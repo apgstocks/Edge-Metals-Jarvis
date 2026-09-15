@@ -70,6 +70,7 @@ const ACTIONS = [
     // document that was handed to a driver, removed from the system. Which
     // one went, and who removed it, outlives the record itself.
     'delete-bol',                 // a saved bill of lading form (the PDF is kept)
+    'delete-packing-list',        // a container's packing list
 ];
 
 function listEntries() {

@@ -158,6 +158,10 @@ body[data-theme="light"] {
     <button class="subtab-btn" data-subtab="invoice">Invoice</button>
     <button class="subtab-btn" data-subtab="proforma">Proforma</button>
     <button class="subtab-btn" data-subtab="bol">BOL</button>
+    <!-- Apsara, 2026-09-16: "i want to create a sub tab under invoice
+         -documents as packing list". Next to BOL because a packing list
+         travels with the same container. -->
+    <button class="subtab-btn" data-subtab="packing">Packing list</button>
     <button class="subtab-btn" data-subtab="verification">Verification</button>
   </div>
 
@@ -263,6 +267,63 @@ body[data-theme="light"] {
     <div class="card" style="padding:20px 22px;">
       <div style="font-size:13px; font-weight:700; color:var(--text-strong); margin-bottom:10px;">Saved bills of lading</div>
       <div id="bolSavedList" style="font-size:12.5px; color:var(--text-muted);">Loading…</div>
+    </div>
+  </div>
+
+  <!-- ── PACKING LIST ────────────────────────────────────────────────────
+       Apsara, 2026-09-16: "it should allow to upload photo/pdf ,it scan and
+       fill fields and then create fields like container nuber,booking no,
+       invoice number,rows and columns of items."
+
+       THE SCAN FILLS THE FORM AND SAVES NOTHING. Everything it read is shown
+       in the boxes, marked, and waits for her. See helpers/packingList.js. -->
+  <div id="panelPacking" class="hidden">
+    <div class="card" style="padding:20px 22px; margin-bottom:16px;">
+
+      <div style="font-size:15px; font-weight:700; color:var(--text-strong); margin-bottom:4px;">Read it off the document</div>
+      <div style="font-size:12px; color:var(--text-muted); margin-bottom:12px;">
+        Take a photo of the packing list, or pick the PDF. The boxes below fill in from it &mdash; check them, then save. Nothing is saved until you press Save.
+      </div>
+
+      <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap; margin-bottom:6px;">
+        <input type="file" id="pkFile" accept="image/*,application/pdf" style="font-size:12.5px;">
+        <button type="button" id="btnPkScan" class="btn btn-primary">Scan</button>
+        <span id="pkScanStatus" style="font-size:12px; color:var(--text-muted);"></span>
+      </div>
+      <div id="pkScanNote" style="font-size:11.5px; color:var(--text-muted); margin-bottom:16px;"></div>
+
+      <div style="display:grid; grid-template-columns:repeat(4,1fr); gap:12px; margin-bottom:12px;">
+        <div class="field" data-pkfield="container_no"><label for="pk_container">Container number</label><input id="pk_container" type="text" placeholder="TCLU1234567"></div>
+        <div class="field" data-pkfield="booking_no"><label for="pk_booking">Booking number</label><input id="pk_booking" type="text"></div>
+        <div class="field" data-pkfield="invoice_no"><label for="pk_invoice">Invoice number</label><input id="pk_invoice" type="text"></div>
+        <div class="field" data-pkfield="seal_no"><label for="pk_seal">Seal number</label><input id="pk_seal" type="text"></div>
+      </div>
+
+      <div style="display:grid; grid-template-columns:repeat(4,1fr); gap:12px; margin-bottom:18px;">
+        <div class="field" data-pkfield="customer"><label for="pk_customer">Customer</label><input id="pk_customer" type="text" autocomplete="off"></div>
+        <div class="field" data-pkfield="date"><label for="pk_date">Date</label><input id="pk_date" type="date"></div>
+        <div class="field" data-pkfield="weight_unit"><label for="pk_unit">Weight unit</label>
+          <select id="pk_unit"><option value="lb">lb</option><option value="kg">kg</option><option value="mt">mt</option></select>
+        </div>
+      </div>
+
+      <div style="font-size:12px; font-weight:700; color:var(--text-strong); margin:4px 0 8px;">Items
+        <span style="font-weight:400; color:var(--text-muted); font-size:11px;">&mdash; one line per row on the packing list</span>
+      </div>
+      <div id="pkItems"></div>
+      <button type="button" id="btnPkAddRow" class="btn btn-secondary" style="margin-top:8px; font-size:11px;">+ Add line</button>
+      <div id="pkTotals" style="margin-top:14px; font-family:var(--font-mono); font-size:12px; color:var(--text-muted);"></div>
+
+      <div style="display:flex; gap:10px; margin-top:16px; align-items:center;">
+        <button type="button" id="btnPkSave" class="btn btn-primary">Save packing list</button>
+        <button type="button" id="btnPkClear" class="btn btn-secondary">Clear</button>
+        <span id="pkStatus" style="font-size:12px; color:var(--text-muted);"></span>
+      </div>
+    </div>
+
+    <div class="card" style="padding:20px 22px;">
+      <div style="font-size:13px; font-weight:700; color:var(--text-strong); margin-bottom:10px;">Saved packing lists</div>
+      <div id="pkSavedList" style="font-size:12.5px; color:var(--text-muted);">Loading…</div>
     </div>
   </div>
 
@@ -961,6 +1022,7 @@ function setSubtab(name) {
   $('panelInvoice').classList.toggle('hidden', name !== 'invoice');
   $('panelProforma').classList.toggle('hidden', name !== 'proforma');
   $('panelBol').classList.toggle('hidden', name !== 'bol');
+  $('panelPacking').classList.toggle('hidden', name !== 'packing');
   $('panelVerification').classList.toggle('hidden', name !== 'verification');
   // Both consignee typeaheads read `addressBook`, so it gets a refresh on
   // entry to either — that is what stops a contact added in the Address Book
@@ -970,6 +1032,7 @@ function setSubtab(name) {
   if (name === 'proforma' || name === 'bol') refreshAddressBook();
   if (name === 'proforma') { loadSavedProformas(); resetWizard(); }
   if (name === 'bol') { bolInit(); loadSavedBols(); }
+  if (name === 'packing') { pkInit(); loadSavedPackingLists(); }
 }
 document.querySelectorAll('.subtab-btn').forEach((b) => b.addEventListener('click', () => setSubtab(b.dataset.subtab)));
 
@@ -4398,6 +4461,311 @@ function bolClearForm() {
   if ($('bol_date')) $('bol_date').value = bolTodayStr();
   bolRows = [bolBlankRow(), bolBlankRow()];
   bolPaintItems();
+}
+
+
+// ── PACKING LIST ───────────────────────────────────────────────────────────
+// Apsara, 2026-09-16: "it should allow to upload photo/pdf ,it scan and fill
+// fields and then create fields like container nuber,booking no,invoice
+// number,rows and columns of items."
+//
+// THE SCAN FILLS THE FORM. IT NEVER SAVES. Same rule as every AI path in this
+// project: the model proposes, she disposes. A scanner that files its own
+// guesses builds a drawer of documents nobody has read, and the first wrong
+// container number is found by a customer.
+//
+// AND EVERY SCANNED BOX IS MARKED until she touches it, so "which of these did
+// the machine decide?" is answerable by looking rather than by remembering.
+const PK_COLS = [
+  ['marks', 'Marks', '90px'],
+  ['description', 'Description', '1fr'],
+  ['pieces', 'Pieces', '80px'],
+  ['gross_weight', 'Gross', '110px'],
+  ['net_weight', 'Net', '110px'],
+  ['note', 'Note', '130px'],
+];
+const PK_GRID = PK_COLS.map((c) => c[2]).join(' ') + ' 30px';
+
+let pkRows = [];
+let pkEditingId = null;
+let _pkWired = false;
+
+function pkBlankRow() {
+  const r = {};
+  PK_COLS.forEach(([k]) => { r[k] = ''; });
+  return r;
+}
+
+// Today, in the yard's timezone. Not toISOString() — that is UTC, and from 7pm
+// in Frisco it is already tomorrow. Same bug this project fixed on the BOL.
+function pkTodayStr() {
+  return new Date().toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' });
+}
+
+function pkInit() {
+  if (!pkRows.length) pkRows = [pkBlankRow(), pkBlankRow()];
+  if (!$('pk_date').value) $('pk_date').value = pkTodayStr();
+  pkPaintItems();
+  if (_pkWired) return;
+  _pkWired = true;
+  $('btnPkAddRow').addEventListener('click', () => { pkRows.push(pkBlankRow()); pkPaintItems(); });
+  $('btnPkScan').addEventListener('click', () => pkScan());
+  $('btnPkSave').addEventListener('click', () => pkSave());
+  $('btnPkClear').addEventListener('click', () => { if (confirm('Clear this form?')) pkClearForm(); });
+  // Any edit clears that box's "read from the document" mark — once she has
+  // touched it, it is hers.
+  document.querySelectorAll('#panelPacking [data-pkfield] input, #panelPacking [data-pkfield] select')
+    .forEach((el) => el.addEventListener('input', () => pkMark(el.closest('[data-pkfield]').dataset.pkfield, false)));
+}
+
+// The mark itself. A tinted left edge and a word, rather than a colour alone —
+// a colour is invisible to a colourblind reader and meaningless to everyone
+// else until someone explains it.
+function pkMark(field, on) {
+  const box = document.querySelector(`#panelPacking [data-pkfield="${field}"]`);
+  if (!box) return;
+  box.style.borderLeft = on ? '3px solid var(--accent)' : '';
+  box.style.paddingLeft = on ? '8px' : '';
+  let tag = box.querySelector('.pk-scanned-tag');
+  if (on && !tag) {
+    tag = document.createElement('span');
+    tag.className = 'pk-scanned-tag';
+    tag.style.cssText = 'font-size:10px; color:var(--accent); margin-left:6px; font-family:var(--font-mono); letter-spacing:.04em;';
+    tag.textContent = 'read';
+    const label = box.querySelector('label');
+    if (label) label.appendChild(tag);
+  } else if (!on && tag) {
+    tag.remove();
+  }
+}
+
+function pkPaintItems() {
+  const head = `<div style="display:grid; grid-template-columns:${PK_GRID}; gap:8px; margin-bottom:6px; font-family:var(--font-mono); font-size:10px; letter-spacing:.08em; text-transform:uppercase; color:var(--text-faint);">
+      ${PK_COLS.map(([, label]) => `<div>${label}</div>`).join('')}<div></div>
+    </div>`;
+  // Rebuilt wholesale, values carried in the VALUE attribute — a half-rebuilt
+  // table where row 3 still holds row 2's text is the classic bug of this
+  // pattern, and here it would put a weight against the wrong material.
+  $('pkItems').innerHTML = head + pkRows.map((r, i) => `
+    <div style="display:grid; grid-template-columns:${PK_GRID}; gap:8px; margin-bottom:6px; align-items:center;">
+      ${PK_COLS.map(([k]) => `<input data-pi="${i}" data-pf="${k}" type="text" value="${esc(r[k] || '')}"${k === 'pieces' || k === 'gross_weight' || k === 'net_weight' ? ' style="text-align:right; font-family:var(--font-mono);"' : ''}>`).join('')}
+      <button type="button" class="btn btn-secondary pk-del" data-i="${i}" style="padding:4px 8px; font-size:12px;">&times;</button>
+    </div>`).join('');
+
+  $('pkItems').querySelectorAll('input[data-pi]').forEach((el) => {
+    el.addEventListener('input', () => {
+      pkRows[Number(el.dataset.pi)][el.dataset.pf] = el.value;
+      pkPaintTotals();
+    });
+  });
+  $('pkItems').querySelectorAll('.pk-del').forEach((el) => el.addEventListener('click', () => {
+    pkRows.splice(Number(el.dataset.i), 1);
+    if (!pkRows.length) pkRows = [pkBlankRow()];
+    pkPaintItems();
+  }));
+  pkPaintTotals();
+}
+
+// Parsed only for the RUNNING TOTAL. The stored values stay the strings on the
+// document — "46,300" must read back as "46,300", the same rule as the BOL.
+const pkNum = (v) => {
+  const s = String(v == null ? '' : v).replace(/,/g, '').trim();
+  if (!s) return null;
+  const n = parseFloat(s);
+  return isFinite(n) ? n : null;
+};
+
+function pkPaintTotals() {
+  const sum = (k) => pkRows.reduce((t, r) => {
+    const n = pkNum(r[k]);
+    return n == null ? t : t + n;
+  }, 0);
+  const fmt = (n) => (n ? n.toLocaleString() : '—');
+  const unit = $('pk_unit') ? $('pk_unit').value : 'lb';
+  $('pkTotals').innerHTML = `${pkRows.length} line${pkRows.length === 1 ? '' : 's'} · Pieces ${fmt(sum('pieces'))} · Gross ${fmt(sum('gross_weight'))} · <strong style="color:var(--text-strong);">Net ${fmt(sum('net_weight'))} ${esc(unit)}</strong>`;
+}
+
+async function pkScan() {
+  const input = $('pkFile');
+  const file = input && input.files && input.files[0];
+  if (!file) { $('pkScanStatus').textContent = 'Pick a photo or a PDF first.'; return; }
+  $('pkScanStatus').textContent = 'Reading…';
+  $('btnPkScan').disabled = true;
+  try {
+    const base64 = await new Promise((resolve, reject) => {
+      const fr = new FileReader();
+      fr.onload = () => resolve(String(fr.result).replace(/^data:[^;]+;base64,/, ''));
+      fr.onerror = () => reject(new Error('could not read that file'));
+      fr.readAsDataURL(file);
+    });
+    const out = await api('/api/packing-lists/scan', { method: 'POST', body: JSON.stringify({
+      file_base64: base64, mime_type: file.type || 'application/pdf',
+    }) });
+
+    if (!out || !out.ok) {
+      // Fail soft and say so plainly. She still has a form she can type into,
+      // which is exactly where she was before this button existed.
+      $('pkScanStatus').textContent = (out && out.error) || 'Could not read that file.';
+      return;
+    }
+
+    const f = out.fields || {};
+    const set = (id, v) => { if (v && $(id)) $(id).value = v; };
+    set('pk_container', f.container_no);
+    set('pk_booking', f.booking_no);
+    set('pk_invoice', f.invoice_no);
+    set('pk_seal', f.seal_no);
+    set('pk_customer', f.customer);
+    if (f.weight_unit && $('pk_unit')) $('pk_unit').value = f.weight_unit;
+    // MM/DD/YYYY off the document into the picker's yyyy-mm-dd. A date that
+    // silently fails to land is worse than one left blank, so a value that
+    // does not parse is left for her rather than guessed at.
+    if (f.date) {
+      const m = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/.exec(f.date);
+      if (m) $('pk_date').value = `${m[3]}-${m[1].padStart(2, '0')}-${m[2].padStart(2, '0')}`;
+    }
+
+    if (Array.isArray(out.rows) && out.rows.length) {
+      pkRows = out.rows.map((r) => {
+        const row = pkBlankRow();
+        PK_COLS.forEach(([k]) => { row[k] = r[k] || ''; });
+        return row;
+      });
+      pkPaintItems();
+    }
+
+    (out.scanned_fields || []).forEach((k) => pkMark(k, true));
+    const n = (out.rows || []).length;
+    $('pkScanStatus').textContent = `Read ${n} line${n === 1 ? '' : 's'}.`;
+    // Said every time, not once. The whole risk of this feature is a number
+    // nobody checked, and the moment to say so is while she is looking at it.
+    $('pkScanNote').textContent = 'Everything marked "read" came off the document — check it before saving. Anything it could not find has been left blank rather than guessed.';
+  } catch (e) {
+    $('pkScanStatus').textContent = e.message;
+  } finally {
+    $('btnPkScan').disabled = false;
+  }
+}
+
+function pkPayload() {
+  return {
+    id: pkEditingId,
+    container_no: $('pk_container').value.trim(),
+    booking_no: $('pk_booking').value.trim(),
+    invoice_no: $('pk_invoice').value.trim(),
+    seal_no: $('pk_seal').value.trim(),
+    customer: $('pk_customer').value.trim(),
+    date: $('pk_date').value,
+    weight_unit: $('pk_unit').value || 'lb',
+    rows: pkRows.filter((r) => PK_COLS.some(([k]) => String(r[k] || '').trim())),
+    scanned_fields: [...document.querySelectorAll('#panelPacking [data-pkfield]')]
+      .filter((b) => b.querySelector('.pk-scanned-tag')).map((b) => b.dataset.pkfield),
+  };
+}
+
+async function pkSave() {
+  const body = pkPayload();
+  if (!body.container_no && !body.rows.length) {
+    $('pkStatus').textContent = 'Add a container number or at least one line.';
+    return;
+  }
+  $('btnPkSave').disabled = true;
+  try {
+    const out = await api('/api/packing-lists', { method: 'POST', body: JSON.stringify(body) });
+    pkEditingId = (out && out.packing_list && out.packing_list.id) || pkEditingId;
+    $('pkStatus').textContent = `Saved${body.container_no ? ' — ' + body.container_no : ''}.`;
+    loadSavedPackingLists();
+  } catch (e) {
+    $('pkStatus').textContent = e.message;
+  }
+  $('btnPkSave').disabled = false;
+}
+
+function pkClearForm() {
+  pkEditingId = null;
+  ['pk_container', 'pk_booking', 'pk_invoice', 'pk_seal', 'pk_customer'].forEach((id) => { if ($(id)) $(id).value = ''; });
+  if ($('pk_unit')) $('pk_unit').value = 'lb';
+  if ($('pk_date')) $('pk_date').value = pkTodayStr();
+  document.querySelectorAll('#panelPacking [data-pkfield]').forEach((b) => pkMark(b.dataset.pkfield, false));
+  if ($('pkFile')) $('pkFile').value = '';
+  $('pkScanStatus').textContent = '';
+  $('pkScanNote').textContent = '';
+  $('pkStatus').textContent = '';
+  pkRows = [pkBlankRow(), pkBlankRow()];
+  pkPaintItems();
+}
+
+async function pkEdit(id) {
+  const { packing_list: pl } = await api(`/api/packing-lists/${encodeURIComponent(id)}`);
+  if (!pl) return;
+  pkEditingId = pl.id;
+  $('pk_container').value = pl.container_no || '';
+  $('pk_booking').value = pl.booking_no || '';
+  $('pk_invoice').value = pl.invoice_no || '';
+  $('pk_seal').value = pl.seal_no || '';
+  $('pk_customer').value = pl.customer || '';
+  $('pk_date').value = pl.date || '';
+  $('pk_unit').value = pl.weight_unit || 'lb';
+  pkRows = (pl.rows || []).map((r) => {
+    const row = pkBlankRow();
+    PK_COLS.forEach(([k]) => { row[k] = r[k] || ''; });
+    return row;
+  });
+  if (!pkRows.length) pkRows = [pkBlankRow()];
+  pkPaintItems();
+  // The marks are restored from the record, so a list she never checked still
+  // says which of its numbers came off a photo.
+  document.querySelectorAll('#panelPacking [data-pkfield]').forEach((b) => pkMark(b.dataset.pkfield, false));
+  (pl.scanned_fields || []).forEach((k) => pkMark(k, true));
+  $('pkStatus').textContent = `Editing ${pl.container_no || 'this packing list'}. Save replaces it.`;
+  $('panelPacking').scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
+async function pkDelete(id, label) {
+  if (!confirm(`Delete the packing list for ${label || 'this container'}?\n\nThis cannot be undone.`)) return;
+  try {
+    await api(`/api/packing-lists/${encodeURIComponent(id)}`, { method: 'DELETE' });
+    if (pkEditingId === id) pkClearForm();
+    $('pkStatus').textContent = 'Deleted.';
+    loadSavedPackingLists();
+  } catch (e) { $('pkStatus').textContent = e.message; }
+}
+
+async function loadSavedPackingLists() {
+  try {
+    const { packing_lists: rows } = await api('/api/packing-lists');
+    const list = rows || [];
+    $('pkSavedList').innerHTML = list.length
+      ? `<table style="width:100%; border-collapse:collapse; font-size:12.5px;">
+          <tr style="color:var(--text-muted); font-size:10px; letter-spacing:.08em;">
+            <th style="text-align:left; padding:5px 8px;">CONTAINER</th>
+            <th style="text-align:left; padding:5px 8px;">BOOKING</th>
+            <th style="text-align:left; padding:5px 8px;">INVOICE</th>
+            <th style="text-align:left; padding:5px 8px;">CUSTOMER</th>
+            <th style="text-align:right; padding:5px 8px;">LINES</th>
+            <th style="padding:5px 8px;"></th>
+          </tr>
+          ${list.map((p) => `
+            <tr style="border-top:1px solid var(--border-subtle);">
+              <td style="padding:7px 8px; font-family:var(--font-mono);">${esc(p.container_no || '(none)')}</td>
+              <td style="padding:7px 8px; font-family:var(--font-mono);">${esc(p.booking_no || '—')}</td>
+              <td style="padding:7px 8px; font-family:var(--font-mono);">${esc(p.invoice_no || '—')}</td>
+              <td style="padding:7px 8px;">${esc(p.customer || '—')}</td>
+              <td style="padding:7px 8px; text-align:right; font-family:var(--font-mono);">${(p.rows || []).length}</td>
+              <td style="padding:7px 8px; text-align:right; white-space:nowrap;">
+                <button class="btn btn-secondary pk-edit" data-id="${esc(p.id)}" style="font-size:11px; padding:4px 10px;">Edit</button>
+                <button class="btn btn-secondary pk-row-del" data-id="${esc(p.id)}" data-label="${esc(p.container_no || '')}" style="font-size:11px; padding:4px 10px; color:var(--danger, #c0392b);">Delete</button>
+              </td>
+            </tr>`).join('')}
+        </table>`
+      : 'None yet.';
+    $('pkSavedList').querySelectorAll('.pk-edit').forEach((el) =>
+      el.addEventListener('click', () => pkEdit(el.dataset.id).catch((e) => { $('pkStatus').textContent = e.message; })));
+    $('pkSavedList').querySelectorAll('.pk-row-del').forEach((el) =>
+      el.addEventListener('click', () => pkDelete(el.dataset.id, el.dataset.label)));
+  } catch (e) {
+    $('pkSavedList').textContent = e.message;
+  }
 }
 
 // Apsara, 2026-09-16: "also add delete option in bol generated".

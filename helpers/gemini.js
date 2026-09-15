@@ -4061,4 +4061,9 @@ async function extractWeightFromImage(imageBase64, mimeType = 'image/jpeg', retr
     }
 }
 
-module.exports = { callGeminiJSON, lastGeminiFailure, extractPdfFields, extractBookingFieldsFromText, resolveCutoffDate, classifyDocument, extractScaleTicketFields, extractWeightFromImage, checkPhotoQuality, extractFreightInvoiceRecords, extractCommissionDebitNoteRecords, extractJioInvoiceRecords, extractSherTruckingInvoiceRecords, extractAjTransportInvoiceRecords, transcribeVoiceNote };
+// getClient/getModelName exported 2026-09-16 for helpers/packingList.js.
+// Every extraction in this file builds its own model with its own prompt and
+// generationConfig; a new one doing the same thing needs the client, and the
+// alternative was a ninth near-identical extract* function living here, far
+// from the store it feeds.
+module.exports = { getClient, getModelName, callGeminiJSON, lastGeminiFailure, extractPdfFields, extractBookingFieldsFromText, resolveCutoffDate, classifyDocument, extractScaleTicketFields, extractWeightFromImage, checkPhotoQuality, extractFreightInvoiceRecords, extractCommissionDebitNoteRecords, extractJioInvoiceRecords, extractSherTruckingInvoiceRecords, extractAjTransportInvoiceRecords, transcribeVoiceNote };

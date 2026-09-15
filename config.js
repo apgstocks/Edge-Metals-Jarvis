@@ -192,6 +192,13 @@ const FILES = {
     // means one BOL number and two different documents.
     BOL_LAYOUTS_FILE: path.join(DATA_DIR, 'bol_layouts.json'),
 
+    // ── PACKING LISTS (2026-09-16) ───────────────────────────────────────
+    // Apsara: "in edge metals,i want to create a sub tab under invoice
+    // -documents as packing list.it should allow to upload photo/pdf ,it
+    // scan and fill fields". EDGE METALS — one packing list per container,
+    // keyed on the container number. See helpers/packingList.js.
+    PACKING_LISTS_FILE: path.join(DATA_DIR, 'packing_lists.json'),
+
     // ── WHICH ITEM NAMES MEAN THE SAME METAL (2026-09-16) ────────────────
     // Apsara: "Warn me if al combo and aluminium combo,remember my
     // selection-then next time let ai decide based on knowldge". Her

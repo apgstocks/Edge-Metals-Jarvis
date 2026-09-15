@@ -5564,6 +5564,91 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
         } catch (e) { res.status(500).json({ error: e.message }); }
     });
 
+    // ── PACKING LISTS ────────────────────────────────────────────────────
+    // Apsara, 2026-09-16: "in edge metals,i want to create a sub tab under
+    // invoice -documents as packing list.it should allow to upload photo/pdf,
+    // it scan and fill fields and then create fields like container nuber,
+    // booking no,invoice number,rows and columns of items."
+    //
+    // EDGE METALS. requireAdmin like every other document route; staff never
+    // reach this file's Edge Metals routes at all.
+    //
+    // ── SCAN AND SAVE ARE SEPARATE ROUTES, ON PURPOSE ────────────────────
+    // /scan reads a file and returns fields. It writes NOTHING. Saving is a
+    // second, explicit request she makes after looking at what came back.
+    // One route that scanned and filed would produce a drawer of documents
+    // nobody has read, and the first wrong container number would be found by
+    // a customer rather than by her.
+    app.post('/api/packing-lists/scan', requireAdmin, async (req, res) => {
+        try {
+            const b = req.body || {};
+            const base64 = String(b.file_base64 || '').replace(/^data:[^;]+;base64,/, '');
+            if (!base64) return res.status(400).json({ error: 'no file' });
+            // Size-capped before it reaches the model. A 40MB phone photo is a
+            // slow request and a large bill, and the cap is a sentence she can
+            // act on rather than a timeout she cannot.
+            if (base64.length > 28 * 1024 * 1024) {
+                return res.status(413).json({ error: 'That file is too big — under 20MB, please.' });
+            }
+            const out = await require('./helpers/packingList').scan(base64, b.mime_type || 'application/pdf');
+            res.json(out);
+        } catch (e) {
+            // Fail soft: she is left with an empty form she can type into,
+            // which is where she would be without this feature at all.
+            console.error('[packing-list] scan route failed:', e.message);
+            res.json({ ok: false, error: 'Could not read that file. Fill the form in by hand.', fields: null });
+        }
+    });
+
+    app.get('/api/packing-lists', requireAdmin, (req, res) => {
+        try { res.json({ ok: true, packing_lists: require('./helpers/packingList').list() }); }
+        catch (e) { res.status(500).json({ error: e.message }); }
+    });
+
+    app.get('/api/packing-lists/:id', requireAdmin, (req, res) => {
+        try {
+            const rec = require('./helpers/packingList').get(req.params.id);
+            if (!rec) return res.status(404).json({ error: 'no such packing list' });
+            res.json({ ok: true, packing_list: rec });
+        } catch (e) { res.status(500).json({ error: e.message }); }
+    });
+
+    app.post('/api/packing-lists', requireAdmin, async (req, res) => {
+        try {
+            const b = req.body || {};
+            // A packing list with no container and no rows is an empty form
+            // saved by accident. Refused with a sentence rather than stored,
+            // because a drawer of blanks makes the real ones harder to find.
+            if (!String(b.container_no || '').trim() && !(Array.isArray(b.rows) && b.rows.length)) {
+                return res.status(400).json({ error: 'A packing list needs at least a container number or one item line.' });
+            }
+            const saved = await require('./helpers/packingList').save({ ...b, created_by: req.role || null });
+            res.json({ ok: true, packing_list: saved });
+        } catch (e) { res.status(500).json({ error: e.message }); }
+    });
+
+    app.delete('/api/packing-lists/:id', requireAdmin, async (req, res) => {
+        try {
+            const pl = require('./helpers/packingList');
+            const audit = require('./helpers/audit');
+            const doomed = pl.get(req.params.id);
+            if (!doomed) return res.status(404).json({ error: 'no such packing list' });
+            // Recorded before the act and stamped after, the same as the BOL
+            // delete. Which container's list went, and who removed it,
+            // outlives the record.
+            const entry = await audit.record({
+                action: 'delete-packing-list', subject: String(req.params.id),
+                actor: actorOf(req), role: req.role, ip: req.ip,
+                detail: { container_no: doomed.container_no, booking_no: doomed.booking_no,
+                          invoice_no: doomed.invoice_no, lines: (doomed.rows || []).length },
+            });
+            const removed = await pl.remove(req.params.id);
+            await audit.complete(entry, removed ? 'done' : 'failed', {});
+            if (!removed) return res.status(404).json({ error: 'no such packing list' });
+            res.json({ ok: true });
+        } catch (e) { res.status(500).json({ error: e.message }); }
+    });
+
     app.get('/api/bols', requireAdmin, (req, res) => {
         try { res.json({ ok: true, bols: require('./helpers/bols').listBols() }); }
         catch (e) { res.status(500).json({ error: e.message }); }
