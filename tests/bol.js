@@ -639,37 +639,36 @@ section('H — the store behind Edit');
        bad === '2026-09-17' && good === '2026-09-16',
        `UTC says ${bad}, the yard says ${good} — if these matched, this section would prove nothing`);
 
-    for (const [label, file, fn] of [
-        ['website', 'dashboard/documents.html', 'function bolTodayStr()'],
-        ['app', 'mobile-app/www/index.html', 'function bolTodayISO()'],
+    for (const [label, file, name] of [
+        ['website', 'dashboard/documents.html', 'bolTodayStr'],
+        ['app', 'mobile-app/www/index.html', 'bolTodayISO'],
     ]) {
         const src = fs.readFileSync(path.join(ROOT, file), 'utf8');
-        const body = src.slice(src.indexOf(fn), src.indexOf(fn) + 260);
-        // Evaluated, not grepped: a function that mentions the timezone and
-        // still returns a UTC string would pass a source check.
-        // eslint-disable-next-line no-new-func
-        const got = new Function(`${body}\n return ${fn.replace('function ', '').replace('()', '')}();`)
-            .call({ Date: null });
-        void got;
-        // Re-run with the clock pinned. Date is replaced only inside this
-        // call so nothing else in the suite sees a frozen clock.
+        // Bounded at the function's own closing brace. A fixed character
+        // slice cut the body in half and the eval failed with a syntax error
+        // that had nothing to do with dates.
+        const at = src.indexOf(`function ${name}()`);
+        const close = src.indexOf('\n}', at);
+        const body = src.slice(at, close + 2);
+
+        // EVALUATED with the clock pinned, not grepped. A function that
+        // mentions America/Los_Angeles and still returns a UTC string would
+        // sail through a source check — which is how the UTC version got
+        // written in the first place.
         const RealDate = Date;
-        // eslint-disable-next-line no-global-assign
-        global.Date = class extends RealDate {
-            constructor(...a) { return a.length ? new RealDate(...a) : new RealDate(AT_8PM_FRISCO); }
+        class Pinned extends RealDate {
+            constructor(...a) { super(...(a.length ? a : [AT_8PM_FRISCO])); }
             static now() { return AT_8PM_FRISCO; }
-        };
-        let pinned;
+        }
+        let pinned = null, err = null;
         try {
             // eslint-disable-next-line no-new-func
-            pinned = new Function(`${body}\n return ${fn.replace('function ', '').replace('()', '')}();`)();
-        } finally {
-            // eslint-disable-next-line no-global-assign
-            global.Date = RealDate;
-        }
+            pinned = new Function('Date', `${body}\nreturn ${name}();`)(Pinned);
+        } catch (e) { err = e; }
+
         ck(`${label}: at 8:30pm in Frisco the default is TODAY, not tomorrow`,
-           pinned === '2026-09-16',
-           `got ${pinned} — UTC would say 2026-09-17, which is the bug`);
+           !err && pinned === '2026-09-16',
+           err ? err.message : `got ${pinned} — UTC would say 2026-09-17, which is the bug`);
     }
 
     // And the archive folder has to agree with the paper, or a BOL raised in
