@@ -68,7 +68,11 @@ const toNum = (v) => {
 //              withdrawForExpense for why the two differ.
 //   reversal — money put BACK when a payment or expense is undone. Positive,
 //              carries reverses_entry_id (and the payment/expense id).
-const ENTRY_KINDS = ['topup', 'payment', 'expense', 'reversal'];
+// 'receipt' added 2026-09-16: cash taken IN for a yard sale. Distinct from
+// 'topup' (her own float) because the Petty cash tab and the spend report
+// split on kind, and a day's takings filed as a top-up would read as money
+// she put in rather than money the yard earned.
+const ENTRY_KINDS = ['topup', 'payment', 'receipt', 'expense', 'reversal'];
 
 function newEntryId() {
     return `PC_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
@@ -184,6 +188,58 @@ async function withdrawForPayment({ amount, loadId, paymentId, date, createdBy, 
         };
         list.push(entry);
         result = { entry, taken: round2(taken), available, capped: taken < want - CENT };
+        return list;
+    });
+    return result;
+}
+
+// ── put cash IN, because a yard SALE was paid in cash ─────────────────────
+//
+// Apsara, 2026-09-16: "in sales-receive payment,mode should be cash/account
+// transfer.if its cash-it should get added to petty cash.log them" — and,
+// asked which company: "i am talking about edge yard only".
+//
+// ── THE BUG THIS EXISTS TO FIX, WHICH IS WORSE THAN A MISSING FEATURE ───────
+// Petty cash already moved for cash payments, in ONE direction. helpers/
+// payments.js called withdrawForPayment for any cash payment on a yard load,
+// and a yard load can be a SALE. So money ARRIVING was recorded as money
+// LEAVING: take $5,000 cash for a load of aluminium and the cash box went DOWN
+// five thousand.
+//
+// And it was usually not even wrong quietly. withdrawForPayment refuses when
+// the box holds less than the amount, so recording a $5,000 cash sale against
+// a $300 box failed outright with "Only 300.00 in petty cash" — a sale she
+// could not enter at all, for a reason that made no sense from where she was
+// standing.
+//
+// ── NO CAP, NO REFUSAL, DELIBERATELY ────────────────────────────────────────
+// Unlike every withdrawal in this file, there is nothing to check. Cash coming
+// in cannot overdraw a box; the money is physically in her hand. A balance
+// test here would be the same mistake in a new place.
+async function depositForPayment({ amount, loadId, paymentId, date, createdBy } = {}) {
+    const want = round2(toNum(amount));
+    if (want == null || want <= 0) throw new Error('a cash amount must be greater than zero');
+
+    let result = null;
+    await mutateJson(cfg.PETTY_CASH_FILE, [], (all) => {
+        const list = Array.isArray(all) ? all : [];
+        const entry = {
+            id: newEntryId(),
+            // 'receipt', not 'topup'. A top-up is her putting her own money in
+            // the box; this is a customer paying for metal. The Petty cash tab
+            // and the spend report both split on kind, and calling a sale a
+            // top-up would make the day's takings look like a float she added.
+            kind: 'receipt',
+            date: /^\d{4}-\d{2}-\d{2}$/.test(String(date || '')) ? date : require('./time').todayLocal(),
+            amount: round2(want),                 // POSITIVE — money in
+            note: null,
+            load_id: loadId || null,
+            payment_id: paymentId || null,
+            created_at: new Date().toISOString(),
+            created_by: createdBy || null,
+        };
+        list.push(entry);
+        result = { entry, added: round2(want), balance: balanceOf(list) };
         return list;
     });
     return result;
@@ -315,25 +371,31 @@ async function reverseForPayment(idOrEntryId, { createdBy } = {}) {
     let record = null;
     await mutateJson(cfg.PETTY_CASH_FILE, [], (all) => {
         const list = Array.isArray(all) ? all : [];
-        // kind === 'payment' only. An expense withdrawal can carry the same
-        // shape but is undone by reverseForExpense — mixing them would let
-        // deleting a payment refund an unrelated expense.
+        // 'payment' and 'receipt' only. An expense withdrawal can carry the
+        // same shape but is undone by reverseForExpense — mixing them would
+        // let deleting a payment refund an unrelated expense.
+        //
+        // 'receipt' is here so that deleting a cash SALE payment takes the
+        // money back OUT of the box. The arithmetic below negates whatever
+        // was recorded, so it is correct in both directions without a branch
+        // — a second code path for the positive case is where the two would
+        // eventually disagree about which way the money went.
         const matches = (e) => e && (e.payment_id === key || e.id === key);
-        const taken = list.filter((e) => matches(e) && e.kind === 'payment');
-        if (!taken.length) return list;                                   // never drew on cash
+        const taken = list.filter((e) => matches(e) && (e.kind === 'payment' || e.kind === 'receipt'));
+        if (!taken.length) return list;                                   // never touched the cash box
         const takenIds = new Set(taken.map((e) => e.id));
         // Already refunded — by payment id, or by the entry id the rollback
         // would have used. Both are checked, or a delete after a failed
         // rollback could refund the same withdrawal twice.
         if (list.some((e) => e && e.kind === 'reversal'
             && (e.payment_id === key || takenIds.has(e.reverses_entry_id)))) return list;
-        const total = round2(taken.reduce((a, e) => a + (toNum(e.amount) || 0), 0)) || 0;  // negative
+        const total = round2(taken.reduce((a, e) => a + (toNum(e.amount) || 0), 0)) || 0;  // negative for a payment, positive for a receipt
         record = {
             id: newEntryId(),
             kind: 'reversal',
             date: require('./time').todayLocal(),
-            amount: round2(-total),               // positive
-            note: 'cash payment deleted',
+            amount: round2(-total),               // the opposite of whatever it undoes
+            note: taken[0].kind === 'receipt' ? 'cash receipt deleted' : 'cash payment deleted',
             load_id: taken[0].load_id || null,
             payment_id: taken[0].payment_id || null,
             // Which withdrawal(s) this undoes. Recorded explicitly because the
@@ -374,6 +436,6 @@ async function deleteEntry(id) {
 
 module.exports = {
     ENTRY_KINDS, listEntries, balance, balanceOf, history,
-    addTopUp, withdrawForPayment, stampPaymentId, reverseForPayment,
+    addTopUp, withdrawForPayment, depositForPayment, stampPaymentId, reverseForPayment,
     withdrawForExpense, reverseForExpense, deleteEntry,
 };

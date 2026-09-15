@@ -2144,7 +2144,10 @@ const payMoney = (n) => '$' + Number(n || 0).toLocaleString('en-US', { minimumFr
 // Seeded with the same two the server starts with, so the form still works if
 // that fetch has not landed yet.
 let bankOptions = ['BofA', 'Chase Bank'];
-let bankModes = ['Zelle', 'Wire'];
+// Only the fallback for the first paint; /api/banks replaces it with the
+// server's MODES_WITH_BANK. Kept in step anyway, or an Account transfer
+// chosen before that response lands shows no bank field.
+let bankModes = ['Zelle', 'Wire', 'Account transfer'];
 let bankOther = 'Others';
 
 // ── AND SOMETHING HAS TO GO AND ASK ──────────────────────────────────────
@@ -4412,10 +4415,18 @@ function renderLoads(loads) {
           <div class="ld-grid-2">
             <div class="field">
               <label>Payment mode</label>
+              <!-- Apsara, 2026-09-16: "mode should be cash/account transfer".
+                   Cash and Account transfer FIRST because they are what she
+                   reaches for; Zelle, Wire and Cheque stay below because the
+                   bank matcher keys on Zelle/Wire and payments already on file
+                   carry all three. Kept in step with helpers/payments.js's
+                   PAYMENT_MODES — a mode here that the server does not know is
+                   a silent 400 she would read as "the button is broken". -->
               <select id="pay_mode">
+                <option value="Cash">Cash</option>
+                <option value="Account transfer">Account transfer</option>
                 <option value="Zelle">Zelle</option>
                 <option value="Wire">Wire</option>
-                <option value="Cash">Cash</option>
                 <option value="Cheque">Cheque</option>
               </select>
             </div>
@@ -6355,8 +6366,13 @@ async function renderPettyCashTab() {
   const bal = pettyCash.balance;
   const rows = pettyCash.entries || [];
 
+  // 'receipt' — cash taken IN for a yard sale, added 2026-09-16. Named as
+  // money RECEIVED rather than folded into "Cash added": a top-up is her own
+  // float going in, a receipt is a customer paying for metal, and a row that
+  // cannot tell her which is which makes the day's takings unreadable.
   const kindLabel = (e) => e.kind === 'topup' ? 'Cash added'
-    : e.kind === 'reversal' ? 'Payment reversed'
+    : e.kind === 'receipt' ? `Received${e.load_id ? ' — ' + e.load_id : ''}`
+    : e.kind === 'reversal' ? 'Reversed'
     : `Paid${e.load_id ? ' — ' + e.load_id : ''}`;
 
   $('viewRoot').innerHTML = `

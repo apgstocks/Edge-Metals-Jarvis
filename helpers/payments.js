@@ -30,7 +30,15 @@ const { loadJson, mutateJson } = require('./json');
 // Fixed set, per Apsara. Kept as a constant and exported so the API, both
 // clients and the PDF all read the same list rather than three drifting
 // copies of a dropdown.
-const PAYMENT_MODES = ['Zelle', 'Wire', 'Cash', 'Cheque'];
+// 'Account transfer' added 2026-09-16, per Apsara: "in sales-receive payment,
+// mode should be cash/account transfer".
+//
+// ADDED, not substituted. Zelle and Wire stay because helpers/banks.js's
+// resolveForMode keys on them and payments already on file carry them; folding
+// three modes into one would leave those rows naming a mode that no longer
+// exists and the bank matcher with nothing to match on. She gets the plain
+// word she asked for, and nothing recorded stops meaning what it meant.
+const PAYMENT_MODES = ['Cash', 'Account transfer', 'Zelle', 'Wire', 'Cheque'];
 
 // ── WHOSE BOOKS A ROW BELONGS TO ─────────────────────────────────────────
 // Apsara, 2026-09-10: "Always remember Edge Yard is different and Edge Metals
@@ -165,11 +173,45 @@ async function addPayment(input = {}) {
         if (['sale', 'trucker', 'bill', 'sale_cost', 'metals_trucking'].includes(k)) return k;
         throw new Error(`unknown load_kind "${k}" — add it here and to helpers/spendReport.js, do not let it default`);
     })();
-    const drawsPettyCash = mode === 'Cash' && !EDGE_METALS_KINDS.has(loadKind);
+    // ── WHICH WAY THE CASH IS MOVING ─────────────────────────────────────
+    // Apsara, 2026-09-16: "in sales-receive payment,mode should be cash/
+    // account transfer.if its cash-it should get added to petty cash."
+    //
+    // It was already moving the box — in ONE direction. This branch called
+    // withdrawForPayment for ANY cash payment on a yard load, and a yard load
+    // can be a SALE. So money arriving was recorded as money leaving: take
+    // $5,000 cash for a load of aluminium and the box went DOWN five thousand.
+    //
+    // It rarely even failed quietly. withdrawForPayment refuses when the box
+    // holds less than the amount, so a $5,000 cash sale against a $300 box
+    // was rejected outright with "Only 300.00 in petty cash" — a sale she
+    // could not record at all, for a reason that made no sense from where she
+    // was standing. That is almost certainly what prompted the request.
+    //
+    // A 'sale' is the yard SELLING metal, so its cash comes IN. Everything
+    // else on a yard load — a purchase, a trucker bill — is cash going OUT.
+    // Decided from load_kind, the same field that already decides whose books
+    // the row belongs to, rather than from a flag a client could send.
+    const touchesPettyCash = mode === 'Cash' && !EDGE_METALS_KINDS.has(loadKind);
+    const cashComesIn = loadKind === 'sale';
 
     let cashEntry = null;
     let cashTaken = null;
-    if (drawsPettyCash) {
+    if (touchesPettyCash && cashComesIn) {
+        const petty = require('./pettyCash');
+        // No cap and no refusal — see depositForPayment. Cash in hand cannot
+        // overdraw a box, and a balance test here would be the original bug
+        // wearing a new hat.
+        const res = await petty.depositForPayment({
+            amount,
+            loadId,
+            paymentId: null,                 // stamped after the payment id exists
+            date: input.paid_on,
+            createdBy: input.created_by || null,
+        });
+        cashEntry = res.entry;
+        cashTaken = res.added;
+    } else if (touchesPettyCash) {
         const petty = require('./pettyCash');
         const res = await petty.withdrawForPayment({
             amount,
@@ -299,9 +341,13 @@ async function deletePayment(id) {
         removed = next.length !== list.length;
         return next;
     });
-    // An Edge Metals cash payment never came out of this box (see
-    // drawsPettyCash above), so refunding one would credit the yard with cash
-    // it never spent — inventing money, which is worse than losing it.
+    // An Edge Metals cash payment never touched this box (see
+    // touchesPettyCash above), so reversing one would credit the yard with
+    // cash it never handled — inventing money, which is worse than losing it.
+    //
+    // Works in BOTH directions without a branch: reverseForPayment negates
+    // whatever it finds, so deleting a cash PURCHASE payment puts money back
+    // in the box and deleting a cash SALE receipt takes it back out.
     if (removed && doomed && doomed.mode === 'Cash' && !EDGE_METALS_KINDS.has(doomed.load_kind)) {
         // By the withdrawal's own id when we have it, else by payment id —
         // reverseForPayment accepts either, and the entry id is the one that
