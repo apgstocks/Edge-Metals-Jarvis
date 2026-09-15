@@ -2041,6 +2041,28 @@ const MUTATIONS = [
       // pasted into one template and so could not be reused.
       find: "        shipper_signature: require('./signature').signatureBlockHtml({",
       to:   "        shipper_signature: '<div class=\"sigink\"><img src=\"data:image/png;base64,AAAA\"></div>', _unused: ((x) => x)({" },
+
+    // ── PREVIEW HAS TO OPEN (2026-09-16) ─────────────────────────────────
+    { name: 'bolprev: the website opens the tab AFTER the fetch, so the blocker eats it',
+      file: 'dashboard/documents.html', suites: ['bol'],
+      // Exactly how it shipped, and exactly what she reported: "in bol,
+      // preview not opened". The click that authorises window.open has
+      // expired by then, and the refusal is silent.
+      find: "      const tab = window.open('', '_blank');",
+      to:   '      const tab = null;' },
+    { name: 'bolprev: a blocked tab is not noticed, so nothing happens at all',
+      file: 'dashboard/documents.html', suites: ['bol'],
+      find: "        status.textContent = 'Your browser blocked the new tab, so the preview was downloaded instead. Nothing was saved.';",
+      to:   "        status.textContent = 'Preview opened.';" },
+    { name: 'bolprev: the app goes back to window.open, which Android no-ops',
+      file: 'mobile-app/www/index.html', suites: ['bol'],
+      find: "      await deliverExportedFile(blob, `bol-preview-${String(body.bol_no || 'draft').replace(/[^A-Za-z0-9_-]/g, '_')}.pdf`, 'pdf');",
+      to:   '      window.open(URL.createObjectURL(blob), \'_blank\');' },
+    { name: 'bolprev: a preview claims it was saved',
+      file: 'mobile-app/www/index.html', suites: ['bol'],
+      // She would think the document had been issued.
+      find: "      return set('Preview ready. Nothing was saved.');",
+      to:   "      return set('Saved.');" },
 ];
 
 // ── CRASH-SAFE, NOT JUST EXIT-SAFE ───────────────────────────────────────

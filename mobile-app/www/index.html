@@ -7685,10 +7685,27 @@ async function bolSubmit(preview) {
         body: JSON.stringify(body),
       });
       if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || `preview failed (${res.status})`);
-      const url = URL.createObjectURL(await res.blob());
-      window.open(url, '_blank');
-      setTimeout(() => URL.revokeObjectURL(url), 60000);
-      return set('Preview opened. Nothing was saved.');
+      const blob = await res.blob();
+      if (!blob.size) throw new Error('the preview came back empty');
+      // ── NOT window.open. THIS WAS ALREADY KNOWN HERE ──────────────────
+      // Apsara, 2026-09-16: "in bol,preview not opened".
+      //
+      // Android's WebView does not support real popup/multi-window behaviour
+      // unless the host app wires up WebChromeClient.onCreateWindow, which
+      // this Capacitor app does not — so window.open() silently no-ops. This
+      // file already says so in two places, and her words the first time it
+      // happened, on 2026-08-17, were "it is pressed, but nothing happening".
+      // I copied the website's shape into the app and reintroduced a bug this
+      // codebase had already found, fixed and written down.
+      //
+      // deliverExportedFile is what the proforma and invoice previews in this
+      // same file use: it writes the PDF and hands it to whatever on the
+      // phone opens PDFs.
+      //
+      // Named …-preview so a file sitting in Downloads cannot be mistaken for
+      // the issued document — nothing was saved on the server.
+      await deliverExportedFile(blob, `bol-preview-${String(body.bol_no || 'draft').replace(/[^A-Za-z0-9_-]/g, '_')}.pdf`, 'pdf');
+      return set('Preview ready. Nothing was saved.');
     }
     const out = await api('/api/bol/generate', { method: 'POST', body: JSON.stringify(body) });
     bolw.editingId = out.id || bolw.editingId;

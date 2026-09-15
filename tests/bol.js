@@ -357,6 +357,58 @@ const panelCode = HTML
     .replace(/<!--[\s\S]*?-->/g, '');
 const bolJs = HTML.slice(HTML.indexOf('function bolPayload'), HTML.indexOf('function bolPayload') + 1200)
     .replace(/\/\/[^\n]*/g, '');
+// ── PREVIEW HAS TO ACTUALLY OPEN ─────────────────────────────────────────
+// Apsara, 2026-09-16: "in bol,preview not opened".
+//
+// Two different faults with the same symptom, one per client, both mine:
+//
+//   WEBSITE  window.open ran AFTER the fetch, by which point the click that
+//            authorised it had expired and the popup blocker ate it in
+//            silence. The tab is now claimed synchronously and pointed at the
+//            PDF when it arrives.
+//   APP      window.open does nothing at all in an Android WebView. This file
+//            already said so in two places, from 2026-08-17, and her words
+//            then were "it is pressed, but nothing happening". The app now
+//            uses deliverExportedFile, like its own proforma and invoice
+//            previews always did.
+{
+    const appSrc = fs.readFileSync(path.join(ROOT, 'mobile-app/www/index.html'), 'utf8');
+    // Bounded at the function's own closing brace, not a character count. A
+    // fixed window ran past bolSubmit into neighbouring code that legitimately
+    // uses window.open, and the assertion below failed for a reason that had
+    // nothing to do with the preview.
+    // Bounded at the function's own closing brace, and with COMMENTS STRIPPED.
+    // Both matter and both bit: a fixed character window ran past bolSubmit
+    // into neighbouring code that legitimately uses window.open, and once that
+    // was fixed the check still failed on the comment in bolSubmit explaining
+    // why window.open is NOT used. That is the second time today an assertion
+    // has tripped over the documentation of the rule it enforces — scan the
+    // code, not the prose about the code.
+    const cut = (src) => {
+        const from = src.indexOf('async function bolSubmit');
+        const end = src.indexOf('\n}', from);
+        return src.slice(from, end === -1 ? from + 3400 : end).replace(/\/\/[^\n]*/g, '');
+    };
+    const webPreview = cut(HTML);
+    const appPreview = cut(appSrc);
+
+    ck('website: the tab is opened BEFORE the fetch, while the click is still live',
+       webPreview.indexOf("window.open('', '_blank')") !== -1
+       && webPreview.indexOf("window.open('', '_blank')") < webPreview.indexOf('/api/bol/generate?preview=1'),
+       'opening it afterwards is what a popup blocker swallows, silently');
+    ck('  and a blocked tab falls back to downloading the preview',
+       /blocked the new tab/.test(webPreview) && /a\.download = `bol-preview-/.test(webPreview),
+       'telling her it opened when it did not is worse than either outcome');
+    ck('app: the preview does NOT use window.open',
+       !/window\.open/.test(appPreview),
+       "Android's WebView no-ops it — this codebase found that out on 2026-08-17");
+    ck('  it goes through deliverExportedFile, like the proforma preview',
+       /deliverExportedFile\(blob, `bol-preview-/.test(appPreview));
+    ck('  and neither client calls a preview "saved"',
+       /Nothing was saved/.test(webPreview) && /Nothing was saved/.test(appPreview),
+       'a preview that reads as saved is a document she thinks she has issued');
+}
+
 ck('  and nothing borrows the delivery ETA for the pickup time',
    !/delivery_eta/.test(JSON.stringify(body))
    && !/delivery_eta/.test(panelCode) && !/delivery_eta/.test(bolJs),
