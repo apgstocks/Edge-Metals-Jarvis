@@ -403,12 +403,21 @@ function drawItemTable(doc, items, columns, totalsRow) {
 // Right-aligned shaded box of totals — `emphasize` rows (net/amount) render
 // larger and in navy so the number that matters most doesn't get lost among
 // the rest.
-function drawSummaryBox(doc, rows) {
+// Returns { top, height } so a caller can put something in the EMPTY COLUMN
+// to the left of it — see the signature block, and Apsara's question below.
+function drawSummaryBox(doc, rows, opts) {
     const boxW = 230;
     const boxX = PAGE_R - boxW;
     const rowH = 19;
     const boxH = rows.length * rowH + 20;
-    ensureSpace(doc, boxH);
+    // `reserve` is the height of whatever will be drawn BESIDE this box, and
+    // it is taken as a MAX rather than added: the two sit in adjacent columns,
+    // so the space the pair needs is the taller of them, not their sum.
+    //
+    // Adding them was my first attempt and it made the bug worse — the box
+    // and the signature moved to page 2 together, which is one page-break
+    // earlier than before rather than none at all.
+    ensureSpace(doc, Math.max(boxH, (opts && opts.reserve) || 0));
     const boxTop = doc.y;
 
     doc.rect(boxX, boxTop, boxW, boxH).fillAndStroke(NAVY_LIGHT, RULE);
@@ -420,6 +429,7 @@ function drawSummaryBox(doc, rows) {
         doc.font(r.emphasize ? 'Helvetica-Bold' : 'Helvetica').fontSize(size).fillColor(color).text(r.value, boxX + 14, y, { width: boxW - 28, align: 'right' });
     });
     doc.y = boxTop + boxH + 18;
+    return { top: boxTop, height: boxH, left: PAGE_L, width: boxX - PAGE_L - 20 };
 }
 
 // ── Seller signature block ───────────────────────────────────────────────
@@ -434,14 +444,36 @@ function drawSummaryBox(doc, rows) {
 // still prints, just empty — the ticket then works as a paper form someone
 // can sign by hand, which is strictly better than the block vanishing and
 // the document silently changing shape depending on signed/unsigned.
+// ── AND WHY IT IS NOT ON A PAGE OF ITS OWN ─────────────────────────────────
+// Apsara, 2026-09-16, with EDGE_66.pdf attached: "why sign only is in next
+// page?why cant it be on left side of summary?"
+//
+// Because it was drawn in the flow, after the Summary box, and the Summary box
+// is only 230pt wide and pinned to the RIGHT margin. So the page ended with a
+// box on the right, half a page of white space to its left, and 82pt of
+// signature block that no longer fitted underneath — pushing it, alone, onto
+// page two. The document looked finished and then had an orphan.
+//
+// `at` places the block in that empty left column instead, level with the
+// Summary box. Passed by the caller rather than worked out here, because this
+// function is also used by documents with no summary box at all, where the
+// ordinary flow position is right.
+//
+// SIG_BLOCK_H is exported as a constant so the caller can RESERVE the space
+// before drawing the box: the box fitting is not the same question as the box
+// and the signature both fitting, and conflating the two is how the orphan
+// happened in the first place.
+const SIG_AREA_H = 46;                      // drawing space above the rule
+const SIG_BLOCK_H = SIG_AREA_H + 26 + 10;   // + label, timestamp and top gap
+
 function drawSignatureBlock(doc, load, opts) {
     // "Buyer signature" on a sale — the person signing is whoever received
     // the material, and on a sale that is the buyer.
     const partyWord = (opts && opts.kind === 'sale') ? 'Buyer' : 'Seller';
-    const SIG_AREA_H = 46;   // drawing space above the rule
     const BLOCK_H = SIG_AREA_H + 26;
-    ensureSpace(doc, BLOCK_H + 10);
-    const top = doc.y + 10;
+    const at = opts && opts.at;
+    if (!at) ensureSpace(doc, BLOCK_H + 10);
+    const top = at ? at.top : doc.y + 10;
     const lineY = top + SIG_AREA_H;
     const lineW = 230;
 
@@ -470,7 +502,11 @@ function drawSignatureBlock(doc, load, opts) {
         doc.font('Helvetica').fontSize(7.5).fillColor(MUTED)
             .text(`Signed ${when} (LA time)`, PAGE_L, lineY + 16, { width: 260, lineBreak: false });
     }
-    doc.y = lineY + 30;
+    // When placed beside the Summary box, the flow position belongs to the
+    // BOX, not to this block — moving doc.y here would push whatever comes
+    // next down by the height of a column that sits alongside, leaving a gap
+    // the width of the page.
+    if (!at) doc.y = lineY + 30;
 }
 
 function drawSectionHeading(doc, text) {
@@ -661,6 +697,8 @@ function generateLoadPdf(load, opts = {}) {
             // opt-in per document, per Apsara 2026-08-15 — previously this
             // decided automatically off item count; now the dashboard asks
             // before generating and includeSummary carries that answer here.
+            let summaryBox = null;
+            let signaturePlaced = false;
             if (includeSummary) {
                 const groups = items.length ? groupItemsByDescription(items) : [];
                 if (groups.length && groups.length < items.length) {
@@ -669,12 +707,24 @@ function generateLoadPdf(load, opts = {}) {
                 }
 
                 drawSectionHeading(doc, 'Summary');
-                drawSummaryBox(doc, [
+                // ── THE SIGNATURE GOES BESIDE THIS BOX ───────────────────
+                // Apsara, 2026-09-16: "why sign only is in next page?why cant
+                // it be on left side of summary?" — see drawSignatureBlock.
+                //
+                // The space is reserved BEFORE the box is drawn, so the two
+                // cannot be split across a page break. Reserving only the box
+                // is what put an orphan signature on page 2 of EDGE_66.
+                const wantsSig = !isSale && includeSummary;
+                summaryBox = drawSummaryBox(doc, [
                     { label: 'Gross total',  value: load.gross_weight != null ? `${load.gross_weight} ${unit}` : '—' },
                     { label: 'Tare total',   value: load.tare_weight  != null ? `${load.tare_weight} ${unit}`  : '—' },
                     { label: 'Net total',    value: load.net_weight   != null ? `${load.net_weight} ${unit}`   : '—', emphasize: true },
                     { label: 'Amount total', value: load.amount       != null ? `$${fmtAmount(load.amount)}`        : '—', emphasize: true },
-                ]);
+                ], { reserve: wantsSig ? SIG_BLOCK_H : 0 });
+                if (wantsSig) {
+                    drawSignatureBlock(doc, load, { ...(opts || {}), at: summaryBox });
+                    signaturePlaced = true;
+                }
             }
 
             // The "Captured Scale Photos" list that used to be appended here
@@ -782,13 +832,18 @@ function generateLoadPdf(load, opts = {}) {
                 doc.fillColor('#000').moveDown(0.8);
             }
 
-            // Signature block last, per Apsara 2026-08-17 — a signature
-            // belongs at the end of the document, under the numbers it's
-            // attesting to.
+            // Signature block, per Apsara 2026-08-17 — at the end of the
+            // document, under the numbers it's attesting to.
+            //
+            // Already drawn BESIDE the Summary box when there is one (2026-09-16,
+            // "why cant it be on left side of summary?"). This is the fallback
+            // for a ticket generated WITHOUT the summary section, where there is
+            // no box to sit next to and the flow position is right.
+            //
             // Sales carry no signature line — Apsara 2026-08-24, "no sign
             // needed". A ruled line nobody will ever sign is worse than no
             // line: it reads as an unfinished document.
-            if (!isSale) drawSignatureBlock(doc, load, opts);
+            if (!isSale && !signaturePlaced) drawSignatureBlock(doc, load, opts);
 
             addFooters(doc, load);
             doc.end();
