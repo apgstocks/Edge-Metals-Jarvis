@@ -2122,6 +2122,53 @@ const MUTATIONS = [
       // typed it differently", and the stock figure stays wrong.
       find: "        suggestion = await api('/api/item-aliases/suggest?item=' + encodeURIComponent(s.typed_as || s.item));",
       to:   '        suggestion = null;' },
+
+    // ── REPORTS IN THE YARD APP (2026-09-16) ─────────────────────────────
+    { name: 'reports: the app goes back to one report',
+      file: 'mobile-app/www/index.html', suites: ['app-reports'],
+      find: "    if (currentMobileTab === 'report') { await renderReportsMenu(); return; }",
+      to:   "    if (currentMobileTab === 'report') { await renderSpendReportTab(); return; }" },
+    { name: 'reports: the menu buttons render but are not wired',
+      file: 'mobile-app/www/index.html', suites: ['app-reports'],
+      // Looks perfect in source and does nothing on a phone — a failure this
+      // project has shipped before.
+      find: "  $('viewRoot').querySelectorAll('.rep-open').forEach((b) => b.addEventListener('click', () => {",
+      to:   "  [].forEach((b) => b.addEventListener('click', () => {" },
+    { name: 'reports: there is no way back out of a report',
+      file: 'mobile-app/www/index.html', suites: ['app-reports'],
+      find: "  $('repBack').addEventListener('click', () => { reportView = null; renderReportsMenu(); });",
+      to:   '' },
+    { name: 'reports: a buyer with no linked cost shows a margin of zero',
+      file: 'mobile-app/www/index.html', suites: ['app-reports'],
+      // Reads as "sold at cost", which is a different and much worse claim
+      // than "we do not know".
+      find: "            b.margin === null ? ' · cost not linked' : ` · margin ${repMoney(b.margin)}`}",
+      to:   '            ` · margin ${repMoney(b.margin || 0)}`}' },
+    { name: 'reports: profit hides how much of the sales its margin covers',
+      file: 'mobile-app/www/index.html', suites: ['app-reports'],
+      // The most misleading number this app could produce.
+      find: "    ${m.caveat ? `<div style=\"font-size:11.5px; color:var(--status-warning, #d69e2e); margin-bottom:14px; line-height:1.5;\">${esc(m.caveat)}</div>` : '<div style=\"margin-bottom:14px;\"></div>'}",
+      to:   "    <div style=\"margin-bottom:14px;\"></div>" },
+    { name: 'reports: the cash figures stop being labelled NOT profit',
+      file: 'mobile-app/www/index.html', suites: ['app-reports'],
+      find: "    <div style=\"font-size:11px; letter-spacing:.1em; color:var(--text-muted); margin-bottom:6px;\">MONEY IN AND OUT — NOT PROFIT</div>",
+      to:   "    <div style=\"font-size:11px; letter-spacing:.1em; color:var(--text-muted); margin-bottom:6px;\">PROFIT</div>" },
+    { name: 'profit: the margin is computed on sales with no known cost',
+      file: 'helpers/yardProfit.js', suites: ['app-reports', 'stock-aliases'],
+      find: '        if (b && b.cost != null) linkedRevenue += (b.amount || 0);',
+      to:   '        linkedRevenue += (b.amount || 0);' },
+    { name: 'profit: stock on hand shows what came IN, not what is left',
+      file: 'mobile-app/www/index.html', suites: ['app-reports'],
+      find: '          ${repNum(oh ? g.onHand : g.net)} ${esc(data.unit || \'lb\')}${oh && g.onHand < 0 ? \' ⚠\' : \'\'}',
+      to:   '          ${repNum(g.net)} ${esc(data.unit || \'lb\')}' },
+    { name: 'bolgoods: pieces is separated from the commodity again',
+      file: 'mobile-app/www/index.html', suites: ['app-reports'],
+      find: '        <div style="display:grid; grid-template-columns:1fr 78px 34px; gap:8px; align-items:center; margin-bottom:8px;">',
+      to:   '        <div style="display:grid; grid-template-columns:1fr 34px; gap:8px; align-items:center; margin-bottom:8px;">' },
+    { name: 'bolgoods: the three weights are split across two lines again',
+      file: 'mobile-app/www/index.html', suites: ['app-reports'],
+      find: '        <div style="display:grid; grid-template-columns:repeat(3,1fr); gap:8px;">\n          <input data-bi="${i}" data-bf="gross_weight"',
+      to:   '        <div style="display:grid; grid-template-columns:repeat(2,1fr); gap:8px;">\n          <input data-bi="${i}" data-bf="gross_weight"' },
 ];
 
 // ── CRASH-SAFE, NOT JUST EXIT-SAFE ───────────────────────────────────────

@@ -5909,6 +5909,160 @@ let spendMethod = '';
 // repaint is worse than no filter.
 let spendBank = '';
 
+// ── THE REPORT TAB IS A MENU ───────────────────────────────────────────────
+// Apsara, 2026-09-16: "There should be multiple reports in yard app na?" —
+// and she was right. Report was ONE view, the spend report, while the server
+// had been producing a sales report the phone never showed and the website
+// had for weeks.
+//
+// Asked what the tab should become, she chose a menu over one long page. That
+// is also the right call on a phone: a stacked page loads every report to
+// answer one question, and the tab bar is already seven items wide, so a new
+// report cannot be a new tab.
+//
+// The four are the ones she said she actually opens. Adding a fifth is one
+// entry in this array and one render function — deliberately, because "there
+// should be more reports" is a sentence that gets said again.
+let reportView = null;   // null = the menu; otherwise the id being shown
+
+const YARD_REPORTS = [
+  { id: 'sales',  title: 'Sales',        blurb: 'Who you sold to, weight and amount — with margin where the material is linked to what it cost.' },
+  { id: 'stock',  title: 'Stock on hand', blurb: 'What is left in the yard by item type, after everything shipped out.' },
+  { id: 'spend',  title: 'Spend',        blurb: 'Money out, by month, method and bank.' },
+  { id: 'profit', title: 'Profit',       blurb: 'Bought against sold, and the margin on what actually left.' },
+];
+
+async function renderReportsMenu() {
+  if (reportView) {
+    const hit = YARD_REPORTS.find((r) => r.id === reportView);
+    if (hit) return renderOneReport(hit);
+    reportView = null;   // an id that no longer exists must not strand her
+  }
+  $('viewRoot').innerHTML = `
+    <section style="max-width:600px; margin:0 auto; padding:20px 16px 60px;">
+      <div style="font-family:var(--font-mono); font-size:10.5px; letter-spacing:.14em; text-transform:uppercase; color:var(--text-muted); margin-bottom:6px;">Reports</div>
+      <div style="font-size:12.5px; color:var(--text-muted); margin-bottom:16px; line-height:1.55;">Edge Yard only — Edge Metals keeps its own books.</div>
+      ${YARD_REPORTS.map((r) => `
+        <button type="button" class="rep-open" data-rep="${esc(r.id)}"
+          style="display:block; width:100%; text-align:left; background:var(--surface-card); border:1px solid var(--border-subtle); border-radius:var(--radius-sm); padding:14px 16px; margin-bottom:10px;">
+          <div style="font-size:15px; font-weight:700; color:var(--text-strong);">${esc(r.title)}</div>
+          <div style="font-size:12.5px; color:var(--text-muted); margin-top:3px; line-height:1.5;">${esc(r.blurb)}</div>
+        </button>`).join('')}
+    </section>`;
+  $('viewRoot').querySelectorAll('.rep-open').forEach((b) => b.addEventListener('click', () => {
+    reportView = b.dataset.rep;
+    renderReportsMenu();
+  }));
+}
+
+async function renderOneReport(rep) {
+  // Painted before the fetch so a slow report shows its own title and a way
+  // back, rather than a blank screen she cannot leave.
+  $('viewRoot').innerHTML = `
+    <section style="max-width:600px; margin:0 auto; padding:16px 16px 60px;">
+      <button type="button" id="repBack" class="btn" style="font-size:12px; padding:6px 12px; margin-bottom:12px;">&larr; Reports</button>
+      <div style="font-size:17px; font-weight:700; color:var(--text-strong); margin-bottom:12px;">${esc(rep.title)}</div>
+      <div id="repBody" style="font-size:13px; color:var(--text-muted);">Loading…</div>
+    </section>`;
+  $('repBack').addEventListener('click', () => { reportView = null; renderReportsMenu(); });
+  try {
+    // Spend is the one report that predates this menu, and it owns the whole
+    // view — filters, method columns, bank columns, all tested. It is left
+    // exactly as it was and simply given a way back, rather than being
+    // rewritten to paint into a div: re-plumbing a working money report to
+    // fit a new menu is how a working money report stops working.
+    if (rep.id === 'spend') {
+      await renderSpendReportTab();
+      const back = document.createElement('button');
+      back.type = 'button';
+      back.className = 'btn';
+      back.style.cssText = 'font-size:12px; padding:6px 12px; margin:16px 0 0 16px;';
+      back.textContent = '← Reports';
+      back.addEventListener('click', () => { reportView = null; renderReportsMenu(); });
+      $('viewRoot').insertBefore(back, $('viewRoot').firstChild);
+      return;
+    }
+    if (rep.id === 'sales')  return await renderSalesReportInto('repBody');
+    if (rep.id === 'stock')  return await renderStockReportInto('repBody');
+    if (rep.id === 'profit') return await renderProfitReportInto('repBody');
+  } catch (e) {
+    $('repBody').innerHTML = `<div style="color:var(--status-danger);">${esc(e.message)}</div>`;
+  }
+}
+
+const repMoney = (n) => (n === null || n === undefined ? '—' : '$' + Number(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }));
+const repNum = (n) => (n === null || n === undefined ? '—' : Number(n).toLocaleString('en-US'));
+
+// ── SALES — the one the phone never had ────────────────────────────────────
+async function renderSalesReportInto(id) {
+  const data = await api('/api/outbound-loads/report');
+  const rows = data.byBuyer || [];
+  $(id).innerHTML = `
+    <div style="display:flex; gap:18px; margin-bottom:14px;">
+      <div><div style="font-size:20px; font-weight:700; color:var(--text-strong);">${repMoney(data.totalAmount)}</div><div style="font-size:11px; color:var(--text-muted);">sold</div></div>
+      <div><div style="font-size:20px; font-weight:700; color:var(--text-strong);">${data.totalMargin === null ? '—' : repMoney(data.totalMargin)}</div><div style="font-size:11px; color:var(--text-muted);">margin</div></div>
+    </div>
+    ${data.totalMargin === null ? `<div style="font-size:11.5px; color:var(--status-warning, #d69e2e); margin-bottom:12px; line-height:1.5;">No sale is linked to the loads it came from, so there is no cost to measure against.</div>` : ''}
+    ${rows.length ? rows.map((b) => `
+      <div style="border-top:1px solid var(--border-subtle); padding:9px 0;">
+        <div style="display:flex; justify-content:space-between; gap:10px;">
+          <span style="color:var(--text-strong); font-weight:700;">${esc(b.buyer)}</span>
+          <span style="font-family:var(--font-mono);">${repMoney(b.amount)}</span>
+        </div>
+        <div style="font-size:11.5px; color:var(--text-muted); margin-top:2px;">
+          ${repNum(b.net)} ${esc(data.unit || 'lb')} · ${b.loadCount} load${b.loadCount === 1 ? '' : 's'}${
+            b.margin === null ? ' · cost not linked' : ` · margin ${repMoney(b.margin)}`}
+        </div>
+      </div>`).join('') : '<div>Nothing sold yet.</div>'}`;
+}
+
+// ── STOCK ON HAND ──────────────────────────────────────────────────────────
+async function renderStockReportInto(id) {
+  // No date range: on hand is a point in time, and "bought this week minus
+  // shipped ever" is not a number that means anything. The Inventory tab says
+  // the same thing when a filter is set.
+  const data = await api('/api/loads/inventory');
+  const rows = (data.byType || []).filter((g) => (g.onHand === undefined ? g.net : g.onHand) !== 0);
+  const oh = data.onHandAvailable;
+  $(id).innerHTML = `
+    ${oh ? '' : '<div style="font-size:11.5px; color:var(--status-warning, #d69e2e); margin-bottom:10px;">On-hand could not be worked out, so this shows what came IN.</div>'}
+    ${rows.length ? rows.map((g) => `
+      <div style="display:flex; justify-content:space-between; gap:10px; border-top:1px solid var(--border-subtle); padding:9px 0;">
+        <div style="min-width:0;">
+          <div style="color:var(--text-strong);">${esc(g.description)}</div>
+          <div style="font-size:11.5px; color:var(--text-muted);">${repNum(g.net)} in${oh ? ` · ${repNum(g.shipped || 0)} out` : ''}</div>
+        </div>
+        <span style="font-family:var(--font-mono); font-weight:700; color:${oh && g.onHand < 0 ? 'var(--status-danger)' : 'var(--text-strong)'};">
+          ${repNum(oh ? g.onHand : g.net)} ${esc(data.unit || 'lb')}${oh && g.onHand < 0 ? ' ⚠' : ''}
+        </span>
+      </div>`).join('') : '<div>Nothing on hand.</div>'}`;
+}
+
+// ── PROFIT ─────────────────────────────────────────────────────────────────
+async function renderProfitReportInto(id) {
+  const d = await api('/api/reports/yard-profit');
+  const m = d.margin || {}, c = d.cash || {};
+  $(id).innerHTML = `
+    <div style="font-size:11px; letter-spacing:.1em; color:var(--text-muted); margin-bottom:6px;">MARGIN ON WHAT WAS SOLD</div>
+    <div style="display:flex; gap:18px; margin-bottom:6px;">
+      <div><div style="font-size:20px; font-weight:700; color:var(--text-strong);">${repMoney(m.revenue)}</div><div style="font-size:11px; color:var(--text-muted);">revenue</div></div>
+      <div><div style="font-size:20px; font-weight:700; color:var(--text-strong);">${repMoney(m.cost_of_material_sold)}</div><div style="font-size:11px; color:var(--text-muted);">cost</div></div>
+      <div><div style="font-size:20px; font-weight:700; color:${(m.margin || 0) < 0 ? 'var(--status-danger)' : 'var(--text-strong)'};">${repMoney(m.margin)}</div><div style="font-size:11px; color:var(--text-muted);">margin</div></div>
+    </div>
+    ${m.caveat ? `<div style="font-size:11.5px; color:var(--status-warning, #d69e2e); margin-bottom:14px; line-height:1.5;">${esc(m.caveat)}</div>` : '<div style="margin-bottom:14px;"></div>'}
+
+    <div style="font-size:11px; letter-spacing:.1em; color:var(--text-muted); margin-bottom:6px;">MONEY IN AND OUT — NOT PROFIT</div>
+    <div style="font-family:var(--font-mono); font-size:12.5px; line-height:1.9; color:var(--text-muted);">
+      bought ${repMoney(c.bought)}<br>
+      sold ${repMoney(c.sold)}<br>
+      expenses ${repMoney(c.expenses)}<br>
+      trucking ${repMoney(c.trucking)}<br>
+      <strong style="color:var(--text-strong);">net ${repMoney(c.net)}</strong>
+    </div>
+    <div style="font-size:11.5px; color:var(--text-muted); margin-top:8px; line-height:1.5;">${esc(c.note || '')}</div>
+    ${(d.partial || []).length ? `<div style="font-size:11.5px; color:var(--status-danger); margin-top:8px;">Could not read: ${esc((d.partial || []).join(', '))}.</div>` : ''}`;
+}
+
 async function renderSpendReportTab() {
   const qs = [];
   if (spendFrom) qs.push('from=' + encodeURIComponent(spendFrom));
@@ -6604,7 +6758,7 @@ async function paintCurrentMobileTab() {
     if (currentMobileTab === 'inventory') { await renderInventoryTab(); return; }
     if (currentMobileTab === 'petty') { await renderPettyCashTab(); return; }
     if (currentMobileTab === 'trucker') { await renderTruckerTab(); return; }
-    if (currentMobileTab === 'report') { await renderSpendReportTab(); return; }
+    if (currentMobileTab === 'report') { await renderReportsMenu(); return; }
     if (currentMobileTab === 'expenses') { await renderExpensesTab(); return; }
     if (currentMobileTab === 'documents') { await renderDocumentsTab(); return; }
   } catch (err) {
@@ -7527,15 +7681,25 @@ function renderBolForm() {
 
     ${w.items.map((r, i) => `
       <div style="border:1px solid var(--border-subtle); border-radius:var(--radius-sm); padding:10px 12px; margin-bottom:10px;">
-        <div style="display:flex; align-items:center; gap:8px; margin-bottom:8px;">
-          <input data-bi="${i}" data-bf="description" placeholder="Description of goods" value="${esc(r.description)}" autocomplete="off" style="flex:1;">
-          <button type="button" class="btn bolw-del" data-bi="${i}" style="padding:6px 10px; font-size:13px;">&times;</button>
+        <!-- Apsara, 2026-09-16: "make pieces and commoity next to each other
+             in goods section of bol on app and gross,tare,net should be in
+             same line". So the line reads the way she says it aloud —
+             WHAT and HOW MANY together, then the three weights together,
+             which is also the order they come off the scale.
+
+             Pieces is given a fixed 78px rather than a share of the row: a
+             count is two or three characters and a description is not, and
+             an even split leaves the commodity box too narrow to read on a
+             phone. -->
+        <div style="display:grid; grid-template-columns:1fr 78px 34px; gap:8px; align-items:center; margin-bottom:8px;">
+          <input data-bi="${i}" data-bf="description" placeholder="Commodity" value="${esc(r.description)}" autocomplete="off">
+          <input data-bi="${i}" data-bf="pieces" inputmode="decimal" placeholder="Pieces" value="${esc(r.pieces)}" autocomplete="off" style="text-align:right;">
+          <button type="button" class="btn bolw-del" data-bi="${i}" style="padding:6px 8px; font-size:13px;">&times;</button>
         </div>
-        <div style="display:grid; grid-template-columns:repeat(2,1fr); gap:8px;">
-          <input data-bi="${i}" data-bf="pieces"       inputmode="decimal" placeholder="Pieces" value="${esc(r.pieces)}" autocomplete="off">
-          <input data-bi="${i}" data-bf="gross_weight" inputmode="decimal" placeholder="Gross"  value="${esc(r.gross_weight)}" autocomplete="off">
-          <input data-bi="${i}" data-bf="tare_weight"  inputmode="decimal" placeholder="Tare"   value="${esc(r.tare_weight)}" autocomplete="off">
-          <input data-bi="${i}" data-bf="net_weight"   inputmode="decimal" placeholder="Net"    value="${esc(r.net_weight)}" autocomplete="off">
+        <div style="display:grid; grid-template-columns:repeat(3,1fr); gap:8px;">
+          <input data-bi="${i}" data-bf="gross_weight" inputmode="decimal" placeholder="Gross" value="${esc(r.gross_weight)}" autocomplete="off" style="text-align:right;">
+          <input data-bi="${i}" data-bf="tare_weight"  inputmode="decimal" placeholder="Tare"  value="${esc(r.tare_weight)}" autocomplete="off" style="text-align:right;">
+          <input data-bi="${i}" data-bf="net_weight"   inputmode="decimal" placeholder="Net"   value="${esc(r.net_weight)}" autocomplete="off" style="text-align:right;">
         </div>
       </div>`).join('')}
 

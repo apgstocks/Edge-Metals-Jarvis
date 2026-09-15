@@ -5393,6 +5393,26 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
         }
     });
 
+    // ── BOUGHT VS SOLD, FOR THE YARD ────────────────────────────────────
+    // Apsara, 2026-09-16, choosing it off a list of reports she actually
+    // opens: "Profit — bought vs sold". It existed nowhere before this.
+    //
+    // requireAdmin, like the spend report: this is every figure the business
+    // turns on, and staff keep Loads and the cash balance.
+    //
+    // EDGE YARD ONLY. Edge Metals has its own margin and the two must never
+    // be added together. See helpers/yardProfit.js for why the obvious
+    // "sold this month minus bought this month" is the wrong number and what
+    // is reported instead.
+    app.get('/api/reports/yard-profit', requireAdmin, (req, res) => {
+        try {
+            res.json(require('./helpers/yardProfit').yardProfit({
+                from: req.query.from || null,
+                to: req.query.to || null,
+            }));
+        } catch (e) { res.status(500).json({ error: e.message }); }
+    });
+
     // ── WHICH ITEM NAMES MEAN THE SAME METAL ────────────────────────────
     // Apsara, 2026-09-16: "Warn me if al combo and aluminium combo,remember
     // my selection-then next time let ai decide based on knowldge".

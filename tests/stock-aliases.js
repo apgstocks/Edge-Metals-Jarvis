@@ -311,6 +311,60 @@ section('H — the clients ask about the NAME before offering the override');
     }
 }
 
+section('I — profit, and how much of it is actually known');
+{
+    // Apsara picked this report off a list because it existed nowhere:
+    // "Profit — bought vs sold". The app test stubs the route, so the MATHS
+    // is exercised here — a mutation computing the margin over sales with no
+    // known cost survived until this section existed.
+    fs.writeFileSync(cfg.LOADS_FILE, '[]');
+    fs.writeFileSync(cfg.OUTBOUND_LOADS_FILE, '[]');
+    fs.writeFileSync(cfg.ITEM_ALIASES_FILE, '[]');
+
+    const bought = (await req('POST', '/api/loads', { sid: admin, body: {
+        date: '2026-09-10', seller: 'Ramesh', buyer: 'Edge Trading', weight_unit: 'lb',
+        items: [{ description: 'Al combo', gross_weight: 1000, tare_weight: 0, price: 0.50 }],
+    } })).json;
+    const loadId = bought && (bought.id || (bought.load && bought.load.id));
+
+    // One sale LINKED to the load it came from, one not. That mix is the
+    // normal state of the yard, and it is what makes coverage meaningful.
+    await req('POST', '/api/outbound-loads', { sid: admin, body: {
+        date: '2026-09-15', buyer: 'Eccomelt', weight_unit: 'lb',
+        linked_inbound_load_ids: [loadId],
+        items: [{ description: 'Al combo', gross_weight: 600, tare_weight: 0, price: 1.00 }],
+    } });
+    await req('POST', '/api/outbound-loads', { sid: admin, body: {
+        date: '2026-09-15', buyer: 'Daekwang', weight_unit: 'lb',
+        items: [{ description: 'Al combo', gross_weight: 200, tare_weight: 0, price: 1.20 }],
+    } });
+
+    const r = (await req('GET', '/api/reports/yard-profit?from=2026-09-01&to=2026-09-30', { sid: admin })).json || {};
+    const m = r.margin || {};
+    ck('revenue is every sale in the range', m.revenue === 840, JSON.stringify(m));
+    ck('  cost is only the material that was LINKED', m.cost_of_material_sold === 500, JSON.stringify(m));
+    ck('  and the margin is the difference', m.margin === 340, JSON.stringify(m));
+
+    // ── THE HONEST PART ──────────────────────────────────────────────────
+    // 600 of 840 has a cost behind it. A margin quietly computed on 71% of
+    // sales and shown as the whole business is the most misleading number
+    // this app could produce.
+    ck('coverage says how much of the sales the margin covers',
+       m.coverage_pct === 71.4, `coverage ${m.coverage_pct}% — 600 linked of 840 sold`);
+    ck('  and it is said in words, not left as a number to interpret',
+       /71\.4/.test(m.caveat || '') && /not linked/.test(m.caveat || ''), m.caveat);
+
+    // The cash block must never be mistaken for profit.
+    ck('the cash figures are separate from the margin',
+       r.cash && r.cash.bought === 500 && r.cash.sold === 840, JSON.stringify(r.cash));
+    ck('  and carry the warning that they are NOT profit',
+       /NOT profit/.test((r.cash || {}).note || ''),
+       'metal bought this month is usually sold in another — read as profit, ' +
+       'a big purchase looks like a loss it never was');
+    ck('  with nothing unreadable', Array.isArray(r.partial) && r.partial.length === 0,
+       JSON.stringify(r.partial));
+}
+
 console.log(`\n  ${pass} passed, ${fail} failed`);
 if (failures.length) { console.log('\n  failed:'); failures.forEach((f) => console.log('    · ' + f)); }
 server.close();
