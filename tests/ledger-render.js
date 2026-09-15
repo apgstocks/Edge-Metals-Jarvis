@@ -54,10 +54,24 @@ const SCRIPT = [...html.matchAll(/<script(?![^>]*\bsrc=)[^>]*>([\s\S]*?)<\/scrip
 // resumes AFTERWARDS and overwrites the table with the placeholder — which
 // looked exactly like "renderLedgerTab drew nothing", and cost me a wrong
 // diagnosis before I printed the element instead of the assertion.
-async function mount(routes) {
+// ── SETTING THE PROFILE HAS TO HAPPEN INSIDE THE SAME EVAL ──────────────
+// `opts.isSuper` appends the assignment to the script being evaluated rather
+// than running it as a second w.eval(). IS_SUPER is a top-level `let`, and in
+// an indirect eval a `let` goes into a NEW declarative environment belonging
+// to that eval — so it is neither a property of window nor visible to any
+// later eval. Both were tried; both silently created a stray global while the
+// page's own functions kept closing over the real, still-false binding, and
+// the only symptom was a button that would not appear. Appended to the same
+// source, the assignment lands in the environment the page actually reads.
+//
+// Needed as of 2026-09-16: the Edge Metals Delete buttons are Jarvis-only
+// ("all types to jarvis profile"), so a suite that renders them has to say
+// which profile it is rendering as.
+async function mount(routes, opts = {}) {
     const dom = new JSDOM(html, { runScripts: 'outside-only', url: 'http://localhost/' });
     const w = dom.window;
-    try { w.eval(SCRIPT); } catch (e) { return { w, dom, err: e }; }
+    const boot = opts.isSuper === undefined ? SCRIPT : `${SCRIPT}\n;IS_SUPER = ${opts.isSuper ? 'true' : 'false'};`;
+    try { w.eval(boot); } catch (e) { return { w, dom, err: e }; }
     w.api = async (p, opts) => {
         const [base, qs] = String(p).split('?');
         const q = Object.fromEntries(new w.URLSearchParams(qs || ''));
@@ -1096,7 +1110,8 @@ section('G4 — deleting a payment, and saying what that undoes');
                  open_bills: [{ id: 'B1', supplier: 'Eccomelt', container_no: 'MSKU1', balance: 3440 }],
                  credit: {}, modes: ['Zelle', 'Wire'], banks: ['Chase'] };
     };
-    const { w, dom } = await mount({ '/api/bills': billsRoute, '/api/bill-payments': route });
+    const { w, dom } = await mount({ '/api/bills': billsRoute, '/api/bill-payments': route },
+                                   { isSuper: true });
     // Every DELETE, whatever the path, lands here.
     const realApi = w.api;
     w.api = async (pth, opts) => {
@@ -1104,6 +1119,19 @@ section('G4 — deleting a payment, and saying what that undoes');
         return realApi(pth, opts);
     };
     const doc = w.document;
+
+    // ── WHO IS LOOKING AT THIS SCREEN ────────────────────────────────────
+    // Apsara, 2026-09-16: unwinding an Edge Metals payment takes the Jarvis
+    // profile ("all types to jarvis profile"), so the Delete button below
+    // exists only for a super session — and the mount above therefore
+    // answers /api/me with super:true.
+    //
+    // Set that way and NOT by assigning the flag from outside. IS_SUPER is a
+    // top-level `let` inside the script this file evaluates, so it is neither
+    // a property of window nor reachable from a second w.eval() — both were
+    // tried, both silently did nothing, and the button stayed hidden while
+    // the test insisted it had asked for it. Answering /api/me is also the
+    // path the real page takes, which is the better reason.
     await w.renderLedgerTab('bills');
     await w.openBillPayForm({ supplier: 'Eccomelt' });
 
@@ -1142,6 +1170,45 @@ section('G4 — deleting a payment, and saying what that undoes');
        deleted[0] === '/api/bill-payments/P2', deleted[0]);
 
     await new Promise((r) => setTimeout(r, 60));
+    dom.window.close();
+}
+
+section('G4b — and what a plain admin sees on that same screen');
+{
+    // Apsara, 2026-09-16, asked which types the Jarvis profile should own:
+    // the Edge Metals ledgers too. So on this screen an admin sees the
+    // payments and cannot remove one.
+    //
+    // Its own mount rather than flipping IS_SUPER and re-rendering the modal
+    // above: re-rendering into an open modal leaves the previous render's
+    // state behind, and the resulting failure reads as the feature being
+    // broken rather than the fixture.
+    const payments = [
+        { id: 'P1', kind: 'payment', supplier: 'Eccomelt', date: '09/10/2026', mode: 'Wire',
+          amount: 4000, allocations: [{ bill_id: 'B1', amount: 4000 }] },
+    ];
+    const route = () => ({ payments, summary: { total: 0 },
+        open_bills: [{ id: 'B1', supplier: 'Eccomelt', container_no: 'MSKU1', balance: 3440 }],
+        credit: {}, modes: ['Zelle', 'Wire'], banks: ['Chase'] });
+    const { w, dom } = await mount({ '/api/bills': billsRoute, '/api/bill-payments': route },
+                                   { isSuper: false });
+    const doc = w.document;
+    await w.renderLedgerTab('bills');
+    await w.openBillPayForm({ supplier: 'Eccomelt' });
+
+    ck('a plain admin still sees every payment', doc.querySelectorAll('#bpModal div[data-payment]').length === 1,
+       'hiding the history as well would be a different, worse change');
+    ck('  but has no Delete to press', doc.querySelectorAll('#bpModal .bpDel').length === 0,
+       `${doc.querySelectorAll('#bpModal .bpDel').length} delete buttons — this ledger is Jarvis-only`);
+    // A control that simply vanishes reads as a bug. The em-dash that takes
+    // its place carries the reason; asserted on the ATTRIBUTE because that is
+    // where it lives, not on textContent where it is not.
+    const placeholder = doc.querySelector('#bpModal div[data-payment] span[title]');
+    ck('  and something in its place says which profile can',
+       !!placeholder && /Jarvis profile/i.test(placeholder.getAttribute('title')),
+       placeholder ? placeholder.getAttribute('title') : '(no placeholder rendered at all)');
+
+    await new Promise((r) => setTimeout(r, 40));
     dom.window.close();
 }
 

@@ -605,6 +605,30 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
         return res.status(403).json({ error: 'admin access required' });
     }
 
+    // ── THE JARVIS PROFILE, AS A GATE ───────────────────────────────────
+    // Apsara, 2026-09-16, on deleting a payment entered by mistake: "give
+    // delete partial payment to admin..all types to jarvis profile", and
+    // when asked which types: the Edge Metals ledgers too.
+    //
+    // So the line is drawn by BOOK, not by amount. An admin may remove one
+    // payment from a yard load — that is the everyday "I typed the wrong
+    // figure" correction. Unwinding a supplier bill payment, a customer
+    // receipt, a sale-cost settlement or a metals trucking payment takes the
+    // Jarvis profile, because those are Edge Metals' books and a deletion
+    // there moves a supplier's running account or a customer's balance.
+    //
+    // isSuper is the session's `super` flag, set only by the Jarvis password.
+    // The machine API_TOKEN path deliberately sets req.isSuper = false, so a
+    // script holding the token cannot delete Edge Metals money either — that
+    // is intentional, not an oversight: nothing automated should.
+    function requireSuper(req, res, next) {
+        if (isSuper(req)) return next();
+        return res.status(403).json({
+            error: 'This is an Edge Metals ledger entry. Sign in with the Jarvis profile to remove it.',
+            code: 'JARVIS_PROFILE_REQUIRED',
+        });
+    }
+
     // The top-level profile. NOT a middleware on any whole route — every route
     // a Jarvis session can reach, an admin can reach too. What this answers is
     // narrower: may this session walk past a lock that stops everyone else.
@@ -3760,7 +3784,7 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
     // Deleting an ADVANCE also un-applies whatever it was covering, which
     // raises those containers' balances. That is correct, and it is why the
     // response says which containers moved: the UI names them before asking.
-    app.delete('/api/bill-payments/:id', async (req, res) => {
+    app.delete('/api/bill-payments/:id', requireSuper, async (req, res) => {
         try {
             const bp = require('./helpers/billPayments');
             const audit = require('./helpers/audit');
@@ -3842,7 +3866,7 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
 
     // Audited, for the same reason the purchase side is: money coming off the
     // record is the most consequential thing these routes do.
-    app.delete('/api/sales-receipts/:id', async (req, res) => {
+    app.delete('/api/sales-receipts/:id', requireSuper, async (req, res) => {
         try {
             const r = require('./helpers/salesReceipts');
             const audit = require('./helpers/audit');
@@ -3992,7 +4016,7 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
         } catch (e) { res.status(400).json({ error: e.message }); }
     });
 
-    app.delete('/api/metals-trucking/:id', async (req, res) => {
+    app.delete('/api/metals-trucking/:id', requireSuper, async (req, res) => {
         try {
             const mt = require('./helpers/metalsTrucking');
             const audit = require('./helpers/audit');
@@ -4039,7 +4063,7 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
         } catch (e) { res.status(400).json({ error: e.message }); }
     });
 
-    app.delete('/api/sales-settlements/:id', async (req, res) => {
+    app.delete('/api/sales-settlements/:id', requireSuper, async (req, res) => {
         try {
             const st = require('./helpers/salesSettlements');
             const audit = require('./helpers/audit');
@@ -4218,24 +4242,42 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
     // that is the one case where the deletion might be covering something
     // rather than fixing it. Logged either way when super; silent for admin,
     // as before.
-    app.delete('/api/payments/:id', async (req, res) => {
+    // Admin, not any signed-in session. This route had NO gate at all: staff
+    // were blocked only because '/api/payments' is absent from
+    // STAFF_ALLOWED_PATH_PREFIXES, which left the plain 'user' role able to
+    // delete a payment from either client. Found 2026-09-16 while wiring
+    // Apsara's "give delete partial payment to admin".
+    app.delete('/api/payments/:id', requireAdmin, async (req, res) => {
         try {
             const { deletePayment, listPayments } = require('./helpers/payments');
             const audit = require('./helpers/audit');
             const doomed = listPayments().find((p) => p && String(p.id) === String(req.params.id)) || null;
-            let entry = null;
-            if (isSuper(req)) {
-                entry = await audit.record({
-                    action: 'delete-payment', subject: String(req.params.id),
-                    actor: actorOf(req), role: req.role, ip: req.ip,
-                    detail: doomed ? {
-                        load_id: doomed.load_id, mode: doomed.mode,
-                        amount: doomed.amount, paid_on: doomed.paid_on,
-                    } : { note: 'no matching payment found' },
-                });
-            }
+            // ── EVERY DELETION, NOT JUST JARVIS'S ────────────────────────
+            // This was wrapped in `if (isSuper(req))`, so an ADMIN removing a
+            // payment left no trace at all — money could leave the books with
+            // nothing recording who took it out. Apsara, asked directly on
+            // 2026-09-16, chose to log every deletion: "Log every deletion".
+            //
+            // Recorded BEFORE the delete and stamped after, which is this
+            // audit log's protocol (see helpers/audit.js): a crash between
+            // the two leaves a row saying the attempt started, where logging
+            // afterwards would leave nothing at all.
+            //
+            // The role is on the row, so an admin deletion and a Jarvis one
+            // are still told apart — by what the log says, not by whether the
+            // log exists.
+            const entry = await audit.record({
+                action: 'delete-payment', subject: String(req.params.id),
+                actor: actorOf(req), role: req.role, ip: req.ip,
+                detail: doomed ? {
+                    load_id: doomed.load_id, load_kind: doomed.load_kind || 'purchase',
+                    mode: doomed.mode, bank: doomed.bank || null,
+                    amount: doomed.amount, paid_on: doomed.paid_on,
+                    reference: doomed.reference || null,
+                } : { note: 'no matching payment found' },
+            });
             const removed = await deletePayment(String(req.params.id));
-            if (entry) await audit.complete(entry, removed ? 'done' : 'failed', { removed });
+            await audit.complete(entry, removed ? 'done' : 'failed', { removed });
             res.json({ ok: true, removed });
         } catch (e) { res.status(500).json({ error: e.message }); }
     });

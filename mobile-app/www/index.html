@@ -2251,6 +2251,26 @@ function updatePayPreview() {
   }
 }
 
+// ── WHO MAY REMOVE A PAYMENT ────────────────────────────────────────────
+// Apsara, 2026-09-16: "in receive payment-what if i mistakenly added
+// something-->give delete partial payment to admin..all types to jarvis
+// profile" — and, asked what "partial" meant, she chose "one payment out of
+// several". So an admin may take any single payment row back off a yard
+// load, which is the everyday "I typed the wrong figure" correction. The
+// load simply goes back to owing that money.
+//
+// This ✕ used to be shown to EVERYONE who could open the box, and
+// DELETE /api/payments/:id had no gate at all — staff were stopped only
+// because the whole path is off their allowlist, which left the plain 'user'
+// role able to delete a payment from either client. The route is now
+// requireAdmin; this hides a button the server would refuse.
+//
+// UI GUARD, NOT SECURITY — the same rule as loadIsDeletable below. Hiding a
+// button prevents a mistake; the route is what prevents an attack.
+function payCanDelete() {
+  return ROLE === 'admin';
+}
+
 function renderPayHistory() {
   const el = $('payHistory');
   if (!el || !payingLoad) return;
@@ -2265,7 +2285,7 @@ function renderPayHistory() {
         ${r.reference ? `<span style="color:var(--text-faint);">${esc(r.reference)}</span>` : ''}
         <span style="flex:1;"></span>
         <span style="font-weight:700;">${payMoney(r.amount)}</span>
-        <button class="btn btn-danger btn-del-pay" data-id="${esc(r.id)}" style="font-size:10px; padding:3px 8px;">✕</button>
+        ${payCanDelete() ? `<button class="btn btn-danger btn-del-pay" data-id="${esc(r.id)}" style="font-size:10px; padding:3px 8px;">✕</button>` : ''}
       </div>`).join('')}`;
 }
 

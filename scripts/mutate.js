@@ -1930,6 +1930,46 @@ const MUTATIONS = [
       // divergence this codebase already guards for invoices.
       find: "    po_number: (w.po || '').trim(), appointment_id: (w.appointment || '').trim(),",
       to:   "    po: (w.po || '').trim(), appointment: (w.appointment || '').trim()," },
+
+    // ── WHO MAY DELETE MONEY (2026-09-16) ────────────────────────────────
+    { name: 'paydel: the payment delete loses its gate, as it was before today',
+      file: 'api.js', suites: ['payment-delete-roles'],
+      // Not hypothetical — this is exactly how the route shipped until now,
+      // which left the plain 'user' role able to remove a payment.
+      find: "    app.delete('/api/payments/:id', requireAdmin, async (req, res) => {",
+      to:   "    app.delete('/api/payments/:id', async (req, res) => {" },
+    { name: 'paydel: an Edge Metals receipt becomes deletable by any admin',
+      file: 'api.js', suites: ['payment-delete-roles'],
+      find: "    app.delete('/api/sales-receipts/:id', requireSuper, async (req, res) => {",
+      to:   "    app.delete('/api/sales-receipts/:id', async (req, res) => {" },
+    { name: 'paydel: a supplier bill payment becomes deletable by any admin',
+      file: 'api.js', suites: ['payment-delete-roles'],
+      find: "    app.delete('/api/bill-payments/:id', requireSuper, async (req, res) => {",
+      to:   "    app.delete('/api/bill-payments/:id', async (req, res) => {" },
+    { name: 'paydel: requireSuper accepts any admin, not just the Jarvis profile',
+      file: 'api.js', suites: ['payment-delete-roles'],
+      find: '        if (isSuper(req)) return next();\n        return res.status(403).json({\n            error: \'This is an Edge Metals ledger entry.',
+      to:   '        if (req.role === \'admin\') return next();\n        return res.status(403).json({\n            error: \'This is an Edge Metals ledger entry.' },
+    { name: "paydel: an admin's deletion goes unlogged again",
+      file: 'api.js', suites: ['payment-delete-roles'],
+      // Money leaving the books with nothing recording who took it out. This
+      // is how it behaved until she was asked and said "Log every deletion".
+      find: "            const entry = await audit.record({\n                action: 'delete-payment', subject: String(req.params.id),",
+      to:   "            const entry = isSuper(req) ? await audit.record({\n                action: 'delete-payment', subject: String(req.params.id)," },
+    { name: 'paydel: the audit row is written AFTER the delete instead of before',
+      file: 'api.js', suites: ['payment-delete-roles'],
+      // The protocol is record-then-act: a crash between the two must still
+      // leave a row saying the attempt started.
+      find: "            const removed = await deletePayment(String(req.params.id));\n            await audit.complete(entry, removed ? 'done' : 'failed', { removed });",
+      to:   "            const removed = await deletePayment(String(req.params.id));\n            if (!removed) return res.json({ ok: true, removed });\n            await audit.complete(entry, 'done', { removed });" },
+    { name: 'paydel: the ✕ is drawn for everyone again',
+      file: 'dashboard/index.html', suites: ['payment-delete-roles'],
+      find: "function payCanDelete() {\n  return ROLE === 'admin';",
+      to:   'function payCanDelete() {\n  return true;' },
+    { name: 'paydel: the Edge Metals Delete buttons come back for plain admins',
+      file: 'dashboard/index.html', suites: ['payment-delete-roles'],
+      find: "function metalsCanDelete() {\n  return IS_SUPER === true;",
+      to:   "function metalsCanDelete() {\n  return ROLE === 'admin';" },
 ];
 
 // ── CRASH-SAFE, NOT JUST EXIT-SAFE ───────────────────────────────────────

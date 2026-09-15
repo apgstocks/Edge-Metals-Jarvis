@@ -39,6 +39,18 @@ process.env.APP_PASSWORD    = 'user-pw-aaaaaaaaaaaa';
 process.env.ADMIN_PASSWORD  = 'admin-pw-bbbbbbbbbbb';
 process.env.STAFF_PASSWORD  = 'staff-pw-ccccccccccc';
 process.env.JARVIS_PASSWORD = 'jarvis-pw-ddddddddddd';
+// ── UNWINDING EDGE METALS MONEY TAKES THE JARVIS PROFILE ─────────────────
+// Apsara, 2026-09-16: "give delete partial payment to admin..all types to
+// jarvis profile" — and, asked which types, the Edge Metals ledgers too. A
+// supplier bill payment, a customer receipt, a sale-cost settlement and a
+// metals trucking payment each move a running account or reopen containers,
+// so they sit behind the PROFILE rather than the role. An admin keeps the
+// yard loads, where a wrong figure is an everyday correction.
+//
+// The deletes below used to run as `admin`. They are not held to a lower
+// standard now — every one is still asserted, just through the door she
+// chose, and section "the rule itself" asserts an admin is refused so the
+// gate is covered rather than merely worked around.
 
 const ROOT = path.join(__dirname, '..');
 const cfg = require(path.join(ROOT, 'config'));
@@ -308,6 +320,7 @@ section('E — the routes, because a helper nothing calls is not a feature');
     const app = createApi();
     await new Promise((r) => { server = app.listen(0, () => { base = `http://127.0.0.1:${server.address().port}`; r(); }); });
     const admin = (await login('admin-pw-bbbbbbbbbbb')).json.sid;
+    const jarvis = (await login('jarvis-pw-ddddddddddd')).json.sid;
 
     let r = await req('GET', '/api/bills', { sid: admin });
     ck('GET /api/bills answers', r.status === 200, String(r.status));
@@ -583,6 +596,7 @@ section('E — the routes, because a helper nothing calls is not a feature');
 section('E2 — photos, filters, and the Shipment sheet row');
 {
     const admin = (await login('admin-pw-bbbbbbbbbbb')).json.sid;
+    const jarvis = (await login('jarvis-pw-ddddddddddd')).json.sid;
 
     // ── PHOTOS ───────────────────────────────────────────────────────────
     // Apsara: "In bill,i want photos field where url can be pasted."
@@ -781,6 +795,7 @@ section('K — deleting a payment takes everything it touched with it');
     // it. Money coming off the record is the most consequential thing this
     // file does, and the Yard has audited its equivalent since 2026-08-30.
     const admin = (await login('admin-pw-bbbbbbbbbbb')).json.sid;
+    const jarvis = (await login('jarvis-pw-ddddddddddd')).json.sid;
     const bp = require(path.join(ROOT, 'helpers/billPayments'));
     const audit = require(path.join(ROOT, 'helpers/audit'));
     const { listPayments } = require(path.join(ROOT, 'helpers/payments'));
@@ -808,7 +823,20 @@ section('K — deleting a payment takes everything it touched with it');
     const ledgerBefore = listPayments().filter((x) => x.load_id === pid).length;
     ck('  and there is one ledger row behind it', ledgerBefore === 1, String(ledgerBefore));
 
-    const gone = await req('DELETE', `/api/bill-payments/${pid}`, { sid: admin });
+    // THE RULE ITSELF, asserted here and not only in
+    // tests/payment-delete-roles.js: this is the file someone opens when they
+    // wonder why the delete below uses a different session, and a comment
+    // explaining a rule is worth less than a line proving it.
+    const asAdmin = await req('DELETE', `/api/bill-payments/${pid}`, { sid: admin });
+    ck('a plain admin cannot unwind an Edge Metals payment', asAdmin.status === 403,
+       `got ${asAdmin.status} ${asAdmin.raw || ''}`);
+    ck('  and is told which profile can', asAdmin.json && asAdmin.json.code === 'JARVIS_PROFILE_REQUIRED',
+       JSON.stringify(asAdmin.json));
+    ck('  with nothing removed by the refusal',
+       listPayments().filter((x) => x.load_id === pid).length === 1,
+       'a refused delete that half-happened would be worse than one that succeeded');
+
+    const gone = await req('DELETE', `/api/bill-payments/${pid}`, { sid: jarvis });
     ck('the payment deletes', gone.status === 200, gone.raw);
     ck('  naming the containers it reopened',
        Array.isArray(gone.json.containers_reopened) && gone.json.containers_reopened.length === 2,
@@ -849,7 +877,7 @@ section('K — deleting a payment takes everything it touched with it');
        /logBillSafely/.test(delRoute) && /payment-removed/.test(delRoute),
        'POST re-mirrors every container it touches; DELETE moves the same numbers back');
 
-    const twice = await req('DELETE', `/api/bill-payments/${pid}`, { sid: admin });
+    const twice = await req('DELETE', `/api/bill-payments/${pid}`, { sid: jarvis });
     ck('deleting it again is a clean 404, not a 500', twice.status === 404, twice.raw);
 
     // Staff must not reach this at all — '/api/bill-payments' is deliberately
@@ -865,6 +893,7 @@ section('L — cash, and the yard cash box it must not touch');
     // Asked whether Edge Metals cash should draw down the yard's Petty cash
     // reserve: "No — Edge Metals cash is separate."
     const admin = (await login('admin-pw-bbbbbbbbbbb')).json.sid;
+    const jarvis = (await login('jarvis-pw-ddddddddddd')).json.sid;
     const bp = require(path.join(ROOT, 'helpers/billPayments'));
     const petty = require(path.join(ROOT, 'helpers/pettyCash'));
     const { listPayments } = require(path.join(ROOT, 'helpers/payments'));
@@ -913,7 +942,7 @@ section('L — cash, and the yard cash box it must not touch');
        row && !row.petty_cash_entry_id, JSON.stringify(row && row.petty_cash_entry_id));
 
     // Deleting must not PAY money INTO a box the cash never came out of.
-    const gone = await req('DELETE', `/api/bill-payments/${cash.json.payment.id}`, { sid: admin });
+    const gone = await req('DELETE', `/api/bill-payments/${cash.json.payment.id}`, { sid: jarvis });
     ck('deleting a cash payment succeeds', gone.status === 200, gone.raw);
     ck('  and still does not move the yard box', petty.balance() === before,
        `refunding it would credit the yard with cash it never spent: ${before} -> ${petty.balance()}`);
@@ -948,6 +977,7 @@ section('M — one payment, one supplier, enforced where it is not displayed');
     // ROUTE, which the yard assistant and anything else can reach without
     // going near the form.
     const admin = (await login('admin-pw-bbbbbbbbbbb')).json.sid;
+    const jarvis = (await login('jarvis-pw-ddddddddddd')).json.sid;
     const bp = require(path.join(ROOT, 'helpers/billPayments'));
 
     const mk = async (supplier, container) => (await req('POST', '/api/bills', { sid: admin, body: {
@@ -1028,6 +1058,7 @@ section('N — sales at container grain: charges, commission, and the join');
     // "bookng first then container no", other charges each with a note, and
     // commission per MT off "The invoiced weight (sale)".
     const admin = (await login('admin-pw-bbbbbbbbbbb')).json.sid;
+    const jarvis = (await login('jarvis-pw-ddddddddddd')).json.sid;
     const round2 = (n) => Math.round(n * 100) / 100;
     const round3 = (n) => Math.round(n * 1000) / 1000;
 
@@ -1192,6 +1223,7 @@ section('O — mark as paid, and the $25 the bank took on the way');
     // `paid` column would say settled while the bank says $12,315 against a
     // $12,340 invoice, and nothing would say where the difference went.
     const admin = (await login('admin-pw-bbbbbbbbbbb')).json.sid;
+    const jarvis = (await login('jarvis-pw-ddddddddddd')).json.sid;
     const receipts = require(path.join(ROOT, 'helpers/salesReceipts'));
     const { listPayments } = require(path.join(ROOT, 'helpers/payments'));
 
@@ -1316,7 +1348,7 @@ section('O — mark as paid, and the $25 the bank took on the way');
     // ── DELETING ONE REOPENS WHAT IT CLOSED ──────────────────────────────
     const audit = require(path.join(ROOT, 'helpers/audit'));
     const rid = paid.json.receipt.id;
-    const gone = await req('DELETE', `/api/sales-receipts/${rid}`, { sid: admin });
+    const gone = await req('DELETE', `/api/sales-receipts/${rid}`, { sid: jarvis });
     ck('deleting a receipt succeeds', gone.status === 200, gone.raw);
     ck('  the container owes again, bank charge and all',
        owed().balance === 11890 && owed().charge === 0, JSON.stringify(owed()));
@@ -1324,7 +1356,7 @@ section('O — mark as paid, and the $25 the bank took on the way');
        audit.listEntries().some((e) => e.subject === rid && e.action === 'delete-sales-receipt'),
        JSON.stringify(audit.listEntries().filter((e) => e.subject === rid).map((e) => e.action)));
     ck('  deleting it twice is a clean 404',
-       (await req('DELETE', `/api/sales-receipts/${rid}`, { sid: admin })).status === 404);
+       (await req('DELETE', `/api/sales-receipts/${rid}`, { sid: jarvis })).status === 404);
 
     const staff = (await login('staff-pw-ccccccccccc')).json.sid;
     ck('staff cannot touch receipts at all',
@@ -1336,6 +1368,7 @@ section('P — settling what a sale costs: freight out, and the agent');
     // Apsara, 2026-09-10, asked whether freight and commission need paid or
     // unpaid tracking: "Yes — both get settled separately."
     const admin = (await login('admin-pw-bbbbbbbbbbb')).json.sid;
+    const jarvis = (await login('jarvis-pw-ddddddddddd')).json.sid;
     const st = require(path.join(ROOT, 'helpers/salesSettlements'));
     const { listPayments } = require(path.join(ROOT, 'helpers/payments'));
     const spend = require(path.join(ROOT, 'helpers/spendReport'));
@@ -1441,7 +1474,7 @@ section('P — settling what a sale costs: freight out, and the agent');
     // ── DELETING TAKES THE LEDGER ROW WITH IT ────────────────────────────
     const audit = require(path.join(ROOT, 'helpers/audit'));
     const sid2 = rest.json.settlement.id;
-    const gone = await req('DELETE', `/api/sales-settlements/${sid2}`, { sid: admin });
+    const gone = await req('DELETE', `/api/sales-settlements/${sid2}`, { sid: jarvis });
     ck('deleting a settlement succeeds', gone.status === 200, gone.raw);
     ck('  the charge and commission owe again',
        st.payables().find((p) => p.key === freight.key).balance === 1850,
@@ -1462,6 +1495,7 @@ section('Q — the customer box, and the figures that move as she types');
     // book data as i type match" and "also i want invoice amount and
     // commission amount to be computed dynamically".
     const admin = (await login('admin-pw-bbbbbbbbbbb')).json.sid;
+    const jarvis = (await login('jarvis-pw-ddddddddddd')).json.sid;
     const ab = require(path.join(ROOT, 'helpers/addressBook'));
 
     // Two aliases for one company — she calls it both, and offering only the
@@ -1527,6 +1561,7 @@ section('R — several grades in one container');
     // container." Asked how the weights work: "Each item has its own weight
     // and price."
     const admin = (await login('admin-pw-bbbbbbbbbbb')).json.sid;
+    const jarvis = (await login('jarvis-pw-ddddddddddd')).json.sid;
     const round2 = (n) => Math.round(n * 100) / 100;
     const round3 = (n) => Math.round(n * 1000) / 1000;
 
@@ -1674,6 +1709,7 @@ section('S — Edge Metals haulage, which is not the yard\'s');
     // put all the relevant details from bill to this..give an option to pay.
     // Also give an option to filter by date,month,trucking company,status".
     const admin = (await login('admin-pw-bbbbbbbbbbb')).json.sid;
+    const jarvis = (await login('jarvis-pw-ddddddddddd')).json.sid;
     const mt = require(path.join(ROOT, 'helpers/metalsTrucking'));
     const { listPayments } = require(path.join(ROOT, 'helpers/payments'));
     const spend = require(path.join(ROOT, 'helpers/spendReport'));
@@ -1849,7 +1885,7 @@ section('S — Edge Metals haulage, which is not the yard\'s');
 
     const audit = require(path.join(ROOT, 'helpers/audit'));
     const pid = pay.json.payment.id;
-    const gone = await req('DELETE', `/api/metals-trucking/${pid}`, { sid: admin });
+    const gone = await req('DELETE', `/api/metals-trucking/${pid}`, { sid: jarvis });
     ck('deleting a haulage payment succeeds', gone.status === 200, gone.raw);
     ck('  the hauls owe again',
        mt.payables().find((r) => r.bill_id === h2.id).status === 'unpaid');
@@ -1869,6 +1905,7 @@ section('T — several grades on one invoice');
     // Apsara, 2026-09-10: "Once bill thing are fixed,i want outgoing sales to
     // be fixed to support multi item in a container."
     const admin = (await login('admin-pw-bbbbbbbbbbb')).json.sid;
+    const jarvis = (await login('jarvis-pw-ddddddddddd')).json.sid;
     const round2 = (n) => Math.round(n * 100) / 100;
     const round3 = (n) => Math.round(n * 1000) / 1000;
 
@@ -1957,6 +1994,7 @@ section('U — what the haulage is made of');
     // keeps, whose columns are Line Haul, Port Fees, Chassis Rent, Others,
     // Net Amount.
     const admin = (await login('admin-pw-bbbbbbbbbbb')).json.sid;
+    const jarvis = (await login('jarvis-pw-ddddddddddd')).json.sid;
     const mt = require(path.join(ROOT, 'helpers/metalsTrucking'));
 
     // Her own first row, reproduced: 650 + 55 + 0 + 100 = 805.
@@ -2048,6 +2086,7 @@ section('V — what a container actually made');
     // on the same booking + container, so what a box cost and what it sold
     // for can be subtracted. The app could not answer this before today.
     const admin = (await login('admin-pw-bbbbbbbbbbb')).json.sid;
+    const jarvis = (await login('jarvis-pw-ddddddddddd')).json.sid;
     const margin = require(path.join(ROOT, 'helpers/margin'));
     const round2 = (n) => Math.round(n * 100) / 100;
 
@@ -2255,6 +2294,7 @@ section('X — a container claimed twice, on either side');
     // helpers/metalsTrucking.js keys on the bill id and shows both hauls.
     // One duplicate, two tabs disagreeing, no warning anywhere.
     const admin = (await login('admin-pw-bbbbbbbbbbb')).json.sid;
+    const jarvis = (await login('jarvis-pw-ddddddddddd')).json.sid;
     const margin = require(path.join(ROOT, 'helpers/margin'));
     const mt = require(path.join(ROOT, 'helpers/metalsTrucking'));
 
