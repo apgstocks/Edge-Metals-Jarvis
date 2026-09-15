@@ -191,6 +191,35 @@ section('E2 — it can see an EXPENSE, not just the month\'s total');
     // "there are none" — which is the worst pair of meanings to merge.
     const tools = require(path.join(ROOT, 'helpers/tools'));
 
+    // ── AND THE SUMMARY CARRIES CATEGORIES ───────────────────────────────
+    // Apsara, pushing back: "But it shoudl able to show that na". She was
+    // right, and about more than find_expenses. spend_report handed over
+    // byMethod, byBank and months and NO category breakdown at all — so
+    // "how much salary did we pay" was unanswerable even as a summary, while
+    // expenses.getExpenseReport had been computing byCategory for the
+    // Expenses tab the whole time. One line per category is an aggregate, so
+    // the "rows would dominate the prompt" reasoning does not cover it.
+    {
+        const expMod0 = require.resolve(path.join(ROOT, 'helpers/expenses'));
+        require(expMod0);
+        const realLoad = require.cache[expMod0].exports.loadExpenses;
+        require.cache[expMod0].exports.loadExpenses = () => ([
+            { id: 'C1', date: '2026-09-12', category: 'Labour', description: 'Salary', amount: 200, payment_method: 'Cash' },
+            { id: 'C2', date: '2026-09-10', category: 'Labour', description: 'Salary Santiago', amount: 900, payment_method: 'Cash' },
+            { id: 'C3', date: '2026-09-05', category: 'Fuel', description: 'Diesel', amount: 300, payment_method: 'Card' },
+        ]);
+        const rep = await tools.runRead('spend_report', {});
+        ck('the spend summary breaks expenses down BY CATEGORY',
+           Array.isArray(rep.byCategory) && rep.byCategory.length > 0,
+           JSON.stringify(Object.keys(rep)));
+        const labour = (rep.byCategory || []).find((c) => c.category === 'Labour');
+        ck('  so "how much salary did we pay" is answerable from the summary',
+           labour && labour.amount === 1100, JSON.stringify(rep.byCategory));
+        ck('  and it still carries no rows, which was the point of dropping them',
+           rep.rows === undefined, JSON.stringify(Object.keys(rep)));
+        require.cache[expMod0].exports.loadExpenses = realLoad;
+    }
+
     ck('there IS a tool that reads expense rows',
        tools.readToolNames().includes('find_expenses'),
        tools.readToolNames().join(', '));

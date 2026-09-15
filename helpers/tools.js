@@ -203,9 +203,31 @@ const TOOLS = {
                 pettyEntries: petty.listEntries(), from: p.from, to: p.to, method: p.method,
             });
             // The row-level drill-down is dropped: the totals answer the
-            // question and the rows would dominate the prompt.
+            // question and the rows would dominate the prompt. find_expenses
+            // is the drill-down beside this, for anything that needs a name.
             const { rows, received, ...totals } = r;
-            return { ...totals, received: { total: received.total, count: received.count, byMethod: received.byMethod } };
+
+            // ── BY CATEGORY, WHICH WAS MISSING ENTIRELY ──────────────────
+            // Apsara, 2026-09-15, pushing back on "it should be able to show
+            // that na" after being told the deployed build lacked
+            // find_expenses. She was right, and about more than that: this
+            // report handed over byMethod, byBank and months, and NO category
+            // breakdown at all. So "how much salary did we pay" was
+            // unanswerable even in the summary, despite
+            // expenses.getExpenseReport computing byCategory for the Expenses
+            // tab all along.
+            //
+            // It is an AGGREGATE, one line per category, so the reasoning
+            // above about rows dominating the prompt does not apply to it.
+            // This makes the ordinary summary question — what did we spend on
+            // labour, on fuel, on repairs — answerable without a row search.
+            let byCategory = [];
+            try {
+                const { getExpenseReport, loadExpenses } = require('./expenses');
+                byCategory = (getExpenseReport(loadExpenses(), { from: p.from, to: p.to }).byCategory) || [];
+            } catch (e) { /* a report that cannot be built must not break the rest */ }
+
+            return { ...totals, byCategory, received: { total: received.total, count: received.count, byMethod: received.byMethod } };
         },
     },
 
