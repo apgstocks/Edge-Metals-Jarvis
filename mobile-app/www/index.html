@@ -4721,8 +4721,11 @@ function wireLoadsEvents() {
   // what reported minus 300 lb of aluminium that was sitting in the yard.
   // Asking about the override first would train her to click through a prompt
   // whose real answer is "you typed it differently".
-  async function handleStockShort(err, sendSale) {
-    const short = (err && err.shortfalls) || [];
+  // Takes the SAVE RESPONSE's stock_warning, not a thrown error: since
+  // 2026-09-16 the server saves the sale and reports, rather than refusing
+  // it. No sendSale to retry with, and no allow_negative anywhere.
+  async function handleStockShort(warning) {
+    const short = (warning && warning.shortfalls) || [];
     let learned = false;
 
     for (const s of short) {
@@ -4748,20 +4751,22 @@ function wireLoadsEvents() {
       if (same) learned = true;
     }
 
-    if (learned) {
-      try { await sendSale(); return; }
-      catch (e2) { if (!e2 || e2.code !== 'STOCK_SHORT') throw e2; err = e2; }
-    }
+    // ── THE WARNING ──────────────────────────────────────────────────────
+    // The sale is ALREADY SAVED. This says what the numbers are and what it
+    // usually means; it does not ask permission, because she said it should
+    // not block — "just provide warning that can be overriden".
+    //
+    // Skipped when she has just answered an alias question, because the
+    // shortfall may no longer be real: warning her that stock is short
+    // immediately after she explained that it is not reads as not listening.
+    if (learned) return;
 
-    const lines = ((err && err.shortfalls) || []).map((s) => '  · ' + (s.on_hand <= 0
+    const lines = short.map((s) => '  · ' + (s.on_hand <= 0
       ? `${s.item}: nothing on hand, ${s.requested} going out`
       : `${s.item}: ${s.on_hand} on hand, ${s.requested} going out (short ${s.short_by})`)).join('\n');
-    const ok = confirm(
-      `This ships more than the yard has on record:\n\n${lines}\n\n` +
-      `That usually means a purchase was never entered.\n\n` +
-      `OK = record it anyway\nCancel = stop and check the loads`);
-    if (!ok) throw new Error('Nothing was saved — check the missing purchase first.');
-    await sendSale({ allow_negative: true });
+    alert(
+      `Saved — but this ships more than the yard has on record:\n\n${lines}\n\n` +
+      `That usually means a purchase was never entered. Stock on hand will show a negative until it is.`);
   }
 
   $('btnSaveLoad').addEventListener('click', async () => {
@@ -4872,12 +4877,13 @@ function wireLoadsEvents() {
         const sendSale = (extra) => (isEdit
           ? api(`/api/outbound-loads/${encodeURIComponent(editingLoadId)}`, { method: 'PUT', body: JSON.stringify({ ...salePayload, ...extra }) })
           : api('/api/outbound-loads', { method: 'POST', body: JSON.stringify({ ...salePayload, ...extra }) }));
-        try {
-          await sendSale();
-        } catch (err) {
-          if (!err || err.code !== 'STOCK_SHORT') throw err;
-          await handleStockShort(err, sendSale);
-        }
+        // ── SAVED FIRST, WARNED AFTER ──────────────────────────────────
+        // Apsara, 2026-09-16: "negative inventory should not block a sale in
+        // edge yard.just provide warning that can be overriden". The server
+        // no longer refuses; it saves and reports. So there is no retry, no
+        // allow_negative and no confirm in the way of the save.
+        const saved = await sendSale();
+        if (saved && saved.stock_warning) await handleStockShort(saved.stock_warning);
       } else if (isEdit) {
         await api(`/api/loads/${encodeURIComponent(editingLoadId)}`, { method: 'PUT', body: JSON.stringify(payload) });
       } else {

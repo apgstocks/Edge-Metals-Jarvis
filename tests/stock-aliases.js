@@ -95,23 +95,35 @@ section('A — the report her question was about');
        row && row.shipped === 400 && row.onHand === 600, JSON.stringify(row));
 }
 
-section('B — the sale that cannot happen is refused');
+section('B — the sale that is short is RECORDED, and warned about');
 {
-    // Her choice, in her words: "Block the sale instead".
+    // ── SHE REVERSED THIS, AND THE REVERSAL IS THE POINT ─────────────────
+    // On 2026-09-16 she picked "Block the sale instead" from the options put
+    // to her. Later the same day, having used it: "negative inventory should
+    // not block a sale in edge yard.just provide warning that can be
+    // overriden."
+    //
+    // So this section is the exact inverse of what it asserted this morning.
+    // Written out rather than deleted, because the old rule is the one a
+    // future reader would assume from helpers/stockGuard.js's name.
     const short = await sell('Al combo', 5000);
-    ck('shipping more than is on hand is refused', short.status === 400, JSON.stringify(short.json));
-    ck('  with a machine-readable reason', short.json && short.json.code === 'STOCK_SHORT');
+    ck('shipping more than is on hand is RECORDED', short.status === 200, JSON.stringify(short.json));
+    ck('  and comes back with a warning', !!(short.json && short.json.stock_warning),
+       JSON.stringify(short.json) + ' — a save with no warning is the minus-300 row coming back silently');
+    ck('  machine-readable', short.json.stock_warning.code === 'STOCK_SHORT');
     // "Not enough stock" tells her nothing she can act on.
     ck('  naming the item, what is on hand and what was attempted',
-       /Al combo/.test(short.json.error) && /600/.test(short.json.error) && /5000/.test(short.json.error),
-       short.json && short.json.error);
+       /Al combo/.test(short.json.stock_warning.message)
+       && /600/.test(short.json.stock_warning.message)
+       && /5000/.test(short.json.stock_warning.message),
+       short.json.stock_warning.message);
 
-    // THE CASE THAT MATTERS MOST: a material never bought at all. On hand is
-    // ZERO, which is a fact — not "unknown". Conflating those two made the
-    // first version of this guard wave through exactly the sale that produced
-    // the minus-300 row she was looking at.
+    // THE CASE THAT MATTERS MOST is still the one to get right: a material
+    // never bought at all. On hand is ZERO, which is a FACT, not "unknown".
+    // Conflating those two is what produced the minus-300 row originally, and
+    // it would now show up as a sale that warns about nothing.
     const never = await sell('Brass', 50);
-    ck('a material never bought is refused too', never.status === 400 && never.json.code === 'STOCK_SHORT',
+    ck('a material never bought still warns', never.status === 200 && !!never.json.stock_warning,
        JSON.stringify(never.json) + ' — "not in the report" means zero, not unknown');
 
     // Two lines of one metal, each fitting, together not.
@@ -120,26 +132,23 @@ section('B — the sale that cannot happen is refused');
         items: [{ description: 'Al combo', gross_weight: 400, tare_weight: 0, price: 2 },
                 { description: 'Al combo', gross_weight: 400, tare_weight: 0, price: 2 }],
     } });
-    ck('  two lines of one metal are summed before checking', pair.status === 400,
+    ck('  two lines of one metal are summed before warning', !!(pair.json && pair.json.stock_warning),
        JSON.stringify(pair.json) + ' — 400 and 400 each fit inside 600; together they do not');
-
-    const nothing = await inventory();
-    ck('  and a refused sale wrote nothing',
-       (nothing.byType || []).find((g) => g.description === 'Al combo').shipped === 400,
-       'a refusal that half-happened would be worse than one that succeeded');
 }
 
-section('C — it can still be overridden, deliberately');
+section('C — and the negative is VISIBLE afterwards');
 {
-    // The risk I put to her when she chose the block: it "stops you recording
-    // something that physically happened". A truck that has left is a fact,
-    // and an app that refuses to write facts down gets worked around onto
-    // paper, where nobody can see it.
-    const forced = await sell('Al combo', 900, { allow_negative: true });
-    ck('an explicit override records it anyway', forced.status === 200, JSON.stringify(forced.json));
+    // This is what carries the weight now that nothing is refused. The warning
+    // is a dialog and dialogs are dismissed; the report is where the problem
+    // has to keep showing until the missing purchase is entered.
+    //
+    // It is also the cost of her reversal, stated as a test rather than as an
+    // opinion: these sales all went through, and the only thing left pointing
+    // at the missing paperwork is this number.
     const inv = await inventory();
     const row = (inv.byType || []).find((g) => g.description === 'Al combo');
-    ck('  and the negative is then VISIBLE rather than hidden',
+    ck('the sales were really written', row && row.shipped > 600, JSON.stringify(row));
+    ck('  and on-hand has gone negative, where it can be seen',
        row && row.onHand < 0, JSON.stringify(row) + ' — the point is that it shows');
 }
 
@@ -165,11 +174,24 @@ section('D — "Al combo" and "Aluminium combo", once she says so');
        (twoRows.byType || []).map((g) => `${g.description}:${g.onHand}`).join(' | ') +
        ' — this is the split she was looking at');
 
-    // 300 is on hand under the second name, so this one is NOT a shortage —
-    // it is allowed. The refusal below is for more than that name holds.
-    const blocked = await sell('Aluminium combo', 800);
-    ck('selling more than that name holds is refused', blocked.status === 400,
-       JSON.stringify(blocked.json) + ' — 300 came in under this spelling, 800 is going out');
+    // 300 is on hand under the second name, so 800 is more than that spelling
+    // holds — and the split is exactly why. Since 2026-09-16 it warns rather
+    // than refusing ("just provide warning that can be overriden"), so the
+    // sale IS written; what is asserted is that she is told.
+    //
+    // It is deliberately NOT sold here. Recording it would shift the numbers
+    // the rest of this section checks, and the subject of those checks is the
+    // merge, not the warning.
+    const wouldWarn = await req('POST', '/api/outbound-loads', { sid: admin, body: {
+        date: '2026-09-15', buyer: 'Eccomelt', weight_unit: 'lb',
+        items: [{ description: 'Aluminium combo', gross_weight: 800, tare_weight: 0, price: 2 }],
+    } });
+    ck('selling more than that name holds warns', !!(wouldWarn.json && wouldWarn.json.stock_warning),
+       JSON.stringify(wouldWarn.json) + ' — 300 came in under this spelling, 800 is going out');
+    // Undone, so the merge assertions below read the numbers they describe.
+    if (wouldWarn.json && wouldWarn.json.load) {
+        await req('DELETE', `/api/outbound-loads/${encodeURIComponent(wouldWarn.json.load.id)}`, { sid: admin });
+    }
 
     const yes = await req('POST', '/api/item-aliases', { sid: admin, body: {
         a: 'Aluminium combo', b: 'Al combo', same: true } });
@@ -179,6 +201,9 @@ section('D — "Al combo" and "Aluminium combo", once she says so');
 
     const now = await sell('Aluminium combo', 300);
     ck('  and then the same sale goes through', now.status === 200, JSON.stringify(now.json));
+    ck('    with no warning, because the stock is genuinely there now',
+       !now.json.stock_warning, JSON.stringify(now.json && now.json.stock_warning) +
+       ' — the whole point of her answering the question');
 
     const inv = await inventory();
     const rows = (inv.byType || []).filter((g) => /combo/i.test(g.description));
@@ -276,16 +301,22 @@ section('G — an edit is not refused for its own weight');
         items: [{ description: 'Al combo', gross_weight: 880, tare_weight: 0, price: 2 }],
     } });
     ck('  correcting it DOWN to 880 is allowed', down.status === 200, JSON.stringify(down.json));
+    // AND with no warning. Now that nothing is refused, "allowed" is true of
+    // every edit — so the exclusion is only observable through the warning
+    // being absent. Without this the check above passes on a broken guard.
+    ck('    and comes back clean, which is what the exclusion is for',
+       !down.json.stock_warning, JSON.stringify(down.json && down.json.stock_warning));
 
     const up = await req('PUT', `/api/outbound-loads/${encodeURIComponent(id)}`, { sid: admin, body: {
         date: '2026-09-15', buyer: 'Eccomelt', weight_unit: 'lb',
         items: [{ description: 'Al combo', gross_weight: 1200, tare_weight: 0, price: 2 }],
     } });
-    ck('  while raising it past stock is still refused', up.status === 400 && up.json.code === 'STOCK_SHORT',
-       JSON.stringify(up.json));
+    ck('  while raising it past stock warns instead of refusing',
+       up.status === 200 && !!up.json.stock_warning,
+       JSON.stringify(up.json) + ' — she reversed the block on 2026-09-16; what matters on an edit is that the exclusion still works, so 880 passes clean and 1200 does not')
 }
 
-section('H — the clients ask about the NAME before offering the override');
+section('H — the clients still ask about the NAME');
 {
     // The ordering is the design. Most refusals are not a shortage at all —
     // they are one metal typed two ways. Asking about the override first
@@ -295,19 +326,24 @@ section('H — the clients ask about the NAME before offering the override');
         const src = fs.readFileSync(path.join(ROOT, file), 'utf8');
         const fn = src.slice(src.indexOf('async function handleStockShort'),
                              src.indexOf('async function handleStockShort') + 3000).replace(/\/\/[^\n]*/g, '');
-        ck(`${label}: the naming question is asked first`,
-           fn.indexOf('/api/item-aliases/suggest') !== -1
-           && fn.indexOf('/api/item-aliases/suggest') < fn.indexOf('allow_negative'),
-           'the override must come second, or the real cause never gets fixed');
+        ck(`${label}: the naming question is still asked`,
+           fn.indexOf('/api/item-aliases/suggest') !== -1,
+           'the spelling is still the likeliest cause, and asking is what stops it recurring');
         ck(`${label}:   both answers are recorded, not just "same"`,
            /same,\s*\}\)/.test(fn) && !/same: true/.test(fn),
            'storing only agreement turns this into a nagging machine');
-        ck(`${label}:   and it retries once she has answered`,
-           /if \(learned\)/.test(fn) && /await sendSale\(\);/.test(fn),
-           'otherwise she answers the question and the sale still fails');
-        ck(`${label}:   allow_negative is sent from exactly one place`,
-           (fn.match(/allow_negative/g) || []).length === 1,
-           'an override reachable from two paths is an override nobody is sure they gave');
+        // She reversed the block on 2026-09-16 ("just provide warning that can
+        // be overriden"), so there is nothing to retry and nothing to
+        // override: the sale is already saved by the time this runs.
+        ck(`${label}:   nothing is retried, because nothing was refused`,
+           !/await sendSale\(/.test(fn),
+           'a retry here would record the sale a second time');
+        ck(`${label}:   allow_negative is gone entirely`,
+           !/allow_negative/.test(fn),
+           'an override for a rule that no longer exists is a switch nobody can explain');
+        ck(`${label}:   and the warning is skipped when she has just explained it away`,
+           /if \(learned\) return;/.test(fn),
+           'warning that stock is short right after she said it is not reads as not listening');
     }
 }
 

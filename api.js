@@ -4455,29 +4455,34 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
             const drawErr = checkDraws(b.items, null);
             if (drawErr) return res.status(400).json({ error: drawErr });
 
-            // ── YOU CANNOT SHIP WHAT YOU NEVER BOUGHT ────────────────────
-            // Apsara, 2026-09-16, choosing the strongest option offered:
-            // "Block the sale instead". A negative on-hand is never true of
-            // the metal, only of the paperwork, and the moment of the sale is
-            // the last point where somebody still remembers which load was
-            // never entered.
+            // ── SHIPPING MORE THAN THE YARD HAS ON RECORD ────────────────
+            // Apsara, 2026-09-16, REVERSING the choice she made earlier the
+            // same day: "negative inventory should not block a sale in edge
+            // yard.just provide warning that can be overriden".
             //
-            // Overridable on purpose — see helpers/stockGuard.js. A truck that
-            // has already left is a fact, and an app that refuses to write
-            // facts down gets worked around onto paper. `allow_negative` is
-            // only ever sent after she has been shown the numbers and said
-            // yes, exactly like petty cash's allow_partial.
-            if (!b.allow_negative) {
+            // She had picked "Block the sale instead" when the options were
+            // put to her, and then lived with it. Her call, and the right one
+            // to defer to — she is the person entering loads at the gate, and
+            // a refusal there does not stop the truck, it stops the record.
+            //
+            // WHAT THAT COSTS, stated plainly because it is real: the reason
+            // for the block was that the moment of the sale is the last point
+            // where somebody still remembers which purchase was never
+            // entered. A warning after the fact is easier to ignore than a
+            // refusal before it, and the minus-300 row she originally
+            // complained about can come back.
+            //
+            // So the warning does not vanish. It rides back on the SAVE
+            // response for the toast, and — because a toast is gone in three
+            // seconds — the shortfall is recomputed on every read of the
+            // inventory report, where a negative on-hand keeps showing until
+            // the missing purchase is entered.
+            const stockWarnings = (() => {
                 const guard = require('./helpers/stockGuard');
                 const short = guard.shortfalls(b.items);
-                if (short.length) {
-                    return res.status(400).json({
-                        error: guard.explain(short, b.weight_unit || 'lb'),
-                        code: 'STOCK_SHORT',
-                        shortfalls: short,
-                    });
-                }
-            }
+                if (!short.length) return null;
+                return { code: 'STOCK_SHORT', message: guard.explain(short, b.weight_unit || 'lb'), shortfalls: short };
+            })();
 
             const { addOutboundLoad } = require('./helpers/outboundLoads');
             const record = await addOutboundLoad({
@@ -4498,7 +4503,7 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
             // not fail the save — so its outcome rides back on the response
             // as `enquiry` for the form to show, rather than being thrown.
             const enquiry = await scheduleDeliveryEnquiry(record, req, 'created');
-            res.json({ ok: true, load: record, enquiry });
+            res.json({ ok: true, load: record, enquiry, stock_warning: stockWarnings });
         } catch (err) {
             const isValidation = /^Validation:/.test(err.message || '');
             if (!isValidation) console.error('[API] create outbound load failed:', err.message);
@@ -4512,20 +4517,15 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
             const drawErr = checkDraws((req.body || {}).items, req.params.id);
             if (drawErr) return res.status(400).json({ error: drawErr });
 
-            // Same guard on EDITS, with this load's own weights added back
-            // first — otherwise correcting 400 lb to 380 would be refused
+            // Same warning on EDITS, with this load's own weights added back
+            // first — otherwise correcting 400 lb to 380 would be flagged
             // because the original 400 is still counted against stock.
-            if (!b.allow_negative) {
+            const stockWarnings = (() => {
                 const guard = require('./helpers/stockGuard');
                 const short = guard.shortfalls(b.items, { excludeOutboundId: req.params.id });
-                if (short.length) {
-                    return res.status(400).json({
-                        error: guard.explain(short, b.weight_unit || 'lb'),
-                        code: 'STOCK_SHORT',
-                        shortfalls: short,
-                    });
-                }
-            }
+                if (!short.length) return null;
+                return { code: 'STOCK_SHORT', message: guard.explain(short, b.weight_unit || 'lb'), shortfalls: short };
+            })();
 
             const { editOutboundLoad } = require('./helpers/outboundLoads');
             const record = await editOutboundLoad(req.params.id, {
@@ -4541,7 +4541,7 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
             // change the trucker, and a task left pointing at the old one
             // would ask the wrong haulier at the wrong hour.
             const enquiry = await scheduleDeliveryEnquiry(record, req, 'edited');
-            res.json({ ok: true, load: record, enquiry });
+            res.json({ ok: true, load: record, enquiry, stock_warning: stockWarnings });
         } catch (err) {
             const isValidation = /^Validation:/.test(err.message || '');
             if (!isValidation) console.error('[API] edit outbound load failed:', err.message);
