@@ -477,8 +477,64 @@ for (const [label, src] of [['app', MOBILE], ['website', DASH]]) {
        (src.match(/searchInput\.addEventListener\('input', repaintDeck\)/g) || []).length === 1
        && /const repaintDeck = \(\) => \{/.test(src),
        'two render paths is how they end up disagreeing about what is on screen');
-    ck(`${label}: search and item filter compose`,
-       /let rows = filterLoads\(loadsCache, q\);\s*\n\s*if \(chosenItemDetail\) rows = loadsWithItem\(rows, chosenItemDetail\);/.test(src));
+    // ASSERTION UPDATED 2026-09-15, not deleted. It pinned the exact TWO-filter
+    // composition; there are three now (kind, then text, then item detail),
+    // so the old regex could not match. The property it was guarding — that
+    // each filter narrows what the next one sees, rather than each starting
+    // from loadsCache and fighting — is unchanged and is what this pins.
+    ck(`${label}: kind, search and item filter compose in that order`,
+       /let rows = filterLoadsByKind\(loadsCache, loadKindFilter\);\s*\n\s*rows = filterLoads\(rows, q\);\s*\n\s*if \(chosenItemDetail\) rows = loadsWithItem\(rows, chosenItemDetail\);/.test(src),
+       'each filter must narrow what the next one sees');
+    ck(`${label}: the kind filter counts as narrowing`,
+       /const narrowed = !!q \|\| !!chosenItemDetail \|\| loadKindFilter !== 'all';/.test(src),
+       'otherwise Sales-only still renders grouped by date, hiding most of the answer');
+}
+
+// ── ALL / PURCHASES / SALES ─────────────────────────────────────────────
+// Apsara, 2026-09-15: "what if i can have a checkbox,which shows build sales
+// only in loads" — built as a three-state segmented control instead, because
+// a checkbox covers two of the three and the third (purchases only) is the
+// one the yard wants most. See the note in the markup.
+section('The Loads deck can be shown by kind');
+{
+    const ROWS = [
+        { id: 'EDGE_1', seller: 'Ramesh' },                       // untagged = purchase
+        { id: 'EDGE_2', seller: 'Hugo', _kind: 'purchase' },
+        { id: 'OUT_1',  seller: 'Daekwang', _kind: 'sale' },
+    ];
+    for (const [label, src] of [['app', MOBILE], ['website', DASH]]) {
+        // Run the REAL function out of each client, not a copy of it.
+        const fn = new Function(grab(src, 'filterLoadsByKind', label)
+            + '; const LOAD_KINDS=[["all"],["purchase"],["sale"]]; return filterLoadsByKind;')();
+
+        ck(`${label}: All shows everything`, fn(ROWS, 'all').length === 3);
+        ck(`${label}:   and so does no filter at all`, fn(ROWS, '').length === 3);
+        ck(`${label}: Sales shows only the sale`,
+           fn(ROWS, 'sale').map((r) => r.id).join(',') === 'OUT_1',
+           fn(ROWS, 'sale').map((r) => r.id).join(','));
+        ck(`${label}: Purchases shows only purchases`,
+           fn(ROWS, 'purchase').map((r) => r.id).join(',') === 'EDGE_1,EDGE_2',
+           fn(ROWS, 'purchase').map((r) => r.id).join(','));
+        // Every row predates _kind; an untagged one is a purchase, which is
+        // what it was before sales existed. Without this an old load falls
+        // out of BOTH tabs and is reachable only from All.
+        ck(`${label}:   counting an untagged row as a purchase`,
+           fn(ROWS, 'purchase').some((r) => r.id === 'EDGE_1'),
+           'an untagged load must not vanish from both tabs');
+        ck(`${label}:   and never as a sale`, !fn(ROWS, 'sale').some((r) => r.id === 'EDGE_1'));
+
+        // The control itself, and the two things about it that fail silently.
+        ck(`${label}: there is a bar to click`, /id="loadKindBar"/.test(src));
+        ck(`${label}:   with all three states offered`,
+           /\['all', 'All'\], \['purchase', 'Purchases'\], \['sale', 'Sales'\]/.test(src));
+        ck(`${label}:   wired by delegation, so it survives its own repaint`,
+           /kindBar\.addEventListener\('click'/.test(src),
+           'paintLoadKindBar rebuilds the buttons; handlers bound to them would work once');
+        ck(`${label}:   and the choice is remembered`,
+           /localStorage\.setItem\('loadKindFilter'/.test(src));
+        ck(`${label}:   reading it back defensively, because a webview can throw`,
+           /catch \(e\) \{ return 'all'; \}/.test(src));
+    }
 }
 
 console.log(`\n  ${pass} passed, ${fail} failed`);

@@ -3862,6 +3862,18 @@ function loadsWithItem(loads, description) {
     .some(it => String(it.description || 'Other').trim().toLowerCase() === want));
 }
 
+// ── WHICH KIND OF ROW ───────────────────────────────────────────────────
+// The deck merges purchases (helpers/loads.js) and sales (outboundLoads.js);
+// the map that builds loadsCache tags each with _kind and aliases a sale's
+// buyer into `seller`. Anything untagged is a purchase, which is what every
+// row was before sales existed — so an old record filters correctly without
+// being migrated.
+const LOAD_KINDS = [['all', 'All'], ['purchase', 'Purchases'], ['sale', 'Sales']];
+function filterLoadsByKind(loads, kind) {
+  if (!kind || kind === 'all') return loads;
+  return (loads || []).filter((l) => (l._kind === 'sale' ? 'sale' : 'purchase') === kind);
+}
+
 function filterLoads(loads, query) {
   // ── ONE box, typed, matching everything on the load ─────────────────────
   // Apsara, 2026-09-02: "instead of select option of item detail filter, make
@@ -4195,6 +4207,24 @@ function renderLoads(loads) {
            its items — description and per-item price — per Apsara 2026-09-02:
            "make it as type and match .. add it to search by date, seller,
            item, price". -->
+      <!-- ── ALL / PURCHASES / SALES ───────────────────────────────────────
+           Apsara, 2026-09-15: "what if i can have a checkbox,which shows
+           build sales only in loads".
+
+           A SEGMENTED CONTROL RATHER THAN THE CHECKBOX SHE ASKED FOR, and the
+           reason is worth keeping: this is a three-state question, not a
+           two-state one. "Sales only" ticked covers two of All / Purchases /
+           Sales, and the third is the one the yard wants most — so it grows a
+           second checkbox, and two checkboxes that can both be ticked can say
+           "only sales and only purchases", which is nothing.
+
+           This tab has already paid for that once: the item-detail DROPDOWN
+           was removed on 2026-09-02 because it answered the same question as
+           the search box beside it. See the note at the top of filterLoads.
+
+           Sits ABOVE the search box because it narrows the haystack that box
+           then searches, which is the order they are read in. -->
+      <div id="loadKindBar" style="display:flex; gap:6px; margin-bottom:10px;"></div>
       <input id="loadSearch" type="text" placeholder="Search by date, seller, item, price…" style="width:100%; padding:11px 14px; margin-bottom:10px; border:1px solid var(--border-default); border-radius:var(--radius-sm); font-size:13px; background:var(--surface-sunken); color:var(--text-strong);">
 
       <!-- ── By item detail ────────────────────────────────────────────────
@@ -4729,9 +4759,14 @@ function wireLoadsEvents() {
   // is how they end up disagreeing about what is on screen.
   const repaintDeck = () => {
     const q = String(searchInput ? searchInput.value : '').trim();
-    let rows = filterLoads(loadsCache, q);
+    // Kind FIRST, then text, then item detail. Each narrows what the next
+    // one sees, so the three compose instead of competing — the failure the
+    // removed item-detail dropdown had.
+    let rows = filterLoadsByKind(loadsCache, loadKindFilter);
+    rows = filterLoads(rows, q);
     if (chosenItemDetail) rows = loadsWithItem(rows, chosenItemDetail);
-    const narrowed = !!q || !!chosenItemDetail;
+    const narrowed = !!q || !!chosenItemDetail || loadKindFilter !== 'all';
+    paintLoadKindBar(rows.length);
     // flat while EITHER is on. Once you have asked for one material you are
     // no longer looking for a day, and only the first date section renders
     // open — grouping would hide most of the answer. Clearing both puts the
@@ -4754,6 +4789,21 @@ function wireLoadsEvents() {
       });
     }
   };
+
+  // ── THE KIND BAR GOES THROUGH THE SAME REPAINT ───────────────────────
+  // Delegated on the container, because paintLoadKindBar rebuilds the buttons
+  // on every repaint to move the highlight and the count — handlers bound to
+  // the buttons themselves would be thrown away with them, and the control
+  // would work exactly once.
+  const kindBar = $('loadKindBar');
+  if (kindBar) kindBar.addEventListener('click', (ev) => {
+    const b = ev.target.closest('.load-kind-btn');
+    if (!b || b.dataset.kind === loadKindFilter) return;
+    loadKindFilter = b.dataset.kind;
+    try { localStorage.setItem('loadKindFilter', loadKindFilter); } catch (e) {}
+    repaintDeck();
+  });
+  paintLoadKindBar();
 
   if (searchInput) searchInput.addEventListener('input', repaintDeck);
 
@@ -5003,6 +5053,29 @@ function wireDeckEvents() {
 }
 
 
+// Which kind the deck is showing. Remembered, because it is a way of working
+// rather than a one-off question — someone doing the week's sales should not
+// re-pick it on every visit. localStorage can throw in a webview, so it is
+// read defensively and a failure just means "All".
+let loadKindFilter = (() => {
+  try {
+    const v = localStorage.getItem('loadKindFilter');
+    return LOAD_KINDS.some(([k]) => k === v) ? v : 'all';
+  } catch (e) { return 'all'; }
+})();
+function paintLoadKindBar(count) {
+  const bar = document.getElementById('loadKindBar');
+  if (!bar) return;
+  bar.innerHTML = LOAD_KINDS.map(([k, label]) => {
+    const on = loadKindFilter === k;
+    // The COUNT rides on the active tab, for the same reason the item filter
+    // shows one: a genuine zero has to be distinguishable from a filter that
+    // is not looking where you think.
+    const txt = on && count !== undefined ? `${label} (${count})` : label;
+    return `<button type="button" class="btn ${on ? 'btn-primary' : 'btn-secondary'} load-kind-btn" data-kind="${k}"
+              aria-pressed="${on}" style="font-size:12px; padding:6px 14px;">${txt}</button>`;
+  }).join('');
+}
 let loadsCache = [];
 // Unfinished loads shown above the deck. Held separately from loadsCache on
 // purpose — every total and filter in this tab reads loadsCache, and a draft
