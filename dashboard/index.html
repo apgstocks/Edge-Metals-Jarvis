@@ -8342,6 +8342,115 @@ async function renderPettyCashTab() {
   }
 }
 
+// ── MONTH -> WEEK -> DAY, ONCE A MONTH IS OVER ─────────────────────────────
+// Apsara, 2026-09-16: "in loads once the onth gets over,just make group as
+// monthwise exppand/collapse-then weekwise-on clicking daywise expand".
+//
+// THE CURRENT MONTH IS LEFT ALONE. Day sections, newest open, exactly as
+// before — that is the screen she works in every day, and burying today's
+// loads two folds deep to tidy up last March would be a bad trade. Her words
+// are "once the month gets over", and this takes them literally.
+//
+// Older months fold: month -> week -> day, all shut. Nothing is hidden, it is
+// only further away, and the counts on each heading say what is inside so she
+// never has to open a fold to find out whether it is worth opening.
+//
+// Weeks run Monday to Sunday and are CLIPPED TO THE MONTH, so a week straddling
+// month-end appears in both with only that month's days in it. The alternative
+// — letting a week own days from two months — makes the month counts stop
+// adding up, and a count that does not add up is worse than an awkward week.
+function loadMonthKey(iso) { return String(iso || '').slice(0, 7); }
+
+function loadWeekStart(iso) {
+  const d = new Date(iso + 'T00:00:00');
+  if (isNaN(d.getTime())) return iso;
+  // getDay(): 0 = Sunday. Shift so Monday is the first day.
+  const back = (d.getDay() + 6) % 7;
+  d.setDate(d.getDate() - back);
+  return d.toISOString().slice(0, 10);
+}
+
+function loadWeekLabel(days) {
+  // Labelled by the days ACTUALLY PRESENT, not by the calendar week, so a
+  // heading never advertises a range with nothing in most of it.
+  const sorted = days.slice().sort();
+  const fmt = (k) => new Date(k + 'T00:00:00').toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+  const a = sorted[0], b = sorted[sorted.length - 1];
+  return a === b ? fmt(a) : `${fmt(a)} – ${fmt(b)}`;
+}
+
+function loadMonthLabel(key) {
+  const d = new Date(key + '-01T00:00:00');
+  if (isNaN(d.getTime())) return key;
+  return d.toLocaleDateString(undefined, { month: 'long', year: 'numeric' });
+}
+
+// Splits the deck into the part that stays flat (this month, plus anything
+// undated) and the older months, folded.
+function splitLoadsByRecency(loads) {
+  const thisMonth = new Date().toISOString().slice(0, 7);
+  const recent = [], older = [];
+  for (const l of (loads || [])) {
+    const key = loadMonthKey(l && l.date);
+    // Undated loads stay in the flat part. Filing them under a month would
+    // mean inventing one, and they are the rows most likely to need fixing.
+    if (!key || key >= thisMonth) recent.push(l);
+    else older.push(l);
+  }
+  return { recent, older };
+}
+
+// [{ key, label, count, weeks: [{ key, label, count, days: [{key,label,loads}] }] }]
+function groupLoadsByMonthWeekDay(loads) {
+  const byMonth = new Map();
+  for (const l of (loads || [])) {
+    const mk = loadMonthKey(l && l.date);
+    if (!byMonth.has(mk)) byMonth.set(mk, []);
+    byMonth.get(mk).push(l);
+  }
+  return Array.from(byMonth.keys()).sort((a, b) => b.localeCompare(a)).map((mk) => {
+    const byWeek = new Map();
+    for (const l of byMonth.get(mk)) {
+      const wk = loadWeekStart(l.date);
+      if (!byWeek.has(wk)) byWeek.set(wk, []);
+      byWeek.get(wk).push(l);
+    }
+    const weeks = Array.from(byWeek.keys()).sort((a, b) => b.localeCompare(a)).map((wk) => {
+      const byDay = new Map();
+      for (const l of byWeek.get(wk)) {
+        if (!byDay.has(l.date)) byDay.set(l.date, []);
+        byDay.get(l.date).push(l);
+      }
+      const dayKeys = Array.from(byDay.keys()).sort((a, b) => b.localeCompare(a));
+      return {
+        key: wk,
+        label: loadWeekLabel(dayKeys),
+        count: byWeek.get(wk).length,
+        days: dayKeys.map((dk) => ({ key: dk, label: formatLoadDateHeading(dk), loads: byDay.get(dk) })),
+      };
+    });
+    return { key: mk, label: loadMonthLabel(mk), count: byMonth.get(mk).length, weeks };
+  });
+}
+
+function loadCountLabel(n) { return `${n} load${n === 1 ? '' : 's'}`; }
+
+function loadFoldedMonthsHtml(older) {
+  return groupLoadsByMonthWeekDay(older).map((m) => `
+    <details class="load-month-section">
+      <summary class="load-date-heading">${esc(m.label)}<span class="load-date-count">${loadCountLabel(m.count)}</span></summary>
+      ${m.weeks.map((w) => `
+        <details class="load-week-section">
+          <summary class="load-week-heading">${esc(w.label)}<span class="load-date-count">${loadCountLabel(w.count)}</span></summary>
+          ${w.days.map((d) => `
+            <details class="load-day-section">
+              <summary class="load-day-heading">${esc(d.label)}<span class="load-date-count">${loadCountLabel(d.loads.length)}</span></summary>
+              <div class="load-deck-grid">${d.loads.map(loadCardHtml).join('')}</div>
+            </details>`).join('')}
+        </details>`).join('')}
+    </details>`).join('');
+}
+
 function loadDeckSectionsHtml(loads, emptyMsg, opts) {
   const flat = !!(opts && opts.flat);
   const empty = `<div style="padding:60px; text-align:center; color:var(--text-faint); font-family:var(--font-mono); font-size:12px;">${esc(emptyMsg)}</div>`;
@@ -8361,15 +8470,19 @@ function loadDeckSectionsHtml(loads, emptyMsg, opts) {
     return `<div class="load-deck-grid">${rows.map(loadCardHtml).join('')}</div>`;
   }
 
-  const groups = groupLoadsByDate(loads);
-  if (!groups.length) {
+  // This month stays as day sections; older months fold into
+  // month -> week -> day. See splitLoadsByRecency for why.
+  const { recent, older } = splitLoadsByRecency(loads);
+  const groups = groupLoadsByDate(recent);
+  if (!groups.length && !older.length) {
     return empty;
   }
-  return groups.map((g, i) => `
+  const days = groups.map((g, i) => `
     <details class="load-date-section" ${i === 0 ? 'open' : ''}>
       <summary class="load-date-heading">${esc(g.label)}<span class="load-date-count">${g.loads.length} load${g.loads.length === 1 ? '' : 's'}</span></summary>
       <div class="load-deck-grid">${g.loads.map(loadCardHtml).join('')}</div>
     </details>`).join('');
+  return days + (older.length ? loadFoldedMonthsHtml(older) : '');
 }
 
 
@@ -8694,6 +8807,19 @@ function renderLoads(loads) {
       .load-date-heading::before { content:'▸'; font-size:10px; color:var(--text-muted); display:inline-block; transition:transform 120ms ease; }
       .load-date-section[open] > .load-date-heading::before { transform:rotate(90deg); }
       .load-date-count { font-weight:400; text-transform:none; letter-spacing:0; color:var(--text-muted); }
+      /* ── Older months: month > week > day (2026-09-16) ────────────────
+         Each level is one step quieter and one step indented, so depth is
+         readable at a glance rather than having to be counted. They reuse
+         the day heading's disclosure triangle and its open/shut rotation. */
+      .load-month-section { margin-bottom:10px; }
+      .load-week-section, .load-day-section { margin-left:16px; }
+      .load-week-heading, .load-day-heading { display:flex; align-items:baseline; gap:8px; font-family:var(--font-mono); font-weight:500; letter-spacing:.06em; padding-bottom:6px; margin-bottom:8px; border-bottom:1px solid var(--border-subtle); cursor:pointer; list-style:none; user-select:none; }
+      .load-week-heading { font-size:11.5px; color:var(--text-body); text-transform:uppercase; }
+      .load-day-heading  { font-size:11px; color:var(--text-muted); text-transform:none; letter-spacing:0; }
+      .load-week-heading::-webkit-details-marker, .load-day-heading::-webkit-details-marker { display:none; }
+      .load-week-heading::before, .load-day-heading::before { content:'▸'; font-size:9px; color:var(--text-faint); display:inline-block; transition:transform 120ms ease; }
+      .load-week-section[open] > .load-week-heading::before,
+      .load-day-section[open]  > .load-day-heading::before { transform:rotate(90deg); }
       .load-deck-grid { display:grid; grid-template-columns:repeat(auto-fill, minmax(270px, 1fr)); gap:16px; }
       .load-card { box-shadow:0 3px 0 -1px var(--border-subtle), 0 8px 20px -6px rgba(0,0,0,.18); transition:transform 140ms ease, box-shadow 140ms ease; }
       .load-card:hover { transform:translateY(-3px); box-shadow:0 5px 0 -1px var(--border-subtle), 0 14px 26px -8px rgba(0,0,0,.24); }
