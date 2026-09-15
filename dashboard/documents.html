@@ -3932,9 +3932,12 @@ let _bolWired = false;
 // browser's own clock. That is a date printed on documents already going to
 // customers, and moving it is a change she should make on purpose rather than
 // inherit from a BOL fix. Flagged to her rather than done quietly.
-const BOL_TZ = 'America/Los_Angeles';
+// The zone is inline rather than in a const above: this function is lifted
+// out and evaluated on its own by tests/bol.js with the clock pinned to the
+// evening, and a free variable would make it unrunnable there. It also makes
+// the website and the app byte-identical on the one line that matters.
 function bolTodayStr() {
-  return new Date().toLocaleDateString('en-CA', { timeZone: BOL_TZ });
+  return new Date().toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' });
 }
 
 function bolBlankRow() { return { description: '', pieces: '', gross_weight: '', tare_weight: '', net_weight: '' }; }

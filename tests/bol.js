@@ -279,6 +279,17 @@ await new Promise((r) => setTimeout(r, 200));
 ck('the BOL tab exists beside Invoice and Proforma',
    !!d.querySelector('[data-subtab="bol"]') && !d.getElementById('panelBol').classList.contains('hidden'));
 
+// ── THE DATE IS ALREADY FILLED IN ────────────────────────────────────────
+// "by default bol date should be today date". Asserted on the RENDERED form,
+// not on the helper: a mutation deleting the one line that applies the
+// default left bolTodayStr() perfectly correct and unused, and section H2 —
+// which only evaluates the helper — kept passing.
+{
+    const today = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' });
+    ck('  and opening it fills the date with today', d.getElementById('bol_date').value === today,
+       `field reads ${JSON.stringify(d.getElementById('bol_date').value)}, today in the yard is ${today}`);
+}
+
 const inp = d.getElementById('bol_consignee');
 inp.value = 'ecc';
 inp.dispatchEvent(new w.Event('input', { bubbles: true }));

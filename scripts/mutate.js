@@ -2169,6 +2169,29 @@ const MUTATIONS = [
       file: 'mobile-app/www/index.html', suites: ['app-reports'],
       find: '        <div style="display:grid; grid-template-columns:repeat(3,1fr); gap:8px;">\n          <input data-bi="${i}" data-bf="gross_weight"',
       to:   '        <div style="display:grid; grid-template-columns:repeat(2,1fr); gap:8px;">\n          <input data-bi="${i}" data-bf="gross_weight"' },
+
+    // ── THE BOL'S DEFAULT DATE (2026-09-16) ──────────────────────────────
+    // "by default bol date should be today date". It already did — in UTC,
+    // so from 7pm in Frisco it was tomorrow. Correct most of the day and
+    // quietly wrong at the end of it.
+    { name: 'boldate: the website goes back to UTC, so an evening BOL says tomorrow',
+      file: 'dashboard/documents.html', suites: ['bol'],
+      find: "  return new Date().toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' });\n}\n\nfunction bolBlankRow()",
+      to:   '  return new Date().toISOString().slice(0, 10);\n}\n\nfunction bolBlankRow()' },
+    { name: 'boldate: the app goes back to UTC',
+      file: 'mobile-app/www/index.html', suites: ['bol'],
+      find: "function bolTodayISO() {\n  return new Date().toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' });",
+      to:   'function bolTodayISO() {\n  return new Date().toISOString().slice(0, 10);' },
+    { name: 'boldate: the form stops defaulting the date at all',
+      file: 'dashboard/documents.html', suites: ['bol'],
+      find: "  if (!$('bol_date').value) $('bol_date').value = bolTodayStr();",
+      to:   '' },
+    { name: 'boldate: the archive files an evening BOL under tomorrow',
+      file: 'api.js', suites: ['bol'],
+      // The paper says one day and the folder says another, so it is not
+      // where anyone looks for it.
+      find: "                || new Date().toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' });",
+      to:   "                || new Date().toISOString().slice(0, 10);" },
 ];
 
 // ── CRASH-SAFE, NOT JUST EXIT-SAFE ───────────────────────────────────────
