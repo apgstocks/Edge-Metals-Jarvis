@@ -4150,7 +4150,7 @@ function loadCardHtml(l) {
         ${loadIsDeletable(l) ? `<button class="btn btn-danger btn-delete-load" data-id="${esc(l.id)}" style="font-size:11px; padding:5px 10px;">Delete</button>` : ''}
         <!-- Pay, per Apsara 2026-08-28. Sits with Edit/Delete because it is a
              thing done TO an existing load, not part of creating one. -->
-        ${loadIsPayable(l) ? `<button class="btn btn-pay-load" data-id="${esc(l.id)}" data-kind="${esc(l._kind || 'purchase')}" style="font-size:11px; padding:5px 10px;">Pay</button>` : ''}
+        ${loadIsPayable(l) ? `<button class="btn btn-pay-load" data-id="${esc(l.id)}" data-kind="${esc(l._kind || 'purchase')}" style="font-size:11px; padding:5px 10px;">${l._kind === 'sale' ? 'Receive payment' : 'Pay'}</button>` : ''}
       </div>
     </div>`;
 }
@@ -7836,13 +7836,29 @@ function openPayModal(loadId, kind) {
   if (!l) return;
   payingLoad = { id: l.id, kind: kind || l._kind || 'purchase', amount: l.amount, seller: l.seller, payment: l.payment };
   const p = l.payment || { paid: 0, pending: l.amount, status: 'unpaid' };
+  // A sale's BUYER is aliased into `seller` when the two lists are merged
+  // (see the map that sets _kind), so the name shown is right either way.
+  // The direction is not, and everything below keys off this.
+  const sale = payingLoad.kind === 'sale';
   const who = l.seller ? ` · ${l.seller}` : '';
+  const ttl = document.getElementById('payModalTitle');
+  if (ttl) ttl.textContent = sale ? 'Receive payment' : 'Record payment';
   $('payLoadSummary').innerHTML = l.amount == null
     // A load with no priced items has nothing to settle against. Say so
     // plainly rather than showing "0.00 pending", which reads as "nothing
     // owed" when it actually means "we don't know yet".
-    ? `Load ${esc(l.id)}${esc(who)}<br><span style="color:var(--status-warning);">This load has no price yet, so there is no balance to work against.</span>`
-    : `Load ${esc(l.id)}${esc(who)}<br>Load total ${payMoney(l.amount)} · already paid ${payMoney(p.paid)} · <strong>${payMoney(p.pending)} outstanding</strong>`;
+    ? `${sale ? 'Sale' : 'Load'} ${esc(l.id)}${esc(who)}<br><span style="color:var(--status-warning);">This ${sale ? 'sale' : 'load'} has no price yet, so there is no balance to work against.</span>`
+    // ── A SALE TAKES MONEY IN, SO IT SAYS SO ─────────────────────────────
+    // Apsara, 2026-09-15: "In add sales ,there should be receive payment na
+    // instead of pay". This list merges purchases and sales, and every word
+    // here was written for a purchase — "Pay", "Load total", "already paid".
+    // On a row she SOLD, that describes money leaving for material she is
+    // being paid for.
+    //
+    // The ledger was already right: helpers/spendReport.js marks load_kind
+    // 'sale' as direction 'in' and labels it "Sale". Only the words she reads
+    // were backwards, which is the version that looks considered.
+    : `${sale ? 'Sale' : 'Load'} ${esc(l.id)}${esc(who)}<br>${sale ? 'Sale' : 'Load'} total ${payMoney(l.amount)} · already ${sale ? 'received' : 'paid'} ${payMoney(p.paid)} · <strong>${payMoney(p.pending)} outstanding</strong>`;
   $('pay_mode').value = 'Zelle';
   paintBankOptions($('pay_bank'));
   $('pay_bank_other').value = '';
@@ -8267,7 +8283,8 @@ function renderLoads(loads) {
       <div class="modal-shell" style="max-width:460px;">
         <div class="modal-stripe"></div>
         <div class="modal-head">
-          <div style="font-weight:700; text-transform:uppercase; font-size:14px;">Record payment</div>
+          <!-- Set per row in openPayModal: a sale takes money IN. -->
+          <div id="payModalTitle" style="font-weight:700; text-transform:uppercase; font-size:14px;">Record payment</div>
           <button id="btnClosePay" class="btn" style="padding:4px 10px;">✕</button>
         </div>
         <div class="modal-body">

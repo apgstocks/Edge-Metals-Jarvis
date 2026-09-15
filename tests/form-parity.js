@@ -472,5 +472,56 @@ ck('net total is right', /data-label="Net">7,305</.test(web));
   }
 }
 
+// ── A SALE TAKES MONEY IN, ON BOTH CLIENTS ──────────────────────────────
+// Apsara, 2026-09-15: "In add sales ,there should be receive payment na
+// instead of pay..WHy didnt you tell me taht?" — and then, asked what she
+// meant: "I am telling about add sales in mobile app".
+//
+// The Loads list merges purchases and sales (the map that sets _kind aliases
+// a sale's buyer into `seller`), and every word around the money was written
+// for a purchase: a Pay button, "Record payment", "Load total", "already
+// paid". On a row she SOLD that describes money leaving for material she is
+// being paid for.
+//
+// The ledger was already right — helpers/spendReport.js marks load_kind
+// 'sale' as direction 'in' and labels it "Sale" — so this was never a money
+// bug, only a reading one. That is the version that looks considered while
+// saying the opposite of what happened.
+//
+// PINNED ON BOTH FILES because the screen exists twice, which is this file's
+// whole reason to exist. The app is the one she was actually looking at.
+{
+  const dash = fs.readFileSync(R + 'dashboard/index.html', 'utf8');
+  const mob  = fs.readFileSync(R + 'mobile-app/www/index.html', 'utf8');
+
+  for (const [label, src] of [['dashboard', dash], ['mobile', mob]]) {
+    ck(`${label}: the button on a SALE says Receive payment`,
+       /_kind === 'sale' \? 'Receive payment' : 'Pay'/.test(src),
+       'a sale row offering "Pay" reads as money going out');
+    ck(`${label}:   while a purchase still says Pay`,
+       /: 'Pay'\}<\/button>/.test(src));
+
+    const modal = grabFrom(label === 'dashboard' ? 'dashboard/index.html' : 'mobile-app/www/index.html',
+                           'openPayModal');
+    ck(`${label}: the modal decides its own direction`,
+       /const sale = payingLoad\.kind === 'sale'/.test(modal), modal.slice(0, 120));
+    ck(`${label}:   retitling itself Receive payment for a sale`,
+       /sale \? 'Receive payment' : 'Record payment'/.test(modal));
+    ck(`${label}:   and reporting money already RECEIVED, not paid`,
+       /already \$\{sale \? 'received' : 'paid'\}/.test(modal),
+       '"already paid" on a sale is the same inversion one line down');
+    ck(`${label}:   calling the row a Sale rather than a Load`,
+       (modal.match(/sale \? 'Sale' : 'Load'/g) || []).length >= 1, modal.slice(-400));
+    ck(`${label}:   with no bare "already paid" left on the sale path`,
+       !/already paid \$\{payMoney/.test(modal));
+  }
+
+  // The markup the title is written into has to exist, or the assignment is a
+  // silent no-op and the heading stays "Record payment" forever.
+  for (const [label, src] of [['dashboard', dash], ['mobile', mob]])
+    ck(`${label}: the pay modal heading has an id to write to`,
+       /id="payModalTitle"/.test(src));
+}
+
 console.log(`\n  ${pass} passed, ${fail} failed`);
 process.exit(fail?1:0);
