@@ -406,6 +406,61 @@ section('E3 — reading the payee out of the description');
            r.suggest === false && r.why === 'vendor_already_set');
     }
 
+    // ── WHAT IT WAS FOR ───────────────────────────────────────────────────
+    // Apsara, 2026-09-15: "Also,Salary paid $200 for tools why cant ai figure
+    // out what it is for?" It can — and her own line is the case where the
+    // honest answer is to ASK. "Salary" argues for Labour, "for tools" argues
+    // for Equipment, and only she knows which. Picking one files money under
+    // a heading she never chose, silently.
+    {
+        const r = await v.suggestVendor('Salary paid $200 for tools', {
+            expenses: EXP, category: 'Labour',
+            ask: say({ vendor: null, category: null, ambiguous: ['Labour', 'Equipment'], confidence: 'high' }),
+        });
+        ck('HER LINE: an ambiguous description asks rather than picks',
+           r.suggest === true && r.kind === 'category' && (r.ambiguous || []).length === 2,
+           JSON.stringify(r));
+        ck('  naming both readings', /Labour or Equipment/.test(r.question), r.question);
+        ck('  and choosing neither for her', !r.category, JSON.stringify(r));
+    }
+    {
+        const r = await v.suggestVendor('Diesel for the loader', {
+            expenses: EXP, category: 'Other',
+            ask: say({ vendor: null, category: 'Fuel', confidence: 'high' }),
+        });
+        ck('a clear line offers the category it describes',
+           r.suggest === true && r.category === 'Fuel', JSON.stringify(r));
+        ck('  saying what it disagrees with', /rather than Other/.test(r.question), r.question);
+    }
+    {
+        const r = await v.suggestVendor('Diesel for the loader', {
+            expenses: EXP, category: 'Fuel',
+            ask: say({ vendor: null, category: 'Fuel', confidence: 'high' }),
+        });
+        ck('  and says nothing when it already agrees with her',
+           r.suggest === false,
+           'interrupting to confirm what she already chose is a nag');
+    }
+    {
+        // Same guard as the vendor half: a category the model invents is not
+        // a category. It has to be one the server actually offers.
+        const r = await v.suggestVendor('Hose repair', {
+            expenses: EXP, category: 'Other',
+            ask: say({ vendor: null, category: 'Spaceships', confidence: 'high' }),
+        });
+        ck('a category the model INVENTED is refused', r.suggest === false, JSON.stringify(r));
+    }
+    {
+        const r = await v.suggestVendor('Weekly salary Santiago', {
+            expenses: EXP, category: 'Other',
+            ask: say({ vendor: 'Santiago', category: 'Labour', confidence: 'high' }),
+        });
+        ck('one line can answer both questions in one round trip',
+           r.kind === 'vendor' && r.vendor === 'Santiago'
+           && r.category_hint && r.category_hint.category === 'Labour',
+           JSON.stringify(r));
+    }
+
     // ── AND IT MUST NEVER BLOCK RECORDING AN EXPENSE ──────────────────────
     // No key, a quota wall, a timeout, malformed JSON. An expense she cannot
     // record because a suggestion service was down is a far worse bug than

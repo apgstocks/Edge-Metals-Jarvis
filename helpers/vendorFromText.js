@@ -78,31 +78,39 @@ function withTimeout(promise, ms) {
     });
 }
 
-function buildPrompt(description, known) {
+function buildPrompt(description, known, categories, current) {
     return [
         'You are reading one line typed into an expense form at a scrap yard.',
-        'Decide whether it names a PERSON or a COMPANY that the money was paid to.',
+        'Answer two things about it: WHO was paid, and WHAT IT WAS FOR.',
         '',
         `The line: ${JSON.stringify(String(description || ''))}`,
+        current ? `The category currently selected: ${JSON.stringify(current)}` : 'No category selected yet.',
         '',
         known.length
             ? `Names already used as vendors here, most common first: ${JSON.stringify(known.slice(0, 40))}`
             : 'No vendors have been recorded yet.',
+        `Categories available: ${JSON.stringify(categories)}`,
         '',
-        'Rules:',
+        'WHO:',
         '1. Only answer with a name if the text really names someone paid. "Weekly salary Santiago" names Santiago. "Salary paid $200 for tools" names NOBODY — "tools" is a thing, not a person.',
         '2. Materials, parts, fuel, services and places are NOT vendors. Diesel, hose, scrap, gate, forklift, Oakland are not names.',
         '3. If one of the known names above appears, prefer that exact spelling.',
-        '4. If you are not confident, return null. A wrong guess is worse than no guess: it files money against the wrong person.',
         '',
-        'Return JSON only: {"vendor": string|null, "confidence": "high"|"low"}',
+        'WHAT FOR:',
+        '4. Choose the category the line describes, from the list above, exactly as spelled there.',
+        '5. IF THE LINE POINTS AT TWO DIFFERENT CATEGORIES, say so instead of picking one. "Salary paid $200 for tools" argues for Labour (a salary) AND for Equipment (tools) — that is ambiguous, and the person who typed it is the only one who knows. Return both in "ambiguous" and leave "category" null.',
+        '6. If you are not confident, return null for that field.',
+        '',
+        'A wrong guess is worse than no guess: it files money against the wrong person or the wrong heading.',
+        '',
+        'Return JSON only: {"vendor": string|null, "category": string|null, "ambiguous": string[]|null, "confidence": "high"|"low"}',
     ].join('\n');
 }
 
 // ── THE ONLY EXPORT THAT MATTERS ────────────────────────────────────────
 // Returns { suggest: false } or a QUESTION for the client to ask. Never
 // writes, never throws.
-async function suggestVendor(description, { expenses = null, vendor = null, ask = null } = {}) {
+async function suggestVendor(description, { expenses = null, vendor = null, category = null, ask = null } = {}) {
     // She typed a vendor. Second-guessing that would be worse than useless.
     if (String(vendor || '').trim()) return { suggest: false, why: 'vendor_already_set' };
 
@@ -112,28 +120,60 @@ async function suggestVendor(description, { expenses = null, vendor = null, ask 
 
     const rows = expenses || require('./expenses').loadExpenses();
     const known = knownVendors(rows);
+    const CATEGORIES = require('./expenses').EXPENSE_CATEGORIES;
 
     // `ask` is injectable so the tests never reach the real Gemini — and so a
     // test cannot spend her quota. Production never passes one.
     const call = ask || ((prompt) => callGeminiJSON(prompt));
-    const out = await withTimeout(Promise.resolve().then(() => call(buildPrompt(text, known))), TIMEOUT_MS);
+    const out = await withTimeout(Promise.resolve().then(
+        () => call(buildPrompt(text, known, CATEGORIES, category))), TIMEOUT_MS);
 
     // EVERY failure lands here: no key, quota, timeout, bad JSON. The expense
     // must still save exactly as typed.
     if (!out || typeof out !== 'object') return { suggest: false, why: 'no_answer' };
 
+    // ── WHAT IT WAS FOR ──────────────────────────────────────────────────
+    // Apsara, 2026-09-15: "Also,Salary paid $200 for tools why cant ai figure
+    // out what it is for?" It can, and her own example is the case where the
+    // honest answer is to ASK: "Salary" argues for Labour, "for tools" argues
+    // for Equipment, and only she knows which. Picking one would file the
+    // money under a heading she did not choose, silently.
+    //
+    // Deterministic guards, same as the vendor half: a category the model
+    // invents is dropped, and a category that merely repeats what she has
+    // already selected is not worth interrupting her for.
+    const inList = (c) => CATEGORIES.find((k) => norm(k) === norm(c)) || null;
+    const ambiguous = Array.isArray(out.ambiguous)
+        ? out.ambiguous.map(inList).filter(Boolean) : [];
+    const picked = inList(out.category);
+    const cat = ambiguous.length >= 2
+        ? { ambiguous, question: `Is this ${ambiguous.slice(0, 2).join(' or ')}?` }
+        : (picked && norm(picked) !== norm(category || '') && out.confidence === 'high'
+            ? { category: picked, question: category
+                ? `This reads like ${picked} rather than ${category}. Change it?`
+                : `Is this ${picked}?` }
+            : null);
+
     const name = String(out.vendor || '').trim();
-    if (!name) return { suggest: false, why: 'no_name_in_text' };
+    if (!name) {
+        return cat
+            ? { suggest: true, kind: 'category', ...cat }
+            : { suggest: false, why: 'no_name_in_text' };
+    }
     // A "name" the model lifted verbatim from a word that is plainly not one
     // still has to clear the next test, so low confidence is simply dropped.
-    if (out.confidence && out.confidence !== 'high') return { suggest: false, why: 'unsure' };
+    if (out.confidence && out.confidence !== 'high') {
+        return cat ? { suggest: true, kind: 'category', ...cat } : { suggest: false, why: 'unsure' };
+    }
 
     // ── THE NAME HAS TO BE IN THE TEXT ───────────────────────────────────
     // Deterministic, and it is the guard that matters: a model asked for a
     // name will sometimes produce a plausible one that was never typed. If
     // the word is not in what she wrote, it is invented, and inventing a
     // payee is the one outcome worse than suggesting nothing.
-    if (!norm(text).includes(norm(name))) return { suggest: false, why: 'not_in_text' };
+    if (!norm(text).includes(norm(name))) {
+        return cat ? { suggest: true, kind: 'category', ...cat } : { suggest: false, why: 'not_in_text' };
+    }
 
     // Is this someone already on file? Exact after normalisation, never
     // fuzzy — nameMatch.js's rule, for the reason it gives: a near miss
@@ -142,6 +182,7 @@ async function suggestVendor(description, { expenses = null, vendor = null, ask 
 
     return {
         suggest: true,
+        kind: 'vendor',
         // Her spelling when she has one, so the vendor column does not grow
         // "santiago" beside "Santiago".
         vendor: match || name,
@@ -149,6 +190,8 @@ async function suggestVendor(description, { expenses = null, vendor = null, ask 
         question: match
             ? `Is this for ${match}?`
             : `Is this for ${name}? That would be a new vendor.`,
+        // Carried alongside, so one round trip answers both questions.
+        ...(cat ? { category_hint: cat } : {}),
     };
 }
 

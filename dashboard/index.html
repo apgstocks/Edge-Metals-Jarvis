@@ -4677,6 +4677,50 @@ function wireVendorSuggest() {
   const hide = () => { box.style.display = 'none'; box.innerHTML = ''; };
   hide();
 
+  // One question at a time. When a line answers both — a name AND a category
+  // that disagrees with the box — the vendor is asked first and the category
+  // follows once she has answered, rather than stacking two prompts on a form
+  // she is halfway through.
+  function askQuestion(r, onDone) {
+    if (!r || !r.suggest) { hide(); if (onDone) onDone(); return; }
+    const opts = r.ambiguous && r.ambiguous.length >= 2
+      // AMBIGUOUS: her own example. "Salary paid $200 for tools" argues for
+      // Labour AND for Equipment, and only she knows which. Both are offered
+      // by name; neither is preselected.
+      ? r.ambiguous.slice(0, 2).map((c, i) => `<button type="button" class="btn expAskOpt" data-cat="${esc(c)}" style="font-size:11px; padding:4px 10px; margin-left:${i ? 6 : 8}px;">${esc(c)}</button>`).join('')
+      : `<button type="button" class="btn expAskYes" style="font-size:11px; padding:4px 10px; margin-left:8px;">${r.kind === 'category' ? 'Change' : 'Yes'}</button>`;
+    box.innerHTML = `<span style="color:var(--text-muted);">${esc(r.question)}</span>${opts}
+      <button type="button" class="btn expAskNo" style="font-size:11px; padding:4px 10px;">${r.ambiguous ? 'Leave it' : (r.kind === 'category' ? 'Keep' : 'No')}</button>`;
+    box.style.display = 'block';
+    const done = () => { hide(); if (onDone) onDone(); };
+    // ── SETTING A <select> TO A MISSING OPTION DOES NOTHING ───────────────
+    // Silently. She clicks "Equipment", the box does not change, and there is
+    // nothing on screen to say why. openExpenseModal already guards this for
+    // an expense's own stored category; accepting a suggestion needs the same
+    // guard. In production the suggestion can only offer a category from the
+    // server's list, which is also what builds this dropdown — so this should
+    // be unreachable, and that is exactly the kind of "should" that is worth
+    // four lines rather than a silent no-op.
+    const setCategory = (c) => {
+      const sel = $('exp_category');
+      if (!sel) return;
+      if (![...sel.options].some((o) => o.value === c)) {
+        sel.insertAdjacentHTML('afterbegin', `<option value="${esc(c)}">${esc(c)}</option>`);
+      }
+      sel.value = c;
+    };
+    box.querySelectorAll('.expAskOpt').forEach((b2) => b2.addEventListener('click', () => {
+      setCategory(b2.dataset.cat); done();
+    }));
+    const yes = box.querySelector('.expAskYes');
+    if (yes) yes.addEventListener('click', () => {
+      if (r.kind === 'category') setCategory(r.category);
+      else $('exp_vendor').value = r.vendor;
+      done();
+    });
+    box.querySelector('.expAskNo').addEventListener('click', done);
+  }
+
   desc.addEventListener('blur', async () => {
     const text = desc.value.trim();
     // Asked about this exact line already — including when she said no.
@@ -4688,22 +4732,19 @@ function wireVendorSuggest() {
     try {
       r = await api('/api/expenses/suggest-vendor', {
         method: 'POST',
-        body: JSON.stringify({ description: text, vendor: $('exp_vendor').value }),
+        body: JSON.stringify({ description: text, vendor: $('exp_vendor').value, category: $('exp_category').value }),
       });
     } catch (e) { hide(); return; }          // never let this surface as an error
-    if (!r || !r.suggest || $('exp_vendor').value.trim()) { hide(); return; }
-
-    box.innerHTML = `<span style="color:var(--text-muted);">${esc(r.question)}</span>
-      <button type="button" id="expVendorYes" class="btn" style="font-size:11px; padding:4px 10px; margin-left:8px;">Yes</button>
-      <button type="button" id="expVendorNo" class="btn" style="font-size:11px; padding:4px 10px;">No</button>`;
-    box.style.display = 'block';
-    $('expVendorYes').addEventListener('click', () => {
-      $('exp_vendor').value = r.vendor;
-      hide();
-    });
+    if (!r || !r.suggest) { hide(); return; }
     // No is remembered for this line by vendorAskedFor above, so it does not
     // come straight back when she tabs away again.
-    $('expVendorNo').addEventListener('click', hide);
+    askQuestion(r, () => {
+      // A vendor answer can carry a category disagreement with it. Asked
+      // second, so she is never looking at two prompts at once.
+      if (r.kind === 'vendor' && r.category_hint) {
+        askQuestion({ suggest: true, kind: 'category', ...r.category_hint });
+      }
+    });
   });
 }
 

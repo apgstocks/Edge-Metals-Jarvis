@@ -36,7 +36,9 @@ const HTML = fs.readFileSync(path.join(ROOT, 'dashboard/index.html'), 'utf8');
 
 const EXPENSES = {
     ok: true,
-    categories: ['Fuel', 'Repairs', 'Other'],
+    // The server's real list, so a suggestion can never be the odd one out.
+    categories: ['Fuel', 'Freight', 'Equipment', 'Repairs & maintenance', 'Labour',
+                 'Rent', 'Utilities', 'Supplies', 'Permits & fees', 'Insurance', 'Other'],
     methods: ['Cash', 'Card'],
     default_method: 'Cash',
     retired_methods: ['Zelle', 'Cheque'],
@@ -305,7 +307,7 @@ section('F — "Is this for Santiago?"');
            d.getElementById('exp_vendor').value === '',
            'nothing is written until she says yes');
 
-        d.getElementById('expVendorYes').click();
+        d.querySelector('.expAskYes').click();
         ck('saying Yes fills the vendor', d.getElementById('exp_vendor').value === 'Santiago');
         ck('  and the question goes away', box.style.display === 'none');
         dom.window.close();
@@ -320,7 +322,7 @@ section('F — "Is this for Santiago?"');
         d.getElementById('exp_description').value = 'Weekly salary Santiago';
         blur(d, dom);
         await new Promise((r) => setTimeout(r, 120));
-        d.getElementById('expVendorNo').click();
+        d.querySelector('.expAskNo').click();
         ck('saying No leaves the vendor empty', d.getElementById('exp_vendor').value === '');
         // Re-asking the same line is how a helpful prompt becomes a nag.
         blur(d, dom);
@@ -360,6 +362,144 @@ section('F — "Is this for Santiago?"');
            d.getElementById('expVendorAsk').style.display === 'none');
         ck('  and the form is still perfectly usable',
            d.getElementById('expSave').disabled === false);
+        dom.window.close();
+    }
+}
+
+section('G — what it was FOR, and when that is genuinely unclear');
+{
+    // Apsara, 2026-09-15: "Also,Salary paid $200 for tools why cant ai figure
+    // out what it is for?"
+    //
+    // It can — and her own example is the case where the honest answer is to
+    // ASK rather than pick. "Salary" argues for Labour; "for tools" argues for
+    // Equipment. Choosing one files money under a heading she never picked,
+    // silently, which is the failure this whole evening has been about.
+    const mk = (suggestion) => {
+        const calls = [];
+        const dom = new JSDOM(HTML, {
+            runScripts: 'dangerously', url: 'http://localhost/',
+            beforeParse(w) {
+                w.fetch = (u, o) => {
+                    const k = String(u).split('?')[0];
+                    if (k === '/api/expenses/suggest-vendor') {
+                        calls.push(JSON.parse(o.body));
+                        return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve(suggestion) });
+                    }
+                    if (o && o.method && o.method !== 'GET') {
+                        return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ ok: true, expense: {} }) });
+                    }
+                    const body = k === '/api/expenses' ? EXPENSES
+                        : k === '/api/me' ? { ok: true, role: 'admin' } : { ok: true };
+                    return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve(body) });
+                };
+                w.alert = () => {}; w.confirm = () => true;
+            },
+        });
+        return { dom, calls };
+    };
+    const blur = (d, dom) => d.getElementById('exp_description')
+        .dispatchEvent(new dom.window.Event('blur'));
+
+    {
+        // HER EXACT LINE.
+        const { dom, calls } = mk({ ok: true, suggest: true, kind: 'category',
+            ambiguous: ['Labour', 'Equipment'], question: 'Is this Labour or Equipment?' });
+        await new Promise((r) => setTimeout(r, 600));
+        const w = dom.window, d = w.document;
+        await w.renderExpensesTab();
+        w.openExpenseModal(null);
+        d.getElementById('exp_description').value = 'Salary paid $200 for tools';
+        blur(d, dom);
+        await new Promise((r) => setTimeout(r, 120));
+
+        ck('the selected category is sent, so the answer can disagree with it',
+           calls.length === 1 && typeof calls[0].category === 'string', JSON.stringify(calls));
+        const box = d.getElementById('expVendorAsk');
+        ck('an ambiguous line ASKS instead of picking',
+           /Is this Labour or Equipment\?/.test(box.textContent), box.textContent);
+        ck('  offering both by name', d.querySelectorAll('.expAskOpt').length === 2,
+           String(d.querySelectorAll('.expAskOpt').length));
+        ck('  with neither chosen for her yet',
+           d.getElementById('exp_category').value !== 'Equipment');
+
+        d.querySelectorAll('.expAskOpt')[1].click();
+        ck('picking one sets it', d.getElementById('exp_category').value === 'Equipment',
+           d.getElementById('exp_category').value);
+        ck('  and the question clears', box.style.display === 'none');
+        dom.window.close();
+    }
+    {
+        // ── A <select> SET TO A MISSING OPTION DOES NOTHING, SILENTLY ──────
+        // She clicks, the box does not change, and nothing on screen says
+        // why. It should be unreachable — a suggestion can only offer a
+        // category from the same server list that builds this dropdown — and
+        // that is exactly the kind of "should" worth guarding.
+        const { dom } = mk({ ok: true, suggest: true, kind: 'category', category: 'Demurrage',
+            question: 'Is this Demurrage?' });
+        await new Promise((r) => setTimeout(r, 600));
+        const w = dom.window, d = w.document;
+        await w.renderExpensesTab();
+        w.openExpenseModal(null);
+        ck('fixture sanity: the dropdown does not offer Demurrage',
+           ![...d.getElementById('exp_category').options].some((o) => o.value === 'Demurrage'));
+        d.getElementById('exp_description').value = 'Container sat at the port';
+        blur(d, dom);
+        await new Promise((r) => setTimeout(r, 120));
+        d.querySelector('.expAskYes').click();
+        ck('a category the dropdown lacks is ADDED, not silently ignored',
+           d.getElementById('exp_category').value === 'Demurrage',
+           d.getElementById('exp_category').value);
+        dom.window.close();
+    }
+    {
+        // A clear line that disagrees with the box.
+        const { dom } = mk({ ok: true, suggest: true, kind: 'category', category: 'Fuel',
+            question: 'This reads like Fuel rather than Supplies. Change it?' });
+        await new Promise((r) => setTimeout(r, 600));
+        const w = dom.window, d = w.document;
+        await w.renderExpensesTab();
+        w.openExpenseModal(null);
+        // Set to something else FIRST, or "Keep" proves nothing: Fuel is the
+        // first option and a new expense already has it selected.
+        d.getElementById('exp_category').value = 'Supplies';
+        d.getElementById('exp_description').value = 'Diesel for the loader';
+        blur(d, dom);
+        await new Promise((r) => setTimeout(r, 120));
+        ck('a clear mismatch offers the change',
+           /reads like Fuel/.test(d.getElementById('expVendorAsk').textContent));
+        d.querySelector('.expAskNo').click();
+        ck('  and Keep leaves her category alone',
+           d.getElementById('exp_category').value === 'Supplies',
+           'her choice stands unless she changes it');
+        dom.window.close();
+    }
+    {
+        // Both questions from one line: vendor first, category after.
+        const { dom } = mk({ ok: true, suggest: true, kind: 'vendor', vendor: 'Santiago', known: true,
+            question: 'Is this for Santiago?',
+            category_hint: { category: 'Labour', question: 'This reads like Labour rather than Fuel. Change it?' } });
+        await new Promise((r) => setTimeout(r, 600));
+        const w = dom.window, d = w.document;
+        await w.renderExpensesTab();
+        w.openExpenseModal(null);
+        d.getElementById('exp_description').value = 'Weekly salary Santiago';
+        blur(d, dom);
+        await new Promise((r) => setTimeout(r, 120));
+
+        const box = d.getElementById('expVendorAsk');
+        ck('the vendor is asked FIRST', /Is this for Santiago\?/.test(box.textContent), box.textContent);
+        ck('  and only one question is on screen at a time',
+           !/reads like Labour/.test(box.textContent), box.textContent);
+        d.querySelector('.expAskYes').click();
+        await new Promise((r) => setTimeout(r, 20));
+        ck('answering it brings up the category question',
+           /reads like Labour/.test(box.textContent), box.textContent);
+        ck('  with the vendor already set from the first answer',
+           d.getElementById('exp_vendor').value === 'Santiago');
+        d.querySelector('.expAskYes').click();
+        ck('  and answering that sets the category too',
+           d.getElementById('exp_category').value === 'Labour');
         dom.window.close();
     }
 }

@@ -4765,7 +4765,7 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
         try {
             const { suggestVendor } = require('./helpers/vendorFromText');
             const b2 = req.body || {};
-            const out = await suggestVendor(b2.description, { vendor: b2.vendor });
+            const out = await suggestVendor(b2.description, { vendor: b2.vendor, category: b2.category });
             res.json({ ok: true, ...out });
         } catch (e) {
             // 200, not 500. The client treats this as "nothing to ask" and
