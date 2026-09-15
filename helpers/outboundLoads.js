@@ -179,6 +179,8 @@ async function addOutboundLoad(entry) {
     await mutateJson(cfg.OUTBOUND_LOADS_FILE, [], (loads) => {
         already = require('./oncePerSave').findSpent(loads, rec.client_request_id);
         if (already) return loads;   // returned unchanged — nothing is written
+        // One buyer, one spelling — see the twin comment in helpers/loads.js.
+        rec.buyer = require('./canonicalName').canonicalName(loads.map((l) => l.buyer), rec.buyer);
         rec.id = nextOutboundId(loads);
         loads.unshift(rec);
         if (loads.length > 5000) loads.length = 5000;
@@ -313,12 +315,23 @@ function getOutboundReport(allLoads, { from, to } = {}) {
     const items = filtered.flatMap((l) => (Array.isArray(l.items) ? l.items : []));
     const byType = items.length ? groupItemsByDescription(items) : [];
 
+    // ── ONE BUYER, ONE ROW ───────────────────────────────────────────────
+    // Apsara, 2026-09-16: "Sellers name/bUyers name-make it case
+    // insensitive". Mirror of the per-seller fix in helpers/loads.js and
+    // changed in the same breath: these two were the same code with one word
+    // different, and fixing only the one she happened to name is how half a
+    // bug survives. helpers/canonicalName.js exists so there is now one
+    // implementation rather than two that drift.
+    const { groupByName, normalizeName } = require('./canonicalName');
     const buyerMap = new Map();
+    for (const [key, grp] of groupByName(filtered, (l) => l.buyer, 'Unknown buyer')) {
+        buyerMap.set(key, { buyer: grp.label, loadCount: 0, net: 0, amount: 0, cost: 0, costKnown: false, items: [] });
+    }
     let overallCost = 0, overallCostKnown = false;
     for (const l of filtered) {
-        const key = (l.buyer && String(l.buyer).trim()) || 'Unknown buyer';
-        if (!buyerMap.has(key)) buyerMap.set(key, { buyer: key, loadCount: 0, net: 0, amount: 0, cost: 0, costKnown: false, items: [] });
+        const key = normalizeName(String(l.buyer || '').trim()) || '~blank';
         const b = buyerMap.get(key);
+        if (!b) continue;
         b.loadCount += 1;
         b.net += l.net_weight || 0;
         b.amount += l.amount || 0;

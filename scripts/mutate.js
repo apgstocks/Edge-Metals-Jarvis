@@ -1865,6 +1865,45 @@ const MUTATIONS = [
       // Dropping 'bol' is the real regression: every saved BOL 404s.
       find: "const SAVED_KINDS = new Set(['invoice', 'proforma', 'bol']);",
       to:   "const SAVED_KINDS = new Set(['invoice', 'proforma']);" },
+
+    // ── SELLER / BUYER NAMES ARE CASE-INSENSITIVE (2026-09-16) ───────────
+    { name: 'names: the per-seller report keys on the raw name again',
+      file: 'helpers/loads.js', suites: ['names-case'],
+      find: "        const key = require('./canonicalName').normalizeName(String(l.seller || '').trim()) || '~blank';",
+      to:   "        const key = (l.seller && String(l.seller).trim()) || 'Unknown seller';" },
+    { name: 'names: the per-buyer report keys on the raw name again',
+      file: 'helpers/outboundLoads.js', suites: ['names-case'],
+      // Included because these two were identical code with one word changed
+      // — the shape where a fix lands on the one she named and the other
+      // keeps the bug for months.
+      find: "        const key = normalizeName(String(l.buyer || '').trim()) || '~blank';",
+      to:   "        const key = (l.buyer && String(l.buyer).trim()) || 'Unknown buyer';" },
+    { name: 'names: a grouped row is labelled with the lower-cased key',
+      file: 'helpers/canonicalName.js', suites: ['names-case'],
+      // The exact mistake found on the Inventory tab the day before, which
+      // printed "al combo" beside "Al combo".
+      find: '        if (best) g.label = best.spelling;',
+      to:   '        if (best) g.label = best.spelling.toLowerCase();' },
+    { name: 'names: the stored seller keeps whatever case was typed',
+      file: 'helpers/loads.js', suites: ['names-case'],
+      // Grouping fixes the report. This is the half that fixes the printed
+      // ticket, and the half that looks unnecessary once the screen is right.
+      find: "        rec.seller = require('./canonicalName').canonicalName(loads.map((l) => l.seller), rec.seller);",
+      to:   '' },
+    { name: 'names: the stored buyer keeps whatever case was typed',
+      file: 'helpers/outboundLoads.js', suites: ['names-case'],
+      find: "        rec.buyer = require('./canonicalName').canonicalName(loads.map((l) => l.buyer), rec.buyer);",
+      to:   '' },
+    { name: 'names: a brand-new name gets title-cased on the way in',
+      file: 'helpers/canonicalName.js', suites: ['names-case'],
+      // The tempting wrong fix. "MK Metal Trading", "d.c. scrap" and "JB's"
+      // are real names; a rule that rewrites them gets fought every day.
+      find: '    if (!bucket || !bucket.size) return name;',
+      to:   "    if (!bucket || !bucket.size) return name.replace(/\\b[a-z]/g, (c) => c.toUpperCase());" },
+    { name: 'names: blank names all merge into one supplier',
+      file: 'helpers/canonicalName.js', suites: ['names-case'],
+      find: "        const key = k || '~blank';",
+      to:   '        const key = k;' },
 ];
 
 // ── CRASH-SAFE, NOT JUST EXIT-SAFE ───────────────────────────────────────

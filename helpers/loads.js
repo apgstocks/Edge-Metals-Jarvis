@@ -218,6 +218,22 @@ async function addLoad(entry) {
     await mutateJson(cfg.LOADS_FILE, [], (loads) => {
         already = require('./oncePerSave').findSpent(loads, rec.client_request_id);
         if (already) return loads;   // unchanged — nothing written
+        // ── ONE SELLER, ONE SPELLING ─────────────────────────────────────
+        // Apsara, 2026-09-16: "Sellers name/bUyers name-make it case
+        // insensitive". Grouping the REPORTS case-insensitively fixes the
+        // totals; it does not fix a printed ticket, and two tickets for the
+        // same man carrying two spellings of his name is the part she sees
+        // on paper. So a name that already exists under a different case is
+        // stored the way SHE established it.
+        //
+        // Nothing is invented — no title-casing. "MK Metal Trading", "d.c.
+        // scrap", "JB's" are real names and a rule that rewrites them is a
+        // rule that gets fought. A genuinely new name is stored exactly as
+        // typed and becomes the established one. Same rule
+        // helpers/vendorFromText.js already applies to expense vendors.
+        //
+        // Inside the lock, so it reads the list this record is about to join.
+        rec.seller = require('./canonicalName').canonicalName(loads.map((l) => l.seller), rec.seller);
         rec.id = nextLoadId(loads);
         loads.unshift(rec);
         if (loads.length > 5000) loads.length = 5000;
@@ -446,11 +462,25 @@ function getInventoryReport(allLoads, { from, to } = {}) {
     // l.seller/l.seller_address hold the outside party's name+address —
     // l.buyer is the fixed "Edge Trading" constant (see helpers/loads.js's
     // top-of-file note and pdf.js's comment on the 2026-08-15 field swap).
+    // ── ONE SELLER, ONE ROW ──────────────────────────────────────────────
+    // Apsara, 2026-09-16: "Sellers name/bUyers name-make it case
+    // insensitive". This used to group on the RAW trimmed name, so "Ramesh"
+    // and "ramesh" were two sellers with two sets of totals — and the person
+    // reading the tab has no way to know the two lines are one man.
+    //
+    // groupByName keys case- AND punctuation-insensitively (so "M K Metal"
+    // and "MK Metal" meet too) and labels each group with the spelling used
+    // most, never the lower-cased key. Labelling with the key is the mistake
+    // that put "al combo" beside "Al combo" on this same screen.
+    const { groupByName } = require('./canonicalName');
     const sellerMap = new Map();
+    for (const [key, grp] of groupByName(filtered, (l) => l.seller, 'Unknown seller')) {
+        sellerMap.set(key, { seller: grp.label, loadCount: 0, net: 0, amount: 0, items: [], loads: [] });
+    }
     for (const l of filtered) {
-        const key = (l.seller && String(l.seller).trim()) || 'Unknown seller';
-        if (!sellerMap.has(key)) sellerMap.set(key, { seller: key, loadCount: 0, net: 0, amount: 0, items: [], loads: [] });
+        const key = require('./canonicalName').normalizeName(String(l.seller || '').trim()) || '~blank';
         const s = sellerMap.get(key);
+        if (!s) continue;
         s.loadCount += 1;
         s.net += l.net_weight || 0;
         s.amount += l.amount || 0;
