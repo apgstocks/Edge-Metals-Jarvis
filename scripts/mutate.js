@@ -1904,6 +1904,32 @@ const MUTATIONS = [
       file: 'helpers/canonicalName.js', suites: ['names-case'],
       find: "        const key = k || '~blank';",
       to:   '        const key = k;' },
+
+    // ── BOL ON THE PHONE (2026-09-16) ────────────────────────────────────
+    { name: 'bol-app: the sub-tab disappears from the app',
+      file: 'mobile-app/www/index.html', suites: ['bol'],
+      find: "['proforma', 'Proforma'], ['invoice', 'Invoice'], ['bol', 'BOL']",
+      to:   "['proforma', 'Proforma'], ['invoice', 'Invoice']" },
+    { name: 'bol-app: the button is there but routes to the proforma wizard',
+      file: 'mobile-app/www/index.html', suites: ['bol'],
+      find: "  else if (docsSubTab === 'bol') renderBolForm();",
+      to:   '' },
+    { name: 'bol-app: the consignee dropdown stops filling the address',
+      file: 'mobile-app/www/index.html', suites: ['bol'],
+      find: "    bolw.consigneeAddress = entry.raw || '';",
+      to:   '' },
+    { name: 'bol-app: a weight keystroke repaints the whole form',
+      file: 'mobile-app/www/index.html', suites: ['bol'],
+      // On a phone this throws the caret to the end of the box on every
+      // character — the field is rebuilt underneath the cursor.
+      find: '      bolRepaintTotals();\n    });\n  });\n  $(\'docBody\').querySelectorAll(\'.bolw-del\')',
+      to:   '      renderBolForm();\n    });\n  });\n  $(\'docBody\').querySelectorAll(\'.bolw-del\')' },
+    { name: 'bol-app: the app builds its own payload keys, diverging from the website',
+      file: 'mobile-app/www/index.html', suites: ['bol'],
+      // Two clients asking for two different documents from one route is the
+      // divergence this codebase already guards for invoices.
+      find: "    po_number: (w.po || '').trim(), appointment_id: (w.appointment || '').trim(),",
+      to:   "    po: (w.po || '').trim(), appointment: (w.appointment || '').trim()," },
 ];
 
 // ── CRASH-SAFE, NOT JUST EXIT-SAFE ───────────────────────────────────────

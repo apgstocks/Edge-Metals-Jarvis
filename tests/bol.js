@@ -300,6 +300,125 @@ ck('  pickup comes from its own two fields and nowhere else',
 ck('no page threw while rendering', errors.length === 0, errors.join(' | '));
 dom.window.close();
 
+// ── THE SAME DOCUMENT ON THE PHONE ──────────────────────────────────────
+// Apsara, 2026-09-16: "Build bol into edge yard app and website(under
+// documents)". Driven rather than diffed against the website: the two
+// screens are deliberately laid out differently (four fact boxes per row is
+// unusable on a phone), so form-parity's field-by-field comparison is the
+// wrong tool here. What must match is the PAYLOAD — both clients have to ask
+// the same server for the same document.
+section('G — the app');
+{
+    const APP = fs.readFileSync(path.join(ROOT, 'mobile-app/www/index.html'), 'utf8');
+    const appErrors = [];
+    const appDom = new JSDOM(APP, {
+        runScripts: 'dangerously', url: 'http://localhost/',
+        beforeParse(w) {
+            w.fetch = (u, opts) => {
+                const k = String(u).split('?')[0].replace(/^https?:\/\/[^/]+/, '');
+                w.__sent = w.__sent || [];
+                if (opts && opts.method === 'POST') w.__sent.push({ url: k, body: JSON.parse(opts.body || '{}') });
+                return Promise.resolve({ ok: true, status: 200, blob: () => Promise.resolve({}),
+                    json: () => Promise.resolve(k === '/api/address-book' ? BOOK
+                        : k === '/api/me' ? { ok: true, role: 'admin' } : { ok: true }) });
+            };
+            w.alert = () => {}; w.confirm = () => true;
+            w.URL.createObjectURL = () => 'blob:x'; w.URL.revokeObjectURL = () => {};
+            w.open = () => {};
+            w.addEventListener('error', (e) => appErrors.push(e.message));
+        },
+    });
+    await new Promise((r) => setTimeout(r, 700));
+    const aw = appDom.window, ad = aw.document;
+
+    ck('the app offers a BOL sub-tab under Documents',
+       /\['bol', 'BOL'\]/.test(APP) && typeof aw.renderBolForm === 'function',
+       'it sits beside Proforma and Invoice, where her other documents already are');
+
+    // Reached by CLICKING the sub-tab, not by setting docsSubTab. That is a
+    // top-level `let`, so it is not a property of window — assigning it makes
+    // a stray the page never reads, the Proforma wizard renders instead, and
+    // the assertion below fails for a reason that has nothing to do with the
+    // BOL. Third time this trap has cost this project a debugging session.
+    if (typeof aw.renderDocumentsTab === 'function') {
+        await aw.renderDocumentsTab();
+        await new Promise((r) => setTimeout(r, 200));
+        const tab = ad.querySelector('.doc-subtab-btn[data-subtab="bol"]');
+        ck('  the BOL button is on screen beside Proforma and Invoice', !!tab);
+        if (tab) {
+            tab.dispatchEvent(new aw.MouseEvent('click', { bubbles: true }));
+            await new Promise((r) => setTimeout(r, 250));
+        }
+    }
+    const inp = ad.getElementById('bolw_consignee');
+    ck('  the form renders', !!inp && !!ad.getElementById('bolw_seal'));
+
+    if (inp) {
+        inp.value = 'ecc';
+        inp.dispatchEvent(new aw.Event('input', { bubbles: true }));
+        await new Promise((r) => setTimeout(r, 60));
+        const items = [...ad.querySelectorAll('#bolwConsigneeList .ac-item')];
+        ck('  typing part of a name offers a match', items.length === 1, `${items.length} matches`);
+        if (items.length) {
+            items[0].dispatchEvent(new aw.MouseEvent('mousedown', { bubbles: true, cancelable: true }));
+            await new Promise((r) => setTimeout(r, 40));
+            ck('  picking it fills the name and the address',
+               inp.value === 'Eccomelt' && /1234 Foundry Rd/.test(ad.getElementById('bolw_address').value),
+               `${JSON.stringify(inp.value)} / ${JSON.stringify(ad.getElementById('bolw_address').value)}`);
+        }
+
+        const setA = (id, v) => { const el = ad.getElementById(id); el.value = v; el.dispatchEvent(new aw.Event('input', { bubbles: true })); };
+        setA('bolw_no', 'EM-1047'); setA('bolw_po', 'PO-55410'); setA('bolw_appt', 'APT-77213');
+        setA('bolw_pdate', '2026-09-15'); setA('bolw_ptime', '09:30');
+        setA('bolw_carrier', 'Santiago Trucking'); setA('bolw_driver', 'Miguel Ortiz');
+        setA('bolw_container', 'TRL-8821'); setA('bolw_seal', '40217');
+        ad.querySelectorAll('#docBody input[data-bi="0"]').forEach((el) => {
+            const v = { description: 'Aluminium combo scrap', pieces: '14', gross_weight: '46300', tare_weight: '4120', net_weight: '42180' }[el.dataset.bf];
+            el.value = v; el.dispatchEvent(new aw.Event('input', { bubbles: true }));
+        });
+
+        // ── NODE IDENTITY, NOT VALUE ─────────────────────────────────────
+        // A phone repaint that rebuilds every input throws the caret to the
+        // end of the box on every keystroke. The first version of this check
+        // compared the field's VALUE, which a rebuilt input carries just the
+        // same — so a mutation replacing the targeted redraw with a full
+        // re-render sailed through. The question is not "does it hold the
+        // right text" but "is it the same element the finger is in", so the
+        // node is captured before typing and compared by identity after.
+        const before = ad.querySelector('#docBody input[data-bi="0"][data-bf="gross_weight"]');
+        before.value = '46301';
+        before.dispatchEvent(new aw.Event('input', { bubbles: true }));
+        const after = ad.querySelector('#docBody input[data-bi="0"][data-bf="gross_weight"]');
+        ck('  typing a weight does not rebuild the field under the caret',
+           after === before && before.isConnected,
+           'a full repaint per keystroke replaces the element and sends the cursor to the end of the box');
+        // …while the figures below it still keep up, which is why the
+        // targeted redraw exists at all.
+        ck('  but the running total still updates',
+           /46,301/.test(ad.getElementById('docBody').textContent),
+           ad.getElementById('docBody').textContent.slice(-200));
+        before.value = '46300';
+        before.dispatchEvent(new aw.Event('input', { bubbles: true }));
+
+        ad.getElementById('bolwGenerate').dispatchEvent(new aw.MouseEvent('click', { bubbles: true }));
+        await new Promise((r) => setTimeout(r, 150));
+        const sentA = (aw.__sent || []).filter((x) => x.url === '/api/bol/generate');
+        ck('  Generate posts to the same route as the website', sentA.length === 1, `${sentA.length} posts`);
+        const b = sentA.length ? sentA[0].body : {};
+        ck('  and sends the same payload shape',
+           b.driver === 'Miguel Ortiz' && b.pickup_time === '09:30' && b.po_number === 'PO-55410'
+           && b.appointment_id === 'APT-77213' && b.seal_no === '40217'
+           && b.items[0].gross_weight === '46300' && b.items[0].tare_weight === '4120',
+           JSON.stringify(b).slice(0, 240));
+        ck('  so both clients ask for one document, not two versions of it',
+           JSON.stringify(Object.keys(b).sort()) === JSON.stringify(Object.keys(body).sort()),
+           `app: ${Object.keys(b).sort().join(',')}\n        web: ${Object.keys(body).sort().join(',')}`);
+    }
+
+    ck('  and nothing threw', appErrors.length === 0, appErrors.slice(0, 2).join(' | '));
+    appDom.window.close();
+}
+
 console.log(`\n  ${pass} passed, ${fail} failed`);
 if (failures.length) { console.log('\n  failed:'); failures.forEach((f) => console.log('    · ' + f)); }
 process.exit(fail ? 1 : 0);

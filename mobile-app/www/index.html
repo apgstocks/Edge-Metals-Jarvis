@@ -7287,7 +7287,7 @@ async function renderDocumentsTab() {
     <section style="max-width:600px; margin:0 auto; padding:20px 16px 60px;">
       <div style="font-family:var(--font-mono); font-size:10.5px; letter-spacing:.14em; text-transform:uppercase; color:var(--text-muted); margin-bottom:12px;">Documents</div>
       <div style="display:flex; gap:4px; margin-bottom:18px; border-bottom:1px solid var(--border-subtle);">
-        ${[['proforma', 'Proforma'], ['invoice', 'Invoice']].map(([id, label]) => `
+        ${[['proforma', 'Proforma'], ['invoice', 'Invoice'], ['bol', 'BOL']].map(([id, label]) => `
           <button class="btn doc-subtab-btn" data-subtab="${id}" style="flex:1; border:none; border-radius:0; border-bottom:2px solid ${docsSubTab === id ? 'var(--accent)' : 'transparent'}; background:transparent; padding:9px 10px; font-size:12.5px; font-weight:${docsSubTab === id ? '700' : '500'}; color:${docsSubTab === id ? 'var(--text-strong)' : 'var(--text-muted)'};">${label}</button>`).join('')}
       </div>
       <div id="docBody"></div>
@@ -7297,7 +7297,9 @@ async function renderDocumentsTab() {
     docsSubTab = btn.dataset.subtab;
     renderDocumentsTab();
   }));
-  if (docsSubTab === 'proforma') renderPfWizard(); else renderInvFlow();
+  if (docsSubTab === 'proforma') renderPfWizard();
+  else if (docsSubTab === 'bol') renderBolForm();
+  else renderInvFlow();
 }
 
 // Reusable consignee/buyer typeahead. Returns the picked address-book entry
@@ -7326,6 +7328,281 @@ function wireDocTypeahead(inputId, listId, onPick, onType) {
     }));
   });
   input.addEventListener('blur', () => setTimeout(close, 150));
+}
+
+// ── BILL OF LADING ────────────────────────────────────────────────────────
+// Apsara, 2026-09-16: "Build bol into edge yard app and website(under
+// documents)". The website half shipped yesterday; this is the same document
+// on the phone, which is where she is standing when the driver is waiting.
+//
+// SAME SERVER, SAME TEMPLATE, SAME PDF. This posts to /api/bol/generate like
+// the dashboard does — it does not build its own document. Two clients
+// rendering their own version of one legal shipping paper is the divergence
+// this codebase already guards against for invoices (see pickInvGroups).
+//
+// EDGE METALS IS THE SHIPPER even though this lives in the Edge Yard app.
+// She said so directly when I first built it — "No.its for edge metals." —
+// and the shipper block is fixed in assets/bol/template.html, not a field.
+// Being able to raise it from the yard phone does not make it a yard document.
+//
+// ONE COLUMN. The dashboard puts four fact boxes on a row; that is unusable
+// on a phone, so the fields stack and the goods lines are a small card each
+// rather than a five-column grid. Same fields, same order, same names.
+let bolw = null;
+
+function resetBolForm() {
+  bolw = {
+    consignee: '', consigneeAddress: '',
+    bolNo: '', date: docTodayISO(),
+    po: '', appointment: '',
+    pickupDate: '', pickupTime: '',
+    carrier: '', driver: '',
+    container: '', seal: '',
+    unit: 'lb', notes: '',
+    items: [bolBlankItem(), bolBlankItem()],
+    status: '',
+  };
+}
+function bolBlankItem() { return { description: '', pieces: '', gross_weight: '', tare_weight: '', net_weight: '' }; }
+
+const bolNum = (v) => {
+  if (v === null || v === undefined || String(v).trim() === '') return null;
+  const n = parseFloat(String(v).replace(/,/g, ''));
+  return isFinite(n) ? n : null;
+};
+function bolTotal(field) {
+  // A column nobody filled totals to nothing, not 0 — the same rule the PDF
+  // follows. "0" under TARE claims the containers weighed nothing.
+  let any = false, acc = 0;
+  for (const r of (bolw.items || [])) { const v = bolNum(r[field]); if (v !== null) { any = true; acc += v; } }
+  return any ? acc : null;
+}
+const bolFmt = (n) => (n === null ? '—' : Math.round(n).toLocaleString('en-US'));
+
+// Shown, never enforced. She types all three weights off a scale ticket; if
+// they do not reconcile this says so and gets out of the way. The PDF prints
+// exactly what she typed — a document that silently rewrites a weight on a
+// page the buyer re-weighs against is the worst thing this screen could do.
+function bolWarnings() {
+  const out = [];
+  (bolw.items || []).forEach((r, i) => {
+    const g = bolNum(r.gross_weight), t = bolNum(r.tare_weight), n = bolNum(r.net_weight);
+    const where = String(r.description || '').trim() ? `"${r.description.trim()}"` : `line ${i + 1}`;
+    if (g !== null && t !== null && n !== null && Math.abs((g - t) - n) > 1) {
+      out.push(`${where}: net ${bolFmt(n)} but gross minus tare is ${bolFmt(g - t)}.`);
+    }
+    if (g !== null && t !== null && t > g) out.push(`${where}: tare is heavier than gross.`);
+    if (n !== null && n <= 0) out.push(`${where}: net weight is ${bolFmt(n)}.`);
+  });
+  return out;
+}
+
+function renderBolForm() {
+  if (!bolw) resetBolForm();
+  const w = bolw;
+  const warn = bolWarnings();
+  const fld = (id, label, val, type, ph) => `
+    <div class="field">
+      <label for="${id}">${label}</label>
+      <input id="${id}" type="${type || 'text'}" value="${esc(val || '')}" ${ph ? `placeholder="${esc(ph)}"` : ''} autocomplete="off">
+    </div>`;
+
+  $('docBody').innerHTML = `
+    <div style="font-size:13px; color:var(--text-muted); margin-bottom:14px; line-height:1.55;">
+      Shipper is Edge Metals. Type the buyer and it matches your address book.
+    </div>
+
+    <div class="field" style="position:relative;">
+      <label for="bolw_consignee">Consignee</label>
+      <input id="bolw_consignee" placeholder="Start typing a customer" autocomplete="off" value="${esc(w.consignee)}">
+      <div id="bolwConsigneeList" class="ac-dropdown hidden"></div>
+    </div>
+    <div class="field">
+      <label for="bolw_address">Consignee address</label>
+      <textarea id="bolw_address" rows="3" placeholder="Fills in when you pick a name">${esc(w.consigneeAddress)}</textarea>
+    </div>
+
+    <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px;">
+      ${fld('bolw_no', 'BOL number', w.bolNo, 'text', 'EM-1047')}
+      ${fld('bolw_date', 'Date', w.date, 'date')}
+      ${fld('bolw_po', 'PO number', w.po)}
+      ${fld('bolw_appt', 'Appointment ID', w.appointment)}
+      ${fld('bolw_pdate', 'Pickup date', w.pickupDate, 'date')}
+      ${fld('bolw_ptime', 'Pickup time', w.pickupTime, 'time')}
+      ${fld('bolw_carrier', 'Carrier', w.carrier, 'text', 'Trucking company')}
+      ${fld('bolw_driver', 'Driver', w.driver, 'text', "Driver's name")}
+      ${fld('bolw_container', 'Container / trailer', w.container)}
+      ${fld('bolw_seal', 'Seal number', w.seal)}
+    </div>
+
+    <div style="display:flex; align-items:center; justify-content:space-between; margin:16px 0 8px;">
+      <div style="font-size:13px; font-weight:700; color:var(--text-strong);">Goods</div>
+      <select id="bolw_unit" style="width:auto; padding:6px 10px; font-size:12px;">
+        <option value="lb"${w.unit === 'lb' ? ' selected' : ''}>lb</option>
+        <option value="mt"${w.unit === 'mt' ? ' selected' : ''}>mt</option>
+      </select>
+    </div>
+    <div style="font-size:11.5px; color:var(--text-muted); margin-bottom:10px; line-height:1.5;">
+      Net should equal gross minus tare. Leave a box empty and it prints as a dash, not a zero.
+    </div>
+
+    ${w.items.map((r, i) => `
+      <div style="border:1px solid var(--border-subtle); border-radius:var(--radius-sm); padding:10px 12px; margin-bottom:10px;">
+        <div style="display:flex; align-items:center; gap:8px; margin-bottom:8px;">
+          <input data-bi="${i}" data-bf="description" placeholder="Description of goods" value="${esc(r.description)}" autocomplete="off" style="flex:1;">
+          <button type="button" class="btn bolw-del" data-bi="${i}" style="padding:6px 10px; font-size:13px;">&times;</button>
+        </div>
+        <div style="display:grid; grid-template-columns:repeat(2,1fr); gap:8px;">
+          <input data-bi="${i}" data-bf="pieces"       inputmode="decimal" placeholder="Pieces" value="${esc(r.pieces)}" autocomplete="off">
+          <input data-bi="${i}" data-bf="gross_weight" inputmode="decimal" placeholder="Gross"  value="${esc(r.gross_weight)}" autocomplete="off">
+          <input data-bi="${i}" data-bf="tare_weight"  inputmode="decimal" placeholder="Tare"   value="${esc(r.tare_weight)}" autocomplete="off">
+          <input data-bi="${i}" data-bf="net_weight"   inputmode="decimal" placeholder="Net"    value="${esc(r.net_weight)}" autocomplete="off">
+        </div>
+      </div>`).join('')}
+
+    <button type="button" id="bolwAddRow" class="btn" style="font-size:12.5px; padding:8px 12px;">+ Add line</button>
+
+    <div style="margin-top:14px; font-family:var(--font-mono); font-size:12px; color:var(--text-muted); line-height:1.7;">
+      Pieces ${bolFmt(bolTotal('pieces'))} · Gross ${bolFmt(bolTotal('gross_weight'))} · Tare ${bolFmt(bolTotal('tare_weight'))}<br>
+      <strong style="color:var(--text-strong);">Net ${bolFmt(bolTotal('net_weight'))} ${esc(w.unit)}</strong>
+    </div>
+
+    ${warn.length ? `
+      <div style="margin-top:12px; border:1px solid var(--status-warning, #d69e2e); border-radius:var(--radius-sm); padding:10px 12px; font-size:12.5px; color:var(--status-warning, #d69e2e); line-height:1.6;">
+        ${warn.map(esc).join('<br>')}
+        <div style="color:var(--text-muted); margin-top:6px; font-size:11.5px;">The PDF prints exactly what you typed — nothing here is changed for you.</div>
+      </div>` : ''}
+
+    <div class="field" style="margin-top:14px;">
+      <label for="bolw_notes">Notes</label>
+      <textarea id="bolw_notes" rows="2" placeholder="Prints under the goods table">${esc(w.notes)}</textarea>
+    </div>
+
+    <div style="display:flex; gap:10px; margin-top:16px;">
+      <button type="button" id="bolwPreview" class="btn" style="flex:1;">Preview</button>
+      <button type="button" id="bolwGenerate" class="btn btn-primary" style="flex:1;">Generate</button>
+    </div>
+    <div id="bolwStatus" style="margin-top:10px; font-size:12.5px; color:var(--text-muted); min-height:18px;">${esc(w.status || '')}</div>`;
+
+  // ── Consignee type-ahead ────────────────────────────────────────────────
+  // The shared wireDocTypeahead, which already carries the three rules this
+  // app learned the hard way: mousedown not click, selection by position not
+  // entry.id, and a search that matches the raw address text as well as the
+  // aliases.
+  wireDocTypeahead('bolw_consignee', 'bolwConsigneeList', (entry) => {
+    bolw.consignee = docConsigneeName(entry);
+    bolw.consigneeAddress = entry.raw || '';
+    $('bolw_consignee').value = bolw.consignee;
+    $('bolw_address').value = bolw.consigneeAddress;
+  }, () => { bolw.consignee = $('bolw_consignee').value; });
+
+  // Plain fields write straight to the model and do NOT re-render — a
+  // repaint on every keystroke throws away the caret, which on a phone means
+  // the cursor jumping to the end of every box as you type.
+  const bind = (id, key) => { const el = $(id); if (el) el.addEventListener('input', () => { bolw[key] = el.value; }); };
+  bind('bolw_address', 'consigneeAddress'); bind('bolw_no', 'bolNo'); bind('bolw_date', 'date');
+  bind('bolw_po', 'po'); bind('bolw_appt', 'appointment');
+  bind('bolw_pdate', 'pickupDate'); bind('bolw_ptime', 'pickupTime');
+  bind('bolw_carrier', 'carrier'); bind('bolw_driver', 'driver');
+  bind('bolw_container', 'container'); bind('bolw_seal', 'seal');
+  bind('bolw_notes', 'notes');
+
+  // The weight boxes DO re-render, because the running total and the
+  // reconcile warning below them have to keep up. Only that part is redrawn.
+  $('docBody').querySelectorAll('input[data-bi]').forEach((el) => {
+    el.addEventListener('input', () => {
+      bolw.items[Number(el.dataset.bi)][el.dataset.bf] = el.value;
+      bolRepaintTotals();
+    });
+  });
+  $('docBody').querySelectorAll('.bolw-del').forEach((el) => el.addEventListener('click', () => {
+    bolw.items.splice(Number(el.dataset.bi), 1);
+    if (!bolw.items.length) bolw.items = [bolBlankItem()];
+    renderBolForm();
+  }));
+  $('bolwAddRow').addEventListener('click', () => { bolw.items.push(bolBlankItem()); renderBolForm(); });
+  $('bolw_unit').addEventListener('change', () => { bolw.unit = $('bolw_unit').value; bolRepaintTotals(); });
+  $('bolwPreview').addEventListener('click', () => bolSubmit(true));
+  $('bolwGenerate').addEventListener('click', () => bolSubmit(false));
+}
+
+// Redraws only the totals line and the warning box, leaving every input — and
+// the caret inside whichever one is focused — exactly where it was.
+function bolRepaintTotals() {
+  const holder = $('docBody');
+  if (!holder) return;
+  const totals = holder.querySelector('[data-bol-totals]') || (() => {
+    const el = holder.querySelector('div[style*="font-family:var(--font-mono)"]');
+    if (el) el.setAttribute('data-bol-totals', '1');
+    return el;
+  })();
+  if (totals) {
+    totals.innerHTML = `Pieces ${bolFmt(bolTotal('pieces'))} · Gross ${bolFmt(bolTotal('gross_weight'))} · Tare ${bolFmt(bolTotal('tare_weight'))}<br>` +
+      `<strong style="color:var(--text-strong);">Net ${bolFmt(bolTotal('net_weight'))} ${esc(bolw.unit)}</strong>`;
+  }
+  const warn = bolWarnings();
+  let box = holder.querySelector('[data-bol-warn]');
+  if (!warn.length) { if (box) box.remove(); return; }
+  if (!box) {
+    box = document.createElement('div');
+    box.setAttribute('data-bol-warn', '1');
+    box.style.cssText = 'margin-top:12px; border:1px solid var(--status-warning, #d69e2e); border-radius:var(--radius-sm); padding:10px 12px; font-size:12.5px; color:var(--status-warning, #d69e2e); line-height:1.6;';
+    if (totals && totals.parentNode) totals.parentNode.insertBefore(box, totals.nextSibling);
+    else holder.appendChild(box);
+  }
+  box.innerHTML = `${warn.map(esc).join('<br>')}<div style="color:var(--text-muted); margin-top:6px; font-size:11.5px;">The PDF prints exactly what you typed — nothing here is changed for you.</div>`;
+}
+
+function bolPayload() {
+  const w = bolw;
+  return {
+    bol_no: (w.bolNo || '').trim(), bol_date: w.date,
+    consignee_name: (w.consignee || '').trim(), consignee_address: w.consigneeAddress,
+    po_number: (w.po || '').trim(), appointment_id: (w.appointment || '').trim(),
+    pickup_date: w.pickupDate, pickup_time: w.pickupTime,
+    carrier: (w.carrier || '').trim(), driver: (w.driver || '').trim(),
+    container_no: (w.container || '').trim(), seal_no: (w.seal || '').trim(),
+    weight_unit: w.unit || 'lb', notes: w.notes,
+    items: (w.items || []).map((r) => ({
+      description: String(r.description || '').trim(),
+      pieces: r.pieces, gross_weight: r.gross_weight,
+      tare_weight: r.tare_weight, net_weight: r.net_weight,
+    })),
+  };
+}
+
+async function bolSubmit(preview) {
+  const body = bolPayload();
+  const set = (msg) => { bolw.status = msg; if ($('bolwStatus')) $('bolwStatus').textContent = msg; };
+  if (!body.consignee_name) return set('Who is it going to? Fill the consignee.');
+  if (!body.items.some((it) => it.description || bolNum(it.net_weight) !== null || bolNum(it.gross_weight) !== null)) {
+    return set('Add at least one line of goods.');
+  }
+  set(preview ? 'Building preview…' : 'Generating…');
+  try {
+    if (preview) {
+      // Opened as a blob: the route is a POST behind the session, so there is
+      // no URL that would carry the form with it.
+      // API_BASE and the Bearer token, not a bare path: the app is a
+      // Capacitor WebView served from its own origin, so a relative URL does
+      // not reach the server at all and there is no session cookie to lean
+      // on. Same shape as the documents download at the bottom of this file.
+      const res = await fetch(API_BASE + '/api/bol/generate?preview=1', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + getToken() },
+        body: JSON.stringify(body),
+      });
+      if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || `preview failed (${res.status})`);
+      const url = URL.createObjectURL(await res.blob());
+      window.open(url, '_blank');
+      setTimeout(() => URL.revokeObjectURL(url), 60000);
+      return set('Preview opened. Nothing was saved.');
+    }
+    const out = await api('/api/bol/generate', { method: 'POST', body: JSON.stringify(body) });
+    set(`Saved as ${out.saved_filename}`);
+  } catch (e) {
+    set(e.message);
+  }
 }
 
 // ── PROFORMA — 3-step wizard ──────────────────────────────────────────────
