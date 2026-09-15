@@ -97,7 +97,14 @@ function validateForSave(entry) {
 
 function buildRecord(entry) {
     validateForSave(entry);
-    const items = Array.isArray(entry.items) ? entry.items.map(computeItem) : [];
+    // ── ONE METAL, ONE SPELLING ──────────────────────────────────────
+    // Apsara, 2026-09-16: "if i saved description say HMS and when i type
+    // ike hms in small,it i considering that as a new item." Case only —
+    // see helpers/itemSpelling.js for why this is not the alias feature and
+    // must never grow into it.
+    const _known = require('./itemSpelling').knownSpellings();
+    const items = Array.isArray(entry.items)
+        ? require('./itemSpelling').canonicaliseItems(entry.items, _known).map(computeItem) : [];
     const totals = sumItems(items);
     return {
         date          : entry.date || null,

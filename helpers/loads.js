@@ -163,7 +163,14 @@ function validateLoadForSave(entry) {
 
 async function addLoad(entry) {
     validateLoadForSave(entry);
-    const items = Array.isArray(entry.items) ? entry.items.map(computeItem) : [];
+    // ── ONE METAL, ONE SPELLING ──────────────────────────────────────
+    // Apsara, 2026-09-16: "if i saved description say HMS and when i type
+    // ike hms in small,it i considering that as a new item." Case only —
+    // see helpers/itemSpelling.js for why this is not the alias feature and
+    // must never grow into it.
+    const _known = require('./itemSpelling').knownSpellings();
+    const items = Array.isArray(entry.items)
+        ? require('./itemSpelling').canonicaliseItems(entry.items, _known).map(computeItem) : [];
     const totals = sumItems(items);
 
     const rec = {
@@ -264,7 +271,14 @@ async function updateLoad(id, patch) {
 // fresh "Generate PDF" button until it's regenerated.
 async function editLoad(id, entry) {
     validateLoadForSave(entry);
-    const items = Array.isArray(entry.items) ? entry.items.map(computeItem) : [];
+    // ── ONE METAL, ONE SPELLING ──────────────────────────────────────
+    // Apsara, 2026-09-16: "if i saved description say HMS and when i type
+    // ike hms in small,it i considering that as a new item." Case only —
+    // see helpers/itemSpelling.js for why this is not the alias feature and
+    // must never grow into it.
+    const _known = require('./itemSpelling').knownSpellings();
+    const items = Array.isArray(entry.items)
+        ? require('./itemSpelling').canonicaliseItems(entry.items, _known).map(computeItem) : [];
     const totals = sumItems(items);
 
     const patch = {

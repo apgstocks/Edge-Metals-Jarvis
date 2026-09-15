@@ -740,17 +740,23 @@ let waQrRefreshTimer = null; // re-renders the WhatsApp tab while a QR is pendin
 // first cut of this and she asked for it back — "let the descripton of header
 // be there" — so it stays. What went is the EYEBROW above it and the ALL-CAPS
 // title, which were the two that said nothing the nav item had not.
-function pageHead(title, { note = '', stats = [], chips = [], actions = '' } = {}) {
-  const L = 'font-size:11.5px; color:var(--text-muted); margin-top:2px;';
+// The stat row on its own, so a screen whose figures change with a filter can
+// redraw JUST them. Added 2026-09-16 for the Loads tab — see loadStatsHtml.
+const STAT_LABEL_CSS = 'font-size:11.5px; color:var(--text-muted); margin-top:2px;';
+function statRowHtml(stats) {
+  return (stats || []).filter(Boolean)
+    .map(([label, value]) => `<div><div style="font-size:20px; font-weight:600; color:var(--text-strong); line-height:1.1;">${value}</div><div style="${STAT_LABEL_CSS}">${esc(label)}</div></div>`)
+    .join('');
+}
+
+function pageHead(title, { note = '', stats = [], chips = [], actions = '', statsId = '' } = {}) {
+  const L = STAT_LABEL_CSS;
   return `
     <div style="display:flex; align-items:flex-start; justify-content:space-between; gap:14px; flex-wrap:wrap; margin-bottom:16px;">
       <div style="min-width:0;">
         <h2 style="font-size:19px; font-weight:600; text-transform:none; letter-spacing:-.01em; margin:0;">${esc(title)}</h2>
         ${note ? `<div style="font-size:12.5px; color:var(--text-muted); margin-top:5px; max-width:60ch;">${note}</div>` : ''}
-        ${stats.length ? `<div style="display:flex; gap:22px; flex-wrap:wrap; margin-top:12px;">${stats
-          .filter(Boolean)
-          .map(([label, value]) => `<div><div style="font-size:20px; font-weight:600; color:var(--text-strong); line-height:1.1;">${value}</div><div style="${L}">${esc(label)}</div></div>`)
-          .join('')}</div>` : ''}
+        ${stats.length ? `<div${statsId ? ` id="${statsId}"` : ''} style="display:flex; gap:22px; flex-wrap:wrap; margin-top:12px;">${statRowHtml(stats)}</div>` : ''}
       </div>
       <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
         ${chips.filter(Boolean).map((c) => `<span style="font-family:var(--font-mono); font-size:10px; color:var(--text-faint); border:1px solid var(--border-subtle); border-radius:var(--radius-xs); padding:3px 7px;">${esc(c)}</span>`).join('')}
@@ -4461,6 +4467,50 @@ function loadsWithItem(loads, description) {
 // row was before sales existed — so an old record filters correctly without
 // being migrated.
 const LOAD_KINDS = [['all', 'All'], ['purchase', 'Purchases'], ['sale', 'Sales']];
+
+// ── THE FIGURES AT THE TOP FOLLOW THE FILTER ───────────────────────────────
+// Apsara, 2026-09-16: "also in loads,only loads are coming what about sales
+// and its value when i click on sales???"
+//
+// She was right and it was worse than it looked. The three figures were
+// computed from loadsCache — EVERYTHING — while the deck below them showed the
+// filtered set. Press Sales and the list narrowed while "62 loads · $650,590"
+// sat unchanged above it, which does not read as a bug: it reads as the total
+// for what is on screen. A wrong number that looks like an answer is worse
+// than no number.
+//
+// ── AND "VALUE" ON *ALL* WAS NEVER A REAL FIGURE ────────────────────────────
+// This is the part she did not ask about and is the more serious half. On All,
+// `value` summed the amount of every load — purchases AND sales — into one
+// total. A purchase amount is money OUT and a sale amount is money IN; adding
+// them produces a number that means nothing at all, and it grows every time
+// she trades, so it looks like a business figure going up.
+//
+// So All no longer prints one blended total. It shows what was bought and what
+// was sold, side by side and separately, and neither is called profit — the
+// yard's actual margin needs the cost of the specific metal sold, which is
+// what helpers/yardProfit.js exists to work out.
+function loadStats(rows, kind) {
+  const list = rows || [];
+  const sum = (f) => list.reduce((t, l) => t + (Number(f(l)) || 0), 0);
+  const net = sum((l) => l.net_weight).toLocaleString();
+  const money = (k) => fmtAmount(list.filter((l) => (l._kind === 'sale' ? 'sale' : 'purchase') === k)
+    .reduce((t, l) => t + (Number(l.amount) || 0), 0)) || '—';
+
+  if (kind === 'sale') {
+    return [['sales', String(list.length)], ['net weight', esc(net)], ['sold for', esc(money('sale'))]];
+  }
+  if (kind === 'purchase') {
+    return [['purchases', String(list.length)], ['net weight', esc(net)], ['paid', esc(money('purchase'))]];
+  }
+  return [
+    ['loads', String(list.length)],
+    ['net weight', esc(net)],
+    ['bought', esc(money('purchase'))],
+    ['sold', esc(money('sale'))],
+  ];
+}
+
 function filterLoadsByKind(loads, kind) {
   if (!kind || kind === 'all') return loads;
   return (loads || []).filter((l) => (l._kind === 'sale' ? 'sale' : 'purchase') === kind);
@@ -8821,11 +8871,9 @@ function renderLoads(loads) {
     <section style="max-width:1000px; margin:0 auto; padding:28px 20px 80px;">
       ${pageHead('Loads', {
         note: 'Camera or upload gross/tare weight, computed net, generated PDF ticket.',
-        stats: [
-          ['loads', String(loadsCache.length)],
-          ['net weight', esc(loadsCache.reduce((t, l) => t + (Number(l.net_weight) || 0), 0).toLocaleString())],
-          ['value', esc(fmtAmount(loadsCache.reduce((t, l) => t + (Number(l.amount) || 0), 0)) || '—')],
-        ],
+        // Recomputed on every filter change — see loadStats/repaintDeck.
+        statsId: 'loadStats',
+        stats: loadStats(filterLoadsByKind(loadsCache, loadKindFilter), loadKindFilter),
         actions: `<button id="btnAddLoad" class="btn btn-primary">+ Create invoice</button>
           <!-- Visible to every role. Recording material leaving the yard is
                yard work, same as recording it arriving — Apsara, 2026-08-24,
@@ -9516,6 +9564,13 @@ function wireLoadsEvents() {
     if (chosenItemDetail) rows = loadsWithItem(rows, chosenItemDetail);
     const narrowed = !!q || !!chosenItemDetail || loadKindFilter !== 'all';
     paintLoadKindBar(rows.length);
+    // The figures at the top describe WHAT IS ON SCREEN — including the text
+    // search and the item filter, not just the kind buttons. Anything else
+    // and the count above disagrees with the list below, which is the bug
+    // she reported. Rebuilt rather than assigned field by field because the
+    // NUMBER of figures changes: All shows bought and sold separately.
+    const statsBox = $('loadStats');
+    if (statsBox) statsBox.innerHTML = statRowHtml(loadStats(rows, loadKindFilter));
     // flat while EITHER is on. Once you have asked for one material you are
     // no longer looking for a day, and only the first date section renders
     // open — grouping would hide most of the answer. Clearing both puts the
