@@ -243,6 +243,30 @@ function buildBolHtml(data) {
         total_tare: escapeHtml(fmtWeight(t.tare_weight)),
         total_net: escapeHtml(fmtWeight(t.net_weight)),
         notes_block,
+        // ── THE SHIPPER'S SIGNATURE ──────────────────────────────────────
+        // Apsara, 2026-09-16: "Give chandra bose sign to shipper".
+        //
+        // The same image the commercial invoice and the proforma already
+        // carry — helpers/signature.js, one file and one loader, so every
+        // document Edge Metals issues is signed identically and nobody has to
+        // remember which template has it inlined. That module exists because
+        // the signature was once pasted into a single template's HTML and so
+        // could not be reused; adding a second copy here would rebuild the
+        // exact problem it was written to remove.
+        //
+        // FAIL SOFT, inherited: an unreadable file yields an empty block of
+        // the same height, so the layout is identical and the line can be
+        // signed by hand. A BOL that refuses to render because a PNG was
+        // missing would be far worse than one printing a blank rule — the
+        // driver is waiting either way.
+        //
+        // The DRIVER and CONSIGNEE lines stay blank on purpose. Those are
+        // signed on the spot by the people receiving the goods, and printing
+        // a signature for them would be signing on someone else's behalf.
+        shipper_signature: require('./signature').signatureBlockHtml({
+            height: '30px', maxHeight: '28px', maxWidth: '150px',
+            align: 'flex-end', justify: 'flex-start', marginBottom: 0,
+        }).replace('<div style="height:30px;', '<div class="sigink" style="height:30px;'),
     };
 
     let html = loadTemplate();

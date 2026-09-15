@@ -2013,6 +2013,34 @@ const MUTATIONS = [
       // time the BOL date was left blank.
       find: '                saved_date: savedDate,',
       to:   '' },
+
+    // ── THE SHIPPER'S SIGNATURE (2026-09-16) ─────────────────────────────
+    { name: 'bolsig: the shipper line loses its signature',
+      file: 'helpers/bolPdf.js', suites: ['bol'],
+      find: "        shipper_signature: require('./signature').signatureBlockHtml({",
+      to:   "        shipper_signature: '', _unused: ((x) => x)({" },
+    { name: 'bolsig: the driver and consignee lines get signed too',
+      file: 'assets/bol/template.html', suites: ['bol'],
+      // Signing on behalf of the people RECEIVING the goods. The worst
+      // version of this feature, and it would look completely normal.
+      find: '        <div class="sigink"></div>\n        <div class="sig">DRIVER',
+      to:   '        {{shipper_signature}}\n        <div class="sig">DRIVER' },
+    { name: 'bolsig: the signature prints BELOW the rule instead of on it',
+      file: 'assets/bol/template.html', suites: ['bol'],
+      find: '        {{shipper_signature}}\n        <div class="sig">SHIPPER',
+      to:   '        <div class="sig">SHIPPER' },
+    { name: 'bolsig: a missing signature file collapses the column',
+      file: 'helpers/signature.js', suites: ['bol'],
+      // The three rules then print at different heights and the page reads as
+      // a misprint on a document someone is about to sign.
+      find: '    if (!url) return `<div style="height:${height};${mb}"></div>`;',
+      to:   "    if (!url) return '';" },
+    { name: 'bolsig: a second copy of the image is inlined instead of shared',
+      file: 'helpers/bolPdf.js', suites: ['bol'],
+      // helpers/signature.js exists precisely because the signature was once
+      // pasted into one template and so could not be reused.
+      find: "        shipper_signature: require('./signature').signatureBlockHtml({",
+      to:   "        shipper_signature: '<div class=\"sigink\"><img src=\"data:image/png;base64,AAAA\"></div>', _unused: ((x) => x)({" },
 ];
 
 // ── CRASH-SAFE, NOT JUST EXIT-SAFE ───────────────────────────────────────

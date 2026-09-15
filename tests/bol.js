@@ -77,9 +77,79 @@ section('A — the document carries every field she named');
        'without it the page is a packing list with a signature box, not a contract of carriage');
     ck('  with three signature lines: shipper, driver, consignee',
        has('SHIPPER') && has('DRIVER') && has('RECEIVED BY'));
+
+    // ── THE SHIPPER'S SIGNATURE ──────────────────────────────────────────
+    // Apsara, 2026-09-16: "Give chandra bose sign to shipper".
+    const flat = html.replace(/data:image\/png;base64,[A-Za-z0-9+/=]+/g, 'IMG').replace(/\n\s*/g, ' ');
+    ck('the shipper line is signed',
+       /sigcol">\s*<div class="sigink"[^>]*><img src="IMG"[^>]*><\/div>\s*<div class="sig">SHIPPER/.test(flat),
+       'the image has to sit ABOVE the rule and inside the SHIPPER column — ' +
+       'anywhere else on the page is not a signature on that line');
+    // Signing for the driver or the consignee would be signing on someone
+    // else's behalf. They sign on the spot, for goods they are receiving.
+    ck('  and the driver and consignee lines are left blank',
+       (flat.match(/<div class="sigink"><\/div>/g) || []).length === 2
+       && (flat.match(/<img/g) || []).length === 1,
+       'printing a signature for the people receiving the goods would be ' +
+       'signing on their behalf');
+    ck('  it is the SAME signature the invoice and proforma already carry',
+       html.includes(require('../helpers/signature').signatureDataUrl()),
+       'a second copy of the image would rebuild the exact problem ' +
+       'helpers/signature.js was written to remove');
     ck('  and internal notes are stripped from what the buyer receives',
        !/<!--/.test(html) && !/Apsara/.test(html),
        'the template comments discuss the design; they are not for the customer');
+}
+
+section('A2 — a missing signature file must not cost her the document');
+{
+    // Inherited from helpers/signature.js, and worth asserting HERE because
+    // the BOL adds a placeholder that would otherwise print raw: a document
+    // refusing to render because a PNG was unreadable is far worse than one
+    // printing a blank rule. The driver is waiting either way, and a blank
+    // line can be signed by hand.
+    //
+    // ── RUN IN A CHILD PROCESS, AND HERE IS WHY ──────────────────────────
+    // The first version of this section set process.env.SIGNATURE_FILE and
+    // called buildBolHtml. It passed, and it tested NOTHING: that variable is
+    // read once at module load, so by the time a test can set it the real
+    // path is already baked in and the module has cached the image besides.
+    // A green check that cannot fail is worse than no check, because it is
+    // read as coverage.
+    //
+    // A fresh node with the variable already wrong is the only honest way to
+    // reach the branch.
+    const { execFileSync } = require('child_process');
+    const script = `
+        const bol = require(${JSON.stringify(path.join(ROOT, 'helpers/bolPdf'))});
+        const out = bol.buildBolHtml({ consignee_name: 'X', items: [{ description: 'Al', net_weight: 1 }] });
+        const flat = out.html.replace(/\\n\\s*/g, ' ');
+        process.stdout.write(JSON.stringify({
+            rendered: flat.includes('SHIPPER'),
+            noImage: !/<img/.test(flat),
+            noPlaceholder: !/\\{\\{/.test(flat),
+            spacerKept: /<div class="sigink" style="height:30px;"><\\/div>\\s*<div class="sig">SHIPPER/.test(flat),
+            inkColumns: (flat.match(/class="sigink"/g) || []).length,
+        }));
+    `;
+    let res = null, threw = null;
+    try {
+        res = JSON.parse(execFileSync(process.execPath, ['-e', script], {
+            env: { ...process.env, SIGNATURE_FILE: '/definitely/not/here.png', JARVIS_TEST: '1' },
+            encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'],
+        }));
+    } catch (e) { threw = e; }
+
+    ck('the document still renders with no signature file', !threw && res && res.rendered,
+       threw ? String(threw.message).split('\n')[0] : JSON.stringify(res));
+    ck('  with no broken-image icon on a customer-facing page', !!res && res.noImage);
+    ck('  and no {{placeholder}} left on the page', !!res && res.noPlaceholder,
+       'the unfilled-placeholder guard would throw, which is the point of it');
+    // The height is reserved either way, or the shipper's rule prints higher
+    // than the driver's and the page looks misprinted.
+    ck('  the 30px space is still reserved, so the three lines stay level',
+       !!res && res.spacerKept && res.inkColumns === 3,
+       JSON.stringify(res));
 }
 
 section('B — blank is an absence, not a zero');

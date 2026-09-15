@@ -98,7 +98,14 @@
   .terms { margin-top:14px; font-size:7pt; color:#5c5c57; line-height:1.5; border-top:0.5pt solid #e2e2de; padding-top:9px; }
 
   .sigs { display:flex; gap:16px; margin-top:26px; }
-  .sig { flex:1; border-top:0.7pt solid #111; padding-top:4px; font-size:6.8pt; letter-spacing:.06em; color:#71716c; }
+  .sigcol { flex:1; }
+  /* The signature sits ABOVE the rule, because that is where a signature
+     goes. Every column reserves the same height whether or not it holds one,
+     so the three lines stay level — a shipper line printing lower than the
+     driver's reads as a misprint on a document someone is about to sign. */
+  .sigink { height:30px; display:flex; align-items:flex-end; justify-content:flex-start; }
+  .sigink img { max-height:28px; max-width:150px; }
+  .sig { border-top:0.7pt solid #111; padding-top:4px; font-size:6.8pt; letter-spacing:.06em; color:#71716c; }
   .sig .sub { display:block; margin-top:13px; font-size:6.5pt; color:#a3a39d; }
 </style>
 </head>
@@ -172,9 +179,18 @@
     </div>
 
     <div class="sigs">
-      <div class="sig">SHIPPER<span class="sub">Signature · Date</span></div>
-      <div class="sig">DRIVER<span class="sub">Signature · Date</span></div>
-      <div class="sig">RECEIVED BY<span class="sub">Signature · Date</span></div>
+      <div class="sigcol">
+        {{shipper_signature}}
+        <div class="sig">SHIPPER<span class="sub">Signature · Date</span></div>
+      </div>
+      <div class="sigcol">
+        <div class="sigink"></div>
+        <div class="sig">DRIVER<span class="sub">Signature · Date</span></div>
+      </div>
+      <div class="sigcol">
+        <div class="sigink"></div>
+        <div class="sig">RECEIVED BY<span class="sub">Signature · Date</span></div>
+      </div>
     </div>
 
   </div>
