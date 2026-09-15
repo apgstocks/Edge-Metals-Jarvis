@@ -880,7 +880,17 @@ const NAV_ITEMS = [
   // and never stored (see helpers/metalsTrucking.js). Filing it under Sales
   // would put it one subject away from the thing it is made of. Say the word
   // and it moves; the strip is one array.
-  { id: 'sales', label: 'Sales', group: 'Edge Metals' },
+  // Apsara, 2026-09-16: "change the sales in edge metals as invoice."
+  //
+  // THE LABEL ONLY. The id stays 'sales', and so do /api/sales, the stored
+  // records, the 'sale'/'sale_cost' payment kinds and helpers/sales.js.
+  // Renaming any of those would rewrite data to change a word on a screen,
+  // and /api/sales is deliberately ABSENT from STAFF_ALLOWED_PATH_PREFIXES —
+  // a renamed path would silently stop being blocked for staff.
+  //
+  // Edge YARD sales (outbound loads) keep the word Sales. Different company,
+  // and she said Edge Metals.
+  { id: 'sales', label: 'Invoice', group: 'Edge Metals' },
   // ── EDGE INVENTORY ───────────────────────────────────────────────────
   // Apsara, 2026-09-11: "WANT TO HAVE a separate tab called Edge inventory.
   // there i want to maintain per supplier basis. inventory items and accounts
@@ -5366,7 +5376,7 @@ const LEDGER_KINDS = {
             ['Payable', 'net_payable', 'money'], ['Balance', 'balance', 'money']],
   },
   sales: {
-    eyebrow: '// Edge Metals', title: 'Sales register', addLabel: '+ Add sale', editLabel: 'Edit sale',
+    eyebrow: '// Edge Metals', title: 'Invoice register', addLabel: '+ Add invoice', editLabel: 'Edit invoice',
     path: '/api/sales', listKey: 'sales', itemKey: 'sale',
     money: ['invoice_price', 'amount', 'commission_per_mt', 'commission_amount',
             'received', 'balance'],
@@ -5536,11 +5546,14 @@ function wireMetalsTabs() {
   });
 }
 
+// Eyebrows for the sub-tabs. 'Invoice' rather than 'Sales' since 2026-09-16 —
+// the section is called Invoice now and an eyebrow still reading Sales would
+// be the one place the old name survived.
 const SALES_TAB_TITLES = {
-  incoming: ['Sales', 'Incoming'],
+  incoming: ['Invoice', 'Incoming'],
   margin: ['Edge Metals', 'Margin per container'],
-  freight: ['Sales', 'Freight'],
-  commission: ['Sales', 'Commission'],
+  freight: ['Invoice', 'Freight'],
+  commission: ['Invoice', 'Commission'],
 };
 
 async function renderLedgerTab(kind) {
@@ -5826,7 +5839,7 @@ async function openFromBill() {
     <div id="fbModal" style="position:fixed; inset:0; background:rgba(0,0,0,.66); z-index:9100; display:flex; align-items:flex-start; justify-content:center; overflow-y:auto; padding:32px 16px;">
       <div class="card" style="width:min(700px,100%); padding:20px 22px 18px; background:${L.sunken}; border-color:${L.line};">
         <div style="display:flex; align-items:baseline; justify-content:space-between; margin-bottom:4px;">
-          <h3 style="margin:0; font-size:16px; text-transform:none; color:${L.ink};">New sale from a bill</h3>
+          <h3 style="margin:0; font-size:16px; text-transform:none; color:${L.ink};">New invoice from a bill</h3>
           ${ledgerThemeToggle()}
           <button id="fbClose" aria-label="Close" style="background:none; border:none; color:${L.inkMuted}; font-size:22px; line-height:1; cursor:pointer;">&times;</button>
         </div>
@@ -5844,7 +5857,7 @@ async function openFromBill() {
             : `<div style="padding:18px; text-align:center; font-size:12px; color:${L.inkFaint};">No bills with a container number yet.</div>`}
         </div>
         <div style="margin-top:10px; font-size:11px; color:${L.inkFaint};">
-          ${data.unsold || 0} of ${rows.length} not sold yet. Nothing here? Use Add sale for a container that never had a bill.
+          ${data.unsold || 0} of ${rows.length} not sold yet. Nothing here? Use Add invoice for a container that never had a bill.
         </div>
         <div id="fbErr" style="color:${L.danger}; font-size:11px; margin-top:8px;"></div>
       </div>
@@ -5862,7 +5875,7 @@ async function openFromBill() {
       try {
         const r = await api(`/api/sales/from-bill/${encodeURIComponent(b.dataset.id)}`);
         if (r.already_sold) {
-          $('fbErr').textContent = 'That container already has a sale against it.';
+          $('fbErr').textContent = 'That container already has an invoice against it.';
           return;
         }
         close();
@@ -6299,7 +6312,7 @@ async function openTruckingPay(data, company) {
 // beside it.
 async function renderSalesSubTab(which) {
   metalsTab.sales = which;
-  const [eyebrow, title] = SALES_TAB_TITLES[which] || ['Sales', which];
+  const [eyebrow, title] = SALES_TAB_TITLES[which] || ['Invoice', which];
   const root = $('viewRoot');
   root.innerHTML = `
     <div style="max-width:100%; margin:0 auto; padding:34px 28px 80px;">
@@ -6386,7 +6399,7 @@ async function renderMargin() {
 
     ${(un.bills.length || un.sales.length) ? `
       <div style="margin-bottom:12px; padding:9px 12px; border:1px solid var(--status-warn); border-radius:var(--radius-sm); font-size:12px; color:var(--status-warn);">
-        ${un.bills.length ? `${un.bills.length} bill${un.bills.length === 1 ? '' : 's'}` : ''}${un.bills.length && un.sales.length ? ' and ' : ''}${un.sales.length ? `${un.sales.length} sale${un.sales.length === 1 ? '' : 's'}` : ''} carry no container number, so ${un.bills.length + un.sales.length === 1 ? 'it can' : 'they can'} never be matched. Add one and ${un.bills.length + un.sales.length === 1 ? 'it appears' : 'they appear'} here.
+        ${un.bills.length ? `${un.bills.length} bill${un.bills.length === 1 ? '' : 's'}` : ''}${un.bills.length && un.sales.length ? ' and ' : ''}${un.sales.length ? `${un.sales.length} invoice${un.sales.length === 1 ? '' : 's'}` : ''} carry no container number, so ${un.bills.length + un.sales.length === 1 ? 'it can' : 'they can'} never be matched. Add one and ${un.bills.length + un.sales.length === 1 ? 'it appears' : 'they appear'} here.
       </div>` : ''}
 
     <div class="card" style="padding:0; overflow-x:auto;">
@@ -6412,7 +6425,7 @@ async function renderMargin() {
               ? `<span title="More than one row claims this container — this margin uses only one of them" style="font-size:10px; color:var(--status-danger);">duplicated</span>`
               : ''}${r.state === 'closed' ? (r.weight_gap ? `<span title="Bought ${ledNum(r.bought_weight_lb)} lbs, sold ${ledNum(r.sold_weight_lb)}" style="font-size:10px; color:var(--status-warn);">${ledNum(r.weight_gap)} lb gap</span>` : '') : state(r)}</td>
           </tr>`).join('')
-          : `<tr><td colspan="12" style="padding:26px; text-align:center; color:var(--text-faint); font-family:var(--font-mono); font-size:12px;">${active ? 'Nothing matches those filters.' : 'No container has both a bill and a sale yet.'}</td></tr>`}</tbody>
+          : `<tr><td colspan="12" style="padding:26px; text-align:center; color:var(--text-faint); font-family:var(--font-mono); font-size:12px;">${active ? 'Nothing matches those filters.' : 'No container has both a bill and an invoice yet.'}</td></tr>`}</tbody>
       </table>
     </div>
     <div style="margin-top:10px; font-family:var(--font-mono); font-size:10px; color:var(--text-faint);">
