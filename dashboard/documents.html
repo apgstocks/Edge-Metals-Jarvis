@@ -3913,11 +3913,35 @@ $('btnInvGenerate').addEventListener('click', async () => {
 let bolRows = [];
 let _bolWired = false;
 
+// ── TODAY, WHERE THE BUSINESS IS ───────────────────────────────────────────
+// Apsara, 2026-09-16: "by default bol date should be today date".
+//
+// It already defaulted to today — but through new Date().toISOString(), which
+// is UTC. Frisco is UTC-5 in summer, so from 7pm local the UTC date is
+// already TOMORROW: a BOL raised in the evening printed tomorrow's date, and
+// filed itself in tomorrow's archive folder. "Today" was right for most of
+// the working day and quietly wrong at the end of it, which is the worst
+// shape a date bug can have.
+//
+// America/Los_Angeles, matching her instruction of 2026-09-10 — "Bill date
+// and invoice date should be by default today in LA date" — and matching
+// todayYardDateStr() in dashboard/index.html, which exists for exactly this.
+// en-CA yields YYYY-MM-DD directly, so there is no month name to misparse.
+//
+// DELIBERATELY NOT APPLIED TO THE PROFORMA ON THIS PAGE, which still uses the
+// browser's own clock. That is a date printed on documents already going to
+// customers, and moving it is a change she should make on purpose rather than
+// inherit from a BOL fix. Flagged to her rather than done quietly.
+const BOL_TZ = 'America/Los_Angeles';
+function bolTodayStr() {
+  return new Date().toLocaleDateString('en-CA', { timeZone: BOL_TZ });
+}
+
 function bolBlankRow() { return { description: '', pieces: '', gross_weight: '', tare_weight: '', net_weight: '' }; }
 
 function bolInit() {
   if (!bolRows.length) bolRows = [bolBlankRow(), bolBlankRow()];
-  if (!$('bol_date').value) $('bol_date').value = new Date().toISOString().slice(0, 10);
+  if (!$('bol_date').value) $('bol_date').value = bolTodayStr();
   bolPaintItems();
   if (_bolWired) return;
   _bolWired = true;

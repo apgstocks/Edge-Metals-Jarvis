@@ -7586,7 +7586,7 @@ function resetBolForm() {
   bolw = {
     editingId: null,
     consignee: '', consigneeAddress: '',
-    bolNo: '', date: docTodayISO(),
+    bolNo: '', date: bolTodayISO(),
     po: '', appointment: '',
     pickupDate: '', pickupTime: '',
     carrier: '', driver: '',
@@ -7597,6 +7597,25 @@ function resetBolForm() {
   };
 }
 function bolBlankItem() { return { description: '', pieces: '', gross_weight: '', tare_weight: '', net_weight: '' }; }
+
+// ── TODAY, WHERE THE BUSINESS IS ───────────────────────────────────────────
+// Apsara, 2026-09-16: "by default bol date should be today date".
+//
+// It did default to today — via docTodayISO(), which is UTC. Frisco is UTC-5
+// in summer, so from 7pm local the UTC date is already TOMORROW and an
+// evening BOL printed tomorrow's date. Right for most of the working day and
+// quietly wrong at the end of it.
+//
+// A SEPARATE function rather than a fix to docTodayISO, deliberately. That
+// one also seeds the invoice date AND builds the folder guess for downloading
+// a saved proforma or invoice — a guess that has to agree with the folder the
+// SERVER filed it under. Quietly changing it would move a date on documents
+// customers already receive and could make a download look for the wrong day.
+// The same UTC problem is there and is worth fixing; it is worth fixing on
+// purpose, not as a side effect of this.
+function bolTodayISO() {
+  return new Date().toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' });
+}
 
 const bolNum = (v) => {
   if (v === null || v === undefined || String(v).trim() === '') return null;

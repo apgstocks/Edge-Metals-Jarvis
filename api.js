@@ -5355,7 +5355,13 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
             // The date the archive actually filed it under — today when she
             // left the BOL date blank. Returned below so the client can build
             // a download URL for THIS file rather than guessing the folder.
-            const savedDate = body.bol_date || new Date().toISOString().slice(0, 10);
+            // toLocaleDateString, not toISOString: the latter is UTC, so from
+            // 7pm in Frisco a BOL with no date of its own would be filed in
+            // TOMORROW's archive folder — and then not be where anyone looks
+            // for it. Same rule as the clients now use for the date printed
+            // on the document, so the folder and the paper agree.
+            const savedDate = body.bol_date
+                || new Date().toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' });
             const savedPath = documentsSaved.saveBolCopy(pdf, filename, savedDate);
 
             // ── AND THE FIELDS, SO IT CAN BE EDITED ──────────────────────

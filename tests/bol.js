@@ -616,7 +616,72 @@ section('H — the store behind Edit');
 
     try { fs.rmSync(TMP, { recursive: true, force: true }); } catch {}
 
-    section('I — Generate hands back the file');
+    section('H2 — the date it starts on');
+{
+    // Apsara, 2026-09-16: "by default bol date should be today date".
+    //
+    // It always DID default to today — through new Date().toISOString(),
+    // which is UTC. That is the shape of date bug worth having a test for:
+    // correct for most of the working day, and quietly wrong at the end of
+    // it. Frisco is UTC-5 in summer, so from 7pm local the UTC date is
+    // already tomorrow, and an evening BOL printed tomorrow's date and filed
+    // itself in tomorrow's archive folder.
+    //
+    // ── PINNED TO 8PM, THE HOUR THAT BREAKS ──────────────────────────────
+    // A test run at any other time passes either way, which is exactly how
+    // this survived being written in the first place. The clock is fixed at
+    // 01:30 UTC on the 17th — 8:30pm on the 16th in Frisco — so the two
+    // answers differ and only the right one passes.
+    const AT_8PM_FRISCO = Date.parse('2026-09-17T01:30:00Z');
+    const bad = new Date(AT_8PM_FRISCO).toISOString().slice(0, 10);
+    const good = new Date(AT_8PM_FRISCO).toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' });
+    ck('the fixture really is on the far side of the rollover',
+       bad === '2026-09-17' && good === '2026-09-16',
+       `UTC says ${bad}, the yard says ${good} — if these matched, this section would prove nothing`);
+
+    for (const [label, file, fn] of [
+        ['website', 'dashboard/documents.html', 'function bolTodayStr()'],
+        ['app', 'mobile-app/www/index.html', 'function bolTodayISO()'],
+    ]) {
+        const src = fs.readFileSync(path.join(ROOT, file), 'utf8');
+        const body = src.slice(src.indexOf(fn), src.indexOf(fn) + 260);
+        // Evaluated, not grepped: a function that mentions the timezone and
+        // still returns a UTC string would pass a source check.
+        // eslint-disable-next-line no-new-func
+        const got = new Function(`${body}\n return ${fn.replace('function ', '').replace('()', '')}();`)
+            .call({ Date: null });
+        void got;
+        // Re-run with the clock pinned. Date is replaced only inside this
+        // call so nothing else in the suite sees a frozen clock.
+        const RealDate = Date;
+        // eslint-disable-next-line no-global-assign
+        global.Date = class extends RealDate {
+            constructor(...a) { return a.length ? new RealDate(...a) : new RealDate(AT_8PM_FRISCO); }
+            static now() { return AT_8PM_FRISCO; }
+        };
+        let pinned;
+        try {
+            // eslint-disable-next-line no-new-func
+            pinned = new Function(`${body}\n return ${fn.replace('function ', '').replace('()', '')}();`)();
+        } finally {
+            // eslint-disable-next-line no-global-assign
+            global.Date = RealDate;
+        }
+        ck(`${label}: at 8:30pm in Frisco the default is TODAY, not tomorrow`,
+           pinned === '2026-09-16',
+           `got ${pinned} — UTC would say 2026-09-17, which is the bug`);
+    }
+
+    // And the archive folder has to agree with the paper, or a BOL raised in
+    // the evening is filed under a day nobody looks in.
+    const apiTxt = fs.readFileSync(path.join(ROOT, 'api.js'), 'utf8');
+    const block = apiTxt.slice(apiTxt.indexOf('const savedDate = body.bol_date'), apiTxt.indexOf('const savedDate = body.bol_date') + 220);
+    ck('  and the server files it under the same day',
+       /America\/Los_Angeles/.test(block) && !/toISOString/.test(block),
+       block.trim());
+}
+
+section('I — Generate hands back the file');
     {
         // Apsara: "When i click generate-It needs to get as downloadable
         // file". It used to report a filename, which is an inventory
