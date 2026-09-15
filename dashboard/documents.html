@@ -4082,22 +4082,124 @@ async function bolSubmit(preview) {
       return;
     }
     const out = await api('/api/bol/generate', { method: 'POST', body: JSON.stringify(body) });
-    status.textContent = `Saved as ${out.saved_filename}`;
+    bolEditingId = out.id || bolEditingId;
+    // ── HAND HER THE FILE ────────────────────────────────────────────────
+    // Apsara, 2026-09-16: "When i click generate-It needs to get as
+    // downloadable file". It used to save server-side and report a filename,
+    // which is an inventory number, not a document.
+    //
+    // Downloaded through /api/documents/download rather than by returning the
+    // bytes from the generate call: what lands in her Downloads folder is
+    // then the EXACT file the archive holds, and the archive is proved
+    // readable at the moment it is written instead of the first time she
+    // goes looking for something old.
+    status.textContent = 'Saved. Downloading…';
+    try {
+        await bolDownload(out.saved_filename, out.saved_date);
+        status.textContent = `Saved and downloaded — ${out.saved_filename}`;
+    } catch (e) {
+        // The PDF exists and is filed; only the handing-over failed. Saying
+        // "could not download" without that would read as "it did not save".
+        status.textContent = `Saved as ${out.saved_filename}, but the download did not start: ${e.message}`;
+    }
     loadSavedBols();
   } catch (e) {
     status.textContent = e.message;
   }
 }
 
+// Same mechanism as downloadSavedProforma above: fetch the saved file and
+// click an <a download>, which is what a normal download link does.
+async function bolDownload(filename, date) {
+  const qs = `?kind=bol&date=${encodeURIComponent(date || '')}&file=${encodeURIComponent(filename)}`;
+  const res = await fetch('/api/documents/download' + qs);
+  if (res.status === 401) { location.href = '/login'; throw new Error('signed out'); }
+  if (!res.ok) throw new Error(`the archive returned ${res.status}`);
+  const blob = await res.blob();
+  if (!blob.size) throw new Error('the archive returned an empty file');
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 5000);
+}
+
+// ── EDIT ─────────────────────────────────────────────────────────────────
+// Apsara, 2026-09-16: "Edit Bol option also needed". Loads a stored BOL back
+// into the form. Generating again upserts by BOL number, so a correction
+// replaces the document rather than leaving two both claiming to be EM-1047.
+let bolEditingId = null;
+
+async function bolEdit(id) {
+  const { bol } = await api(`/api/bols/${encodeURIComponent(id)}`);
+  if (!bol) return;
+  bolEditingId = bol.id;
+  $('bol_consignee').value = bol.consignee_name || '';
+  $('bol_consignee_address').value = bol.consignee_address || '';
+  $('bol_no').value = bol.bol_no || '';
+  $('bol_date').value = bol.bol_date || '';
+  $('bol_po').value = bol.po_number || '';
+  $('bol_appointment').value = bol.appointment_id || '';
+  $('bol_pickup_date').value = bol.pickup_date || '';
+  $('bol_pickup_time').value = bol.pickup_time || '';
+  $('bol_carrier').value = bol.carrier || '';
+  $('bol_driver').value = bol.driver || '';
+  $('bol_container').value = bol.container_no || '';
+  $('bol_seal').value = bol.seal_no || '';
+  $('bol_unit').value = bol.weight_unit || 'lb';
+  $('bol_notes').value = bol.notes || '';
+  // The weights come back as the STRINGS she typed — see helpers/bols.js.
+  // Parsing them on the way in or out would make "46,300" reappear as 46300
+  // after an edit that never touched it.
+  bolRows = (bol.items || []).map((it) => ({
+    description: it.description || '', pieces: it.pieces ?? '',
+    gross_weight: it.gross_weight ?? '', tare_weight: it.tare_weight ?? '', net_weight: it.net_weight ?? '',
+  }));
+  if (!bolRows.length) bolRows = [bolBlankRow()];
+  bolPaintItems();
+  $('bolStatus').textContent = `Editing ${bol.bol_no || 'this BOL'}${bol.generated_count > 1 ? ` — generated ${bol.generated_count} times` : ''}. Generate replaces it.`;
+  $('panelBol').scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
+// Lists the STORED BOLS, not the files on disk. The archive listing shows
+// filenames, which is an inventory; this shows documents — who it went to,
+// which container, when it was last touched — because that is what she is
+// looking for when she comes back to correct one.
 async function loadSavedBols() {
   try {
-    const { bols } = await api('/api/documents/saved');
-    const groups = bols || [];
-    $('bolSavedList').innerHTML = groups.length
-      ? groups.map((g) => `<div style="margin-bottom:8px;"><div style="font-family:var(--font-mono); font-size:11px; color:var(--text-faint);">${esc(g.date)}</div>${
-          g.files.map((f) => `<div><a href="/api/documents/download?kind=bol&date=${encodeURIComponent(g.date)}&file=${encodeURIComponent(f)}" target="_blank">${esc(f)}</a></div>`).join('')
-        }</div>`).join('')
+    const { bols } = await api('/api/bols');
+    const rows = bols || [];
+    $('bolSavedList').innerHTML = rows.length
+      ? `<table style="width:100%; border-collapse:collapse; font-size:12.5px;">
+          <tr style="color:var(--text-muted); font-size:10px; letter-spacing:.08em;">
+            <th style="text-align:left; padding:5px 8px;">BOL</th>
+            <th style="text-align:left; padding:5px 8px;">CONSIGNEE</th>
+            <th style="text-align:left; padding:5px 8px;">CONTAINER</th>
+            <th style="text-align:left; padding:5px 8px;">DATE</th>
+            <th style="padding:5px 8px;"></th>
+          </tr>
+          ${rows.map((b) => `
+            <tr style="border-top:1px solid var(--border-subtle);">
+              <td style="padding:7px 8px; font-family:var(--font-mono);">${esc(b.bol_no || '(no number)')}${
+                b.generated_count > 1 ? `<span title="Reissued ${b.generated_count} times" style="color:var(--text-faint); font-size:10px;"> ×${b.generated_count}</span>` : ''}</td>
+              <td style="padding:7px 8px;">${esc(b.consignee_name || '—')}</td>
+              <td style="padding:7px 8px; font-family:var(--font-mono);">${esc(b.container_no || '—')}</td>
+              <td style="padding:7px 8px; font-family:var(--font-mono); color:var(--text-muted);">${esc(b.bol_date || '—')}</td>
+              <td style="padding:7px 8px; text-align:right; white-space:nowrap;">
+                <button class="btn btn-secondary bol-edit" data-id="${esc(b.id)}" style="font-size:11px; padding:4px 10px;">Edit</button>
+                ${b.last_filename ? `<button class="btn btn-secondary bol-dl" data-file="${esc(b.last_filename)}" data-date="${esc(b.last_saved_date || '')}" style="font-size:11px; padding:4px 10px;">PDF</button>` : ''}
+              </td>
+            </tr>`).join('')}
+        </table>`
       : 'None yet.';
+    $('bolSavedList').querySelectorAll('.bol-edit').forEach((el) =>
+      el.addEventListener('click', () => bolEdit(el.dataset.id).catch((e) => { $('bolStatus').textContent = e.message; })));
+    $('bolSavedList').querySelectorAll('.bol-dl').forEach((el) =>
+      el.addEventListener('click', () => bolDownload(el.dataset.file, el.dataset.date)
+        .catch((e) => { $('bolStatus').textContent = e.message; })));
   } catch (e) {
     $('bolSavedList').textContent = e.message;
   }

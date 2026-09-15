@@ -419,6 +419,127 @@ section('G — the app');
     appDom.window.close();
 }
 
+section('H — the store behind Edit');
+{
+    // Apsara, 2026-09-16: "Edit Bol option also needed". The BOL used to save
+    // only the rendered PDF, which is where the typing ENDED — there was
+    // nothing to reopen. So "add an Edit button" was not a UI change; the
+    // data it edits had to exist first.
+    const os = require('os');
+    const TMP = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvis-bols-'));
+    const cfg = require('../config');
+    cfg.BOLS_FILE = path.join(TMP, 'bols.json');
+    fs.writeFileSync(cfg.BOLS_FILE, '[]');
+    const store = require('../helpers/bols');
+
+    const mk = (over) => Object.assign({
+        bol_no: 'EM-1047', bol_date: '2026-09-15', consignee_name: 'Eccomelt LLC',
+        consignee_address: 'Eccomelt LLC\n1234 Foundry Rd', po_number: 'PO-55410',
+        appointment_id: 'APT-77213', pickup_date: '2026-09-15', pickup_time: '09:30',
+        carrier: 'Santiago Trucking', driver: 'Miguel Ortiz',
+        container_no: 'TRL-8821', seal_no: '40217', weight_unit: 'lb',
+        items: [{ description: 'Aluminium combo scrap', pieces: '14',
+                  gross_weight: '46,300', tare_weight: '4120', net_weight: '42180' }],
+    }, over || {});
+
+    const first = await store.saveBol(mk());
+    ck('a generated BOL stores its fields, not just a PDF', !!first && !!first.id,
+       JSON.stringify(first && first.id));
+    const back = store.getBol(first.id);
+    ck('  and every field comes back',
+       back && back.driver === 'Miguel Ortiz' && back.pickup_time === '09:30'
+       && back.seal_no === '40217' && back.po_number === 'PO-55410',
+       JSON.stringify(back && { driver: back.driver, seal: back.seal_no }));
+
+    // ── WEIGHTS COME BACK AS TYPED ───────────────────────────────────
+    // Kept as strings on purpose. Parsing them here would make "46,300"
+    // reappear as 46300 after an edit that never touched that box, which
+    // is a number silently changing itself on a weight document.
+    ck('  weights come back exactly as typed, commas and all',
+       back && back.items[0].gross_weight === '46,300',
+       JSON.stringify(back && back.items[0]));
+
+    // ── EDITING REPLACES, IT DOES NOT ACCUMULATE ─────────────────────
+    // Two records both claiming to be EM-1047 is the failure this guards:
+    // the number IS the document's identity, it is what the buyer quotes.
+    const second = await store.saveBol(mk({ driver: 'Luis Ramos', bol_no: 'em 1047' }));
+    ck('editing and regenerating replaces the same record',
+       second.id === first.id && store.listBols().length === 1,
+       `${store.listBols().length} rows; ids ${first.id} / ${second.id}`);
+    ck('  matching the number loosely, so "em 1047" is not a second BOL',
+       store.keyOf('em 1047') === store.keyOf('EM-1047'));
+    ck('  the edit took', store.getBol(first.id).driver === 'Luis Ramos');
+    ck('  and a reissue is visible as one', second.generated_count === 2,
+       `generated_count ${second.generated_count} — a BOL on its second printing ` +
+       'looks identical to a fresh one without this');
+    ck('  while the original creation time is kept',
+       second.created_at === first.created_at,
+       'an edit is not a new document');
+
+    // A blank number is not a number. Merging two unnumbered BOLs would
+    // silently destroy one.
+    await store.saveBol(mk({ bol_no: '', consignee_name: 'A' }));
+    await store.saveBol(mk({ bol_no: '', consignee_name: 'B' }));
+    ck('two BOLs with no number stay two BOLs', store.listBols().length === 3,
+       `${store.listBols().length} rows`);
+
+    ck('the list carries enough to recognise a document',
+       store.listBols().every((r) => 'bol_no' in r && 'consignee_name' in r && 'container_no' in r),
+       JSON.stringify(store.listBols()[0]));
+    ck('  but not the whole record', !('items' in (store.listBols()[0] || {})),
+       'shipping every item line to draw a few rows is what made other lists slow');
+
+    ck('a BOL can be removed from the list', await store.deleteBol(first.id) === true);
+    ck('  and removing a missing one says so', await store.deleteBol('nope') === false);
+
+    try { fs.rmSync(TMP, { recursive: true, force: true }); } catch {}
+
+    section('I — Generate hands back the file');
+    {
+        // Apsara: "When i click generate-It needs to get as downloadable
+        // file". It used to report a filename, which is an inventory
+        // number rather than a document.
+        const web = fs.readFileSync(path.join(ROOT, 'dashboard/documents.html'), 'utf8');
+        const app3 = fs.readFileSync(path.join(ROOT, 'mobile-app/www/index.html'), 'utf8');
+
+        // ANCHORED TO THE RESPONSE, not to the words. The first version
+        // matched /saved_date: savedDate,/ anywhere in api.js — which the
+        // stored record's own `last_saved_date: savedDate,` line satisfies,
+        // so deleting the real one from the response left this green. A
+        // mutation doing exactly that survived until the two were told apart.
+        const apiSrc = fs.readFileSync(path.join(ROOT, 'api.js'), 'utf8');
+        ck('the route returns the date the archive filed it under',
+           /saved_filename: path\.basename\(savedPath\),\s*\n\s*saved_date: savedDate,/.test(apiSrc),
+           'without it the client has to guess the folder, and guesses wrong ' +
+           'every time the BOL date is left blank');
+
+        ck('website: Generate downloads the saved file',
+           /await bolDownload\(out\.saved_filename, out\.saved_date\)/.test(web));
+        ck('  through an <a download>, like a normal link',
+           /a\.download = filename;/.test(web.slice(web.indexOf('async function bolDownload'),
+                                                    web.indexOf('async function bolDownload') + 1200)));
+        ck('  and pulls it from the ARCHIVE, not from the generate response',
+           /\/api\/documents\/download' \+ qs/.test(web.slice(web.indexOf('async function bolDownload'),
+                                                               web.indexOf('async function bolDownload') + 1200)),
+           'so what lands in her Downloads folder is the exact file the archive holds');
+
+        ck('app: Generate downloads too',
+           /deliverExportedFile\(blob, out\.saved_filename, 'pdf'\)/.test(app3),
+           'an <a download> does nothing in an Android WebView — deliverExportedFile ' +
+           'writes the file and opens the share sheet on a real device');
+
+        // A failure to hand over is not a failure to save, and saying so
+        // matters: "could not download" alone reads as "it did not save",
+        // and she would generate it again.
+        for (const [label, src] of [['website', web], ['app', app3]]) {
+            ck(`${label}: a failed download still says the PDF was saved`,
+               /but the download did not start/.test(src),
+               '"could not download" alone reads as "it did not save"');
+        }
+    }
+
+    }
+
 console.log(`\n  ${pass} passed, ${fail} failed`);
 if (failures.length) { console.log('\n  failed:'); failures.forEach((f) => console.log('    · ' + f)); }
 process.exit(fail ? 1 : 0);

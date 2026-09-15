@@ -1970,6 +1970,49 @@ const MUTATIONS = [
       file: 'dashboard/index.html', suites: ['payment-delete-roles'],
       find: "function metalsCanDelete() {\n  return IS_SUPER === true;",
       to:   "function metalsCanDelete() {\n  return ROLE === 'admin';" },
+
+    // ── DOWNLOAD ON GENERATE, AND EDIT (2026-09-16) ──────────────────────
+    { name: 'boledit: a second Generate makes a SECOND record for the same BOL number',
+      file: 'helpers/bols.js', suites: ['bol'],
+      // Two rows both claiming to be EM-1047. The number is the document's
+      // identity — it is what the buyer quotes back.
+      find: '        const idx = k ? list.findIndex((r) => keyOf(r && r.bol_no) === k)',
+      to:   '        const idx = k ? -1' },
+    { name: 'boledit: blank BOL numbers all merge into one record',
+      file: 'helpers/bols.js', suites: ['bol'],
+      // The dangerous direction: merging two unnumbered BOLs destroys one.
+      find: "    return String(bolNo == null ? '' : bolNo).trim().toUpperCase().replace(/[^A-Z0-9]/g, '');",
+      to:   "    return String(bolNo == null ? '' : bolNo).trim().toUpperCase().replace(/[^A-Z0-9]/g, '') || 'BLANK';" },
+    { name: 'boledit: the BOL number is matched strictly, so "em 1047" is a new document',
+      file: 'helpers/bols.js', suites: ['bol'],
+      find: "    return String(bolNo == null ? '' : bolNo).trim().toUpperCase().replace(/[^A-Z0-9]/g, '');",
+      to:   "    return String(bolNo == null ? '' : bolNo).trim();" },
+    { name: 'boledit: weights are parsed on the way in, so "46,300" comes back as 46300',
+      file: 'helpers/bols.js', suites: ['bol'],
+      find: "            gross_weight: (it && it.gross_weight) ?? '',",
+      to:   "            gross_weight: parseFloat(String((it && it.gross_weight) ?? '').replace(/,/g, '')) || ''," },
+    { name: 'boledit: a reissue is indistinguishable from a first printing',
+      file: 'helpers/bols.js', suites: ['bol'],
+      find: '        generated_count: ((prev && prev.generated_count) || 0) + 1,',
+      to:   '        generated_count: 1,' },
+    { name: 'boledit: an edit resets the original creation time',
+      file: 'helpers/bols.js', suites: ['bol'],
+      find: '        created_at: (prev && prev.created_at) || new Date().toISOString(),',
+      to:   '        created_at: new Date().toISOString(),' },
+    { name: 'boldl: Generate goes back to reporting a filename instead of the file',
+      file: 'dashboard/documents.html', suites: ['bol'],
+      find: '        await bolDownload(out.saved_filename, out.saved_date);',
+      to:   '' },
+    { name: 'boldl: the app stops delivering the PDF to the phone',
+      file: 'mobile-app/www/index.html', suites: ['bol'],
+      find: "        await deliverExportedFile(blob, out.saved_filename, 'pdf');",
+      to:   '' },
+    { name: 'boldl: the route stops saying which day the archive filed it under',
+      file: 'api.js', suites: ['bol'],
+      // Without it the client guesses the folder, and guesses wrong every
+      // time the BOL date was left blank.
+      find: '                saved_date: savedDate,',
+      to:   '' },
 ];
 
 // ── CRASH-SAFE, NOT JUST EXIT-SAFE ───────────────────────────────────────

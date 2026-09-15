@@ -176,6 +176,13 @@ const FILES = {
     // from PAYMENTS_FILE because it flows the other way — see the header of
     // helpers/salesReceipts.js for why it writes no row to the spend ledger.
     SALES_RECEIPTS_FILE: path.join(DATA_DIR, 'sales_receipts.json'),
+
+    // ── THE FIELDS BEHIND A BILL OF LADING (2026-09-16) ──────────────────
+    // Apsara: "Edit Bol option also needed". The BOL shipped saving only the
+    // rendered PDF (documents_saved/bol/<date>/<file>.pdf), which is where
+    // the typing ENDED — there was nothing to reopen. This holds what she
+    // filled in, so a BOL can be corrected and reissued. See helpers/bols.js.
+    BOLS_FILE: path.join(DATA_DIR, 'bols.json'),
     // What a sale COSTS: charges she pays and agent commission. Money out, so
     // unlike receipts it does mirror into PAYMENTS_FILE — load_kind
     // 'sale_cost', its own line in the spend report.

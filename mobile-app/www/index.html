@@ -7372,6 +7372,7 @@ let bolw = null;
 
 function resetBolForm() {
   bolw = {
+    editingId: null,
     consignee: '', consigneeAddress: '',
     bolNo: '', date: docTodayISO(),
     po: '', appointment: '',
@@ -7502,7 +7503,12 @@ function renderBolForm() {
       <button type="button" id="bolwPreview" class="btn" style="flex:1;">Preview</button>
       <button type="button" id="bolwGenerate" class="btn btn-primary" style="flex:1;">Generate</button>
     </div>
-    <div id="bolwStatus" style="margin-top:10px; font-size:12.5px; color:var(--text-muted); min-height:18px;">${esc(w.status || '')}</div>`;
+    <div id="bolwStatus" style="margin-top:10px; font-size:12.5px; color:var(--text-muted); min-height:18px;">${esc(w.status || '')}</div>
+
+    <div style="margin-top:22px; padding-top:14px; border-top:1px solid var(--border-subtle);">
+      <div style="font-size:13px; font-weight:700; color:var(--text-strong); margin-bottom:8px;">Saved bills of lading</div>
+      <div id="bolwSaved" style="font-size:12.5px; color:var(--text-muted);">Loading…</div>
+    </div>`;
 
   // ── Consignee type-ahead ────────────────────────────────────────────────
   // The shared wireDocTypeahead, which already carries the three rules this
@@ -7544,6 +7550,72 @@ function renderBolForm() {
   $('bolw_unit').addEventListener('change', () => { bolw.unit = $('bolw_unit').value; bolRepaintTotals(); });
   $('bolwPreview').addEventListener('click', () => bolSubmit(true));
   $('bolwGenerate').addEventListener('click', () => bolSubmit(false));
+  loadSavedBolsApp();
+}
+
+// ── EDIT ─────────────────────────────────────────────────────────────────
+// Apsara, 2026-09-16: "Edit Bol option also needed". The BOL used to save
+// only the PDF, so there was nothing to reopen — helpers/bols.js now stores
+// what was typed. Generating again upserts by BOL number, so a correction
+// replaces the document rather than leaving two both claiming to be EM-1047.
+async function loadSavedBolsApp() {
+  const box = $('bolwSaved');
+  if (!box) return;
+  try {
+    const { bols } = await api('/api/bols');
+    const rows = bols || [];
+    box.innerHTML = rows.length
+      ? rows.slice(0, 20).map((b) => `
+          <div style="display:flex; align-items:center; gap:10px; padding:8px 0; border-top:1px solid var(--border-subtle);">
+            <div style="flex:1; min-width:0;">
+              <div style="font-family:var(--font-mono); color:var(--text-strong);">${esc(b.bol_no || '(no number)')}${
+                b.generated_count > 1 ? `<span style="color:var(--text-faint); font-size:11px;"> ×${b.generated_count}</span>` : ''}</div>
+              <div style="color:var(--text-muted); font-size:11.5px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">
+                ${esc(b.consignee_name || '—')}${b.container_no ? ' · ' + esc(b.container_no) : ''}${b.bol_date ? ' · ' + esc(b.bol_date) : ''}</div>
+            </div>
+            <button type="button" class="btn bolw-edit" data-id="${esc(b.id)}" style="font-size:12px; padding:6px 12px;">Edit</button>
+          </div>`).join('')
+      : 'None yet.';
+    box.querySelectorAll('.bolw-edit').forEach((el) => el.addEventListener('click', () => bolEditApp(el.dataset.id)));
+  } catch (e) {
+    box.textContent = e.message;
+  }
+}
+
+async function bolEditApp(id) {
+  try {
+    const { bol } = await api(`/api/bols/${encodeURIComponent(id)}`);
+    if (!bol) return;
+    bolw = {
+      editingId: bol.id,
+      consignee: bol.consignee_name || '', consigneeAddress: bol.consignee_address || '',
+      bolNo: bol.bol_no || '', date: bol.bol_date || '',
+      po: bol.po_number || '', appointment: bol.appointment_id || '',
+      pickupDate: bol.pickup_date || '', pickupTime: bol.pickup_time || '',
+      carrier: bol.carrier || '', driver: bol.driver || '',
+      container: bol.container_no || '', seal: bol.seal_no || '',
+      unit: bol.weight_unit || 'lb', notes: bol.notes || '',
+      // Weights come back as the STRINGS she typed — see helpers/bols.js.
+      // Parsing them would make "46,300" reappear as 46300 after an edit
+      // that never touched that box.
+      items: (bol.items || []).map((it) => ({
+        description: it.description || '', pieces: it.pieces ?? '',
+        gross_weight: it.gross_weight ?? '', tare_weight: it.tare_weight ?? '', net_weight: it.net_weight ?? '',
+      })),
+      status: `Editing ${bol.bol_no || 'this BOL'}. Generate replaces it.`,
+    };
+    if (!bolw.items.length) bolw.items = [bolBlankItem()];
+    // Safe to re-render wholesale: this client's renderBolForm rebinds every
+    // listener it needs, including the consignee type-ahead, because it
+    // rebuilds the markup each time. (The website's version wires the
+    // type-ahead once against a form that is NOT rebuilt — same feature, two
+    // shapes, and mixing up which is which leaves a dropdown that silently
+    // stops matching after the first edit.)
+    renderBolForm();
+    $('docBody').scrollTop = 0;
+  } catch (e) {
+    if ($('bolwStatus')) $('bolwStatus').textContent = e.message;
+  }
 }
 
 // Redraws only the totals line and the warning box, leaving every input — and
@@ -7619,7 +7691,33 @@ async function bolSubmit(preview) {
       return set('Preview opened. Nothing was saved.');
     }
     const out = await api('/api/bol/generate', { method: 'POST', body: JSON.stringify(body) });
-    set(`Saved as ${out.saved_filename}`);
+    bolw.editingId = out.id || bolw.editingId;
+    // ── HAND HER THE FILE ────────────────────────────────────────────────
+    // Apsara, 2026-09-16: "When i click generate-It needs to get as
+    // downloadable file". A filename is an inventory number, not a document.
+    //
+    // Pulled back through /api/documents/download so what lands on the phone
+    // is the EXACT file the archive holds, and delivered by
+    // deliverExportedFile — which on a real device writes it with the
+    // Filesystem plugin and opens the share sheet, because an <a download>
+    // does nothing in an Android WebView.
+    set('Saved. Downloading…');
+    try {
+        const qs = `?kind=bol&date=${encodeURIComponent(out.saved_date || '')}&file=${encodeURIComponent(out.saved_filename)}`;
+        const res = await fetch(API_BASE + '/api/documents/download' + qs, {
+            headers: { Authorization: 'Bearer ' + getToken() },
+        });
+        if (!res.ok) throw new Error(`the archive returned ${res.status}`);
+        const blob = await res.blob();
+        if (!blob.size) throw new Error('the archive returned an empty file');
+        await deliverExportedFile(blob, out.saved_filename, 'pdf');
+        set(`Saved and downloaded — ${out.saved_filename}`);
+    } catch (e) {
+        // The PDF is generated and filed; only the handing-over failed.
+        // Saying "could not download" alone would read as "it did not save".
+        set(`Saved as ${out.saved_filename}, but the download did not start: ${e.message}`);
+    }
+    if (typeof loadSavedBolsApp === 'function') loadSavedBolsApp();
   } catch (e) {
     set(e.message);
   }

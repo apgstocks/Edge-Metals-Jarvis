@@ -5311,13 +5311,76 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
             const safeNo = documentsSaved.safeName(body.bol_no || 'BOL').replace(/_+/g, '_');
             const who = String(body.consignee_name || 'customer').slice(0, 40).replace(/[^A-Za-z0-9_\- ]/g, '');
             const filename = `${safeNo}_${who}.pdf`.replace(/\s+/g, '_');
-            const savedPath = documentsSaved.saveBolCopy(pdf, filename, body.bol_date || null);
+            // The date the archive actually filed it under — today when she
+            // left the BOL date blank. Returned below so the client can build
+            // a download URL for THIS file rather than guessing the folder.
+            const savedDate = body.bol_date || new Date().toISOString().slice(0, 10);
+            const savedPath = documentsSaved.saveBolCopy(pdf, filename, savedDate);
 
-            res.json({ ok: true, saved_filename: path.basename(savedPath), warnings });
+            // ── AND THE FIELDS, SO IT CAN BE EDITED ──────────────────────
+            // Apsara, 2026-09-16: "Edit Bol option also needed". Saving only
+            // the PDF left nothing to reopen — see helpers/bols.js. Upserted
+            // by BOL number, so correcting a typo and generating again
+            // replaces the record rather than leaving two documents both
+            // claiming to be EM-1047.
+            //
+            // Non-fatal, on purpose and for the same reason the proforma's
+            // sheet log is: she is standing there waiting for a PDF, and a
+            // failure to file the form data must not cost her the document.
+            let record = null;
+            try {
+                record = await require('./helpers/bols').saveBol({
+                    ...body,
+                    created_by: req.role || null,
+                    last_filename: path.basename(savedPath),
+                    last_saved_date: savedDate,
+                });
+            } catch (e) {
+                console.error('[bol] could not store the form fields (non-fatal):', e.message);
+            }
+
+            res.json({
+                ok: true,
+                saved_filename: path.basename(savedPath),
+                saved_date: savedDate,
+                id: record ? record.id : null,
+                warnings,
+            });
         } catch (e) {
             console.error('[bol] generate failed:', e);
             res.status(500).json({ error: e.message });
         }
+    });
+
+    // ── SAVED BILLS OF LADING ───────────────────────────────────────────
+    // Apsara, 2026-09-16: "Edit Bol option also needed". The list is a list —
+    // enough to recognise a document and no more; GET /:id returns the whole
+    // record for loading back into the form.
+    //
+    // requireAdmin like the generate route: a BOL names the buyer, the
+    // container and the weights of a shipment, which is the commercial side
+    // of the business and not staff's.
+    app.get('/api/bols', requireAdmin, (req, res) => {
+        try { res.json({ ok: true, bols: require('./helpers/bols').listBols() }); }
+        catch (e) { res.status(500).json({ error: e.message }); }
+    });
+    app.get('/api/bols/:id', requireAdmin, (req, res) => {
+        try {
+            const rec = require('./helpers/bols').getBol(req.params.id);
+            if (!rec) return res.status(404).json({ error: 'no such bill of lading' });
+            res.json({ ok: true, bol: rec });
+        } catch (e) { res.status(500).json({ error: e.message }); }
+    });
+    // Removes the FORM record, not the PDF. Said plainly in the response
+    // because the two are different things and a delete that silently took
+    // the archived document with it would be a surprise: the copy that was
+    // handed to a driver stays in documents_saved/bol/.
+    app.delete('/api/bols/:id', requireAdmin, async (req, res) => {
+        try {
+            const removed = await require('./helpers/bols').deleteBol(req.params.id);
+            if (!removed) return res.status(404).json({ error: 'no such bill of lading' });
+            res.json({ ok: true, removed, note: 'the saved PDF is kept' });
+        } catch (e) { res.status(500).json({ error: e.message }); }
     });
 
     // Added per Apsara: auto-suggest the next invoice number for a selected
