@@ -540,12 +540,18 @@ const MUTATIONS = [
       to:   "        try { require('./helpers/bills').addBill(req.body || {}); res.json({ ok: true, ...require('./helpers/bills').compute(req.body || {}) }); }" },
     { name: 'bills: a client may post its own balance again',
       file: 'helpers/bills.js', suites: ['bills-sales'],
-      find: "const WRITABLE = COLUMNS.filter((c) => !c.derived).map((c) => c.key)\n    .concat(['supplier_invoice_amount', 'price_unit', 'note']);",
-      to:   "const WRITABLE = COLUMNS.map((c) => c.key)\n    .concat(['supplier_invoice_amount', 'price_unit', 'note', 'balance', 'net_lb']);" },
+      // Find string repaired 2026-09-15: WRITABLE gained 'items' and
+      // 'trucking_split' on 2026-09-10 and this stopped matching, so the
+      // mutation had been silently doing nothing since. Anchored on the
+      // filter() now, which is the part under test, rather than on the whole
+      // statement including a list that grows.
+      find: 'const WRITABLE = COLUMNS.filter((c) => !c.derived).map((c) => c.key)',
+      to:   'const WRITABLE = COLUMNS.map((c) => c.key)' },
     { name: 'bills: the supplier invoice amount is unwritable again',
       file: 'helpers/bills.js', suites: ['bills-sales'],
-      find: "    .concat(['supplier_invoice_amount', 'price_unit', 'note']);",
-      to:   "    .concat(['price_unit', 'note']);" },
+      // Same repair, same reason.
+      find: "    .concat(['supplier_invoice_amount', 'price_unit', 'note', 'items', 'trucking_split']);",
+      to:   "    .concat(['price_unit', 'note', 'items', 'trucking_split']);" },
     { name: 'sales: the $10 rule is copied instead of imported',
       file: 'helpers/sales.js', suites: ['bills-sales'],
       find: '        : (price === null ? null : (price < bills.PER_LB_CEILING ? \'lb\' : \'mt\'));',
@@ -855,7 +861,24 @@ const MUTATIONS = [
       file: 'helpers/sales.js', suites: ['bills-sales'],
       find: '                : round2(t.receivable - got - (ded.total || 0)),',
       to:   '                : round2(t.receivable - got),' },
-    { name: 'Mark paid is offered on a container already settled',
+    { name: 'sales: the receive button goes back to saying Mark paid',
+      file: 'dashboard/index.html', suites: ['ledger-render'],
+      find: 'padding:3px 9px;">Receive payment</button>',
+      to:   'padding:3px 9px;">Mark paid</button>' },
+    { name: 'sales: a settled container reads as paid, not received',
+      file: 'dashboard/index.html', suites: ['ledger-render'],
+      find: "margin-right:6px;\">received${r.bank_charge || r.discount ? ' *' : ''}</span>",
+      to:   "margin-right:6px;\">paid${r.bank_charge || r.discount ? ' *' : ''}</span>" },
+    { name: 'sales: the receipt modal is titled Mark paid again',
+      file: 'dashboard/index.html', suites: ['ledger-render'],
+      find: 'color:${L.ink};">Receive payment — ${esc(row.container_no',
+      to:   'color:${L.ink};">Mark paid — ${esc(row.container_no' },
+    { name: 'bills: the outflow word is stripped from the Bills toolbar too',
+      file: 'dashboard/index.html', suites: ['ledger-render'],
+      find: '<button id="btnPay" class="btn btn-secondary" style="font-size:12px; padding:8px 14px;">Pay</button>',
+      to:   '<button id="btnPay" class="btn btn-secondary" style="font-size:12px; padding:8px 14px;">Receive payment</button>' },
+
+    { name: 'Receive payment is offered on a container already settled',
       file: 'dashboard/index.html', suites: ['ledger-render'],
       find: "        ${kind === 'sales' && r.balance !== null && r.balance > 0.005",
       to:   "        ${kind === 'sales' && r.balance !== null" },
@@ -1533,6 +1556,26 @@ function recoverFromCrash() {
     }
     try { fs.unlinkSync(SIDECAR); } catch (e) {}
 }
+// ── AND ON THE WAY OUT, NOT ONLY ON THE WAY IN — 2026-09-15 ─────────────
+// recoverFromCrash above already repairs a killed run, but only on the NEXT
+// invocation. Between the kill and that next run the working tree carries a
+// mutation, and the person most likely to be interrupted mid-run is also the
+// person about to `git commit -a`. Twice on 2026-09-11 a timeout left a
+// mutation in the tree — once a broken guard in helpers/followUp.js, once a
+// deleted header column in dashboard/index.html — and both times the next
+// thing to fail was something unrelated.
+//
+// A `finally` covers an exception; it does not run for SIGTERM or SIGINT,
+// which is how a timeout arrives. These do. They reuse recoverFromCrash
+// rather than reimplementing the restore, so there is one repair path and the
+// sidecar stays the single source of truth about what was touched.
+for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP']) {
+    process.on(sig, () => {
+        try { recoverFromCrash(); } catch (e) { console.error('restore failed:', e.message); }
+        process.exit(130);
+    });
+}
+
 // FIRST, BEFORE ANY PATH THAT CAN EXIT — 2026-09-08.
 // This call used to sit BELOW the argument handling, and `--list` exits in
 // that handling. So the one command you would naturally reach for to see what

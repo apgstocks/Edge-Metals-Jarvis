@@ -1175,17 +1175,61 @@ section('G5 — mark as paid, and the shortfall it will not let vanish');
     const doc = w.document;
     await w.renderLedgerTab('sales');
 
-    ck('an unpaid container offers Mark paid',
-       !!doc.querySelector('.ledger-paid[data-id="S1"]'));
-    ck('  a settled one does not', !doc.querySelector('.ledger-paid[data-id="S2"]'),
+    ck('an unpaid container offers Receive payment',
+       !!doc.querySelector('.ledger-receive[data-id="S1"]'));
+    ck('  a settled one does not', !doc.querySelector('.ledger-receive[data-id="S2"]'),
        'offering to settle something already settled is how it gets paid twice');
     ck('  and says so, with a mark that it was not the full amount',
-       /paid \*/.test(doc.querySelector('tr[data-id="S2"]').textContent),
+       /received \*/.test(doc.querySelector('tr[data-id="S2"]').textContent),
        doc.querySelector('tr[data-id="S2"]').textContent.replace(/\s+/g, ' ').trim());
 
-    doc.querySelector('.ledger-paid[data-id="S1"]').click();
+    // ── THE SELL SIDE NEVER USES THE OUTFLOW WORD ────────────────────────
+    // Apsara, 2026-09-15: "In add sales ,there should be receive payment na
+    // instead of pay..WHy didnt you tell me taht?"
+    //
+    // She is right on both counts. The button said "Mark paid" and the settled
+    // chip said "paid" on rows she had INVOICED — money coming IN — because on
+    // 2026-09-10 she said "give the option as mark as paid" and I used her
+    // phrase without noticing that the word inverts on the sell side. The
+    // modal behind it already said "How much arrived", "Received on" and
+    // "Into": the model was right and only the labels were wrong, which is the
+    // worst version of it — everything reads as considered.
+    //
+    // So this checks the DIRECTION across the whole Outgoing screen, not the
+    // two strings that were wrong. Any new control that says pay/paid on a
+    // sales row fails here.
+    {
+        const strip = (el) => (el ? el.textContent.replace(/\s+/g, ' ').trim() : '');
+        const salesRows = [...doc.querySelectorAll('tbody tr[data-id]')].map(strip).join(' | ');
+        ck('no sales row says "pay" or "paid" anywhere on it',
+           !/\bpay\b|\bpaid\b/i.test(salesRows), salesRows);
+        ck('  the action is to RECEIVE',
+           /Receive payment/.test(salesRows), salesRows);
+        ck('  and a settled container reads as received, not as paid',
+           /received/.test(strip(doc.querySelector('tr[data-id="S2"]'))),
+           strip(doc.querySelector('tr[data-id="S2"]')));
+        // The BILLS side must keep the outflow word — that money really does
+        // go out, and this rule must not leak across.
+        await w.renderLedgerTab('bills');
+        const billBar = strip(doc.getElementById('btnPay'));
+        ck('  while the Bills toolbar still says Pay, because that money leaves',
+           billBar === 'Pay', billBar);
+        await w.renderLedgerTab('sales');
+    }
+
+    doc.querySelector('.ledger-receive[data-id="S1"]').click();
     await new Promise((r) => setTimeout(r, 50));
     ck('the form opens', !!doc.getElementById('mpModal'));
+    // The modal TITLE, which a mutation renaming it back to "Mark paid"
+    // survived — every other assertion here was about the fields inside it,
+    // and those were already worded for money coming in. The heading was the
+    // one thing nothing looked at.
+    ck('  titled for money coming IN',
+       /Receive payment/.test(doc.querySelector('#mpModal h3').textContent),
+       doc.querySelector('#mpModal h3').textContent);
+    ck('  and never for money going out',
+       !/\bpaid\b|\bpay\b/i.test(doc.querySelector('#mpModal h3').textContent),
+       doc.querySelector('#mpModal h3').textContent);
     ck('  saying who owes what',
        /Wireco owes/.test(doc.getElementById('mpModal').textContent),
        doc.getElementById('mpModal').textContent.replace(/\s+/g, ' ').slice(0, 90));
