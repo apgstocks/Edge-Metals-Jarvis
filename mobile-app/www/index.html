@@ -7936,7 +7936,41 @@ async function bolwLoadLayout(consignee) {
     console.error('[bol] layout unavailable, showing every field:', e.message);
     bolwLayout = null;
   }
+  await bolwSuggestNumber(consignee);
   renderBolForm();
+}
+
+// ── THE NUMBER ─────────────────────────────────────────────────────────────
+// Apsara, 2026-09-16: "make bol number auto generate/customerbasis in
+// sequence" -> "include year in bol number as in 26ECC001".
+//
+// Same rule as the website: only ever into an empty box, or over a suggestion
+// this function made. A number she typed is hers — her answer was "Yours wins,
+// counter untouched" — and on a phone, where the form is rebuilt on every
+// render, overwriting it would be that much easier to do by accident.
+//
+// The suggestion is NOT what ends up on the document. /api/bol/generate
+// reserves the real one when the box is posted empty, and the response says
+// which; two phones open on one customer are shown the same suggestion and
+// only one of them can have it.
+let bolwAutoNo = null;
+async function bolwSuggestNumber(consignee) {
+  if (!bolw) return;
+  const current = String(bolw.bolNo || '').trim();
+  if (current && current !== bolwAutoNo) return;
+  if (!String(consignee || '').trim()) return;
+  try {
+    const d = await api(`/api/bols/next-number?customer=${encodeURIComponent(consignee)}`
+                      + `&date=${encodeURIComponent(bolw.date || '')}`);
+    const n = String((d && d.bol_no) || '').trim();
+    if (!n) return;
+    const now = String(bolw.bolNo || '').trim();
+    if (now && now !== bolwAutoNo) return;
+    bolw.bolNo = n;
+    bolwAutoNo = n;
+  } catch (e) {
+    console.error('[bol] could not suggest a number:', e.message);
+  }
 }
 
 function renderBolForm() {
@@ -7979,7 +8013,7 @@ function renderBolForm() {
          rather than written out: a hand-written list in source order would
          look correct and silently ignore every drag she made. -->
     <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px;">
-      ${fld('bolw_no', 'BOL number', w.bolNo, 'text', 'EM-1047')}
+      ${fld('bolw_no', 'BOL number', w.bolNo, 'text', '26ECC001')}
       ${fld('bolw_date', 'Date', w.date, 'date')}
       ${bolwLayoutFields().map((f) => BOLW_FIELD_HTML(f, w, fld)).join('')}
     </div>
@@ -8304,6 +8338,10 @@ async function bolSubmit(preview) {
     }
     const out = await api('/api/bol/generate', { method: 'POST', body: JSON.stringify(body) });
     bolw.editingId = out.id || bolw.editingId;
+    // The number the server actually issued. It reserves one when the box was
+    // posted empty, and it is not always the suggestion — so the form is told
+    // what went on the paper rather than left showing a blank.
+    if (out.bol_no) { bolw.bolNo = out.bol_no; bolwAutoNo = out.bol_no; }
     // ── HAND HER THE FILE ────────────────────────────────────────────────
     // Apsara, 2026-09-16: "When i click generate-It needs to get as
     // downloadable file". A filename is an inventory number, not a document.

@@ -187,28 +187,46 @@ body[data-theme="light"] {
       <div style="font-size:15px; font-weight:700; color:var(--text-strong); margin-bottom:4px;">Who is it going to?</div>
       <div style="font-size:12px; color:var(--text-muted); margin-bottom:12px;">Type a name — it matches your address book as you type. Pick one and the address fills in.</div>
 
-      <div style="display:grid; grid-template-columns:1fr 1fr; gap:14px; margin-bottom:16px;">
-        <div class="field" style="position:relative;">
-          <label for="bol_consignee">Consignee name</label>
-          <input id="bol_consignee" type="text" autocomplete="off" placeholder="Start typing…">
-          <div id="bolConsigneeList" class="autocomplete-list hidden"></div>
-        </div>
-        <div class="field">
-          <label for="bol_consignee_address">Consignee address</label>
-          <textarea id="bol_consignee_address" rows="4" placeholder="Fills in when you pick a name — or type it"></textarea>
-        </div>
-      </div>
+      <!-- ── WHO ON THE LEFT, WHICH DOCUMENT ON THE RIGHT ─────────────────
+           Apsara, 2026-09-16: "consignee address below consignee.date,bol
+           number on one side."
 
-      <!-- ALWAYS ON. Not part of any layout: a BOL with no number or no date
-           is not a document anyone can act on, and the unit is what the goods
-           table is denominated in rather than a field that prints on its own.
-           See helpers/bolLayouts.js — these are not in the optional list at
-           all, so no layout can switch them off. -->
-      <div style="display:grid; grid-template-columns:repeat(4,1fr); gap:12px; margin-bottom:12px;">
-        <div class="field"><label for="bol_no">BOL number</label><input id="bol_no" type="text" placeholder="EM-1047"></div>
-        <div class="field"><label for="bol_date">Date</label><input id="bol_date" type="date"></div>
-        <div class="field"><label for="bol_unit">Weight unit</label>
-          <select id="bol_unit"><option value="lb">lb</option><option value="mt">mt</option></select>
+           So the two halves of the header are two kinds of thing, the same
+           split the packing list header uses: LEFT is the party — the name
+           with its address directly underneath, which is how it prints and
+           how an address is read. RIGHT is the document — its number, its
+           date, and the unit its weights are in.
+
+           Side by side the name and the address were two boxes of equal
+           weight, and the address is four lines to a name's one. -->
+      <div style="display:flex; gap:44px; flex-wrap:wrap; margin-bottom:16px;">
+        <div style="display:flex; flex-direction:column; gap:12px; width:380px; max-width:100%;">
+          <div class="field" style="position:relative;">
+            <label for="bol_consignee">Consignee name</label>
+            <input id="bol_consignee" type="text" autocomplete="off" placeholder="Start typing…">
+            <div id="bolConsigneeList" class="autocomplete-list hidden"></div>
+          </div>
+          <div class="field">
+            <label for="bol_consignee_address">Consignee address</label>
+            <textarea id="bol_consignee_address" rows="4" placeholder="Fills in when you pick a name — or type it"></textarea>
+          </div>
+        </div>
+        <!-- ALWAYS ON. Not part of any layout: a BOL with no number or no
+             date is not a document anyone can act on, and the unit is what
+             the goods table is denominated in rather than a field that prints
+             on its own. See helpers/bolLayouts.js — these are not in the
+             optional list at all, so no layout can switch them off. -->
+        <div style="display:flex; flex-direction:column; gap:12px; width:260px; max-width:100%;">
+          <div class="field">
+            <label for="bol_no">BOL number
+              <span style="font-weight:400; color:var(--text-muted); font-size:11px;">— fills in from the consignee; type over it to use your own</span>
+            </label>
+            <input id="bol_no" type="text" placeholder="26ECC001">
+          </div>
+          <div class="field"><label for="bol_date">Date</label><input id="bol_date" type="date"></div>
+          <div class="field"><label for="bol_unit">Weight unit</label>
+            <select id="bol_unit"><option value="lb">lb</option><option value="mt">mt</option></select>
+          </div>
         </div>
       </div>
 
@@ -229,9 +247,16 @@ body[data-theme="light"] {
              is only discovered when a buyer disputes a delivery window.
              Date and time share one wrapper because the layout treats them as
              one field ("Pickup date and time") and prints them as one box. -->
-        <div class="field" data-bolfield="pickup" style="grid-column:span 2; display:grid; grid-template-columns:1fr 1fr; gap:12px;">
-          <div class="field"><label for="bol_pickup_date">Pickup date</label><input id="bol_pickup_date" type="date"></div>
-          <div class="field"><label for="bol_pickup_time">Pickup time</label><input id="bol_pickup_time" type="time"></div>
+        <!-- Apsara, 2026-09-16: "pickup date and time next to each other."
+             flex, not a nested 2-column grid inside a span-2 cell: at a
+             narrower width the outer grid collapses to fewer columns, the
+             span-2 cell becomes one column, and the two boxes stack. They are
+             one fact — when the truck was loaded — and reading a date above a
+             time as two separate facts is how a BOL gets a pickup time that
+             belongs to another day. -->
+        <div class="field" data-bolfield="pickup" style="grid-column:span 2; display:flex; flex-direction:row; gap:12px; align-items:flex-end;">
+          <div class="field" style="flex:1; min-width:0;"><label for="bol_pickup_date">Pickup date</label><input id="bol_pickup_date" type="date"></div>
+          <div class="field" style="flex:1; min-width:0;"><label for="bol_pickup_time">Pickup time</label><input id="bol_pickup_time" type="time"></div>
         </div>
         <div class="field" data-bolfield="carrier"><label for="bol_carrier">Carrier</label><input id="bol_carrier" type="text" placeholder="Trucking company"></div>
         <div class="field" data-bolfield="driver"><label for="bol_driver">Driver</label><input id="bol_driver" type="text" placeholder="Driver's name"></div>
@@ -4361,6 +4386,12 @@ async function bolSubmit(preview) {
     }
     const out = await api('/api/bol/generate', { method: 'POST', body: JSON.stringify(body) });
     bolEditingId = out.id || bolEditingId;
+    // The server reserves the number when the box was left empty, and it may
+    // not be the one that was suggested — two screens open on one customer are
+    // shown the same suggestion and only one of them can have it. Showing what
+    // was actually issued is the difference between her filing cabinet and the
+    // document agreeing or not.
+    if (out.bol_no && $('bol_no')) { $('bol_no').value = out.bol_no; bolAutoNo = out.bol_no; }
     // ── HAND HER THE FILE ────────────────────────────────────────────────
     // Apsara, 2026-09-16: "When i click generate-It needs to get as
     // downloadable file". It used to save server-side and report a filename,
@@ -4484,16 +4515,58 @@ function bolCustomValues() {
   return out;
 }
 
+// ── THE NUMBER THE BOX FILLS IN WITH ───────────────────────────────────────
+// Apsara, 2026-09-16: "make bol number auto generate/customerbasis in
+// sequence" -> "include year in bol number as in 26ECC001".
+//
+// ONLY EVER INTO AN EMPTY BOX, and only into one this function put something
+// in. Overwriting a number she typed would be the worst possible behaviour
+// here: her answer was "Yours wins, counter untouched", and a suggestion that
+// quietly replaces a typed number changes the identity of a document a driver
+// is already holding.
+//
+// bolAutoNo remembers what was suggested, so switching consignee replaces a
+// stale suggestion (26ECC004 for a BOL now going to Taewon) but never touches
+// anything she has edited.
+let bolAutoNo = null;
+
+async function bolSuggestNumber(consignee) {
+  const box = $('bol_no');
+  if (!box) return;
+  const current = String(box.value || '').trim();
+  if (current && current !== bolAutoNo) return;      // hers — leave it alone
+  if (!String(consignee || '').trim()) return;
+  try {
+    const d = await api(`/api/bols/next-number?customer=${encodeURIComponent(consignee)}`
+                      + `&date=${encodeURIComponent($('bol_date') ? $('bol_date').value : '')}`);
+    const n = String((d && d.bol_no) || '').trim();
+    if (!n) return;
+    // Re-read: an await happened, and she may have started typing during it.
+    const now = String(box.value || '').trim();
+    if (now && now !== bolAutoNo) return;
+    box.value = n;
+    bolAutoNo = n;
+  } catch (e) {
+    // A suggestion is a convenience. Leaving the box empty costs her a typed
+    // number; blocking the form would cost her the document.
+    console.error('[bol] could not suggest a number:', e.message);
+  }
+}
+
 async function bolLoadLayout(consignee) {
   try {
     const d = await api(`/api/bol-layouts/resolve?customer=${encodeURIComponent(consignee || '')}`);
     bolApplyLayout(d);
+    bolSuggestNumber(consignee);
   } catch (e) {
     // Fail OPEN. If the layout cannot be read, show every field rather than
     // whichever ones happen to be visible — an unreachable layout service must
     // not be able to produce a BOL with fields missing.
     console.error('[bol] layout unavailable, showing every field:', e.message);
     bolApplyLayout(null);
+    // Still suggest: the two are independent, and a layout service that is
+    // down is no reason to make her invent a number as well.
+    bolSuggestNumber(consignee);
   }
 }
 

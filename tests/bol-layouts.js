@@ -142,7 +142,11 @@ section('B — a missing layout means EVERY field, never none');
 // ══════════════════════════════════════════════════════════════════════════
 {
     const none = labels(buildBolHtml(BOL).html);
-    for (const lbl of ['DATE', 'PO NUMBER', 'APPOINTMENT ID', 'PICKUP', 'CARRIER', 'DRIVER', 'CONTAINER', 'SEAL']) {
+    // PICKUP prints as two boxes since 2026-09-16 — Apsara: "pickup date and
+    // time next to each other." One layout field still, two labels on the
+    // paper; see the note in helpers/bolPdf.js for why the KEY did not split.
+    for (const lbl of ['DATE', 'PO NUMBER', 'APPOINTMENT ID', 'PICKUP DATE', 'PICKUP TIME',
+                       'CARRIER', 'DRIVER', 'CONTAINER', 'SEAL']) {
         ck(`no layout still prints ${lbl}`, none.includes(lbl), none.join(','));
     }
     ck('  and an EMPTY layout list does not strip the document either',

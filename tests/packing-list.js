@@ -848,11 +848,27 @@ section('F — three items in one container');
     let plain = null;
     await pl.generatePdf({ ...threeItems, show_item_in_grid: false, item_description: 'Auto parts' },
         { renderer: async (html) => { plain = { t: tableOf(html), html }; return { packing: Buffer.from('x') }; } });
-    ck('unticked, the table is five columns as before',
-       new Set(plain.t.map((r) => r.length)).size === 1 && plain.t[0].length === 5,
-       plain.t.map((r) => r.length).join(','));
-    ck('  and the totals are still right', plain.t[plain.t.length - 1].slice(1).join('|') === '15,000|1,500|13,500|6.123',
-       plain.t[plain.t.length - 1].join(' | '));
+    // Five columns when NOTHING names an item — the fixture's rows carry no
+    // item, and the checkbox is off.
+    const bare = threeItems.rows.map(({ item, ...r }) => r);
+    let plainBare = null;
+    await pl.generatePdf({ ...threeItems, show_item_in_grid: false, rows: bare },
+        { renderer: async (html) => { plainBare = tableOf(html); return { packing: Buffer.from('x') }; } });
+    ck('unticked and unnamed, the table is five columns as before',
+       new Set(plainBare.map((r) => r.length)).size === 1 && plainBare[0].length === 5,
+       plainBare.map((r) => r.length).join(','));
+    // ── BUT NAMED ROWS SHOW THE COLUMN WITHOUT THE CHECKBOX ──────────────
+    // Apsara, 2026-09-16: "why item description missing in packing list of
+    // invoice tab in docs?" — because the column waited for a checkbox that
+    // only the packing-list screen has, and an invoice's line items have
+    // carried item_desc all along. The column now follows the DATA as well as
+    // the box, which is what makes the invoice's own packing list name what is
+    // in the container.
+    ck('  but rows that name an item show the column anyway',
+       plain.t[0].length === 6 && /Item/.test(plain.t[0][1]),
+       plain.t[0].join(' | ') + ' — a packing list that names nothing is the bug she reported');
+    ck('  and the totals are still right', plainBare[plainBare.length - 1].slice(1).join('|') === '15,000|1,500|13,500|6.123',
+       plainBare[plainBare.length - 1].join(' | '));
     // Her answer when asked where the single description should go: "Printed
     // above the packing table".
     ck('  the one item description prints above the table', /Item: Auto parts/.test(plain.html),

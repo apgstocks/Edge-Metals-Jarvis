@@ -219,6 +219,55 @@ console.log('\n=== separate invoice / packing list ===');
 // code cannot be printed before the checks have run.
 (async () => {
 
+console.log('\n=== the packing list names what is in the container ===');
+// Apsara, 2026-09-16: "why item description missing in packing list of invoice
+// tab in docs?"
+//
+// Because the Item column was built for the packing-list screen and waited on
+// ITS checkbox, which the invoice path never sets — while her invoice line
+// items have carried item_desc since this template was written. The packing
+// list beside a commercial invoice printed a container number and four weights
+// and did not say what was in the box.
+{
+  const { buildInvoiceClassicHtml: build2 } = require(R('helpers/invoicePdf'));
+  const { html: h } = build2({
+    inv_no: INV, container_no: 'KOCU5139886',
+    line_items: [
+      { item_desc: 'Aluminium combo', container_no: 'KOCU5139886', weight: 23.469, rate: 1000,
+        packing: { gross_weight_lbs: '56,000', tare_lbs: '4,265', net_weight_lbs: '51,735', net_weight_mt: '23.469' } },
+      { item_desc: 'Regular combo', container_no: 'HMMU6904319', weight: 23.678, rate: 1000,
+        packing: { gross_weight_lbs: '56,500', tare_lbs: '4,300', net_weight_lbs: '52,200', net_weight_mt: '23.678' } },
+    ],
+  });
+  const d = h.slice(h.indexOf('<div class="doc-packing">'));
+  const tbl = d.slice(d.indexOf('<table'), d.indexOf('</table>'));
+  const rows = [...tbl.matchAll(/<tr[^>]*>[\s\S]*?<\/tr>/g)].map((m) =>
+      [...m[0].matchAll(/<t[hd][^>]*>([\s\S]*?)<\/t[hd]>/g)]
+          .map((c) => c[1].replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim()));
+
+  ck('the packing table has an Item column', /Item/.test(rows[0][1]), true);
+  ck('...naming each container', [rows[1][1], rows[2][1]], ['Aluminium combo', 'Regular combo']);
+  // COUNTED. A TOTAL row with the wrong number of cells does not error, it
+  // SHEARS — the figures slide one column left and print under the wrong
+  // headings, on the document a customer checks with a calculator.
+  ck('...and every row still has the same cell count',
+     new Set(rows.map((r) => r.length)).size, 1);
+  ck('...six of them', rows[0].length, 6);
+  ck('the TOTAL row carries gross, tare and net',
+     [rows[3][0], rows[3][2], rows[3][3], rows[3][4]],
+     ['TOTAL', '112,500', '8,565', '103,935']);
+
+  // Nothing named, nothing added: the column follows the data, so a document
+  // with no descriptions is the five-column one it has always been.
+  const { html: h2 } = build2({ inv_no: INV, container_no: 'KOCU5139886',
+    line_items: [{ container_no: 'KOCU5139886', weight: 23.469, rate: 1000,
+                   packing: { gross_weight_lbs: '56,000', net_weight_lbs: '51,735' } }] });
+  const d2 = h2.slice(h2.indexOf('<div class="doc-packing">'));
+  const tbl2 = d2.slice(d2.indexOf('<table'), d2.indexOf('</table>'));
+  const head2 = [...tbl2.matchAll(/<th[^>]*>([\s\S]*?)<\/th>/g)].map((m) => m[1].replace(/<[^>]+>/g, ' ').trim());
+  ck('a line item with no description keeps the old five columns', head2.length, 5);
+}
+
 console.log('\n=== invoice only ===');
 // Apsara, 2026-09-16: "add a checkbox called invoice only in invoice of
 // documents". The invoice on its own — no packing list in the PDF, no second

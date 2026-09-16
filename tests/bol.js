@@ -46,8 +46,32 @@ section('A — the document carries every field she named');
     // Named one at a time rather than in a loop, so a failure says WHICH
     // field went missing instead of "one of eleven".
     ck('driver name',      has('Miguel Ortiz'));
-    ck('  pickup date and time', /09\/15\/2026 · 9:30 AM/.test(html),
-       'she asked for both, and they share one box');
+    // TWO boxes now, side by side — Apsara, 2026-09-16: "pickup date and time
+    // next to each other." They used to share one box as "09/15/2026 · 9:30
+    // AM", which is two facts joined by a dot, read at a gate in a hurry.
+    ck('  pickup date and time', html.includes('09/15/2026') && html.includes('9:30 AM'),
+       'she asked for both');
+    ck('    each with its own heading',
+       /PICKUP DATE/.test(html) && /PICKUP TIME/.test(html), 'one box labelled PICKUP was the old shape');
+    ck('    beside each other, not stacked',
+       /grid-template-columns:1fr 1fr[\s\S]{0,400}PICKUP DATE[\s\S]{0,400}PICKUP TIME/.test(html),
+       'a date above a time reads as two separate facts');
+    // ── AND STILL ONE LAYOUT FIELD ───────────────────────────────────
+    // Splitting `pickup` into pickup_date and pickup_time would have been the
+    // obvious way to print two boxes, and sanitise() drops keys it does not
+    // recognise — so every layout she has already designed would have lost
+    // pickup entirely, silently, the next time it was saved. What she sees
+    // changed; the stored contract did not.
+    {
+        const L = require(path.join(ROOT, 'helpers/bolLayouts'));
+        const saved = L.sanitise([{ key: 'pickup', row: 2, span: 6, shown: true }]);
+        ck('    a stored layout still knows the pickup key',
+           saved.some((f) => f.key === 'pickup' && f.shown !== false),
+           JSON.stringify(saved.map((f) => f.key)));
+        ck('    and neither half exists as a field of its own',
+           !saved.some((f) => f.key === 'pickup_date' || f.key === 'pickup_time'),
+           'two keys would mean two boxes she can separate, and a layout that loses both on an older client');
+    }
     ck('  PO number',      has('PO-55410'));
     ck('  appointment id', has('APT-77213'));
     ck('  gross',          has('46,300'));
@@ -736,6 +760,93 @@ section('I — Generate hands back the file');
     }
 
     }
+
+// ══════════════════════════════════════════════════════════════════════════
+console.log('\n=== the header reads the way she asked ===');
+// ══════════════════════════════════════════════════════════════════════════
+// Apsara, 2026-09-16: "consignee address below consignee.date,bol number on
+// one side.pickup date and time next to each other."
+//
+// Driven in jsdom and asserted on the RENDERED containers, not on the source
+// order: CSS decides what sits beside what, and markup in the right order
+// inside the wrong wrapper looks correct in a diff and wrong on the screen.
+{
+    const HTML2 = fs.readFileSync(path.join(ROOT, 'dashboard/documents.html'), 'utf8');
+    let askedFor = null;
+    const dom2 = new JSDOM(HTML2, { runScripts: 'dangerously', url: 'http://localhost/documents',
+        beforeParse(w) {
+            w.fetch = (u) => {
+                const s = String(u);
+                if (s.includes('next-number')) {
+                    askedFor = s;
+                    return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ bol_no: '26ECC001', code: 'ECC' }) });
+                }
+                if (s.includes('bol-layouts/resolve')) {
+                    return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ customer: 'Eccomelt', fields: [] }) });
+                }
+                return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ ok: true, bols: [], packing_lists: [], entries: [] }) });
+            };
+            w.alert = () => {};
+        } });
+    await new Promise((r) => setTimeout(r, 400));
+    const w2 = dom2.window, d2 = w2.document;
+    [...d2.querySelectorAll('.subtab-btn')].find((b) => b.dataset.subtab === 'bol')
+        .dispatchEvent(new w2.MouseEvent('click', { bubbles: true }));
+    await new Promise((r) => setTimeout(r, 150));
+
+    // ── THE ADDRESS IS UNDER THE NAME ────────────────────────────────────
+    const nameBox = d2.getElementById('bol_consignee');
+    const addrBox = d2.getElementById('bol_consignee_address');
+    const col = nameBox.closest('div[style*="flex-direction:column"]');
+    ck('the consignee address is in the same column as the name',
+       !!col && col.contains(addrBox),
+       'side by side they were two boxes of equal weight, and an address is four lines to a name\'s one');
+    ck('  and below it, not above',
+       !!col && [...col.querySelectorAll('input,textarea')].indexOf(nameBox)
+             < [...col.querySelectorAll('input,textarea')].indexOf(addrBox));
+
+    // ── NUMBER AND DATE ARE THE OTHER SIDE ───────────────────────────────
+    const noBox = d2.getElementById('bol_no'), dateBox = d2.getElementById('bol_date');
+    const rightCol = noBox.closest('div[style*="flex-direction:column"]');
+    ck('the number and the date share a column', !!rightCol && rightCol.contains(dateBox));
+    ck('  which is NOT the consignee\'s', rightCol !== col,
+       'left is the party, right is the document — the same split the packing list header uses');
+
+    // ── PICKUP IS ONE ROW ────────────────────────────────────────────────
+    const pick = d2.querySelector('[data-bolfield="pickup"]');
+    const pd = d2.getElementById('bol_pickup_date'), pt = d2.getElementById('bol_pickup_time');
+    ck('pickup date and time share one wrapper', !!pick && pick.contains(pd) && pick.contains(pt));
+    ck('  laid out in a row, not a column',
+       /flex-direction:\s*row/.test(pick.getAttribute('style') || ''),
+       pick.getAttribute('style'));
+    ck('    and not a nested grid inside a span-2 cell',
+       !/grid-template-columns/.test(pick.getAttribute('style') || ''),
+       'at a narrower width the outer grid collapses, the cell becomes one column and the two boxes stack');
+
+    // ── THE NUMBER FILLS ITSELF IN ───────────────────────────────────────
+    const inp2 = d2.getElementById('bol_consignee');
+    inp2.value = 'Eccomelt Inc';
+    inp2.dispatchEvent(new w2.Event('blur', { bubbles: true }));
+    await new Promise((r) => setTimeout(r, 250));
+    ck('choosing a consignee asks for that customer\'s next number',
+       /next-number\?customer=Eccomelt/.test(askedFor || ''), String(askedFor));
+    ck('  and puts it in the box', d2.getElementById('bol_no').value === '26ECC001',
+       d2.getElementById('bol_no').value);
+
+    // ── AND NEVER OVER SOMETHING SHE TYPED ───────────────────────────────
+    // Her answer: "Yours wins, counter untouched". A suggestion that overwrote
+    // a typed number would change the identity of a document a driver may
+    // already be holding.
+    d2.getElementById('bol_no').value = 'EM-9999';
+    inp2.value = 'Taewon Automotive';
+    inp2.dispatchEvent(new w2.Event('blur', { bubbles: true }));
+    await new Promise((r) => setTimeout(r, 250));
+    ck('a number she typed survives a change of consignee',
+       d2.getElementById('bol_no').value === 'EM-9999',
+       d2.getElementById('bol_no').value);
+
+    dom2.window.close();
+}
 
 console.log(`\n  ${pass} passed, ${fail} failed`);
 if (failures.length) { console.log('\n  failed:'); failures.forEach((f) => console.log('    · ' + f)); }

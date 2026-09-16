@@ -315,7 +315,25 @@ function buildInvoiceClassicHtml(data) {
     // generated through the "Separate invoice & packing list" flag prints the
     // same five columns it has printed since 2026-09-09. Nothing on file
     // changes shape because a different screen grew a checkbox.
-    const showItem = data.packing_show_item === true || data.packing_show_item === 'true';
+    // ── WHY AN INVOICE'S PACKING LIST SHOWS IT TOO ───────────────────────
+    // Apsara, 2026-09-16: "why item description missing in packing list of
+    // invoice tab in docs?"
+    //
+    // Because the column was built for the packing-list screen and switched on
+    // by ITS checkbox, and the invoice path never sets that flag. Her invoice
+    // line items have carried item_desc all along — "Aluminium combo",
+    // "Regular combo" — and the packing list beside them printed a container
+    // number and four weights with no word about what was in the box. On a
+    // customs document that is the column that matters most.
+    //
+    // So the column also appears when the DATA has descriptions, which for an
+    // invoice is always. This DOES change a document her customers already
+    // receive, from five columns to six. Deliberate, and the smaller change of
+    // the two available: the alternative is a packing list that names nothing.
+    const lineItemsNameSomething = lineItems.some((it) =>
+        String((it && (it.item || it.item_desc)) || '').trim());
+    const showItem = data.packing_show_item === true || data.packing_show_item === 'true'
+        || lineItemsNameSomething;
     const num = (v) => {
         const n = parseFloat(String(v == null ? '' : v).replace(/,/g, '').trim());
         return isFinite(n) ? n : null;
@@ -328,8 +346,12 @@ function buildInvoiceClassicHtml(data) {
         { head: 'Container', width: showItem ? '18%' : '22%',
           cell: (item) => escapeHtml(item.container_no || data.container_no),
           total: 'TOTAL' },
+        // `item` is what the packing-list screen sends; `item_desc` is what an
+        // invoice line item has always been called. One column, either source
+        // — reading only one of them is how this went missing in the first
+        // place.
         ...(showItem ? [{ head: 'Item', width: '16%',
-          cell: (item) => escapeHtml(item.item || ''), total: '' }] : []),
+          cell: (item) => escapeHtml(item.item || item.item_desc || ''), total: '' }] : []),
         { head: 'Gross Weight<br>(lbs)', width: showItem ? '17%' : '20%',
           cell: (item, p) => escapeHtml(p.gross_weight_lbs || '-'),
           total: () => (totalGrossLbs == null ? '' : formatInt(totalGrossLbs)) },

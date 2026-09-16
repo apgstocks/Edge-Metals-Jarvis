@@ -259,7 +259,22 @@ function buildBolHtml(data) {
         bol_date:  () => factBox('DATE', d.bol_date ? formatDate(d.bol_date) : '—', d.bol_date),
         po_number:      () => factBox('PO NUMBER', orDash(d.po_number), d.po_number),
         appointment_id: () => factBox('APPOINTMENT ID', orDash(d.appointment_id), d.appointment_id),
-        pickup:         () => factBox('PICKUP', pickup || '—', pickup),
+        // ── TWO BOXES, SIDE BY SIDE ──────────────────────────────────
+        // Apsara, 2026-09-16: "pickup date and time next to each other."
+        //
+        // It printed as one box reading "09/16/2026 · 9:30 AM", which is two
+        // facts joined by a dot and is read at a gate in a hurry.
+        //
+        // Still ONE layout field. Splitting `pickup` into pickup_date and
+        // pickup_time in helpers/bolLayouts.js would have been the obvious
+        // move and would have silently deleted pickup from every layout she
+        // has already designed — sanitise() drops keys it does not recognise,
+        // which is right, and would be exactly wrong here. What she sees
+        // changes; the stored contract does not.
+        pickup: () => `<div style="display:grid; grid-template-columns:1fr 1fr; gap:6pt;">`
+            + factBox('PICKUP DATE', pickupDate || '—', pickupDate)
+            + factBox('PICKUP TIME', pickupTime || '—', pickupTime)
+            + `</div>`,
         carrier:        () => factBox('CARRIER', orDash(d.carrier), d.carrier),
         driver:         () => factBox('DRIVER', orDash(d.driver), d.driver),
         container_no:   () => factBox('CONTAINER', orDash(d.container_no), d.container_no),

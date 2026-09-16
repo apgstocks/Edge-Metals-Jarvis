@@ -183,6 +183,11 @@ const FILES = {
     // the typing ENDED — there was nothing to reopen. This holds what she
     // filled in, so a BOL can be corrected and reissued. See helpers/bols.js.
     BOLS_FILE: path.join(DATA_DIR, 'bols.json'),
+    // The per-customer, per-year BOL sequence (2026-09-16, "include year in
+    // bol number as in 26ECC001"). A SEPARATE FILE from bols.json on purpose:
+    // deleting a BOL must not hand its number to the next document, and a
+    // counter living inside the list it counts would do exactly that.
+    BOL_COUNTERS_FILE: path.join(DATA_DIR, 'bol_counters.json'),
 
     // ── WHICH FIELDS EACH CUSTOMER'S BOL CARRIES (2026-09-16) ────────────
     // Apsara: "For different customer,i can have different field in bol".

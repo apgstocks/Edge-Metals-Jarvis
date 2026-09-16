@@ -5340,6 +5340,36 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
             // layout is hers to set on the Design screen, not the caller's
             // to assert per document.
             const resolved = require('./helpers/bolLayouts').layoutFor(body.consignee_name);
+
+            // ── THE NUMBER ───────────────────────────────────────────────
+            // Apsara, 2026-09-16: "make bol number auto generate/customerbasis
+            // in sequence" -> "include year in bol number as in 26ECC001".
+            //
+            // RESERVED HERE, not in the browser. The form shows a suggestion
+            // the moment she picks a consignee, but nothing is consumed until
+            // a document actually exists — and two screens open on the same
+            // customer would otherwise be shown the same number, and
+            // helpers/bols.js upserts by bol_no, so the second save would
+            // REPLACE the first rather than sit beside it.
+            //
+            // A number she typed WINS ("Yours wins, counter untouched") and is
+            // used exactly as typed. noteUsed only drags the counter forward
+            // when what she typed is in this series and ahead of it, because
+            // the alternative is suggesting a number that already exists.
+            const bolNumbers = require('./helpers/bolNumbers');
+            if (!String(body.bol_no || '').trim()) {
+                try {
+                    body.bol_no = await bolNumbers.reserve(body.consignee_name, body.bol_date);
+                } catch (e) {
+                    // A BOL with no number is still a document she can correct;
+                    // a failed generate is a driver at a gate.
+                    console.error('[bol] could not reserve a number (non-fatal):', e.message);
+                }
+            } else if (req.query.preview !== '1') {
+                try { await bolNumbers.noteUsed(body.bol_no); }
+                catch (e) { console.error('[bol] could not note the number used (non-fatal):', e.message); }
+            }
+
             const withLayout = { ...body, layout: resolved.fields };
 
             // The weight check runs on the server too, not only in the
@@ -5404,6 +5434,11 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
                 ok: true,
                 saved_filename: path.basename(savedPath),
                 saved_date: savedDate,
+                // The number actually used, which is NOT always the one the
+                // client sent: it posts a blank to mean "you choose". A
+                // response that stayed silent about it would leave the form
+                // showing an empty box for a document that has a number on it.
+                bol_no: body.bol_no || '',
                 id: record ? record.id : null,
                 warnings,
             });
@@ -5712,6 +5747,18 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
             await audit.complete(entry, removed ? 'done' : 'failed', {});
             if (!removed) return res.status(404).json({ error: 'no such packing list' });
             res.json({ ok: true });
+        } catch (e) { res.status(500).json({ error: e.message }); }
+    });
+
+    // What the form should put in the box when she picks a consignee.
+    // A SUGGESTION ONLY — nothing is reserved until a document is generated,
+    // because a number consumed by opening a screen leaves a gap in a series
+    // a buyer can see. /api/bol/generate does the reserving.
+    app.get('/api/bols/next-number', requireAdmin, (req, res) => {
+        try {
+            const n = require('./helpers/bolNumbers');
+            res.json({ bol_no: n.suggest(req.query.customer, req.query.date),
+                       code: n.codeFor(req.query.customer) });
         } catch (e) { res.status(500).json({ error: e.message }); }
     });
 
