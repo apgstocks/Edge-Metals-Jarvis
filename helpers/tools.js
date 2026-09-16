@@ -557,7 +557,12 @@ const TOOLS = {
             // the tool and addPayment's validator cannot disagree: proposing a
             // Zelle here and having addPayment refuse it at run time would
             // show up as a confirmed action that then failed.
-            const allowed = modesForKind('purchase');
+            // The kind of the LOAD, not a hardcoded 'purchase'. This tool
+            // records against whatever row she names, and since the two kinds
+            // now take different lists (receive payment is Cash or Bank
+            // transfer; paying a supplier keeps Zelle and Wire), asking for
+            // the wrong one would refuse a payment the server would accept.
+            const allowed = modesForKind(load._kind || load.load_kind || 'purchase');
             const mode = allowed.find((m) => m.toLowerCase() === str(p.mode).toLowerCase());
             if (!mode) throw new Error(`payment mode must be one of: ${allowed.join(', ')}`);
 

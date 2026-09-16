@@ -43,8 +43,20 @@ function mount(file) {
     const html = fs.readFileSync(path.join(ROOT, file), 'utf8');
     const SCRIPT = [...html.matchAll(/<script(?![^>]*src=)[^>]*>([\s\S]*?)<\/script>/g)].map((m) => m[1]).join('\n');
     const dom = new JSDOM(html, { runScripts: 'outside-only', url: 'http://localhost/' });
-    // The boot sequence throws without a live document; the render functions
-    // are defined by then and are all this file needs.
+    // ── boot() MUST NOT OUTLIVE THE WINDOW ───────────────────────────────
+    // boot() is async. It starts during eval, awaits a fetch, and RESUMES as
+    // a microtask — by which time the process is tearing down and its first
+    // $() throws "Cannot read properties of undefined". This file printed
+    // "36 passed, 0 failed" and then EXITED 1, so every run of it by name
+    // looked perfect and the full runner marked it failed.
+    //
+    // Held at its first await rather than swallowed: a fetch that never
+    // settles means boot never reaches the DOM, and it also guarantees this
+    // suite touches no network. Same fix as tests/sidebar-collapse.js, which
+    // hit this first and wrote it down — it just never travelled to the other
+    // files that mount these pages.
+    dom.window.fetch = () => new Promise(() => {});
+    dom.window.setInterval = () => 0;
     try { dom.window.eval(SCRIPT); } catch (e) { /* see above */ }
     return dom;
 }

@@ -8751,7 +8751,21 @@ function openPayModal(loadId, kind) {
     // 'sale' as direction 'in' and labels it "Sale". Only the words she reads
     // were backwards, which is the version that looks considered.
     : `${sale ? 'Sale' : 'Load'} ${esc(l.id)}${esc(who)}<br>${sale ? 'Sale' : 'Load'} total ${payMoney(l.amount)} · already ${sale ? 'received' : 'paid'} ${payMoney(p.paid)} · <strong>${payMoney(p.pending)} outstanding</strong>`;
-  $('pay_mode').value = 'Zelle';
+  // ── THE MODES THIS ROW ACCEPTS ───────────────────────────────────────
+  // A sale takes Cash or Bank transfer (her rule for receive payment); a
+  // purchase keeps the full list, because paying a supplier by Zelle is
+  // money going the other way and she does it constantly. Rebuilt on every
+  // open, so switching from a sale row to a purchase row cannot leave the
+  // previous row's options behind.
+  //
+  // Kept in step with helpers/payments.js's modesForKind, which is what the
+  // SERVER enforces — a dropdown is a suggestion, and the yard assistant
+  // records payments through the same validator.
+  const payModes = sale ? ['Cash', 'Bank transfer'] : ['Cash', 'Bank transfer', 'Zelle', 'Wire', 'Cheque'];
+  $('pay_mode').innerHTML = payModes.map((m) => `<option value="${esc(m)}">${esc(m)}</option>`).join('');
+  // A default that EXISTS in the list. Zelle was being selected on a list
+  // that no longer had it, which is the bug this line is now written against.
+  $('pay_mode').value = payModes.includes('Zelle') ? 'Zelle' : 'Cash';
   paintBankOptions($('pay_bank'));
   $('pay_bank_other').value = '';
   syncBankFields('pay');
@@ -9263,11 +9277,20 @@ function renderLoads(loads) {
                    The server enforces the same two for yard load kinds, so
                    this is not the only thing holding the rule — a dropdown is
                    a suggestion, and the yard assistant records payments too.
-                   Kept in step with helpers/payments.js's YARD_LOAD_MODES. -->
-              <select id="pay_mode">
-                <option value="Cash">Cash</option>
-                <option value="Bank transfer">Bank transfer</option>
-              </select>
+                   Kept in step with helpers/payments.js's YARD_LOAD_MODES.
+
+                   ── AND FILLED PER ROW, NOT FIXED ──────────────────────
+                   Apsara, 2026-09-16, restricted RECEIVE PAYMENT — a sale,
+                   money coming in. This modal does both: "Record payment" on
+                   a purchase is money going OUT to a supplier, and she pays
+                   those by Zelle and Wire. Hardcoding the two options here
+                   took those away, and worse, openPayModal selects 'Zelle'
+                   by default — a <select> set to a value it does not have
+                   goes to "", so a dropdown she never touched posted an
+                   empty mode and the save failed outright.
+
+                   openPayModal fills this now, from the kind of the row. -->
+              <select id="pay_mode"></select>
             </div>
             <div class="field"><label>Date</label><input id="pay_date" placeholder="MM/DD/YYYY" autocomplete="off"></div>
           </div>

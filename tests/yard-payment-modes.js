@@ -21,6 +21,20 @@
 //   yard payment already recorded as Zelle names a mode the server no longer
 //   knows, with the bank matcher left nothing to key on. Section D.
 //
+//   TOO MUCH, AND IT SHIPPED. 2026-09-17: this file's own rule caught
+//   'purchase' as well as 'sale', reading "yard" where she wrote "receive
+//   payment". RECEIVE PAYMENT IS A SALE. Paying a SUPPLIER is money going the
+//   other way and she does it by Zelle and Wire — the bank picker exists for
+//   those two modes. So for a day, a supplier payment by Zelle was refused
+//   outright, and the modal opened by selecting 'Zelle' on a list that no
+//   longer had it: a <select> set to a missing value goes to "", so an
+//   untouched dropdown posted an empty mode and the save failed.
+//
+//   Four checks in THIS FILE asserted that over-reach. tests/jarvis-profile.js
+//   had been crashing on it since the day it landed, and nothing said so
+//   because the full runner was not being used. Section E now holds the line
+//   from the other side.
+//
 // So the assertions are as much about what did NOT change as what did.
 
 const fs = require('fs');
@@ -66,16 +80,31 @@ function payModeOptions(src) {
 section('A — the yard pay modal offers exactly two');
 // ══════════════════════════════════════════════════════════════════════════
 {
+    // ── BUILT PER ROW, NOT HARDCODED ─────────────────────────────────────
+    // The markup used to carry two <option> tags and this section read them.
+    // That is what made the over-reach invisible: the same modal is "Receive
+    // payment" on a sale and "Record payment" on a purchase, and a fixed list
+    // cannot be right for both. openPayModal fills it now, so the check is on
+    // the CODE THAT FILLS IT.
     for (const [who, src] of [['website', DASH], ['app', APP]]) {
         const opts = payModeOptions(src);
-        ck(`${who}: two options, not five`,
-           !!opts && opts.length === 2, JSON.stringify(opts));
-        ck(`  ${who}: Cash and Bank transfer`,
-           !!opts && opts.join('|') === 'Cash|Bank transfer', JSON.stringify(opts));
-        // Named individually so a failure says WHICH one came back.
-        for (const gone of ['Zelle', 'Wire', 'Cheque']) {
-            ck(`  ${who}: no ${gone}`, !!opts && !opts.includes(gone), JSON.stringify(opts));
-        }
+        ck(`${who}: the markup carries no fixed list`,
+           !opts || opts.length === 0, JSON.stringify(opts));
+
+        const fill = (src.match(/const payModes = sale \? \[([^\]]*)\] : \[([^\]]*)\]/) || []);
+        ck(`  ${who}: a sale offers exactly two`,
+           /'Cash', 'Bank transfer'/.test(fill[1] || ''), fill[1]);
+        ck(`  ${who}: and no Zelle on a sale`, !/Zelle/.test(fill[1] || ''), fill[1]);
+        ck(`  ${who}: a purchase keeps the full list`,
+           /Zelle/.test(fill[2] || '') && /Wire/.test(fill[2] || '') && /Cheque/.test(fill[2] || ''),
+           fill[2] + ' — paying a supplier is money going the other way');
+
+        // THE BUG THAT MADE IT WORSE: the modal selected 'Zelle' as its
+        // default. On a list without it a <select> goes to "", so a dropdown
+        // she never touched posted no mode at all and the save was refused.
+        ck(`  ${who}: the default is a mode the list actually has`,
+           /payModes\.includes\('Zelle'\) \? 'Zelle' : 'Cash'/.test(src),
+           "a <select> set to a value it does not have silently becomes ''");
     }
 }
 
@@ -88,13 +117,28 @@ section('B — and the SERVER holds the rule, not just the dropdown');
     // yard assistant records payments without going near one.
     await petty.addTopUp({ amount: 10000, date: '2026-09-15', note: 'float' });
 
-    for (const kind of ['purchase', 'sale']) {
-        for (const mode of ['Zelle', 'Wire', 'Cheque']) {
-            let err = null;
-            try { await pay.addPayment({ load_id: `L_${kind}_${mode}`, load_kind: kind, mode, amount: 10, paid_on: '2026-09-16', bank: 'Chase Bank' }); }
-            catch (e) { err = e; }
-            ck(`a yard ${kind} cannot be paid by ${mode}`, !!err, 'recorded anyway');
-        }
+    // A SALE — receive payment, money in. Her rule.
+    for (const mode of ['Zelle', 'Wire', 'Cheque']) {
+        let err = null;
+        try { await pay.addPayment({ load_id: `L_sale_${mode}`, load_kind: 'sale', mode, amount: 10, paid_on: '2026-09-16', bank: 'Chase Bank' }); }
+        catch (e) { err = e; }
+        ck(`receive payment cannot be ${mode}`, !!err, 'recorded anyway');
+    }
+
+    // ── AND A PURCHASE MUST STILL TAKE ALL FIVE ──────────────────────────
+    // This is the line that was crossed. Paying a supplier is not receiving
+    // payment, and she pays those by Zelle and Wire — there is a whole
+    // bank-account picker for exactly those two modes.
+    for (const mode of ['Zelle', 'Wire', 'Cheque', 'Cash', 'Bank transfer']) {
+        let err = null; let rec = null;
+        // A bank only where a bank makes sense — Cash and Cheque are refused
+        // one, correctly, and my first version of this check sent one anyway
+        // and then read the refusal as the restriction still being in place.
+        const extra = (mode === 'Zelle' || mode === 'Wire') ? { bank: 'Chase Bank' } : {};
+        try { rec = await pay.addPayment({ load_id: `L_buy_${mode}`, load_kind: 'purchase', mode, amount: 10, paid_on: '2026-09-16', ...extra }); }
+        catch (e) { err = e; }
+        ck(`  paying a supplier by ${mode} still records`, !err && rec && rec.mode === mode,
+           err ? err.message : JSON.stringify(rec && rec.mode));
     }
 
     // The message must name the list THAT APPLIES. Being refused a Zelle and
@@ -120,8 +164,12 @@ section('B — and the SERVER holds the rule, not just the dropdown');
     // would refuse at run time — a confirmed action that then fails, which is
     // worse than never offering it.
     const tools = fs.readFileSync(path.join(ROOT, 'helpers/tools.js'), 'utf8');
-    ck('the yard assistant asks modesForKind rather than the full list',
-       /modesForKind\('purchase'\)/.test(tools) && !/PAYMENT_MODES\.find/.test(tools),
+    // Asked for the LOAD'S kind, not a hardcoded one: the two kinds now take
+    // different lists, so a tool that always asked for 'purchase' would offer
+    // Zelle on a sale and be refused by the server it just agreed with.
+    ck('the yard assistant asks modesForKind for the load\'s own kind',
+       /modesForKind\(load\._kind \|\| load\.load_kind \|\| 'purchase'\)/.test(tools)
+       && !/PAYMENT_MODES\.find/.test(tools),
        'two validators disagreeing shows up as a confirmed payment that then errors');
     ck('  and tells the model the two it may use',
        /describe: 'Cash or Bank transfer'/.test(tools));

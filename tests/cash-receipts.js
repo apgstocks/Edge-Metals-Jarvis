@@ -200,10 +200,15 @@ section('E — Bank transfer');
     // Both clients offer it, or the server accepting the mode changes nothing.
     // That the modal offers ONLY these two is asserted in
     // tests/yard-payment-modes.js, which is where that rule lives.
+    // Read out of the CODE THAT FILLS the dropdown, not out of the markup.
+    // openPayModal builds the list per row since 2026-09-17 — a sale takes
+    // two modes, a purchase keeps five — so <option> tags no longer exist in
+    // the page for this to match. See tests/yard-payment-modes.js, where that
+    // rule lives, and helpers/payments.js for why it had to become per-row.
     for (const [who, src] of [['website', DASH], ['app', APP]]) {
-        ck(`${who}: the pay modal offers Bank transfer`,
-           /<option value="Bank transfer">/.test(src));
-        ck(`  ${who}: and still offers Cash`, /<option value="Cash">/.test(src));
+        const fill = (src.match(/const payModes = sale \? \[([^\]]*)\]/) || [])[1] || '';
+        ck(`${who}: receiving a payment offers Bank transfer`, /'Bank transfer'/.test(fill), fill);
+        ck(`  ${who}: and still offers Cash`, /'Cash'/.test(fill), fill);
     }
 }
 

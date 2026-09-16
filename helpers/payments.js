@@ -62,7 +62,28 @@ const PAYMENT_MODES = ['Cash', 'Bank transfer', 'Zelle', 'Wire', 'Cheque'];
 // appears. The narrowing applies to new entries only, which is the whole of
 // what she asked for.
 const YARD_LOAD_MODES = ['Cash', 'Bank transfer'];
-const YARD_LOAD_KINDS = new Set(['purchase', 'sale']);
+
+// ── RECEIVE PAYMENT, NOT EVERY YARD PAYMENT ────────────────────────────────
+// Apsara, 2026-09-16: "whn i talked about receive payment-i was talking only
+// about edge yard ..in loads,there are two options na..create invoice and
+// sale..in receive payment-i should have only cash and bank transfer".
+//
+// This set held 'purchase' as well, and that was my over-reach reading "yard"
+// where she wrote "receive payment". RECEIVE PAYMENT IS A SALE — money coming
+// in. Paying a supplier for a load is money going OUT, a different
+// transaction, and she pays those by Zelle and Wire: the bank-account picker
+// exists for exactly those two modes.
+//
+// What it cost, live, until 2026-09-17:
+//   a supplier payment by Zelle, Wire or Cheque was REFUSED outright;
+//   and the modal opens by selecting 'Zelle', which was no longer among the
+//   options — a <select> set to a value it does not have goes to "", so a
+//   dropdown she never touched posted an EMPTY mode and the save failed.
+//
+// Found by running the whole test suite rather than the dozen files I had
+// been naming: tests/jarvis-profile.js had been CRASHING on this since the
+// day it landed.
+const YARD_LOAD_KINDS = new Set(['sale']);
 
 // The modes a given load kind accepts. One function, so the validator, the
 // bot tool and anything added later cannot disagree about the answer.
