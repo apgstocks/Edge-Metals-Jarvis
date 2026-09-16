@@ -157,6 +157,41 @@ input::placeholder { color:var(--steel-500); }
 .modal-body { padding:24px 26px; max-height:62vh; overflow-y:auto; }
 .modal-foot { display:flex; justify-content:flex-end; gap:10px; padding:16px 26px; border-top:1px solid var(--border-subtle); background:var(--surface-sunken); }
 
+/* ── COLLAPSING THE SIDEBAR, ON DESKTOP ──────────────────────────────────
+   Apsara, 2026-09-16: "make the side bar collapsible".
+
+   COLLAPSED IS A RAIL, NOT NOTHING. Hiding it outright would reclaim the most
+   space and cost a click before every single navigation; a 54px rail keeps
+   every destination one click away and still gives back 200px. The nav items
+   have no icons, so the rail shows the first letters of each label — readable
+   enough to find Loads from Ledger, with the full name on hover and in the
+   title attribute for anyone who needs it spelled out.
+
+   SEPARATE FROM THE PHONE BEHAVIOUR BELOW, deliberately. At phone widths the
+   sidebar is already off-canvas behind the burger; a second mechanism fighting
+   the same element over the same pixels is the bug this kind of change always
+   has. #btnNavCollapse is hidden under the same breakpoint that shows the
+   burger, so only one of the two is ever live. */
+#sidebar { transition: width 180ms var(--ease-out), transform 220ms var(--ease-out); }
+body.nav-collapsed #sidebar { width:54px; }
+body.nav-collapsed #sidebar .nav-label,
+body.nav-collapsed #sidebar .nav-section-label,
+body.nav-collapsed #sidebar .brand-words,
+body.nav-collapsed #sidebar #todayLabel,
+body.nav-collapsed #sidebar #roleLabel { display:none; }
+body.nav-collapsed #sidebar .nav-btn { justify-content:center; padding:10px 0; gap:0; border-left-width:2px; }
+body.nav-collapsed #sidebar .nav-initials { display:block; }
+.nav-initials { display:none; font-family:var(--font-mono); font-size:10.5px; font-weight:700; letter-spacing:.02em; }
+body.nav-collapsed #sidebar > div:first-of-type + div { padding:14px 6px; }
+body.nav-collapsed #sidebar nav { padding:10px 5px; }
+body.nav-collapsed #sidebar #btnSignout { font-size:0; padding:8px 0; }
+body.nav-collapsed #sidebar #btnSignout::after { content:'\2192'; font-size:14px; }
+/* The toggle itself. Inside the sidebar so it moves with it, and pinned to the
+   top-right of the brand block where a disclosure control belongs. */
+#btnNavCollapse { position:absolute; top:10px; right:8px; width:24px; height:24px; display:flex; align-items:center; justify-content:center; background:transparent; border:1px solid var(--steel-700); border-radius:var(--radius-xs); color:var(--steel-400); cursor:pointer; font-size:12px; line-height:1; padding:0; transition:color var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out); }
+#btnNavCollapse:hover { color:#fff; border-color:var(--steel-500); }
+body.nav-collapsed #btnNavCollapse { position:static; margin:0 auto; }
+
 /* ── Collapsible sidebar for phone widths ─────────────────────────────────
    Desktop: sidebar sits in normal flex flow, always visible, unchanged.
    Phone (≤860px): sidebar becomes a fixed off-canvas panel that slides in
@@ -169,6 +204,9 @@ input::placeholder { color:var(--steel-500); }
   #sidebar.mobile-open { transform:translateX(0); }
   #sidebarBackdrop.mobile-open { display:block; }
   #hamburgerBtn { display:flex; }
+  /* One mechanism at a time: the burger owns the sidebar on a phone. */
+  #btnNavCollapse { display:none; }
+  body.nav-collapsed #sidebar { width:min(82vw,300px); }
   main { padding-top:58px; }
 }
 #hamburgerBtn { position:fixed; top:14px; left:14px; z-index:41; width:40px; height:40px; align-items:center; justify-content:center; flex-direction:column; gap:5px; background:var(--steel-950); border:1px solid var(--steel-700); border-radius:var(--radius-sm); cursor:pointer; }
@@ -287,7 +325,11 @@ input::placeholder { color:var(--steel-500); }
          Now: a 30px mark, two short lines that cannot wrap, and the live
          state as a dot with a tooltip rather than a sentence in caps. The
          text is still there on hover; the shouting is not. -->
-    <div style="padding:16px 18px 14px; border-bottom:1px solid var(--steel-800);">
+    <div style="padding:16px 18px 14px; border-bottom:1px solid var(--steel-800); position:relative;">
+      <!-- Apsara, 2026-09-16: "make the side bar collapsible". Pinned to the
+           brand block's top-right, where a disclosure control belongs; when
+           collapsed it centres itself in the rail. -->
+      <button id="btnNavCollapse" type="button" aria-label="Collapse the menu" aria-expanded="true" title="Collapse the menu">&#8249;</button>
       <div style="display:flex; align-items:center; gap:10px;">
         <div style="position:relative; width:30px; height:30px; flex-shrink:0;">
           <span style="position:absolute; inset:-5px; border-radius:50%; background:radial-gradient(circle, rgba(215,126,61,.45), transparent 68%); animation:emGlow 2.2s ease-in-out infinite;"></span>
@@ -297,7 +339,7 @@ input::placeholder { color:var(--steel-500); }
           <span style="position:absolute; inset:8px; border-radius:50%; border:1px solid rgba(255,214,170,.7); animation:emPing 2.2s cubic-bezier(.2,.7,.2,1) infinite;"></span>
           <span style="position:absolute; left:50%; top:50%; width:10px; height:10px; margin:-5px 0 0 -5px; border-radius:50%; background:radial-gradient(circle at 40% 38%, #FFFFFF, #FFE7CB 40%, #FFB877 70%, #D77E3D 100%); box-shadow:0 0 26px rgba(255,214,170,1), 0 0 56px rgba(215,126,61,.6);"></span>
         </div>
-        <div style="min-width:0; flex:1;">
+        <div class="brand-words" style="min-width:0; flex:1;">
           <div style="font-family:var(--font-display); font-size:17px; font-weight:800; letter-spacing:.04em; color:#fff;">Jarvis</div>
           <div style="font-family:var(--font-mono); font-size:9.5px; color:var(--steel-400); white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">Edge Metals ops</div>
         </div>
@@ -1013,6 +1055,54 @@ async function api(path, opts = {}) {
   return data;
 }
 
+// Short labels for the collapsed rail. Multi-word labels give their initials
+// ("Edge Inventory" -> EI); a single word gives its first letters.
+//
+// Not icons: there are twenty-odd destinations here and inventing an icon for
+// each would mean twenty small guesses about what a thing looks like, most of
+// them worse than two letters.
+//
+// ── AND THEY ARE MADE UNIQUE ACROSS THE VISIBLE MENU ────────────────────────
+// The first version took a fixed two letters, which gave Board and Bookings
+// both "BO" — two destinations showing one label, which is precisely the
+// confusion initials were supposed to avoid. So they are computed for the
+// WHOLE list at once and lengthened until no two collide: Board stays BO,
+// Bookings becomes BOO.
+//
+// Computed per render rather than stored, because which items are visible
+// depends on the role — a staff menu and an admin menu can legitimately
+// resolve the same label differently, and the rail should be unambiguous in
+// whichever one is on screen.
+function navInitialsFor(labels) {
+  const base = (label) => {
+    const words = String(label || '').trim().split(/\s+/).filter(Boolean);
+    if (!words.length) return '?';
+    if (words.length === 1) return words[0].slice(0, 2).toUpperCase();
+    return words.slice(0, 3).map((w) => w[0]).join('').toUpperCase();
+  };
+  const out = new Map();
+  const used = new Map();   // initials -> how many already have it
+  for (const label of labels) {
+    let key = base(label);
+    // Lengthen a single word one letter at a time; a multi-word label that
+    // still collides falls back to its first word plus the next initial.
+    const words = String(label || '').trim().split(/\s+/).filter(Boolean);
+    let n = 2;
+    while (used.has(key) && n < 6) {
+      n += 1;
+      key = words.length === 1
+        ? words[0].slice(0, n).toUpperCase()
+        : (words[0].slice(0, n - words.length + 1) + words.slice(1).map((w) => w[0]).join('')).toUpperCase();
+    }
+    // If six letters still collide the labels are effectively identical, and a
+    // suffix is the only honest answer left.
+    if (used.has(key)) key = `${key}${used.get(key) + 1}`;
+    used.set(key, (used.get(key) || 0) + 1);
+    out.set(label, key);
+  }
+  return out;
+}
+
 function renderNav() {
   const nav = $('sideNav');
   // Staff see Loads and Petty Cash only. The petty-cash entry was added
@@ -1044,13 +1134,19 @@ function renderNav() {
                        'Design', 'Bot & Automation', 'Contacts & Outreach', 'System'];
   const rank = (g) => { const i = GROUP_ORDER.indexOf(g); return i === -1 ? GROUP_ORDER.length : i; };
   visible.sort((a2, b2) => rank(a2.group) - rank(b2.group));
+  // Worked out across the sorted, role-filtered list, so the rail is
+  // unambiguous for whoever is actually looking at it.
+  const initials = navInitialsFor(visible.map((n) => n.label));
   let lastGroup = null;
   nav.innerHTML = visible.map(n => {
     const header = n.group !== lastGroup
       ? `<div class="nav-section-label"${lastGroup === null ? '' : ' style="margin-top:14px;"'}>${esc(n.group)}</div>`
       : '';
     lastGroup = n.group;
-    return `${header}<button class="nav-btn ${n.id === CURRENT_TAB ? 'active' : ''}" data-tab="${n.id}">${esc(n.label)}</button>`;
+    // Both the full label and the initials are always in the DOM; CSS shows
+    // one or the other. Rebuilding the nav on collapse would be a second code
+    // path that could disagree with this one about what is in the menu.
+    return `${header}<button class="nav-btn ${n.id === CURRENT_TAB ? 'active' : ''}" data-tab="${n.id}" title="${esc(n.label)}"><span class="nav-initials">${esc(initials.get(n.label) || '?')}</span><span class="nav-label">${esc(n.label)}</span></button>`;
   }).join('');
   nav.querySelectorAll('button').forEach(b => b.addEventListener('click', () => {
     // Address book is its own standalone page (dashboard/address-book.html,
@@ -1083,6 +1179,44 @@ $('hamburgerBtn').addEventListener('click', () => {
   $('hamburgerBtn').setAttribute('aria-expanded', open ? 'true' : 'false');
 });
 $('sidebarBackdrop').addEventListener('click', closeMobileSidebar);
+
+// ── COLLAPSING THE SIDEBAR ─────────────────────────────────────────────────
+// Apsara, 2026-09-16: "make the side bar collapsible".
+//
+// REMEMBERED, because it is a way of working rather than a one-off: someone
+// who wants the room back wants it back tomorrow too. Same reasoning and the
+// same defensive read as loadKindFilter — localStorage throws in some webviews
+// and a failure there must cost nothing but the preference.
+//
+// Applied to <body> rather than to the sidebar, so the rule can reach the
+// <main> beside it if that is ever wanted, and so one class is the whole of
+// the state.
+function setNavCollapsed(on, remember) {
+  document.body.classList.toggle('nav-collapsed', on);
+  const btn = $('btnNavCollapse');
+  if (btn) {
+    // The chevron points the way it will MOVE things, which is the convention
+    // people already read without being told.
+    btn.innerHTML = on ? '&#8250;' : '&#8249;';
+    btn.setAttribute('aria-expanded', on ? 'false' : 'true');
+    const words = on ? 'Expand the menu' : 'Collapse the menu';
+    btn.setAttribute('aria-label', words);
+    btn.title = words;
+  }
+  if (remember) { try { localStorage.setItem('navCollapsed', on ? '1' : '0'); } catch (e) {} }
+}
+
+if ($('btnNavCollapse')) {
+  $('btnNavCollapse').addEventListener('click', () => {
+    setNavCollapsed(!document.body.classList.contains('nav-collapsed'), true);
+  });
+}
+
+// Restored before the first paint of the nav. Read defensively: a throw here
+// would take the whole boot down for a saved preference.
+try {
+  if (localStorage.getItem('navCollapsed') === '1') setNavCollapsed(true, false);
+} catch (e) { /* no preference, no problem */ }
 
 function switchTab(tab) {
   CURRENT_TAB = tab;
