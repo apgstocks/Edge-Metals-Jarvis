@@ -208,6 +208,7 @@ const TOOLS = {
             buyer: { type: 'string', describe: 'match part of a buyer name, case-insensitive' },
             from: { type: 'date' }, to: { type: 'date' },
             item: { type: 'string', describe: 'match part of an item description' },
+            unpaid_only: { type: 'boolean', describe: 'true to return only sales the customer has not fully paid for' },
             limit: { type: 'number', describe: 'defaults to 25' },
         },
         run: async (p) => {
@@ -223,11 +224,25 @@ const TOOLS = {
                 return true;
             }).sort((a, b) => String(b.date || '').localeCompare(String(a.date || '')));
             const limit = Math.max(1, Math.min(100, Number(p.limit) || 25));
+            // ── WHAT THE CUSTOMER STILL OWES ─────────────────────────────
+            // Attached here rather than left to a second call. Once sales are
+            // visible at all, "who still owes me" is the next question anyone
+            // asks, and an assistant that can list sales but not say which are
+            // unpaid can only answer half of it.
+            //
+            // paymentSummary is the SAME arithmetic the screens use — a
+            // second implementation in this file would eventually disagree
+            // with the ledger, on money.
+            const { paymentSummary } = require('./payments');
+            const withPay = rows.map((l) => ({ ...l, payment: paymentSummary(l.id, l.amount) }));
+            const shown = p.unpaid_only
+                ? withPay.filter((l) => l.payment && l.payment.pending > 0)
+                : withPay;
             // The COUNT comes back alongside the page, so an answer built on
             // the first 25 of 300 sales can say so instead of sounding
             // complete. A truncated list presented as the whole is how a
             // confident wrong total gets spoken aloud.
-            return { total: rows.length, showing: Math.min(limit, rows.length), sales: rows.slice(0, limit) };
+            return { total: shown.length, showing: Math.min(limit, shown.length), sales: shown.slice(0, limit) };
         },
     },
 
@@ -264,6 +279,108 @@ const TOOLS = {
                     ? `Say the margin AND this, in the same breath: ${out.margin.caveat}`
                     : 'Margin covers essentially all sales in this range.',
                 _never: 'The cash block is money in and out over the period. It is NOT profit — do not call it profit, and do not add it to the margin.',
+            };
+        },
+    },
+
+    // ── AND THE REST OF IT ───────────────────────────────────────────────
+    // Apsara, 2026-09-16, on being told the assistant could not see sales:
+    // "it should see everything".
+    //
+    // So this is the rest of the yard, audited store by store against
+    // config.js rather than guessed at. What was still invisible after the
+    // sales reads landed: WhatsApp scale tickets, unfinished loads, the
+    // material catalogue and her own decisions about which names mean the same
+    // metal — and, on the money side, what customers still owe HER.
+    //
+    // ── "EVERYTHING" MEANS EVERYTHING *YARD* ─────────────────────────────
+    // Edge Metals is a different company and its stores stay out of this file:
+    // bills, sales (invoices), sales receipts, settlements, metals trucking,
+    // Edge Inventory, BOLs, packing lists. Not an oversight — an assistant
+    // that can read both is one answer away from a figure that describes
+    // neither company, which is the mistake this whole app is arranged to
+    // prevent. tests/yard-assistant-knowledge.js holds the line.
+
+    scale_tickets: {
+        kind: 'read',
+        description: 'Scale-ticket photos sent in over WhatsApp — the quick weight captures, separate from full load records. Use when asked about a weight that was photographed but may never have become a load.',
+        params: {
+            from: { type: 'date' }, to: { type: 'date' },
+            limit: { type: 'number', describe: 'defaults to 25' },
+        },
+        run: async (p) => {
+            const { loadScaleTickets } = require('./scaleTickets');
+            const day = (t) => String((t && (t.received_at || t.created_at)) || '').slice(0, 10);
+            const rows = (loadScaleTickets() || []).filter((t) => {
+                if (!t) return false;
+                if (p.from && day(t) < p.from) return false;
+                if (p.to && day(t) > p.to) return false;
+                return true;
+            });
+            const limit = Math.max(1, Math.min(100, Number(p.limit) || 25));
+            return {
+                total: rows.length, showing: Math.min(limit, rows.length),
+                // The PHOTO is not sent — only that there is one, and its link.
+                // A base64 image in a tool result is a huge payload for a
+                // question the link already answers.
+                tickets: rows.slice(0, limit).map((t) => ({
+                    id: t.id, received_at: t.received_at, from: t.from || t.sender || null,
+                    weight: t.weight ?? null, unit: t.unit || null,
+                    description: t.description || t.note || null,
+                    has_photo: !!(t.drive_link || t.drive_file_id), drive_link: t.drive_link || null,
+                })),
+            };
+        },
+    },
+
+    load_drafts: {
+        kind: 'read',
+        description: 'Loads that were started and never finished. Use for "is there anything half-entered", or when a load someone remembers recording cannot be found.',
+        params: {},
+        run: async () => {
+            const { listDrafts } = require('./loadDrafts');
+            const rows = listDrafts();
+            return {
+                total: rows.length,
+                // Summarised, not dumped. A draft carries the whole half-typed
+                // form including photo links; what answers the question is
+                // whose it is, when, and how far it got.
+                drafts: rows.map((d) => ({
+                    id: d.id, updated_at: d.updated_at || d.created_at || null,
+                    kind: d.kind || 'purchase', seller: d.seller || d.buyer || null,
+                    date: d.date || null,
+                    items: Array.isArray(d.items) ? d.items.filter((i) => i && i.description).length : 0,
+                })),
+            };
+        },
+    },
+
+    item_catalogue: {
+        kind: 'read',
+        description: 'Every material description the yard uses, and which different spellings she has confirmed mean the same metal. Use before answering about a material by name — "Al combo" and "Aluminium combo" may be one pile.',
+        params: {},
+        run: async () => {
+            const { loadCustomItemTypes } = require('./itemTypes');
+            const aliases = require('./itemAliases');
+            return {
+                descriptions: loadCustomItemTypes(),
+                // ── ONLY THE ONES SHE SETTLED ────────────────────────────
+                // helpers/itemAliases.js stores AI verdicts alongside her
+                // answers and never lets a machine verdict settle anything.
+                // Passing the unfiltered list here would let one wrong guess
+                // become a merged pile in every answer the assistant gives.
+                //
+                // source === 'user' AND same === true. A "no, these are
+                // different" is also hers and also stored, and shipping it in
+                // a list called same_metal would invert her answer.
+                //
+                // NOT aliases.settled() — that takes a PAIR and answers about
+                // that one pair. Calling it with no arguments returned null
+                // and crashed this tool on its first run.
+                same_metal: aliases.list()
+                    .filter((r) => r && r.source === 'user' && r.same === true)
+                    .map((r) => [r.a, r.b]),
+                _note: 'Two descriptions are the same metal ONLY if they appear together in same_metal. Never merge two materials because their names look alike — "Al 6061" and "Al 6063" are different alloys worth different money.',
             };
         },
     },

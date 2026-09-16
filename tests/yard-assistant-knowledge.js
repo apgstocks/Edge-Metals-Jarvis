@@ -162,7 +162,102 @@ section('C — the profit figure cannot be quoted without its caveat');
 }
 
 // ══════════════════════════════════════════════════════════════════════════
-section('D — nothing new can write');
+section('D — the rest of the yard');
+// ══════════════════════════════════════════════════════════════════════════
+{
+    // Apsara, on being told it could not see sales: "it should see everything".
+    // So the remaining stores were audited against config.js rather than
+    // guessed at, and what was still invisible got a read.
+    const reads = tools.readToolNames();
+    for (const [what, name] of [
+        ['WhatsApp scale tickets', 'scale_tickets'],
+        ['unfinished loads', 'load_drafts'],
+        ['the material catalogue', 'item_catalogue'],
+    ]) {
+        ck(`it can see ${what}`, reads.includes(name), reads.join(', '));
+    }
+
+    const st = require(path.join(ROOT, 'helpers/scaleTickets'));
+    await st.addScaleTicket({ from: '+15551234', weight: 4210, unit: 'lb', description: 'HMS', drive_link: 'https://d/x' });
+    const tick = await tools.runRead('scale_tickets', {});
+    ck('a scale ticket comes back', tick.total === 1, JSON.stringify(tick.total));
+    ck('  saying there is a photo', tick.tickets[0].has_photo === true);
+    // A base64 image in a tool result is an enormous payload for a question
+    // the link already answers.
+    ck('  without shipping the photo itself', !JSON.stringify(tick).includes('base64'),
+       'the link answers the question; the bytes just cost money');
+
+    const dr = require(path.join(ROOT, 'helpers/loadDrafts'));
+    await dr.saveDraft({ seller: 'Half Typed Co', date: '2026-09-16', items: [{ description: 'Zorba', gross_weight: 100 }] });
+    const drafts = await tools.runRead('load_drafts', {});
+    ck('an unfinished load is visible', drafts.total === 1 && drafts.drafts[0].seller === 'Half Typed Co',
+       JSON.stringify(drafts.drafts));
+    ck('  summarised rather than dumped', drafts.drafts[0].items === 1 && !drafts.drafts[0].gross_photo_link,
+       'a draft carries the whole half-typed form; what answers the question is whose it is and how far it got');
+
+    // ── THE CATALOGUE, AND WHOSE ANSWERS COUNT ───────────────────────────
+    const it = require(path.join(ROOT, 'helpers/itemTypes'));
+    const al = require(path.join(ROOT, 'helpers/itemAliases'));
+    await it.addCustomItemType('Al combo');
+    await it.addCustomItemType('Aluminium combo');
+    await al.remember('Al combo', 'Aluminium combo', true, { source: 'user' });
+    await al.remember('Al 6061', 'Al 6063', false, { source: 'user' });
+    await al.remember('HMS', 'Zorba', true, { source: 'ai' });
+
+    const cat = await tools.runRead('item_catalogue', {});
+    ck('the material list comes back', cat.descriptions.length > 0, `${cat.descriptions.length}`);
+    const pairs = JSON.stringify(cat.same_metal);
+    ck('  her YES is in same_metal', /Al combo.*Aluminium combo/.test(pairs), pairs);
+    ck('  her NO is NOT', !/6061/.test(pairs),
+       pairs + ' — shipping a "these are different" in a list called same_metal inverts her answer');
+    ck('  and an AI guess is NOT', !/Zorba/.test(pairs),
+       pairs + ' — one wrong machine verdict would become a merged pile in every answer');
+    ck('  with the rule stated for the model',
+       /different alloys/i.test(cat._note || ''), cat._note);
+
+    // ── WHAT CUSTOMERS OWE HER ───────────────────────────────────────────
+    // Once sales are visible at all, this is the next question anyone asks.
+    const payments = require(path.join(ROOT, 'helpers/payments'));
+    const sales = (await tools.runRead('find_sales', {})).sales;
+    const ecco = sales.find((s) => s.buyer === 'Eccomelt');
+    await payments.addPayment({ load_id: ecco.id, load_kind: 'sale', mode: 'Bank transfer',
+                                bank: 'Chase Bank', amount: 1200, paid_on: '2026-09-16' });
+    const all = await tools.runRead('find_sales', {});
+    ck('every sale carries what is still owed on it', all.sales.every((s) => s.payment),
+       'listing sales without payment state answers half the question');
+    const owed = await tools.runRead('find_sales', { unpaid_only: true });
+    ck('  and unpaid_only narrows to those still owing',
+       owed.total === 1 && owed.sales[0].buyer === 'Daekwang',
+       JSON.stringify(owed.sales.map((s) => s.buyer)));
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+section('E — but NOT Edge Metals');
+// ══════════════════════════════════════════════════════════════════════════
+{
+    // "Everything" means everything YARD. Edge Metals is a different company,
+    // and an assistant that can read both is one answer away from a figure
+    // that describes neither — the mistake this whole app is arranged around.
+    //
+    // Asserted at the SOURCE, because the failure is a require() somebody adds
+    // without thinking, not a wrong number that shows up in a fixture.
+    const src = fs.readFileSync(path.join(ROOT, 'helpers/tools.js'), 'utf8')
+        .replace(/^[ \t]*\/\/.*$/gm, '');   // comments stripped: they NAME these stores
+    for (const metals of ['bills', 'salesReceipts', 'salesSettlements', 'metalsTrucking',
+                          'edgeInventory', 'bols', 'packingList', 'margin']) {
+        ck(`the assistant cannot read Edge Metals ${metals}`,
+           !new RegExp(`require\\('\\./${metals}'\\)`).test(src),
+           `helpers/${metals}.js is Edge Metals — adding it here mixes two companies' books`);
+    }
+    // helpers/sales.js is Edge Metals INVOICES, not yard sales. The names
+    // collide and that is exactly how this mistake would get made.
+    ck('  nor Edge Metals invoices (helpers/sales.js)',
+       !/require\('\.\/sales'\)/.test(src),
+       'yard sales are helpers/outboundLoads.js; helpers/sales.js is the Edge Metals invoice register');
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+section('F — nothing new can write');
 // ══════════════════════════════════════════════════════════════════════════
 {
     // All three are reads. "Complete knowledge" is about what it can SEE; an

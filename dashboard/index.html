@@ -8525,17 +8525,31 @@ let bankOther = 'Others';
 // two seeded banks and Others still works — she can type the name and the
 // server records it. A blocking error here would stop her recording a payment
 // over a dropdown that had a working escape hatch all along.
-let bankListLoaded = false;
-async function loadBankOptions(force) {
-  if (bankListLoaded && !force) return;
+// ── THE SAME STALENESS BUG THE ADDRESS BOOK HAD ────────────────────────────
+// Apsara, 2026-09-16, asked whether anything ELSE goes stale until she logs
+// out. This did.
+//
+// It was `if (bankListLoaded && !force) return;` with a latch that nothing
+// ever forced — so the bank list was fetched once per session and never
+// again. A bank she typed under "Others" on the website was invisible on the
+// phone, and in the other browser tab, until the session was torn down. The
+// identical shape of `if (!docsAddressBook.length)`, one screen over.
+//
+// Now refreshed on every pay-modal open. It is one small request, which is
+// what the address book concluded too.
+//
+// AND THE LAST GOOD LIST SURVIVES A FAILURE. The assignments are guarded on
+// `.length`, so a failed or empty response leaves the previous values in
+// place rather than emptying the dropdown. A stale bank list is usable; an
+// empty one means she cannot record which account a transfer came from.
+async function loadBankOptions() {
   try {
     const d = await api('/api/payments');
     if (Array.isArray(d.banks) && d.banks.length) bankOptions = d.banks;
     if (Array.isArray(d.bank_modes) && d.bank_modes.length) bankModes = d.bank_modes;
     if (typeof d.other === 'string' && d.other) bankOther = d.other;
-    bankListLoaded = true;
   } catch (e) {
-    console.warn('[BANKS] could not load the bank list, using the built-in one:', e.message);
+    console.warn('[BANKS] could not refresh the bank list, keeping the last good one:', e.message);
   }
 }
 

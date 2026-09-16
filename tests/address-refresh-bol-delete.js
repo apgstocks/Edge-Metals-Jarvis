@@ -48,6 +48,7 @@ if (!String(cfg.DATA_DIR).startsWith(TMP)) { console.error('  ABORT  config not 
 
 const APP = fs.readFileSync(path.join(ROOT, 'mobile-app/www/index.html'), 'utf8');
 const WEB = fs.readFileSync(path.join(ROOT, 'dashboard/documents.html'), 'utf8');
+const WEB_DASH = fs.readFileSync(path.join(ROOT, 'dashboard/index.html'), 'utf8');
 
 // Comments are STRIPPED before any source scan below. Twice already in this
 // project an assertion has been satisfied by the comment explaining the rule
@@ -189,6 +190,51 @@ section('C — the guard that caused it cannot come back');
     ck('the website refreshes on sub-tab entry', /refreshAddressBook\(\)/.test(WEB_CODE));
     ck('  from setSubtab, which is where she arrives',
        /name === 'proforma' \|\| name === 'bol'\) refreshAddressBook\(\)/.test(WEB_CODE));
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+section('C2 — nothing else latches for the session');
+// ══════════════════════════════════════════════════════════════════════════
+{
+    // Apsara, 2026-09-16, after the address-book fix: "wh about bol design and
+    // app not reflecting latest data unless log out?"
+    //
+    // A fair question, and the answer was no: the BANK LIST had the identical
+    // bug one screen over. `if (bankListLoaded && !force) return;` with a latch
+    // nothing ever forced, so a bank she typed under "Others" on the website
+    // stayed invisible on the phone until the session was torn down.
+    //
+    // A latch on DATA is the shape of this bug. A latch on WIRING
+    // (truckerModalsWired) is correct and must survive — binding listeners
+    // twice is its own bug — so this is asserted by name rather than by
+    // banning the pattern.
+    for (const [who, code] of [['website', stripComments(WEB_DASH)], ['app', APP_CODE]]) {
+        ck(`${who}: the bank list no longer latches for the session`,
+           !/bankListLoaded/.test(code),
+           'a bank added elsewhere stayed invisible until logout — the address-book bug, one screen over');
+        ck(`  ${who}: and a failed refresh keeps the last good list`,
+           /keeping the last good one/.test(code),
+           'an empty dropdown means she cannot record which account a transfer came from');
+        ck(`  ${who}: while the modal WIRING latch survives`,
+           /truckerModalsWired/.test(code),
+           'binding the same listeners twice is its own bug — only DATA latches are wrong');
+    }
+
+    // The BOL layout she designs on the website has to reach the phone, and
+    // that is the half of her question about Design. It is refreshed on every
+    // entry to the BOL sub-tab AND on every consignee pick, so a layout saved
+    // on the website shows up next time she opens the tab.
+    ck('app: the BOL layout is re-read on entering the BOL tab',
+       /docsSubTab === 'bol'\) \{ renderBolForm\(\); bolwLoadLayout\(/.test(APP_CODE),
+       'a layout cached for the session is the same bug wearing a different hat');
+    ck('  and again whenever the consignee changes',
+       (APP_CODE.match(/bolwLoadLayout\(/g) || []).length >= 3,
+       'picked from the dropdown, typed by hand, or reopened from an edit');
+    // And it cannot go stale in a way that matters anyway: the SERVER resolves
+    // the layout again from the consignee when it builds the PDF.
+    ck('  and the server resolves it again at generate time regardless',
+       /layoutFor\(body\.consignee_name\)/.test(fs.readFileSync(path.join(ROOT, 'api.js'), 'utf8')),
+       'so even a phone that never refreshed prints the right document');
 }
 
 // ══════════════════════════════════════════════════════════════════════════
