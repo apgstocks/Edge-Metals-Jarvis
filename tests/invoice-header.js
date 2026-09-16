@@ -122,10 +122,8 @@ console.log('\n=== separate invoice / packing list ===');
   // touched the real header. These assertions run against the ASSEMBLED html,
   // not the raw template, because "the placeholder got substituted in both
   // copies" is the part that actually breaks.
-  ck('the template marks the header region for cloning',
+  ck('the template still marks the invoice header region',
      /<!--INV_HEAD_START-->/.test(t) && /<!--INV_HEAD_END-->/.test(t), true);
-  ck('the standalone header is a placeholder, not a second copy',
-     /\{\{pl_header_rows\}\}/.test(t), true);
 
   const { buildInvoiceClassicHtml } = require(R('helpers/invoicePdf'));
   const built = buildInvoiceClassicHtml({
@@ -144,33 +142,64 @@ console.log('\n=== separate invoice / packing list ===');
   ck('the clone actually rendered (not an empty block)', head.length > 1500, true);
   ck('no placeholder survived into the clone', /\{\{/.test(head), false);
 
-  // Every field her own packing list carries.
+  // ── WHAT THE COMPACT HEADER CARRIES ─────────────────────────────────
+  // Apsara, 2026-09-16, on the document as it stood: "I dont want this much
+  // big packing list", then "I dont want terms,vessel,payment terms..", then
+  // "Build B".
+  //
+  // This block used to assert the CLONE — every field of the invoice header,
+  // because on 2026-09-09 she sent her own separately-made packing list as the
+  // reference and it carried them all. Ten of those assertions now fail, and
+  // every one of them is a rule she has since overruled rather than a
+  // regression. The clone was about half an A4 page; eight bundle weights
+  // needed a second sheet under it.
+  //
+  // WHAT IT MUST STILL CARRY is everything that says which shipment this is.
+  // A packing list that has lost the buyer or the container is a grid of
+  // numbers a broker cannot file, and that failure looks tidy.
   for (const [label, needle] of [
-    ['Exporter',                  'EDGE METALS INC'],
-    ['the exporter FAX line',     'FAX: (425) 940-9408'],
-    ['Invoice No & Items',        'Invoice No &amp; Items'],
-    ['the invoice number',        '26JY96'],
-    ['the item label',            'ALUMINIUM COMBO'],
-    ['DATE',                      '09/10/2026'],
-    ['Other Reference(s)',        'Other Reference(s)'],
-    ['the booking reference',     'M3928609NU00121'],
-    ['the buyer name',            'TAEWON AUTOMOTIVE'],
-    ['the buyer address',         'HAMAN-GUN'],
-    ['Terms',                     '>Terms<'],
-    ['Vessel / Flight No',        'Vessel / Flight No'],
-    ['Payment Terms',             'Payment Terms'],
-    ['Country of Origin',         'Country of Origin'],
-    ['Place of Receipt by Carrier', 'Place of Receipt by Carrier'],
-    ['Port of Loading',           'OAKLAND'],
-    ['Port of Discharge',         'BUSAN'],
+    ['the exporter',        'EDGE METALS INC'],
+    ['the exporter address','14750 DEVONSHIRE LN'],
+    ['the invoice number',  '26JY96'],
+    ['the date',            '09/10/2026'],
+    ['the buyer name',      'TAEWON AUTOMOTIVE'],
+    ['the buyer address',   'HAMAN-GUN'],
   ]) ck(`the standalone header carries ${label}`, head.includes(needle), true);
 
-  // ...and still no money on it. The item table with Rate/Amount lives in
-  // .doc-invoice, which only-packing hides; nothing price-shaped may leak into
-  // the header block itself.
-  ck('the standalone header carries NO rate column', /US\$\/MT/.test(head), false);
-  ck('...no amount column', /Amount/i.test(head), false);
-  ck('...no invoice total', /final_amount|TOTAL/.test(head), false);
+  // ── AND WHAT IT MUST NOT ────────────────────────────────────────────
+  // Her three, by name. Two of them printed EMPTY on her own documents,
+  // which is how a header grows without anyone deciding it should.
+  for (const gone of ['Terms', 'Vessel', 'Payment Terms'])
+    ck(`  and not ${gone}`, new RegExp(gone, 'i').test(head), false);
+
+  // The shipment's own references survive, on one line instead of in five
+  // boxes — a packing list with no container or booking on it cannot be
+  // matched to the shipment it describes.
+  {
+    const { html: h4 } = require(R('helpers/invoicePdf')).buildInvoiceClassicHtml({
+      inv_no: INV, inv_date: '2026-09-10', container_no: 'KOCU5139886',
+      booking_no: 'M3928609NU00121', seal_no: '40217',
+      port_loading: 'OAKLAND', port_discharge: 'BUSAN', country_of_origin: 'USA',
+      terms: 'LC', vessel: 'HMM',
+      line_items: [{ item_desc: 'Aluminium combo', container_no: 'KOCU5139886', weight: 23.469, rate: 1000 }],
+    });
+    const head4 = h4.slice(h4.indexOf('class="pl-header"'), h4.indexOf('<div class="doc-packing"'));
+    for (const [label, needle] of [['the booking', 'M3928609NU00121'], ['the seal', '40217'],
+                                   ['the load port', 'OAKLAND'], ['the discharge port', 'BUSAN'],
+                                   ['the origin', 'USA']])
+      ck(`  the reference line carries ${label}`, head4.includes(needle), true);
+    ck('  and still refuses Terms and Vessel', /Terms|Vessel/i.test(head4), false);
+
+    // A blank field prints NOTHING, not a label with nothing after it.
+    const { html: h5 } = require(R('helpers/invoicePdf')).buildInvoiceClassicHtml({
+      inv_no: INV, container_no: 'KOCU5139886',
+      line_items: [{ item_desc: 'Aluminium combo', container_no: 'KOCU5139886', weight: 1, rate: 1 }],
+    });
+    const head5 = h5.slice(h5.indexOf('class="pl-header"'), h5.indexOf('<div class="doc-packing"'));
+    ck('  a shipment with no booking or seal prints no empty labels',
+       /Booking|Seal|Origin/.test(head5), false);
+    ck('  and no placeholder survives either', /\{\{/.test(head5), false);
+  }
 
   // Apsara, 2026-09-09: "packing list separate colour should not contain blue".
   // The header is a clone of the INVOICE header, so it arrives wearing the

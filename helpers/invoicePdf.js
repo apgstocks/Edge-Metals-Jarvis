@@ -544,11 +544,29 @@ function buildInvoiceClassicHtml(data) {
         ? `    <div class="seam" style="padding:1.5mm 2mm;font-size:10pt;font-weight:700;border-left:0.8pt solid var(--black);border-right:0.8pt solid var(--black);">${aboveTable}</div>`
         : '';
 
+    // ── THE STANDALONE PACKING LIST'S REFERENCE LINE ─────────────────────
+    // Apsara, 2026-09-16: "I dont want this much big packing list", "I dont
+    // want terms,vessel,payment terms..", "Build B".
+    //
+    // The tall cloned invoice header is gone; what a packing list needs from
+    // it fits on one line. Every part is omitted when it is empty rather than
+    // printed as a label with nothing after it — two of the three boxes she
+    // asked me to remove were printing blank on her own documents, which is
+    // how a header grows without anyone deciding it should.
+    //
+    // The ITEM and CONTAINER already print immediately above the table (see
+    // packing_item_line) and are deliberately not repeated here.
+    const plRefs = [
+        data.booking_no ? `Booking ${escapeHtml(data.booking_no)}` : '',
+        data.seal_no ? `Seal ${escapeHtml(data.seal_no)}` : '',
+        (data.port_loading || data.port_discharge)
+            ? `${escapeHtml(data.port_loading || '—')} &rarr; ${escapeHtml(data.port_discharge || '—')}`
+            : '',
+        data.country_of_origin ? `Origin ${escapeHtml(data.country_of_origin)}` : '',
+        data.reference ? escapeHtml(data.reference) : '',
+    ].filter(Boolean).join(' &nbsp;&middot;&nbsp; ');
+
     let html = loadTemplate();
-    // Clone the invoice header into the standalone packing-list slot before
-    // any substitution happens, so the copy's placeholders are filled by the
-    // same pass that fills the original's.
-    html = html.split('{{pl_header_rows}}').join(extractInvoiceHeader(html));
     const subs = {
         // <wbr> after each underscore: a real break OPPORTUNITY that
         // contributes no character, so the wrapped number still copies out of
@@ -566,6 +584,7 @@ function buildInvoiceClassicHtml(data) {
         item_label: escapeHtml(itemLabels(lineItems, data.inv_no)),
         inv_date: escapeHtml(formatDate(data.inv_date)),
         other_ref: otherRef,
+        pl_refs_line: plRefs,
         buyer_name: escapeHtml(buyerName),
         buyer_address_lines: buyerAddressLines,
         terms: escapeHtml(data.terms || ''),

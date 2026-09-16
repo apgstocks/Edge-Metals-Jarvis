@@ -55,6 +55,9 @@ body.only-packing .pl-header > :first-child{margin-top:0;}
 /* !important because that banner carries an INLINE display:flex, and an
    inline style beats a stylesheet rule. Without it both banners render. */
 body.only-packing .pl-banner-inline{display:none !important;}
+/* The compact header carries its own rule under the title, so the packing
+   table follows it directly. (2026-09-16, "Build B".) */
+body.only-packing .doc-packing > table.seam{margin-top:0;}
 /* Footer declaration: invoice wording by default (combined sheet included),
    packing wording only when the packing list is standing on its own. */
 .decl-packing{display:none;}
@@ -70,6 +73,9 @@ body.only-packing .decl-packing{display:inline;}
    document — its own banner, table head and TOTAL row have always been orange.
    Scoped to .pl-header, which only ever renders in only-packing mode, so the
    combined PDF and the invoice-only PDF are untouched. */
+/* The compact header (2026-09-16, "Build B") has no .lbl cells of its own —
+   it is plain divs, not the invoice's label/value grid. Kept so a template
+   restored from an older copy still repaints correctly, and harmless now. */
 .pl-header .lbl{background:var(--light-orange);}
 </style>
 </head>
@@ -282,18 +288,50 @@ body.only-packing .decl-packing{display:inline;}
          broker or a consignee can use.
          Deliberately carries NO rates, amounts or totals. A packing list with
          prices on it is a document you do not want reaching a forwarder. -->
+    <!-- ── THE HEADER THE PACKING LIST ACTUALLY NEEDS ───────────────────
+         Apsara, 2026-09-16, on the document as it stood: "I dont want this
+         much big packing list", then "I dont want terms,vessel,payment
+         terms..", then "Build B".
+
+         Until now this block was an exact CLONE of the invoice header —
+         exporter, buyer, invoice number, reference, terms, vessel, payment
+         terms and four ports, in the invoice's own tall boxes. On an invoice
+         that is the document. On a packing list it was about half the page,
+         so eight bundle weights needed a second sheet.
+
+         THE CLONE WAS NOT A MISTAKE AT THE TIME. It exists so the standalone
+         list can never disagree with the invoice about the buyer or the
+         ports, and every field here still comes from the same substituted
+         values — it is the LAYOUT that changed, not the source.
+
+         WHAT IS GONE: Terms, Vessel / Flight No, Payment Terms. Her words.
+         None of the three says anything about what is in the box, and two of
+         them were printing empty on her own documents.
+
+         WHAT STAYS: who sent it, who receives it, which invoice and date it
+         belongs to, and the shipment's own references — container, seal,
+         booking, the two ports. A packing list with none of that is a grid of
+         numbers a broker cannot file. -->
     <div class="pl-header">
-      <!-- Banner first, so the standalone packing list opens with its own
-           title exactly as the invoice does. In COMBINED mode this whole
-           block is hidden and the original mid-document banner (below, in
-           .doc-packing) is the one that shows — the two documents keep
-           reading as one continuous sheet, unchanged. -->
-      <div style="background:var(--orange);color:var(--light-orange);text-align:center;font-weight:700;font-size:15.5pt;height:12mm;box-sizing:border-box;display:flex;align-items:center;justify-content:center;">PACKING LIST</div>
-      <!-- Filled from the INV_HEAD region above by helpers/invoicePdf.js.
-           NOT a second hand-written header: an exact copy, so the standalone
-           packing list can never disagree with the invoice about the buyer,
-           the vessel or the ports. -->
-{{pl_header_rows}}
+      <div style="border-bottom:2pt solid var(--orange);padding:1.5mm 2mm;display:flex;justify-content:space-between;align-items:flex-end;">
+        <div style="font-weight:700;font-size:14pt;color:var(--orange);letter-spacing:.02em;">PACKING LIST</div>
+        <div style="font-size:9.5pt;font-weight:700;">{{inv_no}} &nbsp;&middot;&nbsp; {{inv_date}}</div>
+      </div>
+      <table class="seam" style="width:100%;border-collapse:collapse;">
+        <tr>
+          <td style="width:50%;padding:1.5mm 2mm;vertical-align:top;border-right:1pt solid var(--black);">
+            <div style="font-size:7.5pt;color:#555;letter-spacing:.06em;">EXPORTER</div>
+            <div style="font-weight:700;font-size:10pt;margin-top:0.5mm;">EDGE METALS INC</div>
+            <div style="font-size:8.5pt;line-height:1.45;">14750 DEVONSHIRE LN, FRISCO, TX 75035<br>TAX-ID: 26-3269514 &nbsp;&middot;&nbsp; TEL: (310) 938-2525</div>
+          </td>
+          <td style="width:50%;padding:1.5mm 2mm;vertical-align:top;">
+            <div style="font-size:7.5pt;color:#555;letter-spacing:.06em;">BUYER</div>
+            <div style="font-weight:700;font-size:10pt;margin-top:0.5mm;">{{buyer_name}}</div>
+            <div style="font-size:8.5pt;line-height:1.45;">{{buyer_address_lines}}</div>
+          </td>
+        </tr>
+      </table>
+      <div class="seam" style="border-top:1pt solid var(--black);padding:1.5mm 2mm;font-size:8.5pt;line-height:1.5;">{{pl_refs_line}}</div>
     </div>
     <div class="doc-packing">
     <!-- Packing list -->
