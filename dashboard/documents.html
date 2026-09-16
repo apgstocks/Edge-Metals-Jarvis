@@ -4508,12 +4508,23 @@ function bolClearForm() {
 // The rows still CARRY a container_no in the store: a scanned page may list
 // several, and generatePdf falls back to the header's when a row has none.
 // What is gone is the column she has to fill in.
+// FIXED WIDTHS, not 1fr. Three fractional columns stretch to fill the panel,
+// which on this page meant a ~330px box for a six-character weight — Apsara,
+// 2026-09-16: "Why the gross,tare,net box kength is more?"
+//
+// 130px fits "1,234,567" with room to spare and stops there. The row is
+// left-aligned rather than justified, so the leftover width stays as white
+// space instead of being shared out among the boxes.
 const PK_COLS = [
-  ['gross_weight_lbs', 'Gross', '1fr'],
-  ['tare_lbs', 'Tare', '1fr'],
-  ['net_weight_lbs', 'Net', '1fr'],
+  ['gross_weight_lbs', 'Gross', '130px'],
+  ['tare_lbs', 'Tare', '130px'],
+  ['net_weight_lbs', 'Net', '130px'],
 ];
 const PK_GRID = PK_COLS.map((c) => c[2]).join(' ') + ' 30px';
+// justify-content:start keeps the leftover width as white space rather than
+// letting the grid share it out. Applied to the heading row AND the input
+// rows, or the labels sit over the wrong boxes.
+const PK_ROW_CSS = `display:grid; grid-template-columns:${PK_GRID}; gap:8px; justify-content:start;`;
 
 let pkRows = [];
 let pkEditingId = null;
@@ -4575,14 +4586,14 @@ function pkPaintItems() {
   // stay put once the list is long enough to scroll — a weights table whose
   // headings have scrolled away is one where the next number goes in the wrong
   // column. Opaque background, or the rows show through it.
-  const head = `<div style="position:sticky; top:0; z-index:2; background:var(--surface-card); padding:2px 0 6px; display:grid; grid-template-columns:${PK_GRID}; gap:8px; font-family:var(--font-mono); font-size:10px; letter-spacing:.08em; text-transform:uppercase; color:var(--text-faint); border-bottom:1px solid var(--border-subtle); margin-bottom:6px;">
+  const head = `<div style="position:sticky; top:0; z-index:2; background:var(--surface-card); padding:2px 0 6px; ${PK_ROW_CSS} font-family:var(--font-mono); font-size:10px; letter-spacing:.08em; text-transform:uppercase; color:var(--text-faint); border-bottom:1px solid var(--border-subtle); margin-bottom:6px;">
       ${PK_COLS.map(([, label]) => `<div style="text-align:right;">${label}</div>`).join('')}<div></div>
     </div>`;
   // Rebuilt wholesale, values carried in the VALUE attribute — a half-rebuilt
   // table where row 3 still holds row 2's text is the classic bug of this
   // pattern, and here it would put a weight against the wrong material.
   $('pkItems').innerHTML = head + pkRows.map((r, i) => `
-    <div style="display:grid; grid-template-columns:${PK_GRID}; gap:8px; margin-bottom:6px; align-items:center;">
+    <div style="${PK_ROW_CSS} margin-bottom:6px; align-items:center;">
       ${PK_COLS.map(([k]) => `<input data-pi="${i}" data-pf="${k}" type="text" value="${esc(r[k] || '')}" style="text-align:right; font-family:var(--font-mono);">`).join('')}
       <button type="button" class="btn btn-secondary pk-del" data-i="${i}" style="padding:4px 8px; font-size:12px;">&times;</button>
     </div>`).join('');

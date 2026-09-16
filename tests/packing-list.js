@@ -453,6 +453,25 @@ section('D — the screen');
        /position:sticky; top:0/.test(DOCS.slice(DOCS.indexOf('const head = '), DOCS.indexOf('const head = ') + 400)),
        'headings that scroll away are headings that stop being read');
 
+    // Apsara, 2026-09-16: "Why the gross,tare,net box kength is more?" —
+    // three 1fr columns stretched to fill the panel, so a six-character weight
+    // got a ~330px box. Fixed widths, and the row is left-aligned so the
+    // leftover width stays as white space instead of being shared out.
+    {
+        const headEl = d.getElementById('pkItems').firstElementChild;
+        const rowEl = headEl && headEl.nextElementSibling;
+        const styleOf = (el) => (el && el.getAttribute('style')) || '';
+        ck('  the weight boxes are a fixed width, not stretched',
+           /grid-template-columns:130px 130px 130px/.test(styleOf(headEl)), styleOf(headEl).slice(0, 120));
+        ck('    and the row does not share out the leftover width',
+           /justify-content:start/.test(styleOf(rowEl)),
+           '1fr columns grow to fill the panel however wide it is');
+        ck('    with the headings over the boxes they label',
+           styleOf(headEl).includes('grid-template-columns:130px 130px 130px')
+           && styleOf(rowEl).includes('grid-template-columns:130px 130px 130px'),
+           'the heading row and the input rows must use the SAME track list');
+    }
+
     const rows0 = d.querySelectorAll('#pkItems input[data-pi]').length;
     ck('  and starts with blank lines to type into', rows0 > 0, `${rows0} inputs`);
 
