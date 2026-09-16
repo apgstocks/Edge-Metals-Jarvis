@@ -429,6 +429,26 @@ section('D — the screen');
                                ['invoice number', 'pk_invoice']]) {
         ck(`  there is a ${label} box`, !!d.getElementById(id));
     }
+
+    // ── AND THEY SIT WHERE SHE PUT THEM ──────────────────────────────────
+    // Apsara, 2026-09-16: "Start with date,below it-invoice number,below-
+    // customer.on the right side,booking number ,container,seal no stakced
+    // vertical". Left is the commercial side of the document — when, which
+    // invoice, whose; right is the shipment — booking, box, seal.
+    //
+    // Asserted by reading the rendered columns rather than the source order,
+    // because CSS can reorder a grid and leave the markup looking right.
+    {
+        const wrap = d.querySelector('#panelPacking [data-pkfield="date"]').parentElement.parentElement;
+        const colOf = (i) => [...wrap.children[i].querySelectorAll('[data-pkfield]')].map((e) => e.dataset.pkfield);
+        ck('  the left column is date, invoice, customer',
+           colOf(0).join(',') === 'date,invoice_no,customer', colOf(0).join(','));
+        ck('  the right column is booking, container, seal',
+           colOf(1).join(',') === 'booking_no,container_no,seal_no', colOf(1).join(','));
+        ck('    both stacked vertically',
+           [0, 1].every((i) => /flex-direction:\s*column/.test(wrap.children[i].getAttribute('style') || '')),
+           'a row of three is not a stack');
+    }
     ck('  and an upload that takes a photo OR a pdf',
        /accept="image\/\*,application\/pdf"/.test(DOCS),
        'she said "upload photo/pdf" — a picker that only takes PDFs makes her scan it first');

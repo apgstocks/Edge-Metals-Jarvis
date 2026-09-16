@@ -292,16 +292,31 @@ body[data-theme="light"] {
       </div>
       <div id="pkScanNote" style="font-size:11.5px; color:var(--text-muted); margin-bottom:16px;"></div>
 
-      <div style="display:grid; grid-template-columns:repeat(4,1fr); gap:12px; margin-bottom:12px;">
-        <div class="field" data-pkfield="container_no"><label for="pk_container">Container number</label><input id="pk_container" type="text" placeholder="TCLU1234567"></div>
-        <div class="field" data-pkfield="booking_no"><label for="pk_booking">Booking number</label><input id="pk_booking" type="text"></div>
-        <div class="field" data-pkfield="invoice_no"><label for="pk_invoice">Invoice number</label><input id="pk_invoice" type="text"></div>
-        <div class="field" data-pkfield="seal_no"><label for="pk_seal">Seal number</label><input id="pk_seal" type="text"></div>
-      </div>
+      <!-- ── TWO STACKED COLUMNS ──────────────────────────────────────────
+           Apsara, 2026-09-16: "Start with date,below it-invoice number,
+           below-customer.on the right side,booking number ,container,seal no
+           stakced vertical".
 
-      <div style="display:grid; grid-template-columns:repeat(4,1fr); gap:12px; margin-bottom:18px;">
-        <div class="field" data-pkfield="customer"><label for="pk_customer">Customer</label><input id="pk_customer" type="text" autocomplete="off"></div>
-        <div class="field" data-pkfield="date"><label for="pk_date">Date</label><input id="pk_date" type="date"></div>
+           LEFT is the commercial side of the document — when, which invoice,
+           whose. RIGHT is the shipment — the booking, the box, the seal.
+           Four-across meant the two kinds of thing sat side by side in an
+           order that read as nothing in particular.
+
+           The boxes are 260px rather than a share of the panel, for the same
+           reason the weight boxes are: a fractional column grows to fill
+           whatever it is in, and a container number does not need half a
+           page. Columns collapse to one on a narrow screen. -->
+      <div style="display:flex; gap:44px; flex-wrap:wrap; margin-bottom:18px;">
+        <div style="display:flex; flex-direction:column; gap:12px; width:260px;">
+          <div class="field" data-pkfield="date"><label for="pk_date">Date</label><input id="pk_date" type="date"></div>
+          <div class="field" data-pkfield="invoice_no"><label for="pk_invoice">Invoice number</label><input id="pk_invoice" type="text"></div>
+          <div class="field" data-pkfield="customer"><label for="pk_customer">Customer</label><input id="pk_customer" type="text" autocomplete="off"></div>
+        </div>
+        <div style="display:flex; flex-direction:column; gap:12px; width:260px;">
+          <div class="field" data-pkfield="booking_no"><label for="pk_booking">Booking number</label><input id="pk_booking" type="text"></div>
+          <div class="field" data-pkfield="container_no"><label for="pk_container">Container number</label><input id="pk_container" type="text" placeholder="TCLU1234567"></div>
+          <div class="field" data-pkfield="seal_no"><label for="pk_seal">Seal number</label><input id="pk_seal" type="text"></div>
+        </div>
         <!-- No unit picker: this document's columns ARE the units
              (Net lbs and Net mt are separate columns on her packing list),
              so a unit dropdown would be a second, contradictory answer. -->
