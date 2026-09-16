@@ -53,4 +53,20 @@ function getInvoiceVersionSummary(containerNo) {
     return { count: versions.length, latest, saved_at };
 }
 
-module.exports = { saveInvoiceVersion, getInvoiceVersionSummary };
+// The most recent full payload for a container — the whole Review & Generate
+// form state, header and line items. Exported 2026-09-16 so the packing list
+// can borrow the invoice HEADER rather than asking her to retype an exporter
+// block, a vessel and four ports she has already entered once.
+//
+// Returns null rather than a partial: a packing list built on half a header
+// is a document that looks fine and is useless to a broker, which is the same
+// reasoning as extractInvoiceHeader's loud failure in helpers/invoicePdf.js.
+function getLatestInvoicePayload(containerNo) {
+    const key = keyFor(containerNo);
+    if (!key) return null;
+    const all = loadJson(cfg.INVOICE_VERSIONS_FILE, {});
+    const list = (all && Array.isArray(all[key])) ? all[key] : [];
+    return list.length ? list[list.length - 1] : null;
+}
+
+module.exports = { saveInvoiceVersion, getInvoiceVersionSummary, getLatestInvoicePayload };

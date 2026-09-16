@@ -26,11 +26,37 @@ const cfg = require('../config');
 const { loadJson, mutateJson } = require('./json');
 
 // ── WHAT A ROW IS ──────────────────────────────────────────────────────────
-// Her words: "rows and columns of items". A packing list's columns vary by
-// customer, but these are the ones that appear on every one Edge Metals
-// issues. Anything the document has that is not here lands in `note` rather
-// than being dropped — losing a column silently is worse than an untidy one.
-const ROW_FIELDS = ['marks', 'description', 'pieces', 'gross_weight', 'net_weight', 'note'];
+// THE COLUMNS EDGE METALS ACTUALLY USES, not a guess at them.
+//
+// The first version of this file invented a generic shape — marks,
+// description, pieces, gross, net, note — without checking. Apsara has been
+// issuing packing lists since 2026-09-09 through the invoice's "Separate
+// invoice & packing list" flag, and hers is a WEIGHT BREAKDOWN per container:
+//
+//   Container | Gross | Truck | Container tare | Chassis | Boxes | Net (lbs) | Net (mt)
+//
+// Gross minus the four tare components is the net. That is the document a
+// broker receives from her, so it is the document this must read and produce.
+// A scanner reading fields her packing list does not have, feeding a PDF in a
+// shape her customers have never seen, would have been worse than no feature.
+//
+// Same columns as assets/invoice-classic/template.html's packing table and
+// helpers/invoicePdf.js's packingRowsHtml — deliberately, so a packing list
+// made here and one made from an invoice are the same document.
+const ROW_FIELDS = [
+    'container_no',
+    'gross_weight_lbs',
+    'truck_lbs',
+    'container_tare_lbs',
+    'chassis_lbs',
+    'boxes_weight_lbs',
+    'net_weight_lbs',
+    'net_weight_mt',
+    // Not a column on the printed document. Anything the scanned page carries
+    // that does not fit above lands here rather than being dropped — losing a
+    // column silently is worse than an untidy one.
+    'note',
+];
 
 // Kept as the STRINGS on the document. The same rule as the BOL's weights
 // (helpers/bols.js): "46,300" must read back as "46,300" after an edit that
@@ -146,14 +172,17 @@ Extract what is actually printed. Return ONLY raw JSON — no markdown, no prose
   "date": null,           // MM/DD/YYYY. If the document uses DD/MM/YYYY, still output MM/DD/YYYY.
   "customer": null,       // who it is going to — the consignee or buyer named on the list
   "weight_unit": null,    // "lb", "kg" or "mt" — whichever the weights on this document are in
-  "rows": [               // one entry per LINE ITEM in the items table, in the order printed
+  "rows": [               // one entry per CONTAINER row in the packing table, in the order printed
     {
-      "marks": null,        // marks/numbers or bundle/pallet id, if the table has such a column
-      "description": null,  // the material as written, e.g. "Aluminium Extrusion 6063"
-      "pieces": null,       // count of pieces/bundles/bales for this line
-      "gross_weight": null, // exactly as printed, keep any thousands separators
-      "net_weight": null,   // exactly as printed
-      "note": null          // anything else in that row that does not fit the columns above
+      "container_no": null,        // the container this row is for, e.g. "TCLU1234567"
+      "gross_weight_lbs": null,    // exactly as printed, keep thousands separators
+      "truck_lbs": null,           // the truck's own weight, a tare component
+      "container_tare_lbs": null,  // the container's tare weight
+      "chassis_lbs": null,         // the chassis weight, another tare component
+      "boxes_weight_lbs": null,    // weight of boxes/packaging
+      "net_weight_lbs": null,      // net after the tares, exactly as printed
+      "net_weight_mt": null,       // net in metric tonnes if the document shows it
+      "note": null                 // anything else in that row that does not fit the columns above
     }
   ]
 }
@@ -263,7 +292,156 @@ function normaliseScan(parsed) {
     return { fields, rows, scanned_fields };
 }
 
+// ── THE PDF ────────────────────────────────────────────────────────────────
+// Apsara, 2026-09-16, asked what the tab should do: "Scan ,fill data auto and
+// generate pdf."
+//
+// It renders through assets/invoice-classic/template.html in its standalone
+// packing mode — the SAME document the invoice's "Separate invoice & packing
+// list" flag has produced since 2026-09-09. Not a second design: a packing
+// list made here and one made from an invoice must be the same document, or
+// her customers receive two different-looking papers from one company.
+//
+// ── IT BORROWS THE INVOICE'S HEADER ─────────────────────────────────────────
+// That template's standalone packing list carries the full invoice header —
+// exporter, invoice no, date, buyer address, terms, vessel, four ports. This
+// form holds none of that and should not: she has typed it once already on the
+// invoice for the same container.
+//
+// So the header comes from the stored invoice payload, found by CONTAINER,
+// and if there is no invoice for that container this REFUSES rather than
+// printing a headerless page. A packing list with a blank exporter block looks
+// finished and is useless to a broker — the same reason extractInvoiceHeader
+// fails loudly instead of rendering an empty header.
+async function generatePdf(record, { renderer } = {}) {
+    const rec = record || {};
+    const container = str(rec.container_no);
+    if (!container) {
+        const e = new Error('This packing list has no container number, so there is no invoice to take the header from.');
+        e.code = 'NO_CONTAINER';
+        throw e;
+    }
+
+    const { getLatestInvoicePayload } = require('./invoiceVersions');
+    const invoice = getLatestInvoicePayload(container);
+    if (!invoice) {
+        const e = new Error(`No invoice on file for ${container}. Make the invoice first — the packing list takes its header from it.`);
+        e.code = 'NO_INVOICE';
+        throw e;
+    }
+
+    // Her weight rows, in the shape helpers/invoicePdf.js's packingRowsHtml
+    // reads. One lineItem per row, carrying only the packing block: the
+    // packing list prints no rates and no totals, so the money fields on the
+    // invoice's own line items are deliberately not copied across.
+    // `line_items`, NOT `lineItems`. helpers/invoicePdf.js reads
+    // `data.line_items`, and the first version of this handed it the camelCase
+    // name — which is not an error, it is an EMPTY packing table. The PDF
+    // rendered, the header was right, and every weight row was missing. A
+    // wrong key on an optional field is the quietest bug there is.
+    const line_items = (rec.rows || []).filter((r) => ROW_FIELDS.some((f) => str(r[f]))).map((r) => ({
+        container_no: str(r.container_no) || container,
+        weight: str(r.net_weight_mt),
+        packing: {
+            gross_weight_lbs: str(r.gross_weight_lbs),
+            truck_lbs: str(r.truck_lbs),
+            container_tare_lbs: str(r.container_tare_lbs),
+            chassis_lbs: str(r.chassis_lbs),
+            boxes_weight_lbs: str(r.boxes_weight_lbs),
+            net_weight_lbs: str(r.net_weight_lbs),
+            net_weight_mt: str(r.net_weight_mt),
+        },
+    }));
+    if (!line_items.length) {
+        const e = new Error('This packing list has no weight rows to print.');
+        e.code = 'NO_ROWS';
+        throw e;
+    }
+
+    // The invoice's header, HER rows. Her own container/invoice numbers win
+    // where she has typed one — the scan read them off the paper in front of
+    // her, and a stale invoice payload should not overwrite that.
+    const data = {
+        ...invoice,
+        container_no: container,
+        inv_no: str(rec.invoice_no) || invoice.inv_no,
+        line_items,
+    };
+
+    const { buildInvoiceClassicHtml, renderModes } = require('./invoicePdf');
+    const { html } = buildInvoiceClassicHtml(data);
+    const run = renderer || renderModes;
+    const out = await run(html, ['packing'], {});
+    return out.packing;
+}
+
+// ── DOES IT AGREE WITH THE INVOICE? ────────────────────────────────────────
+// Apsara, 2026-09-16, asked whether a scanned packing list should be checked
+// against its invoice: "Yes — warn me when they disagree."
+//
+// Compared per CONTAINER, on the two figures that matter: net lbs and net mt.
+// Gross and the tare components are the packing list's own working; the net is
+// the number both documents assert, and the one a customer will notice.
+//
+// Returns [] when there is nothing to compare against. "No invoice yet" is not
+// a disagreement, and reporting it as one would teach her to ignore the list.
+function compareToInvoice(record) {
+    const rec = record || {};
+    const container = str(rec.container_no);
+    if (!container) return [];
+
+    let invoice = null;
+    try { invoice = require('./invoiceVersions').getLatestInvoicePayload(container); }
+    catch (e) { console.error('[packingList] could not read the invoice to compare:', e.message); return []; }
+    // The stored payload is whatever the Review & Generate screen posts, and
+    // that screen sends `line_items` — the same key helpers/invoicePdf.js
+    // reads. `lineItems` is accepted as well rather than assumed absent,
+    // because a saved payload from an older client may carry either.
+    const invLines = (Array.isArray(invoice && invoice.line_items) && invoice.line_items)
+        || (Array.isArray(invoice && invoice.lineItems) && invoice.lineItems) || [];
+    if (!invLines.length) return [];
+
+    const num = (v) => {
+        const n = parseFloat(String(v == null ? '' : v).replace(/,/g, '').trim());
+        return isFinite(n) ? n : null;
+    };
+    const byContainer = new Map();
+    for (const li of invLines) {
+        const k = keyOf((li && li.container_no) || invoice.container_no);
+        if (k) byContainer.set(k, li);
+    }
+
+    const out = [];
+    for (const r of (rec.rows || [])) {
+        const k = keyOf(r.container_no || container);
+        const li = byContainer.get(k);
+        if (!li) continue;
+        const p = li.packing || {};
+        // A tonne of slack on lbs and a kilo on mt. Both documents are typed by
+        // hand from the same scale tickets, and flagging a 1 lb rounding would
+        // make the warning noise rather than information.
+        const checks = [
+            ['net weight (lbs)', num(r.net_weight_lbs), num(p.net_weight_lbs), 1],
+            ['net weight (mt)',  num(r.net_weight_mt),  num(p.net_weight_mt) ?? num(li.weight), 0.001],
+        ];
+        for (const [what, mine, theirs, slack] of checks) {
+            if (mine == null || theirs == null) continue;
+            if (Math.abs(mine - theirs) <= slack) continue;
+            out.push({
+                container: r.container_no || container,
+                field: what,
+                packing_list: mine,
+                invoice: theirs,
+                // Said in words, because a client that renders the numbers and
+                // not the sentence leaves her to work out which is which.
+                message: `${r.container_no || container}: the packing list says ${what} ${mine.toLocaleString()}, the invoice says ${theirs.toLocaleString()}.`,
+            });
+        }
+    }
+    return out;
+}
+
 module.exports = {
     ROW_FIELDS, keyOf, buildRecord, loadAll, list, get, save, remove,
-    scan, normaliseScan,
+    scan, normaliseScan, generatePdf, compareToInvoice,
 };

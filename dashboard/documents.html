@@ -302,9 +302,9 @@ body[data-theme="light"] {
       <div style="display:grid; grid-template-columns:repeat(4,1fr); gap:12px; margin-bottom:18px;">
         <div class="field" data-pkfield="customer"><label for="pk_customer">Customer</label><input id="pk_customer" type="text" autocomplete="off"></div>
         <div class="field" data-pkfield="date"><label for="pk_date">Date</label><input id="pk_date" type="date"></div>
-        <div class="field" data-pkfield="weight_unit"><label for="pk_unit">Weight unit</label>
-          <select id="pk_unit"><option value="lb">lb</option><option value="kg">kg</option><option value="mt">mt</option></select>
-        </div>
+        <!-- No unit picker: this document's columns ARE the units
+             (Net lbs and Net mt are separate columns on her packing list),
+             so a unit dropdown would be a second, contradictory answer. -->
       </div>
 
       <div style="font-size:12px; font-weight:700; color:var(--text-strong); margin:4px 0 8px;">Items
@@ -314,8 +314,15 @@ body[data-theme="light"] {
       <button type="button" id="btnPkAddRow" class="btn btn-secondary" style="margin-top:8px; font-size:11px;">+ Add line</button>
       <div id="pkTotals" style="margin-top:14px; font-family:var(--font-mono); font-size:12px; color:var(--text-muted);"></div>
 
-      <div style="display:flex; gap:10px; margin-top:16px; align-items:center;">
-        <button type="button" id="btnPkSave" class="btn btn-primary">Save packing list</button>
+      <!-- Disagreements with the invoice for the same container. Shown on
+           SAVE as well as on Generate, per Apsara 2026-09-16: "Yes — warn me
+           when they disagree." -->
+      <div id="pkWarnings" style="margin-top:12px;"></div>
+
+      <div style="display:flex; gap:10px; margin-top:16px; align-items:center; flex-wrap:wrap;">
+        <button type="button" id="btnPkSave" class="btn btn-secondary">Save</button>
+        <button type="button" id="btnPkPreview" class="btn btn-secondary">Preview PDF</button>
+        <button type="button" id="btnPkGenerate" class="btn btn-primary">Generate &amp; save PDF</button>
         <button type="button" id="btnPkClear" class="btn btn-secondary">Clear</button>
         <span id="pkStatus" style="font-size:12px; color:var(--text-muted);"></span>
       </div>
@@ -4476,13 +4483,20 @@ function bolClearForm() {
 //
 // AND EVERY SCANNED BOX IS MARKED until she touches it, so "which of these did
 // the machine decide?" is answerable by looking rather than by remembering.
+// THE COLUMNS HER PACKING LIST ACTUALLY HAS — a weight breakdown per
+// container, matching assets/invoice-classic/template.html's packing table.
+// The first version of this invented marks/description/pieces without
+// checking, and would have produced a document her customers have never seen.
+// Keep in step with helpers/packingList.js's ROW_FIELDS.
 const PK_COLS = [
-  ['marks', 'Marks', '90px'],
-  ['description', 'Description', '1fr'],
-  ['pieces', 'Pieces', '80px'],
-  ['gross_weight', 'Gross', '110px'],
-  ['net_weight', 'Net', '110px'],
-  ['note', 'Note', '130px'],
+  ['container_no', 'Container', '1.4fr'],
+  ['gross_weight_lbs', 'Gross', '1fr'],
+  ['truck_lbs', 'Truck', '1fr'],
+  ['container_tare_lbs', 'Cont. tare', '1fr'],
+  ['chassis_lbs', 'Chassis', '1fr'],
+  ['boxes_weight_lbs', 'Boxes', '1fr'],
+  ['net_weight_lbs', 'Net (lbs)', '1fr'],
+  ['net_weight_mt', 'Net (mt)', '1fr'],
 ];
 const PK_GRID = PK_COLS.map((c) => c[2]).join(' ') + ' 30px';
 
@@ -4511,6 +4525,8 @@ function pkInit() {
   $('btnPkAddRow').addEventListener('click', () => { pkRows.push(pkBlankRow()); pkPaintItems(); });
   $('btnPkScan').addEventListener('click', () => pkScan());
   $('btnPkSave').addEventListener('click', () => pkSave());
+  $('btnPkPreview').addEventListener('click', () => pkGenerate(true));
+  $('btnPkGenerate').addEventListener('click', () => pkGenerate(false));
   $('btnPkClear').addEventListener('click', () => { if (confirm('Clear this form?')) pkClearForm(); });
   // Any edit clears that box's "read from the document" mark — once she has
   // touched it, it is hers.
@@ -4548,7 +4564,7 @@ function pkPaintItems() {
   // pattern, and here it would put a weight against the wrong material.
   $('pkItems').innerHTML = head + pkRows.map((r, i) => `
     <div style="display:grid; grid-template-columns:${PK_GRID}; gap:8px; margin-bottom:6px; align-items:center;">
-      ${PK_COLS.map(([k]) => `<input data-pi="${i}" data-pf="${k}" type="text" value="${esc(r[k] || '')}"${k === 'pieces' || k === 'gross_weight' || k === 'net_weight' ? ' style="text-align:right; font-family:var(--font-mono);"' : ''}>`).join('')}
+      ${PK_COLS.map(([k]) => `<input data-pi="${i}" data-pf="${k}" type="text" value="${esc(r[k] || '')}"${k === 'container_no' ? ' style="font-family:var(--font-mono);"' : ' style="text-align:right; font-family:var(--font-mono);"'}>`).join('')}
       <button type="button" class="btn btn-secondary pk-del" data-i="${i}" style="padding:4px 8px; font-size:12px;">&times;</button>
     </div>`).join('');
 
@@ -4581,8 +4597,8 @@ function pkPaintTotals() {
     return n == null ? t : t + n;
   }, 0);
   const fmt = (n) => (n ? n.toLocaleString() : '—');
-  const unit = $('pk_unit') ? $('pk_unit').value : 'lb';
-  $('pkTotals').innerHTML = `${pkRows.length} line${pkRows.length === 1 ? '' : 's'} · Pieces ${fmt(sum('pieces'))} · Gross ${fmt(sum('gross_weight'))} · <strong style="color:var(--text-strong);">Net ${fmt(sum('net_weight'))} ${esc(unit)}</strong>`;
+  const mt = sum('net_weight_mt');
+  $('pkTotals').innerHTML = `${pkRows.length} container${pkRows.length === 1 ? '' : 's'} · Gross ${fmt(sum('gross_weight_lbs'))} lbs · <strong style="color:var(--text-strong);">Net ${fmt(sum('net_weight_lbs'))} lbs${mt ? ` · ${mt.toFixed(3)} mt` : ''}</strong>`;
 }
 
 async function pkScan() {
@@ -4616,7 +4632,6 @@ async function pkScan() {
     set('pk_invoice', f.invoice_no);
     set('pk_seal', f.seal_no);
     set('pk_customer', f.customer);
-    if (f.weight_unit && $('pk_unit')) $('pk_unit').value = f.weight_unit;
     // MM/DD/YYYY off the document into the picker's yyyy-mm-dd. A date that
     // silently fails to land is worse than one left blank, so a value that
     // does not parse is left for her rather than guessed at.
@@ -4656,11 +4671,70 @@ function pkPayload() {
     seal_no: $('pk_seal').value.trim(),
     customer: $('pk_customer').value.trim(),
     date: $('pk_date').value,
-    weight_unit: $('pk_unit').value || 'lb',
     rows: pkRows.filter((r) => PK_COLS.some(([k]) => String(r[k] || '').trim())),
     scanned_fields: [...document.querySelectorAll('#panelPacking [data-pkfield]')]
       .filter((b) => b.querySelector('.pk-scanned-tag')).map((b) => b.dataset.pkfield),
   };
+}
+
+// ── WHERE THE PACKING LIST DISAGREES WITH ITS INVOICE ─────────────────────
+// Apsara, 2026-09-16: "Yes — warn me when they disagree."
+//
+// Compared per container on the NET figures — the numbers both documents
+// assert and the ones a customer will notice. Not a blocker: the packing list
+// may be right and the invoice wrong, and only she knows which.
+//
+// Silent when there is nothing to compare against. "No invoice yet" is not a
+// disagreement, and reporting it as one teaches her to stop reading these.
+function pkPaintWarnings(warnings) {
+  const list = warnings || [];
+  if (!list.length) { $('pkWarnings').innerHTML = ''; return; }
+  $('pkWarnings').innerHTML = `
+    <div style="border:1px solid var(--status-warning, #d69e2e); border-radius:var(--radius-sm); padding:10px 12px; font-size:12.5px; color:var(--status-warning, #d69e2e); line-height:1.6;">
+      <strong>This does not match the invoice for the same container.</strong><br>
+      ${list.map((w) => esc(w.message)).join('<br>')}
+      <div style="color:var(--text-muted); margin-top:6px; font-size:11.5px;">Nothing is changed for you — check which one is right.</div>
+    </div>`;
+}
+
+// ── GENERATE ───────────────────────────────────────────────────────────────
+// Apsara, 2026-09-16: "Scan ,fill data auto and generate pdf."
+//
+// Built from what is ON SCREEN, not from what was last saved: she may have
+// corrected a scanned figure and not pressed Save, and printing the older
+// stored version would be the worst kind of surprise on a document going to a
+// customer.
+async function pkGenerate(preview) {
+  const body = pkPayload();
+  if (!body.container_no) { $('pkStatus').textContent = 'Which container? The header comes from that container\'s invoice.'; return; }
+  if (!body.rows.length) { $('pkStatus').textContent = 'Add at least one container row.'; return; }
+  $('pkStatus').textContent = preview ? 'Building preview…' : 'Generating…';
+  $('btnPkGenerate').disabled = true; $('btnPkPreview').disabled = true;
+  try {
+    if (preview) {
+      // The tab is claimed BEFORE the await, or the popup blocker eats it —
+      // documented on the BOL preview, same trap.
+      const tab = window.open('', '_blank');
+      const res = await fetch('/api/packing-lists/generate?preview=1', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+      });
+      if (!res.ok) {
+        if (tab) tab.close();
+        const j = await res.json().catch(() => ({}));
+        throw new Error(j.error || 'could not build the preview');
+      }
+      const url = URL.createObjectURL(await res.blob());
+      if (tab) tab.location = url; else window.location = url;
+      $('pkStatus').textContent = 'Preview opened.';
+      return;
+    }
+    const out = await api('/api/packing-lists/generate', { method: 'POST', body: JSON.stringify(body) });
+    $('pkStatus').textContent = `Saved as ${out.saved_filename}.`;
+    pkPaintWarnings(out.warnings);
+  } catch (e) {
+    $('pkStatus').textContent = e.message;
+  }
+  $('btnPkGenerate').disabled = false; $('btnPkPreview').disabled = false;
 }
 
 async function pkSave() {
@@ -4674,6 +4748,9 @@ async function pkSave() {
     const out = await api('/api/packing-lists', { method: 'POST', body: JSON.stringify(body) });
     pkEditingId = (out && out.packing_list && out.packing_list.id) || pkEditingId;
     $('pkStatus').textContent = `Saved${body.container_no ? ' — ' + body.container_no : ''}.`;
+    // Checked on save as well as on generate: a packing list she files and
+    // never prints can still disagree with its invoice.
+    pkPaintWarnings(out && out.warnings);
     loadSavedPackingLists();
   } catch (e) {
     $('pkStatus').textContent = e.message;
@@ -4684,13 +4761,13 @@ async function pkSave() {
 function pkClearForm() {
   pkEditingId = null;
   ['pk_container', 'pk_booking', 'pk_invoice', 'pk_seal', 'pk_customer'].forEach((id) => { if ($(id)) $(id).value = ''; });
-  if ($('pk_unit')) $('pk_unit').value = 'lb';
   if ($('pk_date')) $('pk_date').value = pkTodayStr();
   document.querySelectorAll('#panelPacking [data-pkfield]').forEach((b) => pkMark(b.dataset.pkfield, false));
   if ($('pkFile')) $('pkFile').value = '';
   $('pkScanStatus').textContent = '';
   $('pkScanNote').textContent = '';
   $('pkStatus').textContent = '';
+  pkPaintWarnings([]);
   pkRows = [pkBlankRow(), pkBlankRow()];
   pkPaintItems();
 }
@@ -4705,7 +4782,6 @@ async function pkEdit(id) {
   $('pk_seal').value = pl.seal_no || '';
   $('pk_customer').value = pl.customer || '';
   $('pk_date').value = pl.date || '';
-  $('pk_unit').value = pl.weight_unit || 'lb';
   pkRows = (pl.rows || []).map((r) => {
     const row = pkBlankRow();
     PK_COLS.forEach(([k]) => { row[k] = r[k] || ''; });

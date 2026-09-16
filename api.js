@@ -5622,9 +5622,67 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
             if (!String(b.container_no || '').trim() && !(Array.isArray(b.rows) && b.rows.length)) {
                 return res.status(400).json({ error: 'A packing list needs at least a container number or one item line.' });
             }
-            const saved = await require('./helpers/packingList').save({ ...b, created_by: req.role || null });
-            res.json({ ok: true, packing_list: saved });
+            const pl = require('./helpers/packingList');
+            const saved = await pl.save({ ...b, created_by: req.role || null });
+            // Checked on SAVE too, not only on Generate. A packing list she
+            // files and never prints can still disagree with its invoice, and
+            // the moment she is looking at it is the moment to say so.
+            res.json({ ok: true, packing_list: saved, warnings: pl.compareToInvoice(saved) });
         } catch (e) { res.status(500).json({ error: e.message }); }
+    });
+
+    // ── GENERATE THE PDF ─────────────────────────────────────────────────
+    // Apsara, 2026-09-16, on what the tab should do: "Scan ,fill data auto and
+    // generate pdf."
+    //
+    // Renders the SAME document the invoice's "Separate invoice & packing
+    // list" flag produces — see helpers/packingList.js's generatePdf for why
+    // it borrows the invoice header rather than asking her to retype it, and
+    // why it refuses rather than printing a headerless page.
+    app.post('/api/packing-lists/generate', requireAdmin, async (req, res) => {
+        try {
+            const pl = require('./helpers/packingList');
+            const body = req.body || {};
+            // Generated from what is ON SCREEN, not from what is stored: she
+            // may have corrected a scanned figure and not saved yet, and a
+            // Generate that quietly printed the older stored version would be
+            // the worst kind of surprise on a document going to a customer.
+            const rec = pl.buildRecord(body, null);
+            const pdf = await pl.generatePdf(rec);
+
+            // The cross-check rides back on the same response rather than
+            // needing a second call — she is looking at the result right now,
+            // which is the moment a disagreement is worth raising.
+            const warnings = pl.compareToInvoice(rec);
+
+            if (req.query.preview === '1') {
+                res.set('Content-Type', 'application/pdf');
+                res.set('Content-Disposition', 'inline; filename="packing-list-preview.pdf"');
+                return res.send(pdf);
+            }
+
+            const safe = documentsSaved.safeName(rec.container_no || 'PACKING').replace(/_+/g, '_');
+            const savedDate = rec.date
+                || new Date().toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' });
+            // Filed in the invoice archive alongside the invoice it belongs
+            // to, under the same container. saveInvoiceCopy's signature is
+            // (buffer, filename, containerNo, dateStr) — getting that order
+            // wrong files the document under a date-shaped container.
+            const savedPath = documentsSaved.saveInvoiceCopy(
+                pdf, `${safe}_packing.pdf`, rec.container_no, savedDate);
+
+            res.json({
+                ok: true,
+                saved_filename: path.basename(savedPath),
+                saved_date: savedDate,
+                warnings,
+            });
+        } catch (e) {
+            // NO_INVOICE / NO_CONTAINER / NO_ROWS all carry a sentence she can
+            // act on; anything else is a real failure and says so.
+            const known = ['NO_INVOICE', 'NO_CONTAINER', 'NO_ROWS'].includes(e.code);
+            res.status(known ? 400 : 500).json({ error: e.message, code: e.code || null });
+        }
     });
 
     app.delete('/api/packing-lists/:id', requireAdmin, async (req, res) => {

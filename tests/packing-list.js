@@ -50,12 +50,27 @@ const pl = require(path.join(ROOT, 'helpers/packingList'));
 const DOCS = fs.readFileSync(path.join(ROOT, 'dashboard/documents.html'), 'utf8');
 
 // What a real packing list for one of her containers looks like coming back.
+//
+// A WEIGHT BREAKDOWN PER CONTAINER — gross, then the four tare components
+// (truck, container, chassis, boxes), then net in lbs and mt. That is the
+// document Edge Metals has been issuing since 2026-09-09 through the invoice's
+// "Separate invoice & packing list" flag.
+//
+// The first version of this fixture used marks/description/pieces, because the
+// first version of the helper invented those columns without checking what her
+// packing list actually has. A scanner reading fields her document does not
+// carry, feeding a PDF in a shape her customers have never seen, would have
+// been worse than no feature.
 const GOOD = {
     container_no: 'TCLU 123 456 7', booking_no: 'BK-2602', invoice_no: '260819_AC_26JY95',
     seal_no: '40217', date: '09/16/2026', customer: 'Eccomelt', weight_unit: 'LBS',
     rows: [
-        { marks: 'B1-B4', description: 'Aluminium Extrusion 6063', pieces: '4', gross_weight: '46,300', net_weight: '42,180' },
-        { marks: 'B5', description: 'Al Breakage', pieces: '1', gross_weight: '2,482', net_weight: '2,362' },
+        { container_no: 'TCLU1234567', gross_weight_lbs: '46,300', truck_lbs: '15,000',
+          container_tare_lbs: '8,000', chassis_lbs: '6,000', boxes_weight_lbs: '500',
+          net_weight_lbs: '16,800', net_weight_mt: '7.620' },
+        { container_no: 'MSKU7654321', gross_weight_lbs: '44,120', truck_lbs: '14,800',
+          container_tare_lbs: '8,000', chassis_lbs: '6,000', boxes_weight_lbs: '420',
+          net_weight_lbs: '14,900', net_weight_mt: '6.758' },
     ],
 };
 
@@ -70,14 +85,24 @@ section('A — what comes back off a document');
     ck('  container number', out.fields.container_no === 'TCLU 123 456 7', out.fields.container_no);
     ck('  booking number', out.fields.booking_no === 'BK-2602');
     ck('  invoice number', out.fields.invoice_no === '260819_AC_26JY95');
-    ck('  and the item rows', out.rows.length === 2, JSON.stringify(out.rows.map((r) => r.description)));
+    ck('  and the container rows', out.rows.length === 2, JSON.stringify(out.rows.map((r) => r.container_no)));
+    // The columns her document actually has. Asserted by name, because the
+    // whole point of this rewrite was that the first set was invented.
+    for (const col of ['gross_weight_lbs', 'truck_lbs', 'container_tare_lbs',
+                       'chassis_lbs', 'boxes_weight_lbs', 'net_weight_lbs', 'net_weight_mt']) {
+        ck(`    ${col} is read`, !!out.rows[0][col], JSON.stringify(out.rows[0]));
+    }
+    ck('    and the columns match the printed template exactly',
+       pl.ROW_FIELDS.filter((f) => f !== 'note').join(',') ===
+       'container_no,gross_weight_lbs,truck_lbs,container_tare_lbs,chassis_lbs,boxes_weight_lbs,net_weight_lbs,net_weight_mt',
+       pl.ROW_FIELDS.join(',') + ' — must stay in step with assets/invoice-classic/template.html');
 
     // ── WEIGHTS STAY AS PRINTED ──────────────────────────────────────────
     // The same rule as the BOL's: "46,300" must read back as "46,300". A
     // figure quietly reformatted cannot be compared to the paper it came off,
     // which is the one check she can actually make.
-    ck('  weights are kept exactly as printed', out.rows[0].gross_weight === '46,300',
-       out.rows[0].gross_weight + ' — 46300 means it was parsed, and a parsed figure cannot be checked against the paper');
+    ck('  weights are kept exactly as printed', out.rows[0].gross_weight_lbs === '46,300',
+       out.rows[0].gross_weight_lbs + ' — 46300 means it was parsed, and a parsed figure cannot be checked against the paper');
 
     // A unit this system understands, not whatever the model typed.
     ck('  "LBS" becomes lb', out.fields.weight_unit === 'lb', out.fields.weight_unit);
@@ -95,7 +120,7 @@ section('B — it does not invent, and it does not crash');
 {
     const sparse = await pl.scan('eA==', 'image/jpeg', { ask: async () => JSON.stringify({
         container_no: 'MSKU7654321', booking_no: null, invoice_no: null,
-        rows: [{ description: 'HMS', pieces: '3' }, {}, { description: null }],
+        rows: [{ container_no: 'MSKU7654321', net_weight_lbs: '3,000' }, {}, { container_no: null }],
     }) });
     ck('a missing booking number stays empty', sparse.fields.booking_no === '', JSON.stringify(sparse.fields.booking_no));
     ck('  and is NOT reported as read', !sparse.scanned_fields.includes('booking_no'),
@@ -178,13 +203,13 @@ section('C — the scan route saves NOTHING');
     const saved = await req('POST', '/api/packing-lists', { sid: admin, body: {
         container_no: 'TCLU1234567', booking_no: 'BK-2602', invoice_no: 'INV-1',
         customer: 'Eccomelt', weight_unit: 'lb',
-        rows: [{ description: 'Al Extrusion', pieces: '4', gross_weight: '46,300', net_weight: '42,180' }],
+        rows: [{ container_no: 'TCLU1234567', gross_weight_lbs: '46,300', net_weight_lbs: '16,800', net_weight_mt: '7.620' }],
         scanned_fields: ['container_no', 'rows'],
     } });
     ck('saving is its own request', saved.status === 200 && !!saved.json.packing_list, JSON.stringify(saved.json));
     ck('  and the weights survive as typed',
-       saved.json.packing_list.rows[0].gross_weight === '46,300',
-       saved.json.packing_list.rows[0].gross_weight);
+       saved.json.packing_list.rows[0].gross_weight_lbs === '46,300',
+       saved.json.packing_list.rows[0].gross_weight_lbs);
     ck('  with a record of which fields were read off the document',
        (saved.json.packing_list.scanned_fields || []).includes('container_no'),
        'six weeks later, "was this typed or read?" is a question with money behind it');
@@ -200,7 +225,7 @@ section('C — the scan route saves NOTHING');
     // document.
     const again = await req('POST', '/api/packing-lists', { sid: admin, body: {
         container_no: 'tclu 123 456 7', booking_no: 'BK-9999',
-        rows: [{ description: 'Al Extrusion', pieces: '5' }],
+        rows: [{ container_no: 'TCLU1234567', net_weight_lbs: '16,900' }],
     } });
     ck('the same container spelled differently REPLACES the list',
        again.json.packing_list.id === saved.json.packing_list.id,
@@ -210,8 +235,8 @@ section('C — the scan route saves NOTHING');
 
     // A list with NO container can only ever be new. Blank keys must never
     // match each other — the trap helpers/oncePerSave.js documents.
-    await req('POST', '/api/packing-lists', { sid: admin, body: { rows: [{ description: 'X' }] } });
-    await req('POST', '/api/packing-lists', { sid: admin, body: { rows: [{ description: 'Y' }] } });
+    await req('POST', '/api/packing-lists', { sid: admin, body: { rows: [{ net_weight_lbs: '1' }] } });
+    await req('POST', '/api/packing-lists', { sid: admin, body: { rows: [{ net_weight_lbs: '2' }] } });
     ck('two lists with no container stay two lists', pl.list().length === 3, `${pl.list().length}`);
 
     // ── DELETE IS AUDITED ────────────────────────────────────────────────
@@ -227,6 +252,93 @@ section('C — the scan route saves NOTHING');
        JSON.stringify(row && row.detail));
 
     server.close();
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+section('C2 — generating the PDF, and checking it against the invoice');
+// ══════════════════════════════════════════════════════════════════════════
+{
+    // Apsara, 2026-09-16, on what the tab should do: "Scan ,fill data auto and
+    // generate pdf", and on cross-checking: "Yes — warn me when they disagree."
+    const iv = require(path.join(ROOT, 'helpers/invoiceVersions'));
+    await iv.saveInvoiceVersion('TCLU1234567', {
+        inv_no: '260819_AC_26JY95', container_no: 'TCLU1234567', consignee: 'Eccomelt Inc',
+        line_items: [{ container_no: 'TCLU1234567', weight: '7.620',
+            packing: { gross_weight_lbs: '46,300', net_weight_lbs: '16,800', net_weight_mt: '7.620' } }],
+    });
+
+    const rec = {
+        container_no: 'TCLU1234567', invoice_no: '260819_AC_26JY95',
+        rows: [{ container_no: 'TCLU1234567', gross_weight_lbs: '46,300', truck_lbs: '15,000',
+                 container_tare_lbs: '8,000', chassis_lbs: '6,000', boxes_weight_lbs: '500',
+                 net_weight_lbs: '16,800', net_weight_mt: '7.620' }],
+    };
+
+    // ── THE SAME DOCUMENT, NOT A SECOND DESIGN ───────────────────────────
+    // Rendered through assets/invoice-classic/template.html's standalone
+    // packing mode — the one the invoice's "Separate" flag has produced since
+    // 2026-09-09. Two designs would mean her customers receiving two
+    // different-looking papers from one company.
+    //
+    // The renderer is INJECTED: Chromium cannot launch in this sandbox, and
+    // what is under test is the data handed to it, not the pixels.
+    let handed = null;
+    const pdf = await pl.generatePdf(rec, { renderer: async (html, modes) => { handed = { html, modes }; return { packing: Buffer.from('%PDF stub') }; } });
+    ck('a PDF comes out', !!pdf && pdf.length > 0);
+    ck('  in the template\'s standalone packing mode', handed.modes.join(',') === 'packing', JSON.stringify(handed.modes));
+
+    // ── THE HEADER COMES FROM THE INVOICE ────────────────────────────────
+    // That template's standalone packing list carries the full invoice header
+    // — exporter, buyer, terms, vessel, four ports. This form holds none of
+    // it and should not: she typed it once already on the invoice for the same
+    // container.
+    ck('  the header is taken from the invoice', /Eccomelt Inc/.test(handed.html),
+       'retyping an exporter block and four ports she has already entered is not a feature');
+    ck('  and HER weight rows are on it',
+       /46,300/.test(handed.html) && /16,800/.test(handed.html) && /6,000/.test(handed.html),
+       'the whole packing table, not just the header');
+
+    // A packing list with a blank exporter block looks finished and is useless
+    // to a broker. Refusing is the right answer, and it says what to do.
+    let err = null;
+    try {
+        await pl.generatePdf({ container_no: 'NOPE1234567', rows: [{ net_weight_lbs: '1' }] },
+                             { renderer: async () => ({ packing: Buffer.from('x') }) });
+    } catch (e) { err = e; }
+    ck('no invoice for that container means it REFUSES', err && err.code === 'NO_INVOICE', String(err && err.code));
+    ck('  saying what to do about it', err && /Make the invoice first/i.test(err.message), err && err.message);
+
+    let err2 = null;
+    try { await pl.generatePdf({ rows: [{ net_weight_lbs: '1' }] }, { renderer: async () => ({}) }); } catch (e) { err2 = e; }
+    ck('  and no container at all is its own refusal', err2 && err2.code === 'NO_CONTAINER', String(err2 && err2.code));
+
+    // ── THE CROSS-CHECK ──────────────────────────────────────────────────
+    ck('a packing list that agrees with its invoice warns about nothing',
+       pl.compareToInvoice(rec).length === 0, JSON.stringify(pl.compareToInvoice(rec)));
+
+    const differ = JSON.parse(JSON.stringify(rec));
+    differ.rows[0].net_weight_lbs = '17,900';
+    const warn = pl.compareToInvoice(differ);
+    ck('a net weight that disagrees IS flagged', warn.length === 1, JSON.stringify(warn));
+    ck('  naming the container and both figures',
+       warn[0] && /TCLU1234567/.test(warn[0].message) && /17,900/.test(warn[0].message) && /16,800/.test(warn[0].message),
+       warn[0] && warn[0].message);
+    ck('  and it is a warning, not a refusal',
+       !!(await pl.generatePdf(differ, { renderer: async () => ({ packing: Buffer.from('x') }) })),
+       'the packing list may be right and the invoice wrong — only she knows which');
+
+    // Rounding must not become noise. Both documents are typed by hand from
+    // the same scale tickets; flagging a 1 lb difference teaches her to ignore
+    // the warning, and then the real one goes past too.
+    const rounded = JSON.parse(JSON.stringify(rec));
+    rounded.rows[0].net_weight_lbs = '16,801';
+    ck('  a 1 lb rounding is NOT flagged', pl.compareToInvoice(rounded).length === 0,
+       JSON.stringify(pl.compareToInvoice(rounded)));
+
+    // "No invoice yet" is not a disagreement.
+    ck('nothing to compare against says nothing',
+       pl.compareToInvoice({ container_no: 'XXXU0000000', rows: [{ net_weight_lbs: '1' }] }).length === 0,
+       'reporting a missing invoice as a mismatch teaches her to stop reading these');
 }
 
 // ══════════════════════════════════════════════════════════════════════════
@@ -264,11 +376,21 @@ section('D — the screen');
 
     // Rows and columns.
     const headers = d.getElementById('pkItems').textContent;
-    for (const col of ['Description', 'Pieces', 'Gross', 'Net']) {
+    for (const col of ['Container', 'Gross', 'Truck', 'Chassis', 'Boxes', 'Net (lbs)', 'Net (mt)']) {
         ck(`  the items table has a ${col} column`, headers.includes(col), headers.slice(0, 120));
     }
     const rows0 = d.querySelectorAll('#pkItems input[data-pi]').length;
     ck('  and starts with blank lines to type into', rows0 > 0, `${rows0} inputs`);
+
+    // She asked for a PDF out of this tab, not just storage.
+    ck('  there is a Generate button', !!d.getElementById('btnPkGenerate'));
+    ck('  and a Preview', !!d.getElementById('btnPkPreview'));
+    ck('  with somewhere to show a disagreement', !!d.getElementById('pkWarnings'));
+    // The preview tab is claimed BEFORE the fetch, or the popup blocker eats
+    // it — documented on the BOL preview, and the same trap here.
+    ck('  the preview opens its tab before the await',
+       /const tab = window\.open\('', '_blank'\);[\s\S]{0,200}await fetch/.test(DOCS),
+       'window.open after an await is swallowed by the popup blocker, silently');
 
     // Adding a line must actually add one.
     d.getElementById('btnPkAddRow').dispatchEvent(new w.MouseEvent('click', { bubbles: true }));
