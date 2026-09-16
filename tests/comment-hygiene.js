@@ -172,12 +172,22 @@ section('C — the document she was sent, rebuilt');
     const rows = [...tbl.matchAll(/<tr[^>]*>[\s\S]*?<\/tr>/g)].map((m) =>
         [...m[0].matchAll(/<t[hd][^>]*>([\s\S]*?)<\/t[hd]>/g)]
             .map((c) => c[1].replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim()));
-    ck('no row claims zero tonnes', !rows.slice(1).some((r2) => r2[4] === '0.000'),
-       rows.slice(1).map((r2) => r2[4]).join(', '));
+    // By NAME, not by position: the Container column is dropped when every row
+    // is the same container (2026-09-16, "Why would i need to repeat container
+    // number?"), which is exactly this fixture. A check that counts from the
+    // left reads the wrong column the day the shape changes, and this file
+    // exists because of a failure nothing noticed.
+    const col = (name) => rows[0].findIndex((h) => h.replace(/\s+/g, ' ').startsWith(name));
+    const mt = col('Net Weight (MT)'), lbs = col('Net Weight (lbs)');
+    ck('no row claims zero tonnes', !rows.slice(1, -1).some((r2) => r2[mt] === '0.000'),
+       rows.slice(1, -1).map((r2) => r2[mt]).join(', '));
     const total = rows[rows.length - 1];
-    ck('  the MT total is the pounds converted', total[4] === '4.127',
-       `${total[4]} — 9,098 lbs is 4.127 mt, and 0.000 is what it printed`);
-    ck('  and the lbs total is unchanged', total[3] === '9,098', total.join(' | '));
+    ck('  the MT total is the pounds converted', total[mt] === '4.127',
+       `${total[mt]} — 9,098 lbs is 4.127 mt, and 0.000 is what it printed`);
+    ck('  and the lbs total is unchanged', total[lbs] === '9,098', total.join(' | '));
+    ck('  and the eight identical containers print once, above the table',
+       /Container: HMMU7060866/.test(html) && !rows[0].some((h) => /Container/.test(h)),
+       rows[0].join(' | '));
 }
 
 console.log(`\n  ${pass} passed, ${fail} failed`);

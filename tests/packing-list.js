@@ -823,22 +823,41 @@ section('F — three items in one container');
                 .map((c) => c[1].replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim()));
     };
 
+    // ── LOOK COLUMNS UP BY NAME, NOT BY POSITION ─────────────────────────
+    // The Container column is dropped when every row is the same container
+    // (Apsara, 2026-09-16: "Why would i need to repeat container number?"), so
+    // a table is five columns or six depending on the DATA as well as the
+    // checkbox. Every assertion below that counted from the left broke the
+    // moment that landed — which is a test-design fault, not a regression:
+    // "the Gross column" is what these checks mean, and that is what they
+    // should ask for.
+    const at = (rows, row, name) => {
+        const i = rows[0].findIndex((h) => h.replace(/\s+/g, ' ').startsWith(name));
+        return i < 0 ? undefined : rows[row][i];
+    };
+
     let shown = null;
     await pl.generatePdf(threeItems, { renderer: async (html) => { shown = tableOf(html); return { packing: Buffer.from('x') }; } });
     ck('every row of the printed table has the same number of cells',
        new Set(shown.map((r) => r.length)).size === 1,
        shown.map((r) => r.length).join(',') + ' — a TOTAL row with the wrong count SHEARS, it does not error');
-    ck('  six columns when the item is shown', shown[0].length === 6, shown[0].join(' | '));
-    ck('  headed Container, Item, Gross, Tare, Net, Net',
-       /Item/.test(shown[0][1]) && /Gross/.test(shown[0][2]), shown[0].join(' | '));
-    ck('  each item on its own line', shown[1][1] === 'Alternator' && shown[3][1] === 'AC compressor',
-       shown.slice(1, 4).map((r) => r[1]).join(' / '));
+    // ── AND THE REPEATED CONTAINER IS GONE ───────────────────────────────
+    // Three items in ONE container: the column would have printed
+    // HMMU7060866 three times. It is stated once, above the table.
+    ck('  no Container column when every row is the same container',
+       !shown[0].some((h) => /Container/.test(h)), shown[0].join(' | '));
+    ck('  five columns: Item, Gross, Tare, Net, Net', shown[0].length === 5, shown[0].join(' | '));
+    ck('  each item on its own line',
+       at(shown, 1, 'Item') === 'Alternator' && at(shown, 3, 'Item') === 'AC compressor',
+       shown.slice(1, 4).map((r) => r[0]).join(' / '));
 
-    const total = shown[shown.length - 1];
-    ck('the TOTAL row carries gross, tare AND net', total[0] === 'TOTAL'
-       && total[2] === '15,000' && total[3] === '1,500' && total[4] === '13,500',
-       total.join(' | ') + ' — gross and tare used to print as blank cells');
-    ck('  and the MT total', total[5] === '6.123', total.join(' | '));
+    const last = shown.length - 1;
+    ck('the TOTAL row carries gross, tare AND net',
+       /TOTAL/.test(shown[last][0])
+       && at(shown, last, 'Gross') === '15,000' && at(shown, last, 'Tare') === '1,500'
+       && at(shown, last, 'Net Weight (lbs)') === '13,500',
+       shown[last].join(' | ') + ' — gross and tare used to print as blank cells');
+    ck('  and the MT total', at(shown, last, 'Net Weight (MT)') === '6.123', shown[last].join(' | '));
 
     // ── AND WITHOUT THE CHECKBOX, NOTHING MOVED ──────────────────────────
     // An invoice generated through "Separate invoice & packing list" prints
@@ -854,9 +873,12 @@ section('F — three items in one container');
     let plainBare = null;
     await pl.generatePdf({ ...threeItems, show_item_in_grid: false, rows: bare },
         { renderer: async (html) => { plainBare = tableOf(html); return { packing: Buffer.from('x') }; } });
-    ck('unticked and unnamed, the table is five columns as before',
-       new Set(plainBare.map((r) => r.length)).size === 1 && plainBare[0].length === 5,
+    ck('unticked and unnamed, every row still has the same cell count',
+       new Set(plainBare.map((r) => r.length)).size === 1,
        plainBare.map((r) => r.length).join(','));
+    ck('  four columns: no Item, and no repeated Container either',
+       plainBare[0].length === 4 && !plainBare[0].some((h) => /Container|Item/.test(h)),
+       plainBare[0].join(' | '));
     // ── BUT NAMED ROWS SHOW THE COLUMN WITHOUT THE CHECKBOX ──────────────
     // Apsara, 2026-09-16: "why item description missing in packing list of
     // invoice tab in docs?" — because the column waited for a checkbox that
@@ -865,10 +887,12 @@ section('F — three items in one container');
     // the box, which is what makes the invoice's own packing list name what is
     // in the container.
     ck('  but rows that name an item show the column anyway',
-       plain.t[0].length === 6 && /Item/.test(plain.t[0][1]),
+       plain.t[0].some((h) => /Item/.test(h)),
        plain.t[0].join(' | ') + ' — a packing list that names nothing is the bug she reported');
-    ck('  and the totals are still right', plainBare[plainBare.length - 1].slice(1).join('|') === '15,000|1,500|13,500|6.123',
-       plainBare[plainBare.length - 1].join(' | '));
+    ck('  and the totals are still right',
+       plainBare[plainBare.length - 1].join('|') === 'TOTAL 15,000|1,500|13,500|6.123',
+       plainBare[plainBare.length - 1].join(' | ')
+       + ' — with neither Container nor Item on the table, the word TOTAL rides on the gross');
     // Her answer when asked where the single description should go: "Printed
     // above the packing table".
     ck('  the one item description prints above the table', /Item: Auto parts/.test(plain.html),
@@ -890,8 +914,8 @@ section('F — three items in one container');
     ck('a blank row does not print', withBlank.length === shown.length,
        `${withBlank.length} rows vs ${shown.length} — "- | 0 | 0 | 0.000" on a customer's packing list`);
     ck('  and neither does an item with no weighing behind it',
-       !withBlank.some((r) => r[1] === 'Radiator'),
-       withBlank.map((r) => r[1]).join(' / '));
+       !withBlank.some((r) => r[0] === 'Radiator'),
+       withBlank.map((r) => r[0]).join(' / '));
 
     // ── THE WARNING IS PER CONTAINER, NOT PER ROW ────────────────────────
     ck('three items that add up to the invoice warn about NOTHING',

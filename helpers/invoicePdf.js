@@ -342,27 +342,60 @@ function buildInvoiceClassicHtml(data) {
     let totalNetLbs = 0, totalNetMt = 0, totalGrossLbs = null, totalTareLbs = null;
     const addUp = (acc, v) => (v == null ? acc : (acc == null ? v : acc + v));
 
+    // ── DOES THE CONTAINER COLUMN SAY ANYTHING? ──────────────────────────
+    // Apsara, 2026-09-16, looking at a forty-row sample: "Why would i need to
+    // repeat container number?"
+    //
+    // She does not. A bundle tally is forty weighings of ONE container, and a
+    // column printing HMMU7060866 forty times is the same column she had me
+    // remove from the entry grid a few hours earlier ("remove container in
+    // item grid") — I took it out of the form she types into and left it on
+    // the paper her customer reads.
+    //
+    // So the column earns its place only when the rows actually DIFFER. When
+    // they are all one container it is dropped and the number is stated ONCE,
+    // above the table, where it reads as a fact about the shipment rather than
+    // as data.
+    //
+    // ── ONLY WHEN THERE IS REPETITION TO REMOVE ──────────────────────────
+    // A single-row table is not repetition, so a one-container invoice's
+    // packing list keeps the exact shape it has had since 2026-09-09. The only
+    // documents that change are the ones that were saying the same thing
+    // several times over.
+    const containersOn = [...new Set(lineItems
+        .map((it) => String((it && it.container_no) || data.container_no || '').trim())
+        .filter(Boolean))];
+    const oneContainer = lineItems.length > 1 && containersOn.length === 1;
+    const containerWidth = showItem ? '18%' : '22%';
+    // The width the dropped column gives back, shared out among the weights so
+    // the table still fills the page rather than ending in white space.
+    const spare = oneContainer ? Number(containerWidth.replace('%', '')) / (showItem ? 5 : 4) : 0;
+    const w = (pct) => `${(Number(pct.replace('%', '')) + spare).toFixed(1)}%`;
+
     const PACKING_COLUMNS = [
-        { head: 'Container', width: showItem ? '18%' : '22%',
+        ...(oneContainer ? [] : [{ head: 'Container', width: containerWidth,
           cell: (item) => escapeHtml(item.container_no || data.container_no),
-          total: 'TOTAL' },
+          total: 'TOTAL' }]),
         // `item` is what the packing-list screen sends; `item_desc` is what an
         // invoice line item has always been called. One column, either source
         // — reading only one of them is how this went missing in the first
         // place.
-        ...(showItem ? [{ head: 'Item', width: '16%',
-          cell: (item) => escapeHtml(item.item || item.item_desc || ''), total: '' }] : []),
-        { head: 'Gross Weight<br>(lbs)', width: showItem ? '17%' : '20%',
+        ...(showItem ? [{ head: 'Item', width: w('16%'),
+          cell: (item) => escapeHtml(item.item || item.item_desc || ''),
+          // With no Container column, something has to carry the word TOTAL or
+          // the last row is a line of figures with no label on it.
+          total: oneContainer ? 'TOTAL' : '' }] : []),
+        { head: 'Gross Weight<br>(lbs)', width: w(showItem ? '17%' : '20%'),
           cell: (item, p) => escapeHtml(p.gross_weight_lbs || '-'),
           total: () => (totalGrossLbs == null ? '' : formatInt(totalGrossLbs)) },
-        { head: 'Tare<br>(lbs)', width: showItem ? '16%' : '20%',
+        { head: 'Tare<br>(lbs)', width: w(showItem ? '16%' : '20%'),
           cell: (item, p) => { const t = require('./packingList').tareOf(p);
                                return escapeHtml(t == null ? '-' : t.toLocaleString('en-US')); },
           total: () => (totalTareLbs == null ? '' : formatInt(totalTareLbs)) },
-        { head: 'Net Weight<br>(lbs)', width: showItem ? '17%' : '20%',
+        { head: 'Net Weight<br>(lbs)', width: w(showItem ? '17%' : '20%'),
           cell: (item, p, netLbs) => escapeHtml(p.net_weight_lbs || formatInt(netLbs)),
           total: () => formatInt(totalNetLbs) },
-        { head: 'Net Weight<br>(MT)', width: showItem ? '16%' : '18%',
+        { head: 'Net Weight<br>(MT)', width: w(showItem ? '16%' : '18%'),
           // A dash, not 0.000, when there is genuinely nothing: a printed zero
           // is a CLAIM that the container weighed nothing, and a blank is an
           // absence. The same rule tareOf follows, on the same document.
@@ -423,6 +456,13 @@ function buildInvoiceClassicHtml(data) {
     // render. Hence the thunks in `total` above — reading the variables at
     // declaration time would print zeroes.
     const packingTotalCellsHtml = PACKING_COLUMNS.map((c, i) => {
+        // Neither Container nor Item on the table: the first column is Gross,
+        // and it takes the label. A total row of bare figures is one a reader
+        // has to work out from its shading.
+        if (oneContainer && !showItem && i === 0) {
+            return '          <td style="padding:2mm 1mm;font-weight:700;font-size:10pt;text-align:center;vertical-align:middle;border:1pt solid black;">'
+                 + `TOTAL ${totalGrossLbs == null ? '' : formatInt(totalGrossLbs)}</td>`;
+        }
         const v = typeof c.total === 'function' ? c.total() : c.total;
         const style = v
             ? 'padding:2mm 1mm;font-weight:700;font-size:10pt;text-align:center;vertical-align:middle;border:1pt solid black;'
@@ -435,8 +475,17 @@ function buildInvoiceClassicHtml(data) {
     // the packing table". Empty when she has not named one — a stray "Item:"
     // with nothing after it looks like a field that failed to fill.
     const itemDesc = String(data.packing_item_description || '').trim();
-    const packingItemLineHtml = itemDesc
-        ? `    <div class="seam" style="padding:1.5mm 2mm;font-size:10pt;font-weight:700;border-left:0.8pt solid var(--black);border-right:0.8pt solid var(--black);">Item: ${escapeHtml(itemDesc)}</div>`
+    // Stated ONCE when every row is the same container — see the note on
+    // PACKING_COLUMNS. It is not anywhere else on this document: the standalone
+    // packing list's header carries the exporter, the invoice number and the
+    // ports, but no container, so dropping the column without saying it here
+    // would lose it from the page entirely.
+    const aboveTable = [
+        oneContainer ? `Container: ${escapeHtml(containersOn[0])}` : '',
+        itemDesc ? `Item: ${escapeHtml(itemDesc)}` : '',
+    ].filter(Boolean).join(' &nbsp;|&nbsp; ');
+    const packingItemLineHtml = aboveTable
+        ? `    <div class="seam" style="padding:1.5mm 2mm;font-size:10pt;font-weight:700;border-left:0.8pt solid var(--black);border-right:0.8pt solid var(--black);">${aboveTable}</div>`
         : '';
 
     let html = loadTemplate();
