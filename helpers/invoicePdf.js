@@ -633,13 +633,21 @@ function buildInvoiceClassicHtml(data) {
 // ONE browser, N renders. Chromium launch is by far the most expensive part
 // of this (~1s), so producing two documents must not pay it twice.
 async function renderModes(html, modes, opts) {
+    // ── WHERE THE SECONDS GO ─────────────────────────────────────────────
+    // Apsara, 2026-09-16: "why invoice and bol takes more time to generate?"
+    // Measured, not reasoned about — see helpers/pdfTiming.js. The phases are
+    // named for the four things this function does, in order, so the log line
+    // answers the question directly rather than needing arithmetic.
+    const timer = require('./pdfTiming').start(`invoice ${(modes || []).join('+')}`);
     const browser = await puppeteer.launch({
         headless: true,
         args: opts.launchArgs || ['--no-sandbox', '--disable-setuid-sandbox'],
     });
+    timer.mark('launch-chromium');
     try {
         const page = await browser.newPage();
         await page.setContent(html, { waitUntil: 'networkidle0' });
+        timer.mark('load-page');
         const out = {};
         for (const mode of modes) {
             // The mode is a BODY CLASS, and the CSS in the template hides the
@@ -671,7 +679,7 @@ async function renderModes(html, modes, opts) {
                 // measures against that, not against the 816px width above.
                 // Saying only the width let it default to 297 by luck rather
                 // than by statement.
-            }, { pageHeightMm: 297, pageWidthMm: 210, label: `invoice ${mode}` });
+            }, { pageHeightMm: 297, pageWidthMm: 210, timer, label: `invoice ${mode}` });
             // Same Uint8Array -> Buffer gotcha documented in proformaPdf.js —
             // res.send() needs a real Buffer or it JSON-stringifies byte-by-byte.
             out[mode] = Buffer.from(pdf);
@@ -679,6 +687,8 @@ async function renderModes(html, modes, opts) {
         return out;
     } finally {
         await browser.close();
+        timer.mark('close-chromium');
+        timer.done({ html_kb: Math.round(String(html || '').length / 1024), modes: (modes || []).length });
     }
 }
 

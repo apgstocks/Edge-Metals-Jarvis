@@ -5754,6 +5754,24 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
     // A SUGGESTION ONLY — nothing is reserved until a document is generated,
     // because a number consumed by opening a screen leaves a gap in a series
     // a buyer can see. /api/bol/generate does the reserving.
+    // ── WHERE THE SECONDS GO ────────────────────────────────────────────
+    // Apsara, 2026-09-16: "why invoice and bol takes more time to generate?"
+    //
+    // Every generate logs one [PDF-TIME] line to pm2; this is the same data
+    // without needing shell access, plus a rollup by document kind, which is
+    // the shape that actually answers the question: not "that one took 4s" but
+    // "launching Chromium is 60% of every document".
+    //
+    // In memory and capped at the last fifty. Admin-only for no security
+    // reason beyond consistency — it holds document numbers and durations,
+    // nothing else.
+    app.get('/api/pdf-timings', requireAdmin, (req, res) => {
+        try {
+            const t = require('./helpers/pdfTiming');
+            res.json({ summary: t.summary(), recent: t.recent(Number(req.query.n) || 20) });
+        } catch (e) { res.status(500).json({ error: e.message }); }
+    });
+
     app.get('/api/bols/next-number', requireAdmin, (req, res) => {
         try {
             const n = require('./helpers/bolNumbers');

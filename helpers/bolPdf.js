@@ -377,14 +377,24 @@ ${item_rows}
 }
 
 async function generateBolPdf(data, opts = {}) {
+    // ── WHERE THE SECONDS GO ─────────────────────────────────────────────
+    // Apsara, 2026-09-16: "why invoice and bol takes more time to generate?"
+    // Measured rather than reasoned about — see helpers/pdfTiming.js. The
+    // BOL's html is ~625KB, of which ~615KB is five fonts inlined as base64,
+    // so `html` is reported alongside the phases: if setContent is the slow
+    // one, that is why.
+    const timer = require('./pdfTiming').start(`bol ${(data && data.bol_no) || ''}`.trim());
     const { html } = buildBolHtml(data);
+    timer.mark('build-html');
     const browser = await puppeteer.launch({
         headless: true,
         args: opts.launchArgs || ['--no-sandbox', '--disable-setuid-sandbox'],
     });
+    timer.mark('launch-chromium');
     try {
         const page = await browser.newPage();
         await page.setContent(html, { waitUntil: 'networkidle0' });
+        timer.mark('load-page');
         const { pdfFittedToOnePage } = require('./pdfFit');
         // One page. A BOL that runs to two is a BOL whose second page gets
         // left on the desk, and the signatures live at the bottom.
@@ -392,12 +402,15 @@ async function generateBolPdf(data, opts = {}) {
             width: '8.5in',
             printBackground: true,
             preferCSSPageSize: true,
-        }, { pageWidthMm: 215.9, pageHeightMm: 279.4, label: `bol ${data && data.bol_no ? data.bol_no : ''}`.trim() });
+        }, { pageWidthMm: 215.9, pageHeightMm: 279.4, timer,
+             label: `bol ${data && data.bol_no ? data.bol_no : ''}`.trim() });
         // puppeteer resolves page.pdf() with a Uint8Array, not a Buffer —
         // res.send() JSON-stringifies it byte by byte without this.
         return Buffer.from(pdf);
     } finally {
         await browser.close();
+        timer.mark('close-chromium');
+        timer.done({ html_kb: Math.round(html.length / 1024) });
     }
 }
 

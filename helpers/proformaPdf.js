@@ -248,14 +248,22 @@ function buildProformaDc2Html(data) {
 // pass `['--no-sandbox']` etc. if the deploy VM needs it (common on some
 // Linux hosts running as root) without hardcoding that here.
 async function generateProformaDc2Pdf(data, opts = {}) {
+    // Timed as well, though Apsara asked about the invoice and the BOL: the
+    // three renderers share a shape, and a baseline from the one she has NOT
+    // complained about is what says whether the other two are slow for a
+    // reason of their own or whether every document costs this.
+    const timer = require('./pdfTiming').start(`proforma ${(data && data.inv_no) || ''}`.trim());
     const { html } = buildProformaDc2Html(data);
+    timer.mark('build-html');
     const browser = await puppeteer.launch({
         headless: true,
         args: opts.launchArgs || ['--no-sandbox', '--disable-setuid-sandbox'],
     });
+    timer.mark('launch-chromium');
     try {
         const page = await browser.newPage();
         await page.setContent(html, { waitUntil: 'networkidle0' });
+        timer.mark('load-page');
         // One page, same rule as the invoice (Apsara 2026-08-29). This
         // template's @page is 816x1500px rather than A4, and 1500px is
         // generous, so in practice this never scales — it is here so a
@@ -266,7 +274,8 @@ async function generateProformaDc2Pdf(data, opts = {}) {
             width: '816px',
             printBackground: true,
             preferCSSPageSize: true,
-        }, { pageHeightPx: 1500, pageWidthPx: 816, label: `proforma ${data && data.inv_no ? data.inv_no : ''}`.trim() });
+        }, { pageHeightPx: 1500, pageWidthPx: 816, timer,
+             label: `proforma ${data && data.inv_no ? data.inv_no : ''}`.trim() });
         // puppeteer resolves page.pdf() with a Uint8Array, not a Node
         // Buffer — Buffer.isBuffer(Uint8Array) is false, so passing it
         // straight to Express's res.send() gets JSON-stringified byte-by-
@@ -277,6 +286,8 @@ async function generateProformaDc2Pdf(data, opts = {}) {
         return Buffer.from(pdf);
     } finally {
         await browser.close();
+        timer.mark('close-chromium');
+        timer.done({ html_kb: Math.round(html.length / 1024) });
     }
 }
 

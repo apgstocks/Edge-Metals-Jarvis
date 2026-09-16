@@ -303,11 +303,20 @@ async function pdfFittedToOnePage(page, pdfOptions = {}, opts = {}) {
     const targetPx = pageHeightMm * PX_PER_MM;
     let scale = 1;
     let paginating = false;
+    // Optional, and optional on purpose: every existing caller works unchanged
+    // and a missing stopwatch costs a measurement, not a document.
+    // (2026-09-16, "why invoice and bol takes more time to generate?")
+    const timer = opts.timer || null;
+    const mark = (name) => { try { if (timer) timer.mark(name); } catch (e) {} };
     try {
         // STEP 1 — reclaim empty space, at full size. This is the step that
         // handles the ordinary case: her invoice was ~100px over, and the top
         // and bottom margins alone give back ~113px.
         const trimmed = await trimToFit(page, targetPx);
+        // How much of the wait is the FITTER — the measure/restyle/measure
+        // loop, which costs one round trip to Chrome per step and is the part
+        // that is invisible from the outside.
+        mark(`fit(${trimmed.applied.length + 1} passes)`);
 
         if (trimmed.fits) {
             if (trimmed.applied.length) {
@@ -376,7 +385,9 @@ async function pdfFittedToOnePage(page, pdfOptions = {}, opts = {}) {
             margin: { ...(pdfOptions.margin || {}), bottom: '10mm' } }
         : { ...pdfOptions, scale: safe };
 
-    return page.pdf(finalOptions);
+    const out = await page.pdf(finalOptions);
+    mark('render');
+    return out;
 }
 
 module.exports = { pdfFittedToOnePage, scaleToFit, centringOffsetPx, trimToFit, measureAndMark, measureContentPx, RELIEFS, MIN_SCALE, SAFETY, PX_PER_MM, PAGINATION_CSS, PAGE_FOOTER };
