@@ -231,81 +231,100 @@ function buildBolHtml(data) {
     const blank = (v) => (String(v || '').trim() ? '' : ' empty');
     const orDash = (v) => (String(v || '').trim() ? String(v).trim() : '—');
 
-    // ── THE FIELDS THIS CUSTOMER'S BOL CARRIES ───────────────────────────
-    // Apsara, 2026-09-16: "For different customer,i can have different field
-    // in bol". The two fixed rows the template used to hard-code are built
-    // here from helpers/bolLayouts.js.
+    // ── THE LAYOUT GRID ──────────────────────────────────────────────────
+    // Apsara, 2026-09-16: "what if i want them in different places.change the
+    // position and size", and on the required blocks: "Let me move them too."
     //
-    // DATE IS FIRST AND CANNOT BE TURNED OFF. It is not in the layout's
-    // optional list at all — an undated bill of lading is not a document
-    // anyone can act on, and this is not a decision worth leaving to a
-    // screen where it could be switched off by accident.
+    // Twelve columns. Every block on the document — the consignee card, the
+    // number, the date, each optional field, the goods table and the notes —
+    // is placed by her layout. helpers/bolLayouts.js explains why a grid
+    // rather than free X/Y; the short version is that a grid cannot produce
+    // two boxes on top of each other or a field half off the paper, and those
+    // are the only things free positioning would have bought that she would
+    // never actually want.
     //
-    // The layout is passed IN (d.layout) rather than read from disk here, so
-    // this stays a pure function of its argument: every test in tests/bol.js
-    // calls it directly, and a helper that quietly loaded a file would make
-    // those tests depend on whatever layouts happen to exist. The caller —
-    // api.js's /api/bol/generate — resolves it.
-    const factValue = {
-        po_number:      { label: 'PO NUMBER',      value: orDash(d.po_number),      raw: d.po_number },
-        appointment_id: { label: 'APPOINTMENT ID', value: orDash(d.appointment_id), raw: d.appointment_id },
-        pickup:         { label: 'PICKUP',         value: pickup || '—',            raw: pickup },
-        carrier:        { label: 'CARRIER',        value: orDash(d.carrier),        raw: d.carrier },
-        driver:         { label: 'DRIVER',         value: orDash(d.driver),         raw: d.driver },
-        container_no:   { label: 'CONTAINER',      value: orDash(d.container_no),   raw: d.container_no },
-        seal_no:        { label: 'SEAL',           value: orDash(d.seal_no),        raw: d.seal_no },
+    // The layout is passed IN (d.layout) rather than read from disk, so this
+    // stays a pure function of its argument — every test in tests/bol.js calls
+    // it directly, and a helper that quietly loaded a file would make those
+    // tests depend on whatever layouts happen to exist.
+    const L = require('./bolLayouts');
+
+    // Each block, as the HTML that goes inside its grid cell. A block with no
+    // renderer here is skipped rather than guessed at.
+    const factBox = (label, value, raw) => `<div class="fact"><div class="lbl">${escapeHtml(label)}</div><div class="v${blank(raw)}">${escapeHtml(value)}</div></div>`;
+
+    const BLOCK = {
+        consignee: () => `<div class="card to"><div class="lbl">CONSIGNEE</div><div class="nm">${escapeHtml(consigneeName || '—')}</div><div class="ad">${lines.map(escapeHtml).join('<br>')}</div></div>`,
+        bol_no:    () => factBox('BOL NUMBER', orDash(d.bol_no), d.bol_no),
+        bol_date:  () => factBox('DATE', d.bol_date ? formatDate(d.bol_date) : '—', d.bol_date),
+        po_number:      () => factBox('PO NUMBER', orDash(d.po_number), d.po_number),
+        appointment_id: () => factBox('APPOINTMENT ID', orDash(d.appointment_id), d.appointment_id),
+        pickup:         () => factBox('PICKUP', pickup || '—', pickup),
+        carrier:        () => factBox('CARRIER', orDash(d.carrier), d.carrier),
+        driver:         () => factBox('DRIVER', orDash(d.driver), d.driver),
+        container_no:   () => factBox('CONTAINER', orDash(d.container_no), d.container_no),
+        seal_no:        () => factBox('SEAL', orDash(d.seal_no), d.seal_no),
+        goods: () => `<table class="goods">
+      <tr>
+        <th class="desc">DESCRIPTION OF GOODS</th>
+        <th style="width:52pt;">PIECES</th>
+        <th style="width:66pt;">GROSS</th>
+        <th style="width:60pt;">TARE</th>
+        <th style="width:66pt;">NET</th>
+      </tr>
+${item_rows}
+      <tr class="total">
+        <td class="desc">Total <span class="unit">(${escapeHtml(unit)})</span></td>
+        <td>${escapeHtml(fmtCount(t.pieces))}</td>
+        <td>${escapeHtml(fmtWeight(t.gross_weight))}</td>
+        <td>${escapeHtml(fmtWeight(t.tare_weight))}</td>
+        <td>${escapeHtml(fmtWeight(t.net_weight))}</td>
+      </tr>
+    </table>`,
+        notes: () => notes_block,
     };
 
-    const layout = Array.isArray(d.layout) && d.layout.length
-        ? d.layout.filter((f) => f && f.shown !== false)
-        // No layout supplied means the document she has always had: the seven
-        // optional fields in their original order. A missing layout must never
-        // mean an EMPTY document — the same "blank never silently means a
-        // default" rule the rest of this project runs on, pointed the other way.
-        : ['po_number', 'appointment_id', 'pickup', 'carrier', 'driver', 'container_no', 'seal_no'].map((key) => ({ key }));
+    // A field she named herself. Its VALUE comes from the BOL's custom_fields,
+    // keyed by the layout key.
+    const customBlock = (f) => {
+        const label = String(f.label || '').trim();
+        if (!label) return '';
+        const v = (d.custom_fields || {})[f.key];
+        return factBox(label.toUpperCase(), orDash(v), v);
+    };
 
-    const cells = [{ label: 'DATE', value: d.bol_date ? formatDate(d.bol_date) : '', cls: '' }];
-    for (const f of layout) {
-        const known = factValue[f.key];
-        if (known) { cells.push({ label: known.label, value: known.value, cls: blank(known.raw) }); continue; }
-        // A field she named herself. 'notes' has its own block further down
-        // the template and is handled there, so it is not a fact cell.
-        if (f.key === 'notes') continue;
-        if (String(f.key || '').startsWith('custom:')) {
-            const label = String(f.label || '').trim();
-            if (!label) continue;
-            const v = (d.custom_fields || {})[f.key];
-            cells.push({ label: label.toUpperCase(), value: orDash(v), cls: blank(v) });
-        }
-    }
+    // No layout supplied means the document she has always had. A missing
+    // layout must NEVER mean an empty document — the same "blank never
+    // silently means a default" rule the rest of this project runs on,
+    // pointed the other way.
+    const layoutFields = (Array.isArray(d.layout) && d.layout.length)
+        ? L.decorate(d.layout)
+        : L.defaultFields();
 
-    // Four to a row, which is the grid the template's .facts class is built
-    // for. A short final row simply has fewer boxes.
-    const fact_rows = [];
-    for (let i = 0; i < cells.length; i += 4) {
-        fact_rows.push('    <div class="facts">\n' + cells.slice(i, i + 4).map((c) =>
-            `      <div class="fact"><div class="lbl">${escapeHtml(c.label)}</div><div class="v${c.cls}">${escapeHtml(c.value)}</div></div>`
-        ).join('\n') + '\n    </div>');
-    }
+    const layout_rows = L.rowsFor(layoutFields).map((row) => {
+        const cells = row.fields.map((f) => {
+            const html = f.custom ? customBlock(f) : (BLOCK[f.key] ? BLOCK[f.key]() : '');
+            if (!html) return '';
+            return `<div style="grid-column:span ${f.span};">${html}</div>`;
+        }).filter(Boolean);
+        if (!cells.length) return '';
+        return '    <div class="grid">\n      ' + cells.join('\n      ') + '\n    </div>';
+    }).filter(Boolean).join('\n');
 
     const subs = {
-        fact_rows: fact_rows.join('\n\n'),
+        layout_rows,
         bol_no: escapeHtml(d.bol_no || ''),
         bol_date: escapeHtml(d.bol_date ? formatDate(d.bol_date) : ''),
-        consignee_name: escapeHtml(consigneeName || '—'),
-        consignee_address_lines: lines.map(escapeHtml).join('<br>'),
         // The seven per-field substitutions that used to live here are gone:
         // the template no longer names them, because fact_rows above decides
         // which of them appear and in what order. Left-behind substitutions
         // for placeholders that no longer exist read like live code and send
         // the next person looking for a template that stopped using them.
-        item_rows,
         weight_unit: escapeHtml(unit),
         total_pieces: escapeHtml(fmtCount(t.pieces)),
         total_gross: escapeHtml(fmtWeight(t.gross_weight)),
         total_tare: escapeHtml(fmtWeight(t.tare_weight)),
         total_net: escapeHtml(fmtWeight(t.net_weight)),
-        notes_block,
         // ── THE SHIPPER'S SIGNATURE ──────────────────────────────────────
         // Apsara, 2026-09-16: "Give chandra bose sign to shipper".
         //

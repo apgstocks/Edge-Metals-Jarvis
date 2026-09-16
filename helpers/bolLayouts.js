@@ -57,15 +57,58 @@ const OPTIONAL_FIELDS = [
     { key: 'notes',          label: 'Notes',            keys: ['notes'] },
 ];
 
-// Never optional. Listed here so a screen can SHOW that they are fixed rather
-// than leaving her wondering why Consignee has no handle — but they are not
-// part of any stored layout and sanitise() will not accept them.
+// ── REQUIRED, BUT NOT FIXED IN PLACE ────────────────────────────────────────
+// Apsara, 2026-09-16, choosing between locking these and not: "Let me move
+// them too."
+//
+// So they are PLACEABLE — she can move and resize them like anything else —
+// and they are NOT HIDEABLE. Those are different properties and the split is
+// deliberate: where the consignee sits on the page is a matter of taste, and a
+// bill of lading with no consignee on it is not a bill of lading. sanitise()
+// below re-adds any of these that a layout leaves out, always shown.
+//
+// Some are naturally full width. `min_span` is a floor, not a lock: the goods
+// table has five columns of its own and stops being readable squeezed into a
+// quarter of the page.
 const REQUIRED_FIELDS = [
-    { key: 'consignee', label: 'Consignee name and address' },
-    { key: 'bol_no',    label: 'BOL number' },
-    { key: 'bol_date',  label: 'Date' },
-    { key: 'goods',     label: 'Goods — commodity, pieces, gross, tare, net' },
+    { key: 'consignee', label: 'Consignee name and address', span: 12, min_span: 6 },
+    { key: 'bol_no',    label: 'BOL number',                 span: 3,  min_span: 2 },
+    { key: 'bol_date',  label: 'Date',                       span: 3,  min_span: 2 },
+    { key: 'goods',     label: 'Goods — commodity, pieces, gross, tare, net', span: 12, min_span: 8 },
 ];
+const REQUIRED_KEYS = new Set(REQUIRED_FIELDS.map((f) => f.key));
+const requiredByKey = new Map(REQUIRED_FIELDS.map((f) => [f.key, f]));
+
+// ── THE GRID ────────────────────────────────────────────────────────────────
+// Twelve columns, which divides by 2, 3, 4 and 6 — so a half, a third and a
+// quarter are all exact and a row always closes cleanly.
+//
+// A field carries a `row` and a `span`; its position WITHIN a row is its order
+// in the list. That is what makes overlap impossible by construction rather
+// than by validation: two boxes cannot occupy one cell if cells are never
+// addressed directly. She still gets "different places and different size" —
+// any row, any order, any of five widths — without a layout that can put the
+// carrier on top of the seal.
+//
+// A row that does not add up to 12 simply leaves white space, which is how
+// gaps are made.
+const GRID_COLUMNS = 12;
+// `fallback` is the field's NATURAL width, not the full page. Defaulting a
+// missing span to 12 was the first version, and it was the bug that lost the
+// goods table: three required blocks arriving without spans each claimed the
+// whole row, so only the first one fitted. A field with no stated width should
+// take the width it has always had.
+const clampSpan = (n, min, fallback) => {
+    const v = Math.round(Number(n));
+    if (!isFinite(v)) return Math.max(min || 1, fallback || 3);
+    return Math.max(min || 1, Math.min(GRID_COLUMNS, v));
+};
+const clampRow = (n) => {
+    const v = Math.round(Number(n));
+    // Rows are renumbered densely on the way out (see sanitise), so an absurd
+    // value cannot open a hundred blank rows on the document.
+    return isFinite(v) && v >= 0 ? Math.min(99, v) : 0;
+};
 
 const OPTIONAL_KEYS = OPTIONAL_FIELDS.map((f) => f.key);
 const byKey = new Map(OPTIONAL_FIELDS.map((f) => [f.key, f]));
@@ -91,8 +134,64 @@ function customerKey(name) {
 // catalogue order. Deliberately everything-on — a BOL with too many boxes is
 // a document she can tidy, while one missing the field her buyer needs is a
 // rejected delivery. Erring toward more is the cheap direction.
+// The layout that reproduces the document she has always had: consignee across
+// the top, number and date beside it, the optional fields four to a row, goods
+// across the bottom. Rows and spans are explicit so a fresh layout is a real
+// grid she can start dragging, not a special case the renderer has to guess at.
 function defaultFields() {
-    return OPTIONAL_FIELDS.map((f) => ({ key: f.key, label: f.label, shown: true, custom: false }));
+    const out = [
+        { key: 'consignee', row: 0, span: 12 },
+        { key: 'bol_no',    row: 1, span: 3 },
+        { key: 'bol_date',  row: 1, span: 3 },
+    ];
+    // Optional fields, three to a row after the number and date.
+    OPTIONAL_FIELDS.forEach((f, i) => {
+        if (f.key === 'notes') return;            // its own full-width block
+        out.push({ key: f.key, row: 1 + Math.floor((i + 2) / 4), span: 3 });
+    });
+    // 90/91 keep these last whatever the loop above produced; packRows
+    // renumbers them densely, so the stored layout never carries the gap.
+    out.push({ key: 'goods', row: 90, span: 12 });
+    out.push({ key: 'notes', row: 91, span: 12 });
+    return packRows(decorate(out.map((f) => ({ ...f, shown: true, custom: false }))));
+}
+
+// Fills in the label, min_span and required flag from the catalogue, so a
+// stored layout never has to carry them and can never disagree with it. A
+// label stored on a catalogue field would be the thing that goes stale when a
+// field is renamed here.
+function decorate(fields) {
+    return fields.map((f) => {
+        const req = requiredByKey.get(f.key);
+        const opt = byKey.get(f.key);
+        return {
+            key: f.key,
+            label: f.custom ? f.label : ((req || opt || {}).label || f.label || f.key),
+            shown: req ? true : f.shown !== false,
+            custom: !!f.custom,
+            required: !!req,
+            // A row that was never stated stays unstated here; sanitise gives
+            // it one of its own rather than piling everything onto row 0.
+            row: Number.isFinite(Number(f.row)) ? clampRow(f.row) : null,
+            span: clampSpan(f.span, req ? req.min_span : 1, req ? req.span : 3),
+            min_span: req ? req.min_span : 1,
+        };
+    });
+}
+
+// Renumbers rows densely (0,1,2…) keeping her order, so a layout cannot carry
+// a gap of eighty empty rows into the PDF. Applied on the way OUT, so dragging
+// a field to "row 90" while rearranging is harmless.
+function packRows(fields) {
+    // Anything with no row of its own gets one at the end, in order — never
+    // row 0, which is how unstated fields used to collide with each other.
+    let next = fields.reduce((m, f) => Math.max(m, Number(f.row) || 0), 0);
+    const placed = fields.map((f) => (f.row == null ? { ...f, row: ++next } : f));
+    const rows = [...new Set(placed.map((f) => f.row))].sort((a, b) => a - b);
+    const at = new Map(rows.map((r, i) => [r, i]));
+    return placed
+        .map((f) => ({ ...f, row: at.get(f.row) }))
+        .sort((a, b) => a.row - b.row);
 }
 
 // ── SANITISE ────────────────────────────────────────────────────────────────
@@ -119,27 +218,90 @@ function sanitise(fields) {
             const label = String(raw.label || '').trim().slice(0, 60);
             if (!label) continue;
             seen.add(key);
-            out.push({ key, label, shown: raw.shown !== false, custom: true });
+            out.push({ key, label, shown: raw.shown !== false, custom: true, row: raw.row, span: raw.span });
             continue;
         }
 
-        if (!byKey.has(key)) continue;   // not a field this server knows
+        // A field this server knows: optional, or one of the required blocks.
+        // Required blocks are ACCEPTED here now (2026-09-16, "Let me move them
+        // too") — they carry a row and a span like anything else. What they do
+        // not carry is `shown`: decorate() forces it true regardless of what
+        // arrived, so no layout, however it was posted, can produce a bill of
+        // lading with no consignee on it.
+        if (!byKey.has(key) && !REQUIRED_KEYS.has(key)) continue;
         seen.add(key);
         out.push({
             key,
             // The catalogue's label wins. Letting a client rename "Carrier" to
             // something else on the printed document is not what a layout is
-            // for, and a renamed required-ish field is a document that reads
-            // wrong to the person receiving it.
-            label: byKey.get(key).label,
+            // for, and a renamed field is a document that reads wrong to the
+            // person receiving it.
+            label: (requiredByKey.get(key) || byKey.get(key)).label,
             shown: raw.shown !== false,
             custom: false,
+            row: raw.row,
+            span: raw.span,
         });
     }
+
+    // ── WHAT A CLIENT LEFT OUT ───────────────────────────────────────────
+    // Optional fields come back HIDDEN: a client one version behind must not
+    // silently delete a field it has never heard of, and must not silently
+    // turn one on either.
+    //
+    // Required blocks come back SHOWN, placed after everything else. A layout
+    // that omits the goods table is a layout that arrived broken, and the
+    // answer is to put it back rather than to print a document without it.
+    const lastRow = out.reduce((m, f) => Math.max(m, clampRow(f.row)), 0);
     for (const f of OPTIONAL_FIELDS) {
-        if (!seen.has(f.key)) out.push({ key: f.key, label: f.label, shown: false, custom: false });
+        if (!seen.has(f.key)) out.push({ key: f.key, label: f.label, shown: false, custom: false, row: lastRow + 1, span: 3 });
     }
-    return out;
+    // EACH ON ITS OWN ROW. Putting them all on one row was the first version
+    // and it silently lost the goods table: consignee + number + date + goods
+    // is far more than twelve columns, and rowsFor trims what does not fit.
+    // A re-added block is one that arrived missing, which is exactly when it
+    // must not be quietly dropped a second time.
+    let spare = lastRow + 1;
+    for (const f of REQUIRED_FIELDS) {
+        if (!seen.has(f.key)) out.push({ key: f.key, label: f.label, shown: true, custom: false, row: ++spare, span: f.span });
+    }
+    return packRows(decorate(out));
+}
+
+// Only what PRINTS, grouped into rows the renderer can lay out directly.
+// [{ row: 0, fields: [...] }, …] — each row's spans are capped at 12 so a row
+// can never overflow the page, however the layout was stored.
+function rowsFor(fields) {
+    const shown = (fields || []).filter((f) => f && f.shown !== false);
+    const byRow = new Map();
+    for (const f of shown) {
+        if (!byRow.has(f.row)) byRow.set(f.row, []);
+        byRow.get(f.row).push(f);
+    }
+    return [...byRow.keys()].sort((a, b) => a - b).map((r) => {
+        const fields = byRow.get(r);
+        // Trim, do not wrap. A row she overfilled is her arrangement to fix;
+        // silently pushing the last box onto a row of its own would move a
+        // field she placed deliberately and look like the drag did not take.
+        //
+        // BUT A REQUIRED BLOCK IS NEVER THE THING TRIMMED. She can move and
+        // resize the goods table; she cannot end up with a bill of lading
+        // that has no goods on it because an optional field was dropped in
+        // front of it. So required blocks claim their columns first, and the
+        // optional ones fit into what is left — in her order either way.
+        const need = fields.filter((f) => f.required).reduce((n, f) => n + f.span, 0);
+        let used = 0, reserved = need;
+        const fitted = [];
+        for (const f of fields) {
+            const budget = f.required ? (GRID_COLUMNS - used) : (GRID_COLUMNS - used - reserved);
+            const span = Math.min(f.span, budget);
+            if (f.required) reserved -= f.span;
+            if (span < 1) continue;          // not `break` — a later required field still gets its turn
+            fitted.push({ ...f, span });
+            used += span;
+        }
+        return { row: r, used, fields: fitted };
+    }).filter((r) => r.fields.length);
 }
 
 function loadLayouts() {
@@ -219,6 +381,7 @@ function listLayouts() {
 
 module.exports = {
     OPTIONAL_FIELDS, REQUIRED_FIELDS, OPTIONAL_KEYS, CUSTOM_PREFIX,
+    GRID_COLUMNS, rowsFor, decorate, packRows,
     customerKey, defaultFields, sanitise,
     layoutFor, shownFields, saveLayout, deleteLayout, listLayouts, loadLayouts,
 };

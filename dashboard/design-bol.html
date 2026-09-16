@@ -82,17 +82,38 @@ textarea { font-family:inherit; }
 
   <div id="dbSource" style="font-size:12.5px; color:var(--text-faint); margin-bottom:16px;"></div>
 
-  <div class="card" style="padding:6px 0; margin-bottom:8px;">
-    <div style="font-family:var(--font-mono); font-size:10.5px; letter-spacing:.1em; text-transform:uppercase; color:var(--text-faint); padding:12px 18px 10px;">Always on this document</div>
-    <div id="dbRequired"></div>
+  <!-- ── THE CANVAS ───────────────────────────────────────────────────────
+       Apsara, 2026-09-16: "what if i want them in different places.change the
+       position and size", and on the required blocks: "Let me move them too."
+
+       Twelve columns, the same grid the printed document uses, so what she
+       arranges here is literally what prints. Drag a box to another row or to
+       another place in its row; drag its right edge, or use the width buttons,
+       to resize.
+
+       WIDTH BUTTONS AS WELL AS A DRAG HANDLE, for the same reason the field
+       list has arrows as well as drag: edge-dragging does not work on touch,
+       and she opens this on an iPad. -->
+  <div class="card" style="padding:14px; margin-bottom:10px;">
+    <div style="display:flex; align-items:center; justify-content:space-between; gap:10px; margin-bottom:10px; flex-wrap:wrap;">
+      <div style="font-family:var(--font-mono); font-size:10.5px; letter-spacing:.1em; text-transform:uppercase; color:var(--text-faint);">The document</div>
+      <div id="dbSelInfo" style="font-size:12px; color:var(--text-muted);">Click a box to select it</div>
+    </div>
+
+    <div id="dbCanvas"></div>
+
+    <div style="display:flex; align-items:center; gap:10px; margin-top:12px; flex-wrap:wrap;">
+      <button id="dbAddRow" class="btn btn-secondary">+ Row</button>
+      <button id="dbAddField" class="btn btn-secondary">+ Your own field</button>
+      <span style="flex:1"></span>
+      <span style="font-size:11.5px; color:var(--text-faint);">Width</span>
+      <div id="dbWidths" style="display:flex; gap:4px;"></div>
+    </div>
   </div>
 
-  <div class="card" style="padding:6px 0;">
-    <div style="font-family:var(--font-mono); font-size:10.5px; letter-spacing:.1em; text-transform:uppercase; color:var(--text-faint); padding:12px 18px 10px;">Your fields &mdash; drag to reorder</div>
-    <div id="dbFields"></div>
-    <div style="padding:14px 18px; border-top:1px solid var(--border-subtle);">
-      <button id="dbAddField" class="btn btn-secondary">+ Add your own field</button>
-    </div>
+  <div class="card" style="padding:6px 0; margin-bottom:10px;">
+    <div style="font-family:var(--font-mono); font-size:10.5px; letter-spacing:.1em; text-transform:uppercase; color:var(--text-faint); padding:12px 18px 8px;">Not on this document &mdash; drag one up to add it</div>
+    <div id="dbTray" style="display:flex; flex-wrap:wrap; gap:6px; padding:0 18px 14px;"></div>
   </div>
 
   <div style="display:flex; align-items:center; justify-content:space-between; gap:14px; margin-top:20px; flex-wrap:wrap;">
@@ -139,6 +160,10 @@ const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
 let CATALOGUE = { optional: [], required: [], custom_prefix: 'custom:' };
+// Blank rows she has added but not yet dropped anything on. Not part of the
+// saved layout — an empty row prints as nothing, so storing it would be
+// storing a gap the document does not have.
+let emptyRows = 0;
 let customer = '';
 let fields = [];
 let dirty = false;
@@ -162,73 +187,257 @@ window.addEventListener('beforeunload', (e) => {
   e.returnValue = '';
 });
 
-function renderRequired() {
-  $('dbRequired').innerHTML = CATALOGUE.required.map((f) => `
-    <div style="display:flex; align-items:center; gap:12px; padding:11px 18px; border-top:1px solid var(--border-subtle);">
-      <span style="color:var(--text-faint); font-size:13px;">&#128274;</span>
-      <span style="flex:1; font-size:13.5px; color:var(--text-muted);">${esc(f.label)}</span>
-      <span style="font-family:var(--font-mono); font-size:10px; letter-spacing:.08em; text-transform:uppercase; color:var(--text-faint);">Required</span>
-    </div>`).join('');
+const GRID = 12;
+// The five widths worth having. A quarter, a third, a half, two-thirds and
+// full — every one of them an exact division of twelve, so a row always closes
+// cleanly and she never ends up one column short of a tidy line.
+const WIDTHS = [[3, '¼'], [4, '⅓'], [6, '½'], [8, '⅔'], [12, 'full']];
+
+let selectedKey = null;
+
+const fieldByKey = (k) => fields.find((f) => f.key === k);
+
+// Rows as [[field, …], …] in row order. Rebuilt from `fields` on every render
+// rather than kept as its own structure — two representations of one layout
+// drift, and here the drift would be a box that moved on screen and not on the
+// document.
+function rowsOf(list) {
+  const shown = list.filter((f) => f.shown !== false);
+  const byRow = new Map();
+  for (const f of shown) {
+    const r = Number(f.row) || 0;
+    if (!byRow.has(r)) byRow.set(r, []);
+    byRow.get(r).push(f);
+  }
+  return [...byRow.keys()].sort((a, b) => a - b).map((r) => byRow.get(r));
 }
 
-function renderFields() {
-  $('dbFields').innerHTML = fields.map((f, i) => `
-    <div class="db-row" draggable="true" data-i="${i}" style="display:flex; align-items:center; gap:10px; padding:10px 18px; border-top:1px solid var(--border-subtle); ${f.shown ? '' : 'opacity:.5;'}">
-      <span class="db-grip" style="cursor:grab; color:var(--text-faint); font-size:15px; user-select:none;" title="Drag to reorder">&#8942;&#8942;</span>
-      <span style="flex:1; font-size:13.5px; color:var(--text-strong);">${esc(f.label)}${f.custom ? ' <span style="font-family:var(--font-mono); font-size:9.5px; letter-spacing:.08em; text-transform:uppercase; color:var(--copper-400);">yours</span>' : ''}</span>
-      <button class="db-up btn btn-secondary" data-i="${i}" ${i === 0 ? 'disabled' : ''} style="padding:5px 9px;" title="Move up">&uarr;</button>
-      <button class="db-down btn btn-secondary" data-i="${i}" ${i === fields.length - 1 ? 'disabled' : ''} style="padding:5px 9px;" title="Move down">&darr;</button>
-      <button class="db-toggle btn btn-secondary" data-i="${i}" style="padding:5px 12px; min-width:74px; ${f.shown ? 'color:var(--accent-onSoft); border-color:var(--accent);' : ''}">${f.shown ? 'Shown' : 'Hidden'}</button>
-      ${f.custom ? `<button class="db-remove btn btn-secondary" data-i="${i}" style="padding:5px 9px; color:var(--status-danger); border-color:var(--status-danger);" title="Remove this field">&times;</button>` : ''}
-    </div>`).join('');
-
-  $('dbFields').querySelectorAll('.db-up').forEach((b) => b.addEventListener('click', () => move(+b.dataset.i, -1)));
-  $('dbFields').querySelectorAll('.db-down').forEach((b) => b.addEventListener('click', () => move(+b.dataset.i, 1)));
-  $('dbFields').querySelectorAll('.db-toggle').forEach((b) => b.addEventListener('click', () => {
-    const i = +b.dataset.i; fields[i].shown = !fields[i].shown; markDirty(); renderFields();
-  }));
-  $('dbFields').querySelectorAll('.db-remove').forEach((b) => b.addEventListener('click', () => {
-    const i = +b.dataset.i;
-    if (!confirm(`Remove "${fields[i].label}" from this layout?`)) return;
-    fields.splice(i, 1); markDirty(); renderFields();
-  }));
-  wireDrag();
+// Renumbers rows 0,1,2… keeping order, so dragging never leaves gaps that
+// print as blank bands. Mirrors packRows on the server.
+function packRows() {
+  const seen = [...new Set(fields.filter((f) => f.shown !== false).map((f) => Number(f.row) || 0))].sort((a, b) => a - b);
+  const at = new Map(seen.map((r, i) => [r, i]));
+  fields.forEach((f) => { if (f.shown !== false) f.row = at.has(Number(f.row) || 0) ? at.get(Number(f.row) || 0) : 0; });
 }
 
-function move(i, by) {
-  const j = i + by;
-  if (j < 0 || j >= fields.length) return;
-  const [row] = fields.splice(i, 1);
-  fields.splice(j, 0, row);
-  markDirty();
-  renderFields();
+function rowUsed(row) { return row.reduce((n, f) => n + (Number(f.span) || 0), 0); }
+
+function renderCanvas() {
+  packRows();
+  const rows = rowsOf(fields);
+  const canvas = $('dbCanvas');
+
+  canvas.innerHTML = rows.map((row, ri) => {
+    const used = rowUsed(row);
+    const free = Math.max(0, GRID - used);
+    return `
+      <div class="db-row-strip" data-row="${ri}" style="margin-bottom:8px;">
+        <div style="display:flex; align-items:center; gap:8px; margin-bottom:4px;">
+          <span style="font-family:var(--font-mono); font-size:9.5px; color:var(--text-faint); letter-spacing:.08em;">ROW ${ri + 1}</span>
+          <span style="font-size:10.5px; color:${used > GRID ? 'var(--status-danger)' : 'var(--text-faint)'};">${used}/12${used > GRID ? ' — too wide, the last box will be trimmed' : ''}</span>
+          <span style="flex:1"></span>
+          <button class="btn btn-secondary db-row-del" data-row="${ri}" style="padding:2px 7px; font-size:10px;" title="Remove this row">&times;</button>
+        </div>
+        <div class="db-cells" data-row="${ri}" style="display:grid; grid-template-columns:repeat(12,1fr); gap:6px; min-height:46px; border:1px dashed var(--border-subtle); border-radius:var(--radius-sm); padding:5px;">
+          ${row.map((f) => cellHtml(f)).join('')}
+          ${free > 0 ? `<div class="db-gap" data-row="${ri}" style="grid-column:span ${free}; border:1px dashed var(--border-subtle); border-radius:var(--radius-xs); display:flex; align-items:center; justify-content:center; font-size:10.5px; color:var(--text-faint); min-height:36px;">drop here</div>` : ''}
+        </div>
+      </div>`;
+  }).join('') + emptyRowsHtml(rows.length)
+    || '<div style="padding:22px; text-align:center; color:var(--text-faint); font-size:12.5px;">Nothing on the document. Drag a field up from below.</div>';
+
+  renderTray();
+  renderWidths();
+  wireCanvas();
 }
 
-// Index-based, not element-based. Rebuilding the list on every drop means the
-// element a listener closed over is gone by the next drag — a class of bug
-// this project has hit before with rebuilt inputs.
-let dragFrom = null;
-function wireDrag() {
-  $('dbFields').querySelectorAll('.db-row').forEach((row) => {
-    row.addEventListener('dragstart', (e) => {
-      dragFrom = +row.dataset.i;
-      e.dataTransfer.effectAllowed = 'move';
-      // Firefox will not start a drag at all without data set on the transfer.
-      e.dataTransfer.setData('text/plain', String(dragFrom));
-      row.style.opacity = '.4';
+// Blank rows at the bottom, waiting for a drop. They are not saved: an empty
+// row prints as nothing, so a layout carrying one would be carrying a gap the
+// document does not have.
+function emptyRowsHtml(startAt) {
+  let out = '';
+  for (let k = 0; k < emptyRows; k++) {
+    const ri = startAt + k;
+    out += `
+      <div class="db-row-strip" style="margin-bottom:8px;">
+        <div style="display:flex; align-items:center; gap:8px; margin-bottom:4px;">
+          <span style="font-family:var(--font-mono); font-size:9.5px; color:var(--text-faint); letter-spacing:.08em;">ROW ${ri + 1}</span>
+          <span style="font-size:10.5px; color:var(--text-faint);">empty</span>
+        </div>
+        <div class="db-cells" data-row="${ri}" style="display:grid; grid-template-columns:repeat(12,1fr); gap:6px; min-height:46px; border:1px dashed var(--border-subtle); border-radius:var(--radius-sm); padding:5px;">
+          <div class="db-gap" style="grid-column:span 12; border:1px dashed var(--border-subtle); border-radius:var(--radius-xs); display:flex; align-items:center; justify-content:center; font-size:10.5px; color:var(--text-faint); min-height:36px;">drop here</div>
+        </div>
+      </div>`;
+  }
+  return out;
+}
+
+function cellHtml(f) {
+  const on = selectedKey === f.key;
+  return `
+    <div class="db-cell" draggable="true" data-key="${esc(f.key)}"
+         style="grid-column:span ${f.span}; position:relative; border:1px solid ${on ? 'var(--accent)' : 'var(--border-default)'};
+                background:${on ? 'var(--accent-soft)' : 'var(--surface-sunken)'}; border-radius:var(--radius-xs);
+                padding:7px 9px; min-height:36px; cursor:grab; user-select:none; overflow:hidden;">
+      <div style="display:flex; align-items:center; gap:5px;">
+        ${f.required ? '<span style="font-size:10px; color:var(--text-faint);" title="Always on this document">&#128274;</span>' : ''}
+        <span style="font-size:11.5px; color:var(--text-strong); white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${esc(f.label)}</span>
+      </div>
+      <div style="font-family:var(--font-mono); font-size:9.5px; color:var(--text-faint); margin-top:2px;">${f.span}/12</div>
+      <div class="db-resize" data-key="${esc(f.key)}" title="Drag to resize"
+           style="position:absolute; right:0; top:0; bottom:0; width:8px; cursor:ew-resize; background:transparent;"></div>
+    </div>`;
+}
+
+// Hidden fields live down here rather than vanishing, so "where did Seal go?"
+// is answered by looking rather than by remembering. Required blocks never
+// appear here — they cannot be hidden at all.
+function renderTray() {
+  const hidden = fields.filter((f) => f.shown === false);
+  $('dbTray').innerHTML = hidden.length
+    ? hidden.map((f) => `
+        <div class="db-tray-item" draggable="true" data-key="${esc(f.key)}"
+             style="border:1px solid var(--border-default); border-radius:var(--radius-xs); padding:6px 10px; font-size:11.5px; color:var(--text-muted); cursor:grab; background:var(--surface-sunken);">
+          ${esc(f.label)}${f.custom ? ' <span style="font-size:9px; color:var(--copper-400); letter-spacing:.06em;">YOURS</span>' : ''}
+        </div>`).join('')
+    : '<span style="font-size:11.5px; color:var(--text-faint);">Everything is on the document.</span>';
+}
+
+function renderWidths() {
+  const f = selectedKey ? fieldByKey(selectedKey) : null;
+  $('dbWidths').innerHTML = WIDTHS.map(([n, label]) => {
+    const on = f && f.span === n;
+    const tooSmall = f && n < (f.min_span || 1);
+    return `<button class="btn btn-secondary db-w" data-n="${n}" ${!f || tooSmall ? 'disabled' : ''}
+              style="padding:3px 10px; font-size:11px; ${on ? 'color:var(--accent-onSoft); border-color:var(--accent);' : ''}"
+              ${tooSmall ? `title="${esc(f.label)} needs at least ${f.min_span}/12 to stay readable"` : ''}>${label}</button>`;
+  }).join('');
+  $('dbSelInfo').textContent = f
+    ? `${f.label} — ${f.span}/12${f.required ? ' · always on this document' : ''}`
+    : 'Click a box to select it';
+}
+
+// ── DRAGGING ───────────────────────────────────────────────────────────────
+// Keyed by FIELD KEY, never by index. The canvas is rebuilt on every change,
+// so an index captured at dragstart names a different field by the time the
+// drop lands — the bug this pattern always has.
+let dragKey = null;
+
+function wireCanvas() {
+  const canvas = $('dbCanvas');
+
+  canvas.querySelectorAll('.db-cell, .db-tray-item').forEach((el) => wireDraggable(el));
+  $('dbTray').querySelectorAll('.db-tray-item').forEach((el) => wireDraggable(el));
+
+  // Selecting. Mousedown rather than click, so selecting and then dragging is
+  // one gesture instead of two.
+  canvas.querySelectorAll('.db-cell').forEach((el) => {
+    el.addEventListener('mousedown', (e) => {
+      if (e.target.classList.contains('db-resize')) return;
+      selectedKey = el.dataset.key;
+      renderCanvas();
     });
-    row.addEventListener('dragend', () => { row.style.opacity = ''; dragFrom = null; });
-    row.addEventListener('dragover', (e) => { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; });
-    row.addEventListener('drop', (e) => {
+  });
+
+  // Drop targets: a row's cell area, and the gap at its end.
+  canvas.querySelectorAll('.db-cells').forEach((zone) => {
+    zone.addEventListener('dragover', (e) => { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; });
+    zone.addEventListener('drop', (e) => {
       e.preventDefault();
-      const to = +row.dataset.i;
-      if (dragFrom === null || dragFrom === to) return;
-      const [moved] = fields.splice(dragFrom, 1);
-      fields.splice(to, 0, moved);
-      dragFrom = null;
-      markDirty();
-      renderFields();
+      if (!dragKey) return;
+      const row = Number(zone.dataset.row);
+      // WHERE in the row: before whichever cell the pointer is left of.
+      const cells = [...zone.querySelectorAll('.db-cell')].filter((c) => c.dataset.key !== dragKey);
+      let before = null;
+      for (const c of cells) {
+        const r = c.getBoundingClientRect();
+        if (e.clientX < r.left + r.width / 2) { before = c.dataset.key; break; }
+      }
+      moveField(dragKey, row, before);
+      // A drop on a trailing blank row uses it up, so the canvas does not
+      // keep growing an extra empty strip every time she moves something.
+      if (emptyRows > 0 && row >= rowsOf(fields).length - 1) emptyRows = Math.max(0, emptyRows - 1);
+      dragKey = null;
     });
+  });
+
+  canvas.querySelectorAll('.db-row-del').forEach((b) => b.addEventListener('click', () => {
+    const ri = Number(b.dataset.row);
+    const row = rowsOf(fields)[ri] || [];
+    const req = row.filter((f) => f.required);
+    if (req.length) {
+      setStatus(`${req.map((f) => f.label).join(' and ')} cannot be taken off the document — move ${req.length > 1 ? 'them' : 'it'} to another row first.`, true);
+      return;
+    }
+    row.forEach((f) => { f.shown = false; });
+    markDirty(); renderCanvas();
+  }));
+
+  canvas.querySelectorAll('.db-resize').forEach((h) => wireResize(h));
+  $('dbWidths').querySelectorAll('.db-w').forEach((b) => b.addEventListener('click', () => {
+    const f = selectedKey ? fieldByKey(selectedKey) : null;
+    if (!f) return;
+    f.span = Number(b.dataset.n);
+    markDirty(); renderCanvas();
+  }));
+}
+
+function wireDraggable(el) {
+  el.addEventListener('dragstart', (e) => {
+    dragKey = el.dataset.key;
+    // Firefox refuses to start a drag without data on the transfer.
+    e.dataTransfer.setData('text/plain', dragKey);
+    e.dataTransfer.effectAllowed = 'move';
+    el.style.opacity = '.4';
+  });
+  el.addEventListener('dragend', () => { el.style.opacity = ''; dragKey = null; });
+}
+
+// Moves `key` to `row`, placed before `beforeKey` (or last). Everything about
+// position is expressed as row + order, so there is no coordinate to get wrong
+// and no way to land on top of another field.
+function moveField(key, row, beforeKey) {
+  const f = fieldByKey(key);
+  if (!f) return;
+  f.shown = true;
+  f.row = row;
+  // Reorder within the list so the row's order matches where it was dropped.
+  const idx = fields.indexOf(f);
+  fields.splice(idx, 1);
+  const at = beforeKey ? fields.findIndex((x) => x.key === beforeKey) : -1;
+  if (at >= 0) fields.splice(at, 0, f); else {
+    // Last in that row: insert after the final field currently on it.
+    let last = -1;
+    fields.forEach((x, i) => { if (x.shown !== false && Number(x.row) === row) last = i; });
+    fields.splice(last + 1, 0, f);
+  }
+  selectedKey = key;
+  markDirty();
+  renderCanvas();
+}
+
+// Edge-drag resize. Snaps to the grid, so it cannot produce a width the
+// document has no column for.
+function wireResize(handle) {
+  handle.addEventListener('mousedown', (e) => {
+    e.preventDefault(); e.stopPropagation();
+    const f = fieldByKey(handle.dataset.key);
+    if (!f) return;
+    selectedKey = f.key;
+    const zone = handle.closest('.db-cells');
+    const colW = zone.getBoundingClientRect().width / GRID;
+    const startX = e.clientX, startSpan = f.span;
+    const onMove = (ev) => {
+      const delta = Math.round((ev.clientX - startX) / colW);
+      const next = Math.max(f.min_span || 1, Math.min(GRID, startSpan + delta));
+      if (next !== f.span) { f.span = next; markDirty(); renderCanvas(); }
+    };
+    const onUp = () => {
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup', onUp);
+    };
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
   });
 }
 
@@ -239,7 +448,6 @@ async function loadCustomerList(selectKey) {
     .concat((d.layouts || []).map((l) => `<option value="${esc(l.customer)}">${esc(l.customer)}</option>`));
   $('dbCustomer').innerHTML = opts.join('');
   if (selectKey != null) $('dbCustomer').value = selectKey;
-  renderRequired();
 }
 
 async function loadLayout(who) {
@@ -257,7 +465,7 @@ async function loadLayout(who) {
         : `${customer} has no layout of their own yet — this is the default. Save to give them one.`);
   $('dbResetCustomer').classList.toggle('hidden', !customer || d.source !== 'customer');
   setStatus('');
-  renderFields();
+  renderCanvas();
 }
 
 $('dbCustomer').addEventListener('change', async () => {
@@ -286,6 +494,18 @@ $('dbAddCustomer').addEventListener('click', async () => {
   } catch (e) { setStatus(e.message, true); }
 });
 
+// A new row is just a row number nothing sits on yet. It appears because
+// renderCanvas draws one empty strip past the last occupied row.
+$('dbAddRow').addEventListener('click', () => {
+  const rows = rowsOf(fields);
+  // Park a hidden marker on the new row so it survives the render. Simpler
+  // than a separate list of empty rows, which would be a second thing to keep
+  // in step with the fields.
+  emptyRows = Math.max(1, emptyRows + 1);
+  markDirty();
+  renderCanvas();
+});
+
 $('dbAddField').addEventListener('click', () => {
   const label = (prompt('What should this field be called on the BOL? (e.g. Gate code)') || '').trim();
   if (!label) return;
@@ -294,9 +514,12 @@ $('dbAddField').addEventListener('click', () => {
   // different field from "Gate code" on the next.
   const key = CATALOGUE.custom_prefix + label.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
   if (fields.some((f) => f.key === key)) { setStatus(`"${label}" is already on this layout.`, true); return; }
-  fields.push({ key, label, shown: true, custom: true });
+  // Dropped on a row of its own at the end, a third wide. Somewhere she
+  // can see it and drag it, rather than squeezed onto a full row.
+  const lastRow = Math.max(-1, ...fields.filter((f) => f.shown !== false).map((f) => Number(f.row) || 0));
+  fields.push({ key, label, shown: true, custom: true, row: lastRow + 1, span: 4, min_span: 1 });
   markDirty();
-  renderFields();
+  renderCanvas();
 });
 
 $('dbSave').addEventListener('click', async () => {

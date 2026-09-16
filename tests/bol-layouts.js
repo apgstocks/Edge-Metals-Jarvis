@@ -98,19 +98,41 @@ section('A — a layout cannot make an invalid bill of lading');
         { key: 'po_number', shown: true },
     ]);
     const keys = attack.map((f) => f.key);
+    // ── THE RULE CHANGED ON 2026-09-16 ───────────────────────────────────
+    // Asked whether the required blocks should stay locked in place, she said
+    // "Let me move them too." So they are no longer REFUSED by sanitise — they
+    // are accepted, placed and resized like anything else. What cannot be done
+    // is turn one OFF, and that is now the thing asserted: a layout claiming
+    // to hide the consignee gets it back, shown.
+    //
+    // Placeable and hideable are different properties. Where the consignee
+    // sits is a matter of taste; a bill of lading with no consignee on it is
+    // not a bill of lading.
     for (const locked of ['consignee', 'bol_date', 'bol_no', 'goods']) {
-        ck(`a layout claiming to hide ${locked} is refused that field`, !keys.includes(locked),
-           JSON.stringify(keys));
+        const f = attack.find((x) => x.key === locked);
+        ck(`a layout claiming to hide ${locked} gets it back`, !!f && f.shown === true,
+           JSON.stringify(f));
+        ck(`  and ${locked} is flagged required`, !!f && f.required === true);
     }
     ck('  while the legitimate part of the same layout is kept',
        attack.find((f) => f.key === 'po_number') && attack.find((f) => f.key === 'po_number').shown === true,
        'rejecting the whole layout over one bad row would lose the seven good ones');
 
-    // And it must not merely be dropped from the LIST — it must still print.
+    // Each re-added block lands on a row of ITS OWN. Putting them all on one
+    // row was the first version of this and it silently lost the goods table —
+    // consignee plus number plus date plus goods is four times twelve columns,
+    // and rowsFor trims what does not fit. A block that arrived missing is
+    // exactly the one that must not be dropped a second time.
+    const reqRows = attack.filter((f) => f.required).map((f) => f.row);
+    ck('  and each sits on its own row', new Set(reqRows).size === reqRows.length,
+       JSON.stringify(attack.filter((f) => f.required).map((f) => `${f.key}@${f.row}`)));
+
+    // And it must not merely be in the LIST — it must still print.
     const html = buildBolHtml({ ...BOL, layout: attack }).html;
     ck('  and the document still carries its date', labels(html).includes('DATE'), labels(html).join(','));
     ck('  and its consignee', /Eccomelt/.test(html));
-    ck('  and its goods', /Al combo/.test(html) && /42,180/.test(html));
+    ck('  and its goods', /DESCRIPTION OF GOODS/.test(html) && /42,180/.test(html),
+       'the goods table is not a labelled box, so it is checked by its own heading');
     assertNoUnfilledPlaceholders(html);
     ck('  with no placeholder left unfilled', true);
 }
@@ -201,11 +223,18 @@ section('D — fields she names herself');
     // …and a client one version BEHIND must not delete what it never knew.
     const partial = L.sanitise([{ key: 'po_number', shown: true }]);
     ck('a client that sends only the fields it knows does not delete the rest',
-       partial.length === L.OPTIONAL_FIELDS.length,
-       `${partial.length} vs ${L.OPTIONAL_FIELDS.length} — an old client saving would otherwise wipe a new field`);
-    ck('  and the ones it omitted come back HIDDEN, not shown',
-       partial.filter((f) => f.key !== 'po_number').every((f) => f.shown === false),
-       'silently turning fields back on would be its own surprise');
+       partial.length === L.OPTIONAL_FIELDS.length + L.REQUIRED_FIELDS.length,
+       `${partial.length} vs ${L.OPTIONAL_FIELDS.length} optional + ${L.REQUIRED_FIELDS.length} required — an old client saving would otherwise wipe a field it never knew about`);
+    // Optional fields it left out come back HIDDEN — silently turning one on
+    // would be its own surprise. REQUIRED blocks come back SHOWN, because a
+    // layout that omits the goods table arrived broken and the answer is to
+    // put it back, not to print a document without it.
+    ck('  optional ones it omitted come back HIDDEN',
+       partial.filter((f) => f.key !== 'po_number' && !f.required).every((f) => f.shown === false),
+       JSON.stringify(partial.filter((f) => !f.required).map((f) => `${f.key}:${f.shown}`)));
+    ck('  and required ones come back SHOWN',
+       partial.filter((f) => f.required).every((f) => f.shown === true),
+       JSON.stringify(partial.filter((f) => f.required).map((f) => `${f.key}:${f.shown}`)));
 }
 
 // ══════════════════════════════════════════════════════════════════════════
@@ -286,9 +315,14 @@ section('E — against a real server');
         body: { ...BOL, bol_no: 'EM-1048', layout: [{ key: 'seal_no', shown: true }] },
     });
     ck('a layout sent BY the client is ignored', forced.status === 200, JSON.stringify(forced.json));
+    // Her two optional fields, plus the required blocks that always print.
     ck('  the document still follows HER layout',
-       handed && handed.layout.filter((f) => f.shown !== false).map((f) => f.key).join(',') === 'po_number,appointment_id',
+       handed && handed.layout.filter((f) => f.shown !== false && !f.required)
+           .map((f) => f.key).join(',') === 'po_number,appointment_id',
        JSON.stringify(handed && handed.layout.filter((f) => f.shown !== false).map((f) => f.key)));
+    ck('    with the required blocks alongside, not instead',
+       handed && handed.layout.filter((f) => f.required && f.shown !== false).length === L.REQUIRED_FIELDS.length,
+       JSON.stringify(handed && handed.layout.filter((f) => f.required).map((f) => f.key)));
 
     const stored = require(path.join(ROOT, 'helpers/bols')).listBols().find((b) => b.bol_no === 'EM-1048');
     ck('  and the stored record keeps no client-sent layout',
@@ -323,47 +357,94 @@ section('F — the Design screen, driven');
         },
     });
     await new Promise((r) => setTimeout(r, 400));
-    const d = dom.window.document;
+    const w = dom.window;
+    const d = w.document;
 
-    const rows = () => [...d.querySelectorAll('#dbFields .db-row')];
-    const labelOf = (row) => row.children[1].textContent.trim();
-    ck('every optional field is listed', rows().length === L.OPTIONAL_FIELDS.length, `${rows().length} rows`);
-    ck('  and the required ones are shown as locked, not hidden from her',
-       d.querySelectorAll('#dbRequired > div').length === L.REQUIRED_FIELDS.length,
-       'leaving them off the screen entirely makes her wonder where Consignee went');
-    ck('  with no handle to move them',
-       !d.querySelector('#dbRequired .db-grip'),
-       'a grip that does nothing is worse than no grip');
+    // ── THE CANVAS ───────────────────────────────────────────────────────
+    // Apsara, 2026-09-16: "what if i want them in different places.change the
+    // position and size" — so the field LIST became a twelve-column canvas,
+    // and the required blocks became placeable ("Let me move them too").
+    const cells = () => [...d.querySelectorAll('.db-cell')];
+    const spanOf = (el) => Number((el.getAttribute('style').match(/grid-column:span (\d+)/) || [])[1]);
+    const keyOf = (el) => el.dataset.key;
 
-    // ── ARROWS AS WELL AS DRAG ───────────────────────────────────────────
-    // HTML5 drag-and-drop does not fire on touch, and she uses an iPad. A
-    // drag-only list is a screen that silently refuses to work there.
-    const first = labelOf(rows()[0]), second = labelOf(rows()[1]);
-    rows()[1].querySelector('.db-down').dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }));
-    ck('the down arrow actually moves a row', labelOf(rows()[2]) === second,
-       rows().map(labelOf).join(' > '));
-    rows()[2].querySelector('.db-up').dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }));
-    ck('  and the up arrow puts it back', labelOf(rows()[1]) === second && labelOf(rows()[0]) === first,
-       rows().map(labelOf).join(' > '));
-    ck('  the first row cannot be moved up off the list', rows()[0].querySelector('.db-up').disabled);
-    ck('  nor the last down', rows()[rows().length - 1].querySelector('.db-down').disabled);
-    ck('and every row is draggable too', rows().every((r) => r.getAttribute('draggable') === 'true'));
+    ck('every field is a box on the canvas',
+       cells().length === L.OPTIONAL_FIELDS.length + L.REQUIRED_FIELDS.length,
+       `${cells().length} boxes`);
+    ck('  laid out in rows', d.querySelectorAll('.db-row-strip').length >= 3,
+       `${d.querySelectorAll('.db-row-strip').length} rows`);
 
-    rows()[0].querySelector('.db-toggle').dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }));
-    ck('a field can be switched off', /Hidden/.test(rows()[0].querySelector('.db-toggle').textContent));
+    // Required blocks are ON the canvas and DRAGGABLE — that is the change she
+    // asked for. What they do not get is a way to be switched off.
+    const goods = cells().find((c) => keyOf(c) === 'goods');
+    ck('  the goods table is on the canvas', !!goods);
+    ck('    and can be dragged like anything else', goods && goods.getAttribute('draggable') === 'true',
+       '"Let me move them too" — locking it in place is the thing she overruled');
+    ck('    but has no way to be hidden',
+       !d.querySelector('.db-cell[data-key="goods"] .db-toggle'),
+       'a bill of lading with no goods on it is not a bill of lading');
 
-    // ── NOTHING SAVES UNTIL SHE SAYS SO ──────────────────────────────────
+    // ── SIZE ─────────────────────────────────────────────────────────────
+    const consignee = cells().find((c) => keyOf(c) === 'consignee');
+    ck('a field starts at the width the document has always used', spanOf(consignee) === 12,
+       String(spanOf(consignee)));
+    consignee.dispatchEvent(new w.MouseEvent('mousedown', { bubbles: true }));
+    const widthBtn = (label) => [...d.querySelectorAll('.db-w')].find((b) => b.textContent === label);
+    widthBtn('½').dispatchEvent(new w.MouseEvent('click', { bubbles: true }));
+    ck('  and resizing it works',
+       spanOf(cells().find((c) => keyOf(c) === 'consignee')) === 6,
+       String(spanOf(cells().find((c) => keyOf(c) === 'consignee'))));
+
+    // A floor, not a lock. The consignee block holds a name and three lines of
+    // address; a quarter of the page is not a width it can be read at.
+    ck('  but it cannot be shrunk past readable', widthBtn('¼').disabled,
+       'min_span is a floor — she can resize it, she cannot make it useless');
+
+    // WIDTH BUTTONS AS WELL AS EDGE-DRAGGING, for the same reason the old list
+    // had arrows as well as drag: edge-drag does not fire on touch, and she
+    // uses an iPad.
+    ck('  every box has a resize edge for the mouse',
+       cells().every((c) => !!c.querySelector('.db-resize')));
+    ck('  and there are width buttons for touch',
+       [...d.querySelectorAll('.db-w')].length === 5,
+       'five exact divisions of twelve');
+
+    // ── POSITION ─────────────────────────────────────────────────────────
+    // Dropping onto a row moves the field there. Driven through the real drop
+    // handler rather than by poking the model, because a canvas that renders
+    // beautifully and ignores the drop is the failure this is for.
+    const zone = [...d.querySelectorAll('.db-cells')][0];
+    const seal = cells().find((c) => keyOf(c) === 'seal_no');
+    const rowOfSeal = () => [...d.querySelectorAll('.db-cells')]
+        .findIndex((z) => [...z.querySelectorAll('.db-cell')].some((c) => keyOf(c) === 'seal_no'));
+    const before = rowOfSeal();
+    // A real dataTransfer on BOTH events. The first version omitted it on
+    // dragstart, so setData threw — and the drag still "worked" only because
+    // dragKey is assigned on the line before the throw. A test that passes by
+    // luck is one that will keep passing when the handler stops working.
+    const dt = () => ({ setData() {}, getData: () => 'seal_no', dropEffect: 'move', effectAllowed: 'move' });
+    const start = new w.MouseEvent('dragstart', { bubbles: true });
+    start.dataTransfer = dt();
+    seal.dispatchEvent(start);
+    const drop = new w.MouseEvent('drop', { bubbles: true, cancelable: true });
+    drop.dataTransfer = dt();
+    zone.dispatchEvent(drop);
+    ck('dragging a field to another row moves it', rowOfSeal() === 0 && before !== 0,
+       `row ${before} -> ${rowOfSeal()}`);
+
+    // Nothing saves until she says so — unchanged from the field-picker, and
+    // more important now that a stray drag can move a box on a legal document.
     ck('nothing has been saved yet', put === null,
        'auto-saving each drag means a stray drag permanently changes a customer document');
-    d.getElementById('dbSave').dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }));
+    d.getElementById('dbSave').dispatchEvent(new w.MouseEvent('click', { bubbles: true }));
     await new Promise((r) => setTimeout(r, 120));
     ck('Save sends the layout', !!put && Array.isArray(put.fields), JSON.stringify(put && Object.keys(put)));
-    ck('  carrying the switch she flipped',
-       put && put.fields[0] && put.fields[0].shown === false,
-       JSON.stringify(put && put.fields && put.fields.slice(0, 2)));
-    ck('  and the order she left it in',
-       put && put.fields.map((f) => f.label).join('>') === rows().map(labelOf).map((s) => s.replace(/ yours$/, '')).join('>'),
-       JSON.stringify(put && put.fields.map((f) => f.label)));
+    ck('  carrying row and span for every field',
+       put && put.fields.every((f) => Number.isFinite(f.row) && Number.isFinite(f.span)),
+       JSON.stringify(put && put.fields.slice(0, 3)));
+    ck('  including the resize she made',
+       put && put.fields.find((f) => f.key === 'consignee').span === 6,
+       JSON.stringify(put && put.fields.find((f) => f.key === 'consignee')));
 
     dom.window.close();
 }

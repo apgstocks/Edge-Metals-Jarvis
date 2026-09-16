@@ -59,14 +59,25 @@
   .body { border:0.7pt solid #c9c9c9; border-top:none; border-radius:0 0 5px 5px; padding:15px 16px 18px; }
 
   .cards { display:flex; gap:11px; margin-bottom:11px; }
-  .card { flex:1; background:#f4f4f2; border-radius:4px; padding:10px 12px; }
+  .card { flex:1; background:#f4f4f2; border-radius:4px; padding:10px 12px; min-width:0; }
   .card.to { background:#eef3fa; }
   .card .lbl { font-size:6.8pt; letter-spacing:.1em; color:#71716c; margin-bottom:4px; }
   .card .nm { font-weight:700; font-size:10pt; }
   .card .ad { color:#4a4a46; line-height:1.55; margin-top:1px; }
 
+  /* ── THE LAYOUT GRID ──────────────────────────────────────────────────
+     Twelve columns. A field spans 1..12 and a row that does not add up to 12
+     leaves white space, which is how gaps are made.
+
+     CSS grid rather than flex, because flex:1 makes every box the same width
+     and a span is exactly the thing flex cannot express. min-width:0 on the
+     cells stops a long container number forcing a column wider than its
+     span — the failure that turns a tidy layout into an overflowing one only
+     on the documents with the longest values. */
+  .grid { display:grid; grid-template-columns:repeat(12, 1fr); gap:9px; margin-bottom:9px; align-items:start; }
+  .grid > * { min-width:0; }
   .facts { display:flex; gap:9px; margin-bottom:9px; }
-  .fact { flex:1; background:#f4f4f2; border-radius:4px; padding:8px 10px; min-width:0; }
+  .fact { background:#f4f4f2; border-radius:4px; padding:8px 10px; min-width:0; }
   .fact .lbl { font-size:6.8pt; letter-spacing:.08em; color:#71716c; }
   .fact .v { font-family:'PlexMono', monospace; font-size:8.5pt; margin-top:2px; overflow-wrap:break-word; }
   /* A blank fact still prints its box and label. An empty box reads as "not
@@ -74,7 +85,7 @@
      a driver holding a BOL with no seal row will not think to ask for one. */
   .fact .v.empty { color:#a3a39d; }
 
-  table.goods { width:100%; border-collapse:collapse; margin-top:4px; table-layout:fixed; }
+  table.goods { width:100%; border-collapse:collapse; margin-top:0; table-layout:fixed; }
   table.goods th {
     background:#f4f4f2; -webkit-print-color-adjust:exact; print-color-adjust:exact;
     font-size:6.8pt; letter-spacing:.07em; color:#71716c; font-weight:600;
@@ -88,7 +99,7 @@
   table.goods tr.total td.desc { font-weight:700; }
   .unit { font-weight:400; color:#71716c; }
 
-  .notes { margin-top:12px; font-size:8pt; color:#4a4a46; line-height:1.55; }
+  .notes { margin-top:0; font-size:8pt; color:#4a4a46; line-height:1.55; }
   .notes .lbl { font-size:6.8pt; letter-spacing:.1em; color:#71716c; margin-bottom:3px; }
 
   /* THE LEGAL SENTENCE. A BOL is a receipt AND a contract of carriage; the
@@ -124,46 +135,28 @@
 
   <div class="body">
 
+    <!-- ── THE WHOLE BODY IS THE LAYOUT GRID ───────────────────────────
+         Apsara, 2026-09-16: "what if i want them in different places.change
+         the position and size" — and, on whether the required blocks stay
+         put, "Let me move them too."
+
+         So the consignee card, the BOL number, the date, the goods table and
+         the notes are all placed by her layout now, alongside the optional
+         fields. Twelve columns; see helpers/bolLayouts.js for why a grid
+         rather than free X/Y, and helpers/bolPdf.js for the renderer.
+
+         SHIPPER is the one card still fixed. It is Edge Metals' own name and
+         address on Edge Metals' own document — not a field, and not hers to
+         move off the top of the page. -->
     <div class="cards">
       <div class="card">
         <div class="lbl">SHIPPER</div>
         <div class="nm">Edge Metals Inc</div>
         <div class="ad">14750 Devonshire Ln<br>Frisco, TX 75035<br>Tel (310) 938-2525</div>
       </div>
-      <div class="card to">
-        <div class="lbl">CONSIGNEE</div>
-        <div class="nm">{{consignee_name}}</div>
-        <div class="ad">{{consignee_address_lines}}</div>
-      </div>
     </div>
 
-    <!-- The two rows that used to be here (DATE/PO/APPOINTMENT/PICKUP and
-         CARRIER/DRIVER/CONTAINER/SEAL) are now built from the customer's
-         layout — see helpers/bolLayouts.js. DATE is still always first and
-         still cannot be turned off; only the optional fields move.
-         Generated four to a row so the printed document keeps the grid it
-         has always had regardless of how many fields are switched on. -->
-    {{fact_rows}}
-
-    <table class="goods">
-      <tr>
-        <th class="desc">DESCRIPTION OF GOODS</th>
-        <th style="width:52pt;">PIECES</th>
-        <th style="width:66pt;">GROSS</th>
-        <th style="width:60pt;">TARE</th>
-        <th style="width:66pt;">NET</th>
-      </tr>
-      {{item_rows}}
-      <tr class="total">
-        <td class="desc">Total <span class="unit">({{weight_unit}})</span></td>
-        <td>{{total_pieces}}</td>
-        <td>{{total_gross}}</td>
-        <td>{{total_tare}}</td>
-        <td>{{total_net}}</td>
-      </tr>
-    </table>
-
-    {{notes_block}}
+    {{layout_rows}}
 
     <div class="terms">
       Received, subject to the classifications and lawfully filed tariffs in effect on the date of issue, the property
