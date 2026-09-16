@@ -58,6 +58,20 @@ const { loadJson, mutateJson } = require('./json');
 // SCAN finds may be four, and both end up in the same place.
 const ROW_FIELDS = [
     'container_no',
+    // ── ONE CONTAINER, SEVERAL ITEMS ───────────────────────────────────────
+    // Apsara, 2026-09-16: "sometimes i will have 3 different items in a
+    // container..for eg:alternator,starter,ac compressor.each with separate
+    // gross,net,tare overall total gross,net,tare and adding those
+    // gross,net,tare --->overall for the container".
+    //
+    // So a row is no longer "a container" — it is a WEIGHING, and several of
+    // them can belong to the same container. That was already true before she
+    // said it: a handwritten bundle tally produces fifteen rows for one
+    // container. Naming the item is what makes the breakdown readable.
+    //
+    // Blank is the normal case. A container holding one item is described
+    // once, in item_description on the record, not fifteen times down a column.
+    'item',
     'gross_weight_lbs',
     'tare_lbs',
     'net_weight_lbs',
@@ -116,6 +130,24 @@ function netOf(row) {
     return g - (t == null ? 0 : t);
 }
 
+// ── IS THERE A WEIGHING ON THIS ROW? ───────────────────────────────────────
+// "Does any field have a value?" used to answer this, and stopped working the
+// moment tare started defaulting to 0 (2026-09-16, her "by default make tare
+// as 0"). Every blank row the form opens with carries tare "0", so every one
+// of them looked real — and the two starter rows printed on the customer's
+// packing list as "- | 0 | 0 | 0.000".
+//
+// A row is a WEIGHING. A tare with nothing weighed against it is not one, and
+// neither is a name she has typed ahead of the scale ticket: that is worth
+// KEEPING (losing what she typed is worse than an unfinished row) but not
+// worth PRINTING.
+function hasWeight(row) {
+    const r = row || {};
+    return ['gross_weight_lbs', 'net_weight_lbs', 'net_weight_mt',
+            'truck_lbs', 'container_tare_lbs', 'chassis_lbs', 'boxes_weight_lbs']
+        .some((k) => str(r[k]) !== '');
+}
+
 function tareOf(row) {
     const r = row || {};
     const own = toNum(r.tare_lbs);
@@ -124,6 +156,35 @@ function tareOf(row) {
         .map((k) => toNum(r[k])).filter((n) => n != null);
     if (!parts.length) return null;
     return parts.reduce((a, b) => a + b, 0);
+}
+
+// ── THE OVERALL FIGURE FOR THE CONTAINER ───────────────────────────────────
+// Apsara, 2026-09-16: "overall total gross,net,tare and adding those
+// gross,net,tare --->overall for the container".
+//
+// Rows are weighings, not containers. Three items — or fifteen bundles — add
+// up to ONE container's gross, tare and net, and that total is what the
+// invoice states and what a customer checks.
+//
+// Net is summed from the DERIVED nets, not taken from the stored strings: the
+// row total and the row's own printed net then cannot disagree. Sums are null
+// when there was nothing to add, for the same reason tareOf is — a printed 0
+// claims a container that weighed nothing.
+//
+// `only` optionally narrows to one container, for a list that covers several.
+function totalsOf(rows, only) {
+    const k = only == null ? null : keyOf(only);
+    let gross = null, tare = null, net = null, mt = null;
+    const add = (acc, v) => (v == null ? acc : (acc == null ? v : acc + v));
+    for (const r of (Array.isArray(rows) ? rows : [])) {
+        if (!r) continue;
+        if (k && keyOf(r.container_no || only) !== k) continue;
+        gross = add(gross, toNum(r.gross_weight_lbs));
+        tare = add(tare, tareOf(r));
+        net = add(net, netOf(r));
+        mt = add(mt, toNum(r.net_weight_mt));
+    }
+    return { gross, tare, net, net_mt: mt };
 }
 
 // Kept as the STRINGS on the document. The same rule as the BOL's weights
@@ -155,6 +216,16 @@ function buildRecord(input, prev) {
         date: i.date || null,
         customer: str(i.customer),
         seal_no: str(i.seal_no),
+        // What is in the container, when it is all one thing. Her words: an
+        // "item description text box" on the right, beside the booking number.
+        item_description: str(i.item_description),
+        // And the switch that turns the grid into a per-item breakdown —
+        // "give a check box as show item in grid-next to s.no in grid,item
+        // should come". Stored on the record rather than kept in the browser
+        // because it decides what the PRINTED document looks like, and a
+        // packing list reopened next month must print the same paper it
+        // printed today.
+        show_item_in_grid: i.show_item_in_grid === true || i.show_item_in_grid === 'true',
         weight_unit: str(i.weight_unit) || 'lb',
         rows: rows.map((r) => {
             const out = {};
@@ -291,9 +362,17 @@ IT MAY BE EITHER OF TWO VERY DIFFERENT THINGS, and both are normal:
   "date": null,           // MM/DD/YYYY. If the document uses DD/MM/YYYY, still output MM/DD/YYYY.
   "customer": null,       // who it is going to — the consignee or buyer named on the list
   "weight_unit": null,    // "lb", "kg" or "mt" — whichever the weights on this document are in
-  "rows": [               // one row per CONTAINER (shape A) or per BUNDLE (shape B), in the order written
+  "item_description": null, // what is in the container when the document names ONE thing for the whole shipment, e.g. "Alternator". Leave null if the lines name different items — those go in each row's "item".
+  "rows": [               // one row per CONTAINER (shape A), per ITEM where a container is broken down by material, or per BUNDLE (shape B), in the order written
     {
       "container_no": null,        // the container this row is for, e.g. "TCLU1234567"
+      // What was weighed, when the document says. One container often holds
+      // several different items — "alternator", "starter", "ac compressor" —
+      // each with its own weights. Copy the wording on the page; leave null
+      // when the line does not name anything. A bundle tally almost never
+      // does, and inventing a material here would put a wrong description on
+      // a customs document.
+      "item": null,
       "gross_weight_lbs": null,    // exactly as printed, keep thousands separators
       "tare_lbs": null,            // the TOTAL tare, if the document prints one single figure
       "net_weight_lbs": null,      // net after the tare, exactly as printed
@@ -386,6 +465,7 @@ function normaliseScan(parsed) {
         seal_no: str(parsed.seal_no),
         date: str(parsed.date),
         customer: str(parsed.customer),
+        item_description: str(parsed.item_description),
         // Only a unit this system understands. A model answering "pounds" or
         // "LBS" must not become a unit string nothing else recognises.
         weight_unit: (() => {
@@ -463,8 +543,16 @@ async function generatePdf(record, { renderer } = {}) {
     // name — which is not an error, it is an EMPTY packing table. The PDF
     // rendered, the header was right, and every weight row was missing. A
     // wrong key on an optional field is the quietest bug there is.
-    const line_items = (rec.rows || []).filter((r) => ROW_FIELDS.some((f) => str(r[f]))).map((r) => ({
+    // Only rows with something WEIGHED on them. See hasWeight: the old test
+    // here was "does any field have a value", which every blank row passes now
+    // that tare defaults to 0 — and a blank row on a packing list is a line
+    // reading "- | 0 | 0 | 0.000" on a document going to a customer.
+    const line_items = (rec.rows || []).filter(hasWeight).map((r) => ({
         container_no: str(r.container_no) || container,
+        // What this weighing was of. Only printed when she asked for the
+        // column; carried regardless, so ticking the box on a list filed last
+        // month prints what was already typed rather than a column of blanks.
+        item: str(r.item),
         weight: str(r.net_weight_mt),
         packing: {
             gross_weight_lbs: str(r.gross_weight_lbs),
@@ -473,7 +561,17 @@ async function generatePdf(record, { renderer } = {}) {
             // the single answer to "what is the tare"; invoicePdf calls the
             // same function rather than repeating the rule.
             tare_lbs: (() => { const t = tareOf(r); return t == null ? '' : t.toLocaleString('en-US'); })(),
-            net_weight_lbs: str(r.net_weight_lbs),
+            // DERIVED HERE TOO, not copied from the stored string. buildRecord
+            // already derives it, so for anything filed through the route the
+            // two agree — but a record that reached this function another way
+            // would otherwise print whatever string it happened to carry, and
+            // invoicePdf falls back to net_weight_mt x 2204.62 when that string
+            // is empty, which rounds. A packing list totalling 13,499 against
+            // an invoice saying 13,500 is a question from a customer.
+            //
+            // netOf is the one answer to "what is the net". The stored string
+            // is kept only as a last resort, for a row with no gross at all.
+            net_weight_lbs: (() => { const n = netOf(r); return n == null ? str(r.net_weight_lbs) : n.toLocaleString('en-US'); })(),
             net_weight_mt: str(r.net_weight_mt),
         },
     }));
@@ -491,6 +589,17 @@ async function generatePdf(record, { renderer } = {}) {
         container_no: container,
         inv_no: str(rec.invoice_no) || invoice.inv_no,
         line_items,
+        // ── HER TWO ANSWERS ABOUT THE PRINTED DOCUMENT ───────────────────
+        // Apsara, 2026-09-16: the Item column goes on the PDF too when she
+        // ticks "show item in grid"; and with the box unticked, the single
+        // header description is "Printed above the packing table".
+        //
+        // The description is passed whether or not the column is showing. It
+        // is redundant when both are filled, and redundant is much better than
+        // a document that silently drops something she typed into it — she
+        // can clear the box if she does not want the line.
+        packing_show_item: rec.show_item_in_grid === true,
+        packing_item_description: str(rec.item_description),
     };
 
     const { buildInvoiceClassicHtml, renderModes } = require('./invoicePdf');
@@ -536,30 +645,60 @@ function compareToInvoice(record) {
         if (k) byContainer.set(k, li);
     }
 
-    const out = [];
+    // ── SUMMED PER CONTAINER, NOT ROW BY ROW ─────────────────────────────
+    // This compared EVERY ROW against the container's invoice line, which was
+    // only ever right when a container had exactly one row. It does not:
+    //
+    //   - Apsara, 2026-09-16: "sometimes i will have 3 different items in a
+    //     container..for eg:alternator,starter,ac compressor"
+    //   - and her handwritten bundle tally is FIFTEEN rows for one container,
+    //     which was already true before she said the first thing.
+    //
+    // Row-by-row, a fifteen-bundle list produced fifteen warnings saying the
+    // packing list claims 3,599 lbs and the invoice claims 61,530 — all of
+    // them wrong, all of them alarming, and a warning list that is wrong every
+    // time is one she learns to scroll past. That is the real cost: it would
+    // have silenced the case it exists to catch.
+    //
+    // The figure both documents assert is the container TOTAL. So that is what
+    // is compared, once per container.
+    const groups = new Map();
     for (const r of (rec.rows || [])) {
         const k = keyOf(r.container_no || container);
+        if (!k) continue;
+        if (!groups.has(k)) groups.set(k, { label: str(r.container_no) || container, rows: [] });
+        groups.get(k).rows.push(r);
+    }
+
+    const out = [];
+    for (const [k, g] of groups) {
         const li = byContainer.get(k);
         if (!li) continue;
         const p = li.packing || {};
-        // A tonne of slack on lbs and a kilo on mt. Both documents are typed by
+        const mine = totalsOf(g.rows);
+        // A pound of slack on lbs and a kilo on mt. Both documents are typed by
         // hand from the same scale tickets, and flagging a 1 lb rounding would
         // make the warning noise rather than information.
         const checks = [
-            ['net weight (lbs)', num(r.net_weight_lbs), num(p.net_weight_lbs), 1],
-            ['net weight (mt)',  num(r.net_weight_mt),  num(p.net_weight_mt) ?? num(li.weight), 0.001],
+            ['net weight (lbs)', mine.net,    num(p.net_weight_lbs), 1],
+            ['net weight (mt)',  mine.net_mt, num(p.net_weight_mt) ?? num(li.weight), 0.001],
         ];
-        for (const [what, mine, theirs, slack] of checks) {
-            if (mine == null || theirs == null) continue;
-            if (Math.abs(mine - theirs) <= slack) continue;
+        for (const [what, ours, theirs, slack] of checks) {
+            if (ours == null || theirs == null) continue;
+            if (Math.abs(ours - theirs) <= slack) continue;
+            // Says how many rows were added together. "The packing list says
+            // 61,530" is checkable; it is not obvious that the figure came
+            // from fifteen lines unless the sentence says so.
+            const from = g.rows.length > 1 ? ` (${g.rows.length} lines added up)` : '';
             out.push({
-                container: r.container_no || container,
+                container: g.label,
                 field: what,
-                packing_list: mine,
+                packing_list: ours,
                 invoice: theirs,
+                rows: g.rows.length,
                 // Said in words, because a client that renders the numbers and
                 // not the sentence leaves her to work out which is which.
-                message: `${r.container_no || container}: the packing list says ${what} ${mine.toLocaleString()}, the invoice says ${theirs.toLocaleString()}.`,
+                message: `${g.label}: the packing list says ${what} ${ours.toLocaleString()}${from}, the invoice says ${theirs.toLocaleString()}.`,
             });
         }
     }
@@ -567,6 +706,6 @@ function compareToInvoice(record) {
 }
 
 module.exports = {
-    ROW_FIELDS, FORM_FIELDS, tareOf, netOf, keyOf, buildRecord, loadAll, list, get, save, remove,
+    ROW_FIELDS, FORM_FIELDS, tareOf, netOf, totalsOf, hasWeight, keyOf, buildRecord, loadAll, list, get, save, remove,
     scan, normaliseScan, generatePdf, compareToInvoice,
 };

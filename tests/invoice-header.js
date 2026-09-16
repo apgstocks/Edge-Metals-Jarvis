@@ -213,5 +213,95 @@ console.log('\n=== separate invoice / packing list ===');
   ck('...and downloads both files', /saved_filenames/.test(dash), true);
 }
 
+// Everything below needs `await`, and this file is a plain CommonJS script —
+// top-level await is a SyntaxError here, not a slow test. One async wrapper
+// around the asynchronous sections, with the summary inside it so the exit
+// code cannot be printed before the checks have run.
+(async () => {
+
+console.log('\n=== invoice only ===');
+// Apsara, 2026-09-16: "add a checkbox called invoice only in invoice of
+// documents". The invoice on its own — no packing list in the PDF, no second
+// file.
+//
+// ── WHY THE RISK HERE IS THE OPPOSITE ONE ───────────────────────────────────
+// Every other check in this section guards against the packing list going
+// MISSING. This one guards against it going OUT: the point of the flag is that
+// a customer receives the invoice and nothing else, and a mode that quietly
+// rendered 'both' would look identical in the filename and the status message.
+// So the assertion is on WHICH MODES are requested, driven through the real
+// function with the renderer injected — Chromium cannot launch in this sandbox
+// and the mode list is the entire decision.
+{
+  const { generateInvoiceClassicPdf } = require(R('helpers/invoicePdf'));
+  const data = { inv_no: INV, container_no: 'KOCU5139886',
+                 line_items: [{ item_desc: 'Aluminium combo', container_no: 'KOCU5139886', weight: 23.469, rate: 1000 }] };
+  const spy = () => { const seen = []; return { seen, render: async (html, modes) => {
+      seen.push(modes.join('+'));
+      return { both: Buffer.from('B'), invoice: Buffer.from('I'), packing: Buffer.from('P') };
+  } }; };
+
+  const a = spy();
+  const onlyOut = await generateInvoiceClassicPdf(data, { invoiceOnly: true, render: a.render });
+  ck('invoice only renders the invoice half ALONE', a.seen, ['invoice']);
+  ck('...and hands back one buffer, not a pair', Buffer.isBuffer(onlyOut) && onlyOut.toString(), 'I');
+
+  const b = spy();
+  await generateInvoiceClassicPdf(data, { render: b.render });
+  ck('no flag still means the combined sheet', b.seen, ['both']);
+
+  const c = spy();
+  await generateInvoiceClassicPdf(data, { separate: true, render: c.render });
+  ck('separate still renders both halves', c.seen, ['invoice+packing']);
+
+  // A contradiction has to resolve the SAFE way: fewer documents than she
+  // expected, never a packing list she asked not to send.
+  const d2 = spy();
+  await generateInvoiceClassicPdf(data, { separate: true, invoiceOnly: true, render: d2.render });
+  ck('invoice only BEATS separate if both arrive', d2.seen, ['invoice']);
+
+  const apiSrc2 = fs.readFileSync(R('api.js'), 'utf8');
+  ck('the API reads the flag', /body\.invoice_only === true/.test(apiSrc2), true);
+  ck('...and stops separate from overriding it',
+     /const separate = !invoiceOnly &&/.test(apiSrc2), true);
+  ck('...and files it under its own name', /_INVOICE\.pdf` : `\$\{safeInv\}\.pdf`/.test(apiSrc2), true);
+}
+
+console.log('\n=== the two checkboxes cannot contradict each other ===');
+// Driven in jsdom, not grepped: the exclusion is four elements and two
+// handlers, and "the function exists" is not the property that matters.
+{
+  const { JSDOM } = require('jsdom');
+  const dash2 = fs.readFileSync(R('dashboard/documents.html'), 'utf8');
+  const dom = new JSDOM(dash2, { runScripts: 'dangerously', url: 'http://localhost/documents',
+    beforeParse(w) {
+      w.fetch = () => new Promise(() => {});   // boot() must never reach the DOM after close()
+      w.alert = () => {};
+    } });
+  await new Promise((r) => setTimeout(r, 250));
+  const w = dom.window, d = w.document;
+  const ids = ['inv_separate', 'inv_separate_bulk', 'inv_only', 'inv_only_bulk'];
+  ck('all four boxes exist', ids.every((i) => !!d.getElementById(i)), true);
+  const state = () => ids.map((i) => (d.getElementById(i).checked ? 1 : 0));
+  const tick = (id) => { const el = d.getElementById(id); el.checked = true;
+                         el.dispatchEvent(new w.Event('change', { bubbles: true })); };
+
+  tick('inv_separate');
+  ck('ticking Separate ticks both Separate boxes', state(), [1, 1, 0, 0]);
+  tick('inv_only');
+  ck('...and ticking Invoice only clears them', state(), [0, 0, 1, 1]);
+  tick('inv_separate_bulk');
+  ck('...it works from the batch bar too', state(), [1, 1, 0, 0]);
+  tick('inv_only_bulk');
+  ck('...both ways', state(), [0, 0, 1, 1]);
+
+  ck('generate sends invoice_only', /payload\.invoice_only = /.test(dash2), true);
+  ck('...and will not send separate alongside it',
+     /payload\.separate = !payload\.invoice_only/.test(dash2), true);
+  dom.window.close();
+}
+
 console.log(`\n  ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
+
+})().catch((e) => { console.error(e); process.exit(1); });

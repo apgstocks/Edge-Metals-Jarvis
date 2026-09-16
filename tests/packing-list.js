@@ -49,6 +49,14 @@ if (!String(cfg.DATA_DIR).startsWith(TMP)) { console.error('  ABORT  config not 
 const pl = require(path.join(ROOT, 'helpers/packingList'));
 const DOCS = fs.readFileSync(path.join(ROOT, 'dashboard/documents.html'), 'utf8');
 
+// Her real weigh sheet, photographed on a desk: fifteen bundles, 61,530 lbs.
+// Module scope rather than inside section A2, because section F needs the same
+// sheet to prove the invoice cross-check produces ONE warning for it and not
+// fifteen — and two copies of her figures would eventually be two different
+// sets of figures.
+const TALLY_WEIGHTS = [3599, 3475, 4146, 3939, 4450, 3815, 4346, 4293, 4018, 4088,
+                       4228, 4210, 4369, 4076, 4478];
+
 // What a real packing list for one of her containers looks like coming back.
 //
 // A WEIGHT BREAKDOWN PER CONTAINER — gross, then the four tare components
@@ -161,8 +169,6 @@ section('A2 — the document she ACTUALLY sends: a handwritten bundle tally');
     // feature has been wrong, and the first time with the real document in
     // front of me. Her actual figures are the fixture now, so this exact sheet
     // cannot quietly stop working again.
-    const TALLY_WEIGHTS = [3599, 3475, 4146, 3939, 4450, 3815, 4346, 4293, 4018, 4088,
-                           4228, 4210, 4369, 4076, 4478];
     // The single weight is the GROSS — Apsara, 2026-09-16: "a single weight is
     // gross..make calc as gross -tare is net.by default make tare as 0". My
     // first version put it in net, which was a guess and the wrong one.
@@ -476,7 +482,16 @@ section('C2 — generating the PDF, and checking it against the invoice');
     ck('a packing list that agrees with its invoice warns about nothing',
        pl.compareToInvoice(rec).length === 0, JSON.stringify(pl.compareToInvoice(rec)));
 
+    // ── DISAGREE BY CHANGING A REAL FIGURE ───────────────────────────────
+    // This used to overwrite net_weight_lbs, which stopped meaning anything
+    // once net became DERIVED (gross minus tare, her rule of 2026-09-16). A
+    // stored net is now a rendering of the two figures beside it, so the way
+    // to make a packing list genuinely disagree with its invoice is to change
+    // what was WEIGHED. 47,400 gross against the same 29,500 of tare is
+    // 17,900 net — the same disagreement this check has always been about,
+    // expressed in a field that still drives something.
     const differ = JSON.parse(JSON.stringify(rec));
+    differ.rows[0].gross_weight_lbs = '47,400';
     differ.rows[0].net_weight_lbs = '17,900';
     const warn = pl.compareToInvoice(differ);
     ck('a net weight that disagrees IS flagged', warn.length === 1, JSON.stringify(warn));
@@ -491,6 +506,7 @@ section('C2 — generating the PDF, and checking it against the invoice');
     // the same scale tickets; flagging a 1 lb difference teaches her to ignore
     // the warning, and then the real one goes past too.
     const rounded = JSON.parse(JSON.stringify(rec));
+    rounded.rows[0].gross_weight_lbs = '46,301';
     rounded.rows[0].net_weight_lbs = '16,801';
     ck('  a 1 lb rounding is NOT flagged', pl.compareToInvoice(rounded).length === 0,
        JSON.stringify(pl.compareToInvoice(rounded)));
@@ -689,8 +705,13 @@ section('E — Generate hands her the FILE');
     // Through the input event, not by poking pkRows: that is a top-level
     // `let` and therefore NOT a window property — the seventh time this
     // project has been caught by that, so this file does not test it that way.
-    const gross = d.querySelector('#pkItems input[data-pi="0"][data-pk="gross_weight_lbs"]')
-               || d.querySelector('#pkItems input[data-pi="0"]');
+    // data-pf, not data-pk. The first version of this line had the wrong
+    // attribute and fell through to "the first input in row 0" — which is the
+    // NOTE box. It passed anyway, because until hasWeight landed a row with
+    // only a note (and the default tare "0") still counted as a row. A test
+    // that passes by luck keeps passing when the thing under it breaks.
+    const gross = d.querySelector('#pkItems input[data-pi="0"][data-pf="gross_weight_lbs"]');
+    if (!gross) throw new Error('no gross box in row 0');
     gross.value = '3599';
     gross.dispatchEvent(new w.Event('input', { bubbles: true }));
 
@@ -729,6 +750,263 @@ section('E — Generate hands her the FILE');
     ck('    which the BOL\'s query would NOT have done',
        !docsSaved.resolveSavedPath({ kind: 'bol', filename: q.file, date: q.date }),
        'copying bolDownload verbatim would have looked right and 404d');
+
+    dom.window.close();
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+section('F — three items in one container');
+// ══════════════════════════════════════════════════════════════════════════
+{
+    // Apsara, 2026-09-16: "sometimes i will have 3 different items in a
+    // container..for eg:alternator,starter,ac compressor.each with separate
+    // gross,net,tare overall total gross,net,tare and adding those
+    // gross,net,tare --->overall for the container..on the right side of
+    // booking number,add a item description text box.give a check box as show
+    // item in grid-next to s.no in grid,item should come".
+    //
+    // ── WHAT THIS ACTUALLY CHANGED ───────────────────────────────────────
+    // A ROW STOPPED BEING A CONTAINER. It was already not one — her
+    // handwritten tally is fifteen rows for one container — but nothing in
+    // the code said so, and two things quietly assumed the old shape:
+    //
+    //   the TOTAL row, which printed only a net and left gross and tare
+    //   blank (harmless on one row, a missing answer on three), and
+    //
+    //   compareToInvoice, which checked EVERY ROW against the container's
+    //   invoice line and would have warned three times, all three wrong.
+    //
+    // Section A2's fifteen-bundle tally is the same shape, so the second of
+    // those was live before she asked for any of this.
+    const iv2 = require(path.join(ROOT, 'helpers/invoiceVersions'));
+    await iv2.saveInvoiceVersion('HMMU7060866', {
+        inv_no: 'PL-3ITEM', container_no: 'HMMU7060866', consignee: 'Eccomelt Inc',
+        line_items: [{ container_no: 'HMMU7060866', weight: '6.123',
+            packing: { net_weight_lbs: '13,500', net_weight_mt: '6.123' } }],
+    });
+
+    const threeItems = {
+        container_no: 'HMMU7060866', invoice_no: 'PL-3ITEM', show_item_in_grid: true,
+        rows: [
+            { item: 'Alternator',    gross_weight_lbs: '6,000', tare_lbs: '600', net_weight_mt: '2.449' },
+            { item: 'Starter',       gross_weight_lbs: '5,000', tare_lbs: '500', net_weight_mt: '2.041' },
+            { item: 'AC compressor', gross_weight_lbs: '4,000', tare_lbs: '400', net_weight_mt: '1.633' },
+        ],
+    };
+
+    // ── THE OVERALL FIGURE ───────────────────────────────────────────────
+    const t = pl.totalsOf(threeItems.rows);
+    ck('three items add up to one container', t.gross === 15000 && t.tare === 1500 && t.net === 13500,
+       JSON.stringify(t));
+    ck('  and the net total is the sum of the DERIVED nets',
+       t.net === threeItems.rows.reduce((a, r) => a + pl.netOf(r), 0),
+       'a total taken from stored strings can disagree with the column above it');
+    ck('  nothing to add gives null, not 0',
+       pl.totalsOf([]).gross === null && pl.totalsOf([{}]).net === null,
+       'a printed 0 claims a container that weighed nothing');
+    ck('  and one container can be picked out of a list covering several',
+       pl.totalsOf([{ container_no: 'AAAU1', gross_weight_lbs: '10' },
+                    { container_no: 'BBBU2', gross_weight_lbs: '90' }], 'bbbu 2').gross === 90,
+       'spacing and case differ on every carrier document');
+
+    // ── THE PRINTED TABLE ────────────────────────────────────────────────
+    // COUNTED, not eyeballed. A TOTAL row with the wrong number of cells does
+    // not error — it SHEARS, sliding every figure one column left so the nets
+    // print under the wrong headings on the page a customer checks with a
+    // calculator. The column count now depends on a checkbox, which is exactly
+    // when that goes wrong.
+    const tableOf = (html) => {
+        const d = html.slice(html.indexOf('<div class="doc-packing">'));
+        const tbl = d.slice(d.indexOf('<table'), d.indexOf('</table>'));
+        return [...tbl.matchAll(/<tr[^>]*>[\s\S]*?<\/tr>/g)].map((m) =>
+            [...m[0].matchAll(/<t[hd][^>]*>([\s\S]*?)<\/t[hd]>/g)]
+                .map((c) => c[1].replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim()));
+    };
+
+    let shown = null;
+    await pl.generatePdf(threeItems, { renderer: async (html) => { shown = tableOf(html); return { packing: Buffer.from('x') }; } });
+    ck('every row of the printed table has the same number of cells',
+       new Set(shown.map((r) => r.length)).size === 1,
+       shown.map((r) => r.length).join(',') + ' — a TOTAL row with the wrong count SHEARS, it does not error');
+    ck('  six columns when the item is shown', shown[0].length === 6, shown[0].join(' | '));
+    ck('  headed Container, Item, Gross, Tare, Net, Net',
+       /Item/.test(shown[0][1]) && /Gross/.test(shown[0][2]), shown[0].join(' | '));
+    ck('  each item on its own line', shown[1][1] === 'Alternator' && shown[3][1] === 'AC compressor',
+       shown.slice(1, 4).map((r) => r[1]).join(' / '));
+
+    const total = shown[shown.length - 1];
+    ck('the TOTAL row carries gross, tare AND net', total[0] === 'TOTAL'
+       && total[2] === '15,000' && total[3] === '1,500' && total[4] === '13,500',
+       total.join(' | ') + ' — gross and tare used to print as blank cells');
+    ck('  and the MT total', total[5] === '6.123', total.join(' | '));
+
+    // ── AND WITHOUT THE CHECKBOX, NOTHING MOVED ──────────────────────────
+    // An invoice generated through "Separate invoice & packing list" prints
+    // the same five columns it has printed since 2026-09-09. A screen growing
+    // a checkbox must not reshape a document nothing on this path asked to
+    // change.
+    let plain = null;
+    await pl.generatePdf({ ...threeItems, show_item_in_grid: false, item_description: 'Auto parts' },
+        { renderer: async (html) => { plain = { t: tableOf(html), html }; return { packing: Buffer.from('x') }; } });
+    ck('unticked, the table is five columns as before',
+       new Set(plain.t.map((r) => r.length)).size === 1 && plain.t[0].length === 5,
+       plain.t.map((r) => r.length).join(','));
+    ck('  and the totals are still right', plain.t[plain.t.length - 1].slice(1).join('|') === '15,000|1,500|13,500|6.123',
+       plain.t[plain.t.length - 1].join(' | '));
+    // Her answer when asked where the single description should go: "Printed
+    // above the packing table".
+    ck('  the one item description prints above the table', /Item: Auto parts/.test(plain.html),
+       'she typed it into the form; a document that silently drops it is worse than a redundant line');
+    ck('    above, not inside it',
+       plain.html.indexOf('Item: Auto parts') < plain.html.indexOf('{{packing_rows}}'.replace('{{', '').replace('}}', ''))
+       || plain.html.indexOf('Item: Auto parts') < plain.html.slice(plain.html.indexOf('<div class="doc-packing">')).indexOf('<table') + plain.html.indexOf('<div class="doc-packing">'),
+       'a description below the weights reads as a footnote');
+    ck('  and an empty one prints nothing at all',
+       !/Item:\s*</.test(plain.html.replace(/Item: Auto parts/, '')),
+       'a label with nothing after it looks like a field that failed to fill');
+
+    // ── AND A BLANK ROW NEVER REACHES THE PAPER ──────────────────────────
+    // The form opens with empty rows carrying tare "0". Before hasWeight they
+    // printed as "- | 0 | 0 | 0.000" under her real weights.
+    let withBlank = null;
+    await pl.generatePdf({ ...threeItems, rows: [...threeItems.rows, { tare_lbs: '0' }, { item: 'Radiator' }] },
+        { renderer: async (html) => { withBlank = tableOf(html); return { packing: Buffer.from('x') }; } });
+    ck('a blank row does not print', withBlank.length === shown.length,
+       `${withBlank.length} rows vs ${shown.length} — "- | 0 | 0 | 0.000" on a customer's packing list`);
+    ck('  and neither does an item with no weighing behind it',
+       !withBlank.some((r) => r[1] === 'Radiator'),
+       withBlank.map((r) => r[1]).join(' / '));
+
+    // ── THE WARNING IS PER CONTAINER, NOT PER ROW ────────────────────────
+    ck('three items that add up to the invoice warn about NOTHING',
+       pl.compareToInvoice(threeItems).length === 0,
+       JSON.stringify(pl.compareToInvoice(threeItems)) + ' — row-by-row this was three warnings, every one of them wrong');
+
+    const off = JSON.parse(JSON.stringify(threeItems));
+    off.rows[1].gross_weight_lbs = '5,900';   // +900 on the container
+    const w2 = pl.compareToInvoice(off);
+    ck('  but a container total that is out IS flagged, once', w2.length === 1, JSON.stringify(w2));
+    ck('    with the container total, not one row\'s figure',
+       w2[0] && /14,400/.test(w2[0].message), w2[0] && w2[0].message);
+    ck('    and says how many lines were added up',
+       w2[0] && /3 lines added up/.test(w2[0].message), w2[0] && w2[0].message);
+
+    // The fifteen-bundle tally from section A2 is the same shape, and was
+    // being warned about fifteen times before this.
+    const tally15 = { container_no: 'HMMU7060866', rows: TALLY_WEIGHTS.map((v) => ({ gross_weight_lbs: String(v) })) };
+    const w15 = pl.compareToInvoice(tally15);
+    ck('  a fifteen-bundle tally produces ONE warning, not fifteen', w15.length === 1,
+       `${w15.length} — a warning list that is wrong every time is one she learns to scroll past`);
+    ck('    quoting 61,530, the whole container', w15[0] && /61,530/.test(w15[0].message),
+       w15[0] && w15[0].message);
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+section('G — the item column on the screen');
+// ══════════════════════════════════════════════════════════════════════════
+{
+    const dom = new JSDOM(DOCS, { runScripts: 'dangerously', url: 'http://localhost/documents',
+        beforeParse(w) {
+            w.fetch = () => Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ ok: true, packing_lists: [], bols: [] }) });
+            w.alert = () => {}; w.confirm = () => true;
+        } });
+    await new Promise((r) => setTimeout(r, 400));
+    const w = dom.window, d = w.document;
+    [...d.querySelectorAll('.subtab-btn')].find((b) => b.dataset.subtab === 'packing')
+        .dispatchEvent(new w.MouseEvent('click', { bubbles: true }));
+    await new Promise((r) => setTimeout(r, 150));
+
+    // "on the right side of booking number,add a item description text box"
+    ck('there is an item description box', !!d.getElementById('pk_item_desc'));
+    const cols = [...d.querySelector('#panelPacking [data-pkfield="date"]').parentElement.parentElement.children];
+    ck('  to the RIGHT of the booking number column', cols.length === 3
+       && [...cols[2].querySelectorAll('[data-pkfield]')].some((e) => e.dataset.pkfield === 'item_description'),
+       `${cols.length} columns`);
+    ck('there is a "show item in grid" checkbox', !!d.getElementById('pk_show_item'));
+    ck('  off by default', d.getElementById('pk_show_item').checked === false,
+       'one item per container is the ordinary case; a column of blanks is not');
+
+    // ── THE HEADING AND THE ROWS COME FROM ONE CALL ──────────────────────
+    // The grid is CSS columns, so a heading built from a different column
+    // count than the inputs does not error — the labels simply sit over the
+    // wrong boxes, and she types a tare into Gross.
+    const headCells = () => [...d.querySelector('#pkItems > div').children].map((c) => c.textContent.trim());
+    const gridOf = (n) => (d.querySelectorAll('#pkItems > div')[n].getAttribute('style')
+        .match(/grid-template-columns:([^;]*)/) || [, ''])[1].trim().split(/\s+/);
+
+    ck('unticked: # then the three weights', headCells().join(',') === '#,Gross,Tare,Net,',
+       headCells().join(','));
+    ck('  and the heading grid matches a row exactly',
+       gridOf(0).join(' ') === gridOf(1).join(' '), `${gridOf(0).join(' ')} vs ${gridOf(1).join(' ')}`);
+
+    const cb = d.getElementById('pk_show_item');
+    cb.checked = true; cb.dispatchEvent(new w.Event('change', { bubbles: true }));
+    await new Promise((r) => setTimeout(r, 60));
+
+    // "next to s.no in grid,item should come" — between the line number and
+    // the weights, not tacked on the end.
+    ck('ticked: Item appears right after #', headCells().join(',') === '#,Item,Gross,Tare,Net,',
+       headCells().join(','));
+    ck('  the heading and the rows still agree',
+       gridOf(0).join(' ') === gridOf(1).join(' '), `${gridOf(0).join(' ')} vs ${gridOf(1).join(' ')}`);
+    // ── AND THE WIDE COLUMN IS THE ONE HOLDING THE NAME ──────────────────
+    // The cells are laid out by CSS grid, so their ORDER in the markup and
+    // their WIDTHS are two separate statements that can disagree. Adding the
+    // item's width at the end of the template instead of after the line
+    // number leaves the markup reading "# | Item | Gross" while the boxes are
+    // sized 52 | 130 | 130 | 130 | 190 — an "Alternator" box the size of a
+    // weight, and a Net box big enough for a sentence. Nothing errors and the
+    // heading check above still passes, so it is asserted directly.
+    ck('    and it is the SECOND column that is wide',
+       gridOf(1)[1] === '190px', gridOf(1).join(' '));
+    ck('  and every row got an item box',
+       [...d.querySelectorAll('#pkItems input[data-pf="item"]')].length === d.querySelectorAll('#pkItems > div').length - 1,
+       'one heading plus one box per row');
+
+    // Typing goes to the row, and the payload carries both settings.
+    const it = d.querySelector('#pkItems input[data-pi="0"][data-pf="item"]');
+    it.value = 'Alternator'; it.dispatchEvent(new w.Event('input', { bubbles: true }));
+    const g = d.querySelector('#pkItems input[data-pi="0"][data-pf="gross_weight_lbs"]');
+    g.value = '6000'; g.dispatchEvent(new w.Event('input', { bubbles: true }));
+    d.getElementById('pk_item_desc').value = 'Auto parts';
+    const payload = w.eval('pkPayload()');
+    ck('the item reaches the payload', payload.rows[0] && payload.rows[0].item === 'Alternator',
+       JSON.stringify(payload.rows[0]));
+    ck('  along with the checkbox', payload.show_item_in_grid === true, String(payload.show_item_in_grid));
+    ck('  and the header description', payload.item_description === 'Auto parts', payload.item_description);
+
+    // ── THE BLANK ROW THAT WAS BEING FILED ───────────────────────────────
+    // THE BUG THIS SECTION FOUND. The form opens with two empty rows, and
+    // since tare started defaulting to "0" this morning, "does any weight
+    // column have a value" was TRUE for both of them. So a packing list with
+    // one weighing on it filed two rows and PRINTED the empty one, as
+    // "- | 0 | 0 | 0.000", on the document a customer receives.
+    //
+    // Nothing in the suite noticed: every fixture in this file builds its own
+    // rows, so no test had ever been through the screen's own blank row.
+    ck('an untouched blank row is NOT filed', w.eval('pkPayload()').rows.length === 1,
+       JSON.stringify(w.eval('pkPayload()').rows) + ' — tare "0" made every empty row look real');
+
+    // But a name she typed ahead of the scale ticket is hers. Kept, so nothing
+    // she typed is lost; not printed, which is helpers/packingList.js's
+    // hasWeight.
+    const it2 = d.querySelector('#pkItems input[data-pi="1"][data-pf="item"]');
+    it2.value = 'Starter'; it2.dispatchEvent(new w.Event('input', { bubbles: true }));
+    ck('  but a named row with no weight yet is kept',
+       w.eval('pkPayload()').rows.length === 2,
+       'she names the three items, then weighs them — a save in between must not lose the names');
+    ck('    and still does not print',
+       pl.hasWeight({ item: 'Starter', tare_lbs: '0' }) === false,
+       'an item with no weighing behind it is not a line on a packing list');
+
+    // Untick and the weights must survive — the column is a view, not a store.
+    cb.checked = false; cb.dispatchEvent(new w.Event('change', { bubbles: true }));
+    await new Promise((r) => setTimeout(r, 60));
+    ck('unticking keeps the weights', w.eval('pkPayload()').rows[0].gross_weight_lbs === '6000',
+       JSON.stringify(w.eval('pkPayload()').rows[0]));
+    ck('  and does not throw the item away either',
+       w.eval('pkRows[0].item') === 'Alternator',
+       'hiding a column that deletes what is under it is a data loss she cannot see');
 
     dom.window.close();
 }

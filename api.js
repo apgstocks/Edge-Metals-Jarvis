@@ -5887,8 +5887,18 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
             // Apsara, 2026-09-09: "Use seprate flag." Off by default, so an
             // existing client that does not send it gets the combined PDF it
             // has always got. The old Flask tool used the same field name.
-            const separate = body.separate === true || body.separate === 'true';
-            const out = await generateInvoiceClassicPdf(body, { separate });
+            // ── invoice only ────────────────────────────────────────────────
+            // Apsara, 2026-09-16: "add a checkbox called invoice only in
+            // invoice of documents". The invoice alone, no packing list in the
+            // PDF and no second file.
+            //
+            // Checked BEFORE separate and wins over it: the two are a
+            // contradiction, and the safe reading of a contradiction is the
+            // narrower one — she gets fewer documents than she expected rather
+            // than a packing list she asked not to send.
+            const invoiceOnly = body.invoice_only === true || body.invoice_only === 'true';
+            const separate = !invoiceOnly && (body.separate === true || body.separate === 'true');
+            const out = await generateInvoiceClassicPdf(body, { separate, invoiceOnly });
 
             if (req.query.preview === '1') {
                 // Preview is a single inline PDF by construction — a browser
@@ -5924,7 +5934,10 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
             }
 
             const pdf = out;
-            const filename = `${safeInv}.pdf`;
+            // Named _INVOICE so a file on her desk says which of the two it
+            // is. The same name separate mode gives its invoice half, because
+            // it is the same document — one filing convention, not two.
+            const filename = invoiceOnly ? `${safeInv}_INVOICE.pdf` : `${safeInv}.pdf`;
             const savedPath = documentsSaved.saveInvoiceCopy(pdf, filename, body.container_no || 'UNKNOWN');
 
             // Save the form-state snapshot that produced this real PDF, so a

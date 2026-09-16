@@ -294,35 +294,115 @@ function buildInvoiceClassicHtml(data) {
     // Packing List rows — one per line item, using whatever weights were
     // resolved server-side (real packing-sheet data where matched, else a
     // calculated fallback — see helpers/invoiceSheet.js).
-    let totalNetLbs = 0, totalNetMt = 0;
+    // ── THE PACKING TABLE'S COLUMNS, DECLARED ONCE ───────────────────────
+    // Apsara, 2026-09-16: "sometimes i will have 3 different items in a
+    // container..for eg:alternator,starter,ac compressor.each with separate
+    // gross,net,tare overall total gross,net,tare and adding those
+    // gross,net,tare --->overall for the container", and on whether the
+    // customer's copy shows the breakdown: "Item column on the PDF too".
+    //
+    // The table is therefore FIVE columns or SIX, and the heading, the rows
+    // and the TOTAL row must all agree about which. Three hand-written copies
+    // of a changing count is how that row SHEARS: no error, the net figures
+    // slide one column left and print under the wrong headings on the paper a
+    // customer is checking with a calculator. tests/packing-list.js counts
+    // cells for exactly this reason.
+    //
+    // So: one list, three renderers. The count cannot disagree with itself.
+    //
+    // ── OFF BY DEFAULT ───────────────────────────────────────────────────
+    // showItem is false unless a packing list says otherwise, so an INVOICE
+    // generated through the "Separate invoice & packing list" flag prints the
+    // same five columns it has printed since 2026-09-09. Nothing on file
+    // changes shape because a different screen grew a checkbox.
+    const showItem = data.packing_show_item === true || data.packing_show_item === 'true';
+    const num = (v) => {
+        const n = parseFloat(String(v == null ? '' : v).replace(/,/g, '').trim());
+        return isFinite(n) ? n : null;
+    };
+
+    let totalNetLbs = 0, totalNetMt = 0, totalGrossLbs = null, totalTareLbs = null;
+    const addUp = (acc, v) => (v == null ? acc : (acc == null ? v : acc + v));
+
+    const PACKING_COLUMNS = [
+        { head: 'Container', width: showItem ? '18%' : '22%',
+          cell: (item) => escapeHtml(item.container_no || data.container_no),
+          total: 'TOTAL' },
+        ...(showItem ? [{ head: 'Item', width: '16%',
+          cell: (item) => escapeHtml(item.item || ''), total: '' }] : []),
+        { head: 'Gross Weight<br>(lbs)', width: showItem ? '17%' : '20%',
+          cell: (item, p) => escapeHtml(p.gross_weight_lbs || '-'),
+          total: () => (totalGrossLbs == null ? '' : formatInt(totalGrossLbs)) },
+        { head: 'Tare<br>(lbs)', width: showItem ? '16%' : '20%',
+          cell: (item, p) => { const t = require('./packingList').tareOf(p);
+                               return escapeHtml(t == null ? '-' : t.toLocaleString('en-US')); },
+          total: () => (totalTareLbs == null ? '' : formatInt(totalTareLbs)) },
+        { head: 'Net Weight<br>(lbs)', width: showItem ? '17%' : '20%',
+          cell: (item, p, netLbs) => escapeHtml(p.net_weight_lbs || formatInt(netLbs)),
+          total: () => formatInt(totalNetLbs) },
+        { head: 'Net Weight<br>(MT)', width: showItem ? '16%' : '18%',
+          cell: (item, p, netLbs, netMt) => netMt.toFixed(3),
+          total: () => totalNetMt.toFixed(3) },
+    ];
+
+    const packingHeadCellsHtml = PACKING_COLUMNS.map((c) =>
+        `          <th style="width:${c.width};padding:1mm;font-size:9.5pt;text-align:center;vertical-align:middle;border:1pt solid black;">${c.head}</th>`
+    ).join('\n');
+
+    // Packing List rows — one per line item, using whatever weights were
+    // resolved server-side (real packing-sheet data where matched, else a
+    // calculated fallback — see helpers/invoiceSheet.js).
+    //
+    // ── ONE TARE COLUMN ──────────────────────────────────────────────────
+    // Apsara, 2026-09-16: "in packing list,i juxt want gross,tare ,net" — and,
+    // on whether the printed document follows, "Yes".
+    //
+    // helpers/packingList.js's tareOf is the ONE place that decides what a
+    // tare is: her own figure when she typed one, otherwise the four
+    // components added up. Reused rather than re-implemented here, because two
+    // answers to "what is the tare" would eventually differ, and they would
+    // differ on a document a customer is holding.
+    //
+    // An INVOICE SAVED BEFORE TODAY still carries truck/container/chassis/
+    // boxes broken out. It regenerates with the same total it always had, in
+    // one column instead of four — nothing on file needs migrating.
     const packingRowsHtml = lineItems.map((item) => {
         const p = item.packing || {};
         const netMt = parseFloat(String(p.net_weight_mt || '').replace(/,/g, '')) || Number(item.weight) || 0;
         const netLbs = parseFloat(String(p.net_weight_lbs || '').replace(/,/g, '')) || Math.round(netMt * 2204.62);
         totalNetMt += netMt;
         totalNetLbs += netLbs;
-        // ── ONE TARE COLUMN ──────────────────────────────────────────────
-        // Apsara, 2026-09-16: "in packing list,i juxt want gross,tare ,net" —
-        // and, on whether the printed document follows, "Yes".
-        //
-        // helpers/packingList.js's tareOf is the ONE place that decides what a
-        // tare is: her own figure when she typed one, otherwise the four
-        // components added up. Reused rather than re-implemented here, because
-        // two answers to "what is the tare" would eventually differ, and they
-        // would differ on a document a customer is holding.
-        //
-        // An INVOICE SAVED BEFORE TODAY still carries truck/container/chassis/
-        // boxes broken out. It regenerates with the same total it always had,
-        // in one column instead of four — nothing on file needs migrating.
-        const tare = require('./packingList').tareOf(p);
-        return `        <tr style="height:10mm;">
-          <td style="padding:1mm;font-size:9.5pt;text-align:center;vertical-align:middle;">${escapeHtml(item.container_no || data.container_no)}</td>
-          <td style="padding:1mm;font-size:9.5pt;text-align:center;vertical-align:middle;">${escapeHtml(p.gross_weight_lbs || '-')}</td>
-          <td style="padding:1mm;font-size:9.5pt;text-align:center;vertical-align:middle;">${escapeHtml(tare == null ? '-' : tare.toLocaleString('en-US'))}</td>
-          <td style="padding:1mm;font-size:9.5pt;text-align:center;vertical-align:middle;">${escapeHtml(p.net_weight_lbs || formatInt(netLbs))}</td>
-          <td style="padding:1mm;font-size:9.5pt;text-align:center;vertical-align:middle;">${netMt.toFixed(3)}</td>
-        </tr>`;
+        // The overall gross and tare for the container — her words, "overall
+        // total gross,net,tare". Null rather than 0 when no row carried one:
+        // a printed 0 claims a container that weighed nothing, and a blank is
+        // an absence. Same rule tareOf follows.
+        totalGrossLbs = addUp(totalGrossLbs, num(p.gross_weight_lbs));
+        totalTareLbs = addUp(totalTareLbs, require('./packingList').tareOf(p));
+        const cells = PACKING_COLUMNS.map((c) =>
+            `          <td style="padding:1mm;font-size:9.5pt;text-align:center;vertical-align:middle;">${c.cell(item, p, netLbs, netMt)}</td>`
+        ).join('\n');
+        return `        <tr style="height:10mm;">\n${cells}\n        </tr>`;
     });
+
+    // Built AFTER the rows, because the totals are accumulated while they
+    // render. Hence the thunks in `total` above — reading the variables at
+    // declaration time would print zeroes.
+    const packingTotalCellsHtml = PACKING_COLUMNS.map((c, i) => {
+        const v = typeof c.total === 'function' ? c.total() : c.total;
+        const style = v
+            ? 'padding:2mm 1mm;font-weight:700;font-size:10pt;text-align:center;vertical-align:middle;border:1pt solid black;'
+            : 'padding:2mm 1mm;border:1pt solid black;';
+        return `          <td style="${style}">${v}</td>`;
+    }).join('\n');
+
+    // One line naming what is in the container when it is all one thing.
+    // Apsara, 2026-09-16, on where the header description goes: "Printed above
+    // the packing table". Empty when she has not named one — a stray "Item:"
+    // with nothing after it looks like a field that failed to fill.
+    const itemDesc = String(data.packing_item_description || '').trim();
+    const packingItemLineHtml = itemDesc
+        ? `    <div class="seam" style="padding:1.5mm 2mm;font-size:10pt;font-weight:700;border-left:0.8pt solid var(--black);border-right:0.8pt solid var(--black);">Item: ${escapeHtml(itemDesc)}</div>`
+        : '';
 
     let html = loadTemplate();
     // Clone the invoice header into the standalone packing-list slot before
@@ -371,6 +451,13 @@ function buildInvoiceClassicHtml(data) {
         signature_src: require('./signature').signatureDataUrl() || '',
         signature_block: require('./signature').signatureBlockHtml(),
         packing_rows: packingRowsHtml.join('\n'),
+        packing_head_cells: packingHeadCellsHtml,
+        packing_total_cells: packingTotalCellsHtml,
+        packing_item_line: packingItemLineHtml,
+        // Kept as substitutions even though the TOTAL row now builds its own
+        // cells: an older saved template or another caller may still reference
+        // them, and leaving a live {{placeholder}} on a customer's document is
+        // the worst possible failure mode for a rename.
         total_net_lbs_fmt: formatInt(totalNetLbs),
         total_net_mt_fmt: totalNetMt.toFixed(3),
     };
@@ -442,13 +529,41 @@ async function renderModes(html, modes, opts) {
 //
 // The return type changes with the flag rather than always being an object,
 // so every existing caller keeps working untouched. api.js opts in explicitly.
+// ── invoice only ──────────────────────────────────────────────────────────
+// Apsara, 2026-09-16: "add a checkbox called invoice only in invoice of
+// documents".
+//
+// opts.invoiceOnly true -> Buffer, the invoice ALONE. No packing list, not in
+//                          the same PDF and not as a second file.
+//
+// The machinery was already there: the template has hidden the packing half
+// under body.only-invoice since 2026-09-09, and separate mode has been
+// rendering exactly this document as its first output ever since. What was
+// missing was a way to ask for it and keep only that half.
+//
+// It BEATS separate, and deliberately so: "invoice only" and "and also give me
+// the packing list" are a contradiction, and the safe reading of a
+// contradiction on a document going to a customer is the narrower one — she
+// gets fewer papers than she expected, not a packing list she asked not to
+// send. The screen keeps the two boxes from being ticked together; this is
+// what happens if anything else ever posts both.
+//
+// `opts.render` is injectable for the same reason helpers/packingList.js's
+// generatePdf takes a renderer: Chromium cannot launch in the test sandbox, and
+// WHICH MODES are asked for is the whole of this decision. A test that cannot
+// see the mode list can only re-read the source.
 async function generateInvoiceClassicPdf(data, opts = {}) {
     const { html } = buildInvoiceClassicHtml(data);
+    const render = opts.render || renderModes;
+    if (opts.invoiceOnly) {
+        const { invoice } = await render(html, ['invoice'], opts);
+        return invoice;
+    }
     if (!opts.separate) {
-        const { both } = await renderModes(html, ['both'], opts);
+        const { both } = await render(html, ['both'], opts);
         return both;
     }
-    const { invoice, packing } = await renderModes(html, ['invoice', 'packing'], opts);
+    const { invoice, packing } = await render(html, ['invoice', 'packing'], opts);
     return { invoice, packing };
 }
 

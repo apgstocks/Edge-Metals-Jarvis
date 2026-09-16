@@ -317,6 +317,33 @@ body[data-theme="light"] {
           <div class="field" data-pkfield="container_no"><label for="pk_container">Container number</label><input id="pk_container" type="text" placeholder="TCLU1234567"></div>
           <div class="field" data-pkfield="seal_no"><label for="pk_seal">Seal number</label><input id="pk_seal" type="text"></div>
         </div>
+        <!-- ── WHAT IS IN THE CONTAINER ─────────────────────────────────
+             Apsara, 2026-09-16: "on the right side of booking number,add a
+             item description text box.give a check box as show item in grid
+             -next to s.no in grid,item should come".
+
+             TWO WAYS TO SAY THE SAME THING, and which one is right depends on
+             the container. One item in the box: name it once, here, and it
+             prints above the packing table (her answer: "Printed above the
+             packing table"). Three items — alternator, starter, ac
+             compressor — each with their own weights: tick the box and the
+             grid grows an Item column beside the line number, and so does the
+             PDF ("Item column on the PDF too").
+
+             The checkbox is stored ON THE RECORD, not in the browser: it
+             decides what the printed document looks like, and a packing list
+             reopened next month must print the same paper it printed today. -->
+        <div style="display:flex; flex-direction:column; gap:12px; width:260px;">
+          <div class="field" data-pkfield="item_description">
+            <label for="pk_item_desc">Item description</label>
+            <input id="pk_item_desc" type="text" placeholder="Alternator" autocomplete="off">
+          </div>
+          <label for="pk_show_item" style="display:flex; align-items:center; gap:7px; font-size:12px; color:var(--text-muted); cursor:pointer; user-select:none;">
+            <input type="checkbox" id="pk_show_item" style="width:15px; height:15px; margin:0; cursor:pointer;">
+            Show item in grid
+          </label>
+          <div style="font-size:11px; color:var(--text-faint); line-height:1.45;">Tick this when one container holds several items and each has its own weights. The grid and the PDF both gain an Item column.</div>
+        </div>
         <!-- No unit picker: this document's columns ARE the units
              (Net lbs and Net mt are separate columns on her packing list),
              so a unit dropdown would be a second, contradictory answer. -->
@@ -429,6 +456,14 @@ body[data-theme="light"] {
           <label id="invSeparateBulkWrap" style="display:flex; align-items:center; gap:6px; font-size:12px; color:var(--text-muted); cursor:pointer;">
             <input type="checkbox" id="inv_separate_bulk" style="width:15px; height:15px; cursor:pointer;">
             Separate invoice &amp; packing list
+          </label>
+          <!-- Here as well as on Step 3, for the reason the note above gives:
+               the batch flow steps through Step 3 once per container, so a
+               setting that only exists there has to be re-ticked for every
+               invoice in the queue. -->
+          <label id="invOnlyBulkWrap" style="display:flex; align-items:center; gap:6px; font-size:12px; color:var(--text-muted); cursor:pointer;">
+            <input type="checkbox" id="inv_only_bulk" style="width:15px; height:15px; cursor:pointer;">
+            Invoice only
           </label>
           <button id="btnInvBulkGenerate" type="button" class="btn btn-primary" style="padding:6px 12px; font-size:11px;">Review &amp; generate selected</button>
         </div>
@@ -561,6 +596,18 @@ body[data-theme="light"] {
         <label style="display:inline-flex; align-items:center; gap:6px; font-size:12px; color:var(--text-body); cursor:pointer; user-select:none;">
           <input type="checkbox" id="inv_separate" style="width:auto; margin:0;">
           Separate invoice &amp; packing list
+        </label>
+        <!-- Apsara, 2026-09-16: "add a checkbox called invoice only in invoice
+             of documents". The invoice on its own — no packing list in the PDF
+             and no second file.
+
+             Mutually exclusive with Separate, enforced both ways below and
+             again on the server. "Invoice only" and "also send the packing
+             list" cannot both be true, and a pair of checkboxes that can be
+             ticked into a contradiction is a pair that eventually is. -->
+        <label style="display:inline-flex; align-items:center; gap:6px; font-size:12px; color:var(--text-body); cursor:pointer; user-select:none;">
+          <input type="checkbox" id="inv_only" style="width:auto; margin:0;">
+          Invoice only
         </label>
         <span id="invSuccessMsg" style="font-size:12px; color:var(--leaf-400); align-self:center;"></span>
         <button id="btnInvGenerate" type="button" class="btn btn-primary">Generate &amp; Download</button>
@@ -3972,15 +4019,36 @@ async function downloadSavedInvoice(filename, containerNo) {
 // are the same setting, so ticking either ticks the other — otherwise the
 // batch flow silently ignores whichever one she did not use, which is exactly
 // the confusion that produced "Separate flag not coming".
+//
+// "Invoice only" (2026-09-16) works the same way and for the same reason, and
+// the two settings EXCLUDE each other: ticking either unticks the other, in
+// both places. A screen that lets her tick "invoice only" and "separate
+// invoice & packing list" together is a screen that has to guess, and the
+// guess would be about what goes to a customer.
 function syncInvSeparate(fromId) {
   const a = $('inv_separate'), b = $('inv_separate_bulk');
   if (!a || !b) return;
   const src = fromId === 'inv_separate_bulk' ? b : a;
   a.checked = b.checked = src.checked;
+  if (src.checked) setInvOnly(false);
+}
+function setInvOnly(on) {
+  for (const id of ['inv_only', 'inv_only_bulk']) { const el = $(id); if (el) el.checked = on; }
+}
+function syncInvOnly(fromId) {
+  const a = $('inv_only'), b = $('inv_only_bulk');
+  if (!a || !b) return;
+  const src = fromId === 'inv_only_bulk' ? b : a;
+  a.checked = b.checked = src.checked;
+  if (src.checked) { for (const id of ['inv_separate', 'inv_separate_bulk']) { const el = $(id); if (el) el.checked = false; } }
 }
 for (const id of ['inv_separate', 'inv_separate_bulk']) {
   const el = $(id);
   if (el) el.addEventListener('change', () => syncInvSeparate(id));
+}
+for (const id of ['inv_only', 'inv_only_bulk']) {
+  const el = $(id);
+  if (el) el.addEventListener('change', () => syncInvOnly(id));
 }
 
 $('btnInvGenerate').addEventListener('click', async () => {
@@ -3993,7 +4061,14 @@ $('btnInvGenerate').addEventListener('click', async () => {
     // Either checkbox counts. They are kept in sync, but reading both means a
     // stale one can never quietly win.
     const sepEl = $('inv_separate'), sepBulkEl = $('inv_separate_bulk');
-    payload.separate = !!((sepEl && sepEl.checked) || (sepBulkEl && sepBulkEl.checked));
+    const onlyEl = $('inv_only'), onlyBulkEl = $('inv_only_bulk');
+    payload.invoice_only = !!((onlyEl && onlyEl.checked) || (onlyBulkEl && onlyBulkEl.checked));
+    // Invoice only wins, the same way it does on the server. The two boxes
+    // cannot both be ticked through this screen; saying so here as well means
+    // a stale one can never quietly attach a packing list to an invoice she
+    // asked to send on its own.
+    payload.separate = !payload.invoice_only
+      && !!((sepEl && sepEl.checked) || (sepBulkEl && sepBulkEl.checked));
     const result = await api('/api/invoice/generate', { method: 'POST', body: JSON.stringify(payload) });
     // Separate mode returns saved_filenames (both documents); combined returns
     // the single saved_filename it always has. Downloading in sequence rather
@@ -4536,6 +4611,16 @@ const PK_COLS = [
   ['net_weight_lbs', 'Net', '130px'],
 ];
 const PK_GRID = PK_COLS.map((c) => c[2]).join(' ') + ' 30px';
+// ── THE ITEM COLUMN ────────────────────────────────────────────────────────
+// Apsara, 2026-09-16: "next to s.no in grid,item should come" — so it sits
+// between the line number and Gross, and only when she has asked for it.
+//
+// Not one of PK_COLS: those three are the WEIGHTS, they are what pkBlankRow
+// fills, what pkPayload tests a row for emptiness with, and what the totals
+// sum. An item description is none of those things — a row carrying a name and
+// no weight is not a row, and putting 'item' in PK_COLS would have made it one.
+const PK_ITEM_COL_WIDTH = '190px';
+function pkShowItem() { const b = $('pk_show_item'); return !!(b && b.checked); }
 // justify-content:start keeps the leftover width as white space rather than
 // letting the grid share it out. Applied to the heading row AND the input
 // rows, or the labels sit over the wrong boxes.
@@ -4546,7 +4631,13 @@ const PK_GRID = PK_COLS.map((c) => c[2]).join(' ') + ' 30px';
 //
 // Filled from the scan (the "#1" written beside each weight) and typeable by
 // hand. Blank is fine: a formatted packing table has no bundle numbers.
-const PK_ROW_CSS = `display:grid; grid-template-columns:52px ${PK_GRID}; gap:8px; justify-content:start;`;
+// A function, not a const, because the column count now depends on a checkbox
+// — and the heading row and the input rows MUST be built from the same call or
+// the labels sit over the wrong boxes.
+function pkRowCss() {
+  const item = pkShowItem() ? ` ${PK_ITEM_COL_WIDTH}` : '';
+  return `display:grid; grid-template-columns:52px${item} ${PK_GRID}; gap:8px; justify-content:start;`;
+}
 
 let pkRows = [];
 let pkEditingId = null;
@@ -4595,6 +4686,11 @@ function pkInit() {
   if (_pkWired) return;
   _pkWired = true;
   $('btnPkAddRow').addEventListener('click', () => { pkRows.push(pkBlankRow()); pkPaintItems(); });
+  // Repaints rather than toggling a CSS class: the grid's column count lives
+  // in one string (pkRowCss) used by the heading AND the rows, and hiding a
+  // column with CSS would leave that string describing a table that is no
+  // longer on the screen.
+  $('pk_show_item').addEventListener('change', () => pkPaintItems());
   $('btnPkScan').addEventListener('click', () => pkScan());
   $('btnPkSave').addEventListener('click', () => pkSave());
   $('btnPkPreview').addEventListener('click', () => pkGenerate(true));
@@ -4632,15 +4728,18 @@ function pkPaintItems() {
   // stay put once the list is long enough to scroll — a weights table whose
   // headings have scrolled away is one where the next number goes in the wrong
   // column. Opaque background, or the rows show through it.
-  const head = `<div style="position:sticky; top:0; z-index:2; background:var(--surface-card); padding:2px 0 6px; ${PK_ROW_CSS} font-family:var(--font-mono); font-size:10px; letter-spacing:.08em; text-transform:uppercase; color:var(--text-faint); border-bottom:1px solid var(--border-subtle); margin-bottom:6px;">
-      <div>#</div>${PK_COLS.map(([, label]) => `<div style="text-align:right;">${label}</div>`).join('')}<div></div>
+  const rowCss = pkRowCss();
+  const showItem = pkShowItem();
+  const head = `<div style="position:sticky; top:0; z-index:2; background:var(--surface-card); padding:2px 0 6px; ${rowCss} font-family:var(--font-mono); font-size:10px; letter-spacing:.08em; text-transform:uppercase; color:var(--text-faint); border-bottom:1px solid var(--border-subtle); margin-bottom:6px;">
+      <div>#</div>${showItem ? '<div>Item</div>' : ''}${PK_COLS.map(([, label]) => `<div style="text-align:right;">${label}</div>`).join('')}<div></div>
     </div>`;
   // Rebuilt wholesale, values carried in the VALUE attribute — a half-rebuilt
   // table where row 3 still holds row 2's text is the classic bug of this
   // pattern, and here it would put a weight against the wrong material.
   $('pkItems').innerHTML = head + pkRows.map((r, i) => `
-    <div style="${PK_ROW_CSS} margin-bottom:6px; align-items:center;">
+    <div style="${rowCss} margin-bottom:6px; align-items:center;">
       <input data-pi="${i}" data-pf="note" type="text" value="${esc(r.note || '')}" placeholder="#${i + 1}" style="font-family:var(--font-mono); color:var(--text-muted);">
+      ${showItem ? `<input data-pi="${i}" data-pf="item" type="text" value="${esc(r.item || '')}" placeholder="Alternator" autocomplete="off">` : ''}
       ${PK_COLS.map(([k]) => {
         const calc = k === 'net_weight_lbs';
         return `<input data-pi="${i}" data-pf="${k}" type="text" value="${esc(r[k] || '')}"${calc ? ' readonly tabindex="-1" title="Gross minus tare"' : ''} style="text-align:right; font-family:var(--font-mono);${calc ? ' background:var(--surface-sunken); color:var(--text-muted);' : ''}">`;
@@ -4720,6 +4819,7 @@ async function pkScan() {
     set('pk_invoice', f.invoice_no);
     set('pk_seal', f.seal_no);
     set('pk_customer', f.customer);
+    set('pk_item_desc', f.item_description);
     // MM/DD/YYYY off the document into the picker's yyyy-mm-dd. A date that
     // silently fails to land is worse than one left blank, so a value that
     // does not parse is left for her rather than guessed at.
@@ -4733,12 +4833,25 @@ async function pkScan() {
         const row = pkBlankRow();
         PK_COLS.forEach(([k]) => { row[k] = r[k] || ''; });
         row.note = r.note || '';
+        // Carried even when the column is hidden: a scan that read three
+        // different items off the page must not lose them because a checkbox
+        // was not ticked yet. Ticking it afterwards then shows what was
+        // already read, rather than a column of blanks.
+        row.item = r.item || '';
         // Tare back to 0 if the scan left it blank, then net follows from it.
         if (!String(row.tare_lbs || '').trim()) row.tare_lbs = row.gross_weight_lbs ? '0' : '';
         const n = pkNetOf(row);
         row.net_weight_lbs = n == null ? '' : n.toLocaleString('en-US');
         return row;
       });
+      // If the page named an item on more than one line, she is in the
+      // several-items case whether or not she has ticked the box — so show
+      // the column. Never turned OFF here: that would hide something she
+      // deliberately asked to see.
+      if ($('pk_show_item') && !$('pk_show_item').checked
+          && pkRows.filter((r) => String(r.item || '').trim()).length > 1) {
+        $('pk_show_item').checked = true;
+      }
       pkPaintItems();
     }
 
@@ -4763,11 +4876,24 @@ function pkPayload() {
     invoice_no: $('pk_invoice').value.trim(),
     seal_no: $('pk_seal').value.trim(),
     customer: $('pk_customer').value.trim(),
+    item_description: $('pk_item_desc').value.trim(),
+    show_item_in_grid: pkShowItem(),
     date: $('pk_date').value,
-    // A row counts as real if she typed a WEIGHT into it. Testing every
-    // stored field would keep a row alive on a container_no a scan left
-    // behind, and save a line with no weights on it.
-    rows: pkRows.filter((r) => PK_COLS.some(([k]) => String(r[k] || '').trim())),
+    // ── WHAT COUNTS AS A ROW ─────────────────────────────────────────
+    // A WEIGHT, or an item name she has typed ahead of the scale ticket.
+    //
+    // NOT tare on its own. Every blank row this form opens with carries tare
+    // "0" (her "by default make tare as 0", 2026-09-16), so the old test —
+    // any of the three weight columns non-empty — passed for every empty row
+    // on the screen, and they were filed and PRINTED: "- | 0 | 0 | 0.000" on
+    // a customer's packing list. helpers/packingList.js's hasWeight is the
+    // matching rule on the way to the PDF.
+    //
+    // An item with no weight is kept but does not print. Losing something she
+    // typed is worse than storing a row she has not finished.
+    rows: pkRows.filter((r) => String(r.gross_weight_lbs || '').trim()
+                            || String(r.net_weight_lbs || '').trim()
+                            || String(r.item || '').trim()),
     scanned_fields: [...document.querySelectorAll('#panelPacking [data-pkfield]')]
       .filter((b) => b.querySelector('.pk-scanned-tag')).map((b) => b.dataset.pkfield),
   };
@@ -4903,7 +5029,8 @@ async function pkSave() {
 
 function pkClearForm() {
   pkEditingId = null;
-  ['pk_container', 'pk_booking', 'pk_invoice', 'pk_seal', 'pk_customer'].forEach((id) => { if ($(id)) $(id).value = ''; });
+  ['pk_container', 'pk_booking', 'pk_invoice', 'pk_seal', 'pk_customer', 'pk_item_desc'].forEach((id) => { if ($(id)) $(id).value = ''; });
+  if ($('pk_show_item')) $('pk_show_item').checked = false;
   if ($('pk_date')) $('pk_date').value = pkTodayStr();
   document.querySelectorAll('#panelPacking [data-pkfield]').forEach((b) => pkMark(b.dataset.pkfield, false));
   if ($('pkFile')) $('pkFile').value = '';
@@ -4925,9 +5052,16 @@ async function pkEdit(id) {
   $('pk_seal').value = pl.seal_no || '';
   $('pk_customer').value = pl.customer || '';
   $('pk_date').value = pl.date || '';
+  $('pk_item_desc').value = pl.item_description || '';
+  // The checkbox is part of the RECORD. Reopening a list she printed last
+  // month must redraw the document she printed, not whatever the box happened
+  // to be left on.
+  $('pk_show_item').checked = pl.show_item_in_grid === true;
   pkRows = (pl.rows || []).map((r) => {
     const row = pkBlankRow();
     PK_COLS.forEach(([k]) => { row[k] = r[k] || ''; });
+    row.item = r.item || '';
+    row.note = r.note || '';
     return row;
   });
   if (!pkRows.length) pkRows = [pkBlankRow()];

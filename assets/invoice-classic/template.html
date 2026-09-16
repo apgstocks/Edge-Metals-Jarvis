@@ -298,6 +298,12 @@ body.only-packing .decl-packing{display:inline;}
     <div class="doc-packing">
     <!-- Packing list -->
     <div class="seam pl-banner-inline" style="background:var(--orange);color:var(--light-orange);text-align:center;font-weight:700;font-size:15.5pt;height:12mm;box-sizing:border-box;display:flex;align-items:center;justify-content:center;">PACKING LIST</div>
+    <!-- One line naming what is in the container, when it is all one thing.
+         Apsara, 2026-09-16, asked where the header item description should
+         appear: "Printed above the packing table". Renders as nothing at all
+         when she has not named one — an empty label line on a customer's
+         document looks like a field that failed to fill. -->
+{{packing_item_line}}
     <table class="seam">
       <thead>
         <tr style="background:var(--light-orange);height:15mm;">
@@ -317,25 +323,34 @@ body.only-packing .decl-packing{display:inline;}
                the invoice's "Separate invoice & packing list" flag. Both
                change together, deliberately: two packing lists in different
                shapes from one company is worse than either shape. -->
-          <th style="width:22%;padding:1mm;font-size:9.5pt;text-align:center;vertical-align:middle;border:1pt solid black;">Container</th>
-          <th style="width:20%;padding:1mm;font-size:9.5pt;text-align:center;vertical-align:middle;border:1pt solid black;">Gross Weight<br>(lbs)</th>
-          <th style="width:20%;padding:1mm;font-size:9.5pt;text-align:center;vertical-align:middle;border:1pt solid black;">Tare<br>(lbs)</th>
-          <th style="width:20%;padding:1mm;font-size:9.5pt;text-align:center;vertical-align:middle;border:1pt solid black;">Net Weight<br>(lbs)</th>
-          <th style="width:18%;padding:1mm;font-size:9.5pt;text-align:center;vertical-align:middle;border:1pt solid black;">Net Weight<br>(MT)</th>
+          <!-- ── THE HEADING CELLS ARE BUILT, NOT WRITTEN ─────────────
+               Apsara, 2026-09-16: "sometimes i will have 3 different items in
+               a container..for eg:alternator,starter,ac compressor", and the
+               Item column is to print: "Item column on the PDF too".
+
+               So this table has FIVE columns or SIX depending on a checkbox,
+               and three places have to agree about which — the heading, every
+               row, and the TOTAL row. Hand-written HTML in three places with
+               a count that changes is precisely how the TOTAL row SHEARS:
+               nothing errors, the net figures slide one column left and print
+               under the wrong headings on a document a customer is holding.
+
+               One list in helpers/invoicePdf.js (PACKING_COLUMNS) now emits
+               all three. The count cannot disagree with itself. -->
+{{packing_head_cells}}
         </tr>
       </thead>
       <tbody>
 {{packing_rows}}
-        <!-- Three blank cells, not five: the four tare columns became one on
-             2026-09-16. A TOTAL row with the wrong number of cells does not
-             error, it SHEARS — the net figures slide one column left and land
-             under the wrong headings, on the document a customer receives. -->
+        <!-- Built from the same column list as the heading and the rows —
+             see the note above. It now carries the OVERALL GROSS and TARE as
+             well as the net: Apsara, 2026-09-16, "overall total gross,net,
+             tare and adding those gross,net,tare --->overall for the
+             container". They were blank cells before, which on a list of one
+             row was merely redundant and on a list of three items was a
+             missing answer. -->
         <tr style="background:var(--light-orange);height:15mm;">
-          <td style="padding:2mm 1mm;font-weight:700;font-size:10pt;text-align:center;vertical-align:middle;border:1pt solid black;">TOTAL</td>
-          <td style="padding:2mm 1mm;border:1pt solid black;"></td>
-          <td style="padding:2mm 1mm;border:1pt solid black;"></td>
-          <td style="padding:2mm 1mm;font-weight:700;font-size:10pt;text-align:center;vertical-align:middle;border:1pt solid black;">{{total_net_lbs_fmt}}</td>
-          <td style="padding:2mm 1mm;font-weight:700;font-size:10pt;text-align:center;vertical-align:middle;border:1pt solid black;">{{total_net_mt_fmt}}</td>
+{{packing_total_cells}}
         </tr>
       </tbody>
     </table>
