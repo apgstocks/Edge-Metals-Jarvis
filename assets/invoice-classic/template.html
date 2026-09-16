@@ -313,25 +313,48 @@ body.only-packing .decl-packing{display:inline;}
          booking, the two ports. A packing list with none of that is a grid of
          numbers a broker cannot file. -->
     <div class="pl-header">
-      <div style="border-bottom:2pt solid var(--orange);padding:1.5mm 2mm;display:flex;justify-content:space-between;align-items:flex-end;">
-        <div style="font-weight:700;font-size:14pt;color:var(--orange);letter-spacing:.02em;">PACKING LIST</div>
+      <!-- ── THE BANNER IS FILLED ─────────────────────────────────────
+           Apsara, 2026-09-16: "Fill the packing list colour."
+
+           The compact header landed with orange TYPE on white and a rule
+           under it. Every other document this company sends opens with a
+           solid bar — the invoice's, and the packing list's own before it
+           was rebuilt — so on a desk beside them it read as an unfinished
+           draft rather than as the same company's paperwork.
+
+           Filled, but 9mm rather than the original 12mm: the height was
+           what made the old header too big, not the colour. The invoice
+           number and date sit INSIDE the bar, so the fill costs no extra
+           depth at all. -->
+      <div style="background:var(--orange);color:var(--light-orange);padding:1.8mm 2.5mm;display:flex;justify-content:space-between;align-items:center;">
+        <div style="font-weight:700;font-size:13.5pt;letter-spacing:.03em;">PACKING LIST</div>
         <div style="font-size:9.5pt;font-weight:700;">{{inv_no}} &nbsp;&middot;&nbsp; {{inv_date}}</div>
       </div>
       <table class="seam" style="width:100%;border-collapse:collapse;">
         <tr>
-          <td style="width:50%;padding:1.5mm 2mm;vertical-align:top;border-right:1pt solid var(--black);">
-            <div style="font-size:7.5pt;color:#555;letter-spacing:.06em;">EXPORTER</div>
-            <div style="font-weight:700;font-size:10pt;margin-top:0.5mm;">EDGE METALS INC</div>
-            <div style="font-size:8.5pt;line-height:1.45;">14750 DEVONSHIRE LN, FRISCO, TX 75035<br>TAX-ID: 26-3269514 &nbsp;&middot;&nbsp; TEL: (310) 938-2525</div>
+          <!-- The label strips carry the same light orange as the table head
+               and the TOTAL row, so the eye reads one document rather than a
+               coloured table under a plain block. This is the palette the
+               standalone list has had since 2026-09-09 ("packing list
+               separate colour should not contain blue") — it simply did not
+               survive the rebuild. -->
+          <td style="width:50%;padding:0;vertical-align:top;border-right:1pt solid var(--black);">
+            <div style="background:var(--light-orange);padding:0.8mm 2.5mm;font-size:7.5pt;font-weight:700;letter-spacing:.06em;">EXPORTER</div>
+            <div style="padding:1.2mm 2.5mm;">
+              <div style="font-weight:700;font-size:10pt;">EDGE METALS INC</div>
+              <div style="font-size:8.5pt;line-height:1.45;">14750 DEVONSHIRE LN, FRISCO, TX 75035<br>TAX-ID: 26-3269514 &nbsp;&middot;&nbsp; TEL: (310) 938-2525</div>
+            </div>
           </td>
-          <td style="width:50%;padding:1.5mm 2mm;vertical-align:top;">
-            <div style="font-size:7.5pt;color:#555;letter-spacing:.06em;">BUYER</div>
-            <div style="font-weight:700;font-size:10pt;margin-top:0.5mm;">{{buyer_name}}</div>
-            <div style="font-size:8.5pt;line-height:1.45;">{{buyer_address_lines}}</div>
+          <td style="width:50%;padding:0;vertical-align:top;">
+            <div style="background:var(--light-orange);padding:0.8mm 2.5mm;font-size:7.5pt;font-weight:700;letter-spacing:.06em;">BUYER</div>
+            <div style="padding:1.2mm 2.5mm;">
+              <div style="font-weight:700;font-size:10pt;">{{buyer_name}}</div>
+              <div style="font-size:8.5pt;line-height:1.45;">{{buyer_address_lines}}</div>
+            </div>
           </td>
         </tr>
       </table>
-      <div class="seam" style="border-top:1pt solid var(--black);padding:1.5mm 2mm;font-size:8.5pt;line-height:1.5;">{{pl_refs_line}}</div>
+      <div class="seam" style="border-top:1pt solid var(--black);padding:1.2mm 2.5mm;font-size:8.5pt;line-height:1.5;">{{pl_refs_line}}</div>
     </div>
     <div class="doc-packing">
     <!-- Packing list -->

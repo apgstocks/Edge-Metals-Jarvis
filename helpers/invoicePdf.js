@@ -540,8 +540,12 @@ function buildInvoiceClassicHtml(data) {
         oneContainer ? `Container: ${escapeHtml(containersOn[0])}` : '',
         itemDesc ? `Item: ${escapeHtml(itemDesc)}` : '',
     ].filter(Boolean).join(' &nbsp;|&nbsp; ');
+    // Tinted like the label strips above it and the table head below, so the
+    // line naming the container reads as part of the coloured document rather
+    // than as a white gap between two orange bands. Apsara, 2026-09-16: "Fill
+    // the packing list colour."
     const packingItemLineHtml = aboveTable
-        ? `    <div class="seam" style="padding:1.5mm 2mm;font-size:10pt;font-weight:700;border-left:0.8pt solid var(--black);border-right:0.8pt solid var(--black);">${aboveTable}</div>`
+        ? `    <div class="seam" style="background:var(--light-orange);padding:1.2mm 2.5mm;font-size:9.5pt;font-weight:700;border-left:0.8pt solid var(--black);border-right:0.8pt solid var(--black);">${aboveTable}</div>`
         : '';
 
     // ── THE STANDALONE PACKING LIST'S REFERENCE LINE ─────────────────────

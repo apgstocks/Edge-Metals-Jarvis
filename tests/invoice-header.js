@@ -166,6 +166,27 @@ console.log('\n=== separate invoice / packing list ===');
     ['the buyer address',   'HAMAN-GUN'],
   ]) ck(`the standalone header carries ${label}`, head.includes(needle), true);
 
+  // ── THE COLOUR ───────────────────────────────────────────────────────
+  // Apsara, 2026-09-16: "Fill the packing list colour."
+  //
+  // The first compact header printed orange TYPE on white with a rule under
+  // it. Every other document this company sends opens with a solid bar — the
+  // invoice's, and this one's own before the rebuild — so beside them it read
+  // as an unfinished draft rather than as the same company's paperwork.
+  //
+  // Checked because a fill is exactly the kind of thing a later layout change
+  // drops without anything failing, which is how it went missing this time.
+  ck('the banner is FILLED, not just coloured type',
+     /background:var\(--orange\)/.test(head), true);
+  ck('  with the invoice number inside it, costing no extra height',
+     head.indexOf('background:var(--orange)') < head.indexOf('26JY96'), true);
+  ck('  and the exporter and buyer strips are tinted to match',
+     (head.match(/background:var\(--light-orange\)/g) || []).length, 2);
+  // Orange, never blue: the invoice header is the blue document and this is a
+  // clone of its VALUES, not of its palette (2026-09-09, "packing list
+  // separate colour should not contain blue").
+  ck('  and nothing in it is blue', /light-blue/.test(head), false);
+
   // ── AND WHAT IT MUST NOT ────────────────────────────────────────────
   // Her three, by name. Two of them printed EMPTY on her own documents,
   // which is how a header grows without anyone deciding it should.
