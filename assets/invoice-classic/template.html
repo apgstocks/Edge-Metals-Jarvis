@@ -342,13 +342,25 @@ body.only-packing .decl-packing{display:inline;}
       </thead>
       <tbody>
 {{packing_rows}}
-        <!-- Built from the same column list as the heading and the rows —
+        <!-- Built from the same column list as the heading and the rows;
              see the note above. It now carries the OVERALL GROSS and TARE as
-             well as the net: Apsara, 2026-09-16, "overall total gross,net,
-             tare and adding those gross,net,tare --->overall for the
-             container". They were blank cells before, which on a list of one
-             row was merely redundant and on a list of three items was a
-             missing answer. -->
+             well as the net, which Apsara asked for on 2026-09-16: the three
+             weights of every line added up to one figure for the container.
+             They were blank cells before, which on a list of one row was
+             merely redundant and on a list of three items was a missing
+             answer.
+
+             HER WORDS ARE PARAPHRASED ON PURPOSE. The first version of this
+             comment quoted her message, and her message contains an arrow
+             written with three hyphens. An HTML comment ENDS at the first
+             occurrence of two hyphens and a bracket, so the comment closed
+             inside the quotation and the rest of this paragraph became TEXT —
+             printed, in full, across the middle of a packing list that went
+             to a customer. Nothing errored and every test passed.
+
+             So: no run of hyphens inside a comment in this file, and no
+             pasting of raw messages into one. tests/comment-hygiene.js
+             enforces it across every template and both clients. -->
         <tr style="background:var(--light-orange);height:15mm;">
 {{packing_total_cells}}
         </tr>

@@ -421,7 +421,9 @@ body[data-theme="light"] {
         <div style="display:flex; justify-content:flex-end; margin-top:10px;"><button id="btnInvStep1Next" type="button" class="btn btn-primary">Find containers</button></div>
 
         <!-- Direct container-number search — the ONLY lookup her original
-             PythonAnywhere tool had (invoice_gen.py's --container flag).
+             PythonAnywhere tool had (the "container" flag on
+             invoice_gen.py; written without its two leading hyphens
+             deliberately — see tests/comment-hygiene.js).
              Kept as a second path alongside the buyer-first flow above
              rather than replacing it, per Apsara: "search by container
              number" — for when she already knows the container ID and

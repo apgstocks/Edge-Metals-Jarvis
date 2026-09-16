@@ -363,8 +363,11 @@ function buildInvoiceClassicHtml(data) {
           cell: (item, p, netLbs) => escapeHtml(p.net_weight_lbs || formatInt(netLbs)),
           total: () => formatInt(totalNetLbs) },
         { head: 'Net Weight<br>(MT)', width: showItem ? '16%' : '18%',
-          cell: (item, p, netLbs, netMt) => netMt.toFixed(3),
-          total: () => totalNetMt.toFixed(3) },
+          // A dash, not 0.000, when there is genuinely nothing: a printed zero
+          // is a CLAIM that the container weighed nothing, and a blank is an
+          // absence. The same rule tareOf follows, on the same document.
+          cell: (item, p, netLbs, netMt) => (netMt ? netMt.toFixed(3) : '-'),
+          total: () => (totalNetMt ? totalNetMt.toFixed(3) : '-') },
     ];
 
     const packingHeadCellsHtml = PACKING_COLUMNS.map((c) =>
@@ -390,8 +393,18 @@ function buildInvoiceClassicHtml(data) {
     // one column instead of four — nothing on file needs migrating.
     const packingRowsHtml = lineItems.map((item) => {
         const p = item.packing || {};
-        const netMt = parseFloat(String(p.net_weight_mt || '').replace(/,/g, '')) || Number(item.weight) || 0;
+        // ── MT IS A CONVERSION, NOT A FIELD THAT MAY BE BLANK ────────────
+        // A packing list built from a weigh sheet has pounds and nothing else,
+        // and this printed 0.000 down the whole column and on the TOTAL — on a
+        // customs document, a stated net weight of zero tonnes.
+        //
+        // An invoice states its own MT (that is what it prices on) and is
+        // untouched. Only a row that has pounds and no tonnes gets the
+        // conversion, which is arithmetic anyone receiving the document can
+        // repeat, not a figure being invented.
+        let netMt = parseFloat(String(p.net_weight_mt || '').replace(/,/g, '')) || Number(item.weight) || 0;
         const netLbs = parseFloat(String(p.net_weight_lbs || '').replace(/,/g, '')) || Math.round(netMt * 2204.62);
+        if (!netMt && netLbs) netMt = netLbs / 2204.62;
         totalNetMt += netMt;
         totalNetLbs += netLbs;
         // The overall gross and tare for the container — her words, "overall
