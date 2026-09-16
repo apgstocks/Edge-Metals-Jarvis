@@ -163,30 +163,47 @@ section('A2 — the document she ACTUALLY sends: a handwritten bundle tally');
     // cannot quietly stop working again.
     const TALLY_WEIGHTS = [3599, 3475, 4146, 3939, 4450, 3815, 4346, 4293, 4018, 4088,
                            4228, 4210, 4369, 4076, 4478];
+    // The single weight is the GROSS — Apsara, 2026-09-16: "a single weight is
+    // gross..make calc as gross -tare is net.by default make tare as 0". My
+    // first version put it in net, which was a guess and the wrong one.
     const tally = {
         container_no: null, booking_no: null, invoice_no: null, weight_unit: 'lb',
-        rows: TALLY_WEIGHTS.map((w, i) => ({ net_weight_lbs: String(w), note: `#${i + 1}` })),
+        rows: TALLY_WEIGHTS.map((w, i) => ({ gross_weight_lbs: String(w), note: `#${i + 1}` })),
     };
     const out = await pl.scan('eA==', 'image/jpeg', { ask: async () => JSON.stringify(tally) });
 
     ck('every bundle becomes a row', out.rows.length === 15, `${out.rows.length} of 15`);
     ck('  the first and last are right',
-       out.rows[0].net_weight_lbs === '3599' && out.rows[14].net_weight_lbs === '4478',
-       `${out.rows[0].net_weight_lbs} … ${out.rows[14].net_weight_lbs}`);
+       out.rows[0].gross_weight_lbs === '3599' && out.rows[14].gross_weight_lbs === '4478',
+       `${out.rows[0].gross_weight_lbs} … ${out.rows[14].gross_weight_lbs}`);
     ck('  and the bundle numbers are kept',
        out.rows[0].note === '#1' && out.rows[14].note === '#15',
        'a bale-by-bale packing list with no bale numbers is a column of figures');
 
-    // A bale on a scale has no truck, container or chassis under it. Inventing
-    // a gross or a tare for it would be the scanner making something up, which
-    // is the one thing this feature must never do.
-    ck('  gross stays empty, because a bale has no gross',
-       out.rows.every((r) => !r.gross_weight_lbs));
-    ck('  and so does tare', out.rows.every((r) => !r.tare_lbs),
-       'there is nothing under a bale to be tare');
+    // The scan returns a gross and NOTHING ELSE. Tare defaulting to 0 and net
+    // being gross minus tare are the FORM's job, not the model's — asking it
+    // for a net would be a second answer to a question the arithmetic already
+    // settles.
+    ck('  the scan does not return a net at all',
+       out.rows.every((r) => !r.net_weight_lbs),
+       'net is derived; a scanned one could disagree with the two figures beside it');
+
+    // ── AND THE DERIVATION ───────────────────────────────────────────────
+    const built = pl.buildRecord({ rows: out.rows }, null);
+    ck('  once filed, tare defaults to 0', built.rows.every((r) => r.tare_lbs === '0'),
+       JSON.stringify(built.rows.slice(0, 2).map((r) => r.tare_lbs)));
+    ck('  and net comes out as gross minus tare',
+       built.rows[0].net_weight_lbs === '3,599' && built.rows[14].net_weight_lbs === '4,478',
+       `${built.rows[0].net_weight_lbs} … ${built.rows[14].net_weight_lbs}`);
+    ck('  a real tare changes it',
+       pl.netOf({ gross_weight_lbs: '3,599', tare_lbs: '599' }) === 3000,
+       String(pl.netOf({ gross_weight_lbs: '3,599', tare_lbs: '599' })));
+    ck('  and no gross at all gives no net, not zero',
+       pl.netOf({ tare_lbs: '500' }) === null,
+       'a zero net would claim a bundle weighing nothing');
 
     // The number that matters: fifteen bundles is one container-load.
-    const total = out.rows.reduce((t, r) => t + Number(String(r.net_weight_lbs).replace(/,/g, '')), 0);
+    const total = built.rows.reduce((t, r) => t + Number(String(r.net_weight_lbs).replace(/,/g, '')), 0);
     ck('  the net total is the container load', total === 61530, `${total} — 61,530 lbs across 15 bundles`);
 
     // The heading on her sheet reads "3599 - weight", which repeats the first
@@ -208,8 +225,11 @@ section('A2 — the document she ACTUALLY sends: a handwritten bundle tally');
     // wording that is perfectly correct.
     const flat = src.replace(/\s+/g, ' ');
     ck('  and says one numbered line is one row', /line is ONE BUNDLE and becomes ONE ROW/.test(flat));
-    ck('  and that the single weight is NET', /the bundle's NET weight/.test(flat),
-       'put in gross, it would claim a tare exists');
+    ck('  and that the single weight is GROSS', /the bundle's GROSS weight/.test(flat),
+       'her correction: "a single weight is gross"');
+    ck('  and tells the model NOT to return a net',
+       /leave tare and\s*net null/.test(flat) && /net is CALCULATED as gross minus tare/.test(flat),
+       'a scanned net would be a second answer to a question the form already settles');
     ck('  and to read EVERY line, including a second sheet',
        /READ EVERY NUMBERED LINE/.test(flat) && /second sheet or a second photo/.test(flat),
        'her two sheets were photographed side by side in one image');

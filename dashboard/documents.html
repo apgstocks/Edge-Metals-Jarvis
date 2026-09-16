@@ -4552,10 +4552,34 @@ let pkRows = [];
 let pkEditingId = null;
 let _pkWired = false;
 
+// Tare starts at 0 — Apsara, 2026-09-16: "by default make tare as 0". A bale on
+// a scale has nothing under it, and a blank tare would leave net uncomputable
+// for the ordinary case.
 function pkBlankRow() {
   const r = { note: '' };
   PK_COLS.forEach(([k]) => { r[k] = ''; });
+  r.tare_lbs = '0';
   return r;
+}
+
+// ── NET IS CALCULATED, NEVER TYPED ─────────────────────────────────────────
+// "make calc as gross -tare is net". So the Net box is read-only and recomputed
+// on every keystroke in Gross or Tare. Read-only rather than merely
+// auto-filled: a box she can overtype is a box that can end up disagreeing with
+// the two figures beside it, and a customer checking with a calculator is
+// exactly who finds that.
+function pkNetOf(r) {
+  const g = pkNum(r.gross_weight_lbs);
+  if (g == null) return null;
+  const t = pkNum(r.tare_lbs);
+  return g - (t == null ? 0 : t);
+}
+
+function pkRecalcRow(i) {
+  const n = pkNetOf(pkRows[i]);
+  pkRows[i].net_weight_lbs = n == null ? '' : n.toLocaleString('en-US');
+  const box = document.querySelector(`#pkItems input[data-pi="${i}"][data-pf="net_weight_lbs"]`);
+  if (box) box.value = pkRows[i].net_weight_lbs;
 }
 
 // Today, in the yard's timezone. Not toISOString() — that is UTC, and from 7pm
@@ -4617,13 +4641,22 @@ function pkPaintItems() {
   $('pkItems').innerHTML = head + pkRows.map((r, i) => `
     <div style="${PK_ROW_CSS} margin-bottom:6px; align-items:center;">
       <input data-pi="${i}" data-pf="note" type="text" value="${esc(r.note || '')}" placeholder="#${i + 1}" style="font-family:var(--font-mono); color:var(--text-muted);">
-      ${PK_COLS.map(([k]) => `<input data-pi="${i}" data-pf="${k}" type="text" value="${esc(r[k] || '')}" style="text-align:right; font-family:var(--font-mono);">`).join('')}
+      ${PK_COLS.map(([k]) => {
+        const calc = k === 'net_weight_lbs';
+        return `<input data-pi="${i}" data-pf="${k}" type="text" value="${esc(r[k] || '')}"${calc ? ' readonly tabindex="-1" title="Gross minus tare"' : ''} style="text-align:right; font-family:var(--font-mono);${calc ? ' background:var(--surface-sunken); color:var(--text-muted);' : ''}">`;
+      }).join('')}
       <button type="button" class="btn btn-secondary pk-del" data-i="${i}" style="padding:4px 8px; font-size:12px;">&times;</button>
     </div>`).join('');
 
   $('pkItems').querySelectorAll('input[data-pi]').forEach((el) => {
     el.addEventListener('input', () => {
-      pkRows[Number(el.dataset.pi)][el.dataset.pf] = el.value;
+      const i = Number(el.dataset.pi);
+      pkRows[i][el.dataset.pf] = el.value;
+      // Net follows gross and tare on every keystroke. Only that ONE box is
+      // rewritten — repainting the whole table here would throw away the caret
+      // she is typing into, the bug the BOL's goods rows already carry a note
+      // about.
+      if (el.dataset.pf === 'gross_weight_lbs' || el.dataset.pf === 'tare_lbs') pkRecalcRow(i);
       pkPaintTotals();
     });
   });
@@ -4650,7 +4683,10 @@ function pkPaintTotals() {
     return n == null ? t : t + n;
   }, 0);
   const fmt = (n) => (n ? n.toLocaleString() : '—');
-  $('pkTotals').innerHTML = `${pkRows.length} row${pkRows.length === 1 ? '' : 's'} · Gross ${fmt(sum('gross_weight_lbs'))} · Tare ${fmt(sum('tare_lbs'))} · <strong style="color:var(--text-strong);">Net ${fmt(sum('net_weight_lbs'))} lbs</strong>`;
+  // Net totalled from the DERIVED figure, not from whatever is in the box, so
+  // the total and the column can never tell different stories.
+  const netTotal = pkRows.reduce((t, r) => { const n = pkNetOf(r); return n == null ? t : t + n; }, 0);
+  $('pkTotals').innerHTML = `${pkRows.length} row${pkRows.length === 1 ? '' : 's'} · Gross ${fmt(sum('gross_weight_lbs'))} · Tare ${fmt(sum('tare_lbs'))} · <strong style="color:var(--text-strong);">Net ${fmt(netTotal)} lbs</strong>`;
 }
 
 async function pkScan() {
@@ -4696,6 +4732,11 @@ async function pkScan() {
       pkRows = out.rows.map((r) => {
         const row = pkBlankRow();
         PK_COLS.forEach(([k]) => { row[k] = r[k] || ''; });
+        row.note = r.note || '';
+        // Tare back to 0 if the scan left it blank, then net follows from it.
+        if (!String(row.tare_lbs || '').trim()) row.tare_lbs = row.gross_weight_lbs ? '0' : '';
+        const n = pkNetOf(row);
+        row.net_weight_lbs = n == null ? '' : n.toLocaleString('en-US');
         return row;
       });
       pkPaintItems();

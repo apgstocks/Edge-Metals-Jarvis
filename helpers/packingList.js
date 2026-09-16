@@ -98,6 +98,24 @@ const toNum = (v) => {
 // Returns null rather than 0 when there is nothing to add: a zero tare is a
 // CLAIM that the container weighed nothing, and a blank is an absence. On a
 // weight document those are different, and the BOL learned it the hard way.
+// ── NET IS CALCULATED ──────────────────────────────────────────────────────
+// Apsara, 2026-09-16: "a single weight is gross..make calc as gross -tare is
+// net.by default make tare as 0".
+//
+// So net is never typed and never taken from a document: it is gross minus
+// tare, every time. One derivation, here, called by the form and by the PDF —
+// a stored net could disagree with the two figures beside it, and on a weight
+// document a customer checks with a calculator that is the disagreement they
+// find.
+//
+// Null when there is no gross. Zero would claim a bundle weighing nothing.
+function netOf(row) {
+    const g = toNum((row || {}).gross_weight_lbs);
+    if (g == null) return null;
+    const t = tareOf(row);
+    return g - (t == null ? 0 : t);
+}
+
 function tareOf(row) {
     const r = row || {};
     const own = toNum(r.tare_lbs);
@@ -149,8 +167,17 @@ function buildRecord(input, prev) {
                 // Formatted with separators, like every other weight in this
                 // project. A summed tare landing as "29500" beside a gross of
                 // "46,300" reads as a different kind of number.
-                if (t != null) out.tare_lbs = t.toLocaleString('en-US');
+                //
+                // TARE DEFAULTS TO 0, her words — a bale on a scale has
+                // nothing under it, and a blank tare would leave net
+                // uncomputable for the ordinary case.
+                out.tare_lbs = t != null ? t.toLocaleString('en-US') : (out.gross_weight_lbs ? '0' : '');
             }
+            // NET IS ALWAYS DERIVED. Whatever arrived — typed, scanned off a
+            // printed table, or absent — the stored net is gross minus tare,
+            // so the three figures on the row can never disagree.
+            const n = netOf(out);
+            out.net_weight_lbs = n == null ? '' : n.toLocaleString('en-US');
             return out;
         }),
         // ── PROVENANCE ───────────────────────────────────────────────────
@@ -241,10 +268,11 @@ IT MAY BE EITHER OF TWO VERY DIFFERENT THINGS, and both are normal:
 
       This is the WEIGH SHEET the packing list is built from. Each numbered
       line is ONE BUNDLE and becomes ONE ROW. The single weight on the line is
-      the bundle's NET weight — a bale on a scale has no truck, container or
-      chassis under it, so there is no gross and no tare to find. Put it in
-      net_weight_lbs and leave gross and tare null. Put the bundle's number
-      (the "#1", "#2") in that row's "note".
+      the bundle's GROSS weight. Put it in gross_weight_lbs and leave tare and
+      net null — tare defaults to 0 and net is CALCULATED as gross minus tare,
+      so returning a net here would be a second answer to a question the form
+      already answers. Put the bundle's number (the "#1", "#2") in that row's
+      "note".
 
       READ EVERY NUMBERED LINE, including ones that continue onto a second
       sheet or a second photo, and including ones that have been crossed out
@@ -539,6 +567,6 @@ function compareToInvoice(record) {
 }
 
 module.exports = {
-    ROW_FIELDS, FORM_FIELDS, tareOf, keyOf, buildRecord, loadAll, list, get, save, remove,
+    ROW_FIELDS, FORM_FIELDS, tareOf, netOf, keyOf, buildRecord, loadAll, list, get, save, remove,
     scan, normaliseScan, generatePdf, compareToInvoice,
 };
