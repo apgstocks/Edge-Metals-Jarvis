@@ -5671,10 +5671,18 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
             const savedPath = documentsSaved.saveInvoiceCopy(
                 pdf, `${safe}_packing.pdf`, rec.container_no, savedDate);
 
+            // saved_container rides back with the filename and the date
+            // because all THREE are needed to find the file again through
+            // /api/documents/download (kind=invoice files under
+            // <date>/<container>/). The client has a container in its form,
+            // but buildRecord trims it — handing back what was actually used
+            // to write the file is the difference between a download that
+            // works and one that 404s on a trailing space.
             res.json({
                 ok: true,
                 saved_filename: path.basename(savedPath),
                 saved_date: savedDate,
+                saved_container: rec.container_no,
                 warnings,
             });
         } catch (e) {

@@ -4825,12 +4825,59 @@ async function pkGenerate(preview) {
       return;
     }
     const out = await api('/api/packing-lists/generate', { method: 'POST', body: JSON.stringify(body) });
-    $('pkStatus').textContent = `Saved as ${out.saved_filename}.`;
+    // The warnings first: a cross-check that disagrees with the invoice
+    // matters whether or not the file reaches her Downloads folder.
     pkPaintWarnings(out.warnings);
+    // ── AND THEN HAND HER THE FILE ───────────────────────────────────────
+    // Apsara, 2026-09-16: "saved as HMMU7060866_packing.pdf. BUT ITS NOT
+    // DOWNLOADED ON CLICKING GENERATE". This route reported a filename and
+    // stopped — an inventory number, not a document. The BOL had the exact
+    // same complaint earlier today ("When i click generate-It needs to get
+    // as downloadable file") and I did not carry the fix across when I built
+    // this panel.
+    //
+    // Same mechanism as bolDownload: re-fetch the SAVED file through
+    // /api/documents/download and click an <a download>. Fetching it back
+    // rather than returning the bytes from generate means what lands in her
+    // Downloads folder is the exact file the archive holds, and the archive
+    // is proved readable the moment it is written.
+    $('pkStatus').textContent = 'Saved. Downloading…';
+    try {
+      await pkDownload(out.saved_filename, out.saved_date,
+                       out.saved_container || body.container_no);
+      $('pkStatus').textContent = `Saved and downloaded — ${out.saved_filename}`;
+    } catch (e) {
+      // The PDF exists and is filed; only the handing-over failed. Saying
+      // "could not download" without that would read as "it did not save".
+      $('pkStatus').textContent = `Saved as ${out.saved_filename}, but the download did not start: ${e.message}`;
+    }
   } catch (e) {
     $('pkStatus').textContent = e.message;
   }
   $('btnPkGenerate').disabled = false; $('btnPkPreview').disabled = false;
+}
+
+// A packing list is filed in the INVOICE archive, beside the invoice it
+// belongs to — so it is found again by kind + date + container + filename,
+// three keys where a BOL needs two. Getting any of them wrong is a 404, not
+// a wrong file, because resolveSavedPath builds the directory from them.
+async function pkDownload(filename, date, container) {
+  const qs = `?kind=invoice&date=${encodeURIComponent(date || '')}`
+           + `&container=${encodeURIComponent(container || '')}`
+           + `&file=${encodeURIComponent(filename)}`;
+  const res = await fetch('/api/documents/download' + qs);
+  if (res.status === 401) { location.href = '/login'; throw new Error('signed out'); }
+  if (!res.ok) throw new Error(`the archive returned ${res.status}`);
+  const blob = await res.blob();
+  if (!blob.size) throw new Error('the archive returned an empty file');
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 5000);
 }
 
 async function pkSave() {

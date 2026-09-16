@@ -628,6 +628,111 @@ section('D — the screen');
     dom.window.close();
 }
 
+// ══════════════════════════════════════════════════════════════════════════
+section('E — Generate hands her the FILE');
+// ══════════════════════════════════════════════════════════════════════════
+{
+    // Apsara, 2026-09-16: "saved as HMMU7060866_packing.pdf. BUT ITS NOT
+    // DOWNLOADED ON CLICKING GENERATE".
+    //
+    // The route saved the PDF into the archive and reported a filename. A
+    // filename is an inventory number; she wanted the document. The BOL had
+    // the identical complaint earlier the same day and was fixed then — I did
+    // not carry that across when I built this panel, which is the "think
+    // about its impact in other folder" instruction failing in the other
+    // direction: not a change that broke something else, a fix that never
+    // travelled.
+    //
+    // ── WHY THIS IS TWO SECTIONS AND NOT ONE ─────────────────────────────
+    // E1 drives the button and asserts a download is triggered. That alone
+    // would pass with the wrong query string, because the stub answers
+    // anything. E2 takes the URL E1 actually built and resolves it against
+    // the REAL archive, with a REAL file written by saveInvoiceCopy. A
+    // packing list is filed under kind=invoice/<date>/<container>/, three
+    // keys — one wrong and it is a 404, and a 404 here means "Saved as …,
+    // but the download did not start" on every single generate.
+    const dom = new JSDOM(DOCS, { runScripts: 'dangerously', url: 'http://localhost/documents',
+        beforeParse(w) {
+            w.alert = () => {}; w.confirm = () => true;
+            w.URL.createObjectURL = () => 'blob:stub';   // jsdom has neither
+            w.URL.revokeObjectURL = () => {};
+            w.__downloads = [];
+            w.__fetched = [];
+            w.fetch = (url, opts) => {
+                w.__fetched.push(String(url));
+                if (String(url).includes('/api/packing-lists/generate')) {
+                    return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({
+                        ok: true, saved_filename: 'HMMU7060866_packing.pdf',
+                        saved_date: '2026-09-16', saved_container: 'HMMU7060866', warnings: [],
+                    }) });
+                }
+                if (String(url).includes('/api/documents/download')) {
+                    return Promise.resolve({ ok: true, status: 200, blob: () => Promise.resolve({ size: 4096 }) });
+                }
+                return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ ok: true, packing_lists: [], bols: [] }) });
+            };
+        } });
+    await new Promise((r) => setTimeout(r, 400));
+    const w = dom.window, d = w.document;
+    // The click that matters, recorded at the prototype: the code builds the
+    // <a>, clicks it and removes it inside one function, so there is no
+    // element left in the DOM to find afterwards.
+    const clicked = [];
+    w.HTMLAnchorElement.prototype.click = function () { clicked.push({ href: this.href, download: this.download }); };
+
+    [...d.querySelectorAll('.subtab-btn')].find((b) => b.dataset.subtab === 'packing')
+        .dispatchEvent(new w.MouseEvent('click', { bubbles: true }));
+    await new Promise((r) => setTimeout(r, 100));
+
+    d.getElementById('pk_container').value = 'HMMU7060866';
+    d.getElementById('pk_invoice').value = '260819_AC_26JY95';
+    // Through the input event, not by poking pkRows: that is a top-level
+    // `let` and therefore NOT a window property — the seventh time this
+    // project has been caught by that, so this file does not test it that way.
+    const gross = d.querySelector('#pkItems input[data-pi="0"][data-pk="gross_weight_lbs"]')
+               || d.querySelector('#pkItems input[data-pi="0"]');
+    gross.value = '3599';
+    gross.dispatchEvent(new w.Event('input', { bubbles: true }));
+
+    d.getElementById('btnPkGenerate').dispatchEvent(new w.MouseEvent('click', { bubbles: true }));
+    await new Promise((r) => setTimeout(r, 300));
+
+    const status = d.getElementById('pkStatus').textContent;
+    ck('clicking Generate downloads the PDF', clicked.length === 1,
+       `${clicked.length} downloads — status said "${status}"`);
+    ck('  under the name it was filed as',
+       clicked.length === 1 && clicked[0].download === 'HMMU7060866_packing.pdf',
+       clicked.length ? clicked[0].download : 'nothing was clicked');
+    ck('  and it says so, not just "saved"', /download/i.test(status), status);
+
+    const dl = w.__fetched.find((u) => u.includes('/api/documents/download')) || '';
+    ck('  fetched back out of the archive', !!dl,
+       'returning the bytes from generate would hand her a file nobody has proved the archive can read back');
+    ck('    as kind=invoice', /kind=invoice/.test(dl), dl);
+    ck('    with the container', /container=HMMU7060866/.test(dl), dl);
+    ck('    and the date it was filed under', /date=2026-09-16/.test(dl), dl);
+
+    // ── AND THE ARCHIVE AGREES ───────────────────────────────────────────
+    // The URL the page just built, resolved against the real thing.
+    const docsSaved = require(path.join(ROOT, 'helpers/documentsSaved'));
+    const written = docsSaved.saveInvoiceCopy(
+        Buffer.from('%PDF-1.4 stub'), 'HMMU7060866_packing.pdf', 'HMMU7060866', '2026-09-16');
+    ck('  the file really is filed in the invoice archive', fs.existsSync(written), written);
+    const q = Object.fromEntries([...new w.URLSearchParams(dl.split('?')[1] || '')]);
+    const resolved = docsSaved.resolveSavedPath({
+        kind: q.kind, filename: q.file, date: q.date, container: q.container });
+    ck('  and THAT query string resolves to it', resolved === written,
+       `${resolved} !== ${written} — the download 404s and every generate reports a failure`);
+
+    // A packing list is not a BOL: the bol archive has no container level, so
+    // the BOL's own two-key query would land in the wrong tree entirely.
+    ck('    which the BOL\'s query would NOT have done',
+       !docsSaved.resolveSavedPath({ kind: 'bol', filename: q.file, date: q.date }),
+       'copying bolDownload verbatim would have looked right and 404d');
+
+    dom.window.close();
+}
+
 console.log(`\n  ${pass} passed, ${fail} failed`);
 if (fail) { console.log('\n  FAILED:\n' + failures.map((f) => '    - ' + f).join('\n')); process.exit(1); }
 
