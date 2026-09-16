@@ -4488,15 +4488,21 @@ function bolClearForm() {
 // The first version of this invented marks/description/pieces without
 // checking, and would have produced a document her customers have never seen.
 // Keep in step with helpers/packingList.js's ROW_FIELDS.
+// Apsara, 2026-09-16: "in packing list,i juxt want gross,tare ,net".
+//
+// THREE COLUMNS. The eight-column version put Truck, Container tare, Chassis
+// and Boxes on screen because they are four separate columns on her printed
+// packing list — but they are four ways of saying tare, and typing them into
+// boxes 90px wide is not what she wants from this form. One Tare, summed on
+// the way to the PDF (see pkTareParts in helpers/packingList.js).
+//
+// The container stays: a packing list can cover more than one, and a weight
+// row with no container on it cannot be checked against anything.
 const PK_COLS = [
-  ['container_no', 'Container', '1.4fr'],
+  ['container_no', 'Container', '1.6fr'],
   ['gross_weight_lbs', 'Gross', '1fr'],
-  ['truck_lbs', 'Truck', '1fr'],
-  ['container_tare_lbs', 'Cont. tare', '1fr'],
-  ['chassis_lbs', 'Chassis', '1fr'],
-  ['boxes_weight_lbs', 'Boxes', '1fr'],
-  ['net_weight_lbs', 'Net (lbs)', '1fr'],
-  ['net_weight_mt', 'Net (mt)', '1fr'],
+  ['tare_lbs', 'Tare', '1fr'],
+  ['net_weight_lbs', 'Net', '1fr'],
 ];
 const PK_GRID = PK_COLS.map((c) => c[2]).join(' ') + ' 30px';
 
@@ -4556,8 +4562,12 @@ function pkMark(field, on) {
 }
 
 function pkPaintItems() {
-  const head = `<div style="display:grid; grid-template-columns:${PK_GRID}; gap:8px; margin-bottom:6px; font-family:var(--font-mono); font-size:10px; letter-spacing:.08em; text-transform:uppercase; color:var(--text-faint);">
-      ${PK_COLS.map(([, label]) => `<div>${label}</div>`).join('')}<div></div>
+  // Apsara: "keep the heading on top of the box". Sticky, so the column names
+  // stay put once the list is long enough to scroll — a weights table whose
+  // headings have scrolled away is one where the next number goes in the wrong
+  // column. Opaque background, or the rows show through it.
+  const head = `<div style="position:sticky; top:0; z-index:2; background:var(--surface-card); padding:2px 0 6px; display:grid; grid-template-columns:${PK_GRID}; gap:8px; font-family:var(--font-mono); font-size:10px; letter-spacing:.08em; text-transform:uppercase; color:var(--text-faint); border-bottom:1px solid var(--border-subtle); margin-bottom:6px;">
+      ${PK_COLS.map(([k, label]) => `<div${k === 'container_no' ? '' : ' style="text-align:right;"'}>${label}</div>`).join('')}<div></div>
     </div>`;
   // Rebuilt wholesale, values carried in the VALUE attribute — a half-rebuilt
   // table where row 3 still holds row 2's text is the classic bug of this
@@ -4597,8 +4607,7 @@ function pkPaintTotals() {
     return n == null ? t : t + n;
   }, 0);
   const fmt = (n) => (n ? n.toLocaleString() : '—');
-  const mt = sum('net_weight_mt');
-  $('pkTotals').innerHTML = `${pkRows.length} container${pkRows.length === 1 ? '' : 's'} · Gross ${fmt(sum('gross_weight_lbs'))} lbs · <strong style="color:var(--text-strong);">Net ${fmt(sum('net_weight_lbs'))} lbs${mt ? ` · ${mt.toFixed(3)} mt` : ''}</strong>`;
+  $('pkTotals').innerHTML = `${pkRows.length} row${pkRows.length === 1 ? '' : 's'} · Gross ${fmt(sum('gross_weight_lbs'))} · Tare ${fmt(sum('tare_lbs'))} · <strong style="color:var(--text-strong);">Net ${fmt(sum('net_weight_lbs'))} lbs</strong>`;
 }
 
 async function pkScan() {

@@ -301,23 +301,37 @@ body.only-packing .decl-packing{display:inline;}
     <table class="seam">
       <thead>
         <tr style="background:var(--light-orange);height:15mm;">
-          <th style="width:15%;padding:1mm;font-size:9.5pt;text-align:center;vertical-align:middle;border:1pt solid black;">Container</th>
-          <th style="width:13%;padding:1mm;font-size:9.5pt;text-align:center;vertical-align:middle;border:1pt solid black;">Gross Weight<br>(lbs)</th>
-          <th style="width:11%;padding:1mm;font-size:9.5pt;text-align:center;vertical-align:middle;border:1pt solid black;">Truck<br>(lbs)</th>
-          <th style="width:12%;padding:1mm;font-size:9.5pt;text-align:center;vertical-align:middle;border:1pt solid black;">Container<br>Tare (lbs)</th>
-          <th style="width:11%;padding:1mm;font-size:9.5pt;text-align:center;vertical-align:middle;border:1pt solid black;">Chassis<br>(lbs)</th>
-          <th style="width:12%;padding:1mm;font-size:9.5pt;text-align:center;vertical-align:middle;border:1pt solid black;">Boxes<br>(lbs)</th>
-          <th style="width:13%;padding:1mm;font-size:9.5pt;text-align:center;vertical-align:middle;border:1pt solid black;">Net Weight<br>(lbs)</th>
-          <th style="width:13%;padding:1mm;font-size:9.5pt;text-align:center;vertical-align:middle;border:1pt solid black;">Net Weight<br>(MT)</th>
+          <!-- ── THREE WEIGHT COLUMNS, NOT SIX ────────────────────────
+               Apsara, 2026-09-16: "in packing list,i juxt want gross,tare
+               ,net", and asked whether the printed document should follow:
+               "Yes — Gross, Tare, Net on the PDF too."
+
+               Truck, Container Tare, Chassis and Boxes were four ways of
+               saying tare. They are summed into one Tare column here, and
+               helpers/invoicePdf.js adds them for any invoice that still
+               carries them broken out — so an older invoice regenerated
+               today prints the same total it always did, in one column
+               instead of four.
+
+               THIS IS THE DOCUMENT CUSTOMERS RECEIVE, and it is shared with
+               the invoice's "Separate invoice & packing list" flag. Both
+               change together, deliberately: two packing lists in different
+               shapes from one company is worse than either shape. -->
+          <th style="width:22%;padding:1mm;font-size:9.5pt;text-align:center;vertical-align:middle;border:1pt solid black;">Container</th>
+          <th style="width:20%;padding:1mm;font-size:9.5pt;text-align:center;vertical-align:middle;border:1pt solid black;">Gross Weight<br>(lbs)</th>
+          <th style="width:20%;padding:1mm;font-size:9.5pt;text-align:center;vertical-align:middle;border:1pt solid black;">Tare<br>(lbs)</th>
+          <th style="width:20%;padding:1mm;font-size:9.5pt;text-align:center;vertical-align:middle;border:1pt solid black;">Net Weight<br>(lbs)</th>
+          <th style="width:18%;padding:1mm;font-size:9.5pt;text-align:center;vertical-align:middle;border:1pt solid black;">Net Weight<br>(MT)</th>
         </tr>
       </thead>
       <tbody>
 {{packing_rows}}
+        <!-- Three blank cells, not five: the four tare columns became one on
+             2026-09-16. A TOTAL row with the wrong number of cells does not
+             error, it SHEARS — the net figures slide one column left and land
+             under the wrong headings, on the document a customer receives. -->
         <tr style="background:var(--light-orange);height:15mm;">
           <td style="padding:2mm 1mm;font-weight:700;font-size:10pt;text-align:center;vertical-align:middle;border:1pt solid black;">TOTAL</td>
-          <td style="padding:2mm 1mm;border:1pt solid black;"></td>
-          <td style="padding:2mm 1mm;border:1pt solid black;"></td>
-          <td style="padding:2mm 1mm;border:1pt solid black;"></td>
           <td style="padding:2mm 1mm;border:1pt solid black;"></td>
           <td style="padding:2mm 1mm;border:1pt solid black;"></td>
           <td style="padding:2mm 1mm;font-weight:700;font-size:10pt;text-align:center;vertical-align:middle;border:1pt solid black;">{{total_net_lbs_fmt}}</td>

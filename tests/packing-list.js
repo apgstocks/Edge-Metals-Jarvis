@@ -92,10 +92,30 @@ section('A — what comes back off a document');
                        'chassis_lbs', 'boxes_weight_lbs', 'net_weight_lbs', 'net_weight_mt']) {
         ck(`    ${col} is read`, !!out.rows[0][col], JSON.stringify(out.rows[0]));
     }
-    ck('    and the columns match the printed template exactly',
-       pl.ROW_FIELDS.filter((f) => f !== 'note').join(',') ===
-       'container_no,gross_weight_lbs,truck_lbs,container_tare_lbs,chassis_lbs,boxes_weight_lbs,net_weight_lbs,net_weight_mt',
-       pl.ROW_FIELDS.join(',') + ' — must stay in step with assets/invoice-classic/template.html');
+    // ── AND THEN SHE ASKED FOR THREE ─────────────────────────────────────
+    // "in packing list,i juxt want gross,tare ,net", and on whether the
+    // printed document follows: "Yes". So the FORM is four columns — the
+    // container plus those three — while the STORE still accepts the four
+    // tare components, because a scanned page prints them separately and
+    // discarding them would make the record disagree with the paper.
+    ck('    the form shows the four she asked for',
+       pl.FORM_FIELDS.join(',') === 'container_no,gross_weight_lbs,tare_lbs,net_weight_lbs',
+       pl.FORM_FIELDS.join(','));
+    ck('    while the store still keeps the tare components',
+       ['truck_lbs', 'container_tare_lbs', 'chassis_lbs', 'boxes_weight_lbs']
+           .every((k) => pl.ROW_FIELDS.includes(k)),
+       pl.ROW_FIELDS.join(','));
+
+    // ── ONE ANSWER TO "WHAT IS THE TARE" ─────────────────────────────────
+    // Her typed figure wins; otherwise the components are summed. Both the
+    // form and helpers/invoicePdf.js call this one function, because two
+    // answers would eventually differ — on a document a customer is holding.
+    ck('  a typed tare wins', pl.tareOf({ tare_lbs: '24,000', truck_lbs: '15,000' }) === 24000);
+    ck('  four components are summed',
+       pl.tareOf({ truck_lbs: '15,000', container_tare_lbs: '8,000', chassis_lbs: '6,000', boxes_weight_lbs: '500' }) === 29500);
+    ck('  and nothing at all stays NULL, not zero',
+       pl.tareOf({}) === null,
+       'a zero tare claims the container weighed nothing; a blank is an absence, and on a weight document those differ');
 
     // ── WEIGHTS STAY AS PRINTED ──────────────────────────────────────────
     // The same rule as the BOL's: "46,300" must read back as "46,300". A
@@ -295,8 +315,44 @@ section('C2 — generating the PDF, and checking it against the invoice');
     ck('  the header is taken from the invoice', /Eccomelt Inc/.test(handed.html),
        'retyping an exporter block and four ports she has already entered is not a feature');
     ck('  and HER weight rows are on it',
-       /46,300/.test(handed.html) && /16,800/.test(handed.html) && /6,000/.test(handed.html),
+       /46,300/.test(handed.html) && /16,800/.test(handed.html),
        'the whole packing table, not just the header');
+
+    // ── THE PRINTED TABLE IS THREE WEIGHT COLUMNS NOW ────────────────────
+    // Counted rather than eyeballed. A TOTAL row with the wrong number of
+    // cells does not error — it SHEARS, sliding the net figures one column
+    // left so they print under the wrong headings, on the page a customer
+    // receives. Nothing else in this suite would catch that.
+    {
+        const start = handed.html.indexOf('class="doc-packing"');
+        const tbl = handed.html.slice(handed.html.indexOf('<table', start), handed.html.indexOf('</table>', start));
+        const cellsIn = (x) => (x.match(/<t[hd][ >]/g) || []).length;
+        const thead = tbl.slice(tbl.indexOf('<thead>'), tbl.indexOf('</thead>'));
+        const body = tbl.slice(tbl.indexOf('<tbody>'), tbl.indexOf('</tbody>'));
+        const counts = [cellsIn(thead), ...body.split('<tr').slice(1).map(cellsIn)];
+        ck('  every row of the printed table has the same number of cells',
+           new Set(counts).size === 1, counts.join(',') + ' — header, data rows and TOTAL');
+        ck('    and that number is five', counts[0] === 5, String(counts[0]));
+        ck('  the four old tare headings are gone',
+           !/Truck<br>/.test(handed.html) && !/Chassis<br>/.test(handed.html) && !/Boxes<br>/.test(handed.html));
+        ck('    replaced by one Tare', /Tare<br>/.test(handed.html));
+    }
+
+    // ── AND NOTHING ON FILE NEEDS MIGRATING ──────────────────────────────
+    // An invoice saved before today still carries the tare broken into four.
+    // It must regenerate with the SAME total it always had, in one column.
+    {
+        const { buildInvoiceClassicHtml } = require(path.join(ROOT, 'helpers/invoicePdf'));
+        const { html } = buildInvoiceClassicHtml({
+            inv_no: 'OLD-1', container_no: 'TCLU1234567', consignee: 'Eccomelt Inc',
+            line_items: [{ container_no: 'TCLU1234567', weight: '7.620', packing: {
+                gross_weight_lbs: '46,300', truck_lbs: '15,000', container_tare_lbs: '8,000',
+                chassis_lbs: '6,000', boxes_weight_lbs: '500', net_weight_lbs: '16,800', net_weight_mt: '7.620' } }],
+        });
+        ck('an invoice saved BEFORE today still prints its tare', /29,500/.test(html),
+           '15,000 + 8,000 + 6,000 + 500 — summed on read, so no stored payload needs changing');
+        ck('  with its gross and net untouched', /46,300/.test(html) && /16,800/.test(html));
+    }
 
     // A packing list with a blank exporter block looks finished and is useless
     // to a broker. Refusing is the right answer, and it says what to do.
@@ -376,9 +432,17 @@ section('D — the screen');
 
     // Rows and columns.
     const headers = d.getElementById('pkItems').textContent;
-    for (const col of ['Container', 'Gross', 'Truck', 'Chassis', 'Boxes', 'Net (lbs)', 'Net (mt)']) {
+    for (const col of ['Container', 'Gross', 'Tare', 'Net']) {
         ck(`  the items table has a ${col} column`, headers.includes(col), headers.slice(0, 120));
     }
+    // "keep the heading on top of the box" — sticky, so the column names stay
+    // put once the list is long enough to scroll. A weights table whose
+    // headings have scrolled away is one where the next number goes in the
+    // wrong column.
+    ck('  the heading stays on top of the box',
+       /position:sticky; top:0/.test(DOCS.slice(DOCS.indexOf('const head = '), DOCS.indexOf('const head = ') + 400)),
+       'headings that scroll away are headings that stop being read');
+
     const rows0 = d.querySelectorAll('#pkItems input[data-pi]').length;
     ck('  and starts with blank lines to type into', rows0 > 0, `${rows0} inputs`);
 

@@ -43,20 +43,63 @@ const { loadJson, mutateJson } = require('./json');
 // Same columns as assets/invoice-classic/template.html's packing table and
 // helpers/invoicePdf.js's packingRowsHtml — deliberately, so a packing list
 // made here and one made from an invoice are the same document.
+// ── AND THEN SHE ASKED FOR THREE ───────────────────────────────────────────
+// Apsara, 2026-09-16: "in packing list,i juxt want gross,tare ,net".
+//
+// Truck, container tare, chassis and boxes are four separate columns on the
+// printed document, but they are four ways of saying TARE, and typing them
+// into four narrow boxes is not what she wants from this form. So the stored
+// row carries one `tare_lbs`.
+//
+// THE FOUR COMPONENTS ARE STILL ACCEPTED, because a scanned document has them
+// printed separately and throwing them away would lose what the paper said.
+// They are read, kept, and summed into tare_lbs when the document she is
+// reading breaks them out — see tareOf. What she TYPES is one number; what a
+// SCAN finds may be four, and both end up in the same place.
 const ROW_FIELDS = [
     'container_no',
     'gross_weight_lbs',
+    'tare_lbs',
+    'net_weight_lbs',
+    // Kept but not shown on her form. A scanned page that prints the tare
+    // broken out still has those numbers, and discarding them would mean the
+    // stored record disagrees with the paper it came from.
     'truck_lbs',
     'container_tare_lbs',
     'chassis_lbs',
     'boxes_weight_lbs',
-    'net_weight_lbs',
     'net_weight_mt',
-    // Not a column on the printed document. Anything the scanned page carries
-    // that does not fit above lands here rather than being dropped — losing a
-    // column silently is worse than an untidy one.
+    // Anything the scanned page carries that does not fit above lands here
+    // rather than being dropped — losing a column silently is worse than an
+    // untidy one.
     'note',
 ];
+
+// The columns her FORM shows, in order. Exported so the screen cannot drift
+// from the store about which three she asked for.
+const FORM_FIELDS = ['container_no', 'gross_weight_lbs', 'tare_lbs', 'net_weight_lbs'];
+
+const toNum = (v) => {
+    const n = parseFloat(String(v == null ? '' : v).replace(/,/g, '').trim());
+    return isFinite(n) ? n : null;
+};
+
+// One tare from whichever the row carries. Her single figure wins when she has
+// typed one; otherwise the four components are added up, which is what the
+// printed document means by tare anyway.
+//
+// Returns null rather than 0 when there is nothing to add: a zero tare is a
+// CLAIM that the container weighed nothing, and a blank is an absence. On a
+// weight document those are different, and the BOL learned it the hard way.
+function tareOf(row) {
+    const r = row || {};
+    const own = toNum(r.tare_lbs);
+    if (own != null) return own;
+    const parts = ['truck_lbs', 'container_tare_lbs', 'chassis_lbs', 'boxes_weight_lbs']
+        .map((k) => toNum(r[k])).filter((n) => n != null);
+    if (!parts.length) return null;
+    return parts.reduce((a, b) => a + b, 0);
+}
 
 // Kept as the STRINGS on the document. The same rule as the BOL's weights
 // (helpers/bols.js): "46,300" must read back as "46,300" after an edit that
@@ -91,6 +134,16 @@ function buildRecord(input, prev) {
         rows: rows.map((r) => {
             const out = {};
             for (const f of ROW_FIELDS) out[f] = str(r && r[f]);
+            // A scanned page that printed the tare in four columns gets one
+            // tare filled in from them, so the form she opens shows a figure
+            // rather than a blank beside four numbers she cannot see.
+            if (!out.tare_lbs) {
+                const t = tareOf(r);
+                // Formatted with separators, like every other weight in this
+                // project. A summed tare landing as "29500" beside a gross of
+                // "46,300" reads as a different kind of number.
+                if (t != null) out.tare_lbs = t.toLocaleString('en-US');
+            }
             return out;
         }),
         // ── PROVENANCE ───────────────────────────────────────────────────
@@ -176,11 +229,16 @@ Extract what is actually printed. Return ONLY raw JSON — no markdown, no prose
     {
       "container_no": null,        // the container this row is for, e.g. "TCLU1234567"
       "gross_weight_lbs": null,    // exactly as printed, keep thousands separators
-      "truck_lbs": null,           // the truck's own weight, a tare component
+      "tare_lbs": null,            // the TOTAL tare, if the document prints one single figure
+      "net_weight_lbs": null,      // net after the tare, exactly as printed
+      // Some packing lists break the tare into its parts instead of printing
+      // one total. Fill these in when they are printed separately, and leave
+      // tare_lbs null — do NOT add them up yourself. Adding is arithmetic the
+      // reader can do; guessing which columns are tare components is not.
+      "truck_lbs": null,           // the truck's own weight
       "container_tare_lbs": null,  // the container's tare weight
-      "chassis_lbs": null,         // the chassis weight, another tare component
-      "boxes_weight_lbs": null,    // weight of boxes/packaging
-      "net_weight_lbs": null,      // net after the tares, exactly as printed
+      "chassis_lbs": null,         // the chassis weight
+      "boxes_weight_lbs": null,    // weight of boxes or packaging
       "net_weight_mt": null,       // net in metric tonnes if the document shows it
       "note": null                 // anything else in that row that does not fit the columns above
     }
@@ -344,10 +402,11 @@ async function generatePdf(record, { renderer } = {}) {
         weight: str(r.net_weight_mt),
         packing: {
             gross_weight_lbs: str(r.gross_weight_lbs),
-            truck_lbs: str(r.truck_lbs),
-            container_tare_lbs: str(r.container_tare_lbs),
-            chassis_lbs: str(r.chassis_lbs),
-            boxes_weight_lbs: str(r.boxes_weight_lbs),
+            // One tare, however the row arrived at it — typed, or summed from
+            // the four components a scanned page printed separately. tareOf is
+            // the single answer to "what is the tare"; invoicePdf calls the
+            // same function rather than repeating the rule.
+            tare_lbs: (() => { const t = tareOf(r); return t == null ? '' : t.toLocaleString('en-US'); })(),
             net_weight_lbs: str(r.net_weight_lbs),
             net_weight_mt: str(r.net_weight_mt),
         },
@@ -442,6 +501,6 @@ function compareToInvoice(record) {
 }
 
 module.exports = {
-    ROW_FIELDS, keyOf, buildRecord, loadAll, list, get, save, remove,
+    ROW_FIELDS, FORM_FIELDS, tareOf, keyOf, buildRecord, loadAll, list, get, save, remove,
     scan, normaliseScan, generatePdf, compareToInvoice,
 };

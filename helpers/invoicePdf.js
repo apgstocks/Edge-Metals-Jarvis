@@ -301,13 +301,24 @@ function buildInvoiceClassicHtml(data) {
         const netLbs = parseFloat(String(p.net_weight_lbs || '').replace(/,/g, '')) || Math.round(netMt * 2204.62);
         totalNetMt += netMt;
         totalNetLbs += netLbs;
+        // ── ONE TARE COLUMN ──────────────────────────────────────────────
+        // Apsara, 2026-09-16: "in packing list,i juxt want gross,tare ,net" —
+        // and, on whether the printed document follows, "Yes".
+        //
+        // helpers/packingList.js's tareOf is the ONE place that decides what a
+        // tare is: her own figure when she typed one, otherwise the four
+        // components added up. Reused rather than re-implemented here, because
+        // two answers to "what is the tare" would eventually differ, and they
+        // would differ on a document a customer is holding.
+        //
+        // An INVOICE SAVED BEFORE TODAY still carries truck/container/chassis/
+        // boxes broken out. It regenerates with the same total it always had,
+        // in one column instead of four — nothing on file needs migrating.
+        const tare = require('./packingList').tareOf(p);
         return `        <tr style="height:10mm;">
           <td style="padding:1mm;font-size:9.5pt;text-align:center;vertical-align:middle;">${escapeHtml(item.container_no || data.container_no)}</td>
           <td style="padding:1mm;font-size:9.5pt;text-align:center;vertical-align:middle;">${escapeHtml(p.gross_weight_lbs || '-')}</td>
-          <td style="padding:1mm;font-size:9.5pt;text-align:center;vertical-align:middle;">${escapeHtml(p.truck_lbs || '-')}</td>
-          <td style="padding:1mm;font-size:9.5pt;text-align:center;vertical-align:middle;">${escapeHtml(p.container_tare_lbs || '-')}</td>
-          <td style="padding:1mm;font-size:9.5pt;text-align:center;vertical-align:middle;">${escapeHtml(p.chassis_lbs || '-')}</td>
-          <td style="padding:1mm;font-size:9.5pt;text-align:center;vertical-align:middle;">${escapeHtml(p.boxes_weight_lbs || '-')}</td>
+          <td style="padding:1mm;font-size:9.5pt;text-align:center;vertical-align:middle;">${escapeHtml(tare == null ? '-' : tare.toLocaleString('en-US'))}</td>
           <td style="padding:1mm;font-size:9.5pt;text-align:center;vertical-align:middle;">${escapeHtml(p.net_weight_lbs || formatInt(netLbs))}</td>
           <td style="padding:1mm;font-size:9.5pt;text-align:center;vertical-align:middle;">${netMt.toFixed(3)}</td>
         </tr>`;
