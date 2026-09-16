@@ -75,9 +75,16 @@ const ROW_FIELDS = [
     'note',
 ];
 
-// The columns her FORM shows, in order. Exported so the screen cannot drift
-// from the store about which three she asked for.
-const FORM_FIELDS = ['container_no', 'gross_weight_lbs', 'tare_lbs', 'net_weight_lbs'];
+// The columns the ITEM GRID shows, in order. Exported so the screen cannot
+// drift from the store about which three she asked for.
+//
+// The container is NOT among them — Apsara, 2026-09-16: "remove container in
+// item grid". It is a field at the top of the form and the key this store
+// matches a packing list on, so putting it on every row asked her to type one
+// number twice and gave it two places to disagree. Rows still CARRY one in the
+// store, because a scanned page may list several; generatePdf and
+// compareToInvoice both fall back to the header's when a row has none.
+const FORM_FIELDS = ['gross_weight_lbs', 'tare_lbs', 'net_weight_lbs'];
 
 const toNum = (v) => {
     const n = parseFloat(String(v == null ? '' : v).replace(/,/g, '').trim());

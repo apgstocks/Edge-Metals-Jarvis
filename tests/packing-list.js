@@ -98,9 +98,12 @@ section('A — what comes back off a document');
     // container plus those three — while the STORE still accepts the four
     // tare components, because a scanned page prints them separately and
     // discarding them would make the record disagree with the paper.
-    ck('    the form shows the four she asked for',
-       pl.FORM_FIELDS.join(',') === 'container_no,gross_weight_lbs,tare_lbs,net_weight_lbs',
+    ck('    the item grid shows the three she asked for',
+       pl.FORM_FIELDS.join(',') === 'gross_weight_lbs,tare_lbs,net_weight_lbs',
        pl.FORM_FIELDS.join(','));
+    ck('    and the container is not one of them',
+       !pl.FORM_FIELDS.includes('container_no'),
+       'it is a field at the top of the form, and the key this store matches on');
     ck('    while the store still keeps the tare components',
        ['truck_lbs', 'container_tare_lbs', 'chassis_lbs', 'boxes_weight_lbs']
            .every((k) => pl.ROW_FIELDS.includes(k)),
@@ -432,7 +435,14 @@ section('D — the screen');
 
     // Rows and columns.
     const headers = d.getElementById('pkItems').textContent;
-    for (const col of ['Container', 'Gross', 'Tare', 'Net']) {
+    // Apsara: "remove container in item grid". It is already a field at the
+    // top of the form and this store keys a packing list on it — one
+    // container, one list. Repeating it per row asked her to type the same
+    // number twice and gave it two places to disagree.
+    ck('  the item grid has no Container column',
+       !/\['container_no', 'Container'/.test(DOCS),
+       'the container lives once, at the top of the form');
+    for (const col of ['Gross', 'Tare', 'Net']) {
         ck(`  the items table has a ${col} column`, headers.includes(col), headers.slice(0, 120));
     }
     // "keep the heading on top of the box" — sticky, so the column names stay

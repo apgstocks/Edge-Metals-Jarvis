@@ -4498,8 +4498,17 @@ function bolClearForm() {
 //
 // The container stays: a packing list can cover more than one, and a weight
 // row with no container on it cannot be checked against anything.
+// Apsara, 2026-09-16: "remove container in item grid".
+//
+// The container is already a field at the TOP of this form, and this store
+// keys a packing list on it — one container, one list. Repeating it on every
+// row was asking her to type the same number twice and giving two places for
+// it to disagree.
+//
+// The rows still CARRY a container_no in the store: a scanned page may list
+// several, and generatePdf falls back to the header's when a row has none.
+// What is gone is the column she has to fill in.
 const PK_COLS = [
-  ['container_no', 'Container', '1.6fr'],
   ['gross_weight_lbs', 'Gross', '1fr'],
   ['tare_lbs', 'Tare', '1fr'],
   ['net_weight_lbs', 'Net', '1fr'],
@@ -4567,14 +4576,14 @@ function pkPaintItems() {
   // headings have scrolled away is one where the next number goes in the wrong
   // column. Opaque background, or the rows show through it.
   const head = `<div style="position:sticky; top:0; z-index:2; background:var(--surface-card); padding:2px 0 6px; display:grid; grid-template-columns:${PK_GRID}; gap:8px; font-family:var(--font-mono); font-size:10px; letter-spacing:.08em; text-transform:uppercase; color:var(--text-faint); border-bottom:1px solid var(--border-subtle); margin-bottom:6px;">
-      ${PK_COLS.map(([k, label]) => `<div${k === 'container_no' ? '' : ' style="text-align:right;"'}>${label}</div>`).join('')}<div></div>
+      ${PK_COLS.map(([, label]) => `<div style="text-align:right;">${label}</div>`).join('')}<div></div>
     </div>`;
   // Rebuilt wholesale, values carried in the VALUE attribute — a half-rebuilt
   // table where row 3 still holds row 2's text is the classic bug of this
   // pattern, and here it would put a weight against the wrong material.
   $('pkItems').innerHTML = head + pkRows.map((r, i) => `
     <div style="display:grid; grid-template-columns:${PK_GRID}; gap:8px; margin-bottom:6px; align-items:center;">
-      ${PK_COLS.map(([k]) => `<input data-pi="${i}" data-pf="${k}" type="text" value="${esc(r[k] || '')}"${k === 'container_no' ? ' style="font-family:var(--font-mono);"' : ' style="text-align:right; font-family:var(--font-mono);"'}>`).join('')}
+      ${PK_COLS.map(([k]) => `<input data-pi="${i}" data-pf="${k}" type="text" value="${esc(r[k] || '')}" style="text-align:right; font-family:var(--font-mono);">`).join('')}
       <button type="button" class="btn btn-secondary pk-del" data-i="${i}" style="padding:4px 8px; font-size:12px;">&times;</button>
     </div>`).join('');
 
@@ -4680,6 +4689,9 @@ function pkPayload() {
     seal_no: $('pk_seal').value.trim(),
     customer: $('pk_customer').value.trim(),
     date: $('pk_date').value,
+    // A row counts as real if she typed a WEIGHT into it. Testing every
+    // stored field would keep a row alive on a container_no a scan left
+    // behind, and save a line with no weights on it.
     rows: pkRows.filter((r) => PK_COLS.some(([k]) => String(r[k] || '').trim())),
     scanned_fields: [...document.querySelectorAll('#panelPacking [data-pkfield]')]
       .filter((b) => b.querySelector('.pk-scanned-tag')).map((b) => b.dataset.pkfield),
