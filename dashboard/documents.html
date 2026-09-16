@@ -500,7 +500,23 @@ body[data-theme="light"] {
     <div id="invStep3" class="card hidden" style="padding:20px 22px;">
       <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:14px;">
         <div style="font-size:15px; font-weight:700; color:var(--text-strong);">Review &amp; generate — every field below is editable before you download.</div>
-        <button id="btnInvStep3Back" type="button" class="btn btn-secondary" style="padding:5px 10px; font-size:10px;">Back</button>
+        <div style="display:flex; gap:8px; align-items:center;">
+          <!-- Apsara, 2026-09-16: "provide refresh button so that it can fetch
+               latets data from order details". Asked what it should overwrite,
+               she chose "Ask me each time" — so it does, rather than guessing
+               between losing her header edits and ignoring a sheet correction
+               to the header. -->
+          <span id="invRefreshStatus" style="font-size:11px; color:var(--text-muted);"></span>
+          <button id="btnInvRefresh" type="button" class="btn btn-secondary" style="padding:5px 10px; font-size:10px;">Refresh from order details</button>
+          <button id="btnInvStep3Back" type="button" class="btn btn-secondary" style="padding:5px 10px; font-size:10px;">Back</button>
+        </div>
+      </div>
+      <div id="invRefreshChoice" class="hidden" style="border:1px solid var(--border-subtle); border-radius:var(--radius-sm); padding:10px 12px; margin-bottom:12px; display:flex; gap:10px; align-items:center; flex-wrap:wrap;">
+        <span style="font-size:12px; color:var(--text-body);">Refresh what?</span>
+        <button id="btnInvRefreshRows" type="button" class="btn btn-secondary" style="padding:5px 10px; font-size:10px;">Just the item rows</button>
+        <button id="btnInvRefreshAll" type="button" class="btn btn-secondary" style="padding:5px 10px; font-size:10px;">The whole invoice</button>
+        <button id="btnInvRefreshCancel" type="button" class="btn btn-secondary" style="padding:5px 10px; font-size:10px;">Cancel</button>
+        <span style="font-size:11px; color:var(--text-muted);">Rows only keeps your invoice number, terms, ports and notes. The whole invoice replaces every box on this screen.</span>
       </div>
 
       <!-- Multi-select batch review queue — "Generate selected" on Step 2
@@ -3692,9 +3708,11 @@ async function loadNextInvQueueItem() {
     // invoice — use the shared booking # instead, still a stable per-
     // shipment identifier (see helpers/invoiceVersions.js — it just
     // uppercases/trims whatever key it's given).
-    enterInvoiceReview(data, isMulti
-      ? { suppressVersionBanner: false, versionKey: group.booking_no }
-      : {});
+    enterInvoiceReview(data, {
+      ...(isMulti ? { suppressVersionBanner: false, versionKey: group.booking_no } : {}),
+      source: { containers: group.containers.slice(), multi: isMulti,
+                versionKey: isMulti ? group.booking_no : group.containers[0] },
+    });
     $('invQueueBannerText').textContent = isMulti
       ? `Reviewing ${invQueueIndex + 1} of ${invQueue.length} — booking ${group.booking_no} (${group.containers.length} containers merged into one invoice)`
       : `Reviewing ${invQueueIndex + 1} of ${invQueue.length} — ${group.containers[0]}`;
@@ -3726,26 +3744,79 @@ function invItemRowHtml(item, i) {
     <td><input class="inv-item-desc" placeholder="item description" value="${esc(item.item_desc || '')}"></td>
     <td><input class="inv-item-weight" type="number" step="any" placeholder="qty (MT)" value="${item.weight || ''}"></td>
     <td><input class="inv-item-rate" type="number" step="any" placeholder="rate" value="${item.rate || ''}"></td>
-    <td><input class="inv-item-amount" type="text" readonly value="$${(Number(item.amount) || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}"></td>
+    <td><input class="inv-item-amount" type="text" readonly value="$${(Number(item.amount) || ((Number(item.weight) || 0) * (Number(item.rate) || 0))).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}"></td>
     <td><input class="inv-p-gross" placeholder="gross lbs" value="${esc(p.gross_weight_lbs || '')}"></td>
     <td><input class="inv-p-truck" placeholder="truck lbs" value="${esc(p.truck_lbs || '')}"></td>
     <td><input class="inv-p-tare" placeholder="tare lbs" value="${esc(p.container_tare_lbs || '')}"></td>
     <td><input class="inv-p-chassis" placeholder="chassis lbs" value="${esc(p.chassis_lbs || '')}"></td>
     <td><input class="inv-p-boxes" placeholder="boxes lbs" value="${esc(p.boxes_weight_lbs || '')}"></td>
-    <td><input class="inv-p-net" placeholder="net lbs" value="${esc(p.net_weight_lbs || '')}"></td>
+    <td><input class="inv-p-net" placeholder="net lbs" readonly tabindex="-1" title="Gross minus truck, container tare, chassis and boxes" style="background:var(--surface-sunken); color:var(--text-muted);" value="${esc(p.net_weight_lbs || '')}"></td>
     <td><button type="button" class="btn btn-secondary inv-item-remove" style="padding:4px 8px; font-size:10px;">Remove</button></td>
   </tr>`;
 }
+// ── THE CHAIN, FROM A SCALE TICKET TO AN AMOUNT ───────────────────────────
+// Apsara, 2026-09-16: "When i change the gross,tare,box,container wight is
+// invoice tab,corresponding net weight in mt,lbs should be computed auto so
+// as rate."
+//
+//   gross - (truck + container tare + chassis + boxes) = NET LBS
+//   net lbs / 2204.62                                  = QTY (MT)
+//   qty x rate                                         = AMOUNT
+//
+// She was typing a corrected gross and then working the other three out on a
+// calculator, into boxes that had no idea they were related. Every step is
+// arithmetic anyone receiving the invoice can repeat — nothing here is a
+// guess.
+//
+// ── WHICH MEANS CORRECTING A WEIGHT CHANGES WHAT IS BILLED ────────────────
+// Deliberate: that is the point of correcting it. But it is also why this
+// fires ONLY on an edit she makes, never on load. applyInvoiceDataToForm
+// renders stored rows untouched — opening an invoice from March must not
+// silently restate its tonnage because 2204.62 disagrees with the figure the
+// sheet carried.
+const LBS_PER_MT = 2204.62;
+const invNumOf = (el) => {
+  const v = parseFloat(String((el && el.value) || '').replace(/,/g, '').trim());
+  return isFinite(v) ? v : null;
+};
+
+// Null, not 0, when there is no gross: a zero net is a CLAIM that the
+// container weighed nothing, and this row prices by weight.
+function invRowNetLbs(row) {
+  const gross = invNumOf(row.querySelector('.inv-p-gross'));
+  if (gross == null) return null;
+  const tare = ['.inv-p-truck', '.inv-p-tare', '.inv-p-chassis', '.inv-p-boxes']
+    .map((sel) => invNumOf(row.querySelector(sel)))
+    .filter((n) => n != null)
+    .reduce((a, b2) => a + b2, 0);
+  return gross - tare;
+}
+
 function wireInvItemRow(row) {
+  const amountBox = row.querySelector('.inv-item-amount');
+  const weightBox = row.querySelector('.inv-item-weight');
   const recalc = () => {
-    const weight = parseFloat(row.querySelector('.inv-item-weight').value) || 0;
+    const weight = parseFloat(weightBox.value) || 0;
     const rate = parseFloat(row.querySelector('.inv-item-rate').value) || 0;
-    row.querySelector('.inv-item-amount').value = '$' + (weight * rate).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    amountBox.value = '$' + (weight * rate).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
     recalcInvFinalAmount();
   };
+  // A weight column changed: net lbs, then MT, then the amount. Only the two
+  // derived boxes are rewritten, so the caret stays where she is typing.
+  const recalcWeights = () => {
+    const net = invRowNetLbs(row);
+    const netBox = row.querySelector('.inv-p-net');
+    netBox.value = net == null ? '' : net.toLocaleString('en-US');
+    // Three decimals, the same precision her sheet and the packing list use.
+    weightBox.value = net == null ? '' : (net / LBS_PER_MT).toFixed(3);
+    recalc();
+  };
   row.querySelector('.inv-item-remove').addEventListener('click', () => { row.remove(); recalcInvFinalAmount(); });
-  row.querySelector('.inv-item-weight').addEventListener('input', recalc);
+  weightBox.addEventListener('input', recalc);
   row.querySelector('.inv-item-rate').addEventListener('input', recalc);
+  for (const sel of ['.inv-p-gross', '.inv-p-truck', '.inv-p-tare', '.inv-p-chassis', '.inv-p-boxes']) {
+    row.querySelector(sel).addEventListener('input', recalcWeights);
+  }
 }
 
 // ── Invoice Notes editor (replaces the old single Freight Deduction field) ──
@@ -3947,8 +4018,16 @@ function applyInvoiceDataToForm(data) {
 // no single container number, so the queue passes the shared booking # as
 // the version-history key instead. opts.suppressVersionBanner skips that
 // lookup entirely when a key doesn't make sense.
+// WHERE THE OPEN REVIEW CAME FROM, so Refresh can ask the same question
+// again. Not derived from the form: she may have edited the container box,
+// and refreshing would then pull a DIFFERENT shipment's figures into an
+// invoice that already carries this one's.
+let invReviewSource = null;   // { containers: [...], multi, versionKey }
+
 function enterInvoiceReview(data, opts = {}) {
   invCurrentData = data;
+  if (opts.source) invReviewSource = opts.source;
+  else if (data && data.container_no) invReviewSource = { containers: [data.container_no], multi: false };
   applyInvoiceDataToForm(data);
   $('invSuccessMsg').textContent = '';
   $('invQueueBanner').classList.add('hidden'); // queue loader re-shows it right after, if we're mid-batch
@@ -3963,11 +4042,68 @@ function enterInvoiceReview(data, opts = {}) {
 async function loadInvoicePreview(containerNo) {
   try {
     const data = await api('/api/invoice/preview?container=' + encodeURIComponent(containerNo));
-    enterInvoiceReview(data);
+    enterInvoiceReview(data, { source: { containers: [containerNo], multi: false, versionKey: containerNo } });
   } catch (e) {
     alert(e.message);
   }
 }
+
+// ── REFRESH FROM THE ORDER SHEET ──────────────────────────────────────────
+// Apsara, 2026-09-16: "provide refresh button so that it can fetch latets data
+// from order details."
+//
+// The same endpoint the review was OPENED with, for the same containers — a
+// merged booking must refresh as a merge, or the second container quietly
+// disappears from an invoice that still names it in the header.
+async function invRefreshFetch() {
+  const src = invReviewSource;
+  if (!src || !src.containers || !src.containers.length) throw new Error('nothing to refresh — open a container first');
+  return src.multi
+    ? api('/api/invoice/preview-multi?containers=' + encodeURIComponent(src.containers.join(',')))
+    : api('/api/invoice/preview?container=' + encodeURIComponent(src.containers[0]));
+}
+
+async function invRefresh(scope) {
+  const btn = $('btnInvRefresh');
+  $('invRefreshChoice').classList.add('hidden');
+  $('invRefreshStatus').textContent = 'Fetching…';
+  if (btn) btn.disabled = true;
+  try {
+    const data = await invRefreshFetch();
+    if (scope === 'all') {
+      // Everything, exactly as if she had just opened it. invCurrentData moves
+      // with it — the consignee and proforma date on the payload are read from
+      // there, and leaving it behind would send the OLD buyer with the NEW
+      // weights.
+      enterInvoiceReview(data, { suppressVersionBanner: true, source: invReviewSource });
+    } else {
+      // Rows only. Her invoice number, terms, ports, vessel and notes are
+      // hers — she has usually corrected them by the time she notices the
+      // sheet has moved on.
+      $('invItemsEditor').innerHTML = normalizeInvItemsForForm(data).map(invItemRowHtml).join('');
+      $('invItemsEditor').querySelectorAll('.inv-item-row').forEach(wireInvItemRow);
+      recalcInvFinalAmount();
+      // The rows came from the sheet, so what the payload reports as the
+      // invoice's own figures must come from there too.
+      if (invCurrentData) invCurrentData = { ...invCurrentData, line_items: data.line_items || data.items || [] };
+    }
+    const n = $('invItemsEditor').querySelectorAll('.inv-item-row').length;
+    $('invRefreshStatus').textContent = `Refreshed — ${n} line${n === 1 ? '' : 's'} from the sheet.`;
+  } catch (e) {
+    // The screen still holds everything she typed. Saying so matters: a
+    // refresh that fails silently reads as one that worked.
+    $('invRefreshStatus').textContent = `Could not refresh: ${e.message}. Nothing on this screen changed.`;
+  }
+  if (btn) btn.disabled = false;
+}
+
+$('btnInvRefresh').addEventListener('click', () => {
+  $('invRefreshStatus').textContent = '';
+  $('invRefreshChoice').classList.toggle('hidden');
+});
+$('btnInvRefreshRows').addEventListener('click', () => invRefresh('rows'));
+$('btnInvRefreshAll').addEventListener('click', () => invRefresh('all'));
+$('btnInvRefreshCancel').addEventListener('click', () => $('invRefreshChoice').classList.add('hidden'));
 
 function collectInvoicePayload() {
   const items = Array.from($('invItemsEditor').querySelectorAll('.inv-item-row')).map((row) => {

@@ -9152,6 +9152,11 @@ async function loadNextInvGroup() {
     invw.data = multi
       ? await api('/api/invoice/preview-multi?containers=' + encodeURIComponent(group.containers.join(',')))
       : await api('/api/invoice/preview?container=' + encodeURIComponent(group.containers[0]));
+    // Where this review came from, so Refresh can ask the same question again.
+    // NOT read back off the form: she may have corrected the container box,
+    // and refreshing would then pull a different shipment's figures into an
+    // invoice that already carries this one's.
+    invw.source = { containers: group.containers.slice(), multi };
     invw.step = 3; renderInvFlow();
   } catch (e) {
     alert(`${group.containers.join(', ')}: ${e.message}`);
@@ -9341,6 +9346,7 @@ function wireInvStep2() {
       // The server computes every figure from the Invoice sheet — weights,
       // rates, packing breakdown, the lot. Nothing here recalculates it.
       invw.data = await api('/api/invoice/preview?container=' + encodeURIComponent(c.container_no));
+      invw.source = { containers: [c.container_no], multi: false };
       invw.queue = []; invw.queueIndex = 0; // a direct tap is not a batch
       invw.step = 3; renderInvFlow();
     } catch (e) {
@@ -9392,6 +9398,24 @@ function invStep3Html() {
     <div style="background:var(--surface-sunken); border-radius:var(--radius-sm); padding:12px 14px; margin-bottom:16px;">
       <div style="font-family:var(--font-mono); font-size:10px; letter-spacing:.12em; text-transform:uppercase; color:var(--text-faint);">Consignee</div>
       <div style="font-size:13.5px; font-weight:600; color:var(--text-strong); margin-top:3px;">${esc(d.consignee || '—')}</div>
+    </div>
+
+    <!-- Apsara, 2026-09-16: "provide refresh button so that it can fetch
+         latets data from order details." Asked what it should overwrite she
+         chose "Ask me each time", so it asks rather than guessing between
+         losing her header edits and ignoring a sheet correction to them. -->
+    <div style="display:flex; gap:8px; align-items:center; margin-bottom:12px; flex-wrap:wrap;">
+      <button id="btnInvwRefresh" class="btn" style="padding:6px 11px; font-size:11px;">Refresh from order details</button>
+      <span id="invwRefreshStatus" style="font-size:11px; color:var(--text-muted);"></span>
+    </div>
+    <div id="invwRefreshChoice" class="hidden" style="border:1px solid var(--border-subtle); border-radius:var(--radius-sm); padding:10px 12px; margin-bottom:12px;">
+      <div style="font-size:12px; color:var(--text-strong); margin-bottom:8px;">Refresh what?</div>
+      <div style="display:flex; gap:8px; flex-wrap:wrap;">
+        <button id="btnInvwRefreshRows" class="btn" style="padding:6px 10px; font-size:10.5px;">Just the item rows</button>
+        <button id="btnInvwRefreshAll" class="btn" style="padding:6px 10px; font-size:10.5px;">The whole invoice</button>
+        <button id="btnInvwRefreshCancel" class="btn" style="padding:6px 10px; font-size:10.5px;">Cancel</button>
+      </div>
+      <div style="font-size:11px; color:var(--text-faint); margin-top:8px; line-height:1.45;">Rows only keeps your invoice number, date, address and adjustments.</div>
     </div>
 
     <div class="field"><label>Invoice No</label><input id="invw_no" value="${esc(d.inv_no || '')}" autocomplete="off"></div>
@@ -9448,7 +9472,7 @@ function invStep3Html() {
             ${cell(inp('invw-p-tare', p.container_tare_lbs, 78))}
             ${cell(inp('invw-p-chassis', p.chassis_lbs, 78))}
             ${cell(inp('invw-p-boxes', p.boxes_weight_lbs, 78))}
-            ${cell(inp('invw-p-net', p.net_weight_lbs, 84))}
+            ${cell(`<input class="invw-p-net" readonly tabindex="-1" value="${esc(p.net_weight_lbs ?? '')}" style="width:84px; padding:6px 7px; background:var(--surface-sunken); border:1px solid var(--border-subtle); border-radius:4px; color:var(--text-muted); outline:none; font-size:12px;">`)}
           </tr>`;
         }).join('')}
         </tbody>
@@ -9562,6 +9586,38 @@ function invCollectPayload() {
   };
 }
 
+// ── THE CHAIN, FROM A SCALE TICKET TO AN AMOUNT ───────────────────────────
+// Apsara, 2026-09-16: "When i change the gross,tare,box,container wight is
+// invoice tab,corresponding net weight in mt,lbs should be computed auto so
+// as rate."
+//
+//   gross - (truck + container tare + chassis + boxes) = NET LBS
+//   net lbs / 2204.62                                  = QTY MT
+//   qty x rate                                         = AMOUNT
+//
+// Same three lines as dashboard/documents.html, deliberately: one invoice
+// corrected on a phone and the same one corrected on the website must reach
+// the same total, and a second rule written slightly differently is how they
+// stop doing that.
+//
+// ONLY ON AN EDIT, never on render. Opening an invoice from March must not
+// restate its tonnage because 2204.62 disagrees with the figure her sheet
+// carried.
+const INVW_LBS_PER_MT = 2204.62;
+const invwNumOf = (el) => {
+  const v = parseFloat(String((el && el.value) || '').replace(/,/g, '').trim());
+  return isFinite(v) ? v : null;
+};
+function invwRowNetLbs(row) {
+  const gross = invwNumOf(row.querySelector('.invw-p-gross'));
+  if (gross == null) return null;   // null, not 0 — a zero net is a claim
+  const tare = ['.invw-p-truck', '.invw-p-tare', '.invw-p-chassis', '.invw-p-boxes']
+    .map((sel) => invwNumOf(row.querySelector(sel)))
+    .filter((n) => n != null)
+    .reduce((a, b) => a + b, 0);
+  return gross - tare;
+}
+
 function wireInvStep3() {
   const money = (n) => Number(n || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   const recalc = () => {
@@ -9579,10 +9635,73 @@ function wireInvStep3() {
       <div style="display:flex; justify-content:space-between; margin-top:8px; padding-top:8px; border-top:1px solid var(--border-subtle); color:var(--text-strong); font-weight:700;"><span>Total</span><span>$${money(subtotal + notesTotal)}</span></div>`;
   };
   const wireNoteDel = () => $('invwNotes').querySelectorAll('.invw-note-del').forEach(b => b.addEventListener('click', () => { b.closest('.invw-note').remove(); recalc(); }));
+
+  // ── REFRESH FROM THE ORDER SHEET ───────────────────────────────────────
+  // The same endpoint this review was OPENED with, for the same containers:
+  // a merged booking must refresh as a merge, or the second container quietly
+  // disappears from an invoice whose header still names it.
+  //
+  // "Rows only" rebuilds the table from the response and re-renders the whole
+  // screen from a data object carrying the NEW line items and the OLD header —
+  // this screen is rendered from invw.data in one pass, so patching the table
+  // in place would leave the two disagreeing about what is on the invoice.
+  const refreshFetch = async () => {
+    const src = invw.source;
+    if (!src || !src.containers || !src.containers.length) throw new Error('nothing to refresh — open a container first');
+    return src.multi
+      ? api('/api/invoice/preview-multi?containers=' + encodeURIComponent(src.containers.join(',')))
+      : api('/api/invoice/preview?container=' + encodeURIComponent(src.containers[0]));
+  };
+  const doRefresh = async (scope) => {
+    $('invwRefreshChoice').classList.add('hidden');
+    $('invwRefreshStatus').textContent = 'Fetching…';
+    try {
+      const fresh = await refreshFetch();
+      // Read back what she has typed BEFORE re-rendering, or "rows only"
+      // loses the very edits it exists to protect.
+      const keep = {
+        inv_no: $('invw_no').value, inv_date: $('invw_date').value,
+        consignee_address: String($('invw_address').value || '').split('\n'),
+        notes: Array.from($('invwNotes').querySelectorAll('.invw-note')).map((r) => ({
+          label: r.querySelector('.invw-note-label').value.trim(),
+          amount: parseFloat(r.querySelector('.invw-note-amount').value) || 0,
+        })).filter((n) => n.label && n.amount !== 0),
+      };
+      invw.data = scope === 'all' ? fresh : { ...invw.data, line_items: fresh.line_items || [], ...keep };
+      renderInvFlow();
+      const n = ((invw.data.line_items) || []).length;
+      if ($('invwRefreshStatus')) $('invwRefreshStatus').textContent = `Refreshed — ${n} line${n === 1 ? '' : 's'} from the sheet.`;
+    } catch (e) {
+      // The screen still holds everything she typed, and saying so matters: a
+      // refresh that fails quietly reads as one that worked.
+      $('invwRefreshStatus').textContent = `Could not refresh: ${e.message}. Nothing changed.`;
+    }
+  };
+  if ($('btnInvwRefresh')) $('btnInvwRefresh').addEventListener('click', () => {
+    $('invwRefreshStatus').textContent = '';
+    $('invwRefreshChoice').classList.toggle('hidden');
+  });
+  if ($('btnInvwRefreshRows')) $('btnInvwRefreshRows').addEventListener('click', () => doRefresh('rows'));
+  if ($('btnInvwRefreshAll')) $('btnInvwRefreshAll').addEventListener('click', () => doRefresh('all'));
+  if ($('btnInvwRefreshCancel')) $('btnInvwRefreshCancel').addEventListener('click', () => $('invwRefreshChoice').classList.add('hidden'));
   // Includes the packing inputs, which don't affect totals but keep the
   // recalc harmless — cheaper than maintaining a second, narrower selector
   // that would silently stop matching if a column is ever added.
+  // A weight column changed: net lbs, then MT, then the amount. Only the two
+  // derived boxes are rewritten, so the caret stays where she is typing.
+  const recalcWeights = (row) => {
+    const net = invwRowNetLbs(row);
+    row.querySelector('.invw-p-net').value = net == null ? '' : net.toLocaleString('en-US');
+    row.querySelector('.invw-weight').value = net == null ? '' : (net / INVW_LBS_PER_MT).toFixed(3);
+    recalc();
+  };
   $('docBody').querySelectorAll('#invwItems input, #invwNotes input').forEach(inp => inp.addEventListener('input', recalc));
+  $('invwItems').querySelectorAll('.invw-item').forEach((row) => {
+    for (const sel of ['.invw-p-gross', '.invw-p-truck', '.invw-p-tare', '.invw-p-chassis', '.invw-p-boxes']) {
+      const el = row.querySelector(sel);
+      if (el) el.addEventListener('input', () => recalcWeights(row));
+    }
+  });
   wireNoteDel();
   recalc();
 
