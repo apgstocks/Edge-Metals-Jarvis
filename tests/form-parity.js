@@ -162,20 +162,26 @@ ck('net total is right', /data-label="Net">7,305</.test(web));
   for (const [label, src] of [['website', web], ['app', app]]) {
     ck(`${label}: has a Pay button on the load card`, /btn-pay-load/.test(src));
     ck(`${label}: has the payment modal`, /id="payModal"/.test(src));
-    // TWO modes since 2026-09-16, per Apsara: "in receive payment-i should
-    // have only cash and bank transfer". This modal is the YARD's; Edge
-    // Metals keeps Zelle/Wire/Cheque in its own screens, which is why the
-    // absence below is asserted against THIS select and not the whole file.
-    // Scoped to the block, and comments stripped, or the note explaining the
-    // rule satisfies the check that the rule is obeyed — twice burned.
-    const payModeOpts = (() => {
-      const clean = src.replace(/<!--[\s\S]*?-->/g, '');
-      const i = clean.indexOf('<select id="pay_mode">');
-      if (i < 0) return null;
-      return [...clean.slice(i, clean.indexOf('</select>', i)).matchAll(/<option value="([^"]+)"/g)].map(m => m[1]);
+    // TWO modes when RECEIVING a payment, per Apsara 2026-09-16: "in receive
+    // payment-i should have only cash and bank transfer". Five when PAYING a
+    // supplier — that is money going the other way, and restricting it too
+    // was an over-reach that shipped and broke her supplier payments for a
+    // day (see tests/yard-payment-modes.js).
+    //
+    // So the list is built per row by openPayModal, and this reads the code
+    // that builds it rather than <option> tags that no longer exist. What
+    // parity means here is that BOTH clients make the same distinction.
+    const payModes = (() => {
+      const m = src.replace(/<!--[\s\S]*?-->/g, '')
+                   .match(/const payModes = sale \? \[([^\]]*)\] : \[([^\]]*)\]/);
+      return m ? { sale: m[1], purchase: m[2] } : null;
     })();
-    ck(`${label}: offers exactly Cash and Bank transfer`,
-       !!payModeOpts && payModeOpts.join('|') === 'Cash|Bank transfer', JSON.stringify(payModeOpts));
+    ck(`${label}: receiving a payment offers exactly Cash and Bank transfer`,
+       !!payModes && /^\s*'Cash', 'Bank transfer'\s*$/.test(payModes.sale),
+       JSON.stringify(payModes && payModes.sale));
+    ck(`${label}: paying a supplier keeps Zelle, Wire and Cheque`,
+       !!payModes && ['Zelle', 'Wire', 'Cheque'].every((m) => payModes.purchase.includes(m)),
+       JSON.stringify(payModes && payModes.purchase));
     ck(`${label}: shows a payment badge on the card`, /paymentBadgeHtml\(l\)/.test(src));
     ck(`${label}: previews the pending amount before saving`, /function updatePayPreview/.test(src));
     ck(`${label}: reloads after saving rather than recomputing the balance locally`,
