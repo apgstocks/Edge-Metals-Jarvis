@@ -66,10 +66,22 @@ const A4_PX = A4 * PX_PER_MM;         // ~1122.5
 
 // ── the floor: unreadable is worse than two pages ─────────────────────────
 {
+    // ── BELOW THE FLOOR, IT STOPS SHRINKING ALTOGETHER ───────────────────
+    // Apsara, 2026-09-16: "in packing list tab,what if my packing list keep on
+    // going to 3 page?"
+    //
+    // This check used to assert r.scale === MIN_SCALE, which encoded the
+    // behaviour her question exposed: a document too tall to fit was shrunk to
+    // 62% AND STILL RAN TO THREE PAGES. The shrinking bought nothing — it does
+    // not remove the second page, it only makes the type on all three harder
+    // to read. The header of pdfFit.js already said the document should be
+    // "allowed to run to a second page"; the code scaled it anyway.
     const r = scaleToFit(2400, A4);
-    ck('an enormous document stops at the floor', r.scale === MIN_SCALE);
+    ck('a document that cannot fit is NOT shrunk', r.scale === 1,
+       `${r.scale} — 62% type across three pages is the worst of both answers`);
     ck('and is honestly reported as NOT fitting', r.fits === false);
-    ck('the floor is high enough to stay legible', MIN_SCALE >= 0.6);
+    ck('  and flagged as something to paginate properly', r.paginate === true);
+    ck('the floor is still high enough to stay legible', MIN_SCALE >= 0.6);
     // It must NOT be truncated. The thing at the bottom of a commercial
     // invoice is the authorised signature.
     const src = fs.readFileSync(path.join(R, 'helpers/pdfFit.js'), 'utf8');
@@ -198,6 +210,68 @@ const A4_PX = A4 * PX_PER_MM;         // ~1122.5
         ck('every relief was tried before scaling', styles2.length >= RELIEFS.length - 1);
         ck('and only then is it centred', styles2.some((c) => /position:relative/.test(c)));
         ck('the scaled version still fits the page', 1500 * got2.scale <= A4_PX + 0.5);
+    }
+
+    // ── AND THE ONE THAT CANNOT BE SAVED AT ALL ──────────────────────────
+    // Apsara, 2026-09-16: "in packing list tab,what if my packing list keep on
+    // going to 3 page?" Forty bundles is forty bundles — three pages is the
+    // right answer. What matters is that they read as one document.
+    //
+    // THE RENDERER CANNOT RUN HERE (this sandbox is aarch64 and Chromium will
+    // not launch), so what is asserted is the CSS and the options handed to
+    // Chrome. That is an honest limit and it is the same one every other check
+    // in this file works within — but it means the footer's appearance itself
+    // is unverified, and that is written down rather than implied.
+    {
+        let got3 = null; const styles3 = [];
+        const enormous = {
+            evaluate: async () => 4200,          // ~4 pages, nothing can save it
+            addStyleTag: async (o) => { styles3.push(o.content); },
+            pdf: async (o) => { got3 = o; return Buffer.from('PDF'); },
+        };
+        await pdfFittedToOnePage(enormous, { printBackground: true, preferCSSPageSize: true },
+                                 { pageHeightMm: 297, pageWidthMm: 210, label: 'forty-bundle packing list' });
+        ck('a genuinely multi-page document prints at FULL size', got3.scale === 1,
+           `${got3.scale} — shrinking it would not have removed a single page`);
+        ck('  so it is not centred either', !styles3.some((c) => /position:relative/.test(c)),
+           'centring exists to put a SHRUNKEN sheet back in the middle of the paper');
+
+        const css = styles3.join('\n');
+        ck('  the column headings repeat on every page', /thead \{ display: table-header-group/.test(css),
+           'page 2 of a weight table with no headings is four columns of numbers');
+        ck('  no row is split down the middle', /page-break-inside: avoid/.test(css),
+           'a break through a row puts a gross on one page and its net on the next');
+        ck('  and the TOTAL is kept with the rows above it',
+           /tr\.total[^}]*break-before:\s*avoid/.test(css),
+           'a final page carrying only TOTAL and a signature is the shape she objected to in August');
+
+        ck('  the pages are numbered', got3.displayHeaderFooter === true
+           && /pageNumber/.test(got3.footerTemplate || '') && /totalPages/.test(got3.footerTemplate || ''),
+           'three loose sheets with no numbers give a broker no way to know they have all of them');
+        ck('    with a font size, or Chrome renders the footer at zero',
+           /font-size:\s*\d/.test(got3.footerTemplate || ''), got3.footerTemplate);
+        ck('    and room to sit in, since the template sets @page margin 0',
+           (got3.margin || {}).bottom === '10mm', JSON.stringify(got3.margin));
+        ck('  and the caller\'s own options survive',
+           got3.printBackground === true && got3.preferCSSPageSize === true,
+           'the sheet must stay the size the template asks for');
+    }
+
+    // A document that FITS gets none of this — no footer, no page numbers, no
+    // pagination CSS. "Page 1 of 1" on a commercial invoice is noise, and this
+    // template has never carried a footer of its own.
+    {
+        let got4 = null; const styles4 = [];
+        const fine = {
+            evaluate: async () => 900,
+            addStyleTag: async (o) => { styles4.push(o.content); },
+            pdf: async (o) => { got4 = o; return Buffer.from('PDF'); },
+        };
+        await pdfFittedToOnePage(fine, { printBackground: true }, { pageHeightMm: 297, label: 'ordinary invoice' });
+        ck('a one-page document gets no page-number footer', !got4.displayHeaderFooter,
+           '"Page 1 of 1" is noise on an invoice');
+        ck('  and no pagination rules', !styles4.some((c) => /table-header-group/.test(c)),
+           'nothing about a document that fits should change');
     }
 
     // Chrome throws if scale leaves [0.1, 2], which would take the whole

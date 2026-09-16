@@ -102,9 +102,22 @@ function scaleToFit(contentPx, pageHeightMm) {
     if (contentPx <= targetPx) return { scale: 1, fits: true, targetPx };
     const ideal = (targetPx / contentPx) * SAFETY;
     if (ideal < MIN_SCALE) {
-        // Too tall to fit legibly. Render at the floor and let it paginate —
-        // the caller warns.
-        return { scale: MIN_SCALE, fits: false, targetPx, ideal };
+        // ── TOO TALL TO FIT LEGIBLY: FULL SIZE, AND PAGINATE ─────────────
+        // Apsara, 2026-09-16: "in packing list tab,what if my packing list
+        // keep on going to 3 page?"
+        //
+        // This used to return MIN_SCALE, which was the worst of both answers:
+        // the document was shrunk to 62% AND still ran to three pages. The
+        // shrinking bought nothing — it does not avoid the second page, it
+        // only makes the type on all three harder to read. The header of this
+        // file already said what should happen ("allowed to run to a second
+        // page"); the code kept scaling anyway.
+        //
+        // So a document that genuinely does not fit is printed at the size it
+        // was designed at, and pagination is handled properly instead:
+        // repeated column headings, no row split down the middle, and page
+        // numbers. See PAGINATION_CSS.
+        return { scale: 1, fits: false, paginate: true, targetPx, ideal };
     }
     return { scale: ideal, fits: true, targetPx, ideal };
 }
@@ -141,6 +154,47 @@ function centringOffsetPx(pageWidthPx, scale) {
     if (!(scale < 1) || !Number.isFinite(pageWidthPx) || pageWidthPx <= 0) return 0;
     return (pageWidthPx * (1 - scale)) / (2 * scale);
 }
+
+// ── WHEN IT IS GENUINELY A MULTI-PAGE DOCUMENT ────────────────────────────
+// Apsara, 2026-09-16: "in packing list tab,what if my packing list keep on
+// going to 3 page?"
+//
+// Three pages of a packing list is not a failure — forty bundles is forty
+// bundles. What WOULD be a failure is three pages that cannot be read as one
+// document, and every part of that is a default this file was not setting:
+//
+//   THE COLUMN HEADINGS. Page 2 of a weight table with no headings is four
+//   columns of numbers. thead repeats automatically in print, but only while
+//   nothing overrides display on it — stated here so it cannot be lost to a
+//   future style.
+//
+//   ROWS SPLIT DOWN THE MIDDLE. A page break through a row puts a gross on
+//   one page and its net on the next.
+//
+//   THE TOTAL LANDING ALONE. A final page carrying nothing but TOTAL and a
+//   signature is the shape Apsara objected to in the first place, on
+//   2026-08-29. Kept with the rows above it where the browser can.
+//
+//   WHICH PAGE THIS IS. A broker receiving three loose sheets has no way to
+//   know whether they have all of them. Page numbers come from Chrome's own
+//   footer — see the pdf options below.
+const PAGINATION_CSS = `
+  thead { display: table-header-group !important; }
+  tfoot { display: table-footer-group !important; }
+  tr, .fact, .card { break-inside: avoid !important; page-break-inside: avoid !important; }
+  tr.total, .seam + .seam { break-before: avoid !important; page-break-before: avoid !important; }
+`;
+
+// Chrome's own page footer, used ONLY when the document is going to run to
+// more than one page. On a single-page invoice "Page 1 of 1" is noise, and
+// this template has never carried a footer of its own.
+//
+// The inline font-size is required: Chrome renders header and footer templates
+// at 0 by default, which is the usual reason a footerTemplate "does not work".
+const PAGE_FOOTER = '<div style="width:100%;font-size:8px;font-family:Arial,sans-serif;'
+    + 'color:#555;text-align:center;padding:0 10mm;">'
+    + 'Page <span class="pageNumber"></span> of <span class="totalPages"></span>'
+    + '</div>';
 
 // ── the reliefs ───────────────────────────────────────────────────────────
 // Applied in order, re-measuring after each, stopping the moment the document
@@ -248,6 +302,7 @@ async function pdfFittedToOnePage(page, pdfOptions = {}, opts = {}) {
 
     const targetPx = pageHeightMm * PX_PER_MM;
     let scale = 1;
+    let paginating = false;
     try {
         // STEP 1 — reclaim empty space, at full size. This is the step that
         // handles the ordinary case: her invoice was ~100px over, and the top
@@ -267,14 +322,22 @@ async function pdfFittedToOnePage(page, pdfOptions = {}, opts = {}) {
             // reported as one rather than done quietly.
             const r = scaleToFit(trimmed.height, pageHeightMm);
             scale = r.scale;
+            paginating = !r.fits;
             console.warn(
                 `[PDF] ${label} still does not fit after reclaiming empty space `
                 + `(${Math.round(trimmed.height)}px vs ${Math.round(targetPx)}px). `
                 + (r.fits
                     ? `Scaled to ${scale.toFixed(3)} as a last resort — the document will print smaller than designed.`
-                    : `Even at the ${MIN_SCALE} floor it will not fit, so it is allowed to run to a second page `
-                      + 'rather than be shrunk to unreadable or cut off.'),
+                    : `Shrinking it far enough would put it below the ${MIN_SCALE} legibility floor without `
+                      + 'saving the second page either, so it prints at full size across several pages: '
+                      + 'headings repeated, rows kept whole, pages numbered.'),
             );
+            if (paginating) {
+                // CSS only. Nothing here changes a figure, a column or a font
+                // size — it changes where the paper is allowed to be cut.
+                try { await page.addStyleTag({ content: PAGINATION_CSS }); }
+                catch (err) { console.warn(`[PDF] could not apply pagination rules to ${label}:`, err.message); }
+            }
         }
     } catch (err) {
         // Fitting is an improvement, not a requirement. If any of it fails the
@@ -302,7 +365,18 @@ async function pdfFittedToOnePage(page, pdfOptions = {}, opts = {}) {
         }
     }
 
-    return page.pdf({ ...pdfOptions, scale: safe });
+    // Page numbers, and ONLY when there is more than one page to number.
+    // preferCSSPageSize is left exactly as the caller set it, so the sheet
+    // stays the size the template asks for; the only addition is a bottom
+    // margin for the footer to sit in, since these templates set
+    // `@page{margin:0}` and a footer with no margin is clipped away.
+    const finalOptions = paginating
+        ? { ...pdfOptions, scale: safe, displayHeaderFooter: true,
+            headerTemplate: '<span></span>', footerTemplate: PAGE_FOOTER,
+            margin: { ...(pdfOptions.margin || {}), bottom: '10mm' } }
+        : { ...pdfOptions, scale: safe };
+
+    return page.pdf(finalOptions);
 }
 
-module.exports = { pdfFittedToOnePage, scaleToFit, centringOffsetPx, trimToFit, measureAndMark, measureContentPx, RELIEFS, MIN_SCALE, SAFETY, PX_PER_MM };
+module.exports = { pdfFittedToOnePage, scaleToFit, centringOffsetPx, trimToFit, measureAndMark, measureContentPx, RELIEFS, MIN_SCALE, SAFETY, PX_PER_MM, PAGINATION_CSS, PAGE_FOOTER };

@@ -4996,7 +4996,24 @@ function pkPaintTotals() {
   // Net totalled from the DERIVED figure, not from whatever is in the box, so
   // the total and the column can never tell different stories.
   const netTotal = pkRows.reduce((t, r) => { const n = pkNetOf(r); return n == null ? t : t + n; }, 0);
-  $('pkTotals').innerHTML = `${pkRows.length} row${pkRows.length === 1 ? '' : 's'} · Gross ${fmt(sum('gross_weight_lbs'))} · Tare ${fmt(sum('tare_lbs'))} · <strong style="color:var(--text-strong);">Net ${fmt(netTotal)} lbs</strong>`;
+  // ── WHAT HAPPENS WHEN THE LIST IS LONG ───────────────────────────────
+  // Apsara, 2026-09-16: "in packing list tab,what if my packing list keep on
+  // going to 3 page?"
+  //
+  // It prints on three pages, and that is the right answer — forty bundles is
+  // forty bundles. Said here because the alternative is finding out from the
+  // PDF, and because the thing worth knowing is not the page COUNT but that
+  // the pages will read as one document: headings repeated, no line split.
+  //
+  // Deliberately not a predicted number of pages. The first page carries the
+  // whole invoice header and later ones do not, so any figure quoted here
+  // would be wrong about half the time, and a wrong estimate is worse than
+  // none.
+  const long = pkRows.filter((r) => String(r.gross_weight_lbs || '').trim()).length >= 12;
+  const note = long
+    ? ` · <span style="color:var(--text-muted);">long list — prints across several pages, headings repeated on each, no line split</span>`
+    : '';
+  $('pkTotals').innerHTML = `${pkRows.length} row${pkRows.length === 1 ? '' : 's'} · Gross ${fmt(sum('gross_weight_lbs'))} · Tare ${fmt(sum('tare_lbs'))} · <strong style="color:var(--text-strong);">Net ${fmt(netTotal)} lbs</strong>${note}`;
 }
 
 async function pkScan() {

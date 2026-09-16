@@ -1024,6 +1024,22 @@ section('G — the item column on the screen');
        w.eval('pkRows[0].item') === 'Alternator',
        'hiding a column that deletes what is under it is a data loss she cannot see');
 
+    // ── A LONG LIST SAYS SO ──────────────────────────────────────────────
+    // Apsara, 2026-09-16: "in packing list tab,what if my packing list keep on
+    // going to 3 page?" It prints on three pages — forty bundles is forty
+    // bundles — and the screen says so before the PDF does.
+    ck('a short list says nothing about pages',
+       !/several pages/.test(d.getElementById('pkTotals').textContent),
+       d.getElementById('pkTotals').textContent);
+    w.eval('pkRows = Array.from({length: 20}, (_, i) => ({ note: "#" + (i+1), gross_weight_lbs: "3500", tare_lbs: "0", net_weight_lbs: "3,500" })); pkPaintItems();');
+    ck('  a long one warns before the PDF does',
+       /several pages/.test(d.getElementById('pkTotals').textContent),
+       d.getElementById('pkTotals').textContent);
+    ck('    and promises the thing that matters, not a page count',
+       /headings repeated/.test(d.getElementById('pkTotals').textContent)
+       && !/\b3 pages\b/.test(d.getElementById('pkTotals').textContent),
+       'the first page carries the invoice header and later ones do not, so any figure would be wrong half the time');
+
     dom.window.close();
 }
 
