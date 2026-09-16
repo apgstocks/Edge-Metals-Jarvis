@@ -138,6 +138,87 @@ section('A — what comes back off a document');
 }
 
 // ══════════════════════════════════════════════════════════════════════════
+section('A2 — the document she ACTUALLY sends: a handwritten bundle tally');
+// ══════════════════════════════════════════════════════════════════════════
+{
+    // Apsara, 2026-09-16, with a photo of two notepad sheets on a desk: "When i
+    // send to scan packing list,it is not filling the gross weight at all
+    // except 3599."
+    //
+    // ── WHY IT FOUND NOTHING ─────────────────────────────────────────────
+    // The prompt asked for "one entry per CONTAINER row in the packing table"
+    // with Container / Gross / Tare / Net columns. Her sheet has none of those.
+    // It is a WEIGH SHEET — fifteen numbered bundles, one weight each:
+    //
+    //     3599 - weight
+    //     #1 - 3599 lbs
+    //     #2 - 3475 lbs
+    //     ...
+    //     #15 - 4478 lbs
+    //
+    // So there was nothing for the model to fill in, and the single figure that
+    // did land was the "3599" in the heading. THIRD time the shape of this
+    // feature has been wrong, and the first time with the real document in
+    // front of me. Her actual figures are the fixture now, so this exact sheet
+    // cannot quietly stop working again.
+    const TALLY_WEIGHTS = [3599, 3475, 4146, 3939, 4450, 3815, 4346, 4293, 4018, 4088,
+                           4228, 4210, 4369, 4076, 4478];
+    const tally = {
+        container_no: null, booking_no: null, invoice_no: null, weight_unit: 'lb',
+        rows: TALLY_WEIGHTS.map((w, i) => ({ net_weight_lbs: String(w), note: `#${i + 1}` })),
+    };
+    const out = await pl.scan('eA==', 'image/jpeg', { ask: async () => JSON.stringify(tally) });
+
+    ck('every bundle becomes a row', out.rows.length === 15, `${out.rows.length} of 15`);
+    ck('  the first and last are right',
+       out.rows[0].net_weight_lbs === '3599' && out.rows[14].net_weight_lbs === '4478',
+       `${out.rows[0].net_weight_lbs} … ${out.rows[14].net_weight_lbs}`);
+    ck('  and the bundle numbers are kept',
+       out.rows[0].note === '#1' && out.rows[14].note === '#15',
+       'a bale-by-bale packing list with no bale numbers is a column of figures');
+
+    // A bale on a scale has no truck, container or chassis under it. Inventing
+    // a gross or a tare for it would be the scanner making something up, which
+    // is the one thing this feature must never do.
+    ck('  gross stays empty, because a bale has no gross',
+       out.rows.every((r) => !r.gross_weight_lbs));
+    ck('  and so does tare', out.rows.every((r) => !r.tare_lbs),
+       'there is nothing under a bale to be tare');
+
+    // The number that matters: fifteen bundles is one container-load.
+    const total = out.rows.reduce((t, r) => t + Number(String(r.net_weight_lbs).replace(/,/g, '')), 0);
+    ck('  the net total is the container load', total === 61530, `${total} — 61,530 lbs across 15 bundles`);
+
+    // The heading on her sheet reads "3599 - weight", which repeats the first
+    // entry. It is a note to herself, not a row and not a container.
+    ck('a heading that repeats the first weight is not a container number',
+       !out.fields.container_no,
+       JSON.stringify(out.fields.container_no) + ' — a made-up container is worse than a blank');
+
+    // ── THE PROMPT HAS TO SAY ALL OF THIS ────────────────────────────────
+    // The fixture above proves the plumbing handles the shape; only the prompt
+    // decides whether the model produces it. Asserted at the source, because a
+    // stubbed `ask` can never catch a prompt that asks for the wrong thing —
+    // which is precisely the bug she reported.
+    const src = fs.readFileSync(path.join(ROOT, 'helpers/packingList.js'), 'utf8');
+    ck('the prompt describes a handwritten tally', /HANDWRITTEN TALLY/.test(src));
+    // Newlines flattened before matching: the prompt is a template literal
+    // wrapped for readability, so a phrase that reads as one sentence is
+    // spread over two source lines. Matching the raw file would fail on
+    // wording that is perfectly correct.
+    const flat = src.replace(/\s+/g, ' ');
+    ck('  and says one numbered line is one row', /line is ONE BUNDLE and becomes ONE ROW/.test(flat));
+    ck('  and that the single weight is NET', /the bundle's NET weight/.test(flat),
+       'put in gross, it would claim a tare exists');
+    ck('  and to read EVERY line, including a second sheet',
+       /READ EVERY NUMBERED LINE/.test(flat) && /second sheet or a second photo/.test(flat),
+       'her two sheets were photographed side by side in one image');
+    ck('  and to use the corrected figure where a line was amended',
+       /crossed out and rewritten/.test(flat),
+       'three lines on her sheet are struck through and rewritten');
+}
+
+// ══════════════════════════════════════════════════════════════════════════
 section('B — it does not invent, and it does not crash');
 // ══════════════════════════════════════════════════════════════════════════
 {
@@ -462,6 +543,10 @@ section('D — the screen');
     ck('  the item grid has no Container column',
        !/\['container_no', 'Container'/.test(DOCS),
        'the container lives once, at the top of the form');
+    // The bundle number is a row LABEL, not one of the three weight columns
+    // she named — it says WHICH bale a weight belongs to.
+    ck('  there is a # column for the bundle number',
+       /<div>#<\/div>/.test(DOCS), 'a bale-by-bale list with no bale numbers is a column of figures');
     for (const col of ['Gross', 'Tare', 'Net']) {
         ck(`  the items table has a ${col} column`, headers.includes(col), headers.slice(0, 120));
     }
@@ -481,14 +566,17 @@ section('D — the screen');
         const headEl = d.getElementById('pkItems').firstElementChild;
         const rowEl = headEl && headEl.nextElementSibling;
         const styleOf = (el) => (el && el.getAttribute('style')) || '';
+        // 52px for the bundle number, then three fixed weight columns. Fixed,
+        // not 1fr — a fractional column grows to fill the panel, which is why
+        // a six-character weight had a ~330px box.
         ck('  the weight boxes are a fixed width, not stretched',
-           /grid-template-columns:130px 130px 130px/.test(styleOf(headEl)), styleOf(headEl).slice(0, 120));
+           /grid-template-columns:52px 130px 130px 130px/.test(styleOf(headEl)), styleOf(headEl).slice(0, 140));
         ck('    and the row does not share out the leftover width',
            /justify-content:start/.test(styleOf(rowEl)),
            '1fr columns grow to fill the panel however wide it is');
         ck('    with the headings over the boxes they label',
-           styleOf(headEl).includes('grid-template-columns:130px 130px 130px')
-           && styleOf(rowEl).includes('grid-template-columns:130px 130px 130px'),
+           styleOf(headEl).includes('grid-template-columns:52px 130px 130px 130px')
+           && styleOf(rowEl).includes('grid-template-columns:52px 130px 130px 130px'),
            'the heading row and the input rows must use the SAME track list');
     }
 

@@ -4539,14 +4539,21 @@ const PK_GRID = PK_COLS.map((c) => c[2]).join(' ') + ' 30px';
 // justify-content:start keeps the leftover width as white space rather than
 // letting the grid share it out. Applied to the heading row AND the input
 // rows, or the labels sit over the wrong boxes.
-const PK_ROW_CSS = `display:grid; grid-template-columns:${PK_GRID}; gap:8px; justify-content:start;`;
+// A narrow leading column for the BUNDLE NUMBER — "#1", "#2". Not one of the
+// three weight columns she named; it is the row's label, the thing that says
+// WHICH bale a weight belongs to. A bale-by-bale packing list with no bale
+// numbers on it is a column of figures.
+//
+// Filled from the scan (the "#1" written beside each weight) and typeable by
+// hand. Blank is fine: a formatted packing table has no bundle numbers.
+const PK_ROW_CSS = `display:grid; grid-template-columns:52px ${PK_GRID}; gap:8px; justify-content:start;`;
 
 let pkRows = [];
 let pkEditingId = null;
 let _pkWired = false;
 
 function pkBlankRow() {
-  const r = {};
+  const r = { note: '' };
   PK_COLS.forEach(([k]) => { r[k] = ''; });
   return r;
 }
@@ -4602,13 +4609,14 @@ function pkPaintItems() {
   // headings have scrolled away is one where the next number goes in the wrong
   // column. Opaque background, or the rows show through it.
   const head = `<div style="position:sticky; top:0; z-index:2; background:var(--surface-card); padding:2px 0 6px; ${PK_ROW_CSS} font-family:var(--font-mono); font-size:10px; letter-spacing:.08em; text-transform:uppercase; color:var(--text-faint); border-bottom:1px solid var(--border-subtle); margin-bottom:6px;">
-      ${PK_COLS.map(([, label]) => `<div style="text-align:right;">${label}</div>`).join('')}<div></div>
+      <div>#</div>${PK_COLS.map(([, label]) => `<div style="text-align:right;">${label}</div>`).join('')}<div></div>
     </div>`;
   // Rebuilt wholesale, values carried in the VALUE attribute — a half-rebuilt
   // table where row 3 still holds row 2's text is the classic bug of this
   // pattern, and here it would put a weight against the wrong material.
   $('pkItems').innerHTML = head + pkRows.map((r, i) => `
     <div style="${PK_ROW_CSS} margin-bottom:6px; align-items:center;">
+      <input data-pi="${i}" data-pf="note" type="text" value="${esc(r.note || '')}" placeholder="#${i + 1}" style="font-family:var(--font-mono); color:var(--text-muted);">
       ${PK_COLS.map(([k]) => `<input data-pi="${i}" data-pf="${k}" type="text" value="${esc(r[k] || '')}" style="text-align:right; font-family:var(--font-mono);">`).join('')}
       <button type="button" class="btn btn-secondary pk-del" data-i="${i}" style="padding:4px 8px; font-size:12px;">&times;</button>
     </div>`).join('');

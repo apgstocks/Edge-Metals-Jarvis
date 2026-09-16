@@ -221,18 +221,49 @@ async function remove(id) {
 async function scan(base64, mimeType, { ask } = {}) {
     if (!base64) throw new Error('a file is required');
 
-    const prompt = `You are reading a PACKING LIST for a container of scrap metal.
-Extract what is actually printed. Return ONLY raw JSON — no markdown, no prose.
+    const prompt = `You are reading a source document for a PACKING LIST for a
+container of scrap metal. Extract what is actually on it. Return ONLY raw JSON
+— no markdown, no prose.
+
+IT MAY BE EITHER OF TWO VERY DIFFERENT THINGS, and both are normal:
+
+  (A) A PRINTED PACKING TABLE, with columns like Container / Gross / Tare /
+      Net. One row per container.
+
+  (B) A HANDWRITTEN TALLY of bundle or bale weights — a numbered list, one
+      weight per line, often on a scrap of paper or a notepad photographed on
+      a desk. It looks like:
+
+          #1 - 3599 lbs
+          #2 - 3475 lbs
+          #3 - 4146 lbs
+          ...
+
+      This is the WEIGH SHEET the packing list is built from. Each numbered
+      line is ONE BUNDLE and becomes ONE ROW. The single weight on the line is
+      the bundle's NET weight — a bale on a scale has no truck, container or
+      chassis under it, so there is no gross and no tare to find. Put it in
+      net_weight_lbs and leave gross and tare null. Put the bundle's number
+      (the "#1", "#2") in that row's "note".
+
+      READ EVERY NUMBERED LINE, including ones that continue onto a second
+      sheet or a second photo, and including ones that have been crossed out
+      and rewritten — use the CORRECTED figure where a line was amended.
+      Do not stop at the first few. A tally with fifteen lines must return
+      fifteen rows.
+
+      A heading like "3599 - weight" at the top is a note to herself, usually
+      repeating the first entry. It is NOT a row and NOT a container number.
 
 {
-  "container_no": null,   // e.g. "TCLU1234567". The container/trailer this list describes.
+  "container_no": null,   // e.g. "TCLU1234567". Only if the document actually shows one — a handwritten weigh sheet usually does not, and a made-up container number is worse than a blank.
   "booking_no": null,     // the carrier booking reference, if the document shows one
   "invoice_no": null,     // the commercial invoice number this list accompanies
   "seal_no": null,        // seal number, if shown
   "date": null,           // MM/DD/YYYY. If the document uses DD/MM/YYYY, still output MM/DD/YYYY.
   "customer": null,       // who it is going to — the consignee or buyer named on the list
   "weight_unit": null,    // "lb", "kg" or "mt" — whichever the weights on this document are in
-  "rows": [               // one entry per CONTAINER row in the packing table, in the order printed
+  "rows": [               // one row per CONTAINER (shape A) or per BUNDLE (shape B), in the order written
     {
       "container_no": null,        // the container this row is for, e.g. "TCLU1234567"
       "gross_weight_lbs": null,    // exactly as printed, keep thousands separators
