@@ -846,7 +846,10 @@ section('F — three items in one container');
     // HMMU7060866 three times. It is stated once, above the table.
     ck('  no Container column when every row is the same container',
        !shown[0].some((h) => /Container/.test(h)), shown[0].join(' | '));
-    ck('  five columns: Item, Gross, Tare, Net, Net', shown[0].length === 5, shown[0].join(' | '));
+    // The line number takes the place the container had — Apsara's weigh
+    // sheet numbers every bundle and those numbers were not printed at all.
+    ck('  a line-number column instead', shown[0][0] === '#', shown[0].join(' | '));
+    ck('  six columns: #, Item, Gross, Tare, Net, Net', shown[0].length === 6, shown[0].join(' | '));
     ck('  each item on its own line',
        at(shown, 1, 'Item') === 'Alternator' && at(shown, 3, 'Item') === 'AC compressor',
        shown.slice(1, 4).map((r) => r[0]).join(' / '));
@@ -858,6 +861,11 @@ section('F — three items in one container');
        && at(shown, last, 'Net Weight (lbs)') === '13,500',
        shown[last].join(' | ') + ' — gross and tare used to print as blank cells');
     ck('  and the MT total', at(shown, last, 'Net Weight (MT)') === '6.123', shown[last].join(' | '));
+    // WITH BOTH a line-number column and an Item column, exactly ONE of them
+    // may carry the word. The first version printed "TOTAL | TOTAL".
+    ck('  and exactly one cell says TOTAL',
+       shown[last].filter((c) => /TOTAL/.test(c)).length === 1,
+       shown[last].join(' | '));
 
     // ── AND WITHOUT THE CHECKBOX, NOTHING MOVED ──────────────────────────
     // An invoice generated through "Separate invoice & packing list" prints
@@ -876,8 +884,9 @@ section('F — three items in one container');
     ck('unticked and unnamed, every row still has the same cell count',
        new Set(plainBare.map((r) => r.length)).size === 1,
        plainBare.map((r) => r.length).join(','));
-    ck('  four columns: no Item, and no repeated Container either',
-       plainBare[0].length === 4 && !plainBare[0].some((h) => /Container|Item/.test(h)),
+    ck('  five columns: a line number and the four weights, no repeated Container',
+       plainBare[0].length === 5 && plainBare[0][0] === '#'
+       && !plainBare[0].some((h) => /Container|Item/.test(h)),
        plainBare[0].join(' | '));
     // ── BUT NAMED ROWS SHOW THE COLUMN WITHOUT THE CHECKBOX ──────────────
     // Apsara, 2026-09-16: "why item description missing in packing list of
@@ -890,9 +899,11 @@ section('F — three items in one container');
        plain.t[0].some((h) => /Item/.test(h)),
        plain.t[0].join(' | ') + ' — a packing list that names nothing is the bug she reported');
     ck('  and the totals are still right',
-       plainBare[plainBare.length - 1].join('|') === 'TOTAL 15,000|1,500|13,500|6.123',
-       plainBare[plainBare.length - 1].join(' | ')
-       + ' — with neither Container nor Item on the table, the word TOTAL rides on the gross');
+       plainBare[plainBare.length - 1].join('|') === 'TOTAL|15,000|1,500|13,500|6.123',
+       plainBare[plainBare.length - 1].join(' | '));
+    ck('    with exactly one cell saying TOTAL',
+       plainBare[plainBare.length - 1].filter((c) => /TOTAL/.test(c)).length === 1,
+       plainBare[plainBare.length - 1].join(' | ') + ' — my first version printed it in two');
     // Her answer when asked where the single description should go: "Printed
     // above the packing table".
     ck('  the one item description prints above the table', /Item: Auto parts/.test(plain.html),
@@ -904,6 +915,38 @@ section('F — three items in one container');
     ck('  and an empty one prints nothing at all',
        !/Item:\s*</.test(plain.html.replace(/Item: Auto parts/, '')),
        'a label with nothing after it looks like a field that failed to fill');
+
+    // ── EVERY WEIGHT FORMATTED THE SAME WAY ──────────────────────────────
+    // A packing list went out with "1111" in Gross beside "1,046" in Net,
+    // because gross is copied through as the string she typed while net is
+    // derived and formatted. On the same four-figure numbers, one column with
+    // separators and one without reads as carelessness.
+    let mixed = null;
+    await pl.generatePdf({ container_no: 'HMMU7060866', invoice_no: 'PL-3ITEM',
+        rows: [{ gross_weight_lbs: '1111', tare_lbs: '65', note: '#1' },
+               { gross_weight_lbs: '1228', tare_lbs: '65', note: '#2' }] },
+        { renderer: async (html) => { mixed = tableOf(html); return { packing: Buffer.from('x') }; } });
+    ck('a gross typed without commas still prints with them',
+       at(mixed, 1, 'Gross') === '1,111' && at(mixed, 2, 'Gross') === '1,228',
+       `${at(mixed, 1, 'Gross')} beside a net of ${at(mixed, 1, 'Net Weight (lbs)')}`);
+    ck('  and her bundle numbers reach the paper',
+       mixed[1][0] === '#1' && mixed[2][0] === '#2',
+       `${mixed[1][0]} / ${mixed[2][0]} — she numbers every bundle on the weigh sheet`);
+    ck('  a row she did not number is numbered by position',
+       (await (async () => {
+           let t2 = null;
+           await pl.generatePdf({ container_no: 'HMMU7060866', invoice_no: 'PL-3ITEM',
+               rows: [{ gross_weight_lbs: '1111' }, { gross_weight_lbs: '1228' }] },
+               { renderer: async (html) => { t2 = tableOf(html); return { packing: Buffer.from('x') }; } });
+           return t2[1][0] === '1' && t2[2][0] === '2';
+       })()), 'a position index is presentation, not a claim about anything');
+
+    // ── A NET OF ZERO IS A CLAIM ─────────────────────────────────────────
+    // A row with a gross and a tare but no stored net printed "0" beside a
+    // gross of 6,000 on the same line.
+    ck('a row with weights never prints a net of 0',
+       !mixed.slice(1, -1).some((r) => at([mixed[0], r], 1, 'Net Weight (lbs)') === '0'),
+       mixed.slice(1, -1).map((r) => r[3]).join(', '));
 
     // ── AND A BLANK ROW NEVER REACHES THE PAPER ──────────────────────────
     // The form opens with empty rows carrying tare "0". Before hasWeight they

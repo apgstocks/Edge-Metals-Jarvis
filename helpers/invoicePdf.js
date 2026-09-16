@@ -367,12 +367,55 @@ function buildInvoiceClassicHtml(data) {
         .filter(Boolean))];
     const oneContainer = lineItems.length > 1 && containersOn.length === 1;
     const containerWidth = showItem ? '18%' : '22%';
-    // The width the dropped column gives back, shared out among the weights so
-    // the table still fills the page rather than ending in white space.
-    const spare = oneContainer ? Number(containerWidth.replace('%', '')) / (showItem ? 5 : 4) : 0;
+
+    // ── EVERY WEIGHT PRINTED THE SAME WAY ────────────────────────────────
+    // A packing list went out with "1111" in the Gross column beside "1,046"
+    // in Net, because gross is copied through as the STRING she typed while
+    // net is derived and formatted. One column with separators and one
+    // without, on the same four-figure numbers, reads as carelessness on a
+    // document a customs broker checks.
+    //
+    // Formatted only when the value is a clean number. Anything else — a
+    // range, a note, a figure with a unit stuck to it — is printed exactly as
+    // it arrived, because mangling what she wrote is worse than an odd-looking
+    // cell.
+    const weightText = (v) => {
+        const raw = String(v == null ? '' : v).trim();
+        if (!raw) return '';
+        const n = Number(raw.replace(/,/g, ''));
+        if (!isFinite(n) || !/^[\d,]+(\.\d+)?$/.test(raw)) return raw;
+        return n.toLocaleString('en-US', { maximumFractionDigits: 3 });
+    };
+
+    // ── THE LINE NUMBER ──────────────────────────────────────────────────
+    // Apsara's weigh sheet numbers every bundle — "#1 - 3599", "#2 - 3475" —
+    // and she types those into the form's leading column. They were not on the
+    // printed document at all, so a buyer querying "the fourth bundle" and she
+    // querying it were counting rows by eye on different sheets.
+    //
+    // Only when the Container column is gone, which is exactly the
+    // bundle-by-bundle case. On an invoice's packing list, one row per
+    // container, a row number is noise. It also gives the TOTAL row back a
+    // label cell of its own — "TOTAL 9,851" crammed into the Gross column was
+    // the other half of what she called bad.
+    //
+    // Her own numbering wins; a row she left blank is numbered by position,
+    // which is a presentation index and not a claim about anything.
+    const numberCol = oneContainer;
+    const numberWidth = 9;
+
+    // What the dropped Container column gives back, minus what the line number
+    // takes, shared among the weight columns so the table still fills the page.
+    const weightCols = showItem ? 5 : 4;
+    const spare = oneContainer
+        ? (Number(containerWidth.replace('%', '')) - (numberCol ? numberWidth : 0)) / weightCols
+        : 0;
     const w = (pct) => `${(Number(pct.replace('%', '')) + spare).toFixed(1)}%`;
 
     const PACKING_COLUMNS = [
+        ...(numberCol ? [{ head: '#', width: `${numberWidth}%`,
+          cell: (item, p, netLbs, netMt, i) => escapeHtml(String(item.note || '').trim() || String(i + 1)),
+          total: 'TOTAL' }] : []),
         ...(oneContainer ? [] : [{ head: 'Container', width: containerWidth,
           cell: (item) => escapeHtml(item.container_no || data.container_no),
           total: 'TOTAL' }]),
@@ -382,19 +425,23 @@ function buildInvoiceClassicHtml(data) {
         // place.
         ...(showItem ? [{ head: 'Item', width: w('16%'),
           cell: (item) => escapeHtml(item.item || item.item_desc || ''),
-          // With no Container column, something has to carry the word TOTAL or
-          // the last row is a line of figures with no label on it.
-          total: oneContainer ? 'TOTAL' : '' }] : []),
+          // Something has to carry the word TOTAL or the last row is a line of
+          // figures with no label on it — but only ONE something. When the
+          // line-number column is there it takes the label and this one stays
+          // blank; the first version of that printed "TOTAL | TOTAL" across
+          // two cells.
+          total: (oneContainer && !numberCol) ? 'TOTAL' : '' }] : []),
         { head: 'Gross Weight<br>(lbs)', width: w(showItem ? '17%' : '20%'),
-          cell: (item, p) => escapeHtml(p.gross_weight_lbs || '-'),
+          cell: (item, p) => escapeHtml(weightText(p.gross_weight_lbs) || '-'),
           total: () => (totalGrossLbs == null ? '' : formatInt(totalGrossLbs)) },
         { head: 'Tare<br>(lbs)', width: w(showItem ? '16%' : '20%'),
           cell: (item, p) => { const t = require('./packingList').tareOf(p);
                                return escapeHtml(t == null ? '-' : t.toLocaleString('en-US')); },
           total: () => (totalTareLbs == null ? '' : formatInt(totalTareLbs)) },
         { head: 'Net Weight<br>(lbs)', width: w(showItem ? '17%' : '20%'),
-          cell: (item, p, netLbs) => escapeHtml(p.net_weight_lbs || formatInt(netLbs)),
-          total: () => formatInt(totalNetLbs) },
+          // A dash, never a zero, when there is genuinely nothing to state.
+          cell: (item, p, netLbs) => escapeHtml(weightText(p.net_weight_lbs) || (netLbs ? formatInt(netLbs) : '-')),
+          total: () => (totalNetLbs ? formatInt(totalNetLbs) : '-') },
         { head: 'Net Weight<br>(MT)', width: w(showItem ? '16%' : '18%'),
           // A dash, not 0.000, when there is genuinely nothing: a printed zero
           // is a CLAIM that the container weighed nothing, and a blank is an
@@ -424,7 +471,7 @@ function buildInvoiceClassicHtml(data) {
     // An INVOICE SAVED BEFORE TODAY still carries truck/container/chassis/
     // boxes broken out. It regenerates with the same total it always had, in
     // one column instead of four — nothing on file needs migrating.
-    const packingRowsHtml = lineItems.map((item) => {
+    const packingRowsHtml = lineItems.map((item, rowIndex) => {
         const p = item.packing || {};
         // ── MT IS A CONVERSION, NOT A FIELD THAT MAY BE BLANK ────────────
         // A packing list built from a weigh sheet has pounds and nothing else,
@@ -436,7 +483,23 @@ function buildInvoiceClassicHtml(data) {
         // conversion, which is arithmetic anyone receiving the document can
         // repeat, not a figure being invented.
         let netMt = parseFloat(String(p.net_weight_mt || '').replace(/,/g, '')) || Number(item.weight) || 0;
-        const netLbs = parseFloat(String(p.net_weight_lbs || '').replace(/,/g, '')) || Math.round(netMt * 2204.62);
+        // ── NET FROM THE WEIGHTS, NOT FROM NOTHING ───────────────────────
+        // A row carrying a gross and a tare but no stored net printed "0" —
+        // and a 0 on a packing list is a CLAIM that the bundle weighed
+        // nothing, printed beside a gross of 6,000 on the same line. Gross
+        // minus tare is the rule the rest of the system runs on
+        // (helpers/packingList.js's netOf); it simply was not reaching this
+        // table, which is fed by invoice line items as well as by the
+        // packing-list screen.
+        let netLbs = parseFloat(String(p.net_weight_lbs || '').replace(/,/g, ''));
+        if (!isFinite(netLbs) || netLbs === 0) {
+            const grossN = parseFloat(String(p.gross_weight_lbs || '').replace(/,/g, ''));
+            const tareN = require('./packingList').tareOf(p);
+            netLbs = isFinite(grossN)
+                ? grossN - (tareN == null ? 0 : tareN)
+                : Math.round(netMt * 2204.62);
+        }
+        if (!isFinite(netLbs)) netLbs = 0;
         if (!netMt && netLbs) netMt = netLbs / 2204.62;
         totalNetMt += netMt;
         totalNetLbs += netLbs;
@@ -447,7 +510,7 @@ function buildInvoiceClassicHtml(data) {
         totalGrossLbs = addUp(totalGrossLbs, num(p.gross_weight_lbs));
         totalTareLbs = addUp(totalTareLbs, require('./packingList').tareOf(p));
         const cells = PACKING_COLUMNS.map((c) =>
-            `          <td style="padding:1mm;font-size:9.5pt;text-align:center;vertical-align:middle;">${c.cell(item, p, netLbs, netMt)}</td>`
+            `          <td style="padding:1mm;font-size:9.5pt;text-align:center;vertical-align:middle;">${c.cell(item, p, netLbs, netMt, rowIndex)}</td>`
         ).join('\n');
         return `        <tr style="height:10mm;">\n${cells}\n        </tr>`;
     });
@@ -456,13 +519,6 @@ function buildInvoiceClassicHtml(data) {
     // render. Hence the thunks in `total` above — reading the variables at
     // declaration time would print zeroes.
     const packingTotalCellsHtml = PACKING_COLUMNS.map((c, i) => {
-        // Neither Container nor Item on the table: the first column is Gross,
-        // and it takes the label. A total row of bare figures is one a reader
-        // has to work out from its shading.
-        if (oneContainer && !showItem && i === 0) {
-            return '          <td style="padding:2mm 1mm;font-weight:700;font-size:10pt;text-align:center;vertical-align:middle;border:1pt solid black;">'
-                 + `TOTAL ${totalGrossLbs == null ? '' : formatInt(totalGrossLbs)}</td>`;
-        }
         const v = typeof c.total === 'function' ? c.total() : c.total;
         const style = v
             ? 'padding:2mm 1mm;font-weight:700;font-size:10pt;text-align:center;vertical-align:middle;border:1pt solid black;'

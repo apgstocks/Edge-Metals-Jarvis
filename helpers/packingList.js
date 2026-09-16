@@ -553,6 +553,11 @@ async function generatePdf(record, { renderer } = {}) {
         // column; carried regardless, so ticking the box on a list filed last
         // month prints what was already typed rather than a column of blanks.
         item: str(r.item),
+        // HER BUNDLE NUMBER. The "#1", "#2" written beside each weight on the
+        // notepad, typed into the form's leading column — and, until now, not
+        // passed to the PDF at all, so a buyer querying "the fourth bundle"
+        // and she querying it were counting rows by eye on different sheets.
+        note: str(r.note),
         weight: str(r.net_weight_mt),
         packing: {
             gross_weight_lbs: str(r.gross_weight_lbs),

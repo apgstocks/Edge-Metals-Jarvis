@@ -257,6 +257,31 @@ console.log('\n=== the packing list names what is in the container ===');
      [rows[3][0], rows[3][2], rows[3][3], rows[3][4]],
      ['TOTAL', '112,500', '8,565', '103,935']);
 
+  // ── A NET OF ZERO IS A CLAIM ──────────────────────────────────────────
+  // An invoice line carrying a gross and a tare but no stored net printed
+  // "0" in the Net column, beside a gross of 56,000 on the same line. Gross
+  // minus tare is the rule the rest of the system runs on; it was not
+  // reaching this table, which invoice line items feed as well as the
+  // packing-list screen does.
+  {
+    const { html: h3 } = build2({ inv_no: INV, container_no: 'KOCU5139886',
+      line_items: [
+        { item_desc: 'Aluminium combo', container_no: 'KOCU5139886', weight: 0, rate: 1000,
+          packing: { gross_weight_lbs: '56,000', truck_lbs: '15,000', container_tare_lbs: '8,000' } },
+        { item_desc: 'Regular combo', container_no: 'HMMU6904319', weight: 0, rate: 900,
+          packing: { gross_weight_lbs: '50,000', container_tare_lbs: '8,000' } },
+      ] });
+    const d3 = h3.slice(h3.indexOf('<div class="doc-packing">'));
+    const tbl3 = d3.slice(d3.indexOf('<table'), d3.indexOf('</table>'));
+    const rows3 = [...tbl3.matchAll(/<tr[^>]*>[\s\S]*?<\/tr>/g)].map((m) =>
+        [...m[0].matchAll(/<t[hd][^>]*>([\s\S]*?)<\/t[hd]>/g)]
+            .map((c) => c[1].replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim()));
+    const netCol = rows3[0].findIndex((hh) => hh.replace(/\s+/g, ' ').startsWith('Net Weight (lbs)'));
+    ck('a line with weights but no stored net is not printed as 0',
+       [rows3[1][netCol], rows3[2][netCol]], ['33,000', '42,000']);
+    ck('  and the MT follows from it', rows3[1][netCol + 1], '14.969');
+  }
+
   // Nothing named, nothing added: the column follows the data, so a document
   // with no descriptions is the five-column one it has always been.
   const { html: h2 } = build2({ inv_no: INV, container_no: 'KOCU5139886',
