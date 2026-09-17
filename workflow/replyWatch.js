@@ -1093,7 +1093,7 @@ asked_for_quote: the sender's OWN WORDS, copied verbatim from the email — the 
   null if you cannot point at a specific span, in which case asked_for should almost certainly be null too.
 key_figures: every figure a person deciding what to do about this email would need, as objects {"label","value"}. "value" is the figure copied VERBATIM. "label" says in 1-4 words WHAT THAT NUMBER IS, so the list is readable without opening the email — "current price", "their counter", "tonnage", "container", "invoice total", "balance due". A list like 21.428 / $990 / $995 / $1015 with no labels is useless: she cannot tell tonnage from price, or the old price from the proposed one. If you genuinely cannot tell what a number is, leave it out rather than labelling it vaguely. Up to 4, most important first, [] if the email contains none. Take them from the THREAD as well as the email - a total stated earlier in the thread is exactly what makes a later amount readable as short or correct. Copy the characters as written ("$58,313.56", not "58313.56", not "about 58k"). NEVER compute, total, convert or round one, and never write a figure that does not literally appear above.
 
-deadline: any date or time limit the sender actually states, verbatim. Do NOT infer or invent one — null if none is stated.
+deadline: a date or time by which SOMEBODY MUST ACT, stated by the sender, verbatim. Do NOT infer or invent one — null if none is stated. A date that merely DESCRIBES THE SHIPMENT is not a deadline and must be null: an ERD or earliest return date, an estimated ready date, an ETD/ETA, an arrival or departure date, a sailing date. Nothing expires when those pass. A CUTOFF IS a deadline — an SI cutoff, doc cutoff, VGM cutoff or gate-in cutoff is the hardest deadline in this business, and so is anything the sender says is needed "by" a date.
 is_order: true ONLY if the sender is BUYING MATERIAL FROM US — asking to buy, asking for a proforma/PI, or confirming a purchase with quantities and/or prices. false for everything else. Specifically false for a REQUEST TO BOOK FREIGHT: asking a carrier, forwarder or line for container space, a sailing, a booking number or an ERD is logistics we are buying, not material someone is buying from us, and a proforma has no meaning there. Also false for a general enquiry with no material, a message about an EXISTING shipment, an invoice, or marketing. An order almost always also needs a reply, so both can be true.
 order_buyer: when is_order is true, the company that would be BUYING — often NOT the sender, because orders here arrive from agents writing on a buyer's behalf ("Daekwang confirmed 2 containers" from an agent's address means Daekwang). null if the email names no buying company, or if is_order is false.
 
@@ -1520,8 +1520,40 @@ function degenericiseSummary(summary, fromLabel) {
 // caught exactly that, passing while the real gate was disabled.
 //
 // She is waiting on THEM, and there is a named thing outstanding.
+// OUR OWN TEAM'S OUTBOUND REQUESTS ARE NOT HER PROBLEM (2026-09-17).
+//
+// LIVE, and she sent it in:
+//
+//   1. !! Accounting Edge needs a booking from Chicago to Busan for one 40HC
+//      container with an estimated ready date of September 17. -- by 9/17 (today)
+//      Zimex Team
+//
+//   Apsara: "they just asked for booking. why it needs to come to whatsapp? no.."
+//
+// The item was factually right -- Accounting Edge asked Zimex for a booking
+// and Zimex has not answered, so Zimex owes us something. It was still the
+// wrong thing to put on her phone. Bose raised it, Bose is chasing it, and
+// she has no action.
+//
+// `from_internal` separates the two shapes of `waiting_on: 'them'` exactly:
+//
+//   OUR outbound request      "we asked Zimex for a booking"      -> the
+//                             team's work in progress. Dropped.
+//   THEIR inbound report      "Andy is chasing the carrier for the EDO"
+//                             -> a live commitment made TO us, which is the
+//                             most useful thing in the inbox. Kept.
+//
+// WHAT THIS COSTS, and she chose it knowingly: nothing will nag if Zimex
+// never replies. I offered a staleness escalation (silent for four days,
+// surfaced after) and she said no. The condition is one line, so it is one
+// line to restore.
+//
+// Undefined `from_internal` (older stored items, hand-built test fixtures)
+// reads as external and is kept -- failing towards showing her something,
+// never towards silence.
 const isOwedItem = (a) => !!a && a.waiting_on === 'them'
-    && a.confidence >= MIN_CONFIDENCE && !!a.asked_for;
+    && a.confidence >= MIN_CONFIDENCE && !!a.asked_for
+    && !a.from_internal;
 
 // A third party was asked something. Needs BOTH a named party and a named
 // thing. Live case that forced the second half: "Yurim Cha attached
@@ -2042,7 +2074,19 @@ async function assess(email) {
         urgency: ['high', 'normal', 'low'].includes(res.urgency) ? res.urgency : 'normal',
         summary: resolveRelativeDates(degenericiseSummary(res.summary, senderLabel(email.from)), email.date),
         asked_for: res.asked_for ? String(res.asked_for).trim() : null,
-        deadline: res.deadline ? String(res.deadline).trim() : null,
+        // See deadlineIsShipmentDate. An estimated ready date, an ERD, an ETD
+        // or a sailing date describes the shipment; it is not a date by which
+        // she must act, and letting it through made the loudest line in her
+        // digest ("!! ... by 9/17 (today)") urgent about nothing.
+        deadline: (() => {
+            const d = res.deadline ? String(res.deadline).trim() : null;
+            if (!d) return null;
+            if (deadlineIsShipmentDate(d, `${email.body || ''}\n${email.thread || ''}`)) {
+                console.warn(`[REPLYWATCH] dropping deadline "${d}" — it describes the shipment (a ready date / ERD / ETD), not something she has to do`);
+                return null;
+            }
+            return d;
+        })(),
         // Apsara, 2026-08-28, on a live digest: "This is not proforma stupid."
         //
         //   2. . Accounting needs a booking for 2 *40 HC containers from LA to
@@ -2059,6 +2103,11 @@ async function assess(email) {
         // FROM us, so a message our own team SENT can never be one. We do not
         // sell to ourselves. (The prompt is tightened too, but the structural
         // rule is the one that has to hold.)
+        // Carried out of assess() for the first time (2026-09-17). It was
+        // computed here and used only for is_order; the digest gate needs it
+        // too -- an owed item OUR OWN TEAM raised is their work in progress,
+        // not hers.
+        from_internal: fromInternal,
         is_order: !fromInternal && (res.is_order === true || res.is_order === 'true'),
         order_buyer: res.order_buyer ? String(res.order_buyer).trim() : null,
     };
@@ -2211,6 +2260,76 @@ function daysUntilDeadline(text, now = new Date(), anchor = null) {
     return Math.round((deadlineDay - laMidnightUTC(now)) / DAY_MS);
 }
 // The urgency an item deserves once its stated deadline is accounted for.
+// A DATE ABOUT THE SHIPMENT IS NOT A DEADLINE FOR HER (2026-09-17).
+//
+// LIVE, and she sent it in with "this can be ignored":
+//
+//   1. !! Accounting Edge needs a booking from Chicago to Busan for one 40HC
+//      container with an estimated ready date of September 17. -- by 9/17 (today)
+//
+// The "!!" and the "by 9/17 (today)" both came from an ESTIMATED READY DATE.
+// That is when the cargo is ready. It is a property of the shipment, not a
+// date by which anybody must do anything, and nothing expires if it passes.
+// So the most urgent-looking item in her digest was urgent about nothing.
+//
+// The prompt invited it: "deadline: any date or time limit the sender
+// actually states". An ERD is a date the sender states, so the model was
+// answering the question it was asked. The prompt is tightened too, but the
+// structural rule belongs here -- same reason as HEADERS BEAT THE MODEL and
+// the money gap: the judgement is the model's, the check is arithmetic the
+// code can do and the model cannot be trusted to repeat.
+//
+// A CUTOFF IS NOT IN THIS LIST. Miss an SI cutoff and the container does not
+// sail; it is the single hardest deadline in this business.
+//
+// BUT THAT IS NOT WHAT PROTECTS IT, and reverse-verification is how I found
+// out: adding "cutoff" to this list breaks no test, because OBLIGATION_WORD
+// below also contains it and the `!OBLIGATION_WORD` check rescues the
+// sentence either way. Written down because the comment used to imply this
+// list was the safeguard, and a reader trusting that would move a word
+// between the two lists expecting it to matter. Keeping cutoff out of here
+// is belt to OBLIGATION_WORD's braces; the braces are what hold.
+const SHIPMENT_DATE = /\b(?:erd|earliest\s+return(?:\s+date)?|estimated\s+(?:ready|arrival|departure)(?:\s+date)?|ready\s+date|etd|eta|arrival\s+date|departure\s+date|sail(?:s|ing)?\s+(?:on|date)|on\s+board\s+date|free\s+time\s+(?:starts|from))\b/i;
+// If the sentence also says something must HAPPEN by that date, it is a real
+// deadline after all -- "we need the booking by the ready date of 9/17".
+const OBLIGATION_WORD = /\b(?:by|before|no\s+later\s+than|deadline|due|cut[\s-]?off|cutoff|must|expires?|latest)\b/i;
+
+// Returns true when the model's `deadline` is only describing the shipment.
+//
+// SENTENCE-SCOPED, because the word "ERD" and the date can sit twenty words
+// apart in one paragraph, and a whole-message test would throw away a real
+// deadline from any mail that happens to mention a sailing.
+//
+// MATCHED ON THE RESOLVED DATE, not on the characters. My first version
+// compared the deadline's tokens against each sentence, and it failed on the
+// exact live case it was written for: the model normalises the date, so it
+// returned "9/17" while the body said "September 17". Nothing matched, the
+// guard never fired, and the item kept its false "!!". Parsing both sides and
+// comparing the DAY is the only version that survives the model rewriting the
+// date -- which it does routinely.
+function deadlineIsShipmentDate(deadlineText, haystack, now = new Date()) {
+    const target = parseDeadline(deadlineText, now);
+    const day = (d) => (d instanceof Date && !isNaN(d.getTime()))
+        ? Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()) : null;
+    const want = day(target);
+    // A deadline we cannot date cannot be checked this way. Fall back to a
+    // literal token match so "ASAP"-style text is still examined, and accept
+    // that an undatable deadline is the weaker case.
+    const toks = String(deadlineText || '').toLowerCase().match(/[a-z0-9]+/g) || [];
+    if (!toks.length) return false;
+    const esc = (x) => x.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const literal = new RegExp(toks.map(esc).join('[^a-z0-9]{0,3}'), 'i');
+
+    for (const sent of importance.sentencesOf(String(haystack || ''))) {
+        const hit = want !== null
+            ? (day(parseDeadline(sent, now)) === want || literal.test(sent))
+            : literal.test(sent);
+        if (!hit) continue;
+        if (SHIPMENT_DATE.test(sent) && !OBLIGATION_WORD.test(sent)) return true;
+    }
+    return false;
+}
+
 function applyDeadlineUrgency(item, now = new Date()) {
     const days = daysUntilDeadline(item.deadline, now, item.receivedAt ? new Date(item.receivedAt) : null);
     if (days === null) return item;
@@ -3763,6 +3882,13 @@ async function run({ sendToManager, sendMessage: _sendMessage = null, dryRun = f
         if (a.waiting_on === 'someone_else') {
             console.log(`[REPLYWATCH] not listing "${String(a.summary || '').slice(0, 60)}" — nobody at Edge Metals is on the To line`);
         }
+        // Named every time. A filter that acts silently is one she cannot
+        // audit, and this one suppresses real outstanding work -- the whole
+        // reason the PO and importance gaps went unnoticed for weeks is that
+        // nothing was written down when mail was dropped.
+        if (a.waiting_on === 'them' && a.from_internal && a.asked_for) {
+            console.log(`[REPLYWATCH] not listing "${String(a.summary || '').slice(0, 60)}" — our own team raised this; it is their chase, not hers`);
+        }
         // `imp.level` joins the gate as a SIXTH condition. This is the one
         // line that makes the 22 visible, and it is deliberately gated on
         // `critical`/`high` rather than anything with a signal: `normal`
@@ -4387,5 +4513,5 @@ async function run({ sendToManager, sendMessage: _sendMessage = null, dryRun = f
 module.exports = { run, senderKey, recordSenderEvent, senderHistoryLine, quoteAppearsIn, buildThreadLedger, threadMessageText, digestAudience, deliverDigestMessage, degenericiseSummary, resolveRelativeDates, isOwedItem, isBystanderItem, isColleagueItem, collectAttachmentNames, figureGap, parseMoneyFigure, addressing, newFence, defence, cleanLabel, normFigure, figureText, refreshSentIndex, sheWroteSince, MAX_ASSESS_ATTEMPTS, draftProformaForOrder, proformaDraftLines, buildPrompt, collectDeadlineReminders, buildDeadlineMessage, bulkMailSignal, FENCE, FENCE_END, buildDigest, buildChaseMessage, collectChaseUps, hasSheReplied, threadTail, threadMovedOn, closesLoopWithoutAsk, invoiceNumberIn, looksLikePaymentDemand, findPaymentEvidence, mutedReason, addMute, removeMute, activeMutes, MUTE_DAYS, extractLatestMessage, senderLabel, assess, resolveDigestIndex, loadStore, saveStore, knownCounterpartyTest, importanceOf: importance.importanceOf, mergeMap, mergeList, mergePoRecord, laterOf, withSnapshot, poTracker, AGING_DAYS, RECHASE_DAYS, MAX_CHASES, NEVER_REPLY_PATTERNS,
     // Exposed for tests/integration.js — deadline ranking and matter grouping
     // are pure functions and the parts most worth asserting directly.
-    parseDeadline, daysUntilDeadline, applyDeadlineUrgency, groupMatters, sameMatter,
+    parseDeadline, daysUntilDeadline, applyDeadlineUrgency, deadlineIsShipmentDate, SHIPMENT_DATE, groupMatters, sameMatter,
     DIGEST_INDEX_TTL_MS };

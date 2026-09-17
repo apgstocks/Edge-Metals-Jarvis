@@ -1,0 +1,87 @@
+an ERD is not a deadline, and our own team's chase is not her problem
+
+LIVE, and Apsara sent it in with "this can be ignored":
+
+  1. !! Accounting Edge needs a booking from Chicago to Busan for one
+     40HC container with an estimated ready date of September 17.
+     -- by 9/17 (today)
+     Zimex Team
+
+Two separate defects in one line, and the item was FACTUALLY CORRECT
+throughout -- which is the point. Being right is not the same as being
+worth an interruption.
+
+1. THE "!!" AND THE "by 9/17 (today)" CAME FROM AN ESTIMATED READY DATE.
+
+   That is when the cargo is ready. It is a property of the shipment, not
+   a date by which anybody must act, and nothing expires when it passes.
+   So the loudest line in her digest was urgent about nothing.
+
+   The prompt invited it -- "deadline: any date or time limit the sender
+   actually states" -- so the model answered the question it was asked.
+   The prompt is tightened, but the structural rule is in code, for the
+   same reason as HEADERS BEAT THE MODEL: the judgement is the model's,
+   the check is something the code can verify.
+
+   deadlineIsShipmentDate() drops a deadline when the sentence it appears
+   in describes the shipment (ERD, earliest return date, estimated ready
+   date, ETD, ETA, arrival, departure, sailing) and says nothing must
+   happen by it.
+
+   A CUTOFF SURVIVES. Miss an SI cutoff and the container does not sail;
+   it is the hardest deadline in this business, and it is protected by
+   OBLIGATION_WORD -- not, as my comment first implied, by being absent
+   from the descriptive list. Reverse-verification found that: adding
+   "cutoff" to SHIPMENT_DATE breaks no test, because the obligation check
+   rescues the sentence anyway. The comment now says which guard holds.
+
+   TWO OF MY OWN MISTAKES, both found by testing against the real text:
+
+     * The first version compared the deadline's TOKENS against each
+       sentence. The model NORMALISES the date -- it returned "9/17"
+       while the body said "September 17" -- so nothing matched and the
+       guard silently did nothing on the exact case it was written for.
+       Both sides are parsed and the DAY compared now (AJ2).
+     * Sentence scoping was load-bearing but untested: AJ8 passed even
+       with whole-message matching, because its deadline sentence happens
+       to contain "by". AJ9 isolates it with a real ask that has no
+       obligation word and a sailing in another sentence.
+
+2. AN OWED ITEM OUR OWN TEAM RAISED IS THEIR WORK, NOT HERS.
+
+   Accounting Edge asked Zimex for a booking and Zimex has not answered,
+   so Zimex genuinely owes us something. isOwedItem was right. But Bose
+   raised it, Bose is chasing it, and she has no action.
+
+     Apsara: "they just asked for booking. why it needs to come to
+              whatsapp? no.."
+
+   fromInternal was already computed in assess() and used only for
+   is_order; it is now carried out as `from_internal`, and it separates
+   the two shapes of waiting_on:'them' exactly:
+
+     OUR outbound request   "we asked Zimex for a booking"   -> dropped
+     THEIR inbound report   "Andy is chasing the carrier for the EDO"
+                            -> kept. A live commitment made TO us is the
+                            most useful thing in the inbox, and it is the
+                            case this bucket was built for.
+
+   Undefined from_internal (older stored items, fixtures) reads as
+   external and is KEPT -- failing towards showing her something she can
+   dismiss, never towards silence. And the suppression is logged by name
+   every time: the PO and importance gaps went unnoticed for weeks
+   precisely because nothing was written down when mail was dropped.
+
+   WHAT THIS COSTS, and she chose it knowingly: nothing will nag if Zimex
+   never replies. I offered a staleness escalation -- silent for four
+   days, surfaced after -- and she said no. It is one line to restore.
+
+TESTS: AJ (10 assertions) and AK (4) in tests/emailwatch-signals.js, each
+reverse-verified -- disabling the guard fails AJ1-AJ3, removing the
+obligation check fails AJ7, collapsing sentence scoping fails AJ9,
+dropping the from_internal condition fails AK1.
+
+All 117 suites run: 0 failures.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01PaVFkg7JrYeRfUPzvLCFtt

@@ -28,11 +28,15 @@ git add helpers/mailImportance.js scripts/importance-report.js \
         tests/mail-importance.js tests/emailwatch-signals.js
 git commit -F COMMIT_MSG_importance.txt
 
-# 4. Push.
+# 4. Commit the ERD / team-chase fixes she reported last.
+git add workflow/replyWatch.js tests/emailwatch-signals.js
+git commit -F COMMIT_MSG_erd.txt
+
+# 5. Push.
 git push origin main
 
-# 5. Tidy up.
-rm -f COMMIT_MSG_two-mailbox.txt COMMIT_MSG_importance.txt
+# 6. Tidy up.
+rm -f COMMIT_MSG_two-mailbox.txt COMMIT_MSG_importance.txt COMMIT_MSG_erd.txt
 rm -rf _to_delete
 echo
 echo "Done. Now on the VM:  git pull && pm2 restart jarvis"
