@@ -24,6 +24,19 @@ Two over-reaches in one week, both of them live before she caught them:
   its list silently becomes `""` — so a dropdown she never touched posted an
   empty mode and the save failed outright.
 
+- **2026-09-17.** "on selecting wire-it should ask me Payment via Edge Yard/Edge
+  Metals" was about the pay modal. The requirement went into `addPayment`,
+  which every path shares — and `helpers/tools.js`'s `record_payment`, which is
+  how she records a payment by TALKING to Jarvis, had no box for the answer. So
+  it called `addPayment` without one and the helper threw: "record a wire
+  payment of $12,000 against load X" failed outright, and she pays suppliers by
+  wire. Found a day later, by a test fixture that pays the way she really does.
+
+The third one is the same mistake as the first two, which is the point of
+writing them down. The tell is always identical: a rule that makes sense on one
+screen lands in code that other callers reach, and the caller that cannot
+satisfy it is the one nobody was looking at.
+
 ### What that means in practice
 
 - **When a message names a screen, change that screen.** Shared code gets a
@@ -32,6 +45,12 @@ Two over-reaches in one week, both of them live before she caught them:
   will eventually not be set. That is exactly how the invoice lost its columns.
 - **Ask when the blast radius is wider than the request.** One short question
   costs less than a customer-facing document going out wrong.
+- **Before adding a requirement to shared code, list its callers and check each
+  one can satisfy it.** `grep` for the function, open every hit. A new required
+  field is a promise that every caller can supply it; a caller that cannot is a
+  break you have just written and will not see until someone uses that path.
+  Twice now that caller has been the voice/assistant path, because it is the
+  one without a form to put a field on.
 - **Widening scope needs her yes**, even when the wider version is obviously
   more consistent. Consistency is not the goal; her paperwork working is.
 - **Never write a decision of yours into a comment as if it were hers.** If it
