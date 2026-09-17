@@ -3809,6 +3809,135 @@ async function resolveDomainLearnName(chatId, nameText) {
 
 // Only ever called from resolvePending after an explicit "yes" — see the
 // 'await_email_confirm' case below. Never called directly from brain.js.
+// ── EMAILING A SHIPMENT'S DOCUMENTS ────────────────────────────────────────
+// Apsara, 2026-09-17: "now once the invoice and packing list is created -when
+// i give command to jarvis to send--->it should able to mail customer with
+// documents..", and on how she names the shipment: BY CONTAINER NUMBER.
+// Asked where the address comes from: "i have some tab called email contacts".
+//
+// ── IT CONFIRMS BEFORE IT SENDS ─────────────────────────────────────────────
+// My call, not hers — she was asked and answered about the contacts tab
+// instead, so this is the default I chose and she can change it. The reason:
+// the recipient is derived by TWO lookups she cannot see (container →
+// consignee, consignee → contact), an email to a buyer cannot be recalled,
+// and a commercial invoice carries her prices. Every other send in this file
+// confirms first; a document send is the last one that should be the
+// exception. The read-back shows the actual address, not the name — a wrong
+// contact is invisible until the address is on screen.
+//
+// It reuses the await_email_confirm pending rather than adding a new type, so
+// "yes"/"no", the queueing behaviour when another pending is open, and the
+// scheduled-send path all work here for free and cannot drift apart.
+async function sendShipmentDocsForConfirm(chatId, containerNo, rawText) {
+    const shipmentDocs = require('../helpers/shipmentDocs');
+    const container = String(containerNo || '').trim();
+    if (!container) {
+        await _send(chatId, 'Which container? Say it like "send the documents for HMMU7060866".');
+        return { action_taken: 'shipment_docs_no_container' };
+    }
+
+    const found = shipmentDocs.findForContainer(container);
+    if (!found) {
+        // Deliberately does NOT offer to generate one. She asked to send what
+        // she made and checked; building a document at send time would email
+        // a buyer something she has never seen.
+        await _send(chatId, `No invoice or packing list on file for ${container.toUpperCase()}. Generate it in Documents first, then tell me to send it.`);
+        return { action_taken: 'shipment_docs_none' };
+    }
+    if (!found.invoice) {
+        await _send(chatId, `There's a packing list for ${found.container} but no invoice. I haven't sent anything — generate the invoice in Documents first.`);
+        return { action_taken: 'shipment_docs_incomplete' };
+    }
+
+    // ── WHO IT GOES TO ──────────────────────────────────────────────────────
+    // She names a container; a container does not carry a customer. The
+    // consignee comes off the invoice's own version history, so the name used
+    // here is the one printed on the document being sent.
+    if (!found.consignee) {
+        await _send(chatId, `I have the documents for ${found.container} but no customer recorded against them, so I can't work out who to send to. Tell me the name — "send ${found.container} to Eccomelt" — and I'll use that.`);
+        return { action_taken: 'shipment_docs_no_customer' };
+    }
+
+    const { resolveContact } = require('../helpers/emailContacts');
+    const resolved = resolveContact(found.consignee);
+    if (!resolved) {
+        await _send(chatId, `${found.consignee} isn't in Email Contacts, so I don't have an address for them. Add them there and say "send the documents for ${found.container}" again.`);
+        return { action_taken: 'shipment_docs_no_contact' };
+    }
+    if (resolved.type === 'ambiguous') {
+        const names = (resolved.matches || []).map((c) => `${c.name} <${c.email}>`).join('\n  ');
+        await _send(chatId, `More than one contact for ${found.consignee}:\n  ${names}\n\nSay which — "send the documents for ${found.container} to <name>".`);
+        return { action_taken: 'shipment_docs_ambiguous_contact' };
+    }
+    const contact = resolved.contact;
+    if (!contact || !contact.email) {
+        await _send(chatId, `I found ${found.consignee} in Email Contacts but there's no address saved against them.`);
+        return { action_taken: 'shipment_docs_no_address' };
+    }
+
+    // Their standing Cc, same as every other email to this contact gets —
+    // the people who are always copied on that customer's paperwork.
+    const cc = mergeCc(null, contact.cc);
+
+    const invLabel = found.inv_no ? `Invoice ${found.inv_no}` : 'Invoice';
+    const subject = `${invLabel} — ${found.container}`;
+    const docLines = [found.invoice.filename, found.packing && found.packing.filename].filter(Boolean);
+
+    const body = [
+        `Dear ${contact.name || found.consignee},`,
+        '',
+        `Please find attached the ${found.packing ? 'invoice and packing list' : 'invoice'} for container ${found.container}${found.inv_no ? ` (${invLabel})` : ''}.`,
+        '',
+        'Kind regards,',
+        cfg.COMPANY_NAME || 'Edge Trading',
+    ].join('\n');
+
+    const staged = await setPending(chatId, {
+        type: 'await_email_confirm',
+        to: contact.email, cc, bcc: null,
+        subject, body,
+        target_name: contact.name || found.consignee,
+        bkg_no: null,
+        scheduled_for: null,
+        // The container, NOT the bytes — see sendDraftedEmail for why.
+        attach_container: found.container,
+    });
+
+    // Anything odd about the document set is said BEFORE the prompt, not
+    // after, so it is above her thumb when she types "yes".
+    const warnings = [];
+    if (found.missing.includes('packing list')) {
+        warnings.push(`No packing list on file for ${found.container} — only the invoice will go.`);
+    }
+    if (found.hasPackingInside) {
+        warnings.push('That invoice has its packing list bound into the same file.');
+    }
+    const today = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' });
+    if (found.date !== today) {
+        // She may be looking at a document she generated minutes ago while
+        // this picks up an older one — worth one line rather than a surprise.
+        warnings.push(`These were generated on ${found.date}.`);
+    }
+
+    if (staged.queued) {
+        await _send(chatId, `Ready to email ${found.container}'s documents to ${contact.name || found.consignee} <${contact.email}> — but you have a pending ${describePending(staged.blockedBy)} to answer first. I'll ask once that's resolved.`);
+        return { action_taken: 'shipment_docs_queued' };
+    }
+
+    await _send(chatId, [
+        `Send ${found.container}'s documents?`,
+        '',
+        `To: ${contact.name || found.consignee} <${contact.email}>`,
+        ...(cc && cc.length ? [`Cc: ${(Array.isArray(cc) ? cc : [cc]).join(', ')}`] : []),
+        `Subject: ${subject}`,
+        `Attached: ${docLines.join(', ')}`,
+        ...(warnings.length ? ['', ...warnings] : []),
+        '',
+        'Send this? (yes/no)',
+    ].join('\n'));
+    return { action_taken: 'shipment_docs_staged', container: found.container, attached: docLines.length };
+}
+
 async function sendDraftedEmail(chatId, pending) {
     const { sendEmail } = require('../helpers/gmail');
     // Forward FIRST, so that by the time the reply lands in her mailbox the
@@ -3827,9 +3956,34 @@ async function sendDraftedEmail(chatId, pending) {
         // apsara's account regardless — no threadId is ever passed, since a
         // threadId captured from bose's mailbox (where the original lived)
         // is meaningless on a different account's send.
+        // ── ATTACHMENTS ARE READ HERE, NOT CARRIED ON THE PENDING ───────────
+        // Apsara, 2026-09-17: "when i give command to jarvis to send---> it
+        // should able to mail customer with documents".
+        //
+        // The pending carries a CONTAINER NUMBER, and the PDFs are read off
+        // disk at this moment. Two reasons, and the first is not optional:
+        // a pending is persisted as JSON, and a Buffer does not survive a
+        // round trip through it — it comes back as {type:'Buffer',data:[...]}
+        // and would go out as a corrupt attachment. The second is that a
+        // document deleted between the read-back and her "yes" now fails
+        // loudly, instead of emailing a customer an empty PDF.
+        //
+        // Every other caller of this function has no attach_container, gets
+        // `undefined`, and sends exactly the plain-text message it always did
+        // — buildMimeMessage() documents that guarantee explicitly.
+        let attachments;
+        if (pending.attach_container) {
+            const shipmentDocs = require('../helpers/shipmentDocs');
+            const found = shipmentDocs.findForContainer(pending.attach_container);
+            if (!found || !found.invoice) {
+                await _send(chatId, `The documents for ${pending.attach_container} aren't on file any more — nothing was sent. Generate them again in Documents.`);
+                return { action_taken: 'email_send_failed', reason: 'documents_gone' };
+            }
+            attachments = shipmentDocs.attachmentsFor(found);
+        }
         const sent = await sendEmail({
             to: pending.to, cc: pending.cc, bcc: pending.bcc, subject: pending.subject, body: pending.body,
-            inReplyTo: pending.inReplyTo, references: pending.references,
+            inReplyTo: pending.inReplyTo, references: pending.references, attachments,
         });
         // REAL GAP (found 2026-08-06, live — Apsara: "notification bell icon
         // in website for reply thread"): this send's threadId used to be
@@ -3852,8 +4006,14 @@ async function sendDraftedEmail(chatId, pending) {
                 ? ' Forwarded the original to your inbox too, so the thread reads in order.'
                 : " Couldn't forward the original copy to your inbox — the reply itself went fine.";
         }
-        await _send(chatId, `Sent to ${pending.target_name} <${pending.to}>.${note}`);
-        return { action_taken: 'email_sent', forwarded: !!forwarded };
+        // Names the documents that actually went. "Sent." on a document email
+        // leaves her with no record of WHICH invoice a customer received,
+        // which is the first thing she needs when they say they never got it.
+        const attachNote = (attachments && attachments.length)
+            ? ` Attached: ${attachments.map((a) => a.filename).join(', ')}.`
+            : '';
+        await _send(chatId, `Sent to ${pending.target_name} <${pending.to}>.${attachNote}${note}`);
+        return { action_taken: 'email_sent', forwarded: !!forwarded, attached: (attachments || []).length };
     } catch (err) {
         console.error('[ACTIONS] sendEmail failed:', err.message);
         await _send(chatId, `Send failed: ${err.message}. Not retried automatically — try again.`);
@@ -7124,6 +7284,7 @@ showErd, showCutoff, getBookingField,
 scheduleFollowup, escalateUnclear, rememberFact, addBusinessContext, logKnowledgeGap, resolveFactBatch,
 resolveFactConflict, findContradictedFact,
     draftEmailForConfirm, sendDraftedEmail, scheduleDraftedEmail, reschedulePendingEmail, searchMail, draftReplyForConfirm, backfillCutoffs,
+    sendShipmentDocsForConfirm,
     continueBookingRequest, correctBookingDraft, trimTrailingConnective,
     resolveManualEmailAddress, learnDomainForConfirm, resolveDomainLearnName,
 checkSupplierReadiness, resolveReadyCheckYes, resolveReadyCheckNo, resolveReadyCheckDate, recordContainerNumber, sendPriceListTo, sendPriceListCity, relayQuestionToContact, relayReplyReceived, relayReplyReceivedViaEmail, detectExpectedIntent,
