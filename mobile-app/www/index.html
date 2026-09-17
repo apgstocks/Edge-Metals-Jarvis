@@ -2555,6 +2555,7 @@ function renderItemRows() {
         // in the input so the pick doesn't also trigger the blur handler.
         ev.preventDefault();
         input.value = el.dataset.val;
+        blurPicked(input);
         close();
         applyPriceIfChanged();
         syncItemsFromDom();
@@ -4897,6 +4898,7 @@ function wireLoadsEvents() {
         ev.preventDefault();
         const entry = matches[i];
         $('ld_seller').value = entry.aliases[0];
+        blurPicked($('ld_seller'));
         // Populate BOTH address and phone from the address book, per Apsara
         // 2026-08-20 ("i want address and phone number both should be
         // populated whatever is available"). Only fills what the entry
@@ -5278,6 +5280,7 @@ function wireLoadsEvents() {
         ev.preventDefault();
         chosenItemDetail = el.dataset.val;
         itemInput.value = el.dataset.val;
+        blurPicked(itemInput);
         closeAc();
         repaintDeck();
       }));
@@ -7835,6 +7838,26 @@ async function renderDocumentsTab() {
 // through onPick so the caller can keep the full alias tag ("Joey/Taewon"),
 // which the server needs for pricing memory and invoice-number history even
 // though only the company name goes on the document.
+// ── THE KEYBOARD COMES DOWN WHEN SHE PICKS ────────────────────────────────
+// Apsara, 2026-09-17: "in app,when i type the seller or anything,and i
+// selected something from list,my keyboard should collapse na..Why it is
+// expanded?"
+//
+// Because every one of these lists calls preventDefault() on mousedown — and
+// has to. A tap blurs the input first, which closes the list, and the tap then
+// lands on nothing; this project fixed that twice ("consignee not clickable")
+// and the fix is to keep focus in the input.
+//
+// Keeping focus is exactly what holds the soft keyboard up. So the pick now
+// hands focus back explicitly, AFTER the value is applied: preventDefault
+// keeps the tap alive, blur() ends the editing. Both, in that order.
+//
+// blurPicked() rather than input.blur() at each site, so the reason lives in
+// one place and a new type-ahead copied from an old one cannot lose it.
+function blurPicked(el) {
+    try { if (el && typeof el.blur === 'function') el.blur(); } catch (e) {}
+}
+
 function wireDocTypeahead(inputId, listId, onPick, onType) {
   const input = $(inputId), box = $(listId);
   if (!input || !box) return;
@@ -7853,6 +7876,7 @@ function wireDocTypeahead(inputId, listId, onPick, onType) {
       // exact bug twice ("consignee not clickable").
       ev.preventDefault();
       onPick(matches[Number(el.dataset.idx)]);
+      blurPicked(input);
       close();
     }));
   });
@@ -8622,6 +8646,7 @@ function pfRenderItems() {
         // close the list before the click landed.
         ev.preventDefault();
         input.value = items[+el.dataset.i].text;
+        blurPicked(input);
         close();
         sync(); // so Next reads the picked value, not the half-typed one
       }));
@@ -8680,6 +8705,7 @@ function wirePfPayTermField(inputId, listId) {
       input.dataset.touched = '1';
       pfw.paymentTermTouched = true;
       pfw.paymentTerm = input.value;
+      blurPicked(input);
       close();
     }));
   };
