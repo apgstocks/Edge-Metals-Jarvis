@@ -2257,6 +2257,207 @@ section('AD — a deadline line never prints a relative word twice');
         /^• \*TOMORROW\* —/.test(l4), l4);
 }
 
+
+section('AE — a purchase order is a live matter, not an email');
+{
+    // Apsara, 2026-09-17: "Why all my PO gets ignored in email?"
+    //
+    // MEASURED before writing a line of this: the real pipeline was run over
+    // every PO email in her inbox from the previous 20 days. 30 emails, 5
+    // shown, 24 silently dropped — 17 of them from outside the company.
+    // All 24 had asked_for null and needs_reply false, which fails every one
+    // of the five conditions in the digest's inclusion gate.
+    //
+    // These are the real subjects and senders from that sample.
+    const po = require(R('helpers/poTracker.js'));
+
+    // ── EXTRACTION ─────────────────────────────────────────────────────
+    ck('AE1 a real subject yields its PO number',
+        JSON.stringify(po.poReferencesIn('RE: Purchase Order #4302902-Appointment needed')) === '["4302902"]',
+        JSON.stringify(po.poReferencesIn('RE: Purchase Order #4302902-Appointment needed')));
+    // Both of these are REAL mail from the 20-day sample and both would open
+    // a phantom matter that can never be closed, because there is no number
+    // to close it by.
+    ck('AE2 "PO from Edge Metals" opens nothing — no digits, no reference',
+        po.poReferencesIn('PO from Edge Metals').length === 0);
+    ck('AE3 a trailing "PO#" with nothing after it opens nothing',
+        po.poReferencesIn('Rental Invoice # 920043344 for Customer # 5453153 (09/02/2026) PO#').length === 0);
+    // The one false positive that would recur forever, because it lives in a
+    // signature: every message from that sender would move the same fake PO.
+    ck('AE4 a P.O. Box in a signature is not a purchase order',
+        po.poReferencesIn('Edge Metals Inc, P.O. Box 90210, Los Angeles CA').length === 0);
+    ck('AE5 the spellings she actually receives all parse',
+        JSON.stringify(po.poReferencesIn('po number 4302953', 'PO 4302942', 'P.O. No. 4302863', 'our PO# 709275').sort())
+            === JSON.stringify(['4302863', '4302942', '4302953', '709275']));
+
+    // ── THE ACTUAL COMPLAINT ───────────────────────────────────────────
+    // This is the case the whole feature exists for: an email that the digest
+    // gate throws away must still move the PO.
+    {
+        const store = { pos: {} };
+        po.recordPoMovement(store, {
+            po: '4302902', threadId: 't1', messageId: 'm1',
+            fromName: 'Matthew Ellis Whittaker',
+            // Verbatim from the live run. needs_reply false, asked_for null,
+            // waiting_on 'them' — dropped by all five gates.
+            summary: 'Matt confirms delivery September 4, 9/11 at 1100am.',
+            waiting_on: 'them', at: '2026-09-15T12:00:00Z',
+        });
+        ck('AE6 an email no gate would show still moves the PO',
+            po.openPos(store, Date.parse('2026-09-16T12:00:00Z')).length === 1);
+        const lines = po.buildPoLines(po.openPos(store, Date.parse('2026-09-16T12:00:00Z')), Date.parse('2026-09-16T12:00:00Z')).join('\n');
+        ck('AE7 and the PO number is the handle, not a list position',
+            /\*PO 4302902\*/.test(lines) && !/^1\./m.test(lines), lines);
+        ck('AE8 naming who moved it and when',
+            /Matthew Ellis Whittaker/.test(lines) && /yesterday/.test(lines), lines);
+    }
+
+    // ── DEDUPE ─────────────────────────────────────────────────────────
+    {
+        const store = { pos: {} };
+        const ev = { po: '9', messageId: 'same', fromName: 'T', summary: 's', at: '2026-09-15T12:00:00Z' };
+        po.recordPoMovement(store, ev);
+        po.recordPoMovement(store, ev);
+        ck('AE9 a rescan does not double the history',
+            store.pos['9'].events.length === 1, JSON.stringify(store.pos['9'].events));
+    }
+
+    // ── FORGETTING ─────────────────────────────────────────────────────
+    {
+        const store = { pos: {} };
+        po.recordPoMovement(store, { po: '5', messageId: 'a', fromName: 'T', summary: 's', at: '2026-08-01T12:00:00Z' });
+        const now = Date.parse('2026-09-17T12:00:00Z');   // 47 days later
+        ck('AE10 a PO with no movement for a fortnight stops being live',
+            po.openPos(store, now).length === 0);
+        po.prunePos(store, now);
+        ck('AE11 and is eventually dropped from the store entirely',
+            Object.keys(store.pos).length === 0, JSON.stringify(store.pos));
+    }
+    {
+        // The events array must not grow without bound — that is how the
+        // sender counters became a lifetime tally nobody can decay.
+        const store = { pos: {} };
+        for (let i = 0; i < po.MAX_EVENTS + 8; i++) {
+            po.recordPoMovement(store, { po: '7', messageId: 'm' + i, fromName: 'T', summary: 's' + i, at: `2026-09-0${(i % 9) + 1}T12:00:00Z` });
+        }
+        ck('AE12 the event list is capped',
+            store.pos['7'].events.length === po.MAX_EVENTS, String(store.pos['7'].events.length));
+    }
+
+    // ── CLOSING ────────────────────────────────────────────────────────
+    {
+        const store = { pos: {} };
+        po.recordPoMovement(store, { po: '3', messageId: 'a', fromName: 'T', summary: 's', at: '2026-09-16T12:00:00Z' });
+        po.closePo(store, '3');
+        ck('AE13 a closed PO leaves her list',
+            po.openPos(store, Date.parse('2026-09-17T12:00:00Z')).length === 0);
+        // Deletion-free release, same reasoning as the mute fix: the record
+        // has to survive so "what happened to 3" still answers.
+        ck('AE14 but its history is still there to answer from',
+            po.poHistoryLines(store.pos['3']).join('\n').includes('closed 2026-09'),
+            po.poHistoryLines(store.pos['3']).join('\n'));
+        po.recordPoMovement(store, { po: '3', messageId: 'b', fromName: 'T', summary: 'new mail', at: '2026-09-17T12:00:00Z' });
+        ck('AE15 and later mail does NOT silently reopen what she closed',
+            po.openPos(store, Date.parse('2026-09-17T13:00:00Z')).length === 0);
+    }
+
+    // ── WHEN IT IS WORTH INTERRUPTING HER ──────────────────────────────
+    {
+        const store = { pos: {} };
+        po.recordPoMovement(store, { po: '4302942', messageId: 'a', fromName: 'Tiffany', summary: 'Tiffany confirmed Tuesday 9/8 @ 12 PM.', at: '2026-09-16T12:00:00Z' });
+        ck('AE16 an unreported external movement can carry a digest',
+            po.unreportedPos(store, Date.parse('2026-09-16T13:00:00Z')).length === 1);
+        po.markPosTold(store, po.unreportedPos(store, Date.parse('2026-09-16T13:00:00Z')), '2026-09-16T13:00:00Z');
+        ck('AE17 and is not re-announced every hour afterwards',
+            po.unreportedPos(store, Date.parse('2026-09-16T14:00:00Z')).length === 0);
+        // Our own reply is not news to her. Without this a 26-message
+        // appointment thread (she has one) pings her on every turn.
+        po.recordPoMovement(store, { po: '4302942', messageId: 'b', fromName: 'Edge Metals Bose', ours: true, summary: 'Bose confirms the 9/8 appointment.', at: '2026-09-16T15:00:00Z' });
+        ck('AE18 our own mail moves the PO but never triggers a digest',
+            store.pos['4302942'].events.length === 2
+            && po.unreportedPos(store, Date.parse('2026-09-16T16:00:00Z')).length === 0);
+    }
+
+    // ── THE STORE ALLOWLIST (sixth time) ───────────────────────────────
+    // lastScanAt, sentIndex, failures, muted and brain's `indices` were each
+    // silently eaten by a field allowlist. A dropped PO record makes "6
+    // messages, last moved 3d ago" read "1 message, today" forever.
+    {
+        const before = fs.readFileSync(R('workflow/replyWatch.js'), 'utf8');
+        ck('AE19 pos survives loadStore',
+            /pos: \(raw\.pos && typeof raw\.pos === 'object'/.test(before));
+        ck('AE20 pos is on saveStore\'s allowlist',
+            /pos: store\.pos \|\| \{\},/.test(before));
+        ck('AE21 and has a merge rule, not a last-writer-wins',
+            /pos: mergeMap\(snap\.pos, mine\.pos, disk\.pos, mergePoRecord\)/.test(before));
+    }
+    // Two scans each appending to the same PO must not lose either event.
+    {
+        const a = { po: '1', firstSeenAt: '2026-09-01T00:00:00Z', lastMovedAt: '2026-09-15T00:00:00Z',
+                    threadIds: ['t1'], events: [{ at: '2026-09-15T00:00:00Z', messageId: 'x', summary: 'x' }], closedAt: null };
+        const b = { po: '1', firstSeenAt: '2026-09-01T00:00:00Z', lastMovedAt: '2026-09-16T00:00:00Z',
+                    threadIds: ['t2'], events: [{ at: '2026-09-16T00:00:00Z', messageId: 'y', summary: 'y' }], closedAt: null };
+        const m = rw.mergePoRecord(a, b);
+        ck('AE22 concurrent scans keep both movements',
+            m.events.length === 2 && m.lastMovedAt === '2026-09-16T00:00:00Z', JSON.stringify(m.events));
+        ck('AE23 and both threads',
+            m.threadIds.length === 2, JSON.stringify(m.threadIds));
+        const closed = rw.mergePoRecord({ ...a, closedAt: '2026-09-16T01:00:00Z' }, b);
+        ck('AE24 a close wins over a concurrent movement',
+            !!closed.closedAt, JSON.stringify(closed.closedAt));
+    }
+
+    // ── IT MUST NOT TOUCH THE NUMBERED LIST ────────────────────────────
+    // "ignore 1" resolves against store.lastDigest. A second numbered list in
+    // the same message is how it came back as "#undefined" on 01 Sep.
+    {
+        const lines = po.buildPoLines([{
+            po: '4302902', lastMovedAt: '2026-09-16T12:00:00Z',
+            events: [{ at: '2026-09-16T12:00:00Z', by: 'Tiffany', summary: 'delivered' }],
+        }], Date.parse('2026-09-17T12:00:00Z')).join('\n');
+        ck('AE25 no PO line is numbered', !/\b\d+\.\s/.test(lines), lines);
+        ck('AE26 and the PO number is offered as the handle',
+            /close po/i.test(lines), lines);
+    }
+}
+
+
+section('AF — the PO commands the digest line promises actually exist');
+{
+    // The digest now prints 'Say "close po 4302902" when one is done'. A
+    // promise like that to a bot with no such route is the same failure as
+    // the APK Jarvis once offered to send and could not — the PROMISE is the
+    // bug. So the routes are pinned here, beside the line that offers them.
+    const brain = require(R('workflow/brain.js'));
+    const mk = (t) => ({ text: t, textLower: t.toLowerCase(), isManagerOrTeam: true,
+                         isTrucker: false, isSupplier: false, pendingAction: null,
+                         session: {}, activeBooking: null });
+    const intent = (t) => { const d = brain.policyDecide(mk(t)); return d && !d.needsAI ? d.intent : '(needsAI)'; };
+    const po = (t) => { const d = brain.policyDecide(mk(t)); return d && d.data ? d.data.po : null; };
+
+    ck('AF1 "close po 4302902" routes and carries the number',
+        intent('close po 4302902') === 'close_po' && po('close po 4302902') === '4302902', intent('close po 4302902'));
+    ck('AF2 the phrasings she is likely to use all route',
+        ['close PO #4302902', 'done with purchase order 4302902', 'finished with po 4302902']
+            .every((t) => intent(t) === 'close_po'));
+    ck('AF3 "show pos" lists them', intent('show pos') === 'show_pos', intent('show pos'));
+    ck('AF4 "po 4302902" asks for one PO\'s history',
+        intent('po 4302902') === 'show_po', intent('po 4302902'));
+
+    // ── THE COLLISION THAT WOULD HAVE BROKEN HER EXISTING COMMANDS ─────
+    // A PO route matching a bare small number would swallow the digest
+    // index commands — which is exactly how "ignore 1" came back as
+    // "#undefined" on 01 Sep. A PO number is 4-12 digits; a digest index is
+    // 1-2. These four must be untouched.
+    ck('AF5 "po 1" is NOT a PO lookup — far likelier a digest index',
+        intent('po 1') === '(needsAI)', intent('po 1'));
+    ck('AF6 "ignore 1" still reaches the digest', intent('ignore 1') === 'ignore_digest_item', intent('ignore 1'));
+    ck('AF7 "reply to 2" still reaches the digest', intent('reply to 2') === 'reply_to_digest_item', intent('reply to 2'));
+    ck('AF8 "mute 1" still reaches the mute', intent('mute 1') === 'mute_matter', intent('mute 1'));
+    ck('AF9 "close po" with no number does not act on a guess',
+        intent('close po') === '(needsAI)', intent('close po'));
+}
+
 console.log(`\n================================================================`);
 console.log(`${pass} passed, ${fail} failed`);
 if (fail) { console.log('\nFAILED:'); failures.forEach((f) => console.log(`  - ${f}`)); }

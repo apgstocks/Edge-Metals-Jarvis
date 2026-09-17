@@ -4108,6 +4108,64 @@ async function showMutes(chatId) {
     return { action_taken: 'mutes_shown' };
 }
 
+// ── PURCHASE ORDERS (2026-09-17) ───────────────────────────────────────────
+// Apsara: "Why all my PO gets ignored in email?" 24 of 30 real PO emails were
+// silently dropped by the digest gate — see helpers/poTracker.js's header for
+// the measurement and why loosening the gate was the wrong fix.
+//
+// These three exist because the digest LINE OFFERS THEM. A message that says
+// 'say "close po 4302902"' to a bot with no such route is the same class of
+// failure as the APK Jarvis once promised to send and could not: the promise
+// is the bug, not the missing feature. So the route ships with the line.
+async function closePurchaseOrder(chatId, poNumber) {
+    const rw = require('./replyWatch');
+    const po = require('../helpers/poTracker');
+    const store = await rw.loadStore();
+    const key = String(poNumber || '').replace(/[^0-9]/g, '');
+    if (!key) {
+        await _send(chatId, 'Which PO? Say "close po 4302902".');
+        return { action_taken: 'po_close_no_number' };
+    }
+    const rec = po.closePo(store, key);
+    if (!rec) {
+        // NAMED, not silent. She may have the number right and Jarvis may
+        // simply never have seen mail carrying it — saying "no such PO" would
+        // read as though the order does not exist.
+        await _send(chatId, `I have no mail on record carrying PO ${key}, so there's nothing for me to close. It stays out of your list either way.`);
+        return { action_taken: 'po_close_unknown' };
+    }
+    await rw.saveStore(store);
+    await _send(chatId, `Closed PO ${key} — ${rec.events.length} message${rec.events.length === 1 ? '' : 's'} on it, last moved ${String(rec.lastMovedAt).slice(0, 10)}. I'll stop listing it. Say "po ${key}" if you want the history back.`);
+    return { action_taken: 'po_closed', po: key };
+}
+
+async function showPurchaseOrder(chatId, poNumber) {
+    const rw = require('./replyWatch');
+    const po = require('../helpers/poTracker');
+    const store = await rw.loadStore();
+    const key = String(poNumber || '').replace(/[^0-9]/g, '');
+    const rec = key && store.pos ? store.pos[key] : null;
+    if (!rec) {
+        await _send(chatId, `Nothing on record for PO ${key || '(no number given)'}.`);
+        return { action_taken: 'po_unknown' };
+    }
+    await _send(chatId, po.poHistoryLines(rec).join('\n'));
+    return { action_taken: 'po_shown', po: key };
+}
+
+async function showPurchaseOrders(chatId) {
+    const rw = require('./replyWatch');
+    const po = require('../helpers/poTracker');
+    const store = await rw.loadStore();
+    const open = po.openPos(store);
+    if (!open.length) {
+        await _send(chatId, `No open POs — nothing has moved on one in the last ${po.PO_STALE_DAYS} days.`);
+        return { action_taken: 'pos_none' };
+    }
+    await _send(chatId, po.buildPoLines(open).join('\n').replace(/^\n/, ''));
+    return { action_taken: 'pos_shown', count: open.length };
+}
+
 async function ignoreDigestItem(chatId, indices, all = false) {
     const { resolveDigestIndex, loadStore, saveStore } = require('./replyWatch');
 
@@ -7084,6 +7142,9 @@ ignoreDigestItem,
 muteMatter,
 unmuteMatter,
 showMutes,
+closePurchaseOrder,
+showPurchaseOrder,
+showPurchaseOrders,
     setReminder, showReminders, cancelReminder,
     askForScaleTickets, resumeQuoteWithScaleTickets,
     // Proforma raised from a customer's own email (2026-08-23).
