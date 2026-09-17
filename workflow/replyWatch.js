@@ -61,10 +61,6 @@ const { callGeminiJSON } = require('../helpers/gemini');
 const { appendAuditLog } = require('../helpers/auditlog');
 const { loadJson, saveJson, mutateJson } = require('../helpers/json');
 const { getLADate } = require('../helpers/time');
-// A purchase order is a LIVE MATTER, not an email — see the header of
-// helpers/poTracker.js for the 30-email measurement that forced this.
-const poTracker = require('../helpers/poTracker');
-const MAX_PO_EVENTS = poTracker.MAX_EVENTS;
 
 // Routes a manager notification through helpers/managerOutbox.js so that a
 // WhatsApp outage queues it (and, when critical, falls back to email) instead
@@ -394,7 +390,7 @@ function withSnapshot(store) {
 
 function loadStore() {
     const raw = loadJson(cfg.REPLY_WATCH_FILE, {});
-    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return withSnapshot({ muted: { senders: {}, threads: {} }, seen: {}, lastDigest: [], undelivered: [], lastDigestAt: null, tracked: [], senderStats: {}, lastScanAt: null, sentIndex: {}, sentIndexUpdatedAt: null, failures: {}, pos: {} });
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return withSnapshot({ muted: { senders: {}, threads: {} }, seen: {}, lastDigest: [], undelivered: [], lastDigestAt: null, tracked: [], senderStats: {}, lastScanAt: null, sentIndex: {}, sentIndexUpdatedAt: null, failures: {} });
     if (raw.seen && typeof raw.seen === 'object') {
         return withSnapshot({
             seen: raw.seen,
@@ -410,12 +406,6 @@ function loadStore() {
             tracked: Array.isArray(raw.tracked) ? raw.tracked : [],
             // Per-sender reply history — see recordSenderEvent below.
             senderStats: (raw.senderStats && typeof raw.senderStats === 'object') ? raw.senderStats : {},
-            // {poNumber -> {po, firstSeenAt, lastMovedAt, threadIds, events,
-            // closedAt}} — see helpers/poTracker.js. A purchase order is a
-            // multi-week matter, not an email, and it is the one category the
-            // needs_reply/asked_for gates threw away wholesale (24 of 30 real
-            // PO emails, measured 2026-09-17).
-            pos: (raw.pos && typeof raw.pos === 'object' && !Array.isArray(raw.pos)) ? raw.pos : {},
             // HEARTBEAT. The last time a real (non-dryRun) scan finished. This
             // is what an external uptime monitor needs and what neither health
             // endpoint could answer: a process can be up, WhatsApp connected,
@@ -482,38 +472,6 @@ function mergeMap(snap, mine, disk, pick) {
         if (!(k in mine)) delete out[k];                                // removed here
     }
     return out;
-}
-
-// ── TWO SCANS, ONE PO ──────────────────────────────────────────────────────
-// mergeMap's default resolver takes one side whole. For a PO record that
-// loses the other scan's movement, which is the thing this feature exists to
-// keep. Union the events by messageId (the only stable identity a Gmail
-// message has), keep every thread id, and take the later lastMovedAt.
-//
-// A CLOSE WINS over a concurrent movement. She said the order was done; an
-// email that arrived in the same window must not silently reopen it — that
-// would make "close po X" look like it did nothing, which is how a control
-// stops being trusted.
-function mergePoRecord(mine, theirs) {
-    if (!mine) return theirs;
-    if (!theirs) return mine;
-    const byId = new Map();
-    const key = (e, i) => (e && e.messageId) || `${e && e.at}|${e && e.by}|${i}`;
-    for (const list of [theirs.events || [], mine.events || []]) {
-        list.forEach((e, i) => byId.set(key(e, i), e));
-    }
-    const events = [...byId.values()].sort((a, b) => new Date(a.at) - new Date(b.at));
-    const earlier = (x, y) => (!x ? y : !y ? x : (new Date(x) < new Date(y) ? x : y));
-    const later = (x, y) => (!x ? y : !y ? x : (new Date(x) > new Date(y) ? x : y));
-    return {
-        ...theirs, ...mine,
-        events: events.slice(-MAX_PO_EVENTS),
-        threadIds: [...new Set([...(theirs.threadIds || []), ...(mine.threadIds || [])])],
-        firstSeenAt: earlier(mine.firstSeenAt, theirs.firstSeenAt),
-        lastMovedAt: later(mine.lastMovedAt, theirs.lastMovedAt),
-        closedAt: mine.closedAt || theirs.closedAt || null,
-        closedBy: mine.closedBy || theirs.closedBy || null,
-    };
 }
 
 // Same, for arrays of objects identified by `idOf`.
@@ -601,12 +559,6 @@ async function saveStore(store) {
         // silently swallowed by it before. A failure counter that resets on
         // every write can never reach its cap.
         failures: store.failures || {},
-        // SIXTH TIME writing a line on this allowlist. lastScanAt, sentIndex,
-        // failures and muted were each silently swallowed by it, and aiDecide's
-        // data map ate `indices` the same way. A dropped PO record is a PO that
-        // reappears as brand new on the next scan, so "last moved 3d ago,
-        // 6 messages" would read "today, 1 message" forever.
-        pos: store.pos || {},
     };
 
     const snap = store.__snapshot || null;
@@ -643,12 +595,6 @@ async function saveStore(store) {
                 threads: mergeMap((snap.muted || {}).threads, (mine.muted || {}).threads, (disk.muted || {}).threads),
             },
             failures: mergeMap(snap.failures, mine.failures, disk.failures),
-            // Two scans can each append a movement to the SAME PO. Taking
-            // either side whole loses the other's event, so the resolver
-            // unions the event lists by messageId and keeps the later
-            // lastMovedAt. Same shape of problem as the chase counter that
-            // mergeList's iChangedIt check exists for.
-            pos: mergeMap(snap.pos, mine.pos, disk.pos, mergePoRecord),
         };
     });
 }
@@ -3379,43 +3325,6 @@ async function run({ sendToManager, sendMessage: _sendMessage = null, dryRun = f
 
         seen[ref.id] = new Date().toISOString();
 
-        // ── A PO MOVED (2026-09-17) ─────────────────────────────────────────
-        // Apsara: "Why all my PO gets ignored in email?"
-        //
-        // This runs BEFORE the inclusion gate below and is deliberately not
-        // subject to it. The gate is what lost these emails: measured on her
-        // real inbox, 24 of 30 PO emails failed every one of its five
-        // conditions, because a PO thread asks no question and names no
-        // asked_for. See helpers/poTracker.js.
-        //
-        // Recorded for INTERNAL senders too, marked `ours`. "Bose confirms the
-        // Tuesday 9/8 appointment" is movement on the order even though it is
-        // our own mail and rightly earns no digest slot of its own — and a
-        // history that shows only the counterparty's half reads as though we
-        // never answered.
-        try {
-            const poRefs = poTracker.poReferencesIn(subject, visible);
-            for (const po of poRefs) {
-                poTracker.recordPoMovement(store, {
-                    po, threadId: msg.threadId, messageId: ref.id,
-                    from, fromName: senderLabel(from),
-                    ours: !!(me && companyDomain(me)
-                        && senderKey(from).endsWith('@' + companyDomain(me))),
-                    summary: a.summary || subject,
-                    waiting_on: a.waiting_on,
-                    // parseEmailDate returns an ISO STRING, not a Date — and
-                    // the raw header when it cannot parse. Handed straight to
-                    // recordPoMovement, which validates it (see usableDate).
-                    at: parseEmailDate(header(msg, 'Date')),
-                });
-                console.log(`[REPLYWATCH] PO ${po} moved — ${senderLabel(from)}: "${String(a.summary || subject).slice(0, 60)}"`);
-            }
-        } catch (e) {
-            // Never break a scan over the PO ledger. A missed movement costs
-            // one line in one digest; a thrown error costs the whole inbox.
-            console.warn('[REPLYWATCH] PO tracking failed for', ref.id, '-', e.message);
-        }
-
         // AN ORDER COUNTS EVEN WHEN NO REPLY IS WANTED. Found by Apsara's own
         // test, 2026-08-24: she emailed a real order confirmation — "Daekwang
         // confirmed 2 containers of auto casting tense ... Your price is
@@ -3767,19 +3676,7 @@ async function run({ sendToManager, sendMessage: _sendMessage = null, dryRun = f
     // Urgent goes out immediately; everything else waits for the hourly slot.
     // Both are gated on the alert window, so nothing arrives overnight — but
     // nothing is discarded either, it simply waits in `undelivered`.
-    // PO movement can carry a digest on its own — see unreportedPos in
-    // helpers/poTracker.js for why that is narrow enough to be safe. Computed
-    // here because shouldSend needs it.
-    const reportablePos = (() => {
-        try { return poTracker.unreportedPos(store); }
-        catch (e) { console.warn('[REPLYWATCH] could not read the PO ledger:', e.message); return []; }
-    })();
-    // A PO-only digest never rides the URGENT path. Nothing in a PO ledger is
-    // worth breaking the hourly rhythm for, and a feature that can ping her
-    // out of turn is one she will switch off.
-    const shouldSend = inAlertWindow
-        && ((queued.length > 0 && (hasUrgent || gapElapsed))
-            || (reportablePos.length > 0 && gapElapsed));
+    const shouldSend = queued.length > 0 && inAlertWindow && (hasUrgent || gapElapsed);
 
     // Tracks what ACTUALLY went out, as opposed to what we intended to send.
     // These are not the same thing when the send throws, and reporting the
@@ -3824,18 +3721,7 @@ async function run({ sendToManager, sendMessage: _sendMessage = null, dryRun = f
             ? `\n\n⚠ ${deadLettered.length} email${deadLettered.length === 1 ? '' : 's'} I could not read after ${MAX_ASSESS_ATTEMPTS} tries — check ${deadLettered.length === 1 ? 'it' : 'them'} in Gmail:\n`
               + deadLettered.slice(0, 3).map((d) => `• ${d.from} — ${d.subject || '(no subject)'}`).join('\n')
             : '';
-        // The PO section rides UNDER the numbered list and is deliberately
-        // not part of it: "reply to 1" and "ignore 1" resolve against
-        // store.lastDigest (= digestMatters), and a second numbered list in
-        // the same message is how "ignore 1" came back as "#undefined" on
-        // 01 Sep. The PO NUMBER is the handle instead.
-        const poSection = reportablePos.length ? '\n' + poTracker.buildPoLines(reportablePos).join('\n') : '';
-        const body = queued.length
-            ? (overnight ? 'While you were away —\n\n' : '') + buildDigest(digestMatters, queued.length) + backlogNote + dlqNote + poSection
-            // NOTHING NEEDS A REPLY, but a PO moved. buildDigest would render
-            // "0 emails waiting on you:" over an empty list, which is a lie
-            // dressed as a headline. Send the ledger alone instead.
-            : poTracker.buildPoLines(reportablePos).join('\n').replace(/^\n/, '');
+        const body = (overnight ? 'While you were away —\n\n' : '') + buildDigest(digestMatters, queued.length) + backlogNote + dlqNote;
 
         // Stage the confirmation so a plain "yes" produces the document. Only
         // for a draft that is actually complete — one still missing a rate has
@@ -3890,21 +3776,9 @@ async function run({ sendToManager, sendMessage: _sendMessage = null, dryRun = f
             // The SAME grouped array that was just rendered — so "reply to 3"
             // resolves to the item printed as 3, and to that matter's most
             // urgent/current message rather than an older one in the group.
-            // ONLY when this digest actually carried a numbered list. A
-            // PO-only message has none, and overwriting lastDigest with []
-            // would silently break the "reply to 2" she is part-way through
-            // answering from the previous digest — the numbering would resolve
-            // against an empty array and come back as nothing.
-            if (queued.length) {
-                store.lastDigest = digestMatters;
-                store.undelivered = [];
-                store.lastDigestAt = new Date().toISOString();
-            }
-            // AFTER the send, never before. sendMessage returns false when
-            // WhatsApp is down rather than throwing (see the comment on the
-            // try above), so marking these told up front would lose the
-            // movement permanently on a failed send.
-            if (reportablePos.length) poTracker.markPosTold(store, reportablePos);
+            store.lastDigest = digestMatters;
+            store.undelivered = [];
+            store.lastDigestAt = new Date().toISOString();
             delivered = true;
         } catch (err) {
             console.error('[REPLYWATCH] digest send failed, keeping queue for next run:', err.message);
@@ -3990,20 +3864,12 @@ async function run({ sendToManager, sendMessage: _sendMessage = null, dryRun = f
     // means "the scan ran through" and not "the function was entered" - a run
     // that throws halfway leaves the old timestamp and correctly goes stale.
     store.lastScanAt = new Date().toISOString();
-    // FORGETTING, at the end of the scan and never mid-render. A prune that
-    // runs while a list is being built can remove the row that list is about.
-    // See prunePos: a closed PO survives one stale window so "what happened
-    // to 4302902" still answers after she closed it.
-    try {
-        const dropped = poTracker.prunePos(store);
-        if (dropped) console.log(`[REPLYWATCH] pruned ${dropped} PO record(s) with no movement in ${poTracker.PO_STALE_DAYS * 3} days`);
-    } catch (e) { console.warn('[REPLYWATCH] PO prune failed:', e.message); }
     await saveStore(store);
     console.log(`[REPLYWATCH] assessed ${checked}, flagged ${flagged.length}, queued ${store.undelivered.length}, tracked ${store.tracked.length}, chased ${chaseUps.length}, sent ${delivered ? 'yes' : 'no'}`);
     return { checked, flagged: flagged.length, items: flagged, queued: store.undelivered.length, sent: delivered, chased: chaseUps.length, deadLettered: deadLettered.length };
 }
 
-module.exports = { run, senderKey, recordSenderEvent, senderHistoryLine, quoteAppearsIn, buildThreadLedger, threadMessageText, digestAudience, deliverDigestMessage, degenericiseSummary, resolveRelativeDates, isOwedItem, isBystanderItem, isColleagueItem, collectAttachmentNames, figureGap, parseMoneyFigure, addressing, newFence, defence, cleanLabel, normFigure, figureText, refreshSentIndex, sheWroteSince, MAX_ASSESS_ATTEMPTS, draftProformaForOrder, proformaDraftLines, buildPrompt, collectDeadlineReminders, buildDeadlineMessage, bulkMailSignal, FENCE, FENCE_END, buildDigest, buildChaseMessage, collectChaseUps, hasSheReplied, threadTail, threadMovedOn, closesLoopWithoutAsk, invoiceNumberIn, looksLikePaymentDemand, findPaymentEvidence, mutedReason, addMute, removeMute, activeMutes, MUTE_DAYS, extractLatestMessage, senderLabel, assess, resolveDigestIndex, loadStore, saveStore, mergeMap, mergeList, mergePoRecord, laterOf, withSnapshot, poTracker, AGING_DAYS, RECHASE_DAYS, MAX_CHASES, NEVER_REPLY_PATTERNS,
+module.exports = { run, senderKey, recordSenderEvent, senderHistoryLine, quoteAppearsIn, buildThreadLedger, threadMessageText, digestAudience, deliverDigestMessage, degenericiseSummary, resolveRelativeDates, isOwedItem, isBystanderItem, isColleagueItem, collectAttachmentNames, figureGap, parseMoneyFigure, addressing, newFence, defence, cleanLabel, normFigure, figureText, refreshSentIndex, sheWroteSince, MAX_ASSESS_ATTEMPTS, draftProformaForOrder, proformaDraftLines, buildPrompt, collectDeadlineReminders, buildDeadlineMessage, bulkMailSignal, FENCE, FENCE_END, buildDigest, buildChaseMessage, collectChaseUps, hasSheReplied, threadTail, threadMovedOn, closesLoopWithoutAsk, invoiceNumberIn, looksLikePaymentDemand, findPaymentEvidence, mutedReason, addMute, removeMute, activeMutes, MUTE_DAYS, extractLatestMessage, senderLabel, assess, resolveDigestIndex, loadStore, saveStore, mergeMap, mergeList, laterOf, withSnapshot, AGING_DAYS, RECHASE_DAYS, MAX_CHASES, NEVER_REPLY_PATTERNS,
     // Exposed for tests/integration.js — deadline ranking and matter grouping
     // are pure functions and the parts most worth asserting directly.
     parseDeadline, daysUntilDeadline, applyDeadlineUrgency, groupMatters, sameMatter,
