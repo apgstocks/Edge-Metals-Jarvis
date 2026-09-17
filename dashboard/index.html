@@ -8752,7 +8752,24 @@ function paintBankOptions(sel) {
 // this list because she did not put it there. Kept in step with
 // helpers/payments.js's PAID_VIA_MODES, which is what the server enforces.
 const paidViaModes = ['Wire', 'Bank transfer'];
-
+// ── WHOSE MONEY, AND WHY THE KIND COMES OFF THE ROW ───────────────────────
+// Apsara, 2026-09-17: "on selecting wire-it should ask me Payment via Edge
+// Yard/Edge Metals", and on which modes, "Wire and Bank Transfer".
+//
+// openPayModal stamps data-kind on the row. Reading `payingLoad` directly
+// would work in the browser and be untestable outside it: payingLoad is a
+// top-level `let`, which is a script-scope binding and NOT a window property,
+// so a test that assigns w.payingLoad assigns a DIFFERENT variable and this
+// function never sees it. Ninth time this project has been caught by that.
+//
+// It is also the better design: the DOM says what the modal is for.
+//
+// ── AND THE BODY IS IDENTICAL IN BOTH CLIENTS ─────────────────────────────
+// tests/banks.js compares this function character for character across
+// dashboard/index.html and mobile-app/www/index.html, because two helpers that
+// are merely SIMILAR are two helpers that drift — and the way that fails is
+// one client offering what the other cannot save. So every word of
+// explanation lives out here, above the function, rather than inside it.
 function syncBankFields(prefix) {
   const mode = ($(prefix + '_mode') || {}).value || '';
   const row = $(prefix + '_bank_row');
@@ -8761,20 +8778,6 @@ function syncBankFields(prefix) {
   const needs = bankModes.some(m => m.toLowerCase() === String(mode).toLowerCase());
   if (row) row.style.display = needs ? '' : 'none';
   if (otherField) otherField.style.display = (needs && sel && sel.value === bankOther) ? '' : 'none';
-
-  // ── AND WHOSE MONEY ──────────────────────────────────────────────────
-  // Only on the yard pay modal (prefix 'pay'), only on a PURCHASE, only on
-  // her two modes. The trucker modal has its own prefix and is untouched.
-  // ── THE KIND COMES OFF THE ROW, NOT OUT OF A CLOSURE ─────────────────
-  // openPayModal stamps data-kind on this element. Reading `payingLoad`
-  // directly would work in the browser and be untestable outside it:
-  // payingLoad is a top-level `let`, which is a script-scope binding and NOT
-  // a window property, so a test that assigns w.payingLoad assigns a
-  // DIFFERENT variable and this function never sees it. Ninth time this
-  // project has been caught by that — writing it into the code this time
-  // rather than into another comment nobody reads.
-  //
-  // It is also the better design: the DOM says what the modal is for.
   const viaRow = $(prefix + '_via_row');
   if (viaRow) {
     const isPurchase = viaRow.dataset.kind !== 'sale';
@@ -8782,6 +8785,7 @@ function syncBankFields(prefix) {
       ? '' : 'none';
   }
 }
+
 
 // What to send. Null when the mode has no bank, so the server sees an absent
 // field rather than an empty string — it refuses a bank on Cash, and "" is
