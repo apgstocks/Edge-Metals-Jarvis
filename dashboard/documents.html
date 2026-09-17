@@ -3324,8 +3324,31 @@ async function loadSavedProformas() {
   try {
     const { proformas } = await api('/api/documents/saved');
     box.innerHTML = proformas.length
-      ? `<table><thead><tr><th>File</th><th></th></tr></thead><tbody>${proformas.map((f) => `<tr><td>${esc(f)}</td><td><a href="/api/documents/download?kind=proforma&file=${encodeURIComponent(f)}" target="_blank">Open</a></td></tr>`).join('')}</tbody></table>`
+      ? `<table><thead><tr><th>File</th><th></th><th></th></tr></thead><tbody>${proformas.map((f) => `<tr>
+            <td>${esc(f)}</td>
+            <td><a href="/api/documents/download?kind=proforma&file=${encodeURIComponent(f)}" target="_blank">Open</a></td>
+            <td><button type="button" class="btn btn-secondary pf-del" data-file="${esc(f)}" style="padding:3px 8px; font-size:10px;">Delete</button></td>
+          </tr>`).join('')}</tbody></table>`
       : '<div style="padding:16px; color:var(--text-faint); font-size:12px;">No saved proformas yet.</div>';
+    // ── DELETE ────────────────────────────────────────────────────────────
+    // Apsara, 2026-09-17: "add delete option in saved proforma/invoice/bol/
+    // packing list".
+    //
+    // The confirm NAMES THE FILE. "Are you sure?" on a list of near-identical
+    // filenames is a question she cannot actually answer, and this removes a
+    // document that may already be with a customer.
+    box.querySelectorAll('.pf-del').forEach((el) => el.addEventListener('click', async () => {
+      const f = el.dataset.file;
+      if (!confirm(`Delete ${f}?\n\nThe PDF is removed from the archive. This cannot be undone.`)) return;
+      el.disabled = true;
+      try {
+        await api('/api/documents/saved?kind=proforma&file=' + encodeURIComponent(f), { method: 'DELETE' });
+        loadSavedProformas();
+      } catch (e) {
+        el.disabled = false;
+        alert(e.message);
+      }
+    }));
   } catch (e) {
     box.innerHTML = `<div style="padding:16px; color:var(--status-danger); font-size:12px;">${esc(e.message)}</div>`;
   }

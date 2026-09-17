@@ -71,6 +71,11 @@ const ACTIONS = [
     // one went, and who removed it, outlives the record itself.
     'delete-bol',                 // a saved bill of lading form (the PDF is kept)
     'delete-packing-list',        // a container's packing list
+    // Apsara, 2026-09-17: "add delete option in saved proforma/invoice/bol/
+    // packing list". The ARCHIVED PDF — the file itself, which may already be
+    // in a broker's inbox. The only trace of a deleted commercial invoice is
+    // otherwise that it is not there any more.
+    'delete-saved-document',      // an archived proforma/invoice/BOL/packing PDF
 ];
 
 function listEntries() {

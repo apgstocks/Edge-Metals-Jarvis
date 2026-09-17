@@ -136,9 +136,26 @@ function resolveSavedPath({ kind, filename, date, container }) {
     return targetPath;
 }
 
+// ── DELETING A SAVED DOCUMENT ──────────────────────────────────────────────
+// Apsara, 2026-09-17: "add delete option in saved proforma/invoice/bol/packing
+// list", and, asked what it should remove: "The PDF and the record".
+//
+// Resolved through resolveSavedPath rather than by joining the filename onto a
+// directory here. That function already refuses anything that escapes the
+// archive root — a filename of "../../data/banks.json" resolves to null — and
+// a second path-building code path beside it is a second place to get that
+// wrong. This one returns the path it removed, or null when there was nothing
+// there, so the caller can tell "deleted" from "already gone" and say so.
+function deleteSaved({ kind, filename, date, container }) {
+    const target = resolveSavedPath({ kind, filename, date, container });
+    if (!target) return null;
+    fs.unlinkSync(target);
+    return target;
+}
+
 module.exports = {
     safeName, SAVED_KINDS,
     saveInvoiceCopy, saveProformaCopy, saveBolCopy,
     listSavedInvoices, listSavedProformas, listSavedBols,
-    resolveSavedPath,
+    resolveSavedPath, deleteSaved,
 };

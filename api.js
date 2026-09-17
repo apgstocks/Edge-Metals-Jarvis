@@ -6085,6 +6085,93 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
             });
         } catch (e) { res.status(500).json({ error: e.message }); }
     });
+    // ── DELETE A SAVED DOCUMENT ─────────────────────────────────────────
+    // Apsara, 2026-09-17: "add delete option in saved proforma/invoice/bol/
+    // packing list", and, asked what goes: "The PDF and the record".
+    //
+    // ── AUDITED BEFORE THE ACT, STAMPED AFTER ───────────────────────────
+    // Same shape as the BOL delete from 2026-09-16. Which document went, and
+    // who removed it, has to outlive the document — otherwise the only trace
+    // of a deleted commercial invoice is that it is not there any more.
+    //
+    // ── AND THE RECORD, WHERE ONE UNAMBIGUOUSLY BACKS THIS FILE ──────────
+    // A BOL's filename carries its number and a packing list's carries its
+    // container, so each maps to exactly one stored record and both go.
+    //
+    // An INVOICE is different, and deliberately left alone: its stored
+    // "record" is the per-CONTAINER version history that every invoice for
+    // that container shares — including the ones she is keeping. Deleting it
+    // because she removed one PDF would take data she did not ask about,
+    // which is the rule at the top of CLAUDE.md. A proforma has no record at
+    // all. Both cases are reported honestly in the response rather than
+    // quietly doing less than the button says.
+    app.delete('/api/documents/saved', requireAdmin, async (req, res) => {
+        try {
+            const kind = String(req.query.kind || '').trim();
+            const filename = String(req.query.file || '').trim();
+            if (!kind || !filename) return res.status(400).json({ error: 'kind and file are required' });
+
+            // ── RESOLVED FIRST, THEN LOGGED, THEN DELETED ────────────────
+            // The log entry is written BEFORE the file goes, but only once
+            // there is a file to go: a request naming something that is not
+            // there deleted nothing, and an audit trail that records
+            // no-ops is one nobody reads. Found by a test that pressed
+            // Delete twice and counted the entries.
+            const target = documentsSaved.resolveSavedPath({
+                kind, filename, date: req.query.date, container: req.query.container,
+            });
+            if (!target) return res.status(404).json({ error: 'no such saved document' });
+
+            const audit = require('./helpers/audit');
+            const entry = await audit.record({
+                action: 'delete-saved-document', subject: filename,
+                actor: actorOf(req), role: req.role, ip: req.ip,
+                detail: { kind, date: req.query.date || null, container: req.query.container || null },
+            });
+
+            const removed = documentsSaved.deleteSaved({
+                kind, filename, date: req.query.date, container: req.query.container,
+            });
+            if (!removed) {
+                // It existed a moment ago and does not now — something else
+                // removed it between the two calls. Say so rather than
+                // reporting a success.
+                await audit.complete(entry, 'failed', { reason: 'vanished between resolve and delete' });
+                return res.status(404).json({ error: 'no such saved document' });
+            }
+
+            // The record, where the filename identifies exactly one.
+            let record_removed = null;
+            try {
+                if (kind === 'bol') {
+                    const bols = require('./helpers/bols');
+                    // `<BOL_NO>_<who>.pdf` — safeName replaced every run of
+                    // non-alphanumerics, so the number is matched loosely
+                    // against the stored one rather than reconstructed.
+                    const stem = filename.replace(/\.pdf$/i, '');
+                    const hit = bols.listBols().find((b) => b && b.bol_no
+                        && stem.toLowerCase().startsWith(documentsSaved.safeName(b.bol_no).toLowerCase()));
+                    if (hit) { await bols.deleteBol(hit.id); record_removed = `bol ${hit.bol_no}`; }
+                } else if (/_packing\.pdf$/i.test(filename)) {
+                    const pl = require('./helpers/packingList');
+                    const container = String(req.query.container || '').trim();
+                    const hit = pl.list().find((r) => r && pl.keyOf(r.container_no) === pl.keyOf(container));
+                    if (hit) { await pl.remove(hit.id); record_removed = `packing list ${hit.container_no}`; }
+                }
+            } catch (e) {
+                // The file is gone; failing to also remove the record must not
+                // report the delete as failed, or she presses it again.
+                console.error('[documents] could not remove the stored record (non-fatal):', e.message);
+            }
+
+            await audit.complete(entry, 'done', { record_removed });
+            res.json({ ok: true, deleted: path.basename(removed), record_removed });
+        } catch (e) {
+            console.error('[documents] delete failed:', e);
+            res.status(500).json({ error: e.message });
+        }
+    });
+
     app.get('/api/documents/download', (req, res) => {
         const target = documentsSaved.resolveSavedPath({
             kind: req.query.kind, filename: req.query.file,
