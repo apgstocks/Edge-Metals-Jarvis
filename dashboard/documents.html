@@ -335,7 +335,18 @@ body[data-theme="light"] {
         <div style="display:flex; flex-direction:column; gap:12px; width:260px;">
           <div class="field" data-pkfield="date"><label for="pk_date">Date</label><input id="pk_date" type="date"></div>
           <div class="field" data-pkfield="invoice_no"><label for="pk_invoice">Invoice number</label><input id="pk_invoice" type="text"></div>
-          <div class="field" data-pkfield="customer"><label for="pk_customer">Customer</label><input id="pk_customer" type="text" autocomplete="off"></div>
+          <!-- Apsara, 2026-09-18: "customer address not fetching from address
+               book in packing list". This was a plain text box while the
+               proforma and the BOL both matched as she typed, so a name that
+               did not happen to match an address-book alias exactly produced a
+               document with no address on it and nothing on screen said why.
+               Picking from the list is what guarantees the server's lookup
+               finds the entry. -->
+          <div class="field" data-pkfield="customer" style="position:relative;">
+            <label for="pk_customer">Customer</label>
+            <input id="pk_customer" type="text" autocomplete="off" placeholder="Start typing — matches your address book">
+            <div id="pkCustomerList" class="autocomplete-list hidden"></div>
+          </div>
         </div>
         <div style="display:flex; flex-direction:column; gap:12px; width:260px;">
           <div class="field" data-pkfield="booking_no"><label for="pk_booking">Booking number</label><input id="pk_booking" type="text"></div>
@@ -1154,7 +1165,11 @@ function setSubtab(name) {
   // page (a separate page, in another tab) from being invisible here until
   // this one is reloaded. Deliberately not awaited: the panel should paint
   // immediately, and the typeahead is only needed once she starts typing.
-  if (name === 'proforma' || name === 'bol') refreshAddressBook();
+  // 'packing' joined this list on 2026-09-18. Its Customer field now matches
+  // the address book too, and without the refresh it matched against whatever
+  // the book held when this tab was opened — the exact staleness the comment
+  // above describes, on the one screen that was left out of the fix.
+  if (name === 'proforma' || name === 'bol' || name === 'packing') refreshAddressBook();
   if (name === 'proforma') { loadSavedProformas(); resetWizard(); }
   if (name === 'bol') { bolInit(); loadSavedBols(); }
   if (name === 'packing') { pkInit(); loadSavedPackingLists(); }
@@ -4943,6 +4958,45 @@ function pkInit() {
   // column with CSS would leave that string describing a table that is no
   // longer on the screen.
   $('pk_show_item').addEventListener('change', () => pkPaintItems());
+  // ── CUSTOMER MATCHES THE ADDRESS BOOK AS SHE TYPES ────────────────────
+  // Apsara, 2026-09-18: "customer address not fetching from address book in
+  // packing list". The server resolves the address from this name, so a name
+  // that matches an entry is the whole mechanism — picking from the list is
+  // what makes that certain.
+  //
+  // Only the NAME is filled, unlike the BOL and proforma, because this form
+  // has no address box: the address is looked up server-side at generate time
+  // from whatever name ends up here. A second copy on screen could disagree
+  // with the book by the time she generates.
+  //
+  // Every trap this pattern already hit is inherited by copying the BOL's
+  // version rather than writing a third one: mousedown with preventDefault
+  // (click loses a race with the blur-hide, which is what "consignee not
+  // clickable" was), and selection by data-idx into the rendered array,
+  // because 27 of her 98 real entries have no id and id-matching failed
+  // silently for a quarter of the book.
+  {
+    const inp = $('pk_customer'), box = $('pkCustomerList');
+    inp.addEventListener('input', () => {
+      const q = inp.value.trim().toLowerCase();
+      if (!q) { box.classList.add('hidden'); box.innerHTML = ''; return; }
+      const shown = searchAddressBook(q).slice(0, 8);
+      if (!shown.length) { box.classList.add('hidden'); box.innerHTML = ''; return; }
+      box.innerHTML = shown.map((m, i) => `<div class="autocomplete-item" data-idx="${i}">${esc(addressBookEntryLabel(m))}</div>`).join('');
+      box.classList.remove('hidden');
+      box.querySelectorAll('.autocomplete-item').forEach((el) => el.addEventListener('mousedown', (ev) => {
+        ev.preventDefault();
+        const entry = shown[Number(el.dataset.idx)];
+        if (!entry) return;
+        // consigneeNameForEntry, not aliases[0]: an entry saved as
+        // "Joey/Taewon" is searched by the person and printed as the company.
+        inp.value = consigneeNameForEntry(entry);
+        box.classList.add('hidden');
+      }));
+    });
+    inp.addEventListener('blur', () => setTimeout(() => box.classList.add('hidden'), 150));
+  }
+
   $('btnPkScan').addEventListener('click', () => pkScan());
   $('btnPkSave').addEventListener('click', () => pkSave());
   $('btnPkPreview').addEventListener('click', () => pkGenerate(true));

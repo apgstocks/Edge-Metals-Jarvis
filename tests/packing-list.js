@@ -558,6 +558,84 @@ section('C2 — generating the PDF, and checking it against the invoice');
        !/\{\{/.test(overridden || ''),
        'an unsubstituted {{buyer_name}} printed on a customer document');
 
+    // ── THE ADDRESS COMES FROM THE ADDRESS BOOK ──────────────────────────
+    // Apsara, 2026-09-18: "customer address not fetching from address book in
+    // packing list". The override shipped a day earlier printed the name and
+    // an empty address block — and its warning said so, which was describing
+    // the gap rather than closing it.
+    {
+        const { mutateJson } = require(path.join(ROOT, 'helpers/json'));
+        await mutateJson(cfg.ADDRESS_BOOK_FILE, [], () => ([
+            { id: 'ab1', aliases: ['Daekwang'], raw: 'DAEKWANG METAL CO LTD\n124 SANDAN-RO, GIMPO-SI\nGYEONGGI-DO, KOREA' },
+            // Her real shape: searched by a person's name, printed as the company.
+            { id: 'ab2', aliases: ['Joey', 'Taewon'], raw: 'TAEWON METAL\n55 HARBOUR WAY, BUSAN' },
+            { id: 'ab3', aliases: ['Metal One'], raw: 'METAL ONE A\n1 A ST' },
+            { id: 'ab4', aliases: ['Metal Two'], raw: 'METAL TWO B\n2 B ST' },
+        ]));
+
+        const buyerBox = async (customer) => {
+            let html = '';
+            await pl.generatePdf(
+                { container_no: 'ADDRU000001', customer, rows: [{ gross_weight_lbs: '6000', tare_lbs: '500' }] },
+                { allowWithoutInvoice: true,
+                  renderer: async (h) => { html = h; return { packing: Buffer.from('x') }; } });
+            const i = html.indexOf('BUYER');
+            return html.slice(i, i + 340).replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ');
+        };
+
+        const exact = await buyerBox('Daekwang');
+        ck('THE ADDRESS IS FETCHED FROM THE ADDRESS BOOK',
+           /124 SANDAN-RO/.test(exact) && /GYEONGGI-DO/.test(exact), exact);
+        ck('  and the company name off the entry is the buyer line',
+           /DAEKWANG METAL CO LTD/.test(exact), exact);
+
+        // She searches by the person, the document names the company.
+        const byAlias = await buyerBox('Taewon');
+        ck('  an alias match fetches it too', /55 HARBOUR WAY/.test(byAlias), byAlias);
+
+        // The box is never blank — but NOT because this lookup pads it. The
+        // name survives via headerSource.consignee, which invoicePdf falls
+        // back to when there are no address lines. Worth stating: a mutation
+        // emptying the lookup's fallback changed nothing, which is what
+        // showed the padding was redundant.
+        const unknown = await buyerBox('Some New Buyer');
+        ck('  a buyer not in the book still prints the name she typed',
+           /Some New Buyer/.test(unknown), unknown);
+        ck('    and that name comes from the consignee, not a padded address',
+           /consignee: str\(rec\.customer\)/.test(
+               fs.readFileSync(path.join(ROOT, 'helpers/packingList.js'), 'utf8')),
+           'the BUYER name now depends on the address lookup padding itself');
+
+        // ── AND IT NEVER GUESSES ─────────────────────────────────────────
+        // "Metal" matches two entries. Putting one company's address on
+        // another's shipping document is worse than printing no address, and
+        // the missing address is visible where a wrong one is not.
+        const ambiguous = await buyerBox('Metal');
+        ck('  an AMBIGUOUS name gets no address rather than the wrong one',
+           !/1 A ST/.test(ambiguous) && !/2 B ST/.test(ambiguous),
+           `picked one of two matching buyers: ${ambiguous}`);
+        ck('    but still prints what she typed', /Metal/.test(ambiguous), ambiguous);
+
+        // The warning has to describe the document that will actually print.
+        let addrErr = null;
+        try {
+            await pl.generatePdf({ container_no: 'ADDRU000002', customer: 'Daekwang', rows: [{ gross_weight_lbs: '1' }] },
+                                 { renderer: async () => ({ packing: Buffer.from('x') }) });
+        } catch (e) { addrErr = e; }
+        ck('  the warning says the address WILL be carried when it will be',
+           addrErr && /address book address/.test(addrErr.message), addrErr && addrErr.message);
+        ck('    and does not still promise "no address"',
+           addrErr && !/with no address/.test(addrErr.message), addrErr && addrErr.message);
+
+        let noAddrErr = null;
+        try {
+            await pl.generatePdf({ container_no: 'ADDRU000003', customer: 'Some New Buyer', rows: [{ gross_weight_lbs: '1' }] },
+                                 { renderer: async () => ({ packing: Buffer.from('x') }) });
+        } catch (e) { noAddrErr = e; }
+        ck('  and says they are NOT in the book when they are not',
+           noAddrErr && /not in the address book/.test(noAddrErr.message), noAddrErr && noAddrErr.message);
+    }
+
     // A container with no number is still a flat refusal — that one cannot be
     // overridden, because a packing list with no container cannot be filed or
     // found again afterwards.
@@ -1303,6 +1381,90 @@ section('H — "Generate it anyway?" on the screen');
     ck('  and the refusal is left on screen',
        /No invoice on file/i.test(d.getElementById('pkStatus').textContent || ''),
        d.getElementById('pkStatus').textContent);
+
+    dom.window.close();
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+section('I — the Customer field matches the address book');
+// ══════════════════════════════════════════════════════════════════════════
+{
+    // Apsara, 2026-09-18: "customer address not fetching from address book in
+    // packing list".
+    //
+    // The server looks the address up from whatever name lands in this field,
+    // so a name that matches an entry IS the mechanism. It was a plain text
+    // box while the proforma and the BOL both matched as she typed — a name
+    // that did not happen to match exactly produced a document with no
+    // address and nothing on screen said why.
+    const dom = new JSDOM(DOCS, { runScripts: 'dangerously', url: 'http://localhost/documents',
+        beforeParse(w) {
+            w.alert = () => {}; w.confirm = () => true;
+            w.URL.createObjectURL = () => 'blob:stub'; w.URL.revokeObjectURL = () => {};
+            w.__bookFetches = 0;
+            w.fetch = (url) => {
+                if (String(url).includes('/api/address-book')) {
+                    w.__bookFetches += 1;
+                    return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve([
+                        { id: 'ab1', aliases: ['Daekwang'], raw: 'DAEKWANG METAL CO LTD\n124 SANDAN-RO' },
+                        { id: 'ab2', aliases: ['Joey', 'Taewon'], raw: 'TAEWON METAL\n55 HARBOUR WAY' },
+                        // No id — 27 of her 98 real entries are like this, and
+                        // id-matching failed silently for every one of them.
+                        { aliases: ['Eccomelt'], raw: 'ECCOMELT 360 INC\n7 ROCHESTER RD' },
+                    ]) });
+                }
+                return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ ok: true, packing_lists: [], bols: [] }) });
+            };
+        } });
+    await new Promise((r) => setTimeout(r, 400));
+    const w = dom.window, d = w.document;
+
+    // Counted, not inspected. Asserting addressBook.length passed for the
+    // wrong reason: the book is loaded once at page load anyway, so removing
+    // 'packing' from the refresh list left the check green. The PROPERTY is
+    // that entering this tab fetches it AGAIN — that is what stops a contact
+    // added on the Address Book page from being invisible here.
+    const before = w.__bookFetches;
+    [...d.querySelectorAll('.subtab-btn')].find((b) => b.dataset.subtab === 'packing')
+        .dispatchEvent(new w.MouseEvent('click', { bubbles: true }));
+    await new Promise((r) => setTimeout(r, 250));
+
+    ck('opening the packing tab RE-FETCHES the address book',
+       w.__bookFetches > before,
+       `${before} -> ${w.__bookFetches}: a contact added in the Address Book page stays invisible here`);
+    ck('  and it is loaded', w.eval('addressBook.length') === 3);
+
+    const inp = d.getElementById('pk_customer');
+    const box = d.getElementById('pkCustomerList');
+    ck('the Customer field has a match list at all', !!box,
+       'it is still a plain text box — nothing tells her the name has to match');
+
+    inp.value = 'daek';
+    inp.dispatchEvent(new w.Event('input', { bubbles: true }));
+    ck('typing part of a name offers the match', !box.classList.contains('hidden')
+       && /DAEKWANG/i.test(box.textContent), box.textContent);
+
+    // mousedown, not click: the click loses a race with the blur-hide, which
+    // is what "consignee not clickable" turned out to be.
+    box.querySelector('.autocomplete-item').dispatchEvent(new w.MouseEvent('mousedown', { bubbles: true, cancelable: true }));
+    ck('  picking one fills the field', inp.value === 'Daekwang', inp.value);
+    ck('  and closes the list', box.classList.contains('hidden'));
+
+    // Searched by the person, printed as the company.
+    inp.value = 'joey';
+    inp.dispatchEvent(new w.Event('input', { bubbles: true }));
+    box.querySelector('.autocomplete-item').dispatchEvent(new w.MouseEvent('mousedown', { bubbles: true, cancelable: true }));
+    ck('  "Joey/Taewon" fills in the COMPANY, not the person', inp.value === 'Taewon', inp.value);
+
+    // The entry with no id at all.
+    inp.value = 'eccom';
+    inp.dispatchEvent(new w.Event('input', { bubbles: true }));
+    box.querySelector('.autocomplete-item').dispatchEvent(new w.MouseEvent('mousedown', { bubbles: true, cancelable: true }));
+    ck('  an entry with NO id is still selectable', inp.value === 'Eccomelt', inp.value);
+
+    // And it reaches the payload the route reads.
+    ck('  and the picked name is what gets sent',
+       w.eval('pkPayload().customer') === 'Eccomelt', w.eval('pkPayload().customer'));
 
     dom.window.close();
 }

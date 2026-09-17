@@ -517,6 +517,45 @@ function normaliseScan(parsed) {
 // printing a headerless page. A packing list with a blank exporter block looks
 // finished and is useless to a broker — the same reason extractInvoiceHeader
 // fails loudly instead of rendering an empty header.
+// ── HER CUSTOMER NAME -> THE ADDRESS ON FILE ────────────────────────────────
+// Apsara, 2026-09-18: "customer address not fetching from address book in
+// packing list".
+//
+// Returns the address-book entry's raw block as lines, or NOTHING when there
+// is no confident match.
+//
+// Empty is safe, and an earlier version of this comment claimed otherwise —
+// it said returning [] would blank the BUYER box. It does not: invoicePdf
+// reads `addr.length ? addr[0] : data.consignee`, and headerSource.consignee
+// already carries her typed name. A mutation returning [] left every check
+// green, which is how the claim was found to be false. (My error, not a
+// decision of Apsara's.)
+//
+// An AMBIGUOUS match resolves to nothing rather than picking one. Two buyers
+// whose names both contain what she typed is exactly the case where guessing
+// puts the wrong company's address on a shipping document — the name she typed
+// still prints, and the address is simply absent, which is visible.
+//
+// Wrapped, because a packing list must not fail to generate over a lookup: the
+// address book is a synced file and a bad read is not a reason to refuse her
+// document.
+function addressLinesFor(customer) {
+    const name = str(customer);
+    if (!name) return [];
+    try {
+        const { resolveAddress } = require('./addressBook');
+        const hit = resolveAddress(name);
+        if (hit && hit.entry && (hit.type === 'exact' || hit.type === 'partial')) {
+            const lines = String(hit.entry.raw || '')
+                .split('\n').map((l) => l.trim()).filter(Boolean);
+            if (lines.length) return lines;
+        }
+    } catch (e) {
+        console.error('[packingList] address book lookup failed, printing the typed name alone:', e.message);
+    }
+    return [];
+}
+
 async function generatePdf(record, { renderer, allowWithoutInvoice = false } = {}) {
     const rec = record || {};
     const container = str(rec.container_no);
@@ -553,11 +592,20 @@ async function generatePdf(record, { renderer, allowWithoutInvoice = false } = {
         // this sentence is what the override dialog shows her. "Make the
         // invoice first" is no longer the only option, so it no longer reads
         // like an instruction.
+        // The sentence has to match what will actually print, and since
+        // 2026-09-18 that depends on whether her customer is in the address
+        // book — so it is decided by the SAME lookup the document uses, not by
+        // a guess written here. It promised "no address" for a day while the
+        // document was about to carry one.
         const customer = str(rec.customer);
+        const lines = addressLinesFor(customer);
+        const hasAddress = lines.length > 1;
         const e = new Error(
             `No invoice on file for ${container}. `
             + (customer
-                ? `The packing list will show ${customer} as the buyer, from this form, with no address, invoice number or invoice date.`
+                ? (hasAddress
+                    ? `The packing list will show ${customer} and their address book address, but no invoice number or date.`
+                    : `The packing list will show ${customer} as the buyer, from this form — they are not in the address book, so it will carry no address, invoice number or date.`)
                 : 'The packing list will print with the BUYER box empty, and no invoice number or date.')
             + ' Generate it anyway?'
         );
@@ -636,6 +684,27 @@ async function generatePdf(record, { renderer, allowWithoutInvoice = false } = {
     // going to a buyer.
     const headerSource = invoice || {
         consignee: str(rec.customer),
+        // ── THE ADDRESS COMES FROM THE ADDRESS BOOK ─────────────────────────
+        // Apsara, 2026-09-18: "customer address not fetching from address book
+        // in packing list".
+        //
+        // The override shipped a day earlier printed the customer's NAME and
+        // an empty address block, and said so in its warning. That was me
+        // describing a gap rather than closing it: the address book is the one
+        // place this app already knows every buyer's address, the invoice path
+        // uses it, and a packing list with a bare company name in the BUYER
+        // box is not a document a broker can work from.
+        //
+        // invoicePdf reads consignee_address as LINES, takes line 0 as the
+        // buyer name and the rest as the address — the same shape the invoice
+        // screen builds from this same raw block, so the two documents print
+        // an identical BUYER box.
+        //
+        // Only reached when there is no invoice. With one present, the
+        // invoice's own consignee_address wins: she may have corrected an
+        // address on the invoice itself, and a book lookup that quietly
+        // overrode it would put two different addresses on one shipment.
+        consignee_address: addressLinesFor(rec.customer),
         inv_date: rec.date || null,
     };
     const data = {

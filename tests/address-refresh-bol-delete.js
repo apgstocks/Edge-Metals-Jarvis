@@ -188,8 +188,24 @@ section('C — the guard that caused it cannot come back');
     // Book is a SEPARATE page, so a contact added in another browser tab is
     // invisible here until this one is reloaded.
     ck('the website refreshes on sub-tab entry', /refreshAddressBook\(\)/.test(WEB_CODE));
-    ck('  from setSubtab, which is where she arrives',
-       /name === 'proforma' \|\| name === 'bol'\) refreshAddressBook\(\)/.test(WEB_CODE));
+    // ── THIS GREPPED FOR ONE EXACT EXPRESSION ─────────────────────────────
+    // It required the literal `name === 'proforma' || name === 'bol')
+    // refreshAddressBook()` and went red on 2026-09-18 when 'packing' joined
+    // that list — the Customer field there now matches the address book too,
+    // so it needs the same refresh. A check shaped like the code rather than
+    // the property (CLAUDE.md rule 2).
+    //
+    // The property: the refresh is triggered from the tab switch, and EVERY
+    // sub-tab whose fields match the address book is in the list. Missing one
+    // is the original bug — "i have to logout for the change to be seen" — on
+    // whichever screen was left out.
+    const refreshLine = (WEB_CODE.split('\n').find((l) => /refreshAddressBook\(\)/.test(l) && /name ===/.test(l)) || '');
+    ck('  from setSubtab, which is where she arrives', !!refreshLine,
+       'the refresh is no longer wired to the sub-tab switch at all');
+    for (const tab of ['proforma', 'bol', 'packing']) {
+        ck(`    covering the ${tab} sub-tab`, refreshLine.includes(`'${tab}'`),
+           `${tab} matches the address book but keeps a snapshot from page load: ${refreshLine.trim()}`);
+    }
 }
 
 // ══════════════════════════════════════════════════════════════════════════
