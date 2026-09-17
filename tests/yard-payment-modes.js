@@ -138,7 +138,10 @@ section('B — and the SERVER holds the rule, not just the dropdown');
         // one, correctly, and my first version of this check sent one anyway
         // and then read the refusal as the restriction still being in place.
         const extra = {
-            ...((mode === 'Zelle' || mode === 'Wire') ? { bank: 'Chase Bank' } : {}),
+            // Wire only: Zelle came off MODES_WITH_BANK on 2026-09-17
+            // ("should not have bank for zelle"), and a bank on one is now
+            // refused the same way a bank on cash always was.
+            ...(mode === 'Wire' ? { bank: 'Chase Bank' } : {}),
             // Wire and Bank transfer on a yard purchase also record WHOSE
             // money since 2026-09-17 — see tests/paid-via.js. This file is
             // about which MODES are allowed, so it answers that question and
@@ -218,7 +221,7 @@ section('C — Edge Metals keeps its full list');
     const t = pay.modesForKind('trucker');
     ck('trucker bills were not swept in', t.includes('Zelle'), t.join(','));
 
-    const em = await pay.addPayment({ load_id: 'BILL_1', load_kind: 'bill', mode: 'Zelle', amount: 50, paid_on: '2026-09-16', bank: 'Chase Bank' });
+    const em = await pay.addPayment({ load_id: 'BILL_1', load_kind: 'bill', mode: 'Zelle', amount: 50, paid_on: '2026-09-16' });
     ck('  and an Edge Metals Zelle still records', !!em && em.mode === 'Zelle');
 }
 

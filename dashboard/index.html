@@ -8691,7 +8691,11 @@ let bankOptions = ['BofA', 'Chase Bank'];
 // Only the fallback for the first paint; /api/banks replaces it with the
 // server's MODES_WITH_BANK. Kept in step anyway, or a Bank transfer chosen
 // before that response lands shows no bank field.
-let bankModes = ['Zelle', 'Wire', 'Bank transfer'];
+// The fallback until the server's list lands. Kept in step with
+// helpers/banks.js's MODES_WITH_BANK — Zelle came off it on 2026-09-17
+// ("should not have bank for zelle"), and a stale fallback here would
+// show the bank row for the first moment after the modal opens.
+let bankModes = ['Wire', 'Bank transfer'];
 let bankOther = 'Others';
 
 // ── AND SOMETHING HAS TO GO AND ASK ──────────────────────────────────────

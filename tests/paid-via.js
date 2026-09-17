@@ -122,7 +122,7 @@ section('B — and it asks NOWHERE ELSE');
     // screen. She said "pay of create invoice" — a yard purchase — and named
     // two modes.
     for (const [kind, mode, why] of [
-        ['purchase', 'Zelle',         'Zelle shares the bank picker and is still not on her list'],
+        ['purchase', 'Zelle',         'not on her list, and since 2026-09-17 it has no bank behind it either'],
         ['purchase', 'Cash',          'cash is not a transfer between accounts'],
         ['purchase', 'Cheque',        'nor is a cheque'],
         ['sale',     'Cash',          'cash from a yard sale goes into Edge Yard\'s petty cash box, so it is ALWAYS the yard\'s — asking would let her file a contradiction with her own ledger'],
@@ -158,8 +158,10 @@ section('B — and it asks NOWHERE ELSE');
                                      amount: 500, paid_on: '2026-09-17' });
     ck('  and a cash sale still records with nothing extra',
        !!s && s.mode === 'Cash', JSON.stringify(s && s.mode));
+    // No bank: Zelle came off MODES_WITH_BANK on 2026-09-17, so one carrying
+    // a bank is refused now.
     const z = await pay.addPayment({ load_id: 'V_ZELLE', load_kind: 'purchase', mode: 'Zelle',
-                                     amount: 200, paid_on: '2026-09-17', bank: 'BofA' });
+                                     amount: 200, paid_on: '2026-09-17' });
     ck('  and a purchase by Zelle still records', !!z && z.mode === 'Zelle', JSON.stringify(z && z.mode));
 }
 
@@ -252,7 +254,7 @@ section('D — the screen asks at the right moment');
 
     ck('purchase + Wire shows it', shown('purchase', 'Wire') === true);
     ck('purchase + Zelle does NOT', shown('purchase', 'Zelle') === false,
-       'Zelle has a bank but is not on her list');
+       'Zelle is not a transfer she tracks a company against');
     ck('purchase + Cash does NOT', shown('purchase', 'Cash') === false);
     // The other direction, since 2026-09-17: "For receive payment also,add
     // paid to Edge Yard,Edge Metals" — Bank transfer only.

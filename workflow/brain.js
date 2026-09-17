@@ -1487,6 +1487,30 @@ function policyDecide(ctx) {
             return { intent: 'show_mutes', resolvedBy: 'policy', data: {} };
         }
 
+        // ── PURCHASE ORDERS (2026-09-17) ────────────────────────────────
+        // Placed here, ABOVE the "ignore N" rule below, for the same reason
+        // the mute routes are: "close po 4302902" contains a number, and the
+        // digest-index rules downstream match bare numbers greedily. A PO
+        // number is 4-12 digits and a digest index is 1-2, so they cannot
+        // actually collide — but the ordering makes that a fact about the
+        // routes rather than a fact about the regexes, which is the version
+        // that survives someone widening one of them.
+        if ((m = ctx.text.trim().match(/^(?:close|done\s+with|finish(?:ed)?(?:\s+with)?|complete)\s+(?:the\s+)?(?:p\.?\s?o\.?|purchase\s+order)\s*(?:number|no\.?|#)?\s*[:#]?\s*(\d{4,12})\s*$/i))) {
+            return { intent: 'close_po', resolvedBy: 'policy', data: { po: m[1] } };
+        }
+        // The list. Same principle as show_mutes: a ledger she cannot ask for
+        // is one she has to wait for a digest to see.
+        if (/^(?:show\s+)?(?:my\s+)?(?:open\s+)?(?:p\.?\s?o\.?s?|purchase\s+orders?)\s*\??$/i.test(ctx.text.trim())
+            || /^(?:what|which)\s+(?:p\.?\s?o\.?s?|purchase\s+orders?)\s+(?:are\s+)?(?:open|live|outstanding|pending)\s*\??$/i.test(ctx.text.trim())) {
+            return { intent: 'show_pos', resolvedBy: 'policy', data: {} };
+        }
+        // One PO's history. Requires the 4-12 digit shape, so "po 1" is not a
+        // PO lookup — it is far more likely a digest index and must fall
+        // through to the rules that handle those.
+        if ((m = ctx.text.trim().match(/^(?:p\.?\s?o\.?|purchase\s+order)\s*(?:number|no\.?|#)?\s*[:#]?\s*(\d{4,12})\s*\??$/i))) {
+            return { intent: 'show_po', resolvedBy: 'policy', data: { po: m[1] } };
+        }
+
         // "ignore 3" / "ignore #3" / "dismiss 1 and 3" / "ignore 1,3" — the
         // question she asked directly: "if i say ignore 3, will it remove?"
         // At the time, no. This is that answer built. Same digest-index
@@ -2434,6 +2458,9 @@ async function route(decision, ctx, sendMessage) {
         case 'mute_matter':           return actions.muteMatter(chatId, { index: d.index || null, target: d.target || null });
         case 'unmute_matter':         return actions.unmuteMatter(chatId, d.target || null);
         case 'show_mutes':            return actions.showMutes(chatId);
+        case 'close_po':              return actions.closePurchaseOrder(chatId, d.po);
+        case 'show_po':               return actions.showPurchaseOrder(chatId, d.po);
+        case 'show_pos':              return actions.showPurchaseOrders(chatId);
         case 'ignore_digest_item':      return actions.ignoreDigestItem(chatId, d.indices, d.all === true);
         case 'reply_email':             return actions.draftReplyForConfirm(chatId, d.target_name, d.email_details, bkg, ctx.text, extractScheduleClause(ctx.text));
         case 'backfill_cutoffs':         return actions.backfillCutoffs(chatId);

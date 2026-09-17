@@ -73,18 +73,29 @@ function buildClient(tokenFile, label) {
     return google.gmail({ version: 'v1', auth: oAuth2Client });
 }
 
-// bose@edgemetals.com — used everywhere Jarvis READS existing mail:
+// THE PRIMARY READ MAILBOX — used everywhere Jarvis READS existing mail:
 // emailWatcher.js's booking poll, searchMail, and finding the original
 // message to reply to. Never used for sending.
+//
+// WHICH ACCOUNT THIS IS, IS A DEPLOY-TIME FACT, NOT A CODE FACT. This comment
+// said "bose@edgemetals.com" for weeks. On 2026-09-17 all three tokens on her
+// Mac resolved to apsara@edgemetals.com — so the mailbox the addressing layer
+// reasons about was not being read at all, and the CODE was fine while the
+// COMMENTS were the lie. Never assume the address; resolve it with
+// getMyEmailAddress(client), or use getGmailReadMailboxes() which does.
+//
+//   node -e "require('./helpers/gmail.js').getGmailReadMailboxes()
+//            .then(m => console.log(m.map(x => x.role + ' = ' + x.address)))"
 function getGmailRead() {
     if (readClient) return readClient;
     readClient = buildClient(cfg.GMAIL_READ_TOKEN_FILE, 'read');
     return readClient;
 }
 
-// apsara@edgemetals.com — used ONLY by sendEmail() below. Narrow-scoped to
-// gmail.send only, so this client can never read bose's inbox even if
-// something here goes wrong.
+// THE SENDING ACCOUNT — used ONLY by sendEmail() below. Narrow-scoped to
+// gmail.send only, so this client can never read any inbox even if something
+// here goes wrong. Which account it is signed into is a deploy-time choice;
+// see the note on getGmailRead above about not assuming.
 function getGmailWrite() {
     if (writeClient) return writeClient;
     writeClient = buildClient(cfg.GMAIL_WRITE_TOKEN_FILE, 'write');
@@ -107,6 +118,77 @@ function getGmailSenderRead() {
     if (!fs.existsSync(cfg.GMAIL_SENDER_READ_TOKEN_FILE)) return null;
     senderReadClient = buildClient(cfg.GMAIL_SENDER_READ_TOKEN_FILE, 'sender-read');
     return senderReadClient;
+}
+
+// ── EVERY MAILBOX WE READ (2026-09-17) ──────────────────────────────────────
+// Apsara: "No no..it should also read bose".
+//
+// The comments above have said "read = bose@" for weeks. On 2026-09-17 all
+// three tokens on her Mac resolved to apsara@edgemetals.com — so the mailbox
+// the whole addressing layer reasons about was not being read at all, and
+// nothing anywhere said so.
+//
+// Returns one entry per mailbox Jarvis can actually read, each carrying its
+// RESOLVED ADDRESS rather than an assumed one. That resolution is the point:
+// an assumed address is what produced this class of bug twice (see the
+// getMyEmailAddress WeakMap comment below for the first one, where three
+// mailboxes shared one cached address).
+//
+// Ordered, with the primary first, so behaviour with one mailbox is identical
+// to before this existed.
+let read2Client = null;
+function getGmailRead2() {
+    if (read2Client) return read2Client;
+    if (!cfg.GMAIL_READ2_TOKEN_FILE || !fs.existsSync(cfg.GMAIL_READ2_TOKEN_FILE)) return null;
+    read2Client = buildClient(cfg.GMAIL_READ2_TOKEN_FILE, 'read2');
+    return read2Client;
+}
+
+// CALLED THROUGH module.exports ON PURPOSE, not through the local function
+// declarations. Seven test files stub gmail.getGmailRead / getMyEmailAddress
+// on the module object and then re-require their subject — a stubbing seam
+// that has worked since these tests were written. Referencing the local
+// declarations here bypassed it, and the first version of this function did
+// exactly that: tests/simulate-user.js went from 57 passing to 52, every
+// failure reading "Gmail isn't authorized on this server", because this
+// function reached past the stub to the real token loader.
+//
+// That is a genuine compatibility fact about this module, not a concession to
+// testability: getGmailRead is the documented way to obtain the read client,
+// and a new function that quietly uses a private path to the same thing makes
+// the two disagree.
+async function getGmailReadMailboxes() {
+    const self = module.exports;
+    const out = [];
+    for (const [role, get] of [['read', () => self.getGmailRead()], ['read2', () => self.getGmailRead2()]]) {
+        let client = null;
+        try { client = await get(); } catch (e) {
+            console.warn(`[GMAIL] ${role} client unavailable:`, e.message);
+            continue;
+        }
+        if (!client) continue;
+        let address = null;
+        try { address = (await self.getMyEmailAddress(client) || '').toLowerCase() || null; }
+        catch (e) {
+            // A mailbox whose own address cannot be resolved must NOT be
+            // scanned. addressing() takes myAddress to decide whose problem
+            // an email is; a null there makes it fail open and reclassify the
+            // whole mailbox. Skipping one mailbox is a smaller failure than
+            // mislabelling every email in it.
+            console.warn(`[GMAIL] ${role} mailbox skipped — could not resolve its own address:`, e.message);
+            continue;
+        }
+        // The same account authorised twice (which is the state her Mac was
+        // in) must not be scanned twice: it would double every Gemini call
+        // and, without the RFC Message-ID dedupe downstream, double every
+        // digest line.
+        if (out.some((m) => m.address === address)) {
+            console.log(`[GMAIL] ${role} is the same account as ${out.find((m) => m.address === address).role} (${address}) — scanning it once`);
+            continue;
+        }
+        out.push({ role, client, address });
+    }
+    return out;
 }
 
 // ── Message helpers ───────────────────────────────────────────────────────────
@@ -729,7 +811,7 @@ async function getMyEmailAddress(gmail) {
 }
 
 module.exports = {
-    READ_SCOPES, WRITE_SCOPES, getOAuthClient, getGmailRead, getGmailWrite, getGmailSenderRead,
+    READ_SCOPES, WRITE_SCOPES, getOAuthClient, getGmailRead, getGmailWrite, getGmailSenderRead, getGmailRead2, getGmailReadMailboxes,
     parseEmailDate, getEmailContent, htmlToText, preferredReplyAddress, isAutoReply, looksLikeAuthFailure, reportGmailError, downloadAttachment, listMessages, getMessage,
     sendEmail, findLatestFrom, detectCcPattern, parseAddressList, getMyEmailAddress,
     tallyAddressesForTerm,

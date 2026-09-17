@@ -1,0 +1,129 @@
+importance is its own axis: notify on what matters, not on who asked
+
+Apsara: "Basically it should act like an ai assistant which watches the
+mail and notify if there is any improtant mail."
+
+MEASURED FIRST, over three days of her real inbox with live assess()
+calls: 60 emails, 11 shown, 44 dropped. 22 of the 44 carried real
+consequence:
+
+  "Andy is reminding you that the DG SI CUTOFF is September 17 morning
+   at 10 AM and to please provide..."                        -> dropped
+  "Rajkumar wants you to print and courier the attached OBL to Mrs.
+   Akansha in Gurugram"                                      -> dropped
+  "Bose asks if the payment has been wired and to wire the amount asap"
+                                                             -> dropped
+  "Kristal updates the ERD to 9/21, C/O to 9/25, ETD to 9/30"-> dropped
+  "Eccomelt sent a payment remittance ... $13,992.00"        -> dropped
+
+The cutoff was that same morning. Every one of the 22 had asked_for
+null -- the same field that lost the purchase orders last commit.
+
+THE ROOT CAUSE IS GENERAL, and neither a PO problem nor an email
+problem. Jarvis has never measured importance; it measures "does
+somebody want a reply from you". Five of the six gate conditions need a
+QUOTABLE REQUEST SENTENCE, and freight mail mostly does not ask. It
+states a fact with a consequence: a cutoff, a figure, a schedule
+change, an instruction.
+
+helpers/mailImportance.js scores that, IN CODE, from the sender's own
+sentences, and never from a.summary -- scoring the model's output with
+the model's output is the circularity that made `confidence` worthless
+(1.0 on 16 of 16 live emails). Every signal must produce a sentence the
+sender literally wrote; one that cannot is dropped. Same discipline as
+asked_for_quote, same reason (Chain-of-Verification, arXiv:2309.11495:
+do not re-ask "are you sure", ask for something checkable).
+
+  critical  a date we HELD has changed, something has broken, or a
+            cutoff is inside two days.   -> interrupts her
+  high      money, an instruction aimed at us, a cutoff further out, a
+            service about to be cut off. -> next digest
+  normal    a live reference, nothing sharp. Never promoted.
+  low       no grounded signal. Watched, recorded, quiet.
+
+"Notify me straight away" was her explicit choice for consequential
+mail that is not hers to answer, so `critical` alone breaks the hourly
+rhythm -- never on good news, never outside the alert window.
+
+"IGNORE ALL THE MAILS NOT RELATED TO EDGEMETALS", DONE SAFELY. I nearly
+built a sender-domain rule. MEASURED, her three days were zimexglt 8,
+mkmetaltrading 5, hynos 4, eagleinbrit 3, eccomelt 2, fmcmet 1,
+nicrometals 1 -- the business, almost none of it on her own domain. A
+domain filter would have deleted her customers and carriers to remove
+three Google billing notices.
+
+The content cannot settle it either, because these are the same text:
+
+  "Payment ID 4004930 has been issued for $13,992.00"   <- her customer
+  "Your invoice INV-4023 for $49.00 is due"             <- her software
+
+What separates them is that she has emailed one and never emailed the
+other. sentIndex, senderStats and email_contacts.json already say so,
+at no API cost. Admin mail is DEMOTED, never deleted.
+
+TWO OTHER BUGS FIXED ON THE WAY, both found by running this against
+real data rather than fixtures:
+
+  * parseDeadline's last resort was a bare `new Date(s)`, and V8 reads
+    "september 17" as the YEAR 2001. "September 17" came back -9131
+    days: her digest would have printed "OVERDUE by 9131d" and the
+    nudge would have fired 25 years late. Worse, "September 17 morning
+    at 10 AM" returned NOTHING, so the one cutoff landing that morning
+    could not be recognised as imminent. Month names now parse in both
+    word orders, with ordinals, with trailing prose, and only ISO
+    reaches the built-in parser.
+
+  * `tracked` was keyed on the MESSAGE id, so a second message on a
+    thread she had not answered created a SECOND open item. groupMatters
+    hides that inside one digest, but collectChaseUps and
+    collectDeadlineReminders iterate `tracked` directly with no thread
+    dedupe -- three messages from Tiffany on one appointment thread
+    became three things chasing her, each with its own age. That is the
+    RadMetals 709275/709276 duplicate she sent in. One thread is now one
+    open item; the newer message wins the slot; firstFlaggedAt and the
+    chase count carry over, because the age of a matter is how long SHE
+    has had it and resetting the count would mean MAX_CHASES is never
+    reached.
+
+THE REPORT EARNED ITS PLACE TWICE. scripts/importance-report.js scores a
+window of real mail and prints what WOULD have happened, and I ran it
+before letting any of this notify her:
+
+  1. First run: 37 of 153 critical -- five interruptions a day. Top hit
+     was a subject line reading "with erd 9/9", a week in the past,
+     which made every cutoff look overdue and therefore imminent. The
+     cutoff date now comes from the cutoff SENTENCE, the subject is
+     excluded, and a negative value no longer qualifies. 37 -> 17.
+  2. Second run listed "Payment for Sealed units $108596.40 paid" from
+     Edge Metals Bose under "would have gone quiet". knownCounterpartyTest
+     built its domain set from three ledgers that are EMPTY on a fresh
+     deployment, so nothing was known -- and the comment on the function
+     said "Her own company always counts. Internal mail is never admin."
+     while the code did no such thing. Her own domains are passed in now,
+     and the report refuses to print the quiet list at all when the
+     ledger is thin, rather than inviting a decision off a wrong number.
+
+TESTS: tests/mail-importance.js (28, every case a real email from the
+measured sample), plus AH/AI in emailwatch-signals.js and BF/BG in
+two-mailbox.js. Every mechanism reverse-verified -- restoring the old
+`new Date(s)` fallback fails AH1-AH6, removing the thread dedupe fails
+BF1-BF2, ignoring ownDomains fails AI2.
+
+Two of my own guards failed reverse-verification and were dealt with
+rather than left in: a P.O.-Box check that guarded nothing (deleted, in
+the last commit) and the `!has('instruction')` clause in the admin test,
+which was load-bearing but untested because every instruction case came
+from a known counterparty. That one got the test it was missing (CC6).
+
+All 117 suites run. The single failure is
+tests/yard-assistant-knowledge.js ("a Bank transfer on a yard sale needs
+Paid to"), from the other session's helpers/payments.js change -- nothing
+here touches it.
+
+STILL NOT ON: the admin rule is live in code but its effect depends on
+the counterparty ledger, which is empty on this laptop and real on the
+VM. Run scripts/importance-report.js ON THE VM before trusting the quiet
+list.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01PaVFkg7JrYeRfUPzvLCFtt

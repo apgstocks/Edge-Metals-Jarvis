@@ -417,6 +417,22 @@ const GMAIL_WRITE_TOKEN_FILE = process.env.GMAIL_WRITE_TOKEN_FILE || path.join(D
 // treats a missing file here as "not set up yet" and falls back to the
 // existing bose@-only search, so nothing breaks before this is deployed.
 const GMAIL_SENDER_READ_TOKEN_FILE = process.env.GMAIL_SENDER_READ_TOKEN_FILE || path.join(DATA_DIR, 'gmail-token-sender-read.json');
+// ── A SECOND MAILBOX TO READ (2026-09-17) ──────────────────────────────────
+// Apsara: "No no..it should also read bose".
+//
+// Every comment in helpers/gmail.js and workflow/replyWatch.js says the read
+// client is bose@edgemetals.com. MEASURED on 2026-09-17: all three tokens on
+// her Mac resolve to apsara@edgemetals.com. The bose mailbox the addressing
+// logic reasons about has not been readable for some time, and nothing said
+// so — getMyEmailAddress correctly returned whatever account was actually
+// authorised, so the code was consistent and the COMMENTS were the lie.
+//
+// This is a SECOND read mailbox, not a replacement: she wants both. Optional,
+// and absent until someone completes a browser consent signed in as Bose
+// (scripts/gmail-auth.js --role=read2). Every caller falls back to the single
+// mailbox when it is missing, so deploying this file changes nothing on its
+// own.
+const GMAIL_READ2_TOKEN_FILE = process.env.GMAIL_READ2_TOKEN_FILE || path.join(DATA_DIR, 'gmail-token-read2.json');
 const GDRIVE_FOLDER_ID        = process.env.GDRIVE_FOLDER_ID || '';        // Shared Drive root ID (0A...)
 const GDRIVE_UPLOAD_FOLDER_ID = process.env.GDRIVE_UPLOAD_FOLDER_ID || ''; // Folder inside the Shared Drive where PDFs land
 // Optional dedicated folder for yard scale-ticket photos — falls back to
@@ -675,7 +691,7 @@ module.exports = {
     GDRIVE_KEYFILE, GDRIVE_FOLDER_ID, GDRIVE_UPLOAD_FOLDER_ID, GDRIVE_SCALE_TICKETS_FOLDER_ID,
     ADDRESS_BOOK_DOC_ID, ADDRESS_BOOK_FILE,
     QUOTE_REQUESTS_FILE, CONTACT_QUOTE_REQUESTS_FILE, CONTACTS_FILE, QUOTE_REMINDER_SCHEDULE_MIN, EMAIL_THREADS_FILE,
-    GMAIL_CREDENTIALS_FILE, GMAIL_TOKEN_FILE, GMAIL_READ_TOKEN_FILE, GMAIL_WRITE_TOKEN_FILE, GMAIL_SENDER_READ_TOKEN_FILE, EMAIL_PROCESSED_FILE, REPLY_WATCH_FILE,
+    GMAIL_CREDENTIALS_FILE, GMAIL_TOKEN_FILE, GMAIL_READ_TOKEN_FILE, GMAIL_WRITE_TOKEN_FILE, GMAIL_SENDER_READ_TOKEN_FILE, GMAIL_READ2_TOKEN_FILE, EMAIL_PROCESSED_FILE, REPLY_WATCH_FILE,
     GMAIL_WATCH_ENABLED, GMAIL_POLL_DAYS_BACK,
     PRICE_SHEET_ID, PRICELIST_WEBHOOK_TOKEN,BOOKING_TRACKER_SHEET_ID,
     INVOICE_SHEET_ID, INVOICE_MAIN_GID, INVOICE_PACKING_GID,

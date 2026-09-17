@@ -56,11 +56,18 @@
 // relationship. Confirmed sending is a different thing entirely, and that is
 // what this supports.
 
-const { getGmailRead, getGmailSenderRead, parseAddressList, getEmailContent, listMessages, getMessage, getMyEmailAddress, parseEmailDate, isAutoReply, preferredReplyAddress, reportGmailError } = require('../helpers/gmail');
+const { getGmailRead, getGmailSenderRead, getGmailReadMailboxes, parseAddressList, getEmailContent, listMessages, getMessage, getMyEmailAddress, parseEmailDate, isAutoReply, preferredReplyAddress, reportGmailError } = require('../helpers/gmail');
 const { callGeminiJSON } = require('../helpers/gemini');
 const { appendAuditLog } = require('../helpers/auditlog');
 const { loadJson, saveJson, mutateJson } = require('../helpers/json');
 const { getLADate } = require('../helpers/time');
+// A purchase order is a LIVE MATTER, not an email — see the header of
+// helpers/poTracker.js for the 30-email measurement that forced this.
+const poTracker = require('../helpers/poTracker');
+// Importance is its own axis — see helpers/mailImportance.js for the 60-email
+// measurement that forced it ("notify if there is any improtant mail").
+const importance = require('../helpers/mailImportance');
+const MAX_PO_EVENTS = poTracker.MAX_EVENTS;
 
 // Routes a manager notification through helpers/managerOutbox.js so that a
 // WhatsApp outage queues it (and, when critical, falls back to email) instead
@@ -390,7 +397,7 @@ function withSnapshot(store) {
 
 function loadStore() {
     const raw = loadJson(cfg.REPLY_WATCH_FILE, {});
-    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return withSnapshot({ muted: { senders: {}, threads: {} }, seen: {}, lastDigest: [], undelivered: [], lastDigestAt: null, tracked: [], senderStats: {}, lastScanAt: null, sentIndex: {}, sentIndexUpdatedAt: null, failures: {} });
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return withSnapshot({ muted: { senders: {}, threads: {} }, seen: {}, lastDigest: [], undelivered: [], lastDigestAt: null, tracked: [], senderStats: {}, lastScanAt: null, sentIndex: {}, sentIndexUpdatedAt: null, failures: {}, pos: {} });
     if (raw.seen && typeof raw.seen === 'object') {
         return withSnapshot({
             seen: raw.seen,
@@ -406,6 +413,12 @@ function loadStore() {
             tracked: Array.isArray(raw.tracked) ? raw.tracked : [],
             // Per-sender reply history — see recordSenderEvent below.
             senderStats: (raw.senderStats && typeof raw.senderStats === 'object') ? raw.senderStats : {},
+            // {poNumber -> {po, firstSeenAt, lastMovedAt, threadIds, events,
+            // closedAt}} — see helpers/poTracker.js. A purchase order is a
+            // multi-week matter, not an email, and it is the one category the
+            // needs_reply/asked_for gates threw away wholesale (24 of 30 real
+            // PO emails, measured 2026-09-17).
+            pos: (raw.pos && typeof raw.pos === 'object' && !Array.isArray(raw.pos)) ? raw.pos : {},
             // HEARTBEAT. The last time a real (non-dryRun) scan finished. This
             // is what an external uptime monitor needs and what neither health
             // endpoint could answer: a process can be up, WhatsApp connected,
@@ -472,6 +485,38 @@ function mergeMap(snap, mine, disk, pick) {
         if (!(k in mine)) delete out[k];                                // removed here
     }
     return out;
+}
+
+// ── TWO SCANS, ONE PO ──────────────────────────────────────────────────────
+// mergeMap's default resolver takes one side whole. For a PO record that
+// loses the other scan's movement, which is the thing this feature exists to
+// keep. Union the events by messageId (the only stable identity a Gmail
+// message has), keep every thread id, and take the later lastMovedAt.
+//
+// A CLOSE WINS over a concurrent movement. She said the order was done; an
+// email that arrived in the same window must not silently reopen it — that
+// would make "close po X" look like it did nothing, which is how a control
+// stops being trusted.
+function mergePoRecord(mine, theirs) {
+    if (!mine) return theirs;
+    if (!theirs) return mine;
+    const byId = new Map();
+    const key = (e, i) => (e && e.messageId) || `${e && e.at}|${e && e.by}|${i}`;
+    for (const list of [theirs.events || [], mine.events || []]) {
+        list.forEach((e, i) => byId.set(key(e, i), e));
+    }
+    const events = [...byId.values()].sort((a, b) => new Date(a.at) - new Date(b.at));
+    const earlier = (x, y) => (!x ? y : !y ? x : (new Date(x) < new Date(y) ? x : y));
+    const later = (x, y) => (!x ? y : !y ? x : (new Date(x) > new Date(y) ? x : y));
+    return {
+        ...theirs, ...mine,
+        events: events.slice(-MAX_PO_EVENTS),
+        threadIds: [...new Set([...(theirs.threadIds || []), ...(mine.threadIds || [])])],
+        firstSeenAt: earlier(mine.firstSeenAt, theirs.firstSeenAt),
+        lastMovedAt: later(mine.lastMovedAt, theirs.lastMovedAt),
+        closedAt: mine.closedAt || theirs.closedAt || null,
+        closedBy: mine.closedBy || theirs.closedBy || null,
+    };
 }
 
 // Same, for arrays of objects identified by `idOf`.
@@ -559,6 +604,12 @@ async function saveStore(store) {
         // silently swallowed by it before. A failure counter that resets on
         // every write can never reach its cap.
         failures: store.failures || {},
+        // SIXTH TIME writing a line on this allowlist. lastScanAt, sentIndex,
+        // failures and muted were each silently swallowed by it, and aiDecide's
+        // data map ate `indices` the same way. A dropped PO record is a PO that
+        // reappears as brand new on the next scan, so "last moved 3d ago,
+        // 6 messages" would read "today, 1 message" forever.
+        pos: store.pos || {},
     };
 
     const snap = store.__snapshot || null;
@@ -595,6 +646,12 @@ async function saveStore(store) {
                 threads: mergeMap((snap.muted || {}).threads, (mine.muted || {}).threads, (disk.muted || {}).threads),
             },
             failures: mergeMap(snap.failures, mine.failures, disk.failures),
+            // Two scans can each append a movement to the SAME PO. Taking
+            // either side whole loses the other's event, so the resolver
+            // unions the event lists by messageId and keeps the later
+            // lastMovedAt. Same shape of problem as the chase counter that
+            // mergeList's iChangedIt check exists for.
+            pos: mergeMap(snap.pos, mine.pos, disk.pos, mergePoRecord),
         };
     });
 }
@@ -670,6 +727,13 @@ function recordSenderEvent(store, from, event) {
     // prerequisite for any model, and it also pays off immediately through
     // senderHistoryLine below, with no model at all.
     if (event === 'ignored') { s.ignored = (s.ignored || 0) + 1; s.lastIgnoredAt = new Date().toISOString(); }
+    // SOMEBODY AT EDGE METALS ANSWERED, BUT NOT HER (2026-09-17). Kept apart
+    // from `replied` on purpose: senderHistoryLine turns `replied` into "she
+    // reliably answers this sender", which is a claim about Apsara. Counting
+    // Bose's replies there would build her prior out of his behaviour — and
+    // reading bose@ as a second mailbox is exactly what would have started
+    // doing that at volume.
+    if (event === 'team_replied') { s.teamReplied = (s.teamReplied || 0) + 1; s.lastTeamRepliedAt = new Date().toISOString(); }
     store.senderStats[key] = s;
 }
 
@@ -680,21 +744,84 @@ function recordSenderEvent(store, from, event) {
 function senderHistoryLine(store, from) {
     const s = (store && store.senderStats) ? store.senderStats[senderKey(from)] : null;
     if (!s || !s.flagged) return '';
-    const { flagged = 0, replied = 0, ignored = 0 } = s;
+    const { flagged = 0, replied = 0, ignored = 0, teamReplied = 0 } = s;
+    // The team handling a sender is real information and it is NOT evidence
+    // about her. Said plainly, and only when it is the dominant pattern, so
+    // it cannot drown out the two stronger signals below.
+    const teamNote = (teamReplied >= 3 && teamReplied > replied)
+        ? ` Her team has answered ${teamReplied} of their emails and she has answered ${replied || 'none'} — this sender is usually handled by somebody else at Edge Metals, which is not the same as needing nothing.`
+        : '';
     // An explicit dismissal outranks an inferred non-reply: she SAID she did
     // not want this. Stated before inferred, so three dismissals speak even
     // when the reply ratio looks ambiguous.
     if (ignored >= 3) {
-        return `HISTORY WITH THIS SENDER: she has explicitly dismissed ${ignored} of their emails from her list${replied ? ` and replied to ${replied}` : ' and replied to none'}. She has told us this sender's mail is not work for her — weigh it heavily, but a genuinely urgent first real request can still break the pattern.`;
+        return `HISTORY WITH THIS SENDER: she has explicitly dismissed ${ignored} of their emails from her list${replied ? ` and replied to ${replied}` : ' and replied to none'}. She has told us this sender's mail is not work for her — weigh it heavily, but a genuinely urgent first real request can still break the pattern.${teamNote}`;
     }
     // Below this, the ratio is noise. Two data points do not make a pattern —
     // the same reason dailyLearning refuses to draft a rule from a one-off.
     if (flagged < 3) return '';
     if (replied === 0) {
-        return `HISTORY WITH THIS SENDER: ${flagged} of their emails have been flagged as needing her reply, and she has answered none of them. That is evidence this sender's mail does not actually need her — weigh it, but a genuinely urgent first real request can still break the pattern.`;
+        return `HISTORY WITH THIS SENDER: ${flagged} of their emails have been flagged as needing her reply, and she has answered none of them. That is evidence this sender's mail does not actually need her — weigh it, but a genuinely urgent first real request can still break the pattern.${teamNote}`;
     }
     const pct = Math.round((replied / flagged) * 100);
-    return `HISTORY WITH THIS SENDER: she has replied to ${replied} of ${flagged} flagged emails from them (${pct}%). ${pct >= 60 ? 'She reliably answers this sender — an active working relationship.' : 'She answers them only sometimes.'}`;
+    return `HISTORY WITH THIS SENDER: she has replied to ${replied} of ${flagged} flagged emails from them (${pct}%). ${pct >= 60 ? 'She reliably answers this sender — an active working relationship.' : 'She answers them only sometimes.'}${teamNote}`;
+}
+
+// ── IS THIS SENDER SOMEONE WE DEAL WITH? ───────────────────────────────────
+// The money discriminator for helpers/mailImportance.js. These two are the
+// same text and opposite answers:
+//
+//   "Payment ID 4004930 has been issued for $13,992.00"   <- her customer
+//   "Your invoice INV-4023 for $49.00 is due"             <- her software
+//
+// What separates them is that she has emailed one and never emailed the
+// other. Three records already say so, and none of them costs an API call:
+//
+//   sentIndex    built from her Sent folder by refreshSentIndex. The
+//                strongest signal there is — she wrote to them.
+//   senderStats  Jarvis's own ledger of mail she has answered or dismissed.
+//                `ignored` counts too: a sender she has explicitly dismissed
+//                is still a sender she deals with, and demoting their mail on
+//                importance as well would be punishing them twice.
+//   contacts     data/email_contacts.json, the hand-curated list.
+//
+// DOMAIN, not address: ap@eccomelt.com and purchasing@eccomelt.com are one
+// counterparty, and a per-address test would treat every new person at a
+// customer as a stranger.
+// ownDomains: the domains of the mailboxes being scanned. REQUIRED IN
+// PRACTICE, and leaving it out was a live defect the 7-day report caught
+// before this shipped: with an empty sentIndex (which is the state of any
+// fresh deployment, and of her laptop, because the real store lives on the
+// VM) NOTHING was known -- so "Payment for Sealed units $108596.40 paid"
+// from Edge Metals Bose was classed as admin and would have gone quiet.
+//
+// The comment below this line used to say "Her own company always counts.
+// Internal mail is never admin." while the code did no such thing. A comment
+// that promises behaviour the code does not have is worse than no comment:
+// it is what stops the next reader from checking.
+function knownCounterpartyTest(store, contacts, ownDomains = []) {
+    const domains = new Set();
+    // Her own company, always, whatever the ledgers say.
+    for (const d of ownDomains) {
+        const dom = String(d || '').toLowerCase().split('@').pop();
+        if (dom) domains.add(dom);
+    }
+    const add = (addr) => {
+        const d = String(addr || '').toLowerCase().split('@')[1];
+        if (d) domains.add(d);
+    };
+    for (const k of Object.keys((store && store.sentIndex) || {})) add(k);
+    for (const k of Object.keys((store && store.senderStats) || {})) add(k);
+    for (const c of Array.isArray(contacts) ? contacts : []) {
+        add(c && c.email);
+        for (const cc of (c && c.cc) || []) add(cc);
+        if (c && c.domain) domains.add(String(c.domain).toLowerCase());
+    }
+    return (from) => {
+        const d = senderKey(from).split('@')[1];
+        if (!d) return true;          // unparseable: fail towards noise
+        return domains.has(d);
+    };
 }
 
 // How long a numbered digest stays answerable. Her digests are hourly and
@@ -2021,8 +2148,51 @@ function parseDeadline(text, now = new Date(), anchor = null) {
     }
     // "next week" is a real limit but a vague one — a week out, not urgent.
     if (/\bnext week\b/.test(s)) return new Date(todayUTC().getTime() + 7 * DAY_MS);
-    const parsed = new Date(s);
-    if (!isNaN(parsed.getTime())) return parsed;
+
+    // ── MONTH NAMES (2026-09-17) ──────────────────────────────────────────
+    // Found while wiring the importance axis, and it was breaking the single
+    // most important email in her measured sample:
+    //
+    //   "the DG SI CUTOFF is September 17 morning at 10 AM"   -> null
+    //   "September 17"                                        -> 2001-09-17
+    //
+    // The first returned NOTHING, so the cutoff could not be recognised as
+    // imminent — on the one email where the cutoff was that same morning.
+    // The second is worse and was live: the old fallback was a bare
+    // `new Date(s)`, and V8 parses "september 17" as the YEAR 2001. Her
+    // digest would have printed "OVERDUE by 9131d" and the deadline nudge
+    // would have fired as 25 years late.
+    //
+    // Both word orders, optional ordinal, optional year, and trailing prose
+    // is allowed — "September 17 morning at 10 AM" is how people actually
+    // write a cutoff.
+    const MONTHS = { jan: 0, feb: 1, mar: 2, apr: 3, may: 4, jun: 5, jul: 6, aug: 7, sep: 8, oct: 9, nov: 10, dec: 11 };
+    const MONTH_WORD = '(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\\.?';
+    let named = new RegExp('\\b' + MONTH_WORD + '\\s+(\\d{1,2})(?:st|nd|rd|th)?\\b(?:[,\\s]+(\\d{4}))?').exec(s);
+    if (!named) {
+        const r = new RegExp('\\b(\\d{1,2})(?:st|nd|rd|th)?\\s+(?:of\\s+)?' + MONTH_WORD + '\\b(?:[,\\s]+(\\d{4}))?').exec(s);
+        if (r) named = [r[0], r[2], r[1], r[3]];   // normalised to [_, month, day, year]
+    }
+    if (named) {
+        const mo = MONTHS[String(named[1]).slice(0, 3)];
+        const d = +named[2];
+        if (mo !== undefined && d >= 1 && d <= 31) {
+            const y = named[3] ? +named[3] : new Date(laMidnightUTC(now)).getUTCFullYear();
+            const dt = new Date(Date.UTC(y, mo, d));
+            // Same rule the numeric branch uses: no year stated and long past
+            // means they meant next year. A cutoff is never 25 years old.
+            if (!named[3] && dt.getTime() < laMidnightUTC(now) - 180 * DAY_MS) dt.setUTCFullYear(y + 1);
+            return dt;
+        }
+    }
+
+    // ONLY an unambiguous ISO date reaches the built-in parser now. Handing
+    // it arbitrary prose is what produced the year 2001 above — V8's fallback
+    // parsing is implementation-defined, and it guesses.
+    if (/^\d{4}-\d{2}-\d{2}\b/.test(s)) {
+        const parsed = new Date(s);
+        if (!isNaN(parsed.getTime())) return parsed;
+    }
     return null;
 }
 // Whole days from today until the deadline. Negative = already overdue.
@@ -2785,7 +2955,24 @@ function buildDigest(matters, emailCount) {
         || f.unevidenced_request === true
     );
     const unsure = matters.filter((f) => !owed.includes(f) && !elsewhere.includes(f) && !colleague.includes(f) && !orders.includes(f) && unsureItem(f));
-    const replies = matters.filter((f) => !owed.includes(f) && !elsewhere.includes(f) && !colleague.includes(f) && !orders.includes(f) && !unsure.includes(f));
+    // ── WORTH KNOWING (2026-09-17) ────────────────────────────────────
+    // Apsara: "notify if there is any improtant mail."
+    //
+    // An item promoted by IMPORTANCE alone needs a bucket, or it falls into
+    // `replies` below — whose only membership test is "none of the other
+    // buckets wanted it" — and gets counted in "N emails waiting on you".
+    // A remittance advice is not waiting on her, and a headline that says it
+    // is, is the kind of wrong number that makes her stop trusting the count.
+    //
+    // DELIBERATELY LAST AND NARROW: it takes only items NO existing bucket
+    // would have taken. An important email that already qualified as owed or
+    // as her team's stays exactly where it was. The job of this feature is
+    // the 22 that were invisible, not a re-sort of the ones that were not.
+    const worthKnowing = matters.filter((f) => !f.needs_reply
+        && (f.importance === 'critical' || f.importance === 'high')
+        && !owed.includes(f) && !elsewhere.includes(f) && !colleague.includes(f)
+        && !orders.includes(f) && !unsure.includes(f));
+    const replies = matters.filter((f) => !owed.includes(f) && !elsewhere.includes(f) && !colleague.includes(f) && !orders.includes(f) && !unsure.includes(f) && !worthKnowing.includes(f));
     const orderPhrase = `${orders.length} order${orders.length === 1 ? '' : 's'} came in`;
     const replyPhrase = `${replies.length} email${replies.length === 1 ? '' : 's'} waiting on you`;
     const owedPhrase = `you're waiting on ${owed.length}`;
@@ -2798,6 +2985,8 @@ function buildDigest(matters, emailCount) {
     if (owed.length) phrases.push(owedPhrase);
     if (elsewhere.length) phrases.push(elsewherePhrase);
     if (colleague.length) phrases.push(`${colleague.length} your team is handling`);
+    // Named for what it is. Not "waiting on you", because it is not.
+    if (worthKnowing.length) phrases.push(`${worthKnowing.length} worth knowing`);
     // Deliberately last, and deliberately hedged. It is a list of maybes and
     // should read like one.
     if (unsure.length) phrases.push(`${unsure.length} I'm not sure about`);
@@ -2859,6 +3048,15 @@ function buildDigest(matters, emailCount) {
         // Two facts side by side, never one asserted over the other. The
         // vendor says overdue; our own mailbox says paid. Both are true
         // statements about who said what, and the useful reply is the proof.
+        // ── WHY THIS IS IN FRONT OF HER ───────────────────────────────
+        // Shown for items importance put here, and for anything critical. The
+        // quote is the SENDER'S OWN SENTENCE — an importance judgement she
+        // cannot audit is one she has to either accept whole or switch off,
+        // and every filter in this file that acted silently has ended up
+        // hiding something real.
+        if (f.importance_because && (f.importance === 'critical' || worthKnowing.includes(f))) {
+            lines.push(`   ⚠ ${f.importance_because}`);
+        }
         if (f.paidEvidence) {
             lines.push(`   ⚠ our mail of ${f.paidEvidence.at} says invoice ${f.paidEvidence.invoiceNo} was PAID`
                 + ` (${f.paidEvidence.from}: "${f.paidEvidence.subject}") — check before paying again.`);
@@ -3122,6 +3320,20 @@ async function run({ sendToManager, sendMessage: _sendMessage = null, dryRun = f
     }
     const store = loadStore();
     const seen = store.seen;
+    // Built ONCE per run, not per email: the predicate walks every key in
+    // sentIndex and senderStats, and doing that 25 times a scan would be
+    // pure waste. See knownCounterpartyTest.
+    // Built AFTER the mailbox list, because it needs her own domains -- see
+    // knownCounterpartyTest. Declared with `let` and filled below.
+    let isKnownCounterparty = null;
+    // What Jarvis ALREADY HOLDS for each booking. This is the only thing that
+    // can turn "the ERD is 9/21" into "the ERD MOVED" — see
+    // changedBookingDate. Loaded defensively: a missing or unreadable
+    // bookings file must cost the change signal, never the scan.
+    let bookingsHeld = null;
+    try { bookingsHeld = loadJson(cfg.BOOKINGS_FILE, null); } catch (e) {
+        console.warn('[REPLYWATCH] bookings unreadable, schedule-change detection is off this run:', e.message);
+    }
 
     const after = new Date(Date.now() - LOOKBACK_DAYS * 86400000);
     if (rescan) {
@@ -3138,15 +3350,53 @@ async function run({ sendToManager, sendMessage: _sendMessage = null, dryRun = f
     // promotional and social noise before it costs anything.
     const query = `after:${afterStr} in:inbox -from:me -category:promotions -category:social`;
 
-    let messages = [];
-    try {
-        messages = await listMessages(gmail, query, MAX_EMAILS_PER_RUN * 2);
-    } catch (err) {
-        console.error('[REPLYWATCH] Gmail list failed:', err.message);
-        // A revoked token throws here on every scan. Without this the whole
-        // email side goes quiet and looks like an empty inbox.
-        reportGmailError(err, 'inbox scan');
-        return { checked: 0, flagged: 0, error: err.message };
+    // ── EVERY MAILBOX, NOT JUST ONE (2026-09-17) ───────────────────────────
+    // Apsara: "No no..it should also read bose". See getGmailReadMailboxes.
+    //
+    // One query per mailbox, and each ref carries the client and the address
+    // it came from. Those two travel together deliberately: the previous bug
+    // in this area (see getMyEmailAddress's WeakMap comment) was a client
+    // from one mailbox being used with an address from another, which
+    // silently anchored "is this from me" and "did she reply" to the wrong
+    // human for every email in the inbox.
+    // FALLS BACK TO THE SINGLE MAILBOX when the helper is absent. Not
+    // defensive padding: tests/integration.js replaces the whole gmail module
+    // with an object that has getGmailRead and nothing else, and that has been
+    // a valid way to stub this file since it was written. Reaching for a
+    // function that may not be there turned that suite from 324 passing into a
+    // harness crash. `gmail` and `me` above are already exactly this entry.
+    const mailboxes = typeof getGmailReadMailboxes === 'function'
+        ? await getGmailReadMailboxes()
+        : (gmail ? [{ role: 'read', client: gmail, address: me }] : []);
+    if (!mailboxes.length) {
+        console.warn('[REPLYWATCH] no readable mailbox — skipping');
+        return { checked: 0, flagged: 0, skipped: 'no-gmail' };
+    }
+    isKnownCounterparty = knownCounterpartyTest(
+        store, loadJson(cfg.EMAIL_CONTACTS_FILE, []),
+        mailboxes.map((m) => m.address).concat(managerAddress ? [managerAddress] : []));
+
+    const scanQueue = [];
+    for (const mb of mailboxes) {
+        let refs = [];
+        try {
+            refs = await listMessages(mb.client, query, MAX_EMAILS_PER_RUN * 2);
+        } catch (err) {
+            console.error(`[REPLYWATCH] Gmail list failed for ${mb.address}:`, err.message);
+            // A revoked token throws here on every scan. Reported, and the
+            // OTHER mailbox still gets scanned — one dead token must not take
+            // the whole email side quiet, which is what a bare return did.
+            reportGmailError(err, `inbox scan (${mb.address})`);
+            continue;
+        }
+        console.log(`[REPLYWATCH] ${refs.length} candidate(s) in ${mb.address}`);
+        for (const ref of refs) scanQueue.push({ ref, gmail: mb.client, me: mb.address, role: mb.role });
+    }
+    if (!scanQueue.length && mailboxes.length) {
+        // Every mailbox threw. That is the revoked-token case and it must not
+        // look like an empty inbox.
+        const listedNothing = mailboxes.length;
+        console.warn(`[REPLYWATCH] ${listedNothing} mailbox(es) returned no listable mail`);
     }
 
     const flagged = [];
@@ -3156,7 +3406,17 @@ async function run({ sendToManager, sendMessage: _sendMessage = null, dryRun = f
     const deadLettered = [];
     let checked = 0;
 
-    for (const ref of messages) {
+    // THE BODY BELOW IS UNCHANGED BY THE MULTI-MAILBOX WORK, and that is the
+    // point of shadowing rather than threading a parameter through it: `gmail`
+    // and `me` inside this block are now this message's OWN mailbox and its
+    // OWN resolved address. Every existing use — addressing(), the thread
+    // ledger's "HER" marker, findPaymentEvidence — is correct per mailbox
+    // without being rewritten, and there is no path where one mailbox's
+    // client meets another's address.
+    for (const entry of scanQueue) {
+        const ref = entry.ref;
+        const gmail = entry.gmail;     // shadows the outer client, deliberately
+        const me = entry.me;           // shadows the outer address, deliberately
         if (checked >= MAX_EMAILS_PER_RUN) break;
         if (seen[ref.id]) continue;
 
@@ -3167,6 +3427,30 @@ async function run({ sendToManager, sendMessage: _sendMessage = null, dryRun = f
         const hs = (msg && msg.payload && msg.payload.headers) || [];
         const from = header(msg, 'From');
         const subject = header(msg, 'Subject') || '(no subject)';
+
+        // ── THE SAME EMAIL IN TWO MAILBOXES (2026-09-17) ────────────────────
+        // A Gmail message id is per-mailbox. One email sent to both bose@ and
+        // apsara@ has TWO ids, so `seen` — which is keyed on that id — cannot
+        // tell they are the same mail. Without this the second mailbox pays a
+        // second Gemini call and she reads the same item twice in one digest,
+        // under two different numbers.
+        //
+        // The RFC 5322 Message-ID is the identity that survives the mailbox:
+        // it is assigned once by the sending system. Stored in the SAME `seen`
+        // map under a namespaced key rather than in a new store field — a new
+        // field is a seventh chance for the allowlist to eat something (see
+        // saveStore), and this way trimSeen already prunes it.
+        //
+        // Absent or malformed Message-ID falls back to the old per-mailbox
+        // behaviour: a duplicate shown twice is a far smaller failure than an
+        // email suppressed because two unrelated mails were judged identical.
+        const rfcId = String(header(msg, 'Message-ID') || header(msg, 'Message-Id') || '').trim();
+        const midKey = rfcId ? `mid:${rfcId.slice(0, 200)}` : null;
+        if (midKey && seen[midKey]) {
+            console.log(`[REPLYWATCH] already handled in another mailbox: "${String(subject).slice(0, 50)}"`);
+            seen[ref.id] = new Date().toISOString();
+            continue;
+        }
 
         // Her own mail, however it got into the inbox.
         if (me && from.toLowerCase().includes(me)) { seen[ref.id] = new Date().toISOString(); continue; }
@@ -3244,12 +3528,37 @@ async function run({ sendToManager, sendMessage: _sendMessage = null, dryRun = f
                 if (tmsgs.length > 1) {
                     const lastFrom = (tmsgs[tmsgs.length - 1]?.payload?.headers || [])
                         .find((h) => (h.name || '').toLowerCase() === 'from')?.value || '';
-                    if (me && lastFrom.toLowerCase().includes(me)) {
-                        // She has answered this thread. Previously this signal
-                        // was used once (skip the email) and discarded; record
-                        // it so the sender's history means something.
-                        recordSenderEvent(store, from, 'replied');
+                    // ── WHO ANSWERED: HER, OR THE TEAM? (2026-09-17) ────────
+                    // This test used to be `lastFrom.includes(me)`, where `me`
+                    // is the MAILBOX owner. That was already only accidentally
+                    // right, and reading a second mailbox makes it wrong:
+                    // in bose@'s inbox, `me` is BOSE, so Bose answering a
+                    // customer was recorded as SHE REPLIED.
+                    //
+                    // That is not a cosmetic mislabel. senderHistoryLine feeds
+                    // the prompt "she reliably answers this sender — an active
+                    // working relationship", and every reply Bose sent was
+                    // inflating that claim about HER. The prior would have
+                    // been built out of somebody else's behaviour.
+                    //
+                    // Both cases still SKIP: the thread genuinely is not
+                    // waiting on Edge Metals either way, and nagging about mail
+                    // the team has answered is how a digest earns itself
+                    // ignored. What differs is what gets written down.
+                    const lastAddr = senderKey(lastFrom);
+                    const mgr = String(managerAddress || '').toLowerCase();
+                    const domain = companyDomain(me);
+                    const sheAnswered = (mgr && lastAddr === mgr) || (!mgr && me && lastAddr === String(me).toLowerCase());
+                    const teamAnswered = !sheAnswered && !!domain && lastAddr.endsWith('@' + domain);
+                    if (sheAnswered || teamAnswered) {
+                        // 'replied' is a claim about APSARA and nothing else.
+                        // 'team_replied' is recorded separately so the history
+                        // line can say "your team handles this sender" without
+                        // pretending she does.
+                        recordSenderEvent(store, from, sheAnswered ? 'replied' : 'team_replied');
+                        console.log(`[REPLYWATCH] "${String(subject).slice(0, 44)}" — ${sheAnswered ? 'she' : `the team (${lastAddr})`} already answered this thread`);
                         seen[ref.id] = new Date().toISOString();
+                        if (midKey) seen[midKey] = new Date().toISOString();
                         continue;
                     }
                 }
@@ -3324,6 +3633,46 @@ async function run({ sendToManager, sendMessage: _sendMessage = null, dryRun = f
         if (store.failures && store.failures[ref.id]) delete store.failures[ref.id];
 
         seen[ref.id] = new Date().toISOString();
+        // Claimed for every mailbox, not just this one — see the Message-ID
+        // comment above.
+        if (midKey) seen[midKey] = new Date().toISOString();
+
+        // ── A PO MOVED (2026-09-17) ─────────────────────────────────────────
+        // Apsara: "Why all my PO gets ignored in email?"
+        //
+        // This runs BEFORE the inclusion gate below and is deliberately not
+        // subject to it. The gate is what lost these emails: measured on her
+        // real inbox, 24 of 30 PO emails failed every one of its five
+        // conditions, because a PO thread asks no question and names no
+        // asked_for. See helpers/poTracker.js.
+        //
+        // Recorded for INTERNAL senders too, marked `ours`. "Bose confirms the
+        // Tuesday 9/8 appointment" is movement on the order even though it is
+        // our own mail and rightly earns no digest slot of its own — and a
+        // history that shows only the counterparty's half reads as though we
+        // never answered.
+        try {
+            const poRefs = poTracker.poReferencesIn(subject, visible);
+            for (const po of poRefs) {
+                poTracker.recordPoMovement(store, {
+                    po, threadId: msg.threadId, messageId: ref.id,
+                    from, fromName: senderLabel(from),
+                    ours: !!(me && companyDomain(me)
+                        && senderKey(from).endsWith('@' + companyDomain(me))),
+                    summary: a.summary || subject,
+                    waiting_on: a.waiting_on,
+                    // parseEmailDate returns an ISO STRING, not a Date — and
+                    // the raw header when it cannot parse. Handed straight to
+                    // recordPoMovement, which validates it (see usableDate).
+                    at: parseEmailDate(header(msg, 'Date')),
+                });
+                console.log(`[REPLYWATCH] PO ${po} moved — ${senderLabel(from)}: "${String(a.summary || subject).slice(0, 60)}"`);
+            }
+        } catch (e) {
+            // Never break a scan over the PO ledger. A missed movement costs
+            // one line in one digest; a thrown error costs the whole inbox.
+            console.warn('[REPLYWATCH] PO tracking failed for', ref.id, '-', e.message);
+        }
 
         // AN ORDER COUNTS EVEN WHEN NO REPLY IS WANTED. Found by Apsara's own
         // test, 2026-08-24: she emailed a real order confirmation — "Daekwang
@@ -3367,10 +3716,61 @@ async function run({ sendToManager, sendMessage: _sendMessage = null, dryRun = f
         // drops out instead of padding the list she is trying to get through.
         const bystander = isBystanderItem(a);
         const colleagueItem = isColleagueItem(a);
+
+        // ── IMPORTANCE (2026-09-17) ─────────────────────────────────────────
+        // Apsara: "it should act like an ai assistant which watches the mail
+        // and notify if there is any improtant mail."
+        //
+        // MEASURED over three days of her real inbox with live assess()
+        // calls: 60 emails, 11 shown, 44 dropped, and 22 of the dropped
+        // carrying real consequence — a DG SI cutoff landing that same
+        // morning, an instruction to courier an OBL, a $13,992 remittance,
+        // an ERD moving. Every one of the 22 had asked_for null, which is the
+        // same field that lost the purchase orders.
+        //
+        // The five gates above ALL require a quotable request sentence
+        // (is_order excepted). Freight mail mostly does not ask — it states a
+        // fact with a consequence. So importance is computed independently,
+        // from the sender's own sentences, in code, and NEVER from a.summary:
+        // scoring the model's output with the model's output is the
+        // circularity that made `confidence` worthless.
+        const imp = importance.importanceOf({
+            subject, body: visible, thread: threadLedger,
+            // daysUntilDeadline takes a DATE. parseEmailDate returns an ISO
+            // STRING (and the raw header when it cannot parse) — the exact
+            // trap that made the first PO wiring throw on every email behind
+            // a try/catch. Wrapped, and falling back to now rather than to
+            // an Invalid Date, which would silently make every deadline
+            // read as "not imminent" and quietly disarm the cutoff alert.
+            deadlineDays: daysUntilDeadline(a.deadline, (() => {
+                const d = new Date(parseEmailDate(header(msg, 'Date')));
+                return isNaN(d.getTime()) ? new Date() : d;
+            })()),
+            bookings: bookingsHeld, from, isKnownCounterparty,
+            // Injected, not required: the parser lives in this file and a
+            // require the other way would be circular. Without it,
+            // importanceOf cannot date a cutoff and correctly refuses to
+            // call anything imminent.
+            parseDate: parseDeadline,
+            receivedAt: (() => {
+                const d = new Date(parseEmailDate(header(msg, 'Date')));
+                return isNaN(d.getTime()) ? new Date() : d;
+            })(),
+        });
+        if (imp.level === 'critical' || imp.level === 'high') {
+            console.log(`[REPLYWATCH] ${imp.level.toUpperCase()} — ${imp.because}`);
+        }
         if (a.waiting_on === 'someone_else') {
             console.log(`[REPLYWATCH] not listing "${String(a.summary || '').slice(0, 60)}" — nobody at Edge Metals is on the To line`);
         }
-        if ((a.needs_reply && a.confidence >= MIN_CONFIDENCE) || a.is_order || owedItem || bystander || colleagueItem) {
+        // `imp.level` joins the gate as a SIXTH condition. This is the one
+        // line that makes the 22 visible, and it is deliberately gated on
+        // `critical`/`high` rather than anything with a signal: `normal`
+        // means a booking reference and nothing sharp, which is most of her
+        // inbox and would be the flood she switches off.
+        const importantEnough = imp.level === 'critical' || imp.level === 'high';
+        if ((a.needs_reply && a.confidence >= MIN_CONFIDENCE) || a.is_order || owedItem || bystander || colleagueItem
+            || importantEnough) {
             recordSenderEvent(store, from, 'flagged');
             // ── ALREADY PAID? (2026-09-02) ──────────────────────────────
             // Only for mail that reads as a payment demand and names an
@@ -3397,6 +3797,14 @@ async function run({ sendToManager, sendMessage: _sendMessage = null, dryRun = f
 
             flagged.push({
                 paidEvidence,
+                // Carried so the digest can say WHY this is here — a
+                // judgement she cannot audit is one she has to either accept
+                // or switch off. `because` is the sender's own sentence.
+                importance: imp.level,
+                importance_because: imp.because,
+                importance_signals: imp.signals.map((x) => x.kind),
+                notify_now: imp.notifyNow,
+                admin_mail: imp.admin,
                 // replyTo honours the Reply-To header when present — see
                 // helpers/gmail.js's preferredReplyAddress for why From is
                 // often the wrong place to answer.
@@ -3531,8 +3939,45 @@ async function run({ sendToManager, sendMessage: _sendMessage = null, dryRun = f
     //      workflow/actions.js's showPendingReplies / the digest body.
     store.tracked = store.tracked || [];
     const trackedIds = new Set(store.tracked.map((t) => t.id));
+    // ONE THREAD IS ONE OPEN ITEM (2026-09-17).
+    // Apsara: "How does in thread mails be tracked?" -- and the honest answer
+    // was that it wasn't. This list was keyed on the MESSAGE id, so a second
+    // message on a thread she had not answered created a SECOND open item.
+    //
+    // groupMatters hides that inside any one digest (sameMatter returns true
+    // on a matching threadId), but collectChaseUps and
+    // collectDeadlineReminders iterate `tracked` DIRECTLY with no thread
+    // dedupe at all. Three messages from Tiffany on one appointment thread
+    // became three separate things chasing her, each with its own age
+    // counter. That is the duplicate she sent me as RadMetals 709275/709276.
+    //
+    // The NEWER message wins the slot rather than being dropped: its summary
+    // and deadline are the current state of the matter, and chasing her about
+    // a superseded message is exactly how the stale-summary bug felt.
+    // firstFlaggedAt, chases and lastChasedAt are carried over untouched --
+    // the age of a matter is how long SHE has had it, and resetting the chase
+    // count would restart a nag she has already received twice, so MAX_CHASES
+    // would never be reached.
+    const trackedByThread = new Map();
+    for (const t of store.tracked) if (t.threadId) trackedByThread.set(t.threadId, t);
     for (const f of flagged) {
         if (trackedIds.has(f.id)) continue;
+        const sameThread = f.threadId ? trackedByThread.get(f.threadId) : null;
+        if (sameThread) {
+            console.log('[REPLYWATCH] "' + String(f.subject || '').slice(0, 44)
+                + '" updates an open item on the same thread rather than adding one');
+            sameThread.id = f.id;
+            sameThread.summary = f.summary;
+            sameThread.subject = f.subject;
+            sameThread.fromName = f.fromName;
+            sameThread.from = f.from || sameThread.from;
+            sameThread.waiting_on = f.waiting_on || sameThread.waiting_on;
+            sameThread.deadline = f.deadline || sameThread.deadline;
+            sameThread.asked_for = f.asked_for || sameThread.asked_for;
+            sameThread.importance = f.importance || sameThread.importance;
+            sameThread.importance_because = f.importance_because || sameThread.importance_because;
+            continue;
+        }
         store.tracked.push({
             id: f.id, threadId: f.threadId, fromName: f.fromName, subject: f.subject,
             // The ADDRESS as well as the display name (2026-08-25). senderKey
@@ -3551,7 +3996,16 @@ async function run({ sendToManager, sendMessage: _sendMessage = null, dryRun = f
             asked_of: f.asked_of || null,
             action_needed: f.action_needed || null,
             lastDeadlineNudgeOn: null,
+            // Carried so the chase-up and the digest can both say why an
+            // importance-promoted item is on the list days later.
+            importance: f.importance || null,
+            importance_because: f.importance_because || null,
         });
+        // Registered immediately, or two NEW messages on the same thread in
+        // ONE scan would each add an entry -- which is the very duplication
+        // the lookup above exists to prevent, and the commonest shape of it:
+        // a customer and their agent replying within the same five minutes.
+        if (f.threadId) trackedByThread.set(f.threadId, store.tracked[store.tracked.length - 1]);
     }
 
     // A dryRun is her asking directly — answer with exactly what she asked
@@ -3670,13 +4124,43 @@ async function run({ sendToManager, sendMessage: _sendMessage = null, dryRun = f
     // vessel about to sail) or a deadline that is today/tomorrow/overdue.
     const hasUrgent = queued.some((q) => q.urgency === 'high'
         && (q.daysToDeadline == null || q.daysToDeadline <= 1));
+    // IMPORTANCE CAN BREAK THE RHYTHM (2026-09-17).
+    // Apsara, asked what should happen to mail that is consequential but not
+    // hers to answer -- an ERD moving, say: "Notify me straight away."
+    //
+    // Only `critical` qualifies, which helpers/mailImportance.js restricts to
+    // three things: a date we HELD has changed, something has broken (a claim,
+    // a shortage, a hold), or a cutoff inside two days. A remittance advice
+    // and a suspension notice both stay at `high` and wait for the hourly
+    // slot -- deliberately, because a notifier that can wake her for good
+    // news is one she turns off.
+    //
+    // Still gated on the alert window below. Nothing here is worth 3am.
+    const hasCritical = queued.some((q) => q.notify_now === true);
+    if (hasCritical && !hasUrgent) {
+        const crit = queued.filter((q) => q.notify_now);
+        console.log('[REPLYWATCH] sending now -- ' + crit.length + ' critical item(s): '
+            + crit.map((q) => q.importance_because || q.summary).join(' | ').slice(0, 200));
+    }
     const sinceLast = store.lastDigestAt ? (Date.now() - Date.parse(store.lastDigestAt)) : Infinity;
     const gapElapsed = !(sinceLast >= 0) || sinceLast >= DIGEST_MIN_GAP_MS;
 
     // Urgent goes out immediately; everything else waits for the hourly slot.
     // Both are gated on the alert window, so nothing arrives overnight — but
     // nothing is discarded either, it simply waits in `undelivered`.
-    const shouldSend = queued.length > 0 && inAlertWindow && (hasUrgent || gapElapsed);
+    // PO movement can carry a digest on its own — see unreportedPos in
+    // helpers/poTracker.js for why that is narrow enough to be safe. Computed
+    // here because shouldSend needs it.
+    const reportablePos = (() => {
+        try { return poTracker.unreportedPos(store); }
+        catch (e) { console.warn('[REPLYWATCH] could not read the PO ledger:', e.message); return []; }
+    })();
+    // A PO-only digest never rides the URGENT path. Nothing in a PO ledger is
+    // worth breaking the hourly rhythm for, and a feature that can ping her
+    // out of turn is one she will switch off.
+    const shouldSend = inAlertWindow
+        && ((queued.length > 0 && (hasUrgent || hasCritical || gapElapsed))
+            || (reportablePos.length > 0 && gapElapsed));
 
     // Tracks what ACTUALLY went out, as opposed to what we intended to send.
     // These are not the same thing when the send throws, and reporting the
@@ -3721,7 +4205,18 @@ async function run({ sendToManager, sendMessage: _sendMessage = null, dryRun = f
             ? `\n\n⚠ ${deadLettered.length} email${deadLettered.length === 1 ? '' : 's'} I could not read after ${MAX_ASSESS_ATTEMPTS} tries — check ${deadLettered.length === 1 ? 'it' : 'them'} in Gmail:\n`
               + deadLettered.slice(0, 3).map((d) => `• ${d.from} — ${d.subject || '(no subject)'}`).join('\n')
             : '';
-        const body = (overnight ? 'While you were away —\n\n' : '') + buildDigest(digestMatters, queued.length) + backlogNote + dlqNote;
+        // The PO section rides UNDER the numbered list and is deliberately
+        // not part of it: "reply to 1" and "ignore 1" resolve against
+        // store.lastDigest (= digestMatters), and a second numbered list in
+        // the same message is how "ignore 1" came back as "#undefined" on
+        // 01 Sep. The PO NUMBER is the handle instead.
+        const poSection = reportablePos.length ? '\n' + poTracker.buildPoLines(reportablePos).join('\n') : '';
+        const body = queued.length
+            ? (overnight ? 'While you were away —\n\n' : '') + buildDigest(digestMatters, queued.length) + backlogNote + dlqNote + poSection
+            // NOTHING NEEDS A REPLY, but a PO moved. buildDigest would render
+            // "0 emails waiting on you:" over an empty list, which is a lie
+            // dressed as a headline. Send the ledger alone instead.
+            : poTracker.buildPoLines(reportablePos).join('\n').replace(/^\n/, '');
 
         // Stage the confirmation so a plain "yes" produces the document. Only
         // for a draft that is actually complete — one still missing a rate has
@@ -3776,9 +4271,21 @@ async function run({ sendToManager, sendMessage: _sendMessage = null, dryRun = f
             // The SAME grouped array that was just rendered — so "reply to 3"
             // resolves to the item printed as 3, and to that matter's most
             // urgent/current message rather than an older one in the group.
-            store.lastDigest = digestMatters;
-            store.undelivered = [];
-            store.lastDigestAt = new Date().toISOString();
+            // ONLY when this digest actually carried a numbered list. A
+            // PO-only message has none, and overwriting lastDigest with []
+            // would silently break the "reply to 2" she is part-way through
+            // answering from the previous digest — the numbering would resolve
+            // against an empty array and come back as nothing.
+            if (queued.length) {
+                store.lastDigest = digestMatters;
+                store.undelivered = [];
+                store.lastDigestAt = new Date().toISOString();
+            }
+            // AFTER the send, never before. sendMessage returns false when
+            // WhatsApp is down rather than throwing (see the comment on the
+            // try above), so marking these told up front would lose the
+            // movement permanently on a failed send.
+            if (reportablePos.length) poTracker.markPosTold(store, reportablePos);
             delivered = true;
         } catch (err) {
             console.error('[REPLYWATCH] digest send failed, keeping queue for next run:', err.message);
@@ -3864,12 +4371,20 @@ async function run({ sendToManager, sendMessage: _sendMessage = null, dryRun = f
     // means "the scan ran through" and not "the function was entered" - a run
     // that throws halfway leaves the old timestamp and correctly goes stale.
     store.lastScanAt = new Date().toISOString();
+    // FORGETTING, at the end of the scan and never mid-render. A prune that
+    // runs while a list is being built can remove the row that list is about.
+    // See prunePos: a closed PO survives one stale window so "what happened
+    // to 4302902" still answers after she closed it.
+    try {
+        const dropped = poTracker.prunePos(store);
+        if (dropped) console.log(`[REPLYWATCH] pruned ${dropped} PO record(s) with no movement in ${poTracker.PO_STALE_DAYS * 3} days`);
+    } catch (e) { console.warn('[REPLYWATCH] PO prune failed:', e.message); }
     await saveStore(store);
     console.log(`[REPLYWATCH] assessed ${checked}, flagged ${flagged.length}, queued ${store.undelivered.length}, tracked ${store.tracked.length}, chased ${chaseUps.length}, sent ${delivered ? 'yes' : 'no'}`);
     return { checked, flagged: flagged.length, items: flagged, queued: store.undelivered.length, sent: delivered, chased: chaseUps.length, deadLettered: deadLettered.length };
 }
 
-module.exports = { run, senderKey, recordSenderEvent, senderHistoryLine, quoteAppearsIn, buildThreadLedger, threadMessageText, digestAudience, deliverDigestMessage, degenericiseSummary, resolveRelativeDates, isOwedItem, isBystanderItem, isColleagueItem, collectAttachmentNames, figureGap, parseMoneyFigure, addressing, newFence, defence, cleanLabel, normFigure, figureText, refreshSentIndex, sheWroteSince, MAX_ASSESS_ATTEMPTS, draftProformaForOrder, proformaDraftLines, buildPrompt, collectDeadlineReminders, buildDeadlineMessage, bulkMailSignal, FENCE, FENCE_END, buildDigest, buildChaseMessage, collectChaseUps, hasSheReplied, threadTail, threadMovedOn, closesLoopWithoutAsk, invoiceNumberIn, looksLikePaymentDemand, findPaymentEvidence, mutedReason, addMute, removeMute, activeMutes, MUTE_DAYS, extractLatestMessage, senderLabel, assess, resolveDigestIndex, loadStore, saveStore, mergeMap, mergeList, laterOf, withSnapshot, AGING_DAYS, RECHASE_DAYS, MAX_CHASES, NEVER_REPLY_PATTERNS,
+module.exports = { run, senderKey, recordSenderEvent, senderHistoryLine, quoteAppearsIn, buildThreadLedger, threadMessageText, digestAudience, deliverDigestMessage, degenericiseSummary, resolveRelativeDates, isOwedItem, isBystanderItem, isColleagueItem, collectAttachmentNames, figureGap, parseMoneyFigure, addressing, newFence, defence, cleanLabel, normFigure, figureText, refreshSentIndex, sheWroteSince, MAX_ASSESS_ATTEMPTS, draftProformaForOrder, proformaDraftLines, buildPrompt, collectDeadlineReminders, buildDeadlineMessage, bulkMailSignal, FENCE, FENCE_END, buildDigest, buildChaseMessage, collectChaseUps, hasSheReplied, threadTail, threadMovedOn, closesLoopWithoutAsk, invoiceNumberIn, looksLikePaymentDemand, findPaymentEvidence, mutedReason, addMute, removeMute, activeMutes, MUTE_DAYS, extractLatestMessage, senderLabel, assess, resolveDigestIndex, loadStore, saveStore, knownCounterpartyTest, importanceOf: importance.importanceOf, mergeMap, mergeList, mergePoRecord, laterOf, withSnapshot, poTracker, AGING_DAYS, RECHASE_DAYS, MAX_CHASES, NEVER_REPLY_PATTERNS,
     // Exposed for tests/integration.js — deadline ranking and matter grouping
     // are pure functions and the parts most worth asserting directly.
     parseDeadline, daysUntilDeadline, applyDeadlineUrgency, groupMatters, sameMatter,

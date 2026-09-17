@@ -46,18 +46,25 @@ section('A — the two she named, and the escape hatch');
     // as a broken Save button, not as a mismatched string.
     ck('  and "Others" is the exact label both clients are told to use',
        banks.OTHER === 'Others');
-    ck('  Zelle and Wire are the modes that have a bank',
-       banks.needsBank('Zelle') && banks.needsBank('Wire'));
-    ck('  Cash and Cheque do not',
+    // ── ZELLE CAME OFF THIS LIST ─────────────────────────────────────────
+    // Apsara, 2026-09-17: "should not have bank for zelle." Removed from the
+    // MODE rather than hidden on one screen — every form that shows a bank row
+    // asks needsBank, so hiding it on the yard modal alone would leave the
+    // trucker form and the Edge Metals forms still asking for something she
+    // says is not there.
+    ck('  Wire and Bank transfer are the modes that have a bank',
+       banks.needsBank('Wire') && banks.needsBank('Bank transfer'));
+    ck('  Zelle does NOT', !banks.needsBank('Zelle'), 'her words, 2026-09-17');
+    ck('  Cash and Cheque do not either',
        !banks.needsBank('Cash') && !banks.needsBank('Cheque'));
     ck('  and the check is case-insensitive, because clients send what they send',
-       banks.needsBank('zelle') && banks.needsBank('WIRE'));
+       banks.needsBank('wire') && banks.needsBank('BANK TRANSFER') && !banks.needsBank('ZELLE'));
 }
 
 section('B — what it refuses, and why each one matters');
 {
     // 1. THE GAP THIS EXISTS TO CLOSE.
-    for (const mode of ['Zelle', 'Wire']) {
+    for (const mode of ['Wire', 'Bank transfer']) {
         for (const bad of ['', '   ', null, undefined]) {
             let threw = null;
             try { await banks.resolveForMode(mode, bad, { required: true }); } catch (e) { threw = e.message; }
@@ -67,12 +74,14 @@ section('B — what it refuses, and why each one matters');
     // The message has to say what to DO. "Invalid bank" would be true and
     // useless; she is standing at a form with a dropdown in front of her.
     let msg = '';
-    try { await banks.resolveForMode('Zelle', '', { required: true }); } catch (e) { msg = e.message; }
+    try { await banks.resolveForMode('Wire', '', { required: true }); } catch (e) { msg = e.message; }
     ck('  and the refusal names the escape hatch',
-       /Others/.test(msg) && /Zelle/.test(msg), msg);
+       /Others/.test(msg) && /Wire/.test(msg), msg);
 
-    // 2. A BANK ON CASH IS A CLAIM THAT IS NOT TRUE.
-    for (const mode of ['Cash', 'Cheque']) {
+    // 2. A BANK ON CASH IS A CLAIM THAT IS NOT TRUE — and since 2026-09-17,
+    //    the same goes for a Zelle. A NEW one carrying a bank is refused
+    //    rather than stored.
+    for (const mode of ['Cash', 'Cheque', 'Zelle']) {
         let threw = null;
         try { await banks.resolveForMode(mode, 'Chase Bank'); } catch (e) { threw = e.message; }
         // Refused whether or not the caller said it was required: a bank on a
@@ -94,8 +103,8 @@ section('B — what it refuses, and why each one matters');
 section('C — one account, one spelling');
 {
     ck('the canonical spelling comes back, whatever she typed',
-       (await banks.resolveForMode('Zelle', 'bofa', { required: true })) === 'BofA'
-       && (await banks.resolveForMode('Zelle', '  CHASE BANK ', { required: true })) === 'Chase Bank');
+       (await banks.resolveForMode('Wire', 'bofa', { required: true })) === 'BofA'
+       && (await banks.resolveForMode('Wire', '  CHASE BANK ', { required: true })) === 'Chase Bank');
 
     // Her choice over a Banks screen: "Fixed three, but Others text is
     // remembered". Typed once, offered ever after.

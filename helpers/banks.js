@@ -52,7 +52,25 @@ const OTHER = 'Others';
 // would make every transfer she records unbankable and quietly unmatchable —
 // the failure would show up months later as a statement line with no payment
 // against it.
-const MODES_WITH_BANK = ['Zelle', 'Wire', 'Bank transfer'];
+// ── ZELLE HAS NO BANK BEHIND IT ────────────────────────────────────────────
+// Apsara, 2026-09-17: "should not have bank for zelle."
+//
+// Removed from the list rather than hidden on one screen: this is a fact
+// about the MODE, and every form that shows a bank row asks this function.
+// Hiding it on the yard modal alone would leave the trucker form and the Edge
+// Metals forms still asking for something she says is not there.
+//
+// WHAT DOES NOT CHANGE: every Zelle already recorded WITH a bank keeps it.
+// Nothing re-validates history, the spend report still groups those rows
+// under the bank they carry, and the per-bank column still adds up. Purging
+// them would be rewriting what was recorded at the time to match a rule made
+// today.
+//
+// WHAT DOES: a NEW Zelle carrying a bank is now REFUSED rather than stored —
+// resolveForMode throws for any mode not on this list, the same way it always
+// has for Cash. Both clients read this list from the server (bank_modes), so
+// the dropdown disappears without either of them being told separately.
+const MODES_WITH_BANK = ['Wire', 'Bank transfer'];
 
 function needsBank(mode) {
     const m = String(mode || '').trim().toLowerCase();

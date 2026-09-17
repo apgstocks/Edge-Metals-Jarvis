@@ -1,0 +1,87 @@
+read both mailboxes, and stop crediting Bose's replies to her
+
+Apsara: "No no..it should also read bose".
+
+MEASURED FIRST, and this is the finding:
+
+  getGmailRead       -> apsara@edgemetals.com
+  getGmailSenderRead -> apsara@edgemetals.com
+  getGmailWrite      -> apsara@edgemetals.com
+
+All three tokens on her Mac are apsara@. Meanwhile ~30 comments in this
+codebase reason from "the read client is bose@" — including the
+addressing layer that decides whose problem an email is. The mailbox the
+design is built around has not been readable for some time and nothing
+said so, because getMyEmailAddress correctly returns whatever account is
+actually authorised. The code was consistent; the COMMENTS were the lie.
+Those are now corrected to say the address is resolved, never assumed.
+
+WHAT SHIPS:
+
+  getGmailReadMailboxes()  every mailbox we can read, each carrying its
+                           RESOLVED address. The scan runs one query per
+                           mailbox and each ref travels with the client
+                           AND the address it came from — the previous
+                           bug in this area was one mailbox's client
+                           meeting another's cached address.
+  --role=read2             the consent flow for a SECOND mailbox. Nobody
+                           can complete it but Bose, so nothing changes
+                           until he does. One mailbox behaves exactly as
+                           before (BB1).
+
+TWO THINGS BREAK SILENTLY WHEN A SECOND MAILBOX APPEARS:
+
+1. THE SAME EMAIL, TWICE. A Gmail message id is per-mailbox. One mail to
+   both bose@ and apsara@ has two ids, so `seen` cannot tell they are the
+   same — she would read one request twice in one digest under two
+   numbers, having paid for two Gemini calls. Deduped on the RFC 5322
+   Message-ID, stored in the SAME `seen` map under a `mid:` prefix rather
+   than a new store field: a new field is a seventh chance for the
+   allowlist to eat something, and this way trimSeen already prunes it.
+   No Message-ID falls back to the old behaviour — a duplicate shown
+   twice beats an email suppressed because two mails looked identical.
+
+2. BOSE'S REPLIES BECOMING HERS. The has-she-replied test was
+   lastFrom.includes(me) where `me` is the MAILBOX OWNER. In bose@'s
+   inbox that makes Bose answering a customer read as SHE REPLIED — and
+   senderHistoryLine turns `replied` into "she reliably answers this
+   sender — an active working relationship", which is a claim about
+   Apsara fed into every future prompt. Her prior would have been built
+   out of Bose's behaviour, at volume, from the moment bose@ was read.
+   Now: `replied` means Apsara, `team_replied` means anyone else at Edge
+   Metals, and the history line says the team handles this sender
+   without pretending she does — and without implying the mail needs
+   nobody, since somebody is doing that work.
+
+TESTS: tests/two-mailbox.js, new, 13 assertions. It stubs only the two
+Gmail clients and Gemini and then calls the REAL run(). My first attempt
+was eight assertions that grepped this file for the lines I had just
+written — which proves I can retype a regex, not that the scan behaves.
+Deleted, and the reason is recorded in emailwatch-signals.js where they
+used to be. Every mechanism reverse-verified: restoring the old
+who-answered test fails BC2 and BC4.
+
+TWO REGRESSIONS I CAUSED AND FIXED, both found by running the suites:
+
+  * getGmailReadMailboxes called the LOCAL function declarations, which
+    bypassed the stubbing seam seven test files use (stub
+    gmail.getGmailRead on the module, then re-require the subject).
+    simulate-user.js went 57 -> 52 with every failure reading "Gmail
+    isn't authorized on this server". It goes through module.exports now.
+    That is a compatibility fact about this module, not a concession to
+    testability: a new function reaching past the documented accessor
+    makes the two disagree.
+
+  * tests/integration.js replaces the whole gmail module with an object
+    that has getGmailRead and nothing else — a valid way to stub this
+    file since it was written. Reaching for a function that may not be
+    there turned 324 passing into a harness crash. replyWatch now falls
+    back to the single mailbox, which is the same entry it already had.
+
+All 115 suites run. The one failure is tests/yard-assistant-knowledge.js
+("a Bank transfer on a yard sale needs Paid to"), which is the other
+session's payments change in helpers/payments.js — nothing here touches
+it.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01PaVFkg7JrYeRfUPzvLCFtt
