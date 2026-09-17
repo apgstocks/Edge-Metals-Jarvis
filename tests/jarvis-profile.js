@@ -106,7 +106,9 @@ const putLoad = (rec) => mutateJson(cfg.LOADS_FILE, [], (list) => {
 // A load with money against it.
 async function paidLoad(id, amount, mode = 'Zelle') {
     await putLoad({ id, date: '2026-09-01', seller: 'Acme', amount: amount * 2, items: [], weight_unit: 'lb' });
-    await payments.addPayment({ load_id: id, load_kind: 'purchase', amount, mode, paid_on: '2026-09-01' });
+    // paid_via since 2026-09-17: Wire and Bank transfer on a yard purchase
+    // record whose money paid. Harmless on the other modes, which ignore it.
+    await payments.addPayment({ load_id: id, load_kind: 'purchase', amount, mode, paid_on: '2026-09-01', paid_via: 'Edge Yard' });
 }
 
 (async () => {

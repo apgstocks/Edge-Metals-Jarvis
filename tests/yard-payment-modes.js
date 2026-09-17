@@ -134,7 +134,14 @@ section('B — and the SERVER holds the rule, not just the dropdown');
         // A bank only where a bank makes sense — Cash and Cheque are refused
         // one, correctly, and my first version of this check sent one anyway
         // and then read the refusal as the restriction still being in place.
-        const extra = (mode === 'Zelle' || mode === 'Wire') ? { bank: 'Chase Bank' } : {};
+        const extra = {
+            ...((mode === 'Zelle' || mode === 'Wire') ? { bank: 'Chase Bank' } : {}),
+            // Wire and Bank transfer on a yard purchase also record WHOSE
+            // money since 2026-09-17 — see tests/paid-via.js. This file is
+            // about which MODES are allowed, so it answers that question and
+            // moves on.
+            ...((mode === 'Wire' || mode === 'Bank transfer') ? { paid_via: 'Edge Yard' } : {}),
+        };
         try { rec = await pay.addPayment({ load_id: `L_buy_${mode}`, load_kind: 'purchase', mode, amount: 10, paid_on: '2026-09-16', ...extra }); }
         catch (e) { err = e; }
         ck(`  paying a supplier by ${mode} still records`, !err && rec && rec.mode === mode,

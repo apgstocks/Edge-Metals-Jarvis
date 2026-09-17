@@ -109,7 +109,10 @@ section('B — a cash payment is adjusted against the box');
     // tests/yard-payment-modes.js section C.
     for (const mode of ['Bank transfer']) {
         const before = petty.balance();
-        await payments.addPayment({ load_id: 'EDGE_02', amount: 50, mode, bank: 'Chase Bank' });
+        // paid_via since 2026-09-17: a yard purchase by Wire or Bank
+        // transfer records whose money it was. The ordinary case is the
+        // yard's own.
+        await payments.addPayment({ load_id: 'EDGE_02', amount: 50, mode, bank: 'Chase Bank', paid_via: 'Edge Yard' });
         ck(`a ${mode} payment does not touch petty cash`, petty.balance() === before);
     }
 }
@@ -246,7 +249,7 @@ section('G — deleting a cash payment puts the money back');
     ck('  reversing an unknown id credits nothing', petty.balance() === bal);
 
     // A non-cash payment has nothing to refund.
-    const z = await payments.addPayment({ load_id: 'EDGE_21', amount: 99, mode: 'Bank transfer', bank: 'Chase Bank' });
+    const z = await payments.addPayment({ load_id: 'EDGE_21', amount: 99, mode: 'Bank transfer', bank: 'Chase Bank', paid_via: 'Edge Yard' });
     await payments.deletePayment(z.id);
     ck('deleting a non-cash payment leaves the box alone', petty.balance() === 1000);
 }

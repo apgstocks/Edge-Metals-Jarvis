@@ -2217,6 +2217,13 @@ function paintBankOptions(sel) {
 // Shows or hides the bank row for the chosen mode, and the text box for
 // Others. `prefix` is 'pay' or 'trk' — the two forms are identical in
 // behaviour, so they share this rather than each growing their own copy.
+// Her two modes, and only hers — Zelle shares the bank picker and is not on
+// this list because she did not put it there. Kept in step with
+// helpers/payments.js's PAID_VIA_MODES, which is what the server enforces: a
+// client that asks on different modes than the server requires is a form that
+// fails on save.
+const paidViaModes = ['Wire', 'Bank transfer'];
+
 function syncBankFields(prefix) {
   const mode = ($(prefix + '_mode') || {}).value || '';
   const row = $(prefix + '_bank_row');
@@ -2225,6 +2232,16 @@ function syncBankFields(prefix) {
   const needs = bankModes.some(m => m.toLowerCase() === String(mode).toLowerCase());
   if (row) row.style.display = needs ? '' : 'none';
   if (otherField) otherField.style.display = (needs && sel && sel.value === bankOther) ? '' : 'none';
+
+  // Whose money — see dashboard/index.html for why the kind is read off the
+  // ROW rather than out of `payingLoad`: that is a top-level `let`, which is
+  // not a window property, so nothing outside the script can drive it.
+  const viaRow = $(prefix + '_via_row');
+  if (viaRow) {
+    const isPurchase = viaRow.dataset.kind !== 'sale';
+    viaRow.style.display = (isPurchase && paidViaModes.some((m) => m.toLowerCase() === String(mode).toLowerCase()))
+      ? '' : 'none';
+  }
 }
 
 // What to send. Null when the mode has no bank, so the server sees an absent
@@ -2273,6 +2290,10 @@ function openPayModal(loadId, kind) {
   // full list, because paying a supplier by Zelle is money going the other
   // way. Rebuilt on every open so a sale row cannot leave its shorter list
   // behind on the next purchase.
+  // Cleared on every open, or the company chosen on the LAST payment is
+  // pre-answered on this one.
+  if ($('pay_via')) $('pay_via').value = '';
+  if ($('pay_via_row')) $('pay_via_row').dataset.kind = payingLoad.kind;
   const payModes = sale ? ['Cash', 'Bank transfer'] : ['Cash', 'Bank transfer', 'Zelle', 'Wire', 'Cheque'];
   $('pay_mode').innerHTML = payModes.map((m) => `<option value="${esc(m)}">${esc(m)}</option>`).join('');
   // A default that exists in the list: selecting 'Zelle' on a list without it
@@ -4610,6 +4631,22 @@ function renderLoads(loads) {
               <input id="pay_bank_other" placeholder="e.g. Wells Fargo" autocomplete="off" maxlength="40">
             </div>
           </div>
+          <!-- Whose money paid it. Mirrors dashboard/index.html — Apsara,
+               2026-09-17, "on selecting wire-it should ask me Payment via
+               Edge Yard/Edge Metals", and on which modes, "Wire and Bank
+               Transfer". Only on a PURCHASE: a sale takes Bank transfer as
+               one of its two modes and receiving money must not get harder.
+               No pre-selected company; she chose refuse-to-save over
+               recording a gap, and a select opening on "Edge Yard" is
+               answered by not reading it. -->
+          <div class="field" id="pay_via_row" style="margin-top:14px; display:none;">
+            <label for="pay_via">Payment via</label>
+            <select id="pay_via">
+              <option value="">Choose…</option>
+              <option value="Edge Yard">Edge Yard</option>
+              <option value="Edge Metals">Edge Metals</option>
+            </select>
+          </div>
           <div class="ld-grid-2" style="margin-top:14px;">
             <div class="field"><label>Amount</label><input id="pay_amount" type="number" step="any" inputmode="decimal" placeholder="0.00"></div>
             <div class="field"><label>Reference (optional)</label><input id="pay_ref" placeholder="cheque no. / txn id" autocomplete="off"></div>
@@ -4762,6 +4799,10 @@ function wireLoadsEvents() {
     try {
       const body = {
         load_id: payingLoad.id, load_kind: payingLoad.kind, mode: $('pay_mode').value,
+        // '' when the row is hidden, which the server reads as "not answered"
+        // and refuses — deliberately the same value, so a hidden field and an
+        // unanswered one cannot mean different things.
+        paid_via: ($('pay_via') || {}).value || '',
         bank: bankValue('pay'),
         amount, paid_on: toIsoDate($('pay_date').value) || null, reference: $('pay_ref').value.trim() || null,
       };
@@ -6396,6 +6437,20 @@ async function renderSpendReportTab() {
             <div>
               <div style="font-family:var(--font-mono); font-size:11px; color:var(--text-muted);">${esc(b)}</div>
               <div style="font-size:20px; font-weight:800; color:var(--text-strong);">${esc(money(rep.byBank[b]))}</div>
+            </div>`).join('')}
+        </div>
+      </div>` : ''}
+
+      <!-- Whose money. Apsara, 2026-09-17 — mirrors dashboard/index.html;
+           adds up to Total out exactly, including "Not recorded". -->
+      ${Object.keys(rep.byPaidVia || {}).length ? `
+      <div class="card" style="padding:16px 18px; margin-bottom:18px;">
+        <div style="font-family:var(--font-mono); font-size:10px; letter-spacing:.14em; text-transform:uppercase; color:var(--text-muted); margin-bottom:10px;">Paid via</div>
+        <div style="display:flex; gap:26px; flex-wrap:wrap;">
+          ${Object.keys(rep.byPaidVia).sort((a, b) => (rep.byPaidVia[b] || 0) - (rep.byPaidVia[a] || 0)).map(v => `
+            <div>
+              <div style="font-family:var(--font-mono); font-size:11px; color:var(--text-muted);">${esc(v)}</div>
+              <div style="font-size:20px; font-weight:800; color:var(--text-strong);">${esc(money(rep.byPaidVia[v]))}</div>
             </div>`).join('')}
         </div>
       </div>` : ''}

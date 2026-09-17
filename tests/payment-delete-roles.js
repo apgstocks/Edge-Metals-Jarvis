@@ -100,6 +100,8 @@ async function makePaidLoad(as) {
         // transfer only since 2026-09-16 (YARD_LOAD_MODES). What this file
         // tests is who may DELETE a payment, which is unchanged.
         load_id: id, load_kind: 'purchase', mode: 'Bank transfer', bank: 'Chase Bank', amount, paid_on: '2026-09-14',
+        // 2026-09-17: a yard purchase by Bank transfer records whose money.
+        paid_via: 'Edge Yard',
     } })).json;
     const p1 = await pay(400), p2 = await pay(300);
     return { loadId: id, p1: p1 && (p1.id || (p1.payment && p1.payment.id)), p2: p2 && (p2.id || (p2.payment && p2.payment.id)) };

@@ -56,13 +56,33 @@ Two failure shapes this suite has produced more than once:
   happily when the code moves. If a mutation does not turn a check red, the
   check is not testing what its name says.
 
-## 3. Nothing is true until it is deployed
+## 3. Test a new feature END TO END
+
+Apsara, 2026-09-17: "ALwyas test end to end when you add a new feature."
+
+Helper tests and screen tests can both be green while the feature does not
+work. The gaps live between them:
+
+- the route does not forward the new field to the helper;
+- the report route does not forward the new filter;
+- the client sends `paidVia` and the route reads `paid_via`.
+
+So every feature gets a section that starts a real server, logs in, posts
+through the route the screen actually posts to, and reads the figure back out
+of the route the screen actually reads. `tests/paid-via.js` section F is the
+shape to copy.
+
+Measure a **delta**, not an absolute, when earlier sections of the same file
+have already written to the store — a test that breaks when an unrelated
+fixture moves is a test that gets deleted.
+
+## 4. Nothing is true until it is deployed
 
 `bash ship.sh` on the Mac, then `git pull && pm2 restart jarvis --update-env`
 on the VM, as separate steps. Commits sitting on the Mac are not fixes; she is
 still living with the bug.
 
-## 4. Edge Yard and Edge Metals are different companies
+## 5. Edge Yard and Edge Metals are different companies
 
 Said repeatedly, and worth repeating here. A rule for one is not a rule for the
 other, and the separation is most of what this app is for.

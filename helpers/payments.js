@@ -93,6 +93,43 @@ function modesForKind(loadKind) {
         : PAYMENT_MODES.slice();
 }
 
+// ── WHOSE MONEY PAID IT ────────────────────────────────────────────────────
+// Apsara, 2026-09-17: "in pay of create invoice-on selecting wire-it should
+// ask me Payment via Edge Yard/Edge Metals", and on which modes: "Wire and
+// Bank Transfer".
+//
+// The two companies pay for each other's things. Which one's account a
+// transfer actually left is a fact the bank field does not carry — "Chase
+// Bank" does not say whose Chase account.
+const PAID_VIA = ['Edge Yard', 'Edge Metals'];
+// Her two modes, and only hers. Zelle shares the bank picker and is NOT on
+// this list because she did not put it there.
+const PAID_VIA_MODES = new Set(['Wire', 'Bank transfer']);
+// A yard PURCHASE — "pay of create invoice". A sale is receiving money and
+// takes Bank transfer as one of only two modes; requiring this there would
+// make receiving money harder, which is not what she asked for.
+const PAID_VIA_KINDS = new Set(['purchase']);
+
+function paidViaRequired(loadKind, mode) {
+    return PAID_VIA_KINDS.has(String(loadKind || '').trim())
+        && PAID_VIA_MODES.has(String(mode || '').trim());
+}
+
+// Returns '' when this combination does not ask. Throws when it does and she
+// has not answered — her choice, over recording it as "Not recorded": a wire
+// with no company against it cannot be filed.
+function resolvePaidVia(loadKind, mode, value) {
+    const given = PAID_VIA.find((v) => v.toLowerCase() === String(value == null ? '' : value).trim().toLowerCase());
+    if (!paidViaRequired(loadKind, mode)) {
+        // Not asked for — but if a caller sent one anyway it is kept rather
+        // than dropped, because a stated fact about the money should not
+        // vanish because the form did not have a box for it.
+        return given || '';
+    }
+    if (!given) throw new Error(`a ${mode} on a yard purchase needs "Payment via": ${PAID_VIA.join(' or ')}`);
+    return given;
+}
+
 // ── WHOSE BOOKS A ROW BELONGS TO ─────────────────────────────────────────
 // Apsara, 2026-09-10: "Always remember Edge Yard is different and Edge Metals
 // is different", and, asked directly, that Edge Metals cash is separate from
@@ -195,6 +232,34 @@ async function addPayment(input = {}) {
     // deliberately not the same.
     const banks = require('./banks');
     const bank = await banks.resolveForMode(mode, input.bank, { required: input.require_bank === true });
+
+    // ── WHOSE MONEY PAID THE SUPPLIER ────────────────────────────────────
+    // Apsara, 2026-09-17: "in pay of create invoice-on selecting wire-it
+    // should ask me Payment via Edge Yard/Edge Metals. We need to keep track
+    // of this also in report", and, asked which modes: "Wire and Bank
+    // Transfer".
+    //
+    // A yard purchase is Edge Yard's material, but the transfer that pays for
+    // it does not always leave Edge Yard's account. Which company actually
+    // paid is a fact about the money, and until now it was nowhere — the bank
+    // says WHICH ACCOUNT, not whose company it belongs to.
+    //
+    // ── SCOPED EXACTLY TO WHAT SHE ASKED ─────────────────────────────────
+    // "in pay of create invoice" — a yard PURCHASE. Not a sale (Bank transfer
+    // is one of only two modes a sale accepts; requiring this there would make
+    // receiving money harder, which she did not ask for), not the Edge Metals
+    // kinds, not trucker bills. Cash and Cheque never ask: they are not
+    // transfers between accounts.
+    //
+    // Asked which modes, she answered "Wire and Bank Transfer" — NOT Zelle,
+    // though Zelle shares the bank picker. Her list, not the tidy one.
+    //
+    // REQUIRED, her choice over "save it as Not recorded": a wire with no
+    // company against it cannot be filed. So the report has no gap in it by
+    // construction, and old payments written before today simply carry
+    // nothing — see helpers/spendReport.js, which buckets those visibly
+    // rather than pretending they are Edge Yard.
+    const paidVia = resolvePaidVia(loadKind, mode, input.paid_via);
 
     // ── CASH COMES OUT OF THE PETTY CASH BOX ──────────────────────────────
     // Per Apsara 2026-09-02: "If i click pay in load and select cash, the
@@ -327,6 +392,13 @@ async function addPayment(input = {}) {
         // a fact about where money went. The report groups those as
         // "not recorded" rather than hiding them.
         bank,
+        // Which company's money it was — '' on everything that does not ask,
+        // and on every payment written before 2026-09-17. Nothing migrates
+        // those: a wire whose paying company nobody recorded is UNKNOWN, and
+        // stamping "Edge Yard" on it would be inventing a fact about money.
+        // The Spend report buckets them visibly, the same way it does a bank
+        // nobody recorded.
+        paid_via: paidVia,
         // What was ACTUALLY paid. On a capped cash payment this is less than
         // was asked for, and the rest stays outstanding — which is exactly
         // what "make it a partial payment" means. Stored as the real figure so
@@ -495,6 +567,7 @@ function paymentSummary(loadId, loadAmount) {
 }
 
 module.exports = {
-    PAYMENT_MODES, YARD_LOAD_MODES, modesForKind, listPayments, paymentsForLoad, addPayment,
+    PAYMENT_MODES, YARD_LOAD_MODES, modesForKind, PAID_VIA, PAID_VIA_MODES, PAID_VIA_KINDS,
+    paidViaRequired, resolvePaidVia, listPayments, paymentsForLoad, addPayment,
     deletePayment, deletePaymentsForLoad, paymentSummary,
 };

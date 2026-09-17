@@ -4192,6 +4192,12 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
                 // "how much went out of Chase last month". Narrows the same
                 // way the method does — every figure, not only the rows.
                 bank: req.query.bank,
+                // Apsara, 2026-09-17: the Spend report narrows to one company
+                // as well as to one bank. Not validated here for the same
+                // reason the bank is not — "Not recorded" is a legitimate
+                // thing to filter for, and it is how she finds the transfers
+                // written before the field existed.
+                paidVia: req.query.paid_via,
             }));
         } catch (e) { res.status(500).json({ error: e.message }); }
     });

@@ -4841,6 +4841,10 @@ let spendMethod = '';
 // '' means every bank. Same reasoning as spendMethod: a filter that resets on
 // repaint is worse than no filter.
 let spendBank = '';
+// '' means every company. Apsara, 2026-09-17 — same reasoning as spendBank:
+// a filter that resets on every render is a filter she has to re-apply after
+// every date change.
+let spendPaidVia = '';
 
 // ── EXPENSES ────────────────────────────────────────────────────────────
 // Apsara, 2026-09-15: "there is a expense tab in app but not website", and
@@ -5188,6 +5192,7 @@ async function renderSpendReportTab() {
   if (spendTo) qs.push('to=' + encodeURIComponent(spendTo));
   if (spendMethod) qs.push('method=' + encodeURIComponent(spendMethod));
   if (spendBank) qs.push('bank=' + encodeURIComponent(spendBank));
+  if (spendPaidVia) qs.push('paid_via=' + encodeURIComponent(spendPaidVia));
   let rep;
   try {
     rep = await api('/api/reports/spend' + (qs.length ? '?' + qs.join('&') : ''));
@@ -5281,6 +5286,23 @@ async function renderSpendReportTab() {
           ${['', ...(rep.bankColumns || [])].map(b => `
             <button class="btn btn-spend-bank" data-bank="${esc(b)}" style="font-size:11.5px; padding:7px 12px; ${spendBank === b ? 'background:var(--accent); color:#0C0E10; font-weight:700;' : ''}">${esc(b || 'All')}</button>`).join('')}
         </div>` : ''}
+        <!-- ── AND WHOSE MONEY ───────────────────────────────────────────
+             Apsara, 2026-09-17: "We need to keep track of this also in
+             report", and, asked where: the breakdown AND a filter.
+
+             Narrows the whole report the same way the method and the bank do
+             — every figure below means "of this company", never "of
+             everything, with some rows hidden".
+
+             Only rendered when there is more than one to choose between, and
+             "Not recorded" is offered on purpose: it is how she finds the
+             transfers written before this field existed. -->
+        ${(rep.paidViaColumns || []).length > 1 ? `
+        <div style="display:flex; gap:8px; flex-wrap:wrap; margin-top:10px;">
+          <span style="font-family:var(--font-mono); font-size:10px; letter-spacing:.12em; text-transform:uppercase; color:var(--text-muted); align-self:center; margin-right:2px;">Paid via</span>
+          ${['', ...(rep.paidViaColumns || [])].map(v => `
+            <button class="btn btn-spend-via" data-via="${esc(v)}" style="font-size:11.5px; padding:7px 12px; ${spendPaidVia === v ? 'background:var(--accent); color:#0C0E10; font-weight:700;' : ''}">${esc(v || 'All')}</button>`).join('')}
+        </div>` : ''}
       </div>
 
       <!-- ── WHAT LEFT EACH ACCOUNT ──────────────────────────────────────
@@ -5304,6 +5326,27 @@ async function renderSpendReportTab() {
         </div>
       </div>` : ''}
 
+
+      <!-- ── AND WHOSE MONEY IT WAS ───────────────────────────────────────
+           Apsara, 2026-09-17. The bank says WHICH ACCOUNT; this says whose
+           company. "Chase Bank" does not tell her whether Edge Metals funded
+           a yard purchase.
+
+           Adds up to Total out exactly, including "Not recorded" — the same
+           rule the bank card follows, and for the same reason: a breakdown
+           that quietly omits what it cannot classify disagrees with the total
+           and invites her to pick which number to believe. -->
+      ${Object.keys(rep.byPaidVia || {}).length ? `
+      <div class="card" style="padding:16px 18px; margin-bottom:18px;">
+        <div style="font-family:var(--font-mono); font-size:10px; letter-spacing:.14em; text-transform:uppercase; color:var(--text-muted); margin-bottom:10px;">Paid via</div>
+        <div style="display:flex; gap:26px; flex-wrap:wrap;">
+          ${Object.keys(rep.byPaidVia).sort((a, b) => (rep.byPaidVia[b] || 0) - (rep.byPaidVia[a] || 0)).map(v => `
+            <div>
+              <div style="font-family:var(--font-mono); font-size:11px; color:var(--text-muted);">${esc(v)}</div>
+              <div style="font-size:20px; font-weight:800; color:var(--text-strong);">${esc(money(rep.byPaidVia[v]))}</div>
+            </div>`).join('')}
+        </div>
+      </div>` : ''}
 
       <!-- ── money IN, kept apart from money out ──────────────────────────
            A payment against a SALE is a buyer paying US. Until 2026-09-02
@@ -5403,6 +5446,10 @@ async function renderSpendReportTab() {
   }));
   document.querySelectorAll('.btn-spend-bank').forEach(b => b.addEventListener('click', () => {
     spendBank = b.dataset.bank || '';
+    renderSpendReportTab();
+  }));
+  document.querySelectorAll('.btn-spend-via').forEach(b => b.addEventListener('click', () => {
+    spendPaidVia = b.dataset.via || '';
     renderSpendReportTab();
   }));
 }
@@ -8701,6 +8748,11 @@ function paintBankOptions(sel) {
 // Shows or hides the bank row for the chosen mode, and the text box for
 // Others. `prefix` is 'pay' or 'trk' — the two forms are identical in
 // behaviour, so they share this rather than each growing their own copy.
+// Her two modes, and only hers — Zelle shares the bank picker and is NOT on
+// this list because she did not put it there. Kept in step with
+// helpers/payments.js's PAID_VIA_MODES, which is what the server enforces.
+const paidViaModes = ['Wire', 'Bank transfer'];
+
 function syncBankFields(prefix) {
   const mode = ($(prefix + '_mode') || {}).value || '';
   const row = $(prefix + '_bank_row');
@@ -8709,6 +8761,26 @@ function syncBankFields(prefix) {
   const needs = bankModes.some(m => m.toLowerCase() === String(mode).toLowerCase());
   if (row) row.style.display = needs ? '' : 'none';
   if (otherField) otherField.style.display = (needs && sel && sel.value === bankOther) ? '' : 'none';
+
+  // ── AND WHOSE MONEY ──────────────────────────────────────────────────
+  // Only on the yard pay modal (prefix 'pay'), only on a PURCHASE, only on
+  // her two modes. The trucker modal has its own prefix and is untouched.
+  // ── THE KIND COMES OFF THE ROW, NOT OUT OF A CLOSURE ─────────────────
+  // openPayModal stamps data-kind on this element. Reading `payingLoad`
+  // directly would work in the browser and be untestable outside it:
+  // payingLoad is a top-level `let`, which is a script-scope binding and NOT
+  // a window property, so a test that assigns w.payingLoad assigns a
+  // DIFFERENT variable and this function never sees it. Ninth time this
+  // project has been caught by that — writing it into the code this time
+  // rather than into another comment nobody reads.
+  //
+  // It is also the better design: the DOM says what the modal is for.
+  const viaRow = $(prefix + '_via_row');
+  if (viaRow) {
+    const isPurchase = viaRow.dataset.kind !== 'sale';
+    viaRow.style.display = (isPurchase && paidViaModes.some((m) => m.toLowerCase() === String(mode).toLowerCase()))
+      ? '' : 'none';
+  }
 }
 
 // What to send. Null when the mode has no bank, so the server sees an absent
@@ -8768,6 +8840,12 @@ function openPayModal(loadId, kind) {
   $('pay_mode').value = payModes.includes('Zelle') ? 'Zelle' : 'Cash';
   paintBankOptions($('pay_bank'));
   $('pay_bank_other').value = '';
+  // Cleared on every open, or the company she chose on the LAST payment is
+  // pre-answered on this one — the failure mode a remembered dropdown always
+  // has, and here it would file a transfer against the wrong company.
+  if ($('pay_via')) $('pay_via').value = '';
+  // What this modal is for, on the element itself — see syncBankFields.
+  if ($('pay_via_row')) $('pay_via_row').dataset.kind = payingLoad.kind;
   syncBankFields('pay');
   // Repainted when it lands. Not awaited: the modal opens immediately with
   // the banks we already have, and a late arrival only ever ADDS options.
@@ -9304,6 +9382,28 @@ function renderLoads(loads) {
               <input id="pay_bank_other" placeholder="e.g. Wells Fargo" autocomplete="off" maxlength="40">
             </div>
           </div>
+          <!-- ── WHOSE MONEY PAID IT ────────────────────────────────────
+               Apsara, 2026-09-17: "in pay of create invoice-on selecting
+               wire-it should ask me Payment via Edge Yard/Edge Metals", and,
+               asked which modes: "Wire and Bank Transfer".
+
+               ONLY on a purchase — "pay of create invoice". A sale takes Bank
+               transfer as one of its two modes, and asking there would make
+               receiving money harder, which she did not ask for.
+
+               No blank first option: she chose "refuse to save until
+               answered" over recording a gap, and a select that opens on
+               "Edge Yard" would let her answer it by not reading it. It opens
+               on a prompt that is not a valid answer, and the server refuses
+               that too. -->
+          <div class="field" id="pay_via_row" style="margin-top:14px; display:none;">
+            <label for="pay_via">Payment via</label>
+            <select id="pay_via">
+              <option value="">Choose…</option>
+              <option value="Edge Yard">Edge Yard</option>
+              <option value="Edge Metals">Edge Metals</option>
+            </select>
+          </div>
           <div class="ld-grid-2" style="margin-top:14px;">
             <div class="field"><label>Amount</label><input id="pay_amount" type="number" step="any" placeholder="0.00" inputmode="decimal"></div>
             <div class="field"><label>Reference (optional)</label><input id="pay_ref" placeholder="cheque no. / txn id" autocomplete="off"></div>
@@ -9475,6 +9575,10 @@ function wireLoadsEvents() {
     try {
       const body = {
         load_id: payingLoad.id, load_kind: payingLoad.kind, mode: $('pay_mode').value,
+        // '' when the row is hidden, which the server reads as "not answered"
+        // and refuses — deliberately the same value, so a hidden field and an
+        // unanswered one cannot mean different things.
+        paid_via: ($('pay_via') || {}).value || '',
         amount, paid_on: toIsoDate($('pay_date').value) || null, reference: $('pay_ref').value.trim() || null,
         bank: bankValue('pay'),
       };
