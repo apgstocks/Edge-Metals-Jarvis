@@ -5689,12 +5689,41 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
             // Generate that quietly printed the older stored version would be
             // the worst kind of surprise on a document going to a customer.
             const rec = pl.buildRecord(body, null);
-            const pdf = await pl.generatePdf(rec);
+            // ── HER OVERRIDE ────────────────────────────────────────────────
+            // Apsara, 2026-09-17: "it should not restrict me from generating
+            // packing list without invoice. just show warning and ask to
+            // override. on accept, proceed".
+            //
+            // Absent or false, generatePdf refuses exactly as it always has —
+            // the client asks first and only sends this once she has said yes,
+            // so the warning cannot be skipped by accident. Accepted from the
+            // query string as well as the body because the PREVIEW call is a
+            // form post that opens a tab.
+            const allowWithoutInvoice = body.allow_without_invoice === true
+                || body.allow_without_invoice === 'true'
+                || req.query.allow_without_invoice === '1';
+            const pdf = await pl.generatePdf(rec, { allowWithoutInvoice });
 
             // The cross-check rides back on the same response rather than
             // needing a second call — she is looking at the result right now,
             // which is the moment a disagreement is worth raising.
             const warnings = pl.compareToInvoice(rec);
+            // Said on the RESULT too, not only in the dialog she clicked
+            // through. She may generate several in a row, and "which of these
+            // went out without an invoice behind it" is a question she will
+            // have later, when the dialog is long gone.
+            if (allowWithoutInvoice
+                && !require('./helpers/invoiceVersions').getLatestInvoicePayload(rec.container_no)) {
+                // ── SAME SHAPE AS EVERY OTHER WARNING ───────────────────
+                // compareToInvoice yields { message } objects and the screen
+                // renders w.message. A plain string here rendered as nothing
+                // at all — the notice was silently dropped. Caught by the
+                // screen test, not by reading this line.
+                warnings.unshift({
+                    kind: 'no_invoice',
+                    message: `${rec.container_no} has no invoice on file, so the buyer details and invoice number come from this form only.`,
+                });
+            }
 
             if (req.query.preview === '1') {
                 res.set('Content-Type', 'application/pdf');
@@ -5730,7 +5759,16 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
             // NO_INVOICE / NO_CONTAINER / NO_ROWS all carry a sentence she can
             // act on; anything else is a real failure and says so.
             const known = ['NO_INVOICE', 'NO_CONTAINER', 'NO_ROWS'].includes(e.code);
-            res.status(known ? 400 : 500).json({ error: e.message, code: e.code || null });
+            // can_override tells the client this one is a QUESTION, not a
+            // dead end — it is what turns the refusal into "Generate anyway?".
+            // Only NO_INVOICE sets it: a packing list with no container number
+            // genuinely cannot be filed or found again, so that one stays a
+            // refusal.
+            res.status(known ? 400 : 500).json({
+                error: e.message,
+                code: e.code || null,
+                can_override: e.canOverride === true,
+            });
         }
     });
 

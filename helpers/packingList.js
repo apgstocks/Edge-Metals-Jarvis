@@ -517,7 +517,7 @@ function normaliseScan(parsed) {
 // printing a headerless page. A packing list with a blank exporter block looks
 // finished and is useless to a broker — the same reason extractInvoiceHeader
 // fails loudly instead of rendering an empty header.
-async function generatePdf(record, { renderer } = {}) {
+async function generatePdf(record, { renderer, allowWithoutInvoice = false } = {}) {
     const rec = record || {};
     const container = str(rec.container_no);
     if (!container) {
@@ -526,11 +526,46 @@ async function generatePdf(record, { renderer } = {}) {
         throw e;
     }
 
+    // ── NO INVOICE: A WARNING SHE CAN OVERRIDE, NOT A WALL ──────────────────
+    // Apsara, 2026-09-17: "In packing list generation separate tab-it should
+    // not restrict me from generating packing list without invoice. just show
+    // warning and ask to override. on accept, proceed with packing list
+    // generation".
+    //
+    // This used to refuse outright, and the reasoning was that the header is
+    // BORROWED from the invoice — refusing beat printing a headerless page.
+    // The reasoning was half right. The exporter block is hardcoded and the
+    // weights are hers; the only things the invoice supplies are the buyer's
+    // name and address, the invoice number and its date. A packing list
+    // without those is a worse document, not an impossible one — and she
+    // weighs a container before the invoice exists, which is the whole point
+    // of the tab.
+    //
+    // ── THE DEFAULT IS UNCHANGED ────────────────────────────────────────────
+    // allowWithoutInvoice defaults to false, so every existing caller behaves
+    // exactly as before and still gets NO_INVOICE. The flag says "this one is
+    // the override" rather than "this one is the old shape" — a flag that has
+    // to be set to keep today's behaviour eventually is not set.
     const { getLatestInvoicePayload } = require('./invoiceVersions');
     const invoice = getLatestInvoicePayload(container);
-    if (!invoice) {
-        const e = new Error(`No invoice on file for ${container}. Make the invoice first — the packing list takes its header from it.`);
+    if (!invoice && !allowWithoutInvoice) {
+        // The message names WHAT SHE LOSES, not just what is absent, because
+        // this sentence is what the override dialog shows her. "Make the
+        // invoice first" is no longer the only option, so it no longer reads
+        // like an instruction.
+        const customer = str(rec.customer);
+        const e = new Error(
+            `No invoice on file for ${container}. `
+            + (customer
+                ? `The packing list will show ${customer} as the buyer, from this form, with no address, invoice number or invoice date.`
+                : 'The packing list will print with the BUYER box empty, and no invoice number or date.')
+            + ' Generate it anyway?'
+        );
         e.code = 'NO_INVOICE';
+        // Carried so a client can show the choice without re-deriving any of
+        // it, and so the override is offered rather than only the refusal.
+        e.canOverride = true;
+        e.container = container;
         throw e;
     }
 
@@ -589,10 +624,24 @@ async function generatePdf(record, { renderer } = {}) {
     // The invoice's header, HER rows. Her own container/invoice numbers win
     // where she has typed one — the scan read them off the paper in front of
     // her, and a stale invoice payload should not overwrite that.
+    // ── WHEN THERE IS NO INVOICE, THE FORM IS THE ONLY SOURCE ───────────────
+    // Only reached via the override above. The fallbacks apply ONLY when the
+    // invoice is absent: with an invoice present this spreads exactly what it
+    // always did, so a customer name typed here can never quietly override the
+    // consignee printed on the invoice it belongs to.
+    //
+    // invoicePdf's buyerName reads data.consignee when there is no address
+    // block, so her "Customer" field lands in the BUYER box rather than
+    // leaving it empty. Better a name she typed than a blank on a document
+    // going to a buyer.
+    const headerSource = invoice || {
+        consignee: str(rec.customer),
+        inv_date: rec.date || null,
+    };
     const data = {
-        ...invoice,
+        ...headerSource,
         container_no: container,
-        inv_no: str(rec.invoice_no) || invoice.inv_no,
+        inv_no: str(rec.invoice_no) || headerSource.inv_no,
         line_items,
         // ── HER TWO ANSWERS ABOUT THE PRINTED DOCUMENT ───────────────────
         // Apsara, 2026-09-16: the Item column goes on the PDF too when she

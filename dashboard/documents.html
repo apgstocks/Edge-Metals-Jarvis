@@ -1107,7 +1107,20 @@ async function api(path, opts = {}) {
   const res = await fetch(path, { headers: { 'Content-Type': 'application/json' }, ...opts });
   if (res.status === 401) { location.href = '/login'; throw new Error('unauthorized'); }
   const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(data.error || `request failed (${res.status})`);
+  if (!res.ok) {
+    // ── THE ERROR CARRIES THE ROUTE'S CODE ────────────────────────────────
+    // Added 2026-09-17 for the packing list's "generate without an invoice"
+    // override, which has to tell a refusal apart from a QUESTION.
+    //
+    // Purely additive: the message, the type and the return shape are all
+    // unchanged, and every existing caller reads only `.message`. This helper
+    // is used by every screen in this file, so anything that altered what it
+    // returns or what it throws would land on all of them at once.
+    const err = new Error(data.error || `request failed (${res.status})`);
+    err.code = data.code || null;
+    err.canOverride = data.can_override === true;
+    throw err;
+  }
   return data;
 }
 
@@ -5167,11 +5180,25 @@ function pkPayload() {
 function pkPaintWarnings(warnings) {
   const list = warnings || [];
   if (!list.length) { $('pkWarnings').innerHTML = ''; return; }
+  // ── THE HEADING HAS TO MATCH THE WARNING ──────────────────────────────
+  // It was always "This does not match the invoice for the same container."
+  // Once a packing list could be generated with NO invoice (2026-09-17), that
+  // sentence became a lie on exactly the document it appears on — it asserts
+  // a mismatch with an invoice that does not exist. A no-invoice notice is a
+  // different statement and gets a different heading and footer.
+  //
+  // The two cannot mix: with no invoice there is nothing to compare against,
+  // so compareToInvoice returns an empty list.
+  const noInvoice = list.every((w) => w && w.kind === 'no_invoice');
   $('pkWarnings').innerHTML = `
     <div style="border:1px solid var(--status-warning, #d69e2e); border-radius:var(--radius-sm); padding:10px 12px; font-size:12.5px; color:var(--status-warning, #d69e2e); line-height:1.6;">
-      <strong>This does not match the invoice for the same container.</strong><br>
-      ${list.map((w) => esc(w.message)).join('<br>')}
-      <div style="color:var(--text-muted); margin-top:6px; font-size:11.5px;">Nothing is changed for you — check which one is right.</div>
+      <strong>${noInvoice
+        ? 'Generated without an invoice behind it.'
+        : 'This does not match the invoice for the same container.'}</strong><br>
+      ${list.map((w) => esc(w && w.message)).join('<br>')}
+      <div style="color:var(--text-muted); margin-top:6px; font-size:11.5px;">${noInvoice
+        ? 'Check the buyer details on the PDF before it goes out.'
+        : 'Nothing is changed for you — check which one is right.'}</div>
     </div>`;
 }
 
@@ -5182,8 +5209,28 @@ function pkPaintWarnings(warnings) {
 // corrected a scanned figure and not pressed Save, and printing the older
 // stored version would be the worst kind of surprise on a document going to a
 // customer.
-async function pkGenerate(preview) {
+// ── "GENERATE IT ANYWAY?" ───────────────────────────────────────────────────
+// Apsara, 2026-09-17: "In packing list generation separate tab-it should not
+// restrict me from generating packing list without invoice. just show warning
+// and ask to override. on accept, proceed with packing list generation".
+//
+// The server decides whether a failure is a refusal or a question — it sets
+// can_override, and it writes the sentence, because it is the side that knows
+// whether her Customer field will fill the BUYER box or leave it empty.
+// Nothing about the warning is duplicated here; this only asks it.
+//
+// Returns true when she accepted, and the caller retries with the flag. She is
+// asked EVERY time rather than the answer being remembered: each packing list
+// is a separate document, and "don't ask again" on a document that goes to a
+// buyer is how a headerless one gets posted without anyone deciding to.
+function pkAskOverride(err) {
+  if (!err || err.code !== 'NO_INVOICE' || !err.canOverride) return false;
+  return window.confirm(err.message);
+}
+
+async function pkGenerate(preview, allowWithoutInvoice) {
   const body = pkPayload();
+  if (allowWithoutInvoice) body.allow_without_invoice = true;
   if (!body.container_no) { $('pkStatus').textContent = 'Which container? The header comes from that container\'s invoice.'; return; }
   if (!body.rows.length) { $('pkStatus').textContent = 'Add at least one container row.'; return; }
   $('pkStatus').textContent = preview ? 'Building preview…' : 'Generating…';
@@ -5199,6 +5246,14 @@ async function pkGenerate(preview) {
       if (!res.ok) {
         if (tab) tab.close();
         const j = await res.json().catch(() => ({}));
+        // Same override as the real generate. Retried WITHOUT the preview tab
+        // still open — it was closed above, and pkGenerate opens a fresh one,
+        // because a tab claimed before the confirm dialog is a blank window
+        // sitting there while she reads the question.
+        if (j.code === 'NO_INVOICE' && j.can_override === true && window.confirm(j.error)) {
+          $('btnPkGenerate').disabled = false; $('btnPkPreview').disabled = false;
+          return pkGenerate(true, true);
+        }
         throw new Error(j.error || 'could not build the preview');
       }
       const url = URL.createObjectURL(await res.blob());
@@ -5234,6 +5289,14 @@ async function pkGenerate(preview) {
       $('pkStatus').textContent = `Saved as ${out.saved_filename}, but the download did not start: ${e.message}`;
     }
   } catch (e) {
+    // The real generate's override. Asked here rather than beside the fetch
+    // so the buttons are re-enabled first — a confirm dialog answered "yes"
+    // against disabled buttons leaves her looking at a dead panel if the
+    // retry itself fails.
+    if (pkAskOverride(e)) {
+      $('btnPkGenerate').disabled = false; $('btnPkPreview').disabled = false;
+      return pkGenerate(preview, true);
+    }
     $('pkStatus').textContent = e.message;
   }
   $('btnPkGenerate').disabled = false; $('btnPkPreview').disabled = false;

@@ -306,6 +306,38 @@ section('C — the scan route saves NOTHING');
         ck(`staff cannot reach ${label}`, [401, 403].includes(r.status), `${r.status}`);
     }
 
+    // ── THE OVERRIDE, THROUGH THE REAL ROUTE ─────────────────────────────
+    // Apsara, 2026-09-17: "ALwyas test end to end when you add a new feature."
+    //
+    // The helper checks above prove generatePdf honours allowWithoutInvoice.
+    // They cannot prove the ROUTE forwards it, or that the refusal reaches the
+    // browser as something it can offer a choice about — which is the whole
+    // gap CLAUDE.md rule 3 is about. So this posts to the route the screen
+    // actually posts to.
+    {
+        const noInvBody = { container_no: 'ZZZU9990001', rows: [{ gross_weight_lbs: '1000', tare_lbs: '100' }] };
+
+        const refused = await req('POST', '/api/packing-lists/generate', { sid: admin, body: noInvBody });
+        ck('the route refuses a packing list with no invoice', refused.status === 400, String(refused.status));
+        ck('  with a code the screen can act on', (refused.json || {}).code === 'NO_INVOICE',
+           JSON.stringify(refused.json));
+        ck('  AND can_override, which is what turns it into a question',
+           (refused.json || {}).can_override === true,
+           'the browser cannot tell this apart from a dead end, so it can only show an error');
+        ck('  and the sentence names what will be missing',
+           /BUYER box empty/i.test((refused.json || {}).error || ''), (refused.json || {}).error);
+
+        // Now with her override. The PDF itself cannot render here — this
+        // sandbox has no Chromium — so the proof is that it gets PAST the
+        // invoice guard and fails somewhere else entirely. If the route did
+        // not forward the flag, this would still be NO_INVOICE.
+        const allowed = await req('POST', '/api/packing-lists/generate',
+                                  { sid: admin, body: { ...noInvBody, allow_without_invoice: true } });
+        ck('the route FORWARDS her override to the helper',
+           (allowed.json || {}).code !== 'NO_INVOICE',
+           `still NO_INVOICE — the flag never reached generatePdf: ${JSON.stringify(allowed.json)}`);
+    }
+
     const before = pl.list().length;
     // ── THIS DOES NOT CALL THE REAL MODEL ────────────────────────────────
     // The route has no `ask` to inject, and the first version of this check
@@ -479,15 +511,64 @@ section('C2 — generating the PDF, and checking it against the invoice');
            'one Tare is the PACKING LIST TAB\'s shape, not the invoice\'s');
     }
 
-    // A packing list with a blank exporter block looks finished and is useless
-    // to a broker. Refusing is the right answer, and it says what to do.
+    // ── NO INVOICE: A QUESTION, NOT A WALL ───────────────────────────────
+    // Apsara, 2026-09-17: "it should not restrict me from generating packing
+    // list without invoice. just show warning and ask to override. on accept,
+    // proceed with packing list generation".
+    //
+    // The DEFAULT is unchanged and still refuses — the override has to be
+    // asked for, so the warning cannot be skipped by accident. The old check
+    // here required the words "Make the invoice first"; that sentence is gone
+    // on purpose, because making the invoice is no longer the only way out.
     let err = null;
     try {
         await pl.generatePdf({ container_no: 'NOPE1234567', rows: [{ net_weight_lbs: '1' }] },
                              { renderer: async () => ({ packing: Buffer.from('x') }) });
     } catch (e) { err = e; }
-    ck('no invoice for that container means it REFUSES', err && err.code === 'NO_INVOICE', String(err && err.code));
-    ck('  saying what to do about it', err && /Make the invoice first/i.test(err.message), err && err.message);
+    ck('no invoice for that container still refuses BY DEFAULT', err && err.code === 'NO_INVOICE', String(err && err.code));
+    ck('  and offers the override rather than only refusing',
+       err && err.canOverride === true && /Generate it anyway\?/.test(err.message), err && err.message);
+    ck('  naming what the document will be missing',
+       err && /BUYER box empty/i.test(err.message), err && err.message);
+
+    // With a customer typed on the form, the warning says her name will be
+    // used — a different sentence, because it is a different document.
+    let errNamed = null;
+    try {
+        await pl.generatePdf({ container_no: 'NOPE1234567', customer: 'Daekwang', rows: [{ net_weight_lbs: '1' }] },
+                             { renderer: async () => ({ packing: Buffer.from('x') }) });
+    } catch (e) { errNamed = e; }
+    ck('  and says whose name it WILL use when she typed one',
+       errNamed && /Daekwang as the buyer/.test(errNamed.message), errNamed && errNamed.message);
+
+    // ── ON ACCEPT, IT PROCEEDS ───────────────────────────────────────────
+    let overridden = null;
+    const overridePdf = await pl.generatePdf(
+        { container_no: 'NOPE1234567', customer: 'Daekwang', rows: [{ gross_weight_lbs: '1000', tare_lbs: '100' }] },
+        { allowWithoutInvoice: true,
+          renderer: async (html) => { overridden = html; return { packing: Buffer.from('%PDF override') }; } });
+    ck('the override generates a real document', !!overridePdf && overridePdf.length > 0);
+    ck('  and the BUYER box carries the customer off the form, not a blank',
+       /Daekwang/.test(overridden || ''),
+       'the buyer box printed empty — a packing list to a broker with no buyer on it');
+    ck('  and her weights are still on it',
+       /1,000/.test(overridden || '') && /900/.test(overridden || ''),
+       'the rows did not reach the document');
+    ck('  and no template placeholder leaked onto the page',
+       !/\{\{/.test(overridden || ''),
+       'an unsubstituted {{buyer_name}} printed on a customer document');
+
+    // A container with no number is still a flat refusal — that one cannot be
+    // overridden, because a packing list with no container cannot be filed or
+    // found again afterwards.
+    let errNoC = null;
+    try {
+        await pl.generatePdf({ rows: [{ net_weight_lbs: '1' }] },
+                             { allowWithoutInvoice: true, renderer: async () => ({ packing: Buffer.from('x') }) });
+    } catch (e) { errNoC = e; }
+    ck('  the override does NOT excuse a missing container number',
+       errNoC && errNoC.code === 'NO_CONTAINER' && errNoC.canOverride !== true,
+       String(errNoC && errNoC.code));
 
     let err2 = null;
     try { await pl.generatePdf({ rows: [{ net_weight_lbs: '1' }] }, { renderer: async () => ({}) }); } catch (e) { err2 = e; }
@@ -1121,6 +1202,107 @@ section('G — the item column on the screen');
        /headings repeated/.test(d.getElementById('pkTotals').textContent)
        && !/\b3 pages\b/.test(d.getElementById('pkTotals').textContent),
        'the first page carries the invoice header and later ones do not, so any figure would be wrong half the time');
+
+    dom.window.close();
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+section('H — "Generate it anyway?" on the screen');
+// ══════════════════════════════════════════════════════════════════════════
+{
+    // Apsara, 2026-09-17: "In packing list generation separate tab-it should
+    // not restrict me from generating packing list without invoice. just show
+    // warning and ask to override. on accept, proceed with packing list
+    // generation".
+    //
+    // The route returning can_override is worth nothing if the screen shows it
+    // as a plain error and stops. This drives the real button.
+    let answer = true;          // what she clicks in the dialog
+    const asked = [];           // what she was actually shown
+    const posts = [];           // every body that reached the route
+
+    const dom = new JSDOM(DOCS, { runScripts: 'dangerously', url: 'http://localhost/documents',
+        beforeParse(w) {
+            w.alert = () => {};
+            w.confirm = (msg) => { asked.push(String(msg)); return answer; };
+            w.URL.createObjectURL = () => 'blob:stub';
+            w.URL.revokeObjectURL = () => {};
+            w.fetch = (url, opts) => {
+                const u = String(url);
+                if (u.includes('/api/packing-lists/generate')) {
+                    const body = JSON.parse((opts && opts.body) || '{}');
+                    posts.push(body);
+                    // The server's real answer for a container with no invoice
+                    // — refused, but with the override on offer.
+                    if (!body.allow_without_invoice) {
+                        return Promise.resolve({ ok: false, status: 400, json: () => Promise.resolve({
+                            error: 'No invoice on file for ZZZU9990001. The packing list will print with the BUYER box empty, and no invoice number or date. Generate it anyway?',
+                            code: 'NO_INVOICE', can_override: true,
+                        }) });
+                    }
+                    return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({
+                        ok: true, saved_filename: 'ZZZU9990001_packing.pdf', saved_date: '2026-09-17',
+                        saved_container: 'ZZZU9990001',
+                        // The shape the route really sends: an OBJECT with a
+                        // message, like every other warning. A plain string
+                        // here rendered as nothing, which is how that bug was
+                        // found.
+                        warnings: [{ kind: 'no_invoice', message: 'ZZZU9990001 has no invoice on file, so the buyer details and invoice number come from this form only.' }],
+                    }) });
+                }
+                if (u.includes('/api/documents/download')) {
+                    return Promise.resolve({ ok: true, status: 200, blob: () => Promise.resolve({ size: 2048 }) });
+                }
+                return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({ ok: true, packing_lists: [], bols: [] }) });
+            };
+        } });
+    await new Promise((r) => setTimeout(r, 400));
+    const w = dom.window, d = w.document;
+    w.HTMLAnchorElement.prototype.click = function () {};
+
+    [...d.querySelectorAll('.subtab-btn')].find((b) => b.dataset.subtab === 'packing')
+        .dispatchEvent(new w.MouseEvent('click', { bubbles: true }));
+    await new Promise((r) => setTimeout(r, 100));
+
+    d.getElementById('pk_container').value = 'ZZZU9990001';
+    w.eval('pkRows = [{ note: "#1", gross_weight_lbs: "6000", tare_lbs: "500", net_weight_lbs: "5,500" }]; pkPaintItems();');
+
+    d.getElementById('btnPkGenerate').dispatchEvent(new w.MouseEvent('click', { bubbles: true }));
+    await new Promise((r) => setTimeout(r, 300));
+
+    ck('she is ASKED rather than just told no', asked.length === 1, `asked ${asked.length} times`);
+    ck('  and the question is the server\'s sentence, not one invented here',
+       /Generate it anyway\?/.test(asked[0] || '') && /BUYER box empty/i.test(asked[0] || ''),
+       asked[0]);
+    ck('  it retried after she accepted', posts.length === 2, `${posts.length} posts`);
+    ck('  THE RETRY CARRIES THE OVERRIDE',
+       posts[1] && posts[1].allow_without_invoice === true,
+       'the second attempt was identical to the first, so it was refused again');
+    ck('  and the first attempt did NOT carry it',
+       posts[0] && !posts[0].allow_without_invoice,
+       'the warning was skipped — she never got asked');
+    ck('  her rows survived the retry',
+       posts[1] && posts[1].rows && posts[1].rows.length === 1
+       && posts[1].rows[0].gross_weight_lbs === '6000',
+       JSON.stringify(posts[1] && posts[1].rows));
+    const pkw = () => d.getElementById('pkWarnings').textContent || '';
+    ck('  and the result says it went out without an invoice behind it',
+       /without an invoice/i.test(pkw()), pkw());
+    ck('  the notice itself is rendered, not an empty warning box',
+       /no invoice on file/i.test(pkw()),
+       'the message did not render — the route sent a shape the screen does not read');
+    ck('  and it does NOT claim a mismatch with an invoice that does not exist',
+       !/does not match the invoice/i.test(pkw()),
+       pkw());
+
+    // ── AND "NO" MEANS NO ────────────────────────────────────────────────
+    answer = false; posts.length = 0; asked.length = 0;
+    d.getElementById('btnPkGenerate').dispatchEvent(new w.MouseEvent('click', { bubbles: true }));
+    await new Promise((r) => setTimeout(r, 300));
+    ck('declining generates nothing', posts.length === 1, `${posts.length} posts — it generated anyway`);
+    ck('  and the refusal is left on screen',
+       /No invoice on file/i.test(d.getElementById('pkStatus').textContent || ''),
+       d.getElementById('pkStatus').textContent);
 
     dom.window.close();
 }
