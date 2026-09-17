@@ -107,7 +107,10 @@ section('B — a cash payment is adjusted against the box');
     // and these fixtures are yard loads. The old three are still valid for
     // Edge Metals, which is asserted where that rule lives —
     // tests/yard-payment-modes.js section C.
-    for (const mode of ['Bank transfer']) {
+    // Wire since 2026-09-17: a PURCHASE no longer takes Bank transfer ("in
+    // load of invoice pay-remove bank transfer"). What this section is about
+    // is unchanged — a non-cash mode must not touch the petty cash box.
+    for (const mode of ['Wire']) {
         const before = petty.balance();
         // paid_via since 2026-09-17: a yard purchase by Wire or Bank
         // transfer records whose money it was. The ordinary case is the
@@ -249,7 +252,9 @@ section('G — deleting a cash payment puts the money back');
     ck('  reversing an unknown id credits nothing', petty.balance() === bal);
 
     // A non-cash payment has nothing to refund.
-    const z = await payments.addPayment({ load_id: 'EDGE_21', amount: 99, mode: 'Bank transfer', bank: 'Chase Bank', paid_via: 'Edge Yard' });
+    // Wire, not Bank transfer: 2026-09-17 removed Bank transfer from a
+    // PURCHASE entirely ("in load of invoice pay-remove bank transfer").
+    const z = await payments.addPayment({ load_id: 'EDGE_21', amount: 99, mode: 'Wire', bank: 'Chase Bank', paid_via: 'Edge Yard' });
     await payments.deletePayment(z.id);
     ck('deleting a non-cash payment leaves the box alone', petty.balance() === 1000);
 }

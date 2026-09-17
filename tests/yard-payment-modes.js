@@ -129,7 +129,10 @@ section('B — and the SERVER holds the rule, not just the dropdown');
     // This is the line that was crossed. Paying a supplier is not receiving
     // payment, and she pays those by Zelle and Wire — there is a whole
     // bank-account picker for exactly those two modes.
-    for (const mode of ['Zelle', 'Wire', 'Cheque', 'Cash', 'Bank transfer']) {
+    // FOUR, not five: Apsara, 2026-09-17, "in load of invoice pay-remove bank
+    // transfer". On the paying-out side it was a second name for Wire, and two
+    // names for one movement is two ways to answer "how did that go out".
+    for (const mode of ['Zelle', 'Wire', 'Cheque', 'Cash']) {
         let err = null; let rec = null;
         // A bank only where a bank makes sense — Cash and Cheque are refused
         // one, correctly, and my first version of this check sent one anyway
@@ -148,6 +151,20 @@ section('B — and the SERVER holds the rule, not just the dropdown');
            err ? err.message : JSON.stringify(rec && rec.mode));
     }
 
+    // And Bank transfer is refused on that side now, naming what IS allowed.
+    {
+        let err = null;
+        try {
+            await pay.addPayment({ load_id: 'L_buy_BT', load_kind: 'purchase', mode: 'Bank transfer',
+                                   amount: 10, paid_on: '2026-09-17' });
+        } catch (e) { err = e; }
+        ck('  and Bank transfer is refused on a purchase', !!err, 'recorded anyway');
+        ck('    naming Cash, Zelle, Wire and Cheque',
+           err && /Cash/.test(err.message) && /Zelle/.test(err.message)
+           && /Wire/.test(err.message) && /Cheque/.test(err.message),
+           err && err.message);
+    }
+
     // The message must name the list THAT APPLIES. Being refused a Zelle and
     // then told "must be one of: Cash, Bank transfer, Zelle, Wire, Cheque"
     // reads as a bug in the software rather than an answer.
@@ -160,7 +177,7 @@ section('B — and the SERVER holds the rule, not just the dropdown');
     // The two that ARE allowed still work, both ways round.
     const p1 = await pay.addPayment({ load_id: 'L_OK1', load_kind: 'purchase', mode: 'Cash', amount: 100, paid_on: '2026-09-16' });
     ck('cash on a purchase still records', !!p1 && p1.mode === 'Cash');
-    const p2 = await pay.addPayment({ load_id: 'L_OK2', load_kind: 'sale', mode: 'Bank transfer', amount: 100, paid_on: '2026-09-16', bank: 'BofA' });
+    const p2 = await pay.addPayment({ load_id: 'L_OK2', load_kind: 'sale', mode: 'Bank transfer', amount: 100, paid_on: '2026-09-16', bank: 'BofA', paid_via: 'Edge Yard' });
     ck('a bank transfer on a sale still records', !!p2 && p2.mode === 'Bank transfer', JSON.stringify(p2 && p2.mode));
     ck('  carrying the account it landed in', p2 && p2.bank === 'BofA', JSON.stringify(p2 && p2.bank));
     ck('  because a transfer is a mode with a bank behind it',

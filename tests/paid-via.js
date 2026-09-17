@@ -54,18 +54,45 @@ section('A — it asks, and it refuses without an answer');
 {
     await petty.addTopUp({ amount: 50000, date: '2026-09-15', note: 'float' });
 
-    for (const mode of ['Wire', 'Bank transfer']) {
+    // WIRE ONLY on a purchase. Bank transfer was removed from that side
+    // entirely — Apsara, 2026-09-17: "in load of invoice pay-remove bank
+    // transfer" — so Wire is the only transfer left there.
+    {
         let err = null;
         try {
-            await pay.addPayment({ load_id: `V_${mode}`, load_kind: 'purchase', mode, amount: 100,
-                                   paid_on: '2026-09-17', ...(mode === 'Wire' ? { bank: 'Chase Bank' } : {}) });
+            await pay.addPayment({ load_id: 'V_Wire', load_kind: 'purchase', mode: 'Wire', amount: 100,
+                                   paid_on: '2026-09-17', bank: 'Chase Bank' });
         } catch (e) { err = e; }
-        ck(`a purchase by ${mode} refuses to save without it`, !!err, 'recorded anyway');
+        ck('a purchase by Wire refuses to save without it', !!err, 'recorded anyway');
         // The message has to say what to type. "Invalid input" on a payment
         // screen is a support call.
-        ck(`  and the message names both companies`,
+        ck('  and the message names both companies',
            err && /Edge Yard/.test(err.message) && /Edge Metals/.test(err.message),
            err && err.message);
+        ck('  and calls it "Payment via" — money going OUT',
+           err && /Payment via/.test(err.message), err && err.message);
+    }
+
+    // ── AND A SALE, WHICH IS THE OTHER DIRECTION ─────────────────────────
+    // Apsara, 2026-09-17: "For receive payment also,add paid to Edge Yard,Edge
+    // Metals", and, asked which modes: "Bank transfer only".
+    {
+        let err = null;
+        try {
+            await pay.addPayment({ load_id: 'V_SALE_BT', load_kind: 'sale', mode: 'Bank transfer',
+                                   amount: 700, paid_on: '2026-09-17' });
+        } catch (e) { err = e; }
+        ck('a sale by Bank transfer refuses to save without it', !!err, 'recorded anyway');
+        ck('  and calls it "Paid to" — money coming IN',
+           err && /Paid to/.test(err.message), err && err.message);
+        ck('  naming both companies too',
+           err && /Edge Yard/.test(err.message) && /Edge Metals/.test(err.message),
+           err && err.message);
+
+        const ok2 = await pay.addPayment({ load_id: 'V_SALE_OK', load_kind: 'sale', mode: 'Bank transfer',
+                                           amount: 700, paid_on: '2026-09-17', paid_via: 'Edge Metals' });
+        ck('  answered, the receipt records', ok2 && ok2.paid_via === 'Edge Metals',
+           JSON.stringify(ok2 && ok2.paid_via));
     }
 
     const ok = await pay.addPayment({ load_id: 'V_OK', load_kind: 'purchase', mode: 'Wire', amount: 100,
@@ -74,8 +101,8 @@ section('A — it asks, and it refuses without an answer');
 
     // Typed however it arrives. She will not be typing it, but the yard
     // assistant might, and a case mismatch refusing a payment is a bad day.
-    const ci = await pay.addPayment({ load_id: 'V_CI', load_kind: 'purchase', mode: 'Bank transfer', amount: 50,
-                                      paid_on: '2026-09-17', paid_via: 'edge yard' });
+    const ci = await pay.addPayment({ load_id: 'V_CI', load_kind: 'purchase', mode: 'Wire', amount: 50,
+                                      paid_on: '2026-09-17', bank: 'BofA', paid_via: 'edge yard' });
     ck('  and case does not matter', ci && ci.paid_via === 'Edge Yard', JSON.stringify(ci && ci.paid_via));
 
     let bad = null;
@@ -95,11 +122,10 @@ section('B — and it asks NOWHERE ELSE');
     // screen. She said "pay of create invoice" — a yard purchase — and named
     // two modes.
     for (const [kind, mode, why] of [
-        ['purchase', 'Zelle',         'she listed Wire and Bank transfer; Zelle shares the bank picker and is still not on her list'],
+        ['purchase', 'Zelle',         'Zelle shares the bank picker and is still not on her list'],
         ['purchase', 'Cash',          'cash is not a transfer between accounts'],
         ['purchase', 'Cheque',        'nor is a cheque'],
-        ['sale',     'Bank transfer', 'a sale is RECEIVING money, and this is one of only two modes it takes'],
-        ['sale',     'Cash',          'likewise'],
+        ['sale',     'Cash',          'cash from a yard sale goes into Edge Yard\'s petty cash box, so it is ALWAYS the yard\'s — asking would let her file a contradiction with her own ledger'],
         ['bill',     'Wire',          'Edge Metals bills are the other company\'s books'],
         ['sale_cost', 'Wire',         'and so are sale costs'],
         ['metals_trucking', 'Wire',   'and metals haulage'],
@@ -108,12 +134,30 @@ section('B — and it asks NOWHERE ELSE');
         ck(`${kind} / ${mode} does not ask`, pay.paidViaRequired(kind, mode) === false, why);
     }
 
+    // ── AND BANK TRANSFER IS GONE FROM A PURCHASE ALTOGETHER ─────────────
+    // Apsara, 2026-09-17: "in load of invoice pay-remove bank transfer."
+    ck('a purchase no longer offers Bank transfer',
+       !pay.modesForKind('purchase').includes('Bank transfer'),
+       pay.modesForKind('purchase').join(', '));
+    ck('  it offers Cash, Zelle, Wire and Cheque',
+       pay.modesForKind('purchase').join(',') === 'Cash,Zelle,Wire,Cheque',
+       pay.modesForKind('purchase').join(', '));
+    ck('  a sale still takes Bank transfer', pay.modesForKind('sale').includes('Bank transfer'),
+       pay.modesForKind('sale').join(', '));
+    // THE VOCABULARY IS UNTOUCHED: every purchase already recorded as Bank
+    // transfer must keep reading as one everywhere — the spend report, the
+    // bank matcher, the cards. What narrowed is the CHOICE, not the words the
+    // file understands.
+    ck('  and Bank transfer is still a mode this file knows',
+       pay.PAYMENT_MODES.includes('Bank transfer'),
+       'narrowing the vocabulary would orphan every purchase already recorded as one');
+
     // Driven, not just asserted on the predicate: a payment that would be
     // refused is the thing that actually hurts.
-    const s = await pay.addPayment({ load_id: 'V_SALE', load_kind: 'sale', mode: 'Bank transfer',
+    const s = await pay.addPayment({ load_id: 'V_SALE', load_kind: 'sale', mode: 'Cash',
                                      amount: 500, paid_on: '2026-09-17' });
-    ck('  and a sale by Bank transfer still records with nothing extra',
-       !!s && s.mode === 'Bank transfer', JSON.stringify(s && s.mode));
+    ck('  and a cash sale still records with nothing extra',
+       !!s && s.mode === 'Cash', JSON.stringify(s && s.mode));
     const z = await pay.addPayment({ load_id: 'V_ZELLE', load_kind: 'purchase', mode: 'Zelle',
                                      amount: 200, paid_on: '2026-09-17', bank: 'BofA' });
     ck('  and a purchase by Zelle still records', !!z && z.mode === 'Zelle', JSON.stringify(z && z.mode));
@@ -191,7 +235,7 @@ section('D — the screen asks at the right moment');
     d.body.insertAdjacentHTML('beforeend', `
       <select id="pay_mode"></select>
       <div id="pay_bank_row"></div><select id="pay_bank"></select><div id="pay_bank_other_field"></div>
-      <div id="pay_via_row"></div>
+      <div id="pay_via_row"><label for="pay_via">Payment via</label></div>
       <select id="pay_via"><option value=""></option><option value="Edge Yard">Edge Yard</option></select>`);
 
     // data-kind, not `payingLoad`: that is a top-level `let`, a script-scope
@@ -207,14 +251,25 @@ section('D — the screen asks at the right moment');
     };
 
     ck('purchase + Wire shows it', shown('purchase', 'Wire') === true);
-    ck('purchase + Bank transfer shows it', shown('purchase', 'Bank transfer') === true);
     ck('purchase + Zelle does NOT', shown('purchase', 'Zelle') === false,
        'Zelle has a bank but is not on her list');
     ck('purchase + Cash does NOT', shown('purchase', 'Cash') === false);
-    ck('a SALE by Bank transfer does NOT', shown('sale', 'Bank transfer') === false,
-       'receiving money must not get harder — that is the 2026-09-16 over-reach, again');
+    // The other direction, since 2026-09-17: "For receive payment also,add
+    // paid to Edge Yard,Edge Metals" — Bank transfer only.
+    ck('a SALE by Bank transfer SHOWS it', shown('sale', 'Bank transfer') === true);
+    ck('  a cash sale does NOT', shown('sale', 'Cash') === false,
+       'cash from a yard sale is always the yard\'s — it goes into her petty cash box');
     ck('  and switching back to a purchase brings it back', shown('purchase', 'Wire') === true,
        'hidden once must not stay hidden');
+
+    // ── AND THE LABEL FOLLOWS THE DIRECTION ──────────────────────────────
+    // One word for both would be wrong on one of them: a purchase sends money
+    // out, a sale takes it in.
+    const labelOf = () => (d.querySelector('#pay_via_row label') || {}).textContent;
+    shown('purchase', 'Wire');
+    ck('a purchase says "Payment via"', labelOf() === 'Payment via', labelOf());
+    shown('sale', 'Bank transfer');
+    ck('  and a sale says "Paid to"', labelOf() === 'Paid to', labelOf());
 
     dom.window.close();
 }
@@ -236,9 +291,15 @@ section('E — the markup, and both clients');
         ck(`  ${who}: cleared on every open`, /\$\('pay_via'\)\.value = ''/.test(src),
            'otherwise the last payment\'s company is pre-answered on this one');
         ck(`  ${who}: and sent with the payment`, /paid_via: \(\$\('pay_via'\)/.test(src));
-        ck(`  ${who}: the two modes match the server's`,
-           /const paidViaModes = \['Wire', 'Bank transfer'\]/.test(src),
-           'a client that asks on different modes than the server enforces is a form that fails on save');
+        ck(`  ${who}: the combinations match the server's`,
+           /paidViaModesFor = \(sale\) => \(sale \? \['Bank transfer'\] : \['Wire'\]\)/.test(src),
+           'a client that asks on different combinations than the server enforces is a form that fails on save');
+        ck(`  ${who}: and so do the two labels`,
+           /paidViaLabelFor = \(sale\) => \(sale \? 'Paid to' : 'Payment via'\)/.test(src));
+        // Apsara, 2026-09-17: "in load of invoice pay-remove bank transfer."
+        ck(`  ${who}: a purchase no longer offers Bank transfer`,
+           /const payModes = sale \? \['Cash', 'Bank transfer'\] : \['Cash', 'Zelle', 'Wire', 'Cheque'\]/.test(src),
+           'and a sale still does — it is the mode she receives money by');
     }
 }
 
@@ -313,14 +374,37 @@ section('F — END TO END, through the real routes');
     } });
     ck('answered, the route accepts it', okRes.status === 200, `${okRes.status} ${JSON.stringify(okRes.json)}`);
 
-    // A sale by Bank transfer must still go through with no company at all —
-    // the over-reach check, end to end this time.
-    const saleRes = await req('POST', '/api/payments', { sid, body: {
+    // ── AND THE OTHER DIRECTION, END TO END ──────────────────────────────
+    // Apsara, 2026-09-17: "For receive payment also,add paid to Edge Yard,Edge
+    // Metals". This check used to assert a sale needed NOTHING extra, which
+    // was true until she asked for this.
+    const saleMissing = await req('POST', '/api/payments', { sid, body: {
         load_id: 'E2E_SALE', load_kind: 'sale', mode: 'Bank transfer',
         amount: 400, paid_on: '2026-09-17',
     } });
-    ck('a sale by Bank transfer still needs nothing extra', saleRes.status === 200,
+    ck('the route refuses a sale transfer with no company', saleMissing.status >= 400,
+       `${saleMissing.status} ${JSON.stringify(saleMissing.json)}`);
+    ck('  saying "Paid to", not "Payment via"',
+       /Paid to/.test(JSON.stringify(saleMissing.json || {})), JSON.stringify(saleMissing.json));
+
+    const saleRes = await req('POST', '/api/payments', { sid, body: {
+        load_id: 'E2E_SALE', load_kind: 'sale', mode: 'Bank transfer',
+        amount: 400, paid_on: '2026-09-17', paid_via: 'Edge Yard',
+    } });
+    ck('  answered, the receipt records', saleRes.status === 200,
        `${saleRes.status} ${JSON.stringify(saleRes.json)}`);
+
+    // And a purchase can no longer be paid by Bank transfer at all — her
+    // other instruction of the same message.
+    const btPurchase = await req('POST', '/api/payments', { sid, body: {
+        load_id: 'E2E_1', load_kind: 'purchase', mode: 'Bank transfer',
+        amount: 10, paid_on: '2026-09-17', paid_via: 'Edge Yard',
+    } });
+    ck('a purchase by Bank transfer is refused outright', btPurchase.status >= 400,
+       `${btPurchase.status} ${JSON.stringify(btPurchase.json)}`);
+    ck('  and the message lists what a purchase DOES take',
+       /Zelle/.test(JSON.stringify(btPurchase.json || {})) && /Wire/.test(JSON.stringify(btPurchase.json || {})),
+       JSON.stringify(btPurchase.json));
 
     // ── AND IT REACHES THE REPORT THE SCREEN READS ───────────────────────
     const rep = (await req('GET', '/api/reports/spend', { sid })).json || {};

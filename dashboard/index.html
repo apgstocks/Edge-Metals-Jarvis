@@ -8748,10 +8748,21 @@ function paintBankOptions(sel) {
 // Shows or hides the bank row for the chosen mode, and the text box for
 // Others. `prefix` is 'pay' or 'trk' — the two forms are identical in
 // behaviour, so they share this rather than each growing their own copy.
-// Her two modes, and only hers — Zelle shares the bank picker and is NOT on
-// this list because she did not put it there. Kept in step with
-// helpers/payments.js's PAID_VIA_MODES, which is what the server enforces.
-const paidViaModes = ['Wire', 'Bank transfer'];
+// ── WHICH COMBINATIONS ASK, AND WHAT THEY ASK ─────────────────────────────
+// Two directions, two questions. A PURCHASE pays a supplier — "Payment via",
+// whose money went out, and Wire is the only transfer left on that side since
+// she removed Bank transfer from it. A SALE receives money — "Paid to", which
+// company it landed in, on Bank transfer.
+//
+// CASH NEVER ASKS, either way: cash from a yard sale goes into Edge Yard's
+// petty cash box (her rule of 2026-09-02), so it is always the yard's and
+// asking would let her file a contradiction with her own ledger.
+//
+// Kept in step with helpers/payments.js's PAID_VIA_BY_KIND, which is what the
+// server enforces: a client that asks on different combinations than the
+// server requires is a form that fails on save.
+const paidViaModesFor = (sale) => (sale ? ['Bank transfer'] : ['Wire']);
+const paidViaLabelFor = (sale) => (sale ? 'Paid to' : 'Payment via');
 // ── WHOSE MONEY, AND WHY THE KIND COMES OFF THE ROW ───────────────────────
 // Apsara, 2026-09-17: "on selecting wire-it should ask me Payment via Edge
 // Yard/Edge Metals", and on which modes, "Wire and Bank Transfer".
@@ -8780,9 +8791,11 @@ function syncBankFields(prefix) {
   if (otherField) otherField.style.display = (needs && sel && sel.value === bankOther) ? '' : 'none';
   const viaRow = $(prefix + '_via_row');
   if (viaRow) {
-    const isPurchase = viaRow.dataset.kind !== 'sale';
-    viaRow.style.display = (isPurchase && paidViaModes.some((m) => m.toLowerCase() === String(mode).toLowerCase()))
-      ? '' : 'none';
+    const sale = viaRow.dataset.kind === 'sale';
+    const asks = paidViaModesFor(sale).some((m) => m.toLowerCase() === String(mode).toLowerCase());
+    viaRow.style.display = asks ? '' : 'none';
+    const lbl = viaRow.querySelector('label');
+    if (lbl) lbl.textContent = paidViaLabelFor(sale);
   }
 }
 
@@ -8837,7 +8850,12 @@ function openPayModal(loadId, kind) {
   // Kept in step with helpers/payments.js's modesForKind, which is what the
   // SERVER enforces — a dropdown is a suggestion, and the yard assistant
   // records payments through the same validator.
-  const payModes = sale ? ['Cash', 'Bank transfer'] : ['Cash', 'Bank transfer', 'Zelle', 'Wire', 'Cheque'];
+  // Kept in step with helpers/payments.js's modesForKind, which is what the
+  // server enforces. A sale receives money: Cash or Bank transfer, her rule of
+  // 2026-09-16. A purchase pays a supplier: Cash, Zelle, Wire or Cheque —
+  // Apsara, 2026-09-17, "in load of invoice pay-remove bank transfer", because
+  // on that side it was a second name for Wire.
+  const payModes = sale ? ['Cash', 'Bank transfer'] : ['Cash', 'Zelle', 'Wire', 'Cheque'];
   $('pay_mode').innerHTML = payModes.map((m) => `<option value="${esc(m)}">${esc(m)}</option>`).join('');
   // A default that EXISTS in the list. Zelle was being selected on a list
   // that no longer had it, which is the bug this line is now written against.

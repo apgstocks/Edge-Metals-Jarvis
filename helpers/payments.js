@@ -63,6 +63,20 @@ const PAYMENT_MODES = ['Cash', 'Bank transfer', 'Zelle', 'Wire', 'Cheque'];
 // what she asked for.
 const YARD_LOAD_MODES = ['Cash', 'Bank transfer'];
 
+// ── WHAT A PURCHASE MAY BE PAID BY ─────────────────────────────────────────
+// Apsara, 2026-09-17: "in load of invoice pay-remove bank transfer."
+//
+// So paying a supplier is Cash, Zelle, Wire or Cheque. Bank transfer was a
+// second name for the same thing as Wire on this side, and two names for one
+// movement is two ways to answer "how did that go out".
+//
+// PAYMENT_MODES itself is untouched, deliberately: every purchase already
+// recorded as "Bank transfer" keeps reading as Bank transfer everywhere — the
+// spend report, the bank matcher, the cards. What narrows is the list of
+// modes a NEW purchase payment may choose from, not the vocabulary the file
+// understands. Same shape as the receive-payment restriction of 2026-09-16.
+const PURCHASE_MODES = ['Cash', 'Zelle', 'Wire', 'Cheque'];
+
 // ── RECEIVE PAYMENT, NOT EVERY YARD PAYMENT ────────────────────────────────
 // Apsara, 2026-09-16: "whn i talked about receive payment-i was talking only
 // about edge yard ..in loads,there are two options na..create invoice and
@@ -88,9 +102,10 @@ const YARD_LOAD_KINDS = new Set(['sale']);
 // The modes a given load kind accepts. One function, so the validator, the
 // bot tool and anything added later cannot disagree about the answer.
 function modesForKind(loadKind) {
-    return YARD_LOAD_KINDS.has(String(loadKind || 'purchase').trim() || 'purchase')
-        ? YARD_LOAD_MODES.slice()
-        : PAYMENT_MODES.slice();
+    const k = String(loadKind || 'purchase').trim() || 'purchase';
+    if (YARD_LOAD_KINDS.has(k)) return YARD_LOAD_MODES.slice();   // a sale: receive payment
+    if (k === 'purchase') return PURCHASE_MODES.slice();          // paying a supplier
+    return PAYMENT_MODES.slice();                                 // Edge Metals, truckers
 }
 
 // ── WHOSE MONEY PAID IT ────────────────────────────────────────────────────
@@ -102,17 +117,37 @@ function modesForKind(loadKind) {
 // transfer actually left is a fact the bank field does not carry — "Chase
 // Bank" does not say whose Chase account.
 const PAID_VIA = ['Edge Yard', 'Edge Metals'];
-// Her two modes, and only hers. Zelle shares the bank picker and is NOT on
-// this list because she did not put it there.
-const PAID_VIA_MODES = new Set(['Wire', 'Bank transfer']);
-// A yard PURCHASE — "pay of create invoice". A sale is receiving money and
-// takes Bank transfer as one of only two modes; requiring this there would
-// make receiving money harder, which is not what she asked for.
-const PAID_VIA_KINDS = new Set(['purchase']);
+
+// ── WHICH COMBINATIONS ASK ─────────────────────────────────────────────────
+// Two directions, two questions, and they are NOT the same question:
+//
+//   A PURCHASE pays a supplier. "Payment via" — whose money went out.
+//   Apsara, 2026-09-17: "on selecting wire-it should ask me Payment via Edge
+//   Yard/Edge Metals". She then removed Bank transfer from a purchase
+//   entirely ("in load of invoice pay-remove bank transfer"), so Wire is the
+//   only transfer left there and the only mode that asks.
+//
+//   A SALE receives money. "Paid to" — which company it landed in. Apsara,
+//   2026-09-17: "For receive payment also,add paid to Edge Yard,Edge Metals",
+//   and, asked which modes: "Bank transfer only".
+//
+//   CASH NEVER ASKS, on either side. Cash from a yard sale goes into Edge
+//   Yard's petty cash box (her rule of 2026-09-02), so it is always the
+//   yard's — asking would let her file a contradiction with her own ledger.
+const PAID_VIA_BY_KIND = {
+    purchase: new Set(['Wire']),
+    sale: new Set(['Bank transfer']),
+};
 
 function paidViaRequired(loadKind, mode) {
-    return PAID_VIA_KINDS.has(String(loadKind || '').trim())
-        && PAID_VIA_MODES.has(String(mode || '').trim());
+    const allowed = PAID_VIA_BY_KIND[String(loadKind || '').trim()];
+    return !!allowed && allowed.has(String(mode || '').trim());
+}
+
+// The two words the screen shows. A purchase sends money OUT and a sale takes
+// it IN, and one label for both would be wrong on one of them.
+function paidViaLabel(loadKind) {
+    return String(loadKind || '').trim() === 'sale' ? 'Paid to' : 'Payment via';
 }
 
 // Returns '' when this combination does not ask. Throws when it does and she
@@ -126,7 +161,10 @@ function resolvePaidVia(loadKind, mode, value) {
         // vanish because the form did not have a box for it.
         return given || '';
     }
-    if (!given) throw new Error(`a ${mode} on a yard purchase needs "Payment via": ${PAID_VIA.join(' or ')}`);
+    if (!given) {
+        const where = String(loadKind || '').trim() === 'sale' ? 'a yard sale' : 'a yard purchase';
+        throw new Error(`a ${mode} on ${where} needs "${paidViaLabel(loadKind)}": ${PAID_VIA.join(' or ')}`);
+    }
     return given;
 }
 
@@ -567,7 +605,8 @@ function paymentSummary(loadId, loadAmount) {
 }
 
 module.exports = {
-    PAYMENT_MODES, YARD_LOAD_MODES, modesForKind, PAID_VIA, PAID_VIA_MODES, PAID_VIA_KINDS,
-    paidViaRequired, resolvePaidVia, listPayments, paymentsForLoad, addPayment,
+    PAYMENT_MODES, YARD_LOAD_MODES, PURCHASE_MODES, modesForKind,
+    PAID_VIA, PAID_VIA_BY_KIND, paidViaRequired, paidViaLabel, resolvePaidVia,
+    listPayments, paymentsForLoad, addPayment,
     deletePayment, deletePaymentsForLoad, paymentSummary,
 };

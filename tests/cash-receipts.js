@@ -178,7 +178,9 @@ section('E — Bank transfer');
     // payment against it.
     ck('a transfer can carry a bank', banks.MODES_WITH_BANK.includes('Bank transfer'),
        banks.MODES_WITH_BANK.join(','));
-    const t = await pay.addPayment({ load_id: 'OUT_3', load_kind: 'sale', mode: 'Bank transfer',
+    // paid_via since 2026-09-17: a sale received by Bank transfer records
+    // which company it landed in.
+    const t = await pay.addPayment({ load_id: 'OUT_3', load_kind: 'sale', mode: 'Bank transfer', paid_via: 'Edge Yard',
                                      amount: 900, paid_on: '2026-09-16', bank: 'Chase Bank' });
     ck('  and it is stored', t.bank === 'Chase Bank', JSON.stringify(t.bank));
 
@@ -186,7 +188,7 @@ section('E — Bank transfer');
     // drawer, and crediting the cash box for one would overstate what is
     // physically there — the figure nobody can check against a statement.
     const before = petty.balance();
-    await pay.addPayment({ load_id: 'OUT_4', load_kind: 'sale', mode: 'Bank transfer',
+    await pay.addPayment({ load_id: 'OUT_4', load_kind: 'sale', mode: 'Bank transfer', paid_via: 'Edge Yard',
                            amount: 700, paid_on: '2026-09-16', bank: 'BofA' });
     ck('a transfer does NOT touch petty cash', petty.balance() === before,
        `${before} -> ${petty.balance()}`);
@@ -228,8 +230,21 @@ section('F — what the spend report makes of it');
     ck('a cash receipt counts as money IN', rep.cash.in > 0, JSON.stringify(rep.cash));
     ck('  and is not counted as money out',
        rep.cash.out < rep.cash.in, JSON.stringify(rep.cash));
-    ck('  closing agrees with the rows', rep.cash.closing === petty.balance(),
-       `${rep.cash.closing} vs ${petty.balance()}`);
+    // ── COMPARED LIKE WITH LIKE ──────────────────────────────────────────
+    // petty.balance() is ALL TIME; the report above is windowed to one day.
+    // They agreed while every fixture row fell inside that day — and stopped
+    // agreeing at midnight, because the reversal rows written by the delete
+    // tests are stamped with TODAY (helpers/time's todayLocal), which moved
+    // out of the window while nothing about the code changed.
+    //
+    // A test that passes only on the day it was written is a test that cries
+    // wolf on an unrelated morning, which is how a real failure gets waved
+    // through. The closing figure is compared against an ALL-TIME report.
+    const allTime = buildSpendReport({
+        payments: [], expenses: [], pettyEntries: petty.listEntries(),
+    });
+    ck('  closing agrees with the rows', allTime.cash.closing === petty.balance(),
+       `${allTime.cash.closing} vs ${petty.balance()} — all-time against all-time`);
 }
 
 console.log(`\n  ${pass} passed, ${fail} failed`);
