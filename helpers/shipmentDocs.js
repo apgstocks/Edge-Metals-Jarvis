@@ -157,8 +157,50 @@ function findForContainer(containerNo) {
     const packingNames = chosen.classified.filter((c) => c.kind === 'packing').map((c) => c.name);
 
     const invoice = newestOf(chosen.dir, invoiceNames);
-    const packing = newestOf(chosen.dir, packingNames);
+    let packing = newestOf(chosen.dir, packingNames);
     const combined = invoice ? !!(classify(invoice) || {}).combined : false;
+
+    // ── A PACKING LIST FILED UNDER A DIFFERENT DAY ──────────────────────────
+    // Apsara, 2026-09-17, describing exactly this: "Say i have checked invoice
+    // only and generated packing list sep for container-123. When i say to
+    // jarvis to send documents of 123-how does it work?"
+    //
+    // It did not work. The two routes disagreed about what "today" was — the
+    // invoice filed under UTC, the packing list under Pacific — so an evening
+    // pair landed in two folders and this function reported the packing list
+    // missing. That clock bug is fixed at source now (helpers/documentsSaved.js),
+    // but two cases remain and always will:
+    //
+    //   the packing list carries ITS OWN date (rec.date), so dating one to the
+    //     shipment date files it under that day while the invoice files under
+    //     today — no clock involved, and no fix at source possible;
+    //   everything already in the archive, which is split as it stands.
+    //
+    // So: look wider, but ONLY when the invoice's own folder has nothing. A
+    // packing list sitting beside the invoice always wins — this can never
+    // override a correctly-paired document.
+    //
+    // ── AND IT SAYS SO OUT LOUD ─────────────────────────────────────────────
+    // This is the one place that pairs documents filed on different days,
+    // which the rest of this file exists to prevent. The protection is not
+    // cleverness about which one is right — it cannot know — it is that
+    // `packingFromDate` is set and the read-back names the date, so she sees
+    // "packing list from 2026-09-15" before she says yes.
+    let packingFromDate = null;
+    if (!packing && !combined) {
+        for (const f of folders) {
+            if (f.dir === chosen.dir) continue;
+            const names = f.files.filter((n) => (classify(n) || {}).kind === 'packing');
+            const best = newestOf(f.dir, names);
+            if (best) {
+                packing = best;
+                packingFromDate = f.date;
+                chosen.packingDir = f.dir;
+                break;   // folders are newest-first, so this is the latest one
+            }
+        }
+    }
+    const packingDir = packingFromDate ? chosen.packingDir : chosen.dir;
 
     const missing = [];
     if (!invoice) missing.push('invoice');
@@ -171,8 +213,11 @@ function findForContainer(containerNo) {
         date: chosen.date,
         dir: chosen.dir,
         invoice: invoice ? { filename: invoice, path: path.join(chosen.dir, invoice) } : null,
-        packing: packing ? { filename: packing, path: path.join(chosen.dir, packing) } : null,
+        packing: packing ? { filename: packing, path: path.join(packingDir, packing) } : null,
         hasPackingInside: combined,
+        // Null when the pair came from one folder, which is the normal case.
+        // A date here means the caller MUST tell her — see the block above.
+        packingFromDate,
         missing,
         ...(customerFor(containerNo) || { consignee: null, inv_no: null }),
     };

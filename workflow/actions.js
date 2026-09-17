@@ -3912,6 +3912,13 @@ async function sendShipmentDocsForConfirm(chatId, containerNo, rawText) {
     if (found.hasPackingInside) {
         warnings.push('That invoice has its packing list bound into the same file.');
     }
+    // The pair came from two different days. shipmentDocs will only do this
+    // when the invoice's own folder had no packing list at all, and it is the
+    // one case where documents filed on different dates are put in the same
+    // email — so it is named here, where she can still say no.
+    if (found.packingFromDate) {
+        warnings.push(`The packing list is filed under ${found.packingFromDate}, not with the invoice (${found.date}) — check it is the right one.`);
+    }
     const today = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' });
     if (found.date !== today) {
         // She may be looking at a document she generated minutes ago while

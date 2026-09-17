@@ -23,9 +23,33 @@ function safeName(name) {
     return String(name || 'UNKNOWN').trim().toUpperCase().replace(/[^A-Z0-9_\-]/g, '_');
 }
 
-// date accepted as 'YYYY-MM-DD' or omitted (defaults to today).
+// ── TODAY, WHERE THE BUSINESS IS ────────────────────────────────────────────
+// This defaulted to new Date().toISOString() — UTC — until 2026-09-17. Frisco
+// is UTC-7/8, so from late afternoon the UTC date is already TOMORROW and an
+// evening invoice was filed under a day that had not started yet.
+//
+// It went unnoticed for a long time because BOTH SIDES were wrong the same
+// way: the website and the app also guessed the folder with toISOString(), so
+// the download agreed with the archive by accident. Moving only one of them
+// would have broken downloading a freshly generated invoice — which is why
+// the note beside bolTodayISO() in the app left this alone and said it was
+// "worth fixing on purpose, not as a side effect". Apsara asked for it on
+// purpose on 2026-09-17, and server and clients moved in the same commit.
+//
+// What made it visible: an invoice generated in the evening and a packing
+// list generated beside it landed in DIFFERENT date folders, because the
+// packing list route already passed a Pacific date. Sending a container's
+// documents then found the invoice alone and reported the packing list
+// missing — see helpers/shipmentDocs.js, which will not pair documents
+// across folders.
+function todayHere() {
+    return new Date().toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' });
+}
+
+// date accepted as 'YYYY-MM-DD' or omitted (defaults to today, in the yard's
+// timezone — NOT UTC; see todayHere above).
 function saveInvoiceCopy(buffer, filename, containerNo, dateStr) {
-    const date = dateStr || new Date().toISOString().slice(0, 10);
+    const date = dateStr || todayHere();
     const destDir = path.join(cfg.DOCUMENTS_SAVED_DIR, 'invoice', date, safeName(containerNo));
     fs.mkdirSync(destDir, { recursive: true });
     const destPath = path.join(destDir, path.basename(filename));
@@ -79,7 +103,10 @@ function listSavedProformas() {
 // of both. Flat like the proforma would work today and turn into a thousand-
 // file directory inside two years.
 function saveBolCopy(buffer, filename, dateStr) {
-    const date = dateStr || new Date().toISOString().slice(0, 10);
+    // Pacific, same as saveInvoiceCopy — see todayHere(). The BOL route
+    // already passes an explicit date (body.bol_date || Pacific today), so
+    // this default is the safety net rather than the usual path.
+    const date = dateStr || todayHere();
     const destDir = path.join(cfg.DOCUMENTS_SAVED_DIR, 'bol', date);
     fs.mkdirSync(destDir, { recursive: true });
     const destPath = path.join(destDir, path.basename(filename));

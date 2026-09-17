@@ -9073,7 +9073,17 @@ async function docErrText(res) {
 // documents-download route before they can be shared.
 async function docShareSaved(kind, filename, label, containerNo) {
   try {
-    const qs = `?kind=${kind}&file=${encodeURIComponent(filename)}&date=${docTodayISO()}` +
+    // ── bolTodayISO(), NOT docTodayISO() ────────────────────────────────────
+    // This is the folder guess, and it has to agree with the date the SERVER
+    // filed the document under. Both were UTC and therefore agreed by
+    // accident; helpers/documentsSaved.js moved to America/Los_Angeles on
+    // 2026-09-17, so this moved with it in the same commit.
+    //
+    // docTodayISO() is deliberately NOT changed here: it also seeds the date
+    // PRINTED on an invoice, and moving that is a change to a document
+    // customers receive. Same UTC problem, still worth fixing, still worth
+    // fixing on purpose rather than as a side effect of this.
+    const qs = `?kind=${kind}&file=${encodeURIComponent(filename)}&date=${bolTodayISO()}` +
       (containerNo ? `&container=${encodeURIComponent(containerNo)}` : '');
     const res = await fetch(API_BASE + '/api/documents/download' + qs, { headers: { Authorization: 'Bearer ' + getToken() } });
     if (!res.ok) return; // saved fine, just can't hand it over — message above already says "saved"

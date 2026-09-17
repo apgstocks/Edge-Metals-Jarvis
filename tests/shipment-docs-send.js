@@ -57,7 +57,12 @@ function put(date, container, filename, body) {
 const TODAY = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' });
 put(TODAY, 'HMMU7060866', 'EM1047_INVOICE.pdf', '%PDF-1.4 INVOICE BYTES\n%%EOF');
 put(TODAY, 'HMMU7060866', 'EM1047_PACKING_LIST.pdf', '%PDF-1.4 PACKING BYTES\n%%EOF');
-put(TODAY, 'MSCU1112223', 'EM1099_INVOICE.pdf');   // no packing list
+put(TODAY, 'MSCU1112223', 'EM1099_INVOICE.pdf');   // no packing list anywhere
+// Apsara's own case, 2026-09-17: "invoice only" plus a packing list generated
+// separately from the packing tab, and the two filed a day apart because the
+// invoice route used UTC and the packing route Pacific.
+put('2026-09-18', 'OOLU3334445', 'EM1091_INVOICE.pdf', '%PDF-1.4 SPLIT INVOICE\n%%EOF');
+put('2026-09-17', 'OOLU3334445', 'OOLU3334445_packing.pdf', '%PDF-1.4 SPLIT PACKING\n%%EOF');
 
 // ── Stub only the things that would leave the building ──────────────────────
 let SENT = [], MSGS = [], THROW_SEND = false;
@@ -236,6 +241,39 @@ const CHAT = 'test@g.us';
     const p3 = await actions.getPending(CHAT);
     await actions.resolvePending(CHAT, p3, 'yes');
     ck('it still sends the invoice alone', (SENT[0] || {}).attachments.length === 1);
+
+    // ── E2. HER CASE: invoice only, packing list generated separately ───────
+    // Apsara, 2026-09-17: "Say i have checked invoice only and generated
+    // packing list sep for container-123. When i say to jarvis to send
+    // documents of 123-how does it work?" It sent the invoice alone, because
+    // the two routes disagreed about what day it was. Both documents must go,
+    // and the mismatch must be on screen before she confirms.
+    section('E2. the pair filed a day apart');
+
+    await mutateJson(cfg.INVOICE_VERSIONS_FILE, {}, (raw) => {
+        raw['OOLU3334445'] = { inv_no: 'EM1091', consignee: 'Eccomelt' };
+        return raw;
+    });
+
+    MSGS = []; SENT = [];
+    await actions.sendShipmentDocsForConfirm(CHAT, 'OOLU3334445');
+    const splitPrompt = MSGS.join('\n');
+    ck('both documents are listed', /EM1091_INVOICE\.pdf/.test(splitPrompt)
+        && /OOLU3334445_packing\.pdf/.test(splitPrompt), splitPrompt);
+    ck('SHE IS TOLD THE PACKING LIST IS FILED UNDER ANOTHER DATE',
+        /filed under 2026-09-17/.test(splitPrompt),
+        'documents from two different days went out with no warning');
+    ck('  and the warning sits above the prompt',
+        splitPrompt.indexOf('filed under') < splitPrompt.lastIndexOf('yes/no'));
+
+    const sp = await actions.getPending(CHAT);
+    await actions.resolvePending(CHAT, sp, 'yes');
+    const splitAtts = (SENT[0] || {}).attachments || [];
+    ck('both are attached', splitAtts.length === 2, `${splitAtts.length} attached`);
+    ck('  and the packing list is read from ITS OWN folder',
+        (splitAtts.find((a) => /packing/i.test(a.filename)) || {}).content
+            ?.toString().includes('SPLIT PACKING'),
+        'the path was built from the invoice folder — the read would fail or grab the wrong file');
 
     // ── F. The refusals ─────────────────────────────────────────────────────
     section('F. when it must not send');

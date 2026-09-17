@@ -4187,7 +4187,12 @@ function collectInvoicePayload() {
 // ({ok, saved_filename}), so the PDF is re-fetched through the existing
 // /api/documents/download route and forced into a real browser download.
 async function downloadSavedInvoice(filename, containerNo) {
-  const today = new Date().toISOString().slice(0, 10);
+  // ── THE FOLDER GUESS MUST MATCH THE SERVER'S CLOCK ──────────────────────
+  // This was toISOString() — UTC — and so was helpers/documentsSaved.js, so
+  // the two agreed by accident and nobody noticed either was wrong. Both
+  // moved to America/Los_Angeles on 2026-09-17, together, because moving one
+  // alone makes an evening invoice save correctly and then fail to download.
+  const today = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' });
   const res = await fetch('/api/documents/download?kind=invoice&file=' + encodeURIComponent(filename) + '&date=' + today + '&container=' + encodeURIComponent(containerNo));
   if (!res.ok) return false;
   const blob = await res.blob();
