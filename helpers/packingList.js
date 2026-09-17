@@ -603,6 +603,17 @@ async function generatePdf(record, { renderer } = {}) {
         // is redundant when both are filled, and redundant is much better than
         // a document that silently drops something she typed into it — she
         // can clear the box if she does not want the line.
+        // ── THIS IS THE PACKING LIST TAB'S DOCUMENT ──────────────────────
+        // Apsara, 2026-09-17: "my separate packing list tab needs to have
+        // only that [gross, tare, net] while my invoice tab's packing list
+        // need to have gross,tare,container,boxes like last time".
+        //
+        // Set HERE and nowhere else, so the invoice keeps the fuller shape by
+        // default. The flag says "this one is the compact one" rather than
+        // "this one is the old one": a flag that must be set to keep an
+        // existing document unchanged eventually is not set, which is exactly
+        // how the invoice's packing list lost four columns.
+        packing_compact: true,
         packing_show_item: rec.show_item_in_grid === true,
         packing_item_description: str(rec.item_description),
     };

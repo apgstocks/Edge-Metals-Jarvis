@@ -334,12 +334,44 @@ function buildInvoiceClassicHtml(data) {
         String((it && (it.item || it.item_desc)) || '').trim());
     const showItem = data.packing_show_item === true || data.packing_show_item === 'true'
         || lineItemsNameSomething;
+
+    // ── TWO PACKING LISTS, NOT ONE ───────────────────────────────────────
+    // Apsara, 2026-09-17: "Why my invoice packing list ave only gross,tare,
+    // net? i told that my separate packing list tab needs to have only that
+    // while my invoice tab's packing list need to have gross,tare,container,
+    // boxes like last time".
+    //
+    // She is right and this was my mistake, made on 2026-09-16 and written
+    // down as though it were hers. When she said "in packing list i juxt want
+    // gross,tare,net" she meant the packing-list SCREEN she was looking at. I
+    // applied it to the shared template and left a comment claiming both
+    // documents "change together, deliberately" — a decision of mine, filed
+    // under her name, which is the worst way to record one.
+    //
+    // They are two documents with two jobs:
+    //
+    //   THE INVOICE TAB'S — one row per container, and the tare BROKEN OUT
+    //   into truck, container tare, chassis and boxes. That is the shape her
+    //   broker has received since before this project existed, and the four
+    //   components are the working that justifies the net.
+    //
+    //   THE PACKING LIST TAB'S — one row per bundle off a weigh sheet, which
+    //   has a gross and one tare and nothing to break out.
+    //
+    // helpers/packingList.js sets packing_compact; NOTHING ELSE DOES, so the
+    // invoice path keeps the fuller shape by default. Defaulting the other
+    // way round is what caused this: a flag that has to be set to keep an
+    // existing document the way it was will eventually not be set.
+    const compact = data.packing_compact === true || data.packing_compact === 'true';
     const num = (v) => {
         const n = parseFloat(String(v == null ? '' : v).replace(/,/g, '').trim());
         return isFinite(n) ? n : null;
     };
 
     let totalNetLbs = 0, totalNetMt = 0, totalGrossLbs = null, totalTareLbs = null;
+    // The four components, totalled in their own right so the fuller table's
+    // TOTAL row adds up column by column rather than leaving them blank.
+    let totalTruck = null, totalCtare = null, totalChassis = null, totalBoxes = null;
     const addUp = (acc, v) => (v == null ? acc : (acc == null ? v : acc + v));
 
     // ── DOES THE CONTAINER COLUMN SAY ANYTHING? ──────────────────────────
@@ -365,7 +397,7 @@ function buildInvoiceClassicHtml(data) {
     const containersOn = [...new Set(lineItems
         .map((it) => String((it && it.container_no) || data.container_no || '').trim())
         .filter(Boolean))];
-    const oneContainer = lineItems.length > 1 && containersOn.length === 1;
+    const oneContainer = compact && lineItems.length > 1 && containersOn.length === 1;
     const containerWidth = showItem ? '18%' : '22%';
 
     // ── EVERY WEIGHT PRINTED THE SAME WAY ────────────────────────────────
@@ -401,7 +433,11 @@ function buildInvoiceClassicHtml(data) {
     //
     // Her own numbering wins; a row she left blank is numbered by position,
     // which is a presentation index and not a claim about anything.
-    const numberCol = oneContainer;
+    // The line number replaces the repeated container on the BUNDLE list. An
+    // invoice's packing list is one row per container and numbering it says
+    // nothing, so it stays off there even when every row happens to be one
+    // container.
+    const numberCol = oneContainer && compact;
     const numberWidth = 9;
 
     // What the dropped Container column gives back, minus what the line number
@@ -434,10 +470,31 @@ function buildInvoiceClassicHtml(data) {
         { head: 'Gross Weight<br>(lbs)', width: w(showItem ? '17%' : '20%'),
           cell: (item, p) => escapeHtml(weightText(p.gross_weight_lbs) || '-'),
           total: () => (totalGrossLbs == null ? '' : formatInt(totalGrossLbs)) },
-        { head: 'Tare<br>(lbs)', width: w(showItem ? '16%' : '20%'),
-          cell: (item, p) => { const t = require('./packingList').tareOf(p);
-                               return escapeHtml(t == null ? '-' : t.toLocaleString('en-US')); },
-          total: () => (totalTareLbs == null ? '' : formatInt(totalTareLbs)) },
+        // ── ONE TARE, OR THE FOUR IT IS MADE OF ──────────────────────────
+        // The invoice's packing list prints the working: truck, container
+        // tare, chassis and boxes, each in its own column, which is what her
+        // broker has always received. The packing list tab prints the single
+        // figure, because a bundle on a scale has one tare and nothing to
+        // break out.
+        ...(compact
+            ? [{ head: 'Tare<br>(lbs)', width: w(showItem ? '16%' : '20%'),
+                 cell: (item, p) => { const t = require('./packingList').tareOf(p);
+                                      return escapeHtml(t == null ? '-' : t.toLocaleString('en-US')); },
+                 total: () => (totalTareLbs == null ? '' : formatInt(totalTareLbs)) }]
+            : [
+                { head: 'Truck<br>(lbs)', width: '10%',
+                  cell: (item, p) => escapeHtml(weightText(p.truck_lbs) || '-'),
+                  total: () => (totalTruck == null ? '' : formatInt(totalTruck)) },
+                { head: 'Container Tare<br>(lbs)', width: '12%',
+                  cell: (item, p) => escapeHtml(weightText(p.container_tare_lbs) || '-'),
+                  total: () => (totalCtare == null ? '' : formatInt(totalCtare)) },
+                { head: 'Chassis<br>(lbs)', width: '10%',
+                  cell: (item, p) => escapeHtml(weightText(p.chassis_lbs) || '-'),
+                  total: () => (totalChassis == null ? '' : formatInt(totalChassis)) },
+                { head: 'Boxes<br>(lbs)', width: '10%',
+                  cell: (item, p) => escapeHtml(weightText(p.boxes_weight_lbs) || '-'),
+                  total: () => (totalBoxes == null ? '' : formatInt(totalBoxes)) },
+              ]),
         { head: 'Net Weight<br>(lbs)', width: w(showItem ? '17%' : '20%'),
           // A dash, never a zero, when there is genuinely nothing to state.
           cell: (item, p, netLbs) => escapeHtml(weightText(p.net_weight_lbs) || (netLbs ? formatInt(netLbs) : '-')),
@@ -509,6 +566,10 @@ function buildInvoiceClassicHtml(data) {
         // an absence. Same rule tareOf follows.
         totalGrossLbs = addUp(totalGrossLbs, num(p.gross_weight_lbs));
         totalTareLbs = addUp(totalTareLbs, require('./packingList').tareOf(p));
+        totalTruck = addUp(totalTruck, num(p.truck_lbs));
+        totalCtare = addUp(totalCtare, num(p.container_tare_lbs));
+        totalChassis = addUp(totalChassis, num(p.chassis_lbs));
+        totalBoxes = addUp(totalBoxes, num(p.boxes_weight_lbs));
         const cells = PACKING_COLUMNS.map((c) =>
             `          <td style="padding:1mm;font-size:9.5pt;text-align:center;vertical-align:middle;">${c.cell(item, p, netLbs, netMt, rowIndex)}</td>`
         ).join('\n');
@@ -570,7 +631,52 @@ function buildInvoiceClassicHtml(data) {
         data.reference ? escapeHtml(data.reference) : '',
     ].filter(Boolean).join(' &nbsp;&middot;&nbsp; ');
 
+    // ── WHICH HEADER THIS PACKING LIST GETS ──────────────────────────────
+    // The invoice tab's gets the clone it has always had — exporter, buyer,
+    // Terms, Vessel, Payment Terms, four ports — so a list split off its
+    // invoice still says everything the invoice said. The packing list tab's
+    // gets the compact block: no Terms, no Vessel, no Payment Terms, and the
+    // shipment's references on one line.
+    const COMPACT_PL_HEADER = `
+      <div style="background:var(--orange);color:var(--light-orange);padding:1.8mm 2.5mm;display:flex;justify-content:space-between;align-items:center;">
+        <div style="font-weight:700;font-size:13.5pt;letter-spacing:.03em;">PACKING LIST</div>
+        <div style="font-size:9.5pt;font-weight:700;">{{inv_no}} &nbsp;&middot;&nbsp; {{inv_date}}</div>
+      </div>
+      <table class="seam" style="width:100%;border-collapse:collapse;">
+        <tr>
+          <td style="width:50%;padding:0;vertical-align:top;border-right:1pt solid var(--black);">
+            <div style="background:var(--light-orange);padding:0.8mm 2.5mm;font-size:7.5pt;font-weight:700;letter-spacing:.06em;">EXPORTER</div>
+            <div style="padding:1.2mm 2.5mm;">
+              <div style="font-weight:700;font-size:10pt;">EDGE METALS INC</div>
+              <div style="font-size:8.5pt;line-height:1.45;">14750 DEVONSHIRE LN, FRISCO, TX 75035<br>TAX-ID: 26-3269514 &nbsp;&middot;&nbsp; TEL: (310) 938-2525</div>
+            </div>
+          </td>
+          <td style="width:50%;padding:0;vertical-align:top;">
+            <div style="background:var(--light-orange);padding:0.8mm 2.5mm;font-size:7.5pt;font-weight:700;letter-spacing:.06em;">BUYER</div>
+            <div style="padding:1.2mm 2.5mm;">
+              <div style="font-weight:700;font-size:10pt;">{{buyer_name}}</div>
+              <div style="font-size:8.5pt;line-height:1.45;">{{buyer_address_lines}}</div>
+            </div>
+          </td>
+        </tr>
+      </table>
+      <div class="seam" style="border-top:1pt solid var(--black);padding:1.2mm 2.5mm;font-size:8.5pt;line-height:1.5;">{{pl_refs_line}}</div>`;
+
+    // The banner the cloned header needs: the compact block carries its own,
+    // the clone never did. The same bar the document has opened with since
+    // 2026-09-09.
+    const CLONE_PL_BANNER = '\n      <div style="background:var(--orange);color:var(--light-orange);text-align:center;'
+        + 'font-weight:700;font-size:15.5pt;height:12mm;box-sizing:border-box;display:flex;align-items:center;'
+        + 'justify-content:center;">PACKING LIST</div>\n';
+
     let html = loadTemplate();
+    // Injected BEFORE substitution, exactly as the clone always was, so
+    // whichever block lands has its placeholders filled by the same pass. A
+    // header assembled afterwards would print {{buyer_name}} on a customer's
+    // document — and this very edit left {{pl_header_block}} unfilled for one
+    // run, which is how that gets discovered if you look.
+    html = html.split('{{pl_header_block}}')
+               .join(compact ? COMPACT_PL_HEADER : (CLONE_PL_BANNER + extractInvoiceHeader(html)));
     const subs = {
         // <wbr> after each underscore: a real break OPPORTUNITY that
         // contributes no character, so the wrapped number still copies out of

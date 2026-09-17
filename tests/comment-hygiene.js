@@ -140,7 +140,12 @@ section('C — the document she was sent, rebuilt');
     const { buildInvoiceClassicHtml } = require(path.join(ROOT, 'helpers/invoicePdf'));
     const weights = [[1111, 65], [1228, 65], [927, 86], [1239, 118],
                      [1399, 65], [1385, 118], [1388, 118], [1174, 118]];
+    // packing_compact: this is the PACKING LIST TAB's document — one row per
+    // bundle, one tare. The invoice tab's is a different shape (2026-09-17,
+    // "my invoice tab's packing list need to have gross,tare,container,boxes
+    // like last time") and this fixture is a weigh sheet, not an invoice.
     const { html } = buildInvoiceClassicHtml({
+        packing_compact: true,
         inv_no: '260901_AL_26JY95', container_no: 'HMMU7060866', consignee: 'Taewon Automotive',
         line_items: weights.map(([g, t]) => ({
             container_no: 'HMMU7060866',

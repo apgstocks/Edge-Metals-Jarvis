@@ -443,14 +443,23 @@ section('C2 — generating the PDF, and checking it against the invoice');
         ck('  every row of the printed table has the same number of cells',
            new Set(counts).size === 1, counts.join(',') + ' — header, data rows and TOTAL');
         ck('    and that number is five', counts[0] === 5, String(counts[0]));
-        ck('  the four old tare headings are gone',
-           !/Truck<br>/.test(handed.html) && !/Chassis<br>/.test(handed.html) && !/Boxes<br>/.test(handed.html));
-        ck('    replaced by one Tare', /Tare<br>/.test(handed.html));
+        // On THIS document — the packing list tab's. The invoice's keeps all
+        // four; see the block below.
+        ck('  the four tare headings are not on the bundle list',
+           !/Truck<br>/.test(handed.html) && !/Chassis<br>/.test(handed.html) && !/Boxes<br>/.test(handed.html),
+           'a bundle on a scale has one tare and nothing to break out');
+        ck('    one Tare instead', /Tare<br>/.test(handed.html));
     }
 
-    // ── AND NOTHING ON FILE NEEDS MIGRATING ──────────────────────────────
-    // An invoice saved before today still carries the tare broken into four.
-    // It must regenerate with the SAME total it always had, in one column.
+    // ── AND THE INVOICE'S OWN PACKING LIST IS A DIFFERENT DOCUMENT ───────
+    // Apsara, 2026-09-17: "my separate packing list tab needs to have only
+    // that while my invoice tab's packing list need to have gross,tare,
+    // container,boxes like last time".
+    //
+    // This check used to assert that an invoice saved before 2026-09-16
+    // regenerated with its four tare components SUMMED into one column —
+    // which was me applying a message about this screen to her invoice, and
+    // is the thing she is correcting. The invoice keeps the four.
     {
         const { buildInvoiceClassicHtml } = require(path.join(ROOT, 'helpers/invoicePdf'));
         const { html } = buildInvoiceClassicHtml({
@@ -459,9 +468,15 @@ section('C2 — generating the PDF, and checking it against the invoice');
                 gross_weight_lbs: '46,300', truck_lbs: '15,000', container_tare_lbs: '8,000',
                 chassis_lbs: '6,000', boxes_weight_lbs: '500', net_weight_lbs: '16,800', net_weight_mt: '7.620' } }],
         });
-        ck('an invoice saved BEFORE today still prints its tare', /29,500/.test(html),
-           '15,000 + 8,000 + 6,000 + 500 — summed on read, so no stored payload needs changing');
+        ck('an invoice prints the tare BROKEN OUT, as it always did',
+           /Truck<br>/.test(html) && /Chassis<br>/.test(html) && /Boxes<br>/.test(html),
+           'the four components are the working that justifies the net');
+        ck('  each component in its own column',
+           /15,000/.test(html) && /8,000/.test(html) && /6,000/.test(html) && /500/.test(html));
         ck('  with its gross and net untouched', /46,300/.test(html) && /16,800/.test(html));
+        ck('  and no single Tare column on it',
+           !/>Tare<br>/.test(html.slice(html.indexOf('<div class="doc-packing">'))),
+           'one Tare is the PACKING LIST TAB\'s shape, not the invoice\'s');
     }
 
     // A packing list with a blank exporter block looks finished and is useless

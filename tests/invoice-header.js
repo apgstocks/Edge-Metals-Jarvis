@@ -126,7 +126,14 @@ console.log('\n=== separate invoice / packing list ===');
      /<!--INV_HEAD_START-->/.test(t) && /<!--INV_HEAD_END-->/.test(t), true);
 
   const { buildInvoiceClassicHtml } = require(R('helpers/invoicePdf'));
+  // ── packing_compact: THIS IS THE PACKING LIST TAB'S DOCUMENT ──────────
+  // Apsara, 2026-09-17: "my separate packing list tab needs to have only that
+  // while my invoice tab's packing list need to have gross,tare,container,
+  // boxes like last time". Two documents now, and this section is about the
+  // compact one — the checks below were written when there was only one and
+  // would otherwise be asserting the compact shape against the invoice's.
   const built = buildInvoiceClassicHtml({
+    packing_compact: true,
     inv_no: INV, inv_date: '2026-09-10',
     consignee_address: ['TAEWON AUTOMOTIVE CO., LTD', '5, YUJEON 2-GIL, GUNBUK-MYEON',
                         'HAMAN-GUN, GYEONGSANGNAMDO', 'KOREA 52062'],
@@ -198,6 +205,7 @@ console.log('\n=== separate invoice / packing list ===');
   // matched to the shipment it describes.
   {
     const { html: h4 } = require(R('helpers/invoicePdf')).buildInvoiceClassicHtml({
+      packing_compact: true,
       inv_no: INV, inv_date: '2026-09-10', container_no: 'KOCU5139886',
       booking_no: 'M3928609NU00121', seal_no: '40217',
       port_loading: 'OAKLAND', port_discharge: 'BUSAN', country_of_origin: 'USA',
@@ -213,6 +221,7 @@ console.log('\n=== separate invoice / packing list ===');
 
     // A blank field prints NOTHING, not a label with nothing after it.
     const { html: h5 } = require(R('helpers/invoicePdf')).buildInvoiceClassicHtml({
+      packing_compact: true,
       inv_no: INV, container_no: 'KOCU5139886',
       line_items: [{ item_desc: 'Aluminium combo', container_no: 'KOCU5139886', weight: 1, rate: 1 }],
     });
@@ -297,15 +306,63 @@ console.log('\n=== the packing list names what is in the container ===');
 
   ck('the packing table has an Item column', /Item/.test(rows[0][1]), true);
   ck('...naming each container', [rows[1][1], rows[2][1]], ['Aluminium combo', 'Regular combo']);
+  // ── AND THE INVOICE'S OWN SHAPE IS BACK ──────────────────────────────
+  // Apsara, 2026-09-17: "my invoice tab's packing list need to have
+  // gross,tare,container,boxes like last time". The tare is BROKEN OUT here
+  // — truck, container tare, chassis, boxes — which is the working that
+  // justifies the net and what her broker has always received. Collapsing it
+  // to one Tare column was my over-reach on 2026-09-16, applied from a
+  // message about a different screen.
+  ck('...and the tare broken into its four columns',
+     rows[0].slice(3, 7).map((h) => h.replace(/\s*\(lbs\)/, '')),
+     ['Truck', 'Container Tare', 'Chassis', 'Boxes']);
   // COUNTED. A TOTAL row with the wrong number of cells does not error, it
   // SHEARS — the figures slide one column left and print under the wrong
   // headings, on the document a customer checks with a calculator.
   ck('...and every row still has the same cell count',
      new Set(rows.map((r) => r.length)).size, 1);
-  ck('...six of them', rows[0].length, 6);
-  ck('the TOTAL row carries gross, tare and net',
-     [rows[3][0], rows[3][2], rows[3][3], rows[3][4]],
-     ['TOTAL', '112,500', '8,565', '103,935']);
+  ck('...nine of them', rows[0].length, 9);
+  // COUNTED, not eyeballed: a TOTAL row with the wrong cell count does not
+  // error, it SHEARS — every figure slides one column left and prints under
+  // the wrong heading, and this table just grew four columns.
+  const col = (name) => rows[0].findIndex((h) => h.replace(/\s+/g, ' ').startsWith(name));
+  ck('the TOTAL row carries gross and net',
+     [rows[3][0], rows[3][col('Gross')], rows[3][col('Net Weight (lbs)')]],
+     ['TOTAL', '112,500', '103,935']);
+  // The fixture above carries a COMBINED tare and no components, which is the
+  // honest edge case: the four working columns print dashes and the NET is
+  // still right, because tareOf falls back to the single figure. A blank
+  // working column is visible; a wrong net would not be.
+  ck('  a line with only a combined tare shows dashes, not wrong figures',
+     [rows[1][col('Truck')], rows[1][col('Chassis')]], ['-', '-']);
+
+  // And with the four components — which is what both invoice grids actually
+  // collect, four boxes on the website and four on the phone — each totals in
+  // its own column.
+  {
+    const { html: h6 } = build2({ inv_no: INV, container_no: 'KOCU5139886',
+      line_items: [
+        { item_desc: 'Aluminium combo', container_no: 'KOCU5139886', weight: 12.02, rate: 1000,
+          packing: { gross_weight_lbs: '56,000', truck_lbs: '15,000', container_tare_lbs: '8,000',
+                     chassis_lbs: '6,000', boxes_weight_lbs: '500', net_weight_lbs: '26,500' } },
+        { item_desc: 'Regular combo', container_no: 'HMMU6904319', weight: 12.24, rate: 900,
+          packing: { gross_weight_lbs: '56,500', truck_lbs: '15,000', container_tare_lbs: '8,000',
+                     chassis_lbs: '6,000', boxes_weight_lbs: '500', net_weight_lbs: '27,000' } },
+      ] });
+    const d6 = h6.slice(h6.indexOf('<div class="doc-packing">'));
+    const t6 = d6.slice(d6.indexOf('<table'), d6.indexOf('</table>'));
+    const r6 = [...t6.matchAll(/<tr[^>]*>[\s\S]*?<\/tr>/g)].map((m) =>
+        [...m[0].matchAll(/<t[hd][^>]*>([\s\S]*?)<\/t[hd]>/g)]
+            .map((c) => c[1].replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim()));
+    const c6 = (name) => r6[0].findIndex((h) => h.replace(/\s+/g, ' ').startsWith(name));
+    const last6 = r6[r6.length - 1];
+    ck('  each tare component adds up in its own column',
+       [last6[c6('Truck')], last6[c6('Container Tare')], last6[c6('Chassis')], last6[c6('Boxes')]],
+       ['30,000', '16,000', '12,000', '1,000']);
+    ck('    and the net total is still gross minus all four',
+       [last6[c6('Gross')], last6[c6('Net Weight (lbs)')]], ['112,500', '53,500']);
+    ck('    with every row the same width', new Set(r6.map((r) => r.length)).size, 1);
+  }
 
   // ── A NET OF ZERO IS A CLAIM ──────────────────────────────────────────
   // An invoice line carrying a gross and a tare but no stored net printed
@@ -340,7 +397,43 @@ console.log('\n=== the packing list names what is in the container ===');
   const d2 = h2.slice(h2.indexOf('<div class="doc-packing">'));
   const tbl2 = d2.slice(d2.indexOf('<table'), d2.indexOf('</table>'));
   const head2 = [...tbl2.matchAll(/<th[^>]*>([\s\S]*?)<\/th>/g)].map((m) => m[1].replace(/<[^>]+>/g, ' ').trim());
-  ck('a line item with no description keeps the old five columns', head2.length, 5);
+  ck('a line item with no description keeps the invoice\'s eight columns', head2.length, 8);
+}
+
+console.log('\n=== the invoice tab keeps the header it always had ===');
+// Apsara, 2026-09-17, asked whether "like last time" covered the header as
+// well as the columns: yes.
+//
+// Two documents, two headers. The compact block above is the PACKING LIST
+// TAB's; a packing list split off an INVOICE still carries the clone —
+// exporter, buyer, Terms, Vessel, Payment Terms, four ports — so it says
+// everything the invoice it came from said.
+//
+// This section exists because without it, making both documents compact broke
+// nothing: every header check in this file had moved to the compact fixture.
+{
+  const { html: hi } = require(R('helpers/invoicePdf')).buildInvoiceClassicHtml({
+    inv_no: INV, inv_date: '2026-09-10', container_no: 'KOCU5139886',
+    terms: 'LC', vessel: 'HMM', reference: 'M3928609NU00121',
+    consignee_address: ['TAEWON AUTOMOTIVE CO., LTD', 'HAMAN-GUN, KOREA 52062'],
+    place_of_receipt: 'FRISCO', port_loading: 'OAKLAND', port_discharge: 'BUSAN',
+    line_items: [{ item_desc: 'Aluminium combo', container_no: 'KOCU5139886', weight: 23.469, rate: 1000,
+                   packing: { gross_weight_lbs: '56,000', truck_lbs: '15,000' } }],
+  });
+  const head = hi.slice(hi.indexOf('class="pl-header"'), hi.indexOf('<div class="doc-packing"'));
+
+  ck('the invoice\'s packing list keeps Terms', /&gt;Terms|>Terms</.test(head), true);
+  ck('  and Vessel / Flight No', /Vessel \/ Flight No/.test(head), true);
+  ck('  and Payment Terms', /Payment Terms/.test(head), true);
+  ck('  and the four ports', /Port of Loading/.test(head) && /Port of Discharge/.test(head)
+     && /Place of Receipt/.test(head) && /Country of Origin/.test(head), true);
+  ck('  and Other Reference(s)', /Other Reference/.test(head), true);
+  ck('  with its own banner above it', /PACKING LIST/.test(head), true);
+  ck('  and nothing left unfilled', /\{\{/.test(head), false);
+
+  // The compact block's own marker must NOT appear here: the reference line is
+  // the packing list tab's, and seeing it would mean the wrong header landed.
+  ck('  and it is NOT the compact block', /EXPORTER<\/div>/.test(head), false);
 }
 
 console.log('\n=== invoice only ===');
