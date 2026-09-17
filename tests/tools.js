@@ -176,13 +176,53 @@ section('E — the safety line did NOT move');
 
     // buildWrite RETURNS a proposal and writes nothing.
     const before = payments.paymentsForLoad('EDGE_02').length;
-    const prop = await tools.buildWrite('record_payment', { load_id: 'EDGE_02', amount: 500, mode: 'Wire' });
+    // paid_via required for a Wire on a purchase since 2026-09-16 — Apsara:
+    // "on selecting wire-it should ask me Payment via Edge Yard/Edge Metals".
+    // This block is testing that propose writes nothing; it just has to
+    // satisfy the rule the way the real screen does. The rule itself is
+    // checked immediately below.
+    const prop = await tools.buildWrite('record_payment', { load_id: 'EDGE_02', amount: 500, mode: 'Wire', paid_via: 'Edge Yard' });
     ck('proposing a payment writes nothing', payments.paymentsForLoad('EDGE_02').length === before,
        'this is the entire propose-then-confirm design');
     ck('  it returns a sentence a person can check', /Record a Wire payment of \$500\.00 against EDGE_02/.test(prop.summary));
     ck('  with the figures recomputed from the ledger',
        prop.details.some(([k, v]) => k === 'Left pending after' && v === '$0.00'));
     ck('  and only runs when run() is called', typeof prop.run === 'function');
+    ck('  and the card says which company the money moved through',
+       prop.details.some(([k, v]) => k === 'Payment via' && v === 'Edge Yard'),
+       'she confirms a wire without seeing which company it came out of');
+
+    // ── REFUSED AT PROPOSE, NOT AT RUN ───────────────────────────────────
+    // Added 2026-09-17 after a live break: the paid-via rule was added to
+    // addPayment and this tool had no box for it, so "record a wire payment
+    // of $500 against EDGE_02" threw. It must be refused HERE, while she can
+    // still answer the question — a proposal that fails after she has said
+    // yes is the failure this whole propose-then-confirm design exists to
+    // avoid.
+    let wireErr = '';
+    try { await tools.buildWrite('record_payment', { load_id: 'EDGE_02', amount: 500, mode: 'Wire' }); }
+    catch (e) { wireErr = e.message; }
+    ck('a wire with no company is refused at propose time',
+       /needs "Payment via": Edge Yard or Edge Metals/.test(wireErr),
+       `it would have been confirmed and then failed at run time — got: ${wireErr || '(no error)'}`);
+    // ── AND IT REACHES THE LEDGER ────────────────────────────────────────
+    // A mutation deleting paid_via from the tool's run() left every check in
+    // this file green: propose was covered, the actual write was not. She
+    // asked for this so it shows up in the report — "We need to keep track of
+    // this also in report" — and a payment filed without it is invisible
+    // there no matter how good the confirm card looked.
+    const beforeRun = payments.paymentsForLoad('EDGE_02').length;
+    await prop.run({ role: 'admin' });
+    const written = payments.paymentsForLoad('EDGE_02');
+    ck('  running it files exactly one payment', written.length === beforeRun + 1,
+       `${written.length - beforeRun} written`);
+    ck('  AND THE COMPANY IS ON THE FILED PAYMENT',
+       written[written.length - 1].paid_via === 'Edge Yard',
+       `paid_via was ${JSON.stringify(written[written.length - 1].paid_via)} — the spend report cannot break this down`);
+
+    ck('  and the tool has a box for the answer',
+       Object.keys(require(path.join(ROOT, 'helpers/tools')).TOOLS.record_payment.params).includes('paid_via'),
+       'the model cannot supply what the schema does not declare');
 
     // The deletions and the sending stay out entirely — not behind a
     // confirmation, out.

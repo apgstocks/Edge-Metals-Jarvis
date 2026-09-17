@@ -220,8 +220,13 @@ section('D — the rest of the yard');
     const payments = require(path.join(ROOT, 'helpers/payments'));
     const sales = (await tools.runRead('find_sales', {})).sales;
     const ecco = sales.find((s) => s.buyer === 'Eccomelt');
+    // paid_via is REQUIRED for a Bank transfer on a sale since 2026-09-16 —
+    // Apsara: "For receive payment also,add paid to Edge Yard,Edge Metals".
+    // This fixture is not testing that rule, it is testing that sales carry
+    // their payment state; it just has to satisfy it like the real screen does.
     await payments.addPayment({ load_id: ecco.id, load_kind: 'sale', mode: 'Bank transfer',
-                                bank: 'Chase Bank', amount: 1200, paid_on: '2026-09-16' });
+                                bank: 'Chase Bank', paid_via: 'Edge Yard',
+                                amount: 1200, paid_on: '2026-09-16' });
     const all = await tools.runRead('find_sales', {});
     ck('every sale carries what is still owed on it', all.sales.every((s) => s.payment),
        'listing sales without payment state answers half the question');

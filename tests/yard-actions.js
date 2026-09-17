@@ -142,7 +142,12 @@ async function refuses(fn) {
 
     // ── overpayment is allowed but never silent ───────────────────────────
     {
-        const p = await proposeAction({ kind: 'record_payment', params: { load_id: load.id, amount: 5000, mode: 'Wire' } });
+        // paid_via is required for a Wire since 2026-09-16 (Apsara: "on
+        // selecting wire-it should ask me Payment via Edge Yard/Edge Metals")
+        // and, from 2026-09-17, it is asked at PROPOSE time rather than
+        // failing after she has already confirmed. This block is testing the
+        // overpayment warning, so it answers the question the way she would.
+        const p = await proposeAction({ kind: 'record_payment', params: { load_id: load.id, amount: 5000, mode: 'Wire', paid_via: 'Edge Yard' } });
         ck('an overpayment WARNS before it is confirmed', p.warnings.some((w) => /MORE than/.test(w)));
         ck('the warning names the real outstanding figure', p.warnings.some((w) => w.includes('$1500.00')));
         cancelAction(p.id);

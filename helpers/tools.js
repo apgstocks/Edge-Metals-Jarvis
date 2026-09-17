@@ -536,6 +536,20 @@ const TOOLS = {
             // "Not recorded" on the spend report, where she can see and close
             // the gap. See helpers/banks.js.
             bank: { type: 'string', describe: 'which bank a transfer went out of, if she said' },
+            // ── REQUIRED FOR SOME COMBINATIONS, AND THE TOOL HAD NO BOX ─────
+            // Added 2026-09-17 after a live break. The paid-via work of
+            // 2026-09-16 ("on selecting wire-it should ask me Payment via Edge
+            // Yard/Edge Metals") made addPayment THROW for a Wire on a
+            // purchase and a Bank transfer on a sale when no company is given.
+            // That rule was written for the pay modal and applied to the
+            // shared helper — and this tool, which is how she records a
+            // payment by talking to Jarvis, had no way to supply one. So
+            // "record a wire payment of $12,000 against load X" threw.
+            //
+            // Caught only because tests/yard-assistant-knowledge.js pays by
+            // bank transfer on a sale, which is what she actually does. My
+            // regression, not a fixture that went stale.
+            paid_via: { type: 'string', describe: 'Edge Yard or Edge Metals — which company the money moved through' },
             paid_on: { type: 'date', describe: 'defaults to today' },
             note: { type: 'string' },
         },
@@ -562,9 +576,21 @@ const TOOLS = {
             // now take different lists (receive payment is Cash or Bank
             // transfer; paying a supplier keeps Zelle and Wire), asking for
             // the wrong one would refuse a payment the server would accept.
-            const allowed = modesForKind(load._kind || load.load_kind || 'purchase');
+            const loadKind = load._kind || load.load_kind || 'purchase';
+            const allowed = modesForKind(loadKind);
             const mode = allowed.find((m) => m.toLowerCase() === str(p.mode).toLowerCase());
             if (!mode) throw new Error(`payment mode must be one of: ${allowed.join(', ')}`);
+
+            // ── ASK HERE, NOT AT RUN TIME ───────────────────────────────────
+            // Same reasoning as the mode check above, and the same reason it
+            // is checked through payments.js rather than re-stated here: a
+            // proposal this tool confirms and then fails on is worse than one
+            // it refuses up front, because she has already said yes to it.
+            // resolvePaidVia throws with the question in it ("a Wire on a yard
+            // purchase needs \"Payment via\": Edge Yard or Edge Metals"), which
+            // is exactly what the assistant should put to her.
+            const { paidViaRequired, resolvePaidVia } = require('./payments');
+            const paidVia = resolvePaidVia(loadKind, mode, p.paid_via);
 
             // Recomputed from the ledger, NOT from anything the model said.
             const before = paymentSummary(loadId, load.amount);
@@ -594,11 +620,15 @@ const TOOLS = {
                     ['Load', `${loadId} — ${load.seller || 'no seller'}, ${money(load.amount || 0)}`],
                     ['Already paid', money(before.paid)],
                     ['This payment', `${money(amount)} by ${mode}${bank ? ' from ' + bank : ''}`],
+                    // Shown only when it applies — a "Payment via: " line on a
+                    // cash payment is noise on a card she reads at a gate.
+                    ...(paidVia ? [[require('./payments').paidViaLabel(loadKind), paidVia]] : []),
                     ['Left pending after', money(Math.max(after, 0))],
                 ],
                 warnings,
                 run: async (ctx) => require('./payments').addPayment({
-                    load_id: loadId, amount, mode, bank, paid_on: paidOn, note: p.note,
+                    load_id: loadId, load_kind: loadKind, amount, mode, bank, paid_via: paidVia,
+                    paid_on: paidOn, note: p.note,
                     created_by: ctx.role || 'yard-assistant',
                 }),
             };

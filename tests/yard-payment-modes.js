@@ -194,8 +194,24 @@ section('B — and the SERVER holds the rule, not just the dropdown');
     // Asked for the LOAD'S kind, not a hardcoded one: the two kinds now take
     // different lists, so a tool that always asked for 'purchase' would offer
     // Zelle on a sale and be refused by the server it just agreed with.
+    // ── THIS USED TO GREP FOR ONE EXACT EXPRESSION ───────────────────────
+    // It matched `modesForKind(load._kind || load.load_kind || 'purchase')`
+    // literally, and went red on 2026-09-17 when that expression was lifted
+    // into a named `loadKind` variable so the paid-via rule could reuse it —
+    // a refactor that changed no behaviour at all. A check shaped like the
+    // code rather than like the property, exactly as CLAUDE.md rule 2
+    // describes.
+    //
+    // The PROPERTY is: the kind comes from the LOAD, and that is what
+    // modesForKind is asked about — never a hardcoded 'purchase', which would
+    // offer Zelle on a sale and then be refused by the server it just agreed
+    // with.
+    const kindFromLoad = /load\._kind \s*\|\|\s*load\.load_kind/.test(tools);
+    const modesAskedForIt = /modesForKind\(\s*loadKind\s*\)/.test(tools)
+        || /modesForKind\(load\._kind/.test(tools);
     ck('the yard assistant asks modesForKind for the load\'s own kind',
-       /modesForKind\(load\._kind \|\| load\.load_kind \|\| 'purchase'\)/.test(tools)
+       kindFromLoad && modesAskedForIt
+       && !/modesForKind\(\s*'purchase'\s*\)/.test(tools)
        && !/PAYMENT_MODES\.find/.test(tools),
        'two validators disagreeing shows up as a confirmed payment that then errors');
     ck('  and tells the model the two it may use',
