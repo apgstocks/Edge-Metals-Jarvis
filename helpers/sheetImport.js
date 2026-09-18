@@ -36,18 +36,53 @@
 
 const HEADER_ROW = 1;
 
+// ── WHAT A CELL ACTUALLY CONTAINS ───────────────────────────────────────────
+// exceljs does NOT hand back a plain value for every cell. A formula arrives
+// as { formula, result }, a shared formula as { sharedFormula, result }, a
+// styled string as { richText: [...] }, a link as { text, hyperlink }, and a
+// broken cell as { error: '#N/A' }. String() on any of those is the literal
+// "[object Object]".
+//
+// This was found by Apsara, 2026-09-19, looking at rows I had reported as
+// skipped: "Everything was there properly". It was. The reader was wrong.
+// 6,940 cells in her workbook are formulas, and among the columns this file
+// maps they included 664 SUPPLIER INVOICE AMOUNTS — the money owed on most
+// bills — every one of which was being imported as null. Worse, 69 container
+// numbers were formulas too, so those rows then failed the "has a key" test
+// and were dropped entirely, which is how a reading bug disguised itself as
+// a data problem in her sheet.
+function cellValue(v) {
+    if (v === null || v === undefined) return null;
+    if (v instanceof Date) return v;
+    if (typeof v !== 'object') return v;
+    // A formula's computed value. Recursive because a result can itself be a
+    // rich-text or hyperlink object.
+    if ('result' in v) return cellValue(v.result);
+    if (Array.isArray(v.richText)) return v.richText.map((t) => (t && t.text) || '').join('');
+    if ('hyperlink' in v && 'text' in v) return cellValue(v.text);
+    if ('text' in v) return cellValue(v.text);
+    // #REF!, #N/A, #DIV/0! — a cell Excel itself cannot evaluate. Null, and
+    // the row still imports; inventing a number here would be worse.
+    if ('error' in v) return null;
+    return null;
+}
+
 // Lowercased, collapsed whitespace. "HBL  No." and "hbl no." are one header.
 function normHeader(h) {
     return String(h == null ? '' : h).trim().toLowerCase().replace(/\s+/g, ' ');
 }
 
 function num(v) {
-    if (v === null || v === undefined || v === '') return null;
-    const n = parseFloat(String(v).replace(/[$,\s]/g, ''));
+    const c = cellValue(v);
+    if (c === null || c === undefined || c === '') return null;
+    const n = parseFloat(String(c).replace(/[$,\s]/g, ''));
     return Number.isFinite(n) ? n : null;
 }
 
-const str = (v) => String(v == null ? '' : v).trim();
+const str = (v) => {
+    const c = cellValue(v);
+    return String(c == null ? '' : c).trim();
+};
 
 // ── DATES ───────────────────────────────────────────────────────────────────
 // exceljs hands back a JS Date for a real date cell. Her workbook also holds
@@ -56,7 +91,8 @@ const str = (v) => String(v == null ? '' : v).trim();
 // are reported rather than imported as a plausible-looking wrong day.
 const MIN_YEAR = 2000;
 const MAX_YEAR = 2100;
-function toIsoDate(v) {
+function toIsoDate(raw) {
+    const v = cellValue(raw);
     if (v === null || v === undefined || v === '') return null;
     if (v instanceof Date && !isNaN(v.getTime())) {
         const y = v.getUTCFullYear();
@@ -148,11 +184,19 @@ function indexHeaders(headerCells) {
 }
 
 // One sheet -> rows of {field: value}, plus whatever could not be read.
+// `rows` is [{ n, cells }] — n is the row's REAL number in the sheet.
+//
+// It used to be a bare array of cells with the number computed as position+2,
+// which assumes the rows are contiguous. exceljs's eachRow SKIPS blank rows,
+// so every number drifted by however many blanks came before it: the preview
+// told her to look at row 673 when it meant a different row entirely. Found
+// 2026-09-19 when row 673 turned out to be a live San Antonio shipment that
+// the importer had never actually skipped.
 function mapRows({ rows, headerIdx, map, dateFields, numFields, checks, sheet }) {
     const out = [];
     const problems = [];
-    rows.forEach((cells, n) => {
-        const rowNo = n + HEADER_ROW + 1;
+    rows.forEach(({ n, cells }) => {
+        const rowNo = n;
         const rec = {};
         for (const [header, field] of Object.entries(map)) {
             const i = headerIdx[header];
@@ -182,27 +226,46 @@ function mapRows({ rows, headerIdx, map, dateFields, numFields, checks, sheet })
 // weighbridge tickets — which is exactly the shape bills.js already stores as
 // `items`. One bill per row would split every multi-grade container into
 // separate bills and lose the container's real total.
+// ── A LOAD WITHOUT A CONTAINER IS STILL A LOAD ──────────────────────────────
+// Apsara, 2026-09-19, shown the rows this had "skipped": "Everything was there
+// properly". It was. They are her DOMESTIC business — "LOCAL DELIEVERY",
+// "53 ft Trailer", "Local Transit" — real suppliers, customers, weights and
+// prices that never went in a container because they went on a truck.
+//
+// Requiring a container number quietly excluded that entire side of the
+// business. A container is how an EXPORT is identified; it is not what makes
+// a row real. So the rule is now "does this row say anything", and the
+// container is used only for GROUPING, which is all it was ever good for.
+function billKey(r) {
+    const container = str(r.container_no).toUpperCase();
+    if (container) return { key: 'C:' + container, groupable: true };
+    // No container: each row stands alone. There is nothing to group a local
+    // delivery BY — two truckloads from the same supplier on the same day are
+    // two loads, and merging them would invent a single larger one.
+    return { key: 'R:' + r._row, groupable: false };
+}
+
 function toBills(mapped) {
     const byContainer = new Map();
     const skipped = [];
     for (const r of mapped.rows) {
-        const key = str(r.container_no).toUpperCase();
-        if (!key) {
-            // A row with no container is a spacer, a subtotal or a note. Named,
-            // not silently dropped: "620 of 2262 rows" needs an explanation.
-            const hasAnything = ['supplier', 'description', 'gross', 'supplier_price']
-                .some((f) => r[f] !== null && r[f] !== undefined && str(r[f]) !== '');
-            if (hasAnything) skipped.push({ row: r._row, why: 'no container number' });
-            continue;
-        }
+        // Anything at all: a supplier, a description, a weight, a price, a
+        // booking, an invoice number. Only a row that says NOTHING is dropped.
+        const hasAnything = ['supplier', 'description', 'gross', 'supplier_price',
+                             'booking_no', 'invoice_no', 'trucking_company', 'carrier',
+                             'supplier_invoice_amount', 'trucking_amount']
+            .some((f) => r[f] !== null && r[f] !== undefined && str(r[f]) !== '');
+        if (!hasAnything) { skipped.push({ row: r._row, why: 'row is empty' }); continue; }
+        const { key } = billKey(r);
         if (!byContainer.has(key)) byContainer.set(key, []);
         byContainer.get(key).push(r);
     }
 
     const bills = [];
-    for (const [container, group] of byContainer) {
+    for (const [key, group] of byContainer) {
         const first = group[0];
-        const bill = { container_no: container };
+        const bill = {};
+        if (key.startsWith('C:')) bill.container_no = key.slice(2);
         for (const f of ['route', 'carrier', 'trucking_company', 'date', 'supplier',
                          'invoice_no', 'booking_no', 'seal_no', 'supplier_price',
                          'supplier_invoice_amount', 'trucking_amount', 'photos']) {
@@ -239,13 +302,14 @@ function toSales(mapped) {
     const sales = [];
     const skipped = [];
     for (const r of mapped.rows) {
-        const hasKey = str(r.container_no) || str(r.invoice_no);
-        if (!hasKey) {
-            const hasAnything = ['customer', 'consignee', 'item', 'weight', 'invoice_price']
-                .some((f) => r[f] !== null && r[f] !== undefined && str(r[f]) !== '');
-            if (hasAnything) skipped.push({ row: r._row, why: 'no container number and no invoice number' });
-            continue;
-        }
+        // Same correction as toBills: her local deliveries to Eccomelt carry a
+        // PO reference and "Local Transit" instead of a container and an HBL,
+        // and they are invoices like any other. A row is kept if it says
+        // anything; only a genuinely empty one is dropped.
+        const hasAnything = ['customer', 'consignee', 'item', 'weight', 'invoice_price',
+                             'invoice_no', 'container_no', 'booking_no', 'reference', 'hbl_no']
+            .some((f) => r[f] !== null && r[f] !== undefined && str(r[f]) !== '');
+        if (!hasAnything) { skipped.push({ row: r._row, why: 'row is empty' }); continue; }
         const sale = {};
         for (const [, field] of Object.entries(ORDER_MAP)) {
             if (r[field] !== null && r[field] !== undefined && str(r[field]) !== '') sale[field] = r[field];
@@ -304,9 +368,9 @@ async function readWorkbook(buffer, opts = {}) {
     if (shipSheet) {
         const all = [];
         shipSheet.eachRow({ includeEmpty: false }, (row) => {
-            all.push(row.values.slice(1));   // exceljs pads index 0
+            all.push({ n: row.number, cells: row.values.slice(1) });   // exceljs pads index 0
         });
-        const headerIdx = indexHeaders(all[0] || []);
+        const headerIdx = indexHeaders((all[0] || {}).cells || []);
         const mapped = mapRows({ rows: all.slice(1), headerIdx, map: SHIPMENTS_MAP,
                                  dateFields: SHIPMENT_DATES, numFields: SHIPMENT_NUMS,
                                  checks: SHIPMENT_CHECKS, sheet: shipSheet.name });
@@ -322,8 +386,8 @@ async function readWorkbook(buffer, opts = {}) {
     const orderSheet = findSheet(opts.orderSheet || 'Order Details 2026');
     if (orderSheet) {
         const all = [];
-        orderSheet.eachRow({ includeEmpty: false }, (row) => { all.push(row.values.slice(1)); });
-        const headerIdx = indexHeaders(all[0] || []);
+        orderSheet.eachRow({ includeEmpty: false }, (row) => { all.push({ n: row.number, cells: row.values.slice(1) }); });
+        const headerIdx = indexHeaders((all[0] || {}).cells || []);
         const mapped = mapRows({ rows: all.slice(1), headerIdx, map: ORDER_MAP,
                                  dateFields: ORDER_DATES, numFields: ORDER_NUMS,
                                  checks: ORDER_CHECKS, sheet: orderSheet.name });
