@@ -143,3 +143,4 @@ tests/form-parity.js
 tests/mobile-layout.js
 tests/spend-report.js
 .mutate-restore.json
+BOL-sample.html
