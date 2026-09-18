@@ -198,6 +198,37 @@ function rows(supplier, { bills: billsMod = null, billPayments: bpMod = null } =
         });
     }
 
+    // ── AN ADVANCE ON THE BILL IS A CREDIT ON THE ACCOUNT ────────────────
+    // Apsara, 2026-09-19: "include a col cslled advance". The column lives on
+    // the bill, and if it stopped there this account would go on showing the
+    // full invoice as owing on containers she has already part-paid — two
+    // screens answering "what do I owe Gomez" with different numbers, which
+    // is worse than either being wrong on its own.
+    //
+    // A SEPARATE ROW, not a smaller debit. The account's whole shape is
+    // "what went on, what came off, running total" (her words, 2026-09-11),
+    // and netting the advance into the bill's debit would hide the payment
+    // instead of recording it. It is dated with the bill because the sheet
+    // this came from does not say when the advance was sent — stated in the
+    // description rather than invented.
+    for (const b of all) {
+        if (!sameSupplier(b.supplier, who)) continue;
+        const adv = num(b.advance);
+        if (!adv) continue;
+        out.push({
+            id: `${b.id}_ADV`, kind: 'advance',
+            date: b.date || null,
+            iso: bills.sortableDate(b.date) || '',
+            what: `Advance${b.container_no ? ' on ' + b.container_no : ''}`,
+            container_no: b.container_no || null,
+            booking_no: b.booking_no || null,
+            weight: null, weight_unit: null, price: null,
+            debit: null,
+            credit: round2(adv),
+            created_at: b.created_at || null,
+        });
+    }
+
     for (const p of billPayments.list()) {
         if (!sameSupplier(p.supplier, who)) continue;
         out.push({

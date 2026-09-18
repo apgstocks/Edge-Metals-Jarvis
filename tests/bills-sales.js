@@ -122,13 +122,29 @@ section('A — her formulas, exactly as she gave them');
     ck('  Net (MT) is lbs over 2204.62262', b.net_mt === 6.577, String(b.net_mt));
     ck('  a price under $10 is read as per POUND', b.price_unit === 'lb', String(b.price_unit));
     ck('  so the amount is net_lb x price', b.amount === 4640, String(b.amount));
-    // Her formula was "Amount − Trucking − Advance"; she removed Advance on
-    // 2026-09-10, so it is Amount − Trucking.
-    ck('  Balance is amount minus trucking', b.balance === 3440, String(b.balance));
-    ck('  and Advance is gone entirely, not just hidden',
-       !bills.COLUMNS.some((c) => c.key === 'advance') && !bills.WRITABLE.includes('advance')
-       && !('advance' in bills.summary([])),
-       'a column dropped from a form is still a number sitting in a record affecting a balance');
+    // ── HER FORMULA, REMOVED AND THEN ASKED FOR AGAIN ────────────────────
+    // "Amount − Trucking − Advance" was her original. She removed Advance on
+    // 2026-09-10 ("Remove advance on this") and asked for it back on
+    // 2026-09-19, after importing a year of real shipments and finding
+    // $21,791.80 sitting in the Trucking column: "Advance someti,es while
+    // truclimg othr wwise.include a col cslled advance."
+    //
+    // Both checks are kept. The first is the one that matters every day: a
+    // bill with NO advance must read exactly as it did while the column did
+    // not exist, or restoring it would have quietly moved every balance in
+    // the ledger.
+    ck('with no advance, Balance is still amount minus trucking',
+       b.balance === 3440, String(b.balance));
+    const withAdv = bills.compute({ gross: 44000, truck: 15000, container: 8000, chassis: 6000,
+        boxes: 500, supplier_price: 0.32, trucking_amount: 1200, advance: 1000 });
+    ck('  and an advance comes off the balance', withAdv.balance === 2440, String(withAdv.balance));
+    ck('  without touching what the supplier is owed',
+       withAdv.net_payable === b.net_payable,
+       'an advance is money that has left — it is not a discount on their invoice');
+    ck('  Advance is a real column again, not a hidden field',
+       bills.COLUMNS.some((c) => c.key === 'advance') && bills.WRITABLE.includes('advance')
+       && ('advance' in bills.summary([])),
+       'a column she can see but not save is worse than no column');
 
     // ── THE $10 BOUNDARY, BOTH SIDES ─────────────────────────────────────
     // This is the assertion that matters most in the file. lbs and MT differ
@@ -218,9 +234,12 @@ section('D — her columns, in her order');
     // deducting trucking,it should get auto adjusted na". It always did — this
     // is the middle link named, so the deduction is read rather than
     // reconstructed between two other columns.
-        'Supplier price', 'Supplier invoice amount', 'Trucker', 'Trucking',
+    // Advance restored 2026-09-19, sitting immediately after Trucking because
+    // her sheet's one column ("Advance /Trucking") is where both figures come
+    // from and reading them side by side is how she checks the split.
+        'Supplier price', 'Supplier invoice amount', 'Trucker', 'Trucking', 'Advance',
         'Payable', 'Balance', 'Photos'];
-    ck('the bill has her columns, less Advance and Carrier, plus Photos',
+    ck('the bill has her columns, less Carrier, plus Advance and Photos',
        bills.tableColumns().length === wanted.length, String(bills.tableColumns().length));
     ck('  Carrier is off the table but still on the form',
        !bills.tableColumns().some((c) => c.key === 'carrier')

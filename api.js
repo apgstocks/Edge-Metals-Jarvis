@@ -3707,6 +3707,9 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
                 problems: parsed.problems,
                 cancelled: parsed.cancelled || [],
                 mismatches: parsed.mismatches || [],
+                // How her one "Advance /Trucking" column was divided, and any
+                // row close enough to the line to be worth her eye.
+                near_threshold: parsed.near_threshold || [],
                 already_imported: planned.alreadyImported,
                 samples: {
                     bill: planned.bills.find((b) => !b.items) || null,

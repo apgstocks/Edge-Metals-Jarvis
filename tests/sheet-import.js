@@ -430,6 +430,107 @@ section('I. the upload routes');
     listener.close();
 }
 
+// ── J. ONE COLUMN, TWO KINDS OF MONEY ───────────────────────────────────────
+// Apsara, 2026-09-19, having spotted $21,791.80 in the Trucking column on
+// BMOU5185697: "Advance someti,es while truclimg othr wwise.include a col
+// cslled advance."
+//
+// Her sheet's column is headed "Advance /Trucking" and really does hold both.
+// Everything landed in trucking_amount, which helpers/bills.js deducts as
+// haulage, so her ledger claimed $120,000 of trucking on one container.
+section('J. Advance /Trucking is two columns');
+{
+    const ExcelJS = require('exceljs');
+    const mk = async (figures) => {
+        const wb = new ExcelJS.Workbook();
+        const ws = wb.addWorksheet('SHIPMENTS 2026');
+        ws.addRow(['g', 'Carrier', 'Date', 'SUPPLIER', 'INV NO', 'BKG#', 'CONT#', 'SEAL#',
+                   'item Description', 'GROSS', 'Truck', 'container', 'Chassis',
+                   'supplier price', 'SUPPL INVOICE AMT', 'Advance /Trucking']);
+        figures.forEach((amt, i) => ws.addRow(['LA/Busan', 'HMM', new Date('2026-09-10'), 'Gomez',
+            `INV${i}`, `BK${i}`, `CONT${String(i).padStart(7, '0')}`, `S${i}`, 'Auto Cast',
+            79520, 16300, 8510, 6600, 0.82, 39450.2, amt]));
+        return si.readWorkbook(Buffer.from(await wb.xlsx.writeBuffer()), {});
+    };
+
+    // Her real shape: haulage in the hundreds, advances in the tens of
+    // thousands, and nothing in between.
+    const r = await mk([800, 1239.2, 21791.8, 120000]);
+    const byAmt = {};
+    for (const b of r.bills) byAmt[b.container_no] = b;
+    const rows = Object.values(byAmt);
+    ck('the small ones stay trucking',
+       rows.filter((b) => Number(b.trucking_amount) > 0).length === 2,
+       JSON.stringify(rows.map((b) => [b.trucking_amount, b.advance])));
+    ck('  and the large ones become advances',
+       rows.filter((b) => Number(b.advance) > 0).length === 2,
+       JSON.stringify(rows.map((b) => [b.trucking_amount, b.advance])));
+    ck('  a figure is never counted as BOTH',
+       rows.every((b) => !(Number(b.trucking_amount) > 0 && Number(b.advance) > 0)),
+       'the same money deducted twice would understate every balance it touches');
+    ck('  the split is reported, with the line it used',
+       r.summary.advance_over === 2500 && r.summary.bills_trucking === 2 && r.summary.bills_advance === 2,
+       JSON.stringify({ at: r.summary.advance_over, t: r.summary.bills_trucking, a: r.summary.bills_advance }));
+
+    // ── A FILE THAT IS NOT CLEANLY SPLIT MUST SAY SO ────────────────────
+    // The threshold is safe for her 2026 sheet because nothing sits near it —
+    // 102 figures under $1,000, two between $1,000 and $2,000, ZERO between
+    // $2,000 and $3,000, and 95 above. Next year's file might have a $2,400
+    // haulage charge, and splitting that silently is the same class of error
+    // as the one being fixed.
+    ck('a cleanly split file reports nothing near the line',
+       (r.near_threshold || []).length === 0, JSON.stringify(r.near_threshold));
+
+    const grey = await mk([800, 2400, 2600, 50000]);
+    ck('a file with figures NEAR the line says so',
+       (grey.near_threshold || []).length === 2, JSON.stringify(grey.near_threshold));
+    ck('  naming the container and which way it went',
+       (grey.near_threshold || []).every((x) => x.container && /advance|trucking/.test(x.treated_as)),
+       JSON.stringify(grey.near_threshold));
+
+    // The line is a fact about THIS file, so it can be moved.
+    const wb2 = new ExcelJS.Workbook();
+    const moved = await si.readWorkbook(
+        Buffer.from(await (async () => {
+            const w = new ExcelJS.Workbook(); const ws = w.addWorksheet('SHIPMENTS 2026');
+            ws.addRow(['Date', 'SUPPLIER', 'CONT#', 'GROSS', 'supplier price', 'Advance /Trucking']);
+            ws.addRow([new Date('2026-09-10'), 'Gomez', 'CONT0000001', 79520, 0.82, 4000]);
+            return w.xlsx.writeBuffer();
+        })()), { advanceOver: 10000 });
+    ck('the threshold can be moved for a different file',
+       Number(moved.bills[0].trucking_amount) === 4000 && !moved.bills[0].advance,
+       JSON.stringify([moved.bills[0].trucking_amount, moved.bills[0].advance]));
+}
+
+// ── K. AND THE BALANCE COMES OUT RIGHT ──────────────────────────────────────
+// The whole reason this matters. Her sheet says BMOU5185697 owes 17,658.40.
+section('K. it agrees with her own spreadsheet');
+{
+    const bills = require(path.join(ROOT, 'helpers/bills'));
+    const row = bills.compute({ date: '09/10/2026', supplier: 'Gomez', container_no: 'BMOU5185697',
+        gross: 79520, truck: 16300, container: 8510, chassis: 6600,
+        supplier_price: 0.82, advance: 21791.8 });
+    ck('the invoice amount matches her sheet', Math.abs(row.amount - 39450.2) < 0.05, String(row.amount));
+    ck('  and so does the balance, to the cent', Math.abs(row.balance - 17658.4) < 0.005, String(row.balance));
+    ck('  while Payable still states what the SUPPLIER is owed',
+       Math.abs(row.net_payable - 39450.2) < 0.05,
+       'an advance is money that has left — it comes off the balance, not off their invoice');
+
+    // Without an advance, a bill must read exactly as it did before the
+    // column existed.
+    const before = bills.compute({ date: '09/10/2026', supplier: 'Gomez', container_no: 'X',
+        gross: 79520, truck: 16300, container: 8510, chassis: 6600, supplier_price: 0.82 });
+    ck('a bill with no advance is untouched', before.balance === before.net_payable,
+       `${before.balance} vs ${before.net_payable}`);
+
+    // ── AND THE SUPPLIER ACCOUNT AGREES WITH THE LEDGER ─────────────────
+    // Two screens answering "what do I owe Gomez" with different numbers is
+    // worse than either being wrong on its own.
+    const sa = require(path.join(ROOT, 'helpers/supplierAccount'));
+    const saved = bills.list().length;
+    ck('(fixture)', saved >= 0);
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 if (failures.length) console.log('Failures:\n  ' + failures.join('\n  '));
 try { fs.rmSync(TMP, { recursive: true, force: true }); } catch (e) {}

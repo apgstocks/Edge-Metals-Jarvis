@@ -41,7 +41,7 @@ const cfgFor = (kind) => (kind === 'sales'
 // consults (LEDGER_KINDS in dashboard/index.html), so a column that reads as
 // money there reads as money here.
 const MONEY = {
-    bills: ['supplier_price', 'amount', 'trucking_amount', 'net_payable', 'balance'],
+    bills: ['supplier_price', 'amount', 'trucking_amount', 'advance', 'net_payable', 'balance'],
     sales: ['invoice_price', 'amount', 'commission_per_mt', 'commission_amount', 'received', 'balance'],
 };
 const WEIGHTS = {

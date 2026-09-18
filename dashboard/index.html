@@ -5544,7 +5544,7 @@ const LEDGER_KINDS = {
   bills: {
     eyebrow: '// Edge Metals', title: 'Purchase bills', addLabel: '+ Add bill', editLabel: 'Edit bill',
     path: '/api/bills', listKey: 'bills', itemKey: 'bill',
-    money: ['supplier_price', 'amount', 'trucking_amount', 'net_payable', 'balance'],
+    money: ['supplier_price', 'amount', 'trucking_amount', 'advance', 'net_payable', 'balance'],
     filters: ['supplier', 'carrier', 'trucking_company'],
     weights: ['gross', 'truck', 'container', 'chassis', 'boxes', 'total', 'net_lb', 'net_mt'],
     cards: [['Total tare', 'total', 'num'], ['Net weight (lbs)', 'net_lb', 'num'],
@@ -7705,6 +7705,14 @@ async function openImportModal(kind) {
         ${card('Rows skipped', s.rows_skipped)}
         ${card('Unreadable values', s.unreadable_values, true)}
       </div>
+      ${s.bills_advance ? `<div style="margin-top:12px; padding:9px 12px; border:1px solid ${L.line}; border-radius:var(--radius-sm); background:${L.paper}; font-size:12px; color:${L.ink}; line-height:1.55;">
+        Your <b>Advance /Trucking</b> column holds both: <b>${n(s.bills_trucking)}</b> read as trucking, <b>${n(s.bills_advance)}</b> as advances paid to the supplier, split at <b>$${n(s.advance_over)}</b>.
+        ${(p.near_threshold || []).length
+          ? `<span style="color:${L.warn};">${n((p.near_threshold || []).length)} figure${(p.near_threshold || []).length === 1 ? ' sits' : 's sit'} close to that line — worth a look: `
+            + (p.near_threshold || []).slice(0, 6).map((x) => `${esc(x.container)} $${n(x.amount)} → ${esc(x.treated_as)}`).join('; ') + '</span>'
+          : 'Nothing sits near that line in this file.'}
+      </div>` : ''}
+
       <div style="font-size:11px; color:${L.inkFaint}; margin-top:9px; line-height:1.6;">
         Read ${range(sh)} and ${range(or)}.
         ${s.bills_multi_grade ? `${n(s.bills_multi_grade)} containers had several grades and became one bill each. ` : ''}

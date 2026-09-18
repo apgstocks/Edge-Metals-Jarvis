@@ -295,7 +295,11 @@ function billKey(r) {
     return { key: 'R:' + r._row, groupable: false };
 }
 
-function toBills(mapped) {
+// `advanceOver` decides where her "Advance /Trucking" column splits. Passed
+// in rather than read from an outer scope — toBills is its own function, and
+// the first version of this reached for a constant that lives in
+// readWorkbook, which threw on the first row it looked at.
+function toBills(mapped, advanceOver = 2500) {
     const byContainer = new Map();
     const skipped = [];
     for (const r of mapped.rows) {
@@ -334,6 +338,37 @@ function toBills(mapped) {
                          'invoice_no', 'booking_no', 'seal_no', 'trucking_amount', 'photos']) {
             const v = firstStated(f);
             if (v !== undefined) bill[f] = v;
+        }
+
+        // ── ONE COLUMN, TWO KINDS OF MONEY ───────────────────────────────
+        // Apsara, 2026-09-19, having spotted $21,791.80 in the Trucking
+        // column on BMOU5185697: "Advance someti,es while truclimg othr
+        // wwise.include a col cslled advance."
+        //
+        // Her sheet's column is headed "Advance /Trucking" and really does
+        // hold both. Everything landed in trucking_amount, which
+        // helpers/bills.js DEDUCTS as haulage, so her ledger claimed $120,000
+        // of trucking on a single container.
+        //
+        // ── THE THRESHOLD IS NOT A GUESS, IT IS A GAP ────────────────────
+        // Across her 2026 sheet the 199 figures fall in two clumps with
+        // NOTHING between them:
+        //
+        //     under $1,000 ...... 102     $2,000–$3,000 ..... 0
+        //     $1,000–$2,000 ......  2     over $3,000 ...... 95
+        //
+        // Haulage runs $650–$2,000 (median $800). The advances start at
+        // $3,200 and run to $120,000, and 70 of them are more than half the
+        // supplier's whole invoice. $2,500 sits in an empty band, so no row
+        // in THIS file is near the line.
+        //
+        // Passed in rather than baked in, because that is a fact about this
+        // file. And a file that is NOT cleanly split has to say so rather
+        // than be quietly divided — see near_threshold below.
+        const both = num(bill.trucking_amount);
+        if (both !== null && both >= advanceOver) {
+            bill.advance = both;
+            delete bill.trucking_amount;
         }
         // ── THE SUPPLIER INVOICE AMOUNT IS PER GRADE ─────────────────────
         // Checked against her sheet: APZU3556287's three grades carry 16785.40,
@@ -508,6 +543,9 @@ async function readWorkbook(buffer, opts = {}) {
         || wb.worksheets.find((w) => normHeader(w.name).startsWith(normHeader(wanted).split(' ')[0]));
 
     const result = { bills: [], sales: [], problems: [], skipped: [], mismatches: [], sheets: {} };
+    // Where haulage stops and an advance begins. See the note at the split.
+    const advanceOver = Number.isFinite(Number(opts.advanceOver)) && Number(opts.advanceOver) > 0
+        ? Number(opts.advanceOver) : 2500;
 
     const shipSheet = findSheet(opts.shipmentsSheet || 'SHIPMENTS 2026');
     if (shipSheet) {
@@ -520,7 +558,7 @@ async function readWorkbook(buffer, opts = {}) {
         const mapped = mapRows({ rows: shipCut.kept, headerIdx, map: SHIPMENTS_MAP,
                                  dateFields: SHIPMENT_DATES, numFields: SHIPMENT_NUMS,
                                  checks: SHIPMENT_CHECKS, sheet: shipSheet.name });
-        const { bills, skipped } = toBills(mapped);
+        const { bills, skipped } = toBills(mapped, advanceOver);
         result.bills = bills;
         result.problems.push(...mapped.problems);
         result.skipped.push(...skipped.map((s) => ({ sheet: shipSheet.name, ...s })));
@@ -555,6 +593,26 @@ async function readWorkbook(buffer, opts = {}) {
                                  headersTotal: Object.keys(ORDER_MAP).length };
     }
 
+    // ── IS THIS FILE ACTUALLY SPLIT CLEANLY? ────────────────────────────
+    // The threshold is safe for her 2026 sheet because nothing sits near it.
+    // Next year's might have a $2,400 haulage charge, and a silent split on a
+    // file that is not bimodal is the same class of error as the one being
+    // fixed. Anything within 20% either way is reported, by row, so she can
+    // look rather than trust.
+    result.near_threshold = [];
+    for (const b of result.bills) {
+        const v = Number(b.advance) || Number(b.trucking_amount) || 0;
+        if (!v) continue;
+        if (v >= advanceOver * 0.8 && v <= advanceOver * 1.2) {
+            result.near_threshold.push({
+                container: b.container_no || '(local delivery)',
+                supplier: b.supplier || '',
+                amount: v,
+                treated_as: Number(b.advance) ? 'advance' : 'trucking',
+            });
+        }
+    }
+
     result.summary = {
         bills: result.bills.length,
         // Named in its own right rather than counted as an oddity — see
@@ -564,6 +622,10 @@ async function readWorkbook(buffer, opts = {}) {
         sales: result.sales.length,
         rows_skipped: result.skipped.length,
         unreadable_values: result.problems.length,
+        // How the "Advance /Trucking" column was split, and on what line.
+        advance_over: advanceOver,
+        bills_trucking: result.bills.filter((b) => Number(b.trucking_amount) > 0).length,
+        bills_advance: result.bills.filter((b) => Number(b.advance) > 0).length,
         total_mismatches: result.mismatches.length,
         cancelled_orders: (result.cancelled || []).length,
     };

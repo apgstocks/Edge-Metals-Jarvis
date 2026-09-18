@@ -391,7 +391,10 @@ function compute(input) {
     // and reconciling that later is impossible rather than merely tedious.
     const netPayable = amountUsed === null ? null
         : round2(amountUsed - (trucking || 0));
-    const balance = netPayable === null ? null : round2(netPayable - paid);
+    // The third term, restored 2026-09-19. Null-safe: a bill with no advance
+    // must read exactly as it did before the column existed.
+    const advance = num(b.advance) || 0;
+    const balance = netPayable === null ? null : round2(netPayable - paid - advance);
 
     return {
         items,
@@ -549,16 +552,36 @@ const COLUMNS = [
       placeholder: 'who hauled it' },
     { key: 'trucking_amount',  label: 'Trucking',           group: 'trucking', unit: '$', num: true,
       formLabel: 'Trucking cost' },
-    // ── ADVANCE REMOVED ──────────────────────────────────────────────────
-    // Apsara, 2026-09-10: "Remove advance on this". It was in her original
-    // 23 and it is out, which also drops it from her balance formula — that
-    // was "Amount − Trucking − Advance" and is now "Amount − Trucking".
+    // ── ADVANCE: REMOVED 2026-09-10, ASKED FOR AGAIN 2026-09-19 ──────────
+    // Both decisions are hers and both are kept here, because a note saying
+    // only "she asked for this removed" is a note that gets it removed again.
     //
-    // Safe to remove outright rather than hide: bills.json has never existed
-    // in production (nothing imported helpers/bills.js until today), so there
-    // is no stored advance to strand. If there had been, this would need a
-    // migration instead — a column dropped from a form is still a number
-    // sitting in a record affecting a balance.
+    //   2026-09-10, "Remove advance on this". It was in her original 23 and
+    //   came out, taking the third term of her balance formula with it:
+    //   "Amount − Trucking − Advance" became "Amount − Trucking".
+    //
+    //   2026-09-19, after importing a year of real shipments and spotting
+    //   $21,791.80 sitting in the Trucking column on BMOU5185697: "Advance
+    //   someti,es while truclimg othr wwise.include a col cslled advance."
+    //
+    // What changed in between is the DATA. Her sheet has one column headed
+    // "Advance /Trucking" holding both things — median $800, which is
+    // haulage, and 79 rows over $10,000, several of them larger than the
+    // supplier's whole invoice, which are money already paid. With no advance
+    // column there was nowhere for the second kind to go, so the import put
+    // all of it in Trucking and her ledger claimed $120,000 of haulage on a
+    // single container.
+    //
+    // ── AND IT SITS WITH `paid`, NOT WITH `trucking` ─────────────────────
+    // An advance is money that has LEFT — so it comes off the balance, not
+    // off what the supplier is owed. net_payable stays "amount less
+    // trucking", which is what their invoice minus the haulage says, and the
+    // advance reduces what is still outstanding. Putting it in net_payable
+    // would make her Payable column disagree with the supplier's own
+    // document, which is the thing the note above amount is at pains to
+    // prevent.
+    { key: 'advance',          label: 'Advance',            group: 'money', unit: '$', num: true,
+      formLabel: 'Advance paid', hint: 'money already sent to the supplier for this container' },
     // The middle link in the chain, so the trucking deduction is visible
     // rather than something she reconstructs between two other columns.
     { key: 'net_payable',      label: 'Payable',            group: 'money', unit: '$', derived: true,
@@ -591,7 +614,7 @@ const COLUMNS = [
 const TABLE_ORDER = ['route', 'date', 'supplier', 'invoice_no',
     'booking_no', 'container_no', 'seal_no', 'description', 'gross', 'truck',
     'container', 'chassis', 'boxes', 'total', 'net_lb', 'net_mt',
-    'supplier_price', 'amount', 'trucking_company', 'trucking_amount',
+    'supplier_price', 'amount', 'trucking_company', 'trucking_amount', 'advance',
     'net_payable', 'balance',
     'photos'];
 
@@ -999,6 +1022,7 @@ function summary(rows) {
         net_mt: round3(r.reduce((s, x) => s + (x.net_mt || 0), 0)),
         amount: sum('amount'),
         trucking_amount: sum('trucking_amount'),
+        advance: sum('advance'),
         balance: sum('balance'),
     };
 }
