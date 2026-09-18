@@ -400,6 +400,43 @@ function buildInvoiceClassicHtml(data) {
     const oneContainer = compact && lineItems.length > 1 && containersOn.length === 1;
     const containerWidth = showItem ? '18%' : '22%';
 
+    // ── A SUBTOTAL PER ITEM ──────────────────────────────────────────────
+    // Apsara, 2026-09-19, having had to ask me what the per-item totals were
+    // on MSDU2726332: "ADD PER ITEM SUBTOTAL IN PACKING LIST IF DIFFERENT
+    // ITEMS FOUND".
+    //
+    // Sixteen bundles of four different things, and the only totals on the
+    // page were for the container. Working out what the Alternators weighed
+    // meant adding four numbers by hand off a document her buyer also has to
+    // add by hand.
+    //
+    // ── `compact`, WHICH MEANS THE PACKING LIST TAB AND NOTHING ELSE ─────
+    // Gated the same way the single Tare column is, and for the same reason
+    // as the note above it. The INVOICE tab's packing list is one row per
+    // CONTAINER — a subtotal there would group containers by whatever their
+    // item happens to be called and insert rows into the document her broker
+    // has received for years. She named the packing list; the packing list is
+    // what changes. If she wants it on the invoice's too, that is one flag and
+    // her yes.
+    //
+    // ── "IF DIFFERENT ITEMS FOUND" ───────────────────────────────────────
+    // Her condition, and it is the right one: on a list of one item the
+    // subtotal and the TOTAL are the same figures twice, which invites the
+    // reader to look for the difference between them.
+    const itemKeyOf = (it) => String((it && (it.item || it.item_desc)) || '').trim().toLowerCase();
+    const distinctItems = [...new Set(lineItems.map(itemKeyOf).filter(Boolean))];
+    // showItem is implied — an item can only differ if it is named, and a
+    // named item turns the column on — but it is asserted rather than assumed,
+    // because a subtotal row labelled in a column that is not being printed
+    // would put the label nowhere.
+    //
+    // No "and there are more rows than items" clause here, though the first
+    // version had one: a mutation deleted it and nothing went red, because
+    // the `run.rows > 1` guard further down already refuses to print a
+    // subtotal for a run of one. Dead code with a confident comment in front
+    // of it is worse than no code — the next person reads it as load-bearing.
+    const showSubtotals = compact && showItem && distinctItems.length > 1;
+
     // ── EVERY WEIGHT PRINTED THE SAME WAY ────────────────────────────────
     // A packing list went out with "1111" in the Gross column beside "1,046"
     // in Net, because gross is copied through as the STRING she typed while
@@ -451,9 +488,11 @@ function buildInvoiceClassicHtml(data) {
     const PACKING_COLUMNS = [
         ...(numberCol ? [{ head: '#', width: `${numberWidth}%`,
           cell: (item, p, netLbs, netMt, i) => escapeHtml(String(item.note || '').trim() || String(i + 1)),
+          sub: () => 'Subtotal',
           total: 'TOTAL' }] : []),
         ...(oneContainer ? [] : [{ head: 'Container', width: containerWidth,
           cell: (item) => escapeHtml(item.container_no || data.container_no),
+          sub: () => (numberCol ? '' : 'Subtotal'),
           total: 'TOTAL' }]),
         // `item` is what the packing-list screen sends; `item_desc` is what an
         // invoice line item has always been called. One column, either source
@@ -461,6 +500,9 @@ function buildInvoiceClassicHtml(data) {
         // place.
         ...(showItem ? [{ head: 'Item', width: w('16%'),
           cell: (item) => escapeHtml(item.item || item.item_desc || ''),
+          // The item's own name, so the row cannot be read as "everything
+          // above this line" — it says exactly what it is the total of.
+          sub: (acc) => escapeHtml(acc.label),
           // Something has to carry the word TOTAL or the last row is a line of
           // figures with no label on it — but only ONE something. When the
           // line-number column is there it takes the label and this one stays
@@ -469,6 +511,7 @@ function buildInvoiceClassicHtml(data) {
           total: (oneContainer && !numberCol) ? 'TOTAL' : '' }] : []),
         { head: 'Gross Weight<br>(lbs)', width: w(showItem ? '17%' : '20%'),
           cell: (item, p) => escapeHtml(weightText(p.gross_weight_lbs) || '-'),
+          sub: (acc) => (acc.gross == null ? '' : formatInt(acc.gross)),
           total: () => (totalGrossLbs == null ? '' : formatInt(totalGrossLbs)) },
         // ── ONE TARE, OR THE FOUR IT IS MADE OF ──────────────────────────
         // The invoice's packing list prints the working: truck, container
@@ -480,6 +523,7 @@ function buildInvoiceClassicHtml(data) {
             ? [{ head: 'Tare<br>(lbs)', width: w(showItem ? '16%' : '20%'),
                  cell: (item, p) => { const t = require('./packingList').tareOf(p);
                                       return escapeHtml(t == null ? '-' : t.toLocaleString('en-US')); },
+                 sub: (acc) => (acc.tare == null ? '' : formatInt(acc.tare)),
                  total: () => (totalTareLbs == null ? '' : formatInt(totalTareLbs)) }]
             : [
                 { head: 'Truck<br>(lbs)', width: '10%',
@@ -498,12 +542,14 @@ function buildInvoiceClassicHtml(data) {
         { head: 'Net Weight<br>(lbs)', width: w(showItem ? '17%' : '20%'),
           // A dash, never a zero, when there is genuinely nothing to state.
           cell: (item, p, netLbs) => escapeHtml(weightText(p.net_weight_lbs) || (netLbs ? formatInt(netLbs) : '-')),
+          sub: (acc) => (acc.netLbs ? formatInt(acc.netLbs) : ''),
           total: () => (totalNetLbs ? formatInt(totalNetLbs) : '-') },
         { head: 'Net Weight<br>(MT)', width: w(showItem ? '16%' : '18%'),
           // A dash, not 0.000, when there is genuinely nothing: a printed zero
           // is a CLAIM that the container weighed nothing, and a blank is an
           // absence. The same rule tareOf follows, on the same document.
           cell: (item, p, netLbs, netMt) => (netMt ? netMt.toFixed(3) : '-'),
+          sub: (acc) => (acc.netMt ? acc.netMt.toFixed(3) : ''),
           total: () => (totalNetMt ? totalNetMt.toFixed(3) : '-') },
     ];
 
@@ -528,7 +574,11 @@ function buildInvoiceClassicHtml(data) {
     // An INVOICE SAVED BEFORE TODAY still carries truck/container/chassis/
     // boxes broken out. It regenerates with the same total it always had, in
     // one column instead of four — nothing on file needs migrating.
-    const packingRowsHtml = lineItems.map((item, rowIndex) => {
+    // A `for` rather than a `map` because a subtotal row is emitted BETWEEN
+    // rows, and because the accumulators below are per-run as well as per-page.
+    const packingRowsHtml = [];
+    let run = null;
+    lineItems.forEach((item, rowIndex) => {
         const p = item.packing || {};
         // ── MT IS A CONVERSION, NOT A FIELD THAT MAY BE BLANK ────────────
         // A packing list built from a weigh sheet has pounds and nothing else,
@@ -573,7 +623,44 @@ function buildInvoiceClassicHtml(data) {
         const cells = PACKING_COLUMNS.map((c) =>
             `          <td style="padding:1mm;font-size:9.5pt;text-align:center;vertical-align:middle;">${c.cell(item, p, netLbs, netMt, rowIndex)}</td>`
         ).join('\n');
-        return `        <tr style="height:10mm;">\n${cells}\n        </tr>`;
+        packingRowsHtml.push(`        <tr style="height:10mm;">\n${cells}\n        </tr>`);
+
+        // ── AND THE SUBTOTAL, WHEN THIS ITEM'S RUN ENDS ──────────────────
+        // Totalled over a CONTIGUOUS RUN of one item, not over every row
+        // carrying that name wherever it sits. The figure a subtotal states
+        // has to be the sum of the rows directly above it, because that is
+        // the only thing the person holding the document can check — and
+        // this document gets checked with a calculator. Her weigh sheets are
+        // grouped, so in practice a run IS the item; if one ever is not, she
+        // gets two labelled subtotals that each add up rather than one that
+        // does not.
+        if (!showSubtotals) return;
+        const key = itemKeyOf(item);
+        if (!run || run.key !== key) {
+            run = { key, label: item.item || item.item_desc || '',
+                    gross: null, tare: null, netLbs: 0, netMt: 0, rows: 0 };
+        }
+        run.gross = addUp(run.gross, num(p.gross_weight_lbs));
+        run.tare = addUp(run.tare, require('./packingList').tareOf(p));
+        run.netLbs += netLbs;
+        run.netMt += netMt;
+        run.rows += 1;
+
+        const next = lineItems[rowIndex + 1];
+        if (next && itemKeyOf(next) === key) return;
+        // A run of one is not a subtotal, it is the row again. Skipped, so a
+        // single Alternator among fifteen sealed units does not get a line
+        // underneath restating itself.
+        if (run.rows > 1) {
+            const subCells = PACKING_COLUMNS.map((c) => {
+                const v = typeof c.sub === 'function' ? c.sub(run) : '';
+                return `          <td style="padding:1.4mm 1mm;font-size:9.5pt;font-weight:700;`
+                     + `text-align:center;vertical-align:middle;background:var(--light-orange);`
+                     + `border-top:0.8pt solid var(--black);">${v}</td>`;
+            }).join('\n');
+            packingRowsHtml.push(`        <tr style="height:8mm;">\n${subCells}\n        </tr>`);
+        }
+        run = null;
     });
 
     // Built AFTER the rows, because the totals are accumulated while they

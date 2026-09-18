@@ -1469,6 +1469,155 @@ section('I — the Customer field matches the address book');
     dom.window.close();
 }
 
+// ── S. A SUBTOTAL PER ITEM ──────────────────────────────────────────────────
+// Apsara, 2026-09-19, after having to ask me what the per-item totals were on
+// MSDU2726332: "ADD PER ITEM SUBTOTAL IN PACKING LIST IF DIFFERENT ITEMS
+// FOUND".
+//
+// The fixture IS that document — sixteen bundles, four items, a flat 120lb
+// tare each — because a fixture invented to suit the code is the one that
+// passes while the real one breaks.
+section('S. per-item subtotals on the packing list');
+{
+    const sTableOf = (html) => {
+        const d = html.slice(html.indexOf('<div class="doc-packing">'));
+        const tbl = d.slice(d.indexOf('<table'), d.indexOf('</table>'));
+        return [...tbl.matchAll(/<tr[^>]*>[\s\S]*?<\/tr>/g)].map((m) =>
+            [...m[0].matchAll(/<t[hd][^>]*>([\s\S]*?)<\/t[hd]>/g)]
+                .map((c) => c[1].replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim()));
+    };
+    const col = (rows, name) => rows[0].findIndex((h) => h.replace(/\s+/g, ' ').startsWith(name));
+    const render = async (rec) => {
+        let t = null;
+        await pl.generatePdf(rec, { allowWithoutInvoice: true,
+            renderer: async (html) => { t = sTableOf(html); return { packing: Buffer.from('x') }; } });
+        return t;
+    };
+    const REAL = [
+        ['Sealed units', 3798], ['Sealed units', 4468], ['Sealed units', 4183], ['Sealed units', 3673],
+        ['Alternator', 3933], ['Alternator', 3618], ['Alternator', 3686], ['Alternator', 2700],
+        ['starter', 4084], ['starter', 2978],
+        ['Electric motor', 3180], ['Electric motor', 3148], ['Electric motor', 3304],
+        ['Electric motor', 2261], ['Electric motor', 2297], ['Electric motor', 2842],
+    ];
+    const recOf = (pairs) => ({
+        container_no: 'MSDU2726332', customer: 'Aris Enterprises USA LLC',
+        invoice_no: '260918_AP_26Aris02', date: '09/18/2026', item_description: 'Scrap Auto Parts',
+        rows: pairs.map(([item, gross], i) => ({
+            note: String(i + 1), item, gross_weight_lbs: String(gross), tare_lbs: '120' })),
+    });
+
+    const t = await render(recOf(REAL));
+    const subs = t.filter((r) => r[0] === 'Subtotal');
+    ck('four items give four subtotal rows', subs.length === 4, subs.length + '');
+    ck('  each is labelled with its own item, not "Subtotal" alone',
+       subs.map((r) => r[col(t, 'Item')]).join('|') === 'Sealed units|Alternator|starter|Electric motor',
+       subs.map((r) => r[col(t, 'Item')]).join('|'));
+
+    // ── EVERY FIGURE, AGAINST THE ARITHMETIC AND NOT AGAINST ITSELF ──────
+    // Computed here from the fixture rather than pasted from a run, so a
+    // change to how the subtotal is built cannot quietly redefine what is
+    // correct.
+    const groups = [];
+    for (const [item, gross] of REAL) {
+        const g = groups[groups.length - 1];
+        if (g && g.item === item) { g.gross += gross; g.n += 1; }
+        else groups.push({ item, gross, n: 1 });
+    }
+    const fmt = (n) => n.toLocaleString('en-US');
+    const wrong = [];
+    groups.forEach((g, i) => {
+        const r = subs[i];
+        const net = g.gross - 120 * g.n;
+        const want = { gross: fmt(g.gross), tare: fmt(120 * g.n), net: fmt(net),
+                       mt: (net / 2204.62).toFixed(3) };
+        const got = { gross: r[col(t, 'Gross')], tare: r[col(t, 'Tare')],
+                      net: r[col(t, 'Net Weight (lbs)')], mt: r[col(t, 'Net Weight (MT)')] };
+        for (const k of Object.keys(want)) if (want[k] !== got[k]) wrong.push(`${g.item}.${k}: ${got[k]} ≠ ${want[k]}`);
+    });
+    ck('  and every subtotal figure is gross, tare, net and MT for its own rows',
+       wrong.length === 0, wrong.join('; '));
+
+    // The subtotals must reconcile to the TOTAL, or the document contradicts
+    // itself in front of a customs broker.
+    const totalRow = t.find((r) => r[0] === 'TOTAL');
+    const unFmt = (v) => Number(String(v).replace(/,/g, ''));
+    ck('  the subtotals add up to the TOTAL row, in lbs',
+       subs.reduce((a, r) => a + unFmt(r[col(t, 'Net Weight (lbs)')]), 0) === unFmt(totalRow[col(t, 'Net Weight (lbs)')]),
+       'a document that disagrees with itself is worse than one with no subtotals');
+    ck('  and in gross', subs.reduce((a, r) => a + unFmt(r[col(t, 'Gross')]), 0) === unFmt(totalRow[col(t, 'Gross')]));
+
+    // A sheared row does not error, it just prints a column short — and the
+    // TOTAL row has already done that once on this document.
+    ck('  every row still has the same number of cells',
+       new Set(t.map((r) => r.length)).size === 1, t.map((r) => r.length).join(','));
+
+    // ── "IF DIFFERENT ITEMS FOUND" — HER CONDITION, LITERALLY ────────────
+    const oneItem = await render(recOf(REAL.map(([, g]) => ['Sealed units', g])));
+    ck('ONE item gets NO subtotals', !oneItem.some((r) => r[0] === 'Subtotal'),
+       'the subtotal and the TOTAL would be the same figures twice, inviting a hunt for the difference');
+    ck('  but still gets its TOTAL', !!oneItem.find((r) => r[0] === 'TOTAL'));
+
+    // A run of one is the row restated. Two items, one of which appears once.
+    const lone = await render(recOf([['Sealed units', 3798], ['Sealed units', 4468], ['Alternator', 3933]]));
+    const loneSubs = lone.filter((r) => r[0] === 'Subtotal');
+    ck('an item appearing once gets no subtotal of its own',
+       loneSubs.length === 1 && loneSubs[0][col(lone, 'Item')] === 'Sealed units',
+       loneSubs.map((r) => r[col(lone, 'Item')]).join('|'));
+
+    // ── AND THE ROWS THEMSELVES ARE UNTOUCHED ───────────────────────────
+    // The whole risk of inserting rows into a table is that the existing ones
+    // move or change. Sixteen bundles in, sixteen bundles out.
+    ck('all sixteen bundle rows are still there, in order',
+       t.filter((r) => /^\d+$/.test(r[0])).map((r) => r[0]).join(',')
+       === Array.from({ length: 16 }, (_, i) => i + 1).join(','));
+}
+
+// ── S2. THE INVOICE'S PACKING LIST IS NOT TOUCHED ───────────────────────────
+// The reason this section exists is CLAUDE.md's first entry: "in packing list
+// i juxt want gross,tare,net" was about the packing list TAB, was applied to
+// the shared template, and her invoice's packing list lost four columns.
+//
+// Subtotals are gated on `compact`, which ONLY helpers/packingList.js sets.
+// The invoice's packing list is one row per CONTAINER — grouping those by
+// whatever their item happens to be called would insert rows into the document
+// her broker has received for years. Asserted by rendering an invoice whose
+// containers DO repeat an item, which is the case that would fire if the gate
+// were wrong.
+section('S2. the invoice packing list keeps its shape');
+{
+    const inv = require(path.join(ROOT, 'helpers/invoicePdf'));
+    const line = (c, desc, gross) => ({
+        container_no: c, seal_no: 'S1', item_desc: desc, weight: 10, rate: 100,
+        packing: { gross_weight_lbs: String(gross), truck_lbs: '15000',
+                   container_tare_lbs: '8000', chassis_lbs: '6000', boxes_weight_lbs: '500' },
+    });
+    const invData = {
+        inv_no: 'X1', inv_date: '09/18/2026', consignee: 'Aris', booking_no: 'B1',
+        line_items: [line('AAAU1111111', 'Sealed units', 44000),
+                     line('BBBU2222222', 'Sealed units', 45000),
+                     line('CCCU3333333', 'Alternator', 46000)],
+    };
+    // The HTML builder directly — renderModes launches Chromium, which cannot
+    // run in this sandbox (x86 binaries, ARM host), and the markup is what is
+    // being asserted about anyway.
+    // ── .html, NOT THE RETURN VALUE ─────────────────────────────────────
+    // buildInvoiceClassicHtml returns { html, ... }. Testing the object
+    // itself, every regex ran against "[object Object]" — so the subtotal
+    // check PASSED while asserting nothing at all, sitting right next to a
+    // real failure. A check that cannot fail is worse than no check.
+    const built = inv.buildInvoiceClassicHtml(invData);
+    const html = typeof built === 'string' ? built : (built && built.html);
+    ck('the invoice HTML was actually built', typeof html === 'string' && html.length > 1000,
+       'every regex below would have run against "[object Object]" and passed');
+    ck('an invoice with a repeated item gets NO subtotal rows',
+       !!html && !/Subtotal/.test(html),
+       'the gate leaked: rows have been inserted into the document her broker checks');
+    ck('  and it still breaks the tare into four columns',
+       /Truck/.test(html) && /Container Tare/.test(html) && /Chassis/.test(html) && /Boxes/.test(html),
+       'this is the exact regression CLAUDE.md opens with');
+}
+
 console.log(`\n  ${pass} passed, ${fail} failed`);
 if (fail) { console.log('\n  FAILED:\n' + failures.map((f) => '    - ' + f).join('\n')); process.exit(1); }
 
