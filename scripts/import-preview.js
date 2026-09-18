@@ -32,11 +32,14 @@ function clean(o) {
         process.exit(1);
     }
 
-    // Apsara, 2026-09-19: "till 665 rows only to beconsidered." Below that her
-    // Shipments sheet is working space. Passed in rather than baked into the
-    // helper, so it is visible and changeable per file.
+    // Where each sheet's real data stops. Apsara, 2026-09-19: "till 665 rows
+    // only to beconsidered" for Shipments, and "in order details-till row 649
+    // should be there". Below those lines both sheets are working space.
+    // Passed in rather than baked into the helper — these are true of this
+    // file today and will not be true of the next one.
     const r = await si.readWorkbook(fs.readFileSync(src), {
         shipmentsLastRow: Number(process.env.SHIPMENTS_LAST_ROW || 665),
+        ordersLastRow: Number(process.env.ORDERS_LAST_ROW || 649),
     });
     const L = [];
     const p = (s) => L.push(s === undefined ? '' : s);
@@ -54,7 +57,9 @@ function clean(o) {
       + ' | **' + r.summary.bills + '** |');
     p('| — of those, multi-grade containers | ' + r.summary.bills_multi_grade + ' |');
     p('| — of those, local deliveries (no container) | ' + r.summary.bills_local_delivery + ' |');
-    p('| Invoices — from ' + (r.sheets.orders ? r.sheets.orders.name : '?') + ' | **' + r.summary.sales + '** |');
+    p('| Invoices — from ' + (r.sheets.orders ? r.sheets.orders.name : '?')
+      + (r.sheets.orders && r.sheets.orders.lastRow ? ', rows 2–' + r.sheets.orders.lastRow : '')
+      + ' | **' + r.summary.sales + '** |');
     p('| Cancelled / replaced orders excluded | ' + r.summary.cancelled_orders + ' |');
     p('| Rows skipped | ' + r.summary.rows_skipped + ' |');
     p('| Values it could not read | ' + r.summary.unreadable_values + ' |');

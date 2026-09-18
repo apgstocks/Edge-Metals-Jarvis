@@ -93,7 +93,11 @@ const MIN_YEAR = 2000;
 const MAX_YEAR = 2100;
 function toIsoDate(raw) {
     const v = cellValue(raw);
-    if (v === null || v === undefined || v === '') return null;
+    if (v === null || v === undefined) return null;
+    // Whitespace-only counts as ABSENT, not as unreadable. A cell holding a
+    // single space was being reported as `unreadable date ""`, which is a
+    // problem she cannot act on and which buried the one real one.
+    if (typeof v === 'string' && v.trim() === '') return null;
     if (v instanceof Date && !isNaN(v.getTime())) {
         const y = v.getUTCFullYear();
         if (y < MIN_YEAR || y > MAX_YEAR) return { bad: `date out of range (${y})` };
