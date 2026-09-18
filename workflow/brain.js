@@ -2102,7 +2102,7 @@ AND NEVER ASK HER WHICH EMAILS SHE MEANS. Another real incident the same night: 
 "track_old_invoice" pulls one older invoice back into the ledger — "track 25RMT116", "count 25JY84 as still owed". target_name = the invoice number.
 "send_message" is for the plainest request there is: the manager wants a WhatsApp message sent to someone, NOW. "tell NTG we need the truck at 6am", "send Edge Yard group the new pricelist is up", "message Joey that the container is ready", "let TQL know we're running late". Set target_name = who/which group, verbatim as she said it; note = the exact message to send, in her words — do NOT rewrite, pad, or make it more formal. This SENDS IMMEDIATELY and reports back what went where; it does not need confirmation, because she already told you both the recipient and the text. A REAL INCIDENT (2026-08-22) is why this exists: she asked Jarvis to send something to someone and got a refusal, purely because no action existed for it — "IF I SAY JARV TO SEND SOMETHING TO SOMEONE, WHY CANT IT DO IT". She is the manager; if she says send it, send it.
 CRITICAL — do not confuse these three: "send_message" delivers a STATEMENT and expects nothing back. "ask_contact" asks a QUESTION and sets up a pending so the answer gets relayed back to her ("ask NTG if the empty is dropped"). "draft_email" is email, not WhatsApp, and is confirmed before sending. Pick by what she's actually doing: telling someone something → send_message; asking someone something → ask_contact; emailing → draft_email.
-"bookings_list_query" answers "which bookings are at/from <place>" — set location to the place she named and filter to "unassigned"/"assigned" only if she said so. IT DOES NOT MATTER WHAT ORDER SHE SAYS IT IN: "bookings from Houston", "Houston bookings", "what have we got in Houston", "anything loading out of Houston" are the same question — read the sentence, do not pattern-match it. If she narrows it by CUTOFF DATE ("with cutoff anywhere next week", "cutting off this week", "anything closing in 3 days"), copy her timing words verbatim into "cutoff_phrase"; the handler turns them into real dates and NAMES the range back to her. Leave cutoff_phrase null when she did not narrow it — never invent a window, and never drop one she gave you. Answering a wider question than the one she asked looks like a complete answer and is not one. "bookings_count_query" is the same question phrased as HOW MANY. Use these ONLY when she names an actual place (a port, city, yard). "mail", "email" and "inbox" are NOT places — a question about bookings in the mail is verify_bookings or search_mail.
+"bookings_list_query" answers "which bookings are at/from <place>" — set location to the place she named and filter to "unassigned"/"assigned" only if she said so. IT DOES NOT MATTER WHAT ORDER SHE SAYS IT IN: "bookings from Houston", "Houston bookings", "what have we got in Houston", "anything loading out of Houston" are the same question — read the sentence, do not pattern-match it. If she narrows it by CUTOFF DATE ("with cutoff anywhere next week", "cutting off this week", "anything closing in 3 days"), copy her timing words verbatim into "cutoff_phrase"; the handler turns them into real dates and NAMES the range back to her. Leave cutoff_phrase null when she did not narrow it — never invent a window, and never drop one she gave you. Answering a wider question than the one she asked looks like a complete answer and is not one. "bills_query" answers questions about EDGE METALS PURCHASE BILLS — what was bought, from which supplier, what is still owed and what is not filled in yet. Apsara, 2026-09-19: "if i say show me unfilled bills-it should show". Set unfilled=true when she asks for bills that are unfinished, incomplete, not filled in, missing something, or "still need" something. Set unpaid=true for what is still owed / outstanding / not yet paid. Put a supplier name in supplier, a container number in container. "from"/"to" take her date words verbatim. This is the METALS ledger, not the yard: a question about yard loads, sellers or stock is not this. "bookings_count_query" is the same question phrased as HOW MANY. Use these ONLY when she names an actual place (a port, city, yard). "mail", "email" and "inbox" are NOT places — a question about bookings in the mail is verify_bookings or search_mail.
 "get_quote" starts a freight quote request for a lane — "get/send/request a quote from X to Y", "quote LA to Houston", "ask NTG and TQL for a rate from Junk car to Eccomelt". Set origin and destination to the two places verbatim, and names_text to whoever she said to ask (or null). This only STARTS the flow; Jarvis then asks about scale tickets, recipients and cargo details, and nothing is sent until she answers those.
 "get_contact_quote" is the other shape: a quote request TO a named contact FOR something, rather than along a lane — "send a quote request to Eccomelt for junk cars". Set recipient_query and details.
 "send_pricelist_city" sends the price list for a city — set city. "learn_domain" scans a company's mail domain to learn its contacts — set term to the company word she used.
@@ -2186,7 +2186,7 @@ scale_ticket_received, ingate_received, schedule_followup, remember_fact, add_bu
 ask_contact, draft_email, search_mail, reply_email, backfill_cutoffs, verify_bookings, generate_proforma,
 send_shipment_docs,
 learn_writing_style, show_writing_style, rescan_mail, scan_cutoffs,
-bookings_list_query, bookings_count_query, get_quote, get_contact_quote, send_pricelist_city, learn_domain, show_pending_replies, summarize_email,
+bookings_list_query, bookings_count_query, bills_query, get_quote, get_contact_quote, send_pricelist_city, learn_domain, show_pending_replies, summarize_email,
 lookup_address, set_reminder, show_reminders, cancel_reminder, send_message, ignore_digest_item,
 show_receivables, record_payment, show_orphan_payments, set_receivables_start, track_old_invoice,
 reply, silent, NEED_DATA, NEED_APPROVAL
@@ -2261,7 +2261,7 @@ const SAFE_ACTIONS = new Set([
     // confirmations — scale tickets, then recipients, then mandatory cargo
     // details — and nothing dispatches until all of them are answered. The AI
     // chooses the INTENT; the deterministic flow still gates the SEND.
-    'bookings_list_query', 'bookings_count_query', 'get_quote',
+    'bookings_list_query', 'bookings_count_query', 'bills_query', 'get_quote',
     'get_contact_quote', 'send_pricelist_city', 'learn_domain', 'show_pending_replies', 'summarize_email',
     // Read-only address-book lookup — deliberately AI-classified with NO
     // deterministic regex in front of it (2026-08-22, per Apsara: "i cant
@@ -2608,6 +2608,61 @@ async function route(decision, ctx, sendMessage) {
             const body = rows.map(b => formatBookingLine(b)).join('\n');
             const scope = win ? `, cutoff ${win.label}` : '';
             return send(chatId, `${label}bookings from ${d.location}${scope} (${rows.length}):\n${body}${tail}`);
+        }
+        // ── THE METALS BILLS LEDGER ──────────────────────────────────────
+        // Apsara, 2026-09-19: "like in qb,it should allow jarvis to modify
+        // everything as per command.if i say show me unfilled bills-it should
+        // show". This is the READ half of that.
+        //
+        // ── AND IT IS IN BRAIN.JS, NOT IN helpers/tools.js ───────────────
+        // helpers/tools.js is SCOUT — the yard assistant, fenced to Edge Yard
+        // on purpose, with a long note at the top about a bookings tool that
+        // was added there and removed the same day. Purchase bills are Edge
+        // Metals. Putting this in Scout would dissolve the boundary that note
+        // exists to protect, by exactly the reasoning it predicts: "it cannot
+        // answer about bills, so give it a bills tool."
+        //
+        // ONE DEFINITION OF "UNFILLED": helpers/bills.js's filterRows, which
+        // is the same function the ledger screen and the export call. Three
+        // answers to "which bills are unfinished" would eventually disagree,
+        // and she would be the one to find out.
+        case 'bills_query': {
+            const billsLib = require('../helpers/bills');
+            const all = billsLib.listWithTotals();
+            const q = {};
+            if (d.supplier) q.supplier = d.supplier;
+            if (d.container) q.container_no = d.container;
+            if (d.unfilled) q.unfilled = '1';
+            if (d.unpaid) q.unpaid = '1';
+            if (d.from) q.from = d.from;
+            if (d.to) q.to = d.to;
+            const rows = billsLib.filterRows(all, q)
+                .sort((a, b2) => String(billsLib.sortableDate(b2.date) || '').localeCompare(String(billsLib.sortableDate(a.date) || '')));
+
+            const what = [d.unfilled ? 'unfilled' : '', d.unpaid ? 'unpaid' : ''].filter(Boolean).join(' and ');
+            const who = d.supplier ? ` from ${d.supplier}` : '';
+            const label = `${what ? what + ' ' : ''}bills${who}`;
+            if (!rows.length) return send(chatId, `No ${label}.`);
+
+            const money = (n) => '$' + Number(n || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+            // ── EACH LINE SAYS WHAT IS MISSING ───────────────────────────
+            // "12 unfilled bills" is a number she then has to go and look up.
+            // Naming the gap per row is the answer to the question she asked.
+            const line = (b2) => {
+                const miss = billsLib.missingFor(b2);
+                const bits = [b2.date || 'no date', b2.supplier || 'no supplier', b2.container_no || 'no container'];
+                const tail = d.unfilled && miss.length ? ` — needs ${miss.join(', ')}`
+                    : (b2.balance > 0.005 ? ` — ${money(b2.balance)} owing` : '');
+                return `• ${bits.join(' · ')}${tail}`;
+            };
+            // Capped, and the cap is STATED. A truncated list presented as the
+            // whole is how a confident wrong total gets spoken aloud.
+            const SHOW = 15;
+            const body = rows.slice(0, SHOW).map(line).join('\n');
+            const more = rows.length > SHOW ? `\n…and ${rows.length - SHOW} more.` : '';
+            const owed = rows.reduce((t, b2) => t + (Number(b2.balance) || 0), 0);
+            const foot = (!d.unfilled && owed > 0.005) ? `\nOutstanding: ${money(owed)}` : '';
+            return send(chatId, `${rows.length} ${label}:\n${body}${more}${foot}`);
         }
         case 'empty_drop_confirmed':   return actions.emptyDropConfirmed(bkg, ctx.senderName, d.container_seq);
         case 'load_ready_received':    return actions.loadReadyReceived(bkg, ctx.senderName, d.container_seq);

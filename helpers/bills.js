@@ -628,6 +628,45 @@ function sortableDate(v) {
     return null;
 }
 
+// ── WHAT IS STILL MISSING FROM A BILL ───────────────────────────────────────
+// Apsara, 2026-09-19: "if i say show me unfilled bills-it should show".
+//
+// `incomplete` in compute() is deliberately NOT reused and deliberately NOT
+// widened. It drives the "◦ still needs" marker on the ledger row and means
+// something narrow — a bill with no date or no supplier, the two things that
+// stop it being identifiable at all. Widening it would change a marker on
+// every row of a screen she reads daily, which is not what she asked for.
+//
+// This is the broader question, in its own function: what would stop me
+// calling this bill finished? Four things, because they are the four an
+// unfinished bill is actually waiting on — the weighbridge ticket, the
+// supplier's invoice, the container number and the basic identity. Her own
+// words for why they arrive separately are in compute(): "a bill is filled in
+// as the information arrives, and the weighbridge ticket, the supplier invoice
+// and the trucker's number turn up on different days."
+function missingFor(row) {
+    const b = row || {};
+    const blank = (k) => !String(b[k] === null || b[k] === undefined ? '' : b[k]).trim();
+    const out = [];
+    if (blank('date')) out.push('date');
+    if (blank('supplier')) out.push('supplier');
+    if (blank('container_no')) out.push('container no');
+    // The weighbridge half. A gross with no tare still computes a net, so the
+    // gross is what is actually missing when nothing has been weighed.
+    if (blank('gross')) out.push('weights');
+    // The money half. EITHER a price or a typed amount is enough — she prices
+    // most containers per pound and occasionally agrees a flat figure, and
+    // demanding both would mark finished bills as unfinished.
+    //
+    // `supplier_invoice_amount`, NOT `amount`. `amount` is DERIVED (weight x
+    // price, or her stated figure when she typed one) and does not exist on a
+    // raw row at all, so checking it marked every flat-priced bill as waiting
+    // on a price it already had. The stored field is the one she fills in, and
+    // it is the one that is present whether or not withTotals has run.
+    if (blank('supplier_price') && blank('supplier_invoice_amount')) out.push('price');
+    return out;
+}
+
 // `fields` lets another store reuse this with its OWN columns. Sales has
 // customer, HBL and reference where a bill has supplier and container — and
 // passing bills' list would have made the Sales search box find nothing,
@@ -646,6 +685,23 @@ function filterRows(rows, q = {}, fields = FILTERABLE) {
             if (!norm(r[f]).includes(norm(q[f]).trim())) return false;
         }
         if (text && !FILTERABLE.some((f) => norm(r[f]).includes(text))) return false;
+        // ── TWO FILTERS THAT ARE NOT TEXT ────────────────────────────
+        // Put here rather than in a Jarvis-only code path so ONE definition of
+        // "unfilled" serves the ledger screen, the export and the assistant.
+        // Three answers to "which bills are unfinished" would eventually
+        // disagree, and she would be the one to find out.
+        //
+        // Absent means NOT A FILTER, like every other field above — a false or
+        // an empty string must not silently become "only the finished ones".
+        if (has(q.unfilled) && String(q.unfilled) !== 'false') {
+            if (!missingFor(r).length) return false;
+        }
+        if (has(q.unpaid) && String(q.unpaid) !== 'false') {
+            // `balance` is added by withTotals. On a raw row it is undefined,
+            // and an undefined balance is not evidence of anything — the row
+            // is kept rather than being claimed as paid.
+            if (r.balance !== undefined && r.balance !== null && !(Number(r.balance) > 0.005)) return false;
+        }
         if (from || to) {
             const d = sortableDate(r.date);
             // A row with an unreadable date is kept, not dropped. Dropping it
@@ -949,7 +1005,7 @@ function summary(rows) {
 
 module.exports = {
     COLUMNS, GROUPS, TABLE_ORDER, tableColumns, WRITABLE, LB_PER_MT, PER_LB_CEILING, prepareBill,
-    FILTERABLE, filterRows, facets, sortableDate, cleanPhotos,
+    FILTERABLE, filterRows, facets, sortableDate, cleanPhotos, missingFor,
     compute, withTotals, list, listWithTotals, addBill, editBill, deleteBill, summary,
     cleanItems,
     groupColumns,

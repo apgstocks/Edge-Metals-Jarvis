@@ -138,6 +138,26 @@
     // whichever one the content happens to score for.
     var addressed = 'jarvis';
 
+    // ── AND WHO SHE HAS PINNED ───────────────────────────────────────────
+    // 'auto' | 'jarvis' | 'scout'. Remembered, because the whole point is not
+    // having to say it again — and read defensively: a private window with no
+    // localStorage must not stop the assistant working.
+    // True only between hearing a wake word and the question it introduced
+    // being sent. See the note where it is set.
+    var spokenName = false;
+
+    var pinnedAgent = 'auto';
+    try { pinnedAgent = localStorage.getItem('jvPin') || 'auto'; } catch (e) {}
+    if (['auto', 'jarvis', 'scout'].indexOf(pinnedAgent) < 0) pinnedAgent = 'auto';
+
+    // What the two of them actually cover. Her words: Jarvis is Edge Metals,
+    // Scout is Edge Yard — two companies, which is why this control exists.
+    var WHO_LABEL = {
+        auto: { text: 'Auto', title: 'Whichever assistant the question belongs to — click to pin one' },
+        jarvis: { text: 'Jarvis · Metals', title: 'Every question goes to Jarvis — Edge Metals: bills, invoices, bookings, containers, email' },
+        scout: { text: 'Scout · Yard', title: 'Every question goes to Scout — Edge Yard: loads, sellers, stock, yard payments' },
+    };
+
     // `ack` is the PHRASE each one answers its name with, and they are
     // deliberately different. Apsara, 2026-09-07: "I dont want scout to say
     // chime. it should say yes boss.. when i say hey scout."
@@ -262,6 +282,21 @@
         '<span id="jvText"></span>',
         // Deliberately small and grey. It is a setting she will touch once,
         // sitting beside a control she uses constantly.
+        // ── WHO AM I TALKING TO ──────────────────────────────────────────
+        // Apsara, 2026-09-19: "Basically in chat bot,there should be a option
+        // to ask whom to enable-->jarvis/scout", "if jarvis-restrict it to
+        // edge metals", "if scout -edge yard".
+        //
+        // The router has always guessed from the words, and it guesses well,
+        // but a guess is not a guarantee — and the two assistants cover two
+        // DIFFERENT COMPANIES. When she is working through the metals ledger
+        // for an hour she should be able to say so once instead of hoping
+        // each sentence scores the right way.
+        //
+        // Three states, not two. Auto is kept and is the default, because the
+        // router failing in the cheap direction on purpose is still the right
+        // behaviour for someone who has not chosen.
+        '<button id="jvWho" type="button"></button>',
         '<button id="jvVoiceBtn" type="button" title="Choose the voice Jarvis speaks in">●●●</button>',
     ].join('');
     var css = document.createElement('style');
@@ -272,6 +307,10 @@
         '#jvToggle{background:transparent;border:none;color:#B4703A;font:inherit;font-weight:700;cursor:pointer;',
         '  text-transform:uppercase;letter-spacing:.1em;padding:0;}',
         '#jvDot{width:8px;height:8px;border-radius:50%;background:#394046;flex:none;}',
+        '#jvWho{background:transparent;border:1px solid rgba(255,255,255,.16);border-radius:999px;',
+        '  color:#8A9299;font:inherit;font-size:10px;letter-spacing:.06em;text-transform:uppercase;',
+        '  padding:3px 9px;cursor:pointer;white-space:nowrap;}',
+        '#jvWho.on{color:#E7ECEF;}',
         /* The dot is the honest bit. Red and pulsing means the microphone is
            genuinely open right now — not "enabled", OPEN. */
         '#jarvisVoiceBar.live #jvDot{background:#E5484D;animation:jvPulse 1.1s ease-in-out infinite;}',
@@ -1394,6 +1433,13 @@
                 // Scout only when Jarvis was NOT also named — "hey jarvis,
                 // ask scout about the loads" addresses Jarvis.
                 addressed = (isScout && !WAKE.test(txt)) ? 'scout' : 'jarvis';
+                // ── SHE SAID A NAME, THIS TURN ───────────────────────────
+                // `addressed` holds the LAST wake word and survives between
+                // questions, so it cannot answer "did she name one just now".
+                // The pin below needs that difference: a name spoken out loud
+                // is more specific than a setting flipped an hour ago, and
+                // only an explicit address may override the pin.
+                spokenName = true;
                 console.log('[VOICE] ' + AGENT_LOOK[addressed].name
                     + ' — listening for your command');
                 dispatch('WAKE_HEARD');
@@ -2171,7 +2217,17 @@
         // as spoken to decide, and stripAgentName() on the server removes any
         // "Scout," or "Jarvis," prefix afterwards.
         var mySeq = ++askSeq;
-        api('/api/voice/ask', { method: 'POST', body: JSON.stringify({ text: q, agent: addressed }) })
+        // ── THE PIN WINS, EXCEPT OVER HER SAYING A NAME ──────────────────
+        // If she has pinned one, every question goes there. Saying the other
+        // one's name out loud is MORE specific than a setting she flipped an
+        // hour ago, so an explicit address still wins — `addressed` is only
+        // ever set by the wake word.
+        //
+        // 'auto' sends what it always sent, so nothing changes for anyone who
+        // never touches the control.
+        var askAgent = (pinnedAgent === 'auto' || spokenName) ? addressed : pinnedAgent;
+        spokenName = false;   // it belonged to THIS question only
+        api('/api/voice/ask', { method: 'POST', body: JSON.stringify({ text: q, agent: askAgent }) })
             .then(function (r) {
                 // STALE. She interrupted, or asked something else, while this
                 // was in the air. Everything below paints the screen and
@@ -2336,6 +2392,35 @@
             e.stopPropagation();
             if (voiceSheet.classList.contains('hidden')) openVoices(); else closeVoices();
         });
+
+        // ── WHO ANSWERS ──────────────────────────────────────────────────
+        // Cycles Auto → Jarvis → Scout. A cycle rather than a menu because
+        // there are three states and the label always says which one is on —
+        // a menu would be one more click for a control she flips, not browses.
+        function paintWho() {
+            var b = el('jvWho');
+            if (!b) return;
+            b.textContent = WHO_LABEL[pinnedAgent].text;
+            b.title = WHO_LABEL[pinnedAgent].title;
+            b.classList.toggle('on', pinnedAgent !== 'auto');
+        }
+        if (el('jvWho')) {
+            el('jvWho').addEventListener('click', function (e) {
+                e.stopPropagation();
+                var order = ['auto', 'jarvis', 'scout'];
+                pinnedAgent = order[(order.indexOf(pinnedAgent) + 1) % order.length];
+                try { localStorage.setItem('jvPin', pinnedAgent); } catch (err) {}
+                paintWho();
+                // Said out loud on the card, because a silent change to WHICH
+                // COMPANY she is asking about is the one worth confirming.
+                showCard('', pinnedAgent === 'auto'
+                    ? 'Auto — whichever assistant the question belongs to.'
+                    : (pinnedAgent === 'jarvis'
+                        ? 'Jarvis only, from now on — Edge Metals.'
+                        : 'Scout only, from now on — Edge Yard.'));
+            });
+            paintWho();
+        }
         paint();
 
         if (!canWake) {
