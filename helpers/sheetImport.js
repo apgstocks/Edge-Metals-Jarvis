@@ -204,12 +204,28 @@ function mapRows({ rows, headerIdx, map, dateFields, numFields, checks, sheet })
             rec[field] = cells[i];
         }
         for (const f of dateFields) {
+            const rawText = str(rec[f]);
+            if (rawText) rec[f === 'date' ? '_rawDate' : '_rawProformaDate'] = rawText;
             const d = toIsoDate(rec[f]);
             if (d && d.bad) { problems.push({ sheet, row: rowNo, field: f, why: d.bad }); rec[f] = null; }
             else rec[f] = d;
         }
         for (const f of numFields) rec[f] = num(rec[f]);
-        for (const k of Object.keys(rec)) if (typeof rec[k] === 'string' || rec[k] instanceof String) rec[k] = str(rec[k]);
+        // ── EVERY REMAINING FIELD GOES THROUGH str(), NOT JUST STRINGS ────
+        // This used to be `if (typeof rec[k] === 'string')`, which normalised
+        // only the values that were ALREADY strings — so a text field holding
+        // a formula or a hyperlink stayed a raw exceljs object and would have
+        // been written into her data as one. The photo link on a real bill
+        // came out as {"text":"https://…","hyperlink":"https://…"} instead of
+        // a URL, and a supplier cell carrying a formula came out as the
+        // literal "[object Object]".
+        //
+        // Third variant of the same mistake in one afternoon: the unwrapping
+        // has to happen at every boundary, not at the ones that looked likely.
+        for (const k of Object.keys(rec)) {
+            if (dateFields.includes(k) || numFields.includes(k)) continue;
+            rec[k] = str(rec[k]);
+        }
         const stored = {};
         for (const [header, key] of Object.entries(checks || {})) {
             const i = headerIdx[header];
@@ -326,10 +342,42 @@ function toBills(mapped) {
 
 // ── ORDER DETAILS -> SALES ──────────────────────────────────────────────────
 // One row per invoice line, which is what the sales table already holds.
+// ── A CANCELLED ORDER IS NOT AN INVOICE ─────────────────────────────────────
+// The bottom of her Order Details sheet — rows 734 to 754 in this file, all
+// contiguous — records orders that never shipped: "ORDER CANCELLED",
+// "REPLACED BY 26ST10", "LC EXPIRED", "cancelled". Twenty-one of them, and
+// they were being imported as live invoices, which would have put money into
+// "who owes me" that nobody owes.
+//
+// Detected by the MARKER rather than by a row number, deliberately. 733 is
+// where the live data happens to stop in today's file; "this row says the
+// order was cancelled" is true wherever it appears, including in the middle
+// of next year's sheet. Every row it removes is listed in the preview with
+// the text that triggered it, so the rule can be checked rather than trusted.
+const DEAD_ORDER = /\b(cancel(l?ed)?|replaced\s+by|expired|void)\b/i;
+
+function looksCancelled(r) {
+    for (const f of ['booking_no', 'hbl_no', 'invoice_no', 'container_no', 'reference', 'terms']) {
+        if (DEAD_ORDER.test(str(r[f]))) return str(r[f]);
+    }
+    // The date columns hold free text on these rows ("REPLACED BY 26ST10,1").
+    for (const f of ['_rawDate', '_rawProformaDate']) {
+        if (r[f] && DEAD_ORDER.test(String(r[f]))) return String(r[f]);
+    }
+    return null;
+}
+
 function toSales(mapped) {
     const sales = [];
     const skipped = [];
+    const cancelled = [];
     for (const r of mapped.rows) {
+        const why = looksCancelled(r);
+        if (why) {
+            cancelled.push({ row: r._row, invoice_no: str(r.invoice_no),
+                             customer: str(r.customer) || str(r.consignee), marker: why.slice(0, 60) });
+            continue;
+        }
         // Same correction as toBills: her local deliveries to Eccomelt carry a
         // PO reference and "Local Transit" instead of a container and an HBL,
         // and they are invoices like any other. A row is kept if it says
@@ -357,7 +405,7 @@ function toSales(mapped) {
         sale._stored = r._stored;
         sales.push(sale);
     }
-    return { sales, skipped };
+    return { sales, skipped, cancelled };
 }
 
 // Where a stored total and the computed one disagree by more than a cent.
@@ -382,6 +430,27 @@ function totalMismatches(sales) {
 // ── THE ONE ENTRY POINT ─────────────────────────────────────────────────────
 // Takes a workbook buffer. Returns everything that WOULD be created and
 // everything that could not be read. Never writes.
+// ── WHERE THE DATA STOPS ────────────────────────────────────────────────────
+// Apsara, 2026-09-19: "till 665 rows only to beconsidered."
+//
+// Below that line her Shipments sheet is working space — loose sums, a customs
+// commodity description parked for copying, half-built rows for shipments that
+// have not happened. Some of it looks importable (row 673 has a supplier, a
+// route and a price) which is exactly why a rule is needed rather than a
+// judgement per row: a half-built row is indistinguishable from a real one
+// until she says where the data ends.
+//
+// Passed in rather than hardcoded. 665 is true of this file today and will not
+// be true of the next one, and a number frozen into the helper would quietly
+// start cutting off real rows the moment she adds any.
+function applyLastRow(rows, lastRow) {
+    if (!Number.isFinite(lastRow)) return { kept: rows, cut: [] };
+    return {
+        kept: rows.filter((r) => r.n <= lastRow),
+        cut: rows.filter((r) => r.n > lastRow).map((r) => r.n),
+    };
+}
+
 async function readWorkbook(buffer, opts = {}) {
     const ExcelJS = require('exceljs');
     const wb = new ExcelJS.Workbook();
@@ -399,14 +468,18 @@ async function readWorkbook(buffer, opts = {}) {
             all.push({ n: row.number, cells: row.values.slice(1) });   // exceljs pads index 0
         });
         const headerIdx = indexHeaders((all[0] || {}).cells || []);
-        const mapped = mapRows({ rows: all.slice(1), headerIdx, map: SHIPMENTS_MAP,
+        const shipCut = applyLastRow(all.slice(1), opts.shipmentsLastRow);
+        const mapped = mapRows({ rows: shipCut.kept, headerIdx, map: SHIPMENTS_MAP,
                                  dateFields: SHIPMENT_DATES, numFields: SHIPMENT_NUMS,
                                  checks: SHIPMENT_CHECKS, sheet: shipSheet.name });
         const { bills, skipped } = toBills(mapped);
         result.bills = bills;
         result.problems.push(...mapped.problems);
         result.skipped.push(...skipped.map((s) => ({ sheet: shipSheet.name, ...s })));
+        result.belowLastRow = (result.belowLastRow || 0) + shipCut.cut.length;
         result.sheets.shipments = { name: shipSheet.name, dataRows: all.length - 1,
+                                    lastRow: opts.shipmentsLastRow || null,
+                                    rowsBelowLastRow: shipCut.cut.length,
                                     headersMatched: Object.keys(SHIPMENTS_MAP).filter((h) => h in headerIdx).length,
                                     headersTotal: Object.keys(SHIPMENTS_MAP).length };
     }
@@ -416,15 +489,20 @@ async function readWorkbook(buffer, opts = {}) {
         const all = [];
         orderSheet.eachRow({ includeEmpty: false }, (row) => { all.push({ n: row.number, cells: row.values.slice(1) }); });
         const headerIdx = indexHeaders((all[0] || {}).cells || []);
-        const mapped = mapRows({ rows: all.slice(1), headerIdx, map: ORDER_MAP,
+        const orderCut = applyLastRow(all.slice(1), opts.ordersLastRow);
+        const mapped = mapRows({ rows: orderCut.kept, headerIdx, map: ORDER_MAP,
                                  dateFields: ORDER_DATES, numFields: ORDER_NUMS,
                                  checks: ORDER_CHECKS, sheet: orderSheet.name });
-        const { sales, skipped } = toSales(mapped);
+        const { sales, skipped, cancelled } = toSales(mapped);
         result.sales = sales;
+        result.cancelled = cancelled;
         result.problems.push(...mapped.problems);
         result.skipped.push(...skipped.map((s) => ({ sheet: orderSheet.name, ...s })));
         result.mismatches = totalMismatches(sales);
+        result.belowLastRow = (result.belowLastRow || 0) + orderCut.cut.length;
         result.sheets.orders = { name: orderSheet.name, dataRows: all.length - 1,
+                                 lastRow: opts.ordersLastRow || null,
+                                 rowsBelowLastRow: orderCut.cut.length,
                                  headersMatched: Object.keys(ORDER_MAP).filter((h) => h in headerIdx).length,
                                  headersTotal: Object.keys(ORDER_MAP).length };
     }
@@ -439,6 +517,7 @@ async function readWorkbook(buffer, opts = {}) {
         rows_skipped: result.skipped.length,
         unreadable_values: result.problems.length,
         total_mismatches: result.mismatches.length,
+        cancelled_orders: (result.cancelled || []).length,
     };
     return result;
 }

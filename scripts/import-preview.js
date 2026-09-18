@@ -32,7 +32,12 @@ function clean(o) {
         process.exit(1);
     }
 
-    const r = await si.readWorkbook(fs.readFileSync(src));
+    // Apsara, 2026-09-19: "till 665 rows only to beconsidered." Below that her
+    // Shipments sheet is working space. Passed in rather than baked into the
+    // helper, so it is visible and changeable per file.
+    const r = await si.readWorkbook(fs.readFileSync(src), {
+        shipmentsLastRow: Number(process.env.SHIPMENTS_LAST_ROW || 665),
+    });
     const L = [];
     const p = (s) => L.push(s === undefined ? '' : s);
 
@@ -44,10 +49,13 @@ function clean(o) {
     p();
     p('| | |');
     p('|---|---|');
-    p('| Bills — from ' + (r.sheets.shipments ? r.sheets.shipments.name : '?') + ' | **' + r.summary.bills + '** |');
+    p('| Bills — from ' + (r.sheets.shipments ? r.sheets.shipments.name : '?')
+      + (r.sheets.shipments && r.sheets.shipments.lastRow ? ', rows 2–' + r.sheets.shipments.lastRow : '')
+      + ' | **' + r.summary.bills + '** |');
     p('| — of those, multi-grade containers | ' + r.summary.bills_multi_grade + ' |');
     p('| — of those, local deliveries (no container) | ' + r.summary.bills_local_delivery + ' |');
     p('| Invoices — from ' + (r.sheets.orders ? r.sheets.orders.name : '?') + ' | **' + r.summary.sales + '** |');
+    p('| Cancelled / replaced orders excluded | ' + r.summary.cancelled_orders + ' |');
     p('| Rows skipped | ' + r.summary.rows_skipped + ' |');
     p('| Values it could not read | ' + r.summary.unreadable_values + ' |');
     p('| Invoice totals disagreeing with weight × price | ' + r.summary.total_mismatches + ' |');
@@ -73,6 +81,17 @@ function clean(o) {
     });
     if (r.skipped.length > 60) { p(); p('…and ' + (r.skipped.length - 60) + ' more.'); }
     p();
+
+    if ((r.cancelled || []).length) {
+        p('## Cancelled and replaced orders — left out');
+        p();
+        p('These say so on the row itself. A cancelled order is not an invoice, and importing one would put money into "who owes me" that nobody owes. Detected by the wording, not by a row number, so it still works when one appears in the middle of next year\'s sheet.');
+        p();
+        p('| Row | Invoice | Customer | What the row says |');
+        p('|---|---|---|---|');
+        r.cancelled.forEach((c) => p('| ' + c.row + ' | ' + c.invoice_no + ' | ' + c.customer + ' | ' + c.marker + ' |'));
+        p();
+    }
 
     p('## Values it could not read');
     p();
