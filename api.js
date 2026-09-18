@@ -3774,6 +3774,45 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
         } catch (e) { res.status(500).json({ error: e.message }); }
     });
 
+    // ── EXPORTING WHAT IS ON SCREEN ─────────────────────────────────────
+    // Apsara, 2026-09-19: "Add export option to bill and invoice-export as xls
+    // and pdf", and, asked what it should contain: exactly what is on screen.
+    //
+    // So it takes the SAME query string the table was drawn with and runs it
+    // through the same filterRows/tableColumns/summary the /api/bills route
+    // uses. A second definition of "which columns" would be discovered by
+    // whoever she sent the file to.
+    //
+    // requireAdmin, matching /api/bills and /api/sales: a ledger export is the
+    // whole ledger in one file, so it cannot be looser than reading the table.
+    app.get('/api/:kind(bills|sales)/export', requireAdmin, async (req, res) => {
+        try {
+            const le = require('./helpers/ledgerExport');
+            const kind = req.params.kind;
+            const format = String(req.query.format || 'xlsx').toLowerCase();
+            const built = le.build(kind, req.query || {});
+            if (format === 'pdf') {
+                const pdf = await le.toPdf(built);
+                res.set('Content-Type', 'application/pdf');
+                res.set('Content-Disposition', `attachment; filename="${le.filenameFor(built, 'pdf')}"`);
+                return res.send(pdf);
+            }
+            if (format !== 'xlsx' && format !== 'xls') {
+                return res.status(400).json({ error: `unknown export format "${format}" — xlsx or pdf` });
+            }
+            const buf = await le.toWorkbook(built);
+            // .xlsx even when she asked for "xls": the file IS a modern
+            // workbook, and naming it .xls makes Excel warn that the contents
+            // do not match the extension every single time she opens it.
+            res.set('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+            res.set('Content-Disposition', `attachment; filename="${le.filenameFor(built, 'xlsx')}"`);
+            return res.send(buf);
+        } catch (e) {
+            console.error('[export] failed:', e && e.stack);
+            res.status(500).json({ error: e.message });
+        }
+    });
+
     app.post('/api/bills/preview', (req, res) => {
         try { res.json({ ok: true, ...require('./helpers/bills').compute(req.body || {}) }); }
         catch (e) { res.status(400).json({ error: e.message }); }

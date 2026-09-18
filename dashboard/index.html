@@ -5805,6 +5805,8 @@ async function renderLedgerTab(kind) {
         <div style="display:flex; gap:8px;">
           ${kind === 'bills' ? '<button id="btnPay" class="btn btn-secondary" style="font-size:12px; padding:8px 14px;">Pay</button>' : ''}
           ${kind === 'sales' ? '<button id="btnFromBill" class="btn btn-secondary" style="font-size:12px; padding:8px 14px;">New from bill</button>' : ''}
+          ${kind === 'bills' || kind === 'sales' ? `<button id="btnExportXlsx" class="btn btn-ghost" style="font-size:12px; padding:8px 12px;" title="Excel — exactly these ${rows.length} rows, with the totals">Excel</button>
+          <button id="btnExportPdf" class="btn btn-ghost" style="font-size:12px; padding:8px 12px;" title="PDF — exactly these ${rows.length} rows, with the totals">PDF</button>` : ''}
           ${kind === 'bills' || kind === 'sales' ? '<button id="btnImport" class="btn btn-secondary" style="font-size:12px; padding:8px 14px;" title="Import a shipments workbook">Import</button>' : ''}
           <button id="btnAddLedger" class="btn btn-primary" style="font-size:12px; padding:8px 14px;">${K.addLabel}</button>
         </div>
@@ -5883,6 +5885,38 @@ async function renderLedgerTab(kind) {
   if ($('btnFromBill')) $('btnFromBill').onclick = () => openFromBill();
   if ($('btnPay')) $('btnPay').onclick = () => openBillPayForm();
   if ($('btnImport')) $('btnImport').onclick = () => openImportModal(kind);
+
+  // ── EXPORT WHAT IS ON SCREEN ─────────────────────────────────────────
+  // Apsara, 2026-09-19: "Add export option to bill and invoice-export as xls
+  // and pdf" — and, on what it should contain, exactly what is on screen.
+  //
+  // So it sends THE SAME query string the table was drawn with, built from
+  // the same ledgerFilters object a line above. Re-deriving it would let the
+  // file and the screen disagree about what "these rows" means, which is the
+  // one thing an export must never do.
+  //
+  // A plain link, not api(): the response is a FILE, and api() parses every
+  // response as JSON — it would swallow the workbook and throw.
+  const exportTo = (format, btn) => {
+    const qs = Object.entries(ledgerFilters[kind] || {})
+      .filter(([, v]) => String(v || '').trim() !== '')
+      .map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(v)}`).join('&');
+    btn.disabled = true;
+    const was = btn.textContent;
+    btn.textContent = '…';
+    // The PDF of 492 rows takes a few seconds and goes through the same
+    // single-slot queue every other document does, so the button has to say
+    // something is happening or she presses it again and joins the queue
+    // twice. Released on a timer rather than on the download, because a
+    // navigation-triggered download fires no event this page can see.
+    const url = `/api/${kind === 'sales' ? 'sales' : 'bills'}/export?format=${format}${qs ? '&' + qs : ''}`;
+    const a = document.createElement('a');
+    a.href = url; a.download = '';
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => { btn.disabled = false; btn.textContent = was; }, format === 'pdf' ? 4000 : 1500);
+  };
+  if ($('btnExportXlsx')) $('btnExportXlsx').onclick = (e) => exportTo('xlsx', e.currentTarget);
+  if ($('btnExportPdf')) $('btnExportPdf').onclick = (e) => exportTo('pdf', e.currentTarget);
   $('btnAddLedger').onclick = () => openLedgerForm(kind);
   // ── EDIT ─────────────────────────────────────────────────────────────
   // Apsara, 2026-09-10: "i want edit option in bill". Until now a typo in a
