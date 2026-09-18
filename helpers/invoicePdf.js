@@ -162,18 +162,68 @@ function itemLabels(lineItems, invNo) {
         out.push(label);
     };
 
-    for (const it of lineItems || []) {
+    // ── WHEN THE LINE ITEMS ARE SUB-ITEMS, THE NUMBER LEADS ──────────────
+    // Apsara, 2026-09-19, about 260918_AP_26ARIS02: "WHY ITS COMING AS SU?"
+    // and then, plainly, "it is scrap auto parts. yeah it will include more
+    // than one item in the container."
+    //
+    // That is the shape this got wrong. A container of SCRAP AUTO PARTS holds
+    // sealed units, alternators, starters and electric motors — things INSIDE
+    // the grade, not four grades. The per-item pass matched "Sealed units" to
+    // SU, found nothing for the other three, and announced a container of auto
+    // parts as SU-SEALED UNITS. The number two lines above it said AP.
+    //
+    // ── BUT NOT ALWAYS, WHICH IS WHERE THE FIRST ATTEMPT WENT WRONG ──────
+    // Reading the number first, full stop, broke two checks in
+    // tests/invoice-header.js and deserved to. The number carries a segment
+    // per CONTAINER, and an invoice can cover fewer containers than the number
+    // names — so on an invoice of one regular-combo container it would have
+    // announced aluminium as well, materials that are not on the document.
+    // Wrong in the opposite direction, and worse: the first bug UNDER-named
+    // what was in the container, this one would INVENT what was in it.
+    //
+    // So the number leads only where the rows are demonstrably finer-grained
+    // than the grades:
+    //
+    //   SEVERAL ROWS IN ONE CONTAINER — her sentence, literally. Rows in a
+    //     single container cannot each be a different grade of that container.
+    //
+    //   MORE ROWS THAN THE NUMBER HAS CODES — the same conclusion when
+    //     container_no is not filled in. The number names one container per
+    //     segment, so extra rows have to be sub-items.
+    //
+    // Anything else is one row per container, and each row's own description
+    // is the better answer — which is what the 2026-09-09 requirement
+    // ("Aluminium combo, regular combo as both are there") depends on, down to
+    // the two materials appearing in the invoice's own row order.
+    const numberCodes = [];
+    for (const t of String(invNo || '').split(/[\s_,]+/)) {
+        const code = t.toUpperCase();
+        if (ITEM_CODE_MAP[code] && !numberCodes.includes(code)) numberCodes.push(code);
+    }
+    const rows = lineItems || [];
+    const containers = [...new Set(rows.map((it) => String((it && it.container_no) || '').trim()))]
+        .filter(Boolean);
+    const subItems = numberCodes.length > 0 && rows.length > 1
+        && ((containers.length === 1) || (numberCodes.length < rows.length));
+
+    if (subItems) {
+        for (const code of numberCodes) push(`${code}-${ITEM_CODE_MAP[code]}`);
+        if (out.length) return out.join(', ');
+    }
+
+    for (const it of rows) {
         // Deliberately NOT passing invNo here. The per-item pass must answer
         // "what did THIS line say"; letting it fall back to the number is what
-        // produced the mislabel above.
+        // produced the mislabel described above.
         push(itemLabel(it && it.item_desc, null));
     }
     if (out.length) return out.join(', ');
 
-    for (const t of String(invNo || '').split(/[\s_]+/)) {
-        const code = t.toUpperCase();
-        if (ITEM_CODE_MAP[code]) push(`${code}-${ITEM_CODE_MAP[code]}`);
-    }
+    // Not one description matched. Then the number is all there is — and ALL
+    // its codes, not the first, which is the trap this function was written
+    // for in the first place.
+    for (const code of numberCodes) push(`${code}-${ITEM_CODE_MAP[code]}`);
     return out.join(', ');
 }
 

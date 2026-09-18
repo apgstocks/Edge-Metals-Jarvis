@@ -1132,8 +1132,21 @@ async function api(path, opts = {}) {
     // is used by every screen in this file, so anything that altered what it
     // returns or what it throws would land on all of them at once.
     const err = new Error(data.error || `request failed (${res.status})`);
+    err.status = res.status;
     err.code = data.code || null;
     err.canOverride = data.can_override === true;
+    // ── AND EVERY OTHER FIELD THE ROUTE SENT ──────────────────────────────
+    // dashboard/index.html and mobile-app/www/index.html both copy every key
+    // except `error`, and say in a comment that they mirror each other. THIS
+    // file did not, so a route's structured extras arrived nowhere. Found on
+    // 2026-09-19: /api/invoice/generate returns `problems` — the rows whose
+    // quantity disagrees with their weights — and the prompt meant to list
+    // them printed "undefined" instead.
+    //
+    // Additive: the message, the type and the return shape are unchanged, and
+    // the two named fields above are still set explicitly because callers
+    // read `canOverride`, which is not what the route calls it.
+    for (const k of Object.keys(data || {})) { if (k !== 'error' && err[k] === undefined) err[k] = data[k]; }
     throw err;
   }
   return data;
@@ -4403,6 +4416,7 @@ $('btnInvGenerate').addEventListener('click', async () => {
   const btn = $('btnInvGenerate');
   setButtonLoading(btn, true, 'Generating…');
   $('invSuccessMsg').textContent = '';
+  $('invSuccessMsg').style.color = '';
   try {
     // Either checkbox counts. They are kept in sync, but reading both means a
     // stale one can never quietly win.
@@ -4415,7 +4429,34 @@ $('btnInvGenerate').addEventListener('click', async () => {
     // asked to send on its own.
     payload.separate = !payload.invoice_only
       && !!((sepEl && sepEl.checked) || (sepBulkEl && sepBulkEl.checked));
-    const result = await api('/api/invoice/generate', { method: 'POST', body: JSON.stringify(payload) });
+    // ── THE QUANTITY MUST AGREE WITH THE WEIGHTS ────────────────────────
+    // The server refuses a 409 WEIGHT_MISMATCH when a row's Quantity
+    // disagrees with its own gross and tare — 260918_AP_26ARIS02 went to the
+    // buyer stating 15,642 MT where the packing list says 7.095. The check
+    // lives on the SERVER, once, rather than in this file and again in the
+    // app: two copies of "does this tonnage make sense" would eventually
+    // disagree, and they would disagree on a customs document.
+    //
+    // This is the whole of the screen's part: show what it found, and let
+    // her say the figures are deliberate.
+    let result;
+    try {
+      result = await api('/api/invoice/generate', { method: 'POST', body: JSON.stringify(payload) });
+    } catch (e) {
+      if (e.code !== 'WEIGHT_MISMATCH') throw e;
+      const lines = (e.problems || []).map((p2) =>
+        `  Row ${p2.row}${p2.item ? ' (' + p2.item + ')' : ''}: ${p2.why}`).join('\n');
+      // The rows, in full, before the question — a confirm that only says
+      // "the weights look wrong" is one she has to dismiss to go and look.
+      if (!confirm(`${e.message}\n\n${lines}\n\nGenerate it anyway?`)) {
+        const msg = $('invSuccessMsg');
+        msg.style.color = 'var(--status-warn, #d98324)';
+        msg.textContent = 'Not generated — the Quantity column disagrees with the packing weights.';
+        return;
+      }
+      result = await api('/api/invoice/generate',
+        { method: 'POST', body: JSON.stringify({ ...payload, weights_ok: true }) });
+    }
     // Separate mode returns saved_filenames (both documents); combined returns
     // the single saved_filename it always has. Downloading in sequence rather
     // than in parallel — two simultaneous downloads is how a browser decides

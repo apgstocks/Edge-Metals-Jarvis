@@ -9890,7 +9890,27 @@ async function invSubmit(preview) {
       if (!blob.size) throw new Error('the server returned an empty PDF');
       await deliverExportedFile(blob, `invoice-preview-${payload.inv_no.replace(/[^A-Za-z0-9_-]/g, '_')}.pdf`, 'pdf');
     } else {
-      const result = await api('/api/invoice/generate', { method: 'POST', body: JSON.stringify(payload) });
+      // ── THE QUANTITY MUST AGREE WITH THE WEIGHTS ──────────────────
+      // Mirrors dashboard/documents.html. The CHECK is on the server, in
+      // helpers/invoiceWeights.js, and there is exactly one of it — the two
+      // screens only render what it found and ask. 260918_AP_26ARIS02 went
+      // to the buyer stating 15,642 MT where the packing list says 7.095.
+      let result;
+      try {
+        result = await api('/api/invoice/generate', { method: 'POST', body: JSON.stringify(payload) });
+      } catch (e) {
+        if (e.code !== 'WEIGHT_MISMATCH') throw e;
+        const lines = (e.problems || []).map((p2) =>
+          `Row ${p2.row}${p2.item ? ' (' + p2.item + ')' : ''}: ${p2.why}`).join('\n\n');
+        if (!confirm(`${e.message}\n\n${lines}\n\nGenerate it anyway?`)) {
+          msg.style.color = 'var(--status-warn, #d98324)';
+          msg.textContent = 'Not generated — the Quantity column disagrees with the packing weights.';
+          btn.disabled = false; btn.textContent = label;
+          return;
+        }
+        result = await api('/api/invoice/generate',
+          { method: 'POST', body: JSON.stringify({ ...payload, weights_ok: true }) });
+      }
       msg.style.color = 'var(--status-success, #3fae55)';
       msg.textContent = '✓ Generated and saved.';
       if (result && result.saved_filename) {

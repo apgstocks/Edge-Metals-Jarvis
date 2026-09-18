@@ -6148,6 +6148,39 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
             // than a packing list she asked not to send.
             const invoiceOnly = body.invoice_only === true || body.invoice_only === 'true';
             const separate = !invoiceOnly && (body.separate === true || body.separate === 'true');
+
+            // ── DOES THE QUANTITY AGREE WITH THE WEIGHTS ON THE SAME ROW? ───
+            // Apsara, 2026-09-19: 260918_AP_26ARIS02 went to the buyer stating
+            // 15,642 MT where her own packing list says 7.095 — pounds in the
+            // MT column, on a customs document. Every figure needed to catch
+            // it was already on the row; nothing compared them. See
+            // helpers/invoiceWeights.js.
+            //
+            // REFUSED, not warned. A warning on the screen is a warning she
+            // can be past before she has read it, and the cost here is a
+            // corrected invoice to a buyer and a broker.
+            //
+            // ── weights_ok IS A NEW REQUIRED ANSWER, SO: WHO CALLS THIS? ────
+            // dashboard/documents.html and mobile-app/www/index.html. That is
+            // the whole list — grepped, every hit opened — and BOTH send it,
+            // so there is no caller left holding a requirement it cannot
+            // satisfy. That check is here in writing because skipping it on
+            // 2026-09-17 is what broke recording a wire payment by voice: the
+            // one caller with no form to put a field on.
+            //
+            // There is no voice or assistant path to this route. If one is
+            // ever added it must be able to answer this question before it
+            // ships, not after.
+            const invoiceWeights = require('./helpers/invoiceWeights');
+            const weightProblems = invoiceWeights.weightProblems(body.line_items);
+            if (weightProblems.length && body.weights_ok !== true && body.weights_ok !== 'true') {
+                return res.status(409).json({
+                    error: invoiceWeights.refusalMessage(weightProblems),
+                    code: 'WEIGHT_MISMATCH',
+                    problems: weightProblems,
+                });
+            }
+
             const out = await generateInvoiceClassicPdf(body, { separate, invoiceOnly });
 
             if (req.query.preview === '1') {
