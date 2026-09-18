@@ -738,7 +738,17 @@ function buildInvoiceClassicHtml(data) {
 
 // ONE browser, N renders. Chromium launch is by far the most expensive part
 // of this (~1s), so producing two documents must not pay it twice.
+// Queued — one Chromium at a time. This is the launch point for BOTH the
+// invoice and the packing list (helpers/packingList.js calls renderModes),
+// so queueing here covers both. Tests that inject their own renderer never
+// reach this function and are unaffected. See helpers/pdfQueue.js.
 async function renderModes(html, modes, opts) {
+    return require('./pdfQueue').run(
+        () => renderModesUnqueued(html, modes, opts),
+        `invoice ${(modes || []).join('+')}`);
+}
+
+async function renderModesUnqueued(html, modes, opts) {
     // ── WHERE THE SECONDS GO ─────────────────────────────────────────────
     // Apsara, 2026-09-16: "why invoice and bol takes more time to generate?"
     // Measured, not reasoned about — see helpers/pdfTiming.js. The phases are

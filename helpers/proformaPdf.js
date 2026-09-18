@@ -247,7 +247,14 @@ function buildProformaDc2Html(data) {
 // Renders the dc-2 proforma to a PDF Buffer. `opts.launchArgs` lets callers
 // pass `['--no-sandbox']` etc. if the deploy VM needs it (common on some
 // Linux hosts running as root) without hardcoding that here.
+// Queued — one Chromium at a time. See helpers/pdfQueue.js.
 async function generateProformaDc2Pdf(data, opts = {}) {
+    return require('./pdfQueue').run(
+        () => generateProformaDc2PdfUnqueued(data, opts),
+        `proforma ${(data && data.inv_no) || ''}`.trim());
+}
+
+async function generateProformaDc2PdfUnqueued(data, opts = {}) {
     // Timed as well, though Apsara asked about the invoice and the BOL: the
     // three renderers share a shape, and a baseline from the one she has NOT
     // complained about is what says whether the other two are slow for a

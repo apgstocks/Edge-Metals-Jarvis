@@ -409,7 +409,18 @@ ${item_rows}
     return { html, totals: t, warnings: weightWarnings(items), item_count: items.length };
 }
 
+// ── QUEUED ──────────────────────────────────────────────────────────────────
+// Apsara, 2026-09-18: "parallel simulatenous connection should be allowed in
+// website and document". The whole launch-render-close is inside the slot, not
+// just the launch — holding it for the launch alone would let two Chromiums
+// overlap, which is the entire problem. See helpers/pdfQueue.js.
 async function generateBolPdf(data, opts = {}) {
+    return require('./pdfQueue').run(
+        () => generateBolPdfUnqueued(data, opts),
+        `bol ${(data && data.bol_no) || ''}`.trim());
+}
+
+async function generateBolPdfUnqueued(data, opts = {}) {
     // ── WHERE THE SECONDS GO ─────────────────────────────────────────────
     // Apsara, 2026-09-16: "why invoice and bol takes more time to generate?"
     // Measured rather than reasoned about — see helpers/pdfTiming.js. The
