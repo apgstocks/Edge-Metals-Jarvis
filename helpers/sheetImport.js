@@ -215,7 +215,20 @@ function mapRows({ rows, headerIdx, map, dateFields, numFields, checks, sheet })
             const i = headerIdx[header];
             if (i !== undefined) stored[key] = num(cells[i]);
         }
-        out.push({ _row: rowNo, _stored: stored, ...rec });
+        // ── A SKIPPED ROW MUST BE ABLE TO SHOW ITS OWN CONTENTS ──────────
+        // Apsara asked "why 13 skipped?" and the answer given was "row is
+        // empty", which was false — every one of them held a stray value.
+        // A count with a label she cannot check is how the previous round of
+        // this went wrong. The cells travel with the row so the preview can
+        // print them instead of asserting something about them.
+        const content = [];
+        cells.forEach((v, i) => {
+            const val = cellValue(v);
+            if (val === null || val === undefined || String(val).trim() === '') return;
+            const header = Object.keys(headerIdx).find((h) => headerIdx[h] === i);
+            content.push((header || ('col' + (i + 1))) + ' = ' + String(val).slice(0, 40));
+        });
+        out.push({ _row: rowNo, _stored: stored, _content: content, ...rec });
     });
     return { rows: out, problems };
 }
@@ -269,7 +282,7 @@ function toBills(mapped) {
                              'booking_no', 'invoice_no', 'trucking_company', 'carrier',
                              'supplier_invoice_amount', 'trucking_amount']
             .some((f) => r[f] !== null && r[f] !== undefined && str(r[f]) !== '');
-        if (!hasAnything) { skipped.push({ row: r._row, why: 'row is empty' }); continue; }
+        if (!hasAnything) { skipped.push({ row: r._row, why: 'nothing a bill can be built from', content: r._content }); continue; }
         const { key } = billKey(r);
         if (!byContainer.has(key)) byContainer.set(key, []);
         byContainer.get(key).push(r);
@@ -324,7 +337,7 @@ function toSales(mapped) {
         const hasAnything = ['customer', 'consignee', 'item', 'weight', 'invoice_price',
                              'invoice_no', 'container_no', 'booking_no', 'reference', 'hbl_no']
             .some((f) => r[f] !== null && r[f] !== undefined && str(r[f]) !== '');
-        if (!hasAnything) { skipped.push({ row: r._row, why: 'row is empty' }); continue; }
+        if (!hasAnything) { skipped.push({ row: r._row, why: 'nothing an invoice can be built from', content: r._content }); continue; }
         const sale = {};
         for (const [, field] of Object.entries(ORDER_MAP)) {
             if (r[field] !== null && r[field] !== undefined && str(r[field]) !== '') sale[field] = r[field];

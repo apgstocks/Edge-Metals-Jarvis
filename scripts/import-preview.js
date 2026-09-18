@@ -61,14 +61,17 @@ function clean(o) {
 
     p('## Rows that were skipped');
     p();
-    p('Only rows that say nothing at all. A blank container is NOT a reason to skip — that means a local delivery, and those are imported and marked as such. Row numbers are as in Excel, so they can be checked.');
+    p('Every one is listed with its actual contents, so nothing here has to be taken on trust. A blank container is NOT a reason to skip — that means a local delivery, and those are imported and marked as such.');
     p();
-    const why = {};
-    r.skipped.forEach((s) => { const k = s.sheet + ' — ' + s.why; (why[k] = why[k] || []).push(s.row); });
-    Object.entries(why).forEach(([k, rows]) => {
-        p('- **' + rows.length + '** in ' + k);
-        p('  - rows: ' + rows.slice(0, 40).join(', ') + (rows.length > 40 ? ' …' : ''));
+    // Every skipped row shows WHAT IS IN IT. A count and a label she cannot
+    // check is exactly how the earlier version of this misled her twice.
+    p('| Sheet | Row | Why | What is actually in the row |');
+    p('|---|---|---|---|');
+    r.skipped.slice(0, 60).forEach((s) => {
+        const content = (s.content && s.content.length) ? s.content.join(' · ') : '(every cell empty)';
+        p('| ' + s.sheet + ' | ' + s.row + ' | ' + s.why + ' | ' + content.replace(/\|/g, '\\|') + ' |');
     });
+    if (r.skipped.length > 60) { p(); p('…and ' + (r.skipped.length - 60) + ' more.'); }
     p();
 
     p('## Values it could not read');
