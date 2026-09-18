@@ -46,6 +46,7 @@ function clean(o) {
     p('|---|---|');
     p('| Bills — from ' + (r.sheets.shipments ? r.sheets.shipments.name : '?') + ' | **' + r.summary.bills + '** |');
     p('| — of those, multi-grade containers | ' + r.summary.bills_multi_grade + ' |');
+    p('| — of those, local deliveries (no container) | ' + r.summary.bills_local_delivery + ' |');
     p('| Invoices — from ' + (r.sheets.orders ? r.sheets.orders.name : '?') + ' | **' + r.summary.sales + '** |');
     p('| Rows skipped | ' + r.summary.rows_skipped + ' |');
     p('| Values it could not read | ' + r.summary.unreadable_values + ' |');
@@ -60,7 +61,7 @@ function clean(o) {
 
     p('## Rows that were skipped');
     p();
-    p('These carry data but have nothing to file them under — almost certainly subtotals, spacers or notes. Row numbers are as in Excel, so they can be checked.');
+    p('Only rows that say nothing at all. A blank container is NOT a reason to skip — that means a local delivery, and those are imported and marked as such. Row numbers are as in Excel, so they can be checked.');
     p();
     const why = {};
     r.skipped.forEach((s) => { const k = s.sheet + ' — ' + s.why; (why[k] = why[k] || []).push(s.row); });
@@ -111,6 +112,14 @@ function clean(o) {
         p('Her sheet puts one row per grade. Row-per-bill would have split this into ' + multi.items.length + ' separate bills.');
         p();
         p(FENCE + 'json'); p(JSON.stringify(clean(multi), null, 1)); p(FENCE); p();
+    }
+    const local = r.bills.find((b) => !b.container_no);
+    if (local) {
+        p('### A local delivery');
+        p();
+        p('No container number, because it went by truck — Apsara, 2026-09-19: "if container number not there, it just means that it is local delivery." Imported and marked, not skipped.');
+        p();
+        p(FENCE + 'json'); p(JSON.stringify(clean(local), null, 1)); p(FENCE); p();
     }
     if (r.sales[0]) { p('### An invoice row'); p(); p(FENCE + 'json'); p(JSON.stringify(clean(r.sales[0]), null, 1)); p(FENCE); }
 

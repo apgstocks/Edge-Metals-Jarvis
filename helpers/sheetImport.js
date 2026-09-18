@@ -236,6 +236,20 @@ function mapRows({ rows, headerIdx, map, dateFields, numFields, checks, sheet })
 // business. A container is how an EXPORT is identified; it is not what makes
 // a row real. So the rule is now "does this row say anything", and the
 // container is used only for GROUPING, which is all it was ever good for.
+// ── NO CONTAINER MEANS LOCAL DELIVERY ───────────────────────────────────────
+// Apsara, 2026-09-19, stating the rule plainly: "if container number not
+// there, it just means that it is local delivery."
+//
+// So a blank container is not missing data to be worked around — it is the
+// fact that this load went by truck rather than by sea, and it is worth
+// recording as such. The route column on these rows backs it up: Oklahoma/LA,
+// houston/Humble, san Antonio/Houston. Domestic movements, every one.
+//
+// It is written into the bill's note rather than a new column. A `local`
+// flag would be a schema change to bills.js for data that is already implied
+// by the empty container, and the note is what she actually reads on the row.
+const LOCAL_NOTE = 'Local delivery — no container (from the Shipments sheet)';
+
 function billKey(r) {
     const container = str(r.container_no).toUpperCase();
     if (container) return { key: 'C:' + container, groupable: true };
@@ -266,6 +280,7 @@ function toBills(mapped) {
         const first = group[0];
         const bill = {};
         if (key.startsWith('C:')) bill.container_no = key.slice(2);
+        else bill.note = LOCAL_NOTE;
         for (const f of ['route', 'carrier', 'trucking_company', 'date', 'supplier',
                          'invoice_no', 'booking_no', 'seal_no', 'supplier_price',
                          'supplier_invoice_amount', 'trucking_amount', 'photos']) {
@@ -403,6 +418,9 @@ async function readWorkbook(buffer, opts = {}) {
 
     result.summary = {
         bills: result.bills.length,
+        // Named in its own right rather than counted as an oddity — see
+        // LOCAL_NOTE. These are her domestic truck movements.
+        bills_local_delivery: result.bills.filter((b) => !b.container_no).length,
         bills_multi_grade: result.bills.filter((b) => Array.isArray(b.items) && b.items.length > 1).length,
         sales: result.sales.length,
         rows_skipped: result.skipped.length,
