@@ -842,6 +842,30 @@ function listWithTotals() {
     return list().map((b) => withTotals({ ...b, paid: paid[b.id] || 0 }));
 }
 
+// ── ONE IMPLEMENTATION OF "WHAT IS A VALID BILL" ────────────────────────────
+// Extracted from addBill 2026-09-19 so the spreadsheet importer can check 568
+// rows BEFORE writing any of them, without carrying a second copy of these
+// rules that would drift the first time one changed. addBill calls it too, so
+// there is exactly one answer to what a bill must have.
+//
+// Builds the row; does not write it.
+function prepareBill(input = {}) {
+    const rec = clean(input);
+    // Deliberately NOT refused for a missing date or supplier — see the
+    // `incomplete` note in compute(). What IS refused is a bill with nothing
+    // in it at all.
+    if (!Object.values(rec).some((v) => v !== null && v !== undefined && String(v).trim() !== ''
+                                        && !(Array.isArray(v) && !v.length))) {
+        throw new Error('a bill needs at least one value');
+    }
+    return {
+        id: newId(),
+        ...rec,
+        created_at: new Date().toISOString(),
+        created_by: input.created_by || null,
+    };
+}
+
 async function addBill(input = {}) {
     const rec = clean(input);
     // Deliberately NOT refused for a missing date or supplier — see the
@@ -924,7 +948,7 @@ function summary(rows) {
 }
 
 module.exports = {
-    COLUMNS, GROUPS, TABLE_ORDER, tableColumns, WRITABLE, LB_PER_MT, PER_LB_CEILING,
+    COLUMNS, GROUPS, TABLE_ORDER, tableColumns, WRITABLE, LB_PER_MT, PER_LB_CEILING, prepareBill,
     FILTERABLE, filterRows, facets, sortableDate, cleanPhotos,
     compute, withTotals, list, listWithTotals, addBill, editBill, deleteBill, summary,
     cleanItems,

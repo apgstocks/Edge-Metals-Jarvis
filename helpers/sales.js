@@ -497,6 +497,22 @@ function listWithTotals() {
 
 function getSale(id) { return list().find((s) => s.id === id) || null; }
 
+// ── ONE IMPLEMENTATION OF "WHAT IS A VALID SALE" ────────────────────────────
+// Extracted from addSale 2026-09-19 so the spreadsheet importer can check 647
+// rows BEFORE writing any of them, without a second copy of these rules that
+// would drift the first time one changed. addSale calls it too.
+function prepareSale(input = {}) {
+    const rec = clean(input);
+    if (!rec.date) throw new Error('a sale needs a date');
+    if (!rec.customer) throw new Error('a sale needs a customer');
+    return {
+        id: newId(),
+        ...rec,
+        created_at: new Date().toISOString(),
+        created_by: input.created_by || null,
+    };
+}
+
 async function addSale(input = {}) {
     const rec = clean(input);
     if (!rec.date) throw new Error('a sale needs a date');
@@ -586,7 +602,7 @@ function summary(rows) {
 module.exports = {
     COLUMNS, GROUPS, TABLE_ORDER, tableColumns, WRITABLE, FILTERABLE, filterRows, facets,
     compute, withTotals, list, listWithTotals, getSale,
-    addSale, editSale, deleteSale, summary,
+    addSale, editSale, deleteSale, summary, prepareSale,
     sortRows, duplicates, cleanCharges, CHARGE_DIRECTIONS, TERMS, SHIPMENT_TERMS,
     groupColumns,
 };

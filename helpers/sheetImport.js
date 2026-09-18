@@ -59,7 +59,10 @@ function cellValue(v) {
     // rich-text or hyperlink object.
     if ('result' in v) return cellValue(v.result);
     if (Array.isArray(v.richText)) return v.richText.map((t) => (t && t.text) || '').join('');
-    if ('hyperlink' in v && 'text' in v) return cellValue(v.text);
+    // Covers a hyperlink cell too — exceljs gives { text, hyperlink } and the
+    // text is the URL as typed. A separate `'hyperlink' in v` branch sat above
+    // this one until a mutation showed removing it changed nothing: this line
+    // already handled it. One branch, accurately described.
     if ('text' in v) return cellValue(v.text);
     // #REF!, #N/A, #DIV/0! — a cell Excel itself cannot evaluate. Null, and
     // the row still imports; inventing a number here would be worse.
@@ -314,10 +317,41 @@ function toBills(mapped) {
         const bill = {};
         if (key.startsWith('C:')) bill.container_no = key.slice(2);
         else bill.note = LOCAL_NOTE;
+
+        // ── FIRST NON-EMPTY ACROSS THE GROUP, NOT THE FIRST ROW ──────────
+        // These describe the CONTAINER, and her sheet writes them once —
+        // usually but not always on the first grade's line. The trucking
+        // advance on CMAU3379443 sits on the second of four rows, so reading
+        // only the first row lost it. Every one of these is a fact about the
+        // shipment, not about a grade, so the first row that states it wins.
+        const firstStated = (f) => {
+            for (const r of group) {
+                if (r[f] !== null && r[f] !== undefined && str(r[f]) !== '') return r[f];
+            }
+            return undefined;
+        };
         for (const f of ['route', 'carrier', 'trucking_company', 'date', 'supplier',
-                         'invoice_no', 'booking_no', 'seal_no', 'supplier_price',
-                         'supplier_invoice_amount', 'trucking_amount', 'photos']) {
-            if (first[f] !== null && first[f] !== undefined && str(first[f]) !== '') bill[f] = first[f];
+                         'invoice_no', 'booking_no', 'seal_no', 'trucking_amount', 'photos']) {
+            const v = firstStated(f);
+            if (v !== undefined) bill[f] = v;
+        }
+        // ── THE SUPPLIER INVOICE AMOUNT IS PER GRADE ─────────────────────
+        // Checked against her sheet: APZU3556287's three grades carry 16785.40,
+        // 15593.76 and 5771.52, which sum to exactly the 38150.68 Jarvis
+        // computes from the same three prices. Hoisting the FIRST grade's
+        // figure onto the container made that bill claim it owed 16,785 when
+        // it owed 38,150 — a $21,365 understatement, on all 46 multi-grade
+        // containers.
+        //
+        // So on a multi-grade bill it is not carried at all: each grade's
+        // price and weight are on its item, and the total is derived from
+        // them. On a single-grade bill the sheet's figure IS the bill's, and
+        // it is kept.
+        if (group.length === 1) {
+            const amt = firstStated('supplier_invoice_amount');
+            if (amt !== undefined) bill.supplier_invoice_amount = amt;
+            const price = firstStated('supplier_price');
+            if (price !== undefined) bill.supplier_price = price;
         }
         if (group.length === 1) {
             // One grade: the flat shape, which is most bills and is untouched.
@@ -325,6 +359,7 @@ function toBills(mapped) {
                 if (first[f] !== null && first[f] !== undefined && str(first[f]) !== '') bill[f] = first[f];
             }
         } else {
+            // Each grade keeps its own weighbridge ticket and its own price.
             bill.items = group.map((r) => {
                 const it = {};
                 for (const f of ITEM_FIELDS) {
@@ -333,9 +368,7 @@ function toBills(mapped) {
                 if (r.supplier_price !== null && r.supplier_price !== undefined) it.price = r.supplier_price;
                 return it;
             }).filter((it) => it.description);
-            // The container's supplier_price belongs to a grade once there are
-            // several, and each item carries its own.
-            delete bill.supplier_price;
+
         }
         bill._rows = group.map((r) => r._row);
         bill._stored = first._stored;
@@ -393,6 +426,17 @@ function toSales(mapped) {
         const sale = {};
         for (const [, field] of Object.entries(ORDER_MAP)) {
             if (r[field] !== null && r[field] !== undefined && str(r[field]) !== '') sale[field] = r[field];
+        }
+        // ── L/C IS LC ────────────────────────────────────────────────────
+        // sales.js accepts LC or TT. Her sheet writes "L/C" on 19 rows, which
+        // is the same term with a slash in it, and those rows were being
+        // refused outright. Typography, not interpretation — nothing else is
+        // guessed at, and a value that is not one of these two after this is
+        // reported rather than mapped to whichever looks closest.
+        if (sale.terms) {
+            const t = sale.terms.toUpperCase().replace(/[\s.]/g, '');
+            if (t === 'L/C' || t === 'LC') sale.terms = 'LC';
+            else if (t === 'T/T' || t === 'TT') sale.terms = 'TT';
         }
         // `consignee` is the address-book tag ("Joey/Taewon"); the sales table
         // keys on customer. Keep the tag in the note rather than losing it —
