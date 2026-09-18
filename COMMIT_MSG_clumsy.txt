@@ -1,0 +1,153 @@
+the digest was clumsy: a false alarm, a debug line, and boilerplate
+
+Apsara pasted eight digests from one night and said: "i dotn want this to
+come evrrytime. These looks clumpsy."
+
+FOUR SEPARATE DEFECTS, and only the last is cosmetic.
+
+1. A FALSE `change` ALERT, FIRED TWICE IN ONE NIGHT.
+
+   The same line on two different emails two hours apart:
+
+     (!) change+cutoff+instruction: cutoff on DALA61376400: we hold
+         09/18/2026, this mail says 09-16
+
+   I opened the mailbox. NEITHER email contains a date at all. The
+   "09-16" is buildThreadLedger's OWN row prefix:
+
+     - [09-16] Andy Park: DG SI CUTOFF for this booking is 10AM ...
+
+   So changedBookingDate was reading Jarvis's own bookkeeping as a date
+   the sender had stated. Because the rows it scans are the ones naming
+   a cutoff, and a cutoff reminder is exactly the kind of row a ledger
+   keeps, this would fire on a great many threads -- and `change` is the
+   ONLY signal allowed to interrupt her. Worst possible place for a
+   false positive.
+
+   Fixed by stripping the "[MM-DD] " prefix, not by dropping the thread:
+   a cutoff is often stated once, earlier in the conversation, and
+   reading the history is why the ledger is passed in at all (CE3, CE4).
+
+2. A COMPLETED DELIVERY FILED AS A DEBT.
+
+     you're waiting on 1, and 1 your team is handling:
+     1. Marc Kang sent wire confirmation for DALA22345800 ...
+     Nothing here is waiting on your reply -- these are things others owe you.
+
+     you're waiting on 1:
+     1. Eccomelt sends Purchase Ticket #4404952 for $72,143.60 for review.
+
+   Nothing is owed in either. Marc SENT the confirmation, Eccomelt SENT
+   the ticket. A completed delivery in a "things others owe you" list is
+   a queue she can never clear -- the exact shape the waiting_on enum was
+   introduced to fix.
+
+   closesLoopWithoutAsk already guarded 'colleague' and 'someone_else'.
+   'them' was never covered, and the importance axis I added the day
+   before made it visible at volume: a wire confirmation carries a money
+   figure, so it scored `high` and earned a numbered slot of its own.
+   Promoting a closed loop was my bug, one day old.
+
+   A progress report still surfaces, which is this bucket's whole value:
+   "Andy is chasing the carrier for the EDO" trips no delivery verb
+   (AL3, AL4). `critical` still promotes regardless -- a claim phrased as
+   a handover ("we are sending the claim report") is still a claim.
+
+3. MY SIGNAL NAMES ON HER PHONE. "change+cutoff+instruction:" is a debug
+   line. The kinds are the vocabulary of the audit log and
+   scripts/ruler.js, not of a message to a person. One reason now, the
+   sharpest one, in words:
+
+     this contradicts what we have on file -- cutoff on DALA61376400: ...
+     something has gone wrong: "WEIGHT SHORTAGE CLAIM ..."
+     money in this one ($72,143.60): "Total Amount: $72,143.60 ..."
+     they are asking us to do something: "Please send the invoice ..."
+
+   Ranked, so an item with a claim AND a figure reads as a claim (CF4).
+
+4. THE BOILERPLATE, which is what she pointed at first. Every one of the
+   eight messages ended with the same three paragraphs, and "(+6 older
+   items still open from before)" carried the same 6 in SIX consecutive
+   messages. Text that never changes stops being read, and worse, it
+   trains her to skim the part that does.
+
+   Shown once a day now, on the first digest of the LA day. The commands
+   still work and she has known them for weeks. Nothing informational is
+   dropped -- AL7 pins that the item, the sender, the ask and the "(your
+   team, not you)" marker all survive the terse render.
+
+   `firstOfDay` is derived from lastDigestAt rather than a new store
+   field: `heldBack` taught me that this week, and a `lastFooterOn` key
+   would be the seventh thing for saveStore's allowlist to swallow.
+
+THREE OF MY FIXTURES WERE TOO WEAK THIS WEEK, and reverse-verification
+is the only reason I know. This commit's was the third: removing the
+ledger stripper broke NO test, because my ledger row was about a
+container and changedBookingDate only scans rows that name a cutoff or
+an ERD. The fixture now carries the row she actually had, and CE1/CE2
+fail without the fix. CF1 was equally weak -- a single-signal item looks
+identical under both formats -- so it tests a multi-signal item now.
+
+TESTS: CE and CF in tests/mail-importance.js (37), AL in
+tests/emailwatch-signals.js (522). Every mechanism reverse-verified.
+All 122 suites run: 0 failures.
+
+STILL OPEN, AND IT NEEDS HER DECISION: every one of those eight digests
+was sent INSIDE the Los Angeles alert window, and every one landed on
+her phone between 00:40 and 03:25. She reads on IST; the window protects
+LA's night. She overruled a change here once before ("no it should work
+on los angeles time only"), so the arithmetic is in the reply and the
+choice is hers.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01PaVFkg7JrYeRfUPzvLCFtt
+
+---------------------------------------------------------------------------
+5. FIVE DIGESTS IN THREE HOURS BECOME ONE.
+
+   12:40, 1:10, 2:05, 3:10, 3:25 -- five messages carrying one or two
+   items each. DIGEST_MIN_GAP_MS was already an hour, and an hourly floor
+   with one item in it is still five messages.
+
+   An ORDINARY digest now waits for either:
+     3 items and an hour   -- there is a list worth reading
+     or 3 hours, any count -- a single item is not left sitting all day
+
+   Her 12:40-3:25 run becomes ONE message. She chose this over fixed
+   daily editions, which would have been quieter but would make something
+   arriving just after an edition wait for the next one.
+
+   URGENT AND CRITICAL ARE UNAFFECTED, and that is the safety of it: a
+   moved cutoff, a claim or a shortage still goes out on the next scan.
+   BM4 pins that; removing the bypass fails it.
+
+   The PO ledger waits for the same batch rather than keeping an hourly
+   slot of its own -- nothing in a PO ledger is worth breaking rhythm for.
+
+AND THE TIMEZONE, ASKED AND ANSWERED A SECOND TIME. Every one of those
+eight digests was sent INSIDE the Los Angeles window; the arithmetic is
+now in the code beside ALERT_START_HOUR:
+
+  her phone (IST)  UTC    Los Angeles   inside 06:00-23:00 LA?
+  00:40            19:10  Thu 12:10     yes
+  03:25            21:55  Thu 14:55     yes
+  18:30            13:00  Fri 06:00     yes  (the overnight batch)
+
+The window works exactly as specified -- it is her night by arithmetic,
+not by fault. Shown the table and offered IST quiet hours, an
+overlap-only window, or LA with critical still breaking through, she
+chose LA again. That is twice. Do not "fix" overnight messages by moving
+ALERT_START_HOUR; the lever she pulled both times is batching, which is
+what the 2 Sep comment predicted and what this commit finally builds.
+
+TWO MORE OF MY OWN MISTAKES, both caught by tests:
+
+  * The batch test seeded lastDigestAt through saveStore, whose merge
+    deliberately keeps the LATER timestamp -- so setting it EARLIER is
+    exactly the write it exists to reject and the helper silently did
+    nothing. Correct production behaviour, wrong tool for a fixture; it
+    writes the store file directly now.
+  * Removing the 3-hour escape cascades into fourteen failures across
+    BH/BI/BJ/BK, because every one of those scenarios has a single item
+    and would be held forever. That is the cap doing its job, and it is
+    worth knowing the blast radius is that wide.

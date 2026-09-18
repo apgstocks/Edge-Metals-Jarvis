@@ -144,6 +144,18 @@ function firstSentenceMatching(sentences, re) {
 //
 // Only fires when Jarvis ALREADY HELD a different value, which is what makes
 // it a change rather than an announcement. bookings.json is the record.
+// buildThreadLedger renders each message as "- [MM-DD] Sender: snippet".
+// That prefix is Jarvis's own bookkeeping, not anything the sender wrote, and
+// letting it reach a date scanner is how the cutoff-change alert fired on a
+// thread containing no dates whatsoever. Only the prefix is removed; the row
+// keeps its text.
+function stripLedgerDates(thread) {
+    return String(thread || '')
+        .split('\n')
+        .map((line) => line.replace(/^-\s*\[\d{1,2}-\d{1,2}\]\s*/, '- '))
+        .join('\n');
+}
+
 const DATEISH = /\b(\d{1,2})[\/.-](\d{1,2})(?:[\/.-](\d{2,4}))?\b/g;
 function datesIn(text) {
     const out = [];
@@ -231,6 +243,29 @@ function changedBookingDate(text, refs, bookings) {
 }
 
 // ── THE VERDICT ────────────────────────────────────────────────────────────
+// Ordered by how much she needs to know it, so the line names the sharpest
+// reason rather than the first one matched.
+const SIGNAL_RANK = ['change', 'problem', 'cutoff', 'money', 'instruction', 'service'];
+function phrase(signals) {
+    const pick = SIGNAL_RANK.map((k) => signals.find((s) => s.kind === k)).find(Boolean) || signals[0];
+    const quote = String(pick.quote || '').replace(/\s+/g, ' ').trim().slice(0, 130);
+    switch (pick.kind) {
+        // The change signal already builds its own sentence naming both
+        // values, which is the whole point of it -- "we hold X, this mail
+        // says Y". Prefixed so she knows it is Jarvis comparing, not the
+        // sender writing.
+        case 'change':      return `this contradicts what we have on file — ${quote}`;
+        case 'problem':     return `something has gone wrong: "${quote}"`;
+        case 'cutoff':      return `there is a deadline in this: "${quote}"`;
+        case 'money':       return pick.figure
+            ? `money in this one (${pick.figure}): "${quote}"`
+            : `money in this one: "${quote}"`;
+        case 'instruction': return `they are asking us to do something: "${quote}"`;
+        case 'service':     return `an account or service is at risk: "${quote}"`;
+        default:            return quote;
+    }
+}
+
 // level:
 //   critical  something moved, something broke, or a cutoff is on top of us.
 //             This is what earns an immediate message.
@@ -304,7 +339,30 @@ function importanceOf({ subject = '', body = '', thread = '', deadlineDays = nul
     const refs = businessRefs(text);
     const signals = [];
 
-    const changed = changedBookingDate(`${body}\n${thread}`, refs, bookings);
+    // THE LEDGER'S OWN TIMESTAMPS ARE NOT STATED DATES (2026-09-18).
+    //
+    // From her real night: the same alarming line on two different emails,
+    // two hours apart --
+    //
+    //   ⚠ change+cutoff+instruction: cutoff on DALA61376400: we hold
+    //     09/18/2026, this mail says 09-16
+    //
+    // I checked the mailbox. NEITHER email contains a date at all. The
+    // "09-16" is buildThreadLedger's own row prefix:
+    //
+    //   - [09-16] Andy Park: approved to return
+    //
+    // So the change detector was reading the ledger's message dates as dates
+    // the sender had stated, and reporting the cutoff as moved on any thread
+    // whose history happens to run on a different day from the one on file --
+    // which is nearly every thread. `change` is the ONLY signal that
+    // interrupts her, so this was the worst possible place for a false
+    // positive, and it fired twice in one night.
+    //
+    // Stripped rather than dropping the thread entirely: a cutoff is often
+    // stated once, earlier in the conversation, and reading the history is
+    // the whole reason the ledger is passed in.
+    const changed = changedBookingDate(`${body}\n${stripLedgerDates(thread)}`, refs, bookings);
     if (changed) signals.push(changed);
 
     const problem = firstSentenceMatching(sentences, PROBLEM_RE);
@@ -401,13 +459,24 @@ function importanceOf({ subject = '', body = '', thread = '', deadlineDays = nul
         // One line for the digest, so she can see WHY Jarvis thought this
         // mattered rather than trusting a label. A judgement she cannot audit
         // is one she has to either accept or switch off.
-        because: signals.length
-            ? signals.map((s) => s.kind).join('+') + ': ' + String(signals[0].quote).slice(0, 140)
-            : null,
+        // PLAIN ENGLISH, because she reads this on a phone. The first version
+        // printed the signal names joined by plus signs:
+        //
+        //   change+cutoff+instruction: cutoff on DALA61376400: we hold
+        //   09/18/2026, this mail says 09-16
+        //
+        // Apsara: "These looks clumpsy". She is right -- that is a debug line.
+        // The signal kinds are my vocabulary, not hers, and "instruction"
+        // tells her nothing she cannot see from the sentence underneath it.
+        //
+        // One reason, the strongest one, in words. The rest are in `signals`
+        // for the audit log and scripts/ruler.js, where the vocabulary
+        // belongs.
+        because: signals.length ? phrase(signals) : null,
     };
 }
 
 module.exports = {
-    importanceOf, cutoffImminence, businessRefs, datesIn, changedBookingDate, sentencesOf,
+    importanceOf, cutoffImminence, phrase, SIGNAL_RANK, stripLedgerDates, businessRefs, datesIn, changedBookingDate, sentencesOf,
     MONEY_RE, CUTOFF_RE, INSTRUCTION_RE, PROBLEM_RE, SERVICE_RE, IMMINENT_DAYS,
 };

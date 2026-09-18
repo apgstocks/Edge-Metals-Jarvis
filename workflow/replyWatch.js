@@ -67,6 +67,14 @@ const poTracker = require('../helpers/poTracker');
 // Importance is its own axis — see helpers/mailImportance.js for the 60-email
 // measurement that forced it ("notify if there is any improtant mail").
 const importance = require('../helpers/mailImportance');
+// Jarvis reads its own message before sending it -- see helpers/digestVerify.js.
+const { verifyDigest } = require('../helpers/digestVerify');
+// How many digests an item may be held out of before it is sent anyway with
+// a warning. Two, because the checks that hold things back are mostly about
+// STALE TEXT, and the cleaners run at render -- so a second attempt often
+// passes. A third failure means the text will never pass, and silence is the
+// worse answer.
+const MAX_HELD_BACK = 2;
 const MAX_PO_EVENTS = poTracker.MAX_EVENTS;
 
 // Routes a manager notification through helpers/managerOutbox.js so that a
@@ -289,6 +297,28 @@ const ALERT_END_HOUR = 23;
 // If the volume is the problem rather than the hour, the fix is BATCHING, not
 // the timezone: on 2 Sep four separate chase messages went out at 01:25,
 // 01:35, 02:40 and 03:30 where one would have done.
+//
+// CONFIRMED A SECOND TIME, 2026-09-18, and the arithmetic is worth keeping
+// because it is the thing that looks like a bug. She sent in eight digests:
+//
+//   her phone (IST)   UTC     Los Angeles      inside 06:00-23:00 LA?
+//   00:40             19:10   Thu 12:10        yes
+//   01:10             19:40   Thu 12:40        yes
+//   02:05             20:35   Thu 13:35        yes
+//   03:10             21:40   Thu 14:40        yes
+//   03:25             21:55   Thu 14:55        yes
+//   09:25             03:55   Thu 20:55        yes
+//   18:30             13:00   Fri 06:00        yes  (the overnight batch,
+//                                                    released at ALERT_START_HOUR)
+//
+// EVERY ONE was sent inside the LA window. The window is working exactly as
+// specified; it is her night by arithmetic, not by fault. Shown the table and
+// offered IST quiet hours, the overlap-only option, and LA-with-critical-
+// through, she chose LA again.
+//
+// So: do not change ALERT_START_HOUR or ALERT_END_HOUR to fix overnight
+// messages. That is twice now. The lever she DID pull is the batch rule --
+// see DIGEST_MIN_ITEMS, which turns that 12:40-3:25 run into one message.
 
 // ── Aging / chase-up — Apsara, 2026-08-22: "if there is something which
 // need our answer yet we didnt give anything after 5 days." ─────────────────
@@ -313,6 +343,28 @@ const MAX_CHASES = 5;
 // Floor between non-urgent digests, so a steady trickle of mail cannot turn
 // into a steady trickle of notifications.
 const DIGEST_MIN_GAP_MS = 60 * 60 * 1000;
+// ...AND THAT FLOOR WAS NOT ENOUGH (2026-09-18). Apsara pasted eight digests
+// from one night -- 12:40, 1:10, 2:05, 3:10, 3:25 -- five in under three
+// hours, each carrying one or two items:
+//
+//   "i dotn want this to come evrrytime. These looks clumpsy."
+//
+// An hourly floor with one item in it is still five messages. So an ORDINARY
+// digest now waits for either enough to be worth reading or long enough that
+// waiting more would be rude:
+//
+//   3 items and an hour        -- there is a list to read
+//   or 3 hours, any count      -- a single item is not left sitting all day
+//
+// Her 12:40-3:25 run becomes ONE message. Chosen by her over fixed daily
+// editions, which would have been quieter still but would make something
+// arriving just after an edition wait for the next.
+//
+// URGENT AND CRITICAL ARE UNAFFECTED and that is the whole safety of it: a
+// moved cutoff, a claim, a shortage or a high-urgency deadline inside a day
+// still goes out on the next scan. See hasUrgent / hasCritical.
+const DIGEST_MIN_ITEMS = 3;
+const DIGEST_MAX_WAIT_MS = 3 * 60 * 60 * 1000;
 
 // Senders that never want a reply. Matched against the FROM header. This is a
 // cheap pre-filter to avoid paying for a Gemini call on obvious machine mail —
@@ -1067,7 +1119,20 @@ summary: THE GIST OF THE EMAIL — what it actually says, in one sentence under 
 
   COVER THE WHOLE EMAIL. If it makes two points, say BOTH — join them with "and". Reporting only the first is the most damaging thing you can do here, because she cannot tell that anything is missing. A real example that was got wrong: an email asking to move JY70 to $995 AND advising against combining the JY71 combos was reported as "wants confirmation of unit price adjustment for JY70" — half the message, silently. Correct: "Jinho wants JY70 at $995 and advises against combining the JY71 combos."
 
-  EVERY AMOUNT AND EVERY DATE STATED IN THE EMAIL GOES IN. Another real miss: "Accounting requested confirmation of LC calculations totaling $111,447.60 before submission scheduled for August 28, 2026" came out as "confirmation of calculations" — no total, no date. Write the date as the sender wrote it (August 28) rather than "tomorrow", which stops being true the day after.
+  EVERY AMOUNT AND EVERY DATE STATED IN THE EMAIL GOES IN. Another real miss: "Accounting requested confirmation of LC calculations totaling $111,447.60 before submission scheduled for August 28, 2026" came out as "confirmation of calculations" — no total, no date.
+
+  NEVER WRITE A WORD THAT MEANS A DIFFERENT DAY TOMORROW. This is the rule broken most often, and it is the one nothing downstream can repair. A summary is written when the mail ARRIVES and re-read for days afterwards, so a relative word in it is a lie on a timer. BANNED, always: today, tonight, tomorrow, yesterday, this morning, this afternoon, next week, this week, in a few days. Write the day the sender meant, as a date.
+
+    BAD  "Confirm the delivery appointment next week."
+    GOOD "Confirm the delivery appointment for the week of September 22."
+
+    BAD  "Kristal needs the booking confirmed tomorrow morning."
+    GOOD "Kristal needs the booking confirmed by September 18 morning."
+
+    BAD  "Andy says the DG SI cutoff is tomorrow at 10 AM."
+    GOOD "Andy says the DG SI cutoff is September 17 at 10 AM."
+
+  If the sender wrote a relative word and you cannot work out the date from the email's own date above, say what they said WITHOUT the timing — "Andy is chasing the DG SI declaration" — rather than repeating a word that will be wrong by the time she reads it. Jarvis checks its own digest before sending and holds back any line that still contains one of these words, so a relative word here costs her the whole item, not just the date.
 
   ATTACHMENTS ARE PART OF THE MESSAGE. When files are listed above, say what came — "sends the signed BOL and packing list" beats "wants you to look at the attached". You can see the FILENAMES only, never the contents, so name them and never state a figure that is only inside one.
 
@@ -1079,7 +1144,9 @@ action_needed: WHAT SHE HAS TO DO, as a short instruction to herself — under 1
     "Send the signed BOL to Zimex."            not  "Reply to Zimex."
     "Chase Andy for the EDO before the 8/28 cutoff."
     "Confirm the $111,447.60 LC figures before submission."
-  If waiting_on is "them", the action is usually to chase, and only when it is worth chasing — an update that arrived yesterday needs nothing. If waiting_on is "someone_else" or "nobody", or if the honest answer is that she does not need to do anything, return null. A null is a real and useful answer here; inventing busywork is worse than saying nothing.
+  If waiting_on is "them", the action is usually to chase, and only when it is worth chasing — an update that arrived the day before needs nothing. A null is a real and useful answer here; inventing busywork is worse than saying nothing.
+
+  WHEN waiting_on IS "someone_else", "colleague" OR "nobody", action_needed MUST BE null. NO EXCEPTIONS. An item that tells her to act while also saying somebody else was asked contradicts itself, and she has sent exactly that back: "Rajkumar sends a draft Bill of Lading for your review / Review and approve / (you are only copied in)" — her question was "If its not pointing to any of edgemetals worker, why is it showing?" Either it is hers to do, in which case waiting_on is "her", or it is not, in which case there is no action for her. Jarvis now checks for this contradiction before sending and holds the item back when it finds one.
   Do NOT repeat the summary in different words. If the only action you can think of is "reply to this email", return null instead — the digest already says she has mail waiting.
 
 asked_of: when waiting_on is "someone_else", the NAME of the person the question is aimed at, taken from the TO line. null otherwise.
@@ -1551,9 +1618,35 @@ function degenericiseSummary(summary, fromLabel) {
 // Undefined `from_internal` (older stored items, hand-built test fixtures)
 // reads as external and is kept -- failing towards showing her something,
 // never towards silence.
+// A DELIVERY IS NOT A DEBT (2026-09-18). From her own night of digests:
+//
+//   you're waiting on 1, and 1 your team is handling:
+//   1. Marc Kang sent wire confirmation for DALA22345800 and HMMU4892142.
+//   ...
+//   Nothing here is waiting on your reply -- these are things others owe you.
+//
+//   you're waiting on 1:
+//   1. Eccomelt sends Purchase Ticket #4404952 for $72,143.60 for review.
+//
+// Apsara: "These looks clumpsy." Nothing is owed in either. Marc SENT the
+// wire confirmation; Eccomelt SENT the ticket. Filing a completed delivery
+// under "things others owe you" is a queue she can never clear, which is the
+// exact shape of the bug the waiting_on enum was introduced to fix.
+//
+// closesLoopWithoutAsk already guarded the 'colleague' and 'someone_else'
+// directions (it nulls asked_for there, and those gates require one). 'them'
+// was never covered, and the importance axis then made it visible at volume:
+// a wire confirmation carries a money figure, so it scores `high` and earns
+// a slot on its own. Promoting a closed loop was my bug, introduced
+// yesterday.
+//
+// A progress report SURVIVES, which is the whole value of this bucket:
+// "Andy is chasing the carrier for the EDO" and "Andy confirms KOCU4417874 is
+// approved to return" trip no delivery verb. Only a handover does.
 const isOwedItem = (a) => !!a && a.waiting_on === 'them'
     && a.confidence >= MIN_CONFIDENCE && !!a.asked_for
-    && !a.from_internal;
+    && !a.from_internal
+    && !closesLoopWithoutAsk(a.summary);
 
 // A third party was asked something. Needs BOTH a named party and a named
 // thing. Live case that forced the second half: "Yurim Cha attached
@@ -3028,7 +3121,23 @@ function proformaDraftLines(draft) {
     return out;
 }
 
-function buildDigest(matters, emailCount) {
+// terse: drop the teaching text. Apsara, on eight digests in one night:
+// "i dotn want this to come evrrytime. These looks clumpsy."
+//
+// She meant the boilerplate, and she is right -- every one of those messages
+// ended with the same three paragraphs:
+//
+//   Nothing here is waiting on your reply -- your team owes these answers.
+//   Say "reply to 1" if you want me to draft the answer for your yes.
+//   (+6 older items still open from before -- say "what needs my reply" ...)
+//
+// The "+6" was +6 in six consecutive messages. Text that never changes stops
+// being read, and worse, it trains her to skim past the part that DOES change.
+// The commands are still there and still work; she has known them for weeks.
+// Shown once a day, on the first digest of the LA day -- see `firstOfDay` at
+// the call site, which derives that from lastDigestAt rather than adding a
+// store field for the allowlist to swallow.
+function buildDigest(matters, emailCount, { terse = false } = {}) {
     const n = emailCount == null ? matters.length : emailCount;
     // Orders that want no reply are in this list too (see the is_order carve-
     // out in _runOnce), so "N emails waiting on you" is no longer always true.
@@ -3296,13 +3405,15 @@ function buildDigest(matters, emailCount) {
         // through to the "owed" wording, which is right for `owed` and
         // backwards for `colleague`.
         const colleagueOnly = colleague.length && !owed.length;
-        lines.push(colleagueOnly
-            ? 'Nothing here is waiting on your reply — your team owes these answers.'
-            : 'Nothing here is waiting on your reply — these are things others owe you.');
-        lines.push(colleagueOnly
-            ? 'Say "reply to 1" if you want me to draft the answer for your yes.'
-            : 'Say "reply to 1" if you want me to draft a nudge for your yes.');
-        return lines.join('\n');
+        if (!terse) {
+            lines.push(colleagueOnly
+                ? 'Nothing here is waiting on your reply — your team owes these answers.'
+                : 'Nothing here is waiting on your reply — these are things others owe you.');
+            lines.push(colleagueOnly
+                ? 'Say "reply to 1" if you want me to draft the answer for your yes.'
+                : 'Say "reply to 1" if you want me to draft a nudge for your yes.');
+        }
+        return lines.join('\n').replace(/\n+$/, '');
     }
     if (!replies.length && !unsure.length) {
         // Order-only digest: the reply instructions would be noise, and worse,
@@ -3313,8 +3424,10 @@ function buildDigest(matters, emailCount) {
             : 'Nothing generated yet — say the word and I\'ll build the proforma for your yes.');
         return lines.join('\n');
     }
-    lines.push('Nothing sent yet. Reply with "reply to 1" (or "reply to 1: confirmed for Friday")');
-    lines.push('and I\'ll draft it for your yes before anything goes out.');
+    if (!terse) {
+        lines.push('Nothing sent yet. Reply with "reply to 1" (or "reply to 1: confirmed for Friday")');
+        lines.push('and I\'ll draft it for your yes before anything goes out.');
+    }
     // Say WHY something is in the maybe pile, and how to make it go away. An
     // unexplained "not sure" bucket is just a second list to ignore.
     if (unsure.length) {
@@ -3894,7 +4007,22 @@ async function run({ sendToManager, sendMessage: _sendMessage = null, dryRun = f
         // `critical`/`high` rather than anything with a signal: `normal`
         // means a booking reference and nothing sharp, which is most of her
         // inbox and would be the flood she switches off.
-        const importantEnough = imp.level === 'critical' || imp.level === 'high';
+        // A CLOSED LOOP IS NOT PROMOTED EITHER. "Marc Kang sent wire
+        // confirmation ... $21,639.20" scores `high` on the money signal, and
+        // on the strength of that it earned a numbered slot of its own in her
+        // 2:05am digest. The figure is real; the obligation is not.
+        //
+        // `critical` still promotes regardless -- a claim or a moved cutoff
+        // matters even when the sender phrases it as a handover ("we are
+        // sending the claim report"), and PROBLEM/CHANGE are the two signals
+        // that cost money by being missed.
+        const closedLoop = closesLoopWithoutAsk(a.summary);
+        const importantEnough = imp.level === 'critical'
+            || (imp.level === 'high' && !closedLoop);
+        if (closedLoop && imp.level === 'high') {
+            console.log(`[REPLYWATCH] not promoting "${String(a.summary || '').slice(0, 55)}" — `
+                + 'a delivery with a figure in it, not an obligation');
+        }
         if ((a.needs_reply && a.confidence >= MIN_CONFIDENCE) || a.is_order || owedItem || bystander || colleagueItem
             || importantEnough) {
             recordSenderEvent(store, from, 'flagged');
@@ -4270,6 +4398,17 @@ async function run({ sendToManager, sendMessage: _sendMessage = null, dryRun = f
     }
     const sinceLast = store.lastDigestAt ? (Date.now() - Date.parse(store.lastDigestAt)) : Infinity;
     const gapElapsed = !(sinceLast >= 0) || sinceLast >= DIGEST_MIN_GAP_MS;
+    // A batch is ready when there is a LIST to read, or when a single item
+    // has waited long enough that holding it any longer is the worse failure.
+    // See DIGEST_MIN_ITEMS. The first digest after a restart or an overnight
+    // hold has sinceLast = Infinity and therefore always qualifies.
+    const batchReady = gapElapsed
+        && (queued.length >= DIGEST_MIN_ITEMS || sinceLast >= DIGEST_MAX_WAIT_MS);
+    if (queued.length && gapElapsed && !batchReady) {
+        console.log(`[REPLYWATCH] holding ${queued.length} item(s) for a fuller digest — `
+            + `${DIGEST_MIN_ITEMS} items or ${Math.round(DIGEST_MAX_WAIT_MS / 3600000)}h, whichever comes first `
+            + `(${Math.round(sinceLast / 60000)}m since the last one)`);
+    }
 
     // Urgent goes out immediately; everything else waits for the hourly slot.
     // Both are gated on the alert window, so nothing arrives overnight — but
@@ -4285,8 +4424,13 @@ async function run({ sendToManager, sendMessage: _sendMessage = null, dryRun = f
     // worth breaking the hourly rhythm for, and a feature that can ping her
     // out of turn is one she will switch off.
     const shouldSend = inAlertWindow
-        && ((queued.length > 0 && (hasUrgent || hasCritical || gapElapsed))
-            || (reportablePos.length > 0 && gapElapsed));
+        && ((queued.length > 0 && (hasUrgent || hasCritical || batchReady))
+            // A PO ledger is never urgent, so it waits for the same batch as
+            // everything else rather than earning an hourly slot of its own.
+            || (reportablePos.length > 0 && batchReady));
+    // NOTE: whether anything actually goes out is settled later, after the
+    // verifier has run -- see `body` below. An empty body is not sent, which
+    // is how "every item was held back" resolves without an empty headline.
 
     // Tracks what ACTUALLY went out, as opposed to what we intended to send.
     // These are not the same thing when the send throws, and reporting the
@@ -4321,7 +4465,17 @@ async function run({ sendToManager, sendMessage: _sendMessage = null, dryRun = f
         // digestMatters was grouped from, pre-grouping).
         const renderedIds = new Set(queued.map((q) => q.id));
         const olderStillOpen = (store.tracked || []).filter((t) => !renderedIds.has(t.id)).length;
-        const backlogNote = olderStillOpen > 0
+        // ONCE A DAY, NOT EVERY TIME. Her night of 2026-09-18 carried
+        // "(+6 older items still open from before ...)" in six consecutive
+        // messages, with the same 6 every time. Text that never changes stops
+        // being read and teaches her to skim the part that does.
+        //
+        // Derived from lastDigestAt rather than a new store field: `heldBack`
+        // taught me that lesson this week, and a `lastFooterOn` key would be
+        // the seventh thing for saveStore's allowlist to swallow.
+        const laDay = (t) => new Date(laMidnightUTC(t)).toISOString().slice(0, 10);
+        const firstOfDay = !store.lastDigestAt || laDay(store.lastDigestAt) !== laDay(new Date());
+        const backlogNote = (olderStillOpen > 0 && firstOfDay)
             ? `\n\n(+${olderStillOpen} older item${olderStillOpen === 1 ? '' : 's'} still open from before — say "what needs my reply" any time to see them.)`
             : '';
         // Dead letters ride along with the digest rather than as their own
@@ -4337,8 +4491,104 @@ async function run({ sendToManager, sendMessage: _sendMessage = null, dryRun = f
         // the same message is how "ignore 1" came back as "#undefined" on
         // 01 Sep. The PO NUMBER is the handle instead.
         const poSection = reportablePos.length ? '\n' + poTracker.buildPoLines(reportablePos).join('\n') : '';
-        const body = queued.length
-            ? (overnight ? 'While you were away —\n\n' : '') + buildDigest(digestMatters, queued.length) + backlogNote + dlqNote + poSection
+        // ---- JARVIS READS ITS OWN MESSAGE BEFORE SENDING IT (2026-09-18) --
+        // Apsara asked for "loop engineering". Every check in
+        // helpers/digestVerify.js is a message she actually received and had
+        // to correct: "tomorrow tomorrow", "TOMORROW (after tomorrow
+        // morning)", "#undefined", a line that asked her to act and said it
+        // was not hers, "OVERDUE by 9131d". None needed a model to spot.
+        //
+        // A held-back item STAYS IN THE QUEUE. It is not delivered, so
+        // `undelivered` keeps it and the next scan re-renders it -- by which
+        // time degenericiseSummary and resolveRelativeDates may well have
+        // cleaned it, since those run at render.
+        //
+        // AND IT CANNOT BE HELD FOREVER. Past MAX_HELD_BACK it goes out with
+        // a warning line instead. A verifier that can suppress a real email
+        // indefinitely is the failure this whole month has been about, wearing
+        // a safety badge -- 24 purchase orders and 22 consequential emails
+        // vanished quietly and she found out by noticing an absence.
+        let digestBody = null;
+        let heldBack = [];
+        if (queued.length) {
+            // THE COUNTER LIVES ON THE QUEUED ITEM, not in a new store field,
+            // and that is a deliberate dodge: a `store.heldBack` map would be
+            // the SEVENTH field for saveStore's allowlist to swallow
+            // (lastScanAt, sentIndex, failures, muted, `indices` and pos were
+            // each eaten by one), and a counter reset on every write can never
+            // reach its cap -- so an item would be held back forever, which is
+            // precisely the silence this cap exists to prevent.
+            //
+            // undelivered is merged with mergeList, which carries whole
+            // objects, so a property on the item survives a write and dies
+            // with the item when it is finally delivered. No pruning needed.
+            const heldCount = (id) => {
+                const q = queued.find((x) => x.id === id);
+                return (q && q.heldBack) || 0;
+            };
+            const bumpHeld = (id) => {
+                const q = queued.find((x) => x.id === id);
+                if (q) q.heldBack = (q.heldBack || 0) + 1;
+                return (q && q.heldBack) || 0;
+            };
+            const forced = digestMatters.filter((m) => heldCount(m.id) >= MAX_HELD_BACK).map((m) => m.id);
+            const verdict = verifyDigest(
+                digestMatters.filter((m) => !forced.includes(m.id)),
+                (items) => buildDigest(items, queued.length, { terse: !firstOfDay }));
+            heldBack = verdict.dropped;
+            // ---- THE FEEDBACK HALF OF THE LOOP (2026-09-18) ---------------
+            // Apsara: "Use loop engineering to adjust the prompt as per the
+            // feedback." Editing a prompt and declaring it better is exactly
+            // the move this project keeps punishing -- six suites passed this
+            // month while the thing they covered was disabled, and the
+            // confidence field sat at 1.0 for sixteen straight emails while
+            // everyone assumed it meant something.
+            //
+            // So every verifier failure is RECORDED with the check that
+            // caught it. scripts/ruler.js --verify tallies them by day, which
+            // turns "the prompt is better now" into a number that either
+            // falls or does not. Recorded for MESSAGE-level failures too,
+            // which no item drop can repair.
+            for (const f of verdict.failures) {
+                await appendAuditLog({
+                    source: 'digest_verify',
+                    check: f.check, level: f.level, why: f.why,
+                    summary: f.summary || null,
+                    messageId: (typeof f.index === 'number' && digestMatters[f.index])
+                        ? digestMatters[f.index].id : null,
+                    from: (typeof f.index === 'number' && digestMatters[f.index])
+                        ? digestMatters[f.index].from : null,
+                }).catch(() => {});
+            }
+            for (const d of heldBack) {
+                const n = bumpHeld(d.id);
+                console.warn(`[REPLYWATCH] holding "${String(d.summary || '').slice(0, 50)}" out of this digest `
+                    + `(${n} of ${MAX_HELD_BACK}) — it stays queued and will be sent anyway if it keeps failing`);
+            }
+            // The forced ones are rendered back in, flagged, so a line that
+            // can never pass the checks still reaches her with the reason
+            // attached rather than disappearing.
+            const forcedItems = digestMatters.filter((m) => forced.includes(m.id));
+            const finalItems = forcedItems.length ? verdict.items.concat(forcedItems) : verdict.items;
+            const rendered = forcedItems.length
+                ? buildDigest(finalItems, queued.length, { terse: !firstOfDay }) : verdict.text;
+            const forcedNote = forcedItems.length
+                ? `\n\n⚠ ${forcedItems.length} item${forcedItems.length === 1 ? '' : 's'} above did not pass my own checks `
+                  + `${forcedItems.length === 1 ? 'and may read' : 'and may read'} oddly (a date or a name may be stale) — `
+                  + `showing ${forcedItems.length === 1 ? 'it' : 'them'} anyway rather than hiding ${forcedItems.length === 1 ? 'it' : 'them'}.`
+                : '';
+            // Everything survived and there is nothing to render at all: say
+            // so rather than sending an empty headline.
+            digestBody = finalItems.length
+                ? (overnight ? 'While you were away —\n\n' : '') + rendered + forcedNote + backlogNote + dlqNote + poSection
+                : null;
+        }
+        // EVERYTHING WAS HELD BACK and there is no PO ledger either: send
+        // nothing this round rather than an empty headline. The queue is
+        // retained below, so the items come back next scan -- and the cap
+        // means they cannot come back forever.
+        const body = digestBody !== null
+            ? digestBody
             // NOTHING NEEDS A REPLY, but a PO moved. buildDigest would render
             // "0 emails waiting on you:" over an empty list, which is a lie
             // dressed as a headline. Send the ledger alone instead.
@@ -4378,6 +4628,33 @@ async function run({ sendToManager, sendMessage: _sendMessage = null, dryRun = f
         } catch (e) {
             console.warn('[REPLYWATCH] could not stage the proforma confirmation:', e.message);
         }
+        // NOTHING SURVIVED THE VERIFIER and there is no PO ledger either.
+        //
+        // WHAT THIS GUARD ACTUALLY BUYS, stated honestly because reverse-
+        // verification showed that deleting it breaks no test: the blank
+        // message is ALREADY prevented downstream -- the manager outbox
+        // refuses an empty body and reports `not delivered`, which throws
+        // into the catch below and retains the queue. So the queue is safe
+        // either way.
+        //
+        // What it replaces is the LOG AND THE RETURN VALUE. Without it the
+        // run reports `digest send failed, keeping queue for next run: not
+        // delivered`, which reads like WhatsApp is broken when in fact the
+        // verifier did its job perfectly. A monitor watching for that string
+        // would page somebody. This says what happened and returns
+        // `sent: false, heldBack: n` instead of an exception path.
+        //
+        // Kept for that reason and no other. The items stay queued and come
+        // back next scan; the held-back cap is what stops that being forever.
+        if (!String(body || '').trim()) {
+            console.warn('[REPLYWATCH] nothing to send after verification — '
+                + `${heldBack.length} item(s) held back and still queued`);
+            store.undelivered = queued;
+            await saveStore(store);
+            return { checked, flagged: flagged.length, items: flagged,
+                     queued: store.undelivered.length, sent: false,
+                     heldBack: heldBack.length, chased: 0 };
+        }
         try {
             // sendMessage returns FALSE when WhatsApp is down — it does not
             // throw. A plain `await` inside try/catch therefore treats a
@@ -4403,8 +4680,19 @@ async function run({ sendToManager, sendMessage: _sendMessage = null, dryRun = f
             // answering from the previous digest — the numbering would resolve
             // against an empty array and come back as nothing.
             if (queued.length) {
-                store.lastDigest = digestMatters;
-                store.undelivered = [];
+                // lastDigest is what "reply to 2" resolves against, so it must
+                // be the items that were actually RENDERED -- not the ones
+                // Jarvis decided to hold back. Numbering that includes an item
+                // she cannot see points her at the wrong mail, which is the
+                // bug class the verifier exists to catch.
+                const heldIds = new Set(heldBack.map((d) => d.id));
+                store.lastDigest = digestMatters.filter((m) => !heldIds.has(m.id));
+                // AND THE QUEUE KEEPS WHAT DID NOT GO OUT. Clearing it
+                // wholesale is what my first wiring did, and it threw the
+                // held-back item away on a "successful" send -- turning the
+                // verifier into exactly the silent dropper it was built to
+                // prevent. Caught by BH2 in tests/two-mailbox.js.
+                store.undelivered = queued.filter((q) => heldIds.has(q.id));
                 store.lastDigestAt = new Date().toISOString();
             }
             // AFTER the send, never before. sendMessage returns false when

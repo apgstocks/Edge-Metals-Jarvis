@@ -63,6 +63,10 @@ let threadLastFrom = EMAIL.from;    // who sent the newest message in the thread
 // a single throw before this was understood.
 let emailOverride = null;
 let msgOverride = null;
+let summaryOverride = null;
+// Per-message overrides keyed by Gmail id, for scenarios that need two
+// DIFFERENT emails in one scan.
+let perMessage = null;
 
 const gmail = require(R('helpers/gmail.js'));
 const mkClient = (address, ids) => ({
@@ -99,16 +103,17 @@ gmail.listMessages = async (client) => {
     listedFrom.push(client.__address);
     return (client.__ids || []).map((id) => ({ id }));
 };
-gmail.getMessage = async (_c, id) => ({
-    id, threadId: 'thread-4302902', internalDate: String(Date.parse('2026-09-15T12:00:00Z')),
+let lastFetchedId = null;
+gmail.getMessage = async (_c, id) => (lastFetchedId = id) && ({
+    id, threadId: (perMessage && perMessage[id]) ? 'thread-' + id : 'thread-4302902', internalDate: String(Date.parse('2026-09-15T12:00:00Z')),
     snippet: (emailOverride || EMAIL).body,
     payload: { headers: [
-        { name: 'From', value: EMAIL.from },
+        { name: 'From', value: (perMessage && perMessage[id] && perMessage[id].from) || EMAIL.from },
         { name: 'To', value: `Edge Metals Bose <${BOSE}>, Apsara <${APSARA}>` },
-        { name: 'Subject', value: (emailOverride || EMAIL).subject },
+        { name: 'Subject', value: (perMessage && perMessage[id] && perMessage[id].subject) || (emailOverride || EMAIL).subject },
         { name: 'Date', value: 'Tue, 15 Sep 2026 12:00:00 +0000' },
         // THE FIELD UNDER TEST: identical in both mailboxes.
-        { name: 'Message-ID', value: (msgOverride && msgOverride.rfc) || RFC_ID },
+        { name: 'Message-ID', value: (perMessage && perMessage[id] && perMessage[id].rfc) || (msgOverride && msgOverride.rfc) || RFC_ID },
     ] },
 });
 gmail.getEmailContent = () => ({ body: (emailOverride || EMAIL).body, pdfParts: [] });
@@ -133,10 +138,21 @@ time.getLADate = () => { const d = new Date(); d.setHours(laHourNow, 0, 0, 0); r
 const gemini = require(R('helpers/gemini.js'));
 gemini.callGeminiJSON = async () => {
     geminiCalls++;
+    if (perMessage && perMessage[lastFetchedId]) return {
+        waiting_on: 'her', asked_of: null, action_needed: null, key_figures: [],
+        needs_reply: true, confidence: 0.9, urgency: 'normal',
+        summary: perMessage[lastFetchedId].summary,
+        asked_for: perMessage[lastFetchedId].askedFor || 'confirmation of the delivery appointment',
+        asked_for_quote: 'Could you please confirm the delivery appointment',
+        deadline: null, is_order: false, order_buyer: null,
+    };
     if (emailOverride) return {
-        waiting_on: 'nobody', asked_of: null, action_needed: null, key_figures: [],
-        needs_reply: false, confidence: 0.9, urgency: 'normal',
-        summary: emailOverride.subject, asked_for: null, asked_for_quote: null,
+        waiting_on: summaryOverride ? 'her' : 'nobody',
+        asked_of: null, action_needed: null, key_figures: [],
+        needs_reply: !!summaryOverride, confidence: 0.9, urgency: 'normal',
+        summary: summaryOverride || emailOverride.subject,
+        asked_for: summaryOverride ? 'confirmation of the delivery appointment' : null,
+        asked_for_quote: summaryOverride ? 'Could you please confirm the delivery appointment' : null,
         deadline: null, is_order: false, order_buyer: null,
     };
     return {
@@ -339,6 +355,286 @@ section('BG — only a critical item breaks the hourly rhythm');
     ck('BG3 an ordinary email waits for the slot',
         res2.sent === false && sent.length === 0, JSON.stringify({ sent: res2.sent, msgs: sent.length }));
     emailOverride = null; msgOverride = null; BOSE_CLIENT.__ids = ['bose-1'];
+}
+
+
+section('BH — the verifier holds a bad line back, then gives up and sends it');
+{
+    // Apsara asked for "loop engineering". This is the wiring test for it:
+    // the real run(), a summary that trips a real check, and the escape hatch
+    // that stops the verifier becoming the silent dropper it exists to guard
+    // against.
+    freshStore();
+    geminiCalls = 0;
+    laHourNow = 10;
+    mailboxesToServe = [{ role: 'read', client: BOSE_CLIENT, address: BOSE }];
+    // "NEXT WEEK", not "tomorrow", and the difference is the point.
+    // resolveRelativeDates converts yesterday/today/tonight/tomorrow against
+    // the arrival date, so a summary with one of those is already clean by
+    // the time it reaches the digest -- my first fixture used "tomorrow" and
+    // the check never fired, because the pipeline had fixed it first. That is
+    // good news for production and a useless test.
+    //
+    // "next week" and "this morning" have NO single day to resolve to, so the
+    // cleaner leaves them alone and they stay stale forever. That is the real
+    // gap the verifier covers, and the worst case for the escape hatch: a
+    // line that can never pass, where a naive verifier loses the email
+    // permanently.
+    emailOverride = { subject: 'Re: appointment', body: 'Could you please confirm the delivery appointment?' };
+    summaryOverride = 'Confirm the delivery appointment next week.';
+
+    const sentEach = [];
+    const send = async (t) => { sentEach.push(t); return true; };
+
+    // Pass 1: held back. Nothing to send, because it was the only item.
+    const r1 = await rw.run({ sendToManager: send });
+    ck('BH1 the offending item is held out of the first digest',
+        !sentEach.join('\n').includes('next week'),
+        sentEach.join('\n').slice(0, 160));
+    // AND SHE GETS NO BLANK MESSAGE. Note what this does and does not prove:
+    // reverse-verification showed that deleting replyWatch's empty-body guard
+    // does NOT break this assertion, because the manager outbox already
+    // refuses an empty body and reports `not delivered`. Two layers guard
+    // this, and the outbox is the one that holds. The guard upstream exists
+    // for the log line and the return value -- see its comment.
+    ck('BH1b and she is not sent a blank message instead',
+        sentEach.every((t) => String(t || '').trim().length > 0),
+        JSON.stringify(sentEach));
+    const q1 = rw.loadStore().undelivered;
+    ck('BH2 but it STAYS QUEUED — it is not thrown away',
+        q1.length === 1 && q1[0].heldBack === 1, JSON.stringify(q1.map((x) => x.heldBack)));
+
+    // Pass 2: same item, re-assessed, held again.
+    const r2 = await rw.run({ sendToManager: send, rescan: true });
+    const q2 = rw.loadStore().undelivered;
+    ck('BH3 a second failure is counted, not escalated yet',
+        q2.length === 1 && q2[0].heldBack === 2, JSON.stringify(q2.map((x) => x.heldBack)));
+
+    // Pass 3: it has now failed MAX_HELD_BACK times. It MUST go out, with the
+    // reason attached. A verifier that can suppress a real email forever is
+    // the failure this month has been about, in a safety badge.
+    sentEach.length = 0;
+    const r3 = await rw.run({ sendToManager: send, rescan: true });
+    const all = sentEach.join('\n');
+    ck('BH4 past the cap it is sent ANYWAY rather than hidden',
+        /next week/.test(all), all.slice(0, 260));
+    ck('BH5 and the message says it did not pass Jarvis\'s own checks',
+        /did not pass my own checks/.test(all), all.slice(0, 400));
+
+    emailOverride = null; summaryOverride = null;
+}
+
+section('BI — a clean digest is not touched by any of this');
+{
+    freshStore();
+    geminiCalls = 0;
+    laHourNow = 10;
+    mailboxesToServe = [{ role: 'read', client: BOSE_CLIENT, address: BOSE }];
+    const sent = [];
+    const res = await rw.run({ sendToManager: async (t) => { sent.push(t); return true; } });
+    ck('BI1 a clean item goes out first time',
+        res.sent === true && /Tiffany/.test(sent.join('\n')), sent.join('\n').slice(0, 200));
+    ck('BI2 with no held-back warning on it',
+        !/did not pass my own checks/.test(sent.join('\n')));
+    const q = rw.loadStore().undelivered;
+    ck('BI3 and nothing is left sitting in the queue', q.length === 0, JSON.stringify(q.length));
+}
+
+
+section('BJ — one good item and one bad one in the same digest');
+{
+    // THE CASE THAT ACTUALLY EXERCISES THE WIRING, and reverse-verification
+    // is how I found it missing: with only ONE item, everything is held back,
+    // the body comes out empty and the early return handles it -- so the two
+    // lines that matter most were never reached by a test.
+    //
+    //   store.undelivered = queued.filter(held)    <- keep what did not go out
+    //   store.lastDigest  = rendered.filter(!held) <- "reply to 1" must mean
+    //                                                 the line she can SEE
+    //
+    // Clearing the queue wholesale here is what my first wiring did, and it
+    // threw the held-back email away on a successful send.
+    freshStore();
+    geminiCalls = 0;
+    laHourNow = 10;
+    mailboxesToServe = [{ role: 'read', client: BOSE_CLIENT, address: BOSE }];
+    BOSE_CLIENT.__ids = ['good-1', 'bad-1'];
+    // Per-message: the first is clean, the second carries a relative word the
+    // cleaner cannot resolve.
+    // DIFFERENT senders and DIFFERENT asks on purpose. groupMatters merges
+    // items sharing a sender domain and overlapping ask words, and my first
+    // version of this fixture gave both the same -- so the two collapsed into
+    // one matter and the scenario silently stopped testing what it claimed.
+    perMessage = {
+        'good-1': { rfc: '<good@m>', from: 'Tiffany Furleigh <tfurleigh@eccomelt.com>',
+                    subject: 'RE: Purchase Order #4302902', askedFor: 'the Friday 9/11 delivery slot',
+                    summary: 'Tiffany asks you to confirm the Friday 9/11 slot for PO 4302902.' },
+        'bad-1': { rfc: '<bad@m>', from: 'Kristal Sosethan <k@zimexglt.com>',
+                   subject: 'RE: Bkg DALA26511200', askedFor: 'the booking rate',
+                   summary: 'Confirm the booking rate next week.' },
+    };
+    const sent = [];
+    const res = await rw.run({ sendToManager: async (t) => { sent.push(t); return true; } });
+    const text = sent.join('\n');
+
+    ck('BJ1 the clean item goes out', /Friday 9\/11/.test(text), text.slice(0, 200));
+    ck('BJ2 the bad one does not', !/next week/.test(text), text.slice(0, 300));
+    const store = rw.loadStore();
+    // THE LINE THAT WAS UNTESTED. A "successful" send must not drain the
+    // queue of things it did not actually send.
+    ck('BJ3 the held-back item is still queued after a successful send',
+        store.undelivered.length === 1 && store.undelivered[0].heldBack === 1,
+        JSON.stringify(store.undelivered.map((x) => ({ id: x.id, held: x.heldBack }))));
+    // THE OTHER UNTESTED LINE. "reply to 1" resolves against lastDigest, so
+    // it must contain only what she can actually see -- otherwise the number
+    // she types points at an email that was never shown to her.
+    ck('BJ4 lastDigest holds only the item she was shown',
+        store.lastDigest.length === 1 && /Friday 9\/11/.test(store.lastDigest[0].summary || ''),
+        JSON.stringify(store.lastDigest.map((x) => (x.summary || '').slice(0, 40))));
+    ck('BJ5 so "reply to 1" resolves to the line printed as 1',
+        (store.lastDigest[0] || {}).id === 'good-1', JSON.stringify((store.lastDigest[0] || {}).id));
+
+    perMessage = null; BOSE_CLIENT.__ids = ['bose-1'];
+}
+
+
+section('BK — the verifier writes down what it caught, so the prompt can be judged');
+{
+    // Apsara: "Use loop engineering to adjust the prompt as per the feedback."
+    //
+    // Editing a prompt and declaring it better is the move this project keeps
+    // punishing: six suites passed this month while the thing they covered
+    // was disabled, and `confidence` sat at 1.0 for sixteen straight emails
+    // while everyone assumed it meant something.
+    //
+    // So the claim has to be checkable. Every verifier failure is written to
+    // the audit log with the check that caught it; scripts/ruler.js --verify
+    // tallies them per day, which turns "the prompt is better now" into a
+    // number that either falls or does not.
+    const logDir = path.join(scratch, 'logs');
+    for (const f of (fs.existsSync(logDir) ? fs.readdirSync(logDir) : [])) fs.rmSync(path.join(logDir, f));
+
+    freshStore();
+    geminiCalls = 0;
+    laHourNow = 10;
+    mailboxesToServe = [{ role: 'read', client: BOSE_CLIENT, address: BOSE }];
+    emailOverride = { subject: 'Re: appointment', body: 'Could you please confirm the delivery appointment?' };
+    summaryOverride = 'Confirm the delivery appointment next week.';
+    await rw.run({ sendToManager: async () => true });
+    emailOverride = null; summaryOverride = null;
+
+    const lines = (fs.existsSync(logDir) ? fs.readdirSync(logDir) : [])
+        .flatMap((f) => fs.readFileSync(path.join(logDir, f), 'utf8').split('\n'))
+        .filter(Boolean).map((l) => { try { return JSON.parse(l); } catch (e) { return null; } })
+        .filter((r) => r && r.source === 'digest_verify');
+
+    ck('BK1 the failure is recorded in the audit log',
+        lines.length >= 1, JSON.stringify(lines).slice(0, 200));
+    ck('BK2 named by the check that caught it',
+        lines.some((r) => r.check === 'relative-date-in-summary'),
+        JSON.stringify(lines.map((r) => r.check)));
+    // The sentence is what a prompt edit is actually written FROM. A tally
+    // with no examples tells you a number and not what to change.
+    ck('BK3 carrying the sentence that caused it',
+        lines.some((r) => /next week/.test(r.summary || '')),
+        JSON.stringify(lines.map((r) => r.summary)));
+    ck('BK4 and the reason, in words',
+        lines.some((r) => /next week/.test(r.why || '')),
+        JSON.stringify(lines.map((r) => r.why)));
+}
+
+section('BL — the prompt now forbids what the verifier keeps catching');
+{
+    // The two changes made from the verifier's own evidence. These are
+    // ASSERTIONS ABOUT THE PROMPT TEXT, which is weaker than a behavioural
+    // test and is said plainly here: they prove the instruction is present,
+    // not that Gemini obeys it. The honest measure of obedience is the
+    // per-day count in `ruler.js --verify` falling, and that takes a week of
+    // real mail. These exist so the clauses cannot be quietly deleted in the
+    // meantime.
+    const p = rw.buildPrompt({ from: 'a@b.com', subject: 's', body: 'b', date: '2026-09-18' });
+
+    // The relative-date rule already existed but named only "tomorrow", and
+    // sat inside a paragraph about amounts. The verifier proved the model
+    // still writes "next week" and "this morning" -- words resolveRelativeDates
+    // CANNOT repair, because they have no single day to resolve to. That is
+    // the one failure class where only the prompt can help.
+    ck('BL1 every relative word the cleaner cannot fix is named',
+        ['next week', 'this morning', 'this afternoon', 'yesterday', 'tonight']
+            .every((w) => p.includes(w)),
+        ['next week', 'this morning', 'this afternoon', 'yesterday', 'tonight']
+            .filter((w) => !p.includes(w)).join(', '));
+    ck('BL2 with a worked rewrite, not just a ban',
+        /BAD\s+"Confirm the delivery appointment next week\."/.test(p)
+        && /GOOD\s+"Confirm the delivery appointment for the week of September 22\."/.test(p), '');
+    // Telling the model the consequence is itself a prompt technique: the
+    // cost of the mistake is no longer invisible to it.
+    ck('BL3 and the consequence spelled out',
+        /holds back any line that still contains one of these words/.test(p), '');
+
+    // The contradiction. The prompt already said to return null; the live
+    // failure proves that was too soft, so it is now an absolute.
+    ck('BL4 action_needed is forbidden outright when it is not hers',
+        /action_needed MUST BE null\. NO EXCEPTIONS\./.test(p), '');
+    ck('BL5 grounded in the message she actually sent back',
+        /why is it showing/.test(p), '');
+}
+
+
+section('BM — five digests in three hours become one');
+{
+    // Apsara pasted eight digests from one night -- 12:40, 1:10, 2:05, 3:10,
+    // 3:25, five in under three hours with one or two items each:
+    // "i dotn want this to come evrrytime."
+    //
+    // An hourly floor with one item in it is still five messages. She chose
+    // "3 items or 3 hours" over fixed daily editions.
+    freshStore();
+    geminiCalls = 0;
+    laHourNow = 10;
+    mailboxesToServe = [{ role: 'read', client: BOSE_CLIENT, address: BOSE }];
+
+    // WRITTEN STRAIGHT TO THE FILE, not through saveStore. saveStore's merge
+    // keeps the LATER lastDigestAt on purpose -- whichever digest actually
+    // went out most recently defines the numbering -- so setting it EARLIER
+    // is exactly the write it is built to reject, and my first version of
+    // this helper silently did nothing. Correct production behaviour; wrong
+    // tool for seeding a fixture.
+    const seed = (minsAgo) => {
+        const raw = JSON.parse(fs.readFileSync(cfg.REPLY_WATCH_FILE, 'utf8'));
+        raw.lastDigestAt = new Date(Date.now() - minsAgo * 60000).toISOString();
+        fs.writeFileSync(cfg.REPLY_WATCH_FILE, JSON.stringify(raw, null, 2));
+    };
+    seed(70);
+    let sent = [];
+    const send = async (t) => { sent.push(t); return true; };
+
+    const r1 = await rw.run({ sendToManager: send });
+    ck('BM1 one item an hour later is held for a fuller digest',
+        r1.sent === false && sent.length === 0, JSON.stringify({ sent: r1.sent, n: sent.length }));
+    ck('BM2 and it stays queued, not dropped',
+        rw.loadStore().undelivered.length === 1, JSON.stringify(rw.loadStore().undelivered.length));
+
+    // THREE HOURS ON, the same single item must go out. A quiet inbox must
+    // not mean an item sits all day.
+    seed(190);
+    sent = [];
+    const r2 = await rw.run({ sendToManager: send, rescan: true });
+    ck('BM3 after three hours a single item goes out anyway',
+        r2.sent === true && sent.length === 1, JSON.stringify({ sent: r2.sent, n: sent.length }));
+
+    // AND A CRITICAL ITEM IS UNAFFECTED -- that is the whole safety of the
+    // change. A claim at 40 minutes must not wait for a batch.
+    freshStore();
+    seed(40);
+    emailOverride = { subject: 'Weight shortage claim on HMMU4892142',
+                      body: 'We are raising a weight shortage claim on container HMMU4892142. Please advise.' };
+    sent = [];
+    const r3 = await rw.run({ sendToManager: send });
+    ck('BM4 a claim still breaks the rhythm immediately',
+        r3.sent === true && /shortage claim/i.test(sent.join('\n')),
+        JSON.stringify({ sent: r3.sent, text: sent.join('\n').slice(0, 120) }));
+    emailOverride = null;
 }
 
 console.log(`\n================================================================`);

@@ -1,0 +1,154 @@
+Jarvis reads its own message before sending it
+
+Apsara asked for "loop engineering". This is the loop that pays for
+itself here: a verification pass between deciding and sending.
+
+EVERY CHECK IS A MESSAGE SHE ACTUALLY RECEIVED AND HAD TO CORRECT:
+
+  "tomorrow tomorrow -- confirmation of calculations"
+  "TOMORROW (after tomorrow morning) -- release timing for shipment"
+  "Ignore 1" -> "I don't have a #undefined from a recent digest"
+  "Rajkumar sends a draft BoL for your review / Review and approve
+   (you are only copied in)"                    <- contradicts itself
+  "!! ... -- by 9/17 (today)" off an estimated ready date
+  a deadline of "September 17" parsed as the year 2001 -> OVERDUE 9131d
+
+Not one needed a model to spot. Each is a property of the RENDERED TEXT
+that arithmetic can check: a word repeated, a literal "undefined", a
+number no real deadline can hold, two clauses that cannot both be true.
+
+THE DESIGN DECISION THAT MATTERS is what happens when a check trips.
+
+NOT "don't send". Silence is the failure this whole month has been
+about -- 24 purchase orders and 22 consequential emails vanished quietly
+and she found out by noticing an absence. A verifier that answers a bad
+line with no message would be the same mistake with a safety badge on.
+
+So: drop the offending item, RE-RENDER, and send the rest. Re-rendering
+rather than editing the string is deliberate -- "reply to N" resolves
+against the ITEM ARRAY, so a line cut out of the text would leave the
+numbers pointing at different mail. That is the bug class this file
+exists to catch and it would be embarrassing to introduce it here.
+
+AND IT CANNOT HOLD SOMETHING FOREVER. Past MAX_HELD_BACK (2) the item
+goes out anyway with a line saying it did not pass Jarvis's own checks.
+Two, because the checks are mostly about STALE TEXT and the cleaners run
+at render, so a second attempt often passes; a third failure means it
+never will, and silence is the worse answer.
+
+The counter lives ON THE QUEUED ITEM, not in a new store field: a
+`store.heldBack` map would be the SEVENTH field for saveStore's
+allowlist to swallow (lastScanAt, sentIndex, failures, muted, brain's
+`indices` and pos were each eaten by one), and a counter reset on every
+write can never reach its cap -- so an item would be held back forever,
+which is precisely the silence the cap exists to prevent.
+
+FIVE BUGS OF MY OWN, all found by tests rather than by reading:
+
+  1. The repair loop's bound was `guard <= list.length`, re-reading a
+     length that SHRINKS on every drop. With three bad items it exited
+     after two and shipped the third. A verifier with an off-by-one in
+     its own loop is worse than no verifier. (DI1)
+  2. The wiring cleared `undelivered` wholesale on a successful send, so
+     the held-back item was thrown away -- turning the verifier into
+     exactly the silent dropper it was built to prevent. (BJ3)
+  3. `lastDigest` still contained held-back items, so "reply to 1" could
+     resolve to an email she was never shown. (BJ4)
+  4. My first fixture used "tomorrow", and the check never fired --
+     because resolveRelativeDates had already cleaned it on the way in.
+     Good news for production, useless as a test. "next week" and "this
+     morning" have no single day to resolve to, so the cleaner leaves
+     them and they stay stale forever: that is the real gap the verifier
+     covers, and the fixture uses one now. (BH)
+  5. The two-item fixture gave both mails the same sender and the same
+     ask, so groupMatters merged them into one matter and the scenario
+     silently stopped testing what it claimed. (BJ)
+
+AND ONE GUARD THAT DOES LESS THAN I CLAIMED. Deleting replyWatch's
+empty-body check breaks no test, because the manager outbox already
+refuses an empty body and reports `not delivered`, which retains the
+queue. Two layers guard the blank message and the outbox is the one that
+holds. The guard upstream is kept only for the log line and the return
+value -- without it the run reports "digest send failed ... not
+delivered", which reads like WhatsApp is broken when the verifier did
+its job perfectly, and a monitor watching for that string would page
+somebody. Both the comment and the test now say so, rather than letting
+the next reader believe the wrong layer is protecting them.
+
+ALSO IN THIS COMMIT: tests/emailwatch-signals.js sections AJ (10) and
+AK (4) are RESTORED. Another session committed a pre-AJ copy of that
+file over them. The fixes themselves survived in replyWatch.js and only
+the assertions were lost -- a guard nobody is watching, which is the
+worst of the two things to lose.
+
+TESTS: tests/digest-verify.js (31, each check tested twice -- once on
+the real historical bug and once on the legitimate lookalike, because a
+verifier that rejects the lookalike would quietly eat real mail) and BH,
+BI, BJ in tests/two-mailbox.js (real run(), 33 total). Every mechanism
+reverse-verified.
+
+All 120 suites run: 0 failures.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01PaVFkg7JrYeRfUPzvLCFtt
+
+---------------------------------------------------------------------------
+SECOND HALF, same request: "Use loop engineering to adjust the prompt as
+per the feedback."
+
+THE PROMPT, CHANGED FROM THE VERIFIER'S OWN EVIDENCE -- not from memory.
+
+1. RELATIVE WORDS. The rule already existed, but it named only
+   "tomorrow" and sat buried inside a paragraph about amounts. The
+   verifier proves the model still writes "next week" and "this
+   morning", and those are the ones that MATTER: resolveRelativeDates
+   converts yesterday/today/tonight/tomorrow against the arrival date,
+   so those are already clean by the time a digest renders. "next week"
+   has no single day to resolve to, so the cleaner leaves it and it
+   stays stale forever. That is the one failure class where ONLY the
+   prompt can help -- code can hold the line back, it cannot fix it.
+
+   Promoted to its own rule, every banned word named, three worked
+   rewrites, an instruction for what to do when the date cannot be
+   worked out, and the consequence stated: Jarvis holds the whole item
+   back, so a relative word costs her the line and not just the date.
+
+2. action_needed WHEN IT IS NOT HERS. The prompt said "return null"; the
+   live failure proves that was too soft -- "Rajkumar sends a draft BoL
+   for your review / Review and approve / (you are only copied in)", and
+   her reply: "If its not pointing to any of edgemetals worker, why is
+   it showing?" Now absolute, and grounded in her own words.
+
+AND THE MEASUREMENT, WHICH IS THE PART THAT MAKES IT A LOOP. Editing a
+prompt and declaring it better is exactly what this project keeps
+punishing: six suites passed this month while the thing they covered was
+disabled, and `confidence` sat at 1.0 for sixteen straight emails while
+everyone assumed it meant something.
+
+So every verifier failure is written to the audit log with the check
+that caught it, and `node scripts/ruler.js --verify --days 14` tallies
+them per check per DAY:
+
+                            09-17 09-18   total
+  relative-date-in-summary      2     1       3
+  contradicts-itself            1     .       1
+
+A count that falls is a prompt change that worked. A count that does not
+is the outcome worth knowing and the one nobody ever measures. The six
+most recent failures print with the sentence that caused them, because a
+tally with no examples tells you a number and not what to change.
+
+The report also refuses to read its own silence as success: "a check
+that never fires is either fixed or never reachable, and those two look
+identical from here".
+
+BL1-BL5 assert the prompt CLAUSES exist and say so plainly in the test:
+that is weaker than a behavioural test and proves the instruction is
+present, not that Gemini obeys it. The honest measure of obedience is
+the per-day count, and it takes a week of real mail. The assertions
+exist so the clauses cannot be quietly deleted in the meantime.
+
+ONE BUG IN MY OWN REPORTER: ruler.js exits early when the log carries no
+`reply_watch` decision rows -- the normal state right after a deploy --
+and that swallowed the entire verifier scoreboard on its first run. The
+exit now stands aside for --verify.

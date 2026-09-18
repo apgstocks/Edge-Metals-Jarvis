@@ -10,6 +10,7 @@
 const path = require('path');
 const R = (p) => path.join(__dirname, '..', p);
 const I = require(R('helpers/mailImportance.js'));
+const rw = require(R('workflow/replyWatch.js'));
 
 let pass = 0, fail = 0;
 const failures = [];
@@ -216,6 +217,99 @@ section('CD — evidence, not vibes');
     // confidence worthless (1.0 on 16 of 16 live emails).
     const src = require('fs').readFileSync(R('helpers/mailImportance.js'), 'utf8');
     ck('CD4 importanceOf takes no summary', !/\bsummary\b\s*[,=:]/.test(src.split('function importanceOf')[1].split('\n').slice(0, 12).join('\n')));
+}
+
+
+section('CE — the ledger\'s own timestamps are not dates the sender stated');
+{
+    // LIVE, 2026-09-18. The same alarming line on two different emails two
+    // hours apart, in the middle of her night:
+    //
+    //   ⚠ change+cutoff+instruction: cutoff on DALA61376400: we hold
+    //     09/18/2026, this mail says 09-16
+    //
+    // I opened the mailbox. NEITHER email contains a date at all. The
+    // "09-16" is buildThreadLedger's own row prefix -- "- [09-16] Andy Park:
+    // approved to return". The change detector was reading Jarvis's own
+    // bookkeeping as a date the sender had stated, and would report a moved
+    // cutoff on any thread whose history runs on a different day from the one
+    // on file -- which is nearly every thread.
+    //
+    // `change` is the ONLY signal that interrupts her. This was the worst
+    // possible place for a false positive and it fired twice in one night.
+    // THE LEDGER ROW MUST NAME A CUTOFF, or the bug does not reproduce, and
+    // my first fixture did not. changedBookingDate is per-field and
+    // sentence-scoped: it only reads dates out of sentences that name the ERD
+    // or the cutoff. So a ledger row about a container tells it nothing, and
+    // removing the stripper broke no test at all.
+    //
+    // The row that DOES reproduce it is the one she actually had -- Andy's
+    // cutoff reminder, sitting in the history with the ledger's own [09-16]
+    // in front of it. Now the field is named, the date is scanned, and
+    // Jarvis's own bookkeeping becomes "the cutoff moved".
+    //
+    // Third fixture this week that was too weak to catch the thing it was
+    // written for. Reverse-verification is the only reason I know.
+    const LEDGER = '- [09-16] Andy Park: DG SI CUTOFF for this booking is 10AM, please send the SI\n'
+                 + '- [09-17] HER (the manager): noted, thanks';
+    const andy = (body, thread) => I.importanceOf({
+        subject: 'Re: MK Trading - Battery HMM BKG #DALA61376400',
+        body, thread, from: 'Andy Park <andy@mkmetaltrading.com>',
+        isKnownCounterparty: KNOWN, bookings: { DALA61376400: { erd_date: '09/20/2026', cutoff_date: '09/18/2026' } },
+        parseDate: rw.parseDeadline, receivedAt: new Date('2026-09-17T20:00:00Z'),
+    });
+
+    const real = andy('KOCU4417874 is approved to return.', LEDGER);
+    ck('CE1 a ledger timestamp is not a stated cutoff',
+        !real.signals.some((x) => x.kind === 'change'), JSON.stringify(real.signals.map((x) => x.kind)));
+    ck('CE2 so it does not interrupt her', real.notifyNow === false, JSON.stringify(real.because));
+
+    // WHAT MUST STILL FIRE. Stripping the prefix rather than dropping the
+    // thread is deliberate: a cutoff is often stated once, earlier in the
+    // conversation, and reading the history is why the ledger is passed in.
+    const inBody = andy('Please note the SI cutoff for DALA61376400 has moved to 9/22.', LEDGER);
+    ck('CE3 a real change stated in the body still interrupts',
+        inBody.notifyNow === true && /9\/22/.test(inBody.because), inBody.because);
+    const inThread = andy('As discussed.',
+        '- [09-16] Andy Park: the cut off for DALA61376400 is now 9/22\n- [09-17] HER (the manager): ok');
+    ck('CE4 and one stated earlier in the THREAD still does too',
+        inThread.notifyNow === true, inThread.because);
+    // The stripper keeps the row's text.
+    ck('CE5 stripping the prefix does not eat the message',
+        /Andy Park: DG SI CUTOFF for this booking is 10AM/.test(I.stripLedgerDates(LEDGER))
+        && !/\[09-16\]/.test(I.stripLedgerDates(LEDGER)),
+        I.stripLedgerDates(LEDGER));
+}
+
+section('CF — the reason reads like a sentence, not like a debug line');
+{
+    // Apsara, on her night of digests: "These looks clumpsy."
+    //
+    // She was looking at "change+cutoff+instruction: cutoff on DALA61376400
+    // ..." -- my signal names, joined by plus signs, on her phone. The kinds
+    // are the vocabulary of the audit log; they do not belong in a message.
+    // MULTIPLE signals on purpose: the old format joined the kinds with plus
+    // signs, so a single-signal item looked fine either way and proved
+    // nothing. This is the shape she actually saw on her phone --
+    // "change+cutoff+instruction:".
+    const multi = score({ from: 'andy@mkmetaltrading.com', subject: 'Re: DALA61376400',
+        body: 'Please note the SI cutoff for DALA61376400 has moved to 9/22 and send the SI by then.' });
+    ck('CF1 no signal names joined by plus signs reach her',
+        !/\w+\+\w+:/.test(multi.because || '') && multi.signals.length > 1,
+        JSON.stringify({ because: multi.because, kinds: multi.signals.map((x) => x.kind) }));
+    const money = score({ from: 'ap@eccomelt.com', subject: 'Purchase Ticket #4404952',
+                          body: 'Total Amount: $72,143.60 for your review.' });
+    ck('CF2 money names the figure', /\$72,143\.60/.test(money.because), money.because);
+    const problem = score({ from: 'x@nicrometals.com', subject: 'WEIGHT SHORTAGE CLAIM',
+                            body: 'We are raising a weight shortage claim on container HMMU4892142.' });
+    ck('CF3 a problem says something has gone wrong',
+        /gone wrong/.test(problem.because), problem.because);
+    // The strongest reason leads, not the first one matched: an item with a
+    // claim AND a figure is a claim.
+    const both = score({ from: 'x@nicrometals.com', subject: 'CLAIM',
+                         body: 'We are raising a shortage claim for $6,910.10 on this contract.' });
+    ck('CF4 the sharpest signal is the one named',
+        /gone wrong/.test(both.because), both.because);
 }
 
 console.log(`\n================================================================`);

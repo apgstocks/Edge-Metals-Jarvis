@@ -46,9 +46,14 @@ for (const f of files) {
 }
 
 const mail = rows.filter((r) => r.source === 'reply_watch' && r.decision);
-if (!mail.length) {
+// --verify reads a DIFFERENT row type (digest_verify) and must still work on
+// a log with no decision blocks in it -- the normal state right after a
+// deploy, and the state in which this exit swallowed the whole verifier
+// scoreboard the first time it ran.
+if (!mail.length && !has('verify')) {
     console.error(rows.length + ' audit line(s) over ' + files.length + ' day(s), none carrying a decision block.');
     console.error('Either no mail was assessed, or the running code predates the enriched audit entry (3eeb406).');
+    console.error('(scripts/ruler.js --verify reads a different row and works without them.)');
     process.exit(1);
 }
 
@@ -68,9 +73,11 @@ const scored = mail.map((r) => {
     };
 });
 
+const quiet = !mail.length;   // --verify only: skip the summary-quality half
 const pct = (n, d) => (d ? Math.round((n / d) * 100) : 0);
 const bar = (p, w = 24) => '#'.repeat(Math.round((p / 100) * w)).padEnd(w, '.');
 
+if (!quiet) {
 console.log('\nQUALITY RULER — ' + scored.length + ' decisions over ' + files.length + ' day(s)');
 console.log('Source: ' + logsDir);
 console.log('='.repeat(72));
@@ -184,3 +191,66 @@ if (has('list')) {
 }
 
 console.log('\nRun with --list to see every summary and the inputs behind it.\n');
+}
+
+// ── THE VERIFIER'S OWN SCOREBOARD (2026-09-18) ─────────────────────────────
+// Apsara: "Use loop engineering to adjust the prompt as per the feedback."
+//
+// A prompt change is a claim, and this is what makes it checkable. Every time
+// helpers/digestVerify.js holds a line back, the check that caught it is
+// written to the audit log. Tallied by day, a prompt fix shows up as a count
+// that FALLS — and a prompt fix that did nothing shows up as a count that
+// does not, which is the outcome worth knowing and the one nobody ever
+// measures.
+//
+//   node scripts/ruler.js --verify --days 14
+//
+// READ THE PER-DAY COLUMN, not the total. The total tells you which check
+// fires most; the trend tells you whether the last edit worked.
+if (has('verify')) {
+    const rows2 = [];
+    for (const f of fs.readdirSync(logsDir).filter((x) => x.endsWith('.jsonl')).sort().slice(-days)) {
+        for (const line of fs.readFileSync(path.join(logsDir, f), 'utf8').split('\n')) {
+            if (!line.trim()) continue;
+            try {
+                const r = JSON.parse(line);
+                if (r.source === 'digest_verify') rows2.push({ ...r, day: f.replace('.jsonl', '') });
+            } catch (e) { /* a truncated tail is not a crash */ }
+        }
+    }
+    console.log('\n' + '='.repeat(72));
+    console.log('WHAT JARVIS CAUGHT IN ITS OWN MESSAGES');
+    console.log('='.repeat(72));
+    if (!rows2.length) {
+        console.log('\nNo verifier failures recorded over these days.');
+        console.log('Either every digest was clean, or the running code predates the');
+        console.log('digest_verify audit row — check that the VM has this deploy before');
+        console.log('reading an empty result as a good one.');
+    } else {
+        const byCheck = {};
+        const days2 = [...new Set(rows2.map((r) => r.day))].sort();
+        for (const r of rows2) {
+            byCheck[r.check] = byCheck[r.check] || {};
+            byCheck[r.check][r.day] = (byCheck[r.check][r.day] || 0) + 1;
+        }
+        const width = Math.max(...Object.keys(byCheck).map((k) => k.length), 12);
+        console.log('\n' + ' '.repeat(width) + '  ' + days2.map((d) => d.slice(5)).join(' ') + '   total');
+        for (const [check, perDay] of Object.entries(byCheck).sort((a, b) =>
+            Object.values(b[1]).reduce((x, y) => x + y, 0) - Object.values(a[1]).reduce((x, y) => x + y, 0))) {
+            const cells = days2.map((d) => String(perDay[d] || '·').padStart(5));
+            const total = Object.values(perDay).reduce((x, y) => x + y, 0);
+            console.log(check.padEnd(width) + '  ' + cells.join(' ') + String(total).padStart(8));
+        }
+        console.log(`\n${rows2.length} failure(s) over ${days2.length} day(s).`);
+        console.log('A check whose count is falling is a prompt change that worked.');
+        console.log('A check that never fires is either fixed or never reachable — and');
+        console.log('those two look identical from here, so do not read a zero as proof.');
+        // The examples are what a prompt edit is actually written from.
+        console.log('\nMOST RECENT, with the sentence that caused it:');
+        for (const r of rows2.slice(-6)) {
+            console.log(`\n  [${r.check}] ${r.day}`);
+            if (r.summary) console.log(`    "${String(r.summary).slice(0, 110)}"`);
+            console.log(`    ${String(r.why || '').slice(0, 110)}`);
+        }
+    }
+}

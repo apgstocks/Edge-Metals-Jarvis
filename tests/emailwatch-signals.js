@@ -2597,6 +2597,161 @@ section('AI — her own company is never "admin mail"');
         withOwn('') === true && withOwn('garbage') === true);
 }
 
+
+section('AJ — a date about the shipment is not a deadline for her');
+{
+    // LIVE, 2026-09-17. Apsara sent this in with "this can be ignored":
+    //
+    //   1. !! Accounting Edge needs a booking from Chicago to Busan for one
+    //      40HC container with an estimated ready date of September 17.
+    //      — by 9/17 (today)
+    //      Zimex Team
+    //
+    // Both the "!!" and the "by 9/17 (today)" came from an ESTIMATED READY
+    // DATE — when the cargo is ready, a property of the shipment. Nothing
+    // expires when it passes and nobody has to act by it, so the loudest
+    // line in her digest was urgent about nothing.
+    //
+    // RESTORED 2026-09-18 after another session committed a pre-AJ copy of
+    // this file over it. The FIX survived in replyWatch.js and only the
+    // assertions were lost, which is the worst combination: a guard nobody
+    // is watching.
+    const now = new Date('2026-09-17T12:00:00Z');
+    const drop = (d, body) => rw.deadlineIsShipmentDate(d, body, now);
+
+    ck('AJ1 the live case: an estimated ready date is not a deadline',
+        drop('9/17', 'We need a booking from Chicago to Busan for one 40HC with an estimated ready date of September 17.') === true);
+    // THE BUG IN MY FIRST FIX: the model NORMALISES the date. It returned
+    // "9/17" while the body said "September 17", so a token comparison never
+    // matched and the guard silently did nothing on the one case it was
+    // written for. Both sides are parsed and the DAY compared now.
+    ck('AJ2 ...even though the model rewrote "September 17" as "9/17"',
+        drop('9/17', 'estimated ready date of September 17.') === true);
+    ck('AJ3 an ERD, an ETD and an ETA are all descriptive',
+        drop('9/17', 'Need booking Chicago/Busan 1x40HC with erd 9/17.') === true
+        && drop('9/30', 'ETD is 9/30 for this vessel.') === true);
+
+    // WHAT MUST SURVIVE, and this half matters most: miss an SI cutoff and
+    // the container does not sail.
+    ck('AJ4 a cutoff is still a deadline',
+        drop('9/17', 'Kind reminder, cut off is tomorrow 9/17.') === false);
+    ck('AJ5 the DG SI cutoff — her worst miss this week — is still a deadline',
+        drop('September 17', 'DG SI CUTOFF for this booking is September 17 morning at 10AM.') === false);
+    ck('AJ6 anything the sender wants done "by" a date is still a deadline',
+        drop('9/17', 'Please confirm the booking by 9/17.') === false);
+    ck('AJ7 a ready date WITH an obligation on it is a real deadline',
+        drop('9/17', 'We need the booking before the ready date of 9/17.') === false);
+    ck('AJ8 a sailing mentioned elsewhere does not disarm the real deadline',
+        drop('9/20', 'Please send the OBL by 9/20. The vessel sails on 9/28.') === false);
+    // SENTENCE SCOPING, ISOLATED. Collapsing it to a whole-message test broke
+    // nothing until this case existed: AJ8 passed because its deadline
+    // sentence contains "by", so OBLIGATION_WORD rescued it rather than the
+    // scoping. Load-bearing and untested is one edit from deletion.
+    ck('AJ9 a real ask in its own sentence survives a sailing elsewhere',
+        drop('9/20', 'Confirm the rate on 9/20. The vessel sails on 9/28.') === false);
+    ck('AJ10 no deadline, nothing to drop',
+        drop(null, 'ETD is 9/30.') === false && drop('9/17', 'Nothing relevant here.') === false);
+}
+
+section('AK — our own team\'s outbound requests do not reach her phone');
+{
+    //   1. !! Accounting Edge needs a booking from Chicago to Busan ...
+    //      Zimex Team
+    //
+    //   Apsara: "they just asked for booking. why it needs to come to
+    //            whatsapp? no.."
+    //
+    // The item was FACTUALLY CORRECT — Accounting Edge asked Zimex and Zimex
+    // has not answered, so Zimex does owe us something. It was still the
+    // wrong thing to put on her phone: Bose raised it, Bose is chasing it.
+    // Being right is not the same as being worth an interruption.
+    const owed = (o) => rw.isOwedItem({ waiting_on: 'them', confidence: 0.9,
+        asked_for: 'a booking from Chicago to Busan', ...o });
+
+    ck('AK1 a request OUR team raised is not an owed item',
+        owed({ from_internal: true }) === false);
+    // The distinction that makes it safe. "Andy Park is chasing the carrier
+    // for the EDO" is a live commitment made TO us and is the case this
+    // bucket was built for (the "intent is totally wrong" fix, 2026-08-25).
+    ck('AK2 a commitment THEY made to us still is',
+        owed({ from_internal: false }) === true);
+    // Older stored items and fixtures carry no from_internal. Undefined must
+    // read as external: failing towards showing her something she can
+    // dismiss, never towards silence.
+    ck('AK3 an item with no from_internal is kept, not silently dropped',
+        owed({}) === true);
+    ck('AK4 the asked_for and confidence requirements still hold',
+        owed({ asked_for: null, from_internal: false }) === false
+        && owed({ confidence: 0.3, from_internal: false }) === false);
+}
+
+
+section('AL — a delivery is not a debt, and the boilerplate goes once a day');
+{
+    // Apsara, on eight digests in one night: "i dotn want this to come
+    // evrrytime. These looks clumpsy."
+    //
+    // Two separate defects in what she pasted.
+
+    // 1. A COMPLETED DELIVERY FILED AS AN OBLIGATION.
+    //
+    //   you're waiting on 1, and 1 your team is handling:
+    //   1. Marc Kang sent wire confirmation for DALA22345800 and HMMU4892142.
+    //   ...
+    //   Nothing here is waiting on your reply — these are things others owe you.
+    //
+    //   you're waiting on 1:
+    //   1. Eccomelt sends Purchase Ticket #4404952 for $72,143.60 for review.
+    //
+    // Nothing is owed in either. Marc SENT the confirmation; Eccomelt SENT
+    // the ticket. A completed delivery in a "things others owe you" list is a
+    // queue she can never clear.
+    //
+    // closesLoopWithoutAsk already guarded 'colleague' and 'someone_else';
+    // 'them' was never covered, and the importance axis I added the day
+    // before made it visible at volume — a wire confirmation carries a money
+    // figure, so it scored `high` and earned a slot of its own.
+    const owed = (summary) => rw.isOwedItem({ waiting_on: 'them', confidence: 1,
+        asked_for: 'the thing', from_internal: false, summary });
+
+    ck('AL1 a wire confirmation is not something they owe her',
+        owed('Marc Kang sent wire confirmation for DALA22345800 and HMMU4892142.') === false);
+    ck('AL2 nor is a purchase ticket they sent',
+        owed('Eccomelt sends Purchase Ticket #4404952 for $72,143.60 for review.') === false);
+    // WHAT MUST SURVIVE — this bucket's whole value is the live commitment
+    // somebody made to her, and a progress report trips no delivery verb.
+    ck('AL3 a progress report still is',
+        owed('Andy is chasing the carrier for the EDO on the TURQUOISE roll.') === true);
+    ck('AL4 and so is a confirmation that something will happen',
+        owed('Andy confirms KOCU4417874 is approved to return.') === true
+        && owed('Kristal is working to get the revised ERD from the line.') === true);
+
+    // 2. THE BOILERPLATE. Every one of those eight messages ended with the
+    // same three paragraphs, and "(+6 older items still open from before)"
+    // carried the same 6 in six consecutive messages. Text that never changes
+    // stops being read, and worse, it trains her to skim the part that does.
+    // The commands still work; she has known them for weeks.
+    const item = { fromName: 'Yurim Cha', subject: 's', needs_reply: false,
+        waiting_on: 'colleague', confidence: 1, urgency: 'normal',
+        asked_of: 'Accounting Edge', asked_for: 'confirmation of the B/L',
+        summary: 'Zimex sends the HBL draft and needs the B/L confirmed before 3:20 PM.' };
+    const full = rw.buildDigest([item], 1, { terse: false });
+    const terse = rw.buildDigest([item], 1, { terse: true });
+    ck('AL5 the first digest of the day still explains itself',
+        /Say "reply to 1"/.test(full), full);
+    ck('AL6 the ones after it do not repeat the instructions',
+        !/Say "reply to 1"/.test(terse) && !/Nothing here is waiting/.test(terse), terse);
+    // THE HALF THAT MATTERS: nothing informational may be lost. Only the
+    // teaching text goes.
+    ck('AL7 but the item, the sender and the ask are all still there',
+        /Zimex sends the HBL draft/.test(terse) && /Yurim Cha/.test(terse)
+        && /confirmation of the B\/L/.test(terse) && /your team, not you/.test(terse), terse);
+    ck('AL8 and it does not end in a pile of blank lines',
+        !/\n\n$/.test(terse), JSON.stringify(terse.slice(-40)));
+    ck('AL9 terse defaults to OFF — an old caller loses nothing',
+        rw.buildDigest([item], 1) === full);
+}
+
 console.log(`\n================================================================`);
 console.log(`${pass} passed, ${fail} failed`);
 if (fail) { console.log('\nFAILED:'); failures.forEach((f) => console.log(`  - ${f}`)); }
