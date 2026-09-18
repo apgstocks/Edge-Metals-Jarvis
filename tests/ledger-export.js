@@ -191,6 +191,49 @@ section('C. the printed ledger');
     ck('  and the money formatted, not raw', /\$[\d,]+\.\d\d/.test(text), text.slice(0, 200));
     ck('  the price carrying its unit', /\/lb/.test(text) && /\/MT/.test(text));
 
+    // ── IT MUST NOT RUN OFF THE RIGHT EDGE ──────────────────────────────
+    // Apsara, 2026-09-19, sending the exported PDF back: "not everything
+    // coming in pdf". A bills row is 23 columns; every cell was nowrap on a
+    // table with no fixed layout, so the long text columns took whatever
+    // width they wanted and the table ran off the sheet. Chromium does not
+    // complain — it clips. The six that fell off were Supplier price,
+    // Supplier invoice amount, Trucker, Trucking, Payable and Balance.
+    // The money.
+    ck('EVERY column is in the printed table',
+       built.columns.every((c) => html.includes('>' + c.label.replace(/&/g, '&amp;') + '<')
+                                  || html.includes(c.label)),
+       built.columns.filter((c) => !html.includes(c.label)).map((c) => c.label).join(', '));
+
+    // The structural fix, and the reason it cannot regress: a fixed table at
+    // width:100% with a percentage on every column IS the page width,
+    // whatever is in the cells.
+    ck('  the table layout is FIXED', /table-layout:\s*fixed/.test(html),
+       'content-sized columns are what ran off the page');
+    const colWidths = [...html.matchAll(/<col style="width:([\d.]+)%">/g)].map((m) => Number(m[1]));
+    ck('  one <col> per column', colWidths.length === built.columns.length,
+       `${colWidths.length} of ${built.columns.length}`);
+    ck('  and they add up to exactly the page',
+       Math.abs(colWidths.reduce((a, b) => a + b, 0) - 100) < 0.5,
+       String(colWidths.reduce((a, b) => a + b, 0)));
+
+    // Text has to WRAP, or a long supplier name makes the table wider again
+    // however the columns are sized.
+    ck('  text cells wrap instead of widening the table',
+       /overflow-wrap:\s*anywhere/.test(html) && /word-break:\s*break-word/.test(html));
+    ck('  while the short numeric ones stay on one line',
+       /td\.n,\s*th\.n\s*\{\s*white-space:\s*nowrap/.test(html),
+       'a wrapped figure is unreadable');
+    ck('  and nowrap is NOT on every cell, which is what clipped it',
+       !/\btd \{[^}]*white-space:\s*nowrap/.test(html), html.slice(html.indexOf('td {'), html.indexOf('td {') + 160));
+
+    // The chosen font must not itself ask for more width than the sheet has.
+    const L = le.layoutFor(built);
+    const estimate = L.total * L.font * le.CHAR_PT_PER_FONT + L.cols.length * le.CELL_PAD_PT;
+    ck('  the font is sized so the content fits without heavy wrapping',
+       estimate <= le.PRINTABLE_PT,
+       `${Math.round(estimate)}pt asked of ${le.PRINTABLE_PT}pt — rounding UP instead of down is what put this over`);
+    ck('  and stays readable', L.font >= 5 && L.font <= 8, `${L.font}pt`);
+
     // ── thead REPEATS ───────────────────────────────────────────────────
     // 492 bills is many pages. Columns named only on page one is a table
     // nobody can read past page one.
@@ -326,6 +369,122 @@ section('D. the export routes');
     ck('staff cannot export the ledger', [401, 403].includes(denied.status), String(denied.status));
 
     listener.close();
+}
+
+// ── E. THE THREE-DOT MENU ───────────────────────────────────────────────────
+// Apsara, 2026-09-19: "for export i want to have a three dott button.so export
+// three dot button.on clicking it should show select box as excel,pdf".
+//
+// Rendered in the real page and CLICKED, not grepped. The whole risk of a
+// menu is that it is present in the markup and does not open, or opens and
+// never closes, or builds a URL that has quietly stopped matching the filters
+// the table was drawn with.
+section('E. the export menu, on the real screen');
+{
+    let JSDOM = null;
+    try { ({ JSDOM } = require('jsdom')); } catch (e) {}
+    if (!JSDOM) {
+        ck('jsdom is installed', false, 'the screen half cannot be tested — run npm install');
+    } else {
+        const html = fs.readFileSync(path.join(ROOT, 'dashboard/index.html'), 'utf8');
+        const SCRIPT = [...html.matchAll(/<script(?![^>]*\bsrc=)[^>]*>([\s\S]*?)<\/script>/g)]
+            .map((m) => m[1]).join('\n');
+        const dom = new JSDOM(html, { runScripts: 'outside-only', url: 'http://localhost/' });
+        const w = dom.window;
+        w.eval(SCRIPT);
+        const bills2 = require(path.join(ROOT, 'helpers/bills'));
+        const all = bills2.listWithTotals();
+        w.api = async () => ({ bills: all, summary: bills2.summary(all), columns: bills2.tableColumns(),
+            fields: bills2.COLUMNS, groups: bills2.GROUPS, writable: bills2.WRITABLE,
+            facets: bills2.facets(all), filterable: bills2.FILTERABLE, total_unfiltered: all.length });
+        await new Promise((r) => setTimeout(r, 60));
+
+        // The download is a navigation, so the anchor is captured instead of
+        // followed — jsdom has nowhere to navigate to and the URL is the thing
+        // being asserted anyway.
+        const clicked = [];
+        const realCreate = w.document.createElement.bind(w.document);
+        w.document.createElement = (tag) => {
+            const el = realCreate(tag);
+            if (String(tag).toLowerCase() === 'a') el.click = () => clicked.push(el.href);
+            return el;
+        };
+
+        await w.renderLedgerTab('bills');
+        const d = w.document;
+        const btn = d.getElementById('btnExport');
+        const menu = d.getElementById('exportMenu');
+        ck('there is ONE export button, not two', !!btn && !d.getElementById('btnExportXlsx'));
+        ck('  and it is the three dots', /·|&middot;|\.\.\./.test(btn.textContent), JSON.stringify(btn.textContent));
+        ck('  the menu starts closed', menu.classList.contains('hidden'));
+        ck('  and says so to a screen reader', btn.getAttribute('aria-expanded') === 'false');
+
+        btn.click();
+        ck('clicking opens it', !menu.classList.contains('hidden'));
+        ck('  with exactly two choices', menu.querySelectorAll('.exp-opt').length === 2);
+        ck('  Excel and PDF', [...menu.querySelectorAll('.exp-opt')].map((o) => o.dataset.format).join(',') === 'xlsx,pdf',
+           [...menu.querySelectorAll('.exp-opt')].map((o) => o.dataset.format).join(','));
+        ck('  and it says how many rows it would export',
+           new RegExp(`Export ${all.length} row`).test(menu.textContent), menu.textContent.slice(0, 60));
+
+        btn.click();
+        ck('clicking the button again closes it', menu.classList.contains('hidden'));
+
+        btn.click();
+        d.body.dispatchEvent(new w.MouseEvent('click', { bubbles: true }));
+        ck('a click elsewhere closes it', menu.classList.contains('hidden'));
+
+        btn.click();
+        d.dispatchEvent(new w.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+        ck('Escape closes it', menu.classList.contains('hidden'));
+
+        // ── AND CHOOSING ONE EXPORTS ────────────────────────────────────
+        btn.click();
+        menu.querySelector('[data-format="xlsx"]').click();
+        ck('choosing Excel starts a download', clicked.length === 1, JSON.stringify(clicked));
+        ck('  of the xlsx', /format=xlsx/.test(clicked[0] || ''), clicked[0]);
+        ck('  from the bills route', /\/api\/bills\/export/.test(clicked[0] || ''), clicked[0]);
+        ck('  and the menu closed behind it', menu.classList.contains('hidden'));
+
+        // ── THE FILTERS GO WITH IT ──────────────────────────────────────
+        // The way this feature is silently wrong: she narrows to one supplier,
+        // exports, and sends someone the whole ledger.
+        clicked.length = 0;
+        // ── FILTERED THROUGH THE REAL FILTER BOXES ──────────────────────
+        // Not by assigning ledgerFilters from a second w.eval: it is a
+        // top-level `const` inside the evaluated script, so in an indirect
+        // eval it is not a property of window and the assignment throws. That
+        // trap is written up in ledger-render.js and I have now walked into it
+        // three times.
+        //
+        // Typing into the boxes is also the honest test — it exercises the
+        // path from her keystroke to the URL, which is the thing that can
+        // silently stop agreeing.
+        const setFilter = async (key, value) => {
+            const el = d.querySelector(`[data-led-filter="${key}"]`);
+            el.value = value;
+            el.dispatchEvent(new w.Event('change', { bubbles: true }));
+            await new Promise((r) => setTimeout(r, 60));
+        };
+        await setFilter('supplier', 'Oakland Metals');
+        await setFilter('q', 'HOU');
+        d.getElementById('btnExport').click();
+        d.getElementById('exportMenu').querySelector('[data-format="pdf"]').click();
+        ck('the filters on screen travel with the export',
+           /supplier=Oakland%20Metals/.test(clicked[0] || '') && /q=HOU/.test(clicked[0] || ''),
+           clicked[0]);
+        ck('  and the PDF is asked for by name', /format=pdf/.test(clicked[0] || ''), clicked[0]);
+
+        // The Invoice register gets its own menu, pointed at its own route.
+        clicked.length = 0;
+        await w.renderLedgerTab('sales');
+        d.getElementById('btnExport').click();
+        d.getElementById('exportMenu').querySelector('[data-format="xlsx"]').click();
+        ck('the Invoice register exports from the sales route',
+           /\/api\/sales\/export/.test(clicked[0] || ''), clicked[0]);
+
+        dom.window.close();
+    }
 }
 
 console.log(`\n  ${pass} passed, ${fail} failed`);

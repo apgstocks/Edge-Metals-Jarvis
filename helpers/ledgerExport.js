@@ -189,10 +189,72 @@ function printedCell(row, col, kind) {
     return esc(v === null || v === undefined ? '' : v);
 }
 
+// ── FITTING 23 COLUMNS ONTO A PAGE ──────────────────────────────────────────
+// Apsara, 2026-09-19, sending the exported Bills PDF back: "not everything
+// coming in pdf". She was right and it was mine. A bills row has 23 columns;
+// every cell was white-space:nowrap on a table with no fixed layout, so the
+// long text columns ("Inesh Cores Chapin", "Mixed Electrical Motors") took as
+// much width as they wanted and the table ran off the right edge of the sheet.
+// Chromium does not complain — it just clips. The six columns that fell off
+// were Supplier price, Supplier invoice amount, Trucker, Trucking, Payable and
+// Balance: the money.
+//
+// ── THE WIDTHS ARE COMPUTED HERE, NOT LEFT TO THE BROWSER ───────────────────
+// table-layout:fixed with an explicit width on every column, shared out by how
+// much each one actually has to say in THIS export. Deterministic, and it can
+// be checked without launching a browser — which matters, because Chromium
+// cannot run in the test sandbox and "it looked fine on my screen" is what
+// produced the clipped PDF.
+//
+// Text wraps; a row grows taller instead of the table growing wider. Numbers
+// keep nowrap because they are short and a wrapped figure is unreadable.
+const PRINTABLE_PT = 740;          // A4 landscape, 297mm less 8mm margins
+const CHAR_PT_PER_FONT = 0.52;     // Helvetica average, measured against real output
+const CELL_PAD_PT = 4;             // 1.2mm each side
+
+// The widest thing a column must show. Headers count: "Net weight (lbs)"
+// wraps onto two lines happily, so only its longest WORD sets a floor.
+function columnDemand(built, col) {
+    const longestWord = String(col.label || '').split(/\s+/)
+        .reduce((m, w2) => Math.max(m, w2.length), 0);
+    let widest = 0;
+    for (const row of built.rows) {
+        const t = String(printedCell(row, col, built.kind)).replace(/<[^>]*>/g, '');
+        if (t.length > widest) widest = t.length;
+    }
+    // Capped: one 60-character item description must not be given a third of
+    // the page. It wraps.
+    return Math.max(longestWord, Math.min(widest, 18), 4);
+}
+
+function layoutFor(built) {
+    const cols = built.columns;
+    const demands = cols.map((c) => columnDemand(built, c));
+    const total = demands.reduce((a, b) => a + b, 0) || 1;
+    // ── THE FONT IS ABOUT READABILITY, NOT ABOUT FITTING ────────────────
+    // With table-layout:fixed at width:100% and a percentage on every column,
+    // the table IS the page width — it cannot run off the sheet whatever is in
+    // it. That is the structural fix. This number only decides how much the
+    // text wraps: too large and every row becomes four lines deep, too small
+    // and nobody can read it. Clamped to 5-8pt at both ends.
+    // FLOORED to the tenth, not rounded: rounding up put the estimate five
+    // points over the printable width, and "five points over" is the whole
+    // category of bug being fixed.
+    const raw = (PRINTABLE_PT - cols.length * CELL_PAD_PT) / (total * CHAR_PT_PER_FONT);
+    const font = Math.max(5, Math.min(8, Math.floor(raw * 10) / 10));
+    const widths = demands.map((d) => (d / total) * 100);
+    return { font, widths, total, cols };
+}
+
 function toHtml(built, opts = {}) {
     const cols = built.columns;
+    const { font, widths } = layoutFor(built);
     const rightish = (c) => (MONEY[built.kind] || []).includes(c.key)
         || (WEIGHTS[built.kind] || []).includes(c.key) || PRICE.includes(c.key);
+    // Only the short, numeric cells keep nowrap. Everything else wraps, which
+    // is the whole fix: a long supplier name makes its ROW taller, not the
+    // table wider.
+    const nowrap = (c) => rightish(c) || /^(date|seal_no|container_no|booking_no)$/.test(c.key);
     const s = built.summary || {};
     const totalCells = cols.map((c) => (Object.prototype.hasOwnProperty.call(s, c.key)
         ? printedCell(s, c, built.kind) : ''));
@@ -200,34 +262,38 @@ function toHtml(built, opts = {}) {
     if (free >= 0) totalCells[free] = 'TOTAL';
 
     return `<!DOCTYPE html><html><head><meta charset="utf-8"><style>
-  @page { size: A4 landscape; margin: 10mm 8mm; }
+  @page { size: A4 landscape; margin: 8mm; }
   body { font-family: Helvetica, Arial, sans-serif; color:#111; margin:0; }
-  h1 { font-size: 15pt; margin: 0 0 2mm; }
-  .sub { font-size: 8.5pt; color:#555; margin-bottom: 4mm; }
-  table { width:100%; border-collapse: collapse; font-size: 7.5pt; }
-  /* thead repeats on every page — a 492-row ledger whose columns are named
-     only on page one is a table nobody can read past page one. */
+  h1 { font-size: 14pt; margin: 0 0 1.5mm; }
+  .sub { font-size: 8pt; color:#555; margin-bottom: 3mm; }
+  /* FIXED, and every column carries a width. Without this the browser sizes
+     columns from content and a wide table silently runs off the sheet. */
+  table { width:100%; border-collapse: collapse; table-layout: fixed; font-size: ${font}pt; }
   thead { display: table-header-group; }
-  tr { page-break-inside: avoid; }
-  th { background:#EFEFEF; border-bottom:0.6pt solid #333; padding:1.6mm 1.2mm;
-       text-align:left; font-size:7pt; text-transform:uppercase; letter-spacing:.04em; }
-  td { border-bottom:0.3pt solid #DDD; padding:1.4mm 1.2mm; white-space:nowrap; }
-  .r { text-align:right; }
-  tfoot td { border-top:0.8pt solid #333; border-bottom:none; font-weight:700; font-size:8pt; padding:2mm 1.2mm; }
   tfoot { display: table-footer-group; }
+  tr { page-break-inside: avoid; }
+  th { background:#EFEFEF; border-bottom:0.6pt solid #333; padding:1.4mm 1.2mm;
+       text-align:left; font-size:${Math.max(5, font - 0.5)}pt; text-transform:uppercase;
+       letter-spacing:.02em; overflow-wrap:anywhere; }
+  td { border-bottom:0.3pt solid #DDD; padding:1.2mm 1.2mm; vertical-align:top;
+       overflow-wrap:anywhere; word-break:break-word; }
+  td.n, th.n { white-space:nowrap; }
+  .r { text-align:right; }
+  tfoot td { border-top:0.8pt solid #333; border-bottom:none; font-weight:700; padding:1.8mm 1.2mm; }
 </style></head><body>
   <h1>${esc(built.title)}</h1>
   <div class="sub">${esc(built.eyebrow)} &middot; ${built.rows.length} of ${built.total_unfiltered} rows`
    + `${built.filters.length ? ' &middot; ' + esc(built.filters.join(' · ')) : ' &middot; no filters'}`
    + ` &middot; exported ${esc(opts.when || new Date().toLocaleString('en-US', { timeZone: 'America/Los_Angeles' }))}</div>
   <table>
-    <thead><tr>${cols.map((c) => `<th class="${rightish(c) ? 'r' : ''}">${esc(c.label)}</th>`).join('')}</tr></thead>
+    <colgroup>${widths.map((w2) => `<col style="width:${w2.toFixed(2)}%">`).join('')}</colgroup>
+    <thead><tr>${cols.map((c, i) => `<th class="${rightish(c) ? 'r ' : ''}${nowrap(c) ? 'n' : ''}">${esc(c.label)}</th>`).join('')}</tr></thead>
     <tbody>${built.rows.map((row) => `<tr>${cols.map((c) =>
-        `<td class="${rightish(c) ? 'r' : ''}">${printedCell(row, c, built.kind)}</td>`).join('')}</tr>`).join('')}
+        `<td class="${rightish(c) ? 'r ' : ''}${nowrap(c) ? 'n' : ''}">${printedCell(row, c, built.kind)}</td>`).join('')}</tr>`).join('')}
       ${built.rows.length ? '' : `<tr><td colspan="${cols.length}" style="padding:8mm;text-align:center;color:#888;">Nothing matches these filters.</td></tr>`}
     </tbody>
     ${totalCells.some(Boolean) ? `<tfoot><tr>${cols.map((c, i) =>
-        `<td class="${rightish(c) ? 'r' : ''}">${totalCells[i]}</td>`).join('')}</tr></tfoot>` : ''}
+        `<td class="${rightish(c) ? 'r ' : ''}${nowrap(c) ? 'n' : ''}">${totalCells[i]}</td>`).join('')}</tr></tfoot>` : ''}
   </table>
 </body></html>`;
 }
@@ -262,4 +328,5 @@ function filenameFor(built, ext) {
     return `${base}_${when}${filtered}.${ext}`;
 }
 
-module.exports = { build, toWorkbook, toHtml, toPdf, filenameFor, cellValue, cellFormat, printedCell, LB_PER_MT };
+module.exports = { build, toWorkbook, toHtml, toPdf, filenameFor, cellValue, cellFormat, printedCell,
+                   layoutFor, columnDemand, PRINTABLE_PT, CHAR_PT_PER_FONT, CELL_PAD_PT, LB_PER_MT };

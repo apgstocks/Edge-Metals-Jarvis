@@ -124,10 +124,43 @@ function aliasMap() {
     return m;
 }
 
+// ── ALIASES CHAIN ───────────────────────────────────────────────────────────
+// She says "g&c" is "carlos g&c" today; in March someone says "carlos g&c" is
+// "Carlos G&C Metals". Following one hop would leave the first pair pointing
+// at a name that has itself moved on, and the cluster would split in two —
+// the exact problem this whole file exists to fix, reintroduced by its own
+// mechanism.
+//
+// Bounded, and it stops the moment a step does not move: a cycle written by
+// hand into the alias file must not hang the preview screen.
+function resolveAlias(name, map) {
+    const m = map || aliasMap();
+    let out = str(name);
+    const seen = new Set();
+    for (let i = 0; i < 10; i++) {
+        const k = normalizeName(out);
+        if (!k || seen.has(k)) break;
+        seen.add(k);
+        const next = m.get(k);
+        if (!next || normalizeName(next) === k) break;
+        out = next;
+    }
+    return out;
+}
+
 async function addAlias(from, to, by) {
     const f = str(from), t = str(to);
     if (!f || !t) throw new Error('an alias needs both names');
     if (normalizeName(f) === normalizeName(t)) throw new Error(`"${f}" and "${t}" are already the same name`);
+    // ── A CYCLE WOULD MAKE THE ANSWER DEPEND ON WHERE YOU START ─────────
+    // "A is really B" plus "B is really A" has no winner, and resolveAlias
+    // would give a different one depending on which name it was handed.
+    // Refused at the point it is written, with both names in the message, so
+    // the fix is obvious.
+    const map = aliasMap();
+    if (normalizeName(resolveAlias(t, map)) === normalizeName(f)) {
+        throw new Error(`"${t}" is already recorded as being "${f}" — removing that one first would leave this making sense.`);
+    }
     await mutateJson(ALIAS_FILE, [], (all) => {
         const list = Array.isArray(all) ? all : [];
         const at = list.findIndex((a) => a && normalizeName(a.from) === normalizeName(f));
@@ -136,6 +169,22 @@ async function addAlias(from, to, by) {
         return list;
     }, { strict: true });
     return { from: f, to: t };
+}
+
+async function removeAlias(from) {
+    const f = str(from);
+    if (!f) throw new Error('which alias?');
+    let gone = false;
+    await mutateJson(ALIAS_FILE, [], (all) => {
+        const list = Array.isArray(all) ? all : [];
+        const keep = list.filter((a) => {
+            const hit = a && normalizeName(a.from) === normalizeName(f);
+            if (hit) gone = true;
+            return !hit;
+        });
+        return keep;
+    }, { strict: true });
+    return gone;
 }
 
 // ── WHICH SPELLINGS ARE ONE SUPPLIER ────────────────────────────────────────
@@ -148,8 +197,8 @@ function clusters() {
     const groups = new Map();   // key -> { key, names: [], total }
 
     for (const u of all) {
-        const aliased = map.get(normalizeName(u.name));
-        const key = normalizeName(aliased || u.name);
+        const aliased = resolveAlias(u.name, map);
+        const key = normalizeName(aliased === u.name ? u.name : aliased);
         if (!key) continue;
         const g = groups.get(key) || { key, names: [], total: 0 };
         g.names.push(u);
@@ -159,7 +208,14 @@ function clusters() {
 
     const out = [];
     for (const g of groups.values()) {
-        if (g.names.length < 2) continue;      // one spelling: nothing to fix
+        // ── ONE SPELLING IS USUALLY NOTHING TO FIX ──────────────────────
+        // Usually. The exception is a plain RENAME: she typed an alias whose
+        // target is a name not yet in use anywhere ("g&c" is really "Carlos
+        // G&C Metals", and that longer form has never been typed on a bill).
+        // Skipping it would silently ignore an instruction she gave.
+        const renamed = g.names.length === 1
+            && normalizeName(resolveAlias(g.names[0].name, map)) !== normalizeName(g.names[0].name);
+        if (g.names.length < 2 && !renamed) continue;
         // The spelling SHE uses most wins. Not title-case: real company names
         // are not title-cased ("MK Metal Trading", "d.c. scrap", "JB's"), and a
         // rule that rewrites them is a rule that has to be fought. See
@@ -167,7 +223,10 @@ function clusters() {
         //
         // An alias she confirmed OVERRIDES frequency — she said which name is
         // right, and a vote does not get to disagree with her.
-        const aliasedTo = g.names.map((n) => map.get(normalizeName(n.name))).find(Boolean);
+        const aliasedTo = g.names
+            .map((n) => (normalizeName(resolveAlias(n.name, map)) !== normalizeName(n.name)
+                ? resolveAlias(n.name, map) : null))
+            .find(Boolean);
         // Only the voting stores, newest first — canonicalName's own contract.
         // A spelling used ONLY by inherited rows (a payment, a booking) has no
         // votes and cannot win, which is right: she never chose it there.
@@ -352,4 +411,4 @@ function merges() {
 }
 
 module.exports = { TARGETS, usage, clusters, proposals, plan, apply, undo, merges,
-                   aliases, addAlias, aliasMap, ALIAS_FILE };
+                   aliases, addAlias, removeAlias, aliasMap, resolveAlias, ALIAS_FILE };

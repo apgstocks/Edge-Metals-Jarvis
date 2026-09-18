@@ -3795,6 +3795,10 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
                 // the note on proposals() for why this one stays manual.
                 proposals: sm.proposals(),
                 aliases: sm.aliases(),
+                // Every spelling currently in use, so the "these two are the
+                // same" boxes can offer them rather than asking her to
+                // remember exactly how a name was typed.
+                names: sm.usage().sort((a, b) => a.name.localeCompare(b.name)),
                 merges: sm.merges(),
             });
         } catch (e) { res.status(500).json({ error: e.message }); }
@@ -3809,6 +3813,15 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
             const { from, to } = req.body || {};
             const saved = await sm.addAlias(from, to, actorOf(req));
             res.json({ ok: true, ...saved });
+        } catch (e) { res.status(400).json({ error: e.message }); }
+    });
+
+    // An alias typed in error is otherwise permanent, and it drives the
+    // destructive step. Admin, like adding one — neither writes a ledger row.
+    app.delete('/api/suppliers/alias/:from', requireAdmin, async (req, res) => {
+        try {
+            const gone = await require('./helpers/supplierMerge').removeAlias(req.params.from);
+            res.json({ ok: true, removed: gone });
         } catch (e) { res.status(400).json({ error: e.message }); }
     });
 

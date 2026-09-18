@@ -316,6 +316,123 @@ section('F. the routes, and who may use them');
     listener.close();
 }
 
+// ── G. SAYING IT HERSELF ────────────────────────────────────────────────────
+// Apsara, 2026-09-19: "in supplier names,it should allow me to type say carlos
+// g&c ,g&c both are same".
+//
+// The gap was real and this section is the proof of it: NOTHING proposes that
+// pair. "carlos g&c" normalises to carlosgc and "g&c" to gc, which share no
+// prefix, so the suggestion list would never offer it and there was no other
+// way in. A panel that only shows what an algorithm noticed is a panel that
+// cannot be corrected.
+section('G. two names she says are the same');
+{
+    for (const [sup, bk] of [['carlos g&c', 'C1'], ['carlos g&c', 'C2'], ['g&c', 'C3'], ['G & C', 'C4']]) {
+        await addBill(sup, bk);
+    }
+
+    ck('nothing proposes carlos g&c and g&c',
+       !sm.proposals().some((p) => /g&c/i.test(p.shorter) && /carlos/i.test(p.longer)),
+       'if this ever passes by itself the typed form is still the only way she can be sure');
+    // The two that DO share a rule are already together — punctuation and
+    // spacing, which is normalizeName's job.
+    ck('  though "g&c" and "G & C" already are one, by rule',
+       !!sm.clusters().find((c) => c.key === 'gc'), JSON.stringify(sm.clusters().map((c) => c.key)));
+
+    await sm.addAlias('g&c', 'carlos g&c', 'apsara');
+    const c = sm.clusters().find((x) => x.winner === 'carlos g&c');
+    ck('after she types it, all three spellings are one supplier',
+       !!c && ['g&c', 'G & C'].every((n) => c.losers.some((l) => l.name === n)),
+       JSON.stringify(c && c.losers.map((l) => l.name)));
+
+    // ── ALIASES CHAIN ───────────────────────────────────────────────────
+    // She says one thing today, someone says another in March. Following one
+    // hop would leave the first pair pointing at a name that has itself moved
+    // on, and the cluster splits in two — the problem this file exists to fix,
+    // reintroduced by its own mechanism.
+    await sm.addAlias('carlos g&c', 'Carlos G&C Metals', 'apsara');
+    const chained = sm.clusters().find((x) => x.winner === 'Carlos G&C Metals');
+    ck('a chain of aliases resolves all the way',
+       !!chained && ['carlos g&c', 'g&c', 'G & C'].every((n) => chained.losers.some((l) => l.name === n)),
+       JSON.stringify(chained && chained.losers.map((l) => l.name)));
+
+    // ── AND THE TARGET NEED NOT EXIST YET ───────────────────────────────
+    // "Carlos G&C Metals" has never been typed on a bill. A pure rename is
+    // still an instruction she gave, and skipping it because the group has
+    // one spelling would silently ignore her.
+    ck('  even to a spelling not yet used anywhere',
+       !!chained && !chained.names.some((n) => n.name === 'Carlos G&C Metals'),
+       'the target was already in the ledger, so this did not test a rename');
+
+    // ── A PLAIN RENAME, WITH NOTHING TO MERGE ───────────────────────────
+    // One supplier, one spelling, aliased to a name that has never been typed.
+    // There is no second spelling to group with, so the "fewer than two names
+    // is nothing to fix" rule skips it — and skipping it silently ignores an
+    // instruction she gave. A mutation removing that exception survived every
+    // other check in this file, because the chain case above happens to have
+    // three names in its group.
+    await addBill('Solo Metals', 'C5');
+    ck('a lone supplier is not a cluster to begin with',
+       !sm.clusters().some((c) => c.names.some((x) => x.name === 'Solo Metals')));
+    await sm.addAlias('Solo Metals', 'Solo Metals LLC', 'apsara');
+    const solo = sm.clusters().find((c) => c.winner === 'Solo Metals LLC');
+    ck('  but renaming it to a brand-new spelling IS a change',
+       !!solo && solo.losers.some((l) => l.name === 'Solo Metals'),
+       JSON.stringify(sm.clusters().map((c) => c.winner)));
+    ck('  and the rename reaches the plan',
+       sm.plan().changes.some((c) => c.from === 'Solo Metals' && c.to === 'Solo Metals LLC'),
+       JSON.stringify(sm.plan().changes.map((c) => c.from + '->' + c.to)));
+
+    let cyc = null;
+    try { await sm.addAlias('Carlos G&C Metals', 'g&c', 'apsara'); } catch (e) { cyc = e; }
+    ck('a cycle is refused', !!cyc && /already recorded as being/.test(cyc.message), cyc && cyc.message);
+    ck('  naming both, so the fix is obvious',
+       !!cyc && /Carlos G&C Metals/.test(cyc.message) && /g&c/.test(cyc.message), cyc && cyc.message);
+
+    // ── AND SHE CAN TAKE ONE BACK ───────────────────────────────────────
+    // An alias typed in error is otherwise permanent, and it drives the
+    // destructive step.
+    ck('an alias can be forgotten', (await sm.removeAlias('carlos g&c')) === true);
+    const afterDrop = sm.clusters().find((x) => x.winner === 'carlos g&c');
+    ck('  and the grouping goes back to what it was',
+       !!afterDrop && !sm.clusters().some((x) => x.winner === 'Carlos G&C Metals'),
+       JSON.stringify(sm.clusters().map((x) => x.winner)));
+    ck('  while the alias she kept still holds',
+       afterDrop.losers.some((l) => l.name === 'g&c'));
+
+    ck('forgetting one that was never there says so, rather than pretending',
+       (await sm.removeAlias('nobody at all')) === false);
+}
+
+// ── H. THE FORM THAT DOES IT ────────────────────────────────────────────────
+// The helper being right proves nothing about whether the panel can reach it.
+section('H. the panel can say it');
+{
+    const src = fs.readFileSync(path.join(ROOT, 'dashboard/index.html'), 'utf8');
+    const panel = src.slice(src.indexOf('async function openSupplierMerge'),
+                            src.indexOf('// ── IMPORTING A SHIPMENTS WORKBOOK'));
+    // NOT named smFrom/smTo: tests/mobile-layout.js requires every field whose
+    // id contains from/to/date to be wired to the US date picker, because a
+    // bare text box renders DD/MM/YYYY on her phone. These are names, not
+    // dates, and the convention is worth more than my naming.
+    ck('there are two boxes to type names into',
+       /id="smAliasName"/.test(panel) && /id="smAliasReal"/.test(panel), 'no way in but the suggestions');
+    ck('  and they are not named like date fields',
+       !/id="sm(From|To)"/.test(panel), 'the date-picker check would flag them, correctly');
+    ck('  offering the names already in use', /list="smNames"/.test(panel) && /datalist id="smNames"/.test(panel),
+       'she would have to remember exactly how a name was typed');
+    ck('  and Save posts the alias', /smSave.*onclick/s.test(panel) && /answer\(from, to\)/.test(panel));
+    ck('  refusing to post half of one',
+       /Both boxes, please/.test(panel), 'an empty box would post and fail on the server');
+    ck('  with a way to forget one', /smDropAlias/.test(panel) && /\/api\/suppliers\/alias\//.test(panel));
+
+    // The preview has to CARRY the names, or the datalist is empty however
+    // well the form is wired.
+    const api = fs.readFileSync(path.join(ROOT, 'api.js'), 'utf8');
+    const route = api.slice(api.indexOf("app.get('/api/suppliers/merge/preview'"), api.indexOf("app.post('/api/suppliers/alias'"));
+    ck('the preview route sends the names to offer', /names: sm\.usage\(\)/.test(route), route.slice(0, 200));
+}
+
 console.log(`\n  ${pass} passed, ${fail} failed`);
 if (failures.length) { console.log('\n  failed:'); failures.forEach((f) => console.log('    · ' + f)); }
 process.exit(fail ? 1 : 0);

@@ -5806,8 +5806,27 @@ async function renderLedgerTab(kind) {
           ${kind === 'bills' ? '<button id="btnPay" class="btn btn-secondary" style="font-size:12px; padding:8px 14px;">Pay</button>' : ''}
           ${kind === 'sales' ? '<button id="btnFromBill" class="btn btn-secondary" style="font-size:12px; padding:8px 14px;">New from bill</button>' : ''}
           ${kind === 'bills' ? '<button id="btnSupplierNames" class="btn btn-ghost" style="font-size:12px; padding:8px 12px;" title="The same supplier typed two ways">Supplier names</button>' : ''}
-          ${kind === 'bills' || kind === 'sales' ? `<button id="btnExportXlsx" class="btn btn-ghost" style="font-size:12px; padding:8px 12px;" title="Excel — exactly these ${rows.length} rows, with the totals">Excel</button>
-          <button id="btnExportPdf" class="btn btn-ghost" style="font-size:12px; padding:8px 12px;" title="PDF — exactly these ${rows.length} rows, with the totals">PDF</button>` : ''}
+          ${kind === 'bills' || kind === 'sales' ? `<div style="position:relative;">
+            <button id="btnExport" class="btn btn-ghost" aria-haspopup="menu" aria-expanded="false"
+              style="font-size:15px; line-height:1; padding:8px 12px; letter-spacing:.12em;"
+              title="Export these ${rows.length} rows">&middot;&middot;&middot;</button>
+            <div id="exportMenu" class="hidden" role="menu"
+              style="position:absolute; right:0; top:calc(100% + 6px); z-index:60; min-width:190px;
+                     background:var(--surface-card); border:1px solid var(--line); border-radius:var(--radius-sm);
+                     box-shadow:0 8px 24px rgba(0,0,0,.45); overflow:hidden;">
+              <div style="padding:7px 12px; font-family:var(--font-mono); font-size:9px; letter-spacing:.12em;
+                          text-transform:uppercase; color:var(--text-muted); border-bottom:1px solid var(--line);">
+                Export ${rows.length} row${rows.length === 1 ? '' : 's'}</div>
+              <button class="exp-opt" data-format="xlsx" role="menuitem"
+                style="display:block; width:100%; text-align:left; background:none; border:none; cursor:pointer;
+                       padding:9px 12px; font-size:12.5px; color:var(--text-primary);">Excel
+                <span style="color:var(--text-faint); font-size:11px;">&nbsp;— .xlsx, figures you can add up</span></button>
+              <button class="exp-opt" data-format="pdf" role="menuitem"
+                style="display:block; width:100%; text-align:left; background:none; border:none; cursor:pointer;
+                       padding:9px 12px; font-size:12.5px; color:var(--text-primary); border-top:1px solid var(--line);">PDF
+                <span style="color:var(--text-faint); font-size:11px;">&nbsp;— to print or send</span></button>
+            </div>
+          </div>` : ''}
           ${kind === 'bills' || kind === 'sales' ? '<button id="btnImport" class="btn btn-secondary" style="font-size:12px; padding:8px 14px;" title="Import a shipments workbook">Import</button>' : ''}
           <button id="btnAddLedger" class="btn btn-primary" style="font-size:12px; padding:8px 14px;">${K.addLabel}</button>
         </div>
@@ -5904,7 +5923,7 @@ async function renderLedgerTab(kind) {
       .filter(([, v]) => String(v || '').trim() !== '')
       .map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(v)}`).join('&');
     btn.disabled = true;
-    const was = btn.textContent;
+    const was = btn.innerHTML;
     btn.textContent = '…';
     // The PDF of 492 rows takes a few seconds and goes through the same
     // single-slot queue every other document does, so the button has to say
@@ -5915,10 +5934,42 @@ async function renderLedgerTab(kind) {
     const a = document.createElement('a');
     a.href = url; a.download = '';
     document.body.appendChild(a); a.click(); a.remove();
-    setTimeout(() => { btn.disabled = false; btn.textContent = was; }, format === 'pdf' ? 4000 : 1500);
+    setTimeout(() => { btn.disabled = false; btn.innerHTML = was; }, format === 'pdf' ? 4000 : 1500);
   };
-  if ($('btnExportXlsx')) $('btnExportXlsx').onclick = (e) => exportTo('xlsx', e.currentTarget);
-  if ($('btnExportPdf')) $('btnExportPdf').onclick = (e) => exportTo('pdf', e.currentTarget);
+  // ── ONE BUTTON, A MENU BEHIND IT ─────────────────────────────────────
+  // Apsara, 2026-09-19: "for export i want to have a three dott button.so
+  // export three dot button.on clicking it should show select box as
+  // excel,pdf".
+  //
+  // Closed by a click anywhere else and by Escape, and the handler is removed
+  // when it closes — a document-level listener left behind by every render of
+  // this tab would accumulate one per visit and they all keep firing.
+  if ($('btnExport')) {
+    const btn = $('btnExport'), menu = $('exportMenu');
+    let away = null;
+    const shut = () => {
+      menu.classList.add('hidden');
+      btn.setAttribute('aria-expanded', 'false');
+      if (away) { document.removeEventListener('click', away, true); document.removeEventListener('keydown', away); away = null; }
+    };
+    btn.onclick = (e) => {
+      e.stopPropagation();
+      if (!menu.classList.contains('hidden')) return shut();
+      menu.classList.remove('hidden');
+      btn.setAttribute('aria-expanded', 'true');
+      away = (ev) => {
+        if (ev.type === 'keydown') { if (ev.key === 'Escape') shut(); return; }
+        if (!menu.contains(ev.target) && ev.target !== btn) shut();
+      };
+      document.addEventListener('click', away, true);
+      document.addEventListener('keydown', away);
+    };
+    menu.querySelectorAll('.exp-opt').forEach((opt) => {
+      opt.onmouseenter = () => { opt.style.background = 'var(--bg-sunken)'; };
+      opt.onmouseleave = () => { opt.style.background = 'none'; };
+      opt.onclick = (e) => { e.stopPropagation(); shut(); exportTo(opt.dataset.format, btn); };
+    });
+  }
   $('btnAddLedger').onclick = () => openLedgerForm(kind);
   // ── EDIT ─────────────────────────────────────────────────────────────
   // Apsara, 2026-09-10: "i want edit option in bill". Until now a typo in a
@@ -7344,6 +7395,42 @@ async function openSupplierMerge() {
              No spelling differences left. Every supplier appears under one name.
            </div>`}
 
+      <!-- ── SAYING IT YOURSELF ──────────────────────────────────────
+           Apsara, 2026-09-19: "in supplier names,it should allow me to type
+           say carlos g&c ,g&c both are same".
+
+           She is right, and the gap was real. Nothing proposes that pair:
+           "carlos g&c" normalises to carlosgc and "g&c" to gc, which share
+           no prefix, so the suggestion list would never have offered it and
+           there was no other way in. A panel that only ever shows what an
+           algorithm noticed is a panel that cannot be corrected. -->
+        <div style="font-size:11px; color:${L.inkFaint}; margin:18px 0 6px;">Tell it two names are the same</div>
+        <div style="border:1px solid ${L.line}; border-radius:var(--radius-sm); background:${L.paper}; padding:12px;">
+          <div style="display:flex; gap:8px; align-items:flex-end; flex-wrap:wrap;">
+            <div style="flex:1; min-width:170px;">
+              <label style="display:block; font-size:11px; color:${L.inkMuted}; margin-bottom:4px;">This name</label>
+              <input id="smAliasName" list="smNames" autocomplete="off" placeholder="g&amp;c"
+                style="width:100%; height:34px; padding:0 10px; background:${L.paper}; border:1px solid ${L.line}; border-radius:var(--radius-sm); color:${L.ink}; font-size:13px;"></div>
+            <div style="padding-bottom:9px; color:${L.inkFaint}; font-size:12px;">is really</div>
+            <div style="flex:1; min-width:170px;">
+              <label style="display:block; font-size:11px; color:${L.inkMuted}; margin-bottom:4px;">This one</label>
+              <input id="smAliasReal" list="smNames" autocomplete="off" placeholder="carlos g&amp;c"
+                style="width:100%; height:34px; padding:0 10px; background:${L.paper}; border:1px solid ${L.line}; border-radius:var(--radius-sm); color:${L.ink}; font-size:13px;"></div>
+            <button id="smSave" class="btn btn-secondary" style="font-size:12px; padding:8px 14px;">Save</button>
+          </div>
+          <datalist id="smNames">${(d.names || []).map((u) => `<option value="${esc(u.name)}"></option>`).join('')}</datalist>
+          <div style="font-size:11px; color:${L.inkFaint}; margin-top:7px; line-height:1.5;">
+            Pick from the names already in use, or type the spelling you would rather keep — the second box can be a
+            name that is not in the ledger yet, and the rows will move to it.
+          </div>
+          ${(d.aliases || []).length ? `<div style="margin-top:10px; display:flex; flex-wrap:wrap; gap:6px;">
+            ${(d.aliases || []).map((a) => `<span style="display:inline-flex; align-items:center; gap:6px; font-size:11px; color:${L.inkMuted}; border:1px solid ${L.line}; border-radius:999px; padding:3px 8px 3px 10px;">
+              ${esc(a.from)} &rarr; <b style="color:${L.ink};">${esc(a.to)}</b>
+              <button class="smDropAlias" data-from="${esc(a.from)}" title="Forget this" style="background:none; border:none; color:${L.inkFaint}; cursor:pointer; font-size:14px; line-height:1; padding:0 2px;">&times;</button>
+            </span>`).join('')}
+          </div>` : ''}
+        </div>
+
       ${proposals.length ? `
         <div style="font-size:11px; color:${L.inkFaint}; margin:18px 0 6px;">These might be the same — only you can say</div>
         <div style="border:1px solid ${L.warn}; border-radius:var(--radius-sm); background:${L.paper};">
@@ -7404,6 +7491,24 @@ async function openSupplierMerge() {
     });
     document.querySelectorAll('.smYesOther').forEach((b) => {
       b.onclick = () => { const p = proposals[Number(b.dataset.i)]; answer(p.longer, p.shorter); };
+    });
+    if ($('smSave')) $('smSave').onclick = async () => {
+      const from = $('smAliasName').value.trim(), to = $('smAliasReal').value.trim();
+      if (!from || !to) {
+        $('smErr').innerHTML = `<div style="margin-top:12px; color:${L.danger};">Both boxes, please — which name, and what it really is.</div>`;
+        return;
+      }
+      await answer(from, to);
+    };
+    document.querySelectorAll('.smDropAlias').forEach((b) => {
+      b.onclick = async () => {
+        try {
+          await api('/api/suppliers/alias/' + encodeURIComponent(b.dataset.from), { method: 'DELETE' });
+          await draw(`Forgotten — "${b.dataset.from}" is its own supplier again.`);
+        } catch (err) {
+          $('smErr').innerHTML = `<div style="margin-top:12px; color:${L.danger};">${esc(err.message)}</div>`;
+        }
+      };
     });
     document.querySelectorAll('.smUndo').forEach((b) => {
       b.onclick = async () => {
