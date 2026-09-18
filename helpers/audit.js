@@ -83,7 +83,7 @@ const ACTIONS = [
     // question about an import is otherwise a question about 568 rows that
     // all appeared at the same second with nothing saying why.
     'import-workbook',            // bills and invoices created from a spreadsheet
-    'undo-import',                // one import removed whole
+    'undo-import', 'merge-suppliers', 'undo-supplier-merge',                // one import removed whole
 ];
 
 function listEntries() {

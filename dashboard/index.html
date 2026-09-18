@@ -5805,6 +5805,7 @@ async function renderLedgerTab(kind) {
         <div style="display:flex; gap:8px;">
           ${kind === 'bills' ? '<button id="btnPay" class="btn btn-secondary" style="font-size:12px; padding:8px 14px;">Pay</button>' : ''}
           ${kind === 'sales' ? '<button id="btnFromBill" class="btn btn-secondary" style="font-size:12px; padding:8px 14px;">New from bill</button>' : ''}
+          ${kind === 'bills' ? '<button id="btnSupplierNames" class="btn btn-ghost" style="font-size:12px; padding:8px 12px;" title="The same supplier typed two ways">Supplier names</button>' : ''}
           ${kind === 'bills' || kind === 'sales' ? `<button id="btnExportXlsx" class="btn btn-ghost" style="font-size:12px; padding:8px 12px;" title="Excel — exactly these ${rows.length} rows, with the totals">Excel</button>
           <button id="btnExportPdf" class="btn btn-ghost" style="font-size:12px; padding:8px 12px;" title="PDF — exactly these ${rows.length} rows, with the totals">PDF</button>` : ''}
           ${kind === 'bills' || kind === 'sales' ? '<button id="btnImport" class="btn btn-secondary" style="font-size:12px; padding:8px 14px;" title="Import a shipments workbook">Import</button>' : ''}
@@ -5885,6 +5886,7 @@ async function renderLedgerTab(kind) {
   if ($('btnFromBill')) $('btnFromBill').onclick = () => openFromBill();
   if ($('btnPay')) $('btnPay').onclick = () => openBillPayForm();
   if ($('btnImport')) $('btnImport').onclick = () => openImportModal(kind);
+  if ($('btnSupplierNames')) $('btnSupplierNames').onclick = () => openSupplierMerge();
 
   // ── EXPORT WHAT IS ON SCREEN ─────────────────────────────────────────
   // Apsara, 2026-09-19: "Add export option to bill and invoice-export as xls
@@ -7258,6 +7260,170 @@ function openBillPaySupplier(data) {
 //
 // An ADVANCE is the same form with no containers ticked: money against the
 // supplier, sitting as credit until she applies it.
+// ── ONE SUPPLIER, ONE SPELLING ──────────────────────────────────────────────
+// Apsara, 2026-09-19, after importing the workbook: "There are like calderon
+// CALDERON,upper case,Space issue like EDGE YARD,EDGEYARD ,MODern modern
+// enterprises getting treated as diff suppliers in bills. make jarvis work on
+// that and fix this."
+//
+// Two lists on this panel, and the split is the whole point:
+//
+//   WHAT THE RULE CAN JOIN — case and spacing only. "calderon"/"CALDERON",
+//     "EDGE YARD"/"EDGEYARD". Shown with the winning spelling and every row
+//     it would touch, and merged in one go.
+//
+//   WHAT ONLY SHE CAN ANSWER — "MODern" and "modern enterprises" are
+//     genuinely different strings. helpers/nameMatch.js refuses fuzzy
+//     matching on purpose, because a near-miss here means paying the wrong
+//     company. So Jarvis asks, once, and her answer becomes an alias.
+//
+// Merging is behind the Jarvis profile. It rewrites hundreds of live
+// financial records across four stores at once, and a payment records WHO WAS
+// PAID by name — so bills and payments have to move together or the balances
+// on suppliers she has already paid jump back to the full invoice amount.
+async function openSupplierMerge() {
+  const L = LEDGER_LIGHT;
+  document.body.insertAdjacentHTML('beforeend', `
+    <div id="smModal" style="position:fixed; inset:0; background:rgba(0,0,0,.66); z-index:9100; display:flex; align-items:flex-start; justify-content:center; overflow-y:auto; padding:32px 16px;">
+      <div class="card" style="width:min(880px,100%); padding:20px 22px 18px; background:${L.sunken}; border-color:${L.line};">
+        <div style="display:flex; align-items:baseline; justify-content:space-between; margin-bottom:6px;">
+          <h3 style="margin:0; font-size:16px; text-transform:none; color:${L.ink};">Supplier names</h3>
+          <button id="smClose" aria-label="Close" title="Close (Esc)" style="background:none; border:none; color:${L.inkMuted}; font-size:22px; line-height:1; cursor:pointer;">&times;</button>
+        </div>
+        <div style="font-size:12px; color:${L.inkFaint}; margin-bottom:16px; line-height:1.55;">
+          The same supplier typed two ways counts twice — in the totals, in what you owe, and in the supplier dropdown.
+          Merging rewrites the stored name across bills, supplier payments, the supplier list and bookings, together.
+        </div>
+        <div id="smBody" style="font-size:12.5px; color:${L.inkMuted};">Looking…</div>
+      </div>
+    </div>`);
+
+  const close = () => { const m = $('smModal'); if (m) m.remove(); document.removeEventListener('keydown', onKey); };
+  const onKey = (e) => { if (e.key === 'Escape') close(); };
+  document.addEventListener('keydown', onKey);
+  $('smClose').onclick = close;
+  $('smModal').addEventListener('click', (e) => { if (e.target.id === 'smModal') close(); });
+
+  const n = (v) => Number(v || 0).toLocaleString('en-US');
+
+  async function draw(note) {
+    let d;
+    try { d = await api('/api/suppliers/merge/preview'); }
+    catch (e) { $('smBody').innerHTML = `<div style="color:${L.danger};">${esc(e.message)}</div>`; return; }
+
+    const clusters = d.clusters || [];
+    const proposals = d.proposals || [];
+    const merges = d.merges || [];
+
+    $('smBody').innerHTML = `
+      ${note ? `<div style="margin-bottom:12px; padding:9px 12px; border:1px solid ${L.ok}; border-radius:var(--radius-sm); color:${L.ink};">${esc(note)}</div>` : ''}
+
+      ${clusters.length ? `
+        <div style="font-size:11px; color:${L.inkFaint}; margin-bottom:6px;">Same name, different spelling — ${n(d.total)} row${d.total === 1 ? '' : 's'} would change</div>
+        <div style="border:1px solid ${L.line}; border-radius:var(--radius-sm); background:${L.paper};">
+          ${clusters.map((c) => `
+            <div style="padding:9px 12px; border-bottom:1px solid ${L.lineSoft};">
+              <div style="color:${L.ink};"><b>${esc(c.winner)}</b>
+                <span style="color:${L.inkFaint}; font-size:11px;">&nbsp;keeps this spelling${c.confirmed ? ' — you chose it' : ' — the one you use most'}</span></div>
+              <div style="color:${L.inkMuted}; font-size:11.5px; margin-top:3px;">
+                absorbs ${c.losers.map((l) => `<b style="color:${L.ink};">${esc(l.name)}</b> (${n(l.total)})`).join(', ')}
+              </div>
+            </div>`).join('')}
+        </div>
+        <div style="font-size:11px; color:${L.inkFaint}; margin-top:7px;">
+          Across ${Object.entries(d.byStore || {}).map(([k, v]) => `${n(v)} in ${esc(k)}`).join(', ')}.
+          Every changed row keeps its original spelling, so this can be undone.
+        </div>
+        <div style="margin-top:12px; display:flex; align-items:center; gap:10px;">
+          <span style="flex:1;"></span>
+          ${metalsCanDelete()
+            ? `<button id="smGo" class="btn btn-primary" style="font-size:12px; padding:8px 16px;">Merge ${n(d.total)} rows</button>`
+            : `<span style="font-size:11px; color:${L.inkFaint};">Merging needs the Jarvis profile — it rewrites financial records in four places at once.</span>`}
+        </div>`
+        : `<div style="padding:12px; border:1px solid ${L.line}; border-radius:var(--radius-sm); background:${L.paper}; color:${L.inkMuted};">
+             No spelling differences left. Every supplier appears under one name.
+           </div>`}
+
+      ${proposals.length ? `
+        <div style="font-size:11px; color:${L.inkFaint}; margin:18px 0 6px;">These might be the same — only you can say</div>
+        <div style="border:1px solid ${L.warn}; border-radius:var(--radius-sm); background:${L.paper};">
+          ${proposals.map((p, i) => `
+            <div style="padding:10px 12px; border-bottom:1px solid ${L.lineSoft}; display:flex; align-items:center; gap:10px; flex-wrap:wrap;">
+              <span style="flex:1; min-width:280px; color:${L.ink};">${esc(p.question)}</span>
+              <button class="smYes btn btn-secondary" data-i="${i}" style="font-size:11px; padding:5px 12px;">Yes — both are “${esc(p.suggest)}”</button>
+              <button class="smYesOther btn btn-secondary" data-i="${i}" style="font-size:11px; padding:5px 12px;">Yes — both are “${esc(p.shorter)}”</button>
+            </div>`).join('')}
+        </div>
+        <div style="font-size:11px; color:${L.inkFaint}; margin-top:7px; line-height:1.5;">
+          Nothing is merged by guessing. Name matching here is case- and spacing-tolerant but never fuzzy — a near-miss
+          would mean paying the wrong company. Answer once and it is remembered.
+        </div>` : ''}
+
+      ${merges.length ? `
+        <div style="font-size:11px; color:${L.inkFaint}; margin:18px 0 6px;">Merged before</div>
+        <div style="border:1px solid ${L.line}; border-radius:var(--radius-sm); background:${L.paper};">
+          ${merges.map((m) => `
+            <div style="display:flex; align-items:center; gap:10px; padding:7px 10px; border-bottom:1px solid ${L.lineSoft}; font-size:11.5px;">
+              <span style="font-family:var(--font-mono); color:${L.inkMuted};">${esc(String(m.merge_id).slice(4, 14))}</span>
+              <span style="flex:1;"></span>
+              <span style="color:${L.inkFaint};">${n(m.rows)} rows</span>
+              ${metalsCanDelete() ? `<button class="smUndo" data-id="${esc(m.merge_id)}" style="background:none; border:1px solid ${L.line}; border-radius:var(--radius-sm); padding:3px 9px; font-size:11px; color:${L.danger}; cursor:pointer;">Undo</button>` : ''}
+            </div>`).join('')}
+        </div>` : ''}
+      <div id="smErr"></div>`;
+
+    if ($('smGo')) $('smGo').onclick = async (e) => {
+      const btn = e.currentTarget;
+      if (!confirm(`Rewrite ${d.total} rows so each supplier has one spelling?\n\n`
+        + clusters.map((c) => `  ${c.losers.map((l) => l.name).join(', ')} → ${c.winner}`).join('\n')
+        + `\n\nBills, supplier payments, the supplier list and bookings change together. Every row keeps its original spelling, so this can be undone.`)) return;
+      btn.disabled = true; btn.innerHTML = '<span class="spinner"></span>Merging…';
+      try {
+        const r = await api('/api/suppliers/merge', { method: 'POST', body: JSON.stringify({}) });
+        await draw(`Merged — ${n(r.changed)} rows now use one spelling.`);
+        renderLedgerTab('bills');
+      } catch (err) {
+        btn.disabled = false; btn.textContent = 'Try again';
+        $('smErr').innerHTML = `<div style="margin-top:12px; color:${L.danger};">${esc(err.message)}</div>`;
+      }
+    };
+
+    // Her answer. Stored as an alias; it does NOT merge on its own — the next
+    // draw simply shows the two names as one cluster and she still presses
+    // Merge. One decision at a time, each one hers.
+    const answer = async (from, to) => {
+      try {
+        await api('/api/suppliers/alias', { method: 'POST', body: JSON.stringify({ from, to }) });
+        await draw(`Noted — “${from}” means “${to}”. It is in the list above now.`);
+      } catch (err) {
+        $('smErr').innerHTML = `<div style="margin-top:12px; color:${L.danger};">${esc(err.message)}</div>`;
+      }
+    };
+    document.querySelectorAll('.smYes').forEach((b) => {
+      b.onclick = () => { const p = proposals[Number(b.dataset.i)]; answer(p.shorter, p.suggest); };
+    });
+    document.querySelectorAll('.smYesOther').forEach((b) => {
+      b.onclick = () => { const p = proposals[Number(b.dataset.i)]; answer(p.longer, p.shorter); };
+    });
+    document.querySelectorAll('.smUndo').forEach((b) => {
+      b.onclick = async () => {
+        if (!confirm('Put every one of these rows back to the spelling it had?')) return;
+        b.disabled = true; b.textContent = '…';
+        try {
+          const r = await api('/api/suppliers/merge/' + encodeURIComponent(b.dataset.id), { method: 'DELETE' });
+          await draw(`Undone — ${n(r.restored)} rows back to their original spelling.`);
+          renderLedgerTab('bills');
+        } catch (err) {
+          b.disabled = false; b.textContent = 'Undo';
+          $('smErr').innerHTML = `<div style="margin-top:12px; color:${L.danger};">${esc(err.message)}</div>`;
+        }
+      };
+    });
+  }
+
+  draw();
+}
+
 // ── IMPORTING A SHIPMENTS WORKBOOK ──────────────────────────────────────────
 // Apsara, 2026-09-19: "I want to have a upload option in jarvis for bills and
 // invoice where i can import this."

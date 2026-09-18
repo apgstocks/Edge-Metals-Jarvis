@@ -3774,6 +3774,82 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
         } catch (e) { res.status(500).json({ error: e.message }); }
     });
 
+    // ── ONE SUPPLIER, ONE SPELLING ──────────────────────────────────────
+    // Apsara, 2026-09-19, after the import: "There are like calderon
+    // CALDERON,upper case,Space issue like EDGE YARD,EDGEYARD ,MODern modern
+    // enterprises getting treated as diff suppliers in bills."
+    //
+    // Preview writes nothing. Merging DOES — she chose to rewrite the stored
+    // names rather than group them on read — and it rewrites across four
+    // stores at once, because a payment records who was paid BY NAME.
+    app.get('/api/suppliers/merge/preview', requireAdmin, (req, res) => {
+        try {
+            const sm = require('./helpers/supplierMerge');
+            const planned = sm.plan();
+            res.json({
+                ok: true,
+                clusters: planned.clusters,
+                byStore: planned.byStore,
+                total: planned.total,
+                // Names no rule can join. A QUESTION, never a decision — see
+                // the note on proposals() for why this one stays manual.
+                proposals: sm.proposals(),
+                aliases: sm.aliases(),
+                merges: sm.merges(),
+            });
+        } catch (e) { res.status(500).json({ error: e.message }); }
+    });
+
+    // Her answer to one of those questions. Stored, never inferred, and it
+    // does NOT rewrite anything on its own: the next preview simply shows the
+    // two names as one cluster, and she still presses Merge.
+    app.post('/api/suppliers/alias', requireAdmin, async (req, res) => {
+        try {
+            const sm = require('./helpers/supplierMerge');
+            const { from, to } = req.body || {};
+            const saved = await sm.addAlias(from, to, actorOf(req));
+            res.json({ ok: true, ...saved });
+        } catch (e) { res.status(400).json({ error: e.message }); }
+    });
+
+    // ── requireSuper, and deliberately ──────────────────────────────────
+    // This rewrites hundreds of live financial records across bills,
+    // payments, the supplier list and the booking workflow. That is a bigger
+    // act than editing one bill, and it sits behind the same gate as undoing
+    // an import for the same reason.
+    app.post('/api/suppliers/merge', requireSuper, async (req, res) => {
+        try {
+            const sm = require('./helpers/supplierMerge');
+            const audit = require('./helpers/audit');
+            const planned = sm.plan({ keys: Array.isArray(req.body && req.body.keys) ? req.body.keys : null });
+            if (!planned.total) return res.json({ ok: true, changed: 0, byStore: {}, merge_id: null });
+            const entry = await audit.record({
+                action: 'merge-suppliers', subject: planned.merge_id,
+                actor: actorOf(req), role: req.role, ip: req.ip,
+                detail: { rows: planned.total, byStore: planned.byStore,
+                          clusters: planned.clusters.map((c) => ({ to: c.winner, from: c.losers.map((l) => l.name) })) },
+            });
+            try {
+                const out = await sm.apply(planned);
+                await audit.complete(entry, 'done', out);
+                res.json({ ok: true, ...out });
+            } catch (e) { await audit.complete(entry, 'failed', { reason: e.message }); throw e; }
+        } catch (e) { res.status(500).json({ error: e.message }); }
+    });
+
+    app.delete('/api/suppliers/merge/:id', requireSuper, async (req, res) => {
+        try {
+            const audit = require('./helpers/audit');
+            const entry = await audit.record({
+                action: 'undo-supplier-merge', subject: req.params.id,
+                actor: actorOf(req), role: req.role, ip: req.ip, detail: { merge_id: req.params.id },
+            });
+            const restored = await require('./helpers/supplierMerge').undo(req.params.id);
+            await audit.complete(entry, 'done', { restored });
+            res.json({ ok: true, restored });
+        } catch (e) { res.status(500).json({ error: e.message }); }
+    });
+
     // ── EXPORTING WHAT IS ON SCREEN ─────────────────────────────────────
     // Apsara, 2026-09-19: "Add export option to bill and invoice-export as xls
     // and pdf", and, asked what it should contain: exactly what is on screen.
