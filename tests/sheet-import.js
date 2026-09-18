@@ -30,6 +30,9 @@ const path = require('path');
 const TMP = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvis-import-'));
 process.env.DATA_DIR = TMP;
 process.env.JARVIS_TEST = '1';
+// Before config.js is required — it reads these once, at load.
+process.env.ADMIN_PASSWORD = 'admin-pw-bbbbbbbbbbb';
+process.env.STAFF_PASSWORD = 'staff-pw-ccccccccccc';
 
 let pass = 0, fail = 0; const failures = [];
 const ck = (n, c, extra) => {
@@ -344,6 +347,87 @@ section('H. undo');
     let err = null;
     try { await siw.undo(''); } catch (e) { err = e; }
     ck('undo without a batch id refuses', !!err, 'otherwise it is a delete-everything button');
+}
+
+// ── I. THROUGH THE REAL ROUTES ──────────────────────────────────────────────
+// Apsara, 2026-09-19: "I want to have a upload option in jarvis for bills and
+// invoice where i can import this", and her standing rule: "ALwyas test end to
+// end when you add a new feature."
+//
+// The helpers being right proves nothing about whether the upload reaches
+// them, whether preview really writes nothing, or whether the undo is behind
+// the right gate.
+section('I. the upload routes');
+{
+    const http = require('http');
+    const { createApi } = require(path.join(ROOT, 'api'));
+    const app = createApi();
+    const listener = await new Promise((r) => { const s = app.listen(0, '127.0.0.1', () => r(s)); });
+    const base = `http://127.0.0.1:${listener.address().port}`;
+
+    const req = (method, p2, { body, sid } = {}) => new Promise((resolve, reject) => {
+        const data = body ? JSON.stringify(body) : null;
+        const headers = {};
+        if (data) { headers['Content-Type'] = 'application/json'; headers['Content-Length'] = Buffer.byteLength(data); }
+        if (sid) headers.Authorization = `Bearer ${sid}`;
+        const r2 = http.request(base + p2, { method, headers }, (res) => {
+            let raw = ''; res.on('data', (c) => { raw += c; });
+            res.on('end', () => { let j = null; try { j = JSON.parse(raw); } catch (e) {} resolve({ status: res.statusCode, json: j }); });
+        });
+        r2.on('error', reject); if (data) r2.write(data); r2.end();
+    });
+
+    const admin = ((await req('POST', '/login', { body: { password: 'admin-pw-bbbbbbbbbbb' } })).json || {}).sid;
+    const staff = ((await req('POST', '/login', { body: { password: 'staff-pw-ccccccccccc' } })).json || {}).sid;
+    ck('logged in', !!admin);
+
+    const file_base64 = buf.toString('base64');
+    const payload = { file_base64, filename: 'routed.xlsx', shipments_last_row: 6, orders_last_row: 5 };
+
+    ck('staff cannot import', [401, 403].includes((await req('POST', '/api/import/preview', { sid: staff, body: payload })).status));
+
+    const bills = require(path.join(ROOT, 'helpers/bills'));
+    const sales = require(path.join(ROOT, 'helpers/sales'));
+    const before = { bills: bills.list().length, sales: sales.list().length };
+
+    const prev = await req('POST', '/api/import/preview', { sid: admin, body: payload });
+    ck('the preview route answers', prev.status === 200, JSON.stringify(prev.json).slice(0, 120));
+    ck('  THE PREVIEW WRITES NOTHING',
+       bills.list().length === before.bills && sales.list().length === before.sales,
+       'the screen she uses to decide must not be the thing that decides');
+    ck('  it says what it would create',
+       prev.json.summary.bills === 3 && prev.json.summary.sales === 2, JSON.stringify(prev.json.summary));
+    ck('  and lists what it refused, with the row',
+       (prev.json.refused || []).length === 1 && (prev.json.refused[0].rows || []).length === 1);
+    ck('  with a sample of each kind to look at',
+       !!prev.json.samples.bill && !!prev.json.samples.multi && !!prev.json.samples.local && !!prev.json.samples.invoice);
+    ck('  but NOT all 568 rows', !prev.json.bills && !prev.json.sales,
+       'sending every row back is a large response she is not going to read');
+
+    const done = await req('POST', '/api/import/commit', { sid: admin, body: payload });
+    ck('committing writes them', done.status === 200 && done.json.bills === 3 && done.json.sales === 2,
+       JSON.stringify(done.json));
+    ck('  and they are really there',
+       bills.list().length === before.bills + 3 && sales.list().length === before.sales + 2);
+
+    const again = await req('POST', '/api/import/commit', { sid: admin, body: payload });
+    ck('the same file twice is refused, 409', again.status === 409 && again.json.code === 'ALREADY_IMPORTED',
+       `${again.status} ${JSON.stringify(again.json)}`);
+
+    const list = await req('GET', '/api/import/batches', { sid: admin });
+    ck('the imports are listable', (list.json.batches || []).length >= 1);
+
+    // Undo is behind the Jarvis profile, not plain admin: it removes hundreds
+    // of financial records at once.
+    const batch = done.json.batch;
+    const denied = await req('DELETE', '/api/import/' + encodeURIComponent(batch), { sid: admin });
+    ck('an ADMIN cannot undo an import', denied.status === 403,
+       `${denied.status} — undoing removes hundreds of rows at once`);
+    ck('  and is told which profile can', /jarvis profile/i.test((denied.json || {}).error || ''),
+       JSON.stringify(denied.json));
+    ck('  so the rows are still there', bills.list().length === before.bills + 3);
+
+    listener.close();
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

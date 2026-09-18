@@ -3654,6 +3654,126 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
     //
     // Writes nothing, and deliberately has no id: it is compute() over a
     // request body and back.
+    // ── IMPORTING HER SHIPMENT WORKBOOK ──────────────────────────────────
+    // Apsara, 2026-09-19: "I want to have a upload option in jarvis for bills
+    // and invoice where i can import this."
+    //
+    // THREE ROUTES, AND THE SPLIT IS THE SAFETY PROPERTY. /preview reads the
+    // file and writes NOTHING; /commit writes what a preview described; and
+    // the undo removes one import whole. She asked to see it before anything
+    // landed, and 568 bills appearing unannounced is not something to find
+    // out about afterwards.
+    //
+    // The preview is re-read on commit rather than carried in a session:
+    // holding a parsed 19MB workbook in memory between two requests is a
+    // memory leak waiting for a busy afternoon, and re-reading the same bytes
+    // gives the same answer. What she approved IS what gets written because
+    // both calls run the same helpers/sheetImport.js over the same file.
+    function importOptionsFrom(body) {
+        const n = (v) => (Number.isFinite(Number(v)) && Number(v) > 0 ? Number(v) : undefined);
+        return { shipmentsLastRow: n(body.shipments_last_row), ordersLastRow: n(body.orders_last_row) };
+    }
+
+    // Base64 in JSON, the same shape /api/packing-lists/scan already uses.
+    // Her workbook is 19MB, which is ~25MB encoded — under the 40MB body cap,
+    // but close enough that the limit is stated rather than discovered.
+    function workbookFrom(body) {
+        const b64 = String(body.file_base64 || '').replace(/^data:[^;]+;base64,/, '');
+        if (!b64) { const e = new Error('no file'); e.status = 400; throw e; }
+        if (b64.length > 34 * 1024 * 1024) {
+            const e = new Error('That workbook is too big — under 25MB, please.');
+            e.status = 413; throw e;
+        }
+        return Buffer.from(b64, 'base64');
+    }
+
+    app.post('/api/import/preview', requireAdmin, async (req, res) => {
+        try {
+            const body = req.body || {};
+            const parsed = await require('./helpers/sheetImport')
+                .readWorkbook(workbookFrom(body), importOptionsFrom(body));
+            const planned = require('./helpers/sheetImportWrite')
+                .plan(parsed, { source: String(body.filename || 'workbook.xlsx'), actor: actorOf(req) });
+            // The rows themselves are NOT sent back — 568 bills is a large
+            // response to render and she is deciding on the shape of it, not
+            // reading all of them. Counts, every refusal, and one of each
+            // kind as a sample.
+            res.json({
+                ok: true,
+                summary: { ...parsed.summary, ...planned.summary },
+                sheets: parsed.sheets,
+                refused: planned.refused,
+                skipped: parsed.skipped,
+                problems: parsed.problems,
+                cancelled: parsed.cancelled || [],
+                mismatches: parsed.mismatches || [],
+                already_imported: planned.alreadyImported,
+                samples: {
+                    bill: planned.bills.find((b) => !b.items) || null,
+                    multi: planned.bills.find((b) => (b.items || []).length > 1) || null,
+                    local: planned.bills.find((b) => !b.container_no) || null,
+                    invoice: planned.sales[0] || null,
+                },
+            });
+        } catch (e) {
+            res.status(e.status || 500).json({ error: e.message });
+        }
+    });
+
+    app.post('/api/import/commit', requireAdmin, async (req, res) => {
+        try {
+            const body = req.body || {};
+            const parsed = await require('./helpers/sheetImport')
+                .readWorkbook(workbookFrom(body), importOptionsFrom(body));
+            const siw = require('./helpers/sheetImportWrite');
+            const planned = siw.plan(parsed, { source: String(body.filename || 'workbook.xlsx'), actor: actorOf(req) });
+
+            // Audited BEFORE the write, like the document delete: the record
+            // this describes is the one that will not exist if it goes wrong.
+            const audit = require('./helpers/audit');
+            const entry = await audit.record({
+                action: 'import-workbook', subject: planned.batch,
+                actor: actorOf(req), role: req.role, ip: req.ip,
+                detail: { source: planned.source, bills: planned.summary.bills,
+                          sales: planned.summary.sales, refused: planned.summary.refused },
+            });
+            try {
+                const result = await siw.commit(planned, { force: body.force === true });
+                await audit.complete(entry, 'done', result);
+                res.json({ ok: true, ...result, refused: planned.refused });
+            } catch (e) {
+                await audit.complete(entry, 'failed', { reason: e.message, code: e.code || null });
+                throw e;
+            }
+        } catch (e) {
+            res.status(e.code === 'ALREADY_IMPORTED' ? 409 : (e.status || 500))
+               .json({ error: e.message, code: e.code || null, batch: e.batch || null });
+        }
+    });
+
+    app.get('/api/import/batches', requireAdmin, (req, res) => {
+        try { res.json({ batches: require('./helpers/sheetImportWrite').listBatches() }); }
+        catch (e) { res.status(500).json({ error: e.message }); }
+    });
+
+    // The way back. requireSuper, not requireAdmin: undoing an import removes
+    // hundreds of financial records at once, which is a bigger act than
+    // deleting one bill and belongs behind the same gate as unwinding a
+    // supplier payment.
+    app.delete('/api/import/:batch', requireSuper, async (req, res) => {
+        try {
+            const audit = require('./helpers/audit');
+            const entry = await audit.record({
+                action: 'undo-import', subject: req.params.batch,
+                actor: actorOf(req), role: req.role, ip: req.ip,
+                detail: { batch: req.params.batch },
+            });
+            const removed = await require('./helpers/sheetImportWrite').undo(req.params.batch);
+            await audit.complete(entry, 'done', { removed });
+            res.json({ ok: true, removed });
+        } catch (e) { res.status(500).json({ error: e.message }); }
+    });
+
     app.post('/api/bills/preview', (req, res) => {
         try { res.json({ ok: true, ...require('./helpers/bills').compute(req.body || {}) }); }
         catch (e) { res.status(400).json({ error: e.message }); }

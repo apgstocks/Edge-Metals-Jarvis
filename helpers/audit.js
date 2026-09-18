@@ -76,6 +76,14 @@ const ACTIONS = [
     // in a broker's inbox. The only trace of a deleted commercial invoice is
     // otherwise that it is not there any more.
     'delete-saved-document',      // an archived proforma/invoice/BOL/packing PDF
+    // ── A SPREADSHEET IMPORT ────────────────────────────────────────────
+    // Apsara, 2026-09-19, asking for an upload button. One press creates
+    // hundreds of financial records at once and the undo removes them again,
+    // so both belong in the log that exists to answer "who did that": a
+    // question about an import is otherwise a question about 568 rows that
+    // all appeared at the same second with nothing saying why.
+    'import-workbook',            // bills and invoices created from a spreadsheet
+    'undo-import',                // one import removed whole
 ];
 
 function listEntries() {

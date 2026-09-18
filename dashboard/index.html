@@ -5805,6 +5805,7 @@ async function renderLedgerTab(kind) {
         <div style="display:flex; gap:8px;">
           ${kind === 'bills' ? '<button id="btnPay" class="btn btn-secondary" style="font-size:12px; padding:8px 14px;">Pay</button>' : ''}
           ${kind === 'sales' ? '<button id="btnFromBill" class="btn btn-secondary" style="font-size:12px; padding:8px 14px;">New from bill</button>' : ''}
+          ${kind === 'bills' || kind === 'sales' ? '<button id="btnImport" class="btn btn-secondary" style="font-size:12px; padding:8px 14px;" title="Import a shipments workbook">Import</button>' : ''}
           <button id="btnAddLedger" class="btn btn-primary" style="font-size:12px; padding:8px 14px;">${K.addLabel}</button>
         </div>
       </div>
@@ -5881,6 +5882,7 @@ async function renderLedgerTab(kind) {
   wireMetalsTabs();
   if ($('btnFromBill')) $('btnFromBill').onclick = () => openFromBill();
   if ($('btnPay')) $('btnPay').onclick = () => openBillPayForm();
+  if ($('btnImport')) $('btnImport').onclick = () => openImportModal(kind);
   $('btnAddLedger').onclick = () => openLedgerForm(kind);
   // ── EDIT ─────────────────────────────────────────────────────────────
   // Apsara, 2026-09-10: "i want edit option in bill". Until now a typo in a
@@ -7222,6 +7224,320 @@ function openBillPaySupplier(data) {
 //
 // An ADVANCE is the same form with no containers ticked: money against the
 // supplier, sitting as credit until she applies it.
+// ── IMPORTING A SHIPMENTS WORKBOOK ──────────────────────────────────────────
+// Apsara, 2026-09-19: "I want to have a upload option in jarvis for bills and
+// invoice where i can import this."
+//
+// ── WHY IT IS TWO BUTTONS AND NOT ONE ───────────────────────────────────────
+// Preview READS the file and writes nothing; Import writes. The click that
+// puts 568 bills into live data is deliberately not the click that opens the
+// file, because there is no way to look at a spreadsheet and know what it
+// will become — the six reader bugs found on 2026-09-19 were every one of
+// them invisible until the numbers were on screen.
+//
+// ── ONE WORKBOOK FILLS BOTH SCREENS ─────────────────────────────────────────
+// Shipments becomes Bills and Order Details becomes Invoices, so an import
+// started from EITHER screen does both. Stated on the panel, because the
+// obvious guess is that the Bills screen imports bills — and acting on that
+// guess means uploading the same file twice. (The server refuses the second
+// one, but being refused is a worse way to learn this than being told.)
+let importFile = null;      // { name, base64 }
+let importPreview = null;   // the last preview, or null
+
+async function openImportModal(kind) {
+  const L = LEDGER_LIGHT;
+  importFile = null; importPreview = null;
+  const fieldCss = `width:100%; height:34px; padding:0 10px; background:${L.paper}; border:1px solid ${L.line}; border-radius:var(--radius-sm); color:${L.ink}; outline:none; font-size:13px;`;
+  const lab = `display:block; font-size:11px; color:${L.inkMuted}; margin-bottom:5px;`;
+
+  document.body.insertAdjacentHTML('beforeend', `
+    <div id="impModal" style="position:fixed; inset:0; background:rgba(0,0,0,.66); z-index:9100; display:flex; align-items:flex-start; justify-content:center; overflow-y:auto; padding:32px 16px;">
+      <div class="card" style="width:min(940px,100%); padding:20px 22px 18px; background:${L.sunken}; border-color:${L.line};">
+        <div style="display:flex; align-items:baseline; justify-content:space-between; margin-bottom:6px;">
+          <h3 style="margin:0; font-size:16px; text-transform:none; color:${L.ink};">Import a shipments workbook</h3>
+          <button id="impClose" aria-label="Close" title="Close (Esc)" style="background:none; border:none; color:${L.inkMuted}; font-size:22px; line-height:1; cursor:pointer;">&times;</button>
+        </div>
+        <div style="font-size:12px; color:${L.inkFaint}; margin-bottom:16px; line-height:1.55;">
+          The <b>Shipments</b> tab becomes purchase <b>Bills</b>; <b>Order Details</b> becomes <b>Invoices</b>.
+          One upload does both — there is no need to come back and do it again from the other screen.
+        </div>
+        <div id="impBody"></div>
+      </div>
+    </div>`);
+
+  const close = () => { const m = $('impModal'); if (m) m.remove(); document.removeEventListener('keydown', onKey); };
+  const onKey = (e) => { if (e.key === 'Escape') close(); };
+  document.addEventListener('keydown', onKey);
+  $('impClose').onclick = close;
+  $('impModal').addEventListener('click', (e) => { if (e.target.id === 'impModal') close(); });
+
+  // ── STEP ONE: THE FILE ────────────────────────────────────────────────
+  function step1(err) {
+    $('impBody').innerHTML = `
+      ${err ? `<div style="margin-bottom:12px; padding:9px 12px; border:1px solid ${L.danger}; border-radius:var(--radius-sm); font-size:12px; color:${L.danger};">${esc(err)}</div>` : ''}
+      <div id="impDrop" style="border:1px dashed ${L.line}; border-radius:var(--radius-sm); background:${L.paper}; padding:26px; text-align:center; cursor:pointer;">
+        <div id="impDropLabel" style="font-size:13px; color:${L.inkMuted};">Drop the .xlsx here, or click to choose one</div>
+      </div>
+      <input type="file" id="impInput" accept=".xlsx,.xlsm,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" style="display:none;">
+
+      <!-- ── WHERE THE REAL DATA STOPS ──────────────────────────────────
+           Apsara, 2026-09-19: "till 665 rows only to beconsidered" and "in
+           order details-till row 649 should be there". Both sheets have
+           working space underneath.
+
+           Left BLANK on purpose. 665 and 649 are true of the file she sent
+           on the 19th and will not be true of the next one, and a prefilled
+           number that has quietly gone stale is worse than an empty box —
+           it would silently drop real rows off the end. The preview says
+           which rows it actually read, so a wrong answer here is visible
+           before anything is written. -->
+      <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px; margin-top:16px;">
+        <div><label style="${lab}">Shipments — last row to read</label>
+          <input id="impShipLast" inputmode="numeric" placeholder="blank = to the end" style="${fieldCss}"></div>
+        <div><label style="${lab}">Order Details — last row to read</label>
+          <input id="impOrdLast" inputmode="numeric" placeholder="blank = to the end" style="${fieldCss}"></div>
+      </div>
+      <div style="font-size:11px; color:${L.inkFaint}; margin-top:7px; line-height:1.5;">
+        Only if the sheet has working notes below the real data. Leave both blank and everything is read;
+        the preview always says which rows it used.
+      </div>
+
+      <div style="border-top:1px solid ${L.line}; padding-top:14px; margin-top:16px; display:flex; align-items:center; gap:10px;">
+        <span id="impNote" style="flex:1; font-size:11px; color:${L.inkFaint};">Nothing is written until you have seen the preview.</span>
+        <button id="impCancel" class="btn btn-secondary" style="font-size:12px; padding:8px 14px;">Cancel</button>
+        <button id="impPreview" class="btn btn-primary" style="font-size:12px; padding:8px 16px;" disabled>Preview</button>
+      </div>
+      <div id="impBatches" style="margin-top:18px;"></div>`;
+
+    const take = (f) => {
+      if (!f) return;
+      if (!/\.xlsm?x?$/i.test(f.name)) return step1('That is not a spreadsheet — an .xlsx is expected.');
+      const r = new FileReader();
+      r.onload = () => {
+        importFile = { name: f.name, base64: String(r.result).split(',')[1] };
+        $('impDropLabel').innerHTML = `<b style="color:${L.ink};">${esc(f.name)}</b> — ${(f.size / 1048576).toFixed(1)} MB, ready`;
+        $('impPreview').disabled = false;
+      };
+      r.readAsDataURL(f);
+    };
+    $('impDrop').onclick = () => $('impInput').click();
+    $('impInput').onchange = () => take($('impInput').files[0]);
+    $('impDrop').addEventListener('dragover', (e) => e.preventDefault());
+    $('impDrop').addEventListener('drop', (e) => { e.preventDefault(); take(e.dataTransfer.files[0]); });
+    $('impCancel').onclick = close;
+    $('impPreview').onclick = doPreview;
+    loadBatches();
+  }
+
+  const lastRows = () => ({
+    shipments_last_row: Number($('impShipLast').value) || undefined,
+    orders_last_row: Number($('impOrdLast').value) || undefined,
+  });
+  let chosenRows = {};
+
+  async function doPreview() {
+    const btn = $('impPreview');
+    btn.disabled = true; btn.innerHTML = '<span class="spinner"></span>Reading…';
+    chosenRows = lastRows();
+    try {
+      importPreview = await api('/api/import/preview', { method: 'POST', body: JSON.stringify({
+        file_base64: importFile.base64, filename: importFile.name, ...chosenRows }) });
+      step2();
+    } catch (e) {
+      step1(e.message || 'Could not read that file.');
+    }
+  }
+
+  const n = (v) => Number(v || 0).toLocaleString('en-US');
+  const card = (label, value, warn) => `
+    <div class="card" style="padding:11px; background:${L.paper}; border-color:${warn && value ? L.warn : L.line};">
+      <div style="font-family:var(--font-mono); font-size:9px; letter-spacing:.12em; text-transform:uppercase; color:${L.inkMuted};">${label}</div>
+      <div style="font-size:17px; font-weight:700; margin-top:4px; color:${warn && value ? L.warn : L.ink};">${n(value)}</div>
+    </div>`;
+  const fold = (title, count, inner) => (count ? `
+    <details style="margin-top:10px; border:1px solid ${L.line}; border-radius:var(--radius-sm); background:${L.paper};">
+      <summary style="padding:9px 12px; cursor:pointer; font-size:12px; color:${L.inkMuted};">${title} <b style="color:${L.ink};">${n(count)}</b></summary>
+      <div style="padding:0 12px 12px; max-height:280px; overflow:auto;">${inner}</div>
+    </details>` : '');
+  const table = (heads, rows) => `
+    <table style="width:100%; border-collapse:collapse; font-size:11.5px;">
+      <thead><tr>${heads.map((h) => `<th style="text-align:left; padding:5px 7px; font-size:10px; color:${L.inkMuted}; font-weight:400; position:sticky; top:0; background:${L.paper};">${h}</th>`).join('')}</tr></thead>
+      <tbody>${rows.join('')}</tbody></table>`;
+  const tr = (cells) => `<tr style="border-top:1px solid ${L.lineSoft};">${cells.map((c) => `<td style="padding:5px 7px; color:${L.ink}; vertical-align:top;">${c}</td>`).join('')}</tr>`;
+
+  // ── STEP TWO: WHAT IT WOULD DO ────────────────────────────────────────
+  function step2() {
+    const p = importPreview;
+    const s = p.summary || {};
+    const sh = (p.sheets || {}).shipments, or = (p.sheets || {}).orders;
+    const already = p.already_imported || [];
+    const range = (x) => {
+      if (!x) return '<b style="color:' + L.danger + ';">that sheet was not found</b>';
+      return x.lastRow
+        ? `${esc(x.name)}, rows 2–${n(x.lastRow)}${x.rowsBelowLastRow ? ` (${n(x.rowsBelowLastRow)} below that line ignored)` : ''}`
+        : `${esc(x.name)}, all ${n(x.dataRows)} rows`;
+    };
+    // A column that moved or got renamed does not fail — the field simply
+    // arrives empty on every row, which is invisible in a total. Said out
+    // loud, because it is the one thing here that looks like success.
+    const shortCols = [sh, or].filter((x) => x && x.headersMatched < x.headersTotal);
+
+    $('impBody').innerHTML = `
+      <div style="padding:9px 12px; border:1px solid ${L.line}; border-radius:var(--radius-sm); background:${L.paper}; font-size:12px; color:${L.ink}; margin-bottom:12px;">
+        <b>Nothing has been written.</b> This is what the import would create.
+      </div>
+
+      ${already.length ? `<div style="margin-bottom:12px; padding:10px 12px; border:1px solid ${L.warn}; border-radius:var(--radius-sm); font-size:12px; color:${L.warn}; line-height:1.55;">
+        <b>“${esc(importFile.name)}” has been imported before</b> — ${already.map((a) => `${n(a.rows)} rows on ${esc(String(a.at || '').slice(0, 10))}`).join('; ')}.
+        Importing it again <b>doubles every row</b>, and the two copies are not distinguishable on the screen afterwards.
+        Undo the earlier import first, or tick the box below if this really is meant to go in twice.
+      </div>` : ''}
+
+      <div style="display:grid; grid-template-columns:repeat(5,1fr); gap:8px;">
+        ${card('Bills', s.bills)}
+        ${card('Invoices', s.sales)}
+        ${card('Refused', s.refused, true)}
+        ${card('Rows skipped', s.rows_skipped)}
+        ${card('Unreadable values', s.unreadable_values, true)}
+      </div>
+      <div style="font-size:11px; color:${L.inkFaint}; margin-top:9px; line-height:1.6;">
+        Read ${range(sh)} and ${range(or)}.
+        ${s.bills_multi_grade ? `${n(s.bills_multi_grade)} containers had several grades and became one bill each. ` : ''}
+        ${s.bills_local_delivery ? `${n(s.bills_local_delivery)} had no container — local deliveries, imported and marked as such. ` : ''}
+        ${s.cancelled_orders ? `${n(s.cancelled_orders)} cancelled or replaced orders were left out.` : ''}
+      </div>
+
+      ${shortCols.length ? `<div style="margin-top:14px; padding:10px 12px; border:1px solid ${L.warn}; border-radius:var(--radius-sm); font-size:12px; color:${L.warn}; line-height:1.55;">
+        ${shortCols.map((x) => `Only ${n(x.headersMatched)} of the ${n(x.headersTotal)} expected columns were found in <b>${esc(x.name)}</b>`).join('; ')}.
+        The missing ones import as blank on every row — which does not fail, and does not show up in any total. Worth checking a heading was not renamed before importing.
+      </div>` : ''}
+
+      ${(p.refused || []).length ? `<div style="margin-top:14px; padding:10px 12px; border:1px solid ${L.warn}; border-radius:var(--radius-sm); font-size:12px; color:${L.warn};">
+        ${n((p.refused || []).length)} row${(p.refused || []).length === 1 ? '' : 's'} would be refused and <b>not imported</b>. They are listed below with the spreadsheet row, so they can be fixed and the file uploaded again.
+      </div>` : ''}
+
+      ${fold('Refused rows', (p.refused || []).length, table(['Row', 'Kind', 'Which', 'Why'],
+        (p.refused || []).map((r) => tr([esc((r.rows || []).join(', ')), esc(r.kind),
+          esc(r.container || r.invoice_no || r.supplier || r.customer || ''), esc(r.why)]))))}
+
+      ${fold('Rows skipped — with what is actually in them', (p.skipped || []).length, table(['Sheet', 'Row', 'Why', 'What is in the row'],
+        (p.skipped || []).slice(0, 150).map((r) => tr([esc(r.sheet), esc(r.row), esc(r.why),
+          `<span style="color:${L.inkFaint};">${esc((r.content || []).join(' · ') || '(every cell empty)')}</span>`]))))}
+
+      ${fold('Cancelled and replaced orders — left out', (p.cancelled || []).length, table(['Row', 'Invoice', 'Customer', 'What the row says'],
+        (p.cancelled || []).map((c) => tr([esc(c.row), esc(c.invoice_no), esc(c.customer), esc(c.marker)]))))}
+
+      ${fold('Values it could not read — the row still imports, that one value does not', (p.problems || []).length, table(['Sheet', 'Row', 'Field', 'What is there'],
+        (p.problems || []).slice(0, 100).map((x) => tr([esc(x.sheet), esc(x.row), esc(x.field), esc(x.why)]))))}
+
+      ${fold('Invoice totals that disagree with weight × price — reported, never corrected', (p.mismatches || []).length, table(['Row', 'Invoice', 'Sheet says', 'weight × price', 'Difference'],
+        (p.mismatches || []).slice(0, 80).map((m) => tr([esc(m.row), esc(m.invoice_no), esc(m.sheet_says), esc(m.weight_x_price), esc(m.difference)]))))}
+
+      ${fold('A sample of each kind, exactly as it would be stored', 1, `<pre style="font-size:10.5px; color:${L.ink}; white-space:pre-wrap; margin:10px 0 0;">${esc(JSON.stringify(p.samples || {}, null, 1))}</pre>`)}
+
+      <div style="border-top:1px solid ${L.line}; padding-top:14px; margin-top:16px; display:flex; align-items:center; gap:12px; flex-wrap:wrap;">
+        ${already.length ? `<label style="font-size:11.5px; color:${L.warn}; display:flex; align-items:center; gap:6px; cursor:pointer;">
+          <input type="checkbox" id="impForce"> Yes — import it a second time anyway</label>` : ''}
+        <span style="flex:1;"></span>
+        <button id="impBack" class="btn btn-secondary" style="font-size:12px; padding:8px 14px;">Choose another file</button>
+        <button id="impGo" class="btn btn-primary" style="font-size:12px; padding:8px 16px;" ${already.length ? 'disabled' : ''}>Import ${n(s.bills)} bills and ${n(s.sales)} invoices</button>
+      </div>
+      <div id="impErr"></div>`;
+
+    $('impBack').onclick = () => { importFile = null; importPreview = null; step1(); };
+    if ($('impForce')) $('impForce').onchange = (e) => { $('impGo').disabled = !e.target.checked; };
+    $('impGo').onclick = doCommit;
+  }
+
+  // ── STEP THREE: WRITE IT ──────────────────────────────────────────────
+  async function doCommit() {
+    const btn = $('impGo');
+    btn.disabled = true; btn.innerHTML = '<span class="spinner"></span>Importing…';
+    try {
+      // The file is sent AGAIN rather than the preview's rows being written.
+      // The server re-reads the same bytes through the same reader, so what
+      // lands is produced by the code that produced the preview — a preview
+      // whose rows were shipped back to be written could be edited on the way.
+      const r = await api('/api/import/commit', { method: 'POST', body: JSON.stringify({
+        file_base64: importFile.base64, filename: importFile.name, ...chosenRows,
+        force: !!($('impForce') && $('impForce').checked) }) });
+      step3(r);
+    } catch (e) {
+      btn.disabled = false; btn.textContent = 'Try again';
+      $('impErr').innerHTML = `<div style="margin-top:12px; padding:10px 12px; border:1px solid ${L.danger}; border-radius:var(--radius-sm); font-size:12px; color:${L.danger}; line-height:1.55;">${esc(e.message || 'The import failed.')}</div>`;
+    }
+  }
+
+  function step3(r) {
+    $('impBody').innerHTML = `
+      <div style="padding:14px 16px; border:1px solid ${L.ok}; border-radius:var(--radius-sm); background:${L.paper};">
+        <div style="font-size:15px; color:${L.ink}; font-weight:600;">Imported.</div>
+        <div style="font-size:12.5px; color:${L.inkMuted}; margin-top:6px; line-height:1.6;">
+          ${n(r.bills)} bills and ${n(r.sales)} invoices from ${esc(r.source || importFile.name)}.
+          ${r.refused ? `${n(r.refused)} rows were refused and are not in.` : ''}
+        </div>
+        <div style="font-family:var(--font-mono); font-size:10.5px; color:${L.inkFaint}; margin-top:8px;">${esc(r.batch)}</div>
+      </div>
+      <div style="border-top:1px solid ${L.line}; padding-top:14px; margin-top:16px; display:flex; align-items:center; gap:10px;">
+        <span style="flex:1; font-size:11px; color:${L.inkFaint};">
+          ${metalsCanDelete()
+            ? 'Undo removes exactly these rows and nothing that was typed by hand.'
+            : 'Undoing an import needs the Jarvis profile — it removes hundreds of rows at once.'}
+        </span>
+        ${metalsCanDelete() ? `<button id="impUndo" class="btn btn-secondary" style="font-size:12px; padding:8px 14px; color:${L.danger};">Undo this import</button>` : ''}
+        <button id="impDone" class="btn btn-primary" style="font-size:12px; padding:8px 16px;">Done</button>
+      </div>
+      <div id="impErr"></div>`;
+    $('impDone').onclick = () => { close(); renderLedgerTab(kind); };
+    if ($('impUndo')) $('impUndo').onclick = () => undoBatch(r.batch, $('impUndo'));
+  }
+
+  async function undoBatch(batch, btn) {
+    if (!confirm(`Remove every row that came from this import?\n\n${batch}\n\nRows typed by hand are not touched.`)) return;
+    btn.disabled = true; btn.innerHTML = '<span class="spinner"></span>Undoing…';
+    try {
+      const r = await api('/api/import/' + encodeURIComponent(batch), { method: 'DELETE' });
+      $('impBody').innerHTML = `<div style="padding:14px 16px; border:1px solid ${L.line}; border-radius:var(--radius-sm); background:${L.paper}; font-size:13px; color:${L.ink};">
+          Undone — ${n(r.removed)} rows removed.</div>
+        <div style="border-top:1px solid ${L.line}; padding-top:14px; margin-top:16px; text-align:right;">
+          <button id="impDone2" class="btn btn-primary" style="font-size:12px; padding:8px 16px;">Done</button></div>`;
+      $('impDone2').onclick = () => { close(); renderLedgerTab(kind); };
+    } catch (e) {
+      btn.disabled = false; btn.textContent = 'Undo this import';
+      $('impErr').innerHTML = `<div style="margin-top:12px; padding:10px 12px; border:1px solid ${L.danger}; border-radius:var(--radius-sm); font-size:12px; color:${L.danger};">${esc(e.message || 'Could not undo.')}</div>`;
+    }
+  }
+
+  // ── WHAT HAS BEEN IMPORTED BEFORE ─────────────────────────────────────
+  // On the first screen, because "have I already done this?" is the question
+  // that decides whether to upload at all. Failure is silent: not knowing the
+  // history must not stop her importing.
+  async function loadBatches() {
+    try {
+      const { batches } = await api('/api/import/batches');
+      const el = $('impBatches');
+      if (!el || !batches || !batches.length) return;
+      el.innerHTML = `
+        <div style="font-size:11px; color:${L.inkFaint}; margin-bottom:6px;">Imported before</div>
+        <div style="border:1px solid ${L.line}; border-radius:var(--radius-sm); background:${L.paper}; max-height:170px; overflow:auto;">
+          ${batches.map((b) => `
+            <div style="display:flex; align-items:center; gap:10px; padding:7px 10px; border-bottom:1px solid ${L.lineSoft}; font-size:11.5px;">
+              <span style="color:${L.inkMuted}; font-family:var(--font-mono);">${esc(String(b.at || '').slice(0, 10))}</span>
+              <span style="color:${L.ink}; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${esc(b.source || '')}</span>
+              <span style="flex:1;"></span>
+              <span style="color:${L.inkFaint}; white-space:nowrap;">${n(b.bills)} bills · ${n(b.sales)} invoices</span>
+              ${metalsCanDelete() ? `<button class="impUndoRow" data-batch="${esc(b.batch)}" style="background:none; border:1px solid ${L.line}; border-radius:var(--radius-sm); padding:3px 9px; font-size:11px; color:${L.danger}; cursor:pointer; white-space:nowrap;">Undo</button>` : ''}
+            </div>`).join('')}
+        </div>`;
+      el.querySelectorAll('.impUndoRow').forEach((b) => {
+        b.onclick = () => undoBatch(b.dataset.batch, b);
+      });
+    } catch (e) { /* silent on purpose — see above */ }
+  }
+
+  step1();
+}
+
 async function openBillPayForm(opts = {}) {
   const L = LEDGER_LIGHT;
   const data = await api('/api/bill-payments');
