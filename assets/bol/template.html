@@ -79,7 +79,13 @@
   .facts { display:flex; gap:9px; margin-bottom:9px; }
   .fact { background:#f4f4f2; border-radius:4px; padding:8px 10px; min-width:0; }
   .fact .lbl { font-size:6.8pt; letter-spacing:.08em; color:#71716c; }
-  .fact .v { font-family:'PlexMono', monospace; font-size:8.5pt; margin-top:2px; overflow-wrap:break-word; }
+  /* min-height, because an unfilled value is now genuinely EMPTY rather than
+     a dash (2026-09-18 — see helpers/bolPdf.js for whose instruction and why;
+     names stay out of this file, it ships to the buyer). Without it the div
+     collapses to nothing, the box shrinks to its label, and a row of four
+     facts prints at three different heights. The dash was holding the shape
+     up; this holds it up instead. */
+  .fact .v { font-family:'PlexMono', monospace; font-size:8.5pt; margin-top:2px; overflow-wrap:break-word; min-height:11pt; }
   /* A blank fact still prints its box and label. An empty box reads as "not
      recorded"; a missing box reads as "this document has no such field", and
      a driver holding a BOL with no seal row will not think to ask for one. */
@@ -145,16 +151,11 @@
          fields. Twelve columns; see helpers/bolLayouts.js for why a grid
          rather than free X/Y, and helpers/bolPdf.js for the renderer.
 
-         SHIPPER is the one card still fixed. It is Edge Metals' own name and
-         address on Edge Metals' own document — not a field, and not hers to
-         move off the top of the page. -->
-    <div class="cards">
-      <div class="card">
-        <div class="lbl">SHIPPER</div>
-        <div class="nm">Edge Metals Inc</div>
-        <div class="ad">14750 Devonshire Ln<br>Frisco, TX 75035<br>Tel (310) 938-2525</div>
-      </div>
-    </div>
+         SHIPPER is still not one of her fields, but it is no longer pinned
+         here: since 2026-09-18 it is drawn beside the CONSIGNEE as one pair
+         (see the consignee block in helpers/bolPdf.js), because the two ends
+         of a shipment belong on one line. Left as a fixed strip it printed
+         above the buyer, full width, and the two stacked. -->
 
     {{layout_rows}}
 

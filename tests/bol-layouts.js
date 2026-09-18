@@ -108,12 +108,26 @@ section('A — a layout cannot make an invalid bill of lading');
     // Placeable and hideable are different properties. Where the consignee
     // sits is a matter of taste; a bill of lading with no consignee on it is
     // not a bill of lading.
-    for (const locked of ['consignee', 'bol_date', 'bol_no', 'goods']) {
+    // bol_no left this list on 2026-09-18 — Apsara: "Remove bol number in
+    // field box. make it appear on right side of header." It is no longer a
+    // layout field at all, which is a STRONGER guarantee than being required:
+    // a field that is not in the catalogue cannot be hidden, moved, resized or
+    // switched back on, and the header slot that prints it is not part of any
+    // layout. The two checks below replace it.
+    for (const locked of ['consignee', 'bol_date', 'goods']) {
         const f = attack.find((x) => x.key === locked);
         ck(`a layout claiming to hide ${locked} gets it back`, !!f && f.shown === true,
            JSON.stringify(f));
         ck(`  and ${locked} is flagged required`, !!f && f.required === true);
     }
+    ck('the BOL number is not a layout field at all',
+       !keys.includes('bol_no'),
+       'it is back in the catalogue, so it prints twice — header and box');
+    ck('  and nothing in the catalogue offers it',
+       !L.OPTIONAL_KEYS.includes('bol_no')
+       && !L.REQUIRED_FIELDS.some((f) => f.key === 'bol_no'),
+       'the field picker would offer it and re-create the duplicate');
+
     ck('  while the legitimate part of the same layout is kept',
        attack.find((f) => f.key === 'po_number') && attack.find((f) => f.key === 'po_number').shown === true,
        'rejecting the whole layout over one bad row would lose the seven good ones');
@@ -142,10 +156,10 @@ section('B — a missing layout means EVERY field, never none');
 // ══════════════════════════════════════════════════════════════════════════
 {
     const none = labels(buildBolHtml(BOL).html);
-    // PICKUP prints as two boxes since 2026-09-16 — Apsara: "pickup date and
-    // time next to each other." One layout field still, two labels on the
-    // paper; see the note in helpers/bolPdf.js for why the KEY did not split.
-    for (const lbl of ['DATE', 'PO NUMBER', 'APPOINTMENT ID', 'PICKUP DATE', 'PICKUP TIME',
+    // PICKUP is ONE box again since 2026-09-18 — Apsara: "pickupdate should
+    // be in one ine", reversing the two-box split of 09-16. One layout field
+    // throughout, which is why neither change moved anything stored.
+    for (const lbl of ['DATE', 'PO NUMBER', 'APPOINTMENT ID', 'PICKUP',
                        'CARRIER', 'DRIVER', 'CONTAINER', 'SEAL']) {
         ck(`no layout still prints ${lbl}`, none.includes(lbl), none.join(','));
     }

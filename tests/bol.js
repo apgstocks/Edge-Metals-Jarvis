@@ -46,16 +46,23 @@ section('A — the document carries every field she named');
     // Named one at a time rather than in a loop, so a failure says WHICH
     // field went missing instead of "one of eleven".
     ck('driver name',      has('Miguel Ortiz'));
-    // TWO boxes now, side by side — Apsara, 2026-09-16: "pickup date and time
-    // next to each other." They used to share one box as "09/15/2026 · 9:30
-    // AM", which is two facts joined by a dot, read at a gate in a hurry.
+    // ── ONE BOX AGAIN, ON ONE LINE ───────────────────────────────────
+    // Apsara, 2026-09-18: "pickupdate should be in one ine", on the sample she
+    // approved that day, which reads "09/16/2026 · 9:00 AM".
+    //
+    // THIS REVERSES 2026-09-16, when "pickup date and time next to each other"
+    // was read as two boxes side by side. Both readings are honest; seeing the
+    // pair on a quarter-width cell she picked the single line. The older
+    // instruction is recorded rather than deleted, so the next person does not
+    // "fix" this back.
     ck('  pickup date and time', html.includes('09/15/2026') && html.includes('9:30 AM'),
        'she asked for both');
-    ck('    each with its own heading',
-       /PICKUP DATE/.test(html) && /PICKUP TIME/.test(html), 'one box labelled PICKUP was the old shape');
-    ck('    beside each other, not stacked',
-       /grid-template-columns:1fr 1fr[\s\S]{0,400}PICKUP DATE[\s\S]{0,400}PICKUP TIME/.test(html),
-       'a date above a time reads as two separate facts');
+    ck('    on ONE line, under a single PICKUP heading',
+       /PICKUP/.test(html) && !/PICKUP DATE/.test(html) && !/PICKUP TIME/.test(html),
+       'two separate boxes was the 2026-09-16 shape, reversed on 09-18');
+    ck('    joined by a dot, in that order',
+       /09\/15\/2026\s*\u00b7\s*9:30 AM/.test(html.replace(/<[^>]+>/g, '')),
+       'the two values are not on one line together');
     // ── AND STILL ONE LAYOUT FIELD ───────────────────────────────────
     // Splitting `pickup` into pickup_date and pickup_time would have been the
     // obvious way to print two boxes, and sanitise() drops keys it does not
@@ -120,6 +127,9 @@ section('A — the document carries every field she named');
        html.includes(require('../helpers/signature').signatureDataUrl()),
        'a second copy of the image would rebuild the exact problem ' +
        'helpers/signature.js was written to remove');
+    // Covers CSS comments too, not just HTML ones — a /* ... */ note inside
+    // <style> survives comment-stripping and ships with the document. That is
+    // exactly how this check earned its keep on 2026-09-18.
     ck('  and internal notes are stripped from what the buyer receives',
        !/<!--/.test(html) && !/Apsara/.test(html),
        'the template comments discuss the design; they are not for the customer');
@@ -183,24 +193,88 @@ section('B — blank is an absence, not a zero');
     const { html, totals } = bol.buildBolHtml({ consignee_name: 'X', items: [{ description: 'Scrap', net_weight: 100 }] });
     ck('an unfilled tare column totals to nothing, not 0', totals.tare_weight === null,
        JSON.stringify(totals));
-    // ASSERTED ON THE FORMATTER, not on the page containing a dash somewhere.
+    // ASSERTED ON THE FORMATTER, not on the page containing a blank somewhere.
     // The first version tested html.includes('>—<'), which passed even with
     // the formatter mutated to print 0 — because the empty PO and appointment
-    // boxes also render a dash. It was green for a reason that had nothing to
-    // do with weights.
-    ck('  because a null weight formats as a dash, never as 0',
-       bol.fmtWeight(null) === '—' && bol.fmtWeight('') === '—' && bol.fmtWeight(undefined) === '—',
+    // boxes rendered a dash too. It was green for a reason that had nothing to
+    // do with weights. That reasoning holds for blanks even more strongly, so
+    // this stays on the formatter.
+    //
+    // 2026-09-18 — Apsara: "if i didnt enter anything keep it empty. dont
+    // place hyphen". The dash became a blank. THE DISTINCTION IT PROTECTED IS
+    // UNCHANGED and is the next check: a blank is an absence, a 0 is a claim
+    // that the container weighed nothing, and on a weight document those are
+    // different statements.
+    ck('  because a null weight formats as EMPTY, never as 0',
+       bol.fmtWeight(null) === '' && bol.fmtWeight('') === '' && bol.fmtWeight(undefined) === '',
        `got ${JSON.stringify([bol.fmtWeight(null), bol.fmtWeight(''), bol.fmtWeight(undefined)])}`);
     ck('  while a real zero still prints as 0', bol.fmtWeight(0) === '0',
        'a tare she actually entered as 0 is a claim she made, and stays');
-    ck('  and the goods row shows the dash in the tare cell',
-       /<td>—<\/td>\s*<td>100<\/td>/.test(html.replace(/\n\s*/g, '')),
-       'tare empty, net 100 — checked as a pair so a dash elsewhere cannot satisfy it');
+    ck('  and the goods row leaves the tare cell EMPTY',
+       /<td><\/td>\s*<td>100<\/td>/.test(html.replace(/\n\s*/g, '')),
+       'tare empty, net 100 — checked as a pair so a blank elsewhere cannot satisfy it');
     ck('  while the column that WAS filled still totals', totals.net_weight === 100);
+    // ── THE NUMBER LIVES IN THE HEADER, ONCE ─────────────────────────────
+    // Apsara, 2026-09-18: "Remove bol number in field box. make it appear on
+    // right side of header." It was printing in BOTH places — the black band
+    // has carried it since the template was written, and a fact box repeated
+    // it a few centimetres below.
+    // ── SHIPPER AND CONSIGNEE ARE ONE PAIR ───────────────────────────────
+    // Apsara, 2026-09-18: "make shipper and consignee next to each other."
+    // SHIPPER was a fixed strip above the grid, so Edge Metals printed across
+    // the full width with the buyer stacked underneath.
+    const paired = bol.buildBolHtml({
+        bol_no: 'EM-2001', consignee_name: 'CUSTOM ALLOY SALES, INC.',
+        consignee_address_lines: ['13329 Ector Street', 'CITY OF INDUSTRY'],
+        items: [{ description: 'Al', gross_weight: 1000 }],
+    }).html;
+    const strip = paired.slice(paired.indexOf('SHIPPER'), paired.indexOf('SHIPPER') + 700);
+    ck('shipper and consignee sit in ONE row', /class="cards"/.test(paired)
+       && strip.indexOf('CONSIGNEE') > 0,
+       'they are in separate blocks again, so they stack');
+    ck('  shipper first, consignee second',
+       paired.indexOf('>SHIPPER<') < paired.indexOf('>CONSIGNEE<'));
+    ck('  and the buyer is still the one on the tinted card',
+       /class="card to"[\s\S]{0,80}CONSIGNEE/.test(paired),
+       'the shipper got the buyer\'s card style');
+    // The pairing must be INSIDE the layout, not a fixed strip above it —
+    // otherwise moving the consignee leaves the shipper stranded at the top.
+    ck('  the pair is part of the layout, not pinned above it',
+       !/<div class="cards">\s*<div class="card">\s*<div class="lbl">SHIPPER/.test(
+           require('fs').readFileSync(require('path').join(__dirname, '..', 'assets/bol/template.html'), 'utf8')),
+       'the template still hard-codes a shipper strip of its own');
+
+    // Its OWN fixture: the section's html is the blank-weights document and
+    // carries no number at all, so these checks would have passed on an empty
+    // string. Found immediately, but it is the same shape as every
+    // passes-for-the-wrong-reason bug in this repo.
+    const numbered = bol.buildBolHtml({
+        bol_no: 'EM-1047', bol_date: '2026-09-16', consignee_name: 'X',
+        items: [{ description: 'Al', gross_weight: 1000 }],
+    }).html;
+    ck('the BOL number prints exactly once', (numbered.match(/EM-1047/g) || []).length === 1,
+       `printed ${(numbered.match(/EM-1047/g) || []).length} times`);
+    ck('  and it is in the header band, not a fact box',
+       /class="docno">EM-1047</.test(numbered) && !/BOL NUMBER/.test(numbered),
+       'the number is still sitting in the field grid');
+
     ck('  and an empty fact box is still printed, greyed',
-       /class="v empty">—</.test(html),
+       /class="v empty"><\/div>/.test(html),
        'a missing box reads as "this document has no such field", and a driver ' +
        'holding a BOL with no seal row will not think to ask for one');
+    // The box has to keep its HEIGHT too, or a row of four facts prints at
+    // three different heights once the dash that was propping it up is gone.
+    ck('    and the empty box keeps its height',
+       /\.fact \.v \{[^}]*min-height/.test(
+           require('fs').readFileSync(require('path').join(__dirname, '..', 'assets/bol/template.html'), 'utf8')),
+       'the value div collapses to nothing and the box shrinks to its label');
+    // Her instruction, checked on the document as a whole: no dash stands in
+    // for something she did not type. Scoped to the BODY so the stylesheet's
+    // own prose cannot satisfy or break it.
+    const body = html.slice(html.indexOf('</style>'));
+    ck('    and NO placeholder dash is printed anywhere on the document',
+       !/>\s*—\s*</.test(body),
+       'something still prints a dash where she entered nothing');
 }
 
 section('C — the weights are checked, and never corrected');

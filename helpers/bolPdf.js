@@ -75,17 +75,25 @@ const toNum = (v) => {
 };
 
 // Weights print with thousands separators and no decimals — a scale ticket
-// reads 46,300 and so should the document beside it. A null prints as an
-// em-dash, never as 0: a zero tare is a claim (the container weighed nothing)
-// and a blank tare is an absence, and on a weight document those differ.
+// reads 46,300 and so should the document beside it.
+//
+// ── A BLANK PRINTS BLANK ────────────────────────────────────────────────────
+// Apsara, 2026-09-18: "if i didnt enter anything keep it empty. dont place
+// hyphen". These returned an em-dash, so a BOL with no tare printed a row of
+// dashes across the weight columns.
+//
+// The distinction the dash was protecting is UNCHANGED and still matters: a
+// null is never rendered as 0, because a zero tare is a CLAIM (the container
+// weighed nothing) and a blank tare is an absence. Empty says "not recorded"
+// just as well as a dash did, and it is what she asked for.
 function fmtWeight(n) {
     const v = toNum(n);
-    if (v === null) return '—';
+    if (v === null) return '';
     return Math.round(v).toLocaleString('en-US');
 }
 function fmtCount(n) {
     const v = toNum(n);
-    if (v === null) return '—';
+    if (v === null) return '';
     return String(Math.round(v));
 }
 
@@ -229,7 +237,10 @@ function buildBolHtml(data) {
 
     // An empty value still renders its box, greyed — see the template's note.
     const blank = (v) => (String(v || '').trim() ? '' : ' empty');
-    const orDash = (v) => (String(v || '').trim() ? String(v).trim() : '—');
+    // Was orDash. Apsara, 2026-09-18: "if i didnt enter anything keep it
+    // empty. dont place hyphen". The BOX still prints — see blank() above and
+    // the template's note — it is only the dash inside it that goes.
+    const orBlank = (v) => String(v || '').trim();
 
     // ── THE LAYOUT GRID ──────────────────────────────────────────────────
     // Apsara, 2026-09-16: "what if i want them in different places.change the
@@ -254,31 +265,53 @@ function buildBolHtml(data) {
     const factBox = (label, value, raw) => `<div class="fact"><div class="lbl">${escapeHtml(label)}</div><div class="v${blank(raw)}">${escapeHtml(value)}</div></div>`;
 
     const BLOCK = {
-        consignee: () => `<div class="card to"><div class="lbl">CONSIGNEE</div><div class="nm">${escapeHtml(consigneeName || '—')}</div><div class="ad">${lines.map(escapeHtml).join('<br>')}</div></div>`,
-        bol_no:    () => factBox('BOL NUMBER', orDash(d.bol_no), d.bol_no),
-        bol_date:  () => factBox('DATE', d.bol_date ? formatDate(d.bol_date) : '—', d.bol_date),
-        po_number:      () => factBox('PO NUMBER', orDash(d.po_number), d.po_number),
-        appointment_id: () => factBox('APPOINTMENT ID', orDash(d.appointment_id), d.appointment_id),
-        // ── TWO BOXES, SIDE BY SIDE ──────────────────────────────────
-        // Apsara, 2026-09-16: "pickup date and time next to each other."
+        // ── SHIPPER AND CONSIGNEE, SIDE BY SIDE ──────────────────────
+        // Apsara, 2026-09-18: "make shipper and consignee next to each other."
         //
-        // It printed as one box reading "09/16/2026 · 9:30 AM", which is two
-        // facts joined by a dot and is read at a gate in a hurry.
+        // SHIPPER used to be a fixed card in its own strip ABOVE the grid, so
+        // the two stacked: Edge Metals across the full width, the buyer across
+        // the full width beneath it. They are the two ends of one shipment and
+        // belong on one line, which is how the sample she approved reads.
         //
-        // Still ONE layout field. Splitting `pickup` into pickup_date and
-        // pickup_time in helpers/bolLayouts.js would have been the obvious
-        // move and would have silently deleted pickup from every layout she
-        // has already designed — sanitise() drops keys it does not recognise,
-        // which is right, and would be exactly wrong here. What she sees
-        // changes; the stored contract does not.
-        pickup: () => `<div style="display:grid; grid-template-columns:1fr 1fr; gap:6pt;">`
-            + factBox('PICKUP DATE', pickupDate || '—', pickupDate)
-            + factBox('PICKUP TIME', pickupTime || '—', pickupTime)
+        // They are emitted as ONE cell holding two half-width cards, rather
+        // than as two grid cells. That is what makes them inseparable: the
+        // pair always adds to a whole row and always stays together, whatever
+        // span a stored layout gives the consignee and wherever she moves it.
+        // Shipper is still not a layout field — it is Edge Metals' own name on
+        // Edge Metals' own document, not one of her fields — it simply travels
+        // with the consignee now instead of being pinned to the top.
+        consignee: () => `<div class="cards">`
+            + `<div class="card"><div class="lbl">SHIPPER</div>`
+            + `<div class="nm">Edge Metals Inc</div>`
+            + `<div class="ad">14750 Devonshire Ln<br>Frisco, TX 75035<br>Tel (310) 938-2525</div></div>`
+            + `<div class="card to"><div class="lbl">CONSIGNEE</div>`
+            + `<div class="nm">${escapeHtml(consigneeName)}</div>`
+            + `<div class="ad">${lines.map(escapeHtml).join('<br>')}</div></div>`
             + `</div>`,
-        carrier:        () => factBox('CARRIER', orDash(d.carrier), d.carrier),
-        driver:         () => factBox('DRIVER', orDash(d.driver), d.driver),
-        container_no:   () => factBox('CONTAINER', orDash(d.container_no), d.container_no),
-        seal_no:        () => factBox('SEAL', orDash(d.seal_no), d.seal_no),
+        bol_date:  () => factBox('DATE', d.bol_date ? formatDate(d.bol_date) : '', d.bol_date),
+        po_number:      () => factBox('PO NUMBER', orBlank(d.po_number), d.po_number),
+        appointment_id: () => factBox('APPOINTMENT ID', orBlank(d.appointment_id), d.appointment_id),
+        // ── ONE BOX, ONE LINE ────────────────────────────────────────
+        // Apsara, 2026-09-18: "pickupdate should be in one ine", on the sample
+        // she approved the same day, which reads "09/16/2026 · 9:00 AM".
+        //
+        // THIS REVERSES 2026-09-16. That day she said "pickup date and time
+        // next to each other" and it was split into two boxes; seeing it on a
+        // quarter-width cell, the pair is cramped and she asked for the single
+        // line back. Her newer word wins, and the older one is recorded here
+        // rather than quietly overwritten — the two readings of "next to each
+        // other" (two boxes side by side, or two values on one line) are both
+        // honest, and this is the one she wants.
+        //
+        // Still ONE layout field either way, which is why this is a renderer
+        // change and nothing stored had to move.
+        pickup: () => factBox('PICKUP',
+            [pickupDate, pickupTime].filter(Boolean).join(' \u00b7 '),
+            pickupDate || pickupTime),
+        carrier:        () => factBox('CARRIER', orBlank(d.carrier), d.carrier),
+        driver:         () => factBox('DRIVER', orBlank(d.driver), d.driver),
+        container_no:   () => factBox('CONTAINER', orBlank(d.container_no), d.container_no),
+        seal_no:        () => factBox('SEAL', orBlank(d.seal_no), d.seal_no),
         goods: () => `<table class="goods">
       <tr>
         <th class="desc">DESCRIPTION OF GOODS</th>
@@ -305,7 +338,7 @@ ${item_rows}
         const label = String(f.label || '').trim();
         if (!label) return '';
         const v = (d.custom_fields || {})[f.key];
-        return factBox(label.toUpperCase(), orDash(v), v);
+        return factBox(label.toUpperCase(), orBlank(v), v);
     };
 
     // No layout supplied means the document she has always had. A missing

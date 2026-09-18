@@ -70,9 +70,22 @@ const OPTIONAL_FIELDS = [
 // Some are naturally full width. `min_span` is a floor, not a lock: the goods
 // table has five columns of its own and stops being readable squeezed into a
 // quarter of the page.
+// ── THE BOL NUMBER IS NOT IN HERE ───────────────────────────────────────────
+// Apsara, 2026-09-18: "Remove bol number in field box. make it appear on right
+// side of header."
+//
+// It was printing TWICE — the black header band has carried {{bol_no}} on the
+// right since the template was written, and a fact box repeated it a few
+// centimetres below. The header is where it belongs: it is the document's
+// identity, not one of its facts, and a driver or broker quoting it back reads
+// it off the top.
+//
+// Removed from the catalogue rather than defaulted to hidden, so it cannot be
+// switched back on from the field picker and re-create the duplicate. The
+// header slot is not part of the layout at all and never was — nothing she can
+// do on the Design screen can take the number off a BOL.
 const REQUIRED_FIELDS = [
     { key: 'consignee', label: 'Consignee name and address', span: 12, min_span: 6 },
-    { key: 'bol_no',    label: 'BOL number',                 span: 3,  min_span: 2 },
     { key: 'bol_date',  label: 'Date',                       span: 3,  min_span: 2 },
     { key: 'goods',     label: 'Goods — commodity, pieces, gross, tare, net', span: 12, min_span: 8 },
 ];
@@ -141,13 +154,17 @@ function customerKey(name) {
 function defaultFields() {
     const out = [
         { key: 'consignee', row: 0, span: 12 },
-        { key: 'bol_no',    row: 1, span: 3 },
         { key: 'bol_date',  row: 1, span: 3 },
     ];
-    // Optional fields, three to a row after the number and date.
+    // Four to a row, each a quarter of the twelve columns. The offset is (i+1)
+    // and not (i+2) because the BOL number no longer takes a box — see
+    // REQUIRED_FIELDS above. That lands the rows exactly as the sample she
+    // approved on 2026-09-18 has them:
+    //   row 1  DATE · PO NUMBER · APPOINTMENT ID · PICKUP
+    //   row 2  CARRIER · DRIVER · CONTAINER · SEAL
     OPTIONAL_FIELDS.forEach((f, i) => {
         if (f.key === 'notes') return;            // its own full-width block
-        out.push({ key: f.key, row: 1 + Math.floor((i + 2) / 4), span: 3 });
+        out.push({ key: f.key, row: 1 + Math.floor((i + 1) / 4), span: 3 });
     });
     // 90/91 keep these last whatever the loop above produced; packRows
     // renumbers them densely, so the stored layout never carries the gap.
