@@ -528,6 +528,12 @@ const INVOICE_PACKING_GID  = process.env.INVOICE_PACKING_GID  || '1340048377';
 // helpers/addressBook.js. Same flat-JSON-store pattern as
 // address_book.json / quote_requests.json.
 const PROFORMA_PRICING_FILE = path.join(DATA_DIR, 'proforma_pricing.json');
+// The FORM STATE behind each saved proforma PDF, keyed by its filename —
+// what "Copy to a new proforma" reads (2026-09-18). Distinct from
+// PROFORMA_PRICING_FILE beside it, which remembers PRICES PER CUSTOMER across
+// documents; this remembers one specific document. See
+// helpers/proformaVersions.js.
+const PROFORMA_VERSIONS_FILE = path.join(DATA_DIR, 'proforma_versions.json');
 // Save-a-copy archive for generated Invoice/Proforma PDFs — mirrors the
 // datewise/container-wise (invoice) and flat (proforma) folder layout
 // Apsara originally asked for in the Flask app, kept identical here for
@@ -695,7 +701,7 @@ module.exports = {
     GMAIL_WATCH_ENABLED, GMAIL_POLL_DAYS_BACK,
     PRICE_SHEET_ID, PRICELIST_WEBHOOK_TOKEN,BOOKING_TRACKER_SHEET_ID,
     INVOICE_SHEET_ID, INVOICE_MAIN_GID, INVOICE_PACKING_GID,
-    PROFORMA_PRICING_FILE, DOCUMENTS_SAVED_DIR,
+    PROFORMA_PRICING_FILE, PROFORMA_VERSIONS_FILE, DOCUMENTS_SAVED_DIR,
     SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS, ALERT_EMAIL_TO,
     TWILIO_SID, TWILIO_AUTH_TOKEN, TWILIO_FROM, ALERT_SMS_TO,
     GEMINI_API_KEY_BACKUP,

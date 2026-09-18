@@ -1034,6 +1034,10 @@ body[data-theme="light"] {
     </div>
 
     <div id="pfFullForm" class="hidden">
+    <!-- Says which document this was copied from and, more importantly, what
+         was left blank. "Pre-filled" without naming the empty invoice number
+         invites generating a proforma with no number on it. -->
+    <div id="pfCopyNote" class="hidden" style="border:1px solid var(--status-warning, #d69e2e); border-radius:var(--radius-sm); padding:10px 12px; margin-bottom:12px; font-size:12.5px; color:var(--status-warning, #d69e2e); line-height:1.6;"></div>
     <div class="card" style="padding:20px 22px;">
       <div class="grid4">
         <div class="field"><label>Invoice No <span id="pfInvNoChip" class="pricing-chip hidden"></span></label><input id="pf_inv_no" placeholder="e.g. 260819_AC_26JY105"></div>
@@ -2908,6 +2912,9 @@ function resetWizard() {
   window._pfPaymentTermFromWizard = false;
   pfNextContainerCode = null; // don't carry a previous consignee's number sequence into a new proforma
   window._pfConsigneeSheetTag = null;
+  // The copy banner belongs to one copied document. Left up, it would claim
+  // the NEXT proforma was copied from something it has nothing to do with.
+  if ($('pfCopyNote')) { $('pfCopyNote').classList.add('hidden'); $('pfCopyNote').innerHTML = ''; }
   $('pfWiz_consignee').value = '';
   $('pfWiz_containerCount').value = '1';
   // Starts on the house default and is NOT marked dirty, so this customer's
@@ -3351,13 +3358,28 @@ async function loadSavedProformas() {
   box.innerHTML = '<div style="padding:16px; color:var(--text-faint); font-size:12px;">Loading…</div>';
   try {
     const { proformas } = await api('/api/documents/saved');
+    // ── WHICH ONES CAN BE COPIED ──────────────────────────────────────────
+    // Apsara, 2026-09-17: "copy option so that itwill get coppied to proforma
+    // for say..". Only proformas generated since the form state started being
+    // stored have anything to copy — one call for the whole list, and a row
+    // without a payload gets no button rather than one that fails on click.
+    // A failed lookup here must not take the list down with it.
+    let copyable = {};
+    try { copyable = (await api('/api/proforma/copyable')).copyable || {}; } catch (e) {
+      console.error('[proforma] could not check which are copyable:', e.message);
+    }
     box.innerHTML = proformas.length
-      ? `<table><thead><tr><th>File</th><th></th><th></th></tr></thead><tbody>${proformas.map((f) => `<tr>
+      ? `<table><thead><tr><th>File</th><th></th><th></th><th></th></tr></thead><tbody>${proformas.map((f) => `<tr>
             <td>${esc(f)}</td>
             <td><a href="/api/documents/download?kind=proforma&file=${encodeURIComponent(f)}" target="_blank">Open</a></td>
+            <td>${copyable[f]
+              ? `<button type="button" class="btn btn-secondary pf-copy" data-file="${esc(f)}" style="padding:3px 8px; font-size:10px;">Copy</button>`
+              : `<span title="Generated before Copy existed — its form was never stored, so there is nothing to copy from." style="color:var(--text-faint); font-size:10px;">—</span>`}</td>
             <td><button type="button" class="btn btn-secondary pf-del" data-file="${esc(f)}" style="padding:3px 8px; font-size:10px;">Delete</button></td>
           </tr>`).join('')}</tbody></table>`
       : '<div style="padding:16px; color:var(--text-faint); font-size:12px;">No saved proformas yet.</div>';
+
+    box.querySelectorAll('.pf-copy').forEach((el) => el.addEventListener('click', () => pfCopyFrom(el.dataset.file, el)));
     // ── DELETE ────────────────────────────────────────────────────────────
     // Apsara, 2026-09-17: "add delete option in saved proforma/invoice/bol/
     // packing list".
@@ -3379,6 +3401,111 @@ async function loadSavedProformas() {
     }));
   } catch (e) {
     box.innerHTML = `<div style="padding:16px; color:var(--status-danger); font-size:12px;">${esc(e.message)}</div>`;
+  }
+}
+
+// ── COPY A SAVED PROFORMA INTO A NEW ONE ──────────────────────────────────
+// Apsara, 2026-09-17: "copy option so that itwill get coppied to proforma for
+// say..", and, asked what Copy should produce: "A new proforma, pre-filled".
+//
+// So it fills the form and stops. It does not generate, it does not save, and
+// nothing is locked — every field is the same editable input it always was.
+// The last step of a copy is always an edit; a Copy that produced a finished
+// document would be a second way to send a customer something nobody read.
+//
+// ── THE INVOICE NUMBER IS NOT COPIED ────────────────────────────────────────
+// My call, not hers, and the one part of the source document deliberately
+// left behind: two proformas carrying one number are not two documents, they
+// are one document and a collision. helpers/bolNumbers.js's header is the
+// long version — the short one is that the number is an identity a customer
+// quotes back. The route strips it and the field is left blank so she fills
+// it the way she always does.
+//
+// The DATE is not copied either, for a smaller reason: a proforma dated three
+// weeks ago, re-sent today, is wrong on its face.
+async function pfCopyFrom(file, btn) {
+  if (btn) { btn.disabled = true; btn.textContent = 'Copying…'; }
+  try {
+    const { payload, generated_at } = await api('/api/proforma/saved-payload?file=' + encodeURIComponent(file));
+    pfFillFromPayload(payload);
+
+    // Land her on the form, not the wizard — the wizard's whole job is
+    // collecting what a copy already has.
+    $('pfWizard').classList.add('hidden');
+    $('pfFullForm').classList.remove('hidden');
+    $('pfFullForm').scrollIntoView({ behavior: 'smooth', block: 'start' });
+
+    // Says WHAT was left out. She is about to send this, and "pre-filled"
+    // without naming the two blank fields invites generating a proforma with
+    // no number on it.
+    const when = generated_at ? ` from ${fmtDate(generated_at.slice(0, 10))}` : '';
+    $('pfCopyNote').innerHTML = `Copied from <strong>${esc(file)}</strong>${esc(when)}.
+      The invoice number and date are blank on purpose — a new proforma needs its own.`;
+    $('pfCopyNote').classList.remove('hidden');
+  } catch (e) {
+    alert(e.message);
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = 'Copy'; }
+  }
+}
+
+// Pours a stored payload back into the form. The mirror of pfPayload() — and
+// deliberately written beside nothing else, because the two have to agree
+// field for field and a reader checking that should not have to hunt.
+function pfFillFromPayload(p) {
+  const d = p || {};
+  const set = (id, v) => { const el = $(id); if (el) el.value = v == null ? '' : v; };
+
+  // Blank, not copied — see the header.
+  set('pf_inv_no', '');
+  set('pf_inv_date', '');
+
+  set('pf_reference', d.reference);
+  set('pf_qty_unit', d.qty_unit || 'MT');
+  set('pf_consignee', d.consignee);
+  set('pf_consignee_address', Array.isArray(d.consignee_address)
+    ? d.consignee_address.join('\n') : (d.consignee_address || ''));
+  set('pf_trade_terms', d.trade_terms);
+  set('pf_port_discharge', d.port_discharge);
+  set('pf_payment_term', d.payment_term);
+  set('pf_freight_label', d.freight_label);
+  set('pf_buyer_po', d.buyer_po);
+  set('pf_buyer_po_date', d.buyer_po_date ? toUsDate(d.buyer_po_date) : '');
+  set('pf_country_of_origin', d.country_of_origin || 'USA');
+  set('pf_shipment_allowance', d.shipment_allowance);
+
+  // The sheet tag rides along: it is what the Edge Metals sheet log files
+  // this under, and rebuilding it from the consignee name would lose the
+  // "Joey/Taewon" form that column expects.
+  window._pfConsigneeSheetTag = d.consignee_sheet_tag || d.consignee || null;
+  // The payment term came off a real document, so it is hers — flagged so
+  // lookupPricingMemory does not overwrite it with the remembered one.
+  window._pfPaymentTermFromWizard = !!d.payment_term;
+
+  // ── CONTAINERS: THE ITEMS, NOT THE NUMBERS ──────────────────────────────
+  // Item descriptions, quantities and rates are what she is copying. The
+  // CONTAINER NUMBERS are not: those belong to the shipment that already
+  // went, and carrying one over would put a container that is on the water
+  // onto a document for a shipment that has not sailed.
+  //
+  // That is guaranteed by CONSTRUCTION, not by clearing them afterwards:
+  // wiping the list drops every previous block, and addContainer() takes
+  // items only — it has no parameter for a container number, so there is no
+  // path by which the stored one could arrive. An explicit clearing line sat
+  // here for an afternoon; a mutation deleting it changed nothing, because it
+  // had nothing to clear. Worse, it also wiped the auto-code addContainer
+  // fills in when a container-number sequence is running for this customer,
+  // which is a number she wants.
+  //
+  // If addContainer ever learns to take a container_no, this becomes a real
+  // gap — tests/proforma-copy.js section F copies over a form already holding
+  // container numbers and asserts none survive.
+  $('pfContainers').innerHTML = '';
+  const containers = Array.isArray(d.containers) && d.containers.length ? d.containers : [{ items: [] }];
+  for (const c of containers) {
+    addContainer((c.items || []).map((it) => ({
+      desc: it.desc || '', qty: it.qty || 0, rate: it.rate || 0,
+    })));
   }
 }
 

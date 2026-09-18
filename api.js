@@ -5283,6 +5283,27 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
             const filename = `${safeInv}_${(body.consignee || 'customer').toString().slice(0, 40).replace(/[^A-Za-z0-9_\- ]/g, '')}.pdf`.replace(/\s+/g, '_');
             const savedPath = documentsSaved.saveProformaCopy(pdf, filename);
 
+            // ── THE FORM BEHIND THE FILE ────────────────────────────────────
+            // Apsara, 2026-09-17: "copy option so that itwill get coppied to
+            // proforma for say..". Copy needs the payload, and until now this
+            // route archived the PDF and threw the payload away — so there was
+            // nothing to copy from.
+            //
+            // Keyed on the name the file was ACTUALLY saved under, not the one
+            // built above: saveProformaCopy basenames what it is given, and a
+            // key that disagrees with the saved list is a Copy button that
+            // finds nothing.
+            //
+            // Non-fatal, like the two calls below it. The proforma exists and
+            // is filed by this point; losing a convenience must not cost her a
+            // document.
+            try {
+                await require('./helpers/proformaVersions')
+                    .saveProformaPayload(path.basename(savedPath), body);
+            } catch (e) {
+                console.error('[proforma] saving the form state failed (non-fatal):', e.message);
+            }
+
             try {
                 await proformaPricing.recordFromGeneration(
                     body.consignee || '',
@@ -6123,6 +6144,44 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
             });
         } catch (e) { res.status(500).json({ error: e.message }); }
     });
+
+    // ── WHICH SAVED PROFORMAS CAN BE COPIED ─────────────────────────────
+    // Apsara, 2026-09-17: "copy option so that itwill get coppied to proforma
+    // for say..".
+    //
+    // Only proformas generated since helpers/proformaVersions.js shipped have
+    // a stored form payload — everything older is a PDF and nothing else, and
+    // there is no honest backfill (see that file's header). So the screen asks
+    // which ones it can offer, in ONE call for the whole list rather than one
+    // per row, and draws a button only for those. A Copy button that reports
+    // "nothing to copy" on click is worse than no button.
+    app.get('/api/proforma/copyable', requireAdmin, (req, res) => {
+        try {
+            const pv = require('./helpers/proformaVersions');
+            res.json({ copyable: pv.copyableSet(documentsSaved.listSavedProformas()) });
+        } catch (e) { res.status(500).json({ error: e.message }); }
+    });
+
+    // The payload behind one saved proforma, for pre-filling a NEW one.
+    //
+    // Deliberately does NOT hand back inv_no — see the client. A new proforma
+    // needs its own number, and copying one produces two documents claiming
+    // the same identity. helpers/bolNumbers.js's header is the long version of
+    // why that is worse than it sounds.
+    app.get('/api/proforma/saved-payload', requireAdmin, (req, res) => {
+        try {
+            const pv = require('./helpers/proformaVersions');
+            const rec = pv.getProformaPayload(req.query.file);
+            if (!rec) {
+                return res.status(404).json({
+                    error: 'That proforma was generated before Copy existed, so its form was never stored. Nothing to copy from.',
+                    code: 'NO_PAYLOAD',
+                });
+            }
+            const { inv_no, saved_at, ...rest } = rec;
+            res.json({ ok: true, payload: rest, copied_from: pv.keyFor(req.query.file), generated_at: saved_at || null });
+        } catch (e) { res.status(500).json({ error: e.message }); }
+    });
     // ── DELETE A SAVED DOCUMENT ─────────────────────────────────────────
     // Apsara, 2026-09-17: "add delete option in saved proforma/invoice/bol/
     // packing list", and, asked what goes: "The PDF and the record".
@@ -6195,6 +6254,14 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
                     const container = String(req.query.container || '').trim();
                     const hit = pl.list().find((r) => r && pl.keyOf(r.container_no) === pl.keyOf(container));
                     if (hit) { await pl.remove(hit.id); record_removed = `packing list ${hit.container_no}`; }
+                } else if (kind === 'proforma') {
+                    // The stored form state goes with the PDF (2026-09-18).
+                    // Left behind, it is a Copy button offered on a row that
+                    // no longer exists — and, since the store is capped, an
+                    // entry for a deleted document evicting a live one.
+                    const removedPayload = await require('./helpers/proformaVersions')
+                        .forgetProformaPayload(filename);
+                    if (removedPayload) record_removed = 'saved form state';
                 }
             } catch (e) {
                 // The file is gone; failing to also remove the record must not
