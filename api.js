@@ -2148,6 +2148,21 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
                         ok: false,
                     });
                 }
+                // ── WHAT IS SPOKEN IS NOT WHAT IS SHOWN ──────────────────
+                // Apsara, 2026-09-19: "i dont want it to say out the booking
+                // number aloud. bcoz it doesnt make any sense". `answer`
+                // stays exactly as it was (the card shows the number);
+                // `spoken` is the copy the speaker reads. See
+                // helpers/spokenAnswer.js for the scope — booking numbers only.
+                if (typeof payload.spoken !== 'string') {
+                    try {
+                        const { forSpeech } = require('./helpers/spokenAnswer');
+                        const rows = (payload.cards && Array.isArray(payload.cards.rows)) ? payload.cards.rows : [];
+                        payload = Object.assign({}, payload, { spoken: forSpeech(payload.answer, { rows }) });
+                    } catch (e) {
+                        console.warn('[VOICE] spoken copy failed, speaking the answer as-is:', e.message);
+                    }
+                }
                 // Merged UNDER the payload so an explicit awaiting on a
                 // branch always wins over the inferred one.
                 return res.json(Object.assign({ awaiting }, payload));
@@ -3322,7 +3337,10 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
             // something that may have messaged a trucker.
             const { AGENTS } = require('./helpers/voiceRouter');
             const voice = (AGENTS[b.agent] && AGENTS[b.agent].voice) || undefined;
-            const wav = await say(b.text, { voice });
+            // The phone app sends the on-screen answer here to be read out.
+            // Same rule as /api/voice/ask: booking numbers are not spoken.
+            const { forSpeech } = require('./helpers/spokenAnswer');
+            const wav = await say(forSpeech(b.text), { voice });
             res.set('Content-Type', 'audio/wav');
             res.send(wav);
         } catch (e) {
@@ -6569,8 +6587,14 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
             if (!sale) return res.status(404).json({ error: 'no such sale' });
 
             const photos = saleInvoice.photosFor(saleInvoice.billFor(sale));
+            // Addresses she typed into the box, when the address book had
+            // none. Passed through on a GET so the screen can re-draw the
+            // draft with them before anything is sent — she reads the real
+            // message either way.
+            const recipients = req.query.recipients || null;
             const draft = shipmentMail.draftFor(sale.container_no, {
                 photos,
+                recipients,
                 // The sale KNOWS its customer, so a container whose invoice
                 // history has not recorded a consignee still resolves. The
                 // invoice's own record still wins when it has one — it is the
@@ -6578,7 +6602,8 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
                 consignee: null,
             });
             if (!draft.ok && draft.reason === 'no_customer' && String(sale.customer || '').trim()) {
-                const retry = shipmentMail.draftFor(sale.container_no, { photos, consignee: sale.customer });
+                const retry = shipmentMail.draftFor(sale.container_no,
+                    { photos, recipients, consignee: sale.customer });
                 if (retry.ok || retry.reason !== 'no_customer') return res.json(retry);
             }
             res.json(draft);
@@ -6616,11 +6641,22 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
                 });
             }
 
-            let draft = shipmentMail.draftFor(sale.container_no, { photos });
+            const recipients = body0.recipients || null;
+            let draft = shipmentMail.draftFor(sale.container_no, { photos, recipients });
             if (!draft.ok && draft.reason === 'no_customer' && String(sale.customer || '').trim()) {
-                draft = shipmentMail.draftFor(sale.container_no, { photos, consignee: sale.customer });
+                draft = shipmentMail.draftFor(sale.container_no,
+                    { photos, recipients, consignee: sale.customer });
             }
-            if (!draft.ok) return res.status(409).json({ error: draft.message, code: draft.reason.toUpperCase() });
+            if (!draft.ok) {
+                return res.status(409).json({
+                    error: draft.message, code: draft.reason.toUpperCase(),
+                    // The screen shows the recipients box on this flag rather
+                    // than on a string match against the sentence.
+                    ask_recipients: draft.ask_recipients === true,
+                    consignee: draft.consignee || null,
+                    bad: draft.bad || undefined,
+                });
+            }
 
             // ── SENDING IS NOT A THING A GET CAN DO BY ACCIDENT ───────────
             // confirm must be explicitly true. The screen sets it when she
@@ -6629,18 +6665,57 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
                 return res.status(400).json({ error: 'confirm is required', code: 'NOT_CONFIRMED' });
             }
 
+            // ── WHAT SHE EDITED WINS ──────────────────────────────────────
+            // Apsara, 2026-09-19: "also make the email editable."
+            //
+            // The draft is a starting point, not a template she has to accept.
+            // Whatever is in the boxes when she presses Send is what goes —
+            // and because the screen posts back exactly what it is showing,
+            // the message she read is the message that left.
+            //
+            // Trimmed-empty falls back to the generated text rather than
+            // sending a blank subject: clearing a box is far more likely to be
+            // an accident than an instruction.
+            const subject = String(body0.subject || '').trim() || draft.subject;
+            const mailBody = String(body0.body || '').trim() ? String(body0.body) : draft.body;
+
             const { sendEmail } = require('./helpers/gmail');
             const attachments = shipmentDocs.attachmentsFor(draft.found);
             const sent = await sendEmail({
                 to: draft.to,
                 cc: draft.contact_cc || null,
                 bcc: null,
-                subject: draft.subject,
-                body: draft.body,
+                subject,
+                body: mailBody,
                 attachments,
             });
-            res.json({ ok: true, to: draft.to, subject: draft.subject,
-                       attached: attachments.map((a) => a.filename), id: sent && sent.id });
+            // ── AND THEN IT IS IN THE ADDRESS BOOK ────────────────────────
+            // Apsara, 2026-09-19: "then it should get stored in email
+            // contacts tab". Saved AFTER the send, not before: a contact
+            // written for a message that then failed to go is a contact she
+            // never asked for, sitting there looking like it worked.
+            //
+            // Non-fatal on purpose. The invoice has left the building by this
+            // point and a bookkeeping failure must not turn a 200 into a 500 —
+            // she would resend it, and the buyer would have two.
+            let saved_contact = null;
+            if (draft.save_as && draft.save_as.name) {
+                try {
+                    const { addContact } = require('./helpers/emailContacts');
+                    await addContact(draft.save_as.name, draft.save_as.email,
+                                     (draft.save_as.cc || []).length ? { cc: draft.save_as.cc } : {});
+                    saved_contact = draft.save_as.name;
+                } catch (e) {
+                    console.error('[sale-invoice] sent, but could not save the contact:', e.message);
+                }
+            }
+
+            // The subject that WENT, not the one that was generated — she may
+            // have rewritten it, and the confirmation screen has to report
+            // what happened rather than what was planned.
+            res.json({ ok: true, to: draft.to, cc: draft.contact_cc || [], subject,
+                       attached: attachments.map((a) => a.filename), id: sent && sent.id,
+                       saved_contact });
         } catch (e) {
             console.error('[sale-invoice] send failed:', e && e.stack);
             res.status(500).json({ error: e.message });

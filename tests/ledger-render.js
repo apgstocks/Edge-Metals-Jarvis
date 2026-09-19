@@ -94,6 +94,40 @@ const rgbEq = (got, hex) => {
     return s === `rgb(${r},${g},${b})` || s.toLowerCase() === `#${h}`.toLowerCase();
 };
 
+
+// ── OPENING A ROW'S ⋯ MENU ──────────────────────────────────────────────────
+// Apsara, 2026-09-19, with a screenshot of RECEIVE PAYMENT / GENERATE / EDIT /
+// DELETE repeating down the whole screen: "i dont want something like button
+// keep on piling up.perhaps a small icon ..on clicking,these button should
+// expand."
+//
+// So the row actions live behind one icon now. Every check below that used to
+// query .ledger-edit / .ledger-del / .ledger-receive OPENS THE MENU and reads
+// what is really in it — deleting those checks, or matching the new markup by
+// string, would have thrown away the coverage rather than moved it.
+//
+// .click() rather than dispatchEvent: a disabled button still fires listeners
+// under dispatchEvent, which is how a guarded control gets tested into
+// looking like it works.
+function openRowMenu(doc, id) {
+    const btn = doc.querySelector(`.row-menu-btn[data-id="${id}"]`);
+    if (!btn) return null;
+    // ── CLOSE WHATEVER IS OPEN FIRST ────────────────────────────────────
+    // The icon TOGGLES, which is the behaviour she asked for and the right
+    // one. It also means a helper that just clicks is not idempotent: asking
+    // for the same row's menu twice in a row CLOSES it, and the second call
+    // hands back nothing. That cost a false failure in the pay/paid sweep,
+    // where the reported cause ("the action is to RECEIVE") had nothing to do
+    // with the real one.
+    const open = doc.getElementById('rowMenu');
+    if (open) open.remove();
+    btn.click();
+    return doc.getElementById('rowMenu');
+}
+const menuLabels = (menu) => menu
+    ? [...menu.querySelectorAll('button')].map((b) => b.textContent.trim())
+    : [];
+
 const BILL_ROWS = [
     { id: 'B1', route: 'HOUSTON / BUSAN', carrier: 'MSC', supplier: 'Eccomelt',
       trucking_company: 'Bayou Haulage', date: '09/10/2026', booking_no: '272766480',
@@ -137,15 +171,27 @@ section('A — the table actually draws');
        String(root.querySelectorAll('tbody tr[data-id]').length));
 
     // ── HER QUESTION, ANSWERED BY THE DOM ────────────────────────────────
-    const edits = root.querySelectorAll('.ledger-edit');
-    ck('every row has an Edit button', edits.length === 2, String(edits.length));
-    ck('  labelled "Edit"', edits.length && edits[0].textContent.trim() === 'Edit',
-       edits.length ? edits[0].textContent.trim() : '(none)');
-    ck('  carrying the row id it will edit',
-       [...edits].map((b) => b.dataset.id).join(',') === 'B1,B2',
-       [...edits].map((b) => b.dataset.id).join(','));
-    ck('  and Delete is still there beside it',
-       root.querySelectorAll('.ledger-del').length === 2);
+    const menus = root.querySelectorAll('.row-menu-btn');
+    ck('every row carries an actions icon', menus.length === 2, String(menus.length));
+    ck('  and ONE control, not four words piling up',
+       [...root.querySelectorAll('tbody tr[data-id]')]
+         .every((tr) => tr.lastElementChild.querySelectorAll('button').length === 1),
+       [...root.querySelectorAll('tbody tr[data-id]')]
+         .map((tr) => tr.lastElementChild.querySelectorAll('button').length).join(','));
+    ck('  carrying the row id it acts on',
+       [...menus].map((b) => b.dataset.id).join(',') === 'B1,B2',
+       [...menus].map((b) => b.dataset.id).join(','));
+
+    const menu = openRowMenu(w.document, 'B1');
+    ck('  clicking it opens a menu', !!menu, 'the icon has to expand into something');
+    ck('  with Edit in it', menuLabels(menu).includes('Edit'), menuLabels(menu).join(' | '));
+    ck('  and Delete', menuLabels(menu).includes('Delete'), menuLabels(menu).join(' | '));
+    ck('  and no Generate on a BILL, which has no customer to invoice',
+       !menuLabels(menu).some((l) => /Generate/.test(l)), menuLabels(menu).join(' | '));
+
+    // Clicking the same icon again closes it, or the icon cannot undo itself.
+    w.document.querySelector('.row-menu-btn[data-id="B1"]').click();
+    ck('  clicking the icon again closes it', !w.document.getElementById('rowMenu'));
     dom.window.close();
 }
 
@@ -282,7 +328,9 @@ section('F — and the sales tab renders too');
     await w.renderLedgerTab('sales');
     const root = w.document.getElementById('viewRoot');
     ck('the sale draws a row', root.querySelectorAll('tbody tr[data-id]').length === 1);
-    ck('  with an Edit button', root.querySelectorAll('.ledger-edit').length === 1);
+    ck('  with an actions menu carrying Edit',
+       menuLabels(openRowMenu(w.document, root.querySelector('tbody tr[data-id]').dataset.id))
+         .includes('Edit'));
     ck('  and a customer dropdown, not a supplier one',
        !!w.document.querySelector('[data-led-filter="customer"]')
        && !w.document.querySelector('[data-led-filter="supplier"]'),
@@ -333,8 +381,8 @@ section('F2 — a bill she just added is editable, and REACHABLE');
 
     const rows = doc.querySelectorAll('#viewRoot tbody tr[data-id]');
     ck('the bill she just added is in the table', rows.length === 1, String(rows.length));
-    ck('  and it has an Edit button like any other row',
-       doc.querySelectorAll('#viewRoot .ledger-edit').length === 1);
+    ck('  and it has an actions menu like any other row',
+       doc.querySelectorAll('#viewRoot .row-menu-btn').length === 1);
 
     // ── THE ACTUAL FIX ───────────────────────────────────────────────────
     const cell = rows[0].lastElementChild;
@@ -347,8 +395,8 @@ section('F2 — a bill she just added is editable, and REACHABLE');
        /position:\s*sticky/.test(th[th.length - 1].getAttribute('style') || ''));
     ck('  opaque, so the scrolling columns do not show through it',
        /background:/.test(cell.getAttribute('style') || ''));
-    ck('  and the buttons come FIRST in the cell, before any warnings',
-       cell.innerHTML.indexOf('ledger-edit') < cell.innerHTML.indexOf('status-warn')
+    ck('  and the actions icon comes FIRST in the cell, before any warnings',
+       cell.innerHTML.indexOf('row-menu-btn') < cell.innerHTML.indexOf('status-warn')
        || !/status-warn/.test(cell.innerHTML),
        'a cell whose width depends on how many warnings a row has is a moving target');
 
@@ -1243,9 +1291,14 @@ section('G5 — mark as paid, and the shortfall it will not let vanish');
     await w.renderLedgerTab('sales');
 
     ck('an unpaid container offers Receive payment',
-       !!doc.querySelector('.ledger-receive[data-id="S1"]'));
-    ck('  a settled one does not', !doc.querySelector('.ledger-receive[data-id="S2"]'),
+       menuLabels(openRowMenu(doc, 'S1')).includes('Receive payment'),
+       menuLabels(doc.getElementById('rowMenu')).join(' | '));
+    ck('  a settled one does not',
+       !menuLabels(openRowMenu(doc, 'S2')).includes('Receive payment'),
        'offering to settle something already settled is how it gets paid twice');
+    ck('  and a sales row offers Generate, which a bill row does not',
+       menuLabels(openRowMenu(doc, 'S1')).some((l) => /Generate/.test(l)),
+       menuLabels(doc.getElementById('rowMenu')).join(' | '));
     ck('  and says so, with a mark that it was not the full amount',
        /received \*/.test(doc.querySelector('tr[data-id="S2"]').textContent),
        doc.querySelector('tr[data-id="S2"]').textContent.replace(/\s+/g, ' ').trim());
@@ -1267,8 +1320,14 @@ section('G5 — mark as paid, and the shortfall it will not let vanish');
     // sales row fails here.
     {
         const strip = (el) => (el ? el.textContent.replace(/\s+/g, ' ').trim() : '');
-        const salesRows = [...doc.querySelectorAll('tbody tr[data-id]')].map(strip).join(' | ');
-        ck('no sales row says "pay" or "paid" anywhere on it',
+        // ── THE MENU COUNTS AS THE ROW ──────────────────────────────────
+        // The words moved behind an icon on 2026-09-19, so a sweep that only
+        // reads the row would pass on a menu item saying "Mark paid" — the
+        // check would have survived the very change it exists to catch.
+        const menuText = ['S1', 'S2'].map((id) => menuLabels(openRowMenu(doc, id)).join(' ')).join(' ');
+        const salesRows = [...doc.querySelectorAll('tbody tr[data-id]')].map(strip).join(' | ')
+                        + ' | ' + menuText;
+        ck('no sales row says "pay" or "paid" anywhere on it, menu included',
            !/\bpay\b|\bpaid\b/i.test(salesRows), salesRows);
         ck('  the action is to RECEIVE',
            /Receive payment/.test(salesRows), salesRows);
@@ -1284,7 +1343,11 @@ section('G5 — mark as paid, and the shortfall it will not let vanish');
         await w.renderLedgerTab('sales');
     }
 
-    doc.querySelector('.ledger-receive[data-id="S1"]').click();
+    {
+        const m = openRowMenu(doc, 'S1');
+        const item = [...m.querySelectorAll('button')].find((b) => /Receive payment/.test(b.textContent));
+        item.click();
+    }
     await new Promise((r) => setTimeout(r, 50));
     ck('the form opens', !!doc.getElementById('mpModal'));
     // The modal TITLE, which a mutation renaming it back to "Mark paid"

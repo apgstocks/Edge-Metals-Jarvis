@@ -242,7 +242,17 @@ for (const [label, src] of CLIENTS) {
     // calendar — which is the state she complained about.
     const wired = new Set((src.match(/wireUsDateField\('([a-zA-Z_]+)'\)/g) || [])
         .map(m => /'([a-zA-Z_]+)'/.exec(m)[1]));
-    const fields = (src.match(/<input id="([a-zA-Z_]*(?:date|Date|from|to|From|To|erd|cutoff)[a-zA-Z_]*)"/g) || [])
+    // ── "to" AND "from" ONLY WHERE THEY MEAN A DATE ──────────────────────
+    // This matched `to` and `from` anywhere in an id, which is a check shaped
+    // by naming rather than by meaning. On 2026-09-19 a recipients box called
+    // `genTo` — an EMAIL field — was reported as an unwired date field, and
+    // the honest reading is that the detector was wrong, not the field.
+    //
+    // Every real date field in both clients is either snake_case (`inv_to`,
+    // `spend_from`, `trk_pay_date`) or camelCase ending in `Date` (`bpDate`,
+    // `rcDate`). So `to`/`from` must sit behind an underscore or be the whole
+    // id; `date`, `erd` and `cutoff` are unambiguous and stay loose.
+    const fields = (src.match(/<input id="([a-zA-Z_]*(?:date|Date|erd|cutoff)[a-zA-Z_]*|[a-zA-Z]*_(?:from|to)|from|to)"/g) || [])
         .map(m => /id="([^"]+)"/.exec(m)[1])
         .filter(id => !/^(inv_from|inv_to)$/.test(id) || true);
     const missing = fields.filter(id => !wired.has(id));

@@ -267,11 +267,25 @@ const COLUMNS = [
     // Apsara, 2026-09-10: "bookng first then container no", correcting the
     // mockup. It is also the correct order for a reason worth writing down:
     // a container number is NOT unique — MSKU1111111 sails again next year
-    // with different metal in it. The booking is what makes it unique, so the
-    // booking is the key and the container is the label under it. Reading
-    // booking-first groups the containers under their shipment, which is how
-    // the business thinks about them, and it matches helpers/bills.js so the
-    // two tables join on the same pair.
+    // with different metal in it — so the booking has to come with it.
+    // Reading booking-first groups the containers under their shipment, which
+    // is how the business thinks about them, and it matches helpers/bills.js
+    // so the two tables join on the same pair.
+    //
+    // ── AND THE PAIR IS NOT UNIQUE EITHER ────────────────────────────────
+    // This said "the booking is what makes it unique" until 2026-09-19, when
+    // Apsara corrected it: "booking never makes it unique.sometimes diff
+    // container under same booking.sometimes diff items in same container."
+    //
+    // The correction matters because code was written on the old sentence.
+    // helpers/margin.js kept ONE row per booking+container and threw the rest
+    // away — $15,955 of revenue missing from a single four-grade container —
+    // and duplicates() called every multi-grade container a duplicate. Both
+    // are fixed; the wording is fixed here so the next reader does not rebuild
+    // the same assumption.
+    //
+    // booking + container identifies a CONTAINER. Booking + container + grade
+    // identifies a ROW.
     { key: 'booking_no',     label: 'Booking no',     group: 'shipment' },
     { key: 'container_no',   label: 'Container no',   group: 'shipment' },
     { key: 'terms',           label: 'Payment terms',  group: 'shipment', choices: TERMS,
@@ -423,16 +437,55 @@ function clean(input) {
 // sale without it.
 function withTotals(s) { return { ...s, ...compute(s) }; }
 
-// ── BOOKING, THEN CONTAINER WITHIN IT ────────────────────────────────────
-// The order she asked for, applied where the table is built rather than in
-// the client, so the website, the phone and anything reading the route all
-// agree. Blank bookings sort last: a row with no booking is unfinished, not
-// first in the alphabet.
+// ── NEWEST INVOICE FIRST, THEN BOOKING, THEN CONTAINER ───────────────────
+//
+// Apsara, 2026-09-19, holding an exported PDF headed "Invoice register" whose
+// first five rows ran 2026-04, 2026-05, 2025-11, 2025-12, 2026-01:
+//
+//     "why its not sorted by invoice date?"
+//
+// It was not sorted by date at all. It was sorted by BOOKING, which was the
+// right answer to a different question and is recorded below as the thing it
+// replaced. Asked which should change — the screen, the export, or both — she
+// chose all of it, newest first.
+//
+// ── WHAT THE OLD ORDER WAS FOR, SO IT IS NOT LOST ────────────────────────
+// Booking-then-container grouped every container of one shipment together,
+// because a container number is not unique over time: MSKU1111111 sails again
+// next year with different metal in it, so the booking has to come with it.
+// That grouping is what has been given up here. Rows sharing a booking still
+// sit together WHEN THEY SHARE AN INVOICE DATE, which on her data is most of
+// them — the four TEMU7944250 rows on 2026-03-02 stay a block — but a booking
+// invoiced across two days now appears in two places, and that is the trade
+// she made knowingly.
+//
+// ── DATES ARRIVE IN TWO FORMATS AND MUST NOT BE SORTED AS TEXT ───────────
+// The 569 imported rows carry '2026-04-24'; anything typed on the Sales form
+// carries '09/10/2026'. Compared as plain strings, EVERY typed row sorts
+// after EVERY imported one regardless of when it happened — a table that
+// looks sorted and is not, which is worse than one that visibly is not.
+//
+// bills.sortableDate normalises both to YYYY-MM-DD and is imported rather
+// than rewritten: two answers to "which of these two dates is earlier" would
+// eventually disagree, and the two ledgers are joined on booking + container
+// for margin.
+//
+// A date that parses as NEITHER sorts last, after every dated row. There is
+// no honest place to put a row in time when its date cannot be read, and the
+// bottom is where she will find it. Those rows keep booking order among
+// themselves so the list stays stable rather than shuffling on every load.
 function sortRows(rows) {
-    const key = (r) => [String(r.booking_no || '').trim().toUpperCase(),
+    const key = (r) => [bills.sortableDate(r.date),
+                        String(r.booking_no || '').trim().toUpperCase(),
                         String(r.container_no || '').trim().toUpperCase()];
     return [...(rows || [])].sort((a, b) => {
-        const [ab, ac] = key(a); const [bb, bc] = key(b);
+        const [ad, ab, ac] = key(a); const [bd, bb, bc] = key(b);
+        // Undated last, whichever direction the dated ones run.
+        if (!ad !== !bd) return ad ? -1 : 1;
+        if (ad && bd && ad !== bd) return ad < bd ? 1 : -1;   // DESC: newest first
+        // Everything below is the tie-break, and it is the old order exactly.
+        // Deterministic on purpose: a list that reshuffles between two loads
+        // because two rows compared equal is a list she cannot trust.
         if (!ab !== !bb) return ab ? -1 : 1;
         if (ab !== bb) return ab < bb ? -1 : 1;
         if (ac !== bc) return ac < bc ? -1 : 1;
@@ -440,20 +493,37 @@ function sortRows(rows) {
     });
 }
 
-// ── THE SAME CONTAINER TWICE UNDER ONE BOOKING ───────────────────────────
+// ── THE SAME GRADE TWICE ON ONE CONTAINER ────────────────────────────────
 // Reported, never refused. A duplicate is usually a typo and occasionally
-// real (a container split across two invoices), and this file is not in a
-// position to tell the difference — but silence would let the margin join
-// against helpers/bills.js double-count, which is the failure nobody finds
-// until a month is closed.
+// real, and this file is not in a position to tell the difference — but
+// silence would let the margin join against helpers/bills.js double-count,
+// which is the failure nobody finds until a month is closed.
+//
+// ── IT USED TO KEY ON booking|container, AND THAT WAS WRONG ──────────────
+// Apsara, 2026-09-19: "booking never makes it unique.sometimes diff container
+// under same booking.sometimes diff items in same container."
+//
+// Her imported ledger has one ROW PER GRADE — booking 266116225, container
+// TEMU7944250, four rows: Alu Breakage, Alternator, Starter/bose load, Wheel
+// Weight/bose load. Keyed on booking|container, all four were reported as a
+// duplicated container. So the warning fired on most of her ledger, which is
+// the same as never firing: a list of false alarms is where a real duplicate
+// goes to hide.
+//
+// The grade is part of the key now. Two rows naming DIFFERENT grades are that
+// container's two grades; two rows naming the SAME grade are the double-count
+// worth interrupting her for. A blank grade is still a grade — two rows on
+// one container with nothing named is the classic duplicated row.
+const gradeKey = (r) => String((r && (r.item || r.description)) || '').trim().toUpperCase();
 function duplicates(rows) {
     const seen = new Map();
     for (const r of (rows || [])) {
         const bk = String(r.booking_no || '').trim().toUpperCase();
         const cn = String(r.container_no || '').trim().toUpperCase();
         if (!bk || !cn) continue;
-        const k = `${bk}|${cn}`;
-        if (!seen.has(k)) seen.set(k, { booking_no: r.booking_no, container_no: r.container_no, ids: [] });
+        const k = `${bk}|${cn}|${gradeKey(r)}`;
+        if (!seen.has(k)) seen.set(k, { booking_no: r.booking_no, container_no: r.container_no,
+                                        item: (r.item || r.description) || null, ids: [] });
         seen.get(k).ids.push(r.id);
     }
     return [...seen.values()].filter((d) => d.ids.length > 1);

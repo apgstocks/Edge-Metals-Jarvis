@@ -31,6 +31,28 @@
 
 const cfg = require('../config');
 
+// ── WHO THIS EMAIL IS FROM ──────────────────────────────────────────────────
+// Apsara, 2026-09-19, reading a draft: "in kind regards,i dont want Edge
+// Trading.It should be Jarvis,Edge Metals Inc."
+//
+// ── AND THIS IS WHY IT IS NOT A CONFIG CHANGE ───────────────────────────────
+// It used to read `cfg.COMPANY_NAME || 'Edge Trading'`, and the obvious fix is
+// to edit config.js. That would have been wrong, and expensively so:
+// COMPANY_NAME is also the caption on every EDGE YARD load ticket (api.js
+// ~5392) and the yard app pins it as BUYER_FIXED_NAME on every load
+// (mobile-app/www/index.html). Edge Yard and Edge Metals are different
+// companies — the separation is most of what this app is for — so one edit in
+// config.js would have renamed the buyer on her yard paperwork to settle the
+// sign-off on a metals invoice.
+//
+// This file only ever sends a container's INVOICE and packing list, which are
+// Edge Metals documents. So the name is stated here, where the document's
+// company is known, and cfg.COMPANY_NAME keeps meaning what it meant.
+//
+// She can also edit it per message now — the draft screen is a text box — so
+// this is the default, not a rule.
+const SIGN_OFF = ['Jarvis', 'Edge Metals Inc'];
+
 // The reasons a draft cannot be built. Exported so a caller can branch on a
 // value rather than on a substring of a sentence meant for a human.
 const REASONS = ['no_container', 'none', 'incomplete', 'no_customer',
@@ -47,7 +69,53 @@ function no(reason, message, extra = {}) {
 //
 // consigneeOverride exists for her "send HMMU7060866 to Eccomelt" — the
 // documents are on file but carry no customer, and she names one.
-function draftFor(containerNo, { photos = [], consignee: consigneeOverride = null } = {}) {
+// ── ADDRESSES TYPED IN, WHEN THE ADDRESS BOOK HAS NONE ──────────────────────
+// Apsara, 2026-09-19, looking at "Edge Metals Recycling isn't in Email
+// Contacts, so I don't have an address for them":
+//
+//     "if its in email contacts,it can take ..else it can ask for email
+//      recipients separated by comma"
+//
+// Split on commas, semicolons and whitespace, because a list pasted out of
+// somebody else's mail client arrives in all three. Anything that is not an
+// address is REPORTED rather than quietly dropped: a typo'd address silently
+// removed from a list of four is an invoice that three people receive and one
+// does not, and nobody finds out.
+// ── ONE LEFT-TO-RIGHT SCAN, BECAUSE ORDER IS MEANING ────────────────────────
+// The first address is the addressee and the rest are copied, so the order she
+// typed them in is not cosmetic. An earlier version split on whitespace first
+// and then looked for angle brackets — which tore
+//
+//     "Ray" <ray@emr.example>
+//
+// into two tokens, reported `"Ray"` as a bad address, and refused the whole
+// list. Anything that pulls the bracketed addresses out first and the bare
+// ones after would fix that and shuffle the order, which is worse: it would
+// silently change who the invoice is addressed to.
+//
+// So: one regex, scanned once, yielding either a bracketed address or a bare
+// token in the position it was written.
+const TOKEN = /"[^"]*"\s*<([^>]*)>|<([^>]*)>|([^\s,;<>]+)/g;
+function parseRecipients(input) {
+    const { isValidEmail } = require('./emailContacts');
+    const text = Array.isArray(input) ? input.join(', ') : String(input || '');
+    const good = [], bad = [];
+    TOKEN.lastIndex = 0;
+    let m;
+    while ((m = TOKEN.exec(text)) !== null) {
+        const tok = String(m[1] ?? m[2] ?? m[3] ?? '').trim().replace(/^"|"$/g, '');
+        if (!tok) continue;
+        // Reported, never quietly dropped: one address silently removed from a
+        // list of four is an invoice that three people receive and one does
+        // not, and nobody finds out.
+        if (isValidEmail(tok)) { if (!good.includes(tok)) good.push(tok); }
+        else if (!bad.includes(tok)) bad.push(tok);
+    }
+    return { good, bad };
+}
+
+function draftFor(containerNo, { photos = [], consignee: consigneeOverride = null,
+                                 recipients = null } = {}) {
     const shipmentDocs = require('./shipmentDocs');
     const container = String(containerNo || '').trim();
     if (!container) {
@@ -74,19 +142,50 @@ function draftFor(containerNo, { photos = [], consignee: consigneeOverride = nul
         return no('no_customer', `I have the documents for ${found.container} but no customer recorded against them, so I can't work out who to send to. Tell me the name — "send ${found.container} to Eccomelt" — and I'll use that.`, { found });
     }
 
-    const { resolveContact } = require('./emailContacts');
-    const resolved = resolveContact(consignee);
-    if (!resolved) {
-        return no('no_contact', `${consignee} isn't in Email Contacts, so I don't have an address for them. Add them there and say "send the documents for ${found.container}" again.`, { found, consignee });
+    // ── ADDRESSES SHE TYPED WIN OVER THE ADDRESS BOOK ───────────────────────
+    // Not "fall back to": if she has just typed a list, that list is the
+    // answer and the lookup is not consulted at all. The lookup is what failed
+    // and sent her to the box.
+    //
+    // `saveAs` tells the caller this contact did not exist and is worth
+    // storing — her "then it should get stored in email contacts tab". This
+    // file does not write it: it reads what is on disk and builds a draft,
+    // and a function that quietly saves a contact while answering a question
+    // about an email is a function nobody expects to have written anything.
+    let contact = null;
+    let saveAs = null;
+    const typed = recipients === null || recipients === undefined
+        ? null : parseRecipients(recipients);
+    if (typed && typed.bad.length) {
+        return no('bad_recipients',
+                  `These don't look like email addresses: ${typed.bad.join(', ')}. Separate them with commas.`,
+                  { found, consignee, bad: typed.bad });
     }
-    if (resolved.type === 'ambiguous') {
-        const names = (resolved.matches || []).map((c) => `${c.name} <${c.email}>`).join('\n  ');
-        return no('ambiguous_contact', `More than one contact for ${consignee}:\n  ${names}\n\nSay which — "send the documents for ${found.container} to <name>".`,
-                  { found, consignee, matches: resolved.matches || [] });
-    }
-    const contact = resolved.contact;
-    if (!contact || !contact.email) {
-        return no('no_address', `I found ${consignee} in Email Contacts but there's no address saved against them.`, { found, consignee });
+    if (typed && typed.good.length) {
+        // The first is the addressee, the rest are copied — the same shape an
+        // Email Contacts entry has, so storing it needs no translation.
+        contact = { name: consignee, email: typed.good[0], cc: typed.good.slice(1) };
+        saveAs = { name: consignee, email: typed.good[0], cc: typed.good.slice(1) };
+    } else {
+        const { resolveContact } = require('./emailContacts');
+        const resolved = resolveContact(consignee);
+        if (!resolved) {
+            // `ask_recipients` is what the screen keys on to show the box. The
+            // sentence keeps its WhatsApp wording, where there is no box and
+            // adding them in the tab really is the next step.
+            return no('no_contact', `${consignee} isn't in Email Contacts, so I don't have an address for them. Add them there and say "send the documents for ${found.container}" again.`,
+                      { found, consignee, ask_recipients: true });
+        }
+        if (resolved.type === 'ambiguous') {
+            const names = (resolved.matches || []).map((c) => `${c.name} <${c.email}>`).join('\n  ');
+            return no('ambiguous_contact', `More than one contact for ${consignee}:\n  ${names}\n\nSay which — "send the documents for ${found.container} to <name>".`,
+                      { found, consignee, matches: resolved.matches || [] });
+        }
+        contact = resolved.contact;
+        if (!contact || !contact.email) {
+            return no('no_address', `I found ${consignee} in Email Contacts but there's no address saved against them.`,
+                      { found, consignee, ask_recipients: true });
+        }
     }
 
     const invLabel = found.inv_no ? `Invoice ${found.inv_no}` : 'Invoice';
@@ -106,7 +205,7 @@ function draftFor(containerNo, { photos = [], consignee: consigneeOverride = nul
         ...(links.length ? ['', links.length === 1 ? 'Loading photo:' : 'Loading photos:', ...links] : []),
         '',
         'Kind regards,',
-        cfg.COMPANY_NAME || 'Edge Trading',
+        ...SIGN_OFF,
     ].join('\n');
 
     // ── ANYTHING ODD ABOUT THE DOCUMENT SET ─────────────────────────────────
@@ -147,6 +246,10 @@ function draftFor(containerNo, { photos = [], consignee: consigneeOverride = nul
         // the people who are always copied on that customer's paperwork.
         // Resolved by the caller, which owns mergeCc's precedence rules.
         contact_cc: contact.cc || null,
+        // Non-null means these addresses came from her, not from the address
+        // book, and the caller should offer to keep them. The caller does the
+        // writing — see the note above.
+        save_as: saveAs,
         subject,
         body,
         attachments,
@@ -155,4 +258,4 @@ function draftFor(containerNo, { photos = [], consignee: consigneeOverride = nul
     };
 }
 
-module.exports = { draftFor, REASONS };
+module.exports = { draftFor, parseRecipients, REASONS };

@@ -824,14 +824,25 @@ const tableColumns = () => TABLE_ORDER.map((k) => COLUMNS.find((c) => c.key === 
 //
 // Reported, never refused, for the same reason as on the sales side: it is
 // usually a typo and occasionally real, and this file cannot tell which.
+// ── THE SAME GRADE TWICE ON ONE CONTAINER ────────────────────────────────
+// Keyed on booking|container until 2026-09-19, when Apsara corrected the
+// assumption the whole join was built on: "booking never makes it unique.
+// sometimes diff container under same booking.sometimes diff items in same
+// container."
+//
+// The grade is part of the key now, the same as helpers/sales.js — the two
+// sides are joined for margin, so two answers to "is this a duplicate" would
+// disagree about the same container. A blank grade is still a grade.
+const gradeKey = (r) => String((r && (r.description || r.item)) || '').trim().toUpperCase();
 function duplicates(rows) {
     const seen = new Map();
     for (const r of (rows || [])) {
         const bk = String(r.booking_no || '').trim().toUpperCase();
         const cn = String(r.container_no || '').trim().toUpperCase();
         if (!bk || !cn) continue;
-        const k = `${bk}|${cn}`;
-        if (!seen.has(k)) seen.set(k, { booking_no: r.booking_no, container_no: r.container_no, ids: [] });
+        const k = `${bk}|${cn}|${gradeKey(r)}`;
+        if (!seen.has(k)) seen.set(k, { booking_no: r.booking_no, container_no: r.container_no,
+                                        item: (r.description || r.item) || null, ids: [] });
         seen.get(k).ids.push(r.id);
     }
     return [...seen.values()].filter((d) => d.ids.length > 1);

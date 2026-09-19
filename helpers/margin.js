@@ -40,10 +40,21 @@ const num = (v) => {
     return isFinite(n) ? n : null;
 };
 
-// The pair that identifies a physical container. A container number alone is
-// not unique over time — MSKU1111111 sails again next year with different
-// metal in it — so the booking is what makes it one, exactly as it is on
-// both of the tables being joined.
+// ── THE PAIR THAT IDENTIFIES A PHYSICAL CONTAINER ───────────────────────
+// A container number alone is not unique over time — MSKU1111111 sails again
+// next year with different metal in it — so the booking has to be part of the
+// key, exactly as it is on both of the tables being joined.
+//
+// WHAT THIS COMMENT USED TO SAY, AND WHY IT IS CORRECTED
+// It said "the booking is what makes it one", i.e. that booking+container was
+// UNIQUE. Apsara, 2026-09-19: "booking never makes it unique.sometimes diff
+// container under same booking.sometimes diff items in same container."
+//
+// She is right and the old wording was load-bearing: several files were built
+// on the belief that one key means one row, and this one silently dropped
+// $15,955 of revenue from a single container because of it. booking+container
+// identifies a CONTAINER. It does not identify a ROW — a container carries as
+// many rows as it carries grades.
 const keyOf = (bookingNo, containerNo) =>
     `${String(bookingNo || '').trim().toUpperCase()}|${String(containerNo || '').trim().toUpperCase()}`;
 
@@ -59,6 +70,75 @@ function rows() {
         return byKey.get(k);
     };
 
+    // ── SEVERAL LINES ON ONE CONTAINER ARE ONE CONTAINER'S MONEY ─────────
+    //
+    // Apsara, 2026-09-19, correcting the comment this file was built on:
+    //
+    //     "booking never makes it unique.sometimes diff container under same
+    //      booking.sometimes diff items in same container."
+    //
+    // She is right, and it was costing her real money in this report. Every
+    // row here used to be ASSIGNED, so a container carrying four grades kept
+    // the first line and threw the other three away. Her own figures, booking
+    // 266116225 / TEMU7944250:
+    //
+    //     the four invoice lines total   $30,604.60
+    //     this report showed revenue of  $14,649.53
+    //     money missing                  $15,955.07
+    //
+    // So the lines are SUMMED. It was never a decision to drop them; it was a
+    // consequence of a sentence about uniqueness that was not true.
+    //
+    // ── BOTH SIDES, OR THE NUMBER GETS WORSE RATHER THAN BETTER ──────────
+    // She answered about the SALES side, which is what she was looking at.
+    // Summing only that side would divide a container's whole revenue by one
+    // line of its cost — a margin that reads far better than the deal, which
+    // is the direction nobody questions and this file already warns about.
+    // There is no version of "fix half of it" that is safer than fixing both,
+    // so both are summed and this paragraph is here to say that the purchase
+    // half was my call and not hers.
+    //
+    // ── WHAT A DUPLICATE MEANS NOW ───────────────────────────────────────
+    // It used to mean "more than one row on this container", which on her
+    // data is most containers and therefore meant nothing. A real duplicate
+    // is the SAME GRADE claimed twice — that is the one that double-counts.
+    // See sales.duplicates()/bills.duplicates(), where the same change is
+    // made, so the ledger screen and this report agree about what is wrong.
+    // ── WHAT COUNTS AS THE SAME LINE TWICE ───────────────────────────────
+    // The grade, normalised. Two rows on one container naming different
+    // grades are that container's two grades; two rows naming the SAME grade
+    // are a double-count, and now that the lines are summed a double-count
+    // adds real money to the report rather than merely confusing it.
+    //
+    // A blank grade counts as a grade: two rows on one container with nothing
+    // named is the classic duplicated row, and it is the shape her earliest
+    // duplicate test uses.
+    const gradeOf = (r) => String(r.item || r.description || '').trim().toUpperCase();
+    const noteGrade = (row, side, r) => {
+        const seen = row[side] || (row[side] = new Map());
+        const g = gradeOf(r);
+        if (!seen.has(g)) { seen.set(g, [r.id]); return; }
+        seen.get(g).push(r.id);
+    };
+    const repeatedIds = (seen) => {
+        const out2 = [];
+        for (const ids of (seen || new Map()).values()) if (ids.length > 1) out2.push(...ids);
+        return out2;
+    };
+
+    const addNum = (a, b2) => (a === null || a === undefined)
+        ? (b2 === null || b2 === undefined ? null : b2)
+        : round2(a + (num(b2) || 0));
+    // Newest of two dates, by the same normaliser the ledgers sort on, so a
+    // container's date does not depend on which row was read first.
+    const laterDate = (a, b2) => {
+        const sd = require('./bills').sortableDate;
+        const [x, y] = [sd(a), sd(b2)];
+        if (!x) return b2 || a || null;
+        if (!y) return a;
+        return x >= y ? a : b2;
+    };
+
     for (const b of bills.listWithTotals()) {
         const container = String(b.container_no || '').trim();
         // Without a container there is nothing to join ON. Reported by the
@@ -68,13 +148,22 @@ function rows() {
         if (!container) continue;
         const k = keyOf(b.booking_no, container);
         const row = take(k, { key: k, booking_no: b.booking_no || null, container_no: container });
-        // ── TWO BILLS FOR ONE CONTAINER ──────────────────────────────────
-        // Assigning over the top would keep only the LAST one, and the
-        // container would read as cheaper than it was — a margin that looks
-        // better than the deal, which is the direction nobody questions.
-        // Counted and named instead; the caller shows it.
+        noteGrade(row, '_billGrades', b);
         if (row.bill_id) {
-            row.duplicate_bill_ids = (row.duplicate_bill_ids || [row.bill_id]).concat(b.id);
+            // Every line's id is kept — the caller lists them, and a real
+            // duplicate has to be findable from here.
+            row.bill_ids = (row.bill_ids || [row.bill_id]).concat(b.id);
+            row.bill_amount = addNum(row.bill_amount, b.amount);
+            row.trucking = addNum(row.trucking, b.trucking_amount_used !== undefined
+                ? b.trucking_amount_used : b.trucking_amount);
+            row.bought_weight_lb = addNum(row.bought_weight_lb, b.net_lb);
+            row.bill_date = laterDate(row.bill_date, b.date);
+            // Two different suppliers on one container is not a multi-grade
+            // line, it is a mistake. Named rather than silently merged.
+            if (b.supplier && row.supplier && b.supplier !== row.supplier) {
+                row.supplier_conflict = [...new Set([...(row.supplier_conflict || [row.supplier]), b.supplier])];
+            }
+            continue;
         }
         row.bill_id = b.id;
         row.supplier = b.supplier || null;
@@ -92,8 +181,32 @@ function rows() {
         if (!container) continue;
         const k = keyOf(s.booking_no, container);
         const row = take(k, { key: k, booking_no: s.booking_no || null, container_no: container });
+        // The sell side of the same change. Four grades invoiced off one
+        // container are four lines of ONE container's revenue, not four
+        // candidates for the honour of being its revenue.
+        //
+        // Worth recording what was nearly done instead: reordering the sales
+        // table newest-first earlier today would have changed WHICH single
+        // line this report kept, silently, for every multi-grade container.
+        // That would have been a second wrong answer sitting on top of the
+        // first, and harder to see because the number would have moved.
+        noteGrade(row, '_saleGrades', s);
         if (row.sale_id) {
-            row.duplicate_sale_ids = (row.duplicate_sale_ids || [row.sale_id]).concat(s.id);
+            row.sale_ids = (row.sale_ids || [row.sale_id]).concat(s.id);
+            row.invoice_amount = addNum(row.invoice_amount, s.amount);
+            row.charges_in = round2((row.charges_in || 0) + (num(s.charges_in_total) || 0));
+            row.charges_out = round2((row.charges_out || 0) + (num(s.charges_out_total) || 0));
+            row.commission = round2((row.commission || 0) + (num(s.commission_amount) || 0));
+            row.sold_weight_lb = addNum(row.sold_weight_lb, s.weight_lb);
+            row.received = round2((row.received || 0) + (num(s.received) || 0));
+            row.receivable = addNum(row.receivable, s.receivable);
+            row.sale_date = laterDate(row.sale_date, s.date);
+            // Same reasoning as the supplier above: one container invoiced to
+            // two different customers is a mistake, not a grade split.
+            if (s.customer && row.customer && s.customer !== row.customer) {
+                row.customer_conflict = [...new Set([...(row.customer_conflict || [row.customer]), s.customer])];
+            }
+            continue;
         }
         row.sale_id = s.id;
         row.customer = s.customer || null;
@@ -132,8 +245,9 @@ function rows() {
             && r.sold_weight_lb !== null && r.sold_weight_lb !== undefined)
             ? Math.round((r.bought_weight_lb - r.sold_weight_lb) * 1000) / 1000 : null;
 
+        const { _billGrades, _saleGrades, ...rest } = r;
         out.push({
-            ...r,
+            ...rest,
             bill_amount: r.bill_amount ?? null,
             trucking: r.trucking ?? null,
             invoice_amount: r.invoice_amount ?? null,
@@ -141,11 +255,17 @@ function rows() {
             charges_out: r.charges_out ?? null,
             commission: r.commission ?? null,
             state, revenue, cost, margin,
-            // Non-empty means this margin is computed from ONE of several
-            // rows that claim the same container, and is not to be trusted
-            // until she says which is real.
-            duplicate_bill_ids: r.duplicate_bill_ids || [],
-            duplicate_sale_ids: r.duplicate_sale_ids || [],
+            // ── NON-EMPTY MEANS THE SAME GRADE TWICE ─────────────────
+            // It used to mean "more than one row on this container", which
+            // on her data is most containers — so the warning fired
+            // everywhere and therefore nowhere. Apsara, 2026-09-19:
+            // "sometimes diff items in same container".
+            //
+            // Now that the lines are SUMMED, a repeated grade is not merely
+            // confusing: it adds money that was never invoiced. That is the
+            // one worth a flag.
+            duplicate_bill_ids: repeatedIds(_billGrades),
+            duplicate_sale_ids: repeatedIds(_saleGrades),
             margin_pct: marginPct,
             weight_gap: weightGap,
             // Per metric ton of what was SOLD, which is the figure a trader

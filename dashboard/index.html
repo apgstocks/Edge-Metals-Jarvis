@@ -5770,30 +5770,44 @@ async function renderLedgerTab(kind) {
              The modal behind this button already said "How much arrived",
              "Received on" and "Into" — the model was right and only the label
              on the way in was wrong. -->
-        ${kind === 'sales' && r.balance !== null && r.balance > 0.005
-          ? `<button class="btn btn-secondary ledger-receive" data-id="${esc(r.id)}" style="font-size:10px; padding:3px 9px;">Receive payment</button>` : ''}
+        <!-- ── ONE ICON, NOT FOUR BUTTONS ───────────────────────────────
+             Apsara, 2026-09-19, with a screenshot of the same four words
+             repeating down the whole screen: "i dont want something like
+             button keep on piling up.perhaps a small icon ..on clicking,
+             these button should expand."
+
+             She is right, and it was getting worse by design: every feature
+             added this month put another word in this cell. RECEIVE PAYMENT
+             GENERATE EDIT DELETE, x 651 rows, is about 2,600 buttons drawn
+             on a tab she opens all day — which is also a real part of why
+             that tab is slow.
+
+             So the cell is a single ⋯ that opens a small menu. The same
+             stacked-dots idea she asked for on the export ("three dots
+             option.i want three dots to stacked vertically"), horizontal
+             here because it sits in a row of actions rather than at the end
+             of a toolbar.
+
+             WHAT STAYS VISIBLE: the status marks. "received", the missing
+             tare warning, the "still needs" marker and the amount-differs
+             flag are not actions — they are things she is meant to SEE
+             while scanning, and hiding a warning behind a click is how a
+             warning stops working. Only the buttons fold away.
+
+             AND NO BACKTICKS IN HERE. This whole cell is inside a template
+             literal, so one backtick in a comment ends the string and the
+             page stops parsing — which is exactly what the first version of
+             this comment did, quoting "received" in backticks. -->
         ${kind === 'sales' && r.balance !== null && Math.abs(r.balance) <= 0.005
           ? `<span title="Settled${r.bank_charge ? ` — ${ledMoney(r.bank_charge)} of it was a bank charge` : ''}${r.discount ? ` — ${ledMoney(r.discount)} discounted` : ''}" style="color:var(--status-good, #4ade80); font-size:10px; font-family:var(--font-mono); margin-right:6px;">received${r.bank_charge || r.discount ? ' *' : ''}</span>` : ''}
-        <!-- ── GENERATE ─────────────────────────────────────────────────
-             Apsara, 2026-09-19: "if all important details of bills is
-             entered,if i say create invoice… -upon my confirmation-it needs
-             to create automatically… andupon confirm- mail it to the
-             customer with loading photos", and then, plainly: "Instead of
-             create invoice->Have it as generate".
-
-             So the word is GENERATE — the same word the Documents screen
-             uses for the same act. Two words for one thing is two things to
-             learn.
-
-             On the SALES row and nowhere else, because an invoice is what
-             she bills a CUSTOMER and a bill has no customer on it. Offered
-             on every sales row rather than only on complete ones: the route
-             answers 422 with the list of what is still missing, which is a
-             more useful thing to read than a button that is not there. -->
-        ${kind === 'sales'
-          ? `<button class="btn btn-secondary ledger-generate" data-id="${esc(r.id)}" style="font-size:10px; padding:3px 9px;" title="Invoice and packing list for this container, then the email">Generate</button>` : ''}
-        <button class="btn btn-secondary ledger-edit" data-id="${esc(r.id)}" style="font-size:10px; padding:3px 9px;">Edit</button>
-        <button class="btn btn-ghost ledger-del" data-id="${esc(r.id)}" style="font-size:10px; padding:3px 7px;">Delete</button>
+        <!-- The items themselves are built in actionsFor(), below. Generate
+             appears on SALES rows only, because an invoice is what she bills
+             a CUSTOMER and a bill has no customer on it — and on every sales
+             row rather than only the complete ones, since the route answers
+             422 with the list of what is still missing, which is a more
+             useful thing to read than a button that is not there. -->
+        <button class="row-menu-btn" data-id="${esc(r.id)}" aria-label="Actions" title="Actions"
+          style="background:none; border:1px solid var(--line); border-radius:var(--radius-sm); color:var(--text-muted); font-size:13px; line-height:1; padding:3px 8px; cursor:pointer;">&#8943;</button>
         ${(r.missing_tares && r.missing_tares.length)
           ? ` <span title="No weight recorded for: ${esc(r.missing_tares.join(', '))} — the net is computed without them" style="color:var(--status-warn); font-family:var(--font-mono); font-size:10px;">⚠ ${esc(r.missing_tares.length)}</span>` : ''}
         ${(r.incomplete && r.incomplete.length)
@@ -6070,33 +6084,105 @@ async function renderLedgerTab(kind) {
   // The row is taken from what is already on screen rather than re-fetched:
   // it is the row she clicked, and a second GET could hand back a different
   // one if something changed underneath.
-  document.querySelectorAll('.ledger-receive').forEach((b) => {
-    b.onclick = () => {
-      const row = (ledgerState.rows || []).find((r) => r.id === b.dataset.id);
-      if (row) openMarkPaid(row);
-    };
-  });
-  document.querySelectorAll('.ledger-generate').forEach((b) => {
-    b.onclick = () => {
-      const row = (ledgerState.rows || []).find((r) => r.id === b.dataset.id);
-      if (row) openGenerateInvoice(row);
-    };
-  });
-  document.querySelectorAll('.ledger-edit').forEach((b) => {
-    b.onclick = () => {
-      const row = (ledgerState.rows || []).find((r) => r.id === b.dataset.id);
-      if (row) openLedgerForm(kind, row);
-    };
-  });
-  document.querySelectorAll('.ledger-del').forEach((b) => {
-    b.onclick = async () => {
+  // ── THE ROW MENU ────────────────────────────────────────────────────
+  // Apsara, 2026-09-19: "i dont want something like button keep on piling
+  // up.perhaps a small icon ..on clicking,these button should expand."
+  //
+  // ONE listener on the table, not one per row. 651 rows x 4 buttons was
+  // 2,600 handlers bound on every render, and binding them is a measurable
+  // part of why this tab is slow — the same reason the export menu is built
+  // once and shown, rather than built per row.
+  //
+  // The menu is built at CLICK time from the row she clicked, so which items
+  // appear can depend on that row (Receive payment only where money is
+  // owed) without every row paying for the decision up front.
+  const actionsFor = (row) => {
+    const items = [];
+    if (kind === 'sales' && row.balance !== null && row.balance > 0.005) {
+      items.push(['Receive payment', () => openMarkPaid(row)]);
+    }
+    if (kind === 'sales') {
+      items.push(['Generate invoice & email', () => openGenerateInvoice(row)]);
+    }
+    items.push(['Edit', () => openLedgerForm(kind, row)]);
+    items.push(['Delete', async () => {
       if (!confirm('Delete this row?')) return;
       try {
-        await api(`${K.path}/${encodeURIComponent(b.dataset.id)}`, { method: 'DELETE' });
+        await api(`${K.path}/${encodeURIComponent(row.id)}`, { method: 'DELETE' });
         renderLedgerTab(kind);
-      } catch (e) { alert(e.message || 'Could not delete it'); }
+      } catch (e) { alert(e.message || 'Could not delete'); }
+    }, 'danger']);
+    return items;
+  };
+
+  const closeRowMenu = () => { const m = $('rowMenu'); if (m) m.remove(); };
+
+  // ── NOT capture: true ───────────────────────────────────────────────
+  // The dismiss-on-outside-click listener must run AFTER the icon's own
+  // handler, not before it. On capture it ran first, so a second click on
+  // the SAME icon removed the menu and then the handler — finding nothing
+  // open — drew it again. The icon could open the menu and never close it.
+  //
+  // On the bubble phase the handler's stopPropagation keeps this listener
+  // from seeing clicks on the icon at all, which is exactly the intent: an
+  // outside click closes, the icon itself toggles.
+
+  document.querySelectorAll('.row-menu-btn').forEach((b) => {
+    b.onclick = (ev) => {
+      ev.stopPropagation();
+      const already = $('rowMenu');
+      closeRowMenu();
+      // A second click on the same button closes it rather than redrawing
+      // it — otherwise the icon has no way to undo itself.
+      if (already && already.dataset.for === b.dataset.id) return;
+
+      const row = (ledgerState.rows || []).find((r) => r.id === b.dataset.id);
+      if (!row) return;
+      const L = LEDGER_LIGHT;
+      const items = actionsFor(row);
+      const rect = b.getBoundingClientRect();
+      document.body.insertAdjacentHTML('beforeend', `
+        <div id="rowMenu" data-for="${esc(row.id)}" style="position:fixed; z-index:9200;
+             background:${L.sunken}; border:1px solid ${L.line}; border-radius:var(--radius-sm);
+             box-shadow:0 10px 30px rgba(0,0,0,.45); min-width:190px; padding:4px;">
+          ${items.map(([label, , tone], i) => `
+            <button data-i="${i}" style="display:block; width:100%; text-align:left; padding:7px 11px;
+              background:none; border:none; cursor:pointer; font-size:12px; border-radius:4px;
+              color:${tone === 'danger' ? L.danger : L.ink};">${esc(label)}</button>`).join('')}
+        </div>`);
+      const menu = $('rowMenu');
+      // Placed after it exists, so its real height decides whether it opens
+      // upward — a menu on the last row of a long table must not be drawn
+      // off the bottom of the window where she cannot reach it.
+      const h = menu.offsetHeight, w = menu.offsetWidth;
+      const top = (rect.bottom + h > window.innerHeight - 8) ? Math.max(8, rect.top - h - 4) : rect.bottom + 4;
+      menu.style.top = `${top}px`;
+      menu.style.left = `${Math.max(8, Math.min(rect.right - w, window.innerWidth - w - 8))}px`;
+      menu.querySelectorAll('button').forEach((mb) => {
+        mb.onmouseenter = () => { mb.style.background = L.paper; };
+        mb.onmouseleave = () => { mb.style.background = 'none'; };
+        mb.onclick = (e2) => {
+          e2.stopPropagation();
+          const fn = items[Number(mb.dataset.i)][1];
+          closeRowMenu();
+          fn();
+        };
+      });
+      document.addEventListener('click', closeRowMenu, { once: true });
+      document.addEventListener('keydown', function esc3(e3) {
+        if (e3.key !== 'Escape') return;
+        closeRowMenu();
+        document.removeEventListener('keydown', esc3);
+      });
     };
   });
+
+  // ── .ledger-receive / .ledger-edit / .ledger-del ARE GONE ───────────
+  // Their three querySelectorAll loops were deleted with the markup on
+  // 2026-09-19, not left behind. Nothing renders those classes any more, so
+  // a loop over them binds nothing while looking exactly like working code —
+  // and the next person to change how a row is deleted would edit the copy
+  // that never runs. Everything they did now lives in actionsFor() above.
 }
 
 // ── THE SHEET, IN TWO PALETTES ───────────────────────────────────────────
@@ -6287,7 +6373,8 @@ async function openFromBill() {
 let genState = null;
 async function openGenerateInvoice(row) {
   const L = LEDGER_LIGHT;
-  genState = { row, step: 1, mode: 'normal', gen: null, draft: null, busy: false };
+  genState = { row, step: 1, mode: 'normal', gen: null, draft: null, recipients: '',
+               subject: null, body: null, busy: false };
   document.body.insertAdjacentHTML('beforeend', `
     <div id="genModal" style="position:fixed; inset:0; background:rgba(0,0,0,.66); z-index:9100; display:flex; align-items:flex-start; justify-content:center; overflow-y:auto; padding:32px 16px;">
       <div class="card" id="genCard" style="width:min(820px,100%); padding:20px 22px 18px; background:${L.sunken}; border-color:${L.line};"></div>
@@ -6392,6 +6479,41 @@ async function openGenerateInvoice(row) {
     if (genState.step === 3) {
       const d = genState.draft;
       if (!d.ok) {
+        // ── NO ADDRESS ON FILE: ASK, DON'T STOP ─────────────────────────
+        // Apsara, 2026-09-19, reading "Edge Metals Recycling isn't in Email
+        // Contacts, so I don't have an address for them. Add them there and
+        // say ... again":
+        //
+        //   "if its in email contacts,it can take ..else it can ask for email
+        //    recipients separated by comma ... then it should get stored in
+        //    email contacts tab"
+        //
+        // Being sent to another tab, told to come back and start over, is the
+        // worst possible answer to a question the screen could simply ask.
+        // The typed list goes back through the SAME draft route, so the next
+        // thing she sees is the real message with the real addresses on it —
+        // typing them is not a shortcut past the read-before-send step.
+        if (d.ask_recipients) {
+          card.innerHTML = head('Who should this go to?', label) + `
+            <div style="font-size:12px; color:${L.inkFaint}; margin-bottom:10px;">${esc(d.consignee || 'This customer')} isn't in Email Contacts yet. Type the addresses and I'll use them now and save them there for next time.</div>
+            <input id="genRecipients" type="text" placeholder="someone@example.com, someone.else@example.com"
+              style="width:100%; padding:9px 11px; font-size:13px; font-family:var(--font-mono); background:${L.paper}; color:${L.ink}; border:1px solid ${L.line}; border-radius:var(--radius-sm);">
+            <div style="font-size:11px; color:${L.inkFaint}; margin-top:6px;">Separate them with commas. The first one is the addressee; the rest are copied.</div>
+            <div id="genErr" style="color:${L.danger}; font-size:12px; margin:8px 0 0;"></div>
+            <div style="display:flex; justify-content:space-between; gap:8px; margin-top:14px;">
+              <button id="genBack3" class="btn btn-ghost" style="font-size:12px; padding:7px 14px;">Back to the invoice</button>
+              <div style="display:flex; gap:8px;">
+                <button id="genDone3" class="btn btn-ghost" style="font-size:12px; padding:7px 14px;">Don't send</button>
+                <button id="genUseTo" class="btn btn-primary" style="font-size:12px; padding:7px 16px;">Use these</button>
+              </div>
+            </div>`;
+          $('genBack3').onclick = () => { genState.step = 2; render(); };
+          $('genDone3').onclick = () => { close(); renderLedgerTab('sales'); };
+          $('genUseTo').onclick = doDraft;
+          const box = $('genRecipients');
+          if (box) { box.focus(); box.onkeydown = (ev) => { if (ev.key === 'Enter') doDraft(); }; }
+          return;
+        }
         card.innerHTML = head('Nothing sent', label) + `
           ${warnBlock([d.message], 'bad')}
           <div style="font-size:12px; color:${L.inkFaint};">The documents are generated and filed — only the email stopped. Fix the above and press Generate again, or send it from Jarvis once the contact exists.</div>
@@ -6405,16 +6527,37 @@ async function openGenerateInvoice(row) {
       const line = (k, v) => `<div style="display:flex; gap:8px; padding:4px 0;">
           <span style="width:76px; font-size:10px; text-transform:uppercase; letter-spacing:.1em; color:${L.inkMuted};">${k}</span>
           <span style="flex:1; font-size:12px; color:${L.ink}; word-break:break-word;">${esc(v)}</span></div>`;
+      // ── EDITABLE, BECAUSE A DRAFT IS A STARTING POINT ─────────────
+      // Apsara, 2026-09-19: "also make the email editable."
+      //
+      // Subject and body are real inputs, seeded with the generated text and
+      // posted back as they stand. To/Cc/Attached stay read-only: those are
+      // decided by the address book and by what is on disk, and a typed
+      // address that silently disagrees with the contact record is the bug
+      // the recipients box already handles properly.
+      //
+      // genState.subject / genState.body hold her edits, so stepping back to
+      // the invoice and forward again does not throw them away.
+      const subj = genState.subject !== undefined && genState.subject !== null
+        ? genState.subject : d.subject;
+      const bodyText = genState.body !== undefined && genState.body !== null
+        ? genState.body : d.body;
       card.innerHTML = head('Send this?', label) + `
         ${warnBlock(g.weight_message ? [g.weight_message] : [], 'bad')}
         ${warnBlock(d.warnings || [], 'warn')}
         <div style="background:${L.paper}; border:1px solid ${L.line}; border-radius:var(--radius-sm); padding:10px 12px;">
           ${line('To', `${d.name} <${d.to}>`)}
           ${(d.contact_cc && d.contact_cc.length) ? line('Cc', [].concat(d.contact_cc).join(', ')) : ''}
-          ${line('Subject', d.subject)}
           ${line('Attached', (d.attachments || []).join(', ') || 'nothing')}
+          <div style="display:flex; gap:8px; padding:4px 0; align-items:center;">
+            <span style="width:76px; font-size:10px; text-transform:uppercase; letter-spacing:.1em; color:${L.inkMuted};">Subject</span>
+            <input id="genSubject" type="text" value="${esc(subj)}"
+              style="flex:1; padding:6px 9px; font-size:12px; background:${L.sunken}; color:${L.ink}; border:1px solid ${L.line}; border-radius:var(--radius-sm);">
+          </div>
           <div style="border-top:1px solid ${L.lineSoft}; margin-top:8px; padding-top:8px;">
-            <pre style="margin:0; font-family:inherit; font-size:12px; color:${L.ink}; white-space:pre-wrap; word-break:break-word;">${esc(d.body)}</pre>
+            <textarea id="genBody" rows="11" spellcheck="true"
+              style="width:100%; resize:vertical; padding:8px 10px; font-family:inherit; font-size:12px; line-height:1.55; background:${L.sunken}; color:${L.ink}; border:1px solid ${L.line}; border-radius:var(--radius-sm);">${esc(bodyText)}</textarea>
+            <div style="font-size:11px; color:${L.inkFaint}; margin-top:4px;">Edit anything here — what is in these boxes is what gets sent.</div>
           </div>
         </div>
         ${(d.photos || []).length ? `<div style="font-size:11px; color:${L.inkFaint}; margin-top:8px;">${d.photos.length} loading photo${d.photos.length === 1 ? '' : 's'} go as links in the message, not as attachments.</div>` : `<div style="font-size:11px; color:${L.warn}; margin-top:8px;">No loading photos on the matching bill — paste the links onto the bill's Photos field and generate again if you want them included.</div>`}
@@ -6426,9 +6569,14 @@ async function openGenerateInvoice(row) {
             <button id="genSend" class="btn btn-primary" style="font-size:12px; padding:7px 16px;">Send to ${esc(d.name)}</button>
           </div>
         </div>`;
-      $('genBack3').onclick = () => { genState.step = 2; render(); };
+      const keep = () => {
+        const sEl = $('genSubject'), bEl = $('genBody');
+        if (sEl) genState.subject = sEl.value;
+        if (bEl) genState.body = bEl.value;
+      };
+      $('genBack3').onclick = () => { keep(); genState.step = 2; render(); };
       $('genDone3').onclick = () => { close(); renderLedgerTab('sales'); };
-      $('genSend').onclick = doSend;
+      $('genSend').onclick = () => { keep(); doSend(); };
     }
 
     // ── STEP 4: IT WENT ─────────────────────────────────────────────────
@@ -6439,6 +6587,7 @@ async function openGenerateInvoice(row) {
           <div style="font-size:13px; color:${L.ok};">Emailed to ${esc(s.to)}</div>
           <div style="font-size:12px; color:${L.inkFaint}; margin-top:6px;">${esc(s.subject)}</div>
           <div style="font-size:11px; color:${L.inkFaint}; margin-top:4px;">${(s.attached || []).map(esc).join(' · ')}</div>
+          ${s.saved_contact ? `<div style="font-size:11px; color:${L.ok}; margin-top:8px;">${esc(s.saved_contact)} is now in Email Contacts \u2014 next time it will fill itself in.</div>` : ''}
         </div>
         <div style="display:flex; justify-content:flex-end; margin-top:14px;">
           <button id="genDone4" class="btn btn-primary" style="font-size:12px; padding:7px 16px;">Close</button>
@@ -6485,19 +6634,28 @@ async function openGenerateInvoice(row) {
   }
 
   async function doDraft() {
-    busy('genNext', true, 'Reading…');
+    // Whatever she typed into the recipients box, if that box is showing.
+    // Kept on genState rather than read at send time, so the addresses that
+    // produced the draft she READ are the addresses that go.
+    const box = $('genRecipients');
+    if (box) genState.recipients = box.value.trim();
+    const btn = $('genUseTo') ? 'genUseTo' : 'genNext';
+    busy(btn, true, 'Reading…');
     try {
-      genState.draft = await api(`/api/sales/${encodeURIComponent(genState.row.id)}/invoice/draft-mail`);
+      const qs = genState.recipients ? `?recipients=${encodeURIComponent(genState.recipients)}` : '';
+      genState.draft = await api(`/api/sales/${encodeURIComponent(genState.row.id)}/invoice/draft-mail${qs}`);
       genState.step = 3;
       render();
-    } catch (e) { busy('genNext', false); fail(e); }
+    } catch (e) { busy(btn, false); fail(e); }
   }
 
   async function doSend() {
     busy('genSend', true, 'Sending…');
     try {
       genState.sent = await api(`/api/sales/${encodeURIComponent(genState.row.id)}/invoice/send`,
-                                { method: 'POST', body: JSON.stringify({ confirm: true }) });
+                                { method: 'POST', body: JSON.stringify(
+                                    { confirm: true, recipients: genState.recipients || undefined,
+                                      subject: genState.subject, body: genState.body }) });
       genState.step = 4;
       render();
     } catch (e) {
@@ -6515,7 +6673,10 @@ async function openGenerateInvoice(row) {
         try {
           busy('genSend', true, 'Sending…');
           genState.sent = await api(`/api/sales/${encodeURIComponent(genState.row.id)}/invoice/send`,
-                                    { method: 'POST', body: JSON.stringify({ confirm: true, weights_ok: true }) });
+                                    { method: 'POST', body: JSON.stringify(
+                                        { confirm: true, weights_ok: true,
+                                          recipients: genState.recipients || undefined,
+                                          subject: genState.subject, body: genState.body }) });
           genState.step = 4;
           render();
         } catch (e2) { busy('genSend', false); fail(e2); }

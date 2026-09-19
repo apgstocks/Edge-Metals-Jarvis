@@ -451,6 +451,23 @@ function encodeHeader(str) {
     return `=?UTF-8?B?${Buffer.from(String(str), 'utf8').toString('base64')}?=`;
 }
 
+// An attachment's bytes as base64, whichever shape the caller had them in.
+// Throws with the FILENAME when it has neither — a message that names the
+// document is one she can act on; "undefined is not a function" is not.
+function base64Of(att) {
+    if (att && typeof att.base64 === 'string') return att.base64;
+    const c = att && att.content;
+    // A Buffer IS a Uint8Array, so these two lines overlap on purpose: the
+    // first is the fast, obvious path every caller actually takes, the second
+    // catches a plain Uint8Array from anything that ever hands one over.
+    // Deleting either alone changes nothing — checked with a mutation, which
+    // is why this is said here rather than left to look like a bug.
+    if (Buffer.isBuffer(c)) return c.toString('base64');
+    if (typeof c === 'string') return Buffer.from(c).toString('base64');
+    if (c instanceof Uint8Array) return Buffer.from(c).toString('base64');
+    throw new Error(`attachment "${(att && att.filename) || 'unnamed'}" has no content to send`);
+}
+
 function buildMimeMessage({ to, cc, bcc, subject, body, inReplyTo, references, attachments }) {
     const hasAttachments = Array.isArray(attachments) && attachments.length > 0;
     const boundary = hasAttachments ? `----jarvis-${Date.now()}-${Math.random().toString(36).slice(2)}` : null;
@@ -481,10 +498,36 @@ function buildMimeMessage({ to, cc, bcc, subject, body, inReplyTo, references, a
                 'Content-Transfer-Encoding: base64',
                 `Content-Disposition: attachment; filename="${att.filename}"`,
                 '',
+                // ── content (a Buffer) OR base64 (a string) ─────────────
+                // Apsara, 2026-09-19, pressing Send on an invoice to Daekwang:
+                //
+                //     "Cannot read properties of undefined (reading 'replace')"
+                //
+                // This line read `att.base64.replace(...)`, and NOTHING IN THE
+                // CODEBASE EVER SET `base64`. Grepped: every caller passes a
+                // Buffer under `content` —
+                //
+                //     helpers/shipmentDocs.attachmentsFor   { filename, content, mimeType }
+                //     workflow/actions.js:7385 (proforma)   { filename, content, mimeType }
+                //     api.js's sale-invoice send            the same, via attachmentsFor
+                //
+                // So EVERY email with an attachment threw here, on every path,
+                // and had done since the shapes drifted apart. It survived
+                // because four test files stub sendEmail — the stub accepts
+                // any object, so the one thing that mattered about the object
+                // was the one thing never checked. tests/sale-invoice.js
+                // section K now builds a real MIME message from exactly what
+                // the route produces, so a stub cannot hide this again.
+                //
+                // Both shapes are accepted rather than picking one and editing
+                // three callers: a Buffer is what every caller already has,
+                // and a base64 string is what this line always claimed to
+                // want. Neither can now be the wrong answer.
+                //
                 // Wrapped at 76 chars — standard MIME base64 line length; Gmail
                 // accepts unwrapped base64 too, but wrapping is the RFC 2045
                 // convention and avoids any risk with mail clients that assume it.
-                att.base64.replace(/(.{76})/g, '$1\r\n'),
+                base64Of(att).replace(/(.{76})/g, '$1\r\n'),
             );
         }
         parts.push(`--${boundary}--`);
@@ -815,4 +858,10 @@ module.exports = {
     parseEmailDate, getEmailContent, htmlToText, preferredReplyAddress, isAutoReply, looksLikeAuthFailure, reportGmailError, downloadAttachment, listMessages, getMessage,
     sendEmail, findLatestFrom, detectCcPattern, parseAddressList, getMyEmailAddress,
     tallyAddressesForTerm,
+    // Exported so a test can encode a REAL message from what a route actually
+    // produces. Every suite that touches sending stubs sendEmail — which is
+    // right, nothing may leave the building — but a stub accepts any object,
+    // and for two months the one thing that mattered about that object was
+    // the one thing nothing checked. See the note at base64Of.
+    buildMimeMessage,
 };

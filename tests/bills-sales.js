@@ -779,8 +779,20 @@ section('F — who may see her supplier prices');
     ck('  with the running totals asked of the SERVER',
        /\$\{K\.path\}\/preview/.test(html),
        'computing her formulas in the browser would be a second implementation');
+    // ── MATCHED ON THE BEHAVIOUR, NOT ON THE MARKUP ─────────────────────
+    // This read /class="btn btn-secondary ledger-edit"/ until 2026-09-19,
+    // when the four row buttons moved behind one ⋯ icon — Apsara: "i dont
+    // want something like button keep on piling up.perhaps a small icon ..on
+    // clicking,these button should expand." The class vanished and this went
+    // red for a change that did not remove Edit at all.
+    //
+    // tests/ledger-render.js opens the real menu and reads what is in it,
+    // which is where that belongs. All this file needs is that a row can
+    // reach the edit form; the CSS class it wears is not the point and never
+    // was — the header of ledger-render.js says exactly this about exactly
+    // this string.
     ck('  every row offers an edit, not just a delete',
-       /class="btn btn-secondary ledger-edit"/.test(html) && /openLedgerForm\(kind, row\)/.test(html),
+       /openLedgerForm\(kind, row\)/.test(html) && /class="row-menu-btn"/.test(html),
        'a typo in a seal number should not mean retyping eighteen fields');
     // The signature grew a third argument on 2026-09-10 (`seed`, a suggestion
     // for a NEW row, from the bill a container was bought on). Matched on the
@@ -1222,11 +1234,60 @@ section('N — sales at container grain: charges, commission, and the join');
     ck('  but both rows are still returned, not silently dropped',
        withDupes.json.sales.filter((x) => String(x.container_no || '').toUpperCase() === 'DUPC1').length === 2,
        'refusing would be wrong: a container really can be split across two invoices');
-    ck('  and the rows arrive in booking-then-container order',
-       (() => { const b = withDupes.json.sales.map((x) => String(x.booking_no || '').toUpperCase())
-                          .filter(Boolean);
-                return b.every((v, i) => i === 0 || b[i - 1] <= v); })(),
-       withDupes.json.sales.map((x) => x.booking_no || '-').join(','));
+    // ── NEWEST INVOICE FIRST, 2026-09-19 ────────────────────────────────
+    // This asserted booking-then-container until Apsara looked at an exported
+    // PDF headed "Invoice register" whose first rows ran 2026-04, 2026-05,
+    // 2025-11, 2025-12: "why its not sorted by invoice date?". Asked whether
+    // to change the screen, the export or both, she chose all of it.
+    //
+    // The old contract is recorded rather than deleted: booking order is what
+    // grouped a shipment's containers together, and losing that grouping is
+    // the trade she made. It survives as the TIE-BREAK below.
+    ck('  and the rows arrive newest invoice first',
+       (() => { const d = withDupes.json.sales
+                    .map((x) => bills.sortableDate(x.date))
+                    .filter(Boolean);
+                return d.every((v, i) => i === 0 || d[i - 1] >= v); })(),
+       withDupes.json.sales.map((x) => x.date || '-').join(','));
+    ck('  with booking order kept as the tie-break within one date',
+       (() => { const same = withDupes.json.sales.filter((x) => x.date === '09/10/2026')
+                    .map((x) => String(x.booking_no || '').toUpperCase()).filter(Boolean);
+                return same.every((v, i) => i === 0 || same[i - 1] <= v); })(),
+       withDupes.json.sales.filter((x) => x.date === '09/10/2026').map((x) => x.booking_no || '-').join(','));
+
+    // ── AND THE TRAP THAT MAKES IT LOOK SORTED WHEN IT IS NOT ───────────
+    // Her 569 imported rows carry '2026-04-24'; anything typed on the form
+    // carries '09/10/2026'. Compared as plain strings every typed row sorts
+    // after every imported one whatever the dates say. A '2026-01-05' row
+    // added here must land BELOW the 09/2026 rows, not above them.
+    await req('POST', '/api/sales', { sid: admin, body: {
+        date: '2026-01-05', customer: 'Daekwang', booking_no: 'ISOB', container_no: 'ISOC1' } });
+    await req('POST', '/api/sales', { sid: admin, body: {
+        date: '2026-12-31', customer: 'Daekwang', booking_no: 'ISOB', container_no: 'ISOC2' } });
+    const mixed = (await req('GET', '/api/sales', { sid: admin })).json.sales;
+    const at = (c) => mixed.findIndex((x) => String(x.container_no || '').toUpperCase() === c);
+    ck('an ISO-dated January row sorts BELOW a slash-dated September one',
+       at('ISOC1') > at('DUPC1'),
+       mixed.map((x) => `${x.container_no || '-'}:${x.date || '-'}`).join(' '));
+    ck('  and an ISO-dated December row sorts ABOVE it',
+       at('ISOC2') < at('DUPC1') && at('ISOC2') === 0,
+       mixed.map((x) => `${x.container_no || '-'}:${x.date || '-'}`).join(' '));
+
+    // ── A DATE THAT PARSES AS NEITHER GOES LAST ─────────────────────────
+    // addSale insists on a date but does not police its shape, so 'TBC' is a
+    // storable value and sortableDate returns null for it. There is no honest
+    // place to put a row in time when its date cannot be read, and the bottom
+    // is where she will find it — floating it to the top would push a real
+    // invoice off the first page of the register.
+    await req('POST', '/api/sales', { sid: admin, body: {
+        date: 'TBC', customer: 'Daekwang', booking_no: 'BADB', container_no: 'BADC1' } });
+    const withBad = (await req('GET', '/api/sales', { sid: admin })).json.sales;
+    ck('an unreadable date sorts to the bottom, not the top',
+       withBad.findIndex((x) => x.container_no === 'BADC1') === withBad.length - 1,
+       withBad.map((x) => `${x.container_no || '-'}:${x.date || '-'}`).join(' '));
+    ck('  and it is still returned, not dropped',
+       withBad.some((x) => x.container_no === 'BADC1'),
+       'a row nobody can see is a row nobody fixes');
     ck('  the client is told which terms are allowed',
        JSON.stringify(withDupes.json.terms) === JSON.stringify(['LC', 'TT']),
        JSON.stringify(withDupes.json.terms));
@@ -2354,13 +2415,118 @@ section('X — a container claimed twice, on either side');
        margin.summary(margin.rows().filter((r) => r.container_no === 'DUPCU1')).conflicted === 1,
        'a duplicate makes the margin next to it wrong and it cannot be seen by looking');
 
+    // ══ SEVERAL GRADES ON ONE CONTAINER ARE ONE CONTAINER'S MONEY ═══════
+    //
+    // Apsara, 2026-09-19, correcting the sentence this whole join was built
+    // on: "booking never makes it unique.sometimes diff container under same
+    // booking.sometimes diff items in same container."
+    //
+    // The fixture is hers — booking 266116225, container TEMU7944250, four
+    // grades, straight off the invoice register she was looking at. Before
+    // this, margin kept the first line and discarded three:
+    //
+    //     the four lines total   $30,604.60
+    //     the report showed      $14,649.53
+    //
+    // Fifteen thousand nine hundred and fifty-five dollars, on one container,
+    // silently, for every multi-grade container in the ledger.
+    {
+        await req('POST', '/api/bills', { sid: admin, body: {
+            date: '03/02/2026', supplier: 'Gomez', booking_no: '266116225',
+            container_no: 'TEMU7944250', gross: 70000, truck: 15000, container: 8500,
+            chassis: 6600, boxes: 0, supplier_price: 0.30 } });
+        const grades = [['Alu Breakage', 29897, 0.49], ['Alternator', 11409, 1.13],
+                        ['Starter/bose load', 1634, 0.85], ['Wheel Weight/bose load', 6975, 0.24]];
+        for (const [item, weight, price] of grades) {
+            await req('POST', '/api/sales', { sid: admin, body: {
+                date: '03/02/2026', customer: 'Modern Enterprises/Hardeep Puri',
+                booking_no: '266116225', container_no: 'TEMU7944250',
+                item, weight, invoice_price: price } });
+        }
+        const real = Math.round(grades.reduce((t, [, w, p]) => t + w * p, 0) * 100) / 100;
+        const mg = margin.rows().find((r) => r.container_no === 'TEMU7944250');
+
+        ck('a four-grade container reports ALL four lines as its revenue',
+           Math.abs(mg.revenue - real) < 0.02,
+           `$${mg.revenue} vs the $${real} she actually invoiced`);
+        ck('  which is not just the first line', mg.revenue > 20000,
+           `$${mg.revenue} — the old behaviour showed $14,649.53`);
+        ck('  and every row id is kept', (mg.sale_ids || []).length === 4,
+           JSON.stringify(mg.sale_ids));
+        ck('  the sold weight is the four lines added up',
+           Math.abs(mg.sold_weight_lb - grades.reduce((t, [, w]) => t + w, 0)) < 1,
+           String(mg.sold_weight_lb));
+
+        // ── AND NONE OF IT IS A DUPLICATE ───────────────────────────────
+        // The warning used to fire on every one of these, which on her data
+        // is most containers — a list of false alarms is where a real
+        // duplicate goes to hide.
+        ck('four different grades are NOT a duplicated container',
+           (mg.duplicate_sale_ids || []).length === 0,
+           JSON.stringify(mg.duplicate_sale_ids));
+        ck('  and the ledger screen agrees',
+           !sales.duplicates(sales.listWithTotals())
+               .some((d) => String(d.container_no).toUpperCase() === 'TEMU7944250'),
+           'two answers to "is this a duplicate" would disagree about the same container');
+
+        // ── THE SAME GRADE TWICE IS ────────────────────────────────────
+        // Now that lines are summed, a repeated grade does not merely
+        // confuse the report: it adds money that was never invoiced.
+        await req('POST', '/api/sales', { sid: admin, body: {
+            date: '03/02/2026', customer: 'Modern Enterprises/Hardeep Puri',
+            booking_no: '266116225', container_no: 'TEMU7944250',
+            item: 'Alternator', weight: 11409, invoice_price: 1.13 } });
+        const dupG = margin.rows().find((r) => r.container_no === 'TEMU7944250');
+        ck('the SAME grade twice IS flagged', (dupG.duplicate_sale_ids || []).length === 2,
+           JSON.stringify(dupG.duplicate_sale_ids));
+        ck('  naming both rows, so she can delete the right one',
+           new Set(dupG.duplicate_sale_ids).size === 2);
+        ck('  and the ledger screen flags it too',
+           sales.duplicates(sales.listWithTotals())
+               .some((d) => String(d.container_no).toUpperCase() === 'TEMU7944250'
+                         && String(d.item || '').toUpperCase() === 'ALTERNATOR'),
+           JSON.stringify(sales.duplicates(sales.listWithTotals())));
+        ck('  while the other three grades are left alone',
+           (dupG.duplicate_sale_ids || []).length === 2,
+           'flagging the whole container again would be the old behaviour wearing a new name');
+    }
+
+    // ── AND WHICH OF TWO SALES THE MARGIN ROW USES ──────────────────────
+    // It used to be whichever came LAST out of sales.listWithTotals, which is
+    // to say whichever the sort happened to put last — never a decision, only
+    // a consequence. Reordering the sales table newest-first on 2026-09-19
+    // would have silently flipped the customer and the margin shown for every
+    // duplicated container, with nothing saying so.
+    //
+    // So it is stated now: the most recent invoice wins, because a container
+    // invoiced twice is usually a revision and the revision is the one the
+    // customer is holding. Asserted here rather than left to the sort, so the
+    // NEXT reorder cannot move it either.
+    await req('POST', '/api/sales', { sid: admin, body: {
+        date: '09/20/2026', customer: 'Revised Customer', booking_no: 'DUPBK',
+        container_no: 'DUPCU1', weight: 12000, invoice_price: 0.71 } });
+    const rev = margin.rows().find((r) => r.container_no === 'DUPCU1');
+    ck('two sales on one container: the NEWEST invoice is the one shown',
+       rev.customer === 'Revised Customer' && rev.sale_date === '09/20/2026',
+       `${rev.customer} / ${rev.sale_date}`);
+    ck('  and both are still named, because the point is that she looks',
+       (rev.duplicate_sale_ids || []).length === 2,
+       JSON.stringify(rev.duplicate_sale_ids));
+
     // Trucking keys on the bill, so it legitimately shows two hauls — that is
     // the disagreement the warning exists to explain.
     ck('trucking still lists both hauls, which is why the two tabs disagreed',
        mt.payables().filter((r) => r.container_no === 'DUPCU1').length === 2,
        'one keyed on the container, one on the bill — the warning is what reconciles them');
 
-    const clean = margin.rows().find((r) => r.container_no !== 'DUPCU1' && r.state === 'closed');
+    // A row with exactly one bill line and one sale line — the ordinary case.
+    // This used to be "any closed row that is not DUPCU1", which was fragile
+    // for a reason that showed up on 2026-09-19: the four-grade fixture above
+    // is also closed, and it deliberately carries a repeated grade, so "any
+    // other closed row" started picking a row that is supposed to be flagged.
+    // Asking for the shape it means is both clearer and stable.
+    const clean = margin.rows().find((r) => r.state === 'closed'
+        && (r.bill_ids || []).length === 0 && (r.sale_ids || []).length === 0);
     if (clean) {
         ck('a container claimed once carries no flag',
            (clean.duplicate_bill_ids || []).length === 0

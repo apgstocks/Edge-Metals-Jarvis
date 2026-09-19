@@ -370,18 +370,34 @@ section('F. who it goes to and what it says');
        /Loading photos:/.test(shipmentMail.draftFor('MSDU2726332',
            { photos: ['https://a.example/1.jpg', 'https://a.example/2.jpg'] }).body));
 
-    // ── WITH NO PHOTOS IT IS THE OLD BODY, TO THE BYTE ──────────────────
-    // The WhatsApp path passes none, and this is the check that keeps it
-    // unchanged. The four lines below are what workflow/actions.js sent
-    // before this was extracted.
+    // ── WITH NO PHOTOS, ONE BODY FOR BOTH PATHS ─────────────────────────
+    // The WhatsApp path passes no photos, so its message must come out of
+    // this file byte for byte the same as the screen's — that is the whole
+    // reason the words were extracted into one place.
+    //
+    // ── AND THE SIGN-OFF IS NOT cfg.COMPANY_NAME ────────────────────────
+    // Apsara, 2026-09-19: "in kind regards,i dont want Edge Trading.It should
+    // be Jarvis,Edge Metals Inc."
+    //
+    // The obvious fix was config.js, and it would have been wrong:
+    // COMPANY_NAME is also the caption on every EDGE YARD load ticket and the
+    // yard app's BUYER_FIXED_NAME. Edge Yard and Edge Metals are different
+    // companies. Spelled out here rather than read from config, so a future
+    // edit to one cannot move the other.
     const bare = shipmentMail.draftFor('MSDU2726332');
     const expected = [
         'Dear Aris Metals,', '',
         'Please find attached the invoice and packing list for container MSDU2726332 (Invoice 26ARIS02).',
-        '', 'Kind regards,', cfg.COMPANY_NAME || 'Edge Trading',
+        '', 'Kind regards,', 'Jarvis', 'Edge Metals Inc',
     ].join('\n');
-    ck('with no photos the body is byte-identical to the one it replaced',
-       bare.body === expected, JSON.stringify(bare.body));
+    ck('with no photos the body is exactly the shared one', bare.body === expected,
+       JSON.stringify(bare.body));
+    ck('  signed for Edge Metals, not Edge Trading',
+       /Jarvis\nEdge Metals Inc$/.test(bare.body) && !/Edge Trading/.test(bare.body),
+       JSON.stringify(bare.body.slice(-40)));
+    ck('  and config.js still says Edge Trading, because the YARD uses it',
+       cfg.COMPANY_NAME === 'Edge Trading',
+       'changing it would rename the buyer on every yard load ticket');
     ck('  and carries no photo heading at all', !/Loading photo/.test(bare.body));
 }
 
@@ -615,6 +631,258 @@ section('H. end to end: generate, draft, send');
     listener.close();
 }
 
+// ── J. A CUSTOMER WHO IS NOT IN THE ADDRESS BOOK ────────────────────────────
+// Apsara, 2026-09-19, reading the refusal she got:
+//
+//   "if its in email contacts,it can take ..else it can ask for email
+//    recipients separated by comma ... then it should get stored in email
+//    contacts tab"
+//
+// Being sent to a different tab, told to add the contact and start the whole
+// thing again, is the worst available answer to a question the screen could
+// just ask. The typed list goes back through the SAME draft route, so what
+// she reads before pressing Send is the real message with the real addresses
+// on it — typing them is not a shortcut past the read-before-send step.
+section('J. typed recipients, then kept');
+{
+    const { createApi } = require(R('api'));
+    const app = createApi();
+    const listener = await new Promise((r) => { const s = app.listen(0, '127.0.0.1', () => r(s)); });
+    const base = `http://127.0.0.1:${listener.address().port}`;
+    const call = (method, p2, sid2, body) => new Promise((resolve, reject) => {
+        const d = body === undefined ? null : JSON.stringify(body);
+        const headers = {};
+        if (sid2) headers.Authorization = `Bearer ${sid2}`;
+        if (d) { headers['Content-Type'] = 'application/json'; headers['Content-Length'] = Buffer.byteLength(d); }
+        const r = http.request(base + p2, { method, headers }, (res) => {
+            let raw = ''; res.on('data', (c) => { raw += c; });
+            res.on('end', () => { let j = null; try { j = JSON.parse(raw); } catch (e) {}
+                resolve({ status: res.statusCode, json: j, raw }); });
+        });
+        r.on('error', reject); if (d) r.write(d); r.end();
+    });
+    const sid2 = ((await call('POST', '/login', null, { password: 'admin-pw-ssssssssssss' })).json || {}).sid;
+
+    // A container whose consignee is nowhere in Email Contacts — her exact
+    // case, "Edge Metals Recycling isn't in Email Contacts".
+    await bills.addBill({ date: '09/10/2026', supplier: 'Gomez', booking_no: 'DALA31313131',
+        container_no: 'TCNU2798153', gross: 29250, truck: 8700, container: 4400, chassis: 1250, boxes: 0,
+        photos: 'https://drive.example/emr-1.jpg' });
+    const emr = await sales.addSale({ booking_no: 'DALA31313131', container_no: 'TCNU2798153',
+        customer: 'Edge Metals Recycling', date: '09/18/2026', invoice_no: 'EM7001',
+        item: 'Al Wheels', weight: 15000, invoice_price: 1.45 });
+    await call('POST', `/api/sales/${emr.id}/invoice/generate`, sid2, {});
+
+    // ── IT ASKS, IT DOES NOT JUST REFUSE ────────────────────────────────
+    const asked = await call('GET', `/api/sales/${emr.id}/invoice/draft-mail`, sid2);
+    ck('with no contact on file the draft says so', (asked.json || {}).ok === false,
+       asked.raw.slice(0, 120));
+    ck('  and asks for addresses rather than ending there',
+       (asked.json || {}).ask_recipients === true, JSON.stringify(asked.json));
+    ck('  naming who it needs them for',
+       (asked.json || {}).consignee === 'Edge Metals Recycling', String((asked.json || {}).consignee));
+
+    // ── WHAT SHE TYPES IS PARSED, NOT TRUSTED ───────────────────────────
+    const bad = await call('GET',
+        `/api/sales/${emr.id}/invoice/draft-mail?recipients=${encodeURIComponent('good@emr.example, not-an-address')}`, sid2);
+    ck('a typo in the list is named, not silently dropped',
+       (bad.json || {}).reason === 'bad_recipients'
+       && ((bad.json || {}).bad || []).includes('not-an-address'),
+       JSON.stringify(bad.json));
+    ck('  because one address quietly removed from four is an invoice three people get',
+       (bad.json || {}).ok === false);
+
+    // Commas, semicolons, spaces and a display name — a list pasted out of
+    // somebody else's mail client arrives in every one of these shapes.
+    const messy = 'ops@emr.example; accounts@emr.example , "Ray" <ray@emr.example>';
+    const drafted = await call('GET',
+        `/api/sales/${emr.id}/invoice/draft-mail?recipients=${encodeURIComponent(messy)}`, sid2);
+    ck('a messy pasted list still resolves', (drafted.json || {}).ok === true,
+       drafted.raw.slice(0, 160));
+    ck('  first address is the addressee', (drafted.json || {}).to === 'ops@emr.example',
+       String((drafted.json || {}).to));
+    ck('  the rest are copied',
+       JSON.stringify((drafted.json || {}).contact_cc) === '["accounts@emr.example","ray@emr.example"]',
+       JSON.stringify((drafted.json || {}).contact_cc));
+    ck('  the display name is stripped, the address kept',
+       !String((drafted.json || {}).contact_cc || '').includes('Ray'));
+    ck('  and she is shown the real body before any of it goes',
+       /Dear Edge Metals Recycling/.test((drafted.json || {}).body || ''),
+       ((drafted.json || {}).body || '').slice(0, 80));
+
+    // ── NOTHING IS SAVED UNTIL THE SEND SUCCEEDS ────────────────────────
+    // A contact written for a message that then failed is a contact she never
+    // asked for, sitting there looking like it worked.
+    const { resolveContact } = require(R('helpers/emailContacts'));
+    ck('drafting alone stores nothing in Email Contacts',
+       !resolveContact('Edge Metals Recycling'),
+       'the draft is a read; it must not write');
+
+    SENT = [];
+    const went = await call('POST', `/api/sales/${emr.id}/invoice/send`, sid2,
+                            { confirm: true, recipients: messy });
+    ck('the send goes to the typed addresses', went.status === 200 && SENT.length === 1,
+       `${went.status} ${went.raw.slice(0, 160)}`);
+    if (SENT.length === 1) {
+        ck('  to the first', SENT[0].to === 'ops@emr.example', String(SENT[0].to));
+        ck('  copying the others',
+           JSON.stringify(SENT[0].cc) === '["accounts@emr.example","ray@emr.example"]',
+           JSON.stringify(SENT[0].cc));
+        ck('  with the documents attached', (SENT[0].attachments || []).length >= 1);
+        ck('  and the loading photo as a link',
+           SENT[0].body.includes('https://drive.example/emr-1.jpg'), SENT[0].body);
+    }
+
+    // ── AN EDIT REACHES THE WIRE, NOT JUST THE REQUEST ──────────────────
+    // "also make the email editable." The screen test asserts that the boxes
+    // are POSTED; this asserts the server USES them. A mutation that made the
+    // route ignore body0.subject left the screen test perfectly green — the
+    // browser was sending the edit and the server was quietly discarding it,
+    // which is the worst shape of this bug: she watches her own words go.
+    SENT = [];
+    await call('POST', `/api/sales/${emr.id}/invoice/send`, sid2, {
+        confirm: true, recipients: messy,
+        subject: 'Invoice EM7001 — revised', body: 'Dear Ops,\n\nRevised as agreed.\n\nJarvis' });
+    ck('the subject SHE typed is the one that goes',
+       SENT.length === 1 && SENT[0].subject === 'Invoice EM7001 — revised',
+       JSON.stringify(SENT[0] && SENT[0].subject));
+    ck('  and the body she rewrote', SENT.length === 1 && /Revised as agreed/.test(SENT[0].body),
+       JSON.stringify(SENT[0] && SENT[0].body));
+
+    // Clearing a box is far more likely to be an accident than an
+    // instruction, so an empty one falls back rather than sending a blank
+    // subject to a customer.
+    SENT = [];
+    await call('POST', `/api/sales/${emr.id}/invoice/send`, sid2,
+               { confirm: true, recipients: messy, subject: '   ', body: '' });
+    ck('an emptied box falls back to the generated text',
+       SENT.length === 1 && /Invoice EM7001/.test(SENT[0].subject)
+       && /Please find attached/.test(SENT[0].body),
+       JSON.stringify(SENT[0] && SENT[0].subject));
+
+    // ── AND NOW IT IS IN THE TAB ────────────────────────────────────────
+    const saved = resolveContact('Edge Metals Recycling');
+    ck('the customer is now in Email Contacts', !!saved && saved.type !== 'ambiguous',
+       JSON.stringify(saved));
+    ck('  with the address she typed',
+       saved && saved.contact && saved.contact.email === 'ops@emr.example',
+       JSON.stringify(saved && saved.contact));
+    ck('  and the others as their standing Cc',
+       saved && JSON.stringify(saved.contact.cc) === '["accounts@emr.example","ray@emr.example"]',
+       JSON.stringify(saved && saved.contact.cc));
+    ck('  the route says so, so the screen can tell her',
+       (went.json || {}).saved_contact === 'Edge Metals Recycling',
+       JSON.stringify((went.json || {}).saved_contact));
+
+    // ── SO THE NEXT ONE NEEDS NO TYPING ─────────────────────────────────
+    const second = await call('GET', `/api/sales/${emr.id}/invoice/draft-mail`, sid2);
+    ck('next time it fills itself in', (second.json || {}).ok === true
+       && second.json.to === 'ops@emr.example',
+       JSON.stringify((second.json || {}).to || second.json));
+    ck('  and does not offer to save it again',
+       !(second.json || {}).save_as, JSON.stringify((second.json || {}).save_as));
+
+    // ── THE WHATSAPP PATH IS UNTOUCHED ──────────────────────────────────
+    // It passes no recipients, so it still gets the refusal it always got —
+    // there is no box on a WhatsApp message to put an address in.
+    const src = fs.readFileSync(R('workflow/actions.js'), 'utf8');
+    ck('the assistant path passes no recipients',
+       !/draftFor\(containerNo,\s*\{[^}]*recipients/.test(src),
+       'a flag must mark the NEW shape, never the old one');
+
+    listener.close();
+}
+
+// ── K. THE MESSAGE REALLY ENCODES ───────────────────────────────────────────
+// Apsara, 2026-09-19, pressing Send on an invoice to Daekwang:
+//
+//     "Cannot read properties of undefined (reading 'replace')"
+//
+// helpers/gmail.js's buildMimeMessage read `att.base64.replace(...)`, and
+// nothing in the codebase has ever set `base64` — every caller passes a
+// Buffer under `content`. So EVERY email with an attachment threw, on every
+// path: this one, the WhatsApp "send the documents for X", and the proforma
+// send at workflow/actions.js:7385.
+//
+// ── WHY FOUR GREEN TEST FILES DID NOT NOTICE ────────────────────────────────
+// They stub sendEmail, which is correct — nothing may leave the building —
+// but a stub accepts any object. The attachments were handed to something
+// that would take anything, so the only property that mattered about them was
+// the only one never exercised. Green all the way to the customer.
+//
+// So this section takes the attachments the ROUTE produced and puts them
+// through the REAL encoder. No stub sits in the middle of it.
+section('K. the attachments survive a real MIME encode');
+{
+    const shipmentDocs = require(R('helpers/shipmentDocs'));
+    // Deliberately NOT the stubbed module: Module._load only intercepts
+    // 'helpers/gmail', so the encoder is reached by its own path.
+    const { buildMimeMessage } = orig.call(Module, R('helpers/gmail'), module, false);
+
+    const found = shipmentDocs.findForContainer('MSDU2726332');
+    const attachments = shipmentDocs.attachmentsFor(found);
+    ck('the route really has documents to attach', attachments.length >= 1,
+       String(attachments.length));
+
+    // ── THE SHAPE, NAMED ────────────────────────────────────────────────
+    ck('  and they carry their bytes under `content`, as every caller does',
+       attachments.every((a) => Buffer.isBuffer(a.content)),
+       JSON.stringify(attachments.map((a) => Object.keys(a))));
+    ck('  and nothing sets `base64`, which is what the encoder used to demand',
+       attachments.every((a) => a.base64 === undefined),
+       'if this ever changes, the encoder is being fed a shape nothing produces');
+
+    let raw = null, err = null;
+    try {
+        raw = buildMimeMessage({
+            to: 'buyer@aris.example', cc: null, bcc: null,
+            subject: 'Invoice 26ARIS02 — MSDU2726332',
+            body: 'Dear Aris Metals,\n\nPlease find attached…',
+            attachments,
+        });
+    } catch (e) { err = e; }
+    ck('the real encoder accepts them', !err, err && err.message);
+    ck('  and produces a message', !!raw && raw.length > 100, raw ? String(raw.length) : 'nothing');
+
+    if (raw) {
+        // base64url, per the Gmail API — decode it back and look inside.
+        const decoded = Buffer.from(raw.replace(/-/g, '+').replace(/_/g, '/'), 'base64').toString('utf8');
+        ck('  the filename is in the message', /26ARIS02_INVOICE\.pdf/.test(decoded));
+        ck('  declared as a PDF attachment',
+           /Content-Type: application\/pdf/.test(decoded)
+           && /Content-Disposition: attachment/.test(decoded));
+        ck('  with the PDF actually in it, not an empty part',
+           /Content-Transfer-Encoding: base64/.test(decoded)
+           && decoded.includes(attachments[0].content.toString('base64').slice(0, 40)),
+           'a header saying "attachment" over nothing is worse than no attachment');
+        ck('  and the body is still there beside it',
+           /Please find attached/.test(decoded));
+    }
+
+    // ── AND A GENUINELY EMPTY ATTACHMENT SAYS WHICH ONE ─────────────────
+    // "undefined is not a function" is not something she can act on; a
+    // filename is.
+    let named = null;
+    try {
+        buildMimeMessage({ to: 'x@y.example', subject: 's', body: 'b',
+                           attachments: [{ filename: 'BROKEN.pdf', mimeType: 'application/pdf' }] });
+    } catch (e) { named = e; }
+    ck('an attachment with no bytes throws by NAME', !!named && /BROKEN\.pdf/.test(named.message),
+       String(named && named.message));
+
+    // ── THE OTHER TWO CALLERS ARE THE SAME SHAPE ────────────────────────
+    // This was never only about the invoice screen. Asserted as source,
+    // because driving a proforma send from here would be a different suite.
+    const actionsSrc = fs.readFileSync(R('workflow/actions.js'), 'utf8');
+    ck('the proforma send passes `content` too, so it was broken the same way',
+       /attachments: \[\{ filename, content: pdf, mimeType: 'application\/pdf' \}\]/.test(actionsSrc),
+       'if this drifts, one of the two paths is fixed and the other is not');
+    const gmailSrc = fs.readFileSync(R('helpers/gmail.js'), 'utf8');
+    ck('  and the encoder now takes either shape',
+       /function base64Of\(att\)/.test(gmailSrc) && /base64Of\(att\)\.replace/.test(gmailSrc),
+       'one fix at the boundary rather than three edits at three callers');
+}
+
 // ── I. THE SCREEN ───────────────────────────────────────────────────────────
 // CLAUDE.md rule 3 again, from the other end: the routes above can all be
 // right while the button that calls them is not wired, or calls them in the
@@ -747,9 +1015,18 @@ section('I. the three screens');
                 ck('step 3 shows the real address before it goes',
                    /buyer@aris\.example/.test(card3.textContent), '');
                 ck('  the Cc too', /broker@aris\.example/.test(card3.textContent), '');
-                ck('  the subject', /Invoice 26ARIS02 — MSDU2726332/.test(card3.textContent), '');
-                ck('  the body she will actually send',
-                   /Please find attached/.test(card3.textContent), '');
+                // Subject and body are INPUTS now — "also make the email
+                // editable" — and an input's value is not in textContent.
+                // Reading the element is the point: a check that passed on
+                // textContent would keep passing if the boxes rendered empty.
+                ck('  the subject, in a box she can rewrite',
+                   D.getElementById('genSubject')
+                   && D.getElementById('genSubject').value === 'Invoice 26ARIS02 — MSDU2726332',
+                   D.getElementById('genSubject') ? D.getElementById('genSubject').value : 'no subject box');
+                ck('  the body she will actually send, also editable',
+                   D.getElementById('genBody')
+                   && /Please find attached/.test(D.getElementById('genBody').value),
+                   D.getElementById('genBody') ? D.getElementById('genBody').value.slice(0, 60) : 'no body box');
                 ck('  and what is attached', /26ARIS02_INVOICE\.pdf/.test(card3.textContent), '');
                 ck('  the photos are named as LINKS, not attachments',
                    /links in the message, not as attachments/.test(card3.textContent), '');
@@ -758,6 +1035,9 @@ section('I. the three screens');
                 ck('  and there is a way out that is not Send',
                    !!D.getElementById('genDone3') && !!D.getElementById('genBack3'));
 
+                // ── AN EDIT REACHES THE SEND ────────────────────────────
+                D.getElementById('genSubject').value = 'Invoice 26ARIS02 — corrected';
+                D.getElementById('genBody').value = 'Dear Aris,\n\nRevised as discussed.\n\nJarvis';
                 D.getElementById('genSend').click();
                 await new Promise((r) => setTimeout(r, 40));
 
@@ -770,6 +1050,14 @@ section('I. the three screens');
                 ck('  and NOT with weights_ok, which she never answered',
                    !!send && send.body && send.body.weights_ok === undefined,
                    'weights_ok means she read the figures, not that there was no question');
+                // "also make the email editable" — and editable means the
+                // edit is what goes, not that the box accepts typing.
+                ck('  carrying the subject SHE typed, not the generated one',
+                   !!send && send.body.subject === 'Invoice 26ARIS02 — corrected',
+                   JSON.stringify(send && send.body.subject));
+                ck('  and the body she rewrote',
+                   !!send && /Revised as discussed/.test(send.body.body || ''),
+                   JSON.stringify(send && send.body.body));
                 ck('  exactly one send, not one per press',
                    CALLS.filter((c) => /\/send$/.test(c.path)).length === 1,
                    String(CALLS.filter((c) => /\/send$/.test(c.path)).length));
@@ -784,6 +1072,84 @@ section('I. the three screens');
                     .map((c) => c.path.split('/').pop());
                 ck('generate, then draft-mail, then send — in that order',
                    order.join(' -> ') === 'generate -> draft-mail -> send', order.join(' -> '));
+
+                // ── AND THE BOX, WHEN THERE IS NO CONTACT ───────────────
+                // Her "else it can ask for email recipients separated by
+                // comma". Driven the way she drives it: the draft comes back
+                // refusing, she types a list, presses Use these, and the NEXT
+                // thing on screen is the real message with those addresses on
+                // it — not a send.
+                CALLS.length = 0;
+                let askedOnce = false;
+                w.api = async (p2, opts) => {
+                    CALLS.push({ path: String(p2).split('?')[0], query: String(p2).split('?')[1] || '',
+                                 method: (opts || {}).method || 'GET',
+                                 body: (opts || {}).body ? JSON.parse(opts.body) : null });
+                    if (/\/invoice\/generate$/.test(p2)) return {
+                        ok: true, container_no: 'TCNU2798153', inv_no: 'EM7001',
+                        saved_filenames: ['EM7001.pdf'],
+                        line_items: [{ item_desc: 'Al Wheels', weight: 6.8, rate: 3196.7, amount: 21737.56 }],
+                        photos: [], warnings: [], weight_problems: [], weight_message: null };
+                    if (/\/invoice\/draft-mail/.test(p2)) {
+                        if (!askedOnce) { askedOnce = true; return {
+                            ok: false, reason: 'no_contact', ask_recipients: true,
+                            consignee: 'Edge Metals Recycling',
+                            message: "Edge Metals Recycling isn't in Email Contacts…" }; }
+                        return { ok: true, to: 'ops@emr.example', name: 'Edge Metals Recycling',
+                                 contact_cc: ['accounts@emr.example'],
+                                 subject: 'Invoice EM7001 — TCNU2798153',
+                                 body: 'Dear Edge Metals Recycling,\n\nPlease find attached…',
+                                 attachments: ['EM7001.pdf'], photos: [], warnings: [] };
+                    }
+                    if (/\/invoice\/send$/.test(p2)) return {
+                        ok: true, to: 'ops@emr.example', subject: 'Invoice EM7001 — TCNU2798153',
+                        attached: ['EM7001.pdf'], saved_contact: 'Edge Metals Recycling' };
+                    return {};
+                };
+
+                await w.openGenerateInvoice({ id: 'S2', container_no: 'TCNU2798153',
+                                              invoice_no: 'EM7001', customer: 'Edge Metals Recycling' });
+                D.getElementById('genGo').click();
+                await new Promise((r) => setTimeout(r, 40));
+                D.getElementById('genNext').click();
+                await new Promise((r) => setTimeout(r, 40));
+
+                ck('no contact on file puts a box on screen, not a dead end',
+                   !!D.getElementById('genRecipients'),
+                   D.getElementById('genCard').textContent.slice(0, 120));
+                ck('  naming the customer it needs addresses for',
+                   /Edge Metals Recycling/.test(D.getElementById('genCard').textContent));
+                ck('  and saying the first one is the addressee',
+                   /first one is the addressee/.test(D.getElementById('genCard').textContent));
+                ck('  with no Send button anywhere near it',
+                   !D.getElementById('genSend'), 'nothing to press that would send to nobody');
+
+                D.getElementById('genRecipients').value = 'ops@emr.example, accounts@emr.example';
+                D.getElementById('genUseTo').click();
+                await new Promise((r) => setTimeout(r, 40));
+
+                const asked = CALLS.filter((c) => /draft-mail$/.test(c.path));
+                ck('the typed list goes back through the SAME draft route',
+                   asked.length === 2 && /recipients=/.test(asked[1].query),
+                   JSON.stringify(asked.map((c) => c.query)));
+                ck('  so she reads the real message before anything is sent',
+                   /ops@emr\.example/.test(D.getElementById('genCard').textContent)
+                   && /Please find attached/.test(D.getElementById('genCard').textContent),
+                   D.getElementById('genCard').textContent.slice(0, 160));
+                ck('  and still nothing has been sent',
+                   !CALLS.some((c) => /\/send$/.test(c.path)), '');
+
+                D.getElementById('genSend').click();
+                await new Promise((r) => setTimeout(r, 40));
+                const s2 = CALLS.find((c) => /\/send$/.test(c.path));
+                ck('Send carries the typed addresses, not just the confirm',
+                   !!s2 && s2.body.confirm === true
+                   && s2.body.recipients === 'ops@emr.example, accounts@emr.example',
+                   JSON.stringify(s2 && s2.body));
+                ck('  and she is told it is in Email Contacts now',
+                   /now in Email Contacts/.test(D.getElementById('genCard').textContent),
+                   D.getElementById('genCard').textContent.slice(0, 200));
+
             }
         }
         w.close();
