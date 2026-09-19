@@ -2299,7 +2299,10 @@
                     speak('I can do that. Check the card and confirm it.');
                     if (typeof window.renderYardProposal === 'function') window.renderYardProposal(r.proposal);
                 } else {
-                    speak(answer);
+                    // The card shows `answer`; the speaker reads `spoken`,
+                    // which has the booking numbers taken out (Apsara,
+                    // 2026-09-19). Older servers send no `spoken` — fall back.
+                    speak((r && typeof r.spoken === 'string' && r.spoken.trim()) ? r.spoken : answer);
                 }
             })
             .catch(function (e) {

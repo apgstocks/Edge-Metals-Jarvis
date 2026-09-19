@@ -897,6 +897,20 @@ function policyDecide(ctx) {
                     `That draft is addressed to ${p.target_name || p.to}. Reply "yes" to send it to them, or "no" and tell me to draft a new one to ${named[1].trim()}.` } };
             }
         }
+        // ── "TELL THEM WE HAVE AN ISSUE AND WILL SEND IT LATER" ─────────
+        // Apsara, 2026-09-19. An instruction said at an open draft CHANGES
+        // that draft — redrafted professionally and shown again for a yes.
+        // Before this it fell through, was read as a brand-new request, and
+        // queued a second draft behind the first.
+        //
+        // Only drafts that carry revise_ctx (a reply, or a plain new email)
+        // and only text that starts the way an instruction starts — see
+        // helpers/replyFlow.js isRevision. yes/no/send/schedule are all
+        // handled above or below and never reach this as a rewrite.
+        if (p.type === 'await_email_confirm' && p.revise_ctx
+            && require('../helpers/replyFlow').isRevision(ctx.text)) {
+            return { intent: 'revise_email_draft', resolvedBy: 'policy', data: { instruction: ctx.text.trim() } };
+        }
         if (YES.includes(t)) return { intent: 'resolve_pending', resolvedBy: 'policy', data: { answer: 'yes' } };
         if (NO.includes(t))  return { intent: 'resolve_pending', resolvedBy: 'policy', data: { answer: 'no' } };
         // REAL BUG (found 2026-08-04, live): with an already-drafted
@@ -1465,6 +1479,47 @@ function policyDecide(ctx) {
             };
         }
 
+        // ── "REPLY TO TWO", "REPLY TO THE HOUSTON ONE", "REPLY TO THAT" ──
+        // Apsara, 2026-09-19. Measured first: every one of these read the
+        // words after "reply to" as a PERSON called "two" / "the second one"
+        // / "the Houston cutoff email", and "reply to that" was not
+        // understood at all. By voice those are the normal way to say it —
+        // a speech engine writes "two", not "2".
+        //
+        // Only against a FRESH digest (the same 12h the bare-number rule
+        // above uses). With no digest, all three fall through to exactly
+        // what they did before. See helpers/replyFlow.js.
+        {
+            const rf = require('../helpers/replyFlow');
+            const { lastDigest: dl, lastDigestAt: dat } = (() => {
+                try { return require('./replyWatch').loadStore() || {}; } catch (e) { return {}; }
+            })();
+            const datMs = Date.parse(dat || '');
+            const fresh = Number.isFinite(datMs) && Date.now() - datMs < 12 * 60 * 60 * 1000
+                && Array.isArray(dl) && dl.length > 0;
+            const that = rf.replyToThat(ctx.text);
+            if (that) {
+                return { intent: 'reply_to_focused_digest', resolvedBy: 'policy', data: { details: that.details } };
+            }
+            if (fresh) {
+                const spoken = rf.spokenDigestIndex(ctx.text);
+                if (spoken) {
+                    return { intent: 'reply_to_digest_item', resolvedBy: 'policy',
+                        data: { index: spoken.index, details: spoken.details } };
+                }
+                const described = rf.describedDigestTarget(ctx.text);
+                const hit = described ? rf.matchDigest(described.desc, dl) : null;
+                if (hit && hit.index) {
+                    return { intent: 'reply_to_digest_item', resolvedBy: 'policy',
+                        data: { index: hit.index, details: described.details } };
+                }
+                if (hit && hit.ambiguous) {
+                    return { intent: 'pick_digest_reply', resolvedBy: 'policy',
+                        data: { indexes: hit.ambiguous, details: described.details } };
+                }
+            }
+        }
+
         // ── MUTE — "what if i want ignore?", asked twice ────────────────
         // Deliberately ABOVE the "ignore N" rule below, because the phrases
         // overlap: "ignore 1 permanently" has to reach the mute, not the
@@ -1558,6 +1613,19 @@ function policyDecide(ctx) {
                 intent: 'reply_email', resolvedBy: 'policy',
                 data: { target_name: m[1].trim(), email_details: m[2].trim(), bkg_no: detailsBkg || ctx.activeBooking || null },
             };
+        }
+
+        // "reply to Yurim" — a name and nothing else. Until 2026-09-19 this
+        // shape had no rule and depended on the AI classifier reading it as a
+        // reply; it is the first step of the flow Apsara asked for ("if i say
+        // reply to A ... show two mails ... ask which one"), so it is
+        // deterministic now. Deliberately narrow: one to four plain words,
+        // none of them a pronoun or a number — those are handled above.
+        if ((m = ctx.text.trim().replace(/[.!?]+$/, '').match(/^(?:please\s+)?reply\s+to\s+([a-z][a-z'&.-]*(?:\s+[a-z][a-z'&.-]*){0,3})(?:'s\s+(?:last\s+|latest\s+)?(?:email|mail|message))?$/i))
+            && !/^(?:that|this|it|them|him|her|me|us|all|everyone|everybody|every|each|any|the|a|an)\b/i.test(m[1])
+            && !/\b(?:email|mail|message|one|thread)$/i.test(m[1])) {
+            return { intent: 'reply_email', resolvedBy: 'policy',
+                data: { target_name: m[1].trim(), email_details: null, bkg_no: null } };
         }
 
         // THE ONE PROPERTY that separates the inbox question from a search:
@@ -2522,6 +2590,9 @@ async function route(decision, ctx, sendMessage) {
         // It is how a bare "what is this email about" finds its referent.
         case 'summarize_email':         return actions.summarizeEmail(chatId, d.index, d.target_name, ctx.quotedText);
         case 'reply_to_digest_item':    return actions.replyToDigestItem(chatId, d.index, d.details, ctx.text);
+        case 'reply_to_focused_digest': return actions.replyToFocusedDigest(chatId, d.details || null, ctx.text);
+        case 'pick_digest_reply':       return actions.askWhichDigestItem(chatId, d.indexes, d.details || null, ctx.text);
+        case 'revise_email_draft':      return actions.reviseDraftedEmail(chatId, ctx.pendingAction, d.instruction);
         case 'mute_matter':           return actions.muteMatter(chatId, { index: d.index || null, target: d.target || null });
         case 'unmute_matter':         return actions.unmuteMatter(chatId, d.target || null);
         case 'show_mutes':            return actions.showMutes(chatId);
@@ -2817,6 +2888,13 @@ function pendingFullReminder(p) {
         }
         const listText = opts.map((c, i) => `${i + 1}. ${c.name} <${c.email}>`).join('\n');
         return `(Still waiting — I don't have anyone called "${p.heard}". Did you mean one of these?\n${listText}\n\nReply with the number, or "no".)`;
+    }
+    if (p.type === 'await_reply_thread_pick' || p.type === 'await_digest_reply_pick') {
+        const listText = (p.options || []).map((o, i) => `${i + 1}. ${o}`).join('\n');
+        return `(Still waiting — which one should I reply to?\n${listText}\n\nSay the number, or "cancel".)`;
+    }
+    if (p.type === 'await_compose_instead') {
+        return `(Still waiting: no email from ${p.target_name} to reply to — want me to write them a new one? Reply yes or no.)`;
     }
     if (p.type === 'await_cc_pattern_confirm') {
         return `(Still waiting: save ${p.detected_cc.join(', ')} as ${p.target_name}'s standing cc? Reply yes or no — either way I'll draft the email to them next.)`;

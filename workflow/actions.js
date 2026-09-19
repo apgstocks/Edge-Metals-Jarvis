@@ -1727,6 +1727,36 @@ if (answer === 'no') {
     return { action_taken: 'cancelled_pending' };
 }
 
+// ── Which of her recent threads with them ─────────────────────────────────
+if (pending.type === 'await_reply_thread_pick') {
+    const i = (pending.options || []).indexOf(selection);
+    const chosen = i >= 0 ? (pending.candidates || [])[i] : null;
+    await clearPending(chatId);
+    if (!chosen) {
+        await _send(chatId, `I didn't catch which one — say "reply to ${pending.target_name}" and pick again.`);
+        return { action_taken: 'reply_thread_pick_unclear' };
+    }
+    return draftReplyForConfirm(chatId, pending.target_name, pending.details || null, null,
+        pending.raw_text || `reply to ${pending.target_name}`, pending.send_at_text || null, chosen.id);
+}
+// ── Which digest item "that" was ──────────────────────────────────────────
+if (pending.type === 'await_digest_reply_pick') {
+    const i = (pending.options || []).indexOf(selection);
+    const index = i >= 0 ? (pending.indexes || [])[i] : null;
+    await clearPending(chatId);
+    if (!index) {
+        await _send(chatId, 'I didn\'t catch which one — say "reply to" and the number from the digest.');
+        return { action_taken: 'digest_reply_pick_unclear' };
+    }
+    return replyToDigestItem(chatId, String(index), pending.details || null, pending.raw_text || null);
+}
+// ── "Want me to compose a new email instead?" — yes ──────────────────────
+if (pending.type === 'await_compose_instead') {
+    await clearPending(chatId);
+    return draftEmailForConfirm(chatId, pending.target_name, pending.details || null,
+        pending.bkg_no || null, pending.raw_text || `email ${pending.target_name}`, pending.send_at_text || null);
+}
+
 switch (pending.type) {
     case 'select_trucker':
         await clearPending(chatId);
@@ -3631,6 +3661,9 @@ Return ONLY this JSON: { "subject": "short subject line", "body": "email body, p
         target_name: targetName, bkg_no: bkgNo || null,
         scheduled_for: scheduledFor ? scheduledFor.toISOString() : null,
         req: req || null,
+        // A plain new email can be redrafted by instruction too. The
+        // booking-request path keeps its own field-correction flow instead.
+        revise_ctx: req ? null : { kind: 'new' },
     });
     const whenSuffix = scheduledFor ? ` at ${formatScheduledFor(scheduledFor)}` : '';
     if (staged.queued) {
@@ -4092,6 +4125,8 @@ async function replyToDigestItem(chatId, index, details, rawText) {
     // guards, and duplicating any of that here would mean two code paths to
     // keep correct.
     const target = item.from || item.fromName;
+    // What "reply to that" means next time — see replyToFocusedDigest.
+    noteDigestFocus(chatId, item);
 
     // THE POSITIVE LABEL (2026-08-31). ignoreDigestItem now records a
     // dismissal; without this the collection would be one-class — every
@@ -4389,6 +4424,9 @@ async function explainDigestItem(chatId, index) {
         await _send(chatId, `I don't have a #${n} from a recent digest. Ask "what needs my reply" for a fresh list.`);
         return { action_taken: 'explain_unknown_index' };
     }
+    // Explaining an item is the most natural thing to say "reply to that"
+    // straight after — so it becomes what "that" means.
+    noteDigestFocus(chatId, item);
 
     // The thread lives in whichever mailbox the message came from, tried in
     // the order the scan reads them. A miss in one is not an error -- see
@@ -5008,6 +5046,169 @@ function extractSubjectHint(rawText) {
 // fetch fails for any reason — deleted, in the other mailbox, a token problem
 // — it falls through to the original search, so the worst case is exactly
 // today's behaviour rather than a failure.
+// ── "reply to that" ─────────────────────────────────────────────────────────
+// The digest item she was last dealing with — replied to or explained — is
+// what "that" means, for half an hour. After that, or with nothing in focus,
+// she is asked rather than guessed at: a reply to the wrong customer is the
+// one mistake here that cannot be taken back.
+const DIGEST_FOCUS_MS = 30 * 60 * 1000;
+function noteDigestFocus(chatId, item) {
+    try {
+        if (item && (item.id || item.from)) {
+            updateSession(chatId, { digestFocus: { id: item.id || null, from: item.from || null, at: Date.now() } });
+        }
+    } catch (e) { /* focus is a convenience; never block the reply over it */ }
+}
+
+function digestList() {
+    try {
+        const rw = require('./replyWatch');
+        const { lastDigest, lastDigestAt } = rw.loadStore() || {};
+        const at = Date.parse(lastDigestAt || '');
+        const fresh = Number.isFinite(at) && Date.now() - at < 12 * 60 * 60 * 1000;
+        return fresh && Array.isArray(lastDigest) ? lastDigest : [];
+    } catch (e) { return []; }
+}
+
+async function askWhichDigestItem(chatId, indexes, details, rawText) {
+    const list = digestList();
+    const idx = (indexes && indexes.length ? indexes : list.map((_, i) => i + 1))
+        .map((n) => parseInt(n, 10)).filter((n) => n >= 1 && n <= list.length);
+    if (!idx.length) {
+        await _send(chatId, 'Reply to whom? Say their name — "reply to Yurim" — or "what needs my reply" for the list.');
+        return { action_taken: 'digest_reply_no_list' };
+    }
+    const { threadLabel } = require('../helpers/replyFlow');
+    const options = idx.map((n) => {
+        const it = list[n - 1];
+        return `${it.fromName || it.from || 'Unknown'} — ${threadLabel({ subject: it.subject })}`;
+    });
+    const staged = await setPending(chatId, {
+        type: 'await_digest_reply_pick', options, indexes: idx,
+        details: details || null, raw_text: rawText || null,
+    });
+    if (staged.queued && !staged.duplicate) {
+        await _send(chatId, 'Answer the open question first — then say "reply to" and the number.');
+        return { action_taken: 'digest_reply_pick_queued' };
+    }
+    await _send(chatId, `Which one should I reply to?\n${options.map((o, i) => `${i + 1}. ${o}`).join('\n')}`);
+    return { action_taken: 'digest_reply_pick_asked' };
+}
+
+async function replyToFocusedDigest(chatId, details, rawText) {
+    const list = digestList();
+    let focus = null;
+    try { focus = (require('../helpers/context').getSession(chatId) || {}).digestFocus || null; } catch (e) { /* none */ }
+    if (focus && Date.now() - (focus.at || 0) < DIGEST_FOCUS_MS) {
+        const i = list.findIndex((it) => (focus.id && it.id === focus.id) || (!focus.id && focus.from && it.from === focus.from));
+        if (i >= 0) return replyToDigestItem(chatId, String(i + 1), details, rawText);
+    }
+    if (list.length === 1) return replyToDigestItem(chatId, '1', details, rawText);
+    return askWhichDigestItem(chatId, null, details, rawText);
+}
+
+// Several recent threads from the same sender → list them and ask. Returns an
+// action result when it asked, or null to let the caller carry on as before.
+const THREAD_PICK_WINDOW = 'newer_than:7d';
+async function offerThreadChoice(chatId, { targetName, details, rawText, sendAtText, gmail }) {
+    const { getMessage } = require('../helpers/gmail');
+    const res = await searchOwnThenBose(`from:${targetName} ${THREAD_PICK_WINDOW}`, 10, gmail);
+    const seen = new Set();
+    const firsts = [];
+    for (const m of res.messages || []) {
+        const t = m.threadId || m.id;
+        if (seen.has(t)) continue;
+        seen.add(t);
+        firsts.push(m);
+    }
+    if (firsts.length < 2) return null;
+    const candidates = [];
+    for (const m of firsts.slice(0, 5)) {
+        try {
+            const full = await getMessage(res.gmail, m.id);
+            const h = Object.fromEntries(((full && full.payload && full.payload.headers) || []).map((x) => [x.name, x.value]));
+            candidates.push({ id: m.id, subject: h.Subject || '', date: h.Date || null, from: h.From || null });
+        } catch (e) { /* one unreadable message is not a reason to lose the list */ }
+    }
+    if (candidates.length < 2) return null;
+    const { threadLabel } = require('../helpers/replyFlow');
+    const options = candidates.map(threadLabel);
+    const staged = await setPending(chatId, {
+        type: 'await_reply_thread_pick', options, candidates,
+        target_name: targetName, details: details || null,
+        raw_text: rawText || null, send_at_text: sendAtText || null,
+    });
+    if (staged.queued && !staged.duplicate) {
+        await _send(chatId, `${targetName} has ${candidates.length} recent emails — I'll ask which one to reply to once the open question is answered.`);
+        return { action_taken: 'reply_thread_pick_queued' };
+    }
+    await _send(chatId, `You have ${candidates.length} recent emails from ${targetName}:\n`
+        + options.map((o, i) => `${i + 1}. ${o}`).join('\n')
+        + '\n\nWhich one should I reply to?');
+    return { action_taken: 'reply_thread_pick_asked' };
+}
+
+// ── "Tell them we have an issue and will send it later" ─────────────────────
+// Apsara, 2026-09-19. An instruction said AT an open draft rewrites that
+// draft — professionally, in her voice — and shows it again for a yes. Never
+// sends: the only way out of here is the same yes/no as before.
+//
+// Recipient, cc, threading and schedule are carried over untouched. Only the
+// words change, which is the one thing she asked to change.
+async function reviseDraftedEmail(chatId, pending, instruction) {
+    if (!pending || pending.type !== 'await_email_confirm' || !pending.revise_ctx) {
+        await _send(chatId, 'There is no draft open to change. Tell me who to write to.');
+        return { action_taken: 'revise_no_draft' };
+    }
+    const c = pending.revise_ctx;
+    const isReply = c.kind === 'reply';
+    const { callGeminiJSON } = require('../helpers/gemini');
+    const prompt = `You are redrafting an email for Apsara, who runs freight operations at Edge Metals Inc. She has read the current draft and told you what to change.
+${todayDateContext()}
+${isReply ? `It is a reply in this thread — From: ${c.orig_from || pending.target_name}, Subject: ${c.thread_subject || pending.subject}
+Their email: ${c.orig_body || '(not available)'}
+` : ''}Recipient: ${pending.target_name || pending.to}
+${c.booking_line ? `Relevant booking data (use only what's relevant): ${c.booking_line}\n` : ''}
+CURRENT DRAFT
+Subject: ${pending.subject}
+${pending.body}
+
+HER INSTRUCTION: "${String(instruction).trim()}"
+
+How to apply it:
+- If she says what to tell them ("tell them…", "say…", "let them know…"), that IS the message now. Write it clearly and professionally; drop anything in the current draft it replaces.
+- If she asks for a change of form ("shorter", "more formal", "softer"), keep the content and change the form.
+- Turn plain or blunt wording into courteous business English — but keep her meaning exactly. If she says there is an issue and it will come later, say that, politely; do not make up what the issue is, a date, an amount, or any promise she did not give.
+- Plain text, no markdown.
+${require('../helpers/writingStyle').getStyleGuidance()}
+Return ONLY this JSON: { ${isReply ? '' : '"subject": "short subject line", '}"body": "the full email body, signed off the way she signs off — fall back to Edge Metals Inc. only if no sign-off style is given above." }`;
+    const draft = await callGeminiJSON(prompt);
+    if (!draft || !draft.body || !String(draft.body).trim()) {
+        // The old draft is still open and still sendable — say so, rather
+        // than leaving her unsure whether it was lost.
+        await _send(chatId, `${draftFailureMessage(isReply ? 'reply' : 'email')} The previous draft is still open — "yes" sends it as it was.`);
+        return { action_taken: 'revise_failed' };
+    }
+    const body = String(draft.body).trim();
+    const subject = (!isReply && draft.subject && String(draft.subject).trim()) ? String(draft.subject).trim() : pending.subject;
+    await mutateBrain((b) => {
+        const cur = b.pending_actions && b.pending_actions[chatId];
+        if (cur && cur.type === 'await_email_confirm') {
+            cur.body = body;
+            cur.subject = subject;
+            cur.revisions = (cur.revisions || 0) + 1;
+            cur.expires_at = new Date(Date.now() + cfg.PENDING_EXPIRY_MS).toISOString();
+        }
+    });
+    const whenSuffix = pending.scheduled_for ? ` at ${formatScheduledFor(new Date(pending.scheduled_for))}` : '';
+    const head = isReply
+        ? `Reply to ${pending.target_name} <${pending.to}> (thread: "${c.thread_subject || pending.subject}"):`
+        : `To ${pending.target_name} <${pending.to}>:\nSubject: ${subject}`;
+    await _send(chatId,
+        `Redrafted.\n${head}\n${ccBccPreviewLine({ cc: pending.cc, bcc: pending.bcc })}\n${body}\n\nSend this${whenSuffix}? (yes/no)`);
+    return { action_taken: 'email_draft_revised' };
+}
+
 async function draftReplyForConfirm(chatId, targetName, details, bkgNo, rawText, sendAtText, exactMessageId = null) {
     if (!targetName) {
         await _send(chatId, 'Reply to who? Give me a name or company, e.g. "reply to Zimex about DALA123: confirmed".');
@@ -5157,8 +5358,50 @@ async function draftReplyForConfirm(chatId, targetName, details, bkgNo, rawText,
         // own — "reply to" is a specific instruction about an EXISTING
         // thread; silently switching to a new one changes what the manager
         // asked for. Ask instead.
+        // The question is REAL now. It used to be asked with nothing behind
+        // it, so her "yes" reached a pending that did not exist and came back
+        // "I couldn't pin that down" (found 2026-09-19, e2e). The pending
+        // carries the ORIGINAL sentence, so the fresh draft is checked for
+        // grounding against what she actually said, same as any compose.
+        const staged = await setPending(chatId, {
+            type: 'await_compose_instead',
+            target_name: targetName, details: details || null, bkg_no: bkgNo || null,
+            raw_text: rawText || null, send_at_text: sendAtText || null,
+        });
+        if (staged.queued && !staged.duplicate) {
+            await _send(chatId, `Couldn't find an email from ${targetName}${bkgNo ? ` about ${bkgNo}` : ''} to reply to. I'll offer to write them a new email once the open question is answered.`);
+            return { action_taken: 'reply_no_thread_found' };
+        }
         await _send(chatId, `Couldn't find an email from ${targetName}${bkgNo ? ` about ${bkgNo}` : ''} to reply to. Want me to compose a new email instead?`);
         return { action_taken: 'reply_no_thread_found' };
+    }
+
+    // ── TWO RECENT EMAILS FROM THEM — ASK WHICH ─────────────────────────
+    // Apsara, 2026-09-19: "if i have two emails from A, if i say reply to A
+    // --> then it should show two mails --> ask which one to respond to".
+    // Until now this took messages[0] — whatever Gmail ranked first — and
+    // drafted into it without a word, so a reply meant for Tuesday's thread
+    // could land in Monday's.
+    //
+    // Only when she has NOT already said which: an exact message (digest
+    // item, or an earlier pick), a subject, or a booking number all pin the
+    // thread down and skip this. Only RECENT threads count — a customer she
+    // has mailed for a year would otherwise get a list every single time.
+    // A booking only counts as "she said which" when she SAID it — the
+    // session's active booking is carried into bkgNo silently by brain.js,
+    // and must not suppress the question she asked for.
+    const saidBooking = !!bkgNo && String(rawText || '').toUpperCase().includes(String(bkgNo).toUpperCase());
+    if (!exactMessageId && !subjectHint && !saidBooking) {
+        try {
+            const picked = await offerThreadChoice(chatId, {
+                targetName, details, rawText, sendAtText, gmail,
+            });
+            if (picked) return picked;
+        } catch (err) {
+            // A failed look for OTHER threads must never cost her the reply
+            // she asked for — fall through to exactly today's behaviour.
+            console.warn('[ACTIONS] recent-thread check failed, replying to the latest:', err.message);
+        }
     }
 
     // NOT `gmail` — must be whichever account (apsara's own mailbox or
@@ -5442,6 +5685,14 @@ Return ONLY this JSON: { "body": "reply body, plain text, no markdown, sign off 
         inReplyTo: messageIdHeader, references,
         target_name: targetName, bkg_no: bkgNo || null,
         scheduled_for: scheduledFor ? scheduledFor.toISOString() : null,
+        // What a "tell them …" at the confirm needs to redraft it — see
+        // reviseDraftedEmail. The original is kept short: it is context for
+        // the rewrite, not something that is sent.
+        revise_ctx: {
+            kind: 'reply', thread_subject: origSubject,
+            orig_from: hdrs.From || null, orig_body: String(origBody || '').slice(0, 1500),
+            booking_line: bookingLine || null,
+        },
         // Set only when the thread was found ONLY in bose@ — apsara@ has no
         // copy, so on confirm the original is forwarded to her first and the
         // reply lands underneath it in her own mailbox. Carries the fields
@@ -7444,6 +7695,7 @@ async function showWritingStyle(chatId) {
 }
 
 module.exports = {
+    replyToFocusedDigest, askWhichDigestItem, reviseDraftedEmail,
     ready,
     describeLink,
     showPendingReplies, replyToDigestItem, summarizeEmail, markPendingReminded, forwardOriginalToSelf, sendDraftedEmail,
