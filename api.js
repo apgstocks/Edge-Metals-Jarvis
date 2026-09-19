@@ -3777,90 +3777,83 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
         } catch (e) { res.status(500).json({ error: e.message }); }
     });
 
-    // ── ONE SUPPLIER, ONE SPELLING ──────────────────────────────────────
-    // Apsara, 2026-09-19, after the import: "There are like calderon
-    // CALDERON,upper case,Space issue like EDGE YARD,EDGEYARD ,MODern modern
-    // enterprises getting treated as diff suppliers in bills."
+    // ── ONE NAME, ONE SPELLING — FOR WHICHEVER FIELD SHE PICKS ──────────
+    // Apsara, 2026-09-19: "Even in carrier-that supplier name same problem is
+    // there.dont make sepratae button for this.instead ,make one button give
+    // an opion for each field to correct this."
     //
-    // Preview writes nothing. Merging DOES — she chose to rewrite the stored
-    // names rather than group them on read — and it rewrites across four
-    // stores at once, because a payment records who was paid BY NAME.
-    app.get('/api/suppliers/merge/preview', requireAdmin, (req, res) => {
+    // So the field is a parameter, not a second copy of the feature. An
+    // unknown one throws in helpers/nameCleanup.js rather than quietly
+    // cleaning nothing.
+    app.get('/api/names/:field/preview', requireAdmin, (req, res) => {
         try {
-            const sm = require('./helpers/supplierMerge');
-            const planned = sm.plan();
+            const nc = require('./helpers/nameCleanup');
+            const field = req.params.field;
+            const planned = nc.plan(field);
             res.json({
-                ok: true,
+                ok: true, field,
+                fields: nc.FIELD_KEYS.map((k) => ({ key: k, label: nc.FIELDS[k].label, where: nc.FIELDS[k].where })),
                 clusters: planned.clusters,
                 byStore: planned.byStore,
                 total: planned.total,
-                // Names no rule can join. A QUESTION, never a decision — see
-                // the note on proposals() for why this one stays manual.
-                proposals: sm.proposals(),
-                aliases: sm.aliases(),
-                // Every spelling currently in use, so the "these two are the
-                // same" boxes can offer them rather than asking her to
-                // remember exactly how a name was typed.
-                names: sm.usage().sort((a, b) => a.name.localeCompare(b.name)),
-                merges: sm.merges(),
+                proposals: nc.proposals(field),
+                aliases: nc.aliases(field),
+                names: nc.usage(field).sort((a, b) => a.name.localeCompare(b.name)),
+                // Every merge ever run, whatever the field — so an undo is
+                // reachable from whichever tab she happens to be on.
+                merges: nc.merges(),
             });
-        } catch (e) { res.status(500).json({ error: e.message }); }
+        } catch (e) { res.status(400).json({ error: e.message }); }
     });
 
-    // Her answer to one of those questions. Stored, never inferred, and it
-    // does NOT rewrite anything on its own: the next preview simply shows the
-    // two names as one cluster, and she still presses Merge.
-    app.post('/api/suppliers/alias', requireAdmin, async (req, res) => {
+    app.post('/api/names/:field/alias', requireAdmin, async (req, res) => {
         try {
-            const sm = require('./helpers/supplierMerge');
+            const nc = require('./helpers/nameCleanup');
             const { from, to } = req.body || {};
-            const saved = await sm.addAlias(from, to, actorOf(req));
-            res.json({ ok: true, ...saved });
+            res.json({ ok: true, ...(await nc.addAlias(req.params.field, from, to, actorOf(req))) });
         } catch (e) { res.status(400).json({ error: e.message }); }
     });
 
-    // An alias typed in error is otherwise permanent, and it drives the
-    // destructive step. Admin, like adding one — neither writes a ledger row.
-    app.delete('/api/suppliers/alias/:from', requireAdmin, async (req, res) => {
+    app.delete('/api/names/:field/alias/:from', requireAdmin, async (req, res) => {
         try {
-            const gone = await require('./helpers/supplierMerge').removeAlias(req.params.from);
-            res.json({ ok: true, removed: gone });
+            const removed = await require('./helpers/nameCleanup').removeAlias(req.params.field, req.params.from);
+            res.json({ ok: true, removed });
         } catch (e) { res.status(400).json({ error: e.message }); }
     });
 
-    // ── requireSuper, and deliberately ──────────────────────────────────
-    // This rewrites hundreds of live financial records across bills,
-    // payments, the supplier list and the booking workflow. That is a bigger
-    // act than editing one bill, and it sits behind the same gate as undoing
-    // an import for the same reason.
-    app.post('/api/suppliers/merge', requireSuper, async (req, res) => {
+    // requireSuper, and deliberately: this rewrites hundreds of live records
+    // across several stores at once, which is a bigger act than editing one
+    // bill and sits behind the same gate as undoing an import.
+    app.post('/api/names/:field/merge', requireSuper, async (req, res) => {
         try {
-            const sm = require('./helpers/supplierMerge');
+            const nc = require('./helpers/nameCleanup');
             const audit = require('./helpers/audit');
-            const planned = sm.plan({ keys: Array.isArray(req.body && req.body.keys) ? req.body.keys : null });
-            if (!planned.total) return res.json({ ok: true, changed: 0, byStore: {}, merge_id: null });
+            const field = req.params.field;
+            const planned = nc.plan(field, { keys: Array.isArray(req.body && req.body.keys) ? req.body.keys : null });
+            if (!planned.total) return res.json({ ok: true, field, changed: 0, byStore: {}, merge_id: null });
             const entry = await audit.record({
-                action: 'merge-suppliers', subject: planned.merge_id,
+                action: 'merge-names', subject: planned.merge_id,
                 actor: actorOf(req), role: req.role, ip: req.ip,
-                detail: { rows: planned.total, byStore: planned.byStore,
+                detail: { field, rows: planned.total, byStore: planned.byStore,
                           clusters: planned.clusters.map((c) => ({ to: c.winner, from: c.losers.map((l) => l.name) })) },
             });
             try {
-                const out = await sm.apply(planned);
+                const out = await nc.apply(planned);
                 await audit.complete(entry, 'done', out);
                 res.json({ ok: true, ...out });
             } catch (e) { await audit.complete(entry, 'failed', { reason: e.message }); throw e; }
         } catch (e) { res.status(500).json({ error: e.message }); }
     });
 
-    app.delete('/api/suppliers/merge/:id', requireSuper, async (req, res) => {
+    // The merge id names its own field, so the undo route does not need one.
+    app.delete('/api/names/merge/:id', requireSuper, async (req, res) => {
         try {
             const audit = require('./helpers/audit');
             const entry = await audit.record({
-                action: 'undo-supplier-merge', subject: req.params.id,
+                action: 'undo-name-merge', subject: req.params.id,
                 actor: actorOf(req), role: req.role, ip: req.ip, detail: { merge_id: req.params.id },
             });
-            const restored = await require('./helpers/supplierMerge').undo(req.params.id);
+            const restored = await require('./helpers/nameCleanup').undo(req.params.id);
             await audit.complete(entry, 'done', { restored });
             res.json({ ok: true, restored });
         } catch (e) { res.status(500).json({ error: e.message }); }

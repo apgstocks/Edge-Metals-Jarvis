@@ -5838,7 +5838,7 @@ async function renderLedgerTab(kind) {
         <div style="display:flex; gap:8px;">
           ${kind === 'bills' ? '<button id="btnPay" class="btn btn-secondary" style="font-size:12px; padding:8px 14px;">Pay</button>' : ''}
           ${kind === 'sales' ? '<button id="btnFromBill" class="btn btn-secondary" style="font-size:12px; padding:8px 14px;">New from bill</button>' : ''}
-          ${kind === 'bills' ? '<button id="btnSupplierNames" class="btn btn-ghost" style="font-size:12px; padding:8px 12px;" title="The same supplier typed two ways">Supplier names</button>' : ''}
+          ${kind === 'bills' || kind === 'sales' ? '<button id="btnNameCleanup" class="btn btn-ghost" style="font-size:12px; padding:8px 12px;" title="The same name typed two ways">Clean names</button>' : ''}
           ${kind === 'bills' || kind === 'sales' ? '<button id="btnImport" class="btn btn-secondary" style="font-size:12px; padding:8px 14px;" title="Import a shipments workbook">Import</button>' : ''}
           <button id="btnAddLedger" class="btn btn-primary" style="font-size:12px; padding:8px 14px;">${K.addLabel}</button>
           ${kind === 'bills' || kind === 'sales' ? `<div style="position:relative;">
@@ -5955,7 +5955,7 @@ async function renderLedgerTab(kind) {
   if ($('btnFromBill')) $('btnFromBill').onclick = () => openFromBill();
   if ($('btnPay')) $('btnPay').onclick = () => openBillPayForm();
   if ($('btnImport')) $('btnImport').onclick = () => openImportModal(kind);
-  if ($('btnSupplierNames')) $('btnSupplierNames').onclick = () => openSupplierMerge();
+  if ($('btnNameCleanup')) $('btnNameCleanup').onclick = () => openNameCleanup(kind === 'sales' ? 'customer' : 'supplier');
 
   // ── EXPORT WHAT IS ON SCREEN ─────────────────────────────────────────
   // Apsara, 2026-09-19: "Add export option to bill and invoice-export as xls
@@ -7382,19 +7382,21 @@ function openBillPaySupplier(data) {
 // financial records across four stores at once, and a payment records WHO WAS
 // PAID by name — so bills and payments have to move together or the balances
 // on suppliers she has already paid jump back to the full invoice amount.
-async function openSupplierMerge() {
+async function openNameCleanup(startField) {
   const L = LEDGER_LIGHT;
+  // Which field is being cleaned. Apsara, 2026-09-19: "dont make sepratae
+  // button for this.instead ,make one button give an opion for each field to
+  // correct this." One panel, one control, four fields.
+  let field = startField || 'supplier';
   document.body.insertAdjacentHTML('beforeend', `
     <div id="smModal" style="position:fixed; inset:0; background:rgba(0,0,0,.66); z-index:9100; display:flex; align-items:flex-start; justify-content:center; overflow-y:auto; padding:32px 16px;">
       <div class="card" style="width:min(880px,100%); padding:20px 22px 18px; background:${L.sunken}; border-color:${L.line};">
         <div style="display:flex; align-items:baseline; justify-content:space-between; margin-bottom:6px;">
-          <h3 style="margin:0; font-size:16px; text-transform:none; color:${L.ink};">Supplier names</h3>
+          <h3 style="margin:0; font-size:16px; text-transform:none; color:${L.ink};">Clean up names</h3>
           <button id="smClose" aria-label="Close" title="Close (Esc)" style="background:none; border:none; color:${L.inkMuted}; font-size:22px; line-height:1; cursor:pointer;">&times;</button>
         </div>
-        <div style="font-size:12px; color:${L.inkFaint}; margin-bottom:16px; line-height:1.55;">
-          The same supplier typed two ways counts twice — in the totals, in what you owe, and in the supplier dropdown.
-          Merging rewrites the stored name across bills, supplier payments, the supplier list and bookings, together.
-        </div>
+        <div id="smFields" style="display:flex; gap:4px; border-bottom:1px solid ${L.line}; margin-bottom:12px;"></div>
+        <div id="smWhere" style="font-size:12px; color:${L.inkFaint}; margin-bottom:16px; line-height:1.55;"></div>
         <div id="smBody" style="font-size:12.5px; color:${L.inkMuted};">Looking…</div>
       </div>
     </div>`);
@@ -7409,12 +7411,30 @@ async function openSupplierMerge() {
 
   async function draw(note) {
     let d;
-    try { d = await api('/api/suppliers/merge/preview'); }
+    try { d = await api(`/api/names/${field}/preview`); }
     catch (e) { $('smBody').innerHTML = `<div style="color:${L.danger};">${esc(e.message)}</div>`; return; }
 
     const clusters = d.clusters || [];
     const proposals = d.proposals || [];
     const merges = d.merges || [];
+
+    // The tabs, and the sentence naming exactly which stores this field
+    // touches — so "merge" is never a button she presses without knowing what
+    // it reaches.
+    $('smFields').innerHTML = (d.fields || []).map((f) => {
+      const on = f.key === field;
+      return `<button class="smField" data-field="${esc(f.key)}" style="background:none; border:none; cursor:pointer;
+        font-size:12px; padding:7px 13px; color:${on ? L.ink : L.inkMuted};
+        border-bottom:2px solid ${on ? L.accent : 'transparent'};">${esc(f.label)}</button>`;
+    }).join('');
+    const here = (d.fields || []).find((f) => f.key === field);
+    $('smWhere').innerHTML = here
+      ? `The same ${esc(here.label.toLowerCase())} typed two ways counts twice — in the totals, in the filters and in the dropdown.
+         Merging rewrites the stored name across ${esc(here.where)}, together.`
+      : '';
+    document.querySelectorAll('.smField').forEach((b) => {
+      b.onclick = () => { field = b.dataset.field; draw(); };
+    });
 
     $('smBody').innerHTML = `
       ${note ? `<div style="margin-bottom:12px; padding:9px 12px; border:1px solid ${L.ok}; border-radius:var(--radius-sm); color:${L.ink};">${esc(note)}</div>` : ''}
@@ -7439,10 +7459,10 @@ async function openSupplierMerge() {
           <span style="flex:1;"></span>
           ${metalsCanDelete()
             ? `<button id="smGo" class="btn btn-primary" style="font-size:12px; padding:8px 16px;">Merge ${n(d.total)} rows</button>`
-            : `<span style="font-size:11px; color:${L.inkFaint};">Merging needs the Jarvis profile — it rewrites financial records in four places at once.</span>`}
+            : `<span style="font-size:11px; color:${L.inkFaint};">Merging needs the Jarvis profile — it rewrites financial records in several places at once.</span>`}
         </div>`
         : `<div style="padding:12px; border:1px solid ${L.line}; border-radius:var(--radius-sm); background:${L.paper}; color:${L.inkMuted};">
-             No spelling differences left. Every supplier appears under one name.
+             No spelling differences left here. Every ${esc((here && here.label.toLowerCase()) || 'name')} appears under one name.
            </div>`}
 
       <!-- ── SAYING IT YOURSELF ──────────────────────────────────────
@@ -7501,7 +7521,8 @@ async function openSupplierMerge() {
         <div style="border:1px solid ${L.line}; border-radius:var(--radius-sm); background:${L.paper};">
           ${merges.map((m) => `
             <div style="display:flex; align-items:center; gap:10px; padding:7px 10px; border-bottom:1px solid ${L.lineSoft}; font-size:11.5px;">
-              <span style="font-family:var(--font-mono); color:${L.inkMuted};">${esc(String(m.merge_id).slice(4, 14))}</span>
+              <span style="color:${L.ink};">${esc(m.label || m.field || '')}</span>
+              <span style="font-family:var(--font-mono); color:${L.inkMuted};">${esc(String(m.merge_id).slice(0, 22))}</span>
               <span style="flex:1;"></span>
               <span style="color:${L.inkFaint};">${n(m.rows)} rows</span>
               ${metalsCanDelete() ? `<button class="smUndo" data-id="${esc(m.merge_id)}" style="background:none; border:1px solid ${L.line}; border-radius:var(--radius-sm); padding:3px 9px; font-size:11px; color:${L.danger}; cursor:pointer;">Undo</button>` : ''}
@@ -7516,7 +7537,7 @@ async function openSupplierMerge() {
         + `\n\nBills, supplier payments, the supplier list and bookings change together. Every row keeps its original spelling, so this can be undone.`)) return;
       btn.disabled = true; btn.innerHTML = '<span class="spinner"></span>Merging…';
       try {
-        const r = await api('/api/suppliers/merge', { method: 'POST', body: JSON.stringify({}) });
+        const r = await api(`/api/names/${field}/merge`, { method: 'POST', body: JSON.stringify({}) });
         await draw(`Merged — ${n(r.changed)} rows now use one spelling.`);
         renderLedgerTab('bills');
       } catch (err) {
@@ -7530,7 +7551,7 @@ async function openSupplierMerge() {
     // Merge. One decision at a time, each one hers.
     const answer = async (from, to) => {
       try {
-        await api('/api/suppliers/alias', { method: 'POST', body: JSON.stringify({ from, to }) });
+        await api(`/api/names/${field}/alias`, { method: 'POST', body: JSON.stringify({ from, to }) });
         await draw(`Noted — “${from}” means “${to}”. It is in the list above now.`);
       } catch (err) {
         $('smErr').innerHTML = `<div style="margin-top:12px; color:${L.danger};">${esc(err.message)}</div>`;
@@ -7553,8 +7574,8 @@ async function openSupplierMerge() {
     document.querySelectorAll('.smDropAlias').forEach((b) => {
       b.onclick = async () => {
         try {
-          await api('/api/suppliers/alias/' + encodeURIComponent(b.dataset.from), { method: 'DELETE' });
-          await draw(`Forgotten — "${b.dataset.from}" is its own supplier again.`);
+          await api(`/api/names/${field}/alias/` + encodeURIComponent(b.dataset.from), { method: 'DELETE' });
+          await draw(`Forgotten — "${b.dataset.from}" stands on its own again.`);
         } catch (err) {
           $('smErr').innerHTML = `<div style="margin-top:12px; color:${L.danger};">${esc(err.message)}</div>`;
         }
@@ -7565,7 +7586,7 @@ async function openSupplierMerge() {
         if (!confirm('Put every one of these rows back to the spelling it had?')) return;
         b.disabled = true; b.textContent = '…';
         try {
-          const r = await api('/api/suppliers/merge/' + encodeURIComponent(b.dataset.id), { method: 'DELETE' });
+          const r = await api('/api/names/merge/' + encodeURIComponent(b.dataset.id), { method: 'DELETE' });
           await draw(`Undone — ${n(r.restored)} rows back to their original spelling.`);
           renderLedgerTab('bills');
         } catch (err) {

@@ -1,4 +1,4 @@
-// ── tests/supplier-merge.js ─────────────────────────────────────────────────
+// ── tests/name-cleanup.js ─────────────────────────────────────────────────
 // Apsara, 2026-09-19, after importing the Shipments workbook: "There are like
 // calderon CALDERON,upper case,Space issue like EDGE YARD,EDGEYARD ,MODern
 // modern enterprises getting treated as diff suppliers in bills. make jarvis
@@ -40,7 +40,19 @@ process.env.ADMIN_PASSWORD = 'admin-pw-ggggggggggg';
 process.env.JARVIS_PASSWORD = 'jarvis-pw-hhhhhhhhhh';
 
 const ROOT = path.join(__dirname, '..');
-const sm = require(path.join(ROOT, 'helpers/supplierMerge'));
+const nc = require(path.join(ROOT, 'helpers/nameCleanup'));
+// Every call is field-scoped now; `sm` keeps the supplier-shaped checks below
+// reading the way they did when supplier was the only field there was.
+const sm = {
+    clusters: () => nc.clusters('supplier'),
+    proposals: () => nc.proposals('supplier'),
+    plan: (o) => nc.plan('supplier', o),
+    apply: (p2) => nc.apply(p2),
+    undo: (id) => nc.undo(id),
+    merges: () => nc.merges(),
+    addAlias: (f, t, by) => nc.addAlias('supplier', f, t, by),
+    removeAlias: (f) => nc.removeAlias('supplier', f),
+};
 const bills = require(path.join(ROOT, 'helpers/bills'));
 const bp = require(path.join(ROOT, 'helpers/billPayments'));
 const supplierAccount = require(path.join(ROOT, 'helpers/supplierAccount'));
@@ -214,12 +226,16 @@ section('C. bills and payments, or the balances break');
 // turns out to be wrong.
 section('D. it can be undone');
 {
-    const changed = bills.list().filter((b) => b.supplier_was);
+    // Keyed by FIELD now — a bill has a supplier AND a carrier AND a trucker,
+    // and a flat pair would have the second merge overwrite the first's
+    // original while still claiming to be undoable.
+    const changed = bills.list().filter((b) => b.name_was && b.name_was.supplier);
     ck('changed rows carry the spelling they had', changed.length > 0,
        'nothing recorded what it used to be');
-    ck('  and the merge that changed them', changed.every((b) => !!b.supplier_merge));
+    ck('  and the merge that changed them', changed.every((b) => !!(b.name_merge && b.name_merge.supplier)));
     ck('  while untouched rows carry neither',
-       bills.list().filter((b) => b.supplier === 'Edge Metals').every((b) => !b.supplier_was && !b.supplier_merge));
+       bills.list().filter((b) => b.supplier === 'Edge Metals')
+           .every((b) => !(b.name_was && b.name_was.supplier) && !(b.name_merge && b.name_merge.supplier)));
 
     const merges = sm.merges();
     ck('the merge is listed, so an undo has something to name', merges.length === 1, String(merges.length));
@@ -231,7 +247,8 @@ section('D. it can be undone');
     ck('  exactly as it was', names.join('|') === ['CALDERON', 'EDGE YARD', 'EDGEYARD', 'Edge Metals', 'MODern', 'calderon', 'modern enterprises'].join('|'),
        names.join('|'));
     ck('  and the markers are gone too',
-       bills.list().every((b) => b.supplier_was === undefined && b.supplier_merge === undefined));
+       bills.list().every((b) => !(b.name_was && b.name_was.supplier)
+                                 && !(b.name_merge && b.name_merge.supplier)));
 }
 
 // ── E. EDGE YARD IS NOT EDGE METALS ─────────────────────────────────────────
@@ -253,7 +270,7 @@ section('E. two companies stay two companies');
 
     // Edge Yard's own ledger is a different company's books and keys on
     // `seller`, not `supplier`. Nothing here may reach into it.
-    const src = fs.readFileSync(path.join(ROOT, 'helpers/supplierMerge.js'), 'utf8');
+    const src = fs.readFileSync(path.join(ROOT, 'helpers/nameCleanup.js'), 'utf8');
     ck('the yard ledger is not among the stores this rewrites',
        !/LOADS_FILE|OUTBOUND_LOADS_FILE/.test(src),
        'a merge would be editing the other company\'s books');
@@ -284,7 +301,7 @@ section('F. the routes, and who may use them');
     ck('logged in as both profiles', !!admin && !!jarvis);
 
     const before = bills.list().map((b) => b.supplier).join('|');
-    const prev = await req('GET', '/api/suppliers/merge/preview', { sid: admin });
+    const prev = await req('GET', '/api/names/supplier/preview', { sid: admin });
     ck('the preview answers', prev.status === 200 && (prev.json.clusters || []).length > 0,
        JSON.stringify(prev.json).slice(0, 140));
     ck('  and WRITES NOTHING', bills.list().map((b) => b.supplier).join('|') === before,
@@ -294,15 +311,15 @@ section('F. the routes, and who may use them');
     // ── THE GATE ────────────────────────────────────────────────────────
     // Rewriting hundreds of financial records across four stores is a bigger
     // act than editing one bill.
-    const denied = await req('POST', '/api/suppliers/merge', { sid: admin, body: {} });
+    const denied = await req('POST', '/api/names/supplier/merge', { sid: admin, body: {} });
     ck('an ADMIN cannot merge', denied.status === 403, String(denied.status));
     ck('  and nothing changed', bills.list().map((b) => b.supplier).join('|') === before);
 
-    const done = await req('POST', '/api/suppliers/merge', { sid: jarvis, body: {} });
+    const done = await req('POST', '/api/names/supplier/merge', { sid: jarvis, body: {} });
     ck('the Jarvis profile can', done.status === 200 && done.json.changed > 0,
        `${done.status} ${JSON.stringify(done.json).slice(0, 120)}`);
 
-    const undone = await req('DELETE', '/api/suppliers/merge/' + encodeURIComponent(done.json.merge_id), { sid: jarvis });
+    const undone = await req('DELETE', '/api/names/merge/' + encodeURIComponent(done.json.merge_id), { sid: jarvis });
     ck('  and can undo it', undone.status === 200 && undone.json.restored > 0, JSON.stringify(undone.json));
     ck('  putting the ledger back exactly', bills.list().map((b) => b.supplier).join('|') === before);
 
@@ -310,7 +327,7 @@ section('F. the routes, and who may use them');
     // no record of who did it.
     const audit = fs.readFileSync(path.join(ROOT, 'helpers/audit.js'), 'utf8');
     ck('both actions are registered for audit',
-       /'merge-suppliers'/.test(audit) && /'undo-supplier-merge'/.test(audit),
+       /'merge-names'/.test(audit) && /'undo-name-merge'/.test(audit),
        'an unregistered action logs as "unknown-action"');
 
     listener.close();
@@ -409,7 +426,7 @@ section('G. two names she says are the same');
 section('H. the panel can say it');
 {
     const src = fs.readFileSync(path.join(ROOT, 'dashboard/index.html'), 'utf8');
-    const panel = src.slice(src.indexOf('async function openSupplierMerge'),
+    const panel = src.slice(src.indexOf('async function openNameCleanup'),
                             src.indexOf('// ── IMPORTING A SHIPMENTS WORKBOOK'));
     // NOT named smFrom/smTo: tests/mobile-layout.js requires every field whose
     // id contains from/to/date to be wired to the US date picker, because a
@@ -424,13 +441,131 @@ section('H. the panel can say it');
     ck('  and Save posts the alias', /smSave.*onclick/s.test(panel) && /answer\(from, to\)/.test(panel));
     ck('  refusing to post half of one',
        /Both boxes, please/.test(panel), 'an empty box would post and fail on the server');
-    ck('  with a way to forget one', /smDropAlias/.test(panel) && /\/api\/suppliers\/alias\//.test(panel));
+    ck('  with a way to forget one', /smDropAlias/.test(panel) && /\/api\/names\/\$\{field\}\/alias\//.test(panel));
 
     // The preview has to CARRY the names, or the datalist is empty however
     // well the form is wired.
     const api = fs.readFileSync(path.join(ROOT, 'api.js'), 'utf8');
-    const route = api.slice(api.indexOf("app.get('/api/suppliers/merge/preview'"), api.indexOf("app.post('/api/suppliers/alias'"));
-    ck('the preview route sends the names to offer', /names: sm\.usage\(\)/.test(route), route.slice(0, 200));
+    // The route is registered with the FIELD as a path parameter, so it is
+    // ':field', not 'supplier' — an earlier rename substituted the call site
+    // and missed the registration, and the slice came back empty.
+    const from = api.indexOf("app.get('/api/names/:field/preview'");
+    const to = api.indexOf("app.post('/api/names/:field/alias'");
+    const route = from >= 0 && to > from ? api.slice(from, to) : '';
+    ck('the preview route is registered with a field parameter', !!route,
+       'one button, an option per field — the field cannot be baked into the path');
+    ck('the preview route sends the names to offer', /names: nc\.usage\(field\)/.test(route),
+       route.slice(0, 160));
+}
+
+
+// ── I. THE SAME PROBLEM IN THE OTHER FIELDS ─────────────────────────────────
+// Apsara, 2026-09-19: "Even in carrier-that supplier name same problem is
+// there.dont make sepratae button for this.instead ,make one button give an
+// opion for each field to correct this."
+//
+// So the field is a parameter. These are the checks that only mean anything
+// once it is: that each field reads its OWN stores, that merging one leaves
+// the others alone, and that a row merged twice keeps both originals.
+section('I. carrier, trucker and customer');
+{
+    const sales = require(path.join(ROOT, 'helpers/sales'));
+    // ── TWO OF THE PREFERRED SPELLING, ONE OF THE OTHER ─────────────────
+    // Deliberately not one each. With a 1-1 tie the winner comes down to the
+    // tie-break — newest, then longest, then alphabetical — and a check that
+    // names a WINNER on that is flaky. Three of these were, the first time
+    // this section was written, which is the same mistake the EDGE YARD
+    // fixture in section A already carries a note about. Frequency is the
+    // rule; the tie-break is tested on its own, for determinism only.
+    const bill = (bk, carrier, trucker) => bills.addBill({ date: '09/14/2026', supplier: 'Gomez',
+        carrier, trucking_company: trucker, booking_no: bk, container_no: 'CCCU00000' + bk.slice(2),
+        gross: 44000, truck: 15000, supplier_price: 0.32 });
+    await bill('NC1', 'MSC', 'Sher Trucking');
+    await bill('NC2', 'M S C', 'SHER TRUCKING');
+    await bill('NC3', 'MSC', 'Sher Trucking');
+    const sale = (no, customer) => sales.addSale({ date: '09/14/2026', customer, invoice_no: no,
+        container_no: 'SALE' + no, weight: 20, invoice_price: 1000 });
+    await sale('S1', 'Aris Enterprises');
+    await sale('S2', 'ARIS  ENTERPRISES');
+    await sale('S3', 'Aris Enterprises');
+
+    for (const [f, expect] of [['carrier', 'MSC'], ['trucker', 'Sher Trucking'],
+                               ['customer', 'Aris Enterprises']]) {
+        const cs = nc.clusters(f);
+        ck(`${f}: the two spellings are one`, cs.length >= 1 && cs.some((c) => c.winner === expect),
+           JSON.stringify(cs.map((c) => [c.winner, c.losers.map((l) => l.name)])));
+    }
+
+    ck('an unknown field is refused, not quietly cleaned', (() => {
+        try { nc.clusters('nonsense'); return false; } catch (e) { return /unknown field/.test(e.message); }
+    })());
+
+    // ── EACH FIELD READS ITS OWN STORES ─────────────────────────────────
+    ck('carrier does not reach into the supplier payments store',
+       !nc.targetsFor('carrier').some((t) => t.key === 'payments'),
+       'a carrier merge rewriting payments would be editing who was paid');
+    ck('customer does not reach into bills at all',
+       nc.targetsFor('customer').every((t) => t.key === 'sales'));
+    ck('trucker uses the bill\'s trucking_company column',
+       nc.targetsFor('trucker').some((t) => t.key === 'bills' && t.field === 'trucking_company'),
+       'her word for it is Trucker; the column is trucking_company');
+
+    // ── MERGING ONE LEAVES THE OTHERS ALONE ─────────────────────────────
+    const suppliersBefore = [...new Set(bills.list().map((b) => b.supplier))].sort().join('|');
+    const carrierMerge = await nc.apply(nc.plan('carrier'));
+    ck('merging carrier changes carriers', carrierMerge.changed > 0, String(carrierMerge.changed));
+    ck('  and leaves every supplier untouched',
+       [...new Set(bills.list().map((b) => b.supplier))].sort().join('|') === suppliersBefore,
+       'one field\'s merge reaching another is the whole reason this is scoped');
+    ck('  and leaves the truckers untouched',
+       bills.list().some((b) => b.trucking_company === 'SHER TRUCKING'));
+
+    // ── A ROW MERGED TWICE KEEPS BOTH ORIGINALS ─────────────────────────
+    // The reason the stamps are keyed by field. A flat pair would have the
+    // second merge overwrite the first's original, leaving it unrecoverable
+    // while still claiming to be undoable.
+    const truckerMerge = await nc.apply(nc.plan('trucker'));
+    const twice = bills.list().find((b) => b.booking_no === 'NC2');
+    ck('a row merged on two fields keeps both originals',
+       twice && twice.name_was && twice.name_was.carrier === 'M S C'
+       && twice.name_was.trucker === 'SHER TRUCKING',
+       `carrier merge ${carrierMerge.changed} rows, trucker merge ${truckerMerge.changed} rows; `
+       + `C2 name_was = ${JSON.stringify(twice && twice.name_was)}`);
+
+    // ── AND UNDOING ONE UNDOES ONLY THAT ONE ────────────────────────────
+    const restored = await nc.undo(carrierMerge.merge_id);
+    ck('undoing the carrier merge puts the carriers back',
+       restored > 0 && bills.list().some((b) => b.carrier === 'M S C'), String(restored));
+    ck('  and leaves the trucker merge standing',
+       !bills.list().some((b) => b.trucking_company === 'SHER TRUCKING'),
+       'an undo that reaches other fields is worse than no undo');
+    const c2 = bills.list().find((b) => b.booking_no === 'NC2');
+    ck('  with the trucker original still on file',
+       !!c2 && !!c2.name_was && c2.name_was.trucker === 'SHER TRUCKING',
+       JSON.stringify(c2 && c2.name_was));
+
+    // Each merge is listed with the field it belongs to, or an undo is a
+    // guess about what it will touch.
+    ck('past merges say which field they were',
+       nc.merges().every((m) => !!m.field && !!m.label),
+       JSON.stringify(nc.merges().map((m) => [m.field, m.rows])));
+}
+
+// ── J. THE ANSWERS SHE ALREADY GAVE ARE NOT LOST ────────────────────────────
+// supplierMerge.js wrote data/supplier_aliases.json with no field on it. A
+// refactor that forgets a decision she made by hand is a refactor that costs
+// her the same afternoon twice.
+section('J. the pre-field-scope aliases still count');
+{
+    const fsx = require('fs');
+    const legacy = path.join(process.env.DATA_DIR, 'supplier_aliases.json');
+    fsx.writeFileSync(legacy, JSON.stringify([{ from: 'GMZ', to: 'Gomez', at: '2026-09-19T00:00:00Z' }]));
+    ck('an old supplier alias is read, and read as a SUPPLIER one',
+       nc.aliases('supplier').some((a) => a.from === 'GMZ' && a.field === 'supplier'),
+       JSON.stringify(nc.aliases('supplier')));
+    ck('  and does not leak into another field',
+       !nc.aliases('carrier').some((a) => a.from === 'GMZ'),
+       JSON.stringify(nc.aliases('carrier')));
 }
 
 console.log(`\n  ${pass} passed, ${fail} failed`);
