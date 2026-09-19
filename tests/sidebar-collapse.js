@@ -225,5 +225,46 @@ section('D — the phone is untouched');
     dom.window.close();
 }
 
+// ── N. THE COLLAPSED RAIL STOPS AT THE PHONE ────────────────────────────────
+// Apsara, 2026-09-19, with a screenshot: "This is not hw i want collapsible to
+// work" — a sidebar nearly as wide as the phone with OL, SR, BO, BOO, TR, SU,
+// DO, BI, INV, EI, BOL, BOT listed down the middle of it.
+//
+// body.nav-collapsed is a DESKTOP idea — the stylesheet says so three lines
+// above the rule that broke it: "One mechanism at a time: the burger owns the
+// sidebar on a phone." But the class is set on the BODY and it persists, so a
+// window narrowed after the rail was collapsed arrives at the phone layout
+// still wearing it. Only the WIDTH was neutralised there; the rules hiding the
+// labels and showing the initials were not, so both halves applied at once.
+section('N. nav-collapsed does not leak into the phone layout');
+{
+    const css = HTML.slice(HTML.indexOf('@media (max-width: 860px)'),
+                          HTML.indexOf('@media (max-width: 860px)') + 2600);
+    ck('the phone layout restores the sidebar width',
+       /body\.nav-collapsed #sidebar \{ width:min\(82vw,300px\); \}/.test(css));
+    ck('  AND brings the labels back', /body\.nav-collapsed #sidebar \.nav-label/.test(css),
+       'a 300px panel showing two-letter initials is both halves at once');
+    ck('  hiding the initials instead',
+       /body\.nav-collapsed #sidebar \.nav-initials \{ display:none; \}/.test(css),
+       'OL, SR, BO, BOO down the middle of a phone screen');
+    ck('  and restores the row padding, not just the width',
+       /body\.nav-collapsed #sidebar \.nav-btn \{ justify-content:flex-start/.test(css),
+       'centred rows in a full-width panel read as a mistake');
+    ck('  and the sign-out label', /body\.nav-collapsed #sidebar #btnSignout \{ font-size:13px/.test(css)
+       && /body\.nav-collapsed #sidebar #btnSignout::after \{ content:none; \}/.test(css),
+       'it was font-size:0 with an arrow glued on by ::after');
+    ck('  restored by revert rather than by guessing each base display',
+       /display:revert/.test(css),
+       '.nav-label is a bare span with no rule of its own — block would be a guess');
+
+    // The desktop rail is UNTOUCHED. That is the behaviour she asked for on
+    // 2026-09-12 and this fix must not quietly take it away.
+    const desktop = HTML.slice(0, HTML.indexOf('@media (max-width: 860px)'));
+    ck('the desktop rail still collapses to 54px',
+       /body\.nav-collapsed #sidebar \{ width:54px; \}/.test(desktop));
+    ck('  and still shows its initials there',
+       /body\.nav-collapsed #sidebar \.nav-initials \{ display:block; \}/.test(desktop));
+}
+
 console.log(`\n  ${pass} passed, ${fail} failed`);
 if (fail) { console.log('\n  FAILED:\n' + failures.map((f) => '    - ' + f).join('\n')); process.exit(1); }

@@ -206,7 +206,39 @@ body.nav-collapsed #btnNavCollapse { position:static; margin:0 auto; }
   #hamburgerBtn { display:flex; }
   /* One mechanism at a time: the burger owns the sidebar on a phone. */
   #btnNavCollapse { display:none; }
+
+  /* ── nav-collapsed IS A DESKTOP IDEA, AND IT HAS TO STOP AT THE DOOR ──
+     Apsara, 2026-09-19, with a screenshot: "This is not hw i want
+     collapsible to work" — a sidebar nearly as wide as the phone, listing
+     OL, SR, BO, BOO, TR, SU, DO, BI, INV, EI, BOL, BOT down the middle.
+
+     The class is set on the BODY and it persists, so a window narrowed after
+     the rail was collapsed on a desktop arrives here still wearing it. Only
+     the WIDTH was neutralised below; the rules that hide the labels and show
+     the initials were not. The result is both halves at once: a 300px panel
+     with nothing readable in it.
+
+     So the whole treatment is undone here, not just its width. The burger
+     owns the sidebar on a phone — that is stated three lines up — and this
+     is what actually making it true looks like. Every value below is the
+     base rule it restores, taken from the definitions at the top of this
+     stylesheet rather than guessed. */
   body.nav-collapsed #sidebar { width:min(82vw,300px); }
+  /* `revert`, not a hard-coded display. .nav-label is a bare <span> with no
+     rule of its own, .brand-words and #roleLabel are not — writing block for
+     all four would be four guesses at what they already are. revert restores
+     whatever the cascade gives each one. */
+  body.nav-collapsed #sidebar .nav-label,
+  body.nav-collapsed #sidebar .nav-section-label,
+  body.nav-collapsed #sidebar .brand-words,
+  body.nav-collapsed #sidebar #todayLabel,
+  body.nav-collapsed #sidebar #roleLabel { display:revert; }
+  body.nav-collapsed #sidebar .nav-initials { display:none; }
+  body.nav-collapsed #sidebar .nav-btn { justify-content:flex-start; padding:10px 12px 10px 13px; gap:11px; border-left-width:3px; }
+  body.nav-collapsed #sidebar > div:first-of-type + div { padding:14px 16px; }
+  body.nav-collapsed #sidebar nav { padding:10px 12px; }
+  body.nav-collapsed #sidebar #btnSignout { font-size:13px; padding:8px 12px; }
+  body.nav-collapsed #sidebar #btnSignout::after { content:none; }
   main { padding-top:58px; }
 }
 #hamburgerBtn { position:fixed; top:14px; left:14px; z-index:41; width:40px; height:40px; align-items:center; justify-content:center; flex-direction:column; gap:5px; background:var(--steel-950); border:1px solid var(--steel-700); border-radius:var(--radius-sm); cursor:pointer; }
