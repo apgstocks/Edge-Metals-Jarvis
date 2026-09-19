@@ -7117,6 +7117,51 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
     // entire class of "I pulled the fix, why don't I see it" confusion.
     // Icons/manifest are left on express.static's default — they're inert
     // once generated and don't carry this risk.
+    // ── AND THE PAGE CARRIES THE BUILD IT WAS SERVED FROM ────────────────
+    // Apsara, 2026-09-19, five rounds into "undo not there in jarvis
+    // profile": the Bills footer said "build 9861a0d" and the fix in 9861a0d
+    // was not on her screen.
+    //
+    // The footer was not lying, it was answering a different question. It
+    // reads /api/health — the SERVER's commit — while the markup she is
+    // looking at came from a separately cached static file. So a stale tab
+    // reports the new build perfectly happily, which is worse than reporting
+    // nothing: it retires the one check we had.
+    //
+    // The header above already forces revalidation and has since 2026-08-15,
+    // for this same symptom. It is necessary and it is not sufficient — a
+    // proxy, a restored tab or a browser that ignores it all land in the same
+    // place, and none of them are fixable from here. What IS fixable is
+    // making the page SAY which build it is, so the two can be compared.
+    //
+    // Substituted at send time rather than written into the file, because a
+    // commit id committed into the file it describes is a chicken and an egg.
+    // Only files that actually carry the token are touched; everything else
+    // falls through to express.static untouched.
+    const BUILD_TOKEN = '{{JARVIS_BUILD}}';
+    app.get(/\.html$|^\/$/, (req, res, next) => {
+        const rel = req.path === '/' ? 'index.html' : req.path.replace(/^\/+/, '');
+        const file = path.join(cfg.ROOT, 'dashboard', rel);
+        // ── SECOND LINE, NOT THE FIRST ───────────────────────────────
+        // Express normalises req.path before routing — "/../package.json"
+        // arrives as "/package.json" and "%2f" is never decoded into a
+        // separator — so no request can currently walk out of this directory,
+        // and a mutation deleting this line does not turn any test red.
+        // Said plainly rather than left looking load-bearing.
+        //
+        // It stays because the thing below it is a filesystem read named by
+        // user input, and the day someone reaches for req.url or adds a
+        // decodeURIComponent, this is what is standing there.
+        if (!file.startsWith(path.join(cfg.ROOT, 'dashboard') + path.sep)) return next();
+        let html;
+        try { html = fs.readFileSync(file, 'utf8'); } catch (e) { return next(); }
+        if (!html.includes(BUILD_TOKEN)) return next();
+        let sha = 'unknown';
+        try { sha = (require('./helpers/version').running() || {}).short || 'unknown'; } catch (e) {}
+        res.setHeader('Cache-Control', 'no-cache, must-revalidate');
+        res.type('html').send(html.split(BUILD_TOKEN).join(sha));
+    });
+
     app.use('/', express.static(path.join(cfg.ROOT, 'dashboard'), {
         setHeaders: (res, filePath) => {
             if (filePath.endsWith('.html')) {

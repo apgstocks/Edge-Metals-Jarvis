@@ -2,6 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
+<meta name="jarvis-build" content="{{JARVIS_BUILD}}">
 <!-- viewport-fit=cover so the standalone (home-screen) app can paint into the
      iPhone's safe areas instead of leaving white bars around the notch. -->
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
@@ -5929,8 +5930,25 @@ async function renderLedgerTab(kind) {
     const v = h && h.version;
     const el = $('ledBuild');
     if (!el || !v) return;
+    // ── THE PAGE'S OWN BUILD, NOT JUST THE SERVER'S ────────────────────
+    // Apsara, 2026-09-19: the footer said "build 9861a0d" while the fix in
+    // 9861a0d was not on her screen. It was not lying — it reports the
+    // SERVER's commit, and the markup around it came from a separately
+    // cached file. A stale tab reporting the new build is worse than
+    // reporting nothing, because it retires the only check there was.
+    //
+    // The server substitutes this meta at send time, so it describes THIS
+    // COPY of the page. When the two disagree, the page is old.
+    const meta = document.querySelector('meta[name="jarvis-build"]');
+    const pageBuild = meta ? String(meta.content || '').trim() : '';
+    const stale = pageBuild && pageBuild !== '{{JARVIS_BUILD}}' && pageBuild !== v.short;
     el.textContent = `build ${v.short}${v.dirty ? '+local' : ''} · `;
     el.title = `${v.subject || ''} — committed ${v.committed_at || '?'}, running since ${v.booted_at || '?'}`;
+    if (stale) {
+      el.textContent = `this page is build ${pageBuild}, the server is on ${v.short} — RELOAD · `;
+      el.style.color = 'var(--status-warn, #d98324)';
+      el.title = 'Your browser is showing an older copy of the page. Hard reload (Cmd+Shift+R).';
+    }
   }).catch(() => {});
 
   wireMetalsTabs();
