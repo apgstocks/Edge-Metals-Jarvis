@@ -5806,10 +5806,12 @@ async function renderLedgerTab(kind) {
           ${kind === 'bills' ? '<button id="btnPay" class="btn btn-secondary" style="font-size:12px; padding:8px 14px;">Pay</button>' : ''}
           ${kind === 'sales' ? '<button id="btnFromBill" class="btn btn-secondary" style="font-size:12px; padding:8px 14px;">New from bill</button>' : ''}
           ${kind === 'bills' ? '<button id="btnSupplierNames" class="btn btn-ghost" style="font-size:12px; padding:8px 12px;" title="The same supplier typed two ways">Supplier names</button>' : ''}
+          ${kind === 'bills' || kind === 'sales' ? '<button id="btnImport" class="btn btn-secondary" style="font-size:12px; padding:8px 14px;" title="Import a shipments workbook">Import</button>' : ''}
+          <button id="btnAddLedger" class="btn btn-primary" style="font-size:12px; padding:8px 14px;">${K.addLabel}</button>
           ${kind === 'bills' || kind === 'sales' ? `<div style="position:relative;">
             <button id="btnExport" class="btn btn-ghost" aria-haspopup="menu" aria-expanded="false"
-              style="font-size:15px; line-height:1; padding:8px 12px; letter-spacing:.12em;"
-              title="Export these ${rows.length} rows">&middot;&middot;&middot;</button>
+              style="font-size:17px; line-height:1; padding:8px 10px;"
+              title="Export these ${rows.length} rows">&#8942;</button>
             <div id="exportMenu" class="hidden" role="menu"
               style="position:absolute; right:0; top:calc(100% + 6px); z-index:60; min-width:190px;
                      background:var(--surface-card); border:1px solid var(--line); border-radius:var(--radius-sm);
@@ -5827,8 +5829,6 @@ async function renderLedgerTab(kind) {
                 <span style="color:var(--text-faint); font-size:11px;">&nbsp;— to print or send</span></button>
             </div>
           </div>` : ''}
-          ${kind === 'bills' || kind === 'sales' ? '<button id="btnImport" class="btn btn-secondary" style="font-size:12px; padding:8px 14px;" title="Import a shipments workbook">Import</button>' : ''}
-          <button id="btnAddLedger" class="btn btn-primary" style="font-size:12px; padding:8px 14px;">${K.addLabel}</button>
         </div>
       </div>
       ${kind === 'sales' || kind === 'bills' ? metalsTabBar(kind === 'sales' ? 'sales' : 'bills') : ''}
@@ -7793,11 +7793,9 @@ async function openImportModal(kind) {
       </div>
       <div style="border-top:1px solid ${L.line}; padding-top:14px; margin-top:16px; display:flex; align-items:center; gap:10px;">
         <span style="flex:1; font-size:11px; color:${L.inkFaint};">
-          ${metalsCanDelete()
-            ? 'Undo removes exactly these rows and nothing that was typed by hand.'
-            : 'Undoing an import needs the Jarvis profile — it removes hundreds of rows at once.'}
+          Undo removes exactly these rows and nothing that was typed by hand. It needs the Jarvis profile.
         </span>
-        ${metalsCanDelete() ? `<button id="impUndo" class="btn btn-secondary" style="font-size:12px; padding:8px 14px; color:${L.danger};">Undo this import</button>` : ''}
+        <button id="impUndo" class="btn btn-secondary" style="font-size:12px; padding:8px 14px; color:${L.danger};">Undo this import</button>
         <button id="impDone" class="btn btn-primary" style="font-size:12px; padding:8px 16px;">Done</button>
       </div>
       <div id="impErr"></div>`;
@@ -7826,10 +7824,30 @@ async function openImportModal(kind) {
   // that decides whether to upload at all. Failure is silent: not knowing the
   // history must not stop her importing.
   async function loadBatches() {
+    const el = $('impBatches');
+    if (!el) return;
+    let batches;
     try {
-      const { batches } = await api('/api/import/batches');
-      const el = $('impBatches');
-      if (!el || !batches || !batches.length) return;
+      ({ batches } = await api('/api/import/batches'));
+    } catch (e) {
+      // ── NOT SILENT ANY MORE ──────────────────────────────────────────
+      // Apsara, 2026-09-19: "undo not there in jarvis profile". It was not
+      // the gate — a Jarvis session is role=admin and super=true and both
+      // routes answer 200. It was this function, which used to swallow every
+      // failure "so that not knowing the history does not stop her
+      // importing". That reasoning is right for a decoration and wrong for
+      // the ONLY WAY OUT of a bad import: the section simply did not appear,
+      // and there was nothing on screen to say why.
+      el.innerHTML = `<div style="font-size:11px; color:${L.warn};">Could not load the list of past imports — ${esc(e.message || 'no reason given')}. Reload and try again.</div>`;
+      return;
+    }
+    if (!batches || !batches.length) {
+      // "Nothing has been imported" and "the list failed" have to look
+      // different, or the absence of an Undo button means nothing.
+      el.innerHTML = `<div style="font-size:11px; color:${L.inkFaint};">No imports on record yet.</div>`;
+      return;
+    }
+    {
       el.innerHTML = `
         <div style="font-size:11px; color:${L.inkFaint}; margin-bottom:6px;">Imported before</div>
         <div style="border:1px solid ${L.line}; border-radius:var(--radius-sm); background:${L.paper}; max-height:170px; overflow:auto;">
@@ -7839,13 +7857,24 @@ async function openImportModal(kind) {
               <span style="color:${L.ink}; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${esc(b.source || '')}</span>
               <span style="flex:1;"></span>
               <span style="color:${L.inkFaint}; white-space:nowrap;">${n(b.bills)} bills · ${n(b.sales)} invoices</span>
-              ${metalsCanDelete() ? `<button class="impUndoRow" data-batch="${esc(b.batch)}" style="background:none; border:1px solid ${L.line}; border-radius:var(--radius-sm); padding:3px 9px; font-size:11px; color:${L.danger}; cursor:pointer; white-space:nowrap;">Undo</button>` : ''}
+              <!-- ── ALWAYS DRAWN ────────────────────────────────────
+                   This was behind metalsCanDelete(), which reads IS_SUPER —
+                   a value the page fetches once at boot and that is wrong
+                   the moment anything about that fetch goes wrong. When it
+                   is wrong, the only route back out of a bad import
+                   disappears with no explanation, which is what happened.
+
+                   The REAL gate is the route: DELETE /api/import/:batch is
+                   requireSuper and answers with a sentence naming the
+                   profile. A button that explains why it cannot act beats a
+                   button that is not there. -->
+              <button class="impUndoRow" data-batch="${esc(b.batch)}" style="background:none; border:1px solid ${L.line}; border-radius:var(--radius-sm); padding:3px 9px; font-size:11px; color:${L.danger}; cursor:pointer; white-space:nowrap;">Undo</button>
             </div>`).join('')}
         </div>`;
       el.querySelectorAll('.impUndoRow').forEach((b) => {
         b.onclick = () => undoBatch(b.dataset.batch, b);
       });
-    } catch (e) { /* silent on purpose — see above */ }
+    }
   }
 
   step1();

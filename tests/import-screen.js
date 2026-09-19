@@ -363,13 +363,24 @@ section('E. importing');
     // ── THE UNDO GATE ───────────────────────────────────────────────────
     // DELETE /api/import/:batch is requireSuper. A button that 403s is a
     // worse answer than no button plus a sentence saying which profile can.
-    // Anchored on the success screen HAVING rendered. The first version of
-    // this passed while the panel was empty — "the button is absent" is not
-    // evidence of a deliberate omission when everything is absent.
-    ck('an ADMIN is not offered Undo',
-       /Imported\./.test(body) && !w.document.getElementById('impUndo'),
-       'the route behind it is requireSuper — the button would only ever 403');
-    ck('  and is told which profile can', /needs the Jarvis profile/.test(body));
+    // ── THE UNDO BUTTON IS ALWAYS DRAWN ─────────────────────────────────
+    // Apsara, 2026-09-19: "undo not there in jarvis profile."
+    //
+    // It was not the gate. A Jarvis session is role=admin AND super=true, and
+    // both import routes answer 200 for it — checked against a real server.
+    // It was the SCREEN: the button sat behind metalsCanDelete(), which reads
+    // IS_SUPER, a value the page fetches once at boot and which is wrong the
+    // moment anything about that fetch goes wrong. When it is wrong, the only
+    // way back out of a bad import vanishes with no explanation.
+    //
+    // So it is drawn for everyone now. DELETE /api/import/:batch is
+    // requireSuper and answers with a sentence naming the profile — a button
+    // that explains why it cannot act beats a button that is not there.
+    ck('the success screen rendered', /Imported\./.test(body), body.slice(0, 80));
+    ck('  Undo is offered even to an admin', !!w.document.getElementById('impUndo'),
+       'hiding it on a client-side guess is what left her with no way back');
+    ck('  and the screen says which profile it needs',
+       /needs the Jarvis profile/.test(body), body.slice(-160));
     dom.window.close();
 }
 
@@ -446,6 +457,20 @@ section('G. undo on the Jarvis profile');
 
     const undo = w.document.getElementById('impUndo');
     ck('the Jarvis profile IS offered Undo', !!undo);
+
+    // ── AND THE PAST-IMPORTS LIST NEVER FAILS IN SILENCE ────────────────
+    // The second way the Undo disappeared. loadBatches used to swallow every
+    // error "so that not knowing the history does not stop her importing" —
+    // right for a decoration, wrong for the only route out of a bad import.
+    // Three outcomes, three different things on screen.
+    const src2 = fs.readFileSync(path.join(ROOT, 'dashboard/index.html'), 'utf8');
+    const lb = src2.slice(src2.indexOf('async function loadBatches'),
+                          src2.indexOf('async function loadBatches') + 2200);
+    ck('  a failed list says so', /Could not load the list of past imports/.test(lb),
+       'it rendered nothing at all, with no way to tell why');
+    ck('  an empty list says THAT instead', /No imports on record yet/.test(lb),
+       '"nothing imported" and "the list broke" must not look identical');
+    ck('  and nothing is swallowed', !/silent on purpose/.test(lb));
     fire(w, undo); await settle(80);
 
     const del = calls.find((c) => c.path === '/api/import/imp_new');

@@ -415,7 +415,18 @@ section('E. the export menu, on the real screen');
         const btn = d.getElementById('btnExport');
         const menu = d.getElementById('exportMenu');
         ck('there is ONE export button, not two', !!btn && !d.getElementById('btnExportXlsx'));
-        ck('  and it is the three dots', /·|&middot;|\.\.\./.test(btn.textContent), JSON.stringify(btn.textContent));
+        // ⋮ (U+22EE), not ··· — Apsara, 2026-09-19: "i want three dots to
+        // stacked vertically not horizontally".
+        ck('  and the dots are stacked vertically', btn.textContent.trim() === '\u22EE',
+           JSON.stringify(btn.textContent));
+        // ── AND IT IS THE LAST THING IN THE ROW ─────────────────────────
+        // "that too at the right side after add bill". Asserted on the DOM
+        // order rather than on CSS, because a float or a margin would look
+        // right in one width and wrong in another.
+        const bar = btn.closest('div').parentElement;
+        const buttons = [...bar.querySelectorAll('button')].map((b2) => b2.id).filter(Boolean);
+        ck('  and it sits after Add bill', buttons.indexOf('btnExport') > buttons.indexOf('btnAddLedger'),
+           buttons.join(' → '));
         ck('  the menu starts closed', menu.classList.contains('hidden'));
         ck('  and says so to a screen reader', btn.getAttribute('aria-expanded') === 'false');
 
