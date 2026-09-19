@@ -1,0 +1,174 @@
+explain a thread the way Gmail does, however she asks for it
+
+Apsara: "If i say explain 5 - will it provide detailed summary include
+the in thread mails" -- and then, on the shape: "Give summary need to
+give data like gmail summary inbuilt feature".
+
+THE ANSWER WAS NO, ON BOTH COUNTS.
+
+summarize_email resolved the index and then called getMessage on ONE
+id. It never opened the thread. On her 26-message appointment thread it
+explained the newest email and nothing else, and the only history she
+got was whatever quoted chain the sender's own mail client happened to
+paste underneath -- luck, not a feature.
+
+"explain 5" was not a command either. It fell to the AI layer for Gemini
+to interpret, unlike "reply to 5" and "ignore 5".
+
+THE TARGET IS HER OWN REFERENCE. A real Gmail AI Overview she pasted:
+
+  * Apsara requested delivery appointment for PO #4302902 ...
+  * Matthew requested rescheduling to Sept 1, and Tiffany confirmed
+    moving delivery to Sept 1 at 12 PM.
+
+And a second, already quoted in replyWatch.js since August:
+
+  "...loading Aug 12. Booking rolled multiple times; Accounting requested
+   new ERD of 8/19 or 8/20, then confirmed HMM RAON 0025W (CUT 8/18). You
+   requested rolling to HMM TURQUOISE 0011W (ERD 8/25, CUT 8/28); Andy is
+   working to get EDO # ASAP."
+
+Read together the shape is precise: chronological, every actor named
+with her as "You", every reference kept verbatim, repetition compressed,
+and it ENDS ON THE LIVE STATE -- the sentence saying what is true now is
+last, because that is the one she acts on.
+
+WHAT THE MODEL MAY AND MAY NOT DO. Everything countable is computed in
+code and handed to the renderer: participants and their message counts,
+when the thread started, how long it has run, who spoke last, whether
+SHE has ever written on it, what is attached. The model writes the
+narrative only.
+
+That split is this month's whole lesson. Verbalised confidence came back
+1.0 on sixteen consecutive emails; 47% of summaries named the wrong
+speaker; asked_for was invented for deliveries. Every one was fixed by
+moving a checkable fact out of the model's answer and into arithmetic. A
+story genuinely needs a model, so it gets exactly that job.
+
+── AND THEN SHE PUSHED BACK ON THE ROUTING, CORRECTLY ─────────────────
+
+  "Why should i restrict it to explain N. WHat if user say, give summary
+   of N or what N is about? etc.. Pass it throygh AI and let AI decide"
+
+She is right and I had over-applied a rule. "reply to 5" and "ignore 5"
+are regex because a misroute there has SIDE EFFECTS -- a draft to the
+wrong customer, a real email dismissed. Explaining is READ-ONLY; the
+worst case is showing the wrong thread, which costs nothing.
+
+But "move it to the AI" is not the answer either, because that leaves
+TWO overlapping actions doing nearly the same job, and a model asked to
+choose between near-identical options gets it wrong some of the time.
+That is a classifier problem I would be creating, not solving.
+
+So: ONE implementation, three ways in.
+
+  regex "explain 5"        instant, no API call, cannot misfire
+  AI "give summary of 5"   -> summarize_email, which now DELEGATES here
+  AI "what did Raj send"   -> summarize_email by name, which also does
+
+Her complaint was never the routing name. It was that the output read
+one message and ignored the thread. Fixing the OUTPUT once, on the path
+everything already goes through, beats adding another intent.
+
+tellThreadStory returns false for a thread of one, where the existing
+single-message summary is the better answer, and false on any read
+error -- a summary of one message beats an apology.
+
+FIVE THINGS THE TESTS CAUGHT THAT READING DID NOT:
+
+  1. storyPrompt defaulted its fence markers to '', so the fence existed
+     only because the one caller happened to pass one. Any future caller
+     that forgot would hand a whole thread to the model with no boundary.
+     Fenced by default now, with the markers exported. (EB8)
+  2. My first reverse-verify of the delegation broke NO test, because
+     EF3 only reads source text -- exactly the pseudo-test pattern that
+     has gone green six times this month while the thing it covered was
+     disabled. Replaced with a real invocation: stubbed thread, stubbed
+     model, and the message that would reach her phone. (EF0a-EF0l)
+  3. Disabling only the early `return` ALSO broke no test: tellThreadStory
+     still sent, so the story went out AND the single-message summary
+     followed it -- two WhatsApp messages for one question, with every
+     content assertion still green. Counting the sends is what makes the
+     test sensitive. (EF0l)
+  4. My stub made getGmailRead async. The real one is synchronous and
+     summarizeEmail does `gmail = getGmailRead()` without awaiting, so
+     `gmail` became a Promise, threads.get blew up inside a try/catch and
+     the delegation silently declined -- indistinguishable from the
+     feature not working until I ran it under a debugger. My stub was
+     wrong, not the code.
+  5. Whether she reads as "You" depends on the sender-read token being
+     present; that is the only thing that tells Jarvis which address is
+     HERS rather than the mailbox being read. Without it she is NAMED,
+     which is accurate rather than wrong. Both cases pinned, because the
+     difference is invisible until someone deploys without that token.
+
+TESTS: tests/explain-thread.js, new, 57 assertions. All 124 suites run:
+0 failures.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01PaVFkg7JrYeRfUPzvLCFtt
+
+---------------------------------------------------------------------------
+AND THE LOOP AROUND IT. Apsara: "Do loop engineering on this."
+
+The digest has read its own message before sending since 18 Sep. The
+story did not -- and this is the surface where the model has MORE
+freedom, not less: free prose, rather than structured fields rendered
+into a template.
+
+EVERY CHECK IS A PROMISE THE PROMPT ALREADY MAKES:
+
+  prompt says                        check
+  ---------------------------------- --------------------------
+  "WRITE DATES AS DATES"             relative-date-in-bullet
+  "NAME THE ACTOR IN EVERY BULLET"   actorless-bullet
+  "never write a figure that is not  ungrounded-figure
+   in the text above"                ungrounded-reference
+  (nothing, but it has happened)     leaked-value
+
+That mapping is the design. A rule the prompt states and nothing
+enforces is a rule the model keeps only when it feels like it, and this
+project has measured how often that is: confidence 1.0 on sixteen
+consecutive emails, the wrong speaker named on 47% of a real sample.
+
+Figures and references are grounded against the LEDGER THE MODEL WAS
+GIVEN, on digits only, the same normalisation groundFigures uses on
+key_figures -- so "$13,992.00", "USD 13,992.00" and "13992.00" are one
+figure rather than three misses, and "$99,999.00" out of nowhere is
+caught.
+
+THE REPAIR IS THE BULLET, NEVER THE MESSAGE. The counted half --
+participants, span, who spoke last, whether she has ever replied -- is
+computed in code and goes out whatever the model does. Losing a whole
+thread summary to one bad sentence would be the silence this month has
+been about.
+
+THE LEARN HALF: every failure is written to the same audit row the
+digest verifier uses, with `surface` telling them apart, so
+scripts/ruler.js --verify is ONE scoreboard across both:
+
+                                   09-18 09-19   total
+  story/actorless-bullet               .     2       2
+  digest/relative-date-in-summary      1     .       1
+  story/ungrounded-figure              .     1       1
+
+TWO BUGS MY OWN TESTS FOUND, and both were real:
+
+  1. EG15: the prompt tells the model to write "You" for Apsara, but
+     whether "You" appears in facts.participants depends on the
+     sender-read token existing -- that token is the only thing that
+     says which address is HERS rather than the mailbox being read.
+     Without it the list says "Apsara", so the verifier dropped every
+     bullet that did exactly what the prompt asked and she got a thread
+     summary with no story in it. Both spellings are accepted now.
+  2. EG13: with an EMPTY participant list the only verifiable name is
+     "You", so every bullet naming a real person the header parse failed
+     to enumerate would be dropped -- a good sentence lost because
+     something upstream broke. The actor check now stands down entirely
+     rather than treating ignorance as evidence.
+
+Every mechanism reverse-verified: disabling the call, the actor check,
+figure grounding, reference grounding, the relative-date rule or the
+audit write each fails the assertions that cover it.
+
+tests/explain-thread.js is 81 assertions. All 126 suites run: 0 failures.

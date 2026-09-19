@@ -1487,6 +1487,26 @@ function policyDecide(ctx) {
             return { intent: 'show_mutes', resolvedBy: 'policy', data: {} };
         }
 
+        // ── EXPLAIN N (2026-09-19) ──────────────────────────────────────
+        // Apsara: "If i say explain 5 - will it provide detailed summary
+        // include the in thread mails".
+        //
+        // It did not. "explain 5" fell through to the AI layer, where Gemini
+        // decided whether it meant summarize_email -- which then read ONE
+        // message and never opened the thread. Made deterministic here for
+        // the same reason "reply to 5" and "ignore 5" are: a drill-down that
+        // works most of the time is not something a terser digest can be
+        // built on top of.
+        //
+        // Placed with the other index commands and ABOVE the bare-number
+        // rules, and bounded to 1-2 digits so it cannot swallow "explain
+        // 4302902", which is a PO and is handled above.
+        if ((m = ctx.text.trim().match(/^(?:explain|expand|open|details?(?:\s+(?:of|on|for))?|tell\s+me\s+more\s+(?:about|on)|more\s+(?:about|on))\s+#?(\d{1,2})\s*\??$/i))
+            || (m = ctx.text.trim().match(/^what(?:[’']?s| is| was)?\s+#?(\d{1,2})\s+about\s*\??$/i))
+            || (m = ctx.text.trim().match(/^(?:full|whole|entire)\s+(?:thread|story|history)\s+(?:of|for)?\s*#?(\d{1,2})\s*\??$/i))) {
+            return { intent: 'explain_digest_item', resolvedBy: 'policy', data: { index: m[1] } };
+        }
+
         // ── PURCHASE ORDERS (2026-09-17) ────────────────────────────────
         // Placed here, ABOVE the "ignore N" rule below, for the same reason
         // the mute routes are: "close po 4302902" contains a number, and the
@@ -2505,6 +2525,7 @@ async function route(decision, ctx, sendMessage) {
         case 'mute_matter':           return actions.muteMatter(chatId, { index: d.index || null, target: d.target || null });
         case 'unmute_matter':         return actions.unmuteMatter(chatId, d.target || null);
         case 'show_mutes':            return actions.showMutes(chatId);
+        case 'explain_digest_item':   return actions.explainDigestItem(chatId, d.index);
         case 'close_po':              return actions.closePurchaseOrder(chatId, d.po);
         case 'show_po':               return actions.showPurchaseOrder(chatId, d.po);
         case 'show_pos':              return actions.showPurchaseOrders(chatId);

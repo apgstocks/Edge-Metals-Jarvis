@@ -4222,6 +4222,192 @@ async function showMutes(chatId) {
     return { action_taken: 'mutes_shown' };
 }
 
+// ── EXPLAIN N (2026-09-19) ─────────────────────────────────────────────────
+// Apsara: "If i say explain 5 - will it provide detailed summary include the
+// in thread mails" -- and then, on what it should read like: "Give summary
+// need to give data like gmail summary inbuilt feature".
+//
+// The honest answer to the first question was NO. summarize_email resolves
+// the index and then calls getMessage on ONE id; it never opens the thread.
+// On her 26-message appointment thread it explains the newest email and
+// nothing else, and the only history she gets is whatever quoted chain the
+// sender's own mail client happened to paste underneath -- luck, not a
+// feature.
+//
+// "explain 5" was not a command either. It fell to the AI layer and Gemini
+// decided what it meant, unlike "reply to 5" and "ignore 5", which are regex
+// and cannot miss. A drill-down that works most of the time is not a
+// drill-down you can build a terser digest on top of.
+//
+// THIS READS THE WHOLE THREAD and tells the story of it -- see
+// helpers/threadStory.js for the two real Gmail AI Overviews it is modelled
+// on and the split between what the code counts and what the model writes.
+// ── ONE PATH, HOWEVER SHE ASKS (2026-09-19) ────────────────────────────────
+// Apsara, on my first cut of this: "Why should i restrict it to explain N.
+// WHat if user say, give summary of N or what N is about? etc.. Pass it
+// throygh AI and let AI decide it"
+//
+// She is right, and I had over-applied a rule. "reply to 5" and "ignore 5"
+// are regex-matched because a misroute there has SIDE EFFECTS -- a draft to
+// the wrong customer, a real email dismissed. Explaining is READ-ONLY; the
+// worst case is showing her the wrong thread, which costs nothing. I borrowed
+// strictness from actions that need it and applied it where it only gets in
+// the way.
+//
+// But the answer is not "move it to the AI" either, because that would leave
+// TWO overlapping actions -- summarize_email and explain_digest_item -- doing
+// nearly the same job, and a model asked to choose between near-identical
+// options will get it wrong some of the time. That is a classifier problem I
+// would be creating, not solving.
+//
+// So: ONE implementation, reached from three directions.
+//
+//   regex "explain 5"      -> instant, no API call, cannot misfire
+//   AI "give summary of 5" -> summarize_email, which now delegates here
+//   AI "what did Raj send" -> summarize_email by name, which ALSO delegates
+//                             here once it has found the message
+//
+// Her actual complaint was never the routing name. It was that the output
+// read one message and ignored the thread. Fixing the OUTPUT once, on the
+// path everything already goes through, is worth more than another intent.
+async function tellThreadStory(chatId, gmail, { threadId, subject, fallback }) {
+    const { getEmailContent, parseEmailDate, getMyEmailAddress, getGmailSenderRead } = require('../helpers/gmail');
+    const { callGeminiJSON } = require('../helpers/gemini');
+    const rw = require('./replyWatch');
+    const story = require('../helpers/threadStory');
+    if (!gmail || !threadId) return false;
+
+    let tmsgs = null;
+    try {
+        const th = await gmail.users.threads.get({ userId: 'me', id: threadId, format: 'full' });
+        tmsgs = (th && th.data && th.data.messages) || null;
+    } catch (e) { return false; }
+    // A thread of one is just an email; the existing single-message summary
+    // is the better answer for it and this returns false so the caller uses
+    // it. Telling the "story" of one message is padding.
+    if (!tmsgs || tmsgs.length < 2) return false;
+
+    const H = (m, name) => ((m.payload && m.payload.headers) || [])
+        .find((h) => (h.name || '').toLowerCase() === name)?.value || '';
+    const addrOf = (v) => (String(v).match(/<([^>]+)>/) || [null, String(v)])[1].trim().toLowerCase();
+
+    let me = null, manager = null;
+    try { me = (await getMyEmailAddress(gmail) || '').toLowerCase(); } catch (e) {}
+    try {
+        const sr = getGmailSenderRead();
+        if (sr) manager = (await getMyEmailAddress(sr) || '').toLowerCase();
+    } catch (e) {}
+
+    const facts = story.threadFacts(
+        tmsgs.map((m) => ({ at: parseEmailDate(H(m, 'date')), fromLabel: H(m, 'from'),
+                            fromAddress: addrOf(H(m, 'from')),
+                            attachments: rw.collectAttachmentNames(m.payload || {},
+                                (getEmailContent(m.payload || {}) || {}).pdfParts || []) })),
+        { myAddress: me, managerAddress: manager });
+
+    // The same tapered, fenced ledger the hourly scan builds. Reused rather
+    // than rebuilt so an injection defence fixed in one place is fixed in
+    // both -- a forged fence in message 3 of a thread is the same attack one
+    // layer back.
+    const recent = tmsgs.slice(-story.MAX_STORY_MESSAGES);
+    const ledger = rw.buildThreadLedger(recent, me);
+    if (!ledger) return false;
+
+    let out = null;
+    try {
+        out = await callGeminiJSON(story.storyPrompt(ledger, facts, {
+            subject: subject || H(recent[recent.length - 1], 'subject') || '',
+        }), 2);
+    } catch (e) { console.warn('[EXPLAIN] story failed:', e.message); }
+
+    if (!out || !Array.isArray(out.bullets) || !out.bullets.length) {
+        // The counted half still works without the model, and it is the half
+        // she cannot get anywhere else -- who is on this, how long it has
+        // been running, who spoke last, whether she has ever replied.
+        await _send(chatId, story.renderStory({ bullets: fallback ? [fallback] : [] },
+            facts, { subject }));
+        return true;
+    }
+
+    // ── THE STORY READS ITSELF BEFORE SENDING (2026-09-19) ─────────────────
+    // Apsara: "Do loop engineering on this."
+    //
+    // The digest has verified its own output since 18 Sep; this surface did
+    // not, and it is the one where the model has MORE freedom -- free prose
+    // rather than structured fields rendered into a template.
+    //
+    // Every check is a promise the prompt makes, because a rule nothing
+    // enforces is a rule the model keeps only when it feels like it. See
+    // verifyStory for the mapping.
+    //
+    // The REPAIR is to drop the bullet, never the message: the counted half
+    // is computed in code and is the part she cannot get anywhere else.
+    const checked = story.verifyStory(out.bullets, facts, ledger);
+    for (const f of checked.failures) {
+        console.warn(`[STORY] ${f.check}: ${f.why}`);
+        // RECORDED, so the prompt above can be judged rather than asserted.
+        // Same audit row as the digest verifier, with `surface` telling them
+        // apart -- one scoreboard, read by scripts/ruler.js --verify. A
+        // prompt fix shows up as a count that falls, and a prompt fix that
+        // did nothing shows up as one that does not.
+        try {
+            await require('../helpers/auditlog').appendAuditLog({
+                source: 'digest_verify', surface: 'story',
+                check: f.check, level: 'item', why: f.why, summary: f.bullet,
+            });
+        } catch (e) { /* never lose an answer over an audit row */ }
+    }
+    if (checked.dropped) {
+        console.warn(`[STORY] dropped ${checked.dropped} of ${out.bullets.length} bullet(s); `
+            + `${checked.bullets.length} left`);
+    }
+    // Every bullet failed. Send the counted facts rather than nothing -- a
+    // thread with no usable narrative is still a thread she can be told the
+    // shape of, and silence is the failure this month has been about.
+    await _send(chatId, story.renderStory(
+        { bullets: checked.bullets, outstanding: checked.bullets.length ? out.outstanding : null },
+        facts, { subject }));
+    return true;
+}
+
+// The fast path for the exact phrasings, routed by regex in brain.js. No API
+// call, no latency, and it cannot misfire -- but it is only a shortcut into
+// tellThreadStory, never the only way in. Anything it does not match reaches
+// the same place through summarize_email.
+async function explainDigestItem(chatId, index) {
+    const { getGmailRead, getGmailRead2, getGmailSenderRead } = require('../helpers/gmail');
+    const rw = require('./replyWatch');
+
+    const n = String(index || '').replace(/[^0-9]/g, '');
+    if (!n) {
+        await _send(chatId, 'Which one? Say "explain 2" with the number from the list.');
+        return { action_taken: 'explain_no_index' };
+    }
+    let item = null;
+    try { item = rw.resolveDigestIndex(n); } catch (e) { /* stale digest */ }
+    if (!item) {
+        await _send(chatId, `I don't have a #${n} from a recent digest. Ask "what needs my reply" for a fresh list.`);
+        return { action_taken: 'explain_unknown_index' };
+    }
+
+    // The thread lives in whichever mailbox the message came from, tried in
+    // the order the scan reads them. A miss in one is not an error -- see
+    // getGmailReadMailboxes for why both are scanned at all.
+    for (const get of [getGmailRead, getGmailRead2, getGmailSenderRead]) {
+        let client = null;
+        try { client = await get(); } catch (e) { continue; }
+        if (!client) continue;
+        const told = await tellThreadStory(chatId, client, {
+            threadId: item.threadId, subject: item.subject, fallback: item.summary });
+        if (told) return { action_taken: 'explained', index: n };
+    }
+    // Falls back to what is stored rather than refusing: something beats "I
+    // cannot read that", and this is reachable whenever a thread has been
+    // archived or the id has aged out.
+    await _send(chatId, `I couldn't open that thread. What I have on it:\n\n${item.summary || item.subject || '(nothing)'}`);
+    return { action_taken: 'explain_no_thread' };
+}
+
 // ── PURCHASE ORDERS (2026-09-17) ───────────────────────────────────────────
 // Apsara: "Why all my PO gets ignored in email?" 24 of 30 real PO emails were
 // silently dropped by the digest gate — see helpers/poTracker.js's header for
@@ -4489,6 +4675,42 @@ async function summarizeEmail(chatId, index, targetName, quotedText) {
             await _send(chatId, `Couldn't find an email from ${who} to summarise.`);
             return { action_taken: 'summarize_email_not_found' };
         }
+    }
+
+    // ── THE THREAD FIRST, WHATEVER SHE TYPED (2026-09-19) ──────────────────
+    // Apsara: "Why should i restrict it to explain N. WHat if user say, give
+    // summary of N or what N is about? etc.. Pass it throygh AI and let AI
+    // decide it"
+    //
+    // She is right that the PHRASING should not be a whitelist, and this is
+    // the line that makes that true. Everything the AI layer classifies as
+    // "what does this email say" -- "give summary of 5", "what is 5 about",
+    // "summarise the Zimex mail", "what did Raj want" -- already arrives
+    // here. So the fix belongs here, not in another intent: once we have a
+    // message, we have its threadId, and the story is strictly the better
+    // answer.
+    //
+    // Her original question was "will it include the in thread mails". Until
+    // this line the answer was no on every path: this function called
+    // getMessage on ONE id and never opened the thread, so a 26-message
+    // appointment thread was explained by its newest email and whatever
+    // quoted chain the sender's mail client happened to paste underneath.
+    //
+    // tellThreadStory returns false for a thread of one, where the
+    // single-message summary below is the better answer -- telling the
+    // "story" of one email is padding.
+    try {
+        const told = await tellThreadStory(chatId, gmail, {
+            threadId: msg.threadId,
+            subject: (item && item.subject) || ((msg.payload && msg.payload.headers) || [])
+                .find((h) => (h.name || '').toLowerCase() === 'subject')?.value || '',
+            fallback: item && item.summary,
+        });
+        if (told) return { action_taken: 'summarize_email_thread' };
+    } catch (e) {
+        // Never lose the single-message answer over a thread read. A summary
+        // of one message beats an apology.
+        console.warn('[SUMMARIZE] thread story failed, falling back to the single message:', e.message);
     }
 
     const hdrs = {};
@@ -7258,6 +7480,8 @@ muteMatter,
 unmuteMatter,
 showMutes,
 closePurchaseOrder,
+explainDigestItem,
+tellThreadStory,
 showPurchaseOrder,
 showPurchaseOrders,
     setReminder, showReminders, cancelReminder,

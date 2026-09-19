@@ -214,7 +214,9 @@ if (has('verify')) {
             if (!line.trim()) continue;
             try {
                 const r = JSON.parse(line);
-                if (r.source === 'digest_verify') rows2.push({ ...r, day: f.replace('.jsonl', '') });
+                // `surface` tells the digest and the thread story apart;
+                // rows written before it existed are digests.
+                if (r.source === 'digest_verify') rows2.push({ ...r, surface: r.surface || 'digest', day: f.replace('.jsonl', '') });
             } catch (e) { /* a truncated tail is not a crash */ }
         }
     }
@@ -230,8 +232,9 @@ if (has('verify')) {
         const byCheck = {};
         const days2 = [...new Set(rows2.map((r) => r.day))].sort();
         for (const r of rows2) {
-            byCheck[r.check] = byCheck[r.check] || {};
-            byCheck[r.check][r.day] = (byCheck[r.check][r.day] || 0) + 1;
+            const key = `${r.surface}/${r.check}`;
+            byCheck[key] = byCheck[key] || {};
+            byCheck[key][r.day] = (byCheck[key][r.day] || 0) + 1;
         }
         const width = Math.max(...Object.keys(byCheck).map((k) => k.length), 12);
         console.log('\n' + ' '.repeat(width) + '  ' + days2.map((d) => d.slice(5)).join(' ') + '   total');
@@ -248,7 +251,7 @@ if (has('verify')) {
         // The examples are what a prompt edit is actually written from.
         console.log('\nMOST RECENT, with the sentence that caused it:');
         for (const r of rows2.slice(-6)) {
-            console.log(`\n  [${r.check}] ${r.day}`);
+            console.log(`\n  [${r.surface}/${r.check}] ${r.day}`);
             if (r.summary) console.log(`    "${String(r.summary).slice(0, 110)}"`);
             console.log(`    ${String(r.why || '').slice(0, 110)}`);
         }
