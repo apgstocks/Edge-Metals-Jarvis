@@ -468,14 +468,57 @@ function base64Of(att) {
     throw new Error(`attachment "${(att && att.filename) || 'unnamed'}" has no content to send`);
 }
 
-function buildMimeMessage({ to, cc, bcc, subject, body, inReplyTo, references, attachments }) {
+// ── EVERY MAIL JARVIS SENDS GOES AS HTML TOO ────────────────────────────────
+// Apsara, 2026-09-19, after a sentence wrapped mid-parenthetical in her
+// buyer's mail client. text/plain is wrapped by the READER at 78 characters
+// (RFC 5322), including anything she types into the now-editable body. HTML
+// reflows to the reader's window instead, so nothing wraps mid-sentence.
+//
+// Offered the narrow version — this path only — she said: "HTML for all the
+// mail that jarvis sends." So it is done in ONE place, in sendEmail, which
+// derives the HTML from the plain body when a caller has not supplied one.
+//
+// ── WHY THERE, AND NOT AT THE TWELVE CALL SITES ─────────────────────────────
+// There are twelve: the digest, quote requests, contact quote requests, the
+// manager outbox, reply-in-thread, shipment docs, the proforma, the sale
+// invoice. Asking each of them to remember a new argument is asking one of
+// them to forget, and the one that forgets is the one nobody is looking at.
+// Deriving it centrally means a caller has to do nothing and cannot get it
+// wrong; a caller that wants its OWN html still passes bodyHtml and wins.
+//
+// ── multipart/alternative, NOT text/html ALONE ──────────────────────────────
+// Both parts go: the plain text AND the HTML. Three reasons, and the second
+// is the one that made this safe to do everywhere:
+//
+//   1. a client that prefers plain text still shows her exact words;
+//   2. helpers/gmail.js's own getEmailContent prefers text/plain when reading
+//      a message back — so reply threading, the mail watcher and everything
+//      that re-reads sent mail sees exactly what it saw yesterday;
+//   3. an HTML-only commercial email scores worse with spam filters, which
+//      matters when the thing being sent is an invoice a buyer must receive.
+//
+// Threading itself is carried by In-Reply-To and References, which are
+// HEADERS and untouched by any of this.
+//
+// With attachments the nesting is multipart/mixed > multipart/alternative >
+// the two bodies, then the files. That is the correct shape and the reason
+// there are two boundaries.
+function buildMimeMessage({ to, cc, bcc, subject, body, bodyHtml, inReplyTo, references, attachments }) {
     const hasAttachments = Array.isArray(attachments) && attachments.length > 0;
-    const boundary = hasAttachments ? `----jarvis-${Date.now()}-${Math.random().toString(36).slice(2)}` : null;
+    const hasHtml = typeof bodyHtml === 'string' && bodyHtml.trim() !== '';
+    const stamp = () => `----jarvis-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    const boundary = hasAttachments ? stamp() : null;
+    const altBoundary = hasHtml ? stamp() + '-alt' : null;
+
+    const topType = hasAttachments
+        ? `multipart/mixed; boundary="${boundary}"`
+        : (hasHtml ? `multipart/alternative; boundary="${altBoundary}"`
+                   : 'text/plain; charset="UTF-8"');
 
     const headers = [
         `To: ${to}`,
         `Subject: ${encodeHeader(subject)}`,
-        hasAttachments ? `Content-Type: multipart/mixed; boundary="${boundary}"` : 'Content-Type: text/plain; charset="UTF-8"',
+        `Content-Type: ${topType}`,
         'MIME-Version: 1.0',
     ];
     // Cc is a normal header — visible to every recipient. Bcc is ALSO just a
@@ -488,9 +531,31 @@ function buildMimeMessage({ to, cc, bcc, subject, body, inReplyTo, references, a
     if (inReplyTo) headers.push(`In-Reply-To: ${inReplyTo}`);
     if (references) headers.push(`References: ${references}`);
 
+    // The body section, in whichever shape it takes. One definition, used by
+    // both the with-attachments and without-attachments paths below, so the
+    // two cannot disagree about what a body looks like.
+    const bodyBlock = hasHtml
+        ? [
+            `Content-Type: multipart/alternative; boundary="${altBoundary}"`,
+            '',
+            `--${altBoundary}`, 'Content-Type: text/plain; charset="UTF-8"', '', body,
+            `--${altBoundary}`, 'Content-Type: text/html; charset="UTF-8"', '', bodyHtml,
+            `--${altBoundary}--`,
+        ]
+        : ['Content-Type: text/plain; charset="UTF-8"', '', body];
+
     let bodyPart = body;
+    if (hasHtml && !hasAttachments) {
+        // The top-level type IS multipart/alternative, so the parts go
+        // straight out without a wrapper.
+        bodyPart = [
+            `--${altBoundary}`, 'Content-Type: text/plain; charset="UTF-8"', '', body,
+            `--${altBoundary}`, 'Content-Type: text/html; charset="UTF-8"', '', bodyHtml,
+            `--${altBoundary}--`,
+        ].join('\r\n');
+    }
     if (hasAttachments) {
-        const parts = [`--${boundary}`, 'Content-Type: text/plain; charset="UTF-8"', '', body];
+        const parts = [`--${boundary}`, ...bodyBlock];
         for (const att of attachments) {
             parts.push(
                 `--${boundary}`,
@@ -556,9 +621,60 @@ function buildMimeMessage({ to, cc, bcc, subject, body, inReplyTo, references, a
 // original thread instead of starting a new one — needed for
 // relayReplyReceivedViaEmail's acknowledgment send. Optional and additive:
 // every existing caller that doesn't pass it behaves exactly as before.
-async function sendEmail({ to, cc, bcc, subject, body, inReplyTo, references, threadId, attachments }) {
-    const gmail = getGmailWrite();
-    const requestBody = { raw: buildMimeMessage({ to, cc, bcc, subject, body, inReplyTo, references, attachments }) };
+// ── PLAIN TEXT -> THE HTML HALF OF THE SAME MESSAGE ─────────────────────────
+// Apsara, 2026-09-19: "HTML for all the mail that jarvis sends."
+//
+// Deliberately DUMB. It does not try to make the email look designed — it
+// takes the words that were already going out and stops the reader's client
+// from hard-wrapping them at 78 characters. Anything cleverer would mean the
+// message she read on screen and the message the buyer sees are two different
+// documents, and the whole point of the draft screen is that they are not.
+//
+// ── ESCAPE FIRST, LINK SECOND ───────────────────────────────────────────────
+// A customer name containing & or < would otherwise break the markup, or
+// worse, be interpreted as markup. Escaping runs over the whole string before
+// anything is linkified, so the link regex only ever sees safe text. A URL
+// carrying &amp; inside an href is correct HTML and resolves normally.
+//
+// Trailing punctuation is trimmed off a link: "see https://x.example/a." must
+// not produce a link ending in a full stop, which 404s.
+function escapeHtmlText(str) {
+    return String(str === null || str === undefined ? '' : str)
+        .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+function textToHtml(text) {
+    const safe = escapeHtmlText(text);
+    const linked = safe.replace(/(https?:\/\/[^\s<]+)/g, (url) => {
+        const m = /[.,;:)\]]+$/.exec(url);
+        const trail = m ? m[0] : '';
+        const clean = trail ? url.slice(0, -trail.length) : url;
+        return `<a href="${clean}">${clean}</a>${trail}`;
+    });
+    // white-space:pre-wrap keeps her blank lines and indentation exactly as
+    // she typed them while still letting long lines REFLOW, which is the
+    // whole reason this exists. <br> alone would preserve the breaks and lose
+    // nothing, but pre-wrap also survives a pasted table or an indented list.
+    return '<div style="font-family:Arial,Helvetica,sans-serif;font-size:14px;'
+         + 'line-height:1.5;color:#202124;white-space:pre-wrap;">'
+         + linked + '</div>';
+}
+
+async function sendEmail({ to, cc, bcc, subject, body, bodyHtml, inReplyTo, references, threadId, attachments }) {
+    // ── THROUGH module.exports, for the reason getGmailReadMailboxes is ──
+    // See the long note above that function: getGmailWrite is the documented
+    // way to obtain the send client, and reaching the local declaration
+    // bypasses the stubbing seam seven suites already use. It also made the
+    // one thing this function now decides — whether an html half goes out —
+    // untestable without real OAuth credentials on disk, which is not a thing
+    // a test may require.
+    const gmail = module.exports.getGmailWrite();
+    // Derived here so no call site has to remember. A caller that supplies
+    // its own html wins; an empty body produces no html half at all rather
+    // than an empty <div>.
+    const html = (typeof bodyHtml === 'string' && bodyHtml.trim() !== '')
+        ? bodyHtml
+        : (String(body || '').trim() ? textToHtml(body) : undefined);
+    const requestBody = { raw: buildMimeMessage({ to, cc, bcc, subject, body, bodyHtml: html, inReplyTo, references, attachments }) };
     if (threadId) requestBody.threadId = threadId;
     const res = await gmail.users.messages.send({ userId: 'me', requestBody });
     return res.data; // { id, threadId, ... } — threadId here is apsara's own, unrelated to bose's copy
@@ -858,6 +974,7 @@ module.exports = {
     parseEmailDate, getEmailContent, htmlToText, preferredReplyAddress, isAutoReply, looksLikeAuthFailure, reportGmailError, downloadAttachment, listMessages, getMessage,
     sendEmail, findLatestFrom, detectCcPattern, parseAddressList, getMyEmailAddress,
     tallyAddressesForTerm,
+    textToHtml, escapeHtmlText,
     // Exported so a test can encode a REAL message from what a route actually
     // produces. Every suite that touches sending stubs sendEmail — which is
     // right, nothing may leave the building — but a stub accepts any object,

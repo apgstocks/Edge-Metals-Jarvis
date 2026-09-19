@@ -891,6 +891,167 @@ section('K. the attachments survive a real MIME encode');
            /Please find attached/.test(decoded));
     }
 
+    // ══ HTML, ON EVERY MAIL JARVIS SENDS ════════════════════════════════
+    //
+    // Apsara, 2026-09-19. Offered the narrow version — invoice emails only —
+    // she said: "HTML for all the mail that jarvis sends."
+    //
+    // So it is derived in sendEmail from the plain body, in one place, rather
+    // than asked of twelve call sites. Asking each of them to remember a new
+    // argument is asking one of them to forget, and the one that forgets is
+    // the one nobody is looking at.
+    {
+        const { textToHtml } = orig.call(Module, R('helpers/gmail'), module, false);
+
+        // ── THE PLAIN HALF STILL GOES ───────────────────────────────────
+        // This is what made it safe to do everywhere. getEmailContent prefers
+        // text/plain when reading a message back, so reply threading, the
+        // mail watcher and everything that re-reads sent mail sees exactly
+        // what it saw yesterday.
+        const both = buildMimeMessage({
+            to: 'buyer@aris.example', subject: 'Invoice 26ARIS02 — MSDU2726332',
+            body: 'Dear Aris Metals,\n\nSee https://x.example/a?u=1&v=2.\n\nJarvis',
+            bodyHtml: textToHtml('Dear Aris Metals,\n\nSee https://x.example/a?u=1&v=2.\n\nJarvis'),
+        });
+        const decodedBoth = Buffer.from(both.replace(/-/g, '+').replace(/_/g, '/'), 'base64').toString('utf8');
+        ck('an html message is multipart/alternative',
+           /Content-Type: multipart\/alternative/.test(decodedBoth),
+           decodedBoth.split('\n')[2]);
+        ck('  carrying the plain text half', /Content-Type: text\/plain/.test(decodedBoth)
+           && /Dear Aris Metals,/.test(decodedBoth));
+        ck('  AND the html half', /Content-Type: text\/html/.test(decodedBoth));
+        ck('  with the url made clickable',
+           /<a href="https:\/\/x\.example\/a\?u=1&amp;v=2">/.test(decodedBoth),
+           'links in a plain-text body are clickable; in html they have to be made so');
+
+        // ── ESCAPING, WHICH IS THE ONE THAT COULD GO WRONG QUIETLY ──────
+        // A customer name carrying & or < would otherwise break the markup —
+        // or be interpreted as it.
+        const risky = textToHtml('Dear A & B <Ltd>,\nsee https://x.example/a.');
+        ck('an ampersand in a customer name is escaped', /A &amp; B/.test(risky), risky);
+        ck('  and angle brackets are not markup', /&lt;Ltd&gt;/.test(risky)
+           && !/<Ltd>/.test(risky), risky);
+        ck('  a trailing full stop stays OUT of the link',
+           /<a href="https:\/\/x\.example\/a">https:\/\/x\.example\/a<\/a>\./.test(risky),
+           'a link ending in a full stop 404s');
+        ck('  and her line breaks survive',
+           /white-space:pre-wrap/.test(risky),
+           'pre-wrap keeps blank lines and indentation while still reflowing long ones');
+
+        // ── A CALLER THAT PASSES NOTHING IS UNCHANGED ───────────────────
+        // buildMimeMessage's own default. sendEmail is what derives the html;
+        // the encoder still produces yesterday's bytes when handed none.
+        const plain = buildMimeMessage({
+            to: 'x@y.example', subject: 's', body: 'just text' });
+        const decodedPlain = Buffer.from(plain.replace(/-/g, '+').replace(/_/g, '/'), 'base64').toString('utf8');
+        ck('no bodyHtml means a plain text/plain message, exactly as before',
+           /Content-Type: text\/plain; charset="UTF-8"/.test(decodedPlain)
+           && !/multipart/.test(decodedPlain),
+           decodedPlain.split('\n').slice(0, 4).join(' | '));
+
+        // ── AND WITH ATTACHMENTS, THE NESTING IS THE RIGHT ONE ──────────
+        // multipart/mixed > multipart/alternative > the two bodies, then the
+        // files. Getting this wrong produces a message that some clients show
+        // as an empty body with three attachments.
+        const full = buildMimeMessage({
+            to: 'buyer@aris.example', subject: 'Invoice 26ARIS02 — MSDU2726332',
+            body: 'Dear Aris Metals,\n\nPlease find attached…',
+            bodyHtml: textToHtml('Dear Aris Metals,\n\nPlease find attached…'),
+            attachments,
+        });
+        const decodedFull = Buffer.from(full.replace(/-/g, '+').replace(/_/g, '/'), 'base64').toString('utf8');
+        ck('with attachments the outer type is multipart/mixed',
+           /Content-Type: multipart\/mixed/.test(decodedFull.slice(0, 400)),
+           decodedFull.slice(0, 200));
+        ck('  with multipart/alternative nested inside it',
+           decodedFull.indexOf('multipart/alternative') > decodedFull.indexOf('multipart/mixed'),
+           'the two bodies belong together, inside the envelope that holds the files');
+        ck('  both bodies present', /Content-Type: text\/plain/.test(decodedFull)
+           && /Content-Type: text\/html/.test(decodedFull));
+        ck('  and the PDF still attached beside them',
+           /Content-Type: application\/pdf/.test(decodedFull)
+           && /26ARIS02_INVOICE\.pdf/.test(decodedFull));
+        // ── EVERY BOUNDARY IS CLOSED ────────────────────────────────────
+        // A multipart block whose terminating --boundary-- is missing is not
+        // a syntax error anywhere in our code — it encodes, it sends, and
+        // then some clients render the message as an empty body with the
+        // parts shown as attachments. Nothing else here noticed: a mutation
+        // deleting both closing lines left every other check green.
+        const closed = (raw3, label) => {
+            const dec3 = Buffer.from(raw3.replace(/-/g, '+').replace(/_/g, '/'), 'base64').toString('utf8');
+            const bounds = [...new Set((dec3.match(/boundary="([^"]+)"/g) || [])
+                .map((b) => b.slice('boundary="'.length, -1)))];
+            const unclosed = bounds.filter((b) => !dec3.includes(`--${b}--`));
+            ck(`  every boundary is terminated (${label})`, bounds.length > 0 && unclosed.length === 0,
+               bounds.length ? `unclosed: ${unclosed.join(', ')}` : 'no boundaries found at all');
+        };
+        closed(both, 'html, no attachments');
+        closed(full, 'html with attachments');
+
+        ck('  the two boundaries are different strings',
+           (() => { const m = decodedFull.match(/boundary="([^"]+)"/g) || [];
+                    return m.length === 2 && m[0] !== m[1]; })(),
+           (decodedFull.match(/boundary="([^"]+)"/g) || []).join(' | '));
+
+        // ── AND THE DERIVATION ITSELF, WHICH IS THE ACTUAL PROMISE ─────
+        // Everything above hands buildMimeMessage an html body. Her
+        // instruction was "HTML for all the mail that jarvis sends" — twelve
+        // call sites that pass NOTHING. What makes that true is sendEmail
+        // deriving it, and none of the above would notice if that line went.
+        //
+        // getGmailWrite is stubbed ON THE MODULE OBJECT, the seam seven other
+        // suites already use, so the real sendEmail runs and the message it
+        // would have handed Gmail is captured instead of sent.
+        {
+            const realGmail = orig.call(Module, R('helpers/gmail'), module, false);
+            const savedWrite = realGmail.getGmailWrite;
+            let raw = null;
+            realGmail.getGmailWrite = () => ({ users: { messages: {
+                send: async ({ requestBody }) => { raw = requestBody.raw; return { data: { id: 'm' } }; },
+            } } });
+            try {
+                await realGmail.sendEmail({
+                    to: 'someone@example.com', subject: 'Digest',
+                    body: 'Line one\n\nSee https://x.example/a & note the ampersand.',
+                });
+            } finally { realGmail.getGmailWrite = savedWrite; }
+
+            const dec = raw
+                ? Buffer.from(raw.replace(/-/g, '+').replace(/_/g, '/'), 'base64').toString('utf8')
+                : '';
+            ck('a caller passing NO html still sends both halves',
+               /multipart\/alternative/.test(dec) && /Content-Type: text\/html/.test(dec),
+               dec.slice(0, 200) || 'nothing was captured');
+            ck('  the plain half is her exact words, untouched',
+               /Line one\n\nSee https:\/\/x\.example\/a & note the ampersand\./.test(dec),
+               'the text part must not be escaped — it is not markup');
+            ck('  and the html half is escaped and linked',
+               /&amp; note the ampersand/.test(dec)
+               && /<a href="https:\/\/x\.example\/a">/.test(dec),
+               dec.slice(dec.indexOf('text/html'), dec.indexOf('text/html') + 300));
+
+            // A caller that supplies its own html must still win.
+            let raw2 = null;
+            realGmail.getGmailWrite = () => ({ users: { messages: {
+                send: async ({ requestBody }) => { raw2 = requestBody.raw; return { data: { id: 'm' } }; },
+            } } });
+            try {
+                await realGmail.sendEmail({ to: 'x@y.example', subject: 's', body: 'plain',
+                                            bodyHtml: '<div>MINE</div>' });
+            } finally { realGmail.getGmailWrite = savedWrite; }
+            const dec2 = raw2
+                ? Buffer.from(raw2.replace(/-/g, '+').replace(/_/g, '/'), 'base64').toString('utf8')
+                : '';
+            ck('  a caller with its own html keeps it', /<div>MINE<\/div>/.test(dec2), dec2.slice(-200));
+        }
+
+        // An empty body must not produce an empty <div> half.
+        ck('an empty body produces no html half at all',
+           !/multipart/.test(Buffer.from(
+               buildMimeMessage({ to: 'x@y.example', subject: 's', body: '' })
+                 .replace(/-/g, '+').replace(/_/g, '/'), 'base64').toString('utf8')));
+    }
+
     // ── AND A GENUINELY EMPTY ATTACHMENT SAYS WHICH ONE ─────────────────
     // "undefined is not a function" is not something she can act on; a
     // filename is.
