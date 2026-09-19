@@ -145,3 +145,6 @@ tests/spend-report.js
 .mutate-restore.json
 BOL-sample.html
 IMPORT-PREVIEW.md
+
+# Scratch from assistant sessions — never part of the app.
+Claude outputs/
