@@ -192,16 +192,42 @@ function draftFor(containerNo, { photos = [], consignee: consigneeOverride = nul
     const subject = `${invLabel} — ${found.container}`;
     const attachments = [found.invoice.filename, found.packing && found.packing.filename].filter(Boolean);
 
-    // ── THE BODY ────────────────────────────────────────────────────────────
-    // The first four lines are exactly what actions.js has always sent. The
-    // photo block is appended AFTER the sentence about the documents and
-    // BEFORE the sign-off, and only when the caller passed links — so with no
-    // photos the body is byte-identical to the one this replaced.
+    // ── THE BODY, AND WHY ITS LINES ARE SHORT ───────────────────────────────
+    //
+    // Apsara, 2026-09-19, with a screenshot of a sentence broken after the
+    // word "(Invoice": "why the line is getting wrapped..please find the
+    // attached ->That line".
+    //
+    // Arithmetic, not a quirk. The sentence was ONE line and it was too long:
+    //
+    //     ...for container MSKU1629380 (Invoice 260904_AC_26JY103).   87 chars
+    //     ...invoice and packing list... (Invoice ...).              104 chars
+    //
+    // This goes out as text/plain, and RFC 5322 says a line SHOULD be at most
+    // 78 characters — so Gmail wraps it, at 78, wherever 78 happens to fall.
+    // On her screenshot that was mid-parenthetical, which is why it looked
+    // broken rather than merely long. Nothing in helpers/gmail.js wraps the
+    // body; the reader's client does.
+    //
+    // So the invoice number gets its own line. That takes the longest form
+    // down to 76 and reads better besides — an invoice number on its own line
+    // is one a buyer can copy. Container numbers are always eleven characters
+    // (four letters, seven digits), so 76 is stable rather than lucky.
+    //
+    // ── WHAT THIS DOES NOT FIX ──────────────────────────────────────────────
+    // Her own edits. The body is a text box now, and a long paragraph typed
+    // into it will wrap at 78 exactly the same way. The structural answer to
+    // that is sending HTML, which reflows to whatever width the reader's
+    // window is — a change to helpers/gmail.js's shared encoder, so it needs
+    // her yes rather than my initiative.
     const links = (Array.isArray(photos) ? photos : []).map((p) => String(p || '').trim()).filter(Boolean);
     const body = [
         `Dear ${contact.name || consignee},`,
         '',
-        `Please find attached the ${found.packing ? 'invoice and packing list' : 'invoice'} for container ${found.container}${found.inv_no ? ` (${invLabel})` : ''}.`,
+        `Please find attached the ${found.packing ? 'invoice and packing list' : 'invoice'} for container ${found.container}.`,
+        // NOT `${invLabel} no:` — invLabel already carries the number, so
+        // that reads "Invoice 260904_AC_26JY103 no: 260904_AC_26JY103".
+        ...(found.inv_no ? [`Invoice no: ${found.inv_no}`] : []),
         ...(links.length ? ['', links.length === 1 ? 'Loading photo:' : 'Loading photos:', ...links] : []),
         '',
         'Kind regards,',

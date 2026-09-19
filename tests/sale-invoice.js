@@ -387,7 +387,8 @@ section('F. who it goes to and what it says');
     const bare = shipmentMail.draftFor('MSDU2726332');
     const expected = [
         'Dear Aris Metals,', '',
-        'Please find attached the invoice and packing list for container MSDU2726332 (Invoice 26ARIS02).',
+        'Please find attached the invoice and packing list for container MSDU2726332.',
+        'Invoice no: 26ARIS02',
         '', 'Kind regards,', 'Jarvis', 'Edge Metals Inc',
     ].join('\n');
     ck('with no photos the body is exactly the shared one', bare.body === expected,
@@ -399,6 +400,37 @@ section('F. who it goes to and what it says');
        cfg.COMPANY_NAME === 'Edge Trading',
        'changing it would rename the buyer on every yard load ticket');
     ck('  and carries no photo heading at all', !/Loading photo/.test(bare.body));
+
+    // ── NO LINE OVER 78 CHARACTERS ──────────────────────────────────────
+    // Apsara, 2026-09-19, with a screenshot of a sentence broken after
+    // "(Invoice": "why the line is getting wrapped..please find the attached
+    // ->That line".
+    //
+    // Arithmetic. The sentence was one line carrying the container AND the
+    // invoice number — 87 characters with just the invoice, 104 with the
+    // packing list. This goes out as text/plain, RFC 5322 says a line SHOULD
+    // be at most 78, so Gmail wrapped it at 78 wherever 78 happened to fall.
+    // That landed mid-parenthetical, which is why it read as broken rather
+    // than merely long.
+    //
+    // Asserted as the PROPERTY, not as the sentence: the wording will change
+    // again, and what must not change is that it fits. A check pinned to the
+    // string would go green on a rewrite that overflows by one word.
+    for (const [label, b] of [['with photos', d], ['without', bare]]) {
+        const over = b.body.split('\n').filter((l) => l.length > 78);
+        ck(`  every line fits in 78 characters (${label})`, over.length === 0,
+           over.map((l) => `${l.length}: ${l}`).join(' | '));
+    }
+    ck('  and the invoice number is on its own line, where it can be copied',
+       /\nInvoice no: 26ARIS02\n/.test(bare.body + '\n'), JSON.stringify(bare.body));
+    ck('  not doubled up as "Invoice X no: X"',
+       !/Invoice \S+ no:/.test(bare.body), JSON.stringify(bare.body));
+
+    // The longest form this can take — packing list present, so the sentence
+    // is at its longest — is the one that was 104. Named so the margin is
+    // visible rather than assumed.
+    const longest = Math.max(...bare.body.split('\n').map((l) => l.length));
+    console.log(`        longest line: ${longest} of 78`);
 }
 
 // ── G. THE CALLERS THAT WERE ALREADY THERE ──────────────────────────────────
