@@ -486,6 +486,72 @@ section('E. the export menu, on the real screen');
            clicked[0]);
         ck('  and the PDF is asked for by name', /format=pdf/.test(clicked[0] || ''), clicked[0]);
 
+        // ── UNDO IS IN THE MENU, WHERE IT CAN BE FOUND ─────────────────
+        // Apsara, 2026-09-19, after six rounds of me hunting a rendering bug
+        // that did not exist: "undo import s there only in import button".
+        // It was rendering the whole time; the only route to it was a button
+        // labelled IMPORT, which is not where anyone looks to UNDO one.
+        {
+            // A fresh render first: exportTo disables the button for four
+            // seconds after a PDF, and .click() on a disabled button does
+            // nothing — which made this whole block fail silently the first
+            // time, exactly the way it did in tests/import-screen.js.
+            await w.renderLedgerTab('bills');
+            const wrap = d.getElementById('undoImportWrap');
+            ck('the menu has an Undo last import entry', !!wrap);
+            ck('  and starts hidden', wrap.classList.contains('hidden'));
+
+            // ── OPENED WITH NO IMPORTS, IT STAYS HIDDEN ─────────────────
+            // The check above only sees the initial markup, so it passed
+            // happily against a mutation that showed the entry regardless.
+            // This opens the menu with an empty list, which is the branch.
+            const noApi = w.api;
+            w.api = async (p2, o) => (String(p2).includes('/api/import/batches')
+                ? { batches: [] } : noApi(p2, o));
+            d.getElementById('btnExport').click();
+            await new Promise((r) => setTimeout(r, 60));
+            ck('  and stays hidden when there is nothing to undo',
+               wrap.classList.contains('hidden'),
+               'a dead entry gets clicked once and distrusted after');
+            d.getElementById('btnExport').click();   // shut it again
+            w.api = noApi;
+
+            // With a batch on file it appears, naming what it would remove.
+            const withBatch = { batches: [{ batch: 'imp_x', source: 'Shipments 2026.xlsx',
+                                            at: '2026-09-18T20:41:27.899Z', bills: 569, sales: 651 }] };
+            const prevApi = w.api;
+            w.api = async (p2, o) => (String(p2).includes('/api/import/batches')
+                ? withBatch
+                : prevApi(p2, o));
+            d.getElementById('btnExport').click();
+            await new Promise((r) => setTimeout(r, 60));
+            ck('  and appears once an import exists', !wrap.classList.contains('hidden'));
+            ck('  naming the file and what it would remove',
+               /Shipments 2026\.xlsx/.test(wrap.textContent) && /569 bills/.test(wrap.textContent)
+               && /651 invoices/.test(wrap.textContent),
+               wrap.textContent.trim().slice(0, 120));
+            ck('  and carrying the batch id the route needs',
+               d.getElementById('btnUndoImport').dataset.batch === 'imp_x');
+
+            // Clicking it asks first, then DELETEs that batch.
+            let asked = null;
+            w.confirm = (m) => { asked = m; return true; };
+            let deleted = null;
+            w.api = async (p2, o) => {
+                if (String(p2).includes('/api/import/batches')) return withBatch;
+                if ((o || {}).method === 'DELETE') { deleted = String(p2); return { ok: true, removed: 1220 }; }
+                return prevApi(p2, o);
+            };
+            w.alert = () => {};
+            d.getElementById('btnUndoImport').click();
+            await new Promise((r) => setTimeout(r, 80));
+            ck('  clicking it asks before removing 1,220 rows', !!asked && /Remove every row/.test(asked),
+               String(asked).slice(0, 80));
+            ck('  and says which profile it needs', !!asked && /Jarvis profile/.test(asked));
+            ck('  then DELETEs that batch', deleted === '/api/import/imp_x', String(deleted));
+            w.api = prevApi;
+        }
+
         // The Invoice register gets its own menu, pointed at its own route.
         clicked.length = 0;
         await w.renderLedgerTab('sales');

@@ -5860,6 +5860,28 @@ async function renderLedgerTab(kind) {
                 style="display:block; width:100%; text-align:left; background:none; border:none; cursor:pointer;
                        padding:9px 12px; font-size:12.5px; color:var(--text-primary); border-top:1px solid var(--line);">PDF
                 <span style="color:var(--text-faint); font-size:11px;">&nbsp;— to print or send</span></button>
+
+              <!-- ── UNDO, WHERE SOMEONE WOULD LOOK FOR IT ──────────────
+                   Apsara, 2026-09-19, after six rounds of me hunting a
+                   rendering bug that did not exist: "undo import s there only
+                   in import button".
+
+                   It was rendering the whole time. The only route to it was a
+                   button labelled IMPORT, which is not where anyone looks to
+                   UNDO one — you have to re-enter the thing you want to
+                   reverse. That is a discoverability fault, and it is mine.
+
+                   Hidden until the batches come back, because an "Undo last
+                   import" offered when there has never been an import is a
+                   dead entry she will click once and distrust after. -->
+              <div id="undoImportWrap" class="hidden" style="border-top:1px solid var(--line);">
+                <div style="padding:7px 12px; font-family:var(--font-mono); font-size:9px; letter-spacing:.12em;
+                            text-transform:uppercase; color:var(--text-muted);">Import</div>
+                <button id="btnUndoImport" role="menuitem"
+                  style="display:block; width:100%; text-align:left; background:none; border:none; cursor:pointer;
+                         padding:9px 12px; font-size:12.5px; color:var(--status-warn, #d98324);">Undo last import
+                  <span id="undoImportWhat" style="color:var(--text-faint); font-size:11px;"></span></button>
+              </div>
             </div>
           </div>` : ''}
         </div>
@@ -6007,6 +6029,9 @@ async function renderLedgerTab(kind) {
       if (!menu.classList.contains('hidden')) return shut();
       menu.classList.remove('hidden');
       btn.setAttribute('aria-expanded', 'true');
+      // Asked for as the menu opens rather than on every table render: it is
+      // one small request, and only when she is actually looking.
+      loadUndoImport();
       away = (ev) => {
         if (ev.type === 'keydown') { if (ev.key === 'Escape') shut(); return; }
         if (!menu.contains(ev.target) && ev.target !== btn) shut();
@@ -6014,6 +6039,45 @@ async function renderLedgerTab(kind) {
       document.addEventListener('click', away, true);
       document.addEventListener('keydown', away);
     };
+    // ── THE LAST IMPORT, IF THERE IS ONE ──────────────────────────────
+    // Failure is quiet HERE and only here: not knowing whether an import
+    // exists must not stop her exporting, and the Import panel still lists
+    // every batch with its own reason when it cannot load them.
+    async function loadUndoImport() {
+      const wrap = $('undoImportWrap');
+      if (!wrap) return;
+      try {
+        const { batches } = await api('/api/import/batches');
+        const last = (batches || [])[0];
+        if (!last) { wrap.classList.add('hidden'); return; }
+        $('undoImportWhat').textContent =
+          `\u2014 ${esc(last.source || 'workbook')}, ${Number(last.bills || 0).toLocaleString('en-US')} bills`
+          + ` and ${Number(last.sales || 0).toLocaleString('en-US')} invoices`;
+        $('btnUndoImport').dataset.batch = last.batch;
+        wrap.classList.remove('hidden');
+      } catch (e) { wrap.classList.add('hidden'); }
+    }
+    if ($('btnUndoImport')) {
+      $('btnUndoImport').onclick = async (e) => {
+        e.stopPropagation();
+        const b = e.currentTarget;
+        const batch = b.dataset.batch;
+        if (!batch) return;
+        if (!confirm(`Remove every row that came from this import?\n\n${batch}\n\n`
+          + 'Rows typed by hand are not touched. This needs the Jarvis profile.')) return;
+        b.disabled = true; b.textContent = 'Undoing…';
+        try {
+          const r = await api('/api/import/' + encodeURIComponent(batch), { method: 'DELETE' });
+          shut();
+          await renderLedgerTab(kind);
+          alert(`Undone — ${Number(r.removed || 0).toLocaleString('en-US')} rows removed.`);
+        } catch (err) {
+          b.disabled = false; b.textContent = 'Undo last import';
+          alert(err.message || 'Could not undo that import.');
+        }
+      };
+    }
+
     menu.querySelectorAll('.exp-opt').forEach((opt) => {
       opt.onmouseenter = () => { opt.style.background = 'var(--bg-sunken)'; };
       opt.onmouseleave = () => { opt.style.background = 'none'; };
