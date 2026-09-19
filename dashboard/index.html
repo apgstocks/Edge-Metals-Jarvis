@@ -5774,6 +5774,24 @@ async function renderLedgerTab(kind) {
           ? `<button class="btn btn-secondary ledger-receive" data-id="${esc(r.id)}" style="font-size:10px; padding:3px 9px;">Receive payment</button>` : ''}
         ${kind === 'sales' && r.balance !== null && Math.abs(r.balance) <= 0.005
           ? `<span title="Settled${r.bank_charge ? ` — ${ledMoney(r.bank_charge)} of it was a bank charge` : ''}${r.discount ? ` — ${ledMoney(r.discount)} discounted` : ''}" style="color:var(--status-good, #4ade80); font-size:10px; font-family:var(--font-mono); margin-right:6px;">received${r.bank_charge || r.discount ? ' *' : ''}</span>` : ''}
+        <!-- ── GENERATE ─────────────────────────────────────────────────
+             Apsara, 2026-09-19: "if all important details of bills is
+             entered,if i say create invoice… -upon my confirmation-it needs
+             to create automatically… andupon confirm- mail it to the
+             customer with loading photos", and then, plainly: "Instead of
+             create invoice->Have it as generate".
+
+             So the word is GENERATE — the same word the Documents screen
+             uses for the same act. Two words for one thing is two things to
+             learn.
+
+             On the SALES row and nowhere else, because an invoice is what
+             she bills a CUSTOMER and a bill has no customer on it. Offered
+             on every sales row rather than only on complete ones: the route
+             answers 422 with the list of what is still missing, which is a
+             more useful thing to read than a button that is not there. -->
+        ${kind === 'sales'
+          ? `<button class="btn btn-secondary ledger-generate" data-id="${esc(r.id)}" style="font-size:10px; padding:3px 9px;" title="Invoice and packing list for this container, then the email">Generate</button>` : ''}
         <button class="btn btn-secondary ledger-edit" data-id="${esc(r.id)}" style="font-size:10px; padding:3px 9px;">Edit</button>
         <button class="btn btn-ghost ledger-del" data-id="${esc(r.id)}" style="font-size:10px; padding:3px 7px;">Delete</button>
         ${(r.missing_tares && r.missing_tares.length)
@@ -6058,6 +6076,12 @@ async function renderLedgerTab(kind) {
       if (row) openMarkPaid(row);
     };
   });
+  document.querySelectorAll('.ledger-generate').forEach((b) => {
+    b.onclick = () => {
+      const row = (ledgerState.rows || []).find((r) => r.id === b.dataset.id);
+      if (row) openGenerateInvoice(row);
+    };
+  });
   document.querySelectorAll('.ledger-edit').forEach((b) => {
     b.onclick = () => {
       const row = (ledgerState.rows || []).find((r) => r.id === b.dataset.id);
@@ -6228,6 +6252,280 @@ async function openFromBill() {
       } catch (e) { $('fbErr').textContent = e.message || 'Could not read that bill'; }
     };
   });
+}
+
+// ══ GENERATE: THE INVOICE, THEN THE EMAIL ═══════════════════════════════
+//
+// Apsara, 2026-09-19:
+//
+//   "if all important details of bills is entered,if i say create invoice(it
+//    needs to ask-separate invoice and packing list/normal) -upon my
+//    confirmation-it needs to create automatically (get verfiication from me
+//    by showing that on screen)andupon confirm- mail it to the customer with
+//    loading photos"
+//
+//   "first need to show the generated invoice then draft mail"
+//
+// Three steps, in her order, and she can stop at any of them:
+//
+//   1  ASK      separate invoice and packing list, or normal
+//   2  LOOK     the real PDF, the figures, and anything odd about it
+//   3  SEND     the actual email, with the actual address, before it goes
+//
+// ── WHY STEP 2 SHOWS THE PDF AND NOT A SUMMARY ──────────────────────────
+// Because a summary is something I would have written, and the customer
+// does not receive my summary. 260918_AP_26ARIS02 went out saying 15,642 MT;
+// the only artefact that could ever have shown that is the document itself.
+// The iframe is the file that is going to be attached, fetched back from
+// disk through the same download route she uses everywhere else.
+//
+// ── AND WHY IT DOES NOT AUTO-ADVANCE ────────────────────────────────────
+// Each step needs a press. "upon my confirmation" and "upon confirm" are two
+// separate confirmations in her sentence, and collapsing them into one would
+// mean the last thing she pressed was about the PDF while the thing that
+// happened was an email to a buyer.
+let genState = null;
+async function openGenerateInvoice(row) {
+  const L = LEDGER_LIGHT;
+  genState = { row, step: 1, mode: 'normal', gen: null, draft: null, busy: false };
+  document.body.insertAdjacentHTML('beforeend', `
+    <div id="genModal" style="position:fixed; inset:0; background:rgba(0,0,0,.66); z-index:9100; display:flex; align-items:flex-start; justify-content:center; overflow-y:auto; padding:32px 16px;">
+      <div class="card" id="genCard" style="width:min(820px,100%); padding:20px 22px 18px; background:${L.sunken}; border-color:${L.line};"></div>
+    </div>`);
+  const close = () => { const m = $('genModal'); if (m) m.remove(); document.removeEventListener('keydown', onEsc); genState = null; };
+  const onEsc = (e) => { if (e.key === 'Escape' && !(genState && genState.busy)) close(); };
+  document.addEventListener('keydown', onEsc);
+  ledgerReopen = () => { close(); };
+
+  const money = (n) => (n === null || n === undefined) ? '—'
+    : '$' + Number(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+  const head = (title, sub) => `
+    <div style="display:flex; align-items:baseline; justify-content:space-between; margin-bottom:4px;">
+      <h3 style="margin:0; font-size:16px; text-transform:none; color:${L.ink};">${title}</h3>
+      <button id="genClose" aria-label="Close" style="background:none; border:none; color:${L.inkMuted}; font-size:22px; line-height:1; cursor:pointer;">&times;</button>
+    </div>
+    <div style="font-size:12px; color:${L.inkFaint}; margin-bottom:14px;">${sub}</div>`;
+
+  // Warnings sit ABOVE the button, never below it — the rule the WhatsApp
+  // confirmation already follows. A caution under the thing you press is a
+  // caution you read afterwards.
+  const warnBlock = (list, tone) => (list && list.length) ? `
+    <div style="background:${tone === 'bad' ? 'rgba(220,80,60,.09)' : 'rgba(200,140,40,.10)'}; border:1px solid ${tone === 'bad' ? L.danger : L.warn}; border-radius:var(--radius-sm); padding:10px 12px; margin-bottom:12px;">
+      ${list.map((w) => `<div style="font-size:12px; color:${tone === 'bad' ? L.danger : L.ink}; margin:2px 0;">${esc(w)}</div>`).join('')}
+    </div>` : '';
+
+  function render() {
+    const card = $('genCard');
+    if (!card) return;
+    const r = genState.row;
+    const label = `${esc(r.container_no || '—')}${r.invoice_no ? ' · ' + esc(r.invoice_no) : ''}${r.customer ? ' · ' + esc(r.customer) : ''}`;
+
+    // ── STEP 1: THE ONE QUESTION SHE ASKED TO BE ASKED ──────────────────
+    if (genState.step === 1) {
+      const opt = (id, title, sub) => `
+        <label style="display:flex; gap:10px; align-items:flex-start; padding:11px 12px; border:1px solid ${genState.mode === id ? L.accent : L.line}; border-radius:var(--radius-sm); background:${L.paper}; cursor:pointer; margin-bottom:8px;">
+          <input type="radio" name="genMode" value="${id}" ${genState.mode === id ? 'checked' : ''} style="margin-top:2px;">
+          <span><span style="font-size:13px; color:${L.ink};">${title}</span>
+          <span style="display:block; font-size:11px; color:${L.inkFaint}; margin-top:2px;">${sub}</span></span>
+        </label>`;
+      card.innerHTML = head('Generate', label) + `
+        ${opt('normal', 'Normal', 'One PDF — the invoice with its packing list behind it.')}
+        ${opt('separate', 'Separate invoice and packing list', 'Two PDFs, filed and attached as a pair.')}
+        ${opt('invoice_only', 'Invoice only', 'No packing list at all, in the file or in the email.')}
+        <div id="genErr" style="color:${L.danger}; font-size:12px; margin:8px 0 0;"></div>
+        <div style="display:flex; justify-content:flex-end; gap:8px; margin-top:14px;">
+          <button id="genCancel" class="btn btn-ghost" style="font-size:12px; padding:7px 14px;">Cancel</button>
+          <button id="genGo" class="btn btn-primary" style="font-size:12px; padding:7px 16px;">Generate</button>
+        </div>`;
+      card.querySelectorAll('input[name=genMode]').forEach((el) => {
+        el.onchange = () => { genState.mode = el.value; render(); };
+      });
+      $('genCancel').onclick = close;
+      $('genGo').onclick = doGenerate;
+    }
+
+    // ── STEP 2: THE DOCUMENT ITSELF ─────────────────────────────────────
+    if (genState.step === 2) {
+      const g = genState.gen;
+      const files = g.saved_filenames || [g.saved_filename];
+      // The INVOICE half is what is shown when there are two — it is the
+      // document with the money on it, the same choice the preview on the
+      // Documents screen makes.
+      const first = files[0];
+      const today = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' });
+      const src = `/api/documents/download?kind=invoice&file=${encodeURIComponent(first)}`
+                + `&date=${today}&container=${encodeURIComponent(g.container_no || '')}#toolbar=0`;
+      const rows = (g.line_items || []).map((it) => `
+        <tr>
+          <td style="padding:5px 8px; font-size:12px; color:${L.ink};">${esc(it.item_desc || '')}</td>
+          <td style="padding:5px 8px; font-size:12px; color:${L.ink}; text-align:right; font-family:var(--font-mono);">${Number(it.weight || 0).toFixed(3)} MT</td>
+          <td style="padding:5px 8px; font-size:12px; color:${L.ink}; text-align:right; font-family:var(--font-mono);">${money(it.rate)} /MT</td>
+          <td style="padding:5px 8px; font-size:12px; color:${L.ink}; text-align:right; font-family:var(--font-mono);">${money(it.amount)}</td>
+        </tr>`).join('');
+      card.innerHTML = head('Check it before it goes', label) + `
+        ${warnBlock(g.weight_message ? [g.weight_message] : [], 'bad')}
+        ${warnBlock(g.warnings || [], 'warn')}
+        <table style="width:100%; border-collapse:collapse; background:${L.paper}; border:1px solid ${L.line}; border-radius:var(--radius-sm); margin-bottom:10px;">
+          <thead><tr style="border-bottom:1px solid ${L.line};">
+            <th style="padding:5px 8px; font-size:10px; text-transform:uppercase; letter-spacing:.1em; color:${L.inkMuted}; text-align:left;">Description</th>
+            <th style="padding:5px 8px; font-size:10px; text-transform:uppercase; letter-spacing:.1em; color:${L.inkMuted}; text-align:right;">Quantity</th>
+            <th style="padding:5px 8px; font-size:10px; text-transform:uppercase; letter-spacing:.1em; color:${L.inkMuted}; text-align:right;">Rate</th>
+            <th style="padding:5px 8px; font-size:10px; text-transform:uppercase; letter-spacing:.1em; color:${L.inkMuted}; text-align:right;">Amount</th>
+          </tr></thead><tbody>${rows}</tbody></table>
+        <div style="font-size:11px; color:${L.inkFaint}; margin-bottom:6px;">Saved: ${files.map((f) => esc(f)).join(' · ')}</div>
+        <iframe src="${src}" style="width:100%; height:440px; border:1px solid ${L.line}; border-radius:var(--radius-sm); background:#fff;"></iframe>
+        <div id="genErr" style="color:${L.danger}; font-size:12px; margin:8px 0 0;"></div>
+        <div style="display:flex; justify-content:space-between; align-items:center; gap:8px; margin-top:14px;">
+          <button id="genBack" class="btn btn-ghost" style="font-size:12px; padding:7px 14px;">Generate again</button>
+          <div style="display:flex; gap:8px;">
+            <button id="genDone" class="btn btn-ghost" style="font-size:12px; padding:7px 14px;">Done — don't email</button>
+            <button id="genNext" class="btn btn-primary" style="font-size:12px; padding:7px 16px;">Next: the email</button>
+          </div>
+        </div>`;
+      $('genBack').onclick = () => { genState.step = 1; render(); };
+      $('genDone').onclick = () => { close(); renderLedgerTab('sales'); };
+      $('genNext').onclick = doDraft;
+    }
+
+    // ── STEP 3: THE EMAIL, EXACTLY AS IT WILL BE SENT ───────────────────
+    if (genState.step === 3) {
+      const d = genState.draft;
+      if (!d.ok) {
+        card.innerHTML = head('Nothing sent', label) + `
+          ${warnBlock([d.message], 'bad')}
+          <div style="font-size:12px; color:${L.inkFaint};">The documents are generated and filed — only the email stopped. Fix the above and press Generate again, or send it from Jarvis once the contact exists.</div>
+          <div style="display:flex; justify-content:flex-end; gap:8px; margin-top:14px;">
+            <button id="genDone2" class="btn btn-primary" style="font-size:12px; padding:7px 16px;">Close</button>
+          </div>`;
+        $('genDone2').onclick = () => { close(); renderLedgerTab('sales'); };
+        return;
+      }
+      const g = genState.gen || {};
+      const line = (k, v) => `<div style="display:flex; gap:8px; padding:4px 0;">
+          <span style="width:76px; font-size:10px; text-transform:uppercase; letter-spacing:.1em; color:${L.inkMuted};">${k}</span>
+          <span style="flex:1; font-size:12px; color:${L.ink}; word-break:break-word;">${esc(v)}</span></div>`;
+      card.innerHTML = head('Send this?', label) + `
+        ${warnBlock(g.weight_message ? [g.weight_message] : [], 'bad')}
+        ${warnBlock(d.warnings || [], 'warn')}
+        <div style="background:${L.paper}; border:1px solid ${L.line}; border-radius:var(--radius-sm); padding:10px 12px;">
+          ${line('To', `${d.name} <${d.to}>`)}
+          ${(d.contact_cc && d.contact_cc.length) ? line('Cc', [].concat(d.contact_cc).join(', ')) : ''}
+          ${line('Subject', d.subject)}
+          ${line('Attached', (d.attachments || []).join(', ') || 'nothing')}
+          <div style="border-top:1px solid ${L.lineSoft}; margin-top:8px; padding-top:8px;">
+            <pre style="margin:0; font-family:inherit; font-size:12px; color:${L.ink}; white-space:pre-wrap; word-break:break-word;">${esc(d.body)}</pre>
+          </div>
+        </div>
+        ${(d.photos || []).length ? `<div style="font-size:11px; color:${L.inkFaint}; margin-top:8px;">${d.photos.length} loading photo${d.photos.length === 1 ? '' : 's'} go as links in the message, not as attachments.</div>` : `<div style="font-size:11px; color:${L.warn}; margin-top:8px;">No loading photos on the matching bill — paste the links onto the bill's Photos field and generate again if you want them included.</div>`}
+        <div id="genErr" style="color:${L.danger}; font-size:12px; margin:8px 0 0;"></div>
+        <div style="display:flex; justify-content:space-between; gap:8px; margin-top:14px;">
+          <button id="genBack3" class="btn btn-ghost" style="font-size:12px; padding:7px 14px;">Back to the invoice</button>
+          <div style="display:flex; gap:8px;">
+            <button id="genDone3" class="btn btn-ghost" style="font-size:12px; padding:7px 14px;">Don't send</button>
+            <button id="genSend" class="btn btn-primary" style="font-size:12px; padding:7px 16px;">Send to ${esc(d.name)}</button>
+          </div>
+        </div>`;
+      $('genBack3').onclick = () => { genState.step = 2; render(); };
+      $('genDone3').onclick = () => { close(); renderLedgerTab('sales'); };
+      $('genSend').onclick = doSend;
+    }
+
+    // ── STEP 4: IT WENT ─────────────────────────────────────────────────
+    if (genState.step === 4) {
+      const s = genState.sent;
+      card.innerHTML = head('Sent', label) + `
+        <div style="background:${L.paper}; border:1px solid ${L.line}; border-radius:var(--radius-sm); padding:12px;">
+          <div style="font-size:13px; color:${L.ok};">Emailed to ${esc(s.to)}</div>
+          <div style="font-size:12px; color:${L.inkFaint}; margin-top:6px;">${esc(s.subject)}</div>
+          <div style="font-size:11px; color:${L.inkFaint}; margin-top:4px;">${(s.attached || []).map(esc).join(' · ')}</div>
+        </div>
+        <div style="display:flex; justify-content:flex-end; margin-top:14px;">
+          <button id="genDone4" class="btn btn-primary" style="font-size:12px; padding:7px 16px;">Close</button>
+        </div>`;
+      $('genDone4').onclick = () => { close(); renderLedgerTab('sales'); };
+    }
+
+    const x = $('genClose'); if (x) x.onclick = close;
+  }
+
+  // ── The three calls ───────────────────────────────────────────────────
+  // Every one of them disables its own button first. A double-press on Send
+  // is two emails to a customer, and "I only clicked it once" is not a thing
+  // anyone can prove afterwards.
+  function busy(btnId, on, label) {
+    genState.busy = on;
+    const b = $(btnId);
+    if (b) { b.disabled = on; if (on) { b.dataset.was = b.textContent; b.textContent = label; }
+             else if (b.dataset.was) b.textContent = b.dataset.was; }
+  }
+  const fail = (e) => {
+    const el = $('genErr');
+    if (el) el.textContent = e && e.message ? e.message : 'That did not work';
+  };
+
+  async function doGenerate() {
+    busy('genGo', true, 'Generating…');
+    try {
+      const body = { separate: genState.mode === 'separate', invoice_only: genState.mode === 'invoice_only' };
+      genState.gen = await api(`/api/sales/${encodeURIComponent(genState.row.id)}/invoice/generate`,
+                               { method: 'POST', body: JSON.stringify(body) });
+      genState.step = 2;
+      render();
+    } catch (e) {
+      busy('genGo', false);
+      // 422 comes back with the list of what the sale is still missing,
+      // which is the answer to "why won't it" rather than a shrug.
+      if (e.code === 'SALE_INCOMPLETE' && Array.isArray(e.missing)) {
+        fail({ message: `This sale still needs: ${e.missing.join(', ')}. Edit the row, then generate.` });
+        return;
+      }
+      fail(e);
+    }
+  }
+
+  async function doDraft() {
+    busy('genNext', true, 'Reading…');
+    try {
+      genState.draft = await api(`/api/sales/${encodeURIComponent(genState.row.id)}/invoice/draft-mail`);
+      genState.step = 3;
+      render();
+    } catch (e) { busy('genNext', false); fail(e); }
+  }
+
+  async function doSend() {
+    busy('genSend', true, 'Sending…');
+    try {
+      genState.sent = await api(`/api/sales/${encodeURIComponent(genState.row.id)}/invoice/send`,
+                                { method: 'POST', body: JSON.stringify({ confirm: true }) });
+      genState.step = 4;
+      render();
+    } catch (e) {
+      busy('genSend', false);
+      // ── THE WEIGHT QUESTION, ASKED HERE AND ONLY HERE ─────────────
+      // Her call on 2026-09-19: "weights_ok it should generate and then ask
+      // for my conf to mail". The server refuses the SEND, not the generate,
+      // and this is where she answers it — with the rows in full, above the
+      // question, because a confirm that only says "the weights look wrong"
+      // is one she has to dismiss in order to go and look.
+      if (e.code === 'WEIGHT_MISMATCH') {
+        const lines = (e.problems || []).map((p) =>
+          `  Row ${p.row}${p.item ? ' (' + p.item + ')' : ''}: ${p.why}`).join('\n');
+        if (!confirm(`${e.message}\n\n${lines}\n\nSend it anyway?`)) return;
+        try {
+          busy('genSend', true, 'Sending…');
+          genState.sent = await api(`/api/sales/${encodeURIComponent(genState.row.id)}/invoice/send`,
+                                    { method: 'POST', body: JSON.stringify({ confirm: true, weights_ok: true }) });
+          genState.step = 4;
+          render();
+        } catch (e2) { busy('genSend', false); fail(e2); }
+        return;
+      }
+      fail(e);
+    }
+  }
+
+  render();
 }
 
 // ── EDGE METALS HAULAGE ──────────────────────────────────────────────────

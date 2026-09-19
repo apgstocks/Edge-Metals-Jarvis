@@ -3828,69 +3828,33 @@ async function resolveDomainLearnName(chatId, nameText) {
 // It reuses the await_email_confirm pending rather than adding a new type, so
 // "yes"/"no", the queueing behaviour when another pending is open, and the
 // scheduled-send path all work here for free and cannot drift apart.
+// ── THE RECIPIENT AND THE WORDS MOVED OUT, 2026-09-19 ───────────────────────
+// Everything from "which container" down to the body now lives in
+// helpers/shipmentMail.js, unchanged, because Apsara asked for Generate on a
+// Sale row to show her the same draft on screen before it goes. Two copies of
+// "work out the customer and write the message" would drift, and the day they
+// drift is the day the email she READ is not the email that was sent.
+//
+// This function keeps everything that is about WhatsApp — the sending, the
+// pending, the yes/no — and nothing that is about the message. The messages
+// below are the helper's, verbatim, so this path says exactly what it said
+// yesterday. No photos are passed: that is the web flow's shape, and a flag
+// that must be set to keep an existing message unchanged would eventually not
+// be set.
 async function sendShipmentDocsForConfirm(chatId, containerNo, rawText) {
-    const shipmentDocs = require('../helpers/shipmentDocs');
-    const container = String(containerNo || '').trim();
-    if (!container) {
-        await _send(chatId, 'Which container? Say it like "send the documents for HMMU7060866".');
-        return { action_taken: 'shipment_docs_no_container' };
+    const shipmentMail = require('../helpers/shipmentMail');
+    const draft = shipmentMail.draftFor(containerNo);
+    if (!draft.ok) {
+        await _send(chatId, draft.message);
+        return { action_taken: `shipment_docs_${draft.reason}` };
     }
-
-    const found = shipmentDocs.findForContainer(container);
-    if (!found) {
-        // Deliberately does NOT offer to generate one. She asked to send what
-        // she made and checked; building a document at send time would email
-        // a buyer something she has never seen.
-        await _send(chatId, `No invoice or packing list on file for ${container.toUpperCase()}. Generate it in Documents first, then tell me to send it.`);
-        return { action_taken: 'shipment_docs_none' };
-    }
-    if (!found.invoice) {
-        await _send(chatId, `There's a packing list for ${found.container} but no invoice. I haven't sent anything — generate the invoice in Documents first.`);
-        return { action_taken: 'shipment_docs_incomplete' };
-    }
-
-    // ── WHO IT GOES TO ──────────────────────────────────────────────────────
-    // She names a container; a container does not carry a customer. The
-    // consignee comes off the invoice's own version history, so the name used
-    // here is the one printed on the document being sent.
-    if (!found.consignee) {
-        await _send(chatId, `I have the documents for ${found.container} but no customer recorded against them, so I can't work out who to send to. Tell me the name — "send ${found.container} to Eccomelt" — and I'll use that.`);
-        return { action_taken: 'shipment_docs_no_customer' };
-    }
-
-    const { resolveContact } = require('../helpers/emailContacts');
-    const resolved = resolveContact(found.consignee);
-    if (!resolved) {
-        await _send(chatId, `${found.consignee} isn't in Email Contacts, so I don't have an address for them. Add them there and say "send the documents for ${found.container}" again.`);
-        return { action_taken: 'shipment_docs_no_contact' };
-    }
-    if (resolved.type === 'ambiguous') {
-        const names = (resolved.matches || []).map((c) => `${c.name} <${c.email}>`).join('\n  ');
-        await _send(chatId, `More than one contact for ${found.consignee}:\n  ${names}\n\nSay which — "send the documents for ${found.container} to <name>".`);
-        return { action_taken: 'shipment_docs_ambiguous_contact' };
-    }
-    const contact = resolved.contact;
-    if (!contact || !contact.email) {
-        await _send(chatId, `I found ${found.consignee} in Email Contacts but there's no address saved against them.`);
-        return { action_taken: 'shipment_docs_no_address' };
-    }
+    const { found, contact, subject, body } = draft;
 
     // Their standing Cc, same as every other email to this contact gets —
     // the people who are always copied on that customer's paperwork.
-    const cc = mergeCc(null, contact.cc);
+    const cc = mergeCc(null, draft.contact_cc);
 
-    const invLabel = found.inv_no ? `Invoice ${found.inv_no}` : 'Invoice';
-    const subject = `${invLabel} — ${found.container}`;
-    const docLines = [found.invoice.filename, found.packing && found.packing.filename].filter(Boolean);
-
-    const body = [
-        `Dear ${contact.name || found.consignee},`,
-        '',
-        `Please find attached the ${found.packing ? 'invoice and packing list' : 'invoice'} for container ${found.container}${found.inv_no ? ` (${invLabel})` : ''}.`,
-        '',
-        'Kind regards,',
-        cfg.COMPANY_NAME || 'Edge Trading',
-    ].join('\n');
+    const docLines = draft.attachments;
 
     const staged = await setPending(chatId, {
         type: 'await_email_confirm',
@@ -3904,27 +3868,10 @@ async function sendShipmentDocsForConfirm(chatId, containerNo, rawText) {
     });
 
     // Anything odd about the document set is said BEFORE the prompt, not
-    // after, so it is above her thumb when she types "yes".
-    const warnings = [];
-    if (found.missing.includes('packing list')) {
-        warnings.push(`No packing list on file for ${found.container} — only the invoice will go.`);
-    }
-    if (found.hasPackingInside) {
-        warnings.push('That invoice has its packing list bound into the same file.');
-    }
-    // The pair came from two different days. shipmentDocs will only do this
-    // when the invoice's own folder had no packing list at all, and it is the
-    // one case where documents filed on different dates are put in the same
-    // email — so it is named here, where she can still say no.
-    if (found.packingFromDate) {
-        warnings.push(`The packing list is filed under ${found.packingFromDate}, not with the invoice (${found.date}) — check it is the right one.`);
-    }
-    const today = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' });
-    if (found.date !== today) {
-        // She may be looking at a document she generated minutes ago while
-        // this picks up an older one — worth one line rather than a surprise.
-        warnings.push(`These were generated on ${found.date}.`);
-    }
+    // after, so it is above her thumb when she types "yes". Built in
+    // helpers/shipmentMail.js now, in the same order and the same words, so
+    // the web screen shows her the identical list.
+    const warnings = draft.warnings;
 
     if (staged.queued) {
         await _send(chatId, `Ready to email ${found.container}'s documents to ${contact.name || found.consignee} <${contact.email}> — but you have a pending ${describePending(staged.blockedBy)} to answer first. I'll ask once that's resolved.`);

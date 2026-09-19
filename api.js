@@ -6408,49 +6408,241 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
                 return res.send(one);
             }
 
-            const safeInv = documentsSaved.safeName(body.inv_no || body.container_no || 'INVOICE').replace(/_+/g, '_');
+            return res.json(await saveGeneratedInvoice(out, body, { separate, invoiceOnly }));
+        } catch (e) {
+            console.error('[invoice] generate failed:', e);
+            res.status(500).json({ error: e.message });
+        }
+    });
 
-            if (separate) {
-                // Same names the old tool produced, so her filing does not
-                // have to learn a new convention.
-                const invName = `${safeInv}_INVOICE.pdf`;
-                const pkgName = `${safeInv}_PACKING_LIST.pdf`;
-                const invPath = documentsSaved.saveInvoiceCopy(out.invoice, invName, body.container_no || 'UNKNOWN');
-                const pkgPath = documentsSaved.saveInvoiceCopy(out.packing, pkgName, body.container_no || 'UNKNOWN');
-                try {
-                    await invoiceVersions.saveInvoiceVersion(body.container_no, body);
-                } catch (verErr) {
-                    console.error('[invoice] saving version history failed (non-fatal):', verErr.message);
-                }
-                return res.json({
-                    ok: true,
-                    separate: true,
-                    saved_filename: path.basename(invPath),
-                    saved_filenames: [path.basename(invPath), path.basename(pkgPath)],
-                });
-            }
+    // ── FILING A GENERATED INVOICE ────────────────────────────────────────
+    // Extracted from the route body on 2026-09-19 so the Sale row's Generate
+    // can file its documents the same way. It was inline, and copying forty
+    // lines of "name it, save it, record the version" into a second route is
+    // how two folders full of differently-named invoices happen.
+    //
+    // Everything below is that code unchanged — the names, the order, the
+    // non-fatal version write. The only new thing is that it returns the
+    // payload instead of sending it.
+    async function saveGeneratedInvoice(out, body, { separate, invoiceOnly }) {
+        const safeInv = documentsSaved.safeName(body.inv_no || body.container_no || 'INVOICE').replace(/_+/g, '_');
 
-            const pdf = out;
-            // Named _INVOICE so a file on her desk says which of the two it
-            // is. The same name separate mode gives its invoice half, because
-            // it is the same document — one filing convention, not two.
-            const filename = invoiceOnly ? `${safeInv}_INVOICE.pdf` : `${safeInv}.pdf`;
-            const savedPath = documentsSaved.saveInvoiceCopy(pdf, filename, body.container_no || 'UNKNOWN');
-
-            // Save the form-state snapshot that produced this real PDF, so a
-            // later visit to the same container can offer "Load previous
-            // edits" instead of starting from raw sheet data again. Deliberately
-            // does not block the response on failure — losing this convenience
-            // history is not worth failing a real invoice generation over.
+        if (separate) {
+            // Same names the old tool produced, so her filing does not
+            // have to learn a new convention.
+            const invName = `${safeInv}_INVOICE.pdf`;
+            const pkgName = `${safeInv}_PACKING_LIST.pdf`;
+            const invPath = documentsSaved.saveInvoiceCopy(out.invoice, invName, body.container_no || 'UNKNOWN');
+            const pkgPath = documentsSaved.saveInvoiceCopy(out.packing, pkgName, body.container_no || 'UNKNOWN');
             try {
                 await invoiceVersions.saveInvoiceVersion(body.container_no, body);
             } catch (verErr) {
                 console.error('[invoice] saving version history failed (non-fatal):', verErr.message);
             }
+            return {
+                ok: true,
+                separate: true,
+                saved_filename: path.basename(invPath),
+                saved_filenames: [path.basename(invPath), path.basename(pkgPath)],
+            };
+        }
 
-            res.json({ ok: true, saved_filename: path.basename(savedPath) });
+        const pdf = out;
+        // Named _INVOICE so a file on her desk says which of the two it
+        // is. The same name separate mode gives its invoice half, because
+        // it is the same document — one filing convention, not two.
+        const filename = invoiceOnly ? `${safeInv}_INVOICE.pdf` : `${safeInv}.pdf`;
+        const savedPath = documentsSaved.saveInvoiceCopy(pdf, filename, body.container_no || 'UNKNOWN');
+
+        // Save the form-state snapshot that produced this real PDF, so a
+        // later visit to the same container can offer "Load previous
+        // edits" instead of starting from raw sheet data again. Deliberately
+        // does not block the response on failure — losing this convenience
+        // history is not worth failing a real invoice generation over.
+        try {
+            await invoiceVersions.saveInvoiceVersion(body.container_no, body);
+        } catch (verErr) {
+            console.error('[invoice] saving version history failed (non-fatal):', verErr.message);
+        }
+
+        return { ok: true, saved_filename: path.basename(savedPath) };
+    }
+
+    // ══ GENERATE FROM A SALE ROW ══════════════════════════════════════════
+    //
+    // Apsara, 2026-09-19: "if all important details of bills is entered,if i
+    // say create invoice(it needs to ask-separate invoice and packing list/
+    // normal) -upon my confirmation-it needs to create automatically (get
+    // verfiication from me by showing that on screen)andupon confirm- mail it
+    // to the customer with loading photos", and then: "Instead of create
+    // invoice->Have it as generate".
+    //
+    // Three routes, because the flow has three stops and she named the order
+    // herself: "first need to show the generated invoice then draft mail".
+    //
+    //   generate    build it from the sale, file it, hand back what it found
+    //   draft-mail  who it would go to and what it would say
+    //   send        the only irreversible one, and the only one that refuses
+    //
+    // ── WHY THE WEIGHT GUARD MOVED TO THE LAST STOP ───────────────────────
+    // /api/invoice/generate refuses a 409 WEIGHT_MISMATCH and is NOT changed
+    // by any of this — the Documents screen behaves today exactly as it did
+    // yesterday. Here the guard sits on send instead, and that was her call:
+    // "weights_ok it should generate and then ask for my conf to mail".
+    //
+    // It is also the better place for it. Generating is reversible — a PDF in
+    // a folder that nobody has seen harms nobody — and emailing a buyer is
+    // not. Guarding the step that cannot be taken back, with the figures on
+    // screen while she answers, is a stronger check than guarding the step
+    // that can.
+    //
+    // ── AND THE ROUTE THAT CANNOT MAKE THE MISTAKE ANYWAY ─────────────────
+    // 260918_AP_26ARIS02 said 15,642.000 MT because pounds were typed into a
+    // column headed MT. Nothing is typed here: helpers/saleInvoice.js
+    // converts the sale's pounds into the tonnes that column is labelled
+    // with, and its per-pound price into the US$/MT the next column is
+    // labelled with. The guard still runs, and on a correctly built invoice
+    // it finds nothing.
+    const requireSaleInvoice = requireAdmin;
+
+    app.post('/api/sales/:id/invoice/generate', requireSaleInvoice, async (req, res) => {
+        try {
+            const saleInvoice = require('./helpers/saleInvoice');
+            const salesHelper = require('./helpers/sales');
+            const sale = salesHelper.getSale(req.params.id);
+            if (!sale) return res.status(404).json({ error: 'no such sale' });
+
+            const body0 = req.body || {};
+            // Same exclusion the Documents screen enforces and for the same
+            // reason: "invoice only" and "separate invoice and packing list"
+            // contradict each other, and the safe reading of a contradiction
+            // is the narrower one — fewer documents than expected, never a
+            // packing list she asked not to send.
+            const invoiceOnly = body0.invoice_only === true || body0.invoice_only === 'true';
+            const separate = !invoiceOnly && (body0.separate === true || body0.separate === 'true');
+
+            const built = saleInvoice.buildFrom(sale);
+            if (!built.readiness.ok) {
+                // 422, not 500: the sale is fine, it is just not finished.
+                return res.status(422).json({
+                    error: `This sale still needs: ${built.readiness.missing.join(', ')}.`,
+                    code: 'SALE_INCOMPLETE',
+                    missing: built.readiness.missing,
+                });
+            }
+
+            const { generateInvoiceClassicPdf } = require('./helpers/invoicePdf');
+            const out = await generateInvoiceClassicPdf(built.body, { separate, invoiceOnly });
+            const saved = await saveGeneratedInvoice(out, built.body, { separate, invoiceOnly });
+
+            // Reported, not refused. The screen puts these above the Send
+            // button on the next stop, where they are still answerable.
+            const invoiceWeights = require('./helpers/invoiceWeights');
+            const problems = invoiceWeights.weightProblems(built.body.line_items);
+
+            res.json({
+                ...saved,
+                container_no: built.body.container_no,
+                inv_no: built.body.inv_no,
+                consignee: built.body.consignee,
+                line_items: built.body.line_items,
+                photos: built.photos,
+                warnings: built.warnings,
+                weight_problems: problems,
+                weight_message: problems.length ? invoiceWeights.refusalMessage(problems) : null,
+            });
         } catch (e) {
-            console.error('[invoice] generate failed:', e);
+            console.error('[sale-invoice] generate failed:', e && e.stack);
+            res.status(500).json({ error: e.message });
+        }
+    });
+
+    // Stop two. Read-only — it looks at what is on disk and at the address
+    // book, and sends nothing. The photos come from the matching BILL, which
+    // is where she pastes them.
+    app.get('/api/sales/:id/invoice/draft-mail', requireSaleInvoice, (req, res) => {
+        try {
+            const saleInvoice = require('./helpers/saleInvoice');
+            const shipmentMail = require('./helpers/shipmentMail');
+            const salesHelper = require('./helpers/sales');
+            const sale = salesHelper.getSale(req.params.id);
+            if (!sale) return res.status(404).json({ error: 'no such sale' });
+
+            const photos = saleInvoice.photosFor(saleInvoice.billFor(sale));
+            const draft = shipmentMail.draftFor(sale.container_no, {
+                photos,
+                // The sale KNOWS its customer, so a container whose invoice
+                // history has not recorded a consignee still resolves. The
+                // invoice's own record still wins when it has one — it is the
+                // name printed on the document being sent.
+                consignee: null,
+            });
+            if (!draft.ok && draft.reason === 'no_customer' && String(sale.customer || '').trim()) {
+                const retry = shipmentMail.draftFor(sale.container_no, { photos, consignee: sale.customer });
+                if (retry.ok || retry.reason !== 'no_customer') return res.json(retry);
+            }
+            res.json(draft);
+        } catch (e) {
+            console.error('[sale-invoice] draft-mail failed:', e && e.stack);
+            res.status(500).json({ error: e.message });
+        }
+    });
+
+    // Stop three, and the only one that cannot be taken back.
+    app.post('/api/sales/:id/invoice/send', requireSaleInvoice, async (req, res) => {
+        try {
+            const saleInvoice = require('./helpers/saleInvoice');
+            const shipmentMail = require('./helpers/shipmentMail');
+            const shipmentDocs = require('./helpers/shipmentDocs');
+            const salesHelper = require('./helpers/sales');
+            const sale = salesHelper.getSale(req.params.id);
+            if (!sale) return res.status(404).json({ error: 'no such sale' });
+
+            const body0 = req.body || {};
+            const photos = saleInvoice.photosFor(saleInvoice.billFor(sale));
+
+            // ── THE WEIGHT ANSWER IS REQUIRED HERE ────────────────────────
+            // Built from the SALE again rather than trusted from the client:
+            // a figure the browser sends back is a figure the browser could
+            // have changed, and this is the document that goes to customs.
+            const built = saleInvoice.buildFrom(sale);
+            const invoiceWeights = require('./helpers/invoiceWeights');
+            const problems = invoiceWeights.weightProblems(built.body.line_items);
+            if (problems.length && body0.weights_ok !== true && body0.weights_ok !== 'true') {
+                return res.status(409).json({
+                    error: invoiceWeights.refusalMessage(problems),
+                    code: 'WEIGHT_MISMATCH',
+                    problems,
+                });
+            }
+
+            let draft = shipmentMail.draftFor(sale.container_no, { photos });
+            if (!draft.ok && draft.reason === 'no_customer' && String(sale.customer || '').trim()) {
+                draft = shipmentMail.draftFor(sale.container_no, { photos, consignee: sale.customer });
+            }
+            if (!draft.ok) return res.status(409).json({ error: draft.message, code: draft.reason.toUpperCase() });
+
+            // ── SENDING IS NOT A THING A GET CAN DO BY ACCIDENT ───────────
+            // confirm must be explicitly true. The screen sets it when she
+            // presses Send on the draft she has just read; nothing else does.
+            if (body0.confirm !== true && body0.confirm !== 'true') {
+                return res.status(400).json({ error: 'confirm is required', code: 'NOT_CONFIRMED' });
+            }
+
+            const { sendEmail } = require('./helpers/gmail');
+            const attachments = shipmentDocs.attachmentsFor(draft.found);
+            const sent = await sendEmail({
+                to: draft.to,
+                cc: draft.contact_cc || null,
+                bcc: null,
+                subject: draft.subject,
+                body: draft.body,
+                attachments,
+            });
+            res.json({ ok: true, to: draft.to, subject: draft.subject,
+                       attached: attachments.map((a) => a.filename), id: sent && sent.id });
+        } catch (e) {
+            console.error('[sale-invoice] send failed:', e && e.stack);
             res.status(500).json({ error: e.message });
         }
     });

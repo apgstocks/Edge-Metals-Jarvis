@@ -1,0 +1,797 @@
+// ── tests/sale-invoice.js ───────────────────────────────────────────────────
+// Apsara, 2026-09-19:
+//
+//   "if all important details of bills is entered,if i say create invoice(it
+//    needs to ask-separate invoice and packing list/normal) -upon my
+//    confirmation-it needs to create automatically (get verfiication from me
+//    by showing that on screen)andupon confirm- mail it to the customer with
+//    loading photos"
+//
+//   "weights_ok it should generate and then ask for my conf to mail showing
+//    draft mail on screen.first need to show the generated invoice then draft
+//    mail"
+//
+//   "Instead of create invoice->Have it as generate"
+//
+// ── THE ONE THAT MATTERS ────────────────────────────────────────────────────
+// Section A. 260918_AP_26ARIS02 reached a buyer and a broker saying
+//
+//     Quantity 15,642.000 MT      where her packing list says 7.095
+//
+// because the POUNDS were typed into a column headed "Quantity MT" and the
+// per-pound rate into one headed "Rate US$/MT". The dollars came out right,
+// so nothing on the document contradicted itself.
+//
+// Every other section here is plumbing. This one is the reason the feature is
+// worth building rather than clicking through Documents: the sale already
+// knows the weight is in pounds and the price is per pound, so the conversion
+// is arithmetic and arithmetic does not get tired at eleven at night.
+//
+// ── AND SECTION G, WHICH IS THE CLAUDE.md RULE ──────────────────────────────
+// This added a requirement to shared code twice over — helpers/shipmentMail.js
+// was lifted out of workflow/actions.js, and saveGeneratedInvoice out of the
+// /api/invoice/generate route. Both have an existing caller that nobody was
+// looking at. G asserts those callers still behave EXACTLY as before, because
+// that is the mistake this repo has recorded three times.
+
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
+const http = require('http');
+const Module = require('module');
+
+const TMP = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvis-saleinv-'));
+process.env.DATA_DIR = TMP;
+process.env.JARVIS_TEST = '1';
+process.env.ADMIN_PASSWORD = 'admin-pw-ssssssssssss';
+
+let pass = 0, fail = 0; const failures = [];
+const ck = (n, c, extra) => {
+    if (c) { pass++; console.log('  PASS  ' + n); }
+    else { fail++; failures.push(n); console.log('  FAIL  ' + n); if (extra) console.log('        ' + extra); }
+};
+const section = (t) => console.log('\n=== ' + t + ' ===');
+
+const R = (m) => path.join(__dirname, '..', m);
+const cfg = require(R('config'));
+if (!String(cfg.DATA_DIR).startsWith(os.tmpdir())) {
+    console.error('REFUSING TO RUN: DATA_DIR is not a temp directory — this test writes.');
+    process.exit(1);
+}
+
+// ── Stub only what would leave the building ─────────────────────────────────
+// Same shape as tests/shipment-docs-send.js. helpers/gmail is the one thing
+// that must not be real, because the whole point of this feature is that it
+// ends in an email to a customer.
+let SENT = [];
+const orig = Module._load;
+Module._load = function (r) {
+    if (r.endsWith('helpers/gmail') || r === '../helpers/gmail' || r === './helpers/gmail') return {
+        getGmailRead: () => ({}), getGmailSenderRead: () => ({}), getGmailWrite: () => ({}),
+        getMyEmailAddress: async () => 'apsara@edgemetals.com',
+        listMessages: async () => [], getMessage: async () => ({}), getEmailContent: () => ({ body: '' }),
+        parseAddressList: () => [], parseEmailDate: (d) => d,
+        sendEmail: async (p) => { SENT.push(p); return { id: 'msg_1', threadId: 'th_1' }; },
+    };
+    if (r.endsWith('helpers/gemini')) return { callGeminiJSON: async () => ({}) };
+    if (r.endsWith('helpers/emailThreads')) return { trackSentEmail: async () => {} };
+    if (r.includes('whatsapp-web')) return {};
+    // ── AND CHROME, WHICH IS THE ONE STEP THAT CANNOT RUN HERE ──────────
+    // tests/pdf-one-page.js says the same thing for its own reason: the
+    // render is not exercisable in the test environment. So this fakes
+    // puppeteer and NOTHING ELSE about the chain.
+    //
+    // Which means everything this feature added is still real: the route,
+    // helpers/saleInvoice's arithmetic, invoicePdf building the HTML and
+    // choosing its modes, the separate/combined split, documentsSaved
+    // filing it under the right day and container, shipmentDocs finding it
+    // again, shipmentMail addressing it, and the send. The bytes inside the
+    // PDF are helpers/invoicePdf's business and are covered by
+    // tests/pdf-one-page.js and tests/packing-list.js.
+    //
+    // It records the HTML it was given, so section H can assert that the
+    // figures reached the document rather than only the JSON response — a
+    // route that returns the right numbers and renders the wrong ones is
+    // exactly the gap CLAUDE.md rule 3 is about.
+    if (r === 'puppeteer') return {
+        launch: async () => ({
+            newPage: async () => ({
+                setContent: async (html) => { RENDERED.push(String(html)); },
+                evaluate: async () => {},
+                pdf: async () => Buffer.from('%PDF-1.4 fake\n%%EOF'),
+                // pdfFit measures the rendered page before deciding a scale.
+                $eval: async () => 1000,
+                addStyleTag: async () => {},
+                emulateMediaType: async () => {},
+            }),
+            close: async () => {},
+        }),
+    };
+    return orig.apply(this, arguments);
+};
+let RENDERED = [];
+
+const bills = require(R('helpers/bills'));
+const sales = require(R('helpers/sales'));
+const saleInvoice = require(R('helpers/saleInvoice'));
+const shipmentMail = require(R('helpers/shipmentMail'));
+
+const TODAY = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' });
+function put(container, filename, body) {
+    const dir = path.join(cfg.DOCUMENTS_SAVED_DIR, 'invoice', TODAY, container);
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, filename), body || `%PDF-1.4 ${filename}\n%%EOF`);
+}
+
+(async () => {
+
+// ── THE ARIS CONTAINER, AS IT REALLY WAS ────────────────────────────────────
+// 15,642 lb of scrap auto parts at $0.548 a pound. Both figures exactly as
+// they sat on the row; the invoice that went out is what happened to them.
+await bills.addBill({
+    date: '09/10/2026', supplier: 'Gomez', booking_no: 'DALA89635900', container_no: 'MSDU2726332',
+    // gross 29,250 - 14,350 of tares = 14,900 lb net = 6.758 MT, against an
+    // invoiced 15,642 lb = 7.095 MT. About 5% apart, which is the realistic
+    // shape of a reweigh at destination and is what section D is about.
+    seal_no: 'SL9981', gross: 29250, truck: 8700, container: 4400, chassis: 1250, boxes: 0,
+    supplier_price: 0.32, price_unit: 'lb',
+    photos: 'https://drive.example/load-1.jpg\nhttps://drive.example/load-2.jpg',
+});
+const ARIS = await sales.addSale({
+    booking_no: 'DALA89635900', container_no: 'MSDU2726332', customer: 'Aris Metals',
+    date: '09/18/2026', invoice_no: '26ARIS02', item: 'scrap auto parts',
+    weight: 15642, invoice_price: 0.548, terms: 'TT',
+});
+
+// ── A. THE UNITS ────────────────────────────────────────────────────────────
+section('A. pounds do not walk into a column headed MT');
+{
+    const built = saleInvoice.buildFrom(ARIS);
+    const li = built.body.line_items[0];
+
+    // 15,642 lb / 2204.62262 = 7.0951…
+    ck('Quantity is the TONNAGE, not the poundage',
+       Math.abs(li.weight - 7.095) < 0.002,
+       `${li.weight} — the Aris invoice said 15642.000 here`);
+    ck('  and it is emphatically not 15,642', li.weight < 100, String(li.weight));
+
+    // $0.548/lb x 2204.62262 = $1,208.13/MT
+    ck('Rate is US$ per MT, converted from her per-pound price',
+       Math.abs(li.rate - 1208.13) < 0.5,
+       `${li.rate} — the Aris invoice printed 0.548 under a column headed US$/MT`);
+
+    // ── AND THE MONEY IS UNCHANGED ──────────────────────────────────────
+    // The whole reason nobody caught it: the dollars were right. Converting
+    // both figures must leave the total exactly where the ledger has it, or
+    // this fix would trade a label error for a money error, which is worse.
+    const ledger = sales.compute(ARIS);
+    ck('the amount still matches the Sales ledger to the cent',
+       Math.abs(li.amount - ledger.amount) < 0.005,
+       `invoice ${li.amount} vs ledger ${ledger.amount}`);
+    console.log(`        15,642 lb @ $0.548/lb  ->  ${li.weight} MT @ $${li.rate}/MT  =  $${li.amount}`);
+
+    // ── AND THE GUARD FINDS NOTHING, BECAUSE THERE IS NOTHING ───────────
+    const invoiceWeights = require(R('helpers/invoiceWeights'));
+    ck('helpers/invoiceWeights has no complaint about it',
+       invoiceWeights.weightProblems(built.body.line_items).length === 0,
+       JSON.stringify(invoiceWeights.weightProblems(built.body.line_items)));
+
+    // The same guard, against the row as she actually typed it, must still
+    // fire — otherwise this check proves the guard is broken, not that the
+    // conversion works.
+    const asTyped = [{ ...li, weight: 15642, rate: 0.548 }];
+    ck('  while the row as it was really typed still trips it',
+       invoiceWeights.weightProblems(asTyped).length > 0,
+       'if this passes, the guard stopped working and A proves nothing');
+}
+
+// ── B. A PRICE ALREADY PER MT IS NOT MULTIPLIED TWICE ───────────────────────
+// The mirror-image bug, and the one a careless fix creates.
+section('B. a per-MT price is left alone');
+{
+    const perMt = await sales.addSale({
+        booking_no: 'DALA00000001', container_no: 'TCLU9988776', customer: 'Daekwang',
+        date: '09/18/2026', invoice_no: 'EM2001', item: 'shredded scrap',
+        weight: 22046.2262, invoice_price: 430,
+    });
+    const li = saleInvoice.buildFrom(perMt).body.line_items[0];
+    ck('$430/MT stays $430/MT', Math.abs(li.rate - 430) < 0.01, String(li.rate));
+    ck('  and 22,046 lb is 10 MT', Math.abs(li.weight - 10) < 0.002, String(li.weight));
+    ck('  so the invoice reads $4,300', Math.abs(li.amount - 4300) < 1, String(li.amount));
+
+    // An explicit price_unit overrides the magnitude rule, exactly as it does
+    // on the ledger — she can sell at $8/MT and say so.
+    const cheap = await sales.addSale({
+        booking_no: 'DALA00000002', container_no: 'TCLU1111111', customer: 'Daekwang',
+        date: '09/18/2026', invoice_no: 'EM2002', item: 'offcuts',
+        weight: 22046.2262, invoice_price: 8, price_unit: 'mt',
+    });
+    ck('an explicit price_unit of mt is honoured, not overruled by magnitude',
+       Math.abs(saleInvoice.buildFrom(cheap).body.line_items[0].rate - 8) < 0.01,
+       String(saleInvoice.buildFrom(cheap).body.line_items[0].rate));
+}
+
+// ── C. WHAT "ALL IMPORTANT DETAILS ENTERED" MEANS ───────────────────────────
+// Her words. Deliberately NOT bills.missingFor — that answers "is this
+// purchase finished", and a finished purchase is not the same thing as a
+// printable document.
+section('C. readiness');
+{
+    // A date and a customer is the least addSale will accept — it refuses
+    // "a sale needs a date" outright, which is its own business and not this
+    // file's to argue with.
+    const bare = await sales.addSale({ customer: 'Someone', date: '09/18/2026' });
+    const m = saleInvoice.readiness(bare).missing;
+    ck('a barely-started sale lists everything it needs',
+       m.includes('invoice number') && m.includes('container no') && m.includes('weight')
+       && m.includes('price') && m.includes('item description'),
+       m.join(', '));
+    ck('  and does not claim to be ready', saleInvoice.readiness(bare).ok === false);
+    ck('the Aris sale is ready', saleInvoice.readiness(ARIS).ok === true,
+       saleInvoice.readiness(ARIS).missing.join(', '));
+
+    // A flat agreed amount with no per-unit price is a real way she sells.
+    const flat = await sales.addSale({
+        booking_no: 'DALA00000003', container_no: 'TCLU2222222', customer: 'Daekwang',
+        date: '09/18/2026', invoice_no: 'EM2003', item: 'mixed',
+        weight: 22046.2262, invoice_amount: 5000,
+    });
+    ck('a flat invoice amount counts as priced', saleInvoice.readiness(flat).ok === true,
+       saleInvoice.readiness(flat).missing.join(', '));
+    ck('  and the line carries that amount, not a recomputed one',
+       Math.abs(saleInvoice.buildFrom(flat).body.line_items[0].amount - 5000) < 0.01,
+       String(saleInvoice.buildFrom(flat).body.line_items[0].amount));
+}
+
+// ── C2. ONLY WHAT SHE REBILLS GOES ON THE CUSTOMER'S INVOICE ───────────────
+// sales.compute splits charges by direction: 'in' is money she RECOVERS from
+// the customer, 'out' is Edge Metals' own cost. Putting an 'out' charge on
+// the customer's invoice bills them for her commission and her freight.
+//
+// Written because a mutation deleting the direction filter left every other
+// check in this file green — the totals still added up, they were just adding
+// up the wrong things, which is the exact shape of an error a customer finds
+// before she does.
+section('C2. charges, by direction');
+{
+    const withCharges = await sales.addSale({
+        booking_no: 'DALA00000009', container_no: 'TCLU9999999', customer: 'Daekwang',
+        date: '09/18/2026', invoice_no: 'EM5001', item: 'scrap',
+        weight: 22046.2262, invoice_price: 400,
+        charges: [
+            { what: 'Ocean freight', amount: 1800, direction: 'in',
+              why: 'CFR sale — recovered from the buyer on the invoice.' },
+            { what: 'Agent commission', amount: 250, direction: 'out',
+              why: 'Edge Metals pays this; it is not the buyer\'s to see.' },
+        ],
+    });
+    const body = saleInvoice.buildFrom(withCharges).body;
+    const labels = (body.notes || []).map((n) => n.label);
+    ck('what she recovers appears as a line', labels.includes('Ocean freight'), JSON.stringify(labels));
+    ck('  and what SHE pays does not', !labels.includes('Agent commission'),
+       'the buyer would be looking at her commission');
+    ck('  exactly one note line', (body.notes || []).length === 1, JSON.stringify(body.notes));
+    ck('  and the total adds only that one',
+       Math.abs(body.final_amount - (body.subtotal + 1800)) < 0.01,
+       `subtotal ${body.subtotal}, final ${body.final_amount}`);
+}
+
+// ── D. THE TWO LEDGERS DISAGREEING IS A WARNING, NEVER A SILENCE ────────────
+// The bill's weighbridge net and the sale's invoiced weight are allowed to
+// differ — she said so: the invoiced weight "can differ after reweighing at
+// destination". What is not allowed is the document going out with its two
+// halves quietly disagreeing, which nothing else catches: invoiceWeights
+// compares a row against its OWN gross and tares, so a 12% gap between the
+// two ledgers sits well inside its 2% test and nowhere near its 5x one.
+section('D. the bill and the sale, side by side');
+{
+    const built = saleInvoice.buildFrom(ARIS);
+    const billMt = bills.compute(saleInvoice.billFor(ARIS)).net_mt;
+    ck('the matching bill is found on booking + container', !!saleInvoice.billFor(ARIS));
+    ck('  and the two weights really do differ here', Math.abs(billMt - 7.095) > 0.05,
+       `bill ${billMt} MT vs invoice 7.095 MT`);
+    ck('so the gap is said out loud',
+       built.warnings.some((w) => /weighbridge net/.test(w)),
+       built.warnings.join(' | '));
+
+    // A sale whose weight agrees with the bill must NOT produce the warning —
+    // one she sees every time is one she stops reading.
+    await bills.addBill({ date: '09/10/2026', supplier: 'Gomez', booking_no: 'DALA55555555',
+        container_no: 'MSKU5555555', gross: 30000, truck: 8700, container: 4400, chassis: 1250, boxes: 0 });
+    const agrees = await sales.addSale({ booking_no: 'DALA55555555', container_no: 'MSKU5555555',
+        customer: 'Aris Metals', date: '09/18/2026', invoice_no: 'EM3001', item: 'scrap',
+        weight: 15650, invoice_price: 0.5 });
+    ck('  and stays quiet when they agree',
+       !saleInvoice.buildFrom(agrees).warnings.some((w) => /weighbridge net/.test(w)),
+       saleInvoice.buildFrom(agrees).warnings.join(' | '));
+
+    // No bill at all is a real situation — the purchase side may not be
+    // entered yet — and it does not stop an invoice.
+    const orphan = await sales.addSale({ booking_no: 'DALA99999999', container_no: 'ZZZU9999999',
+        customer: 'Aris Metals', date: '09/18/2026', invoice_no: 'EM4001', item: 'scrap',
+        weight: 15000, invoice_price: 0.5 });
+    const ob = saleInvoice.buildFrom(orphan);
+    ck('a sale with no matching bill still builds', ob.readiness.ok === true);
+    ck('  and says the packing weights and photos are blank',
+       ob.warnings.some((w) => /No matching bill/.test(w)), ob.warnings.join(' | '));
+    ck('  with an empty packing block rather than zeros',
+       ob.body.line_items[0].packing.gross_weight_lbs === ''
+       && ob.body.line_items[0].packing.truck_lbs === '',
+       JSON.stringify(ob.body.line_items[0].packing));
+}
+
+// ── E. THE PHOTOS COME OFF THE BILL ─────────────────────────────────────────
+section('E. loading photos');
+{
+    ck('the bill\'s photo links are picked up',
+       saleInvoice.buildFrom(ARIS).photos.length === 2,
+       JSON.stringify(saleInvoice.buildFrom(ARIS).photos));
+
+    // bills.cleanPhotos already drops anything that is not http(s). Asserted
+    // here because these strings go into an email body.
+    await bills.addBill({ date: '09/10/2026', supplier: 'X', booking_no: 'DALA77777777',
+        container_no: 'MSKU7777777', gross: 30000, truck: 8700, container: 4400, chassis: 1250,
+        photos: 'https://ok.example/a.jpg javascript:alert(1) file:///etc/passwd' });
+    const b = bills.listWithTotals().find((x) => x.container_no === 'MSKU7777777');
+    ck('  and only http(s) links survive',
+       JSON.stringify(saleInvoice.photosFor(b)) === '["https://ok.example/a.jpg"]',
+       JSON.stringify(saleInvoice.photosFor(b)));
+}
+
+// ── F. THE DRAFT EMAIL ──────────────────────────────────────────────────────
+section('F. who it goes to and what it says');
+{
+    const { mutateJson } = require(R('helpers/json'));
+    await mutateJson(cfg.EMAIL_CONTACTS_FILE, [], (all) => {
+        all.push({ id: 'C1', name: 'Aris Metals', email: 'buyer@aris.example', cc: ['broker@aris.example'] });
+        return all;
+    });
+    put('MSDU2726332', '26ARIS02_INVOICE.pdf');
+    put('MSDU2726332', '26ARIS02_PACKING_LIST.pdf');
+    // The consignee is read off the invoice's own version history, not off
+    // the sale — so the name used is the one PRINTED on the document being
+    // sent. Generate writes that record; this section skips generate, so it
+    // writes it by hand to stand where generate would have.
+    await require(R('helpers/invoiceVersions'))
+        .saveInvoiceVersion('MSDU2726332', { consignee: 'Aris Metals', inv_no: '26ARIS02' });
+
+    const d = shipmentMail.draftFor('MSDU2726332', { photos: ['https://drive.example/load-1.jpg'] });
+    ck('a draft is produced', d.ok === true, d.message);
+    ck('  addressed to the contact on file', d.to === 'buyer@aris.example', String(d.to));
+    ck('  with their standing Cc', JSON.stringify(d.contact_cc) === '["broker@aris.example"]',
+       JSON.stringify(d.contact_cc));
+    ck('  both documents attached', d.attachments.length === 2, JSON.stringify(d.attachments));
+    ck('  and the photo link is IN THE BODY, not attached',
+       d.body.includes('https://drive.example/load-1.jpg')
+       && !d.attachments.some((a) => /load-1/.test(a)),
+       d.body);
+    ck('  under a heading that says what they are', /Loading photo:/.test(d.body), d.body);
+    ck('  and "photos" plural when there are several',
+       /Loading photos:/.test(shipmentMail.draftFor('MSDU2726332',
+           { photos: ['https://a.example/1.jpg', 'https://a.example/2.jpg'] }).body));
+
+    // ── WITH NO PHOTOS IT IS THE OLD BODY, TO THE BYTE ──────────────────
+    // The WhatsApp path passes none, and this is the check that keeps it
+    // unchanged. The four lines below are what workflow/actions.js sent
+    // before this was extracted.
+    const bare = shipmentMail.draftFor('MSDU2726332');
+    const expected = [
+        'Dear Aris Metals,', '',
+        'Please find attached the invoice and packing list for container MSDU2726332 (Invoice 26ARIS02).',
+        '', 'Kind regards,', cfg.COMPANY_NAME || 'Edge Trading',
+    ].join('\n');
+    ck('with no photos the body is byte-identical to the one it replaced',
+       bare.body === expected, JSON.stringify(bare.body));
+    ck('  and carries no photo heading at all', !/Loading photo/.test(bare.body));
+}
+
+// ── G. THE CALLERS THAT WERE ALREADY THERE ──────────────────────────────────
+// CLAUDE.md, three incidents: "a rule that makes sense on one screen lands in
+// code that other callers reach, and the caller that cannot satisfy it is the
+// one nobody was looking at." Two extractions happened here. Both had exactly
+// one existing caller. Both are checked.
+section('G. nothing that already worked changed');
+{
+    const api = fs.readFileSync(R('api.js'), 'utf8');
+    const actionsSrc = fs.readFileSync(R('workflow/actions.js'), 'utf8');
+
+    // 1. /api/invoice/generate still REFUSES on a weight mismatch. The new
+    //    route reports instead, and that difference is deliberate and hers —
+    //    but the Documents screen must behave today as it did yesterday.
+    ck('/api/invoice/generate still 409s on WEIGHT_MISMATCH',
+       /if \(weightProblems\.length && body\.weights_ok !== true[\s\S]{0,200}WEIGHT_MISMATCH/.test(api),
+       'the Documents screen was not part of this request');
+
+    // 2. workflow/actions.js no longer carries its own copy of the message.
+    ck('the WhatsApp path has no second copy of the body',
+       !/Please find attached the \$\{found\.packing \? 'invoice and packing list'/.test(actionsSrc),
+       'two copies of the words is how the email she read stops being the email that went');
+    ck('  and asks helpers/shipmentMail for it',
+       /shipmentMail\.draftFor\(containerNo\)/.test(actionsSrc));
+    ck('  passing NO photos, so its message is unchanged',
+       !/draftFor\(containerNo,\s*\{[^}]*photos/.test(actionsSrc),
+       'a flag must mark the NEW shape, never the old one');
+
+    // 3. Every reason the old code had still exists, and still maps to the
+    //    same action_taken string — brain.js and the tests read those.
+    for (const reason of shipmentMail.REASONS) {
+        ck(`  reason "${reason}" survives the move`, shipmentMail.REASONS.includes(reason));
+    }
+    ck('  and actions.js builds action_taken from it',
+       /shipment_docs_\$\{draft\.reason\}/.test(actionsSrc));
+
+    // 4. saveGeneratedInvoice is ONE function with two callers, not two
+    //    copies of the filing convention.
+    ck('the filing convention exists once',
+       (api.match(/_PACKING_LIST\.pdf`;/g) || []).length === 1,
+       'a second copy is two folders of differently-named invoices');
+    ck('  and both routes call it',
+       (api.match(/saveGeneratedInvoice\(/g) || []).length === 3,
+       'one definition plus two call sites');
+}
+
+// ── H. END TO END, THROUGH THE ROUTES THE SCREEN USES ───────────────────────
+// CLAUDE.md rule 3. Helper tests and screen tests can both be green while the
+// feature does not work; the gaps live between them. This starts a real
+// server, logs in, and walks her three stops in her order.
+section('H. end to end: generate, draft, send');
+{
+    const { createApi } = require(R('api'));
+    const app = createApi();
+    const listener = await new Promise((r) => { const s = app.listen(0, '127.0.0.1', () => r(s)); });
+    const base = `http://127.0.0.1:${listener.address().port}`;
+
+    const call = (method, p2, sid, body) => new Promise((resolve, reject) => {
+        const d = body === undefined ? null : JSON.stringify(body);
+        const headers = {};
+        if (sid) headers.Authorization = `Bearer ${sid}`;
+        if (d) { headers['Content-Type'] = 'application/json'; headers['Content-Length'] = Buffer.byteLength(d); }
+        const r = http.request(base + p2, { method, headers }, (res) => {
+            let raw = ''; res.on('data', (c) => { raw += c; });
+            res.on('end', () => { let j = null; try { j = JSON.parse(raw); } catch (e) {}
+                resolve({ status: res.statusCode, json: j, raw }); });
+        });
+        r.on('error', reject); if (d) r.write(d); r.end();
+    });
+
+    const sid = ((await call('POST', '/login', null, { password: 'admin-pw-ssssssssssss' })).json || {}).sid;
+    ck('logged in', !!sid);
+
+    // ── STOP ONE: GENERATE ──────────────────────────────────────────────
+    // separate: true — "separate invoice and packing list", the first of the
+    // two she wants to be asked about.
+    const gen = await call('POST', `/api/sales/${ARIS.id}/invoice/generate`, sid, { separate: true });
+    ck('generate answers 200', gen.status === 200, `${gen.status} ${gen.raw.slice(0, 200)}`);
+    if (gen.json) {
+        ck('  two files, because she asked for them separately',
+           gen.json.separate === true && (gen.json.saved_filenames || []).length === 2,
+           JSON.stringify(gen.json.saved_filenames));
+        // `.every` on an EMPTY array is true. Both of these passed happily
+        // while generate was returning a 500 and saved_filenames was
+        // undefined — a check that is vacuous on the failure case is not a
+        // check. The length is asserted first, every time.
+        const names = gen.json.saved_filenames || [];
+        ck('  named for the invoice, not the container',
+           names.length === 2 && names.every((f) => f.startsWith('26ARIS02_')),
+           JSON.stringify(names));
+        ck('  and they are really on disk',
+           names.length === 2 && names.every((f) => fs.existsSync(
+               path.join(cfg.DOCUMENTS_SAVED_DIR, 'invoice', TODAY, 'MSDU2726332', f))),
+           'the screen shows her a file that has to exist to be shown');
+
+        // ── AND THE FIGURES REACHED THE DOCUMENT ────────────────────────
+        // The gap CLAUDE.md rule 3 names: a route can return the right
+        // numbers in JSON and render the wrong ones onto the PDF. This reads
+        // the HTML invoicePdf actually handed to Chromium.
+        const html = RENDERED.join('\n');
+        ck('  the printed Quantity column says 7.095, not 15,642',
+           /7\.095/.test(html) && !/15,?642\.000/.test(html),
+           html.length ? 'rendered HTML did not contain 7.095' : 'nothing was rendered at all');
+        ck('  and the printed Rate column is the per-MT figure',
+           /1,?208\.13/.test(html) && !/>\s*0\.548\s*</.test(html),
+           'the Aris invoice printed 0.548 under a column headed US$/MT');
+        ck('  with the container and invoice number on it',
+           /MSDU2726332/.test(html) && /26ARIS02/.test(html));
+
+        // What the verification screen puts in front of her.
+        ck('  the line items come back for the screen to show',
+           (gen.json.line_items || []).length === 1
+           && Math.abs(gen.json.line_items[0].weight - 7.095) < 0.002,
+           JSON.stringify((gen.json.line_items || [])[0]));
+        ck('  so do the photos', (gen.json.photos || []).length === 2);
+        ck('  and the two-ledger warning', (gen.json.warnings || []).some((w) => /weighbridge/.test(w)));
+
+        // Her instruction: generate does NOT refuse on weights.
+        ck('  generate did not refuse', gen.json.ok === true);
+        ck('  and reported no weight problem, because there is none',
+           (gen.json.weight_problems || []).length === 0,
+           JSON.stringify(gen.json.weight_problems));
+    }
+
+    // An unfinished sale is 422 with what it needs, not a 500.
+    const bare2 = await sales.addSale({ customer: 'Nobody', date: '09/18/2026' });
+    const inc = await call('POST', `/api/sales/${bare2.id}/invoice/generate`, sid, {});
+    ck('an unfinished sale is refused with its list', inc.status === 422
+       && (inc.json || {}).code === 'SALE_INCOMPLETE'
+       && ((inc.json || {}).missing || []).includes('weight'),
+       `${inc.status} ${inc.raw.slice(0, 160)}`);
+
+    // ── STOP TWO: THE DRAFT ─────────────────────────────────────────────
+    const draft = await call('GET', `/api/sales/${ARIS.id}/invoice/draft-mail`, sid);
+    ck('the draft comes back', draft.status === 200 && (draft.json || {}).ok === true,
+       `${draft.status} ${draft.raw.slice(0, 200)}`);
+    if (draft.json && draft.json.ok) {
+        ck('  to the real address, for her to read before she sends',
+           draft.json.to === 'buyer@aris.example', String(draft.json.to));
+        ck('  attaching the two files generated a moment ago',
+           (draft.json.attachments || []).length === 2, JSON.stringify(draft.json.attachments));
+        ck('  with both photo links in the body',
+           (draft.json.photos || []).length === 2
+           && draft.json.body.includes('https://drive.example/load-2.jpg'));
+    }
+
+    // ── STOP THREE: SEND ────────────────────────────────────────────────
+    // Nothing goes without confirm, whatever else is right.
+    SENT = [];
+    const noConf = await call('POST', `/api/sales/${ARIS.id}/invoice/send`, sid, {});
+    ck('send refuses without an explicit confirm',
+       noConf.status === 400 && (noConf.json || {}).code === 'NOT_CONFIRMED',
+       `${noConf.status} ${noConf.raw.slice(0, 120)}`);
+    ck('  and nothing left the building', SENT.length === 0, `${SENT.length} sent`);
+
+    const sent = await call('POST', `/api/sales/${ARIS.id}/invoice/send`, sid, { confirm: true });
+    ck('send goes on confirm', sent.status === 200 && (sent.json || {}).ok === true,
+       `${sent.status} ${sent.raw.slice(0, 200)}`);
+    ck('  exactly one email', SENT.length === 1, `${SENT.length}`);
+    if (SENT.length === 1) {
+        ck('  to the buyer', SENT[0].to === 'buyer@aris.example', String(SENT[0].to));
+        ck('  copying the broker', JSON.stringify(SENT[0].cc) === '["broker@aris.example"]',
+           JSON.stringify(SENT[0].cc));
+        ck('  subject names the invoice and the container',
+           SENT[0].subject === 'Invoice 26ARIS02 — MSDU2726332', SENT[0].subject);
+        ck('  with the two PDFs attached as bytes',
+           (SENT[0].attachments || []).length === 2
+           && SENT[0].attachments.every((a) => Buffer.isBuffer(a.content) && a.content.length > 0),
+           JSON.stringify((SENT[0].attachments || []).map((a) => a.filename)));
+        ck('  and the photos as links, not as attachments',
+           SENT[0].body.includes('https://drive.example/load-1.jpg')
+           && !(SENT[0].attachments || []).some((a) => /\.jpg$/i.test(a.filename)),
+           SENT[0].body);
+        ck('  the body she was shown is the body that went',
+           draft.json && SENT[0].body === draft.json.body,
+           'a draft that differs from the send is worse than no draft');
+    }
+
+    // ── AND THE WEIGHT GUARD, ON SEND ───────────────────────────────────
+    // Her call: generate, then ask at the mail step. So a sale that really is
+    // wrong must sail through generate and be stopped here.
+    await bills.addBill({ date: '09/10/2026', supplier: 'Gomez', booking_no: 'DALA66666666',
+        container_no: 'MSKU6666666', gross: 30000, truck: 8700, container: 4400, chassis: 1250, boxes: 0 });
+    const badSale = await sales.addSale({ booking_no: 'DALA66666666', container_no: 'MSKU6666666',
+        customer: 'Aris Metals', date: '09/18/2026', invoice_no: 'EM9001', item: 'scrap',
+        // Pounds in the weight field with the unit forced to MT: the sale now
+        // claims 15,650 METRIC TONS in one container.
+        weight: 15650, weight_unit: 'mt', invoice_price: 430 });
+    const badGen = await call('POST', `/api/sales/${badSale.id}/invoice/generate`, sid, {});
+    ck('a wrong tonnage still GENERATES, as she asked', badGen.status === 200,
+       `${badGen.status} ${badGen.raw.slice(0, 160)}`);
+    ck('  and comes back flagged, for the screen to show',
+       ((badGen.json || {}).weight_problems || []).length > 0
+       && !!(badGen.json || {}).weight_message,
+       JSON.stringify((badGen.json || {}).weight_problems));
+
+    SENT = [];
+    const badSend = await call('POST', `/api/sales/${badSale.id}/invoice/send`, sid, { confirm: true });
+    ck('  but SENDING it is refused', badSend.status === 409
+       && (badSend.json || {}).code === 'WEIGHT_MISMATCH',
+       `${badSend.status} ${badSend.raw.slice(0, 160)}`);
+    ck('  and nothing went', SENT.length === 0, `${SENT.length} sent`);
+
+    // ── AND weights_ok IS NOT A THING THE BROWSER CAN LIE ABOUT ─────────
+    // The send route rebuilds the invoice from the SALE rather than trusting
+    // line items posted back to it. weights_ok says "I have read this and the
+    // figures are deliberate" — it does not say "there is no problem".
+    const apiSrc = fs.readFileSync(R('api.js'), 'utf8');
+    ck('  the send route recomputes from the sale, not from the request body',
+       /const built = saleInvoice\.buildFrom\(sale\);[\s\S]{0,300}weightProblems\(built\.body\.line_items\)/
+           .test(apiSrc.slice(apiSrc.indexOf("invoice/send"))),
+       'a figure the browser sends back is a figure the browser could have changed');
+
+    SENT = [];
+    const okd = await call('POST', `/api/sales/${badSale.id}/invoice/send`, sid,
+                           { confirm: true, weights_ok: true });
+    ck('  and her acknowledgement lets it through', okd.status === 200 && SENT.length === 1,
+       `${okd.status} ${okd.raw.slice(0, 160)}`);
+
+    // ── STAFF CANNOT REACH ANY OF IT ────────────────────────────────────
+    // /api/sales is deliberately absent from STAFF_ALLOWED_PATH_PREFIXES —
+    // these are customer invoices and her margins. The new routes sit under
+    // the same prefix and must inherit that, not quietly widen it.
+    const staffBlocked = await call('POST', `/api/sales/${ARIS.id}/invoice/send`, null, { confirm: true });
+    ck('an unauthenticated caller cannot send an invoice',
+       staffBlocked.status === 401 || staffBlocked.status === 403,
+       String(staffBlocked.status));
+
+    listener.close();
+}
+
+// ── I. THE SCREEN ───────────────────────────────────────────────────────────
+// CLAUDE.md rule 3 again, from the other end: the routes above can all be
+// right while the button that calls them is not wired, or calls them in the
+// wrong order, or sends `paid_via` where the route reads `paid-via`.
+//
+// jsdom, the real dashboard/index.html, its real script. The three steps are
+// driven the way she drives them: press Generate, look, press Next, look,
+// press Send.
+section('I. the three screens');
+{
+    let JSDOM = null;
+    try { ({ JSDOM } = require('jsdom')); } catch (e) {}
+    if (!JSDOM) {
+        ck('jsdom is installed so the screen can be rendered', false,
+           'this is NOT a pass — run npm install');
+    } else {
+        const pageHtml = fs.readFileSync(R('dashboard/index.html'), 'utf8');
+        const SCRIPT = (pageHtml.match(/<script>([\s\S]*?)<\/script>/g) || [])
+            .map((b) => b.replace(/^<script>/, '').replace(/<\/script>$/, '')).join('\n');
+
+        const dom = new JSDOM(pageHtml, { runScripts: 'outside-only', url: 'http://localhost/' });
+        const w = dom.window;
+        let bootErr = null;
+        // A `boot()` that resumes after the window is gone throws on its first
+        // $() — the failure shape CLAUDE.md names. Held at its first await.
+        w.fetch = () => new Promise(() => {});
+        try { w.eval(SCRIPT); } catch (e) { bootErr = e; }
+        ck('the page script still parses and runs', !bootErr, bootErr && bootErr.message);
+
+        if (!bootErr) {
+            // What the browser asked for, in order — the thing being tested.
+            const CALLS = [];
+            w.api = async (p2, opts) => {
+                CALLS.push({ path: String(p2).split('?')[0], method: (opts || {}).method || 'GET',
+                             body: (opts || {}).body ? JSON.parse(opts.body) : null });
+                if (/\/invoice\/generate$/.test(p2)) return {
+                    ok: true, separate: true, container_no: 'MSDU2726332', inv_no: '26ARIS02',
+                    saved_filenames: ['26ARIS02_INVOICE.pdf', '26ARIS02_PACKING_LIST.pdf'],
+                    line_items: [{ item_desc: 'scrap auto parts', weight: 7.095, rate: 1208.13, amount: 8571.82 }],
+                    photos: ['https://drive.example/load-1.jpg'],
+                    warnings: ['The invoice charges 7.095 MT; the bill\'s weighbridge net is 6.758 MT.'],
+                    weight_problems: [], weight_message: null,
+                };
+                if (/\/invoice\/draft-mail$/.test(p2)) return {
+                    ok: true, to: 'buyer@aris.example', name: 'Aris Metals',
+                    contact_cc: ['broker@aris.example'],
+                    subject: 'Invoice 26ARIS02 — MSDU2726332',
+                    body: 'Dear Aris Metals,\n\nPlease find attached…\n\nLoading photos:\nhttps://drive.example/load-1.jpg',
+                    attachments: ['26ARIS02_INVOICE.pdf', '26ARIS02_PACKING_LIST.pdf'],
+                    photos: ['https://drive.example/load-1.jpg'], warnings: [],
+                };
+                if (/\/invoice\/send$/.test(p2)) return {
+                    ok: true, to: 'buyer@aris.example', subject: 'Invoice 26ARIS02 — MSDU2726332',
+                    attached: ['26ARIS02_INVOICE.pdf', '26ARIS02_PACKING_LIST.pdf'],
+                };
+                return {};
+            };
+            await new Promise((r) => setTimeout(r, 40));
+
+            ck('  openGenerateInvoice is reachable from the page',
+               typeof w.openGenerateInvoice === 'function');
+
+            if (typeof w.openGenerateInvoice === 'function') {
+                const D = w.document;
+                await w.openGenerateInvoice({ id: 'S1', container_no: 'MSDU2726332',
+                                              invoice_no: '26ARIS02', customer: 'Aris Metals' });
+
+                // ── STEP 1 ──────────────────────────────────────────────
+                ck('step 1 asks the one question she asked to be asked',
+                   !!D.getElementById('genModal')
+                   && D.querySelectorAll('input[name=genMode]').length === 3,
+                   String(D.querySelectorAll('input[name=genMode]').length));
+                const modes = Array.from(D.querySelectorAll('input[name=genMode]')).map((e2) => e2.value);
+                ck('  normal, separate and invoice only',
+                   modes.join(',') === 'normal,separate,invoice_only', modes.join(','));
+                ck('  with normal chosen by default, the shape she has always had',
+                   D.querySelector('input[name=genMode]:checked').value === 'normal');
+                ck('  and the button says Generate, not Create',
+                   /^Generate$/.test(D.getElementById('genGo').textContent.trim())
+                   && !/Create invoice/i.test(D.getElementById('genCard').innerHTML),
+                   D.getElementById('genGo').textContent);
+
+                // Pick separate, then generate.
+                const sep = D.querySelector('input[value=separate]');
+                sep.checked = true;
+                sep.dispatchEvent(new w.Event('change'));
+                ck('  choosing separate sticks',
+                   D.querySelector('input[name=genMode]:checked').value === 'separate');
+
+                // dispatchEvent, not .click(): a disabled button still fires
+                // listeners under dispatchEvent, which would hide exactly the
+                // double-press guard being asserted below.
+                D.getElementById('genGo').click();
+                await new Promise((r) => setTimeout(r, 40));
+
+                ck('generate posted to the sale\'s route',
+                   CALLS.some((c) => c.method === 'POST' && /\/api\/sales\/S1\/invoice\/generate$/.test(c.path)),
+                   JSON.stringify(CALLS));
+                ck('  carrying separate:true and invoice_only:false',
+                   (CALLS.find((c) => /generate$/.test(c.path)) || {}).body
+                   && CALLS.find((c) => /generate$/.test(c.path)).body.separate === true
+                   && CALLS.find((c) => /generate$/.test(c.path)).body.invoice_only === false,
+                   JSON.stringify((CALLS.find((c) => /generate$/.test(c.path)) || {}).body));
+
+                // ── STEP 2: THE DOCUMENT ────────────────────────────────
+                const card = D.getElementById('genCard');
+                ck('step 2 shows the PDF itself, not a summary of it',
+                   !!card.querySelector('iframe')
+                   && /documents\/download/.test(card.querySelector('iframe').getAttribute('src')),
+                   card.querySelector('iframe') ? card.querySelector('iframe').getAttribute('src') : 'no iframe');
+                ck('  the quantity is printed in MT', /7\.095 MT/.test(card.textContent), '');
+                ck('  and the rate per MT', /1,208\.13 \/MT/.test(card.textContent), '');
+                ck('  the two-ledger warning is above the buttons, not below',
+                   card.innerHTML.indexOf('weighbridge net') > -1
+                   && card.innerHTML.indexOf('weighbridge net') < card.innerHTML.indexOf('id="genNext"'),
+                   'a caution under the thing you press is one you read afterwards');
+                ck('  both filenames are named', /26ARIS02_PACKING_LIST\.pdf/.test(card.textContent));
+                ck('  and she can stop here without emailing anyone',
+                   !!D.getElementById('genDone'), 'no way out but Send is not a way out');
+
+                // NOTHING was emailed by getting this far.
+                ck('  nothing has been sent yet',
+                   !CALLS.some((c) => /\/send$/.test(c.path)), JSON.stringify(CALLS.map((c) => c.path)));
+
+                D.getElementById('genNext').click();
+                await new Promise((r) => setTimeout(r, 40));
+
+                // ── STEP 3: THE EMAIL ───────────────────────────────────
+                const card3 = D.getElementById('genCard');
+                ck('step 3 shows the real address before it goes',
+                   /buyer@aris\.example/.test(card3.textContent), '');
+                ck('  the Cc too', /broker@aris\.example/.test(card3.textContent), '');
+                ck('  the subject', /Invoice 26ARIS02 — MSDU2726332/.test(card3.textContent), '');
+                ck('  the body she will actually send',
+                   /Please find attached/.test(card3.textContent), '');
+                ck('  and what is attached', /26ARIS02_INVOICE\.pdf/.test(card3.textContent), '');
+                ck('  the photos are named as LINKS, not attachments',
+                   /links in the message, not as attachments/.test(card3.textContent), '');
+                ck('  still nothing sent',
+                   !CALLS.some((c) => /\/send$/.test(c.path)), '');
+                ck('  and there is a way out that is not Send',
+                   !!D.getElementById('genDone3') && !!D.getElementById('genBack3'));
+
+                D.getElementById('genSend').click();
+                await new Promise((r) => setTimeout(r, 40));
+
+                const send = CALLS.find((c) => /\/send$/.test(c.path));
+                ck('Send posts to the send route', !!send && send.method === 'POST',
+                   JSON.stringify(CALLS.map((c) => c.method + ' ' + c.path)));
+                ck('  with confirm true, which the route requires',
+                   !!send && send.body && send.body.confirm === true,
+                   JSON.stringify(send && send.body));
+                ck('  and NOT with weights_ok, which she never answered',
+                   !!send && send.body && send.body.weights_ok === undefined,
+                   'weights_ok means she read the figures, not that there was no question');
+                ck('  exactly one send, not one per press',
+                   CALLS.filter((c) => /\/send$/.test(c.path)).length === 1,
+                   String(CALLS.filter((c) => /\/send$/.test(c.path)).length));
+
+                ck('step 4 says it went, and to whom',
+                   /Emailed to buyer@aris\.example/.test(D.getElementById('genCard').textContent),
+                   D.getElementById('genCard').textContent.slice(0, 120));
+
+                // ── THE ORDER IS HERS ───────────────────────────────────
+                // "first need to show the generated invoice then draft mail".
+                const order = CALLS.filter((c) => /invoice\/(generate|draft-mail|send)$/.test(c.path))
+                    .map((c) => c.path.split('/').pop());
+                ck('generate, then draft-mail, then send — in that order',
+                   order.join(' -> ') === 'generate -> draft-mail -> send', order.join(' -> '));
+            }
+        }
+        w.close();
+    }
+}
+
+console.log(`\n  ${pass} passed, ${fail} failed`);
+if (failures.length) { console.log('\n  failed:'); failures.forEach((f) => console.log('    · ' + f)); }
+process.exit(fail ? 1 : 0);
+
+})().catch((e) => { console.error('SUITE CRASHED:', e && e.stack); process.exit(1); });
