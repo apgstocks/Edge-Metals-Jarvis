@@ -523,11 +523,24 @@ async function addSale(input = {}) {
         created_at: new Date().toISOString(),
         created_by: input.created_by || null,
     };
+    // ── STRICT: THIS WRITE EITHER HAPPENS OR SAYS SO ─────────────────────
+    // mutateJson is forgiving by default — on failure it logs, returns
+    // loadJson() and NEVER RUNS THE MUTATOR, handing back plausible-looking
+    // data with no way to tell the write never landed. Its own note says the
+    // paths where a lost write means lost DATA should opt in; this is one of
+    // them, and 131 of 146 writes in this codebase had not.
+    //
+    // The catch covers mutator errors too, not just lock contention, so the
+    // forgiving path also swallows bugs in the function above.
+    //
+    // No retry loop on top: LOCK_OPTS already backs off eight times (40ms to
+    // 400ms), so a failure here is genuinely exceptional and a second layer
+    // would be defensive code with nothing to defend against.
     await mutateJson(cfg.SALES_FILE, [], (all) => {
         const rows = Array.isArray(all) ? all : [];
         rows.push(row);
         return rows;
-    });
+    }, { strict: true });
     return withTotals(row);
 }
 
@@ -555,7 +568,7 @@ async function editSale(id, input = {}) {
         rows[i] = merged;
         found = rows[i];
         return rows;
-    });
+    }, { strict: true });
     if (problem) throw new Error(problem);
     if (!found) throw new Error(`no sale ${id}`);
     return withTotals(found);
@@ -570,7 +583,7 @@ async function deleteSale(id) {
         rows.splice(i, 1);
         gone = true;
         return rows;
-    });
+    }, { strict: true });
     if (!gone) throw new Error(`no sale ${id}`);
     return true;
 }

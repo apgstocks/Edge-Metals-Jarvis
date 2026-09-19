@@ -154,12 +154,25 @@ async function addExpense(entry) {
         amount: round2(amount),
         notes: (entry.notes && String(entry.notes).trim()) || null,
     };
+    // ── STRICT: THIS WRITE EITHER HAPPENS OR SAYS SO ─────────────────────
+    // mutateJson is forgiving by default — on failure it logs, returns
+    // loadJson() and NEVER RUNS THE MUTATOR, handing back plausible-looking
+    // data with no way to tell the write never landed. Its own note says the
+    // paths where a lost write means lost DATA should opt in; this is one of
+    // them, and 131 of 146 writes in this codebase had not.
+    //
+    // The catch covers mutator errors too, not just lock contention, so the
+    // forgiving path also swallows bugs in the function above.
+    //
+    // No retry loop on top: LOCK_OPTS already backs off eight times (40ms to
+    // 400ms), so a failure here is genuinely exceptional and a second layer
+    // would be defensive code with nothing to defend against.
     await mutateJson(cfg.EXPENSES_FILE, [], (list) => {
         rec.id = nextExpenseId(list);
         list.unshift(rec);
         if (list.length > 20000) list.length = 20000;
         return list;
-    });
+    }, { strict: true });
 
     // ── a CASH expense comes out of the box ───────────────────────────────
     // Apsara 2026-09-02: "if expense is added -> expense amount must be
@@ -217,7 +230,7 @@ async function editExpense(id, entry) {
         });
         updated = e;
         return list;
-    });
+    }, { strict: true });
     if (!updated) return updated;
 
     // ── keep the cash ledger in step with the edit ────────────────────────
@@ -272,7 +285,7 @@ async function deleteExpense(id) {
         removed = list[idx];
         list.splice(idx, 1);
         return list;
-    });
+    }, { strict: true });
     // Deleting a cash expense puts the money back — the expense was the only
     // reason it left. Reversal row, idempotent, same as everywhere else.
     if (removed && removed.payment_method === 'Cash') {

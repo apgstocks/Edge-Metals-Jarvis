@@ -285,11 +285,24 @@ async function addPaymentRecord(input = {}, { advance = false } = {}) {
     const mirrored = await mirrorToLedger(rec);
     rec.ledger_payment_id = mirrored && mirrored.id ? mirrored.id : null;
 
+    // ── STRICT: THIS WRITE EITHER HAPPENS OR SAYS SO ─────────────────────
+    // mutateJson is forgiving by default — on failure it logs, returns
+    // loadJson() and NEVER RUNS THE MUTATOR, handing back plausible-looking
+    // data with no way to tell the write never landed. Its own note says the
+    // paths where a lost write means lost DATA should opt in; this is one of
+    // them, and 131 of 146 writes in this codebase had not.
+    //
+    // The catch covers mutator errors too, not just lock contention, so the
+    // forgiving path also swallows bugs in the function above.
+    //
+    // No retry loop on top: LOCK_OPTS already backs off eight times (40ms to
+    // 400ms), so a failure here is genuinely exceptional and a second layer
+    // would be defensive code with nothing to defend against.
     await mutateJson(cfg.BILL_PAYMENTS_FILE, [], (all) => {
         const rows = Array.isArray(all) ? all : [];
         rows.push(rec);
         return rows;
-    });
+    }, { strict: true });
     return rec;
 }
 
@@ -319,7 +332,7 @@ async function applyAdvance(paymentId, allocations = []) {
         rows[i] = { ...rows[i], allocations: merged, updated_at: new Date().toISOString() };
         out = rows[i];
         return rows;
-    });
+    }, { strict: true });
     if (problem) throw new Error(problem);
     return out;
 }
@@ -334,7 +347,7 @@ async function deleteBillPayment(id) {
         const i = rows.findIndex((r) => r.id === id);
         if (i !== -1) rows.splice(i, 1);
         return rows;
-    });
+    }, { strict: true });
     try {
         const { deletePaymentsForLoad } = require('./payments');
         await deletePaymentsForLoad(doomed.id);
