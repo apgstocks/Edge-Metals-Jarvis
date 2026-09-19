@@ -1,0 +1,327 @@
+// ── tests/contact-harvest.js ────────────────────────────────────────────────
+// Apsara, 2026-09-19, four messages in a row:
+//
+//   "is there any option to learn email contacts..?"
+//   "How to learn all the email contacts?"
+//   "from email to email contacts tab"
+//   "save it"
+//
+// There WAS an option and it was not the one she wanted: "learn radmetals
+// contacts" learns ONE company she names, through WhatsApp. She is asking for
+// the whole mailbox, landing in the tab she was looking at.
+//
+// ── WHAT THIS IS REALLY GUARDING ────────────────────────────────────────────
+// Email Contacts is what resolveContact reads to decide WHERE A CUSTOMER'S
+// INVOICE GOES. A bulk writer pointed at it is the most dangerous thing built
+// today: one careless sweep and a name she typed herself is silently replaced
+// by a local-part scraped off a Cc line. So most of this file is about what
+// the harvest REFUSES to do.
+//
+// Gmail is a stub object, never the real client — helpers/contactHarvest.js
+// takes the client as an argument for exactly that reason. A test that can
+// reach her live mailbox is a test that will one day read it.
+
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
+const http = require('http');
+
+let pass = 0, fail = 0; const failures = [];
+const ck = (n, c, extra) => {
+    if (c) { pass++; console.log('  PASS  ' + n); }
+    else { fail++; failures.push(n); console.log('  FAIL  ' + n); if (extra) console.log('        ' + extra); }
+};
+const section = (t) => console.log('\n=== ' + t + ' ===');
+
+const ROOT = path.join(__dirname, '..');
+const TMP = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvis-harvest-'));
+process.env.DATA_DIR = TMP;
+process.env.JARVIS_TEST = '1';
+process.env.ADMIN_PASSWORD = 'admin-pw-hhhhhhhhhhhh';
+
+const cfg = require(path.join(ROOT, 'config'));
+if (!String(cfg.DATA_DIR).startsWith(os.tmpdir())) {
+    console.error('REFUSING TO RUN: DATA_DIR is not a temp directory.');
+    process.exit(1);
+}
+const harvest = require(path.join(ROOT, 'helpers/contactHarvest'));
+const emailContacts = require(path.join(ROOT, 'helpers/emailContacts'));
+
+// ── A MAILBOX, AS ONE REALLY LOOKS ──────────────────────────────────────────
+// Real suppliers, a shared mailbox, a no-reply, her own address, a stranger
+// Cc'd once on somebody else's thread, and a display name that must survive.
+const MAIL = [
+    { From: '"Marc Kang" <marckang@mkmetaltrading.com>', To: 'apsara@edgemetals.com', Cc: 'export@mkmetaltrading.com' },
+    { From: '"Marc Kang" <marckang@mkmetaltrading.com>', To: 'apsara@edgemetals.com', Cc: 'export@mkmetaltrading.com' },
+    { From: 'export@mkmetaltrading.com', To: 'apsara@edgemetals.com', Cc: '' },
+    { From: '"Joey Lee" <joey@daekwang.example>', To: 'apsara@edgemetals.com', Cc: 'accounts@daekwang.example' },
+    { From: 'apsara@edgemetals.com', To: '"Joey Lee" <joey@daekwang.example>', Cc: '' },
+    { From: 'no-reply@shippingline.example', To: 'apsara@edgemetals.com', Cc: '' },
+    { From: 'notifications@portal.example', To: 'apsara@edgemetals.com', Cc: '' },
+    { From: '"Bose" <bose@edgemetals.com>', To: 'apsara@edgemetals.com', Cc: '' },
+    { From: '"Joey Lee" <joey@daekwang.example>', To: 'apsara@edgemetals.com', Cc: 'stranger@somewhere.example' },
+    // accounts@ appears TWICE and never as a sender. Two things follow, and
+    // both are the real rules rather than my first guess at them:
+    //   - twice means it is not "thin", so it reaches the list at all;
+    //   - from === 0 is what proposeDomainRoles calls a SHARED mailbox.
+    { From: '"Joey Lee" <joey@daekwang.example>', To: 'apsara@edgemetals.com', Cc: 'accounts@daekwang.example' },
+];
+const fakeGmail = {
+    users: { messages: {
+        list: async ({ maxResults }) => ({ data: {
+            messages: MAIL.slice(0, maxResults).map((_, i) => ({ id: String(i) })) } }),
+    } },
+};
+const fakeGetMessage = async (_g, id) => {
+    const m = MAIL[Number(id)];
+    return { payload: { headers: Object.entries(m).map(([name, value]) => ({ name, value })) } };
+};
+const MINE = ['apsara@edgemetals.com', 'bose@edgemetals.com'];
+
+(async () => {
+
+// ── A. THE SCAN ─────────────────────────────────────────────────────────────
+section('A. reading the mailbox');
+let tally;
+{
+    const r = await harvest.scan(fakeGmail, { limit: 50, mine: MINE, getMessage: fakeGetMessage });
+    tally = r.tally;
+    ck('it reads every message', r.scanned === MAIL.length, `${r.scanned} of ${MAIL.length}`);
+    ck('  and tallies From, To and Cc alike',
+       tally.get('marckang@mkmetaltrading.com').from === 2
+       && tally.get('export@mkmetaltrading.com').cc === 2
+       && tally.get('joey@daekwang.example').to === 1,
+       JSON.stringify([...tally].slice(0, 3)));
+    ck('  keeping the real display name off the header',
+       tally.get('marckang@mkmetaltrading.com').displayName === 'Marc Kang',
+       String(tally.get('marckang@mkmetaltrading.com').displayName));
+    ck('  which is what stops an email saying "Dear export"',
+       tally.get('joey@daekwang.example').displayName === 'Joey Lee');
+
+    // ── ONE UNREADABLE MESSAGE MUST NOT END THE SWEEP ───────────────────
+    // She asked for everyone. 199 of 200 is a far better answer than a
+    // stack trace.
+    const flaky = await harvest.scan(fakeGmail, { limit: 50, mine: MINE,
+        getMessage: async (g, id) => {
+            if (id === '3') throw new Error('that one is gone');
+            return fakeGetMessage(g, id);
+        } });
+    ck('a message it cannot read is skipped, not fatal',
+       flaky.scanned === MAIL.length - 1, String(flaky.scanned));
+
+    // Spam is worse than nothing here: a contact learned from spam lands in
+    // the tab she trusts to address invoices.
+    let asked = null;
+    await harvest.scan({ users: { messages: { list: async (a) => { asked = a; return { data: {} }; } } } },
+                       { getMessage: fakeGetMessage });
+    ck('  and spam and trash are excluded at the query',
+       /-in:spam/.test(asked.q) && /-in:trash/.test(asked.q), asked.q);
+}
+
+// ── B. WHAT IT REFUSES TO PROPOSE ───────────────────────────────────────────
+section('B. what never reaches the list');
+let proposed;
+{
+    const r = harvest.propose(tally, { mine: MINE, known: [] });
+    proposed = r;
+    const all = r.domains.flatMap((d) => d.proposals.map((p) => p.addr));
+
+    ck('her own address is not a contact', !all.includes('apsara@edgemetals.com'));
+    ck('  nor is anyone else on her own domain', !all.includes('bose@edgemetals.com'),
+       'her own company proposing itself as a customer is noise she has to untick forever');
+    ck('  and the whole domain is skipped by address, not by guesswork',
+       r.skipped.mine >= 2, JSON.stringify(r.skipped));
+
+    ck('no-reply@ is not a contact', !all.includes('no-reply@shippingline.example'));
+    ck('  nor notifications@', !all.includes('notifications@portal.example'));
+    ck('  counted as machine addresses', r.skipped.machine === 2, JSON.stringify(r.skipped));
+
+    // Seen once, only in a Cc, never written to: a name on somebody else's
+    // thread, not a correspondent of hers.
+    ck('someone Cc\'d once on another thread is not a contact',
+       !all.includes('stranger@somewhere.example'), all.join(', '));
+    ck('  counted as thin rather than silently vanishing', r.skipped.thin >= 1,
+       JSON.stringify(r.skipped));
+
+    // ── AND WHAT DOES ───────────────────────────────────────────────────
+    ck('the two real companies are proposed',
+       r.domains.map((d) => d.domain).sort().join(',') === 'daekwang.example,mkmetaltrading.com',
+       r.domains.map((d) => d.domain).join(','));
+    ck('  busiest company first, because that list runs long',
+       r.domains[0].messages >= r.domains[1].messages,
+       r.domains.map((d) => `${d.domain}:${d.messages}`).join(' '));
+}
+
+// ── C. THE ROLES ARE NOT DECIDED HERE ───────────────────────────────────────
+// primary / secondary / shared comes from emailContacts.proposeDomainRoles —
+// the SAME function "learn X contacts" and scripts/learnDomain.js use. Three
+// ways in, ONE opinion about what a contact is. A second implementation would
+// disagree eventually, and it would disagree about which address a customer's
+// invoice goes to.
+section('C. one opinion about who is primary');
+{
+    const src = fs.readFileSync(path.join(ROOT, 'helpers/contactHarvest.js'), 'utf8');
+    ck('the harvest calls proposeDomainRoles rather than deciding for itself',
+       /emailContacts\.proposeDomainRoles\(/.test(src),
+       'a second implementation would disagree about where an invoice goes');
+    ck('  and does not invent a role anywhere',
+       !/role\s*=\s*['"]primary['"]/.test(src), 'roles are that function\'s business');
+
+    const mk = proposed.domains.find((d) => d.domain === 'mkmetaltrading.com');
+    ck('the person who actually writes is primary',
+       (mk.proposals.find((p) => p.addr === 'marckang@mkmetaltrading.com') || {}).role === 'primary',
+       JSON.stringify(mk.proposals.map((p) => `${p.addr}:${p.role}`)));
+
+    // ── AND export@ IS SECONDARY, NOT SHARED ────────────────────────────
+    // My first version of this asserted 'shared' and was wrong about the
+    // rule, not about the code. proposeDomainRoles calls an address shared
+    // when it never sends (from === 0), or when it is Cc'd at least ten
+    // times AND at least three times as often as it sends. export@ sends
+    // once here, so it is a person-shaped member of the group. Written down
+    // because guessing that threshold is how a second implementation starts.
+    ck('  and an address that DOES send is a member, not a mailbox',
+       (mk.proposals.find((p) => p.addr === 'export@mkmetaltrading.com') || {}).role === 'secondary',
+       JSON.stringify(mk.proposals.map((p) => `${p.addr}:${p.role}`)));
+
+    const dkD = proposed.domains.find((d) => d.domain === 'daekwang.example');
+    ck('an address that never sends IS a shared mailbox',
+       (dkD.proposals.find((p) => p.addr === 'accounts@daekwang.example') || {}).role === 'shared',
+       JSON.stringify(dkD.proposals.map((p) => `${p.addr}:${p.role}`)));
+}
+
+// ── D. ALREADY SAVED IS SHOWN, NOT RE-OFFERED ───────────────────────────────
+section('D. what is already in the tab');
+{
+    const r = harvest.propose(tally, { mine: MINE,
+        known: [{ name: 'joey', email: 'joey@daekwang.example' }] });
+    const joey = r.domains.flatMap((d) => d.proposals).find((p) => p.addr === 'joey@daekwang.example');
+    ck('an address already saved is marked, not hidden', joey && joey.already_known === true,
+       'leaving it out entirely invites her to run the same scan twice asking why');
+
+    const dk = r.domains.find((d) => d.domain === 'daekwang.example');
+    ck('  and a company with someone still to add is NOT marked all_known',
+       dk && dk.all_known === false, JSON.stringify(dk && dk.proposals.map((p) => p.already_known)));
+
+    const both = harvest.propose(tally, { mine: MINE, known: [
+        { name: 'joey', email: 'joey@daekwang.example' },
+        { name: 'dk accounts', email: 'accounts@daekwang.example' }] });
+    ck('  a company fully saved IS, so the screen can drop it',
+       both.domains.find((d) => d.domain === 'daekwang.example').all_known === true);
+}
+
+// ── E. END TO END, THROUGH THE ROUTES THE SCREEN USES ───────────────────────
+section('E. end to end: scan, pick, save');
+{
+    const { createApi } = require(path.join(ROOT, 'api'));
+    const app = createApi();
+    const listener = await new Promise((r) => { const s = app.listen(0, '127.0.0.1', () => r(s)); });
+    const base = `http://127.0.0.1:${listener.address().port}`;
+    const call = (method, p2, sid, body) => new Promise((resolve, reject) => {
+        const d = body === undefined ? null : JSON.stringify(body);
+        const headers = {};
+        if (sid) headers.Authorization = `Bearer ${sid}`;
+        if (d) { headers['Content-Type'] = 'application/json'; headers['Content-Length'] = Buffer.byteLength(d); }
+        const r = http.request(base + p2, { method, headers }, (res) => {
+            let raw = ''; res.on('data', (c) => { raw += c; });
+            res.on('end', () => { let j = null; try { j = JSON.parse(raw); } catch (e) {}
+                resolve({ status: res.statusCode, json: j, raw }); });
+        });
+        r.on('error', reject); if (d) r.write(d); r.end();
+    });
+    const sid = ((await call('POST', '/login', null, { password: 'admin-pw-hhhhhhhhhhhh' })).json || {}).sid;
+    ck('logged in', !!sid);
+
+    // Gmail is not configured in a test environment, and the route must say
+    // so in words rather than 500 — that is the commonest real failure and
+    // "500" sends her looking in the wrong place.
+    const noGmail = await call('GET', '/api/email-contacts/harvest', sid);
+    ck('with no Gmail configured it explains itself',
+       noGmail.status === 503 && (noGmail.json || {}).code === 'GMAIL_UNAVAILABLE',
+       `${noGmail.status} ${noGmail.raw.slice(0, 120)}`);
+    ck('  naming Gmail rather than returning a bare 500',
+       /Gmail isn't configured/.test((noGmail.json || {}).error || ''),
+       (noGmail.json || {}).error);
+
+    // ── THE SAVE, WHICH IS THE HALF THAT WRITES ─────────────────────────
+    await emailContacts.addContact('joey', 'joey@daekwang.example');
+    const before = emailContacts.loadContacts().length;
+
+    const r = await call('POST', '/api/email-contacts/harvest', sid, { save: [
+        { name: 'marckang', email: 'marckang@mkmetaltrading.com', domain: 'mkmetaltrading.com',
+          role: 'primary', displayName: 'Marc Kang' },
+        // Same ADDRESS as the existing contact under a different name.
+        { name: 'joey lee', email: 'joey@daekwang.example' },
+        // Same NAME as the existing contact, different address.
+        { name: 'joey', email: 'someone.else@daekwang.example' },
+        { name: '', email: 'accounts@daekwang.example' },
+    ] });
+
+    ck('the save answers 200', r.status === 200, `${r.status} ${r.raw.slice(0, 160)}`);
+    const saved = (r.json || {}).saved || [];
+    const skipped = (r.json || {}).skipped || [];
+    ck('  the new contact is written',
+       saved.some((x) => x.email === 'marckang@mkmetaltrading.com'), JSON.stringify(saved));
+    ck('  and really is in the tab',
+       emailContacts.loadContacts().some((c) => c.email === 'marckang@mkmetaltrading.com'));
+    ck('  carrying its domain group and role',
+       (emailContacts.loadContacts().find((c) => c.email === 'marckang@mkmetaltrading.com') || {}).role === 'primary');
+    ck('  and its real display name',
+       (emailContacts.loadContacts().find((c) => c.email === 'marckang@mkmetaltrading.com') || {}).displayName === 'Marc Kang',
+       'so a drafted email says "Dear Marc Kang", not "Dear marckang"');
+
+    // ── THE REFUSALS, WHICH ARE THE POINT ───────────────────────────────
+    ck('an address already saved is NOT written again',
+       skipped.some((x) => x.email === 'joey@daekwang.example' && /already saved/.test(x.why)),
+       JSON.stringify(skipped));
+    ck('  and a NAME already taken is refused rather than overwritten',
+       skipped.some((x) => x.email === 'someone.else@daekwang.example' && /already a contact/.test(x.why)),
+       'addContact is an upsert by name — a bulk writer would silently replace what she typed');
+    ck('  a row with no name is refused, not guessed at',
+       skipped.some((x) => x.email === 'accounts@daekwang.example' && /needs a name/.test(x.why)),
+       JSON.stringify(skipped));
+    ck('  and the existing contact is untouched',
+       (emailContacts.loadContacts().find((c) => c.name === 'joey') || {}).email === 'joey@daekwang.example',
+       'this tab decides where invoices go; a silent overwrite here is a misdelivered invoice');
+    ck('  exactly one row was added', emailContacts.loadContacts().length === before + 1,
+       `${before} -> ${emailContacts.loadContacts().length}`);
+
+    ck('an empty selection is a 400, not a no-op 200',
+       (await call('POST', '/api/email-contacts/harvest', sid, { save: [] })).status === 400);
+
+    // Same gate as the rest of this tab: it reads her mail and writes her
+    // address book.
+    ck('an unauthenticated caller cannot scan her mail',
+       [401, 403].includes((await call('GET', '/api/email-contacts/harvest', null)).status));
+    ck('  nor write to her address book',
+       [401, 403].includes((await call('POST', '/api/email-contacts/harvest', null,
+           { save: [{ name: 'x', email: 'x@y.example' }] })).status));
+
+    listener.close();
+}
+
+// ── F. THE SCREEN ───────────────────────────────────────────────────────────
+section('F. the button is where she was looking');
+{
+    const src = fs.readFileSync(path.join(ROOT, 'dashboard/index.html'), 'utf8');
+    ck('Email contacts has a Learn from my mail button',
+       /id="btnHarvestContacts"/.test(src) && /Learn from my mail/.test(src),
+       'she asked while looking at this tab, not at a chat window');
+    ck('  it scans before it saves', /email-contacts\/harvest\?limit=/.test(src));
+    ck('  and nothing is written without a second press',
+       /Nothing is saved until you press Save/.test(src),
+       'a sweep of a real mailbox is not something to apply on one click');
+    ck('  an already-saved row cannot be ticked',
+       /p\.already_known \? 'disabled'/.test(src));
+    ck('  a row with no name cannot be saved silently',
+       /no name — type one or untick it/.test(src),
+       'guessing a label is what produced "Dear export"');
+    ck('  and what was skipped is reported back, not swallowed',
+       /Skipped \$\{skipped\}/.test(src) || /r\.skipped\.map/.test(src),
+       'a bulk save that quietly drops rows is one she cannot trust');
+}
+
+console.log(`\n  ${pass} passed, ${fail} failed`);
+if (failures.length) { console.log('\n  failed:'); failures.forEach((f) => console.log('    · ' + f)); }
+process.exit(fail ? 1 : 0);
+
+})().catch((e) => { console.error('SUITE CRASHED:', e && e.stack); process.exit(1); });
