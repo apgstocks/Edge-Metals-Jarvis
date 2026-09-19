@@ -103,47 +103,75 @@ section('A — it collapses, and comes back');
 }
 
 // ══════════════════════════════════════════════════════════════════════════
-section('B — the rail labels are unique, for every role');
+section('B — collapsed means GONE, not narrower');
 // ══════════════════════════════════════════════════════════════════════════
+// Apsara, 2026-09-19, twice, the second time with a screenshot of OL, SR, BO,
+// BOO, TR, SU, DO, BI, INV, EI, BOL, BOT down the middle of a panel: "This is
+// not hw i want collapsible to work." Asked what it should do instead: hide it
+// completely, hamburger brings it back.
+//
+// This section used to test the two-letter rail — that every item had a label
+// and no two collided, because a fixed two letters once gave Board and
+// Bookings both "BO". Careful checks for a feature that should not have
+// existed. They are replaced rather than deleted, because the property that
+// actually mattered inside them survives: NOTHING MAY BE LOST when the menu
+// collapses.
 {
-    // THE BUG THIS SECTION EXISTS FOR: a fixed two letters gave Board and
-    // Bookings both "BO". Checked per ROLE because the visible list differs —
-    // a rail that is unambiguous for an admin can collide for staff, and staff
-    // are the ones least likely to say so.
     for (const role of ['admin', 'user', 'staff']) {
         const { dom, w, d } = mount({ role });
         w.renderNav();
         const btns = navBtns(d);
         if (!btns.length) { dom.window.close(); continue; }
 
-        const keys = btns.map((b) => (b.querySelector('.nav-initials') || {}).textContent || '');
-        ck(`${role}: every item has a rail label`, keys.every(Boolean), JSON.stringify(keys));
-        ck(`  ${role}: and no two are the same`, new Set(keys).size === keys.length,
-           keys.join(',') + ' — two destinations showing one label is worse than no label');
+        // ── THE ONE THAT SURVIVED THE REDESIGN ──────────────────────────
+        // A collapsed menu that quietly drops destinations is the failure
+        // this checked for under the old design and still checks for now.
+        ck(`${role}: every destination carries its full name`,
+           btns.every((b) => ((b.querySelector('.nav-label') || {}).textContent || '').trim()),
+           'the menu comes back in full, so the names must be in the DOM to come back to');
+        ck(`  ${role}: and a title for hover`, btns.every((b) => b.getAttribute('title')));
 
-        // The full name is always reachable: shown expanded, and on hover
-        // either way.
-        ck(`  ${role}: the full name is always in the DOM`,
-           btns.every((b) => (b.querySelector('.nav-label') || {}).textContent),
-           'CSS shows one or the other; rebuilding the nav on collapse would be a second code path that could disagree');
-        ck(`  ${role}: and on hover as a title`, btns.every((b) => b.getAttribute('title')),
-           'two letters are a reminder, not a name');
+        // And nothing abbreviates anything any more.
+        ck(`  ${role}: no two-letter stubs anywhere`,
+           !d.querySelector('.nav-initials'),
+           'navInitialsFor is gone; a stub element left behind is one someone re-wires');
 
         dom.window.close();
     }
 
-    // The specific pair that broke.
-    const { dom, w, d } = mount();
-    w.renderNav();
-    const find = (label) => navBtns(d).find((b) => (b.querySelector('.nav-label') || {}).textContent === label);
-    const board = find('Board'), bookings = find('Bookings');
-    if (board && bookings) {
-        const a = board.querySelector('.nav-initials').textContent;
-        const b = bookings.querySelector('.nav-initials').textContent;
-        ck('Board and Bookings do not collide', a !== b, `${a} vs ${b}`);
-        ck('  and the longer one is the one that grew', b.length > a.length, `${a} / ${b}`);
-    }
-    dom.window.close();
+    // ── THE MECHANISM IS THE PHONE'S, NOT A THIRD STATE ─────────────────
+    // Collapsing on a desktop and opening the drawer on a phone are the same
+    // intent, so they are the same code. A separate desktop treatment is what
+    // leaked into the phone layout and produced her screenshot.
+    ck('collapsed puts the sidebar off-canvas',
+       /body\.nav-collapsed #sidebar \{ position:fixed;[^}]*transform:translateX\(-100%\)/.test(HTML),
+       'a 54px rail still eats width and still cannot be read');
+    ck('  and shows the hamburger', /body\.nav-collapsed #hamburgerBtn \{ display:flex; \}/.test(HTML));
+    ck('  which slides the FULL menu back over the page',
+       /body\.nav-collapsed #sidebar\.mobile-open \{ transform:translateX\(0\); \}/.test(HTML));
+    ck('  with a backdrop', /body\.nav-collapsed #sidebarBackdrop\.mobile-open \{ display:block; \}/.test(HTML));
+    ck('  and room made for the button', /body\.nav-collapsed main \{ padding-top:58px; \}/.test(HTML));
+
+    ck('no rail rules are left behind',
+       !/body\.nav-collapsed #sidebar \{ width:54px/.test(HTML)
+       && !/\.nav-initials/.test(HTML),
+       'the old treatment half-removed is what produced a 300px panel of stubs');
+
+    // ── AND THE HANDLERS ARE NO LONGER CALLED NO-OPS ────────────────────
+    // Their comment said "phone widths only ... harmless no-ops on desktop".
+    // They now open and close the menu at every width, and a comment calling
+    // load-bearing code a no-op is how it gets deleted by someone tidying.
+    // Matched on the HEADING, not on the words "phone widths only" — the
+    // replacement comment QUOTES the old claim while correcting it, so a
+    // negative match on the phrase fails against the very fix it is checking.
+    ck('the off-canvas handlers no longer claim to be phone-only',
+       /NOT phone-only any more/.test(HTML)
+       && !/^\/\/ ── Mobile off-canvas sidebar \(phone widths only/m.test(HTML));
+
+    // Expanding from inside the open drawer must not leave the backdrop up.
+    ck('expanding closes the drawer behind it',
+       /if \(!on && typeof closeMobileSidebar === 'function'\) closeMobileSidebar\(\);/.test(HTML),
+       'the sidebar returns to the flow and the backdrop is left covering the page');
 }
 
 // ══════════════════════════════════════════════════════════════════════════
@@ -218,52 +246,41 @@ section('D — the phone is untouched');
     ck('the collapse toggle is hidden at phone widths',
        /@media[^{]*\{[\s\S]*?#btnNavCollapse\s*\{\s*display:\s*none/.test(HTML),
        'otherwise a phone gets a rail button and a burger arguing over the same panel');
-    ck('  and a collapsed body does not shrink the off-canvas panel',
-       /body\.nav-collapsed #sidebar \{ width:min\(82vw,300px\); \}/.test(HTML),
-       'a 54px off-canvas drawer would be unusable and would look like a rendering fault');
-
-    dom.window.close();
+    ck('  and a collapsed body no longer shrinks anything',
+       !/body\.nav-collapsed #sidebar \{ width:54px/.test(HTML),
+       'this used to check the phone undid a 54px rail; there is no rail to undo');
 }
 
-// ── N. THE COLLAPSED RAIL STOPS AT THE PHONE ────────────────────────────────
-// Apsara, 2026-09-19, with a screenshot: "This is not hw i want collapsible to
-// work" — a sidebar nearly as wide as the phone with OL, SR, BO, BOO, TR, SU,
-// DO, BI, INV, EI, BOL, BOT listed down the middle of it.
+// ── N. THERE IS NOTHING LEFT TO LEAK ────────────────────────────────────────
+// This section tested a fix made hours earlier the same day: body.nav-collapsed
+// is set on the BODY and persists, so a window narrowed after collapsing on a
+// desktop arrived at the phone layout still wearing it — and only the WIDTH was
+// being undone there, giving a 300px panel of two-letter stubs.
 //
-// body.nav-collapsed is a DESKTOP idea — the stylesheet says so three lines
-// above the rule that broke it: "One mechanism at a time: the burger owns the
-// sidebar on a phone." But the class is set on the BODY and it persists, so a
-// window narrowed after the rail was collapsed arrives at the phone layout
-// still wearing it. Only the WIDTH was neutralised there; the rules hiding the
-// labels and showing the initials were not, so both halves applied at once.
-section('N. nav-collapsed does not leak into the phone layout');
+// That fix is gone because the thing it fixed is gone. Collapsing IS the
+// off-canvas panel now, at every width, so there is no desktop-only treatment
+// left to leak. The checks are replaced by the one that makes the whole class
+// of bug impossible rather than caught.
+section('N. one mechanism, so nothing can leak between them');
 {
-    const css = HTML.slice(HTML.indexOf('@media (max-width: 860px)'),
-                          HTML.indexOf('@media (max-width: 860px)') + 2600);
-    ck('the phone layout restores the sidebar width',
-       /body\.nav-collapsed #sidebar \{ width:min\(82vw,300px\); \}/.test(css));
-    ck('  AND brings the labels back', /body\.nav-collapsed #sidebar \.nav-label/.test(css),
-       'a 300px panel showing two-letter initials is both halves at once');
-    ck('  hiding the initials instead',
-       /body\.nav-collapsed #sidebar \.nav-initials \{ display:none; \}/.test(css),
-       'OL, SR, BO, BOO down the middle of a phone screen');
-    ck('  and restores the row padding, not just the width',
-       /body\.nav-collapsed #sidebar \.nav-btn \{ justify-content:flex-start/.test(css),
-       'centred rows in a full-width panel read as a mistake');
-    ck('  and the sign-out label', /body\.nav-collapsed #sidebar #btnSignout \{ font-size:13px/.test(css)
-       && /body\.nav-collapsed #sidebar #btnSignout::after \{ content:none; \}/.test(css),
-       'it was font-size:0 with an arrow glued on by ::after');
-    ck('  restored by revert rather than by guessing each base display',
-       /display:revert/.test(css),
-       '.nav-label is a bare span with no rule of its own — block would be a guess');
+    ck('there is no desktop-only collapsed treatment',
+       !/body\.nav-collapsed #sidebar \{ width:54px/.test(HTML)
+       && !/body\.nav-collapsed #sidebar \.nav-initials/.test(HTML),
+       'two treatments for one intent is what produced her screenshot');
 
-    // The desktop rail is UNTOUCHED. That is the behaviour she asked for on
-    // 2026-09-12 and this fix must not quietly take it away.
-    const desktop = HTML.slice(0, HTML.indexOf('@media (max-width: 860px)'));
-    ck('the desktop rail still collapses to 54px',
-       /body\.nav-collapsed #sidebar \{ width:54px; \}/.test(desktop));
-    ck('  and still shows its initials there',
-       /body\.nav-collapsed #sidebar \.nav-initials \{ display:block; \}/.test(desktop));
+    // The phone block should no longer need to undo anything.
+    const phone = HTML.slice(HTML.indexOf('@media (max-width: 860px)'),
+                             HTML.indexOf('@media (max-width: 860px)') + 1600);
+    ck('  and the phone block has nothing to undo',
+       !/display:revert/.test(phone) && !/nav-initials/.test(phone),
+       phone.slice(0, 200));
+    ck('  which is said out loud, not left as an absence',
+       /AND NOTHING TO UNDO HERE ANY MORE/.test(HTML),
+       'a block that silently stopped doing something reads as an accident');
+
+    // The burger still owns the phone: one control at a time.
+    ck('the collapse toggle is still hidden at phone widths',
+       /@media[^{]*\{[\s\S]*?#btnNavCollapse\s*\{\s*display:\s*none/.test(HTML));
 }
 
 console.log(`\n  ${pass} passed, ${fail} failed`);

@@ -174,24 +174,38 @@ input::placeholder { color:var(--steel-500); }
    has. #btnNavCollapse is hidden under the same breakpoint that shows the
    burger, so only one of the two is ever live. */
 #sidebar { transition: width 180ms var(--ease-out), transform 220ms var(--ease-out); }
-body.nav-collapsed #sidebar { width:54px; }
-body.nav-collapsed #sidebar .nav-label,
-body.nav-collapsed #sidebar .nav-section-label,
-body.nav-collapsed #sidebar .brand-words,
-body.nav-collapsed #sidebar #todayLabel,
-body.nav-collapsed #sidebar #roleLabel { display:none; }
-body.nav-collapsed #sidebar .nav-btn { justify-content:center; padding:10px 0; gap:0; border-left-width:2px; }
-body.nav-collapsed #sidebar .nav-initials { display:block; }
-.nav-initials { display:none; font-family:var(--font-mono); font-size:10.5px; font-weight:700; letter-spacing:.02em; }
-body.nav-collapsed #sidebar > div:first-of-type + div { padding:14px 6px; }
-body.nav-collapsed #sidebar nav { padding:10px 5px; }
-body.nav-collapsed #sidebar #btnSignout { font-size:0; padding:8px 0; }
-body.nav-collapsed #sidebar #btnSignout::after { content:'\2192'; font-size:14px; }
+/* ── COLLAPSED MEANS GONE, NOT NARROWER ──────────────────────────────────
+   Apsara, 2026-09-19, twice, the second time with a screenshot of OL, SR,
+   BO, BOO, TR, SU, DO, BI, INV, EI, BOL, BOT down the middle of a panel:
+   "This is not hw i want collapsible to work." Asked what it should do
+   instead, she chose: hide it completely, hamburger brings it back.
+
+   She is right and the old design was mine. A 54px rail of two-letter
+   stubs is the worst of both — it still eats width, and Board/Bookings
+   become BO/BOO, which is precisely the ambiguity the initials were
+   invented to remove. The comment that defended it argued icons would be
+   "twenty small guesses"; true, and the answer was not to guess in letters
+   instead. It was to stop showing a menu she cannot read.
+
+   ── AND IT REUSES THE MECHANISM THAT ALREADY WORKS ────────────────────
+   The phone layout has done the right thing all along: slide the sidebar
+   off-canvas, leave a hamburger, bring the FULL menu back over the content.
+   Collapsing on a desktop is the same intent, so it is now the same code
+   rather than a third state to keep in step. That also retires the bug
+   fixed this morning — the desktop rail leaking into the phone layout —
+   by removing the thing that leaked. */
+body.nav-collapsed #sidebar { position:fixed; inset:0 auto 0 0; z-index:40; width:min(82vw,300px);
+                              transform:translateX(-100%); box-shadow:0 0 50px rgba(0,0,0,.6); }
+body.nav-collapsed #sidebar.mobile-open { transform:translateX(0); }
+body.nav-collapsed #sidebarBackdrop.mobile-open { display:block; }
+body.nav-collapsed #hamburgerBtn { display:flex; }
+/* Room for the hamburger, which is fixed at the top-left. */
+body.nav-collapsed main { padding-top:58px; }
+
 /* The toggle itself. Inside the sidebar so it moves with it, and pinned to the
    top-right of the brand block where a disclosure control belongs. */
 #btnNavCollapse { position:absolute; top:10px; right:8px; width:24px; height:24px; display:flex; align-items:center; justify-content:center; background:transparent; border:1px solid var(--steel-700); border-radius:var(--radius-xs); color:var(--steel-400); cursor:pointer; font-size:12px; line-height:1; padding:0; transition:color var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out); }
 #btnNavCollapse:hover { color:#fff; border-color:var(--steel-500); }
-body.nav-collapsed #btnNavCollapse { position:static; margin:0 auto; }
 
 /* ── Collapsible sidebar for phone widths ─────────────────────────────────
    Desktop: sidebar sits in normal flex flow, always visible, unchanged.
@@ -208,38 +222,13 @@ body.nav-collapsed #btnNavCollapse { position:static; margin:0 auto; }
   /* One mechanism at a time: the burger owns the sidebar on a phone. */
   #btnNavCollapse { display:none; }
 
-  /* ── nav-collapsed IS A DESKTOP IDEA, AND IT HAS TO STOP AT THE DOOR ──
-     Apsara, 2026-09-19, with a screenshot: "This is not hw i want
-     collapsible to work" — a sidebar nearly as wide as the phone, listing
-     OL, SR, BO, BOO, TR, SU, DO, BI, INV, EI, BOL, BOT down the middle.
-
-     The class is set on the BODY and it persists, so a window narrowed after
-     the rail was collapsed on a desktop arrives here still wearing it. Only
-     the WIDTH was neutralised below; the rules that hide the labels and show
-     the initials were not. The result is both halves at once: a 300px panel
-     with nothing readable in it.
-
-     So the whole treatment is undone here, not just its width. The burger
-     owns the sidebar on a phone — that is stated three lines up — and this
-     is what actually making it true looks like. Every value below is the
-     base rule it restores, taken from the definitions at the top of this
-     stylesheet rather than guessed. */
-  body.nav-collapsed #sidebar { width:min(82vw,300px); }
-  /* `revert`, not a hard-coded display. .nav-label is a bare <span> with no
-     rule of its own, .brand-words and #roleLabel are not — writing block for
-     all four would be four guesses at what they already are. revert restores
-     whatever the cascade gives each one. */
-  body.nav-collapsed #sidebar .nav-label,
-  body.nav-collapsed #sidebar .nav-section-label,
-  body.nav-collapsed #sidebar .brand-words,
-  body.nav-collapsed #sidebar #todayLabel,
-  body.nav-collapsed #sidebar #roleLabel { display:revert; }
-  body.nav-collapsed #sidebar .nav-initials { display:none; }
-  body.nav-collapsed #sidebar .nav-btn { justify-content:flex-start; padding:10px 12px 10px 13px; gap:11px; border-left-width:3px; }
-  body.nav-collapsed #sidebar > div:first-of-type + div { padding:14px 16px; }
-  body.nav-collapsed #sidebar nav { padding:10px 12px; }
-  body.nav-collapsed #sidebar #btnSignout { font-size:13px; padding:8px 12px; }
-  body.nav-collapsed #sidebar #btnSignout::after { content:none; }
+  /* ── AND NOTHING TO UNDO HERE ANY MORE ─────────────────────────────
+     This block used to neutralise a desktop-only rail that leaked in: the
+     class is set on the BODY and persists, so a window narrowed after
+     collapsing arrived wearing it, and only the WIDTH was being undone —
+     giving a 300px panel showing two-letter stubs. That fix is gone
+     because the thing it was fixing is gone. Collapsed now means the same
+     off-canvas panel the phone already uses, at every width. */
   main { padding-top:58px; }
 }
 #hamburgerBtn { position:fixed; top:14px; left:14px; z-index:41; width:40px; height:40px; align-items:center; justify-content:center; flex-direction:column; gap:5px; background:var(--steel-950); border:1px solid var(--steel-700); border-radius:var(--radius-sm); cursor:pointer; }
@@ -1088,53 +1077,15 @@ async function api(path, opts = {}) {
   return data;
 }
 
-// Short labels for the collapsed rail. Multi-word labels give their initials
-// ("Edge Inventory" -> EI); a single word gives its first letters.
+// ── THE COLLAPSED RAIL'S INITIALS ARE GONE ──────────────────────────────────
+// navInitialsFor() lived here and turned "Edge Inventory" into EI, lengthening
+// keys until no two collided (Board BO, Bookings BOO). It was careful code for
+// a feature that should not have existed: Apsara, 2026-09-19, looking at the
+// result — "This is not hw i want collapsible to work."
 //
-// Not icons: there are twenty-odd destinations here and inventing an icon for
-// each would mean twenty small guesses about what a thing looks like, most of
-// them worse than two letters.
-//
-// ── AND THEY ARE MADE UNIQUE ACROSS THE VISIBLE MENU ────────────────────────
-// The first version took a fixed two letters, which gave Board and Bookings
-// both "BO" — two destinations showing one label, which is precisely the
-// confusion initials were supposed to avoid. So they are computed for the
-// WHOLE list at once and lengthened until no two collide: Board stays BO,
-// Bookings becomes BOO.
-//
-// Computed per render rather than stored, because which items are visible
-// depends on the role — a staff menu and an admin menu can legitimately
-// resolve the same label differently, and the rail should be unambiguous in
-// whichever one is on screen.
-function navInitialsFor(labels) {
-  const base = (label) => {
-    const words = String(label || '').trim().split(/\s+/).filter(Boolean);
-    if (!words.length) return '?';
-    if (words.length === 1) return words[0].slice(0, 2).toUpperCase();
-    return words.slice(0, 3).map((w) => w[0]).join('').toUpperCase();
-  };
-  const out = new Map();
-  const used = new Map();   // initials -> how many already have it
-  for (const label of labels) {
-    let key = base(label);
-    // Lengthen a single word one letter at a time; a multi-word label that
-    // still collides falls back to its first word plus the next initial.
-    const words = String(label || '').trim().split(/\s+/).filter(Boolean);
-    let n = 2;
-    while (used.has(key) && n < 6) {
-      n += 1;
-      key = words.length === 1
-        ? words[0].slice(0, n).toUpperCase()
-        : (words[0].slice(0, n - words.length + 1) + words.slice(1).map((w) => w[0]).join('')).toUpperCase();
-    }
-    // If six letters still collide the labels are effectively identical, and a
-    // suffix is the only honest answer left.
-    if (used.has(key)) key = `${key}${used.get(key) + 1}`;
-    used.set(key, (used.get(key) || 0) + 1);
-    out.set(label, key);
-  }
-  return out;
-}
+// Collapsing hides the sidebar entirely now and the hamburger brings the FULL
+// menu back, so there is nothing to abbreviate. Deleted rather than left
+// unreferenced: a function nothing calls is a function someone re-wires.
 
 function renderNav() {
   const nav = $('sideNav');
@@ -1169,7 +1120,6 @@ function renderNav() {
   visible.sort((a2, b2) => rank(a2.group) - rank(b2.group));
   // Worked out across the sorted, role-filtered list, so the rail is
   // unambiguous for whoever is actually looking at it.
-  const initials = navInitialsFor(visible.map((n) => n.label));
   let lastGroup = null;
   nav.innerHTML = visible.map(n => {
     const header = n.group !== lastGroup
@@ -1179,7 +1129,7 @@ function renderNav() {
     // Both the full label and the initials are always in the DOM; CSS shows
     // one or the other. Rebuilding the nav on collapse would be a second code
     // path that could disagree with this one about what is in the menu.
-    return `${header}<button class="nav-btn ${n.id === CURRENT_TAB ? 'active' : ''}" data-tab="${n.id}" title="${esc(n.label)}"><span class="nav-initials">${esc(initials.get(n.label) || '?')}</span><span class="nav-label">${esc(n.label)}</span></button>`;
+    return `${header}<button class="nav-btn ${n.id === CURRENT_TAB ? 'active' : ''}" data-tab="${n.id}" title="${esc(n.label)}"><span class="nav-label">${esc(n.label)}</span></button>`;
   }).join('');
   nav.querySelectorAll('button').forEach(b => b.addEventListener('click', () => {
     // Address book is its own standalone page (dashboard/address-book.html,
@@ -1196,9 +1146,13 @@ function renderNav() {
   }));
 }
 
-// ── Mobile off-canvas sidebar (phone widths only — desktop sidebar is
-// always visible via the media query above, these handlers are harmless
-// no-ops on desktop since the classes have no visual effect there). ───────
+// ── The off-canvas sidebar — NOT phone-only any more ──────────────────────
+// This said "phone widths only ... harmless no-ops on desktop since the
+// classes have no visual effect there". That stopped being true on
+// 2026-09-19, when collapsing on a desktop became the same off-canvas panel
+// rather than a 54px rail of two-letter stubs. These handlers are now what
+// opens and closes the menu at EVERY width, and a comment calling them
+// no-ops is how load-bearing code gets deleted by someone tidying up.
 function closeMobileSidebar() {
   $('sidebar').classList.remove('mobile-open');
   $('sidebarBackdrop').classList.remove('mobile-open');
@@ -1226,6 +1180,10 @@ $('sidebarBackdrop').addEventListener('click', closeMobileSidebar);
 // the state.
 function setNavCollapsed(on, remember) {
   document.body.classList.toggle('nav-collapsed', on);
+  // Expanding from INSIDE the open drawer: the sidebar returns to the normal
+  // flow, so the drawer state has to come off with it or the backdrop is left
+  // covering the page with nothing over it.
+  if (!on && typeof closeMobileSidebar === 'function') closeMobileSidebar();
   const btn = $('btnNavCollapse');
   if (btn) {
     // The chevron points the way it will MOVE things, which is the convention

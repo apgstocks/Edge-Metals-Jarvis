@@ -95,11 +95,15 @@ section('A — what she reads says Invoice');
     // thing she actually clicks.
     w.renderNav();
     const buttons = [...w.document.querySelectorAll('#sideNav button[data-tab]')];
-    // Read off .nav-label, NOT the whole button. Since the sidebar became
-    // collapsible (2026-09-16) each button also carries a .nav-initials span
-    // for the collapsed rail, so textContent is "INVInvoice" — this failed on
-    // correct code, which is the same shape of mistake as reading a heading's
+    // Read off .nav-label, NOT the whole button. When the sidebar collapsed to
+    // a rail (2026-09-16 to 2026-09-19) each button also carried a
+    // .nav-initials span, so textContent was "INVInvoice" — this failed on
+    // correct code, the same shape of mistake as reading a heading's
     // textContent when the count sits beside it in its own span.
+    //
+    // The rail is gone and the span with it, so the two now agree. Kept
+    // reading .nav-label anyway: it is the element that holds the NAME, and
+    // the next thing added beside it would break this again.
     const nameOf = (b) => ((b.querySelector('.nav-label') || b).textContent || '').trim();
     const salesBtn = buttons.find((b) => b.dataset.tab === 'sales');
     ck('the sidebar entry reads Invoice', salesBtn && nameOf(salesBtn) === 'Invoice',
