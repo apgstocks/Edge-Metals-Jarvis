@@ -2272,6 +2272,23 @@ const MUTATIONS = [
       find: "            if (hauler && !String(bill.trucking_company || '').trim()) patch.trucking_company = hauler;",
       to:   '            if (hauler) patch.trucking_company = hauler;' },
 
+    // ── WHICH MONTHS CARRIED THE CONTAINER-KEY LOSS (2026-09-20) ─────────
+
+    { name: 'damage: the month grouping only understands an ISO date, so hand-typed rows read as undatable',
+      file: 'scripts/margin-damage.js', suites: ['margin-damage'],
+      find: '                const dates = g.sales.map((s) => bills.sortableDate(s && s.date))',
+      to:   "                const dates = g.sales.map((s) => (/^\\d{4}-\\d{2}-\\d{2}$/.test(String(s && s.date || '').trim()) ? String(s.date).trim() : null))" },
+
+    { name: 'damage: the months go behind --list, so the run she does never shows them',
+      file: 'scripts/margin-damage.js', suites: ['margin-damage'],
+      find: 'if (affected) {\n    const byMonth = new Map();',
+      to:   'if (affected && wantList) {\n    const byMonth = new Map();' },
+
+    { name: 'damage: the last month seen wins instead of the earliest',
+      file: 'scripts/margin-damage.js', suites: ['margin-damage'],
+      find: '                return dates.length ? dates[0].slice(0, 7) : null;',
+      to:   '                return dates.length ? dates[dates.length - 1].slice(0, 7) : null;' },
+
     // ── TRUCKING DEDUCTED FROM A YARD LOAD (2026-09-20) ───────────────────
     // Each of these is a way the feature could be "implemented" and be wrong
     // about money. If tests/load-trucking.js does not go red for one of them,

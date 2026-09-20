@@ -121,6 +121,35 @@ for (const g of byKey.values()) {
     if (g.sales.length > 1 || g.bills.length > 1) {
         rows.push({
             bk, cn,
+            // ── WHEN, added 2026-09-20 ───────────────────────────────────
+            // This file's own header says it answers "HOW MUCH, across the
+            // whole ledger, and FOR HOW LONG", and until now it answered only
+            // the first. The second is the one that decides what she does
+            // next: a figure spread evenly over six months is a reporting
+            // correction, and the same figure concentrated in the month she
+            // has been quoting from is a set of decisions to revisit.
+            //
+            // The SALE's date, because the missing money is revenue and the
+            // month a sale lands in is the month its margin was read in.
+            // Earliest line of the container, so a container whose grades
+            // were invoiced across a month boundary counts once, in the month
+            // it started — not twice, and not in whichever order the store
+            // happened to return.
+            //
+            // THROUGH bills.sortableDate, not a regex of my own. Dates here
+            // are stored EXACTLY AS TYPED: a row she entered on the form
+            // holds "03/02/2026" and one that came off the sheet import holds
+            // "2026-03-02", and her ledger is a mix of both. My first version
+            // matched only the ISO shape, which would have filed every
+            // hand-entered container under "no date" and reported the whole
+            // loss as undatable. sortableDate is what the rest of this app
+            // already uses to understand a date, and it returns null rather
+            // than guessing at one it cannot read.
+            month: (() => {
+                const dates = g.sales.map((s) => bills.sortableDate(s && s.date))
+                    .filter(Boolean).sort();
+                return dates.length ? dates[0].slice(0, 7) : null;
+            })(),
             // Marked so the list cannot be read as "revenue recovered" on a
             // container whose extra line is a double-count rather than a
             // second grade. Without this the two look identical, and the one
@@ -162,6 +191,33 @@ console.log(`  understated by                  ${money(marginNow - marginWas)}`)
 if (!affected) {
     console.log('');
     console.log('  Nothing to report — every container carries exactly one line.');
+}
+
+// ── AND FOR HOW LONG ────────────────────────────────────────────────────────
+// Printed always, not behind --list: "which months did I read a wrong number
+// in" is the question that decides whether anything needs revisiting, and
+// putting it behind a flag means it is the part she does not see.
+if (affected) {
+    const byMonth = new Map();
+    for (const r of rows) {
+        const k = r.month || '(no date on the sale)';
+        const m = byMonth.get(k) || { missed: 0, containers: 0 };
+        m.missed += r.missed; m.containers += 1;
+        byMonth.set(k, m);
+    }
+    const months = [...byMonth.entries()].sort((a, b) => String(a[0]).localeCompare(String(b[0])));
+    console.log('');
+    console.log('  AND WHICH MONTHS YOU READ IT IN');
+    console.log('  ' + '─'.repeat(58));
+    // Scaled against the WORST month, not against the total — a bar scaled to
+    // the total is a row of stubs when one month dominates, which is exactly
+    // when the shape matters most.
+    const worst = months.reduce((t, [, m]) => Math.max(t, m.missed), 0);
+    for (const [k, m] of months) {
+        const bar = worst > 0 ? '█'.repeat(Math.max(1, Math.round((m.missed / worst) * 24))) : '';
+        console.log(`  ${String(k).padEnd(22)}${money(m.missed).padStart(14)}   ${bar}`);
+        console.log(`  ${''.padEnd(22)}${String(m.containers).padStart(3)} container(s)`);
+    }
 }
 
 // ── AND THE OTHER KIND OF PROBLEM ───────────────────────────────────────────

@@ -134,6 +134,74 @@ section('C. a repeated grade is flagged, not celebrated');
        'marking everything is the same as marking nothing');
 }
 
+// ── E. AND FOR HOW LONG ─────────────────────────────────────────────────────
+// This script's header promises "HOW MUCH, across the whole ledger, and for
+// how long", and until 2026-09-20 it answered only the first. Which months
+// carried the loss is what decides whether anything needs revisiting: spread
+// evenly it is a reporting correction, concentrated in the month she has been
+// quoting from it is a set of decisions to go back over.
+section('E. which months carried it');
+{
+    // A SECOND MONTH, and written in the OTHER date format on purpose. Rows
+    // here are stored exactly as typed — a container entered on the form
+    // holds "04/11/2026" and one off the sheet import holds "2026-04-11", and
+    // her real ledger is a mix. The first version of the month grouping
+    // matched only the ISO shape, which would have filed every hand-entered
+    // container under "no date" and reported the whole loss as undatable.
+    await bills.addBill({ date: '2026-04-11', supplier: 'Aussins', booking_no: '265999111',
+        container_no: 'MSKU9990001', gross: 40000, truck: 12000, container: 8500,
+        chassis: 6600, boxes: 0, supplier_price: 0.40 });
+    for (const [item, weight, invoice_price] of [['AL COMBO', 9000, 0.90], ['SHRED', 4000, 0.50]]) {
+        await sales.addSale({ date: '2026-04-11', customer: 'MK Trading', booking_no: '265999111',
+            container_no: 'MSKU9990001', item, weight, invoice_price });
+    }
+    const out = run().stdout || '';
+
+    ck('the months section is printed', /AND WHICH MONTHS YOU READ IT IN/.test(out), out.slice(0, 120));
+    // Not behind --list: the run above passes no flags. "Which months did I
+    // read a wrong number in" behind a flag is the part she does not see.
+    ck('  without needing --list', /AND WHICH MONTHS YOU READ IT IN/.test(run().stdout || ''));
+
+    const monthLines = out.split('\n').slice(out.split('\n').findIndex((l) => /WHICH MONTHS/.test(l)));
+    ck('  the US-typed container lands in March', monthLines.some((l) => /2026-03/.test(l)),
+       monthLines.slice(0, 8).join(' | '));
+    // THE ONE THAT CATCHES THE REGEX MISTAKE. If sortableDate were replaced
+    // by an ISO-only match, this row would move to "(no date on the sale)"
+    // and the March line would vanish entirely.
+    ck('  the ISO-dated container lands in April', monthLines.some((l) => /2026-04/.test(l)),
+       monthLines.slice(0, 8).join(' | '));
+    ck('  and neither is filed as undatable', !/\(no date on the sale\)/.test(monthLines.join('\n')),
+       'a date the rest of the app understands must not read as missing here');
+    ck('  each month says how many containers', /container\(s\)/.test(monthLines.join('\n')));
+
+    // Months in order, so the shape over time reads left to right.
+    const march = monthLines.findIndex((l) => /2026-03/.test(l));
+    const april = monthLines.findIndex((l) => /2026-04/.test(l));
+    ck('  and they are in date order', march > -1 && april > march, `march=${march} april=${april}`);
+
+    // ── A CONTAINER INVOICED ACROSS A MONTH BOUNDARY ─────────────────────
+    // Its grades do not all land on one day. It must be counted ONCE, in the
+    // month it started — not twice, and not in whichever month the store
+    // happened to return last. A mutation taking the LAST date instead of the
+    // earliest survived until this existed, which means the "earliest line"
+    // rule in the script was a comment and nothing more.
+    await bills.addBill({ date: '2026-05-30', supplier: 'Gomez', booking_no: '266777222',
+        container_no: 'CSNU5550001', gross: 40000, truck: 12000, container: 8500,
+        chassis: 6600, boxes: 0, supplier_price: 0.40 });
+    await sales.addSale({ date: '05/30/2026', customer: 'Modern', booking_no: '266777222',
+        container_no: 'CSNU5550001', item: 'ALU BREAKAGE', weight: 9000, invoice_price: 0.90 });
+    await sales.addSale({ date: '06/02/2026', customer: 'Modern', booking_no: '266777222',
+        container_no: 'CSNU5550001', item: 'SHRED', weight: 4000, invoice_price: 0.50 });
+    const out2 = run().stdout || '';
+    const lines2 = out2.split('\n').slice(out2.split('\n').findIndex((l) => /WHICH MONTHS/.test(l)));
+    const may = lines2.filter((l) => /2026-05/.test(l));
+    const june = lines2.filter((l) => /2026-06/.test(l));
+    ck('  a container spanning two months is filed under the first', may.length === 1,
+       lines2.slice(0, 12).join(' | '));
+    ck('  and does NOT also appear under the second', june.length === 0,
+       'counted twice, its loss is reported twice');
+}
+
 // ── D. AN EMPTY LEDGER SAYS SO RATHER THAN CRASHING ─────────────────────────
 // It will be run on a fresh checkout, and a stack trace there reads as "the
 // fix is broken" rather than "there is nothing here yet".
