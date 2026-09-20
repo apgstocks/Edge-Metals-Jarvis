@@ -2199,6 +2199,79 @@ const MUTATIONS = [
       find: "                || new Date().toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' });",
       to:   "                || new Date().toISOString().slice(0, 10);" },
 
+    // ── A VERIFIED HAULER INVOICE, OFFERED TO A BILL (2026-09-20) ─────────
+    // The first two are the ones that cost real money.
+
+    { name: 'verify->bill: one haul is written to every grade of the container',
+      file: 'helpers/truckingProposal.js', suites: ['verify-to-bill'],
+      find: "            status: candidates.length === 1 ? 'one_bill' : 'several_bills',",
+      to:   "            status: 'one_bill'," },
+
+    { name: 'verify->bill: a container with several bills quietly picks the first',
+      file: 'helpers/truckingProposal.js', suites: ['verify-to-bill'],
+      find: '        const candidates = rows.filter((b) => norm(joinBy === \'booking\' ? b.booking_no : b.container_no) === key);',
+      to:   '        const candidates = rows.filter((b) => norm(joinBy === \'booking\' ? b.booking_no : b.container_no) === key).slice(0, 1);' },
+
+    { name: 'verify->bill: accepting blanks the Verified on date she typed',
+      file: 'helpers/truckingProposal.js', suites: ['verify-to-bill'],
+      find: '        verified_on: (current && current.verified_on) || null,',
+      to:   '        verified_on: null,' },
+
+    { name: 'verify->bill: a charge the invoice did not make is written as 0.00',
+      file: 'helpers/truckingProposal.js', suites: ['verify-to-bill'],
+      find: 'const pos = (v) => { const n = money(v); return n !== null && n > 0 ? n : null; };',
+      to:   'const pos = (v) => { const n = money(v); return n === null ? null : n; };' },
+
+    { name: 'verify->bill: a row the cross-check failed is offered anyway',
+      file: 'helpers/truckingProposal.js', suites: ['verify-to-bill'],
+      find: "        if (rec.status !== 'verified' && rec.status !== 'match') {",
+      to:   '        if (false) {' },
+
+    { name: 'verify->bill: Sher is joined on container, which it does not have',
+      file: 'helpers/truckingProposal.js', suites: ['verify-to-bill'],
+      find: "const JOIN_BY = { aj: 'container', jio: 'container', sher: 'booking' };",
+      to:   "const JOIN_BY = { aj: 'container', jio: 'container', sher: 'container' };" },
+
+    { name: 'verify->bill: an Other goes in with no note, so every accept throws',
+      file: 'helpers/truckingProposal.js', suites: ['verify-to-bill'],
+      find: "            note: `From AJ Transport invoice ${rec.invoice_no || '(no number)'} — the invoice did not name this charge.` });",
+      to:   "            note: '' });" },
+
+    { name: 'verify->bill: the candidates stop naming their grade, so she cannot tell them apart',
+      file: 'helpers/truckingProposal.js', suites: ['verify-to-bill'],
+      find: '            grade: String((b.description || b.item) || \'\').trim() || null,',
+      to:   '            grade: b.grade || null,' },
+
+    { name: 'verify->invoice: Zimex freight replaces a charge but mints a new id',
+      file: 'helpers/freightProposal.js', suites: ['verify-to-bill'],
+      find: '            ? { ...c, what: charge.what, amount: charge.amount, direction: charge.direction, why: charge.why }',
+      to:   '            ? { ...charge }' },
+
+    { name: 'verify->invoice: accepting freight drops every other charge on the row',
+      file: 'helpers/freightProposal.js', suites: ['verify-to-bill'],
+      find: '    return existing.concat([charge]);',
+      to:   '    return [charge];' },
+
+    { name: 'verify->invoice: one HBL writes to every grade of the invoice',
+      file: 'helpers/freightProposal.js', suites: ['verify-to-bill'],
+      find: "            status: candidates.length === 1 ? 'one_sale' : 'several_sales',",
+      to:   "            status: 'one_sale'," },
+
+    { name: 'verify->invoice: the freight charge loses the reason, so sales.js refuses it',
+      file: 'helpers/freightProposal.js', suites: ['verify-to-bill'],
+      find: "        why: `Zimex invoice ${rec.invoice_no || '(no number)'}`",
+      to:   "        why: ``" },
+
+    { name: 'verify->bill: the accept route stops carrying verified_on through',
+      file: 'api.js', suites: ['verify-to-bill'],
+      find: '            const patch = { trucking_split: tp.splitToSave(split, tp.currentOf(bill)) };',
+      to:   '            const patch = { trucking_split: split };' },
+
+    { name: 'verify->bill: the accept route overwrites a trucker name she typed',
+      file: 'api.js', suites: ['verify-to-bill'],
+      find: "            if (hauler && !String(bill.trucking_company || '').trim()) patch.trucking_company = hauler;",
+      to:   '            if (hauler) patch.trucking_company = hauler;' },
+
     // ── TRUCKING DEDUCTED FROM A YARD LOAD (2026-09-20) ───────────────────
     // Each of these is a way the feature could be "implemented" and be wrong
     // about money. If tests/load-trucking.js does not go red for one of them,

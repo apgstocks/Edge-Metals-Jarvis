@@ -1085,6 +1085,23 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
             const pdfRecords = extractedPerFile.flat();
 
             const result = await crossCheckZimexRecords(pdfRecords, { year, month });
+            // ── AND WHAT IT WOULD PUT ON THE INVOICE ─────────────────────
+            // Apsara, 2026-09-20, on where each verification's figures go:
+            // "For transports, second tab of Bills.. For zimex - in freight
+            // of invoice.." Zimex is ocean freight per HBL, not haulage, so
+            // it is offered as a charge on the SALE row — never as a bill's
+            // trucking. Different helper, different store, different key; see
+            // helpers/freightProposal.js's header for why the two are not one
+            // file.
+            //
+            // Never fails the verification, same reason as the truckers.
+            try {
+                result.sale_proposals = require('./helpers/freightProposal').proposals(result.matched);
+            } catch (e) {
+                console.error('[verify/zimex] freight proposals failed:', e.message);
+                result.sale_proposals = [];
+                result.sale_proposals_error = e.message;
+            }
             res.json(result);
         } catch (e) {
             console.error('[verify/zimex] failed:', e.message);
@@ -1172,6 +1189,24 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
                 result.sheet_log = { logged: 0, error: e.message };
             }
 
+            // ── AND WHAT IT WOULD PUT ON THE BILL ────────────────────────
+            // Apsara, 2026-09-20: "that verified bill is not coming into
+            // trucking of bills?" — it was not, and it should. Computed in
+            // THIS response rather than stored: a proposal is about the run
+            // that just happened, and a saved one would be a figure aging
+            // quietly against a bill somebody has since edited.
+            //
+            // Never fails the verification. She ran this to check an invoice;
+            // a fault in the offer that follows must not cost her the check.
+            try {
+                result.bill_proposals = require('./helpers/truckingProposal')
+                    .proposals(result.matched, 'jio');
+            } catch (e) {
+                console.error('[verify/jio] bill proposals failed:', e.message);
+                result.bill_proposals = [];
+                result.bill_proposals_error = e.message;
+            }
+
             res.json(result);
         } catch (e) {
             console.error('[verify/jio] failed:', e.message);
@@ -1214,6 +1249,24 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
             } catch (e) {
                 console.error('[verify/sher] sheet logging failed:', e.message);
                 result.sheet_log = { logged: 0, error: e.message };
+            }
+
+            // ── AND WHAT IT WOULD PUT ON THE BILL ────────────────────────
+            // Apsara, 2026-09-20: "that verified bill is not coming into
+            // trucking of bills?" — it was not, and it should. Computed in
+            // THIS response rather than stored: a proposal is about the run
+            // that just happened, and a saved one would be a figure aging
+            // quietly against a bill somebody has since edited.
+            //
+            // Never fails the verification. She ran this to check an invoice;
+            // a fault in the offer that follows must not cost her the check.
+            try {
+                result.bill_proposals = require('./helpers/truckingProposal')
+                    .proposals(result.matched, 'sher');
+            } catch (e) {
+                console.error('[verify/sher] bill proposals failed:', e.message);
+                result.bill_proposals = [];
+                result.bill_proposals_error = e.message;
             }
 
             res.json(result);
@@ -1266,6 +1319,24 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
             } catch (e) {
                 console.error('[verify/aj-transport] sheet logging failed:', e.message);
                 result.sheet_log = { logged: 0, error: e.message };
+            }
+
+            // ── AND WHAT IT WOULD PUT ON THE BILL ────────────────────────
+            // Apsara, 2026-09-20: "that verified bill is not coming into
+            // trucking of bills?" — it was not, and it should. Computed in
+            // THIS response rather than stored: a proposal is about the run
+            // that just happened, and a saved one would be a figure aging
+            // quietly against a bill somebody has since edited.
+            //
+            // Never fails the verification. She ran this to check an invoice;
+            // a fault in the offer that follows must not cost her the check.
+            try {
+                result.bill_proposals = require('./helpers/truckingProposal')
+                    .proposals(result.matched, 'aj');
+            } catch (e) {
+                console.error('[verify/aj-transport] bill proposals failed:', e.message);
+                result.bill_proposals = [];
+                result.bill_proposals_error = e.message;
             }
 
             res.json(result);
@@ -4237,6 +4308,72 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
             // just typed eighteen fields into. See shipmentSheetLog's header.
             require('./helpers/shipmentSheetLog').logBillSafely(bill, 'saved');
             res.json({ ok: true, bill });
+        } catch (e) { res.status(400).json({ error: e.message }); }
+    });
+
+    // ── ACCEPTING A VERIFIED HAULER INVOICE ONTO ONE BILL ─────────────────
+    //
+    // Apsara, 2026-09-20, chose to confirm each one rather than have a
+    // verification write straight in — so this is the confirm. It takes the
+    // bill SHE picked and the split she was shown, and goes through the same
+    // editBill/cleanTruckingSplit path as a hand edit: no second way to write
+    // money, no second sanitizer to keep in step.
+    //
+    // ASSEMBLED HERE, NOT IN THE BROWSER, and that is the point of the route
+    // existing at all. splitToSave carries the bill's own `verified_on`
+    // through untouched — a browser building this payload would have to
+    // remember to, and the day it forgot, accepting a proposal would silently
+    // blank a date she had typed. Her decision that verified_on stays a human
+    // statement is enforced on this side of the wire.
+    //
+    // ONE BILL PER CALL, deliberately. A container is one row per grade and a
+    // haul is charged once; a route that took a list would be one loop away
+    // from trebling her haulage, which is the mistake this whole feature was
+    // shaped to avoid.
+    app.post('/api/bills/:id/accept-trucking', async (req, res) => {
+        try {
+            const b = require('./helpers/bills');
+            const tp = require('./helpers/truckingProposal');
+            const id = String(req.params.id);
+            const bill = b.listWithTotals().find((x) => x.id === id);
+            if (!bill) return res.status(404).json({ error: `no bill ${id}` });
+
+            const split = (req.body || {}).split;
+            if (!split || typeof split !== 'object') return res.status(400).json({ error: 'a split is required' });
+
+            // The trucker's name rides along when the bill has none. It does
+            // NOT overwrite one she typed — she chose to see both figures and
+            // change nothing, and a company name is a figure of a kind.
+            const patch = { trucking_split: tp.splitToSave(split, tp.currentOf(bill)) };
+            const hauler = String((req.body || {}).hauler || '').trim();
+            if (hauler && !String(bill.trucking_company || '').trim()) patch.trucking_company = hauler;
+
+            const saved = await b.editBill(id, patch);
+            require('./helpers/shipmentSheetLog').logBillSafely(saved, 'edited');
+            res.json({ ok: true, bill: saved });
+        } catch (e) { res.status(400).json({ error: e.message }); }
+    });
+
+    // ── ACCEPTING A VERIFIED ZIMEX INVOICE ONTO ONE SALE ──────────────────
+    // The same confirm, for ocean freight — her "for zimex, in freight of
+    // invoice". chargesToSave rebuilds the charge list server-side because
+    // helpers/salesSettlements.js pays charges off BY ID: a list rebuilt in
+    // the browser that loses an id moves a settled freight payment onto an
+    // unrelated line, and nothing would say so.
+    app.post('/api/sales/:id/accept-freight', async (req, res) => {
+        try {
+            const s = require('./helpers/sales');
+            const fp = require('./helpers/freightProposal');
+            const id = String(req.params.id);
+            const sale = s.listWithTotals().find((x) => x.id === id);
+            if (!sale) return res.status(404).json({ error: `no invoice row ${id}` });
+
+            const charge = (req.body || {}).charge;
+            if (!charge || typeof charge !== 'object') return res.status(400).json({ error: 'a charge is required' });
+
+            const charges = fp.chargesToSave(sale, charge, { replaceId: (req.body || {}).replace_id || null });
+            const saved = await s.editSale(id, { charges });
+            res.json({ ok: true, sale: saved });
         } catch (e) { res.status(400).json({ error: e.message }); }
     });
 

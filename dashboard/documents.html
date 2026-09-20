@@ -741,6 +741,10 @@ body[data-theme="light"] {
       </div>
 
       <div id="zimexSummary" class="hidden" style="display:flex; gap:10px; flex-wrap:wrap; margin-top:18px;"></div>
+      <!-- Where the verified figures would go. Apsara, 2026-09-20:
+           "that verified bill is not coming into trucking of bills?"
+           Rendered right under the run, with her invoice still on screen. -->
+      <div id="zimexProposals" class="hidden" style="margin-top:18px;"></div>
       <div id="zimexResultsWrap" class="hidden" style="margin-top:14px;">
         <div class="section-label">PDF line items vs. Invoice sheet</div>
         <div id="zimexFilterNote"></div>
@@ -788,6 +792,10 @@ body[data-theme="light"] {
         </div>
 
         <div id="ajSummary" class="hidden" style="display:flex; gap:10px; flex-wrap:wrap; margin-top:18px;"></div>
+        <!-- Where the verified figures would go. Apsara, 2026-09-20:
+             "that verified bill is not coming into trucking of bills?"
+             Rendered right under the run, with her invoice still on screen. -->
+        <div id="ajProposals" class="hidden" style="margin-top:18px;"></div>
         <div id="ajResultsWrap" class="hidden" style="margin-top:14px;">
           <div class="section-label">AJ Transport invoices vs. Invoice sheet</div>
           <div id="ajFilterNote"></div>
@@ -822,6 +830,10 @@ body[data-theme="light"] {
         </div>
 
         <div id="sherSummary" class="hidden" style="display:flex; gap:10px; flex-wrap:wrap; margin-top:18px;"></div>
+        <!-- Where the verified figures would go. Apsara, 2026-09-20:
+             "that verified bill is not coming into trucking of bills?"
+             Rendered right under the run, with her invoice still on screen. -->
+        <div id="sherProposals" class="hidden" style="margin-top:18px;"></div>
         <div id="sherResultsWrap" class="hidden" style="margin-top:14px;">
           <div class="section-label">Sher invoices vs. Invoice sheet</div>
           <div id="sherFilterNote"></div>
@@ -869,6 +881,10 @@ body[data-theme="light"] {
         </div>
 
         <div id="jioSummary" class="hidden" style="display:flex; gap:10px; flex-wrap:wrap; margin-top:18px;"></div>
+        <!-- Where the verified figures would go. Apsara, 2026-09-20:
+             "that verified bill is not coming into trucking of bills?"
+             Rendered right under the run, with her invoice still on screen. -->
+        <div id="jioProposals" class="hidden" style="margin-top:18px;"></div>
         <div id="jioResultsWrap" class="hidden" style="margin-top:14px;">
           <div class="section-label">Jio invoices vs. Invoice sheet</div>
           <div id="jioFilterNote"></div>
@@ -1472,6 +1488,240 @@ function zimexEmptyMessage({ period, label, outside, total }) {
   return 'No line items extracted.';
 }
 
+
+// ══════════════════════════════════════════════════════════════════════════
+// WHERE A VERIFIED INVOICE'S FIGURES WOULD GO
+// ══════════════════════════════════════════════════════════════════════════
+// Apsara, 2026-09-20: "When i run verification against say aj transport,that
+// verified bill is not coming into trucking of bills?" It was not, and that
+// was a gap. The server now works out what it WOULD put on each bill (see
+// helpers/truckingProposal.js) and hands it back with the run; this renders
+// it here, under the results, while the hauler's invoice is still open in
+// front of her.
+//
+// NOTHING HERE WRITES ON ITS OWN. She chose to confirm each one, so every
+// row has an Accept she has to press, and a row matching several bills has
+// no bill chosen until she picks one.
+//
+// ONE RENDERER FOR AJ, JIO AND SHER, and that IS the right sharing: the
+// three produce the same proposal shape and take the same action. What is
+// deliberately NOT shared is the mapping from an invoice to a split — that
+// lives per-hauler in helpers/truckingProposal.js, because their invoices
+// are different documents and will not stay the same shape as each other.
+const PROPOSAL_STATE = {};
+
+function propMoney(n) {
+  return (n === null || n === undefined || n === '') ? '—'
+    : '$' + Number(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
+const SPLIT_LABELS = [['line_haul', 'Line Haul'], ['port_fees', 'Port Fees'],
+                      ['chassis_rent', 'Chassis Rent'], ['dry_run', 'Dry Run'], ['extra_scale', 'Extra Scale']];
+
+function renderBillProposals(prefix, result) {
+  const box = $(prefix + 'Proposals');
+  if (!box) return;
+  const list = (result && result.bill_proposals) || [];
+  PROPOSAL_STATE[prefix] = { list, picked: {} };
+
+  if (result && result.bill_proposals_error) {
+    box.innerHTML = `<div style="font-size:12px; color:#e58a7c;">Could not work out where these belong: ${esc(result.bill_proposals_error)}</div>`;
+    box.classList.remove('hidden');
+    return;
+  }
+  // Rows the cross-check did not pass are already in the table above with
+  // their own status. Repeating them here as "nothing to offer" would be a
+  // second list of the same complaint.
+  const offerable = list.filter((p) => p.status !== 'not_verified');
+  if (!offerable.length) { box.classList.add('hidden'); box.innerHTML = ''; return; }
+
+  box.innerHTML = `
+    <div style="font-family:var(--font-mono); font-size:10px; font-weight:600; letter-spacing:.16em; text-transform:uppercase; color:var(--text-muted); margin-bottom:10px;">Put these on the bill</div>
+    <div style="display:flex; flex-direction:column; gap:10px;">
+      ${offerable.map((p, i) => billProposalCard(prefix, p, i)).join('')}
+    </div>`;
+  box.classList.remove('hidden');
+}
+
+function billProposalCard(prefix, p, i) {
+  const key = `${prefix}:${p.index}`;
+  const parts = SPLIT_LABELS
+    .filter(([k]) => p.split && p.split[k] != null)
+    .map(([k, label]) => `${esc(label)} ${propMoney(p.split[k])}`)
+    .concat(((p.split && p.split.others) || []).map((o) => `${esc(o.what)} ${propMoney(o.amount)}`));
+
+  // NOT named `head`. tests/packing-list.js locates its sticky-heading check
+  // by searching this file for the packing list's own declaration of that
+  // variable, so a second one EARLIER in the file silently moved that search
+  // onto this function and turned a passing check red. Renamed here rather
+  // than loosening a check that is doing its job.
+  //
+  // And the first version of this note quoted that declaration verbatim, so
+  // the COMMENT became the earlier match and the check stayed red. Hence the
+  // careful wording: do not write that string here.
+  const cardHead = `<div style="font-family:var(--font-mono); font-size:11px; color:var(--text-muted);">
+      ${esc(p.hauler)} · inv ${esc(p.invoice_no || '—')} · ${p.join_by === 'booking' ? 'booking' : 'container'} <strong style="color:var(--text-strong);">${esc(p.join_by === 'booking' ? (p.booking_no || '—') : (p.container_no || '—'))}</strong>
+    </div>
+    <div style="font-size:12px; margin-top:4px;">${parts.join(' · ') || 'no charges read'} <strong style="color:var(--text-strong);">= ${propMoney(p.proposed_total)}</strong></div>`;
+
+  if (p.status === 'no_bill' || p.status === 'no_key') {
+    return `<div class="section" style="padding:12px;">${cardHead}
+      <div style="font-size:12px; color:var(--status-warning, #d69e2e); margin-top:6px;">${esc(p.why || '')}</div></div>`;
+  }
+
+  const cands = p.candidates || [];
+  // ── SEVERAL BILLS: SHE PICKS, AND NOTHING IS PRE-PICKED ────────────────
+  // A container is one bill per grade and the haul was charged once. Marking
+  // one by default would be a guess about money wearing the look of an
+  // answer — and putting it on all of them would multiply her haulage, which
+  // is the mistake that cost $15,955 on the margin report.
+  const several = p.status === 'several_bills';
+  const rows = cands.map((c) => {
+    const dis = (c.disagreements || []).map((d) =>
+      `<div style="font-size:11px; color:var(--status-warning, #d69e2e);">${esc(labelFor(d.field))}: invoice ${propMoney(d.invoice)}, bill says ${propMoney(d.bill)} — kept, not changed</div>`).join('');
+    const has = c.current && c.current.total != null;
+    return `<label style="display:flex; align-items:flex-start; gap:8px; padding:8px; border:1px solid var(--border-default); border-radius:var(--radius-xs); cursor:pointer;">
+      <input type="radio" name="prop-${esc(key)}" value="${esc(c.bill_id)}" data-prop="${esc(key)}" ${several ? '' : 'checked'} style="margin-top:3px;">
+      <span style="flex:1;">
+        <span style="font-family:var(--font-mono); font-size:11px;">${esc(c.bill_id)}</span>
+        <span style="font-size:12px;"> · ${esc(c.grade || 'no grade')} · ${esc(c.supplier || 'no supplier')}${c.amount != null ? ' · ' + propMoney(c.amount) : ''}</span>
+        ${has ? `<div style="font-size:11px; color:var(--text-muted);">this bill already has trucking of ${propMoney(c.current.total)}</div>` : ''}
+        ${dis}
+      </span>
+    </label>`;
+  }).join('');
+
+  return `<div class="section" style="padding:12px;">
+    ${cardHead}
+    ${several ? `<div style="font-size:12px; color:var(--status-warning, #d69e2e); margin:8px 0 6px;">${esc(p.why || '')}</div>` : '<div style="height:8px;"></div>'}
+    <div style="display:flex; flex-direction:column; gap:6px;">${rows}</div>
+    <div style="margin-top:10px; display:flex; align-items:center; gap:10px;">
+      <button class="btn btn-primary" data-accept-bill="${esc(key)}" style="font-size:12px; padding:6px 14px;">Accept onto this bill</button>
+      <span class="prop-msg" data-msg="${esc(key)}" style="font-size:11px; color:var(--text-muted);"></span>
+    </div>
+  </div>`;
+}
+
+function labelFor(field) {
+  const hit = SPLIT_LABELS.find(([k]) => k === field);
+  return hit ? hit[1] : field;
+}
+
+// ── ZIMEX: ITS OWN RENDERER, AND ON PURPOSE ──────────────────────────────
+// Apsara, 2026-09-20: "For transports, second tab of Bills.. For zimex - in
+// freight of invoice.." Ocean freight per HBL is not haulage; it lands as a
+// charge on the invoice row. Different shape, different action, different
+// words — folding it into the renderer above would mean every later change
+// to one of them was a change to both.
+function renderFreightProposals(result) {
+  const box = $('zimexProposals');
+  if (!box) return;
+  const list = (result && result.sale_proposals) || [];
+  PROPOSAL_STATE.zimex = { list, picked: {} };
+
+  if (result && result.sale_proposals_error) {
+    box.innerHTML = `<div style="font-size:12px; color:#e58a7c;">Could not work out where these belong: ${esc(result.sale_proposals_error)}</div>`;
+    box.classList.remove('hidden');
+    return;
+  }
+  const offerable = list.filter((p) => p.status !== 'not_verified');
+  if (!offerable.length) { box.classList.add('hidden'); box.innerHTML = ''; return; }
+
+  box.innerHTML = `
+    <div style="font-family:var(--font-mono); font-size:10px; font-weight:600; letter-spacing:.16em; text-transform:uppercase; color:var(--text-muted); margin-bottom:10px;">Put these on the invoice</div>
+    <div style="display:flex; flex-direction:column; gap:10px;">
+      ${offerable.map((p) => freightProposalCard(p)).join('')}
+    </div>`;
+  box.classList.remove('hidden');
+}
+
+function freightProposalCard(p) {
+  const key = `zimex:${p.index}`;
+  // See the note in billProposalCard — same reason.
+  const cardHead = `<div style="font-family:var(--font-mono); font-size:11px; color:var(--text-muted);">
+      Zimex · inv ${esc(p.invoice_no || '—')} · HBL <strong style="color:var(--text-strong);">${esc(p.hbl_no || '—')}</strong>${p.container_no ? ' · ' + esc(p.container_no) : ''}
+    </div>
+    <div style="font-size:12px; margin-top:4px;">Ocean freight <strong style="color:var(--text-strong);">${propMoney(p.charge && p.charge.amount)}</strong>${
+      // The sheet's own Freight column and the gap, when the cross-check
+      // called it a mismatch. Said out loud rather than left in the table
+      // above: this is the figure she is about to put on an invoice.
+      p.delta != null && Math.abs(p.delta) >= 0.005
+        ? ` <span style="color:var(--status-warning, #d69e2e);">— the sheet says ${propMoney(p.sheet_freight)}, a gap of ${propMoney(p.delta)}</span>` : ''
+    }</div>`;
+
+  if (p.status === 'no_sale' || p.status === 'no_amount') {
+    return `<div class="section" style="padding:12px;">${cardHead}
+      <div style="font-size:12px; color:var(--status-warning, #d69e2e); margin-top:6px;">${esc(p.why || '')}</div></div>`;
+  }
+
+  const several = p.status === 'several_sales';
+  const rows = (p.candidates || []).map((c) => {
+    const ex = (c.existing_freight || [])[0];
+    return `<label style="display:flex; align-items:flex-start; gap:8px; padding:8px; border:1px solid var(--border-default); border-radius:var(--radius-xs); cursor:pointer;">
+      <input type="radio" name="prop-${esc(key)}" value="${esc(c.sale_id)}" data-prop="${esc(key)}" data-replace="${esc(ex ? ex.id : '')}" ${several ? '' : 'checked'} style="margin-top:3px;">
+      <span style="flex:1;">
+        <span style="font-family:var(--font-mono); font-size:11px;">${esc(c.sale_id)}</span>
+        <span style="font-size:12px;"> · ${esc(c.grade || 'no grade')} · ${esc(c.customer || 'no customer')}</span>
+        ${ex ? `<div style="font-size:11px; color:var(--text-muted);">already has ${esc(ex.what)} ${propMoney(ex.amount)} — accepting updates that line rather than adding a second</div>` : ''}
+        ${c.disagreement ? `<div style="font-size:11px; color:var(--status-warning, #d69e2e);">invoice ${propMoney(c.disagreement.invoice)} vs ${propMoney(c.disagreement.sale)} on file</div>` : ''}
+      </span>
+    </label>`;
+  }).join('');
+
+  return `<div class="section" style="padding:12px;">
+    ${cardHead}
+    ${several ? `<div style="font-size:12px; color:var(--status-warning, #d69e2e); margin:8px 0 6px;">${esc(p.why || '')}</div>` : '<div style="height:8px;"></div>'}
+    <div style="display:flex; flex-direction:column; gap:6px;">${rows}</div>
+    <div style="margin-top:10px; display:flex; align-items:center; gap:10px;">
+      <button class="btn btn-primary" data-accept-freight="${esc(key)}" style="font-size:12px; padding:6px 14px;">Accept onto this invoice row</button>
+      <span class="prop-msg" data-msg="${esc(key)}" style="font-size:11px; color:var(--text-muted);"></span>
+    </div>
+  </div>`;
+}
+
+// One delegated listener for every Accept on the page. Per-card wiring would
+// have to be redone on each re-render, and a button that quietly stops being
+// wired is indistinguishable from one that did nothing.
+document.addEventListener('click', async (e) => {
+  const billBtn = e.target.closest && e.target.closest('[data-accept-bill]');
+  const frtBtn = e.target.closest && e.target.closest('[data-accept-freight]');
+  if (!billBtn && !frtBtn) return;
+  const key = (billBtn || frtBtn).getAttribute(billBtn ? 'data-accept-bill' : 'data-accept-freight');
+  const [prefix, idxRaw] = key.split(':');
+  const state = PROPOSAL_STATE[prefix];
+  const msg = document.querySelector(`.prop-msg[data-msg="${key}"]`);
+  const say = (t, bad) => { if (msg) { msg.textContent = t; msg.style.color = bad ? '#e58a7c' : 'var(--text-muted)'; } };
+  if (!state) return say('That run is no longer on screen — verify again.', true);
+
+  const p = (state.list || []).find((x) => String(x.index) === String(idxRaw));
+  if (!p) return say('Could not find that row.', true);
+  const chosen = document.querySelector(`input[name="prop-${key}"]:checked`);
+  // The whole reason a several-bills card ships with nothing selected.
+  if (!chosen) return say('Pick which row this goes on first.', true);
+
+  const btn = billBtn || frtBtn;
+  btn.disabled = true;
+  say('Saving…');
+  try {
+    if (billBtn) {
+      await api(`/api/bills/${encodeURIComponent(chosen.value)}/accept-trucking`,
+        { method: 'POST', body: JSON.stringify({ split: p.split, hauler: p.hauler }) });
+      say(`Saved onto ${chosen.value}. It is on Bills → Trucking now.`);
+    } else {
+      const replaceId = chosen.getAttribute('data-replace') || null;
+      await api(`/api/sales/${encodeURIComponent(chosen.value)}/accept-freight`,
+        { method: 'POST', body: JSON.stringify({ charge: p.charge, replace_id: replaceId || null }) });
+      say(`Saved onto ${chosen.value}. It is on Invoice → Freight now.`);
+    }
+    // Left disabled on success. Pressing it twice would write the same
+    // figures again — harmless on a split, but a second freight CHARGE where
+    // no existing one was found, which is money appearing twice.
+  } catch (err) {
+    btn.disabled = false;
+    say(err.message || 'Could not save it.', true);
+  }
+});
+
 function renderZimexResults(result) {
   // Stashed so a chip click can re-render this tab without re-uploading or
   // re-running the Gemini extraction — filtering is a view concern.
@@ -1539,10 +1789,12 @@ $('btnZimexVerify').addEventListener('click', async () => {
   $('zimexLoading').classList.remove('hidden');
   $('zimexSummary').classList.add('hidden');
   $('zimexResultsWrap').classList.add('hidden');
+  if ($('zimexProposals')) { $('zimexProposals').classList.add('hidden'); $('zimexProposals').innerHTML = ''; }
   try {
     const body = { pdfs: zimexFiles, year: $('zimexYear').value || undefined, month: $('zimexMonth').value || undefined };
     const result = await api('/api/verify/zimex', { method: 'POST', body: JSON.stringify(body) });
     renderZimexResults(result);
+    renderFreightProposals(result);
   } catch (e) {
     alert(e.message);
   } finally {
@@ -1782,10 +2034,12 @@ $('btnJioVerify').addEventListener('click', async () => {
   $('jioLoading').classList.remove('hidden');
   $('jioSummary').classList.add('hidden');
   $('jioResultsWrap').classList.add('hidden');
+  if ($('jioProposals')) { $('jioProposals').classList.add('hidden'); $('jioProposals').innerHTML = ''; }
   try {
     const body = { pdfs: jioFiles };
     const result = await api('/api/verify/jio', { method: 'POST', body: JSON.stringify(body) });
     renderJioResults(result);
+    renderBillProposals('jio', result);
   } catch (e) {
     alert(e.message);
   } finally {
@@ -1897,10 +2151,12 @@ $('btnSherVerify').addEventListener('click', async () => {
   $('sherLoading').classList.remove('hidden');
   $('sherSummary').classList.add('hidden');
   $('sherResultsWrap').classList.add('hidden');
+  if ($('sherProposals')) { $('sherProposals').classList.add('hidden'); $('sherProposals').innerHTML = ''; }
   try {
     const body = { pdfs: sherFiles };
     const result = await api('/api/verify/sher', { method: 'POST', body: JSON.stringify(body) });
     renderSherResults(result);
+    renderBillProposals('sher', result);
   } catch (e) {
     alert(e.message);
   } finally {
@@ -2006,10 +2262,12 @@ $('btnAjVerify').addEventListener('click', async () => {
   $('ajLoading').classList.remove('hidden');
   $('ajSummary').classList.add('hidden');
   $('ajResultsWrap').classList.add('hidden');
+  if ($('ajProposals')) { $('ajProposals').classList.add('hidden'); $('ajProposals').innerHTML = ''; }
   try {
     const body = { pdfs: ajFiles };
     const result = await api('/api/verify/aj-transport', { method: 'POST', body: JSON.stringify(body) });
     renderAjResults(result);
+    renderBillProposals('aj', result);
   } catch (e) {
     alert(e.message);
   } finally {
