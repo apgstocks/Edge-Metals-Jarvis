@@ -1215,6 +1215,27 @@ function switchTab(tab) {
   loadTab(tab);
 }
 
+// ── "JARVIS, OPEN THE BILLS" ──────────────────────────────────────────────
+// Apsara, 2026-09-20. The voice route answers with { open: { tab, sub, href } }
+// (helpers/screens.js decides which screen, and refuses the other company's).
+// A tab loads in place, then its sub-tab is clicked exactly as a person would
+// — through the same button, so nothing here can disagree with the page about
+// what that sub-tab shows. A standalone page is a real navigation.
+window.jarvisOpenScreen = async function (open) {
+  if (!open) return false;
+  if (open.href) { window.location.href = open.href; return true; }
+  if (!open.tab) return false;
+  CURRENT_TAB = open.tab;
+  renderNav();
+  try { await loadTab(open.tab); } catch (e) { console.warn('[VOICE] open failed:', e.message); return false; }
+  if (open.sub) {
+    const btn = document.querySelector(`.metals-tab[data-section="${open.sub.section}"][data-tab="${open.sub.tab}"]`);
+    if (btn) btn.click();
+  }
+  try { closeMobileSidebar(); } catch (e) { /* no sidebar on this layout */ }
+  return true;
+};
+
 async function loadTab(tab) {
   const root = $('viewRoot');
   if (typeof stopCamera === 'function') stopCamera(); // navigating away must never leave the camera running

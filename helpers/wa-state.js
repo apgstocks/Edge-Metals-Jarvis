@@ -66,4 +66,19 @@ async function findCommonGroups(contactId) {
     return state._commonGroups(contactId);
 }
 
-module.exports = { setStatus, get, setLogoutHandler, triggerLogout, setGroupsLookupHandler, findGroups, setVerifyNumberHandler, verifyNumber, setCommonGroupsHandler, findCommonGroups, sendCapture };
+// ── A VOICE TURN CAN SAY LESS THAN IT SHOWS ─────────────────────────────────
+// Apsara, 2026-09-20: "when i say urgent cutoff - it can just say ... 4
+// bookings has cut off today". /api/voice/ask marks its capture `voice: true`;
+// an action that has a short spoken form sets it here, and the voice route
+// speaks that while the screen still shows everything the action sent.
+// Outside a voice turn both are no-ops, so WhatsApp is untouched.
+function isVoiceTurn() {
+    const c = sendCapture.getStore();
+    return !!(c && c.voice);
+}
+function sayAloud(text) {
+    const c = sendCapture.getStore();
+    if (c && c.voice && typeof text === 'string' && text.trim()) c.spoken = text.trim();
+}
+
+module.exports = { setStatus, get, setLogoutHandler, triggerLogout, setGroupsLookupHandler, findGroups, setVerifyNumberHandler, verifyNumber, setCommonGroupsHandler, findCommonGroups, sendCapture, isVoiceTurn, sayAloud };

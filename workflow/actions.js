@@ -327,6 +327,14 @@ return { action_taken: 'list_all' };
 }
 
 async function showBookingsUrgent(chatId) {
+// Voice: SAY the count, SHOW the list (Apsara, 2026-09-20). WhatsApp keeps
+// the list below exactly as it was.
+if (require('../helpers/wa-state').isVoiceTurn()) {
+    const u = require('../helpers/metalsBrief').urgentCutoffs();
+    await _send(chatId, u.screen);
+    require('../helpers/wa-state').sayAloud(u.spoken);
+    return { action_taken: u.count ? 'list_urgent' : 'list_empty' };
+}
 const urgent = getUrgentBookings();
 if (!urgent.length) { await _send(chatId, `No cutoffs within ${cfg.URGENT_CUTOFF_DAYS} days.`); return { action_taken: 'list_empty' }; }
 const lines = urgent.map(b => `${b.booking_number} — cutoff ${b.cutoff_date} (${daysUntil(b.cutoff_date)}d)`);
@@ -5046,6 +5054,39 @@ function extractSubjectHint(rawText) {
 // fetch fails for any reason — deleted, in the other mailbox, a token problem
 // — it falls through to the original search, so the worst case is exactly
 // today's behaviour rather than a failure.
+// ── "Jarvis, brief me" ──────────────────────────────────────────────────────
+// Edge Metals only — see helpers/metalsBrief.js. Spoken short, shown in full.
+async function metalsBriefing(chatId) {
+    const b = require('../helpers/metalsBrief').build();
+    await _send(chatId, b.screen);
+    require('../helpers/wa-state').sayAloud(b.spoken);
+    return { action_taken: 'metals_brief' };
+}
+
+// ── The other Edge Metals screens, read aloud ───────────────────────────────
+// helpers/metalsReports.js. `who` narrows it where the screen can: a
+// trucking company, a customer (commission/freight) or a supplier (Edge
+// Inventory).
+async function metalsReport(chatId, report, who) {
+    const mr = require('../helpers/metalsReports');
+    const opts = report === 'trucking' ? { company: who }
+        : report === 'edge_inventory' ? { supplier: who }
+        : (report === 'freight' || report === 'commission') ? { customer: who } : {};
+    let out;
+    try { out = mr.run(report, opts); }
+    catch (e) {
+        await _send(chatId, `Couldn't read that screen: ${e.message}`);
+        return { action_taken: 'metals_report_failed' };
+    }
+    if (!out) {
+        await _send(chatId, 'Which one — margin, trucking, freight, commission, Edge Inventory or quote requests?');
+        return { action_taken: 'metals_report_unknown' };
+    }
+    await _send(chatId, out.screen);
+    require('../helpers/wa-state').sayAloud(out.spoken);
+    return { action_taken: 'metals_report', report };
+}
+
 // ── "reply to that" ─────────────────────────────────────────────────────────
 // The digest item she was last dealing with — replied to or explained — is
 // what "that" means, for half an hour. After that, or with nothing in focus,
@@ -7695,6 +7736,7 @@ async function showWritingStyle(chatId) {
 }
 
 module.exports = {
+    metalsBriefing, metalsReport,
     replyToFocusedDigest, askWhichDigestItem, reviseDraftedEmail,
     ready,
     describeLink,

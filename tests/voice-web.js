@@ -2383,6 +2383,76 @@ section('DOC2 — it does not offer a send it cannot make');
        'a document left on screen after it was emailed reads as still waiting');
 }
 
+section('ANN — Jarvis speaks up on its own (Apsara, 2026-09-20)');
+{
+    // The server half is tests/voice-announce.js. This is the page half:
+    // what voice.js DOES with an announcement — when it speaks, when it
+    // holds back, and that it never opens the microphone afterwards.
+    const mk = (payload) => {
+        const b = browser();
+        const polls = [];
+        const orig = b.w.fetch;
+        b.w.fetch = async (p, o) => {
+            if (/\/api\/voice\/announcements/.test(p)) {
+                polls.push(p);
+                const body = typeof payload === 'function' ? payload(polls.length) : payload;
+                return { ok: true, json: async () => body };
+            }
+            return orig(p, o);
+        };
+        return { b, polls };
+    };
+    const ITEM = { now: '2026-09-20T10:00:00.000Z', spoken: 'Heads up. This booking cuts off tomorrow.',
+                   screen: '• T1: cutoff in 1d', items: [{ at: Date.parse('2026-09-20T09:59:00Z'), text: 'T1: cutoff in 1d' }] };
+    const tick = async (b) => { b.w.JarvisVoice.announceTick(); await new Promise((r) => setTimeout(r, 25)); };
+    const daytime = (b) => { b.w.Date = class extends Date { getHours() { return 11; } }; };
+
+    {
+        const { b, polls } = mk(ITEM);
+        daytime(b);
+        await tick(b);
+        ck('voice OFF: it does not even ask the server', polls.length === 0, String(polls.length));
+        b.w.JarvisVoice.dispatch('USER_TOGGLE');
+        await tick(b);
+        ck('voice ON: it asks', polls.length === 1);
+        ck('  and SPEAKS the announcement', b.log.spoken.includes(ITEM.spoken), JSON.stringify(b.log.spoken));
+        ck('  shows it on the card', /cutoff in 1d/.test(b.doc.getElementById('jvCard') ? b.doc.getElementById('jvCard').textContent : ''),
+           b.doc.getElementById('jvCard') && b.doc.getElementById('jvCard').textContent);
+        await new Promise((r) => setTimeout(r, 30));
+        ck('  and does NOT open the microphone afterwards', !b.w.JarvisVoice.state().capturing,
+           JSON.stringify(b.w.JarvisVoice.state()));
+        await tick(b);
+        ck('  (second poll sends since=)', /since=/.test(polls[1] || ''), polls[1]);
+    }
+    {
+        const { b } = mk(ITEM);
+        b.w.Date = class extends Date { getHours() { return 23; } };
+        b.w.JarvisVoice.dispatch('USER_TOGGLE');
+        await tick(b);
+        ck('11pm: quiet hours — nothing is said', !b.log.spoken.includes(ITEM.spoken), JSON.stringify(b.log.spoken));
+    }
+    {
+        // Turned off by voice: the ask response carries announce:false.
+        const b3 = browser({ reply: { answer: "Okay — I won't speak up.", announce: false } });
+        daytime(b3);
+        b3.w.JarvisVoice.dispatch('USER_TOGGLE');
+        b3.w.JarvisVoice.dispatch('WAKE_HEARD');
+        b3.mic() && b3.mic().hear('hey jarvis stop announcements');
+        b3.w.JarvisVoice.finish();
+        await new Promise((r) => setTimeout(r, 30));
+        ck('"stop announcements" switches it off in the page', b3.w.JarvisVoice.announceOn() === false);
+        ck('  and remembers it', b3.w.localStorage.getItem('jvAnnounce') === 'off');
+    }
+    {
+        const { b } = mk(ITEM);
+        daytime(b);
+        b.w.JarvisVoice.dispatch('USER_TOGGLE');
+        b.w.JarvisVoice.dispatch('WAKE_HEARD');           // she is mid-question
+        await tick(b);
+        ck('while she is talking to it, it holds back', !b.log.spoken.includes(ITEM.spoken), JSON.stringify(b.log.spoken));
+    }
+}
+
 console.log(`\n  ${pass} passed, ${fail} failed`);
 if (failures.length) { console.log('\n  Failed:'); failures.forEach((f) => console.log('   - ' + f)); }
 process.exit(fail ? 1 : 0);

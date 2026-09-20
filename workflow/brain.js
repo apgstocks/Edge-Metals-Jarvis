@@ -1194,6 +1194,24 @@ function policyDecide(ctx) {
 
         if (t === 'bookings' || /^(?:show\s+(?:me\s+)?|list\s+)?(?:all\s+)?bookings?$/.test(t)) return { intent: 'bookings_menu', resolvedBy: 'policy' };
         if (t === 'urgent' || /^(?:show\s+(?:me\s+)?|list\s+)?urgent\s+bookings?$/.test(t)) return { intent: 'show_bookings_urgent', resolvedBy: 'policy' };
+        // "urgent cutoff(s)", "any cutoffs today", "what's cutting off" —
+        // Apsara, 2026-09-20. Same answer as "urgent bookings".
+        if (/^(?:(?:show|tell|give)\s+(?:me\s+)?(?:the\s+)?|list\s+|any\s+)?urgent\s+cut\s*-?\s*offs?\??$/.test(t)
+            || /^(?:any|what(?:'s|\s+is|\s+are)?(?:\s+the)?)\s+cut\s*-?\s*offs?\s+(?:today|this\s+week|coming\s+up|soon)\??$/.test(t)
+            || /^what(?:'s|\s+is)\s+cutting\s+off(?:\s+(?:today|soon|this\s+week))?\??$/.test(t)) {
+            return { intent: 'show_bookings_urgent', resolvedBy: 'policy' };
+        }
+        // ── "BRIEF ME" ───────────────────────────────────────────────────
+        // Apsara, 2026-09-20. Edge Metals only — the yard is Scout's.
+        if (require('../helpers/briefIntent').isBriefRequest(t)) {
+            return { intent: 'metals_brief', resolvedBy: 'policy' };
+        }
+        // The other Metals screens, read-only. A fast path for the plainest
+        // phrasings only — anything else reaches the AI as metals_report.
+        {
+            const rep = require('../helpers/metalsReports').reportIn(t);
+            if (rep) return { intent: 'metals_report', resolvedBy: 'policy', data: { report: rep } };
+        }
         if (t === 'available' || /^(?:show\s+(?:me\s+)?|list\s+)?available\s+bookings?$/.test(t)) return { intent: 'show_bookings_available', resolvedBy: 'policy' };
         if (t === 'truckers' || t === 'suppliers' || t === 'contacts' ||
             /^(?:show\s+(?:me\s+)?|list\s+)?(?:truckers|suppliers|contacts)$/.test(t))
@@ -2217,7 +2235,7 @@ AND NEVER ASK HER WHICH EMAILS SHE MEANS. Another real incident the same night: 
 "track_old_invoice" pulls one older invoice back into the ledger — "track 25RMT116", "count 25JY84 as still owed". target_name = the invoice number.
 "send_message" is for the plainest request there is: the manager wants a WhatsApp message sent to someone, NOW. "tell NTG we need the truck at 6am", "send Edge Yard group the new pricelist is up", "message Joey that the container is ready", "let TQL know we're running late". Set target_name = who/which group, verbatim as she said it; note = the exact message to send, in her words — do NOT rewrite, pad, or make it more formal. This SENDS IMMEDIATELY and reports back what went where; it does not need confirmation, because she already told you both the recipient and the text. A REAL INCIDENT (2026-08-22) is why this exists: she asked Jarvis to send something to someone and got a refusal, purely because no action existed for it — "IF I SAY JARV TO SEND SOMETHING TO SOMEONE, WHY CANT IT DO IT". She is the manager; if she says send it, send it.
 CRITICAL — do not confuse these three: "send_message" delivers a STATEMENT and expects nothing back. "ask_contact" asks a QUESTION and sets up a pending so the answer gets relayed back to her ("ask NTG if the empty is dropped"). "draft_email" is email, not WhatsApp, and is confirmed before sending. Pick by what she's actually doing: telling someone something → send_message; asking someone something → ask_contact; emailing → draft_email.
-"bookings_list_query" answers "which bookings are at/from <place>" — set location to the place she named and filter to "unassigned"/"assigned" only if she said so. IT DOES NOT MATTER WHAT ORDER SHE SAYS IT IN: "bookings from Houston", "Houston bookings", "what have we got in Houston", "anything loading out of Houston" are the same question — read the sentence, do not pattern-match it. If she narrows it by CUTOFF DATE ("with cutoff anywhere next week", "cutting off this week", "anything closing in 3 days"), copy her timing words verbatim into "cutoff_phrase"; the handler turns them into real dates and NAMES the range back to her. Leave cutoff_phrase null when she did not narrow it — never invent a window, and never drop one she gave you. Answering a wider question than the one she asked looks like a complete answer and is not one. "bills_query" answers questions about EDGE METALS PURCHASE BILLS — what was bought, from which supplier, what is still owed and what is not filled in yet. Apsara, 2026-09-19: "if i say show me unfilled bills-it should show". Set unfilled=true when she asks for bills that are unfinished, incomplete, not filled in, missing something, or "still need" something. Set unpaid=true for what is still owed / outstanding / not yet paid. Put a supplier name in supplier, a container number in container. "from"/"to" take her date words verbatim. This is the METALS ledger, not the yard: a question about yard loads, sellers or stock is not this. "bookings_count_query" is the same question phrased as HOW MANY. Use these ONLY when she names an actual place (a port, city, yard). "mail", "email" and "inbox" are NOT places — a question about bookings in the mail is verify_bookings or search_mail.
+"bookings_list_query" answers "which bookings are at/from <place>" — set location to the place she named and filter to "unassigned"/"assigned" only if she said so. IT DOES NOT MATTER WHAT ORDER SHE SAYS IT IN: "bookings from Houston", "Houston bookings", "what have we got in Houston", "anything loading out of Houston" are the same question — read the sentence, do not pattern-match it. If she narrows it by CUTOFF DATE ("with cutoff anywhere next week", "cutting off this week", "anything closing in 3 days"), copy her timing words verbatim into "cutoff_phrase"; the handler turns them into real dates and NAMES the range back to her. Leave cutoff_phrase null when she did not narrow it — never invent a window, and never drop one she gave you. Answering a wider question than the one she asked looks like a complete answer and is not one. "bills_query" answers questions about EDGE METALS PURCHASE BILLS — what was bought, from which supplier, what is still owed and what is not filled in yet. Apsara, 2026-09-19: "if i say show me unfilled bills-it should show". Set unfilled=true when she asks for bills that are unfinished, incomplete, not filled in, missing something, or "still need" something. Set unpaid=true for what is still owed / outstanding / not yet paid. Put a supplier name in supplier, a container number in container. "from"/"to" take her date words verbatim. This is the METALS ledger, not the yard: a question about yard loads, sellers or stock is not this. "metals_report" answers READ-ONLY questions about the other Edge Metals screens (Apsara, 2026-09-20). Set "report" to exactly one of: "margin" (profit / margin on closed containers — "what's our margin", "how much did we make"), "trucking" (Edge Metals trucking bills — what we owe truckers for metals hauls; put a trucking company in target_name if she names one), "freight" (freight and other charges owed on invoices), "commission" (commission owed on invoices; a customer name goes in target_name), "edge_inventory" (Edge Inventory — deliveries received from suppliers and what we owe them; a supplier name goes in target_name), "quotes" (open quote requests and the prices that came back). NEVER use it for the yard — yard loads, yard profit, petty cash, yard inventory, yard trucker bills and expenses are Scout's, not yours. "metals_brief" is a spoken briefing of where Edge Metals stands — "brief me", "what's on today", "catch me up", "what do I need to know", "good morning". "bookings_count_query" is the same question phrased as HOW MANY. Use these ONLY when she names an actual place (a port, city, yard). "mail", "email" and "inbox" are NOT places — a question about bookings in the mail is verify_bookings or search_mail.
 "get_quote" starts a freight quote request for a lane — "get/send/request a quote from X to Y", "quote LA to Houston", "ask NTG and TQL for a rate from Junk car to Eccomelt". Set origin and destination to the two places verbatim, and names_text to whoever she said to ask (or null). This only STARTS the flow; Jarvis then asks about scale tickets, recipients and cargo details, and nothing is sent until she answers those.
 "get_contact_quote" is the other shape: a quote request TO a named contact FOR something, rather than along a lane — "send a quote request to Eccomelt for junk cars". Set recipient_query and details.
 "send_pricelist_city" sends the price list for a city — set city. "learn_domain" scans a company's mail domain to learn its contacts — set term to the company word she used.
@@ -2304,6 +2322,7 @@ learn_writing_style, show_writing_style, rescan_mail, scan_cutoffs,
 bookings_list_query, bookings_count_query, bills_query, get_quote, get_contact_quote, send_pricelist_city, learn_domain, show_pending_replies, summarize_email,
 lookup_address, set_reminder, show_reminders, cancel_reminder, send_message, ignore_digest_item,
 show_receivables, record_payment, show_orphan_payments, set_receivables_start, track_old_invoice,
+metals_report, metals_brief,
 reply, silent, NEED_DATA, NEED_APPROVAL
 
 Return ONLY this JSON:
@@ -2316,6 +2335,8 @@ Return ONLY this JSON:
   "trucker_name": null,
   "target_name": null,
   "email_details": null,
+  "report": null,
+  "unfilled": false, "unpaid": false, "supplier": null, "container": null, "from": null, "to": null,
   "minutes": null,
   "fact": null,
   "note": null,
@@ -2377,6 +2398,8 @@ const SAFE_ACTIONS = new Set([
     // details — and nothing dispatches until all of them are answered. The AI
     // chooses the INTENT; the deterministic flow still gates the SEND.
     'bookings_list_query', 'bookings_count_query', 'bills_query', 'get_quote',
+    // Read-only, 2026-09-20 — nothing is sent, written or paid.
+    'metals_report', 'metals_brief',
     'get_contact_quote', 'send_pricelist_city', 'learn_domain', 'show_pending_replies', 'summarize_email',
     // Read-only address-book lookup — deliberately AI-classified with NO
     // deterministic regex in front of it (2026-08-22, per Apsara: "i cant
@@ -2569,6 +2592,8 @@ async function route(decision, ctx, sendMessage) {
         case 'show_booking_status':    return bkg ? actions.showBookingStatus(chatId, bkg) : askBkg(chatId, 'Which booking number?', 'show_booking_status');
         case 'show_bookings_all':      return actions.showBookingsAll(chatId);
         case 'show_bookings_urgent':   return actions.showBookingsUrgent(chatId);
+        case 'metals_brief':           return actions.metalsBriefing(chatId);
+        case 'metals_report':          return actions.metalsReport(chatId, d.report, d.target_name || null);
         case 'show_bookings_available':updateSession(chatId, { lastInstruction: 'bookings_query', lastBookingsFilter: 'unassigned' }); return actions.showBookingsAvailable(chatId);
         case 'show_bookings_week':     return actions.showBookingsWeek(chatId);
         case 'show_contacts':          return actions.showContacts(chatId);
@@ -3105,6 +3130,19 @@ async function process(rawEvent, sendMessage) {
                 // when it is not. Worth replacing with a pass-through, but
                 // not in the same change as a live bug fix.
                 indices: ai.indices,
+                // SIXTH TIME (2026-09-20), found adding `report` below: the
+                // prompt has asked the model for cutoff_phrase (bookings
+                // window, 09-08) and for unfilled/unpaid/supplier/container/
+                // from/to (bills_query, 09-19), and this list dropped every
+                // one — so "Houston bookings cutting off next week" and
+                // "unfilled bills from Zimex" worked only when a regex caught
+                // them, and silently answered a WIDER question when the AI
+                // did. Forwarded now, with metals_report's `report`.
+                report: ai.report,
+                cutoff_phrase: ai.cutoff_phrase,
+                unfilled: ai.unfilled === true, unpaid: ai.unpaid === true,
+                supplier: ai.supplier, container: ai.container,
+                from: ai.from, to: ai.to,
             },
         };
     }

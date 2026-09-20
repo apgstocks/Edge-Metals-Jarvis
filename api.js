@@ -2229,6 +2229,45 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
                 }
             }
 
+            // ── "STOP ANNOUNCEMENTS" / "ANNOUNCEMENTS ON" ────────────────
+            // The switch for Jarvis speaking up on its own. The setting
+            // lives in her browser (dashboard/voice.js); this only answers
+            // and tells the page which way to flip it.
+            {
+                const flip = require('./helpers/announcements').toggleIn(stripped);
+                if (flip) {
+                    return answering({
+                        agent: 'jarvis', agent_name: AGENTS.jarvis.name, voice: AGENTS.jarvis.voice,
+                        routed_because: 'announcements ' + flip,
+                        answer: flip === 'off'
+                            ? "Okay — I won't speak up on my own until you say \"announcements on\"."
+                            : "Okay — I'll speak up when something needs you.",
+                        announce: flip === 'on', ok: true, cards: null, awaiting: false,
+                    });
+                }
+            }
+
+            // ── "OPEN THE BILLS" ─────────────────────────────────────────
+            // Apsara, 2026-09-20. Only on an explicit navigation verb — see
+            // helpers/screens.js — and only within the answering assistant's
+            // own company: Jarvis will not open a yard screen, Scout will not
+            // open a Metals one. Not while a proforma is mid-question, where
+            // "open …" could be her answer to it.
+            if (!proformaOpen) {
+                const screens = require('./helpers/screens');
+                const scr = screens.match(stripped);
+                if (scr) {
+                    const no = screens.refusal(scr, route.agent);
+                    console.log(`[VOICE] navigation: ${scr.key}${no ? ' — refused, other company' : ''}`);
+                    return answering({
+                        agent: route.agent, agent_name: agent.name, voice: agent.voice,
+                        routed_because: 'navigation',
+                        answer: no || `Opening ${scr.label}.`, ok: !no,
+                        open: no ? null : screens.toOpen(scr), cards: null, awaiting: false,
+                    });
+                }
+            }
+
             // ── SCOUT NEVER SEES EDGE METALS ─────────────────────────────
             // Apsara, 2026-09-19: "when i ask scout what are the loads that
             // we have taken yesterday - it should not show edge metal loads.
@@ -3322,7 +3361,9 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
             const managerNum = settings.manager_number || cfg.MANAGER_NUMBER;
             if (!managerNum) return res.status(400).json({ error: 'MANAGER_NUMBER not configured' });
             const chatId = `${managerNum}@c.us`;
-            const capture = { replies: [] };
+            // voice: true lets an action hand back a SHORT spoken form while
+            // the screen keeps the full text — see helpers/wa-state sayAloud.
+            const capture = { replies: [], voice: true, spoken: null };
 
             // ── WHATSAPP BEING DOWN MUST NOT COST HER EVERY ANSWER ───────
             // Found 2026-09-07 by tests/e2e-voice.js on its first run: with
@@ -3392,15 +3433,28 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
                     .map((r) => String(r).replace(/@c\.us$/, '')).join(', ')}: WhatsApp is not connected.`;
             }
             mem.remember('bot', spoken);
-            return answering({
+            return answering(Object.assign({
                 agent: 'jarvis', agent_name: agent.name, voice: agent.voice,
                 routed_because: route.why,
                 answer: spoken, replies, ok: true,
                 cards,
-            });
+            }, (capture.spoken && !refused.length) ? { spoken: capture.spoken } : {}));
         } catch (e) {
             console.error('[API] voice/ask failed:', e.stack || e.message);
             res.status(500).json({ error: e.message });
+        }
+    });
+
+    // ── JARVIS SPEAKS UP ON ITS OWN ───────────────────────────────────────
+    // Apsara, 2026-09-20. The dashboard polls this while voice is on; see
+    // helpers/announcements.js for what qualifies (Edge Metals only) and why
+    // a first poll returns nothing but a cursor.
+    app.get('/api/voice/announcements', (req, res) => {
+        try {
+            res.json(require('./helpers/announcements').poll(req.query.since || null));
+        } catch (e) {
+            console.warn('[API] voice/announcements failed:', e.message);
+            res.json({ now: new Date().toISOString(), items: [], spoken: '', screen: '', error: e.message });
         }
     });
 

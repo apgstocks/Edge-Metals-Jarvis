@@ -1120,6 +1120,8 @@
         // later already knows what it is about to hear itself say.
         nowSpeaking = String(text || '');
         selfTriggers = 0;
+        var wasAnnouncement = announcingNow;
+        announcingNow = false;
         dispatch('SPEAK_START');           // closes the mic BEFORE any audio
         // EXACTLY ONE dispatch of SPEAK_END, whichever engine runs and
         // however it ends. Two would reopen the microphone while Jarvis is
@@ -1167,6 +1169,10 @@
                     suppressAck = true;
                     dispatch('WAKE_HEARD');
                 }
+            } else if (wasAnnouncement) {
+                // Jarvis spoke up unprompted. Nothing was asked of her, so
+                // the microphone does not reopen — an announcement that
+                // started listening would be the assistant eavesdropping.
             } else if (followUpMode && state.enabled && state.foreground && !speechUnavailable) {
                 // ── ALEXA'S FOLLOW-UP MODE ───────────────────────────────
                 // Apsara, 2026-09-07: "mimic siri behaviour/alexa's."
@@ -2169,6 +2175,7 @@
     // confirm rule and every validation apply identically. A spoken
     // instruction can no more write to the ledger than a typed one.
     function ask(q) {
+        lastAskAt = Date.now();
         say('Thinking…');
         // Shown IMMEDIATELY, before the request goes out. This is the whole
         // perceived-speed fix: the wait now contains her own words instead
@@ -2303,6 +2310,18 @@
                     // which has the booking numbers taken out (Apsara,
                     // 2026-09-19). Older servers send no `spoken` — fall back.
                     speak((r && typeof r.spoken === 'string' && r.spoken.trim()) ? r.spoken : answer);
+                }
+                if (r && typeof r.announce === 'boolean') {
+                    announceOn = r.announce;
+                    try { localStorage.setItem('jvAnnounce', announceOn ? 'on' : 'off'); } catch (e) {}
+                }
+                // ── OPEN A SCREEN ────────────────────────────────────────
+                // Apsara, 2026-09-20. A tab opens now, under the answer. A
+                // standalone page is a full navigation that would cut
+                // "Opening Documents" off mid-word, so it waits a moment.
+                if (r && r.open && typeof window.jarvisOpenScreen === 'function') {
+                    var target = r.open;
+                    setTimeout(function () { window.jarvisOpenScreen(target); }, target.href ? 1400 : 0);
                 }
             })
             .catch(function (e) {
@@ -2475,6 +2494,46 @@
     if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', mount);
     else mount();
 
+    // ── JARVIS SPEAKS UP ON ITS OWN ──────────────────────────────────────
+    // Apsara, 2026-09-20. While voice is ON and this tab is in front, the
+    // server is asked once a minute whether anything needs her
+    // (/api/voice/announcements — Edge Metals only). It speaks ONLY when
+    // nothing else is going on: not while Jarvis is talking or listening,
+    // and not within 20 seconds of her last question. Quiet hours 9pm–8am in
+    // her own clock: the cursor still advances, so the morning is not a
+    // backlog — the briefing covers that. "Stop announcements" turns it off.
+    var lastAskAt = 0;
+    var announcingNow = false;
+    var announceOn = true;
+    try { announceOn = localStorage.getItem('jvAnnounce') !== 'off'; } catch (e) {}
+    var annSince = null;
+    var ANNOUNCE_EVERY_MS = 60000;
+    function quietHours(d) { var h = (d || new Date()).getHours(); return h >= 21 || h < 8; }
+    function announceTick() {
+        if (!state.enabled || !state.foreground || document.hidden) return;
+        if (typeof api !== 'function' && typeof window.fetch !== 'function') return;
+        var url = '/api/voice/announcements' + (annSince ? '?since=' + encodeURIComponent(annSince) : '');
+        window.fetch(url, { credentials: 'same-origin' }).then(function (res) { return res.ok ? res.json() : null; })
+            .then(function (r) {
+                if (!r) return;
+                if (r.now) annSince = r.now;
+                if (!r.items || !r.items.length || !r.spoken) return;
+                if (!announceOn || quietHours()) return;
+                if (state.speaking || state.capturing || (Date.now() - lastAskAt) < 20000) {
+                    // Busy — keep them for the next tick rather than lose them.
+                    annSince = new Date(Math.min.apply(null, r.items.map(function (x) { return x.at; })) - 1).toISOString();
+                    return;
+                }
+                paintAgent('jarvis');
+                showCard(undefined, r.screen || r.spoken, false);
+                announcingNow = true;
+                speak(r.spoken);
+            })
+            .catch(function () { /* a missed poll is not worth a word */ });
+    }
+    setInterval(announceTick, ANNOUNCE_EVERY_MS);
+    setTimeout(announceTick, 3000);   // sets the cursor soon after load
+
     // Exposed for the tests, and for anyone debugging a report of "it kept
     // listening" — the state is the whole explanation.
     window.JarvisVoice = {
@@ -2497,5 +2556,7 @@
         guard: function () { return guardMode; },
         isOwnVoice: isOwnVoice,
         nowSpeaking: function () { return nowSpeaking; },
+        announceTick: announceTick,
+        announceOn: function () { return announceOn; },
     };
 }());

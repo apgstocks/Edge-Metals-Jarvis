@@ -5730,6 +5730,22 @@ async function loadSavedBols() {
 }
 
 setSubtab('proforma');
+
+// ── #voice=<subtab>[:<verification tab>] — opened by Jarvis ──────────────
+// Apsara, 2026-09-20: "take me to Zimex verification". The dashboard's voice
+// route sends her here with a hash; without one this page behaves exactly as
+// before (Proforma). Applied through the same setters the buttons call.
+(function openFromVoice() {
+  const m = /[#&]voice=([a-z-]+)(?::([a-z-]+))?/.exec(location.hash || '');
+  if (!m) return;
+  try {
+    setSubtab(m[1]);
+    if (m[1] === 'verification' && m[2]) {
+      const group = Object.keys(VERIFY_GROUP_SUBTABS).find((g) => VERIFY_GROUP_SUBTABS[g].includes(m[2]));
+      if (group) { setVerifyGroup(group); setVerifySubtab(m[2]); }
+    }
+  } catch (e) { console.warn('[VOICE] deep link failed:', e.message); }
+})();
 </script>
 </body>
 </html>
