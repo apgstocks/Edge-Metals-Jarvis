@@ -1276,10 +1276,16 @@ const MUTATIONS = [
       file: 'helpers/bills.js', suites: ['bills-sales'],
       find: '    const netPayable = amountUsed === null ? null\n        : round2(amountUsed - (trucking || 0));',
       to:   '    const netPayable = amountUsed;' },
+    // STALE FIND STRING, repaired 2026-09-20. The advance column landed on
+    // 2026-09-19 and made this line `netPayable - paid - advance`; the
+    // mutation still hunted for `netPayable - paid` and so was reported "not
+    // applied" — which means the green beside it had meant nothing since.
+    // Noticed only because the runner says so out loud. Not a production
+    // change: helpers/bills.js is untouched.
     { name: 'trucking is deducted twice, once again in the balance',
       file: 'helpers/bills.js', suites: ['bills-sales'],
-      find: '    const balance = netPayable === null ? null : round2(netPayable - paid);',
-      to:   '    const balance = netPayable === null ? null : round2(netPayable - (trucking || 0) - paid);' },
+      find: '    const balance = netPayable === null ? null : round2(netPayable - paid - advance);',
+      to:   '    const balance = netPayable === null ? null : round2(netPayable - (trucking || 0) - paid - advance);' },
     { name: 'the bill amount is netted down instead of the payable',
       file: 'helpers/bills.js', suites: ['bills-sales'],
       find: '        amount: amountUsed,\n        net_payable: netPayable,',
@@ -2192,6 +2198,81 @@ const MUTATIONS = [
       // where anyone looks for it.
       find: "                || new Date().toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' });",
       to:   "                || new Date().toISOString().slice(0, 10);" },
+
+    // ── TRUCKING DEDUCTED FROM A YARD LOAD (2026-09-20) ───────────────────
+    // Each of these is a way the feature could be "implemented" and be wrong
+    // about money. If tests/load-trucking.js does not go red for one of them,
+    // the check with that name is not testing what its name says.
+
+    { name: 'trucking: the deduction is netted into amount, so her record and the seller\'s ticket disagree',
+      file: 'helpers/loads.js', suites: ['load-trucking'],
+      find: '        ...cleanTrucking(entry),\n        net_payable   : payableFrom(totals.amount, entry.trucking_amount),',
+      to:   '        ...cleanTrucking(entry),\n        amount        : payableFrom(totals.amount, entry.trucking_amount),\n        net_payable   : payableFrom(totals.amount, entry.trucking_amount),' },
+
+    { name: 'trucking: an edit with no trucking key WIPES the deduction — the old-APK bug',
+      file: 'helpers/loads.js', suites: ['load-trucking'],
+      find: "    const truckingGiven = ('trucking_amount' in entry) || ('trucking_company' in entry)\n        || ('trucking_note' in entry);",
+      to:   '    const truckingGiven = true;' },
+
+    { name: 'trucking: net_payable is carried from before the edit instead of recomputed',
+      file: 'helpers/loads.js', suites: ['load-trucking'],
+      find: '            l.net_payable = payableFrom(l.amount, l.trucking_amount);',
+      to:   '            if (l.net_payable == null) l.net_payable = payableFrom(l.amount, l.trucking_amount);' },
+
+    { name: 'trucking: a load recorded before this feature reads as owing nothing',
+      file: 'helpers/loads.js', suites: ['load-trucking'],
+      find: '    return load.net_payable !== undefined && load.net_payable !== null\n        ? load.net_payable : (load.amount ?? null);',
+      to:   '    return load.net_payable ?? null;' },
+
+    { name: 'trucking: the yard profit report counts the haulage twice',
+      file: 'helpers/yardProfit.js', suites: ['load-trucking'],
+      find: '    const bought = round2(purchases.reduce((s, l) => s + (payableOf(l) || 0), 0)) || 0;',
+      to:   '    const bought = round2(purchases.reduce((s, l) => s + (l.amount || 0), 0)) || 0;' },
+
+    { name: 'trucking: a deduction with no hauler still writes a payable to nobody',
+      file: 'helpers/loadTruckerBill.js', suites: ['load-trucking'],
+      find: "    if (!company) return { skipped: true, reason: 'no_trucking_company' };",
+      to:   "    if (!company) { /* mutated */ }" },
+
+    { name: 'trucking: ticking the box twice writes a second bill for one haul',
+      file: 'helpers/loadTruckerBill.js', suites: ['load-trucking'],
+      find: '    const existing = truckerBills.billsForLoadTicket(load.id);\n    if (existing.length) {',
+      to:   '    const existing = [];\n    if (existing.length) {' },
+
+    { name: 'trucking: the bill is dated today instead of the day of the haul',
+      file: 'helpers/loadTruckerBill.js', suites: ['load-trucking'],
+      find: "    const date = /^\\d{4}-\\d{2}-\\d{2}$/.test(String(load.date || ''))\n        ? load.date : require('./time').todayLocal();",
+      to:   "    const date = require('./time').todayLocal();" },
+
+    { name: 'trucking: the ticket the seller signs never shows the deduction',
+      file: 'helpers/pdf.js', suites: ['load-trucking'],
+      find: '                const trucking = !isSale ? Number(load.trucking_amount) || 0 : 0;',
+      to:   '                const trucking = 0;' },
+
+    { name: 'trucking: the receipt he walks away with never shows the deduction',
+      file: 'helpers/pdf.js', suites: ['load-trucking'],
+      find: "    const rcpTrucking = (opts && opts.kind === 'sale') ? 0 : Number(load.trucking_amount) || 0;",
+      to:   '    const rcpTrucking = 0;' },
+
+    { name: 'trucking: the create route drops the deduction on the floor',
+      file: 'api.js', suites: ['load-trucking'],
+      find: '                trucking_company: b.trucking_company, trucking_amount: b.trucking_amount,\n                trucking_note: b.trucking_note,',
+      to:   '' },
+
+    { name: 'trucking: the edit route names the keys unconditionally, so the old APK wipes them',
+      file: 'api.js', suites: ['load-trucking'],
+      find: "                ...('trucking_amount'  in b ? { trucking_amount:  b.trucking_amount  } : {}),",
+      to:   '                trucking_amount: b.trucking_amount,' },
+
+    { name: 'trucking: the load list measures the balance against the gross amount',
+      file: 'api.js', suites: ['load-trucking'],
+      find: "                    payment: paymentSummary(l.id, require('./helpers/loads').payableOf(l)),",
+      to:   '                    payment: paymentSummary(l.id, l.amount),' },
+
+    { name: 'trucking: the voice assistant states the gross as what is still owed',
+      file: 'helpers/tools.js', suites: ['load-trucking'],
+      find: "                summary: paymentSummary(id, require('./loads').payableOf(load)),",
+      to:   '                summary: paymentSummary(id, load.amount),' },
 ];
 
 // ── CRASH-SAFE, NOT JUST EXIT-SAFE ───────────────────────────────────────

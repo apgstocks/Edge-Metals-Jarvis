@@ -27,8 +27,12 @@ function run(file,rows){
   let el={innerHTML:''};
   const ctx={document:{getElementById:()=>el,querySelectorAll:()=>rows},
              fmtAmount:n=>n==null?'':Number(n).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2})};
-  const fn=new Function('document','fmtAmount', grabFrom(file,'updateItemTotals')+'; return updateItemTotals;');
-  fn(ctx.document,ctx.fmtAmount)();
+  // updateTruckingSummary joins document and fmtAmount as a declared
+  // collaborator (2026-09-20) — updateItemTotals refreshes the payable line
+  // at the end, and this comparison is about the totals the two clients
+  // compute, not about that call.
+  const fn=new Function('document','fmtAmount','updateTruckingSummary', grabFrom(file,'updateItemTotals')+'; return updateItemTotals;');
+  fn(ctx.document,ctx.fmtAmount,()=>{})();
   return el.innerHTML.replace(/\s+/g,' ').trim();
 }
 let pass=0,fail=0; const ck=(n,c)=>{c?(pass++,console.log('  PASS  '+n)):(fail++,console.log('  FAIL  '+n));};
@@ -424,9 +428,10 @@ ck('net total is right', /data-label="Net">7,305</.test(web));
     const mkRow = (g,t,n,a) => { const v={'.ld-item-gross':g,'.ld-item-tare':t,'.ld-item-net':n,'.ld-item-amount':a};
       return { querySelector: (s) => (s in v) ? { value: v[s]==null?'':String(v[s]) } : null }; };
     let elx = { innerHTML:'' };
-    new Function('document','fmtAmount', grab('updateItemTotals') + ';updateItemTotals();')(
+    // Third argument is updateTruckingSummary — see the note on run() above.
+    new Function('document','fmtAmount','updateTruckingSummary', grab('updateItemTotals') + ';updateItemTotals();')(
       { getElementById: () => elx, querySelectorAll: () => [mkRow(4210,200,4010,'$8,822.00'), mkRow(3475,180,3295,'$7,249.00')] },
-      fmtAmount);
+      fmtAmount, () => {});
     const amt = (elx.innerHTML.match(/data-label="Amount">([^<]*)</)||[])[1];
     ck(`${p}: the item totals Amount renders with a single $`, amt === '$16,071.00');
   }

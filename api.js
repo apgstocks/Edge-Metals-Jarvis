@@ -1443,7 +1443,13 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
                     // What the clients actually wanted all along.
                     seller_signed: !!seller_signature,
                     pdf_stale: !!l.pdf_link && (Number(l.pdf_template_version) || 0) < PDF_TEMPLATE_VERSION,
-                    payment: paymentSummary(l.id, l.amount),
+                    // payableOf, not l.amount — a load carrying a trucking
+                    // deduction owes the seller less than the metal came to,
+                    // and this is the figure both clients draw the card's
+                    // outstanding balance from. Identical to l.amount on every
+                    // load without one, which is all of them until she enters
+                    // the first.
+                    payment: paymentSummary(l.id, require('./helpers/loads').payableOf(l)),
                 };
             }));
         } catch (e) { res.status(500).json({ error: e.message }); }
@@ -1622,6 +1628,11 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
                 seller_address: b.seller_address, seller_phone: b.seller_phone,
                 buyer: b.buyer, buyer_address: b.buyer_address,
                 items: b.items, weight_unit: b.weight_unit,
+                // Optional haulage deducted from what the seller is paid.
+                // Unconditional here, unlike the edit route below: a CREATE
+                // has no prior value to preserve, so absent means none.
+                trucking_company: b.trucking_company, trucking_amount: b.trucking_amount,
+                trucking_note: b.trucking_note,
                 created_by: b.created_by || req.role || 'unknown',
                 // One-time ticket — see helpers/oncePerSave.js.
                 client_request_id: b.client_request_id,
@@ -1680,7 +1691,22 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
             // every sync rebuilds from loads.json anyway, so a missed one
             // self-heals on the next change. See helpers/sheetSync.js.
             require('./helpers/sheetSync').scheduleSync([require('./helpers/sheetSync').monthKeyFor(finalLoad && finalLoad.date)]);
-            res.json({ ok: true, load: finalLoad });
+            // The offered trucker bill — see helpers/loadTruckerBill.js. Runs
+            // AFTER the load is safely written and never fails the save: the
+            // metal is in the yard whether or not a debt to the hauler got
+            // recorded, and a load that refuses to save because a second
+            // ledger complained would be the worse bug by a distance. The
+            // outcome rides back on the response so the screen can say what
+            // happened instead of leaving a ticked box unexplained.
+            let truckerBill = null;
+            try {
+                truckerBill = await require('./helpers/loadTruckerBill').maybeCreateTruckerBill(
+                    finalLoad, { wanted: b.create_trucker_bill, createdBy: b.created_by || req.role || 'unknown' });
+            } catch (e) {
+                console.error('[API] trucker bill from load failed:', e.message);
+                truckerBill = { skipped: true, reason: 'error', message: e.message };
+            }
+            res.json({ ok: true, load: finalLoad, trucker_bill: truckerBill });
         } catch (err) {
             // validateLoadForSave (helpers/loads.js) throws a plain Error
             // prefixed "Validation:" for a missing mandatory field — that's a
@@ -1744,6 +1770,20 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
                 seller_address: b.seller_address, seller_phone: b.seller_phone,
                 buyer: b.buyer, buyer_address: b.buyer_address,
                 items: b.items, weight_unit: b.weight_unit,
+                // ── FORWARDED ONLY IF THE CLIENT SENT IT ─────────────────
+                // Spread, not listed, and this is the point of the whole
+                // design. The APK on her phone was built before trucking
+                // existed and will keep PUTting loads without these keys for
+                // as long as it takes to ship a new build. editLoad reads the
+                // KEY'S PRESENCE as "the caller means to set this" — so if
+                // this route named the fields unconditionally, `b.trucking_amount`
+                // would arrive as undefined, editLoad would see the key, and
+                // every edit made on her phone would wipe a deduction entered
+                // at the desk. Absence has to travel all the way down as
+                // absence, not as undefined.
+                ...('trucking_company' in b ? { trucking_company: b.trucking_company } : {}),
+                ...('trucking_amount'  in b ? { trucking_amount:  b.trucking_amount  } : {}),
+                ...('trucking_note'    in b ? { trucking_note:    b.trucking_note    } : {}),
             });
             if (!record) return res.status(404).json({ error: 'not found' });
 
@@ -1802,7 +1842,20 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
                 const sheetSync = require('./helpers/sheetSync');
                 sheetSync.scheduleSync([sheetSync.monthKeyFor(existing.date), sheetSync.monthKeyFor(finalLoad && finalLoad.date)]);
             }
-            res.json({ ok: true, load: finalLoad });
+            // Same offer on an edit — she may add the haulage after the fact,
+            // once the hauler's invoice turns up. maybeCreateTruckerBill
+            // refuses to write a second bill against a ticket that already has
+            // one and reports the existing id instead, so ticking the box
+            // twice cannot double her payable.
+            let truckerBill = null;
+            try {
+                truckerBill = await require('./helpers/loadTruckerBill').maybeCreateTruckerBill(
+                    finalLoad, { wanted: b.create_trucker_bill, createdBy: b.created_by || req.role || 'unknown' });
+            } catch (e) {
+                console.error('[API] trucker bill from load failed:', e.message);
+                truckerBill = { skipped: true, reason: 'error', message: e.message };
+            }
+            res.json({ ok: true, load: finalLoad, trucker_bill: truckerBill });
         } catch (err) {
             const isValidation = /^Validation:/.test(err.message || '');
             if (!isValidation) console.error('[API] edit load failed:', err.message);
@@ -4819,9 +4872,14 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
                 const l = loadOutboundLoads().find((x) => x.id === loadId);
                 return l ? l.amount : null;
             }
-            const { loadLoads } = require('./helpers/loads');
+            // A PURCHASE is the one kind that can carry a trucking deduction,
+            // so it is the one branch that asks payableOf rather than reading
+            // .amount. The sale and trucker branches above deliberately do
+            // not: a trucker bill IS the haulage, and netting haulage out of
+            // a sale would be an invention.
+            const { loadLoads, payableOf } = require('./helpers/loads');
             const l = loadLoads().find((x) => x.id === loadId);
-            return l ? l.amount : null;
+            return l ? payableOf(l) : null;
         } catch (e) { return null; }
     }
 
@@ -7743,6 +7801,21 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
     // pattern as address-book/quote-requests/outbound-loads above. Proforma
     // subtab is fully wired (see dashboard/documents.html); Invoice and
     // Verification subtabs are still placeholders as of this patch.
+    // ── desktop/melspec.js, for the browser's end-of-turn model ──────────
+    // ONE implementation of Whisper's log-mel features: the Mac app's main
+    // process requires desktop/melspec.js, and dashboard/turn-model.js gets
+    // the same file here, wrapped so its top-level consts stay private.
+    // Copying it into dashboard/ would give two ports of a function whose
+    // whole header is about how easily it goes subtly wrong.
+    app.get('/melspec.js', (req, res) => {
+        try {
+            const src = fs.readFileSync(path.join(cfg.ROOT, 'desktop', 'melspec.js'), 'utf8');
+            res.set('Content-Type', 'text/javascript; charset=utf-8');
+            res.set('Cache-Control', 'no-cache');
+            res.send('(function(){var module={exports:{}};\n' + src + '\nwindow.JarvisMelspec=module.exports;})();\n');
+        } catch (e) { res.status(500).type('text/javascript').send('/* melspec unavailable: ' + String(e.message).replace(/\*\//g, '') + ' */'); }
+    });
+
     app.get('/documents', (req, res) => {
         res.sendFile(path.join(cfg.ROOT, 'dashboard', 'documents.html'));
     });
@@ -7801,21 +7874,6 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
     // falls through to express.static untouched.
     const BUILD_TOKEN = '{{JARVIS_BUILD}}';
     app.get(/\.html$|^\/$/, (req, res, next) => {
-    // ── desktop/melspec.js, for the browser's end-of-turn model ──────────
-    // ONE implementation of Whisper's log-mel features: the Mac app's main
-    // process requires desktop/melspec.js, and dashboard/turn-model.js gets
-    // the same file here, wrapped so its top-level consts stay private.
-    // Copying it into dashboard/ would give two ports of a function whose
-    // whole header is about how easily it goes subtly wrong.
-    app.get('/melspec.js', (req, res) => {
-        try {
-            const src = fs.readFileSync(path.join(cfg.ROOT, 'desktop', 'melspec.js'), 'utf8');
-            res.set('Content-Type', 'text/javascript; charset=utf-8');
-            res.set('Cache-Control', 'no-cache');
-            res.send('(function(){var module={exports:{}};\n' + src + '\nwindow.JarvisMelspec=module.exports;})();\n');
-        } catch (e) { res.status(500).type('text/javascript').send('/* melspec unavailable: ' + String(e.message).replace(/\*\//g, '') + ' */'); }
-    });
-
         const rel = req.path === '/' ? 'index.html' : req.path.replace(/^\/+/, '');
         const file = path.join(cfg.ROOT, 'dashboard', rel);
         // ── SECOND LINE, NOT THE FIRST ───────────────────────────────

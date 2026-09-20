@@ -133,7 +133,14 @@ const TOOLS = {
                 .filter((l) => !p.from || String(l.date || '') >= p.from)
                 .filter((l) => !p.to || String(l.date || '') <= p.to)
                 .filter((l) => !item || (l.items || []).some((it) => String(it.description || '').toLowerCase().includes(item)))
-                .map((l) => ({ id: l.id, date: l.date, seller: l.seller, amount: l.amount, payment: paymentSummary(l.id, l.amount) }))
+                // net_payable alongside amount, and the payment measured
+                // against the payable — a load with haulage deducted owes the
+                // seller less than the metal came to, and "what do we still
+                // owe Ramesh" is the question this tool exists to answer.
+                .map((l) => ({ id: l.id, date: l.date, seller: l.seller, amount: l.amount,
+                               trucking_amount: l.trucking_amount ?? null,
+                               net_payable: require('./loads').payableOf(l),
+                               payment: paymentSummary(l.id, require('./loads').payableOf(l)) }))
                 .filter((l) => !p.unpaid_only || (l.payment && l.payment.pending > 0))
                 .sort((a, b) => String(b.date).localeCompare(String(a.date)));
             return cap(rows);
@@ -155,9 +162,17 @@ const TOOLS = {
             if (!load) return { found: false, load_id: id };
             return {
                 found: true,
-                load: { id: load.id, date: load.date, seller: load.seller, amount: load.amount, items: load.items || [], signed: !!load.seller_signature },
+                // amount AND net_payable, both named, because the difference
+                // between them is the whole point of the deduction and an
+                // assistant handed only one of them will state it as though
+                // it were the other.
+                load: { id: load.id, date: load.date, seller: load.seller, amount: load.amount,
+                        trucking_company: load.trucking_company ?? null,
+                        trucking_amount: load.trucking_amount ?? null,
+                        net_payable: require('./loads').payableOf(load),
+                        items: load.items || [], signed: !!load.seller_signature },
                 payments: paymentsForLoad(id),
-                summary: paymentSummary(id, load.amount),
+                summary: paymentSummary(id, require('./loads').payableOf(load)),
             };
         },
     },
@@ -593,7 +608,10 @@ const TOOLS = {
             const paidVia = resolvePaidVia(loadKind, mode, p.paid_via);
 
             // Recomputed from the ledger, NOT from anything the model said.
-            const before = paymentSummary(loadId, load.amount);
+            // Against the PAYABLE: if $200 of haulage was deducted, "$2,259
+            // still outstanding" is the true figure and "$2,459" would have
+            // her overpay by exactly the deduction she just made.
+            const before = paymentSummary(loadId, require('./loads').payableOf(load));
             const after = Math.round((before.pending - amount) * 100) / 100;
             const paidOn = isYmd(p.paid_on) ? p.paid_on : require('./time').todayLocal();
 
@@ -617,7 +635,18 @@ const TOOLS = {
             return {
                 summary: `Record a ${mode} payment of ${money(amount)} against ${loadId} (${load.seller || 'no seller'}), dated ${paidOn}.`,
                 details: [
+                    // The metal's figure and the payable are the SAME on every
+                    // load without a deduction, so the card reads exactly as it
+                    // always has until there is one — and when there is, it
+                    // shows both and says why they differ. A card that printed
+                    // only the payable would leave her unable to check it
+                    // against the ticket in her hand; only the amount would
+                    // have her paying the haulage twice.
                     ['Load', `${loadId} — ${load.seller || 'no seller'}, ${money(load.amount || 0)}`],
+                    ...(load.trucking_amount
+                        ? [['Less trucking', `${money(load.trucking_amount)}${load.trucking_company ? ' — ' + load.trucking_company : ''}`],
+                           ['Payable to seller', money(require('./loads').payableOf(load) || 0)]]
+                        : []),
                     ['Already paid', money(before.paid)],
                     ['This payment', `${money(amount)} by ${mode}${bank ? ' from ' + bank : ''}`],
                     // Shown only when it applies — a "Payment via: " line on a

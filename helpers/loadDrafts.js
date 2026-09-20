@@ -59,6 +59,15 @@ async function saveDraft(input = {}) {
         seller_phone: input.seller_phone || null,
         description: input.description || '',
         weight_unit: input.weight_unit || 'lb',
+        // Carried on the draft, or a recovered load comes back missing its
+        // deduction — which is the one field whose absence looks exactly like
+        // a decision she made rather than data she lost. A draft exists to
+        // survive a closed tab and a flat phone; surviving them minus $200 is
+        // the failure it was built to prevent.
+        trucking_company: input.trucking_company || null,
+        trucking_amount: input.trucking_amount != null && input.trucking_amount !== ''
+            ? Number(input.trucking_amount) : null,
+        trucking_note: input.trucking_note || null,
         items: Array.isArray(input.items) ? input.items : [],
         created_at: input.created_at || now,
         updated_at: now,

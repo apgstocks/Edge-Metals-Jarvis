@@ -715,11 +715,48 @@ function generateLoadPdf(load, opts = {}) {
                 // cannot be split across a page break. Reserving only the box
                 // is what put an orphan signature on page 2 of EDGE_66.
                 const wantsSig = !isSale && includeSummary;
+                // ── THE DEDUCTION, ON THE DOCUMENT HE SIGNS ──────────────
+                // Apsara, 2026-09-20: when she collects the metal herself she
+                // pays the seller less by the haulage. He is signing this
+                // page, so the two lines that turn "Amount total" into what
+                // he is actually handed have to be ON it — a ticket saying
+                // $2,459 against $2,259 in his hand is an argument at the
+                // gate, and she is the one standing there.
+                //
+                // ONLY WHEN THERE IS ONE. `trucking` is falsy on every load
+                // that has no deduction, so those tickets print exactly the
+                // four rows they have always printed — same height, same
+                // reserved signature geometry, same one-page fit. A "Trucking
+                // $0.00" line on every ticket in the book would be a change
+                // to a document nobody asked to change.
+                //
+                // Sale tickets are excluded outright: a buyer's copy has no
+                // business carrying what she paid a hauler on the way in.
+                const trucking = !isSale ? Number(load.trucking_amount) || 0 : 0;
+                const netPayable = trucking > 0 && load.amount != null
+                    ? Math.round((load.amount - trucking) * 100) / 100 : null;
                 summaryBox = drawSummaryBox(doc, [
                     { label: 'Gross total',  value: load.gross_weight != null ? `${load.gross_weight} ${unit}` : '—' },
                     { label: 'Tare total',   value: load.tare_weight  != null ? `${load.tare_weight} ${unit}`  : '—' },
                     { label: 'Net total',    value: load.net_weight   != null ? `${load.net_weight} ${unit}`   : '—', emphasize: true },
-                    { label: 'Amount total', value: load.amount       != null ? `$${fmtAmount(load.amount)}`        : '—', emphasize: true },
+                    // Still "Amount total", still the metal's figure, still
+                    // emphasised when it is the last line. De-emphasised only
+                    // when a Net payable follows it, so the bottom row of the
+                    // box is always the number that matters most.
+                    { label: 'Amount total', value: load.amount       != null ? `$${fmtAmount(load.amount)}`        : '—', emphasize: netPayable === null },
+                    ...(netPayable !== null ? [
+                        // LABEL STAYS SHORT, and this is not cosmetic. The
+                        // label column in drawSummaryBox is 110pt wide against
+                        // a FIXED 19pt row height — roughly 22 characters at
+                        // 9.5pt Helvetica. "Less trucking — Bay Area Hauling"
+                        // wraps to two lines inside a row that cannot grow and
+                        // lands on top of the Net payable beneath it. The
+                        // hauler's name is on the load record and on the
+                        // trucker bill; the seller needs the deduction, not
+                        // the name of the company that earned it.
+                        { label: 'Less trucking', value: `-$${fmtAmount(trucking)}` },
+                        { label: 'Net payable', value: `$${fmtAmount(netPayable)}`, emphasize: true },
+                    ] : []),
                 ], { reserve: wantsSig ? SIG_BLOCK_H : 0 });
                 if (wantsSig) {
                     drawSignatureBlock(doc, load, { ...(opts || {}), at: summaryBox });
@@ -1161,7 +1198,24 @@ function drawReceiptContent(doc, load, contentWidth, opts) {
     divider();
 
     line(`Net total: ${load.net_weight != null ? `${load.net_weight} ${unit}` : '—'}`, { size: 9.5, bold: true, gap: 1 });
-    line(`Amount total: ${load.amount != null ? `$${fmtAmount(load.amount)}` : '—'}`, { size: 11, bold: true, gap: 3 });
+    // ── THE DEDUCTION, ON THE COPY HE WALKS AWAY WITH ────────────────────
+    // Same rule as the full ticket's summary box, and it matters more here:
+    // this is the slip that physically leaves with the seller, so it is the
+    // one he will hold up when the cash does not match. Prints only when
+    // there IS a deduction, so every other receipt in the book is byte-for-byte
+    // the receipt it was. Purchases only — `partyWord` above is already the
+    // kind test this file uses.
+    const rcpTrucking = (opts && opts.kind === 'sale') ? 0 : Number(load.trucking_amount) || 0;
+    const rcpNet = rcpTrucking > 0 && load.amount != null
+        ? Math.round((load.amount - rcpTrucking) * 100) / 100 : null;
+    if (rcpNet !== null) {
+        line(`Amount total: $${fmtAmount(load.amount)}`, { size: 9.5, gap: 0.5 });
+        line(`Less trucking${load.trucking_company ? ` (${load.trucking_company})` : ''}: -$${fmtAmount(rcpTrucking)}`,
+             { size: 8.5, color: MUTED, gap: 1 });
+        line(`Net payable: $${fmtAmount(rcpNet)}`, { size: 11, bold: true, gap: 3 });
+    } else {
+        line(`Amount total: ${load.amount != null ? `$${fmtAmount(load.amount)}` : '—'}`, { size: 11, bold: true, gap: 3 });
+    }
     divider();
 
     // Signature — same idea as the full ticket's block (see

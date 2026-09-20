@@ -120,6 +120,10 @@ global.document = {
   querySelectorAll:()=> global.__rows,
 };
 global.fmtAmount = (n)=> n==null?'':('$'+Number(n).toFixed(2));
+// Stubbed like document and fmtAmount above: updateItemTotals calls it at
+// the end to refresh the 'amount less trucking' line (2026-09-20), and this
+// harness is about the totals ARITHMETIC, not that collaborator.
+global.updateTruckingSummary = ()=>{};
 eval(grab('updateItemTotals'));
 
 

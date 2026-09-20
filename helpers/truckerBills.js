@@ -173,6 +173,25 @@ async function deleteBill(id) {
     return removed;
 }
 
+// ── EVERY BILL TYPED AGAINST ONE LOAD TICKET ─────────────────────────────
+//
+// Added 2026-09-20 for the load-trucking link. Apsara asked whether trucking
+// on a load "should put an entry in trucker bills" — sometimes yes, when an
+// outside hauler is owed; never when she collected it with her own truck. The
+// load form offers to create the bill, and this is what stops it offering
+// twice: an edit that touches the trucking on a load whose bill already
+// exists must say so rather than quietly minting a second debt.
+//
+// STILL NOT A FOREIGN KEY, and the header above is the reason. This matches
+// the free text as typed, case- and space-insensitively so "edge_42" finds
+// EDGE_42, and it is used to WARN, never to refuse a bill. A hauler's invoice
+// naming a ticket this yard has never heard of is still a debt.
+function billsForLoadTicket(ticket) {
+    const want = String(ticket || '').trim().toLowerCase().replace(/\s+/g, '');
+    if (!want) return [];
+    return listBills().filter((b) => String(b && b.load_ticket || '').trim().toLowerCase().replace(/\s+/g, '') === want);
+}
+
 function getBill(id) {
     return listBills().find((b) => b && b.id === id) || null;
 }
@@ -232,5 +251,5 @@ function billsReport(rows) {
 module.exports = {
     TRUCKER_PAYMENT_MODES,
     listBills, listBillsWithPayments, billsReport,
-    addBill, editBill, deleteBill, getBill,
+    addBill, editBill, deleteBill, getBill, billsForLoadTicket,
 };

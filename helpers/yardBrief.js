@@ -57,12 +57,19 @@ function bySeller(loads) {
     const m = new Map();
     for (const l of loads) {
         const key = String(l.seller || 'Unknown').trim() || 'Unknown';
-        if (!m.has(key)) m.set(key, { seller: key, loads: 0, net_weight: 0, amount: 0, paid: 0, pending: 0, last_date: null, last_paid_on: null, payments: 0 });
+        if (!m.has(key)) m.set(key, { seller: key, loads: 0, net_weight: 0, amount: 0, trucking: 0, payable: 0, paid: 0, pending: 0, last_date: null, last_paid_on: null, payments: 0 });
         const row = m.get(key);
         row.loads += 1;
         row.net_weight += num(l.net_weight);
+        // `amount` stays what she BOUGHT from this seller — the metal's value,
+        // matching the Inventory tab's per-seller column. `trucking` and
+        // `payable` are added beside it rather than folded into it, so "how
+        // much have I bought from Ramesh" and "how much do I owe Ramesh" stay
+        // two questions with two answers.
         row.amount += num(l.amount);
-        const p = paymentSummary(l.id, l.amount);
+        row.trucking += num(l.trucking_amount);
+        row.payable += num(require('./loads').payableOf(l));
+        const p = paymentSummary(l.id, require('./loads').payableOf(l));
         row.paid += num(p.paid);
         row.pending += num(p.pending);
         if (!row.last_date || ymd(l.date) > row.last_date) row.last_date = ymd(l.date);
@@ -81,7 +88,15 @@ function bySeller(loads) {
         // otherwise "9052.00" sorts lexically against "980.00" and the biggest
         // seller stops being first.
         .sort((a, b) => b.amount - a.amount)
-        .map((r) => ({ ...r, net_weight: round2(r.net_weight), amount: money(r.amount), paid: money(r.paid), pending: money(r.pending) }));
+        // trucking/payable omitted entirely when this seller has no deduction
+        // anywhere, rather than sent as "0.00" — a zero on every row of a
+        // brief the model reads aloud is a field it will eventually mention.
+        .map((r) => {
+            const out = { ...r, net_weight: round2(r.net_weight), amount: money(r.amount), paid: money(r.paid), pending: money(r.pending) };
+            if (r.trucking > 0) { out.trucking = money(r.trucking); out.payable = money(r.payable); }
+            else { delete out.trucking; delete out.payable; }
+            return out;
+        });
 }
 
 function summarise(loads) {
@@ -124,11 +139,20 @@ function buildYardBrief(opts = {}) {
     // Outstanding money, which is the question most worth getting right.
     const outstanding = [];
     for (const l of loads) {
-        const p = paymentSummary(l.id, l.amount);
-        if (p.status === 'partial' || (p.status === 'unpaid' && num(l.amount) > 0)) {
+        // Outstanding is measured against the PAYABLE throughout — including
+        // the `> 0` gate, or a load bought for exactly its haulage would sit
+        // on this list forever owing nothing.
+        const payable = require('./loads').payableOf(l);
+        const p = paymentSummary(l.id, payable);
+        if (p.status === 'partial' || (p.status === 'unpaid' && num(payable) > 0)) {
             outstanding.push({
                 load_id: l.id, date: ymd(l.date), seller: l.seller || null,
-                total: money(l.amount), paid: money(p.paid), pending: money(p.pending), status: p.status,
+                // `total` is what is OWED, which is the column this list is
+                // about. The metal's figure rides along only when the two
+                // differ, so the model can explain the gap if she asks.
+                total: money(payable), paid: money(p.paid), pending: money(p.pending), status: p.status,
+                ...(num(l.trucking_amount) > 0
+                    ? { load_amount: money(l.amount), trucking: money(l.trucking_amount) } : {}),
             });
         }
     }
@@ -173,7 +197,7 @@ function buildYardBrief(opts = {}) {
                 id: l.id, load_number: l.load_number ?? null, date: ymd(l.date), seller: l.seller || null,
                 net_weight: round2(l.net_weight), amount: money(l.amount),
                 items: (l.items || []).map((it) => it.description).filter(Boolean),
-                payment_status: paymentSummary(l.id, l.amount).status,
+                payment_status: paymentSummary(l.id, require('./loads').payableOf(l)).status,
             })),
         recent_sales: recentSales
             .slice()

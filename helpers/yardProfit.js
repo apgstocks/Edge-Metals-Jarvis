@@ -62,7 +62,28 @@ function yardProfit({ from = null, to = null } = {}) {
     const coverage = revenue > 0 ? Math.round((linkedRevenue / revenue) * 1000) / 10 : null;
 
     // ── THE CASH PICTURE, LABELLED AS SUCH ───────────────────────────────
-    const bought = round2(purchases.reduce((s, l) => s + (l.amount || 0), 0)) || 0;
+    //
+    // ── WHY THIS IS payableOf AND NOT l.amount ───────────────────────────
+    // Apsara, 2026-09-20, asked whether trucking on a load should also write
+    // a trucker bill. Sometimes it should: an outside hauler she pays is a
+    // real debt and belongs in that ledger. But `trucking` below ALREADY sums
+    // every trucker bill in range, so if the same haulage were also sitting
+    // inside a load's `amount` it would be subtracted twice and this report
+    // would claim she spent the deduction on top of paying it.
+    //
+    // net_payable is what actually left her hand for the metal; the trucker
+    // bill is what left it for the haul; they add back up to `amount` and
+    // nothing is counted or lost. On every load without a deduction — all of
+    // them until she enters the first — payableOf returns `amount` and this
+    // line is the line it has always been.
+    //
+    // Deliberately NOT applied to helpers/stock.js's unitCostOf, which keeps
+    // using gross `amount`: that figure is the LANDED cost of the metal, and
+    // metal collected for a $200 deduction still cost $200 to get to the
+    // yard. Netting it there would understate cost of goods and overstate
+    // margin on every sale drawn from that lot.
+    const { payableOf } = require('./loads');
+    const bought = round2(purchases.reduce((s, l) => s + (payableOf(l) || 0), 0)) || 0;
     const sold = round2(sales.reduce((s, l) => s + (l.amount || 0), 0)) || 0;
 
     let expenses = 0;

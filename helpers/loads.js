@@ -65,6 +65,62 @@ function computeItem(it) {
     };
 }
 
+// ── HAULAGE DEDUCTED FROM WHAT THE SELLER IS PAID ───────────────────────
+//
+// Apsara, 2026-09-20, asked "in yard app,what if my load includes trucking?"
+// and then said BOTH things happen depending on the seller: sometimes she
+// pays an outside hauler separately and the seller still gets his full
+// price, and sometimes she collects the metal herself and pays the seller
+// LESS by the haulage. The first case already worked — helpers/truckerBills.js
+// is a payables ledger of its own and its payments reach the spend report.
+// The second had nowhere to live: the only ways to record it were to drop
+// the price per lb, which puts a figure on the signed ticket the seller never
+// agreed to and then flows into Inventory as a false cost, or to pay him in
+// full and book the haulage separately, which shows the whole amount leaving
+// petty cash and makes the deduction invisible.
+//
+// THREE FIELDS, NOT FIVE. helpers/bills.js splits trucking into Line Haul,
+// Port Fees, Chassis Rent, Dry Run and Extra Scale. Those are drayage words —
+// a container coming off a ship. A truck collecting scrap from a seller's
+// shop has no port fee and no chassis to rent, and a form full of boxes that
+// are always blank is a form people stop reading. My call, not hers: if the
+// yard ever needs the breakdown it can be added, but it should be added
+// because a real charge had nowhere to go, not for symmetry with Metals.
+//
+// `amount` IS NOT REDUCED. Same rule bills.js states for a supplier invoice:
+// amount stays what the metal came to, which is the figure printed on the
+// ticket the seller signs, and the deduction lands in a separate net_payable.
+// Netting it in place would mean her record and his copy never agree again.
+function cleanTrucking(entry) {
+    const company = String(entry.trucking_company || '').trim();
+    const note    = String(entry.trucking_note || '').trim();
+    return {
+        trucking_company: company || null,
+        trucking_amount : toNum(entry.trucking_amount),
+        trucking_note   : note || null,
+    };
+}
+
+// amount less haulage. null amount stays null — a load with no priced items
+// has no payable, and 0 - trucking would invent a debt the seller owes HER.
+function payableFrom(amount, trucking) {
+    const amt = toNum(amount);
+    if (amt === null) return null;
+    return round2(amt - (toNum(trucking) || 0));
+}
+
+// THE SINGLE READER. Every place that asks "what is this seller owed" goes
+// through here rather than reaching for `.amount` itself, because there are
+// twenty of them and a figure that disagrees between the load card, the
+// ticket, the pay sheet and what Jarvis says out loud is worse than no
+// figure at all. Falls back to `amount` for every load recorded before this
+// existed — those have no net_payable key and must read as "no deduction".
+function payableOf(load) {
+    if (!load) return null;
+    return load.net_payable !== undefined && load.net_payable !== null
+        ? load.net_payable : (load.amount ?? null);
+}
+
 // Load-level gross/tare/net/amount are SUMS across items — kept on the
 // record too so the card deck and PDF summary don't have to re-derive them
 // every time they're displayed.
@@ -196,6 +252,12 @@ async function addLoad(entry) {
         tare_weight   : totals.tare_weight,
         net_weight    : totals.net_weight,
         amount        : totals.amount,
+        // Optional haulage deducted from what the seller is paid — see
+        // cleanTrucking above. A create has no prior state to preserve, so
+        // these come straight off the request; editLoad is where absence has
+        // to mean "leave it alone".
+        ...cleanTrucking(entry),
+        net_payable   : payableFrom(totals.amount, entry.trucking_amount),
         weight_unit   : entry.weight_unit || 'lb',
         pdf_drive_id  : null, pdf_link: null,
         weights_pdf_drive_id: null, weights_pdf_link: null,
@@ -307,9 +369,34 @@ async function editLoad(id, entry) {
         status        : 'open',
     };
 
+    // ── A MISSING TRUCKING FIELD MEANS LEAVE IT, NOT CLEAR IT ────────────
+    //
+    // Every other field above is in the patch unconditionally, which is right
+    // for them: both forms always send all of them, so an absent one means
+    // blank. Trucking cannot work that way, and the reason is her phone. The
+    // APK installed on it was built before this field existed and will keep
+    // posting edits without it for as long as it takes to ship a new build —
+    // under the usual rule, every edit she makes on the phone would silently
+    // wipe a deduction she entered at the desk, and she would find out by
+    // paying a seller $200 too much. So absence PRESERVES.
+    //
+    // Clearing still works from either form, because both send the key with
+    // an empty value once they know about it, and an empty value is null.
+    const truckingGiven = ('trucking_amount' in entry) || ('trucking_company' in entry)
+        || ('trucking_note' in entry);
+    const truckingPatch = truckingGiven ? cleanTrucking(entry) : null;
+
     const loads = await mutateJson(cfg.LOADS_FILE, [], (loads) => {
         const l = loads.find(x => x.id === id);
-        if (l) Object.assign(l, patch, { updated_at: new Date().toISOString() });
+        if (l) {
+            Object.assign(l, patch, { updated_at: new Date().toISOString() });
+            if (truckingPatch) Object.assign(l, truckingPatch);
+            // Recomputed here, inside the lock, from whatever SURVIVED the
+            // two assignments above — not from `entry`. The items can change
+            // on an edit that never mentions trucking, and a net_payable left
+            // over from the old amount is a wrong number that looks right.
+            l.net_payable = payableFrom(l.amount, l.trucking_amount);
+        }
         return loads;
     });
     return loads.find(l => l.id === id) || null;
@@ -663,4 +750,5 @@ function getItemLines(allLoads, { description, from, to } = {}) {
     };
 }
 
-module.exports = { loadLoads, addLoad, updateLoad, editLoad, deleteLoad, getLoad, renumberLoad, getInventoryReport, getItemLines };
+module.exports = { loadLoads, addLoad, updateLoad, editLoad, deleteLoad, getLoad, renumberLoad, getInventoryReport, getItemLines,
+                   cleanTrucking, payableFrom, payableOf };

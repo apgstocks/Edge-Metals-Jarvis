@@ -3560,6 +3560,12 @@ function currentDraftPayload() {
     seller_address: $('ld_seller_address') ? $('ld_seller_address').value : '',
     seller_phone: $('ld_seller_phone') ? $('ld_seller_phone').value : '',
     description: editingLoadDescription || '',
+    // On the draft too — see helpers/loadDrafts.js. A recovered load that
+    // comes back without its deduction is worse than one that comes back
+    // empty, because it looks finished.
+    trucking_company: $('ld_trucking_company') ? $('ld_trucking_company').value : '',
+    trucking_amount: $('ld_trucking_amount') ? $('ld_trucking_amount').value : '',
+    trucking_note: $('ld_trucking_note') ? $('ld_trucking_note').value : '',
     items: (currentLoadItems || []).filter(itemHasContent),
   };
 }
@@ -3651,6 +3657,14 @@ function applyLoadDraft(d) {
   if ($('ld_seller_address')) $('ld_seller_address').value = d.seller_address || '';
   if ($('ld_seller_phone')) $('ld_seller_phone').value = d.seller_phone || '';
   editingLoadDescription = d.description || '';
+  if ($('ld_trucking_company')) $('ld_trucking_company').value = d.trucking_company || '';
+  if ($('ld_trucking_amount'))  $('ld_trucking_amount').value  = d.trucking_amount != null ? d.trucking_amount : '';
+  if ($('ld_trucking_note'))    $('ld_trucking_note').value    = d.trucking_note || '';
+  // Opened when there is one, so a restored deduction is visible rather than
+  // folded away behind a summary she has no reason to click.
+  if ($('ld_trucking_details')) $('ld_trucking_details').open = !!d.trucking_amount;
+  updateTruckingSummary();
+  syncTruckerBillCheckbox();
   currentLoadItems = Array.isArray(d.items) && d.items.length ? d.items.slice() : [blankLoadItem()];
   renderItemRows();
   const bar = $('draftBar'); if (bar) bar.classList.add('hidden');
@@ -4019,6 +4033,10 @@ function updateItemTotals() {
     <span></span>
     <span class="tl-num tl-strong" data-label="Amount">${amt ? fmtAmount(r2(amt)) : ''}</span>
     <span></span>`;
+  // The payable line is "amount minus trucking", so it goes stale the moment
+  // an item price changes. Refreshed from here rather than wired to every
+  // item input separately — this function already runs on all of them.
+  updateTruckingSummary();
 }
 
 function renderItemRows() {
@@ -4581,6 +4599,55 @@ function applyLoadModalMode(mode) {
   // the row to one column so the address simply takes the space.
   const row2 = $('ld_party_row2');
   if (row2) row2.style.gridTemplateColumns = sale ? '1fr' : '';
+  // Trucking is a PURCHASE deduction — what she pays the seller, less the
+  // haulage she covered. There is no equivalent on a sale: a customer owes
+  // the invoice, and quietly reducing it by what a hauler charged her would
+  // be inventing a discount. Hidden rather than disabled so nothing about it
+  // can reach a sale payload by accident.
+  const truck = $('ld_trucking_section');
+  if (truck) truck.style.display = sale ? 'none' : '';
+}
+
+// ── WHAT THIS DEDUCTION DOES TO THE PAYABLE, WHILE SHE TYPES ─────────────
+// The arithmetic is trivial and that is exactly why it belongs on screen: the
+// figure she cares about is not what she typed, it is what goes in the
+// seller's hand, and asking her to do the subtraction at a gate with a queue
+// behind her is how the wrong cash gets counted out.
+function updateTruckingSummary() {
+  const el = $('ld_trucking_summary');
+  const badge = $('ld_trucking_badge');
+  const amtEl = $('ld_trucking_amount');
+  if (!el || !amtEl) return;
+  const trucking = parseFloat(String(amtEl.value || '').replace(/[^0-9.\-]/g, ''));
+  // Summed from the DOM, same source updateItemTotals reads and for the same
+  // reason: the inputs are the live truth while someone is typing.
+  let amount = 0;
+  document.querySelectorAll('#ld_items .item-row').forEach((row) => {
+    const av = parseFloat(String(row.querySelector('.ld-item-amount')?.value || '').replace(/[^0-9.\-]/g, ''));
+    if (isFinite(av)) amount += av;
+  });
+  if (!isFinite(trucking) || trucking <= 0) {
+    el.textContent = '';
+    if (badge) badge.textContent = '';
+    return;
+  }
+  const r2 = (x) => Math.round(x * 100) / 100;
+  if (badge) badge.textContent = '− ' + fmtAmount(r2(trucking));
+  el.textContent = `Amount ${fmtAmount(r2(amount))} − trucking ${fmtAmount(r2(trucking))} = ${fmtAmount(r2(amount - trucking))} payable to the seller`;
+}
+
+// Ticked when a hauling company is named, cleared when the name goes away —
+// but ONLY while she has not touched the box herself. Once she has, her
+// choice stands: a checkbox that keeps re-deciding after you have decided is
+// worse than one that never helps at all.
+function syncTruckerBillCheckbox() {
+  const box = $('ld_trucking_bill');
+  const co = $('ld_trucking_company');
+  const amt = $('ld_trucking_amount');
+  if (!box || !co || !amt) return;
+  if (box.dataset.touched === '1') return;
+  const trucking = parseFloat(String(amt.value || '').replace(/[^0-9.\-]/g, ''));
+  box.checked = !!co.value.trim() && isFinite(trucking) && trucking > 0;
 }
 
 function resetLoadModal(mode) {
@@ -4603,7 +4670,14 @@ function resetLoadModal(mode) {
     ? crypto.randomUUID()
     : 'tk-' + Date.now() + '-' + Math.random().toString(36).slice(2, 11);
   currentLoadItems = [blankLoadItem()];
-  ['ld_date', 'ld_seller', 'ld_seller_address', 'ld_seller_phone', 'ld_desc'].forEach(id => { if ($(id)) $(id).value = ''; });
+  ['ld_date', 'ld_seller', 'ld_seller_address', 'ld_seller_phone', 'ld_desc',
+   'ld_trucking_company', 'ld_trucking_amount', 'ld_trucking_note'].forEach(id => { if ($(id)) $(id).value = ''; });
+  // A fresh form is a fresh decision about the checkbox too — `touched`
+  // surviving from the previous load is how the box stops auto-ticking for
+  // the rest of the session after one manual change.
+  if ($('ld_trucking_bill')) { $('ld_trucking_bill').checked = false; delete $('ld_trucking_bill').dataset.touched; }
+  if ($('ld_trucking_details')) $('ld_trucking_details').open = false;
+  updateTruckingSummary();
   editingLoadDescription = '';
   // Date defaults to TODAY instead of blank — per Apsara, having to pick it
   // manually on every single load was pure friction for what's almost
@@ -4656,6 +4730,21 @@ function openEditLoadModal(load) {
   if ($('ld_seller_phone'))    $('ld_seller_phone').value    = load.seller_phone || '';
   editingLoadDescription = load.description || '';
   if ($('ld_desc'))            $('ld_desc').value            = load.description || '';
+  // ── TRUCKING ON AN EXISTING LOAD ────────────────────────────────────
+  // Opened, not just filled. A deduction folded inside a collapsed section
+  // is a deduction she will not see while checking the numbers, and this
+  // form's whole job at this moment is letting her check the numbers.
+  if ($('ld_trucking_company')) $('ld_trucking_company').value = load.trucking_company || '';
+  if ($('ld_trucking_amount'))  $('ld_trucking_amount').value  = load.trucking_amount != null ? fmtAmount(load.trucking_amount) : '';
+  if ($('ld_trucking_note'))    $('ld_trucking_note').value    = load.trucking_note || '';
+  if ($('ld_trucking_details')) $('ld_trucking_details').open  = !!load.trucking_amount;
+  // NOT auto-ticked on an edit, and marked touched so nothing ticks it
+  // later either. The bill for this load, if there is one, was already
+  // offered when it was created; re-offering it on every subsequent edit is
+  // how a second payable gets written for one haul. The server refuses the
+  // duplicate anyway — this stops her being asked to make the mistake.
+  if ($('ld_trucking_bill')) { $('ld_trucking_bill').checked = false; $('ld_trucking_bill').dataset.touched = '1'; }
+  updateTruckingSummary();
   $('loadModalErr').textContent = '';
   // Set AFTER editingLoadId is assigned — applyLoadModalMode runs before this
   // while it is still null, so its title is the create-mode one.
@@ -4714,6 +4803,13 @@ function loadCardHtml(l) {
              read as "worth nothing", which is a different claim.
              Mirrors mobile-app/www/index.html. -->
         <span style="font-weight:700; color:var(--text-strong);">Amount: ${l.amount != null && fmtAmount(l.amount) ? esc(fmtAmount(l.amount)) : '—'}</span>
+        <!-- The deduction, and only when there is one. Every card in the deck
+             is otherwise exactly the card it was — a "Trucking —" line on
+             hundreds of tiles would be noise on the screen she scans most.
+             Mirrors mobile-app/www/index.html. -->
+        ${Number(l.trucking_amount) > 0 ? `
+        <span style="font-size:11px; color:var(--text-muted);">Less trucking: ${esc(fmtAmount(l.trucking_amount))}${l.trucking_company ? ' · ' + esc(l.trucking_company) : ''}</span>
+        <span style="font-weight:700; color:var(--text-strong);">Payable: ${l.net_payable != null && fmtAmount(l.net_payable) ? esc(fmtAmount(l.net_payable)) : '—'}</span>` : ''}
       </div>
       ${paymentBadgeHtml(l)}
       <div style="margin-top:12px; display:flex; flex-direction:column; align-items:flex-start; gap:6px;">
@@ -10269,8 +10365,15 @@ function bankValue(prefix) {
 function openPayModal(loadId, kind) {
   const l = loadsCache.find(x => x.id === loadId);
   if (!l) return;
-  payingLoad = { id: l.id, kind: kind || l._kind || 'purchase', amount: l.amount, seller: l.seller, payment: l.payment };
-  const p = l.payment || { paid: 0, pending: l.amount, status: 'unpaid' };
+  // `amount` here is what the OVERPAYMENT check below subtracts against, so
+  // it has to be the payable, not the metal's figure — otherwise a load with
+  // $200 deducted would accept a $200 overpayment without a word. The sale
+  // branch is untouched: a sale has no net_payable and l.net_payable is
+  // undefined on one, so ?? falls through to l.amount.
+  payingLoad = { id: l.id, kind: kind || l._kind || 'purchase',
+                 amount: (kind || l._kind) === 'sale' ? l.amount : (l.net_payable ?? l.amount),
+                 seller: l.seller, payment: l.payment };
+  const p = l.payment || { paid: 0, pending: payingLoad.amount, status: 'unpaid' };
   // A sale's BUYER is aliased into `seller` when the two lists are merged
   // (see the map that sets _kind), so the name shown is right either way.
   // The direction is not, and everything below keys off this.
@@ -10293,7 +10396,16 @@ function openPayModal(loadId, kind) {
     // The ledger was already right: helpers/spendReport.js marks load_kind
     // 'sale' as direction 'in' and labels it "Sale". Only the words she reads
     // were backwards, which is the version that looks considered.
-    : `${sale ? 'Sale' : 'Load'} ${esc(l.id)}${esc(who)}<br>${sale ? 'Sale' : 'Load'} total ${payMoney(l.amount)} · already ${sale ? 'received' : 'paid'} ${payMoney(p.paid)} · <strong>${payMoney(p.pending)} outstanding</strong>`;
+    // ── THE TOTAL THIS BALANCE IS MEASURED AGAINST ───────────────────────
+    // `p.pending` comes from the server, which measures a purchase against
+    // net_payable (helpers/loads.js's payableOf). So on a load with haulage
+    // deducted, printing "Load total $2,459 · paid $0 · $2,259 outstanding"
+    // would put two figures side by side that do not subtract — and the one
+    // she would query is the one that is right. The deduction gets its own
+    // clause instead, and only when there is one.
+    : `${sale ? 'Sale' : 'Load'} ${esc(l.id)}${esc(who)}<br>${sale ? 'Sale' : 'Load'} total ${payMoney(l.amount)}${
+        !sale && Number(l.trucking_amount) > 0 ? ` · less trucking ${payMoney(l.trucking_amount)}` : ''
+      } · already ${sale ? 'received' : 'paid'} ${payMoney(p.paid)} · <strong>${payMoney(p.pending)} outstanding</strong>`;
   // ── THE MODES THIS ROW ACCEPTS ───────────────────────────────────────
   // A sale takes Cash or Bank transfer (her rule for receive payment); a
   // purchase keeps the full list, because paying a supplier by Zelle is
@@ -10962,6 +11074,43 @@ function renderLoads(loads) {
             <div id="ld_items"></div>
             <button id="btnAddItemRow" type="button" class="btn" style="margin-top:4px; font-size:12px; padding:6px 12px;">+ Add item</button>
           </div>
+          <!-- ── TRUCKING, DEDUCTED FROM WHAT THE SELLER IS PAID ──────────
+               Apsara, 2026-09-20. Purchases only: applyLoadModalMode hides
+               this whole block on a sale, because netting haulage out of what
+               a CUSTOMER owes her would be an invention, not a deduction.
+
+               COLLAPSED BY DEFAULT. Most loads have no haulage on them, and
+               three permanently empty boxes above the Save button is how a
+               form stops being read. It opens itself when an existing load
+               being edited already carries a deduction — see openLoadModal. -->
+          <div class="section" id="ld_trucking_section" style="margin-top:10px;">
+            <details id="ld_trucking_details">
+              <summary style="cursor:pointer; font-size:12px; color:var(--text-muted); user-select:none;">
+                Trucking <span id="ld_trucking_badge" style="font-family:var(--font-mono); color:var(--text);"></span>
+              </summary>
+              <div style="margin-top:8px;">
+                <div class="ld-grid-2" id="ld_trucking_row">
+                  <div class="field"><label>Hauled by (optional)</label>
+                    <input id="ld_trucking_company" type="text" placeholder="who collected it" autocomplete="off"></div>
+                  <div class="field"><label>Deduct from seller ($)</label>
+                    <input id="ld_trucking_amount" type="text" inputmode="decimal" placeholder="0.00" autocomplete="off"></div>
+                </div>
+                <div class="field"><label>Note (optional)</label>
+                  <input id="ld_trucking_note" type="text" placeholder="e.g. collected from his shop" autocomplete="off"></div>
+                <!-- The offer, never a side effect — see
+                     helpers/loadTruckerBill.js. Ticked automatically only once
+                     a hauling company is named, because a named company is the
+                     signal that somebody outside is owed. Her own truck means
+                     a deduction and no bill. -->
+                <label style="display:flex; align-items:flex-start; gap:8px; margin-top:8px; font-size:12px; cursor:pointer;">
+                  <input id="ld_trucking_bill" type="checkbox" style="margin-top:2px;">
+                  <span>Also record this as a Trucker Bill<br>
+                    <span style="color:var(--text-muted);">Tick when an outside hauler is owed. Leave clear if you collected it yourself — a bill would be a payable to nobody.</span></span>
+                </label>
+                <div id="ld_trucking_summary" style="margin-top:8px; font-family:var(--font-mono); font-size:11px; color:var(--text-muted);"></div>
+              </div>
+            </details>
+          </div>
           <div style="margin-top:8px;"><span id="loadModalErr" style="font-family:var(--font-mono); font-size:11px; color:var(--status-danger);"></span></div>
         </div>
         <div class="modal-foot">
@@ -11009,6 +11158,24 @@ function wireLoadsEvents() {
     resetLoadModal('sale');
     $('loadModal').classList.remove('hidden');
   });
+  // Trucking inputs. Delegated on the section rather than wired per field so
+  // this survives the form being re-rendered, same reason the item rows use a
+  // delegated listener.
+  const truckSection = $('ld_trucking_section');
+  if (truckSection) {
+    truckSection.addEventListener('input', (e) => {
+      if (e.target && e.target.id === 'ld_trucking_bill') return;
+      updateTruckingSummary();
+      syncTruckerBillCheckbox();
+    });
+    // Her click on the box is final — see syncTruckerBillCheckbox. `change`
+    // and not `input`, because a checkbox toggled by the auto-sync above
+    // would otherwise mark itself touched and switch the help off.
+    truckSection.addEventListener('change', (e) => {
+      if (e.target && e.target.id === 'ld_trucking_bill') e.target.dataset.touched = '1';
+    });
+  }
+
   const closeLoadModal = () => {
     stopCamera();
     $('loadModal').classList.add('hidden');
@@ -11197,6 +11364,35 @@ function wireLoadsEvents() {
   // Takes the SAVE RESPONSE's stock_warning, not a thrown error: since
   // 2026-09-16 the server saves the sale and reports, rather than refusing
   // it. No sendSale to retry with, and no allow_negative anywhere.
+  // ── WHAT HAPPENED TO THE TICKED BOX ─────────────────────────────────────
+  // Said out loud, because the alternative is a checkbox that sometimes works
+  // and never explains itself. Silent on the ordinary case — she did not tick
+  // it, so there is nothing to report — and silent on success being merely
+  // "not requested". Everything else gets a sentence naming the reason, since
+  // each one is a different thing to do next.
+  function reportTruckerBill(tb) {
+    if (!tb || tb.reason === 'not_requested') return;
+    if (tb.created && tb.bill) {
+      alert(`Trucker Bill ${tb.bill.id} created — ${tb.bill.company}, ${fmtAmount(tb.bill.amount)}, against load ${tb.bill.load_ticket}.\n\nIt is now a payable in Trucker Bills. Pay it from there.`);
+      return;
+    }
+    if (tb.reason === 'already_exists') {
+      alert(`Trucker Bill ${tb.bill_id} already exists against this load, for ${fmtAmount(tb.existing_amount)}.\n\nNothing was created — a second one would double what you owe the hauler. If the figure changed, edit ${tb.bill_id} in Trucker Bills.`);
+      return;
+    }
+    if (tb.reason === 'no_trucking_company') {
+      alert('No Trucker Bill was created — a bill needs the name of whoever hauled it.\n\nThe deduction is saved on the load either way. If you collected it with your own truck, leave the box clear: a bill would be a payable to nobody.');
+      return;
+    }
+    if (tb.reason === 'no_trucking_amount') {
+      alert('No Trucker Bill was created — there is no trucking amount on this load.');
+      return;
+    }
+    if (tb.reason === 'error') {
+      alert('The load saved, but the Trucker Bill could not be created: ' + (tb.message || 'unknown error') + '\n\nAdd it by hand in Trucker Bills.');
+    }
+  }
+
   async function handleStockShort(warning) {
     const short = (warning && warning.shortfalls) || [];
     let learned = false;
@@ -11333,6 +11529,23 @@ function wireLoadsEvents() {
         description: desc,
         items,
         weight_unit: 'lb',
+        // Always sent by THIS client, blank or not — which is what makes a
+        // cleared box actually clear the deduction. The server treats an
+        // absent key as "leave it alone" for the sake of the older APK (see
+        // PUT /api/loads/:id), so a client that knows about the field has to
+        // keep saying so.
+        trucking_company: ($('ld_trucking_company') ? $('ld_trucking_company').value.trim() : '') || null,
+        trucking_amount: (() => {
+          const raw = String($('ld_trucking_amount') ? $('ld_trucking_amount').value : '').replace(/[^0-9.\-]/g, '');
+          const n = parseFloat(raw);
+          return isFinite(n) && n > 0 ? Math.round(n * 100) / 100 : null;
+        })(),
+        trucking_note: ($('ld_trucking_note') ? $('ld_trucking_note').value.trim() : '') || null,
+        // The offer, exactly as she left it. helpers/loadTruckerBill.js does
+        // every check that matters — no amount, no company, one already on
+        // file — and reports back rather than throwing, so a ticked box can
+        // never cost her the load.
+        create_trucker_bill: !!($('ld_trucking_bill') && $('ld_trucking_bill').checked),
         created_by: (typeof ROLE !== 'undefined' ? ROLE : 'user'),
         // Minted when the form opened — see resetLoadModal. Sent on CREATE
         // only; it is meaningless on an edit, which targets a known id.
@@ -11357,9 +11570,11 @@ function wireLoadsEvents() {
         const saved = await sendSale();
         if (saved && saved.stock_warning) await handleStockShort(saved.stock_warning);
       } else if (isEdit) {
-        await api(`/api/loads/${encodeURIComponent(editingLoadId)}`, { method: 'PUT', body: JSON.stringify(payload) });
+        const saved = await api(`/api/loads/${encodeURIComponent(editingLoadId)}`, { method: 'PUT', body: JSON.stringify(payload) });
+        reportTruckerBill(saved && saved.trucker_bill);
       } else {
-        await api('/api/loads', { method: 'POST', body: JSON.stringify(payload) });
+        const saved = await api('/api/loads', { method: 'POST', body: JSON.stringify(payload) });
+        reportTruckerBill(saved && saved.trucker_bill);
       }
       // The work is committed, so the draft has done its job. Cleared only
       // AFTER the request resolves — clearing before it would throw the
@@ -12005,6 +12220,11 @@ boot();
        checks for window.JarvisLocalRecognition when choosing an engine. In a
        browser this file returns immediately — there is no bridge to use. -->
   <script src="voice-local.js"></script>
+  <!-- "Hey Jarvis" as a keyword model (openWakeWord, 2026-09-20). BEFORE
+       voice.js, which hands it the wake and starts/stops it. -->
+  <script src="oww-core.js"></script>
+  <script src="wake-model.js"></script>
+  <script src="turn-model.js"></script>
   <script src="voice.js"></script>
   <!-- The orb. Reads the SAME voice state, so it cannot say "listening"
        while the microphone is shut. -->
@@ -12079,8 +12299,4 @@ boot();
   </div>
 </div>
 </body>
-</html>  <!-- "Hey Jarvis" as a keyword model (openWakeWord, 2026-09-20). BEFORE
-       voice.js, which hands it the wake and starts/stops it. -->
-  <script src="oww-core.js"></script>
-  <script src="wake-model.js"></script>
-  <script src="turn-model.js"></script>
+</html>

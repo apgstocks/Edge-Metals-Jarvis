@@ -35,7 +35,17 @@ async function generateAndStoreLoadPdfs(load, opts = {}) {
     if (!payment) {
         try {
             const { paymentSummary } = require('./payments');
-            payment = paymentSummary(load.id, load.amount);
+            // A PURCHASE may carry a trucking deduction, so the "Paid X of Y"
+            // block on the ticket has to measure against what the seller is
+            // actually owed, not what the metal came to. A SALE cannot carry
+            // one — netting haulage out of what a customer owes HER would be
+            // an invention — so it keeps reading .amount. Named by kind rather
+            // than left to payableOf's fallback: this is a deliberate
+            // difference between the two documents, not an accident of which
+            // store the record came from.
+            payment = opts.kind === 'sale'
+                ? paymentSummary(load.id, load.amount)
+                : paymentSummary(load.id, require('./loads').payableOf(load));
         } catch (e) {
             console.warn('[LOADS-PDF] payment lookup failed, ticket will omit it:', e.message);
         }

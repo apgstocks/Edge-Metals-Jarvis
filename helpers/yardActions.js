@@ -61,7 +61,14 @@ const money = (n) => `$${(Math.round(Number(n) * 100) / 100).toFixed(2)}`;
 // id, created_by, created_at, status, and every *_drive_id / *_link — an
 // assistant must not be able to repoint a load at a different PDF or photo,
 // or rewrite who recorded it.
-const EDITABLE_LOAD_FIELDS = ['date', 'seller', 'seller_address', 'seller_phone', 'description', 'weight_unit'];
+// trucking_company sits in this list; trucking_AMOUNT deliberately does not.
+// Every field here is put through String().trim() and stored as text, which is
+// right for a name and wrong for money — a "200" saved as the string "200"
+// would then be subtracted from the load amount by helpers/loads.js's toNum
+// and work, right up until someone says "two hundred" and stores a word. The
+// amount is handled separately below, parsed as a number and refused if it is
+// not one.
+const EDITABLE_LOAD_FIELDS = ['date', 'seller', 'seller_address', 'seller_phone', 'description', 'weight_unit', 'trucking_company', 'trucking_note'];
 
 const ACTIONS = {
     // record_payment MOVED to helpers/tools.js on 2026-09-05, and the copy
@@ -151,6 +158,36 @@ const ACTIONS = {
             changes.push(['items', `${(load.items || []).length} → ${items.length}, totals recalculated`]);
         }
 
+        // ── THE TRUCKING DEDUCTION, PARSED AS MONEY ──────────────────────
+        // Separate from the loop above for the reason given at
+        // EDITABLE_LOAD_FIELDS, and shown as a before/after on what the SELLER
+        // IS OWED rather than as a field rename — that is the number this
+        // changes and the only one she can check against her cash box.
+        //
+        // An explicit 0 or '' CLEARS it. `p.trucking_amount === null` does
+        // not, and must not: a model that omits a parameter it was not asked
+        // about would otherwise wipe a deduction on every unrelated edit.
+        // Two variables, not one: `truckingNext = null` is a legitimate value
+        // meaning "clear it", so a single nullable cannot also carry "nothing
+        // to do here" without one of the two silently winning.
+        let truckingChanged = false;
+        let truckingNext = null;
+        if (p.trucking_amount !== undefined && p.trucking_amount !== null) {
+            const raw = String(p.trucking_amount).trim();
+            const next = raw === '' ? null : Number(raw);
+            if (next !== null && !Number.isFinite(next)) throw new Error(`"${raw}" is not an amount of trucking`);
+            if (next !== null && next < 0) throw new Error('trucking cannot be negative');
+            const prev = Number(load.trucking_amount) || 0;
+            if ((next || 0) !== prev) {
+                truckingChanged = true;
+                truckingNext = next;
+                const { payableFrom } = require('./loads');
+                changes.push(['trucking', `${money(prev)} → ${money(next || 0)}`]);
+                changes.push(['payable to seller',
+                    `${money(payableFrom(load.amount, prev) || 0)} → ${money(payableFrom(load.amount, next) || 0)}`]);
+            }
+        }
+
         if (!changes.length) throw new Error('that would not change anything on the load');
 
         const warnings = [];
@@ -158,9 +195,14 @@ const ACTIONS = {
         // reason an edit deserves a confirmation more than a payment does.
         if (load.seller_signature) warnings.push('The seller signature on this load will be cleared — it attests to the current numbers.');
         if (load.pdf_link || load.pdf_drive_id) warnings.push('The generated PDF will be discarded and must be regenerated.');
-        const { paymentSummary } = require('./payments');
-        const pay = paymentSummary(loadId, load.amount);
-        if (items && pay.paid > 0) warnings.push(`${money(pay.paid)} has already been paid against this load — changing the amount changes what is still owed.`);
+        const { paymentSummary, } = require('./payments');
+        const pay = paymentSummary(loadId, require('./loads').payableOf(load));
+        // `items ||` was the whole condition until trucking existed. A
+        // deduction moves what is owed exactly as an item price does, so an
+        // edit that changes ONLY the trucking on a part-paid load has to carry
+        // the same warning — otherwise the one kind of edit invented today is
+        // the one kind that changes her balance silently.
+        if ((items || truckingChanged) && pay.paid > 0) warnings.push(`${money(pay.paid)} has already been paid against this load — changing the amount changes what is still owed.`);
 
         return {
             summary: `Edit load ${loadId} (${load.seller || 'no seller'}): ${changes.map((c) => c[0]).join(', ')}.`,
@@ -179,6 +221,15 @@ const ACTIONS = {
                     description: patch.description ?? load.description,
                     weight_unit: patch.weight_unit ?? load.weight_unit,
                     items: items || load.items || [],
+                    // Spread in ONLY when this edit touched trucking. Sending
+                    // the key unconditionally would be the safe-looking choice
+                    // and the wrong one: editLoad reads the key's PRESENCE as
+                    // "the caller means to set this", and a voice edit of a
+                    // seller's phone number has no business restating a money
+                    // figure it was never given.
+                    ...(truckingChanged ? { trucking_amount: truckingNext } : {}),
+                    ...(patch.trucking_company !== undefined ? { trucking_company: patch.trucking_company } : {}),
+                    ...(patch.trucking_note !== undefined ? { trucking_note: patch.trucking_note } : {}),
                     edited_by: ctx.role || 'yard-assistant',
                 });
             },
