@@ -28,6 +28,9 @@
       "main.js",
       "preload.js",
       "speech.js",
+      "tts.js",
+      "turn.js",
+      "melspec.js",
       "package.json"
     ],
     "mac": {

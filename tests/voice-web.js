@@ -39,7 +39,7 @@ const VOICE = fs.readFileSync(path.join(ROOT, 'dashboard/voice.js'), 'utf8');
 // OVER Jarvis needs Jarvis to still be talking, and the default mock finishes
 // before the test can say a word. Without it the whole BARGE section was
 // measuring the follow-up window instead.
-function browser({ chrome = true, voices = null, pref = null, reply = null, holdSpeech = false } = {}) {
+function browser({ chrome = true, voices = null, pref = null, reply = null, holdSpeech = false, before = null } = {}) {
     let held = null;
     const vc = new VirtualConsole();
     // runScripts 'outside-only' is what gives the window a real eval() with
@@ -130,7 +130,10 @@ function browser({ chrome = true, voices = null, pref = null, reply = null, hold
         // assistant owns it. Reading the old field silently recorded
         // `undefined` on every call.
         log.paths.push(p);
-        log.asked.push(body.text || body.question);
+        // Only QUESTIONS are recorded as asked. A GET with no body (the
+        // vocabulary fetch, 2026-09-20) is not her asking anything.
+        if (body.text !== undefined || body.question !== undefined) log.asked.push(body.text || body.question);
+        if (/\/api\/voice\/vocab/.test(p)) return { ok: true, terms: [] };
         w.__lastAgent = body.agent || null;
         const who = body.agent === 'scout' ? 'scout' : 'jarvis';
         const base = {
@@ -203,6 +206,7 @@ function browser({ chrome = true, voices = null, pref = null, reply = null, hold
         try { w.localStorage.setItem('jarvisVoiceName', pref); } catch (e) {}
     }
 
+    if (typeof before === 'function') before(w);
     w.eval(MACHINE);
     if (!w.VoiceMachine) w.VoiceMachine = require(path.join(ROOT, 'dashboard/voice-machine.js'));
     w.eval(VOICE);
@@ -2381,6 +2385,190 @@ section('DOC2 — it does not offer a send it cannot make');
     ck('  and it is gone once the send comes back',
        b3.doc.getElementById('jvDoc').classList.contains('hidden'),
        'a document left on screen after it was emailed reads as still waiting');
+}
+
+section('PAUSE — "Hey Jarvis", a pause, then the question (her recording, 2026-09-20)');
+{
+    const b = browser();
+    b.w.JarvisVoice.dispatch('USER_TOGGLE');
+    b.w.JarvisVoice.dispatch('WAKE_HEARD');
+    b.mic() && b.mic().hear('hey jarvis');
+    // Longer than the 1.2s end-of-sentence window: she is waiting for it.
+    await new Promise((r) => setTimeout(r, 1600));
+    ck('the bare wake word does NOT close the capture', b.w.JarvisVoice.state().capturing,
+       JSON.stringify(b.w.JarvisVoice.state()));
+    b.mic() && b.mic().hear('hey jarvis check my mail');
+    b.w.JarvisVoice.finish();
+    await new Promise((r) => setTimeout(r, 30));
+    ck('  and the question she says after the pause is asked', b.log.asked.some((q) => /check my mail/.test(q || '')),
+       JSON.stringify(b.log.asked));
+}
+{
+    const b = browser();
+    b.w.JarvisVoice.dispatch('USER_TOGGLE');
+    b.w.JarvisVoice.dispatch('WAKE_HEARD');
+    b.mic() && b.mic().hear('hey jarvis what needs my reply');
+    await new Promise((r) => setTimeout(r, 1600));
+    ck('a real sentence still ends on 1.2s of silence', b.log.asked.some((q) => /what needs my reply/.test(q || '')),
+       JSON.stringify(b.log.asked));
+}
+
+section('YES — a bare "Hey Jarvis" inside the follow-up window is answered (2026-09-20)');
+{
+    const b = browser();
+    await new Promise((r) => setTimeout(r, 30));          // acks warm
+    b.w.JarvisVoice.dispatch('USER_TOGGLE');
+    b.w.JarvisVoice.dispatch('WAKE_HEARD');
+    b.mic() && b.mic().hear('hey jarvis what needs my reply');
+    b.w.JarvisVoice.finish();
+    await new Promise((r) => setTimeout(r, 60));          // answer spoken → follow-up window
+    const st = b.w.JarvisVoice.state();
+    ck('(the follow-up window is open after the answer)', st.capturing, JSON.stringify(st));
+    // Past the 1.2s duplicate-acknowledgement guard: in life she says the
+    // name again seconds later, not milliseconds.
+    await new Promise((r) => setTimeout(r, 1300));
+    const before = b.w.__playedRates.length;
+    b.mic() && b.mic().hear('hey jarvis');
+    await new Promise((r) => setTimeout(r, 20));
+    ck('the bare name inside it gets "Yes, boss?"', b.w.__playedRates.length === before + 1,
+       `${before} -> ${b.w.__playedRates.length}`);
+    b.mic() && b.mic().hear('hey jarvis');
+    await new Promise((r) => setTimeout(r, 20));
+    ck('  once — the name heard again in the same capture is not answered twice',
+       b.w.__playedRates.length === before + 1, `${b.w.__playedRates.length}`);
+    b.mic() && b.mic().hear('hey jarvis yes boss check my mail');
+    b.w.JarvisVoice.finish();
+    await new Promise((r) => setTimeout(r, 30));
+    const last = b.log.asked[b.log.asked.length - 1] || '';
+    ck('  and what she says next is asked', /check my mail/.test(last), JSON.stringify(b.log.asked));
+    ck('  without Jarvis\'s own "yes boss" in it', !/yes\s*boss/i.test(last), last);
+}
+{
+    const b = browser();
+    await new Promise((r) => setTimeout(r, 30));
+    b.w.JarvisVoice.dispatch('USER_TOGGLE');
+    b.w.JarvisVoice.dispatch('WAKE_HEARD');                // the normal wake: its own reply
+    const after = b.w.__playedRates.length;
+    b.mic() && b.mic().hear('hey jarvis');
+    await new Promise((r) => setTimeout(r, 20));
+    ck('a normal wake still replies exactly once, not twice', b.w.__playedRates.length === after, `${after} -> ${b.w.__playedRates.length}`);
+}
+
+section('WAKE — the on-device "Hey Jarvis" model (2026-09-20)');
+{
+    // A stand-in for dashboard/wake-model.js with the same surface. What is
+    // tested here is voice.js's side: when it turns the model on and off,
+    // what a fire does in each state. The model itself is tests/oww-parity.js.
+    const fake = (w) => {
+        const W = { starts: 0, stops: 0, deaf: 0, onwake: null,
+            start() { this.starts++; return Promise.resolve('on'); }, stop() { this.stops++; },
+            deafFor(ms) { this.deaf = ms; } };
+        w.JarvisWake = W;
+    };
+    const b = browser({ before: fake });
+    const W = b.w.JarvisWake;
+    await new Promise((r) => setTimeout(r, 30));
+    ck('voice OFF: the model is not listening', W.starts === 0, String(W.starts));
+    b.w.JarvisVoice.dispatch('USER_TOGGLE');
+    ck('voice ON: the model starts', W.starts === 1 && typeof W.onwake === 'function', String(W.starts));
+    const acks = b.w.__playedRates.length;
+    W.onwake(0.93);
+    ck('a model fire opens the capture', b.w.JarvisVoice.state().capturing, JSON.stringify(b.w.JarvisVoice.state()));
+    ck('  answers "Yes, boss?"', b.w.__playedRates.length === acks + 1, `${acks} -> ${b.w.__playedRates.length}`);
+    ck('  and deafens the model for its own reply', W.deaf > 0, String(W.deaf));
+    b.mic() && b.mic().hear('hey jarvis check my mail');
+    b.w.JarvisVoice.finish();
+    await new Promise((r) => setTimeout(r, 40));
+    ck('  and the question is asked, name stripped', b.log.asked.some((q) => /^check my mail$/i.test(q || '')), JSON.stringify(b.log.asked));
+    b.w.JarvisVoice.dispatch('APP_BACKGROUND');
+    ck('tab in the background: the model stops', W.stops >= 1, String(W.stops));
+    b.w.JarvisVoice.dispatch('APP_FOREGROUND');
+    ck('  and comes back with the tab', W.starts === 2, String(W.starts));
+}
+{
+    const b = browser({ before: (w) => { w.JarvisWake = { onwake: null, start() { return Promise.resolve(); }, stop() {}, deafFor() {} }; }, holdSpeech: true });
+    b.w.JarvisVoice.dispatch('USER_TOGGLE');
+    b.w.JarvisVoice.dispatch('WAKE_HEARD');
+    b.mic() && b.mic().hear('hey jarvis what needs my reply');
+    b.w.JarvisVoice.finish();
+    await new Promise((r) => setTimeout(r, 30));
+    ck('(Jarvis is talking)', b.w.JarvisVoice.state().speaking, JSON.stringify(b.w.JarvisVoice.state()));
+    const asked = b.log.asked.length;
+    b.w.JarvisWake.onwake(0.9);
+    ck('a model fire WHILE Jarvis talks does nothing — the guard mic owns barge-in',
+       b.w.JarvisVoice.state().speaking && !b.w.JarvisVoice.state().capturing && b.log.asked.length === asked,
+       JSON.stringify(b.w.JarvisVoice.state()));
+    b.endSpeech();
+}
+{
+    const b = browser();
+    b.w.JarvisVoice.dispatch('USER_TOGGLE');
+    ck('no wake model on the page (old browser, blocked CDN): voice still works', b.w.JarvisVoice.state().enabled);
+}
+
+section('TURN — ending on how the sentence ends, not the clock (2026-09-20)');
+{
+    const withTurn = (verdict) => (w) => {
+        w.JarvisWake = { status: 'on', onwake: null, start() { return Promise.resolve('on'); }, stop() {}, deafFor() {},
+            recent: (ms) => new Float32Array(Math.round(ms * 16)) };
+        w.JarvisTurn = { status: 'on', asked: 0, load() { return Promise.resolve(); },
+            analyse() { this.asked++; return Promise.resolve({ ok: true, probability: verdict ? 0.9 : 0.1, complete: verdict, ms: 30 }); } };
+    };
+    const saidAt = async (b, text) => {
+        b.w.JarvisVoice.dispatch('USER_TOGGLE');
+        b.w.JarvisVoice.dispatch('WAKE_HEARD');
+        b.mic() && b.mic().hear(text);
+        return Date.now();
+    };
+    const askedBy = async (b, ms) => { await new Promise((r) => setTimeout(r, ms)); return b.log.asked.length; };
+
+    {
+        const b = browser({ before: withTurn(true) });
+        await saidAt(b, 'hey jarvis what needs my reply');
+        const at700 = await askedBy(b, 700);
+        ck('a finished sentence ends at the short pause (~0.45 s), not 1.2 s', at700 === 1, String(at700));
+        ck('  because the model was asked', b.w.JarvisTurn.asked === 1, String(b.w.JarvisTurn.asked));
+    }
+    {
+        const b = browser({ before: withTurn(false) });
+        await saidAt(b, 'hey jarvis send the proforma for autocast');
+        const at1500 = await askedBy(b, 1500);
+        ck('an UNfinished-sounding pause is NOT cut off at 1.2 s', at1500 === 0, String(at1500));
+        const at3000 = await askedBy(b, 1500);
+        ck('  but the turn still ends after 2.6 s of silence', at3000 === 1, String(at3000));
+    }
+    {
+        const b = browser({ before: withTurn(true) });
+        await saidAt(b, 'hey jarvis send a mail to');
+        const at1500 = await askedBy(b, 1500);
+        ck('"send a mail to" — a dangling word — waits even if the voice sounds final', at1500 === 0 && b.w.JarvisTurn.asked === 0,
+           `asked=${at1500} model=${b.w.JarvisTurn.asked}`);
+    }
+    {
+        const b = browser({ before: withTurn(false) });
+        await saidAt(b, 'hey jarvis send the proforma');
+        await new Promise((r) => setTimeout(r, 600));
+        b.mic() && b.mic().hear('hey jarvis send the proforma to daekwang');   // she carries on
+        const n = await askedBy(b, 1500);
+        ck('talking again cancels the pending decision; she is not cut off', n === 0, String(n));
+        await new Promise((r) => setTimeout(r, 1500));
+        ck('  and the WHOLE sentence is asked', b.log.asked.some((q) => /proforma to daekwang/.test(q || '')), JSON.stringify(b.log.asked));
+    }
+}
+
+section('STT — her names win over the common word (2026-09-20)');
+{
+    const b = browser();
+    const V = b.w.JarvisVoice;
+    V.setVocab(['Jayashree Menon', 'Daekwang', 'Eccomelt', 'Houston']);
+    const alts = (...t) => t.map((x) => ({ transcript: x, confidence: 0.5 }));
+    ck('a lower guess naming her contact is taken',
+       V.pickAlternative(alts('send a mail to jaya shree', 'send a mail to jayashree menon')) === 'send a mail to jayashree menon');
+    ck('a customer name beats a sound-alike', V.pickAlternative(alts('proforma for day kwang', 'proforma for daekwang')) === 'proforma for daekwang');
+    ck('a tie keeps the top guess — ordinary sentences are untouched',
+       V.pickAlternative(alts('what needs my reply', 'what need my reply')) === 'what needs my reply');
+    ck('domain words count too ("cutoff" over "cut off")',
+       V.pickAlternative(alts('any cut of today', 'any cutoff today')) === 'any cutoff today');
 }
 
 section('ANN — Jarvis speaks up on its own (Apsara, 2026-09-20)');

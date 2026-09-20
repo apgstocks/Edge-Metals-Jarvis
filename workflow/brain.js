@@ -1195,10 +1195,10 @@ function policyDecide(ctx) {
         if (t === 'bookings' || /^(?:show\s+(?:me\s+)?|list\s+)?(?:all\s+)?bookings?$/.test(t)) return { intent: 'bookings_menu', resolvedBy: 'policy' };
         if (t === 'urgent' || /^(?:show\s+(?:me\s+)?|list\s+)?urgent\s+bookings?$/.test(t)) return { intent: 'show_bookings_urgent', resolvedBy: 'policy' };
         // "urgent cutoff(s)", "any cutoffs today", "what's cutting off" —
-        // Apsara, 2026-09-20. Same answer as "urgent bookings".
-        if (/^(?:(?:show|tell|give)\s+(?:me\s+)?(?:the\s+)?|list\s+|any\s+)?urgent\s+cut\s*-?\s*offs?\??$/.test(t)
-            || /^(?:any|what(?:'s|\s+is|\s+are)?(?:\s+the)?)\s+cut\s*-?\s*offs?\s+(?:today|this\s+week|coming\s+up|soon)\??$/.test(t)
-            || /^what(?:'s|\s+is)\s+cutting\s+off(?:\s+(?:today|soon|this\s+week))?\??$/.test(t)) {
+        // Apsara, 2026-09-20. Same answer as "urgent bookings". The phrase
+        // test lives in helpers/voiceClaims.js so the voice route (which has
+        // to know to stand its bookings panel aside) and this rule agree.
+        if (require('../helpers/voiceClaims').isUrgentCutoffQuestion(t)) {
             return { intent: 'show_bookings_urgent', resolvedBy: 'policy' };
         }
         // ── "BRIEF ME" ───────────────────────────────────────────────────
@@ -1745,7 +1745,13 @@ function policyDecide(ctx) {
             // with the "any" dropped. Both still require no sender.
             || /^(?:new|latest|unread)\s+(?:e?mails?|messages?)\s*\??$/i.test(ctx.text.trim())
             || /^(?:what'?s|whats|anything)\s+new\s+(?:in|with|on)\s+(?:the\s+|my\s+)?(?:mail|inbox|e?mails?)\s*\??$/i.test(ctx.text.trim())
-            || /^(?:what|anything)\s+(?:is\s+)?(?:waiting|pending)\s+on\s+me\b/i.test(ctx.text.trim())) {
+            || /^(?:what|anything)\s+(?:is\s+)?(?:waiting|pending)\s+on\s+me\b/i.test(ctx.text.trim())
+            // Her recording, 2026-09-20: "check my mail" and "is there any
+            // mail that we have received" both fell through to the model.
+            // Still gated below on no sender being named.
+            || /^(?:check|show|read|see)\s+(?:me\s+)?(?:my\s+|the\s+|our\s+)?(?:new\s+)?(?:e-?mails?|mails?)\s*\??$/i.test(ctx.text.trim())
+            || /^(?:is|are)\s+there\s+(?:any\s+)?(?:new\s+)?(?:e-?mails?|mails?|messages?)\b(?:\s+(?:that\s+)?(?:we(?:'ve|\s+have)?|i(?:'ve|\s+have)?)\s+(?:received|got(?:ten)?))?(?:\s+today)?\s*\??$/i.test(ctx.text.trim())
+            || /^(?:did|have)\s+(?:we|i)\s+(?:receive[d]?|get|got(?:ten)?)\s+(?:any\s+)?(?:new\s+)?(?:e-?mails?|mails?)(?:\s+today)?\s*\??$/i.test(ctx.text.trim())) {
             return namesSomeone(ctx.text)
                 // She named somebody — this is a targeted question, and
                 // answering it with the whole inbox would bury the one thread

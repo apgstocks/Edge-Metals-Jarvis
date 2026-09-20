@@ -1989,9 +1989,15 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
     app.get('/api/voice/vocab', async (req, res) => {
         try {
             const vv = require('./helpers/voiceVocab');
-            const prompt = vv.buildPrompt(await vv.fromDataAsync());
+            const sources = await vv.fromDataAsync();
+            const prompt = vv.buildPrompt(sources);
+            // `terms` (2026-09-20): the same names as a list, for Chrome, which
+            // cannot take a prompt — dashboard/voice.js uses them to choose
+            // between the recogniser's alternative transcripts.
+            const t = vv.terms(sources);
+            const terms = [...t.ports, ...t.suppliers, ...t.truckers, ...t.consignees, ...t.contacts];
             res.set('Cache-Control', 'no-store');
-            res.json({ ok: true, prompt, chars: prompt.length });
+            res.json({ ok: true, prompt, chars: prompt.length, terms });
         } catch (e) {
             // A failure here must not stop her talking: the desktop app keeps
             // the static prompt it shipped with, which is yesterday's
@@ -7795,6 +7801,21 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
     // falls through to express.static untouched.
     const BUILD_TOKEN = '{{JARVIS_BUILD}}';
     app.get(/\.html$|^\/$/, (req, res, next) => {
+    // ── desktop/melspec.js, for the browser's end-of-turn model ──────────
+    // ONE implementation of Whisper's log-mel features: the Mac app's main
+    // process requires desktop/melspec.js, and dashboard/turn-model.js gets
+    // the same file here, wrapped so its top-level consts stay private.
+    // Copying it into dashboard/ would give two ports of a function whose
+    // whole header is about how easily it goes subtly wrong.
+    app.get('/melspec.js', (req, res) => {
+        try {
+            const src = fs.readFileSync(path.join(cfg.ROOT, 'desktop', 'melspec.js'), 'utf8');
+            res.set('Content-Type', 'text/javascript; charset=utf-8');
+            res.set('Cache-Control', 'no-cache');
+            res.send('(function(){var module={exports:{}};\n' + src + '\nwindow.JarvisMelspec=module.exports;})();\n');
+        } catch (e) { res.status(500).type('text/javascript').send('/* melspec unavailable: ' + String(e.message).replace(/\*\//g, '') + ' */'); }
+    });
+
         const rel = req.path === '/' ? 'index.html' : req.path.replace(/^\/+/, '');
         const file = path.join(cfg.ROOT, 'dashboard', rel);
         // ── SECOND LINE, NOT THE FIRST ───────────────────────────────

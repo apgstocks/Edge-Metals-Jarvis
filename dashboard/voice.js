@@ -848,9 +848,93 @@
     // Order matters and is the reducer's, not ours: STOP_SPEAKING before
     // START_MIC, always. Starting the microphone before the speaker is muted
     // is the entire self-trigger bug.
+    // ── HER NAMES OVER THE COMMON WORD (speech-to-text in Chrome) ───────
+    // Apsara, 2026-09-20: "Speech to text" — work on it. Siri is told the
+    // names in her contacts; Chrome's recogniser cannot be told anything. It
+    // CAN return several guesses for a phrase, and when one of the lower
+    // guesses contains a name she actually deals with ("Jayashree",
+    // "Daekwang", "Eccomelt") and the top one does not, that one is taken.
+    // The top guess wins every tie, so ordinary sentences are untouched.
+    // The names come from /api/voice/vocab — the list the Mac app's Whisper
+    // is already primed with.
+    var vocabTerms = [];
+    var DOMAIN_TERMS = ['Jarvis', 'Scout', 'booking', 'bookings', 'cutoff', 'proforma', 'ERD', 'BOL',
+        'packing list', 'invoice', 'trucker', 'supplier', 'container', 'Zimex', 'Edge Metals'];
+    function termHits(text) {
+        var t = ' ' + String(text || '').toLowerCase().replace(/[^a-z0-9 ]+/g, ' ') + ' ';
+        var n = 0, all = vocabTerms.concat(DOMAIN_TERMS);
+        for (var i = 0; i < all.length; i++) {
+            var w = String(all[i]).toLowerCase().replace(/[^a-z0-9 ]+/g, ' ').trim();
+            if (w.length > 2 && t.indexOf(' ' + w + ' ') !== -1) n += 1;
+        }
+        return n;
+    }
+    function pickAlternative(res) {
+        var best = res[0].transcript, bestHits = termHits(best);
+        for (var k = 1; k < res.length; k++) {
+            var h = termHits(res[k].transcript);
+            if (h > bestHits) { best = res[k].transcript; bestHits = h; }
+        }
+        if (best !== res[0].transcript) {
+            console.log('[VOICE] heard "' + res[0].transcript.trim() + '" — taking "' + best.trim() + '" (names one of yours)');
+        }
+        return best;
+    }
+    var vocabLoaded = false;
+    function loadVocab() {
+        if (vocabLoaded || typeof api !== 'function') return;
+        vocabLoaded = true;
+        try {
+            Promise.resolve(api('/api/voice/vocab')).then(function (r) {
+                if (r && Array.isArray(r.terms)) vocabTerms = r.terms.slice(0, 200);
+            }).catch(function () { vocabLoaded = false; });
+        } catch (e) { vocabLoaded = false; }
+    }
+
+    // ── THE WAKE MODEL (dashboard/wake-model.js) ─────────────────────────
+    // Apsara, 2026-09-20: "openWakeWord -> we need it." On while voice is on
+    // and the tab is in front — the same condition the transcript wake word
+    // runs under — and off otherwise, so it never listens in a background tab.
+    var wakeWanted = false;
+    function syncWake() {
+        var W = window.JarvisWake;
+        if (!W) return;
+        var want = !!(state.enabled && state.foreground && !speechUnavailable);
+        if (want === wakeWanted) return;
+        wakeWanted = want;
+        if (want) {
+            loadVocab();
+            W.onwake = wakeFromModel;
+            Promise.resolve(W.start()).then(function (st) {
+                if (st === 'on' && window.JarvisTurn && !LOCAL) window.JarvisTurn.load().catch(function () {});
+            });
+        }
+        else W.stop();
+    }
+    function wakeFromModel(score) {
+        if (!state.enabled || !state.foreground) {
+            console.log('[VOICE] wake model fired but voice is ' + (state.enabled ? 'in the background' : 'off') + ' — ignored');
+            return;
+        }
+        // While Jarvis is talking the guard mic owns interruptions, with its
+        // echo filter. The model has no way to tell her "Hey Jarvis" from a
+        // reply that happens to contain the name, so it stands aside.
+        if (state.speaking) { console.log('[VOICE] wake model fired while Jarvis is talking — the guard mic decides'); return; }
+        // Already listening (the follow-up window): answer the name.
+        if (state.capturing) {
+            console.log('[VOICE] wake model fired inside an open capture — answering the name');
+            answerTheName('hey jarvis'); return;
+        }
+        addressed = 'jarvis';
+        spokenName = true;
+        console.log('[VOICE] Jarvis — heard by the wake model (' + (score || 0).toFixed(2) + '), listening for your command');
+        dispatch('WAKE_HEARD');
+    }
+
     function dispatch(event) {
         var r = VM.reduce(state, event);
         state = r.state;
+        try { syncWake(); } catch (e) { /* the transcript wake word still works */ }
         (r.effects || []).forEach(function (fx) {
             if (fx === 'STOP_SPEAKING') stopSpeaking();
             else if (fx === 'STOP_MIC') stopMic();
@@ -1211,11 +1295,18 @@
         rec = new SR();
         rec.continuous = canWake;
         rec.interimResults = true;
+        // Several guesses per phrase, so the one naming HER people can win —
+        // see pickAlternative(). Chrome takes no custom vocabulary; this is
+        // the nearest thing it offers.
+        try { rec.maxAlternatives = 4; } catch (e) {}
         rec.lang = 'en-US';
 
         rec.onresult = function (ev) {
             var txt = '';
-            for (var i = ev.resultIndex; i < ev.results.length; i += 1) txt += ev.results[i][0].transcript;
+            for (var i = ev.resultIndex; i < ev.results.length; i += 1) {
+                var res = ev.results[i];
+                txt += (res.isFinal && res.length > 1) ? pickAlternative(res) : res[0].transcript;
+            }
             txt = txt.trim();
             if (!txt) return;
             // The engine just worked. Whatever went wrong before was
@@ -1385,11 +1476,12 @@
                 heardDuringCapture = capturePrefix ? (capturePrefix + ' ' + txt) : txt;
                 // SHE HAS SPOKEN. From here the short end-of-utterance window
                 // applies; before this, the long waiting-to-start one did.
-                heardAnything = true;
+                if (saidMoreThanName()) heardAnything = true;
                 // She is still talking, so the clock starts again. This is
                 // the whole fix for being cut off: the window measures
                 // SILENCE, not elapsed time.
                 armCaptureTimers();
+                if (!saidMoreThanName() && (WAKE.test(txt) || WAKE_SCOUT.test(txt))) answerTheName(txt);
                 // ── THE TRANSCRIPT GOES IN THE CARD, NOT THE PILL ────────
                 // Apsara, 2026-09-06: "the transcription is also cut into
                 // half - not wrapping."
@@ -2008,6 +2100,7 @@
         try {
             if (rec && typeof rec.ignoreFor === 'function') rec.ignoreFor(ms + 120);
         } catch (e) {}
+        try { if (window.JarvisWake) window.JarvisWake.deafFor(ms + 250); } catch (e) {}
     }
 
     // ── THE CHIME ANSWERS THE WAKE WORD, NOTHING ELSE ────────────────────
@@ -2055,6 +2148,10 @@
         if (!capturePassive) {
             showCard(o.seed || '', o.seed ? '' : (o.hint ? o.hint + ' \u2014 go ahead' : 'Go ahead\u2026'), true);
         }
+        // Answered already if this opening played the reply; otherwise a
+        // bare name said inside this capture gets one (answerTheName).
+        answeredName = (o.ack !== false);
+        captureOpenedAt = Date.now();
         if (o.ack !== false) playAck();
         armCaptureTimers();
     }
@@ -2102,21 +2199,107 @@
     var SILENCE_MS = 1200;      // quiet long enough to mean "finished"
     var HARD_CAP_MS = 45000;    // a recogniser that never stops emitting
     var hardCapTimer = null;
+    // Set only once she says something AFTER the wake word. Her recording,
+    // 2026-09-20: she said "Hey Jarvis", paused for it to answer the way Siri
+    // does, and 1.2s of that pause closed the capture as "finished" with
+    // nothing in it — six times running, then "check my mail" landed on a
+    // closed microphone. A bare name is not a sentence, so the long wait for
+    // her to start still applies until there is one.
     var heardAnything = false;
+    // "Yes, boss?" is Jarvis's own reply. Chrome's recogniser cannot be
+    // deafened while it plays (only the desktop engine can), so if it hears
+    // the reply it is removed rather than asked as her question.
+    var ACK_ECHO = /\byes,?\s*boss\b[.?!]?/gi;
+    function withoutEcho(t) { return String(t || '').replace(ACK_ECHO, ' ').replace(/\s{2,}/g, ' ').trim(); }
+    function saidMoreThanName() { return !!withoutEcho(heardDuringCapture).replace(WAKE, '').replace(WAKE_SCOUT, '').trim(); }
+
+    // ── "HEY JARVIS" ALWAYS GETS A "YES, BOSS?" ─────────────────────────
+    // Apsara, 2026-09-20, after her recording: yes, add it. The reply
+    // already played when the wake word OPENED a capture — but after every
+    // answer the follow-up window is open, and a "Hey Jarvis" said inside it
+    // was taken silently as part of that window: no reply, a 5-second clock,
+    // and she said the name again. Six times, on the recording.
+    //
+    // So a bare name heard inside an open capture is answered once, and the
+    // passive 5-second follow-up window becomes the full 10-second wait.
+    var answeredName = false;
+    function answerTheName(txt) {
+        if (answeredName) return;
+        answeredName = true;
+        if (WAKE_SCOUT.test(txt) && !WAKE.test(txt)) addressed = 'scout';
+        else if (WAKE.test(txt)) addressed = 'jarvis';
+        paintAgent(addressed);
+        if (capturePassive) { capturePassive = false; armCaptureTimers(); }
+        playAck();
+    }
 
     function armCaptureTimers() {
         clearTimeout(captureTimer);
         // A passive follow-up window is five seconds, not ten. She was not
         // asked anything, so holding the microphone open for a full
         // thinking-pause after every answer is a mic that is always on.
-        captureTimer = setTimeout(finishCapture,
-            heardAnything ? SILENCE_MS : (capturePassive ? FOLLOWUP_MS : LISTEN_MS));
+        turnAsk += 1;              // a word arrived: any question in flight is stale
+        if (heardAnything && smartTurnReady()) {
+            // ── HOW THE SENTENCE ENDS, NOT HOW LONG THE PAUSE IS ─────────
+            // Apsara, 2026-09-20: "Endpointing … work on this." At a short
+            // pause the end-of-turn model is asked; if her voice has fallen
+            // the way a finished sentence does, the turn ends then — faster
+            // than the old 1.2 s. If not ("send a mail to…"), it waits, up
+            // to TURN_MAX_MS of silence. See askTurn().
+            captureTimer = setTimeout(askTurn, TURN_ASK_MS);
+        } else {
+            captureTimer = setTimeout(finishCapture,
+                heardAnything ? SILENCE_MS : (capturePassive ? FOLLOWUP_MS : LISTEN_MS));
+        }
         if (!hardCapTimer) hardCapTimer = setTimeout(function () {
             console.log('[VOICE] hard cap reached — closing the capture');
             finishCapture();
         }, HARD_CAP_MS);
     }
+    // ── THE END-OF-TURN MODEL, IN CHROME (dashboard/turn-model.js) ───────
+    // Not for the Mac app's engine: voice-local.js already asks the same
+    // model in the main process, on its own audio.
+    var TURN_ASK_MS = 450;       // pause length at which the model is asked
+    var TURN_MAX_MS = 2600;      // silence after which the turn ends regardless
+    var turnAsk = 0;             // generation counter — a late answer to a stale question is ignored
+    var captureOpenedAt = 0;
+    // A sentence ending on one of these is not finished, whatever the voice
+    // did: "send a mail to", "the booking for", "tell them that".
+    var DANGLING = /\b(?:and|or|but|to|the|a|an|for|from|with|of|about|at|in|on|by|that|because|so|is|are|my|our|their|this|um|uh|er|like|then)\s*$/i;
+    function smartTurnReady() {
+        return !LOCAL && !!(window.JarvisTurn && window.JarvisTurn.status === 'on'
+            && window.JarvisWake && window.JarvisWake.status === 'on' && window.JarvisWake.recent);
+    }
+    function askTurn() {
+        var mine = ++turnAsk;
+        var asked = Date.now();
+        var said = withoutEcho(heardDuringCapture).replace(WAKE, '').trim();
+        // The rest of the patience, counted from the last word, not from now.
+        var rest = Math.max(0, TURN_MAX_MS - TURN_ASK_MS);
+        captureTimer = setTimeout(function () {
+            if (mine !== turnAsk) return;
+            console.log('[TURN] ' + TURN_MAX_MS + 'ms of silence — ending the turn');
+            finishCapture();
+        }, rest);
+        if (DANGLING.test(said)) {
+            console.log('[TURN] "…' + said.slice(-24) + '" is not a finished sentence — waiting');
+            return;
+        }
+        var ms = Math.min(8000, Math.max(1500, Date.now() - captureOpenedAt + 500));
+        window.JarvisTurn.analyse(window.JarvisWake.recent(ms)).then(function (r) {
+            if (mine !== turnAsk || !state.capturing) return;
+            if (r && r.ok && r.complete) {
+                console.log('[TURN] finished (p=' + r.probability.toFixed(2) + ', ' + r.ms + 'ms) — '
+                    + (Date.now() - asked + TURN_ASK_MS) + 'ms after her last word');
+                finishCapture();
+            } else if (r && r.ok) {
+                console.log('[TURN] not finished (p=' + r.probability.toFixed(2) + ') — waiting');
+            }
+        });
+    }
+
     function clearCaptureTimers() {
+        turnAsk += 1;
         clearTimeout(captureTimer);
         clearTimeout(hardCapTimer);
         hardCapTimer = null;
@@ -2128,7 +2311,7 @@
         // second time half a minute later — mid-way through whatever she was
         // saying next.
         clearCaptureTimers();
-        var q = heardDuringCapture.replace(WAKE, '').trim();
+        var q = withoutEcho(heardDuringCapture).replace(WAKE, '').trim();
         capturePrefix = '';
         dispatch('CAPTURE_END');
         if (!q) {
@@ -2557,6 +2740,8 @@
         isOwnVoice: isOwnVoice,
         nowSpeaking: function () { return nowSpeaking; },
         announceTick: announceTick,
+        pickAlternative: pickAlternative,
+        setVocab: function (list) { vocabTerms = (list || []).slice(); },
         announceOn: function () { return announceOn; },
     };
 }());

@@ -17,8 +17,16 @@ const CORE = [
 ];
 const RE = new RegExp('^(?:' + CORE.join('|') + ')$', 'i');
 
+// Greetings and "what's up", said on their own or run together the way the
+// recogniser hands them over ("what's up today good morning good morning",
+// Apsara's recording 2026-09-20), are a request for the briefing: that is
+// what Jarvis in the film does with "good morning".
+const GREETING_ONLY = /^(?:(?:good\s+(?:morning|afternoon|evening)|what'?s\s+up|whats\s+up|sup|hey|hi|hello|morning|jarvis|ok(?:ay)?|so|today|now|please|there)[\s,.!?]*)+$/;
+const HAS_GREETING = /\b(?:good\s+(?:morning|afternoon|evening)|what'?s\s+up|whats\s+up|morning)\b/;
+
 function isBriefRequest(text) {
     let t = String(text || '').toLowerCase().trim();
+    if (GREETING_ONLY.test(t) && HAS_GREETING.test(t)) return true;
     // "good morning jarvis" on its own is a greeting — answer it with the brief.
     if (/^(?:(?:hey|ok(?:ay)?)[,\s]+)?good\s+(?:morning|afternoon|evening)(?:[,\s]+jarvis)?[.!?]*$/.test(t)) return true;
     t = t.replace(LEAD, '').replace(TAIL, '').trim();

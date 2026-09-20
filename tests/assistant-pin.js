@@ -81,7 +81,17 @@ section('B. the pin is what gets sent');
     // separate flag.
     ck('a name spoken THIS turn overrides the pin', /spokenName/.test(ask));
     ck('  set where the wake word is actually heard',
-       /spokenName = true;/.test(VOICE) && VOICE.indexOf('spokenName = true;') > VOICE.indexOf('WAKE_SCOUT.test(txt)'),
+       // Two places hear a wake word since 2026-09-20: the transcript
+       // (after WAKE_SCOUT.test) and the on-device model (wakeFromModel).
+       // Every assignment must be in one of them.
+       (() => {
+           const at = []; let i = -1;
+           while ((i = VOICE.indexOf('spokenName = true;', i + 1)) !== -1) at.push(i);
+           const tx = VOICE.indexOf('WAKE_SCOUT.test(txt)');
+           const mdl = VOICE.indexOf('function wakeFromModel(');
+           const mdlEnd = VOICE.indexOf('\n    }\n', mdl);
+           return at.length >= 1 && at.every((p) => p > tx || (p > mdl && p < mdlEnd));
+       })(),
        'set anywhere else and it would not mean "she named one"');
     ck('  and cleared once that question has gone',
        /spokenName = false;   \/\/ it belonged to THIS question only/.test(VOICE),

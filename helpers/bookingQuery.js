@@ -296,7 +296,15 @@ function needsPort(frame, result) {
     const f = frame || {};
     if (f.location) return null;
     if (f.scope === 'all') return null;
-    const ports = (result && result.ports) || [];
+    // Case-folded: her recording (2026-09-20) asked "Houston, LONG BEACH,
+    // Oakland, LOS ANGELES, Long Beach, CHICAGO, Los Angeles?" — seven
+    // "ports", five places, because the bookings spell them two ways.
+    const seen = new Set();
+    const ports = ((result && result.ports) || []).filter((p) => {
+        const k = String(p || '').trim().toLowerCase();
+        if (!k || seen.has(k)) return false;
+        seen.add(k); return true;
+    });
     if (ports.length < 2) return null;
     return ports;
 }

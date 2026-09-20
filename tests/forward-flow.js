@@ -97,7 +97,10 @@ section('B — the guards actually short-circuit');
        /const quick = \(answeringBrain[^)]*\)\s*\n\s*\?\s*null/.test(seg),
        'answering from the booking list would drop the confirmation on the floor');
     ck('    and an order stands it down too',
-       /const quick = \(answeringBrain \|\| looksLikeOrder\)/.test(seg),
+       // `\b` not `\)`: 2026-09-20 added `|| brainOwns` after it (the
+       // briefing/inbox stand-aside). The property is unchanged — an order
+       // still stands the shortcut down.
+       /const quick = \(answeringBrain \|\| looksLikeOrder\b/.test(seg),
        'a model asked to answer "forward the booking" from a table reads out a field');
     ck('  and the proforma draft stands down',
        /const step = \(answeringBrain && !amended && !parking\)\s*\n?\s*\? null : pro\.handle\(asked, \{ transition \}\)/.test(seg),
