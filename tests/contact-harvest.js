@@ -65,6 +65,13 @@ const MAIL = [
     //   - twice means it is not "thin", so it reaches the list at all;
     //   - from === 0 is what proposeDomainRoles calls a SHARED mailbox.
     { From: '"Joey Lee" <joey@daekwang.example>', To: 'apsara@edgemetals.com', Cc: 'accounts@daekwang.example' },
+    // Two unrelated people who happen to share a consumer mail provider.
+    // Apsara, 2026-09-20, seeing the first real harvest file one of these
+    // under a group called HOTMAIL.COM: "if i want to change the domain-??"
+    { From: '"Pan Metal Michael" <panmetal@hotmail.com>', To: 'apsara@edgemetals.com', Cc: '' },
+    { From: 'apsara@edgemetals.com', To: '"Pan Metal Michael" <panmetal@hotmail.com>', Cc: '' },
+    { From: '"Dana Ortiz" <dortiz@hotmail.com>', To: 'apsara@edgemetals.com', Cc: '' },
+    { From: 'apsara@edgemetals.com', To: '"Dana Ortiz" <dortiz@hotmail.com>', Cc: '' },
 ];
 const fakeGmail = {
     users: { messages: {
@@ -144,9 +151,14 @@ let proposed;
        JSON.stringify(r.skipped));
 
     // ── AND WHAT DOES ───────────────────────────────────────────────────
+    // Consumer providers appear too (see C2) — they are headings, not
+    // companies — so this asserts the real COMPANIES are there rather than
+    // pinning the whole list, which would go red every time the fixture
+    // grows a new kind of sender.
+    const realCompanies = r.domains.filter((d) => !d.freemail).map((d) => d.domain).sort();
     ck('the two real companies are proposed',
-       r.domains.map((d) => d.domain).sort().join(',') === 'daekwang.example,mkmetaltrading.com',
-       r.domains.map((d) => d.domain).join(','));
+       realCompanies.join(',') === 'daekwang.example,mkmetaltrading.com',
+       realCompanies.join(','));
     ck('  busiest company first, because that list runs long',
        r.domains[0].messages >= r.domains[1].messages,
        r.domains.map((d) => `${d.domain}:${d.messages}`).join(' '));
@@ -187,6 +199,119 @@ section('C. one opinion about who is primary');
     ck('an address that never sends IS a shared mailbox',
        (dkD.proposals.find((p) => p.addr === 'accounts@daekwang.example') || {}).role === 'shared',
        JSON.stringify(dkD.proposals.map((p) => `${p.addr}:${p.role}`)));
+}
+
+// ── C2. A CONSUMER MAIL PROVIDER IS NOT A COMPANY ───────────────────────────
+// Apsara, 2026-09-20, on the first real harvest: a contact at
+// panmetal@hotmail.com filed under a domain group called HOTMAIL.COM and
+// labelled "shared / mailbox".
+//
+// The label was cosmetic. The GROUP was not. A domain group in
+// helpers/emailContacts.js means its members are colleagues: they auto-cc
+// each other, and a bare company name resolves to whoever is primary. File
+// three unrelated people under hotmail.com and emailing one of them copies
+// the other two — strangers, on commercial mail.
+section('C2. hotmail.com is not a company');
+{
+    const r = harvest.propose(tally, { mine: MINE, known: [] });
+    const hot = r.domains.find((d) => d.domain === 'hotmail.com');
+    ck('the provider still appears, as a heading', !!hot, r.domains.map((d) => d.domain).join(','));
+    ck('  flagged as consumer mail', hot && hot.freemail === true);
+    ck('  with both people under it', hot && hot.proposals.length === 2,
+       JSON.stringify(hot && hot.proposals.map((p) => p.addr)));
+
+    ck('but NOBODY there is put in a domain group',
+       hot.proposals.every((p) => p.domain === null),
+       JSON.stringify(hot.proposals.map((p) => p.domain)));
+    ck('  and nobody is given a role',
+       hot.proposals.every((p) => p.role === null),
+       JSON.stringify(hot.proposals.map((p) => p.role)));
+    ck('  so two strangers can never auto-cc each other', 
+       hot.proposals.every((p) => !p.domain && !p.role),
+       'that is what a domain group MEANS, and it is not cosmetic');
+
+    ck('  they are named from the real header, not the local part',
+       hot.proposals.some((p) => p.name === 'Pan Metal Michael'),
+       JSON.stringify(hot.proposals.map((p) => p.name)));
+
+    // A real company is unaffected — the fix must not flatten everything.
+    const mkStill = r.domains.find((d) => d.domain === 'mkmetaltrading.com');
+    ck('a real company is still grouped', mkStill.proposals.every((p) => p.domain === undefined || p.domain),
+       'flattening every domain would throw away the thing groups are for');
+    ck('  and still has a primary',
+       mkStill.proposals.some((p) => p.role === 'primary'));
+
+    // ── AND THE SHARED FUNCTION IS NOT WHAT CHANGED ─────────────────────
+    // proposeDomainRoles is used by "learn X contacts" and
+    // scripts/learnDomain.js, always for a company SHE NAMED — where an
+    // address that never sends really is likely a shared mailbox. The wrong
+    // label came from sweeping personal domains it was never pointed at, so
+    // the fix belongs at the sweep.
+    // Scoped to the FUNCTION, not the file: emailContacts.js now mentions
+    // hotmail in updateContact's note about why the group became editable,
+    // and a whole-file grep went red on my own comment. A check that reads
+    // the wrong span is a check that will be deleted the next time it lies.
+    const ecSrc = fs.readFileSync(path.join(ROOT, 'helpers/emailContacts.js'), 'utf8');
+    const fnStart = ecSrc.indexOf('function proposeDomainRoles');
+    const fnEnd = ecSrc.indexOf('\nfunction ', fnStart + 1);
+    const fnSrc = ecSrc.slice(fnStart, fnEnd === -1 ? undefined : fnEnd);
+    ck('  proposeDomainRoles itself is untouched by this',
+       fnStart > -1 && !/FREEMAIL|hotmail|gmail|freemail/i.test(fnSrc),
+       'changing it would change "learn X contacts" too, which nobody asked for');
+}
+
+// ── C3. THE GROUP CAN BE CHANGED AFTERWARDS ─────────────────────────────────
+// "if i want to change the domain-??" — she could not. updateContact copied
+// domain and role straight off the old record and the panel said "that stays
+// as it is", so a wrong grouping was permanent unless she deleted the contact
+// and retyped it, losing the standing Cc with it. That is the same
+// delete-and-retype hole the Edit button was added to close.
+section('C3. changing a contact\'s group');
+{
+    await emailContacts.addContact('michael', 'panmetal@hotmail.com',
+        { domain: 'hotmail.com', role: 'shared' });
+    await emailContacts.setContactCc('michael', ['someone@else.example']);
+
+    await emailContacts.updateContact('michael', { domain: 'panmetal.example', role: 'primary' });
+    let got = emailContacts.loadContacts().find((c) => c.name === 'michael');
+    ck('the domain can be changed', got.domain === 'panmetal.example', JSON.stringify(got));
+    ck('  and the role with it', got.role === 'primary', String(got.role));
+    ck('  without losing the standing Cc',
+       JSON.stringify(got.cc) === '["someone@else.example"]',
+       'deleting and retyping was the old way, and it lost exactly this');
+
+    // Emptying the domain takes the contact out of any group. The role goes
+    // with it: a role with no group is a label nothing can act on.
+    await emailContacts.updateContact('michael', { domain: '' });
+    got = emailContacts.loadContacts().find((c) => c.name === 'michael');
+    ck('an empty domain takes them out of the group', got.domain === undefined, JSON.stringify(got));
+    ck('  and the orphaned role goes too', got.role === undefined, String(got.role));
+
+    // ── ONE PRIMARY PER DOMAIN ──────────────────────────────────────────
+    // Promoting without demoting leaves two, and resolveContact would then
+    // pick by list order — which is to say, by accident.
+    await emailContacts.addContact('a-one', 'one@grp.example', { domain: 'grp.example', role: 'primary' });
+    await emailContacts.addContact('a-two', 'two@grp.example', { domain: 'grp.example', role: 'secondary' });
+    await emailContacts.updateContact('a-two', { role: 'primary' });
+    const grp = emailContacts.loadContacts().filter((c) => c.domain === 'grp.example');
+    ck('promoting a member demotes the old primary',
+       grp.filter((c) => c.role === 'primary').length === 1,
+       JSON.stringify(grp.map((c) => `${c.name}:${c.role}`)));
+    ck('  and it is the one she promoted',
+       (grp.find((c) => c.role === 'primary') || {}).name === 'a-two',
+       JSON.stringify(grp.map((c) => `${c.name}:${c.role}`)));
+
+    // Nonsense in, refusal out — not a silently stored bad value.
+    let err = null;
+    try { await emailContacts.updateContact('a-two', { domain: 'not a domain' }); }
+    catch (e) { err = e; }
+    ck('a malformed domain is refused', !!err && /does not look like a domain/.test(err.message),
+       String(err));
+    err = null;
+    try { await emailContacts.updateContact('a-two', { role: 'boss' }); } catch (e) { err = e; }
+    ck('  and an invented role is refused', !!err && /is not a role/.test(err.message), String(err));
+    ck('  leaving the contact as it was',
+       (emailContacts.loadContacts().find((c) => c.name === 'a-two') || {}).role === 'primary');
 }
 
 // ── D. ALREADY SAVED IS SHOWN, NOT RE-OFFERED ───────────────────────────────
@@ -315,6 +440,20 @@ section('F. the button is where she was looking');
     ck('  a row with no name cannot be saved silently',
        /no name — type one or untick it/.test(src),
        'guessing a label is what produced "Dear export"');
+    ck('  the edit panel lets her change the group',
+       /class="ec-domain"/.test(src) && /class="ec-role"/.test(src),
+       'it used to say "that stays as it is"');
+    // The PANEL must not still tell her the grouping is permanent. Matched
+    // on the rendered sentence, not on the phrase anywhere in the file — the
+    // comment above that markup quotes the old wording on purpose, to record
+    // what changed, and a grep for the bare phrase goes red on the history
+    // rather than on the behaviour.
+    ck('  and no longer tells her the grouping is permanent',
+       !/group as <strong>\$\{esc\(m\.role/.test(src),
+       'a comment that has become a lie is worse than no comment');
+    ck('  emptying the domain is sent, not omitted',
+       /domain: panel\.querySelector\('\.ec-domain'\)\.value\.trim\(\)/.test(src),
+       'omitting it would preserve a grouping she has just cleared on screen');
     ck('  and what was skipped is reported back, not swallowed',
        /Skipped \$\{skipped\}/.test(src) || /r\.skipped\.map/.test(src),
        'a bulk save that quietly drops rows is one she cannot trust');

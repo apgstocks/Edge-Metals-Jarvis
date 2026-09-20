@@ -41,6 +41,36 @@ const emailContacts = require('./emailContacts');
 // whose address happens to read like a robot's.
 const MACHINE = /^(no[-_.]?reply|do[-_.]?not[-_.]?reply|donotreply|mailer[-_.]?daemon|postmaster|bounce[s]?|notifications?|alerts?|automated|noreply)([-_.+].*)?$/i;
 
+// ── A FREE-MAIL DOMAIN IS NOT A COMPANY ─────────────────────────────────────
+// Apsara, 2026-09-20, looking at the first real harvest: a contact at
+// panmetal@hotmail.com had been filed under a domain group called
+// HOTMAIL.COM, labelled "shared / mailbox".
+//
+// Both halves of that are wrong, and the second one is not cosmetic. A domain
+// group in helpers/emailContacts.js means something specific: its members are
+// COLLEAGUES. They auto-cc each other, and a bare company name resolves to
+// whoever is marked primary. File three unrelated people under hotmail.com
+// and emailing one of them copies the other two — strangers, on somebody's
+// commercial mail.
+//
+// So an address at a consumer mail provider is proposed FLAT: a person, with
+// no domain and no role. She can still group them by hand if two of them
+// really are one company.
+//
+// ── AND IT IS NOT DONE BY CHANGING proposeDomainRoles ───────────────────────
+// That function is shared with "learn X contacts" and scripts/learnDomain.js,
+// and it is always invoked there for a company Apsara has NAMED — where an
+// address that never sends genuinely is likely a shared mailbox. The wrong
+// label here comes from sweeping personal domains it was never pointed at, so
+// the fix belongs here, at the sweep, not in the shared opinion.
+const FREEMAIL = new Set([
+    'gmail.com', 'googlemail.com', 'hotmail.com', 'hotmail.co.uk', 'outlook.com',
+    'live.com', 'msn.com', 'yahoo.com', 'yahoo.co.uk', 'yahoo.co.in', 'ymail.com',
+    'aol.com', 'icloud.com', 'me.com', 'mac.com', 'protonmail.com', 'proton.me',
+    'gmx.com', 'gmx.de', 'mail.com', 'zoho.com', 'yandex.com', 'qq.com',
+    '163.com', '126.com', 'naver.com', 'daum.net', 'hanmail.net', 'rediffmail.com',
+]);
+
 // Cheap header split that respects quoted display names — "Kang, Marc"
 // <marc@x.com> must not become two addresses.
 const splitAddresses = (headerValue) =>
@@ -134,6 +164,28 @@ function propose(tally, { mine = [], known = [], minMessages = 1 } = {}) {
     const domains = [];
     for (const [domain, addrs] of byDomain) {
         const bare = domain.replace(/\.[a-z.]+$/i, '');
+
+        // ── CONSUMER MAIL: PEOPLE, NOT A COMPANY ────────────────────────
+        // Each one stands alone. No domain, no role, and therefore no
+        // auto-cc between strangers who happen to share a mail provider.
+        if (FREEMAIL.has(domain)) {
+            const people = [...addrs.entries()].map(([addr, counts]) => ({
+                addr, counts,
+                role: null,
+                domain: null,
+                name: counts.displayName || addr.split('@')[0],
+                displayName: counts.displayName || null,
+                already_known: knownAddrs.has(addr),
+                messages: counts.from + counts.to + counts.cc,
+            })).sort((a, b) => b.messages - a.messages);
+            domains.push({
+                domain, freemail: true, proposals: people,
+                all_known: people.every((p) => p.already_known),
+                messages: people.reduce((t, p) => t + p.messages, 0),
+            });
+            continue;
+        }
+
         // ── THE SHARED OPINION ──────────────────────────────────────────
         // proposeDomainRoles decides primary / secondary / shared, including
         // its deliberate refusal to pick a primary on an exact tie. Called

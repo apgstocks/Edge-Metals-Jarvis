@@ -2792,7 +2792,30 @@ function renderEmailContacts() {
         <div class="field"><label style="font-size:10px;">Email address</label><input class="ec-email" value="${esc(m.email)}"></div>
         <div class="field"><label style="font-size:10px;">Standing Cc (comma-separated)</label><input class="ec-cc" value="${esc(Array.isArray(m.cc) ? m.cc.join(', ') : '')}"></div>
       </div>
-      ${m.domain ? `<div style="font-size:11px; color:var(--text-faint); margin-bottom:8px;">In the <strong>${esc(m.domain)}</strong> group as <strong>${esc(m.role || 'member')}</strong> — that stays as it is.</div>` : ''}
+      <!-- ── THE GROUP, EDITABLE ──────────────────────────────────────
+           Apsara, 2026-09-20, on a contact the harvest had filed under a
+           HOTMAIL.COM group: "if i want to change the domain-??"
+
+           She could not: this line used to read "that stays as it is", so
+           a wrong grouping was permanent unless she deleted the contact
+           and retyped it — losing the standing Cc with it. That is the
+           same delete-and-retype hole the Edit button exists to close.
+
+           Emptying the domain takes the contact OUT of its group; the
+           role goes with it, because a role with no group is a label
+           nothing can act on. -->
+      <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-bottom:10px;">
+        <div class="field"><label style="font-size:10px;">Company group (domain) — empty means none</label>
+          <input class="ec-domain" value="${esc(m.domain || '')}" placeholder="e.g. radmetals.com"></div>
+        <div class="field"><label style="font-size:10px;">Role in that group</label>
+          <select class="ec-role">
+            <option value="" ${!m.role ? 'selected' : ''}>—</option>
+            <option value="primary" ${m.role === 'primary' ? 'selected' : ''}>Primary — a bare company name resolves here</option>
+            <option value="secondary" ${m.role === 'secondary' ? 'selected' : ''}>Secondary</option>
+            <option value="shared" ${m.role === 'shared' ? 'selected' : ''}>Shared / mailbox</option>
+          </select></div>
+      </div>
+      <div style="font-size:11px; color:var(--text-faint); margin-bottom:8px;">Everyone in a group auto-cc's everyone else — so only group people who really are colleagues.</div>
       <div style="display:flex; justify-content:flex-end; gap:8px;">
         <button class="btn btn-secondary ec-cancel" style="padding:6px 12px; font-size:10px;">Cancel</button>
         <button class="btn btn-primary ec-save" data-name="${esc(m.name)}" style="padding:6px 12px; font-size:10px;">Save changes</button>
@@ -2877,6 +2900,12 @@ function renderEmailContacts() {
           email: panel.querySelector('.ec-email').value.trim(),
           displayName: panel.querySelector('.ec-display').value.trim(),
           cc: panel.querySelector('.ec-cc').value.trim(),
+          // Sent as empty strings rather than omitted, because empty MEANS
+          // something here: no group, no role. The server deletes the fields
+          // on an empty domain; omitting them would preserve a grouping she
+          // has just cleared on screen.
+          domain: panel.querySelector('.ec-domain').value.trim(),
+          role: panel.querySelector('.ec-role').value,
         };
         if (!payload.name || !payload.email) { alert('Name and email are both required.'); return; }
         const original = btn.dataset.name;
@@ -2940,7 +2969,7 @@ function renderEmailContacts() {
           <input class="hv-name" data-d="${di}" data-p="${pi}" value="${esc(p.name || '')}"
             placeholder="name Jarvis matches on"
             style="width:150px; padding:4px 7px; font-size:11px;">
-          <span class="badge" style="font-size:9px;">${esc(p.role)}</span>
+          ${p.role ? `<span class="badge" style="font-size:9px;">${esc(p.role)}</span>` : ''}
           <span style="font-family:var(--font-mono); font-size:10px; color:var(--text-faint);">${p.messages}&times;</span>
           ${p.already_known ? '<span style="font-size:10px; color:var(--text-faint);">saved</span>' : ''}
         </span>
@@ -2966,7 +2995,7 @@ function renderEmailContacts() {
           <div style="max-height:52vh; overflow-y:auto; display:flex; flex-direction:column; gap:14px;">
             ${domains.map((d, di) => `
               <div>
-                <div style="font-size:12px; font-weight:700; text-transform:uppercase; color:var(--text-strong); margin-bottom:6px;">${esc(d.domain)}</div>
+                <div style="font-size:12px; font-weight:700; text-transform:uppercase; color:var(--text-strong); margin-bottom:6px;">${esc(d.domain)}${d.freemail ? '<span style="font-weight:400; text-transform:none; color:var(--text-faint); font-size:11px;"> — saved as individual people, not a company group</span>' : ''}</div>
                 <div style="display:flex; flex-direction:column; gap:5px;">${d.proposals.map((p, pi) => row(p, di, pi)).join('')}</div>
               </div>`).join('')}
           </div>
@@ -2991,7 +3020,15 @@ function renderEmailContacts() {
         const p = d.proposals[Number(c.dataset.p)];
         const nameEl = document.querySelector(`.hv-name[data-d="${c.dataset.d}"][data-p="${c.dataset.p}"]`);
         const name = (nameEl && nameEl.value.trim()) || p.name || '';
-        save.push({ name, email: p.addr, domain: d.domain, role: p.role, displayName: p.displayName || undefined });
+        // ── p.domain WINS OVER d.domain ─────────────────────────────
+        // A consumer mail provider is a heading, not a company: the helper
+        // returns domain:null and role:null for those, and sending
+        // d.domain would file three strangers into one "hotmail.com" group
+        // whose members auto-cc each other.
+        const domain = p.domain !== undefined ? p.domain : d.domain;
+        save.push({ name, email: p.addr,
+                    domain: domain || undefined, role: (domain && p.role) || undefined,
+                    displayName: p.displayName || undefined });
       });
       const unnamed = save.filter((r) => !r.name);
       if (unnamed.length) {

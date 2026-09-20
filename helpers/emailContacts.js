@@ -162,6 +162,50 @@ async function updateContact(originalName, patch = {}) {
             if (clean.length) entry.cc = clean; else delete entry.cc;
         }
 
+        // ── THE DOMAIN GROUP IS EDITABLE, 2026-09-20 ────────────────────
+        // Apsara, looking at a contact the harvest had filed under a
+        // HOTMAIL.COM group: "if i want to change the domain-??"
+        //
+        // She could not. This function copied domain and role straight off
+        // the old record and the edit panel said "that stays as it is" — so
+        // a wrong grouping was permanent unless she deleted the contact and
+        // retyped it, losing the standing Cc with it. That is the same
+        // "delete and retype" hole the Edit button was added to close on
+        // 2026-08-22, still open for the two fields hardest to get right.
+        //
+        // An EMPTY domain means "not in a group": the field is deleted along
+        // with the role, because a role without a group is a label that
+        // resolveContact can never act on.
+        if (patch.domain != null) {
+            const d = String(patch.domain).trim().toLowerCase();
+            if (d) {
+                if (!/^[a-z0-9][a-z0-9.\-]*\.[a-z]{2,}$/.test(d)) {
+                    failure = `"${patch.domain}" does not look like a domain.`; return list;
+                }
+                entry.domain = d;
+            } else {
+                delete entry.domain;
+                delete entry.role;
+            }
+        }
+        if (patch.role != null && entry.domain) {
+            const r = String(patch.role).trim().toLowerCase();
+            if (r && !['primary', 'secondary', 'shared'].includes(r)) {
+                failure = `"${patch.role}" is not a role — use primary, secondary or shared.`; return list;
+            }
+            if (r) entry.role = r; else delete entry.role;
+        }
+
+        // ── ONE PRIMARY PER DOMAIN, SAME AS addContact ──────────────────
+        // Promoting someone here without demoting the incumbent leaves two
+        // primaries, and resolveContact would then pick by list order —
+        // which is to say, by accident.
+        if (entry.domain && entry.role === 'primary') {
+            list = list.map((x, j) => (j !== i && x.domain
+                && x.domain.toLowerCase() === entry.domain && x.role === 'primary')
+                ? { ...x, role: 'secondary' } : x);
+        }
+
         list[i] = entry;
         return list;
     });
