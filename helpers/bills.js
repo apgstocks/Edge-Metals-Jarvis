@@ -232,6 +232,20 @@ function cleanTruckingSplit(input) {
     // Her "Last Verified": who checked this against the trucker's invoice and
     // when. Recorded rather than computed — it is a statement about a human
     // having looked, which nothing here can infer.
+    //
+    // ── AND IT STAYS HAND-TYPED. DO NOT WIRE VERIFICATION TO IT. ─────────
+    // Apsara, 2026-09-20, asked whether running the AJ Transport verification
+    // would land in Metals trucking; told it does not and that this date is
+    // typed by hand, she answered "verified on is good". So the gap is the
+    // feature.
+    //
+    // The AJ Transport / Zimex / Sher / Jio runs compare a hauler's PDFs
+    // against the Edge Metals Invoice SHEET and log the passing rows to a tab
+    // on that workbook — see helpers/invoiceVerify.js, which requires nothing
+    // but ./invoiceSheet and so cannot write here even by accident. Making a
+    // passing cross-check stamp this field would replace "a person checked
+    // this" with "a machine matched two numbers", which is a different claim
+    // wearing the same word.
     out.verified_on = String(t.verified_on || '').trim() || null;
     if (out.invoice_no || out.verified_on) any = true;
 

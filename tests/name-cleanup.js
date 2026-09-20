@@ -271,8 +271,14 @@ section('E. two companies stay two companies');
     // Edge Yard's own ledger is a different company's books and keys on
     // `seller`, not `supplier`. Nothing here may reach into it.
     const src = fs.readFileSync(path.join(ROOT, 'helpers/nameCleanup.js'), 'utf8');
+    // TRUCKER_BILLS_FILE added 2026-09-20. The regex named the two LOAD
+    // stores and stopped, so the yard's HAULAGE ledger — the one whose rows
+    // carry a company name, and therefore the one a Trucker cleanup would
+    // most plausibly be pointed at one day — was the single yard store this
+    // guard did not cover. Behaviour was already correct; the test just could
+    // not have caught it changing.
     ck('the yard ledger is not among the stores this rewrites',
-       !/LOADS_FILE|OUTBOUND_LOADS_FILE/.test(src),
+       !/LOADS_FILE|OUTBOUND_LOADS_FILE|TRUCKER_BILLS_FILE/.test(src),
        'a merge would be editing the other company\'s books');
 }
 
