@@ -416,6 +416,33 @@ const NO  = ['no', 'n', 'cancel', 'stop', 'nope', "don't"];
 // Moved to helpers/pickFromList.js, which matches by position, by name, by
 // sound and by edit distance — and returns nothing at all when more than one
 // option survives, so ambiguity becomes a question instead of a guess.
+// ── IS THIS ACTUALLY A PLACE? ───────────────────────────────────────────────
+// Returns a sentence to say INSTEAD of a count, or null when the place is
+// fine. "0 bookings from null" and "0 bookings from shutup" are both a count
+// of the wrong question stated as a fact, and a zero reads as "we have none".
+//
+// A place counts when it is empty-free AND some booking's port matches it —
+// loading OR discharge, through the same localityMatchesPort the count uses,
+// so aliases like "LA" keep working. A real port with nothing in it right now
+// is still a place, and still gets its honest zero from the handler.
+function placeProblem(location) {
+    const loc = String(location == null ? '' : location).trim();
+    if (!loc || /^(?:null|undefined|none|n\/a|any|all)$/i.test(loc)) {
+        return 'Which port? I count bookings by port — e.g. "how many bookings from Houston". '
+            + 'I can\'t count them by loading date yet.';
+    }
+    try {
+        const bk = require('../helpers/booking');
+        const known = Object.values(require('../helpers/json').loadBookings() || {}).some((b) =>
+            bk.localityMatchesPort(b.port_of_loading, loc) || bk.localityMatchesPort(b.port_of_discharge, loc));
+        if (!known) return `I don't have any bookings with a port called "${loc}". Which port did you mean?`;
+    } catch (e) {
+        // Can't check — fall through to today's behaviour rather than block.
+        console.warn('[BRAIN] place check failed:', e.message);
+    }
+    return null;
+}
+
 function resolveListSelection(text, options) {
     return require('../helpers/pickFromList').pick(text, options);
 }
@@ -2670,6 +2697,15 @@ async function route(decision, ctx, sendMessage) {
         }
         case 'send_pricelist_city':    return actions.sendPriceListCity(chatId, d.city, d.target_name);
         case 'bookings_count_query': {
+            // Apsara, 2026-09-19: "show me number of bookings that we have
+            // loaded this month" came back "0 bookings from null", and "shut
+            // up" came back "0 bookings from shutup". The classifier is told
+            // to use this ONLY when she names a place and did it anyway, so
+            // the place is checked here, where it is used — see placeProblem.
+            {
+                const problem = placeProblem(d.location);
+                if (problem) return send(chatId, problem);
+            }
             updateSession(chatId, { lastInstruction: 'bookings_query', lastBookingsFilter: d.filter });
             const { count, bookings } = queryBookingsByLocation(d.location, d.filter);
             const label = d.filter === 'unassigned' ? 'unassigned (no supplier) ' : d.filter === 'assigned' ? 'assigned ' : '';
@@ -2677,6 +2713,10 @@ async function route(decision, ctx, sendMessage) {
             return send(chatId, `${count} ${label}booking${count === 1 ? '' : 's'} from ${d.location}${list}`);
         }
         case 'bookings_list_query': {
+            {
+                const problem = placeProblem(d.location);
+                if (problem) return send(chatId, problem);
+            }
             updateSession(chatId, { lastInstruction: 'bookings_query', lastBookingsFilter: d.filter });
             const { count, records } = queryBookingsByLocation(d.location, d.filter);
             const label = d.filter === 'unassigned' ? 'Unassigned (no supplier) ' : d.filter === 'assigned' ? 'Assigned ' : '';
