@@ -2881,13 +2881,64 @@ function renderEmailContacts() {
 
       const roleOrder = { primary: 0, secondary: 1, shared: 2 };
       const domains = Object.keys(grouped).sort();
+      // ── A CONSUMER PROVIDER IS NOT A COMPANY ──────────────────────────
+      // Kept in step with helpers/contactHarvest.js's FREEMAIL list. A group
+      // headed GMAIL.COM is six strangers who auto-cc each other, and saying
+      // so on the header is the difference between her noticing and not.
+      const FREEMAIL_UI = ['gmail.com', 'googlemail.com', 'hotmail.com', 'hotmail.co.uk',
+        'outlook.com', 'live.com', 'msn.com', 'yahoo.com', 'yahoo.co.uk', 'yahoo.co.in',
+        'ymail.com', 'aol.com', 'icloud.com', 'me.com', 'mac.com', 'protonmail.com',
+        'proton.me', 'gmx.com', 'gmx.de', 'mail.com', 'zoho.com', 'yandex.com', 'qq.com',
+        '163.com', '126.com', 'naver.com', 'daum.net', 'hanmail.net', 'rediffmail.com'];
+
       groupsEl.innerHTML = domains.map((domain) => {
         const members = grouped[domain].slice().sort((a, b) => (roleOrder[a.role] ?? 9) - (roleOrder[b.role] ?? 9));
+        const isFree = FREEMAIL_UI.includes(String(domain).toLowerCase());
         return `<div class="card" style="padding:18px 20px; margin-bottom:16px;">
-          <div style="font-size:13px; font-weight:700; color:var(--text-strong); text-transform:uppercase; margin-bottom:12px;">${esc(domain)}</div>
+          <div style="display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:12px;">
+            <div style="font-size:13px; font-weight:700; color:var(--text-strong); text-transform:uppercase;">${esc(domain)}</div>
+            <!-- ── MOVE THE WHOLE GROUP ─────────────────────────────────
+                 Apsara, 2026-09-20, on six unrelated suppliers under
+                 GMAIL.COM: "give an option to move it to diff domain."
+                 Editing them one at a time is six rounds of open, clear,
+                 save — and the sixth is the one that gets forgotten, which
+                 leaves the group half-dismantled and still auto-ccing. -->
+            <button class="btn btn-secondary btn-regroup" data-domain="${esc(domain)}"
+              style="padding:5px 11px; font-size:10px;">Move all ${members.length}…</button>
+          </div>
+          ${isFree ? `<div style="font-size:11.5px; color:var(--status-warn); margin:-4px 0 12px;">${esc(domain)} is a mail provider, not a company — these ${members.length} people are not colleagues, but everyone here auto-cc's everyone else. "Move all" with the box left empty separates them.</div>` : ''}
           <div style="display:flex; flex-direction:column; gap:8px;">${members.map(memberRow).join('')}</div>
         </div>`;
       }).join('');
+
+      document.querySelectorAll('.btn-regroup').forEach((btn) => btn.addEventListener('click', async () => {
+        const domain = btn.dataset.domain;
+        const names = (grouped[domain] || []).map((c) => c.name);
+        const to = prompt(
+          `Move all ${names.length} contacts out of "${domain}".`
+          + `\n\nType the company domain they belong to — or leave it EMPTY`
+          + `\nto make each of them a separate person with no group.`
+          + `\n\nNobody keeps their old role: "primary of ${domain}" means`
+          + `\nnothing once they are somewhere real.`,
+          '');
+        // prompt() returns null on Cancel and '' on an empty OK. Those are
+        // different answers — '' means ungroup — so they cannot be collapsed.
+        if (to === null) return;
+        btn.disabled = true; btn.textContent = 'Moving…';
+        try {
+          const r = await api('/api/email-contacts/regroup', {
+            method: 'POST', body: JSON.stringify({ names, domain: to.trim() }) });
+          loadEmailContacts();
+          const failed = (r.skipped || []).length;
+          if (failed) {
+            alert(`Moved ${(r.moved || []).length}. ${failed} could not be moved:\n`
+                + r.skipped.map((x) => `  ${x.name} — ${x.why}`).join('\n'));
+          }
+        } catch (e) {
+          btn.disabled = false; btn.textContent = `Move all ${names.length}…`;
+          alert(e.message || 'Could not move them');
+        }
+      }));
 
       rows.innerHTML = flat.length ? flat.map(memberRow).join('') : '<div style="font-family:var(--font-mono); font-size:11.5px; color:var(--text-faint); text-align:center; padding:10px 0;">No ungrouped contacts.</div>';
       document.querySelectorAll('.btn-del-email-contact').forEach(btn => btn.addEventListener('click', async () => {

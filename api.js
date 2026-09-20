@@ -2191,7 +2191,29 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
             // ("the Maersk one", "the urgent one", "send it"), and the
             // booking number is then read out of OUR row by index. The model
             // picks; it never writes an identifier.
-            const stripped = stripAgentName(text);
+            // Speech repairs first (helpers/voiceClaims.js): Chrome writes
+            // "what's up" as "WhatsApp", and hears a greeting twice.
+            const vc = require('./helpers/voiceClaims');
+            const stripped = vc.normalizeHeard(stripAgentName(text));
+
+            // ── NOISE IS NOT A QUESTION ──────────────────────────────────
+            // "or or or" (her recording, 2026-09-20) went to the model and
+            // came back "I cannot answer that question with the data
+            // provided". A capture made only of filler words is treated as
+            // nothing heard.
+            if (vc.isNoise(stripped)) {
+                console.log(`[VOICE] "${stripped}" is noise — not asking anyone`);
+                return res.json({ ok: true, agent: route.agent, agent_name: agent.name, voice: agent.voice,
+                    routed_because: 'noise', answer: "Didn't catch that.", spoken: 'Sorry?', cards: null, awaiting: false });
+            }
+            // Does the brain own this sentence outright — the briefing, her
+            // inbox, urgent cutoffs, a Metals report? Then the bookings
+            // machinery below (follow-up answerer, booking query, "which
+            // port?") stands aside. Measured: with a Houston list on screen,
+            // "what needs my attention" was answered as a follow-up about
+            // that list, and "is there any mail" was asked which port.
+            const brainOwns = route.agent === 'jarvis' ? vc.brainOwns(stripped) : null;
+            if (brainOwns) console.log(`[VOICE] "${stripped}" belongs to the brain (${brainOwns}) — bookings panel stands aside`);
 
             // Is she half-way through a proforma? Checked FIRST: her answers
             // to its questions ("Daekwang", "never mind") belong to the
@@ -2947,7 +2969,7 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
             // first. Facts veto; the model refines.
             const acEarly = require('./helpers/answerCards');
             const looksLikeOrder = rewrittenAsOrder || acEarly.IS_INSTRUCTION.test(stripped);
-            const quick = (answeringBrain || looksLikeOrder)
+            const quick = (answeringBrain || looksLikeOrder || brainOwns)
                 ? null            // her answer belongs to whoever asked
                 : await fu.answer(asked, refSet, ref.resolved && ref.resolved.row);
             if (looksLikeOrder && refSet) {
@@ -3001,7 +3023,7 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
             // follow-up anyway, so the instruction was built and thrown away.
             const isOrder = rewrittenAsOrder || ac.IS_INSTRUCTION.test(stripped);
             const patternSaysFollowUp = ac.isFollowUp(stripped, refSet);
-            const followingUp = !answeringBrain && !isOrder && (
+            const followingUp = !answeringBrain && !isOrder && !brainOwns && (
                 !!ref.resolved
                 || (patternSaysFollowUp && modelSaysRows !== false)
             );
@@ -3146,7 +3168,7 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
                 catch (e) { console.warn('[VOICE] booking-request veto check failed:', e.message); }
                 if (askingSomeone) console.log(`[VOICE] "${String(asked).slice(0, 60)}" names someone to ask — not a query`);
 
-                if (answeringBrain || rewrittenAsOrder || askingSomeone) {
+                if (answeringBrain || rewrittenAsOrder || askingSomeone || brainOwns) {
                     cards = null;
                 } else if (followingUp && !answeringPort) {
                     cards = null;
@@ -5646,6 +5668,61 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
             res.json({ ok: true });
         } catch (e) {
             res.status(400).json({ error: e.message });
+        }
+    });
+
+    // ══ MOVE A WHOLE GROUP ══════════════════════════════════════════════════
+    //
+    // Apsara, 2026-09-20, looking at six unrelated suppliers filed under a
+    // group called GMAIL.COM — one of them marked PRIMARY, so a bare company
+    // mention resolved to a scrap dealer and the other five were auto-cc'd on
+    // whatever went to any of them: "give an option to move it to diff
+    // domain."
+    //
+    // The Edit panel already moves ONE contact (2026-09-20, her "if i want to
+    // change the domain-??"). Six contacts is six rounds of open, clear, save,
+    // and the sixth is the one that gets forgotten — which leaves the group
+    // half-dismantled and still auto-ccing.
+    //
+    // An EMPTY domain ungroups them: each becomes a person on their own. That
+    // is the answer for the case that produced the question, because
+    // gmail.com is not a company and nobody there is anybody's colleague.
+    //
+    // ── IT GOES THROUGH updateContact, ONE AT A TIME ────────────────────────
+    // Not a bulk rewrite of the file. updateContact already validates the
+    // domain, refuses an invented role, drops an orphaned role when the group
+    // goes, and demotes an incumbent primary. A faster loop that wrote the
+    // store directly would be a second copy of all four rules.
+    app.post('/api/email-contacts/regroup', requireAdmin, async (req, res) => {
+        try {
+            const ec = require('./helpers/emailContacts');
+            const body = req.body || {};
+            const names = Array.isArray(body.names) ? body.names : [];
+            if (!names.length) return res.status(400).json({ error: 'no contacts named' });
+
+            // Empty string is a REAL value here — it means "no group" — so it
+            // must be distinguishable from the field being absent.
+            const domain = body.domain === undefined || body.domain === null
+                ? null : String(body.domain).trim();
+            if (domain === null) return res.status(400).json({ error: 'domain is required (empty string to ungroup)' });
+
+            const moved = [], skipped = [];
+            for (const name of names) {
+                try {
+                    // role is deliberately NOT carried across. A "primary" of
+                    // gmail.com means nothing once it is a member of a real
+                    // company, and guessing which of six should lead it is
+                    // the sort of guess proposeDomainRoles refuses to make.
+                    await ec.updateContact(String(name), { domain, role: '' });
+                    moved.push(String(name));
+                } catch (e) {
+                    skipped.push({ name: String(name), why: e.message });
+                }
+            }
+            res.json({ ok: true, moved, skipped, domain: domain || null });
+        } catch (e) {
+            console.error('[email-contacts] regroup failed:', e && e.stack);
+            res.status(500).json({ error: e.message });
         }
     });
 

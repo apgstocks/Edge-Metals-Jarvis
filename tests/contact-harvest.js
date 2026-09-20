@@ -424,6 +424,121 @@ section('E. end to end: scan, pick, save');
     listener.close();
 }
 
+// ── E2. MOVING A WHOLE GROUP ────────────────────────────────────────────────
+// Apsara, 2026-09-20, looking at six unrelated suppliers filed under a group
+// called GMAIL.COM — one of them marked PRIMARY, so a bare company mention
+// resolved to a scrap dealer and the other five were auto-cc'd on whatever
+// went to any of them: "give an option to move it to diff domain."
+//
+// The Edit panel moves ONE contact. Six is six rounds of open, clear, save,
+// and the sixth is the one that gets forgotten — leaving the group
+// half-dismantled and still auto-ccing.
+section('E2. six at once, not six times');
+{
+    const { createApi } = require(path.join(ROOT, 'api'));
+    const app = createApi();
+    const listener = await new Promise((r) => { const s = app.listen(0, '127.0.0.1', () => r(s)); });
+    const base = `http://127.0.0.1:${listener.address().port}`;
+    const call = (method, p2, sid2, body) => new Promise((resolve, reject) => {
+        const dd = body === undefined ? null : JSON.stringify(body);
+        const headers = {};
+        if (sid2) headers.Authorization = `Bearer ${sid2}`;
+        if (dd) { headers['Content-Type'] = 'application/json'; headers['Content-Length'] = Buffer.byteLength(dd); }
+        const r = http.request(base + p2, { method, headers }, (res) => {
+            let raw = ''; res.on('data', (c) => { raw += c; });
+            res.on('end', () => { let j = null; try { j = JSON.parse(raw); } catch (e) {}
+                resolve({ status: res.statusCode, json: j, raw }); });
+        });
+        r.on('error', reject); if (dd) r.write(dd); r.end();
+    });
+    const sid3 = ((await call('POST', '/login', null, { password: 'admin-pw-hhhhhhhhhhhh' })).json || {}).sid;
+
+    // Her screenshot, near enough: a consumer provider treated as a company,
+    // with somebody marked primary.
+    await emailContacts.addContact('alscrap01', 'alscrap01@gmail.com',
+        { domain: 'gmail.com', role: 'primary', displayName: 'Aluminium Scrap' });
+    await emailContacts.addContact('gardunoslogistics', 'gardunoslogistics@gmail.com',
+        { domain: 'gmail.com', role: 'shared', displayName: 'Maria Fernanda Garduno' });
+    await emailContacts.addContact('brayangonzalez036', 'brayangonzalez036@gmail.com',
+        { domain: 'gmail.com', role: 'shared', displayName: 'Brayan Calderon' });
+
+    // ── EMPTY MEANS UNGROUP, AND THAT IS THE ANSWER HERE ────────────────
+    const r = await call('POST', '/api/email-contacts/regroup', sid3, {
+        names: ['alscrap01', 'gardunoslogistics', 'brayangonzalez036'], domain: '' });
+    ck('the whole group moves in one call', r.status === 200 && (r.json || {}).moved.length === 3,
+       `${r.status} ${r.raw.slice(0, 160)}`);
+
+    const after = emailContacts.loadContacts();
+    const three = after.filter((c) => /@gmail\.com$/.test(c.email));
+    ck('  nobody is left in a gmail.com group',
+       three.every((c) => c.domain === undefined), JSON.stringify(three.map((c) => c.domain)));
+    ck('  and the orphaned roles went with it',
+       three.every((c) => c.role === undefined), JSON.stringify(three.map((c) => c.role)));
+    ck('  so no two of them auto-cc each other any more',
+       three.every((c) => !c.domain),
+       'that is what a domain group MEANS — six strangers copied on each other');
+    ck('  while the contacts themselves survive',
+       three.length === 3 && three.every((c) => c.email && c.name),
+       JSON.stringify(three.map((c) => c.name)));
+    ck('  keeping their real display names',
+       (after.find((c) => c.name === 'alscrap01') || {}).displayName === 'Aluminium Scrap',
+       'delete-and-retype was the old way, and it lost exactly this');
+
+    // ── OR MOVED SOMEWHERE REAL, STILL CARRYING THEIR OLD ROLES ─────────
+    // A FRESH pair, still in gmail.com with roles intact. The first version
+    // of this reused the three above — which had already been ungrouped, so
+    // their roles were gone and a mutation that carried roles across had
+    // nothing to carry. The check passed while testing nothing.
+    await emailContacts.addContact('mmazariegos386', 'mmazariegos386@gmail.com',
+        { domain: 'gmail.com', role: 'primary' });
+    await emailContacts.addContact('jose.drmironandmetal', 'jose.drmironandmetal@gmail.com',
+        { domain: 'gmail.com', role: 'shared', displayName: 'Jose Martinez' });
+    ck('(the fixture really does have roles to lose)',
+       (emailContacts.loadContacts().find((c) => c.name === 'mmazariegos386') || {}).role === 'primary');
+
+    await call('POST', '/api/email-contacts/regroup', sid3, {
+        names: ['mmazariegos386', 'jose.drmironandmetal'], domain: 'drmiron.example' });
+    const moved = emailContacts.loadContacts().filter((c) => c.domain === 'drmiron.example');
+    ck('they can be moved to a real company instead', moved.length === 2,
+       JSON.stringify(moved.map((c) => c.name)));
+    ck('  and NOBODY arrives carrying an old role',
+       moved.every((c) => c.role === undefined),
+       '"primary of gmail.com" means nothing once they are somewhere real, and '
+       + 'guessing which of six should lead is the guess proposeDomainRoles refuses');
+    ck('  so the new group has no primary until she picks one',
+       !moved.some((c) => c.role === 'primary'),
+       'a primary inherited from a mail provider is a guess wearing a badge');
+
+    // ── REFUSALS ────────────────────────────────────────────────────────
+    const bad = await call('POST', '/api/email-contacts/regroup', sid3,
+        { names: ['alscrap01'], domain: 'not a domain' });
+    ck('a malformed domain is reported per contact, not thrown',
+       bad.status === 200 && (bad.json || {}).skipped.length === 1
+       && /does not look like a domain/.test(bad.json.skipped[0].why),
+       bad.raw.slice(0, 200));
+    // alscrap01 was ungrouped above and the malformed attempt must leave it
+    // exactly there — a refusal that half-applies is worse than one that
+    // does nothing, because nothing on screen says which half.
+    ck('  and nothing moved',
+       (emailContacts.loadContacts().find((c) => c.name === 'alscrap01') || {}).domain === undefined,
+       JSON.stringify(emailContacts.loadContacts().find((c) => c.name === 'alscrap01')));
+
+    ck('an unknown name is skipped, not fatal to the rest',
+       (await call('POST', '/api/email-contacts/regroup', sid3,
+           { names: ['nobody-here', 'alscrap01'], domain: '' })).json.moved.length === 1,
+       'one bad name must not cost her the other five');
+    ck('an empty list is a 400', 
+       (await call('POST', '/api/email-contacts/regroup', sid3, { names: [], domain: '' })).status === 400);
+    ck('  and an absent domain is too, because empty STRING means something',
+       (await call('POST', '/api/email-contacts/regroup', sid3, { names: ['x'] })).status === 400,
+       'omitting the field and clearing it are different instructions');
+    ck('an unauthenticated caller cannot regroup her address book',
+       [401, 403].includes((await call('POST', '/api/email-contacts/regroup', null,
+           { names: ['alscrap01'], domain: '' })).status));
+
+    listener.close();
+}
+
 // ── F. THE SCREEN ───────────────────────────────────────────────────────────
 section('F. the button is where she was looking');
 {
@@ -440,6 +555,15 @@ section('F. the button is where she was looking');
     ck('  a row with no name cannot be saved silently',
        /no name — type one or untick it/.test(src),
        'guessing a label is what produced "Dear export"');
+    ck('every group can be moved in one go',
+       /btn-regroup/.test(src) && /Move all \$\{members\.length\}/.test(src),
+       'six rounds of open-clear-save is how the sixth gets forgotten');
+    ck('  Cancel and an empty box are told apart',
+       /if \(to === null\) return;/.test(src),
+       "prompt() gives null for Cancel and '' for empty OK — '' means ungroup");
+    ck('  and a consumer provider says so on its header',
+       /is a mail provider, not a company/.test(src),
+       'a group headed GMAIL.COM is six strangers who auto-cc each other');
     ck('  the edit panel lets her change the group',
        /class="ec-domain"/.test(src) && /class="ec-role"/.test(src),
        'it used to say "that stays as it is"');
