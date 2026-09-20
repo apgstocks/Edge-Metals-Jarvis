@@ -2506,6 +2506,66 @@ section('WAKE — the on-device "Hey Jarvis" model (2026-09-20)');
     ck('no wake model on the page (old browser, blocked CDN): voice still works', b.w.JarvisVoice.state().enabled);
 }
 
+section('ECHO — one "Hey Jarvis", one wake (her recording, 2026-09-20 17:13)');
+{
+    // She said "Hey Jarvis, what needs my reply". The transcript woke Jarvis;
+    // the model, a beat behind, fired twice more on the same words — three
+    // acknowledgements, two fresh captures, over the answer.
+    let release = null;
+    const b = browser({
+        before: (w) => { w.JarvisWake = { onwake: null, start() { return Promise.resolve('on'); }, stop() {}, deafFor() {} }; },
+        reply: () => ({ answer: 'Checked 0 new emails.', __wait: true }),
+    });
+    await new Promise((r) => setTimeout(r, 30));
+    // Hold the answer in the air, as the real server does for a few seconds.
+    const realApi = b.w.api;
+    b.w.api = (p, o) => /voice\/ask/.test(p)
+        ? new Promise((res) => { release = () => res(realApi(p, o)); })
+        : realApi(p, o);
+    b.w.JarvisVoice.dispatch('USER_TOGGLE');
+    b.mic() && b.mic().hear('hey jarvis');                 // the TRANSCRIPT wake
+    await new Promise((r) => setTimeout(r, 20));
+    const acks0 = b.w.__playedRates.length;
+    b.w.JarvisWake.onwake(0.9);                            // the model, 1 beat late, same words
+    ck('a model fire right after a transcript wake is the SAME "Hey Jarvis" — no second acknowledgement',
+       b.w.__playedRates.length === acks0, `${acks0} -> ${b.w.__playedRates.length}`);
+    b.mic() && b.mic().hear('hey jarvis what needs my reply');
+    b.w.JarvisVoice.finish();
+    await new Promise((r) => setTimeout(r, 20));
+    b.w.JarvisWake.onwake(0.95);                           // fires again while the answer is in the air
+    ck('a model fire while her question is being answered opens NO new capture',
+       !b.w.JarvisVoice.state().capturing && b.w.__playedRates.length === acks0, JSON.stringify(b.w.JarvisVoice.state()));
+    // Past the 4 s echo window, the answer still in the air: only the
+    // in-flight guard stands between this fire and a stray capture.
+    await new Promise((r) => setTimeout(r, 4200));
+    b.w.JarvisWake.onwake(0.95);
+    ck('  even 4 s later, while the answer is still coming — no new capture',
+       !b.w.JarvisVoice.state().capturing && b.w.__playedRates.length === acks0, JSON.stringify(b.w.JarvisVoice.state()));
+    release && release();
+    await new Promise((r) => setTimeout(r, 40));
+    ck('  and the answer is spoken', b.log.spoken.some((t) => /Checked 0 new emails/.test(t)), JSON.stringify(b.log.spoken));
+    ck('  one question asked, once', b.log.asked.length === 1 && /what needs my reply/.test(b.log.asked[0]), JSON.stringify(b.log.asked));
+}
+
+{
+    // Isolates the echo window: the transcript wake's capture closes with
+    // nothing in it, so Jarvis is idle — and the model's late fire on the
+    // same words must still not start a second capture.
+    const b = browser({ before: (w) => { w.JarvisWake = { onwake: null, start() { return Promise.resolve('on'); }, stop() {}, deafFor() {} }; } });
+    await new Promise((r) => setTimeout(r, 30));
+    b.w.JarvisVoice.dispatch('USER_TOGGLE');
+    b.mic() && b.mic().hear('hey jarvis');
+    await new Promise((r) => setTimeout(r, 10));
+    b.w.JarvisVoice.finish();                                // nothing said after the name
+    await new Promise((r) => setTimeout(r, 10));
+    const idle = !b.w.JarvisVoice.state().capturing;
+    const acks = b.w.__playedRates.length;
+    b.w.JarvisWake.onwake(0.9);
+    ck('(idle again)', idle);
+    ck('the model echoing a wake that already happened does not start another', !b.w.JarvisVoice.state().capturing && b.w.__playedRates.length === acks,
+       JSON.stringify(b.w.JarvisVoice.state()));
+}
+
 section('TURN — ending on how the sentence ends, not the clock (2026-09-20)');
 {
     const withTurn = (verdict) => (w) => {

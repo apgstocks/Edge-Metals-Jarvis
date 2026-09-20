@@ -4821,32 +4821,59 @@ async function showPendingReplies(chatId) {
         // them. Say the honest count here too, not just in the automatic
         // digest, since this is the direct answer to her asking "what's
         // outstanding" — silence about the backlog is the whole bug.
-        const older = Math.max(0, (result.backlogCount || 0) - (result.items ? result.items.length : 0));
-        const backlogNote = older > 0
-            ? `
-
-(+${older} older item${older === 1 ? '' : 's'} still open from before this check — they'll get chased if they sit too long, but I don't have a "list them all" view yet.)`
-            : '';
-        if (!result.items || !result.items.length) {
-            const base = `Checked ${result.checked} new email${result.checked === 1 ? '' : 's'} — nothing new waiting on a reply from you.`;
-            await _send(chatId, base + backlogNote);
+        // ── EVERYTHING STILL OPEN, NOT JUST WHAT IS NEW ──────────────────
+        // Apsara's recording, 2026-09-20 17:13: "what needs my reply" →
+        // "Checked 0 new emails — nothing new … (+13 older items still open
+        // … I don't have a 'list them all' view yet.)". Jarvis knew about
+        // thirteen emails waiting on her and would not name one. Asked where
+        // to fix it: "Voice and WhatsApp".
+        //
+        // So the older items still TRACKED (replyWatch drops them once she
+        // replies, or after the chase limit) are listed after the new ones,
+        // numbered in ONE sequence, and that same sequence becomes
+        // lastDigest — so "reply to 12" and "explain 12" resolve to the line
+        // she is reading. New items first; then the backlog, longest-waiting
+        // first. On voice only a count is spoken; the list is on screen.
+        const newItems = result.items || [];
+        const store = await loadStore();
+        const newIds = new Set(newItems.map((x) => x && x.id).filter(Boolean));
+        const newThreads = new Set(newItems.map((x) => x && x.threadId).filter(Boolean));
+        const olderItems = (store.tracked || [])
+            .filter((t) => t && !newIds.has(t.id) && !(t.threadId && newThreads.has(t.threadId)))
+            .sort((a, b) => String(a.firstFlaggedAt || '').localeCompare(String(b.firstFlaggedAt || '')))
+            .map((t) => Object.assign({}, t, {
+                needs_reply: (t.waiting_on || 'her') === 'her',
+                from_backlog: true,
+            }));
+        if (!newItems.length && !olderItems.length) {
+            await _send(chatId, `Checked ${result.checked} new email${result.checked === 1 ? '' : 's'} — nothing new waiting on a reply from you.`);
+            require('../helpers/wa-state').sayAloud('Nothing is waiting on a reply from you.');
             return { action_taken: 'pending_replies_none' };
         }
-        // REAL BUG fixed alongside the backlog note above (2026-08-25): this
-        // path never grouped items into matters (the automatic digest does,
-        // via groupMatters) and never updated store.lastDigest — so the
-        // numbers she saw here meant nothing to "reply to N"/"ignore N",
-        // which resolve against whatever the LAST AUTOMATIC digest set
-        // lastDigest to. A "reply to 1" typed right after asking "which
-        // needs my reply" could silently act on a completely different,
-        // stale email. Group and persist exactly like the automatic path so
-        // the numbers she is looking at are the numbers that resolve.
-        const grouped = groupMatters(result.items);
-        const store = await loadStore();
-        store.lastDigest = grouped;
+        // REAL BUG fixed alongside the backlog note (2026-08-25): this path
+        // never grouped items into matters and never updated lastDigest — so
+        // the numbers she saw here meant nothing to "reply to N"/"ignore N".
+        // Grouped and persisted exactly like the automatic path.
+        //
+        // lastDigestAt too (2026-09-20): resolveDigestIndex refuses a digest
+        // older than 12 hours, and this path never stamped it — so numbers
+        // from an on-demand check could be refused as "stale" the moment the
+        // last AUTOMATIC digest was half a day old.
+        const grouped = newItems.length ? groupMatters(newItems) : [];
+        const all = grouped.concat(olderItems);
+        store.lastDigest = all;
+        store.lastDigestAt = new Date().toISOString();
         await saveStore(store);
-        await _send(chatId, buildDigest(grouped, result.items.length) + backlogNote);
-        return { action_taken: 'pending_replies_reported', count: result.items.length };
+        const head = newItems.length
+            ? `Checked ${result.checked} new email${result.checked === 1 ? '' : 's'} — ${newItems.length} new, plus ${olderItems.length} still open from before.`
+            : `Checked ${result.checked} new email${result.checked === 1 ? '' : 's'} — nothing new. Still open from before:`;
+        await _send(chatId, (olderItems.length ? head + '\n\n' : '') + buildDigest(all, all.length));
+        const owedByHer = all.filter((f) => f.needs_reply !== false && (f.waiting_on || 'her') === 'her').length;
+        const waiting = owedByHer || all.length;
+        require('../helpers/wa-state').sayAloud(newItems.length
+            ? `${newItems.length} new, and ${waiting} in all waiting on you — they're on screen.`
+            : `Nothing new. ${waiting} ${waiting === 1 ? 'email is' : 'emails are'} still waiting on you — they're on screen.`);
+        return { action_taken: 'pending_replies_reported', count: newItems.length, open: all.length };
     } catch (err) {
         console.error('[ACTIONS] showPendingReplies failed:', err.message);
         await _send(chatId, `Couldn't check the inbox: ${err.message}`);

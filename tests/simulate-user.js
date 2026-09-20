@@ -375,8 +375,11 @@ function dbg(r) { if (r.threw) console.log(`  >>> threw: ${r.threw.stack}`); }
         const r15b = await turn('Apsara', MANAGER_CHAT, MANAGER_NUM, 'which needs my reply');
         reply(r15b); dbg(r15b);
         const text15b = r15b.replies[0]?.text || '';
-        ck('S15b second check -> flags Whittaker (not Tiffany again), no crash', !r15b.threw && /whittaker/i.test(text15b) && !/tiffany/i.test(text15b));
-        ck('S15c second check HONESTLY notes Tiffany is still open, not silently dropped', /older item.*still open/i.test(text15b));
+        // Spec changed 2026-09-20 by Apsara ("Voice and WhatsApp" — list every
+        // open item, numbered). Tiffany used to be a count-only note; she is
+        // now LISTED after the new item, so "reply to 2" reaches her.
+        ck('S15b second check -> Whittaker is #1 (the new one), no crash', !r15b.threw && /(^|\n)\s*1\. [^\n]*whittaker/i.test(text15b));
+        ck('S15c second check LISTS Tiffany as still open, after the new item', /1 still open from before/i.test(text15b) && /(^|\n)\s*2\. [\s\S]*tiffany/i.test(text15b));
 
         // What "reply to 1"/"ignore 1" actually resolve against is
         // store.lastDigest, read via replyWatch's own resolveDigestIndex —

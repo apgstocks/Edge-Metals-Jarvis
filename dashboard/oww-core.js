@@ -46,7 +46,7 @@
         if (typeof o.run !== 'function') throw new Error('OwwCore needs run(name, data, dims)');
         this.run = o.run;
         this.threshold = o.threshold == null ? 0.5 : o.threshold;
-        this.debounceMs = o.debounceMs == null ? 1500 : o.debounceMs;
+        this.debounceMs = o.debounceMs == null ? 3000 : o.debounceMs;   // one phrase scores high for ~1.5 s
         this.wwName = o.wakeModel || 'wake';
         this.reset();
     }

@@ -911,7 +911,23 @@
         }
         else W.stop();
     }
+    // ── ONE "HEY JARVIS", ONE WAKE ───────────────────────────────────────
+    // Her recording, 2026-09-20 17:13: "Hey Jarvis, what needs my reply" —
+    // the transcript woke Jarvis first, she asked, and then the model, a beat
+    // behind, fired on the SAME "Hey Jarvis" twice more. Each opened a new
+    // capture and played the acknowledgement: three "Yes, boss?" for one
+    // question, the last two over the answer she was waiting for. So a model
+    // fire is ignored for WAKE_ECHO_MS after any wake, and while her question
+    // is still being answered.
+    var WAKE_ECHO_MS = 4000;
+    var lastWakeAt = 0;
+    var askInFlight = false;
     function wakeFromModel(score) {
+        if (Date.now() - lastWakeAt < WAKE_ECHO_MS) {
+            console.log('[VOICE] wake model fired ' + (Date.now() - lastWakeAt) + 'ms after a wake — same "Hey Jarvis", ignored');
+            return;
+        }
+        if (askInFlight) { console.log('[VOICE] wake model fired while your question is being answered — ignored'); return; }
         if (!state.enabled || !state.foreground) {
             console.log('[VOICE] wake model fired but voice is ' + (state.enabled ? 'in the background' : 'off') + ' — ignored');
             return;
@@ -926,7 +942,7 @@
             answerTheName('hey jarvis'); return;
         }
         addressed = 'jarvis';
-        spokenName = true;
+        spokenName = true; lastWakeAt = Date.now();
         console.log('[VOICE] Jarvis — heard by the wake model (' + (score || 0).toFixed(2) + '), listening for your command');
         dispatch('WAKE_HEARD');
     }
@@ -1537,7 +1553,7 @@
                 // The pin below needs that difference: a name spoken out loud
                 // is more specific than a setting flipped an hour ago, and
                 // only an explicit address may override the pin.
-                spokenName = true;
+                spokenName = true; lastWakeAt = Date.now();
                 console.log('[VOICE] ' + AGENT_LOOK[addressed].name
                     + ' — listening for your command');
                 dispatch('WAKE_HEARD');
@@ -2417,8 +2433,10 @@
         // never touches the control.
         var askAgent = (pinnedAgent === 'auto' || spokenName) ? addressed : pinnedAgent;
         spokenName = false;   // it belonged to THIS question only
+        askInFlight = true;
         api('/api/voice/ask', { method: 'POST', body: JSON.stringify({ text: q, agent: askAgent }) })
             .then(function (r) {
+                askInFlight = false;
                 // STALE. She interrupted, or asked something else, while this
                 // was in the air. Everything below paints the screen and
                 // speaks, so returning here is the difference between "shut
@@ -2508,6 +2526,7 @@
                 }
             })
             .catch(function (e) {
+                askInFlight = false;
                 // Same guard. A request that fails AFTER she said "shut up"
                 // must not put "Failed" on a screen she has moved on from —
                 // the error belongs to a question she retracted.
