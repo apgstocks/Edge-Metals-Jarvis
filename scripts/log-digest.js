@@ -88,69 +88,11 @@ try { audit = logDigest.decisions(fs.readFileSync(path.join(LOGS, `${DAY}.jsonl`
 catch (e) { /* a day with no decisions is a quiet day, not an error */ }
 
 // ── THE REPORT ──────────────────────────────────────────────────────────────
-say('');
-say(`  JARVIS — ${DAY}`);
-say(bar());
-say(`  log lines read        ${d.lines_considered}`);
-say(`  distinct problems     ${d.distinct_problems}`);
-say(`  total occurrences     ${d.total_occurrences}`);
-say(`  NEW since ${dayBefore}   ${d.new_today}`);
-if (Object.keys(d.by_kind).length) {
-    say('');
-    for (const [k, n] of Object.entries(d.by_kind).sort((a, b) => b[1] - a[1])) {
-        say(`  ${k.padEnd(18)} ${n}`);
-    }
-}
-
-if (!d.distinct_problems) {
-    say('');
-    say('  Nothing errored, nothing fell back silently. A clean day.');
-} else {
-    const shown = has('full') ? d.items : d.items.slice(0, 15);
-    say('');
-    say('  WORST FIRST');
-    say(bar());
-    for (const i of shown) {
-        const tag = i.is_new ? ' ← NEW' : '';
-        say('');
-        say(`  [${i.kind}] x${i.count}${tag}`);
-        say(`      ${i.why}`);
-        say(`      first ${i.first || '?'}   last ${i.last || '?'}   (${i.file})`);
-        say(`      ${i.sample.replace(/\s+/g, ' ').slice(0, 180)}`);
-        if (i.frame) say(`      ${i.frame}`);
-    }
-    if (!has('full') && d.items.length > shown.length) {
-        say('');
-        say(`  … and ${d.items.length - shown.length} more — run with --full`);
-    }
-}
-
-// ── TIMINGS ─────────────────────────────────────────────────────────────────
-// helpers/pdfTiming.js has printed these since 2026-09-16 and nothing has
-// ever read one, so "why is generating slow today" has never been answerable
-// from data.
-if (t.length) {
-    say('');
-    say('  DOCUMENT GENERATION');
-    say(bar());
-    for (const x of t) {
-        say(`  ${x.label.padEnd(26)} n=${String(x.count).padStart(3)}  `
-          + `median ${String(x.median).padStart(5)}ms   max ${String(x.max).padStart(6)}ms   `
-          + `${x.total_s}s total`);
-    }
-}
-
-// ── WHAT THE ASSISTANT DID ──────────────────────────────────────────────────
-if (audit.intents.length) {
-    say('');
-    say('  DECISIONS');
-    say(bar());
-    for (const i of audit.intents.slice(0, 12)) {
-        const by = Object.entries(i.resolvedBy).map(([k, n]) => `${k}=${n}`).join(' ');
-        say(`  ${i.intent.padEnd(28)} ${String(i.count).padStart(4)}   ${by}`);
-    }
-    if (audit.unparsed) say(`  (${audit.unparsed} unreadable line(s) in the audit log)`);
-}
+// Rendered by helpers/logDigest.js, not here: scheduler.js emails the same
+// string every morning, and two renderers would drift. The day they drift is
+// the day the email says something this script does not, with no way to tell
+// which is right.
+console.log(logDigest.render({ day: DAY, dayBefore, d, timings: t, audit, full: has('full') }));
 
 // ── AND ONLY THEN, AN OPINION ───────────────────────────────────────────────
 // Given the grouped facts above and nothing else — not the raw log, which is

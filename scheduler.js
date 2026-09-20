@@ -324,6 +324,95 @@ async function stallWatch() {
     }
 }
 
+// ── 7AM — YESTERDAY, AS THE LOGS SAW IT ──────────────────────────────────────
+// Apsara, 2026-09-20: "I want to have an agent which reads all the logs and
+// suggest improvements next day", and, asked where it should land: email.
+//
+// Seven, so it is already sitting there before the 8am digest rather than
+// arriving in the middle of her morning.
+//
+// ── WHY THIS EXISTS AT ALL ───────────────────────────────────────────────────
+// On 2026-09-19 every email with an attachment threw — three separate send
+// paths — while 134 test files were green. The error was in pm2-error.log the
+// first time anyone pressed Send. Nobody reads that file; she found it by
+// using the app and reading the message back to me.
+//
+// ── IT SENDS ON A CLEAN DAY TOO, AND THAT IS DELIBERATE ──────────────────────
+// A report that only arrives when something is wrong is one whose absence
+// means either "fine" or "the job is broken", and those are not the same
+// thing. The SUBJECT carries the verdict — "clean", "3 new problems", "2
+// POSSIBLE LOST WRITES" — so a clean day costs her one glance at a subject
+// line and never needs opening.
+async function nightlyLogDigest() {
+    const path = require('path');
+    const fs = require('fs');
+    const logDigest = require('./helpers/logDigest');
+    const cfg = require('./config');
+    const { getLADate } = require('./helpers/time');
+
+    // Yesterday in LA, like every other date decision here. On UTC this job
+    // would report half of two days and head it with one date.
+    const d0 = getLADate();
+    d0.setDate(d0.getDate() - 1);
+    const DAY = `${d0.getFullYear()}-${String(d0.getMonth() + 1).padStart(2, '0')}-${String(d0.getDate()).padStart(2, '0')}`;
+    const prevDate = new Date(`${DAY}T12:00:00Z`);
+    prevDate.setUTCDate(prevDate.getUTCDate() - 1);
+    const dayBefore = prevDate.toISOString().slice(0, 10);
+
+    const LOGS = cfg.LOGS_DIR || path.join(cfg.DATA_DIR, 'logs');
+    const lines = logDigest.readLines([path.join(LOGS, 'pm2-out.log'), path.join(LOGS, 'pm2-error.log')]);
+    if (!lines.length) {
+        console.log('[SCHED] log-digest: no pm2 logs to read — skipping');
+        return;
+    }
+
+    const prev = logDigest.digest(lines, { onDay: dayBefore });
+    const d = logDigest.digest(lines, { onDay: DAY, previousSignatures: prev.items.map((i) => i.sig) });
+    const timings = logDigest.timings(lines, { onDay: DAY });
+    let audit = { intents: [], unparsed: 0 };
+    try { audit = logDigest.decisions(fs.readFileSync(path.join(LOGS, `${DAY}.jsonl`), 'utf8')); } catch (e) {}
+
+    // The FULL list by email. The 15-row cap exists so a terminal stays
+    // readable; an email has a scrollbar, and the row she needs is as likely
+    // to be the sixteenth as the first.
+    const body = logDigest.render({ day: DAY, dayBefore, d, timings, audit, full: true });
+    const subject = logDigest.subjectFor(DAY, d);
+
+    // ── WHERE IT GOES ────────────────────────────────────────────────────
+    // ALERT_EMAIL_TO when it is configured, her own sending address
+    // otherwise — RESOLVED, never assumed. helpers/gmail.js carries a long
+    // note about the fortnight its comments claimed one mailbox while all
+    // three tokens pointed at another.
+    const gmail = require('./helpers/gmail');
+    let to = cfg.ALERT_EMAIL_TO || '';
+    if (!to) {
+        try { to = await gmail.getMyEmailAddress(gmail.getGmailWrite()); } catch (e) {}
+    }
+    if (!to) {
+        console.warn('[SCHED] log-digest: no destination (set ALERT_EMAIL_TO) — not sent');
+        return;
+    }
+
+    // ── MONOSPACE, OR THE COLUMNS ARE NOISE ──────────────────────────────
+    // Every mail Jarvis sends now carries an HTML half derived from the
+    // plain text (2026-09-19), and that default renders in Arial with
+    // pre-wrap — right for a letter to a buyer, wrong for a report whose
+    // meaning is in its alignment. This is the caller that supplies its own.
+    const bodyHtml = '<div style="font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;'
+                   + 'font-size:12px;line-height:1.45;white-space:pre;color:#202124;">'
+                   + gmail.escapeHtmlText(body) + '</div>';
+
+    try {
+        await gmail.sendEmail({ to, subject, body, bodyHtml });
+        console.log(`[SCHED] log-digest: ${subject} → ${to}`);
+    } catch (e) {
+        // A failed report must not take the scheduler down with it, and must
+        // not be silent either — that would make this job an instance of the
+        // exact problem it exists to find.
+        console.error('[SCHED] log-digest: could not send:', e.message);
+    }
+}
+
 // ── 11PM — auto-archive (cutoff passed yesterday, no ingate, not kept) ────────
 // Multi-container rule: archive only if ALL containers are in a terminal stage.
 // If /1 is ingated but /2 is still forwarded, the booking stays active so ops
@@ -1045,6 +1134,7 @@ function start() {
     cron.schedule('0 9-17 * * *', () => stallWatch().catch(e => console.error('[SCHED] stall:', e)),     TZ);
     cron.schedule('0 6 * * *',    () => pricelistFallback().catch(e => console.error('[SCHED] pricelist:', e)), TZ);
     cron.schedule('0 23 * * *',   () => autoArchive().catch(e => console.error('[SCHED] archive:', e)),  TZ);
+    cron.schedule('0 7 * * *',    () => nightlyLogDigest().catch(e => console.error('[SCHED] log-digest:', e)), TZ);
     cron.schedule('45 22 * * *',  () => nightlyCutoffBackfill().catch(e => console.error('[SCHED] cutoff-backfill:', e)), TZ);
     cron.schedule('* * * * *',    () => taskRunner().catch(e => console.error('[SCHED] tasks:',  e)),    TZ);
     cron.schedule('*/5 * * * *',  () => quoteEmailReplyWatch().catch(e => console.error('[SCHED] quote-email-poll:', e)), TZ);
@@ -1128,4 +1218,9 @@ function start() {
     console.log('[SCHED] Jobs registered (8AM digest, 8:15AM trucker-check, hourly urgent+stall 9-17, 6AM pricelist, 11PM archive, 2AM data backup, 3:30AM fact backup, 15-min email watcher, minute task-runner, 8PM ET yard report — LA time unless noted)');
 }
 
-module.exports = { init, start, morningDigest, urgentWatch, autoArchive, taskRunner, pricelistFallback, eodYardReport, buildYardReportText };
+// nightlyLogDigest is exported so tests/log-digest.js can RUN it against a
+// stubbed mailer rather than grepping this file for the shape of the call.
+// Two checks that only grepped survived a mutation — one that truncated the
+// email to 15 rows, one that dropped the monospace html — because the words
+// they matched were still sitting in the comments.
+module.exports = { init, start, morningDigest, urgentWatch, autoArchive, taskRunner, pricelistFallback, eodYardReport, buildYardReportText, nightlyLogDigest };

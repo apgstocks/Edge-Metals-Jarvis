@@ -257,4 +257,91 @@ function decisions(jsonlText) {
     };
 }
 
-module.exports = { signature, classify, digest, timings, decisions, readLines, KINDS, TS };
+// ── THE REPORT, IN ONE PLACE ────────────────────────────────────────────────
+// scripts/log-digest.js prints it; scheduler.js emails it. Two renderers
+// would drift, and the day they drift is the day the morning email says
+// something the script does not — with no way to tell which is right.
+//
+// Plain text on purpose. It is read in a terminal and in an email, and the
+// columns line up in both as long as nothing renders it in a proportional
+// font (see the monospace bodyHtml the scheduler passes).
+function render({ day, dayBefore, d, timings: t = [], audit = { intents: [], unparsed: 0 }, full = false }) {
+    const bar = '  ' + '─'.repeat(62);
+    const L = [];
+    const say = (x = '') => L.push(x);
+
+    say('');
+    say(`  JARVIS — ${day}`);
+    say(bar);
+    say(`  log lines read        ${d.lines_considered}`);
+    say(`  distinct problems     ${d.distinct_problems}`);
+    say(`  total occurrences     ${d.total_occurrences}`);
+    say(`  NEW since ${dayBefore}   ${d.new_today}`);
+    if (Object.keys(d.by_kind).length) {
+        say('');
+        for (const [k, n] of Object.entries(d.by_kind).sort((a, b) => b[1] - a[1])) {
+            say(`  ${k.padEnd(18)} ${n}`);
+        }
+    }
+
+    if (!d.distinct_problems) {
+        say('');
+        say('  Nothing errored, nothing fell back silently. A clean day.');
+    } else {
+        const shown = full ? d.items : d.items.slice(0, 15);
+        say('');
+        say('  WORST FIRST');
+        say(bar);
+        for (const i of shown) {
+            say('');
+            say(`  [${i.kind}] x${i.count}${i.is_new ? ' ← NEW' : ''}`);
+            say(`      ${i.why}`);
+            say(`      first ${i.first || '?'}   last ${i.last || '?'}   (${i.file})`);
+            say(`      ${i.sample.replace(/\s+/g, ' ').slice(0, 180)}`);
+            if (i.frame) say(`      ${i.frame}`);
+        }
+        if (!full && d.items.length > shown.length) {
+            say('');
+            say(`  … and ${d.items.length - shown.length} more — run with --full`);
+        }
+    }
+
+    if (t.length) {
+        say('');
+        say('  DOCUMENT GENERATION');
+        say(bar);
+        for (const x of t) {
+            say(`  ${x.label.padEnd(26)} n=${String(x.count).padStart(3)}  `
+              + `median ${String(x.median).padStart(5)}ms   max ${String(x.max).padStart(6)}ms   `
+              + `${x.total_s}s total`);
+        }
+    }
+
+    if (audit.intents.length) {
+        say('');
+        say('  DECISIONS');
+        say(bar);
+        for (const i of audit.intents.slice(0, 12)) {
+            const by = Object.entries(i.resolvedBy).map(([k, n]) => `${k}=${n}`).join(' ');
+            say(`  ${i.intent.padEnd(28)} ${String(i.count).padStart(4)}   ${by}`);
+        }
+        if (audit.unparsed) say(`  (${audit.unparsed} unreadable line(s) in the audit log)`);
+    }
+    return L.join('\n');
+}
+
+// ── ONE LINE THAT SAYS WHETHER TO OPEN IT ───────────────────────────────────
+// The subject of the email. A subject that reads the same every morning is
+// one she stops seeing, so the counts that decide whether this is worth her
+// time go in it: what is new, and whether anything was lost.
+function subjectFor(day, d) {
+    const lost = d.items.filter((i) => i.kind === 'lost-write')
+        .reduce((t, i) => t + i.count, 0);
+    if (lost) return `Jarvis ${day} — ${lost} POSSIBLE LOST WRITE${lost === 1 ? '' : 'S'}`;
+    if (d.new_today) return `Jarvis ${day} — ${d.new_today} new problem${d.new_today === 1 ? '' : 's'}`;
+    if (d.distinct_problems) return `Jarvis ${day} — ${d.distinct_problems} known problem${d.distinct_problems === 1 ? '' : 's'}, nothing new`;
+    return `Jarvis ${day} — clean`;
+}
+
+module.exports = { signature, classify, digest, timings, decisions, readLines,
+                   render, subjectFor, KINDS, TS };

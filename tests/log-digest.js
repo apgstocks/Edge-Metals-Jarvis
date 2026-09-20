@@ -65,6 +65,16 @@ const PM2 = [
     // Timings nothing has ever read.
     '2026-09-19T12:00:00: [PDF-TIME] invoice both total 812ms — launch-chromium 300ms',
     '2026-09-19T12:05:00: [PDF-TIME] invoice both total 1440ms — launch-chromium 900ms',
+    // ── A LINE WITH MARKUP IN IT ────────────────────────────────────────
+    // Real log lines carry < > and & — an email header, a shell redirect, a
+    // company called "A & B". Without one here the escaper is a no-op and a
+    // mutation removing it stays green, which is exactly what happened.
+    '2026-09-19T14:00:00: [ACTIONS] draft failed for "A & B <Ltd>" <ab@x.example>: EACCES',
+    // ── AND ENOUGH DISTINCT FAULTS TO EXCEED THE 15-ROW CAP ─────────────
+    // The terminal truncates at 15; the email must not. With six problems
+    // both look identical, so a mutation truncating the email survived.
+    ...Array.from({ length: 18 }, (_, i) =>
+        `2026-09-19T15:${String(i).padStart(2, '0')}:00: [SCHED] job-${i} failed: distinct reason ${i}`),
     // The day after. Must not appear in the 19th's report.
     '2026-09-20T02:00:00: [HARVEST] skipped a message: 404',
 ].join('\n');
@@ -239,6 +249,136 @@ section('G. end to end');
         { encoding: 'utf8', env: { ...process.env, DATA_DIR: quiet, JARVIS_TEST: '1' } });
     ck('a clean day says it was clean', /A clean day/.test(r3.stdout || ''),
        (r3.stdout || '').slice(-300));
+}
+
+// ── H. THE MORNING EMAIL ────────────────────────────────────────────────────
+// Asked where the scheduled report should land, she chose email. Three things
+// then matter that did not matter for a terminal: the subject has to say
+// whether it is worth opening, the columns have to survive an HTML renderer,
+// and a failure to send must not take the scheduler down with it.
+section('H. the 7am email');
+{
+    ck('one renderer, not two',
+       typeof logDigest.render === 'function'
+       && !/say\(`  JARVIS —/.test(fs.readFileSync(path.join(ROOT, 'scripts/log-digest.js'), 'utf8')),
+       'the script and the scheduler must print the same string or neither can be trusted');
+
+    const body = logDigest.render({ day: '2026-09-19', dayBefore: '2026-09-18', d, full: true });
+    ck('  the rendered report carries the day', /JARVIS — 2026-09-19/.test(body));
+    ck('  and the crash', /send failed/.test(body) && /buildMimeMessage/.test(body));
+    ck('  in full, because an email has a scrollbar',
+       !/run with --full/.test(body),
+       'the 15-row cap is for a terminal; the row she needs may be the sixteenth');
+
+    // ── THE SUBJECT IS THE WHOLE REPORT, ON A CLEAN DAY ─────────────────
+    // A subject that reads the same every morning is one she stops seeing.
+    ck('a lost write says so in the subject',
+       /POSSIBLE LOST WRITE/.test(logDigest.subjectFor('2026-09-19', d)),
+       logDigest.subjectFor('2026-09-19', d));
+    const noLost = { ...d, items: d.items.filter((i) => i.kind !== 'lost-write') };
+    ck('  otherwise the count of NEW problems',
+       /2 new problems|1 new problem|\d+ new problem/.test(logDigest.subjectFor('2026-09-19', noLost)),
+       logDigest.subjectFor('2026-09-19', noLost));
+    ck('  and a clean day says clean, so it never needs opening',
+       logDigest.subjectFor('2026-09-19',
+           { items: [], new_today: 0, distinct_problems: 0 }) === 'Jarvis 2026-09-19 — clean',
+       logDigest.subjectFor('2026-09-19', { items: [], new_today: 0, distinct_problems: 0 }));
+
+    // ── AND IT SENDS ON A CLEAN DAY TOO ─────────────────────────────────
+    // A report that only arrives when something is wrong makes its absence
+    // ambiguous: "fine" and "the job is broken" look identical.
+    const sched = fs.readFileSync(path.join(ROOT, 'scheduler.js'), 'utf8');
+    ck('the job is scheduled', /cron\.schedule\('0 7 \* \* \*'.*nightlyLogDigest/.test(sched),
+       'before the 8am digest, so it is waiting rather than interrupting');
+    ck('  and does not skip quiet days',
+       !/if \(!d\.distinct_problems\)\s*return/.test(sched),
+       'absence must not mean two different things');
+
+    // ── AND THE MESSAGE IT WOULD ACTUALLY SEND ──────────────────────────
+    // Grepping this file for "monospace" and "full: true" left two mutations
+    // green — one truncating the email to 15 rows, one dropping the html
+    // half — because the words were still in the comments. So the job is RUN
+    // against a stubbed mailer and the message it hands over is read.
+    {
+        const realGmail = require(path.join(ROOT, 'helpers/gmail'));
+        const savedSend = realGmail.sendEmail;
+        const savedWrite = realGmail.getGmailWrite;
+        const savedAddr = realGmail.getMyEmailAddress;
+        let sent = null;
+        realGmail.sendEmail = async (m) => { sent = m; return { id: 'm' }; };
+        realGmail.getGmailWrite = () => ({});
+        realGmail.getMyEmailAddress = async () => 'apsara@edgemetals.com';
+        // ── THE FIXTURE HAS TO LAND ON *ITS* YESTERDAY ──────────────────
+        // The job computes yesterday in LA and reads that day. The static
+        // 2026-09-19 fixture above is only "yesterday" on one date in
+        // history, so the first version of this asserted 18 rows against a
+        // day the job had never heard of and reported 2 — a test failing for
+        // a reason that had nothing to do with the behaviour it names.
+        //
+        // So the lines are written for whatever day the job will ask for.
+        const { getLADate } = require(path.join(ROOT, 'helpers/time'));
+        const y = getLADate(); y.setDate(y.getDate() - 1);
+        const yDay = `${y.getFullYear()}-${String(y.getMonth() + 1).padStart(2, '0')}-${String(y.getDate()).padStart(2, '0')}`;
+        fs.appendFileSync(path.join(TMP, 'logs', 'pm2-error.log'),
+            // A line carrying markup, so the escaper is not a no-op.
+            `${yDay}T14:00:00: [ACTIONS] draft failed for "A & B <Ltd>" <ab@x.example>: EACCES\n`
+            // ── GENUINELY DIFFERENT FAULTS, NOT NUMBERED ONES ───────────
+            // `job-0 … reason 0` through `job-17 … reason 17` collapse to a
+            // SINGLE row, because signature() replaces every number — which
+            // is the whole point of it and the first version of this fixture
+            // forgot. Eighteen different sentences are needed to exceed a
+            // fifteen-row cap.
+          + ['token expired', 'socket hang up', 'quota exceeded', 'bad gateway',
+             'permission denied', 'host unreachable', 'invalid signature', 'body too large',
+             'no such booking', 'duplicate key', 'timeout waiting for lock', 'disk full',
+             'malformed header', 'unsupported media type', 'stream closed', 'rate limited',
+             'certificate expired', 'connection reset']
+                .map((why, i) => `${yDay}T15:${String(i).padStart(2, '0')}:00: [SCHED] a job failed: ${why}`)
+                .join('\n')
+          + '\n');
+        try {
+            const scheduler = require(path.join(ROOT, 'scheduler'));
+            await scheduler.nightlyLogDigest();
+        } catch (e) { /* reported below by `sent` being null */ }
+        finally {
+            realGmail.sendEmail = savedSend;
+            realGmail.getGmailWrite = savedWrite;
+            realGmail.getMyEmailAddress = savedAddr;
+        }
+
+        ck('the job builds a real message', !!sent, 'nothing was handed to sendEmail');
+        if (sent) {
+            ck('  addressed somewhere', !!sent.to, String(sent.to));
+            ck('  with a subject that says what kind of day it was',
+               /^Jarvis \d{4}-\d{2}-\d{2} — /.test(sent.subject || ''), String(sent.subject));
+            ck('  a plain-text body', /JARVIS —/.test(sent.body || ''), String(sent.body || '').slice(0, 60));
+            ck('  NOT truncated the way the terminal version is',
+               !/run with --full/.test(sent.body || ''),
+               'an email has a scrollbar; the row she needs may be the sixteenth');
+            // And prove it by counting: the terminal caps at 15.
+            const rows = (String(sent.body || '').match(/\[[a-z-]+\] x\d+/g) || []).length;
+            ck(`  carrying all ${rows} rows, not the terminal's 15`, rows > 15, String(rows));
+            ck('  and its own monospace html half',
+               /monospace/.test(sent.bodyHtml || ''),
+               'the Arial default would turn these columns into noise');
+            // The fixture's log carries "→" and "—" and no angle brackets,
+            // so this asserts the ESCAPER ran rather than hoping the sample
+            // happened to contain something dangerous.
+            const inner = String(sent.bodyHtml || '').replace(/^<div[^>]*>/, '').replace(/<\/div>$/, '');
+            ck('  escaped, because a log line can contain < and &',
+               !/<[a-zA-Z/]/.test(inner),
+               'an unescaped log line becomes markup: ' + inner.slice(0, 120));
+        }
+    }
+
+    // ── AND A FAILED REPORT IS NOT SILENT ───────────────────────────────
+    // This job exists to find swallowed failures. Swallowing its own would
+    // be the joke writing itself.
+    ck('a send failure is logged, not thrown',
+       /could not send/.test(sched) && /catch \(e\)/.test(sched));
+    ck('  and no destination is reported rather than assumed',
+       /no destination \(set ALERT_EMAIL_TO\)/.test(sched),
+       'helpers/gmail.js carries a long note about assuming which mailbox is which');
 }
 
 console.log(`\n  ${pass} passed, ${fail} failed`);
