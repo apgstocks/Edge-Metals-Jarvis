@@ -1349,6 +1349,85 @@ section('I. the three screens');
     }
 }
 
+
+// ══════════════════════════════════════════════════════════════════════════
+section('EVERY GRADE OF THE CONTAINER, NOT JUST THE ROW SHE CLICKED');
+// ══════════════════════════════════════════════════════════════════════════
+// Apsara, 2026-09-21, having noticed that a bill carries all seven of its
+// grades and asked why an invoice does not.
+//
+// Her Invoice ledger is ONE ROW PER GRADE. buildFrom read `items[]` off the
+// single row it was handed, and a flat row has none — so Generate on the
+// Alternator row of MSDU2726332 produced a commercial invoice with ONE line,
+// $16,794.34, for a container worth $44,016.10, and reported readiness ok.
+// She generates multi-grade invoices from the spreadsheet, so nothing short
+// was ever sent; this was latent.
+{
+    const ARIS = (item, weight, price, over = {}) => ({
+        id: 'S_' + item.replace(/\W/g, ''), date: '2026-09-18', customer: 'Aris Enterprises',
+        booking_no: 'EBKG18670536', container_no: 'MSDU2726332', invoice_no: '260918_AP_26Aris02',
+        item, weight, invoice_price: price, price_unit: 'lb', weight_unit: 'lb', ...over,
+    });
+    const FOUR = [ARIS('Sealed units', 15642, 0.548), ARIS('Alternator', 13457, 1.248),
+                  ARIS('Starter', 6822, 0.973), ARIS('Electric motors', 16312, 0.738)];
+
+    const descs = (inv) => inv.body.line_items.map((l) => l.item_desc).join(' | ');
+    // allSales is injected so this never reads her real ledger.
+    const build = (row, all) => saleInvoice.buildFrom(row, { bill: null, allSales: all });
+
+    const fromAlt = build(FOUR[1], FOUR);
+    ck('every grade is on the invoice, not just the row clicked',
+       fromAlt.body.line_items.length === 4, descs(fromAlt));
+    ck('  and the total is the container, not the grade',
+       Math.abs(fromAlt.body.subtotal - 44042.23) < 0.02, String(fromAlt.body.subtotal));
+
+    // THE PROPERTY: which row she clicks must not change the document.
+    const fromSealed = build(FOUR[0], FOUR);
+    ck('  the same invoice whichever row she clicks',
+       descs(fromSealed) === descs(fromAlt) && fromSealed.body.subtotal === fromAlt.body.subtotal,
+       `${descs(fromSealed)} vs ${descs(fromAlt)}`);
+
+    // ── AND WHAT IT MUST NEVER MERGE ──────────────────────────────────────
+    // Two rows on one container with DIFFERENT invoice numbers are two
+    // invoices — a split billing — and putting one's metal on the other is
+    // the worse failure of the two this fix exists between.
+    const other = ARIS('Copper', 1000, 3.2, { id: 'S_OTHER', invoice_no: '260918_AP_26Aris99' });
+    const guarded = build(FOUR[1], FOUR.concat([other]));
+    ck('a different invoice number on the same container is NOT merged in',
+       guarded.body.line_items.length === 4 && !/Copper/.test(descs(guarded)), descs(guarded));
+
+    const otherCust = ARIS('Brass', 900, 2.1, { id: 'S_CUST', customer: 'Someone Else' });
+    const guarded2 = build(FOUR[1], FOUR.concat([otherCust]));
+    ck('and nor is another customer', !/Brass/.test(descs(guarded2)), descs(guarded2));
+
+    const otherCont = ARIS('Zinc', 800, 1.1, { id: 'S_CONT', container_no: 'TCLU7654321' });
+    const guarded3 = build(FOUR[1], FOUR.concat([otherCont]));
+    ck('nor another container', !/Zinc/.test(descs(guarded3)), descs(guarded3));
+
+    // A single-grade container is one line, exactly as before.
+    const alone = ARIS('HMS', 40000, 0.31, { id: 'S_ALONE', container_no: 'MSKU0001111' });
+    ck('a container with one grade is still one line',
+       build(alone, [alone]).body.line_items.length === 1);
+
+    // The path that ALREADY worked — a row carrying its own items[] — must be
+    // untouched, or this fix would double-count a nested sale.
+    const nested = ARIS('', 0, 0, { id: 'S_NEST', container_no: 'MSKU0002222',
+        items: [{ description: 'Al combo', weight: 9000, price: 0.9 },
+                { description: 'Shred', weight: 4000, price: 0.5 }] });
+    const nestedInv = build(nested, [nested]);
+    ck('a row with its own items still uses them', nestedInv.body.line_items.length === 2,
+       descs(nestedInv));
+
+    // The weighbridge figures describe the WHOLE container. Repeating them on
+    // four lines would read as four containers to a customs officer.
+    const withPacking = saleInvoice.buildFrom(FOUR[1], { allSales: FOUR,
+        bill: { booking_no: 'EBKG18670536', container_no: 'MSDU2726332', gross: 44000, truck: 15000,
+                container: 8500, chassis: 6600, boxes: 0, seal_no: '0173873' } });
+    const packed = withPacking.body.line_items.filter((l) => l.packing && l.packing.gross_weight_lbs);
+    ck('the container weighbridge figures appear ONCE, on the first line',
+       packed.length === 1, `${packed.length} line(s) carry a gross weight`);
+}
+
 console.log(`\n  ${pass} passed, ${fail} failed`);
 if (failures.length) { console.log('\n  failed:'); failures.forEach((f) => console.log('    · ' + f)); }
 process.exit(fail ? 1 : 0);

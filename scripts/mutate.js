@@ -2348,6 +2348,35 @@ const MUTATIONS = [
       find: "    app.post('/api/petty-cash/transfer', requireAdmin, async (req, res) => {",
       to:   "    app.post('/api/petty-cash/transfer', async (req, res) => {" },
 
+    // ── EVERY GRADE ON THE INVOICE (2026-09-21) ──────────────────────────
+    // The first is the defect itself: one line for a four-grade container, on
+    // a document that goes to a customer and to customs.
+
+    { name: 'invoice: only the clicked row is on it, the other grades are missing',
+      file: 'helpers/saleInvoice.js', suites: ['sale-invoice'],
+      find: '    const siblings = siblingRows(s, opts.allSales);',
+      to:   '    const siblings = [s];' },
+
+    { name: 'invoice: a DIFFERENT invoice number on the same container is merged in',
+      file: 'helpers/saleInvoice.js', suites: ['sale-invoice'],
+      find: "            && norm(x.invoice_no) === norm(s.invoice_no)\n            && norm(x.customer) === norm(s.customer));",
+      to:   '            );' },
+
+    { name: "invoice: another customer's metal is put on this one",
+      file: 'helpers/saleInvoice.js', suites: ['sale-invoice'],
+      find: "            && norm(x.customer) === norm(s.customer));",
+      to:   '            );' },
+
+    { name: 'invoice: the container weighbridge figures repeat on every line',
+      file: 'helpers/saleInvoice.js', suites: ['sale-invoice'],
+      find: '                packing: packingFrom(i === 0 ? bill : null, sc.weight_mt),',
+      to:   '                packing: packingFrom(bill, sc.weight_mt),' },
+
+    { name: 'invoice: a row with its own items stops using them',
+      file: 'helpers/saleInvoice.js', suites: ['sale-invoice'],
+      find: '    const graded = Array.isArray(c.items) && c.items.length > 0 ? c.items : null;',
+      to:   '    const graded = null;' },
+
     // ── TRUCKING DEDUCTED FROM A YARD LOAD (2026-09-20) ───────────────────
     // Each of these is a way the feature could be "implemented" and be wrong
     // about money. If tests/load-trucking.js does not go red for one of them,

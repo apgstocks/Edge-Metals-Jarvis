@@ -188,11 +188,54 @@ function photosFor(bill) {
 // already splits them into `items` with their own weights. When it has done
 // so, each becomes its own invoice row; when it has not, the container is one
 // row. Same rule the packing list follows.
+// ── EVERY ROW OF THIS INVOICE, NOT JUST THE ONE SHE CLICKED ────────────────
+//
+// Apsara, 2026-09-21, having noticed that a bill carries all seven of its
+// grades and asked why an invoice does not.
+//
+// Her Invoice ledger holds ONE ROW PER GRADE — container MSDU2726332 is four
+// rows, Sealed units / Alternator / Starter / Electric motors, each with its
+// own weight and rate. buildFrom read `items[]` off the single row it was
+// handed, and a flat row has none, so pressing Generate on the Alternator
+// produced a commercial invoice with ONE line: Alternator, $16,794.34,
+// against a container genuinely worth $44,016.10. It reported readiness ok
+// and warned about nothing. That document goes to a customer and to customs.
+//
+// She generates multi-grade invoices from the spreadsheet today, so nothing
+// short has been sent — this was latent, not live.
+//
+// ── WHAT IT GATHERS ON, AND WHY IT IS THREE FIELDS ─────────────────────────
+// booking + container + INVOICE NUMBER, and the customer must match too.
+// Booking and container alone are not enough: two rows on one container with
+// different invoice numbers are two invoices — a split billing — and merging
+// them would put another invoice's metal on this one. The customer check is
+// belt and braces for the same reason. Rows with no invoice number gather
+// only with other rows that also have none.
+//
+// Sorted by their stored order so the lines print the way her ledger reads.
+function siblingRows(s, all) {
+    const norm = (v) => String(v == null ? '' : v).trim().toUpperCase();
+    const bk = norm(s.booking_no), cn = norm(s.container_no);
+    if (!bk && !cn) return [s];
+    const rows = (Array.isArray(all) ? all : sales.list())
+        .filter((x) => x
+            && norm(x.booking_no) === bk
+            && norm(x.container_no) === cn
+            && norm(x.invoice_no) === norm(s.invoice_no)
+            && norm(x.customer) === norm(s.customer));
+    // The row she clicked is always in the result, even if the store could
+    // not be read — an invoice with no lines is worse than one with one.
+    return rows.length ? rows : [s];
+}
+
 function buildFrom(sale, opts = {}) {
     const s = sale || {};
     const c = sales.compute(s);
     const bill = opts.bill !== undefined ? opts.bill : billFor(s);
     const rate = ratePerMt(s);
+    // Injectable, so a test does not have to write to her real ledger to
+    // exercise this — same reason helpers/truckingProposal.js takes allBills.
+    const siblings = siblingRows(s, opts.allSales);
 
     const warnings = [];
     if (!bill) {
@@ -254,21 +297,34 @@ function buildFrom(sale, opts = {}) {
                 packing: packingFrom(it.weighed ? it : (graded.length === 1 ? bill : null), mt),
             };
         })
-        : [{
-            item_desc: str(s.item),
-            container_no: str(s.container_no),
-            seal_no: str((bill || {}).seal_no),
-            weight: c.weight_mt,
-            rate,
-            // ── HER FIGURE WINS, EXACTLY AS IT DOES ON THE LEDGER ───────
-            // sales.compute returns the amount she typed when she typed one
-            // and the arithmetic otherwise. Recomputing here would put a
-            // number on the customer's invoice that her own Sales tab
-            // disagrees with by a cent, and reconciling that later is worse
-            // than tedious.
-            amount: c.amount !== null ? round2(c.amount) : round2((c.weight_mt || 0) * (rate || 0)),
-            packing: packingFrom(bill, c.weight_mt),
-        }];
+        // ── ONE LINE PER SIBLING ROW ────────────────────────────────────
+        // When this row carries no items of its own, its GRADE is the row
+        // and the container's other grades are its sibling rows. Each is
+        // computed on its own terms — its own weight, its own rate, its own
+        // typed amount — because that is how she priced them. `packing` goes
+        // on the first line only: the weighbridge figures describe the whole
+        // container, and repeating them on four lines would read as four
+        // containers.
+        : siblings.map((sib, i) => {
+            const sc = sales.compute(sib);
+            const sRate = ratePerMt(sib);
+            return {
+                item_desc: str(sib.item),
+                container_no: str(sib.container_no),
+                seal_no: str((bill || {}).seal_no),
+                weight: sc.weight_mt,
+                rate: sRate,
+                // ── HER FIGURE WINS, EXACTLY AS IT DOES ON THE LEDGER ───
+                // sales.compute returns the amount she typed when she typed
+                // one and the arithmetic otherwise. Recomputing here would
+                // put a number on the customer's invoice that her own Sales
+                // tab disagrees with by a cent, and reconciling that later is
+                // worse than tedious.
+                amount: sc.amount !== null ? round2(sc.amount) : round2((sc.weight_mt || 0) * (sRate || 0)),
+                packing: packingFrom(i === 0 ? bill : null, sc.weight_mt),
+            };
+        });
+
 
     const subtotal = round2(lineItems.reduce((t, it) => t + (Number(it.amount) || 0), 0));
 
