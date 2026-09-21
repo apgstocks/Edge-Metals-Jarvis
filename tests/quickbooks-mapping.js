@@ -80,6 +80,10 @@ ck('confirmation beats even an exact match', st('Pan Metal', V, 'vendor').qb.Id 
 m.confirm('vendor', 'Completely New Supplier', null, null);
 ck('"not in QuickBooks" is remembered as new', st('Completely New Supplier', V, 'vendor').status === 'new');
 ck('vendor and customer maps are separate', st('Rad Metals', [], 'vendor').status === 'none');
+m.confirm('customer', 'Junk Car', 'SKIP', null, 'apsara', 'stock held at their yard, mixed into a later container');
+ck('SKIP: a stock location is never a customer', st('Junk car', C, 'customer').status === 'skip' && !st('Junk car', C, 'customer').qb);
+ck('SKIP keeps her reason', /stock held/.test(st('Junk Car', C, 'customer').note));
+ck('SKIP as customer does not touch the same name as vendor', st('Junk Car', [{ Id: '77', DisplayName: 'Junk Car', Active: true }], 'vendor').status === 'exact');
 ck('map persisted to disk', JSON.parse(fs.readFileSync(process.env.QB_PARTY_MAP_FILE, 'utf8')).customer.radmetals.qbId === '298');
 
 fs.rmSync(TMP, { recursive: true, force: true });

@@ -2323,6 +2323,41 @@ const MUTATIONS = [
       find: '                .sort((a, b) => b.available - a.available);',
       to:   '                .sort((a, b) => a.available - b.available);' },
 
+    // ── BofA IS TWO COMPANIES NOW (2026-09-21) ───────────────────────────
+    // Each of these is a way to get a third company's money wrong: filed
+    // under the wrong owner, guessed at where she said nothing, or a loan
+    // between two businesses presented as her own cash moving around.
+
+    { name: 'petty: unstated money is swept into the company she trades most under',
+      file: 'helpers/pettyCash.js', suites: ['petty-cash-banks'],
+      find: "    return COMPANY_OF[String(source || '').trim()] || COMPANY_UNKNOWN;",
+      to:   "    return COMPANY_OF[String(source || '').trim()] || 'Edge Metals';" },
+
+    { name: 'petty: the company split stops adding up to cash in hand',
+      file: 'helpers/pettyCash.js', suites: ['petty-cash-banks'],
+      find: '        out[co] = round2((out[co] || 0) + (amt || 0)) || 0;',
+      to:   '        out[co] = round2(amt || 0) || 0;' },
+
+    { name: 'petty: a loan between two companies reads as an internal transfer',
+      file: 'helpers/pettyCash.js', suites: ['petty-cash-banks'],
+      find: "                     intercompany: a !== COMPANY_UNKNOWN && z !== COMPANY_UNKNOWN && a !== z };",
+      to:   '                     intercompany: false };' },
+
+    { name: 'petty: two buckets with no stated company are called intercompany',
+      file: 'helpers/pettyCash.js', suites: ['petty-cash-banks'],
+      find: "                     intercompany: a !== COMPANY_UNKNOWN && z !== COMPANY_UNKNOWN && a !== z };",
+      to:   '                     intercompany: a !== z };' },
+
+    { name: 'petty: a spoken bucket name is refused because it has no slash',
+      file: 'helpers/pettyCash.js', suites: ['petty-cash-banks'],
+      find: "    const exact = list.find((s) => flat(s) === want);",
+      to:   '    const exact = list.find((s) => s === raw);' },
+
+    { name: 'petty: a half-name resolves even when two buckets could mean it',
+      file: 'helpers/pettyCash.js', suites: ['petty-cash-banks'],
+      find: '    return ends.length === 1 ? ends[0] : null;',
+      to:   '    return ends.length ? ends[0] : null;' },
+
     { name: 'petty: a cash SALE is filed under a bank it never came from',
       file: 'helpers/pettyCash.js', suites: ['petty-cash-banks'],
       find: '            cash_source: cleanSource(cashSource, { allowBlank: true }),\n            date: /^\\d{4}-\\d{2}-\\d{2}$/.test(String(date || \'\')) ? date : require(\'./time\').todayLocal(),\n            amount: round2(want),                 // POSITIVE — money in',

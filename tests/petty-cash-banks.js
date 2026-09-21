@@ -84,8 +84,13 @@ section('A — three buckets, and they always sum to the total');
 {
     await reset();
     ck('an empty box is zero everywhere', B().total === 0 && bucket('BofA') === 0);
-    ck('the sources come from ONE list', Array.isArray(petty.SOURCES) && petty.SOURCES.length === 3,
+    // Five since 2026-09-21: BofA split into an Edge Metals account and an
+    // AAA Investment one, and plain BofA stayed because her old rows say it.
+    ck('the sources come from ONE list', Array.isArray(petty.SOURCES) && petty.SOURCES.length === 5,
         JSON.stringify(petty.SOURCES));
+    ck('  plain BofA is still a bucket, so no past row was reassigned',
+        petty.SOURCES.includes('BofA'),
+        'her choice: keep BofA as-is and reassign as she goes');
     // "Others" is banks.js's word for a bank that is not BofA or Chase. Two
     // meanings for one word on adjacent screens is the trap she avoided.
     ck('and the third bucket is NOT called Others', !petty.SOURCES.includes('Others'));
@@ -371,8 +376,17 @@ section('F — END TO END, through the real routes');
     ck('the tab returns Cash in hand', tab.json && tab.json.balance === 13000);
     ck('  and each bucket', tab.json.by_source && tab.json.by_source['Chase Bank'] === 3000
         && tab.json.by_source.BofA === 10000, JSON.stringify(tab.json.by_source));
+    // THE PROPERTY, not a count: the route serves the SAME list the helper
+    // holds. `=== 3` was here, and it went red the day BofA split in two —
+    // for a change that is exactly what this check wants to be true.
     ck('  and the source list, so the client need not hardcode one',
-        Array.isArray(tab.json.sources) && tab.json.sources.length === 3);
+        Array.isArray(tab.json.sources)
+        && tab.json.sources.join('|') === petty.SOURCES.join('|'),
+        JSON.stringify(tab.json.sources));
+    ck('  with the company behind each bucket, where she has said one',
+        tab.json.company_of && tab.json.company_of['BofA/AAA Investment'] === 'AAA Investment'
+        && tab.json.company_of['Chase Bank'] === tab.json.company_unknown,
+        JSON.stringify(tab.json.company_of));
 
     const { addLoad } = require(path.join(ROOT, 'helpers/loads'));
     const load = await addLoad({ date: '2026-09-21', seller: 'Ramesh',
@@ -446,6 +460,136 @@ section('F — END TO END, through the real routes');
 }
 
 // ══════════════════════════════════════════════════════════════════════════
+// ══════════════════════════════════════════════════════════════════════════
+section('H — BofA is two accounts, and they belong to two companies');
+// Apsara, 2026-09-21: "In petty cash ,add bofa/AAA investments" → "Under
+// BofA. 1.Edge Metals 2.AAA Investment" → and AAA Investment is "Yes — a
+// third company". CLAUDE.md rule 5 is about exactly that separation.
+{
+    await reset();
+    await petty.addTopUp({ amount: 6000, cash_source: 'BofA', date: '2026-09-21' });
+    await petty.addTopUp({ amount: 4000, cash_source: 'BofA/Edge Metals', date: '2026-09-21' });
+    await petty.addTopUp({ amount: 2500, cash_source: 'BofA/AAA Investment', date: '2026-09-21' });
+    await petty.addTopUp({ amount: 1500, cash_source: 'Chase Bank', date: '2026-09-21' });
+
+    ck('the two new buckets hold what was put in them',
+        bucket('BofA/Edge Metals') === 4000 && bucket('BofA/AAA Investment') === 2500,
+        `${bucket('BofA/Edge Metals')} / ${bucket('BofA/AAA Investment')}`);
+    ck('  and plain BofA is untouched by either', bucket('BofA') === 6000, String(bucket('BofA')));
+    invariant('after topping up four buckets');
+
+    // ── HER ANSWER: ONE TOTAL, THE SPLIT BELOW IT ────────────────────────
+    const co = petty.balanceByCompany(petty.listEntries());
+    ck('cash in hand is still every row added up', B().total === 14000, String(B().total));
+    ck('  Edge Metals and AAA Investment are separate figures',
+        co['Edge Metals'] === 4000 && co['AAA Investment'] === 2500, JSON.stringify(co));
+    // THE PROPERTY, not the shape: the company split cannot drift from the
+    // total, because it is folded from the buckets rather than counted again.
+    ck('  and the company figures sum to the same total',
+        Math.abs(Object.values(co).reduce((a, b) => a + b, 0) - B().total) < 0.005,
+        `${JSON.stringify(co)} vs ${B().total}`);
+
+    // ── WHAT SHE HAS NOT SAID IS NOT GUESSED ─────────────────────────────
+    // Plain BofA is a mix, and she has never said whose Chase is. Assigning
+    // either to Edge Metals because it is the bigger company would print a
+    // per-company figure that reads as fact.
+    ck('money whose company she has not stated says so',
+        co[petty.COMPANY_UNKNOWN] === 7500, JSON.stringify(co));
+    ck('  no unstated money is quietly filed under Edge Metals',
+        co['Edge Metals'] === 4000,
+        'plain BofA and Chase must not be swept into the company she trades most under');
+
+    // ── THE CALLER WITHOUT A DROPDOWN ────────────────────────────────────
+    // helpers/tools.js is how she records a payment by TALKING to Jarvis. It
+    // has no select to pick a slash from, and it is the caller this repo has
+    // broken three times by adding a requirement it could not meet.
+    ck('a spoken name resolves without the slash',
+        petty.cleanSource('BofA Edge Metals') === 'BofA/Edge Metals'
+        && petty.cleanSource('bofa - aaa investment') === 'BofA/AAA Investment');
+    ck('  and a bare company name resolves when only one bucket can mean it',
+        petty.cleanSource('AAA Investment') === 'BofA/AAA Investment'
+        && petty.cleanSource('edge metals') === 'BofA/Edge Metals');
+    ck('  but "BofA" alone still means the unsplit bucket, not a guess',
+        petty.cleanSource('BofA') === 'BofA',
+        'if this ever resolves to a split bucket, old rows change meaning');
+    let refused = null;
+    try { petty.cleanSource('Wells Fargo'); } catch (e) { refused = e; }
+    ck('  and a name that is not a bucket is still refused', !!refused);
+
+    // ── BORROWING ACROSS THE LINE: ALLOWED, AND SAID OUT LOUD ────────────
+    // Her choice of three: "Allow it, record it as owed."
+    // Only two buckets, so the lender is not a question. The first attempt at
+    // this check left plain BofA holding the most, the borrow came from THERE,
+    // and intercompany was correctly false — the code was right and the
+    // fixture was wrong. A test whose answer depends on which bucket happens
+    // to be fullest is a test that goes red when an unrelated figure moves.
+    await reset();
+    await petty.addTopUp({ amount: 4000, cash_source: 'BofA/Edge Metals', date: '2026-09-21' });
+    await petty.addTopUp({ amount: 2500, cash_source: 'BofA/AAA Investment', date: '2026-09-21' });
+    await petty.withdrawForPayment({ amount: 3000, loadId: 'L_AAA',
+        cashSource: 'BofA/AAA Investment', allowBorrow: true });
+    const owed = petty.borrowings();
+    const cross = owed.find((b) => b.owes === 'BofA/AAA Investment');
+    ck('a short bucket still borrows rather than refusing', !!cross,
+        JSON.stringify(owed));
+    ck('  and the balance is flagged as between two companies',
+        !!cross && cross.intercompany === true
+        && cross.owes_company === 'AAA Investment' && cross.to_company !== 'AAA Investment',
+        JSON.stringify(cross));
+    invariant('after a cross-company borrow');
+
+    // Two buckets with no stated company are not "the same company" — an
+    // absence of an answer must not be asserted as a match.
+    const plain = petty.borrowings([
+        { kind: 'transfer', transfer_reason: 'borrow', cash_source: 'BofA',
+          transfer_to: 'Chase Bank', amount: -500 },
+    ])[0];
+    ck('two buckets with no company stated are not called intercompany',
+        !!plain && plain.intercompany === false, JSON.stringify(plain));
+    // AND THE ONE THAT MATTERS MORE, which the check above cannot catch:
+    // 'Company not stated' differs from 'Edge Metals' as a STRING, so a rule
+    // written as "the two labels differ" calls this intercompany. It is not.
+    // Nobody has said whose Chase Bank is, and a balance cannot be declared
+    // to cross a line that has not been drawn.
+    const half = petty.borrowings([
+        { kind: 'transfer', transfer_reason: 'borrow', cash_source: 'BofA/Edge Metals',
+          transfer_to: 'Chase Bank', amount: -500 },
+    ])[0];
+    ck('  nor is a named company against an unnamed one',
+        !!half && half.intercompany === false, JSON.stringify(half));
+
+    // ── THE AMBIGUITY RULE, WHICH TODAY'S LIST CANNOT EXERCISE ───────────
+    // No two real buckets end in the same word, so the "only when it can mean
+    // one thing" guard is unreachable against SOURCES — which is exactly why
+    // matchSource takes the list. The day a second Edge Metals account is
+    // added, a spoken "Edge Metals" must resolve to NEITHER rather than to
+    // whichever happens to be first.
+    ck('a half-name that could mean two buckets resolves to neither',
+        petty.matchSource('edge metals', ['BofA/Edge Metals', 'Chase/Edge Metals']) === null,
+        'guessing between two of her accounts is the thing rule 5 exists to stop');
+    ck('  and still resolves when only one can mean it',
+        petty.matchSource('edge metals', ['BofA/Edge Metals', 'Chase Bank']) === 'BofA/Edge Metals');
+
+    // ── AND THE COPIES OF THE LIST IN THE TWO CLIENTS ────────────────────
+    // Both screens build their dropdown from the server, but each keeps a
+    // fallback for the moment before the first response lands. A stale
+    // fallback would offer 'BofA' as though it were the only BofA account.
+    const FALLBACK = /\['BofA', 'BofA\/Edge Metals', 'BofA\/AAA Investment', 'Chase Bank', 'Unassigned'\]/;
+    for (const f of ['dashboard/index.html', 'mobile-app/www/index.html']) {
+        const src = fs.readFileSync(path.join(__dirname, '..', f), 'utf8');
+        const copies = (src.match(/pettyCash\.sources[\s\S]{0,120}?\['BofA'[^\]]*\]/g) || []);
+        ck(`${f}: every petty-cash fallback matches SOURCES`,
+            copies.length > 0 && copies.every((c) => FALLBACK.test(c)),
+            `${copies.length} fallback(s): ${JSON.stringify(copies.map((c) => c.slice(-90)))}`);
+    }
+    // The phone asks with a numbered prompt. "Type 1 or 2" was true when
+    // there were two banks; there are four now.
+    const mob = fs.readFileSync(path.join(__dirname, '..', 'mobile-app/www/index.html'), 'utf8');
+    ck('the phone no longer tells her to type 1 or 2',
+        !/Type 1 or 2\./.test(mob),
+        'a prompt naming a range it no longer has is how a wrong bucket gets picked');
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 if (failures.length) { console.log('\nFailures:'); failures.forEach((f) => console.log('  - ' + f)); }
 try { fs.rmSync(TMP, { recursive: true, force: true }); } catch (e) {}

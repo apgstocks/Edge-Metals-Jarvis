@@ -112,8 +112,44 @@ function listEntries() {
 // box before this existed, and cash taken in from a customer on a sale, which
 // never came out of a bank at all. It can be spent like the others and moved
 // into a bank later, when she actually banks it — see transfer().
-const SOURCES = ['BofA', 'Chase Bank', 'Unassigned'];
+// ── BofA IS TWO ACCOUNTS, AND THEY BELONG TO TWO COMPANIES ────────────────
+//
+// Apsara, 2026-09-21: "In petty cash ,add bofa/AAA investments" — then, asked
+// what exactly: "Under BofA. 1.Edge Metals 2.AAA Investment", and asked
+// whether AAA Investment is a separate company the way Edge Yard and Edge
+// Metals are: "Yes — a third company".
+//
+// So this is not another bank. It is a second COMPANY's money sitting in the
+// same cash box, and CLAUDE.md rule 5 is about exactly that: a rule for one
+// company is not a rule for the other, and the separation is most of what
+// this app is for.
+//
+// ── PLAIN 'BofA' STAYS, AND IS NOT MIGRATED ───────────────────────────────
+// Every petty cash row written before today says 'BofA' and nothing else.
+// HER CHOICE, of three offered: "Keep 'BofA' as-is, reassign as you go" —
+// the old rows keep their name, the two new buckets start empty, and she
+// moves money across with the Reassign button she already has. Rewriting
+// those rows to 'BofA/Edge Metals' would have been one migration and a claim,
+// filed under her name, that none of that cash was AAA Investment's. Nobody
+// knows that. So plain BofA is a real bucket for as long as it holds money.
+const SOURCES = ['BofA', 'BofA/Edge Metals', 'BofA/AAA Investment', 'Chase Bank', 'Unassigned'];
 const UNASSIGNED = 'Unassigned';
+
+// ── WHICH COMPANY'S MONEY EACH BUCKET HOLDS ───────────────────────────────
+// ONLY what she has actually said. She named the company behind the two new
+// buckets and nothing else. Plain BofA is a mix by definition, and she has
+// never said whose Chase Bank is or whose the opening float was — so they sit
+// under COMPANY_UNKNOWN rather than being quietly assigned to Edge Metals
+// because it is the bigger company. A guess here would print a per-company
+// figure that reads as fact on a screen she makes decisions from.
+const COMPANY_UNKNOWN = 'Company not stated';
+const COMPANY_OF = {
+    'BofA/Edge Metals': 'Edge Metals',
+    'BofA/AAA Investment': 'AAA Investment',
+};
+function companyOf(source) {
+    return COMPANY_OF[String(source || '').trim()] || COMPANY_UNKNOWN;
+}
 
 // EVERY ROW WRITTEN BEFORE TODAY HAS NO SOURCE, and must read as Unassigned
 // rather than as nothing. That is not a fallback, it is the opening float:
@@ -123,11 +159,44 @@ const UNASSIGNED = 'Unassigned';
 function sourceOf(entry) {
     const raw = String((entry && entry.cash_source) || '').trim();
     if (!raw) return UNASSIGNED;
-    const hit = SOURCES.find((s) => s.toLowerCase() === raw.toLowerCase());
+    const hit = matchSource(raw);
     // An unrecognised name is kept AS TYPED rather than forced to Unassigned.
     // If a third bank is ever added, its old rows must not silently pour into
     // the unbanked bucket — they would inflate a figure she reassigns from.
     return hit || raw;
+}
+
+// ── ONE NAME, HOWEVER IT WAS WRITTEN ──────────────────────────────────────
+// 'BofA/Edge Metals' has a slash in it, and the paths that reach this do not
+// all have a dropdown to pick from. helpers/tools.js is how she tells Jarvis
+// about a cash payment by TALKING to it, and a spoken or typed "BofA Edge
+// Metals" must not be refused as "not one of ...". That caller is the one
+// this repo breaks every time shared code grows a requirement, three times
+// now, so it is handled here rather than left to each caller to get right.
+//
+// Separators collapse: slash, hyphen, dash and runs of spaces are all the
+// same thing. Case is ignored, as it already was.
+const flat = (v) => String(v == null ? '' : v).trim().toLowerCase()
+    .replace(/[\/\-‐-―_,]+/g, ' ').replace(/\s+/g, ' ').trim();
+
+// `list` is injectable for the same reason balanceBySource and borrowings
+// take their entries: the ambiguity rule below cannot be exercised against
+// the real SOURCES, because no two of them end in the same word TODAY. That
+// is the whole point of the rule — it is for the day one does — and a guard
+// no test can reach is a guard nobody knows is still working.
+function matchSource(raw, list = SOURCES) {
+    const want = flat(raw);
+    if (!want) return null;
+    const exact = list.find((s) => flat(s) === want);
+    if (exact) return exact;
+    // ── AND A SHORTER NAME, ONLY WHEN IT CAN MEAN ONE THING ───────────────
+    // "Edge Metals" or "AAA Investment" on its own is what a person says out
+    // loud. It resolves ONLY when exactly one bucket ends that way — two
+    // candidates is an ambiguity, and guessing between two companies' money
+    // is the one thing rule 5 exists to stop. Anchored at the end so "BofA"
+    // keeps meaning the legacy bucket and never drifts into a split one.
+    const ends = list.filter((s) => flat(s) !== want && flat(s).endsWith(' ' + want));
+    return ends.length === 1 ? ends[0] : null;
 }
 
 // Normalises on the way IN. Refuses a name that is not a source, because a
@@ -139,7 +208,7 @@ function cleanSource(v, { allowBlank = false } = {}) {
         if (allowBlank) return UNASSIGNED;
         throw new Error(`Which cash is this? Choose ${SOURCES.join(', ')}.`);
     }
-    const hit = SOURCES.find((s) => s.toLowerCase() === raw.toLowerCase());
+    const hit = matchSource(raw);
     if (!hit) throw new Error(`"${raw}" is not one of ${SOURCES.join(', ')}.`);
     return hit;
 }
@@ -174,9 +243,39 @@ function balanceBySource(entries) {
     return out;
 }
 
+// ── THE SAME MONEY, GROUPED BY WHOSE IT IS ────────────────────────────────
+//
+// HER CHOICE, 2026-09-21, of three offered: "Keep one total, break it down
+// below". She had said on 20-Sep that "overall all the sum of amount should
+// come in cash in hand", and that promise is kept — the headline figure is
+// still every row added up. This sits under it.
+//
+// Built by folding balanceBySource, NOT by a second pass over the rows, so
+// the invariant at the top of this file still holds one level further down:
+// the company figures cannot drift from the bucket figures, and neither can
+// drift from the total, because there is only ever one tally.
+//
+// Buckets whose company she has not stated are reported under one honest
+// heading rather than spread across the two she has named.
+function balanceByCompany(entries) {
+    const per = balanceBySource(entries);
+    const out = {};
+    for (const [src, amt] of Object.entries(per)) {
+        const co = companyOf(src);
+        out[co] = round2((out[co] || 0) + (amt || 0)) || 0;
+    }
+    return out;
+}
+
 function balances() {
     const list = listEntries();
-    return { total: balanceOf(list), bySource: balanceBySource(list) };
+    return {
+        total: balanceOf(list),
+        bySource: balanceBySource(list),
+        byCompany: balanceByCompany(list),
+        // So a screen can label a bucket without repeating the map.
+        companyOf: SOURCES.reduce((m, s) => { m[s] = companyOf(s); return m; }, {}),
+    };
 }
 
 function balance() {
@@ -382,7 +481,25 @@ function borrowings(entries) {
         if (Math.abs(netAmt) <= CENT) continue;
         out.push(netAmt > 0 ? { owes, to, amount: netAmt } : { owes: to, to: owes, amount: round2(-netAmt) });
     }
-    return out.sort((a, b) => b.amount - a.amount);
+    // ── AND WHICH OF THESE CROSS A COMPANY LINE ───────────────────────────
+    // HER CHOICE, 2026-09-21, of three offered: "Allow it, record it as owed"
+    // — Edge Metals covering an AAA Investment payment out of the same cash
+    // box still works, and is not refused. But that balance is not the same
+    // animal as Chase owing BofA: it is one company owing another, the thing
+    // CLAUDE.md rule 5 says to keep apart, and somebody settles it on paper.
+    //
+    // So it is FLAGGED, not blocked, and the flag is computed rather than
+    // stored — a borrow whose buckets are later renamed must not keep an old
+    // answer. Two buckets with no stated company are not "the same company":
+    // COMPANY_UNKNOWN is an absence of an answer, so it claims nothing either
+    // way and intercompany stays false until she says whose the money is.
+    return out
+        .map((b) => {
+            const a = companyOf(b.owes), z = companyOf(b.to);
+            return { ...b, owes_company: a, to_company: z,
+                     intercompany: a !== COMPANY_UNKNOWN && z !== COMPANY_UNKNOWN && a !== z };
+        })
+        .sort((a, b) => b.amount - a.amount);
 }
 
 // Every borrow and repay, newest first — the history behind the figures above.
@@ -823,4 +940,11 @@ module.exports = {
     // faster than three.
     SOURCES, UNASSIGNED, sourceOf, cleanSource, balanceBySource, balances,
     transfer, borrowings, transfers, TRANSFER_REASONS,
+    // Per-company, added 2026-09-21 when BofA became two accounts belonging
+    // to two companies. Exported for the same reason SOURCES is: one map, not
+    // one per screen.
+    COMPANY_OF, COMPANY_UNKNOWN, companyOf, balanceByCompany,
+    // Exported for the ambiguity check only — see its note. Nothing in the
+    // app calls it directly; cleanSource and sourceOf are the front doors.
+    matchSource,
 };

@@ -5812,6 +5812,9 @@ async function refreshPettyCash() {
       // From the SERVER, never a list typed here. helpers/pettyCash.js says
       // why: six copies of a dropdown drift faster than three.
       sources: Array.isArray(d && d.sources) ? d.sources : [],
+      by_company: (d && d.by_company) || {},
+      company_of: (d && d.company_of) || {},
+      company_unknown: (d && d.company_unknown) || 'Company not stated',
     };
   } catch (e) {
     // Keep the last known figure rather than showing $0.00, which would read
@@ -10120,6 +10123,17 @@ function pettyBorrowingHtml(isAdmin) {
     <div class="card" style="padding:14px 16px; margin-bottom:10px; display:flex; align-items:center; gap:14px; flex-wrap:wrap;">
       <div style="flex:1; min-width:220px;">
         <div style="font-size:13px;"><strong style="color:var(--text-strong);">${esc(b.owes)}</strong> owes <strong style="color:var(--text-strong);">${esc(b.to)}</strong></div>
+        <!-- ── A LOAN BETWEEN TWO COMPANIES IS NOT THE SAME THING ──────
+             Apsara, 2026-09-21, asked whether borrowing should cross the
+             line between Edge Metals and AAA Investment, of three offered:
+             "Allow it, record it as owed". So it is allowed and it is not
+             refused — but it is said out loud. Chase owing BofA is her own
+             money moving between her own pots; Edge Metals owing AAA
+             Investment is a balance between two companies that somebody
+             settles on paper, and it should never look like the first one.
+             The flag is computed by helpers/pettyCash.borrowings, not stored,
+             so renaming a bucket cannot leave a stale claim here. -->
+        ${b.intercompany ? `<div style="margin-top:5px; font-size:11.5px; color:var(--status-warning, #d69e2e);">Between two companies — ${esc(b.owes_company)} owes ${esc(b.to_company)}. This is an intercompany balance, not a transfer inside one business.</div>` : ''}
         <div style="font-family:var(--font-mono); font-size:11px; color:var(--text-muted); margin-top:3px;">${esc(b.owes)} currently holds ${esc(fmtAmount(held(b.owes)))}</div>
       </div>
       <div style="font-family:var(--font-mono); font-size:16px; font-weight:700; color:var(--text-strong);">${esc(fmtAmount(b.amount))}</div>
@@ -10200,11 +10214,24 @@ async function renderPettyCashTab() {
         // place and its prominence — it is the number she has been reading
         // for weeks — and the buckets are added beside it. They always add
         // up to it, because every one of them is a sum of the same rows.
+        //
+        // ── AND THEN BY COMPANY, BECAUSE BofA IS NOW TWO ─────────────────
+        // Apsara, 2026-09-21: BofA holds Edge Metals' cash and AAA
+        // Investment's, and AAA Investment is "a third company". Her answer
+        // on what the headline should be, of three offered: "Keep one total,
+        // break it down below." So cash in hand is untouched — it is still
+        // every row — and what sits beside it is now WHOSE, not which bank.
+        // The per-bucket figures she asked for on 20-Sep move down one line
+        // rather than disappearing; there are five buckets now and six stats
+        // across the top is a row nobody reads.
+        //
+        // A company with nothing in it is not printed. A heading reading
+        // "AAA Investment $0.00" before any of its cash exists invites the
+        // question of where it went.
         stats: [['cash in hand', esc(fmtAmount(bal))]].concat(
-          (pettyCash.sources || []).map((src) => [
-            src.toLowerCase(),
-            esc(fmtAmount(Number((pettyCash.by_source || {})[src]) || 0)),
-          ])),
+          Object.entries(pettyCash.by_company || {})
+            .filter(([, amt]) => Math.abs(Number(amt) || 0) > 0.005)
+            .map(([co, amt]) => [co.toLowerCase(), esc(fmtAmount(Number(amt) || 0))])),
         chips: [isAdmin ? null : 'read only'],
         actions: isAdmin ? '<button id="btnAddPetty" class="btn btn-primary">+ Add cash</button>' : '',
       })}
@@ -10215,6 +10242,24 @@ async function renderPettyCashTab() {
         <button class="btn petty-tab" data-petty-tab="borrowing" style="font-size:12px; padding:6px 14px;${pettyTab === 'borrowing' ? ' background:var(--surface-raised); color:var(--text-strong);' : ''}">Borrowing${(pettyCash.borrowings || []).length ? ` (${(pettyCash.borrowings || []).length})` : ''}</button>
       </div>
       ${pettyTab === 'borrowing' ? pettyBorrowingHtml(isAdmin) : `
+      <!-- ── EACH BUCKET, UNDER THE COMPANY TOTALS ──────────────────────
+           Apsara, 20-Sep: "keep track of bofa cash available and chase bank."
+           That is still answered, one line down. Every bucket is listed even
+           at zero here, because THIS is the list she reassigns from and a
+           bucket that vanishes when empty cannot be a destination she sees.
+           The company is printed beside the ones she has named; the rest say
+           nothing rather than guessing. -->
+      <div class="card" style="padding:10px 14px; margin-bottom:18px; display:flex; flex-wrap:wrap; gap:8px 22px;">
+        ${(pettyCash.sources || []).map((src) => {
+          const co = (pettyCash.company_of || {})[src];
+          const known = co && co !== pettyCash.company_unknown;
+          return `<div style="min-width:130px;">
+            <div style="font-family:var(--font-mono); font-size:10px; letter-spacing:.09em; text-transform:uppercase; color:var(--text-muted);">${esc(src)}</div>
+            <div style="font-size:13px; color:var(--text-strong);">${esc(fmtAmount(Number((pettyCash.by_source || {})[src]) || 0))}</div>
+            ${known ? `<div style="font-size:10.5px; color:var(--text-faint);">${esc(co)}</div>` : ''}
+          </div>`;
+        }).join('')}
+      </div>
       ${bal <= 0 ? `<div class="card" style="padding:12px 16px; margin-bottom:18px; font-size:12.5px; color:var(--status-warning, #d69e2e);">Cash payments are refused while this is empty. Add cash before paying a load in cash.</div>` : ''}
 
       ${rows.length ? `
@@ -10697,7 +10742,13 @@ function openPayModal(loadId, kind) {
     const wrap = $('pay_cash_source_row');
     const sel = $('pay_cash_source');
     if (sel) {
-      const srcs = (pettyCash.sources || []).length ? pettyCash.sources : ['BofA', 'Chase Bank', 'Unassigned'];
+      // FALLBACK ONLY — used when the server list has not arrived. It mirrors
+      // helpers/pettyCash.SOURCES and tests/petty-cash-banks.js asserts the
+      // two are identical, because a stale fallback here would quietly offer
+      // 'BofA' as if it were still the only BofA account and she would file
+      // Edge Metals' cash into the unsplit bucket without noticing.
+      const srcs = (pettyCash.sources || []).length ? pettyCash.sources
+        : ['BofA', 'BofA/Edge Metals', 'BofA/AAA Investment', 'Chase Bank', 'Unassigned'];
       sel.innerHTML = srcs.map((x) => `<option value="${esc(x)}">${esc(x)}${
         (pettyCash.by_source || {})[x] != null ? ` — ${esc(fmtAmount(Number(pettyCash.by_source[x]) || 0))}` : ''}</option>`).join('');
       // Defaults to whichever bucket holds the most, so the common case needs

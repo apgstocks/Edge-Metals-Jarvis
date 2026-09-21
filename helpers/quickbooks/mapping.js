@@ -79,6 +79,12 @@ function matchParty(jarvisName, qbList, kind, map = loadMap()) {
     const confirmed = map[kind][key];
     if (confirmed) {
         if (confirmed.qbId === null) return { status: 'new', jarvisName, candidates: [], note: 'she marked this as not in QuickBooks' };
+        // Not a party at all in this role. Apsara, 2026-09-21, on "Junk Car"
+        // in the Customer column of 17 local deliveries: "we will keep it in
+        // their inventory. When customer is loaded, we will mix them." The
+        // yard is where the stock waits, not who bought it, so nothing may
+        // ever be invoiced to it; the sale happens later, to the real buyer.
+        if (confirmed.qbId === 'SKIP') return { status: 'skip', jarvisName, candidates: [], note: confirmed.reason || 'not a party in this role' };
         return { status: 'confirmed', jarvisName, qb: { Id: confirmed.qbId, DisplayName: confirmed.qbName }, candidates: [] };
     }
 
@@ -125,12 +131,13 @@ function rankSuggestions(jarvisName, list) {
 function pick(q) { return { Id: String(q.Id), DisplayName: q.DisplayName, Active: q.Active !== false }; }
 
 // Her decision. qbId=null means "not in QuickBooks — a new party".
-function confirm(kind, jarvisName, qbId, qbName, by = 'apsara') {
+// qbId='SKIP' means "never a vendor/customer in this role" (reason kept).
+function confirm(kind, jarvisName, qbId, qbName, by = 'apsara', reason = null) {
     if (!KINDS.includes(kind)) throw new Error(`kind must be vendor|customer, got ${kind}`);
     const key = normalizeName(jarvisName);
     if (!key) throw new Error('empty Jarvis name');
     const m = loadMap();
-    m[kind][key] = { jarvisName, qbId: qbId === null ? null : String(qbId), qbName: qbName || null, by, at: new Date().toISOString() };
+    m[kind][key] = { jarvisName, qbId: qbId === null ? null : String(qbId), qbName: qbName || null, by, at: new Date().toISOString(), ...(reason ? { reason } : {}) };
     saveMap(m);
     return m[kind][key];
 }

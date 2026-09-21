@@ -563,7 +563,17 @@ const TOOLS = {
             // break the thing this tool exists for. Unsaid means the payment
             // comes out of unbanked cash, which is a real bucket and an
             // honest answer rather than a placeholder.
-            cash_source: { type: 'string', describe: 'on a CASH payment, which cash: BofA, Chase Bank, or leave unsaid for unbanked cash' },
+            // Built from the ONE list rather than spelled out here. It was
+            // spelled out, and the day BofA became two accounts this line
+            // would have kept telling the model there were two buckets while
+            // the server knew about four — so "pay Gomez cash from AAA
+            // Investment" would have been proposed as unbanked cash and
+            // filed against the wrong company. helpers/pettyCash.cleanSource
+            // accepts a slash, a dash or plain spaces, and resolves a bare
+            // "Edge Metals" when only one bucket can mean it.
+            cash_source: { type: 'string', describe: 'on a CASH payment, which cash: '
+                + require('./pettyCash').SOURCES.filter((s) => s !== 'Unassigned').join(', ')
+                + ', or leave unsaid for unbanked cash' },
             // ── REQUIRED FOR SOME COMBINATIONS, AND THE TOOL HAD NO BOX ─────
             // Added 2026-09-17 after a live break. The paid-via work of
             // 2026-09-16 ("on selecting wire-it should ask me Payment via Edge
@@ -642,6 +652,21 @@ const TOOLS = {
                         borrowNote = `${cashSource} holds ${money(held)} — confirming this borrows `
                             + `${money(Math.round((amount - held) * 100) / 100)} from `
                             + lenders.map((l) => l.source).join(' and ') + '.';
+                        // ── AND WHETHER THAT CROSSES A COMPANY LINE ──────
+                        // Apsara, 2026-09-21, chose to ALLOW borrowing between
+                        // Edge Metals and AAA Investment and have it recorded
+                        // as owed. This card is the last thing she reads
+                        // before the money moves, and on this path there is no
+                        // second round to ask in — so if confirming creates a
+                        // balance between two companies, the card says so now.
+                        const mine = petty.companyOf(cashSource);
+                        const across = lenders
+                            .map((l) => petty.companyOf(l.source))
+                            .filter((co) => co !== petty.COMPANY_UNKNOWN && co !== mine);
+                        if (mine !== petty.COMPANY_UNKNOWN && across.length) {
+                            borrowNote += ` That is a loan between two companies — ${mine} would owe `
+                                + Array.from(new Set(across)).join(' and ') + '.';
+                        }
                     }
                 }
             }

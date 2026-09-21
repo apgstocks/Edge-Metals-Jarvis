@@ -2372,7 +2372,8 @@ function openPayModal(loadId, kind) {
   {
     const sel = $('pay_cash_source');
     if (sel) {
-      const srcs = (pettyCash.sources || []).length ? pettyCash.sources : ['BofA', 'Chase Bank', 'Unassigned'];
+      const srcs = (pettyCash.sources || []).length ? pettyCash.sources
+        : ['BofA', 'BofA/Edge Metals', 'BofA/AAA Investment', 'Chase Bank', 'Unassigned'];
       sel.innerHTML = srcs.map((x) => `<option value="${esc(x)}">${esc(x)}${
         (pettyCash.by_source || {})[x] != null ? ` — ${esc(fmtAmount(Number(pettyCash.by_source[x]) || 0))}` : ''}</option>`).join('');
       const best = srcs.slice().sort((a, b) =>
@@ -6900,6 +6901,9 @@ async function refreshPettyCash() {
       // From the SERVER, never a list typed here — helpers/pettyCash.js says
       // why: six copies of a dropdown drift faster than three.
       sources: Array.isArray(d && d.sources) ? d.sources : [],
+      by_company: (d && d.by_company) || {},
+      company_of: (d && d.company_of) || {},
+      company_unknown: (d && d.company_unknown) || 'Company not stated',
     };
   } catch (e) {
     // Keep the last known figure rather than showing $0.00, which would read
@@ -6931,6 +6935,13 @@ function pettyBorrowingHtml(isAdmin) {
       <div style="display:flex; align-items:center; gap:12px; flex-wrap:wrap;">
         <div style="flex:1; min-width:180px;">
           <div style="font-size:13px;"><strong style="color:var(--text-strong);">${esc(b.owes)}</strong> owes <strong style="color:var(--text-strong);">${esc(b.to)}</strong></div>
+          <!-- Apsara, 2026-09-21, on borrowing across the Edge Metals / AAA
+               Investment line, of three offered: "Allow it, record it as
+               owed." Allowed, not refused — and said out loud, because one
+               company owing another is settled on paper and must never read
+               like her own cash moving between her own pots. Computed in
+               helpers/pettyCash.borrowings, never stored. -->
+          ${b.intercompany ? `<div style="margin-top:5px; font-size:11.5px; color:var(--status-warning, #d69e2e);">Between two companies — ${esc(b.owes_company)} owes ${esc(b.to_company)}.</div>` : ''}
           <div style="font-family:var(--font-mono); font-size:11px; color:var(--text-muted); margin-top:3px;">${esc(b.owes)} holds ${esc(fmtAmount(held(b.owes)))}</div>
         </div>
         <div style="font-family:var(--font-mono); font-size:16px; font-weight:700; color:var(--text-strong);">${esc(fmtAmount(b.amount))}</div>
@@ -7009,12 +7020,38 @@ async function renderPettyCashTab() {
              place and its size — it is the number she has read for weeks —
              and the buckets sit under it. They always add up to it, because
              every one is a sum of the same rows. -->
+        <!-- ── WHOSE MONEY, THEN WHICH BUCKET ────────────────────────────
+             Apsara, 2026-09-21: BofA became two accounts, Edge Metals' and
+             AAA Investment's, and AAA Investment is "a third company". Her
+             answer on the headline, of three offered: "Keep one total, break
+             it down below." So the big figure above is untouched — still
+             every row — and the company split comes first underneath it,
+             because on a phone the first thing under the total is the thing
+             that gets read. A company with nothing in it is not printed. -->
+        ${Object.entries(pettyCash.by_company || {}).filter(([, a]) => Math.abs(Number(a) || 0) > 0.005).length ? `
+        <div style="display:flex; gap:18px; flex-wrap:wrap; margin-top:12px; padding-top:12px; border-top:1px solid var(--border-subtle);">
+          ${Object.entries(pettyCash.by_company || {})
+            .filter(([, a]) => Math.abs(Number(a) || 0) > 0.005)
+            .map(([co, a]) => {
+              const v = Number(a) || 0;
+              return `<div>
+                <div style="font-family:var(--font-mono); font-size:9.5px; letter-spacing:.12em; text-transform:uppercase; color:var(--text-muted);">${esc(co)}</div>
+                <div style="font-family:var(--font-mono); font-size:15px; font-weight:700; color:${v < 0 ? 'var(--status-danger, #c53030)' : 'var(--text-strong)'};">${esc(fmtAmount(v))}</div>
+              </div>`;
+            }).join('')}
+        </div>` : ''}
+        <!-- And the buckets she asked for on 20-Sep, one line further down.
+             Every one is listed even at zero: this is the list she reassigns
+             into, and a destination that hides while empty is unreachable. -->
         <div style="display:flex; gap:18px; flex-wrap:wrap; margin-top:12px; padding-top:12px; border-top:1px solid var(--border-subtle);">
           ${(pettyCash.sources || []).map((src) => {
             const v = Number((pettyCash.by_source || {})[src]) || 0;
+            const co = (pettyCash.company_of || {})[src];
+            const known = co && co !== pettyCash.company_unknown;
             return `<div>
               <div style="font-family:var(--font-mono); font-size:9.5px; letter-spacing:.12em; text-transform:uppercase; color:var(--text-muted);">${esc(src)}</div>
               <div style="font-family:var(--font-mono); font-size:15px; font-weight:700; color:${v < 0 ? 'var(--status-danger, #c53030)' : 'var(--text-strong)'};">${esc(fmtAmount(v))}</div>
+              ${known ? `<div style="font-size:9.5px; color:var(--text-faint);">${esc(co)}</div>` : ''}
             </div>`;
           }).join('')}
         </div>
@@ -7068,9 +7105,19 @@ async function renderPettyCashTab() {
       // definition money drawn from an account; if it had no bank behind it,
       // it is not a top-up. The SERVER accepts blank, so an older build of
       // this app can still add cash — it just lands in Unassigned.
-      const banks = (pettyCash.sources || ['BofA', 'Chase Bank']).filter((x) => x !== 'Unassigned');
+      // FALLBACK ONLY — mirrors helpers/pettyCash.SOURCES, and
+      // tests/petty-cash-banks.js asserts they are identical. A stale copy
+      // here would offer 'BofA' as though it were still the only BofA
+      // account, and Edge Metals' cash would land in the unsplit bucket.
+      const banks = (pettyCash.sources && pettyCash.sources.length ? pettyCash.sources
+        : ['BofA', 'BofA/Edge Metals', 'BofA/AAA Investment', 'Chase Bank', 'Unassigned'])
+        .filter((x) => x !== 'Unassigned');
+      // "Type 1 or 2" was true when there were two. There are four now, and a
+      // prompt that names a range it no longer has is how a wrong bucket gets
+      // picked in a hurry.
       const pick = prompt(`Which bank did this ${fmtAmount(n)} come out of?\n\n`
-        + banks.map((b, i) => `${i + 1}. ${b}`).join('\n') + '\n\nType 1 or 2.');
+        + banks.map((b, i) => `${i + 1}. ${b}`).join('\n')
+        + `\n\nType 1${banks.length > 1 ? `–${banks.length}` : ''}.`);
       if (pick === null) return;
       const chosen = banks[Number(String(pick).trim()) - 1]
         || banks.find((b) => b.toLowerCase() === String(pick).trim().toLowerCase());
@@ -7094,7 +7141,8 @@ async function renderPettyCashTab() {
 
     const reassign = $('btnReassignCash');
     if (reassign) reassign.addEventListener('click', async () => {
-      const all = pettyCash.sources || ['BofA', 'Chase Bank', 'Unassigned'];
+      const all = (pettyCash.sources && pettyCash.sources.length) ? pettyCash.sources
+        : ['BofA', 'BofA/Edge Metals', 'BofA/AAA Investment', 'Chase Bank', 'Unassigned'];
       const from = prompt('Move cash OUT of which account?\n\n' + all.map((b, i) => `${i + 1}. ${b}`).join('\n'));
       if (from === null) return;
       const src = all[Number(String(from).trim()) - 1] || all.find((b) => b.toLowerCase() === String(from).trim().toLowerCase());

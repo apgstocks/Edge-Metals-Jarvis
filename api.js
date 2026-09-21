@@ -4951,6 +4951,14 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
                 entries: petty.history(200),
                 sources: petty.SOURCES,
                 by_source: petty.balanceBySource(petty.listEntries()),
+                // Added 2026-09-21, alongside again and for the same reason:
+                // BofA became two accounts belonging to two companies, and
+                // her answer was one total with the split underneath it.
+                // `company_of` travels with the list so a screen labels a
+                // bucket without carrying its own copy of the map.
+                by_company: petty.balanceByCompany(petty.listEntries()),
+                company_of: petty.SOURCES.reduce((m, s) => { m[s] = petty.companyOf(s); return m; }, {}),
+                company_unknown: petty.COMPANY_UNKNOWN,
                 borrowings: petty.borrowings(),
                 transfers: petty.transfers(),
             });
