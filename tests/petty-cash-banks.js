@@ -602,12 +602,27 @@ section('H — BofA is two accounts, and they belong to two companies');
             copies.length > 0 && copies.every((c) => c.includes(EXPECTED)),
             `${copies.length} fallback(s) vs ${EXPECTED}: ${JSON.stringify(copies.map((c) => c.slice(-90)))}`);
     }
-    // The phone asks with a numbered prompt. "Type 1 or 2" was true when
-    // there were two banks; there are four now.
-    const mob = fs.readFileSync(path.join(__dirname, '..', 'mobile-app/www/index.html'), 'utf8');
-    ck('the phone no longer tells her to type 1 or 2',
-        !/Type 1 or 2\./.test(mob),
-        'a prompt naming a range it no longer has is how a wrong bucket gets picked');
+    // ── AND THE NUMBERED PROMPT, ON BOTH SCREENS ─────────────────────────
+    // This check read the PHONE only. It passed, I said "the phone no longer
+    // tells her to type 1 or 2", and the website went on saying exactly that
+    // — I had fixed one of the two files and written a check shaped around
+    // the file I fixed. Found by unzipping the built APK and grepping it,
+    // which is the sort of thing that should not be what catches this.
+    //
+    // Now: both files, and the string is matched OUT of any comment, so a
+    // note explaining the fix cannot satisfy the check that the fix happened.
+    for (const f of ['mobile-app/www/index.html', 'dashboard/index.html']) {
+        const src = fs.readFileSync(path.join(__dirname, '..', f), 'utf8');
+        const inCode = src.split('\n')
+            .filter((l) => !/^\s*(\/\/|\*|<!--)/.test(l))
+            .join('\n');
+        ck(`${f}: the add-cash prompt does not name a range it no longer has`,
+            !/Type 1 or 2/.test(inCode),
+            'four accounts now; a prompt saying "1 or 2" is how a wrong one gets picked');
+        ck(`  ${f}: it computes the range from the list instead`,
+            /Type 1\$\{banks\.length > 1/.test(inCode),
+            'so it cannot go stale again the next time an account is added');
+    }
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

@@ -7134,9 +7134,9 @@ async function renderPettyCashTab() {
       const banks = (pettyCash.sources && pettyCash.sources.length ? pettyCash.sources
         : ['BofA', 'Edge Metals', 'AAA Investment', 'Chase Bank', 'Unassigned'])
         .filter((x) => x !== 'Unassigned');
-      // "Type 1 or 2" was true when there were two. There are four now, and a
-      // prompt that names a range it no longer has is how a wrong bucket gets
-      // picked in a hurry.
+      // The range is computed, not written out. It named two accounts back
+      // when there were two, and a prompt stating a range it no longer has is
+      // how a wrong account gets picked in a hurry.
       const pick = prompt(`Which bank did this ${fmtAmount(n)} come out of?\n\n`
         + banks.map((b, i) => `${i + 1}. ${b}`).join('\n')
         + `\n\nType 1${banks.length > 1 ? `–${banks.length}` : ''}.`);

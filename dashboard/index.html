@@ -10331,8 +10331,15 @@ async function renderPettyCashTab() {
       // definition money she drew from an account; if it had no bank behind
       // it, it is not a top-up.
       const banks = (pettyCash.sources || []).filter((x) => x !== 'Unassigned');
+      // The range is computed, not written out. It said "Type 1 or 2" — true
+      // when there were two accounts — and I fixed that sentence on the phone
+      // and left it standing here, because the check I wrote to catch it only
+      // read the phone's file. A prompt naming a range it no longer has is
+      // how a wrong account gets picked in a hurry, and this is the screen
+      // she adds cash on most.
       const pick = prompt(`Which bank did this ${fmtAmount(n)} come out of?\n\n`
-        + banks.map((b, i) => `${i + 1}. ${b}`).join('\n') + '\n\nType 1 or 2.');
+        + banks.map((b, i) => `${i + 1}. ${b}`).join('\n')
+        + `\n\nType 1${banks.length > 1 ? `–${banks.length}` : ''}.`);
       if (pick === null) return;
       const chosen = banks[Number(String(pick).trim()) - 1]
         || banks.find((b) => b.toLowerCase() === String(pick).trim().toLowerCase());
