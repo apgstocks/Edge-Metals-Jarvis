@@ -4032,15 +4032,33 @@ async function startSaleInvoice(chatId, { target = null, container = null } = {}
 
     const who = String(target || '').trim();
     if (!who) {
-        await siStage(chatId, { stage: 'which' }, 'Which supplier or container should I invoice?');
-        await _send(chatId, 'Which supplier or container should I invoice?');
+        await siStage(chatId, { stage: 'which' }, 'Which supplier, customer or container should I invoice?');
+        await _send(chatId, 'Which supplier, customer or container should I invoice?');
         return { action_taken: 'sale_invoice_asked', field: 'which' };
     }
     const found = flow.latestBillsFor(who);
     if (!found.bills.length) {
+        // Not a supplier — a CUSTOMER? "invoice for Daekwang" (2026-09-21:
+        // "invoice should not create proforma"). Her newest sale to them.
+        const sold = flow.latestSalesFor(who);
+        if (sold.groups.length > 1) {
+            const lines = sold.groups.map((g, i) => `${i + 1}. ${g.container_no || '(no container)'} — ${g.rows.map((r) => r.item || '?').join(', ')}${g.invoice_no ? `, invoice ${g.invoice_no}` : ''}`);
+            const q = `Which one should I invoice — 1 to ${sold.groups.length}?`;
+            await siStage(chatId, { stage: 'pick_customer', groups: sold.groups.map((g) => g.rows.map((r) => r.id)) }, q);
+            await _send(chatId, `${sold.groups[0].customer}'s latest sale date is ${sold.date}, with ${sold.groups.length} invoices:\n\n${lines.join('\n')}\n\n${q}`);
+            siSay(`${sold.groups[0].customer} has ${sold.groups.length} sales on the latest date. Which one? They're on screen.`);
+            return { action_taken: 'sale_invoice_pick', count: sold.groups.length };
+        }
+        if (sold.groups.length === 1) {
+            const g = sold.groups[0];
+            const bill = require('../helpers/saleInvoice').billFor(g.rows[0]);
+            return siWithContainer(chatId, { bill, sales: g.rows,
+                intro: `${g.customer}'s latest sale is ${sold.date} — container ${g.container_no || '(none yet)'}`,
+                spokenIntro: `${g.customer}'s latest sale, from ${sold.date}.` });
+        }
         const known = found.known.slice(0, 8);
-        await _send(chatId, `No bills from "${who}" with a container on them.${known.length ? ` Suppliers with bills: ${known.join(', ')}.` : ''}`);
-        siSay(`I don't have any bills from ${who} with a container on them.`);
+        await _send(chatId, `No bills from "${who}" and no sales to "${who}", so there's nothing to invoice.${known.length ? ` Suppliers with bills: ${known.join(', ')}.` : ''}\n\n(If you meant a proforma, say "proforma for ${who}".)`);
+        siSay(`I have no bills from ${who} and no sales to them. If you meant a proforma, say proforma for ${who}.`);
         return { action_taken: 'sale_invoice_no_bills', supplier: who };
     }
     const name = found.bills[0].supplier || who;
@@ -4294,6 +4312,15 @@ async function saleInvoiceAnswer(chatId, pending, text) {
         const bill = flow.billById(choices[idx]);
         if (!bill) { await clearPending(chatId); await _send(chatId, 'That bill is gone — ask me again.'); return { action_taken: 'sale_invoice_failed' }; }
         return siWithContainer(chatId, { bill, sales: flow.salesForBill(bill), intro: `Container ${bill.container_no}`, spokenIntro: 'Got it.' });
+    }
+    if (p.stage === 'pick_customer') {
+        const groups = p.groups || [];
+        const idx = pickIndex(groups.length);
+        if (idx === null) return again(`Say a number from 1 to ${groups.length}.`);
+        const sales = require('../helpers/sales');
+        const rows = groups[idx].map((id) => sales.getSale(id)).filter(Boolean);
+        if (!rows.length) { await clearPending(chatId); await _send(chatId, 'That sale is gone — ask me again.'); return { action_taken: 'sale_invoice_failed' }; }
+        return siWithContainer(chatId, { bill: require('../helpers/saleInvoice').billFor(rows[0]), sales: rows, intro: `Container ${rows[0].container_no || '(none yet)'}`, spokenIntro: 'Got it.' });
     }
     if (p.stage === 'pick_group') {
         const groups = p.groups || [];

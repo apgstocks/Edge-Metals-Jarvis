@@ -31,6 +31,9 @@ process.env.QB_REDIRECT_URI = 'http://localhost:8765/qb/callback';
 
 const auth = require('../helpers/quickbooks/auth');
 const client = require('../helpers/quickbooks/client');
+// config.js loads the real .env on require; dotenv never overrides what is
+// already set, so anything the suite relies on being UNSET is cleared here.
+for (const k of ['QB_SANDBOX_REDIRECT_URI', 'QB_PROD_REDIRECT_URI', 'QB_PROD_WRITES', 'QB_TOKEN_FILE']) delete process.env[k];
 
 function fakeFetch(handler) {
     const calls = [];

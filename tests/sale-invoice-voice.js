@@ -242,6 +242,26 @@ section('D. end to end on WhatsApp — two containers on the latest date');
     await j.stop();
 }
 
+section('D2. "invoice for Daekwang" — a customer, so the sale side');
+{
+    const j = await boot({});
+    const bills = require(R('helpers/bills'));
+    const sales = require(R('helpers/sales'));
+    require(R('helpers/nextInvoiceNo')).suggestNextInvNo = async () => ({ inv_no: '260921_AP_26DK15', highest_existing: '26DK14' });
+    await bills.addBill({ date: '09/15/2026', supplier: 'Gomez', booking_no: 'BKD', container_no: 'DKWU1234567', description: 'Motors', gross: 30000, truck: 9000, container: 4000, chassis: 1000, boxes: 0 });
+    await sales.addSale({ booking_no: 'BKO', container_no: 'OLDU7654321', customer: 'Daekwang Co', date: '09/01/2026', item: 'Cores', weight: 15000, invoice_price: 0.4, invoice_no: '26DK10' });
+    const s = await sales.addSale({ booking_no: 'BKD', container_no: 'DKWU1234567', customer: 'Daekwang Co', date: '09/20/2026', item: 'Motors', weight: 16000, invoice_price: 0.52 });
+    const one = await j.say('prepare an invoice for Daekwang');
+    ck('no proforma', !(one.json && one.json.proforma), A(one));
+    ck('  it found Daekwang\'s LATEST sale, not the older one', /DKWU1234567/.test(A(one)) && !/OLDU7654321/.test(A(one)), A(one));
+    ck('  nothing missing but the number, so it asks the invoice number', /260921_AP_26DK15/.test(A(one)), A(one));
+    await j.say('yes'); await j.say('yes');
+    ck('  the number lands on the sale', sales.getSale(s.id).invoice_no === '260921_AP_26DK15');
+    const gen = await j.say('invoice only');
+    ck('  and it generates from the bill + sale', /Generated 260921_AP_26DK15 for DKWU1234567 — invoice only/.test(A(gen)), A(gen));
+    await j.stop();
+}
+
 section('E. cancel, no, nothing found, and another question already open');
 {
     const j = await boot({});
@@ -256,13 +276,15 @@ section('E. cancel, no, nothing found, and another question already open');
     const none = await j.say('generate invoice for the zorro container');
     ck('no bills from them — says so, and who does have bills', /No bills from "zorro"/i.test(A(none)) && /Inesh/.test(A(none)), A(none));
 
-    // THE COLLISION. "prepare an invoice for Daekwang" has started a PROFORMA
-    // by voice since 2026-09-07. Daekwang is a customer with no bills, so it
-    // must still do exactly that.
+    // "invoice should not create proforma" (2026-09-21). Daekwang has no
+    // bills and no sales here, so it says so — and does NOT open a proforma.
     const pf = await j.say('prepare an invoice for Daekwang');
-    ck('"prepare an invoice for Daekwang" still starts a proforma', !!(pf.json && pf.json.proforma && pf.json.proforma.stage) && !actions.getPending(chat), A(pf));
-    await j.say('cancel');
+    ck('"prepare an invoice for Daekwang" does NOT start a proforma', !(pf.json && pf.json.proforma) && !require(R('helpers/proformaDraft')).current(), A(pf));
+    ck('  it says there is nothing to invoice, and how to ask for a proforma', /no sales to "Daekwang"/i.test(A(pf)) && /proforma for Daekwang/i.test(A(pf)), A(pf));
+    const pf2 = await j.say('make a proforma for Daekwang');
+    ck('  "proforma" by name still starts one', !!(pf2.json && pf2.json.proforma && pf2.json.proforma.stage), A(pf2));
     require(R('helpers/proformaDraft')).clear();
+    await actions.clearPending(chat);
 
     await j.say('generate invoice for inesh');
     const c = await j.say('cancel');

@@ -254,13 +254,11 @@ async function generate(sale, { separate = false, invoiceOnly = false } = {}) {
 // Shared by the WhatsApp brain (policyDecide) and the voice route, so the two
 // cannot disagree about what "generate invoice for X" means.
 //
-// THE COLLISION IT RESOLVES. "prepare an invoice for Daekwang" already starts
-// a PROFORMA by voice (helpers/proformaDraft.namesProforma counts the bare
-// word "invoice", and tests/proforma-draft.js holds it to that). So a making
-// verb plus "invoice" is not enough on its own. This claims the sentence only
-// when it points at something she BOUGHT: a container number, the word
-// container/load, or a name that has bills on file (Inesh does; Daekwang, a
-// customer, does not). Everything else is left exactly where it went before.
+// Apsara, 2026-09-21: "invoice should not create proforma". So a making verb
+// plus the word invoice IS this — for a supplier ("the Inesh container"), a
+// container number, or a customer ("invoice for Daekwang"). A proforma is
+// asked for by name: "proforma", "pro forma" or "PI", which this refuses and
+// helpers/proformaDraft still takes.
 const MAKE = /\b(generate|create|make|raise|prepare|build)\b/i;
 const ASKING = /^\s*(?:(?:hey\s+)?jarvis[,\s]+)?(did|do|does|have|has|was|were|is|are|who|when|where|why|how|what|which|can you tell)\b/i;
 const OTHER_INVOICE_WORK = /\b(proforma|pro forma|pi\b|quote|quotation|payment|paid|unpaid|receivable|old invoice|track|record|send|sent|email|mail)\b/i;
@@ -276,12 +274,26 @@ function saleInvoiceRequest(text) {
     if (ASKING.test(t) || OTHER_INVOICE_WORK.test(t)) return null;
     const cm = t.match(/\b([A-Z]{4})\s?(\d{7})\b/i);
     if (cm) return { container: (cm[1] + cm[2]).toUpperCase(), target: null };
-    const who = targetIn(t);
-    let hasBills = false;
-    try { hasBills = !!(who && latestBillsFor(who).bills.length); } catch (e) { hasBills = false; }
-    if (hasBills) return { container: null, target: who };
-    if (/\b(container|load)\b/i.test(t)) return { container: null, target: who };
-    return null;
+    return { container: null, target: targetIn(t) };
+}
+
+// "invoice for Daekwang" — a CUSTOMER, so the sale side. Her newest sale
+// date for that customer, one entry per invoice on it (booking + container +
+// invoice number, the same gathering as saleInvoice.siblingRows).
+function latestSalesFor(query) {
+    const mine = sales.list().filter((x) => supplierMatches(x.customer, query));
+    if (!mine.length) return { groups: [], date: null };
+    const top = mine.reduce((m, x) => { const d = bills.sortableDate(x.date); return d && (!m || d > m) ? d : m; }, null);
+    const onTop = top ? mine.filter((x) => bills.sortableDate(x.date) === top) : mine;
+    const n = (v) => String(v == null ? '' : v).trim().toUpperCase();
+    const groups = [];
+    for (const r of onTop) {
+        const k = `${n(r.booking_no)}|${n(r.container_no)}|${n(r.invoice_no)}|${n(r.customer)}`;
+        let g = groups.find((x) => x.key === k);
+        if (!g) { g = { key: k, container_no: r.container_no || '', invoice_no: r.invoice_no || '', customer: r.customer || '', rows: [] }; groups.push(g); }
+        g.rows.push(r);
+    }
+    return { groups, date: onTop[0] ? onTop[0].date : null };
 }
 
 function pdfMedia(p) {
@@ -291,6 +303,6 @@ function pdfMedia(p) {
 
 module.exports = {
     supplierMatches, latestBillsFor, billByContainer, billById, salesForBill, salesForContainer,
-    rowsFromBill, groupSales, missingFields, saleInvoiceRequest, targetIn, parseAnswer, parseInvNo, parseLayout, describe, generate, pdfMedia,
+    rowsFromBill, groupSales, missingFields, saleInvoiceRequest, targetIn, latestSalesFor, parseAnswer, parseInvNo, parseLayout, describe, generate, pdfMedia,
     QUESTION, LABEL, ORDER, SHARED, todayMDY,
 };

@@ -538,7 +538,12 @@ function looksLikeProforma(word) {
 // initials.
 function namesProforma(text) {
     const t = String(text || '');
-    if (/\b(?:p\.?\s?i\.?|invoice)\b/i.test(t)) return true;
+    // "invoice" ON ITS OWN IS NOT A PROFORMA (2026-09-21). Apsara: "invoice
+    // should not create proforma". The bare word belongs to the commercial
+    // invoice now (helpers/saleInvoiceFlow — "generate invoice for the Inesh
+    // container"). "proforma invoice" still starts one, through the word
+    // proforma, and so does "PI".
+    if (/\bp\.?\s?i\.?(?=\s|$|[,.;!?])/i.test(t)) return true;
     const words = t.split(/[^A-Za-z]+/).filter(Boolean);
     for (let i = 0; i < words.length; i += 1) {
         if (looksLikeProforma(words[i])) return true;

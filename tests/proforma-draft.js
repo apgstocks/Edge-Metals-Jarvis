@@ -194,8 +194,13 @@ section('H2 — the verbs she actually reaches for');
         'do a proforma for Daekwang',
         'put together a proforma for Daekwang',
         'draft a proforma for Daekwang',
-        'prepare an invoice for Daekwang',
+        'make a proforma invoice for Daekwang',
     ]) ck(`"${t}" starts a draft`, d.isStart(t) === true);
+
+    // Apsara, 2026-09-21: "invoice should not create proforma". The bare
+    // word is the COMMERCIAL invoice now (helpers/saleInvoiceFlow).
+    for (const t of ['prepare an invoice for Daekwang', 'generate invoice for the inesh container', 'make the invoice for Inesh'])
+        ck(`  "${t}" does NOT start a proforma`, d.isStart(t) === false);
 
     // And what must NOT start one. "send" is now a start verb AND the word
     // she uses to post a finished document — the noun is what keeps them
