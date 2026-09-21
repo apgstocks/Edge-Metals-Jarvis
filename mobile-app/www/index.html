@@ -2288,6 +2288,16 @@ function syncBankFields(prefix) {
     const lbl = viaRow.querySelector('label');
     if (lbl) lbl.textContent = paidViaLabelFor(sale);
   }
+  // ── AND WHICH CASH, WHICH FOLLOWS THE MODE ───────────────────────────
+  // Wired here rather than only at open, or switching the dropdown from
+  // Zelle to Cash would leave the question hidden and the payment would
+  // silently come out of unbanked cash. Purchases only: a sale takes cash
+  // IN, and `_via_row`'s kind is already the flag that says which.
+  const cashRow = $(prefix + '_cash_source_row');
+  if (cashRow) {
+    const isSale = viaRow && viaRow.dataset.kind === 'sale';
+    cashRow.style.display = (String(mode).toLowerCase() === 'cash' && !isSale) ? '' : 'none';
+  }
 }
 
 
@@ -2354,6 +2364,22 @@ function openPayModal(loadId, kind) {
   // Cleared on every open, or the company chosen on the LAST payment is
   // pre-answered on this one.
   if ($('pay_via')) $('pay_via').value = '';
+  // Rebuilt on every open from the server's list, so a bucket added later
+  // needs no change here. Unassigned is offered: cash never banked is a real
+  // pot to spend from, and forcing a bank on it would put money against an
+  // account it never came out of. Defaults to the fullest bucket, so the
+  // common case needs no thought and the borrow prompt stays rare.
+  {
+    const sel = $('pay_cash_source');
+    if (sel) {
+      const srcs = (pettyCash.sources || []).length ? pettyCash.sources : ['BofA', 'Chase Bank', 'Unassigned'];
+      sel.innerHTML = srcs.map((x) => `<option value="${esc(x)}">${esc(x)}${
+        (pettyCash.by_source || {})[x] != null ? ` — ${esc(fmtAmount(Number(pettyCash.by_source[x]) || 0))}` : ''}</option>`).join('');
+      const best = srcs.slice().sort((a, b) =>
+        (Number((pettyCash.by_source || {})[b]) || 0) - (Number((pettyCash.by_source || {})[a]) || 0))[0];
+      sel.value = best || srcs[0];
+    }
+  }
   if ($('pay_via_row')) $('pay_via_row').dataset.kind = payingLoad.kind;
   // Kept in step with helpers/payments.js's modesForKind, which is what the
   // server enforces. A sale receives money: Cash or Bank transfer, her rule of
@@ -4815,6 +4841,17 @@ function renderLoads(loads) {
               <option value="Edge Metals">Edge Metals</option>
             </select>
           </div>
+          <!-- ── WHICH CASH ────────────────────────────────────────────
+               Apsara, 2026-09-21: "when they pay cash as mode of payment-ask
+               to choose from bofa/chase." Cash only, and purchases only — a
+               SALE takes cash IN, and asking which bank a customer's notes
+               came out of is a question with no answer. Its own field, NOT
+               the bank row above: helpers/banks.js refuses a bank on a cash
+               payment and is right to. Mirrors dashboard/index.html. -->
+          <div class="field" id="pay_cash_source_row" style="margin-top:14px; display:none;">
+            <label for="pay_cash_source">Which cash</label>
+            <select id="pay_cash_source"></select>
+          </div>
           <div class="ld-grid-2" style="margin-top:14px;">
             <div class="field"><label>Amount</label><input id="pay_amount" type="number" step="any" inputmode="decimal" placeholder="0.00"></div>
             <div class="field"><label>Reference (optional)</label><input id="pay_ref" placeholder="cheque no. / txn id" autocomplete="off"></div>
@@ -5020,11 +5057,42 @@ function wireLoadsEvents() {
         // unanswered one cannot mean different things.
         paid_via: ($('pay_via') || {}).value || '',
         bank: bankValue('pay'),
+        // ── WHICH CASH, ON A CASH PAYMENT ────────────────────────────────
+        // A different field from `bank` above and it has to be: banks.js
+        // REFUSES a bank on a cash payment ("paid cash from Chase" is not a
+        // true sentence), while this says which trip to the bank the notes
+        // came from. '' when hidden, which the server reads as unbanked cash.
+        cash_source: ($('pay_cash_source') || {}).value || '',
         amount, paid_on: toIsoDate($('pay_date').value) || null, reference: $('pay_ref').value.trim() || null,
       };
       try {
         await api('/api/payments', { method: 'POST', body: JSON.stringify(body) });
       } catch (err) {
+        // ── THE NOMINATED BANK IS SHORT, BUT THE BOX IS NOT ──────────────
+        // Apsara, 2026-09-21: "we have only 3000 in chase and 10000 in bofa
+        // ... want to borrow from bofa?On confirmaton-allow them to pay."
+        //
+        // Checked BEFORE the partial-payment branch below, and the order
+        // matters: this is a short BUCKET, not a short box. The partial
+        // prompt would offer to hand the supplier 3,000 and leave 4,000
+        // outstanding while 10,000 sits in the other account — two different
+        // questions, and the wrong one first underpays a supplier for no
+        // reason. Mirrors dashboard/index.html.
+        if (err && err.code === 'PETTY_CASH_BUCKET_SHORT') {
+          const lenders = (err.lenders || []).map((l) => `${l.source} (${fmtAmount(l.available)})`).join(', ');
+          const ok = lenders && confirm(
+            `Only ${fmtAmount(err.bucket_available)} available in ${err.bucket}.\n\n` +
+            `Borrow ${fmtAmount(err.shortfall)} from ${lenders}?\n\n` +
+            `It will be tracked on Petty cash \u2192 Borrowing until you repay it.`);
+          if (!ok) { btn.disabled = false; btn.textContent = 'Record payment'; $('payErr').textContent = 'Nothing was recorded.'; return; }
+          // The AMOUNT is not resent, same reasoning as allow_partial below:
+          // the server re-reads every bucket under its own lock and works the
+          // borrow out again at that moment.
+          await api('/api/payments', { method: 'POST', body: JSON.stringify({ ...body, allow_borrow: true }) });
+          closePayModal();
+          loadTab('loads');
+          return;
+        }
         // ── not enough in the petty cash box ──────────────────────────────
         // Apsara 2026-09-02: "If cash is low while invoice amount is high -->
         // Make it as partial payment and notify user."
@@ -6812,12 +6880,27 @@ async function renderSpendReportTab() {
 // Staff SEE it, admin CHANGES it — her choice. Hiding the form for staff is UX
 // only: POST/DELETE /api/petty-cash are requireAdmin server-side, so a staff
 // session that reached them another way gets a 403.
-let pettyCash = { balance: 0, entries: [] };
+// by_source / borrowings / transfers added 2026-09-21, mirroring
+// dashboard/index.html. `balance` keeps its name and meaning — Cash in hand,
+// the sum of every row — so nothing that already read it changes.
+let pettyCash = { balance: 0, entries: [], by_source: {}, borrowings: [], transfers: [], sources: [] };
+// Which sub-tab of Petty cash is open. Her words, 2026-09-21: "Keep this
+// borrowing tracking in petty cash as a tab inside petty cash."
+let pettyTab = 'cash';
 
 async function refreshPettyCash() {
   try {
     const d = await api('/api/petty-cash');
-    pettyCash = { balance: Number(d.balance) || 0, entries: Array.isArray(d.entries) ? d.entries : [] };
+    pettyCash = {
+      balance: Number(d.balance) || 0,
+      entries: Array.isArray(d.entries) ? d.entries : [],
+      by_source: (d && d.by_source) || {},
+      borrowings: Array.isArray(d && d.borrowings) ? d.borrowings : [],
+      transfers: Array.isArray(d && d.transfers) ? d.transfers : [],
+      // From the SERVER, never a list typed here — helpers/pettyCash.js says
+      // why: six copies of a dropdown drift faster than three.
+      sources: Array.isArray(d && d.sources) ? d.sources : [],
+    };
   } catch (e) {
     // Keep the last known figure rather than showing $0.00, which would read
     // as "the box is empty" — a false statement about money. Same lesson as
@@ -6825,6 +6908,70 @@ async function refreshPettyCash() {
     console.warn('[petty] could not refresh the balance:', e && e.message);
   }
   return pettyCash;
+}
+
+
+// ── THE BORROWING TAB ─────────────────────────────────────────────────────
+// Apsara, 2026-09-21: "Keep this borrowing tracking in petty cash as a tab
+// inside petty cash." Two halves — what is still owed, which is the question,
+// and every movement behind it, which answers "why". Mirrors
+// dashboard/index.html; see that file for the full reasoning.
+function pettyBorrowingHtml(isAdmin) {
+  const owed = pettyCash.borrowings || [];
+  const moves = pettyCash.transfers || [];
+  const held = (src) => Number((pettyCash.by_source || {})[src]) || 0;
+
+  const owedHtml = owed.length ? owed.map((b) => {
+    // The button is disabled when the bucket cannot cover it — the server
+    // refuses it anyway, and a button that always fails teaches people to
+    // ignore the screen. The reason is printed rather than hidden in a toast.
+    const can = held(b.owes) >= b.amount - 0.005;
+    return `
+    <div class="card" style="padding:14px 16px; margin-bottom:10px;">
+      <div style="display:flex; align-items:center; gap:12px; flex-wrap:wrap;">
+        <div style="flex:1; min-width:180px;">
+          <div style="font-size:13px;"><strong style="color:var(--text-strong);">${esc(b.owes)}</strong> owes <strong style="color:var(--text-strong);">${esc(b.to)}</strong></div>
+          <div style="font-family:var(--font-mono); font-size:11px; color:var(--text-muted); margin-top:3px;">${esc(b.owes)} holds ${esc(fmtAmount(held(b.owes)))}</div>
+        </div>
+        <div style="font-family:var(--font-mono); font-size:16px; font-weight:700; color:var(--text-strong);">${esc(fmtAmount(b.amount))}</div>
+        ${isAdmin ? `<button class="btn ${can ? 'btn-primary' : ''} btn-repay" data-owes="${esc(b.owes)}" data-to="${esc(b.to)}" data-amount="${esc(String(b.amount))}"
+          ${can ? '' : 'disabled'} style="font-size:12px; padding:6px 14px;">Repay</button>` : ''}
+      </div>
+      ${can ? '' : `<div style="margin-top:8px; font-size:11.5px; color:var(--status-warning, #d69e2e);">Add cash to ${esc(b.owes)} first — you cannot repay from a bucket that is empty.</div>`}
+    </div>`;
+  }).join('') : `<div class="card" style="padding:18px; font-size:12.5px; color:var(--text-muted);">Nothing owed between accounts.</div>`;
+
+  const label = { borrow: 'borrowed', repay: 'repaid', reassign: 'moved' };
+  const movesHtml = moves.length ? moves.map((m) => `
+    <div class="card" style="padding:12px 14px; margin-bottom:8px;">
+      <div style="display:flex; justify-content:space-between; gap:10px;">
+        <div style="font-size:12.5px;">${esc(m.to)} ${esc(label[m.reason] || m.reason || 'moved')} from ${esc(m.from)}</div>
+        <div style="font-family:var(--font-mono); font-weight:700;">${esc(fmtAmount(m.amount))}</div>
+      </div>
+      <div style="font-family:var(--font-mono); font-size:11px; color:var(--text-faint); margin-top:3px;">${esc(typeof fmtDate === 'function' ? fmtDate(m.date) : (m.date || ''))}${m.note ? ' · ' + esc(m.note) : ''}</div>
+    </div>`).join('')
+    : `<div style="padding:34px; text-align:center; color:var(--text-faint); font-family:var(--font-mono); font-size:12px;">No cash has moved between accounts yet.</div>`;
+
+  return `
+    <div style="font-family:var(--font-mono); font-size:10px; font-weight:600; letter-spacing:.16em; text-transform:uppercase; color:var(--text-muted); margin-bottom:10px;">Outstanding</div>
+    ${owedHtml}
+    <div style="margin:22px 0 10px; display:flex; align-items:center; gap:10px; flex-wrap:wrap;">
+      <div style="font-family:var(--font-mono); font-size:10px; font-weight:600; letter-spacing:.16em; text-transform:uppercase; color:var(--text-muted);">Every movement</div>
+      <span style="flex:1;"></span>
+      ${isAdmin ? '<button id="btnReassignCash" class="btn" style="font-size:12px; padding:6px 14px;">Move cash</button>' : ''}
+    </div>
+    ${movesHtml}`;
+}
+
+// Repay and reassign are one server call with a different reason. The server
+// refuses an impossible move; this only asks and reports.
+async function movePettyCash({ from, to, amount, reason }) {
+  try {
+    await api('/api/petty-cash/transfer', { method: 'POST', body: JSON.stringify({ from, to, amount, reason }) });
+    await renderPettyCashTab();
+  } catch (err) {
+    alert(err.message || 'Could not move the cash.');
+  }
 }
 
 async function renderPettyCashTab() {
@@ -6853,11 +7000,34 @@ async function renderPettyCashTab() {
         ${isAdmin ? '<button id="btnAddPetty" class="btn btn-primary">+ Add cash</button>' : ''}
       </div>
 
-      <div class="card" style="padding:20px; margin-bottom:18px;">
-        <div style="font-family:var(--font-mono); font-size:10px; letter-spacing:.14em; text-transform:uppercase; color:var(--text-muted);">In the box</div>
+      <div class="card" style="padding:20px; margin-bottom:14px;">
+        <div style="font-family:var(--font-mono); font-size:10px; letter-spacing:.14em; text-transform:uppercase; color:var(--text-muted);">Cash in hand</div>
         <div style="font-size:32px; font-weight:800; color:${bal > 0 ? 'var(--text-strong)' : 'var(--status-warning, #d69e2e)'};">${esc(fmtAmount(bal) || '$0.00')}</div>
+        <!-- ── AND EACH BANK BENEATH IT ─────────────────────────────────
+             Apsara, 2026-09-21: "show overall cash .but also keep track of
+             bofacash available and chase bank." The overall figure keeps its
+             place and its size — it is the number she has read for weeks —
+             and the buckets sit under it. They always add up to it, because
+             every one is a sum of the same rows. -->
+        <div style="display:flex; gap:18px; flex-wrap:wrap; margin-top:12px; padding-top:12px; border-top:1px solid var(--border-subtle);">
+          ${(pettyCash.sources || []).map((src) => {
+            const v = Number((pettyCash.by_source || {})[src]) || 0;
+            return `<div>
+              <div style="font-family:var(--font-mono); font-size:9.5px; letter-spacing:.12em; text-transform:uppercase; color:var(--text-muted);">${esc(src)}</div>
+              <div style="font-family:var(--font-mono); font-size:15px; font-weight:700; color:${v < 0 ? 'var(--status-danger, #c53030)' : 'var(--text-strong)'};">${esc(fmtAmount(v))}</div>
+            </div>`;
+          }).join('')}
+        </div>
         ${bal <= 0 ? `<div style="margin-top:8px; font-size:12.5px; color:var(--status-warning, #d69e2e);">Cash payments are refused while this is empty. Add cash before paying a load in cash.</div>` : ''}
       </div>
+
+      <!-- Her words: "Keep this borrowing tracking in petty cash as a tab
+           inside petty cash." -->
+      <div style="display:flex; gap:6px; margin-bottom:16px;">
+        <button class="btn petty-tab" data-petty-tab="cash" style="font-size:12px; padding:6px 14px;${pettyTab === 'cash' ? ' background:var(--surface-raised); color:var(--text-strong);' : ''}">Cash</button>
+        <button class="btn petty-tab" data-petty-tab="borrowing" style="font-size:12px; padding:6px 14px;${pettyTab === 'borrowing' ? ' background:var(--surface-raised); color:var(--text-strong);' : ''}">Borrowing${(pettyCash.borrowings || []).length ? ` (${(pettyCash.borrowings || []).length})` : ''}</button>
+      </div>
+      ${pettyTab === 'borrowing' ? pettyBorrowingHtml(isAdmin) : `
 
       ${rows.length ? `
       <div class="card" style="padding:0; overflow:hidden;">
@@ -6878,8 +7048,12 @@ async function renderPettyCashTab() {
             </tr>`).join('')}
           </tbody>
         </table>
-      </div>` : `<div style="padding:50px; text-align:center; color:var(--text-faint); font-family:var(--font-mono); font-size:12px;">Nothing recorded yet.</div>`}
+      </div>` : `<div style="padding:50px; text-align:center; color:var(--text-faint); font-family:var(--font-mono); font-size:12px;">Nothing recorded yet.</div>`}`}
     </section>`;
+
+  document.querySelectorAll('.petty-tab').forEach((b) => b.addEventListener('click', () => {
+    pettyTab = b.dataset.pettyTab; renderPettyCashTab();
+  }));
 
   if (isAdmin) {
     const add = $('btnAddPetty');
@@ -6888,10 +7062,53 @@ async function renderPettyCashTab() {
       if (amount === null) return;
       const n = Number(String(amount).replace(/[^0-9.\-]/g, ''));
       if (!isFinite(n) || n <= 0) { alert('Enter an amount greater than zero.'); return; }
+      // ── WHICH BANK IT CAME OUT OF ─────────────────────────────────────
+      // Apsara, 2026-09-21: "when adding cash ,ask its from BofA or chase
+      // bank". Unassigned is deliberately NOT offered here: a top-up is by
+      // definition money drawn from an account; if it had no bank behind it,
+      // it is not a top-up. The SERVER accepts blank, so an older build of
+      // this app can still add cash — it just lands in Unassigned.
+      const banks = (pettyCash.sources || ['BofA', 'Chase Bank']).filter((x) => x !== 'Unassigned');
+      const pick = prompt(`Which bank did this ${fmtAmount(n)} come out of?\n\n`
+        + banks.map((b, i) => `${i + 1}. ${b}`).join('\n') + '\n\nType 1 or 2.');
+      if (pick === null) return;
+      const chosen = banks[Number(String(pick).trim()) - 1]
+        || banks.find((b) => b.toLowerCase() === String(pick).trim().toLowerCase());
+      if (!chosen) { alert('Pick one of: ' + banks.join(', ')); return; }
       try {
-        await api('/api/petty-cash', { method: 'POST', body: JSON.stringify({ amount: n }) });
+        await api('/api/petty-cash', { method: 'POST', body: JSON.stringify({ amount: n, cash_source: chosen }) });
         await renderPettyCashTab();
       } catch (err) { alert('Could not add cash: ' + err.message); }
+    });
+
+    // Repay — pre-filled with what is owed, and she can settle part of it.
+    // The server refuses anything the bucket cannot cover.
+    document.querySelectorAll('.btn-repay').forEach((b) => b.addEventListener('click', async () => {
+      const owed = Number(b.dataset.amount) || 0;
+      const raw = prompt(`How much should ${b.dataset.owes} repay ${b.dataset.to}?`, String(owed));
+      if (raw === null) return;
+      const amt = Number(String(raw).replace(/[^0-9.\-]/g, ''));
+      if (!isFinite(amt) || amt <= 0) { alert('Enter an amount greater than zero.'); return; }
+      await movePettyCash({ from: b.dataset.owes, to: b.dataset.to, amount: amt, reason: 'repay' });
+    }));
+
+    const reassign = $('btnReassignCash');
+    if (reassign) reassign.addEventListener('click', async () => {
+      const all = pettyCash.sources || ['BofA', 'Chase Bank', 'Unassigned'];
+      const from = prompt('Move cash OUT of which account?\n\n' + all.map((b, i) => `${i + 1}. ${b}`).join('\n'));
+      if (from === null) return;
+      const src = all[Number(String(from).trim()) - 1] || all.find((b) => b.toLowerCase() === String(from).trim().toLowerCase());
+      if (!src) { alert('Pick one of: ' + all.join(', ')); return; }
+      const rest = all.filter((b) => b !== src);
+      const to = prompt('And INTO which?\n\n' + rest.map((b, i) => `${i + 1}. ${b}`).join('\n'));
+      if (to === null) return;
+      const dst = rest[Number(String(to).trim()) - 1] || rest.find((b) => b.toLowerCase() === String(to).trim().toLowerCase());
+      if (!dst) { alert('Pick one of: ' + rest.join(', ')); return; }
+      const raw = prompt(`How much moves from ${src} to ${dst}?`);
+      if (raw === null) return;
+      const amt = Number(String(raw).replace(/[^0-9.\-]/g, ''));
+      if (!isFinite(amt) || amt <= 0) { alert('Enter an amount greater than zero.'); return; }
+      await movePettyCash({ from: src, to: dst, amount: amt, reason: 'reassign' });
     });
     // Only top-ups carry this button (see the row markup). A withdrawal is
     // undone by deleting the PAYMENT, which reverses it properly — the server
