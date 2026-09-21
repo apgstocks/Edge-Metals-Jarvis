@@ -2289,6 +2289,65 @@ const MUTATIONS = [
       find: '                return dates.length ? dates[0].slice(0, 7) : null;',
       to:   '                return dates.length ? dates[dates.length - 1].slice(0, 7) : null;' },
 
+    // ── PETTY CASH BY BANK (2026-09-21) ──────────────────────────────────
+    // The first two are the bugs found by hand. If either comes back, it
+    // should cost a red test rather than her cash.
+
+    { name: 'petty: Repay moves cash a bucket does not have, clearing a debt with an overdraft',
+      file: 'helpers/pettyCash.js', suites: ['petty-cash-banks'],
+      find: '        const held = round2(balanceBySource(list)[src] || 0) || 0;\n        if (amt - held > CENT) {',
+      to:   '        const held = round2(balanceBySource(list)[src] || 0) || 0;\n        if (false) {' },
+
+    { name: 'petty: a reversal lands in Unassigned instead of the bucket it came from',
+      file: 'helpers/pettyCash.js', suites: ['petty-cash-banks'],
+      find: '            cash_source: sourceOf(taken[0]),\n            date: require(\'./time\').todayLocal(),\n            amount: round2(-total),               // the opposite of whatever it undoes',
+      to:   '            cash_source: UNASSIGNED,\n            date: require(\'./time\').todayLocal(),\n            amount: round2(-total),               // the opposite of whatever it undoes' },
+
+    { name: 'petty: an expense edit forgets the bucket it came out of',
+      file: 'helpers/expenses.js', suites: ['petty-cash-banks'],
+      find: "                cashSource: (entry && entry.cash_source) || priorSource,",
+      to:   '                cashSource: entry && entry.cash_source,' },
+
+    { name: 'petty: a row written before this feature vanishes from every bucket',
+      file: 'helpers/pettyCash.js', suites: ['petty-cash-banks'],
+      find: "    if (!raw) return UNASSIGNED;",
+      to:   "    if (!raw) return '';" },
+
+    { name: 'petty: a short bucket borrows without asking',
+      file: 'helpers/pettyCash.js', suites: ['petty-cash-banks'],
+      find: '            if (!allowBorrow) {',
+      to:   '            if (false) {' },
+
+    { name: 'petty: the borrow takes from the emptiest lender first, so it cannot cover it',
+      file: 'helpers/pettyCash.js', suites: ['petty-cash-banks'],
+      find: '                .sort((a, b) => b.available - a.available);',
+      to:   '                .sort((a, b) => a.available - b.available);' },
+
+    { name: 'petty: a cash SALE is filed under a bank it never came from',
+      file: 'helpers/pettyCash.js', suites: ['petty-cash-banks'],
+      find: '            cash_source: cleanSource(cashSource, { allowBlank: true }),\n            date: /^\\d{4}-\\d{2}-\\d{2}$/.test(String(date || \'\')) ? date : require(\'./time\').todayLocal(),\n            amount: round2(want),                 // POSITIVE — money in',
+      to:   "            cash_source: 'BofA',\n            date: /^\\d{4}-\\d{2}-\\d{2}$/.test(String(date || '')) ? date : require('./time').todayLocal(),\n            amount: round2(want),                 // POSITIVE — money in" },
+
+    { name: 'petty: a top-up from an older client is refused instead of filed as unbanked',
+      file: 'helpers/pettyCash.js', suites: ['petty-cash-banks'],
+      find: '        cash_source: cleanSource(input.cash_source, { allowBlank: true }),',
+      to:   '        cash_source: cleanSource(input.cash_source),' },
+
+    { name: 'petty: the borrow figures are dropped before the Pay sheet can ask',
+      file: 'api.js', suites: ['petty-cash-banks'],
+      find: '            if (e.bucket != null) body.bucket = e.bucket;',
+      to:   '            if (false) body.bucket = e.bucket;' },
+
+    { name: 'petty: a borrow can be raised on its own, a debt from nowhere',
+      file: 'api.js', suites: ['petty-cash-banks'],
+      find: "            if (reason === 'borrow') {",
+      to:   '            if (false) {' },
+
+    { name: 'petty: staff can move cash between her bank accounts',
+      file: 'api.js', suites: ['petty-cash-banks'],
+      find: "    app.post('/api/petty-cash/transfer', requireAdmin, async (req, res) => {",
+      to:   "    app.post('/api/petty-cash/transfer', async (req, res) => {" },
+
     // ── TRUCKING DEDUCTED FROM A YARD LOAD (2026-09-20) ───────────────────
     // Each of these is a way the feature could be "implemented" and be wrong
     // about money. If tests/load-trucking.js does not go red for one of them,

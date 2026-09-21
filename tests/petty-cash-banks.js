@@ -1,0 +1,454 @@
+// ── tests/petty-cash-banks.js ─────────────────────────────────────────────
+// Apsara, 2026-09-21: "in petty cash,two requirement.when adding cash ,ask
+// its from BofA or chase bank.. show overall cash .but also keep track of
+// bofacash available and chase bank.when they pay cash as mode of payment-ask
+// to choose from bofa/chase.Say the bill amount is 7000.we have only 3000 in
+// chase and 10000 in bofa.and user chose the mode of payment as cash and then
+// chase.It should show something in terms of 3000 only avilable inc hase.want
+// to borrow from bofa?On confirmaton-allow them to pay.Keep this borrowing
+// tracking in petty cash as a tab inside petty cash."
+//
+// Her decisions, asked and answered the same day:
+//   existing cash + a customer's cash -> a third bucket, named "Unassigned"
+//                                        (not "Others": helpers/banks.js
+//                                        already uses that word for a bank
+//                                        that is not BofA or Chase)
+//   a cash expense                    -> "Yes, ask — same as a payment"
+//   a borrow                          -> "A Repay button I press"
+//
+// ── THE INVARIANT EVERYTHING ELSE RESTS ON ───────────────────────────────
+// BofA + Chase + Unassigned === Cash in hand, always, through any sequence.
+// Asserted as a PROPERTY after every scenario below rather than as a set of
+// expected numbers, because the numbers are what a refactor changes and the
+// property is what must survive it.
+//
+// ── AND TWO BUGS FOUND BY HAND, WHICH IS WHY THIS FILE EXISTS ────────────
+// Both were found by running her worked example one step further than she
+// described it, and neither would have been caught by the checks I had:
+//   D — Repay moved 4,000 out of a Chase that held nothing, clearing the
+//       debt by creating an overdraft. Worse than the debt, and it looked
+//       like success.
+//   E — an expense EDIT re-wrote the withdrawal into Unassigned when the
+//       original came out of Chase, silently moving money between banks
+//       while the total stayed right.
+
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
+
+let pass = 0, fail = 0; const failures = [];
+const ck = (n, c, extra) => {
+    if (c) { pass++; console.log('  PASS  ' + n); }
+    else { fail++; failures.push(n); console.log('  FAIL  ' + n); if (extra) console.log('        ' + extra); }
+};
+const section = (t) => console.log('\n=== ' + t + ' ===');
+
+const TMP = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvis-pcb-'));
+process.env.DATA_DIR = TMP;
+process.env.JARVIS_TEST = '1';
+// Before config is required — see tests/verify-to-bill.js for the session
+// that skipped itself silently when these sat lower down the file.
+process.env.APP_PASSWORD   = process.env.APP_PASSWORD   || 'user-pw-aaaaaaaaaaaa';
+process.env.ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'admin-pw-bbbbbbbbbbb';
+process.env.STAFF_PASSWORD = process.env.STAFF_PASSWORD || 'staff-pw-ccccccccccc';
+
+const ROOT = path.join(__dirname, '..');
+const cfg = require(path.join(ROOT, 'config'));
+if (!String(cfg.DATA_DIR).startsWith(TMP)) { console.error('  ABORT  config not isolated'); process.exit(1); }
+
+const petty = require(path.join(ROOT, 'helpers/pettyCash'));
+const { mutateJson } = require(path.join(ROOT, 'helpers/json'));
+
+const B = () => petty.balances();
+const bucket = (s) => B().bySource[s] || 0;
+const CENT = 0.005;
+
+// THE PROPERTY, in one place, called after every scenario. A helper rather
+// than a repeated expression so it cannot be written slightly differently in
+// one section and quietly check something weaker.
+function invariant(where) {
+    const b = B();
+    const sum = Object.values(b.bySource).reduce((a, c) => a + c, 0);
+    ck(`  ${where}: the buckets still add up to Cash in hand`,
+        Math.abs(sum - b.total) <= CENT,
+        `${sum} vs ${b.total} — ${JSON.stringify(b.bySource)}`);
+}
+
+const reset = () => mutateJson(cfg.PETTY_CASH_FILE, [], () => []);
+
+(async () => {
+
+// ══════════════════════════════════════════════════════════════════════════
+section('A — three buckets, and they always sum to the total');
+
+{
+    await reset();
+    ck('an empty box is zero everywhere', B().total === 0 && bucket('BofA') === 0);
+    ck('the sources come from ONE list', Array.isArray(petty.SOURCES) && petty.SOURCES.length === 3,
+        JSON.stringify(petty.SOURCES));
+    // "Others" is banks.js's word for a bank that is not BofA or Chase. Two
+    // meanings for one word on adjacent screens is the trap she avoided.
+    ck('and the third bucket is NOT called Others', !petty.SOURCES.includes('Others'));
+
+    await petty.addTopUp({ amount: 3000, cash_source: 'Chase Bank', date: '2026-09-21' });
+    await petty.addTopUp({ amount: 10000, cash_source: 'BofA', date: '2026-09-21' });
+    ck('each top-up lands in the bank she named', bucket('Chase Bank') === 3000 && bucket('BofA') === 10000);
+    ck('and Cash in hand is their sum', B().total === 13000);
+    invariant('after two top-ups');
+
+    // A name that is not a source would become a fourth bucket nobody asked
+    // for, and the three figures on screen would stop adding up.
+    let threw = null;
+    try { await petty.addTopUp({ amount: 100, cash_source: 'Wells Fargo' }); } catch (e) { threw = e; }
+    ck('an unknown bank is refused, not filed somewhere', !!threw && /not one of/.test(threw.message), String(threw));
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+section('B — cash with no bank behind it');
+// ══════════════════════════════════════════════════════════════════════════
+// Her answer: existing cash and a customer's cash go to a third bucket, and
+// she can put a bank behind it later.
+
+{
+    await reset();
+    // A row written before this feature existed has no cash_source AT ALL.
+    // It must read as Unassigned rather than as nothing — a row that answered
+    // null would vanish from every bucket while still counting in the total,
+    // and the invariant would stop holding on her real, historical data.
+    await mutateJson(cfg.PETTY_CASH_FILE, [], () => ([
+        { id: 'OLD_1', kind: 'topup', date: '2026-08-01', amount: 2500, created_at: '2026-08-01T00:00:00Z' },
+    ]));
+    ck('a row from before this feature reads as Unassigned', bucket('Unassigned') === 2500,
+        JSON.stringify(B().bySource));
+    ck('  and still counts in Cash in hand', B().total === 2500);
+    invariant('with only the opening float');
+
+    // A customer's cash never came out of a bank.
+    await petty.depositForPayment({ amount: 5000, loadId: 'SALE_1', date: '2026-09-21' });
+    ck('a cash SALE lands in Unassigned, not in a bank', bucket('Unassigned') === 7500);
+    ck('  and no bank was credited with money it never provided',
+        bucket('BofA') === 0 && bucket('Chase Bank') === 0);
+    invariant('after a cash sale');
+
+    // "Give them an option to add from which bank later."
+    await petty.transfer({ from: 'Unassigned', to: 'Chase Bank', amount: 5000, reason: 'reassign', date: '2026-09-21' });
+    ck('she can put a bank behind it afterwards', bucket('Chase Bank') === 5000 && bucket('Unassigned') === 2500);
+    // A DATED MOVE, not an edit of the old rows — or last month's Chase
+    // figure changes after she has read it and decided on it.
+    const rows = petty.listEntries();
+    ck('  recorded as a dated move, not by rewriting history',
+        rows.filter((e) => e.kind === 'transfer').length === 2, JSON.stringify(rows.map((e) => e.kind)));
+    ck('  and the opening row still says what it always said',
+        rows.find((e) => e.id === 'OLD_1').amount === 2500);
+    ck('  Cash in hand is untouched by a move', B().total === 7500);
+    invariant('after reassigning');
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+section('C — HER WORKED EXAMPLE: 3,000 in Chase, 10,000 in BofA, a 7,000 bill');
+// ══════════════════════════════════════════════════════════════════════════
+
+{
+    await reset();
+    await petty.addTopUp({ amount: 3000, cash_source: 'Chase Bank', date: '2026-09-21' });
+    await petty.addTopUp({ amount: 10000, cash_source: 'BofA', date: '2026-09-21' });
+
+    // "It should show something in terms of 3000 only avilable in chase.want
+    // to borrow from bofa?" — REFUSED FIRST, with the figures, so the
+    // question can be put to her before anything moves.
+    let err = null;
+    try {
+        await petty.withdrawForPayment({ amount: 7000, loadId: 'L1', cashSource: 'Chase Bank' });
+    } catch (e) { err = e; }
+    ck('it refuses rather than quietly borrowing', !!err, 'the whole point is that she is asked');
+    ck('  with its own code, not the empty-box one', err && err.code === 'PETTY_CASH_BUCKET_SHORT', err && err.code);
+    ck('  naming the bucket', err && err.bucket === 'Chase Bank');
+    ck('  what is in it', err && err.bucket_available === 3000);
+    ck('  and what is short', err && err.shortfall === 4000);
+    ck('  and who could cover it', err && err.lenders && err.lenders[0].source === 'BofA'
+        && err.lenders[0].available === 10000, JSON.stringify(err && err.lenders));
+    ck('  nothing moved on the refusal', B().total === 13000 && bucket('Chase Bank') === 3000);
+    invariant('after the refusal');
+
+    // "On confirmaton-allow them to pay."
+    const res = await petty.withdrawForPayment({ amount: 7000, loadId: 'L1', cashSource: 'Chase Bank', allowBorrow: true });
+    ck('on her yes it pays in full', res.taken === 7000 && !res.capped);
+    ck('  Chase is emptied, not overdrawn', bucket('Chase Bank') === 0, String(bucket('Chase Bank')));
+    ck('  BofA gave up exactly the shortfall', bucket('BofA') === 6000, String(bucket('BofA')));
+    ck('  and Cash in hand fell by the payment, no more and no less', B().total === 6000);
+    invariant('after borrowing and paying');
+
+    // "Keep this borrowing tracking in petty cash."
+    const owed = petty.borrowings();
+    ck('the debt is recorded, in the right direction',
+        owed.length === 1 && owed[0].owes === 'Chase Bank' && owed[0].to === 'BofA' && owed[0].amount === 4000,
+        JSON.stringify(owed));
+    ck('  and the movement behind it is on the list', petty.transfers().some((t) => t.reason === 'borrow' && t.amount === 4000));
+
+    // ONE payment row, not two. reverseForPayment and stampPaymentId both
+    // assume one withdrawal per payment; splitting it would break undo.
+    const payRows = petty.listEntries().filter((e) => e.kind === 'payment');
+    ck('the payment is ONE row, not one per bucket', payRows.length === 1, String(payRows.length));
+    ck('  carrying the bucket she nominated', payRows[0].cash_source === 'Chase Bank');
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+section('C2 — a shortfall that spans TWO lenders');
+// ══════════════════════════════════════════════════════════════════════════
+// A mutation that reversed the lender ordering SURVIVED the first version of
+// this file, because every scenario above had only one bucket with money in
+// it and a sort of one element is a sort either way.
+//
+// The order is not arbitrary and it is not invisible: it decides which bank
+// is recorded as the lender, and for how much, on the Borrowing tab she
+// reads. Fullest first, so the fewest banks are drawn into one haul.
+
+{
+    await reset();
+    await petty.addTopUp({ amount: 1000, cash_source: 'Chase Bank', date: '2026-09-21' });
+    await petty.addTopUp({ amount: 3000, cash_source: 'BofA', date: '2026-09-21' });
+    await petty.depositForPayment({ amount: 5000, loadId: 'SALE_X', date: '2026-09-21' });   // Unassigned
+    ck('three buckets with money in them', bucket('Chase Bank') === 1000
+        && bucket('BofA') === 3000 && bucket('Unassigned') === 5000, JSON.stringify(B().bySource));
+
+    // 7,000 out of a Chase holding 1,000: 6,000 short, and no single other
+    // bucket covers it.
+    await petty.withdrawForPayment({ amount: 7000, loadId: 'L2', cashSource: 'Chase Bank', allowBorrow: true });
+    ck('it pays in full anyway', B().total === 2000, String(B().total));
+    ck('  Chase is emptied, not overdrawn', bucket('Chase Bank') === 0);
+    invariant('after a two-lender borrow');
+
+    const owed = petty.borrowings();
+    const from = (who) => (owed.find((b) => b.to === who) || {}).amount || 0;
+    ck('both lenders are recorded', owed.length === 2, JSON.stringify(owed));
+    ck('  and every debt is Chase\'s', owed.every((b) => b.owes === 'Chase Bank'), JSON.stringify(owed));
+    // THE ORDERING, PINNED. Fullest first: Unassigned holds 5,000 so it is
+    // drawn dry, and BofA covers the last 1,000. Reversed, BofA would be
+    // emptied for 3,000 and Unassigned would lend 3,000 — a different pair of
+    // debts on her screen for the same haul.
+    ck('  the fullest bucket lends first', from('Unassigned') === 5000 && from('BofA') === 1000,
+        JSON.stringify(owed));
+    ck('  and the two debts add up to the shortfall',
+        Math.abs(from('Unassigned') + from('BofA') - 6000) <= CENT);
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+section('D — Repay cannot invent an overdraft');
+// ══════════════════════════════════════════════════════════════════════════
+// FOUND BY HAND, running her example one step past where she described it.
+// After the borrow Chase holds nothing, and pressing Repay moved 4,000 out
+// of it anyway — the debt cleared and a MINUS 4,000 appeared in its place.
+// A worse position than the one she started in, reported as success.
+
+{
+    // Its own setup. It used to lean on the state section C left behind, and
+    // C2 now sits between them — a test that breaks when a section is
+    // inserted above it is a test that gets deleted rather than fixed.
+    await reset();
+    await petty.addTopUp({ amount: 3000, cash_source: 'Chase Bank', date: '2026-09-21' });
+    await petty.addTopUp({ amount: 10000, cash_source: 'BofA', date: '2026-09-21' });
+    await petty.withdrawForPayment({ amount: 7000, loadId: 'L1', cashSource: 'Chase Bank', allowBorrow: true });
+    ck('Chase is empty going in', bucket('Chase Bank') === 0);
+    let err = null;
+    try { await petty.transfer({ from: 'Chase Bank', to: 'BofA', amount: 4000, reason: 'repay' }); }
+    catch (e) { err = e; }
+    ck('repaying from an empty bucket is refused', !!err && err.code === 'PETTY_CASH_TRANSFER_SHORT', err && err.code);
+    ck('  and says what to do instead', err && /Add cash to Chase Bank first/.test(err.message), err && err.message);
+    ck('  Chase did NOT go negative', bucket('Chase Bank') === 0, String(bucket('Chase Bank')));
+    ck('  and the debt is still owed', petty.borrowings().length === 1);
+    invariant('after the refused repay');
+
+    // The real sequence: put the cash back, then settle.
+    await petty.addTopUp({ amount: 4000, cash_source: 'Chase Bank', date: '2026-09-22' });
+    await petty.transfer({ from: 'Chase Bank', to: 'BofA', amount: 4000, reason: 'repay', date: '2026-09-22' });
+    ck('once Chase has the money, Repay works', bucket('Chase Bank') === 0 && bucket('BofA') === 10000,
+        JSON.stringify(B().bySource));
+    ck('  and the debt is cleared', petty.borrowings().length === 0, JSON.stringify(petty.borrowings()));
+    ck('  Cash in hand is unchanged by the repayment', B().total === 10000);
+    invariant('after repaying properly');
+
+    // A borrow is only ever created by a payment that needed one. A debt with
+    // no payment behind it is a debt from nowhere.
+    let partial = null;
+    try { await petty.transfer({ from: 'BofA', to: 'Chase Bank', amount: 1000, reason: 'repay', date: '2026-09-22' }); }
+    catch (e) { partial = e; }
+    ck('a repayment with nothing owed still moves the cash', !partial, partial && partial.message);
+    // ── THE DIRECTION, AND I HAD IT BACKWARDS FIRST TIME ─────────────────
+    // I asserted BofA would end up owed FROM, reasoning that BofA "over-paid".
+    // Wrong, and the code was right: BofA handed Chase 1,000 against no debt,
+    // so BofA is out of pocket and CHASE is sitting on its money. Chase owes
+    // BofA. Written out because it is the kind of thing that reads either way
+    // at a glance and only one way once you follow the cash.
+    const over = petty.borrowings();
+    ck('  the bucket now HOLDING the money is the one that owes it',
+        over.length === 1 && over[0].owes === 'Chase Bank' && over[0].to === 'BofA' && over[0].amount === 1000,
+        JSON.stringify(over));
+    // Whatever the direction, it is never reported as a negative debt — that
+    // would be two sentences facing each other for one fact.
+    ck('  and never as a negative amount', over.every((b) => b.amount > 0), JSON.stringify(over));
+    invariant('after an over-repayment');
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+section('E — money goes back where it came from');
+// ══════════════════════════════════════════════════════════════════════════
+// THE SECOND BUG FOUND BY HAND. A reversal that lands in Unassigned while the
+// withdrawal came out of Chase moves money between banks — and the TOTAL
+// stays right, which is exactly why nobody would notice.
+
+{
+    await reset();
+    await petty.addTopUp({ amount: 5000, cash_source: 'Chase Bank', date: '2026-09-21' });
+
+    const p = await petty.withdrawForPayment({ amount: 1200, loadId: 'L9', paymentId: 'PAY_9', cashSource: 'Chase Bank' });
+    ck('the payment came out of Chase', bucket('Chase Bank') === 3800 && bucket('Unassigned') === 0);
+    await petty.reverseForPayment('PAY_9', {});
+    ck('undoing it puts the money back in CHASE', bucket('Chase Bank') === 5000, JSON.stringify(B().bySource));
+    ck('  and not into Unassigned', bucket('Unassigned') === 0,
+        'a refund in the wrong bucket moves money between banks with the total still correct');
+    invariant('after reversing a payment');
+
+    // An expense names its bucket, and keeps its existing permission to
+    // overdraw — that rule predates this feature and removing it would change
+    // a screen she uses daily.
+    const ex = require(path.join(ROOT, 'helpers/expenses'));
+    const e1 = await ex.addExpense({ date: '2026-09-21', description: 'Diesel', vendor: 'Fuel',
+        amount: 200, payment_method: 'Cash', cash_source: 'Chase Bank' });
+    ck('a cash expense comes out of the bucket named', bucket('Chase Bank') === 4800, String(bucket('Chase Bank')));
+
+    // THE EDIT. The form has no reason to resend cash_source when only the
+    // amount changed, so the new withdrawal has to inherit the bucket of the
+    // one it replaces.
+    await ex.editExpense(e1.id, { date: '2026-09-21', description: 'Diesel', vendor: 'Fuel',
+        amount: 300, payment_method: 'Cash' });
+    ck('editing it WITHOUT resending the bank keeps it in Chase', bucket('Chase Bank') === 4700,
+        JSON.stringify(B().bySource));
+    ck('  and nothing leaked into Unassigned', bucket('Unassigned') === 0);
+    invariant('after editing an expense');
+
+    // Allowed to overdraw, deliberately — the money already left the drawer.
+    await ex.addExpense({ date: '2026-09-21', description: 'Parts', vendor: 'Shop',
+        amount: 9000, payment_method: 'Cash', cash_source: 'Chase Bank' });
+    ck('an expense may still take a bucket negative', bucket('Chase Bank') < 0, String(bucket('Chase Bank')));
+    invariant('with a bucket overdrawn');
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+section('F — END TO END, through the real routes');
+// ══════════════════════════════════════════════════════════════════════════
+// The helpers can all be right and the feature still not work: the route may
+// not forward cash_source, the error may lose the figures the prompt needs,
+// the tab may not return the buckets. So: a real server, her numbers, and a
+// payment posted the way the Pay sheet posts it.
+
+{
+    const http = require('http');
+    await reset();
+
+    const { createApi } = require(path.join(ROOT, 'api'));
+    const app = createApi();
+    const server = await new Promise((r) => { const s = app.listen(0, '127.0.0.1', () => r(s)); });
+    const base = `http://127.0.0.1:${server.address().port}`;
+    const req = (method, p, { body, sid } = {}) => new Promise((resolve, reject) => {
+        const data = body == null ? null : JSON.stringify(body);
+        const headers = {};
+        if (data) { headers['Content-Type'] = 'application/json'; headers['Content-Length'] = Buffer.byteLength(data); }
+        if (sid) headers.Authorization = `Bearer ${sid}`;
+        const r2 = http.request(base + p, { method, headers }, (res) => {
+            let raw = ''; res.on('data', (c) => { raw += c; });
+            res.on('end', () => { let j = null; try { j = JSON.parse(raw); } catch (e) {} resolve({ status: res.statusCode, json: j }); });
+        });
+        r2.on('error', reject); if (data) r2.write(data); r2.end();
+    });
+
+    const sid = ((await req('POST', '/login', { body: { password: process.env.ADMIN_PASSWORD } })).json || {}).sid;
+    ck('signed in', !!sid);
+
+    await req('POST', '/api/petty-cash', { sid, body: { amount: 3000, cash_source: 'Chase Bank', date: '2026-09-21' } });
+    await req('POST', '/api/petty-cash', { sid, body: { amount: 10000, cash_source: 'BofA', date: '2026-09-21' } });
+
+    const tab = await req('GET', '/api/petty-cash', { sid });
+    ck('the tab returns Cash in hand', tab.json && tab.json.balance === 13000);
+    ck('  and each bucket', tab.json.by_source && tab.json.by_source['Chase Bank'] === 3000
+        && tab.json.by_source.BofA === 10000, JSON.stringify(tab.json.by_source));
+    ck('  and the source list, so the client need not hardcode one',
+        Array.isArray(tab.json.sources) && tab.json.sources.length === 3);
+
+    const { addLoad } = require(path.join(ROOT, 'helpers/loads'));
+    const load = await addLoad({ date: '2026-09-21', seller: 'Ramesh',
+        items: [{ description: 'HMS', gross_weight: 8000, tare_weight: 1000, price: 1, unit: 'lb' }] });
+
+    const pay = (extra) => req('POST', '/api/payments', { sid, body: {
+        load_id: load.id, load_kind: 'purchase', amount: 7000, mode: 'Cash',
+        paid_on: '2026-09-21', cash_source: 'Chase Bank', ...extra } });
+
+    const first = await pay({});
+    ck('the route refuses the first attempt', first.status === 400);
+    // THE GAP THIS SECTION EXISTS FOR. The route flattens the error to a few
+    // named fields; the bucket ones were being dropped, so the Pay sheet had
+    // the question and none of the figures to ask it with.
+    ck('  and the prompt gets every figure it needs',
+        first.json.code === 'PETTY_CASH_BUCKET_SHORT' && first.json.bucket === 'Chase Bank'
+        && first.json.bucket_available === 3000 && first.json.shortfall === 4000
+        && Array.isArray(first.json.lenders) && first.json.lenders[0].source === 'BofA',
+        JSON.stringify(first.json));
+
+    const second = await pay({ allow_borrow: true });
+    ck('and pays on her confirmation', second.status === 200 && second.json.ok);
+
+    const after = await req('GET', '/api/petty-cash', { sid });
+    ck('the tab shows the borrow', after.json.by_source['Chase Bank'] === 0 && after.json.by_source.BofA === 6000,
+        JSON.stringify(after.json.by_source));
+    ck('  and what is owed', after.json.borrowings.length === 1
+        && after.json.borrowings[0].owes === 'Chase Bank' && after.json.borrowings[0].amount === 4000,
+        JSON.stringify(after.json.borrowings));
+    const sum = Object.values(after.json.by_source).reduce((a, c) => a + c, 0);
+    ck('  and the buckets the ROUTE returns add up to the balance it returns',
+        Math.abs(sum - after.json.balance) <= CENT, `${sum} vs ${after.json.balance}`);
+
+    // Repay, through the route the button uses.
+    const early = await req('POST', '/api/petty-cash/transfer', { sid,
+        body: { from: 'Chase Bank', to: 'BofA', amount: 4000, reason: 'repay' } });
+    ck('the route refuses a repay the bucket cannot fund', early.status === 400
+        && early.json.code === 'PETTY_CASH_TRANSFER_SHORT', JSON.stringify(early.json));
+
+    // A borrow has to come from a payment. One raised on its own is a debt
+    // from nowhere.
+    const naked = await req('POST', '/api/petty-cash/transfer', { sid,
+        body: { from: 'BofA', to: 'Chase Bank', amount: 100, reason: 'borrow' } });
+    ck('the route refuses a borrow with no payment behind it', naked.status === 400, String(naked.status));
+
+    await req('POST', '/api/petty-cash', { sid, body: { amount: 4000, cash_source: 'Chase Bank', date: '2026-09-22' } });
+    const settled = await req('POST', '/api/petty-cash/transfer', { sid,
+        body: { from: 'Chase Bank', to: 'BofA', amount: 4000, reason: 'repay', date: '2026-09-22' } });
+    ck('and settles it once Chase has the cash', settled.status === 200
+        && settled.json.borrowings.length === 0, JSON.stringify(settled.json && settled.json.borrowings));
+
+    // Staff read the balance; they do not move money between her accounts.
+    const staffSid = ((await req('POST', '/login', { body: { password: process.env.STAFF_PASSWORD } })).json || {}).sid;
+    ck('a staff session can be opened, or the next check proves nothing', !!staffSid);
+    const denied = await req('POST', '/api/petty-cash/transfer', { sid: staffSid,
+        body: { from: 'BofA', to: 'Chase Bank', amount: 10, reason: 'reassign' } });
+    ck('staff cannot move cash between accounts', denied.status === 403, String(denied.status));
+
+    // ── THE OLDER APK ────────────────────────────────────────────────────
+    // The build on her phone predates this field. A top-up that names no bank
+    // must still be accepted — refusing would mean she cannot add cash from
+    // her phone at all, which is the mistake CLAUDE.md records twice.
+    const oldClient = await req('POST', '/api/petty-cash', { sid, body: { amount: 500, date: '2026-09-22' } });
+    ck('a top-up from a client that does not know about banks still works', oldClient.status === 200,
+        JSON.stringify(oldClient.json));
+    const last = await req('GET', '/api/petty-cash', { sid });
+    ck('  and lands in Unassigned rather than a guess', last.json.by_source.Unassigned === 500,
+        JSON.stringify(last.json.by_source));
+
+    await new Promise((r) => server.close(r));
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+console.log(`\n${pass} passed, ${fail} failed`);
+if (failures.length) { console.log('\nFailures:'); failures.forEach((f) => console.log('  - ' + f)); }
+try { fs.rmSync(TMP, { recursive: true, force: true }); } catch (e) {}
+process.exit(fail ? 1 : 0);
+
+})().catch((e) => { console.error('\n  CRASH  ', e && e.stack || e); process.exit(1); });
