@@ -2354,8 +2354,55 @@ const MUTATIONS = [
 
     { name: 'invoice: only the clicked row is on it, the other grades are missing',
       file: 'helpers/saleInvoice.js', suites: ['sale-invoice'],
-      find: '    const siblings = siblingRows(s, opts.allSales);',
+      find: '    const siblings = grouping.rows;',
       to:   '    const siblings = [s];' },
+
+    // ── WHICH ROWS MAY MERGE UNASKED (2026-09-21) ─────────────────────────
+    // Her choice of three: a container-backed group merges silently, a group
+    // held together by a booking alone has to be confirmed. Each of these is
+    // a way to get that backwards.
+
+    { name: 'grouping: a booking with no container merges silently, like a container',
+      file: 'helpers/saleInvoice.js', suites: ['sale-invoice'],
+      find: '    if (backed || gathered.length <= 1) {',
+      to:   '    if (true) {' },
+
+    { name: 'grouping: a container is made to ask, undoing the 19-Sep merge',
+      file: 'helpers/saleInvoice.js', suites: ['sale-invoice'],
+      find: "    const backed = !!norm(s.container_no);",
+      to:   '    const backed = false;' },
+
+    { name: 'grouping: an unanswered question builds the whole group anyway',
+      file: 'helpers/saleInvoice.js', suites: ['sale-invoice'],
+      find: '        : [s];',
+      to:   '        : gathered;' },
+
+    { name: 'grouping: the client may name rows siblingRows never gathered',
+      file: 'helpers/saleInvoice.js', suites: ['sale-invoice'],
+      find: '        ? gathered.filter((x) => wanted.includes(String(x.id)) || String(x.id) === String(s.id))',
+      to:   '        ? (opts.allSales || []).filter((x) => wanted.includes(String(x.id)))' },
+
+    { name: 'grouping: answered or not, it reports safe, so the route never asks',
+      file: 'helpers/saleInvoice.js', suites: ['sale-invoice'],
+      find: '        safe: !!wanted,',
+      to:   '        safe: true,' },
+
+    // NOT A MUTATION, ON PURPOSE: deleting the 409 in /api/sales/:id/invoice/
+    // generate cannot be killed by any test, because readiness REQUIRES
+    // container_no and a row with a container is never an unsafe group. The
+    // branch is unreachable until local deliveries become invoiceable. A
+    // mutation that can never go red would make "0 SURVIVED" mean less, so
+    // the fact lives in the route's own comment instead of here.
+
+    { name: 'grouping: the screen pre-ticks every row, nudging toward the merge',
+      file: 'dashboard/index.html', suites: ['sale-invoice'],
+      find: '        genState.include = [String(genState.row.id)]\n          .concat(e.candidates.filter(same).map((c) => String(c.id)));',
+      to:   '        genState.include = e.candidates.map((c) => String(c.id));' },
+
+    { name: 'grouping: the ids stop at generate and never reach Send',
+      file: 'dashboard/index.html', suites: ['sale-invoice'],
+      find: '                                      include_sale_ids: genState.include || undefined }) });',
+      to:   '                                      }) });' },
 
     { name: 'invoice: a DIFFERENT invoice number on the same container is merged in',
       file: 'helpers/saleInvoice.js', suites: ['sale-invoice'],

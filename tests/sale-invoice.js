@@ -639,11 +639,37 @@ section('H. end to end: generate, draft, send');
     // The send route rebuilds the invoice from the SALE rather than trusting
     // line items posted back to it. weights_ok says "I have read this and the
     // figures are deliberate" — it does not say "there is no problem".
-    const apiSrc = fs.readFileSync(R('api.js'), 'utf8');
+    // ── THE PROPERTY, NOT THE LINE OF CODE ──────────────────────────────
+    // This used to match the literal text `buildFrom(sale);` in api.js. On
+    // 2026-09-21 that route legitimately gained a second argument — the ids
+    // she ticked on the grouping screen — and the check went red for a change
+    // that does not weaken it at all. CLAUDE.md rule 2, second failure shape:
+    // "a check shaped like the old code rather than like the property".
+    //
+    // So it is now shaped like the property. The browser posts a body that
+    // claims, in every way it can, that these weights are fine. The refusal
+    // must be unmoved, because none of those figures is read.
+    SENT = [];
+    const lied = await call('POST', `/api/sales/${badSale.id}/invoice/send`, sid, {
+        confirm: true,
+        line_items: [{ item_desc: 'scrap', weight: 7.095, rate: 430, amount: 3050 }],
+        weight_problems: [], weight_message: null,
+        body_weight: 7.095, weight: 7.095, weight_unit: 'mt',
+    });
     ck('  the send route recomputes from the sale, not from the request body',
-       /const built = saleInvoice\.buildFrom\(sale\);[\s\S]{0,300}weightProblems\(built\.body\.line_items\)/
-           .test(apiSrc.slice(apiSrc.indexOf("invoice/send"))),
-       'a figure the browser sends back is a figure the browser could have changed');
+       lied.status === 409 && (lied.json || {}).code === 'WEIGHT_MISMATCH',
+       `${lied.status} ${lied.raw.slice(0, 160)} — a figure the browser sends back is a figure the browser could have changed`);
+    ck('  and nothing went while it was lying', SENT.length === 0, `${SENT.length} sent`);
+
+    // The one thing it DOES take from the body is a list of ids, and even
+    // those are filtered against the rows siblingRows gathered — section L
+    // proves the filtering. Here: a foreign id cannot talk it into a send.
+    SENT = [];
+    const foreign = await call('POST', `/api/sales/${badSale.id}/invoice/send`, sid,
+                               { confirm: true, include_sale_ids: [ARIS.id, 'NOT_A_ROW'] });
+    ck('  and ids from the body cannot smuggle another sale onto it',
+       foreign.status === 409 && SENT.length === 0,
+       `${foreign.status} ${foreign.raw.slice(0, 160)}`);
 
     SENT = [];
     const okd = await call('POST', `/api/sales/${badSale.id}/invoice/send`, sid,
@@ -1343,6 +1369,105 @@ section('I. the three screens');
                    /now in Email Contacts/.test(D.getElementById('genCard').textContent),
                    D.getElementById('genCard').textContent.slice(0, 200));
 
+                // ── THE GROUPING QUESTION, DRIVEN ───────────────────────
+                // The route cannot reach this today — container_no is
+                // REQUIRED, so a local delivery is refused at readiness long
+                // before the 409. That is a reason to drive the screen HERE
+                // rather than not at all: when the day comes that local
+                // deliveries can be invoiced, this is what stops the trailer
+                // rows merging, and unexercised code is not a guard.
+                const prevApi = w.api;
+                w.api = async (p2, opts) => {
+                    CALLS.push({ path: String(p2).split('?')[0], method: (opts || {}).method || 'GET',
+                                 body: (opts || {}).body ? JSON.parse(opts.body) : null });
+                    if (/\/invoice\/generate$/.test(p2)) {
+                        const b = (opts || {}).body ? JSON.parse(opts.body) : {};
+                        if (!b.include_sale_ids) {
+                            const e = new Error('2 rows share booking UMXU637049 with no container '
+                                + 'number. A booking can be a trailer that goes out again, so these '
+                                + 'may be separate deliveries.');
+                            e.status = 409; e.code = 'GROUPING_UNCERTAIN';
+                            e.candidates = [
+                                { id: 'T1', date: '08/03/2026', item: 'Clean cast', weight: 12000,
+                                  weight_unit: 'lb', amount: 4800, included: true },
+                                { id: 'T2', date: '08/11/2026', item: 'Clean cast', weight: 10400,
+                                  weight_unit: 'lb', amount: 4160, included: false },
+                            ];
+                            throw e;
+                        }
+                        return { ok: true, separate: false, container_no: '', inv_no: 'LOCAL1',
+                                 saved_filenames: ['LOCAL1.pdf'], line_items: [], photos: [],
+                                 warnings: [], weight_problems: [], weight_message: null };
+                    }
+                    return prevApi(p2, opts);
+                };
+
+                await w.openGenerateInvoice({ id: 'T1', date: '08/03/2026', container_no: '',
+                                              booking_no: 'UMXU637049', invoice_no: '',
+                                              customer: 'Junk car' });
+                D.getElementById('genGo').click();
+                await new Promise((r) => setTimeout(r, 40));
+
+                ck('a 409 puts the grouping question on screen, not an error string',
+                   !!D.getElementById('genGoG') && D.querySelectorAll('.genPick').length === 2,
+                   D.getElementById('genCard').textContent.slice(0, 140));
+                ck('  saying why, in the words about the trailer',
+                   /trailer that goes out again/.test(D.getElementById('genCard').textContent));
+                ck('  showing both dates, which is what tells them apart',
+                   /08\/03\/2026/.test(D.getElementById('genCard').textContent)
+                   && /08\/11\/2026/.test(D.getElementById('genCard').textContent));
+
+                const picks = Array.from(D.querySelectorAll('.genPick'));
+                ck('  her own row is ticked and cannot be unticked',
+                   picks[0].checked === true && picks[0].disabled === true);
+                // THE PROPERTY: the other-date row starts OFF. Pre-ticking it
+                // would nudge toward the merge that is wrong.
+                ck('  the row from another date starts UNTICKED',
+                   picks[1].checked === false,
+                   'a default that merges two deliveries is the bug, not the fix');
+                ck('  and the button counts what is actually ticked',
+                   /Generate with 1 row\b/.test(D.getElementById('genGoG').textContent),
+                   D.getElementById('genGoG').textContent);
+
+                picks[1].checked = true;
+                picks[1].dispatchEvent(new w.Event('change'));
+                ck('  ticking the second updates the count',
+                   /Generate with 2 rows/.test(D.getElementById('genGoG').textContent),
+                   D.getElementById('genGoG').textContent);
+
+                CALLS.length = 0;
+                D.getElementById('genGoG').click();
+                await new Promise((r) => setTimeout(r, 40));
+                const g2 = CALLS.find((c) => /\/invoice\/generate$/.test(c.path));
+                ck('  and Generate posts the ids she ticked',
+                   !!g2 && Array.isArray(g2.body.include_sale_ids)
+                   && g2.body.include_sale_ids.join(',') === 'T1,T2',
+                   JSON.stringify(g2 && g2.body));
+                ck('  her own row is first, so it is never dropped',
+                   !!g2 && g2.body.include_sale_ids[0] === 'T1');
+
+                // ── AND IT HAS TO REACH SEND ────────────────────────────
+                // Not asserted as source text. Driven: Next, then Send, then
+                // read what the browser actually posted. If the ids stop at
+                // the generate step, the weight guard on /invoice/send
+                // rebuilds a ONE-line invoice and checks it against a PDF
+                // carrying two — the gap CLAUDE.md rule 3 exists for.
+                w.api = prevApi;
+                D.getElementById('genNext').click();
+                await new Promise((r) => setTimeout(r, 40));
+                CALLS.length = 0;
+                const sendBtn = D.getElementById('genSend');
+                ck('  the draft step is reached after a grouped generate', !!sendBtn,
+                   D.getElementById('genCard').textContent.slice(0, 140));
+                if (sendBtn) {
+                    sendBtn.click();
+                    await new Promise((r) => setTimeout(r, 40));
+                    const s3 = CALLS.find((c) => /\/send$/.test(c.path));
+                    ck('  Send carries the same ids, so it weighs the same rows',
+                       !!s3 && Array.isArray(s3.body.include_sale_ids)
+                       && s3.body.include_sale_ids.join(',') === 'T1,T2',
+                       JSON.stringify(s3 && s3.body));
+                }
             }
         }
         w.close();
@@ -1426,6 +1551,114 @@ section('EVERY GRADE OF THE CONTAINER, NOT JUST THE ROW SHE CLICKED');
     const packed = withPacking.body.line_items.filter((l) => l.packing && l.packing.gross_weight_lbs);
     ck('the container weighbridge figures appear ONCE, on the first line',
        packed.length === 1, `${packed.length} line(s) carry a gross weight`);
+}
+
+// ── L. A CONTAINER MAY MERGE ON ITS OWN. A BOOKING MAY NOT. ────────────────
+// ══════════════════════════════════════════════════════════════════════════
+// Apsara, 2026-09-21, choosing between three shapes after the Bills-569 /
+// Invoices-651 question turned up her 52 local deliveries: ask only where
+// there is no container. A booking on one of those rows can be a trailer —
+// "UMXU637049 is a trailer that goes out again next week" — so it names a
+// vehicle, not a shipment, and two rows sharing one may be two deliveries.
+//
+// READ THE REACHABILITY CHECKS AT THE END BEFORE TRUSTING ANY OF THIS AS A
+// FEATURE. saleInvoice.REQUIRED lists container_no, so readiness refuses
+// every local delivery before grouping is ever consulted. This section pins
+// the guard's behaviour AND pins the fact that it cannot currently fire.
+section('L. grouping: a container merges silently, a booking has to be asked');
+{
+    const trailer = (id, date) => ({
+        id, date, customer: 'Junk car', booking_no: 'UMXU637049', container_no: '',
+        invoice_no: '', item: 'Clean cast', weight: 12000,
+        invoice_price: 0.4, price_unit: 'lb', weight_unit: 'lb',
+    });
+    const TWO = [trailer('T1', '08/03/2026'), trailer('T2', '08/11/2026')];
+
+    const majose = (id, item) => ({
+        id, date: '08/24/2026', customer: 'Majose Recicladora', booking_no: 'S2131',
+        container_no: '', invoice_no: '260824_AS_26MR03', item, weight: 9000,
+        invoice_price: 0.5, price_unit: 'lb', weight_unit: 'lb',
+    });
+    const THREE = [majose('M1', 'Al Breakage'), majose('M2', 'Al combo'), majose('M3', 'Auto cast')];
+
+    // ── THE TRAILER, UNASKED ────────────────────────────────────────────────
+    const unasked = saleInvoice.buildFrom(TWO[0], { bill: null, allSales: TWO });
+    ck('two rows on one booking do NOT merge on their own',
+       unasked.body.line_items.length === 1, `${unasked.body.line_items.length} lines`);
+    ck('  and it says so rather than going quiet',
+       unasked.grouping.safe === false && unasked.grouping.candidates.length === 2,
+       JSON.stringify(unasked.grouping.candidates.map((c) => c.date)));
+    ck('  naming the booking as what held them together',
+       unasked.grouping.backed_by === 'booking_no' && /trailer/.test(unasked.grouping.why || ''),
+       unasked.grouping.why || '(no reason given)');
+    ck('  the candidate rows carry the date, which is what tells them apart',
+       unasked.grouping.candidates.every((c) => !!c.date),
+       'a tick list with no dates cannot answer "is this the same delivery?"');
+
+    // ── AND ONCE SHE HAS ANSWERED ───────────────────────────────────────────
+    const asked = saleInvoice.buildFrom(TWO[0], { bill: null, allSales: TWO, includeSaleIds: ['T1', 'T2'] });
+    ck('  ticking both merges them', asked.body.line_items.length === 2);
+    ck('  and the question is then closed', asked.grouping.safe === true);
+    const one = saleInvoice.buildFrom(TWO[0], { bill: null, allSales: TWO, includeSaleIds: ['T1'] });
+    ck('  ticking one keeps one', one.body.line_items.length === 1);
+
+    // THE PROPERTY, not the shape of the code: a browser cannot put a row on
+    // the invoice that siblingRows did not itself gather. Same rule the send
+    // route follows when it rebuilds from the sale.
+    const intruder = saleInvoice.buildFrom(TWO[0],
+        { bill: null, allSales: TWO.concat([majose('M9', 'Somebody else\'s metal')]),
+          includeSaleIds: ['T1', 'M9'] });
+    ck('  an id from outside the gathered rows is discarded',
+       intruder.body.line_items.length === 1
+       && !/Somebody/.test(JSON.stringify(intruder.body.line_items)),
+       JSON.stringify(intruder.body.line_items.map((l) => l.item_desc)));
+
+    // ── THE S2131 CASE: ALSO ASKED, BECAUSE NOTHING SEPARATES THEM ──────────
+    const three = saleInvoice.buildFrom(THREE[0], { bill: null, allSales: THREE });
+    ck('three grades on one booking are asked about too',
+       three.grouping.safe === false && three.grouping.candidates.length === 3,
+       'the data cannot tell S2131 from UMXU637049 — only she can');
+
+    // ── WHAT MUST NOT HAVE CHANGED: THE 19-SEP CONTAINER MERGE ─────────────
+    // She asked for this two days before the grouping question and it is not
+    // the thing that was wrong. If this goes red, the fix over-reached.
+    const graded = (item, price) => ({
+        id: 'C_' + item.replace(/\W/g, ''), date: '09/18/2026', customer: 'Aris Metals',
+        booking_no: 'EBKG18670536', container_no: 'CAAU6673040', invoice_no: '26ARIS09',
+        item, weight: 10000, invoice_price: price, price_unit: 'lb', weight_unit: 'lb',
+    });
+    const SEVEN = ['Al Breakage', 'Alternator', 'Starter', 'Sealed units',
+                   'Auto cast', 'Clean cast', 'Radiator'].map((g, i) => graded(g, 0.4 + i * 0.1));
+    const cont = saleInvoice.buildFrom(SEVEN[3], { bill: null, allSales: SEVEN });
+    ck('a CONTAINER still merges every grade with no question asked',
+       cont.body.line_items.length === 7 && cont.grouping.safe === true,
+       `${cont.body.line_items.length} lines, safe=${cont.grouping.safe}`);
+    ck('  and still does not depend on which row she clicked',
+       saleInvoice.buildFrom(SEVEN[0], { bill: null, allSales: SEVEN }).body.line_items.length === 7);
+    ck('  a lone row with a container is not a question either',
+       saleInvoice.buildFrom(SEVEN[0], { bill: null, allSales: [SEVEN[0]] }).grouping.safe === true);
+
+    // ── THE CALLER WITHOUT A FORM ──────────────────────────────────────────
+    // CLAUDE.md, three times over: the voice path is the one that breaks when
+    // shared code grows a requirement. It must still WORK, and it must say
+    // what it left off rather than silently shortening the document.
+    const flow = require(R('helpers/saleInvoiceFlow'));
+    ck('the voice path takes no new required field',
+       flow.generate.length <= 2, `generate takes ${flow.generate.length} arguments`);
+
+    // ── AND THE REASON NONE OF THIS IS REACHABLE YET ───────────────────────
+    // MY ERROR, corrected here so the next person does not repeat it: I told
+    // her a stray merge was live. It is not. container_no is REQUIRED, so
+    // every local delivery is refused at readiness, before grouping matters.
+    ck('a local delivery is refused for its missing container, not merged',
+       unasked.readiness.ok === false && unasked.readiness.missing.includes('container no'),
+       JSON.stringify(unasked.readiness.missing));
+    ck('  which is true of the S2131 rows as well',
+       three.readiness.ok === false && three.readiness.missing.includes('container no'),
+       JSON.stringify(three.readiness.missing));
+    ck('  so 422 comes first and the grouping 409 is unreachable today',
+       saleInvoice.REQUIRED.some(([k]) => k === 'container_no'),
+       'if container_no ever stops being required, the guard above starts doing work');
 }
 
 console.log(`\n  ${pass} passed, ${fail} failed`);

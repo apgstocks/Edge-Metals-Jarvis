@@ -228,6 +228,92 @@ function siblingRows(s, all) {
     return rows.length ? rows : [s];
 }
 
+// ── A CONTAINER MAY MERGE ON ITS OWN. A BOOKING MAY NOT. ───────────────────
+//
+// Apsara, 2026-09-21, asked why the Bills register holds 569 rows against the
+// Invoices register's 651. Working through it turned up 52 sale rows with no
+// container at all — her LOCAL DELIVERIES, which she confirmed are real and
+// not missing data — and 42 of those carry no invoice number either.
+//
+// On those rows siblingRows above has only booking + customer left to match
+// on, and that is not enough to name one shipment. Her ledger, twice:
+//
+//     2026-08-03   booking UMXU637049   Junk car   Clean cast   (no inv no.)
+//     2026-08-11   booking UMXU637049   Junk car   Clean cast   (no inv no.)
+//
+// Two pickups eight days apart. Apsara, 2026-09-21: "UMXU637049 is a trailer
+// that goes out again next week." A trailer is reused; a container number is
+// not. So those two rows satisfy every test siblingRows applies and are still
+// two separate invoices, while these three are genuinely one:
+//
+//     2026-08-24   S2131   Majose   260824_AS_26MR03   Al Breakage
+//     2026-08-24   S2131   Majose   260824_AS_26MR03   Al combo
+//     2026-08-24   S2131   Majose   260824_AS_26MR03   Auto cast
+//
+// Nothing in the data separates those two cases, which is why this does not
+// try to. HER CHOICE, 2026-09-21, of three offered: ask only where there is
+// no container, and leave a container-backed merge silent — she had asked for
+// that merge two days earlier (CAAU6673040, seven grades) and it is not the
+// thing that is wrong.
+//
+// ── AND IT CANNOT FIRE TODAY. MY ERROR, NOT HERS ───────────────────────────
+// I told her on 2026-09-21 that pressing Generate on either UMXU637049 row
+// would produce one invoice carrying both. That was wrong, and I checked it
+// only after writing this: REQUIRED above lists container_no, so readiness
+// refuses every one of her 52 local-delivery rows with "This sale still
+// needs: container no" long before grouping is consulted. The merge I
+// described is unreachable from the screen and from the voice path alike.
+//
+// This stays because it is a GUARD, it costs nothing, and the day local
+// deliveries become invoiceable is the day the merge becomes real. It is not
+// a feature she can use yet, and nobody should read it as one.
+//
+// ── THE DEFAULT IS THE NARROW ONE ──────────────────────────────────────────
+// An unsafe group hands back the clicked row ALONE and reports the rest as
+// candidates. A caller that knows nothing about this therefore keeps doing
+// what it did before db92f3f — one row, one line — and merging is a thing a
+// caller has to ASK for, by id. That direction matters: a flag that has to be
+// set to keep an existing document intact is a flag that eventually is not
+// set, and that is how the packing list lost four columns in September.
+function siblingGroup(s, opts = {}) {
+    const norm = (v) => String(v == null ? '' : v).trim().toUpperCase();
+    const gathered = siblingRows(s, opts.allSales);
+    const backed = !!norm(s.container_no);
+
+    if (backed || gathered.length <= 1) {
+        return { rows: gathered, safe: true, backed_by: backed ? 'container_no' : null, candidates: [] };
+    }
+
+    // ── WHAT THE CLIENT MAY ASK FOR, AND WHAT IT MAY NOT ────────────────────
+    // Only ids that are already in `gathered` are honoured. The browser is
+    // choosing AMONG rows this function found, never naming new ones — the
+    // same rule /api/sales/:id/invoice/send follows when it rebuilds from the
+    // sale rather than trusting the figures posted back to it.
+    const wanted = Array.isArray(opts.includeSaleIds) ? opts.includeSaleIds.map(String) : null;
+    const rows = wanted
+        ? gathered.filter((x) => wanted.includes(String(x.id)) || String(x.id) === String(s.id))
+        : [s];
+
+    return {
+        rows: rows.length ? rows : [s],
+        // Answered once she has picked; still open until then. The screen
+        // shows its question on this flag, not on a count.
+        safe: !!wanted,
+        backed_by: 'booking_no',
+        candidates: gathered.map((x) => ({
+            id: x.id,
+            date: x.date || null,
+            item: x.item || null,
+            weight: x.weight === null || x.weight === undefined ? null : x.weight,
+            weight_unit: x.weight_unit || null,
+            amount: sales.compute(x).amount,
+            included: rows.some((r) => String(r.id) === String(x.id)),
+        })),
+        why: `${gathered.length} rows share booking ${s.booking_no} with no container number. `
+            + 'A booking can be a trailer that goes out again, so these may be separate deliveries.',
+    };
+}
+
 function buildFrom(sale, opts = {}) {
     const s = sale || {};
     const c = sales.compute(s);
@@ -235,7 +321,10 @@ function buildFrom(sale, opts = {}) {
     const rate = ratePerMt(s);
     // Injectable, so a test does not have to write to her real ledger to
     // exercise this — same reason helpers/truckingProposal.js takes allBills.
-    const siblings = siblingRows(s, opts.allSales);
+    // `grouping` decides whether the gathered rows may merge unasked; see
+    // siblingGroup. opts.includeSaleIds is her answer when they may not.
+    const grouping = siblingGroup(s, { allSales: opts.allSales, includeSaleIds: opts.includeSaleIds });
+    const siblings = grouping.rows;
 
     const warnings = [];
     if (!bill) {
@@ -367,7 +456,8 @@ function buildFrom(sale, opts = {}) {
         line_items: lineItems,
     };
 
-    return { body, bill, photos: photosFor(bill), warnings, readiness: readiness(s) };
+    return { body, bill, photos: photosFor(bill), warnings, readiness: readiness(s), grouping };
 }
 
-module.exports = { billFor, ratePerMt, readiness, packingFrom, photosFor, buildFrom, REQUIRED };
+module.exports = { billFor, ratePerMt, readiness, packingFrom, photosFor, buildFrom,
+                   siblingRows, siblingGroup, REQUIRED };

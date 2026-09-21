@@ -6725,7 +6725,12 @@ let genState = null;
 async function openGenerateInvoice(row) {
   const L = LEDGER_LIGHT;
   genState = { row, step: 1, mode: 'normal', gen: null, draft: null, recipients: '',
-               subject: null, body: null, busy: false };
+               subject: null, body: null, busy: false,
+               // The grouping question, when the server asks it. `candidates`
+               // is what it found; `include` is what she has ticked, and it
+               // rides along to /invoice/send too so the weight check there
+               // weighs the rows that are actually on the PDF.
+               candidates: null, include: null };
   document.body.insertAdjacentHTML('beforeend', `
     <div id="genModal" style="position:fixed; inset:0; background:rgba(0,0,0,.66); z-index:9100; display:flex; align-items:flex-start; justify-content:center; overflow-y:auto; padding:32px 16px;">
       <div class="card" id="genCard" style="width:min(820px,100%); padding:20px 22px 18px; background:${L.sunken}; border-color:${L.line};"></div>
@@ -6781,6 +6786,59 @@ async function openGenerateInvoice(row) {
       });
       $('genCancel').onclick = close;
       $('genGo').onclick = doGenerate;
+    }
+
+    // ── STEP 'group': WHICH ROWS BELONG ON IT ───────────────────────────
+    //
+    // Only ever reached when the server says so (409 GROUPING_UNCERTAIN), and
+    // it only says so when a booking is all that holds the rows together. A
+    // container-backed invoice never sees this screen — Apsara, 2026-09-21,
+    // choosing between three shapes: ask where there is no container, leave
+    // the container merge she asked for on 19-Sep alone.
+    //
+    // WHAT IS PRE-TICKED IS MY CALL, NOT HERS: the clicked row always, plus
+    // any row on the SAME DATE carrying the SAME non-blank invoice number.
+    // That is the S2131 case — three grades, one day, one invoice number, one
+    // delivery. Rows on another date start unticked, because that is the
+    // UMXU637049 case: the same trailer, out again eight days later. Ticking
+    // everything by default would nudge toward the merge that is wrong.
+    if (genState.step === 'group') {
+      const cands = genState.candidates || [];
+      const chosen = genState.include || [];
+      const row = (c) => {
+        const mine = String(c.id) === String(r.id);
+        const on = mine || chosen.includes(String(c.id));
+        return `
+        <label style="display:flex; gap:10px; align-items:center; padding:9px 12px; border:1px solid ${on ? L.accent : L.line}; border-radius:var(--radius-sm); background:${L.paper}; cursor:${mine ? 'default' : 'pointer'}; margin-bottom:6px;">
+          <input type="checkbox" class="genPick" value="${esc(String(c.id))}" ${on ? 'checked' : ''} ${mine ? 'disabled' : ''}>
+          <span style="flex:1; display:flex; gap:14px; align-items:baseline; font-size:12px; color:${L.ink};">
+            <span style="min-width:88px; color:${L.inkMuted};">${esc(c.date || '—')}</span>
+            <span style="flex:1;">${esc(c.item || '—')}</span>
+            <span style="color:${L.inkMuted};">${c.weight === null ? '—' : esc(String(c.weight)) + ' ' + esc(c.weight_unit || '')}</span>
+            <span style="min-width:96px; text-align:right;">${money(c.amount)}</span>
+          </span>
+          ${mine ? `<span style="font-size:10px; color:${L.inkFaint}; text-transform:uppercase; letter-spacing:.06em;">this row</span>` : ''}
+        </label>`;
+      };
+      const n = 1 + chosen.filter((id) => String(id) !== String(r.id)).length;
+      card.innerHTML = head('Which rows belong on this invoice?', label) + `
+        ${warnBlock([genState.groupWhy || ''].filter(Boolean), 'warn')}
+        ${cands.map(row).join('')}
+        <div id="genErr" style="color:${L.danger}; font-size:12px; margin:8px 0 0;"></div>
+        <div style="display:flex; justify-content:space-between; gap:8px; margin-top:14px;">
+          <button id="genBackG" class="btn btn-ghost" style="font-size:12px; padding:7px 14px;">Back</button>
+          <button id="genGoG" class="btn btn-primary" style="font-size:12px; padding:7px 16px;">Generate with ${n} row${n === 1 ? '' : 's'}</button>
+        </div>`;
+      card.querySelectorAll('.genPick').forEach((el) => {
+        el.onchange = () => {
+          const id = el.value;
+          const keep = (genState.include || []).filter((x) => String(x) !== String(id));
+          genState.include = el.checked ? keep.concat([id]) : keep;
+          render();
+        };
+      });
+      $('genBackG').onclick = () => { genState.step = 1; render(); };
+      $('genGoG').onclick = doGenerate;
     }
 
     // ── STEP 2: THE DOCUMENT ITSELF ─────────────────────────────────────
@@ -6965,19 +7023,44 @@ async function openGenerateInvoice(row) {
   };
 
   async function doGenerate() {
-    busy('genGo', true, 'Generating…');
+    const btn = genState.step === 'group' ? 'genGoG' : 'genGo';
+    busy(btn, true, 'Generating…');
     try {
       const body = { separate: genState.mode === 'separate', invoice_only: genState.mode === 'invoice_only' };
+      // Sent only once she has answered. Absent on the first press, which is
+      // what makes the server ask rather than assume.
+      if (genState.include) {
+        body.include_sale_ids = [String(genState.row.id)]
+          .concat(genState.include.filter((id) => String(id) !== String(genState.row.id)));
+      }
       genState.gen = await api(`/api/sales/${encodeURIComponent(genState.row.id)}/invoice/generate`,
                                { method: 'POST', body: JSON.stringify(body) });
       genState.step = 2;
       render();
     } catch (e) {
-      busy('genGo', false);
+      busy(btn, false);
       // 422 comes back with the list of what the sale is still missing,
       // which is the answer to "why won't it" rather than a shrug.
       if (e.code === 'SALE_INCOMPLETE' && Array.isArray(e.missing)) {
         fail({ message: `This sale still needs: ${e.missing.join(', ')}. Edit the row, then generate.` });
+        return;
+      }
+      // 409: several rows share this booking and there is no container to say
+      // whether they are one delivery. Nothing was rendered — see the route.
+      if (e.code === 'GROUPING_UNCERTAIN' && Array.isArray(e.candidates)) {
+        // Every candidate already shares this row's invoice number — that is
+        // one of the four things siblingRows matched on. So the only thing
+        // left to tell one delivery from two is the DATE, and a shared
+        // invoice number is only evidence at all when it is not blank.
+        const same = (c) => String(c.id) !== String(genState.row.id)
+          && String(c.date || '') === String(genState.row.date || '')
+          && String(genState.row.invoice_no || '').trim() !== '';
+        genState.candidates = e.candidates;
+        genState.groupWhy = e.message || e.error || null;
+        genState.include = [String(genState.row.id)]
+          .concat(e.candidates.filter(same).map((c) => String(c.id)));
+        genState.step = 'group';
+        render();
         return;
       }
       fail(e);
@@ -7006,7 +7089,11 @@ async function openGenerateInvoice(row) {
       genState.sent = await api(`/api/sales/${encodeURIComponent(genState.row.id)}/invoice/send`,
                                 { method: 'POST', body: JSON.stringify(
                                     { confirm: true, recipients: genState.recipients || undefined,
-                                      subject: genState.subject, body: genState.body }) });
+                                      subject: genState.subject, body: genState.body,
+                                      // The rows she ticked at the generate step. Without
+                                      // them the weight guard here rebuilds a one-line
+                                      // invoice and checks it against a PDF with three.
+                                      include_sale_ids: genState.include || undefined }) });
       genState.step = 4;
       render();
     } catch (e) {

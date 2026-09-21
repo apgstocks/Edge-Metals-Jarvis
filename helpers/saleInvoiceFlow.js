@@ -220,9 +220,34 @@ function parseLayout(text) {
 
 // Build + render + file, exactly as POST /api/sales/:id/invoice/generate
 // does. Returns the saved paths as well as names, so WhatsApp can attach.
-async function generate(sale, { separate = false, invoiceOnly = false } = {}) {
-    const built = saleInvoice.buildFrom(sale);
+//
+// ── THE GROUPING QUESTION HAS NO SCREEN HERE ───────────────────────────────
+// The website asks which rows belong on an invoice when only a booking holds
+// them together (helpers/saleInvoice.siblingGroup). This path is a sentence
+// on WhatsApp or a voice command; there is no tick list to put the question
+// on, and inventing a required field for it is exactly what broke
+// record_payment on 2026-09-17 — the caller without a form is the one that
+// cannot answer.
+//
+// So it takes the narrow answer, which is what siblingGroup gives anyone who
+// does not ask: THE ONE ROW. One grade on the invoice is a document she can
+// look at and correct. Merging a second delivery into it silently is not.
+// And it SAYS SO, through `warnings` — a channel workflow/actions.js already
+// prints as "Note: ..." lines, so nothing downstream needs changing.
+async function generate(sale, { separate = false, invoiceOnly = false, includeSaleIds = null } = {}) {
+    const built = saleInvoice.buildFrom(sale, { includeSaleIds });
     if (!built.readiness.ok) return { ok: false, missing: built.readiness.missing };
+    const g = built.grouping || {};
+    if (g.safe === false) {
+        const others = (g.candidates || []).filter((c) => !c.included);
+        built.warnings = (built.warnings || []).concat([
+            `${others.length} other row${others.length === 1 ? '' : 's'} share booking `
+            + `${sale.booking_no} with no container number (`
+            + others.map((c) => `${c.item || 'item'} ${c.date || ''}`.trim()).join('; ')
+            + '). Only this one is on the invoice — a booking can be a trailer that goes '
+            + 'out again, so open the Invoices tab if they belong together.',
+        ]);
+    }
     const documentsSaved = require('./documentsSaved');
     const invoiceVersions = require('./invoiceVersions');
     const { generateInvoiceClassicPdf } = require('./invoicePdf');

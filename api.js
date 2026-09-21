@@ -7117,13 +7117,44 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
             const invoiceOnly = body0.invoice_only === true || body0.invoice_only === 'true';
             const separate = !invoiceOnly && (body0.separate === true || body0.separate === 'true');
 
-            const built = saleInvoice.buildFrom(sale);
+            // ── WHICH ROWS GO ON IT, WHEN NO CONTAINER SAYS ──────────────
+            // Her answer to the grouping question, posted back as the ids she
+            // ticked. Absent on the first press, and absent forever on a
+            // container — helpers/saleInvoice.siblingGroup only asks where a
+            // booking is all there is to go on.
+            const includeSaleIds = Array.isArray(body0.include_sale_ids)
+                ? body0.include_sale_ids.map(String) : null;
+
+            const built = saleInvoice.buildFrom(sale, { includeSaleIds });
             if (!built.readiness.ok) {
                 // 422, not 500: the sale is fine, it is just not finished.
                 return res.status(422).json({
                     error: `This sale still needs: ${built.readiness.missing.join(', ')}.`,
                     code: 'SALE_INCOMPLETE',
                     missing: built.readiness.missing,
+                });
+            }
+
+            // ── ASKED BEFORE ANYTHING IS RENDERED, NOT AFTER ──────────────
+            // 409 and no PDF. Rendering first and asking afterwards would put
+            // a file on disk carrying rows she had not agreed to, and the
+            // Send step attaches what is on disk.
+            //
+            // ── AND IT IS UNREACHABLE TODAY. SAID PLAINLY ─────────────────
+            // saleInvoice.REQUIRED lists container_no, so the 422 above fires
+            // for every one of her 52 local deliveries before this is
+            // consulted — and a row WITH a container is never an unsafe
+            // group. So no test can reach this branch, and scripts/mutate.js
+            // deliberately carries no mutation for it: one that can never go
+            // red would weaken what "0 SURVIVED" means. The screen side IS
+            // exercised (tests/sale-invoice.js section I drives the 409 with
+            // a stubbed route) so the answer path is not dead code.
+            // If container_no ever stops being required, write the route test.
+            if (built.grouping && built.grouping.safe === false) {
+                return res.status(409).json({
+                    error: built.grouping.why,
+                    code: 'GROUPING_UNCERTAIN',
+                    candidates: built.grouping.candidates,
                 });
             }
 
@@ -7208,7 +7239,16 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
             // Built from the SALE again rather than trusted from the client:
             // a figure the browser sends back is a figure the browser could
             // have changed, and this is the document that goes to customs.
-            const built = saleInvoice.buildFrom(sale);
+            //
+            // The ids ARE taken from the client, and only the ids: they say
+            // which rows she ticked at the generate step, and without them
+            // this would weigh one row against a PDF carrying three. Every
+            // figure is still read out of her ledger; siblingGroup discards
+            // any id that was not among the rows it gathered itself.
+            const built = saleInvoice.buildFrom(sale, {
+                includeSaleIds: Array.isArray(body0.include_sale_ids)
+                    ? body0.include_sale_ids.map(String) : null,
+            });
             const invoiceWeights = require('./helpers/invoiceWeights');
             const problems = invoiceWeights.weightProblems(built.body.line_items);
             if (problems.length && body0.weights_ok !== true && body0.weights_ok !== 'true') {
