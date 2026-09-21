@@ -124,28 +124,63 @@ function listEntries() {
 // company is not a rule for the other, and the separation is most of what
 // this app is for.
 //
+// ── THE NAMES ARE 'Edge Metals' AND 'AAA Investment' ──────────────────────
+// They were 'BofA/Edge Metals' and 'BofA/AAA Investment' for about an hour.
+// She rejected that: "No no no" to the list of forms it accepted, and then,
+// asked which part was wrong, chose "The names themselves are wrong".
+//
+// Rightly. Read her sentence again — "UNDER BofA. 1.Edge Metals 2.AAA
+// Investment" — that is a bank with two accounts under it, a hierarchy. I
+// flattened it into one string with a slash in the middle, which forced a
+// whole apparatus of tolerant matching to un-flatten it again: a bare "AAA
+// Investment" had to be guessed back into 'BofA/AAA Investment', and the
+// guess needed an ambiguity rule to stop it picking the wrong one. All of
+// that existed to undo a mistake in the name. Gone: the ACCOUNT is the name,
+// the BANK is a separate fact about it, and nothing has to be inferred.
+//
 // ── PLAIN 'BofA' STAYS, AND IS NOT MIGRATED ───────────────────────────────
 // Every petty cash row written before today says 'BofA' and nothing else.
 // HER CHOICE, of three offered: "Keep 'BofA' as-is, reassign as you go" —
-// the old rows keep their name, the two new buckets start empty, and she
+// the old rows keep their name, the two new accounts start empty, and she
 // moves money across with the Reassign button she already has. Rewriting
-// those rows to 'BofA/Edge Metals' would have been one migration and a claim,
-// filed under her name, that none of that cash was AAA Investment's. Nobody
-// knows that. So plain BofA is a real bucket for as long as it holds money.
-const SOURCES = ['BofA', 'BofA/Edge Metals', 'BofA/AAA Investment', 'Chase Bank', 'Unassigned'];
+// those rows would have been a claim, filed under her name, that none of that
+// cash was AAA Investment's. Nobody knows that. So plain BofA is a real
+// bucket for as long as it holds money, and the screens call it what it is:
+// BofA money that has not been split yet.
+const SOURCES = ['BofA', 'Edge Metals', 'AAA Investment', 'Chase Bank', 'Unassigned'];
 const UNASSIGNED = 'Unassigned';
 
-// ── WHICH COMPANY'S MONEY EACH BUCKET HOLDS ───────────────────────────────
+// ── WHICH BANK EACH ACCOUNT SITS IN ───────────────────────────────────────
+// The fact the slash was trying to carry, kept as its own field so a name
+// never has to be taken apart to find it. Unassigned has no bank — that is
+// the whole meaning of the bucket — and says so with null rather than a
+// label, because "Unassigned is at Unassigned" is not a sentence.
+const BANK_OF = {
+    'BofA': 'BofA',
+    'Edge Metals': 'BofA',
+    'AAA Investment': 'BofA',
+    'Chase Bank': 'Chase Bank',
+};
+function bankOf(source) {
+    return BANK_OF[String(source || '').trim()] || null;
+}
+
+// ── AND WHOSE MONEY IT IS ─────────────────────────────────────────────────
 // ONLY what she has actually said. She named the company behind the two new
-// buckets and nothing else. Plain BofA is a mix by definition, and she has
+// accounts and nothing else. Plain BofA is a mix by definition, and she has
 // never said whose Chase Bank is or whose the opening float was — so they sit
 // under COMPANY_UNKNOWN rather than being quietly assigned to Edge Metals
 // because it is the bigger company. A guess here would print a per-company
 // figure that reads as fact on a screen she makes decisions from.
+//
+// The account and the company share a name, which is not a coincidence and
+// not a collision: the account IS that company's money at BofA. Kept as an
+// explicit map anyway, so a future account called something else still
+// reports a company instead of quietly becoming its own.
 const COMPANY_UNKNOWN = 'Company not stated';
 const COMPANY_OF = {
-    'BofA/Edge Metals': 'Edge Metals',
-    'BofA/AAA Investment': 'AAA Investment',
+    'Edge Metals': 'Edge Metals',
+    'AAA Investment': 'AAA Investment',
 };
 function companyOf(source) {
     return COMPANY_OF[String(source || '').trim()] || COMPANY_UNKNOWN;
@@ -166,37 +201,25 @@ function sourceOf(entry) {
     return hit || raw;
 }
 
-// ── ONE NAME, HOWEVER IT WAS WRITTEN ──────────────────────────────────────
-// 'BofA/Edge Metals' has a slash in it, and the paths that reach this do not
-// all have a dropdown to pick from. helpers/tools.js is how she tells Jarvis
-// about a cash payment by TALKING to it, and a spoken or typed "BofA Edge
-// Metals" must not be refused as "not one of ...". That caller is the one
-// this repo breaks every time shared code grows a requirement, three times
-// now, so it is handled here rather than left to each caller to get right.
+// ── ONE NAME, AND NOTHING IS INFERRED FROM A PARTIAL ONE ──────────────────
+// An earlier version of this matched a bare "AAA Investment" back onto
+// 'BofA/AAA Investment', and needed an ambiguity rule to stop it choosing
+// between two accounts. Naming the accounts properly deleted the problem:
+// "AAA Investment" IS the name, so there is nothing left to guess, and
+// guessing between two companies' money is the one thing rule 5 exists to
+// stop. What remains is tolerance for how a name is TYPED, not for what it
+// leaves out — case, and runs of whitespace. Nothing else.
 //
-// Separators collapse: slash, hyphen, dash and runs of spaces are all the
-// same thing. Case is ignored, as it already was.
-const flat = (v) => String(v == null ? '' : v).trim().toLowerCase()
-    .replace(/[\/\-‐-―_,]+/g, ' ').replace(/\s+/g, ' ').trim();
+// This matters most for helpers/tools.js, which is how she records a cash
+// payment by TALKING to Jarvis: it has no dropdown, and it is the caller
+// this repo has broken three times. "aaa  investment" reaches the right
+// account; "AAA" reaches nothing and is refused with the list.
+const flat = (v) => String(v == null ? '' : v).trim().toLowerCase().replace(/\s+/g, ' ');
 
-// `list` is injectable for the same reason balanceBySource and borrowings
-// take their entries: the ambiguity rule below cannot be exercised against
-// the real SOURCES, because no two of them end in the same word TODAY. That
-// is the whole point of the rule — it is for the day one does — and a guard
-// no test can reach is a guard nobody knows is still working.
 function matchSource(raw, list = SOURCES) {
     const want = flat(raw);
     if (!want) return null;
-    const exact = list.find((s) => flat(s) === want);
-    if (exact) return exact;
-    // ── AND A SHORTER NAME, ONLY WHEN IT CAN MEAN ONE THING ───────────────
-    // "Edge Metals" or "AAA Investment" on its own is what a person says out
-    // loud. It resolves ONLY when exactly one bucket ends that way — two
-    // candidates is an ambiguity, and guessing between two companies' money
-    // is the one thing rule 5 exists to stop. Anchored at the end so "BofA"
-    // keeps meaning the legacy bucket and never drifts into a split one.
-    const ends = list.filter((s) => flat(s) !== want && flat(s).endsWith(' ' + want));
-    return ends.length === 1 ? ends[0] : null;
+    return list.find((s) => flat(s) === want) || null;
 }
 
 // Normalises on the way IN. Refuses a name that is not a source, because a
@@ -273,8 +296,11 @@ function balances() {
         total: balanceOf(list),
         bySource: balanceBySource(list),
         byCompany: balanceByCompany(list),
-        // So a screen can label a bucket without repeating the map.
+        // So a screen can label and GROUP an account without repeating either
+        // map. The bank is what the two new accounts are shown under — her
+        // "Under BofA. 1.Edge Metals 2.AAA Investment".
         companyOf: SOURCES.reduce((m, s) => { m[s] = companyOf(s); return m; }, {}),
+        bankOf: SOURCES.reduce((m, s) => { m[s] = bankOf(s); return m; }, {}),
     };
 }
 
@@ -944,7 +970,5 @@ module.exports = {
     // to two companies. Exported for the same reason SOURCES is: one map, not
     // one per screen.
     COMPANY_OF, COMPANY_UNKNOWN, companyOf, balanceByCompany,
-    // Exported for the ambiguity check only — see its note. Nothing in the
-    // app calls it directly; cleanSource and sourceOf are the front doors.
-    matchSource,
+    BANK_OF, bankOf,
 };

@@ -384,7 +384,7 @@ section('F — END TO END, through the real routes');
         && tab.json.sources.join('|') === petty.SOURCES.join('|'),
         JSON.stringify(tab.json.sources));
     ck('  with the company behind each bucket, where she has said one',
-        tab.json.company_of && tab.json.company_of['BofA/AAA Investment'] === 'AAA Investment'
+        tab.json.company_of && tab.json.company_of['AAA Investment'] === 'AAA Investment'
         && tab.json.company_of['Chase Bank'] === tab.json.company_unknown,
         JSON.stringify(tab.json.company_of));
 
@@ -468,13 +468,13 @@ section('H — BofA is two accounts, and they belong to two companies');
 {
     await reset();
     await petty.addTopUp({ amount: 6000, cash_source: 'BofA', date: '2026-09-21' });
-    await petty.addTopUp({ amount: 4000, cash_source: 'BofA/Edge Metals', date: '2026-09-21' });
-    await petty.addTopUp({ amount: 2500, cash_source: 'BofA/AAA Investment', date: '2026-09-21' });
+    await petty.addTopUp({ amount: 4000, cash_source: 'Edge Metals', date: '2026-09-21' });
+    await petty.addTopUp({ amount: 2500, cash_source: 'AAA Investment', date: '2026-09-21' });
     await petty.addTopUp({ amount: 1500, cash_source: 'Chase Bank', date: '2026-09-21' });
 
     ck('the two new buckets hold what was put in them',
-        bucket('BofA/Edge Metals') === 4000 && bucket('BofA/AAA Investment') === 2500,
-        `${bucket('BofA/Edge Metals')} / ${bucket('BofA/AAA Investment')}`);
+        bucket('Edge Metals') === 4000 && bucket('AAA Investment') === 2500,
+        `${bucket('Edge Metals')} / ${bucket('AAA Investment')}`);
     ck('  and plain BofA is untouched by either', bucket('BofA') === 6000, String(bucket('BofA')));
     invariant('after topping up four buckets');
 
@@ -503,15 +503,32 @@ section('H — BofA is two accounts, and they belong to two companies');
     // helpers/tools.js is how she records a payment by TALKING to Jarvis. It
     // has no select to pick a slash from, and it is the caller this repo has
     // broken three times by adding a requirement it could not meet.
-    ck('a spoken name resolves without the slash',
-        petty.cleanSource('BofA Edge Metals') === 'BofA/Edge Metals'
-        && petty.cleanSource('bofa - aaa investment') === 'BofA/AAA Investment');
-    ck('  and a bare company name resolves when only one bucket can mean it',
-        petty.cleanSource('AAA Investment') === 'BofA/AAA Investment'
-        && petty.cleanSource('edge metals') === 'BofA/Edge Metals');
-    ck('  but "BofA" alone still means the unsplit bucket, not a guess',
+    // The account IS the name she would say. Nothing is inferred from a
+    // partial one — an earlier version named these 'BofA/Edge Metals' and
+    // then had to guess a bare "AAA Investment" back onto it. She rejected
+    // the name; the guessing went with it.
+    ck('the name she would say is the name it is stored under',
+        petty.cleanSource('AAA Investment') === 'AAA Investment'
+        && petty.cleanSource('edge metals') === 'Edge Metals');
+    ck('  case and stray spaces are tolerated, nothing else is',
+        petty.cleanSource('  aaa   investment ') === 'AAA Investment');
+    ck('  "BofA" still means the unsplit bucket, not one of its accounts',
         petty.cleanSource('BofA') === 'BofA',
-        'if this ever resolves to a split bucket, old rows change meaning');
+        'if this ever resolves to a split account, every old row changes meaning');
+    let partial = null;
+    try { petty.cleanSource('AAA'); } catch (e) { partial = e; }
+    ck('  and half a name is refused rather than guessed', !!partial,
+        'guessing between two companies is the thing rule 5 exists to stop');
+
+    // ── AND THE BANK EACH ONE SITS IN ────────────────────────────────────
+    // Her shape: "Under BofA. 1.Edge Metals 2.AAA Investment". The bank is a
+    // FACT ABOUT the account, not part of its name, and the screens group by
+    // it. Unassigned has no bank — that is what the bucket means.
+    ck('the two accounts are under BofA',
+        petty.bankOf('Edge Metals') === 'BofA' && petty.bankOf('AAA Investment') === 'BofA');
+    ck('  Chase Bank is its own', petty.bankOf('Chase Bank') === 'Chase Bank');
+    ck('  and unbanked cash says it has no bank rather than naming one',
+        petty.bankOf('Unassigned') === null, String(petty.bankOf('Unassigned')));
     let refused = null;
     try { petty.cleanSource('Wells Fargo'); } catch (e) { refused = e; }
     ck('  and a name that is not a bucket is still refused', !!refused);
@@ -524,12 +541,12 @@ section('H — BofA is two accounts, and they belong to two companies');
     // fixture was wrong. A test whose answer depends on which bucket happens
     // to be fullest is a test that goes red when an unrelated figure moves.
     await reset();
-    await petty.addTopUp({ amount: 4000, cash_source: 'BofA/Edge Metals', date: '2026-09-21' });
-    await petty.addTopUp({ amount: 2500, cash_source: 'BofA/AAA Investment', date: '2026-09-21' });
+    await petty.addTopUp({ amount: 4000, cash_source: 'Edge Metals', date: '2026-09-21' });
+    await petty.addTopUp({ amount: 2500, cash_source: 'AAA Investment', date: '2026-09-21' });
     await petty.withdrawForPayment({ amount: 3000, loadId: 'L_AAA',
-        cashSource: 'BofA/AAA Investment', allowBorrow: true });
+        cashSource: 'AAA Investment', allowBorrow: true });
     const owed = petty.borrowings();
-    const cross = owed.find((b) => b.owes === 'BofA/AAA Investment');
+    const cross = owed.find((b) => b.owes === 'AAA Investment');
     ck('a short bucket still borrows rather than refusing', !!cross,
         JSON.stringify(owed));
     ck('  and the balance is flagged as between two companies',
@@ -552,35 +569,38 @@ section('H — BofA is two accounts, and they belong to two companies');
     // Nobody has said whose Chase Bank is, and a balance cannot be declared
     // to cross a line that has not been drawn.
     const half = petty.borrowings([
-        { kind: 'transfer', transfer_reason: 'borrow', cash_source: 'BofA/Edge Metals',
+        { kind: 'transfer', transfer_reason: 'borrow', cash_source: 'Edge Metals',
           transfer_to: 'Chase Bank', amount: -500 },
     ])[0];
     ck('  nor is a named company against an unnamed one',
         !!half && half.intercompany === false, JSON.stringify(half));
 
-    // ── THE AMBIGUITY RULE, WHICH TODAY'S LIST CANNOT EXERCISE ───────────
-    // No two real buckets end in the same word, so the "only when it can mean
-    // one thing" guard is unreachable against SOURCES — which is exactly why
-    // matchSource takes the list. The day a second Edge Metals account is
-    // added, a spoken "Edge Metals" must resolve to NEITHER rather than to
-    // whichever happens to be first.
-    ck('a half-name that could mean two buckets resolves to neither',
-        petty.matchSource('edge metals', ['BofA/Edge Metals', 'Chase/Edge Metals']) === null,
-        'guessing between two of her accounts is the thing rule 5 exists to stop');
-    ck('  and still resolves when only one can mean it',
-        petty.matchSource('edge metals', ['BofA/Edge Metals', 'Chase Bank']) === 'BofA/Edge Metals');
+    // ── AND NO NAME CAN BE REACHED BY SAYING ANOTHER ────────────────────
+    // Only exact names resolve now, so this is about the LIST rather than the
+    // matcher: if an account is ever added called "Edge Metals Two", saying
+    // "Edge Metals" stops being unambiguous in the head of whoever is typing
+    // it, whatever the code does. This goes red the day that happens.
+    ck('no account name is a prefix or suffix of another',
+        petty.SOURCES.every((a) => petty.SOURCES.every((b) => a === b
+            || !(b.toLowerCase().startsWith(a.toLowerCase() + ' ')
+                 || b.toLowerCase().endsWith(' ' + a.toLowerCase())))),
+        JSON.stringify(petty.SOURCES));
 
     // ── AND THE COPIES OF THE LIST IN THE TWO CLIENTS ────────────────────
     // Both screens build their dropdown from the server, but each keeps a
     // fallback for the moment before the first response lands. A stale
     // fallback would offer 'BofA' as though it were the only BofA account.
-    const FALLBACK = /\['BofA', 'BofA\/Edge Metals', 'BofA\/AAA Investment', 'Chase Bank', 'Unassigned'\]/;
+    // Built FROM SOURCES rather than spelled out, so renaming an account
+    // updates this check instead of breaking it. The first version of this
+    // hardcoded the names and went red an hour later when she renamed them —
+    // the same mistake as the `sources.length === 3` check above.
+    const EXPECTED = '[' + petty.SOURCES.map((s) => `'${s}'`).join(', ') + ']';
     for (const f of ['dashboard/index.html', 'mobile-app/www/index.html']) {
         const src = fs.readFileSync(path.join(__dirname, '..', f), 'utf8');
         const copies = (src.match(/pettyCash\.sources[\s\S]{0,120}?\['BofA'[^\]]*\]/g) || []);
         ck(`${f}: every petty-cash fallback matches SOURCES`,
-            copies.length > 0 && copies.every((c) => FALLBACK.test(c)),
-            `${copies.length} fallback(s): ${JSON.stringify(copies.map((c) => c.slice(-90)))}`);
+            copies.length > 0 && copies.every((c) => c.includes(EXPECTED)),
+            `${copies.length} fallback(s) vs ${EXPECTED}: ${JSON.stringify(copies.map((c) => c.slice(-90)))}`);
     }
     // The phone asks with a numbered prompt. "Type 1 or 2" was true when
     // there were two banks; there are four now.

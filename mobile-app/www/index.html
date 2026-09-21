@@ -2373,7 +2373,7 @@ function openPayModal(loadId, kind) {
     const sel = $('pay_cash_source');
     if (sel) {
       const srcs = (pettyCash.sources || []).length ? pettyCash.sources
-        : ['BofA', 'BofA/Edge Metals', 'BofA/AAA Investment', 'Chase Bank', 'Unassigned'];
+        : ['BofA', 'Edge Metals', 'AAA Investment', 'Chase Bank', 'Unassigned'];
       sel.innerHTML = srcs.map((x) => `<option value="${esc(x)}">${esc(x)}${
         (pettyCash.by_source || {})[x] != null ? ` — ${esc(fmtAmount(Number(pettyCash.by_source[x]) || 0))}` : ''}</option>`).join('');
       const best = srcs.slice().sort((a, b) =>
@@ -6903,6 +6903,7 @@ async function refreshPettyCash() {
       sources: Array.isArray(d && d.sources) ? d.sources : [],
       by_company: (d && d.by_company) || {},
       company_of: (d && d.company_of) || {},
+      bank_of: (d && d.bank_of) || {},
       company_unknown: (d && d.company_unknown) || 'Company not stated',
     };
   } catch (e) {
@@ -7040,20 +7041,41 @@ async function renderPettyCashTab() {
               </div>`;
             }).join('')}
         </div>` : ''}
-        <!-- And the buckets she asked for on 20-Sep, one line further down.
-             Every one is listed even at zero: this is the list she reassigns
-             into, and a destination that hides while empty is unreachable. -->
-        <div style="display:flex; gap:18px; flex-wrap:wrap; margin-top:12px; padding-top:12px; border-top:1px solid var(--border-subtle);">
-          ${(pettyCash.sources || []).map((src) => {
-            const v = Number((pettyCash.by_source || {})[src]) || 0;
-            const co = (pettyCash.company_of || {})[src];
-            const known = co && co !== pettyCash.company_unknown;
-            return `<div>
-              <div style="font-family:var(--font-mono); font-size:9.5px; letter-spacing:.12em; text-transform:uppercase; color:var(--text-muted);">${esc(src)}</div>
-              <div style="font-family:var(--font-mono); font-size:15px; font-weight:700; color:${v < 0 ? 'var(--status-danger, #c53030)' : 'var(--text-strong)'};">${esc(fmtAmount(v))}</div>
-              ${known ? `<div style="font-size:9.5px; color:var(--text-faint);">${esc(co)}</div>` : ''}
-            </div>`;
-          }).join('')}
+        <!-- And the accounts she asked for on 20-Sep, grouped under their
+             bank the way she described them on 21-Sep: "Under BofA. 1.Edge
+             Metals 2.AAA Investment". Every one is listed even at zero: this
+             is the list she reassigns into, and a destination that hides
+             while empty is unreachable. -->
+        <div style="margin-top:12px; padding-top:12px; border-top:1px solid var(--border-subtle);">
+          ${(() => {
+            const srcs = pettyCash.sources || [];
+            const bankOf = pettyCash.bank_of || {};
+            const banks = [];
+            for (const s of srcs) {
+              const b = bankOf[s] || null;
+              let g = banks.find((x) => x.bank === b);
+              if (!g) { g = { bank: b, items: [] }; banks.push(g); }
+              g.items.push(s);
+            }
+            const cell = (src) => {
+              const v = Number((pettyCash.by_source || {})[src]) || 0;
+              const co = (pettyCash.company_of || {})[src];
+              const known = co && co !== pettyCash.company_unknown;
+              // Plain BofA shares its name with its bank; under a BofA
+              // heading it would read "BofA / BofA".
+              const label = src === (bankOf[src] || null) ? 'not yet split' : src;
+              return `<div>
+                <div style="font-family:var(--font-mono); font-size:9.5px; letter-spacing:.12em; text-transform:uppercase; color:var(--text-muted);">${esc(label)}</div>
+                <div style="font-family:var(--font-mono); font-size:15px; font-weight:700; color:${v < 0 ? 'var(--status-danger, #c53030)' : 'var(--text-strong)'};">${esc(fmtAmount(v))}</div>
+                ${known ? `<div style="font-size:9.5px; color:var(--text-faint);">${esc(co)}</div>` : ''}
+              </div>`;
+            };
+            return banks.map((g) => `
+              <div style="margin-bottom:10px;">
+                <div style="font-size:11px; font-weight:700; color:var(--text-strong); margin-bottom:5px;">${esc(g.bank || 'No bank behind it')}</div>
+                <div style="display:flex; gap:18px; flex-wrap:wrap;">${g.items.map(cell).join('')}</div>
+              </div>`).join('');
+          })()}
         </div>
         ${bal <= 0 ? `<div style="margin-top:8px; font-size:12.5px; color:var(--status-warning, #d69e2e);">Cash payments are refused while this is empty. Add cash before paying a load in cash.</div>` : ''}
       </div>
@@ -7110,7 +7132,7 @@ async function renderPettyCashTab() {
       // here would offer 'BofA' as though it were still the only BofA
       // account, and Edge Metals' cash would land in the unsplit bucket.
       const banks = (pettyCash.sources && pettyCash.sources.length ? pettyCash.sources
-        : ['BofA', 'BofA/Edge Metals', 'BofA/AAA Investment', 'Chase Bank', 'Unassigned'])
+        : ['BofA', 'Edge Metals', 'AAA Investment', 'Chase Bank', 'Unassigned'])
         .filter((x) => x !== 'Unassigned');
       // "Type 1 or 2" was true when there were two. There are four now, and a
       // prompt that names a range it no longer has is how a wrong bucket gets
@@ -7142,7 +7164,7 @@ async function renderPettyCashTab() {
     const reassign = $('btnReassignCash');
     if (reassign) reassign.addEventListener('click', async () => {
       const all = (pettyCash.sources && pettyCash.sources.length) ? pettyCash.sources
-        : ['BofA', 'BofA/Edge Metals', 'BofA/AAA Investment', 'Chase Bank', 'Unassigned'];
+        : ['BofA', 'Edge Metals', 'AAA Investment', 'Chase Bank', 'Unassigned'];
       const from = prompt('Move cash OUT of which account?\n\n' + all.map((b, i) => `${i + 1}. ${b}`).join('\n'));
       if (from === null) return;
       const src = all[Number(String(from).trim()) - 1] || all.find((b) => b.toLowerCase() === String(from).trim().toLowerCase());

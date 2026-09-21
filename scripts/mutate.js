@@ -2348,15 +2348,25 @@ const MUTATIONS = [
       find: "                     intercompany: a !== COMPANY_UNKNOWN && z !== COMPANY_UNKNOWN && a !== z };",
       to:   '                     intercompany: a !== z };' },
 
-    { name: 'petty: a spoken bucket name is refused because it has no slash',
+    { name: 'petty: a name typed with odd spacing or case is refused',
       file: 'helpers/pettyCash.js', suites: ['petty-cash-banks'],
-      find: "    const exact = list.find((s) => flat(s) === want);",
-      to:   '    const exact = list.find((s) => s === raw);' },
+      find: '    return list.find((s) => flat(s) === want) || null;',
+      to:   '    return list.find((s) => s === raw) || null;' },
 
-    { name: 'petty: a half-name resolves even when two buckets could mean it',
+    { name: 'petty: half a name resolves to an account she did not say',
       file: 'helpers/pettyCash.js', suites: ['petty-cash-banks'],
-      find: '    return ends.length === 1 ? ends[0] : null;',
-      to:   '    return ends.length ? ends[0] : null;' },
+      find: '    return list.find((s) => flat(s) === want) || null;',
+      to:   '    return list.find((s) => flat(s).startsWith(want)) || null;' },
+
+    { name: 'petty: unbanked cash is given a bank it never came from',
+      file: 'helpers/pettyCash.js', suites: ['petty-cash-banks'],
+      find: "    return BANK_OF[String(source || '').trim()] || null;",
+      to:   "    return BANK_OF[String(source || '').trim()] || 'BofA';" },
+
+    { name: 'petty: an account is filed under the wrong bank',
+      file: 'helpers/pettyCash.js', suites: ['petty-cash-banks'],
+      find: "    'AAA Investment': 'BofA',",
+      to:   "    'AAA Investment': 'Chase Bank'," },
 
     { name: 'petty: a cash SALE is filed under a bank it never came from',
       file: 'helpers/pettyCash.js', suites: ['petty-cash-banks'],

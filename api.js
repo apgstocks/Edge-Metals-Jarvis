@@ -4958,6 +4958,10 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
                 // bucket without carrying its own copy of the map.
                 by_company: petty.balanceByCompany(petty.listEntries()),
                 company_of: petty.SOURCES.reduce((m, s) => { m[s] = petty.companyOf(s); return m; }, {}),
+                // The bank each account sits in, so the screens can group
+                // them the way she described it: "Under BofA. 1.Edge Metals
+                // 2.AAA Investment". Unassigned has no bank and returns null.
+                bank_of: petty.SOURCES.reduce((m, s) => { m[s] = petty.bankOf(s); return m; }, {}),
                 company_unknown: petty.COMPANY_UNKNOWN,
                 borrowings: petty.borrowings(),
                 transfers: petty.transfers(),
