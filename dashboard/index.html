@@ -10173,6 +10173,7 @@ function pettyBorrowingHtml(isAdmin) {
       <span style="flex:1;"></span>
       <!-- Her "give them an option to add from which bank later". A dated
            move, never an edit of the old rows — see helpers/pettyCash.js. -->
+      <button id="btnSplitCash" class="btn" style="font-size:12px; padding:6px 14px;">Split Edge Metals / AAA</button>
       <button id="btnReassignCash" class="btn" style="font-size:12px; padding:6px 14px;">Move cash between accounts</button>
     </div>` : `<div style="font-family:var(--font-mono); font-size:10px; font-weight:600; letter-spacing:.16em; text-transform:uppercase; color:var(--text-muted); margin:22px 0 10px;">Every movement</div>`}
     ${movesHtml}`;
@@ -10229,10 +10230,20 @@ async function renderPettyCashTab() {
         // A company with nothing in it is not printed. A heading reading
         // "AAA Investment $0.00" before any of its cash exists invites the
         // question of where it went.
-        stats: [['cash in hand', esc(fmtAmount(bal))]].concat(
-          Object.entries(pettyCash.by_company || {})
-            .filter(([, amt]) => Math.abs(Number(amt) || 0) > 0.005)
-            .map(([co, amt]) => [co.toLowerCase(), esc(fmtAmount(Number(amt) || 0))])),
+        //
+        // ── AND NOT WHEN IT ONLY REPEATS THE TOTAL ───────────────────────
+        // Apsara, 2026-09-22, on the built app: "it looks ugly". With every
+        // row still unbanked this printed "COMPANY NOT STATED $22,441.03"
+        // immediately under "CASH IN HAND $22,441.03" — the same number
+        // twice, the second time under a label that is an apology. A company
+        // figure earns its place only when it DIVIDES the total, so it is
+        // printed only alongside at least one other company that has money.
+        stats: [['cash in hand', esc(fmtAmount(bal))]].concat((() => {
+          const withMoney = Object.entries(pettyCash.by_company || {})
+            .filter(([, amt]) => Math.abs(Number(amt) || 0) > 0.005);
+          if (withMoney.length < 2) return [];
+          return withMoney.map(([co, amt]) => [co.toLowerCase(), esc(fmtAmount(Number(amt) || 0))]);
+        })()),
         chips: [isAdmin ? null : 'read only'],
         actions: isAdmin ? '<button id="btnAddPetty" class="btn btn-primary">+ Add cash</button>' : '',
       })}
@@ -10267,22 +10278,33 @@ async function renderPettyCashTab() {
             g.items.push(s);
           }
           const cell = (src) => {
-            const co = (pettyCash.company_of || {})[src];
-            const known = co && co !== pettyCash.company_unknown;
-            // The legacy bucket shares its name with its bank, so under a
-            // BofA heading it would read "BofA / BofA". Said plainly instead.
-            const label = src === (bankOf[src] || null) ? 'not yet split' : src;
-            return `<div style="min-width:132px;">
+            // ── THERE IS NO "not yet split" ANY MORE ─────────────────────
+            // There was, for one account: plain 'BofA', the pre-split bucket.
+            // The rule read `name === its own bank`, which is true of Chase
+            // Bank too, so the phone announced "Chase Bank / NOT YET SPLIT".
+            //
+            // Apsara then had the old BofA cash migrated into Edge Metals
+            // (2026-09-22, "for previous cash"), so no account is named after
+            // its bank any longer and the label is simply the name. The whole
+            // special case is deleted rather than left standing unreachable —
+            // tests/petty-cash-banks.js asserts the condition that made it
+            // possible cannot come back.
+            const label = src;
+            // The company sub-label is dropped: every account is named for
+            // its company, so it printed the same words twice.
+            return `<div style="flex:1 1 0; min-width:0;">
               <div style="font-family:var(--font-mono); font-size:10px; letter-spacing:.09em; text-transform:uppercase; color:var(--text-muted);">${esc(label)}</div>
               <div style="font-size:13px; color:var(--text-strong);">${esc(fmtAmount(Number((pettyCash.by_source || {})[src]) || 0))}</div>
-              ${known ? `<div style="font-size:10.5px; color:var(--text-faint);">${esc(co)}</div>` : ''}
             </div>`;
           };
-          return banks.map((g) => `
-            <div>
-              <div style="font-size:11.5px; font-weight:700; color:var(--text-strong); margin-bottom:6px;">${esc(g.bank || 'No bank behind it')}</div>
-              <div style="display:flex; flex-wrap:wrap; gap:8px 20px;">${g.items.map(cell).join('')}</div>
-            </div>`).join('');
+          // A bank heading above a single account says the account's own name
+          // twice — "No bank behind it" sat directly above "Unassigned".
+          return banks.map((g) => (g.items.length < 2
+            ? `<div style="min-width:132px;">${cell(g.items[0])}</div>`
+            : `<div style="min-width:280px;">
+              <div style="font-size:11.5px; font-weight:700; color:var(--text-strong); margin-bottom:6px;">${esc(g.bank)}</div>
+              <div style="display:flex; gap:16px; align-items:flex-start;">${g.items.map(cell).join('')}</div>
+            </div>`)).join('');
         })()}
       </div>
       ${bal <= 0 ? `<div class="card" style="padding:12px 16px; margin-bottom:18px; font-size:12.5px; color:var(--status-warning, #d69e2e);">Cash payments are refused while this is empty. Add cash before paying a load in cash.</div>` : ''}
@@ -10360,6 +10382,37 @@ async function renderPettyCashTab() {
       if (!isFinite(amt) || amt <= 0) { alert('Enter an amount greater than zero.'); return; }
       await movePettyCash({ from: b.dataset.owes, to: b.dataset.to, amount: amt, reason: 'repay' });
     }));
+
+    // ── SPLIT: THE TWO-COMPANY MOVE, WITHOUT THE THREE PROMPTS ──────────
+    // Apsara, 2026-09-22, after choosing to migrate the old BofA cash into
+    // Edge Metals: "now add a split as edge metals/aaa".
+    //
+    // It is the reassign below with both accounts already chosen, because
+    // that is the move she will make over and over: the migration puts every
+    // previous BofA note under Edge Metals, and AAA Investment's share comes
+    // back out of it one amount at a time. Three prompts for a journey whose
+    // start and end never change is three chances to pick the wrong account.
+    //
+    // DELIBERATELY THE SAME ROUTE AND THE SAME REASON ('reassign'). It gets
+    // the refusal when the source is short, the dated pair of rows sharing a
+    // transfer_id, and its line on the Borrowing tab — none of which is
+    // re-implemented here. A second path that moves money is a second path
+    // that can move it wrongly.
+    const SPLIT_FROM = 'Edge Metals', SPLIT_TO = 'AAA Investment';
+    const split = $('btnSplitCash');
+    if (split) split.addEventListener('click', async () => {
+      const held = Number((pettyCash.by_source || {})[SPLIT_FROM]) || 0;
+      const raw = prompt(`How much of ${SPLIT_FROM}'s cash belongs to ${SPLIT_TO}?\n\n`
+        + `${SPLIT_FROM} holds ${fmtAmount(held)}.\n\n`
+        + 'This moves it between the two accounts. Cash in hand does not change.');
+      if (raw === null) return;
+      const amt = Number(String(raw).replace(/[^0-9.\-]/g, ''));
+      if (!isFinite(amt) || amt <= 0) { alert('Enter an amount greater than zero.'); return; }
+      // Stated before it happens, because this one crosses a company line.
+      if (!confirm(`Move ${fmtAmount(amt)} from ${SPLIT_FROM} to ${SPLIT_TO}?\n\n`
+        + 'These are two different companies, so this changes whose money it is.')) return;
+      await movePettyCash({ from: SPLIT_FROM, to: SPLIT_TO, amount: amt, reason: 'reassign' });
+    });
 
     const reassign = $('btnReassignCash');
     if (reassign) reassign.addEventListener('click', async () => {
@@ -10780,7 +10833,7 @@ function openPayModal(loadId, kind) {
       // 'BofA' as if it were still the only BofA account and she would file
       // Edge Metals' cash into the unsplit bucket without noticing.
       const srcs = (pettyCash.sources || []).length ? pettyCash.sources
-        : ['BofA', 'Edge Metals', 'AAA Investment', 'Chase Bank', 'Unassigned'];
+        : ['Edge Metals', 'AAA Investment', 'Chase Bank', 'Unassigned'];
       sel.innerHTML = srcs.map((x) => `<option value="${esc(x)}">${esc(x)}${
         (pettyCash.by_source || {})[x] != null ? ` — ${esc(fmtAmount(Number(pettyCash.by_source[x]) || 0))}` : ''}</option>`).join('');
       // Defaults to whichever bucket holds the most, so the common case needs

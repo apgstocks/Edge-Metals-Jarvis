@@ -138,16 +138,27 @@ function listEntries() {
 // that existed to undo a mistake in the name. Gone: the ACCOUNT is the name,
 // the BANK is a separate fact about it, and nothing has to be inferred.
 //
-// ── PLAIN 'BofA' STAYS, AND IS NOT MIGRATED ───────────────────────────────
-// Every petty cash row written before today says 'BofA' and nothing else.
-// HER CHOICE, of three offered: "Keep 'BofA' as-is, reassign as you go" —
-// the old rows keep their name, the two new accounts start empty, and she
-// moves money across with the Reassign button she already has. Rewriting
-// those rows would have been a claim, filed under her name, that none of that
-// cash was AAA Investment's. Nobody knows that. So plain BofA is a real
-// bucket for as long as it holds money, and the screens call it what it is:
-// BofA money that has not been split yet.
-const SOURCES = ['BofA', 'Edge Metals', 'AAA Investment', 'Chase Bank', 'Unassigned'];
+// ── AND 'BofA' IS GONE, BECAUSE SHE CHANGED HER MIND ──────────────────────
+// It was here for a day. Asked what the existing rows meant, she first chose
+// "Keep 'BofA' as-is, reassign as you go", so the old rows kept the name and
+// the screens called that bucket "not yet split".
+//
+// Apsara, 2026-09-22: "By default BofA is edge metals" / "for previous cash",
+// and then, of three things that could mean, she picked the migration —
+// rewrite the previous cash to the Edge Metals account. That is a claim that
+// none of the old BofA money was AAA Investment's, which is hers alone to
+// make, and she made it. scripts/migrate-bofa-to-edge-metals.js does it,
+// with a backup and a dry run.
+//
+// So there is no 'BofA' account left to offer. MY CALL, not hers: dropping
+// it from this list rather than leaving an empty one behind, because three
+// accounts at BofA where two are companies and one is "the leftovers" is the
+// screen she called ugly. Nothing can be lost by it — sourceOf keeps an
+// unrecognised name AS TYPED and balanceBySource counts it, so if the
+// migration has not run yet her old rows still show their money under
+// 'BofA'; they simply cannot be chosen as a destination. Run the migration
+// straight after deploying and that state lasts minutes.
+const SOURCES = ['Edge Metals', 'AAA Investment', 'Chase Bank', 'Unassigned'];
 const UNASSIGNED = 'Unassigned';
 
 // ── WHICH BANK EACH ACCOUNT SITS IN ───────────────────────────────────────
@@ -156,7 +167,6 @@ const UNASSIGNED = 'Unassigned';
 // the whole meaning of the bucket — and says so with null rather than a
 // label, because "Unassigned is at Unassigned" is not a sentence.
 const BANK_OF = {
-    'BofA': 'BofA',
     'Edge Metals': 'BofA',
     'AAA Investment': 'BofA',
     'Chase Bank': 'Chase Bank',

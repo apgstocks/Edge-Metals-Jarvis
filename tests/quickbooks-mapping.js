@@ -69,7 +69,7 @@ ck('unknown -> none', st('Completely New Supplier', V, 'vendor').status === 'non
 ck('empty name -> none, never a wildcard', st('  ', V, 'vendor').status === 'none' && st('', V, 'vendor').candidates.length === 0);
 ck('two-letter name does not sweep by containment', st('AJ', V, 'vendor').status !== 'suggest' || st('AJ', V, 'vendor').candidates.length <= 1);
 let e = ''; try { st('x', V, 'supplier'); } catch (er) { e = er.message; }
-ck('wrong kind refused', /vendor\|customer/.test(e));
+ck('wrong kind refused', /vendor\|customer\|item/.test(e));
 
 console.log('\n── her decision wins ──');
 m.confirm('customer', 'Rad Metals', '298', 'Rad Metals');
@@ -84,6 +84,12 @@ m.confirm('customer', 'Junk Car', 'SKIP', null, 'apsara', 'stock held at their y
 ck('SKIP: a stock location is never a customer', st('Junk car', C, 'customer').status === 'skip' && !st('Junk car', C, 'customer').qb);
 ck('SKIP keeps her reason', /stock held/.test(st('Junk Car', C, 'customer').note));
 ck('SKIP as customer does not touch the same name as vendor', st('Junk Car', [{ Id: '77', DisplayName: 'Junk Car', Active: true }], 'vendor').status === 'exact');
+const I = [{ Id: '31', DisplayName: 'AUTO CAST', Active: true }, { Id: '32', DisplayName: 'AL COMBO', Active: true }, { Id: '33', DisplayName: 'Regular Engine Combo', Active: true }];
+ck('item: case/spacing only -> exact', st('Auto Cast', I, 'item').status === 'exact' && st('Al combo', I, 'item').qb.Id === '32');
+ck('item: "Regular Combo" is only a suggestion for Regular Engine Combo', st('Regular Combo', I, 'item').status !== 'exact');
+m.confirm('item', 'Alum Scrap Auto Casting Tense', '31', 'AUTO CAST');
+ck('item: confirmed selling description -> its grade', st('ALUM SCRAP AUTO CASTING TENSE', I, 'item').qb.Id === '31');
+ck('item map separate from customers', st('Alum Scrap Auto Casting Tense', [], 'customer').status === 'none');
 ck('map persisted to disk', JSON.parse(fs.readFileSync(process.env.QB_PARTY_MAP_FILE, 'utf8')).customer.radmetals.qbId === '298');
 
 fs.rmSync(TMP, { recursive: true, force: true });

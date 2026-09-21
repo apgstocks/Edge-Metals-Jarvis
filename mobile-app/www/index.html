@@ -2373,7 +2373,7 @@ function openPayModal(loadId, kind) {
     const sel = $('pay_cash_source');
     if (sel) {
       const srcs = (pettyCash.sources || []).length ? pettyCash.sources
-        : ['BofA', 'Edge Metals', 'AAA Investment', 'Chase Bank', 'Unassigned'];
+        : ['Edge Metals', 'AAA Investment', 'Chase Bank', 'Unassigned'];
       sel.innerHTML = srcs.map((x) => `<option value="${esc(x)}">${esc(x)}${
         (pettyCash.by_source || {})[x] != null ? ` — ${esc(fmtAmount(Number(pettyCash.by_source[x]) || 0))}` : ''}</option>`).join('');
       const best = srcs.slice().sort((a, b) =>
@@ -6970,6 +6970,7 @@ function pettyBorrowingHtml(isAdmin) {
     <div style="margin:22px 0 10px; display:flex; align-items:center; gap:10px; flex-wrap:wrap;">
       <div style="font-family:var(--font-mono); font-size:10px; font-weight:600; letter-spacing:.16em; text-transform:uppercase; color:var(--text-muted);">Every movement</div>
       <span style="flex:1;"></span>
+      ${isAdmin ? '<button id="btnSplitCash" class="btn" style="font-size:12px; padding:6px 14px;">Split EM / AAA</button>' : ''}
       ${isAdmin ? '<button id="btnReassignCash" class="btn" style="font-size:12px; padding:6px 14px;">Move cash</button>' : ''}
     </div>
     ${movesHtml}`;
@@ -7029,23 +7030,31 @@ async function renderPettyCashTab() {
              every row — and the company split comes first underneath it,
              because on a phone the first thing under the total is the thing
              that gets read. A company with nothing in it is not printed. -->
-        ${Object.entries(pettyCash.by_company || {}).filter(([, a]) => Math.abs(Number(a) || 0) > 0.005).length ? `
-        <div style="display:flex; gap:18px; flex-wrap:wrap; margin-top:12px; padding-top:12px; border-top:1px solid var(--border-subtle);">
-          ${Object.entries(pettyCash.by_company || {})
-            .filter(([, a]) => Math.abs(Number(a) || 0) > 0.005)
-            .map(([co, a]) => {
-              const v = Number(a) || 0;
-              return `<div>
-                <div style="font-family:var(--font-mono); font-size:9.5px; letter-spacing:.12em; text-transform:uppercase; color:var(--text-muted);">${esc(co)}</div>
-                <div style="font-family:var(--font-mono); font-size:15px; font-weight:700; color:${v < 0 ? 'var(--status-danger, #c53030)' : 'var(--text-strong)'};">${esc(fmtAmount(v))}</div>
-              </div>`;
-            }).join('')}
-        </div>` : ''}
-        <!-- And the accounts she asked for on 20-Sep, grouped under their
-             bank the way she described them on 21-Sep: "Under BofA. 1.Edge
-             Metals 2.AAA Investment". Every one is listed even at zero: this
-             is the list she reassigns into, and a destination that hides
-             while empty is unreachable. -->
+        <!-- ── WHAT THE FIRST VERSION OF THIS GOT WRONG ──────────────────
+             Apsara, 2026-09-22, on the built app: "it looks ugly", and then
+             "all three bofa should be in one line". She was right, and one
+             of the lines was a BUG rather than a matter of taste:
+
+             • CHASE BANK READ "NOT YET SPLIT". The label rule was "the
+               account is named the same as its own bank", true of Chase Bank
+               as well as of the legacy BofA bucket. That bucket is migrated
+               into
+               Edge Metals (2026-09-22, "for previous cash"), so no account
+               is named after its bank and the special case is deleted rather
+               than left standing where nothing can reach it.
+             • A COMPANY BLOCK THAT REPEATED THE TOTAL. Every company has
+               exactly one account today, so the company split and the
+               account list were the same rows twice — and with everything
+               unbanked it rendered "COMPANY NOT STATED $22,441.03" directly
+               under a "CASH IN HAND $22,441.03". It is printed now only when
+               a company spans MORE than one account, which is the only case
+               where it says anything the accounts below do not.
+             • THE THREE BofA ACCOUNTS WRAPPED. Her instruction. Equal thirds
+               with min-width:0, so they stay on one line at phone width and
+               the label wraps inside its own column instead.
+             • "No bank behind it" ABOVE "Unassigned" was the same word said
+               twice. A bank heading is printed only when it groups more than
+               one account. -->
         <div style="margin-top:12px; padding-top:12px; border-top:1px solid var(--border-subtle);">
           ${(() => {
             const srcs = pettyCash.sources || [];
@@ -7057,24 +7066,40 @@ async function renderPettyCashTab() {
               if (!g) { g = { bank: b, items: [] }; banks.push(g); }
               g.items.push(s);
             }
-            const cell = (src) => {
+            const cell = (src, share) => {
               const v = Number((pettyCash.by_source || {})[src]) || 0;
-              const co = (pettyCash.company_of || {})[src];
-              const known = co && co !== pettyCash.company_unknown;
-              // Plain BofA shares its name with its bank; under a BofA
-              // heading it would read "BofA / BofA".
-              const label = src === (bankOf[src] || null) ? 'not yet split' : src;
-              return `<div>
-                <div style="font-family:var(--font-mono); font-size:9.5px; letter-spacing:.12em; text-transform:uppercase; color:var(--text-muted);">${esc(label)}</div>
-                <div style="font-family:var(--font-mono); font-size:15px; font-weight:700; color:${v < 0 ? 'var(--status-danger, #c53030)' : 'var(--text-strong)'};">${esc(fmtAmount(v))}</div>
-                ${known ? `<div style="font-size:9.5px; color:var(--text-faint);">${esc(co)}</div>` : ''}
+              const label = src;
+              return `<div style="flex:${share ? '1 1 0' : '0 0 auto'}; min-width:0;">
+                <div style="font-family:var(--font-mono); font-size:9px; letter-spacing:.1em; text-transform:uppercase; color:var(--text-muted); line-height:1.35;">${esc(label)}</div>
+                <div style="font-family:var(--font-mono); font-size:14px; font-weight:700; color:${v < 0 ? 'var(--status-danger, #c53030)' : 'var(--text-strong)'};">${esc(fmtAmount(v))}</div>
               </div>`;
             };
-            return banks.map((g) => `
-              <div style="margin-bottom:10px;">
-                <div style="font-size:11px; font-weight:700; color:var(--text-strong); margin-bottom:5px;">${esc(g.bank || 'No bank behind it')}</div>
-                <div style="display:flex; gap:18px; flex-wrap:wrap;">${g.items.map(cell).join('')}</div>
-              </div>`).join('');
+            return banks.map((g) => {
+              // One account under a bank needs no heading above it — the
+              // account's own name already says everything the heading would.
+              if (g.items.length < 2) return `<div style="margin-bottom:9px;">${cell(g.items[0], false)}</div>`;
+              return `
+              <div style="margin-bottom:11px;">
+                <div style="font-size:11px; font-weight:700; color:var(--text-strong); margin-bottom:5px;">${esc(g.bank)}</div>
+                <div style="display:flex; gap:12px; align-items:flex-start;">${g.items.map((s) => cell(s, true)).join('')}</div>
+              </div>`;
+            }).join('');
+          })()}
+          ${(() => {
+            // The company line, only where it adds something: a company
+            // holding more than one account. Today none does, so nothing
+            // prints — which is why the duplicate heading is gone.
+            const per = pettyCash.by_company || {};
+            const coOf = pettyCash.company_of || {};
+            const spans = Object.keys(per).filter((co) => co !== pettyCash.company_unknown
+              && (pettyCash.sources || []).filter((s) => coOf[s] === co).length > 1);
+            if (!spans.length) return '';
+            return `<div style="display:flex; gap:18px; flex-wrap:wrap; margin-top:10px; padding-top:10px; border-top:1px solid var(--border-subtle);">
+              ${spans.map((co) => `<div>
+                <div style="font-family:var(--font-mono); font-size:9px; letter-spacing:.1em; text-transform:uppercase; color:var(--text-muted);">${esc(co)} total</div>
+                <div style="font-family:var(--font-mono); font-size:14px; font-weight:700; color:var(--text-strong);">${esc(fmtAmount(Number(per[co]) || 0))}</div>
+              </div>`).join('')}
+            </div>`;
           })()}
         </div>
         ${bal <= 0 ? `<div style="margin-top:8px; font-size:12.5px; color:var(--status-warning, #d69e2e);">Cash payments are refused while this is empty. Add cash before paying a load in cash.</div>` : ''}
@@ -7132,7 +7157,7 @@ async function renderPettyCashTab() {
       // here would offer 'BofA' as though it were still the only BofA
       // account, and Edge Metals' cash would land in the unsplit bucket.
       const banks = (pettyCash.sources && pettyCash.sources.length ? pettyCash.sources
-        : ['BofA', 'Edge Metals', 'AAA Investment', 'Chase Bank', 'Unassigned'])
+        : ['Edge Metals', 'AAA Investment', 'Chase Bank', 'Unassigned'])
         .filter((x) => x !== 'Unassigned');
       // The range is computed, not written out. It named two accounts back
       // when there were two, and a prompt stating a range it no longer has is
@@ -7161,10 +7186,28 @@ async function renderPettyCashTab() {
       await movePettyCash({ from: b.dataset.owes, to: b.dataset.to, amount: amt, reason: 'repay' });
     }));
 
+    // Apsara, 2026-09-22: "now add a split as edge metals/aaa". The reassign
+    // below with both ends already chosen — the move she will make over and
+    // over once the migration puts every previous BofA note under Edge
+    // Metals. Same route, same 'reassign' reason, so it inherits the
+    // short-bucket refusal and the dated row pair rather than re-doing them.
+    const SPLIT_FROM = 'Edge Metals', SPLIT_TO = 'AAA Investment';
+    const split = $('btnSplitCash');
+    if (split) split.addEventListener('click', async () => {
+      const held = Number((pettyCash.by_source || {})[SPLIT_FROM]) || 0;
+      const raw = prompt(`How much of ${SPLIT_FROM}'s cash belongs to ${SPLIT_TO}?\n\n`
+        + `${SPLIT_FROM} holds ${fmtAmount(held)}.`);
+      if (raw === null) return;
+      const amt = Number(String(raw).replace(/[^0-9.\-]/g, ''));
+      if (!isFinite(amt) || amt <= 0) { alert('Enter an amount greater than zero.'); return; }
+      if (!confirm(`Move ${fmtAmount(amt)} from ${SPLIT_FROM} to ${SPLIT_TO}?\n\nTwo different companies — this changes whose money it is.`)) return;
+      await movePettyCash({ from: SPLIT_FROM, to: SPLIT_TO, amount: amt, reason: 'reassign' });
+    });
+
     const reassign = $('btnReassignCash');
     if (reassign) reassign.addEventListener('click', async () => {
       const all = (pettyCash.sources && pettyCash.sources.length) ? pettyCash.sources
-        : ['BofA', 'Edge Metals', 'AAA Investment', 'Chase Bank', 'Unassigned'];
+        : ['Edge Metals', 'AAA Investment', 'Chase Bank', 'Unassigned'];
       const from = prompt('Move cash OUT of which account?\n\n' + all.map((b, i) => `${i + 1}. ${b}`).join('\n'));
       if (from === null) return;
       const src = all[Number(String(from).trim()) - 1] || all.find((b) => b.toLowerCase() === String(from).trim().toLowerCase());
