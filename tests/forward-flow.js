@@ -103,7 +103,10 @@ section('B — the guards actually short-circuit');
        /const quick = \(answeringBrain \|\| looksLikeOrder\b/.test(seg),
        'a model asked to answer "forward the booking" from a table reads out a field');
     ck('  and the proforma draft stands down',
-       /const step = \(answeringBrain && !amended && !parking\)\s*\n?\s*\? null : pro\.handle\(asked, \{ transition \}\)/.test(seg),
+       // 2026-09-21 added `|| saleInvoiceAsk` ("generate invoice for the
+       // Inesh container" is the brain's, not a proforma). The property is
+       // unchanged — answeringBrain still stands the draft down.
+       /const step = \(?\(answeringBrain && !amended && !parking\)(?: \|\| saleInvoiceAsk\))?\s*\n?\s*\? null : pro\.handle\(asked, \{ transition \}\)/.test(seg),
        'a proforma in progress must not swallow a trucker confirmation');
 
     // ── THE SECOND EXCEPTION, AND WHY IT NEEDS NO THIRD LOCK ─────────────

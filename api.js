@@ -2854,7 +2854,16 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
             // on every other utterance — and cannot form an opinion about
             // "yes, Sher Trucking" during a trucker confirmation.
             const parking = transition === 'park' || transition === 'resume';
-            const step = (answeringBrain && !amended && !parking)
+            // "generate invoice for the Inesh container" (2026-09-21) is a
+            // COMMERCIAL invoice from the ledger, not a proforma — the brain
+            // owns it. Only when no proforma is open or staged, so an answer
+            // inside a draft is never taken away from it.
+            let saleInvoiceAsk = false;
+            try {
+                saleInvoiceAsk = !pro.current() && !pro.isStaged()
+                    && !!require('./helpers/saleInvoiceFlow').saleInvoiceRequest(asked);
+            } catch (e) { saleInvoiceAsk = false; }
+            const step = ((answeringBrain && !amended && !parking) || saleInvoiceAsk)
                 ? null : pro.handle(asked, { transition });
 
             // The confirm is over — sent, or cancelled — so a staged draft is
@@ -3590,7 +3599,10 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
                 routed_because: route.why,
                 answer: spoken, replies, ok: true,
                 cards,
-            }, (capture.spoken && !refused.length) ? { spoken: capture.spoken } : {}));
+            }, (capture.spoken && !refused.length) ? { spoken: capture.spoken } : {},
+            // An action asked for a screen (wa-state.openScreen) — e.g. the
+            // outgoing-invoice tab while Jarvis asks for a missing field.
+            capture.open ? { open: capture.open } : {}));
         } catch (e) {
             console.error('[API] voice/ask failed:', e.stack || e.message);
             res.status(500).json({ error: e.message });

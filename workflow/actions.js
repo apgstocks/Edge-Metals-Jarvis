@@ -3933,6 +3933,420 @@ async function sendShipmentDocsForConfirm(chatId, containerNo, rawText) {
     return { action_taken: 'shipment_docs_staged', container: found.container, attached: docLines.length };
 }
 
+// ── "GENERATE INVOICE FOR THE INESH CONTAINER" ──────────────────────────────
+// Apsara, 2026-09-21: "If i say jarvis, generate invoice for the inesh
+// container..start from latest date in bill.. if some data is missing ...
+// show invoice tab to user, ask what is missing - based on user input - fill
+// it, then generate". Invoice number: "ask me" — suggested from the Invoice
+// sheet, confirmed or changed by her every time. Voice and WhatsApp.
+//
+// One pending, 'await_sale_invoice', walked through stages:
+//   which → pick (container) → pick_group (split billing) → field (one
+//   missing value at a time) → inv_no → confirm → layout → generated, then
+//   handed to the ordinary email confirmation.
+//
+// A container is ONE ROW PER GRADE in her Invoice ledger, and one invoice is
+// every row sharing booking + container + invoice number + customer
+// (helpers/saleInvoice.siblingRows). So the state carries ROWS, and the
+// customer and invoice number are SHARED — written to every row, or the
+// grades stop gathering and the invoice prints one line of four.
+//
+// Nothing is written to the ledger until she says yes to the full list of
+// what will change — a voice answer lands in Sales, the margin and the
+// ledger export, not only on this invoice.
+const SI_TYPE = 'await_sale_invoice';
+const SI_YES = /^\s*(yes|yeah|yep|yup|ok|okay|sure|go ahead|do it|save( it)?|confirm(ed)?|correct|right|fine)\b/i;
+const SI_NO = /^\s*(no|nope|don'?t|do not|stop)\b/i;
+
+function siScreen(key) {
+    try {
+        const screens = require('../helpers/screens');
+        const s = screens.SCREENS.find((x) => x.key === key);
+        if (s) require('../helpers/wa-state').openScreen(screens.toOpen(s));
+    } catch (e) { /* a screen that will not open is not a reason to fail */ }
+}
+function siSay(text) { require('../helpers/wa-state').sayAloud(text); }
+
+// Replaces OUR pending with the next stage. Another flow's pending is never
+// touched — startSaleInvoice refuses to begin while one is open.
+async function siStage(chatId, state, question) {
+    const cur = getPending(chatId);
+    if (cur && cur.type === SI_TYPE) await clearPending(chatId);
+    const clean = { ...state };
+    delete clean.created_at; delete clean.expires_at; delete clean.reminded_at;
+    const arbitrate = clean.stage === 'field' && (clean.field === 'customer' || clean.field === 'item');
+    // The literal type string, not SI_TYPE: scripts/check-action-wiring.js
+    // finds pendings by reading `type: 'await_...'` in this file.
+    return setPending(chatId, { ...clean, type: 'await_sale_invoice', question, arbitrate });
+}
+
+function siRow(state, i) {
+    const sales = require('../helpers/sales');
+    const row = (state.rows || [])[i] || {};
+    const base = row.sale_id ? (sales.getSale(row.sale_id) || {}) : {};
+    return { ...base, ...(state.shared || {}), ...(row.patch || {}) };
+}
+
+// The first thing still missing: shared values first (asked once), then each
+// grade's own item / weight / price.
+function siNextMissing(state) {
+    const flow = require('../helpers/saleInvoiceFlow');
+    const rows = state.rows || [];
+    for (const f of flow.SHARED) {
+        if (rows.some((_, i) => flow.missingFields(siRow(state, i)).includes(f))) return { field: f, row: null };
+    }
+    for (let i = 0; i < rows.length; i++) {
+        const miss = flow.missingFields(siRow(state, i)).filter((f) => !flow.SHARED.includes(f));
+        if (miss.length) return { field: miss[0], row: i, all: miss };
+    }
+    return null;
+}
+function siQuestion(state, need) {
+    const flow = require('../helpers/saleInvoiceFlow');
+    const q = flow.QUESTION[need.field];
+    if (need.row === null || (state.rows || []).length < 2) return q;
+    const label = siRow(state, need.row).item || `grade ${need.row + 1}`;
+    return `${label} — ${q.charAt(0).toLowerCase()}${q.slice(1)}`;
+}
+
+async function startSaleInvoice(chatId, { target = null, container = null } = {}) {
+    const flow = require('../helpers/saleInvoiceFlow');
+    const existing = getPending(chatId);
+    if (existing && existing.type !== SI_TYPE) {
+        await _send(chatId, `You have ${describePending(existing.type)} to answer first — answer that (or say "cancel"), then ask me for the invoice again.`);
+        return { action_taken: 'sale_invoice_blocked', blocked_by: existing.type };
+    }
+    if (existing) await clearPending(chatId);
+
+    const c = String(container || '').replace(/\s+/g, '').toUpperCase();
+    if (c) {
+        const bill = flow.billByContainer(c);
+        const sales = bill ? flow.salesForBill(bill) : flow.salesForContainer(c);
+        if (!bill && !sales.length) {
+            await _send(chatId, `I have no bill and no sale for container ${c}, so there's nothing to build an invoice from. Add the bill first.`);
+            siSay("I have no bill or sale for that container, so there's nothing to invoice yet.");
+            return { action_taken: 'sale_invoice_nothing', container: c };
+        }
+        return siWithContainer(chatId, { bill, sales, intro: `Container ${c}` + (bill ? ` — ${bill.supplier || 'bill'} ${bill.date || ''}`.trimEnd() : ''), spokenIntro: 'Found that container.' });
+    }
+
+    const who = String(target || '').trim();
+    if (!who) {
+        await siStage(chatId, { stage: 'which' }, 'Which supplier or container should I invoice?');
+        await _send(chatId, 'Which supplier or container should I invoice?');
+        return { action_taken: 'sale_invoice_asked', field: 'which' };
+    }
+    const found = flow.latestBillsFor(who);
+    if (!found.bills.length) {
+        const known = found.known.slice(0, 8);
+        await _send(chatId, `No bills from "${who}" with a container on them.${known.length ? ` Suppliers with bills: ${known.join(', ')}.` : ''}`);
+        siSay(`I don't have any bills from ${who} with a container on them.`);
+        return { action_taken: 'sale_invoice_no_bills', supplier: who };
+    }
+    const name = found.bills[0].supplier || who;
+    if (found.bills.length > 1) {
+        const lines = found.bills.map((b, i) => `${i + 1}. ${b.container_no} — ${b.description || (Array.isArray(b.items) && b.items.length ? b.items.map((x) => x.description).join(', ') : '(no item)')}${typeof b.net_lb === 'number' ? `, ${b.net_lb.toLocaleString('en-US')} lb` : ''}`);
+        const q = `Which one should I invoice — 1 to ${found.bills.length}?`;
+        await siStage(chatId, { stage: 'pick', choices: found.bills.map((b) => b.id), supplier: name }, q);
+        await _send(chatId, `${name}'s latest bill date is ${found.date}, with ${found.bills.length} containers:\n\n${lines.join('\n')}\n\n${q}`);
+        siSay(`${name} has ${found.bills.length} containers on the latest bill date. Which one? They're on screen.`);
+        return { action_taken: 'sale_invoice_pick', count: found.bills.length };
+    }
+    const bill = found.bills[0];
+    return siWithContainer(chatId, {
+        bill, sales: flow.salesForBill(bill),
+        intro: `${name}'s latest bill is ${bill.date} — container ${bill.container_no}${bill.description ? `, ${bill.description}` : ''}`,
+        spokenIntro: `${name}'s latest container, from the ${bill.date} bill.`,
+    });
+}
+
+async function siWithContainer(chatId, { bill, sales, intro, spokenIntro }) {
+    const flow = require('../helpers/saleInvoiceFlow');
+    const container = (bill && bill.container_no) || (sales[0] && sales[0].container_no) || '';
+    if (!sales.length) {
+        const fromBill = flow.rowsFromBill(bill);
+        const state = { container, bill_id: bill.id, rows: fromBill.rows, shared: fromBill.shared, is_new: true };
+        const grades = fromBill.rows.length;
+        return siContinue(chatId, state,
+            `${intro} (no sale row yet — I'll make ${grades === 1 ? 'one' : `${grades}, one per grade`})`, spokenIntro);
+    }
+    const groups = flow.groupSales(sales);
+    if (groups.length > 1) {
+        const lines = groups.map((g, i) => `${i + 1}. ${g.invoice_no ? `invoice ${g.invoice_no}` : 'no invoice number yet'} — ${g.customer || '(no customer)'} — ${g.rows.map((r) => r.item || '?').join(', ')}`);
+        const q = `That container is billed as ${groups.length} invoices. Which one — 1 to ${groups.length}?`;
+        await siStage(chatId, { stage: 'pick_group', groups: groups.map((g) => g.rows.map((r) => r.id)), bill_id: bill ? bill.id : null, container }, q);
+        await _send(chatId, `${intro}.\n\n${lines.join('\n')}\n\n${q}`);
+        siSay(`That container is billed as ${groups.length} separate invoices. Which one? They're on screen.`);
+        return { action_taken: 'sale_invoice_pick_group', count: groups.length };
+    }
+    const state = { container, bill_id: bill ? bill.id : null,
+        rows: groups[0].rows.map((r) => ({ sale_id: r.id, label: r.item || '', patch: {} })), shared: {}, is_new: false };
+    return siContinue(chatId, state, intro, spokenIntro);
+}
+
+async function siContinue(chatId, state, intro, spokenIntro) {
+    const flow = require('../helpers/saleInvoiceFlow');
+    const need = siNextMissing(state);
+    if (need) {
+        const q = siQuestion(state, need);
+        siScreen('invoice');
+        await siStage(chatId, { ...state, stage: 'field', field: need.field, row: need.row }, q);
+        const list = need.row === null ? [flow.LABEL[need.field].toLowerCase()] : need.all.map((k) => flow.LABEL[k].toLowerCase());
+        await _send(chatId, `${intro ? intro + '.\n\n' : ''}To invoice it I still need: ${list.join(', ')}${(state.rows || []).length > 1 && need.row !== null ? ` for ${siRow(state, need.row).item || 'that grade'}` : ''}.\n\n${q}`);
+        siSay(`${spokenIntro ? spokenIntro + ' ' : ''}${q}`);
+        return { action_taken: 'sale_invoice_asked', field: need.field, row: need.row };
+    }
+    return siAskInvNo(chatId, state, intro, spokenIntro);
+}
+
+async function siAskInvNo(chatId, state, intro, spokenIntro) {
+    const rec = siRow(state, 0);
+    const current = String(rec.invoice_no || '').trim();
+    let suggestion = null, last = null;
+    if (!current) {
+        try {
+            const s = await Promise.race([
+                require('../helpers/nextInvoiceNo').suggestNextInvNo(rec.customer || ''),
+                new Promise((r) => setTimeout(() => r(null), 8000)),
+            ]);
+            if (s && s.inv_no) { suggestion = s.inv_no; last = s.highest_existing || null; }
+        } catch (e) { console.warn('[ACTIONS] invoice-number suggestion failed:', e.message); }
+    }
+    const q = current
+        ? `This sale already has invoice number ${current}. Say yes to keep it, or tell me a different one.`
+        : suggestion
+            ? `Invoice number? The sheet's next for ${rec.customer} is ${suggestion}${last ? ` (last was ${last})` : ''}. Say yes to use it, or tell me the number.`
+            : `What's the invoice number? I couldn't find ${rec.customer || 'this customer'} in the invoice sheet to suggest one.`;
+    await siStage(chatId, { ...state, stage: 'inv_no', suggestion: current || suggestion || null }, q);
+    await _send(chatId, (intro ? intro + '.\n\n' : '') + q);
+    siSay(`${spokenIntro ? spokenIntro + ' ' : ''}${current ? 'This sale already has an invoice number — keep it?'
+        : suggestion ? "What invoice number? The sheet's next one is on screen — say yes to use it." : "What's the invoice number?"}`);
+    return { action_taken: 'sale_invoice_asked', field: 'invoice_no', suggestion };
+}
+
+// What saving would change, row by row, against what is stored now.
+function siChanges(state) {
+    const flow = require('../helpers/saleInvoiceFlow');
+    const sales = require('../helpers/sales');
+    const KEYS = ['customer', 'container_no', 'item', 'weight', 'invoice_price', 'invoice_no', 'date'];
+    const out = [];
+    (state.rows || []).forEach((row, i) => {
+        const before = row.sale_id ? (sales.getSale(row.sale_id) || {}) : {};
+        const after = siRow(state, i);
+        const keys = KEYS.filter((k) => {
+            const was = before[k] === undefined || before[k] === null ? '' : String(before[k]);
+            const now = after[k] === undefined || after[k] === null ? '' : String(after[k]);
+            if (k === 'invoice_price' && before.price_unit !== after.price_unit && now) return true;
+            return was !== now;
+        });
+        if (keys.length) out.push({ i, label: after.item || `grade ${i + 1}`, lines: keys.map((k) => `${flow.LABEL[k]}: ${flow.describe(k, after)}`) });
+    });
+    return out;
+}
+
+async function siConfirm(chatId, state) {
+    const changes = siChanges(state);
+    if (!changes.length) return siAskLayout(chatId, state);
+    const multi = (state.rows || []).length > 1;
+    const body = changes.map((c) => (multi ? `*${c.label}*\n` : '') + c.lines.join('\n')).join('\n\n');
+    const q = state.is_new
+        ? `Add ${state.rows.length === 1 ? 'this sale row' : `these ${state.rows.length} sale rows`} and carry on? (yes/no)`
+        : 'Save these to the sale and carry on? (yes/no)';
+    await siStage(chatId, { ...state, stage: 'confirm' }, q);
+    await _send(chatId, `${state.is_new ? 'New sale' : 'Changes to the sale'} for ${state.container}:\n\n${body}\n\n${q}`);
+    siSay(`${state.is_new ? 'This adds the sale to your ledger' : 'This changes the sale in your ledger'} — it's on screen. Save it?`);
+    return { action_taken: 'sale_invoice_confirm', rows: changes.length };
+}
+
+async function siAskLayout(chatId, state) {
+    const q = 'Normal invoice, separate invoice and packing list, or invoice only?';
+    await siStage(chatId, { ...state, stage: 'layout' }, q);
+    await _send(chatId, q);
+    siSay(q);
+    return { action_taken: 'sale_invoice_asked', field: 'layout' };
+}
+
+async function siSave(state) {
+    const sales = require('../helpers/sales');
+    const saved = [];
+    for (let i = 0; i < (state.rows || []).length; i++) {
+        const row = state.rows[i];
+        const data = { ...(state.shared || {}), ...(row.patch || {}) };
+        const r = row.sale_id
+            ? (Object.keys(data).length ? await sales.editSale(row.sale_id, data) : sales.getSale(row.sale_id))
+            : await sales.addSale({ ...data, created_by: 'jarvis' });
+        saved.push({ sale_id: r.id, label: r.item || row.label || '', patch: {} });
+    }
+    return saved;
+}
+
+async function siGenerate(chatId, state, layout) {
+    const flow = require('../helpers/saleInvoiceFlow');
+    const sales = require('../helpers/sales');
+    const first = (state.rows || [])[0];
+    const sale = first && first.sale_id ? sales.getSale(first.sale_id) : null;
+    await clearPending(chatId);
+    if (!sale) {
+        await _send(chatId, 'That sale row is gone — nothing was generated.');
+        return { action_taken: 'sale_invoice_failed', reason: 'sale_gone' };
+    }
+    let out;
+    try { out = await flow.generate(sale, layout); }
+    catch (e) {
+        console.error('[ACTIONS] sale invoice generate failed:', e && e.stack);
+        await _send(chatId, `Couldn't generate the invoice: ${e.message}`);
+        return { action_taken: 'sale_invoice_failed', reason: e.message };
+    }
+    if (!out.ok) {
+        await _send(chatId, `This sale still needs: ${out.missing.join(', ')} — nothing was generated.`);
+        return { action_taken: 'sale_invoice_incomplete', missing: out.missing };
+    }
+    const li = (out.line_items || []).map((l) => `• ${l.item_desc || l.description || 'item'} — ${typeof l.weight === 'number' ? l.weight.toFixed(3) : l.weight} MT @ $${l.rate}/MT`);
+    const summary = [
+        `Generated ${out.inv_no} for ${out.container_no} — ${layout.label}.`,
+        `To: ${out.consignee || sale.customer}`,
+        ...li,
+        `Saved: ${out.saved_filenames.join(', ')}`,
+        ...(out.warnings || []).map((w) => `Note: ${w}`),
+        ...(out.weight_message ? ['', out.weight_message] : []),
+    ].join('\n');
+    // The PDF itself goes with the message on WhatsApp ("show invoice to
+    // user"); on voice the Documents screen opens instead.
+    const media = out.paths.map((p) => flow.pdfMedia(p)).filter(Boolean);
+    await _send(chatId, summary, media[0] || null);
+    for (const m of media.slice(1)) await _send(chatId, null, m);
+    siScreen('doc-invoice');
+
+    // THE EMAIL, through the confirmation every other document send uses.
+    // Loading photos as links, as the Sale-row Generate does (her answer on
+    // 2026-09-19); consignee fallback to the sale's customer, same as there.
+    const saleInvoice = require('../helpers/saleInvoice');
+    const shipmentMail = require('../helpers/shipmentMail');
+    const photos = saleInvoice.photosFor(saleInvoice.billFor(sale));
+    let draft = shipmentMail.draftFor(sale.container_no, { photos });
+    if (!draft.ok && draft.reason === 'no_customer' && String(sale.customer || '').trim()) {
+        draft = shipmentMail.draftFor(sale.container_no, { photos, consignee: sale.customer });
+    }
+    if (!draft.ok) {
+        await _send(chatId, `${draft.message}\n\n(The invoice is generated and saved — only the email is waiting.)`);
+        siSay("The invoice is generated and on screen, but I can't email it yet — the reason is on screen.");
+        return { action_taken: 'sale_invoice_generated', emailed: false, reason: draft.reason, inv_no: out.inv_no };
+    }
+    const cc = mergeCc(null, draft.contact_cc);
+    const staged = await setPending(chatId, {
+        type: 'await_email_confirm',
+        to: draft.contact.email, cc, bcc: null,
+        subject: draft.subject, body: draft.body,
+        target_name: draft.contact.name || draft.found.consignee,
+        bkg_no: null, scheduled_for: null,
+        attach_container: draft.found.container,
+    });
+    if (staged.queued) {
+        await _send(chatId, `Generated. Emailing it is queued behind ${describePending(staged.blockedBy)} — I'll ask once that's answered.`);
+        return { action_taken: 'sale_invoice_generated', emailed: false, queued: true, inv_no: out.inv_no };
+    }
+    await _send(chatId, [
+        `Email it to ${draft.contact.name || draft.found.consignee} <${draft.contact.email}>?`,
+        ...(cc && cc.length ? [`Cc: ${(Array.isArray(cc) ? cc : [cc]).join(', ')}`] : []),
+        `Subject: ${draft.subject}`,
+        `Attached: ${draft.attachments.join(', ')}`,
+        ...(photos.length ? [`Loading photos: ${photos.length} linked in the email`] : []),
+        '',
+        'Send this? (yes/no)',
+    ].join('\n'));
+    siSay(`Done — the invoice is generated and on screen. Email it to ${draft.contact.name || draft.found.consignee}?`);
+    return { action_taken: 'sale_invoice_generated', emailed: 'staged', inv_no: out.inv_no };
+}
+
+async function saleInvoiceAnswer(chatId, pending, text) {
+    const flow = require('../helpers/saleInvoiceFlow');
+    const t = String(text || '').trim();
+    const p = pending || {};
+    const again = async (msg) => {
+        await siStage(chatId, p, p.question);
+        await _send(chatId, msg || p.question);
+        siSay(msg || p.question);
+        return { action_taken: 'sale_invoice_reasked', stage: p.stage };
+    };
+    const pickIndex = (count) => {
+        const n = t.match(/\b(\d{1,2})\b/);
+        if (n && Number(n[1]) >= 1 && Number(n[1]) <= count) return Number(n[1]) - 1;
+        const words = { first: 1, one: 1, second: 2, two: 2, third: 3, three: 3, fourth: 4, four: 4, fifth: 5, five: 5 };
+        const w = t.toLowerCase().match(/\b(first|second|third|fourth|fifth|one|two|three|four|five)\b/);
+        return w && words[w[1]] <= count ? words[w[1]] - 1 : null;
+    };
+
+    if (p.stage === 'which') {
+        const m = t.match(/\b([A-Z]{4})\s?(\d{7})\b/i);
+        await clearPending(chatId);
+        return startSaleInvoice(chatId, m ? { container: m[1] + m[2] }
+            : { target: t.replace(/^(for|the)\s+/i, '').replace(/\s+container$/i, '').replace(/[.!?]+$/, '') });
+    }
+    if (p.stage === 'pick') {
+        const choices = p.choices || [];
+        let idx = pickIndex(choices.length);
+        const cm = t.match(/\b([A-Z]{4})\s?(\d{7})\b/i);
+        if (idx === null && cm) {
+            const hit = choices.findIndex((id) => { const b = flow.billById(id); return b && String(b.container_no).replace(/\s+/g, '').toUpperCase() === (cm[1] + cm[2]).toUpperCase(); });
+            if (hit !== -1) idx = hit;
+        }
+        if (idx === null) return again(`Say a number from 1 to ${choices.length}.`);
+        const bill = flow.billById(choices[idx]);
+        if (!bill) { await clearPending(chatId); await _send(chatId, 'That bill is gone — ask me again.'); return { action_taken: 'sale_invoice_failed' }; }
+        return siWithContainer(chatId, { bill, sales: flow.salesForBill(bill), intro: `Container ${bill.container_no}`, spokenIntro: 'Got it.' });
+    }
+    if (p.stage === 'pick_group') {
+        const groups = p.groups || [];
+        const idx = pickIndex(groups.length);
+        if (idx === null) return again(`Say a number from 1 to ${groups.length}.`);
+        const sales = require('../helpers/sales');
+        const rows = groups[idx].map((id) => sales.getSale(id)).filter(Boolean);
+        return siContinue(chatId, { container: p.container, bill_id: p.bill_id || null,
+            rows: rows.map((r) => ({ sale_id: r.id, label: r.item || '', patch: {} })), shared: {}, is_new: false }, '', 'Got it.');
+    }
+    if (p.stage === 'field') {
+        const r = flow.parseAnswer(p.field, t);
+        if (!r.ok) return again(r.ask);
+        const state = { ...p, rows: (p.rows || []).map((x) => ({ ...x, patch: { ...(x.patch || {}) } })), shared: { ...(p.shared || {}) } };
+        if (p.row === null || p.row === undefined) Object.assign(state.shared, r.patch);
+        else Object.assign(state.rows[p.row].patch, r.patch);
+        const rec = siRow(state, p.row === null || p.row === undefined ? 0 : p.row);
+        delete state.stage; delete state.field; delete state.row; delete state.question;
+        const heard = `Got it — ${flow.LABEL[p.field].toLowerCase()} ${flow.describe(p.field, rec)}`
+            + (r.inferred ? (p.field === 'invoice_price' ? ' (per lb or per MT taken from the size of the number — say "per MT" or "per lb" if that\'s wrong)' : ' (unit taken from the size of the number)') : '') + '.';
+        return siContinue(chatId, state, heard, heard.replace(/\s*\(.*\)/, ''));
+    }
+    if (p.stage === 'inv_no') {
+        const r = flow.parseInvNo(t, p.suggestion);
+        if (!r.ok) return again(p.suggestion ? `Say yes to use ${p.suggestion}, or tell me the invoice number.` : "What's the invoice number?");
+        return siConfirm(chatId, { ...p, shared: { ...(p.shared || {}), invoice_no: r.inv_no } });
+    }
+    if (p.stage === 'confirm') {
+        if (SI_NO.test(t)) {
+            await clearPending(chatId);
+            await _send(chatId, 'Not saved — the ledger is unchanged and no invoice was made.');
+            siSay('Okay, nothing saved.');
+            return { action_taken: 'sale_invoice_declined' };
+        }
+        if (!SI_YES.test(t)) return again('Save it — yes or no?');
+        let rows;
+        try { rows = await siSave(p); }
+        catch (e) {
+            await clearPending(chatId);
+            await _send(chatId, `Couldn't save the sale: ${e.message}. Nothing was generated.`);
+            return { action_taken: 'sale_invoice_failed', reason: e.message };
+        }
+        return siAskLayout(chatId, { ...p, rows, shared: {}, is_new: false });
+    }
+    if (p.stage === 'layout') {
+        const layout = flow.parseLayout(t);
+        if (!layout) return again('Normal, separate, or invoice only?');
+        return siGenerate(chatId, p, layout);
+    }
+    await clearPending(chatId);
+    return { action_taken: 'sale_invoice_failed', reason: 'unknown stage' };
+}
+
 async function sendDraftedEmail(chatId, pending) {
     const { sendEmail } = require('../helpers/gmail');
     // Forward FIRST, so that by the time the reply lands in her mailbox the
@@ -7767,6 +8181,7 @@ module.exports = {
     replyToFocusedDigest, askWhichDigestItem, reviseDraftedEmail,
     ready,
     describeLink,
+    startSaleInvoice, saleInvoiceAnswer,
     showPendingReplies, replyToDigestItem, summarizeEmail, markPendingReminded, forwardOriginalToSelf, sendDraftedEmail,
 init,
 setPending, clearPending, getPending, resolvePending, promoteQueued,

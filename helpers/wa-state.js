@@ -81,4 +81,14 @@ function sayAloud(text) {
     if (c && c.voice && typeof text === 'string' && text.trim()) c.spoken = text.trim();
 }
 
-module.exports = { setStatus, get, setLogoutHandler, triggerLogout, setGroupsLookupHandler, findGroups, setVerifyNumberHandler, verifyNumber, setCommonGroupsHandler, findCommonGroups, sendCapture, isVoiceTurn, sayAloud };
+// ── AN ACTION CAN OPEN A SCREEN ON A VOICE TURN ─────────────────────────────
+// Apsara, 2026-09-21: "if some data is missing while generating invoice, it
+// can show invoice tab to user". /api/voice/ask returns this as `open`, the
+// same shape it already returns for "open bills" (helpers/screens.toOpen).
+// Outside a voice turn it is a no-op, so WhatsApp is untouched.
+function openScreen(open) {
+    const c = sendCapture.getStore();
+    if (c && c.voice && open && typeof open === 'object') c.open = open;
+}
+
+module.exports = { setStatus, get, setLogoutHandler, triggerLogout, setGroupsLookupHandler, findGroups, setVerifyNumberHandler, verifyNumber, setCommonGroupsHandler, findCommonGroups, sendCapture, isVoiceTurn, sayAloud, openScreen };

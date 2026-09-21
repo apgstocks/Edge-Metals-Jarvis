@@ -377,7 +377,8 @@ section('E — the handover is wired, and awaited');
        iPending !== -1 && iPro !== -1 && iPending < iPro,
        'otherwise her "yes" starts a second proforma instead of sending the first');
     ck('  which is what stops the draft being clobbered mid-confirm',
-       /const step = \(answeringBrain && !amended && !parking\)\s*\n?\s*\? null : pro\.handle\(asked, \{ transition \}\)/.test(seg),
+       // `|| saleInvoiceAsk` added 2026-09-21 — see tests/forward-flow.js.
+       /const step = \(?\(answeringBrain && !amended && !parking\)(?: \|\| saleInvoiceAsk\))?\s*\n?\s*\? null : pro\.handle\(asked, \{ transition \}\)/.test(seg),
        'the pending owns the conversation — except for an amendment to its own proforma');
 
     // ── HER QUESTION, 2026-09-07 ─────────────────────────────────────────
