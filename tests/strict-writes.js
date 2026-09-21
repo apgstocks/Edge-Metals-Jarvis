@@ -125,13 +125,42 @@ section('C. a throwing mutator is not swallowed');
 // to forgiving unless someone remembers. Nobody remembered 131 times.
 section('D. every money write opts in');
 {
-    const MONEY = ['bills', 'sales', 'billPayments', 'payments', 'expenses'];
+    // ── THE LIST THAT MISSED THE ONE THAT MATTERED ───────────────────────
+    // This was five names, and `loads` was not among them. On 2026-09-21
+    // Apsara entered a load, saw it in the app, could not find it on the
+    // website, and found it gone from the app after a restart — loads.json
+    // was still on the forgiving default, so the write failed, addLoad
+    // returned the record anyway and the route answered 200. Her yard's
+    // PRIMARY ledger, guarded by a test that did not look at it.
+    //
+    // So the list is now every store that holds something she cannot
+    // reconstruct: the money, and the loads the money is about.
+    const MONEY = ['bills', 'sales', 'billPayments', 'payments', 'expenses',
+                   'loads', 'outboundLoads', 'pettyCash', 'truckerBills', 'metalsTrucking'];
     for (const name of MONEY) {
         const src = fs.readFileSync(path.join(ROOT, `helpers/${name}.js`), 'utf8');
+
+        // ── TWO IDIOMS, AND THE COUNT ONLY UNDERSTOOD ONE ────────────────
+        // The old check compared how many times `mutateJson(` appears to how
+        // many `{ strict: true }` do. That works when every call site passes
+        // the option, and reports a FALSE FAILURE for the other idiom — one
+        // wrapper at the top of the file, strict once, used everywhere. So
+        // the rule is stated the way it actually matters instead: this file
+        // must never be able to reach the FORGIVING mutateJson.
+        const wraps = /mutateJson:\s*mutateJsonRaw/.test(src)
+            && /const mutateJson\s*=\s*\(.*\)\s*=>\s*mutateJsonRaw\([^)]*\{ strict: true \}\s*\)/.test(src);
         const writes = (src.match(/mutateJson\(/g) || []).length;
-        const strict = (src.match(/\{ strict: true \}/g) || []).length;
-        ck(`${name}: all ${writes} writes are strict`, writes > 0 && strict >= writes,
-           `${strict} of ${writes} — a forgiving write here can lose one of her entries`);
+        if (wraps) {
+            ck(`${name}: wraps mutateJson strictly, so all ${writes} writes are`, writes > 0);
+            // A wrapper only helps while nothing bypasses it.
+            ck(`  ${name}: and nothing calls the raw one directly`,
+               !/mutateJsonRaw\(/.test(src.replace(/const mutateJson\s*=[^;]+;/, '')),
+               'a call that skips the wrapper skips the strictness with it');
+        } else {
+            const strict = (src.match(/\{ strict: true \}/g) || []).length;
+            ck(`${name}: all ${writes} writes are strict`, writes > 0 && strict >= writes,
+               `${strict} of ${writes} — a forgiving write here can lose one of her entries`);
+        }
     }
 
     // And the note saying why, so the next person adding a write sees it.

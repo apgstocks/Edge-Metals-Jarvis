@@ -199,6 +199,11 @@ async function addExpense(entry) {
     if (rec.payment_method === 'Cash') {
         try {
             const res = await require('./pettyCash').withdrawForExpense({
+                // Her answer, 2026-09-21, asked whether a cash expense should
+                // name its bank: "Yes, ask — same as a payment." It asks; it
+                // keeps its existing permission to overdraw. See the note in
+                // helpers/pettyCash.js's withdrawForExpense.
+                cashSource: entry && entry.cash_source,
                 amount: rec.amount, expenseId: rec.id, date: rec.date,
                 createdBy: rec.created_by,
             });
@@ -254,11 +259,26 @@ async function editExpense(id, entry) {
     updated.cash_shortfall = 0;
     try {
         const petty = require('./pettyCash');
+        // ── THE BUCKET HAS TO SURVIVE AN EDIT ────────────────────────────
+        // An edit reverses the old withdrawal and writes a new one. If the
+        // client does not resend cash_source — and the expense form has no
+        // reason to, since only the amount changed — the new row would land
+        // in Unassigned while the original came out of Chase. The total would
+        // still be right, which is exactly why nobody would notice the money
+        // had moved between banks. So the reversal's own source is the
+        // fallback; helpers/pettyCash.js stamps it from the row it undoes.
+        let priorSource = null;
         if (wasCash && (!isCash || amountChanged)) {
-            await petty.reverseForExpense(id, { note: 'expense edited' });
+            const rev = await petty.reverseForExpense(id, { note: 'expense edited' });
+            priorSource = (rev && rev.cash_source) || null;
         }
         if (isCash && (!wasCash || amountChanged)) {
             const res = await petty.withdrawForExpense({
+                // Her answer, 2026-09-21, asked whether a cash expense should
+                // name its bank: "Yes, ask — same as a payment." It asks; it
+                // keeps its existing permission to overdraw. See the note in
+                // helpers/pettyCash.js's withdrawForExpense.
+                cashSource: (entry && entry.cash_source) || priorSource,
                 amount: updated.amount, expenseId: id, date: updated.date,
                 createdBy: updated.created_by,
             });

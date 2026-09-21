@@ -3808,6 +3808,18 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
             if (e.code) body.code = e.code;
             if (e.available != null) body.available = e.available;
             if (e.requested != null) body.requested = e.requested;
+            // ── AND THE BUCKET CASE, WHICH CARRIES DIFFERENT FIELDS ──────
+            // PETTY_CASH_BUCKET_SHORT (2026-09-21) means the BOX can cover
+            // this but the bank she nominated cannot — "only 3,000 in Chase,
+            // borrow 4,000 from BofA?". It carries the bucket, the shortfall
+            // and who could lend. Those were being dropped by the three lines
+            // above, which name `available` and `requested` and nothing else,
+            // so the form would have had the question and none of the figures
+            // to ask it with.
+            if (e.bucket != null) body.bucket = e.bucket;
+            if (e.bucket_available != null) body.bucket_available = e.bucket_available;
+            if (e.shortfall != null) body.shortfall = e.shortfall;
+            if (Array.isArray(e.lenders)) body.lenders = e.lenders;
             res.status(400).json(body);
         }
     });
@@ -4918,8 +4930,56 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
     app.get('/api/petty-cash', (req, res) => {
         try {
             const petty = require('./helpers/pettyCash');
-            res.json({ balance: petty.balance(), entries: petty.history(200) });
+            // `balance` keeps its name and its meaning — Cash in hand, the sum
+            // of every row. Both clients already read it and a screen she uses
+            // daily must not change shape because a new figure arrived beside
+            // it. Everything per-bucket is ADDED alongside.
+            res.json({
+                balance: petty.balance(),
+                entries: petty.history(200),
+                sources: petty.SOURCES,
+                by_source: petty.balanceBySource(petty.listEntries()),
+                borrowings: petty.borrowings(),
+                transfers: petty.transfers(),
+            });
         } catch (e) { res.status(500).json({ error: e.message }); }
+    });
+
+    // ── MOVING CASH BETWEEN BUCKETS ───────────────────────────────────────
+    // One route for all three reasons, because they are one movement:
+    //   repay    — she settles what one bucket borrowed from another
+    //   reassign — unbanked cash gets a bank put behind it, once banked
+    //   borrow   — refused here on purpose. A borrow is only ever created by
+    //              a payment that needed it, inside the same lock that takes
+    //              the money (helpers/pettyCash.js's withdrawForPayment). A
+    //              borrow with no payment behind it is a debt from nowhere.
+    //
+    // requireAdmin, matching POST and DELETE on this store. Staff read the
+    // balance; they do not move money between her bank accounts.
+    app.post('/api/petty-cash/transfer', requireAdmin, async (req, res) => {
+        try {
+            const petty = require('./helpers/pettyCash');
+            const b = req.body || {};
+            const reason = String(b.reason || '').trim().toLowerCase();
+            if (reason === 'borrow') {
+                return res.status(400).json({ error: 'a borrow is created by the payment that needs it, not on its own' });
+            }
+            const moved = await petty.transfer({
+                from: b.from, to: b.to, amount: b.amount, reason,
+                note: b.note, date: b.date, createdBy: (req.role || null),
+            });
+            res.json({ ok: true, transfer: moved, balance: petty.balance(),
+                       by_source: petty.balanceBySource(petty.listEntries()),
+                       borrowings: petty.borrowings() });
+        } catch (e) {
+            // PETTY_CASH_TRANSFER_SHORT is the one the Repay button turns into
+            // "Chase only holds $0 — add cash to Chase first". Carried through
+            // with its figures rather than flattened to a message, so the
+            // screen can say which bucket and how much.
+            const body = { error: e.message };
+            if (e.code) { body.code = e.code; body.bucket = e.bucket; body.bucket_available = e.bucket_available; body.requested = e.requested; }
+            res.status(400).json(body);
+        }
     });
     app.post('/api/petty-cash', requireAdmin, async (req, res) => {
         try {

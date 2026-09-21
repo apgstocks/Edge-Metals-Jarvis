@@ -378,6 +378,10 @@ async function addPayment(input = {}) {
             paymentId: null,                 // stamped after the payment id exists
             date: input.paid_on,
             createdBy: input.created_by || null,
+            // A customer's cash came from no bank. Passed through so she CAN
+            // say otherwise (banking it straight away), but left unset it
+            // lands in Unassigned, which is the truth.
+            cashSource: input.cash_source,
         });
         cashEntry = res.entry;
         cashTaken = res.added;
@@ -390,6 +394,20 @@ async function addPayment(input = {}) {
             date: input.paid_on,
             createdBy: input.created_by || null,
             allowPartial: input.allow_partial === true,
+            // ── WHICH POT OF CASH, AND WHETHER SHE SAID YES TO BORROWING ──
+            // Apsara, 2026-09-21. `cash_source` is NOT `bank`: banks.js
+            // refuses a bank on a cash payment because "paid cash from Chase"
+            // is not a true sentence about where the money left. This says
+            // which trip to the bank the notes in the drawer came from, which
+            // is a different fact and is why it has its own field.
+            //
+            // Blank is allowed all the way down and means Unassigned — the
+            // APK and the voice path both predate this, and a payment she
+            // cannot record is worse than one filed under unbanked cash.
+            cashSource: input.cash_source,
+            // Same shape as allow_partial above: refused first with the
+            // figures, sent again only after she has seen them and agreed.
+            allowBorrow: input.allow_borrow === true,
         });
         cashEntry = res.entry;
         cashTaken = res.taken;

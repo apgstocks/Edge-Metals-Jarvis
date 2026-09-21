@@ -72,7 +72,11 @@ const toNum = (v) => {
 // 'topup' (her own float) because the Petty cash tab and the spend report
 // split on kind, and a day's takings filed as a top-up would read as money
 // she put in rather than money the yard earned.
-const ENTRY_KINDS = ['topup', 'payment', 'receipt', 'expense', 'reversal'];
+// 'transfer' added 2026-09-21: cash moved BETWEEN buckets — a borrow, its
+// repayment, or unbanked cash being assigned to a bank. Always written as a
+// PAIR of rows sharing a transfer_id, one negative and one positive, so the
+// overall total is untouched and only the split moves.
+const ENTRY_KINDS = ['topup', 'payment', 'receipt', 'expense', 'reversal', 'transfer'];
 
 function newEntryId() {
     return `PC_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
@@ -83,11 +87,96 @@ function listEntries() {
     return Array.isArray(raw) ? raw : [];
 }
 
+// ── WHERE THE CASH IN THE BOX CAME FROM ───────────────────────────────────
+//
+// Apsara, 2026-09-21: "when adding cash ,ask its from BofA or chase bank..
+// show overall cash .but also keep track of bofacash available and chase
+// bank."
+//
+// THIS IS NOT helpers/banks.js's `bank`, AND THE DIFFERENCE IS LOAD-BEARING.
+// That field says which account the money left AT THE MOMENT OF PAYMENT, and
+// banks.js REFUSES it on a cash payment for a stated reason: "storing it would
+// put 'paid cash from Chase' on the ledger — a sentence that is not true."
+// That is still true. This field says something else: which pot of
+// ALREADY-WITHDRAWN cash a note came out of. The money left Chase days ago at
+// the counter; this records which trip to the bank it came from. Two facts,
+// two fields — reuse `bank` for this and Zelle and Wire validation breaks.
+//
+// ── "Unassigned", NOT "Others" ────────────────────────────────────────────
+// She first said Others. helpers/banks.js already exports OTHER = 'Others',
+// meaning "a bank that is not BofA or Chase — type its name", on the same pay
+// forms. Two different meanings for one word on adjacent screens is a trap
+// that springs the day a third real bank is added, so she chose Unassigned.
+//
+// It holds two kinds of money, both genuinely unbanked: whatever was in the
+// box before this existed, and cash taken in from a customer on a sale, which
+// never came out of a bank at all. It can be spent like the others and moved
+// into a bank later, when she actually banks it — see transfer().
+const SOURCES = ['BofA', 'Chase Bank', 'Unassigned'];
+const UNASSIGNED = 'Unassigned';
+
+// EVERY ROW WRITTEN BEFORE TODAY HAS NO SOURCE, and must read as Unassigned
+// rather than as nothing. That is not a fallback, it is the opening float:
+// the cash is really there and really has no bank recorded behind it. A row
+// that answered `null` here would vanish from all three buckets while still
+// counting in the total, and the invariant below would stop holding.
+function sourceOf(entry) {
+    const raw = String((entry && entry.cash_source) || '').trim();
+    if (!raw) return UNASSIGNED;
+    const hit = SOURCES.find((s) => s.toLowerCase() === raw.toLowerCase());
+    // An unrecognised name is kept AS TYPED rather than forced to Unassigned.
+    // If a third bank is ever added, its old rows must not silently pour into
+    // the unbanked bucket — they would inflate a figure she reassigns from.
+    return hit || raw;
+}
+
+// Normalises on the way IN. Refuses a name that is not a source, because a
+// typo stored here becomes a fourth bucket nobody asked for and the three
+// figures on screen stop adding up to the total.
+function cleanSource(v, { allowBlank = false } = {}) {
+    const raw = String(v == null ? '' : v).trim();
+    if (!raw) {
+        if (allowBlank) return UNASSIGNED;
+        throw new Error(`Which cash is this? Choose ${SOURCES.join(', ')}.`);
+    }
+    const hit = SOURCES.find((s) => s.toLowerCase() === raw.toLowerCase());
+    if (!hit) throw new Error(`"${raw}" is not one of ${SOURCES.join(', ')}.`);
+    return hit;
+}
+
 // Sum of every row. Signed amounts, so this is one reduce and there is no
 // branch that could count a withdrawal the wrong way.
 function balanceOf(entries) {
     const list = Array.isArray(entries) ? entries : [];
     return round2(list.reduce((a, e) => a + (toNum(e && e.amount) || 0), 0)) || 0;
+}
+
+// ── THE INVARIANT THIS WHOLE FEATURE RESTS ON ─────────────────────────────
+// Every bucket is a sum of the SAME rows balanceOf adds up, filtered. So the
+// buckets cannot drift from the total by construction — there is no second
+// tally to keep in step, and no stored per-bank figure to go stale. The same
+// reasoning as the file's opening note about not storing a balance, applied
+// one level down.
+//
+// A bucket CAN go negative, and that is information rather than corruption:
+// it means cash attributed to that bank left the box without a matching
+// top-up. withdrawForExpense has always been allowed to do this (see its
+// note); only payments refuse.
+function balanceBySource(entries) {
+    const list = Array.isArray(entries) ? entries : [];
+    const out = {};
+    for (const s of SOURCES) out[s] = 0;
+    for (const e of list) {
+        const s = sourceOf(e);
+        out[s] = (out[s] || 0) + (toNum(e && e.amount) || 0);
+    }
+    for (const k of Object.keys(out)) out[k] = round2(out[k]) || 0;
+    return out;
+}
+
+function balances() {
+    const list = listEntries();
+    return { total: balanceOf(list), bySource: balanceBySource(list) };
 }
 
 function balance() {
@@ -120,6 +209,23 @@ async function addTopUp(input = {}) {
     const record = {
         id: newEntryId(),
         kind: 'topup',
+        // ── ASKED ON THE FORM, NOT ENFORCED HERE ─────────────────────────
+        // Apsara, 2026-09-21: "when adding cash ,ask its from BofA or chase
+        // bank". The FORM asks and will not submit without an answer.
+        //
+        // This layer accepts blank, and the first version of it did not —
+        // which would have shipped a break. The phone's Petty cash tab does
+        // not know about this field yet, and the APK already installed never
+        // will until she builds a new one, so a hard requirement here means
+        // she cannot add cash from her phone AT ALL. That is the same mistake
+        // CLAUDE.md records twice: a rule written for one screen landing in
+        // shared code that another caller cannot satisfy. Caught by
+        // tests/yard-payments.js, which tops up without a source.
+        //
+        // A top-up that arrives unattributed lands in Unassigned, which is
+        // honest rather than a guess, and the Borrowing tab's move-cash
+        // action exists exactly so she can put a bank behind it afterwards.
+        cash_source: cleanSource(input.cash_source, { allowBlank: true }),
         date,
         amount,                                   // positive
         note: String(input.note || '').trim() || null,
@@ -134,6 +240,169 @@ async function addTopUp(input = {}) {
         return list;
     });
     return record;
+}
+
+// ── MOVING CASH BETWEEN BUCKETS ───────────────────────────────────────────
+//
+// One primitive, three reasons:
+//   borrow   — BofA covers a payment nominated to Chase, because Chase is short
+//   repay    — she settles that, by pressing Repay. Nothing settles itself.
+//   reassign — unbanked cash gets a bank put behind it, once she banks it
+//
+// TWO ROWS, NOT ONE. The ledger is signed rows and every balance is their
+// sum, so a move is a negative row on one side and a positive on the other.
+// They share a transfer_id. The overall total is unchanged by construction —
+// the two amounts cancel — which is exactly the property that keeps the three
+// buckets adding up to Cash in hand through any number of borrows.
+//
+// A REASSIGNMENT IS A DATED MOVE, NOT AN EDIT. Rewriting the old rows' source
+// would be less code and would change what last month's Chase figure was,
+// after she had already read it and decided on it. This file's opening note
+// says the balance must always be a thing you can point at; a retroactive
+// edit takes that away.
+//
+// NOT EXPOSED FOR ARBITRARY USE: `reason` is checked, because an unlabelled
+// transfer is one the Borrowing tab cannot explain.
+const TRANSFER_REASONS = ['borrow', 'repay', 'reassign'];
+let transferSeq = 0;
+function newTransferId() {
+    transferSeq += 1;
+    return `PCT_${Date.now().toString(36)}${transferSeq.toString(36)}${Math.random().toString(36).slice(2, 6)}`;
+}
+
+async function transfer({ from, to, amount, reason, note, date, createdBy } = {}) {
+    const src = cleanSource(from);
+    const dst = cleanSource(to);
+    if (src === dst) throw new Error('that would move the cash to where it already is');
+    const amt = round2(toNum(amount));
+    if (amt == null || amt <= 0) throw new Error('an amount to move must be greater than zero');
+    const why = String(reason || '').trim().toLowerCase();
+    if (!TRANSFER_REASONS.includes(why)) {
+        throw new Error(`a transfer needs a reason: ${TRANSFER_REASONS.join(', ')}`);
+    }
+    const when = /^\d{4}-\d{2}-\d{2}$/.test(String(date || '')) ? date : require('./time').todayLocal();
+
+    const tid = newTransferId();
+    const common = {
+        kind: 'transfer', transfer_id: tid, transfer_reason: why,
+        date: when, note: String(note || '').trim() || null,
+        load_id: null, payment_id: null,
+        created_at: new Date().toISOString(), created_by: createdBy || null,
+    };
+    const out = { ...common, id: newEntryId(), cash_source: src, amount: round2(-amt), transfer_to: dst };
+    const inn = { ...common, id: newEntryId(), cash_source: dst, amount: round2(amt), transfer_from: src };
+
+    await mutateJson(cfg.PETTY_CASH_FILE, [], (all) => {
+        const list = Array.isArray(all) ? all : [];
+
+        // ── YOU CANNOT MOVE CASH A BUCKET DOES NOT HAVE ──────────────────
+        // Found by running her own worked example one step past where she
+        // described it. After Chase borrows 4,000 from BofA and pays the
+        // 7,000 bill, Chase holds nothing — and pressing Repay moved 4,000
+        // out of it anyway, leaving Chase at MINUS 4,000 and BofA whole. The
+        // debt cleared and an overdraft appeared in its place, which is a
+        // worse position than the one she started in and looks like success.
+        //
+        // The real sequence is: put 4,000 into Chase from the Chase account,
+        // then repay BofA. So a transfer is refused unless the money is
+        // there, and the message says what to do about it.
+        //
+        // Deliberately NOT applied to the borrow inside withdrawForPayment:
+        // that path writes its rows directly and has already capped each
+        // lender at what it holds. A borrow is also the one movement whose
+        // whole purpose is that the destination is short.
+        const held = round2(balanceBySource(list)[src] || 0) || 0;
+        if (amt - held > CENT) {
+            const err = new Error(
+                `${src} only holds ${held.toFixed(2)} — not enough to move ${amt.toFixed(2)}.`
+                + (why === 'repay' ? ` Add cash to ${src} first, then repay ${dst}.` : ''));
+            err.code = 'PETTY_CASH_TRANSFER_SHORT';
+            err.bucket = src;
+            err.bucket_available = held;
+            err.requested = amt;
+            throw err;
+        }
+
+        // ── BOTH ROWS OR NEITHER, and they go in under ONE lock ───────────
+        // Two separate calls could interleave with another writer and leave
+        // the money out of one bucket and not yet in the other — a moment
+        // where the buckets do not add up, which is the only thing anyone
+        // will trust about this screen.
+        list.push(out, inn);
+        return list;
+    });
+    return { transfer_id: tid, from: src, to: dst, amount: amt, reason: why, date: when, rows: [out, inn] };
+}
+
+// ── WHAT ONE BUCKET STILL OWES ANOTHER ────────────────────────────────────
+//
+// Netted per DIRECTED PAIR, so a borrow and its repayment cancel and a second
+// borrow adds. Computed from the rows rather than kept as a running figure,
+// same as every other number in this file.
+//
+// Deliberately nets the two directions against each other: if Chase borrowed
+// 4,000 from BofA and later BofA borrowed 1,000 from Chase, she is owed one
+// sentence — Chase owes BofA 3,000 — not two facing each other. Anyone
+// reading two rows would have to do that subtraction themselves, and would
+// eventually do it wrong.
+function borrowings(entries) {
+    const list = Array.isArray(entries) ? entries : listEntries();
+    const net = new Map();
+    for (const e of list) {
+        if (!e || e.kind !== 'transfer') continue;
+        const why = String(e.transfer_reason || '').toLowerCase();
+        if (why !== 'borrow' && why !== 'repay') continue;
+        // Read only the OUT row of each pair, so the movement is counted once.
+        const amt = toNum(e.amount) || 0;
+        if (amt >= 0) continue;
+        const moverFrom = sourceOf(e);                          // the bucket money LEFT
+        const moverTo = String(e.transfer_to || '').trim();     // the bucket it went TO
+        if (!moverTo) continue;
+        const size = Math.abs(amt);
+
+        // A BORROW: the money left the LENDER and went to the BORROWER, so
+        // after it the borrower owes the lender.
+        //   key is always "<who owes>|<who is owed>"
+        // A REPAY is the same movement run backwards: the money leaves the
+        // one who owed and goes to the one who was owed, so it subtracts
+        // from that same key. Written as one key and a sign rather than two
+        // cases, because two cases is where the direction gets flipped.
+        const key = why === 'borrow' ? `${moverTo}|${moverFrom}` : `${moverFrom}|${moverTo}`;
+        const delta = why === 'borrow' ? size : -size;
+        net.set(key, round2((net.get(key) || 0) + delta));
+    }
+    const out = [];
+    const done = new Set();
+    for (const [key, amount] of net) {
+        if (done.has(key)) continue;
+        const [owes, to] = key.split('|');
+        const back = net.get(`${to}|${owes}`) || 0;
+        done.add(key); done.add(`${to}|${owes}`);
+        const netAmt = round2(amount - back);
+        if (Math.abs(netAmt) <= CENT) continue;
+        out.push(netAmt > 0 ? { owes, to, amount: netAmt } : { owes: to, to: owes, amount: round2(-netAmt) });
+    }
+    return out.sort((a, b) => b.amount - a.amount);
+}
+
+// Every borrow and repay, newest first — the history behind the figures above.
+function transfers(entries) {
+    const list = Array.isArray(entries) ? entries : listEntries();
+    return list
+        .filter((e) => e && e.kind === 'transfer' && (toNum(e.amount) || 0) < 0)
+        .map((e) => ({
+            transfer_id: e.transfer_id || null,
+            reason: e.transfer_reason || null,
+            from: sourceOf(e),
+            to: String(e.transfer_to || '') || null,
+            amount: round2(Math.abs(toNum(e.amount) || 0)),
+            date: e.date || null,
+            note: e.note || null,
+            created_at: e.created_at || null,
+            created_by: e.created_by || null,
+        }))
+        .sort((a, b) => String(b.date || '').localeCompare(String(a.date || ''))
+            || String(b.created_at || '').localeCompare(String(a.created_at || '')));
 }
 
 // ── take cash out, for a cash payment ─────────────────────────────────────
@@ -151,14 +420,84 @@ async function addTopUp(input = {}) {
 //   allowPartial true  -> takes what there is and reports capped: true
 // The default is to REFUSE. A partial payment against a supplier's load is a
 // decision, not a rounding — it leaves them owed money and the ticket says so.
-async function withdrawForPayment({ amount, loadId, paymentId, date, createdBy, allowPartial = false } = {}) {
+async function withdrawForPayment({ amount, loadId, paymentId, date, createdBy, allowPartial = false,
+                                    cashSource, allowBorrow = false } = {}) {
     const want = round2(toNum(amount));
     if (want == null || want <= 0) throw new Error('a cash amount must be greater than zero');
+    // Blank is allowed and means Unassigned. It has to be: the APK on her
+    // phone and the voice path both predate this field, and a payment that
+    // refuses outright because an old client did not name a bank is a payment
+    // she cannot record at all. Unbanked cash is a real bucket, so landing
+    // there is an honest answer rather than a placeholder.
+    const src = cleanSource(cashSource, { allowBlank: true });
 
     let result = null;
     await mutateJson(cfg.PETTY_CASH_FILE, [], (all) => {
         const list = Array.isArray(all) ? all : [];
         const available = balanceOf(list);
+
+        // ── THE NOMINATED BUCKET, AND WHO COULD COVER IT ──────────────────
+        // Apsara's worked example, 2026-09-21: "Say the bill amount is 7000.
+        // we have only 3000 in chase and 10000 in bofa... It should show
+        // something in terms of 3000 only avilable in chase.want to borrow
+        // from bofa?On confirmaton-allow them to pay."
+        //
+        // Refused FIRST, with the figures, and only moved on her yes — the
+        // same shape as the PETTY_CASH_SHORT flow already on these screens,
+        // so it is a pattern she has seen rather than a second convention.
+        //
+        // Checked and moved INSIDE this one mutator, under its lock. A borrow
+        // decided outside and written after would let two payments both see
+        // BofA's ten thousand and both take it.
+        const buckets = balanceBySource(list);
+        const inBucket = round2(buckets[src] || 0) || 0;
+        if (want - inBucket > CENT && available - want > -CENT) {
+            // The box as a whole CAN cover it; only this bucket cannot. That
+            // is the borrow case, and it is the only one that offers a
+            // lender — when the box itself is short there is nothing to
+            // borrow and the existing refusals below are the right answer.
+            const need = round2(want - inBucket);
+            const lenders = SOURCES
+                .filter((s) => s !== src)
+                .map((s) => ({ source: s, available: round2(buckets[s] || 0) || 0 }))
+                .filter((l) => l.available > CENT)
+                .sort((a, b) => b.available - a.available);
+
+            if (!allowBorrow) {
+                const err = new Error(`Only ${inBucket.toFixed(2)} available in ${src}.`);
+                err.code = 'PETTY_CASH_BUCKET_SHORT';
+                err.bucket = src;
+                err.bucket_available = inBucket;
+                err.requested = want;
+                err.shortfall = need;
+                err.lenders = lenders;
+                throw err;
+            }
+
+            // ── DRAW FROM THE FULLEST FIRST ──────────────────────────────
+            // Only matters when there are three buckets and the shortfall
+            // spans two of them. Largest-first leaves the remaining buckets
+            // as even as possible, which is the least surprising of the
+            // arbitrary choices available — and the transfers are listed on
+            // the Borrowing tab either way, so nothing is hidden.
+            let left = need;
+            for (const l of lenders) {
+                if (left <= CENT) break;
+                const take = Math.min(l.available, left);
+                if (take <= CENT) continue;
+                const tid = newTransferId();
+                const common = {
+                    kind: 'transfer', transfer_id: tid, transfer_reason: 'borrow',
+                    date: /^\d{4}-\d{2}-\d{2}$/.test(String(date || '')) ? date : require('./time').todayLocal(),
+                    note: `covering a cash payment from ${src}`,
+                    load_id: loadId || null, payment_id: null,
+                    created_at: new Date().toISOString(), created_by: createdBy || null,
+                };
+                list.push({ ...common, id: newEntryId(), cash_source: l.source, amount: round2(-take), transfer_to: src });
+                list.push({ ...common, id: newEntryId(), cash_source: src, amount: round2(take), transfer_from: l.source });
+                left = round2(left - take);
+            }
+        }
 
         if (available <= CENT) {
             const err = new Error('There is no petty cash to pay from. Add cash on the Petty cash tab first.');
@@ -178,6 +517,9 @@ async function withdrawForPayment({ amount, loadId, paymentId, date, createdBy, 
         const entry = {
             id: newEntryId(),
             kind: 'payment',
+            // The bucket this note came out of. After any borrow above, the
+            // nominated bucket is the one that actually holds the money.
+            cash_source: src,
             date: /^\d{4}-\d{2}-\d{2}$/.test(String(date || '')) ? date : require('./time').todayLocal(),
             amount: round2(-taken),               // negative
             note: null,
@@ -216,7 +558,7 @@ async function withdrawForPayment({ amount, loadId, paymentId, date, createdBy, 
 // Unlike every withdrawal in this file, there is nothing to check. Cash coming
 // in cannot overdraw a box; the money is physically in her hand. A balance
 // test here would be the same mistake in a new place.
-async function depositForPayment({ amount, loadId, paymentId, date, createdBy } = {}) {
+async function depositForPayment({ amount, loadId, paymentId, date, createdBy, cashSource } = {}) {
     const want = round2(toNum(amount));
     if (want == null || want <= 0) throw new Error('a cash amount must be greater than zero');
 
@@ -230,6 +572,14 @@ async function depositForPayment({ amount, loadId, paymentId, date, createdBy } 
             // and the spend report both split on kind, and calling a sale a
             // top-up would make the day's takings look like a float she added.
             kind: 'receipt',
+            // ── A CUSTOMER'S CASH CAME FROM NO BANK ──────────────────────
+            // Unassigned unless the caller says otherwise, and that is the
+            // truth rather than a default: this money was handed over for a
+            // load of metal and never passed through BofA or Chase. Filing it
+            // under a bank would inflate that bank's figure with money it
+            // never provided, and "what has Chase funded" would stop being
+            // answerable. She can move it to a bank later, when she banks it.
+            cash_source: cleanSource(cashSource, { allowBlank: true }),
             date: /^\d{4}-\d{2}-\d{2}$/.test(String(date || '')) ? date : require('./time').todayLocal(),
             amount: round2(want),                 // POSITIVE — money in
             note: null,
@@ -264,9 +614,21 @@ async function depositForPayment({ amount, loadId, paymentId, date, createdBy } 
 // left the drawer that was never entered here. `shortfall` is returned so the
 // screen can say exactly that — Apsara, 2026-09-02: "If expense is more but
 // petty cash is less, notify user."
-async function withdrawForExpense({ amount, expenseId, date, createdBy } = {}) {
+async function withdrawForExpense({ amount, expenseId, date, createdBy, cashSource } = {}) {
     const want = round2(toNum(amount));
     if (want == null || want <= 0) throw new Error('an expense amount must be greater than zero');
+    // ── AN EXPENSE NAMES ITS BUCKET, AND STILL MAY OVERDRAW IT ───────────
+    // Apsara, 2026-09-21, asked whether a cash expense should ask which bank:
+    // "Yes, ask — same as a payment."
+    //
+    // It asks. It does NOT gain a payment's refusal, and that is deliberate
+    // rather than an oversight: this function has always been allowed to take
+    // the box negative, for the reason in the note above — the money has
+    // already left the drawer, and refusing would not un-spend it, it would
+    // only stop the record being made. Adding a borrow prompt here would
+    // change how a screen she uses daily behaves, which she did not ask for.
+    // So a bucket can go negative, and the tab shows that plainly.
+    const src = cleanSource(cashSource, { allowBlank: true });
 
     let result = null;
     await mutateJson(cfg.PETTY_CASH_FILE, [], (all) => {
@@ -275,6 +637,7 @@ async function withdrawForExpense({ amount, expenseId, date, createdBy } = {}) {
         const entry = {
             id: newEntryId(),
             kind: 'expense',
+            cash_source: src,
             date: /^\d{4}-\d{2}-\d{2}$/.test(String(date || '')) ? date : require('./time').todayLocal(),
             amount: round2(-want),               // the FULL amount, never capped
             note: null,
@@ -315,6 +678,14 @@ async function reverseForExpense(expenseId, { createdBy, note } = {}) {
         record = {
             id: newEntryId(),
             kind: 'reversal',
+            // ── BACK INTO THE BUCKET IT CAME OUT OF ──────────────────────
+            // Added 2026-09-21. Without this the refund lands in Unassigned
+            // while the withdrawal came out of Chase, so undoing a payment
+            // would quietly move money between banks — the buckets would
+            // still add up to the right total, which is precisely why nobody
+            // would notice. Taken from the row being reversed, not from the
+            // caller, because the caller does not necessarily know.
+            cash_source: sourceOf(taken[0]),
             date: require('./time').todayLocal(),
             amount: round2(-total),               // positive
             note: note || 'expense removed',
@@ -393,6 +764,14 @@ async function reverseForPayment(idOrEntryId, { createdBy } = {}) {
         record = {
             id: newEntryId(),
             kind: 'reversal',
+            // ── BACK INTO THE BUCKET IT CAME OUT OF ──────────────────────
+            // Added 2026-09-21. Without this the refund lands in Unassigned
+            // while the withdrawal came out of Chase, so undoing a payment
+            // would quietly move money between banks — the buckets would
+            // still add up to the right total, which is precisely why nobody
+            // would notice. Taken from the row being reversed, not from the
+            // caller, because the caller does not necessarily know.
+            cash_source: sourceOf(taken[0]),
             date: require('./time').todayLocal(),
             amount: round2(-total),               // the opposite of whatever it undoes
             note: taken[0].kind === 'receipt' ? 'cash receipt deleted' : 'cash payment deleted',
@@ -438,4 +817,10 @@ module.exports = {
     ENTRY_KINDS, listEntries, balance, balanceOf, history,
     addTopUp, withdrawForPayment, depositForPayment, stampPaymentId, reverseForPayment,
     withdrawForExpense, reverseForExpense, deleteEntry,
+    // Per-bucket, added 2026-09-21. SOURCES is exported so the API, both
+    // clients and the server-side check read ONE list — the same reasoning
+    // helpers/banks.js gives for its own: six copies of a dropdown drift
+    // faster than three.
+    SOURCES, UNASSIGNED, sourceOf, cleanSource, balanceBySource, balances,
+    transfer, borrowings, transfers, TRANSFER_REASONS,
 };

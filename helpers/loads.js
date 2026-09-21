@@ -1,4 +1,28 @@
-const { mutateJson, loadJson, loadSettings } = require('./json');
+const { mutateJson: mutateJsonRaw, loadJson, loadSettings } = require('./json');
+
+// ── EVERY WRITE HERE IS STRICT ────────────────────────────────────────────
+//
+// Apsara, 2026-09-21: "i have a load added on 21-sep in yard but in website
+// ,latest load is 19-sep" — and the load was gone from the app too after a
+// restart. It was never on the server.
+//
+// helpers/json.js's mutateJson defaults to strict:false, which LOGS a failed
+// write and RETURNS THE FILE'S PREVIOUS CONTENTS. For a store that self-heals
+// on the next change that is the right default. For this one it means: the
+// write fails, addLoad returns the record anyway, the route answers 200, the
+// app shows the load, and the next read has never heard of it. She weighs a
+// truck, prices it, the seller signs, and the load is gone.
+//
+// The money stores were fixed for exactly this on 2026-09-xx — payments,
+// expenses, petty cash, trucker bills, bills, sales all opt in. loads.json
+// was missed, and it is the yard's PRIMARY ledger: every amount, every
+// weight, every seller signature hangs off it.
+//
+// Wrapped once rather than passing the option at each call site, the same
+// way helpers/pettyCash.js does it, so a new write cannot be added without
+// it. `getInventoryReport` and the other readers are untouched — reads were
+// never the danger.
+const mutateJson = (file, dflt, fn) => mutateJsonRaw(file, dflt, fn, { strict: true });
 const cfg = require('../config');
 
 function loadLoads() {
@@ -424,13 +448,20 @@ function getLoad(id) {
 
 // Changes an existing load's id (e.g. "EDGE_07" -> "EDGE_12") — added per
 // Apsara 2026-08-15 ("there should be a way to adjust the load number").
-// Validation runs BEFORE mutateJson, not by throwing inside its mutator —
-// mutateJson's own catch block swallows any error a mutator throws and
-// silently falls back to returning the unmodified data (see helpers/json.js),
-// so a thrown "not found"/"already exists" in there would look like success
-// to the caller instead of surfacing as an error. Same reasoning as
-// deleteLoad's `found` flag below: real errors have to be detected with a
-// pre-check + a captured result, not an exception crossing that boundary.
+// Validation runs BEFORE mutateJson, not by throwing inside its mutator.
+//
+// UPDATED 2026-09-21, because the reason changed and a stale reason is worse
+// than none. It used to say mutateJson SWALLOWS a throw from the mutator and
+// returns the unmodified data, so a thrown "not found" would look like
+// success. That was true of this file until today; it is not any more —
+// every write here is now strict (see the top of this file) and a throw
+// propagates.
+//
+// The pattern stays, for a different and still-good reason: these are not
+// write failures, they are "you asked for something that is not there".
+// Checking first and capturing a result keeps the distinction between a
+// REFUSAL and a CRASH, which is the difference between "that number is
+// already taken" and a 500. Same reasoning as deleteLoad's `found` flag.
 // Does NOT touch Drive — the caller (api.js's PUT /:id/renumber route) is
 // responsible for renaming the load's Drive subfolder to match, since this
 // file has no Drive dependency and shouldn't grow one just for this.

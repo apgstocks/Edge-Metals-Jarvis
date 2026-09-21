@@ -31,7 +31,24 @@
 // in payments.js's EDGE_METALS_KINDS beside 'bill' and 'sale_cost'.
 
 const cfg = require('../config');
-const { loadJson, mutateJson } = require('./json');
+const { loadJson, mutateJson: mutateJsonRaw } = require('./json');
+
+// ── EVERY WRITE HERE IS STRICT ────────────────────────────────────────────
+// Added 2026-09-21, alongside the same fix in helpers/loads.js and for the
+// same reason. Apsara entered a load on the 21st; it showed in the app, was
+// absent from the website, and was gone from the app after a restart. It had
+// never been written.
+//
+// helpers/json.js's mutateJson defaults to strict:false: a failed write is
+// LOGGED and the file's PREVIOUS CONTENTS are returned. The caller cannot
+// tell that from success, so the record comes back, the route answers 200,
+// the screen shows the row, and the next read has never heard of it.
+//
+// The money stores opted in months ago. this store did not did not, and a haulier payment that silently does not exist is one she pays twice.
+//
+// Wrapped once rather than passed at each call site, so a new write cannot
+// be added without it.
+const mutateJson = (file, dflt, fn) => mutateJsonRaw(file, dflt, fn, { strict: true });
 
 const num = (v) => {
     if (v === null || v === undefined || v === '') return null;

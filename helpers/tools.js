@@ -551,6 +551,19 @@ const TOOLS = {
             // "Not recorded" on the spend report, where she can see and close
             // the gap. See helpers/banks.js.
             bank: { type: 'string', describe: 'which bank a transfer went out of, if she said' },
+            // ── WHICH CASH, ON A CASH PAYMENT ──────────────────────────────
+            // Apsara, 2026-09-21: cash in the box is now tracked per bank.
+            // NOT the same field as `bank` above, and the difference is why
+            // there are two: `bank` says which account a TRANSFER left;
+            // this says which trip to the bank the NOTES came from. banks.js
+            // still refuses `bank` on a cash payment and is still right to.
+            //
+            // Optional, deliberately. She will often just say "pay Ramesh
+            // 2,000 cash" and never mention a bank — refusing that would
+            // break the thing this tool exists for. Unsaid means the payment
+            // comes out of unbanked cash, which is a real bucket and an
+            // honest answer rather than a placeholder.
+            cash_source: { type: 'string', describe: 'on a CASH payment, which cash: BofA, Chase Bank, or leave unsaid for unbanked cash' },
             // ── REQUIRED FOR SOME COMBINATIONS, AND THE TOOL HAD NO BOX ─────
             // Added 2026-09-17 after a live break. The paid-via work of
             // 2026-09-16 ("on selecting wire-it should ask me Payment via Edge
@@ -607,6 +620,32 @@ const TOOLS = {
             const { paidViaRequired, resolvePaidVia } = require('./payments');
             const paidVia = resolvePaidVia(loadKind, mode, p.paid_via);
 
+            // ── WHICH CASH, AND WHETHER IT WILL HAVE TO BORROW ───────────
+            // Worked out HERE, at propose time, so the confirm card states it
+            // before she says yes rather than the write failing after. The
+            // pay modal refuses and re-asks; this tool has no second round,
+            // so the question has to be answered on the card in front of her.
+            const petty = require('./pettyCash');
+            let cashSource = null;
+            let borrowNote = null;
+            if (mode.toLowerCase() === 'cash' && loadKind !== 'sale') {
+                cashSource = petty.cleanSource(p.cash_source, { allowBlank: true });
+                const buckets = petty.balanceBySource(petty.listEntries());
+                const held = Number(buckets[cashSource] || 0);
+                if (amount - held > 0.005) {
+                    const lenders = petty.SOURCES
+                        .filter((x) => x !== cashSource)
+                        .map((x) => ({ source: x, available: Number(buckets[x] || 0) }))
+                        .filter((l) => l.available > 0.005)
+                        .sort((a, b) => b.available - a.available);
+                    if (lenders.length) {
+                        borrowNote = `${cashSource} holds ${money(held)} — confirming this borrows `
+                            + `${money(Math.round((amount - held) * 100) / 100)} from `
+                            + lenders.map((l) => l.source).join(' and ') + '.';
+                    }
+                }
+            }
+
             // Recomputed from the ledger, NOT from anything the model said.
             // Against the PAYABLE: if $200 of haulage was deducted, "$2,259
             // still outstanding" is the true figure and "$2,459" would have
@@ -629,6 +668,9 @@ const TOOLS = {
             if (banks.needsBank(mode) && !bank) {
                 warnings.push(`No bank recorded for this ${mode} — it will show as "Not recorded" on the spend report.`);
             }
+            // Said on the card, because confirming it is what authorises the
+            // borrow — there is no second prompt on this path.
+            if (borrowNote) warnings.push(borrowNote);
             if (after < 0) warnings.push(`This is ${money(-after)} MORE than the ${money(before.pending)} still outstanding on this load.`);
             if (before.pending === 0) warnings.push('This load is already fully paid.');
 
@@ -649,6 +691,7 @@ const TOOLS = {
                         : []),
                     ['Already paid', money(before.paid)],
                     ['This payment', `${money(amount)} by ${mode}${bank ? ' from ' + bank : ''}`],
+                    ...(cashSource ? [['Which cash', cashSource]] : []),
                     // Shown only when it applies — a "Payment via: " line on a
                     // cash payment is noise on a card she reads at a gate.
                     ...(paidVia ? [[require('./payments').paidViaLabel(loadKind), paidVia]] : []),
@@ -658,6 +701,12 @@ const TOOLS = {
                 run: async (ctx) => require('./payments').addPayment({
                     load_id: loadId, load_kind: loadKind, amount, mode, bank, paid_via: paidVia,
                     paid_on: paidOn, note: p.note,
+                    cash_source: cashSource,
+                    // She confirmed a card that SAID it would borrow — see
+                    // borrowNote above. Sending this without that sentence on
+                    // the card would be moving money between her bank
+                    // accounts on an answer she was never asked for.
+                    allow_borrow: !!borrowNote,
                     created_by: ctx.role || 'yard-assistant',
                 }),
             };
