@@ -114,6 +114,8 @@ async function ensureSandbox(kind, name, opts) {
     if ((opts.env || auth.qbEnv()) !== 'sandbox') throw new Error(`refusing to create ${kind} "${name}" outside the sandbox`);
     if (kind === 'vendor') return (await client.request('POST', '/vendor', { DisplayName: name }, opts)).Vendor.Id;
     if (kind === 'account') return (await client.request('POST', '/account', { Name: name, AccountType: 'Cost of Goods Sold' }, opts)).Account.Id;
+    if (kind === 'term') return (await client.request('POST', '/term', { Name: name, DueDays: 0 }, opts)).Term.Id;
+    if (kind === 'customer') return (await client.request('POST', '/customer', { DisplayName: name }, opts)).Customer.Id;
     if (kind === 'item') {
         const inc = await idByName('Account', 'Name', 'Sales of Product Income', opts);
         const cogs = await idByName('Account', 'Name', 'Cost of Goods Sold', opts);
@@ -143,25 +145,68 @@ async function resolveRefs(b, snapshots, opts) {
 }
 
 // ── check, then enter ───────────────────────────────────────────────────────
-// Before creating: is this container already in her books from this supplier?
-// Same invoice number, or the container number in a line/memo, within 120 days.
-async function findExisting(b, vendorId, opts) {
-    const container = String(b.container_no || '').trim().toUpperCase();
-    const doc = String(b.invoice_no || '').trim();
-    const d = new Date(String(b.date).slice(0, 10));
+// Before creating: is this container already in her books? Searched across ALL
+// suppliers/customers, not just the one Jarvis would use — found 2026-09-22 on
+// TXGU8942580: Jarvis says TAEWON AUTOMOTIVE CO, her accountant invoiced it to
+// TAEWON PRECEISION, and a search limited to the Jarvis customer would have
+// missed it and entered the container twice. Same invoice number, or the
+// container number in a line/memo, within 120 days either side.
+async function findExistingDoc(table, { date, container, doc }, opts) {
+    container = String(container || '').trim().toUpperCase();
+    doc = String(doc || '').trim();
+    const d = new Date(String(date).slice(0, 10));
     const from = new Date(d.getTime() - 120 * 864e5).toISOString().slice(0, 10);
     const to = new Date(d.getTime() + 120 * 864e5).toISOString().slice(0, 10);
-    const r = await client.query(`select * from Bill where VendorRef = '${vendorId}' and TxnDate >= '${from}' and TxnDate <= '${to}' maxresults 1000`, opts);
-    const hits = (r.Bill || []).filter((x) => (doc && x.DocNumber === doc)
-        || (container && JSON.stringify([x.PrivateNote, (x.Line || []).map((l) => l.Description)]).toUpperCase().includes(container)));
-    return hits.map((x) => ({ Id: x.Id, DocNumber: x.DocNumber, TxnDate: x.TxnDate, TotalAmt: x.TotalAmt, containers: (JSON.stringify(x).match(/[A-Z]{4}\d{7}/g) || []).filter((v, i, a) => a.indexOf(v) === i) }));
+    const hits = [];
+    for (let start = 1; ; start += 1000) {
+        const r = await client.query(`select * from ${table} where TxnDate >= '${from}' and TxnDate <= '${to}' startposition ${start} maxresults 1000`, opts);
+        const rows = r[table] || [];
+        for (const x of rows) {
+            const text = JSON.stringify([x.PrivateNote, (x.Line || []).map((l) => l.Description)]).toUpperCase();
+            if ((doc && x.DocNumber === doc) || (container && text.includes(container))) {
+                const party = x.VendorRef || x.CustomerRef || {};
+                hits.push({ Id: x.Id, DocNumber: x.DocNumber, TxnDate: x.TxnDate, TotalAmt: x.TotalAmt, partyId: party.value, party: party.name,
+                    containers: (text.match(/[A-Z]{4}\d{7}/g) || []).filter((v, i, a) => a.indexOf(v) === i) });
+            }
+        }
+        if (rows.length < 1000) break;
+    }
+    return hits;
+}
+// sure = one hit, same party, same total. Anything else she decides.
+function judgeExisting(hits, partyId, total) {
+    const same = hits.filter((h) => h.partyId === String(partyId) && Math.abs(h.TotalAmt - total) < 0.005);
+    if (same.length === 1 && hits.length === 1) return { sure: same[0] };
+    if (!hits.length) return {};
+    const why = hits.map((h) => h.partyId !== String(partyId) ? `#${h.Id} is under ${h.party}` : Math.abs(h.TotalAmt - total) >= 0.005 ? `#${h.Id} totals ${h.TotalAmt}, Jarvis ${total}` : `#${h.Id} matches`);
+    return { ask: hits, why };
+}
+async function findExisting(b, vendorId, opts) {
+    return findExistingDoc('Bill', { date: b.date, container: b.container_no, doc: b.invoice_no }, opts);
 }
 
-// The one entry point. dryRun (default true) builds and checks but writes
-// nothing. A write in production is also refused by client.js unless
-// QB_PROD_WRITES=on.
+// ── CUTOVER ─────────────────────────────────────────────────────────────────
+// Apsara, 2026-09-22: "Jarvis fills everything after that". Her books are
+// complete by hand to 5 Sep 2026 (bills) and 27 Aug 2026 (invoices), and Jan–May
+// supplier wires were booked straight to Cost of Goods Sold with no bill —
+// a Jarvis bill for those containers would count the cost twice. So Jarvis
+// only ever enters documents dated AFTER the cutover. In production an unset
+// cutover refuses everything: no date is not the same as "all dates".
+function cutoverFor(kind, env) {
+    const v = String(process.env[kind === 'bill' ? 'QB_CUTOVER_BILLS' : 'QB_CUTOVER_INVOICES'] || '').trim();
+    if (/^\d{4}-\d{2}-\d{2}$/.test(v)) return v;
+    return env === 'production' ? null : '0000-00-00';
+}
+function beforeCutover(kind, date, env) {
+    const c = cutoverFor(kind, env);
+    if (c === null) return `no ${kind} cutover date set for production — refusing`;
+    return String(date).slice(0, 10) < c ? `${kind} dated ${String(date).slice(0, 10)} is before the cutover (${c}) — her books already hold that period` : null;
+}
+
 async function pushBill(b, snapshots, { env = auth.qbEnv(), dryRun = true, fetchImpl } = {}) {
     const opts = { env, fetchImpl };
+    const cut = beforeCutover('bill', b.date, env);
+    if (cut) return { status: 'before-cutover', problems: [cut] };
     const key = linkKey(env, 'bill', b.id || b.container_no);
     const linked = loadLinks()[key];
     if (linked) return { status: 'already-linked', qbId: linked.qbId };
@@ -172,12 +217,12 @@ async function pushBill(b, snapshots, { env = auth.qbEnv(), dryRun = true, fetch
     if (built.problems) return { status: 'blocked', problems: built.problems };
 
     const existing = await findExisting(b, res.refs.vendorId, opts);
-    const sure = existing.filter((e) => e.DocNumber === built.bill.DocNumber && e.TotalAmt === built.total);
-    if (sure.length === 1) {
-        if (!dryRun) saveLink(key, { qbId: sure[0].Id, how: 'matched-existing', at: new Date().toISOString() });
-        return { status: 'exists', qbId: sure[0].Id, note: 'already in QuickBooks — linked, nothing entered' };
+    const j = judgeExisting(existing, res.refs.vendorId, built.total);
+    if (j.sure) {
+        if (!dryRun) saveLink(key, { qbId: j.sure.Id, how: 'matched-existing', at: new Date().toISOString() });
+        return { status: 'exists', qbId: j.sure.Id, note: 'already in QuickBooks — linked, nothing entered' };
     }
-    if (existing.length) return { status: 'ask', candidates: existing, bill: built.bill, note: 'something for this container is already there but does not match exactly — she decides' };
+    if (j.ask) return { status: 'ask', candidates: j.ask, why: j.why, bill: built.bill, note: 'this container is already in QuickBooks but not exactly as Jarvis has it — she decides' };
     if (dryRun) return { status: 'would-create', bill: built.bill, total: built.total };
 
     const out = await client.request('POST', '/bill', built.bill, opts);
@@ -185,4 +230,4 @@ async function pushBill(b, snapshots, { env = auth.qbEnv(), dryRun = true, fetch
     return { status: 'created', qbId: out.Bill.Id, total: out.Bill.TotalAmt, bill: out.Bill };
 }
 
-module.exports = { buildBill, resolveRefs, findExisting, pushBill, loadLinks, LINKS_FILE, DOC_MAX };
+module.exports = { confirmedName, idByName, ensureSandbox, saveLink, linkKey, cutoverFor, beforeCutover, buildBill, resolveRefs, findExisting, findExistingDoc, judgeExisting, pushBill, loadLinks, LINKS_FILE, DOC_MAX };

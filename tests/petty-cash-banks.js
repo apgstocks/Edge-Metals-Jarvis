@@ -672,6 +672,30 @@ section('H — BofA is two accounts, and they belong to two companies');
         petty.SOURCES.length === 4,
         'the panel may hide a heading; the dropdown must not hide an account');
 
+    // ── SWITCHING TABS DOES NOT GO TO THE SERVER ─────────────────────────
+    // Apsara, 2026-09-22: "when i click cash and borrowing,it takes lot of
+    // time to open." Both tabs render from the same pettyCash object, so the
+    // round trip bought nothing and she waited for it on a phone.
+    //
+    // THE PROPERTY, checked two ways because the first alone would pass if
+    // someone flipped the default: the tab handler must ask not to refresh,
+    // AND the default must still be to refresh, so that every caller that
+    // just moved money keeps re-reading the server.
+    for (const f of ['mobile-app/www/index.html', 'dashboard/index.html']) {
+        const src = fs.readFileSync(path.join(__dirname, '..', f), 'utf8');
+        ck(`${f}: a tab switch asks for no refresh`,
+            /pettyTab = b\.dataset\.pettyTab; renderPettyCashTab\(\{ refresh: false \}\)/.test(src),
+            'the wait she sees is the round trip, not the server');
+        ck(`  ${f}: but refreshing is still the default`,
+            /async function renderPettyCashTab\(\{ refresh = true \} = \{\}\)/.test(src)
+            && /if \(refresh\) await refreshPettyCash\(\)/.test(src),
+            'a caller that forgets the flag must get a slow screen, never a stale one');
+        // The callers that changed money must NOT have picked up the flag.
+        const optedOut = (src.match(/renderPettyCashTab\(\{ refresh: false \}\)/g) || []).length;
+        ck(`  ${f}: only the tab switch skips it`, optedOut === 1,
+            `${optedOut} callers skip the refresh — after adding cash or repaying, the figure on screen would be the old one`);
+    }
+
     // ── AND THE WHOLE SCRIPT STILL PARSES ────────────────────────────────
     // Written after breaking it. An HTML comment inside a JS template literal
     // is not a comment to the JS parser — it is text inside a string — so a

@@ -34,5 +34,19 @@ ck('too-long invoice no blocks', buildBill(B.withTotals({ ...real, invoice_no: '
 ck('no price/amount blocks', buildBill(B.withTotals({ ...real, supplier_price: null }), refs).problems.some((p) => /amount/.test(p)));
 ck('trucking without a Trucking account blocks', buildBill(real, { ...refs, truckingAccountId: null }).problems.some((p) => /Trucking/.test(p)));
 
+const { beforeCutover } = require('../helpers/quickbooks/push');
+const saved = [process.env.QB_CUTOVER_BILLS, process.env.QB_CUTOVER_INVOICES];
+delete process.env.QB_CUTOVER_BILLS; delete process.env.QB_CUTOVER_INVOICES;
+ck('production with no cutover refuses', /no bill cutover/.test(beforeCutover('bill', '2026-10-01', 'production')));
+ck('sandbox with no cutover allows', beforeCutover('bill', '2026-01-01', 'sandbox') === null);
+process.env.QB_CUTOVER_BILLS = '2026-09-06'; process.env.QB_CUTOVER_INVOICES = '2026-08-28';
+ck('bill on 5 Sep (already hand-entered) refused', /before the cutover/.test(beforeCutover('bill', '2026-09-05', 'production')));
+ck('bill on 6 Sep allowed', beforeCutover('bill', '2026-09-06', 'production') === null);
+ck('Jan-May bill refused (no double cost)', beforeCutover('bill', '2026-03-20', 'production') !== null);
+ck('invoice on 28 Aug allowed, 27 Aug refused', beforeCutover('invoice', '2026-08-28', 'production') === null && beforeCutover('invoice', '2026-08-27', 'production') !== null);
+process.env.QB_CUTOVER_BILLS = 'soon';
+ck('a malformed cutover is treated as unset (refuse)', beforeCutover('bill', '2026-12-01', 'production') !== null);
+if (saved[0] === undefined) delete process.env.QB_CUTOVER_BILLS; else process.env.QB_CUTOVER_BILLS = saved[0];
+if (saved[1] === undefined) delete process.env.QB_CUTOVER_INVOICES; else process.env.QB_CUTOVER_INVOICES = saved[1];
 console.log(`\nquickbooks-push: ${pass} passed, ${fail} failed`);
 if (fail) { console.log('FAILED: ' + failures.join(' | ')); process.exit(1); }
