@@ -95,6 +95,37 @@ function formatQtyMt(value) {
     return Number(value || 0).toFixed(3);
 }
 
+// ── "12 × 110 lb", OR NOTHING AT ALL ──────────────────────────────────────
+// The working behind a boxes tare, for a container that came on pallets.
+// Apsara, 2026-09-22: "if its pallets-i need to have that boxes in attached
+// in our packing list."
+//
+// Returns null unless BOTH figures are there and both make sense, because
+// the alternative — printing half of it, or printing "12 × " with a blank —
+// is worse than printing the total alone, which is what every packing list
+// does today. A loosely loaded container has neither field and gets exactly
+// the document it gets now.
+//
+// Deliberately does NOT check the working against boxes_weight_lbs. They are
+// set together by the one answer she gives, so they cannot drift here; and
+// if they ever did, the packing list is the wrong place to discover it —
+// helpers/scaleTicketBoxes.js reports a disagreement to her face, before the
+// PDF exists.
+function boxWorking(p) {
+    if (!p) return null;
+    const n = Number(p.boxes_count);
+    const u = Number(p.boxes_unit_lb);
+    // One guard, not two. There was a !Number.isFinite() line above this and
+    // it could not be killed by any test, because Number.isInteger(NaN) is
+    // already false and u > 0 is already false for NaN — a missing field and
+    // a nonsense field take the same exit. Redundant code that no test can
+    // reach is code the next reader has to decide about for nothing.
+    if (!Number.isInteger(n) || n <= 0 || !(u > 0)) return null;
+    // 110 and 110.5 both read correctly; a trailing ".00" does not.
+    const unit = Number.isInteger(u) ? String(u) : String(Math.round(u * 100) / 100);
+    return `${formatInt(n)} × ${unit} lb`;
+}
+
 // "AC-AUTO CAST" style label — mirrors invoice_gen.py's get_item_label().
 // Tries to find the code by matching the resolved description back against
 // ITEM_CODE_MAP first (cheap, no ambiguity when the description is exactly
@@ -585,8 +616,30 @@ function buildInvoiceClassicHtml(data) {
                 { head: 'Chassis<br>(lbs)', width: '10%',
                   cell: (item, p) => escapeHtml(weightText(p.chassis_lbs) || '-'),
                   total: () => (totalChassis == null ? '' : formatInt(totalChassis)) },
+                // ── AND THE WORKING, WHEN IT CAME ON PALLETS ───────────────
+                // Apsara, 2026-09-22: "if its pallets-i need to have that
+                // boxes in attached in our packing list." Her supplier's
+                // scale ticket states it as working, not as a total —
+                // "12 Boxes x 110Lb  Tare. - 1320Lb" — and that is what the
+                // buyer checks against.
+                //
+                // ADDED BENEATH THE FIGURE, never instead of it. The column
+                // still prints 1,320 exactly as it does today, so a loosely
+                // loaded container's packing list is unchanged to the byte
+                // and her broker's document does not move. The second line
+                // appears only when the count and the unit weight are both
+                // present, which only the pallets answer sets.
                 { head: 'Boxes<br>(lbs)', width: '10%',
-                  cell: (item, p) => escapeHtml(weightText(p.boxes_weight_lbs) || '-'),
+                  cell: (item, p) => {
+                      const shown = escapeHtml(weightText(p.boxes_weight_lbs) || '-');
+                      // Inline, because this document has no stylesheet — a
+                      // class here renders as nothing, which is how the
+                      // working would have silently failed to print.
+                      const w = boxWorking(p);
+                      return w
+                          ? `${shown}<div style="font-size:7.5pt;font-weight:400;white-space:nowrap;">${escapeHtml(w)}</div>`
+                          : shown;
+                  },
                   total: () => (totalBoxes == null ? '' : formatInt(totalBoxes)) },
               ]),
         { head: 'Net Weight<br>(lbs)', width: w(showItem ? '17%' : '20%'),

@@ -1053,6 +1053,34 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
         }
     });
 
+    // ── "12 Boxes x 110Lb", off a supplier's scale ticket ─────────────────
+    // Apsara, 2026-09-22, on where the box figures should come from: both
+    // typed and read off the ticket. This is the reading half.
+    //
+    // READ-ONLY AND STORES NOTHING. No file is kept, no record is written,
+    // and the answer goes into two input boxes she confirms before any PDF
+    // is rendered. A parser that wrote anything would be a parser whose
+    // misreads outlive the moment she could have caught them.
+    //
+    // No Gemini, unlike /api/verify/zimex above: a scale ticket's boxes line
+    // is a fixed shape, and a regex that fails loudly beats a model that
+    // improvises a plausible box count onto a customs document.
+    app.post('/api/packing/boxes-from-ticket', largeJson, async (req, res) => {
+        try {
+            const b64 = (req.body || {}).pdf_base64;
+            if (!b64) return res.status(400).json({ found: false, why: 'No file was attached.' });
+            const { boxesFromPdf } = require('./helpers/scaleTicketBoxes');
+            // boxesFromPdf never throws for a business reason — an unreadable
+            // PDF comes back as { found: false, why }. A 200 with found:false
+            // is the honest shape here: the request worked, the ticket did
+            // not say what we hoped.
+            res.json(await boxesFromPdf(Buffer.from(String(b64), 'base64')));
+        } catch (e) {
+            console.error('[boxes-from-ticket] failed:', e && e.stack);
+            res.status(500).json({ found: false, why: e.message });
+        }
+    });
+
     // Verification tab's Zimex sub-tab — Apsara: "build verification .in
     // that create sub tab as zimex". Body: { pdfs: [{name, base64}], year,
     // month }. Extracts HBL/amount records from each uploaded carrier

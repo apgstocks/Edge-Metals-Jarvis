@@ -2323,6 +2323,41 @@ const MUTATIONS = [
       find: '                .sort((a, b) => b.available - a.available);',
       to:   '                .sort((a, b) => a.available - b.available);' },
 
+    // ── BOXES ON A PALLETISED CONTAINER (2026-09-22) ─────────────────────
+    // Her ask: loose goes exactly as it does today, pallets prints the box
+    // working. Each of these is a way to get that wrong on a document that
+    // goes to a customer and to customs.
+
+    { name: 'boxes: the working prints on a loosely loaded container too',
+      file: 'helpers/invoicePdf.js', suites: ['packing-boxes'],
+      find: '    if (!Number.isInteger(n) || n <= 0 || !(u > 0)) return null;',
+      to:   '    if (false) return null;' },
+
+    { name: 'boxes: the working replaces the tare instead of sitting under it',
+      file: 'helpers/invoicePdf.js', suites: ['packing-boxes'],
+      find: "                          ? `${shown}<div style=\"font-size:7.5pt;font-weight:400;white-space:nowrap;\">${escapeHtml(w)}</div>`",
+      to:   '                          ? `<div>${escapeHtml(w)}</div>`' },
+
+    { name: 'boxes: the ticket total is trusted over the count times the weight',
+      file: 'helpers/scaleTicketBoxes.js', suites: ['scale-ticket-boxes'],
+      find: '    const total = round2(count * unit);',
+      to:   '    const total = round2(printedBoxTare(lines, round2(count * unit)) || (count * unit));' },
+
+    { name: 'boxes: two unrelated numbers on a line are read as a multiplication',
+      file: 'helpers/scaleTicketBoxes.js', suites: ['scale-ticket-boxes'],
+      find: String.raw`    NUM + String.raw`+'`'+String.raw`\s*(?:x\s*)?box(?:es)?\s*(?:[x×*@]|at)\s*`+'`'+` + NUM + String.raw`+'`'+String.raw`\s*(?:lbs?|pounds?)?`+'`'+`,`,
+      to:   '    NUM + String.raw`\\s*(?:x\\s*)?box(?:es)?\\D*` + NUM,' },
+
+    { name: 'boxes: a fractional box count is rounded instead of refused',
+      file: 'helpers/scaleTicketBoxes.js', suites: ['scale-ticket-boxes'],
+      find: '    if (!Number.isInteger(count) || count <= 0) {',
+      to:   '    if (false) {' },
+
+    { name: 'boxes: a ticket that disagrees with itself says nothing',
+      file: 'helpers/scaleTicketBoxes.js', suites: ['scale-ticket-boxes'],
+      find: '        disagrees: printed != null && Math.abs(printed - total) > 0.5,',
+      to:   '        disagrees: false,' },
+
     // ── BofA IS TWO COMPANIES NOW (2026-09-21) ───────────────────────────
     // Each of these is a way to get a third company's money wrong: filed
     // under the wrong owner, guessed at where she said nothing, or a loan

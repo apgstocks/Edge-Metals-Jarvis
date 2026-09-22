@@ -4668,6 +4668,135 @@ for (const id of ['inv_only', 'inv_only_bulk']) {
   if (el) el.addEventListener('change', () => syncInvOnly(id));
 }
 
+// ── "How was it loaded?" ──────────────────────────────────────────────────
+// Returns false only when she closes the question without answering, so the
+// caller can stop rather than generate something she did not confirm.
+//
+// On PALLETS it writes two fields onto every line's packing block —
+// boxes_count and boxes_unit_lb — and sets boxes_weight_lbs to their product,
+// because a tare she has just described as 12 × 110 and a tare typed
+// separately into the row are two chances to disagree on one document.
+// helpers/invoicePdf.js prints the working underneath the figure.
+//
+// The scale ticket is OPTIONAL and only ever pre-fills. helpers/
+// scaleTicketBoxes.js reads "12 Boxes x 110Lb" and hands back what it thinks
+// it saw; she confirms it here, in front of the numbers, before any PDF
+// exists. That ordering is the whole reason reading a supplier's PDF is safe
+// enough to do at all.
+async function askLoading(payload) {
+  return new Promise((resolve) => {
+    const wrap = document.createElement('div');
+    wrap.id = 'loadingAsk';
+    wrap.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:9300;display:flex;'
+      + 'align-items:flex-start;justify-content:center;overflow-y:auto;padding:40px 16px;';
+    const cont = payload.container_no ? esc(payload.container_no) : 'this container';
+    wrap.innerHTML = `
+      <div class="card" style="width:min(520px,100%);padding:20px 22px;">
+        <h3 style="margin:0 0 4px;font-size:16px;text-transform:none;">How was ${cont} loaded?</h3>
+        <div style="font-size:12px;color:var(--text-faint);margin-bottom:14px;">This only changes the packing list.</div>
+        <label style="display:flex;gap:10px;align-items:flex-start;padding:11px 12px;border:1px solid var(--border-subtle);border-radius:var(--radius-sm);margin-bottom:8px;cursor:pointer;">
+          <input type="radio" name="ldm" value="loose" checked style="margin-top:2px;">
+          <span><span style="font-size:13px;">Loosely loaded</span>
+          <span style="display:block;font-size:11px;color:var(--text-faint);margin-top:2px;">Exactly the document you send today</span></span>
+        </label>
+        <label style="display:flex;gap:10px;align-items:flex-start;padding:11px 12px;border:1px solid var(--border-subtle);border-radius:var(--radius-sm);cursor:pointer;">
+          <input type="radio" name="ldm" value="pallets" style="margin-top:2px;">
+          <span><span style="font-size:13px;">On pallets — in boxes</span>
+          <span style="display:block;font-size:11px;color:var(--text-faint);margin-top:2px;">Prints the box working beside the tare</span></span>
+        </label>
+        <div id="ldBoxes" style="display:none;margin-top:14px;padding-top:14px;border-top:1px solid var(--border-subtle);">
+          <div style="display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap;">
+            <div class="field" style="flex:0 0 90px;"><label for="ldCount">Boxes</label><input id="ldCount" type="number" min="1" step="1"></div>
+            <div style="padding-bottom:9px;color:var(--text-faint);">×</div>
+            <div class="field" style="flex:0 0 110px;"><label for="ldUnit">lb per box</label><input id="ldUnit" type="number" min="0" step="any"></div>
+            <div id="ldTotal" style="padding-bottom:9px;font-size:12.5px;color:var(--text-muted);"></div>
+          </div>
+          <div style="margin-top:10px;">
+            <label for="ldTicket" style="font-size:11.5px;color:var(--text-faint);">Scale ticket (optional) — fills the two boxes for you</label>
+            <input id="ldTicket" type="file" accept="application/pdf" style="font-size:12px;margin-top:4px;">
+            <div id="ldTicketMsg" style="font-size:11.5px;margin-top:6px;"></div>
+          </div>
+        </div>
+        <div id="ldErr" style="color:var(--status-danger,#c53030);font-size:12px;margin-top:10px;"></div>
+        <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:14px;">
+          <button id="ldCancel" class="btn btn-ghost" style="font-size:12px;padding:7px 14px;">Cancel</button>
+          <button id="ldGo" class="btn btn-primary" style="font-size:12px;padding:7px 16px;">Generate</button>
+        </div>
+      </div>`;
+    document.body.appendChild(wrap);
+    const close = (v) => { wrap.remove(); resolve(v); };
+    const mode = () => (wrap.querySelector('input[name=ldm]:checked') || {}).value || 'loose';
+    const boxesEl = wrap.querySelector('#ldBoxes');
+    const cnt = wrap.querySelector('#ldCount'), unit = wrap.querySelector('#ldUnit');
+    const tot = wrap.querySelector('#ldTotal'), err = wrap.querySelector('#ldErr');
+    const redraw = () => {
+      boxesEl.style.display = mode() === 'pallets' ? '' : 'none';
+      const n = Number(cnt.value), u = Number(unit.value);
+      tot.textContent = (n > 0 && u > 0) ? `= ${Math.round(n * u * 100) / 100} lb` : '';
+    };
+    wrap.querySelectorAll('input[name=ldm]').forEach((r) => r.addEventListener('change', redraw));
+    cnt.addEventListener('input', redraw);
+    unit.addEventListener('input', redraw);
+
+    wrap.querySelector('#ldTicket').addEventListener('change', async (ev) => {
+      const f = ev.target.files && ev.target.files[0];
+      const msg = wrap.querySelector('#ldTicketMsg');
+      if (!f) return;
+      msg.style.color = 'var(--text-faint)';
+      msg.textContent = 'Reading…';
+      try {
+        const b64 = await new Promise((res, rej) => {
+          const r = new FileReader();
+          r.onload = () => res(String(r.result).split(',')[1] || '');
+          r.onerror = () => rej(new Error('could not read that file'));
+          r.readAsDataURL(f);
+        });
+        const out = await api('/api/packing/boxes-from-ticket',
+          { method: 'POST', body: JSON.stringify({ pdf_base64: b64 }) });
+        if (!out || !out.found) {
+          msg.style.color = 'var(--status-warn,#d98324)';
+          msg.textContent = (out && out.why) || 'Nothing on that ticket looked like a boxes line. Type the two figures.';
+          return;
+        }
+        cnt.value = out.count; unit.value = out.unit_lb; redraw();
+        // ── SAID, NOT ASSUMED ─────────────────────────────────────────
+        // Where the numbers came from, and the container the ticket names,
+        // so a ticket for the WRONG container is visible before she
+        // presses Generate rather than after the PDF is filed.
+        const wrong = out.container_no && payload.container_no
+          && String(out.container_no).toUpperCase() !== String(payload.container_no).toUpperCase();
+        msg.style.color = wrong ? 'var(--status-danger,#c53030)' : 'var(--status-ok,#2f855a)';
+        msg.textContent = wrong
+          ? `That ticket is for ${out.container_no}, not ${payload.container_no}. Check before you generate.`
+          : `Read "${out.source_line}"${out.disagrees
+              ? ` — note the ticket also prints ${out.printed_total_lb} lb, which is not ${out.total_lb}.`
+              : '.'}`;
+      } catch (e) {
+        msg.style.color = 'var(--status-warn,#d98324)';
+        msg.textContent = 'Could not read that ticket: ' + e.message;
+      }
+    });
+
+    wrap.querySelector('#ldCancel').addEventListener('click', () => close(false));
+    wrap.querySelector('#ldGo').addEventListener('click', () => {
+      if (mode() !== 'pallets') return close(true);   // loose: nothing is set
+      const n = Number(cnt.value), u = Number(unit.value);
+      if (!Number.isInteger(n) || n <= 0) { err.textContent = 'How many boxes? A whole number.'; return; }
+      if (!(u > 0)) { err.textContent = 'What does one box weigh, in lb?'; return; }
+      const total = Math.round(n * u * 100) / 100;
+      for (const li of (payload.line_items || [])) {
+        li.packing = li.packing || {};
+        li.packing.boxes_count = n;
+        li.packing.boxes_unit_lb = u;
+        // The tare and its working are set together, from one answer.
+        li.packing.boxes_weight_lbs = String(total);
+      }
+      close(true);
+    });
+    redraw();
+  });
+}
+
 $('btnInvGenerate').addEventListener('click', async () => {
   const payload = collectInvoicePayload();
   if (!payload.inv_no || !payload.line_items.length) { alert('Invoice No and at least one item are required.'); return; }
@@ -4687,6 +4816,26 @@ $('btnInvGenerate').addEventListener('click', async () => {
     // asked to send on its own.
     payload.separate = !payload.invoice_only
       && !!((sepEl && sepEl.checked) || (sepBulkEl && sepBulkEl.checked));
+
+    // ── LOOSELY LOADED, OR ON PALLETS ───────────────────────────────────
+    // Apsara, 2026-09-22: "When it is loosely loaded/pallets,ask when
+    // generating packing list in invoice tab....if its loosely loaded,go
+    // with existing flow,if its pallets-i need to have that boxes in
+    // attached in our packing list."
+    //
+    // ASKED ONLY WHEN A PACKING LIST IS ACTUALLY BEING MADE. On "invoice
+    // only" there is no packing list to put boxes on, so there is no
+    // question — a prompt whose answer changes nothing is a prompt she
+    // learns to dismiss without reading.
+    //
+    // LOOSE IS THE DEFAULT AND CHANGES NOTHING. It sets no fields at all,
+    // so the payload is byte-for-byte what this screen has always sent and
+    // her broker's document does not move. Pallets ADDS two numbers beside
+    // the boxes tare the column already prints.
+    if (!payload.invoice_only) {
+      const answered = await askLoading(payload);
+      if (!answered) { setButtonLoading(btn, false); return; }   // she cancelled
+    }
     // ── THE QUANTITY MUST AGREE WITH THE WEIGHTS ────────────────────────
     // The server refuses a 409 WEIGHT_MISMATCH when a row's Quantity
     // disagrees with its own gross and tare — 260918_AP_26ARIS02 went to the
