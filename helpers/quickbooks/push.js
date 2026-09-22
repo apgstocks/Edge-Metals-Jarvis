@@ -35,6 +35,25 @@ const LINKS_FILE = () => process.env.QB_LINKS_FILE || path.join(DATA_DIR, 'qb-li
 const DOC_MAX = 21;   // QuickBooks DocNumber limit
 const round2 = (n) => Math.round(n * 100) / 100;
 
+// ── LOCAL DELIVERIES (Apsara, 2026-09-22: "2.a") ────────────────────────────
+// A row with no container is a local delivery (memory: ledger-data), and most
+// carry no invoice number — yet QuickBooks needs one to tie a bill to its sale.
+// Such a row gets a number made from ITS OWN date and Jarvis id, so the same
+// row always gets the same number (a re-run finds it instead of doubling it):
+//   LOCAL-260908-A1B2C3   (19 characters; QuickBooks allows 21)
+// A row WITH a container but no invoice number still stops: that is a real
+// gap in her paperwork, not a local delivery.
+function docNumberFor(r) {
+    const given = String((r && r.invoice_no) || '').trim();
+    if (given) return given;
+    if (String((r && r.container_no) || '').trim()) return '';
+    let d = String((r && r.date) || '').trim();
+    if (!/^\d{4}-\d{2}-\d{2}/.test(d)) { try { d = require('../bills').sortableDate(d) || ''; } catch { d = ''; } }
+    const ymd = d.replace(/-/g, '').slice(2, 8);
+    const id = String((r && r.id) || '').replace(/[^A-Za-z0-9]/g, '').slice(-6).toUpperCase();
+    return ymd.length === 6 && id ? `LOCAL-${ymd}-${id}` : '';
+}
+
 function loadLinks() { try { return JSON.parse(fs.readFileSync(LINKS_FILE(), 'utf8')); } catch { return {}; } }
 function saveLink(key, v) {
     const all = loadLinks(); all[key] = v;
@@ -57,7 +76,7 @@ function confirmedName(kind, jarvisName, qbList) {
 function buildBill(b, refs) {
     const problems = [];
     const container = String(b.container_no || '').trim().toUpperCase();
-    const doc = String(b.invoice_no || '').trim();
+    const doc = docNumberFor(b);
     if (!b.date) problems.push('no bill date');
     if (!doc) problems.push('no invoice number — the number that ties this bill to its sale');
     if (doc.length > DOC_MAX) problems.push(`invoice number longer than QuickBooks allows (${DOC_MAX})`);
@@ -182,7 +201,7 @@ function judgeExisting(hits, partyId, total) {
     return { ask: hits, why };
 }
 async function findExisting(b, vendorId, opts) {
-    return findExistingDoc('Bill', { date: b.date, container: b.container_no, doc: b.invoice_no }, opts);
+    return findExistingDoc('Bill', { date: b.date, container: b.container_no, doc: docNumberFor(b) }, opts);
 }
 
 // ── CUTOVER ─────────────────────────────────────────────────────────────────
@@ -215,7 +234,7 @@ async function pushBill(b, snapshots, { env = auth.qbEnv(), dryRun = true, fetch
     // on a real run; a dry run decides nothing. Apsara 2026-09-22: "everything
     // should be tracked".
     const journal = require('./journal');
-    const jarvis = { id: b.id, container: b.container_no, invoice_no: b.invoice_no, supplier: b.supplier, date: b.date, net_payable: b.net_payable };
+    const jarvis = { id: b.id, container: b.container_no, invoice_no: docNumberFor(b), supplier: b.supplier, date: b.date, net_payable: b.net_payable };
     const note = (action, extra) => { if (!dryRun) journal.record({ env, kind: 'bill', action, jarvis, qb: {}, ...extra }); };
 
     const res = await resolveRefs(b, snapshots, opts);
@@ -240,4 +259,4 @@ async function pushBill(b, snapshots, { env = auth.qbEnv(), dryRun = true, fetch
     return { status: 'created', qbId: out.Bill.Id, total: out.Bill.TotalAmt, bill: out.Bill, journalId: je.id };
 }
 
-module.exports = { confirmedName, idByName, ensureSandbox, saveLink, linkKey, cutoverFor, beforeCutover, buildBill, resolveRefs, findExisting, findExistingDoc, judgeExisting, pushBill, loadLinks, LINKS_FILE, DOC_MAX };
+module.exports = { docNumberFor, confirmedName, idByName, ensureSandbox, saveLink, linkKey, cutoverFor, beforeCutover, buildBill, resolveRefs, findExisting, findExistingDoc, judgeExisting, pushBill, loadLinks, LINKS_FILE, DOC_MAX };

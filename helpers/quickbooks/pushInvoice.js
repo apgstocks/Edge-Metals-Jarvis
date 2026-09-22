@@ -25,10 +25,10 @@ function buildInvoice(rows, refs) {
     if (!rows || !rows.length) return { problems: ['no sales rows'] };
     const first = rows[0];
     const same = (k) => rows.every((r) => String(r[k] || '').trim().toUpperCase() === String(first[k] || '').trim().toUpperCase());
-    if (!same('invoice_no')) problems.push('rows carry different invoice numbers');
+    if (!rows.every((r) => push.docNumberFor(r) === push.docNumberFor(first))) problems.push('rows carry different invoice numbers');
     if (!same('customer')) problems.push('rows carry different customers');
     if (!same('container_no')) problems.push('rows carry different containers — one invoice is one container');
-    const doc = String(first.invoice_no || '').trim();
+    const doc = push.docNumberFor(first);
     const container = String(first.container_no || '').trim().toUpperCase();
     const date = first.date;
     if (!doc) problems.push('no invoice number');
@@ -102,12 +102,12 @@ async function pushInvoice(rows, snapshots, { env = auth.qbEnv(), dryRun = true,
     const first = rows[0] || {};
     const cut = push.beforeCutover('invoice', first.date, env);
     if (cut) return { status: 'before-cutover', problems: [cut] };
-    const key = push.linkKey(env, 'invoice', String(first.invoice_no || '').trim() || first.container_no);
+    const key = push.linkKey(env, 'invoice', push.docNumberFor(first) || first.container_no);
     const linked = push.loadLinks()[key];
     if (linked) return { status: 'already-linked', qbId: linked.qbId };
 
     const journal = require('./journal');
-    const jarvis = { ids: rows.map((r) => r.id), container: first.container_no, invoice_no: first.invoice_no, customer: first.customer, date: first.date,
+    const jarvis = { ids: rows.map((r) => r.id), container: first.container_no, invoice_no: push.docNumberFor(first), customer: first.customer, date: first.date,
         receivable: rows.reduce((s, r) => s + (Number(r.receivable) || 0), 0) };
     const note = (action, extra) => { if (!dryRun) journal.record({ env, kind: 'invoice', action, jarvis, qb: {}, ...extra }); };
 
@@ -116,7 +116,7 @@ async function pushInvoice(rows, snapshots, { env = auth.qbEnv(), dryRun = true,
     const built = buildInvoice(rows, res.refs);
     if (built.problems) { note('blocked', { reason: built.problems.join('; ') }); return { status: 'blocked', problems: built.problems }; }
 
-    const hits = await push.findExistingDoc('Invoice', { date: first.date, container: first.container_no, doc: first.invoice_no }, opts);
+    const hits = await push.findExistingDoc('Invoice', { date: first.date, container: first.container_no, doc: push.docNumberFor(first) }, opts);
     const j = push.judgeExisting(hits, res.refs.customerId, built.total);
     if (j.sure) {
         if (!dryRun) push.saveLink(key, { qbId: j.sure.Id, how: 'matched-existing', at: new Date().toISOString() });

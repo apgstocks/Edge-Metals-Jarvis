@@ -74,9 +74,9 @@ async function syncSale(id, env) {
     const sales = require('../sales');
     const one = sales.getSale(id);
     if (!one) return { status: 'gone' };
-    const no = String(one.invoice_no || '').trim();
+    const no = push.docNumberFor(one);
     if (!no) return { status: 'waiting', problems: ['no invoice number yet — entered once it has one'] };
-    const rows = sales.list().filter((s) => String(s.invoice_no || '').trim() === no).map((s) => sales.withTotals(s));
+    const rows = sales.list().filter((s) => push.docNumberFor(s) === no).map((s) => sales.withTotals(s));
     return pushInvoice.pushInvoice(rows, await snapshots(env), { env, dryRun: false });
 }
 
@@ -94,7 +94,7 @@ async function syncReceipt(id, env) {
     if (!r) return { status: 'gone' };
     for (const a of (r.allocations || [])) await syncSale(a.sale_id, env).catch(() => {});
     return pushPayments.pushCustomerPayment(r, await snapshots(env), { env, dryRun: false,
-        saleInvoiceNo: (saleId) => { const s = sales.getSale(saleId); return s && s.invoice_no; } });
+        saleInvoiceNo: (saleId) => { const s = sales.getSale(saleId); return s && push.docNumberFor(s); } });
 }
 
 const SYNC = { bill: syncBill, sale: syncSale, billpayment: syncBillPayment, receipt: syncReceipt };
@@ -106,7 +106,7 @@ function noteChange(kind, id, what, env) {
     let key = push.linkKey(env, LINK_KIND[kind], id);
     if (kind === 'sale') {
         const s = require('../sales').getSale(id);
-        if (s && s.invoice_no) key = push.linkKey(env, 'invoice', String(s.invoice_no).trim());
+        if (s && push.docNumberFor(s)) key = push.linkKey(env, 'invoice', push.docNumberFor(s));
     }
     const l = links[key];
     if (!l) return false;
@@ -153,13 +153,13 @@ async function sweep({ env = auth.qbEnv(), dryRun = false } = {}) {
         const B = require('../bills'), S = require('../sales');
         for (const b of bills) count('bill', await push.pushBill(B.withTotals(b), snaps, { env, dryRun: true }).catch((e) => ({ status: 'error: ' + e.message })));
         const byInv = {};
-        for (const s of sales) if (String(s.invoice_no || '').trim()) (byInv[String(s.invoice_no).trim()] = byInv[String(s.invoice_no).trim()] || []).push(S.withTotals(s));
+        for (const s of sales) { const n = push.docNumberFor(s); if (n) (byInv[n] = byInv[n] || []).push(S.withTotals(s)); }
         for (const rows of Object.values(byInv)) count('sale', await pushInvoice.pushInvoice(rows, snaps, { env, dryRun: true }).catch((e) => ({ status: 'error: ' + e.message })));
         return res;
     }
     for (const b of bills) count('bill', await syncBill(b.id, env).catch((e) => ({ status: 'error: ' + e.message })));
     const seen = new Set();
-    for (const s of sales) { const no = String(s.invoice_no || '').trim(); if (no && seen.has(no)) continue; seen.add(no); count('sale', await syncSale(s.id, env).catch((e) => ({ status: 'error: ' + e.message }))); }
+    for (const s of sales) { const no = push.docNumberFor(s); if (no && seen.has(no)) continue; seen.add(no); count('sale', await syncSale(s.id, env).catch((e) => ({ status: 'error: ' + e.message }))); }
     for (const p of bps) count('billpayment', await syncBillPayment(p.id, env).catch((e) => ({ status: 'error: ' + e.message })));
     for (const r of recs) count('receipt', await syncReceipt(r.id, env).catch((e) => ({ status: 'error: ' + e.message })));
     return res;

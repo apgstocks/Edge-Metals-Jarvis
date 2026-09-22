@@ -48,5 +48,13 @@ process.env.QB_CUTOVER_BILLS = 'soon';
 ck('a malformed cutover is treated as unset (refuse)', beforeCutover('bill', '2026-12-01', 'production') !== null);
 if (saved[0] === undefined) delete process.env.QB_CUTOVER_BILLS; else process.env.QB_CUTOVER_BILLS = saved[0];
 if (saved[1] === undefined) delete process.env.QB_CUTOVER_INVOICES; else process.env.QB_CUTOVER_INVOICES = saved[1];
+const { docNumberFor } = require('../helpers/quickbooks/push');
+ck('local delivery (no container, no inv no) gets a LOCAL number', docNumberFor({ id: 'BILL_17900_ab12cd', date: '2026-09-08' }) === 'LOCAL-260908-AB12CD');
+ck('...the same number every time', docNumberFor({ id: 'BILL_17900_ab12cd', date: '2026-09-08' }) === docNumberFor({ id: 'BILL_17900_ab12cd', date: '2026-09-08', supplier: 'x' }));
+ck('...within the QuickBooks 21-character limit', docNumberFor({ id: 'BILL_17900_ab12cd', date: '2026-09-08' }).length <= DOC_MAX);
+ck('a real invoice number always wins', docNumberFor({ id: 'x1', invoice_no: ' 260831_AC_26MT15 ', date: '2026-09-08' }) === '260831_AC_26MT15');
+ck('container but no invoice number is NOT a local delivery -> stays blank (blocked)', docNumberFor({ id: 'x1', container_no: 'HMMU1234567', date: '2026-09-08' }) === '');
+const local = buildBill(B.withTotals({ ...real, id: 'BILL_1_zz9999', invoice_no: '', container_no: '' }), refs);
+ck('a local bill builds with its LOCAL number', local.bill && local.bill.DocNumber === 'LOCAL-260805-ZZ9999', JSON.stringify(local.problems));
 console.log(`\nquickbooks-push: ${pass} passed, ${fail} failed`);
 if (fail) { console.log('FAILED: ' + failures.join(' | ')); process.exit(1); }
