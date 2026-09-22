@@ -106,22 +106,30 @@ async function pushInvoice(rows, snapshots, { env = auth.qbEnv(), dryRun = true,
     const linked = push.loadLinks()[key];
     if (linked) return { status: 'already-linked', qbId: linked.qbId };
 
+    const journal = require('./journal');
+    const jarvis = { ids: rows.map((r) => r.id), container: first.container_no, invoice_no: first.invoice_no, customer: first.customer, date: first.date,
+        receivable: rows.reduce((s, r) => s + (Number(r.receivable) || 0), 0) };
+    const note = (action, extra) => { if (!dryRun) journal.record({ env, kind: 'invoice', action, jarvis, qb: {}, ...extra }); };
+
     const res = await resolveRefs(rows, snapshots, opts);
-    if (res.problems) return { status: 'blocked', problems: res.problems };
+    if (res.problems) { note('blocked', { reason: res.problems.join('; ') }); return { status: 'blocked', problems: res.problems }; }
     const built = buildInvoice(rows, res.refs);
-    if (built.problems) return { status: 'blocked', problems: built.problems };
+    if (built.problems) { note('blocked', { reason: built.problems.join('; ') }); return { status: 'blocked', problems: built.problems }; }
 
     const hits = await push.findExistingDoc('Invoice', { date: first.date, container: first.container_no, doc: first.invoice_no }, opts);
     const j = push.judgeExisting(hits, res.refs.customerId, built.total);
     if (j.sure) {
         if (!dryRun) push.saveLink(key, { qbId: j.sure.Id, how: 'matched-existing', at: new Date().toISOString() });
+        note('linked-existing', { linkKey: key, jarvisTotal: built.total, qb: { id: j.sure.Id, total: j.sure.TotalAmt, partyId: j.sure.partyId, party: j.sure.party }, reason: 'same customer, same total, found by container/invoice no' });
         return { status: 'exists', qbId: j.sure.Id, note: 'already in QuickBooks — linked, nothing entered' };
     }
-    if (j.ask) return { status: 'ask', candidates: j.ask, why: j.why, invoice: built.invoice, note: 'this container is already in QuickBooks but not exactly as Jarvis has it — she decides' };
+    if (j.ask) { note('asked', { candidates: j.ask, reason: j.why.join('; ') }); return { status: 'ask', candidates: j.ask, why: j.why, invoice: built.invoice, note: 'this container is already in QuickBooks but not exactly as Jarvis has it — she decides' }; }
     if (dryRun) return { status: 'would-create', invoice: built.invoice, total: built.total };
     const out = await client.request('POST', '/invoice', built.invoice, opts);
     push.saveLink(key, { qbId: out.Invoice.Id, syncToken: out.Invoice.SyncToken, how: 'created', total: out.Invoice.TotalAmt, at: new Date().toISOString() });
-    return { status: 'created', qbId: out.Invoice.Id, total: out.Invoice.TotalAmt, invoice: out.Invoice };
+    const je = journal.record({ env, kind: 'invoice', action: 'created', jarvis, linkKey: key, jarvisTotal: built.total,
+        qb: { id: out.Invoice.Id, syncToken: out.Invoice.SyncToken, fp: journal.fingerprint(out.Invoice), total: out.Invoice.TotalAmt, partyId: res.refs.customerId, party: res.customerName } });
+    return { status: 'created', qbId: out.Invoice.Id, total: out.Invoice.TotalAmt, invoice: out.Invoice, journalId: je.id };
 }
 
 module.exports = { buildInvoice, resolveRefs, pushInvoice };

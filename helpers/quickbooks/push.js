@@ -211,23 +211,33 @@ async function pushBill(b, snapshots, { env = auth.qbEnv(), dryRun = true, fetch
     const linked = loadLinks()[key];
     if (linked) return { status: 'already-linked', qbId: linked.qbId };
 
+    // Every decision goes in the journal (helpers/quickbooks/journal.js) — only
+    // on a real run; a dry run decides nothing. Apsara 2026-09-22: "everything
+    // should be tracked".
+    const journal = require('./journal');
+    const jarvis = { id: b.id, container: b.container_no, invoice_no: b.invoice_no, supplier: b.supplier, date: b.date, net_payable: b.net_payable };
+    const note = (action, extra) => { if (!dryRun) journal.record({ env, kind: 'bill', action, jarvis, qb: {}, ...extra }); };
+
     const res = await resolveRefs(b, snapshots, opts);
-    if (res.problems) return { status: 'blocked', problems: res.problems };
+    if (res.problems) { note('blocked', { reason: res.problems.join('; ') }); return { status: 'blocked', problems: res.problems }; }
     const built = buildBill(b, res.refs);
-    if (built.problems) return { status: 'blocked', problems: built.problems };
+    if (built.problems) { note('blocked', { reason: built.problems.join('; ') }); return { status: 'blocked', problems: built.problems }; }
 
     const existing = await findExisting(b, res.refs.vendorId, opts);
     const j = judgeExisting(existing, res.refs.vendorId, built.total);
     if (j.sure) {
         if (!dryRun) saveLink(key, { qbId: j.sure.Id, how: 'matched-existing', at: new Date().toISOString() });
+        note('linked-existing', { linkKey: key, jarvisTotal: built.total, qb: { id: j.sure.Id, total: j.sure.TotalAmt, partyId: j.sure.partyId, party: j.sure.party }, reason: 'same supplier, same total, found by container/invoice no' });
         return { status: 'exists', qbId: j.sure.Id, note: 'already in QuickBooks — linked, nothing entered' };
     }
-    if (j.ask) return { status: 'ask', candidates: j.ask, why: j.why, bill: built.bill, note: 'this container is already in QuickBooks but not exactly as Jarvis has it — she decides' };
+    if (j.ask) { note('asked', { candidates: j.ask, reason: j.why.join('; ') }); return { status: 'ask', candidates: j.ask, why: j.why, bill: built.bill, note: 'this container is already in QuickBooks but not exactly as Jarvis has it — she decides' }; }
     if (dryRun) return { status: 'would-create', bill: built.bill, total: built.total };
 
     const out = await client.request('POST', '/bill', built.bill, opts);
     saveLink(key, { qbId: out.Bill.Id, syncToken: out.Bill.SyncToken, how: 'created', total: out.Bill.TotalAmt, at: new Date().toISOString() });
-    return { status: 'created', qbId: out.Bill.Id, total: out.Bill.TotalAmt, bill: out.Bill };
+    const je = journal.record({ env, kind: 'bill', action: 'created', jarvis, linkKey: key, jarvisTotal: b.net_payable,
+        qb: { id: out.Bill.Id, syncToken: out.Bill.SyncToken, fp: journal.fingerprint(out.Bill), total: out.Bill.TotalAmt, partyId: res.refs.vendorId, party: res.vendorName } });
+    return { status: 'created', qbId: out.Bill.Id, total: out.Bill.TotalAmt, bill: out.Bill, journalId: je.id };
 }
 
 module.exports = { confirmedName, idByName, ensureSandbox, saveLink, linkKey, cutoverFor, beforeCutover, buildBill, resolveRefs, findExisting, findExistingDoc, judgeExisting, pushBill, loadLinks, LINKS_FILE, DOC_MAX };

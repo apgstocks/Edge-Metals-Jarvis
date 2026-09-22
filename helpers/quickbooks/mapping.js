@@ -34,7 +34,10 @@ const MAP_FILE = () => process.env.QB_PARTY_MAP_FILE || path.join(DATA_DIR, 'qb-
 // 'item' = her grade (Auto Cast, AL Combo…) against a QuickBooks Item. Same
 // rules as parties: a grade on the wrong item misstates what was sold, and
 // that is the figure her P&L-by-product and her ISRI reporting are read from.
-const KINDS = ['vendor', 'customer', 'item'];
+// 'bank' = the account money moved through (Jarvis: BofA, Chase Bank…) against
+// a QuickBooks Bank account (Checking (3301)…). Same rule: never guessed — a
+// payment from the wrong account is a reconciliation that never balances.
+const KINDS = ['vendor', 'customer', 'item', 'bank'];
 
 // Words that say what kind of company it is, not which one. Dropped only for
 // the SUGGEST tier, never for exact.
@@ -65,7 +68,7 @@ function similarity(a, b) {
 
 function loadMap() {
     try { const m = JSON.parse(fs.readFileSync(MAP_FILE(), 'utf8')); KINDS.forEach((k) => { m[k] = m[k] || {}; }); return m; }
-    catch { return { vendor: {}, customer: {}, item: {} }; }
+    catch { return { vendor: {}, customer: {}, item: {}, bank: {} }; }
 }
 function saveMap(m) {
     const f = MAP_FILE(), tmp = `${f}.${process.pid}.tmp`;
@@ -77,7 +80,7 @@ function saveMap(m) {
 function matchParty(jarvisName, qbList, kind, map = loadMap()) {
     const key = normalizeName(jarvisName);
     if (!key) return { status: 'none', jarvisName, candidates: [] };
-    if (!KINDS.includes(kind)) throw new Error(`kind must be vendor|customer|item, got ${kind}`);
+    if (!KINDS.includes(kind)) throw new Error(`kind must be vendor|customer|item|bank, got ${kind}`);
 
     const confirmed = map[kind][key];
     if (confirmed) {
@@ -136,7 +139,7 @@ function pick(q) { return { Id: String(q.Id), DisplayName: q.DisplayName, Active
 // Her decision. qbId=null means "not in QuickBooks — a new party".
 // qbId='SKIP' means "never a vendor/customer in this role" (reason kept).
 function confirm(kind, jarvisName, qbId, qbName, by = 'apsara', reason = null) {
-    if (!KINDS.includes(kind)) throw new Error(`kind must be vendor|customer|item, got ${kind}`);
+    if (!KINDS.includes(kind)) throw new Error(`kind must be vendor|customer|item|bank, got ${kind}`);
     const key = normalizeName(jarvisName);
     if (!key) throw new Error('empty Jarvis name');
     const m = loadMap();
@@ -148,6 +151,10 @@ function confirm(kind, jarvisName, qbId, qbName, by = 'apsara', reason = null) {
 // Pulls the full active+inactive list (reads only). Paged: QuickBooks caps a
 // query at 1000 rows.
 async function fetchParties(kind, client, opts) {
+    if (kind === 'bank') {
+        const r = await client.query("select Id, Name, Active, AccountType from Account where AccountType = 'Bank' maxresults 1000", opts);
+        return (r.Account || []).map((a) => ({ Id: a.Id, DisplayName: a.Name, Active: a.Active }));
+    }
     if (kind === 'item') {
         // Items have Name, not DisplayName; shaped the same so matchParty
         // treats a grade exactly as it treats a company.

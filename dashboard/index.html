@@ -10369,20 +10369,45 @@ async function renderPettyCashTab({ refresh = true } = {}) {
       // Unassigned is deliberately NOT offered on this prompt. A top-up is by
       // definition money she drew from an account; if it had no bank behind
       // it, it is not a top-up.
-      const banks = (pettyCash.sources || []).filter((x) => x !== 'Unassigned');
+      // ── THE BANK FIRST, THEN THE ACCOUNT INSIDE IT ────────────────────
+      // Apsara, 2026-09-22: "Bofa should be main.inside that edge metals/AAA",
+      // and asked which part of that was missing, she chose the two-step
+      // prompt rather than a figure on the panel.
+      //
+      // It was one flat list of four, which put "BofA — Edge Metals" and
+      // "Chase Bank" side by side as if they were the same kind of thing.
+      // They are not: the bank is where the money physically came from, the
+      // account is whose it is. Asking them in that order is how she thinks
+      // about it at the counter.
+      //
+      // BOTH LISTS ARE DERIVED, from bank_of — never written out here. That
+      // is the whole reason this is only a form change: the server still
+      // receives one cash_source and knows nothing about steps.
+      const accounts = (pettyCash.sources || []).filter((x) => x !== 'Unassigned');
+      const bankFor = (a) => (pettyCash.bank_of || {})[a] || a;
+      const banks = accounts.map(bankFor).filter((b, i, all) => all.indexOf(b) === i);
       // The range is computed, not written out. It said "Type 1 or 2" — true
       // when there were two accounts — and I fixed that sentence on the phone
       // and left it standing here, because the check I wrote to catch it only
       // read the phone's file. A prompt naming a range it no longer has is
-      // how a wrong account gets picked in a hurry, and this is the screen
-      // she adds cash on most.
-      const pick = prompt(`Which bank did this ${fmtAmount(n)} come out of?\n\n`
-        + banks.map((b, i) => `${i + 1}. ${b}`).join('\n')
-        + `\n\nType 1${banks.length > 1 ? `–${banks.length}` : ''}.`);
-      if (pick === null) return;
-      const chosen = banks[Number(String(pick).trim()) - 1]
-        || banks.find((b) => b.toLowerCase() === String(pick).trim().toLowerCase());
-      if (!chosen) { alert('Pick one of: ' + banks.join(', ')); return; }
+      // how a wrong account gets picked in a hurry.
+      const askFrom = (list, question) => {
+        if (list.length === 1) return list[0];          // nothing to choose
+        const raw = prompt(question + '\n\n' + list.map((b, i) => `${i + 1}. ${b}`).join('\n')
+          + `\n\nType 1${list.length > 1 ? `–${list.length}` : ''}.`);
+        if (raw === null) return null;                   // she cancelled
+        const hit = list[Number(String(raw).trim()) - 1]
+          || list.find((b) => b.toLowerCase() === String(raw).trim().toLowerCase());
+        if (!hit) { alert('Pick one of: ' + list.join(', ')); return null; }
+        return hit;
+      };
+      const bank = askFrom(banks, `Which bank did this ${fmtAmount(n)} come out of?`);
+      if (!bank) return;
+      // A bank with one account asks nothing further — Chase has no second
+      // account, so there is no question to put to her about it.
+      const chosen = askFrom(accounts.filter((a) => bankFor(a) === bank),
+        `Which ${bank} account?`);
+      if (!chosen) return;
       try {
         await api('/api/petty-cash', { method: 'POST', body: JSON.stringify({ amount: n, cash_source: chosen }) });
         await renderPettyCashTab();
@@ -10851,13 +10876,51 @@ function openPayModal(loadId, kind) {
       // Edge Metals' cash into the unsplit bucket without noticing.
       const srcs = (pettyCash.sources || []).length ? pettyCash.sources
         : ['Edge Metals', 'AAA Investment', 'Chase Bank', 'Unassigned'];
-      sel.innerHTML = srcs.map((x) => `<option value="${esc(x)}">${esc(x)}${
-        (pettyCash.by_source || {})[x] != null ? ` — ${esc(fmtAmount(Number(pettyCash.by_source[x]) || 0))}` : ''}</option>`).join('');
-      // Defaults to whichever bucket holds the most, so the common case needs
-      // no thought and the borrow prompt stays rare.
-      const best = srcs.slice().sort((a, b) =>
-        (Number((pettyCash.by_source || {})[b]) || 0) - (Number((pettyCash.by_source || {})[a]) || 0))[0];
-      sel.value = best || srcs[0];
+      const held = (x) => Number((pettyCash.by_source || {})[x]) || 0;
+      const withAmount = (x) => `${x}${(pettyCash.by_source || {})[x] != null ? ` — ${fmtAmount(held(x))}` : ''}`;
+      // Unbanked cash has no bank, so it stands as its own top-level choice
+      // rather than being hidden under one it never came from.
+      const bankFor = (a) => (pettyCash.bank_of || {})[a] || a;
+      const bankSel = $('pay_cash_bank');
+      const label = $('pay_cash_source_label');
+
+      // ── THE ACCOUNTS UNDER ONE BANK ───────────────────────────────────
+      // Called on open and whenever the bank changes. It ALWAYS leaves
+      // pay_cash_source holding a real account, including when the bank has
+      // only one — the submit path reads that value and a hidden select
+      // holding nothing would post an empty cash_source, which is how the
+      // pay modal broke in September when a <select> was set to a value not
+      // in its own list.
+      const fillAccounts = (bank) => {
+        const under = srcs.filter((a) => bankFor(a) === bank);
+        sel.innerHTML = under.map((x) => `<option value="${esc(x)}">${esc(withAmount(x))}</option>`).join('');
+        const best = under.slice().sort((a, b) => held(b) - held(a))[0];
+        sel.value = best || under[0] || '';
+        // One account under a bank is not a question. The select stays in the
+        // DOM holding the answer; only the row is hidden.
+        const only = under.length < 2;
+        sel.style.display = only ? 'none' : '';
+        if (label) label.style.display = only ? 'none' : '';
+      };
+
+      if (bankSel) {
+        const banks = srcs.map(bankFor).filter((b, i, all) => all.indexOf(b) === i);
+        bankSel.innerHTML = banks.map((b) => {
+          const total = srcs.filter((a) => bankFor(a) === b).reduce((t, a) => t + held(a), 0);
+          return `<option value="${esc(b)}">${esc(b)} — ${esc(fmtAmount(total))}</option>`;
+        }).join('');
+        // Defaults to the bank holding the most, so the common case needs no
+        // thought and the borrow prompt stays rare — the same rule the single
+        // dropdown used, one level up.
+        const bestBank = banks.slice().sort((a, b) =>
+          srcs.filter((x) => bankFor(x) === b).reduce((t, x) => t + held(x), 0)
+          - srcs.filter((x) => bankFor(x) === a).reduce((t, x) => t + held(x), 0))[0];
+        bankSel.value = bestBank || banks[0];
+        bankSel.onchange = () => fillAccounts(bankSel.value);
+        fillAccounts(bankSel.value);
+      } else {
+        fillAccounts(bankFor(srcs[0]));
+      }
     }
     // Visibility is syncBankFields' job — it runs on open AND on every mode
     // change, so leaving it there means one rule in one place.
@@ -11431,7 +11494,17 @@ function renderLoads(loads) {
                Its own field, not the bank row above: helpers/banks.js refuses
                a bank on a cash payment and is right to. -->
           <div class="field" id="pay_cash_source_row" style="margin-top:14px; display:none;">
-            <label for="pay_cash_source">Which cash</label>
+            <!-- Apsara, 2026-09-22: "when pay via cash,option of chase/bofa
+                 .when bofa-->Edge metals ac or aaa investments should be
+                 asked". The bank first, the account inside it — the same
+                 order the Add Cash prompt now uses, because it is the order
+                 she thinks in: where the notes came from, then whose they
+                 are. pay_cash_source keeps its id and still holds the ACCOUNT
+                 name, so the submit path below is untouched and the server
+                 still receives one cash_source. -->
+            <label for="pay_cash_bank">Which bank</label>
+            <select id="pay_cash_bank" style="margin-bottom:10px;"></select>
+            <label for="pay_cash_source" id="pay_cash_source_label">Which account</label>
             <select id="pay_cash_source"></select>
           </div>
           <div class="ld-grid-2" style="margin-top:14px;">

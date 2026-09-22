@@ -30,7 +30,29 @@ function assertWriteAllowed(env, method) {
 
 async function request(method, pathAndQuery, body, { env = auth.qbEnv(), fetchImpl = fetch } = {}) {
     method = String(method).toUpperCase();
-    assertWriteAllowed(env, method);
+    if (method === 'GET') return send(method, pathAndQuery, body, { env, fetchImpl });
+    try { assertWriteAllowed(env, method); }
+    catch (e) {   // refused attempts are part of "everything" too
+        try { require('./journal').recordWrite({ env, phase: 'refused', method, path: pathAndQuery, error: e.message }); } catch { /* the refusal stands either way */ }
+        throw e;
+    }
+    // Every write is journalled — intent first, and no intent line, no write.
+    // Required lazily: journal.js itself uses this client for its reads.
+    const journal = require('./journal');
+    const intent = journal.recordWrite({ env, phase: 'intent', method, path: pathAndQuery, body });
+    try {
+        const data = await send(method, pathAndQuery, body, { env, fetchImpl });
+        const obj = data && Object.values(data).find((v) => v && typeof v === 'object' && v.Id);
+        journal.recordWrite({ env, phase: 'done', method, path: pathAndQuery, writeId: intent.id,
+            result: obj ? { type: Object.keys(data).find((k) => data[k] === obj), Id: obj.Id, SyncToken: obj.SyncToken, TotalAmt: obj.TotalAmt, status: obj.status } : null });
+        return data;
+    } catch (e) {
+        journal.recordWrite({ env, phase: 'failed', method, path: pathAndQuery, writeId: intent.id, error: e.message });
+        throw e;
+    }
+}
+
+async function send(method, pathAndQuery, body, { env, fetchImpl }) {
     for (let attempt = 0; attempt < 2; attempt++) {
         const { accessToken, realmId } = await auth.getAccessToken({ env, fetchImpl, force: attempt > 0 });
         const sep = pathAndQuery.includes('?') ? '&' : '?';

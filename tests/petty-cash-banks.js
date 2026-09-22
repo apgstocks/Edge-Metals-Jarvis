@@ -672,6 +672,85 @@ section('H — BofA is two accounts, and they belong to two companies');
         petty.SOURCES.length === 4,
         'the panel may hide a heading; the dropdown must not hide an account');
 
+    // ── THE PAY SHEET ASKS THE BANK, THEN THE ACCOUNT ────────────────────
+    // Apsara, 2026-09-22: "when pay via cash,option of chase/bofa .when
+    // bofa-->Edge metals ac or aaa investments should be asked".
+    //
+    // RUN, not read. The failure that matters here already happened once, on
+    // 2026-09-17: a <select> set to a value not in its own list silently
+    // becomes "", the modal posted an empty mode, and the save failed
+    // outright. The same shape is available now — hide the account select
+    // when a bank has one account and it will post an empty cash_source.
+    //
+    // So this pulls the real population block out of the shipped HTML and
+    // executes it against a fake DOM, for both clients.
+    {
+        const vm = require('vm');
+        const SRC_STATE = {
+            sources: ['Edge Metals', 'AAA Investment', 'Chase Bank', 'Unassigned'],
+            by_source: { 'Edge Metals': 12000, 'AAA Investment': 5000, 'Chase Bank': 3000, 'Unassigned': 2441.03 },
+            bank_of: { 'Edge Metals': 'BofA', 'AAA Investment': 'BofA', 'Chase Bank': 'Chase Bank', 'Unassigned': null },
+        };
+        for (const f of ['mobile-app/www/index.html', 'dashboard/index.html']) {
+            const src = fs.readFileSync(path.join(__dirname, '..', f), 'utf8');
+            // From the marker to the end of its `if (sel) { ... }`.
+            const start = src.indexOf("const sel = $('pay_cash_source');");
+            const open = src.indexOf('{', src.indexOf('if (sel)', start));
+            let d = 0, end = -1;
+            for (let k = open; k < src.length; k++) {
+                if (src[k] === '{') d++;
+                else if (src[k] === '}') { d--; if (!d) { end = k + 1; break; } }
+            }
+            const block = src.slice(start, end);
+
+            const mk = () => ({ innerHTML: '', value: '', style: {}, onchange: null });
+            const els = { pay_cash_source: mk(), pay_cash_bank: mk(), pay_cash_source_label: mk() };
+            const ctx = {
+                $: (id) => els[id] || null,
+                esc: (v) => String(v),
+                fmtAmount: (n) => '$' + Number(n).toFixed(2),
+                pettyCash: SRC_STATE,
+            };
+            let ran = null;
+            try { vm.runInNewContext(block, ctx); } catch (e) { ran = e; }
+            ck(`${f}: the pay sheet's cash block runs`, !ran, ran && ran.message);
+            if (ran) continue;
+
+            const bank = els.pay_cash_bank, acct = els.pay_cash_source;
+            ck(`  ${f}: the bank list is BofA, Chase Bank, unbanked`,
+                /BofA/.test(bank.innerHTML) && /Chase Bank/.test(bank.innerHTML)
+                && /Unassigned/.test(bank.innerHTML)
+                && !/Edge Metals/.test(bank.innerHTML),
+                bank.innerHTML);
+            ck(`  ${f}: it opens on the bank holding the most`, bank.value === 'BofA',
+                `${bank.value} — BofA holds 17,000 against Chase's 3,000`);
+            ck(`  ${f}: and offers that bank's two accounts`,
+                /Edge Metals/.test(acct.innerHTML) && /AAA Investment/.test(acct.innerHTML)
+                && !/Chase/.test(acct.innerHTML), acct.innerHTML);
+            ck(`  ${f}: on the fuller of the two`, acct.value === 'Edge Metals', acct.value);
+            ck(`  ${f}: with both selects showing`, acct.style.display !== 'none');
+
+            // THE ONE THAT REPEATS SEPTEMBER. Chase has a single account, so
+            // the account question is hidden — and the value it posts must
+            // still be a real account, not "".
+            bank.value = 'Chase Bank';
+            bank.onchange();
+            ck(`  ${f}: a bank with one account asks nothing`, acct.style.display === 'none');
+            ck(`  ${f}: but STILL posts a real account, not an empty string`,
+                acct.value === 'Chase Bank',
+                `posted "${acct.value}" — an empty cash_source is the 17-Sep pay-modal break`);
+
+            bank.value = 'Unassigned';
+            bank.onchange();
+            ck(`  ${f}: unbanked cash is still spendable`, acct.value === 'Unassigned', acct.value);
+
+            bank.value = 'BofA';
+            bank.onchange();
+            ck(`  ${f}: and going back re-offers both accounts`,
+                acct.value === 'Edge Metals' && acct.style.display !== 'none', acct.value);
+        }
+    }
+
     // ── SWITCHING TABS DOES NOT GO TO THE SERVER ─────────────────────────
     // Apsara, 2026-09-22: "when i click cash and borrowing,it takes lot of
     // time to open." Both tabs render from the same pettyCash object, so the
@@ -778,8 +857,14 @@ section('H — BofA is two accounts, and they belong to two companies');
         ck(`${f}: the add-cash prompt does not name a range it no longer has`,
             !/Type 1 or 2/.test(inCode),
             'four accounts now; a prompt saying "1 or 2" is how a wrong one gets picked');
+        // THE PROPERTY, not the variable name. This matched `banks.length`
+        // literally and went red the moment the prompt was refactored to take
+        // its list as an argument — a check shaped like the code, again.
+        // What must be true is that the range is DERIVED and no digit range
+        // is written out by hand.
         ck(`  ${f}: it computes the range from the list instead`,
-            /Type 1\$\{banks\.length > 1/.test(inCode),
+            /Type 1\$\{[A-Za-z_$][\w$]*\.length > 1/.test(inCode)
+            && !/Type 1\s*[–-]\s*\d/.test(inCode),
             'so it cannot go stale again the next time an account is added');
     }
 }

@@ -69,7 +69,7 @@ ck('unknown -> none', st('Completely New Supplier', V, 'vendor').status === 'non
 ck('empty name -> none, never a wildcard', st('  ', V, 'vendor').status === 'none' && st('', V, 'vendor').candidates.length === 0);
 ck('two-letter name does not sweep by containment', st('AJ', V, 'vendor').status !== 'suggest' || st('AJ', V, 'vendor').candidates.length <= 1);
 let e = ''; try { st('x', V, 'supplier'); } catch (er) { e = er.message; }
-ck('wrong kind refused', /vendor\|customer\|item/.test(e));
+ck('wrong kind refused', /vendor\|customer\|item\|bank/.test(e));
 
 console.log('\n── her decision wins ──');
 m.confirm('customer', 'Rad Metals', '298', 'Rad Metals');
