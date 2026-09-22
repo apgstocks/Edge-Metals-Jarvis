@@ -4326,6 +4326,7 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
         try {
             const b = require('./helpers/bills');
             const bill = await b.addBill({ ...(req.body || {}), created_by: (req.role || null) });
+            require('./helpers/quickbooks/sync').after('bill', bill && bill.id);   // QuickBooks follows, never blocks (helpers/quickbooks/sync.js)
             // Apsara: "post save of a bill,i want Shipment tab to be created
             // in edge metals sheet." AFTER the bill is safely in bills.json,
             // and non-fatally — a Drive hiccup must not fail a Save she has
@@ -4373,6 +4374,7 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
             if (hauler && !String(bill.trucking_company || '').trim()) patch.trucking_company = hauler;
 
             const saved = await b.editBill(id, patch);
+            require('./helpers/quickbooks/sync').after('bill', saved && saved.id);
             require('./helpers/shipmentSheetLog').logBillSafely(saved, 'edited');
             res.json({ ok: true, bill: saved });
         } catch (e) { res.status(400).json({ error: e.message }); }
@@ -4397,6 +4399,7 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
 
             const charges = fp.chargesToSave(sale, charge, { replaceId: (req.body || {}).replace_id || null });
             const saved = await s.editSale(id, { charges });
+            require('./helpers/quickbooks/sync').after('sale', saved && saved.id);
             res.json({ ok: true, sale: saved });
         } catch (e) { res.status(400).json({ error: e.message }); }
     });
@@ -4405,6 +4408,7 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
         try {
             const b = require('./helpers/bills');
             const bill = await b.editBill(String(req.params.id), req.body || {});
+            require('./helpers/quickbooks/sync').after('bill', bill && bill.id);
             // "on every edit of the bill,i want that row to be modified" —
             // upsertRowsByKey matches on the bill id, so this updates the row
             // it wrote before instead of appending a second one.
@@ -4417,6 +4421,7 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
         try {
             const b = require('./helpers/bills');
             await b.deleteBill(String(req.params.id));
+            require('./helpers/quickbooks/sync').after('bill', String(req.params.id), 'deleted');
             res.json({ ok: true });
         } catch (e) { res.status(400).json({ error: e.message }); }
     });
@@ -4461,6 +4466,7 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
             const rec = body.kind === 'advance'
                 ? await bp.addAdvance(body)
                 : await bp.addBillPayment(body);
+            require('./helpers/quickbooks/sync').after('billpayment', rec && rec.id);
             require('./helpers/shipmentSheetLog');   // loaded lazily elsewhere
             // Every container this touched moves in the sheet too — its
             // Balance changed, and the Shipment tab is meant to mirror the
@@ -4484,6 +4490,7 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
         try {
             const bp = require('./helpers/billPayments');
             const rec = await bp.applyAdvance(String(req.params.id), (req.body || {}).allocations || []);
+            require('./helpers/quickbooks/sync').after('billpayment', rec && rec.id);
             res.json({ ok: true, payment: rec });
         } catch (e) { res.status(400).json({ error: e.message }); }
     });
@@ -4533,6 +4540,7 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
             });
 
             await bp.deleteBillPayment(id);
+            require('./helpers/quickbooks/sync').after('billpayment', id, 'deleted');
             await audit.complete(entry, 'done', { containers_reopened: touched.length });
 
             // Same mirror as the POST path, same non-fatal treatment.
@@ -4585,6 +4593,7 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
         try {
             const r = require('./helpers/salesReceipts');
             const rec = await r.addReceipt({ ...(req.body || {}), created_by: (req.role || null) });
+            require('./helpers/quickbooks/sync').after('receipt', rec && rec.id);
             res.json({ ok: true, receipt: rec });
         } catch (e) { res.status(400).json({ error: e.message }); }
     });
@@ -4609,6 +4618,7 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
                 },
             });
             await r.deleteReceipt(id);
+            require('./helpers/quickbooks/sync').after('receipt', id, 'deleted');
             await audit.complete(entry, 'done',
                 { containers_reopened: (doomed.allocations || []).length });
             res.json({ ok: true, removed: true,
@@ -4867,6 +4877,7 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
         try {
             const s = require('./helpers/sales');
             const sale = await s.addSale({ ...(req.body || {}), created_by: (req.role || null) });
+            require('./helpers/quickbooks/sync').after('sale', sale && sale.id);
             res.json({ ok: true, sale });
         } catch (e) { res.status(400).json({ error: e.message }); }
     });
@@ -4875,6 +4886,7 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
         try {
             const s = require('./helpers/sales');
             const sale = await s.editSale(String(req.params.id), req.body || {});
+            require('./helpers/quickbooks/sync').after('sale', sale && sale.id);
             res.json({ ok: true, sale });
         } catch (e) { res.status(400).json({ error: e.message }); }
     });
@@ -4883,6 +4895,7 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
         try {
             const s = require('./helpers/sales');
             await s.deleteSale(String(req.params.id));
+            require('./helpers/quickbooks/sync').after('sale', String(req.params.id), 'deleted');
             res.json({ ok: true });
         } catch (e) { res.status(400).json({ error: e.message }); }
     });
