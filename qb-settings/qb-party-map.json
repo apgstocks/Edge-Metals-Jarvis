@@ -198,10 +198,11 @@
     },
     "edgeyard": {
       "jarvisName": "Edge Yard",
-      "qbId": null,
-      "qbName": null,
+      "qbId": "585",
+      "qbName": "Edge Yard",
       "by": "apsara",
-      "at": "2026-09-21T14:23:16.494Z"
+      "at": "2026-09-22T06:24:21.823Z",
+      "reason": "created in QuickBooks by qb-create-party on her approval"
     },
     "ines": {
       "jarvisName": "INES",
@@ -613,10 +614,11 @@
     },
     "arisenterprises": {
       "jarvisName": "Aris Enterprises",
-      "qbId": null,
-      "qbName": null,
+      "qbId": "586",
+      "qbName": "Aris Enterprises",
       "by": "apsara",
-      "at": "2026-09-21T14:23:16.498Z"
+      "at": "2026-09-22T06:24:22.931Z",
+      "reason": "created in QuickBooks by qb-create-party on her approval"
     },
     "tiyanshmetalnik": {
       "jarvisName": "Tiyansh Metal/Nik",
