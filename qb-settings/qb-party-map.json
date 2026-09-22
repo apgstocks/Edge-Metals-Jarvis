@@ -1,0 +1,1432 @@
+{
+  "vendor": {
+    "mazariegos": {
+      "jarvisName": "Mazariegos",
+      "qbId": "444",
+      "qbName": "Mazariegos Recycling",
+      "by": "apsara",
+      "at": "2026-09-21T11:41:26.006Z"
+    },
+    "jio": {
+      "jarvisName": "Jio",
+      "qbId": "448",
+      "qbName": "Jio Trucking",
+      "by": "apsara",
+      "at": "2026-09-21T11:41:26.009Z"
+    },
+    "calderon": {
+      "jarvisName": "Calderon",
+      "qbId": "438",
+      "qbName": "Calderon Cores",
+      "by": "apsara",
+      "at": "2026-09-21T11:42:21.603Z"
+    },
+    "amilcargonzalezcalderon": {
+      "jarvisName": "Amilcar Gonzalez Calderon",
+      "qbId": "438",
+      "qbName": "Calderon Cores",
+      "by": "apsara",
+      "at": "2026-09-21T11:42:21.604Z"
+    },
+    "junkcar": {
+      "jarvisName": "Junk Car",
+      "qbId": "420",
+      "qbName": "Houston Junk Car Buyers",
+      "by": "apsara",
+      "at": "2026-09-21T11:51:06.855Z"
+    },
+    "betohisperia": {
+      "jarvisName": "Beto/Hisperia",
+      "qbId": "527",
+      "qbName": "Jorge Beto Hesperia",
+      "by": "apsara",
+      "at": "2026-09-21T11:51:06.857Z"
+    },
+    "emilliosvcm": {
+      "jarvisName": "Emillio SVCM",
+      "qbId": "510",
+      "qbName": "Emilio - SILICON VALLEY CIRCULAR",
+      "by": "apsara",
+      "at": "2026-09-21T11:51:06.858Z"
+    },
+    "mario": {
+      "jarvisName": "Mario",
+      "qbId": null,
+      "qbName": null,
+      "by": "apsara",
+      "at": "2026-09-21T11:51:06.875Z"
+    },
+    "gomez": {
+      "jarvisName": "Gomez",
+      "qbId": "287",
+      "qbName": "Midland",
+      "by": "apsara",
+      "at": "2026-09-21T14:23:16.395Z"
+    },
+    "dnetruckingoscar": {
+      "jarvisName": "DNE TRUCKING/OSCAR",
+      "qbId": "473",
+      "qbName": "Dne trucking corp",
+      "by": "apsara",
+      "at": "2026-09-21T14:23:16.411Z"
+    },
+    "progressive": {
+      "jarvisName": "Progressive",
+      "qbId": "179",
+      "qbName": "Progressive Scrap Metals",
+      "by": "apsara",
+      "at": "2026-09-21T14:23:16.412Z"
+    },
+    "drm": {
+      "jarvisName": "DRM",
+      "qbId": "508",
+      "qbName": "DRM IRON METAL LLC",
+      "by": "apsara",
+      "at": "2026-09-21T14:23:16.421Z"
+    },
+    "oscar": {
+      "jarvisName": "OSCAR",
+      "qbId": "439",
+      "qbName": "Unlimited Oscar and Dne trucking",
+      "by": "apsara",
+      "at": "2026-09-21T14:23:16.422Z"
+    },
+    "sher": {
+      "jarvisName": "sher",
+      "qbId": "573",
+      "qbName": "Sher Trucking",
+      "by": "apsara",
+      "at": "2026-09-21T14:23:16.424Z"
+    },
+    "fmc": {
+      "jarvisName": "FMC",
+      "qbId": "571",
+      "qbName": "FMC Metal",
+      "by": "apsara",
+      "at": "2026-09-21T14:23:16.429Z"
+    },
+    "gomezmidland": {
+      "jarvisName": "Gomez/Midland",
+      "qbId": "287",
+      "qbName": "Midland",
+      "by": "apsara",
+      "at": "2026-09-21T14:23:16.453Z"
+    },
+    "nur": {
+      "jarvisName": "NUR",
+      "qbId": "546",
+      "qbName": "Nur Metal",
+      "by": "apsara",
+      "at": "2026-09-21T14:23:16.455Z"
+    },
+    "kalawarjapan": {
+      "jarvisName": "Kalawar/Japan",
+      "qbId": "511",
+      "qbName": "KALAWAR CO LTD",
+      "by": "apsara",
+      "at": "2026-09-21T14:23:16.456Z"
+    },
+    "psm": {
+      "jarvisName": "PSM",
+      "qbId": "551",
+      "qbName": "PSM Recycle",
+      "by": "apsara",
+      "at": "2026-09-21T14:23:16.458Z"
+    },
+    "kalawarcoltdjapan": {
+      "jarvisName": "Kalawar Co., Ltd/Japan",
+      "qbId": "511",
+      "qbName": "KALAWAR CO LTD",
+      "by": "apsara",
+      "at": "2026-09-21T14:23:16.459Z"
+    },
+    "coreschapin": {
+      "jarvisName": "Cores Chapin",
+      "qbId": "437",
+      "qbName": "Inesh Cores Chapin",
+      "by": "apsara",
+      "at": "2026-09-21T14:23:16.460Z"
+    },
+    "modernenterprises": {
+      "jarvisName": "Modern Enterprises",
+      "qbId": "517",
+      "qbName": "MODERN ENTERPRISES LTD",
+      "by": "apsara",
+      "at": "2026-09-21T14:23:16.462Z"
+    },
+    "featherlite": {
+      "jarvisName": "featherlite",
+      "qbId": "574",
+      "qbName": "Featherlite Trucking",
+      "by": "apsara",
+      "at": "2026-09-21T14:23:16.463Z"
+    },
+    "modern": {
+      "jarvisName": "MODERN",
+      "qbId": "517",
+      "qbName": "MODERN ENTERPRISES LTD",
+      "by": "apsara",
+      "at": "2026-09-21T14:23:16.465Z"
+    },
+    "inesh": {
+      "jarvisName": "Inesh",
+      "qbId": "437",
+      "qbName": "Inesh Cores Chapin",
+      "by": "apsara",
+      "at": "2026-09-21T14:23:16.467Z"
+    },
+    "elderoklahoma": {
+      "jarvisName": "Elder Oklahoma",
+      "qbId": "552",
+      "qbName": "Elder",
+      "by": "apsara",
+      "at": "2026-09-21T14:23:16.477Z"
+    },
+    "apcglobal": {
+      "jarvisName": "APC GLOBAL",
+      "qbId": "493",
+      "qbName": "APC Global Logistics  Houston",
+      "by": "apsara",
+      "at": "2026-09-21T14:23:16.478Z"
+    },
+    "abandos": {
+      "jarvisName": "Abandos",
+      "qbId": "547",
+      "qbName": "Abantos",
+      "by": "apsara",
+      "at": "2026-09-21T14:23:16.480Z"
+    },
+    "edgeyard": {
+      "jarvisName": "Edge Yard",
+      "qbId": null,
+      "qbName": null,
+      "by": "apsara",
+      "at": "2026-09-21T14:23:16.494Z"
+    },
+    "ines": {
+      "jarvisName": "INES",
+      "qbId": "437",
+      "qbName": "Inesh Cores Chapin",
+      "by": "apsara",
+      "at": "2026-09-21T14:23:16.495Z"
+    },
+    "gc": {
+      "jarvisName": "G & C",
+      "qbId": "121",
+      "qbName": "G & C Recycling",
+      "by": "apsara",
+      "at": "2026-09-21T14:23:16.500Z"
+    },
+    "betho": {
+      "jarvisName": "BETHO",
+      "qbId": "527",
+      "qbName": "Jorge Beto Hesperia",
+      "by": "apsara",
+      "at": "2026-09-21T14:23:16.505Z"
+    },
+    "gardunos": {
+      "jarvisName": "Gardunos",
+      "qbId": "426",
+      "qbName": "GARDUNO'S LOGISTICS INC.",
+      "by": "apsara",
+      "at": "2026-09-21T14:23:16.506Z"
+    },
+    "carlosgc": {
+      "jarvisName": "Carlos G & C",
+      "qbId": "121",
+      "qbName": "G & C Recycling",
+      "by": "apsara",
+      "at": "2026-09-21T14:23:16.509Z"
+    },
+    "ntg": {
+      "jarvisName": "NTG",
+      "qbId": null,
+      "qbName": null,
+      "by": "apsara",
+      "at": "2026-09-21T14:23:16.511Z"
+    },
+    "mazariegoes": {
+      "jarvisName": "Mazariegoes",
+      "qbId": "444",
+      "qbName": "Mazariegos Recycling",
+      "by": "apsara",
+      "at": "2026-09-21T14:23:16.517Z"
+    },
+    "emillo": {
+      "jarvisName": "Emillo",
+      "qbId": "510",
+      "qbName": "Emilio - SILICON VALLEY CIRCULAR",
+      "by": "apsara",
+      "at": "2026-09-21T14:23:16.519Z"
+    },
+    "aj": {
+      "jarvisName": "AJ",
+      "qbId": "2",
+      "qbName": "AJ Transport",
+      "by": "apsara",
+      "at": "2026-09-21T14:23:16.521Z"
+    },
+    "norfolk": {
+      "jarvisName": "NORFOLK",
+      "qbId": null,
+      "qbName": null,
+      "by": "apsara",
+      "at": "2026-09-21T14:23:16.527Z"
+    },
+    "modernhardeepbkg": {
+      "jarvisName": "Modern/Hardeep bkg",
+      "qbId": "517",
+      "qbName": "MODERN ENTERPRISES LTD",
+      "by": "apsara",
+      "at": "2026-09-21T14:23:16.530Z"
+    },
+    "jp": {
+      "jarvisName": "JP",
+      "qbId": "575",
+      "qbName": "JP LOGISTICS",
+      "by": "apsara",
+      "at": "2026-09-21T14:23:16.533Z"
+    },
+    "gilroyluis": {
+      "jarvisName": "Gilroy/Luis",
+      "qbId": "579",
+      "qbName": "Deleon Cores Inc/Luis lines core",
+      "by": "apsara",
+      "at": "2026-09-21T14:23:16.545Z"
+    }
+  },
+  "customer": {
+    "taewonprecision": {
+      "jarvisName": "Taewon Precision",
+      "qbId": "453",
+      "qbName": "TAEWON PRECEISION",
+      "by": "apsara",
+      "at": "2026-09-21T20:51:03.825Z",
+      "reason": "follows what the accountant invoiced on the same containers (who pays), 2026-09-22"
+    },
+    "haekwang": {
+      "jarvisName": "Haekwang",
+      "qbId": "262",
+      "qbName": "Haekwang Metal",
+      "by": "apsara",
+      "at": "2026-09-21T11:42:33.710Z"
+    },
+    "majoserecicladorasadecv": {
+      "jarvisName": "Majose Recicladora Sa de Cv",
+      "qbId": "584",
+      "qbName": "Majose",
+      "by": "apsara",
+      "at": "2026-09-21T11:51:06.859Z"
+    },
+    "taewonautomotivecoltd": {
+      "jarvisName": "TAEWON AUTOMOTIVE CO., LTD",
+      "qbId": "453",
+      "qbName": "TAEWON PRECEISION",
+      "by": "apsara",
+      "at": "2026-09-21T20:51:03.813Z",
+      "reason": "follows what the accountant invoiced on the same containers (who pays), 2026-09-22"
+    },
+    "taewonautomotive": {
+      "jarvisName": "TAEWON AUTOMOTIVE",
+      "qbId": "453",
+      "qbName": "TAEWON PRECEISION",
+      "by": "apsara",
+      "at": "2026-09-21T20:51:03.816Z",
+      "reason": "follows what the accountant invoiced on the same containers (who pays), 2026-09-22"
+    },
+    "shinyoung": {
+      "jarvisName": "Shinyoung",
+      "qbId": "455",
+      "qbName": "SHINYOUNG NONFERROUS CO., LTD",
+      "by": "apsara",
+      "at": "2026-09-21T11:51:06.863Z"
+    },
+    "dhatuinternational": {
+      "jarvisName": "DHATU INTERNATIONAL",
+      "qbId": "452",
+      "qbName": "Dhatu International PVT LTD",
+      "by": "apsara",
+      "at": "2026-09-21T11:51:06.864Z"
+    },
+    "eswariglobalmetalindustriesprivatelimited": {
+      "jarvisName": "ESWARI GLOBAL METAL INDUSTRIES PRIVATE LIMITED",
+      "qbId": "544",
+      "qbName": "Eswari Global Metal",
+      "by": "apsara",
+      "at": "2026-09-21T11:51:06.865Z"
+    },
+    "panmetal": {
+      "jarvisName": "Pan Metal",
+      "qbId": "358",
+      "qbName": "PAN METAL CO",
+      "by": "apsara",
+      "at": "2026-09-21T11:51:06.866Z"
+    },
+    "daikiinternationaltradingcorp": {
+      "jarvisName": "DAIKI INTERNATIONAL TRADING CORP.",
+      "qbId": "567",
+      "qbName": "Daiki International",
+      "by": "apsara",
+      "at": "2026-09-21T11:51:06.867Z"
+    },
+    "brightmetalsinc": {
+      "jarvisName": "Bright Metals Inc.",
+      "qbId": "578",
+      "qbName": "Bright Metals",
+      "by": "apsara",
+      "at": "2026-09-21T11:51:06.868Z"
+    },
+    "modernenterpriseshardeeppuri": {
+      "jarvisName": "Modern Enterprises/Hardeep Puri",
+      "qbId": "533",
+      "qbName": "MODERN ENTERPRISES LTD Customer",
+      "by": "apsara",
+      "at": "2026-09-21T11:51:06.869Z"
+    },
+    "remetal": {
+      "jarvisName": "Remetal",
+      "qbId": "432",
+      "qbName": "REMETAL INTERNATINAL, INC",
+      "by": "apsara",
+      "at": "2026-09-21T11:51:06.870Z"
+    },
+    "radmetal": {
+      "jarvisName": "Rad Metal",
+      "qbId": "298",
+      "qbName": "Rad Metals",
+      "by": "apsara",
+      "at": "2026-09-21T11:51:06.871Z"
+    },
+    "maptrascogreenmetalabshiek": {
+      "jarvisName": "MAPTRASCO/GREEN METAL/ABSHIEK",
+      "qbId": "482",
+      "qbName": "MAPRASCO/GREEN METAL",
+      "by": "apsara",
+      "at": "2026-09-21T11:51:06.872Z"
+    },
+    "mgkdwcllc": {
+      "jarvisName": "MGK DWC LLC",
+      "qbId": "503",
+      "qbName": "MGK INTERNATIONAL",
+      "by": "apsara",
+      "at": "2026-09-21T11:51:06.873Z"
+    },
+    "tiyanshmetal": {
+      "jarvisName": "Tiyansh Metal",
+      "qbId": "487",
+      "qbName": "Tiyanesh Metal",
+      "by": "apsara",
+      "at": "2026-09-21T14:23:16.401Z"
+    },
+    "taewonco": {
+      "jarvisName": "TAEWON CO.",
+      "qbId": "453",
+      "qbName": "TAEWON PRECEISION",
+      "by": "apsara",
+      "at": "2026-09-21T20:51:03.818Z",
+      "reason": "follows what the accountant invoiced on the same containers (who pays), 2026-09-22"
+    },
+    "panmetalatech": {
+      "jarvisName": "Pan Metal/A-TECH",
+      "qbId": "406",
+      "qbName": "A-Tech Co., Ltd.",
+      "by": "apsara",
+      "at": "2026-09-21T14:23:16.405Z"
+    },
+    "daekwansanupcoltd": {
+      "jarvisName": "DAEKWAN SANUP CO., LTD.",
+      "qbId": "95",
+      "qbName": "Daekwang Co,Ltd",
+      "by": "apsara",
+      "at": "2026-09-21T14:34:25.020Z"
+    },
+    "panmetaldongametal": {
+      "jarvisName": "Pan Metal/DONG A METAL",
+      "qbId": "399",
+      "qbName": "Dong-A Metal Co., Ltd",
+      "by": "apsara",
+      "at": "2026-09-21T14:23:16.415Z"
+    },
+    "metalbridgedawonalloycoltd": {
+      "jarvisName": "Metal Bridge/Dawon Alloy Co., Ltd.",
+      "qbId": "471",
+      "qbName": "Metal Bridge",
+      "by": "apsara",
+      "at": "2026-09-21T20:51:03.831Z",
+      "reason": "follows what the accountant invoiced on the same containers (who pays), 2026-09-22"
+    },
+    "mkmetaltrading": {
+      "jarvisName": "MK Metal Trading",
+      "qbId": "449",
+      "qbName": "MK Trading",
+      "by": "apsara",
+      "at": "2026-09-21T14:23:16.419Z"
+    },
+    "joeydaekwang": {
+      "jarvisName": "Joey/Daekwang",
+      "qbId": "95",
+      "qbName": "Daekwang Co,Ltd",
+      "by": "apsara",
+      "at": "2026-09-21T14:34:25.023Z"
+    },
+    "panmetalhk": {
+      "jarvisName": "Pan Metal/HK",
+      "qbId": "358",
+      "qbName": "PAN METAL CO",
+      "by": "apsara",
+      "at": "2026-09-21T14:23:16.433Z"
+    },
+    "daekwang": {
+      "jarvisName": "Daekwang",
+      "qbId": "95",
+      "qbName": "Daekwang Co,Ltd",
+      "by": "apsara",
+      "at": "2026-09-21T14:34:25.016Z"
+    },
+    "atech": {
+      "jarvisName": "A Tech",
+      "qbId": "406",
+      "qbName": "A-Tech Co., Ltd.",
+      "by": "apsara",
+      "at": "2026-09-21T14:23:16.445Z"
+    },
+    "hareshdkusa": {
+      "jarvisName": "Haresh/DKUSA",
+      "qbId": "569",
+      "qbName": "DKUSA",
+      "by": "apsara",
+      "at": "2026-09-21T14:23:16.446Z"
+    },
+    "marsglobalvartharji": {
+      "jarvisName": "Mars Global/Vartharji",
+      "qbId": "496",
+      "qbName": "MARS GLOBAL",
+      "by": "apsara",
+      "at": "2026-09-21T14:23:16.448Z"
+    },
+    "marsgloballlc": {
+      "jarvisName": "MARS GLOBAL LLC",
+      "qbId": "496",
+      "qbName": "MARS GLOBAL",
+      "by": "apsara",
+      "at": "2026-09-21T14:23:16.450Z"
+    },
+    "dhatu": {
+      "jarvisName": "DHATU",
+      "qbId": "452",
+      "qbName": "Dhatu International PVT LTD",
+      "by": "apsara",
+      "at": "2026-09-21T14:23:16.451Z"
+    },
+    "joeyktr": {
+      "jarvisName": "Joey/KTR",
+      "qbId": "572",
+      "qbName": "KTR",
+      "by": "apsara",
+      "at": "2026-09-21T14:23:16.469Z"
+    },
+    "daikiinternationaltrading": {
+      "jarvisName": "Daiki International Trading",
+      "qbId": "567",
+      "qbName": "Daiki International",
+      "by": "apsara",
+      "at": "2026-09-21T14:23:16.470Z"
+    },
+    "mkmetal": {
+      "jarvisName": "MK Metal",
+      "qbId": "449",
+      "qbName": "MK Trading",
+      "by": "apsara",
+      "at": "2026-09-21T14:23:16.472Z"
+    },
+    "ktrkoreatotalresourcescoltd": {
+      "jarvisName": "KTR(KOREATOTAL RESOURCES) CO., LTD",
+      "qbId": "572",
+      "qbName": "KTR",
+      "by": "apsara",
+      "at": "2026-09-21T14:23:16.474Z"
+    },
+    "dooin": {
+      "jarvisName": "Dooin",
+      "qbId": "120",
+      "qbName": "Doo IN Co",
+      "by": "apsara",
+      "at": "2026-09-21T14:23:16.475Z"
+    },
+    "alloys": {
+      "jarvisName": "ALLOYS",
+      "qbId": "335",
+      "qbName": "Spectro Alloys",
+      "by": "apsara",
+      "at": "2026-09-21T14:23:16.481Z"
+    },
+    "joeyhynostaewon": {
+      "jarvisName": "Joey/Hynos/Taewon",
+      "qbId": "453",
+      "qbName": "TAEWON PRECEISION",
+      "by": "apsara",
+      "at": "2026-09-21T20:51:03.823Z",
+      "reason": "follows what the accountant invoiced on the same containers (who pays), 2026-09-22"
+    },
+    "edgerecycling": {
+      "jarvisName": "Edge Recycling",
+      "qbId": "568",
+      "qbName": "Edge Metals Recycling",
+      "by": "apsara",
+      "at": "2026-09-21T14:23:16.485Z"
+    },
+    "eswari": {
+      "jarvisName": "Eswari",
+      "qbId": "544",
+      "qbName": "Eswari Global Metal",
+      "by": "apsara",
+      "at": "2026-09-21T14:23:16.487Z"
+    },
+    "joeyjemulpometalcoltd": {
+      "jarvisName": "Joey/Jemulpo Metal Co., Ltd",
+      "qbId": "272",
+      "qbName": "Jemulpo Metal Co Ltd",
+      "by": "apsara",
+      "at": "2026-09-21T14:23:16.489Z"
+    },
+    "hynos": {
+      "jarvisName": "HYNOS",
+      "qbId": "570",
+      "qbName": "Joey Hynos",
+      "by": "apsara",
+      "at": "2026-09-21T14:23:16.490Z"
+    },
+    "joeytaewon": {
+      "jarvisName": "Joey/Taewon",
+      "qbId": "453",
+      "qbName": "TAEWON PRECEISION",
+      "by": "apsara",
+      "at": "2026-09-21T20:51:03.821Z",
+      "reason": "follows what the accountant invoiced on the same containers (who pays), 2026-09-22"
+    },
+    "alainternationalfrz": {
+      "jarvisName": "Ala International Frz",
+      "qbId": "450",
+      "qbName": "ALA International/Pakistan",
+      "by": "apsara",
+      "at": "2026-09-21T14:23:16.497Z"
+    },
+    "arisenterprises": {
+      "jarvisName": "Aris Enterprises",
+      "qbId": null,
+      "qbName": null,
+      "by": "apsara",
+      "at": "2026-09-21T14:23:16.498Z"
+    },
+    "tiyanshmetalnik": {
+      "jarvisName": "Tiyansh Metal/Nik",
+      "qbId": "487",
+      "qbName": "Tiyanesh Metal",
+      "by": "apsara",
+      "at": "2026-09-21T14:23:16.502Z"
+    },
+    "ekmetalevan": {
+      "jarvisName": "EK metal/Evan",
+      "qbId": "360",
+      "qbName": "EK Trading",
+      "by": "apsara",
+      "at": "2026-09-21T14:23:16.503Z"
+    },
+    "wooshin": {
+      "jarvisName": "Wooshin",
+      "qbId": "269",
+      "qbName": "Woo Shin Metal co.ltd",
+      "by": "apsara",
+      "at": "2026-09-21T14:23:16.508Z"
+    },
+    "joeyshinyoung": {
+      "jarvisName": "Joey/Shinyoung",
+      "qbId": "455",
+      "qbName": "SHINYOUNG NONFERROUS CO., LTD",
+      "by": "apsara",
+      "at": "2026-09-21T14:23:16.512Z"
+    },
+    "joeywooshin": {
+      "jarvisName": "Joey/Wooshin",
+      "qbId": "269",
+      "qbName": "Woo Shin Metal co.ltd",
+      "by": "apsara",
+      "at": "2026-09-21T14:23:16.514Z"
+    },
+    "modernhardeep": {
+      "jarvisName": "Modern/Hardeep",
+      "qbId": "533",
+      "qbName": "MODERN ENTERPRISES LTD Customer",
+      "by": "apsara",
+      "at": "2026-09-21T14:23:16.515Z"
+    },
+    "customalloys": {
+      "jarvisName": "Custom Alloys",
+      "qbId": null,
+      "qbName": null,
+      "by": "apsara",
+      "at": "2026-09-21T14:23:16.522Z"
+    },
+    "dhatulogistics": {
+      "jarvisName": "Dhatu Logistics",
+      "qbId": "452",
+      "qbName": "Dhatu International PVT LTD",
+      "by": "apsara",
+      "at": "2026-09-21T14:23:16.524Z"
+    },
+    "mainmetalmax": {
+      "jarvisName": "MainMetal/MAX",
+      "qbId": "545",
+      "qbName": "Main Metal",
+      "by": "apsara",
+      "at": "2026-09-21T14:23:16.537Z"
+    },
+    "joeydooin": {
+      "jarvisName": "Joey/Dooin",
+      "qbId": "120",
+      "qbName": "Doo IN Co",
+      "by": "apsara",
+      "at": "2026-09-21T14:23:16.539Z"
+    },
+    "mexico": {
+      "jarvisName": "Mexico",
+      "qbId": null,
+      "qbName": null,
+      "by": "apsara",
+      "at": "2026-09-21T14:23:16.541Z"
+    },
+    "edgeyard": {
+      "jarvisName": "Edge yard",
+      "qbId": null,
+      "qbName": null,
+      "by": "apsara",
+      "at": "2026-09-21T14:23:16.543Z"
+    },
+    "houstonautocastvictor": {
+      "jarvisName": "Houston auto cast- Victor",
+      "qbId": null,
+      "qbName": null,
+      "by": "apsara",
+      "at": "2026-09-21T14:23:16.547Z"
+    },
+    "daekwangsanup": {
+      "jarvisName": "Dae Kwang Sanup",
+      "qbId": "95",
+      "qbName": "Daekwang Co,Ltd",
+      "by": "apsara",
+      "at": "2026-09-21T14:34:25.024Z"
+    },
+    "daekwangsanupcoltd": {
+      "jarvisName": "DAEKWANG SANUP CO.,LTD",
+      "qbId": "95",
+      "qbName": "Daekwang Co,Ltd",
+      "by": "apsara",
+      "at": "2026-09-21T14:34:25.026Z"
+    },
+    "ekmetal": {
+      "jarvisName": "EK METAL",
+      "qbId": "360",
+      "qbName": "EK Trading",
+      "by": "apsara",
+      "at": "2026-09-21T14:34:25.028Z"
+    },
+    "junkcar": {
+      "jarvisName": "Junk Car",
+      "qbId": "SKIP",
+      "qbName": null,
+      "by": "apsara",
+      "at": "2026-09-21T17:14:22.927Z",
+      "reason": "Stock kept at Junk Car yard; mixed into a later customer container. Not a sale."
+    },
+    "junkcarllc": {
+      "jarvisName": "Junk car LLC",
+      "qbId": "SKIP",
+      "qbName": null,
+      "by": "apsara",
+      "at": "2026-09-21T17:14:22.930Z",
+      "reason": "Stock kept at Junk Car yard; mixed into a later customer container. Not a sale."
+    },
+    "hugo": {
+      "jarvisName": "Hugo",
+      "qbId": null,
+      "qbName": null,
+      "by": "apsara",
+      "at": "2026-09-21T20:18:03.218Z",
+      "reason": "Real sale (4 Aug, trailer UMXU637049). Hugo exists in QB only as a vendor; QB needs a distinct customer display name."
+    },
+    "hokyungcoltd": {
+      "jarvisName": "HO KYUNG CO., LTD.",
+      "qbId": "545",
+      "qbName": "Main Metal",
+      "by": "apsara",
+      "at": "2026-09-21T20:51:03.827Z",
+      "reason": "follows what the accountant invoiced on the same containers (who pays), 2026-09-22"
+    },
+    "dawonalloycoltd": {
+      "jarvisName": "Dawon Alloy Co., Ltd.",
+      "qbId": "471",
+      "qbName": "Metal Bridge",
+      "by": "apsara",
+      "at": "2026-09-21T20:51:03.829Z",
+      "reason": "follows what the accountant invoiced on the same containers (who pays), 2026-09-22"
+    },
+    "outlast": {
+      "jarvisName": "OUTLAST",
+      "qbId": "485",
+      "qbName": "OUTLAST",
+      "by": "apsara",
+      "at": "2026-09-22T05:14:16.696Z",
+      "reason": "Edge Metals customer (6061 truck wheels), 2026-09-22"
+    }
+  },
+  "item": {
+    "alternators": {
+      "jarvisName": "Alternators",
+      "qbId": "74",
+      "qbName": "ALTERNATOR",
+      "by": "apsara",
+      "at": "2026-09-21T20:29:39.523Z"
+    },
+    "hybridalternator": {
+      "jarvisName": "Hybrid Alternator",
+      "qbId": "82",
+      "qbName": "Hybrid Alternator Scrap",
+      "by": "apsara",
+      "at": "2026-09-21T20:29:39.525Z"
+    },
+    "comboloadmixofalternatoraluminstarteracautocompressors": {
+      "jarvisName": "Combo Load (Mix of Alternator/ Alumin Starter / Ac Auto Compressors",
+      "qbId": "15",
+      "qbName": "AC Compressors",
+      "by": "apsara",
+      "at": "2026-09-21T20:29:39.527Z"
+    },
+    "hrcoils": {
+      "jarvisName": "HR COILS",
+      "qbId": "119",
+      "qbName": "HR coils",
+      "by": "apsara",
+      "at": "2026-09-21T20:29:39.529Z"
+    },
+    "alenginecombo": {
+      "jarvisName": "AL ENGINE COMBO",
+      "qbId": "40",
+      "qbName": "Al Engines",
+      "by": "apsara",
+      "at": "2026-09-21T20:29:39.530Z"
+    },
+    "alengine": {
+      "jarvisName": "Al engine",
+      "qbId": "40",
+      "qbName": "Al Engines",
+      "by": "apsara",
+      "at": "2026-09-21T20:29:39.532Z"
+    },
+    "regularcomboregularengine": {
+      "jarvisName": "Regular combo & Regular engine",
+      "qbId": "77",
+      "qbName": "Regular Engine Combo",
+      "by": "apsara",
+      "at": "2026-09-21T20:29:39.534Z"
+    },
+    "scrapalternator": {
+      "jarvisName": "Scrap Alternator",
+      "qbId": "74",
+      "qbName": "ALTERNATOR",
+      "by": "apsara",
+      "at": "2026-09-21T20:29:39.536Z"
+    },
+    "scrapstarter": {
+      "jarvisName": "Scrap Starter",
+      "qbId": "88",
+      "qbName": "Al Nose Starters",
+      "by": "apsara",
+      "at": "2026-09-21T20:29:39.537Z"
+    },
+    "alumscrapautocastingtense": {
+      "jarvisName": "Alum Scrap Auto Casting Tense",
+      "qbId": "71",
+      "qbName": "AUTO CAST",
+      "by": "apsara",
+      "at": "2026-09-21T20:29:39.540Z"
+    },
+    "starter": {
+      "jarvisName": "Starter",
+      "qbId": "88",
+      "qbName": "Al Nose Starters",
+      "by": "apsara",
+      "at": "2026-09-21T20:29:39.541Z"
+    },
+    "accompressor": {
+      "jarvisName": "Ac compressor",
+      "qbId": "15",
+      "qbName": "AC Compressors",
+      "by": "apsara",
+      "at": "2026-09-21T20:29:39.544Z"
+    },
+    "costironscraphscode72041000": {
+      "jarvisName": "Cost Iron Scrap HS CODE:72041000",
+      "qbId": "42",
+      "qbName": "Rotors and Drums",
+      "by": "apsara",
+      "at": "2026-09-21T20:29:39.546Z"
+    },
+    "mixmotors": {
+      "jarvisName": "MIX MOTORS",
+      "qbId": "112",
+      "qbName": "Mixed Motor small",
+      "by": "apsara",
+      "at": "2026-09-21T20:29:39.548Z"
+    },
+    "regcombo": {
+      "jarvisName": "Reg Combo",
+      "qbId": "77",
+      "qbName": "Regular Engine Combo",
+      "by": "apsara",
+      "at": "2026-09-21T20:29:39.549Z"
+    },
+    "startersteel": {
+      "jarvisName": "Starter Steel",
+      "qbId": "93",
+      "qbName": "Starter Iron",
+      "by": "apsara",
+      "at": "2026-09-21T20:29:39.551Z"
+    },
+    "dirtyradiator": {
+      "jarvisName": "Dirty Radiator",
+      "qbId": "2",
+      "qbName": "Al Radiators",
+      "by": "apsara",
+      "at": "2026-09-21T20:29:39.553Z"
+    },
+    "starterboseload": {
+      "jarvisName": "Starter/bose load",
+      "qbId": "88",
+      "qbName": "Al Nose Starters",
+      "by": "apsara",
+      "at": "2026-09-21T20:29:39.555Z"
+    },
+    "wheelweightboseload": {
+      "jarvisName": "Wheel Weight/bose load",
+      "qbId": "90",
+      "qbName": "Lead - Wheels weight",
+      "by": "apsara",
+      "at": "2026-09-21T20:29:39.557Z"
+    },
+    "dirtyalradiator": {
+      "jarvisName": "Dirty Al Radiator",
+      "qbId": "2",
+      "qbName": "Al Radiators",
+      "by": "apsara",
+      "at": "2026-09-21T20:29:39.559Z"
+    },
+    "almixsteelmotorblock": {
+      "jarvisName": "Al mix steel motor block",
+      "qbId": "18",
+      "qbName": "Electrical Motors",
+      "by": "apsara",
+      "at": "2026-09-21T20:29:39.561Z"
+    },
+    "leadmix": {
+      "jarvisName": "Lead Mix",
+      "qbId": "95",
+      "qbName": "Scrap lead",
+      "by": "apsara",
+      "at": "2026-09-21T20:29:39.563Z"
+    },
+    "smallelectricmotors": {
+      "jarvisName": "Small Electric Motors",
+      "qbId": "18",
+      "qbName": "Electrical Motors",
+      "by": "apsara",
+      "at": "2026-09-21T20:29:39.565Z"
+    },
+    "truckstarter": {
+      "jarvisName": "Truck starter",
+      "qbId": "88",
+      "qbName": "Al Nose Starters",
+      "by": "apsara",
+      "at": "2026-09-21T20:29:39.567Z"
+    },
+    "scrapaluminiumdesperdiciosaluminio": {
+      "jarvisName": "SCRAP ALUMINIUM/DESPERDICIOS ALUMINIO",
+      "qbId": "81",
+      "qbName": "Baled Painted Aluminium",
+      "by": "apsara",
+      "at": "2026-09-21T20:29:39.569Z"
+    },
+    "mixalandsteelmotor": {
+      "jarvisName": "Mix AL and Steel Motor",
+      "qbId": "18",
+      "qbName": "Electrical Motors",
+      "by": "apsara",
+      "at": "2026-09-21T20:29:39.571Z"
+    },
+    "steelcombo": {
+      "jarvisName": "Steel combo",
+      "qbId": "103",
+      "qbName": "Steel Engines",
+      "by": "apsara",
+      "at": "2026-09-21T20:29:39.573Z"
+    },
+    "scrapelectricmotor": {
+      "jarvisName": "Scrap Electric Motor",
+      "qbId": "18",
+      "qbName": "Electrical Motors",
+      "by": "apsara",
+      "at": "2026-09-21T20:29:39.576Z"
+    },
+    "dirtychromewheel": {
+      "jarvisName": "Dirty Chrome Wheel",
+      "qbId": "9",
+      "qbName": "Chrome Wheels",
+      "by": "apsara",
+      "at": "2026-09-21T20:29:39.578Z"
+    },
+    "chromerim": {
+      "jarvisName": "Chrome rim",
+      "qbId": "9",
+      "qbName": "Chrome Wheels",
+      "by": "apsara",
+      "at": "2026-09-21T20:29:39.580Z"
+    },
+    "scrapaccompressor": {
+      "jarvisName": "Scrap A/C Compressor",
+      "qbId": "15",
+      "qbName": "AC Compressors",
+      "by": "apsara",
+      "at": "2026-09-21T20:29:39.583Z"
+    },
+    "aluminumscrapcleancrwheel": {
+      "jarvisName": "Aluminum Scrap clean Cr wheel",
+      "qbId": "9",
+      "qbName": "Chrome Wheels",
+      "by": "apsara",
+      "at": "2026-09-21T20:29:39.585Z"
+    },
+    "regularcomboscrap": {
+      "jarvisName": "Regular combo scrap",
+      "qbId": "77",
+      "qbName": "Regular Engine Combo",
+      "by": "apsara",
+      "at": "2026-09-21T20:29:39.587Z"
+    },
+    "smallelectricmotorsnofreeironmudordirttobeloaded": {
+      "jarvisName": "SMALL ELECTRIC MOTORS (NO FREE IRON, MUD OR DIRT TO BE LOADED)",
+      "qbId": "18",
+      "qbName": "Electrical Motors",
+      "by": "apsara",
+      "at": "2026-09-21T20:29:39.589Z"
+    },
+    "lowgrademotor": {
+      "jarvisName": "LOW GRADE MOTOR",
+      "qbId": "18",
+      "qbName": "Electrical Motors",
+      "by": "apsara",
+      "at": "2026-09-21T20:29:39.591Z"
+    },
+    "scrapaluminium": {
+      "jarvisName": "Scrap Aluminium",
+      "qbId": "53",
+      "qbName": "AL COMBO",
+      "by": "apsara",
+      "at": "2026-09-21T20:29:39.594Z"
+    },
+    "aluminiumcombo": {
+      "jarvisName": "Aluminium combo",
+      "qbId": "53",
+      "qbName": "AL COMBO",
+      "by": "apsara",
+      "at": "2026-09-21T20:29:39.596Z"
+    },
+    "regularcombo": {
+      "jarvisName": "Regular Combo",
+      "qbId": "77",
+      "qbName": "Regular Engine Combo",
+      "by": "apsara",
+      "at": "2026-09-21T20:31:24.762Z",
+      "reason": "accepted from QB history"
+    },
+    "autobattery": {
+      "jarvisName": "Auto Battery",
+      "qbId": "75",
+      "qbName": "Battery Scrap",
+      "by": "apsara",
+      "at": "2026-09-21T20:31:24.765Z",
+      "reason": "accepted from QB history"
+    },
+    "autocastingtense": {
+      "jarvisName": "Auto Casting Tense",
+      "qbId": "71",
+      "qbName": "AUTO CAST",
+      "by": "apsara",
+      "at": "2026-09-21T20:31:24.767Z",
+      "reason": "accepted from QB history"
+    },
+    "dirtyalwheels": {
+      "jarvisName": "Dirty Al Wheels",
+      "qbId": "85",
+      "qbName": "Al Wheels Dirty",
+      "by": "apsara",
+      "at": "2026-09-21T20:31:24.769Z",
+      "reason": "accepted from QB history"
+    },
+    "battery": {
+      "jarvisName": "Battery",
+      "qbId": "75",
+      "qbName": "Battery Scrap",
+      "by": "apsara",
+      "at": "2026-09-21T20:31:24.774Z",
+      "reason": "accepted from QB history"
+    },
+    "aluminiumscraptense": {
+      "jarvisName": "ALUMINIUM SCRAP TENSE",
+      "qbId": "71",
+      "qbName": "AUTO CAST",
+      "by": "apsara",
+      "at": "2026-09-21T20:31:24.777Z",
+      "reason": "accepted from QB history"
+    },
+    "alwheels": {
+      "jarvisName": "AL WHEELS",
+      "qbId": "85",
+      "qbName": "Al Wheels Dirty",
+      "by": "apsara",
+      "at": "2026-09-21T20:31:24.783Z",
+      "reason": "accepted from QB history"
+    },
+    "autotense": {
+      "jarvisName": "Auto Tense",
+      "qbId": "71",
+      "qbName": "AUTO CAST",
+      "by": "apsara",
+      "at": "2026-09-21T20:31:24.785Z",
+      "reason": "accepted from QB history"
+    },
+    "scrapwetbatteries": {
+      "jarvisName": "Scrap Wet Batteries",
+      "qbId": "75",
+      "qbName": "Battery Scrap",
+      "by": "apsara",
+      "at": "2026-09-21T20:31:24.787Z",
+      "reason": "accepted from QB history"
+    },
+    "mixedmotorscrap": {
+      "jarvisName": "Mixed Motor Scrap",
+      "qbId": "18",
+      "qbName": "Electrical Motors",
+      "by": "apsara",
+      "at": "2026-09-21T20:31:24.790Z",
+      "reason": "accepted from QB history"
+    },
+    "scarpbatteries": {
+      "jarvisName": "Scarp Batteries",
+      "qbId": "75",
+      "qbName": "Battery Scrap",
+      "by": "apsara",
+      "at": "2026-09-21T20:31:24.792Z",
+      "reason": "accepted from QB history"
+    },
+    "hscode7602009000aluminiumcombo": {
+      "jarvisName": "H.S CODE : 7602009000 ALUMINIUM COMBO",
+      "qbId": "53",
+      "qbName": "AL COMBO",
+      "by": "apsara",
+      "at": "2026-09-21T20:31:24.795Z",
+      "reason": "accepted from QB history"
+    },
+    "castironrotorsdrums80rotors20drums": {
+      "jarvisName": "Cast Iron Rotors & Drums (80% rotors & 20% drums)",
+      "qbId": "42",
+      "qbName": "Rotors and Drums",
+      "by": "apsara",
+      "at": "2026-09-21T20:31:24.797Z",
+      "reason": "accepted from QB history"
+    },
+    "autobatteries": {
+      "jarvisName": "Auto Batteries",
+      "qbId": "75",
+      "qbName": "Battery Scrap",
+      "by": "apsara",
+      "at": "2026-09-21T20:31:24.800Z",
+      "reason": "accepted from QB history"
+    },
+    "aluminiumwheelsclean": {
+      "jarvisName": "Aluminium Wheels Clean",
+      "qbId": "37",
+      "qbName": "Al Wheels Clean",
+      "by": "apsara",
+      "at": "2026-09-21T20:31:24.804Z",
+      "reason": "accepted from QB history"
+    },
+    "scrapregularcombo": {
+      "jarvisName": "Scrap Regular Combo",
+      "qbId": "77",
+      "qbName": "Regular Engine Combo",
+      "by": "apsara",
+      "at": "2026-09-21T20:31:24.807Z",
+      "reason": "accepted from QB history"
+    },
+    "aluminiumscrapautotense": {
+      "jarvisName": "Aluminium Scrap 'Auto Tense'",
+      "qbId": "71",
+      "qbName": "AUTO CAST",
+      "by": "apsara",
+      "at": "2026-09-21T20:31:24.809Z",
+      "reason": "accepted from QB history"
+    },
+    "chromewheel": {
+      "jarvisName": "Chrome wheel",
+      "qbId": "9",
+      "qbName": "Chrome Wheels",
+      "by": "apsara",
+      "at": "2026-09-21T20:31:24.813Z",
+      "reason": "accepted from QB history"
+    },
+    "steelenginewithalhead": {
+      "jarvisName": "Steel Engine with Al Head",
+      "qbId": "103",
+      "qbName": "Steel Engines",
+      "by": "apsara",
+      "at": "2026-09-21T20:31:24.815Z",
+      "reason": "accepted from QB history"
+    },
+    "batteries": {
+      "jarvisName": "Batteries",
+      "qbId": "75",
+      "qbName": "Battery Scrap",
+      "by": "apsara",
+      "at": "2026-09-21T20:31:24.818Z",
+      "reason": "accepted from QB history"
+    },
+    "altensescrap": {
+      "jarvisName": "AL. TENSE SCRAP",
+      "qbId": "71",
+      "qbName": "AUTO CAST",
+      "by": "apsara",
+      "at": "2026-09-21T20:31:24.820Z",
+      "reason": "accepted from QB history"
+    },
+    "dirtyalum356wheels": {
+      "jarvisName": "DIRTY ALUM 356 WHEELS",
+      "qbId": "85",
+      "qbName": "Al Wheels Dirty",
+      "by": "apsara",
+      "at": "2026-09-21T20:31:24.824Z",
+      "reason": "accepted from QB history"
+    },
+    "dirtyaluautowheels": {
+      "jarvisName": "Dirty Alu auto wheels",
+      "qbId": "85",
+      "qbName": "Al Wheels Dirty",
+      "by": "apsara",
+      "at": "2026-09-21T20:31:56.186Z"
+    },
+    "cleanalum356wheels": {
+      "jarvisName": "CLEAN ALUM 356 WHEELS",
+      "qbId": "37",
+      "qbName": "Al Wheels Clean",
+      "by": "apsara",
+      "at": "2026-09-21T20:31:56.189Z"
+    },
+    "electricmotor": {
+      "jarvisName": "Electric Motor",
+      "qbId": "18",
+      "qbName": "Electrical Motors",
+      "by": "apsara",
+      "at": "2026-09-21T20:32:39.419Z"
+    },
+    "electricmotors": {
+      "jarvisName": "Electric motors",
+      "qbId": "18",
+      "qbName": "Electrical Motors",
+      "by": "apsara",
+      "at": "2026-09-21T20:32:39.421Z"
+    },
+    "smallmotor": {
+      "jarvisName": "Small motor",
+      "qbId": "112",
+      "qbName": "Mixed Motor small",
+      "by": "apsara",
+      "at": "2026-09-21T20:32:39.424Z"
+    },
+    "sealedunit": {
+      "jarvisName": "Sealed Unit",
+      "qbId": "21",
+      "qbName": "Sealed Units",
+      "by": "apsara",
+      "at": "2026-09-21T20:32:39.427Z"
+    },
+    "alubreakage": {
+      "jarvisName": "Alu Breakage",
+      "qbId": "46",
+      "qbName": "AL Breakage",
+      "by": "apsara",
+      "at": "2026-09-21T20:32:39.430Z"
+    },
+    "breakage": {
+      "jarvisName": "Breakage",
+      "qbId": "46",
+      "qbName": "AL Breakage",
+      "by": "apsara",
+      "at": "2026-09-21T20:32:39.432Z"
+    },
+    "albreakagetc": {
+      "jarvisName": "Albreakage (tc)",
+      "qbId": "46",
+      "qbName": "AL Breakage",
+      "by": "apsara",
+      "at": "2026-09-21T20:32:39.435Z"
+    },
+    "aluminiumbreakagealengine": {
+      "jarvisName": "Aluminium Breakage (al engine)",
+      "qbId": "46",
+      "qbName": "AL Breakage",
+      "by": "apsara",
+      "at": "2026-09-21T20:32:39.437Z"
+    },
+    "dirtychromewheels": {
+      "jarvisName": "Dirty Chrome wheels",
+      "qbId": "9",
+      "qbName": "Chrome Wheels",
+      "by": "apsara",
+      "at": "2026-09-21T20:32:39.440Z"
+    },
+    "aldirtywheels": {
+      "jarvisName": "AL DIRTY WHEELS",
+      "qbId": "85",
+      "qbName": "Al Wheels Dirty",
+      "by": "apsara",
+      "at": "2026-09-21T20:32:39.442Z"
+    },
+    "isrialcrwheelsdirty": {
+      "jarvisName": "ISRI-AL CR WHEELS DIRTY",
+      "qbId": "85",
+      "qbName": "Al Wheels Dirty",
+      "by": "apsara",
+      "at": "2026-09-21T20:32:39.445Z"
+    },
+    "isrial356wheelsdirtywheel": {
+      "jarvisName": "ISRI-AL 356 WHEELS DIRTY WHEEL",
+      "qbId": "85",
+      "qbName": "Al Wheels Dirty",
+      "by": "apsara",
+      "at": "2026-09-21T20:32:39.450Z"
+    },
+    "alrimsdirty": {
+      "jarvisName": "AL RIMS DIRTY",
+      "qbId": "105",
+      "qbName": "Al Rims",
+      "by": "apsara",
+      "at": "2026-09-21T20:32:39.455Z"
+    },
+    "regularengine": {
+      "jarvisName": "Regular Engine",
+      "qbId": "77",
+      "qbName": "Regular Engine Combo",
+      "by": "apsara",
+      "at": "2026-09-21T20:32:39.459Z"
+    },
+    "acautocompressorsboxloading": {
+      "jarvisName": "Ac Auto Compressors (Box Loading)",
+      "qbId": "15",
+      "qbName": "AC Compressors",
+      "by": "apsara",
+      "at": "2026-09-21T20:32:39.464Z"
+    },
+    "compressor": {
+      "jarvisName": "Compressor",
+      "qbId": "15",
+      "qbName": "AC Compressors",
+      "by": "apsara",
+      "at": "2026-09-21T20:32:39.468Z"
+    },
+    "alunosestarter": {
+      "jarvisName": "Alu Nose Starter",
+      "qbId": "88",
+      "qbName": "Al Nose Starters",
+      "by": "apsara",
+      "at": "2026-09-21T20:32:39.472Z"
+    },
+    "scrapalcombo": {
+      "jarvisName": "Scrap Al Combo",
+      "qbId": "53",
+      "qbName": "AL COMBO",
+      "by": "apsara",
+      "at": "2026-09-21T20:32:39.474Z"
+    },
+    "cuscrapharnesswire": {
+      "jarvisName": "CU SCRAP \"HARNESS WIRE\"",
+      "qbId": "83",
+      "qbName": "Harness wire",
+      "by": "apsara",
+      "at": "2026-09-21T20:32:39.477Z"
+    },
+    "hscode7602009000aluminiumcastingtense": {
+      "jarvisName": "HS CODE: 7602009000 ,ALUMINIUM CASTING TENSE",
+      "qbId": "71",
+      "qbName": "AUTO CAST",
+      "by": "apsara",
+      "at": "2026-09-21T20:32:39.479Z"
+    },
+    "aluminumscrapautotense": {
+      "jarvisName": "Aluminum Scrap Auto Tense",
+      "qbId": "71",
+      "qbName": "AUTO CAST",
+      "by": "apsara",
+      "at": "2026-09-21T20:32:39.482Z"
+    },
+    "alcomboandregularcombo": {
+      "jarvisName": "Al combo and Regular Combo",
+      "qbId": "53",
+      "qbName": "AL COMBO",
+      "by": "apsara",
+      "at": "2026-09-21T20:32:39.485Z"
+    },
+    "alcomboregularcombo": {
+      "jarvisName": "Al combo,Regular Combo",
+      "qbId": "53",
+      "qbName": "AL COMBO",
+      "by": "apsara",
+      "at": "2026-09-21T20:32:39.489Z"
+    },
+    "mixalcomboandsteelmotor": {
+      "jarvisName": "Mix AL combo and Steel Motor",
+      "qbId": "53",
+      "qbName": "AL COMBO",
+      "by": "apsara",
+      "at": "2026-09-21T20:32:39.491Z"
+    },
+    "356autowheels": {
+      "jarvisName": "356 AUTO WHEELS",
+      "qbId": "85",
+      "qbName": "Al Wheels Dirty",
+      "by": "apsara",
+      "at": "2026-09-21T20:32:39.494Z"
+    },
+    "cl356castwheels": {
+      "jarvisName": "Cl 356 Cast wheels.",
+      "qbId": "37",
+      "qbName": "Al Wheels Clean",
+      "by": "apsara",
+      "at": "2026-09-21T20:32:39.497Z"
+    },
+    "scrapsteelcombo": {
+      "jarvisName": "Scrap steel combo",
+      "qbId": "103",
+      "qbName": "Steel Engines",
+      "by": "apsara",
+      "at": "2026-09-21T20:32:39.500Z"
+    }
+  },
+  "bank": {
+    "bofa": {
+      "jarvisName": "BofA",
+      "qbId": "295",
+      "qbName": "Checking (3301)",
+      "by": "apsara",
+      "at": "2026-09-22T04:49:51.607Z",
+      "reason": "Edge Metals BofA account; every 2026 payment in QB went through it"
+    }
+  }
+}
