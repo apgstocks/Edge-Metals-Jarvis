@@ -60,7 +60,7 @@ function buildBillPayment(p, refs) {
     if (!problems.length && p.kind !== 'advance' && Math.abs(allocated - p.amount) > 0.005) problems.push(`allocated ${allocated} of a ${p.amount} payment`);
     if (problems.length) return { problems };
     return { payment: {
-        VendorRef: { value: String(refs.vendorId) }, PayType: 'Check', TotalAmt: total, TxnDate: String(p.date).slice(0, 10),
+        VendorRef: { value: String(refs.vendorId) }, PayType: 'Check', TotalAmt: total, TxnDate: push.isoDate(p.date),
         CheckPayment: { BankAccountRef: { value: String(refs.bankAccountId) } },
         PrivateNote: [p.mode, p.bank, p.ref && `Ref ${p.ref}`, p.kind === 'advance' && 'advance', `Jarvis payment ${p.id}`].filter(Boolean).join(' · '),
         Line,
@@ -93,14 +93,14 @@ function buildCustomerPayment(r, refs) {
     const creditMemos = [];
     for (const [invId, x] of perInvoice) if (x.bankCharge > 0) {
         creditMemos.push({ forInvoice: invId, amount: x.bankCharge, memo: {
-            CustomerRef: { value: String(refs.customerId) }, TxnDate: String(r.date).slice(0, 10),
+            CustomerRef: { value: String(refs.customerId) }, TxnDate: push.isoDate(r.date),
             PrivateNote: `Bank charge taken from wire · invoice #${invId} · Jarvis receipt ${r.id}`,
             Line: [{ DetailType: 'SalesItemLineDetail', Amount: x.bankCharge, Description: 'Bank charge deducted by intermediary bank', SalesItemLineDetail: { ItemRef: { value: String(refs.bankChargeItemId) } } }],
         } });
     }
     const discounts = round2([...perInvoice.values()].reduce((s, x) => s + x.discount, 0));
     const payment = {
-        CustomerRef: { value: String(refs.customerId) }, TotalAmt: money, TxnDate: String(r.date).slice(0, 10),
+        CustomerRef: { value: String(refs.customerId) }, TotalAmt: money, TxnDate: push.isoDate(r.date),
         DepositToAccountRef: { value: String(refs.bankAccountId) },
         PaymentRefNum: r.ref ? String(r.ref).slice(0, 21) : undefined,
         PrivateNote: [r.mode, r.bank, discounts > 0 && `Discount ${discounts.toFixed(2)} recorded in Jarvis, not posted`, `Jarvis receipt ${r.id}`].filter(Boolean).join(' · '),
@@ -132,7 +132,7 @@ async function pushBillPayment(p, snapshots, { env = auth.qbEnv(), dryRun = true
     const opts = { env, fetchImpl };
     const jarvis = { id: p.id, supplier: p.supplier, date: p.date, amount: p.amount, mode: p.mode, bank: p.bank, kind: p.kind, allocations: p.allocations };
     const cut = push.beforeCutover('bill', p.date, env);
-    if (cut) return { status: 'before-cutover', problems: [cut] };
+    if (cut) return { status: push.UNREADABLE.test(cut) ? 'blocked' : 'before-cutover', problems: [cut] };
     const key = push.linkKey(env, 'billpayment', p.id);
     if (push.loadLinks()[key]) return { status: 'already-linked', qbId: push.loadLinks()[key].qbId };
     const problems = [];
@@ -162,7 +162,7 @@ async function pushCustomerPayment(r, snapshots, { env = auth.qbEnv(), dryRun = 
     const opts = { env, fetchImpl };
     const jarvis = { id: r.id, customer: r.customer, date: r.date, amount: r.amount, mode: r.mode, bank: r.bank, allocations: r.allocations };
     const cut = push.beforeCutover('invoice', r.date, env);
-    if (cut) return { status: 'before-cutover', problems: [cut] };
+    if (cut) return { status: push.UNREADABLE.test(cut) ? 'blocked' : 'before-cutover', problems: [cut] };
     const key = push.linkKey(env, 'payment', r.id);
     if (push.loadLinks()[key]) return { status: 'already-linked', qbId: push.loadLinks()[key].qbId };
     const problems = [];

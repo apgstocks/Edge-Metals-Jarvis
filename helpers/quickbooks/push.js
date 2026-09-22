@@ -109,7 +109,7 @@ function buildBill(b, refs) {
     if (problems.length) return { problems };
     const bill = {
         VendorRef: { value: String(refs.vendorId) },
-        TxnDate: String(b.date).slice(0, 10),
+        TxnDate: isoDate(b.date),
         DocNumber: doc,
         PrivateNote: [container && `Container ${container}`, b.booking_no && `Booking ${b.booking_no}`, b.seal_no && `Seal ${b.seal_no}`, b.id && `Jarvis bill ${b.id}`].filter(Boolean).join(' · '),
         Line,
@@ -216,16 +216,28 @@ function cutoverFor(kind, env) {
     if (/^\d{4}-\d{2}-\d{2}$/.test(v)) return v;
     return env === 'production' ? null : '0000-00-00';
 }
+// Jarvis stores dates as typed ("9/15/2026" or "2026-09-15"). Compared as
+// plain text, "9/15/2026" sorts before "2026-09-06" and was silently treated
+// as pre-cutover — so it never reached QuickBooks. Normalise first.
+function isoDate(v) {
+    const s = String(v || '').trim();
+    if (/^\d{4}-\d{2}-\d{2}/.test(s)) return s.slice(0, 10);
+    try { return require('../bills').sortableDate(s) || null; } catch { return null; }
+}
+const UNREADABLE = /can't be read/;
+
 function beforeCutover(kind, date, env) {
     const c = cutoverFor(kind, env);
     if (c === null) return `no ${kind} cutover date set for production — refusing`;
-    return String(date).slice(0, 10) < c ? `${kind} dated ${String(date).slice(0, 10)} is before the cutover (${c}) — her books already hold that period` : null;
+    const d = isoDate(date);
+    if (!d) return `${kind} date "${date}" can't be read — refusing`;
+    return d < c ? `${kind} dated ${d} is before the cutover (${c}) — her books already hold that period` : null;
 }
 
 async function pushBill(b, snapshots, { env = auth.qbEnv(), dryRun = true, fetchImpl } = {}) {
     const opts = { env, fetchImpl };
     const cut = beforeCutover('bill', b.date, env);
-    if (cut) return { status: 'before-cutover', problems: [cut] };
+    if (cut) return { status: UNREADABLE.test(cut) ? 'blocked' : 'before-cutover', problems: [cut] };
     const key = linkKey(env, 'bill', b.id || b.container_no);
     const linked = loadLinks()[key];
     if (linked) return { status: 'already-linked', qbId: linked.qbId };
@@ -259,4 +271,4 @@ async function pushBill(b, snapshots, { env = auth.qbEnv(), dryRun = true, fetch
     return { status: 'created', qbId: out.Bill.Id, total: out.Bill.TotalAmt, bill: out.Bill, journalId: je.id };
 }
 
-module.exports = { docNumberFor, confirmedName, idByName, ensureSandbox, saveLink, linkKey, cutoverFor, beforeCutover, buildBill, resolveRefs, findExisting, findExistingDoc, judgeExisting, pushBill, loadLinks, LINKS_FILE, DOC_MAX };
+module.exports = { isoDate, UNREADABLE, docNumberFor, confirmedName, idByName, ensureSandbox, saveLink, linkKey, cutoverFor, beforeCutover, buildBill, resolveRefs, findExisting, findExistingDoc, judgeExisting, pushBill, loadLinks, LINKS_FILE, DOC_MAX };

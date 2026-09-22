@@ -24,6 +24,8 @@ const lb = buildInvoice([S.withTotals({ ...base, id: 'c', item: 'Steel combo', w
 ck('priced per lb -> Qty in lbs', lb.invoice && lb.invoice.Line[0].SalesItemLineDetail.Qty === 45920 && lb.invoice.Line[0].SalesItemLineDetail.UnitPrice === 1.88);
 const withIn = buildInvoice([S.withTotals({ ...base, id: 'd', item: 'Steel combo', weight: 10, weight_unit: 'mt', invoice_price: 600, charges: [{ what: 'Loading', amount: 150, direction: 'in', why: 'customer asked for extra loading' }, { what: 'Freight', amount: 300, direction: 'out', why: 'we pay the line' }] })], refs);
 ck('charge the CUSTOMER pays becomes a line', withIn.invoice && withIn.invoice.Line.length === 2 && withIn.total === 6150, JSON.stringify(withIn.problems));
+const cent = buildInvoice([{ ...rows[0], amount: round2c(rows[0].weight_mt * rows[0].invoice_price) + 0.01, receivable: round2c(rows[0].weight_mt * rows[0].invoice_price) + 0.01 }], refs);
+ck('1-cent rounding gap -> amount only, no Qty/UnitPrice (QuickBooks 400 "Amount is not equal to UnitPrice * Qty")', cent.invoice && cent.invoice.Line[0].SalesItemLineDetail.Qty === undefined && cent.invoice.Line[0].SalesItemLineDetail.UnitPrice === undefined, JSON.stringify(cent.problems));
 ck('charge WE pay is not on the invoice', !withIn.invoice.Line.some((l) => l.Amount === 300));
 ck('two containers on one invoice refused', buildInvoice([rows[0], { ...rows[1], container_no: 'ABCU0000000' }], refs).problems.some((p) => /one invoice is one container/.test(p)));
 ck('two customers refused', buildInvoice([rows[0], { ...rows[1], customer: 'Other' }], refs).problems.some((p) => /different customers/.test(p)));
@@ -36,5 +38,6 @@ ck('judge: same container under ANOTHER customer -> ask, names it', other.ask &&
 ck('judge: amount differs -> ask', judgeExisting([{ Id: '1', partyId: '9', TotalAmt: 99 }], '9', 100).ask);
 ck('judge: two hits -> ask even if one matches', judgeExisting([{ Id: '1', partyId: '9', TotalAmt: 100 }, { Id: '2', partyId: '9', TotalAmt: 50 }], '9', 100).ask);
 
+function round2c(n){return Math.round(n*100)/100}
 console.log(`\nquickbooks-push-invoice: ${pass} passed, ${fail} failed`);
 if (fail) { console.log('FAILED: ' + failures.join(' | ')); process.exit(1); }

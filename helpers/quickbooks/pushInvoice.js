@@ -46,7 +46,7 @@ function buildInvoice(rows, refs) {
             if (typeof g.amount !== 'number' || !(g.amount > 0)) { problems.push(`grade "${g.grade}" has no amount`); continue; }
             const detail = { ItemRef: { value: String(id) } };
             const qty = g.unit === 'mt' ? g.mt : g.lb;
-            if (typeof qty === 'number' && typeof g.price === 'number' && Math.abs(round2(qty * g.price) - round2(g.amount)) < 0.011) {
+            if (typeof qty === 'number' && typeof g.price === 'number' && round2(qty * g.price) === round2(g.amount)) {
                 detail.Qty = qty; detail.UnitPrice = g.price;
             }
             Line.push({ DetailType: 'SalesItemLineDetail', Amount: round2(g.amount), Description: container || undefined, SalesItemLineDetail: detail });
@@ -63,7 +63,7 @@ function buildInvoice(rows, refs) {
     if (problems.length) return { problems };
     const inv = {
         CustomerRef: { value: String(refs.customerId) },
-        TxnDate: String(date).slice(0, 10),
+        TxnDate: push.isoDate(date),
         DocNumber: doc,
         PrivateNote: [container && `Container ${container}`, first.booking_no && `Booking ${first.booking_no}`, first.hbl_no && `HBL ${first.hbl_no}`, `Jarvis sale ${rows.map((r) => r.id).filter(Boolean).join(',')}`].filter(Boolean).join(' · '),
         Line,
@@ -101,7 +101,7 @@ async function pushInvoice(rows, snapshots, { env = auth.qbEnv(), dryRun = true,
     const opts = { env, fetchImpl };
     const first = rows[0] || {};
     const cut = push.beforeCutover('invoice', first.date, env);
-    if (cut) return { status: 'before-cutover', problems: [cut] };
+    if (cut) return { status: push.UNREADABLE.test(cut) ? 'blocked' : 'before-cutover', problems: [cut] };
     const key = push.linkKey(env, 'invoice', push.docNumberFor(first) || first.container_no);
     const linked = push.loadLinks()[key];
     if (linked) return { status: 'already-linked', qbId: linked.qbId };

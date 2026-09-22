@@ -143,7 +143,9 @@ function after(kind, id, change = 'saved') {
 async function sweep({ env = auth.qbEnv(), dryRun = false } = {}) {
     const res = { bill: {}, sale: {}, billpayment: {}, receipt: {} };
     const count = (k, r) => { const s = (r && r.status) || 'error'; res[k][s] = (res[k][s] || 0) + 1; };
-    const since = (kind, d) => !push.beforeCutover(kind, d, env);
+    // keep a row if it is after the cutover OR its date can't be read — the
+    // push functions then report it as blocked instead of it vanishing.
+    const since = (kind, d) => { const c = push.beforeCutover(kind, d, env); return !c || push.UNREADABLE.test(c); };
     const bills = require('../bills').list().filter((b) => since('bill', b.date));
     const sales = require('../sales').list().filter((s) => since('invoice', s.date));
     const bps = require('../billPayments').list().filter((p) => since('bill', p.date));
@@ -155,6 +157,10 @@ async function sweep({ env = auth.qbEnv(), dryRun = false } = {}) {
         const byInv = {};
         for (const s of sales) { const n = push.docNumberFor(s); if (n) (byInv[n] = byInv[n] || []).push(S.withTotals(s)); }
         for (const rows of Object.values(byInv)) count('sale', await pushInvoice.pushInvoice(rows, snaps, { env, dryRun: true }).catch((e) => ({ status: 'error: ' + e.message })));
+        // payments too — they only find their bill/invoice once it is linked
+        for (const p of bps) count('billpayment', await pushPayments.pushBillPayment(p, snaps, { env, dryRun: true }).catch((e) => ({ status: 'error: ' + e.message })));
+        for (const r of recs) count('receipt', await pushPayments.pushCustomerPayment(r, snaps, { env, dryRun: true,
+            saleInvoiceNo: (saleId) => { const s = S.getSale(saleId); return s && push.docNumberFor(s); } }).catch((e) => ({ status: 'error: ' + e.message })));
         return res;
     }
     for (const b of bills) count('bill', await syncBill(b.id, env).catch((e) => ({ status: 'error: ' + e.message })));

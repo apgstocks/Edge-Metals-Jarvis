@@ -43,6 +43,10 @@ process.env.QB_CUTOVER_BILLS = '2026-09-06'; process.env.QB_CUTOVER_INVOICES = '
 ck('bill on 5 Sep (already hand-entered) refused', /before the cutover/.test(beforeCutover('bill', '2026-09-05', 'production')));
 ck('bill on 6 Sep allowed', beforeCutover('bill', '2026-09-06', 'production') === null);
 ck('Jan-May bill refused (no double cost)', beforeCutover('bill', '2026-03-20', 'production') !== null);
+ck('typed date 9/15/2026 is AFTER the 6 Sep cutover (was wrongly skipped)', beforeCutover('bill', '9/15/2026', 'production') === null);
+ck('typed date 9/5/2026 is before the cutover', /before the cutover/.test(beforeCutover('bill', '9/5/2026', 'production') || ''));
+ck('unreadable date refused, not skipped', /can't be read/.test(beforeCutover('bill', 'Sept 15', 'production') || ''));
+ck('isoDate normalises typed dates', require('../helpers/quickbooks/push').isoDate('9/15/2026') === '2026-09-15' && require('../helpers/quickbooks/push').isoDate('2026-09-15T00:00') === '2026-09-15');
 ck('invoice on 28 Aug allowed, 27 Aug refused', beforeCutover('invoice', '2026-08-28', 'production') === null && beforeCutover('invoice', '2026-08-27', 'production') !== null);
 process.env.QB_CUTOVER_BILLS = 'soon';
 ck('a malformed cutover is treated as unset (refuse)', beforeCutover('bill', '2026-12-01', 'production') !== null);
