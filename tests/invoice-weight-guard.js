@@ -38,25 +38,6 @@ const ck = (n, c, extra) => {
 };
 const section = (t) => console.log('\n=== ' + t + ' ===');
 
-// ── THE GENERATE FLOW NOW ASKS HOW IT WAS LOADED ─────────────────────────
-// Apsara, 2026-09-22: "When it is loosely loaded/pallets,ask when generating
-// packing list in invoice tab". So pressing Generate raises a question before
-// it posts anything, and a test that drives that button has to answer it —
-// this file went red the moment the step was added, which is the step
-// working rather than the step being wrong.
-//
-// IT ANSWERS "LOOSE". That is the default, it sets no fields at all, and the
-// payload is therefore exactly what this suite has always asserted against:
-// no box figures anywhere near the weight guard it is really testing.
-async function answerLoadingLoose(w) {
-    for (let i = 0; i < 25; i++) {
-        const go = w.document.getElementById('ldGo');
-        if (go) { go.click(); return true; }
-        await new Promise((r) => setTimeout(r, 20));
-    }
-    return false;   // never appeared — the caller asserts on this
-}
-
 process.env.DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvis-wguard-'));
 process.env.JARVIS_TEST = '1';
 process.env.ADMIN_PASSWORD = 'admin-pw-ddddddddddd';
@@ -223,8 +204,6 @@ section('D. the website handles the refusal');
          + "$('invItemsEditor').innerHTML = invItemRowHtml({ item_desc:'Sealed units', weight:15642, rate:0.548, packing:{gross_weight_lbs:'16122', truck_lbs:'480'} }, 0);"
          + "$('invItemsEditor').querySelectorAll('.inv-item-row').forEach(wireInvItemRow);");
     w.document.getElementById('btnInvGenerate').click();
-    ck('the loading question is asked before anything is generated',
-       await answerLoadingLoose(w), 'no "How was it loaded?" appeared');
     await new Promise((r) => setTimeout(r, 400));
 
     ck('it posted, was refused, and posted again',
@@ -241,7 +220,6 @@ section('D. the website handles the refusal');
     posts.length = 0;
     dom.window.confirm = () => false;
     w.document.getElementById('btnInvGenerate').click();
-    await answerLoadingLoose(w);
     await new Promise((r) => setTimeout(r, 400));
     ck('declining generates NOTHING', posts.length === 1 && !posts[0].weights_ok,
        JSON.stringify(posts.map((p2) => !!p2.weights_ok)));

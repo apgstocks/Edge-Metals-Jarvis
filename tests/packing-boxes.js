@@ -223,6 +223,105 @@ section('D — half an answer prints nothing');
     }
 }
 
+// ══════════════════════════════════════════════════════════════════════════
+section('E — the field on the review screen');
+// ══════════════════════════════════════════════════════════════════════════
+// Apsara, 2026-09-22, having searched by container, pressed Generate, and
+// seen nothing: "Where wil it ask?I have done search by container-then
+// geenrate..nowhere it asked", then "no.make it work on this."
+//
+// It was a modal raised by the Generate handler. Two things were wrong with
+// that. It was invisible until after she committed to generating, on a screen
+// whose own heading says "every field below is editable before you download";
+// and it lived in ONE of the three places a payload is built from this form,
+// so the batch queue she actually uses went through a different door.
+//
+// It is a field now, and collectInvoicePayload applies it — which is the
+// single place every path goes through. This section drives the real screen.
+{
+    const { JSDOM } = require('jsdom');
+    const WEB = fs.readFileSync(path.join(ROOT, 'dashboard/documents.html'), 'utf8');
+    const posted = [];
+    const dom = new JSDOM(WEB, { runScripts: 'dangerously', url: 'http://localhost/documents',
+        beforeParse(w) {
+            w.fetch = (u, o) => {
+                if (/invoice\/generate/.test(String(u))) posted.push(JSON.parse((o && o.body) || '{}'));
+                return Promise.resolve({ ok: true, status: 200,
+                    json: () => Promise.resolve({ ok: true, saved_filename: 'X.pdf', entries: [], bols: [], packing_lists: [] }),
+                    blob: () => Promise.resolve({ size: 0 }) });
+            };
+            w.alert = () => {}; w.confirm = () => true;
+            w.URL.createObjectURL = () => 'blob:x'; w.URL.revokeObjectURL = () => {};
+        } });
+    const w = dom.window;
+    await new Promise((r) => setTimeout(r, 500));
+    const fill = () => w.eval(
+        "$('inv_no').value='260828_SU_26QS04'; $('inv_container').value='MSNU2312862';"
+        + "$('invItemsEditor').innerHTML = invItemRowHtml({ item_desc:'Sealed Units', weight:23.115, rate:1208.13,"
+        + " packing:{gross_weight_lbs:'78340', truck_lbs:'16000'} }, 0);"
+        + "$('invItemsEditor').querySelectorAll('.inv-item-row').forEach(wireInvItemRow);");
+    const D = w.document;
+
+    ck('the question is a FIELD on the review screen', !!D.getElementById('inv_loading'),
+       'she looked for it here and it was not here');
+    ck('  defaulting to loosely loaded', D.getElementById('inv_loading').value === 'loose');
+    ck('  with the box figures hidden until they are needed',
+       D.getElementById('inv_boxes_row').className.includes('hidden'));
+
+    // LOOSE: the payload must carry no box keys at all.
+    fill();
+    posted.length = 0;
+    D.getElementById('btnInvGenerate').click();
+    await new Promise((r) => setTimeout(r, 300));
+    const loosePack = posted[0] && posted[0].line_items[0].packing;
+    ck('loose posts no box fields whatsoever',
+       !!loosePack && !('boxes_count' in loosePack) && !('boxes_unit_lb' in loosePack),
+       JSON.stringify(loosePack));
+
+    // PALLETS: shown, totalled on screen, and carried into the payload.
+    const sel = D.getElementById('inv_loading');
+    sel.value = 'pallets'; sel.dispatchEvent(new w.Event('change'));
+    ck('choosing pallets reveals the two figures',
+       !D.getElementById('inv_boxes_row').className.includes('hidden'));
+    D.getElementById('inv_box_count').value = '12';
+    D.getElementById('inv_box_unit').value = '110';
+    D.getElementById('inv_box_count').dispatchEvent(new w.Event('input'));
+    // The figure that will print, on screen BEFORE she presses anything —
+    // the whole reason this is not a modal any more.
+    ck('  and totals them where she can see it',
+       /1320/.test(D.getElementById('inv_box_total').textContent),
+       D.getElementById('inv_box_total').textContent);
+
+    fill();
+    sel.value = 'pallets';
+    posted.length = 0;
+    D.getElementById('btnInvGenerate').click();
+    await new Promise((r) => setTimeout(r, 300));
+    const palletPack = posted[0] && posted[0].line_items[0].packing;
+    ck('pallets carries the count and the unit weight into the payload',
+       !!palletPack && palletPack.boxes_count === 12 && palletPack.boxes_unit_lb === 110,
+       JSON.stringify(palletPack));
+    // THE ONE THAT KEEPS THE DOCUMENT HONEST: the tare and the working come
+    // from the same answer, so the printed 1,320 and the printed 12 x 110
+    // cannot disagree.
+    ck('  and sets the tare from them, rather than trusting a typed box',
+       palletPack && palletPack.boxes_weight_lbs === '1320', String(palletPack && palletPack.boxes_weight_lbs));
+
+    // Half an answer must not reach the payload at all.
+    fill();
+    sel.value = 'pallets';
+    D.getElementById('inv_box_count').value = '12';
+    D.getElementById('inv_box_unit').value = '';
+    posted.length = 0;
+    D.getElementById('btnInvGenerate').click();
+    await new Promise((r) => setTimeout(r, 300));
+    const halfPack = posted[0] && posted[0].line_items[0].packing;
+    ck('half an answer posts no box fields', !!halfPack && !('boxes_count' in halfPack),
+       JSON.stringify(halfPack));
+
+    w.close();
+}
+
 listener.close();
 console.log(`\n  ${pass} passed, ${fail} failed`);
 if (failures.length) { console.log('\n  failed:'); failures.forEach((f) => console.log('    · ' + f)); }
