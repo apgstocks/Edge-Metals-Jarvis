@@ -91,10 +91,38 @@ section('B. it does not cry wolf');
 
     // Nothing to compare is NOT a pass — it is silence, and the difference
     // matters: an invoice row with no weights has not been checked.
-    const noWeights = iw.problemFor({ item_desc: 'X', weight: 15642, packing: {} }, 0);
-    ck('  a row with no packing weights is not judged', !noWeights);
+    //
+    // This used weight: 15642 as its example and asserted silence. That was
+    // the hole. Apsara, 2026-09-22, having said it once before: "normally mt
+    // will be within 100." A weightless row stating 15,642 in a column headed
+    // MT was going through unexamined — the same shape of document as
+    // 260918_AP_26ARIS02. The intent of the check stands and the example was
+    // wrong: a PLAUSIBLE quantity with nothing to compare it to is still
+    // silence.
+    const noWeights = iw.problemFor({ item_desc: 'X', weight: 22.571, packing: {} }, 0);
+    ck('  a plausible quantity with no packing weights is not judged', !noWeights);
     const noQty = iw.problemFor(row({ weight: 0 }), 0);
     ck('  nor is a row with no quantity', !noQty);
+
+    // ── HER RULE: A TONNAGE IS A SMALL NUMBER ───────────────────────────
+    // This needs nothing to compare against, which is the whole point — it
+    // is the only check that can speak when the row carries no weights.
+    const impossible = iw.problemFor({ item_desc: 'Sealed Units', weight: 49760, packing: {} }, 0);
+    ck('  but an impossible tonnage is caught with no weights at all',
+       impossible && impossible.kind === 'IMPOSSIBLE_MT', impossible && impossible.kind);
+    ck('    and it offers the figure in MT, so she can just type it',
+       impossible && /22\.571/.test(impossible.why), impossible && impossible.why);
+    ck('  99 MT passes — the line is generous on purpose',
+       !iw.problemFor({ item_desc: 'X', weight: 99, packing: {} }, 0));
+    ck('  101 MT does not',
+       (iw.problemFor({ item_desc: 'X', weight: 101, packing: {} }, 0) || {}).kind === 'IMPOSSIBLE_MT');
+
+    // THE ORDERING. When the row HAS weights, they give the better sentence —
+    // "this is your net weight in POUNDS, and in MT it is 22.571" beats "that
+    // is not a tonnage". The ceiling must not steal that case.
+    const both = iw.problemFor({ item_desc: 'X', weight: 49760, packing: { net_weight_lbs: '49760' } }, 0);
+    ck('  a row that trips BOTH still reports the pounds finding',
+       both && both.kind === 'POUNDS_IN_MT', both && both.kind);
 
     // The vaguer finding, for a mistake that is not the pounds one.
     const far = iw.problemFor(row({ weight: 71 }), 0);

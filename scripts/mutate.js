@@ -2323,6 +2323,25 @@ const MUTATIONS = [
       find: '                .sort((a, b) => b.available - a.available);',
       to:   '                .sort((a, b) => a.available - b.available);' },
 
+    // ── A TONNAGE IS A SMALL NUMBER (2026-09-22) ─────────────────────────
+    // Her rule, said twice: "normally mt will be within 100." It is the only
+    // check in that file that can speak when a row carries no weights.
+
+    { name: 'weights: an impossible tonnage passes when the row has no weights',
+      file: 'helpers/invoiceWeights.js', suites: ['invoice-weight-guard'],
+      find: '        if (stated > MAX_PLAUSIBLE_MT) {',
+      to:   '        if (false) {' },
+
+    { name: 'weights: the ceiling steals the case the pounds finding should name',
+      file: 'helpers/invoiceWeights.js', suites: ['invoice-weight-guard'],
+      find: '    if (!netLbs || netLbs <= 0) {\n        if (stated > MAX_PLAUSIBLE_MT) {',
+      to:   '    if (true) {\n        if (stated > MAX_PLAUSIBLE_MT) {' },
+
+    { name: 'weights: the ceiling is raised past anything she ships',
+      file: 'helpers/invoiceWeights.js', suites: ['invoice-weight-guard'],
+      find: 'const MAX_PLAUSIBLE_MT = 100;',
+      to:   'const MAX_PLAUSIBLE_MT = 100000;' },
+
     // ── BOXES ON A PALLETISED CONTAINER (2026-09-22) ─────────────────────
     // Her ask: loose goes exactly as it does today, pallets prints the box
     // working. Each of these is a way to get that wrong on a document that

@@ -95,6 +95,31 @@ function formatQtyMt(value) {
     return Number(value || 0).toFixed(3);
 }
 
+// ── AND POUNDS ARE WHOLE NUMBERS WITH COMMAS ──────────────────────────────
+// 22.571 MT is three decimals; 49,760 lb is not "49760.000". The unit decides
+// the format as well as the heading, because a quantity printed in the wrong
+// shape is the first thing that makes a buyer doubt the rest of the page.
+function formatQty(value, data) {
+    if (unitHeads(data).qty !== 'lbs') return formatQtyMt(value);
+    const n = Number(value) || 0;
+    // A pound figure is normally whole. Kept to at most 2 decimals rather
+    // than forced to an integer, so a genuinely fractional weight is not
+    // silently rounded into the money.
+    return n.toLocaleString('en-US',
+        { minimumFractionDigits: 0, maximumFractionDigits: Number.isInteger(n) ? 0 : 2 });
+}
+
+// ── WHAT THE TWO MONEY COLUMNS ARE HEADED ─────────────────────────────────
+// 'lb' gives "Quantity lb" and "Rate US$/lb"; anything else gives the MT
+// pair the document has always printed. Read from ONE place so the two
+// headings cannot be set independently and end up describing different units.
+function unitHeads(data) {
+    const u = String((data && data.units) || '').trim().toLowerCase();
+    return (u === 'lb' || u === 'lbs' || u === 'pound' || u === 'pounds')
+        ? { qty: 'lbs', rate: 'lb' }
+        : { qty: 'MT', rate: 'MT' };
+}
+
 // ── "12 × 110 lb", OR NOTHING AT ALL ──────────────────────────────────────
 // The working behind a boxes tare, for a container that came on pallets.
 // Apsara, 2026-09-22: "if its pallets-i need to have that boxes in attached
@@ -337,7 +362,7 @@ function buildInvoiceClassicHtml(data) {
           ${idCell(item.container_no || data.container_no)}
           ${idCell(item.seal_no || data.seal_no)}
           <td style="padding:1mm;font-size:10pt;text-align:center;vertical-align:middle;word-wrap:break-word;overflow-wrap:break-word;white-space:normal;">${escapeHtml(item.item_desc)}</td>
-          <td style="padding:1mm;font-size:10pt;text-align:center;vertical-align:middle;">${formatQtyMt(qty)}</td>
+          <td style="padding:1mm;font-size:10pt;text-align:center;vertical-align:middle;">${formatQty(qty, data)}</td>
           <td style="padding:1mm;font-size:10pt;text-align:center;vertical-align:middle;">${formatRate(rate)}</td>
           <td style="padding:1mm;font-size:10pt;text-align:center;vertical-align:middle;">${formatMoney2(amount)}</td>
         </tr>`;
@@ -909,6 +934,30 @@ function buildInvoiceClassicHtml(data) {
         // reason ab3cf26 unified them in the first place.
         signature_src: require('./signature').signatureDataUrl() || '',
         signature_block: require('./signature').signatureBlockHtml(),
+        // ── THE UNIT THE MONEY COLUMNS ARE IN ─────────────────────────────
+        // Apsara, 2026-09-23, on 260831_SU_26EM05 — an invoice that billed
+        // $13.09 for a container worth $28,860.80: "If i want to generate inv
+        // in lbs?"
+        //
+        // She buys in pounds at cents per pound. Those are the only figures
+        // she has, and every one of them was correct on that document —
+        // 49,760 lb net, $0.58 a pound. The loss came entirely from the
+        // Quantity column being headed MT while the Rate column still held
+        // her per-pound price, a mismatch documents.html created silently
+        // when she edited a weight box (see wireInvItemRow).
+        //
+        // So the unit is now a property of the invoice and BOTH headings come
+        // from it. A heading and its figure cannot disagree when one decides
+        // the other.
+        //
+        // ── ABSENT MEANS MT, AND THAT IS NOT A DEFAULT, IT IS HISTORY ─────
+        // Every invoice ever generated before today is in MT and carries no
+        // `units` field. If this fell back to pounds, reopening a March
+        // invoice would re-head its tonnes as pounds — restating a document
+        // a customer already has. The FORM defaults new invoices to lb; this
+        // renderer defaults to what the file was made in.
+        qty_unit_head: unitHeads(data).qty,
+        rate_unit_head: unitHeads(data).rate,
         packing_rows: packingRowsHtml.join('\n'),
         packing_head_cells: packingHeadCellsHtml,
         packing_total_cells: packingTotalCellsHtml,

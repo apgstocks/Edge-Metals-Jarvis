@@ -72,6 +72,16 @@ section('A — the chain, on the website');
     const dom = mountWeb();
     await new Promise((r) => setTimeout(r, 400));
     const w = dom.window, d = w.document;
+    // ── THIS SECTION IS ABOUT THE MT CHAIN, SO IT ASKS FOR MT ────────────
+    // The invoice now carries a unit and new ones default to POUNDS, after
+    // 260831_SU_26EM05 billed $13.09 for a container worth $28,860.80 — the
+    // Quantity column headed MT while the Rate box held her per-pound price.
+    // Apsara, 2026-09-23: "If i want to generate inv in lbs?"
+    //
+    // Every assertion below is unchanged and still guards the tonnes chain
+    // she asked for on 2026-09-16; it just has to say which unit it means
+    // now, the same way she does. Section C covers pounds.
+    w.eval("$('inv_units').value = 'mt';");
     w.eval("$('invItemsEditor').innerHTML = invItemRowHtml({ item_desc: 'Aluminium combo', rate: " + RATE + ", packing: {} }, 0);"
          + " wireInvItemRow($('invItemsEditor').firstElementChild);");
     const row = d.querySelector('.inv-item-row');
@@ -277,6 +287,59 @@ section('D — the phone reaches the same figure');
     ck('  and its net box is read-only as well',
        /class="invw-p-net" readonly/.test(APP),
        'typeable on one client and derived on the other is two answers to one question');
+
+    dom.window.close();
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+section('D — the same chain in POUNDS, where nothing converts');
+// ══════════════════════════════════════════════════════════════════════════
+// 260831_SU_26EM05 billed $13.09 for a container worth $28,860.80. Every
+// figure on it was right — 49,760 lb net, $0.58 a pound — and the money was
+// wrong by 2204x because the Quantity column was headed MT while the Rate
+// box still held the per-pound price. recalcWeights created that mismatch
+// itself, by dividing the quantity and leaving the rate alone.
+//
+// Apsara, 2026-09-23: "If i want to generate inv in lbs?"
+//
+// In pounds there is no conversion anywhere, which is the point: the printed
+// figures multiply out EXACTLY. 22.571 x a rounded per-MT rate is 29 cents
+// adrift; 49,760 x 0.58 is not.
+{
+    const dom = mountWeb();
+    await new Promise((r) => setTimeout(r, 400));
+    const w = dom.window, d = w.document;
+    ck('a new invoice is in pounds', w.eval("$('inv_units').value") === 'lb',
+       'she buys and prices per pound; that is the default now');
+
+    w.eval("$('invItemsEditor').innerHTML = invItemRowHtml({ item_desc: 'Sealed Units', rate: 0.58, packing: {} }, 0);"
+         + " wireInvItemRow($('invItemsEditor').firstElementChild);");
+    const row = d.querySelector('.inv-item-row');
+    const set = (cls, v) => { const e = row.querySelector(cls); e.value = String(v); e.dispatchEvent(new w.Event('input', { bubbles: true })); };
+    const val = (cls) => row.querySelector(cls).value;
+
+    // Her real container: 79,100 gross, 27,900 truck, 12 boxes x 120 lb.
+    set('.inv-p-gross', 79100); set('.inv-p-truck', 27900); set('.inv-p-boxes', 1440);
+
+    ck('net lbs is still gross minus the tares', val('.inv-p-net') === '49,760', val('.inv-p-net'));
+    // THE LINE THAT COST THE MONEY. It used to divide by 2204.62 here.
+    ck('  the quantity stays in POUNDS', val('.inv-item-weight') === '49760',
+       `${val('.inv-item-weight')} — a tonnage here is what produced $13.09`);
+    ck('  and the amount is the real one', val('.inv-item-amount') === '$28,860.80',
+       `${val('.inv-item-amount')} — the sent invoice said $13.09`);
+
+    // Switching unit must restate the quantity, or the box keeps a figure in
+    // the unit she just left — which IS the bug, arrived at another way.
+    w.eval("$('inv_units').value = 'mt'; $('inv_units').dispatchEvent(new Event('change'));");
+    ck('switching to MT restates the quantity', val('.inv-item-weight') === '22.571', val('.inv-item-weight'));
+    w.eval("$('inv_units').value = 'lb'; $('inv_units').dispatchEvent(new Event('change'));");
+    ck('  and switching back restores the pounds', val('.inv-item-weight') === '49760', val('.inv-item-weight'));
+    ck('  with the amount right again', val('.inv-item-amount') === '$28,860.80', val('.inv-item-amount'));
+
+    // The payload the route receives has to say which unit it is in, or the
+    // headings are a guess.
+    const payload = w.eval('JSON.stringify(collectInvoicePayload())');
+    ck('the payload states its unit', JSON.parse(payload).units === 'lb', payload.slice(0, 80));
 
     dom.window.close();
 }

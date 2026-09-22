@@ -597,6 +597,30 @@ body[data-theme="light"] {
 
                LOOSE IS THE DEFAULT AND SETS NOTHING, so the payload is
                unchanged for every container that is not on pallets. -->
+          <!-- ── THE UNIT THE MONEY COLUMNS ARE IN ──────────────────────────
+               Apsara, 2026-09-23, on 260831_SU_26EM05 — an invoice that
+               billed $13.09 for a container worth $28,860.80: "If i want to
+               generate inv in lbs?"
+
+               Every figure on that document was correct. 49,760 lb net,
+               $0.58 a pound. The loss came from the Quantity column being
+               headed MT while the Rate box still held her per-pound price —
+               a mismatch this screen created itself, silently, the moment
+               she typed a boxes weight (see recalcWeights below).
+
+               One unit, chosen here, drives the quantity box, the rate box
+               and both printed headings. They cannot disagree because one
+               decides the others.
+
+               LB IS THE DEFAULT FOR A NEW INVOICE because that is how she
+               buys and prices. A REOPENED one keeps whatever it was saved
+               as — see applyInvoiceDataToForm, which must never re-head an
+               old document's tonnes as pounds. -->
+          <div class="field"><label for="inv_units">Invoice in</label>
+            <select id="inv_units">
+              <option value="lb" selected>Pounds &mdash; qty in lbs, rate in US$/lb</option>
+              <option value="mt">Metric tonnes &mdash; qty in MT, rate in US$/MT</option>
+            </select></div>
           <div class="field"><label for="inv_loading">Loaded</label>
             <select id="inv_loading">
               <option value="loose" selected>Loosely loaded</option>
@@ -4257,6 +4281,35 @@ function invItemRowHtml(item, i) {
 // silently restate its tonnage because 2204.62 disagrees with the figure the
 // sheet carried.
 const LBS_PER_MT = 2204.62;
+
+// 'lb' or 'mt', for this invoice. One reader, so nothing can consult a
+// different answer than the one that will be printed.
+const invUnits = () => (($('inv_units') || {}).value === 'mt' ? 'mt' : 'lb');
+
+// Every quantity and rate box on screen says which unit it wants, because
+// "qty (MT)" sitting above a pounds figure is exactly how this went wrong.
+function syncInvUnitLabels() {
+  const lb = invUnits() === 'lb';
+  document.querySelectorAll('.inv-item-weight').forEach((el) => {
+    el.placeholder = lb ? 'qty (lbs)' : 'qty (MT)';
+  });
+  document.querySelectorAll('.inv-item-rate').forEach((el) => {
+    el.placeholder = lb ? 'rate US$/lb' : 'rate US$/MT';
+  });
+  // DELIBERATELY NOT NAMED head. tests/packing-list.js locates the packing
+  // grid's sticky heading by searching this file for that declaration and
+  // reading the next 400 characters, so an earlier variable of the same name
+  // silently becomes what it inspects and the real heading stops being
+  // checked. CLAUDE.md records it happening twice before.
+  //
+  // And this comment may not SPELL the declaration either — quoting it is
+  // what re-broke the check the first time, and re-broke it again just now
+  // when I wrote the warning out in full. Describe it; never type it.
+  const qtyHeadEl = $('invQtyHead'), rateHeadEl = $('invRateHead');
+  if (qtyHeadEl) qtyHeadEl.textContent = lb ? 'Qty (lbs)' : 'Qty (MT)';
+  if (rateHeadEl) rateHeadEl.textContent = lb ? 'Rate US$/lb' : 'Rate US$/MT';
+}
+
 const invNumOf = (el) => {
   const v = parseFloat(String((el && el.value) || '').replace(/,/g, '').trim());
   return isFinite(v) ? v : null;
@@ -4289,8 +4342,26 @@ function wireInvItemRow(row) {
     const net = invRowNetLbs(row);
     const netBox = row.querySelector('.inv-p-net');
     netBox.value = net == null ? '' : net.toLocaleString('en-US');
-    // Three decimals, the same precision her sheet and the packing list use.
-    weightBox.value = net == null ? '' : (net / LBS_PER_MT).toFixed(3);
+    // ── THE LINE THAT COST $28,847 ───────────────────────────────────────
+    // It was, unconditionally:
+    //     weightBox.value = (net / LBS_PER_MT).toFixed(3);
+    //
+    // So touching ANY weight box rewrote Quantity into tonnes — and left the
+    // Rate box holding whatever she had typed, which is cents per POUND. On
+    // 260831_SU_26EM05 that produced 22.571 x $0.58 = $13.09 for a container
+    // worth $28,860.80, on a signed commercial invoice. Every individual
+    // figure on the page was right; only their units disagreed.
+    //
+    // Her own words in the note above this function, 2026-09-16:
+    // "corresponding net weight in mt,lbs should be computed auto so as
+    // rate." The rate half was never built. Rather than convert the rate —
+    // which cannot be done safely, since nothing tells you which unit a
+    // typed rate is already in — the row now has ONE unit and the quantity
+    // is written in it. In pounds nothing is converted at all, which is why
+    // the printed figures multiply out exactly: 49,760 x 0.58 = 28,860.80.
+    weightBox.value = net == null ? ''
+        : (invUnits() === 'lb' ? String(Math.round(net * 100) / 100)
+                               : (net / LBS_PER_MT).toFixed(3));
     recalc();
   };
   row.querySelector('.inv-item-remove').addEventListener('click', () => { row.remove(); recalcInvFinalAmount(); });
@@ -4446,7 +4517,61 @@ function normalizeInvItemsForForm(data) {
   }));
 }
 
+// ── READING THE UNIT OFF THE NUMBERS ──────────────────────────────────────
+// Returns 'lb' or 'mt'. An explicit units field always wins; otherwise the
+// first row that carries both a quantity and enough weights to derive its net
+// pounds decides, by which of the two the quantity actually matches.
+//
+// Anchored on the ROW'S OWN NET, not on a threshold, so it is right for a
+// 2 MT part-load as well as a 22 MT container. Where there is nothing to
+// compare against it falls back to her rule — a tonnage is within 100 — and
+// then to pounds, because that is what she buys and prices in.
+function unitsOfData(data) {
+  const u = String((data && data.units) || '').trim().toLowerCase();
+  if (u === 'lb' || u === 'mt') return u;
+
+  for (const it of ((data && data.line_items) || [])) {
+    const qty = Number(it && it.weight);
+    if (!isFinite(qty) || qty <= 0) continue;
+    const p = (it && it.packing) || {};
+    const gross = Number(String(p.gross_weight_lbs || '').replace(/,/g, ''));
+    const stated = Number(String(p.net_weight_lbs || '').replace(/,/g, ''));
+    let net = isFinite(stated) && stated > 0 ? stated : null;
+    if (net == null && isFinite(gross) && gross > 0) {
+      const tare = ['truck_lbs', 'container_tare_lbs', 'chassis_lbs', 'boxes_weight_lbs']
+        .map((k) => Number(String(p[k] || '').replace(/,/g, '')))
+        .filter((n) => isFinite(n)).reduce((a, b) => a + b, 0);
+      net = gross - tare;
+    }
+    if (net == null || !(net > 0)) continue;
+    // Whichever it is nearer to, proportionally. No tolerance to tune.
+    const asLb = Math.abs(qty - net) / net;
+    const asMt = Math.abs(qty - net / LBS_PER_MT) / (net / LBS_PER_MT);
+    return asLb <= asMt ? 'lb' : 'mt';
+  }
+
+  // Nothing to compare against. Her rule, 2026-09-22 — "normally mt will be
+  // within 100" — read in reverse: a quantity that SMALL cannot be pounds of
+  // scrap in a container, so it is tonnes. Anything larger is pounds, which
+  // is also what she buys and prices in when it is genuinely unknowable.
+  const first = Number((((data && data.line_items) || [])[0] || {}).weight);
+  return (isFinite(first) && first > 0 && first <= 100) ? 'mt' : 'lb';
+}
+
 function applyInvoiceDataToForm(data) {
+  // ── WHICH UNIT IS THIS DATA ALREADY IN? ───────────────────────────────
+  // Two different things arrive here and they are NOT in the same unit:
+  //
+  //   a saved invoice  — made by this screen, in MT, before today
+  //   Order Details    — straight off her sheet, in POUNDS
+  //
+  // Her usual route is search-by-container, which is the second one. That is
+  // the whole origin of this bug: the sheet's 49,760 lb landed in a box
+  // labelled MT and nothing said so. Defaulting either way is wrong for the
+  // other, so the unit is READ OFF THE FIGURES rather than assumed — and an
+  // explicit `units`, which every invoice made from now on carries, always
+  // wins over the guess.
+  if ($('inv_units')) $('inv_units').value = unitsOfData(data);
   $('inv_no').value = data.inv_no || '';
   // Sheet dates arrive in assorted shapes; show MM/DD/YYYY here too.
   $('inv_date').value = toUsDate(toIsoDate(data.inv_date) || data.inv_date) || (data.inv_date || '');
@@ -4659,6 +4784,11 @@ function collectInvoicePayload() {
     port_discharge: $('inv_pod').value.trim(),
     vessel: $('inv_vessel').value.trim(),
     country_of_origin: $('inv_country_of_origin').value.trim(),
+    // The unit BOTH money columns are in — see the note on #inv_units. Sent
+    // explicitly on every invoice this screen makes, so helpers/invoicePdf
+    // never has to guess; its own fallback to MT is for documents made
+    // before this existed.
+    units: invUnits(),
     consignee: (invCurrentData && invCurrentData.consignee) || '',
     consignee_address: $('inv_consignee_address').value.split('\n').map((l) => l.trim()).filter(Boolean),
     proforma_date: (invCurrentData && invCurrentData.proforma_date) || '',
@@ -4748,6 +4878,23 @@ function syncInvLoading() {
   // she presses anything — the whole point of moving this out of a modal.
   if (out) out.textContent = (on && n > 0 && u > 0) ? `= ${Math.round(n * u * 100) / 100} lb` : '';
 }
+const unitsSel = $('inv_units');
+if (unitsSel) unitsSel.addEventListener('change', () => {
+  syncInvUnitLabels();
+  // Switching the unit must restate the quantity, or the box keeps a figure
+  // in the unit she just left — which is the whole failure this replaces.
+  // Only rows whose weights can derive it are touched; a row typed by hand
+  // with no gross is left alone rather than silently converted.
+  document.querySelectorAll('.inv-item-row').forEach((row) => {
+    const net = invRowNetLbs(row);
+    if (net == null) return;
+    const wb = row.querySelector('.inv-item-weight');
+    wb.value = invUnits() === 'lb' ? String(Math.round(net * 100) / 100)
+                                   : (net / LBS_PER_MT).toFixed(3);
+    wb.dispatchEvent(new Event('input'));
+  });
+});
+
 for (const id of ['inv_loading', 'inv_box_count', 'inv_box_unit']) {
   const el = $(id);
   if (el) el.addEventListener(id === 'inv_loading' ? 'change' : 'input', syncInvLoading);

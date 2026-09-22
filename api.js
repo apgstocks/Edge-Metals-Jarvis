@@ -7035,7 +7035,7 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
             // ever added it must be able to answer this question before it
             // ships, not after.
             const invoiceWeights = require('./helpers/invoiceWeights');
-            const weightProblems = invoiceWeights.weightProblems(body.line_items);
+            const weightProblems = invoiceWeights.weightProblems(body.line_items, body.units);
             if (weightProblems.length && body.weights_ok !== true && body.weights_ok !== 'true') {
                 return res.status(409).json({
                     error: invoiceWeights.refusalMessage(weightProblems),

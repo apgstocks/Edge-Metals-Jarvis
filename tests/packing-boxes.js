@@ -322,6 +322,89 @@ section('E — the field on the review screen');
     w.close();
 }
 
+// ══════════════════════════════════════════════════════════════════════════
+section('F — 260831_SU_26EM05, the invoice that billed $13.09');
+// ══════════════════════════════════════════════════════════════════════════
+// A signed commercial invoice for MSNU1157057 went out reading:
+//
+//     Quantity 22.571 MT   Rate $0.58   Amount $13.09
+//
+// for a container worth $28,860.80. Every figure on it was correct — 49,760
+// lb net, $0.58 a pound — and the money was wrong by a factor of 2,204
+// because the Quantity column was headed MT while the Rate box still held her
+// PER POUND price. documents.html created that mismatch itself, silently,
+// when she typed the boxes weight: recalcWeights rewrote Quantity into tonnes
+// and never touched the rate.
+//
+// Apsara, 2026-09-23: "If i want to generate inv in lbs?"
+//
+// So: one unit per invoice, and in pounds nothing converts at all — which is
+// also why the printed figures multiply out EXACTLY. 22.571 x any rounded
+// per-MT rate is 29 cents off; 49,760 x 0.58 is not.
+{
+    const EM05 = (units, qty, rate) => ({
+        inv_no: '260831_SU_26EM05', inv_date: '09/23/2026', container_no: 'MSNU1157057',
+        booking_no: 'EBKG18570295', seal_no: 'UL-8667128', consignee: 'EDGE METALS RECYCLING',
+        consignee_address: ['5120 36TH AVE S TAMPA,', 'FL 33619'],
+        units,
+        line_items: [{ item_desc: 'Sealed Units', container_no: 'MSNU1157057', seal_no: 'UL-8667128',
+            weight: qty, rate, amount: qty * rate,
+            packing: { gross_weight_lbs: '79100', truck_lbs: '27900',
+                       boxes_weight_lbs: '1440', boxes_count: 12, boxes_unit_lb: 120,
+                       net_weight_lbs: '49760', net_weight_mt: '22.571' } }],
+        subtotal: qty * rate, final_amount: qty * rate,
+    });
+
+    // ── IN POUNDS: THE DOCUMENT SHE SHOULD HAVE HAD ──────────────────────
+    RENDERED = [];
+    const lb = await call('POST', '/api/invoice/generate', sid, EM05('lb', 49760, 0.58));
+    ck('a pounds invoice generates', lb.status === 200, `${lb.status} ${lb.raw.slice(0, 200)}`);
+    const lbHtml = RENDERED.join('\n');
+    ck('  the columns are headed lbs and US$/lb',
+       /Quantity<br>lbs/.test(lbHtml) && /Rate<br>US\$\/lb/.test(lbHtml),
+       'a heading that disagrees with its figure is the whole bug');
+    ck('  the quantity prints as 49,760, not 49760.000',
+       /49,760/.test(lbHtml) && !/49760\.000/.test(lbHtml));
+    // THE NUMBER THAT MATTERS.
+    ck('  and the amount is $28,860.80', /28,860\.80/.test(lbHtml),
+       'the container is worth this; the sent invoice said $13.09');
+    ck('  with $13.09 nowhere on the page', !/13\.09/.test(lbHtml));
+    // The guard must NOT refuse this — quantity equalling net pounds is
+    // correct here, and it is the exact shape of this file's flagship error.
+    ck('  the weight guard stays quiet on a correct pounds invoice',
+       lb.status === 200 && (lb.json.weight_problems || []).length === 0,
+       JSON.stringify(lb.json && lb.json.weight_problems));
+
+    // ── AND THE MIRROR MISTAKE IS CAUGHT ─────────────────────────────────
+    // Tonnes left in a pounds column under-bills by the same 2204x.
+    const wrongWay = await call('POST', '/api/invoice/generate', sid, EM05('lb', 22.571, 0.58));
+    ck('tonnes in a pounds column is refused', wrongWay.status === 409,
+       `${wrongWay.status} — that invoice would bill $13.09 again`);
+    ck('  and named as such',
+       ((wrongWay.json || {}).problems || [{}])[0].kind === 'TONNES_IN_LB',
+       JSON.stringify((wrongWay.json || {}).problems));
+
+    // ── MT STILL WORKS EXACTLY AS IT DID ─────────────────────────────────
+    RENDERED = [];
+    const mt = await call('POST', '/api/invoice/generate', sid, EM05('mt', 22.571, 1278.67));
+    ck('an MT invoice still generates', mt.status === 200, `${mt.status} ${mt.raw.slice(0, 160)}`);
+    const mtHtml = RENDERED.join('\n');
+    ck('  headed MT and US$/MT', /Quantity<br>MT/.test(mtHtml) && /Rate<br>US\$\/MT/.test(mtHtml));
+    ck('  with three decimals, as it always has', /22\.571/.test(mtHtml));
+
+    // ── AND AN INVOICE MADE BEFORE ANY OF THIS ───────────────────────────
+    // No `units` at all. Every document generated before 2026-09-23 is like
+    // this, and every one of them is in MT. Falling back to pounds would
+    // re-head an old document's tonnes — restating a figure a customer holds.
+    RENDERED = [];
+    const old = await call('POST', '/api/invoice/generate', sid, (() => {
+        const b = EM05('mt', 22.571, 1278.67); delete b.units; return b;
+    })());
+    ck('an invoice with no unit field still prints MT', old.status === 200
+       && /Quantity<br>MT/.test(RENDERED.join('\n')),
+       'absent must mean what it has always meant');
+}
+
 listener.close();
 console.log(`\n  ${pass} passed, ${fail} failed`);
 if (failures.length) { console.log('\n  failed:'); failures.forEach((f) => console.log('    · ' + f)); }
