@@ -157,10 +157,21 @@ function partyDetail(kind, name, env) {
         || KEY(e.jarvis.supplier || e.jarvis.customer || '') === KEY(name)))
         .slice(-60).reverse();
     const sum = (a, f) => r2(a.reduce((s, x) => s + (Number(x[f]) || 0), 0));
+    const billTotal = sum(rows.bills, 'amount');
+    const advanceTotal = sum(rows.advances.filter((a) => a.kind === 'advance'), 'amount');
     rows.totals = {
-        bills: sum(rows.bills, 'amount'), invoices: sum(rows.invoices, 'amount'),
-        advances: sum(rows.advances.filter((a) => a.kind === 'advance'), 'amount'),
+        bills: billTotal, invoices: sum(rows.invoices, 'amount'),
+        advances: advanceTotal,
         advancesUnapplied: r2(rows.advances.filter((a) => a.kind === 'advance').reduce((s, a) => s + (a.amount - a.applied), 0)),
+        // ── WHO IS AHEAD ─────────────────────────────────────────────────
+        // Bills and advances read side by side invite the wrong answer: on
+        // 2026-09-24 the chat told her she owed Hugo $144,792.91 while he was
+        // holding $806,619.75 of her money. One number, with its sign.
+        owedToSupplier: kind === 'vendor' ? r2(billTotal - advanceTotal) : null,
+        // A bill with no amount is a container whose price is not agreed yet.
+        // It is NOT zero cost, and a total that silently includes it as zero
+        // is a lie of omission — so it is counted separately and said aloud.
+        unpricedBills: rows.bills.filter((b) => !(Number(b.amount) > 0)).length,
         inQuickBooks: [...rows.bills, ...rows.invoices, ...rows.advances].filter((x) => x.qbId).length,
         notInQuickBooks: [...rows.bills, ...rows.invoices, ...rows.advances].filter((x) => !x.qbId).length,
     };
@@ -329,6 +340,11 @@ function mount(app, cfg) {
             'Money: always give the figure and what it is (an advance, an open bill, a Jarvis row not yet in QuickBooks).',
             'Be short: three sentences at most, plain words, no jargon, no bullet lists.',
             'You cannot change anything — if an action is needed, name the button on the page.',
+            'For a SUPPLIER, never read out bills and advances as two separate piles: totals.owedToSupplier is',
+            'the one number that matters — positive means she owes him that much, negative means he is holding',
+            'that much of her money. Say which way round it is, in those words.',
+            'If totals.unpricedBills is above zero, say so: those containers have no agreed price yet, so the',
+            'bill total is lower than the real position and no figure here is final until they are priced.',
             'Return JSON: {"answer": "...", "followUp": "one short question that moves this forward"}',
             'The followUp is never optional and never generic — it must be about THIS party or THIS number.',
             '',
@@ -344,8 +360,11 @@ function mount(app, cfg) {
         } catch (e) {
             // Jarvis without the model still answers from the numbers.
             const t = context.totals;
+            const who = t && t.owedToSupplier !== null && t.owedToSupplier !== undefined
+                ? (t.owedToSupplier > 0 ? `you owe ${name} $${t.owedToSupplier}` : `${name} is holding $${r2(-t.owedToSupplier)} of your money`)
+                : null;
             const plain = t
-                ? `${name}: ${t.bills ? `$${t.bills} of bills` : 'no bills'}, ${t.invoices ? `$${t.invoices} of invoices` : 'no invoices'}, $${t.advances} advanced (${t.advancesUnapplied} of it not applied yet), ${t.inQuickBooks} records in QuickBooks and ${t.notInQuickBooks} not.`
+                ? `${name}: ${who ? who + '. ' : ''}$${t.bills} of bills against $${t.advances} advanced${t.unpricedBills ? `, and ${t.unpricedBills} container${t.unpricedBills > 1 ? 's have' : ' has'} no price yet` : ''}. ${t.inQuickBooks} records are in QuickBooks, ${t.notInQuickBooks} are not.`
                 : 'I can see the ledgers but the language model is not answering right now.';
             res.json({ answer: plain, followUp: name ? `Do you want the bills for ${name}, or the wires?` : 'Which supplier or customer shall I open?', degraded: true });
         }

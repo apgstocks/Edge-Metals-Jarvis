@@ -68,6 +68,23 @@ const ck = (name, ok, extra) => { if (ok) { pass++; console.log('  PASS ', name)
     ck('...and always comes back with a follow-up question', /\?\s*$/.test(String(ask.body.followUp || '').trim()), ask.body);
     ck('an empty question is refused', (await post('/api/qb/ask', { question: '  ' })).code === 400);
 
+    // ── who is ahead ───────────────────────────────────────────────────────
+    // The chat told her she owed Hugo $144,792.91 while he held $806,619.75 of
+    // her money (2026-09-24). One signed number, said in words.
+    const R = require('../helpers/quickbooks/routes');
+    const fake = (bills, advances) => {
+        const d = { bills, invoices: [], advances, journal: [] };
+        const sum = (a) => Math.round(a.reduce((s, x) => s + x.amount, 0) * 100) / 100;
+        return { owed: Math.round((sum(bills) - sum(advances.filter(x => x.kind === 'advance'))) * 100) / 100 };
+    };
+    ck('advances bigger than bills means HE is holding her money',
+       fake([{ amount: 144792.91 }], [{ kind: 'advance', amount: 806619.75 }]).owed < 0);
+    ck('bills bigger than advances means she owes him',
+       fake([{ amount: 90000 }], [{ kind: 'advance', amount: 10000 }]).owed === 80000);
+    const askHugo = await post('/api/qb/ask', { question: 'do we owe anything to Hugo?', kind: 'vendor', name: 'Hugo' });
+    ck('the answer never leaves the two piles unresolved',
+       askHugo.code === 200 && (!askHugo.body.degraded || /holding|owe|no bills|no records/i.test(askHugo.body.answer)), askHugo.body);
+
     server.close();
     console.log(`\nquickbooks-page: ${pass} passed, ${fail} failed`);
     if (fail) { console.log('FAILED: ' + failures.join(' | ')); process.exit(1); }
