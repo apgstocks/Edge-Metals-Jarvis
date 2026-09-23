@@ -21,34 +21,23 @@
 //      typing a plausible figure into prose, which is not.
 //
 // Everything is read-only: see sqlGuard and dataMirror.
-const catalog = require('./dataCatalog');
 const guard = require('./sqlGuard');
-const mirror = require('./dataMirror');
 const engine = require('./sqlEngine');
+const books = require('./books');
 
-// Her own questions, with the query each one means. These are the few-shot
-// examples; they are worth more than any prompt wording, and they are the
-// right place to fix a question she asks often and Jarvis gets wrong.
-const EXAMPLES = [
-    { q: 'how much do we owe Inesh', sql: "SELECT supplier, ROUND(SUM(balance), 2) AS owed, COUNT(*) AS bills FROM bills WHERE balance > 0 AND lower(supplier) LIKE '%inesh%' GROUP BY supplier",
-      shape: 'single', headline: 'We owe {supplier} {owed} across {bills} bills.', formats: { owed: 'money', bills: 'number' } },
-    { q: 'which customers owe us money', sql: 'SELECT customer, ROUND(SUM(balance), 2) AS owed FROM sales WHERE balance > 0 GROUP BY customer ORDER BY owed DESC',
-      shape: 'list', headline: '{count} customers owe us money.', title: 'Outstanding by customer' },
-    { q: 'how many containers did we load this month', sql: "SELECT COUNT(DISTINCT container_no) AS containers FROM bills WHERE substr(date, 1, 7) = strftime('%Y-%m', 'now', 'localtime')",
-      shape: 'single', headline: '{containers} containers this month.', formats: { containers: 'number' } },
-    { q: 'what was our margin in August', sql: "SELECT ROUND(SUM(margin), 2) AS margin, ROUND(SUM(revenue), 2) AS revenue, COUNT(*) AS containers FROM margin WHERE state = 'closed' AND substr(sale_date, 1, 7) = '2026-08'",
-      shape: 'single', headline: 'Margin was {margin} on {revenue} of sales, across {containers} closed containers.', formats: { margin: 'money', revenue: 'money', containers: 'number' } },
-    { q: 'which bills are not finished', sql: 'SELECT date, supplier, container_no, still_needs FROM bills WHERE is_finished = 0 ORDER BY date DESC',
-      shape: 'list', headline: '{count} bills still need something.', title: 'Unfinished bills' },
-    { q: 'what did we pay Sher Trucking last month', sql: "SELECT ROUND(SUM(paid), 2) AS paid, COUNT(DISTINCT container_no) AS containers FROM trucking_bills WHERE lower(trucking_company) LIKE '%sher%' AND substr(date, 1, 7) = strftime('%Y-%m', 'now', 'localtime', '-1 month')",
-      shape: 'single', headline: 'We paid {paid} to Sher Trucking on {containers} containers.', formats: { paid: 'money', containers: 'number' } },
-];
+// Her own questions, with the query each one means, now live in
+// helpers/data/books.js — one set per company, because a worked example for
+// the yard is nonsense in the metals book and the other way round. They are
+// still the tuning dial: a question Jarvis keeps getting wrong goes in there.
+const EXAMPLES = books.BOOKS.metals.examples;
 
 const SHAPES = ['single', 'list'];
 
-function prompt(question, previous) {
-    const ex = EXAMPLES.map((e) => `Q: ${e.q}\n${JSON.stringify({ tables: [], sql: e.sql, shape: e.shape, headline: e.headline, formats: e.formats || {}, title: e.title || null })}`).join('\n\n');
-    return `You turn Apsara's question about her EDGE METALS business into ONE read-only SQLite query.
+function prompt(question, previous, bookName) {
+    const b = books.book(bookName);
+    const catalog = b.catalog();
+    const ex = b.examples.map((e) => `Q: ${e.q}\n${JSON.stringify({ tables: [], sql: e.sql, shape: e.shape, headline: e.headline, formats: e.formats || {}, title: e.title || null })}`).join('\n\n');
+    return `You turn Apsara's question about her ${b.label} business into ONE read-only SQLite query.
 
 ${catalog.schemaText(catalog.tableNames())}
 
@@ -65,7 +54,7 @@ HOW TO ANSWER:
 - "formats": placeholder -> one of money, number, weight_lb, weight_mt, percent, date, text.
 - "title": a short heading for the table on screen (list only).
 - "tables": the tables you used.
-- "scope": "metals" normally; "yard" if the question is about Edge Yard (loads, yard inventory, petty cash, expenses, trucker bills) — then leave sql empty; "unclear" if you cannot tell what she means, and put the question you would ask in "ask".
+- "scope": "${b.key}" normally; "${b.other}" if the question is about ${b.otherWords} — then leave sql empty; "unclear" if you cannot tell what she means, and put the question you would ask in "ask".
 Today is ${new Date().toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' })}; SQLite 'now' is that day.
 
 EXAMPLES:
@@ -137,16 +126,20 @@ function nextStep(question, tables, rows) {
 // Returns { ok, spoken, screen, sql, tables, rows, columns, why }.
 async function ask(question, opts = {}) {
     const { callGeminiJSON } = require('../gemini');
+    const b = books.book(opts.book);
+    const mirror = b.mirror();
     let info;
     try { info = mirror.ensure(); }
     catch (e) { return { ok: false, spoken: `I can't read the ledgers right now: ${e.message}`, screen: null, error: e.message }; }
 
-    const plan0 = await callGeminiJSON(prompt(question, null));
+    const plan0 = await callGeminiJSON(prompt(question, null, b.key));
     if (!plan0) {
         return { ok: false, spoken: "I couldn't work that question into a query — the model didn't answer. Say it another way?", screen: null, error: 'no plan' };
     }
-    if (plan0.scope === 'yard') {
-        return { ok: false, scope: 'yard', spoken: "That's Edge Yard — ask Scout. I only have the Edge Metals ledgers.", screen: null };
+    // The other company's question, handed back rather than answered from the
+    // wrong book. Reported as scope 'yard'/'metals' — whichever it belongs to.
+    if (plan0.scope === b.other) {
+        return { ok: false, scope: b.other, spoken: b.redirect, screen: null };
     }
     if (plan0.scope === 'unclear' || (!plan0.sql && plan0.ask)) {
         return { ok: false, scope: 'unclear', spoken: String(plan0.ask || 'What exactly do you want to know?'), screen: null, ask: true };
@@ -169,7 +162,7 @@ async function ask(question, opts = {}) {
         if (attempt === 1) break;
         console.warn(`[ASKDATA] first attempt failed (${lastError}) — repairing`);
         repaired = true;
-        const fixedPlan = await callGeminiJSON(prompt(question, { sql: (plan && plan.sql) || '', error: lastError }));
+        const fixedPlan = await callGeminiJSON(prompt(question, { sql: (plan && plan.sql) || '', error: lastError }, b.key));
         if (!fixedPlan || !fixedPlan.sql) break;
         plan = fixedPlan;
     }
@@ -212,7 +205,7 @@ async function ask(question, opts = {}) {
     if (next) screenParts.push(next);
 
     return { ok: true, spoken, screen: screenParts.join('\n\n'), sql: plan.sql, tables, rows, columns,
-        shape, next, repaired, engine: info.engine, counts: info.counts };
+        shape, next, repaired, book: b.key, engine: info.engine, counts: info.counts };
 }
 
 module.exports = { ask, prompt, bind, fmt, table, nextStep, EXAMPLES };

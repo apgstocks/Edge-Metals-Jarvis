@@ -171,4 +171,4 @@ async function sweep({ env = auth.qbEnv(), dryRun = false } = {}) {
     return res;
 }
 
-module.exports = { after, sweep, syncBill, syncSale, syncBillPayment, syncReceipt, on };
+module.exports = { after, sweep, syncBill, syncSale, syncBillPayment, syncReceipt, on, snapshots };

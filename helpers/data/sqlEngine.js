@@ -82,8 +82,11 @@ function dbDir() {
 // `declared` gives each table its columns even when it has no rows yet: a
 // ledger she has not started using is an EMPTY TABLE, not a missing one, or
 // the first question about it dies with "no such table" instead of "none".
-function buildFile(tables, signature, declared = {}) {
-    const file = path.join(dbDir(), 'ledger-mirror.sqlite');
+function buildFile(tables, signature, declared = {}, { name = 'ledger-mirror.sqlite' } = {}) {
+    // `name` is how the two companies stay apart: Edge Metals and Edge Yard
+    // get SEPARATE files, so neither can reach the other's tables by mistake
+    // — a separation that survives somebody forgetting a WHERE clause.
+    const file = path.join(dbDir(), name);
     const stamp = file + '.stamp';
     try {
         if (fs.existsSync(file) && fs.readFileSync(stamp, 'utf8') === signature) return file;

@@ -124,6 +124,116 @@ function summarise(loads) {
     };
 }
 
+// ── THE REST OF EDGE YARD (2026-09-23) ────────────────────────────────────
+// Apsara asked for "scout's access to all edge yard data". Until now the
+// brief carried four stores — loads, outbound loads, payments and stock — so
+// Scout answered "how much do we owe" well and "what did we spend on fuel in
+// August" not at all, because the expense had never been shown to it.
+//
+// WHAT IS DELIBERATELY NOT HERE, and why it is worth writing down:
+//
+//   petty cash      Edge METALS. Its buckets are Edge Metals, AAA Investment
+//                   and Chase. CLAUDE.md rule 5 — different companies — and
+//                   the yard assistant has no business holding either one's
+//                   bank position.
+//   quote contacts  Asked 2026-09-23; she said no. The store is not company
+//                   scoped, so it may carry Edge Metals suppliers.
+//   item catalogue  Asked at the same time; also no. Grade names only, and
+//                   the same names appear on Edge Metals containers.
+//
+// BOLs she said yes to explicitly. Nothing is inferred here: the three
+// ambiguous stores were put to her by name and only the one she picked is in.
+//
+// EVERY BLOCK IS INDIVIDUALLY GUARDED. This brief is built on the way to
+// answering a question, so a store that throws — a file that does not exist
+// yet on a fresh machine, a helper mid-rename — must cost Scout that one
+// section and nothing else. A brief that fails to build is a bot that says
+// nothing at all, which is strictly worse than one missing a list.
+//
+// AND EVERYTHING IS CAPPED. The whole brief is sent to the model on every
+// single turn, so an uncapped store is a slower and more expensive answer to
+// every question, including the ones that never touch it.
+function yardExtras(days, since) {
+    const out = {};
+    const attempt = (key, fn) => { try { const v = fn(); if (v != null) out[key] = v; } catch (e) { /* this section only */ } };
+
+    attempt('expenses', () => {
+        const ex = require('./expenses');
+        const all = ex.loadExpenses() || [];
+        if (!all.length) return null;
+        const recent = all.filter((e) => ymd(e && e.date) >= since);
+        return {
+            all_time: ex.getExpenseReport(all),
+            [`last_${days}_days`]: ex.getExpenseReport(recent),
+            recent: recent
+                .slice().sort((a, b) => String(b.date || '').localeCompare(String(a.date || '')))
+                .slice(0, 40)
+                .map((e) => ({ date: ymd(e.date), category: e.category || null,
+                               description: e.description || null, amount: money(e.amount),
+                               method: e.method || null })),
+        };
+    });
+
+    attempt('yard_profit', () => {
+        const p = require('./yardProfit').yardProfit({});
+        return (p && typeof p === 'object') ? p : null;
+    });
+
+    attempt('scale_tickets', () => {
+        const rows = require('./scaleTickets').loadScaleTickets() || [];
+        if (!rows.length) return null;
+        // Newest first already; these are evidence FOR a load rather than a
+        // figure of their own, so the count matters more than the detail.
+        return {
+            count: rows.length,
+            recent: rows.slice(0, 25).map((t) => ({
+                id: t.id, received_at: t.received_at || null, seller: t.seller || null,
+                load_id: t.load_id || null, gross: t.gross ?? null, tare: t.tare ?? null,
+                net: t.net ?? null, drive_link: t.drive_link || null,
+            })),
+        };
+    });
+
+    attempt('bols', () => {
+        const rows = require('./bols').listBols() || [];
+        if (!rows.length) return null;
+        return {
+            count: rows.length,
+            recent: rows.slice(0, 30).map((b) => ({
+                bol_no: b.bol_no || b.bolNo || null, date: ymd(b.date), buyer: b.buyer || b.customer || null,
+                container_no: b.container_no || null, items: b.items || b.item || null,
+            })),
+        };
+    });
+
+    attempt('address_book', () => {
+        const rows = require('./addressBook').loadAddressBook() || [];
+        const list = Array.isArray(rows) ? rows : (rows.entries || []);
+        if (!list.length) return null;
+        return {
+            count: list.length,
+            entries: list.slice(0, 60).map((e) => ({
+                name: e.name || null, role: e.role || null, company: e.company || null,
+                city: e.city || null, mobile: e.mobile || e.phone || null,
+            })),
+        };
+    });
+
+    attempt('recent_conversations', () => {
+        const log = require('./yardChatLog');
+        const days2 = (log.listDays() || []).slice(-2);
+        const rows = [];
+        for (const d of days2) for (const e of (log.readDay(d) || [])) rows.push({ day: d, q: e.question || e.q || null });
+        if (!rows.length) return null;
+        // Questions only, not answers. What she has been asking is useful
+        // context; replaying Scout's own prose back into its prompt is how a
+        // wrong answer becomes a remembered fact.
+        return rows.slice(-20);
+    });
+
+    return out;
+}
+
 // Builds the brief. `days` bounds the "recent" window; the totals below are
 // all-time so a question about the whole business is still answerable.
 function buildYardBrief(opts = {}) {
@@ -210,6 +320,7 @@ function buildYardBrief(opts = {}) {
             })),
         by_seller: bySeller(loads).slice(0, 40),
         stock_on_hand: stock,
+        ...yardExtras(days, since),
         money_outstanding: {
             count: outstanding.length,
             total_pending: money(outstanding.reduce((a, r) => a + num(r.pending), 0)),

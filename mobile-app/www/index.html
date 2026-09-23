@@ -10133,6 +10133,16 @@ function invStep3Html() {
 
     <div class="field"><label>Invoice No</label><input id="invw_no" value="${esc(d.inv_no || '')}" autocomplete="off"></div>
     <div class="field"><label>Invoice date</label><input id="invw_date" placeholder="MM/DD/YYYY" value="${esc(toUsDate(d.inv_date || ''))}" autocomplete="off"></div>
+    <!-- One unit, chosen here, drives the quantity column, the rate column
+         and both printed headings. They cannot disagree because one decides
+         the others. LB is the default for a NEW invoice because that is how
+         she buys and prices; a REOPENED one keeps whatever it was saved as,
+         which is what invwUnitsOfData works out. -->
+    <div class="field"><label for="invw_units">Invoice in</label>
+      <select id="invw_units">
+        <option value="lb"${invwUnitsOfData(d) === 'lb' ? ' selected' : ''}>Pounds &mdash; qty in lbs, rate in US$/lb</option>
+        <option value="mt"${invwUnitsOfData(d) === 'mt' ? ' selected' : ''}>Metric tonnes &mdash; qty in MT, rate in US$/MT</option>
+      </select></div>
     <div class="field"><label>Consignee address</label><textarea id="invw_address" rows="3" style="width:100%; padding:11px 12px; background:var(--surface-sunken); border:1px solid var(--border-default); border-radius:var(--radius-sm); color:var(--text-strong); outline:none; font-family:inherit; font-size:13px; resize:vertical;">${esc(addr)}</textarea></div>
 
     <!-- Full line-items table, added 2026-08-22 per Apsara ("show item table
@@ -10163,8 +10173,15 @@ function invStep3Html() {
       <table id="invwItems" data-wide="deliberate" style="border-collapse:collapse; min-width:920px; font-size:12px;">
         <thead>
           <tr style="background:var(--surface-sunken);">
-            ${['#', 'Container #', 'Seal #', 'Description', 'Qty MT', 'Rate', 'Amount', 'Gross lbs', 'Truck lbs', 'Tare lbs', 'Chassis lbs', 'Boxes lbs', 'Net lbs']
-              .map(h => `<th style="padding:7px 8px; text-align:left; font-family:var(--font-mono); font-size:9.5px; letter-spacing:.06em; text-transform:uppercase; color:var(--text-muted); white-space:nowrap; border-bottom:1px solid var(--border-default);">${h}</th>`).join('')}
+            <!-- The quantity and rate headings carry ids because they name a
+                 unit that can change after this table is rendered. "Qty MT"
+                 printed above a pounds figure is precisely how the $13.09
+                 invoice got signed, so the heading is never a fixed string. -->
+            ${[['#'], ['Container #'], ['Seal #'], ['Description'],
+               [invwUnitsOfData(d) === 'mt' ? 'Qty MT' : 'Qty lbs', 'invwQtyHead'],
+               [invwUnitsOfData(d) === 'mt' ? 'Rate US$/MT' : 'Rate US$/lb', 'invwRateHead'],
+               ['Amount'], ['Gross lbs'], ['Truck lbs'], ['Tare lbs'], ['Chassis lbs'], ['Boxes lbs'], ['Net lbs']]
+              .map(([h, id]) => `<th${id ? ` id="${id}"` : ''} style="padding:7px 8px; text-align:left; font-family:var(--font-mono); font-size:9.5px; letter-spacing:.06em; text-transform:uppercase; color:var(--text-muted); white-space:nowrap; border-bottom:1px solid var(--border-default);">${h}</th>`).join('')}
           </tr>
         </thead>
         <tbody>
@@ -10197,7 +10214,7 @@ function invStep3Html() {
       ${notes.map((n, i) => `
         <div class="invw-note" data-i="${i}" style="display:grid; grid-template-columns:1fr 104px auto; gap:6px; align-items:center;">
           <input class="invw-note-label" value="${esc(n.label || '')}" placeholder="e.g. Less: Freight">
-          <input class="invw-note-amount" type="number" step="any" value="${n.amount ?? ''}">
+          <input class="invw-note-amount" type="text" inputmode="decimal" value="${n.amount ?? ''}">
           <button type="button" class="btn btn-danger invw-note-del" style="padding:6px 9px; font-size:10px;">✕</button>
         </div>`).join('')}
     </div>
@@ -10259,14 +10276,24 @@ function invCollectPayload() {
         chassis_lbs: row.querySelector('.invw-p-chassis').value.trim(),
         boxes_weight_lbs: row.querySelector('.invw-p-boxes').value.trim(),
         net_weight_lbs: row.querySelector('.invw-p-net').value.trim(),
-        net_weight_mt: weight ? weight.toFixed(3) : '',
+        // FROM THE NET POUNDS, not from the quantity box. When the invoice is
+        // written in pounds the quantity IS the pounds, so reading it here
+        // printed "Net Weight (MT) 49760.000" on a real reissued PDF. The net
+        // is the one figure that means the same thing in either unit.
+        net_weight_mt: (() => {
+          const net = invwRowNetLbs(row);
+          if (net != null && net > 0) return (net / INVW_LBS_PER_MT).toFixed(3);
+          // No weights to derive from: only a quantity already in MT can
+          // stand in for it. A pounds quantity has nothing to say here.
+          return (invwUnits() === 'mt' && weight) ? weight.toFixed(3) : '';
+        })(),
       },
     };
   }).filter(it => it.item_desc);
 
   const notes = Array.from($('invwNotes').querySelectorAll('.invw-note')).map(row => ({
     label: row.querySelector('.invw-note-label').value.trim(),
-    amount: parseFloat(row.querySelector('.invw-note-amount').value) || 0,
+    amount: invwMoney(row.querySelector('.invw-note-amount').value) || 0,
   })).filter(n => n.label && n.amount !== 0);
 
   const subtotal = items.reduce((s, it) => s + it.amount, 0);
@@ -10292,6 +10319,10 @@ function invCollectPayload() {
     consignee: d.consignee || '',
     consignee_address: $('invw_address').value.split('\n').map(l => l.trim()).filter(Boolean),
     proforma_date: d.proforma_date || '',
+    // The unit BOTH money columns are in. The server heads the printed
+    // Quantity and Rate columns from this, so an invoice generated on the
+    // phone and the same one generated at the desk print identically.
+    units: invwUnits(),
     notes,
     subtotal,
     final_amount: subtotal + notesTotal,
@@ -10317,6 +10348,80 @@ function invCollectPayload() {
 // restate its tonnage because 2204.62 disagrees with the figure her sheet
 // carried.
 const INVW_LBS_PER_MT = 2204.62;
+
+// ── ONE UNIT PER INVOICE (2026-09-23) ─────────────────────────────────────
+// Ported from dashboard/documents.html, where this was fixed first. The
+// phone was still converting every quantity to MT unconditionally while
+// leaving the rate exactly as typed, which is what billed 260831_SU_26EM05
+// at 22.571 x $0.58 = $13.09 for a container worth $28,860.80.
+//
+// The rate is NOT converted here either, and that is deliberate rather than
+// unfinished: nothing on screen says which unit a typed rate is already in,
+// so converting it would be a guess applied to money. Instead the row has
+// ONE unit and the quantity is written in it. In pounds nothing converts at
+// all, so 49,760 x 0.58 = 28,860.80 multiplies out exactly.
+// ── READING A TYPED MONEY FIGURE ──────────────────────────────────────────
+// Identical to invMoney in dashboard/documents.html. Returns null — NOT 0 —
+// when there is no number in the text, because "zero" and "I could not read
+// that" must not be the same answer. An input type=number holding "-$205"
+// returns the EMPTY STRING from .value while still showing what was typed,
+// which is how a filled-in freight deduction reached neither the total nor
+// the PDF on 260923_MC_26MK80.
+function invwMoney(raw) {
+  const s = String(raw == null ? '' : raw).trim();
+  if (!s) return null;
+  const neg = /^\(.*\)$/.test(s) || /-/.test(s);
+  const digits = s.replace(/[^0-9.]/g, '');
+  if (!digits || !/[0-9]/.test(digits)) return null;
+  const n = parseFloat(digits);
+  if (!isFinite(n)) return null;
+  return neg ? -n : n;
+}
+
+const invwUnits = () => (($('invw_units') || {}).value === 'mt' ? 'mt' : 'lb');
+
+// Which unit an EXISTING invoice was written in. Reopening March's invoice
+// must not re-head its tonnes as pounds, so the saved value wins; when the
+// document predates the units field, the quantity is compared against the
+// net it was derived from and whichever it is nearer to, proportionally,
+// is the answer.
+function invwUnitsOfData(data) {
+  const u = String((data && data.units) || '').trim().toLowerCase();
+  if (u === 'lb' || u === 'mt') return u;
+
+  const n = (v) => Number(String(v == null ? '' : v).replace(/,/g, ''));
+  for (const it of ((data && data.line_items) || [])) {
+    const qty = Number(it && it.weight);
+    if (!isFinite(qty) || qty <= 0) continue;
+    const p = (it && it.packing) || {};
+    const stated = n(p.net_weight_lbs), gross = n(p.gross_weight_lbs);
+    let net = isFinite(stated) && stated > 0 ? stated : null;
+    if (net == null && isFinite(gross) && gross > 0) {
+      const tare = ['truck_lbs', 'container_tare_lbs', 'chassis_lbs', 'boxes_weight_lbs']
+        .map((k) => n(p[k])).filter((x) => isFinite(x)).reduce((a, b) => a + b, 0);
+      net = gross - tare;
+    }
+    if (net == null || !(net > 0)) continue;
+    const asLb = Math.abs(qty - net) / net;
+    const asMt = Math.abs(qty - net / INVW_LBS_PER_MT) / (net / INVW_LBS_PER_MT);
+    return asLb <= asMt ? 'lb' : 'mt';
+  }
+  // Her rule, 2026-09-22 — "normally mt will be within 100" — read in
+  // reverse: a quantity that small cannot be pounds of scrap in a container,
+  // so it is tonnes. Anything larger is pounds.
+  const first = Number((((data && data.line_items) || [])[0] || {}).weight);
+  return (isFinite(first) && first > 0 && first <= 100) ? 'mt' : 'lb';
+}
+
+// The two column headings that name a unit. Updated live, because the select
+// sits above a table that is not re-rendered when it changes.
+function invwSyncUnitHeads() {
+  const lb = invwUnits() === 'lb';
+  const q = $('invwQtyHead'), r = $('invwRateHead');
+  if (q) q.textContent = lb ? 'Qty lbs' : 'Qty MT';
+  if (r) r.textContent = lb ? 'Rate US$/lb' : 'Rate US$/MT';
+}
+
 const invwNumOf = (el) => {
   const v = parseFloat(String((el && el.value) || '').replace(/,/g, '').trim());
   return isFinite(v) ? v : null;
@@ -10341,7 +10446,7 @@ function wireInvStep3() {
       row.querySelector('.invw-amount').textContent = '$' + money(amt);
     });
     let notesTotal = 0;
-    $('invwNotes').querySelectorAll('.invw-note').forEach(row => { notesTotal += parseFloat(row.querySelector('.invw-note-amount').value) || 0; });
+    $('invwNotes').querySelectorAll('.invw-note').forEach(row => { notesTotal += invwMoney(row.querySelector('.invw-note-amount').value) || 0; });
     $('invwTotals').innerHTML = `
       <div style="display:flex; justify-content:space-between; color:var(--text-muted);"><span>Subtotal</span><span>$${money(subtotal)}</span></div>
       ${notesTotal ? `<div style="display:flex; justify-content:space-between; color:var(--text-muted); margin-top:4px;"><span>Adjustments</span><span>$${money(notesTotal)}</span></div>` : ''}
@@ -10377,7 +10482,7 @@ function wireInvStep3() {
         consignee_address: String($('invw_address').value || '').split('\n'),
         notes: Array.from($('invwNotes').querySelectorAll('.invw-note')).map((r) => ({
           label: r.querySelector('.invw-note-label').value.trim(),
-          amount: parseFloat(r.querySelector('.invw-note-amount').value) || 0,
+          amount: invwMoney(r.querySelector('.invw-note-amount').value) || 0,
         })).filter((n) => n.label && n.amount !== 0),
       };
       invw.data = scope === 'all' ? fresh : { ...invw.data, line_items: fresh.line_items || [], ...keep };
@@ -10400,14 +10505,35 @@ function wireInvStep3() {
   // Includes the packing inputs, which don't affect totals but keep the
   // recalc harmless — cheaper than maintaining a second, narrower selector
   // that would silently stop matching if a column is ever added.
-  // A weight column changed: net lbs, then MT, then the amount. Only the two
-  // derived boxes are rewritten, so the caret stays where she is typing.
+  // A weight column changed: net lbs, then the quantity IN THIS INVOICE'S
+  // UNIT, then the amount. Only the two derived boxes are rewritten, so the
+  // caret stays where she is typing.
+  //
+  // This line used to divide by 2204.62 unconditionally while the rate box
+  // kept whatever she had typed, which is cents per POUND — see the note on
+  // invwUnits. In pounds nothing is converted, so the printed figures
+  // multiply out exactly.
   const recalcWeights = (row) => {
     const net = invwRowNetLbs(row);
     row.querySelector('.invw-p-net').value = net == null ? '' : net.toLocaleString('en-US');
-    row.querySelector('.invw-weight').value = net == null ? '' : (net / INVW_LBS_PER_MT).toFixed(3);
+    row.querySelector('.invw-weight').value = net == null ? ''
+      : (invwUnits() === 'lb' ? String(Math.round(net * 100) / 100)
+                              : (net / INVW_LBS_PER_MT).toFixed(3));
     recalc();
   };
+  // Changing the unit re-heads the columns and rewrites every quantity that
+  // has a net to derive from. A row she typed a quantity into by hand and
+  // never gave weights to is left alone — there is nothing to convert it
+  // from, and silently rescaling a number she typed is the same class of
+  // mistake as the bug this fixes.
+  if ($('invw_units')) $('invw_units').addEventListener('change', () => {
+    invwSyncUnitHeads();
+    $('invwItems').querySelectorAll('.invw-item').forEach((row) => {
+      if (invwRowNetLbs(row) != null) recalcWeights(row);
+    });
+    recalc();
+  });
+  invwSyncUnitHeads();
   $('docBody').querySelectorAll('#invwItems input, #invwNotes input').forEach(inp => inp.addEventListener('input', recalc));
   $('invwItems').querySelectorAll('.invw-item').forEach((row) => {
     for (const sel of ['.invw-p-gross', '.invw-p-truck', '.invw-p-tare', '.invw-p-chassis', '.invw-p-boxes']) {
@@ -10422,7 +10548,7 @@ function wireInvStep3() {
     const div = document.createElement('div');
     div.className = 'invw-note';
     div.style.cssText = 'display:grid; grid-template-columns:1fr 104px auto; gap:6px; align-items:center;';
-    div.innerHTML = `<input class="invw-note-label" placeholder="e.g. Less: Freight"><input class="invw-note-amount" type="number" step="any"><button type="button" class="btn btn-danger invw-note-del" style="padding:6px 9px; font-size:10px;">✕</button>`;
+    div.innerHTML = `<input class="invw-note-label" placeholder="e.g. Less: Freight"><input class="invw-note-amount" type="text" inputmode="decimal"><button type="button" class="btn btn-danger invw-note-del" style="padding:6px 9px; font-size:10px;">✕</button>`;
     $('invwNotes').appendChild(div);
     div.querySelectorAll('input').forEach(inp => inp.addEventListener('input', recalc));
     div.querySelector('.invw-note-del').addEventListener('click', () => { div.remove(); recalc(); });

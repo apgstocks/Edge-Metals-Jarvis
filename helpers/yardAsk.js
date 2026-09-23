@@ -98,9 +98,50 @@ const SYSTEM_RULES = [
 // so a runaway response cannot cost much.
 const MAX_QUESTION_CHARS = 500;
 
+// Plainly about a figure. Deliberately conservative — a question that is not
+// obviously arithmetic keeps the old path.
+const FIGURE_QUESTION = /\b(how much|how many|total|totals|sum|average|avg|owe|owed|owing|outstanding|balance|spent|spend|spending|paid|pay|revenue|profit|margin|most|least|highest|lowest|per (lb|pound|ton|load)|this (month|week|year|quarter)|last (month|week|year|quarter)|in (january|february|march|april|may|june|july|august|september|october|november|december)|since|between)\b/i;
+
 async function askYard(question, opts = {}) {
     const q = String(question || '').trim().slice(0, MAX_QUESTION_CHARS);
     if (!q) return { ok: false, answer: 'Ask me something about the yard — loads, sellers, stock, or what is still owed.' };
+
+    // ── A FIGURE QUESTION GOES TO THE LEDGER FIRST (2026-09-23) ──────────
+    // The brief below is a THIRTY DAY window, and outside it there is nothing
+    // for the model to read — "what did we pay Junk Car in March" had no
+    // figures to prefer, so it was worked out in prose or refused. The yard
+    // mirror holds every load, sale, trucker bill, expense and petty-cash row
+    // there has ever been, and SQLite does the arithmetic (see
+    // helpers/data/askData.js for the whole argument).
+    //
+    // NARROW ON PURPOSE. It only takes questions that are plainly about a
+    // figure, and only when the query actually returns something; anything
+    // else — "what happened with that load", "is Junk Car reliable" — falls
+    // through to exactly the behaviour she has had since August. This adds a
+    // better answer for one shape of question; it removes nothing.
+    if (opts.ledger !== false && FIGURE_QUESTION.test(q)) {
+        try {
+            const out = await require('./data/askData').ask(q, { book: 'yard' });
+            try {
+                await require('./data/askLog').record({
+                    kind: 'data', question: q, source: 'scout',
+                    outcome: !out.ok ? (out.scope === 'metals' ? 'metals' : 'could_not_answer')
+                        : (out.empty ? 'nothing_matched' : 'answered'),
+                    tables: out.tables || [], sql: out.sql || null,
+                    rows: (out.rows || []).length, repaired: !!out.repaired,
+                });
+            } catch (e) { /* logging never breaks answering */ }
+            if (out.ok && !out.empty) {
+                return { ok: true, have_data: true, from: 'ledger',
+                    answer: out.screen || out.spoken, spoken: out.spoken, sql: out.sql };
+            }
+            if (!out.ok && out.scope === 'metals') {
+                return { ok: true, have_data: false, from: 'ledger', answer: out.spoken, spoken: out.spoken };
+            }
+        } catch (e) {
+            console.warn('[YARDASK] ledger path failed, falling back to the brief:', e.message);
+        }
+    }
 
     const brief = buildYardBrief({ days: opts.days || 30 });
 

@@ -4253,8 +4253,11 @@ function invItemRowHtml(item, i) {
     <td><input class="inv-item-container" placeholder="container #" value="${esc(item.container_no || '')}"></td>
     <td><input class="inv-item-seal" placeholder="seal #" value="${esc(item.seal_no || '')}"></td>
     <td><input class="inv-item-desc" placeholder="item description" value="${esc(item.item_desc || '')}"></td>
-    <td><input class="inv-item-weight" type="number" step="any" placeholder="qty (MT)" value="${item.weight || ''}"></td>
-    <td><input class="inv-item-rate" type="number" step="any" placeholder="rate" value="${item.rate || ''}"></td>
+    <!-- TEXT, not number: an input type=number holding "$0.58" or "1,250"
+         returns the EMPTY STRING from .value while still showing what was
+         typed, so the figure silently becomes 0. See invMoney. -->
+    <td><input class="inv-item-weight" type="text" inputmode="decimal" placeholder="qty (MT)" value="${item.weight || ''}"></td>
+    <td><input class="inv-item-rate" type="text" inputmode="decimal" placeholder="rate" value="${item.rate || ''}"></td>
     <td><input class="inv-item-amount" type="text" readonly value="$${(Number(item.amount) || ((Number(item.weight) || 0) * (Number(item.rate) || 0))).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}"></td>
     <td><input class="inv-p-gross" placeholder="gross lbs" value="${esc(p.gross_weight_lbs || '')}"></td>
     <td><input class="inv-p-truck" placeholder="truck lbs" value="${esc(p.truck_lbs || '')}"></td>
@@ -4337,7 +4340,7 @@ function wireInvItemRow(row) {
   const weightBox = row.querySelector('.inv-item-weight');
   const recalc = () => {
     const weight = parseFloat(weightBox.value) || 0;
-    const rate = parseFloat(row.querySelector('.inv-item-rate').value) || 0;
+    const rate = invMoney(row.querySelector('.inv-item-rate').value) || 0;
     amountBox.value = '$' + (weight * rate).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
     recalcInvFinalAmount();
   };
@@ -4382,12 +4385,49 @@ function wireInvItemRow(row) {
 // invoice total, positive adds to it. Rendered client-side identically to
 // how helpers/invoicePdf.js's normalizeNotes()/notesRowsHtml render them
 // server-side, so what she sees here matches the PDF.
+// ── WHY THIS IS NOT type="number" (2026-09-23) ────────────────────────────
+// 260923_MC_26MK80 went out at $18,439.92 instead of $18,234.92. Apsara had
+// typed a Freight deduction of  -$205  and the row was on screen, filled in,
+// with the figure visible in the box. It reached neither the total nor the
+// PDF.
+//
+// An <input type="number"> whose contents are not a valid number returns the
+// EMPTY STRING from .value — the browser keeps showing what was typed but
+// hands the page nothing. The dollar sign made it invalid:
+//
+//     "-205"   -> .value "-205"   -> -205
+//     "-$205"  -> .value ""       -> parseFloat("") || 0  ->  0
+//
+// and a note of 0 is dropped by collectInvoiceNotes's own filter. So a
+// perfectly reasonable keystroke silently deleted a $205 deduction from a
+// signed commercial invoice, and every figure on the screen still looked
+// right — the same shape as the $13.09 units bug a day earlier.
+//
+// Text, with a lenient parser, is the fix. The spinner goes; being able to
+// type a dollar sign into a money field is worth more than the spinner.
 function invNoteRowHtml(note, i) {
   return `<div class="inv-note-row" data-i="${i}" style="display:grid; grid-template-columns:2fr 1fr auto; gap:8px; align-items:center;">
     <input class="inv-note-label" placeholder="label (e.g. Freight Deduction, EFS Fee)" value="${esc((note && note.label) || '')}">
-    <input class="inv-note-amount" type="number" step="any" placeholder="amount (+/-)" value="${note && note.amount != null ? note.amount : ''}">
+    <input class="inv-note-amount" type="text" inputmode="decimal" placeholder="amount (+/-)" value="${note && note.amount != null ? esc(String(note.amount)) : ''}">
     <button type="button" class="btn btn-secondary inv-note-remove" style="padding:4px 8px; font-size:10px;">Remove</button>
   </div>`;
+}
+
+// ── READING A TYPED MONEY FIGURE ──────────────────────────────────────────
+// Accepts what people actually type into a money box: a currency symbol,
+// thousands separators, spaces, a leading or trailing minus, or accountancy
+// parentheses for a negative. Returns null — NOT 0 — when there is no number
+// in there at all, because 0 and "she typed something I could not read" must
+// not be the same answer. Conflating them is the whole bug above.
+function invMoney(raw) {
+  const s = String(raw == null ? '' : raw).trim();
+  if (!s) return null;
+  const neg = /^\(.*\)$/.test(s) || /-/.test(s);
+  const digits = s.replace(/[^0-9.]/g, '');
+  if (!digits || !/[0-9]/.test(digits)) return null;
+  const n = parseFloat(digits);
+  if (!isFinite(n)) return null;
+  return neg ? -n : n;
 }
 function wireInvNoteRow(row) {
   row.querySelector('.inv-note-amount').addEventListener('input', recalcInvFinalAmount);
@@ -4401,13 +4441,14 @@ function renderInvoiceNotes(notes) {
 function collectInvoiceNotes() {
   return Array.from($('invNotesEditor').querySelectorAll('.inv-note-row')).map((row) => ({
     label: row.querySelector('.inv-note-label').value.trim(),
-    amount: parseFloat(row.querySelector('.inv-note-amount').value) || 0,
+    amount: invMoney(row.querySelector('.inv-note-amount').value) || 0,
   })).filter((n) => n.label && n.amount !== 0);
 }
+
 function invItemsSubtotal() {
   return Array.from($('invItemsEditor').querySelectorAll('.inv-item-row')).reduce((s, row) => {
-    const weight = parseFloat(row.querySelector('.inv-item-weight').value) || 0;
-    const rate = parseFloat(row.querySelector('.inv-item-rate').value) || 0;
+    const weight = invMoney(row.querySelector('.inv-item-weight').value) || 0;
+    const rate = invMoney(row.querySelector('.inv-item-rate').value) || 0;
     return s + weight * rate;
   }, 0);
 }
@@ -4719,8 +4760,8 @@ $('btnInvRefreshCancel').addEventListener('click', () => $('invRefreshChoice').c
 
 function collectInvoicePayload() {
   const items = Array.from($('invItemsEditor').querySelectorAll('.inv-item-row')).map((row) => {
-    const weight = parseFloat(row.querySelector('.inv-item-weight').value) || 0;
-    const rate = parseFloat(row.querySelector('.inv-item-rate').value) || 0;
+    const weight = invMoney(row.querySelector('.inv-item-weight').value) || 0;
+    const rate = invMoney(row.querySelector('.inv-item-rate').value) || 0;
     return {
       item_desc: row.querySelector('.inv-item-desc').value.trim(),
       // Per-item container_no/seal_no — normally the same as the header
@@ -5102,6 +5143,7 @@ $('btnInvGenerate').addEventListener('click', async () => {
     //
     // This is the whole of the screen's part: show what it found, and let
     // her say the figures are deliberate.
+
     let result;
     try {
       result = await api('/api/invoice/generate', { method: 'POST', body: JSON.stringify(payload) });

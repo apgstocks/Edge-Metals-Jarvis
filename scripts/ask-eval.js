@@ -16,6 +16,7 @@
 //
 //   node scripts/ask-eval.js                      all questions
 //   node scripts/ask-eval.js --kind=data          just the ledger ones
+//   node scripts/ask-eval.js --book=yard          just Scout's (Edge Yard)
 //   node scripts/ask-eval.js --only=margin        matching questions only
 //   node scripts/ask-eval.js --file=my.json       her own list
 //   node scripts/ask-eval.js --json=out.json      machine-readable, to diff runs
@@ -35,6 +36,7 @@ const arg = (name, dflt) => {
 const FILE = arg('file', path.join(ROOT, 'tests/fixtures/ask-questions.json'));
 const ONLY = arg('only', null);
 const KIND = arg('kind', null);
+const BOOK = arg('book', null);   // metals | yard
 const OUT = arg('json', null);
 const LIMIT = Number(arg('limit', 0)) || 0;
 
@@ -47,6 +49,7 @@ const cut = (s, n) => {
     const questions = JSON.parse(fs.readFileSync(FILE, 'utf8'))
         .filter((x) => x && x.q)
         .filter((x) => !KIND || (x.kind || 'data') === KIND)
+        .filter((x) => !BOOK || (x.book || 'metals') === BOOK)
         .filter((x) => !ONLY || x.q.toLowerCase().includes(String(ONLY).toLowerCase()));
     const list = LIMIT ? questions.slice(0, LIMIT) : questions;
     if (!list.length) { console.log('No questions matched.'); process.exit(0); }
@@ -63,9 +66,12 @@ const cut = (s, n) => {
     // "nothing matched" rather than "the feature is broken".
     let counts = {};
     try { counts = require(path.join(ROOT, 'helpers/data/dataMirror')).ensure().counts; } catch (e) { counts = { error: e.message }; }
+    let yardCounts = {};
+    try { yardCounts = require(path.join(ROOT, 'helpers/data/yardMirror')).ensure().counts; } catch (e) { yardCounts = { error: e.message }; }
     let textCounts = {};
     try { textCounts = require(path.join(ROOT, 'helpers/data/textIndex')).ensure().counts; } catch (e) { textCounts = { error: e.message }; }
     console.log(`\nLedgers: ${Object.entries(counts).map(([k, v]) => `${k} ${v}`).join(' · ')}`);
+    console.log(`Yard:    ${Object.entries(yardCounts).map(([k, v]) => `${k} ${v}`).join(' · ')}`);
     console.log(`Text:    ${Object.entries(textCounts).map(([k, v]) => `${k} ${v}`).join(' · ')}\n`);
 
     const results = [];
@@ -74,7 +80,7 @@ const cut = (s, n) => {
         const kind = item.kind || 'data';
         const t0 = Date.now();
         let out;
-        try { out = kind === 'text' ? await askText.ask(item.q) : await askData.ask(item.q); }
+        try { out = kind === 'text' ? await askText.ask(item.q) : await askData.ask(item.q, { book: item.book || 'metals' }); }
         catch (e) { out = { ok: false, spoken: `THREW: ${e.message}` }; }
         const ms = Date.now() - t0;
         calls += kind === 'text' ? 1 : (out && out.repaired ? 2 : 1);
