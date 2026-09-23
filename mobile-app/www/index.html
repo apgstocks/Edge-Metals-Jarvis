@@ -5120,7 +5120,11 @@ function wireLoadsEvents() {
   $('payHistory').addEventListener('click', async (ev) => {
     const del = ev.target.closest('.btn-del-pay');
     if (!del) return;
-    if (!confirm('Delete this payment?\n\nThe load balance will go back up by that amount.')) return;
+    // Short on purpose, and read standing up. The cash line only appears
+    // when there IS cash to put back — promising it on a Wire would be false.
+    const isCash = String(del.dataset.mode || '').toLowerCase() === 'cash';
+    if (!confirm(`Delete this ${del.dataset.amount || ''} payment?\n`
+      + `The load will owe it again${isCash ? ', and the cash goes back to petty cash' : ''}.`)) return;
     try {
       await api(`/api/payments/${encodeURIComponent(del.dataset.id)}`, { method: 'DELETE' });
       closePayModal();
@@ -5748,6 +5752,14 @@ function wireDeckEvents() {
   document.querySelectorAll('.btn-pay-load').forEach(btn => btn.addEventListener('click', (ev) => {
     ev.stopPropagation();
     openPayModal(btn.dataset.id, btn.dataset.kind);
+  }));
+
+  // The paid badge, on the Jarvis profile — the only way into a load that
+  // already reads settled. paymentBadgeHtml only renders this hook for
+  // IS_SUPER; the modal opens with the entry fields hidden.
+  document.querySelectorAll('.pay-badge-open').forEach(el => el.addEventListener('click', (ev) => {
+    ev.stopPropagation();
+    openPayModal(el.dataset.openPayments, el.dataset.kind, { historyOnly: true });
   }));
 
   document.querySelectorAll('.btn-edit-load').forEach(btn => btn.addEventListener('click', async (ev) => {
