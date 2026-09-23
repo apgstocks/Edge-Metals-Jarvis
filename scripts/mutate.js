@@ -2323,6 +2323,17 @@ const MUTATIONS = [
       find: '                .sort((a, b) => b.available - a.available);',
       to:   '                .sort((a, b) => a.available - b.available);' },
 
+    // ── THE REFERENCE DATE (2026-09-23) ──────────────────────────────────
+    // parseNaturalTime silently ignored the `now` its caller passed. In
+    // production that is invisible; what it cost was a date function nobody
+    // could test, and tests/booking-request.js section E2 sat red for a day
+    // as a result.
+
+    { name: 'time: the caller\'s reference date is ignored again',
+      file: 'helpers/time.js', suites: ['booking-request'],
+      find: '    const now = from instanceof Date && !isNaN(from)',
+      to:   '    const now = false' },
+
     // ── SEND BY EMAIL, FROM DOCUMENTS (2026-09-23) ───────────────────────
     // "ADD SEND MAIL BUTTON IN INVOICE POST GENERATION". Sending is the one
     // action on that screen that cannot be taken back, so every mutation here

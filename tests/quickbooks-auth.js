@@ -59,7 +59,15 @@ const tokenResp = (n) => ({ access_token: 'acc' + n, refresh_token: 'ref' + n, e
     ck('sandbox and production token files differ', auth.tokenFile('sandbox') !== auth.tokenFile('production'));
     ck('token files live under DATA_DIR', auth.tokenFile('sandbox').startsWith(TMP));
     const gi = fs.readFileSync(path.join(__dirname, '..', '.gitignore'), 'utf8');
-    ck('.env and data/ are gitignored', /^\.env$/m.test(gi) && /^data\/$/m.test(gi));
+    // `/data/` since 2026-09-23, not `data/`: unanchored, git matched it at
+    // any depth and silently ignored helpers/data/ (the ledger engine), which
+    // shipped a commit calling files that were not in the repo. The property
+    // this check is for is unchanged — the token store under DATA_DIR at the
+    // repo root is still ignored, which the next line proves by path.
+    ck('.env and the runtime data dir are gitignored', /^\.env$/m.test(gi) && /^\/?data\/$/m.test(gi), gi.split('\n').slice(0, 8).join(' | '));
+    ck('  and the QuickBooks token file sits inside that ignored dir',
+       auth.tokenFile('production').includes(`${path.sep}data${path.sep}`) || auth.tokenFile('production').startsWith(TMP),
+       auth.tokenFile('production'));
 
     console.log('\n── credentials ──');
     const saved = process.env.QB_SANDBOX_CLIENT_SECRET; delete process.env.QB_SANDBOX_CLIENT_SECRET;

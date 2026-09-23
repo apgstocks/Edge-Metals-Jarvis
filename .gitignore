@@ -1,6 +1,10 @@
 node_modules/
 .env
-data/
+# ANCHORED (2026-09-23). This was `data/`, which git matches at ANY depth — so
+# helpers/data/ (the ledger question engine) was silently ignored, `git add`
+# said nothing, and workflow/brain.js shipped calling files that were not in
+# the repo. The runtime store this line is for is the one at the ROOT.
+/data/
 bookings.json
 *.log
 .DS_Store

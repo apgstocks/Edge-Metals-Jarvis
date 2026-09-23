@@ -84,6 +84,9 @@ section('B. the mirror — the helpers\' own figures, and no yard');
         gross: 29250, truck: 8700, container: 4400, chassis: 1250, boxes: 0, supplier_price: 0.32 });
     await sales.addSale({ date: '09/20/2026', customer: 'Daekwang', booking_no: 'BK1', container_no: 'TCLU9988776',
         item: 'Electric motors', weight: 16600, invoice_price: 0.55, invoice_no: '26DK15' });
+    // Deliberately half-entered — the shape her bills really arrive in, and
+    // what "which bills are not finished" has to be able to find.
+    await bills.addBill({ date: '09/21/2026', supplier: 'Inesh', gross: 20000, truck: 6000 });
 
     const info = mirror.ensure();
     const q = (sql) => engine.query(info.file, sql).rows;
@@ -93,8 +96,26 @@ section('B. the mirror — the helpers\' own figures, and no yard');
     ck('  net weight is the helper\'s net weight', row && row.net_lb === bill.net_lb, `${row && row.net_lb} vs ${bill.net_lb}`);
     ck('  amount is the helper\'s amount', row && row.amount === bill.amount, `${row && row.amount} vs ${bill.amount}`);
     ck('  balance is the helper\'s balance', row && row.balance === bill.balance, `${row && row.balance} vs ${bill.balance}`);
-    ck('  and what it still needs comes across in English',
-       row && typeof row.still_needs === 'string' && !/[_]/.test(row.still_needs || ''), JSON.stringify(row && row.still_needs));
+    const unfinished = bills.listWithTotals().find((b) => (bills.missingFor(b) || []).length);
+    const urow = unfinished ? q(`SELECT * FROM bills WHERE bill_id = '${unfinished.id}'`)[0] : null;
+    ck('  an unfinished bill says so, in English rather than field names',
+       !!urow && urow.is_finished === 0 && typeof urow.still_needs === 'string' && !/_/.test(urow.still_needs),
+       JSON.stringify(urow && { is_finished: urow.is_finished, still_needs: urow.still_needs }));
+    ck('  and a finished one is marked finished', row && row.is_finished === (bills.missingFor(bill).length ? 0 : 1));
+
+    // THE SCHEMA JARVIS IS TOLD ABOUT IS THE SCHEMA IT QUERIES. A column that
+    // exists in one and not the other is a question that fails for a reason
+    // nobody can see, so the two are asserted equal rather than compatible.
+    const catalog = require(R('helpers/data/dataCatalog'));
+    let drift = [];
+    for (const name of Object.keys(mirror.TABLES)) {
+        const described = Object.keys((catalog.find(name) || { columns: {} }).columns).sort();
+        const real = q(`SELECT * FROM ${name} LIMIT 0`);
+        const actual = (require(R('helpers/data/sqlEngine')).query(info.file, `SELECT name FROM pragma_table_info('${name}')`).rows || []).map((r) => r.name).sort();
+        if (JSON.stringify(described) !== JSON.stringify(actual)) drift.push(`${name}: catalog ${described.join(',')} vs table ${actual.join(',')}`);
+        void real;
+    }
+    ck('every table matches its description, column for column', drift.length === 0, drift.join(' | '));
     const sale = sales.listWithTotals()[0];
     const srow = q("SELECT * FROM sales WHERE container_no = 'TCLU9988776'")[0];
     ck('the sale matches too', srow && srow.amount === sale.amount && srow.balance === sale.balance, JSON.stringify(srow));
@@ -178,6 +199,7 @@ section('D. the answer — the model never writes a number');
         sql: 'SELECT supplier, ROUND(SUM(balance), 2) AS owed FROM bills GROUP BY supplier',
         shape: 'single', headline: 'We owe {supplier} {owed}.', formats: { owed: 'money' } });
     let out = await askData.ask('how much do we owe Inesh');
+    ck('a query that worked first time is not marked as repaired', out.repaired === false, JSON.stringify(out.repaired));
     const bill = bills.listWithTotals()[0];
     ck('the figure spoken is the figure in the ledger', out.ok && out.spoken === `We owe Inesh ${askData.fmt(bill.balance, 'money')}.`, out.spoken);
     ck('  the screen says where it came from', /From bills · 1 row/.test(out.screen), out.screen);
@@ -204,6 +226,9 @@ section('D. the answer — the model never writes a number');
     };
     out = await askData.ask('what do we owe in total');
     ck('a bad column is repaired on the second attempt and answered', out.ok && /We owe \$/.test(out.spoken), out.spoken);
+    // scripts/ask-eval.js counts these to show what the questions really cost,
+    // so the flag has to be true when a repair happened and absent when not.
+    ck('  and the repair is REPORTED, not just logged', out.repaired === true, JSON.stringify(out.repaired));
     ck('  and SQLite\'s own words went back to the planner', /no such column: suplier/i.test(plans[plans.length - 1] || ''), 'the repair prompt did not carry the error');
 
     // A query that will not run at all is reported honestly — not as "no data".
@@ -240,8 +265,10 @@ section('F. end to end — voice and WhatsApp, through the server');
        /suppliers are owed money/.test(SP(one)) && !/Gomez/.test(SP(one)), SP(one));
     ck('  and it says which ledger it came from', /From bills/.test(A(one)), A(one));
 
-    const two = await j.say('what is our margin');
-    ck('a second question uses a different ledger', /Margin is \$/.test(A(two)) && /From margin/.test(A(two)), A(two));
+    // "margin" alone is already the Margin SCREEN report (2026-09-20) and
+    // stays that way — this asks something no report answers.
+    const two = await j.say('how much have we spent with suppliers this year');
+    ck('a second question uses a different ledger', /We spent \$/.test(A(two)) && /From bills/.test(A(two)), A(two));
 
     const three = await bot(j.port, 'how much do we owe our suppliers');
     ck('WhatsApp gets the same answer with the table', three.status === 200 && /Inesh/.test(T(three)) && /From bills/.test(T(three)), T(three));

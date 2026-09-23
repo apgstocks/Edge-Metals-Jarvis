@@ -161,6 +161,66 @@ function installGemini(mode, log, o) {
         // composer-* modes only fail the composer; everything else answers.
         const said = (/SHE SAID: (.*)/.exec(prompt) || [])[1] || '';
 
+        // ── THE RETRIEVAL READER (helpers/data/askText.js) ───────────────
+        // Answers only from the passages it was handed, and cites them — the
+        // behaviour the suite asserts. `o.read` overrides it.
+        if (/Answer Apsara's question about her freight business USING ONLY/.test(prompt)) {
+            const q = (/QUESTION: ([\s\S]*?)\n\nJSON only/.exec(prompt) || [])[1] || '';
+            if (typeof o.read === 'function') {
+                const made = o.read(q, prompt);
+                if (made) return made;
+            }
+            // A deliberately literal stub: it quotes the first passage back,
+            // so a test can prove the ANSWER came from the retrieved text.
+            const first = (/\[1\][\s\S]*?\n([\s\S]*?)(\n\n\[2\]|\n\nQUESTION:)/.exec(prompt) || [])[1] || '';
+            const sentence = first.split(/\n/).filter(Boolean).pop() || '';
+            if (!sentence) return { answer: 'Nothing in what I have answers that.', found: false, used: [] };
+            return { answer: sentence.slice(0, 300), found: true, used: [1] };
+        }
+
+        // ── THE LEDGER PLANNER (helpers/data/askData.js) ─────────────────
+        // Returns the SQL a competent planner would write for the questions
+        // the suites ask, so the whole chain — guard, SQLite, the placeholder
+        // binding, the screen — runs for real. `o.plan` overrides it, which is
+        // how a bad plan and the repair loop get tested.
+        if (/You turn Apsara/.test(prompt) && /EDGE METALS business/.test(prompt)) {
+            // The LAST "Q:" — the examples in the prompt each start with one,
+            // and taking the first made every question look like an example.
+            const q = (/[\s\S]*\nQ: ([\s\S]*?)\nAnswer with JSON only/.exec(prompt) || [])[1] || '';
+            const retry = /YOUR LAST ATTEMPT FAILED/.test(prompt);
+            if (typeof o.plan === 'function') {
+                const made = o.plan(q, retry);
+                if (made) return made;
+            }
+            if (/\b(load|loads|yard|petty cash)\b/i.test(q)) {
+                return { scope: 'yard', tables: [], sql: '', shape: 'single', headline: '', formats: {} };
+            }
+            if (/(owe|owed|outstanding|payable)/i.test(q) && /(supplier|inesh|gomez)/i.test(q)) {
+                return { scope: 'metals', tables: ['bills'],
+                    sql: 'SELECT supplier, ROUND(SUM(balance), 2) AS owed, COUNT(*) AS bills FROM bills WHERE balance > 0 GROUP BY supplier ORDER BY owed DESC',
+                    shape: 'list', headline: '{count} suppliers are owed money.', formats: {}, title: 'Owed to suppliers' };
+            }
+            if (/(owe|outstanding|receivable)/i.test(q)) {
+                return { scope: 'metals', tables: ['sales'],
+                    sql: 'SELECT customer, ROUND(SUM(balance), 2) AS owed FROM sales WHERE balance > 0 GROUP BY customer ORDER BY owed DESC',
+                    shape: 'list', headline: '{count} customers owe us money.', formats: {}, title: 'Outstanding by customer' };
+            }
+            if (/(margin|profit)/i.test(q)) {
+                return { scope: 'metals', tables: ['margin'],
+                    sql: "SELECT ROUND(SUM(margin), 2) AS margin, ROUND(SUM(revenue), 2) AS revenue, COUNT(*) AS containers FROM margin WHERE state = 'closed'",
+                    shape: 'single', headline: 'Margin is {margin} on {revenue} of sales, across {containers} closed containers.',
+                    formats: { margin: 'money', revenue: 'money', containers: 'number' } };
+            }
+            if (/(spend|spent|purchase|bought)/i.test(q)) {
+                return { scope: 'metals', tables: ['bills'],
+                    sql: 'SELECT ROUND(SUM(amount), 2) AS spent, COUNT(DISTINCT container_no) AS containers FROM bills',
+                    shape: 'single', headline: 'We spent {spent} on {containers} containers.',
+                    formats: { spent: 'money', containers: 'number' } };
+            }
+            return { scope: 'metals', tables: ['bills'], sql: 'SELECT COUNT(*) AS bills FROM bills',
+                shape: 'single', headline: '{bills} bills on file.', formats: { bills: 'number' } };
+        }
+
         // draftIntent — park / resume / amend / none
         if (/what she wants to do with the proforma/i.test(prompt)) {
             if (/\b(hold|leave|park|one sec|put .* down)\b/i.test(said)) return { label: 'park', why: 'stub' };
@@ -295,6 +355,14 @@ function installGemini(mode, log, o) {
         // "send mail is not doing that", this is what tells us whether the
         // fault is the classification or the twelve steps after it.
         if (/AVAILABLE ACTIONS/i.test(prompt) || /bookings_list_query, bookings_count_query/.test(prompt)) {
+            // ── ask_text (2026-09-23) ─────────────────────────────────
+            // "what did X say about Y" — the words half.
+            {
+                const t2 = (/═══ NEW MESSAGE ═══\s*\n"([\s\S]*?)"\s*\n/.exec(prompt) || [])[1] || '';
+                if (o.askText !== false && /\bwhat did .+ (say|ask|want|quote|send)\b/i.test(t2)) {
+                    return { action: 'ask_text', question: t2, confidence: 0.9, reasoning: 'stub' };
+                }
+            }
             // ── ask_data (2026-09-23) ─────────────────────────────────
             // A ledger question, classified the way the real model would.
             // Narrow on purpose (an explicit money/figure word, and none of

@@ -41,6 +41,24 @@ const ck = (n, c, extra) => {
 const section = (t) => console.log('\n=== ' + t + ' ===');
 const A = (r) => (r && r.json && r.json.answer) || '';
 
+// ── THE CUTOFF SHE TYPES IS "the 20th", AND THAT MOVES ───────────────────
+// Three checks below hardcoded "20 Sep 2026". They were right when written
+// and went red the moment the 20th passed: "the 20th" means the NEXT 20th,
+// so on 23 Sep it is 20 Oct. The suite sat red for a day because the failure
+// looked like rot — which it was, but rot hiding a second, real failure in
+// the same file made both easy to ignore.
+//
+// What those checks are actually about is in their own message: "09/20/2026
+// reads as 9 December to half the world". The claim is that the mail states
+// the date UNAMBIGUOUSLY, and that it is the date she gave — not that the
+// calendar says September. So the expectation is derived from the same
+// helper the product uses, and the FORMAT is asserted separately.
+const br = require(path.join(__dirname, '..', 'helpers/bookingRequest'));
+const CUTOFF_20TH = br.forCarrier(br.cutoffInAnswer('the 20th', new Date()));
+// e.g. "20 Oct 2026" — day, three-letter month, four-digit year. If this is
+// ever null the checks below would pass on an empty pattern, so it is not.
+const UNAMBIGUOUS = /^\d{1,2} \w{3} \d{4}$/;
+
 // ── WHAT COUNTS AS A SYMPTOM ─────────────────────────────────────────────
 // Each of these is a shape of reply that is wrong regardless of what she
 // asked. They are the things she has actually reported today, generalised.
@@ -549,8 +567,8 @@ section('C2d — nothing available, so ask a forwarder');
     ck('    the count and box size as one figure',
        /2\s*x\s*40HC/i.test(body), body.slice(0, 300));
     ck('    and the cut off she gave, unambiguously',
-       /cut ?off/i.test(body) && /20 Sep 2026/.test(body),
-       '"09/20/2026" reads as 9 December to half the world, and a cutoff a month out misses a vessel');
+       /cut ?off/i.test(body) && UNAMBIGUOUS.test(CUTOFF_20TH) && body.includes(CUTOFF_20TH),
+       `"09/20/2026" reads as 9 December to half the world — wanted ${CUTOFF_20TH} in: ${body.slice(0, 300)}`);
     await j.stop();
 }
 
@@ -571,7 +589,8 @@ section('C2d2 — both answers in one breath, and one question fewer');
     ck('answering both at once skips the second question',
        /draft email to zimex/i.test(A(draft)) && !/what cut ?off/i.test(A(draft)), A(draft));
     ck('  and the cutoff she volunteered is the one that goes',
-       /20 Sep 2026/.test(String((j.mails || [])[0]?.body || A(draft))), A(draft).slice(0, 400));
+       String((j.mails || [])[0]?.body || A(draft)).includes(CUTOFF_20TH),
+       `wanted ${CUTOFF_20TH} in: ${A(draft).slice(0, 400)}`);
     await j.stop();
 }
 
@@ -753,8 +772,8 @@ section('C2d4 — correcting the draft, instead of binning it');
     ck('    the corrected port is in the mail',
        /qingdao/i.test(A(fixed)) && !/to BUSAN/i.test(A(fixed)), A(fixed).slice(0, 400));
     ck('    the answers she already gave survive it',
-       /2\s*x\s*40HC/i.test(A(fixed)) && /20 Sep 2026/.test(A(fixed)),
-       'a correction that re-asks how many is the assistant not listening');
+       /2\s*x\s*40HC/i.test(A(fixed)) && A(fixed).includes(CUTOFF_20TH),
+       `a correction that re-asks how many is the assistant not listening — wanted ${CUTOFF_20TH}`);
     ck('    and still nothing has been sent',
        (j.mails || []).length === 0, 'a re-draft is still a draft');
 

@@ -14,6 +14,16 @@ const { getLATime, daysUntil } = require('../helpers/time');
 const { describePending } = require('../helpers/pendingLabel');
 const memory = require('../helpers/memory');
 const trust = require('../helpers/trust');
+// Stage 0 of the learning layer — RECORDING ONLY. recordOutcome never changes
+// a decision, a threshold or a prompt; it appends a labelled row to the audit
+// log so the outcome column finally exists. See helpers/outcome.js.
+const { recordOutcome } = require('../helpers/outcome');
+// trust.js is scoped to forward/assign by deliberate decision. The OUTCOME
+// ledger is deliberately wider — we label every confirmable pending, because
+// a dataset restricted to two action types can never answer a question about
+// any other. Widening the label set does not widen what may act.
+const TRUST_ACTION = { confirm_forward: 'forward', confirm_assign: 'assign' };
+const pendingTarget = (p) => p.trucker_name || p.supplier_name || p.bkg_no || null;
 const { updateSession }        = require('../helpers/context');
 const truckers  = require('./truckers');
 const suppliers = require('./suppliers');
@@ -1701,6 +1711,7 @@ if (answer === 'no') {
     if (wantsAll) {
         if (pending.type === 'confirm_forward') await trust.recordRejection('forward', pending.trucker_name);
         if (pending.type === 'confirm_assign')  await trust.recordRejection('assign', pending.supplier_name);
+        await recordOutcome({ chatId, decisionType: pending.type, actionType: TRUST_ACTION[pending.type] || null, target: pendingTarget(pending), outcome: 'rejected', decidedAt: pending.created_at || null, meta: { scope: 'all' } });
         const { count } = await clearAllPending(chatId);
         const dropped = count === 1 ? 'the open question' : `all ${count} open questions`;
         await _send(chatId, `Cancelled ${dropped}.${outstandingQuoteNote()}`);
@@ -1712,6 +1723,7 @@ if (answer === 'no') {
     // pattern's trust streak — only these two types are trust-eligible.
     if (pending.type === 'confirm_forward') await trust.recordRejection('forward', pending.trucker_name);
     if (pending.type === 'confirm_assign')  await trust.recordRejection('assign', pending.supplier_name);
+    await recordOutcome({ chatId, decisionType: pending.type, actionType: TRUST_ACTION[pending.type] || null, target: pendingTarget(pending), outcome: 'rejected', decidedAt: pending.created_at || null });
 
     // 2026-08-20: an explicit cancel whose WORDING claims a wider scope than
     // the pending it actually cancelled ("cancel all the quote requests"
@@ -1817,10 +1829,12 @@ switch (pending.type) {
     case 'confirm_forward':
         await clearPending(chatId);
         await trust.recordApproval('forward', pending.trucker_name);
+        await recordOutcome({ chatId, decisionType: 'confirm_forward', actionType: 'forward', target: pending.trucker_name, outcome: 'approved', decidedAt: pending.created_at || null });
         return executeForward(chatId, pending.bkg_no, pending.trucker_name, pending.container_seq);
     case 'confirm_assign':
         await clearPending(chatId);
         await trust.recordApproval('assign', pending.supplier_name);
+        await recordOutcome({ chatId, decisionType: 'confirm_assign', actionType: 'assign', target: pending.supplier_name, outcome: 'approved', decidedAt: pending.created_at || null });
         return executeAssign(chatId, pending.bkg_no, pending.supplier_name, pending.container_seq);
     case 'confirm_recall':
         await clearPending(chatId);
@@ -4403,6 +4417,26 @@ async function askLedger(chatId, question) {
     await _send(chatId, out.screen || out.spoken);
     wa.sayAloud(out.spoken);
     return { action_taken: 'ask_data_answered', rows: (out.rows || []).length, tables: out.tables, empty: !!out.empty };
+}
+
+// ── ASK WHAT WAS SAID ──────────────────────────────────────────────────────
+// Phase 2 of "all data access" (2026-09-23): the questions whose answer is in
+// words rather than figures. Retrieval first, then the model reads only what
+// was retrieved and cites it — see helpers/data/askText.js.
+async function askText(chatId, question) {
+    const askTextLib = require('../helpers/data/askText');
+    let out;
+    try { out = await askTextLib.ask(question); }
+    catch (e) {
+        console.error('[ACTIONS] askText failed:', e && e.stack);
+        await _send(chatId, `Couldn't search that: ${e.message}`);
+        return { action_taken: 'ask_text_failed', reason: e.message };
+    }
+    const wa = require('../helpers/wa-state');
+    await _send(chatId, out.screen || out.spoken);
+    wa.sayAloud(out.spoken);
+    return { action_taken: out.empty ? 'ask_text_nothing' : 'ask_text_answered',
+        hits: (out.hits || []).length, cited: (out.used || []).length };
 }
 
 async function sendDraftedEmail(chatId, pending) {
@@ -8239,7 +8273,7 @@ module.exports = {
     replyToFocusedDigest, askWhichDigestItem, reviseDraftedEmail,
     ready,
     describeLink,
-    startSaleInvoice, saleInvoiceAnswer, askLedger,
+    startSaleInvoice, saleInvoiceAnswer, askLedger, askText,
     showPendingReplies, replyToDigestItem, summarizeEmail, markPendingReminded, forwardOriginalToSelf, sendDraftedEmail,
 init,
 setPending, clearPending, getPending, resolvePending, promoteQueued,

@@ -288,6 +288,28 @@ section('E2 — the dates, and the timezone that got one wrong');
     // Once the question HAS been asked, the whole reply is the answer — the
     // same asymmetry as countInAnswer, and for the same reason.
     ck('an answer to the question needs no label', f(br.cutoffInAnswer('the 20th', now)) === '20 Sep 2026');
+
+    // ── THE REFERENCE DATE HAS TO REACH THE PARSER ───────────────────────
+    // helpers/time.parseNaturalTime took ONE argument and bookingRequest had
+    // always called it with two — so `now` was dropped and the real clock
+    // used instead. Nothing looked wrong in production, where they are the
+    // same instant. What it broke was the ability to ask this file "what does
+    // sept 20 mean on 9 September", which is the only way the timezone
+    // behaviour above can be checked at all; the section went red the day 20
+    // Sep 2026 passed and chrono's forwardDate pushed it to 2027.
+    //
+    // Asserted against TWO different reference dates, because a single one
+    // passes just as happily on a function that ignores the argument
+    // entirely — which is exactly how this survived.
+    const t = require('../helpers/time');
+    const may = t.parseNaturalTime('sept 20', new Date('2026-05-01T12:00:00-07:00'));
+    const nov = t.parseNaturalTime('sept 20', new Date('2026-11-01T12:00:00-07:00'));
+    ck('  the reference date reaches the parser, not the wall clock',
+       f(may) === '20 Sep 2026' && f(nov) === '20 Sep 2027',
+       `${f(may)} from May, ${f(nov)} from November — identical answers mean the argument is ignored`);
+    ck('  and no argument still means today',
+       t.parseNaturalTime('sept 20') instanceof Date,
+       'workflow/actions.js calls it with one argument and must keep working');
     ck('  chrono returns null for a bare day of the month, so it is handled here',
        require('../helpers/time').parseNaturalTime('the 25th', now) === null
        && f(br.cutoffInAnswer('the 25th', now)) === '25 Sep 2026',

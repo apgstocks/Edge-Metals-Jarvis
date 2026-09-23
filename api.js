@@ -758,6 +758,20 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
                  cfg.GDRIVE_KEYFILE ? undefined : 'GDRIVE_KEYFILE not set');
             mark('gemini_key', !!cfg.GEMINI_API_KEY, cfg.GEMINI_API_KEY ? undefined : 'GEMINI_API_KEY not set');
 
+            // ── CAN JARVIS ANSWER A LEDGER QUESTION ON THIS BOX ──────────
+            // The ledger questions (2026-09-23) run SQL through node:sqlite
+            // (Node 22+) or, failing that, the python3 bridge. "none" means
+            // every "how much do we owe" would fail, and this is where to see
+            // that after a deploy rather than hearing it from her.
+            //
+            // Deliberately NOT on /healthz: that endpoint is public and its
+            // key list is argued for one addition at a time in
+            // tests/api-health.js. Which SQL library a private box has is a
+            // detail an uptime monitor does not need.
+            const sqlEngine = require('./helpers/data/sqlEngine').engineName();
+            mark('ledger_sql', sqlEngine !== 'none',
+                 sqlEngine === 'none' ? 'no node:sqlite and no python3 — ledger questions cannot run' : sqlEngine);
+
             // Sheet sync — its own last-run outcome.
             const sync = require('./helpers/sheetSync').syncStatus();
             mark('sheet_sync', !sync.lastSyncError,

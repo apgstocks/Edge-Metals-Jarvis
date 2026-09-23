@@ -149,8 +149,34 @@ function laWallClockToUTC(year, month0, day, hour, minute) {
     return new Date(guessUTC + (guessUTC - asLAUTC));
 }
 
-function parseNaturalTime(text) {
-    const now = getLADate(); // fine here — only used to READ today's LA calendar/weekday, never returned directly
+// ── `from` IS THE DATE EVERYTHING IS RELATIVE TO ─────────────────────────
+// It takes one argument and always has. helpers/bookingRequest.js has been
+// calling it as parseNaturalTime(phrase, now) since it was written — passing
+// a reference date that this function silently dropped on the floor and
+// replaced with the real clock.
+//
+// In production those are the same instant, so nothing looked wrong. What it
+// broke is the ability to TEST a date function, and tests/booking-request.js
+// section E2 is exactly that: it pins `now` to 2026-09-09 and asks what
+// "sept 20" means. It got the right answer until 20 Sep 2026 went past, and
+// then chrono's forwardDate pushed it to 2027 and the suite went red — where
+// it has sat, because the failure looked like rot rather than a real
+// signature lie. A date helper whose caller cannot say WHEN is one whose
+// timezone behaviour cannot be checked, and that section exists because a
+// cutoff already came out a day wrong once.
+//
+// OPTIONAL, and absent means the real clock — so workflow/actions.js:2872,
+// which passes one argument, behaves exactly as it did.
+function parseNaturalTime(text, from) {
+    // Converted to LA wall-clock the same way getLADate does, NOT used raw:
+    // every branch below reads .getFullYear()/.getMonth()/.getDate() off it,
+    // and a raw Date would read those in the server's timezone. That is the
+    // precise bug the E2 section was written to catch, and taking a caller's
+    // Date without this conversion would reintroduce it through the front
+    // door.
+    const now = from instanceof Date && !isNaN(from)
+        ? new Date(from.toLocaleString('en-US', { timeZone: 'America/Los_Angeles' }))
+        : getLADate(); // only used to READ today's LA calendar/weekday, never returned directly
     // Every schedule in this app already runs in America/Los_Angeles (see
     // module comment) — a manager-typed timezone qualifier is always
     // redundant, never a real "different timezone" instruction. Strip it
