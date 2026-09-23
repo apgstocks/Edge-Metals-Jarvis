@@ -1127,6 +1127,36 @@ async function eodYardReport() {
     console.log(`[SCHED] eod-yard-report: sent for ${dateKey} — ${todays.length} loads, ${emails.length} email recipient(s), ${waTargets.length} WhatsApp target(s)`);
 }
 
+// ── 11:15PM — HER LIVE WORKBOOK, INTO EDGE METALS ──────────────────────────
+// Apsara, 2026-09-24: "at everyday night,a bot should run which need to update
+// my bills and invoices in website from live sheet..if anything is missing,
+// enter that as well", and "Wire night job.Dont touch edge yard.its for edge
+// metals".
+//
+// EDGE METALS ONLY. helpers/sheetSync.js is the YARD sync going the other way
+// — loads and expenses OUT to Drive — and is untouched by this. Two syncs,
+// two companies, opposite directions; CLAUDE.md rule 5.
+//
+// 11:15pm, half an hour after nightlyCutoffBackfill at 10:45 so the two are
+// never mid-write on the same stores, and before autoArchive at 11pm has to
+// share the hour... deliberately AFTER both, so a slow backfill cannot push
+// this into the next day.
+//
+// DRY RUN until she says otherwise: runNightly writes only when BOTH
+// opts.write is true AND SHEET_SYNC_WRITE=1 is in the environment. She asked
+// to see a report first. Either way the email goes out, including on failure
+// — a night it could not run is a night her ledgers did not get the new rows,
+// and silence would read as "nothing to add".
+async function nightlyMetalsSheetSync() {
+    const job = require('./helpers/metalsSheetSyncJob');
+    const result = await job.runNightly({ write: true });
+    console.log(`[SCHED] metals-sheet-sync ${result.dryRun ? '(dry run)' : '(live)'}:`,
+        result.error || require('./helpers/metalsSheetSync').summarise(result.report));
+    try { await job.emailReport(result); }
+    catch (e) { console.error('[SCHED] metals-sheet-sync email failed:', e.message); }
+    return result;
+}
+
 function start() {
     cron.schedule('0 8 * * *',    () => morningDigest().catch(e => console.error('[SCHED] digest:', e)), TZ);
     cron.schedule('15 8 * * *',   () => dailyTruckerCheck().catch(e => console.error('[SCHED] trucker-check:', e)), TZ);
@@ -1136,6 +1166,7 @@ function start() {
     cron.schedule('0 23 * * *',   () => autoArchive().catch(e => console.error('[SCHED] archive:', e)),  TZ);
     cron.schedule('0 7 * * *',    () => nightlyLogDigest().catch(e => console.error('[SCHED] log-digest:', e)), TZ);
     cron.schedule('45 22 * * *',  () => nightlyCutoffBackfill().catch(e => console.error('[SCHED] cutoff-backfill:', e)), TZ);
+    cron.schedule('15 23 * * *',  () => nightlyMetalsSheetSync().catch(e => console.error('[SCHED] metals-sheet-sync:', e)), TZ);
     cron.schedule('* * * * *',    () => taskRunner().catch(e => console.error('[SCHED] tasks:',  e)),    TZ);
     cron.schedule('*/5 * * * *',  () => quoteEmailReplyWatch().catch(e => console.error('[SCHED] quote-email-poll:', e)), TZ);
     cron.schedule('*/5 * * * *',  () => contactQuoteEmailReplyWatch().catch(e => console.error('[SCHED] contact-quote-email-poll:', e)), TZ);

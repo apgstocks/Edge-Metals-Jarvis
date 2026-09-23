@@ -24,6 +24,11 @@
 const guard = require('./sqlGuard');
 const engine = require('./sqlEngine');
 const books = require('./books');
+// Which tables this question actually needs. A no-op below FULL_BELOW tables,
+// so it changes nothing today and starts working the moment the catalog grows
+// — see the note at the top of that file for why pruning has to land BEFORE
+// the tables do.
+const schemaPick = require('./schemaPick');
 
 // Her own questions, with the query each one means, now live in
 // helpers/data/books.js — one set per company, because a worked example for
@@ -39,7 +44,7 @@ function prompt(question, previous, bookName) {
     const ex = b.examples.map((e) => `Q: ${e.q}\n${JSON.stringify({ tables: [], sql: e.sql, shape: e.shape, headline: e.headline, formats: e.formats || {}, title: e.title || null })}`).join('\n\n');
     return `You turn Apsara's question about her ${b.label} business into ONE read-only SQLite query.
 
-${catalog.schemaText(catalog.tableNames())}
+${catalog.schemaText(schemaPick.pick(question, catalog))}
 
 WHAT HER WORDS MEAN:
 ${catalog.DEFINITIONS.map((d) => '- ' + d).join('\n')}

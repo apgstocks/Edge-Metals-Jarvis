@@ -54,27 +54,34 @@ function readCsv(file) {
         && String(p.date || '').slice(0, 10) === date && Math.abs(r2(p.amount) - amount) < 0.02);
 
     console.log(`${REALLY ? 'IMPORTING' : 'DRY RUN'} · ${supplier} · ${wires.length} wires, ${Object.keys(loads).length} loads`);
-    let addedW = 0, skipW = 0, moneyW = 0;
+    let addedW = 0, skipW = 0, moneyW = 0, skipWmoney = 0;
     for (const w of wires) {
         const amount = r2(num(w.amount));
-        if (haveAdvance(w.date, amount)) { skipW++; continue; }
+        if (haveAdvance(w.date, amount)) { skipW++; skipWmoney = r2(skipWmoney + amount); continue; }
         addedW++; moneyW = r2(moneyW + amount);
         console.log(`  advance ${w.date} $${amount}`);
         if (REALLY) await billPayments.addAdvance({ date: w.date, amount, mode, bank, supplier,
             note: `from ${supplier} tab`, created_by: 'supplier tab import' });
     }
-    let addedB = 0, skipB = 0, moneyB = 0;
+    let addedB = 0, skipB = 0, moneyB = 0, skipBmoney = 0;
     for (const [date, list] of Object.entries(loads).sort()) {
         const items = list.map((l) => ({ description: l.item, gross: num(l.gross), boxes: num(l.tare),
             weight: num(l.net), price: num(l.price), price_unit: 'lb' }));
         const total = r2(list.reduce((s, l) => s + num(l.amount), 0));
-        if (haveBill(date, total)) { skipB++; continue; }
+        if (haveBill(date, total)) { skipB++; skipBmoney = r2(skipBmoney + total); continue; }
         addedB++; moneyB = r2(moneyB + total);
         console.log(`  bill    ${date} $${total}  (${items.length} grades: ${items.map((i) => i.description).join(', ').slice(0, 70)})`);
         if (REALLY) await bills.addBill({ date, supplier, price_unit: 'lb', items,
             note: `${supplier} tab — packing list of ${date}`, created_by: 'supplier tab import' });
     }
+    // The balance is the SUPPLIER'S account, so it counts what was already in
+    // Jarvis too. Counting only the new rows makes it look wrong by exactly
+    // the rows that were right (2026-09-24: Hugo, off by the $9,517.20 bill
+    // already entered for HMMU4098359).
     console.log({ advances: addedW, 'advances already there': skipW, bills: addedB, 'bills already there': skipB,
-        'advances $': moneyW, 'bills $': moneyB, 'balance': r2(moneyW - moneyB) });
+        'advances $': moneyW, 'bills $': moneyB,
+        'already there $': r2(skipWmoney + skipBmoney),
+        'balance of new rows only': r2(moneyW - moneyB),
+        'HIS ACCOUNT BALANCE': r2((moneyW + skipWmoney) - (moneyB + skipBmoney)) });
     console.log(REALLY ? 'In Jarvis. QuickBooks is a separate push.' : 'DRY RUN — nothing written. Add --really.');
 })().catch((e) => { console.error('import failed:', e.message); process.exit(1); });

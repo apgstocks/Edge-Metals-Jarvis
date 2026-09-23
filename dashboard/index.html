@@ -973,6 +973,15 @@ const NAV_ITEMS = [
   // /api/edge-inventory out of STAFF_ALLOWED_PATH_PREFIXES.
   { id: 'edge-inventory', label: 'Edge Inventory', group: 'Edge Metals', adminOnly: true },
 
+  // QuickBooks — one page for the whole integration, a party at a time
+  // (dashboard/quickbooks.html via /quickbooks). Apsara, 2026-09-24: "i want
+  // to have a separate page where i can view everything related to qb
+  // especially these Supplier specific things". Not adminOnly — she asked for
+  // everyone who has Jarvis to see it — but the page is read-only until the
+  // padlock is opened, and the server refuses every change unless the session
+  // is admin, so a staff login can look and not touch.
+  { id: 'quickbooks', label: 'QuickBooks', group: 'Edge Metals' },
+
   // Jarvis (the bot) itself — behavior, memory, to-dos.
   { id: 'bot',       label: 'Bot',   group: 'Bot & Automation' },
   { id: 'facts',     label: 'Facts', group: 'Bot & Automation', adminOnly: true },
@@ -1156,6 +1165,7 @@ function renderNav() {
     if (b.dataset.tab === 'outbound-loads') { window.location.href = '/outbound-loads'; return; }
     if (b.dataset.tab === 'documents') { window.location.href = '/documents'; return; }
     if (b.dataset.tab === 'edge-inventory') { window.location.href = '/edge-inventory'; return; }
+    if (b.dataset.tab === 'quickbooks') { window.location.href = '/quickbooks'; return; }
     if (b.dataset.tab === 'design-bol') { window.location.href = '/design/bol'; return; }
     switchTab(b.dataset.tab); closeMobileSidebar();
   }));
@@ -3161,8 +3171,23 @@ function renderBot() {
           <span id="wakeStatus" style="margin-left:auto; font-family:var(--font-mono); font-size:10px; color:var(--steel-500); white-space:nowrap;">Wake word off</span>
         </div>
         <div id="botLogEl" style="height:380px; overflow-y:auto; padding:20px 22px; display:flex; flex-direction:column; gap:10px;"></div>
-        <div style="display:flex; gap:10px; padding:14px 18px; background:var(--steel-900); border-top:1px solid var(--steel-800);">
-          <input id="botInput" placeholder="forward DALA23991600 to Dave — or: what did we spend last month" style="flex:1; background:var(--steel-950); border:1px solid var(--steel-700); border-radius:var(--radius-xs); padding:10px 14px; font-family:var(--font-mono); font-size:12.5px; color:var(--steel-100); outline:none;">
+        <!-- ── THE BOX GROWS AS SHE TYPES (2026-09-24) ──────────────────────
+             Apsara: "I want jarvis chat bot text command center to expand
+             like this when user starts typing".
+
+             A TEXTAREA, not an input, because an input cannot wrap however it
+             is styled — a long command scrolled sideways and she could only
+             ever see the end of what she had typed.
+
+             align-items:flex-end on the row so the buttons stay on the bottom
+             line as the box grows, rather than stretching to its full height.
+
+             ENTER STILL SENDS. That is the existing behaviour and she uses it
+             constantly; a textarea would otherwise swallow Enter as a newline
+             and the command would just sit there. SHIFT+ENTER is the new line,
+             which is the convention every chat box uses. -->
+        <div style="display:flex; align-items:flex-end; gap:10px; padding:14px 18px; background:var(--steel-900); border-top:1px solid var(--steel-800);">
+          <textarea id="botInput" rows="1" placeholder="forward DALA23991600 to Dave — or: what did we spend last month" style="flex:1; background:var(--steel-950); border:1px solid var(--steel-700); border-radius:var(--radius-xs); padding:10px 14px; font-family:var(--font-mono); font-size:12.5px; line-height:1.5; color:var(--steel-100); outline:none; resize:none; overflow-y:auto; max-height:168px;"></textarea>
           <button id="btnWakeWord" class="btn" title="Toggle always-on 'Jarvis' wake word" style="min-width:44px;">🎙️</button>
           <button id="btnBotMic" class="btn" title="Speak a command" style="min-width:44px;">🎤</button>
           <button id="btnBotSend" class="btn btn-primary">Send</button>
@@ -3171,7 +3196,16 @@ function renderBot() {
     </section>`;
   renderBotLog();
   $('btnBotSend').addEventListener('click', sendBotCommand);
-  $('botInput').addEventListener('keydown', e => { if (e.key === 'Enter') sendBotCommand(); });
+  // ── ENTER SENDS, SHIFT+ENTER BREAKS THE LINE ──────────────────────────
+  // preventDefault on the send, or the textarea also inserts the newline it
+  // was about to and the box is left one blank line tall after every command.
+  $('botInput').addEventListener('keydown', e => {
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendBotCommand(); }
+  });
+  // Grow to fit, up to the max-height in the markup, then scroll. Height is
+  // cleared to 'auto' first so the box SHRINKS again when she deletes — read
+  // scrollHeight against a stale height and it only ever gets taller.
+  $('botInput').addEventListener('input', () => autoGrowBotInput());
   $('btnBotMic').addEventListener('click', toggleBotMic);
   $('btnWakeWord').addEventListener('click', toggleWakeWord);
   // Reflect existing wake-word state (it keeps running across view
@@ -3224,7 +3258,7 @@ async function toggleBotMic() {
           reader.readAsDataURL(blob);
         });
         const res = await api('/api/bot/voice-command', { method: 'POST', body: JSON.stringify({ audio_base64: audioBase64, mime_type: mimeType }) });
-        $('botInput').value = res.text || '';
+        $('botInput').value = res.text || ''; autoGrowBotInput();
         $('botInput').focus();
       } catch (e) {
         botLog.push({ prompt: 'error', color: 'var(--status-danger)', text: e.message });
@@ -3335,7 +3369,7 @@ function startWakeRecognition() {
   try { wakeRecognition.start(); } catch (e) { /* already running — ignore */ }
 }
 function fillBotFromVoice(text) {
-  $('botInput').value = text;
+  $('botInput').value = text; autoGrowBotInput();
   $('botInput').focus();
   botLog.push({ prompt: 'heard', color: 'var(--leaf-400)', text: `"${text}" — review and hit Send` });
   renderBotLog();
@@ -3346,9 +3380,20 @@ function renderBotLog() {
   el.innerHTML = botLog.map(ln => `<div style="display:flex; gap:10px;"><span style="font-family:var(--font-mono); font-size:12.5px; color:${ln.color}; flex-shrink:0;">${ln.prompt}</span><span style="font-family:var(--font-mono); font-size:12.5px; line-height:1.6; color:#e5e9ec; white-space:pre-wrap;">${esc(ln.text)}</span></div>`).join('');
   el.scrollTop = el.scrollHeight;
 }
+// Sizes the command box to its content. Called on every keystroke, and again
+// after anything that puts text in programmatically — the mic transcript and
+// the wake-word handler both do, and a box that stays one line tall after a
+// paragraph of dictation looks broken.
+function autoGrowBotInput() {
+  const el = $('botInput');
+  if (!el) return;
+  el.style.height = 'auto';
+  el.style.height = Math.min(el.scrollHeight, 168) + 'px';
+}
+
 async function sendBotCommand() {
   const input = $('botInput'); const text = input.value.trim(); if (!text) return;
-  botLog.push({ prompt: '&gt;', color: 'var(--leaf-400)', text }); input.value = ''; renderBotLog();
+  botLog.push({ prompt: '&gt;', color: 'var(--leaf-400)', text }); input.value = ''; autoGrowBotInput(); renderBotLog();
   try {
     const res = await api('/api/bot/command', { method: 'POST', body: JSON.stringify({ text }) });
     (res.replies || []).forEach(r => botLog.push({ prompt: 'jarvis', color: 'var(--copper-400)', text: r.text || '(no text)' }));

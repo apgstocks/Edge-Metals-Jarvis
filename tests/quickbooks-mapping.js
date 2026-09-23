@@ -93,5 +93,17 @@ ck('item map separate from customers', st('Alum Scrap Auto Casting Tense', [], '
 ck('map persisted to disk', JSON.parse(fs.readFileSync(process.env.QB_PARTY_MAP_FILE, 'utf8')).customer.radmetals.qbId === '298');
 
 fs.rmSync(TMP, { recursive: true, force: true });
+// a store that does not exist yet must still answer every kind
+(() => {
+    const was = process.env.QB_PARTY_MAP_FILE;
+    process.env.QB_PARTY_MAP_FILE = '/tmp/qb-map-does-not-exist-' + Date.now() + '.json';
+    const fresh = require('../helpers/quickbooks/mapping');
+    let threw = null;
+    try { for (const k of ['vendor', 'customer', 'item', 'bank', 'account']) fresh.matchParty('anything', [], k); } catch (e) { threw = e.message; }
+    ck('every kind answers against a map file that is not there yet', threw === null, threw);
+    ck('...including a brand new kind (account)', Object.keys(fresh.loadMap()).includes('account'));
+    process.env.QB_PARTY_MAP_FILE = was;
+})();
+
 console.log(`\nquickbooks-mapping: ${pass} passed, ${fail} failed`);
 if (fail) { console.log('FAILED: ' + failures.join(' | ')); process.exit(1); }

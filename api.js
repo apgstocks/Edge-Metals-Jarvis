@@ -8326,6 +8326,16 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
         res.sendFile(path.join(cfg.ROOT, 'dashboard', 'edge-inventory.html'));
     });
 
+    // ── QuickBooks, all of it, on one page ────────────────────────────────
+    // Apsara, 2026-09-24: "i want to have a separate page where i can view
+    // everything related to qb especially these Supplier specific things…If i
+    // keep on creating a separate page for each supplier,then it increases
+    // exponentially." One page, one party at a time, picked from a list.
+    // The page and its /api/qb/* routes live in helpers/quickbooks/routes.js
+    // so this file keeps its shape; reads are open, every change needs the
+    // padlock open AND an admin session, because it can reach the live books.
+    require('./helpers/quickbooks/routes').mount(app, cfg);
+
     // Old standalone Contact Quotes page — MERGED into /quote-requests
     // 2026-08-16 per Apsara ("Contact Quotes and Quote Requests... both are
     // same"). dashboard/contact-quote-requests.html still exists on disk

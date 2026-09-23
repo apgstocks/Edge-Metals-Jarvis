@@ -1,0 +1,346 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>QuickBooks — Jarvis</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wght@700;800;900&family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+/* Design tokens copied from dashboard/edge-inventory.html — standalone page,
+   kept in sync by hand, same as the others. */
+:root{
+  --steel-900:#14181B; --steel-800:#1E2429; --steel-700:#2B3239; --steel-600:#3C454D;
+  --steel-500:#57616A; --steel-400:#7E8891; --steel-300:#A7B0B7; --steel-200:#CBD1D6;
+  --leaf-300:#7FD172; --leaf-400:#57BE49; --leaf-500:#3DA836; --leaf-600:#2E861F;
+  --copper-300:#E29C68; --copper-400:#D77E3D;
+  --green-500:#2F8F57; --amber-500:#D99A2B; --red-500:#C5402F; --blue-500:#3A6EA5;
+  --bg-base:#0C0E10; --surface-card:#14181B; --surface-sunken:#0F1214; --surface-hover:#181D21;
+  --text-strong:#FFFFFF; --text-body:#CBD1D6; --text-muted:#A7B0B7; --text-faint:#7E8891;
+  --border-subtle:#1E2429; --border-default:#2B3239; --ring:var(--leaf-500);
+  --font-display:'Archivo',sans-serif; --font-sans:'IBM Plex Sans',system-ui,sans-serif;
+  --font-mono:'IBM Plex Mono',ui-monospace,monospace;
+}
+*,*::before,*::after{box-sizing:border-box}
+body{margin:0;font-family:var(--font-sans);color:var(--text-body);background:var(--bg-base);-webkit-font-smoothing:antialiased;height:100vh;display:flex;flex-direction:column;overflow:hidden}
+h1,h2,h3{font-family:var(--font-display);color:var(--text-strong);margin:0;font-weight:900;letter-spacing:-.02em}
+button{font:inherit;cursor:pointer}
+:focus-visible{outline:2px solid var(--ring);outline-offset:2px}
+.mono{font-family:var(--font-mono)}
+/* ── top bar ─────────────────────────────────────────────────────────── */
+header{display:flex;align-items:center;gap:14px;padding:10px 16px;border-bottom:1px solid var(--border-default);background:var(--surface-card);flex:none}
+header h1{font-size:17px}
+header .back{color:var(--steel-400);font-size:13px;text-decoration:none}
+.chips{display:flex;gap:6px;flex-wrap:wrap;margin-left:auto;align-items:center}
+.chip{font-family:var(--font-mono);font-size:10.5px;letter-spacing:.06em;text-transform:uppercase;padding:3px 7px;border-radius:3px;border:1px solid var(--border-default);color:var(--text-muted);background:var(--surface-sunken);white-space:nowrap}
+.chip.on{color:var(--leaf-300);border-color:var(--leaf-600);background:rgba(87,190,73,.10)}
+.chip.warn{color:var(--amber-500);border-color:#5a4416;background:rgba(217,154,43,.10)}
+.chip.off{color:var(--steel-400)}
+.lock{display:flex;align-items:center;gap:7px;padding:5px 11px;border-radius:4px;border:1px solid var(--border-default);background:var(--surface-sunken);color:var(--text-muted);font-size:12.5px;font-weight:600}
+.lock.open{border-color:var(--red-500);color:#f0b3aa;background:rgba(197,64,47,.12)}
+/* ── layout ──────────────────────────────────────────────────────────── */
+main{flex:1;display:grid;grid-template-columns:288px 1fr;min-height:0}
+aside{border-right:1px solid var(--border-default);background:var(--surface-sunken);display:flex;flex-direction:column;min-height:0}
+.search{padding:9px;border-bottom:1px solid var(--border-subtle)}
+.search input{width:100%;padding:7px 9px;border-radius:4px;border:1px solid var(--border-default);background:var(--bg-base);color:var(--text-body);font-size:13px}
+.tabsel{display:flex;gap:4px;padding:0 9px 9px}
+.tabsel button{flex:1;padding:5px;border-radius:4px;border:1px solid var(--border-default);background:transparent;color:var(--text-muted);font-size:11.5px;font-weight:600}
+.tabsel button.sel{background:rgba(87,190,73,.14);border-color:var(--leaf-600);color:var(--leaf-300)}
+.plist{overflow-y:auto;flex:1}
+.prow{width:100%;text-align:left;padding:8px 11px;border:0;border-bottom:1px solid var(--border-subtle);background:transparent;color:var(--text-body);display:block}
+.prow:hover{background:var(--surface-hover)}
+.prow.sel{background:rgba(87,190,73,.10);box-shadow:inset 2px 0 0 var(--leaf-500)}
+.prow .nm{font-size:13px;font-weight:600;color:var(--text-strong);display:flex;justify-content:space-between;gap:8px}
+.prow .sub{font-size:11px;color:var(--text-faint);font-family:var(--font-mono);margin-top:2px;display:flex;justify-content:space-between;gap:8px}
+.dot{width:6px;height:6px;border-radius:50%;display:inline-block;margin-right:5px;vertical-align:middle}
+.dot.ok{background:var(--green-500)} .dot.no{background:var(--red-500)} .dot.skip{background:var(--steel-500)}
+/* ── detail ──────────────────────────────────────────────────────────── */
+section{display:flex;flex-direction:column;min-height:0}
+.dhead{padding:13px 18px;border-bottom:1px solid var(--border-default);background:var(--surface-card)}
+.dhead .top{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap}
+.dhead h2{font-size:20px}
+.mapline{font-size:12px;color:var(--text-faint)}
+.mapline b{color:var(--copper-300);font-weight:600}
+.stats{display:flex;gap:22px;margin-top:10px;flex-wrap:wrap}
+.stat .k{font-family:var(--font-mono);font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:var(--text-faint)}
+.stat .v{font-size:16px;font-weight:700;color:var(--text-strong);font-family:var(--font-mono)}
+.stat .v.warn{color:var(--amber-500)} .stat .v.bad{color:var(--red-500)} .stat .v.good{color:var(--leaf-300)}
+.tabs{display:flex;gap:2px;padding:0 18px;border-bottom:1px solid var(--border-default);background:var(--surface-card)}
+.tabs button{padding:8px 12px;border:0;background:transparent;color:var(--text-muted);font-size:12.5px;font-weight:600;border-bottom:2px solid transparent}
+.tabs button.sel{color:var(--text-strong);border-bottom-color:var(--leaf-500)}
+.tabs .count{font-family:var(--font-mono);font-size:10.5px;color:var(--text-faint);margin-left:5px}
+.body{overflow-y:auto;flex:1;padding:0 18px 18px}
+table{width:100%;border-collapse:collapse;font-size:12.5px}
+th{text-align:left;font-family:var(--font-mono);font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:var(--text-faint);font-weight:500;padding:9px 8px;border-bottom:1px solid var(--border-default);position:sticky;top:0;background:var(--bg-base)}
+td{padding:7px 8px;border-bottom:1px solid var(--border-subtle);vertical-align:top}
+td.num{text-align:right;font-family:var(--font-mono)}
+tr:hover td{background:var(--surface-hover)}
+.pill{font-family:var(--font-mono);font-size:10px;padding:2px 6px;border-radius:3px;border:1px solid var(--border-default);color:var(--text-faint)}
+.pill.in{color:var(--leaf-300);border-color:var(--leaf-600)}
+.pill.out{color:var(--amber-500);border-color:#5a4416}
+.pill.bad{color:var(--red-500);border-color:#5b2a23}
+.act{padding:3px 8px;border-radius:3px;border:1px solid var(--border-default);background:transparent;color:var(--text-muted);font-size:11px}
+.act:hover:not(:disabled){border-color:var(--leaf-500);color:var(--leaf-300)}
+.act:disabled{opacity:.35;cursor:not-allowed}
+.empty{padding:26px 8px;color:var(--text-faint);font-size:13px}
+/* ── ask jarvis ──────────────────────────────────────────────────────── */
+.ask{flex:none;border-top:1px solid var(--border-default);background:var(--surface-card);padding:10px 18px}
+.askrow{display:flex;gap:8px}
+.askrow input{flex:1;padding:9px 11px;border-radius:5px;border:1px solid var(--border-default);background:var(--bg-base);color:var(--text-body);font-size:13px}
+.askrow button{padding:9px 16px;border-radius:5px;border:1px solid var(--leaf-600);background:rgba(87,190,73,.16);color:var(--leaf-300);font-weight:700;font-size:13px}
+.answer{margin-top:9px;font-size:13px;color:var(--text-body);line-height:1.55;max-height:132px;overflow-y:auto}
+.answer .follow{display:block;margin-top:6px;color:var(--copper-300);font-size:12.5px}
+.answer .you{color:var(--text-faint);font-size:11.5px;font-family:var(--font-mono);margin-bottom:3px}
+.toast{position:fixed;right:16px;bottom:16px;padding:11px 14px;border-radius:5px;border:1px solid var(--border-default);background:var(--surface-card);color:var(--text-body);font-size:12.5px;max-width:420px;box-shadow:0 8px 28px rgba(0,0,0,.5);z-index:40;white-space:pre-wrap}
+.toast.bad{border-color:var(--red-500)} .toast.good{border-color:var(--leaf-600)}
+@media (max-width:900px){ main{grid-template-columns:1fr} aside{display:none} aside.show{display:flex;position:absolute;inset:52px 0 0;z-index:20} }
+</style>
+</head>
+<body>
+<header>
+  <a class="back" href="/">← Jarvis</a>
+  <h1>QuickBooks</h1>
+  <div class="chips" id="chips"></div>
+  <button class="lock" id="lock" title="Unlock to change mappings, push records or undo">🔒 Locked</button>
+</header>
+
+<main>
+  <aside id="aside">
+    <div class="search"><input id="q" placeholder="Search supplier or customer…" autocomplete="off"></div>
+    <div class="tabsel">
+      <button data-kind="" class="sel">All</button>
+      <button data-kind="vendor">Suppliers</button>
+      <button data-kind="customer">Customers</button>
+    </div>
+    <div class="plist" id="plist"><div class="empty" style="padding:14px">Loading…</div></div>
+  </aside>
+
+  <section>
+    <div class="dhead" id="dhead">
+      <div class="top"><h2 id="dname">Pick a supplier or customer</h2></div>
+      <div class="mapline" id="dmap">Everything Jarvis knows about one party, on one screen.</div>
+      <div class="stats" id="dstats"></div>
+    </div>
+    <div class="tabs" id="dtabs"></div>
+    <div class="body" id="dbody"><div class="empty">The list on the left is every name in Jarvis's ledgers. A red dot means it has no QuickBooks match yet.</div></div>
+    <div class="ask">
+      <div class="askrow">
+        <input id="ask" placeholder="Ask Jarvis — “how much did I wire him?”, “why is this blocked?”, “what's not in QB yet?”">
+        <button id="asksend">Ask</button>
+      </div>
+      <div class="answer" id="answer"></div>
+    </div>
+  </section>
+</main>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const money = (n) => (n === null || n === undefined || n === '') ? '—' : '$' + Number(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+let STATE = { unlocked: false, parties: [], kind: '', sel: null, detail: null, tab: 'bills', status: null };
+
+function toast(msg, cls) {
+  const t = document.createElement('div');
+  t.className = 'toast ' + (cls || '');
+  t.textContent = msg;
+  document.body.appendChild(t);
+  setTimeout(() => t.remove(), cls === 'bad' ? 9000 : 5000);
+}
+async function api(url, body) {
+  const r = await fetch(url, body ? { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...body, unlock: STATE.unlocked }) } : {});
+  const j = await r.json().catch(() => ({ error: 'bad response' }));
+  if (!r.ok) throw new Error(j.error || ('HTTP ' + r.status));
+  return j;
+}
+
+/* ── status strip: the things that decide whether a write can happen ── */
+async function loadStatus() {
+  try {
+    const s = await api('/api/qb/status');
+    STATE.status = s;
+    $('chips').innerHTML = [
+      `<span class="chip ${s.env === 'production' ? 'on' : 'warn'}">${s.env}</span>`,
+      `<span class="chip ${s.connected ? 'on' : 'warn'}">${s.connected ? 'connected' : 'not connected'}</span>`,
+      `<span class="chip ${s.writes ? 'on' : 'off'}">writes ${s.writes ? 'on' : 'off'}</span>`,
+      `<span class="chip ${s.autoSync ? 'on' : 'off'}">auto-sync ${s.autoSync ? 'on' : 'off'}</span>`,
+      `<span class="chip">bills ≥ ${s.cutover.bills || '—'}</span>`,
+      `<span class="chip">invoices ≥ ${s.cutover.invoices || '—'}</span>`,
+      `<span class="chip">${s.counts.journal} journal · ${s.counts.standing} standing</span>`,
+      ...s.roles.filter(r => !r.qbId).map(r => `<span class="chip warn">${r.role}: unmapped</span>`),
+    ].join('');
+  } catch (e) { $('chips').innerHTML = `<span class="chip warn">status: ${e.message}</span>`; }
+}
+
+/* ── the party list ─────────────────────────────────────────────────── */
+async function loadParties() {
+  try {
+    const { parties } = await api('/api/qb/parties');
+    STATE.parties = parties;
+    renderList();
+  } catch (e) { $('plist').innerHTML = `<div class="empty" style="padding:14px">${e.message}</div>`; }
+}
+function renderList() {
+  const q = ($('q').value || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+  const rows = STATE.parties.filter(p => (!STATE.kind || p.kind === STATE.kind)
+    && (!q || (p.name + (p.qbName || '')).toUpperCase().replace(/[^A-Z0-9]/g, '').includes(q)));
+  $('plist').innerHTML = rows.length ? rows.map(p => {
+    const dot = p.skipped ? 'skip' : (p.mapped ? 'ok' : 'no');
+    const value = p.kind === 'vendor' ? p.billsValue : p.invoicesValue;
+    const n = p.kind === 'vendor' ? `${p.bills} bills` : `${p.invoices} invoices`;
+    return `<button class="prow ${STATE.sel && STATE.sel.name === p.name && STATE.sel.kind === p.kind ? 'sel' : ''}" data-kind="${p.kind}" data-name="${encodeURIComponent(p.name)}">
+      <span class="nm"><span><span class="dot ${dot}"></span>${p.name}</span><span class="mono" style="color:var(--text-muted)">${money(value)}</span></span>
+      <span class="sub"><span>${p.kind === 'vendor' ? 'supplier' : 'customer'} · ${n}${p.advances ? ` · ${p.advances} wires` : ''}</span><span>${p.qbBalance !== null && p.qbBalance !== undefined ? 'QB ' + money(p.qbBalance) : (p.mapped ? '' : 'no QB match')}</span></span>
+    </button>`;
+  }).join('') : '<div class="empty" style="padding:14px">Nothing matches.</div>';
+  [...document.querySelectorAll('.prow')].forEach(b => b.onclick = () => openParty(b.dataset.kind, decodeURIComponent(b.dataset.name)));
+}
+
+/* ── one party ──────────────────────────────────────────────────────── */
+async function openParty(kind, name) {
+  STATE.sel = { kind, name };
+  STATE.tab = kind === 'vendor' ? 'bills' : 'invoices';
+  renderList();
+  $('dname').textContent = name;
+  $('dbody').innerHTML = '<div class="empty">Reading Jarvis and QuickBooks…</div>';
+  try {
+    const d = await api(`/api/qb/party?kind=${kind}&name=${encodeURIComponent(name)}`);
+    STATE.detail = d;
+    renderDetail();
+  } catch (e) { $('dbody').innerHTML = `<div class="empty">${e.message}</div>`; }
+}
+function renderDetail() {
+  const d = STATE.detail, t = d.totals;
+  $('dmap').innerHTML = d.mapping.qbId
+    ? `in QuickBooks as <b>${d.mapping.qbName}</b> <span class="mono" style="color:var(--text-faint)">#${d.mapping.qbId}</span> · <button class="act" id="remap">change</button>`
+    : `<span style="color:var(--red-500)">no QuickBooks match yet</span> · <button class="act" id="remap">match it</button>`;
+  const gap = (d.qbBalance !== null && d.qbBalance !== undefined) ? null : null;
+  $('dstats').innerHTML = [
+    d.kind === 'vendor' ? ['Bills', money(t.bills), ''] : ['Invoices', money(t.invoices), ''],
+    d.kind === 'vendor' ? ['Advanced', money(t.advances), t.advancesUnapplied > 0 ? 'warn' : ''] : null,
+    d.kind === 'vendor' ? ['Not applied yet', money(t.advancesUnapplied), t.advancesUnapplied > 0 ? 'warn' : 'good'] : null,
+    ['QuickBooks balance', money(d.qbBalance), ''],
+    ['In QuickBooks', `${t.inQuickBooks}`, 'good'],
+    ['Not yet', `${t.notInQuickBooks}`, t.notInQuickBooks ? 'warn' : 'good'],
+  ].filter(Boolean).map(([k, v, cls]) => `<div class="stat"><div class="k">${k}</div><div class="v ${cls}">${v}</div></div>`).join('');
+  const tabs = d.kind === 'vendor'
+    ? [['bills', 'Bills', d.bills.length], ['advances', 'Wires & advances', d.advances.length], ['journal', 'What Jarvis did', d.journal.length]]
+    : [['invoices', 'Invoices', d.invoices.length], ['journal', 'What Jarvis did', d.journal.length]];
+  $('dtabs').innerHTML = tabs.map(([id, label, n]) => `<button data-tab="${id}" class="${STATE.tab === id ? 'sel' : ''}">${label}<span class="count">${n}</span></button>`).join('');
+  [...$('dtabs').querySelectorAll('button')].forEach(b => b.onclick = () => { STATE.tab = b.dataset.tab; renderDetail(); });
+  const rm = $('remap'); if (rm) rm.onclick = remap;
+  renderTable();
+}
+function qbLink(id, kind) {
+  const t = kind === 'invoice' ? 'invoice' : kind === 'bill' ? 'bill' : 'expense';
+  return `<a class="mono" target="_blank" rel="noopener" href="https://qbo.intuit.com/app/${t}?txnId=${id}">#${id}</a>`;
+}
+function renderTable() {
+  const d = STATE.detail;
+  const rows = STATE.tab === 'bills' ? d.bills : STATE.tab === 'invoices' ? d.invoices : STATE.tab === 'advances' ? d.advances : d.journal;
+  if (!rows.length) { $('dbody').innerHTML = '<div class="empty">Nothing here yet.</div>'; return; }
+  if (STATE.tab === 'journal') {
+    $('dbody').innerHTML = `<table><thead><tr><th>When</th><th>What</th><th>Record</th><th class="num">Amount</th><th>Why</th><th></th></tr></thead><tbody>${
+      rows.map(e => `<tr><td class="mono">${(e.at || '').slice(0, 16).replace('T', ' ')}</td>
+        <td><span class="pill ${e.action === 'created' ? 'in' : e.action === 'blocked' ? 'bad' : 'out'}">${e.action}</span> ${e.kind}</td>
+        <td>${e.qb && e.qb.id ? qbLink(e.qb.id, e.kind) : '—'}</td>
+        <td class="num">${e.qb && e.qb.total != null ? money(e.qb.total) : '—'}</td>
+        <td style="color:var(--text-faint)">${(e.reason || '').slice(0, 90)}</td>
+        <td>${e.action === 'created' ? `<button class="act" data-undo="${e.id}" ${STATE.unlocked ? '' : 'disabled'}>undo</button>` : ''}</td></tr>`).join('')}</tbody></table>`;
+    [...document.querySelectorAll('[data-undo]')].forEach(b => b.onclick = () => undo(b.dataset.undo));
+    return;
+  }
+  if (STATE.tab === 'advances') {
+    $('dbody').innerHTML = `<table><thead><tr><th>Date</th><th>Mode</th><th class="num">Amount</th><th class="num">Applied</th><th>QuickBooks</th><th></th></tr></thead><tbody>${
+      rows.map(a => `<tr><td class="mono">${a.date}</td><td>${a.mode || ''} ${a.bank || ''} <span class="pill">${a.kind}</span></td>
+        <td class="num">${money(a.amount)}</td><td class="num" style="color:${a.applied ? 'var(--leaf-300)' : 'var(--amber-500)'}">${money(a.applied)}</td>
+        <td>${a.qbId ? qbLink(a.qbId, 'expense') : '<span class="pill out">not in QB</span>'}</td>
+        <td>${a.qbId ? '' : `<button class="act" data-push="advance:${a.id}" ${STATE.unlocked ? '' : 'disabled'}>send</button>`}</td></tr>`).join('')}</tbody></table>`;
+  } else {
+    const kind = STATE.tab === 'bills' ? 'bill' : 'invoice';
+    $('dbody').innerHTML = `<table><thead><tr><th>Date</th><th>No.</th><th>Container</th><th class="num">Amount</th><th>QuickBooks</th><th></th></tr></thead><tbody>${
+      rows.map(b => `<tr><td class="mono">${b.date}</td><td class="mono">${b.no || '—'}</td><td class="mono" style="color:var(--text-muted)">${b.container || '—'}</td>
+        <td class="num">${money(b.amount)}</td>
+        <td>${b.qbId ? qbLink(b.qbId, kind) : `<span class="pill ${b.blocked ? 'bad' : 'out'}">${b.blocked || 'not in QB'}</span>`}</td>
+        <td>${b.qbId ? '' : `<button class="act" data-check="${kind}:${b.id}">check</button> <button class="act" data-push="${kind}:${b.id}" ${STATE.unlocked ? '' : 'disabled'}>send</button>`}</td></tr>`).join('')}</tbody></table>`;
+  }
+  [...document.querySelectorAll('[data-push]')].forEach(b => b.onclick = () => send(b.dataset.push, false));
+  [...document.querySelectorAll('[data-check]')].forEach(b => b.onclick = () => send(b.dataset.check, true));
+}
+
+/* ── the three things the padlock allows ────────────────────────────── */
+async function send(spec, dryRun) {
+  const [kind, id] = spec.split(':');
+  if (!dryRun && !confirm(`Send this ${kind} to QuickBooks ${STATE.status ? '(' + STATE.status.env + ')' : ''}?\n\nIt goes through the same checks as the nightly run and is recorded in the journal.`)) return;
+  try {
+    const out = await api('/api/qb/push', { kind, id, dryRun });
+    const bits = [out.status, out.qbId ? 'QB #' + out.qbId : '', (out.problems || []).join('; '), out.note || ''].filter(Boolean);
+    toast((dryRun ? 'Check: ' : '') + bits.join(' — '), out.status === 'created' || out.status === 'would-create' ? 'good' : 'bad');
+    if (!dryRun) { await openParty(STATE.sel.kind, STATE.sel.name); loadStatus(); }
+  } catch (e) { toast(e.message, 'bad'); }
+}
+async function undo(journalId) {
+  const reason = prompt('Undo this in QuickBooks. Why? (it goes in the journal)');
+  if (!reason) return;
+  try {
+    const dry = await api('/api/qb/undo', { journalId, reason, dryRun: true });
+    if (!confirm(`${dry.status}: ${dry.note || dry.why || ''}\n\nGo ahead?`)) return;
+    const out = await api('/api/qb/undo', { journalId, reason, dryRun: false });
+    toast(`${out.status} ${out.why || ''}`, out.status === 'refused' ? 'bad' : 'good');
+    await openParty(STATE.sel.kind, STATE.sel.name);
+  } catch (e) { toast(e.message, 'bad'); }
+}
+async function remap() {
+  if (!STATE.unlocked) return toast('Open the padlock first.', 'bad');
+  const d = STATE.detail;
+  try {
+    const c = await api(`/api/qb/candidates?kind=${d.kind}&name=${encodeURIComponent(d.name)}`);
+    const list = (c.candidates || []).map((x, i) => `${i + 1}. ${x.DisplayName || x.name} (#${x.Id})`).join('\n');
+    const pick = prompt(`Match "${d.name}" to which QuickBooks ${d.kind}?\n\n${list || '(no near matches)'}\n\nType a number from the list, or the exact QuickBooks name, or SKIP.`);
+    if (!pick) return;
+    let qbId = null, qbName = null;
+    if (pick.trim().toUpperCase() === 'SKIP') { qbId = 'SKIP'; }
+    else if (/^\d+$/.test(pick.trim()) && c.candidates[+pick.trim() - 1]) {
+      const chosen = c.candidates[+pick.trim() - 1]; qbId = chosen.Id; qbName = chosen.DisplayName || chosen.name;
+    } else {
+      const found = (c.all || []).find(x => x.name.toLowerCase() === pick.trim().toLowerCase());
+      if (!found) return toast('No QuickBooks name matches that exactly. Nothing changed.', 'bad');
+      qbId = found.Id; qbName = found.name;
+    }
+    await api('/api/qb/map', { kind: d.kind, jarvisName: d.name, qbId, qbName, reason: 'matched on the QuickBooks page' });
+    toast('Saved. Commit qb-settings so the other machine has it too.', 'good');
+    await loadParties(); await openParty(d.kind, d.name);
+  } catch (e) { toast(e.message, 'bad'); }
+}
+
+/* ── ask jarvis ─────────────────────────────────────────────────────── */
+async function ask() {
+  const q = $('ask').value.trim();
+  if (!q) return;
+  $('answer').innerHTML = `<div class="you">${q}</div><div style="color:var(--text-faint)">Jarvis is looking…</div>`;
+  $('ask').value = '';
+  try {
+    const out = await api('/api/qb/ask', { question: q, kind: STATE.sel && STATE.sel.kind, name: STATE.sel && STATE.sel.name });
+    $('answer').innerHTML = `<div class="you">${q}</div>${out.answer}<span class="follow">${out.followUp || ''}</span>`;
+  } catch (e) { $('answer').innerHTML = `<div class="you">${q}</div><span style="color:var(--red-500)">${e.message}</span>`; }
+}
+
+$('lock').onclick = () => {
+  STATE.unlocked = !STATE.unlocked;
+  $('lock').className = 'lock' + (STATE.unlocked ? ' open' : '');
+  $('lock').textContent = STATE.unlocked ? '🔓 Unlocked — changes reach QuickBooks' : '🔒 Locked';
+  if (STATE.detail) renderDetail();
+};
+$('q').oninput = renderList;
+[...document.querySelectorAll('.tabsel button')].forEach(b => b.onclick = () => {
+  STATE.kind = b.dataset.kind;
+  [...document.querySelectorAll('.tabsel button')].forEach(x => x.classList.toggle('sel', x === b));
+  renderList();
+});
+$('asksend').onclick = ask;
+$('ask').addEventListener('keydown', (e) => { if (e.key === 'Enter') ask(); });
+
+loadStatus();
+loadParties();
+</script>
+</body>
+</html>

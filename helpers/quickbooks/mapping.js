@@ -73,7 +73,11 @@ function similarity(a, b) {
 
 function loadMap() {
     try { const m = JSON.parse(fs.readFileSync(MAP_FILE(), 'utf8')); KINDS.forEach((k) => { m[k] = m[k] || {}; }); return m; }
-    catch { return { vendor: {}, customer: {}, item: {}, bank: {} }; }
+    // Built from KINDS, not written out by hand: the hand-written version was
+    // missing 'account' the day it was added, and matchParty crashed on the
+    // very first lookup against a store that did not exist yet (2026-09-24,
+    // found by the QuickBooks page's own test).
+    catch { return Object.fromEntries(KINDS.map((k) => [k, {}])); }
 }
 function saveMap(m) {
     const f = MAP_FILE(), tmp = `${f}.${process.pid}.tmp`;
