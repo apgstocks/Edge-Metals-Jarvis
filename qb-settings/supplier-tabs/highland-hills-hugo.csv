@@ -1,0 +1,47 @@
+date,kind,item,gross,tare,net,price,amount
+2026-01-01,wire,opening balance carried from 2025,,,,,84155.75
+2026-01-05,wire,Wire,,,,,30000.0
+2026-01-06,load,Al wheels to Austin,,,,,40420.5
+2026-01-07,load,53 trailer loaded,,,,,19750.6
+2026-01-09,load,53 trailer loaded,,,,,21526.18
+2026-01-09,wire,Wire,,,,,50000.0
+2026-01-15,wire,Wire,,,,,30000.0
+2026-01-15,load,Al wheels to Austin,,,,,46388.75
+2026-01-16,wire,wire,,,,,40000.0
+2026-01-23,wire,wire,,,,,20000.0
+2026-01-26,load,5th trailer loaded TO Junk,,,,,17556.27
+2026-01-28,load,Al wheels to Austin,,,,,43564.75
+2026-01-30,wire,wire,,,,,20000.0
+2026-02-09,load,6th load to Junk car Junk,,,,,16495.07
+2026-02-12,load,HMMU4098359 Seel engine with al head,,,,,9517.2
+2026-02-17,wire,Wire,,,,,20000.0
+2026-02-24,wire,wire,,,,,20000.0
+2026-02-29,load,Load,,,,,27830.16
+2026-03-25,load,load,,,,,28795.18
+2026-04-16,load,load,,,,,22842.19
+2026-05-15,wire,Wire,,,,,30000.0
+2026-05-28,wire,Wire,,,,,35000.0
+2026-05-28,load,load,,,,,17707.06
+2026-06-04,wire,Wire,,,,,25000.0
+2026-06-09,wire,wire,,,,,50000.0
+2026-06-12,wire,wire,,,,,30000.0
+2026-06-10,load,Al wheels to nur metals,,,,,63391.35
+2026-06-17,load,Mix load,,,,,20493.31
+2026-07-10,wire,wire,,,,,50000.0
+2026-07-20,wire,wire,,,,,25000.0
+2026-08-05,load,load,,,,,24493.95
+2026-08-04,wire,MAZARIEGOS,,,42540.0,1.65,70191.0
+2026-08-12,load,load,,,,,30000.0
+2026-08-14,load,load,,,,,20000.0
+2026-08-19,load,load,,,,,100000.0
+2026-08-24,load,Al wheels to nur metals,,,38440.0,1.6,61504.0
+2026-08-24,wire,Clad and chrome rims,,,920.0,0.6,552.0
+2026-08-24,load,sa TO Houston Junk,,,,,23295.75
+2026-08-25,wire,Wired from Edge,,,,,25000.0
+2026-08-10,wire,Wired to Patron,,,18680.0,,47240.0
+2026-08-20,wire,Sold to Ed profit,,,18680.0,2.7,3196.0
+2026-08-26,wire,Wire to Patron,,,,,41285.0
+2026-08-31,wire,Wired to Highland,,,,,25000.0
+2026-09-03,wire,Wired to Patron,,,,,35000.0
+2026-09-04,load,Al wheels to nur metals,,,37689.0,1.6,60302.4
+2026-09-04,load,Clad wheels,,,549.0,1.04,570.96
