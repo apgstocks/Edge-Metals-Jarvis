@@ -7064,6 +7064,132 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
         }
     });
 
+    // ── EMAILING WHAT THE DOCUMENTS TAB JUST GENERATED ────────────────────
+    //
+    // Apsara, 2026-09-23: "ADD SEND MAIL BUTTON IN INVOICE POST GENERATION".
+    //
+    // TWO STOPS, NOT ONE, and that is not me being cautious for its own sake.
+    // Sending is the single action on this screen that cannot be taken back,
+    // and this is the screen where 260831_SU_26EM05 was made — an invoice
+    // that billed $13.09 for a container worth $28,860.80. It is also the
+    // shape she chose for the Sale row on 2026-09-19 and has been using
+    // since: read the real message, addressed to the real people, with the
+    // real files named, THEN press Send. A one-click send would be faster
+    // exactly once and wrong exactly once.
+    //
+    // ── KEYED BY CONTAINER, BECAUSE THIS SCREEN HAS NO SALE ───────────────
+    // /api/sales/:id/invoice/draft-mail and /send do this already, but they
+    // need a sale row and the Documents tab is a typed form with no id. Both
+    // of these reach the SAME helpers — shipmentMail.draftFor,
+    // shipmentDocs.attachmentsFor, gmail.sendEmail — rather than restating
+    // any of it. draftFor has always taken a container; nothing new was
+    // needed to address a message, only a route that has no sale to offer.
+    //
+    // WHAT GETS ATTACHED is what is on disk for that container, which is what
+    // Generate has just put there. Deliberately not a list of filenames from
+    // the browser: a client that names its own attachments is a client that
+    // can attach last week's invoice to this week's email.
+    const invoiceMailDraft = (req) => {
+        const shipmentMail = require('./helpers/shipmentMail');
+        const container = String(req.query.container || (req.body || {}).container || '').trim();
+        const recipients = req.query.recipients || (req.body || {}).recipients || null;
+        // The buyer as typed on the form, so a container whose document
+        // history has no consignee still resolves — same fallback the sale
+        // route makes, for the same reason.
+        const consignee = String(req.query.consignee || (req.body || {}).consignee || '').trim() || null;
+
+        // The loading photos live on the BILL for that container. Looked up
+        // here rather than asked of the browser, so the email carries the
+        // same links the Sale-row path sends.
+        let photos = [];
+        try {
+            const bills = require('./helpers/bills');
+            const norm = (v) => String(v == null ? '' : v).trim().toUpperCase();
+            const bill = (bills.list() || []).find((b) => norm(b.container_no) === norm(container));
+            if (bill) photos = require('./helpers/saleInvoice').photosFor(bill) || [];
+        } catch (e) { photos = []; }
+
+        let draft = shipmentMail.draftFor(container, { photos, recipients });
+        if (!draft.ok && draft.reason === 'no_customer' && consignee) {
+            const retry = shipmentMail.draftFor(container, { photos, recipients, consignee });
+            if (retry.ok || retry.reason !== 'no_customer') draft = retry;
+        }
+        return draft;
+    };
+
+    // Stop one. READ ONLY — it looks at what is on disk and at the address
+    // book, and sends nothing.
+    app.get('/api/invoice/draft-mail', requireAdmin, (req, res) => {
+        try {
+            res.json(invoiceMailDraft(req));
+        } catch (e) {
+            console.error('[invoice] draft-mail failed:', e && e.stack);
+            res.status(500).json({ error: e.message });
+        }
+    });
+
+    // Stop two, and the only one that cannot be taken back.
+    app.post('/api/invoice/send', requireAdmin, async (req, res) => {
+        try {
+            const b = req.body || {};
+            // Explicitly true. The screen sets it when she presses Send on a
+            // draft she has just read; nothing else does, and a GET or a
+            // stray POST can never be mistaken for her saying yes.
+            if (b.confirm !== true && b.confirm !== 'true') {
+                return res.status(400).json({ error: 'confirm is required', code: 'NOT_CONFIRMED' });
+            }
+            const draft = invoiceMailDraft(req);
+            if (!draft.ok) {
+                return res.status(409).json({
+                    error: draft.message, code: String(draft.reason || 'no_draft').toUpperCase(),
+                    ask_recipients: draft.ask_recipients === true,
+                    consignee: draft.consignee || null, bad: draft.bad || undefined,
+                });
+            }
+
+            // ── WHAT SHE EDITED WINS ──────────────────────────────────────
+            // Her rule from 2026-09-19, "also make the email editable": the
+            // draft is a starting point. Trimmed-empty falls back to the
+            // generated text rather than sending a blank subject — clearing
+            // a box is far more likely an accident than an instruction.
+            const subject = String(b.subject || '').trim() || draft.subject;
+            const body = String(b.body || '').trim() ? String(b.body) : draft.body;
+
+            const shipmentDocs = require('./helpers/shipmentDocs');
+            const { sendEmail } = require('./helpers/gmail');
+            const sent = await sendEmail({
+                to: draft.to, cc: draft.contact_cc || null, bcc: null,
+                subject, body, attachments: shipmentDocs.attachmentsFor(draft.found),
+            });
+
+            // AFTER the send, never before: a contact written for a message
+            // that then failed to go is one she never asked for, sitting
+            // there looking like it worked. Non-fatal for the same reason
+            // the sale route gives — the invoice has left the building, and
+            // a bookkeeping failure must not turn a 200 into a 500.
+            let saved_contact = null;
+            if (draft.save_as && draft.save_as.name) {
+                try {
+                    const { addContact } = require('./helpers/emailContacts');
+                    await addContact(draft.save_as.name, draft.save_as.email,
+                                     (draft.save_as.cc || []).length ? { cc: draft.save_as.cc } : {});
+                    saved_contact = draft.save_as.name;
+                } catch (e) {
+                    console.error('[invoice] sent, but could not save the contact:', e.message);
+                }
+            }
+
+            // draft.attachments, not found.names — `names` is not a thing
+            // findForContainer returns, and reporting an empty list after a
+            // successful send would read as "nothing was attached".
+            res.json({ ok: true, id: sent && sent.id, to: draft.to, cc: draft.contact_cc || null,
+                       subject, attached: draft.attachments || [], saved_contact });
+        } catch (e) {
+            console.error('[invoice] send failed:', e && e.stack);
+            res.status(500).json({ error: e.message });
+        }
+    });
+
     // ── FILING A GENERATED INVOICE ────────────────────────────────────────
     // Extracted from the route body on 2026-09-19 so the Sale row's Generate
     // can file its documents the same way. It was inline, and copying forty
