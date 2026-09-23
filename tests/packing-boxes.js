@@ -49,8 +49,21 @@ if (!String(cfg.DATA_DIR).startsWith(TMP)) { console.error('  ABORT  config not 
 // the route, the payload handling, invoicePdf building the HTML, and the
 // column list. The bytes inside the PDF are tests/pdf-one-page.js's business.
 let RENDERED = [];
+// ── THE MAILBOX IS THE ONE THING THAT MUST NOT BE REAL ───────────────────
+// Section G exercises "Send by email", and this suite must never be able to
+// put a message in a customer's inbox. Every send lands here instead, where
+// the checks can read exactly what would have gone.
+let SENT = [];
 const orig = Module._load;
 Module._load = function (r) {
+    if (r.endsWith('helpers/gmail') || r === '../helpers/gmail' || r === './helpers/gmail') return {
+        getGmailRead: () => ({}), getGmailSenderRead: () => ({}), getGmailWrite: () => ({}),
+        getMyEmailAddress: async () => 'apsara@edgemetals.com',
+        listMessages: async () => [], getMessage: async () => ({}), getEmailContent: () => ({ body: '' }),
+        parseAddressList: () => [], parseEmailDate: (d) => d,
+        sendEmail: async (p) => { SENT.push(p); return { id: 'msg_1', threadId: 'th_1' }; },
+    };
+    if (r.endsWith('helpers/emailThreads')) return { trackSentEmail: async () => {} };
     if (r === 'puppeteer') return {
         launch: async () => ({
             newPage: async () => ({
@@ -193,7 +206,12 @@ section('C — on pallets, the working is added');
     RENDERED = [];
     await call('POST', '/api/invoice/generate', sid, BODY({ ...BASE_PACKING }));
     const loose = RENDERED.join('\n');
-    const stripped = html.replace(/<div style="font-size:7\.5pt;font-weight:400;white-space:nowrap;">[^<]*<\/div>/g, '');
+    // Strips the working WHEREVER it renders, rather than matching one
+    // hard-coded style string — it moved from the Boxes cell to the Item cell
+    // on 2026-09-23 ("that 12*120 boxes looks ugly") and this check went red
+    // for a change that is purely cosmetic. Anchored on the CONTENT, which is
+    // what the check is actually about.
+    const stripped = html.replace(/<div style="font-size:7[^"]*">\s*\d[\d,]*\s*\u00d7[^<]*<\/div>/g, '');
     ck('  and nothing else on the page moved', stripped === loose,
         `${stripped.length} vs ${loose.length} characters once the working is removed`);
 }
@@ -403,6 +421,120 @@ section('F — 260831_SU_26EM05, the invoice that billed $13.09');
     ck('an invoice with no unit field still prints MT', old.status === 200
        && /Quantity<br>MT/.test(RENDERED.join('\n')),
        'absent must mean what it has always meant');
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+section('G — Send by email, from the Documents tab');
+// ══════════════════════════════════════════════════════════════════════════
+// Apsara, 2026-09-23: "ADD SEND MAIL BUTTON IN INVOICE POST GENERATION".
+//
+// TWO STOPS. The draft is read first and nothing leaves until she presses
+// Send — the shape she chose for the Sale row on 2026-09-19, and it matters
+// more here because this is the screen that produced the $13.09 invoice.
+//
+// The thing this section is really for: SENDING IS THE ONE ACTION THAT
+// CANNOT BE TAKEN BACK. Every check below is either "it did not send" or
+// "it sent exactly what she read".
+{
+    // A generated invoice has to be on disk for that container first — the
+    // route attaches what it FINDS, never what a browser names.
+    RENDERED = [];
+    const gen = await call('POST', '/api/invoice/generate', sid, {
+        inv_no: '260923_SU_26MAIL1', inv_date: '09/23/2026', container_no: 'MSNU1157057',
+        booking_no: 'EBKG18570295', seal_no: 'UL-8667128', consignee: 'Aris Metals',
+        consignee_address: ['1 Test Road'], units: 'lb',
+        line_items: [{ item_desc: 'Sealed Units', container_no: 'MSNU1157057', weight: 49760, rate: 0.58,
+                       amount: 28860.80, packing: { ...BASE_PACKING } }],
+        subtotal: 28860.80, final_amount: 28860.80,
+    });
+    ck('an invoice is generated and filed', gen.status === 200, `${gen.status} ${gen.raw.slice(0, 160)}`);
+
+    // ── STOP ONE: THE DRAFT, WHICH SENDS NOTHING ─────────────────────────
+    SENT = [];
+    const draft = await call('GET',
+        `/api/invoice/draft-mail?container=MSNU1157057&consignee=${encodeURIComponent('Aris Metals')}`, sid);
+    ck('the draft route answers', draft.status === 200, `${draft.status} ${draft.raw.slice(0, 200)}`);
+    ck('  and it sent NOTHING', SENT.length === 0, `${SENT.length} email(s) left the building`);
+    if (draft.json && draft.json.ok) {
+        ck('  naming the files it would attach',
+           (draft.json.attachments || []).some((n) => /26MAIL1/.test(n)),
+           JSON.stringify(draft.json.attachments));
+        ck('  with a subject and a body to read',
+           !!draft.json.subject && !!draft.json.body, JSON.stringify(draft.json).slice(0, 160));
+    } else {
+        // No contact on file is a legitimate answer — it must ASK rather than
+        // fail, the same way the Sale-row flow does.
+        ck('  or it asks for recipients rather than dead-ending',
+           draft.json && draft.json.ask_recipients === true, JSON.stringify(draft.json).slice(0, 200));
+    }
+
+    // ── AND SENDING WITHOUT CONFIRM IS REFUSED ───────────────────────────
+    // The single most important check here. A POST that reaches this route
+    // by any route other than her pressing Send must not send.
+    SENT = [];
+    const noConfirm = await call('POST', '/api/invoice/send', sid, { container: 'MSNU1157057' });
+    ck('a send without confirm is refused', noConfirm.status === 400
+       && (noConfirm.json || {}).code === 'NOT_CONFIRMED', `${noConfirm.status} ${noConfirm.raw.slice(0, 140)}`);
+    ck('  and nothing went', SENT.length === 0, `${SENT.length} sent`);
+
+    const confirmString = await call('POST', '/api/invoice/send', sid,
+        { container: 'MSNU1157057', confirm: 'yes please' });
+    ck('  nor does a truthy-looking confirm count', confirmString.status === 400,
+       'only true or "true" is her saying yes');
+
+    // A container with nothing on disk cannot be sent, and says so.
+    SENT = [];
+    const nothing = await call('POST', '/api/invoice/send', sid,
+        { container: 'ZZZZ0000000', confirm: true });
+    ck('a container with no documents is a 409, not a silent success',
+       nothing.status === 409, `${nothing.status} ${nothing.raw.slice(0, 140)}`);
+    ck('  and still nothing went', SENT.length === 0, `${SENT.length} sent`);
+
+    // ── STOP TWO: WHAT SHE READ IS WHAT GOES ─────────────────────────────
+    SENT = [];
+    const sent = await call('POST', '/api/invoice/send', sid, {
+        container: 'MSNU1157057', consignee: 'Aris Metals', confirm: true,
+        recipients: 'buyer@aris.example, accounts@aris.example',
+        subject: 'ZZ-EDITED-SUBJECT',
+        body: 'Dear Aris Metals,\n\nZZ-EDITED-BODY',
+    });
+    ck('it sends on her confirmation', sent.status === 200 && SENT.length === 1,
+       `${sent.status} ${sent.raw.slice(0, 200)}`);
+    if (SENT.length === 1) {
+        const m = SENT[0];
+        ck('  to the addresses she typed', /buyer@aris\.example/.test(String(m.to)), String(m.to));
+        // HER text, not the generated one. "also make the email editable",
+        // 2026-09-19 — an edit that is silently discarded is worse than no
+        // edit box at all.
+        // A string the generated draft could never contain, or this check
+        // passes on the draft's own subject and proves nothing — which is
+        // exactly what a mutation showed when it discarded her edit.
+        ck('  with the subject she edited', /ZZ-EDITED-SUBJECT/.test(m.subject), m.subject);
+        ck('  and the body she edited', /ZZ-EDITED-BODY/.test(m.body), String(m.body).slice(0, 90));
+        ck('  carrying the generated PDF itself, not just its name',
+           (m.attachments || []).length > 0 && (m.attachments || []).every((a) => a.content),
+           JSON.stringify((m.attachments || []).map((a) => a.filename)));
+    }
+
+    // ── ONLY AN ADMIN MAY EMAIL A CUSTOMER ───────────────────────────────
+    // Staff alone is not enough of a check: /api/invoice is absent from
+    // STAFF_ALLOWED_PATH_PREFIXES, so staff are refused by the path
+    // middleware whether or not the route guards itself. A mutation removing
+    // requireAdmin survived against a staff-only test. The ORDINARY user role
+    // is what actually exercises the route's own guard.
+    const staffSid = ((await call('POST', '/login', null, { password: 'staff-pw-ccccccccccc' })).json || {}).sid;
+    const userSid  = ((await call('POST', '/login', null, { password: 'user-pw-aaaaaaaaaaaa' })).json || {}).sid;
+    ck('a staff and a plain user session exist, or the next checks prove nothing',
+       !!staffSid && !!userSid);
+    for (const [who, who_sid] of [['staff', staffSid], ['a plain user', userSid]]) {
+        SENT = [];
+        const t = await call('POST', '/api/invoice/send', who_sid, { container: 'MSNU1157057', confirm: true });
+        ck(`${who} cannot send an invoice to a customer`, t.status === 403, String(t.status));
+        ck(`  and nothing went`, SENT.length === 0, `${SENT.length} sent`);
+        // The draft leaks the buyer's address and the message; it is admin-only too.
+        const d2 = await call('GET', '/api/invoice/draft-mail?container=MSNU1157057', who_sid);
+        ck(`  ${who} cannot read the draft either`, d2.status === 403, String(d2.status));
+    }
 }
 
 listener.close();

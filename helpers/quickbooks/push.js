@@ -91,7 +91,7 @@ function buildBill(b, refs) {
         if (!id) { problems.push(`grade "${g.grade}" has no QuickBooks item`); continue; }
         if (typeof g.amount !== 'number') { problems.push(`grade "${g.grade}" has no amount`); continue; }
         const detail = { ItemRef: { value: String(id) }, BillableStatus: 'NotBillable' };
-        if (typeof g.qty === 'number' && typeof g.price === 'number' && round2(g.qty * g.price) === round2(g.amount)) {
+        if (pairFits(g.qty, g.price, g.amount)) {
             detail.Qty = g.qty; detail.UnitPrice = g.price;
         }
         Line.push({ DetailType: 'ItemBasedExpenseLineDetail', Amount: round2(g.amount), Description: container || undefined, ItemBasedExpenseLineDetail: detail });
@@ -216,6 +216,24 @@ function cutoverFor(kind, env) {
     if (/^\d{4}-\d{2}-\d{2}$/.test(v)) return v;
     return env === 'production' ? null : '0000-00-00';
 }
+// QuickBooks recomputes Amount = Qty x UnitPrice itself and rejects the line
+// if its own answer differs by a cent, and it rounds a half-cent up where
+// JavaScript's floating point can round it down (2026-09-23: an Aris line of
+// 8,563.99 was refused twice). So Qty and UnitPrice only travel when the
+// multiplication lands exactly on a cent AND agrees with Jarvis's amount.
+// Otherwise the line carries the amount alone, which QuickBooks never argues
+// with; the weight and rate stay visible in Jarvis and on her own invoice.
+function pairFits(qty, price, amount) {
+    if (typeof qty !== 'number' || typeof price !== 'number' || typeof amount !== 'number') return false;
+    if (!isFinite(qty) || !isFinite(price)) return false;
+    // QuickBooks rounds a half-cent UP; JavaScript's Math.round on a float
+    // that landed a hair below (1392361.4999999998) rounds it down. Settle the
+    // float first, then round half-up the way QuickBooks does.
+    const cents = Math.round(qty * price * 1e8) / 1e6;
+    const qb = Math.floor(cents + 0.5);
+    return qb === Math.round(amount * 100);
+}
+
 // Jarvis stores dates as typed ("9/15/2026" or "2026-09-15"). Compared as
 // plain text, "9/15/2026" sorts before "2026-09-06" and was silently treated
 // as pre-cutover — so it never reached QuickBooks. Normalise first.
@@ -271,4 +289,4 @@ async function pushBill(b, snapshots, { env = auth.qbEnv(), dryRun = true, fetch
     return { status: 'created', qbId: out.Bill.Id, total: out.Bill.TotalAmt, bill: out.Bill, journalId: je.id };
 }
 
-module.exports = { isoDate, UNREADABLE, docNumberFor, confirmedName, idByName, ensureSandbox, saveLink, linkKey, cutoverFor, beforeCutover, buildBill, resolveRefs, findExisting, findExistingDoc, judgeExisting, pushBill, loadLinks, LINKS_FILE, DOC_MAX };
+module.exports = { isoDate, pairFits, UNREADABLE, docNumberFor, confirmedName, idByName, ensureSandbox, saveLink, linkKey, cutoverFor, beforeCutover, buildBill, resolveRefs, findExisting, findExistingDoc, judgeExisting, pushBill, loadLinks, LINKS_FILE, DOC_MAX };

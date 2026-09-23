@@ -605,7 +605,26 @@ function buildInvoiceClassicHtml(data) {
         // — reading only one of them is how this went missing in the first
         // place.
         ...(showItem ? [{ head: 'Item', width: w('16%'),
-          cell: (item) => escapeHtml(item.item || item.item_desc || ''),
+          // ── AND HOW IT WAS PACKED, WHEN IT CAME ON PALLETS ─────────────
+          // Apsara, 2026-09-23: "Still that 12*120 boxes looks ugly..find a
+          // way to make it better."
+          //
+          // It was stacked under the figure in the Boxes column, which is 10%
+          // of the page — two lines crammed into the narrowest cell on the
+          // document, and the second one clipped. The number belongs in that
+          // column; the DESCRIPTION of the packing does not.
+          //
+          // Here it has room and it reads as a sentence about the goods,
+          // which is what a packing list's Item column is for: "Sealed Units
+          // / 12 boxes x 120 lb". The Boxes column goes back to one clean
+          // figure.
+          cell: (item, p) => {
+              const name = escapeHtml(item.item || item.item_desc || '');
+              const w2 = boxWorking(p);
+              return w2
+                  ? `${name}<div style="font-size:7.5pt;font-weight:400;">${escapeHtml(w2)}</div>`
+                  : name;
+          },
           // The item's own name, so the row cannot be read as "everything
           // above this line" — it says exactly what it is the total of.
           sub: (acc) => escapeHtml(acc.label),
@@ -654,15 +673,21 @@ function buildInvoiceClassicHtml(data) {
                 // and her broker's document does not move. The second line
                 // appears only when the count and the unit weight are both
                 // present, which only the pallets answer sets.
+                // One figure, nothing stacked — the "12 x 120 lb" working now
+                // sits in the Item cell, which has the width for it. See the
+                // note there, and Apsara on 2026-09-23.
+                //
+                // UNLESS THERE IS NO ITEM COLUMN. showItem is false when no
+                // line names anything, and then the working has nowhere else
+                // to go — so it falls back here rather than disappearing off
+                // the document she asked to have it on. Cramped beats absent.
                 { head: 'Boxes<br>(lbs)', width: '10%',
                   cell: (item, p) => {
                       const shown = escapeHtml(weightText(p.boxes_weight_lbs) || '-');
-                      // Inline, because this document has no stylesheet — a
-                      // class here renders as nothing, which is how the
-                      // working would have silently failed to print.
-                      const w = boxWorking(p);
-                      return w
-                          ? `${shown}<div style="font-size:7.5pt;font-weight:400;white-space:nowrap;">${escapeHtml(w)}</div>`
+                      if (showItem) return shown;
+                      const w2 = boxWorking(p);
+                      return w2
+                          ? `${shown}<div style="font-size:7pt;font-weight:400;">${escapeHtml(w2)}</div>`
                           : shown;
                   },
                   total: () => (totalBoxes == null ? '' : formatInt(totalBoxes)) },

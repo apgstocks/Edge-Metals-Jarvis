@@ -721,6 +721,11 @@ body[data-theme="light"] {
           Invoice only
         </label>
         <span id="invSuccessMsg" style="font-size:12px; color:var(--leaf-400); align-self:center;"></span>
+        <!-- Apsara, 2026-09-23: "ADD SEND MAIL BUTTON IN INVOICE POST
+             GENERATION". Hidden until a Generate has actually succeeded —
+             there is nothing on disk to attach before that, and a Send button
+             that can only fail is one she stops believing. -->
+        <button id="btnInvSendMail" type="button" class="btn hidden">Send by email</button>
         <button id="btnInvGenerate" type="button" class="btn btn-primary">Generate &amp; Download</button>
       </div>
     </div>
@@ -4734,7 +4739,23 @@ function collectInvoicePayload() {
         chassis_lbs: row.querySelector('.inv-p-chassis').value.trim(),
         boxes_weight_lbs: row.querySelector('.inv-p-boxes').value.trim(),
         net_weight_lbs: row.querySelector('.inv-p-net').value.trim(),
-        net_weight_mt: weight ? weight.toFixed(3) : '',
+        // ── ALWAYS TONNES, WHATEVER THE INVOICE IS PRICED IN ──────────────
+        // This was `weight.toFixed(3)` — the QUANTITY box. That was true only
+        // while every invoice was in MT. On the first pounds invoice the
+        // packing list's "Net Weight (MT)" column printed 49760.000, because
+        // the quantity box now holds pounds.
+        //
+        // The packing list's two weight columns are lbs and MT by definition;
+        // they describe the container, not the price. So the tonnage is
+        // derived from the NET POUNDS on this row, which is the one figure
+        // that means the same thing in either kind of invoice.
+        net_weight_mt: (() => {
+            const netLb = invRowNetLbs(row);
+            if (netLb != null && netLb > 0) return (netLb / LBS_PER_MT).toFixed(3);
+            // No weights to derive it from: fall back to the quantity, but
+            // only when the quantity really is a tonnage.
+            return (invUnits() === 'mt' && weight) ? weight.toFixed(3) : '';
+        })(),
       },
     };
   }).filter((it) => it.item_desc);
@@ -4943,6 +4964,115 @@ if ($('inv_box_ticket')) $('inv_box_ticket').addEventListener('change', async (e
   }
 });
 
+// ── SENDING WHAT WAS JUST GENERATED ──────────────────────────────────────
+// Apsara, 2026-09-23: "ADD SEND MAIL BUTTON IN INVOICE POST GENERATION".
+//
+// TWO STOPS. The draft is fetched and shown — the real recipients, the real
+// subject, the real body, the real filenames — and nothing leaves until she
+// presses Send on it. That is the shape she chose for the Sale row on
+// 2026-09-19 and has used since, and it matters more here: this is the screen
+// that produced 260831_SU_26EM05, the invoice that billed $13.09 for a
+// container worth $28,860.80. A document made on this screen deserves one
+// last look at who is about to receive it.
+//
+// Set by a successful generate, so the email carries the container that was
+// actually made rather than whatever the form says by the time she clicks.
+let invMailFor = null;
+
+async function openInvoiceMail() {
+  if (!invMailFor || !invMailFor.container_no) return;
+  const wrap = document.createElement('div');
+  wrap.id = 'invMailModal';
+  wrap.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:9400;display:flex;'
+    + 'align-items:flex-start;justify-content:center;overflow-y:auto;padding:36px 16px;';
+  wrap.innerHTML = `<div class="card" style="width:min(680px,100%);padding:20px 22px;">
+      <h3 style="margin:0 0 4px;font-size:16px;text-transform:none;">Send ${esc(invMailFor.container_no)}</h3>
+      <div id="invMailBody" style="font-size:13px;color:var(--text-muted);">Reading the address book…</div>
+    </div>`;
+  document.body.appendChild(wrap);
+  const close = () => wrap.remove();
+  const box = wrap.querySelector('#invMailBody');
+
+  // `recipients` is carried on the state rather than read at send time, so
+  // the addresses that produced the draft she READ are the addresses it goes
+  // to — the same rule the Sale-row flow follows.
+  let typed = '';
+
+  const load = async () => {
+    box.innerHTML = '<div style="font-size:13px;color:var(--text-muted);">Reading the address book…</div>';
+    let draft;
+    try {
+      const qs = new URLSearchParams({ container: invMailFor.container_no,
+                                       consignee: invMailFor.consignee || '' });
+      if (typed) qs.set('recipients', typed);
+      draft = await api('/api/invoice/draft-mail?' + qs.toString());
+    } catch (e) {
+      box.innerHTML = `<div style="color:var(--status-danger,#c53030);font-size:13px;">${esc(e.message)}</div>`;
+      return;
+    }
+    if (!draft.ok) {
+      // No contact on file is a BOX, not a dead end — she types them and the
+      // draft is rebuilt through the same route, so she still reads the real
+      // message before anything is sent.
+      const askBox = draft.ask_recipients
+        ? `<div class="field" style="margin-top:12px;"><label for="invMailTo">Send to (first one is the addressee)</label>
+             <input id="invMailTo" placeholder="name@buyer.com, accounts@buyer.com" value="${esc(typed)}"></div>
+           <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:12px;">
+             <button id="invMailCancel" class="btn btn-ghost" style="font-size:12px;padding:7px 14px;">Cancel</button>
+             <button id="invMailUseTo" class="btn btn-primary" style="font-size:12px;padding:7px 16px;">Read the draft</button>
+           </div>`
+        : `<div style="display:flex;justify-content:flex-end;margin-top:12px;">
+             <button id="invMailCancel" class="btn btn-ghost" style="font-size:12px;padding:7px 14px;">Close</button></div>`;
+      box.innerHTML = `<div style="color:var(--status-warn,#d98324);font-size:13px;">${esc(draft.message || 'Nothing to send.')}</div>${askBox}`;
+      wrap.querySelector('#invMailCancel').onclick = close;
+      const use = wrap.querySelector('#invMailUseTo');
+      if (use) use.onclick = () => { typed = (wrap.querySelector('#invMailTo').value || '').trim(); load(); };
+      return;
+    }
+
+    box.innerHTML = `
+      <div style="font-size:13px;margin-bottom:10px;">
+        <div><strong>To</strong> ${esc(draft.to)}${draft.contact_cc && draft.contact_cc.length ? ` &nbsp;<strong>Cc</strong> ${esc(draft.contact_cc.join(', '))}` : ''}</div>
+        <div style="color:var(--text-faint);margin-top:2px;">${esc((draft.attachments || []).join(' · ')) || 'no files found'}</div>
+      </div>
+      ${(draft.warnings || []).map((w) => `<div style="font-size:12px;color:var(--status-warn,#d98324);margin-bottom:6px;">${esc(w)}</div>`).join('')}
+      <div class="field"><label for="invMailSubject">Subject</label><input id="invMailSubject" value="${esc(draft.subject || '')}"></div>
+      <div class="field" style="margin-top:10px;"><label for="invMailText">Message</label>
+        <textarea id="invMailText" rows="10">${esc(draft.body || '')}</textarea></div>
+      <div id="invMailErr" style="color:var(--status-danger,#c53030);font-size:12px;margin-top:8px;"></div>
+      <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:12px;">
+        <button id="invMailCancel" class="btn btn-ghost" style="font-size:12px;padding:7px 14px;">Cancel</button>
+        <button id="invMailSend" class="btn btn-primary" style="font-size:12px;padding:7px 16px;">Send</button>
+      </div>`;
+    wrap.querySelector('#invMailCancel').onclick = close;
+    const send = wrap.querySelector('#invMailSend');
+    send.onclick = async () => {
+      // Disabled first. A double-press on Send is two invoices in a buyer's
+      // inbox, and "I only clicked once" is not provable afterwards.
+      send.disabled = true; send.textContent = 'Sending…';
+      try {
+        const out = await api('/api/invoice/send', { method: 'POST', body: JSON.stringify({
+          confirm: true,
+          container: invMailFor.container_no,
+          consignee: invMailFor.consignee || '',
+          recipients: typed || undefined,
+          subject: (wrap.querySelector('#invMailSubject').value || '').trim(),
+          body: wrap.querySelector('#invMailText').value,
+        }) });
+        close();
+        $('invSuccessMsg').style.color = '';
+        $('invSuccessMsg').textContent = `✓ Sent to ${out.to}`
+          + (out.saved_contact ? ` — ${out.saved_contact} is now in Email Contacts.` : '');
+      } catch (e) {
+        send.disabled = false; send.textContent = 'Send';
+        wrap.querySelector('#invMailErr').textContent = e.message;
+      }
+    };
+  };
+  load();
+}
+if ($('btnInvSendMail')) $('btnInvSendMail').addEventListener('click', openInvoiceMail);
+
 $('btnInvGenerate').addEventListener('click', async () => {
   const payload = collectInvoicePayload();
   if (!payload.inv_no || !payload.line_items.length) { alert('Invoice No and at least one item are required.'); return; }
@@ -5006,6 +5136,16 @@ $('btnInvGenerate').addEventListener('click', async () => {
       $('invSuccessMsg').textContent = downloaded === names.length
         ? (names.length > 1 ? `✓ Saved and downloaded ${names.length} files.` : '✓ Saved and downloaded.')
         : '✓ Saved — download failed, check Saved documents.';
+      // ── AND NOW IT CAN BE EMAILED ─────────────────────────────────────
+      // Apsara, 2026-09-23: "ADD SEND MAIL BUTTON IN INVOICE POST
+      // GENERATION". Revealed only now, because only now is there something
+      // on disk for that container to attach. The container is remembered
+      // from the payload that was actually generated rather than read back
+      // off the form — she may edit the form afterwards, and the email must
+      // carry the documents that were made, not the ones she is now typing.
+      invMailFor = { container_no: payload.container_no, consignee: payload.consignee || '' };
+      const sendBtn = $('btnInvSendMail');
+      if (sendBtn) sendBtn.classList.remove('hidden');
     }
     // Batch review queue: advance to the next group (single container or
     // booking-merged) instead of leaving her stuck on this screen. A brief

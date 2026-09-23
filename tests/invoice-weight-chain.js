@@ -341,6 +341,19 @@ section('D — the same chain in POUNDS, where nothing converts');
     const payload = w.eval('JSON.stringify(collectInvoicePayload())');
     ck('the payload states its unit', JSON.parse(payload).units === 'lb', payload.slice(0, 80));
 
+    // ── AND THE PACKING LIST'S MT COLUMN IS STILL TONNES ─────────────────
+    // It was derived from the QUANTITY box, which was true only while every
+    // invoice was in MT. On the first pounds invoice the packing list printed
+    // "Net Weight (MT) 49760.000" — the pounds figure under a heading that
+    // says tonnes, which is the same class of mistake this whole change
+    // exists to remove, one column further along. The packing list describes
+    // the container, not the price, so its two weight columns are lbs and MT
+    // whatever the invoice is billed in.
+    const pk = JSON.parse(payload).line_items[0].packing;
+    ck('the packing list still reports tonnes in its MT column',
+       pk.net_weight_mt === '22.571', `${pk.net_weight_mt} — 49760.000 means it followed the price`);
+    ck('  and pounds in its lbs column', pk.net_weight_lbs === '49,760', pk.net_weight_lbs);
+
     dom.window.close();
 }
 

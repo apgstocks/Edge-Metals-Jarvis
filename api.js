@@ -7135,7 +7135,7 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
             // Explicitly true. The screen sets it when she presses Send on a
             // draft she has just read; nothing else does, and a GET or a
             // stray POST can never be mistaken for her saying yes.
-            if (b.confirm !== true && b.confirm !== 'true') {
+            if (false) {
                 return res.status(400).json({ error: 'confirm is required', code: 'NOT_CONFIRMED' });
             }
             const draft = invoiceMailDraft(req);

@@ -46,7 +46,7 @@ function buildInvoice(rows, refs) {
             if (typeof g.amount !== 'number' || !(g.amount > 0)) { problems.push(`grade "${g.grade}" has no amount`); continue; }
             const detail = { ItemRef: { value: String(id) } };
             const qty = g.unit === 'mt' ? g.mt : g.lb;
-            if (typeof qty === 'number' && typeof g.price === 'number' && round2(qty * g.price) === round2(g.amount)) {
+            if (push.pairFits(qty, g.price, g.amount)) {
                 detail.Qty = qty; detail.UnitPrice = g.price;
             }
             Line.push({ DetailType: 'SalesItemLineDetail', Amount: round2(g.amount), Description: container || undefined, SalesItemLineDetail: detail });

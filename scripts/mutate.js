@@ -2323,6 +2323,36 @@ const MUTATIONS = [
       find: '                .sort((a, b) => b.available - a.available);',
       to:   '                .sort((a, b) => a.available - b.available);' },
 
+    // ── SEND BY EMAIL, FROM DOCUMENTS (2026-09-23) ───────────────────────
+    // "ADD SEND MAIL BUTTON IN INVOICE POST GENERATION". Sending is the one
+    // action on that screen that cannot be taken back, so every mutation here
+    // is a way for a message to leave when it should not have.
+
+    { name: 'mail: an invoice sends without her confirming',
+      file: 'api.js', suites: ['packing-boxes'],
+      find: "            if (b.confirm !== true && b.confirm !== 'true') {",
+      to:   '            if (false) {' },
+
+    { name: 'mail: a container with no documents sends anyway',
+      file: 'api.js', suites: ['packing-boxes'],
+      find: '            const draft = invoiceMailDraft(req);\n            if (!draft.ok) {',
+      to:   '            const draft = invoiceMailDraft(req);\n            if (false) {' },
+
+    { name: 'mail: the draft route sends instead of only reading',
+      file: 'api.js', suites: ['packing-boxes'],
+      find: "    app.get('/api/invoice/draft-mail', requireAdmin, (req, res) => {",
+      to:   "    app.get('/api/invoice/draft-mail', (req, res) => {" },
+
+    { name: 'mail: staff can email a customer',
+      file: 'api.js', suites: ['packing-boxes'],
+      find: "    app.post('/api/invoice/send', requireAdmin, async (req, res) => {",
+      to:   "    app.post('/api/invoice/send', async (req, res) => {" },
+
+    { name: 'mail: her edited subject and body are discarded',
+      file: 'api.js', suites: ['packing-boxes'],
+      find: "            const subject = String(b.subject || '').trim() || draft.subject;",
+      to:   '            const subject = draft.subject;' },
+
     // ── A TONNAGE IS A SMALL NUMBER (2026-09-22) ─────────────────────────
     // Her rule, said twice: "normally mt will be within 100." It is the only
     // check in that file that can speak when a row carries no weights.
