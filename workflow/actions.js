@@ -4468,6 +4468,123 @@ async function askText(chatId, question) {
         hits: (out.hits || []).length, cited: (out.used || []).length };
 }
 
+// ── BUGZILLA BY VOICE AND WHATSAPP ─────────────────────────────────────────
+// Apsara, 2026-09-24, asked for the tab and then for Jarvis to "file, list and
+// close" as well. The point is catching it at the moment it happens: a bug
+// noticed while she is holding a phone at the yard is one she will not
+// remember to type in at the desk.
+//
+// Filing is immediate — a report is cheap and reversible. CLOSING asks first,
+// because "it's fixed" from the person who reported it is the one status
+// change that should never happen by mishearing.
+async function logBug(chatId, { title, detail = null, area = null, severity = null } = {}) {
+    const bugs = require('../helpers/bugs');
+    const text = String(title || '').trim();
+    if (!text) {
+        await _send(chatId, 'Tell me what went wrong and I\'ll file it — e.g. "log a bug: the invoice printed the wrong weight".');
+        return { action_taken: 'bug_needs_title' };
+    }
+    let row;
+    try { row = await bugs.fileBug({ title: text, detail, area, severity, source: 'jarvis', reporter: 'Apsara' }); }
+    catch (e) {
+        await _send(chatId, `Couldn't file that: ${e.message}`);
+        return { action_taken: 'bug_file_failed', reason: e.message };
+    }
+    const again = row.times > 1;
+    await _send(chatId, [
+        again ? `That one is already filed as ${row.id} — I've noted it happened again (${row.times}×).`
+              : `Filed ${row.id}: ${row.title}`,
+        row.area ? `Where: ${row.area}` : null,
+        'It\'s on the Bugzilla tab, and it stays there until you mark it verified.',
+    ].filter(Boolean).join('\n'));
+    require('../helpers/wa-state').sayAloud(again
+        ? "That's already on the list — I've noted it happened again."
+        : `Filed it. It's on the Bugzilla tab.`);
+    try { require('../helpers/wa-state').openScreen(require('../helpers/screens').toOpen(
+        require('../helpers/screens').SCREENS.find((x) => x.key === 'bugzilla'))); } catch (e) {}
+    return { action_taken: 'bug_filed', id: row.id, repeat: again };
+}
+
+async function showBugs(chatId, status = 'open') {
+    const bugs = require('../helpers/bugs');
+    const want = bugs.STATUSES.includes(status) ? status : 'open';
+    const rows = bugs.filter({ status: want });
+    const s = bugs.summary();
+    if (!rows.length) {
+        const none = want === 'open' ? 'Nothing is open.' : `Nothing is ${want.replace('_', ' ')}.`;
+        await _send(chatId, `${none} ${s.total ? `${s.total} filed in all — ${s.verified} verified.` : 'Nothing has been filed yet.'}`);
+        require('../helpers/wa-state').sayAloud(none);
+        return { action_taken: 'bugs_reported', count: 0 };
+    }
+    // Numbered, so "bug 2 is fixed" means something — the same numbering the
+    // email digest uses, and for the same reason.
+    const lines = rows.map((b, i) => `${i + 1}. ${b.title}${b.area ? ` (${b.area})` : ''}${b.times > 1 ? ` — seen ${b.times}×` : ''}${b.status !== want ? ` [${b.status}]` : ''}`);
+    await _send(chatId, `${rows.length} ${want === 'open' ? 'open' : want.replace('_', ' ')}${s.awaiting_check && want === 'open' ? `, and ${s.awaiting_check} fixed waiting for you to check` : ''}:\n\n${lines.join('\n')}`);
+    require('../helpers/wa-state').sayAloud(`${rows.length} ${want === 'open' ? 'open' : want.replace('_', ' ')}${s.awaiting_check && want === 'open' ? `, and ${s.awaiting_check} waiting for you to check` : ''} — they're on screen.`);
+    // Remembered so a number in her next message resolves to the line she just
+    // read, exactly like the email digest.
+    await setBugList(chatId, rows.map((b) => b.id));
+    try { require('../helpers/wa-state').openScreen(require('../helpers/screens').toOpen(
+        require('../helpers/screens').SCREENS.find((x) => x.key === 'bugzilla'))); } catch (e) {}
+    return { action_taken: 'bugs_reported', count: rows.length };
+}
+
+// The numbered list she was last shown, so "close 2" is unambiguous.
+const BUG_LIST_TTL_MS = 12 * 60 * 60 * 1000;
+let _bugLists = {};
+async function setBugList(chatId, ids) { _bugLists[chatId] = { ids, at: Date.now() }; }
+function resolveBugRef(chatId, ref) {
+    const bugs = require('../helpers/bugs');
+    const raw = String(ref || '').trim();
+    const byId = bugs.get(raw.toUpperCase());
+    if (byId) return byId;
+    const n = parseInt(raw, 10);
+    const held = _bugLists[chatId];
+    if (Number.isInteger(n) && held && Date.now() - held.at < BUG_LIST_TTL_MS && n >= 1 && n <= held.ids.length) {
+        return bugs.get(held.ids[n - 1]);
+    }
+    if (Number.isInteger(n)) {
+        // No list in front of her: fall back to the open ones in the order the
+        // screen shows them, which is what she is most likely looking at.
+        const open = bugs.filter({ status: 'open' });
+        if (n >= 1 && n <= open.length) return open[n - 1];
+    }
+    return null;
+}
+
+async function closeBugForConfirm(chatId, { ref, note = null, status = 'fixed' } = {}) {
+    const bug = resolveBugRef(chatId, ref);
+    if (!bug) {
+        await _send(chatId, `I can't tell which one you mean. Say "show me the bugs" and then the number, or give me the id.`);
+        require('../helpers/wa-state').sayAloud("I can't tell which one you mean — say show me the bugs first.");
+        return { action_taken: 'bug_not_found' };
+    }
+    const staged = await setPending(chatId, {
+        type: 'await_bug_close', bug_id: bug.id, new_status: status === 'verified' ? 'verified' : 'fixed', note,
+    });
+    if (staged.queued) {
+        await _send(chatId, `Ready to mark ${bug.id} ${status}, but you have ${describePending(staged.blockedBy)} to answer first.`);
+        return { action_taken: 'bug_close_queued' };
+    }
+    await _send(chatId, `Mark ${bug.id} as ${status}?\n\n${bug.title}${note ? `\nFix: ${note}` : ''}\n\n(yes/no)`);
+    require('../helpers/wa-state').sayAloud(`Mark that one ${status}?`);
+    return { action_taken: 'bug_close_staged', id: bug.id };
+}
+
+async function applyBugClose(chatId, pending) {
+    const bugs = require('../helpers/bugs');
+    await clearPending(chatId);
+    try {
+        const row = await bugs.update(pending.bug_id, { status: pending.new_status, fix_note: pending.note || null }, 'Apsara');
+        await _send(chatId, `${row.id} is ${row.status}${row.status === 'fixed' ? ' — it stays on the list until you check it and mark it verified' : ''}.`);
+        require('../helpers/wa-state').sayAloud(`Done — ${row.status}.`);
+        return { action_taken: 'bug_closed', id: row.id, status: row.status };
+    } catch (e) {
+        await _send(chatId, `Couldn't update it: ${e.message}`);
+        return { action_taken: 'bug_close_failed', reason: e.message };
+    }
+}
+
 async function sendDraftedEmail(chatId, pending) {
     const { sendEmail } = require('../helpers/gmail');
     // Forward FIRST, so that by the time the reply lands in her mailbox the
@@ -8303,6 +8420,7 @@ module.exports = {
     ready,
     describeLink,
     startSaleInvoice, saleInvoiceAnswer, askLedger, askText,
+    logBug, showBugs, closeBugForConfirm, applyBugClose, resolveBugRef,
     showPendingReplies, replyToDigestItem, summarizeEmail, markPendingReminded, forwardOriginalToSelf, sendDraftedEmail,
 init,
 setPending, clearPending, getPending, resolvePending, promoteQueued,

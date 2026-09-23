@@ -767,6 +767,44 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
         }
     });
 
+    // ── BUGZILLA ────────────────────────────────────────────────────────
+    // Apsara, 2026-09-24: "keep track of all the fixes so that we can revisit
+    // it". Any logged-in person can file one and read the list — a bug staff
+    // cannot report is a bug nobody hears about. Changing an item's STATUS is
+    // admin, because "verified" is her saying she saw it work.
+    app.get('/api/bugs', (req, res) => {
+        try {
+            const bugs = require('./helpers/bugs');
+            res.json({
+                bugs: bugs.filter({ status: req.query.status || null, area: req.query.area || null,
+                    source: req.query.source || null, q: req.query.q || null }),
+                summary: bugs.summary(),
+                areas: bugs.AREAS, statuses: bugs.STATUSES, severities: bugs.SEVERITIES,
+            });
+        } catch (e) { res.status(500).json({ error: e.message }); }
+    });
+
+    app.post('/api/bugs', async (req, res) => {
+        try {
+            const bugs = require('./helpers/bugs');
+            const b = req.body || {};
+            const row = await bugs.fileBug({
+                title: b.title, detail: b.detail, area: b.area, severity: b.severity,
+                source: b.source === 'jarvis' ? 'jarvis' : 'her',
+                reporter: b.reporter || req.role || null,
+            });
+            res.json({ ok: true, bug: row });
+        } catch (e) { res.status(400).json({ error: e.message }); }
+    });
+
+    app.patch('/api/bugs/:id', requireAdmin, async (req, res) => {
+        try {
+            const bugs = require('./helpers/bugs');
+            const row = await bugs.update(req.params.id, req.body || {}, req.role || 'admin');
+            res.json({ ok: true, bug: row });
+        } catch (e) { res.status(/no bug/.test(e.message) ? 404 : 400).json({ error: e.message }); }
+    });
+
     app.get('/api/health', (req, res) => {
         const out = { ok: true, checks: {}, at: new Date().toISOString(),
                       version: require('./helpers/version').running() };

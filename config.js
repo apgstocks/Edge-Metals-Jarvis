@@ -348,6 +348,11 @@ const FILES = {
     // not answer, which is the only way a gap gets fixed instead of noticed
     // once and forgotten.
     ASK_LOG_FILE: path.join(DATA_DIR, 'ask_log.json'),
+
+    // Bugzilla — every problem she reports and what happened to it.
+    // Apsara, 2026-09-24: "create a bugzilla tab in website so that we can
+    // keep track of all the fixes so that we can revisit it".
+    BUGS_FILE: path.join(DATA_DIR, 'bugs.json'),
 };
 
 // ── Env ───────────────────────────────────────────────────────────────────────

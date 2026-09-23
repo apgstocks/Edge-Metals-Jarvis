@@ -40,5 +40,19 @@ ck('fee but no Bank charges item -> blocked, not guessed', r.problems && /Bank c
 r = buildCustomerPayment({ id: 'r4', date: '2026-09-12', amount: 100, allocations: [{ sale_id: 'sX', amount: 100 }] }, crefs);
 ck('invoice not in QuickBooks yet -> blocked', r.problems && /enter the invoice first/.test(r.problems[0]));
 
+// ── prepayments (advances with nothing applied yet) ────────────────────────
+const { buildPrepayment } = require('../helpers/quickbooks/pushPayments');
+const adv = { id: 'BPAY_1', kind: 'advance', date: '2026-08-04', amount: 7000, mode: 'Wire', bank: 'BofA', supplier: 'Mario', allocations: [] };
+const prefs = { vendorId: '601', bankAccountId: '295', prepayAccountId: '98' };
+const pre = buildPrepayment(adv, prefs);
+ck('advance builds a cheque, not a bill payment', pre.payment && pre.payment.PaymentType === 'Check' && pre.total === 7000, JSON.stringify(pre.problems));
+ck('it comes out of the bank she named', pre.payment.AccountRef.value === '295');
+ck('it sits on the payable account, so it is credit against him', pre.payment.Line[0].AccountBasedExpenseLineDetail.AccountRef.value === '98');
+ck('the vendor is on it', pre.payment.EntityRef.value === '601' && pre.payment.EntityRef.type === 'Vendor');
+ck('the note says it is an advance', /advance/.test(pre.payment.PrivateNote));
+ck('a typed date is normalised', buildPrepayment({ ...adv, date: '8/4/2026' }, prefs).payment.TxnDate === '2026-08-04');
+ck('an advance already applied to a bill is refused here', buildPrepayment({ ...adv, allocations: [{ bill_id: 'B1', amount: 7000 }] }, prefs).problems.some((p) => /bill payment/.test(p)));
+ck('no amount, no prepayment', buildPrepayment({ ...adv, amount: 0 }, prefs).problems.length === 1);
+
 console.log(`\nquickbooks-payments: ${pass} passed, ${fail} failed`);
 if (fail) { console.log('FAILED: ' + failures.join(' | ')); process.exit(1); }

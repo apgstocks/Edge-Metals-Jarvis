@@ -36,6 +36,7 @@ const LABELS = {
     confirm_quote_trucker: 'a trucker waiting to be confirmed for a quote',
     await_email_confirm: 'an email waiting for your OK to send',
     await_sale_invoice: 'the invoice you asked me to generate',
+    await_bug_close: 'a bug waiting for your OK to close',
     await_payment_confirm: 'a payment waiting for your OK',
     await_verify_apply: 'some booking changes waiting to be applied',
     await_ready_check: 'a load waiting to be marked ready',

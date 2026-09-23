@@ -54,6 +54,7 @@ const SCREENS = [
     // Both / system
     { key: 'spend', label: 'Spend Report', company: 'both', tab: 'spend', say: ['spend report', 'spending', 'spend'] },
     { key: 'tasks', label: 'Tasks', company: 'system', tab: 'tasks', say: ['tasks', 'reminders', 'scheduled tasks'] },
+    { key: 'bugzilla', label: 'Bugzilla', company: 'both', tab: 'bugzilla', say: ['bugzilla', 'bugs', 'bug list', 'bug tracker', 'issues', 'what is broken'] },
     { key: 'facts', label: 'Facts', company: 'system', tab: 'facts', say: ['facts', 'memory', 'what you remember'] },
     { key: 'bot', label: 'Bot', company: 'system', tab: 'bot', say: ['bot', 'bot log'] },
     { key: 'whatsapp', label: 'WhatsApp', company: 'system', tab: 'whatsapp', say: ['whatsapp', 'whats app', 'qr code'] },

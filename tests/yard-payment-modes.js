@@ -92,9 +92,25 @@ section('A — the yard pay modal offers exactly two');
            !opts || opts.length === 0, JSON.stringify(opts));
 
         const fill = (src.match(/const payModes = sale \? \[([^\]]*)\] : \[([^\]]*)\]/) || []);
-        ck(`  ${who}: a sale offers exactly two`,
-           /'Cash', 'Bank transfer'/.test(fill[1] || ''), fill[1]);
-        ck(`  ${who}: and no Zelle on a sale`, !/Zelle/.test(fill[1] || ''), fill[1]);
+        // ── AGAINST THE SERVER, NOT A LIST WRITTEN HERE ───────────────────
+        // Widened 2026-09-23: "in receive payment,zelle,wire,cash etc should
+        // be there similar to loads", then "Remove just wire".
+        //
+        // The old version of this check spelled the two modes out, so it went
+        // red when she changed her mind rather than when the code broke. What
+        // actually matters is that the CLIENT offers exactly what the SERVER
+        // will accept — a list here the server refuses is a save that fails
+        // after she has filled the whole form in. So both clients are now
+        // compared against modesForKind, and this check survives her changing
+        // the list again.
+        const parse = (s2) => (s2 || '').split(',').map((x) => x.trim().replace(/^'|'$/g, '')).filter(Boolean);
+        ck(`  ${who}: a sale offers exactly what the server accepts`,
+           JSON.stringify(parse(fill[1])) === JSON.stringify(pay.modesForKind('sale')),
+           `client ${JSON.stringify(parse(fill[1]))} vs server ${JSON.stringify(pay.modesForKind('sale'))}`);
+        ck(`  ${who}: a purchase does too`,
+           JSON.stringify(parse(fill[2])) === JSON.stringify(pay.modesForKind('purchase')),
+           `client ${JSON.stringify(parse(fill[2]))} vs server ${JSON.stringify(pay.modesForKind('purchase'))}`);
+        ck(`  ${who}: and Wire is NOT offered on a sale`, !/Wire/.test(fill[1] || ''), fill[1]);
         ck(`  ${who}: a purchase keeps the full list`,
            /Zelle/.test(fill[2] || '') && /Wire/.test(fill[2] || '') && /Cheque/.test(fill[2] || ''),
            fill[2] + ' — paying a supplier is money going the other way');
@@ -168,14 +184,23 @@ section('B — and the SERVER holds the rule, not just the dropdown');
            err && err.message);
     }
 
-    // The message must name the list THAT APPLIES. Being refused a Zelle and
+    // The message must name the list THAT APPLIES. Being refused a Wire and
     // then told "must be one of: Cash, Bank transfer, Zelle, Wire, Cheque"
     // reads as a bug in the software rather than an answer.
+    //
+    // The refused mode is WIRE since 2026-09-23 — Zelle was the example until
+    // she widened receive payment and Zelle became legal. Asserted against
+    // modesForKind rather than a list spelled out here, so the next time she
+    // changes her mind this goes red only if the MESSAGE stops matching the
+    // RULE, which is the thing it is actually for.
     let msg = '';
-    try { await pay.addPayment({ load_id: 'L_MSG', load_kind: 'sale', mode: 'Zelle', amount: 10, paid_on: '2026-09-16' }); }
+    try { await pay.addPayment({ load_id: 'L_MSG', load_kind: 'sale', mode: 'Wire', amount: 10, paid_on: '2026-09-16' }); }
     catch (e) { msg = e.message; }
-    ck('  and the refusal names only the two that are allowed',
-       /Cash/.test(msg) && /Bank transfer/.test(msg) && !/Zelle/.test(msg) && !/Cheque/.test(msg), msg);
+    const allowed = pay.modesForKind('sale');
+    ck('  the refusal names every mode that IS allowed',
+       allowed.every((m) => msg.includes(m)), `${msg} — expected all of ${JSON.stringify(allowed)}`);
+    ck('  and does not offer the one just refused',
+       !/Wire/.test(msg.replace(/^[^:]*:/, '')), msg);
 
     // The two that ARE allowed still work, both ways round.
     const p1 = await pay.addPayment({ load_id: 'L_OK1', load_kind: 'purchase', mode: 'Cash', amount: 100, paid_on: '2026-09-16' });

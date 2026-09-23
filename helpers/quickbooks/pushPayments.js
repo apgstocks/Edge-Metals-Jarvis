@@ -128,7 +128,78 @@ async function findSameMoney({ date, amount, kind }, opts) {
 
 const note = (env, kind, action, jarvis, extra = {}) => journal.record({ env, kind, action, jarvis, qb: extra.qb || {}, ...extra });
 
+// ── a wire before the load arrives ─────────────────────────────────────────
+// Apsara, 2026-09-23, on the Mario Elder tab: "upload mario elder sheet with
+// wire as vendor prepayment". Money paid to a supplier before there is a bill
+// is not a bill payment — there is nothing to pay. It is a cheque booked to a
+// payable account, which leaves a credit standing against him until a load
+// turns up; her accountant does exactly this on the bank screen, categorising
+// such wires as "Vendor Payable".
+//
+// Jarvis does NOT choose that account. The role is mapped like any other name
+// (mapping kind 'account', Jarvis name 'prepayment'), so the books decide.
+const PREPAY_ROLE = 'prepayment';
+
+function buildPrepayment(p, refs) {
+    const problems = [];
+    const amount = round2(p.amount);
+    if (!(amount > 0)) problems.push('an advance needs an amount');
+    if ((p.allocations || []).some((a) => a.amount > 0)) problems.push('this advance is already applied to a bill — it goes in as a bill payment, not a prepayment');
+    if (problems.length) return { problems };
+    return { payment: {
+        PaymentType: 'Check',
+        AccountRef: { value: String(refs.bankAccountId) },
+        EntityRef: { value: String(refs.vendorId), type: 'Vendor' },
+        TxnDate: push.isoDate(p.date),
+        TotalAmt: amount,
+        PrivateNote: [p.mode, p.bank, p.ref && `Ref ${p.ref}`, 'advance — credit against him until a load is applied', `Jarvis payment ${p.id}`].filter(Boolean).join(' · '),
+        Line: [{ Amount: amount, DetailType: 'AccountBasedExpenseLineDetail',
+            Description: p.note || `advance to ${p.supplier}`,
+            AccountBasedExpenseLineDetail: { AccountRef: { value: String(refs.prepayAccountId) } } }],
+    }, total: amount };
+}
+
+async function pushPrepayment(p, snapshots, { env = auth.qbEnv(), dryRun = true, fetchImpl } = {}) {
+    const opts = { env, fetchImpl };
+    const jarvis = { id: p.id, supplier: p.supplier, date: p.date, amount: p.amount, mode: p.mode, bank: p.bank, kind: p.kind };
+    const cut = push.beforeCutover('bill', p.date, env);
+    if (cut) return { status: push.UNREADABLE.test(cut) ? 'blocked' : 'before-cutover', problems: [cut] };
+    const key = push.linkKey(env, 'prepayment', p.id);
+    if (push.loadLinks()[key]) return { status: 'already-linked', qbId: push.loadLinks()[key].qbId };
+    const problems = [];
+    const v = push.confirmedName('vendor', p.supplier, snapshots.vendor); if (v.problem) problems.push(v.problem);
+    const b = bankName(p.mode, p.bank, snapshots); if (b.problem) problems.push(b.problem);
+    const acc = push.confirmedName('account', PREPAY_ROLE, snapshots.account || []);
+    if (acc.problem) problems.push('no account is mapped for an advance — map the role "prepayment" to the account her books use (Vendor Payable)');
+    const refs = problems.length ? null : {
+        vendorId: await push.idByName('Vendor', 'DisplayName', v.name, opts),
+        bankAccountId: await push.idByName('Account', 'Name', b.name, opts),
+        prepayAccountId: await push.idByName('Account', 'Name', acc.name, opts),
+    };
+    if (refs) for (const [what, id] of [[v.name, refs.vendorId], [b.name, refs.bankAccountId], [acc.name, refs.prepayAccountId]])
+        if (!id) problems.push(`"${what}" not found in QuickBooks ${env}`);
+    const built = problems.length ? { problems } : buildPrepayment(p, refs);
+    if (built.problems) { if (!dryRun) note(env, 'prepayment', 'blocked', jarvis, { reason: built.problems.join('; ') }); return { status: 'blocked', problems: built.problems }; }
+    const same = await findSameMoney({ date: p.date, amount: built.total, kind: 'out' }, opts);
+    if (same.length) {
+        if (!dryRun) note(env, 'prepayment', 'asked', jarvis, { candidates: same, reason: 'same amount already left the bank around this date' });
+        return { status: 'ask', candidates: same, payment: built.payment, note: 'the same amount already left the bank in QuickBooks around this date — she decides' };
+    }
+    if (dryRun) return { status: 'would-create', payment: built.payment, total: built.total, account: acc.name };
+    const out = (await client.request('POST', '/purchase', built.payment, opts)).Purchase;
+    push.saveLink(key, { qbId: out.Id, syncToken: out.SyncToken, how: 'created', total: out.TotalAmt, at: new Date().toISOString() });
+    const j = note(env, 'prepayment', 'created', jarvis, { linkKey: key, jarvisTotal: p.amount,
+        qb: { id: out.Id, syncToken: out.SyncToken, total: out.TotalAmt, partyId: refs.vendorId, party: v.name, bank: b.name, account: acc.name } });
+    return { status: 'created', qbId: out.Id, total: out.TotalAmt, journalId: j.id };
+}
+
 async function pushBillPayment(p, snapshots, { env = auth.qbEnv(), dryRun = true, fetchImpl } = {}) {
+    // An advance with nothing applied to it yet is a prepayment, not a
+    // payment: it used to be blocked, which left her $1,000 Mazariegos wire
+    // sitting outside the books.
+    if (p && p.kind === 'advance' && !(p.allocations || []).some((a) => a.amount > 0)) {
+        return pushPrepayment(p, snapshots, { env, dryRun, fetchImpl });
+    }
     const opts = { env, fetchImpl };
     const jarvis = { id: p.id, supplier: p.supplier, date: p.date, amount: p.amount, mode: p.mode, bank: p.bank, kind: p.kind, allocations: p.allocations };
     const cut = push.beforeCutover('bill', p.date, env);
@@ -213,4 +284,4 @@ async function pushCustomerPayment(r, snapshots, { env = auth.qbEnv(), dryRun = 
     return { status: 'created', qbId: out.Id, total: out.TotalAmt, creditMemos: memos, journalId: j.id };
 }
 
-module.exports = { buildBillPayment, buildCustomerPayment, findSameMoney, pushBillPayment, pushCustomerPayment, WINDOW_DAYS, BANK_CHARGE_ITEM };
+module.exports = { buildPrepayment, pushPrepayment, buildBillPayment, buildCustomerPayment, findSameMoney, pushBillPayment, pushCustomerPayment, WINDOW_DAYS, BANK_CHARGE_ITEM };

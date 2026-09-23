@@ -40,7 +40,7 @@ const auth = require('./auth');
 
 const JOURNAL_FILE = () => process.env.QB_JOURNAL_FILE || path.join(DATA_DIR, 'qb-journal.jsonl');
 const LINKS_FILE = () => process.env.QB_LINKS_FILE || path.join(DATA_DIR, 'qb-links.json');
-const QB_TYPE = { bill: 'Bill', invoice: 'Invoice', billpayment: 'BillPayment', payment: 'Payment', creditmemo: 'CreditMemo' };
+const QB_TYPE = { bill: 'Bill', invoice: 'Invoice', billpayment: 'BillPayment', payment: 'Payment', creditmemo: 'CreditMemo', prepayment: 'Purchase' };
 const ACTIONS = ['created', 'linked-existing', 'asked', 'blocked', 'undone', 'unlinked', 'discrepancy'];
 const round2 = (n) => Math.round(Number(n) * 100) / 100;
 

@@ -61,7 +61,27 @@ const PAYMENT_MODES = ['Cash', 'Bank transfer', 'Zelle', 'Wire', 'Cheque'];
 // month is never re-validated and keeps reading as Zelle everywhere it
 // appears. The narrowing applies to new entries only, which is the whole of
 // what she asked for.
-const YARD_LOAD_MODES = ['Cash', 'Bank transfer'];
+// ── WIDENED AGAIN, 2026-09-23 ──────────────────────────────────────────────
+// Apsara: "in receive payment,zelle,wire,cash etc should be there similar to
+// loads" — then, asked which exactly: option one, "Remove just wire".
+//
+// So receive payment is Cash, Bank transfer, Zelle and Cheque. This REVERSES
+// her 2026-09-16 narrowing quoted below. The old note is left standing word
+// for word rather than rewritten: it records what she wanted in September and
+// why the over-reach that followed it was mine, and editing it to agree with
+// today would erase the only account of how that bug happened.
+//
+// WIRE IS DELIBERATELY ABSENT, and it is the one mode she named. A wire in
+// and a Bank transfer in are the same movement by two names, and two names
+// for one movement is two ways to answer "how did that money arrive" — the
+// same reasoning that removed Bank transfer from a PURCHASE on 2026-09-17,
+// pointing the other way.
+//
+// WHAT THIS DOES NOT TOUCH: 'Bank transfer' stays, so the "Paid to" question
+// (PAID_VIA_BY_KIND below) still has a mode to fire on. Dropping it would
+// have left that question unreachable and a <select> defaulting to a value
+// not in its list — which is exactly how the 2026-09-17 breakage worked.
+const YARD_LOAD_MODES = ['Cash', 'Bank transfer', 'Zelle', 'Cheque'];
 
 // ── WHAT A PURCHASE MAY BE PAID BY ─────────────────────────────────────────
 // Apsara, 2026-09-17: "in load of invoice pay-remove bank transfer."

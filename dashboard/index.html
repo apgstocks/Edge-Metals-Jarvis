@@ -977,6 +977,14 @@ const NAV_ITEMS = [
   { id: 'bot',       label: 'Bot',   group: 'Bot & Automation' },
   { id: 'facts',     label: 'Facts', group: 'Bot & Automation', adminOnly: true },
   { id: 'tasks',     label: 'Tasks', group: 'Bot & Automation' },
+  // ── BUGZILLA ─────────────────────────────────────────────────────────
+  // Apsara, 2026-09-24: "create a bugzilla tab in website so that we can keep
+  // track of all the fixes so that we can revisit it."
+  //
+  // NOT adminOnly: a bug staff cannot report is a bug nobody hears about. The
+  // page renders the filing form for everyone and the status buttons only for
+  // admin, which matches the server (POST open, PATCH requireAdmin).
+  { id: 'bugzilla',  label: 'Bugzilla', group: 'Bot & Automation' },
 
   // Who Jarvis talks to and how — channels, directories, inbound requests.
   { id: 'whatsapp',       label: 'WhatsApp',       group: 'Contacts & Outreach', adminOnly: true },
@@ -1099,7 +1107,9 @@ function renderNav() {
   // boundary. Paying is still admin-only, because /api/payments is
   // deliberately NOT on that allowlist.
   const visible = NAV_ITEMS.filter(n => (!n.adminOnly || ROLE === 'admin')
-    && (ROLE !== 'staff' || n.id === 'loads' || n.id === 'petty' || n.id === 'trucker-bills'));
+    // 'bugzilla' is in the staff list on purpose (2026-09-24): the people
+    // using the screens all day are the ones who hit the bugs.
+    && (ROLE !== 'staff' || n.id === 'loads' || n.id === 'petty' || n.id === 'trucker-bills' || n.id === 'bugzilla'));
   // ── ORDERED BY GROUP, NOT BY POSITION ────────────────────────────────
   // A heading is emitted whenever the group CHANGES, so a group whose items
   // are not contiguous in NAV_ITEMS prints its heading twice. Regrouping by
@@ -1252,6 +1262,7 @@ async function loadTab(tab) {
     if (tab === 'settings') return renderSettings(await api('/api/settings'));
     if (tab === 'bot') return renderBot();
     if (tab === 'tasks') return renderTasks(await api('/api/tasks'));
+    if (tab === 'bugzilla') return renderBugzilla();
     if (tab === 'facts') return renderFacts(await api('/api/facts?include=all'));
     if (tab === 'bills') { metalsTab.bills = 'bills'; return renderLedgerTab('bills'); }
     // Arriving from the NAV always lands on the first tab of the section.
@@ -3365,6 +3376,104 @@ function refreshTaskDefaultMessage() {
   const t = TASK_TYPES.find(x => x.value === $('t_type').value);
   if (t) $('t_message').value = t.msg($('t_bkg').value.trim().toUpperCase());
 }
+// ── BUGZILLA ───────────────────────────────────────────────────────────────
+// Apsara, 2026-09-24: "create a bugzilla tab in website so that we can keep
+// track of all the fixes so that we can revisit it."
+//
+// The three states are the whole design: OPEN is broken, FIXED is somebody
+// says it is mended, VERIFIED is her having seen it work. "Fixed" is a claim
+// and "verified" is evidence, and keeping them apart is what makes the list
+// revisitable — the count she reads first is "fixed, waiting on you".
+let bugFilter = 'open';
+const BUG_COLOR = { open: 'var(--status-danger)', fixed: 'var(--status-warning)', verified: 'var(--status-success)', wont_fix: 'var(--text-faint)' };
+const BUG_LABEL = { open: 'Open', fixed: 'Fixed — check it', verified: 'Verified', wont_fix: "Won't fix" };
+const BUG_SOURCE = { her: 'you', jarvis: 'Jarvis (you asked)', auto_question: 'filed itself — unanswered question', auto_crash: 'filed itself — crash' };
+
+async function renderBugzilla() {
+  const data = await api(`/api/bugs?status=${encodeURIComponent(bugFilter)}`);
+  const bugs = data.bugs || [], s = data.summary || {};
+  const isAdmin = ROLE === 'admin';
+  const tab = (id, label, n) => `<button class="bug-filter btn ${bugFilter === id ? 'btn-primary' : 'btn-dark'}" data-f="${id}" style="padding:6px 12px;">${esc(label)}${n === undefined ? '' : ` (${n})`}</button>`;
+  $('viewRoot').innerHTML = `
+    <section style="max-width:1000px; margin:0 auto; padding:38px 40px 80px;">
+      <div class="eyebrow">// Bugzilla</div>
+      <h2 style="font-size:24px; text-transform:uppercase; margin-bottom:6px;">What broke, and what happened about it</h2>
+      <div style="font-size:13px; color:var(--text-muted); margin-bottom:20px;">
+        ${s.open || 0} open · <strong style="color:var(--status-warning);">${s.awaiting_check || 0} fixed and waiting for you to check</strong> · ${s.verified || 0} verified${s.auto ? ` · ${s.auto} filed themselves` : ''}
+      </div>
+      <div class="card" style="padding:18px 20px; margin-bottom:18px;">
+        <div style="font-family:var(--font-mono); font-size:10px; font-weight:600; letter-spacing:.16em; text-transform:uppercase; color:var(--text-muted); margin-bottom:12px;">Report something</div>
+        <div style="display:grid; grid-template-columns:2fr 1fr 1fr; gap:12px;">
+          <div class="field"><label>What went wrong</label><input id="bug_title" placeholder="Invoice printed the wrong weight on the second grade"></div>
+          <div class="field"><label>Where</label><select id="bug_area">${(data.areas || []).map(a => `<option value="${esc(a)}">${esc(a)}</option>`).join('')}</select></div>
+          <div class="field"><label>How bad</label><select id="bug_sev">${(data.severities || []).map(v => `<option value="${esc(v)}"${v === 'normal' ? ' selected' : ''}>${esc(v)}</option>`).join('')}</select></div>
+          <div class="field" style="grid-column:1/-1;"><label>What you were doing (optional)</label><input id="bug_detail" placeholder="Generated it from the Sales row for TCLU9988776"></div>
+        </div>
+        <div style="display:flex; align-items:center; gap:12px;">
+          <button id="btnFileBug" class="btn btn-primary">File it</button>
+          <span id="bugErr" style="font-family:var(--font-mono); font-size:11px; color:var(--status-danger);"></span>
+        </div>
+      </div>
+      <div style="display:flex; gap:8px; margin-bottom:14px; flex-wrap:wrap;">
+        ${tab('open', 'Open', s.open || 0)}${tab('fixed', 'Fixed — check', s.awaiting_check || 0)}${tab('verified', 'Verified', s.verified || 0)}${tab('all', 'Everything', s.total || 0)}
+      </div>
+      <div style="display:flex; flex-direction:column; gap:10px;">
+        ${bugs.length ? bugs.map(b => `
+          <div class="card" style="padding:14px 16px; border-left:3px solid ${BUG_COLOR[b.status] || 'var(--text-faint)'};">
+            <div style="display:flex; justify-content:space-between; gap:14px; align-items:flex-start;">
+              <div style="flex:1; min-width:0;">
+                <div style="font-size:13.5px; font-weight:600; color:var(--text-strong);">${esc(b.title)}</div>
+                <div style="font-family:var(--font-mono); font-size:10.5px; color:var(--text-muted); margin-top:4px;">
+                  ${esc(b.id)} · ${esc(BUG_LABEL[b.status] || b.status)} · ${esc(b.severity || 'normal')}${b.area ? ' · ' + esc(b.area) : ''} · ${esc(String(b.created_at || '').slice(0, 10))}${b.times > 1 ? ` · seen ${b.times}×` : ''} · ${esc(BUG_SOURCE[b.source] || b.source)}
+                </div>
+                ${b.detail ? `<div style="font-size:12px; color:var(--text-body); margin-top:7px; white-space:pre-wrap;">${esc(String(b.detail).slice(0, 600))}</div>` : ''}
+                ${b.fix_note ? `<div style="font-size:12px; color:var(--status-success); margin-top:7px;">Fix: ${esc(b.fix_note)}</div>` : ''}
+              </div>
+              ${isAdmin ? `<div style="display:flex; flex-direction:column; gap:6px; flex-shrink:0;">
+                ${b.status === 'open' ? `<button class="btn btn-dark bug-fix" data-id="${esc(b.id)}" style="white-space:nowrap;">Mark fixed…</button>` : ''}
+                ${b.status === 'fixed' ? `<button class="btn btn-primary bug-verify" data-id="${esc(b.id)}" style="white-space:nowrap;">I checked it — verified</button>` : ''}
+                ${b.status === 'fixed' ? `<button class="btn btn-danger bug-reopen" data-id="${esc(b.id)}" style="white-space:nowrap;">Still broken</button>` : ''}
+                ${b.status === 'verified' ? `<button class="btn btn-dark bug-reopen" data-id="${esc(b.id)}" style="white-space:nowrap;">It came back</button>` : ''}
+                ${b.status !== 'wont_fix' && b.status !== 'verified' ? `<button class="btn btn-dark bug-wont" data-id="${esc(b.id)}" style="white-space:nowrap;">Won't fix</button>` : ''}
+              </div>` : ''}
+            </div>
+            ${(b.history || []).length > 1 ? `<details style="margin-top:8px;"><summary style="font-family:var(--font-mono); font-size:10.5px; color:var(--text-faint); cursor:pointer;">history</summary>
+              ${(b.history || []).map(h => `<div style="font-family:var(--font-mono); font-size:10.5px; color:var(--text-muted); padding:3px 0;">${esc(String(h.at || '').slice(0, 16).replace('T', ' '))} — ${esc(h.what || '')}${h.by ? ' (' + esc(h.by) + ')' : ''}${h.note ? ': ' + esc(h.note) : ''}</div>`).join('')}
+            </details>` : ''}
+          </div>`).join('')
+        : `<div class="card" style="padding:30px; text-align:center; font-family:var(--font-mono); font-size:12px; color:var(--text-faint);">Nothing ${bugFilter === 'all' ? 'filed yet' : 'here'}. ${bugFilter === 'open' ? 'Either it is all working or nothing has been reported yet.' : ''}</div>`}
+      </div>
+    </section>`;
+
+  document.querySelectorAll('.bug-filter').forEach(b => b.addEventListener('click', () => { bugFilter = b.dataset.f; renderBugzilla(); }));
+  $('btnFileBug').addEventListener('click', async () => {
+    const title = $('bug_title').value.trim();
+    $('bugErr').textContent = '';
+    if (!title) { $('bugErr').textContent = 'Say what went wrong.'; return; }
+    try {
+      await api('/api/bugs', { method: 'POST', body: JSON.stringify({
+        title, detail: $('bug_detail').value.trim(), area: $('bug_area').value, severity: $('bug_sev').value }) });
+      bugFilter = 'open';
+      renderBugzilla();
+    } catch (e) { $('bugErr').textContent = e.message; }
+  });
+  const patch = async (id, body) => { await api(`/api/bugs/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify(body) }); renderBugzilla(); };
+  // A fix with no note is the thing she cannot revisit, so the note is asked
+  // for here rather than being optional.
+  document.querySelectorAll('.bug-fix').forEach(b => b.addEventListener('click', () => {
+    const note = prompt('What was the fix? (so you can check it later)');
+    if (note === null) return;
+    patch(b.dataset.id, { status: 'fixed', fix_note: note });
+  }));
+  document.querySelectorAll('.bug-verify').forEach(b => b.addEventListener('click', () => patch(b.dataset.id, { status: 'verified' })));
+  document.querySelectorAll('.bug-reopen').forEach(b => b.addEventListener('click', () => patch(b.dataset.id, { status: 'open', note: 'reopened' })));
+  document.querySelectorAll('.bug-wont').forEach(b => b.addEventListener('click', () => {
+    const why = prompt('Why not?');
+    if (why === null) return;
+    patch(b.dataset.id, { status: 'wont_fix', fix_note: why });
+  }));
+}
+
 function renderTasks(data) {
   const pending = data.pending || [], history = data.history || [];
   $('viewRoot').innerHTML = `
@@ -10134,7 +10243,7 @@ function pettyBorrowingHtml(isAdmin) {
              settles on paper, and it should never look like the first one.
              The flag is computed by helpers/pettyCash.borrowings, not stored,
              so renaming a bucket cannot leave a stale claim here. -->
-        ${b.intercompany ? `<div style="margin-top:5px; font-size:11.5px; color:var(--status-warning, #d69e2e);">Between two companies — ${esc(b.owes_company)} owes ${esc(b.to_company)}. This is an intercompany balance, not a transfer inside one business.</div>` : ''}
+        ${b.intercompany ? `<div style="margin-top:5px; font-size:11.5px; color:var(--status-warning, #d69e2e);">Intercompany — ${esc(b.owes_company)} owes ${esc(b.to_company)}.</div>` : ''}
         <div style="font-family:var(--font-mono); font-size:11px; color:var(--text-muted); margin-top:3px;">${esc(b.owes)} currently holds ${esc(fmtAmount(held(b.owes)))}</div>
       </div>
       <div style="font-family:var(--font-mono); font-size:16px; font-weight:700; color:var(--text-strong);">${esc(fmtAmount(b.amount))}</div>
@@ -10849,7 +10958,11 @@ function openPayModal(loadId, kind) {
   // 2026-09-16. A purchase pays a supplier: Cash, Zelle, Wire or Cheque —
   // Apsara, 2026-09-17, "in load of invoice pay-remove bank transfer", because
   // on that side it was a second name for Wire.
-  const payModes = sale ? ['Cash', 'Bank transfer'] : ['Cash', 'Zelle', 'Wire', 'Cheque'];
+  // Kept in step with helpers/payments.js's modesForKind — the server is
+  // what validates, and a list here it does not accept is a save that
+  // fails after she has typed everything. Sale widened 2026-09-23 on her
+  // instruction; the purchase list is untouched.
+  const payModes = sale ? ['Cash', 'Bank transfer', 'Zelle', 'Cheque'] : ['Cash', 'Zelle', 'Wire', 'Cheque'];
   $('pay_mode').innerHTML = payModes.map((m) => `<option value="${esc(m)}">${esc(m)}</option>`).join('');
   // A default that EXISTS in the list. Zelle was being selected on a list
   // that no longer had it, which is the bug this line is now written against.
@@ -11100,11 +11213,37 @@ function paymentBadgeHtml(l) {
   // duplicate is the fix; there is now one money formatter in the payments UI
   // and nothing to keep in step.
   const money = payMoney;
+
+  // ── THE WAY BACK INTO A SETTLED LOAD (2026-09-23) ──────────────────────
+  // Apsara: "say i have unknowingly made some payment..Full paid.if i want to
+  // reverse that?" — and there was no way to. loadIsPayable hides Pay once a
+  // load reads paid or overpaid, Pay is the only caller of openPayModal, and
+  // the payment history with its ✕ lives INSIDE that modal. So the route
+  // worked, the button existed, and the screen holding it was unreachable.
+  //
+  // Asked how to open that door, she chose: "Make the paid badge open only on
+  // jarvis profile.if i delete the payment-payment should reverse".
+  //
+  // JARVIS PROFILE ONLY, so IS_SUPER and not ROLE — an admin may still remove
+  // one payment of several from a load that is still owing (payCanDelete,
+  // unchanged), but unwinding a load that already reads SETTLED is hers.
+  //
+  // UI GUARD, NOT SECURITY, the same as payCanDelete: the ✕ inside posts to
+  // DELETE /api/payments/:id, which is requireAdmin on the server whatever
+  // this function decides.
+  const settled = p.status === 'paid' || p.status === 'overpaid';
+  const openable = settled && IS_SUPER;
+  const hook = openable
+    ? ` pay-badge-open" data-open-payments="${esc(l.id)}" data-kind="${esc(l._kind || 'purchase')}"`
+      + ` title="Open the payments on this load" style="cursor:pointer;`
+    : `"`;
+  // The class list is closed by `hook` on the openable path, which is why the
+  // strings below stop at the badge class with no quote of their own.
   if (p.status === 'paid') {
-    return `<span class="pay-badge pay-full">PAID ${money(p.paid)}${on}</span>`;
+    return `<span class="pay-badge pay-full${hook}">PAID ${money(p.paid)}${on}</span>`;
   }
   if (p.status === 'overpaid') {
-    return `<span class="pay-badge pay-over">OVERPAID by ${money(p.over)}${on}</span>`;
+    return `<span class="pay-badge pay-over${hook}">OVERPAID by ${money(p.over)}${on}</span>`;
   }
   if (p.status === 'paid_amount_unknown') {
     return `<span class="pay-badge pay-part">PAID ${money(p.paid)}${on} · load has no price yet</span>`;
@@ -11764,9 +11903,8 @@ function wireLoadsEvents() {
         if (err && err.code === 'PETTY_CASH_BUCKET_SHORT') {
           const lenders = (err.lenders || []).map((l) => `${l.source} (${fmtAmount(l.available)})`).join(', ');
           const ok = lenders && confirm(
-            `Only ${fmtAmount(err.bucket_available)} available in ${err.bucket}.\n\n` +
-            `Borrow ${fmtAmount(err.shortfall)} from ${lenders}?\n\n` +
-            `It will be tracked on Petty cash \u2192 Borrowing until you repay it.`);
+            `${err.bucket} has only ${fmtAmount(err.bucket_available)}.\n` +
+            `Borrow ${fmtAmount(err.shortfall)} from ${lenders}?`);
           if (!ok) { btn.disabled = false; btn.textContent = 'Record payment'; $('payErr').textContent = 'Nothing was recorded.'; return; }
           // Same reasoning as allow_partial below: the AMOUNT is not resent.
           // The server re-reads every bucket under its own lock and works the

@@ -299,9 +299,20 @@ section('E — the markup, and both clients');
         ck(`  ${who}: and so do the two labels`,
            /paidViaLabelFor = \(sale\) => \(sale \? 'Paid to' : 'Payment via'\)/.test(src));
         // Apsara, 2026-09-17: "in load of invoice pay-remove bank transfer."
+        // Widened on the SALE side 2026-09-23 ("Remove just wire"), so this
+        // is asserted against modesForKind rather than a list written out
+        // here — the property is that the client offers exactly what the
+        // server accepts, not that either list holds any particular modes.
+        const fill = (src.match(/const payModes = sale \? \[([^\]]*)\] : \[([^\]]*)\]/) || []);
+        const parse = (x) => (x || '').split(',').map((v) => v.trim().replace(/^'|'$/g, '')).filter(Boolean);
         ck(`  ${who}: a purchase no longer offers Bank transfer`,
-           /const payModes = sale \? \['Cash', 'Bank transfer'\] : \['Cash', 'Zelle', 'Wire', 'Cheque'\]/.test(src),
-           'and a sale still does — it is the mode she receives money by');
+           !parse(fill[2]).includes('Bank transfer'), parse(fill[2]).join(', '));
+        ck(`  ${who}: and a sale still does — it is how she receives money`,
+           parse(fill[1]).includes('Bank transfer'), parse(fill[1]).join(', '));
+        ck(`  ${who}: both lists match the server exactly`,
+           JSON.stringify(parse(fill[1])) === JSON.stringify(pay.modesForKind('sale'))
+           && JSON.stringify(parse(fill[2])) === JSON.stringify(pay.modesForKind('purchase')),
+           `sale ${parse(fill[1]).join(', ')} | purchase ${parse(fill[2]).join(', ')}`);
     }
 }
 

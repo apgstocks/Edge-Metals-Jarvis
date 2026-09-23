@@ -180,9 +180,17 @@ ck('net total is right', /data-label="Net">7,305</.test(web));
                    .match(/const payModes = sale \? \[([^\]]*)\] : \[([^\]]*)\]/);
       return m ? { sale: m[1], purchase: m[2] } : null;
     })();
-    ck(`${label}: receiving a payment offers exactly Cash and Bank transfer`,
-       !!payModes && /^\s*'Cash', 'Bank transfer'\s*$/.test(payModes.sale),
-       JSON.stringify(payModes && payModes.sale));
+    // Against the SERVER, not a list spelled out here. Receive payment was
+    // widened on 2026-09-23 ("Remove just wire") and a hardcoded pair went
+    // red for that rather than for a real break. What parity means is that
+    // the client offers exactly what addPayment will accept.
+    const srvSale = require(R + 'helpers/payments').modesForKind('sale');
+    const asList = (x) => (x || '').split(',').map((v) => v.trim().replace(/^'|'$/g, '')).filter(Boolean);
+    ck(`${label}: receiving a payment offers exactly what the server accepts`,
+       !!payModes && JSON.stringify(asList(payModes.sale)) === JSON.stringify(srvSale),
+       `client ${JSON.stringify(asList(payModes && payModes.sale))} vs server ${JSON.stringify(srvSale)}`);
+    ck(`${label}: and Wire is not among them`,
+       !!payModes && !asList(payModes.sale).includes('Wire'), JSON.stringify(payModes && payModes.sale));
     ck(`${label}: paying a supplier keeps Zelle, Wire and Cheque`,
        !!payModes && ['Zelle', 'Wire', 'Cheque'].every((m) => payModes.purchase.includes(m)),
        JSON.stringify(payModes && payModes.purchase));

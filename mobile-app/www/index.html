@@ -2414,7 +2414,11 @@ function openPayModal(loadId, kind) {
   // 2026-09-16. A purchase pays a supplier: Cash, Zelle, Wire or Cheque —
   // Apsara, 2026-09-17, "in load of invoice pay-remove bank transfer", because
   // on that side it was a second name for Wire.
-  const payModes = sale ? ['Cash', 'Bank transfer'] : ['Cash', 'Zelle', 'Wire', 'Cheque'];
+  // Kept in step with helpers/payments.js's modesForKind — the server is
+  // what validates, and a list here it does not accept is a save that
+  // fails after she has typed everything. Sale widened 2026-09-23 on her
+  // instruction; the purchase list is untouched.
+  const payModes = sale ? ['Cash', 'Bank transfer', 'Zelle', 'Cheque'] : ['Cash', 'Zelle', 'Wire', 'Cheque'];
   $('pay_mode').innerHTML = payModes.map((m) => `<option value="${esc(m)}">${esc(m)}</option>`).join('');
   // A default that exists in the list: selecting 'Zelle' on a list without it
   // leaves the select at "", and an untouched dropdown then posts no mode.
@@ -5111,9 +5115,8 @@ function wireLoadsEvents() {
         if (err && err.code === 'PETTY_CASH_BUCKET_SHORT') {
           const lenders = (err.lenders || []).map((l) => `${l.source} (${fmtAmount(l.available)})`).join(', ');
           const ok = lenders && confirm(
-            `Only ${fmtAmount(err.bucket_available)} available in ${err.bucket}.\n\n` +
-            `Borrow ${fmtAmount(err.shortfall)} from ${lenders}?\n\n` +
-            `It will be tracked on Petty cash \u2192 Borrowing until you repay it.`);
+            `${err.bucket} has only ${fmtAmount(err.bucket_available)}.\n` +
+            `Borrow ${fmtAmount(err.shortfall)} from ${lenders}?`);
           if (!ok) { btn.disabled = false; btn.textContent = 'Record payment'; $('payErr').textContent = 'Nothing was recorded.'; return; }
           // The AMOUNT is not resent, same reasoning as allow_partial below:
           // the server re-reads every bucket under its own lock and works the
@@ -6971,7 +6974,7 @@ function pettyBorrowingHtml(isAdmin) {
                company owing another is settled on paper and must never read
                like her own cash moving between her own pots. Computed in
                helpers/pettyCash.borrowings, never stored. -->
-          ${b.intercompany ? `<div style="margin-top:5px; font-size:11.5px; color:var(--status-warning, #d69e2e);">Between two companies — ${esc(b.owes_company)} owes ${esc(b.to_company)}.</div>` : ''}
+          ${b.intercompany ? `<div style="margin-top:5px; font-size:11.5px; color:var(--status-warning, #d69e2e);">Intercompany — ${esc(b.owes_company)} owes ${esc(b.to_company)}.</div>` : ''}
           <div style="font-family:var(--font-mono); font-size:11px; color:var(--text-muted); margin-top:3px;">${esc(b.owes)} holds ${esc(fmtAmount(held(b.owes)))}</div>
         </div>
         <div style="font-family:var(--font-mono); font-size:16px; font-weight:700; color:var(--text-strong);">${esc(fmtAmount(b.amount))}</div>

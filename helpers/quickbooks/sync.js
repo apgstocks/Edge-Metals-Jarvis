@@ -51,13 +51,13 @@ async function snapshots() {
     const opts = { env };
     try {
         const data = {};
-        for (const k of ['vendor', 'customer', 'item', 'bank']) data[k] = await mapping.fetchParties(k, client, opts);
+        for (const k of ['vendor', 'customer', 'item', 'bank', 'account']) data[k] = await mapping.fetchParties(k, client, opts);
         snapCache = { at: Date.now(), env, data };
         return data;
     } catch (e) {
         const f = (n) => { try { return JSON.parse(fs.readFileSync(path.join(DATA_DIR, n), 'utf8')); } catch { return []; } };
         const p = f('qb-snapshot-parties.json');
-        return { vendor: p.vendor || [], customer: p.customer || [], item: f('qb-snapshot-items.json'), bank: f('qb-snapshot-banks.json') };
+        return { vendor: p.vendor || [], customer: p.customer || [], item: f('qb-snapshot-items.json'), bank: f('qb-snapshot-banks.json'), account: f('qb-snapshot-accounts.json') };
     }
 }
 
