@@ -3270,6 +3270,17 @@ async function process(rawEvent, sendMessage) {
             // And it leaks an internal symbol name to someone who has no use
             // for it. This says plainly that the feature is broken, so the
             // next move is to report it rather than retry.
+            // ── IT FILES ITSELF ON THE BUGZILLA TAB (2026-09-24) ────────
+            // Her choice when the tab was built: crashes file themselves.
+            // "I've logged it" below was true of the console and nowhere she
+            // could see; now it is true of a list she reads. Deduplicated by
+            // error signature, so one broken feature is one row however many
+            // times she hits it.
+            try {
+                await require('../helpers/bugs').autoFileCrash(err,
+                    `Jarvis handling "${String(inbound.text || '').slice(0, 60)}"`);
+            } catch (e2) { console.error('[BRAIN] could not file the crash:', e2.message); }
+
             const wiring = /^actions\.([A-Za-z0-9_]+) is not a function$/.exec(err.message || '');
             if (wiring) {
                 console.error(`[BRAIN] WIRING BUG: intent '${decision.intent}' routes to actions.${wiring[1]}(), which is not exported. Check workflow/actions.js.`);

@@ -4415,15 +4415,21 @@ async function askLedger(chatId, question) {
         rows: ((out && out.rows) || []).length, repaired: !!(out && out.repaired),
         ms: Date.now() - startedAt, error: err ? err.message : (out && out.error) || null,
     }).catch(() => {});
+    // Her choice, 2026-09-24: a question Jarvis cannot answer TWICE, and any
+    // crash, files itself on the Bugzilla tab. Both are deduplicated by
+    // signature so a repeat bumps a count instead of adding a row.
+    const bugs = require('../helpers/bugs');
     let out;
     try { out = await askData.ask(question); }
     catch (e) {
         console.error('[ACTIONS] askLedger failed:', e && e.stack);
         await note(null, e);
+        bugs.autoFileCrash(e, 'Asking the ledgers').catch(() => {});
         await _send(chatId, `Couldn't answer that from the ledgers: ${e.message}`);
         return { action_taken: 'ask_data_failed', reason: e.message };
     }
     await note(out, null);
+    if (out && !out.ok && out.scope !== 'yard' && !out.ask) bugs.autoFileQuestion(question, { kind: 'data' }).catch(() => {});
     const wa = require('../helpers/wa-state');
     if (!out.ok) {
         await _send(chatId, out.screen ? `${out.spoken}\n\n${out.screen}` : out.spoken);
@@ -4452,15 +4458,18 @@ async function askText(chatId, question) {
         rows: ((out && out.hits) || []).length, calls: 1,
         ms: Date.now() - startedAt, error: err ? err.message : (out && out.error) || null,
     }).catch(() => {});
+    const bugs2 = require('../helpers/bugs');
     let out;
     try { out = await askTextLib.ask(question); }
     catch (e) {
         console.error('[ACTIONS] askText failed:', e && e.stack);
         await note(null, e);
+        bugs2.autoFileCrash(e, 'Searching the mail').catch(() => {});
         await _send(chatId, `Couldn't search that: ${e.message}`);
         return { action_taken: 'ask_text_failed', reason: e.message };
     }
     await note(out, null);
+    if (out && out.ok === false) bugs2.autoFileQuestion(question, { kind: 'text' }).catch(() => {});
     const wa = require('../helpers/wa-state');
     await _send(chatId, out.screen || out.spoken);
     wa.sayAloud(out.spoken);

@@ -10899,7 +10899,13 @@ function bankValue(prefix) {
   return sel.value || null;
 }
 
-function openPayModal(loadId, kind) {
+// ── opts.historyOnly MARKS THE NEW SHAPE, NEVER THE OLD ───────────────────
+// CLAUDE.md: a flag on shared code says "this one is the new shape". Called
+// with nothing, this modal is exactly what it has always been — the Pay form
+// with the history under it. Only the paid-badge path passes the flag, and
+// only the Jarvis profile can reach that path.
+function openPayModal(loadId, kind, opts) {
+  const historyOnly = !!(opts && opts.historyOnly);
   const l = loadsCache.find(x => x.id === loadId);
   if (!l) return;
   // `amount` here is what the OVERPAYMENT check below subtracts against, so
@@ -11053,6 +11059,31 @@ function openPayModal(loadId, kind) {
   $('payErr').textContent = '';
   renderPayHistory();
   updatePayPreview();
+
+  // ── HISTORY ONLY: EVERYTHING BUT THE LIST GOES AWAY ───────────────────
+  // Hiding the entry fields by walking the modal body rather than by naming
+  // each one. This form has grown a bank row, a cash-source row, a paid-via
+  // row and a preview over three weeks, and a list of ids written here would
+  // be one short the next time a field is added — leaving a half-form under
+  // a heading that says the load is settled.
+  //
+  // The three that stay are the summary (what load this is), the history
+  // (the payments and their ✕) and the error line.
+  {
+    const body = $('payModal') && $('payModal').querySelector('.modal-body');
+    const keep = new Set(['payLoadSummary', 'payHistory', 'payErr']);
+    if (body) {
+      Array.from(body.children).forEach((el) => {
+        const mine = el.id && keep.has(el.id);
+        const holdsErr = !el.id && el.querySelector && el.querySelector('#payErr');
+        el.style.display = (historyOnly && !mine && !holdsErr) ? 'none' : '';
+      });
+    }
+    // Save is meaningless with no form above it, and Cancel becomes Close.
+    if ($('btnSavePay')) $('btnSavePay').style.display = historyOnly ? 'none' : '';
+    if ($('btnCancelPay')) $('btnCancelPay').textContent = historyOnly ? 'Close' : 'Cancel';
+    if (ttl && historyOnly) ttl.textContent = sale ? 'Payments received' : 'Payments made';
+  }
   $('payModal').classList.remove('hidden');
 }
 
@@ -11131,7 +11162,7 @@ function renderPayHistory() {
         ${r.reference ? `<span style="color:var(--text-faint);">${esc(r.reference)}</span>` : ''}
         <span style="flex:1;"></span>
         <span style="font-weight:700;">${payMoney(r.amount)}</span>
-        ${payCanDelete() ? `<button class="btn btn-danger btn-del-pay" data-id="${esc(r.id)}" style="font-size:10px; padding:3px 8px;">✕</button>` : ''}
+        ${payCanDelete() ? `<button class="btn btn-danger btn-del-pay" data-id="${esc(r.id)}" data-mode="${esc(r.mode || '')}" data-amount="${esc(payMoney(r.amount))}" style="font-size:10px; padding:3px 8px;">✕</button>` : ''}
       </div>`).join('')}`;
 }
 
@@ -11233,17 +11264,19 @@ function paymentBadgeHtml(l) {
   // this function decides.
   const settled = p.status === 'paid' || p.status === 'overpaid';
   const openable = settled && IS_SUPER;
-  const hook = openable
-    ? ` pay-badge-open" data-open-payments="${esc(l.id)}" data-kind="${esc(l._kind || 'purchase')}"`
-      + ` title="Open the payments on this load" style="cursor:pointer;`
-    : `"`;
-  // The class list is closed by `hook` on the openable path, which is why the
-  // strings below stop at the badge class with no quote of their own.
+  // Built as whole attributes rather than by splicing quotes into the class
+  // list — a first version closed the class attribute inside this variable
+  // and emitted class="pay-badge pay-full"" on the path that is NOT openable.
+  const badge = (cls, text) => (openable
+    ? `<span class="pay-badge ${cls} pay-badge-open" data-open-payments="${esc(l.id)}"`
+      + ` data-kind="${esc(l._kind || 'purchase')}" title="Open the payments on this load"`
+      + ` style="cursor:pointer; text-decoration:underline dotted;">${text}</span>`
+    : `<span class="pay-badge ${cls}">${text}</span>`);
   if (p.status === 'paid') {
-    return `<span class="pay-badge pay-full${hook}">PAID ${money(p.paid)}${on}</span>`;
+    return badge('pay-full', `PAID ${money(p.paid)}${on}`);
   }
   if (p.status === 'overpaid') {
-    return `<span class="pay-badge pay-over${hook}">OVERPAID by ${money(p.over)}${on}</span>`;
+    return badge('pay-over', `OVERPAID by ${money(p.over)}${on}`);
   }
   if (p.status === 'paid_amount_unknown') {
     return `<span class="pay-badge pay-part">PAID ${money(p.paid)}${on} · load has no price yet</span>`;
@@ -11855,7 +11888,13 @@ function wireLoadsEvents() {
   $('payHistory').addEventListener('click', async (ev) => {
     const del = ev.target.closest('.btn-del-pay');
     if (!del) return;
-    if (!confirm('Delete this payment?\n\nThe load balance will go back up by that amount.')) return;
+    // Short on purpose — she asked for it, and this is read standing up.
+    // The cash line only appears when there IS cash to put back: deleting a
+    // Cash payment returns it to the petty cash bucket it came out of, and
+    // saying so on a Wire would be a false promise.
+    const isCash = String(del.dataset.mode || '').toLowerCase() === 'cash';
+    if (!confirm(`Delete this ${del.dataset.amount || ''} payment?\n`
+      + `The load will owe it again${isCash ? ', and the cash goes back to petty cash' : ''}.`)) return;
     try {
       await api(`/api/payments/${encodeURIComponent(del.dataset.id)}`, { method: 'DELETE' });
       closePayModal();
@@ -12534,6 +12573,16 @@ function wireDeckEvents() {
   document.querySelectorAll('.btn-pay-load').forEach(btn => btn.addEventListener('click', (ev) => {
     ev.stopPropagation();
     openPayModal(btn.dataset.id, btn.dataset.kind);
+  }));
+
+  // ── THE PAID BADGE, ON THE JARVIS PROFILE ────────────────────────────
+  // The only way into a load that already reads settled — see
+  // paymentBadgeHtml, which only renders this hook for IS_SUPER. Opens the
+  // same modal with the entry fields hidden: the payments and their ✕, and
+  // nothing that could record another one on a load that is already paid.
+  document.querySelectorAll('.pay-badge-open').forEach(el => el.addEventListener('click', (ev) => {
+    ev.stopPropagation();
+    openPayModal(el.dataset.openPayments, el.dataset.kind, { historyOnly: true });
   }));
 
   document.querySelectorAll('.btn-edit-load').forEach(btn => btn.addEventListener('click', async (ev) => {
