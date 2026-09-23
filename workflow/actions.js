@@ -4374,6 +4374,37 @@ async function saleInvoiceAnswer(chatId, pending, text) {
     return { action_taken: 'sale_invoice_failed', reason: 'unknown stage' };
 }
 
+// ── ASK THE LEDGERS ANYTHING ───────────────────────────────────────────────
+// Apsara, 2026-09-23: "give all data access and possible advanced rag type
+// chat bot ... Jarvis for Edge Metals. Scout for edge yard."
+//
+// The question is turned into ONE read-only SQL query over a mirror of her
+// Edge Metals ledgers, SQLite does the arithmetic, and the sentence is filled
+// in from the rows — see helpers/data/askData.js for why it is built that way
+// rather than as a vector search over the ledgers.
+//
+// Voice hears one sentence; the table, the source and the row count go on
+// screen, per her standing rule about not reading tables aloud.
+async function askLedger(chatId, question) {
+    const askData = require('../helpers/data/askData');
+    let out;
+    try { out = await askData.ask(question); }
+    catch (e) {
+        console.error('[ACTIONS] askLedger failed:', e && e.stack);
+        await _send(chatId, `Couldn't answer that from the ledgers: ${e.message}`);
+        return { action_taken: 'ask_data_failed', reason: e.message };
+    }
+    const wa = require('../helpers/wa-state');
+    if (!out.ok) {
+        await _send(chatId, out.screen ? `${out.spoken}\n\n${out.screen}` : out.spoken);
+        wa.sayAloud(out.spoken);
+        return { action_taken: out.scope === 'yard' ? 'ask_data_yard' : 'ask_data_no_answer', reason: out.error || out.scope || null };
+    }
+    await _send(chatId, out.screen || out.spoken);
+    wa.sayAloud(out.spoken);
+    return { action_taken: 'ask_data_answered', rows: (out.rows || []).length, tables: out.tables, empty: !!out.empty };
+}
+
 async function sendDraftedEmail(chatId, pending) {
     const { sendEmail } = require('../helpers/gmail');
     // Forward FIRST, so that by the time the reply lands in her mailbox the
@@ -8208,7 +8239,7 @@ module.exports = {
     replyToFocusedDigest, askWhichDigestItem, reviseDraftedEmail,
     ready,
     describeLink,
-    startSaleInvoice, saleInvoiceAnswer,
+    startSaleInvoice, saleInvoiceAnswer, askLedger,
     showPendingReplies, replyToDigestItem, summarizeEmail, markPendingReminded, forwardOriginalToSelf, sendDraftedEmail,
 init,
 setPending, clearPending, getPending, resolvePending, promoteQueued,
