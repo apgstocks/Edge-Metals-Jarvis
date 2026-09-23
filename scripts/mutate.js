@@ -2382,10 +2382,10 @@ const MUTATIONS = [
       find: '    if (!Number.isInteger(n) || n <= 0 || !(u > 0)) return null;',
       to:   '    if (false) return null;' },
 
-    { name: 'boxes: the working replaces the tare instead of sitting under it',
+    { name: 'boxes: the working replaces the item name instead of sitting under it',
       file: 'helpers/invoicePdf.js', suites: ['packing-boxes'],
-      find: "                          ? `${shown}<div style=\"font-size:7.5pt;font-weight:400;white-space:nowrap;\">${escapeHtml(w)}</div>`",
-      to:   '                          ? `<div>${escapeHtml(w)}</div>`' },
+      find: "                  ? `${name}<div style=\"font-size:7.5pt;font-weight:400;\">${escapeHtml(w2)}</div>`",
+      to:   '                  ? `<div>${escapeHtml(w2)}</div>`' },
 
     { name: 'boxes: the ticket total is trusted over the count times the weight',
       file: 'helpers/scaleTicketBoxes.js', suites: ['scale-ticket-boxes'],
