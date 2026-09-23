@@ -2150,17 +2150,26 @@ function paymentBadgeHtml(l) {
 
   // ── THE WAY BACK INTO A SETTLED LOAD (2026-09-23) ──────────────────────
   // Apsara: "say i have unknowingly made some payment..Full paid.if i want to
-  // reverse that?" — loadIsPayable hides Pay once a load reads paid, Pay is
-  // the only caller of openPayModal, and the payment history with its ✕ lives
-  // inside that modal. The route worked; the screen was unreachable.
+  // reverse that?" — and there was no way to. loadIsPayable hides Pay once a
+  // load reads paid or overpaid, Pay is the only caller of openPayModal, and
+  // the payment history with its ✕ lives INSIDE that modal. So the route
+  // worked, the button existed, and the screen holding it was unreachable.
   //
-  // Her answer: "Make the paid badge open only on jarvis profile."
-  // IS_SUPER, not ROLE — an admin still removes one payment of several from a
-  // load that is owing; unwinding a SETTLED one is hers.
+  // Asked how to open that door, she chose: "Make the paid badge open only on
+  // jarvis profile.if i delete the payment-payment should reverse".
   //
-  // Mirrors dashboard/index.html — tests/load-card-actions.js asserts both.
+  // JARVIS PROFILE ONLY, so IS_SUPER and not ROLE — an admin may still remove
+  // one payment of several from a load that is still owing (payCanDelete,
+  // unchanged), but unwinding a load that already reads SETTLED is hers.
+  //
+  // UI GUARD, NOT SECURITY, the same as payCanDelete: the ✕ inside posts to
+  // DELETE /api/payments/:id, which is requireAdmin on the server whatever
+  // this function decides.
   const settled = p.status === 'paid' || p.status === 'overpaid';
   const openable = settled && IS_SUPER;
+  // Built as whole attributes rather than by splicing quotes into the class
+  // list — a first version closed the class attribute inside this variable
+  // and emitted class="pay-badge pay-full"" on the path that is NOT openable.
   const badge = (cls, text) => (openable
     ? `<span class="pay-badge ${cls} pay-badge-open" data-open-payments="${esc(l.id)}"`
       + ` data-kind="${esc(l._kind || 'purchase')}" title="Open the payments on this load"`

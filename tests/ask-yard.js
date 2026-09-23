@@ -118,7 +118,10 @@ section('C. Scout answers a figure question from the ledger');
                 sql: `SELECT seller, ROUND(SUM(pending), 2) AS owed FROM yard_loads WHERE pending > 0 AND lower(seller) LIKE '%${who}%' GROUP BY seller`,
                 shape: 'single', headline: 'We owe {seller} {owed}.', formats: { owed: 'money' } };
         }
-        // The old brief path's model call — deliberately a different shape.
+        // The old brief path. `have_data: false` is what it really says about
+        // a March question: the brief is a 30-day window and March is not in
+        // it. That is exactly when the ledger takes over.
+        if (/march|nobody/i.test(p)) return { answer: '', have_data: false };
         return { answer: 'FROM THE BRIEF', have_data: true };
     };
     const { askYard } = require(Rp('helpers/yardAsk'));
@@ -133,10 +136,20 @@ section('C. Scout answers a figure question from the ledger');
     ck('a question that is not about a figure still goes the old way',
        other && /FROM THE BRIEF/.test(other.answer || ''), JSON.stringify(other && other.answer));
 
+    // AND THE COST: a question the brief CAN answer never reaches the ledger,
+    // so it still costs one model call (tests/yard-ask-tools.js holds the
+    // same property from the other side).
+    const cheap = await askYard('how much did we buy this month');
+    ck('a figure question the brief answers does not pay for a second look',
+       cheap && /FROM THE BRIEF/.test(cheap.answer || '') && cheap.from !== 'ledger', JSON.stringify(cheap && cheap.answer));
+
     // And a ledger that cannot answer falls back rather than failing.
+    // Neither side has it: the brief has nothing and the query matches no row.
+    // She gets the honest answer rather than a figure from somewhere.
     const empty = await askYard('how much do we owe Nobody At All');
-    ck('a figure question the ledger cannot answer falls back to the old path',
-       empty && /FROM THE BRIEF/.test(empty.answer || ''), JSON.stringify(empty && empty.answer));
+    ck('when neither the brief nor the ledger has it, it says so',
+       empty && empty.ok === false && /couldn't work out an answer/i.test(empty.answer || ''),
+       JSON.stringify(empty && empty.answer));
 
     const logged = require(Rp('helpers/data/askLog')).recent(10);
     ck('Scout\'s questions are logged too, marked as Scout\'s',
@@ -164,7 +177,9 @@ section('D. the TEXT chat gets the same answer as voice');
         ? { scope: 'yard', tables: ['yard_loads'],
             sql: 'SELECT seller, ROUND(SUM(pending), 2) AS owed FROM yard_loads WHERE pending > 0 GROUP BY seller',
             shape: 'single', headline: 'We owe {seller} {owed}.', formats: { owed: 'money' } }
-        : { answer: 'FROM THE BRIEF', have_data: true });
+        // The brief has nothing (the load is from March), which is what sends
+        // the question on to the ledger.
+        : { answer: '', have_data: false });
 
     const { createApi } = require(Rp('api'));
     const srv = http.createServer(createApi()).listen(0);

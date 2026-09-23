@@ -412,7 +412,16 @@ ck('net total is right', /data-label="Net">7,305</.test(web));
       let d=0,j=src.indexOf('{',i);
       for(let k=j;k<src.length;k++){ if(src[k]==='{')d++; else if(src[k]==='}'){d--; if(!d) return src.slice(i,k+1);} } };
     const payMoney = (n) => '$' + Number(n||0).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2});
-    const badge = new Function('payMoney','return '+grab('paymentBadgeHtml'))(payMoney);
+    // paymentBadgeHtml reads two free variables besides payMoney since
+    // 2026-09-23: esc, and IS_SUPER — the Jarvis profile is the only one that
+    // gets a clickable badge on a settled load. Both are injected so the
+    // function runs here exactly as it does on the page, and so the two
+    // profiles can be compared below.
+    const esc = (v) => String(v == null ? '' : v)
+      .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+    const mkBadge = (isSuper) =>
+      new Function('payMoney','esc','IS_SUPER','return '+grab('paymentBadgeHtml'))(payMoney, esc, isSuper);
+    const badge = mkBadge(false);
     const strip = (h) => String(h).replace(/<[^>]*>/g,'');
 
     const cases = [
@@ -429,6 +438,29 @@ ck('net total is right', /data-label="Net">7,305</.test(web));
       ck(`${p}: badge (${label}) has no un-prefixed amount`,
          !/(^|[^$\d.,])\d[\d,]*\.\d\d/.test(out));
     }
+
+    // ── THE WAY BACK INTO A SETTLED LOAD ──────────────────────────────
+    // Apsara, 2026-09-23: "Make the paid badge open only on jarvis profile."
+    // A settled load hides Pay, and Pay is the only other way into the
+    // payment history — so if this badge stops being clickable for her, a
+    // wrongly paid load becomes unreversible again with nothing to show it.
+    const superBadge = mkBadge(true);
+    const settledCases = [['paid', { paid: 8822, pending: 0, status: 'paid' }],
+                          ['overpaid', { paid: 9000, over: 178, status: 'overpaid' }]];
+    for (const [label, pay] of settledCases) {
+      ck(`${p}: ${label} badge opens the payments for the Jarvis profile`,
+         /pay-badge-open/.test(superBadge({ id: 'L1', payment: pay })),
+         superBadge({ id: 'L1', payment: pay }));
+      ck(`${p}:   and carries the load it belongs to`,
+         /data-open-payments="L1"/.test(superBadge({ id: 'L1', payment: pay })));
+      ck(`${p}:   but NOT for an ordinary admin`,
+         !/pay-badge-open/.test(badge({ id: 'L1', payment: pay })),
+         badge({ id: 'L1', payment: pay }));
+    }
+    // A load still owing is reached by Pay, which is where a payment is
+    // added — this badge must not become a second door to the same place.
+    ck(`${p}: a part-paid badge never opens, even for Jarvis`,
+       !/pay-badge-open/.test(superBadge({ id: 'L1', payment: { paid: 1, pending: 2, status: 'partial' } })));
     ck(`${p}: nothing is shown when nothing has been paid`, badge({ payment:{ paid:0 } }) === '');
 
     // The totals line under the item rows, rendered for real.
@@ -458,7 +490,10 @@ ck('net total is right', /data-label="Net">7,305</.test(web));
       let d=0,j=src.indexOf('{',i);
       for(let k=j;k<src.length;k++){ if(src[k]==='{')d++; else if(src[k]==='}'){d--; if(!d) return src.slice(i,k+1);} } };
     const payMoney = (n) => '$' + Number(n||0).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2});
-    const badge = new Function('payMoney','return '+grab('paymentBadgeHtml'))(payMoney);
+    // esc and IS_SUPER injected — see the note on the other lift above.
+    const esc2 = (v) => String(v == null ? '' : v)
+      .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+    const badge = new Function('payMoney','esc','IS_SUPER','return '+grab('paymentBadgeHtml'))(payMoney, esc2, false);
     const strip = (h) => String(h).replace(/<[^>]*>/g,'');
     const rows = [{ paid_on:'2026-08-20', mode:'Zelle', amount:8000 },
                   { paid_on:'2026-08-22', mode:'Cash',  amount:4000 }];

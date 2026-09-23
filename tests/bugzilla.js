@@ -185,7 +185,9 @@ section('F. the tab itself');
     const html = fs.readFileSync(R('dashboard/index.html'), 'utf8');
     ck('the nav has a Bugzilla tab', /\{ id: 'bugzilla',\s+label: 'Bugzilla'/.test(html));
     ck('  it renders', /if \(tab === 'bugzilla'\) return renderBugzilla\(\);/.test(html) && /async function renderBugzilla\(\)/.test(html));
-    ck('  staff can see it, because staff hit the bugs', /n\.id === 'bugzilla'/.test(html));
+    // Staff keep their Edge-Yard-only sidebar (tests/page-headings.js), so
+    // Bugzilla is deliberately NOT in the staff filter.
+    ck('  staff keep their yard-only sidebar', !/n\.id === 'bugzilla'/.test(html));
     ck('  the status buttons are admin-only, matching the server', /isAdmin \? `<div/.test(html));
     ck('  and "fixed" asks what the fix was', /What was the fix\?/.test(html));
 

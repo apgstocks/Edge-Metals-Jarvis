@@ -160,6 +160,11 @@ async function ask(question, opts = {}) {
             } catch (e) { lastError = e.message; }
         }
         if (attempt === 1) break;
+        // A repair is worth a second model call only when SQLite REJECTED a
+        // real query — that is the execution-feedback step. A plan that came
+        // back with no SQL at all is not a query to fix, and asking again just
+        // spends another call on the same misunderstanding.
+        if (!plan || !plan.sql) { lastError = lastError || 'no SQL'; break; }
         console.warn(`[ASKDATA] first attempt failed (${lastError}) — repairing`);
         repaired = true;
         const fixedPlan = await callGeminiJSON(prompt(question, { sql: (plan && plan.sql) || '', error: lastError }, b.key));

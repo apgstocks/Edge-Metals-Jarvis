@@ -981,9 +981,16 @@ const NAV_ITEMS = [
   // Apsara, 2026-09-24: "create a bugzilla tab in website so that we can keep
   // track of all the fixes so that we can revisit it."
   //
-  // NOT adminOnly: a bug staff cannot report is a bug nobody hears about. The
-  // page renders the filing form for everyone and the status buttons only for
-  // admin, which matches the server (POST open, PATCH requireAdmin).
+  // NOT adminOnly — she and anyone on a normal login can file and read; the
+  // status buttons render for admin only, matching the server (POST is open,
+  // PATCH is requireAdmin).
+  //
+  // STAFF DO NOT SEE IT, and that is the existing rule rather than a judgement
+  // about staff: their nav is deliberately Edge Yard work and nothing else
+  // (tests/page-headings.js holds it to one Edge Yard heading). Adding this
+  // put a "Bot & Automation" heading in their sidebar. If she wants the yard
+  // crew reporting bugs too, that is a small change to the staff filter and
+  // that test — her call, not one to make sideways.
   { id: 'bugzilla',  label: 'Bugzilla', group: 'Bot & Automation' },
 
   // Who Jarvis talks to and how — channels, directories, inbound requests.
@@ -1107,9 +1114,7 @@ function renderNav() {
   // boundary. Paying is still admin-only, because /api/payments is
   // deliberately NOT on that allowlist.
   const visible = NAV_ITEMS.filter(n => (!n.adminOnly || ROLE === 'admin')
-    // 'bugzilla' is in the staff list on purpose (2026-09-24): the people
-    // using the screens all day are the ones who hit the bugs.
-    && (ROLE !== 'staff' || n.id === 'loads' || n.id === 'petty' || n.id === 'trucker-bills' || n.id === 'bugzilla'));
+    && (ROLE !== 'staff' || n.id === 'loads' || n.id === 'petty' || n.id === 'trucker-bills'));
   // ── ORDERED BY GROUP, NOT BY POSITION ────────────────────────────────
   // A heading is emitted whenever the group CHANGES, so a group whose items
   // are not contiguous in NAV_ITEMS prints its heading twice. Regrouping by

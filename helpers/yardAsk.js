@@ -106,43 +106,6 @@ async function askYard(question, opts = {}) {
     const q = String(question || '').trim().slice(0, MAX_QUESTION_CHARS);
     if (!q) return { ok: false, answer: 'Ask me something about the yard — loads, sellers, stock, or what is still owed.' };
 
-    // ── A FIGURE QUESTION GOES TO THE LEDGER FIRST (2026-09-23) ──────────
-    // The brief below is a THIRTY DAY window, and outside it there is nothing
-    // for the model to read — "what did we pay Junk Car in March" had no
-    // figures to prefer, so it was worked out in prose or refused. The yard
-    // mirror holds every load, sale, trucker bill, expense and petty-cash row
-    // there has ever been, and SQLite does the arithmetic (see
-    // helpers/data/askData.js for the whole argument).
-    //
-    // NARROW ON PURPOSE. It only takes questions that are plainly about a
-    // figure, and only when the query actually returns something; anything
-    // else — "what happened with that load", "is Junk Car reliable" — falls
-    // through to exactly the behaviour she has had since August. This adds a
-    // better answer for one shape of question; it removes nothing.
-    if (opts.ledger !== false && FIGURE_QUESTION.test(q)) {
-        try {
-            const out = await require('./data/askData').ask(q, { book: 'yard' });
-            try {
-                await require('./data/askLog').record({
-                    kind: 'data', question: q, source: 'scout',
-                    outcome: !out.ok ? (out.scope === 'metals' ? 'metals' : 'could_not_answer')
-                        : (out.empty ? 'nothing_matched' : 'answered'),
-                    tables: out.tables || [], sql: out.sql || null,
-                    rows: (out.rows || []).length, repaired: !!out.repaired,
-                });
-            } catch (e) { /* logging never breaks answering */ }
-            if (out.ok && !out.empty) {
-                return { ok: true, have_data: true, from: 'ledger',
-                    answer: out.screen || out.spoken, spoken: out.spoken, sql: out.sql };
-            }
-            if (!out.ok && out.scope === 'metals') {
-                return { ok: true, have_data: false, from: 'ledger', answer: out.spoken, spoken: out.spoken };
-            }
-        } catch (e) {
-            console.warn('[YARDASK] ledger path failed, falling back to the brief:', e.message);
-        }
-    }
-
     const brief = buildYardBrief({ days: opts.days || 30 });
 
     // Recent turns, so "and how much of that is unpaid?" works. Bounded hard:
@@ -272,6 +235,45 @@ async function askYard(question, opts = {}) {
         }
 
         const text = String((res && res.answer) || '').trim();
+
+        // ── THE LEDGER, WHEN THE BRIEF COULD NOT (2026-09-23) ────────────
+        // The brief above is a THIRTY DAY window. Outside it there is nothing
+        // to read, so "what did we pay Junk Car in March" came back as "I
+        // don't have that" — or, worse, was worked out from the little that
+        // was in front of it. The yard mirror holds every load, sale, trucker
+        // bill, expense and petty-cash row there has ever been, and SQLite
+        // does the arithmetic (helpers/data/askData.js has the argument).
+        //
+        // DELIBERATELY SECOND, not first. Asking the ledger first would add a
+        // model call to every question the brief already answers — a real cost
+        // on her bill and a real delay on voice, and tests/yard-ask-tools.js
+        // holds the one-call-per-plain-question property. So it runs only when
+        // the old path has come back empty-handed, and only for a question
+        // plainly about a figure.
+        const briefFailed = !text || (res && res.have_data === false);
+        if (briefFailed && opts.ledger !== false && FIGURE_QUESTION.test(q)) {
+            try {
+                const out = await require('./data/askData').ask(q, { book: 'yard' });
+                try {
+                    await require('./data/askLog').record({
+                        kind: 'data', question: q, source: 'scout',
+                        outcome: !out.ok ? (out.scope === 'metals' ? 'metals' : 'could_not_answer')
+                            : (out.empty ? 'nothing_matched' : 'answered'),
+                        tables: out.tables || [], sql: out.sql || null,
+                        rows: (out.rows || []).length, repaired: !!out.repaired,
+                    });
+                } catch (e) { /* logging never breaks answering */ }
+                if (out.ok && !out.empty) {
+                    return { ok: true, have_data: true, from: 'ledger',
+                        answer: out.screen || out.spoken, spoken: out.spoken, sql: out.sql };
+                }
+                if (!out.ok && out.scope === 'metals') {
+                    return { ok: true, have_data: false, from: 'ledger', answer: out.spoken, spoken: out.spoken };
+                }
+            } catch (e) {
+                console.warn('[YARDASK] the ledger could not answer either:', e.message);
+            }
+        }
         if (!text) {
             // Distinguished from a plain empty answer: if it was still asking
             // for tools when the budget ran out, saying "try rephrasing" would
