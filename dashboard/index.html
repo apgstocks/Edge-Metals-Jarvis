@@ -898,8 +898,20 @@ const NAV_ITEMS = [
   // Freight-forwarding/booking side of the app.
   { id: 'board',     label: 'Board',     group: 'Edge Metals' },
   { id: 'bookings',  label: 'Bookings',  group: 'Edge Metals' },
-  { id: 'truckers',  label: 'Truckers',  group: 'Edge Metals' },
-  { id: 'suppliers', label: 'Suppliers', group: 'Edge Metals' },
+  // ── ONE HEADING, TWO SUB-TABS (2026-09-24) ────────────────────────────
+  // Apsara: "can we combine truckers and suppliers into single heading
+  // .Inside that make sub tab as truckers,suppliers?"
+  //
+  // Two sidebar rows became one. The screens themselves are unchanged — both
+  // are still renderContacts with their own list, their own Add button and
+  // their own wording; only the way in is shared. The sub-tab strip is the
+  // same pattern Petty Cash already uses for Cash / Borrowing.
+  //
+  // 'truckers' and 'suppliers' STILL WORK as tab ids (see loadTab). Anything
+  // that deep-links to one, or calls loadTab with it, lands on the combined
+  // tab with the right sub-tab already open. Retiring the ids would have been
+  // the tidier diff and a worse change.
+  { id: 'partners',  label: 'Truckers & Suppliers', group: 'Edge Metals' },
   // Invoice/Proforma/Verification — added 2026-08-19 per Apsara ("i want
   // invoice,proforma,verification in separate tabs under documents").
   // Standalone page (dashboard/documents.html via the /documents route),
@@ -1269,8 +1281,11 @@ async function loadTab(tab) {
   try {
     if (tab === 'board') return renderBoard(await api('/api/dashboard'));
     if (tab === 'bookings') return renderBookings(await api('/api/bookings'));
-    if (tab === 'truckers') return renderContacts('truckers', 'Drayage roster', '+ Add trucker', await api('/api/truckers'));
-    if (tab === 'suppliers') return renderContacts('suppliers', 'Yard network', '+ Add supplier', await api('/api/suppliers'));
+    // The two old ids are entry points into the combined tab, not screens of
+    // their own any more — a link to #suppliers opens Truckers & Suppliers
+    // with Suppliers showing.
+    if (tab === 'truckers' || tab === 'suppliers') { partnersTab = tab; return renderPartners(); }
+    if (tab === 'partners') return renderPartners();
     if (tab === 'whatsapp') return renderWhatsapp();
     if (tab === 'contacts') return renderPriceContacts();
     if (tab === 'email-contacts') return renderEmailContacts();
@@ -2207,6 +2222,42 @@ $('btnSaveContact').addEventListener('click', async () => {
   } catch (e) { $('ct_error').textContent = e.message; }
   finally { btn.disabled = false; btn.textContent = 'Save'; }
 });
+
+// ── TRUCKERS & SUPPLIERS, ONE HEADING ─────────────────────────────────────
+// Apsara, 2026-09-24: "can we combine truckers and suppliers into single
+// heading .Inside that make sub tab as truckers,suppliers?"
+//
+// EDGE METALS. The yard's haulier screen is Trucker Bills and is a different
+// thing entirely — a directory of contacts here, a list of debts there. The
+// comment above that nav entry has said so since 2026-09-03.
+//
+// Which sub-tab is showing survives a switch away and back, the same way
+// pettyTab does, so moving between Bookings and here does not keep resetting
+// her to Truckers when she is working through suppliers.
+let partnersTab = 'truckers';
+
+async function renderPartners() {
+    const kind = partnersTab === 'suppliers' ? 'suppliers' : 'truckers';
+    const list = await api(kind === 'suppliers' ? '/api/suppliers' : '/api/truckers');
+    // The screens are UNCHANGED — same renderer, same wording, same Add
+    // button. Only the way in is shared, which is what she asked for.
+    if (kind === 'suppliers') renderContacts('suppliers', 'Yard network', '+ Add supplier', list);
+    else renderContacts('truckers', 'Drayage roster', '+ Add trucker', list);
+
+    // The strip goes in AFTER the screen has drawn, rather than inside
+    // renderContacts — that function is shared and has no business knowing it
+    // is being shown under a combined tab.
+    const host = $('viewRoot') && $('viewRoot').querySelector('section');
+    if (!host) return;
+    const btn = (id, label) => `<button class="btn partners-tab" data-partners-tab="${id}" style="font-size:12px; padding:6px 14px;${partnersTab === id ? ' background:var(--surface-raised); color:var(--text-strong);' : ''}">${label}</button>`;
+    host.insertAdjacentHTML('afterbegin',
+        `<div style="display:flex; gap:8px; margin-bottom:18px;">${btn('truckers', 'Truckers')}${btn('suppliers', 'Suppliers')}</div>`);
+    host.querySelectorAll('.partners-tab').forEach((b) => b.addEventListener('click', () => {
+        if (partnersTab === b.dataset.partnersTab) return;   // already here
+        partnersTab = b.dataset.partnersTab;
+        renderPartners();
+    }));
+}
 
 function renderContacts(kind, title, addLabel, list) {
   contactListCache = list;
