@@ -278,6 +278,53 @@ section('F. end to end — voice and WhatsApp, through the server');
     await j.stop();
 }
 
+section('G. the question log — the list of what it could not answer');
+{
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'jv-asklog-'));
+    process.env.DATA_DIR = dir;
+    for (const k of Object.keys(require.cache)) if (k.startsWith(R(''))) delete require.cache[k];
+    const askLog = require(R('helpers/data/askLog'));
+
+    await askLog.record({ kind: 'data', question: 'how much do we owe Inesh', outcome: 'answered', tables: ['bills'], sql: 'SELECT 1', rows: 1, ms: 900 });
+    await askLog.record({ kind: 'data', question: 'average margin per tonne', outcome: 'could_not_answer', ms: 1200, repaired: true });
+    await askLog.record({ kind: 'data', question: 'average margin per tonne', outcome: 'could_not_answer', ms: 1100 });
+    await askLog.record({ kind: 'data', question: 'yard loads yesterday', outcome: 'yard', ms: 300 });
+
+    const s = askLog.summary();
+    ck('every question is counted', s.questions === 4 && s.by.answered === 1 && s.by.could_not_answer === 2 && s.by.yard === 1, JSON.stringify(s.by));
+    ck('the model calls are counted, repairs included', s.model_calls === 5 && s.repaired === 1, `${s.model_calls} calls / ${s.repaired} repaired`);
+    ck('THE LIST: what it could not answer, most asked first',
+       s.needs_work[0] && s.needs_work[0].what === 'average margin per tonne' && s.needs_work[0].times === 2, JSON.stringify(s.needs_work));
+    ck('  and a question sent to Scout is not called a failure', !s.needs_work.some((f) => /yard loads/.test(f.what)), JSON.stringify(s.needs_work));
+
+    // It is a log, not a transcript: the ANSWER and the ROWS are not kept.
+    const raw = fs.readFileSync(path.join(dir, 'ask_log.json'), 'utf8');
+    ck('the answers themselves are not stored', !/\$|answer/i.test(raw) || !/"answer"/.test(raw), raw.slice(0, 200));
+
+    // A broken log must never break an answer.
+    const broken = require(R('helpers/data/askLog'));
+    fs.writeFileSync(path.join(dir, 'ask_log.json'), 'not json at all');
+    const after = await broken.record({ kind: 'data', question: 'x', outcome: 'answered' });
+    ck('a corrupt log file does not throw', after === null || typeof after === 'object');
+
+    // AND THE REAL PATH WRITES ONE. Logging that only the test calls is not
+    // logging, which is how the last one of these ended up being dead code.
+    for (const k of Object.keys(require.cache)) if (k.startsWith(R(''))) delete require.cache[k];
+    const { boot } = require('./helpers/e2e');
+    const j = await boot({});
+    const bills = require(R('helpers/bills'));
+    await bills.addBill({ date: '09/18/2026', supplier: 'Inesh', container_no: 'TCLU9988776', gross: 31250, truck: 9000, supplier_price: 0.3 });
+    await j.say('how much do we owe our suppliers');
+    await j.say('what did the harbourmaster say about penguins');
+    const live = require(R('helpers/data/askLog')).recent(10);
+    ck('asking a real question writes a real log line',
+       live.some((r) => /owe our suppliers/.test(r.question) && r.outcome === 'answered' && (r.tables || []).includes('bills')),
+       JSON.stringify(live.map((r) => [r.question, r.outcome])));
+    ck('  and it records which way she asked', live.every((r) => r.source === 'voice'), JSON.stringify(live.map((r) => r.source)));
+    await j.stop();
+    fs.rmSync(dir, { recursive: true, force: true });
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 if (fail) console.log('\nFAILED:\n  - ' + failures.join('\n  - '));
 process.exit(fail ? 1 : 0);

@@ -749,6 +749,24 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
     // knows plus a couple of trivial file checks. It does NOT make live API
     // calls to Drive/Gemini — a health endpoint that costs money and latency
     // every time it's polled is one nobody leaves running.
+    // ── WHAT JARVIS COULD NOT ANSWER ────────────────────────────────────
+    // The reviewable list from the AI-first review: every ledger/mail question
+    // with what it did. Admin-only — it is her questions and the queries they
+    // produced, which is business detail, not a health signal.
+    app.get('/api/ask-log', requireAdmin, (req, res) => {
+        try {
+            const askLog = require('./helpers/data/askLog');
+            const since = String(req.query.since || '').trim() || null;
+            res.json({
+                summary: askLog.summary({ since }),
+                recent: askLog.recent(Number(req.query.limit) || 50),
+            });
+        } catch (e) {
+            console.error('[API] ask-log failed:', e.message);
+            res.status(500).json({ error: e.message });
+        }
+    });
+
     app.get('/api/health', (req, res) => {
         const out = { ok: true, checks: {}, at: new Date().toISOString(),
                       version: require('./helpers/version').running() };

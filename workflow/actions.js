@@ -4401,13 +4401,29 @@ async function saleInvoiceAnswer(chatId, pending, text) {
 // screen, per her standing rule about not reading tables aloud.
 async function askLedger(chatId, question) {
     const askData = require('../helpers/data/askData');
+    const askLog = require('../helpers/data/askLog');
+    const wa0 = require('../helpers/wa-state');
+    const startedAt = Date.now();
+    // Logged whatever happens — the questions it CANNOT answer are the list
+    // worth having (helpers/data/askLog.js says why).
+    const note = (out, err) => askLog.record({
+        kind: 'data', question, source: wa0.isVoiceTurn() ? 'voice' : 'whatsapp',
+        outcome: err ? 'failed'
+            : !out.ok ? (out.scope === 'yard' ? 'yard' : (out.ask ? 'unclear' : 'could_not_answer'))
+            : (out.empty ? 'nothing_matched' : 'answered'),
+        tables: (out && out.tables) || [], sql: (out && out.sql) || null,
+        rows: ((out && out.rows) || []).length, repaired: !!(out && out.repaired),
+        ms: Date.now() - startedAt, error: err ? err.message : (out && out.error) || null,
+    }).catch(() => {});
     let out;
     try { out = await askData.ask(question); }
     catch (e) {
         console.error('[ACTIONS] askLedger failed:', e && e.stack);
+        await note(null, e);
         await _send(chatId, `Couldn't answer that from the ledgers: ${e.message}`);
         return { action_taken: 'ask_data_failed', reason: e.message };
     }
+    await note(out, null);
     const wa = require('../helpers/wa-state');
     if (!out.ok) {
         await _send(chatId, out.screen ? `${out.spoken}\n\n${out.screen}` : out.spoken);
@@ -4425,13 +4441,26 @@ async function askLedger(chatId, question) {
 // was retrieved and cites it — see helpers/data/askText.js.
 async function askText(chatId, question) {
     const askTextLib = require('../helpers/data/askText');
+    const askLog = require('../helpers/data/askLog');
+    const wa0 = require('../helpers/wa-state');
+    const startedAt = Date.now();
+    const note = (out, err) => askLog.record({
+        kind: 'text', question, source: wa0.isVoiceTurn() ? 'voice' : 'whatsapp',
+        outcome: err ? 'failed' : (!out.ok ? 'could_not_answer'
+            : (out.empty ? 'nothing_matched' : (out.found === false ? 'could_not_answer' : 'answered'))),
+        tables: ((out && out.used) || []).map((h) => h.kind),
+        rows: ((out && out.hits) || []).length, calls: 1,
+        ms: Date.now() - startedAt, error: err ? err.message : (out && out.error) || null,
+    }).catch(() => {});
     let out;
     try { out = await askTextLib.ask(question); }
     catch (e) {
         console.error('[ACTIONS] askText failed:', e && e.stack);
+        await note(null, e);
         await _send(chatId, `Couldn't search that: ${e.message}`);
         return { action_taken: 'ask_text_failed', reason: e.message };
     }
+    await note(out, null);
     const wa = require('../helpers/wa-state');
     await _send(chatId, out.screen || out.spoken);
     wa.sayAloud(out.spoken);

@@ -342,6 +342,12 @@ const FILES = {
     // everything else and a copy leaves the machine nightly. A log that only
     // exists on the disk it is meant to outlive is not a log.
     AUDIT_LOG_FILE: path.join(DATA_DIR, 'audit_log.json'),
+
+    // Every question asked of the ledgers or the mail, with what it did —
+    // see helpers/data/askLog.js. The reviewable list of what Jarvis could
+    // not answer, which is the only way a gap gets fixed instead of noticed
+    // once and forgotten.
+    ASK_LOG_FILE: path.join(DATA_DIR, 'ask_log.json'),
 };
 
 // ── Env ───────────────────────────────────────────────────────────────────────
