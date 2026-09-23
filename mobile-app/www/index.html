@@ -2147,11 +2147,30 @@ function paymentBadgeHtml(l) {
   // duplicate is the fix; there is now one money formatter in the payments UI
   // and nothing to keep in step.
   const money = payMoney;
+
+  // ── THE WAY BACK INTO A SETTLED LOAD (2026-09-23) ──────────────────────
+  // Apsara: "say i have unknowingly made some payment..Full paid.if i want to
+  // reverse that?" — loadIsPayable hides Pay once a load reads paid, Pay is
+  // the only caller of openPayModal, and the payment history with its ✕ lives
+  // inside that modal. The route worked; the screen was unreachable.
+  //
+  // Her answer: "Make the paid badge open only on jarvis profile."
+  // IS_SUPER, not ROLE — an admin still removes one payment of several from a
+  // load that is owing; unwinding a SETTLED one is hers.
+  //
+  // Mirrors dashboard/index.html — tests/load-card-actions.js asserts both.
+  const settled = p.status === 'paid' || p.status === 'overpaid';
+  const openable = settled && IS_SUPER;
+  const badge = (cls, text) => (openable
+    ? `<span class="pay-badge ${cls} pay-badge-open" data-open-payments="${esc(l.id)}"`
+      + ` data-kind="${esc(l._kind || 'purchase')}" title="Open the payments on this load"`
+      + ` style="cursor:pointer; text-decoration:underline dotted;">${text}</span>`
+    : `<span class="pay-badge ${cls}">${text}</span>`);
   if (p.status === 'paid') {
-    return `<span class="pay-badge pay-full">PAID ${money(p.paid)}${on}</span>`;
+    return badge('pay-full', `PAID ${money(p.paid)}${on}`);
   }
   if (p.status === 'overpaid') {
-    return `<span class="pay-badge pay-over">OVERPAID by ${money(p.over)}${on}</span>`;
+    return badge('pay-over', `OVERPAID by ${money(p.over)}${on}`);
   }
   if (p.status === 'paid_amount_unknown') {
     return `<span class="pay-badge pay-part">PAID ${money(p.paid)}${on} · load has no price yet</span>`;
@@ -2314,7 +2333,11 @@ function bankValue(prefix) {
 }
 
 
-function openPayModal(loadId, kind) {
+// opts.historyOnly marks the NEW shape, never the old — called with nothing
+// this is exactly the modal it has always been. Only the paid-badge path
+// passes it, and only the Jarvis profile can reach that path.
+function openPayModal(loadId, kind, opts) {
+  const historyOnly = !!(opts && opts.historyOnly);
   const l = loadsCache.find(x => x.id === loadId);
   if (!l) return;
   // `amount` here is what the OVERPAYMENT check subtracts against, so it has
@@ -2422,7 +2445,17 @@ function openPayModal(loadId, kind) {
   $('pay_mode').innerHTML = payModes.map((m) => `<option value="${esc(m)}">${esc(m)}</option>`).join('');
   // A default that exists in the list: selecting 'Zelle' on a list without it
   // leaves the select at "", and an untouched dropdown then posts no mode.
-  $('pay_mode').value = payModes.includes('Zelle') ? 'Zelle' : 'Cash';
+  // ── THE DEFAULT MODE, AND WHY A SALE IS NOT ZELLE ────────────────────
+  // This line read `payModes.includes('Zelle') ? 'Zelle' : 'Cash'`, written
+  // when only a PURCHASE had Zelle — so a sale fell through to Cash by
+  // accident rather than by decision. Widening receive payment on 2026-09-23
+  // put Zelle on a sale too, which would silently have made every receive
+  // payment open on Zelle.
+  //
+  // Nothing about receiving money changed, so nothing about its default
+  // should: a sale still opens on Cash. Stated rather than inherited, so the
+  // next change to either list cannot move it again by accident.
+  $('pay_mode').value = (!sale && payModes.includes('Zelle')) ? 'Zelle' : 'Cash';
   paintBankOptions($('pay_bank'));
   $('pay_bank_other').value = '';
   syncBankFields('pay');
@@ -2436,6 +2469,24 @@ function openPayModal(loadId, kind) {
   $('payErr').textContent = '';
   renderPayHistory();
   updatePayPreview();
+  // ── HISTORY ONLY: EVERYTHING BUT THE LIST GOES AWAY ─────────────────
+  // Walked rather than listed by id: this form has grown a bank row, a
+  // cash-source row, a paid-via row and a preview, and a list written here
+  // would be one short the next time a field is added — leaving half a form
+  // under a heading that says the load is settled.
+  {
+    const body = $('payModal') && $('payModal').querySelector('.modal-body');
+    const keep = new Set(['payLoadSummary', 'payHistory', 'payErr']);
+    if (body) {
+      Array.from(body.children).forEach((el) => {
+        const mine = el.id && keep.has(el.id);
+        const holdsErr = !el.id && el.querySelector && el.querySelector('#payErr');
+        el.style.display = (historyOnly && !mine && !holdsErr) ? 'none' : '';
+      });
+    }
+    if ($('btnSavePay')) $('btnSavePay').style.display = historyOnly ? 'none' : '';
+    if ($('btnCancelPay')) $('btnCancelPay').textContent = historyOnly ? 'Close' : 'Cancel';
+  }
   $('payModal').classList.remove('hidden');
 }
 
@@ -2498,7 +2549,7 @@ function renderPayHistory() {
         ${r.reference ? `<span style="color:var(--text-faint);">${esc(r.reference)}</span>` : ''}
         <span style="flex:1;"></span>
         <span style="font-weight:700;">${payMoney(r.amount)}</span>
-        ${payCanDelete() ? `<button class="btn btn-danger btn-del-pay" data-id="${esc(r.id)}" style="font-size:10px; padding:3px 8px;">✕</button>` : ''}
+        ${payCanDelete() ? `<button class="btn btn-danger btn-del-pay" data-id="${esc(r.id)}" data-mode="${esc(r.mode || '')}" data-amount="${esc(payMoney(r.amount))}" style="font-size:10px; padding:3px 8px;">✕</button>` : ''}
       </div>`).join('')}`;
 }
 

@@ -10972,7 +10972,17 @@ function openPayModal(loadId, kind, opts) {
   $('pay_mode').innerHTML = payModes.map((m) => `<option value="${esc(m)}">${esc(m)}</option>`).join('');
   // A default that EXISTS in the list. Zelle was being selected on a list
   // that no longer had it, which is the bug this line is now written against.
-  $('pay_mode').value = payModes.includes('Zelle') ? 'Zelle' : 'Cash';
+  // ── THE DEFAULT MODE, AND WHY A SALE IS NOT ZELLE ────────────────────
+  // This line read `payModes.includes('Zelle') ? 'Zelle' : 'Cash'`, written
+  // when only a PURCHASE had Zelle — so a sale fell through to Cash by
+  // accident rather than by decision. Widening receive payment on 2026-09-23
+  // put Zelle on a sale too, which would silently have made every receive
+  // payment open on Zelle.
+  //
+  // Nothing about receiving money changed, so nothing about its default
+  // should: a sale still opens on Cash. Stated rather than inherited, so the
+  // next change to either list cannot move it again by accident.
+  $('pay_mode').value = (!sale && payModes.includes('Zelle')) ? 'Zelle' : 'Cash';
   paintBankOptions($('pay_bank'));
   $('pay_bank_other').value = '';
   // Cleared on every open, or the company she chose on the LAST payment is
