@@ -295,6 +295,19 @@ function installGemini(mode, log, o) {
         // "send mail is not doing that", this is what tells us whether the
         // fault is the classification or the twelve steps after it.
         if (/AVAILABLE ACTIONS/i.test(prompt) || /bookings_list_query, bookings_count_query/.test(prompt)) {
+            // ── ask_data (2026-09-23) ─────────────────────────────────
+            // A ledger question, classified the way the real model would.
+            // Narrow on purpose (an explicit money/figure word, and none of
+            // the words that belong to another action) so no existing suite's
+            // sentence is quietly re-routed through the new action.
+            {
+                const askT = (/═══ NEW MESSAGE ═══\s*\n"([\s\S]*?)"\s*\n/.exec(prompt) || [])[1] || '';
+                if (o.askData !== false
+                    && /\b(owe|owed|outstanding|receivable|payable|spent|revenue|margin|profit)\b/i.test(askT)
+                    && !/\b(reply|email|mail|proforma|quote|forward|booking)\b/i.test(askT)) {
+                    return { action: 'ask_data', question: askT, confidence: 0.9, reasoning: 'stub' };
+                }
+            }
             // The sentence sits under a "NEW MESSAGE" banner, in quotes.
             // Read off the real prompt rather than guessed at: my first
             // version matched nothing and every classification came back
