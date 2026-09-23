@@ -63,25 +63,64 @@ function readCsv(file) {
         if (REALLY) await billPayments.addAdvance({ date: w.date, amount, mode, bank, supplier,
             note: `from ${supplier} tab`, created_by: 'supplier tab import' });
     }
-    let addedB = 0, skipB = 0, moneyB = 0, skipBmoney = 0;
+    let addedB = 0, skipB = 0, moneyB = 0, skipBmoney = 0, fixed = 0, moneyFix = 0, empty = 0, removed = 0;
     for (const [date, list] of Object.entries(loads).sort()) {
         const items = list.map((l) => ({ description: l.item, gross: num(l.gross), boxes: num(l.tare),
             weight: num(l.net), price: num(l.price), price_unit: 'lb' }));
         const total = r2(list.reduce((s, l) => s + num(l.amount), 0));
+        // ── THE AMOUNT MUST TRAVEL ON ITS OWN ─────────────────────────────
+        // A bill's amount is DERIVED from weight x price (bills.js compute()).
+        // Half these tabs carry a value and no weight or price at all, so the
+        // first import of Hugo's tab created 19 bills reading $0.00 and
+        // "no supplier price yet" (2026-09-24, she spotted it on the new
+        // page). supplier_invoice_amount is the field that states a figure
+        // outright — compute() prefers it over its own arithmetic.
+        // Apsara, 2026-09-24: "If amont is empty,it shouldnt be there." A row
+        // with no value is not a bill; it is a line she has not finished. It
+        // is left in the tab and reported here, never written to the ledger.
+        if (!(total > 0)) { empty++; console.log(`  skip  ${date} — no amount on the tab (${list.length} line${list.length > 1 ? 's' : ''})`); continue; }
+        const stated = { supplier_invoice_amount: total };
+        // already imported, but with the amount lost? fix it in place
+        const broken = bills.list().find((b) => String(b.supplier || '').trim().toUpperCase() === supplier.toUpperCase()
+            && String(b.date || '').slice(0, 10) === date
+            && String(b.created_by || '') === 'supplier tab import'
+            && !(Number(bills.withTotals(b).amount) > 0));
+        if (broken) {
+            fixed++; moneyFix = r2(moneyFix + total);
+            console.log(`  ${REALLY ? 'fix  ' : 'would fix'} ${date} $${total} (was $0 — amount had not been carried over)`);
+            if (REALLY) await bills.editBill(broken.id, stated);
+            continue;
+        }
         if (haveBill(date, total)) { skipB++; skipBmoney = r2(skipBmoney + total); continue; }
         addedB++; moneyB = r2(moneyB + total);
         console.log(`  bill    ${date} $${total}  (${items.length} grades: ${items.map((i) => i.description).join(', ').slice(0, 70)})`);
-        if (REALLY) await bills.addBill({ date, supplier, price_unit: 'lb', items,
+        if (REALLY) await bills.addBill({ date, supplier, price_unit: 'lb', items, ...stated,
             note: `${supplier} tab — packing list of ${date}`, created_by: 'supplier tab import' });
     }
     // The balance is the SUPPLIER'S account, so it counts what was already in
     // Jarvis too. Counting only the new rows makes it look wrong by exactly
     // the rows that were right (2026-09-24: Hugo, off by the $9,517.20 bill
     // already entered for HMMU4098359).
+    // --remove-empty: take out rows an earlier run of THIS importer created
+    // with no amount. Only ever its own rows (created_by), only ever the ones
+    // still reading zero, and only when she asks for it.
+    if (process.argv.includes('--remove-empty')) {
+        const junk = bills.list().filter((b) => String(b.created_by || '') === 'supplier tab import'
+            && String(b.supplier || '').trim().toUpperCase() === supplier.toUpperCase()
+            && !(Number(bills.withTotals(b).amount) > 0));
+        for (const b of junk) {
+            removed++;
+            console.log(`  ${REALLY ? 'remove' : 'would remove'} ${b.date} ${b.id} — no amount`);
+            if (REALLY) await bills.deleteBill(b.id);
+        }
+        if (!junk.length) console.log('  nothing to remove — no empty rows from this importer');
+    }
     console.log({ advances: addedW, 'advances already there': skipW, bills: addedB, 'bills already there': skipB,
+        'bills whose amount was repaired': fixed, 'repaired $': moneyFix,
+        'tab rows with no amount, left out': empty, 'empty rows removed': removed,
         'advances $': moneyW, 'bills $': moneyB,
         'already there $': r2(skipWmoney + skipBmoney),
         'balance of new rows only': r2(moneyW - moneyB),
-        'HIS ACCOUNT BALANCE': r2((moneyW + skipWmoney) - (moneyB + skipBmoney)) });
+        'HIS ACCOUNT BALANCE': r2((moneyW + skipWmoney) - (moneyB + skipBmoney + moneyFix)) });
     console.log(REALLY ? 'In Jarvis. QuickBooks is a separate push.' : 'DRY RUN — nothing written. Add --really.');
 })().catch((e) => { console.error('import failed:', e.message); process.exit(1); });
