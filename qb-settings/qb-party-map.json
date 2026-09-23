@@ -51,10 +51,11 @@
     },
     "mario": {
       "jarvisName": "Mario",
-      "qbId": null,
-      "qbName": null,
+      "qbId": "588",
+      "qbName": "LA Recycling",
       "by": "apsara",
-      "at": "2026-09-21T11:51:06.875Z"
+      "at": "2026-09-23T18:37:18.956Z",
+      "reason": "created in QuickBooks by qb-create-party on her approval"
     },
     "gomez": {
       "jarvisName": "Gomez",
@@ -294,6 +295,14 @@
       "qbName": "Deleon Cores Inc/Luis lines core",
       "by": "apsara",
       "at": "2026-09-21T14:23:16.545Z"
+    },
+    "larecycling": {
+      "jarvisName": "LA Recycling",
+      "qbId": "588",
+      "qbName": "LA Recycling",
+      "by": "apsara",
+      "at": "2026-09-23T18:37:18.962Z",
+      "reason": "same party under the name QuickBooks uses"
     }
   },
   "customer": {
@@ -668,8 +677,8 @@
       "qbId": "587",
       "qbName": "Custom Alloys",
       "by": "apsara",
-      "at": "2026-09-23T04:36:56.572Z",
-      "reason": "created in QuickBooks by qb-create-party on her approval"
+      "at": "2026-09-23T04:51:31.342Z",
+      "reason": "already in QuickBooks, linked by qb-create-party"
     },
     "dhatulogistics": {
       "jarvisName": "Dhatu Logistics",
@@ -1431,6 +1440,16 @@
       "by": "apsara",
       "at": "2026-09-22T04:49:51.607Z",
       "reason": "Edge Metals BofA account; every 2026 payment in QB went through it"
+    }
+  },
+  "account": {
+    "prepayment": {
+      "jarvisName": "prepayment",
+      "qbId": "98",
+      "qbName": "Vendor Payable",
+      "by": "apsara",
+      "at": "2026-09-23T18:37:17.349Z",
+      "reason": "role \"prepayment\" — money wired to a supplier before his load arrives (her accountant books these to Vendor Payable)"
     }
   }
 }
