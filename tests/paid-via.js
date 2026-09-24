@@ -66,9 +66,18 @@ section('A — it asks, and it refuses without an answer');
         ck('a purchase by Wire refuses to save without it', !!err, 'recorded anyway');
         // The message has to say what to type. "Invalid input" on a payment
         // screen is a support call.
-        ck('  and the message names both companies',
-           err && /Edge Yard/.test(err.message) && /Edge Metals/.test(err.message),
+        // ── IT NAMES THE COMPANIES THAT BANK THERE ────────────────────
+        // Apsara, 2026-09-24: "Bofa has only two accounts.Edge Metals and AAA
+        // Investment". So the list is no longer fixed — the message must name
+        // whoever can own money at the bank she actually chose, which for
+        // Chase is Edge Yard alone. Asserted against paidViaOptionsFor rather
+        // than a pair spelled out here, or this goes red the next time an
+        // account moves rather than when the message goes wrong.
+        ck('  and the message names the companies that bank there',
+           err && pay.paidViaOptionsFor('Chase Bank').every((c) => err.message.includes(c)),
            err && err.message);
+        ck('  and does not offer one that banks elsewhere',
+           err && !/AAA Investment/.test(err.message), err && err.message);
         ck('  and calls it "Payment via" — money going OUT',
            err && /Payment via/.test(err.message), err && err.message);
     }
@@ -282,8 +291,14 @@ section('E — the markup, and both clients');
 {
     for (const [who, src] of [['website', DASH], ['app', APP]]) {
         ck(`${who}: the modal has a Payment via row`, /id="pay_via_row"/.test(src));
-        ck(`  ${who}: offering both companies`,
-           /<option value="Edge Yard">/.test(src) && /<option value="Edge Metals">/.test(src));
+        // The options are BUILT from the chosen bank now, not baked into the
+        // markup — a fixed pair is what offered Edge Yard against BofA, where
+        // it has no account, and never offered AAA Investment at all.
+        ck(`  ${who}: the options are built from the bank, not hardcoded`,
+           /function paidViaOwnersFor/.test(src) && !/<option value="Edge Yard">/.test(src));
+        ck(`  ${who}: and it knows all three companies`,
+           /'Edge Yard', 'Edge Metals', 'AAA Investment'/.test(src));
+        ck(`  ${who}: Chase resolves to Edge Yard`, /\^chase/i.test(src));
         // No pre-selected company. She chose "refuse to save until answered"
         // over recording a gap, and a select that opens on "Edge Yard" lets
         // her answer it by not reading it.
@@ -445,6 +460,33 @@ section('F — END TO END, through the real routes');
        'client and route must agree on the parameter name');
 
     server.close();
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+section('WHICH COMPANIES BANK WHERE');
+// ══════════════════════════════════════════════════════════════════════════
+{
+    // Apsara, 2026-09-24: "Bofa has only two accounts.Edge Metals and AAA
+    // Investment", and Chase is Edge Yard's.
+    //
+    // SPELLED OUT, not derived from paidViaOptionsFor. A first version of
+    // these checks computed the expectation with the same function it was
+    // testing, so swapping BofA's owners back to the old pair left the file
+    // green — a check that cannot fail. These are her words, so they are
+    // written down as her words.
+    const bofa = pay.paidViaOptionsFor('BofA');
+    ck('BofA is Edge Metals and AAA Investment, in that order',
+       JSON.stringify(bofa) === JSON.stringify(['Edge Metals', 'AAA Investment']), bofa.join(', '));
+    ck('  and Edge Yard is NOT offered against BofA — it has no account there',
+       !bofa.includes('Edge Yard'), bofa.join(', '));
+    ck('Chase is Edge Yard alone', JSON.stringify(pay.paidViaOptionsFor('Chase Bank')) === JSON.stringify(['Edge Yard']),
+       pay.paidViaOptionsFor('Chase Bank').join(', '));
+    ck('AAA Investment is a company the ledger knows', pay.PAID_VIA.includes('AAA Investment'),
+       pay.PAID_VIA.join(', '));
+    // An unrecognised bank must NARROW nothing — a bank she typed under
+    // "Others" can never leave her unable to say whose money it was.
+    ck('an unknown bank offers all three', pay.paidViaOptionsFor('Wells Fargo').length === 3);
+    ck('  and so does a blank one', pay.paidViaOptionsFor('').length === 3);
 }
 
 console.log(`\n  ${pass} passed, ${fail} failed`);

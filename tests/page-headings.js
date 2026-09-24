@@ -246,7 +246,11 @@ section('E — the sidebar is grouped by company');
     // pages read Edge Yard's books, those read Edge Metals', and a page may
     // never be filed under the other company's name.
     const YARD = ['loads', 'inventory', 'petty', 'trucker-bills', 'expenses', 'contacts', 'outbound-loads'];
-    const METALS = ['board', 'bookings', 'truckers', 'suppliers', 'documents', 'bills', 'sales', 'edge-inventory'];
+    // 'truckers' and 'suppliers' merged into 'partners' on 2026-09-24 —
+    // Apsara: "can we combine truckers and suppliers into single heading".
+    // One nav entry, two sub-tabs; still Edge Metals, which is what this
+    // check is about.
+    const METALS = ['board', 'bookings', 'partners', 'documents', 'bills', 'sales', 'edge-inventory'];
     const groupOf = (id) => (NAV_DECL.find((x) => x.id === id) || {}).group;
     ck('  the yard pages are all under Edge Yard',
        YARD.every((id) => groupOf(id) === 'Edge Yard'),

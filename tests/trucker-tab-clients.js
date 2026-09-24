@@ -121,7 +121,15 @@ section('C — the tab is offered to everyone');
     // a "Truckers" tab that is a roster of hauliers and their WhatsApp groups.
     // Two tabs both called Trucker, one holding contacts and one holding
     // debts, is a mistake waiting for a hurried afternoon.
-    ck('website: the existing trucker ROSTER tab is untouched', /id: 'truckers',\s*label: 'Truckers'/.test(site));
+    // The roster moved under one heading with Suppliers on 2026-09-24
+    // ("can we combine truckers and suppliers into single heading"), so it is
+    // no longer its own nav row — but it is still a DIFFERENT place from
+    // trucker bills, which is the whole point of this check.
+    ck('website: the trucker ROSTER is still reachable, and not the bills tab',
+       /id: 'partners'/.test(site)
+       && /btn\('truckers', 'Truckers'\)/.test(site) && /btn\('suppliers', 'Suppliers'\)/.test(site));
+    ck('  and it still opens on the old id, so a link to it keeps working',
+       /tab === 'truckers' \|\| tab === 'suppliers'/.test(site));
     ck('  and the bills tab is named apart from it', /id: 'trucker-bills', label: 'Trucker Bills'/.test(site));
 }
 

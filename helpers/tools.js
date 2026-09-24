@@ -633,7 +633,15 @@ const TOOLS = {
             // filed against Edge Yard. Passing it also means Chase resolves
             // itself, so "record a wire of $12,000 from Chase" no longer has
             // to be told whose money it was.
-            const paidVia = resolvePaidVia(loadKind, mode, p.paid_via, bank);
+            // p.bank, not `bank` — the resolved one is computed sixty lines
+            // further down and referencing it here is a temporal-dead-zone
+            // crash on every voice payment. Found by tests/tools.js, which is
+            // the third time this caller has caught a change made for the
+            // form: it has no form, so it breaks differently and later.
+            //
+            // The raw value is enough: paidViaOptionsFor only needs the bank's
+            // NAME to know which companies bank there.
+            const paidVia = resolvePaidVia(loadKind, mode, p.paid_via, p.bank);
 
             // ── WHICH CASH, AND WHETHER IT WILL HAVE TO BORROW ───────────
             // Worked out HERE, at propose time, so the confirm card states it

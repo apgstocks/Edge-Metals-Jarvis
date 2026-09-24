@@ -2280,6 +2280,19 @@ function paintBankOptions(sel) {
 // Kept in step with helpers/payments.js's PAID_VIA_BY_KIND, which is what the
 // server enforces: a client that asks on different combinations than the
 // server requires is a form that fails on save.
+// Which companies can own money leaving a given bank. Mirrors
+// helpers/payments.js's paidViaOptionsFor — BofA holds Edge Metals and AAA
+// Investment, Chase is Edge Yard's, and anything unrecognised is not narrowed.
+const PAID_VIA_ALL = ['Edge Yard', 'Edge Metals', 'AAA Investment'];
+function paidViaOwnersFor(bank) {
+  const b = String(bank == null ? '' : bank).trim();
+  if (!b) return PAID_VIA_ALL.slice();
+  if (/^chase/i.test(b)) return ['Edge Yard'];
+  const of = (pettyCash && pettyCash.bank_of) || {};
+  const owners = Object.keys(of).filter((a) => of[a] === b && PAID_VIA_ALL.includes(a));
+  return owners.length ? owners : PAID_VIA_ALL.slice();
+}
+
 const paidViaModesFor = (sale) => (sale ? ['Bank transfer'] : ['Wire']);
 const paidViaLabelFor = (sale) => (sale ? 'Paid to' : 'Payment via');
 // ── WHOSE MONEY, AND WHY THE KIND COMES OFF THE ROW ───────────────────────
@@ -2312,9 +2325,25 @@ function syncBankFields(prefix) {
   if (viaRow) {
     const sale = viaRow.dataset.kind === 'sale';
     const asks = paidViaModesFor(sale).some((m) => m.toLowerCase() === String(mode).toLowerCase());
-    viaRow.style.display = asks ? '' : 'none';
     const lbl = viaRow.querySelector('label');
     if (lbl) lbl.textContent = paidViaLabelFor(sale);
+    // ── THE OWNERS THIS BANK CAN HAVE (2026-09-24) ─────────────────────
+    // Apsara: "Bofa has only two accounts.Edge Metals and AAA Investment".
+    // Kept in step with helpers/payments.js's paidViaOptionsFor, which is
+    // what addPayment enforces — a list here the server refuses is a save
+    // that fails after she has filled the form in.
+    const owners = paidViaOwnersFor(bankValue(prefix));
+    const via = $(prefix + '_via');
+    if (via) {
+      const keep = via.value;
+      via.innerHTML = (owners.length === 1 ? '' : '<option value="">Choose…</option>')
+        + owners.map((o) => `<option value="${esc(o)}">${esc(o)}</option>`).join('');
+      via.value = owners.includes(keep) ? keep : (owners.length === 1 ? owners[0] : '');
+    }
+    // ONE POSSIBLE OWNER IS NOT A QUESTION. A Chase wire can only be Edge
+    // Yard, so the row hides and the value goes with the payment anyway —
+    // the server resolves the same way if it arrives blank.
+    viaRow.style.display = (asks && owners.length > 1) ? '' : 'none';
   }
   // ── AND WHICH CASH, WHICH FOLLOWS THE MODE ───────────────────────────
   // Wired here rather than only at open, or switching the dropdown from
@@ -4927,11 +4956,7 @@ function renderLoads(loads) {
                answered by not reading it. -->
           <div class="field" id="pay_via_row" style="margin-top:14px; display:none;">
             <label for="pay_via">Payment via</label>
-            <select id="pay_via">
-              <option value="">Choose…</option>
-              <option value="Edge Yard">Edge Yard</option>
-              <option value="Edge Metals">Edge Metals</option>
-            </select>
+            <select id="pay_via"><option value="">Choose…</option></select>
           </div>
           <!-- ── WHICH CASH ────────────────────────────────────────────
                Apsara, 2026-09-21: "when they pay cash as mode of payment-ask

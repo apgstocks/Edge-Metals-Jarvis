@@ -227,20 +227,28 @@ function resolvePaidVia(loadKind, mode, value, bank) {
     // this one cannot make that promise, so it is not required.
     const allowed = paidViaOptionsFor(bank);
 
-    // ONE POSSIBLE OWNER IS NOT A QUESTION. Chase is Edge Yard's, so a Chase
-    // wire resolves itself rather than refusing for an answer that could only
-    // ever be one thing.
-    if (!given && allowed.length === 1) return allowed[0];
+    // NOT AUTO-FILLED, even when only one company banks there. A first cut
+    // resolved a Chase wire to Edge Yard on its own, which quietly relaxed
+    // her rule that "a wire with no company against it cannot be filed" —
+    // a refusal she asked for on 2026-09-17 and did not ask me to remove.
+    // The SCREEN skips the question when there is only one answer and sends
+    // that answer; the server still insists on being told.
 
     if (!given) {
         const where = String(loadKind || '').trim() === 'sale' ? 'a yard sale' : 'a yard purchase';
         throw new Error(`a ${mode} on ${where} needs "${paidViaLabel(loadKind)}": ${allowed.join(' or ')}`);
     }
-    // A stated answer the bank cannot support is a contradiction, and filing
-    // it would put "Edge Yard" against a BofA account Edge Yard does not have.
-    if (!allowed.includes(given)) {
-        throw new Error(`${given} has no account at ${bank} — "${paidViaLabel(loadKind)}" must be ${allowed.join(' or ')}`);
-    }
+    // ── A STATED ANSWER IS ACCEPTED, EVEN AGAINST THE MAPPING ──────────────
+    // The first version of this THREW when the named company had no account
+    // at the named bank. Existing payments pair Edge Metals with Chase, so
+    // that would have refused combinations already on file — and, worse, it
+    // could refuse a real payment at six in the evening because the mapping
+    // here is narrower than her actual banking.
+    //
+    // The defect she reported was that the form OFFERED Edge Yard against
+    // BofA and never offered AAA Investment. Narrowing what is offered fixes
+    // that. Refusing what she explicitly states is a different and riskier
+    // change, and not one she asked for.
     return given;
 }
 
@@ -713,7 +721,7 @@ function paymentSummary(loadId, loadAmount) {
 
 module.exports = {
     PAYMENT_MODES, YARD_LOAD_MODES, PURCHASE_MODES, modesForKind,
-    PAID_VIA, PAID_VIA_BY_KIND, paidViaRequired, paidViaLabel, resolvePaidVia,
+    PAID_VIA, PAID_VIA_BY_KIND, paidViaRequired, paidViaLabel, resolvePaidVia, paidViaOptionsFor,
     listPayments, paymentsForLoad, addPayment,
     deletePayment, deletePaymentsForLoad, paymentSummary,
 };

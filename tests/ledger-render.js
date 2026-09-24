@@ -1757,8 +1757,20 @@ section('G9 — the Trucking tab');
          === 'bills,trucking',
        [...doc.querySelectorAll('.metals-tab[data-section="bills"]')].map((b) => b.dataset.tab).join(','));
     ck('  not a nav entry of its own', !nav.includes('metals-trucking'), nav.join(','));
-    ck('  and the Edge YARD trucker tab is still there, separately',
-       nav.includes('truckers'),
+    // ── THE ROSTER IS STILL REACHABLE ────────────────────────────────────
+    // Apsara, 2026-09-24: "can we combine truckers and suppliers into single
+    // heading" — so the contacts roster now lives under 'partners' with two
+    // sub-tabs. It is still a separate place from metals trucking.
+    //
+    // This check used to say "the Edge YARD trucker tab" and look for
+    // 'truckers', which was wrong on its own terms: 'truckers' is the Edge
+    // METALS contact roster. The Edge Yard one is 'trucker-bills' — what the
+    // yard owes its hauliers — and that is asserted here too, since it is
+    // what the sentence was always trying to say.
+    ck('  and the contacts roster is still its own tab',
+       nav.includes('partners'), nav.join(','));
+    ck('  with the Edge YARD trucker bills kept separate',
+       nav.includes('trucker-bills'),
        'different company, different store, different line in the spend report');
 
     let text = doc.getElementById('viewRoot').textContent;
