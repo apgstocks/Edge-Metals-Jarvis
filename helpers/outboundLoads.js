@@ -57,17 +57,40 @@ function normaliseDraws(raw) {
         .filter((d) => d.load_id && d.weight != null && d.weight > 0);
 }
 
+// The same 2204.62 as helpers/loads.js and the invoice side.
+const LB_PER_MT = 2204.62;
+
 function computeItem(it) {
     const gross = toNum(it.gross_weight);
     const tare  = toNum(it.tare_weight);
     const net   = (gross != null && tare != null) ? round2(gross - tare) : null;
     const price = toNum(it.price);
-    const amount = (net != null && price != null) ? round2(net * price) : null;
+    // ── PRICED PER POUND OR PER TONNE, ROW BY ROW (2026-09-24) ─────────────
+    // Apsara, asked how far the yard's new per-row lb/MT pricing should go:
+    // "Full per-row lb/MT on sales too".
+    //
+    // This is urgent rather than merely consistent, and the reason is worth
+    // recording. The SALE uses the SAME modal as a purchase —
+    // dashboard/index.html's loadModalMode === 'sale' posts the very same
+    // `items` array that syncItemsFromDom() builds. So the moment the unit
+    // select went onto that form, the sale screen started OFFERING /MT while
+    // this function, which recomputes over whatever the client sends rather
+    // than trusting it, kept answering in pounds. A sale priced at $800/MT
+    // would have been booked at $800 per pound — 2,204 times over — with
+    // nothing on screen to say so.
+    //
+    // THE NET IS NOT CONVERTED, exactly as on the purchase side: it is what
+    // the scale said, and only the quantity the price multiplies changes.
+    // 'lb' and a missing unit take the same branch, so every outbound load
+    // already on file is arithmetically untouched.
+    const perMt = String(it.unit || '').trim().toLowerCase() === 'mt';
+    const qty = (net != null && perMt) ? net / LB_PER_MT : net;
+    const amount = (qty != null && price != null) ? round2(qty * price) : null;
     return {
         draws: normaliseDraws(it && it.draws),
         description: it.description || '',
         gross_weight: gross, tare_weight: tare, net_weight: net,
-        price, unit: it.unit || '', amount,
+        price, unit: perMt ? 'mt' : (it.unit || ''), amount,
     };
 }
 function sumItems(items) {

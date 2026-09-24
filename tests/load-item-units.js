@@ -193,31 +193,201 @@ section('C — the price recall carries its unit');
 }
 
 // ══════════════════════════════════════════════════════════════════════════
-section('D — the ticket the seller signs says what the price is PER');
+section('D — the ticket the seller signs, RENDERED');
+// ══════════════════════════════════════════════════════════════════════════
+// Apsara, 2026-09-24: "if price is in /mt while net in lbs in pdf,it should
+// should show net in pdf".
+//
+// Reading the source is not enough here and this section learned that the
+// hard way: the first attempt put "= 13.608 MT" inline on the receipt line,
+// the source looked right, and the rendered receipt pushed "Amount
+// $10,886.23" off the right edge of the paper. A signed ticket with no
+// amount on it is worse than the problem it was fixing. So these assertions
+// render the real PDFs and read the text back.
+{
+    const pdf = require(path.join(ROOT, 'helpers/pdf'));
+    // NOT `x.buffer` — these generators return a Buffer, and a Buffer's
+    // .buffer is the 8 KB pooled ArrayBuffer it was allocated from, so that
+    // hands the parser the real PDF followed by kilobytes of unrelated pool
+    // memory. It parsed sometimes and returned an empty string other times,
+    // which is exactly the kind of flake that gets a test deleted.
+    const buf = (x) => (Buffer.isBuffer(x) ? x : Buffer.from(x));
+    const mk = (items) => ({
+        id: 'PDF_1', date: '2026-09-24', seller: 'Ramesh Metals', weight_unit: 'lb', items,
+        gross_weight: 100000, tare_weight: 40000, net_weight: 60000,
+        amount: items.reduce((a, i) => a + i.amount, 0),
+    });
+    const COPPER = { description: 'Copper', gross_weight: 50000, tare_weight: 20000, net_weight: NET, price: PER_LB, unit: 'lb', amount: EXPECT_LB };
+    const BRASS  = { description: 'Brass',  gross_weight: 50000, tare_weight: 20000, net_weight: NET, price: PER_MT, unit: 'mt', amount: EXPECT_MT };
+    const PLAIN  = { description: 'Radiator', gross_weight: 50000, tare_weight: 20000, net_weight: NET, price: PER_LB, unit: '', amount: EXPECT_LB };
+
+    // ── READING A RENDERED PDF, THE WAY THIS REPO ALREADY DOES IT ────────
+    // Lifted from tests/load-trucking.js, whose comment records both dead
+    // ends before it — and I walked into both again before reading it:
+    //   - buf.toString() finds nothing, because PDFKit Flate-compresses its
+    //     content streams. Every NEGATIVE check below then passes vacuously,
+    //     which is the check-shaped-like-the-code trap.
+    //   - pdf-parse reads correctly and then throws from inside its own
+    //     bundled pdf.js on a later call in the same process.
+    // So: inflate the streams, and take the hex runs ALONE (PDFKit puts
+    // kerning numbers between them inside a TJ array, and leaving those in
+    // produces "Net 20 30000" which no substring search will match).
+    const zlib = require('zlib');
+    const textOf = async (b) => {
+        const buffer = buf(b);
+        let raw = '', i = 0;
+        while ((i = buffer.indexOf('stream', i)) !== -1) {
+            let st = i + 6;
+            if (buffer[st] === 0x0d) st++;
+            if (buffer[st] === 0x0a) st++;
+            const end = buffer.indexOf('endstream', st);
+            if (end === -1) break;
+            try { raw += zlib.inflateSync(buffer.slice(st, end)).toString('latin1'); } catch (e) { /* not flate */ }
+            i = end + 9;
+        }
+        return (raw.match(/<[0-9A-Fa-f]+>/g) || [])
+            .map((h) => Buffer.from(h.slice(1, -1), 'hex').toString('latin1'))
+            .join('');
+    };
+
+    const mixedTicket  = await textOf(await pdf.generateLoadPdf(mk([COPPER, BRASS]), {}));
+    const mixedReceipt = await textOf(await pdf.generateLoadReceiptPdf(mk([COPPER, BRASS]), {}));
+    const lbTicket     = await textOf(await pdf.generateLoadPdf(mk([COPPER, PLAIN]), {}));
+    const lbReceipt    = await textOf(await pdf.generateLoadReceiptPdf(mk([COPPER, PLAIN]), {}));
+
+    // THE GUARD ON THE GUARD. Every "no tonnage on a pound ticket" check
+    // below passes trivially against an empty string, so prove the extractor
+    // actually read the document before trusting a single negative result.
+    ck('the extractor can read a rendered ticket', /Ramesh Metals/.test(lbTicket), lbTicket.slice(0, 60));
+    ck('  and a rendered receipt', /Ramesh Metals/.test(lbReceipt), lbReceipt.slice(0, 60));
+
+    // ── THE ASK: the tonnage is ON the paper ──────────────────────────────
+    ck('the full ticket shows the tonnage', /13\.608/.test(mixedTicket));
+    ck('  under a Net MT heading', /NET MT/i.test(mixedTicket));
+    ck('the receipt shows the working', /13\.608/.test(mixedReceipt));
+    ck('  as a restatement of the pounds', /30000 lb = 13\.608 MT/.test(mixedReceipt)
+       || /= 13\.608 MT/.test(mixedReceipt), 'the conversion line is missing');
+
+    // ── AND THE AMOUNT IS STILL THERE. The fault that prompted this. ──────
+    ck('the receipt still carries the amount on the MT row', /10,886\.23/.test(mixedReceipt));
+    ck('  and the rate says what it is per', /800\.00\/MT/.test(mixedReceipt));
+    ck('the full ticket carries both too',
+       /10,886\.23/.test(mixedTicket) && /800\.00\/MT/.test(mixedTicket));
+
+    // ── THE WEIGHTS ARE NOT CONVERTED ────────────────────────────────────
+    ck('the net still prints in pounds', /30000/.test(mixedReceipt) && /30000/.test(mixedTicket));
+
+    // ── AND A POUND-ONLY LOAD IS UNTOUCHED ───────────────────────────────
+    // Her standing rule. Proved against the RENDERED document, because that
+    // is what goes in the seller's hand.
+    ck('a pound-only ticket has no Net MT column', !/NET MT/i.test(lbTicket));
+    ck('  no tonnage anywhere on it', !/13\.608/.test(lbTicket));
+    ck('  and its rate prints bare, as it always has', !/0\.36\/lb/.test(lbTicket));
+    ck('a pound-only receipt has no tonnage', !/13\.608/.test(lbReceipt));
+    ck('  and its rate prints bare too', !/0\.36\/lb/.test(lbReceipt));
+    ck('  while still showing the amount', /10,800\.00/.test(lbReceipt));
+
+    // ── THE TOTAL ROW CLAIMS NO TONNAGE ──────────────────────────────────
+    // On a mixed load, summing only the MT rows' tonnage is a figure that is
+    // not the load's weight and not what anyone is paid on.
+    const src = fs.readFileSync(path.join(ROOT, 'helpers/pdf.js'), 'utf8');
+    ck('the TOTAL row is given no net_mt',
+       !/description: 'TOTAL',[\s\S]{0,240}net_mt/.test(src));
+    ck('the MT column set is only used when the load has an MT row',
+       /mtLoad \? TICKET_COLUMNS_MT : TICKET_COLUMNS/.test(src));
+}
+
 // ══════════════════════════════════════════════════════════════════════════
 // "Net 30,000 lb · Price $800 · Amount $10,886.23" is three true figures
 // arranged into a lie, on the one document he takes away.
 {
-    const pdfSrc = fs.readFileSync(path.join(ROOT, 'helpers/pdf.js'), 'utf8');
-    ck('the ticket qualifies the rate', /Price \$\$\{fmtRate\(it\.price\) \?\? '—'\}\/\$\{rateUnit\}/.test(pdfSrc));
-    ck('  rateUnit is the ITEM\'s unit, falling back to the load\'s',
-       /const rateUnit = String\(it\.unit \|\| ''\)\.trim\(\)\.toLowerCase\(\) === 'mt' \? 'MT' : unit;/.test(pdfSrc));
-    ck('  and the WEIGHTS still print in the load\'s unit, unconverted',
-       /Net \$\{it\.net_weight \?\? '—'\} \$\{unit\}/.test(pdfSrc));
 }
 
 // ══════════════════════════════════════════════════════════════════════════
-section('E — the SALE side is untouched');
+
 // ══════════════════════════════════════════════════════════════════════════
-// She said "load app" — the purchase screen. outboundLoads.js has its own
-// computeItem. This section exists so that a later tidy-up that "makes them
-// consistent" fails here instead of on her paperwork.
+section('E — the SALE side, in full');
+// ══════════════════════════════════════════════════════════════════════════
+// Apsara, 2026-09-24, asked how far this goes: "Full per-row lb/MT on sales
+// too". An earlier version of this section asserted the OPPOSITE — that the
+// sale side stayed on pounds — and that was the right call until she made
+// the call herself. It is replaced rather than deleted so the change of
+// scope is on the record.
+//
+// ── AND WHY THIS WAS URGENT, NOT TIDY ─────────────────────────────────────
+// The sale uses the SAME modal as a purchase: dashboard/index.html's
+// loadModalMode === 'sale' posts the very same `items` array that
+// syncItemsFromDom() builds. So the moment the /lb ÷ /MT select landed on
+// that form, the sale screen was OFFERING a tonne rate while
+// outboundLoads.computeItem — which recomputes over the client's figures
+// rather than trusting them — kept answering in pounds. A sale entered at
+// $800/MT would have been booked at $800 A POUND, 2,204x over, with nothing
+// on screen to say so. That window existed for the length of this session.
 {
-    const ob = fs.readFileSync(path.join(ROOT, 'helpers/outboundLoads.js'), 'utf8');
-    ck('outbound still has its own computeItem', /function computeItem\(it\)/.test(ob));
-    ck('  and it does NOT convert by tonne', !/2204\.62/.test(ob));
-    const { loadOutboundLoads } = require(path.join(ROOT, 'helpers/outboundLoads'));
-    ck('  outbound loads still load', Array.isArray(loadOutboundLoads()));
+    const ob = require(path.join(ROOT, 'helpers/outboundLoads'));
+
+    const sale = await ob.addOutboundLoad({
+        date: '2026-09-24', buyer: 'Eccomelt', weight_unit: 'lb',
+        items: [
+            { description: 'Copper',   gross_weight: 50000, tare_weight: 20000, price: PER_LB, unit: 'lb' },
+            { description: 'Brass',    gross_weight: 50000, tare_weight: 20000, price: PER_MT, unit: 'mt' },
+            { description: 'Radiator', gross_weight: 50000, tare_weight: 20000, price: PER_LB },
+        ],
+    });
+    const si = sale.items;
+
+    ck('a per-lb SALE row is net x price', si[0].amount === EXPECT_LB, String(si[0].amount));
+    ck('a per-MT SALE row divides by 2204.62 first', si[1].amount === EXPECT_MT, String(si[1].amount));
+    // The one that protects every outbound load already on file.
+    ck('a SALE row with NO unit is priced per pound, as it always was',
+       si[2].amount === EXPECT_LB, String(si[2].amount));
+    ck('the SALE net stays in pounds', si[1].net_weight === NET, String(si[1].net_weight));
+    ck('  and the unit is stored, normalised', si[1].unit === 'mt', si[1].unit);
+    ck('  a pound row keeps whatever it came with', si[2].unit === '');
+    ck('the SALE total sums both kinds of row',
+       sale.amount === Math.round((EXPECT_LB * 2 + EXPECT_MT) * 100) / 100, String(sale.amount));
+
+    // PURCHASE AND SALE MUST AGREE. Two copies of computeItem is the standing
+    // hazard here — helpers/loads.js and helpers/outboundLoads.js each have
+    // one, and they have drifted before. Same inputs, same answer.
+    const { addLoad } = require(path.join(ROOT, 'helpers/loads'));
+    const buy = await addLoad({ date: '2026-09-24', seller: 'X', weight_unit: 'lb', items: [
+        { description: 'Brass', gross_weight: 50000, tare_weight: 20000, price: PER_MT, unit: 'mt' },
+    ] });
+    ck('the two computeItems agree on a tonne-priced row',
+       buy.items[0].amount === si[1].amount, `${buy.items[0].amount} vs ${si[1].amount}`);
+
+    // The sale SCREEN is read-only for items; it has to be unambiguous.
+    const obHtml = fs.readFileSync(path.join(ROOT, 'dashboard/outbound-loads.html'), 'utf8');
+    ck('the sale list marks a tonne rate as /MT', /perMt \? '\/MT' : ''/.test(obHtml));
+    ck('  and restates the net in tonnes beside it', /2204\.62/.test(obHtml));
+
+    // The sale PDF is the SAME generator as the purchase ticket (api.js passes
+    // kind: 'sale'), so section D's work covers it — but prove it, because
+    // "it is shared" is exactly the assumption that hides a break.
+    const pdf = require(path.join(ROOT, 'helpers/pdf'));
+    const zlib = require('zlib');
+    const rd = (b) => {
+        const buffer = Buffer.isBuffer(b) ? b : Buffer.from(b);
+        let raw = '', i = 0;
+        while ((i = buffer.indexOf('stream', i)) !== -1) {
+            let st = i + 6;
+            if (buffer[st] === 0x0d) st++;
+            if (buffer[st] === 0x0a) st++;
+            const e = buffer.indexOf('endstream', st);
+            if (e === -1) break;
+            try { raw += zlib.inflateSync(buffer.slice(st, e)).toString('latin1'); } catch (err) {}
+            i = e + 9;
+        }
+        return (raw.match(/<[0-9A-Fa-f]+>/g) || [])
+            .map((h) => Buffer.from(h.slice(1, -1), 'hex').toString('latin1')).join('');
+    };
+    const saleDoc = { ...sale, seller: sale.buyer, gross_weight: 150000, tare_weight: 60000, net_weight: 90000 };
+    const saleTicket = rd(await pdf.generateLoadPdf(saleDoc, { kind: 'sale' }));
+    ck('the extractor can read the sale ticket', /Eccomelt/.test(saleTicket), saleTicket.slice(0, 60));
+    ck('the sale ticket shows the tonnage', /13\.608/.test(saleTicket));
+    ck('  under a Net MT heading', /NET MT/i.test(saleTicket));
+    ck('  and says Buyer, not Seller', /Buyer/.test(saleTicket) && !/Seller signature/.test(saleTicket));
 }
 
 // ══════════════════════════════════════════════════════════════════════════
@@ -341,6 +511,38 @@ section('G — END TO END, through the route the screen actually posts to');
            after[1] && String(after[1].amount));
     } else {
         ck('the edit route accepted the change', false, `${edited.status} ${JSON.stringify(edited.json)}`);
+    }
+
+
+    // ── THE SALE, THROUGH ITS OWN ROUTE ──────────────────────────────────
+    // /api/outbound-loads, not /api/loads. The screen posts the same `items`
+    // array to a different endpoint and a different store — which is exactly
+    // why "the form already sends it" was not proof that a sale worked.
+    const soldPost = await req('POST', '/api/outbound-loads', { sid, body: {
+        date: '2026-09-24', buyer: 'Eccomelt E2E', weight_unit: 'lb',
+        items: [
+            { description: 'Copper', gross_weight: '50000', tare_weight: '20000', price: '0.36', unit: 'lb' },
+            { description: 'Brass',  gross_weight: '50000', tare_weight: '20000', price: '800',  unit: 'mt' },
+        ],
+        client_request_id: 'e2e-units-sale-1',
+    } });
+    ck('the sale route accepted it', soldPost.status === 200, `${soldPost.status} ${JSON.stringify(soldPost.json)}`);
+    const sold = (soldPost.json && (soldPost.json.load || soldPost.json.sale || soldPost.json)) || {};
+    const soldId = sold.id;
+    ck('  and gave back an id', !!soldId, JSON.stringify(soldPost.json).slice(0, 160));
+
+    if (soldId) {
+        const backSale = await req('GET', '/api/outbound-loads', { sid });
+        const row = ((backSale.json || []).find
+            ? (backSale.json || []).find((l) => l.id === soldId)
+            : ((backSale.json && backSale.json.loads) || []).find((l) => l.id === soldId)) || {};
+        const sItems = row.items || [];
+        ck('  the sold pound row is $10,800 through the route',
+           sItems[0] && sItems[0].amount === EXPECT_LB, sItems[0] && String(sItems[0].amount));
+        ck('  the sold tonne row is $10,886.23 through the route',
+           sItems[1] && sItems[1].amount === EXPECT_MT, sItems[1] && String(sItems[1].amount));
+        ck('  the sold unit survived', sItems[1] && sItems[1].unit === 'mt', sItems[1] && sItems[1].unit);
+        ck('  and the sold net is still pounds', sItems[1] && sItems[1].net_weight === NET);
     }
 
     server.close();

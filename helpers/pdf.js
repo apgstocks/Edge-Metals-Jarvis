@@ -322,8 +322,16 @@ function drawItemTable(doc, items, columns, totalsRow) {
     // by-seller table in the daily inventory PDF, with nothing to touch in
     // GROUP_COLUMNS_WEIGHTS (the weights-only PDF has no price/amount
     // columns at all, so it's unaffected).
-    const fmt = (n, key) => {
+    const fmt = (n, key, row) => {
         if (n == null) return '—';
+        // A PRICE SAYS WHAT IT IS PER, when the row is priced by the tonne
+        // (2026-09-24). Only on a real item row — the TOTAL row has no price
+        // and no single unit to claim. Everything else is untouched, so a
+        // pound row and every table that is not the ticket print exactly as
+        // they did.
+        if (key === 'price' && row && String(row.unit || '').trim().toLowerCase() === 'mt') {
+            return `$${fmtRate(n)}/MT`;
+        }
         return key === 'price' ? `$${fmtRate(n)}` : (key === 'amount' ? `$${fmtAmount(n)}` : String(n));
     };
     const tableW = PAGE_R - PAGE_L;
@@ -346,7 +354,7 @@ function drawItemTable(doc, items, columns, totalsRow) {
         else if (opts.zebra) doc.rect(PAGE_L, y, tableW, rowH).fill(ZEBRA);
         doc.font(isTotal ? 'Helvetica-Bold' : 'Helvetica').fontSize(9).fillColor(isTotal ? NAVY : INK);
         columns.forEach(c => {
-            const raw = c.key === 'description' ? (rowData.description || (isTotal ? '' : '—')) : fmt(rowData[c.key], c.key);
+            const raw = c.key === 'description' ? (rowData.description || (isTotal ? '' : '—')) : fmt(rowData[c.key], c.key, isTotal ? null : rowData);
             // ellipsis:true does nothing on its own in this pdfkit version
             // (0.15.2) — confirmed by testing directly against the installed
             // package, NOT assumed from docs. It only truncates when a HEIGHT
@@ -577,6 +585,58 @@ const TICKET_COLUMNS = [
     { key: 'amount',       label: 'Amount',       x: 452, width: 110, align: 'right' },
 ];
 
+// ── THE SAME TABLE, PLUS THE TONNAGE THE PRICE MULTIPLIES ─────────────────
+//
+// Apsara, 2026-09-24: "if price is in /mt while net in lbs in pdf,it should
+// should show net in pdf".
+//
+// A row priced per tonne prints its Net in pounds, because pounds are what
+// the weighbridge said and what the seller watched. But then the Price column
+// says $800.00/MT and there is no number on the page that gets him from one
+// to the other. He cannot check his own ticket.
+//
+// ONLY USED WHEN THE LOAD ACTUALLY HAS AN MT ROW. A load priced entirely by
+// the pound gets TICKET_COLUMNS above, unchanged to the point — same widths,
+// same x positions, same six headings. That is deliberate and it is the rule
+// in CLAUDE.md: the flag selects the NEW shape, never the old one, so a
+// ticket that has always printed one way cannot start printing another way
+// because someone forgot to set something.
+//
+// The 512pt of table is re-divided rather than widened — the page has no more
+// room. Description gives up the most because it is the one column whose
+// content is a name rather than a figure, and it still holds "Sealed units"
+// at font 9.
+const TICKET_COLUMNS_MT = [
+    { key: 'description',  label: 'Description', x: 50,  width: 104, align: 'left'  },
+    { key: 'gross_weight', label: 'Gross',        x: 154, width: 64,  align: 'right' },
+    { key: 'tare_weight',  label: 'Tare',         x: 218, width: 64,  align: 'right' },
+    { key: 'net_weight',   label: 'Net',          x: 282, width: 64,  align: 'right' },
+    { key: 'net_mt',       label: 'Net MT',       x: 346, width: 68,  align: 'right' },
+    { key: 'price',        label: 'Price',        x: 414, width: 66,  align: 'right' },
+    { key: 'amount',       label: 'Amount',       x: 480, width: 82,  align: 'right' },
+];
+
+// True when at least one item on this load is priced by the tonne.
+function loadHasMtRow(items) {
+    return (Array.isArray(items) ? items : [])
+        .some((it) => it && String(it.unit || '').trim().toLowerCase() === 'mt');
+}
+
+// net_mt is computed for PRINTING only and is never stored — the ledger keeps
+// pounds, as it always has. Blank on a per-pound row, because a tonnage next
+// to a per-pound rate is a number with nothing to do, and a column of those
+// would invite exactly the mis-multiplication this is meant to prevent.
+//
+// 3 decimals, matching helpers/invoicePdf.js:704, which is how every tonne
+// figure on her outgoing paperwork is already printed.
+function withNetMt(items) {
+    return (Array.isArray(items) ? items : []).map((it) => {
+        const perMt = it && String(it.unit || '').trim().toLowerCase() === 'mt';
+        const net = it && typeof it.net_weight === 'number' && isFinite(it.net_weight) ? it.net_weight : null;
+        return { ...it, net_mt: (perMt && net != null) ? Number((net / 2204.62).toFixed(3)) : null };
+    });
+}
+
 // "Summary by Item Type" table columns — priced version (ticket) includes
 // Amount, the weights-only PDF's version below doesn't.
 const GROUP_COLUMNS = [
@@ -675,11 +735,19 @@ function generateLoadPdf(load, opts = {}) {
                 // server-side (helpers/loads.js's sumItems) rather than
                 // re-adding the items here, so it's always consistent with
                 // whatever the Summary box further down shows.
-                drawItemTable(doc, items, TICKET_COLUMNS, {
-                    description: 'TOTAL',
-                    gross_weight: load.gross_weight, tare_weight: load.tare_weight,
-                    net_weight: load.net_weight, amount: load.amount,
-                });
+                // The Net MT column appears only on a load that has a
+                // tonne-priced row — see TICKET_COLUMNS_MT. The TOTAL row
+                // carries no net_mt on purpose: on a mixed load, summing the
+                // tonnage of the MT rows and leaving out the pound rows gives
+                // a figure that is not the load's weight and not what anyone
+                // is paid on. A dash says that plainly; a number would not.
+                const mtLoad = loadHasMtRow(items);
+                drawItemTable(doc, mtLoad ? withNetMt(items) : items,
+                    mtLoad ? TICKET_COLUMNS_MT : TICKET_COLUMNS, {
+                        description: 'TOTAL',
+                        gross_weight: load.gross_weight, tare_weight: load.tare_weight,
+                        net_weight: load.net_weight, amount: load.amount,
+                    });
             }
 
             // Rolled up by item TYPE (e.g. every "Sealed units" weigh-in
@@ -1203,8 +1271,45 @@ function drawReceiptContent(doc, load, contentWidth, opts) {
         // what he has.
         // `unit` (the LOAD's weight unit) still governs the weights; this
         // only qualifies the rate, and only when it differs.
-        const rateUnit = String(it.unit || '').trim().toLowerCase() === 'mt' ? 'MT' : unit;
-        line(`Net ${it.net_weight ?? '—'} ${unit}  ·  Price $${fmtRate(it.price) ?? '—'}/${rateUnit}  ·  Amount $${fmtAmount(it.amount) ?? '—'}`, { size: 7.5, gap: 1.5 });
+        //
+        // ── AND THE TONNES, WHEN THAT IS WHAT HE IS BEING PAID BY ───────
+        // Apsara, 2026-09-24: "if price is in /mt while net in lbs in pdf,it
+        // should should show net in pdf".
+        //
+        // Qualifying the rate was only half of it. "Net 30,000 lb · Price
+        // $800.00/MT · Amount $10,886.23" is now honest but still not
+        // CHECKABLE — the seller cannot get from the weight he watched go
+        // over the scale to the money he is being handed without a
+        // calculator and the conversion factor. The figure the price
+        // actually multiplies has to be on the page.
+        //
+        // The pounds stay first and unconverted, because that is what the
+        // weighbridge printed and what he came to see. The tonnes are shown
+        // as a restatement of it — "= 13.608 MT" — not as a second weight.
+        //
+        // 3 decimals, matching helpers/invoicePdf.js:704, which is how every
+        // tonne figure on her outgoing paperwork is already printed. See the
+        // note to her about the cent-level gap this leaves: the AMOUNT is
+        // computed from the full-precision division, so multiplying the
+        // rounded tonnage by the rate can land a few cents off.
+        const perMt = String(it.unit || '').trim().toLowerCase() === 'mt';
+        // A POUND ROW PRINTS EXACTLY WHAT IT ALWAYS PRINTED — "$0.36", with
+        // nothing appended. It was not ambiguous before and she did not ask
+        // for it to change; only the tonne row is new, and only the tonne row
+        // says so. Qualifying every rate was tidier and it was also a change
+        // to a document that has been going out for months.
+        const priceText = `$${fmtRate(it.price) ?? '—'}${perMt ? '/MT' : ''}`;
+        line(`Net ${it.net_weight ?? '—'} ${unit}  ·  Price ${priceText}  ·  Amount $${fmtAmount(it.amount) ?? '—'}`, { size: 7.5, gap: perMt ? 0.5 : 1.5 });
+        // ── AND THE WORKING, ON ITS OWN LINE ────────────────────────────
+        // It has to be its own line: this receipt is narrow, and putting the
+        // conversion inline pushed "Amount $10,886.23" off the right edge —
+        // caught by rendering the PDF and reading the text back, not by
+        // looking at the code, which is the only way that kind of fault ever
+        // shows up. A signed ticket with no amount on it is worse than one
+        // that makes him reach for a calculator.
+        if (perMt && typeof it.net_weight === 'number' && isFinite(it.net_weight)) {
+            line(`${it.net_weight} ${unit} = ${(it.net_weight / 2204.62).toFixed(3)} MT`, { size: 7, color: MUTED, gap: 1.5 });
+        }
     });
     divider();
 

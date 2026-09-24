@@ -43,7 +43,10 @@ const TABLES = [
     {
         name: 'yard_sale_items',
         what: 'One row per grade on an outbound load.',
-        columns: { sale_id: 'joins yard_sales.sale_id', date: 'sale date', buyer: 'buyer', grade: 'the grade', net_lb: 'pounds', price: 'price per pound sold', amount: 'dollars for this grade' },
+        columns: { sale_id: 'joins yard_sales.sale_id', date: 'sale date', buyer: 'buyer', grade: 'the grade', net_lb: 'pounds',
+            price: "the rate sold at — READ price_unit BEFORE COMPARING TWO PRICES, exactly as on yard_load_items. amount/net_lb is dollars per pound on every row and is the safe way to compare.",
+            price_unit: "'lb' or 'mt' — what price is per. net_lb is ALWAYS pounds either way.",
+            amount: 'dollars for this grade' },
     },
     {
         name: 'yard_trucker_bills',
@@ -74,7 +77,7 @@ const DEFINITIONS = [
 
 const GOTCHAS = [
     'Weights are POUNDS everywhere in this book — every net_lb, gross_lb and tare_lb, with no exceptions and nothing to convert.',
-    "But a PRICE is not a weight. yard_load_items.price_unit says whether that row's rate is per pound or per metric tonne, because the yard buys some grades either way. Never compare two prices, rank them, or average them without it. amount/net_lb is dollars per pound on every row and is the safe way to compare.",
+    "But a PRICE is not a weight. price_unit on yard_load_items AND yard_sale_items says whether that row's rate is per pound or per metric tonne, because the yard buys and sells some grades either way. Never compare two prices, rank them, or average them without it. amount/net_lb is dollars per pound on every row and is the safe way to compare.",
     'A load and a sale are different things: yard_loads is what the yard BOUGHT, yard_sales is what it SOLD. A question about "loads" without more usually means purchases.',
     'yard_load_items and yard_sale_items hold one row per grade. Count loads with COUNT(DISTINCT load_id), never COUNT(*).',
     'Dates are TEXT in YYYY-MM-DD. Compare with >= and <=; substr(date,1,7) is a month. Some rows have no date typed yet.',

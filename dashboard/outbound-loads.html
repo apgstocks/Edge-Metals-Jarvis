@@ -249,7 +249,20 @@ function loadCard(l) {
       ${l.items && l.items.length ? `
         <table style="margin-top:10px;">
           <thead><tr><th>Item</th><th>Net</th><th>Price</th><th>Amount</th></tr></thead>
-          <tbody>${l.items.map((it) => `<tr><td>${esc(it.description)}</td><td>${it.net_weight ?? '—'} ${esc(l.weight_unit)}</td><td>${it.price ?? '—'}</td><td>${fmtMoney(it.amount)}</td></tr>`).join('')}</tbody>
+          <!-- A rate that is per TONNE says so, and restates the net in
+               tonnes beside it (2026-09-24). Read-only list, so this only
+               has to be unambiguous: "30000 lb" next to a bare "800" reads
+               as a per-pound rate and makes the Amount look like a mistake.
+               A per-pound row is left exactly as it was — no suffix, no
+               second figure. -->
+          <tbody>${l.items.map((it) => {
+            const perMt = String(it.unit || '').trim().toLowerCase() === 'mt';
+            const net = Number(it.net_weight);
+            const netCell = (it.net_weight ?? '—') + ' ' + esc(l.weight_unit)
+              + (perMt && isFinite(net) ? ` <span style="opacity:.6;">= ${(net / 2204.62).toFixed(3)} MT</span>` : '');
+            const priceCell = (it.price ?? '—') + (perMt ? '/MT' : '');
+            return `<tr><td>${esc(it.description)}</td><td>${netCell}</td><td>${priceCell}</td><td>${fmtMoney(it.amount)}</td></tr>`;
+          }).join('')}</tbody>
         </table>` : ''}
       ${deliveryLine(l)}
       <div style="margin-top:10px; text-align:right; display:flex; gap:8px; justify-content:flex-end;">
