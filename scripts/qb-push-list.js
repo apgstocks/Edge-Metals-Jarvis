@@ -44,6 +44,20 @@ const REALLY = process.argv.includes('--really');
 
     const norm = (v) => String(v || '').trim().toUpperCase();
     const inWindow = (d0) => { const d = push.isoDate(d0); return d && d >= since && d <= until; };
+    // ── THE HOLD LIST ──────────────────────────────────────────────────────
+    // Apsara, 2026-09-24, about six rows on Hugo's tab that are money to other
+    // people or sales, not wires to him: "Ignore all these for now. But
+    // remember. i will ask later." They stay in Jarvis — his account has to
+    // tie to his own tab — and the push leaves them alone until the entry is
+    // taken out of qb-settings/qb-hold.json.
+    const HOLD = (() => {
+        try { return JSON.parse(require('fs').readFileSync(require('path').join(__dirname, '..', 'qb-settings', 'qb-hold.json'), 'utf8')).hold || []; }
+        catch { return []; }
+    })();
+    const onHold = (kind, row) => HOLD.find((h) => h.kind === kind
+        && String(h.supplier || '').trim().toUpperCase() === String(row.supplier || row.customer || '').trim().toUpperCase()
+        && push.isoDate(h.date) === push.isoDate(row.date)
+        && Math.abs(Number(h.amount) - Number(row.amount || 0)) < 0.02);
     const bills = require('../helpers/bills');
     const billPayments = require('../helpers/billPayments');
     const pushPayments = require('../helpers/quickbooks/pushPayments');
@@ -65,6 +79,12 @@ const REALLY = process.argv.includes('--really');
             console.log(`QuickBooks ${env.toUpperCase()} · ${REALLY ? 'ENTERING' : 'DRY RUN'} · ${rows.length} ${kind}s`);
             const tally2 = {};
             for (const row of rows.sort((a, b) => String(a.date).localeCompare(String(b.date)))) {
+                const held = onHold(kind, row);
+                if (held) {
+                    tally2['on hold'] = (tally2['on hold'] || 0) + 1;
+                    console.log(`  ${String(row.date).padEnd(11)} ${String(row.supplier || '').slice(0, 16).padEnd(16)} $${row.amount}  ON HOLD — ${held.why}`);
+                    continue;
+                }
                 const r = kind === 'bill'
                     ? await push.pushBill(bills.withTotals(row), snaps, { env, dryRun: !REALLY, reason }).catch((e) => ({ status: 'error: ' + e.message }))
                     : await pushPayments.pushBillPayment(row, snaps, { env, dryRun: !REALLY, reason }).catch((e) => ({ status: 'error: ' + e.message }));

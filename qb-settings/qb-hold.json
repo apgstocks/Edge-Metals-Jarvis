@@ -1,0 +1,11 @@
+{
+  "why": "Rows Apsara has told Jarvis to leave out of QuickBooks until she decides what they are. They stay in Jarvis so a supplier's account still ties to his own tab; the push skips them and says so. Remove an entry here and it goes in on the next push.",
+  "hold": [
+    { "kind": "advance", "supplier": "Hugo", "date": "2026-08-10", "amount": 47240.00, "why": "tab says 'Wired to Patron' — is Patron a separate supplier?", "asked": "2026-09-24" },
+    { "kind": "advance", "supplier": "Hugo", "date": "2026-08-26", "amount": 41285.00, "why": "tab says 'Wire to Patron'", "asked": "2026-09-24" },
+    { "kind": "advance", "supplier": "Hugo", "date": "2026-09-03", "amount": 35000.00, "why": "tab says 'Wired to Patron'", "asked": "2026-09-24" },
+    { "kind": "advance", "supplier": "Hugo", "date": "2026-08-31", "amount": 25000.00, "why": "tab says 'Wired to Highland'", "asked": "2026-09-24" },
+    { "kind": "advance", "supplier": "Hugo", "date": "2026-08-04", "amount": 70191.00, "why": "tab says 'MAZARIEGOS 42,540 @ $1.65' — looks like a sale, not a wire to Hugo", "asked": "2026-09-24" },
+    { "kind": "advance", "supplier": "Hugo", "date": "2026-08-20", "amount": 3196.00, "why": "tab says 'Sold to Ed profit' — looks like a sale", "asked": "2026-09-24" }
+  ]
+}
