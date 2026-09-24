@@ -66,7 +66,9 @@ function readCsv(file) {
     let addedB = 0, skipB = 0, moneyB = 0, skipBmoney = 0, fixed = 0, moneyFix = 0, empty = 0, removed = 0;
     for (const [date, list] of Object.entries(loads).sort()) {
         const items = list.map((l) => ({ description: l.item, gross: num(l.gross), boxes: num(l.tare),
-            weight: num(l.net), price: num(l.price), price_unit: 'lb' }));
+            weight: num(l.net), price: num(l.price), price_unit: 'lb',
+            // the load's own value, for the rows that carry no weight or price
+            amount: num(l.amount) }));
         const total = r2(list.reduce((s, l) => s + num(l.amount), 0));
         // ── THE AMOUNT MUST TRAVEL ON ITS OWN ─────────────────────────────
         // A bill's amount is DERIVED from weight x price (bills.js compute()).
@@ -85,10 +87,27 @@ function readCsv(file) {
             && String(b.date || '').slice(0, 10) === date
             && String(b.created_by || '') === 'supplier tab import'
             && !(Number(bills.withTotals(b).amount) > 0));
-        if (broken) {
-            fixed++; moneyFix = r2(moneyFix + total);
-            console.log(`  ${REALLY ? 'fix  ' : 'would fix'} ${date} $${total} (was $0 — amount had not been carried over)`);
-            if (REALLY) await bills.editBill(broken.id, stated);
+        const linesEmpty = (broken || {}).items && (broken.items || []).some((i) => i.amount === null || i.amount === undefined);
+        if (broken || linesEmpty) {
+            const target = broken || null;
+            if (target) {
+                fixed++; moneyFix = r2(moneyFix + total);
+                console.log(`  ${REALLY ? 'fix  ' : 'would fix'} ${date} $${total} (amount had not been carried over)`);
+                if (REALLY) await bills.editBill(target.id, { ...stated, items });
+                continue;
+            }
+        }
+        // a bill already carrying the right total, but whose LINES have no
+        // figures — QuickBooks needs an amount per line, so put them back
+        const lineless = bills.list().find((b) => String(b.supplier || '').trim().toUpperCase() === supplier.toUpperCase()
+            && String(b.date || '').slice(0, 10) === date
+            && String(b.created_by || '') === 'supplier tab import'
+            && (b.items || []).some((i) => i.amount === null || i.amount === undefined)
+            && Math.abs(r2(bills.withTotals(b).amount) - total) < 0.02);
+        if (lineless) {
+            fixed++;
+            console.log(`  ${REALLY ? 'fix  ' : 'would fix'} ${date} $${total} (lines had no amounts)`);
+            if (REALLY) await bills.editBill(lineless.id, { ...stated, items });
             continue;
         }
         if (haveBill(date, total)) { skipB++; skipBmoney = r2(skipBmoney + total); continue; }

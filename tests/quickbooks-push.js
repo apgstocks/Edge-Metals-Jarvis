@@ -60,5 +60,12 @@ ck('a real invoice number always wins', docNumberFor({ id: 'x1', invoice_no: ' 2
 ck('container but no invoice number is NOT a local delivery -> stays blank (blocked)', docNumberFor({ id: 'x1', container_no: 'HMMU1234567', date: '2026-09-08' }) === '');
 const local = buildBill(B.withTotals({ ...real, id: 'BILL_1_zz9999', invoice_no: '', container_no: '' }), refs);
 ck('a local bill builds with its LOCAL number', local.bill && local.bill.DocNumber === 'LOCAL-260805-ZZ9999', JSON.stringify(local.problems));
+// a whole-load bill: no weight, no price, just a value (Hugo's tab)
+const whole = buildBill(B.withTotals({ id: 'BILL_9_hugo', date: '2026-01-07', supplier: 'Mazariegos', invoice_no: 'HUGO-0107',
+    items: [{ description: 'Auto cast', amount: 19750.6 }], supplier_invoice_amount: 19750.6 }), refs);
+ck('a bill whose line only states an amount still builds', whole.bill && whole.total === 19750.6 && !whole.problems, JSON.stringify(whole.problems));
+ck('...and the line carries no invented Qty or UnitPrice',
+   whole.bill && whole.bill.Line[0].ItemBasedExpenseLineDetail.Qty === undefined && whole.bill.Line[0].Amount === 19750.6, JSON.stringify(whole.bill && whole.bill.Line[0]));
+
 console.log(`\nquickbooks-push: ${pass} passed, ${fail} failed`);
 if (fail) { console.log('FAILED: ' + failures.join(' | ')); process.exit(1); }

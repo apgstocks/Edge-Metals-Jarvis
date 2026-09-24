@@ -33,6 +33,27 @@ const ck = (n, ok, extra) => { if (ok) { pass++; console.log('  PASS ', n); } el
         supplier_invoice_amount: 60873.36, created_by: 'supplier tab import' });
     ck('one date, several grades, one bill', (stated.items || []).length === 2 && Number(bills.withTotals(stated).amount) === 60873.36, bills.withTotals(stated).amount);
 
+    // ── a line that states its own amount ──────────────────────────────────
+    // Hugo's tab gives a value per load and no weight or price anywhere, and
+    // a QuickBooks line needs a figure of its own (2026-09-24: 23 of his 25
+    // bills blocked with 'grade "53 trailer loaded" has no amount').
+    const whole = await bills.addBill({ date: '2026-01-07', supplier: 'Hugo', price_unit: 'lb',
+        items: [{ description: '53 trailer loaded', amount: 19750.6 }],
+        supplier_invoice_amount: 19750.6, created_by: 'supplier tab import' });
+    const wt = bills.withTotals(whole);
+    ck('a line may state its own amount', wt.items[0].amount === 19750.6, wt.items[0]);
+    ck('...and the bill still totals right', Number(wt.amount) === 19750.6, wt.amount);
+    ck('...with no invented weight or price', wt.items[0].weight === null && wt.items[0].price === null, wt.items[0]);
+
+    const both = await bills.addBill({ date: '2026-01-08', supplier: 'Hugo', price_unit: 'lb',
+        items: [{ description: 'Sealed units', weight: 1000, price: 0.5, price_unit: 'lb', amount: 999 }] });
+    ck('weight x price still wins when it can be worked out', bills.withTotals(both).items[0].amount === 500, bills.withTotals(both).items[0]);
+
+    const two = await bills.addBill({ date: '2026-08-24', supplier: 'Hugo', price_unit: 'lb',
+        items: [{ description: 'Al wheels to nur metals', amount: 61504 }, { description: 'sa TO Houston Junk', amount: 23295.75 }],
+        supplier_invoice_amount: 84799.75 });
+    ck('two stated lines on one date add up', Number(bills.withTotals(two).amount) === 84799.75, bills.withTotals(two).amount);
+
     fs.rmSync(dir, { recursive: true, force: true });
     console.log(`\nimport-supplier-tab: ${pass} passed, ${fail} failed`);
     if (fail) { console.log('FAILED: ' + failures.join(' | ')); process.exit(1); }

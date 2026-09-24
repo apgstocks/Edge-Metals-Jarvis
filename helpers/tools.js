@@ -587,7 +587,7 @@ const TOOLS = {
             // Caught only because tests/yard-assistant-knowledge.js pays by
             // bank transfer on a sale, which is what she actually does. My
             // regression, not a fixture that went stale.
-            paid_via: { type: 'string', describe: 'Edge Yard or Edge Metals — which company the money moved through' },
+            paid_via: { type: 'string', describe: 'Edge Yard, Edge Metals or AAA Investment — whose money moved. BofA holds Edge Metals and AAA Investment; Chase is Edge Yard, so a Chase wire needs no answer.' },
             paid_on: { type: 'date', describe: 'defaults to today' },
             note: { type: 'string' },
         },
@@ -628,7 +628,12 @@ const TOOLS = {
             // purchase needs \"Payment via\": Edge Yard or Edge Metals"), which
             // is exactly what the assistant should put to her.
             const { paidViaRequired, resolvePaidVia } = require('./payments');
-            const paidVia = resolvePaidVia(loadKind, mode, p.paid_via);
+            // The bank goes in too since 2026-09-24, so the voice path is
+            // held to the same rule as the form: a wire out of BofA cannot be
+            // filed against Edge Yard. Passing it also means Chase resolves
+            // itself, so "record a wire of $12,000 from Chase" no longer has
+            // to be told whose money it was.
+            const paidVia = resolvePaidVia(loadKind, mode, p.paid_via, bank);
 
             // ── WHICH CASH, AND WHETHER IT WILL HAVE TO BORROW ───────────
             // Worked out HERE, at propose time, so the confirm card states it

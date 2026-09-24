@@ -146,6 +146,14 @@ function cleanItems(input) {
                 ? (weight === null ? null : round2(weight * price))
                 : (mt === null ? null : round2(mt * price));
         }
+        // ── A LINE MAY STATE ITS OWN AMOUNT ──────────────────────────────
+        // Added 2026-09-24. A line's amount is normally weight x price, but a
+        // supplier who deals in whole loads gives neither: Hugo's tab says
+        // "53 trailer loaded — $19,750.60" and nothing else. Same principle
+        // as supplier_invoice_amount on the bill: a figure she states wins
+        // over arithmetic this file cannot do. Only consulted when the
+        // arithmetic came out empty, so nothing that already works changes.
+        if (amount === null) { const stated = num(it.amount); if (stated !== null) amount = round2(stated); }
         out.push({
             id, description, weight, price, price_unit: unit, weight_mt: mt, amount,
             // The ticket, kept on the line so the container's totals can be

@@ -136,7 +136,44 @@ function modesForKind(loadKind) {
 // The two companies pay for each other's things. Which one's account a
 // transfer actually left is a fact the bank field does not carry — "Chase
 // Bank" does not say whose Chase account.
-const PAID_VIA = ['Edge Yard', 'Edge Metals'];
+// ── AAA INVESTMENT IS THE THIRD ONE (2026-09-24) ───────────────────────────
+// Apsara: "In loads pay,why wire ->Bofa ->Showing Edge Yard or Edge Metals?"
+// and then "Bofa has only two accounts.Edge Metals and AAA Investment".
+//
+// She is right, and it was a real defect rather than a wording one. BofA holds
+// Edge Metals and AAA Investment (helpers/pettyCash.js's BANK_OF has said so
+// since 2026-09-21). The picker offered EDGE YARD, which is not a BofA account
+// at all, and did not offer AAA INVESTMENT, which is — so a wire out of
+// BofA / AAA Investment could not be recorded correctly. It had to be filed
+// against one of the other two or not at all.
+const PAID_VIA = ['Edge Yard', 'Edge Metals', 'AAA Investment'];
+
+// ── AND THE ANSWER DEPENDS ON THE BANK ─────────────────────────────────────
+// Which entities can own money leaving a given bank. Derived from petty cash's
+// own BANK_OF rather than restated here, so the two cannot drift: adding an
+// account there changes this without an edit.
+//
+// CHASE IS EDGE YARD'S — her answer, 2026-09-24, asked directly. So choosing
+// Chase has exactly one possible owner and the screen need not ask at all.
+//
+// An unknown or blank bank falls back to ALL of them: this narrows a question,
+// it never blocks a payment. A bank she typed under "Others" must not leave
+// her unable to say whose money it was.
+function paidViaOptionsFor(bank) {
+    const b = String(bank == null ? '' : bank).trim();
+    if (!b) return PAID_VIA.slice();
+    if (/^chase/i.test(b)) return ['Edge Yard'];
+    let accounts = [];
+    try {
+        const petty = require('./pettyCash');
+        accounts = (petty.SOURCES || []).filter((s) => petty.bankOf(s) === b);
+    } catch (e) { accounts = []; }
+    // Petty cash names its BofA buckets exactly as the paying entities are
+    // named, which is why this maps across at all. Anything it does not
+    // recognise is not narrowed.
+    const owners = accounts.filter((a) => PAID_VIA.includes(a));
+    return owners.length ? owners : PAID_VIA.slice();
+}
 
 // ── WHICH COMBINATIONS ASK ─────────────────────────────────────────────────
 // Two directions, two questions, and they are NOT the same question:
@@ -173,7 +210,7 @@ function paidViaLabel(loadKind) {
 // Returns '' when this combination does not ask. Throws when it does and she
 // has not answered — her choice, over recording it as "Not recorded": a wire
 // with no company against it cannot be filed.
-function resolvePaidVia(loadKind, mode, value) {
+function resolvePaidVia(loadKind, mode, value, bank) {
     const given = PAID_VIA.find((v) => v.toLowerCase() === String(value == null ? '' : value).trim().toLowerCase());
     if (!paidViaRequired(loadKind, mode)) {
         // Not asked for — but if a caller sent one anyway it is kept rather
@@ -181,9 +218,28 @@ function resolvePaidVia(loadKind, mode, value) {
         // vanish because the form did not have a box for it.
         return given || '';
     }
+    // ── NARROWED BY THE BANK (2026-09-24) ──────────────────────────────────
+    // A wire out of BofA can only be Edge Metals or AAA Investment; one out of
+    // Chase can only be Edge Yard. `bank` is optional so every existing caller
+    // keeps working unchanged — without it the old, wider list applies, which
+    // is what the voice path passed for a day before this argument existed.
+    // CLAUDE.md: a new required field is a promise every caller can keep, and
+    // this one cannot make that promise, so it is not required.
+    const allowed = paidViaOptionsFor(bank);
+
+    // ONE POSSIBLE OWNER IS NOT A QUESTION. Chase is Edge Yard's, so a Chase
+    // wire resolves itself rather than refusing for an answer that could only
+    // ever be one thing.
+    if (!given && allowed.length === 1) return allowed[0];
+
     if (!given) {
         const where = String(loadKind || '').trim() === 'sale' ? 'a yard sale' : 'a yard purchase';
-        throw new Error(`a ${mode} on ${where} needs "${paidViaLabel(loadKind)}": ${PAID_VIA.join(' or ')}`);
+        throw new Error(`a ${mode} on ${where} needs "${paidViaLabel(loadKind)}": ${allowed.join(' or ')}`);
+    }
+    // A stated answer the bank cannot support is a contradiction, and filing
+    // it would put "Edge Yard" against a BofA account Edge Yard does not have.
+    if (!allowed.includes(given)) {
+        throw new Error(`${given} has no account at ${bank} — "${paidViaLabel(loadKind)}" must be ${allowed.join(' or ')}`);
     }
     return given;
 }
@@ -317,7 +373,7 @@ async function addPayment(input = {}) {
     // construction, and old payments written before today simply carry
     // nothing — see helpers/spendReport.js, which buckets those visibly
     // rather than pretending they are Edge Yard.
-    const paidVia = resolvePaidVia(loadKind, mode, input.paid_via);
+    const paidVia = resolvePaidVia(loadKind, mode, input.paid_via, bank);
 
     // ── CASH COMES OUT OF THE PETTY CASH BOX ──────────────────────────────
     // Per Apsara 2026-09-02: "If i click pay in load and select cash, the
