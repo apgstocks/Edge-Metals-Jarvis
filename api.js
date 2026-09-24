@@ -8336,6 +8336,14 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
     // padlock open AND an admin session, because it can reach the live books.
     require('./helpers/quickbooks/routes').mount(app, cfg);
 
+    // ── Bank details and their documents (Documents → Bank) ───────────────
+    // Apsara, 2026-09-24: "Create a Bank tab under documents in webiste" and
+    // "also have a option to upload under Bank. Keep storing the documents".
+    // The numbers live in qb-settings/bank-accounts.json (git); the scans live
+    // in DATA_DIR/bank-docs/<account>/ (not git). helpers/bankDocs.js holds
+    // the four routes so this file keeps its shape.
+    require('./helpers/bankDocs').mount(app, cfg);
+
     // Old standalone Contact Quotes page — MERGED into /quote-requests
     // 2026-08-16 per Apsara ("Contact Quotes and Quote Requests... both are
     // same"). dashboard/contact-quote-requests.html still exists on disk

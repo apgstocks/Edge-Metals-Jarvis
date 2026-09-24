@@ -68,16 +68,41 @@ function normalizeSellerPhone(raw) {
 // numbers; the client sends its own live-computed net/amount too, but they
 // get recomputed here from gross/tare/price rather than trusted as-is, same
 // as it always has been for the whole-load version of this math.
+// The same 2204.62 the invoice side uses (helpers/invoicePdf.js,
+// dashboard/documents.html). One number, written down once per file rather
+// than imported, because a require cycle here would be worse than a repeated
+// constant — but if it ever changes it changes in all of them.
+const LB_PER_MT = 2204.62;
+
 function computeItem(it) {
     const gross = toNum(it.gross_weight);
     const tare  = toNum(it.tare_weight);
     const net   = (gross != null && tare != null) ? round2(gross - tare) : null;
     const price = toNum(it.price);
-    const amount = (net != null && price != null) ? round2(net * price) : null;
+    // ── PRICED PER POUND OR PER TONNE, ROW BY ROW (2026-09-24) ──────────────
+    // Apsara: "IN EDGE YARD LOAD APP,IT SHOULD HAVE A PROVISION TO CALCULATE
+    // AMOUNT BY USING MT OR LBS ROWISE.BY DEFAULT LBS SHOULD BE ENABLED".
+    //
+    // `unit` was already being STORED here and ignored by the arithmetic,
+    // which is the dangerous half of the pair: this function is the source of
+    // truth — the client's own figures are recomputed here rather than
+    // trusted — so a row the screen priced per tonne would have been
+    // overwritten with the per-pound answer on save, silently, and the ticket
+    // would print a number nobody chose. That is the shape of the invoice bug
+    // that billed 260831_SU_26EM05 at $13.09 instead of $28,860.80.
+    //
+    // THE NET IS NOT CONVERTED. It is what the weighbridge said, in pounds,
+    // and it goes on the ticket the seller signs. Only the QUANTITY the price
+    // multiplies changes, so a pound row is arithmetically untouched — 'lb'
+    // and a missing unit both take the same branch, which is what makes every
+    // load already on file safe.
+    const perMt = String(it.unit || '').trim().toLowerCase() === 'mt';
+    const qty = (net != null && perMt) ? net / LB_PER_MT : net;
+    const amount = (qty != null && price != null) ? round2(qty * price) : null;
     return {
         description: it.description || '',
         gross_weight: gross, tare_weight: tare, net_weight: net,
-        price, unit: it.unit || '', amount,
+        price, unit: perMt ? 'mt' : (it.unit || ''), amount,
         // Carried forward from the incoming item if present — matters for
         // EDITS, where the client sends back photo links an item already
         // has so they aren't lost just because that item wasn't

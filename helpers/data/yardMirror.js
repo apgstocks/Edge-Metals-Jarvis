@@ -61,7 +61,15 @@ function itemRows(listFn, idKey, whoKey, whoField) {
                 [idKey]: row.id, date: iso(row.date), [whoKey]: row[whoField] || null,
                 grade: it.description || it.item || null,
                 net_lb: n2(it.net_weight !== undefined ? it.net_weight : it.weight),
-                price: n2(it.price), amount: n2(it.amount),
+                // price_unit mirrors alongside price because since 2026-09-24
+                // a purchase row can be priced per MT while its weight stays
+                // in pounds. The catalog used to tell the model price was
+                // "price per pound paid" flat out; ask it "what did we pay per
+                // pound for copper" against an MT row and it would answer 800
+                // with total confidence. A column it can see is the only
+                // honest fix — the model cannot infer a unit that isn't there.
+                price: n2(it.price), price_unit: (String(it.unit || '').trim().toLowerCase() === 'mt' ? 'mt' : 'lb'),
+                amount: n2(it.amount),
             });
         }
     }

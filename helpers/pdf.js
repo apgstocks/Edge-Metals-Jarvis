@@ -1193,7 +1193,18 @@ function drawReceiptContent(doc, load, contentWidth, opts) {
     items.forEach((it, i) => {
         line(it.description || `Item ${i + 1}`, { size: 8.5, bold: true, gap: 0.5 });
         line(`Gross ${it.gross_weight ?? '—'} ${unit}  ·  Tare ${it.tare_weight ?? '—'} ${unit}`, { size: 7.5, color: MUTED, gap: 0.5 });
-        line(`Net ${it.net_weight ?? '—'} ${unit}  ·  Price $${fmtRate(it.price) ?? '—'}  ·  Amount $${fmtAmount(it.amount) ?? '—'}`, { size: 7.5, gap: 1.5 });
+        // ── THE PRICE SAYS WHAT IT IS PER ───────────────────────────────
+        // Rows can be priced per MT since 2026-09-24 while the weights stay
+        // in pounds. Without this the line would read "Net 30,000 lb ·
+        // Price $800 · Amount $10,886.23" — three true figures arranged
+        // into a lie, on the one piece of paper the seller signs and takes
+        // away. If he ever multiplies it out he gets $24,000,000 and an
+        // argument nobody in the office can win, because the document is
+        // what he has.
+        // `unit` (the LOAD's weight unit) still governs the weights; this
+        // only qualifies the rate, and only when it differs.
+        const rateUnit = String(it.unit || '').trim().toLowerCase() === 'mt' ? 'MT' : unit;
+        line(`Net ${it.net_weight ?? '—'} ${unit}  ·  Price $${fmtRate(it.price) ?? '—'}/${rateUnit}  ·  Amount $${fmtAmount(it.amount) ?? '—'}`, { size: 7.5, gap: 1.5 });
     });
     divider();
 

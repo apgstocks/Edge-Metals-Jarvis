@@ -213,9 +213,20 @@ async function ask(question, opts = {}) {
     screenParts.push(source);
     const next = nextStep(question, tables, rows);
     if (next) screenParts.push(next);
+    // ── AND WHAT SHE MIGHT ASK NEXT ──────────────────────────────────────
+    // Apsara, 2026-09-24: "follow up questions need to be thrown for
+    // business". Built from the rows and columns this query returned rather
+    // than from her wording — see helpers/data/followUps.js for why, and for
+    // the reason they are offers rather than staged actions.
+    const follow = require('./followUps').followUps(question, { tables, rows, columns, shape });
+    // Carried as TEXT as well as structurally. /api/bot/command captures
+    // replies as strings only, and threading a new field through the whole
+    // bot pipeline to draw three chips is a wide change for a small gain —
+    // the command centre turns any line starting with "• " back into a chip.
+    if (follow.length) screenParts.push(['You could ask:', ...follow.map((f) => `• ${f}`)].join('\n'));
 
     return { ok: true, spoken, screen: screenParts.join('\n\n'), sql: plan.sql, tables, rows, columns,
-        shape, next, repaired, book: b.key, engine: info.engine, counts: info.counts };
+        shape, next, follow_ups: follow, repaired, book: b.key, engine: info.engine, counts: info.counts };
 }
 
 module.exports = { ask, prompt, bind, fmt, table, nextStep, EXAMPLES };

@@ -3428,7 +3428,28 @@ function fillBotFromVoice(text) {
 function renderBotLog() {
   const el = $('botLogEl');
   if (!botLog.length) { el.innerHTML = `<div style="margin:auto; text-align:center; font-family:var(--font-mono); font-size:12px; color:var(--steel-500); line-height:2;">Type a command — or ask a question.<br>Try <span style="color:var(--leaf-400);">urgent</span>, <span style="color:var(--leaf-400);">how much do we owe Inesh</span>, or <span style="color:var(--leaf-400);">what did Zimex say about the HBL</span>.</div>`; return; }
-  el.innerHTML = botLog.map(ln => `<div style="display:flex; gap:10px;"><span style="font-family:var(--font-mono); font-size:12.5px; color:${ln.color}; flex-shrink:0;">${ln.prompt}</span><span style="font-family:var(--font-mono); font-size:12.5px; line-height:1.6; color:#e5e9ec; white-space:pre-wrap;">${esc(ln.text)}</span></div>`).join('');
+  // ── A FOLLOW-UP IS A CHIP, NOT A LINE TO RETYPE ──────────────────────
+  // Apsara, 2026-09-24: "follow up questions need to be thrown for business".
+  // helpers/data/followUps.js decides WHICH questions; this only draws them.
+  // Any line the answer sends as "• …" becomes a button that asks it.
+  //
+  // An OFFER, never a prompt: ignoring the chips costs nothing and nothing is
+  // staged behind them. That was the concern recorded on the old nextStep —
+  // an offer that opens a pending is a question she has to dismiss.
+  const chip = (q) => `<button class="bot-chip" data-ask="${esc(q)}" style="font-family:var(--font-mono); font-size:11.5px; padding:5px 10px; margin:3px 6px 0 0; background:var(--steel-900); border:1px solid var(--steel-700); border-radius:999px; color:var(--steel-200); cursor:pointer;">${esc(q)}</button>`;
+  const body = (t) => {
+    const lines = String(t).split('\n');
+    const asks = lines.filter((l) => l.trim().startsWith('• ')).map((l) => l.trim().slice(2).trim());
+    if (!asks.length) return `<span style="font-family:var(--font-mono); font-size:12.5px; line-height:1.6; color:#e5e9ec; white-space:pre-wrap;">${esc(t)}</span>`;
+    const rest = lines.filter((l) => !l.trim().startsWith('• ')).join('\n');
+    return `<span style="font-family:var(--font-mono); font-size:12.5px; line-height:1.6; color:#e5e9ec; white-space:pre-wrap;">${esc(rest)}</span><div style="margin-top:2px;">${asks.map(chip).join('')}</div>`;
+  };
+  el.innerHTML = botLog.map(ln => `<div style="display:flex; gap:10px;"><span style="font-family:var(--font-mono); font-size:12.5px; color:${ln.color}; flex-shrink:0;">${ln.prompt}</span><span style="flex:1; min-width:0;">${body(ln.text)}</span></div>`).join('');
+  el.querySelectorAll('.bot-chip').forEach((b) => b.addEventListener('click', () => {
+    $('botInput').value = b.dataset.ask;
+    autoGrowBotInput();
+    sendBotCommand();
+  }));
   el.scrollTop = el.scrollHeight;
 }
 // Sizes the command box to its content. Called on every keystroke, and again
@@ -4064,6 +4085,8 @@ async function refreshCustomItemTypes() {
 // groupItemsByDescription normalises: "Battery" and "battery " are the
 // same item type to a yard, and a price typed against one should apply to
 // the other.
+// Returns { price, unit } now, not a bare price — see the comment on
+// applyPriceIfChanged below for why the unit has to travel with it.
 function lastPriceForDescription(desc) {
   const key = String(desc || '').trim().toLowerCase();
   if (!key) return null;
@@ -4071,7 +4094,7 @@ function lastPriceForDescription(desc) {
     for (const it of (load.items || [])) {
       if (String(it.description || '').trim().toLowerCase() === key
           && it.price != null && it.price !== '') {
-        return it.price;
+        return { price: it.price, unit: String(it.unit || '').trim().toLowerCase() === 'mt' ? 'mt' : 'lb' };
       }
     }
   }
@@ -4199,7 +4222,17 @@ function recomputeRowTotals(row) {
     tareEl.style.borderColor  = badTare  ? 'var(--status-danger)' : '';
   }
   const price = parseFloat(row.querySelector('.ld-item-price').value);
-  const amount = (net != null && isFinite(price)) ? Math.round(net * price * 100) / 100 : null;
+  // ── THE PRICE IS PER POUND, OR PER TONNE ────────────────────────────────
+  // THE NET IS NOT CONVERTED. It stays in pounds, as the weighbridge read
+  // it and as the seller's ticket prints it. Only the QUANTITY the price
+  // multiplies changes — which is why 'lb' and a missing unit take the same
+  // branch, and every row anyone has ever entered computes as it always did.
+  // Mirrors computeItem in helpers/loads.js, which is the source of truth and
+  // recomputes this on save; if the two ever disagree the server wins and the
+  // figure on screen was a lie. Same constant, deliberately.
+  const perMt = (row.querySelector('.ld-item-unit')?.value || 'lb') === 'mt';
+  const qty = (net != null && perMt) ? net / 2204.62 : net;
+  const amount = (qty != null && isFinite(price)) ? Math.round(qty * price * 100) / 100 : null;
   row.querySelector('.ld-item-amount').value = fmtAmount(amount);
   // Totals refresh here rather than at each call site. recomputeRowTotals is
   // called from typing, from a scanner read filling a weight in, and from a
@@ -4299,7 +4332,27 @@ function renderItemRows() {
         <div class="ld-item-cap-inputs"><input class="ld-item-tare" type="number" step="any" placeholder="0" value="${it.tare_weight ?? ''}"><button type="button" class="btn btn-photo-item" data-role="tare" title="${it.tare_photo_link ? 'Photo on file — click to replace' : 'Add tare weight photo'}">📷${it.tare_photo_link ? '✓' : ''}</button></div>
       </div>
       <div class="ld-item-net-wrap"><span class="ld-mobile-label">Net</span><input class="ld-item-net" type="number" step="any" disabled title="Net weight" value="${net != null ? net : ''}"></div>
-      <div class="ld-item-price-wrap"><span class="ld-mobile-label">Price</span><input class="ld-item-price" type="number" step="any" placeholder="0" title="Price" value="${it.price ?? ''}"></div>
+      <!-- Price, and the unit that price is PER. Apsara 2026-09-24: "in edge
+           yard load app, it should have a provision to calculate amount by
+           using MT or lbs rowise. By default lbs should be enabled" — so the
+           select sits inside the price cell rather than taking a column of
+           its own, because a rate and its unit are one fact and splitting
+           them across the row would let someone read the wrong pair. It also
+           means the phone grid (net|price) is untouched: this form gets used
+           standing at a scale and its layout is not something to disturb for
+           a feature that is only occasionally needed.
+           DEFAULT IS lb. An item already on file with no unit — which is
+           every load saved before today — renders as lb and computes exactly
+           as it always did. -->
+      <div class="ld-item-price-wrap"><span class="ld-mobile-label">Price</span>
+        <div class="ld-item-price-inputs">
+          <input class="ld-item-price" type="number" step="any" placeholder="0" title="Price" value="${it.price ?? ''}">
+          <select class="ld-item-unit" title="Is this price per pound or per tonne?">
+            <option value="lb"${String(it.unit || '').trim().toLowerCase() === 'mt' ? '' : ' selected'}>/lb</option>
+            <option value="mt"${String(it.unit || '').trim().toLowerCase() === 'mt' ? ' selected' : ''}>/MT</option>
+          </select>
+        </div>
+      </div>
       <div class="ld-item-amount-wrap"><span class="ld-mobile-label">Amount</span><input class="ld-item-amount" type="text" inputmode="decimal" disabled title="Amount" value="${amount != null ? fmtAmount(amount) : ''}"></div>
       <div class="ld-item-actions">
         <button type="button" class="btn btn-insert-item" data-row="${i}" title="Insert a blank item below">+</button>
@@ -4344,6 +4397,14 @@ function renderItemRows() {
       recomputeRowTotals(row);
       syncItemsFromDom();
     }));
+    // The lb/MT select needs its own line: the selector above is `input`, and
+    // a <select> is not one. Without this the amount would sit at the old
+    // unit's figure until the next keystroke anywhere in the row — a wrong
+    // number on screen that looks settled, which is the worst kind.
+    row.querySelectorAll('select.ld-item-unit').forEach(sel => sel.addEventListener('change', () => {
+      recomputeRowTotals(row);
+      syncItemsFromDom();
+    }));
     // Photo button now opens a small "Take Photo / Choose File" menu instead
     // of clicking straight into one generic file input — see showCaptureMenu.
     row.querySelectorAll('.btn-photo-item').forEach(btn => btn.addEventListener('click', () => {
@@ -4382,7 +4443,16 @@ function renderItemRows() {
       const priceInput = row.querySelector('.ld-item-price');
       if (!priceInput) return;
       const last = now ? lastPriceForDescription(now) : null;
-      priceInput.value = last != null ? fmtRate(last) : '';
+      priceInput.value = last ? fmtRate(last.price) : '';
+      // THE UNIT TRAVELS WITH THE PRICE, or this recall becomes a trap.
+      // Rows are priced per lb or per MT since 2026-09-24. If the last
+      // Copper row was $800/MT and this one is left on the lb default, an
+      // $800 PER POUND rate lands in the box without anyone typing it — on
+      // a 30,000 lb row that is a twenty-four-million-dollar load and a
+      // signed ticket to match. Recalling one half of a pair is worse than
+      // recalling neither.
+      const unitSel = row.querySelector('.ld-item-unit');
+      if (unitSel) unitSel.value = last ? last.unit : 'lb';
       recomputeRowTotals(row);
     };
 
@@ -4506,7 +4576,14 @@ function syncItemsFromDom() {
       gross_weight: row.querySelector('.ld-item-gross').value,
       tare_weight : row.querySelector('.ld-item-tare').value,
       price: row.querySelector('.ld-item-price').value,
-      unit : prev.unit || '', // no per-item Unit field anymore — see renderItemRows; just carries whatever an edited old load already had
+      // A per-item unit again, 2026-09-24 — but not the one that used to be
+      // here. The old .ld-item-unit was a FREE-TEXT box labelled "Unit" that
+      // nothing computed from; she removed it in 1ca3d5e making the row fit a
+      // phone, and removing an unread label was right. This one is a
+      // two-option select that the arithmetic actually reads, on both sides
+      // of the wire. It stays out of the phone grid by living inside the
+      // price cell, so that layout is not disturbed a second time.
+      unit : row.querySelector('.ld-item-unit')?.value || 'lb',
       grossPhoto: prev.grossPhoto || null,
       tarePhoto : prev.tarePhoto  || null,
       gross_photo_link: prev.gross_photo_link || null,
@@ -11470,7 +11547,12 @@ function renderLoads(loads) {
          layout — with 8 columns per row there's no good way to keep this a
          single line AND fit a phone screen, so horizontal scroll (like a
          spreadsheet) beats forcing it back into multiple lines on mobile. */
-      .ld-item-header, .item-row { display:grid; grid-template-columns:0.9fr 120px 120px 92px 70px 100px 62px; gap:6px; align-items:center; min-width:620px; }
+      /* Price column went 70px -> 124px on 2026-09-24 to seat the /lb ÷ /MT
+         select beside the rate. min-width follows it, 620 -> 674. */
+      .ld-item-header, .item-row { display:grid; grid-template-columns:0.9fr 120px 120px 92px 124px 100px 62px; gap:6px; align-items:center; min-width:674px; }
+      .ld-item-price-inputs { display:flex; gap:4px; align-items:center; min-width:0; }
+      .ld-item-price-inputs .ld-item-price { flex:1 1 auto; min-width:0; }
+      .ld-item-price-inputs .ld-item-unit { flex:0 0 auto; width:56px; padding:6px 2px; font-family:var(--font-mono); font-size:11px; }
       .ld-item-header { font-family:var(--font-mono); font-size:9.5px; font-weight:600; letter-spacing:.06em; text-transform:uppercase; color:var(--text-muted); padding:0 2px 6px; }
       .item-row { margin-bottom:5px; }
       /* Payment badge. Shown only once something has been paid — see
@@ -11491,8 +11573,8 @@ function renderLoads(loads) {
          column it sums. A total in a different layout from the numbers it
          adds up is a total nobody checks. */
       .ld-item-totals:empty { display:none; }
-      .ld-item-totals { display:grid; grid-template-columns:0.9fr 120px 120px 92px 70px 100px 62px; gap:6px;
-        align-items:center; min-width:620px; margin-top:8px; padding-top:9px;
+      .ld-item-totals { display:grid; grid-template-columns:0.9fr 120px 120px 92px 124px 100px 62px; gap:6px;
+        align-items:center; min-width:674px; margin-top:8px; padding-top:9px;
         border-top:1px solid var(--border-default); font-family:var(--font-mono); font-size:12px; }
       .ld-item-totals .tl-label { font-size:10px; font-weight:700; letter-spacing:.1em; text-transform:uppercase; color:var(--text-muted); }
       .ld-item-totals .tl-num { text-align:right; padding-right:10px; color:var(--text-muted); }

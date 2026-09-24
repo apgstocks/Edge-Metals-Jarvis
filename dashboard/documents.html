@@ -163,6 +163,10 @@ body[data-theme="light"] {
          travels with the same container. -->
     <button class="subtab-btn" data-subtab="packing">Packing list</button>
     <button class="subtab-btn" data-subtab="verification">Verification</button>
+    <!-- Apsara, 2026-09-24: "Create a Bank tab under documents in webiste",
+         after sending a raw Chase printout to be redesigned. What a customer
+         is told to wire to, per company, and a clean sheet to print. -->
+    <button class="subtab-btn" data-subtab="bank">Bank</button>
   </div>
 
   <!-- ── Bill of Lading ───────────────────────────────────────────────────
@@ -181,6 +185,21 @@ body[data-theme="light"] {
        Driver is a plain box ("Type it each time"): the truckers roster holds
        companies, not people, and the driver changes load to load.
   ──────────────────────────────────────────────────────────────────────── -->
+  <!-- ── Bank ──────────────────────────────────────────────────────────────
+       Two companies, two banks — Edge Metals at Bank of America, Edge Trading
+       at Chase — and they must never be handed out interchangeably. The
+       numbers live in qb-settings/bank-accounts.json, read-only from here on
+       purpose: this is what customers wire money to. "Print wire
+       instructions" produces the one-page sheet that replaces sending a
+       screenshot of the bank's own website. -->
+  <div id="panelBank" class="hidden">
+    <div style="font-size:13px; color:var(--text-muted); margin-bottom:16px;">
+      What to give a customer so the money lands in the right account. Click any value to copy it.
+    </div>
+    <div id="bankCards" style="display:grid; gap:16px; grid-template-columns:repeat(auto-fit,minmax(340px,1fr));"></div>
+    <div id="bankNote" style="margin-top:16px; font-size:12px; color:var(--text-faint); line-height:1.6;"></div>
+  </div>
+
   <div id="panelBol" class="hidden">
     <div class="card" style="padding:20px 22px; margin-bottom:16px;">
 
@@ -1255,6 +1274,7 @@ function setSubtab(name) {
   $('panelBol').classList.toggle('hidden', name !== 'bol');
   $('panelPacking').classList.toggle('hidden', name !== 'packing');
   $('panelVerification').classList.toggle('hidden', name !== 'verification');
+  $('panelBank').classList.toggle('hidden', name !== 'bank');
   // Both consignee typeaheads read `addressBook`, so it gets a refresh on
   // entry to either — that is what stops a contact added in the Address Book
   // page (a separate page, in another tab) from being invisible here until
@@ -1268,6 +1288,7 @@ function setSubtab(name) {
   if (name === 'proforma') { loadSavedProformas(); resetWizard(); }
   if (name === 'bol') { bolInit(); loadSavedBols(); }
   if (name === 'packing') { pkInit(); loadSavedPackingLists(); }
+  if (name === 'bank') bankInit();
 }
 document.querySelectorAll('.subtab-btn').forEach((b) => b.addEventListener('click', () => setSubtab(b.dataset.subtab)));
 
@@ -6461,6 +6482,145 @@ setSubtab('proforma');
     }
   } catch (e) { console.warn('[VOICE] deep link failed:', e.message); }
 })();
+
+// ── Bank tab ──────────────────────────────────────────────────────────────
+// Read-only. The accounts come from qb-settings/bank-accounts.json via
+// /api/bank-accounts, so changing an account number is one edit in one file
+// that travels in git — not a search through saved PDFs and old emails.
+let bankAccounts = null;
+async function bankInit() {
+  if (bankAccounts) return;
+  try {
+    const r = await fetch('/api/bank-accounts');
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.error || 'could not read the accounts');
+    bankAccounts = j.accounts || [];
+    bankRender();
+  } catch (e) {
+    document.getElementById('bankCards').innerHTML = '<div style="color:var(--status-danger); font-size:13px;">' + e.message + '</div>';
+  }
+}
+function bankCopy(el, value) {
+  navigator.clipboard.writeText(value).then(() => {
+    const was = el.textContent;
+    el.textContent = 'copied';
+    setTimeout(() => { el.textContent = was; }, 900);
+  }).catch(() => {});
+}
+function bankRow(label, value, warnIfMissing) {
+  const k = '<span style="font-family:var(--font-mono); font-size:10.5px; letter-spacing:.08em; text-transform:uppercase; color:var(--text-faint);">' + label + '</span>';
+  const wrap = (inner) => '<div style="display:flex; justify-content:space-between; gap:12px; padding:5px 0; border-bottom:1px solid var(--border-subtle);">' + k + inner + '</div>';
+  if (!value) return warnIfMissing ? wrap('<span style="font-size:12.5px; color:var(--status-warning);">not set</span>') : '';
+  return wrap('<button type="button" class="bank-copy" data-copy="' + String(value).replace(/"/g, '&quot;') + '"'
+    + ' style="background:none; border:none; padding:0; color:var(--text-strong); font-family:var(--font-mono); font-size:12.5px; cursor:pointer; text-align:right;">' + value + '</button>');
+}
+function bankRender() {
+  document.getElementById('bankCards').innerHTML = bankAccounts.map((a) => (
+    '<div style="border:1px solid var(--border-default); border-radius:var(--radius-md); padding:16px; background:var(--surface-card);">'
+    + '<div style="display:flex; justify-content:space-between; align-items:baseline; gap:10px; margin-bottom:4px;">'
+    + '<div style="font-family:var(--font-display); font-size:17px; font-weight:900; color:var(--text-strong);">' + a.company + '</div>'
+    + '<div style="font-family:var(--font-mono); font-size:10.5px; color:var(--text-faint);">' + a.bank + '</div></div>'
+    + '<div style="font-size:12px; color:' + (a.address ? 'var(--text-muted)' : 'var(--status-warning)') + '; margin-bottom:12px;">'
+    + (a.address || 'address not set') + '</div>'
+    + bankRow('Account number', a.accountNumber)
+    + bankRow('Wire routing', a.wireRouting)
+    + bankRow('ACH / direct deposit', a.achRouting)
+    + bankRow('SWIFT', a.swift)
+    + bankRow('Fed tax ID', a.taxId, true)
+    + bankRow('Bank address', a.bankAddress)
+    + '<button type="button" class="btn btn-secondary bank-print" data-id="' + a.id + '" style="margin-top:14px; width:100%; padding:8px; font-size:11px;">Print wire instructions</button>'
+    // ── documents ─────────────────────────────────────────────────────
+    // Apsara, 2026-09-24: "Left side Bank name. Right side button. click it
+    // to download." Voided cheques, bank letters, W-9s — whatever a customer
+    // or an auditor asks for, kept with the account they belong to.
+    + '<div style="margin-top:16px; border-top:1px solid var(--border-subtle); padding-top:12px;">'
+    + '<div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">'
+    + '<span style="font-family:var(--font-mono); font-size:10px; letter-spacing:.1em; text-transform:uppercase; color:var(--text-faint);">Documents</span>'
+    + '<label class="btn btn-secondary" style="padding:4px 10px; font-size:10px; cursor:pointer; margin:0;">Upload'
+    + '<input type="file" class="bank-upload" data-id="' + a.id + '" style="display:none;"></label></div>'
+    + (a.documents && a.documents.length
+        ? a.documents.map((d) => '<div style="display:flex; justify-content:space-between; align-items:center; gap:10px; padding:6px 0; border-bottom:1px solid var(--border-subtle);">'
+            + '<span style="font-size:12px; color:var(--text-body); overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" title="' + d.name + '">' + d.name
+            + '<span style="color:var(--text-faint); font-family:var(--font-mono); font-size:10px;"> · ' + Math.max(1, Math.round(d.bytes / 1024)) + ' KB</span></span>'
+            + '<a class="btn btn-secondary" style="padding:3px 10px; font-size:10px; white-space:nowrap;" href="/api/bank-accounts/' + a.id + '/docs/' + encodeURIComponent(d.name) + '">Download</a></div>').join('')
+        : '<div style="font-size:12px; color:var(--text-faint);">Nothing stored yet.</div>')
+    + '</div>'
+    + '</div>'
+  )).join('');
+  document.getElementById('bankNote').innerHTML =
+    'At Chase the ACH and wire routing numbers are different — a customer who uses the ACH number for a wire will have it returned. Both are on the printed sheet, labelled.'
+    + '<br>To change any of this, edit <span style="font-family:var(--font-mono);">qb-settings/bank-accounts.json</span> and deploy. It is deliberately not editable from this screen.';
+  document.querySelectorAll('.bank-copy').forEach((b) => b.addEventListener('click', () => bankCopy(b, b.dataset.copy)));
+  document.querySelectorAll('.bank-print').forEach((b) => b.addEventListener('click', () => bankPrint(b.dataset.id)));
+  document.querySelectorAll('.bank-upload').forEach((i) => i.addEventListener('change', () => bankUpload(i)));
+}
+// Upload: base64 in JSON, the same shape the other document routes here use.
+// Admin only on the server — a staff session gets a plain 403 and is told so
+// rather than watching a spinner finish and nothing appear.
+async function bankUpload(input) {
+  const file = input.files && input.files[0];
+  if (!file) return;
+  const id = input.dataset.id;
+  const label = input.parentElement;
+  const was = label.childNodes[0].nodeValue;
+  label.childNodes[0].nodeValue = 'Uploading...';
+  try {
+    if (file.size > 20 * 1024 * 1024) throw new Error('that file is over 20MB');
+    const base64 = await new Promise((resolve, reject) => {
+      const fr = new FileReader();
+      fr.onload = () => resolve(String(fr.result).split(',')[1]);
+      fr.onerror = () => reject(new Error('could not read the file'));
+      fr.readAsDataURL(file);
+    });
+    const r = await fetch('/api/bank-accounts/' + id + '/docs', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ filename: file.name, base64 }),
+    });
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.error || 'upload failed');
+    bankAccounts = null;
+    await bankInit();
+  } catch (e) {
+    alert(e.message);
+  } finally {
+    label.childNodes[0].nodeValue = was;
+    input.value = '';
+  }
+}
+
+// The sheet a customer actually receives — plain, printable, no bank screenshots.
+function bankPrint(id) {
+  const a = bankAccounts.find((x) => x.id === id);
+  if (!a) return;
+  const line = (k, v) => v ? '<tr><td class="k">' + k + '</td><td class="v">' + v + '</td></tr>' : '';
+  const w = window.open('', '_blank', 'width=820,height=1000');
+  w.document.write('<!DOCTYPE html><html><head><meta charset="utf-8"><title>' + a.company + ' - wire instructions</title><style>'
+    + 'body{font-family:Georgia,"Times New Roman",serif; color:#111; margin:56px auto; max-width:620px; line-height:1.55;}'
+    + 'h1{font-size:21px; margin:0 0 2px;} .addr{font-size:12.5px; color:#444; margin-bottom:26px;}'
+    + 'h2{font-size:12px; letter-spacing:.16em; text-transform:uppercase; color:#666; border-bottom:1px solid #ddd; padding-bottom:6px; margin:0 0 10px;}'
+    + 'table{width:100%; border-collapse:collapse;} td{padding:7px 0; vertical-align:top; border-bottom:1px solid #eee;}'
+    + '.k{color:#555; font-size:12.5px; width:46%;} .v{font-family:"Courier New",monospace; font-size:13.5px; text-align:right;}'
+    + '.warn{margin-top:22px; font-size:12px; color:#8a5a00; background:#fff6e5; border:1px solid #f0dcb0; padding:10px 12px; border-radius:4px;}'
+    + '.foot{margin-top:30px; font-size:11px; color:#888;}'
+    + '@media print{body{margin:28px;} .warn{background:none;}}</style></head><body>'
+    + '<h1>' + a.company + '</h1><div class="addr">' + (a.address || '') + '</div>'
+    + '<h2>Wire transfer instructions</h2><table>'
+    + line('Beneficiary name', a.company)
+    + line('Beneficiary address', a.address)
+    + line('Beneficiary account number', a.accountNumber)
+    + line('Bank', a.bank)
+    + line('Bank address', a.bankAddress)
+    + line('Wire routing number (ABA)', a.wireRouting)
+    + line('SWIFT / BIC (international)', a.swift)
+    + line('Fed tax identification number', a.taxId)
+    + '</table>'
+    + (a.achRouting ? '<div class="warn"><b>For ACH and direct deposit only:</b> routing ' + a.achRouting
+        + '. Do not use it for a wire - a wire must use ' + a.wireRouting + ' or it will be returned.</div>' : '')
+    + '<div class="foot">Please send remittance advice with the container number so the payment can be applied to the right invoice.</div>'
+    + '</body></html>');
+  w.document.close();
+  w.focus();
+}
 </script>
 </body>
 </html>

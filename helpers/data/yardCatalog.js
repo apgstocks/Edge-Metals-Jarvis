@@ -30,7 +30,10 @@ const TABLES = [
     {
         name: 'yard_load_items',
         what: 'One row per GRADE on a purchased load — use this for questions about grades or prices per grade.',
-        columns: { load_id: 'joins yard_loads.load_id', date: 'load date', seller: 'seller', grade: 'the grade, e.g. Copper, Brass', net_lb: 'pounds of this grade', price: 'price per pound paid', amount: 'dollars for this grade' },
+        columns: { load_id: 'joins yard_loads.load_id', date: 'load date', seller: 'seller', grade: 'the grade, e.g. Copper, Brass', net_lb: 'pounds of this grade',
+            price: "the rate paid — READ price_unit BEFORE COMPARING TWO PRICES. Most rows are per pound, but a row with price_unit='mt' is priced per metric tonne, and 0.36 and 800.00 can be the same rate. For a like-for-like per-pound figure use amount/net_lb, which is always dollars per pound.",
+            price_unit: "'lb' or 'mt' — what price is per. net_lb is ALWAYS pounds either way.",
+            amount: 'dollars for this grade' },
     },
     {
         name: 'yard_sales',
@@ -70,7 +73,8 @@ const DEFINITIONS = [
 ];
 
 const GOTCHAS = [
-    'Weights are POUNDS everywhere in this book. There is no MT column.',
+    'Weights are POUNDS everywhere in this book — every net_lb, gross_lb and tare_lb, with no exceptions and nothing to convert.',
+    "But a PRICE is not a weight. yard_load_items.price_unit says whether that row's rate is per pound or per metric tonne, because the yard buys some grades either way. Never compare two prices, rank them, or average them without it. amount/net_lb is dollars per pound on every row and is the safe way to compare.",
     'A load and a sale are different things: yard_loads is what the yard BOUGHT, yard_sales is what it SOLD. A question about "loads" without more usually means purchases.',
     'yard_load_items and yard_sale_items hold one row per grade. Count loads with COUNT(DISTINCT load_id), never COUNT(*).',
     'Dates are TEXT in YYYY-MM-DD. Compare with >= and <=; substr(date,1,7) is a month. Some rows have no date typed yet.',

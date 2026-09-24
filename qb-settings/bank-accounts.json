@@ -1,0 +1,31 @@
+{
+  "note": "What Edge Metals and Edge Trading give a customer so money arrives in the right account. Shown on Documents \u2192 Bank, and printed from there as wire instructions. Two companies, two banks \u2014 keep them apart (topics/companies.md: 'a rule for one is not a rule for the other').",
+  "accounts": [
+    {
+      "id": "edge-metals-bofa",
+      "company": "Edge Metals INC",
+      "address": "14750 Devonshire Ln, Frisco, TX 75035",
+      "bank": "Bank of America, N.A.",
+      "bankAddress": "222 Broadway, New York, NY 10038",
+      "accountNumber": "325072483301",
+      "wireRouting": "026009593",
+      "achRouting": null,
+      "swift": "BOFAUS3N",
+      "taxId": "26-326-9514",
+      "source": "Addresses_2026 tab of the Shipments workbook"
+    },
+    {
+      "id": "edge-trading-chase",
+      "company": "EDGE TRADING INC",
+      "address": "2453 E 25th Street, Los Angeles, CA 90058",
+      "bank": "JPMorgan Chase Bank, N.A.",
+      "bankAddress": "270 Park Avenue, New York, NY 10017",
+      "accountNumber": "2911072816",
+      "wireRouting": "021000021",
+      "achRouting": "322271627",
+      "swift": "CHASUS33",
+      "taxId": "",
+      "source": "Chase for Business printout, 2026-09-24; name and address confirmed by Apsara the same day (\"Sorry EDGE TRADING INC\")"
+    }
+  ]
+}
