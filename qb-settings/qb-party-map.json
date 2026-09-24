@@ -303,6 +303,14 @@
       "by": "apsara",
       "at": "2026-09-23T18:37:18.962Z",
       "reason": "same party under the name QuickBooks uses"
+    },
+    "hugo": {
+      "jarvisName": "Hugo",
+      "qbId": "15",
+      "qbName": "Hugo",
+      "by": "apsara",
+      "at": "2026-09-24T06:11:51.185Z",
+      "reason": "already in QuickBooks, linked by qb-create-party"
     }
   },
   "customer": {
@@ -1081,8 +1089,8 @@
       "qbId": "85",
       "qbName": "Al Wheels Dirty",
       "by": "apsara",
-      "at": "2026-09-21T20:31:24.769Z",
-      "reason": "accepted from QB history"
+      "at": "2026-09-24T06:14:09.752Z",
+      "reason": "Hugo tab label, grade chosen 2026-09-24"
     },
     "battery": {
       "jarvisName": "Battery",
@@ -1430,6 +1438,86 @@
       "qbName": "Steel Engines",
       "by": "apsara",
       "at": "2026-09-21T20:32:39.500Z"
+    },
+    "alwheelstoaustin": {
+      "jarvisName": "Al wheels to Austin",
+      "qbId": "85",
+      "qbName": "Al Wheels Dirty",
+      "by": "apsara",
+      "at": "2026-09-24T06:14:09.747Z",
+      "reason": "Hugo tab label, grade chosen 2026-09-24"
+    },
+    "alwheelstonurmetals": {
+      "jarvisName": "Al wheels to nur metals",
+      "qbId": "85",
+      "qbName": "Al Wheels Dirty",
+      "by": "apsara",
+      "at": "2026-09-24T06:14:09.749Z",
+      "reason": "Hugo tab label, grade chosen 2026-09-24"
+    },
+    "cladwheels": {
+      "jarvisName": "Clad wheels",
+      "qbId": "87",
+      "qbName": "Al Wheels Clad",
+      "by": "apsara",
+      "at": "2026-09-24T06:14:09.754Z",
+      "reason": "Hugo tab label, grade chosen 2026-09-24"
+    },
+    "53trailerloaded": {
+      "jarvisName": "53 trailer loaded",
+      "qbId": "32",
+      "qbName": "Mixed Load",
+      "by": "apsara",
+      "at": "2026-09-24T06:14:09.756Z",
+      "reason": "Hugo tab label, grade chosen 2026-09-24"
+    },
+    "5thtrailerloadedtojunk": {
+      "jarvisName": "5th trailer loaded TO Junk",
+      "qbId": "32",
+      "qbName": "Mixed Load",
+      "by": "apsara",
+      "at": "2026-09-24T06:14:09.757Z",
+      "reason": "Hugo tab label, grade chosen 2026-09-24"
+    },
+    "6thloadtojunkcarjunk": {
+      "jarvisName": "6th load to Junk car Junk",
+      "qbId": "32",
+      "qbName": "Mixed Load",
+      "by": "apsara",
+      "at": "2026-09-24T06:14:09.759Z",
+      "reason": "Hugo tab label, grade chosen 2026-09-24"
+    },
+    "load": {
+      "jarvisName": "Load",
+      "qbId": "32",
+      "qbName": "Mixed Load",
+      "by": "apsara",
+      "at": "2026-09-24T06:14:09.762Z",
+      "reason": "Hugo tab label, grade chosen 2026-09-24"
+    },
+    "mixload": {
+      "jarvisName": "Mix load",
+      "qbId": "32",
+      "qbName": "Mixed Load",
+      "by": "apsara",
+      "at": "2026-09-24T06:14:09.763Z",
+      "reason": "Hugo tab label, grade chosen 2026-09-24"
+    },
+    "mixedload": {
+      "jarvisName": "Mixed load",
+      "qbId": "32",
+      "qbName": "Mixed Load",
+      "by": "apsara",
+      "at": "2026-09-24T06:14:09.765Z",
+      "reason": "Hugo tab label, grade chosen 2026-09-24"
+    },
+    "satohoustonjunk": {
+      "jarvisName": "sa TO Houston Junk",
+      "qbId": "32",
+      "qbName": "Mixed Load",
+      "by": "apsara",
+      "at": "2026-09-24T06:14:09.766Z",
+      "reason": "Hugo tab label, grade chosen 2026-09-24"
     }
   },
   "bank": {
