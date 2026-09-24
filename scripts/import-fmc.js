@@ -7,7 +7,8 @@
 //
 //   one invoice per TICKET · invoice number = the ticket number ·
 //   one line · item "Copper" · qty = net lbs · price = amount / net ·
-//   customer FMC METALS · terms Due on receipt
+//   customer FMC METALS · "Due on receipt" (set by pushInvoice, not here —
+//   Jarvis's own `terms` field means LC or TT and refuses anything else)
 //
 // She books even the $1.38/lb tickets as Copper, so this does too. Reading
 // the LIVE tab, not a download, because the workbook changes hourly.
@@ -75,7 +76,12 @@ async function liveTab() {
         console.log(`  ${REALLY ? 'add ' : 'would add'} ${t.date}  ticket ${t.ticket.padEnd(6)} ${String(t.net || '—').padStart(7)} lb  $${String(t.amount).padStart(10)}${price ? `  ($${price.toFixed(4)}/lb)` : '  (no net weight — amount only)'}`);
         if (REALLY) {
             await sales.addSale({
-                date: t.date, customer: CUSTOMER, invoice_no: t.ticket, terms: 'Due on receipt',
+                // NO terms here: Jarvis's `terms` is the SHIPMENT term and it
+                // only accepts LC or TT (sales.js TERMS). "Due on receipt" is
+                // a QuickBooks PAYMENT term, and pushInvoice already puts it
+                // on every invoice it creates. Passing it here threw
+                // "terms must be LC or TT" on the first row (2026-09-25).
+                date: t.date, customer: CUSTOMER, invoice_no: t.ticket,
                 item: ITEM, weight: t.net || null, weight_unit: 'lb', price_unit: 'lb',
                 invoice_price: price, amount: t.amount,
                 note: `FMC tab ticket ${t.ticket}${t.item ? ` · ${t.item}` : ''}`,
