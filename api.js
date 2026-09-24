@@ -4082,7 +4082,7 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
             // applied." Doing it in the browser would leave summary() adding
             // up rows that are no longer on screen — a balance belonging to a
             // different set of bills, which is worse than no filter at all.
-            const rows = b.filterRows(all, req.query || {});
+            const rows = b.newestFirst(b.filterRows(all, req.query || {}));
             res.json({
                 // Same warning the sales table carries. A duplicate here is
                 // worse: margin.js keeps only the LAST bill for a container,

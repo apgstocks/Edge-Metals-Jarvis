@@ -144,10 +144,45 @@ input::placeholder { color:var(--steel-500); }
 .hidden { display:none !important; }
 .spinner { display:inline-block; width:13px; height:13px; border:2px solid rgba(255,255,255,.4); border-top-color:#fff; border-radius:50%; animation:spin .7s linear infinite; }
 @keyframes spin { to { transform:rotate(360deg); } }
-.nav-btn { display:flex; align-items:center; gap:11px; width:100%; text-align:left; padding:10px 12px 10px 13px; background:transparent; color:var(--steel-300); border:none; border-left:3px solid transparent; border-radius:var(--radius-xs); font-family:var(--font-sans); font-size:13.5px; font-weight:600; cursor:pointer; transition:background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out); }
+/* Rows went 41px -> 30px on 2026-09-25 (padding 10->6, font 13.5->13). With
+   25 items that is 275px of rail back, which is most of what was below the
+   fold. The icon is what makes the tighter row readable rather than merely
+   smaller: eleven shapes scan faster than eleven words, and she reads this
+   list dozens of times a day. */
+.nav-btn { display:flex; align-items:center; gap:10px; width:100%; text-align:left; padding:6px 12px 6px 13px; background:transparent; color:var(--steel-300); border:none; border-left:3px solid transparent; border-radius:var(--radius-xs); font-family:var(--font-sans); font-size:13px; font-weight:600; cursor:pointer; transition:background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out); }
+.nav-btn .nav-ico { flex:0 0 16px; width:16px; height:16px; opacity:.62; }
+.nav-btn.active .nav-ico, .nav-btn:hover .nav-ico { opacity:1; }
 .nav-section-label { font-family:var(--font-mono); font-size:9.5px; font-weight:600; letter-spacing:.14em; text-transform:uppercase; color:var(--steel-500); padding:6px 13px 6px; }
 .nav-btn:hover { background:var(--steel-800); color:#fff; }
 .nav-btn.active { background:var(--steel-800); color:#fff; border-left-color:var(--leaf-400); }
+
+/* ── THE COMPANY SWITCHER ────────────────────────────────────────────────
+   Two buttons, not a <select>: the whole point is that both companies are
+   visible at once so it reads as a place she IS rather than a setting. */
+.nav-co { flex:1; text-align:center; padding:6px 0; border:none; border-radius:calc(var(--radius-xs) - 1px); background:transparent; color:var(--steel-400); font-family:var(--font-sans); font-size:11.5px; font-weight:600; cursor:pointer; transition:background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out); }
+.nav-co:hover { color:#fff; }
+.nav-co.active { background:var(--leaf-500); color:#fff; }
+
+/* ── FILTERED BY CSS, NOT BY RE-RENDERING ────────────────────────────────
+   Every button and every heading stays in the DOM exactly as renderNav has
+   always emitted them; a class on the <nav> decides what is on screen. That
+   is not a shortcut, it is the reason eight existing test files still pass:
+   tests/page-headings.js, sidebar-collapse.js, ledger-render.js and the rest
+   read sideNav's children and count headings, and rebuilding the list per
+   company would have changed the shape every one of them asserts.
+   It also keeps deep links working — openTab() can reach a hidden tab and
+   the switcher follows it (see syncNavCompany). */
+#sideNav.co-yard   [data-co-group="Edge Metals"] { display:none; }
+#sideNav.co-metals [data-co-group="Edge Yard"]   { display:none; }
+
+/* Bot, Contacts, Design and System are ten items she touches occasionally,
+   sitting above the fold competing with Loads. Collapsed by default; the
+   heading is the control. The chevron is ::after so the heading's
+   textContent stays exactly the group name — page-headings.js compares it. */
+.nav-section-label.nav-fold { cursor:pointer; display:flex; align-items:center; justify-content:space-between; }
+.nav-section-label.nav-fold::after { content:'▾'; font-size:9px; opacity:.7; transition:transform var(--dur-fast) var(--ease-out); }
+.nav-section-label.nav-fold.shut::after { transform:rotate(-90deg); }
+#sideNav .nav-btn.nav-folded { display:none; }
 .row-hover:hover { background:var(--surface-hover); }
 .chip { font-family:var(--font-mono); font-size:11px; font-weight:600; letter-spacing:.06em; text-transform:uppercase; padding:8px 14px; border-radius:20px; border:1px solid var(--border-default); background:var(--surface-card); color:var(--text-muted); cursor:pointer; }
 .chip.active { background:var(--leaf-500); color:#fff; border-color:var(--leaf-500); }
@@ -373,7 +408,26 @@ body.nav-collapsed main { padding-top:58px; }
       <div id="waStatusLine" style="display:none;"><span id="waStatusText"></span></div>
     </div>
 
-    <nav id="sideNav" style="flex:1; overflow-y:auto; padding:10px 10px; display:flex; flex-direction:column; gap:1px;"></nav>
+    <!-- ── ONE COMPANY AT A TIME (2026-09-25) ──────────────────────────────
+         Apsara, shown a mock of the rail: "Fix it".
+
+         The sidebar was 25 items over seven groups — about 1,100px of rail in
+         a ~700px viewport, so a third of it lived below the fold and the two
+         companies were interleaved with "Both companies" wedged between them.
+         That last part contradicted the rule she has repeated more than any
+         other: Edge Yard and Edge Metals are DIFFERENT COMPANIES.
+
+         DELIBERATELY OUTSIDE #sideNav. tests/page-headings.js walks
+         sideNav.children and pushes EVERY <button> it finds, then looks each
+         one up in NAV_ITEMS by data-tab — a switcher button inside the nav
+         would be an orphan it cannot resolve, and the test would fail for a
+         reason that has nothing to do with what it is guarding. -->
+    <div id="navCompany" style="display:flex; gap:3px; margin:10px 10px 4px; background:var(--steel-900, #111315); border-radius:var(--radius-xs); padding:3px;">
+      <button type="button" class="nav-co" data-co="Edge Yard">Edge Yard</button>
+      <button type="button" class="nav-co" data-co="Edge Metals">Edge Metals</button>
+    </div>
+
+    <nav id="sideNav" style="flex:1; overflow-y:auto; padding:4px 10px 10px; display:flex; flex-direction:column; gap:1px;"></nav>
 
     <div style="padding:16px 22px 20px; border-top:1px solid var(--steel-800);">
       <div id="todayLabel" style="font-family:var(--font-mono); font-size:11px; color:var(--steel-300);"></div>
@@ -1123,6 +1177,81 @@ async function api(path, opts = {}) {
 // menu back, so there is nothing to abbreviate. Deleted rather than left
 // unreferenced: a function nothing calls is a function someone re-wires.
 
+// ── THE FOUR GROUPS THAT START CLOSED ───────────────────────────────────
+// Ten items between them, none of them daily. They were sitting above the
+// fold competing with Loads. The two COMPANY groups are never foldable: those
+// are the work.
+const FOLD_GROUPS = ['Design', 'Bot & Automation', 'Contacts & Outreach', 'System'];
+
+// ── ICONS ───────────────────────────────────────────────────────────────
+// Inline SVG rather than an icon font: a font is a network request and a
+// flash of unstyled rail on a screen she opens all day, for 25 glyphs.
+// stroke:currentColor so hover/active colour them with the label, and a
+// missing id falls back to a dot rather than a gap — a new NAV_ITEMS entry
+// should never be able to make a row look broken.
+const NAV_ICONS = {
+  loads:'M3 7h11v7H3z M14 9h4l2 3v2h-6z M6.5 16.5a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3 M17 16.5a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3',
+  inventory:'M3 8l9-4 9 4-9 4z M3 8v8l9 4 9-4V8 M12 12v8',
+  petty:'M3 7h18v10H3z M12 12a2 2 0 1 0 0-4 2 2 0 0 0 0 4 M12 16v-4',
+  'trucker-bills':'M5 3h14v18l-3-2-2 2-2-2-2 2-2-2-3 2z M9 8h6 M9 12h6',
+  expenses:'M4 4h16v16H4z M8 9h8 M8 13h5',
+  'price-lists':'M4 4h9l7 7-9 9-7-7z M8.5 8.5h.01',
+  'outbound-loads':'M3 7h11v7H3z M14 9h4l2 3v2h-6z M6.5 16.5a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3 M17 16.5a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3 M20 4l-3 3 3 3',
+  spend:'M4 19V9 M10 19V5 M16 19v-7 M21 19H3',
+  board:'M4 4h16v16H4z M4 10h16 M10 10v10',
+  bookings:'M4 5h16v15H4z M4 9h16 M8 3v4 M16 3v4',
+  partners:'M9 11a3 3 0 1 0 0-6 3 3 0 0 0 0 6 M3 20a6 6 0 0 1 12 0 M17 11a3 3 0 1 0 0-6 M17 14a6 6 0 0 1 4 6',
+  documents:'M6 3h8l4 4v14H6z M14 3v4h4 M9 12h6 M9 16h6',
+  bills:'M5 3h14v18l-3-2-2 2-2-2-2 2-2-2-3 2z M9 9h6 M9 13h4',
+  invoice:'M6 3h12v18l-3-2-3 2-3-2-3 2z M9 8h6 M9 12h6 M9 16h3',
+  'edge-inventory':'M3 8l9-4 9 4-9 4z M3 8v8l9 4 9-4V8',
+  quickbooks:'M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18 M9 9a3 3 0 0 1 3-3v12',
+  bot:'M7 8h10v9H7z M12 5v3 M12 3a1 1 0 1 0 0 2 M9.5 12h.01 M14.5 12h.01 M4 11v3 M20 11v3',
+  facts:'M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18 M12 8h.01 M11 12h1v5h1',
+  tasks:'M4 6h3v3H4z M4 15h3v3H4z M10 7.5h10 M10 16.5h10',
+  bugzilla:'M8 6a4 4 0 0 1 8 0 M6 10h12v4a6 6 0 0 1-12 0z M3 12h3 M18 12h3 M5 7l2 2 M19 7l-2 2 M5 17l2-2 M19 17l-2-2',
+  whatsapp:'M12 21a9 9 0 1 0-7.8-4.5L3 21l4.5-1.2A9 9 0 0 0 12 21 M9 9c0 4 2 6 6 6',
+  'email-contacts':'M3 6h18v12H3z M3 7l9 6 9-6',
+  'address-book':'M6 3h13v18H6z M6 8H3 M6 12H3 M6 16H3 M12.5 11a2 2 0 1 0 0-4 2 2 0 0 0 0 4 M9 16a3.5 3.5 0 0 1 7 0',
+  'quote-requests':'M4 5h16v11H8l-4 4z M8 9h8 M8 12h5',
+  'design-bol':'M4 4h16v16H4z M4 9h16 M9 9v11',
+  settings:'M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6 M19.4 15a1.6 1.6 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.6 1.6 0 0 0-2.7 1.1V21a2 2 0 1 1-4 0v-.1A1.6 1.6 0 0 0 7.5 19.4a2 2 0 1 1-2.8-2.8l.1-.1A1.6 1.6 0 0 0 3 13.7a2 2 0 1 1 0-4h.1A1.6 1.6 0 0 0 4.6 7.5a2 2 0 1 1 2.8-2.8l.1.1A1.6 1.6 0 0 0 10.3 3a2 2 0 1 1 4 0v.1a1.6 1.6 0 0 0 2.7 1.5 2 2 0 1 1 2.8 2.8l-.1.1a1.6 1.6 0 0 0 1.1 2.7H21a2 2 0 1 1 0 4h-.1a1.6 1.6 0 0 0-1.5 1z',
+};
+function navIcon(id) {
+  const d = NAV_ICONS[id] || 'M12 14a2 2 0 1 0 0-4 2 2 0 0 0 0 4';
+  return `<svg class="nav-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="${d}"/></svg>`;
+}
+
+// ── WHICH COMPANY THE RAIL IS SHOWING ───────────────────────────────────
+// Remembered across reloads, because the answer is almost always "the same
+// one as last time" — she works a stretch of yard or a stretch of metals,
+// not alternate screens. localStorage can throw (private mode, a locked
+// profile), so every touch is wrapped: a rail that fails to render because
+// a preference could not be read would be a far worse bug than a forgotten
+// preference.
+const NAV_CO_KEY = 'jarvisNavCompany';
+function navCompany() {
+  try { const v = localStorage.getItem(NAV_CO_KEY); if (v === 'Edge Metals' || v === 'Edge Yard') return v; }
+  catch (e) { /* unreadable storage is not a reason to have no sidebar */ }
+  return 'Edge Yard';
+}
+// The switcher FOLLOWS the open tab rather than fighting it. openTab() can
+// land on a Metals screen from a deep link, from Jarvis, or from a button on
+// another page; hiding the row she is standing on would look like the app
+// had lost the page.
+function syncNavCompany() {
+  const item = (typeof NAV_ITEMS !== 'undefined' ? NAV_ITEMS : []).find((n) => n.id === CURRENT_TAB);
+  const co = (item && (item.group === 'Edge Yard' || item.group === 'Edge Metals'))
+    ? item.group : navCompany();
+  try { localStorage.setItem(NAV_CO_KEY, co); } catch (e) { /* best effort */ }
+  const nav = $('sideNav');
+  if (nav) { nav.classList.toggle('co-yard', co === 'Edge Yard'); nav.classList.toggle('co-metals', co === 'Edge Metals'); }
+  document.querySelectorAll('.nav-co').forEach((b) => b.classList.toggle('active', b.dataset.co === co));
+  // Staff never see a Metals screen, so the switcher is noise for them.
+  const box = document.getElementById('navCompany');
+  if (box) box.style.display = (ROLE === 'staff') ? 'none' : 'flex';
+}
+
 function renderNav() {
   const nav = $('sideNav');
   // Staff see Loads and Petty Cash only. The petty-cash entry was added
@@ -1156,16 +1285,32 @@ function renderNav() {
   visible.sort((a2, b2) => rank(a2.group) - rank(b2.group));
   // Worked out across the sorted, role-filtered list, so the rail is
   // unambiguous for whoever is actually looking at it.
+  // ── WHICH UTILITY GROUPS START CLOSED ──────────────────────────────
+  // All of them, EXCEPT one holding the tab she is on. Landing on Settings
+  // from a deep link and finding the row hidden would read as a broken link
+  // rather than as a collapsed group.
+  const foldShut = new Set(FOLD_GROUPS.filter((g) =>
+    !visible.some((x) => x.group === g && x.id === CURRENT_TAB)));
   let lastGroup = null;
   nav.innerHTML = visible.map(n => {
+    // The four utility headings become the fold control. `shut` only when
+    // nothing inside them is the current tab — landing on Settings from a
+    // deep link must not hide the row you are standing on.
+    const foldable = FOLD_GROUPS.includes(n.group);
+    const cls = `nav-section-label${foldable ? ' nav-fold' + (foldShut.has(n.group) ? ' shut' : '') : ''}`;
     const header = n.group !== lastGroup
-      ? `<div class="nav-section-label"${lastGroup === null ? '' : ' style="margin-top:14px;"'}>${esc(n.group)}</div>`
+      ? `<div class="${cls}" data-co-group="${esc(n.group)}"${lastGroup === null ? '' : ' style="margin-top:14px;"'}>${esc(n.group)}</div>`
       : '';
     lastGroup = n.group;
     // Both the full label and the initials are always in the DOM; CSS shows
     // one or the other. Rebuilding the nav on collapse would be a second code
     // path that could disagree with this one about what is in the menu.
-    return `${header}<button class="nav-btn ${n.id === CURRENT_TAB ? 'active' : ''}" data-tab="${n.id}" title="${esc(n.label)}"><span class="nav-label">${esc(n.label)}</span></button>`;
+    // data-co-group is what the CSS filters on, and it is the GROUP rather
+    // than a company so that "Both companies", Design, Bot and System are
+    // simply never matched by either rule and stay on screen always.
+    // nav-folded starts the four utility groups closed; nav-fold marks their
+    // heading as the control.
+    return `${header}<button class="nav-btn ${n.id === CURRENT_TAB ? 'active' : ''}${foldShut.has(n.group) ? ' nav-folded' : ''}" data-tab="${n.id}" data-co-group="${esc(n.group)}" title="${esc(n.label)}">${navIcon(n.id)}<span class="nav-label">${esc(n.label)}</span></button>`;
   }).join('');
   nav.querySelectorAll('button').forEach(b => b.addEventListener('click', () => {
     // Address book is its own standalone page (dashboard/address-book.html,
@@ -1181,6 +1326,33 @@ function renderNav() {
     if (b.dataset.tab === 'design-bol') { window.location.href = '/design/bol'; return; }
     switchTab(b.dataset.tab); closeMobileSidebar();
   }));
+
+  // ── THE FOUR FOLDING HEADINGS ─────────────────────────────────────────
+  // Toggling classes rather than re-rendering: renderNav() rebuilds
+  // innerHTML, which would drop every listener attached above and leave a
+  // rail of dead buttons.
+  nav.querySelectorAll('.nav-section-label.nav-fold').forEach((h) => {
+    h.addEventListener('click', () => {
+      const shut = h.classList.toggle('shut');
+      const grp = h.dataset.coGroup;
+      nav.querySelectorAll(`.nav-btn[data-co-group="${grp}"]`)
+         .forEach((b) => b.classList.toggle('nav-folded', shut));
+    });
+  });
+
+  // The company switcher. Clicking it does NOT change the open tab — it
+  // changes which list she is looking at, and she picks a screen from it.
+  document.querySelectorAll('.nav-co').forEach((b) => {
+    b.onclick = () => {
+      try { localStorage.setItem(NAV_CO_KEY, b.dataset.co); } catch (e) { /* best effort */ }
+      const co = b.dataset.co;
+      nav.classList.toggle('co-yard', co === 'Edge Yard');
+      nav.classList.toggle('co-metals', co === 'Edge Metals');
+      document.querySelectorAll('.nav-co').forEach((x) => x.classList.toggle('active', x === b));
+    };
+  });
+
+  syncNavCompany();
 }
 
 // ── The off-canvas sidebar — NOT phone-only any more ──────────────────────

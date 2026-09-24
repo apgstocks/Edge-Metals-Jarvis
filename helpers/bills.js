@@ -476,6 +476,53 @@ const list = () => {
     return Array.isArray(raw) ? raw : [];
 };
 
+// ── NEWEST BILL AT THE TOP OF THE TABLE ─────────────────────────────────────
+//
+// Apsara, 2026-09-25: "Also latest bill should come at the top".
+//
+// ── WHY THIS IS NOT IN list() OR listWithTotals() ───────────────────────────
+// It would have been one line in either, and it would have been wrong. Those
+// two are reached by THIRTY-THREE callers, and at least one of them decides
+// money by position: helpers/saleInvoiceFlow.js's billByContainer() does
+//
+//     bills.listWithTotals().find((b) => cont(b.container_no) === c)
+//
+// — the FIRST match wins. Reverse the order underneath it and a container
+// with two bills starts building its invoice from the other one: a different
+// supplier, a different price, on a document that goes to a customer. Nobody
+// asked for that and nobody would have seen it until the invoice was wrong.
+// helpers/ledgerExport.js and helpers/data/dataMirror.js read the same list
+// too, so a sort there also silently reorders her exports and the tables
+// Jarvis answers questions from.
+//
+// So the ORDER IS THE TABLE'S, and only the table's: api.js's GET /api/bills
+// calls this after filterRows, and nothing else does. Every other caller sees
+// exactly the list it has always seen.
+//
+// ── UNDATED ROWS GO LAST, NOT FIRST ─────────────────────────────────────────
+// A bill with no date yet is `incomplete` (see compute()) — it is not the
+// newest one, it is the one still being filled in. Sorting it to the top
+// because an empty string compares low would put her least-finished rows
+// where she expects her most recent, which is the opposite of the ask.
+//
+// Stable within a date: bills sharing a day keep the order they were entered,
+// because there is nothing better to sort them by and a table that reshuffles
+// rows it has no reason to reshuffle is one she cannot keep her place in.
+function newestFirst(rows) {
+    return (Array.isArray(rows) ? rows : [])
+        .map((r, i) => ({ r, i }))
+        .sort((a, b2) => {
+            const da = String((a.r && a.r.date) || '').trim();
+            const db = String((b2.r && b2.r.date) || '').trim();
+            if (!da && !db) return a.i - b2.i;
+            if (!da) return 1;          // undated sinks
+            if (!db) return -1;
+            if (da === db) return a.i - b2.i;   // stable within a day
+            return da < db ? 1 : -1;            // ISO dates sort as strings
+        })
+        .map((x) => x.r);
+}
+
 function newId() {
     return `BILL_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
 }
@@ -1076,7 +1123,7 @@ function summary(rows) {
 module.exports = {
     COLUMNS, GROUPS, TABLE_ORDER, tableColumns, WRITABLE, LB_PER_MT, PER_LB_CEILING, prepareBill,
     FILTERABLE, filterRows, facets, sortableDate, cleanPhotos, missingFor,
-    compute, withTotals, list, listWithTotals, addBill, editBill, deleteBill, summary,
+    compute, withTotals, list, listWithTotals, newestFirst, addBill, editBill, deleteBill, summary,
     cleanItems,
     groupColumns,
     cleanTruckingSplit, cleanTruckingOthers, TRUCKING_PARTS, TRUCKING_PART_LABELS,
