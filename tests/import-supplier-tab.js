@@ -54,6 +54,19 @@ const ck = (n, ok, extra) => { if (ok) { pass++; console.log('  PASS ', n); } el
         supplier_invoice_amount: 84799.75 });
     ck('two stated lines on one date add up', Number(bills.withTotals(two).amount) === 84799.75, bills.withTotals(two).amount);
 
+    // ── the same trap on the SALES side ────────────────────────────────────
+    // A sale's amount is derived too. FMC tickets with no net weight came out
+    // as $0.00 invoices; invoice_amount is the field that states a figure.
+    const sales = require('../helpers/sales');
+    const noWeight = await sales.addSale({ date: '2026-05-26', customer: 'FMC METALS', invoice_no: '19449',
+        item: 'Copper', price_unit: 'lb', invoice_amount: 47889.16, created_by: 'fmc tab import' });
+    ck('a sale with no weight still carries its amount', Number(sales.withTotals(noWeight).amount) === 47889.16, sales.withTotals(noWeight).amount);
+    const wrong = await sales.addSale({ date: '2026-05-05', customer: 'FMC METALS', invoice_no: '18913',
+        item: 'Copper', price_unit: 'lb', amount: 3571.36, created_by: 'fmc tab import' });
+    ck('...and passing `amount` instead is silently worth nothing — the bug', !(Number(sales.withTotals(wrong).amount) > 0), sales.withTotals(wrong).amount);
+    await sales.editSale(wrong.id, { invoice_amount: 3571.36 });
+    ck('...which editing invoice_amount repairs in place', Number(sales.withTotals(sales.list().find((x) => x.id === wrong.id)).amount) === 3571.36);
+
     fs.rmSync(dir, { recursive: true, force: true });
     console.log(`\nimport-supplier-tab: ${pass} passed, ${fail} failed`);
     if (fail) { console.log('FAILED: ' + failures.join(' | ')); process.exit(1); }

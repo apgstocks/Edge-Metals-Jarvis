@@ -249,7 +249,14 @@ function mount(app, cfg) {
             const client = require('./client');
             const all = await mapping.fetchParties(kind, client, { env: envOf() });
             const m = mapping.matchParty(String(req.query.name || ''), all, kind);
-            res.json({ status: m.status, candidates: (m.candidates || []).slice(0, 8), all: all.map((x) => ({ Id: x.Id, name: x.DisplayName })).slice(0, 2000) });
+            // An EXACT hit comes back under `qb` with candidates empty — so
+            // the easiest case of all showed "(no near matches)" in the match
+            // dialog (2026-09-25, FMC METALS, which exists verbatim as #561).
+            // Put it at the head of the list, marked, so one keystroke does it.
+            const exact = m.qb ? [{ Id: m.qb.Id || m.qb.qbId, DisplayName: m.qb.DisplayName || m.qb.name || m.qb.qbName, exact: true }] : [];
+            const rest = (m.candidates || []).filter((c) => !exact.length || String(c.Id) !== String(exact[0].Id));
+            res.json({ status: m.status, candidates: exact.concat(rest.slice(0, 8)),
+                all: all.map((x) => ({ Id: x.Id, name: x.DisplayName })).slice(0, 2000) });
         } catch (e) { res.status(500).json({ error: e.message }); }
     });
 

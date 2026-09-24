@@ -2,12 +2,15 @@
 // No network: QB_ENV is pointed at an env with no token, so every QuickBooks
 // call fails fast and the page must still answer from Jarvis's own ledgers.
 process.env.QB_ENV = 'sandbox';
-process.env.QB_TOKEN_FILE = '/tmp/qb-page-test-no-token.json';
-process.env.QB_PARTY_MAP_FILE = '/tmp/qb-page-test-map.json';
-process.env.QB_JOURNAL_FILE = '/tmp/qb-page-test-journal.jsonl';
+// A fresh directory per run. Fixed /tmp paths broke the day a leftover file
+// from an earlier run belonged to another user: the atomic rename inside
+// saveMap() failed with EPERM and the test blamed the code (2026-09-25).
+const _tmp = require('fs').mkdtempSync(require('path').join(require('os').tmpdir(), 'qbpage-'));
+process.env.QB_TOKEN_FILE = require('path').join(_tmp, 'token.json');
+process.env.QB_PARTY_MAP_FILE = require('path').join(_tmp, 'party-map.json');
+process.env.QB_JOURNAL_FILE = require('path').join(_tmp, 'journal.jsonl');
 delete process.env.QB_CUTOVER_INVOICES; delete process.env.QB_CUTOVER_BILLS;
 const fs = require('fs');
-for (const f of [process.env.QB_PARTY_MAP_FILE, process.env.QB_JOURNAL_FILE]) { try { fs.unlinkSync(f); } catch {} }
 
 const express = require('express');
 const routes = require('../helpers/quickbooks/routes');
@@ -85,7 +88,18 @@ const ck = (name, ok, extra) => { if (ok) { pass++; console.log('  PASS ', name)
     ck('the answer never leaves the two piles unresolved',
        askHugo.code === 200 && (!askHugo.body.degraded || /holding|owe|no bills|no records/i.test(askHugo.body.answer)), askHugo.body);
 
+    // an exact name must be OFFERED, not hidden behind "(no near matches)"
+    const M = require('../helpers/quickbooks/mapping');
+    const qbNames = [{ Id: '561', DisplayName: 'FMC METALS', Active: true }, { Id: '571', DisplayName: 'FMC Metal', Active: true }];
+    const hit = M.matchParty('FMC METALS', qbNames, 'customer');
+    ck('an exact name comes back under qb, not candidates — the trap', hit.status === 'exact' && !!hit.qb && (hit.candidates || []).length === 0, hit.status);
+    const routesSrc = fs.readFileSync(require('path').join(__dirname, '..', 'helpers', 'quickbooks', 'routes.js'), 'utf8');
+    ck('...so the candidates route puts it at the head of the list', /const exact = m\.qb \?/.test(routesSrc));
+    const pageSrc = fs.readFileSync(require('path').join(__dirname, '..', 'dashboard', 'quickbooks.html'), 'utf8');
+    ck('...and the dialog marks it', /same name, almost certainly this one/.test(pageSrc));
+
     server.close();
+    try { fs.rmSync(_tmp, { recursive: true, force: true }); } catch {}
     console.log(`\nquickbooks-page: ${pass} passed, ${fail} failed`);
     if (fail) { console.log('FAILED: ' + failures.join(' | ')); process.exit(1); }
 })();

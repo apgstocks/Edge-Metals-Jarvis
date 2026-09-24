@@ -294,7 +294,7 @@ async function remap() {
   const d = STATE.detail;
   try {
     const c = await api(`/api/qb/candidates?kind=${d.kind}&name=${encodeURIComponent(d.name)}`);
-    const list = (c.candidates || []).map((x, i) => `${i + 1}. ${x.DisplayName || x.name} (#${x.Id})`).join('\n');
+    const list = (c.candidates || []).map((x, i) => `${i + 1}. ${x.DisplayName || x.name} (#${x.Id})${x.exact ? '   ← same name, almost certainly this one' : ''}`).join('\n');
     const pick = prompt(`Match "${d.name}" to which QuickBooks ${d.kind}?\n\n${list || '(no near matches)'}\n\nType a number from the list, or the exact QuickBooks name, or SKIP.`);
     if (!pick) return;
     let qbId = null, qbName = null;

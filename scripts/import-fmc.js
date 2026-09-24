@@ -67,9 +67,24 @@ async function liveTab() {
     const have = sales.list();
     const already = (t) => have.some((s) => KEY(s.invoice_no) === KEY(t) && KEY(s.customer) === KEY(CUSTOMER));
 
-    let add = 0, skip = 0, money = 0, noNet = 0;
+    let add = 0, skip = 0, money = 0, noNet = 0, fixed = 0;
     for (const t of tickets.sort((a, b) => a.date.localeCompare(b.date))) {
-        if (already(t.ticket)) { skip++; continue; }
+        // ── A STATED AMOUNT GOES IN invoice_amount, NOT amount ─────────────
+        // `amount` is DERIVED from weight x price (sales.js compute()), so a
+        // ticket with no net weight came out as $0.00 and the FMC page read
+        // $2,455,368.70 instead of $2,564,815.76 — $109,447.06 of tickets
+        // silently worth nothing (2026-09-25). `invoice_amount` is the figure
+        // she states, and compute() prefers it over its own arithmetic.
+        const mine = have.find((x) => KEY(x.invoice_no) === KEY(t.ticket) && KEY(x.customer) === KEY(CUSTOMER));
+        if (mine) {
+            const now = Number(sales.withTotals(mine).amount) || 0;
+            if (Math.abs(now - t.amount) > 0.02) {
+                fixed++;
+                console.log(`  ${REALLY ? 'fix ' : 'would fix'} ${t.date}  ticket ${t.ticket.padEnd(6)} $${now} -> $${t.amount}`);
+                if (REALLY) await sales.editSale(mine.id, { invoice_amount: t.amount });
+            } else { skip++; }
+            continue;
+        }
         const price = t.net ? Math.round((t.amount / t.net) * 1e7) / 1e7 : null;
         if (!t.net) noNet++;
         add++; money = r2(money + t.amount);
@@ -83,14 +98,14 @@ async function liveTab() {
                 // "terms must be LC or TT" on the first row (2026-09-25).
                 date: t.date, customer: CUSTOMER, invoice_no: t.ticket,
                 item: ITEM, weight: t.net || null, weight_unit: 'lb', price_unit: 'lb',
-                invoice_price: price, amount: t.amount,
+                invoice_price: price, invoice_amount: t.amount,
                 note: `FMC tab ticket ${t.ticket}${t.item ? ` · ${t.item}` : ''}`,
                 created_by: 'fmc tab import',
             });
         }
     }
     console.log(`\n${REALLY ? 'added' : 'would add'}: ${add} invoices, $${money}${noNet ? ` (${noNet} with no net weight — the line carries the amount only)` : ''}`);
-    console.log(`already in Jarvis: ${skip}`);
+    console.log(`already in Jarvis and correct: ${skip}${fixed ? ` · amount repaired: ${fixed}` : ''}`);
     console.log(REALLY
         ? 'In Jarvis. Next: node scripts/qb-push-list.js --kind=invoice --customer="FMC METALS" --reason="FMC tab backlog"'
         : 'DRY RUN — nothing written. Add --really.');
