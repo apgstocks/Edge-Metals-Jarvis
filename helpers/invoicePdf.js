@@ -304,62 +304,66 @@ function itemLabels(lineItems, invNo) {
 // red and not the app's --status-danger, both of which are visibly different.
 const ROW_ITEM_RED = '#EA3323';
 
-// ── TWO GUARDS, BOTH MINE, BOTH RECORDED AS MINE ──────────────────────────
+// ── HOW THIS WORKS, AND HOW I GOT IT WRONG FIRST ──────────────────────────
 //
-// ONE MATERIAL, NO RED. Her mock is a MIXED document — two materials, one
-// highlighted. On a single-material invoice there is nothing to distinguish:
-// every row would print the same lone name in red, which is decoration rather
-// than information, and it would change every single-material invoice she has
-// ever sent. Those keep printing exactly what they print today, in black.
+// The first version of this read every ROW on the document, listed the
+// distinct materials across them, and reddened the one matching that row's
+// container. It never fired on a single one of her documents, because that is
+// not the shape her data has. 260901_AL_26JY99 is ONE container, ONE row, and
+// the description she typed into it is a single string:
 //
-// ONE CONTAINER, NO RED EITHER — and this one is a REGRESSION CAUGHT BY
-// tests/packing-list.js rather than something I reasoned out in advance.
-// Apsara, 2026-09-16: "sometimes i will have 3 different items in a
-// container..for eg:alternator,starter,ac compressor.each with separate
-// weight", which is why the packing list has an Item column at all. Every row
-// there is the SAME container holding a different material. Listing all three
-// on all three rows turns a column she asked for into noise, and reddening
-// one of them states a distinction that does not exist — they are all in the
-// one box.
+//     "Al combo,Regular Combo"
 //
-// The red answers "which of these materials is in THIS container". With one
-// container that question has no content. So the list appears only when the
-// document actually spans more than one container, which is precisely the
-// mixed invoice her mock came from.
+// Both materials are in the one box, in the one field. Her mock was not two
+// containers — it was the AL invoice and the RC invoice of the SAME shipment,
+// which is why "Al combo" is red in one and "Regular Combo" in the other, and
+// why the middle line (neither red) is what the document prints today.
 //
-// Both guards are my calls. If she wants red on a single-container document
-// too, each is one line here — but it should be her decision rather than one
-// she discovers on a customer's invoice.
+// So the split is on the COMMA inside one description, and what decides the
+// red is the item code in the invoice number: 260901_**AL**_26JY99 is the
+// aluminium invoice, and the header already says AL-ALUMINIUM COMBO. Nothing
+// here needs to look at other rows at all.
 //
-// `rows` is every line item on the document; `row` is the one being drawn.
+// ── AND THE WRAPPING, WHICH IS WHY SHE SENT THE PDFs ──────────────────────
+// Apsara, 2026-09-25, on the real output: "Description looks ugly". It read
+//
+//     Al
+//     combo,Regular
+//     Combo
+//
+// — three ragged lines. Two causes, both fixed here: she typed no space after
+// the comma, so "combo,Regular" was one unbreakable token that forced the
+// break back onto "Al"; and the cell had no say in where it broke. Each
+// material now gets its own line, which is what the column is for and reads
+// as a list rather than as text that ran out of room.
+//
+// ── THE GUARD, WHICH IS MINE ──────────────────────────────────────────────
+// One material, no red and no reflow: the cell prints exactly what it prints
+// today. That covers every single-material invoice she has ever sent, and it
+// covers the packing list of 2026-09-16 ("3 different items in a container..
+// alternator,starter,ac compressor") — there each ROW is its own material and
+// the description is a single name, so this leaves it alone.
+//
+// `row` is the line being drawn; `invNo` is the document's invoice number.
 // Returns escaped HTML, so callers must NOT escape it again.
-function rowItemsHtml(rows, row) {
-    const nameOf = (it) => String((it && (it.item || it.item_desc)) || '').trim();
-    const mine = nameOf(row);
-    const list = rows || [];
+function rowItemsHtml(row, invNo) {
+    const raw = String((row && (row.item || row.item_desc)) || '').trim();
+    // Split on commas only — "Alternator / Starter" and other separators are
+    // left alone, because the comma is the one she actually types and
+    // guessing at others would reflow descriptions nobody asked about.
+    const parts = raw.split(',').map((p) => p.trim()).filter(Boolean);
+    if (parts.length < 2) return escapeHtml(raw);
 
-    // More than one container on the document? Rows carry container_no on a
-    // merged invoice (buildMultiContainerInvoiceData); a single-container
-    // document leaves it blank or repeats the one value.
-    const containers = [];
-    for (const it of list) {
-        const c = String((it && it.container_no) || '').trim().toUpperCase();
-        if (c && !containers.includes(c)) containers.push(c);
-    }
-    if (containers.length < 2) return escapeHtml(mine);
-
-    // Distinct materials in the document's own row order — the order the
-    // invoice already lists them in, which is what the 2026-09-09 requirement
-    // ("Aluminium combo, regular combo as both are there") settled.
-    const all = [];
-    for (const it of list) {
-        const n = nameOf(it);
-        if (n && !all.some((x) => x.toLowerCase() === n.toLowerCase())) all.push(n);
-    }
-    if (all.length < 2) return escapeHtml(mine);
-    return all.map((n) => (n.toLowerCase() === mine.toLowerCase()
-        ? `<span style="color:${ROW_ITEM_RED};">${escapeHtml(n)}</span>`
-        : escapeHtml(n))).join(', ');
+    // The code in the invoice number says which material THIS document is
+    // for. getItemCode already resolves a description to a code; passing the
+    // number alone resolves the document's own.
+    const docCode = getItemCode('', invNo);
+    return parts.map((p) => {
+        const mine = docCode && getItemCode(p, null) === docCode;
+        return mine
+            ? `<span style="color:${ROW_ITEM_RED};">${escapeHtml(p)}</span>`
+            : escapeHtml(p);
+    }).join(',<br>');
 }
 
 // Normalizes whatever the client sent into a flat [{label, amount}, ...]
@@ -440,7 +444,7 @@ function buildInvoiceClassicHtml(data) {
           ${idCell(data.booking_no)}
           ${idCell(item.container_no || data.container_no)}
           ${idCell(item.seal_no || data.seal_no)}
-          <td style="padding:1mm;font-size:10pt;text-align:center;vertical-align:middle;word-wrap:break-word;overflow-wrap:break-word;white-space:normal;">${rowItemsHtml(lineItems, item)}</td>
+          <td style="padding:1mm;font-size:10pt;text-align:center;vertical-align:middle;word-wrap:break-word;overflow-wrap:break-word;white-space:normal;">${rowItemsHtml(item, data.inv_no)}</td>
           <td style="padding:1mm;font-size:10pt;text-align:center;vertical-align:middle;">${formatQty(qty, data)}</td>
           <td style="padding:1mm;font-size:10pt;text-align:center;vertical-align:middle;">${formatRate(rate)}</td>
           <td style="padding:1mm;font-size:10pt;text-align:center;vertical-align:middle;">${formatMoney2(amount)}</td>
@@ -701,7 +705,7 @@ function buildInvoiceClassicHtml(data) {
               // Same helper as the invoice's Description column, so the two
               // documents cannot say different things about the same
               // container — see rowItemsHtml. Already escaped.
-              const name = rowItemsHtml(lineItems, item);
+              const name = rowItemsHtml(item, data.inv_no);
               const w2 = boxWorking(p);
               return w2
                   ? `${name}<div style="font-size:7.5pt;font-weight:400;">${escapeHtml(w2)}</div>`

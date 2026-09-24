@@ -3,11 +3,21 @@
 // ways — first word red, neither red, second word red: "just replicate the
 // colour exactly in invoice and packing lsit".
 //
-// Asked where it belonged she chose the per-row Description column over the
-// header label, having been told plainly that it means each row starts
-// listing ALL the materials on the document rather than only its own. So this
-// is a content change as well as a colour one, and it was made with that
-// understood.
+// ── AND HOW THE FIRST VERSION OF THIS WAS WRONG ───────────────────────────
+// It read every ROW on the document, listed the distinct materials across
+// them, and reddened the one matching that row's container. Every check
+// passed. It also never fired on a single real document, which she found by
+// sending the PDFs: "Description looks ugly".
+//
+// 260901_AL_26JY99 is ONE container, ONE row, and the description she typed
+// is a single string — "Al combo,Regular Combo". Both materials are in the
+// one box, in the one field. Her mock was never two containers: it was the AL
+// invoice and the RC invoice of the SAME shipment, which is why one word is
+// red in each and the middle line is what the document prints today.
+//
+// So: the split is on the COMMA inside one description, and the invoice
+// number's item code decides the red. The fixtures below are her actual
+// document, not an invented one — that is the whole lesson.
 //
 // ── WHAT THIS PINS ────────────────────────────────────────────────────────
 //
@@ -19,11 +29,15 @@
 //      invoice is worse than reddening none: it states that a container holds
 //      goods it does not.
 //
-//   3. A SINGLE-MATERIAL DOCUMENT IS UNTOUCHED. My call, not hers, and
-//      recorded as mine in helpers/invoicePdf.js: on a document with one
-//      material every row would print the same lone name in red, which is
-//      decoration rather than information, and it would change every
-//      single-material invoice she has ever sent.
+//   3. A ONE-MATERIAL DESCRIPTION IS UNTOUCHED. My call, recorded as mine in
+//      helpers/invoicePdf.js. No comma, no split, no red, no reflow — which
+//      covers every single-material invoice she has ever sent AND the
+//      2026-09-16 packing list whose rows are one material each.
+//
+//   5. THE WRAPPING. "Description looks ugly" was the literal complaint: it
+//      printed as "Al / combo,Regular / Combo" over three ragged lines,
+//      because she types no space after the comma so "combo,Regular" was one
+//      unbreakable token. Each material now gets its own line.
 //
 //   4. THE TWO DOCUMENTS AGREE. The invoice's Description column and the
 //      packing list's Item column go through one helper, because two copies
@@ -63,188 +77,119 @@ const buildInvoiceClassicHtml = async (d) => {
 // without meaning to turns this red.
 const RED = '#EA3323';
 
-const row = (desc, container, seal, lbs, rate) => ({
-    item_desc: desc, container_no: container, seal_no: seal,
-    net_weight_lbs: lbs, rate, amount: Math.round(lbs * rate * 100) / 100,
-});
-const doc = (items) => ({
-    inv_no: '260901_AL_26JY96,260901_RC_26JY97', inv_date: '2026-09-24',
-    consignee: 'MK Trading', booking_no: 'BK1', line_items: items,
+const doc = (invNo, desc) => ({
+    inv_no: invNo, inv_date: '2026-09-28', consignee: 'TAEWON AUTOMOTIVE CO., LTD',
+    booking_no: 'DALA25048200',
+    line_items: [{
+        item_desc: desc, container_no: 'GOAU6226932', seal_no: '0009497',
+        weight: 22.979, rate: 1015, amount: 23323.68, net_weight_lbs: 50660,
+    }],
 });
 
-// The Description / Item cells, in document order.
-const comboCells = (html) => (html.match(/<td[^>]*>(?:(?!<\/td>)[\s\S])*?[Cc]ombo(?:(?!<\/td>)[\s\S])*?<\/td>/g) || [])
+// The Description / Item cells, in document order. Anchored on the real cell
+// style so the header's own label (which also names the material) cannot be
+// mistaken for a row.
+const cells = (html) => (html.match(/<td style="padding:1mm;font-size:(?:10|9\.5)pt[^"]*">(?:(?!<\/td>)[\s\S])*?[Cc]ombo(?:(?!<\/td>)[\s\S])*?<\/td>/g) || [])
     .map((c) => c.replace(/<td[^>]*>/, '').replace(/<\/td>/, '').trim());
 
 (async () => {
 
-const MIXED = [
-    row('Al combo', 'AAAU1111111', 'S1', 40000, 0.5),
-    row('Regular Combo', 'BBBU2222222', 'S2', 41000, 0.4),
-];
-const SINGLE = [
-    row('Al combo', 'AAAU1111111', 'S1', 40000, 0.5),
-    row('Al combo', 'CCCU3333333', 'S3', 39000, 0.5),
-];
-
-const mixedHtml  = await buildInvoiceClassicHtml(doc(MIXED));
-const singleHtml = await buildInvoiceClassicHtml(doc(SINGLE));
+// Exactly what she typed into 260901_AL_26JY99: no space after the comma.
+const DESC = 'Al combo,Regular Combo';
 
 // ══════════════════════════════════════════════════════════════════════════
-section('A — her mock, reproduced');
+section('A — her actual invoice, 260901_AL_26JY99');
 // ══════════════════════════════════════════════════════════════════════════
 {
-    const cells = comboCells(mixedHtml);
-    ck('the document has cells naming the materials', cells.length >= 2, String(cells.length));
+    const html = await buildInvoiceClassicHtml(doc('260901_AL_26JY99', DESC));
+    const c = cells(html);
+    ck('the document has Description cells', c.length >= 1, String(c.length));
 
-    // Line one: "Al combo" red, "Regular Combo" black. Line two: the reverse.
-    ck('row 1 reddens Al combo and leaves Regular Combo black',
-       cells[0] === `<span style="color:${RED};">Al combo</span>, Regular Combo`, cells[0]);
-    ck('row 2 reddens Regular Combo and leaves Al combo black',
-       cells[1] === `Al combo, <span style="color:${RED};">Regular Combo</span>`, cells[1]);
+    // The AL invoice reddens Al combo. Her mock, line one.
+    ck('the AL invoice reddens Al combo',
+       c[0] === `<span style="color:${RED};">Al combo</span>,<br>Regular Combo`, c[0]);
+    ck('  and leaves Regular Combo black', !/color:[^"]*">Regular Combo/.test(c[0]), c[0]);
+    ck('the colour is exactly #EA3323', html.includes(RED));
 
-    // THE COLOUR, EXACTLY. Not a near red, not --status-danger.
-    ck('the colour is exactly #EA3323', mixedHtml.includes(RED));
-    ck('  and no other red is used on these cells',
-       !cells.some((c) => /color:\s*(?!#EA3323)(#|red|rgb|var\()/i.test(c)),
-       cells.join(' | '));
+    // Both documents: the invoice's Description column and the packing list's
+    // Item column run through one helper.
+    ck('the packing list carries it too', c.length >= 2 && c[1] === c[0], c.join(' || '));
 }
 
 // ══════════════════════════════════════════════════════════════════════════
-section('B — EVERY row lists every material, with its own in red');
+section('B — the RC invoice of the same shipment');
 // ══════════════════════════════════════════════════════════════════════════
-// The content half of the change, which she was told about before choosing.
+// Her mock, line three. Same container, same description, different number.
 {
-    const cells = comboCells(mixedHtml);
-    for (let i = 0; i < cells.length; i++) {
-        ck(`cell ${i + 1} names both materials`,
-           /Al combo/.test(cells[i]) && /Regular Combo/.test(cells[i]), cells[i]);
-        ck(`  and reddens exactly one of them`,
-           (cells[i].match(new RegExp(RED, 'g')) || []).length === 1, cells[i]);
-    }
-    // Both tables, not just the invoice: the packing list's Item column runs
-    // through the same helper. Two rows each.
-    ck('both the invoice AND the packing list carry it',
-       (mixedHtml.match(new RegExp(RED, 'g')) || []).length === 4,
-       String((mixedHtml.match(new RegExp(RED, 'g')) || []).length));
+    const html = await buildInvoiceClassicHtml(doc('260901_RC_26JY99', DESC));
+    const c = cells(html);
+    ck('the RC invoice reddens Regular Combo',
+       c[0] === `Al combo,<br><span style="color:${RED};">Regular Combo</span>`, c[0]);
+    ck('  and leaves Al combo black', !/color:[^"]*">Al combo/.test(c[0]), c[0]);
 }
 
 // ══════════════════════════════════════════════════════════════════════════
-section('C — a single-material document is untouched');
+section('C — "Description looks ugly": the wrapping');
 // ══════════════════════════════════════════════════════════════════════════
-// Every invoice she has ever sent for one material keeps printing exactly
-// what it prints today. This is the check that makes the feature safe to
-// deploy without reviewing her back catalogue.
+// It printed "Al / combo,Regular / Combo" — three ragged lines, because she
+// types no space after the comma so "combo,Regular" was one token the browser
+// could not break, forcing the break back onto "Al".
 {
-    ck('no red at all', !singleHtml.includes(RED));
-    const cells = comboCells(singleHtml);
-    ck('  and the cell is just the name', cells[0] === 'Al combo', cells[0]);
-    ck('  with no comma-joined list', !cells.some((c) => c.includes(',')), cells.join(' | '));
+    const html = await buildInvoiceClassicHtml(doc('260901_AL_26JY99', DESC));
+    const c = cells(html)[0];
+    ck('each material gets its own line', c.includes(',<br>'), c);
+    ck('  so "combo,Regular" never appears as one token', !/combo,Regular/.test(c), c);
+    ck('  and the break is AFTER the comma, not before it', !/<br>,/.test(c), c);
 }
 
 // ══════════════════════════════════════════════════════════════════════════
-section('D — the rule itself, on the edges');
+section('D — one material: nothing changes at all');
 // ══════════════════════════════════════════════════════════════════════════
+// No comma, no split, no red, no reflow. This is every single-material
+// invoice she has ever sent, and the 2026-09-16 packing list whose rows are
+// one material each.
 {
-    // Three materials: each row still reddens only its own.
-    const THREE = [
-        row('Alternator', 'AAAU1111111', 'S1', 10000, 1),
-        row('Starter', 'BBBU2222222', 'S2', 11000, 1),
-        row('Ac compressor', 'CCCU3333333', 'S3', 12000, 1),
-    ];
-    const h = await buildInvoiceClassicHtml(doc(THREE));
-    const cells = (h.match(/<td[^>]*>(?:(?!<\/td>)[\s\S])*?Alternator(?:(?!<\/td>)[\s\S])*?<\/td>/g) || [])
-        .map((c) => c.replace(/<td[^>]*>/, '').replace(/<\/td>/, '').trim());
-    ck('with three materials every row lists all three',
-       cells.length > 0 && /Alternator/.test(cells[0]) && /Starter/.test(cells[0]) && /Ac compressor/.test(cells[0]),
-       cells[0]);
-    ck('  and still reddens exactly one',
-       (cells[0].match(new RegExp(RED, 'g')) || []).length === 1, cells[0]);
-    ck('  the first row reddens the FIRST material',
-       new RegExp(`color:${RED};">Alternator<`).test(cells[0]), cells[0]);
-
-    // The same material spelled with different casing is ONE material, not
-    // two — otherwise a row would list "Al combo, AL COMBO" and redden one of
-    // them, which reads as a distinction that does not exist.
-    const CASED = [
-        row('Al combo', 'AAAU1111111', 'S1', 10000, 1),
-        row('AL COMBO', 'BBBU2222222', 'S2', 11000, 1),
-    ];
-    const hc = await buildInvoiceClassicHtml(doc(CASED));
-    ck('casing alone does not make a second material', !hc.includes(RED),
-       (comboCells(hc)[0] || ''));
-
-    // A blank description must not produce a stray comma or an empty red span.
-    const BLANK = [
-        row('Al combo', 'AAAU1111111', 'S1', 10000, 1),
-        row('', 'BBBU2222222', 'S2', 11000, 1),
-    ];
-    const hb = await buildInvoiceClassicHtml(doc(BLANK));
-    ck('a blank description is not listed as a material', !hb.includes(RED),
-       (comboCells(hb)[0] || ''));
-
-    // And the text is ESCAPED — the helper returns HTML, so a description
-    // with an angle bracket in it must not become markup on a financial
-    // document.
-    const XSS = [
-        row('<b>Al combo</b>', 'AAAU1111111', 'S1', 10000, 1),
-        row('Regular Combo', 'BBBU2222222', 'S2', 11000, 1),
-    ];
-    const hx = await buildInvoiceClassicHtml(doc(XSS));
-    // BOTH BRANCHES. The first version of this check only proved the text
-    // was escaped SOMEWHERE — and the black branch escapes it independently,
-    // so dropping escapeHtml from inside the red span left the test green.
-    // A mutation that survives is a check that is not testing its own name.
-    ck('a description is escaped INSIDE the red span',
-       hx.includes(`<span style="color:${RED};">&lt;b&gt;Al combo&lt;/b&gt;</span>`),
-       (hx.match(new RegExp(`<span style="color:${RED};">[\\s\\S]{0,40}`)) || [''])[0]);
-    ck('  and escaped in the black branch too',
-       /Al combo<\/b&gt;, |&lt;b&gt;Al combo&lt;\/b&gt;, /.test(hx) || hx.includes('&lt;b&gt;Al combo&lt;/b&gt;, '),
-       'the non-highlighted copy must be escaped as well');
-    ck('  and it is not double-escaped', !hx.includes('&amp;lt;b&amp;gt;'));
-    ck('  so no raw tag reaches the document', !hx.includes('<b>Al combo</b>'));
+    const html = await buildInvoiceClassicHtml(doc('260901_AL_26JY99', 'Al combo'));
+    const c = cells(html);
+    ck('no red', !html.includes(RED));
+    ck('  no line break inserted', !c[0].includes('<br>'), c[0]);
+    ck('  the cell is just the name', c[0] === 'Al combo', c[0]);
 }
 
 // ══════════════════════════════════════════════════════════════════════════
-section('E — ONE CONTAINER, NO RED — the regression that got caught');
+section('E — the edges');
 // ══════════════════════════════════════════════════════════════════════════
-// This guard was not reasoned out in advance. It was found by
-// tests/packing-list.js going red, which is the whole reason CLAUDE.md says
-// to run the suite rather than the files you remember.
-//
-// Apsara, 2026-09-16: "sometimes i will have 3 different items in a
-// container..for eg:alternator,starter,ac compressor.each with separate
-// weight" — which is why the packing list has an Item column at all. Every
-// row there is the SAME container holding a different material. Listing all
-// three on all three rows turns a column she asked for into noise, and
-// reddening one states a distinction that does not exist: they are all in
-// the one box.
-//
-// The red answers "which of these is in THIS container". One container, no
-// question, no red.
 {
-    const ONE_BOX = [
-        row('Alternator', 'HMMU7060866', 'S1', 6000, 1),
-        row('Starter', 'HMMU7060866', 'S1', 5000, 1),
-        row('Ac compressor', 'HMMU7060866', 'S1', 4000, 1),
-    ];
-    const h = await buildInvoiceClassicHtml(doc(ONE_BOX));
-    ck('three materials in ONE container get no red', !h.includes(RED));
-    const cells = (h.match(/<td[^>]*>(?:(?!<\/td>)[\s\S])*?Alternator(?:(?!<\/td>)[\s\S])*?<\/td>/g) || [])
-        .map((c) => c.replace(/<td[^>]*>/, '').replace(/<\/td>/, '').trim());
-    ck('  and each row still names only its own material', cells[0] === 'Alternator', cells[0]);
-    ck('  so the Item column she asked for on 2026-09-16 is intact',
-       !cells.some((c) => /Starter/.test(c)), cells.join(' | '));
+    // A number whose code matches NEITHER part: no red rather than a guess.
+    // Reddening the wrong material states that a box holds goods it does not.
+    const h1 = await buildInvoiceClassicHtml(doc('PLAIN-1234', DESC));
+    ck('an invoice number with no item code reddens nothing', !h1.includes(RED),
+       (cells(h1)[0] || ''));
+    ck('  but still puts each material on its own line', cells(h1)[0].includes(',<br>'),
+       cells(h1)[0]);
 
-    // A missing container_no must take the same safe branch — an invoice
-    // that never filled the field is a single-container document, not a
-    // licence to list everything.
-    const NO_CONTAINER = [
-        row('Al combo', '', '', 40000, 0.5),
-        row('Regular Combo', '', '', 41000, 0.4),
-    ];
-    const h2 = await buildInvoiceClassicHtml(doc(NO_CONTAINER));
-    ck('no container numbers at all means no red either', !h2.includes(RED));
+    // Spacing she may or may not type — both forms behave identically.
+    const h2 = await buildInvoiceClassicHtml(doc('260901_AL_26JY99', 'Al combo, Regular Combo'));
+    ck('a space after the comma changes nothing',
+       cells(h2)[0] === `<span style="color:${RED};">Al combo</span>,<br>Regular Combo`, cells(h2)[0]);
+
+    // Three materials in the one description.
+    const h3 = await buildInvoiceClassicHtml(doc('260901_AL_26JY99', 'Al combo,Regular Combo,Zorba'));
+    const c3 = cells(h3)[0];
+    ck('three materials each get a line', (c3.match(/<br>/g) || []).length === 2, c3);
+    ck('  and exactly one is red', (c3.match(new RegExp(RED, 'g')) || []).length === 1, c3);
+
+    // A trailing comma must not produce an empty line.
+    const h4 = await buildInvoiceClassicHtml(doc('260901_AL_26JY99', 'Al combo,'));
+    ck('a trailing comma is not a second material', !h4.includes('<br>')
+       || !cells(h4)[0].endsWith('<br>'), cells(h4)[0]);
+
+    // Escaped — the helper returns HTML.
+    const h5 = await buildInvoiceClassicHtml(doc('260901_AL_26JY99', '<b>Al combo</b>,Regular Combo'));
+    ck('the red part is escaped',
+       h5.includes(`<span style="color:${RED};">&lt;b&gt;Al combo&lt;/b&gt;</span>`)
+       || h5.includes('&lt;b&gt;Al combo&lt;/b&gt;'), 'an unescaped tag would render as markup');
+    ck('  and no raw tag reaches the document', !h5.includes('<b>Al combo</b>'));
 }
 
 console.log(`\n  ${pass} passed, ${fail} failed`);

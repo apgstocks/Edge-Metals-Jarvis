@@ -305,32 +305,20 @@ console.log('\n=== the packing list names what is in the container ===');
           .map((c) => c[1].replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim()));
 
   ck('the packing table has an Item column', /Item/.test(rows[0][1]), true);
-  // ── WHAT THIS ROW SAYS CHANGED ON 2026-09-24, DELIBERATELY ───────────
-  // Apsara, with a mock: "just replicate the colour exactly in invoice and
-  // packing lsit". Asked where it belonged she chose the per-row Description
-  // column, having been told it means each row lists ALL the materials on the
-  // document rather than only its own, with the one actually IN that
-  // container in #EA3323.
+  // ── THIS ASSERTION WAS RIGHT ALL ALONG ───────────────────────────────
+  // On 2026-09-24 I rewrote it to expect "Aluminium combo, Regular combo" in
+  // BOTH rows with one reddened, on the theory that her red-highlight request
+  // listed every material on every row of a multi-container invoice. It did
+  // not. Her real document (260901_AL_26JY99) is ONE container whose single
+  // description field reads "Al combo,Regular Combo" — the split is on the
+  // COMMA inside one description, and the invoice number's code picks the
+  // red. See helpers/invoicePdf.js rowItemsHtml and tests/row-item-colour.js.
   //
-  // This assertion used to read ['Aluminium combo', 'Regular combo'] and it
-  // was right until she changed the contract. It is REWRITTEN to the new one
-  // rather than deleted, because the thing it was guarding still matters:
-  // this fixture is the two-container invoice from 2026-09-09, and the Item
-  // column still has to say what is in each box. Only the form of the answer
-  // moved. (`rows` strips tags to spaces, hence the loose spacing here; the
-  // exact markup is pinned in tests/row-item-colour.js.)
-  ck('...every row names both materials', [
-      /Aluminium combo/.test(rows[1][1]) && /Regular combo/.test(rows[1][1]),
-      /Aluminium combo/.test(rows[2][1]) && /Regular combo/.test(rows[2][1]),
-  ], [true, true]);
-  // And the one that is IN that container is the one reddened. Read off the
-  // raw table, because `rows` has already thrown the spans away — a check
-  // that cannot see the colour cannot police it.
-  const rawRows = [...tbl.matchAll(/<tr[^>]*>[\s\S]*?<\/tr>/g)].map((m) => m[0]);
-  ck('...reddening the one in THAT container', [
-      /<span style="color:#EA3323;">Aluminium combo<\/span>/.test(rawRows[1]),
-      /<span style="color:#EA3323;">Regular combo<\/span>/.test(rawRows[2]),
-  ], [true, true]);
+  // This fixture's two rows each carry ONE material, so nothing splits and
+  // nothing reddens: the Item column says what is in each container, exactly
+  // as it did before. Restored to its original form, with the detour recorded
+  // so nobody re-derives the same wrong rule from the same mock.
+  ck('...naming each container', [rows[1][1], rows[2][1]], ['Aluminium combo', 'Regular combo']);
   // ── AND THE INVOICE'S OWN SHAPE IS BACK ──────────────────────────────
   // Apsara, 2026-09-17: "my invoice tab's packing list need to have
   // gross,tare,container,boxes like last time". The tare is BROKEN OUT here
