@@ -268,6 +268,22 @@ section('D — the ticket the seller signs, RENDERED');
     ck('  as a restatement of the pounds', /30000 lb = 13\.608 MT/.test(mixedReceipt)
        || /= 13\.608 MT/.test(mixedReceipt), 'the conversion line is missing');
 
+    // ── ALWAYS THREE DECIMALS ────────────────────────────────────────────
+    // Her real ticket OUT_07 (HMS, 53215/2288 lb at $270/MT) printed its
+    // tonnage as "23.1" while another ticket printed "13.608": net_mt was
+    // being wrapped in Number(), and Number('23.100') is 23.1. A weights
+    // column at one decimal on one document and three on the next reads as a
+    // different measurement, not a tidier one.
+    {
+        const HMS = { description: 'HMS', gross_weight: 53215, tare_weight: 2288, net_weight: 50927, price: 270, unit: 'mt', amount: 6237.03 };
+        const real = await textOf(await pdf.generateLoadPdf({
+            ...mk([HMS]), id: 'OUT_07', gross_weight: 53215, tare_weight: 2288, net_weight: 50927, amount: 6237.03,
+        }, { kind: 'sale' }));
+        ck('a tonnage ending in zeros still prints three decimals', /23\.100/.test(real),
+           (real.match(/HMS.{0,60}/) || [''])[0]);
+        ck('  and not the trimmed form', !/23\.1[^0]/.test(real));
+    }
+
     // ── AND THE AMOUNT IS STILL THERE. The fault that prompted this. ──────
     ck('the receipt still carries the amount on the MT row', /10,886\.23/.test(mixedReceipt));
     ck('  and the rate says what it is per', /800\.00\/MT/.test(mixedReceipt));

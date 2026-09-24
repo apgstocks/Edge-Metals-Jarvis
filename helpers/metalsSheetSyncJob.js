@@ -93,10 +93,21 @@ async function runNightly(opts = {}) {
             // Through the SAME commit the Upload screen uses, so the night's
             // work is a batch with an id and an undo — not a scatter of rows
             // that have to be found again one by one.
+            //
+            // ── PLAN FIRST. commit() TAKES A PLAN, NOT ROWS ────────────────
+            // This handed commit() a bare { bills, sales } object, which has
+            // no .batch — so commit() threw "nothing planned to commit" on
+            // EVERY live night, the job caught it into out.error, and the
+            // scheduler logged that sentence as if it were a summary
+            // (2026-09-25: "bills from the nightly sync: 0 | sales: 0" after
+            // days of running live). plan() is what stamps the batch id,
+            // prepares each row through bills.prepareBill/sales.prepareSale
+            // and separates the rows that cannot be saved at all.
             const siw = require('./sheetImportWrite');
-            out.committed = await siw.commit(
-                { bills: report.newBills, sales: report.newSales },
-                { source: `nightly-sheet-sync ${new Date().toISOString().slice(0, 10)}`, force: true });
+            const source = `nightly-sheet-sync ${new Date().toISOString().slice(0, 10)}`;
+            const planned = siw.plan({ bills: report.newBills, sales: report.newSales }, { source, actor: 'nightly sheet sync' });
+            out.refused = planned.refused || [];
+            out.committed = await siw.commit(planned, { source, force: true });
         }
         out.ok = true;
     } catch (e) {

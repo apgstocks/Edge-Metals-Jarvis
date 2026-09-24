@@ -633,7 +633,13 @@ function withNetMt(items) {
     return (Array.isArray(items) ? items : []).map((it) => {
         const perMt = it && String(it.unit || '').trim().toLowerCase() === 'mt';
         const net = it && typeof it.net_weight === 'number' && isFinite(it.net_weight) ? it.net_weight : null;
-        return { ...it, net_mt: (perMt && net != null) ? Number((net / 2204.62).toFixed(3)) : null };
+        // A STRING, not a Number. Number('23.100') is 23.1, and String(23.1)
+        // is "23.1" — so OUT_07 printed a tonnage at one decimal place while
+        // 13.608 on the next ticket printed at three. Inconsistent precision
+        // on a column of weights on a customer document reads as carelessness
+        // at best and as a different measurement at worst. Fixed at 3, which
+        // is what helpers/invoicePdf.js:704 has always done.
+        return { ...it, net_mt: (perMt && net != null) ? (net / 2204.62).toFixed(3) : null };
     });
 }
 

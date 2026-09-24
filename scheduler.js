@@ -1150,8 +1150,23 @@ async function eodYardReport() {
 async function nightlyMetalsSheetSync() {
     const job = require('./helpers/metalsSheetSyncJob');
     const result = await job.runNightly({ write: true });
-    console.log(`[SCHED] metals-sheet-sync ${result.dryRun ? '(dry run)' : '(live)'}:`,
-        result.error || require('./helpers/metalsSheetSync').summarise(result.report));
+    // ── A FAILURE MUST NOT READ LIKE A SUMMARY ────────────────────────────
+    // This printed `result.error || summarise(...)`, so the night the job
+    // threw "nothing planned to commit" the log said exactly that, in the
+    // place a summary belongs — and it looked like a quiet, successful night
+    // with nothing to add. It had written nothing for days (2026-09-25).
+    const mode = result.dryRun ? '(dry run)' : '(live)';
+    if (result.error) {
+        console.error(`[SCHED] metals-sheet-sync ${mode} FAILED — NOTHING WAS WRITTEN: ${result.error}`);
+    } else {
+        const wrote = result.committed
+            ? ` — wrote ${result.committed.bills} bill(s), ${result.committed.sales} invoice(s) as batch ${result.committed.batch}`
+            : (result.dryRun ? '' : ' — nothing new to write');
+        console.log(`[SCHED] metals-sheet-sync ${mode}: ${require('./helpers/metalsSheetSync').summarise(result.report)}${wrote}`);
+        if ((result.refused || []).length) {
+            console.error(`[SCHED] metals-sheet-sync: ${result.refused.length} row(s) could not be prepared and were NOT written`);
+        }
+    }
     try { await job.emailReport(result); }
     catch (e) { console.error('[SCHED] metals-sheet-sync email failed:', e.message); }
     return result;

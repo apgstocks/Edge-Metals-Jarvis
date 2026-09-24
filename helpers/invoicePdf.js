@@ -283,6 +283,85 @@ function itemLabels(lineItems, invNo) {
     return out.join(', ');
 }
 
+// ── EVERY MATERIAL ON THE DOCUMENT, WITH THIS ROW'S IN RED ────────────────
+//
+// Apsara, 2026-09-24, with a mock of "Al combo, Regular Combo" rendered three
+// ways — the first word red, then neither, then the second word red: "just
+// replicate the colour exactly in invoice and packing lsit". Asked where it
+// belonged she chose the per-row Description column over the header label,
+// having been told it means each row starts listing ALL the materials rather
+// than only its own.
+//
+// So a row on a mixed invoice reads "Al combo, Regular Combo" with the one
+// that is actually IN that container in red. The point is that a customer
+// reading line three can see at a glance which of the two materials that
+// container holds, without cross-referencing the container number against
+// anything.
+//
+// ── THE COLOUR ────────────────────────────────────────────────────────────
+// #EA3323, sampled from her mock: it was the solid glyph fill (1,284 px of
+// it, everything else in that family being anti-aliasing). Not a named CSS
+// red and not the app's --status-danger, both of which are visibly different.
+const ROW_ITEM_RED = '#EA3323';
+
+// ── TWO GUARDS, BOTH MINE, BOTH RECORDED AS MINE ──────────────────────────
+//
+// ONE MATERIAL, NO RED. Her mock is a MIXED document — two materials, one
+// highlighted. On a single-material invoice there is nothing to distinguish:
+// every row would print the same lone name in red, which is decoration rather
+// than information, and it would change every single-material invoice she has
+// ever sent. Those keep printing exactly what they print today, in black.
+//
+// ONE CONTAINER, NO RED EITHER — and this one is a REGRESSION CAUGHT BY
+// tests/packing-list.js rather than something I reasoned out in advance.
+// Apsara, 2026-09-16: "sometimes i will have 3 different items in a
+// container..for eg:alternator,starter,ac compressor.each with separate
+// weight", which is why the packing list has an Item column at all. Every row
+// there is the SAME container holding a different material. Listing all three
+// on all three rows turns a column she asked for into noise, and reddening
+// one of them states a distinction that does not exist — they are all in the
+// one box.
+//
+// The red answers "which of these materials is in THIS container". With one
+// container that question has no content. So the list appears only when the
+// document actually spans more than one container, which is precisely the
+// mixed invoice her mock came from.
+//
+// Both guards are my calls. If she wants red on a single-container document
+// too, each is one line here — but it should be her decision rather than one
+// she discovers on a customer's invoice.
+//
+// `rows` is every line item on the document; `row` is the one being drawn.
+// Returns escaped HTML, so callers must NOT escape it again.
+function rowItemsHtml(rows, row) {
+    const nameOf = (it) => String((it && (it.item || it.item_desc)) || '').trim();
+    const mine = nameOf(row);
+    const list = rows || [];
+
+    // More than one container on the document? Rows carry container_no on a
+    // merged invoice (buildMultiContainerInvoiceData); a single-container
+    // document leaves it blank or repeats the one value.
+    const containers = [];
+    for (const it of list) {
+        const c = String((it && it.container_no) || '').trim().toUpperCase();
+        if (c && !containers.includes(c)) containers.push(c);
+    }
+    if (containers.length < 2) return escapeHtml(mine);
+
+    // Distinct materials in the document's own row order — the order the
+    // invoice already lists them in, which is what the 2026-09-09 requirement
+    // ("Aluminium combo, regular combo as both are there") settled.
+    const all = [];
+    for (const it of list) {
+        const n = nameOf(it);
+        if (n && !all.some((x) => x.toLowerCase() === n.toLowerCase())) all.push(n);
+    }
+    if (all.length < 2) return escapeHtml(mine);
+    return all.map((n) => (n.toLowerCase() === mine.toLowerCase()
+        ? `<span style="color:${ROW_ITEM_RED};">${escapeHtml(n)}</span>`
+        : escapeHtml(n))).join(', ');
+}
+
 // Normalizes whatever the client sent into a flat [{label, amount}, ...]
 // list. Apsara's redesign ("Invoice Notes" — replaces the old dedicated
 // Freight Deduction field) lets her add arbitrary labeled adjustment rows,
@@ -361,7 +440,7 @@ function buildInvoiceClassicHtml(data) {
           ${idCell(data.booking_no)}
           ${idCell(item.container_no || data.container_no)}
           ${idCell(item.seal_no || data.seal_no)}
-          <td style="padding:1mm;font-size:10pt;text-align:center;vertical-align:middle;word-wrap:break-word;overflow-wrap:break-word;white-space:normal;">${escapeHtml(item.item_desc)}</td>
+          <td style="padding:1mm;font-size:10pt;text-align:center;vertical-align:middle;word-wrap:break-word;overflow-wrap:break-word;white-space:normal;">${rowItemsHtml(lineItems, item)}</td>
           <td style="padding:1mm;font-size:10pt;text-align:center;vertical-align:middle;">${formatQty(qty, data)}</td>
           <td style="padding:1mm;font-size:10pt;text-align:center;vertical-align:middle;">${formatRate(rate)}</td>
           <td style="padding:1mm;font-size:10pt;text-align:center;vertical-align:middle;">${formatMoney2(amount)}</td>
@@ -619,7 +698,10 @@ function buildInvoiceClassicHtml(data) {
           // / 12 boxes x 120 lb". The Boxes column goes back to one clean
           // figure.
           cell: (item, p) => {
-              const name = escapeHtml(item.item || item.item_desc || '');
+              // Same helper as the invoice's Description column, so the two
+              // documents cannot say different things about the same
+              // container — see rowItemsHtml. Already escaped.
+              const name = rowItemsHtml(lineItems, item);
               const w2 = boxWorking(p);
               return w2
                   ? `${name}<div style="font-size:7.5pt;font-weight:400;">${escapeHtml(w2)}</div>`
