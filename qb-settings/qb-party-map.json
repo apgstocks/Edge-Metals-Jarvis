@@ -104,7 +104,8 @@
       "qbId": "571",
       "qbName": "FMC Metal",
       "by": "apsara",
-      "at": "2026-09-21T14:23:16.429Z"
+      "at": "2026-09-24T21:08:39.235Z",
+      "reason": "FMC: one company, every spelling — 2026-09-25"
     },
     "gomezmidland": {
       "jarvisName": "Gomez/Midland",
@@ -311,6 +312,22 @@
       "by": "apsara",
       "at": "2026-09-24T06:11:51.185Z",
       "reason": "already in QuickBooks, linked by qb-create-party"
+    },
+    "fmcmetal": {
+      "jarvisName": "FMC METAL",
+      "qbId": "571",
+      "qbName": "FMC Metal",
+      "by": "apsara",
+      "at": "2026-09-24T21:08:39.248Z",
+      "reason": "FMC: one company, every spelling — 2026-09-25"
+    },
+    "fmcmetals": {
+      "jarvisName": "FMC metals",
+      "qbId": "571",
+      "qbName": "FMC Metal",
+      "by": "apsara",
+      "at": "2026-09-24T21:08:39.250Z",
+      "reason": "FMC: one company, every spelling — 2026-09-25"
     }
   },
   "customer": {
@@ -798,6 +815,30 @@
       "by": "apsara",
       "at": "2026-09-22T05:14:16.696Z",
       "reason": "Edge Metals customer (6061 truck wheels), 2026-09-22"
+    },
+    "fmcmetals": {
+      "jarvisName": "FMC metals",
+      "qbId": "561",
+      "qbName": "FMC METALS",
+      "by": "apsara",
+      "at": "2026-09-24T21:08:39.252Z",
+      "reason": "FMC: one company, every spelling — 2026-09-25"
+    },
+    "fmc": {
+      "jarvisName": "FMC",
+      "qbId": "561",
+      "qbName": "FMC METALS",
+      "by": "apsara",
+      "at": "2026-09-24T21:08:39.237Z",
+      "reason": "FMC: one company, every spelling — 2026-09-25"
+    },
+    "fmcmetal": {
+      "jarvisName": "FMC METAL",
+      "qbId": "561",
+      "qbName": "FMC METALS",
+      "by": "apsara",
+      "at": "2026-09-24T21:08:39.249Z",
+      "reason": "FMC: one company, every spelling — 2026-09-25"
     }
   },
   "item": {
