@@ -98,7 +98,13 @@ section('D — unkeyable rows are reported, never inserted');
     // containing a comma shifts every column after it.
     const r = sync.diff({ sheetBills: [bill({ booking_no: '', container_no: '' }), bill()], bills: [bill()] });
     ck('it is not proposed for insert', r.newBills.length === 0, JSON.stringify(r.newBills));
-    ck('it is reported as unreadable', r.unkeyed.length === 1 && r.unkeyed[0].kind === 'bill');
+    // Since 2026-09-24 looksLikeShipment catches this one FIRST — no container
+    // and no booking is also not a shipment — so it lands in notShipments
+    // rather than unkeyed. Either bucket is a report; what matters is that it
+    // is never inserted, which the check above pins.
+    ck('it is reported rather than written',
+        (r.unkeyed.length + r.notShipments.length) === 1,
+        JSON.stringify({ unkeyed: r.unkeyed.length, notShipments: r.notShipments.length }));
 }
 
 section('E — what counts as a disagreement, and what is just noise');
@@ -193,6 +199,76 @@ section('I — it is a DRY RUN until she turns it on');
 
     if (before2 === undefined) delete process.env.SHEET_SYNC_WRITE; else process.env.SHEET_SYNC_WRITE = before2;
     ck('the env is left as it was found', process.env.SHEET_SYNC_WRITE === before2);
+}
+
+section('J — WHAT THE FIRST DRY RUN CAUGHT (2026-09-24)');
+{
+    // Run against her live workbook, the job proposed inserting her LEGEND
+    // row and two notes as invoices, and listed one invoice twice. Every
+    // fixture below is a real row from that run.
+
+    // ── 1. notes and legends are not shipments ────────────────────────────
+    const legend = { invoice_no: 'AL-ALUMINIUM COMBO,AP-Scrap Auto Parts,RC-Regular Combo,BT-Battery' };
+    const note = { invoice_no: 'QB DONE TILL 5/8' };
+    const noteInContainer = { date: '2026-06-30', invoice_no: '260630_BAT_26NT08',
+                              container_no: 'Order confirmed on Text with Bose', customer: 'Next Trading' };
+    const real = { date: '2026-09-21', invoice_no: '260921_BAT_26MK74',
+                   container_no: 'FSCU8671703', customer: 'MK Trading', item: 'BATTERY' };
+
+    ck('her legend row is not a shipment', sync.looksLikeShipment(legend) === false);
+    ck('a note to herself is not a shipment', sync.looksLikeShipment(note) === false);
+    ck('a sentence in the container cell is not a shipment', sync.looksLikeShipment(noteInContainer) === false);
+    ck('a real row still is', sync.looksLikeShipment(real) === true);
+
+    const r = sync.diff({ sheetSales: [legend, note, noteInContainer, real], sales: [] });
+    ck('  only the real one is queued to insert',
+        r.newSales.length === 1 && r.newSales[0].invoice_no === '260921_BAT_26MK74',
+        JSON.stringify(r.newSales.map((x) => x.invoice_no)));
+    ck('  and the other three are reported, not written', r.notShipments.length === 3);
+
+    // ── 2. one invoice, several grades ────────────────────────────────────
+    // 260923_MC_26MK80 appeared TWICE in the insert list because the key
+    // ignored the grade. Both rows are real and both must be kept — as two
+    // DIFFERENT rows, not one row inserted twice.
+    const mk80 = (item) => ({ date: '2026-09-23', invoice_no: '260923_MC_26MK80',
+                              container_no: 'KOCU4930737', customer: 'MK Trading', item });
+    const two = sync.diff({ sheetSales: [mk80('Regular combo'), mk80('Al combo')], sales: [] });
+    ck('two grades on one invoice are two rows', two.newSales.length === 2);
+    ck('  and they have different keys',
+        sync.saleKey(mk80('Regular combo')) !== sync.saleKey(mk80('Al combo')));
+    // With one of them already stored, only the other is new.
+    const one = sync.diff({ sheetSales: [mk80('Regular combo'), mk80('Al combo')],
+                            sales: [mk80('Al combo')] });
+    ck('  storing one leaves exactly one to add', one.newSales.length === 1
+        && one.newSales[0].item === 'Regular combo', JSON.stringify(one.newSales.map((x) => x.item)));
+
+    // ── 3. grades are no longer false disagreements ───────────────────────
+    // 251203 25DHATU01 compared Alternators, Starters and Compressors against
+    // ONE stored row and called two of them conflicts. Now they are simply
+    // different rows.
+    const dhatu = (item, price) => ({ date: '2025-12-12', invoice_no: '251203 25DHATU01',
+                                      container_no: 'APZU3556287', item, invoice_price: price });
+    const d = sync.diff({
+        sheetSales: [dhatu('ALTERNATORS', 0.9405), dhatu('STATERS', 0.7614), dhatu('COMPRESSOR', 0.5595)],
+        sales: [dhatu('COMPRESSOR', 0.5595)],
+    });
+    ck('the stored grade is NOT a disagreement', d.changedSales.length === 0,
+        JSON.stringify(d.changedSales));
+    ck('  and the two unstored grades are simply new', d.newSales.length === 2);
+
+    // ── 4. spacing is not a change of supplier ────────────────────────────
+    ck('"Edge Yard" and "EdgeYard" agree', sync.same('Edge Yard', 'EdgeYard'));
+
+    // ── 5. but a REAL price difference is still reported ──────────────────
+    // HDMU4953511: sheet 1.32 vs Jarvis 1.07, $37,408.80 vs $30,323.80. The
+    // one genuine find in that run, and it must survive every fix above.
+    const hd = (price, amt) => ({ date: '2026-09-01', booking_no: 'DALA9', container_no: 'HDMU4953511',
+                                  supplier: 'Gomez', supplier_price: price, supplier_invoice_amount: amt });
+    const real2 = sync.diff({ sheetBills: [hd(1.32, 37408.8)], bills: [hd(1.07, 30323.8)] });
+    ck('a real price difference is still caught', real2.changedBills.length === 1);
+    ck('  naming both figures',
+        real2.changedBills[0].differences.some((x) => x.field === 'supplier_price' && x.sheet === 1.32 && x.jarvis === 1.07),
+        JSON.stringify(real2.changedBills[0].differences));
 }
 
 // The async checks finish before the tally — a count printed while a promise

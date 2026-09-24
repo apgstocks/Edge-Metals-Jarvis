@@ -49,10 +49,56 @@ function billKey(row) {
     if (!b && !c) return null;             // nothing to match on — never "new"
     return `${b}|${c}`;
 }
+// ── AND A SALE IS KEYED BY ITS GRADE TOO ───────────────────────────────────
+// One invoice covers several grades and sheetImport's toSales does NOT group
+// them — one row per grade, deliberately (toBills groups by container; toSales
+// does not). Keying on invoice + container alone collapsed them, and the first
+// dry run showed exactly what that costs:
+//
+//   260923_MC_26MK80 / KOCU4930737 appeared TWICE in the insert list — it
+//   would have been added twice that night and twice again the next;
+//
+//   and 251203 25DHATU01 compared Alternators, Starters AND Compressors
+//   against one stored row, then reported the other two as disagreements.
+//   Most of that run's 94 conflicts were this artefact, not real ones.
+//
+// The grade is what makes the row, so the grade is in the key.
 function saleKey(row) {
     const i = norm(row && row.invoice_no), c = norm(row && row.container_no);
+    const g = norm(row && (row.item || row.description));
     if (!i && !c) return null;
-    return `${i}|${c}`;
+    return `${i}|${c}|${g}`;
+}
+
+// ── IS THIS A SHIPMENT AT ALL? ─────────────────────────────────────────────
+// sheetImport keeps any row that says ANYTHING — its own comment: "Only a row
+// that says NOTHING is dropped". That is right for the upload screen, where
+// she reviews the list before it is written. It is wrong at 11pm with nobody
+// watching, and the first dry run proved it: these three were queued as new
+// invoices —
+//
+//   AL-ALUMINIUM COMBO,AP-Scrap Auto Parts,RC-Regular Combo,…   (her legend)
+//   QB DONE TILL 5/8                                            (a note)
+//   260630_BAT_26NT08 … "Order confirmed on Text with Bose"     (a note in the
+//                                                                container cell)
+//
+// So a row must LOOK like a shipment before anything is inserted from it: a
+// date, and something that identifies the container it travelled in. Rows that
+// fail are reported, never written — she can see them and decide.
+const CONTAINER_RE = /^[A-Z]{4}\d{6,7}$/;
+
+function looksLikeShipment(row) {
+    if (!row) return false;
+    const c = norm(row.container_no), b = norm(row.booking_no);
+    // Prose in the invoice cell: her legend row is one long comma-separated
+    // line, and a note is a sentence. Neither is an invoice number.
+    const inv = String((row.invoice_no == null ? '' : row.invoice_no)).trim();
+    if (inv.length > 40 || /,\s/.test(inv)) return false;
+    // A container number has a shape. A sentence in that cell does not.
+    if (c && !CONTAINER_RE.test(c) && !b) return false;
+    if (!c && !b) return false;                 // nothing to identify it by
+    if (!String(row.date || '').trim()) return false;
+    return true;
 }
 
 // ── WHAT COUNTS AS A DISAGREEMENT ──────────────────────────────────────────
@@ -66,8 +112,12 @@ const SALE_WATCH = ['date', 'customer', 'consignee', 'invoice_price', 'freight_c
     'commission_per_mt', 'seal_no', 'item'];
 
 const same = (a, b) => {
-    const x = String(a == null ? '' : a).trim();
-    const y = String(b == null ? '' : b).trim();
+    // Whitespace collapsed, not just trimmed. The first dry run reported
+    // supplier: sheet "Edge Yard" vs Jarvis "EdgeYard" as a disagreement —
+    // one spacing difference is not a change of supplier.
+    const flat = (v) => String(v == null ? '' : v).trim().replace(/\s+/g, ' ');
+    const x = flat(a);
+    const y = flat(b);
     // A blank on EITHER side is not a disagreement — a field she has not
     // filled in yet on one side is the normal state of a live sheet.
     if (!x || !y) return true;
@@ -84,7 +134,7 @@ const same = (a, b) => {
     // Money and weights: equal to the cent. "1,250.00" and "1250" are the same
     // number typed two ways, and flagging that is noise.
     if (Number.isFinite(nx) && Number.isFinite(ny)) return Math.abs(nx - ny) < 0.005;
-    return x.toLowerCase() === y.toLowerCase();
+    return x.replace(/\s/g, '').toLowerCase() === y.replace(/\s/g, '').toLowerCase();
 };
 
 function differences(sheetRow, jarvisRow, watch) {
@@ -107,9 +157,13 @@ function diff({ sheetBills = [], sheetSales = [], bills = [], sales = [] }) {
     const haveSales = new Map();
     for (const s of sales) { const k = saleKey(s); if (k) haveSales.set(k, s); }
 
-    const report = { newBills: [], newSales: [], changedBills: [], changedSales: [], unkeyed: [] };
+    const report = { newBills: [], newSales: [], changedBills: [], changedSales: [],
+                     unkeyed: [], notShipments: [] };
 
     for (const row of sheetBills) {
+        // A legend line or a note to herself is not a bill. Reported, never
+        // written — see looksLikeShipment.
+        if (!looksLikeShipment(row)) { report.notShipments.push({ kind: 'bill', row }); continue; }
         const k = billKey(row);
         // No booking AND no container: it cannot be matched next time, so it
         // must not be inserted either — an unkeyable row added tonight is a
@@ -121,6 +175,7 @@ function diff({ sheetBills = [], sheetSales = [], bills = [], sales = [] }) {
         if (d.length) report.changedBills.push({ key: k, container_no: row.container_no, differences: d });
     }
     for (const row of sheetSales) {
+        if (!looksLikeShipment(row)) { report.notShipments.push({ kind: 'sale', row }); continue; }
         const k = saleKey(row);
         if (!k) { report.unkeyed.push({ kind: 'sale', row }); continue; }
         const mine = haveSales.get(k);
@@ -170,8 +225,10 @@ function summarise(report) {
         : 'Nothing new';
     const tail = c ? `, ${c} disagree with the sheet` : '';
     const bad = report.unkeyed.length ? `, ${report.unkeyed.length} unreadable` : '';
-    return head + tail + bad + '.';
+    const nots = (report.notShipments || []).length
+        ? `, ${report.notShipments.length} not shipment rows` : '';
+    return head + tail + bad + nots + '.';
 }
 
 module.exports = { diff, differences, billKey, saleKey, same, fetchWorkbook, summarise,
-    BILL_WATCH, SALE_WATCH };
+    looksLikeShipment, BILL_WATCH, SALE_WATCH };
