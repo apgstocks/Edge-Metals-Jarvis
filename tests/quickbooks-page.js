@@ -245,7 +245,8 @@ const ck = (name, ok, extra) => { if (ok) { pass++; console.log('  PASS ', name)
     ck('the page makes her type the document number to void one', /mustType: d\.doc/.test(pageSrc5));
     ck('...and shows every warning before she can', /im\.warnings\.map/.test(pageSrc5));
     ck('duplicates are on the page', /data-dupes=/.test(pageSrc5) && /api\/qb\/duplicates/.test(pageSrc5));
-    ck('...with the weak signal marked as weak', /Weak signal/.test(pageSrc5));
+    ck('...and a reused reference is shown as NOT a duplicate, not accused',
+       /NOT a duplicate: different containers under one number/.test(pageSrc5));
     const dupes = await get('/api/qb/duplicates');
     ck('with QuickBooks unreachable, the duplicate check says so', dupes.code === 502 && /QuickBooks/.test(dupes.body.error || ''), dupes.body);
 

@@ -557,35 +557,46 @@ async function mergeParty() {
    through the void button, with its impact shown first. */
 async function loadDuplicates() {
   STATE.sel = null; renderList();
-  $('dname').textContent = 'Duplicates and loose money';
-  $('dmap').textContent = 'Reading every document this year…';
+  $('dname').textContent = 'The same money, twice';
+  $('dmap').textContent = 'Reading inside every bill and invoice — line by line, container by container.';
   $('dstats').innerHTML = ''; $('dtabs').innerHTML = '';
-  $('dbody').innerHTML = '<div class="empty">Checking each supplier and customer…</div>';
+  $('dbody').innerHTML = '<div class="empty">Checking every document…</div>';
   try {
     const d = await api('/api/qb/duplicates');
-    $('dmap').textContent = `${d.year} · ${d.suppliers.documents} bills and ${d.customers.documents} invoices checked`;
+    const sum = (f) => (d.suppliers[f].cost || 0) + (d.customers[f].cost || 0);
+    $('dmap').textContent = `${d.year} · ${d.suppliers.documents} bills and ${d.customers.documents} invoices, read line by line`;
     $('dstats').innerHTML = [
-      ['Same number', money(d.suppliers.sameNumber.cost + d.customers.sameNumber.cost), 'warn'],
-      ['Same amount, same day', money(d.suppliers.sameDay.cost + d.customers.sameDay.cost), 'warn'],
+      ['Same container, same money', money(sum('duplicate')), 'warn'],
+      ['A line charged twice', money(sum('doubledLine')), 'warn'],
+      ['One container, two documents', money(sum('sameContainer')), 'warn'],
       ['Paid but not applied', money(d.unapplied.total), 'warn'],
     ].map(([k, v, cls]) => `<div class="stat"><div class="k">${k}</div><div class="v ${cls}">${v}</div></div>`).join('');
-    const block = (label, g, weak) => g.groups.length ? `<h3 class="sec">${label} <span class="count">${g.groups.length}</span> — ${money(g.cost)} in extra copies</h3>
-      ${weak ? '<div class="empty" style="padding:4px 8px">Weak signal: the same weight at the same price ships again and again. Read these before touching them.</div>' : ''}
-      <table><tbody>${g.groups.slice(0, 30).map(x => `<tr class="click" data-open="${x.rows[0].kind === 'bill' ? 'vendor' : 'customer'}|${encodeURIComponent(x.party)}">
-        <td><b>${x.party}</b>${x.doc ? ` <span class="mono" style="color:var(--text-muted)">${x.doc}</span>` : ''}</td>
-        <td class="mono" style="color:var(--text-faint)">${x.rows.map(r => `${r.date} ${qbLink(r.id, r.kind)} ${money(r.total)}${r.balance ? ' open' : ' paid'}`).join('  ·  ')}</td>
-        <td class="num" style="color:var(--amber-500)">${money(x.extra)}</td></tr>`).join('')}</tbody></table>` : '';
+    const row = (party, cells, extra, klass) => `<tr class="click" data-open="${klass}|${encodeURIComponent(party)}">
+      <td><b>${party}</b></td><td class="mono" style="color:var(--text-faint)">${cells}</td>
+      <td class="num" style="color:var(--amber-500)">${money(extra)}</td></tr>`;
+    const docCell = (rows) => rows.map(r => `${r.date} ${qbLink(r.id, r.kind || 'bill')} ${r.doc || '—'} ${money(r.total)}${r.balance ? ' OPEN' : ' paid'}`).join('  ·  ');
+    const sec = (label, note, groups, cells, kind) => groups.length ? `<h3 class="sec">${label} <span class="count">${groups.length}</span></h3>
+      ${note ? `<div class="empty" style="padding:4px 8px">${note}</div>` : ''}
+      <table><tbody>${groups.slice(0, 40).map(g => row(g.party, cells(g), g.extra, kind)).join('')}</tbody></table>` : '';
+    const side = (x, kind, who) => [
+      sec(`${who} — the same containers billed twice for the same money`,
+        'Proved from the lines, not the document number: identical containers, identical total.',
+        x.duplicate.groups, g => `${g.containers.join(', ')} · ${docCell(g.rows)}`, kind),
+      sec(`${who} — one container's line charged on two documents`,
+        'The same container, the same grade, the same amount, on two documents.',
+        x.doubledLine.groups, g => `${g.container} ${g.what} ${money(g.amount)} · ${docCell(g.rows)}`, kind),
+      sec(`${who} — one container on two documents${x.sameContainer.summaries ? `, ${x.sameContainer.summaries} of them a period summary` : ''}`,
+        'A summary document ("Nov.2025", "2025") entered alongside the per-container ones counts the same container twice. Check which one belongs.',
+        x.sameContainer.groups, g => `${g.containers.slice(0, 4).join(', ')}${g.containers.length > 4 ? ` +${g.containers.length - 4}` : ''} · ${docCell(g.rows)}${g.summary ? '  ← summary' : ''}`, kind),
+      sec(`${who} — one reference number used twice`,
+        'NOT a duplicate: different containers under one number. Listed only if you want to tidy the numbering.',
+        x.reference.groups, g => `${g.doc} · ${docCell(g.rows)}`, kind),
+    ].join('');
     const loose = d.unapplied.total ? `<h3 class="sec">Paid, but not applied to any bill <span class="count">${d.unapplied.payments}</span> — ${money(d.unapplied.total)}</h3>
-      <div class="empty" style="padding:4px 8px">The money left the bank and QuickBooks knows it, but nobody matched it to a bill. Every one of these leaves bills looking unpaid that are not.</div>
+      <div class="empty" style="padding:4px 8px">The money left the bank and QuickBooks knows it, but nobody matched it to a bill. Until these are applied, every open bill on this page is overstated.</div>
       <table><tbody>${d.unapplied.byParty.map(p => `<tr class="click" data-open="vendor|${encodeURIComponent(p.party)}"><td>${p.party}</td><td class="num" style="color:var(--amber-500)">${money(p.amount)}</td></tr>`).join('')}</tbody></table>` : '';
-    $('dbody').innerHTML = loose
-      + block('Suppliers — same document number twice', d.suppliers.sameNumber)
-      + block('Customers — same document number twice', d.customers.sameNumber)
-      + block('Suppliers — same amount on the same day', d.suppliers.sameDay)
-      + block('Customers — same amount on the same day', d.customers.sameDay)
-      + block('Suppliers — same amount, different days', d.suppliers.sameAmount, true)
-      + block('Customers — same amount, different days', d.customers.sameAmount, true)
-      || '<div class="empty">Nothing looks doubled this year.</div>';
+    $('dbody').innerHTML = (loose + side(d.suppliers, 'vendor', 'Suppliers') + side(d.customers, 'customer', 'Customers'))
+      || '<div class="empty">Nothing is doubled this year.</div>';
     $('dbody').querySelectorAll('tr.click').forEach(tr => tr.onclick = () => {
       const [kind, name] = tr.dataset.open.split('|');
       if (name) openParty(kind, decodeURIComponent(name));

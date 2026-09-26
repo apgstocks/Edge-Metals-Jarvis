@@ -245,17 +245,108 @@ async function partyDocs(kind, qbId, env = auth.qbEnv()) {
 
 // ── THE SAME MONEY, TWICE ──────────────────────────────────────────────────
 // Apsara, 2026-09-26: "check qb for any duplicate record/amount entry per
-// customer and supplier."
+// customer and supplier." Then, at my first list of them: "how they are
+// duplicate? No.."
 //
-// Three kinds, and they are not equally damning:
-//   same number — the same document number on one party twice. Nearly always
-//                 a real duplicate, whatever the amounts say.
-//   same amount, same day — one party, one figure, one date.
-//   same amount, other days — on her books this is often innocent: the same
-//                 weight at the same price ships again and again. Counted and
-//                 marked weak rather than left out or cried about.
-// Plus, per party, money paid that was never applied to a document — which is
-// why a party's open documents can add up to far more than she actually owes.
+// She was right and the first version was wrong. It keyed on the document
+// number and the amount, and on her books neither one identifies anything:
+//   · a reference is reused across loads. Midland's 26ST01 is FFAU7324771 in
+//     January and KOCU4669460 in March — two real bills, one number.
+//   · a flat rate repeats. Two Garduno's trucking bills on 2 April, both
+//     $8,370, are twelve different containers at the same price.
+// What identifies a line is the CONTAINER. So that is what is compared now,
+// and a document with no container is not accused at all.
+//
+//   duplicate      same party, same containers, same total. Proved, not
+//                  guessed — #38324 and #38553 are the same three lines on
+//                  TCKU6404660, twice.
+//   doubled line   one container billed for the same grade and amount on two
+//                  documents (Houston's $1,387 on MRKU2278150, which is also
+//                  line 1 of the bigger bill).
+//   reference reused  same number, different containers. NOT a duplicate —
+//                  listed only so she can tidy her numbering if she wants to.
+        const pack = (g) => ({ party: g[0].party, partyId: g[0].partyId, doc: g[0].doc, amount: g[0].total,
+        containers: g[0].containers, rows: g.sort((a, b) => String(a.date).localeCompare(String(b.date))),
+        extra: r2(g.reduce((s, x) => s + x.total, 0) - g[0].total) });
+    const groupBy = (rows, keyOf) => {
+        const by = {};
+        for (const r of rows) { const k = keyOf(r); if (k) (by[k] = by[k] || []).push(r); }
+        return Object.values(by).filter((g) => g.length > 1).map(pack).sort((a, b) => b.extra - a.extra);
+    };
+    const cost = (gs) => r2(gs.reduce((s, g) => s + g.extra, 0));
+
+    // Lifted out of duplicates() so it can be tested without a network — it is
+// the part that was wrong, so it is the part that gets pinned.
+function classifyDuplicates(rows) {
+        // 1. the same containers, for the same money, twice
+        const withContainers = rows.filter((r) => r.containers.length);
+        const duplicate = groupBy(withContainers, (r) => `${r.partyId}|${[...r.containers].sort().join(',')}|${r.total.toFixed(2)}`);
+        const seen = new Set(duplicate.flatMap((g) => g.rows.map((r) => r.id)));
+
+        // 2. one container's line charged on two documents
+        const byLine = {};
+        for (const r of rows) {
+            if (seen.has(r.id)) continue;
+            for (const l of r.lines) {
+                if (!l.container || !(l.amount > 0)) continue;
+                const k = `${r.partyId}|${l.container}|${KEY(l.what)}|${l.amount.toFixed(2)}`;
+                (byLine[k] = byLine[k] || []).push({ ...r, line: l });
+            }
+        }
+        const doubledLine = Object.values(byLine)
+            .filter((g) => new Set(g.map((x) => x.id)).size > 1)
+            .map((g) => ({ party: g[0].party, partyId: g[0].partyId, container: g[0].line.container,
+                what: g[0].line.what, amount: g[0].line.amount,
+                rows: g.map((x) => ({ id: x.id, doc: x.doc, date: x.date, total: x.total, balance: x.balance, kind: x.kind })),
+                extra: g[0].line.amount * (new Set(g.map((x) => x.id)).size - 1) }))
+            .sort((a, b) => b.extra - a.extra);
+
+        // 3. the same container on two documents for one party. This is what
+    // found the real problem: period-summary documents ("Nov.2025",
+    // "dec 2025", "2025") entered ALONGSIDE the per-container ones, so the
+    // same container is bought or sold twice — once inside the summary and
+    // once on its own. The containers are read from the LINES only: the memo
+    // often lists every container in the shipment, which made four perfectly
+    // good September invoices look like one invoice four times.
+    const byContainer = {};
+    for (const r of rows) {
+        for (const c of [...new Set(r.lines.map((l) => l.container).filter(Boolean))]) {
+            (byContainer[`${r.partyId}|${c}`] = byContainer[`${r.partyId}|${c}`] || []).push(r);
+        }
+    }
+    const pairs = {};
+    for (const [k, g] of Object.entries(byContainer)) {
+        const docs = [...new Map(g.map((x) => [x.id, x])).values()];
+        if (docs.length < 2) continue;
+        const key = docs.map((d) => d.id).sort().join('+');
+        (pairs[key] = pairs[key] || { party: docs[0].party, partyId: docs[0].partyId, rows: docs, containers: [] })
+            .containers.push(k.split('|')[1]);
+    }
+    const sameContainer = Object.values(pairs).map((p) => ({
+        ...p,
+        // the smaller document is what a double-count costs, at most
+        extra: r2(Math.min(...p.rows.map((r) => r.total))),
+        // a document numbered for a month or a year, next to per-container
+        // ones, is the shape the real problem took
+        summary: p.rows.some((r) => /^(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z.]*\s*\d{4}$|^\d{4}$/i.test(r.doc || '')),
+    })).filter((p) => !seen.has(p.rows[0].id)).sort((a, b) => b.extra - a.extra);
+
+    // 4. a number used twice on different containers. Not a duplicate.
+        const dupIds = new Set([...seen, ...doubledLine.flatMap((g) => g.rows.map((r) => r.id)),
+        ...sameContainer.flatMap((g) => g.rows.map((r) => r.id))]);
+        const reference = groupBy(rows.filter((r) => r.doc && !dupIds.has(r.id)), (r) => `${r.partyId}|${KEY(r.doc)}`)
+            .filter((g) => {
+                const sets = g.rows.map((r) => [...r.containers].sort().join(','));
+                return new Set(sets).size > 1 || sets.every((x) => !x);
+            });
+        return { documents: rows.length,
+            duplicate: { groups: duplicate, cost: cost(duplicate) },
+            doubledLine: { groups: doubledLine, cost: r2(doubledLine.reduce((s, g) => s + g.extra, 0)) },
+            sameContainer: { groups: sameContainer, cost: r2(sameContainer.reduce((s, g) => s + g.extra, 0)),
+                summaries: sameContainer.filter((g) => g.summary).length },
+            reference: { groups: reference, cost: cost(reference) } };
+    }
+
 async function duplicates(env = auth.qbEnv(), { year = new Date().getFullYear() } = {}) {
     return cached(`dupes|${env}|${year}`, 5 * 60 * 1000, async () => {
         const since = `${year}-01-01`;
@@ -263,31 +354,17 @@ async function duplicates(env = auth.qbEnv(), { year = new Date().getFullYear() 
         const grab = async (table, ref, kind) => (await pull(table, `TxnDate >= '${since}'`, opts, 5000))
             .map((x) => ({ kind, id: String(x.Id), doc: String(x.DocNumber || '').trim(), date: x.TxnDate,
                 total: r2(x.TotalAmt), balance: x.Balance === undefined ? null : r2(x.Balance),
-                party: (x[ref] || {}).name || '', partyId: String((x[ref] || {}).value || '') }));
+                party: (x[ref] || {}).name || '', partyId: String((x[ref] || {}).value || ''),
+                containers: containersIn(x),
+                // one line = a container, a grade and an amount. That triple
+                // is what must not appear twice.
+                lines: (x.Line || []).filter((l) => l.DetailType !== 'SubTotalLineDetail').map((l) => {
+                    const d = l.ItemBasedExpenseLineDetail || l.SalesItemLineDetail || l.AccountBasedExpenseLineDetail || {};
+                    const c = (String(l.Description || '').match(/[A-Z]{4}\d{7}/) || [])[0] || '';
+                    return { container: c, what: (d.ItemRef || d.AccountRef || {}).name || '', amount: r2(l.Amount) };
+                }) }));
         const [bills, invoices] = await Promise.all([grab('Bill', 'VendorRef', 'bill'), grab('Invoice', 'CustomerRef', 'invoice')]);
 
-        const group = (rows, keyOf) => {
-            const by = {};
-            for (const r of rows) { const k = keyOf(r); if (k) (by[k] = by[k] || []).push(r); }
-            return Object.values(by).filter((g) => g.length > 1)
-                .map((g) => ({ party: g[0].party, partyId: g[0].partyId, doc: g[0].doc, amount: g[0].total,
-                    rows: g.sort((a, b) => String(a.date).localeCompare(String(b.date))),
-                    // what the extra copies cost — not the whole group
-                    extra: r2(g.reduce((s, x) => s + x.total, 0) - g[0].total) }))
-                .sort((a, b) => b.extra - a.extra);
-        };
-        const side = (rows) => {
-            const sameNumber = group(rows, (r) => (r.doc ? `${r.partyId}|${KEY(r.doc)}` : null));
-            const inNumber = new Set(sameNumber.flatMap((g) => g.rows.map((r) => r.id)));
-            const sameDay = group(rows.filter((r) => !inNumber.has(r.id)), (r) => `${r.partyId}|${r.total.toFixed(2)}|${r.date}`);
-            const inDay = new Set(sameDay.flatMap((g) => g.rows.map((r) => r.id)));
-            const sameAmount = group(rows.filter((r) => !inNumber.has(r.id) && !inDay.has(r.id)), (r) => `${r.partyId}|${r.total.toFixed(2)}`);
-            const cost = (gs) => r2(gs.reduce((s, g) => s + g.extra, 0));
-            return { documents: rows.length,
-                sameNumber: { groups: sameNumber, cost: cost(sameNumber) },
-                sameDay: { groups: sameDay, cost: cost(sameDay) },
-                sameAmount: { groups: sameAmount, cost: cost(sameAmount) } };
-        };
         let unapplied = { total: 0, payments: 0, byParty: [] };
         try {
             const pays = await pull('BillPayment', `TxnDate >= '${since}'`, opts, 5000);
@@ -305,7 +382,7 @@ async function duplicates(env = auth.qbEnv(), { year = new Date().getFullYear() 
                 .sort((a, b) => b.amount - a.amount).slice(0, 20);
         } catch (e) { unapplied.error = e.message; }
 
-        return { env, year, at: new Date().toISOString(), suppliers: side(bills), customers: side(invoices), unapplied };
+        return { env, year, at: new Date().toISOString(), suppliers: classifyDuplicates(bills), customers: classifyDuplicates(invoices), unapplied };
     });
 }
 
@@ -360,4 +437,4 @@ async function find(query, env = auth.qbEnv(), { since = null } = {}) {
         couldNotLook: failed.length ? [...new Set(failed)] : null };
 }
 
-module.exports = { overview, partyDocs, find, duplicates, openItems, partyBalances, profitAndLoss, accounts, forget, flattenReport, containersIn, shapeDoc };
+module.exports = { overview, partyDocs, find, duplicates, classifyDuplicates, openItems, partyBalances, profitAndLoss, accounts, forget, flattenReport, containersIn, shapeDoc };
