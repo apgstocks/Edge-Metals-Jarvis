@@ -3818,6 +3818,32 @@ async function run({ sendToManager, sendMessage: _sendMessage = null, dryRun = f
         const visible = extractLatestMessage(body || msg.snippet || '');
         if (!visible) { seen[ref.id] = new Date().toISOString(); continue; }
 
+        // ── WEIGHT-SHORTAGE CLAIMS (2026-09-26) ─────────────────────────────
+        // Apsara: "it should read the mail with weight shortage detail and
+        // create automatically". The parsing lives in workflow/claimWatch.js,
+        // NOT in this file: the reply digest is something she depends on daily
+        // and must not be able to break because a claim parser threw. So this
+        // is one awaited call inside its own try/catch, and it deliberately
+        // does not touch `seen`, does not `continue`, and does not change what
+        // this loop decides about the message.
+        //
+        // dryRun is passed through and is load-bearing: actions.js:5465 calls
+        // run({dryRun:true}) when she asks "what needs my reply" in WhatsApp.
+        // Without it, asking that question would create claims and message the
+        // team. claimWatch is required here rather than at the top of the file
+        // because the claim parser reuses this module's fence helpers.
+        try {
+            const claimWatch = require('./claimWatch');
+            await claimWatch.consider({
+                messageId: ref.id,
+                threadId: msg.threadId,
+                from, subject,
+                body: visible,
+                mailbox: (typeof me === 'string' ? me : ''),
+                dryRun,
+            });
+        } catch (e) { console.warn('[REPLYWATCH] claim check failed, carrying on:', e.message); }
+
         checked++;
         let a = null;
         let lastAssessError = null;

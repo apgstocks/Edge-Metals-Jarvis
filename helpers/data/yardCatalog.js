@@ -37,12 +37,19 @@ const TABLES = [
     },
     {
         name: 'yard_sales',
-        what: 'A load SOLD to a buyer — the outbound side.',
+        // "sell" is written out alongside "sold" because schemaPick bridges
+        // words by PREFIX, and sell/sold share only one letter — an irregular
+        // verb the matcher cannot reach across. Caught 2026-09-26 by
+        // tests/schema-pick.js when "what did we sell last month" became a
+        // worked example: the pruner dropped yard_sales from the very
+        // question that needs it. Harmless today (7 tables is under the
+        // pruning threshold) and live the moment the catalog grows.
+        what: 'A load SOLD to a buyer — what we SELL, our sales, the outbound side.',
         columns: { sale_id: 'unique id', date: 'sale date, YYYY-MM-DD', buyer: 'who it was sold to', net_lb: 'pounds sold', amount: 'what it sold for, dollars', received: 'money received against it', balance: 'still owed by the buyer when > 0', status: 'delivered or not, as the screen shows it', description: 'free text' },
     },
     {
         name: 'yard_sale_items',
-        what: 'One row per grade on an outbound load.',
+        what: 'One row per grade on an outbound load — what we SELL or SOLD, by grade.',
         columns: { sale_id: 'joins yard_sales.sale_id', date: 'sale date', buyer: 'buyer', grade: 'the grade', net_lb: 'pounds',
             price: "the rate sold at — READ price_unit BEFORE COMPARING TWO PRICES, exactly as on yard_load_items. amount/net_lb is dollars per pound on every row and is the safe way to compare.",
             price_unit: "'lb' or 'mt' — what price is per. net_lb is ALWAYS pounds either way.",

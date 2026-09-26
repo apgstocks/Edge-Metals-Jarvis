@@ -8344,6 +8344,15 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
     // the four routes so this file keeps its shape.
     require('./helpers/bankDocs').mount(app, cfg);
 
+    // ── Weight-shortage claims (Edge Metals) ──────────────────────────────
+    // Apsara, 2026-09-26: "Revamp weight shortage sheet .. it should read the
+    // mail with weight shortage detail and create automatically". The page and
+    // its /api/claims routes live in helpers/claims/routes.js so this file
+    // keeps its shape. /api/claims is deliberately NOT in
+    // STAFF_ALLOWED_PATH_PREFIXES — staff are scoped to Loads, and a claim
+    // carries the customer's complaint and Edge's margin.
+    require('./helpers/claims/routes').mount(app, cfg);
+
     // Old standalone Contact Quotes page — MERGED into /quote-requests
     // 2026-08-16 per Apsara ("Contact Quotes and Quote Requests... both are
     // same"). dashboard/contact-quote-requests.html still exists on disk

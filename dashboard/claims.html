@@ -1,0 +1,495 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Claims — Jarvis</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wght@700;800;900&family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+/* Design tokens copied from dashboard/quickbooks.html — standalone page, kept
+   in sync by hand, same as the others. */
+:root{
+  --steel-900:#14181B; --steel-800:#1E2429; --steel-700:#2B3239; --steel-600:#3C454D;
+  --steel-500:#57616A; --steel-400:#7E8891; --steel-300:#A7B0B7; --steel-200:#CBD1D6;
+  --leaf-300:#7FD172; --leaf-400:#57BE49; --leaf-500:#3DA836; --leaf-600:#2E861F;
+  --copper-300:#E29C68; --copper-400:#D77E3D;
+  --green-500:#2F8F57; --amber-500:#D99A2B; --red-500:#C5402F; --blue-500:#3A6EA5;
+  --bg-base:#0C0E10; --surface-card:#14181B; --surface-sunken:#0F1214; --surface-hover:#181D21;
+  --text-strong:#FFFFFF; --text-body:#CBD1D6; --text-muted:#A7B0B7; --text-faint:#7E8891;
+  --border-subtle:#1E2429; --border-default:#2B3239; --ring:var(--leaf-500);
+  --font-display:'Archivo',sans-serif; --font-sans:'IBM Plex Sans',system-ui,sans-serif;
+  --font-mono:'IBM Plex Mono',ui-monospace,monospace;
+}
+*,*::before,*::after{box-sizing:border-box}
+body{margin:0;font-family:var(--font-sans);color:var(--text-body);background:var(--bg-base);-webkit-font-smoothing:antialiased;height:100vh;display:flex;flex-direction:column;overflow:hidden}
+h1,h2,h3{font-family:var(--font-display);color:var(--text-strong);margin:0;font-weight:900;letter-spacing:-.02em}
+button{font:inherit;cursor:pointer}
+input,select{font:inherit}
+:focus-visible{outline:2px solid var(--ring);outline-offset:2px}
+.mono{font-family:var(--font-mono)}
+.num{font-family:var(--font-mono);font-variant-numeric:tabular-nums}
+
+header{display:flex;align-items:center;gap:14px;padding:10px 16px;border-bottom:1px solid var(--border-default);background:var(--surface-card);flex:none}
+header h1{font-size:17px}
+header .back{color:var(--steel-400);font-size:13px;text-decoration:none}
+header .back:hover{color:var(--text-body)}
+.chips{display:flex;gap:6px;flex-wrap:wrap;margin-left:auto;align-items:center}
+.chip{font-family:var(--font-mono);font-size:10.5px;letter-spacing:.06em;text-transform:uppercase;padding:3px 7px;border-radius:3px;border:1px solid var(--border-default);color:var(--text-muted);background:var(--surface-sunken);white-space:nowrap}
+.chip.on{color:var(--leaf-300);border-color:var(--leaf-600);background:rgba(87,190,73,.10)}
+.chip.warn{color:var(--amber-500);border-color:#5a4416;background:rgba(217,154,43,.10)}
+.chip.bad{color:#f0b3aa;border-color:var(--red-500);background:rgba(197,64,47,.12)}
+.chip.act{cursor:pointer}
+.chip.act:hover{border-color:var(--text-body);color:var(--text-body)}
+
+/* ── exposure strip ─────────────────────────────────────────────────────── */
+.strip{display:grid;grid-template-columns:repeat(4,1fr);gap:1px;background:var(--border-default);border-bottom:1px solid var(--border-default);flex:none}
+.tile{background:var(--surface-card);padding:11px 16px 12px;display:flex;flex-direction:column;gap:3px;min-width:0}
+.tile .k{font-size:10.5px;letter-spacing:.07em;text-transform:uppercase;color:var(--text-faint)}
+.tile .v{font-family:var(--font-mono);font-size:21px;font-weight:600;color:var(--text-strong);line-height:1.15}
+.tile .s{font-size:11.5px;color:var(--text-faint)}
+.tile.net .v{color:var(--copper-300)}
+.tile.rec .v{color:var(--leaf-300)}
+.tile.todo .v{color:var(--amber-500)}
+
+main{flex:1;display:grid;grid-template-columns:330px 1fr;min-height:0}
+aside{border-right:1px solid var(--border-default);background:var(--surface-sunken);display:flex;flex-direction:column;min-height:0}
+.search{padding:9px;border-bottom:1px solid var(--border-subtle);display:flex;gap:7px}
+.search input{flex:1;padding:7px 9px;border-radius:4px;border:1px solid var(--border-default);background:var(--bg-base);color:var(--text-body);font-size:13px}
+.search button{padding:7px 10px;border-radius:4px;border:1px solid var(--leaf-600);background:rgba(87,190,73,.14);color:var(--leaf-300);font-size:12px;font-weight:600}
+.tabsel{display:flex;gap:4px;padding:0 9px 9px}
+.tabsel button{flex:1;padding:5px 2px;border-radius:4px;border:1px solid var(--border-default);background:transparent;color:var(--text-muted);font-size:11px;font-weight:600}
+.tabsel button.sel{background:rgba(87,190,73,.14);border-color:var(--leaf-600);color:var(--leaf-300)}
+.rows{overflow-y:auto;flex:1;min-height:0}
+.prow{padding:9px 12px;border-bottom:1px solid var(--border-subtle);cursor:pointer;display:flex;flex-direction:column;gap:3px}
+.prow:hover{background:var(--surface-hover)}
+.prow.sel{background:rgba(87,190,73,.09);box-shadow:inset 2px 0 0 var(--leaf-500)}
+.prow .t{display:flex;align-items:baseline;gap:7px}
+.prow .who{font-size:13px;font-weight:600;color:var(--text-strong);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.prow .amt{margin-left:auto;font-family:var(--font-mono);font-size:12.5px;color:var(--text-body);white-space:nowrap}
+.prow .b{display:flex;align-items:center;gap:7px;font-size:11px;color:var(--text-faint)}
+.prow .cid{font-family:var(--font-mono);font-size:11px;color:var(--steel-400)}
+.empty{padding:30px 16px;text-align:center;color:var(--text-faint);font-size:12.5px}
+
+.pill{display:inline-flex;align-items:center;gap:4px;font-size:10px;letter-spacing:.05em;text-transform:uppercase;padding:2px 6px;border-radius:3px;font-weight:600;white-space:nowrap}
+.pill i{width:4px;height:4px;border-radius:50%;background:currentColor}
+.s-unverified{color:var(--amber-500);background:rgba(217,154,43,.13)}
+.s-verified{color:var(--blue-500);background:rgba(58,110,165,.16)}
+.s-recovery_raised{color:var(--leaf-300);background:rgba(87,190,73,.13)}
+.s-settled{color:var(--steel-300);background:rgba(126,136,145,.13)}
+.s-rejected,.s-withdrawn{color:var(--steel-400);background:rgba(126,136,145,.09)}
+
+section.detail{overflow-y:auto;min-height:0;padding:18px 22px 40px}
+.dhead{display:flex;align-items:flex-start;gap:12px;flex-wrap:wrap;padding-bottom:14px;border-bottom:1px solid var(--border-default)}
+.dhead h2{font-size:20px}
+.dhead .sub{font-family:var(--font-mono);font-size:12px;color:var(--text-faint);margin-top:4px}
+.dhead .right{margin-left:auto;display:flex;gap:6px;align-items:center;flex-wrap:wrap}
+.card{background:var(--surface-card);border:1px solid var(--border-default);border-radius:6px;padding:14px 16px;margin-top:14px}
+.card > h3{font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--text-faint);font-family:var(--font-sans);font-weight:700;margin-bottom:10px}
+.card.flag{border-left:2px solid var(--amber-500)}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:12px}
+label.f{display:flex;flex-direction:column;gap:4px;font-size:11px;letter-spacing:.04em;text-transform:uppercase;color:var(--text-faint)}
+label.f input,label.f select{padding:7px 9px;border-radius:4px;border:1px solid var(--border-default);background:var(--bg-base);color:var(--text-body);font-size:13px;font-family:var(--font-mono)}
+label.f input:disabled{color:var(--steel-500)}
+.units{display:flex;gap:5px}
+.units button{flex:1;padding:7px 4px;border-radius:4px;border:1px solid var(--border-default);background:transparent;color:var(--text-muted);font-family:var(--font-mono);font-size:12.5px;font-weight:600}
+.units button.sel{background:rgba(87,190,73,.16);border-color:var(--leaf-500);color:var(--leaf-300)}
+.units button.need{border-color:var(--amber-500)}
+.calc{margin-top:12px;padding:11px 13px;border-radius:5px;background:var(--surface-sunken);border:1px solid var(--border-subtle);display:flex;gap:22px;flex-wrap:wrap}
+.calc div{display:flex;flex-direction:column;gap:2px}
+.calc .k{font-size:10px;letter-spacing:.07em;text-transform:uppercase;color:var(--text-faint)}
+.calc .v{font-family:var(--font-mono);font-size:16px;color:var(--text-strong)}
+.calc .v.hi{color:var(--copper-300)}
+.calc .v.muted{color:var(--steel-500)}
+.actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:13px;align-items:center}
+.btn{padding:8px 14px;border-radius:4px;border:1px solid var(--border-default);background:var(--surface-sunken);color:var(--text-body);font-size:13px;font-weight:600}
+.btn:hover{border-color:var(--text-muted)}
+.btn.go{border-color:var(--leaf-500);background:rgba(87,190,73,.16);color:var(--leaf-300)}
+.btn.go:disabled{opacity:.42;cursor:not-allowed}
+.btn.warn{border-color:#5a4416;color:var(--amber-500)}
+.btn.danger{border-color:var(--red-500);color:#f0b3aa}
+.hint{font-size:12px;color:var(--text-faint);margin-top:9px;line-height:1.55}
+.hint b{color:var(--amber-500);font-weight:600}
+
+.quotes{display:flex;flex-direction:column;gap:9px}
+.q{display:grid;grid-template-columns:132px 1fr;gap:10px;align-items:start}
+.q .qk{font-size:11px;letter-spacing:.04em;text-transform:uppercase;color:var(--text-faint);padding-top:2px}
+.q .qv{font-size:12.5px;color:var(--text-body);border-left:2px solid var(--border-default);padding-left:10px;font-style:italic}
+.trail{display:flex;flex-direction:column;gap:8px}
+.mailrow{display:flex;gap:10px;font-size:12px;align-items:baseline}
+.mailrow .d{font-family:var(--font-mono);color:var(--steel-400);white-space:nowrap;font-size:11px}
+.mailrow .s{color:var(--text-body);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.mailrow .f{color:var(--text-faint);white-space:nowrap}
+.hist{font-size:11.5px;color:var(--text-faint);display:flex;flex-direction:column;gap:4px;font-family:var(--font-mono)}
+.blank{display:flex;flex-direction:column;gap:8px;align-items:center;justify-content:center;height:100%;color:var(--text-faint);font-size:13px}
+
+.toast{position:fixed;left:50%;transform:translateX(-50%);bottom:22px;padding:10px 16px;border-radius:5px;background:var(--surface-card);border:1px solid var(--border-default);color:var(--text-body);font-size:13px;box-shadow:0 8px 28px rgba(0,0,0,.55);z-index:50;max-width:560px}
+.toast.bad{border-color:var(--red-500);color:#f0b3aa}
+.toast.ok{border-color:var(--leaf-600);color:var(--leaf-300)}
+.modal{position:fixed;inset:0;background:rgba(6,8,9,.72);display:flex;align-items:center;justify-content:center;z-index:60;padding:18px}
+.modal .box{background:var(--surface-card);border:1px solid var(--border-default);border-radius:7px;padding:18px 20px;width:100%;max-width:560px;max-height:88vh;overflow-y:auto}
+.modal h3{font-family:var(--font-display);font-size:16px;color:var(--text-strong);margin-bottom:12px}
+
+@media (max-width:1020px){
+  .strip{grid-template-columns:repeat(2,1fr)}
+  main{grid-template-columns:1fr;overflow-y:auto}
+  aside{border-right:0;border-bottom:1px solid var(--border-default);max-height:42vh}
+  body{overflow:auto;height:auto;min-height:100vh}
+}
+</style>
+</head>
+<body>
+
+<header>
+  <a class="back" href="/">&larr; Jarvis</a>
+  <h1>Claims</h1>
+  <div class="chips" id="chips"></div>
+</header>
+
+<div class="strip" id="strip"></div>
+
+<main>
+  <aside>
+    <div class="search">
+      <input id="q" type="search" placeholder="Container, invoice, customer, supplier" aria-label="Search claims">
+      <button id="newBtn" type="button" title="Enter a claim that came in by phone or WhatsApp">New</button>
+    </div>
+    <div class="tabsel" id="tabs"></div>
+    <div class="rows" id="rows"></div>
+  </aside>
+  <section class="detail" id="detail"></section>
+</main>
+
+<script>
+const MT = { MT:1, LB:1/2204.62, KG:1/1000 };
+const STATE = { claims:[], stats:{}, sel:null, tab:'needs', q:'' };
+const $ = (s) => document.querySelector(s);
+const esc = (s) => String(s==null?'':s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const money = (n) => (n===null||n===undefined||n==='') ? '—' : '$' + Number(n).toLocaleString('en-US',{maximumFractionDigits:2});
+const numOf = (v) => { if (v===null||v===undefined||v==='') return null; const n = Number(String(v).replace(/[$,\s]/g,'')); return Number.isFinite(n) ? n : null; };
+
+async function api(url, body){
+  const r = await fetch(url, body ? { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body) } : {});
+  const j = await r.json().catch(() => ({ error:'bad response' }));
+  if (!r.ok) throw new Error(j.error || ('HTTP ' + r.status));
+  return j;
+}
+let toastTimer = null;
+function toast(msg, kind){
+  const old = $('.toast'); if (old) old.remove();
+  const d = document.createElement('div');
+  d.className = 'toast' + (kind ? ' ' + kind : '');
+  d.textContent = msg;
+  document.body.appendChild(d);
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => d.remove(), kind === 'bad' ? 7000 : 3500);
+}
+
+/* ── the shortage maths, mirroring helpers/claims.js verify() so the preview
+   cannot disagree with what the server will store ─────────────────────────── */
+function compute({ inv, recv, unit, rate, rateUnit }){
+  const out = { shortage:null, pct:null, amount:null };
+  if (inv===null || recv===null || !unit) return out;
+  out.shortage = Math.round((inv - recv) * 1e6) / 1e6;
+  if (inv > 0) out.pct = Math.round((out.shortage / inv) * 10000) / 100;
+  if (rate !== null && MT[rateUnit]) {
+    const inRate = rateUnit === unit ? out.shortage : (out.shortage * MT[unit]) / MT[rateUnit];
+    out.amount = Math.round(inRate * rate * 100) / 100;
+  }
+  return out;
+}
+
+const TABS = [
+  { id:'needs',  label:'Needs you' },
+  { id:'open',   label:'Open' },
+  { id:'all',    label:'All' },
+  { id:'closed', label:'Closed' },
+];
+function inTab(c){
+  if (STATE.tab === 'needs')  return c.status === 'unverified' || (c.status === 'verified' && !numOf(c.our_claim));
+  if (STATE.tab === 'open')   return !['settled','rejected','withdrawn'].includes(c.status);
+  if (STATE.tab === 'closed') return ['settled','rejected','withdrawn'].includes(c.status);
+  return true;
+}
+function visible(){
+  const q = STATE.q.trim().toLowerCase();
+  return STATE.claims.filter(c => {
+    if (!inTab(c)) return false;
+    if (!q) return true;
+    return [c.customer,c.supplier,c.invoice_no,c.container_no,c.note].join(' ').toLowerCase().includes(q);
+  });
+}
+
+function renderChips(){
+  const s = STATE.stats || {};
+  $('#chips').innerHTML = [
+    s.unverified ? `<span class="chip warn">${s.unverified} to verify</span>` : '<span class="chip on">nothing to verify</span>',
+    s.awaiting_recovery ? `<span class="chip bad">${s.awaiting_recovery} recovery not raised</span>` : '',
+    `<span class="chip">${s.total || 0} claims</span>`,
+    '<span class="chip act" id="refresh">Refresh</span>',
+  ].filter(Boolean).join('');
+  const r = $('#refresh'); if (r) r.onclick = () => load(true);
+}
+
+function renderStrip(){
+  const s = STATE.stats || {};
+  $('#strip').innerHTML = [
+    ['Claimed against Edge', money(s.claimed), (s.open||0) + ' open', ''],
+    ['Recovered from suppliers', money(s.recovered), (s.recovery_rate||0) + '% of claimed value', 'rec'],
+    ['Absorbed by Edge', money(s.net), 'what the shortages cost', 'net'],
+    ['Waiting on someone', (s.unverified||0) + ' + ' + (s.awaiting_recovery||0), 'to verify + to recover', 'todo'],
+  ].map(t => `<div class="tile ${t[3]}"><span class="k">${t[0]}</span><span class="v">${t[1]}</span><span class="s">${t[2]}</span></div>`).join('');
+}
+
+function renderTabs(){
+  $('#tabs').innerHTML = TABS.map(t => {
+    const n = STATE.claims.filter(c => { const k = STATE.tab; STATE.tab = t.id; const r = inTab(c); STATE.tab = k; return r; }).length;
+    return `<button type="button" data-t="${t.id}" class="${STATE.tab===t.id?'sel':''}">${t.label} ${n}</button>`;
+  }).join('');
+  $('#tabs').querySelectorAll('button').forEach(b => b.onclick = () => { STATE.tab = b.dataset.t; renderTabs(); renderRows(); });
+}
+
+function pill(s){ return `<span class="pill s-${s}"><i></i>${esc(String(s).replace('_',' '))}</span>`; }
+
+function renderRows(){
+  const rows = visible();
+  if (!rows.length){ $('#rows').innerHTML = '<div class="empty">No claims here.</div>'; return; }
+  $('#rows').innerHTML = rows.map(c => {
+    const amt = c.claim_amount !== null && c.claim_amount !== undefined ? money(c.claim_amount)
+              : c.stated_claim_amount !== null && c.stated_claim_amount !== undefined ? money(c.stated_claim_amount) + '?'
+              : '—';
+    return `<div class="prow ${STATE.sel===c.id?'sel':''}" data-id="${c.id}" tabindex="0">
+      <div class="t"><span class="who">${esc(c.customer||'Customer not named')}</span><span class="amt">${amt}</span></div>
+      <div class="b">${pill(c.status)}<span class="cid">${esc(c.container_no||'no container')}</span><span class="cid">${esc(c.invoice_no||'')}</span></div>
+    </div>`;
+  }).join('');
+  $('#rows').querySelectorAll('.prow').forEach(el => {
+    const pick = () => { STATE.sel = el.dataset.id; renderRows(); renderDetail(); };
+    el.onclick = pick;
+    el.onkeydown = (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); pick(); } };
+  });
+}
+
+const FLAG_TEXT = {
+  unit_not_stated: 'The mail never said MT, KG or LB. Nothing is worked out until you pick the unit — a guess between MT and pounds is out by 2204x.',
+  container_unknown: 'A container number was found in the mail but not one that matched cleanly. Check it against the invoice.',
+  figure_changed: 'The customer has moved their own figure since an earlier mail. Read the trail before agreeing anything.',
+  supplier_unknown: 'No supplier on this claim, so there is nobody to recover from. Until one is set, the whole amount lands on Edge.',
+};
+
+function renderDetail(){
+  const c = STATE.claims.find(x => x.id === STATE.sel);
+  const d = $('#detail');
+  if (!c){
+    d.innerHTML = `<div class="blank"><div>Pick a claim on the left.</div>
+      <div style="max-width:430px;text-align:center;line-height:1.6">Claims arrive from customer mail, land here unverified, and become a money figure only once someone confirms the weights and the unit.</div></div>`;
+    return;
+  }
+  const unit = c.weight_unit || '';
+  const flags = (c.flags || []).filter(f => FLAG_TEXT[f]);
+
+  d.innerHTML = `
+    <div class="dhead">
+      <div>
+        <h2>${esc(c.customer || 'Customer not named')}</h2>
+        <div class="sub">${esc(c.invoice_no || 'no invoice')} &nbsp;·&nbsp; ${esc(c.container_no || 'no container')} &nbsp;·&nbsp; ${esc(String(c.claim_type||'').replace('_',' '))}</div>
+      </div>
+      <div class="right">${pill(c.status)}
+        <span class="chip">recover from ${esc(c.supplier || 'nobody yet')}</span>
+      </div>
+    </div>
+
+    ${flags.length ? `<div class="card flag"><h3>Before this is a figure</h3>${flags.map(f => `<div class="hint" style="margin-top:0">${esc(FLAG_TEXT[f])}</div>`).join('')}</div>` : ''}
+
+    <div class="card">
+      <h3>Confirm the weights</h3>
+      <div class="grid">
+        <label class="f">Invoiced weight
+          <input id="f_inv" class="num" inputmode="decimal" value="${c.invoice_weight ?? ''}" placeholder="—">
+        </label>
+        <label class="f">Weight they received
+          <input id="f_recv" class="num" inputmode="decimal" value="${c.claimed_weight ?? ''}" placeholder="—">
+        </label>
+        <label class="f">Unit for both weights
+          <div class="units" id="f_unit">
+            ${['MT','LB','KG'].map(u => `<button type="button" data-u="${u}" class="${unit===u?'sel':''} ${unit?'':'need'}">${u}</button>`).join('')}
+          </div>
+        </label>
+        <label class="f">Rate
+          <input id="f_rate" class="num" inputmode="decimal" value="${c.sell_price ?? ''}" placeholder="e.g. 2140">
+        </label>
+        <label class="f">Rate is per
+          <select id="f_rateUnit">
+            ${['MT','LB','KG'].map(u => `<option value="${u}" ${((c.sell_price_unit||unit||'MT')===u)?'selected':''}>${u}</option>`).join('')}
+          </select>
+        </label>
+      </div>
+      <div class="calc" id="calc"></div>
+      <div class="actions">
+        <button class="btn go" id="verifyBtn" type="button">Confirm and work out the claim</button>
+        <span class="hint" style="margin:0" id="verifyWhy"></span>
+      </div>
+      <div class="hint">These figures are what turn a mail into money, so nothing here is filled in from the mail unless the mail said it in words. ${c.stated_claim_amount!=null ? `The customer is asking <b>${money(c.stated_claim_amount)}</b> — that is their figure, not yet yours.` : ''}</div>
+    </div>
+
+    <div class="card">
+      <h3>Recovery from the supplier</h3>
+      <div class="grid">
+        <label class="f">Supplier
+          <input id="f_supplier" value="${esc(c.supplier||'')}" placeholder="who Edge bought from">
+        </label>
+        <label class="f">Recovering from them
+          <input id="f_ours" class="num" inputmode="decimal" value="${c.our_claim ?? ''}" placeholder="—">
+        </label>
+      </div>
+      <div class="actions">
+        <button class="btn go" id="recBtn" type="button">Raise the recovery</button>
+        <button class="btn" id="saveSupBtn" type="button">Save supplier</button>
+      </div>
+      <div class="hint">This is the half that decides what the shortage actually costs Edge. A claim settled with the customer and never recovered from the supplier is absorbed in full.</div>
+    </div>
+
+    ${Object.keys(c.quotes||{}).length ? `<div class="card"><h3>Read from the mail, word for word</h3>
+      <div class="quotes">${Object.entries(c.quotes).map(([k,v]) => `<div class="q"><span class="qk">${esc(k.replace(/_/g,' '))}</span><span class="qv">${esc(v)}</span></div>`).join('')}</div>
+      <div class="hint">Each line is the span the parser read that field from. If a quote does not say what the field claims, the field is wrong — fix it above.</div></div>` : ''}
+
+    ${(c.mail||[]).length ? `<div class="card"><h3>Mail trail — ${(c.mail||[]).length}</h3><div class="trail">${(c.mail||[]).map(m => `<div class="mailrow"><span class="d">${esc(String(m.date||'').slice(0,10))}</span><span class="s">${esc(m.subject||'(no subject)')}</span><span class="f">${esc(m.from||'')}</span></div>`).join('')}</div></div>` : ''}
+
+    <div class="card">
+      <h3>Close it out</h3>
+      <div class="actions">
+        <button class="btn go" data-st="settled" type="button">Settled</button>
+        <button class="btn warn" data-st="rejected" type="button">Rejected</button>
+        <button class="btn danger" data-st="withdrawn" type="button">Customer withdrew it</button>
+      </div>
+    </div>
+
+    ${(c.history||[]).length ? `<div class="card"><h3>History</h3><div class="hist">${(c.history||[]).slice().reverse().map(h => `<span>${esc(String(h.at||'').slice(0,16).replace('T',' '))} — ${esc(h.what)} · ${esc(h.by)}</span>`).join('')}</div></div>` : ''}
+  `;
+
+  wireDetail(c);
+}
+
+function readForm(){
+  return {
+    inv: numOf($('#f_inv') && $('#f_inv').value),
+    recv: numOf($('#f_recv') && $('#f_recv').value),
+    unit: (document.querySelector('#f_unit button.sel') || {}).dataset ? document.querySelector('#f_unit button.sel').dataset.u : null,
+    rate: numOf($('#f_rate') && $('#f_rate').value),
+    rateUnit: $('#f_rateUnit') ? $('#f_rateUnit').value : 'MT',
+  };
+}
+
+function renderCalc(){
+  const f = readForm();
+  const r = compute(f);
+  const pctClass = r.pct === null ? 'muted' : (r.pct >= 2 ? 'hi' : '');
+  $('#calc').innerHTML = [
+    ['Shortage', r.shortage === null ? '—' : r.shortage.toFixed(3) + (f.unit ? ' ' + f.unit : ''), r.shortage===null?'muted':''],
+    ['Of invoiced weight', r.pct === null ? '—' : r.pct.toFixed(2) + '%', pctClass],
+    ['Claim against Edge', r.amount === null ? '—' : money(r.amount), r.amount===null?'muted':'hi'],
+  ].map(x => `<div><span class="k">${x[0]}</span><span class="v ${x[2]}">${x[1]}</span></div>`).join('');
+
+  const why = !f.unit ? 'Pick the unit first.'
+    : (f.inv === null || f.recv === null) ? 'Both weights are needed.'
+    : f.rate === null ? 'Without a rate this records the shortage but no amount.'
+    : '';
+  $('#verifyWhy').textContent = why;
+  $('#verifyBtn').disabled = !f.unit || f.inv === null || f.recv === null;
+}
+
+function wireDetail(c){
+  ['f_inv','f_recv','f_rate'].forEach(id => { const el = $('#' + id); if (el) el.oninput = renderCalc; });
+  const ru = $('#f_rateUnit'); if (ru) ru.onchange = renderCalc;
+  document.querySelectorAll('#f_unit button').forEach(b => b.onclick = () => {
+    document.querySelectorAll('#f_unit button').forEach(x => { x.classList.remove('sel'); x.classList.remove('need'); });
+    b.classList.add('sel'); renderCalc();
+  });
+  renderCalc();
+
+  $('#verifyBtn').onclick = async () => {
+    const f = readForm();
+    try {
+      await api(`/api/claims/${c.id}/verify`, { invoice_weight:f.inv, claimed_weight:f.recv, weight_unit:f.unit, sell_price:f.rate, sell_price_unit:f.rateUnit });
+      toast('Confirmed. The verify reminder is cancelled and a recovery to-do is raised.', 'ok');
+      await load();
+    } catch (e) { toast(e.message, 'bad'); }
+  };
+  $('#saveSupBtn').onclick = async () => {
+    try { await api(`/api/claims/${c.id}/edit`, { supplier: $('#f_supplier').value.trim() }); toast('Supplier saved.', 'ok'); await load(); }
+    catch (e) { toast(e.message, 'bad'); }
+  };
+  $('#recBtn').onclick = async () => {
+    const ours = numOf($('#f_ours').value);
+    if (ours === null) { toast('Put in what you are recovering from the supplier first.', 'bad'); return; }
+    try {
+      const sup = $('#f_supplier').value.trim();
+      if (sup && sup !== (c.supplier||'')) await api(`/api/claims/${c.id}/edit`, { supplier: sup });
+      await api(`/api/claims/${c.id}/recovery`, { our_claim: ours });
+      toast('Recovery raised.', 'ok'); await load();
+    } catch (e) { toast(e.message, 'bad'); }
+  };
+  document.querySelectorAll('[data-st]').forEach(b => b.onclick = async () => {
+    try { await api(`/api/claims/${c.id}/status`, { status: b.dataset.st }); toast('Marked ' + b.dataset.st + '.', 'ok'); await load(); }
+    catch (e) { toast(e.message, 'bad'); }
+  });
+}
+
+/* ── manual entry ────────────────────────────────────────────────────────── */
+function openNew(){
+  const wrap = document.createElement('div');
+  wrap.className = 'modal';
+  wrap.innerHTML = `<div class="box"><h3>Claim that came in by phone or WhatsApp</h3>
+    <div class="grid">
+      <label class="f">Customer<input id="n_cust"></label>
+      <label class="f">Supplier<input id="n_sup"></label>
+      <label class="f">Invoice no<input id="n_inv" class="mono"></label>
+      <label class="f">Container no<input id="n_cont" class="mono"></label>
+      <label class="f">What they are asking<input id="n_amt" class="num" inputmode="decimal"></label>
+      <label class="f">Kind
+        <select id="n_type"><option value="weight_shortage">weight shortage</option><option value="grade_recovery">grade / recovery</option><option value="quality">quality</option><option value="damage">damage</option></select>
+      </label>
+    </div>
+    <label class="f" style="margin-top:12px">Note<input id="n_note"></label>
+    <div class="hint">Weights are left out on purpose — enter them in Confirm the weights, where the unit is recorded with them.</div>
+    <div class="actions"><button class="btn go" id="n_save" type="button">Create as unverified</button><button class="btn" id="n_cancel" type="button">Cancel</button></div>
+  </div>`;
+  document.body.appendChild(wrap);
+  const close = () => wrap.remove();
+  wrap.onclick = (e) => { if (e.target === wrap) close(); };
+  wrap.querySelector('#n_cancel').onclick = close;
+  wrap.querySelector('#n_save').onclick = async () => {
+    const body = {
+      customer: wrap.querySelector('#n_cust').value.trim(),
+      supplier: wrap.querySelector('#n_sup').value.trim(),
+      invoice_no: wrap.querySelector('#n_inv').value.trim(),
+      container_no: wrap.querySelector('#n_cont').value.trim(),
+      stated_claim_amount: numOf(wrap.querySelector('#n_amt').value),
+      claim_type: wrap.querySelector('#n_type').value,
+      note: wrap.querySelector('#n_note').value.trim(),
+      created_by: 'manual',
+    };
+    try { const rec = await api('/api/claims', body); close(); toast('Created, unverified.', 'ok'); STATE.sel = rec.id; STATE.tab = 'needs'; await load(); }
+    catch (e) { toast(e.message, 'bad'); }
+  };
+  wrap.querySelector('#n_cust').focus();
+}
+
+async function load(announce){
+  try {
+    const j = await api('/api/claims');
+    STATE.claims = (j.claims || []).slice().sort((a,b) => String(b.created_at||'').localeCompare(String(a.created_at||'')));
+    STATE.stats = j.stats || {};
+    if (!STATE.claims.find(c => c.id === STATE.sel)) STATE.sel = (visible()[0] || {}).id || null;
+    renderChips(); renderStrip(); renderTabs(); renderRows(); renderDetail();
+    if (announce) toast('Up to date.', 'ok');
+  } catch (e) { toast('Could not load claims — ' + e.message, 'bad'); }
+}
+
+$('#q').oninput = (e) => { STATE.q = e.target.value; renderRows(); };
+$('#newBtn').onclick = openNew;
+load();
+</script>
+</body>
+</html>
