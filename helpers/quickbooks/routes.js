@@ -701,6 +701,39 @@ function mount(app, cfg) {
         catch (e) { res.status(502).json({ error: `QuickBooks: ${e.message}` }); }
     });
 
+    // ── money paid, money matched ──────────────────────────────────────────
+    // The single biggest thing wrong with her books: $4.96M of payments with
+    // no allocation, so every bill reads open. Allocating moves nothing —
+    // no bank entry, no profit and loss, no change to the payable total — it
+    // only says which bill the money already spent belongs to. Read-only
+    // until she says otherwise, and never a bulk button without a dry run.
+    app.get('/api/qb/allocate-plan', async (req, res) => {
+        try {
+            res.json(await require('./applyPayments').plan({
+                vendor: req.query.vendor || null,
+                since: /^\d{4}-\d{2}-\d{2}$/.test(String(req.query.since || '')) ? req.query.since : '2024-01-01',
+                env: envOf(),
+            }));
+        } catch (e) { res.status(502).json({ error: `QuickBooks: ${e.message}` }); }
+    });
+
+    app.post('/api/qb/allocate', async (req, res) => {
+        if (locked(req, res)) return;
+        const b = req.body || {};
+        const really = b.really === true;
+        if (really && String(b.confirm || '').trim().toUpperCase() !== 'APPLY') {
+            return res.status(400).json({ error: 'to place these for real, type APPLY' });
+        }
+        const ap = require('./applyPayments');
+        try {
+            // the plan is made again here, from live data — never trusted
+            // from the browser, where it may be minutes old
+            const planned = await ap.plan({ vendor: b.vendor || null,
+                since: /^\d{4}-\d{2}-\d{2}$/.test(String(b.since || '')) ? b.since : '2024-01-01', env: envOf() });
+            res.json(await ap.apply(planned, { reason: b.reason, really, by: who(req), env: envOf() }));
+        } catch (e) { res.status(400).json({ error: e.message }); }
+    });
+
     app.post('/api/qb/undo', async (req, res) => {
         if (locked(req, res)) return;
         const { journalId, reason, dryRun } = req.body || {};

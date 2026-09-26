@@ -207,7 +207,8 @@ async function loadStatus() {
       `<span class="chip act" data-todo="1" title="Everything QuickBooks is waiting on">what needs you</span>`,
       `<span class="chip act" data-books="1" title="The year, what is owed both ways, and the bank balances — read live from QuickBooks">the books</span>`,
       `<span class="chip act" data-find="1" title="Find a document in QuickBooks by number, container or amount">find</span>`,
-      `<span class="chip act" data-dupes="1" title="The same money entered twice, per supplier and customer, and payments never applied">duplicates</span>`,
+      `<span class="chip act" data-allocate="1" title="Payments that were never matched to a bill — the biggest single thing wrong with the books">place payments</span>`,
+      `<span class="chip act" data-dupes="1" title=""The same money entered twice, per supplier and customer, and payments never applied">duplicates</span>`,
       `<span class="chip act" data-missing="1" title=""Your live sheet against your live books — what neither side has">sheet vs books</span>`,
       `<span class="chip act" data-older="1" title="Enter a reviewed list of rows from before the cutover">enter an older list</span>`,
       `<span class="chip ${s.connected ? '' : 'warn'} act" data-connect="1" title="${s.connected ? 'Reconnect QuickBooks — needed when the token is refused' : 'QuickBooks is not connected — nothing can be read or written until it is'}">${s.connected ? 'reconnect' : 'connect QuickBooks'}</span>`,
@@ -597,7 +598,7 @@ async function loadDuplicates() {
     ].join('');
     const loose = d.unapplied.total ? `<h3 class="sec">Paid, but not applied to any bill <span class="count">${d.unapplied.payments}</span> — ${money(d.unapplied.total)}</h3>
       <div class="empty" style="padding:4px 8px">The money left the bank and QuickBooks knows it, but nobody matched it to a bill. Until these are applied, every open bill on this page is overstated.</div>
-      <table><tbody>${d.unapplied.byParty.map(p => `<tr class="click" data-open="vendor|${encodeURIComponent(p.party)}"><td>${p.party}</td><td class="num" style="color:var(--amber-500)">${money(p.amount)}</td></tr>`).join('')}</tbody></table>` : '';
+      <table><tbody>${d.unapplied.byParty.map(p => `<tr><td class="click" data-open="vendor|${encodeURIComponent(p.party)}"><u>${p.party}</u></td><td class="num" style="color:var(--amber-500)">${money(p.amount)}</td><td><button class="act" data-place="${encodeURIComponent(p.party)}">place them</button></td></tr>`).join('')}</tbody></table>` : '';
     $('dbody').innerHTML = (loose + side(d.suppliers, 'vendor', 'Suppliers') + side(d.customers, 'customer', 'Customers'))
       || '<div class="empty">Nothing is doubled this year.</div>';
     $('dbody').querySelectorAll('tr.click').forEach(tr => tr.onclick = () => {
@@ -605,6 +606,59 @@ async function loadDuplicates() {
       if (name) openParty(kind, decodeURIComponent(name));
     });
   } catch (e) { $('dbody').innerHTML = `<div class="empty">${e.message}</div>`; }
+}
+
+/* ── MONEY PAID, MONEY MATCHED ───────────────────────────────────────
+   The biggest single thing wrong with her books: payments with no
+   allocation, so bills read open that are settled. Placing them moves
+   nothing — no bank entry, no P&L, no change to the payable total — it
+   only says which bill the money belongs to. Dry run first, always. */
+async function allocatePayments(vendor) {
+  STATE.sel = null; renderList();
+  $('dname').textContent = vendor ? `Place ${vendor}'s payments` : 'Place the loose payments';
+  $('dmap').textContent = 'Reading every payment and every open bill…';
+  $('dstats').innerHTML = ''; $('dtabs').innerHTML = '';
+  $('dbody').innerHTML = '<div class="empty">Working out which bill each payment settled…</div>';
+  try {
+    const p = await api(`/api/qb/allocate-plan${vendor ? `?vendor=${encodeURIComponent(vendor)}` : ''}`);
+    STATE.plan = p;
+    $('dmap').textContent = `${money(p.totals.loose)} of payments carry no allocation · ${money(p.totals.placed)} can be placed across ${p.totals.bills} bills`;
+    $('dstats').innerHTML = [
+      ['Unallocated', money(p.totals.loose), 'warn'],
+      ['Can be placed', money(p.totals.placed), 'good'],
+      ['Payments', p.totals.payments, ''],
+      ['Nowhere to put it', p.unplaceable.length, p.unplaceable.length ? 'warn' : 'good'],
+    ].map(([k, v, cls]) => `<div class="stat"><div class="k">${k}</div><div class="v ${cls}">${v}</div></div>`).join('');
+    const rows = p.payments.map(r => `<tr><td class="mono">${r.date}</td><td><b>${r.vendor}</b> ${qbLink(r.id, 'payment')}</td>
+        <td class="num">${money(r.total)}</td><td class="num" style="color:var(--amber-500)">${money(r.loose)}</td>
+        <td style="color:var(--text-faint)">${r.picks.map(k => `${k.doc || '#' + k.billId} ${k.date} ← ${money(k.take)}`).join('<br>')}</td>
+        <td class="num">${r.leftOver ? money(r.leftOver) : ''}</td></tr>`).join('');
+    const stuck = p.unplaceable.length ? `<h3 class="sec">Nowhere to put it <span class="count">${p.unplaceable.length}</span></h3>
+      <div class="empty" style="padding:4px 8px">These suppliers have no open bill to take the money. Either it is a prepayment for a load that has not arrived, or the bill is missing.</div>
+      <table><tbody>${p.unplaceable.map(u => `<tr class="click" data-open="vendor|${encodeURIComponent(u.vendor)}"><td>${u.vendor}</td><td class="mono">${u.date}</td><td class="num">${money(u.loose)}</td></tr>`).join('')}</tbody></table>` : '';
+    $('dbody').innerHTML = `<div class="empty" style="padding:8px">Nothing here moves money. It only records which bill each payment settled — the bank, the profit and loss and the payable total are all untouched.</div>
+      <table><thead><tr><th>Paid</th><th>Supplier</th><th class="num">Payment</th><th class="num">Unplaced</th><th>Goes to</th><th class="num">Left</th></tr></thead><tbody>${rows}</tbody></table>${stuck}`;
+    $('dbody').querySelectorAll('tr.click').forEach(tr => tr.onclick = () => {
+      const [kind, name] = tr.dataset.open.split('|');
+      if (name) openParty(kind, decodeURIComponent(name));
+    });
+    if (!p.payments.length) return;
+    if (!STATE.unlocked) return toast('Open the padlock to place these.', 'bad');
+    const ok = await confirmImpact({
+      title: 'Place these payments against their bills',
+      sub: `${money(p.totals.placed)} across ${p.totals.bills} bills, ${p.totals.payments} payments`,
+      bodyHtml: `<div class="pk-none">No money moves. No bank entry, no profit and loss, no change to what you owe in total — this only records which bill each payment settled, so what stays open afterwards is your real debt.</div>
+        <div class="pk-none">Each payment is read again from QuickBooks first and skipped if it changed since this list was made. Every allocation goes in the journal.</div>`,
+      mustType: 'APPLY', okLabel: 'Place them',
+    });
+    if (!ok) return toast('Left alone. Nothing was written.', 'good');
+    const reason = await askText('Why?', 'It goes in the journal beside every allocation.', 'Reason', 'payments were recorded without being matched to their bills', 'Place them');
+    if (!reason) return;
+    toast('Placing…');
+    const out = await api('/api/qb/allocate', { vendor: vendor || null, reason, really: true, confirm: 'APPLY' });
+    toast(`Placed ${money(out.totals.placed)} across ${out.totals.payments} payments${out.skipped.length ? `, ${out.skipped.length} skipped` : ''}.`, 'good');
+    await allocatePayments(vendor);
+  } catch (e) { $('dbody').innerHTML = `<div class="empty">${e.message}</div>`; toast(e.message, 'bad'); }
 }
 
 /* ── what is waiting on her ──────────────────────────────────────────
@@ -1027,6 +1081,7 @@ $('chips').addEventListener('click', (e) => {
   else if (chip.dataset.find) findDoc();
   else if (chip.dataset.missing) loadMissing();
   else if (chip.dataset.dupes) loadDuplicates();
+  else if (chip.dataset.allocate) allocatePayments(null);
   else if (chip.dataset.older) pushOlderList();
   else if (chip.dataset.connect) connectQb();
 });
