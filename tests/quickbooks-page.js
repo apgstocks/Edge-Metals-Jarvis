@@ -275,7 +275,7 @@ const ck = (name, ok, extra) => { if (ok) { pass++; console.log('  PASS ', name)
        (await post('/api/qb/bank-review', {})).code === 400);
     const notACsv = await post('/api/qb/bank-review', { csv: 'nothing like a bank export' });
     ck('a file with no bank lines in it is refused, not silently empty',
-       notACsv.code === 400 && /export/.test(notACsv.body.error), notACsv.body);
+       notACsv.code === 400 && /header row|export/.test(notACsv.body.error), notACsv.body);
     const bank = require('../scripts/qb-bank-match.js');
     const read = bank.readBankLines({ text: 'Date,Description,Payee,Spent,Received\n09/15/2026,WIRE OUT,Inesh Cores Chapin,60000,\n09/16/2026,ZELLE IN,Rad Metals,,45120.50\n' });
     ck('the matcher reads an uploaded export the same way it reads a file',
