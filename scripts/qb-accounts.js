@@ -17,13 +17,9 @@ if (arg('env')) process.env.QB_ENV = arg('env');
 const mapping = require('../helpers/quickbooks/mapping');
 const client = require('../helpers/quickbooks/client');
 
-// The roles Jarvis can use today. Adding one here is how a new use of an
-// account gets a name she can answer.
-const ROLES = {
-    prepayment: 'money wired to a supplier before his load arrives (her accountant books these to Vendor Payable)',
-    'bank charges': 'the fee a customer wire arrives short by',
-    trucking: 'the trucking deducted on a supplier bill',
-};
+// The roles Jarvis can use today. They live in mapping.js now (2026-09-26),
+// so this script, the QuickBooks page and the status chips read one list.
+const ROLES = mapping.ACCOUNT_ROLES;
 
 (async () => {
     const [cmd, a, b] = process.argv.slice(2).filter((x) => !x.startsWith('--'));

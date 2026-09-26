@@ -18,6 +18,7 @@
 const path = require('path');
 
 const mapping = require('./mapping');
+const { normalizeName } = require('../nameMatch');
 const journal = require('./journal');
 const push = require('./push');
 const pushInvoice = require('./pushInvoice');
@@ -202,12 +203,43 @@ function partyDetail(kind, name, env) {
 }
 
 
+// ── WHAT IS STILL WAITING ON HER ───────────────────────────────────────────
+// Apsara, 2026-09-26: "i basically want my website to handle whatever we can
+// do from qb from here." The first thing the terminal was still needed for is
+// simply KNOWING what is outstanding — a blocked row sat blocked until
+// somebody ran a script and read a list.
+//
+// The last word wins: a bill blocked on Monday and entered on Tuesday is not
+// a question any more, and a row whose link exists is in the books whatever
+// the journal said on the way there.
+function openQuestions(env) {
+    const links = push.loadLinks();
+    const latest = new Map();
+    for (const e of journal.list({ env })) {
+        const id = (e.jarvis && e.jarvis.id) || e.linkKey || '';
+        if (!id) continue;
+        latest.set(`${e.kind}|${id}`, e);
+    }
+    const out = [];
+    for (const e of latest.values()) {
+        if (e.action !== 'blocked' && e.action !== 'asked') continue;
+        if (e.linkKey && links[e.linkKey]) continue;
+        out.push({ id: e.id, kind: e.kind, action: e.action, when: e.at,
+            who: (e.jarvis && (e.jarvis.supplier || e.jarvis.customer)) || '',
+            what: (e.jarvis && (e.jarvis.container || e.jarvis.id)) || '',
+            jarvisId: (e.jarvis && e.jarvis.id) || null,
+            why: e.reason || '' });
+    }
+    return out.sort((a, b) => String(b.when).localeCompare(String(a.when)));
+}
+
 // ── the routes ─────────────────────────────────────────────────────────────
 // Mounted from api.js with one line. Reads are open; every mutation needs the
 // padlock open (`unlock: true`) AND an admin session — two deliberate acts,
 // because a mis-click here lands in her live books.
 function mount(app, cfg) {
     const envOf = () => auth.qbEnv();
+    const who = (req) => (req.isSuper ? 'super admin' : (req.role || 'admin'));
     const locked = (req, res) => {
         if (req.role !== 'admin') { res.status(403).json({ error: 'changing QuickBooks needs an admin session' }); return true; }
         if (!(req.body && req.body.unlock === true)) { res.status(400).json({ error: 'the page is locked — open the padlock first' }); return true; }
@@ -222,9 +254,9 @@ function mount(app, cfg) {
         // Same misreading as the party header had: these chips said "unmapped"
         // for accounts that were mapped, because matchParty answers under
         // `qb`, not `qbId`.
-        const roles = ['prepayment', 'bank charges', 'trucking'].map((role) => {
+        const roles = Object.keys(mapping.ACCOUNT_ROLES).map((role) => {
             const m = readMapping('account', role);
-            return { role, qbId: m.qbId, qbName: m.qbName };
+            return { role, qbId: m.qbId, qbName: m.qbName, why: mapping.ACCOUNT_ROLES[role] };
         });
         const j = journal.list({ env });
         res.json({
@@ -353,7 +385,7 @@ function mount(app, cfg) {
         const { bills, invoices } = req.body || {};
         if (!bills && !invoices) return res.status(400).json({ error: 'give a bills date, an invoices date, or both' });
         try {
-            const { changed } = push.saveCutover({ bills, invoices }, req.isSuper ? 'super admin' : (req.role || 'admin'));
+            const { changed } = push.saveCutover({ bills, invoices }, who(req));
             const env = envOf();
             const pinned = ['bill', 'invoice'].filter((k) => push.cutoverSource(k) === 'env');
             res.json({ ok: true, changed,
@@ -377,6 +409,95 @@ function mount(app, cfg) {
             res.json({ ok: out.ok, dryRun: out.dryRun, error: out.error,
                 summary: job.summarise(out.result || {}), report: job.reportText(out) });
         } catch (e) { res.status(500).json({ error: e.message }); }
+    });
+
+    // ── everything waiting on her, in one answer ───────────────────────────
+    // Unmatched names first and by value, because "which of these 60 names
+    // matters" is the question the terminal never answered.
+    app.get('/api/qb/todo', async (req, res) => {
+        const env = envOf();
+        try {
+            // withQb false: this is the page's first paint and must not wait
+            // on QuickBooks. Balances come with the party she opens.
+            const rows = await partyRows({ env, withQb: false });
+            const unmatched = rows.filter((p) => !p.mapped && !p.skipped)
+                .map((p) => ({ kind: p.kind, name: p.name, bills: p.bills, invoices: p.invoices,
+                    value: r2(p.billsValue + p.invoicesValue), lastActivity: p.lastActivity }))
+                .sort((a, b) => b.value - a.value);
+            const roles = Object.keys(mapping.ACCOUNT_ROLES)
+                .map((role) => ({ role, why: mapping.ACCOUNT_ROLES[role], ...readMapping('account', role) }))
+                .filter((r) => !r.qbId);
+            const q = openQuestions(env);
+            res.json({ unmatched, roles,
+                stuck: q.filter((x) => x.action === 'blocked'),
+                asked: q.filter((x) => x.action === 'asked'),
+                counts: { unmatched: unmatched.length, roles: roles.length,
+                    stuck: q.filter((x) => x.action === 'blocked').length,
+                    asked: q.filter((x) => x.action === 'asked').length } });
+        } catch (e) { res.status(500).json({ error: e.message }); }
+    });
+
+    // Her chart of accounts, for the role picker.
+    app.get('/api/qb/accounts', async (req, res) => {
+        try {
+            const all = await mapping.fetchParties('account', require('./client'), { env: envOf() });
+            const like = KEY(req.query.like || '');
+            const rows = (like ? all.filter((a) => KEY(a.DisplayName).includes(like)) : all)
+                .filter((a) => a.Active !== false)
+                .map((a) => ({ id: String(a.Id), name: a.DisplayName, type: a.AccountType, sub: a.AccountSubType, balance: a.Balance }));
+            res.json({ accounts: rows.slice(0, 300), total: rows.length, roles: mapping.ACCOUNT_ROLES });
+        } catch (e) { res.status(502).json({ error: `QuickBooks: ${e.message}` }); }
+    });
+
+    // Which account answers a role. Was scripts/qb-accounts.js role.
+    app.post('/api/qb/role', async (req, res) => {
+        if (locked(req, res)) return;
+        const { role, qbId, qbName } = req.body || {};
+        if (!mapping.ACCOUNT_ROLES[role]) return res.status(400).json({ error: `role must be one of: ${Object.keys(mapping.ACCOUNT_ROLES).join(', ')}` });
+        if (!qbId) return res.status(400).json({ error: 'which account?' });
+        try {
+            const saved = mapping.confirm('account', role, String(qbId), qbName || null, who(req),
+                `role "${role}" — ${mapping.ACCOUNT_ROLES[role]}`);
+            res.json({ ok: true, role, saved, note: 'saved — the next write uses it' });
+        } catch (e) { res.status(400).json({ error: e.message }); }
+    });
+
+    // ── a name that is not in QuickBooks at all ────────────────────────────
+    // Jarvis never invents a party on its own (mapping.js: a new name is a
+    // question for her). This is her answering it without the terminal. It
+    // refuses to make a twin: a second "Mazariegos Recycling" splits one
+    // supplier's balance across two records and nothing tells you it happened.
+    app.post('/api/qb/create-party', async (req, res) => {
+        if (locked(req, res)) return;
+        const { kind, name, jarvisName, contact, company } = req.body || {};
+        if (!['vendor', 'customer'].includes(kind)) return res.status(400).json({ error: 'kind must be vendor or customer' });
+        const wanted = String(name || '').trim();
+        if (!wanted) return res.status(400).json({ error: 'what should it be called in QuickBooks?' });
+        const jName = String(jarvisName || wanted).trim();
+        const env = envOf();
+        const client = require('./client');
+        try {
+            const all = await mapping.fetchParties(kind, client, { env });
+            const twin = all.filter((x) => normalizeName(x.DisplayName) === normalizeName(wanted));
+            if (twin.length) {
+                mapping.confirm(kind, jName, twin[0].Id, twin[0].DisplayName, who(req), 'already in QuickBooks — linked, not created');
+                return res.json({ status: 'already-there', qbId: String(twin[0].Id), qbName: twin[0].DisplayName,
+                    note: `"${twin[0].DisplayName}" (#${twin[0].Id}) is already there — linked to it instead of making a second one.` });
+            }
+            const table = kind === 'vendor' ? 'Vendor' : 'Customer';
+            const body = { DisplayName: wanted };
+            if (company) body.CompanyName = String(company).trim();
+            if (contact) {
+                const parts = String(contact).trim().split(/\s+/);
+                body.GivenName = parts[0];
+                if (parts.length > 1) body.FamilyName = parts.slice(1).join(' ');
+            }
+            const made = (await client.request('POST', '/' + table.toLowerCase(), body, { env }))[table];
+            mapping.confirm(kind, jName, made.Id, made.DisplayName, who(req), 'created from the QuickBooks page');
+            if (jName !== wanted) mapping.confirm(kind, wanted, made.Id, made.DisplayName, who(req), 'same party under the name QuickBooks uses');
+            res.json({ status: 'created', qbId: String(made.Id), qbName: made.DisplayName,
+                note: `Created ${kind} #${made.Id} "${made.DisplayName}" and matched "${jName}" to it.` });
+        } catch (e) { res.status(400).json({ error: e.message }); }
     });
 
     app.post('/api/qb/undo', async (req, res) => {

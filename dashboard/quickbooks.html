@@ -85,6 +85,10 @@ tr:hover td{background:var(--surface-hover)}
 .act:hover:not(:disabled){border-color:var(--leaf-500);color:var(--leaf-300)}
 .act:disabled{opacity:.35;cursor:not-allowed}
 .empty{padding:26px 8px;color:var(--text-faint);font-size:13px}
+h3.sec{font-family:var(--font-mono);font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--text-muted);font-weight:500;margin:18px 0 4px;padding:0 8px}
+h3.sec:first-child{margin-top:4px}
+h3.sec .count{color:var(--amber-500);margin-left:6px}
+tr.click{cursor:pointer} td.r{text-align:right;font-family:var(--font-mono)}
 /* ── ask jarvis ──────────────────────────────────────────────────────── */
 .ask{flex:none;border-top:1px solid var(--border-default);background:var(--surface-card);padding:10px 18px}
 .askrow{display:flex;gap:8px}
@@ -95,6 +99,34 @@ tr:hover td{background:var(--surface-hover)}
 .answer .you{color:var(--text-faint);font-size:11.5px;font-family:var(--font-mono);margin-bottom:3px}
 .toast{position:fixed;right:16px;bottom:16px;padding:11px 14px;border-radius:5px;border:1px solid var(--border-default);background:var(--surface-card);color:var(--text-body);font-size:12.5px;max-width:420px;box-shadow:0 8px 28px rgba(0,0,0,.5);z-index:40;white-space:pre-wrap}
 .toast.bad{border-color:var(--red-500)} .toast.good{border-color:var(--leaf-600)}
+
+/* ── THE MATCH PICKER (2026-09-26) ────────────────────────────────────────
+   Apsara, on a screenshot of the old one: "this box looks out of sync from
+   my website design". It was window.prompt() — drawn by the operating
+   system, in the OS's own font and colours, and impossible to style at all.
+   No amount of CSS could have reached it.
+   It was also the wrong control for the job. The answer is almost always
+   "the one with the same name", and it was asking her to READ a numbered
+   list and then TYPE a digit. Now the candidates are rows she clicks. */
+.pk-back{position:fixed;inset:0;background:rgba(6,8,10,.66);display:flex;align-items:flex-start;justify-content:center;padding:64px 20px;z-index:60;overflow-y:auto}
+.pk{background:var(--surface-card);border:1px solid var(--border-default);border-radius:7px;width:100%;max-width:520px;box-shadow:0 18px 50px rgba(0,0,0,.55)}
+.pk-head{padding:15px 18px 12px;border-bottom:1px solid var(--border-subtle)}
+.pk-head h3{margin:0;font-family:var(--font-display);font-size:15px;font-weight:700;color:var(--text-strong)}
+.pk-head p{margin:5px 0 0;font-size:12px;color:var(--text-faint)}
+.pk-list{max-height:46vh;overflow-y:auto;padding:7px}
+.pk-opt{display:flex;align-items:center;gap:10px;width:100%;text-align:left;padding:9px 11px;border-radius:4px;border:1px solid transparent;background:transparent;color:var(--text-body);font-size:13px}
+.pk-opt:hover,.pk-opt:focus-visible{background:var(--surface-hover);border-color:var(--border-default);outline:none}
+.pk-opt .pk-id{margin-left:auto;font-family:var(--font-mono);font-size:11px;color:var(--text-faint)}
+.pk-opt .pk-why{font-family:var(--font-mono);font-size:10.5px;letter-spacing:.04em;text-transform:uppercase;color:var(--leaf-300);border:1px solid var(--leaf-600);border-radius:3px;padding:2px 6px}
+.pk-none{padding:14px 12px;font-size:12.5px;color:var(--text-faint)}
+.pk-foot{padding:12px 18px 15px;border-top:1px solid var(--border-subtle);display:flex;flex-direction:column;gap:9px}
+.pk-foot label{font-size:11.5px;color:var(--text-faint)}
+.pk-foot input{width:100%;padding:8px 10px;border-radius:4px;border:1px solid var(--border-default);background:var(--surface-sunken);color:var(--text-body);font:inherit;font-size:13px}
+.pk-foot input:focus{outline:none;border-color:var(--ring)}
+.pk-btns{display:flex;gap:8px;justify-content:flex-end}
+.pk-btns button{padding:7px 13px;border-radius:4px;border:1px solid var(--border-default);background:var(--surface-sunken);color:var(--text-body);font-size:12.5px}
+.pk-btns button:hover{background:var(--surface-hover)}
+.pk-btns .pk-go{border-color:var(--leaf-600);color:var(--leaf-300)}
 @media (max-width:900px){ main{grid-template-columns:1fr} aside{display:none} aside.show{display:flex;position:absolute;inset:52px 0 0;z-index:20} }
 </style>
 </head>
@@ -169,9 +201,137 @@ async function loadStatus() {
       `<span class="chip ${(s.nightly || {}).writes ? 'on' : 'off'}" title="Every night at midnight Los Angeles, after the 11:15pm sheet sync. It enters everything dated on or after the cutover that is not in QuickBooks yet, and emails what went in, what is stuck, and what it left alone.">nightly ${(s.nightly || {}).writes ? '00:00' : 'dry run'}</span>`,
       `<span class="chip act" data-run="1" title="Run that same sweep now">run now</span>`,
       `<span class="chip">${s.counts.journal} journal · ${s.counts.standing} standing</span>`,
-      ...s.roles.filter(r => !r.qbId).map(r => `<span class="chip warn">${r.role}: unmapped</span>`),
+      `<span class="chip act" data-todo="1" title="Everything QuickBooks is waiting on">what needs you</span>`,
+      ...s.roles.map(r => r.qbId
+        ? `<span class="chip act" data-role="${r.role}" title="${r.why || ''} — now ${r.qbName || ('#' + r.qbId)}. Click to change.">${r.role} ✓</span>`
+        : `<span class="chip warn act" data-role="${r.role}" title="${r.why || ''} — nothing answers this yet, so any write needing it is blocked. Click to set it.">${r.role}: unmapped</span>`),
     ].join('');
   } catch (e) { $('chips').innerHTML = `<span class="chip warn">status: ${e.message}</span>`; }
+}
+
+/* ── THE SAME DIALOG, EVERYWHERE (2026-09-26) ────────────────────────
+   Apsara's complaint about window.prompt was that it is drawn by the
+   operating system and looks nothing like her site — so the match picker
+   replaced it. Anything new on this page has to meet the same bar, or the
+   page goes back to looking half-finished. These two reuse the picker's
+   own markup and CSS: one asks for a line of text, one asks her to choose
+   from a list. Escape and a backdrop click cancel, exactly like the picker. */
+function pkEsc(v) { return String(v == null ? '' : v).replace(/[&<>"]/g, (m) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[m])); }
+function pkShell(title, sub, inner) {
+  const back = document.createElement('div');
+  back.className = 'pk-back';
+  back.innerHTML = `<div class="pk" role="dialog" aria-modal="true" aria-label="${pkEsc(title)}">
+      <div class="pk-head"><h3>${pkEsc(title)}</h3>${sub ? `<p>${pkEsc(sub)}</p>` : ''}</div>${inner}</div>`;
+  return back;
+}
+function pkOpen(back, resolve) {
+  let done = false;
+  const finish = (v) => { if (done) return; done = true; document.removeEventListener('keydown', onKey); back.remove(); resolve(v); };
+  const onKey = (e) => { if (e.key === 'Escape') finish(null); };
+  back.addEventListener('click', (e) => { if (e.target === back) finish(null); });
+  document.addEventListener('keydown', onKey);
+  document.body.appendChild(back);
+  return finish;
+}
+/* one line of text; resolves the string, or null if she backed out */
+function askText(title, sub, label, value, okLabel) {
+  return new Promise((resolve) => {
+    const back = pkShell(title, sub, `<div class="pk-foot">
+        <label for="pkIn">${pkEsc(label)}</label>
+        <input id="pkIn" autocomplete="off" value="${pkEsc(value || '')}">
+        <div class="pk-btns"><button type="button" class="pk-cancel">Cancel</button>
+          <button type="button" class="pk-go">${pkEsc(okLabel || 'OK')}</button></div>
+      </div>`);
+    const finish = pkOpen(back, resolve);
+    const input = back.querySelector('#pkIn');
+    const go = () => finish(input.value.trim() || null);
+    back.querySelector('.pk-cancel').addEventListener('click', () => finish(null));
+    back.querySelector('.pk-go').addEventListener('click', go);
+    input.addEventListener('keydown', (e) => { if (e.key === 'Enter') go(); });
+    input.focus(); input.select();
+  });
+}
+/* one of a list; rows are { label, why, id }. Resolves the row, or null */
+function pickRow(title, sub, rows, emptyText) {
+  return new Promise((resolve) => {
+    const back = pkShell(title, sub, `<div class="pk-list">${rows.length ? rows.map((r, i) => `
+        <button type="button" class="pk-opt" data-i="${i}">
+          <span>${pkEsc(r.label)}</span>${r.why ? `<span class="pk-why">${pkEsc(r.why)}</span>` : ''}
+          ${r.id ? `<span class="pk-id">#${pkEsc(r.id)}</span>` : ''}
+        </button>`).join('') : `<div class="pk-none">${pkEsc(emptyText || 'Nothing to choose from.')}</div>`}</div>
+      <div class="pk-foot"><div class="pk-btns"><button type="button" class="pk-cancel">Cancel</button></div></div>`);
+    const finish = pkOpen(back, resolve);
+    back.querySelector('.pk-cancel').addEventListener('click', () => finish(null));
+    back.querySelectorAll('.pk-opt').forEach((b) => b.addEventListener('click', () => finish(rows[+b.dataset.i])));
+    const first = back.querySelector('.pk-opt'); if (first) first.focus();
+  });
+}
+
+/* ── what is waiting on her ──────────────────────────────────────────
+   The first thing the page shows, because "what do I still have to do"
+   used to need a script and a read of its output. Unmatched names by
+   value, unset account roles, and every row whose last word was still
+   blocked or needs-you. */
+async function loadTodo() {
+  $('dname').textContent = 'What needs you';
+  $('dmap').textContent = 'Everything QuickBooks is waiting on, most valuable first. Click any line to open it.';
+  $('dstats').innerHTML = '';
+  $('dtabs').innerHTML = '';
+  $('dbody').innerHTML = '<div class="empty">Reading…</div>';
+  try {
+    const t = await api('/api/qb/todo');
+    STATE.todo = t;
+    const c = t.counts;
+    const sec = [];
+    if (c.roles) sec.push(`<h3 class="sec">Account roles not set <span class="count">${c.roles}</span></h3>
+      <table><tbody>${t.roles.map(r => `<tr class="click" data-role="${r.role}"><td><b>${r.role}</b></td><td>${r.why}</td><td class="r">set it</td></tr>`).join('')}</tbody></table>`);
+    if (c.stuck) sec.push(`<h3 class="sec">Stuck — Jarvis would not enter these <span class="count">${c.stuck}</span></h3>
+      <table><tbody>${t.stuck.slice(0, 40).map(x => `<tr class="click" data-open="${x.kind === 'invoice' ? 'customer' : 'vendor'}|${encodeURIComponent(x.who)}"><td class="mono">${x.kind}</td><td>${x.who || '—'}</td><td class="mono">${x.what || ''}</td><td>${x.why}</td></tr>`).join('')}</tbody></table>`);
+    if (c.asked) sec.push(`<h3 class="sec">Needs you — the same money may already be there <span class="count">${c.asked}</span></h3>
+      <table><tbody>${t.asked.slice(0, 40).map(x => `<tr class="click" data-open="${x.kind === 'invoice' ? 'customer' : 'vendor'}|${encodeURIComponent(x.who)}"><td class="mono">${x.kind}</td><td>${x.who || '—'}</td><td class="mono">${x.what || ''}</td><td>${x.why}</td></tr>`).join('')}</tbody></table>`);
+    if (c.unmatched) sec.push(`<h3 class="sec">No QuickBooks match yet <span class="count">${c.unmatched}</span></h3>
+      <table><thead><tr><th>NAME</th><th>WHAT IT HOLDS</th><th class="r">VALUE</th><th>LAST SEEN</th></tr></thead><tbody>${t.unmatched.slice(0, 60).map(u => `<tr class="click" data-open="${u.kind}|${encodeURIComponent(u.name)}"><td><b>${u.name}</b> <span class="mono" style="color:var(--text-faint)">${u.kind}</span></td><td>${u.bills ? u.bills + ' bills' : ''}${u.bills && u.invoices ? ' · ' : ''}${u.invoices ? u.invoices + ' invoices' : ''}</td><td class="r">${money(u.value)}</td><td class="mono">${u.lastActivity || ''}</td></tr>`).join('')}</tbody></table>`);
+    $('dbody').innerHTML = sec.length ? sec.join('') : '<div class="empty">Nothing is waiting. Every name is matched, every role is set, and nothing is stuck.</div>';
+    $('dbody').querySelectorAll('tr.click').forEach(tr => tr.onclick = () => {
+      if (tr.dataset.role) return setRole(tr.dataset.role);
+      const [kind, name] = tr.dataset.open.split('|');
+      if (name) openParty(kind, decodeURIComponent(name));
+    });
+  } catch (e) { $('dbody').innerHTML = `<div class="empty">${e.message}</div>`; }
+}
+
+/* Which account answers a role. Was scripts/qb-accounts.js role. */
+async function setRole(role) {
+  if (!STATE.unlocked) return toast('Open the padlock first.', 'bad');
+  const why = ((STATE.status && STATE.status.roles) || []).find(r => r.role === role);
+  const like = await askText(`Which account answers "${role}"?`, why && why.why ? why.why : '',
+    'Type part of the account name to search your chart of accounts', '', 'Search');
+  if (like === null) return;
+  try {
+    const r = await api(`/api/qb/accounts?like=${encodeURIComponent(like)}`);
+    const rows = r.accounts.slice(0, 40).map(a => ({ label: `${a.name} — ${a.type}${a.sub ? ' / ' + a.sub : ''}`, id: a.id, name: a.name }));
+    const chosen = await pickRow(`${role} → which account?`, `${r.total} match "${like}"`, rows, `No account matches "${like}". Try a shorter word.`);
+    if (!chosen) return;
+    await api('/api/qb/role', { role, qbId: chosen.id, qbName: chosen.name });
+    toast(`${role} → ${chosen.name}. The next write uses it.`, 'good');
+    await loadStatus(); if (!STATE.sel) await loadTodo();
+  } catch (e) { toast(e.message, 'bad'); }
+}
+
+/* A name that is in no QuickBooks record at all. Jarvis never invents one
+   on its own — this is her saying yes, without the terminal. */
+async function createParty(kind, jarvisName) {
+  const qbName = await askText(`Create a new ${kind} in QuickBooks`,
+    `Jarvis will keep calling it "${jarvisName}".`, 'Name it should carry in QuickBooks', jarvisName, 'Next');
+  if (!qbName) return;
+  const contact = await askText('Contact person', 'The person, when the record carries a company name. Leave blank for none.',
+    `Contact on "${qbName}"`, '', 'Create it');
+  if (contact === null && !confirm(`Create ${kind} "${qbName}" with no contact name?`)) return;
+  try {
+    const out = await api('/api/qb/create-party', { kind, name: qbName, jarvisName, contact: contact || '' });
+    toast(out.note, 'good');
+    await loadParties(); await openParty(kind, jarvisName);
+  } catch (e) { toast(e.message, 'bad'); }
 }
 
 /* ── the cutover ─────────────────────────────────────────────────────
@@ -189,14 +349,17 @@ function cutChip(which, date, from) {
 async function moveCutover(which) {
   if (!STATE.unlocked) return toast('Open the padlock first.', 'bad');
   const now = (STATE.status && STATE.status.cutover && STATE.status.cutover[which]) || '';
-  const next = prompt(`Enter nothing dated before this ${which === 'bills' ? 'bill' : 'invoice'} date (YYYY-MM-DD).\n\nEverything on or after it that is not in QuickBooks yet goes in on the next nightly run. Anything older is left to you — her books already hold that period, or the cost went straight to Cost of Goods Sold with no bill.`, now);
-  if (!next || next.trim() === now) return;
+  const next = await askText(`Enter nothing dated before this ${which === 'bills' ? 'bill' : 'invoice'} date`,
+    'Everything on or after it that is not in QuickBooks yet goes in on the next nightly run. Anything older is left to you — your books already hold that period, or the cost went straight to Cost of Goods Sold with no bill.',
+    'Date (YYYY-MM-DD)', now, 'Move it');
+  if (!next || next === now) return;
   try {
-    const out = await api('/api/qb/cutover', { [which]: next.trim() });
+    const out = await api('/api/qb/cutover', { [which]: next });
     toast(out.note || 'Saved.', /still wins/.test(out.note || '') ? 'bad' : 'good');
     await loadStatus();
   } catch (e) { toast(e.message, 'bad'); }
 }
+
 /* The nightly run, on demand. Same sweep, same checks, same journal. */
 async function runNow() {
   if (!STATE.unlocked) return toast('Open the padlock first.', 'bad');
@@ -325,7 +488,8 @@ async function send(spec, dryRun) {
   } catch (e) { toast(e.message, 'bad'); }
 }
 async function undo(journalId) {
-  const reason = prompt('Undo this in QuickBooks. Why? (it goes in the journal)');
+  const reason = await askText('Undo this in QuickBooks', 'The reason goes in the journal beside the undo, so the books can be explained later.',
+    'Why is it coming back out?', '', 'Continue');
   if (!reason) return;
   try {
     const dry = await api('/api/qb/undo', { journalId, reason, dryRun: true });
@@ -335,15 +499,101 @@ async function undo(journalId) {
     await openParty(STATE.sel.kind, STATE.sel.name);
   } catch (e) { toast(e.message, 'bad'); }
 }
+/* ── PICKING THE QUICKBOOKS MATCH ───────────────────────────────────────
+   Replaces window.prompt(). Resolves to the SAME four things prompt() gave
+   back — a 1-based index as a string, a typed QuickBooks name, 'SKIP', or
+   null for cancel — so remap()'s parsing below is unchanged. That is
+   deliberate: this is a change of appearance and of input method, not of
+   what gets written to the mapping.
+
+   The exact-name row keeps the words "same name, almost certainly this one"
+   because tests/quickbooks-page.js asserts that phrase is on the page — it
+   is the tell that the candidates route put the exact match at the head of
+   the list, and losing the wording would lose that check. */
+function pickMatch(d, c) {
+  return new Promise((resolve) => {
+    const cands = c.candidates || [];
+    const back = document.createElement('div');
+    back.className = 'pk-back';
+    const esc = (s) => String(s == null ? '' : s).replace(/[&<>"]/g, (m) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[m]));
+    back.innerHTML = `
+      <div class="pk" role="dialog" aria-modal="true" aria-label="Match to a QuickBooks ${esc(d.kind)}">
+        <div class="pk-head">
+          <h3>Match &ldquo;${esc(d.name)}&rdquo;</h3>
+          <p>to a QuickBooks ${esc(d.kind)}</p>
+        </div>
+        <div class="pk-list">${cands.length ? cands.map((x, i) => `
+          <button type="button" class="pk-opt" data-i="${i + 1}">
+            <span>${esc(x.DisplayName || x.name)}</span>
+            ${x.exact ? '<span class="pk-why">same name, almost certainly this one</span>' : ''}
+            <span class="pk-id">#${esc(x.Id)}</span>
+          </button>`).join('') : '<div class="pk-none">No near matches. Type the exact QuickBooks name below.</div>'}
+        </div>
+        <div class="pk-foot">
+          <label for="pkTyped">Not listed? Type the exact QuickBooks name</label>
+          <input id="pkTyped" list="pkAll" autocomplete="off" placeholder="exact name as it appears in QuickBooks">
+          <datalist id="pkAll">${(c.all || []).slice(0, 2000).map((x) => `<option value="${esc(x.name)}"></option>`).join('')}</datalist>
+          <div class="pk-btns">
+            <button type="button" class="pk-cancel">Cancel</button>
+            <button type="button" class="pk-skip">Skip</button>
+            <button type="button" class="pk-new" title="It is in none of your QuickBooks records — create it there and match it">NEW to create it in QuickBooks</button>
+            <button type="button" class="pk-go">Use typed name</button>
+          </div>
+        </div>
+      </div>`;
+
+    let done = false;
+    const finish = (v) => {
+      if (done) return;
+      done = true;
+      document.removeEventListener('keydown', onKey);
+      back.remove();
+      resolve(v);
+    };
+    // Escape cancels and a click on the backdrop cancels — both leave the
+    // mapping exactly as it was, same as dismissing the old prompt.
+    const onKey = (e) => {
+      if (e.key === 'Escape') finish(null);
+      if (e.key === 'Enter' && document.activeElement === back.querySelector('#pkTyped')) {
+        const t = back.querySelector('#pkTyped').value.trim();
+        if (t) finish(t);
+      }
+    };
+    back.addEventListener('click', (e) => { if (e.target === back) finish(null); });
+    back.querySelectorAll('.pk-opt').forEach((b) => b.addEventListener('click', () => finish(b.dataset.i)));
+    back.querySelector('.pk-cancel').addEventListener('click', () => finish(null));
+    back.querySelector('.pk-skip').addEventListener('click', () => finish('SKIP'));
+    // Nothing in her books is this party. Jarvis never invents one on its
+    // own, so this is her saying create it — the answer remap() turns into
+    // createParty(), which refuses to make a twin.
+    back.querySelector('.pk-new').addEventListener('click', () => finish('NEW'));
+    back.querySelector('.pk-go').addEventListener('click', () => {
+      const t = back.querySelector('#pkTyped').value.trim();
+      // An empty box is not a choice. Saying so beats closing on nothing and
+      // leaving her wondering whether it saved.
+      if (!t) { toast('Type a QuickBooks name, or pick one from the list.', 'bad'); return; }
+      finish(t);
+    });
+    document.addEventListener('keydown', onKey);
+    document.body.appendChild(back);
+    // The exact match is almost always the answer, so it is what the keyboard
+    // lands on. Enter confirms it without touching the mouse.
+    const first = back.querySelector('.pk-opt') || back.querySelector('#pkTyped');
+    if (first) first.focus();
+  });
+}
+
 async function remap() {
   if (!STATE.unlocked) return toast('Open the padlock first.', 'bad');
   const d = STATE.detail;
   try {
     const c = await api(`/api/qb/candidates?kind=${d.kind}&name=${encodeURIComponent(d.name)}`);
-    const list = (c.candidates || []).map((x, i) => `${i + 1}. ${x.DisplayName || x.name} (#${x.Id})${x.exact ? '   ← same name, almost certainly this one' : ''}`).join('\n');
-    const pick = prompt(`Match "${d.name}" to which QuickBooks ${d.kind}?\n\n${list || '(no near matches)'}\n\nType a number from the list, or the exact QuickBooks name, or SKIP.`);
+    // Returns exactly what prompt() returned — a number as a string, a typed
+    // name, 'SKIP', or null for cancel — so everything below is untouched.
+    const pick = await pickMatch(d, c);
     if (!pick) return;
     let qbId = null, qbName = null;
+    if (pick.trim().toUpperCase() === 'NEW') return createParty(d.kind, d.name);
     if (pick.trim().toUpperCase() === 'SKIP') { qbId = 'SKIP'; }
     else if (/^\d+$/.test(pick.trim()) && c.candidates[+pick.trim() - 1]) {
       const chosen = c.candidates[+pick.trim() - 1]; qbId = chosen.Id; qbName = chosen.DisplayName || chosen.name;
@@ -388,12 +638,15 @@ $('chips').addEventListener('click', (e) => {
   if (!chip) return;
   if (chip.dataset.cut) moveCutover(chip.dataset.cut);
   else if (chip.dataset.run) runNow();
+  else if (chip.dataset.role) setRole(chip.dataset.role);
+  else if (chip.dataset.todo) { STATE.sel = null; renderList(); loadTodo(); }
 });
 $('asksend').onclick = ask;
 $('ask').addEventListener('keydown', (e) => { if (e.key === 'Enter') ask(); });
 
 loadStatus();
 loadParties();
+loadTodo();
 </script>
 </body>
 </html>

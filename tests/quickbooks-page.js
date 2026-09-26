@@ -14,6 +14,8 @@ process.env.QB_CUTOVER_FILE = require('path').join(require('fs').mkdtempSync(req
 const fs = require('fs');
 
 const express = require('express');
+const journal = require('../helpers/quickbooks/journal');
+const KEYNAME = (v) => String(v || '').toLowerCase().replace(/[^a-z0-9]/g, '');
 const routes = require('../helpers/quickbooks/routes');
 let pass = 0, fail = 0; const failures = [];
 const ck = (name, ok, extra) => { if (ok) { pass++; console.log('  PASS ', name); } else { fail++; failures.push(name); console.log('  FAIL ', name, extra === undefined ? '' : JSON.stringify(extra).slice(0, 200)); } };
@@ -116,6 +118,63 @@ const ck = (name, ok, extra) => { if (ok) { pass++; console.log('  PASS ', name)
     const roleChips = (await get('/api/qb/status')).body.roles;
     ck('the account-role chips read the same way (they said unmapped when mapped)',
        Array.isArray(roleChips) && roleChips.every((r) => 'qbId' in r), roleChips);
+
+    // ── everything the terminal used to be needed for (2026-09-26) ─────────
+    // Apsara: "i basically want my website to handle whatever we can do from
+    // qb from here." Three of the scripts move onto the page: what is still
+    // waiting (qb-journal check + qb-match-parties), which account answers a
+    // role (qb-accounts role) and creating a party she approved
+    // (qb-create-party).
+    const todo = await get('/api/qb/todo');
+    ck('the worklist answers without QuickBooks being reachable',
+       todo.code === 200 && Array.isArray(todo.body.unmatched) && Array.isArray(todo.body.stuck), todo.body && todo.body.error);
+    ck('...and counts every kind of thing that is waiting',
+       todo.body.counts && ['unmatched', 'roles', 'stuck', 'asked'].every((k) => typeof todo.body.counts[k] === 'number'), todo.body.counts);
+    ck('...unmatched names come most valuable first, so the list is worth reading top down',
+       todo.body.unmatched.every((u, i, a) => !i || a[i - 1].value >= u.value));
+    ck('...a name she already matched is not asked about again',
+       !todo.body.unmatched.some((u) => KEYNAME(u.name) === 'mario'), todo.body.unmatched.slice(0, 3));
+    ck('...an unset account role is on the list, with what it is for',
+       todo.body.roles.every((r) => r.role && r.why), todo.body.roles);
+
+    // a blocked row is a question until it is entered; then it is not
+    journal.record({ env: 'sandbox', kind: 'bill', action: 'blocked', jarvis: { id: 'TODO_B1', supplier: 'Aris', container: 'ARIS1111111' }, reason: 'no supplier amount yet' });
+    journal.record({ env: 'sandbox', kind: 'bill', action: 'blocked', jarvis: { id: 'TODO_B2', supplier: 'Hugo', container: 'HUGO2222222' }, reason: 'grade has no amount' });
+    journal.record({ env: 'sandbox', kind: 'bill', action: 'created', jarvis: { id: 'TODO_B2', supplier: 'Hugo' }, qb: { id: '9001' }, reason: '' });
+    const todo2 = await get('/api/qb/todo');
+    ck('a stuck row is listed with its reason, not just counted',
+       todo2.body.stuck.some((x) => x.what === 'ARIS1111111' && /no supplier amount/.test(x.why)), todo2.body.stuck);
+    ck('...and one that went in afterwards drops off the list — last word wins',
+       !todo2.body.stuck.some((x) => x.what === 'HUGO2222222'), todo2.body.stuck);
+
+    // ── account roles ──────────────────────────────────────────────────────
+    ck('locked: setting a role is refused', (await post('/api/qb/role', { role: 'prepayment', qbId: '98' })).code === 400);
+    const badRole = await post('/api/qb/role', { role: 'not a role', qbId: '98', unlock: true });
+    ck('an unknown role is refused and the real ones are named',
+       badRole.code === 400 && /prepayment/.test(badRole.body.error), badRole.body);
+    ck('a role with no account is refused', (await post('/api/qb/role', { role: 'trucking', unlock: true })).code === 400);
+    const roleSet = await post('/api/qb/role', { role: 'prepayment', qbId: '98', qbName: 'Vendor Payable', unlock: true });
+    ck('unlocked admin can say which account answers a role', roleSet.code === 200 && roleSet.body.saved.qbId === '98', roleSet.body);
+    const afterRole = await get('/api/qb/status');
+    ck('...and the chip stops saying unmapped', (afterRole.body.roles.find((r) => r.role === 'prepayment') || {}).qbId === '98',
+       afterRole.body.roles);
+    ck('...and it drops off the worklist', !(await get('/api/qb/todo')).body.roles.some((r) => r.role === 'prepayment'));
+
+    // ── creating a party she approved ──────────────────────────────────────
+    ck('locked: creating a party is refused', (await post('/api/qb/create-party', { kind: 'vendor', name: 'X' })).code === 400);
+    ck('a party with no name is refused', (await post('/api/qb/create-party', { kind: 'vendor', unlock: true })).code === 400);
+    ck('a kind that is not vendor or customer is refused',
+       (await post('/api/qb/create-party', { kind: 'item', name: 'X', unlock: true })).code === 400);
+    // QuickBooks is unreachable in this test, so the create must FAIL — and
+    // must not leave a mapping behind pointing at a party that never existed.
+    const cantCreate = await post('/api/qb/create-party', { kind: 'vendor', name: 'Brand New Yard', unlock: true });
+    ck('with QuickBooks unreachable, creating fails loudly', cantCreate.code === 400 && !!cantCreate.body.error, cantCreate.body);
+    const mapNow = JSON.parse(fs.readFileSync(process.env.QB_PARTY_MAP_FILE, 'utf8'));
+    ck('...and no half-made mapping is left behind', !Object.keys(mapNow.vendor || {}).includes('brandnewyard'), Object.keys(mapNow.vendor || {}));
+    const pageSrc2 = fs.readFileSync(require('path').join(__dirname, '..', 'dashboard', 'quickbooks.html'), 'utf8');
+    ck('the match dialog offers to create it when nothing matches', /NEW to create it in QuickBooks/.test(pageSrc2));
+    ck('the worklist is what the page opens on', /loadTodo\(\);/.test(pageSrc2) && /api\/qb\/todo/.test(pageSrc2));
+    ck('a role chip can be clicked to set it', /data-role=/.test(pageSrc2) && /api\/qb\/role/.test(pageSrc2));
 
     // ── the cutover, from the page (2026-09-26) ────────────────────────────
     // Apsara: "I want nightly report to run everyday to upload all the bills
