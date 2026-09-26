@@ -16,6 +16,16 @@ const { execFileSync } = require('child_process');
 const ROOT = path.join(__dirname, '..');
 const FIXTURE = path.join(__dirname, 'fixtures', 'weight-shortage-tab.csv');
 const TMP = fs.mkdtempSync(path.join(os.tmpdir(), 'claims-import-'));
+// Isolate the PARENT process too, before anything from the repo is required.
+// Only the child runs used to get a DATA_DIR, so section H's in-process calls
+// wrote the vocabulary straight into the real data directory.
+process.env.DATA_DIR = TMP;
+process.env.JARVIS_TEST = '1';
+const _cfg = require(path.join(ROOT, 'config.js'));
+if (!String(_cfg.DATA_DIR).startsWith(TMP)) {
+    console.error('ABORT — DATA_DIR did not land in the temp dir; refusing to touch real data');
+    process.exit(1);
+}
 
 let pass = 0, fail = 0; const failures = [];
 const ck = (n, ok, extra) => { if (ok) { pass++; console.log('  PASS ', n); } else { fail++; failures.push(n); console.log('  FAIL ', n, extra === undefined ? '' : JSON.stringify(extra).slice(0, 220)); } };
@@ -110,7 +120,7 @@ console.log('\n=== F — nobody is notified, and re-running changes nothing ==='
         !fs.existsSync(path.join(dir, 'tasks.json')) || JSON.parse(fs.readFileSync(path.join(dir, 'tasks.json'), 'utf8')).length === 0);
     ck('every imported claim records where it came from',
         first.every((r) => r.created_by === 'sheet-import'
-            && (r.history || []).some((h) => /imported from the Weight Shortage tab, row \d+/.test(h.what))),
+            && (r.history || []).some((h) => /imported from .+, row \d+/.test(h.what))),
         first.slice(0, 1).map((r) => r.history));
 
     const out2 = run(['--really'], dir);
@@ -119,68 +129,118 @@ console.log('\n=== F — nobody is notified, and re-running changes nothing ==='
     ck('and says so', /already in the register/.test(out2));
 }
 
-console.log('\n=== G — not every container has the same kind of claim ===');
+console.log('\n=== G — with no model, nothing is guessed ===');
 {
-    const dir = fs.mkdtempSync(path.join(TMP, 'kind-'));
+    // The importer is run with --no-ai throughout this suite, so no test here
+    // reaches the network. That makes this section the important one: when the
+    // model is not asked, every claim must come out UNCLASSIFIED and say so.
+    // The old version had a table of regexes to fall back on; it guessed
+    // confidently and got eleven containers wrong.
+    const dir = fs.mkdtempSync(path.join(TMP, 'noai-'));
     const out = run(['--really'], dir);
     const rows = JSON.parse(fs.readFileSync(path.join(dir, 'claims.json'), 'utf8'));
-    const kindOf = (inv, amt) => {
-        const m = rows.filter((r) => r.invoice_no === inv && (amt === undefined || r.claim_amount === amt));
-        return m.length === 1 ? m[0].claim_type : `${m.length} matches`;
-    };
-    ck('a plain shortage row is a weight shortage', kindOf('25VT03') === 'weight_shortage', kindOf('25VT03'));
-    ck('"Hand Tools found" is foreign material, not a shortage', kindOf('26ME07', 450) === 'foreign_material', kindOf('26ME07', 450));
-    ck('"52% Recovery Promised" is a recovery shortfall', kindOf('26ME07', 3100) === 'recovery_shortfall', kindOf('26ME07', 3100));
-    ck('the engine-combo block is a grade downgrade, read from its COLUMN HEADINGS',
-        kindOf('26MK47') === 'grade_downgrade', kindOf('26MK47'));
-    ck('one container, two claims, two different kinds',
-        rows.filter((r) => r.container_no === 'TEMU7944250').map((r) => r.claim_type).sort().join(',') === 'foreign_material,recovery_shortfall',
-        rows.filter((r) => r.container_no === 'TEMU7944250').map((r) => r.claim_type));
-    ck('the report breaks the import down by kind', /KIND OF CLAIM/.test(out) && /grade downgrade/.test(out));
-    ck('and lists what would otherwise have been mislabelled', /NOT a weight shortage/.test(out));
-    ck('how each kind was decided is kept on the claim',
-        rows.filter((r) => r.claim_type !== 'weight_shortage').every((r) => (r.quotes || {}).claim_type),
-        rows.filter((r) => !(r.quotes || {}).claim_type).map((r) => r.invoice_no));
-    ck('nothing is left as a bare default', !rows.some((r) => !r.claim_type));
+    ck('every claim imported', rows.length >= 9, rows.length);
+    ck('none of them was given a kind', rows.every((r) => r.claim_type === null), rows.filter((r) => r.claim_type).map((r) => r.invoice_no));
+    ck('and every one is flagged so a person can see it', rows.every((r) => (r.flags || []).includes('kind_unknown')));
+    ck('the report says how many and why', /NOT classified/.test(out) && /not asked/.test(out), out.split('\n').filter((l) => /classified/.test(l)));
+    ck('it points at the way to fix it', /--reclassify/.test(out));
+    ck('no vocabulary was invented either', !fs.existsSync(path.join(dir, 'claim_kinds.json'))
+        || JSON.parse(fs.readFileSync(path.join(dir, 'claim_kinds.json'), 'utf8')).length === 0);
+    ck('the money is unaffected by not knowing the kind', /TOTALS to import/.test(out));
 }
 
-console.log('\n=== H — the classifier falls back rather than mislabelling ===');
+console.log('\n=== G2 — reclassify never lets a non-answer overwrite a kind ===');
+{
+    const dir = fs.mkdtempSync(path.join(TMP, 'recl-'));
+    run(['--really'], dir);
+    const file = path.join(dir, 'claims.json');
+    const rows = JSON.parse(fs.readFileSync(file, 'utf8'));
+    rows[0].claim_type = 'weight_shortage';         // as if a model had named it earlier
+    fs.writeFileSync(file, JSON.stringify(rows));
+    const out = run(['--reclassify', '--really'], dir);
+    const after = JSON.parse(fs.readFileSync(file, 'utf8'));
+    ck('a recorded kind survives a run where the model cannot answer', after[0].claim_type === 'weight_shortage', after[0].claim_type);
+    ck('and the run says it left them alone', /left alone because the model still could not say/.test(out));
+    ck('reclassify imports nothing new', after.length === rows.length);
+}
+
+console.log('\n=== H — the model names the kinds, and says when it cannot ===');
 {
     const claimKind = require(path.join(ROOT, 'helpers', 'claimKind'));
+    const claimKinds = require(path.join(ROOT, 'helpers', 'claimKinds'));
     const gemini = require(path.join(ROOT, 'helpers', 'gemini'));
     const real = gemini.callGeminiJSON;
-    const text = 'Reg/Al Engine claim | Reg.Engine& Steel haed Combo | Alu.Engine Combo | 4.75 | 570';
+    const say = (o) => { gemini.callGeminiJSON = async () => o; };
+    const ROW = 'Reg/Al Engine claim | Reg.Engine& Steel haed Combo | Alu.Engine Combo | 4.75 | 570';
 
-    gemini.callGeminiJSON = async () => ({ type: 'grade_downgrade', quote: 'Alu.Engine Combo', confidence: 0.9, why: 'engine combos repriced' });
-    let r = await claimKind.classify(text);
-    ck('a confident, quoted answer is taken from the model', r.by === 'ai' && r.type === 'grade_downgrade', r);
+    ck('the vocabulary starts empty — there is no list in the code', claimKinds.list().length === 0, claimKinds.list());
 
-    gemini.callGeminiJSON = async () => ({ type: 'damage', quote: 'the container was crushed', confidence: 0.95, why: 'x' });
-    r = await claimKind.classify(text);
-    ck('an answer quoting words that are NOT in the row is refused', r.by === 'rules' && r.droppedQuote, r);
-    ck('and the rules answer takes over', r.type === 'grade_downgrade', r.type);
+    say({ matches_existing: null, label: 'grade downgrade', description: 'part of the load was a cheaper grade', quote: 'Alu.Engine Combo', confidence: 0.9, why: 'engine combos repriced' });
+    let d = await claimKind.decide(ROW);
+    ck('the model names a kind and it is recorded', d.slug === 'grade_downgrade' && d.created === true, d);
+    ck('the label is the model\'s words, not a slug', claimKinds.get('grade_downgrade').label === 'grade downgrade');
 
-    gemini.callGeminiJSON = async () => ({ type: 'damage', quote: 'Alu.Engine Combo', confidence: 0.2, why: 'x' });
-    r = await claimKind.classify(text);
-    ck('a low-confidence answer falls back to the rules', r.by === 'rules' && r.aiConfidence === 0.2, r);
+    // A different wording for the same argument must reuse the kind, because
+    // "both are same meaning" is a judgement the model makes, not a synonym table.
+    say({ matches_existing: 'grade_downgrade', label: 'grade downgrade', description: '', quote: 'Alu.Engine Combo', confidence: 0.9, why: 'same argument, different words' });
+    d = await claimKind.decide(ROW);
+    ck('a second claim meaning the same thing reuses the kind', d.slug === 'grade_downgrade' && d.created === false, d);
+    ck('the vocabulary did not grow', claimKinds.list().length === 1, claimKinds.list().map((k) => k.slug));
+
+    say({ matches_existing: null, label: 'recovery shortfall', description: 'yield below what was promised', quote: 'Alu.Engine Combo', confidence: 0.9, why: 'x' });
+    d = await claimKind.decide(ROW);
+    ck('a genuinely new kind is added', d.slug === 'recovery_shortfall' && d.created === true, d);
+    ck('so the vocabulary grows as claims arrive', claimKinds.list().length === 2);
+
+    say({ matches_existing: 'a_kind_that_never_existed', label: 'damage', description: '', quote: 'Alu.Engine Combo', confidence: 0.9, why: 'x' });
+    d = await claimKind.decide(ROW);
+    ck('a match against a slug that does not exist is treated as new, not trusted', d.slug === 'damage', d);
+
+    say({ matches_existing: null, label: 'damage', description: '', quote: 'the container was crushed', confidence: 0.95, why: 'x' });
+    d = await claimKind.decide(ROW);
+    ck('a quote that is not in the row leaves the claim UNCLASSIFIED', d.slug === null && /not in the row/.test(d.unresolved), d);
+    ck('and it records what the model would have said', d.wouldHaveSaid === 'damage', d);
+
+    say({ matches_existing: null, label: 'damage', description: '', quote: 'Alu.Engine Combo', confidence: 0.2, why: 'x' });
+    d = await claimKind.decide(ROW);
+    ck('low confidence leaves it unclassified rather than guessing', d.slug === null && /not confident/.test(d.unresolved), d);
+
+    say({ matches_existing: null, label: null, description: '', quote: '', confidence: 0.9, why: 'nothing here says' });
+    d = await claimKind.decide('Some row | Kalawar | 1210');
+    ck('a row that says nothing gets NO kind — never the commonest one', d.slug === null && /does not say/.test(d.unresolved), d);
+
+    say(null);
+    d = await claimKind.decide(ROW);
+    ck('no answer at all is unclassified, not a fallback label', d.slug === null && /did not answer/.test(d.unresolved), d);
 
     gemini.callGeminiJSON = async () => { throw new Error('quota'); };
-    r = await claimKind.classify(text);
-    ck('a failed call falls back instead of throwing', r.by === 'rules' && r.aiError === 'quota', r);
+    d = await claimKind.decide(ROW);
+    ck('a failed call is unclassified and never throws', d.slug === null && /the call failed/.test(d.unresolved), d);
 
-    gemini.callGeminiJSON = async () => ({ type: 'not_a_real_kind', confidence: 0.99 });
-    r = await claimKind.classify(text);
-    ck('a kind outside the closed set is never stored', claimKind.TYPES.includes(r.type) && r.by === 'rules', r);
+    say({ matches_existing: null, label: 'this is a whole sentence about what the customer is complaining about at length', description: '', quote: 'Alu.Engine Combo', confidence: 0.9, why: 'x' });
+    d = await claimKind.decide(ROW);
+    ck('a sentence is refused as a label', d.slug === null && /a sentence, not a label/.test(d.unresolved), d);
 
-    gemini.callGeminiJSON = async () => null;
-    r = await claimKind.classify('Varo Trading | 21.192 | 21.01 | 0.182', { hasWeights: true, shortage: 0.182 });
-    ck('with no model at all, weights and a difference still read as a shortage', r.type === 'weight_shortage', r);
-    r = await claimKind.classify('Some row | Kalawar | 1210', {});
-    ck('and a row that says nothing is "other", never a guess', r.type === 'other', r);
+    ck('nothing unclassified ever polluted the vocabulary', claimKinds.list().length === 3, claimKinds.list().map((k) => k.slug));
+
+    // Drift is fixed by merging, which is hers to do — the code does not do it.
+    const claims = require(path.join(ROOT, 'helpers', 'claims'));
+    ck('two kinds can be folded into one', await (async () => {
+        await claimKinds.ensure('short weight', 'less than invoiced');
+        const before = claimKinds.list().length;
+        await claimKinds.merge('short_weight', 'grade_downgrade');
+        return claimKinds.list().length === before - 1;
+    })());
+    ck('and the folded name is kept as an alias so nothing becomes unreadable',
+        (claimKinds.get('grade_downgrade').aliases || []).includes('short_weight'));
+    ck('merging into a kind that does not exist is refused, in words', await (async () => {
+        try { await claimKinds.merge('grade_downgrade', 'nope'); return false; }
+        catch (e) { return /there is no kind/.test(e.message); }
+    })());
+    ck('a colour is derived from the slug, so a new kind needs no CSS',
+        typeof claimKinds.hue('grade_downgrade') === 'number' && claimKinds.hue('a') !== claimKinds.hue('b'));
 
     gemini.callGeminiJSON = real;
-    ck('a commodity heading does not become contamination',
-        claimKind.byRules('ROTORS AND DRUMS | Cont No. Gross Received Shortage in MT | 23.718 | 23.4 | 0.318', { hasWeights: true, shortage: 0.318 }).type === 'weight_shortage');
 }
 
 console.log(`\n  ${pass} passed, ${fail} failed`);

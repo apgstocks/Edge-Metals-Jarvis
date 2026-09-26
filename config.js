@@ -268,6 +268,11 @@ const FILES = {
     // Shortage 2025" tab: that tab is seven stacked tables sharing one grid,
     // so an appended row has no defined column meaning. See helpers/claims.js.
     CLAIMS_FILE: path.join(DATA_DIR, 'claims.json'),
+    // The kinds of claim, as the model has named them. Deliberately NOT a list
+    // in the code: Apsara, 2026-09-26, "let ai decide dynamically". The model
+    // names a kind and also decides whether a new name means the same as one
+    // already here; this file is where they accumulate. helpers/claimKinds.js.
+    CLAIM_KINDS_FILE: path.join(DATA_DIR, 'claim_kinds.json'),
     // Gmail message ids the claim watcher has already judged. Separate from
     // EMAIL_ASSESSED_FILE and PAYMENT_EMAILS_PROCESSED_FILE for the same
     // reason those two are separate — no watcher may mark another's mail as

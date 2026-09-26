@@ -22,7 +22,9 @@
 // MT. A guess between MT and LB is a 2204x error. If the mail does not say the
 // unit, the claim is created with the unit missing and waits for a person.
 const { callGeminiJSON } = require('./gemini');
-const claimKind = require('./claimKind');
+// The extractor pulls FACTS out of a mail. What KIND of claim it is, is decided
+// separately by helpers/claimKind from the mail's own words, so this file has no
+// list of kinds in it either.
 
 // ISO 6346: four letters then seven digits, usually with the owner code split
 // off by a space in a typed mail.
@@ -92,7 +94,7 @@ const FIELDS = [
     ['claimed_weight', 'the weight the customer says they received, as a bare number'],
     ['weight_unit', 'MT, LB or KG — ONLY if the mail states it in words or a symbol'],
     ['stated_claim_amount', 'the money amount the customer is asking for, as a bare number, if stated'],
-    ['claim_type', 'what the claim is ABOUT — one of ' + claimKind.TYPES.join(', ') + '. Do not answer weight_shortage just because weights are present; a grade or recovery claim has weights too'],
+
 ];
 
 function buildPrompt(email) {
@@ -197,11 +199,9 @@ async function extract(email = {}) {
         claimed_weight: keep('claimed_weight', asNum(f.claimed_weight)),
         weight_unit: keep('weight_unit', asUnit(f.weight_unit)),
         stated_claim_amount: keep('stated_claim_amount', asNum(f.stated_claim_amount)),
-        // The kind is NOT defaulted to weight_shortage. If the model did not
-        // name one from the closed set, claimKind decides from the mail's own
-        // words — the same classifier the sheet import uses.
-        claim_type: claimKind.TYPES.includes(f.claim_type) ? f.claim_type
-            : claimKind.byRules(`${email.subject || ''} ${email.body || ''}`, { hasWeights: asNum(f.invoice_weight) !== null && asNum(f.claimed_weight) !== null }).type,
+        // No claim_type here on purpose — workflow/claimWatch asks
+        // helpers/claimKind about the mail, so the kind is named the same way for
+        // a mail as for a sheet row, by the model and not by this prompt.
     };
 
     if (!fields.container_no && !fields.invoice_no) return null;   // nothing to key on

@@ -16,6 +16,8 @@ const path = require('path');
 // require silently changes meaning — don't.
 const claims = require('../claims');
 const claimWatch = require('../../workflow/claimWatch');
+const claimKinds = require('../claimKinds');
+const importSheet = require('./importSheet');
 
 const bad = (res, msg, code = 400) => res.status(code).json({ error: msg });
 
@@ -28,17 +30,17 @@ function mount(app, cfg) {
     app.get('/api/claims', (req, res) => {
         try {
             const rows = claims.list();
-            // typeLabels travels with the rows so the page never spells a kind
-            // differently from the server. containers is the count the header
-            // leads with — Apsara, 2026-09-26: "put it into website per
-            // container basis", and one container can carry several claims of
-            // different kinds.
+            // `kinds` is the vocabulary as it actually stands — whatever the
+            // model has named so far, with a hue per slug so a kind the model
+            // invents tonight is legible on the page with no CSS to add. There is
+            // no fixed list to send, by design.
             const keyOf = (c) => String(c.container_no || c.invoice_no || '—').toUpperCase();
             res.json({
                 claims: rows,
                 stats: { ...claims.stats(rows), containers: new Set(rows.map(keyOf)).size },
-                statuses: claims.STATUSES, types: claims.TYPES,
-                typeLabels: claims.TYPE_LABEL, units: claims.UNITS,
+                statuses: claims.STATUSES,
+                kinds: claimKinds.list().map((k) => ({ ...k, hue: claimKinds.hue(k.slug) })),
+                units: claims.UNITS,
             });
         } catch (e) { bad(res, e.message, 500); }
     });
@@ -116,7 +118,115 @@ function mount(app, cfg) {
         } catch (e) { bad(res, e.message); }
     });
 
-    console.log('[CLAIMS] routes mounted — /claims, /api/claims');
+    // ── THE VOCABULARY ─────────────────────────────────────────────────────
+    // She can rename a kind into her own words and merge two the model named
+    // separately. This is the correction path for a dynamic vocabulary — the
+    // alternative was a fixed list in the code, which is what she rejected.
+    app.get('/api/claim-kinds', (req, res) => {
+        res.json({ kinds: claimKinds.list().map((k) => ({ ...k, hue: claimKinds.hue(k.slug) })) });
+    });
+
+    app.post('/api/claim-kinds/rename', async (req, res) => {
+        try {
+            const b = req.body || {};
+            if (!b.slug || !b.label) return bad(res, 'which kind, and what should it be called');
+            res.json(await claimKinds.rename(b.slug, b.label, b.by || 'manager'));
+        } catch (e) { bad(res, e.message); }
+    });
+
+    app.post('/api/claim-kinds/merge', async (req, res) => {
+        try {
+            const b = req.body || {};
+            if (!b.from || !b.into) return bad(res, 'merging needs the kind to fold in and the kind to keep');
+            const moved = claims.list().filter((c) => c && c.claim_type === b.from);
+            await claimKinds.merge(b.from, b.into, b.by || 'manager');
+            for (const c of moved) {
+                await claims.update(c.id, { claim_type: b.into }, b.by || 'manager',
+                    `kind merged: ${b.from} → ${b.into}`);
+            }
+            res.json({ into: claimKinds.get(b.into), moved: moved.length });
+        } catch (e) { bad(res, e.message); }
+    });
+
+    // ── IMPORTING A SHEET FROM THE PAGE ────────────────────────────────────
+    // Apsara, 2026-09-26: "if i upload the weight shortage sheet and ai to
+    // classify them properly and put it into website, it should do that."
+    //
+    // Two steps, and the plan stays HERE between them. The page gets a summary
+    // and an id; committing sends back only that id. It is not a round trip of
+    // convenience — a plan posted back from a browser is a plan a browser could
+    // edit, and these rows are money. What she confirms is what was computed.
+    const plans = new Map();
+    const PLAN_TTL = 15 * 60 * 1000;
+    const sweepPlans = () => {
+        const cut = Date.now() - PLAN_TTL;
+        for (const [id, v] of plans) if (v.at < cut) plans.delete(id);
+        // A cap as well as a TTL: a big workbook held per preview would otherwise
+        // grow this process's memory for as long as she keeps pressing the button.
+        while (plans.size > 8) plans.delete(plans.keys().next().value);
+    };
+
+    // What the page is allowed to see: everything except the internal row objects.
+    const forPage = (p, id) => ({
+        planId: id,
+        source: p.source, tab: p.tab, tabs: p.tabs, sheetRows: p.sheetRows,
+        blocks: p.blocks,
+        count: p.claims.length,
+        totals: p.totals, byStatus: p.byStatus,
+        byKind: Object.entries(p.byKind).map(([slug, k]) => ({ slug, ...k, hue: slug ? claimKinds.hue(slug) : null })),
+        vocabulary: { named: p.vocabulary.named, settled: p.vocabulary.settled, kinds: p.vocabulary.kinds, folds: p.vocabulary.folds, why: p.vocabulary.why },
+        merged: p.merged, split: p.split, manual: p.manual, noUnit: p.noUnit,
+        unresolved: p.unresolved, already: p.already.length,
+        skipped: p.skipped.length,
+        preview: p.claims.slice(0, 200).map((r) => ({
+            rows: r.fromRows, customer: r.customer, supplier: r.supplier,
+            invoice_no: r.invoice_no, container_no: r.container_no,
+            claim_type: r.claim_type, kind: r.kind ? r.kind.label : null,
+            why: r.type_why || r.type_unresolved || '', quote: r.type_quote || '',
+            claim_amount: r.claim_amount, our_claim: r.our_claim, status: r.status,
+            weight_unit: r.weight_unit,
+        })),
+    });
+
+    app.post('/api/claims/import/preview', async (req, res) => {
+        try {
+            const b = req.body || {};
+            if (b.xlsxBase64 && String(b.xlsxBase64).length > 40 * 1024 * 1024) return bad(res, 'that file is too big to read in one go');
+            const p = await importSheet.plan({
+                csv: b.csv || undefined,
+                xlsxBase64: b.xlsxBase64 || undefined,
+                name: b.name || undefined,
+                tab: b.tab || undefined,
+                useAi: b.useAi !== false,
+            });
+            sweepPlans();
+            const id = 'plan_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+            plans.set(id, { plan: p, at: Date.now() });
+            res.json(forPage(p, id));
+        } catch (e) { bad(res, e.message); }
+    });
+
+    app.post('/api/claims/import/commit', async (req, res) => {
+        try {
+            const held = plans.get(String((req.body || {}).planId || ''));
+            if (!held) return bad(res, 'that preview has expired — read the sheet again before importing');
+            const w = await importSheet.commit(held.plan, 'sheet-import');
+            plans.delete(String(req.body.planId));
+            res.json({ created: w.created, stats: claims.stats() });
+        } catch (e) { bad(res, e.message, 500); }
+    });
+
+    app.post('/api/claims/import/reclassify', async (req, res) => {
+        try {
+            const b = req.body || {};
+            const held = plans.get(String(b.planId || ''));
+            if (!held) return bad(res, 'that preview has expired — read the sheet again first');
+            const r = await importSheet.reclassify(held.plan, { write: b.really === true });
+            res.json({ ...r, wrote: b.really === true });
+        } catch (e) { bad(res, e.message, 500); }
+    });
+
+    console.log('[CLAIMS] routes mounted — /claims, /api/claims, /api/claim-kinds, /api/claims/import');
 }
 
 module.exports = { mount };

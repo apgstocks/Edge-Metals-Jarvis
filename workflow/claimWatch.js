@@ -26,6 +26,7 @@ const { loadJson, mutateJson } = require('../helpers/json');
 const claims = require('../helpers/claims');
 const tasks = require('../helpers/tasks');
 const { gate, extract } = require('../helpers/claimParse');
+const claimKind = require('../helpers/claimKind');
 
 let _sendToTeam = async () => {};
 function init({ sendToTeam } = {}) {
@@ -67,6 +68,8 @@ function notifyText(c, { isNew, changed }) {
     const L = [];
     L.push(isNew ? 'Weight shortage claim received' : 'Weight shortage claim updated');
     L.push('');
+    if (c.claim_type) L.push(`Claiming:  ${require('../helpers/claimKinds').label(c.claim_type)}`);
+    else L.push('Claiming:  not classified yet — read the mail before replying');
     L.push(`Customer:  ${c.customer || '—'}`);
     L.push(`Invoice:   ${c.invoice_no || '—'}`);
     L.push(`Container: ${c.container_no || '—'}`);
@@ -185,11 +188,18 @@ async function consider({ messageId, threadId, from, subject, body, mailbox, dry
             } else rec = claims.get(existing.id);
         } else {
             isNew = true;
+            // What kind of claim, from the mail's own words. Null when the model
+            // cannot say — the claim is still created, flagged kind_unknown, and
+            // picked up later. Never defaulted to the commonest kind.
+            const kind = await claimKind.decide(
+                claimKind.rowText([subject, body], ''),
+            );
             rec = await claims.create({
                 ...f,
-                quotes: got.quotes,
+                claim_type: kind.slug,
+                quotes: { ...got.quotes, ...(kind.slug ? { claim_type: kind.quote || kind.why } : {}) },
                 mail: [mail],
-                note: got.reason || '',
+                note: [got.reason || '', kind.slug ? '' : `kind not classified: ${kind.unresolved}`].filter(Boolean).join(' | '),
                 flags: g.containers.length && !f.container_no ? [claims.FLAG_UNKNOWN_CONTAINER] : [],
             }, 'claims/email');
             await raiseVerifyTodo(rec);
