@@ -37,6 +37,7 @@ header .back{color:var(--steel-400);font-size:13px;text-decoration:none}
 .chip.on{color:var(--leaf-300);border-color:var(--leaf-600);background:rgba(87,190,73,.10)}
 .chip.warn{color:var(--amber-500);border-color:#5a4416;background:rgba(217,154,43,.10)}
 .chip.off{color:var(--steel-400)}
+.chip.act{cursor:pointer} .chip.act:hover{border-color:var(--text-body);color:var(--text-body)}
 .lock{display:flex;align-items:center;gap:7px;padding:5px 11px;border-radius:4px;border:1px solid var(--border-default);background:var(--surface-sunken);color:var(--text-muted);font-size:12.5px;font-weight:600}
 .lock.open{border-color:var(--red-500);color:#f0b3aa;background:rgba(197,64,47,.12)}
 /* ── layout ──────────────────────────────────────────────────────────── */
@@ -163,12 +164,52 @@ async function loadStatus() {
       `<span class="chip ${s.connected ? 'on' : 'warn'}">${s.connected ? 'connected' : 'not connected'}</span>`,
       `<span class="chip ${s.writes ? 'on' : 'off'}">writes ${s.writes ? 'on' : 'off'}</span>`,
       `<span class="chip ${s.autoSync ? 'on' : 'off'}">auto-sync ${s.autoSync ? 'on' : 'off'}</span>`,
-      `<span class="chip">bills ≥ ${s.cutover.bills || '—'}</span>`,
-      `<span class="chip">invoices ≥ ${s.cutover.invoices || '—'}</span>`,
+      cutChip('bills', s.cutover.bills, s.cutover.billsFrom),
+      cutChip('invoices', s.cutover.invoices, s.cutover.invoicesFrom),
+      `<span class="chip ${(s.nightly || {}).writes ? 'on' : 'off'}" title="Every night at midnight Los Angeles, after the 11:15pm sheet sync. It enters everything dated on or after the cutover that is not in QuickBooks yet, and emails what went in, what is stuck, and what it left alone.">nightly ${(s.nightly || {}).writes ? '00:00' : 'dry run'}</span>`,
+      `<span class="chip act" data-run="1" title="Run that same sweep now">run now</span>`,
       `<span class="chip">${s.counts.journal} journal · ${s.counts.standing} standing</span>`,
       ...s.roles.filter(r => !r.qbId).map(r => `<span class="chip warn">${r.role}: unmapped</span>`),
     ].join('');
   } catch (e) { $('chips').innerHTML = `<span class="chip warn">status: ${e.message}</span>`; }
+}
+
+/* ── the cutover ─────────────────────────────────────────────────────
+   The boundary that decides what the nightly run will and will not touch.
+   It used to live only in .env, which meant an SSH session and a restart —
+   and a night where everything was silently skipped. Clicking it here moves
+   it, and the next run honours it with no restart. */
+function cutChip(which, date, from) {
+  const pinned = from === 'env', unset = from === 'unset' || !date;
+  const tip = unset ? 'No cutover set — nothing will be entered in production. Click to set it.'
+    : pinned ? 'Pinned in .env on this machine — remove that line for this to be editable here.'
+    : 'Jarvis enters nothing dated before this. Click to move it.';
+  return `<span class="chip ${unset ? 'warn' : ''} ${pinned ? '' : 'act'}" ${pinned ? '' : `data-cut="${which}"`} title="${tip}">${which} ≥ ${date || 'not set'}${pinned ? ' (.env)' : ''}</span>`;
+}
+async function moveCutover(which) {
+  if (!STATE.unlocked) return toast('Open the padlock first.', 'bad');
+  const now = (STATE.status && STATE.status.cutover && STATE.status.cutover[which]) || '';
+  const next = prompt(`Enter nothing dated before this ${which === 'bills' ? 'bill' : 'invoice'} date (YYYY-MM-DD).\n\nEverything on or after it that is not in QuickBooks yet goes in on the next nightly run. Anything older is left to you — her books already hold that period, or the cost went straight to Cost of Goods Sold with no bill.`, now);
+  if (!next || next.trim() === now) return;
+  try {
+    const out = await api('/api/qb/cutover', { [which]: next.trim() });
+    toast(out.note || 'Saved.', /still wins/.test(out.note || '') ? 'bad' : 'good');
+    await loadStatus();
+  } catch (e) { toast(e.message, 'bad'); }
+}
+/* The nightly run, on demand. Same sweep, same checks, same journal. */
+async function runNow() {
+  if (!STATE.unlocked) return toast('Open the padlock first.', 'bad');
+  const live = confirm('Run the nightly QuickBooks sweep NOW and enter what it finds?\n\nOK = enter it for real.\nCancel = check only (nothing written).');
+  toast(live ? 'Running — entering what it finds…' : 'Running — checking only…');
+  try {
+    const out = await api('/api/qb/run', { dryRun: !live });
+    $('answer').textContent = out.report || out.error || '';
+    $('answer').style.display = 'block';
+    const s = out.summary || {};
+    toast(`${out.dryRun ? 'Checked' : 'Entered'} ${s.made || 0}${s.blocked ? `, ${s.blocked} stuck` : ''}${s.asked ? `, ${s.asked} need you` : ''}${s.left ? `, ${s.left} older than the cutover` : ''}`, s.blocked || s.errored ? 'bad' : 'good');
+    await loadStatus();
+  } catch (e) { toast(e.message, 'bad'); }
 }
 
 /* ── the party list ─────────────────────────────────────────────────── */
@@ -335,6 +376,13 @@ $('q').oninput = renderList;
   STATE.kind = b.dataset.kind;
   [...document.querySelectorAll('.tabsel button')].forEach(x => x.classList.toggle('sel', x === b));
   renderList();
+});
+/* the status strip is clickable: the cutover chips and "run now" */
+$('chips').addEventListener('click', (e) => {
+  const chip = e.target.closest('.chip');
+  if (!chip) return;
+  if (chip.dataset.cut) moveCutover(chip.dataset.cut);
+  else if (chip.dataset.run) runNow();
 });
 $('asksend').onclick = ask;
 $('ask').addEventListener('keydown', (e) => { if (e.key === 'Enter') ask(); });

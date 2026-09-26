@@ -70,9 +70,9 @@ const REALLY = process.argv.includes('--really');
     if (!rows.length) { console.log(`no ${kind}s match that filter`); return; }
 
     // The cutover is lifted for this process only, after the rows are chosen.
-    const was = [process.env.QB_CUTOVER_INVOICES, process.env.QB_CUTOVER_BILLS];
-    process.env.QB_CUTOVER_INVOICES = since;
-    process.env.QB_CUTOVER_BILLS = since;
+    // 2026-09-26: the saved setting now outranks .env, so setting the env vars
+    // here no longer moves the boundary — the explicit override does.
+    push.setCutover({ bills: since, invoices: since });
     try {
         const snaps = await sync.snapshots(env);
         if (kind !== 'invoice') {
@@ -114,7 +114,6 @@ const REALLY = process.argv.includes('--really');
         console.log(REALLY ? 'Journalled — `node scripts/qb-journal.js undo <id> --reason="..."` takes any of it back.'
             : 'DRY RUN — nothing written. Add --really once the list above is right.');
     } finally {
-        if (was[0] === undefined) delete process.env.QB_CUTOVER_INVOICES; else process.env.QB_CUTOVER_INVOICES = was[0];
-        if (was[1] === undefined) delete process.env.QB_CUTOVER_BILLS; else process.env.QB_CUTOVER_BILLS = was[1];
+        push.clearCutover();
     }
 })().catch((e) => { console.error('qb-push-list failed:', e.message); process.exit(1); });

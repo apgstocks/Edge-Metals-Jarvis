@@ -10,6 +10,7 @@ process.env.QB_TOKEN_FILE = require('path').join(_tmp, 'token.json');
 process.env.QB_PARTY_MAP_FILE = require('path').join(_tmp, 'party-map.json');
 process.env.QB_JOURNAL_FILE = require('path').join(_tmp, 'journal.jsonl');
 delete process.env.QB_CUTOVER_INVOICES; delete process.env.QB_CUTOVER_BILLS;
+process.env.QB_CUTOVER_FILE = require('path').join(require('fs').mkdtempSync(require('path').join(require('os').tmpdir(), 'qbpage-')), 'cutover.json');
 const fs = require('fs');
 
 const express = require('express');
@@ -97,6 +98,34 @@ const ck = (name, ok, extra) => { if (ok) { pass++; console.log('  PASS ', name)
     ck('...so the candidates route puts it at the head of the list', /const exact = m\.qb \?/.test(routesSrc));
     const pageSrc = fs.readFileSync(require('path').join(__dirname, '..', 'dashboard', 'quickbooks.html'), 'utf8');
     ck('...and the dialog marks it', /same name, almost certainly this one/.test(pageSrc));
+
+    // ── the cutover, from the page (2026-09-26) ────────────────────────────
+    // Apsara: "I want nightly report to run everyday to upload all the bills
+    // and invoices." The cutover decides what "all" is, so it has to be
+    // movable here — moving it used to mean SSH and a pm2 restart.
+    ck('status carries the cutover and where it comes from',
+       !!status.body.cutover && typeof status.body.cutover.billsFrom === 'string', status.body.cutover);
+    ck('status says when the nightly run happens', /00:00/.test(((status.body.nightly) || {}).at || ''), status.body.nightly);
+    ck('locked: moving the cutover is refused', (await post('/api/qb/cutover', { bills: '2026-09-06' })).code === 400);
+    const cut = await post('/api/qb/cutover', { bills: '2026-09-06', invoices: '2026-08-28', unlock: true });
+    ck('unlocked admin can move the cutover', cut.code === 200 && cut.body.cutover.bills === '2026-09-06'
+       && cut.body.cutover.invoices === '2026-08-28' && cut.body.cutover.billsFrom === 'setting', cut.body);
+    ck('...and it says the next run uses it, no restart', /no restart/.test(cut.body.note || ''), cut.body.note);
+    const badCut = await post('/api/qb/cutover', { bills: 'soon', unlock: true });
+    ck('a junk date is refused with a readable reason', badCut.code === 400 && /date like/.test(badCut.body.error), badCut.body);
+    ck('...and the boundary did not move', (await get('/api/qb/status')).body.cutover.bills === '2026-09-06');
+    ck('an empty change is refused rather than saved as nothing', (await post('/api/qb/cutover', { unlock: true })).code === 400);
+    ck('the page can move it without the terminal', /data-cut=/.test(html) && /api\/qb\/cutover/.test(html));
+
+    // ── the same sweep, on demand ──────────────────────────────────────────
+    ck('locked: run-now is refused', (await post('/api/qb/run', {})).code === 400);
+    // pushed far into the future first, so this runs the sweep over nothing
+    await post('/api/qb/cutover', { bills: '2027-01-01', invoices: '2027-01-01', unlock: true });
+    const run = await post('/api/qb/run', { unlock: true });
+    ck('run-now checks by default — nothing is written unless asked',
+       run.code === 200 && run.body.dryRun === true && /nothing was written/i.test(run.body.report || ''), run.body);
+    ck('...and reports what the cutover left alone', typeof (run.body.summary || {}).left === 'number', run.body.summary);
+    ck('the page has the button', /data-run=/.test(html) && /api\/qb\/run/.test(html));
 
     server.close();
     try { fs.rmSync(_tmp, { recursive: true, force: true }); } catch {}
