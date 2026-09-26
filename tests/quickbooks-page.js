@@ -99,6 +99,24 @@ const ck = (name, ok, extra) => { if (ok) { pass++; console.log('  PASS ', name)
     const pageSrc = fs.readFileSync(require('path').join(__dirname, '..', 'dashboard', 'quickbooks.html'), 'utf8');
     ck('...and the dialog marks it', /same name, almost certainly this one/.test(pageSrc));
 
+    // ── a mapping she confirmed must SHOW (2026-09-26) ─────────────────────
+    // Apsara: "i have matched the supplier name just now ... yet it shows no
+    // match in qb." It was saved. /api/qb/party read it off the wrong field
+    // (matchParty answers under `qb`, not `qbId`), so the header said "no
+    // QuickBooks match yet" for every party, always, and the balance beside it
+    // read "—". The party LIST was right the whole time, which is what made it
+    // look like her matching had failed.
+    const marioMapped = await get('/api/qb/party?kind=vendor&name=Mario');
+    ck('a confirmed mapping shows on the party itself, not just in the list',
+       marioMapped.code === 200 && marioMapped.body.mapping.qbId === '588'
+       && marioMapped.body.mapping.qbName === 'LA Recycling', marioMapped.body.mapping);
+    ck('...and it says it was confirmed, not guessed', marioMapped.body.mapping.status === 'confirmed', marioMapped.body.mapping);
+    const unmapped = await get('/api/qb/party?kind=vendor&name=Nobody%20At%20All');
+    ck('an unmatched party still reads as unmatched', unmapped.code === 200 && unmapped.body.mapping.qbId === null, unmapped.body.mapping);
+    const roleChips = (await get('/api/qb/status')).body.roles;
+    ck('the account-role chips read the same way (they said unmapped when mapped)',
+       Array.isArray(roleChips) && roleChips.every((r) => 'qbId' in r), roleChips);
+
     // ── the cutover, from the page (2026-09-26) ────────────────────────────
     // Apsara: "I want nightly report to run everyday to upload all the bills
     // and invoices." The cutover decides what "all" is, so it has to be

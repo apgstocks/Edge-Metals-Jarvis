@@ -251,9 +251,14 @@ async function openParty(kind, name) {
 }
 function renderDetail() {
   const d = STATE.detail, t = d.totals;
-  $('dmap').innerHTML = d.mapping.qbId
-    ? `in QuickBooks as <b>${d.mapping.qbName}</b> <span class="mono" style="color:var(--text-faint)">#${d.mapping.qbId}</span> · <button class="act" id="remap">change</button>`
-    : `<span style="color:var(--red-500)">no QuickBooks match yet</span> · <button class="act" id="remap">match it</button>`;
+  const mp = d.mapping || {};
+  $('dmap').innerHTML = (mp.qbId && mp.qbId !== 'SKIP')
+    ? `in QuickBooks as <b>${mp.qbName || ''}</b> <span class="mono" style="color:var(--text-faint)">#${mp.qbId}</span>${mp.status === 'exact' ? ' <span style="color:var(--text-faint)">(same name — matched automatically)</span>' : ''} · <button class="act" id="remap">change</button>`
+    : mp.status === 'skip'
+      ? `not a QuickBooks party — ${mp.note || 'you marked it as not one'} · <button class="act" id="remap">change</button>`
+      : mp.status === 'new'
+        ? `you marked this as not in QuickBooks · <button class="act" id="remap">change</button>`
+        : `<span style="color:var(--red-500)">no QuickBooks match yet</span> · <button class="act" id="remap">match it</button>`;
   const gap = (d.qbBalance !== null && d.qbBalance !== undefined) ? null : null;
   $('dstats').innerHTML = [
     d.kind === 'vendor' ? ['Bills', money(t.bills), ''] : ['Invoices', money(t.invoices), ''],

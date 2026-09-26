@@ -82,12 +82,35 @@ function jarvisParties() {
     return Object.values(out);
 }
 
+// ── ONE READING OF A MAPPING, FOR THE WHOLE PAGE (2026-09-26) ──────────────
+// Apsara, 2026-09-26: "i have matched the supplier name just now ... yet it
+// shows no match in qb." It was matched. The page could not read it.
+//
+// matchParty() answers with the QuickBooks record under `qb: { Id,
+// DisplayName }`. Two places here read `m.qbId` and `m.qbName` instead, which
+// are undefined on that object — so the party header said "no QuickBooks match
+// yet" for EVERY party no matter what she confirmed, and the balance beside it
+// (looked up by that undefined id) always read "—". The party list was right
+// the whole time because it reads the stored map directly. One reader now, so
+// the two halves of the screen cannot disagree again.
+function readMapping(kind, name, qbList = []) {
+    const hit = mapping.matchParty(name, qbList, kind);
+    if (!hit) return { qbId: null, qbName: null, status: 'none' };
+    if (hit.status === 'confirmed' || hit.status === 'exact') {
+        return { qbId: hit.qb ? String(hit.qb.Id) : null, qbName: hit.qb ? hit.qb.DisplayName : null, status: hit.status };
+    }
+    // 'skip' = she said this is not a party in this role; 'new' = not in
+    // QuickBooks at all. Both are answers, not gaps, and the page says so.
+    return { qbId: hit.status === 'skip' ? 'SKIP' : null, qbName: null, status: hit.status, note: hit.note || null,
+        candidates: hit.candidates || [] };
+}
+
 function mappedTo(kind, name, map) {
     const m = (map[kind] || {})[KEY(name).toLowerCase()] || null;
     if (m) return m;
     // mapping.js normalises its own way; ask it properly rather than guess
-    const hit = mapping.matchParty(name, [], kind);
-    return hit && hit.qbId ? { qbId: hit.qbId, qbName: hit.qbName } : null;
+    const hit = readMapping(kind, name);
+    return hit.qbId ? { qbId: hit.qbId, qbName: hit.qbName } : null;
 }
 
 async function partyRows({ env, withQb = true }) {
@@ -196,9 +219,12 @@ function mount(app, cfg) {
     app.get('/api/qb/status', async (req, res) => {
         const env = envOf();
         const map = mapping.loadMap();
+        // Same misreading as the party header had: these chips said "unmapped"
+        // for accounts that were mapped, because matchParty answers under
+        // `qb`, not `qbId`.
         const roles = ['prepayment', 'bank charges', 'trucking'].map((role) => {
-            const m = mapping.matchParty(role, [], 'account');
-            return { role, qbId: m && m.qbId, qbName: m && m.qbName };
+            const m = readMapping('account', role);
+            return { role, qbId: m.qbId, qbName: m.qbName };
         });
         const j = journal.list({ env });
         res.json({
@@ -234,14 +260,20 @@ function mount(app, cfg) {
         try {
             const env = envOf();
             const detail = partyDetail(kind, name, env);
-            const m = mapping.matchParty(name, [], kind);
-            let qbBalance = null;
+            let qbBalance = null, list = [];
             try {
                 const qb = await qbParties(env);
-                const found = (kind === 'vendor' ? qb.vendor : qb.customer).find((x) => String(x.Id) === String(m.qbId));
-                qbBalance = found ? r2(found.Balance) : null;
+                list = (kind === 'vendor' ? qb.vendor : qb.customer) || [];
             } catch { /* QuickBooks unreachable — the Jarvis side still shows */ }
-            res.json({ kind, name, mapping: { qbId: m.qbId || null, qbName: m.qbName || null, status: m.status }, qbBalance, ...detail });
+            // The live list goes in, so a vendor she renamed in QuickBooks to
+            // match Jarvis's spelling reads as matched here too, not just at
+            // push time.
+            const m = readMapping(kind, name, list);
+            if (m.qbId && m.qbId !== 'SKIP') {
+                const found = list.find((x) => String(x.Id) === String(m.qbId));
+                qbBalance = found ? r2(found.Balance) : null;
+            }
+            res.json({ kind, name, mapping: { qbId: m.qbId || null, qbName: m.qbName || null, status: m.status, note: m.note || null }, qbBalance, ...detail });
         } catch (e) { res.status(500).json({ error: e.message }); }
     });
 
