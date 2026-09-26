@@ -87,13 +87,63 @@ console.log('\n=== B — the preview maths are the server maths ===');
 
 console.log('\n=== C — the page refuses to let you skip the unit ===');
 {
-    ck('the unit buttons are marked as needed until one is picked', /class="\$\{unit===u\?'sel':''\} \$\{unit\?'':'need'\}"/.test(HTML));
-    ck('the confirm button is disabled without a unit', /verifyBtn'\)\.disabled = !f\.unit/.test(HTML));
+    ck('the unit buttons are marked as needed until one is picked', /\(unit\?'':'need'\)/.test(HTML));
+    ck('the confirm button is disabled without a unit', /\.f_verify'\)\.disabled = !f\.unit/.test(HTML));
     ck('and it says why in words', /Pick the unit first\./.test(HTML));
     ck('the 2204x danger is spelled out where it matters', /2204x/.test(HTML));
     ck("the customer's own figure is labelled as theirs, not Edge's", /that is their figure, not yet yours/.test(HTML));
-    ck('an unverified claim shows the asking figure with a question mark, never as the claim',
-        /money\(c\.stated_claim_amount\) \+ '\?'/.test(HTML));
+    ck('an unverified claim shows the asking figure as asked-for, never as the claim',
+        /money\(c\.stated_claim_amount\) \+ ' asked'/.test(HTML));
+}
+
+console.log('\n=== E — the page is organised per CONTAINER, not per row ===');
+{
+    // Lift the page's own grouping out of its source and feed it claims.
+    const js = HTML.split('<script>')[1].split('</script>')[0];
+    // All three helpers are single-line declarations in the page; a [^;]+
+    // pattern truncates numOf at its first inner semicolon and the sandbox then
+    // fails to parse, which is how this test lied about itself once already.
+    const parts = [
+        js.match(/^const containerKey = .*$/m),
+        js.match(/^const numOf = .*$/m),
+        js.match(/^const kindLabel = .*$/m),
+        js.match(/^function containers\(\)\{[\s\S]*?^\}$/m),
+    ];
+    ck('the page still declares its per-container grouping', parts.every(Boolean), parts.map((p) => !!p));
+    let containers = null, box = null;
+    if (parts.every(Boolean)) {
+        box = { console, STATE: { labels: {} } };
+        vm.createContext(box);
+        vm.runInContext(parts.map((p) => p[0]).join('\n') + '\nglobalThis.__c = containers;', box);
+        containers = box.__c;
+    }
+    ck('and it runs on its own', typeof containers === 'function');
+
+    box.STATE.claims = [
+        { id: 'a', container_no: 'TEMU7944250', invoice_no: '26ME07', customer: 'Modern enterprises', supplier: 'Nur Metal', claim_type: 'foreign_material', claim_amount: 450, our_claim: null, status: 'verified', created_at: '2026-03-03' },
+        { id: 'b', container_no: 'TEMU7944250', invoice_no: '26ME07', customer: 'Modern enterprises', supplier: 'Nur Metal', claim_type: 'recovery_shortfall', claim_amount: 3100, our_claim: 500, status: 'unverified', created_at: '2026-03-04' },
+        { id: 'c', container_no: 'CAIU9975642', invoice_no: '26JY05', customer: 'Joey/Daekwang', supplier: 'Junk car', claim_type: 'weight_shortage', claim_amount: 4113.08, our_claim: 3686.43, status: 'settled', created_at: '2026-05-18' },
+    ];
+    const g = containers();
+    ck('three claims across two containers become two entries', g.length === 2, g.length);
+    const me07 = g.find((x) => x.key === 'TEMU7944250');
+    ck('a container with two claims keeps both', me07 && me07.claims.length === 2, me07 && me07.claims.length);
+    ck('and lists BOTH kinds, because they are not the same claim',
+        me07 && me07.kinds.length === 2 && me07.kinds.includes('foreign_material') && me07.kinds.includes('recovery_shortfall'), me07 && me07.kinds);
+    ck('the container total is the sum of its claims', me07 && me07.claimed === 3550, me07 && me07.claimed);
+    ck('absorbed is claimed less what was recovered', me07 && me07.net === 3050, me07 && me07.net);
+    ck('it counts what is still waiting on a person', me07 && me07.needs === 2, me07 && me07.needs);
+    const jy = g.find((x) => x.key === 'CAIU9975642');
+    ck('a settled, fully recovered container needs nothing', jy && jy.needs === 0, jy && jy.needs);
+    ck('a claim with no container still gets an entry, keyed on its invoice', (() => {
+        box.STATE.claims = [{ id: 'd', container_no: '', invoice_no: 'LOCAL-1', claim_type: 'other', claim_amount: 10, our_claim: null, status: 'unverified' }];
+        const r = containers();
+        return r.length === 1 && r[0].key === 'LOCAL-1';
+    })());
+    ck('the kind chip has a class per kind, so each reads differently',
+        /\.k-weight_shortage\{/.test(HTML) && /\.k-grade_downgrade\{/.test(HTML) && /\.k-recovery_shortfall\{/.test(HTML) && /\.k-foreign_material\{/.test(HTML));
+    ck('a container can be given another claim from its own page', /\+ another claim/.test(HTML));
+    ck('the detail pane explains why one container has several claims', /three different arguments with the customer/.test(HTML));
 }
 
 console.log('\n=== D — the routes the page posts to ===');
@@ -119,6 +169,10 @@ console.log('\n=== D — the routes the page posts to ===');
         && typeof listed.body.stats.net === 'number', listed.body && Object.keys(listed.body));
     ck('the closed set of statuses comes with it, so the page cannot invent one',
         Array.isArray(listed.body.statuses) && listed.body.statuses.includes('unverified'));
+    ck('the kinds and their labels travel with the rows, so the page cannot spell one differently',
+        listed.body.typeLabels && listed.body.typeLabels.grade_downgrade === 'grade downgrade'
+        && listed.body.types.includes('recovery_shortfall'), listed.body.types);
+    ck('the header count is CONTAINERS, not rows', typeof listed.body.stats.containers === 'number');
 
     const made = await post('/api/claims', { customer: 'Metal Bridge', container_no: 'TRHU6472030', invoice_no: '26MB02' });
     ck('a manual claim can be created', made.code === 200 && made.body.status === 'unverified', made.body);

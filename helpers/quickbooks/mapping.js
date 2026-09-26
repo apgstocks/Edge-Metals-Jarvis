@@ -44,6 +44,18 @@ const MAP_FILE = () => process.env.QB_PARTY_MAP_FILE || path.join(DATA_DIR, 'qb-
 // 'prepayment', 'bank charges', 'trucking' — with the account she uses for it.
 const KINDS = ['vendor', 'customer', 'item', 'bank', 'account'];
 
+// ── THE ROLES AN ACCOUNT CAN ANSWER ────────────────────────────────────────
+// Apsara, 2026-09-23: "Jarvis should have idea about all these accounts.
+// ensure it." A role is what Jarvis needs an account FOR; the mapping says
+// which of her accounts answers it. Kept here, not in the script that used to
+// own the list, so the script, the page and the status chips cannot drift
+// apart on what the roles even are (2026-09-26).
+const ACCOUNT_ROLES = {
+    prepayment: 'money wired to a supplier before his load arrives (her accountant books these to Vendor Payable)',
+    'bank charges': 'the fee a customer wire arrives short by',
+    trucking: 'the trucking deducted on a supplier bill',
+};
+
 // Words that say what kind of company it is, not which one. Dropped only for
 // the SUGGEST tier, never for exact.
 const LEGAL = new Set(['llc', 'inc', 'incorporated', 'co', 'company', 'corp', 'corporation', 'ltd', 'limited', 'coltd', 'pvt', 'plc', 'lp', 'the', 'customer', 'vendor']);
@@ -201,4 +213,4 @@ async function fetchParties(kind, client, opts) {
     return out;
 }
 
-module.exports = { matchParty, confirm, loadMap, fetchParties, tokens, core, similarity, MAP_FILE };
+module.exports = { matchParty, confirm, loadMap, fetchParties, ACCOUNT_ROLES, tokens, core, similarity, MAP_FILE };

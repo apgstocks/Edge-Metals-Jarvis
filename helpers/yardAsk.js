@@ -102,7 +102,50 @@ const MAX_QUESTION_CHARS = 500;
 // obviously arithmetic keeps the old path.
 const FIGURE_QUESTION = /\b(how much|how many|total|totals|sum|average|avg|owe|owed|owing|outstanding|balance|spent|spend|spending|paid|pay|revenue|profit|margin|most|least|highest|lowest|per (lb|pound|ton|load)|this (month|week|year|quarter)|last (month|week|year|quarter)|in (january|february|march|april|may|june|july|august|september|october|november|december)|since|between)\b/i;
 
+// ── EVERY ANSWER IS LOGGED, AT THE FUNCTION RATHER THAN THE ROUTE ────────
+// Apsara, 2026-09-26: Jarvis "is dumb most of the times".
+//
+// There was no way to check. THREE routes call askYard — api.js 2167 (the
+// chat box), 2541 and 3571 (the voice paths) — and not one of them recorded
+// whether it answered. The only thing in data/ask_log.json was the LEDGER
+// FALLBACK inside this file, which is the last resort and fires on a handful
+// of questions. So the log showed 22 entries, all failures, and I read that
+// as her experience. It was the test suite.
+//
+// Wrapping the function instead of the three callers is the point: a fourth
+// route cannot be added without logging, and none of the eight return
+// statements below has to remember anything.
 async function askYard(question, opts = {}) {
+    const started = Date.now();
+    let out;
+    try {
+        out = await askYardInner(question, opts);
+        return out;
+    } finally {
+        // ── NEVER BLOCKS THE ANSWER ──────────────────────────────────────
+        // No await: record() writes a file, and a question should not wait on
+        // a log. record() already swallows its own errors, and the catch here
+        // is the belt to that braces — a logging failure must never be what
+        // turns a working answer into an error.
+        try {
+            // The ledger fallback records its own, more detailed row. Marked
+            // so the report can collapse the pair rather than count the
+            // question twice and halve the apparent success rate.
+            const viaLedger = !!(out && out.from === 'ledger');
+            require('./data/askLog').record({
+                kind: 'data', source: 'scout-ask', question,
+                outcome: !out ? 'failed'
+                    : (!out.ok ? 'could_not_answer'
+                        : (out.have_data === false ? 'nothing_matched' : 'answered')),
+                proposed: !!(out && out.proposal),
+                via_ledger: viaLedger,
+                ms: Date.now() - started,
+            });
+        } catch (e) { /* a log is never worth an answer */ }
+    }
+}
+
+async function askYardInner(question, opts = {}) {
     const q = String(question || '').trim().slice(0, MAX_QUESTION_CHARS);
     if (!q) return { ok: false, answer: 'Ask me something about the yard — loads, sellers, stock, or what is still owed.' };
 

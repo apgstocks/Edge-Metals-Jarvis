@@ -72,6 +72,29 @@ aside{border-right:1px solid var(--border-default);background:var(--surface-sunk
 .prow .cid{font-family:var(--font-mono);font-size:11px;color:var(--steel-400)}
 .empty{padding:30px 16px;text-align:center;color:var(--text-faint);font-size:12.5px}
 
+/* ── claim kind, and the per-container detail ─────────────────────────── */
+.kind{display:inline-flex;align-items:center;font-size:10px;letter-spacing:.05em;text-transform:uppercase;padding:2px 6px;border-radius:3px;font-weight:600;white-space:nowrap;border:1px solid transparent}
+.k-weight_shortage{color:var(--steel-200);background:rgba(203,209,214,.09);border-color:var(--border-default)}
+.k-grade_downgrade{color:var(--copper-300);background:rgba(215,126,61,.12);border-color:#5b3d22}
+.k-recovery_shortfall{color:var(--amber-500);background:rgba(217,154,43,.12);border-color:#5a4416}
+.k-foreign_material{color:var(--blue-500);background:rgba(58,110,165,.16);border-color:#26405e}
+.k-damage{color:#f0b3aa;background:rgba(197,64,47,.13);border-color:#5e2a23}
+.k-quality{color:var(--leaf-300);background:rgba(87,190,73,.11);border-color:var(--leaf-600)}
+.k-other{color:var(--text-faint);background:rgba(126,136,145,.10);border-color:var(--border-default)}
+.kinds{display:flex;gap:4px;flex-wrap:wrap}
+.csum{display:flex;gap:20px;flex-wrap:wrap;padding:11px 14px;border-radius:6px;background:var(--surface-sunken);border:1px solid var(--border-subtle);margin-top:12px}
+.csum div{display:flex;flex-direction:column;gap:2px}
+.csum .k{font-size:10px;letter-spacing:.07em;text-transform:uppercase;color:var(--text-faint)}
+.csum .v{font-family:var(--font-mono);font-size:15px;color:var(--text-strong)}
+.csum .v.hi{color:var(--copper-300)}
+.claim{border:1px solid var(--border-default);border-radius:7px;margin-top:14px;overflow:hidden}
+.claim > .ch{display:flex;align-items:center;gap:9px;padding:10px 14px;background:var(--surface-sunken);border-bottom:1px solid var(--border-default);flex-wrap:wrap}
+.claim > .ch .n{font-family:var(--font-mono);font-size:12px;color:var(--text-faint)}
+.claim > .ch .amt{margin-left:auto;font-family:var(--font-mono);font-size:14px;color:var(--text-strong)}
+.claim > .cb{padding:2px 14px 14px}
+.claim .card{border:0;border-top:1px solid var(--border-subtle);border-radius:0;margin-top:0;padding:14px 0 12px;background:transparent}
+.claim .card:first-child{border-top:0}
+.why{font-size:11.5px;color:var(--text-faint);font-style:italic}
 .pill{display:inline-flex;align-items:center;gap:4px;font-size:10px;letter-spacing:.05em;text-transform:uppercase;padding:2px 6px;border-radius:3px;font-weight:600;white-space:nowrap}
 .pill i{width:4px;height:4px;border-radius:50%;background:currentColor}
 .s-unverified{color:var(--amber-500);background:rgba(217,154,43,.13)}
@@ -162,12 +185,18 @@ label.f input:disabled{color:var(--steel-500)}
 </main>
 
 <script>
+/* Claims, grouped the way a container actually is: one container can carry a
+   weight shortage AND a grade downgrade AND foreign material, each with its own
+   figure, its own supplier recovery and its own status. Apsara, 2026-09-26:
+   "Not all the container have same kind of claim .. put it into website per
+   container basis." */
 const MT = { MT:1, LB:1/2204.62, KG:1/1000 };
-const STATE = { claims:[], stats:{}, sel:null, tab:'needs', q:'' };
-const $ = (s) => document.querySelector(s);
+const STATE = { claims:[], stats:{}, labels:{}, sel:null, tab:'needs', q:'' };
+const $ = (s, root) => (root || document).querySelector(s);
 const esc = (s) => String(s==null?'':s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const money = (n) => (n===null||n===undefined||n==='') ? '—' : '$' + Number(n).toLocaleString('en-US',{maximumFractionDigits:2});
 const numOf = (v) => { if (v===null||v===undefined||v==='') return null; const n = Number(String(v).replace(/[$,\s]/g,'')); return Number.isFinite(n) ? n : null; };
+const kindLabel = (t) => STATE.labels[t] || String(t||'other').replace(/_/g,' ');
 
 async function api(url, body){
   const r = await fetch(url, body ? { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body) } : {});
@@ -186,8 +215,8 @@ function toast(msg, kind){
   toastTimer = setTimeout(() => d.remove(), kind === 'bad' ? 7000 : 3500);
 }
 
-/* ── the shortage maths, mirroring helpers/claims.js verify() so the preview
-   cannot disagree with what the server will store ─────────────────────────── */
+/* the shortage maths, mirroring helpers/claims.js verify() so the preview
+   cannot disagree with what the server will store */
 function compute({ inv, recv, unit, rate, rateUnit }){
   const out = { shortage:null, pct:null, amount:null };
   if (inv===null || recv===null || !unit) return out;
@@ -200,295 +229,321 @@ function compute({ inv, recv, unit, rate, rateUnit }){
   return out;
 }
 
+/* ── containers ─────────────────────────────────────────────────────────── */
+const containerKey = (c) => String(c.container_no || c.invoice_no || '—').toUpperCase();
+function containers(){
+  const map = new Map();
+  for (const c of STATE.claims){
+    const k = containerKey(c);
+    if (!map.has(k)) map.set(k, { key:k, container:c.container_no||'', claims:[] });
+    map.get(k).claims.push(c);
+  }
+  for (const g of map.values()){
+    g.customer = (g.claims.find(c => c.customer) || {}).customer || '';
+    g.invoices = [...new Set(g.claims.map(c => c.invoice_no).filter(Boolean))];
+    g.suppliers = [...new Set(g.claims.map(c => c.supplier).filter(Boolean))];
+    g.kinds = [...new Set(g.claims.map(c => c.claim_type || 'other'))];
+    g.claimed = g.claims.reduce((t,c) => t + (numOf(c.claim_amount)||0), 0);
+    g.recovered = g.claims.reduce((t,c) => t + (numOf(c.our_claim)||0), 0);
+    g.net = g.claimed - g.recovered;
+    g.needs = g.claims.filter(c => c.status === 'unverified' || (c.status === 'verified' && !numOf(c.our_claim))).length;
+    g.newest = g.claims.map(c => c.created_at || '').sort().pop() || '';
+  }
+  return [...map.values()];
+}
+
 const TABS = [
   { id:'needs',  label:'Needs you' },
+  { id:'multi',  label:'2+ claims' },
   { id:'open',   label:'Open' },
   { id:'all',    label:'All' },
-  { id:'closed', label:'Closed' },
 ];
-function inTab(c){
-  if (STATE.tab === 'needs')  return c.status === 'unverified' || (c.status === 'verified' && !numOf(c.our_claim));
-  if (STATE.tab === 'open')   return !['settled','rejected','withdrawn'].includes(c.status);
-  if (STATE.tab === 'closed') return ['settled','rejected','withdrawn'].includes(c.status);
+function inTab(g){
+  if (STATE.tab === 'needs') return g.needs > 0;
+  if (STATE.tab === 'multi') return g.claims.length > 1;
+  if (STATE.tab === 'open')  return g.claims.some(c => !['settled','rejected','withdrawn'].includes(c.status));
   return true;
 }
 function visible(){
   const q = STATE.q.trim().toLowerCase();
-  return STATE.claims.filter(c => {
-    if (!inTab(c)) return false;
+  return containers().filter(g => {
+    if (!inTab(g)) return false;
     if (!q) return true;
-    return [c.customer,c.supplier,c.invoice_no,c.container_no,c.note].join(' ').toLowerCase().includes(q);
-  });
+    const hay = [g.key, g.customer, g.invoices.join(' '), g.suppliers.join(' '), g.kinds.map(kindLabel).join(' '),
+      g.claims.map(c => c.note).join(' ')].join(' ').toLowerCase();
+    return hay.includes(q);
+  }).sort((a,b) => (b.needs - a.needs) || (b.claimed - a.claimed) || b.newest.localeCompare(a.newest));
 }
+
+function pill(s){
+  const c = s === 'Settled' ? '' : '';
+  const cls = s === 'settled' ? 'p-settled' : s === 'unverified' ? 'p-open' : s === 'verified' ? 's-verified' : s === 'recovery_raised' ? 's-recovery_raised' : 'p-dropped';
+  const label = s === 'recovery_raised' ? 'recovery raised' : s === 'withdrawn' ? 'withdrawn' : s;
+  return '<span class="pill ' + cls + '"><i></i>' + esc(label) + '</span>';
+}
+const kindChip = (t) => '<span class="kind k-' + esc(t||'other') + '">' + esc(kindLabel(t)) + '</span>';
 
 function renderChips(){
   const s = STATE.stats || {};
   $('#chips').innerHTML = [
-    s.unverified ? `<span class="chip warn">${s.unverified} to verify</span>` : '<span class="chip on">nothing to verify</span>',
-    s.awaiting_recovery ? `<span class="chip bad">${s.awaiting_recovery} recovery not raised</span>` : '',
-    `<span class="chip">${s.total || 0} claims</span>`,
+    s.unverified ? '<span class="chip warn">' + s.unverified + ' to verify</span>' : '<span class="chip on">nothing to verify</span>',
+    s.awaiting_recovery ? '<span class="chip bad">' + s.awaiting_recovery + ' recovery not raised</span>' : '',
+    '<span class="chip">' + (s.containers || 0) + ' containers · ' + (s.total || 0) + ' claims</span>',
     '<span class="chip act" id="refresh">Refresh</span>',
   ].filter(Boolean).join('');
   const r = $('#refresh'); if (r) r.onclick = () => load(true);
 }
-
 function renderStrip(){
   const s = STATE.stats || {};
   $('#strip').innerHTML = [
-    ['Claimed against Edge', money(s.claimed), (s.open||0) + ' open', ''],
+    ['Claimed against Edge', money(s.claimed), (s.containers||0) + ' containers', ''],
     ['Recovered from suppliers', money(s.recovered), (s.recovery_rate||0) + '% of claimed value', 'rec'],
-    ['Absorbed by Edge', money(s.net), 'what the shortages cost', 'net'],
+    ['Absorbed by Edge', money(s.net), 'what the claims cost', 'net'],
     ['Waiting on someone', (s.unverified||0) + ' + ' + (s.awaiting_recovery||0), 'to verify + to recover', 'todo'],
-  ].map(t => `<div class="tile ${t[3]}"><span class="k">${t[0]}</span><span class="v">${t[1]}</span><span class="s">${t[2]}</span></div>`).join('');
+  ].map(t => '<div class="tile ' + t[3] + '"><span class="k">' + t[0] + '</span><span class="v">' + t[1] + '</span><span class="s">' + t[2] + '</span></div>').join('');
 }
-
 function renderTabs(){
+  const all = containers();
   $('#tabs').innerHTML = TABS.map(t => {
-    const n = STATE.claims.filter(c => { const k = STATE.tab; STATE.tab = t.id; const r = inTab(c); STATE.tab = k; return r; }).length;
-    return `<button type="button" data-t="${t.id}" class="${STATE.tab===t.id?'sel':''}">${t.label} ${n}</button>`;
+    const keep = STATE.tab; STATE.tab = t.id;
+    const n = all.filter(inTab).length;
+    STATE.tab = keep;
+    return '<button type="button" data-t="' + t.id + '" class="' + (STATE.tab===t.id?'sel':'') + '">' + t.label + ' ' + n + '</button>';
   }).join('');
   $('#tabs').querySelectorAll('button').forEach(b => b.onclick = () => { STATE.tab = b.dataset.t; renderTabs(); renderRows(); });
 }
 
-function pill(s){ return `<span class="pill s-${s}"><i></i>${esc(String(s).replace('_',' '))}</span>`; }
-
 function renderRows(){
   const rows = visible();
-  if (!rows.length){ $('#rows').innerHTML = '<div class="empty">No claims here.</div>'; return; }
-  $('#rows').innerHTML = rows.map(c => {
-    const amt = c.claim_amount !== null && c.claim_amount !== undefined ? money(c.claim_amount)
-              : c.stated_claim_amount !== null && c.stated_claim_amount !== undefined ? money(c.stated_claim_amount) + '?'
-              : '—';
-    return `<div class="prow ${STATE.sel===c.id?'sel':''}" data-id="${c.id}" tabindex="0">
-      <div class="t"><span class="who">${esc(c.customer||'Customer not named')}</span><span class="amt">${amt}</span></div>
-      <div class="b">${pill(c.status)}<span class="cid">${esc(c.container_no||'no container')}</span><span class="cid">${esc(c.invoice_no||'')}</span></div>
-    </div>`;
+  if (!rows.length){ $('#rows').innerHTML = '<div class="empty">No containers here.</div>'; return; }
+  $('#rows').innerHTML = rows.map(g => {
+    const amt = g.claimed > 0 ? money(g.claimed) : '—';
+    return '<div class="prow ' + (STATE.sel===g.key?'sel':'') + '" data-k="' + esc(g.key) + '" tabindex="0">' +
+      '<div class="t"><span class="who">' + esc(g.customer || 'Customer not named') + '</span><span class="amt">' + amt + '</span></div>' +
+      '<div class="b"><span class="cid">' + esc(g.key) + '</span>' +
+        (g.claims.length > 1 ? '<span class="cid">' + g.claims.length + ' claims</span>' : '') +
+        (g.needs ? '<span class="pill p-open"><i></i>' + g.needs + ' to do</span>' : '') + '</div>' +
+      '<div class="kinds">' + g.kinds.map(kindChip).join('') + '</div>' +
+    '</div>';
   }).join('');
   $('#rows').querySelectorAll('.prow').forEach(el => {
-    const pick = () => { STATE.sel = el.dataset.id; renderRows(); renderDetail(); };
+    const pick = () => { STATE.sel = el.dataset.k; renderRows(); renderDetail(); };
     el.onclick = pick;
     el.onkeydown = (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); pick(); } };
   });
 }
 
 const FLAG_TEXT = {
-  unit_not_stated: 'The mail never said MT, KG or LB. Nothing is worked out until you pick the unit — a guess between MT and pounds is out by 2204x.',
-  container_unknown: 'A container number was found in the mail but not one that matched cleanly. Check it against the invoice.',
+  unit_not_stated: 'No unit was stated, so nothing is worked out. A guess between MT and pounds is out by 2204x.',
+  container_unknown: 'A container number was found but did not match cleanly. Check it against the invoice.',
   figure_changed: 'The customer has moved their own figure since an earlier mail. Read the trail before agreeing anything.',
-  supplier_unknown: 'No supplier on this claim, so there is nobody to recover from. Until one is set, the whole amount lands on Edge.',
+  supplier_unknown: 'No supplier on this claim, so there is nobody to recover from. The whole amount lands on Edge.',
 };
 
-function renderDetail(){
-  const c = STATE.claims.find(x => x.id === STATE.sel);
-  const d = $('#detail');
-  if (!c){
-    d.innerHTML = `<div class="blank"><div>Pick a claim on the left.</div>
-      <div style="max-width:430px;text-align:center;line-height:1.6">Claims arrive from customer mail, land here unverified, and become a money figure only once someone confirms the weights and the unit.</div></div>`;
-    return;
-  }
+function claimCard(c, i){
   const unit = c.weight_unit || '';
   const flags = (c.flags || []).filter(f => FLAG_TEXT[f]);
-
-  d.innerHTML = `
-    <div class="dhead">
-      <div>
-        <h2>${esc(c.customer || 'Customer not named')}</h2>
-        <div class="sub">${esc(c.invoice_no || 'no invoice')} &nbsp;·&nbsp; ${esc(c.container_no || 'no container')} &nbsp;·&nbsp; ${esc(String(c.claim_type||'').replace('_',' '))}</div>
-      </div>
-      <div class="right">${pill(c.status)}
-        <span class="chip">recover from ${esc(c.supplier || 'nobody yet')}</span>
-      </div>
-    </div>
-
-    ${flags.length ? `<div class="card flag"><h3>Before this is a figure</h3>${flags.map(f => `<div class="hint" style="margin-top:0">${esc(FLAG_TEXT[f])}</div>`).join('')}</div>` : ''}
-
-    <div class="card">
-      <h3>Confirm the weights</h3>
-      <div class="grid">
-        <label class="f">Invoiced weight
-          <input id="f_inv" class="num" inputmode="decimal" value="${c.invoice_weight ?? ''}" placeholder="—">
-        </label>
-        <label class="f">Weight they received
-          <input id="f_recv" class="num" inputmode="decimal" value="${c.claimed_weight ?? ''}" placeholder="—">
-        </label>
-        <label class="f">Unit for both weights
-          <div class="units" id="f_unit">
-            ${['MT','LB','KG'].map(u => `<button type="button" data-u="${u}" class="${unit===u?'sel':''} ${unit?'':'need'}">${u}</button>`).join('')}
-          </div>
-        </label>
-        <label class="f">Rate
-          <input id="f_rate" class="num" inputmode="decimal" value="${c.sell_price ?? ''}" placeholder="e.g. 2140">
-        </label>
-        <label class="f">Rate is per
-          <select id="f_rateUnit">
-            ${['MT','LB','KG'].map(u => `<option value="${u}" ${((c.sell_price_unit||unit||'MT')===u)?'selected':''}>${u}</option>`).join('')}
-          </select>
-        </label>
-      </div>
-      <div class="calc" id="calc"></div>
-      <div class="actions">
-        <button class="btn go" id="verifyBtn" type="button">Confirm and work out the claim</button>
-        <span class="hint" style="margin:0" id="verifyWhy"></span>
-      </div>
-      <div class="hint">These figures are what turn a mail into money, so nothing here is filled in from the mail unless the mail said it in words. ${c.stated_claim_amount!=null ? `The customer is asking <b>${money(c.stated_claim_amount)}</b> — that is their figure, not yet yours.` : ''}</div>
-    </div>
-
-    <div class="card">
-      <h3>Recovery from the supplier</h3>
-      <div class="grid">
-        <label class="f">Supplier
-          <input id="f_supplier" value="${esc(c.supplier||'')}" placeholder="who Edge bought from">
-        </label>
-        <label class="f">Recovering from them
-          <input id="f_ours" class="num" inputmode="decimal" value="${c.our_claim ?? ''}" placeholder="—">
-        </label>
-      </div>
-      <div class="actions">
-        <button class="btn go" id="recBtn" type="button">Raise the recovery</button>
-        <button class="btn" id="saveSupBtn" type="button">Save supplier</button>
-      </div>
-      <div class="hint">This is the half that decides what the shortage actually costs Edge. A claim settled with the customer and never recovered from the supplier is absorbed in full.</div>
-    </div>
-
-    ${Object.keys(c.quotes||{}).length ? `<div class="card"><h3>Read from the mail, word for word</h3>
-      <div class="quotes">${Object.entries(c.quotes).map(([k,v]) => `<div class="q"><span class="qk">${esc(k.replace(/_/g,' '))}</span><span class="qv">${esc(v)}</span></div>`).join('')}</div>
-      <div class="hint">Each line is the span the parser read that field from. If a quote does not say what the field claims, the field is wrong — fix it above.</div></div>` : ''}
-
-    ${(c.mail||[]).length ? `<div class="card"><h3>Mail trail — ${(c.mail||[]).length}</h3><div class="trail">${(c.mail||[]).map(m => `<div class="mailrow"><span class="d">${esc(String(m.date||'').slice(0,10))}</span><span class="s">${esc(m.subject||'(no subject)')}</span><span class="f">${esc(m.from||'')}</span></div>`).join('')}</div></div>` : ''}
-
-    <div class="card">
-      <h3>Close it out</h3>
-      <div class="actions">
-        <button class="btn go" data-st="settled" type="button">Settled</button>
-        <button class="btn warn" data-st="rejected" type="button">Rejected</button>
-        <button class="btn danger" data-st="withdrawn" type="button">Customer withdrew it</button>
-      </div>
-    </div>
-
-    ${(c.history||[]).length ? `<div class="card"><h3>History</h3><div class="hist">${(c.history||[]).slice().reverse().map(h => `<span>${esc(String(h.at||'').slice(0,16).replace('T',' '))} — ${esc(h.what)} · ${esc(h.by)}</span>`).join('')}</div></div>` : ''}
-  `;
-
-  wireDetail(c);
+  const why = (c.quotes || {}).claim_type || '';
+  return '<div class="claim" data-cid="' + c.id + '">' +
+    '<div class="ch"><span class="n">#' + (i+1) + '</span>' + kindChip(c.claim_type) + pill(c.status) +
+      (c.invoice_no ? '<span class="n">' + esc(c.invoice_no) + '</span>' : '') +
+      '<span class="amt">' + (c.claim_amount!=null ? money(c.claim_amount) : (c.stated_claim_amount!=null ? money(c.stated_claim_amount) + ' asked' : '—')) + '</span></div>' +
+    '<div class="cb">' +
+      (why ? '<div class="card"><div class="why">Kind read from: “' + esc(why) + '”</div></div>' : '') +
+      (flags.length ? '<div class="card">' + flags.map(f => '<div class="hint" style="margin-top:0"><b>·</b> ' + esc(FLAG_TEXT[f]) + '</div>').join('') + '</div>' : '') +
+      '<div class="card"><h3>Confirm the weights</h3><div class="grid">' +
+        '<label class="f">Invoiced weight<input class="num f_inv" inputmode="decimal" value="' + (c.invoice_weight ?? '') + '" placeholder="—"></label>' +
+        '<label class="f">Weight they received<input class="num f_recv" inputmode="decimal" value="' + (c.claimed_weight ?? '') + '" placeholder="—"></label>' +
+        '<label class="f">Unit for both<div class="units f_unit">' +
+          ['MT','LB','KG'].map(u => '<button type="button" data-u="' + u + '" class="' + (unit===u?'sel':'') + ' ' + (unit?'':'need') + '">' + u + '</button>').join('') +
+        '</div></label>' +
+        '<label class="f">Rate<input class="num f_rate" inputmode="decimal" value="' + (c.sell_price ?? '') + '" placeholder="e.g. 2140"></label>' +
+        '<label class="f">Rate is per<select class="f_rateUnit">' +
+          ['MT','LB','KG'].map(u => '<option value="' + u + '" ' + (((c.sell_price_unit||unit||'MT')===u)?'selected':'') + '>' + u + '</option>').join('') +
+        '</select></label>' +
+        '<label class="f">Kind of claim<select class="f_kind">' +
+          Object.keys(STATE.labels).map(t => '<option value="' + t + '" ' + ((c.claim_type||'other')===t?'selected':'') + '>' + esc(kindLabel(t)) + '</option>').join('') +
+        '</select></label>' +
+      '</div><div class="calc"></div>' +
+      '<div class="actions"><button class="btn go f_verify" type="button">Confirm and work out the claim</button><span class="hint" style="margin:0" id="why"></span></div>' +
+      '<div class="hint">Nothing here is filled in from the mail unless the mail said it in words.' +
+        (c.stated_claim_amount!=null ? ' The customer is asking <b>' + money(c.stated_claim_amount) + '</b> — that is their figure, not yet yours.' : '') + '</div></div>' +
+      '<div class="card"><h3>Recovery from the supplier</h3><div class="grid">' +
+        '<label class="f">Supplier<input class="f_sup" value="' + esc(c.supplier||'') + '" placeholder="who Edge bought from"></label>' +
+        '<label class="f">Recovering from them<input class="num f_ours" inputmode="decimal" value="' + (c.our_claim ?? '') + '" placeholder="—"></label>' +
+      '</div><div class="actions">' +
+        '<button class="btn go f_rec" type="button">Raise the recovery</button>' +
+        '<button class="btn f_save" type="button">Save</button>' +
+        '<button class="btn f_st" data-st="settled" type="button">Settled</button>' +
+        '<button class="btn warn f_st" data-st="rejected" type="button">Rejected</button>' +
+        '<button class="btn danger f_st" data-st="withdrawn" type="button">Withdrawn</button>' +
+      '</div></div>' +
+      (Object.keys(c.quotes||{}).filter(k => k !== 'claim_type').length ? '<div class="card"><h3>Read from the mail, word for word</h3><div class="quotes">' +
+        Object.entries(c.quotes).filter(([k]) => k !== 'claim_type').map(([k,v]) => '<div class="q"><span class="qk">' + esc(k.replace(/_/g,' ')) + '</span><span class="qv">' + esc(v) + '</span></div>').join('') +
+      '</div></div>' : '') +
+      ((c.mail||[]).length ? '<div class="card"><h3>Mail trail — ' + c.mail.length + '</h3><div class="trail">' +
+        c.mail.map(m => '<div class="mailrow"><span class="d">' + esc(String(m.date||'').slice(0,10)) + '</span><span class="s">' + esc(m.subject||'(no subject)') + '</span><span class="f">' + esc(m.from||'') + '</span></div>').join('') +
+      '</div></div>' : '') +
+      (c.note ? '<div class="card"><h3>Note</h3><div class="hint" style="margin-top:0">' + esc(c.note) + '</div></div>' : '') +
+      ((c.history||[]).length ? '<div class="card"><h3>History</h3><div class="hist">' +
+        c.history.slice().reverse().map(h => '<span>' + esc(String(h.at||'').slice(0,16).replace('T',' ')) + ' — ' + esc(h.what) + ' · ' + esc(h.by) + '</span>').join('') +
+      '</div></div>' : '') +
+    '</div></div>';
 }
 
-function readForm(){
+function renderDetail(){
+  const g = containers().find(x => x.key === STATE.sel);
+  const d = $('#detail');
+  if (!g){
+    d.innerHTML = '<div class="blank"><div>Pick a container on the left.</div>' +
+      '<div style="max-width:450px;text-align:center;line-height:1.6">One container can carry more than one claim, and they are rarely the same kind — a weight shortage, a grade downgrade and foreign material are three different arguments with the customer and three different recoveries from the supplier.</div></div>';
+    return;
+  }
+  d.innerHTML =
+    '<div class="dhead"><div><h2>' + esc(g.key) + '</h2>' +
+      '<div class="sub">' + esc(g.customer || 'customer not named') + (g.invoices.length ? ' &nbsp;·&nbsp; ' + esc(g.invoices.join(', ')) : '') + '</div></div>' +
+      '<div class="right">' + g.kinds.map(kindChip).join('') +
+        '<span class="chip">recover from ' + esc(g.suppliers.join(', ') || 'nobody yet') + '</span>' +
+        '<span class="chip act" id="addClaim">+ another claim</span></div></div>' +
+    '<div class="csum">' +
+      '<div><span class="k">Claims on this container</span><span class="v">' + g.claims.length + '</span></div>' +
+      '<div><span class="k">Claimed against Edge</span><span class="v">' + money(g.claimed) + '</span></div>' +
+      '<div><span class="k">Recovered</span><span class="v">' + money(g.recovered) + '</span></div>' +
+      '<div><span class="k">Absorbed</span><span class="v hi">' + money(g.net) + '</span></div>' +
+    '</div>' +
+    g.claims.map(claimCard).join('');
+
+  g.claims.forEach(c => wireClaim(c));
+  const add = $('#addClaim');
+  if (add) add.onclick = () => openNew({ container_no: g.container || g.key, customer: g.customer, invoice_no: g.invoices[0] || '' });
+}
+
+function readCard(el){
+  const sel = el.querySelector('.f_unit button.sel');
   return {
-    inv: numOf($('#f_inv') && $('#f_inv').value),
-    recv: numOf($('#f_recv') && $('#f_recv').value),
-    unit: (document.querySelector('#f_unit button.sel') || {}).dataset ? document.querySelector('#f_unit button.sel').dataset.u : null,
-    rate: numOf($('#f_rate') && $('#f_rate').value),
-    rateUnit: $('#f_rateUnit') ? $('#f_rateUnit').value : 'MT',
+    inv: numOf(el.querySelector('.f_inv').value),
+    recv: numOf(el.querySelector('.f_recv').value),
+    unit: sel ? sel.dataset.u : null,
+    rate: numOf(el.querySelector('.f_rate').value),
+    rateUnit: el.querySelector('.f_rateUnit').value,
   };
 }
-
-function renderCalc(){
-  const f = readForm();
+function renderCalc(el){
+  const f = readCard(el);
   const r = compute(f);
-  const pctClass = r.pct === null ? 'muted' : (r.pct >= 2 ? 'hi' : '');
-  $('#calc').innerHTML = [
+  el.querySelector('.calc').innerHTML = [
     ['Shortage', r.shortage === null ? '—' : r.shortage.toFixed(3) + (f.unit ? ' ' + f.unit : ''), r.shortage===null?'muted':''],
-    ['Of invoiced weight', r.pct === null ? '—' : r.pct.toFixed(2) + '%', pctClass],
+    ['Of invoiced weight', r.pct === null ? '—' : r.pct.toFixed(2) + '%', r.pct===null?'muted':(r.pct>=2?'hi':'')],
     ['Claim against Edge', r.amount === null ? '—' : money(r.amount), r.amount===null?'muted':'hi'],
-  ].map(x => `<div><span class="k">${x[0]}</span><span class="v ${x[2]}">${x[1]}</span></div>`).join('');
-
+  ].map(x => '<div><span class="k">' + x[0] + '</span><span class="v ' + x[2] + '">' + x[1] + '</span></div>').join('');
   const why = !f.unit ? 'Pick the unit first.'
     : (f.inv === null || f.recv === null) ? 'Both weights are needed.'
-    : f.rate === null ? 'Without a rate this records the shortage but no amount.'
-    : '';
-  $('#verifyWhy').textContent = why;
-  $('#verifyBtn').disabled = !f.unit || f.inv === null || f.recv === null;
+    : f.rate === null ? 'Without a rate this records the shortage but no amount.' : '';
+  el.querySelector('#why').textContent = why;
+  el.querySelector('.f_verify').disabled = !f.unit || f.inv === null || f.recv === null;
 }
 
-function wireDetail(c){
-  ['f_inv','f_recv','f_rate'].forEach(id => { const el = $('#' + id); if (el) el.oninput = renderCalc; });
-  const ru = $('#f_rateUnit'); if (ru) ru.onchange = renderCalc;
-  document.querySelectorAll('#f_unit button').forEach(b => b.onclick = () => {
-    document.querySelectorAll('#f_unit button').forEach(x => { x.classList.remove('sel'); x.classList.remove('need'); });
-    b.classList.add('sel'); renderCalc();
+function wireClaim(c){
+  const el = document.querySelector('.claim[data-cid="' + c.id + '"]');
+  if (!el) return;
+  el.querySelectorAll('.f_inv,.f_recv,.f_rate').forEach(i => i.oninput = () => renderCalc(el));
+  el.querySelector('.f_rateUnit').onchange = () => renderCalc(el);
+  el.querySelectorAll('.f_unit button').forEach(b => b.onclick = () => {
+    el.querySelectorAll('.f_unit button').forEach(x => { x.classList.remove('sel'); x.classList.remove('need'); });
+    b.classList.add('sel'); renderCalc(el);
   });
-  renderCalc();
+  renderCalc(el);
 
-  $('#verifyBtn').onclick = async () => {
-    const f = readForm();
+  el.querySelector('.f_verify').onclick = async () => {
+    const f = readCard(el);
     try {
-      await api(`/api/claims/${c.id}/verify`, { invoice_weight:f.inv, claimed_weight:f.recv, weight_unit:f.unit, sell_price:f.rate, sell_price_unit:f.rateUnit });
-      toast('Confirmed. The verify reminder is cancelled and a recovery to-do is raised.', 'ok');
+      const kind = el.querySelector('.f_kind').value;
+      if (kind !== (c.claim_type || 'other')) await api('/api/claims/' + c.id + '/edit', { claim_type: kind });
+      await api('/api/claims/' + c.id + '/verify', { invoice_weight:f.inv, claimed_weight:f.recv, weight_unit:f.unit, sell_price:f.rate, sell_price_unit:f.rateUnit });
+      toast('Confirmed. The chase is cancelled and a recovery to-do is raised.', 'ok');
       await load();
     } catch (e) { toast(e.message, 'bad'); }
   };
-  $('#saveSupBtn').onclick = async () => {
-    try { await api(`/api/claims/${c.id}/edit`, { supplier: $('#f_supplier').value.trim() }); toast('Supplier saved.', 'ok'); await load(); }
-    catch (e) { toast(e.message, 'bad'); }
+  el.querySelector('.f_save').onclick = async () => {
+    try {
+      await api('/api/claims/' + c.id + '/edit', { supplier: el.querySelector('.f_sup').value.trim(), claim_type: el.querySelector('.f_kind').value });
+      toast('Saved.', 'ok'); await load();
+    } catch (e) { toast(e.message, 'bad'); }
   };
-  $('#recBtn').onclick = async () => {
-    const ours = numOf($('#f_ours').value);
+  el.querySelector('.f_rec').onclick = async () => {
+    const ours = numOf(el.querySelector('.f_ours').value);
     if (ours === null) { toast('Put in what you are recovering from the supplier first.', 'bad'); return; }
     try {
-      const sup = $('#f_supplier').value.trim();
-      if (sup && sup !== (c.supplier||'')) await api(`/api/claims/${c.id}/edit`, { supplier: sup });
-      await api(`/api/claims/${c.id}/recovery`, { our_claim: ours });
+      const sup = el.querySelector('.f_sup').value.trim();
+      if (sup && sup !== (c.supplier||'')) await api('/api/claims/' + c.id + '/edit', { supplier: sup });
+      await api('/api/claims/' + c.id + '/recovery', { our_claim: ours });
       toast('Recovery raised.', 'ok'); await load();
     } catch (e) { toast(e.message, 'bad'); }
   };
-  document.querySelectorAll('[data-st]').forEach(b => b.onclick = async () => {
-    try { await api(`/api/claims/${c.id}/status`, { status: b.dataset.st }); toast('Marked ' + b.dataset.st + '.', 'ok'); await load(); }
+  el.querySelectorAll('.f_st').forEach(b => b.onclick = async () => {
+    try { await api('/api/claims/' + c.id + '/status', { status: b.dataset.st }); toast('Marked ' + b.dataset.st + '.', 'ok'); await load(); }
     catch (e) { toast(e.message, 'bad'); }
   });
 }
 
-/* ── manual entry ────────────────────────────────────────────────────────── */
-function openNew(){
+/* ── manual entry, prefilled when adding to a container already open ─────── */
+function openNew(pre){
+  pre = pre || {};
   const wrap = document.createElement('div');
   wrap.className = 'modal';
-  wrap.innerHTML = `<div class="box"><h3>Claim that came in by phone or WhatsApp</h3>
-    <div class="grid">
-      <label class="f">Customer<input id="n_cust"></label>
-      <label class="f">Supplier<input id="n_sup"></label>
-      <label class="f">Invoice no<input id="n_inv" class="mono"></label>
-      <label class="f">Container no<input id="n_cont" class="mono"></label>
-      <label class="f">What they are asking<input id="n_amt" class="num" inputmode="decimal"></label>
-      <label class="f">Kind
-        <select id="n_type"><option value="weight_shortage">weight shortage</option><option value="grade_recovery">grade / recovery</option><option value="quality">quality</option><option value="damage">damage</option></select>
-      </label>
-    </div>
-    <label class="f" style="margin-top:12px">Note<input id="n_note"></label>
-    <div class="hint">Weights are left out on purpose — enter them in Confirm the weights, where the unit is recorded with them.</div>
-    <div class="actions"><button class="btn go" id="n_save" type="button">Create as unverified</button><button class="btn" id="n_cancel" type="button">Cancel</button></div>
-  </div>`;
+  wrap.innerHTML = '<div class="box"><h3>' + (pre.container_no ? 'Another claim on ' + esc(pre.container_no) : 'Claim that came in by phone or WhatsApp') + '</h3>' +
+    '<div class="grid">' +
+      '<label class="f">Customer<input id="n_cust" value="' + esc(pre.customer||'') + '"></label>' +
+      '<label class="f">Supplier<input id="n_sup"></label>' +
+      '<label class="f">Invoice no<input id="n_inv" class="mono" value="' + esc(pre.invoice_no||'') + '"></label>' +
+      '<label class="f">Container no<input id="n_cont" class="mono" value="' + esc(pre.container_no||'') + '"></label>' +
+      '<label class="f">What they are asking<input id="n_amt" class="num" inputmode="decimal"></label>' +
+      '<label class="f">Kind of claim<select id="n_type">' +
+        Object.keys(STATE.labels).map(t => '<option value="' + t + '">' + esc(kindLabel(t)) + '</option>').join('') +
+      '</select></label>' +
+    '</div>' +
+    '<label class="f" style="margin-top:12px">What they are claiming<input id="n_note" placeholder="in their words — this is the evidence for the kind"></label>' +
+    '<div class="hint">Weights are left out on purpose — enter them in Confirm the weights, where the unit is recorded with them.</div>' +
+    '<div class="actions"><button class="btn go" id="n_save" type="button">Create as unverified</button><button class="btn" id="n_cancel" type="button">Cancel</button></div></div>';
   document.body.appendChild(wrap);
   const close = () => wrap.remove();
   wrap.onclick = (e) => { if (e.target === wrap) close(); };
-  wrap.querySelector('#n_cancel').onclick = close;
-  wrap.querySelector('#n_save').onclick = async () => {
+  $('#n_cancel', wrap).onclick = close;
+  $('#n_save', wrap).onclick = async () => {
     const body = {
-      customer: wrap.querySelector('#n_cust').value.trim(),
-      supplier: wrap.querySelector('#n_sup').value.trim(),
-      invoice_no: wrap.querySelector('#n_inv').value.trim(),
-      container_no: wrap.querySelector('#n_cont').value.trim(),
-      stated_claim_amount: numOf(wrap.querySelector('#n_amt').value),
-      claim_type: wrap.querySelector('#n_type').value,
-      note: wrap.querySelector('#n_note').value.trim(),
+      customer: $('#n_cust', wrap).value.trim(),
+      supplier: $('#n_sup', wrap).value.trim(),
+      invoice_no: $('#n_inv', wrap).value.trim(),
+      container_no: $('#n_cont', wrap).value.trim(),
+      stated_claim_amount: numOf($('#n_amt', wrap).value),
+      claim_type: $('#n_type', wrap).value,
+      note: $('#n_note', wrap).value.trim(),
       created_by: 'manual',
     };
-    try { const rec = await api('/api/claims', body); close(); toast('Created, unverified.', 'ok'); STATE.sel = rec.id; STATE.tab = 'needs'; await load(); }
-    catch (e) { toast(e.message, 'bad'); }
+    try {
+      const rec = await api('/api/claims', body);
+      close(); toast('Created, unverified.', 'ok');
+      STATE.sel = String(rec.container_no || rec.invoice_no || '—').toUpperCase();
+      await load();
+    } catch (e) { toast(e.message, 'bad'); }
   };
-  wrap.querySelector('#n_cust').focus();
+  $('#n_cust', wrap).focus();
 }
 
 async function load(announce){
   try {
     const j = await api('/api/claims');
-    STATE.claims = (j.claims || []).slice().sort((a,b) => String(b.created_at||'').localeCompare(String(a.created_at||'')));
+    STATE.claims = j.claims || [];
     STATE.stats = j.stats || {};
-    if (!STATE.claims.find(c => c.id === STATE.sel)) STATE.sel = (visible()[0] || {}).id || null;
+    STATE.labels = j.typeLabels || {};
+    if (!containers().some(g => g.key === STATE.sel)) STATE.sel = (visible()[0] || {}).key || null;
     renderChips(); renderStrip(); renderTabs(); renderRows(); renderDetail();
     if (announce) toast('Up to date.', 'ok');
   } catch (e) { toast('Could not load claims — ' + e.message, 'bad'); }
 }
 
 $('#q').oninput = (e) => { STATE.q = e.target.value; renderRows(); };
-$('#newBtn').onclick = openNew;
+$('#newBtn').onclick = () => openNew();
 load();
 </script>
 </body>

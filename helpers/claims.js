@@ -28,7 +28,10 @@ const FILE = () => cfg.CLAIMS_FILE || path.join(cfg.DATA_DIR, 'claims.json');
 
 // Status is a closed set. 'unverified' is where every parsed claim starts.
 const STATUSES = ['unverified', 'verified', 'recovery_raised', 'settled', 'rejected', 'withdrawn'];
-const TYPES = ['weight_shortage', 'grade_recovery', 'quality', 'damage', 'other'];
+// The kinds live in helpers/claimKind.js, which is also what classifies a row or
+// a mail into one. Apsara, 2026-09-26: "Not all the container have same kind of
+// claim" — the first import labelled everything weight_shortage, which was wrong.
+const { TYPES, LABEL: TYPE_LABEL } = require('./claimKind');
 const UNITS = ['MT', 'LB', 'KG'];
 
 // Flags are the reasons a human still has to look. They are not errors — a
@@ -225,7 +228,7 @@ function stats(rows) {
 module.exports = {
     list, get, findByKey, keyOf, create, update, verify, raiseRecovery, setStatus, addMail, stats,
     convert, toMT, newId, blank,
-    STATUSES, TYPES, UNITS,
+    STATUSES, TYPES, TYPE_LABEL, UNITS,
     FLAG_NO_UNIT, FLAG_UNKNOWN_CONTAINER, FLAG_FIGURE_CHANGED, FLAG_NO_SUPPLIER,
     FILE,
 };

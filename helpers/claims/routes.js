@@ -28,7 +28,18 @@ function mount(app, cfg) {
     app.get('/api/claims', (req, res) => {
         try {
             const rows = claims.list();
-            res.json({ claims: rows, stats: claims.stats(rows), statuses: claims.STATUSES, types: claims.TYPES, units: claims.UNITS });
+            // typeLabels travels with the rows so the page never spells a kind
+            // differently from the server. containers is the count the header
+            // leads with — Apsara, 2026-09-26: "put it into website per
+            // container basis", and one container can carry several claims of
+            // different kinds.
+            const keyOf = (c) => String(c.container_no || c.invoice_no || '—').toUpperCase();
+            res.json({
+                claims: rows,
+                stats: { ...claims.stats(rows), containers: new Set(rows.map(keyOf)).size },
+                statuses: claims.STATUSES, types: claims.TYPES,
+                typeLabels: claims.TYPE_LABEL, units: claims.UNITS,
+            });
         } catch (e) { bad(res, e.message, 500); }
     });
 
