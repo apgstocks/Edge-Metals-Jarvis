@@ -290,7 +290,12 @@ section('G. the question log — the list of what it could not answer');
     await askLog.record({ kind: 'data', question: 'average margin per tonne', outcome: 'could_not_answer', ms: 1100 });
     await askLog.record({ kind: 'data', question: 'yard loads yesterday', outcome: 'yard', ms: 300 });
 
-    const s = askLog.summary();
+    // includeTests, because THIS IS test traffic. summary() began excluding
+    // rows tagged by JARVIS_TEST on 2026-09-26: the log had filled with
+    // fixture questions and been read — by me — as her real experience. The
+    // flag that makes the log honest for her also hides this file's own rows
+    // from this file, so the test has to ask for them by name.
+    const s = askLog.summary({ includeTests: true });
     ck('every question is counted', s.questions === 4 && s.by.answered === 1 && s.by.could_not_answer === 2 && s.by.yard === 1, JSON.stringify(s.by));
     ck('the model calls are counted, repairs included', s.model_calls === 5 && s.repaired === 1, `${s.model_calls} calls / ${s.repaired} repaired`);
     ck('THE LIST: what it could not answer, most asked first',

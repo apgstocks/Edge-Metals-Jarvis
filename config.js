@@ -543,6 +543,11 @@ const BOOKING_TRACKER_SHEET_ID = process.env.BOOKING_TRACKER_SHEET_ID || '';
 const INVOICE_SHEET_ID     = process.env.INVOICE_SHEET_ID     || '1QsCeuqeRKODuouzO2PfKbxG9qJpN8yAbIurSzhI--6s';
 const INVOICE_MAIN_GID     = process.env.INVOICE_MAIN_GID     || '571096144';
 const INVOICE_PACKING_GID  = process.env.INVOICE_PACKING_GID  || '1340048377';
+// The "Weight Shortage 2025" tab on the same workbook. Read-only, and only by
+// scripts/claims-import-sheet.js — the live claim register is CLAIMS_FILE, not
+// this tab. See claude/jarvis-claims-from-email.md for why the tab cannot be
+// written to.
+const CLAIMS_SHEET_GID     = process.env.CLAIMS_SHEET_GID     || '522311867';
 
 // Customer pricing memory (Proforma tab) — pricing-only, NOT a full
 // address/profile store, since buyer addresses already have a working
@@ -723,6 +728,7 @@ module.exports = {
     GMAIL_WATCH_ENABLED, GMAIL_POLL_DAYS_BACK,
     PRICE_SHEET_ID, PRICELIST_WEBHOOK_TOKEN,BOOKING_TRACKER_SHEET_ID,
     INVOICE_SHEET_ID, INVOICE_MAIN_GID, INVOICE_PACKING_GID,
+    CLAIMS_SHEET_GID,
     PROFORMA_PRICING_FILE, PROFORMA_VERSIONS_FILE, DOCUMENTS_SAVED_DIR,
     SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS, ALERT_EMAIL_TO,
     TWILIO_SID, TWILIO_AUTH_TOKEN, TWILIO_FROM, ALERT_SMS_TO,

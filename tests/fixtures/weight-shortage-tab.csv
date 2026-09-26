@@ -1,0 +1,25 @@
+,,,,,,,,,,,,
+,,Cont No.,Gross,Received ,Shortage in MT,Shortage in LBS,Selling Price,Amount,,Buyer,Buying Price,Claim Amount
+Varo Trading,25VT03,CCLU7611723,21.192,21.01,0.182,401,1875,341.25,Paid,Gomez,0.775,310.775
+Soline,25ST36,SEGU6045439,21.464,21.1,0.364,802.48,1990,724.36,,INES,0.88,706.18
+DK METAL,25DK09,MEDU5374011,"23,718",23400,0.318,318,390,,,MANA,315,100.17
+Soline,25ST36,SEGU6045439,21.464,21.1,0.364,802,1990,724.36,,CORES,0.88,706
+TCLU8551501,conatiner damage,Claim to Modern,Paid with invoice 26MK39,578.77,1/2 paid,,,,,,,
+ROTORS AND DRUMS,,,,,,,,,,,,
+RS RESOURCES,25DK09,MEDU5374011,23.718,23.4,0.318,701.07,390.00,124.02,,MANA,315.000,100.17
+,,,,,,,,,,,,
+Supplier,date,Inv Nbr,Container number,Inv Weight,Inv Price,Total Amt,Loading photos,Customer Name,Claimed Weight,Difference,Claim amount,Our Claim
+Gomez,04/21/2026,26JY03,HMMU6316059,20.239,2140,43311.46,Photos,Joey/Daekwang,19.94,0.299,639.86,580
+Oscar,02/24/2026,26Ala04,SEKU1544070,"42,920",0.1475,6330.70,Photos,Ala International,,0.328,106.66,101.68
+Abantos,02/24/2026,26Ala01,ONEU2932047,54700,0.1475,8068.25,Photos,Ala International,,0.967,314.45,299.77
+,,,,,,,,,,,,
+Supplier,date,Inv Nbr,Container number,Inv item,Inv Weight,Price,Inv amount,Note,,Loading photos,Customer Name,Claim amount
+Nur Metal,03-03-2026,26ME07,TEMU7944250,Al breakage,29897,,,Hand Tools found,,,Modern enterprises,450
+Nur Metal,03-03-2026,26ME07,TEMU7944250,Al breakage,,,,52% Recovery Promised,,,Modern enterprises,3100
+,,,,,,,,,,,,
+Reg/Al Engine claim,Claims Details,Supplier Details,,,,,,,,,,
+Supplier,date,Inv Nbr,Container number,Inv Weight,Inv Price,Total Amt,Loading photos,Customer Name,Reg.Engine& Steel haed Combo,Price($),Calc.total,Claim amount
+Beto/Hisperia,1/7/26,26MK47,CAIU7341166,22.290,890,19838.10,Photo,MK METAL,4.75,570,2707.5,1520
+,,,,,,,,,,,,
+Supplier,date,Inv Nbr,Container number,Inv Weight,Inv Price,Total Amt,Loading photos,Customer Name,Claimed Weight,Difference,Claim amount,Our Claim
+Modern,2/2/2026,26MK39,TCLU8551501,21.100,900,18990,Photo,MK METAL,,,578.77,400
