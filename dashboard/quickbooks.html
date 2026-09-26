@@ -182,7 +182,10 @@ function toast(msg, cls) {
 async function api(url, body) {
   const r = await fetch(url, body ? { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...body, unlock: STATE.unlocked }) } : {});
   const j = await r.json().catch(() => ({ error: 'bad response' }));
-  if (!r.ok) throw new Error(j.error || ('HTTP ' + r.status));
+  // A refusal often carries more than a sentence — the name that is taken,
+  // a suggestion, the impact she was shown. Keep it on the error so the
+  // caller can offer the fix instead of only reporting the failure.
+  if (!r.ok) { const err = new Error(j.error || j.note || ('HTTP ' + r.status)); err.body = j; err.status = r.status; throw err; }
   return j;
 }
 
@@ -654,7 +657,21 @@ async function createParty(kind, jarvisName) {
     const out = await api('/api/qb/create-party', { kind, name: qbName, jarvisName, contact: contact || '' });
     toast(out.note, 'good');
     await loadParties(); await openParty(kind, jarvisName);
-  } catch (e) { toast(e.message, 'bad'); }
+  } catch (e) {
+    // QuickBooks keeps ONE name list for customers, vendors and employees,
+    // so a company she both buys from and sells to cannot carry the same
+    // name twice. Offer the fix rather than the error.
+    const taken = e.body && e.body.status === 'name-taken' ? e.body : null;
+    if (!taken) return toast(e.message, 'bad');
+    const again = await askText('That name is taken in QuickBooks', taken.note,
+      `Name for this ${kind}`, taken.suggestion, 'Create it');
+    if (!again) return toast('Left alone. Nothing was created.', 'good');
+    try {
+      const out2 = await api('/api/qb/create-party', { kind, name: again, jarvisName, contact: contact || '' });
+      toast(out2.note, 'good');
+      await loadParties(); await openParty(kind, jarvisName);
+    } catch (e2) { toast(e2.message, 'bad'); }
+  }
 }
 
 /* ── the cutover ─────────────────────────────────────────────────────

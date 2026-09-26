@@ -249,6 +249,22 @@ const ck = (name, ok, extra) => { if (ok) { pass++; console.log('  PASS ', name)
     const dupes = await get('/api/qb/duplicates');
     ck('with QuickBooks unreachable, the duplicate check says so', dupes.code === 502 && /QuickBooks/.test(dupes.body.error || ''), dupes.body);
 
+    // ── one name list for customers, vendors and employees (2026-09-26) ────
+    // Apsara, creating a supplier: "Duplicate Name Exists Error … Id=505".
+    // #505 was a CUSTOMER, "nur metals". QuickBooks keeps ONE display-name
+    // list across all three, so a company she both buys from and sells to
+    // cannot carry the same name twice. Checking only the same kind walked
+    // straight into Intuit's refusal.
+    const routesSrc2 = fs.readFileSync(require('path').join(__dirname, '..', 'helpers', 'quickbooks', 'routes.js'), 'utf8');
+    ck('creating a party checks the OTHER name list too', /const other = kind === 'vendor' \? 'customer' : 'vendor'/.test(routesSrc2));
+    ck('...and answers 409 with what holds the name and a name that would work',
+       /status: 'name-taken'/.test(routesSrc2) && /suggestion/.test(routesSrc2));
+    ck('...and Intuit\'s own duplicate refusal is translated, not repeated',
+       /Duplicate Name Exists.*?Id=/is.test(routesSrc2));
+    const pageSrc6 = fs.readFileSync(require('path').join(__dirname, '..', 'dashboard', 'quickbooks.html'), 'utf8');
+    ck('the page offers the working name instead of showing the error', /That name is taken in QuickBooks/.test(pageSrc6));
+    ck('...which needs the refusal body, not just its sentence', /err\.body = j/.test(pageSrc6));
+
     // ── the cutover, from the page (2026-09-26) ────────────────────────────
     // Apsara: "I want nightly report to run everyday to upload all the bills
     // and invoices." The cutover decides what "all" is, so it has to be

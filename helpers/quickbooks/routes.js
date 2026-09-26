@@ -478,12 +478,31 @@ function mount(app, cfg) {
         const env = envOf();
         const client = require('./client');
         try {
-            const all = await mapping.fetchParties(kind, client, { env });
+            // ── ONE NAME LIST FOR EVERYBODY (2026-09-26) ───────────────────
+            // Apsara hit: "Duplicate Name Exists Error … Id=505" creating a
+            // supplier. #505 was a CUSTOMER, "nur metals". QuickBooks keeps
+            // ONE display-name list across customers, vendors and employees,
+            // so a company she both buys from and sells to cannot carry the
+            // same name twice. Checking only the same kind found nothing and
+            // walked into Intuit's refusal — so both lists are checked, and
+            // the answer explains it instead of repeating a 400.
+            const other = kind === 'vendor' ? 'customer' : 'vendor';
+            const [all, others] = await Promise.all([
+                mapping.fetchParties(kind, client, { env }),
+                mapping.fetchParties(other, client, { env }).catch(() => []),
+            ]);
             const twin = all.filter((x) => normalizeName(x.DisplayName) === normalizeName(wanted));
             if (twin.length) {
                 mapping.confirm(kind, jName, twin[0].Id, twin[0].DisplayName, who(req), 'already in QuickBooks — linked, not created');
                 return res.json({ status: 'already-there', qbId: String(twin[0].Id), qbName: twin[0].DisplayName,
                     note: `"${twin[0].DisplayName}" (#${twin[0].Id}) is already there — linked to it instead of making a second one.` });
+            }
+            const clash = others.find((x) => normalizeName(x.DisplayName) === normalizeName(wanted));
+            if (clash) {
+                const suggestion = `${wanted} (${kind === 'vendor' ? 'supplier' : 'customer'})`;
+                return res.status(409).json({ status: 'name-taken', takenBy: other, qbId: String(clash.Id), qbName: clash.DisplayName,
+                    suggestion,
+                    note: `QuickBooks keeps one name list for customers, vendors and employees, and "${clash.DisplayName}" is already a ${other} (#${clash.Id}). A company you both buy from and sell to needs two records with different names — try "${suggestion}".` });
             }
             const table = kind === 'vendor' ? 'Vendor' : 'Customer';
             const body = { DisplayName: wanted };
@@ -498,7 +517,17 @@ function mount(app, cfg) {
             if (jName !== wanted) mapping.confirm(kind, wanted, made.Id, made.DisplayName, who(req), 'same party under the name QuickBooks uses');
             res.json({ status: 'created', qbId: String(made.Id), qbName: made.DisplayName,
                 note: `Created ${kind} #${made.Id} "${made.DisplayName}" and matched "${jName}" to it.` });
-        } catch (e) { res.status(400).json({ error: e.message }); }
+        } catch (e) {
+            // Intuit's own duplicate refusal, in case the name belongs to an
+            // employee or something else the two lists above do not cover.
+            const m = /Duplicate Name Exists.*?Id=(\d+)/is.exec(e.message || '');
+            if (m) {
+                return res.status(409).json({ status: 'name-taken', qbId: m[1],
+                    suggestion: `${wanted} (${kind === 'vendor' ? 'supplier' : 'customer'})`,
+                    note: `QuickBooks already has record #${m[1]} under that name — it keeps one name list for customers, vendors and employees. Give this one a different display name, for example "${wanted} (${kind === 'vendor' ? 'supplier' : 'customer'})".` });
+            }
+            res.status(400).json({ error: e.message });
+        }
     });
 
     // ── HER BOOKS, WITHOUT OPENING QUICKBOOKS (2026-09-26) ─────────────────
