@@ -277,10 +277,39 @@ async function partyDocs(kind, qbId, env = auth.qbEnv()) {
 
     // Lifted out of duplicates() so it can be tested without a network — it is
 // the part that was wrong, so it is the part that gets pinned.
+// ── A CONTAINER IS ONLY ITSELF FOR ONE VOYAGE ──────────────────────────────
+// Apsara, 2026-09-26: "boss same container cn by issued by shipper across
+// diff month/year." Right — the shipping line reuses the box. HMMU6166160 to
+// SOLINE in July 2025 and again in August 2026 is two shipments, not one sold
+// twice, and calling that a duplicate would have had her void a real invoice.
+//
+// So the container identifies a line only inside one shipment cycle. Ninety
+// days covers load, sail, discharge and billing with room to spare; beyond
+// that the same number is the shipper's, not hers. The one exception is a
+// period summary ("Nov.2025", "2025"): it is dated at the end of the period
+// it covers, so its own months-old containers are exactly what it should
+// hold, and the window would throw away the very thing worth finding.
+const SHIPMENT_DAYS = 90;
+const daysApart = (a, b) => Math.abs(new Date(a) - new Date(b)) / 864e5;
+const SUMMARY_DOC = /^(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z.]*\s*\d{4}$|^\d{4}$/i;
+const isSummary = (r) => SUMMARY_DOC.test(String(r.doc || '').trim());
+// every document in the group is within one cycle of the earliest, or one of
+// them is a summary that is allowed to reach back
+function oneVoyage(docs) {
+    if (docs.some(isSummary)) return true;
+    const dates = docs.map((d) => d.date).sort();
+    return daysApart(dates[0], dates[dates.length - 1]) <= SHIPMENT_DAYS;
+}
+
 function classifyDuplicates(rows) {
         // 1. the same containers, for the same money, twice
         const withContainers = rows.filter((r) => r.containers.length);
-        const duplicate = groupBy(withContainers, (r) => `${r.partyId}|${[...r.containers].sort().join(',')}|${r.total.toFixed(2)}`);
+        const allSame = groupBy(withContainers, (r) => `${r.partyId}|${[...r.containers].sort().join(',')}|${r.total.toFixed(2)}`);
+        const duplicate = allSame.filter((g) => oneVoyage(g.rows));
+        // the same number, the same money, but seasons apart: the shipper's
+        // box came round again. Named, never counted, never accused.
+        const reusedBox = allSame.filter((g) => !oneVoyage(g.rows))
+            .map((g) => ({ ...g, apart: Math.round(daysApart(g.rows[0].date, g.rows[g.rows.length - 1].date)) }));
         const seen = new Set(duplicate.flatMap((g) => g.rows.map((r) => r.id)));
 
         // 2. one container's line charged on two documents
@@ -295,6 +324,7 @@ function classifyDuplicates(rows) {
         }
         const doubledLine = Object.values(byLine)
             .filter((g) => new Set(g.map((x) => x.id)).size > 1)
+            .filter((g) => oneVoyage(g))
             .map((g) => ({ party: g[0].party, partyId: g[0].partyId, container: g[0].line.container,
                 what: g[0].line.what, amount: g[0].line.amount,
                 rows: g.map((x) => ({ id: x.id, doc: x.doc, date: x.date, total: x.total, balance: x.balance, kind: x.kind })),
@@ -329,7 +359,7 @@ function classifyDuplicates(rows) {
         // a document numbered for a month or a year, next to per-container
         // ones, is the shape the real problem took
         summary: p.rows.some((r) => /^(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z.]*\s*\d{4}$|^\d{4}$/i.test(r.doc || '')),
-    })).filter((p) => !seen.has(p.rows[0].id)).sort((a, b) => b.extra - a.extra);
+    })).filter((p) => !seen.has(p.rows[0].id) && oneVoyage(p.rows)).sort((a, b) => b.extra - a.extra);
 
     // 4. a number used twice on different containers. Not a duplicate.
         const dupIds = new Set([...seen, ...doubledLine.flatMap((g) => g.rows.map((r) => r.id)),
@@ -344,6 +374,7 @@ function classifyDuplicates(rows) {
             doubledLine: { groups: doubledLine, cost: r2(doubledLine.reduce((s, g) => s + g.extra, 0)) },
             sameContainer: { groups: sameContainer, cost: r2(sameContainer.reduce((s, g) => s + g.extra, 0)),
                 summaries: sameContainer.filter((g) => g.summary).length },
+            reusedBox: { groups: reusedBox, cost: 0, note: `same container number more than ${SHIPMENT_DAYS} days apart — the shipping line reusing the box, not a duplicate` },
             reference: { groups: reference, cost: cost(reference) } };
     }
 

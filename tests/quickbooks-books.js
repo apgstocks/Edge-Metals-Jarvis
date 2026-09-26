@@ -107,5 +107,36 @@ const os = require('os');
     ck('containers for this come from the LINES, never the memo', /r\.lines\.map\(\(l\) => l\.container\)/.test(src3));
 }
 
+// ── THE SHIPPER REUSES THE BOX (2026-09-26) ───────────────────────────────
+// Apsara: "boss same container cn by issued by shipper across diff
+// month/year." HMMU6166160 to SOLINE in July 2025 and again in August 2026 is
+// two shipments. Calling that a duplicate would have had her void a real
+// $86,329.60 invoice.
+{
+    const L = (c, w, a) => ({ container: c, what: w, amount: a });
+    const soline = [
+        { kind: 'invoice', id: 'a', doc: '25ST31', date: '2025-07-01', total: 86329.6, balance: 0, party: 'SOLINE', partyId: '1', containers: ['HMMU6166160'], lines: [L('HMMU6166160', 'AL', 86329.6)] },
+        { kind: 'invoice', id: 'b', doc: '260723_AW_26DC02', date: '2026-08-27', total: 86329.6, balance: 86329.6, party: 'SOLINE', partyId: '1', containers: ['HMMU6166160'], lines: [L('HMMU6166160', 'AL', 86329.6)] },
+    ];
+    const r = books.classifyDuplicates(soline);
+    ck('the same container a year apart is NOT a duplicate — the box came round again',
+       r.duplicate.groups.length === 0 && r.sameContainer.groups.length === 0, r.duplicate.groups);
+    ck('...it is named as a reused box, with how far apart they are',
+       r.reusedBox.groups.length === 1 && r.reusedBox.groups[0].apart === 422, r.reusedBox.groups);
+    ck('...and costs nothing, because nothing is wrong with it', r.reusedBox.cost === 0);
+    const close = books.classifyDuplicates([
+        { ...soline[0] }, { ...soline[1], date: '2025-07-20' },
+    ]);
+    ck('the same container inside one shipment cycle IS still caught',
+       close.duplicate.groups.length === 1, close.duplicate.groups);
+    // a summary reaches back over its whole period on purpose
+    const summary = books.classifyDuplicates([
+        { kind: 'bill', id: 'e', doc: '2025', date: '2025-12-18', total: 470770.21, balance: 470770.21, party: 'Mike', partyId: '7', containers: ['AAAA1111111'], lines: [L('AAAA1111111', 'AC', 470770.21)] },
+        { kind: 'bill', id: 'f', doc: '25ST30', date: '2025-01-20', total: 32514.12, balance: 32514.12, party: 'Mike', partyId: '7', containers: ['AAAA1111111'], lines: [L('AAAA1111111', 'AC', 32514.12)] },
+    ]);
+    ck('a year-end summary is still matched against its own months-old bills',
+       summary.sameContainer.groups.length === 1 && summary.sameContainer.summaries === 1, summary.sameContainer);
+}
+
 console.log(`\nquickbooks-books: ${pass} passed, ${fail} failed`);
 if (fail) { console.log('FAILED: ' + failures.join(' | ')); process.exit(1); }
