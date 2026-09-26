@@ -90,7 +90,10 @@ async function plan({ vendor = null, vendorId = null, env = auth.qbEnv(), since 
 
         // 1. the bill whose balance IS this money
         const exact = open.find((b) => b.left > 0 && Math.abs(b.left - left) < 0.005);
-        if (exact) { picks.push({ ...exact, take: exact.left, why: 'the open balance matches this payment to the cent' }); exact.left = 0; left = 0; }
+        if (exact) { picks.push({ ...exact, take: exact.left,
+            why: exact.left === exact.balance ? 'the open balance matches this payment to the cent'
+                : 'what is left open on this bill matches this payment to the cent' });
+            exact.left = 0; left = 0; }
 
         // 2. then oldest first
         for (const b of open) {

@@ -39,7 +39,7 @@ function mount(app, cfg) {
                 claims: rows,
                 stats: { ...claims.stats(rows), containers: new Set(rows.map(keyOf)).size },
                 statuses: claims.STATUSES,
-                kinds: claimKinds.list().map((k) => ({ ...k, hue: claimKinds.hue(k.slug) })),
+                kinds: vocabulary(),
                 units: claims.UNITS,
             });
         } catch (e) { bad(res, e.message, 500); }
@@ -123,7 +123,7 @@ function mount(app, cfg) {
     // separately. This is the correction path for a dynamic vocabulary — the
     // alternative was a fixed list in the code, which is what she rejected.
     app.get('/api/claim-kinds', (req, res) => {
-        res.json({ kinds: claimKinds.list().map((k) => ({ ...k, hue: claimKinds.hue(k.slug) })) });
+        res.json({ kinds: vocabulary() });
     });
 
     app.post('/api/claim-kinds/rename', async (req, res) => {
@@ -139,6 +139,12 @@ function mount(app, cfg) {
             const b = req.body || {};
             if (!b.from || !b.into) return bad(res, 'merging needs the kind to fold in and the kind to keep');
             const moved = claims.list().filter((c) => c && c.claim_type === b.from);
+            // Either side may be a kind that only exists on claims — an older
+            // import's slug the registry never recorded. Adopt it first so the
+            // merge has something to work with.
+            for (const slug of [b.from, b.into]) {
+                if (!claimKinds.get(slug)) await claimKinds.ensure(claimKinds.label(slug), '', 'adopted from an earlier import');
+            }
             await claimKinds.merge(b.from, b.into, b.by || 'manager');
             for (const c of moved) {
                 await claims.update(c.id, { claim_type: b.into }, b.by || 'manager',
@@ -167,6 +173,23 @@ function mount(app, cfg) {
     };
 
     // What the page is allowed to see: everything except the internal row objects.
+    // Kinds actually in use on claims, plus the registry. Claims imported before
+    // the registry existed carry a slug it has never heard of, which is why the
+    // header read "0 kinds" while every row on screen showed one. A kind she can
+    // see has to be a kind she can rename and merge.
+    const vocabulary = () => {
+        const reg = claimKinds.list();
+        const known = new Set(reg.map((k) => k.slug));
+        const extra = new Map();
+        for (const c of claims.list()) {
+            const s = c && c.claim_type;
+            if (!s || known.has(s)) continue;
+            if (!extra.has(s)) extra.set(s, { slug: s, label: claimKinds.label(s), description: '', count: 0, named_by: 'imported before the vocabulary existed' });
+            extra.get(s).count += 1;
+        }
+        return [...reg, ...extra.values()].map((k) => ({ ...k, hue: claimKinds.hue(k.slug) }));
+    };
+
     const forPage = (p, id) => ({
         planId: id,
         source: p.source, tab: p.tab, tabs: p.tabs, sheetRows: p.sheetRows,
@@ -203,7 +226,10 @@ function mount(app, cfg) {
             const id = 'plan_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
             plans.set(id, { plan: p, at: Date.now() });
             res.json(forPage(p, id));
-        } catch (e) { bad(res, e.message); }
+        } catch (e) {
+            console.error('[CLAIMS] import preview failed:', e && e.stack || e);
+            bad(res, e.message);
+        }
     });
 
     app.post('/api/claims/import/commit', async (req, res) => {

@@ -290,6 +290,61 @@ console.log('\n=== F — uploading a sheet, from the page ===');
     server.close();
 }
 
+console.log('\n=== F2 — a failure is never a silent nothing ===');
+{
+    // From her screen recording, 2026-09-26 16:16: she pressed "Read the live tab
+    // instead", it spun for two seconds, then cleared with no message at all. The
+    // error WAS raised — it rendered at z-index 50, behind the modal's 60.
+    const z = (sel) => { const m = HTML.match(new RegExp('\\' + sel + '\\{[^}]*z-index:(\\d+)')); return m ? Number(m[1]) : null; };
+    ck('the toast sits ABOVE the modal that raised it', z('.toast') > z('.modal'), { toast: z('.toast'), modal: z('.modal') });
+    ck('an import failure is also written into the modal, not only toasted', /That did not work/.test(HTML));
+    ck('and it says nothing was written', /Nothing was written\./.test(HTML));
+    ck('a file that cannot be read says so', /could not be read from disk/.test(HTML));
+
+    // And the server-side message has to name which step failed.
+    const src = fs.readFileSync(path.join(__dirname, '..', 'helpers', 'claims', 'importSheet.js'), 'utf8');
+    ck('an unreachable Google is named as that', /could not reach Google Sheets/.test(src));
+    ck('a sign-in page is named as that', /sign-in page instead of the sheet/.test(src));
+    ck('a refusal is named as that', /shared as "anyone with the link can view"/.test(src));
+    ck('every one of them points at uploading the file instead',
+        (src.match(/upload the file instead/g) || []).length >= 4);
+    ck('and the server logs the failure for pm2', /import preview failed/.test(fs.readFileSync(path.join(__dirname, '..', 'helpers', 'claims', 'routes.js'), 'utf8')));
+}
+
+console.log('\n=== F3 — kinds from an older import are still hers to fix ===');
+{
+    const app = express();
+    app.use(express.json());
+    app.use((req, res, next) => { req.role = 'admin'; next(); });
+    routes.mount(app, { ROOT: path.join(__dirname, '..') });
+    const server = app.listen(0);
+    const port = server.address().port;
+    const get = async (p2) => { const r = await fetch(`http://127.0.0.1:${port}${p2}`); return { code: r.status, body: await r.json().catch(() => null) }; };
+    const post = async (p2, body) => {
+        const r = await fetch(`http://127.0.0.1:${port}${p2}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+        return { code: r.status, body: await r.json().catch(() => null) };
+    };
+
+    // Exactly her situation: claims carrying a slug the registry never recorded,
+    // because they were imported before the vocabulary existed.
+    const a = await claims.create({ customer: 'Modern enterprises', container_no: 'TEMU7944250', invoice_no: '26ME07-a', claim_type: 'foreign_material' }, 'test');
+    const b = await claims.create({ customer: 'Taewon', container_no: 'HMMU6180208', invoice_no: '25JY84-a', claim_type: 'grade_downgrade' }, 'test');
+    void a; void b;
+
+    const v = await get('/api/claim-kinds');
+    const slugs = (v.body.kinds || []).map((k) => k.slug);
+    ck('a kind only in use on claims is still listed', slugs.includes('foreign_material') && slugs.includes('grade_downgrade'), slugs);
+    ck('it reads as words, not as a slug', (v.body.kinds.find((k) => k.slug === 'foreign_material') || {}).label === 'foreign material');
+    ck('and it carries a colour like any other', typeof (v.body.kinds.find((k) => k.slug === 'grade_downgrade') || {}).hue === 'number');
+    ck('the page header would no longer say 0 kinds', (await get('/api/claims')).body.kinds.length >= 2);
+
+    const m = await post('/api/claim-kinds/merge', { from: 'grade_downgrade', into: 'foreign_material' });
+    ck('two of them can be folded together even though neither was registered', m.code === 200, m.body);
+    ck('and the claims move with it', (claims.get(b.id) || {}).claim_type === 'foreign_material', (claims.get(b.id) || {}).claim_type);
+
+    server.close();
+}
+
 console.log('\n=== G — the import controls are on the page ===');
 {
     ck('there is an Import button', /id="impBtn"/.test(HTML) && /Import sheet/.test(HTML));

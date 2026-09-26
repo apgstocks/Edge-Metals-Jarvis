@@ -171,7 +171,11 @@ label.f input:disabled{color:var(--steel-500)}
 .hist{font-size:11.5px;color:var(--text-faint);display:flex;flex-direction:column;gap:4px;font-family:var(--font-mono)}
 .blank{display:flex;flex-direction:column;gap:8px;align-items:center;justify-content:center;height:100%;color:var(--text-faint);font-size:13px}
 
-.toast{position:fixed;left:50%;transform:translateX(-50%);bottom:22px;padding:10px 16px;border-radius:5px;background:var(--surface-card);border:1px solid var(--border-default);color:var(--text-body);font-size:13px;box-shadow:0 8px 28px rgba(0,0,0,.55);z-index:50;max-width:560px}
+/* z-index 80, ABOVE .modal's 60. It was 50, which put every error message behind
+   the modal that caused it: the import spun, failed, and cleared itself with no
+   visible explanation. A failure that looks like nothing happening is worse than
+   a failure. */
+.toast{position:fixed;left:50%;transform:translateX(-50%);bottom:22px;padding:10px 16px;border-radius:5px;background:var(--surface-card);border:1px solid var(--border-default);color:var(--text-body);font-size:13px;box-shadow:0 8px 28px rgba(0,0,0,.55);z-index:80;max-width:560px}
 .toast.bad{border-color:var(--red-500);color:#f0b3aa}
 .toast.ok{border-color:var(--leaf-600);color:var(--leaf-300)}
 .modal{position:fixed;inset:0;background:rgba(6,8,9,.72);display:flex;align-items:center;justify-content:center;z-index:60;padding:18px}
@@ -619,10 +623,20 @@ function openImport(){
   const busy = (what) => { out.innerHTML = '<div class="imp-sec"><h4><span class="spin"></span> ' + esc(what) + '</h4>' +
     '<div class="hint">Every row is read on its own, so a full sheet takes a minute or two. Leave this open.</div></div>'; };
 
+  const failed = (msg) => {
+    // Inline, not only a toast. The toast can be missed, scrolled past or
+    // dismissed; the reason the import did not happen belongs where she was
+    // looking when it did not happen.
+    out.innerHTML = '<div class="imp-sec"><h4 style="color:#f0b3aa">That did not work</h4>' +
+      '<div class="hint" style="margin-top:0">' + esc(msg) + '</div>' +
+      '<div class="hint">Nothing was written. If it was the live tab, the sheet has to be link-viewable from the server — uploading the file works either way.</div></div>';
+    toast(msg, 'bad');
+  };
+
   async function preview(body){
     busy('reading the sheet and working out what each claim is about');
     try { render(await api('/api/claims/import/preview', { ...body, useAi: useAi() })); }
-    catch (e) { out.innerHTML = ''; toast(e.message, 'bad'); }
+    catch (e) { failed(e.message); }
   }
 
   $('#i_live', wrap).onclick = () => preview({});
@@ -632,9 +646,11 @@ function openImport(){
     if (!f) return;
     const r = new FileReader();
     if (/\.csv$/i.test(f.name) || f.type === 'text/csv') {
+      r.onerror = () => failed('that file could not be read from disk');
       r.onload = () => preview({ csv: String(r.result), name: f.name });
       r.readAsText(f);
     } else {
+      r.onerror = () => failed('that file could not be read from disk');
       r.onload = () => preview({ xlsxBase64: String(r.result).split(',').pop(), name: f.name });
       r.readAsDataURL(f);
     }
