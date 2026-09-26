@@ -243,6 +243,72 @@ async function partyDocs(kind, qbId, env = auth.qbEnv()) {
     });
 }
 
+// ── THE SAME MONEY, TWICE ──────────────────────────────────────────────────
+// Apsara, 2026-09-26: "check qb for any duplicate record/amount entry per
+// customer and supplier."
+//
+// Three kinds, and they are not equally damning:
+//   same number — the same document number on one party twice. Nearly always
+//                 a real duplicate, whatever the amounts say.
+//   same amount, same day — one party, one figure, one date.
+//   same amount, other days — on her books this is often innocent: the same
+//                 weight at the same price ships again and again. Counted and
+//                 marked weak rather than left out or cried about.
+// Plus, per party, money paid that was never applied to a document — which is
+// why a party's open documents can add up to far more than she actually owes.
+async function duplicates(env = auth.qbEnv(), { year = new Date().getFullYear() } = {}) {
+    return cached(`dupes|${env}|${year}`, 5 * 60 * 1000, async () => {
+        const since = `${year}-01-01`;
+        const opts = { env };
+        const grab = async (table, ref, kind) => (await pull(table, `TxnDate >= '${since}'`, opts, 5000))
+            .map((x) => ({ kind, id: String(x.Id), doc: String(x.DocNumber || '').trim(), date: x.TxnDate,
+                total: r2(x.TotalAmt), balance: x.Balance === undefined ? null : r2(x.Balance),
+                party: (x[ref] || {}).name || '', partyId: String((x[ref] || {}).value || '') }));
+        const [bills, invoices] = await Promise.all([grab('Bill', 'VendorRef', 'bill'), grab('Invoice', 'CustomerRef', 'invoice')]);
+
+        const group = (rows, keyOf) => {
+            const by = {};
+            for (const r of rows) { const k = keyOf(r); if (k) (by[k] = by[k] || []).push(r); }
+            return Object.values(by).filter((g) => g.length > 1)
+                .map((g) => ({ party: g[0].party, partyId: g[0].partyId, doc: g[0].doc, amount: g[0].total,
+                    rows: g.sort((a, b) => String(a.date).localeCompare(String(b.date))),
+                    // what the extra copies cost — not the whole group
+                    extra: r2(g.reduce((s, x) => s + x.total, 0) - g[0].total) }))
+                .sort((a, b) => b.extra - a.extra);
+        };
+        const side = (rows) => {
+            const sameNumber = group(rows, (r) => (r.doc ? `${r.partyId}|${KEY(r.doc)}` : null));
+            const inNumber = new Set(sameNumber.flatMap((g) => g.rows.map((r) => r.id)));
+            const sameDay = group(rows.filter((r) => !inNumber.has(r.id)), (r) => `${r.partyId}|${r.total.toFixed(2)}|${r.date}`);
+            const inDay = new Set(sameDay.flatMap((g) => g.rows.map((r) => r.id)));
+            const sameAmount = group(rows.filter((r) => !inNumber.has(r.id) && !inDay.has(r.id)), (r) => `${r.partyId}|${r.total.toFixed(2)}`);
+            const cost = (gs) => r2(gs.reduce((s, g) => s + g.extra, 0));
+            return { documents: rows.length,
+                sameNumber: { groups: sameNumber, cost: cost(sameNumber) },
+                sameDay: { groups: sameDay, cost: cost(sameDay) },
+                sameAmount: { groups: sameAmount, cost: cost(sameAmount) } };
+        };
+        let unapplied = { total: 0, payments: 0, byParty: [] };
+        try {
+            const pays = await pull('BillPayment', `TxnDate >= '${since}'`, opts, 5000);
+            const by = {};
+            for (const p of pays) {
+                const attached = (p.Line || []).reduce((s, l) => s + ((l.LinkedTxn || []).length ? Number(l.Amount || 0) : 0), 0);
+                const loose = r2(Number(p.TotalAmt || 0) - attached);
+                if (loose <= 0.01) continue;
+                const name = (p.VendorRef || {}).name || '';
+                by[name] = r2((by[name] || 0) + loose);
+                unapplied.total = r2(unapplied.total + loose);
+                unapplied.payments++;
+            }
+            unapplied.byParty = Object.entries(by).map(([party, amount]) => ({ party, amount }))
+                .sort((a, b) => b.amount - a.amount).slice(0, 20);
+        } catch (e) { unapplied.error = e.message; }
+
+        return { env, year, at: new Date().toISOString(), suppliers: side(bills), customers: side(invoices), unapplied };
+    });
+}
+
 // ── find one document, the way she would search in QuickBooks ──────────────
 // A ticket number, an invoice number, a container, or an amount. Whatever she
 // has in her hand when the question comes up.
@@ -294,4 +360,4 @@ async function find(query, env = auth.qbEnv(), { since = null } = {}) {
         couldNotLook: failed.length ? [...new Set(failed)] : null };
 }
 
-module.exports = { overview, partyDocs, find, openItems, partyBalances, profitAndLoss, accounts, forget, flattenReport, containersIn, shapeDoc };
+module.exports = { overview, partyDocs, find, duplicates, openItems, partyBalances, profitAndLoss, accounts, forget, flattenReport, containersIn, shapeDoc };

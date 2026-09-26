@@ -615,6 +615,63 @@ function mount(app, cfg) {
         } catch (e) { res.status(400).json({ error: e.message }); }
     });
 
+    // ── VOID, DELETE, MERGE (2026-09-26) ───────────────────────────────────
+    // Apsara: "Merging two parties, voiding or deleting anything should be
+    // there on qb. Ensure the impact before changing any section."
+    //
+    // The impact comes first and is not optional: every change carries the
+    // stamp of the version she was shown, and is refused if the document
+    // moved in the meantime. None of this can be taken back, so the reason
+    // and the impact both go in the journal.
+    app.get('/api/qb/impact', async (req, res) => {
+        try { res.json(await require('./riskyOps').impact(req.query.type, req.query.id, { env: envOf() })); }
+        catch (e) { res.status(400).json({ error: e.message }); }
+    });
+
+    app.post('/api/qb/void', async (req, res) => {
+        if (locked(req, res)) return;
+        const b = req.body || {};
+        const op = b.op === 'delete' ? 'delete' : 'void';
+        // The typed word is the document's own number — she cannot confirm
+        // this one by reflex, and she cannot confirm the wrong document.
+        const risky = require('./riskyOps');
+        try {
+            const now = await risky.impact(b.type, b.id, { env: envOf() });
+            const expect = now.doc.doc || `#${now.id}`;
+            if (String(b.confirm || '').trim() !== expect) {
+                return res.status(400).json({ error: `to ${op} this, type its number exactly: ${expect}`, impact: now });
+            }
+            res.json(await risky.apply({ type: b.type, id: b.id, op, reason: b.reason, stamp: b.stamp, by: who(req), env: envOf() }));
+        } catch (e) { res.status(400).json({ error: e.message }); }
+    });
+
+    app.get('/api/qb/merge-impact', async (req, res) => {
+        try { res.json(await require('./riskyOps').mergeImpact(req.query.kind, req.query.loser, req.query.winner, { env: envOf() })); }
+        catch (e) { res.status(400).json({ error: e.message }); }
+    });
+
+    // "I merged them in QuickBooks" — Jarvis proves the old record is gone,
+    // then re-points every name that was aimed at it.
+    app.post('/api/qb/merged', async (req, res) => {
+        if (locked(req, res)) return;
+        const b = req.body || {};
+        if (!b.deadId || !b.survivorId) return res.status(400).json({ error: 'which two? give the old id and the surviving id' });
+        try {
+            res.json(await require('./riskyOps').adoptMerge(b.kind, b.deadId, b.survivorId,
+                { env: envOf(), by: who(req), reason: b.reason || '' }));
+        } catch (e) { res.status(400).json({ error: e.message }); }
+    });
+
+    // ── the same money, twice ──────────────────────────────────────────────
+    // "check qb for any duplicate record/amount entry per customer and
+    // supplier." Read-only; it names them, it never deletes one — that is the
+    // void button, one document at a time, with its impact shown.
+    app.get('/api/qb/duplicates', async (req, res) => {
+        const year = /^\d{4}$/.test(String(req.query.year || '')) ? Number(req.query.year) : new Date().getFullYear();
+        try { res.json(await books.duplicates(envOf(), { year })); }
+        catch (e) { res.status(502).json({ error: `QuickBooks: ${e.message}` }); }
+    });
+
     app.post('/api/qb/undo', async (req, res) => {
         if (locked(req, res)) return;
         const { journalId, reason, dryRun } = req.body || {};

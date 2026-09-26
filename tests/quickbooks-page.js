@@ -225,6 +225,30 @@ const ck = (name, ok, extra) => { if (ok) { pass++; console.log('  PASS ', name)
     ck('...and the live run needs the word ENTER typed', /toUpperCase\(\) !== 'ENTER'/.test(pageSrc4));
     ck('connecting QuickBooks is on the page', /data-connect=/.test(pageSrc4) && /api\/qb\/connect-url/.test(pageSrc4));
 
+    // ── void, delete and merge (2026-09-26) ────────────────────────────────
+    // Apsara: "Merging two parties, voiding or deleting anything should be
+    // there on qb. Ensure the impact before changing any section."
+    ck('locked: voiding is refused', (await post('/api/qb/void', { type: 'invoice', id: '1' })).code === 400);
+    ck('locked: adopting a merge is refused', (await post('/api/qb/merged', { deadId: '1', survivorId: '2' })).code === 400);
+    const badType = await get('/api/qb/impact?type=receipt&id=1');
+    ck('an impact for a type QuickBooks has no operation for is refused, and lists the real ones',
+       badType.code === 400 && /invoice/.test(badType.body.error), badType.body);
+    const mergeNeeds = await post('/api/qb/merged', { kind: 'vendor', unlock: true });
+    ck('adopting a merge needs both ids', mergeNeeds.code === 400 && /old id/.test(mergeNeeds.body.error), mergeNeeds.body);
+    const risky = fs.readFileSync(require('path').join(__dirname, '..', 'helpers', 'quickbooks', 'riskyOps.js'), 'utf8');
+    ck('a change is refused if the document moved since she looked at it', /changed in QuickBooks since you looked/.test(risky));
+    ck('...and a bill is never offered a void, because QuickBooks cannot void one',
+       /bill: \{ table: 'Bill', void: false/.test(risky));
+    ck('...and the impact is taken again inside the change, not trusted from the caller', /const now = await impact\(type, id/.test(risky));
+    ck('merging says plainly that QuickBooks will not do it over the API', /canDoItHere: false/.test(risky) && /error 2010/.test(risky));
+    const pageSrc5 = fs.readFileSync(require('path').join(__dirname, '..', 'dashboard', 'quickbooks.html'), 'utf8');
+    ck('the page makes her type the document number to void one', /mustType: d\.doc/.test(pageSrc5));
+    ck('...and shows every warning before she can', /im\.warnings\.map/.test(pageSrc5));
+    ck('duplicates are on the page', /data-dupes=/.test(pageSrc5) && /api\/qb\/duplicates/.test(pageSrc5));
+    ck('...with the weak signal marked as weak', /Weak signal/.test(pageSrc5));
+    const dupes = await get('/api/qb/duplicates');
+    ck('with QuickBooks unreachable, the duplicate check says so', dupes.code === 502 && /QuickBooks/.test(dupes.body.error || ''), dupes.body);
+
     // ── the cutover, from the page (2026-09-26) ────────────────────────────
     // Apsara: "I want nightly report to run everyday to upload all the bills
     // and invoices." The cutover decides what "all" is, so it has to be

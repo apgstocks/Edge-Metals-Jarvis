@@ -204,7 +204,8 @@ async function loadStatus() {
       `<span class="chip act" data-todo="1" title="Everything QuickBooks is waiting on">what needs you</span>`,
       `<span class="chip act" data-books="1" title="The year, what is owed both ways, and the bank balances — read live from QuickBooks">the books</span>`,
       `<span class="chip act" data-find="1" title="Find a document in QuickBooks by number, container or amount">find</span>`,
-      `<span class="chip act" data-missing="1" title="Your live sheet against your live books — what neither side has">sheet vs books</span>`,
+      `<span class="chip act" data-dupes="1" title="The same money entered twice, per supplier and customer, and payments never applied">duplicates</span>`,
+      `<span class="chip act" data-missing="1" title=""Your live sheet against your live books — what neither side has">sheet vs books</span>`,
       `<span class="chip act" data-older="1" title="Enter a reviewed list of rows from before the cutover">enter an older list</span>`,
       `<span class="chip ${s.connected ? '' : 'warn'} act" data-connect="1" title="${s.connected ? 'Reconnect QuickBooks — needed when the token is refused' : 'QuickBooks is not connected — nothing can be read or written until it is'}">${s.connected ? 'reconnect' : 'connect QuickBooks'}</span>`,
       ...s.roles.map(r => r.qbId
@@ -460,6 +461,135 @@ async function findDoc() {
   } catch (e) { $('dbody').innerHTML = `<div class="empty">${e.message}</div>`; }
 }
 
+/* ── A CHANGE THAT CANNOT BE TAKEN BACK ──────────────────────────────
+   Apsara, 2026-09-26: "Ensure the impact before changing any section."
+   So every one of these opens with what it will do — not a yes/no box —
+   and the confirmation is the document's own number, typed. You cannot
+   agree to this one by reflex, and you cannot agree to the wrong one. */
+function confirmImpact({ title, sub, bodyHtml, mustType, okLabel }) {
+  return new Promise((resolve) => {
+    const back = pkShell(title, sub, `<div class="pk-list" style="max-height:52vh">${bodyHtml}</div>
+      <div class="pk-foot">
+        <label for="pkYes">${mustType ? `Type <b>${pkEsc(mustType)}</b> to go ahead` : 'Go ahead?'}</label>
+        ${mustType ? '<input id="pkYes" autocomplete="off" placeholder="' + pkEsc(mustType) + '">' : ''}
+        <div class="pk-btns"><button type="button" class="pk-cancel">Leave it alone</button>
+          <button type="button" class="pk-go">${pkEsc(okLabel || 'Go ahead')}</button></div>
+      </div>`);
+    const finish = pkOpen(back, resolve);
+    back.querySelector('.pk-cancel').addEventListener('click', () => finish(false));
+    back.querySelector('.pk-go').addEventListener('click', () => {
+      if (!mustType) return finish(true);
+      const typed = back.querySelector('#pkYes').value.trim();
+      if (typed !== mustType) { toast(`Type ${mustType} exactly, or leave it alone.`, 'bad'); return; }
+      finish(true);
+    });
+    const inp = back.querySelector('#pkYes'); if (inp) inp.focus();
+  });
+}
+
+/* Void or delete one document in her books. */
+async function voidDoc(type, id) {
+  if (!STATE.unlocked) return toast('Open the padlock first.', 'bad');
+  try {
+    const im = await api(`/api/qb/impact?type=${encodeURIComponent(type)}&id=${encodeURIComponent(id)}`);
+    const d = im.doc;
+    const op = im.canVoid ? 'void' : 'delete';
+    const warn = im.warnings.length
+      ? im.warnings.map(w => `<div class="pk-none" style="color:var(--amber-500)">${w}</div>`).join('')
+      : '<div class="pk-none">Nothing else in your books depends on this one.</div>';
+    const lines = (d.lines || []).map(l => `<div class="pk-opt"><span>${l.what || '—'}</span><span class="pk-id">${money(l.amount)}</span></div>`).join('');
+    const ok = await confirmImpact({
+      title: `${op === 'void' ? 'Void' : 'Delete'} ${type} ${d.doc || '#' + im.id}`,
+      sub: `${d.party || ''} · ${d.date} · ${money(d.total)}${d.balance !== null ? ` · ${money(d.balance)} still open` : ''}`,
+      bodyHtml: `${warn}${lines}<div class="pk-none">${op === 'void'
+        ? 'Voiding keeps the document and sets it to zero. QuickBooks stamps it Voided. It cannot be un-voided.'
+        : 'Deleting removes the document from your books entirely. It cannot be undone.'}</div>`,
+      mustType: d.doc || `#${im.id}`,
+      okLabel: op === 'void' ? 'Void it' : 'Delete it',
+    });
+    if (!ok) return toast('Left alone. Nothing changed.', 'good');
+    const reason = await askText('Why?', 'It stays in the journal beside this, for whoever asks later.', 'Reason', '', op === 'void' ? 'Void it' : 'Delete it');
+    if (!reason) return toast('Left alone — no reason given.', 'good');
+    const out = await api('/api/qb/void', { type, id, op, reason, stamp: im.stamp, confirm: d.doc || `#${im.id}` });
+    toast(`${out.status} ${type} ${d.doc || '#' + im.id}${out.unlinked ? ' — Jarvis link dropped' : ''}`, 'good');
+    if (STATE.sel) openParty(STATE.sel.kind, STATE.sel.name); else loadBooks();
+  } catch (e) { toast(e.message, 'bad'); }
+}
+
+/* Two records for one company. QuickBooks will not merge over its API —
+   proved against her own books — so Jarvis shows what the merge moves,
+   gives the steps, and repairs its own mappings afterwards. */
+async function mergeParty() {
+  if (!STATE.unlocked) return toast('Open the padlock first.', 'bad');
+  const d = STATE.detail;
+  if (!d.mapping.qbId || d.mapping.qbId === 'SKIP') return toast('Match this one to QuickBooks first.', 'bad');
+  try {
+    const c = await api(`/api/qb/candidates?kind=${d.kind}&name=${encodeURIComponent(d.name)}`);
+    const typed = await askText('Merge two QuickBooks records', `"${d.mapping.qbName}" (#${d.mapping.qbId}) is the one Jarvis uses. Which other record is the same company?`,
+      'Type part of the other name', '', 'Search');
+    if (!typed) return;
+    const pool = (c.all || []).filter(x => x.name.toLowerCase().includes(typed.toLowerCase()) && String(x.Id) !== String(d.mapping.qbId));
+    const other = await pickRow('Which one is the duplicate?', 'The one you pick is the record that will DISAPPEAR.',
+      pool.slice(0, 25).map(x => ({ label: x.name, id: String(x.Id) })), `Nothing else matches "${typed}".`);
+    if (!other) return;
+    const im = await api(`/api/qb/merge-impact?kind=${d.kind}&loser=${other.id}&winner=${d.mapping.qbId}`);
+    const body = `${im.warnings.map(w => `<div class="pk-none" style="color:var(--amber-500)">${w}</div>`).join('')}
+      <div class="pk-opt"><span>Disappears: ${im.loser.name}</span><span class="pk-id">#${im.loser.id} · ${im.loser.documents || 0} docs · ${money(im.loser.balance)}</span></div>
+      <div class="pk-opt"><span>Survives: ${im.winner.name}</span><span class="pk-id">#${im.winner.id} · ${im.winner.documents || 0} docs · ${money(im.winner.balance)}</span></div>
+      <div class="pk-none">Balance afterwards: ${money(im.moves.afterwards)}</div>
+      <div class="pk-none" style="color:var(--amber-500)">${im.why}</div>
+      ${im.howTo.map((h, i) => `<div class="pk-opt"><span>${i + 1}. ${h}</span></div>`).join('')}`;
+    const done = await confirmImpact({ title: 'Merge in QuickBooks', sub: 'Jarvis cannot do this one for you — these are the steps, and then it repairs its own side.',
+      bodyHtml: body, mustType: null, okLabel: 'I merged them' });
+    if (!done) return;
+    const out = await api('/api/qb/merged', { kind: d.kind, deadId: im.loser.id, survivorId: im.winner.id, reason: `merged ${im.loser.name} into ${im.winner.name}` });
+    toast(out.note, out.status === 'adopted' ? 'good' : 'bad');
+    if (out.status === 'adopted') { await loadParties(); await openParty(d.kind, d.name); }
+  } catch (e) { toast(e.message, 'bad'); }
+}
+
+/* ── THE SAME MONEY, TWICE ───────────────────────────────────────────
+   "check qb for any duplicate record/amount entry per customer and
+   supplier." Named, never deleted automatically — each one goes out
+   through the void button, with its impact shown first. */
+async function loadDuplicates() {
+  STATE.sel = null; renderList();
+  $('dname').textContent = 'Duplicates and loose money';
+  $('dmap').textContent = 'Reading every document this year…';
+  $('dstats').innerHTML = ''; $('dtabs').innerHTML = '';
+  $('dbody').innerHTML = '<div class="empty">Checking each supplier and customer…</div>';
+  try {
+    const d = await api('/api/qb/duplicates');
+    $('dmap').textContent = `${d.year} · ${d.suppliers.documents} bills and ${d.customers.documents} invoices checked`;
+    $('dstats').innerHTML = [
+      ['Same number', money(d.suppliers.sameNumber.cost + d.customers.sameNumber.cost), 'warn'],
+      ['Same amount, same day', money(d.suppliers.sameDay.cost + d.customers.sameDay.cost), 'warn'],
+      ['Paid but not applied', money(d.unapplied.total), 'warn'],
+    ].map(([k, v, cls]) => `<div class="stat"><div class="k">${k}</div><div class="v ${cls}">${v}</div></div>`).join('');
+    const block = (label, g, weak) => g.groups.length ? `<h3 class="sec">${label} <span class="count">${g.groups.length}</span> — ${money(g.cost)} in extra copies</h3>
+      ${weak ? '<div class="empty" style="padding:4px 8px">Weak signal: the same weight at the same price ships again and again. Read these before touching them.</div>' : ''}
+      <table><tbody>${g.groups.slice(0, 30).map(x => `<tr class="click" data-open="${x.rows[0].kind === 'bill' ? 'vendor' : 'customer'}|${encodeURIComponent(x.party)}">
+        <td><b>${x.party}</b>${x.doc ? ` <span class="mono" style="color:var(--text-muted)">${x.doc}</span>` : ''}</td>
+        <td class="mono" style="color:var(--text-faint)">${x.rows.map(r => `${r.date} ${qbLink(r.id, r.kind)} ${money(r.total)}${r.balance ? ' open' : ' paid'}`).join('  ·  ')}</td>
+        <td class="num" style="color:var(--amber-500)">${money(x.extra)}</td></tr>`).join('')}</tbody></table>` : '';
+    const loose = d.unapplied.total ? `<h3 class="sec">Paid, but not applied to any bill <span class="count">${d.unapplied.payments}</span> — ${money(d.unapplied.total)}</h3>
+      <div class="empty" style="padding:4px 8px">The money left the bank and QuickBooks knows it, but nobody matched it to a bill. Every one of these leaves bills looking unpaid that are not.</div>
+      <table><tbody>${d.unapplied.byParty.map(p => `<tr class="click" data-open="vendor|${encodeURIComponent(p.party)}"><td>${p.party}</td><td class="num" style="color:var(--amber-500)">${money(p.amount)}</td></tr>`).join('')}</tbody></table>` : '';
+    $('dbody').innerHTML = loose
+      + block('Suppliers — same document number twice', d.suppliers.sameNumber)
+      + block('Customers — same document number twice', d.customers.sameNumber)
+      + block('Suppliers — same amount on the same day', d.suppliers.sameDay)
+      + block('Customers — same amount on the same day', d.customers.sameDay)
+      + block('Suppliers — same amount, different days', d.suppliers.sameAmount, true)
+      + block('Customers — same amount, different days', d.customers.sameAmount, true)
+      || '<div class="empty">Nothing looks doubled this year.</div>';
+    $('dbody').querySelectorAll('tr.click').forEach(tr => tr.onclick = () => {
+      const [kind, name] = tr.dataset.open.split('|');
+      if (name) openParty(kind, decodeURIComponent(name));
+    });
+  } catch (e) { $('dbody').innerHTML = `<div class="empty">${e.message}</div>`; }
+}
+
 /* ── what is waiting on her ──────────────────────────────────────────
    The first thing the page shows, because "what do I still have to do"
    used to need a script and a read of its output. Unmatched names by
@@ -609,7 +739,7 @@ function renderDetail() {
   const d = STATE.detail, t = d.totals;
   const mp = d.mapping || {};
   $('dmap').innerHTML = (mp.qbId && mp.qbId !== 'SKIP')
-    ? `in QuickBooks as <b>${mp.qbName || ''}</b> <span class="mono" style="color:var(--text-faint)">#${mp.qbId}</span>${mp.status === 'exact' ? ' <span style="color:var(--text-faint)">(same name — matched automatically)</span>' : ''} · <button class="act" id="remap">change</button>`
+    ? `in QuickBooks as <b>${mp.qbName || ''}</b> <span class="mono" style="color:var(--text-faint)">#${mp.qbId}</span>${mp.status === 'exact' ? ' <span style="color:var(--text-faint)">(same name — matched automatically)</span>' : ''} · <button class="act" id="remap">change</button> · <button class="act" id="mergeit" title="Two QuickBooks records for one company">merge a duplicate</button>`
     : mp.status === 'skip'
       ? `not a QuickBooks party — ${mp.note || 'you marked it as not one'} · <button class="act" id="remap">change</button>`
       : mp.status === 'new'
@@ -630,6 +760,7 @@ function renderDetail() {
   $('dtabs').innerHTML = tabs.map(([id, label, n]) => `<button data-tab="${id}" class="${STATE.tab === id ? 'sel' : ''}">${label}<span class="count">${n}</span></button>`).join('');
   [...$('dtabs').querySelectorAll('button')].forEach(b => b.onclick = () => { STATE.tab = b.dataset.tab; renderDetail(); });
   const rm = $('remap'); if (rm) rm.onclick = remap;
+  const mg = $('mergeit'); if (mg) mg.onclick = mergeParty;
   renderTable();
 }
 function qbLink(id, kind) {
@@ -653,11 +784,13 @@ async function renderQbTab() {
       ['Paid', money(t.paid)], t.credited ? ['Credits', money(t.credited)] : null,
       ['Still open', money(t.open)],
     ].filter(Boolean).map(([k, v]) => `<div class="stat"><div class="k">${k}</div><div class="v ${k === 'Still open' && t.open ? 'warn' : ''}">${v}</div></div>`).join('')}</div>`;
-    $('dbody').innerHTML = head + `<table><thead><tr><th>Date</th><th>What</th><th>No.</th><th>Container</th><th class="num">Amount</th><th class="num">Open</th></tr></thead><tbody>${
+    $('dbody').innerHTML = head + `<table><thead><tr><th>Date</th><th>What</th><th>No.</th><th>Container</th><th class="num">Amount</th><th class="num">Open</th><th></th></tr></thead><tbody>${
       q.docs.map(x => `<tr><td class="mono">${x.date}</td><td><span class="pill ${x.kind === 'payment' ? 'in' : x.kind === 'credit' ? 'out' : ''}">${x.kind}</span> ${qbLink(x.id, x.kind)}</td>
         <td class="mono">${x.doc || '—'}</td><td class="mono" style="color:var(--text-muted)">${x.containers.join(' ') || '—'}</td>
         <td class="num">${money(x.total)}</td>
-        <td class="num" style="color:${x.balance ? 'var(--amber-500)' : 'var(--text-faint)'}">${x.balance === null ? '' : money(x.balance)}</td></tr>`).join('')}</tbody></table>`;
+        <td class="num" style="color:${x.balance ? 'var(--amber-500)' : 'var(--text-faint)'}">${x.balance === null ? '' : money(x.balance)}</td>
+        <td><button class="act" data-void="${x.kind === 'expense' ? 'purchase' : x.kind === 'receipt' ? 'salesreceipt' : x.kind === 'credit' ? (d.kind === 'vendor' ? 'vendorcredit' : 'creditmemo') : x.kind === 'payment' ? (d.kind === 'vendor' ? 'billpayment' : 'payment') : x.kind}:${x.id}" ${STATE.unlocked ? '' : 'disabled'}>void</button></td></tr>`).join('')}</tbody></table>`;
+    $('dbody').querySelectorAll('[data-void]').forEach(b => b.onclick = () => { const [t, i] = b.dataset.void.split(':'); voidDoc(t, i); });
   } catch (e) { $('dbody').innerHTML = `<div class="empty">${e.message}</div>`; }
 }
 
@@ -862,6 +995,7 @@ $('chips').addEventListener('click', (e) => {
   else if (chip.dataset.books) loadBooks();
   else if (chip.dataset.find) findDoc();
   else if (chip.dataset.missing) loadMissing();
+  else if (chip.dataset.dupes) loadDuplicates();
   else if (chip.dataset.older) pushOlderList();
   else if (chip.dataset.connect) connectQb();
 });

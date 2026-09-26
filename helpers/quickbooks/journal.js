@@ -41,7 +41,11 @@ const auth = require('./auth');
 const JOURNAL_FILE = () => process.env.QB_JOURNAL_FILE || path.join(DATA_DIR, 'qb-journal.jsonl');
 const LINKS_FILE = () => process.env.QB_LINKS_FILE || path.join(DATA_DIR, 'qb-links.json');
 const QB_TYPE = { bill: 'Bill', invoice: 'Invoice', billpayment: 'BillPayment', payment: 'Payment', creditmemo: 'CreditMemo', prepayment: 'Purchase' };
-const ACTIONS = ['created', 'linked-existing', 'asked', 'blocked', 'undone', 'unlinked', 'discrepancy'];
+// 'voided' and 'deleted' join the list 2026-09-26, when she asked for both to
+// be possible from the page: "voiding or deleting anything should be there on
+// qb. Ensure the impact before changing any section." Neither can be taken
+// back, so the entry carries the impact she was shown before she said yes.
+const ACTIONS = ['created', 'linked-existing', 'asked', 'blocked', 'undone', 'unlinked', 'discrepancy', 'voided', 'deleted'];
 const round2 = (n) => Math.round(Number(n) * 100) / 100;
 
 // A crash can leave a half-written last line. Appending straight after it
