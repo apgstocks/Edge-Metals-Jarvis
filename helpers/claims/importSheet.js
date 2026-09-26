@@ -161,15 +161,51 @@ function statusFor(noteText, claim_amount) {
     return 'unverified';
 }
 
+// ── WHERE THE CURRENT CLAIMS START ──────────────────────────────────────────
+// Apsara, 2026-09-26: "I need to have the rows which comes after 2026 claims ..
+// there is a row with that."
+//
+// The tab keeps its history above a one-cell marker row reading "2026 Claims",
+// and everything above that line is a closed year she does not want imported. So
+// the walk begins AFTER the last such marker. Last, not first: when "2027 Claims"
+// is added next January the current section moves with it and nothing here needs
+// editing.
+//
+// No marker at all means start from the top, which is what every other sheet
+// shape does — the rule only fires when the sheet itself declares a boundary.
+const YEAR_MARKER = /^\s*(20\d{2})\s*claims?\s*$/i;
+
+function findStart(table) {
+    let at = 0, label = null;
+    table.forEach((cells, i) => {
+        const filled = (cells || []).map(txt).filter(Boolean);
+        if (filled.length === 1 && YEAR_MARKER.test(filled[0])) { at = i + 1; label = filled[0]; }
+    });
+    return { startRow: at, marker: label };
+}
+
 // ── THE WALK ────────────────────────────────────────────────────────────────
-function walk(table) {
+function walk(table, opts = {}) {
     let map = null, blockNo = 0, blockLabel = '', section = '', sectionRow = -99;
     const found = [], skipped = [], manual = [], blocks = [];
+
+    const auto = findStart(table);
+    // An explicit fromRow wins, so she can point it somewhere else without an edit.
+    const startRow = Number.isFinite(opts.fromRow) && opts.fromRow > 0 ? opts.fromRow - 1 : auto.startRow;
+    const start = { startRow, marker: opts.fromRow ? null : auto.marker, ignoredAbove: 0, from: opts.fromRow ? 'asked for' : (auto.marker ? 'the marker row' : 'the top of the sheet') };
 
     table.forEach((cells, i) => {
         const rowNo = i + 1;
         const filled = cells.filter((c) => txt(c)).length;
         if (!filled) return;
+        if (i < startRow) {
+            // The marker row is the boundary, not something above it — counting it
+            // made the sentence "N rows above it ignored" untrue by one.
+            const isMarker = start.marker && i === startRow - 1;
+            if (!isMarker) start.ignoredAbove += 1;
+            skipped.push({ rowNo, why: isMarker ? `the "${start.marker}" marker` : `above ${start.marker ? `"${start.marker}"` : 'the start row'}` });
+            return;
+        }
 
         if (isHeaderRow(cells)) {
             map = mapColumns(cells);
@@ -232,7 +268,7 @@ function walk(table) {
             note: noteText, unitWhy, date: txt(g('date')),
         });
     });
-    return { found, skipped, manual, blocks };
+    return { found, skipped, manual, blocks, start };
 }
 
 // ── GROUPING ────────────────────────────────────────────────────────────────
@@ -340,7 +376,7 @@ async function classifyAll(toWrite, { useAi = true, onProgress } = {}) {
 // ── PLAN — reads and decides, writes NOTHING ─────────────────────────────────
 async function plan(input = {}) {
     const { rows, source, tab, tabs } = await readSheet(input);
-    const { found, skipped, manual, blocks } = walk(rows);
+    const { found, skipped, manual, blocks, start } = walk(rows, { fromRow: input.fromRow });
     const { toWrite, merged, already } = group(found);
     const vocabulary = await classifyAll(toWrite, { useAi: input.useAi !== false, onProgress: input.onProgress });
 
@@ -354,6 +390,7 @@ async function plan(input = {}) {
     return {
         source, tab, tabs,
         sheetRows: rows.length,
+        start,
         blocks,
         claims: toWrite,
         merged: merged.map((r) => ({ rows: r.fromRows, invoice_no: r.invoice_no, container_no: r.container_no, claim_amount: r.claim_amount, our_claim: r.our_claim })),

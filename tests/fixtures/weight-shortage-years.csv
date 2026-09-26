@@ -1,0 +1,9 @@
+,,Cont No.,Gross,Received ,Shortage in MT,Shortage in LBS,Selling Price,Amount,,Buyer,Buying Price,Claim Amount
+Varo Trading,25VT03,CCLU7611723,21.192,21.01,0.182,401,1875,341.25,Paid,Gomez,0.775,310.775
+Soline,25ST17,HMMU6624344,18.947,18.83,0.117,258,2010,235.17,,Mike,0.74,190.92
+Rad Metal,25RMT25,SMCU1042085,21.518,19.84,1.678,3699,1970,3305.66,paid 7/18/2025,Freddy,0.78,2885.22
+,,,,,,,,,,,,
+2026 Claims,,,,,,,,,,,,
+Supplier,date,Inv Nbr,Container number,Inv Weight,Inv Price,Total Amt,Loading photos,Customer Name,Claimed Weight,Difference,Claim amount,Our Claim
+Gomez,04/21/2026,26JY03,HMMU6316059,20.239,2140,43311.46,Photos,Joey/Daekwang,19.94,0.299,639.86,580
+Calderon,18/05/2026,26MT06,HMMU4268943,23.569,2490,58686.81,Photos,Pan metal/A-Tech,23.44,0.129,321.21,298.62

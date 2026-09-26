@@ -5,6 +5,7 @@
 //   node scripts/claims-import-sheet.js --really         # writes
 //   node scripts/claims-import-sheet.js --reclassify      # re-ask about claims already in
 //   node scripts/claims-import-sheet.js --no-ai           # ask nothing; all import unclassified
+//   node scripts/claims-import-sheet.js --from-row=51      # ignore the marker, start here
 //   node scripts/claims-import-sheet.js --csv=./ws.csv     # from a file, no network
 //   node scripts/claims-import-sheet.js --xlsx=./book.xlsx # from a workbook
 //
@@ -23,6 +24,7 @@ const arg = (k) => { const a = process.argv.find((x) => x.startsWith(`--${k}=`))
 const REALLY = process.argv.includes('--really');
 const NO_AI = process.argv.includes('--no-ai');
 const RECLASSIFY = process.argv.includes('--reclassify');
+const FROM_ROW = Number(arg('from-row')) || undefined;
 const CSV_PATH = arg('csv');
 const XLSX_PATH = arg('xlsx');
 
@@ -30,7 +32,7 @@ const money = (n) => (n === null || n === undefined ? '—' : '$' + Number(n).to
 const pad = (s, n) => String(s == null ? '' : s).padEnd(n);
 
 async function main() {
-    const input = { useAi: !NO_AI };
+    const input = { useAi: !NO_AI, fromRow: FROM_ROW };
     if (CSV_PATH) { input.csv = fs.readFileSync(CSV_PATH, 'utf8'); input.name = CSV_PATH; }
     else if (XLSX_PATH) { input.xlsxBase64 = fs.readFileSync(XLSX_PATH).toString('base64'); input.name = XLSX_PATH; }
 
@@ -41,6 +43,8 @@ async function main() {
     process.stdout.write('\n\n');
 
     console.log(`Read ${p.source} — ${p.sheetRows} sheet rows`);
+    if (p.start.marker) console.log(`  Starting at row ${p.start.startRow + 1}, just after "${p.start.marker}" — ${p.start.ignoredAbove} row(s) above it ignored`);
+    else if (p.start.startRow) console.log(`  Starting at row ${p.start.startRow + 1} as asked — ${p.start.ignoredAbove} row(s) above it ignored`);
     if (p.tabs) console.log(`  sheets in the file: ${p.tabs.join(', ')}`);
     for (const b of p.blocks) {
         console.log(`  row ${String(b.row).padStart(3)}  ${b.label}`);

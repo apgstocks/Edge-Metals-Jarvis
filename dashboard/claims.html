@@ -677,6 +677,11 @@ function openImport(){
     out.innerHTML =
       '<div class="imp-sec"><h4>' + esc(p.source) + ' — ' + p.sheetRows + ' rows</h4>' +
         (p.tabs ? '<div class="hint" style="margin-top:0">sheets in the file: ' + esc(p.tabs.join(', ')) + '</div>' : '') +
+        (p.start && p.start.marker
+          ? '<div class="hint" style="margin-top:0">Starting at row <b>' + (p.start.startRow + 1) + '</b>, just after “' + esc(p.start.marker) + '” — the ' + p.start.ignoredAbove + ' row(s) above it are an earlier year and are not imported.</div>'
+          : (p.start && p.start.startRow
+            ? '<div class="hint" style="margin-top:0">Starting at row ' + (p.start.startRow + 1) + ' as asked — ' + p.start.ignoredAbove + ' row(s) above it ignored.</div>'
+            : '<div class="hint" style="margin-top:0">No year marker row on this sheet, so every row is read. Add a one-cell row reading e.g. “2027 Claims” to close off a year.</div>')) +
       '</div>' +
       '<div class="imp-sum">' +
         '<div><span class="k">To import</span><span class="v">' + p.count + '</span></div>' +

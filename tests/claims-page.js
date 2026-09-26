@@ -359,6 +359,8 @@ console.log('\n=== G — the import controls are on the page ===');
     ck('and the difference between claimed and exposure is explained',
         /withdrawn and rejected claims are not exposure/.test(HTML));
     ck('a not-classified row is shown as such in the preview table', /not classified<\/span>/.test(HTML));
+    ck('the page says which row it started at and why', /just after/.test(HTML) && /an earlier year and are not imported/.test(HTML));
+    ck('and tells her how to close off a year when there is no marker', /Add a one-cell row reading/.test(HTML));
 }
 
 console.log(`\n  ${pass} passed, ${fail} failed`);

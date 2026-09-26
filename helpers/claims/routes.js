@@ -193,6 +193,7 @@ function mount(app, cfg) {
     const forPage = (p, id) => ({
         planId: id,
         source: p.source, tab: p.tab, tabs: p.tabs, sheetRows: p.sheetRows,
+        start: p.start,
         blocks: p.blocks,
         count: p.claims.length,
         totals: p.totals, byStatus: p.byStatus,
@@ -220,6 +221,7 @@ function mount(app, cfg) {
                 xlsxBase64: b.xlsxBase64 || undefined,
                 name: b.name || undefined,
                 tab: b.tab || undefined,
+                fromRow: Number(b.fromRow) || undefined,
                 useAi: b.useAi !== false,
             });
             sweepPlans();

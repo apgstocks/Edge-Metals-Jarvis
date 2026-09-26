@@ -129,6 +129,56 @@ console.log('\n=== F — nobody is notified, and re-running changes nothing ==='
     ck('and says so', /already in the register/.test(out2));
 }
 
+console.log('\n=== E2 — the sheet says where the current year starts ===');
+{
+    // Apsara, 2026-09-26: "I need to have the rows which comes after 2026
+    // claims .. there is a row with that." The tab keeps closed years above a
+    // one-cell marker row, and those are not hers to import any more.
+    const YEARS = path.join(__dirname, 'fixtures', 'weight-shortage-years.csv');
+    const runY = (args, dir) => execFileSync(process.execPath,
+        [path.join(ROOT, 'scripts', 'claims-import-sheet.js'), `--csv=${YEARS}`, '--no-ai', ...args],
+        { cwd: ROOT, env: { ...process.env, DATA_DIR: dir, JARVIS_TEST: '1' }, encoding: 'utf8' });
+
+    const dir = fs.mkdtempSync(path.join(TMP, 'years-'));
+    const out = runY(['--really'], dir);
+    const rows = JSON.parse(fs.readFileSync(path.join(dir, 'claims.json'), 'utf8'));
+    ck('only the rows after the marker are imported', rows.length === 2, rows.map((r) => r.invoice_no));
+    ck('the 2025 block above it is left alone',
+        !rows.some((r) => ['25VT03', '25ST17', '25RMT25'].includes(r.invoice_no)), rows.map((r) => r.invoice_no));
+    ck('and the 2026 rows are all there', rows.map((r) => r.invoice_no).sort().join(',') === '26JY03,26MT06');
+    ck('it says where it started and how much it skipped',
+        /Starting at row 7, just after "2026 Claims" — 4 row\(s\) above it ignored/.test(out), out.split('\n').slice(0, 6));
+    ck('the money is only the current year\'s', /claimed \$961\.07/.test(out), out.split('\n').filter((l) => /TOTALS/.test(l)));
+
+    // The old behaviour is still reachable, for a restored sheet.
+    const dir2 = fs.mkdtempSync(path.join(TMP, 'years2-'));
+    runY(['--from-row=1', '--really'], dir2);
+    const all = JSON.parse(fs.readFileSync(path.join(dir2, 'claims.json'), 'utf8'));
+    ck('--from-row=1 reads the whole sheet again', all.length === 5, all.length);
+
+    // Next January someone adds "2027 Claims"; the boundary must move with it and
+    // nothing in the code should need editing.
+    const dir3 = fs.mkdtempSync(path.join(TMP, 'years3-'));
+    const two = fs.readFileSync(YEARS, 'utf8') + '\n,,,,,,,,,,,,\n2027 Claims,,,,,,,,,,,,\n' +
+        'Supplier,date,Inv Nbr,Container number,Inv Weight,Inv Price,Total Amt,Loading photos,Customer Name,Claimed Weight,Difference,Claim amount,Our Claim\n' +
+        'Gomez,01/09/2027,27AA01,TEMU1234567,20.0,2000,40000,Photos,Someone,19.5,0.5,1000,900\n';
+    const f3 = path.join(dir3, 'two-years.csv');
+    fs.writeFileSync(f3, two);
+    const out3 = execFileSync(process.execPath,
+        [path.join(ROOT, 'scripts', 'claims-import-sheet.js'), `--csv=${f3}`, '--no-ai', '--really'],
+        { cwd: ROOT, env: { ...process.env, DATA_DIR: dir3, JARVIS_TEST: '1' }, encoding: 'utf8' });
+    const r3 = JSON.parse(fs.readFileSync(path.join(dir3, 'claims.json'), 'utf8'));
+    ck('with two markers it starts after the LAST one', r3.length === 1 && r3[0].invoice_no === '27AA01', r3.map((r) => r.invoice_no));
+    ck('and names that marker', /just after "2027 Claims"/.test(out3));
+
+    // A sheet with no marker must behave exactly as before.
+    const dir4 = fs.mkdtempSync(path.join(TMP, 'years4-'));
+    const out4 = run(['--really'], dir4);
+    ck('a sheet with no marker still reads from the top',
+        JSON.parse(fs.readFileSync(path.join(dir4, 'claims.json'), 'utf8')).length >= 9
+        && !/Starting at row/.test(out4));
+}
+
 console.log('\n=== G — with no model, nothing is guessed ===');
 {
     // The importer is run with --no-ai throughout this suite, so no test here
