@@ -281,8 +281,25 @@ const ck = (name, ok, extra) => { if (ok) { pass++; console.log('  PASS ', name)
     ck('the matcher reads an uploaded export the same way it reads a file',
        read.lines.length === 2 && read.lines[0].direction === 'out' && read.lines[1].direction === 'in', read.lines);
     ck('...money out and money in are never mixed up', read.lines[0].amount === 60000 && read.lines[1].amount === 45120.5);
+    // The Banking screen exports only what is on screen, so 661 lines arrive
+    // as several files. Apsara: "Right now it shows only one page for
+    // download." They go in together, and an overlap is counted once.
+    const hdr = 'Date,Description,Payee,Spent,Received\n';
+    const two = await post('/api/qb/bank-review', {
+        csvs: [hdr + '09/15/2026,WIRE OUT,Inesh Cores Chapin,60000,\n09/16/2026,ZELLE IN,Rad Metals,,45120.50\n',
+               hdr + '09/16/2026,ZELLE IN,Rad Metals,,45120.50\n09/17/2026,WIRE OUT,Midland,72000,\n'] });
+    ck('several partial exports are read as one list',
+       two.code === 200 && two.body.counted === 3 && two.body.files === 2, two.body && { counted: two.body.counted, files: two.body.files, err: two.body.error });
+    ck('...and a line in two overlapping exports is counted once',
+       two.body.duplicates === 1, two.body && two.body.duplicates);
+    const mixed = await post('/api/qb/bank-review', { csvs: ['not a bank export at all', hdr + '09/15/2026,WIRE OUT,Midland,100,\n'] });
+    ck('a file it cannot read does not lose the ones it can',
+       mixed.code === 200 && mixed.body.counted === 1 && Array.isArray(mixed.body.unreadable), mixed.body && { c: mixed.body.counted, u: mixed.body.unreadable });
+    ck('...and with QuickBooks unreachable the lines are still read, marked unchecked',
+       !!mixed.body.quickbooks && mixed.body.rows.every((x) => x.how === 'unchecked'), mixed.body && mixed.body.rows[0]);
     const pageSrc7 = fs.readFileSync(require('path').join(__dirname, '..', 'dashboard', 'quickbooks.html'), 'utf8');
     ck('the bank screen is on the page', /data-bank=/.test(pageSrc7) && /api\/qb\/bank-review/.test(pageSrc7));
+    ck('...and takes several files at once', /input\.multiple = !!many/.test(pageSrc7));
     ck('...and says plainly that it writes nothing to QuickBooks', /Nothing here touches QuickBooks/.test(pageSrc7));
 
     // ── the cutover, from the page (2026-09-26) ────────────────────────────
