@@ -202,6 +202,8 @@ async function loadStatus() {
       `<span class="chip act" data-run="1" title="Run that same sweep now">run now</span>`,
       `<span class="chip">${s.counts.journal} journal · ${s.counts.standing} standing</span>`,
       `<span class="chip act" data-todo="1" title="Everything QuickBooks is waiting on">what needs you</span>`,
+      `<span class="chip act" data-books="1" title="The year, what is owed both ways, and the bank balances — read live from QuickBooks">the books</span>`,
+      `<span class="chip act" data-find="1" title="Find a document in QuickBooks by number, container or amount">find</span>`,
       ...s.roles.map(r => r.qbId
         ? `<span class="chip act" data-role="${r.role}" title="${r.why || ''} — now ${r.qbName || ('#' + r.qbId)}. Click to change.">${r.role} ✓</span>`
         : `<span class="chip warn act" data-role="${r.role}" title="${r.why || ''} — nothing answers this yet, so any write needing it is blocked. Click to set it.">${r.role}: unmapped</span>`),
@@ -265,6 +267,83 @@ function pickRow(title, sub, rows, emptyText) {
     back.querySelectorAll('.pk-opt').forEach((b) => b.addEventListener('click', () => finish(rows[+b.dataset.i])));
     const first = back.querySelector('.pk-opt'); if (first) first.focus();
   });
+}
+
+/* ── HER BOOKS, ON THIS PAGE ─────────────────────────────────────────
+   The year as QuickBooks itself reports it, what is still owed both ways
+   with its age, and the bank balances. Read live and read-only. Where two
+   figures disagree — the open bills add up to more than the A/P account,
+   say — both are shown: that disagreement is information, and hiding it
+   behind one number is how a page starts lying politely. */
+async function loadBooks() {
+  STATE.sel = null; renderList();
+  $('dname').textContent = 'The books';
+  $('dmap').textContent = 'Read live from QuickBooks a moment ago. Nothing here changes anything.';
+  $('dstats').innerHTML = ''; $('dtabs').innerHTML = '';
+  $('dbody').innerHTML = '<div class="empty">Reading your books…</div>';
+  try {
+    const b = await api('/api/qb/books');
+    STATE.books = b;
+    const pl = b.pl || {};
+    $('dmap').textContent = `${b.company || 'Your books'} · ${b.year} · read ${new Date(b.at).toLocaleTimeString()}`;
+    $('dstats').innerHTML = [
+      ['Income', money(pl.income), ''], ['Cost of goods', money(pl.cogs), ''],
+      ['Gross profit', money(pl.grossProfit), 'good'], ['Expenses', money(pl.expenses), ''],
+      ['Net income', money(pl.netIncome), (pl.netIncome || 0) >= 0 ? 'good' : 'warn'],
+    ].map(([k, v, cls]) => `<div class="stat"><div class="k">${k}</div><div class="v ${cls}">${v}</div></div>`).join('');
+    const agingRow = (a) => `<span class="mono" style="color:var(--text-faint)">not due yet ${money(a.current)} · ≤30d ${money(a.d30)} · ≤60d ${money(a.d60)} · older ${money(a.d90)}</span>`;
+    const side = (label, x, who) => x ? `<h3 class="sec">${label} <span class="count">${x.count}</span> — ${money(x.total)}</h3>
+      <div style="padding:0 8px 6px">${agingRow(x.aging)}</div>
+      <table><thead><tr><th>Date</th><th>${who}</th><th>No.</th><th class="num">Total</th><th class="num">Still open</th><th class="num">Age</th></tr></thead><tbody>${
+        x.rows.slice(0, 15).map(r => `<tr class="click" data-open="${x === (STATE.books.ar) ? 'customer' : 'vendor'}|${encodeURIComponent(r.party)}">
+          <td class="mono">${r.date}</td><td>${r.party || '—'}</td><td class="mono">${qbLink(r.id, r.kind)} ${r.doc || ''}</td>
+          <td class="num">${money(r.total)}</td><td class="num" style="color:var(--amber-500)">${money(r.balance)}</td>
+          <td class="num" style="color:var(--text-faint)">${r.days}d</td></tr>`).join('')}</tbody></table>` : '';
+    const banks = `<h3 class="sec">Accounts</h3><table><tbody>${(b.banks || []).concat(b.receivable || [], b.payable || [])
+      .map(a => `<tr><td>${a.name}</td><td class="mono" style="color:var(--text-faint)">${a.type}</td><td class="num">${money(a.balance)}</td></tr>`).join('')}</tbody></table>`;
+    // The two ways of counting what she owes rarely agree, and the gap is
+    // usually bills paid outside a bill payment. Say it rather than pick one.
+    const apAcct = (b.payable || []).reduce((s, a) => s + Math.abs(a.balance), 0);
+    const gap = (b.ap && Math.abs(b.ap.total - apAcct) > 1)
+      ? `<div class="empty" style="padding:10px 8px">Open bills add up to ${money(b.ap.total)}, the Accounts Payable accounts show ${money(apAcct)}. The difference is bills settled some other way than a bill payment — worth a look when you reconcile.</div>` : '';
+    const broken = b.unreadable ? `<div class="empty" style="color:var(--amber-500);padding:10px 8px">${b.unreadable} — what is missing below is missing because of that, not because it is zero.</div>` : '';
+    $('dbody').innerHTML = broken + side('Owed to you', b.ar, 'Customer') + side('You owe', b.ap, 'Supplier') + gap + banks;
+    $('dbody').querySelectorAll('tr.click').forEach(tr => tr.onclick = () => {
+      const [kind, name] = tr.dataset.open.split('|');
+      if (name) openParty(kind, decodeURIComponent(name));
+    });
+  } catch (e) { $('dbody').innerHTML = `<div class="empty">${e.message}</div>`; }
+}
+
+/* Find a document the way she would in QuickBooks: a ticket number, an
+   invoice number, a container, or an amount. */
+async function findDoc() {
+  const q = await askText('Find it in QuickBooks', 'An invoice or ticket number, a container, or an exact amount.',
+    'What are you looking for?', '', 'Find');
+  if (!q) return;
+  STATE.sel = null; renderList();
+  $('dname').textContent = `Find "${q}"`;
+  $('dmap').textContent = 'Searching your books…';
+  $('dstats').innerHTML = ''; $('dtabs').innerHTML = '';
+  $('dbody').innerHTML = '<div class="empty">Searching…</div>';
+  try {
+    const r = await api(`/api/qb/find?q=${encodeURIComponent(q)}`);
+    $('dmap').textContent = r.couldNotLook
+      ? `Could not search your books: ${r.couldNotLook[0]}`
+      : r.hits.length
+        ? `${r.hits.length} document${r.hits.length > 1 ? 's' : ''}, matched by ${r.how}.`
+        : `Nothing in QuickBooks carries "${q}"${r.scannedFrom ? ` — containers were searched back to ${r.scannedFrom} only` : ''}.`;
+    $('dbody').innerHTML = r.hits.length ? `<table><thead><tr><th>Date</th><th>What</th><th>No.</th><th>Who</th><th>Container</th><th class="num">Amount</th><th class="num">Open</th></tr></thead><tbody>${
+      r.hits.map(x => `<tr><td class="mono">${x.date}</td><td><span class="pill">${x.kind}</span> ${qbLink(x.id, x.kind)}</td>
+        <td class="mono">${x.doc || '—'}</td><td class="click" data-open="${x.kind === 'bill' || x.kind === 'expense' ? 'vendor' : 'customer'}|${encodeURIComponent(x.party)}"><u>${x.party || '—'}</u></td>
+        <td class="mono" style="color:var(--text-muted)">${x.containers.join(' ') || '—'}</td>
+        <td class="num">${money(x.total)}</td><td class="num" style="color:${x.balance ? 'var(--amber-500)' : 'var(--text-faint)'}">${x.balance === null ? '' : money(x.balance)}</td></tr>`).join('')}</tbody></table>`
+      : `<div class="empty">${r.couldNotLook ? 'Nothing was searched — QuickBooks did not answer, so this is not a "no".' : 'Nothing found. Try the other number on the document, or the exact amount.'}</div>`;
+    $('dbody').querySelectorAll('td.click').forEach(td => td.onclick = () => {
+      const [kind, name] = td.dataset.open.split('|');
+      if (name) openParty(kind, decodeURIComponent(name));
+    });
+  } catch (e) { $('dbody').innerHTML = `<div class="empty">${e.message}</div>`; }
 }
 
 /* ── what is waiting on her ──────────────────────────────────────────
@@ -432,8 +511,8 @@ function renderDetail() {
     ['Not yet', `${t.notInQuickBooks}`, t.notInQuickBooks ? 'warn' : 'good'],
   ].filter(Boolean).map(([k, v, cls]) => `<div class="stat"><div class="k">${k}</div><div class="v ${cls}">${v}</div></div>`).join('');
   const tabs = d.kind === 'vendor'
-    ? [['bills', 'Bills', d.bills.length], ['advances', 'Wires & advances', d.advances.length], ['journal', 'What Jarvis did', d.journal.length]]
-    : [['invoices', 'Invoices', d.invoices.length], ['journal', 'What Jarvis did', d.journal.length]];
+    ? [['bills', 'Bills', d.bills.length], ['advances', 'Wires & advances', d.advances.length], ['qb', 'In QuickBooks', ''], ['journal', 'What Jarvis did', d.journal.length]]
+    : [['invoices', 'Invoices', d.invoices.length], ['qb', 'In QuickBooks', ''], ['journal', 'What Jarvis did', d.journal.length]];
   $('dtabs').innerHTML = tabs.map(([id, label, n]) => `<button data-tab="${id}" class="${STATE.tab === id ? 'sel' : ''}">${label}<span class="count">${n}</span></button>`).join('');
   [...$('dtabs').querySelectorAll('button')].forEach(b => b.onclick = () => { STATE.tab = b.dataset.tab; renderDetail(); });
   const rm = $('remap'); if (rm) rm.onclick = remap;
@@ -443,8 +522,34 @@ function qbLink(id, kind) {
   const t = kind === 'invoice' ? 'invoice' : kind === 'bill' ? 'bill' : 'expense';
   return `<a class="mono" target="_blank" rel="noopener" href="https://qbo.intuit.com/app/${t}?txnId=${id}">#${id}</a>`;
 }
+/* ── WHAT QUICKBOOKS ITSELF HOLDS ────────────────────────────────────
+   Apsara, 2026-09-26: "jarvis should be supreme of qb." Every other tab
+   is the Jarvis side. This one is her books, read live — the documents,
+   what is still open, and what has been paid — so the answer to "is it
+   in there, and for how much" never needs the other app. */
+async function renderQbTab() {
+  const d = STATE.detail;
+  $('dbody').innerHTML = '<div class="empty">Reading your books…</div>';
+  try {
+    const q = await api(`/api/qb/party-docs?kind=${d.kind}&name=${encodeURIComponent(d.name)}`);
+    if (!q.mapped) { $('dbody').innerHTML = `<div class="empty">${q.note}</div>`; return; }
+    const t = q.totals;
+    const head = `<div class="stats" style="padding:10px 8px 4px">${[
+      ['Documents', t.documents], [d.kind === 'vendor' ? 'Billed' : 'Invoiced', money(d.kind === 'vendor' ? t.billed : t.invoiced)],
+      ['Paid', money(t.paid)], t.credited ? ['Credits', money(t.credited)] : null,
+      ['Still open', money(t.open)],
+    ].filter(Boolean).map(([k, v]) => `<div class="stat"><div class="k">${k}</div><div class="v ${k === 'Still open' && t.open ? 'warn' : ''}">${v}</div></div>`).join('')}</div>`;
+    $('dbody').innerHTML = head + `<table><thead><tr><th>Date</th><th>What</th><th>No.</th><th>Container</th><th class="num">Amount</th><th class="num">Open</th></tr></thead><tbody>${
+      q.docs.map(x => `<tr><td class="mono">${x.date}</td><td><span class="pill ${x.kind === 'payment' ? 'in' : x.kind === 'credit' ? 'out' : ''}">${x.kind}</span> ${qbLink(x.id, x.kind)}</td>
+        <td class="mono">${x.doc || '—'}</td><td class="mono" style="color:var(--text-muted)">${x.containers.join(' ') || '—'}</td>
+        <td class="num">${money(x.total)}</td>
+        <td class="num" style="color:${x.balance ? 'var(--amber-500)' : 'var(--text-faint)'}">${x.balance === null ? '' : money(x.balance)}</td></tr>`).join('')}</tbody></table>`;
+  } catch (e) { $('dbody').innerHTML = `<div class="empty">${e.message}</div>`; }
+}
+
 function renderTable() {
   const d = STATE.detail;
+  if (STATE.tab === 'qb') return renderQbTab();
   const rows = STATE.tab === 'bills' ? d.bills : STATE.tab === 'invoices' ? d.invoices : STATE.tab === 'advances' ? d.advances : d.journal;
   if (!rows.length) { $('dbody').innerHTML = '<div class="empty">Nothing here yet.</div>'; return; }
   if (STATE.tab === 'journal') {
@@ -640,6 +745,8 @@ $('chips').addEventListener('click', (e) => {
   else if (chip.dataset.run) runNow();
   else if (chip.dataset.role) setRole(chip.dataset.role);
   else if (chip.dataset.todo) { STATE.sel = null; renderList(); loadTodo(); }
+  else if (chip.dataset.books) loadBooks();
+  else if (chip.dataset.find) findDoc();
 });
 $('asksend').onclick = ask;
 $('ask').addEventListener('keydown', (e) => { if (e.key === 'Enter') ask(); });

@@ -18,6 +18,7 @@
 const path = require('path');
 
 const mapping = require('./mapping');
+const books = require('./books');
 const { normalizeName } = require('../nameMatch');
 const journal = require('./journal');
 const push = require('./push');
@@ -500,6 +501,46 @@ function mount(app, cfg) {
         } catch (e) { res.status(400).json({ error: e.message }); }
     });
 
+    // ── HER BOOKS, WITHOUT OPENING QUICKBOOKS (2026-09-26) ─────────────────
+    // Apsara: "user should able to feel content with jarvis quickbook without
+    // needing to open qb … jarvis should be supreme of qb." Until now the page
+    // showed the Jarvis side and one balance per party; everything else meant
+    // going to QuickBooks. These three are that side, read live and read-only.
+    app.get('/api/qb/books', async (req, res) => {
+        try {
+            const year = /^\d{4}$/.test(String(req.query.year || '')) ? Number(req.query.year) : undefined;
+            const out = await books.overview(envOf(), { year });
+            // Partial books are worth showing; books that are partly missing
+            // must SAY so, or a zero reads as a fact.
+            const why = out.error || (out.pl && out.pl.error) || null;
+            res.json({ ...out, unreadable: why ? `QuickBooks: ${why}` : null });
+        } catch (e) { res.status(502).json({ error: `QuickBooks: ${e.message}` }); }
+    });
+
+    // Every document QuickBooks holds for one party — the tab that means she
+    // does not have to go and look.
+    app.get('/api/qb/party-docs', async (req, res) => {
+        const kind = req.query.kind === 'customer' ? 'customer' : 'vendor';
+        const name = String(req.query.name || '').trim();
+        if (!name) return res.status(400).json({ error: 'which party?' });
+        const m = readMapping(kind, name);
+        if (!m.qbId || m.qbId === 'SKIP') return res.json({ mapped: false, mapping: m, docs: [], totals: null,
+            note: 'no QuickBooks match yet — match it and this fills in' });
+        try {
+            const out = await books.partyDocs(kind, m.qbId, envOf());
+            res.json({ mapped: true, qbId: m.qbId, qbName: m.qbName, ...out });
+        } catch (e) { res.status(502).json({ error: `QuickBooks: ${e.message}` }); }
+    });
+
+    // A ticket number, an invoice number, a container or an amount — whatever
+    // she has in her hand when the question comes up.
+    app.get('/api/qb/find', async (req, res) => {
+        const q = String(req.query.q || '').trim();
+        if (!q) return res.status(400).json({ error: 'search for what?' });
+        try { res.json(await books.find(q, envOf())); }
+        catch (e) { res.status(502).json({ error: `QuickBooks: ${e.message}` }); }
+    });
+
     app.post('/api/qb/undo', async (req, res) => {
         if (locked(req, res)) return;
         const { journalId, reason, dryRun } = req.body || {};
@@ -528,8 +569,26 @@ function mount(app, cfg) {
                 context = { party: name, kind, mappedTo: m.qbName || null, qbBalance, totals: d.totals,
                     bills: d.bills.slice(-25), invoices: d.invoices.slice(-25), advances: d.advances.slice(-25),
                     recentJarvisWrites: d.journal.slice(0, 10).map((e) => ({ at: e.at, action: e.action, kind: e.kind, qbId: e.qb && e.qb.id, reason: e.reason })) };
+                // ── AND WHAT QUICKBOOKS ITSELF SAYS (2026-09-26) ───────────
+                // Apsara: "jarvis should be supreme of qb". Answering only
+                // from Jarvis's ledgers meant the chat could not see a
+                // payment her accountant entered by hand — so it is handed
+                // her books too, for the same party, read live.
+                if (m.qbId && m.qbId !== 'SKIP') {
+                    try {
+                        const q = await books.partyDocs(kind === 'customer' ? 'customer' : 'vendor', m.qbId, env);
+                        context.inQuickBooks = { totals: q.totals, documents: q.docs.slice(0, 25).map((x) => ({ kind: x.kind, doc: x.doc, date: x.date, total: x.total, open: x.balance, containers: x.containers })) };
+                    } catch (e) { context.inQuickBooks = { error: e.message }; }
+                }
             } else {
                 context = { overview: (await partyRows({ env, withQb: false })).slice(0, 40) };
+                try {
+                    const b = await books.overview(env);
+                    context.books = { year: b.year, profitAndLoss: b.pl,
+                        owedToYou: b.ar && { count: b.ar.count, total: b.ar.total, aging: b.ar.aging },
+                        youOwe: b.ap && { count: b.ap.count, total: b.ap.total, aging: b.ap.aging },
+                        banks: (b.banks || []).map((a) => ({ name: a.name, balance: a.balance })) };
+                } catch (e) { context.books = { error: e.message }; }
             }
         } catch (e) { context = { error: e.message }; }
 
@@ -540,6 +599,11 @@ function mount(app, cfg) {
             'Money: always give the figure and what it is (an advance, an open bill, a Jarvis row not yet in QuickBooks).',
             'Be short: three sentences at most, plain words, no jargon, no bullet lists.',
             'You cannot change anything — if an action is needed, name the button on the page.',
+            'DATA.inQuickBooks and DATA.books are her REAL books, read live. Where they disagree with the',
+            'Jarvis side, say both figures and which is which — the disagreement is usually the answer she',
+            'is after (a payment her accountant entered by hand, a consolidated invoice, a bill paid another way).',
+            'She should never have to open QuickBooks to check what you just said, so quote the document',
+            'number and the date when you name one.',
             'For a SUPPLIER, never read out bills and advances as two separate piles: totals.owedToSupplier is',
             'the one number that matters — positive means she owes him that much, negative means he is holding',
             'that much of her money. Say which way round it is, in those words.',
@@ -563,8 +627,9 @@ function mount(app, cfg) {
             const who = t && t.owedToSupplier !== null && t.owedToSupplier !== undefined
                 ? (t.owedToSupplier > 0 ? `you owe ${name} $${t.owedToSupplier}` : `${name} is holding $${r2(-t.owedToSupplier)} of your money`)
                 : null;
+            const qbT = context.inQuickBooks && context.inQuickBooks.totals;
             const plain = t
-                ? `${name}: ${who ? who + '. ' : ''}$${t.bills} of bills against $${t.advances} advanced${t.unpricedBills ? `, and ${t.unpricedBills} container${t.unpricedBills > 1 ? 's have' : ' has'} no price yet` : ''}. ${t.inQuickBooks} records are in QuickBooks, ${t.notInQuickBooks} are not.`
+                ? `${name}: ${who ? who + '. ' : ''}$${t.bills} of bills against $${t.advances} advanced${t.unpricedBills ? `, and ${t.unpricedBills} container${t.unpricedBills > 1 ? 's have' : ' has'} no price yet` : ''}. ${t.inQuickBooks} records are in QuickBooks, ${t.notInQuickBooks} are not.${qbT ? ` Your books hold ${qbT.documents} documents for this party, ${qbT.open ? `$${qbT.open} still open` : 'nothing open'}.` : ''}`
                 : 'I can see the ledgers but the language model is not answering right now.';
             res.json({ answer: plain, followUp: name ? `Do you want the bills for ${name}, or the wires?` : 'Which supplier or customer shall I open?', degraded: true });
         }

@@ -176,6 +176,26 @@ const ck = (name, ok, extra) => { if (ok) { pass++; console.log('  PASS ', name)
     ck('the worklist is what the page opens on', /loadTodo\(\);/.test(pageSrc2) && /api\/qb\/todo/.test(pageSrc2));
     ck('a role chip can be clicked to set it', /data-role=/.test(pageSrc2) && /api\/qb\/role/.test(pageSrc2));
 
+    // ── her books, without opening QuickBooks (2026-09-26) ─────────────────
+    const unmappedDocs = await get('/api/qb/party-docs?kind=vendor&name=Nobody%20At%20All');
+    ck('the QuickBooks tab of an unmatched party says so instead of erroring',
+       unmappedDocs.code === 200 && unmappedDocs.body.mapped === false && /match it/.test(unmappedDocs.body.note || ''), unmappedDocs.body);
+    ck('party-docs needs a party', (await get('/api/qb/party-docs?kind=vendor')).code === 400);
+    ck('find needs something to find', (await get('/api/qb/find?q=')).code === 400);
+    // QuickBooks is unreachable in this test: the page must say that plainly
+    // rather than show an empty set of books as if they were the truth.
+    const booksOut = await get('/api/qb/books');
+    ck('with QuickBooks unreachable, the books say so — a zero is not a fact',
+       booksOut.code === 200 && /QuickBooks/.test(booksOut.body.unreadable || ''), booksOut.body.unreadable);
+    const findOut = await get('/api/qb/find?q=25AQ02');
+    ck('...and a search that could not look says that, not "nothing found"',
+       findOut.code === 200 && !findOut.body.hits.length && Array.isArray(findOut.body.couldNotLook)
+       && findOut.body.couldNotLook.length > 0, findOut.body);
+    const pageSrc3 = fs.readFileSync(require('path').join(__dirname, '..', 'dashboard', 'quickbooks.html'), 'utf8');
+    ck('the party has an In QuickBooks tab', /In QuickBooks/.test(pageSrc3) && /api\/qb\/party-docs/.test(pageSrc3));
+    ck('the books and a document search are on the page', /data-books=/.test(pageSrc3) && /data-find=/.test(pageSrc3));
+    ck('...and where two figures disagree the page shows both', /Open bills add up to/.test(pageSrc3));
+
     // ── the cutover, from the page (2026-09-26) ────────────────────────────
     // Apsara: "I want nightly report to run everyday to upload all the bills
     // and invoices." The cutover decides what "all" is, so it has to be
