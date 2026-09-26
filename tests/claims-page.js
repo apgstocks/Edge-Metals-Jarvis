@@ -140,8 +140,15 @@ console.log('\n=== E — the page is organised per CONTAINER, not per row ===');
         const r = containers();
         return r.length === 1 && r[0].key === 'LOCAL-1';
     })());
-    ck('the kind chip has a class per kind, so each reads differently',
-        /\.k-weight_shortage\{/.test(HTML) && /\.k-grade_downgrade\{/.test(HTML) && /\.k-recovery_shortfall\{/.test(HTML) && /\.k-foreign_material\{/.test(HTML));
+    // The whole point of the rewrite: there is no list of kinds anywhere, so
+    // there cannot be a CSS class per kind either.
+    ck('there is NO css class per kind', (HTML.match(/\.k-[a-z_]+\s*\{/g) || []).length === 0, (HTML.match(/\.k-[a-z_]+\s*\{/g) || []));
+    ck('a kind is coloured from a hue the server derives from its slug', /--kh/.test(HTML) && /hsl\(var\(--kh/.test(HTML));
+    ck('no kind name is hardcoded in the page',
+        (HTML.match(/weight_shortage|grade_downgrade|recovery_shortfall|foreign_material/g) || []).length === 0);
+    ck('a claim with no kind says so rather than showing a default', /not classified yet/.test(HTML));
+    ck('she can rename a kind and fold two together', /claim-kinds\/rename/.test(HTML) && /claim-kinds\/merge/.test(HTML));
+    ck('and name a kind the model has never met', /name a new kind/.test(HTML));
     ck('a container can be given another claim from its own page', /\+ another claim/.test(HTML));
     ck('the detail pane explains why one container has several claims', /three different arguments with the customer/.test(HTML));
 }
@@ -169,9 +176,10 @@ console.log('\n=== D — the routes the page posts to ===');
         && typeof listed.body.stats.net === 'number', listed.body && Object.keys(listed.body));
     ck('the closed set of statuses comes with it, so the page cannot invent one',
         Array.isArray(listed.body.statuses) && listed.body.statuses.includes('unverified'));
-    ck('the kinds and their labels travel with the rows, so the page cannot spell one differently',
-        listed.body.typeLabels && listed.body.typeLabels.grade_downgrade === 'grade downgrade'
-        && listed.body.types.includes('recovery_shortfall'), listed.body.types);
+    ck('the live vocabulary travels with the rows, so the page cannot spell a kind differently',
+        Array.isArray(listed.body.kinds), listed.body.kinds);
+    ck('and the server sends no fixed list of kinds at all',
+        !('types' in listed.body) && !('typeLabels' in listed.body), Object.keys(listed.body));
     ck('the header count is CONTAINERS, not rows', typeof listed.body.stats.containers === 'number');
 
     const made = await post('/api/claims', { customer: 'Metal Bridge', container_no: 'TRHU6472030', invoice_no: '26MB02' });
@@ -195,6 +203,107 @@ console.log('\n=== D — the routes the page posts to ===');
     ck('an unknown claim is a clean 404', gone.code === 404);
 
     server.close();
+}
+
+console.log('\n=== F — uploading a sheet, from the page ===');
+{
+    const app = express();
+    app.use(express.json({ limit: '40mb' }));
+    app.use((req, res, next) => { req.role = 'admin'; next(); });
+    routes.mount(app, { ROOT: path.join(__dirname, '..') });
+    const server = app.listen(0);
+    const port = server.address().port;
+    const post = async (p2, body) => {
+        const r = await fetch(`http://127.0.0.1:${port}${p2}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+        return { code: r.status, body: await r.json().catch(() => null) };
+    };
+
+    // The shape that actually catches people out: the legacy block, where "Amount"
+    // is the customer's claim and "Claim Amount" is Edge's recovery, plus a second
+    // block with the normal columns.
+    const CSV = [
+        ',,Cont No.,Gross,Received ,Shortage in MT,Shortage in LBS,Selling Price,Amount,,Buyer,Buying Price,Claim Amount',
+        'Varo Trading,25VT03,CCLU7611723,21.192,21.01,0.182,401,1875,341.25,Paid,Gomez,0.775,310.775',
+        'Soline,25ST36,SEGU6045439,21.464,21.1,0.364,802,1990,724.36,,INES,0.88,706.18',
+        ',,,,,,,,,,,,',
+        'Supplier,date,Inv Nbr,Container number,Inv Weight,Inv Price,Total Amt,Loading photos,Customer Name,Claimed Weight,Difference,Claim amount,Our Claim',
+        'Gomez,04/21/2026,26JY03,HMMU6316059,20.239,2140,43311.46,Photos,Joey/Daekwang,19.94,0.299,639.86,580',
+    ].join('\n');
+
+    // Deltas, not absolutes: sections B, D and E of this file have already
+    // written to this store, and CLAUDE.md is explicit that a test which breaks
+    // when an unrelated fixture moves is a test that gets deleted.
+    const tasksFile = path.join(TMP, 'tasks.json');
+    const tasksBefore = fs.existsSync(tasksFile) ? JSON.parse(fs.readFileSync(tasksFile, 'utf8')).length : 0;
+    const claimsBefore = claims.list().length;
+
+    const pv = await post('/api/claims/import/preview', { csv: CSV, name: 'Weight Shortage.csv', useAi: false });
+    ck('a sheet can be handed straight to the page', pv.code === 200 && pv.body.count === 3, pv.body && (pv.body.error || pv.body.count));
+    ck('it says which sheet it read', /Weight Shortage\.csv/.test(pv.body.source), pv.body.source);
+    ck('and reports where each figure came from, per block', pv.body.blocks.length === 2 && pv.body.blocks[0].legacy === true, pv.body.blocks);
+    ck('the legacy block is read the right way round — "Amount" is the customer\'s claim',
+        pv.body.blocks[0].claimFrom === 'Amount' && pv.body.blocks[0].recoveryFrom === 'Claim Amount', pv.body.blocks[0]);
+    ck('and "Buyer" is understood to be the supplier', pv.body.blocks[0].supplierFrom === 'Buyer');
+    ck('the totals are computed before anything is written',
+        Math.abs(pv.body.totals.claimed - 1705.47) < 0.01 && Math.abs(pv.body.totals.net - (1705.47 - 1596.955)) < 0.01, pv.body.totals);
+
+    // The plan is the server's. A browser must not be able to hand back figures.
+    ck('the page is given an id, not the rows', !!pv.body.planId && !('alreadyRows' in pv.body) && !Array.isArray(pv.body.claims), Object.keys(pv.body));
+    ck('every claim it would create is shown for checking', Array.isArray(pv.body.preview) && pv.body.preview.length === 3);
+    ck('nothing was written by the preview', claims.list().length === claimsBefore, { before: claimsBefore, now: claims.list().length });
+
+    const stale = await post('/api/claims/import/commit', { planId: 'plan_nonsense' });
+    ck('an unknown plan id is refused', stale.code >= 400 && /expired/.test(stale.body.error), stale.body);
+
+    const done = await post('/api/claims/import/commit', { planId: pv.body.planId });
+    ck('confirming imports exactly what was previewed', done.code === 200 && done.body.created === 3, done.body);
+    ck('and the register now holds them', claims.list().length === claimsBefore + 3, { before: claimsBefore, now: claims.list().length });
+    ck('the customer claim landed as the claim, not the recovery',
+        (claims.list().find((c) => c.invoice_no === '25VT03') || {}).claim_amount === 341.25);
+    ck('and the recovery landed as the recovery',
+        (claims.list().find((c) => c.invoice_no === '25VT03') || {}).our_claim === 310.775);
+    // The point of the whole two-step design: importing history must not nag her
+    // once per historical claim.
+    const tasksAfter = fs.existsSync(tasksFile) ? JSON.parse(fs.readFileSync(tasksFile, 'utf8')).length : 0;
+    ck('importing three claims raised no to-do at all', tasksAfter === tasksBefore, { before: tasksBefore, after: tasksAfter });
+
+    const twice = await post('/api/claims/import/commit', { planId: pv.body.planId });
+    ck('the same plan cannot be committed twice', twice.code >= 400, twice.body);
+
+    const again = await post('/api/claims/import/preview', { csv: CSV, useAi: false });
+    ck('reading the same sheet again finds them already in', again.body.count === 0 && again.body.already === 3, { c: again.body.count, a: again.body.already });
+
+    // What she would actually drag in.
+    const ExcelJS = require('exceljs');
+    const wb = new ExcelJS.Workbook();
+    const other = wb.addWorksheet('Order Details');
+    other.addRow(['nothing to do with claims']);
+    const ws = wb.addWorksheet('Weight Shortage 2025');
+    for (const line of CSV.split('\n')) ws.addRow(line.split(','));
+    const buf = await wb.xlsx.writeBuffer();
+    const xl = await post('/api/claims/import/preview', { xlsxBase64: Buffer.from(buf).toString('base64'), name: 'Shipments 2026.xlsx', useAi: false });
+    ck('a real .xlsx workbook can be uploaded', xl.code === 200, xl.body && xl.body.error);
+    ck('and the right sheet is found without being told which', /Weight Shortage 2025/.test(xl.body.source), xl.body.source);
+    ck('the other sheets are listed so a wrong pick is visible', (xl.body.tabs || []).includes('Order Details'), xl.body.tabs);
+    ck('it reads the same claims out of the workbook as out of the csv', xl.body.already === 3, { a: xl.body.already });
+
+    server.close();
+}
+
+console.log('\n=== G — the import controls are on the page ===');
+{
+    ck('there is an Import button', /id="impBtn"/.test(HTML) && /Import sheet/.test(HTML));
+    ck('a file can be dropped or chosen', /type="file"/.test(HTML) && /ondrop/.test(HTML) && /accept=".xlsx/.test(HTML));
+    ck('or the live tab read instead', /Read the live tab instead/.test(HTML));
+    ck('classifying can be turned off', /let the model classify them/.test(HTML));
+    ck('it posts to preview and then to commit', /claims\/import\/preview/.test(HTML) && /claims\/import\/commit/.test(HTML));
+    ck('commit sends only the plan id', /commit', \{ planId: p\.planId \}/.test(HTML));
+    ck('the confirm button says how many', /Import these ' \+ p\.count \+ ' claims/.test(HTML));
+    ck('it promises no to-do and no WhatsApp, where she can see it', /No to-do, no WhatsApp/.test(HTML));
+    ck('the reversed legacy columns are called out on screen', /reverse of every other block/.test(HTML));
+    ck('and the difference between claimed and exposure is explained',
+        /withdrawn and rejected claims are not exposure/.test(HTML));
+    ck('a not-classified row is shown as such in the preview table', /not classified<\/span>/.test(HTML));
 }
 
 console.log(`\n  ${pass} passed, ${fail} failed`);

@@ -18,6 +18,7 @@
 const path = require('path');
 
 const mapping = require('./mapping');
+const books = require('./books');
 const { normalizeName } = require('../nameMatch');
 const journal = require('./journal');
 const push = require('./push');
@@ -477,12 +478,31 @@ function mount(app, cfg) {
         const env = envOf();
         const client = require('./client');
         try {
-            const all = await mapping.fetchParties(kind, client, { env });
+            // ── ONE NAME LIST FOR EVERYBODY (2026-09-26) ───────────────────
+            // Apsara hit: "Duplicate Name Exists Error … Id=505" creating a
+            // supplier. #505 was a CUSTOMER, "nur metals". QuickBooks keeps
+            // ONE display-name list across customers, vendors and employees,
+            // so a company she both buys from and sells to cannot carry the
+            // same name twice. Checking only the same kind found nothing and
+            // walked into Intuit's refusal — so both lists are checked, and
+            // the answer explains it instead of repeating a 400.
+            const other = kind === 'vendor' ? 'customer' : 'vendor';
+            const [all, others] = await Promise.all([
+                mapping.fetchParties(kind, client, { env }),
+                mapping.fetchParties(other, client, { env }).catch(() => []),
+            ]);
             const twin = all.filter((x) => normalizeName(x.DisplayName) === normalizeName(wanted));
             if (twin.length) {
                 mapping.confirm(kind, jName, twin[0].Id, twin[0].DisplayName, who(req), 'already in QuickBooks — linked, not created');
                 return res.json({ status: 'already-there', qbId: String(twin[0].Id), qbName: twin[0].DisplayName,
                     note: `"${twin[0].DisplayName}" (#${twin[0].Id}) is already there — linked to it instead of making a second one.` });
+            }
+            const clash = others.find((x) => normalizeName(x.DisplayName) === normalizeName(wanted));
+            if (clash) {
+                const suggestion = `${wanted} (${kind === 'vendor' ? 'supplier' : 'customer'})`;
+                return res.status(409).json({ status: 'name-taken', takenBy: other, qbId: String(clash.Id), qbName: clash.DisplayName,
+                    suggestion,
+                    note: `QuickBooks keeps one name list for customers, vendors and employees, and "${clash.DisplayName}" is already a ${other} (#${clash.Id}). A company you both buy from and sell to needs two records with different names — try "${suggestion}".` });
             }
             const table = kind === 'vendor' ? 'Vendor' : 'Customer';
             const body = { DisplayName: wanted };
@@ -497,7 +517,188 @@ function mount(app, cfg) {
             if (jName !== wanted) mapping.confirm(kind, wanted, made.Id, made.DisplayName, who(req), 'same party under the name QuickBooks uses');
             res.json({ status: 'created', qbId: String(made.Id), qbName: made.DisplayName,
                 note: `Created ${kind} #${made.Id} "${made.DisplayName}" and matched "${jName}" to it.` });
+        } catch (e) {
+            // Intuit's own duplicate refusal, in case the name belongs to an
+            // employee or something else the two lists above do not cover.
+            const m = /Duplicate Name Exists.*?Id=(\d+)/is.exec(e.message || '');
+            if (m) {
+                return res.status(409).json({ status: 'name-taken', qbId: m[1],
+                    suggestion: `${wanted} (${kind === 'vendor' ? 'supplier' : 'customer'})`,
+                    note: `QuickBooks already has record #${m[1]} under that name — it keeps one name list for customers, vendors and employees. Give this one a different display name, for example "${wanted} (${kind === 'vendor' ? 'supplier' : 'customer'})".` });
+            }
+            res.status(400).json({ error: e.message });
+        }
+    });
+
+    // ── HER BOOKS, WITHOUT OPENING QUICKBOOKS (2026-09-26) ─────────────────
+    // Apsara: "user should able to feel content with jarvis quickbook without
+    // needing to open qb … jarvis should be supreme of qb." Until now the page
+    // showed the Jarvis side and one balance per party; everything else meant
+    // going to QuickBooks. These three are that side, read live and read-only.
+    app.get('/api/qb/books', async (req, res) => {
+        try {
+            const year = /^\d{4}$/.test(String(req.query.year || '')) ? Number(req.query.year) : undefined;
+            const out = await books.overview(envOf(), { year });
+            // Partial books are worth showing; books that are partly missing
+            // must SAY so, or a zero reads as a fact.
+            const why = out.error || (out.pl && out.pl.error) || null;
+            res.json({ ...out, unreadable: why ? `QuickBooks: ${why}` : null });
+        } catch (e) { res.status(502).json({ error: `QuickBooks: ${e.message}` }); }
+    });
+
+    // Every document QuickBooks holds for one party — the tab that means she
+    // does not have to go and look.
+    app.get('/api/qb/party-docs', async (req, res) => {
+        const kind = req.query.kind === 'customer' ? 'customer' : 'vendor';
+        const name = String(req.query.name || '').trim();
+        if (!name) return res.status(400).json({ error: 'which party?' });
+        const m = readMapping(kind, name);
+        if (!m.qbId || m.qbId === 'SKIP') return res.json({ mapped: false, mapping: m, docs: [], totals: null,
+            note: 'no QuickBooks match yet — match it and this fills in' });
+        try {
+            const out = await books.partyDocs(kind, m.qbId, envOf());
+            res.json({ mapped: true, qbId: m.qbId, qbName: m.qbName, ...out });
+        } catch (e) { res.status(502).json({ error: `QuickBooks: ${e.message}` }); }
+    });
+
+    // A ticket number, an invoice number, a container or an amount — whatever
+    // she has in her hand when the question comes up.
+    app.get('/api/qb/find', async (req, res) => {
+        const q = String(req.query.q || '').trim();
+        if (!q) return res.status(400).json({ error: 'search for what?' });
+        try { res.json(await books.find(q, envOf())); }
+        catch (e) { res.status(502).json({ error: `QuickBooks: ${e.message}` }); }
+    });
+
+    // ── her live sheet against her live books ──────────────────────────────
+    // scripts/qb-vs-sheet.js, on the page. Read-only: it says what is missing
+    // and never enters it, because most of what is missing sits before the
+    // cutover in the period her accountant owns.
+    let missingCache = { at: 0, key: '', data: null };
+    app.get('/api/qb/missing', async (req, res) => {
+        const since = /^\d{4}-\d{2}-\d{2}$/.test(String(req.query.since || '')) ? req.query.since : '2026-01-01';
+        const env = envOf();
+        const key = `${env}|${since}`;
+        // Both sides of this are slow (the whole workbook, then the year's
+        // documents), and it is the kind of screen she reopens.
+        if (missingCache.data && missingCache.key === key && Date.now() - missingCache.at < 10 * 60 * 1000) {
+            return res.json({ ...missingCache.data, cached: true });
+        }
+        try {
+            const data = await require('./vsSheet').compare({ since, env });
+            missingCache = { at: Date.now(), key, data };
+            res.json(data);
+        } catch (e) { res.status(502).json({ error: e.message }); }
+    });
+
+    // ── connecting QuickBooks ──────────────────────────────────────────────
+    // Was scripts/qb-connect.js on the laptop. The consent screen has to
+    // happen in a browser, so the page does what the script did: hand her the
+    // link, take back the address the browser landed on. Nothing is stored
+    // until Intuit has answered.
+    app.post('/api/qb/connect-url', async (req, res) => {
+        if (locked(req, res)) return;
+        try {
+            const env = envOf();
+            res.json({ env, url: auth.buildAuthUrl(env), status: auth.status(env),
+                note: env === 'production'
+                    ? 'This connects your LIVE books. Sign in, pick Edge Metals, then paste the whole address the browser lands on — it may say "can\'t connect", which is fine.'
+                    : 'Sandbox. Sign in, then paste the whole address the browser lands on.' });
         } catch (e) { res.status(400).json({ error: e.message }); }
+    });
+    app.post('/api/qb/connect', async (req, res) => {
+        if (locked(req, res)) return;
+        const url = String((req.body || {}).redirectedUrl || '').trim();
+        if (!/^https?:\/\//.test(url) || !/code=/.test(url)) {
+            return res.status(400).json({ error: 'paste the WHOLE address the browser landed on — it carries the code' });
+        }
+        const env = envOf();
+        try {
+            const t = await auth.exchangeRedirect(url, { env });
+            const ci = await require('./client').companyInfo({ env }).catch(() => ({}));
+            books.forget();
+            res.json({ ok: true, env, realmId: t.realmId, company: ci.CompanyName || null, status: auth.status(env) });
+        } catch (e) { res.status(400).json({ error: e.message }); }
+    });
+
+    // ── a reviewed list of older rows ──────────────────────────────────────
+    // The one place the cutover steps aside, for the rows she has just looked
+    // at and nothing else. Dry run unless she says otherwise IN WORDS, and a
+    // reason is required — it goes in the journal beside every row.
+    app.post('/api/qb/push-list', async (req, res) => {
+        if (locked(req, res)) return;
+        const b = req.body || {};
+        const really = b.really === true;
+        if (really && String(b.confirm || '').trim().toUpperCase() !== 'ENTER') {
+            return res.status(400).json({ error: 'to enter these for real, type ENTER — this is the one path that goes behind the cutover' });
+        }
+        try {
+            const out = await require('./pushList').run({
+                kind: String(b.kind || 'invoice').toLowerCase(),
+                since: String(b.since || '2026-01-01'), until: String(b.until || '2026-12-31'),
+                party: b.party ? String(b.party) : null,
+                reason: b.reason, really, env: envOf(),
+            });
+            if (really) books.forget();
+            res.json(out);
+        } catch (e) { res.status(400).json({ error: e.message }); }
+    });
+
+    // ── VOID, DELETE, MERGE (2026-09-26) ───────────────────────────────────
+    // Apsara: "Merging two parties, voiding or deleting anything should be
+    // there on qb. Ensure the impact before changing any section."
+    //
+    // The impact comes first and is not optional: every change carries the
+    // stamp of the version she was shown, and is refused if the document
+    // moved in the meantime. None of this can be taken back, so the reason
+    // and the impact both go in the journal.
+    app.get('/api/qb/impact', async (req, res) => {
+        try { res.json(await require('./riskyOps').impact(req.query.type, req.query.id, { env: envOf() })); }
+        catch (e) { res.status(400).json({ error: e.message }); }
+    });
+
+    app.post('/api/qb/void', async (req, res) => {
+        if (locked(req, res)) return;
+        const b = req.body || {};
+        const op = b.op === 'delete' ? 'delete' : 'void';
+        // The typed word is the document's own number — she cannot confirm
+        // this one by reflex, and she cannot confirm the wrong document.
+        const risky = require('./riskyOps');
+        try {
+            const now = await risky.impact(b.type, b.id, { env: envOf() });
+            const expect = now.doc.doc || `#${now.id}`;
+            if (String(b.confirm || '').trim() !== expect) {
+                return res.status(400).json({ error: `to ${op} this, type its number exactly: ${expect}`, impact: now });
+            }
+            res.json(await risky.apply({ type: b.type, id: b.id, op, reason: b.reason, stamp: b.stamp, by: who(req), env: envOf() }));
+        } catch (e) { res.status(400).json({ error: e.message }); }
+    });
+
+    app.get('/api/qb/merge-impact', async (req, res) => {
+        try { res.json(await require('./riskyOps').mergeImpact(req.query.kind, req.query.loser, req.query.winner, { env: envOf() })); }
+        catch (e) { res.status(400).json({ error: e.message }); }
+    });
+
+    // "I merged them in QuickBooks" — Jarvis proves the old record is gone,
+    // then re-points every name that was aimed at it.
+    app.post('/api/qb/merged', async (req, res) => {
+        if (locked(req, res)) return;
+        const b = req.body || {};
+        if (!b.deadId || !b.survivorId) return res.status(400).json({ error: 'which two? give the old id and the surviving id' });
+        try {
+            res.json(await require('./riskyOps').adoptMerge(b.kind, b.deadId, b.survivorId,
+                { env: envOf(), by: who(req), reason: b.reason || '' }));
+        } catch (e) { res.status(400).json({ error: e.message }); }
+    });
+
+    // ── the same money, twice ──────────────────────────────────────────────
+    // "check qb for any duplicate record/amount entry per customer and
+    // supplier." Read-only; it names them, it never deletes one — that is the
+    // void button, one document at a time, with its impact shown.
+    app.get('/api/qb/duplicates', async (req, res) => {
+        const year = /^\d{4}$/.test(String(req.query.year || '')) ? Number(req.query.year) : new Date().getFullYear();
+        try { res.json(await books.duplicates(envOf(), { year })); }
+        catch (e) { res.status(502).json({ error: `QuickBooks: ${e.message}` }); }
     });
 
     app.post('/api/qb/undo', async (req, res) => {
@@ -528,8 +729,26 @@ function mount(app, cfg) {
                 context = { party: name, kind, mappedTo: m.qbName || null, qbBalance, totals: d.totals,
                     bills: d.bills.slice(-25), invoices: d.invoices.slice(-25), advances: d.advances.slice(-25),
                     recentJarvisWrites: d.journal.slice(0, 10).map((e) => ({ at: e.at, action: e.action, kind: e.kind, qbId: e.qb && e.qb.id, reason: e.reason })) };
+                // ── AND WHAT QUICKBOOKS ITSELF SAYS (2026-09-26) ───────────
+                // Apsara: "jarvis should be supreme of qb". Answering only
+                // from Jarvis's ledgers meant the chat could not see a
+                // payment her accountant entered by hand — so it is handed
+                // her books too, for the same party, read live.
+                if (m.qbId && m.qbId !== 'SKIP') {
+                    try {
+                        const q = await books.partyDocs(kind === 'customer' ? 'customer' : 'vendor', m.qbId, env);
+                        context.inQuickBooks = { totals: q.totals, documents: q.docs.slice(0, 25).map((x) => ({ kind: x.kind, doc: x.doc, date: x.date, total: x.total, open: x.balance, containers: x.containers })) };
+                    } catch (e) { context.inQuickBooks = { error: e.message }; }
+                }
             } else {
                 context = { overview: (await partyRows({ env, withQb: false })).slice(0, 40) };
+                try {
+                    const b = await books.overview(env);
+                    context.books = { year: b.year, profitAndLoss: b.pl,
+                        owedToYou: b.ar && { count: b.ar.count, total: b.ar.total, aging: b.ar.aging },
+                        youOwe: b.ap && { count: b.ap.count, total: b.ap.total, aging: b.ap.aging },
+                        banks: (b.banks || []).map((a) => ({ name: a.name, balance: a.balance })) };
+                } catch (e) { context.books = { error: e.message }; }
             }
         } catch (e) { context = { error: e.message }; }
 
@@ -540,6 +759,11 @@ function mount(app, cfg) {
             'Money: always give the figure and what it is (an advance, an open bill, a Jarvis row not yet in QuickBooks).',
             'Be short: three sentences at most, plain words, no jargon, no bullet lists.',
             'You cannot change anything — if an action is needed, name the button on the page.',
+            'DATA.inQuickBooks and DATA.books are her REAL books, read live. Where they disagree with the',
+            'Jarvis side, say both figures and which is which — the disagreement is usually the answer she',
+            'is after (a payment her accountant entered by hand, a consolidated invoice, a bill paid another way).',
+            'She should never have to open QuickBooks to check what you just said, so quote the document',
+            'number and the date when you name one.',
             'For a SUPPLIER, never read out bills and advances as two separate piles: totals.owedToSupplier is',
             'the one number that matters — positive means she owes him that much, negative means he is holding',
             'that much of her money. Say which way round it is, in those words.',
@@ -563,8 +787,9 @@ function mount(app, cfg) {
             const who = t && t.owedToSupplier !== null && t.owedToSupplier !== undefined
                 ? (t.owedToSupplier > 0 ? `you owe ${name} $${t.owedToSupplier}` : `${name} is holding $${r2(-t.owedToSupplier)} of your money`)
                 : null;
+            const qbT = context.inQuickBooks && context.inQuickBooks.totals;
             const plain = t
-                ? `${name}: ${who ? who + '. ' : ''}$${t.bills} of bills against $${t.advances} advanced${t.unpricedBills ? `, and ${t.unpricedBills} container${t.unpricedBills > 1 ? 's have' : ' has'} no price yet` : ''}. ${t.inQuickBooks} records are in QuickBooks, ${t.notInQuickBooks} are not.`
+                ? `${name}: ${who ? who + '. ' : ''}$${t.bills} of bills against $${t.advances} advanced${t.unpricedBills ? `, and ${t.unpricedBills} container${t.unpricedBills > 1 ? 's have' : ' has'} no price yet` : ''}. ${t.inQuickBooks} records are in QuickBooks, ${t.notInQuickBooks} are not.${qbT ? ` Your books hold ${qbT.documents} documents for this party, ${qbT.open ? `$${qbT.open} still open` : 'nothing open'}.` : ''}`
                 : 'I can see the ledgers but the language model is not answering right now.';
             res.json({ answer: plain, followUp: name ? `Do you want the bills for ${name}, or the wires?` : 'Which supplier or customer shall I open?', degraded: true });
         }

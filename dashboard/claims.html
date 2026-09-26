@@ -73,14 +73,38 @@ aside{border-right:1px solid var(--border-default);background:var(--surface-sunk
 .empty{padding:30px 16px;text-align:center;color:var(--text-faint);font-size:12.5px}
 
 /* ── claim kind, and the per-container detail ─────────────────────────── */
-.kind{display:inline-flex;align-items:center;font-size:10px;letter-spacing:.05em;text-transform:uppercase;padding:2px 6px;border-radius:3px;font-weight:600;white-space:nowrap;border:1px solid transparent}
-.k-weight_shortage{color:var(--steel-200);background:rgba(203,209,214,.09);border-color:var(--border-default)}
-.k-grade_downgrade{color:var(--copper-300);background:rgba(215,126,61,.12);border-color:#5b3d22}
-.k-recovery_shortfall{color:var(--amber-500);background:rgba(217,154,43,.12);border-color:#5a4416}
-.k-foreign_material{color:var(--blue-500);background:rgba(58,110,165,.16);border-color:#26405e}
-.k-damage{color:#f0b3aa;background:rgba(197,64,47,.13);border-color:#5e2a23}
-.k-quality{color:var(--leaf-300);background:rgba(87,190,73,.11);border-color:var(--leaf-600)}
-.k-other{color:var(--text-faint);background:rgba(126,136,145,.10);border-color:var(--border-default)}
+/* ONE rule, not one per kind. The kinds are named by the model at run time, so
+   the colour is derived from the slug (server-side hue) — a kind that first
+   appears tonight is legible with no CSS to add. There is deliberately no list
+   of kinds in this stylesheet. */
+.kind{display:inline-flex;align-items:center;font-size:10px;letter-spacing:.05em;text-transform:uppercase;padding:2px 6px;border-radius:3px;font-weight:600;white-space:nowrap;
+  color:hsl(var(--kh,210) 55% 74%);background:hsl(var(--kh,210) 45% 17%);border:1px solid hsl(var(--kh,210) 30% 31%)}
+.kind.none{color:var(--amber-500);background:rgba(217,154,43,.12);border-color:#5a4416;font-style:italic}
+.vocab{display:flex;flex-direction:column;gap:7px}
+.vrow{display:flex;align-items:center;gap:9px;font-size:12.5px}
+.vrow .cnt{font-family:var(--font-mono);font-size:11px;color:var(--text-faint)}
+.vrow .act{margin-left:auto;display:flex;gap:6px}
+.vrow select,.vrow input{padding:4px 7px;border-radius:4px;border:1px solid var(--border-default);background:var(--bg-base);color:var(--text-body);font-size:12px}
+/* ── importing a sheet ─────────────────────────────────────────────────── */
+.modal .box.wide{max-width:900px}
+.drop{border:1px dashed var(--border-default);border-radius:6px;padding:16px;text-align:center;color:var(--text-muted);font-size:13px;background:var(--surface-sunken)}
+.drop.on{border-color:var(--leaf-500);color:var(--leaf-300)}
+.drop input[type=file]{display:block;margin:9px auto 0;color:var(--text-muted);font-size:12px}
+.imp-sum{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:1px;background:var(--border-default);border:1px solid var(--border-default);border-radius:6px;overflow:hidden;margin-top:12px}
+.imp-sum > div{background:var(--surface-card);padding:9px 12px;display:flex;flex-direction:column;gap:2px}
+.imp-sum .k{font-size:10px;letter-spacing:.06em;text-transform:uppercase;color:var(--text-faint)}
+.imp-sum .v{font-family:var(--font-mono);font-size:16px;color:var(--text-strong)}
+.imp-sum .v.hi{color:var(--copper-300)}
+.imp-sec{margin-top:14px}
+.imp-sec > h4{margin:0 0 6px;font-size:11px;letter-spacing:.07em;text-transform:uppercase;color:var(--text-faint);font-family:var(--font-sans);font-weight:700}
+.imp-list{font-family:var(--font-mono);font-size:11.5px;color:var(--text-muted);max-height:150px;overflow-y:auto;display:flex;flex-direction:column;gap:3px}
+.imp-tbl{max-height:260px;overflow:auto;border:1px solid var(--border-default);border-radius:6px;margin-top:6px}
+.imp-tbl table{border-collapse:collapse;width:100%;font-size:11.5px;min-width:660px}
+.imp-tbl th{position:sticky;top:0;background:var(--surface-sunken);text-align:left;padding:6px 8px;border-bottom:1px solid var(--border-default);font-size:10px;letter-spacing:.05em;text-transform:uppercase;color:var(--text-faint)}
+.imp-tbl td{padding:5px 8px;border-bottom:1px solid var(--border-subtle);white-space:nowrap}
+.imp-tbl td.w{white-space:normal;color:var(--text-faint);font-style:italic;max-width:320px}
+.spin{display:inline-block;width:11px;height:11px;border:2px solid var(--border-default);border-top-color:var(--leaf-500);border-radius:50%;animation:sp .7s linear infinite;vertical-align:-1px}
+@keyframes sp{to{transform:rotate(360deg)}}
 .kinds{display:flex;gap:4px;flex-wrap:wrap}
 .csum{display:flex;gap:20px;flex-wrap:wrap;padding:11px 14px;border-radius:6px;background:var(--surface-sunken);border:1px solid var(--border-subtle);margin-top:12px}
 .csum div{display:flex;flex-direction:column;gap:2px}
@@ -191,12 +215,16 @@ label.f input:disabled{color:var(--steel-500)}
    "Not all the container have same kind of claim .. put it into website per
    container basis." */
 const MT = { MT:1, LB:1/2204.62, KG:1/1000 };
-const STATE = { claims:[], stats:{}, labels:{}, sel:null, tab:'needs', q:'' };
+const STATE = { claims:[], stats:{}, kinds:[], sel:null, tab:'needs', q:'' };
 const $ = (s, root) => (root || document).querySelector(s);
 const esc = (s) => String(s==null?'':s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const money = (n) => (n===null||n===undefined||n==='') ? '—' : '$' + Number(n).toLocaleString('en-US',{maximumFractionDigits:2});
 const numOf = (v) => { if (v===null||v===undefined||v==='') return null; const n = Number(String(v).replace(/[$,\s]/g,'')); return Number.isFinite(n) ? n : null; };
-const kindLabel = (t) => STATE.labels[t] || String(t||'other').replace(/_/g,' ');
+/* The vocabulary comes from the server, which got it from the model. A slug with
+   no entry yet still reads sensibly; a claim with no kind at all says so. */
+const kindOf = (t) => STATE.kinds.find(k => k.slug === t) || null;
+const kindLabel = (t) => { if (!t) return 'not classified yet'; const k = kindOf(t); return k ? k.label : String(t).replace(/_/g,' '); };
+const kindHue = (t) => { const k = kindOf(t); return k && typeof k.hue === 'number' ? k.hue : 210; };
 
 async function api(url, body){
   const r = await fetch(url, body ? { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body) } : {});
@@ -281,7 +309,9 @@ function pill(s){
   const label = s === 'recovery_raised' ? 'recovery raised' : s === 'withdrawn' ? 'withdrawn' : s;
   return '<span class="pill ' + cls + '"><i></i>' + esc(label) + '</span>';
 }
-const kindChip = (t) => '<span class="kind k-' + esc(t||'other') + '">' + esc(kindLabel(t)) + '</span>';
+const kindChip = (t) => t
+  ? '<span class="kind" style="--kh:' + kindHue(t) + '" title="' + esc(kindLabel(t)) + '">' + esc(kindLabel(t)) + '</span>'
+  : '<span class="kind none">not classified yet</span>';
 
 function renderChips(){
   const s = STATE.stats || {};
@@ -289,9 +319,13 @@ function renderChips(){
     s.unverified ? '<span class="chip warn">' + s.unverified + ' to verify</span>' : '<span class="chip on">nothing to verify</span>',
     s.awaiting_recovery ? '<span class="chip bad">' + s.awaiting_recovery + ' recovery not raised</span>' : '',
     '<span class="chip">' + (s.containers || 0) + ' containers · ' + (s.total || 0) + ' claims</span>',
+    '<span class="chip act" id="vocab">' + (STATE.kinds.length || 0) + ' kinds</span>',
+    '<span class="chip act" id="impBtn">Import sheet</span>',
     '<span class="chip act" id="refresh">Refresh</span>',
   ].filter(Boolean).join('');
   const r = $('#refresh'); if (r) r.onclick = () => load(true);
+  const v = $('#vocab'); if (v) v.onclick = openVocab;
+  const ib = $('#impBtn'); if (ib) ib.onclick = openImport;
 }
 function renderStrip(){
   const s = STATE.stats || {};
@@ -362,7 +396,9 @@ function claimCard(c, i){
           ['MT','LB','KG'].map(u => '<option value="' + u + '" ' + (((c.sell_price_unit||unit||'MT')===u)?'selected':'') + '>' + u + '</option>').join('') +
         '</select></label>' +
         '<label class="f">Kind of claim<select class="f_kind">' +
-          Object.keys(STATE.labels).map(t => '<option value="' + t + '" ' + ((c.claim_type||'other')===t?'selected':'') + '>' + esc(kindLabel(t)) + '</option>').join('') +
+          '<option value="">not classified yet</option>' +
+          STATE.kinds.map(k => '<option value="' + esc(k.slug) + '" ' + (c.claim_type===k.slug?'selected':'') + '>' + esc(k.label) + '</option>').join('') +
+          '<option value="__new">name a new kind…</option>' +
         '</select></label>' +
       '</div><div class="calc"></div>' +
       '<div class="actions"><button class="btn go f_verify" type="button">Confirm and work out the claim</button><span class="hint" style="margin:0" id="why"></span></div>' +
@@ -464,9 +500,30 @@ function wireClaim(c){
       await load();
     } catch (e) { toast(e.message, 'bad'); }
   };
+  el.querySelector('.f_kind').onchange = () => {
+    const sel = el.querySelector('.f_kind');
+    if (sel.value !== '__new') return;
+    // Ask inline rather than with a dialog, and add the name to the vocabulary
+    // the moment she uses it.
+    const row = document.createElement('div');
+    row.className = 'actions';
+    row.innerHTML = '<input class="k_new" placeholder="what kind of claim is this? two or three words" style="flex:1;padding:7px 9px;border-radius:4px;border:1px solid var(--border-default);background:var(--bg-base);color:var(--text-body)">' +
+      '<button class="btn go k_ok" type="button">Use it</button>';
+    sel.parentNode.appendChild(row);
+    row.querySelector('.k_ok').onclick = async () => {
+      const label = row.querySelector('.k_new').value.trim();
+      if (!label) { toast('Give it a name first.', 'bad'); return; }
+      try { await api('/api/claims/' + c.id + '/edit', { claim_type: label }); toast('Kind set to “' + label + '”.', 'ok'); await load(); }
+      catch (e) { toast(e.message, 'bad'); }
+    };
+    row.querySelector('.k_new').focus();
+  };
   el.querySelector('.f_save').onclick = async () => {
     try {
-      await api('/api/claims/' + c.id + '/edit', { supplier: el.querySelector('.f_sup').value.trim(), claim_type: el.querySelector('.f_kind').value });
+      const k = el.querySelector('.f_kind').value;
+      const body = { supplier: el.querySelector('.f_sup').value.trim() };
+      if (k !== '__new') body.claim_type = k;
+      await api('/api/claims/' + c.id + '/edit', body);
       toast('Saved.', 'ok'); await load();
     } catch (e) { toast(e.message, 'bad'); }
   };
@@ -499,7 +556,8 @@ function openNew(pre){
       '<label class="f">Container no<input id="n_cont" class="mono" value="' + esc(pre.container_no||'') + '"></label>' +
       '<label class="f">What they are asking<input id="n_amt" class="num" inputmode="decimal"></label>' +
       '<label class="f">Kind of claim<select id="n_type">' +
-        Object.keys(STATE.labels).map(t => '<option value="' + t + '">' + esc(kindLabel(t)) + '</option>').join('') +
+        '<option value="">let the kind be worked out from what they said</option>' +
+        STATE.kinds.map(k => '<option value="' + esc(k.slug) + '">' + esc(k.label) + '</option>').join('') +
       '</select></label>' +
     '</div>' +
     '<label class="f" style="margin-top:12px">What they are claiming<input id="n_note" placeholder="in their words — this is the evidence for the kind"></label>' +
@@ -530,12 +588,206 @@ function openNew(pre){
   $('#n_cust', wrap).focus();
 }
 
+/* ── importing a weight-shortage sheet ────────────────────────────────────
+   Two steps on purpose. Reading and classifying writes nothing; the plan stays on
+   the server and this page holds only an id, so what you confirm is exactly what
+   was computed. Nothing here raises a to-do or sends a WhatsApp — eighty
+   historical claims through the normal path would have messaged the team eighty
+   times. */
+const money0 = (n) => '$' + Math.round(Number(n)||0).toLocaleString('en-US');
+function openImport(){
+  const wrap = document.createElement('div');
+  wrap.className = 'modal';
+  wrap.innerHTML = '<div class="box wide"><h3>Import a weight shortage sheet</h3>' +
+    '<div class="hint" style="margin-top:0">Upload the sheet, or read the live tab. The model reads every row, names what each claim is actually about, then settles those names into a vocabulary. Nothing is written until you confirm, and no to-do or WhatsApp goes out either way.</div>' +
+    '<div class="drop" id="i_drop">Drop a .xlsx or .csv here, or choose one' +
+      '<input type="file" id="i_file" accept=".xlsx,.xls,.csv,text/csv">' +
+    '</div>' +
+    '<div class="actions">' +
+      '<button class="btn go" id="i_live" type="button">Read the live tab instead</button>' +
+      '<label class="hint" style="margin:0;display:flex;align-items:center;gap:6px"><input type="checkbox" id="i_ai" checked> let the model classify them</label>' +
+      '<button class="btn" id="i_close" type="button" style="margin-left:auto">Close</button>' +
+    '</div>' +
+    '<div id="i_out"></div></div>';
+  document.body.appendChild(wrap);
+  const close = () => wrap.remove();
+  wrap.onclick = (e) => { if (e.target === wrap) close(); };
+  $('#i_close', wrap).onclick = close;
+  const out = $('#i_out', wrap);
+  const useAi = () => $('#i_ai', wrap).checked;
+
+  const busy = (what) => { out.innerHTML = '<div class="imp-sec"><h4><span class="spin"></span> ' + esc(what) + '</h4>' +
+    '<div class="hint">Every row is read on its own, so a full sheet takes a minute or two. Leave this open.</div></div>'; };
+
+  async function preview(body){
+    busy('reading the sheet and working out what each claim is about');
+    try { render(await api('/api/claims/import/preview', { ...body, useAi: useAi() })); }
+    catch (e) { out.innerHTML = ''; toast(e.message, 'bad'); }
+  }
+
+  $('#i_live', wrap).onclick = () => preview({});
+  const fileEl = $('#i_file', wrap);
+  fileEl.onchange = () => {
+    const f = fileEl.files && fileEl.files[0];
+    if (!f) return;
+    const r = new FileReader();
+    if (/\.csv$/i.test(f.name) || f.type === 'text/csv') {
+      r.onload = () => preview({ csv: String(r.result), name: f.name });
+      r.readAsText(f);
+    } else {
+      r.onload = () => preview({ xlsxBase64: String(r.result).split(',').pop(), name: f.name });
+      r.readAsDataURL(f);
+    }
+  };
+  const drop = $('#i_drop', wrap);
+  drop.ondragover = (e) => { e.preventDefault(); drop.classList.add('on'); };
+  drop.ondragleave = () => drop.classList.remove('on');
+  drop.ondrop = (e) => {
+    e.preventDefault(); drop.classList.remove('on');
+    const f = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
+    if (!f) return;
+    fileEl.files = e.dataTransfer.files;
+    fileEl.onchange();
+  };
+
+  function list(title, items){
+    if (!items || !items.length) return '';
+    return '<div class="imp-sec"><h4>' + title + ' — ' + items.length + '</h4><div class="imp-list">' +
+      items.map(x => '<span>' + esc(x) + '</span>').join('') + '</div></div>';
+  }
+
+  function render(p){
+    const v = p.vocabulary || {};
+    out.innerHTML =
+      '<div class="imp-sec"><h4>' + esc(p.source) + ' — ' + p.sheetRows + ' rows</h4>' +
+        (p.tabs ? '<div class="hint" style="margin-top:0">sheets in the file: ' + esc(p.tabs.join(', ')) + '</div>' : '') +
+      '</div>' +
+      '<div class="imp-sum">' +
+        '<div><span class="k">To import</span><span class="v">' + p.count + '</span></div>' +
+        '<div><span class="k">Claimed</span><span class="v">' + money0(p.totals.claimed) + '</span></div>' +
+        '<div><span class="k">Recovered</span><span class="v">' + money0(p.totals.recovered) + '</span></div>' +
+        '<div><span class="k">Absorbed</span><span class="v hi">' + money0(p.totals.net) + '</span></div>' +
+        '<div><span class="k">Already in</span><span class="v">' + p.already + '</span></div>' +
+        '<div><span class="k">By hand</span><span class="v">' + p.manual.length + '</span></div>' +
+      '</div>' +
+      '<div class="hint">Claimed is every row on the sheet. The register\'s own exposure figure will be lower, because withdrawn and rejected claims are not exposure.</div>' +
+
+      '<div class="imp-sec"><h4>Where each figure was read from</h4><div class="imp-list">' +
+        p.blocks.map(b => '<span>row ' + b.row + (b.legacy ? '  LEGACY  ' : '  ') +
+          'claim←"' + esc(b.claimFrom || '(none)') + '"  recovery←"' + esc(b.recoveryFrom || '(none)') + '"  supplier←"' + esc(b.supplierFrom || '(none)') + '"</span>').join('') +
+      '</div><div class="hint">In the 2025 block those two money columns are the reverse of every other block, and "Buyer" holds the supplier. If that looks wrong, stop — the totals are wrong too.</div></div>' +
+
+      (v.named && v.named.length ? '<div class="imp-sec"><h4>What the model called them, row by row</h4><div class="imp-list">' +
+        v.named.map(n => '<span>' + String(n.count).padStart(3) + '  ' + esc(n.label) + '</span>').join('') + '</div>' +
+        (v.settled ? '<div class="hint">Settled into <b>' + v.kinds.map(k => esc(k.label)).join(', ') + '</b>' +
+          (v.why ? ' — ' + esc(v.why) : '') + (v.folds && v.folds.length ? '<br>folded: ' + esc(v.folds.join(' · ')) : '') + '</div>'
+          : '<div class="hint">The model could not settle these into one vocabulary, so the names it gave row by row are kept.</div>') +
+      '</div>' : '') +
+
+      (p.byKind.length ? '<div class="imp-sec"><h4>Kinds</h4><div class="imp-list">' +
+        p.byKind.slice().sort((a,b) => b.claims - a.claims).map(k =>
+          '<span>' + (k.slug ? '<span class="kind" style="--kh:' + k.hue + '">' + esc(k.label) + '</span>' : '<span class="kind none">not classified yet</span>') +
+          '  ' + k.claims + '  ' + money0(k.claimed) + '</span>').join('') +
+      '</div></div>' : '') +
+
+      list('Repeated rows, merged into one claim', p.merged.map(m => 'rows ' + m.rows.join('+') + '  ' + m.invoice_no + ' / ' + m.container_no + '  ' + money0(m.claim_amount))) +
+      list('One container, more than one claim', p.split.map(m => m.invoice_no + ' / ' + m.container_no + '  ' + money0(m.claim_amount))) +
+      list('Not imported — prose where an identifier should be', p.manual.map(m => 'row ' + m.rowNo + '  ' + m.cells)) +
+      list('Unit left blank, flagged for a person', p.noUnit.map(m => m.invoice_no + ' / ' + m.container_no + '  ' + m.why)) +
+      list('Not classified — nothing guessed', p.unresolved.map(m => (m.container_no || m.invoice_no) + '  ' + m.why)) +
+
+      '<div class="imp-sec"><h4>Every claim this will create</h4><div class="imp-tbl"><table><thead><tr>' +
+        ['Container','Invoice','Customer','Supplier','Kind','Claimed','Recovery','Status','Why that kind'].map(h => '<th>' + h + '</th>').join('') +
+      '</tr></thead><tbody>' +
+        p.preview.map(r => '<tr>' +
+          '<td class="mono">' + esc(r.container_no || '—') + '</td>' +
+          '<td class="mono">' + esc(r.invoice_no || '—') + '</td>' +
+          '<td>' + esc(r.customer || '—') + '</td>' +
+          '<td>' + esc(r.supplier || '—') + '</td>' +
+          '<td>' + (r.claim_type ? esc(r.kind || r.claim_type) : '<span style="color:var(--amber-500)">not classified</span>') + '</td>' +
+          '<td class="mono">' + (r.claim_amount!=null ? money0(r.claim_amount) : '—') + '</td>' +
+          '<td class="mono">' + (r.our_claim!=null ? money0(r.our_claim) : '—') + '</td>' +
+          '<td>' + esc(r.status) + '</td>' +
+          '<td class="w">' + esc(r.why || '') + '</td>' +
+        '</tr>').join('') +
+      '</tbody></table></div></div>' +
+
+      '<div class="actions">' +
+        (p.count ? '<button class="btn go" id="i_go" type="button">Import these ' + p.count + ' claims</button>'
+                 : '<span class="hint" style="margin:0">Nothing new to import — every claim on this sheet is already in the register.</span>') +
+        '<span class="hint" style="margin:0">No to-do, no WhatsApp.</span>' +
+      '</div>';
+
+    const go = $('#i_go', wrap);
+    if (go) go.onclick = async () => {
+      go.disabled = true; go.textContent = 'Importing…';
+      try {
+        const r = await api('/api/claims/import/commit', { planId: p.planId });
+        close(); toast('Imported ' + r.created + ' claims.', 'ok'); await load();
+      } catch (e) { go.disabled = false; go.textContent = 'Import these ' + p.count + ' claims'; toast(e.message, 'bad'); }
+    };
+  }
+}
+
+/* ── the vocabulary, and how to correct it ────────────────────────────────
+   Nothing in this app decides which kinds exist — the model names them as it
+   meets claims it has not seen before. The cost of that is drift: two names for
+   one argument. This is the fix, and it is hers to make, not a synonym table's. */
+function openVocab(){
+  const kinds = STATE.kinds.slice().sort((a,b) => (b.count||0) - (a.count||0));
+  const used = STATE.claims.reduce((o,c) => { const k = c.claim_type || ''; o[k] = (o[k]||0)+1; return o; }, {});
+  const wrap = document.createElement('div');
+  wrap.className = 'modal';
+  wrap.innerHTML = '<div class="box"><h3>Kinds of claim in use</h3>' +
+    '<div class="hint" style="margin-top:0">These were named by the model as it read your claims — there is no list of them in the code. Rename one into your own words, or fold two together when they are the same argument.</div>' +
+    '<div class="vocab" style="margin-top:14px">' +
+      (kinds.length ? kinds.map(k =>
+        '<div class="vrow" data-slug="' + esc(k.slug) + '">' +
+          '<span class="kind" style="--kh:' + (k.hue||210) + '">' + esc(k.label) + '</span>' +
+          '<span class="cnt">' + (used[k.slug]||0) + ' claims</span>' +
+          '<span class="act">' +
+            '<input class="v_label" value="' + esc(k.label) + '" size="16">' +
+            '<button class="btn v_ren" type="button" style="padding:4px 9px;font-size:12px">Rename</button>' +
+            '<select class="v_into"><option value="">fold into…</option>' +
+              kinds.filter(o => o.slug !== k.slug).map(o => '<option value="' + esc(o.slug) + '">' + esc(o.label) + '</option>').join('') +
+            '</select>' +
+            '<button class="btn v_mrg" type="button" style="padding:4px 9px;font-size:12px">Merge</button>' +
+          '</span>' +
+        '</div>').join('')
+        : '<div class="hint">Nothing classified yet. Kinds appear here as claims arrive.</div>') +
+      (used[''] ? '<div class="vrow"><span class="kind none">not classified yet</span><span class="cnt">' + used[''] + ' claims</span></div>' : '') +
+    '</div>' +
+    '<div class="actions"><button class="btn" id="v_close" type="button">Close</button></div></div>';
+  document.body.appendChild(wrap);
+  const close = () => wrap.remove();
+  wrap.onclick = (e) => { if (e.target === wrap) close(); };
+  $('#v_close', wrap).onclick = close;
+  wrap.querySelectorAll('.vrow[data-slug]').forEach(row => {
+    const slug = row.dataset.slug;
+    const ren = row.querySelector('.v_ren'), mrg = row.querySelector('.v_mrg');
+    if (ren) ren.onclick = async () => {
+      const label = row.querySelector('.v_label').value.trim();
+      if (!label) { toast('Give it a name.', 'bad'); return; }
+      try { await api('/api/claim-kinds/rename', { slug, label }); close(); toast('Renamed.', 'ok'); await load(); }
+      catch (e) { toast(e.message, 'bad'); }
+    };
+    if (mrg) mrg.onclick = async () => {
+      const into = row.querySelector('.v_into').value;
+      if (!into) { toast('Pick which kind to fold it into.', 'bad'); return; }
+      try {
+        const r = await api('/api/claim-kinds/merge', { from: slug, into });
+        close(); toast('Merged — ' + r.moved + ' claim(s) moved over.', 'ok'); await load();
+      } catch (e) { toast(e.message, 'bad'); }
+    };
+  });
+}
+
 async function load(announce){
   try {
     const j = await api('/api/claims');
     STATE.claims = j.claims || [];
     STATE.stats = j.stats || {};
-    STATE.labels = j.typeLabels || {};
+    STATE.kinds = j.kinds || [];
     if (!containers().some(g => g.key === STATE.sel)) STATE.sel = (visible()[0] || {}).key || null;
     renderChips(); renderStrip(); renderTabs(); renderRows(); renderDetail();
     if (announce) toast('Up to date.', 'ok');

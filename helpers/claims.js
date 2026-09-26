@@ -28,10 +28,12 @@ const FILE = () => cfg.CLAIMS_FILE || path.join(cfg.DATA_DIR, 'claims.json');
 
 // Status is a closed set. 'unverified' is where every parsed claim starts.
 const STATUSES = ['unverified', 'verified', 'recovery_raised', 'settled', 'rejected', 'withdrawn'];
-// The kinds live in helpers/claimKind.js, which is also what classifies a row or
-// a mail into one. Apsara, 2026-09-26: "Not all the container have same kind of
-// claim" — the first import labelled everything weight_shortage, which was wrong.
-const { TYPES, LABEL: TYPE_LABEL } = require('./claimKind');
+// There is deliberately NO list of claim kinds here. Apsara, 2026-09-26: "let ai
+// decide dynamically". A kind is a slug the model named, recorded in
+// helpers/claimKinds.js; `claim_type` is one of those slugs, or null for a claim
+// nothing has been able to classify yet. Null is a real state, not a gap — it is
+// flagged and shown on the page rather than defaulted to the commonest kind.
+const claimKinds = require('./claimKinds');
 const UNITS = ['MT', 'LB', 'KG'];
 
 // Flags are the reasons a human still has to look. They are not errors — a
@@ -40,6 +42,7 @@ const FLAG_NO_UNIT = 'unit_not_stated';
 const FLAG_UNKNOWN_CONTAINER = 'container_unknown';
 const FLAG_FIGURE_CHANGED = 'figure_changed';
 const FLAG_NO_SUPPLIER = 'supplier_unknown';
+const FLAG_KIND_UNKNOWN = 'kind_unknown';
 
 const newId = () => `clm_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
 const norm = (s) => String(s == null ? '' : s).toUpperCase().replace(/[^A-Z0-9]/g, '');
@@ -92,6 +95,7 @@ function withFlags(c) {
     const flags = new Set(c.flags || []);
     if (!c.weight_unit) flags.add(FLAG_NO_UNIT); else flags.delete(FLAG_NO_UNIT);
     if (!String(c.supplier || '').trim()) flags.add(FLAG_NO_SUPPLIER); else flags.delete(FLAG_NO_SUPPLIER);
+    if (!c.claim_type) flags.add(FLAG_KIND_UNKNOWN); else flags.delete(FLAG_KIND_UNKNOWN);
     c.flags = [...flags];
     return c;
 }
@@ -108,7 +112,7 @@ async function create(input = {}, by = 'claims') {
         id: newId(),
         key: keyOf(input.invoice_no, input.container_no),
         status: STATUSES.includes(input.status) ? input.status : 'unverified',
-        claim_type: TYPES.includes(input.claim_type) ? input.claim_type : 'weight_shortage',
+        claim_type: input.claim_type ? claimKinds.slugify(input.claim_type) : null,
         weight_unit: UNITS.includes(input.weight_unit) ? input.weight_unit : null,
         claim_amount: null,          // never on creation — verify() computes it
         created_at: now, updated_at: now, created_by: by,
@@ -222,13 +226,21 @@ function stats(rows) {
         awaiting_recovery: live.filter((c) => c.status === 'verified' && !num(c.our_claim)).length,
         open: live.filter((c) => !['settled'].includes(c.status)).length,
         by_status: STATUSES.reduce((o, s) => { o[s] = all.filter((c) => c.status === s).length; return o; }, {}),
+        // Grouped by whatever kinds actually turned up, not by a fixed set.
+        by_kind: live.reduce((o, c) => {
+            const k = c.claim_type || '(not classified)';
+            if (!o[k]) o[k] = { claims: 0, claimed: 0 };
+            o[k].claims += 1; o[k].claimed += num(c.claim_amount) || 0;
+            return o;
+        }, {}),
+        unclassified: all.filter((c) => !c.claim_type).length,
     };
 }
 
 module.exports = {
     list, get, findByKey, keyOf, create, update, verify, raiseRecovery, setStatus, addMail, stats,
     convert, toMT, newId, blank,
-    STATUSES, TYPES, TYPE_LABEL, UNITS,
-    FLAG_NO_UNIT, FLAG_UNKNOWN_CONTAINER, FLAG_FIGURE_CHANGED, FLAG_NO_SUPPLIER,
+    STATUSES, UNITS,
+    FLAG_NO_UNIT, FLAG_UNKNOWN_CONTAINER, FLAG_FIGURE_CHANGED, FLAG_NO_SUPPLIER, FLAG_KIND_UNKNOWN,
     FILE,
 };

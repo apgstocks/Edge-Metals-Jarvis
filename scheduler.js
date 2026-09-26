@@ -1191,6 +1191,18 @@ function start() {
     cron.schedule('0 6 * * *',    () => pricelistFallback().catch(e => console.error('[SCHED] pricelist:', e)), TZ);
     cron.schedule('0 23 * * *',   () => autoArchive().catch(e => console.error('[SCHED] archive:', e)),  TZ);
     cron.schedule('0 7 * * *',    () => nightlyLogDigest().catch(e => console.error('[SCHED] log-digest:', e)), TZ);
+    // ── THE LEDGERS, CHECKED AGAINST THEMSELVES ──────────────────────────
+    // Apsara, 2026-09-26: "Is it possible to run an agent everyday in website
+    // to find out any issue or discrepancy?"
+    //
+    // 06:30, ahead of the 07:00 log digest and the 08:00 morning digest, so
+    // if all three have something to say they arrive oldest-first and she
+    // reads them in the order they were produced.
+    //
+    // Silent when clean — see helpers/integritySweepJob.js. Everything it
+    // notices, when it notices anything.
+    cron.schedule('30 6 * * *',   () => require('./helpers/integritySweepJob').run()
+        .catch(e => console.error('[SCHED] integrity-sweep:', e)), TZ);
     cron.schedule('45 22 * * *',  () => nightlyCutoffBackfill().catch(e => console.error('[SCHED] cutoff-backfill:', e)), TZ);
     cron.schedule('15 23 * * *',  () => nightlyMetalsSheetSync().catch(e => console.error('[SCHED] metals-sheet-sync:', e)), TZ);
     // ── QuickBooks, 45 minutes after the sheet sync ───────────────────────
