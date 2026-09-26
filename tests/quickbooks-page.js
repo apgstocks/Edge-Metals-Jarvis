@@ -194,7 +194,36 @@ const ck = (name, ok, extra) => { if (ok) { pass++; console.log('  PASS ', name)
     const pageSrc3 = fs.readFileSync(require('path').join(__dirname, '..', 'dashboard', 'quickbooks.html'), 'utf8');
     ck('the party has an In QuickBooks tab', /In QuickBooks/.test(pageSrc3) && /api\/qb\/party-docs/.test(pageSrc3));
     ck('the books and a document search are on the page', /data-books=/.test(pageSrc3) && /data-find=/.test(pageSrc3));
-    ck('...and where two figures disagree the page shows both', /Open bills add up to/.test(pageSrc3));
+    ck('...the headline is the balance QuickBooks itself totals, not a pile of documents',
+       /as QuickBooks itself totals them/.test(pageSrc3) && /never applied to a document/.test(pageSrc3));
+    ck('...and money older than the year is named, not dropped', /Not counted above/.test(pageSrc3));
+
+    // ── the last three scripts (2026-09-26) ────────────────────────────────
+    ck('locked: asking for the connect link is refused', (await post('/api/qb/connect-url', {})).code === 400);
+    ck('locked: connecting is refused', (await post('/api/qb/connect', { redirectedUrl: 'https://x/?code=1' })).code === 400);
+    const badLanded = await post('/api/qb/connect', { redirectedUrl: 'not a url', unlock: true });
+    ck('a pasted address with no code is refused, and says what to paste',
+       badLanded.code === 400 && /whole address/i.test(badLanded.body.error), badLanded.body);
+
+    ck('locked: the older-list push is refused', (await post('/api/qb/push-list', { kind: 'bill', reason: 'because' })).code === 400);
+    const listNoReason = await post('/api/qb/push-list', { kind: 'bill', unlock: true });
+    ck('an older-list push with no reason is refused — the journal needs one',
+       listNoReason.code === 400 && /reason/.test(listNoReason.body.error), listNoReason.body);
+    const noConfirm = await post('/api/qb/push-list', { kind: 'bill', reason: 'backlog she confirmed', really: true, unlock: true });
+    ck('...and going live without typing ENTER is refused',
+       noConfirm.code === 400 && /ENTER/.test(noConfirm.body.error), noConfirm.body);
+    const listBadKind = await post('/api/qb/push-list', { kind: 'journal', reason: 'backlog she confirmed', unlock: true });
+    ck('...and a kind it cannot push is refused', listBadKind.code === 400 && /invoice, bill or advance/.test(listBadKind.body.error), listBadKind.body);
+    const dryList = await post('/api/qb/push-list', { kind: 'bill', party: 'Nobody At All', since: '2026-01-01', until: '2026-12-31', reason: 'a window with nothing in it', unlock: true });
+    ck('a dry run answers with the rows it would touch and writes nothing',
+       dryList.code === 200 && dryList.body.dryRun === true && Array.isArray(dryList.body.rows), dryList.body);
+
+    const pageSrc4 = fs.readFileSync(require('path').join(__dirname, '..', 'dashboard', 'quickbooks.html'), 'utf8');
+    ck('sheet-vs-books is on the page', /data-missing=/.test(pageSrc4) && /api\/qb\/missing/.test(pageSrc4));
+    ck('...and it says which side of the cutover each row falls', /accountant's period/.test(pageSrc4));
+    ck('the older-list push is on the page, dry run first', /data-older=/.test(pageSrc4) && /really: false/.test(pageSrc4));
+    ck('...and the live run needs the word ENTER typed', /toUpperCase\(\) !== 'ENTER'/.test(pageSrc4));
+    ck('connecting QuickBooks is on the page', /data-connect=/.test(pageSrc4) && /api\/qb\/connect-url/.test(pageSrc4));
 
     // ── the cutover, from the page (2026-09-26) ────────────────────────────
     // Apsara: "I want nightly report to run everyday to upload all the bills

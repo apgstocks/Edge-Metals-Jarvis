@@ -79,8 +79,42 @@ async function profitAndLoss(env, from, to) {
 }
 
 // ── what is still open, on both sides ──────────────────────────────────────
-async function openItems(env) {
+// ── WHAT SHE ACTUALLY OWES, AND WHAT IS ACTUALLY OWED TO HER ───────────────
+// Apsara, 2026-09-26, on a $10.7M figure: "What thr hell?"
+//
+// She was right to shout. Summing every bill with a balance is NOT what she
+// owes: QuickBooks nets each vendor's open bills against the money already
+// sitting on that vendor unapplied — every prepayment wired before a load
+// arrived. Her vendor balances come to $5.3M; the open bills come to $10.7M;
+// the $5.4M between them is prepayments that have never been applied to a
+// bill. The vendor and customer balances are the answer to "what do I owe";
+// the open documents are the answer to "which ones"; and the gap between them
+// is its own finding. All three are shown, none of them pretends to be the
+// others.
+async function partyBalances(env) {
     const opts = { env };
+    const sum = async (table) => {
+        const rows = await pull(table, 'Active in (true, false)', opts, 4000);
+        const owed = rows.filter((x) => Number(x.Balance) > 0);
+        const credit = rows.filter((x) => Number(x.Balance) < 0);
+        return {
+            net: r2(rows.reduce((s, x) => s + Number(x.Balance || 0), 0)),
+            owed: r2(owed.reduce((s, x) => s + Number(x.Balance), 0)),
+            credit: r2(credit.reduce((s, x) => s + Number(x.Balance), 0)),
+            count: owed.length, creditCount: credit.length,
+            top: owed.sort((a, b) => b.Balance - a.Balance).slice(0, 12)
+                .map((x) => ({ id: String(x.Id), name: x.DisplayName, balance: r2(x.Balance) })),
+        };
+    };
+    const [vendor, customer] = await Promise.all([sum('Vendor'), sum('Customer')]);
+    return { vendor, customer };
+}
+
+async function openItems(env, { year = null } = {}) {
+    const opts = { env };
+    // Apsara, 2026-09-26: "Just focus only on 2026". Anything older is still
+    // real money, so it is counted and named on one line rather than dropped.
+    const since = year ? `${year}-01-01` : null;
     const [inv, bills] = await Promise.all([
         pull('Invoice', "Balance > '0'", opts, 3000),
         pull('Bill', "Balance > '0'", opts, 3000),
@@ -92,8 +126,18 @@ async function openItems(env) {
         party: (x[ref] || {}).name || '', partyId: String((x[ref] || {}).value || ''),
         total: r2(x.TotalAmt), balance: r2(x.Balance), days: age(x.TxnDate),
     });
-    const ar = inv.map((x) => shape(x, 'CustomerRef', 'invoice')).sort((a, b) => b.balance - a.balance);
-    const ap = bills.map((x) => shape(x, 'VendorRef', 'bill')).sort((a, b) => b.balance - a.balance);
+    const split = (rows, ref, kind) => {
+        const all = rows.map((x) => shape(x, ref, kind)).sort((a, b) => b.balance - a.balance);
+        if (!since) return { rows: all, older: { count: 0, total: 0 } };
+        const inYear = all.filter((x) => String(x.date) >= since);
+        const older = all.filter((x) => String(x.date) < since);
+        return { rows: inYear, older: { count: older.length, total: r2(older.reduce((s, x) => s + x.balance, 0)),
+            oldest: older.length ? older.map((x) => x.date).sort()[0] : null } };
+    };
+    const arSplit = split(inv, 'CustomerRef', 'invoice');
+    const apSplit = split(bills, 'VendorRef', 'bill');
+    const ar = arSplit.rows;
+    const ap = apSplit.rows;
     const bucket = (rows) => {
         const b = { current: 0, d30: 0, d60: 0, d90: 0 };
         for (const x of rows) {
@@ -106,8 +150,8 @@ async function openItems(env) {
         return b;
     };
     return {
-        ar: { count: ar.length, total: r2(ar.reduce((s, x) => s + x.balance, 0)), aging: bucket(ar), rows: ar.slice(0, 100) },
-        ap: { count: ap.length, total: r2(ap.reduce((s, x) => s + x.balance, 0)), aging: bucket(ap), rows: ap.slice(0, 100) },
+        ar: { count: ar.length, total: r2(ar.reduce((s, x) => s + x.balance, 0)), aging: bucket(ar), rows: ar.slice(0, 100), older: arSplit.older },
+        ap: { count: ap.length, total: r2(ap.reduce((s, x) => s + x.balance, 0)), aging: bucket(ap), rows: ap.slice(0, 100), older: apSplit.older },
     };
 }
 
@@ -121,16 +165,25 @@ async function accounts(env) {
 async function overview(env = auth.qbEnv(), { year } = {}) {
     const y = year || new Date().getFullYear();
     return cached(`overview|${env}|${y}`, 5 * 60 * 1000, async () => {
-        const [pl, open, accs, ci] = await Promise.all([
+        const [pl, open, accs, ci, bal] = await Promise.all([
             profitAndLoss(env, `${y}-01-01`, `${y}-12-31`).catch((e) => ({ error: e.message })),
-            openItems(env).catch((e) => ({ error: e.message })),
+            openItems(env, { year: y }).catch((e) => ({ error: e.message })),
             accounts(env).catch(() => []),
             client.companyInfo({ env }).catch(() => ({})),
+            partyBalances(env).catch(() => null),
         ]);
         const of = (type) => accs.filter((a) => a.type === type);
         return {
             company: ci.CompanyName || null, env, year: y, at: new Date().toISOString(),
             pl, ar: open.ar || null, ap: open.ap || null, error: open.error || null,
+            // What QuickBooks itself says each side comes to, after it nets
+            // prepayments off. This is the figure that answers "what do I
+            // owe" — the open documents below only answer "which ones".
+            owe: bal ? { total: bal.vendor.net, vendors: bal.vendor.count, prepaid: bal.vendor.credit,
+                prepaidVendors: bal.vendor.creditCount, top: bal.vendor.top,
+                unapplied: open.ap ? r2(open.ap.total - bal.vendor.net) : null } : null,
+            owedToYou: bal ? { total: bal.customer.net, customers: bal.customer.count, credits: bal.customer.credit,
+                top: bal.customer.top, unapplied: open.ar ? r2(open.ar.total - bal.customer.net) : null } : null,
             banks: of('Bank').concat(of('Credit Card')),
             receivable: of('Accounts Receivable'), payable: of('Accounts Payable'),
         };
@@ -241,4 +294,4 @@ async function find(query, env = auth.qbEnv(), { since = null } = {}) {
         couldNotLook: failed.length ? [...new Set(failed)] : null };
 }
 
-module.exports = { overview, partyDocs, find, openItems, profitAndLoss, accounts, forget, flattenReport, containersIn, shapeDoc };
+module.exports = { overview, partyDocs, find, openItems, partyBalances, profitAndLoss, accounts, forget, flattenReport, containersIn, shapeDoc };

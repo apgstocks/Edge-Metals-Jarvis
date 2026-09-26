@@ -55,5 +55,18 @@ ck('nothing here touches the global write switch', !/QB_PROD_WRITES\s*=/.test(sr
 ck('...and nothing here POSTs to QuickBooks', !/request\(\s*'POST'/.test(src) && !/client\.request\('P/.test(src));
 ck('a name with an apostrophe cannot break the query', /replace\(\/'\/g, "''"\)/.test(src));
 
+// ── what she owes is a BALANCE, not a sum of documents (2026-09-26) ────────
+// Apsara, at a $10.7M figure for what she owes: "What thr hell?" Summing
+// bills with a balance double-counts every prepayment already sitting on the
+// vendor. These pin the shape that keeps the two apart.
+const os = require('os');
+{
+    const src2 = fs.readFileSync(path.join(__dirname, '..', 'helpers', 'quickbooks', 'books.js'), 'utf8');
+    ck('the overview asks QuickBooks for the vendor and customer balances', /partyBalances/.test(src2) && /owe:/.test(src2));
+    ck('...and reports the unapplied gap rather than hiding it', /unapplied:/.test(src2));
+    ck('open items are scoped to the year she asked for', /openItems\(env, \{ year: y \}\)/.test(src2));
+    ck('...and anything older is counted and named, not dropped', /older: \{ count: older\.length/.test(src2));
+}
+
 console.log(`\nquickbooks-books: ${pass} passed, ${fail} failed`);
 if (fail) { console.log('FAILED: ' + failures.join(' | ')); process.exit(1); }

@@ -541,6 +541,80 @@ function mount(app, cfg) {
         catch (e) { res.status(502).json({ error: `QuickBooks: ${e.message}` }); }
     });
 
+    // ── her live sheet against her live books ──────────────────────────────
+    // scripts/qb-vs-sheet.js, on the page. Read-only: it says what is missing
+    // and never enters it, because most of what is missing sits before the
+    // cutover in the period her accountant owns.
+    let missingCache = { at: 0, key: '', data: null };
+    app.get('/api/qb/missing', async (req, res) => {
+        const since = /^\d{4}-\d{2}-\d{2}$/.test(String(req.query.since || '')) ? req.query.since : '2026-01-01';
+        const env = envOf();
+        const key = `${env}|${since}`;
+        // Both sides of this are slow (the whole workbook, then the year's
+        // documents), and it is the kind of screen she reopens.
+        if (missingCache.data && missingCache.key === key && Date.now() - missingCache.at < 10 * 60 * 1000) {
+            return res.json({ ...missingCache.data, cached: true });
+        }
+        try {
+            const data = await require('./vsSheet').compare({ since, env });
+            missingCache = { at: Date.now(), key, data };
+            res.json(data);
+        } catch (e) { res.status(502).json({ error: e.message }); }
+    });
+
+    // ── connecting QuickBooks ──────────────────────────────────────────────
+    // Was scripts/qb-connect.js on the laptop. The consent screen has to
+    // happen in a browser, so the page does what the script did: hand her the
+    // link, take back the address the browser landed on. Nothing is stored
+    // until Intuit has answered.
+    app.post('/api/qb/connect-url', async (req, res) => {
+        if (locked(req, res)) return;
+        try {
+            const env = envOf();
+            res.json({ env, url: auth.buildAuthUrl(env), status: auth.status(env),
+                note: env === 'production'
+                    ? 'This connects your LIVE books. Sign in, pick Edge Metals, then paste the whole address the browser lands on — it may say "can\'t connect", which is fine.'
+                    : 'Sandbox. Sign in, then paste the whole address the browser lands on.' });
+        } catch (e) { res.status(400).json({ error: e.message }); }
+    });
+    app.post('/api/qb/connect', async (req, res) => {
+        if (locked(req, res)) return;
+        const url = String((req.body || {}).redirectedUrl || '').trim();
+        if (!/^https?:\/\//.test(url) || !/code=/.test(url)) {
+            return res.status(400).json({ error: 'paste the WHOLE address the browser landed on — it carries the code' });
+        }
+        const env = envOf();
+        try {
+            const t = await auth.exchangeRedirect(url, { env });
+            const ci = await require('./client').companyInfo({ env }).catch(() => ({}));
+            books.forget();
+            res.json({ ok: true, env, realmId: t.realmId, company: ci.CompanyName || null, status: auth.status(env) });
+        } catch (e) { res.status(400).json({ error: e.message }); }
+    });
+
+    // ── a reviewed list of older rows ──────────────────────────────────────
+    // The one place the cutover steps aside, for the rows she has just looked
+    // at and nothing else. Dry run unless she says otherwise IN WORDS, and a
+    // reason is required — it goes in the journal beside every row.
+    app.post('/api/qb/push-list', async (req, res) => {
+        if (locked(req, res)) return;
+        const b = req.body || {};
+        const really = b.really === true;
+        if (really && String(b.confirm || '').trim().toUpperCase() !== 'ENTER') {
+            return res.status(400).json({ error: 'to enter these for real, type ENTER — this is the one path that goes behind the cutover' });
+        }
+        try {
+            const out = await require('./pushList').run({
+                kind: String(b.kind || 'invoice').toLowerCase(),
+                since: String(b.since || '2026-01-01'), until: String(b.until || '2026-12-31'),
+                party: b.party ? String(b.party) : null,
+                reason: b.reason, really, env: envOf(),
+            });
+            if (really) books.forget();
+            res.json(out);
+        } catch (e) { res.status(400).json({ error: e.message }); }
+    });
+
     app.post('/api/qb/undo', async (req, res) => {
         if (locked(req, res)) return;
         const { journalId, reason, dryRun } = req.body || {};
