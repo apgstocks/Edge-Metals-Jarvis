@@ -669,16 +669,20 @@ async function allocatePayments(vendor) {
    every line against the open bill or invoice it pays. Nothing is
    written to QuickBooks; this is the sheet she clicks down. */
 async function bankReview() {
-  const file = await pickFile('.csv,text/csv');
-  if (!file) return;
+  // The Banking screen exports only the rows on screen, so 661 lines arrive
+  // as several files. Take them all at once.
+  const files = await pickFile('.csv,text/csv', true);
+  if (!files || !files.length) return;
   STATE.sel = null; renderList();
   $('dname').textContent = 'Bank lines, matched';
-  $('dmap').textContent = `Reading ${file.name}…`;
+  $('dmap').textContent = `Reading ${files.map(f => f.name).join(', ')}…`;
   $('dstats').innerHTML = ''; $('dtabs').innerHTML = '';
   $('dbody').innerHTML = '<div class="empty">Matching every line against what is still open…</div>';
   try {
-    const r = await api('/api/qb/bank-review', { csv: file.base64, base64: true });
-    $('dmap').textContent = `${r.counted} bank lines · ${r.open.bills} bills and ${r.open.invoices} invoices open since ${r.since}`;
+    const r = await api('/api/qb/bank-review', { csvs: files.map(f => f.base64), base64: true });
+    $('dmap').textContent = `${r.counted} bank lines from ${r.files} file${r.files > 1 ? 's' : ''}`
+      + `${r.duplicates ? `, ${r.duplicates} line${r.duplicates > 1 ? 's' : ''} seen twice and counted once` : ''}`
+      + ` · ${r.open.bills} bills and ${r.open.invoices} invoices open since ${r.since}`;
     const t = r.tally;
     $('dstats').innerHTML = [
       ['Certain', `${t.exact || 0}`, 'good'], ['Adds up', `${t.group || 0}`, 'good'],
@@ -699,17 +703,21 @@ async function bankReview() {
 }
 
 /* a file off her machine, as base64 — the same shape every upload here uses */
-function pickFile(accept) {
+function pickFile(accept, many) {
   return new Promise((resolve) => {
     const input = document.createElement('input');
-    input.type = 'file'; input.accept = accept || '';
-    input.onchange = () => {
-      const f = input.files && input.files[0];
-      if (!f) return resolve(null);
-      const fr = new FileReader();
-      fr.onload = () => resolve({ name: f.name, base64: String(fr.result).split(',')[1] });
-      fr.onerror = () => resolve(null);
-      fr.readAsDataURL(f);
+    input.type = 'file'; input.accept = accept || ''; input.multiple = !!many;
+    input.onchange = async () => {
+      const list = [...(input.files || [])];
+      if (!list.length) return resolve(many ? [] : null);
+      const read = (f) => new Promise((done) => {
+        const fr = new FileReader();
+        fr.onload = () => done({ name: f.name, base64: String(fr.result).split(',')[1] });
+        fr.onerror = () => done(null);
+        fr.readAsDataURL(f);
+      });
+      const out = (await Promise.all(list.map(read))).filter(Boolean);
+      resolve(many ? out : out[0] || null);
     };
     input.click();
   });

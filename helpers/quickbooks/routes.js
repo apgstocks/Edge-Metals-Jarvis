@@ -747,25 +747,51 @@ function mount(app, cfg) {
     // accountant clicks down in the Banking screen.
     app.post('/api/qb/bank-review', async (req, res) => {
         const b = req.body || {};
-        const csv = typeof b.csv === 'string' && b.csv.length
-            ? (b.base64 ? Buffer.from(b.csv, 'base64').toString('utf8') : b.csv) : '';
-        if (!csv.trim()) return res.status(400).json({ error: 'send the CSV exported from the Banking screen' });
+        // ── ONE PAGE AT A TIME (2026-09-26) ────────────────────────────────
+        // Apsara: "Right now it shows only one page for download." The
+        // Banking screen exports what is ON SCREEN, so 661 lines come out as
+        // several files. Send them all: they are read together, and a line
+        // that appears in two overlapping exports is counted once.
+        const decode = (v) => (b.base64 ? Buffer.from(String(v), 'base64').toString('utf8') : String(v));
+        const files = Array.isArray(b.csvs) ? b.csvs.map(decode)
+            : (typeof b.csv === 'string' && b.csv.length ? [decode(b.csv)] : []);
+        if (!files.length || !files.some((f) => f.trim())) return res.status(400).json({ error: 'send the CSV exported from the Banking screen' });
         const since = /^\d{4}-\d{2}-\d{2}$/.test(String(b.since || '')) ? b.since : `${new Date().getFullYear()}-01-01`;
         const bank = require('../../scripts/qb-bank-match.js');
         const env = envOf();
         try {
-            const { lines, columns } = bank.readBankLines({ text: csv });
-            if (!lines.length) return res.status(400).json({ error: 'no bank lines found in that file — check it is the export, not a screenshot' });
-            const docs = await bank.openDocs(env, since);
+            let columns = null; const lines = []; const seen = new Set(); let duplicates = 0;
+            const problems = [];
+            for (const text of files) {
+                let part;
+                try { part = bank.readBankLines({ text }); }
+                catch (e) { problems.push(e.message); continue; }
+                columns = columns || part.columns;
+                for (const l of part.lines) {
+                    // the same line in two overlapping exports: one date, one
+                    // description, one amount, one direction
+                    const key = `${l.date}|${l.amount}|${l.direction}|${String(l.desc).trim().toUpperCase()}`;
+                    if (seen.has(key)) { duplicates++; continue; }
+                    seen.add(key); lines.push(l);
+                }
+            }
+            if (!lines.length) return res.status(400).json({ error: problems[0] || 'no bank lines found in those files — check they are the export, not a screenshot' });
+            // If QuickBooks cannot be reached, she still gets her lines read
+            // and counted — with every row marked unchecked and the reason
+            // said out loud, rather than a 400 that throws the file away.
+            let docs = null, qbError = null;
+            try { docs = await bank.openDocs(env, since); }
+            catch (e) { qbError = e.message; docs = { out: [], in: [] }; }
             const tally = {};
             const rows = lines.map((line) => {
-                const m = bank.matchLine(line, docs);
+                const m = qbError ? { how: 'unchecked', why: `QuickBooks could not be read: ${qbError}`, docs: [] } : bank.matchLine(line, docs);
                 tally[m.how] = (tally[m.how] || 0) + 1;
                 return { ...line, how: m.how, why: m.why,
                     docs: m.docs.map((d) => ({ type: d.type, id: String(d.id), doc: d.doc, date: d.date, party: d.party, balance: d.balance, containers: d.containers })) };
             });
             const money = (how) => r2(rows.filter((x) => x.how === how).reduce((s, x) => s + x.amount, 0));
-            res.json({ env, since, columns, counted: rows.length, tally,
+            res.json({ env, since, columns, counted: rows.length, files: files.length, duplicates,
+                unreadable: problems.length ? problems : null, quickbooks: qbError, tally,
                 totals: { exact: money('exact'), group: money('group'), near: money('near'), none: money('none'), notTrade: money('not-trade') },
                 open: { bills: docs.out.length, invoices: docs.in.length },
                 rows });
