@@ -266,6 +266,25 @@ const ck = (name, ok, extra) => { if (ok) { pass++; console.log('  PASS ', name)
     ck('the page offers the working name instead of showing the error', /That name is taken in QuickBooks/.test(pageSrc6));
     ck('...which needs the refusal body, not just its sentence', /err\.body = j/.test(pageSrc6));
 
+    // ── the bank's "For Review" list (2026-09-26) ──────────────────────────
+    // Apsara: "i need it." QuickBooks exposes that queue to no app — checked
+    // against her own books: no BankTransaction entity, /olb unsupported, and
+    // no report carries an un-reviewed line because it is not a transaction
+    // yet. The CSV the Banking screen exports is the way in.
+    ck('a bank review with no file is refused, and says what to send',
+       (await post('/api/qb/bank-review', {})).code === 400);
+    const notACsv = await post('/api/qb/bank-review', { csv: 'nothing like a bank export' });
+    ck('a file with no bank lines in it is refused, not silently empty',
+       notACsv.code === 400 && /export/.test(notACsv.body.error), notACsv.body);
+    const bank = require('../scripts/qb-bank-match.js');
+    const read = bank.readBankLines({ text: 'Date,Description,Payee,Spent,Received\n09/15/2026,WIRE OUT,Inesh Cores Chapin,60000,\n09/16/2026,ZELLE IN,Rad Metals,,45120.50\n' });
+    ck('the matcher reads an uploaded export the same way it reads a file',
+       read.lines.length === 2 && read.lines[0].direction === 'out' && read.lines[1].direction === 'in', read.lines);
+    ck('...money out and money in are never mixed up', read.lines[0].amount === 60000 && read.lines[1].amount === 45120.5);
+    const pageSrc7 = fs.readFileSync(require('path').join(__dirname, '..', 'dashboard', 'quickbooks.html'), 'utf8');
+    ck('the bank screen is on the page', /data-bank=/.test(pageSrc7) && /api\/qb\/bank-review/.test(pageSrc7));
+    ck('...and says plainly that it writes nothing to QuickBooks', /Nothing here touches QuickBooks/.test(pageSrc7));
+
     // ── the cutover, from the page (2026-09-26) ────────────────────────────
     // Apsara: "I want nightly report to run everyday to upload all the bills
     // and invoices." The cutover decides what "all" is, so it has to be

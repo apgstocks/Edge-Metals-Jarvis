@@ -207,7 +207,8 @@ async function loadStatus() {
       `<span class="chip act" data-todo="1" title="Everything QuickBooks is waiting on">what needs you</span>`,
       `<span class="chip act" data-books="1" title="The year, what is owed both ways, and the bank balances — read live from QuickBooks">the books</span>`,
       `<span class="chip act" data-find="1" title="Find a document in QuickBooks by number, container or amount">find</span>`,
-      `<span class="chip act" data-allocate="1" title="Payments that were never matched to a bill — the biggest single thing wrong with the books">place payments</span>`,
+      `<span class="chip act" data-bank="1" title="The CSV you export from the Banking screen, matched line by line to what is open">bank lines</span>`,
+      `<span class="chip act" data-allocate="1" title=""Payments that were never matched to a bill — the biggest single thing wrong with the books">place payments</span>`,
       `<span class="chip act" data-dupes="1" title=""The same money entered twice, per supplier and customer, and payments never applied">duplicates</span>`,
       `<span class="chip act" data-missing="1" title=""Your live sheet against your live books — what neither side has">sheet vs books</span>`,
       `<span class="chip act" data-older="1" title="Enter a reviewed list of rows from before the cutover">enter an older list</span>`,
@@ -661,6 +662,59 @@ async function allocatePayments(vendor) {
   } catch (e) { $('dbody').innerHTML = `<div class="empty">${e.message}</div>`; toast(e.message, 'bad'); }
 }
 
+/* ── THE BANK'S "FOR REVIEW" LIST ────────────────────────────────────
+   QuickBooks does not let any app read that queue — checked against her
+   own books, not assumed. What it does allow is the CSV the Banking
+   screen exports, so she exports once and this does the thinking:
+   every line against the open bill or invoice it pays. Nothing is
+   written to QuickBooks; this is the sheet she clicks down. */
+async function bankReview() {
+  const file = await pickFile('.csv,text/csv');
+  if (!file) return;
+  STATE.sel = null; renderList();
+  $('dname').textContent = 'Bank lines, matched';
+  $('dmap').textContent = `Reading ${file.name}…`;
+  $('dstats').innerHTML = ''; $('dtabs').innerHTML = '';
+  $('dbody').innerHTML = '<div class="empty">Matching every line against what is still open…</div>';
+  try {
+    const r = await api('/api/qb/bank-review', { csv: file.base64, base64: true });
+    $('dmap').textContent = `${r.counted} bank lines · ${r.open.bills} bills and ${r.open.invoices} invoices open since ${r.since}`;
+    const t = r.tally;
+    $('dstats').innerHTML = [
+      ['Certain', `${t.exact || 0}`, 'good'], ['Adds up', `${t.group || 0}`, 'good'],
+      ['Needs you', `${(t.near || 0)}`, 'warn'], ['Nothing matches', `${t.none || 0}`, 'warn'],
+      ['Not trade', `${t['not-trade'] || 0}`, ''],
+    ].map(([k, v, cls]) => `<div class="stat"><div class="k">${k}</div><div class="v ${cls}">${v}</div></div>`).join('');
+    const pill = { exact: 'in', group: 'in', fee: 'out', lump: 'out', near: 'out', none: 'bad', 'not-trade': '' };
+    const order = { exact: 0, group: 1, fee: 2, lump: 3, near: 4, none: 5, 'not-trade': 6 };
+    const rows = r.rows.slice().sort((a, b) => (order[a.how] - order[b.how]) || b.amount - a.amount);
+    $('dbody').innerHTML = `<div class="empty" style="padding:8px">Nothing here touches QuickBooks. Work down it in the Banking screen — the certain ones first.</div>
+      <table><thead><tr><th>Date</th><th>On the statement</th><th class="num">Out</th><th class="num">In</th><th>What it is</th><th>Match</th></tr></thead><tbody>${
+      rows.map(x => `<tr><td class="mono">${x.date}</td>
+        <td>${x.desc || '—'}${x.party ? `<br><span class="mono" style="color:var(--text-faint)">${x.party}</span>` : ''}</td>
+        <td class="num">${x.spent ? money(x.spent) : ''}</td><td class="num">${x.received ? money(x.received) : ''}</td>
+        <td><span class="pill ${pill[x.how] || ''}">${x.how}</span> <span style="color:var(--text-faint)">${x.why}</span></td>
+        <td class="mono">${x.docs.map(d => `${qbLink(d.id, d.type.toLowerCase())} ${d.doc || ''} ${money(d.balance)}<br><span style="color:var(--text-faint)">${d.party}</span>`).join('<br>')}</td></tr>`).join('')}</tbody></table>`;
+  } catch (e) { $('dbody').innerHTML = `<div class="empty">${e.message}</div>`; }
+}
+
+/* a file off her machine, as base64 — the same shape every upload here uses */
+function pickFile(accept) {
+  return new Promise((resolve) => {
+    const input = document.createElement('input');
+    input.type = 'file'; input.accept = accept || '';
+    input.onchange = () => {
+      const f = input.files && input.files[0];
+      if (!f) return resolve(null);
+      const fr = new FileReader();
+      fr.onload = () => resolve({ name: f.name, base64: String(fr.result).split(',')[1] });
+      fr.onerror = () => resolve(null);
+      fr.readAsDataURL(f);
+    };
+    input.click();
+  });
+}
+
 /* ── what is waiting on her ──────────────────────────────────────────
    The first thing the page shows, because "what do I still have to do"
    used to need a script and a read of its output. Unmatched names by
@@ -1082,6 +1136,7 @@ $('chips').addEventListener('click', (e) => {
   else if (chip.dataset.missing) loadMissing();
   else if (chip.dataset.dupes) loadDuplicates();
   else if (chip.dataset.allocate) allocatePayments(null);
+  else if (chip.dataset.bank) bankReview();
   else if (chip.dataset.older) pushOlderList();
   else if (chip.dataset.connect) connectQb();
 });

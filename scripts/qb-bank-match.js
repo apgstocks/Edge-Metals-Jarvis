@@ -78,8 +78,11 @@ function isoDate(v) {
     const d = new Date(s); return isNaN(d) ? null : d.toISOString().slice(0, 10);
 }
 
+// Takes a path (the script) or { text } (the upload on the QuickBooks page,
+// 2026-09-26 — Apsara: "i need it"). Same reader either way: one parser, one
+// set of column guesses, one behaviour to trust.
 function readBankLines(file) {
-    const rows = parseCsv(fs.readFileSync(file, 'utf8'));
+    const rows = parseCsv(file && file.text !== undefined ? String(file.text) : fs.readFileSync(file, 'utf8'));
     const h = headerRow(rows);
     if (h === -1) throw new Error('could not find the header row — send me the first few lines of the file');
     const head = rows[h].map((c) => String(c).trim());
@@ -104,9 +107,9 @@ function readBankLines(file) {
 }
 
 // ── what is still open in QuickBooks ────────────────────────────────────────
-async function openDocs(env) {
+async function openDocs(env, since = SINCE) {
     const pull = async (t) => { let all = [], s = 1; for (;;) {
-        const r = (await client.query(`select * from ${t} where Balance > '0' and TxnDate >= '${SINCE}' startposition ${s} maxresults 1000`, { env }))[t] || [];
+        const r = (await client.query(`select * from ${t} where Balance > '0' and TxnDate >= '${since}' startposition ${s} maxresults 1000`, { env }))[t] || [];
         all = all.concat(r); if (r.length < 1000) break; s += 1000; } return all; };
     const bills = (await pull('Bill')).map((b) => ({ type: 'Bill', id: b.Id, doc: b.DocNumber || '', date: b.TxnDate,
         party: (b.VendorRef || {}).name || '', partyId: (b.VendorRef || {}).value, balance: round2(b.Balance), total: round2(b.TotalAmt),
@@ -278,5 +281,5 @@ async function main() {
     console.log('NOTHING was written to QuickBooks — this sheet is for the accountant to work down.');
 }
 
-module.exports = { parseCsv, words, payeeGuard, notTrade, feeShort, lumpSum, readBankLines, matchLine, containersIn, nameHit, isoDate };
+module.exports = { parseCsv, words, payeeGuard, notTrade, feeShort, lumpSum, readBankLines, matchLine, openDocs, containersIn, nameHit, isoDate };
 if (require.main === module) main().catch((e) => { console.error('qb-bank-match failed:', e.message); process.exit(1); });

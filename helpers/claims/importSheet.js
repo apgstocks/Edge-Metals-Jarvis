@@ -78,10 +78,21 @@ async function readSheet(input = {}) {
         const { rows, tab, tabs } = await rowsFromXlsx(buf, input.tab);
         return { rows, source: `${input.name || 'an uploaded workbook'} › ${tab}`, tab, tabs };
     }
+    // The live tab is fetched from wherever this process runs — which is the VM,
+    // not her laptop. "fetch failed" on its own tells her nothing, so each way it
+    // can go wrong says which one it was and what to do instead.
+    if (!cfg.INVOICE_SHEET_ID) throw new Error('no sheet is configured (INVOICE_SHEET_ID) — upload the file instead');
     const url = `https://docs.google.com/spreadsheets/d/${cfg.INVOICE_SHEET_ID}/export?format=csv&gid=${cfg.CLAIMS_SHEET_GID}`;
-    const res = await fetch(url);
-    if (!res.ok) throw new Error(`could not read the live tab (${res.status}) — it has to be link-viewable, or upload the file instead`);
-    return { rows: parseCsv(await res.text()), source: `the live Weight Shortage tab (gid ${cfg.CLAIMS_SHEET_GID})` };
+    let res;
+    try { res = await fetch(url); }
+    catch (e) { throw new Error(`this server could not reach Google Sheets (${e.message}) — upload the file instead`); }
+    if (res.status === 401 || res.status === 403) throw new Error('Google refused the sheet — it has to be shared as "anyone with the link can view", or upload the file instead');
+    if (!res.ok) throw new Error(`could not read the live tab (HTTP ${res.status}) — upload the file instead`);
+    const text = await res.text();
+    if (/^\s*<(!doctype|html)/i.test(text)) throw new Error('Google sent a sign-in page instead of the sheet — it is not link-viewable from this server, so upload the file instead');
+    const rows = parseCsv(text);
+    if (!rows.length) throw new Error(`the live tab (gid ${cfg.CLAIMS_SHEET_GID}) came back empty — check the tab still exists`);
+    return { rows, source: `the live Weight Shortage tab (gid ${cfg.CLAIMS_SHEET_GID})` };
 }
 
 // ── HEADER → FIELD ──────────────────────────────────────────────────────────

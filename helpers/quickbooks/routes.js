@@ -734,6 +734,44 @@ function mount(app, cfg) {
         } catch (e) { res.status(400).json({ error: e.message }); }
     });
 
+    // ── THE BANK'S "FOR REVIEW" LIST ───────────────────────────────────────
+    // Apsara, 2026-09-26: "i need it." QuickBooks does not expose that queue
+    // to ANY app — verified against her own books: there is no BankTransaction
+    // entity, /olb is an unsupported operation, and no report carries an
+    // un-reviewed line, because it is not a transaction yet. What Intuit does
+    // allow is the CSV the Banking screen exports. So she exports once, and
+    // this does the thinking: every line matched to the open bill or invoice
+    // it pays, with the same conservative rules as the script.
+    //
+    // It writes NOTHING to QuickBooks. The output is a worklist she or the
+    // accountant clicks down in the Banking screen.
+    app.post('/api/qb/bank-review', async (req, res) => {
+        const b = req.body || {};
+        const csv = typeof b.csv === 'string' && b.csv.length
+            ? (b.base64 ? Buffer.from(b.csv, 'base64').toString('utf8') : b.csv) : '';
+        if (!csv.trim()) return res.status(400).json({ error: 'send the CSV exported from the Banking screen' });
+        const since = /^\d{4}-\d{2}-\d{2}$/.test(String(b.since || '')) ? b.since : `${new Date().getFullYear()}-01-01`;
+        const bank = require('../../scripts/qb-bank-match.js');
+        const env = envOf();
+        try {
+            const { lines, columns } = bank.readBankLines({ text: csv });
+            if (!lines.length) return res.status(400).json({ error: 'no bank lines found in that file — check it is the export, not a screenshot' });
+            const docs = await bank.openDocs(env, since);
+            const tally = {};
+            const rows = lines.map((line) => {
+                const m = bank.matchLine(line, docs);
+                tally[m.how] = (tally[m.how] || 0) + 1;
+                return { ...line, how: m.how, why: m.why,
+                    docs: m.docs.map((d) => ({ type: d.type, id: String(d.id), doc: d.doc, date: d.date, party: d.party, balance: d.balance, containers: d.containers })) };
+            });
+            const money = (how) => r2(rows.filter((x) => x.how === how).reduce((s, x) => s + x.amount, 0));
+            res.json({ env, since, columns, counted: rows.length, tally,
+                totals: { exact: money('exact'), group: money('group'), near: money('near'), none: money('none'), notTrade: money('not-trade') },
+                open: { bills: docs.out.length, invoices: docs.in.length },
+                rows });
+        } catch (e) { res.status(400).json({ error: e.message }); }
+    });
+
     app.post('/api/qb/undo', async (req, res) => {
         if (locked(req, res)) return;
         const { journalId, reason, dryRun } = req.body || {};
