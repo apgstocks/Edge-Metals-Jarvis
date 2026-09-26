@@ -1172,6 +1172,17 @@ async function nightlyMetalsSheetSync() {
     return result;
 }
 
+async function nightlyQuickBooks() {
+    const job = require('./helpers/quickbooksNightly');
+    const out = await job.run();
+    const s = job.summarise(out.result || {});
+    if (out.error) console.error(`[SCHED] quickbooks FAILED — NOTHING WAS WRITTEN: ${out.error}`);
+    else console.log(`[SCHED] quickbooks ${out.dryRun ? '(dry run)' : '(live)'}: entered ${s.made}, stuck ${s.blocked}, needs her ${s.asked}${s.errored ? `, errors ${s.errored}` : ''}${s.left ? `, left alone ${s.left} older than the cutover` : ''}`);
+    try { await job.emailReport(out); }
+    catch (e) { console.error('[SCHED] quickbooks email failed:', e.message); }
+    return out;
+}
+
 function start() {
     cron.schedule('0 8 * * *',    () => morningDigest().catch(e => console.error('[SCHED] digest:', e)), TZ);
     cron.schedule('15 8 * * *',   () => dailyTruckerCheck().catch(e => console.error('[SCHED] trucker-check:', e)), TZ);
@@ -1182,6 +1193,13 @@ function start() {
     cron.schedule('0 7 * * *',    () => nightlyLogDigest().catch(e => console.error('[SCHED] log-digest:', e)), TZ);
     cron.schedule('45 22 * * *',  () => nightlyCutoffBackfill().catch(e => console.error('[SCHED] cutoff-backfill:', e)), TZ);
     cron.schedule('15 23 * * *',  () => nightlyMetalsSheetSync().catch(e => console.error('[SCHED] metals-sheet-sync:', e)), TZ);
+    // ── QuickBooks, 45 minutes after the sheet sync ───────────────────────
+    // Apsara, 2026-09-25, comparing Jarvis to a commercial product: "Their
+    // QuickBooks integration will be cleaner — fix this." The gap was not the
+    // checks, it was that nothing ran on its own. Ordered AFTER the sheet
+    // sync on purpose: that job fills the ledgers, this one pushes what it
+    // filled. Same switches as ever — off means a dry run that says so.
+    cron.schedule('0 0 * * *',    () => nightlyQuickBooks().catch(e => console.error('[SCHED] quickbooks:', e)), TZ);
     cron.schedule('* * * * *',    () => taskRunner().catch(e => console.error('[SCHED] tasks:',  e)),    TZ);
     cron.schedule('*/5 * * * *',  () => quoteEmailReplyWatch().catch(e => console.error('[SCHED] quote-email-poll:', e)), TZ);
     cron.schedule('*/5 * * * *',  () => contactQuoteEmailReplyWatch().catch(e => console.error('[SCHED] contact-quote-email-poll:', e)), TZ);

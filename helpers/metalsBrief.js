@@ -92,7 +92,13 @@ function dueToday(now = new Date()) {
     try {
         const end = new Date(now); end.setHours(23, 59, 59, 999);
         const tasks = loadJson(cfg.TASKS_FILE, []) || [];
+        // Claim to-dos are excluded on purpose. Apsara, 2026-09-26, asked for
+        // the claims feature and for the brief to keep saying exactly what it
+        // says today; claim_verify / claim_recovery are manager-targeted, so
+        // without this line every claim would start appearing in the spoken
+        // brief. They live on /claims and in the team WhatsApp instead.
         return tasks.filter((t) => t && t.status === 'pending' && t.target_kind === 'manager'
+            && !String(t.type || '').startsWith('claim_')
             && new Date(t.fire_at) <= end);
     } catch (e) { return []; }
 }

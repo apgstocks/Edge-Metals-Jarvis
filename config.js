@@ -263,6 +263,17 @@ const FILES = {
     // pattern as EMAIL_PROCESSED_FILE, kept separate so the two watchers can
     // never mark each other's mail as handled.
     PAYMENT_EMAILS_PROCESSED_FILE: path.join(DATA_DIR, 'payment_emails_processed.json'),
+    // Weight-shortage / grade claims a customer has raised against Edge
+    // Metals. Its own store, NOT a row appended to the sheet's "Weight
+    // Shortage 2025" tab: that tab is seven stacked tables sharing one grid,
+    // so an appended row has no defined column meaning. See helpers/claims.js.
+    CLAIMS_FILE: path.join(DATA_DIR, 'claims.json'),
+    // Gmail message ids the claim watcher has already judged. Separate from
+    // EMAIL_ASSESSED_FILE and PAYMENT_EMAILS_PROCESSED_FILE for the same
+    // reason those two are separate — no watcher may mark another's mail as
+    // handled, and replyWatch's `seen` is aged out by trimSeen, which would
+    // let a chaser re-create a claim weeks later.
+    CLAIM_EMAILS_PROCESSED_FILE: path.join(DATA_DIR, 'claim_emails_processed.json'),
     // Yard scale-ticket photos — standalone store, deliberately separate from
     // BOOKINGS_FILE/WORKFLOW_FILE. Added for the yard/scale-staff camera-photo
     // feature: yard staff text a photo of the digital scale ticket, Gemini reads

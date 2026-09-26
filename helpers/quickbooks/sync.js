@@ -143,13 +143,32 @@ function after(kind, id, change = 'saved') {
 async function sweep({ env = auth.qbEnv(), dryRun = false } = {}) {
     const res = { bill: {}, sale: {}, billpayment: {}, receipt: {} };
     const count = (k, r) => { const s = (r && r.status) || 'error'; res[k][s] = (res[k][s] || 0) + 1; };
+    // ── WHAT THE CUTOVER LEFT BEHIND (2026-09-26) ───────────────────────────
+    // Rows older than the cutover are dropped here, before any push. That was
+    // invisible: with the cutover set to today, a night's sheet sync could
+    // write 11 bills and the run would report nothing at all — no error, no
+    // count, nothing to act on. So the sweep now counts what it walked past,
+    // with the oldest and newest date, and the report says it out loud.
+    const left = { bill: 0, sale: 0, billpayment: 0, receipt: 0, from: null, to: null, why: {} };
+    const noteLeft = (k, kind, d, reason) => {
+        left[k]++;
+        const iso = push.isoDate(d);
+        if (iso) { if (!left.from || iso < left.from) left.from = iso; if (!left.to || iso > left.to) left.to = iso; }
+        const why = String(reason || '').replace(/\(\d{4}-\d{2}-\d{2}\)/, '').trim();
+        left.why[why] = (left.why[why] || 0) + 1;
+    };
     // keep a row if it is after the cutover OR its date can't be read — the
     // push functions then report it as blocked instead of it vanishing.
-    const since = (kind, d) => { const c = push.beforeCutover(kind, d, env); return !c || push.UNREADABLE.test(c); };
-    const bills = require('../bills').list().filter((b) => since('bill', b.date));
-    const sales = require('../sales').list().filter((s) => since('invoice', s.date));
-    const bps = require('../billPayments').list().filter((p) => since('bill', p.date));
-    const recs = require('../salesReceipts').list().filter((r) => since('invoice', r.date));
+    const since = (k, kind, d) => {
+        const c = push.beforeCutover(kind, d, env);
+        if (!c || push.UNREADABLE.test(c)) return true;
+        noteLeft(k, kind, d, c);
+        return false;
+    };
+    const bills = require('../bills').list().filter((b) => since('bill', 'bill', b.date));
+    const sales = require('../sales').list().filter((s) => since('sale', 'invoice', s.date));
+    const bps = require('../billPayments').list().filter((p) => since('billpayment', 'bill', p.date));
+    const recs = require('../salesReceipts').list().filter((r) => since('receipt', 'invoice', r.date));
     const snaps = await snapshots(env);
     if (dryRun) {
         const B = require('../bills'), S = require('../sales');
@@ -161,6 +180,7 @@ async function sweep({ env = auth.qbEnv(), dryRun = false } = {}) {
         for (const p of bps) count('billpayment', await pushPayments.pushBillPayment(p, snaps, { env, dryRun: true }).catch((e) => ({ status: 'error: ' + e.message })));
         for (const r of recs) count('receipt', await pushPayments.pushCustomerPayment(r, snaps, { env, dryRun: true,
             saleInvoiceNo: (saleId) => { const s = S.getSale(saleId); return s && push.docNumberFor(s); } }).catch((e) => ({ status: 'error: ' + e.message })));
+        res.leftAlone = left;
         return res;
     }
     for (const b of bills) count('bill', await syncBill(b.id, env).catch((e) => ({ status: 'error: ' + e.message })));
@@ -168,6 +188,7 @@ async function sweep({ env = auth.qbEnv(), dryRun = false } = {}) {
     for (const s of sales) { const no = push.docNumberFor(s); if (no && seen.has(no)) continue; seen.add(no); count('sale', await syncSale(s.id, env).catch((e) => ({ status: 'error: ' + e.message }))); }
     for (const p of bps) count('billpayment', await syncBillPayment(p.id, env).catch((e) => ({ status: 'error: ' + e.message })));
     for (const r of recs) count('receipt', await syncReceipt(r.id, env).catch((e) => ({ status: 'error: ' + e.message })));
+    res.leftAlone = left;
     return res;
 }
 

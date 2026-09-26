@@ -136,6 +136,10 @@ async function sendToTeam(text) {
 // ── Wire modules ───────────────────────────────────────────────────────────────
 alerts.init({ sendToManager });
 actions.init({ sendMessage, sendToManager, sendToTeam, pushAlert: alerts.pushAlert });
+// Claims get sendToTeam and NOTHING else. A weight-shortage claim names the
+// customer's complaint and the supplier it will be recovered from, so it must
+// never reach a group either of them is in — and sendMessage can reach any chat.
+require('./workflow/claimWatch').init({ sendToTeam });
 pricelist.init({ sendMessage, getBrowser: () => client.pupBrowser });
 require('./helpers/notify').init({ pushAlert: alerts.pushAlert });
 

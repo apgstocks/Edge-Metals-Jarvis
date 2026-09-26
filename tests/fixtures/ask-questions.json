@@ -37,11 +37,21 @@
   },
   {
     "q": "how many containers did we load this month",
-    "kind": "data"
+    "kind": "data",
+    "expect": {
+      "tables": [
+        "bills"
+      ]
+    }
   },
   {
     "q": "how many containers did we load in August",
-    "kind": "data"
+    "kind": "data",
+    "expect": {
+      "tables": [
+        "bills"
+      ]
+    }
   },
   {
     "q": "what did we spend on metal last month",
@@ -108,7 +118,12 @@
   },
   {
     "q": "what is the average price per pound we paid for motors",
-    "kind": "data"
+    "kind": "data",
+    "expect": {
+      "tables": [
+        "bill_items"
+      ]
+    }
   },
   {
     "q": "how many tonnes did we ship to Daekwang this year",
@@ -148,11 +163,21 @@
   },
   {
     "q": "what did we pay in advances that is still unapplied",
-    "kind": "data"
+    "kind": "data",
+    "expect": {
+      "tables": [
+        "bill_payments"
+      ]
+    }
   },
   {
     "q": "how much is sitting in Edge inventory",
-    "kind": "data"
+    "kind": "data",
+    "expect": {
+      "tables": [
+        "edge_inventory"
+      ]
+    }
   },
   {
     "q": "how many loads did the yard take yesterday",
@@ -208,7 +233,12 @@
   {
     "q": "which seller did we buy the most copper from this year",
     "kind": "data",
-    "book": "yard"
+    "book": "yard",
+    "expect": {
+      "tables": [
+        "yard_load_items"
+      ]
+    }
   },
   {
     "q": "how much is still owed to truckers",
@@ -242,6 +272,379 @@
   },
   {
     "q": "how many containers did we ship this month",
+    "kind": "data",
+    "book": "yard",
+    "expect": {
+      "scope": "metals"
+    }
+  },
+  {
+    "q": "how many loads this week",
+    "kind": "data",
+    "book": "yard",
+    "expect": {
+      "tables": [
+        "yard_loads"
+      ]
+    }
+  },
+  {
+    "q": "how many loads did we take today",
+    "kind": "data",
+    "book": "yard",
+    "expect": {
+      "tables": [
+        "yard_loads"
+      ]
+    }
+  },
+  {
+    "q": "how many loads in August",
+    "kind": "data",
+    "book": "yard",
+    "expect": {
+      "tables": [
+        "yard_loads"
+      ]
+    }
+  },
+  {
+    "q": "how many sellers did we buy from this month",
+    "kind": "data",
+    "book": "yard",
+    "expect": {
+      "tables": [
+        "yard_loads"
+      ]
+    }
+  },
+  {
+    "q": "how much copper did we buy this month",
+    "kind": "data",
+    "book": "yard",
+    "expect": {
+      "tables": [
+        "yard_load_items"
+      ]
+    }
+  },
+  {
+    "q": "what grades did we buy this month",
+    "kind": "data",
+    "book": "yard",
+    "expect": {
+      "tables": [
+        "yard_load_items"
+      ]
+    }
+  },
+  {
+    "q": "what are we paying per pound for brass",
+    "kind": "data",
+    "book": "yard",
+    "expect": {
+      "tables": [
+        "yard_load_items"
+      ]
+    }
+  },
+  {
+    "q": "what did we sell last month",
+    "kind": "data",
+    "book": "yard",
+    "expect": {
+      "tables": [
+        "yard_sales"
+      ]
+    }
+  },
+  {
+    "q": "who owes us money",
+    "kind": "data",
+    "book": "yard",
+    "expect": {
+      "tables": [
+        "yard_sales"
+      ]
+    }
+  },
+  {
+    "q": "what is the oldest unpaid load",
+    "kind": "data",
+    "book": "yard",
+    "expect": {
+      "tables": [
+        "yard_loads"
+      ]
+    }
+  },
+  {
+    "q": "which loads are still unpaid",
+    "kind": "data",
+    "book": "yard",
+    "expect": {
+      "tables": [
+        "yard_loads"
+      ]
+    }
+  },
+  {
+    "q": "what was our biggest load",
+    "kind": "data",
+    "book": "yard",
+    "expect": {
+      "tables": [
+        "yard_loads"
+      ]
+    }
+  },
+  {
+    "q": "who did we spend the most with this year",
+    "kind": "data",
+    "book": "yard",
+    "expect": {
+      "tables": [
+        "yard_loads"
+      ]
+    }
+  },
+  {
+    "q": "what did we spend on expenses this month",
+    "kind": "data",
+    "book": "yard",
+    "expect": {
+      "tables": [
+        "yard_expenses"
+      ]
+    }
+  },
+  {
+    "q": "what did we pay in trucking this month",
+    "kind": "data",
+    "book": "yard",
+    "expect": {
+      "tables": [
+        "yard_trucker_bills"
+      ]
+    }
+  },
+  {
+    "q": "how many containers did we ship this year",
+    "kind": "data",
+    "expect": {
+      "tables": [
+        "bills"
+      ]
+    }
+  },
+  {
+    "q": "what did we invoice last month",
+    "kind": "data",
+    "expect": {
+      "tables": [
+        "sales"
+      ]
+    }
+  },
+  {
+    "q": "which containers did we bill this week",
+    "kind": "data",
+    "expect": {
+      "tables": [
+        "bills"
+      ]
+    }
+  },
+  {
+    "q": "what is the oldest unpaid bill",
+    "kind": "data",
+    "expect": {
+      "tables": [
+        "bills"
+      ]
+    }
+  },
+  {
+    "q": "which invoices are overdue",
+    "kind": "data",
+    "expect": {
+      "tables": [
+        "sales"
+      ]
+    }
+  },
+  {
+    "q": "which containers lost money",
+    "kind": "data",
+    "expect": {
+      "tables": [
+        "margin"
+      ]
+    }
+  },
+  {
+    "q": "which customer is the most profitable",
+    "kind": "data",
+    "expect": {
+      "tables": [
+        "margin"
+      ]
+    }
+  },
+  {
+    "q": "what did we pay out this month",
+    "kind": "data",
+    "expect": {
+      "tables": [
+        "bill_payments"
+      ]
+    }
+  },
+  {
+    "q": "what came in this month",
+    "kind": "data",
+    "expect": {
+      "tables": [
+        "sales_receipts"
+      ]
+    }
+  },
+  {
+    "q": "which bookings are still open",
+    "kind": "data",
+    "expect": {
+      "tables": [
+        "bookings"
+      ]
+    }
+  },
+  {
+    "q": "what are we paying per pound for aluminium combo",
+    "kind": "data",
+    "expect": {
+      "tables": [
+        "bill_items"
+      ]
+    }
+  },
+  {
+    "q": "what's outstanding to suppliers",
+    "kind": "data",
+    "expect": {
+      "tables": [
+        "bills"
+      ]
+    }
+  },
+  {
+    "q": "supplier balance",
+    "kind": "data",
+    "expect": {
+      "tables": [
+        "bills"
+      ]
+    }
+  },
+  {
+    "q": "how much do we still have to pay our suppliers",
+    "kind": "data",
+    "expect": {
+      "tables": [
+        "bills"
+      ]
+    }
+  },
+  {
+    "q": "who do we owe",
+    "kind": "data",
+    "expect": {
+      "tables": [
+        "bills"
+      ]
+    }
+  },
+  {
+    "q": "customer outstanding",
+    "kind": "data",
+    "expect": {
+      "tables": [
+        "sales"
+      ]
+    }
+  },
+  {
+    "q": "how much are we waiting to be paid",
+    "kind": "data",
+    "expect": {
+      "tables": [
+        "sales"
+      ]
+    }
+  },
+  {
+    "q": "loads this week",
+    "kind": "data",
+    "book": "yard",
+    "expect": {
+      "tables": [
+        "yard_loads"
+      ]
+    }
+  },
+  {
+    "q": "count of loads this week",
+    "kind": "data",
+    "book": "yard",
+    "expect": {
+      "tables": [
+        "yard_loads"
+      ]
+    }
+  },
+  {
+    "q": "how many loads have we done since monday",
+    "kind": "data",
+    "book": "yard",
+    "expect": {
+      "tables": [
+        "yard_loads"
+      ]
+    }
+  },
+  {
+    "q": "yard purchases this week",
+    "kind": "data",
+    "book": "yard",
+    "expect": {
+      "tables": [
+        "yard_loads"
+      ]
+    }
+  },
+  {
+    "q": "what is in the petty cash tin",
+    "kind": "data",
+    "expect": {
+      "scope": "yard"
+    }
+  },
+  {
+    "q": "how much did we pay our sellers this week",
+    "kind": "data",
+    "expect": {
+      "scope": "yard"
+    }
+  },
+  {
+    "q": "which bookings are still open",
+    "kind": "data",
+    "book": "yard",
+    "expect": {
+      "scope": "metals"
+    }
+  },
+  {
+    "q": "what is the margin on KOCU4930737",
     "kind": "data",
     "book": "yard",
     "expect": {

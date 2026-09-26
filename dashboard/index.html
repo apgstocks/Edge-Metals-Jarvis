@@ -1047,6 +1047,7 @@ const NAV_ITEMS = [
   // padlock is opened, and the server refuses every change unless the session
   // is admin, so a staff login can look and not touch.
   { id: 'quickbooks', label: 'QuickBooks', group: 'Edge Metals' },
+  { id: 'claims', label: 'Claims', group: 'Edge Metals' },
 
   // Jarvis (the bot) itself — behavior, memory, to-dos.
   { id: 'bot',       label: 'Bot',   group: 'Bot & Automation' },
@@ -1206,6 +1207,7 @@ const NAV_ICONS = {
   invoice:'M6 3h12v18l-3-2-3 2-3-2-3 2z M9 8h6 M9 12h6 M9 16h3',
   'edge-inventory':'M3 8l9-4 9 4-9 4z M3 8v8l9 4 9-4V8',
   quickbooks:'M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18 M9 9a3 3 0 0 1 3-3v12',
+  claims:'M12 4v14 M6 8h12 M6 8l-3 6h6z M18 8l3 6h-6z M8 20h8',
   bot:'M7 8h10v9H7z M12 5v3 M12 3a1 1 0 1 0 0 2 M9.5 12h.01 M14.5 12h.01 M4 11v3 M20 11v3',
   facts:'M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18 M12 8h.01 M11 12h1v5h1',
   tasks:'M4 6h3v3H4z M4 15h3v3H4z M10 7.5h10 M10 16.5h10',
@@ -1323,6 +1325,7 @@ function renderNav() {
     if (b.dataset.tab === 'documents') { window.location.href = '/documents'; return; }
     if (b.dataset.tab === 'edge-inventory') { window.location.href = '/edge-inventory'; return; }
     if (b.dataset.tab === 'quickbooks') { window.location.href = '/quickbooks'; return; }
+    if (b.dataset.tab === 'claims') { window.location.href = '/claims'; return; }
     if (b.dataset.tab === 'design-bol') { window.location.href = '/design/bol'; return; }
     switchTab(b.dataset.tab); closeMobileSidebar();
   }));

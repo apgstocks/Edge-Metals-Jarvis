@@ -35,6 +35,10 @@ ck('no price/amount blocks', buildBill(B.withTotals({ ...real, supplier_price: n
 ck('trucking without a Trucking account blocks', buildBill(real, { ...refs, truckingAccountId: null }).problems.some((p) => /Trucking/.test(p)));
 
 const { beforeCutover } = require('../helpers/quickbooks/push');
+// The saved cutover (data/qb-cutover.json) now outranks .env, so these tests
+// point it somewhere empty — otherwise what she last chose on the page would
+// decide whether they pass.
+process.env.QB_CUTOVER_FILE = require('path').join(require('fs').mkdtempSync(require('path').join(require('os').tmpdir(), 'qbcut-')), 'cutover.json');
 const saved = [process.env.QB_CUTOVER_BILLS, process.env.QB_CUTOVER_INVOICES];
 delete process.env.QB_CUTOVER_BILLS; delete process.env.QB_CUTOVER_INVOICES;
 ck('production with no cutover refuses', /no bill cutover/.test(beforeCutover('bill', '2026-10-01', 'production')));
@@ -66,6 +70,31 @@ const whole = buildBill(B.withTotals({ id: 'BILL_9_hugo', date: '2026-01-07', su
 ck('a bill whose line only states an amount still builds', whole.bill && whole.total === 19750.6 && !whole.problems, JSON.stringify(whole.problems));
 ck('...and the line carries no invented Qty or UnitPrice',
    whole.bill && whole.bill.Line[0].ItemBasedExpenseLineDetail.Qty === undefined && whole.bill.Line[0].Amount === 19750.6, JSON.stringify(whole.bill && whole.bill.Line[0]));
+
+// ── the cutover has a home she can edit (2026-09-26) ────────────────────────
+// Apsara: "I want nightly report to run everyday to upload all the bills and
+// invoices." The nightly run only touches rows on or after the cutover, so the
+// cutover decides what "all" means — and moving it used to mean SSH, an .env
+// edit and a pm2 restart. It is now a saved setting that outranks .env.
+const P = require('../helpers/quickbooks/push');
+const envWas = [process.env.QB_CUTOVER_BILLS, process.env.QB_CUTOVER_INVOICES];
+process.env.QB_CUTOVER_BILLS = '2026-09-24'; process.env.QB_CUTOVER_INVOICES = '2026-09-24';
+ck('with nothing saved, .env is what is in force', P.cutoverFor('bill', 'production') === '2026-09-24' && P.cutoverSource('bill') === 'env');
+P.saveCutover({ bills: '2026-09-06', invoices: '2026-08-28' }, 'test');
+ck('a saved cutover outranks .env — no SSH to move the boundary',
+   P.cutoverFor('bill', 'production') === '2026-09-06' && P.cutoverSource('bill') === 'setting');
+ck('...the invoice side moves too', P.cutoverFor('invoice', 'production') === '2026-08-28' && P.cutoverSource('invoice') === 'setting');
+ck('...and who moved it, and when, is kept', (P.cutoverStore().history || [])[0].by === 'test' && !!(P.cutoverStore().history || [])[0].at);
+let junk = null;
+try { P.saveCutover({ bills: 'today' }); } catch (e) { junk = e.message; }
+ck('a junk date is refused with a readable reason', /date like 2026-09-06/.test(junk || ''), junk);
+ck('...and the boundary it would have replaced still stands', P.cutoverFor('bill', 'production') === '2026-09-06');
+P.setCutover({ bills: '2026-01-01', invoices: '2026-01-01' });
+ck('a reviewed list can lift it for that run only', P.cutoverFor('bill', 'production') === '2026-01-01' && P.cutoverSource('bill') === 'override');
+P.clearCutover();
+ck('...and the saved boundary comes straight back', P.cutoverFor('bill', 'production') === '2026-09-06' && P.cutoverSource('bill') === 'setting');
+if (envWas[0] === undefined) delete process.env.QB_CUTOVER_BILLS; else process.env.QB_CUTOVER_BILLS = envWas[0];
+if (envWas[1] === undefined) delete process.env.QB_CUTOVER_INVOICES; else process.env.QB_CUTOVER_INVOICES = envWas[1];
 
 console.log(`\nquickbooks-push: ${pass} passed, ${fail} failed`);
 if (fail) { console.log('FAILED: ' + failures.join(' | ')); process.exit(1); }

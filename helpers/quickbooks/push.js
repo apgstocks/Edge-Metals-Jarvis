@@ -211,10 +211,78 @@ async function findExisting(b, vendorId, opts) {
 // a Jarvis bill for those containers would count the cost twice. So Jarvis
 // only ever enters documents dated AFTER the cutover. In production an unset
 // cutover refuses everything: no date is not the same as "all dates".
-function cutoverFor(kind, env) {
+//
+// ── WHERE THE CUTOVER LIVES (2026-09-26) ────────────────────────────────────
+// It used to live only in .env. That meant moving the boundary was an SSH
+// session and a pm2 restart, and — worse — the nightly run silently skipped
+// every row older than whatever was pinned there. It now also lives in a
+// settings file Jarvis can write, so the date can be moved from the QuickBooks
+// page and the next run honours it with no restart.
+//
+// Three places, in this order:
+//   1. an in-process override — a script that says "for this run, go back to
+//      1 Jan" (scripts/qb-push-list.js). Never persisted.
+//   2. the settings file she edits on the page. This is the real boundary.
+//   3. .env — the machine's default, and all a fresh install has.
+// The page says which one is in force, because "I changed it and nothing
+// happened" is the worst answer a screen can give.
+const CUTOVER_FILE = () => process.env.QB_CUTOVER_FILE || path.join(DATA_DIR, 'qb-cutover.json');
+const CUT_KEY = { bill: 'bills', invoice: 'invoices' };
+const ISO_DAY = /^\d{4}-\d{2}-\d{2}$/;
+
+function cutoverStore() {
+    try { const j = JSON.parse(fs.readFileSync(CUTOVER_FILE(), 'utf8')); return (j && typeof j === 'object') ? j : {}; }
+    catch { return {}; }
+}
+function cutoverEnv(kind) {
     const v = String(process.env[kind === 'bill' ? 'QB_CUTOVER_BILLS' : 'QB_CUTOVER_INVOICES'] || '').trim();
-    if (/^\d{4}-\d{2}-\d{2}$/.test(v)) return v;
+    return ISO_DAY.test(v) ? v : null;
+}
+// For one process only, and only where a script means it: qb-push-list.js
+// pushes a list she has already reviewed, which is exactly the case where the
+// boundary should step aside. Nothing is written to the file.
+let OVERRIDE = {};
+function setCutover(next = {}) {
+    OVERRIDE = {};
+    for (const k of ['bills', 'invoices']) {
+        const v = next[k] === undefined || next[k] === null ? '' : String(next[k]).trim();
+        if (ISO_DAY.test(v)) OVERRIDE[k] = v;
+    }
+    return { ...OVERRIDE };
+}
+function clearCutover() { OVERRIDE = {}; }
+function cutoverFor(kind, env) {
+    const k = CUT_KEY[kind] || kind;
+    if (ISO_DAY.test(String(OVERRIDE[k] || ''))) return OVERRIDE[k];
+    const saved = String(cutoverStore()[k] || '').trim();
+    if (ISO_DAY.test(saved)) return saved;
+    const fromEnv = cutoverEnv(kind);
+    if (fromEnv) return fromEnv;
     return env === 'production' ? null : '0000-00-00';
+}
+function cutoverSource(kind) {
+    const k = CUT_KEY[kind] || kind;
+    if (ISO_DAY.test(String(OVERRIDE[k] || ''))) return 'override';
+    if (ISO_DAY.test(String(cutoverStore()[k] || '').trim())) return 'setting';
+    return cutoverEnv(kind) ? 'env' : 'unset';
+}
+// Moving the boundary is a decision about her real books, so it is written
+// with who moved it and when. The last 25 moves stay in the file.
+function saveCutover(next = {}, who = '') {
+    const store = cutoverStore();
+    const changed = {};
+    for (const k of ['bills', 'invoices']) {
+        const v = next[k] === undefined || next[k] === null ? '' : String(next[k]).trim();
+        if (!v) continue;
+        if (!ISO_DAY.test(v)) throw new Error(`the ${k} cutover must be a date like 2026-09-06 — got "${next[k]}"`);
+        if (store[k] !== v) changed[k] = v;
+        store[k] = v;
+    }
+    if (!Object.keys(changed).length) return { saved: store, changed };
+    store.history = [{ at: new Date().toISOString(), by: who || 'jarvis', ...changed }, ...(store.history || [])].slice(0, 25);
+    fs.mkdirSync(path.dirname(CUTOVER_FILE()), { recursive: true });
+    fs.writeFileSync(CUTOVER_FILE(), JSON.stringify(store, null, 2));
+    return { saved: store, changed };
 }
 // QuickBooks recomputes Amount = Qty x UnitPrice itself and rejects the line
 // if its own answer differs by a cent, and it rounds a half-cent up where
@@ -289,4 +357,4 @@ async function pushBill(b, snapshots, { env = auth.qbEnv(), dryRun = true, fetch
     return { status: 'created', qbId: out.Bill.Id, total: out.Bill.TotalAmt, bill: out.Bill, journalId: je.id };
 }
 
-module.exports = { isoDate, pairFits, UNREADABLE, docNumberFor, confirmedName, idByName, ensureSandbox, saveLink, linkKey, cutoverFor, beforeCutover, buildBill, resolveRefs, findExisting, findExistingDoc, judgeExisting, pushBill, loadLinks, LINKS_FILE, DOC_MAX };
+module.exports = { isoDate, pairFits, UNREADABLE, docNumberFor, confirmedName, idByName, ensureSandbox, saveLink, linkKey, cutoverFor, cutoverSource, cutoverStore, saveCutover, setCutover, clearCutover, beforeCutover, buildBill, resolveRefs, findExisting, findExistingDoc, judgeExisting, pushBill, loadLinks, LINKS_FILE, DOC_MAX };

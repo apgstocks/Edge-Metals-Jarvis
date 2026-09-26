@@ -205,7 +205,10 @@ function mount(app, cfg) {
             env,
             writes: String(process.env.QB_PROD_WRITES || 'off').toLowerCase() === 'on',
             autoSync: String(process.env.QB_SYNC || 'off').toLowerCase() === 'on',
-            cutover: { bills: push.cutoverFor('bill', env), invoices: push.cutoverFor('invoice', env) },
+            cutover: { bills: push.cutoverFor('bill', env), invoices: push.cutoverFor('invoice', env),
+                billsFrom: push.cutoverSource('bill'), invoicesFrom: push.cutoverSource('invoice'),
+                history: (push.cutoverStore().history || []).slice(0, 5) },
+            nightly: { at: '00:00 Los Angeles', writes: require('../quickbooksNightly').enabled() },
             connected: auth.status(env).connected,
             roles,
             counts: { mapped: Object.keys(map.vendor || {}).length + Object.keys(map.customer || {}).length,
@@ -304,6 +307,43 @@ function mount(app, cfg) {
                 : kind === 'invoice' ? await sync.syncSale(id, env)
                 : await sync.syncBillPayment(id, env);
             res.json(out);
+        } catch (e) { res.status(500).json({ error: e.message }); }
+    });
+
+    // ── the cutover ────────────────────────────────────────────────────────
+    // Apsara, 2026-09-26: "I want nightly report to run everyday to upload all
+    // the bills and invoices." The nightly run only ever touches rows dated on
+    // or after this boundary, so the boundary is the setting that decides what
+    // "all" means — and it belongs here, not in an SSH session. .env wins
+    // where it is set, and this says so rather than pretending to have saved.
+    app.post('/api/qb/cutover', async (req, res) => {
+        if (locked(req, res)) return;
+        const { bills, invoices } = req.body || {};
+        if (!bills && !invoices) return res.status(400).json({ error: 'give a bills date, an invoices date, or both' });
+        try {
+            const { changed } = push.saveCutover({ bills, invoices }, req.isSuper ? 'super admin' : (req.role || 'admin'));
+            const env = envOf();
+            const pinned = ['bill', 'invoice'].filter((k) => push.cutoverSource(k) === 'env');
+            res.json({ ok: true, changed,
+                cutover: { bills: push.cutoverFor('bill', env), invoices: push.cutoverFor('invoice', env),
+                    billsFrom: push.cutoverSource('bill'), invoicesFrom: push.cutoverSource('invoice') },
+                note: pinned.length
+                    ? `saved, but ${pinned.map((k) => k === 'bill' ? 'QB_CUTOVER_BILLS' : 'QB_CUTOVER_INVOICES').join(' and ')} in .env still wins — remove that line and restart for this to take effect`
+                    : 'saved — the next run uses it, no restart needed' });
+        } catch (e) { res.status(400).json({ error: e.message }); }
+    });
+
+    // The nightly run, on demand. Same sweep, same checks, same journal — the
+    // only difference is who started it. Dry run by default: nothing reaches
+    // her books unless the body says dryRun: false.
+    app.post('/api/qb/run', async (req, res) => {
+        if (locked(req, res)) return;
+        const job = require('../quickbooksNightly');
+        const dryRun = (req.body || {}).dryRun !== false || !job.enabled();
+        try {
+            const out = await job.run({ dryRun });
+            res.json({ ok: out.ok, dryRun: out.dryRun, error: out.error,
+                summary: job.summarise(out.result || {}), report: job.reportText(out) });
         } catch (e) { res.status(500).json({ error: e.message }); }
     });
 
