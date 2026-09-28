@@ -6724,6 +6724,14 @@ async function renderLedgerTab(kind) {
       <div style="margin-top:10px; font-family:var(--font-mono); font-size:10px; color:var(--text-faint);">
         <span id="ledBuild" title="Which build of the app you are looking at"></span>${rows.length} row${rows.length === 1 ? '' : 's'} · Edit and Delete stay pinned on the right as the table scrolls · ƒ columns are computed server-side · price shows /lb or /MT so a wrong unit is visible
       </div>
+      <button id="ledTop" title="Back to the newest ${kind === 'bills' ? 'bill' : 'invoice'}" aria-label="Back to the top of the list"
+        style="position:fixed; right:26px; bottom:26px; z-index:40; width:42px; height:42px; border-radius:50%;
+               display:none; align-items:center; justify-content:center; cursor:pointer;
+               background:var(--surface-card); color:var(--text-body);
+               border:1px solid var(--border-default); box-shadow:0 6px 18px rgba(0,0,0,.34);
+               transition:opacity .16s ease, transform .16s ease; opacity:0;">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5M5 12l7-7 7 7"/></svg>
+      </button>
     </div>`;
 
   // Applied on ENTER or on leaving the box, not on every keystroke: each
@@ -6741,6 +6749,55 @@ async function renderLedgerTab(kind) {
     el.addEventListener('keydown', (e) => { if (e.key === 'Enter') apply(); });
   });
   $('ledClear').onclick = () => { ledgerFilters[kind] = {}; renderLedgerTab(kind); };
+
+  // ── BACK TO THE TOP OF THE LIST ──────────────────────────────────────
+  // Apsara, 2026-09-29: "There should be a arrow button in the bill/invoice
+  // when i scroll down to move to the top bill".
+  //
+  // THE PART THAT IS EASY TO GET WRONG: this page does not scroll the window.
+  // body is `overflow:hidden` (line ~74) and the scrolling element is
+  // #viewRoot (`flex:1; overflow-y:auto`). window.scrollTo(0, 0) here does
+  // nothing at all — the button would look right, press nicely and move the
+  // page not one pixel. Everything below talks to #viewRoot.
+  //
+  // Scoped to this function on purpose. renderLedgerTab is reached only with
+  // 'bills' and 'sales' (every call site checked), so the button exists on
+  // the two ledgers she named and nowhere else. It lives INSIDE the tab's own
+  // markup, so switching tabs removes it with the rest of the content.
+  {
+    const scroller = $('viewRoot');
+    const btn = $('ledTop');
+    if (scroller && btn) {
+      // One listener, always. renderLedgerTab runs again on every filter
+      // change, and #viewRoot outlives the tab — so without removing the
+      // previous handler first, a morning of filtering leaves dozens of them
+      // attached, all firing on every scroll event.
+      if (scroller._ledTopHandler) scroller.removeEventListener('scroll', scroller._ledTopHandler);
+
+      const SHOW_AFTER = 320;     // roughly one screen of rows
+      const sync = () => {
+        const on = scroller.scrollTop > SHOW_AFTER;
+        btn.style.display = on ? 'flex' : 'none';
+        btn.style.opacity = on ? '1' : '0';
+        btn.style.transform = on ? 'translateY(0)' : 'translateY(6px)';
+      };
+      scroller._ledTopHandler = sync;
+      scroller.addEventListener('scroll', sync, { passive: true });
+
+      btn.onclick = () => {
+        scroller.scrollTo({ top: 0, behavior: 'smooth' });
+        // The filter box is where she usually goes next after jumping up.
+        const q = document.querySelector('[data-led-filter="q"]');
+        if (q) setTimeout(() => { try { q.focus({ preventScroll: true }); } catch (e) { q.focus(); } }, 320);
+      };
+      btn.onmouseenter = () => { btn.style.borderColor = 'var(--accent)'; };
+      btn.onmouseleave = () => { btn.style.borderColor = 'var(--border-default)'; };
+
+      // A re-render after she had scrolled down keeps the scroll position, so
+      // decide the button's state now rather than waiting for the next scroll.
+      sync();
+    }
+  }
 
   // ── WHICH BUILD AM I LOOKING AT ──────────────────────────────────────
   // Apsara, 2026-09-10, twice: "Why edit option not there in bills?" and then

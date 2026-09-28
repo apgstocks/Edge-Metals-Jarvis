@@ -2701,6 +2701,76 @@ section('ANN — Jarvis speaks up on its own (Apsara, 2026-09-20)');
     }
 }
 
+// ══════════════════════════════════════════════════════════════════════════
+section('FOLD — the bar is furniture, not a billboard');
+// ══════════════════════════════════════════════════════════════════════════
+// Apsara, 2026-09-29: "i dont want jarvis voice and hold to talk option to be
+// expandable everytime,it is hiding other things."
+//
+// ── THE REGRESSION THIS SECTION EXISTS TO HOLD DOWN ───────────────────────
+// The first version folded the bar with a CAPTURE-phase listener that called
+// stopPropagation on any click anywhere on the pill, reasoning that the real
+// controls were display:none and so unclickable. That killed the #jvToggle
+// click before it ever reached its handler — every wake test above died on
+// `b.mic()` being null. Worse than a failing test: that click is the ONE user
+// gesture a browser will accept to start an AudioContext, so on the live page
+// it was a voice bar that could never make a sound.
+//
+// The last check in this section is the one that would have caught it.
+{
+    const seed = (v) => (w) => { try { w.localStorage.setItem('jv_bar_open', v); } catch (e) {} };
+
+    const fresh = browser({});
+    const bar = fresh.doc.getElementById('jarvisVoiceBar');
+    ck('a first visit finds it folded away', bar.classList.contains('collapsed'),
+       bar.className);
+    ck('  the dot survives the fold — it is the honest bit',
+       fresh.doc.getElementById('jvDot') && bar.contains(fresh.doc.getElementById('jvDot')));
+    ck('  and there is a grip to open it', !!fresh.doc.getElementById('jvGrip'));
+
+    // Opening it, and the preference sticking.
+    fresh.doc.getElementById('jvGrip').click();
+    ck('clicking the grip opens it', !bar.classList.contains('collapsed'), bar.className);
+    ck('  and it is still openable from the other side',
+       fresh.doc.getElementById('jvGrip').getAttribute('aria-expanded') === 'true',
+       fresh.doc.getElementById('jvGrip').getAttribute('aria-expanded'));
+    // The WRITE, not the read. Seeding localStorage in `before` below proves
+    // only that the preference is read back; deleting the setItem entirely
+    // left every check in this section green. Without this one she clicks it
+    // open, reloads, and finds it folded again — which is her complaint with
+    // an extra step.
+    let stored = null;
+    try { stored = fresh.w.localStorage.getItem('jv_bar_open'); } catch (e) {}
+    ck('  opening it is WRITTEN DOWN, not just applied', stored === '1',
+       `localStorage jv_bar_open = ${JSON.stringify(stored)}`);
+
+    fresh.doc.getElementById('jvGrip').click();
+    ck('  clicking it again folds it back — not a one-way door',
+       bar.classList.contains('collapsed'), bar.className);
+    try { stored = fresh.w.localStorage.getItem('jv_bar_open'); } catch (e) {}
+    ck('  and folding it is written down too', stored === '0',
+       `localStorage jv_bar_open = ${JSON.stringify(stored)}`);
+
+    const remembered = browser({ before: seed('1') });
+    ck('a reload remembers she opened it',
+       !remembered.doc.getElementById('jarvisVoiceBar').classList.contains('collapsed'),
+       'that "everytime" in her message is the whole point');
+    const reFolded = browser({ before: seed('0') });
+    ck('  and remembers she folded it',
+       reFolded.doc.getElementById('jarvisVoiceBar').classList.contains('collapsed'));
+
+    // ── THE ONE THAT CAUGHT THE REGRESSION ────────────────────────────────
+    // Folded, a click on the toggle must still reach the toggle. This is the
+    // AudioContext gesture; if the fold eats it, voice is dead.
+    const b = browser({});
+    b.doc.getElementById('jvToggle').click();
+    ck('FOLDED, the toggle still gets its own click', !!b.mic(),
+       'the fold swallowed the one gesture that starts audio');
+    ck('  and the fold did not open itself doing it',
+       b.doc.getElementById('jarvisVoiceBar').classList.contains('collapsed'),
+       'a control click is not a request to unfold');
+}
+
 console.log(`\n  ${pass} passed, ${fail} failed`);
 if (failures.length) { console.log('\n  Failed:'); failures.forEach((f) => console.log('   - ' + f)); }
 process.exit(fail ? 1 : 0);

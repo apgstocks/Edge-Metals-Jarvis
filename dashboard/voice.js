@@ -277,6 +277,21 @@
     var bar = document.createElement('div');
     bar.id = 'jarvisVoiceBar';
     bar.innerHTML = [
+        // ── COLLAPSED BY DEFAULT ──────────────────────────────────────────
+        // Apsara, 2026-09-29: "i dont want jarvis voice and hold to talk
+        // option to be expandable everytime,it is hiding other things."
+        //
+        // The bar was a permanently-open pill: HOLD TO TALK + the status
+        // line + AUTO + the voice picker, ~320px of fixed furniture sitting
+        // over the bottom-right of whatever screen she was actually working
+        // on. Nothing here is removed — it folds into the dot, and the grip
+        // opens it again.
+        //
+        // Deliberately NOT a re-expand on activity. Popping open whenever
+        // Jarvis speaks is the "everytime" she is complaining about, so the
+        // dot carries the live state instead: collapsed, it still goes red
+        // and pulses while the microphone is genuinely open.
+        '<button id="jvGrip" type="button" title="Show the voice controls" aria-label="Show the voice controls"></button>',
         '<button id="jvToggle" type="button"></button>',
         '<span id="jvDot"></span>',
         '<span id="jvText"></span>',
@@ -320,6 +335,24 @@
         '#jvVoiceBtn{background:transparent;border:none;color:#5A6169;cursor:pointer;padding:0 2px;',
         '  font-size:9px;letter-spacing:1px;line-height:1;}',
         '#jvVoiceBtn:hover{color:#B4703A;}',
+
+        /* ── THE COLLAPSED PILL ───────────────────────────────────────────
+           A circle the size of the dot's padding, not a bar. Everything that
+           takes width is display:none, so nothing reflows underneath it. */
+        /* Visible in BOTH states — folded it is the way in, open it is the
+           way back. The first version of this was `display:none` with a
+           `.collapsed` override, which meant that once she opened the bar
+           there was no control to close it again: a one-way door. */
+        '#jvGrip{display:block;background:transparent;border:none;padding:0;margin:0;cursor:pointer;',
+        '  color:#5A6169;font:inherit;font-size:9px;line-height:1;}',
+        '#jvGrip:hover{color:#B4703A;}',
+        '#jarvisVoiceBar.collapsed{padding:7px 9px;gap:6px;}',
+        '#jarvisVoiceBar.collapsed #jvToggle,',
+        '#jarvisVoiceBar.collapsed #jvText,',
+        '#jarvisVoiceBar.collapsed #jvWho,',
+        '#jarvisVoiceBar.collapsed #jvVoiceBtn{display:none;}',
+        /* The dot has to stay readable when it is the only thing left. */
+        '#jarvisVoiceBar.collapsed #jvDot{width:9px;height:9px;}',
     ].join('');
 
     function el(id) { return document.getElementById(id); }
@@ -2590,6 +2623,61 @@
         css.textContent += cardCss + voiceCss + panelCss + docCss;
         document.head.appendChild(css);
         document.body.appendChild(bar);
+
+        // ── FOLDED UNTIL SHE ASKS FOR IT ──────────────────────────────────
+        // Default COLLAPSED, and the choice is remembered. "Everytime" is the
+        // word in her message: a bar that folds and comes back open on the
+        // next page is the same complaint with extra clicks.
+        //
+        // localStorage in a try — Safari private browsing throws on read, and
+        // a voice bar that fails to mount because it could not remember a
+        // preference would be a much worse bug than the one being fixed.
+        (function () {
+            var KEY = 'jv_bar_open';
+            var open = false;
+            try { open = localStorage.getItem(KEY) === '1'; } catch (e) { open = false; }
+            var apply = function () {
+                bar.classList.toggle('collapsed', !open);
+                var g = document.getElementById('jvGrip');
+                // ▸ points out (open me), ▾ points down (fold me away).
+                if (g) {
+                    g.textContent = open ? '\u25BE' : '\u25B8';
+                    g.title = open ? 'Hide the voice controls' : 'Show the voice controls';
+                    g.setAttribute('aria-label', g.title);
+                    g.setAttribute('aria-expanded', open ? 'true' : 'false');
+                }
+                bar.title = open ? '' : 'Voice controls — click to open';
+            };
+            apply();
+            var set = function (v) {
+                open = v;
+                try { localStorage.setItem(KEY, v ? '1' : '0'); } catch (e) { /* not fatal */ }
+                apply();
+            };
+            // ── ONLY THE PILL'S OWN FURNITURE, NEVER A REAL CONTROL ───────
+            // The first version of this swallowed ANY click on the bar while
+            // folded, on the reasoning that the real controls are display:none
+            // so nothing else could be clicked. That reasoning is wrong in the
+            // one place it matters: a capture-phase stopPropagation on the bar
+            // kills the event BEFORE it reaches #jvToggle, and display:none
+            // does not stop a programmatic .click(). tests/voice-web.js opens
+            // the microphone that way in twenty-odd places and every one of
+            // them died on `b.mic()` returning null — the mic never opened,
+            // because the click that opens it was eaten by a cosmetic folding
+            // control. The toggle's click is also the ONE user gesture the
+            // browser will accept to start audio, so on the real page this
+            // would have been a voice bar that could never make a sound.
+            //
+            // So: act only on the grip, the dot, and the pill's own
+            // background. Anything that is a control gets its click.
+            var MINE = { jvGrip: 1, jvDot: 1, jarvisVoiceBar: 1 };
+            bar.addEventListener('click', function (e) {
+                var id = e.target && e.target.id;
+                if (!MINE[id]) return;                 // a real control — hands off
+                e.stopPropagation();
+                set(!open);
+            });
+        }());
         // Panel first, card under it: results above, the sentence being
         // spoken nearest the voice bar she is looking at.
         var stack = document.createElement('div');
