@@ -283,12 +283,30 @@ body[data-theme="light"] {
                  made before today changes. BILL OF LADING and the number are
                  NOT letterhead and always print; unticking removes only the
                  company band on the left. -->
-            <label style="display:flex; gap:8px; align-items:flex-start; margin-top:12px;
+            <!-- ── WIDTH:AUTO IS NOT COSMETIC HERE ─────────────────────
+                 `.field input { width:100% }` (line ~74) applies to a
+                 checkbox as readily as to a text box, so this control
+                 stretched the full 380px of the column and squeezed its own
+                 label into a one-word-wide strip down the right-hand side.
+                 Apsara saw it and asked "Why coming like this?".
+
+                 EVERY other checkbox in this file already carries an
+                 explicit width — 15px, 16px or auto — so the trap was known
+                 and I was the one who walked into it. 15px matches the ones
+                 beside it on the packing list and invoice panels.
+
+                 width and flex:none hold the box at its own size;
+                 flex:1 + min-width:0 give the text the rest of the row. The
+                 font is reset too — `.field label` is var(--font-mono), which
+                 is right for a field label and wrong for a sentence. -->
+            <label style="display:flex; gap:9px; align-items:flex-start; margin-top:12px;
                           padding-top:11px; border-top:1px solid var(--border-subtle);
-                          font-size:12px; cursor:pointer;">
-              <input type="checkbox" id="bol_letterhead" checked style="margin-top:2px;">
-              <span>Print the Edge Metals letterhead<br>
-                <span style="color:var(--text-faint); font-size:11px;">The black band with the address and tax ID. The BILL OF LADING title and number always print.</span></span>
+                          font-size:12px; cursor:pointer; font-family:var(--font-sans);
+                          color:var(--text-body); margin-bottom:0;">
+              <input type="checkbox" id="bol_letterhead" checked
+                style="width:15px; height:15px; flex:none; margin:2px 0 0 0; padding:0; cursor:pointer;">
+              <span style="flex:1; min-width:0; line-height:1.5;">Print the Edge Metals letterhead
+                <span style="display:block; color:var(--text-faint); font-size:11px; margin-top:2px;">The black band with the address and tax ID. The BILL OF LADING title and number always print.</span></span>
             </label>
           </div>
         </div>
