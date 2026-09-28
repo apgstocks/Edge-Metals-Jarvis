@@ -678,7 +678,8 @@ function openImport(){
       '<div class="imp-sec"><h4>' + esc(p.source) + ' — ' + p.sheetRows + ' rows</h4>' +
         (p.tabs ? '<div class="hint" style="margin-top:0">sheets in the file: ' + esc(p.tabs.join(', ')) + '</div>' : '') +
         (p.start && p.start.marker
-          ? '<div class="hint" style="margin-top:0">Starting at row <b>' + (p.start.startRow + 1) + '</b>, just after “' + esc(p.start.marker) + '” — the ' + p.start.ignoredAbove + ' row(s) above it are an earlier year and are not imported.</div>'
+          ? '<div class="hint" style="margin-top:0">Starting at row <b>' + (p.start.startRow + 1) + '</b>, just after “' + esc(p.start.marker) + '” — the ' + p.start.ignoredAbove + ' row(s) above it are an earlier year and are not imported.' +
+            (p.start.inheritedFrom ? ' The rows under the marker have no header of their own, so the columns come from <b>row ' + p.start.inheritedFrom + '</b>.' : '') + '</div>'
           : (p.start && p.start.startRow
             ? '<div class="hint" style="margin-top:0">Starting at row ' + (p.start.startRow + 1) + ' as asked — ' + p.start.ignoredAbove + ' row(s) above it ignored.</div>'
             : '<div class="hint" style="margin-top:0">No year marker row on this sheet, so every row is read. Add a one-cell row reading e.g. “2027 Claims” to close off a year.</div>')) +
@@ -714,6 +715,7 @@ function openImport(){
       list('Repeated rows, merged into one claim', p.merged.map(m => 'rows ' + m.rows.join('+') + '  ' + m.invoice_no + ' / ' + m.container_no + '  ' + money0(m.claim_amount))) +
       list('One container, more than one claim', p.split.map(m => m.invoice_no + ' / ' + m.container_no + '  ' + money0(m.claim_amount))) +
       list('Not imported — prose where an identifier should be', p.manual.map(m => 'row ' + m.rowNo + '  ' + m.cells)) +
+      list('Check these — the figures look like the columns are shifted', (p.misaligned || []).map(m => m.invoice_no + ' / ' + m.container_no + '  ' + m.why)) +
       list('Unit left blank, flagged for a person', p.noUnit.map(m => m.invoice_no + ' / ' + m.container_no + '  ' + m.why)) +
       list('Not classified — nothing guessed', p.unresolved.map(m => (m.container_no || m.invoice_no) + '  ' + m.why)) +
 

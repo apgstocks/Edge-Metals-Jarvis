@@ -199,7 +199,7 @@ function mount(app, cfg) {
         totals: p.totals, byStatus: p.byStatus,
         byKind: Object.entries(p.byKind).map(([slug, k]) => ({ slug, ...k, hue: slug ? claimKinds.hue(slug) : null })),
         vocabulary: { named: p.vocabulary.named, settled: p.vocabulary.settled, kinds: p.vocabulary.kinds, folds: p.vocabulary.folds, why: p.vocabulary.why },
-        merged: p.merged, split: p.split, manual: p.manual, noUnit: p.noUnit,
+        merged: p.merged, split: p.split, manual: p.manual, noUnit: p.noUnit, misaligned: p.misaligned,
         unresolved: p.unresolved, already: p.already.length,
         skipped: p.skipped.length,
         preview: p.claims.slice(0, 200).map((r) => ({

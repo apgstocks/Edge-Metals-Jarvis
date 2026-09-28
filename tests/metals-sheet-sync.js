@@ -272,6 +272,74 @@ section('J — WHAT THE FIRST DRY RUN CAUGHT (2026-09-24)');
 }
 
 // The async checks finish before the tally — a count printed while a promise
+section('K — FREIGHT IS NOT A FIELD ANY MORE (2026-09-28)');
+{
+    // Apsara, on a live dry run: "freight_charges: sheet 553 vs Jarvis 170 —
+    // why?" Because this was comparing a dead column. helpers/sales.js:333
+    // says freight_charges is "GONE from the columns" since 2026-09-10 —
+    // freight moved into charges[] where it can carry a note, and the old
+    // field is kept writable only so older rows do not lose their money.
+    // compute() folds a legacy value in ONLY when there is no charge list.
+    //
+    // So on every sale entered since then, this job compared the sheet's
+    // freight column against whatever happened to be left in the superseded
+    // field, and reported a disagreement that did not exist.
+    const sheet = { invoice_no: '260804_AC_26RMT53', container_no: 'HMMU4741911', freight_charges: '553' };
+
+    // HER ROW: the real freight is in the charge list; the old field is stale.
+    const modern = { invoice_no: '260804_AC_26RMT53', container_no: 'HMMU4741911',
+        freight_charges: 170, charges: [{ what: 'Ocean freight', amount: 553, direction: 'out' }] };
+    ck('a row whose freight is in the charge list agrees',
+        sync.differences(sheet, modern, ['freight_charges']).length === 0,
+        JSON.stringify(sync.differences(sheet, modern, ['freight_charges'])));
+
+    // And it must still CATCH a real freight disagreement rather than passing
+    // everything — a comparison that never fires is the bug it just replaced.
+    const wrong = { ...modern, charges: [{ what: 'Ocean freight', amount: 400, direction: 'out' }] };
+    const d = sync.differences(sheet, wrong, ['freight_charges']);
+    ck('  but a genuinely different freight is still reported', d.length === 1, JSON.stringify(d));
+    ck('  quoting what Jarvis actually holds, not the dead field', d[0] && d[0].jarvis === 400,
+        JSON.stringify(d[0]));
+
+    // A row entered before 2026-09-10 has no list, and compute() would fold
+    // the legacy value in — so comparing it is right.
+    const legacy = { invoice_no: 'X', container_no: 'Y', freight_charges: 170 };
+    const dl = sync.differences(sheet, legacy, ['freight_charges']);
+    ck('a legacy row is still compared on its field', dl.length === 1, JSON.stringify(dl));
+    ck('  and says where the figure came from', dl[0] && dl[0].from === 'legacy field',
+        JSON.stringify(dl[0]));
+
+    // ── THE CASE THAT CANNOT BE COMPARED ─────────────────────────────────
+    // Her sheet has ONE freight number; Jarvis has a LIST. Outgoing charges
+    // that are not freight must NOT be summed in — an inspection fee is not
+    // freight, and adding it would invent a disagreement in the other
+    // direction. It says so instead of printing a number meaning something
+    // else.
+    const other = { invoice_no: 'X', container_no: 'Y', freight_charges: 170,
+        charges: [{ what: 'Inspection', amount: 90, direction: 'out' }] };
+    const doth = sync.differences(sheet, other, ['freight_charges']);
+    ck('charges with no freight among them are not summed', doth.length === 1, JSON.stringify(doth));
+    ck('  and it says so rather than quoting 90',
+        /no freight charge/.test(String(doth[0] && doth[0].jarvis)), JSON.stringify(doth[0]));
+    ck('  with a note explaining the shapes differ', !!(doth[0] && doth[0].note));
+
+    // When the sheet claims no freight either, there is nothing to say.
+    ck('no freight on either side is silent',
+        sync.differences({ ...sheet, freight_charges: '' }, other, ['freight_charges']).length === 0);
+
+    // Incoming charges are money the CUSTOMER pays on top — never freight
+    // Edge Metals bore.
+    const inbound = { invoice_no: 'X', container_no: 'Y',
+        charges: [{ what: 'Freight', amount: 553, direction: 'in' }] };
+    ck('an incoming freight charge is not treated as our cost',
+        /no freight charge/.test(String((sync.differences(sheet, inbound, ['freight_charges'])[0] || {}).jarvis)));
+
+    // Every other watched field must be untouched by this — the special case
+    // is for freight alone.
+    ck('another field still compares plainly',
+        sync.differences({ ...sheet, customer: 'MK' }, { ...modern, customer: 'Other' }, ['customer']).length === 1);
+}
+
 // is still in flight is a green run that proved less than it says.
 Promise.all(runs).then(() => {
     console.log(`\n  ${pass} passed, ${fail} failed`);

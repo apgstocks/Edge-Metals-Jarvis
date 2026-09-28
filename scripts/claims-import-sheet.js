@@ -44,6 +44,7 @@ async function main() {
 
     console.log(`Read ${p.source} — ${p.sheetRows} sheet rows`);
     if (p.start.marker) console.log(`  Starting at row ${p.start.startRow + 1}, just after "${p.start.marker}" — ${p.start.ignoredAbove} row(s) above it ignored`);
+    if (p.start.inheritedFrom) console.log(`  The rows under the marker have no header of their own, so the columns come from row ${p.start.inheritedFrom}`);
     else if (p.start.startRow) console.log(`  Starting at row ${p.start.startRow + 1} as asked — ${p.start.ignoredAbove} row(s) above it ignored`);
     if (p.tabs) console.log(`  sheets in the file: ${p.tabs.join(', ')}`);
     for (const b of p.blocks) {
@@ -76,6 +77,11 @@ async function main() {
     if (p.manual.length) {
         console.log('NOT IMPORTED — the identifier columns hold prose, not identifiers. Enter these by hand on /claims:');
         for (const m of p.manual) console.log(`  row ${String(m.rowNo).padStart(3)}  ${m.cells.slice(0, 110)}`);
+        console.log('');
+    }
+    if (p.misaligned.length) {
+        console.log('CHECK THESE — the figures look like the columns are shifted:');
+        for (const r of p.misaligned) console.log(`  ${pad(r.rows.join('+'), 5)} ${r.invoice_no} / ${r.container_no}\n        ${r.why}`);
         console.log('');
     }
     if (p.noUnit.length) {

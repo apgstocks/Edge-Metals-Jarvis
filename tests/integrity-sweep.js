@@ -109,6 +109,55 @@ section('A — EVERY CHECK FIRES ON ITS OWN FAULT, AND ONLY ON IT');
 }
 
 // ══════════════════════════════════════════════════════════════════════════
+section('A2 — HER CASE: both halves exist and did not join');
+// ══════════════════════════════════════════════════════════════════════════
+// The first live run, 2026-09-26, against her real books:
+//
+//   · CAIU9824029 — Calderon:     bought 277 days ago and not sold
+//   · CAIU9824029 — SOLINE METAL: sold 277 days ago with no bill behind it
+//
+// One container, both halves recorded, reported as two separate gaps. They
+// are not gaps. margin.js:58 keys a row on BOOKING + CONTAINER, so a bill and
+// a sale that agree on the container and disagree on the booking never meet —
+// the container is counted twice and its real margin is computed nowhere.
+//
+// Reporting that as two missing documents sends her looking for two things
+// that both already exist, which is worse than saying nothing at all.
+{
+    const CONT = 'CAIU9824029';
+    write(
+        [bill('HB1', { date: ago(277), supplier: 'Calderon', booking_no: 'BK-A', container_no: CONT })],
+        [sale('HS1', { date: ago(277), customer: 'SOLINE METAL', booking_no: 'BK-B', container_no: CONT })],
+    );
+    const res = sweep.run();
+    ck('the container is reported once, not twice', countOf('unjoined-containers', res) === 1,
+       `${countOf('unjoined-containers', res)} lines for one container`);
+
+    const item = (res.findings.find((f) => f.id === 'unjoined-containers') || { items: [] }).items[0];
+    ck('  and named as a join failure, not a missing document',
+       item && /both halves exist/.test(item.detail), item && item.detail);
+    ck('  with both booking numbers, so she can see which is wrong',
+       item && /BK-A/.test(item.detail) && /BK-B/.test(item.detail), item && item.detail);
+    ck('  and both parties, because they differ', item && /Calderon/.test(item.what) && /SOLINE METAL/.test(item.what),
+       item && item.what);
+
+    // When the bookings DO agree the container closes and there is nothing to
+    // say — otherwise this check would flag every completed trade.
+    write(
+        [bill('HB2', { date: ago(277), supplier: 'Calderon', booking_no: 'BK-A', container_no: CONT })],
+        [sale('HS2', { date: ago(277), customer: 'SOLINE METAL', booking_no: 'BK-A', container_no: CONT })],
+    );
+    ck('a matching booking closes the container silently', !fired('unjoined-containers', sweep.run()));
+
+    // And a genuinely one-sided container must still read as one-sided.
+    write([bill('HB3', { date: ago(277), container_no: 'LONELY111111' })], []);
+    const lone = sweep.run();
+    ck('a container with only a bill still says so', fired('unjoined-containers', lone));
+    const li = (lone.findings.find((f) => f.id === 'unjoined-containers') || { items: [] }).items[0];
+    ck('  without claiming a join failure', li && !/both halves/.test(li.detail), li && li.detail);
+}
+
+// ══════════════════════════════════════════════════════════════════════════
 section('B — a fresh row is not a problem yet');
 // ══════════════════════════════════════════════════════════════════════════
 // Everything typed this morning would otherwise be a finding on day one, and

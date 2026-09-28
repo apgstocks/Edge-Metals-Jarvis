@@ -152,6 +152,25 @@ function unitFor(inv, recv) {
     return { unit: null, why: `weights out of tonnage range (${vals.join(', ')}) — pounds or a typo in an MT column` };
 }
 
+// A row can carry one value too many — PAN METAL / 25MT20 has a stray number in
+// the middle, so every field after it shifts one column and its recovery reads
+// $0.89 where the sheet says $230. Nothing about the row's shape gives that away:
+// it is exactly as wide as the RS Resources rows, which are correct and simply
+// carry a link in the last column.
+//
+// What DOES give it away is the figure itself. Across this sheet a recovery runs
+// at roughly 75-100% of the claim, because Edge buys at a little under what it
+// sells for. A "recovery" that is a fraction of a percent of the claim is a
+// column read wrong, not a recovery. So it is flagged for a person rather than
+// imported as a number somebody might believe.
+const SUSPECT_RECOVERY_RATIO = Number(process.env.CLAIM_SUSPECT_RECOVERY_RATIO || 0.1);
+function suspectRecovery(claim_amount, our_claim) {
+    if (!claim_amount || !our_claim || claim_amount <= 0 || our_claim <= 0) return '';
+    const ratio = our_claim / claim_amount;
+    if (ratio >= SUSPECT_RECOVERY_RATIO) return '';
+    return `recovery of ${our_claim} against a claim of ${claim_amount} is ${(ratio * 100).toFixed(2)}% — on this sheet a recovery runs at 75-100%, so this row's columns are probably shifted. Check it before trusting the figure.`;
+}
+
 function statusFor(noteText, claim_amount) {
     const n = lc(noteText);
     if (/removed by customer/.test(n)) return 'withdrawn';
@@ -190,9 +209,43 @@ function walk(table, opts = {}) {
     const found = [], skipped = [], manual = [], blocks = [];
 
     const auto = findStart(table);
+    // THE ROWS UNDER THE MARKER HAVE NO HEADER OF THEIR OWN.
+    // "2026 Claims" is followed straight away by PAN METAL, the RS Resources and
+    // MGK blocks, Maptresco and the MK Metal rows — all of which keep using the
+    // column layout declared once at the top of the tab, which starting at the
+    // marker puts ABOVE the start line. Beginning with no column map silently
+    // dropped every one of them: 34 claims imported where the section holds fifty.
+    //
+    // So the last header ABOVE the start line is carried down as the opening
+    // layout, and said out loud in the block list — because that inherited header
+    // is the legacy one, where "Amount" is the customer's claim, "Claim Amount" is
+    // Edge's recovery and "Buyer" is the supplier. Inheriting it quietly would be
+    // the same figures read backwards.
+    const inheritHeader = (from) => {
+        for (let i = from - 1; i >= 0; i -= 1) {
+            const cells = (table[i] || []).map((c) => String(c == null ? '' : c));
+            if (isHeaderRow(cells)) return { row: i + 1, map: mapColumns(cells) };
+        }
+        return null;
+    };
     // An explicit fromRow wins, so she can point it somewhere else without an edit.
     const startRow = Number.isFinite(opts.fromRow) && opts.fromRow > 0 ? opts.fromRow - 1 : auto.startRow;
-    const start = { startRow, marker: opts.fromRow ? null : auto.marker, ignoredAbove: 0, from: opts.fromRow ? 'asked for' : (auto.marker ? 'the marker row' : 'the top of the sheet') };
+    const start = { startRow, marker: opts.fromRow ? null : auto.marker, ignoredAbove: 0, from: opts.fromRow ? 'asked for' : (auto.marker ? 'the marker row' : 'the top of the sheet'), inheritedFrom: null };
+    if (startRow > 0) {
+        const inherited = inheritHeader(startRow);
+        if (inherited) {
+            map = inherited.map;
+            blockNo = 1;
+            blockLabel = `block 1${map.__legacy ? ' (legacy 2025 shape)' : ''}, columns inherited from row ${inherited.row}`;
+            start.inheritedFrom = inherited.row;
+            blocks.push({
+                row: inherited.row, label: blockLabel, legacy: map.__legacy, inherited: true,
+                claimFrom: map.__headers[map.claim_amount] || null,
+                recoveryFrom: map.__headers[map.our_claim] || null,
+                supplierFrom: map.__headers[map.supplier] || null,
+            });
+        }
+    }
 
     table.forEach((cells, i) => {
         const rowNo = i + 1;
@@ -266,6 +319,7 @@ function walk(table, opts = {}) {
             claim_amount, our_claim: num(g('our_claim')),
             status: statusFor(noteText, claim_amount),
             note: noteText, unitWhy, date: txt(g('date')),
+            suspect: suspectRecovery(claim_amount, num(g('our_claim'))),
         });
     });
     return { found, skipped, manual, blocks, start };
@@ -402,6 +456,7 @@ async function plan(input = {}) {
         // words. Stripped before any of this goes to the page.
         alreadyRows: already,
         noUnit: toWrite.filter((r) => r.unitWhy).map((r) => ({ rows: r.fromRows, invoice_no: r.invoice_no, container_no: r.container_no, why: r.unitWhy })),
+        misaligned: toWrite.filter((r) => r.suspect).map((r) => ({ rows: r.fromRows, invoice_no: r.invoice_no, container_no: r.container_no, why: r.suspect })),
         unresolved: toWrite.filter((r) => !r.claim_type).map((r) => ({ invoice_no: r.invoice_no, container_no: r.container_no, why: r.type_unresolved })),
         byStatus: toWrite.reduce((o, r) => { o[r.status] = (o[r.status] || 0) + 1; return o; }, {}),
         byKind,
@@ -428,7 +483,7 @@ async function commit(p, by = 'sheet-import') {
             invoice_weight: r.invoice_weight, claimed_weight: r.claimed_weight,
             weight_unit: r.weight_unit,
             sell_price: r.sell_price, sell_price_unit: r.weight_unit,
-            note: [r.note, r.unitWhy].filter(Boolean).join(' | '),
+            note: [r.note, r.unitWhy, r.suspect].filter(Boolean).join(' | '),
         }, by);
         const patch = { status: r.status, quotes: { claim_type: r.type_quote || r.type_why || r.type_unresolved || '' } };
         if (r.claim_amount !== null) patch.claim_amount = r.claim_amount;
