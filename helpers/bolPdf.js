@@ -231,6 +231,39 @@ function buildBolHtml(data) {
         : '';
 
     const consigneeName = String(d.consignee_name || '').trim();
+
+    // ── SHIPPER: EDITABLE, WITH EDGE METALS AS THE FLOOR ──────────────────
+    // Apsara, 2026-09-29: "I want shipper to be editable in BOL".
+    //
+    // Hard-coded here until now. The default is not a nicety — EVERY BOL
+    // saved before today has no shipper_name, and a BOL is a document a driver
+    // signs and a receiving dock keeps. Falling back to blank would have
+    // reprinted every one of her existing BOLs with an empty SHIPPER card, and
+    // she would find out from a rejected delivery rather than from this
+    // screen. Blank resolves to Edge Metals; only a value she typed replaces
+    // it.
+    //
+    // EDGE METALS, NOT EDGE YARD — the two are different companies and this is
+    // the Edge Metals template. Making the field editable does not make this a
+    // yard document; it lets her correct or re-address the shipper on Edge
+    // Metals' own BOL.
+    const SHIPPER_DEFAULT = {
+        name: 'Edge Metals Inc',
+        address: '14750 Devonshire Ln\nFrisco, TX 75035\nTel (310) 938-2525',
+    };
+    const shipperName = String(d.shipper_name || '').trim() || SHIPPER_DEFAULT.name;
+    const shipperLines = String(
+        String(d.shipper_address || '').trim() || SHIPPER_DEFAULT.address
+    ).split(/\r?\n/).map((x) => x.trim()).filter(Boolean);
+
+    // Is this still Edge Metals shipping? Decides whether Chandra Bose's
+    // signature prints — see shipper_signature below for why that matters.
+    // Name only: a re-addressed Edge Metals BOL is still Edge Metals.
+    const normCo = (v) => String(v || '').toLowerCase()
+        .replace(/[.,]/g, ' ')
+        .replace(/\b(inc|incorporated|llc|l\.?l\.?c|co|corp|corporation|ltd|limited)\b/g, ' ')
+        .replace(/\s+/g, ' ').trim();
+    const isEdgeMetals = normCo(shipperName) === normCo(SHIPPER_DEFAULT.name);
     const lines = Array.isArray(d.consignee_address_lines)
         ? d.consignee_address_lines.map((l) => String(l).trim()).filter(Boolean)
         : addressLines(d.consignee_address, consigneeName);
@@ -282,8 +315,8 @@ function buildBolHtml(data) {
         // with the consignee now instead of being pinned to the top.
         consignee: () => `<div class="cards">`
             + `<div class="card"><div class="lbl">SHIPPER</div>`
-            + `<div class="nm">Edge Metals Inc</div>`
-            + `<div class="ad">14750 Devonshire Ln<br>Frisco, TX 75035<br>Tel (310) 938-2525</div></div>`
+            + `<div class="nm">${escapeHtml(shipperName)}</div>`
+            + `<div class="ad">${shipperLines.map(escapeHtml).join('<br>')}</div></div>`
             + `<div class="card to"><div class="lbl">CONSIGNEE</div>`
             + `<div class="nm">${escapeHtml(consigneeName)}</div>`
             + `<div class="ad">${lines.map(escapeHtml).join('<br>')}</div></div>`
@@ -368,6 +401,29 @@ ${item_rows}
         // which of them appear and in what order. Left-behind substitutions
         // for placeholders that no longer exist read like live code and send
         // the next person looking for a template that stopped using them.
+        // ── THE LETTERHEAD, HERS TO SWITCH OFF ───────────────────────────
+        // Apsara, 2026-09-29: "Make the letterhead of edge metals INc as
+        // optional.Make a check box .if i select ,then edge metals letterhead
+        // must appear".
+        //
+        // ABSENT MEANS SHOWN. The stored flag is hide_letterhead, so a BOL
+        // saved before today — none of which carries the field — prints its
+        // letterhead exactly as it always has. Had this been `letterhead:
+        // true` instead, every existing BOL would have reprinted bare, which
+        // is the same break the shipper default above exists to prevent: a
+        // flag that must be SET to keep a document unchanged eventually is
+        // not set.
+        //
+        // The empty div is not padding. .band is space-between, so with no
+        // child at all BILL OF LADING slides to the left margin and the
+        // header reads as a different document.
+        letterhead: d.hide_letterhead
+            ? '<div></div>'
+            : '<div>'
+              + '<div class="co">EDGE METALS INC</div>'
+              + '<div class="colines">14750 Devonshire Ln, Frisco, TX 75035<br>'
+              + 'Tel (310) 938-2525 &nbsp;·&nbsp; Fax (425) 940-9408 &nbsp;·&nbsp; Tax ID 26-3269514</div>'
+              + '</div>',
         weight_unit: escapeHtml(unit),
         total_pieces: escapeHtml(fmtCount(t.pieces)),
         total_gross: escapeHtml(fmtWeight(t.gross_weight)),
@@ -393,10 +449,32 @@ ${item_rows}
         // The DRIVER and CONSIGNEE lines stay blank on purpose. Those are
         // signed on the spot by the people receiving the goods, and printing
         // a signature for them would be signing on someone else's behalf.
-        shipper_signature: require('./signature').signatureBlockHtml({
+        //
+        // ── AND SO DOES THE SHIPPER, IF THE SHIPPER IS NOT EDGE METALS ────
+        // Apsara, 2026-09-29, on making the shipper editable: "If shipper is
+        // not edge metals ,remove the shipper sign picture.It should be blank".
+        //
+        // She is right and it is the same principle one paragraph up. This
+        // signature is Chandra Bose's, and he signs for Edge Metals. Leaving
+        // it on a BOL that names a different shipper would print his signature
+        // under someone else's company — signing on another party's behalf, on
+        // the one document in this codebase that a driver and a receiving dock
+        // both countersign. That is not a cosmetic defect.
+        //
+        // isEdgeMetals is compared on the NAME ONLY, and loosely — case and
+        // spacing ignored, a trailing Inc/Inc./LLC tolerated — because
+        // "edge metals inc" typed in a hurry must not silently drop the
+        // signature off her own paperwork. A re-addressed Edge Metals BOL (new
+        // suite, new phone) keeps the signature; a different company does not.
+        // Blank shipper is Edge Metals by default, so every BOL saved before
+        // today is unchanged.
+        shipper_signature: isEdgeMetals ? require('./signature').signatureBlockHtml({
             height: '30px', maxHeight: '28px', maxWidth: '150px',
             align: 'flex-end', justify: 'flex-start', marginBottom: 0,
-        }).replace('<div style="height:30px;', '<div class="sigink" style="height:30px;'),
+        }).replace('<div style="height:30px;', '<div class="sigink" style="height:30px;')
+            // The same height, so the strip does not move and the line can be
+            // signed by hand — exactly what the fail-soft path above yields.
+            : '<div class="sigink" style="height:30px;"></div>',
     };
 
     let html = loadTemplate();
