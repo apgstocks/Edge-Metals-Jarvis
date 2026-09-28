@@ -288,4 +288,66 @@ function reportText(result, planned) {
     return out.join('\n');
 }
 
-module.exports = { plan, commit, restore, batches, reportText, KINDS, ARCHIVE };
+// ── THE THREE WAYS IN ─────────────────────────────────────────────────────
+// Apsara, 2026-09-29, asked which of three she needed and answered "1,2,3":
+// a bad import, a date range, and rows she ticks on screen.
+//
+// All three resolve to a LIST OF IDS and then go through plan() — the guards
+// above are the only way rows leave a ledger by this file. That is the whole
+// design: a second entry point is a second place for the payment and claim
+// checks to be forgotten.
+//
+// ── WHY THE DATE RANGE REUSES filterRows ──────────────────────────────────
+// helpers/bills.js:766 already decides which rows a from/to picks out, and
+// the ledger screen, the export and Jarvis all ask it. A second date
+// comparison here would be a fourth answer to "which rows are in August", and
+// the day it disagreed with the screen she would be looking at ten rows and
+// deleting eleven. So the selector is the SAME query object the screen sends.
+function resolve(kind, selector = {}) {
+    const K = KINDS[kind];
+    if (!K) throw new Error(`unknown ledger "${kind}" — bills or sales`);
+    const rows = K.list();
+
+    // 1. Rows she ticked.
+    if (Array.isArray(selector.ids) && selector.ids.length) {
+        return { ids: selector.ids.map(String), how: `${selector.ids.length} rows picked on screen` };
+    }
+
+    // 2. A bad import, by its batch id.
+    if (selector.import_batch) {
+        const b = String(selector.import_batch);
+        const hit = rows.filter((r) => r && r.imported_batch === b);
+        return { ids: hit.map((r) => String(r.id)), how: `everything imported as ${b}` };
+    }
+
+    // 3. A date range — or any other ledger filter, because it is the screen's
+    //    own query object and narrowing by supplier as well as by date is a
+    //    thing she will want the first time she uses this.
+    const f = selector.filters || {};
+    const keys = Object.keys(f).filter((k) => String(f[k] ?? '').trim() !== '');
+    if (!keys.length) {
+        // The one selector that must never be allowed to mean "everything".
+        throw new Error('no rows selected — a bulk delete with no filter would take the whole ledger');
+    }
+    const mod = kind === 'bills' ? require('./bills') : require('./sales');
+    const hit = mod.filterRows(rows, f);
+    const said = [];
+    if (f.from || f.to) said.push(`${f.from || 'the start'} to ${f.to || 'today'}`);
+    for (const k of keys) { if (k !== 'from' && k !== 'to') said.push(`${k} ${f[k]}`); }
+    return { ids: hit.map((r) => String(r.id)), how: said.join(', ') };
+}
+
+// plan(), reached by a selector instead of a hand-typed id list. Same guards,
+// same refusals, same shape back.
+function planBy(kind, selector = {}, opts = {}) {
+    const { ids, how } = resolve(kind, selector);
+    if (!ids.length) {
+        return { kind, batch: batchId(), reason: opts.reason || '', going: [], refused: [],
+                 how, counts: { asked: 0, going: 0, refused: 0 } };
+    }
+    const out = plan(kind, ids, opts);
+    out.how = how;
+    return out;
+}
+
+module.exports = { plan, planBy, resolve, commit, restore, batches, reportText, KINDS, ARCHIVE };

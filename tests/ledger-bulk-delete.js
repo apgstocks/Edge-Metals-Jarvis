@@ -37,6 +37,14 @@ const section = (t) => console.log('\n=== ' + t + ' ===');
 const TMP = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvis-bulkdel-'));
 process.env.DATA_DIR = TMP;
 process.env.JARVIS_TEST = '1';
+// Set BEFORE anything requires config.js, which reads these at require time.
+// Setting them inside section H — where they are used — was too late: config
+// had already been loaded by helpers/bills at the top of this file, the Jarvis
+// login returned no sid, and eleven checks failed on a password that was
+// present in the environment but not in the config the server was holding.
+process.env.APP_PASSWORD    = process.env.APP_PASSWORD    || 'user-password-aaa';
+process.env.ADMIN_PASSWORD  = process.env.ADMIN_PASSWORD  || 'admin-password-bbb';
+process.env.JARVIS_PASSWORD = process.env.JARVIS_PASSWORD || 'jarvis-password-ddd';
 
 const ROOT = path.join(__dirname, '..');
 const bd = require(path.join(ROOT, 'helpers/ledgerBulkDelete'));
@@ -316,6 +324,188 @@ section('E — the guard can actually fire');
     ck('an unreadable payments file stops the delete', threw !== null, 'it returned a plan instead');
     ck('  and says why', threw === null || /payments/.test(threw), threw);
     ck('  the row is untouched', idsIn('bills') === 'X1');
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+section('G — THE THREE WAYS IN');
+// ══════════════════════════════════════════════════════════════════════════
+// She was asked which she needed and answered "1,2,3": a bad import, a date
+// range, and rows she ticks. All three resolve to a list of ids and go
+// through plan(), so the guards above are the only exit — a selector that
+// bypassed them would be a second, unguarded delete.
+{
+    write('bills.json', [
+        bill('G1', 'AAAU0000001', { date: '01/10/2026', imported_batch: 'IMP_A' }),
+        bill('G2', 'BBBU0000002', { date: '02/14/2026', imported_batch: 'IMP_A' }),
+        bill('G3', 'CCCU0000003', { date: '08/20/2026', imported_batch: 'IMP_B' }),
+        bill('G4', 'DDDU0000004', { date: '09/01/2026', supplier: 'Calderon' }),
+    ]);
+    write('bill_payments.json', []);
+    write('claims.json', []);
+
+    // 1 — rows ticked on screen
+    const ticked = bd.planBy('bills', { ids: ['G1', 'G4'] });
+    ck('ticked rows resolve to exactly those rows',
+       ticked.going.map((r) => r.id).sort().join(',') === 'G1,G4',
+       ticked.going.map((r) => r.id).join(','));
+
+    // 2 — a bad import, by batch
+    const imp = bd.planBy('bills', { import_batch: 'IMP_A' });
+    ck('an import batch picks up its own rows and only those',
+       imp.going.map((r) => r.id).sort().join(',') === 'G1,G2',
+       imp.going.map((r) => r.id).join(','));
+    ck('  and says what it matched', /IMP_A/.test(imp.how || ''), imp.how);
+
+    // 3 — a date range, through the SCREEN's own filter
+    const range = bd.planBy('bills', { filters: { from: '01/01/2026', to: '02/28/2026' } });
+    ck('a date range picks the rows in it',
+       range.going.map((r) => r.id).sort().join(',') === 'G1,G2',
+       range.going.map((r) => r.id).join(','));
+    ck('  and nothing outside it', !range.going.some((r) => r.id === 'G3' || r.id === 'G4'));
+
+    // Same query object the screen sends, so a supplier filter narrows too.
+    const supp = bd.planBy('bills', { filters: { supplier: 'Calderon' } });
+    ck('any ledger filter works, not just dates',
+       supp.going.map((r) => r.id).join(',') === 'G4', supp.going.map((r) => r.id).join(','));
+
+    // ── THE ONE THAT MUST NEVER MEAN "EVERYTHING" ─────────────────────────
+    // An empty filter object reaching filterRows matches every row. If that
+    // became a plan, one stray press with the filters cleared would take the
+    // whole ledger. It has to throw, not return 400 rows.
+    let threw = null;
+    try { bd.planBy('bills', { filters: {} }); } catch (e) { threw = e.message; }
+    ck('an EMPTY filter refuses instead of selecting everything', !!threw,
+       'it returned a plan for the entire ledger');
+    let threw2 = null;
+    try { bd.planBy('bills', {}); } catch (e) { threw2 = e.message; }
+    ck('  and so does a selector with nothing in it at all', !!threw2, threw2 || 'no throw');
+
+    // A selector that matches nothing is not an error — it is an empty plan.
+    const none = bd.planBy('bills', { import_batch: 'IMP_NOPE' });
+    ck('a batch that matches nothing is an empty plan, not a throw',
+       none.going.length === 0 && none.counts.asked === 0);
+
+    // The guards still apply through a selector — this is the whole point.
+    write('bill_payments.json', [{
+        id: 'GP1', date: '02/20/2026', supplier: 'Fede', amount: 500, mode: 'Wire',
+        allocations: [{ bill_id: 'G2', amount: 500 }],
+    }]);
+    const guarded = bd.planBy('bills', { import_batch: 'IMP_A' });
+    ck('A SELECTOR DOES NOT BYPASS THE PAYMENT GUARD',
+       guarded.refused.some((r) => r.id === 'G2'), JSON.stringify(guarded.refused));
+    ck('  and the unpaid one in the same batch still goes',
+       guarded.going.map((r) => r.id).join(',') === 'G1', guarded.going.map((r) => r.id).join(','));
+    write('bill_payments.json', []);
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+section('H — END TO END, through the real routes');
+// ══════════════════════════════════════════════════════════════════════════
+// Apsara, 2026-09-17: "ALwyas test end to end when you add a new feature."
+//
+// Everything above is the helper. The helper being right is not the feature
+// working: the route may not forward the selector, the client may send `kind`
+// where the route reads `ledger`, the lock may be on the wrong verb. So: a
+// real server, a real login, posted the way the modal posts it, and the rows
+// read back out of the ledger route the screen actually reads.
+//
+// Measured as a DELTA — sections above have already written to this store,
+// and a test that breaks when an unrelated fixture moves gets deleted.
+{
+    const http = require('http');
+
+    write('bills.json', [
+        bill('H1', 'EEEU0000001', { date: '03/01/2026' }),
+        bill('H2', 'FFFU0000002', { date: '03/02/2026' }),
+        bill('H3', 'GGGU0000003', { date: '03/03/2026' }),
+    ]);
+    write('bill_payments.json', [{
+        id: 'HP1', date: '03/05/2026', supplier: 'Fede', amount: 700, mode: 'Wire',
+        allocations: [{ bill_id: 'H2', amount: 700 }],
+    }]);
+    write('claims.json', []);
+
+    const { createApi } = require(path.join(ROOT, 'api'));
+    const app = createApi();
+    const server = await new Promise((r) => { const s = app.listen(0, '127.0.0.1', () => r(s)); });
+    const base = `http://127.0.0.1:${server.address().port}`;
+    const req = (method, pth, { body, sid } = {}) => new Promise((resolve, reject) => {
+        const data = body == null ? null : JSON.stringify(body);
+        const headers = {};
+        if (data) { headers['Content-Type'] = 'application/json'; headers['Content-Length'] = Buffer.byteLength(data); }
+        if (sid) headers.Authorization = `Bearer ${sid}`;
+        const r2 = http.request(base + pth, { method, headers }, (res) => {
+            let raw = ''; res.on('data', (c) => { raw += c; });
+            res.on('end', () => { let j = null; try { j = JSON.parse(raw); } catch (e) {} resolve({ status: res.statusCode, json: j }); });
+        });
+        r2.on('error', reject); if (data) r2.write(data); r2.end();
+    });
+
+    const jarvis = ((await req('POST', '/login', { body: { password: process.env.JARVIS_PASSWORD } })).json || {}).sid;
+    const admin  = ((await req('POST', '/login', { body: { password: process.env.ADMIN_PASSWORD } })).json || {}).sid;
+    ck('signed in as the Jarvis profile', !!jarvis);
+    ck('  and as a plain admin', !!admin);
+
+    // ── THE LOCK ──────────────────────────────────────────────────────────
+    // /api/bills/:id is open to an admin, because one bill is an admin's to
+    // correct. A SELECTION is not: it is the one control that can empty a
+    // year in a press, so it carries the same lock as every other deletion of
+    // Edge Metals money. Hiding the button is not a permission — this is.
+    const asAdmin = await req('POST', '/api/ledger/bulk-delete/commit',
+        { sid: admin, body: { kind: 'bills', selector: { ids: ['H1'] } } });
+    ck('a plain admin CANNOT bulk delete', asAdmin.status === 403, String(asAdmin.status));
+    ck('  and the row is still there', bills.list().some((b) => b.id === 'H1'));
+
+    // ── PLAN CHANGES NOTHING ──────────────────────────────────────────────
+    const before = bills.list().length;
+    const plan = await req('POST', '/api/ledger/bulk-delete/plan',
+        { sid: jarvis, body: { kind: 'bills', selector: { ids: ['H1', 'H2', 'H3'] } } });
+    ck('the plan route answers', plan.status === 200, String(plan.status));
+    ck('  the paid one is refused', (plan.json.refused || []).some((r) => r.id === 'H2'),
+       JSON.stringify(plan.json.refused));
+    ck('  two are going', (plan.json.going || []).length === 2,
+       String((plan.json.going || []).length));
+    ck('  AND NOTHING WAS DELETED BY PLANNING', bills.list().length === before,
+       `${before} -> ${bills.list().length}`);
+
+    // ── COMMIT, THROUGH THE ROUTE THE MODAL POSTS TO ──────────────────────
+    const done = await req('POST', '/api/ledger/bulk-delete/commit',
+        { sid: jarvis, body: { kind: 'bills', selector: { ids: ['H1', 'H2', 'H3'] }, reason: 'typed twice' } });
+    ck('the commit route answers', done.status === 200, JSON.stringify(done.json));
+    ck('  it removed two', done.json.removed === 2, String(done.json.removed));
+
+    // Read back out of the route the SCREEN reads, not the helper.
+    const listed = await req('GET', '/api/bills', { sid: jarvis });
+    const left = (listed.json.bills || []).map((b) => b.id);
+    ck('the ledger route no longer returns them', !left.includes('H1') && !left.includes('H3'),
+       left.join(','));
+    ck('  and the paid one is still on the books', left.includes('H2'), left.join(','));
+    ck('  the payment still points at a bill that exists',
+       (require(path.join(ROOT, 'helpers/billPayments')).paidByBill() || {}).H2 === 700);
+
+    // ── AND BACK AGAIN ────────────────────────────────────────────────────
+    const back = await req('POST', '/api/ledger/bulk-delete/restore',
+        { sid: jarvis, body: { batch: done.json.batch } });
+    ck('restore answers', back.status === 200, String(back.status));
+    ck('  it put both back', back.json.restored === 2, String(back.json.restored));
+    const again = await req('GET', '/api/bills', { sid: jarvis });
+    const now = (again.json.bills || []).map((b) => b.id);
+    ck('  and the ledger route shows them again',
+       now.includes('H1') && now.includes('H3'), now.join(','));
+
+    // ── THE SELECTOR IS RE-PLANNED SERVER SIDE ────────────────────────────
+    // The client posts the selector, never the row list it was shown. If the
+    // route trusted a posted list, the guards would be decided by whoever
+    // holds the page — so a commit naming the PAID row directly must still
+    // refuse it.
+    const sneaky = await req('POST', '/api/ledger/bulk-delete/commit',
+        { sid: jarvis, body: { kind: 'bills', selector: { ids: ['H2'] },
+                               going: [{ id: 'H2' }], refused: [] } });
+    ck('a commit cannot smuggle past the guard', sneaky.json.removed === 0,
+       JSON.stringify(sneaky.json));
+    ck('  the paid bill survives it', bills.list().some((b) => b.id === 'H2'));
+
+    await new Promise((r) => server.close(r));
 }
 
 console.log(`\n  ${pass} passed, ${fail} failed`);
