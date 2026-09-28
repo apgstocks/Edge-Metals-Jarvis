@@ -655,6 +655,28 @@ const COLUMNS = [
     // rather than something she reconstructs between two other columns.
     { key: 'net_payable',      label: 'Payable',            group: 'money', unit: '$', derived: true,
       hint: 'bill amount less trucking — what the supplier is owed' },
+    // ── WHAT HAS ACTUALLY GONE OUT ────────────────────────────────────────
+    // Apsara, 2026-09-29: "What if i want to see the paid amount for bills".
+    //
+    // `paid` has been computed on every row since bill payments existed —
+    // withTotals() returns it and Balance already subtracts it — but it has
+    // never been a COLUMN. So the screen showed the RESULT of paying a
+    // supplier and never the payment itself: Payable, Advance, Balance, and
+    // the amount that moved nowhere to be seen. Reading it off meant
+    // subtracting Balance from Payable in her head, and getting that wrong is
+    // how a supplier gets paid twice.
+    //
+    // tableOnly AND derived, deliberately, and this is the part that matters:
+    // `paid` is the SUM OF THE PAYMENT RECORDS in bill_payments.json. If it
+    // were an ordinary field in the 'money' group it would appear on the bill
+    // form as a box, and a figure typed there would sit on the row overriding
+    // the real total — withTotals reads `b.paid` first (line ~391). A bill
+    // could then claim to be settled with no payment behind it, and the money
+    // would balance nowhere. It is not in WRITABLE either; both together, so
+    // neither one alone is load-bearing.
+    { key: 'paid',             label: 'Paid',               tableOnly: true, derived: true,
+      unit: '$', num: true,
+      hint: 'total of the payments recorded against this bill — not typed' },
     { key: 'balance',          label: 'Balance',            group: 'money', unit: '$', derived: true },
 
     // Its own row at the end, full width. Sitting in the middle of the
@@ -684,7 +706,9 @@ const TABLE_ORDER = ['route', 'date', 'supplier', 'invoice_no',
     'booking_no', 'container_no', 'seal_no', 'description', 'gross', 'truck',
     'container', 'chassis', 'boxes', 'total', 'net_lb', 'net_mt',
     'supplier_price', 'amount', 'trucking_company', 'trucking_amount', 'advance',
-    'net_payable', 'balance',
+    // Payable − Paid − Advance = Balance, and the columns now read in that
+    // order, so the arithmetic on the screen is the arithmetic in withTotals.
+    'net_payable', 'paid', 'balance',
     'photos'];
 
 // ── FILTERS, AND SEVERAL AT ONCE ─────────────────────────────────────────

@@ -4090,6 +4090,26 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
                 duplicates: b.duplicates(all),
                 bills: rows,
                 summary: b.summary(rows),
+                // ── CREDIT SITTING WITH EACH SUPPLIER ────────────────────
+                // Apsara, 2026-09-29: "see all unapplied advacne against the
+                // suppl[i]er".
+                //
+                // An advance is a payment whose allocations do not yet add up
+                // to it; the remainder is credit against that supplier.
+                // helpers/billPayments.js has computed this for weeks —
+                // creditBySupplier() — and the ONLY place it reached was the
+                // "who are you paying?" step of the pay modal. So the figure
+                // existed and could not be seen unless she was already in the
+                // act of paying someone.
+                //
+                // Keyed by supplier name so the row badge can look up its own
+                // without a second request. Fails soft: a bills table that
+                // refuses to load because an advance could not be read would
+                // be far worse than one with no badges.
+                credit: (() => {
+                    try { return require('./helpers/billPayments').creditBySupplier(); }
+                    catch (e) { return {}; }
+                })(),
                 // Built from EVERY row, not the filtered ones, or narrowing by
                 // supplier would empty the supplier dropdown she just used.
                 facets: b.facets(all),
@@ -4621,6 +4641,12 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
                 // tick rather than making her remember which are open.
                 open_bills: unpaid,
                 credit: bp.creditBySupplier(),
+                // The individual advances behind those totals, so the panel can
+                // show WHICH payment is sitting unapplied and from when — a
+                // total alone does not tell her what to go and look at.
+                // Only the ones with something left; a fully applied advance is
+                // history, not an open item.
+                advances: bp.advancesFor(null).filter((a) => (a.available || 0) > 0.005),
                 modes: bp.BILL_PAYMENT_MODES,
                 banks: require('./helpers/banks').options(),
                 other: require('./helpers/banks').OTHER,

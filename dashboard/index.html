@@ -6502,7 +6502,17 @@ const ledgerFilters = { bills: {}, sales: {} };
 const metalsTab = { bills: 'bills', sales: 'outgoing' };
 
 const METALS_TABS = {
-  bills: [['bills', 'Bills'], ['trucking', 'Trucking']],
+  // ── OUTGOING, REACHABLE FROM BILLS TOO ────────────────────────────────
+  // Apsara, 2026-09-29: "Add a outgoing tab in Bills.remove it from invoice
+  // register.." — asked whether that meant MOVING it, which would leave the
+  // Invoice section with no invoice table in it at all, she chose to have it
+  // in both.
+  //
+  // It is the SAME screen, not a copy: both tabs call renderLedgerTab('sales'),
+  // so there is one renderer, one column list and one set of filters. Two
+  // copies of an invoice table would eventually disagree about a figure, and
+  // she would have no way of knowing which one was lying.
+  bills: [['bills', 'Bills'], ['outgoing', 'Outgoing'], ['trucking', 'Trucking']],
   sales: [['outgoing', 'Outgoing'], ['incoming', 'Incoming'],
           ['freight', 'Freight'], ['commission', 'Commission'],
           // The join, and the reason the two sides were keyed the same way.
@@ -6528,7 +6538,12 @@ function wireMetalsTabs() {
       const { section, tab } = b.dataset;
       metalsTab[section] = tab;
       if (section === 'bills') {
-        return tab === 'trucking' ? renderMetalsTruckingTab() : renderLedgerTab('bills');
+        if (tab === 'trucking') return renderMetalsTruckingTab();
+        // Outgoing under Bills is the sales ledger drawn with the BILLS tab
+        // bar, so pressing it does not throw her into the Invoice section —
+        // see the `bar` option on renderLedgerTab.
+        if (tab === 'outgoing') return renderLedgerTab('sales', { bar: 'bills' });
+        return renderLedgerTab('bills');
       }
       return tab === 'outgoing' ? renderLedgerTab('sales') : renderSalesSubTab(tab);
     };
@@ -6545,7 +6560,20 @@ const SALES_TAB_TITLES = {
   commission: ['Invoice', 'Commission'],
 };
 
-async function renderLedgerTab(kind) {
+// ── `bar` NAMES THE NEW SHAPE, NEVER THE OLD ONE ─────────────────────────
+// Apsara, 2026-09-29: "Add a outgoing tab in Bills".
+//
+// This function draws the tab bar of the section its KIND belongs to — sales
+// draws the Invoice bar, bills draws the Bills bar — which is right for every
+// caller that existed before today. The one new caller wants the sales table
+// UNDER the Bills bar, because pressing Outgoing inside Bills must not silently
+// move her to another section.
+//
+// So the option is `bar`, and leaving it out means exactly what every existing
+// call already meant. A flag that had to be SET to keep the old behaviour would
+// eventually not be set, and the twenty-odd existing callers would each draw
+// the wrong navigation.
+async function renderLedgerTab(kind, { bar = null } = {}) {
   // Incoming, Freight and Commission are their own screens — they are not the
   // sales table with different columns, and pretending otherwise is how a
   // charge list ends up rendered as a row of blanks.
@@ -6584,6 +6612,9 @@ async function renderLedgerTab(kind) {
   // (/api/ledger/bulk-delete/* is requireSuper — this is only the UI half, and
   // hiding a button is not a permission).
   const canBulk = IS_SUPER === true;
+  // Supplier -> unapplied advance. From /api/bills (see the route), so the
+  // table and the badges are one request and cannot disagree about a figure.
+  const ledCredit = (kind === 'bills' && data.credit) ? data.credit : {};
   const body = rows.length ? rows.map((r, i) => `
     <tr data-id="${esc(r.id)}" style="border-top:1px solid var(--line);">
       ${canBulk ? `<td style="padding:7px 4px 7px 10px; width:26px;"><input type="checkbox" class="ledPick" data-id="${esc(r.id)}" aria-label="Select ${esc(r.container_no || r.id)}" style="cursor:pointer;"></td>` : ''}
@@ -6626,6 +6657,23 @@ async function renderLedgerTab(kind) {
              literal, so one backtick in a comment ends the string and the
              page stops parsing — which is exactly what the first version of
              this comment did, quoting "received" in backticks. -->
+        <!-- ── CREDIT SITTING WITH THIS SUPPLIER ─────────────────────────
+             Apsara, 2026-09-29: "see all unapplied advacne against the
+             suppl[i]er". This is the per-ROW half of that — the panel above
+             the table is the list.
+
+             It sits with the status marks rather than the buttons, because
+             like them it is something she is meant to SEE while scanning: a
+             bill with a balance owing while the same supplier is holding an
+             advance is a payment that may not need making. Not an action.
+
+             BILLS ONLY. Credit against a SUPPLIER has no meaning on a sale,
+             where the other party is a customer — a customer's credit is a
+             different store (sales receipts and deductions) and putting the
+             supplier figure on both would be a number that is simply wrong
+             half the time. -->
+        ${kind === 'bills' && ledCredit[String(r.supplier || '').trim()] > 0.005
+          ? `<span title="${esc(String(r.supplier || '').trim())} is holding ${ledMoney(ledCredit[String(r.supplier || '').trim()])} of unapplied advance — it may cover part of this" style="color:var(--status-good, #4ade80); font-size:10px; font-family:var(--font-mono); margin-right:6px;">${ledMoney(ledCredit[String(r.supplier || '').trim()])} credit</span>` : ''}
         ${kind === 'sales' && r.balance !== null && Math.abs(r.balance) <= 0.005
           ? `<span title="Settled${r.bank_charge ? ` — ${ledMoney(r.bank_charge)} of it was a bank charge` : ''}${r.discount ? ` — ${ledMoney(r.discount)} discounted` : ''}" style="color:var(--status-good, #4ade80); font-size:10px; font-family:var(--font-mono); margin-right:6px;">received${r.bank_charge || r.discount ? ' *' : ''}</span>` : ''}
         <!-- The items themselves are built in actionsFor(), below. Generate
@@ -6704,7 +6752,7 @@ async function renderLedgerTab(kind) {
           </div>` : ''}
         </div>
       </div>
-      ${kind === 'sales' || kind === 'bills' ? metalsTabBar(kind === 'sales' ? 'sales' : 'bills') : ''}
+      ${kind === 'sales' || kind === 'bills' ? metalsTabBar(bar || (kind === 'sales' ? 'sales' : 'bills')) : ''}
       ${kind === 'sales' && (data.duplicates || []).length ? `<div style="margin-bottom:12px; padding:9px 12px; border:1px solid var(--status-warn); border-radius:var(--radius-sm); font-size:12px; color:var(--status-warn);">
         ${(data.duplicates || []).map((d) => `${esc(d.container_no)} appears ${d.ids.length} times under ${esc(d.booking_no)}`).join(' · ')}
         — usually a typo, occasionally a container split across two invoices. Worth a look either way: the margin against Bills counts it twice.
@@ -6721,6 +6769,26 @@ async function renderLedgerTab(kind) {
           ${activeFilterCount(f) ? `${activeFilterCount(f)} filter${activeFilterCount(f) === 1 ? '' : 's'} · ` : ''}${rows.length} of ${data.total_unfiltered ?? rows.length}
         </div>
       </div>
+      <!-- ── MONEY ALREADY WITH THE SUPPLIER ───────────────────────────
+           Apsara, 2026-09-29: "see all unapplied advacne against the
+           suppl[i]er".
+
+           creditBySupplier() has existed for weeks and reached exactly one
+           place: the "who are you paying?" step of the pay modal. So the
+           figure was only visible to someone already in the act of paying
+           somebody — which is the one moment she does not need reminding.
+
+           Shown only when there IS credit. A strip reading "$0.00 sitting"
+           on every visit is furniture, and furniture stops being read. -->
+      ${kind === 'bills' && Object.keys(ledCredit).length ? `<div id="ledCreditBar" style="display:flex; align-items:center; gap:10px; margin-bottom:10px; padding:9px 13px;
+           border:1px solid var(--status-good, #4ade80); border-radius:var(--radius-sm); background:var(--surface-sunken);">
+        <span style="font-family:var(--font-mono); font-size:11px; color:var(--text-body);">
+          ${ledMoney(Object.values(ledCredit).reduce((a, b) => a + b, 0))} of advances sitting unapplied
+          across ${Object.keys(ledCredit).length} supplier${Object.keys(ledCredit).length === 1 ? '' : 's'}
+        </span>
+        <div style="flex:1;"></div>
+        <button id="ledCreditShow" class="btn btn-ghost" style="font-size:11px; padding:6px 14px;">Show them</button>
+      </div>` : ''}
       ${canBulk ? `<div id="ledSelBar" style="display:none; align-items:center; gap:10px; margin-bottom:10px; padding:9px 13px;
            border:1px solid var(--accent); border-radius:var(--radius-sm); background:var(--surface-sunken);">
         <span id="ledSelCount" style="font-family:var(--font-mono); font-size:11px; color:var(--text-body);"></span>
@@ -6768,12 +6836,65 @@ async function renderLedgerTab(kind) {
       const v = String(el.value || '').trim();
       if ((ledgerFilters[kind][key] || '') === v) return;   // nothing changed
       ledgerFilters[kind][key] = v;
-      renderLedgerTab(kind);
+      renderLedgerTab(kind, { bar });
     };
     el.addEventListener('change', apply);
     el.addEventListener('keydown', (e) => { if (e.key === 'Enter') apply(); });
   });
-  $('ledClear').onclick = () => { ledgerFilters[kind] = {}; renderLedgerTab(kind); };
+  $('ledClear').onclick = () => { ledgerFilters[kind] = {}; renderLedgerTab(kind, { bar }); };
+
+  // ── THE UNAPPLIED ADVANCES LIST ──────────────────────────────────────
+  // The strip says how much; this says which. A total alone does not tell her
+  // what to go and look at, so the list names the supplier, the date the
+  // advance was paid, what it was, how much has been applied and what is left.
+  //
+  // The individual advances come from /api/bill-payments rather than riding
+  // on every bills request — most visits to this tab never open this, and
+  // loading the whole payment ledger to render a strip nobody pressed would
+  // slow the table for everyone.
+  if ($('ledCreditShow')) {
+    $('ledCreditShow').onclick = async () => {
+      let rows = [];
+      try {
+        const d = await api('/api/bill-payments');
+        rows = (d.advances || []).slice().sort((a, b) => (b.available || 0) - (a.available || 0));
+      } catch (e) { alert(e.message || 'Could not read the advances'); return; }
+
+      const back = document.createElement('div');
+      back.className = 'modal-overlay';
+      back.style.display = 'flex';
+      back.innerHTML = `
+        <div class="modal" role="dialog" aria-modal="true" aria-label="Unapplied advances" style="max-width:720px; width:100%;">
+          <div style="padding:18px 22px 12px; border-bottom:1px solid var(--border-subtle);">
+            <h3 style="margin:0; font-size:16px; text-transform:uppercase;">Advances sitting unapplied</h3>
+            <p style="margin:6px 0 0; font-size:12px; color:var(--text-muted);">
+              Money already sent to a supplier that no container has been put against yet.
+              Apply one from Pay, on the supplier it belongs to.</p>
+          </div>
+          <div class="modal-body" style="padding:0;">
+            ${rows.length ? `<table style="width:100%; border-collapse:collapse; font-size:12px;">
+              <thead><tr style="background:var(--bg-sunken);">
+                ${['Supplier', 'Paid on', 'Advance', 'Applied', 'Left'].map((h, i) => `<th style="padding:8px 12px; text-align:${i > 1 ? 'right' : 'left'}; font-family:var(--font-mono); font-size:9px; letter-spacing:.1em; text-transform:uppercase; color:var(--text-muted);">${h}</th>`).join('')}
+              </tr></thead>
+              <tbody>${rows.map((a) => `<tr style="border-top:1px solid var(--line);">
+                <td style="padding:8px 12px;">${esc(a.supplier || '—')}</td>
+                <td style="padding:8px 12px; font-family:var(--font-mono);">${esc(a.date || '—')}</td>
+                <td style="padding:8px 12px; text-align:right; font-family:var(--font-mono);">${ledMoney(a.amount)}</td>
+                <td style="padding:8px 12px; text-align:right; font-family:var(--font-mono); color:var(--text-muted);">${ledMoney(a.used)}</td>
+                <td style="padding:8px 12px; text-align:right; font-family:var(--font-mono); color:var(--status-good, #4ade80);">${ledMoney(a.available)}</td>
+              </tr>`).join('')}</tbody>
+            </table>` : '<div style="padding:26px; text-align:center; color:var(--text-faint); font-size:12px;">Nothing sitting unapplied.</div>'}
+          </div>
+          <div style="padding:14px 22px; border-top:1px solid var(--border-subtle); display:flex; justify-content:flex-end;">
+            <button id="credClose" class="btn btn-secondary" style="font-size:12px; padding:8px 18px;">Close</button>
+          </div>
+        </div>`;
+      document.body.appendChild(back);
+      const close = () => back.remove();
+      back.querySelector('#credClose').onclick = close;
+      back.addEventListener('click', (e) => { if (e.target === back) close(); });
+    };
+  }
 
   // ── CLEARING SEVERAL ROWS ────────────────────────────────────────────
   // Apsara, 2026-09-29: "What if i want to delte multiple rows in bills and
@@ -6827,7 +6948,7 @@ async function renderLedgerTab(kind) {
           const r = await api('/api/ledger/bulk-delete/restore', {
             method: 'POST', body: JSON.stringify({ batch }) });
           alert(`${r.restored} row${r.restored === 1 ? '' : 's'} put back.`);
-          renderLedgerTab(kind);
+          renderLedgerTab(kind, { bar });
         } catch (e) { $('ledUndoGo').disabled = false; alert(e.message || 'Could not restore'); }
       };
     };
@@ -6937,7 +7058,7 @@ async function renderLedgerTab(kind) {
             method: 'POST',
             body: JSON.stringify({ kind, selector: selectorNow(), reason: back.querySelector('#bdReason').value }) });
           close();
-          await renderLedgerTab(kind);
+          await renderLedgerTab(kind, { bar });
           if (res.removed) showUndo(res.batch, res.removed);
           else alert('Nothing was deleted — every row was refused.');
         } catch (e) {
@@ -7038,7 +7159,7 @@ async function renderLedgerTab(kind) {
   wireMetalsTabs();
   if ($('btnFromBill')) $('btnFromBill').onclick = () => openFromBill();
   if ($('btnPay')) $('btnPay').onclick = () => openBillPayForm();
-  if ($('btnImport')) $('btnImport').onclick = () => openImportModal(kind);
+  if ($('btnImport')) $('btnImport').onclick = () => openImportModal(kind, bar);
   if ($('btnNameCleanup')) $('btnNameCleanup').onclick = () => openNameCleanup(kind === 'sales' ? 'customer' : 'supplier');
 
   // ── EXPORT WHAT IS ON SCREEN ─────────────────────────────────────────
@@ -7131,7 +7252,7 @@ async function renderLedgerTab(kind) {
         try {
           const r = await api('/api/import/' + encodeURIComponent(batch), { method: 'DELETE' });
           shut();
-          await renderLedgerTab(kind);
+          await renderLedgerTab(kind, { bar });
           alert(`Undone — ${Number(r.removed || 0).toLocaleString('en-US')} rows removed.`);
         } catch (err) {
           b.disabled = false; b.textContent = 'Undo last import';
@@ -7146,7 +7267,7 @@ async function renderLedgerTab(kind) {
       opt.onclick = (e) => { e.stopPropagation(); shut(); exportTo(opt.dataset.format, btn); };
     });
   }
-  $('btnAddLedger').onclick = () => openLedgerForm(kind);
+  $('btnAddLedger').onclick = () => openLedgerForm(kind, undefined, undefined, bar);
   // ── EDIT ─────────────────────────────────────────────────────────────
   // Apsara, 2026-09-10: "i want edit option in bill". Until now a typo in a
   // seal number meant deleting the row and typing all 18 fields again.
@@ -7176,12 +7297,12 @@ async function renderLedgerTab(kind) {
     if (kind === 'sales') {
       items.push(['Generate invoice & email', () => openGenerateInvoice(row)]);
     }
-    items.push(['Edit', () => openLedgerForm(kind, row)]);
+    items.push(['Edit', () => openLedgerForm(kind, row, undefined, bar)]);
     items.push(['Delete', async () => {
       if (!confirm('Delete this row?')) return;
       try {
         await api(`${K.path}/${encodeURIComponent(row.id)}`, { method: 'DELETE' });
-        renderLedgerTab(kind);
+        renderLedgerTab(kind, { bar });
       } catch (e) { alert(e.message || 'Could not delete'); }
     }, 'danger']);
     return items;
@@ -9260,7 +9381,11 @@ async function openNameCleanup(startField) {
 let importFile = null;      // { name, base64 }
 let importPreview = null;   // the last preview, or null
 
-async function openImportModal(kind) {
+// `bar` is carried only so the ledger this returns to draws the navigation she
+// came from — Outgoing reached from Bills must not land back on the Invoice
+// bar. Defaulting to null means every existing caller behaves exactly as it
+// did; see renderLedgerTab for why the flag names the new shape.
+async function openImportModal(kind, bar = null) {
   const L = LEDGER_LIGHT;
   importFile = null; importPreview = null;
   const fieldCss = `width:100%; height:34px; padding:0 10px; background:${L.paper}; border:1px solid ${L.line}; border-radius:var(--radius-sm); color:${L.ink}; outline:none; font-size:13px;`;
@@ -9510,7 +9635,7 @@ async function openImportModal(kind) {
         <button id="impDone" class="btn btn-primary" style="font-size:12px; padding:8px 16px;">Done</button>
       </div>
       <div id="impErr"></div>`;
-    $('impDone').onclick = () => { close(); renderLedgerTab(kind); };
+    $('impDone').onclick = () => { close(); renderLedgerTab(kind, { bar }); };
     if ($('impUndo')) $('impUndo').onclick = () => undoBatch(r.batch, $('impUndo'));
   }
 
@@ -9523,7 +9648,7 @@ async function openImportModal(kind) {
           Undone — ${n(r.removed)} rows removed.</div>
         <div style="border-top:1px solid ${L.line}; padding-top:14px; margin-top:16px; text-align:right;">
           <button id="impDone2" class="btn btn-primary" style="font-size:12px; padding:8px 16px;">Done</button></div>`;
-      $('impDone2').onclick = () => { close(); renderLedgerTab(kind); };
+      $('impDone2').onclick = () => { close(); renderLedgerTab(kind, { bar }); };
     } catch (e) {
       btn.disabled = false; btn.textContent = 'Undo this import';
       $('impErr').innerHTML = `<div style="margin-top:12px; padding:10px 12px; border:1px solid ${L.danger}; border-radius:var(--radius-sm); font-size:12px; color:${L.danger};">${esc(e.message || 'Could not undo.')}</div>`;
@@ -9610,7 +9735,25 @@ async function openBillPayForm(opts = {}) {
   // picked it at the door (openBillPaySupplier below).
   const supplier = applying ? opts.applySupplier : (opts.supplier || null);
   const advances = (data.payments || [])
-    .filter((p) => p.kind === 'advance' && (!applying || p.supplier === opts.applySupplier))
+  // ── ONLY THIS SUPPLIER'S ADVANCES ────────────────────────────────────
+  // Apsara, 2026-09-29: "If i select a supplier in pay,Any detail relared to
+  // that supplier shoud come only".
+  //
+  // The containers below were filtered to the chosen supplier on 2026-09-10
+  // ("show only related supplier container"). This list was not: the supplier
+  // clause applied only in APPLY mode, so paying anyone normally offered the
+  // advances of every supplier in the business in one dropdown.
+  //
+  // Not dangerous — helpers/billPayments.applyAdvance binds to the advance's
+  // OWN supplier and throws on a mismatch, so the server was never going to
+  // write it. It is worse than that in a quiet way: she picks the obvious
+  // entry, presses save, and gets told off for a choice the screen offered
+  // her. A control that offers what the server will refuse is a trap.
+  //
+  // sameSupplier rather than ===, matching the container filter below. Apply
+  // mode was strict and case-sensitive; now the two lists in this one form
+  // agree about what counts as the same name, which they did not before.
+  .filter((p) => p.kind === 'advance' && sameSupplier(p.supplier, supplier))
     .map((p) => ({ ...p, available: round2(p.amount - (p.allocations || []).reduce((s, a) => s + Number(a.amount || 0), 0)) }))
     .filter((p) => p.available > 0.005);
   // ── ONLY THIS SUPPLIER'S CONTAINERS ──────────────────────────────────
@@ -9654,9 +9797,35 @@ async function openBillPayForm(opts = {}) {
   // Newest first: the one she wants to undo is almost always the last one
   // she entered, and scrolling a ledger to find it is how the wrong row gets
   // deleted.
-  const recorded = (data.payments || []).slice().reverse();
+  // ── ONLY THIS SUPPLIER'S PAYMENTS ────────────────────────────────────
+  // Apsara, 2026-09-29: "If i select a supplier in pay,Any detail relared to
+  // that supplier shoud come only".
+  //
+  // "Already recorded" listed EVERY payment in the business. Having chosen
+  // Eccomelt at the door, the history under the form was still Oakland
+  // Metals, Calderon and everyone else, newest first — so the row she is most
+  // likely to want to delete is buried among other suppliers' money, and the
+  // Delete button beside each one is live. That is the arrangement in which a
+  // wrong row gets removed.
+  //
+  // The containers were narrowed on 2026-09-10 ("show only related supplier
+  // container"); these two lists were simply never done at the same time.
+  const recorded = (data.payments || [])
+    .filter((p) => sameSupplier(p.supplier, supplier))
+    .slice().reverse();
 
-  const creditLines = Object.entries(credit).map(([sup, amt]) =>
+  // ── AND ONLY THIS SUPPLIER'S CREDIT ──────────────────────────────────
+  // Same message. "Credit on hand" printed every supplier holding an advance,
+  // each one an "apply" button — so on a form for paying Eccomelt she could
+  // press Oakland Metals' credit. helpers/billPayments.applyAdvance binds to
+  // the advance's own supplier and throws, so nothing wrong could be written;
+  // the defect is a form offering a button the server will refuse.
+  //
+  // The whole map is still on the Bills tab strip, which is where "who is
+  // holding my money" belongs. Here the question is narrower.
+  const creditLines = Object.entries(credit)
+    .filter(([sup]) => sameSupplier(sup, supplier))
+    .map(([sup, amt]) =>
     `<button class="bpApply" data-supplier="${esc(sup)}" style="background:none; border:none; padding:0 2px; cursor:pointer; font-size:11px; color:${L.inkMuted}; text-decoration:underline dotted;">${esc(sup)} <b style="color:${L.ok};">${money(amt)}</b> — apply</button>`).join(' · ');
 
   document.body.insertAdjacentHTML('beforeend', `
@@ -9934,7 +10103,10 @@ async function openBillPayForm(opts = {}) {
 // `existing` means editing a saved row, and conflating the two would have the
 // autosave issue a PUT against an id that is not there. Named `seed` because
 // `prefill` is already taken further down by the booking picker's markup.
-function openLedgerForm(kind, existing, seed) {
+// `bar`, same reason as openImportModal: saving a row from Outgoing-inside-
+// Bills must redraw the Bills navigation, not the Invoice one. Last parameter
+// and optional, so the four existing call sites are untouched.
+function openLedgerForm(kind, existing, seed, bar = null) {
   const K = LEDGER_KINDS[kind];
   const editing = !!(existing && existing.id);
   const all = ledgerState.fields || [];
@@ -10391,13 +10563,13 @@ function openLedgerForm(kind, existing, seed) {
     if (onEscape) document.removeEventListener('keydown', onEscape);
     // Autosave may have created the row while she typed, so the table behind
     // has to catch up whichever way she leaves.
-    if (savedId || editing) renderLedgerTab(kind);
+    if (savedId || editing) renderLedgerTab(kind, { bar });
   };
   const onEscape = (e) => { if (e.key === 'Escape') close(); };
   document.addEventListener('keydown', onEscape);
   $('ledClose').onclick = close;
   // The bill/sales form autosaves, so reopening it loses nothing typed.
-  ledgerReopen = () => { close(); openLedgerForm(kind, existing, seed); };
+  ledgerReopen = () => { close(); openLedgerForm(kind, existing, seed, bar); };
   $('ledCancel').onclick = close;
 
   const readForm = () => {

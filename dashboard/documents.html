@@ -297,8 +297,11 @@ body[data-theme="light"] {
 
                  width and flex:none hold the box at its own size;
                  flex:1 + min-width:0 give the text the rest of the row. The
-                 font is reset too — `.field label` is var(--font-mono), which
-                 is right for a field label and wrong for a sentence. -->
+                 font is reset too: .field label uses the mono label face,
+                 which is right for a field label and wrong for a sentence.
+                 (No double hyphen in here, deliberately: this is an HTML
+                 comment and a run of them can close it early. See
+                 tests/comment-hygiene.js, which caught exactly that.) -->
             <label style="display:flex; gap:9px; align-items:flex-start; margin-top:12px;
                           padding-top:11px; border-top:1px solid var(--border-subtle);
                           font-size:12px; cursor:pointer; font-family:var(--font-sans);

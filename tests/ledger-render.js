@@ -1094,6 +1094,82 @@ section('G3 — spending an advance she already paid');
     ck('  showing what is left on it, not what was sent',
        /1,680/.test(sel.options[0].textContent), sel.options[0].textContent);
 
+    // ── ONLY THIS SUPPLIER'S ADVANCES, IN NORMAL PAY TOO ─────────────────
+    // Apsara, 2026-09-29: "If i select a supplier in pay,Any detail relared to
+    // that supplier shoud come only".
+    //
+    // The containers were filtered to the chosen supplier on 2026-09-10. This
+    // dropdown was not: the supplier clause applied ONLY in apply mode, so
+    // paying anyone normally listed every supplier's advances together.
+    //
+    // helpers/billPayments.applyAdvance binds to the advance's own supplier
+    // and throws on a mismatch, so nothing wrong could ever be written — the
+    // defect is that the screen offered her a choice the server would refuse,
+    // and she would be told off for pressing what she was shown.
+    {
+        const two = {
+            ...ROUTE,
+            payments: [
+                { id: 'PA', kind: 'advance', supplier: 'Eccomelt', date: '09/01/2026',
+                  mode: 'Wire', amount: 500, allocations: [] },
+                { id: 'PB', kind: 'advance', supplier: 'Oakland Metals', date: '09/02/2026',
+                  mode: 'Wire', amount: 700, allocations: [] },
+                { id: 'PC', kind: 'advance', supplier: 'eccomelt', date: '09/03/2026',
+                  mode: 'Zelle', amount: 250, allocations: [] },
+            ],
+            credit: { Eccomelt: 750, 'Oakland Metals': 700 },
+        };
+        const b2 = await mount({
+            '/api/bills': billsRoute,
+            '/api/bill-payments': (q, opts) => (opts && opts.method === 'POST' ? { ok: true } : two),
+        });
+        await b2.w.renderLedgerTab('bills');
+        await b2.w.openBillPayForm({ supplier: 'Eccomelt' });
+        const form = b2.w.document.getElementById('bpModal');
+        const text = form ? form.textContent : 'no form';
+
+        // ── CREDIT ON HAND ────────────────────────────────────────────────
+        // Every supplier holding an advance was printed here, each one a live
+        // "apply" button, on a form for paying ONE supplier.
+        const applyBtns = [...b2.w.document.querySelectorAll('.bpApply')]
+            .map((x) => x.dataset.supplier);
+        ck('paying Eccomelt offers only Eccomelt\'s credit to apply',
+           applyBtns.length === 1 && /eccomelt/i.test(applyBtns[0]),
+           applyBtns.join(',') || 'none');
+        ck('  Oakland Metals\' credit is not a button on this form',
+           !applyBtns.some((x) => /oakland/i.test(x)), applyBtns.join(','));
+        ck('  and its figure is not printed either', !/700\.00/.test(text),
+           (text.match(/Credit on hand[^\n]{0,90}/) || ['not found'])[0]);
+
+        // ── ALREADY RECORDED ──────────────────────────────────────────────
+        // The history under the form listed every payment in the business,
+        // each with a live Delete beside it.
+        const rows = [...b2.w.document.querySelectorAll('#bpModal [data-pay]')];
+        const shown = rows.length ? rows.map((r) => r.textContent).join(' | ') : text;
+        ck('the recorded list is this supplier\'s payments only',
+           !/Oakland Metals/.test(shown), shown.slice(0, 200));
+
+        // ── AND THE APPLY PICKER AGREES ABOUT NAMES ───────────────────────
+        // The advance dropdown only exists in apply mode, and apply mode
+        // already filtered — but with ===, case-sensitively, while the
+        // container list beside it uses sameSupplier. So an advance typed
+        // "eccomelt" was invisible when applying to "Eccomelt", and the
+        // credit simply could not be spent.
+        //
+        // The server agrees with the looser reading: cleanAllocations matches
+        // containers with sameSupplier too. Two answers in one form about what
+        // counts as the same supplier is the disagreement worth removing.
+        const btn = b2.w.document.querySelector('.bpApply');
+        btn.click();
+        await new Promise((r) => setTimeout(r, 40));
+        const sel3 = b2.w.document.getElementById('bpAdvSel');
+        const opts3 = sel3 ? [...sel3.options].map((o) => o.textContent).join(' | ') : 'no picker';
+        ck('applying finds the advance typed in another case', /250\.00/.test(opts3), opts3);
+        ck('  and its own properly-cased one', /500\.00/.test(opts3), opts3);
+        ck('  and still nobody else\'s', !/700\.00/.test(opts3), opts3);
+        b2.dom.window.close();
+    }
+
     // Nothing here moves money, so nothing here asks about banks.
     ck('the bank and method fields are gone',
        doc.getElementById('bpBank').closest('div').style.display === 'none' &&
@@ -1752,9 +1828,13 @@ section('G9 — the Trucking tab');
     await w.renderMetalsTruckingTab();
 
     const nav = [...doc.querySelectorAll('.nav-btn')].map((b) => b.dataset.tab);
+    // Outgoing joined this list on 2026-09-29 — Apsara: "Add a outgoing tab in
+    // Bills". Asserted in full rather than with `includes`, because the point
+    // of this check is that Trucking lives HERE and nowhere else, and a
+    // loosened comparison would stop noticing if it gained a nav entry too.
     ck('Trucking is a tab inside Bills, where its data comes from',
        [...doc.querySelectorAll('.metals-tab[data-section="bills"]')].map((b) => b.dataset.tab).join(',')
-         === 'bills,trucking',
+         === 'bills,outgoing,trucking',
        [...doc.querySelectorAll('.metals-tab[data-section="bills"]')].map((b) => b.dataset.tab).join(','));
     ck('  not a nav entry of its own', !nav.includes('metals-trucking'), nav.join(','));
     // ── THE ROSTER IS STILL REACHABLE ────────────────────────────────────
@@ -2226,6 +2306,104 @@ section('H — and the sheet write is coalesced, not one per keystroke');
     ck('  and a queued write cannot hold the process open',
        /unref/.test(src), 'a pending timer would hang every short-lived run');
     ck('  with a flush for shutdown', typeof ship.flushPending === 'function');
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+section('OUTGOING FROM BILLS — one screen, reachable from two places');
+// ══════════════════════════════════════════════════════════════════════════
+// Apsara, 2026-09-29: "Add a outgoing tab in Bills.remove it from invoice
+// register.." — asked whether that meant MOVING it, which would leave the
+// Invoice section with no invoice table at all, she chose to keep it in both.
+//
+// ── ONE RENDERER, NOT A COPY ──────────────────────────────────────────────
+// Both tabs call renderLedgerTab('sales'). Two invoice tables would drift and
+// she would have no way of telling which was lying.
+//
+// ── THE PART THAT IS EASY TO GET WRONG ────────────────────────────────────
+// renderLedgerTab draws the tab bar belonging to its KIND, so the sales table
+// shown under Bills drew the INVOICE bar — pressing Outgoing inside Bills
+// silently moved her to another section. Hence the `bar` option, which names
+// the NEW shape: leaving it out means what every existing call already meant.
+//
+// And it has to SURVIVE a re-render. Changing a filter, clearing, importing or
+// saving all redraw the ledger, and each of those calls that did not carry
+// `bar` would drop her back onto the Invoice bar mid-task.
+{
+    // A local sales route — this file has no shared salesRoute, only per-section
+    // inline ones. Two rows, so "it drew the sales table" is a countable claim.
+    const SROWS = [
+        { id: 'S1', customer: 'MK Trading', date: '08/01/2026', booking_no: 'DALA1',
+          container_no: 'HMMU1111111', photos: [], gross: 40000, truck: 14000,
+          container: 8000, chassis: 6000, boxes: 400, customer_price: 900 },
+        { id: 'S2', customer: 'SOLINE METAL', date: '08/02/2026', booking_no: 'DALA2',
+          container_no: 'HMMU2222222', photos: [], gross: 40000, truck: 14000,
+          container: 8000, chassis: 6000, boxes: 400, customer_price: 950 },
+    ].map(sales.withTotals);
+    const outRoute = (q) => {
+        const rows = sales.filterRows(SROWS, q);
+        return { sales: rows, summary: sales.summary(rows), columns: sales.tableColumns(),
+                 fields: sales.COLUMNS, groups: sales.GROUPS, writable: sales.WRITABLE,
+                 facets: sales.facets(SROWS), filterable: sales.FILTERABLE,
+                 duplicates: [], total_unfiltered: SROWS.length };
+    };
+    const { w, dom } = await mount({ '/api/bills': billsRoute, '/api/sales': outRoute });
+    const doc = w.document;
+    const barTabs = () => [...doc.querySelectorAll('.metals-tab')]
+        .map((b) => `${b.dataset.section}:${b.dataset.tab}`);
+    const onTab = () => [...doc.querySelectorAll('.metals-tab')]
+        .find((b) => b.style.borderBottom && !/transparent/.test(b.style.borderBottom));
+
+    // The tab exists, in the Bills section.
+    await w.renderLedgerTab('bills');
+    ck('Bills has an Outgoing tab', barTabs().includes('bills:outgoing'), barTabs().join(' '));
+    ck('  and still has Bills and Trucking',
+       barTabs().includes('bills:bills') && barTabs().includes('bills:trucking'),
+       barTabs().join(' '));
+
+    // The Invoice register KEEPS its own — she chose both.
+    await w.renderLedgerTab('sales');
+    ck('the Invoice register keeps its Outgoing tab', barTabs().includes('sales:outgoing'),
+       barTabs().join(' '));
+    ck('  and its other four', ['incoming', 'freight', 'commission', 'margin']
+       .every((t) => barTabs().includes(`sales:${t}`)), barTabs().join(' '));
+
+    // ── DRIVEN BY THE BUTTON, NOT BY POKING STATE ─────────────────────────
+    // metalsTab is a top-level `const`, so under w.eval it is not a property
+    // of window and cannot be set from here — the same trap this file already
+    // documents for IS_SUPER. Clicking is better anyway: it exercises
+    // wireMetalsTabs, which is the half that decides what Outgoing does.
+    await w.renderLedgerTab('bills');
+    const outBtn = doc.querySelector('.metals-tab[data-section="bills"][data-tab="outgoing"]');
+    ck('  and it is clickable', !!outBtn);
+    outBtn.click();
+    await new Promise((r) => setTimeout(r, 80));
+    ck('Outgoing inside Bills draws the BILLS navigation',
+       barTabs().every((t) => t.startsWith('bills:')), barTabs().join(' '));
+    ck('  and does not throw her into the Invoice section',
+       !barTabs().some((t) => t.startsWith('sales:')), barTabs().join(' '));
+    ck('  while showing the SALES rows', doc.querySelectorAll('tbody tr[data-id]').length === 2,
+       String(doc.querySelectorAll('tbody tr[data-id]').length));
+    ck('  with Outgoing marked as the one she is on',
+       onTab() && onTab().dataset.tab === 'outgoing',
+       onTab() ? onTab().dataset.tab : 'nothing marked');
+
+    // ── IT SURVIVES A RE-RENDER ───────────────────────────────────────────
+    // Every internal redraw has to carry the flag. A filter change that
+    // dropped it would move her to the Invoice section mid-task, and the only
+    // symptom would be the navigation quietly changing under her.
+    // ledgerFilters is another top-level const — pressing Clear is the real
+    // path and the one she would take.
+    doc.getElementById('ledClear').click();
+    await new Promise((r) => setTimeout(r, 60));
+    ck('clearing the filters keeps her in Bills',
+       barTabs().every((t) => t.startsWith('bills:')), barTabs().join(' '));
+
+    // Without the flag it is the Invoice bar, which is correct for the
+    // Invoice section and is what every pre-existing caller still gets.
+    await w.renderLedgerTab('sales');
+    ck('a plain call still draws the Invoice bar, as it always did',
+       barTabs().some((t) => t.startsWith('sales:')), barTabs().join(' '));
+    dom.window.close();
 }
 
 console.log(`\n  ${pass} passed, ${fail} failed`);
