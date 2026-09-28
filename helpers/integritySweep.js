@@ -116,15 +116,49 @@ const CHECKS = [
             const margin = require('./margin');
             const rows = margin.rows() || [];
             const out = [];
+            // ── THE SAME CONTAINER, TWICE, IS ONE PROBLEM NOT TWO ────────
+            // Her first live run, 2026-09-26:
+            //
+            //   CAIU9824029 — Calderon:     bought 277 days ago and not sold
+            //   CAIU9824029 — SOLINE METAL: sold 277 days ago with no bill
+            //
+            // A bill AND a sale, same container, same day, reported as two
+            // separate gaps. They are not. margin.js:58 keys a row on
+            // BOOKING + CONTAINER, so two halves that agree on the container
+            // and disagree on the booking never meet — and the container is
+            // counted twice with its real margin computed nowhere.
+            //
+            // Reporting that as two missing halves sends her looking for two
+            // documents that both already exist, which is worse than saying
+            // nothing. Grouped by container first, so the pair is named as
+            // what it is.
+            const byContainer = new Map();
             for (const r of rows) {
                 if (r.state === 'closed') continue;
-                const age = daysSince(r.bill_date || r.sale_date);
-                if (age !== null && age < STALE_DAYS) continue;    // still in flight
+                const c = String(r.container_no || '').trim().toUpperCase();
+                if (!c) continue;
+                if (!byContainer.has(c)) byContainer.set(c, []);
+                byContainer.get(c).push(r);
+            }
+            for (const [container, group] of byContainer) {
+                const age = Math.max(...group.map((r) => daysSince(r.bill_date || r.sale_date) || 0));
+                if (age < STALE_DAYS) continue;                 // still in flight
+                const bought = group.find((r) => r.state === 'bought');
+                const sold = group.find((r) => r.state === 'sold');
+                if (bought && sold) {
+                    out.push({
+                        what: `${container} — ${bought.supplier || '?'} to ${sold.customer || '?'}`,
+                        detail: `both halves exist but the booking numbers differ, so the margin is computed nowhere`
+                            + ` (bill ${bought.booking_no || 'blank'}, sale ${sold.booking_no || 'blank'})`,
+                    });
+                    continue;
+                }
+                const r = group[0];
                 out.push({
-                    what: `${r.container_no || r.key} — ${r.supplier || r.customer || 'unnamed'}`,
+                    what: `${container} — ${r.supplier || r.customer || 'unnamed'}`,
                     detail: r.state === 'bought'
-                        ? `bought ${age === null ? '' : age + ' days ago '}and not sold`
-                        : `sold ${age === null ? '' : age + ' days ago '}with no bill behind it`,
+                        ? `bought ${age} days ago and not sold`
+                        : `sold ${age} days ago with no bill behind it`,
                 });
             }
             return out;

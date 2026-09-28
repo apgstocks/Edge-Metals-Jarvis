@@ -137,9 +137,85 @@ const same = (a, b) => {
     return x.replace(/\s/g, '').toLowerCase() === y.replace(/\s/g, '').toLowerCase();
 };
 
+// ── FREIGHT IS NOT A FIELD ANY MORE ───────────────────────────────────────
+// Apsara, 2026-09-28, on a live dry run: "freight_charges: sheet 553 vs
+// Jarvis 170 — why?"
+//
+// Because this was comparing a dead column. helpers/sales.js:333 says it
+// plainly: freight_charges is "GONE from the columns" since 2026-09-10 and
+// kept writable only so rows entered before then do not lose their money.
+// Freight now lives in `charges[]`, where it can carry the note she asked
+// for. compute() folds a legacy value into that list ONLY when there is no
+// list — so on any row entered since, freight_charges holds whatever was
+// there before and the real figure is in the charges.
+//
+// So the sheet's single freight column was being compared against a
+// superseded field, and every row entered since 10 September reported a
+// disagreement that does not exist.
+//
+// ── WHAT IT COMPARES NOW, AND WHAT IT REFUSES TO ──────────────────────────
+// Her sheet has ONE freight number. Jarvis has a LIST with notes. Those are
+// not the same shape, and pretending otherwise is how the last wrong answer
+// happened. So:
+//
+//   · charges named freight  ->  compared against the sheet's column.
+//   · a legacy row (no list) ->  compared, exactly as before.
+//   · outgoing charges that are NOT freight -> NOT silently added in. An
+//     inspection fee is not freight, and quietly summing it would invent a
+//     disagreement in the other direction.
+//
+// When Jarvis holds outgoing charges but none of them is named freight, the
+// two sides cannot be compared field-to-field at all, and the difference SAYS
+// so rather than printing a number that means something else.
+const FREIGHT_RE = /freight|ocean|drayage/i;
+
+// This file had no number helpers — it compared strings. freightOf needs to
+// ADD charges up, so it needs real ones. Written here rather than imported
+// from sales.js, because this module is deliberately pure: the whole point of
+// diff() is that it can be handed two plain arrays and tested with no ledger,
+// no network and no clock.
+const num = (v) => {
+    if (v === null || v === undefined || v === '') return null;
+    const n = typeof v === 'number' ? v : parseFloat(String(v).replace(/[$,\s]/g, ''));
+    return isFinite(n) ? n : null;
+};
+const round2 = (n) => (typeof n === 'number' && isFinite(n) ? Math.round(n * 100) / 100 : null);
+
+function freightOf(row) {
+    const charges = Array.isArray(row && row.charges) ? row.charges : [];
+    const out = charges.filter((c) => c && c.direction === 'out');
+    if (!out.length) {
+        // Nothing in the list: the legacy column is all there is, and
+        // compute() would have folded it in anyway.
+        return { amount: num(row && row.freight_charges), basis: 'legacy field' };
+    }
+    const freight = out.filter((c) => FREIGHT_RE.test(String(c.what || '')));
+    if (freight.length) {
+        return { amount: round2(freight.reduce((t, c) => t + (num(c.amount) || 0), 0)), basis: 'charges' };
+    }
+    // Charges, but none of them freight. Comparable to nothing.
+    return { amount: null, basis: 'no freight charge', others: out.length };
+}
+
 function differences(sheetRow, jarvisRow, watch) {
     const out = [];
     for (const f of watch) {
+        if (f === 'freight_charges') {
+            const mine = freightOf(jarvisRow);
+            if (mine.amount === null) {
+                // Only worth saying when the sheet actually claims freight.
+                if (num(sheetRow[f])) {
+                    out.push({ field: 'freight_charges', sheet: sheetRow[f],
+                        jarvis: `no freight charge (${mine.others} other charge${mine.others === 1 ? '' : 's'})`,
+                        note: 'the sheet has one freight column; Jarvis has a charge list with none named freight' });
+                }
+                continue;
+            }
+            if (!same(sheetRow[f], mine.amount)) {
+                out.push({ field: 'freight_charges', sheet: sheetRow[f], jarvis: mine.amount, from: mine.basis });
+            }
+            continue;
+        }
         if (!same(sheetRow[f], jarvisRow[f])) {
             out.push({ field: f, sheet: sheetRow[f], jarvis: jarvisRow[f] });
         }

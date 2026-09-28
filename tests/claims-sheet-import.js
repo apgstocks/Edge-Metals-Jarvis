@@ -179,6 +179,51 @@ console.log('\n=== E2 — the sheet says where the current year starts ===');
         && !/Starting at row/.test(out4));
 }
 
+console.log('\n=== E3 — the rows under the marker have no header of their own ===');
+{
+    // The live tab reads: "2026 Claims", then straight into PAN METAL, the RS
+    // Resources and MGK blocks — no header row between them, because they keep
+    // using the layout declared once at the top. Starting at the marker with no
+    // column map dropped all of them: 34 claims where the section holds 50.
+    const f = path.join(TMP, 'inherit.csv');
+    fs.writeFileSync(f, [
+        ',,Cont No.,Gross,Received ,Shortage in MT,Shortage in LBS,Selling Price,Amount,,Buyer,Buying Price,Claim Amount',
+        'Varo Trading,25VT03,CCLU7611723,21.192,21.01,0.182,401,1875,341.25,Paid,Gomez,0.775,310.775',
+        ',,,,,,,,,,,,',
+        '2026 Claims,,,,,,,,,,,,',
+        'RS RESOURCES,25DK09,MEDU5374011,23.718,23.4,0.318,701.07,390.00,124.02,,MANA,315.000,100.17,https://example.com/x',
+        'MGK INTERNATIONAL,25MGK08,MEDU6597154,23.746,23.33,0.416,917.12,391,162.656,,MANA,315.000,131.04',
+        'PAN METAL,25MT20,KOCU4442692,20.847,20.73,0.117,258,2030.00,237.51,,DRM,258,0.89,230',
+    ].join('\n'));
+    const dir = fs.mkdtempSync(path.join(TMP, 'inh-'));
+    const out = execFileSync(process.execPath,
+        [path.join(ROOT, 'scripts', 'claims-import-sheet.js'), `--csv=${f}`, '--no-ai', '--really'],
+        { cwd: ROOT, env: { ...process.env, DATA_DIR: dir, JARVIS_TEST: '1' }, encoding: 'utf8' });
+    const rows = JSON.parse(fs.readFileSync(path.join(dir, 'claims.json'), 'utf8'));
+
+    ck('the headerless rows under the marker are imported, not dropped', rows.length === 3, rows.map((r) => r.invoice_no));
+    ck('the 2025 row above the marker is still left out', !rows.some((r) => r.invoice_no === '25VT03'));
+    ck('it says where the columns came from', /columns come from row 1/.test(out), out.split('\n').slice(0, 6));
+
+    // The inherited header is the LEGACY one, where the two money columns are the
+    // reverse of every other block. Inheriting it quietly would read every figure
+    // backwards.
+    const dk = rows.find((r) => r.invoice_no === '25DK09');
+    ck('the customer claim is read from "Amount"', dk && dk.claim_amount === 124.02, dk && dk.claim_amount);
+    ck('and the recovery from "Claim Amount", not the other way round', dk && dk.our_claim === 100.17, dk && dk.our_claim);
+    ck('a trailing link does not confuse the columns', dk && dk.supplier === 'MANA', dk && dk.supplier);
+    ck('the block list says the layout was inherited and is the legacy shape', /INHERITED|inherited/.test(out) || /legacy/i.test(out), out.split('\n').slice(0, 8));
+
+    // One row on the real tab carries a stray value mid-row, so everything after
+    // it shifts a column and its recovery reads 0.89 where the sheet says 230.
+    ck('a recovery that cannot be right is flagged, not believed',
+        /CHECK THESE/.test(out) && /25MT20/.test(out), out.split('\n').filter((l) => /CHECK|25MT20/.test(l)));
+    ck('and the reason is on the claim itself, where she will see it',
+        /columns are probably shifted/.test((rows.find((r) => r.invoice_no === '25MT20') || {}).note || ''),
+        (rows.find((r) => r.invoice_no === '25MT20') || {}).note);
+    ck('a correct row is NOT flagged', !/25DK09/.test(out.split('CHECK THESE')[1] || ''));
+}
+
 console.log('\n=== G — with no model, nothing is guessed ===');
 {
     // The importer is run with --no-ai throughout this suite, so no test here
