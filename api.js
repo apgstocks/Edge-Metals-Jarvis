@@ -4524,6 +4524,77 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
         } catch (e) { res.status(400).json({ error: e.message }); }
     });
 
+    // ── CLEARING SEVERAL ROWS AT ONCE ─────────────────────────────────────
+    // Apsara, 2026-09-29: "What if i want to delte multiple rows in bills and
+    // invoice". Asked which she needed she said all three — a bad import, a
+    // date range, and rows she ticks — and asked that a row with money against
+    // it be REFUSED while the rest go.
+    //
+    // ── requireSuper, LIKE EVERY OTHER DELETION OF METALS MONEY ───────────
+    // /api/bills/:id is not behind it because a single bill is an admin's to
+    // correct. A SELECTION is a different thing: it is the one control here
+    // that can empty a year in one press, and it changes what is owed to
+    // suppliers and what customers owe. Same lock as sales-receipts,
+    // bill-payments and sales-settlements.
+    //
+    // Plan and commit are separate routes on purpose. The screen shows her
+    // exactly what will go and what was refused, and NOTHING has happened
+    // when she is reading it.
+    app.post('/api/ledger/bulk-delete/plan', requireSuper, (req, res) => {
+        try {
+            const bd = require('./helpers/ledgerBulkDelete');
+            const { kind, selector, reason } = req.body || {};
+            res.json(bd.planBy(String(kind || ''), selector || {}, { reason }));
+        } catch (e) { res.status(400).json({ error: e.message }); }
+    });
+
+    // ── THE PLAN IS RE-RUN, NOT TRUSTED ───────────────────────────────────
+    // The client posts back the SELECTOR, not the row list it was shown. A
+    // plan sent to the browser and posted back is a list the caller can edit:
+    // it would be the one path into these ledgers where the payment and claim
+    // guards are decided by whoever is holding the page. Re-planning server
+    // side costs a few milliseconds and means the refusals are always this
+    // instant's, not the ones from before she went to lunch.
+    app.post('/api/ledger/bulk-delete/commit', requireSuper, async (req, res) => {
+        try {
+            const bd = require('./helpers/ledgerBulkDelete');
+            const { kind, selector, reason } = req.body || {};
+            const planned = bd.planBy(String(kind || ''), selector || {}, { reason });
+            if (!planned.going.length) {
+                return res.json({ batch: planned.batch, removed: 0, refused: planned.refused,
+                                  how: planned.how });
+            }
+            const result = await bd.commit(planned);
+            for (const row of planned.going) {
+                try {
+                    require('./helpers/quickbooks/sync')
+                        .after(planned.kind === 'bills' ? 'bill' : 'sale', String(row.id), 'deleted');
+                } catch (e) { /* the rows are already gone; a sync hiccup must not 500 */ }
+            }
+            res.json({ ...result, how: planned.how, going: planned.going.length });
+        } catch (e) { res.status(400).json({ error: e.message }); }
+    });
+
+    app.post('/api/ledger/bulk-delete/restore', requireSuper, async (req, res) => {
+        try {
+            const bd = require('./helpers/ledgerBulkDelete');
+            const back = await bd.restore(String((req.body || {}).batch || ''));
+            res.json({ ok: true, restored: back });
+        } catch (e) { res.status(400).json({ error: e.message }); }
+    });
+
+    // What can be put back, and what imports there are to clear — the two
+    // lists the screen needs to offer ways in 1 and the undo.
+    app.get('/api/ledger/bulk-delete/batches', requireSuper, (req, res) => {
+        try {
+            const bd = require('./helpers/ledgerBulkDelete');
+            let imports = [];
+            try { imports = require('./helpers/sheetImportWrite').listBatches() || []; }
+            catch (e) { imports = []; }
+            res.json({ deletions: bd.batches(), imports });
+        } catch (e) { res.status(400).json({ error: e.message }); }
+    });
+
     // ── Paying for containers ─────────────────────────────────────────────
     // Apsara, 2026-09-10: "We need pay option.in payment,there is a possible
     // of giving advance deduction and multiple container paynebt at once."

@@ -229,6 +229,68 @@ body[data-theme="light"] {
             <label for="bol_consignee_address">Consignee address</label>
             <textarea id="bol_consignee_address" rows="4" placeholder="Fills in when you pick a name — or type it"></textarea>
           </div>
+
+          <!-- ── SHIPPER, LOCKED ─────────────────────────────────────────
+               Apsara, 2026-09-29: "I want shipper to be editable in BOL",
+               then "Make the shipper locked by default.If i want to edit,i
+               have to remove the locl".
+
+               It was hard-coded in helpers/bolPdf.js and printed identically
+               on every BOL. Locked rather than simply editable because this
+               is the one field on this form where a careless keystroke is a
+               legal problem, not a typo: the shipper is who the carrier
+               believes handed over the goods.
+
+               LEAVING IT EMPTY IS EDGE METALS. Every BOL saved before today
+               has no shipper at all, so blank has to keep printing what it
+               prints today — the default lives in bolPdf.js and blank falls
+               back to it. Nothing needs setting to keep an old BOL correct.
+
+               And unlocking warns about the signature: Chandra Bose signs
+               for Edge Metals, so a BOL naming anyone else prints a blank
+               signature line. Her instruction, and the reason is on the
+               shipper_signature key in helpers/bolPdf.js. -->
+          <div class="field" style="border:1px solid var(--border-subtle); border-radius:6px; padding:11px 12px;">
+            <div style="display:flex; align-items:center; gap:8px; margin-bottom:8px;">
+              <label for="bol_shipper" style="margin:0;">Shipper</label>
+              <div style="flex:1;"></div>
+              <button type="button" id="bolShipLock" aria-pressed="true"
+                title="Unlock to change who is shipping"
+                style="background:none; border:1px solid var(--border-default); border-radius:999px; cursor:pointer;
+                       font-size:10.5px; letter-spacing:.06em; text-transform:uppercase; padding:4px 11px;
+                       color:var(--text-muted); font-family:var(--font-mono);">&#128274; Locked</button>
+            </div>
+            <input id="bol_shipper" type="text" autocomplete="off" disabled
+              placeholder="Edge Metals Inc" style="margin-bottom:8px;">
+            <textarea id="bol_shipper_address" rows="3" disabled
+              placeholder="14750 Devonshire Ln&#10;Frisco, TX 75035&#10;Tel (310) 938-2525"></textarea>
+            <div id="bolShipNote" style="margin-top:7px; font-size:11px; color:var(--text-faint); line-height:1.5;">
+              Leave both blank and the BOL prints Edge Metals Inc, as it always has.
+            </div>
+
+            <!-- ── THE LETTERHEAD ────────────────────────────────────────
+                 Apsara, 2026-09-29: "Make the letterhead of edge metals INc
+                 as optional.Make a check box .if i select ,then edge metals
+                 letterhead must appear".
+
+                 TICKED BY DEFAULT, and it sits here rather than off on its
+                 own because it is the same question as the shipper: whose
+                 document is this. A BOL shipped by someone else usually
+                 should not carry Edge Metals' black band and tax ID.
+
+                 Ticked is also what every BOL already saved means — the
+                 stored flag is hide_letterhead, absent, so nothing she has
+                 made before today changes. BILL OF LADING and the number are
+                 NOT letterhead and always print; unticking removes only the
+                 company band on the left. -->
+            <label style="display:flex; gap:8px; align-items:flex-start; margin-top:12px;
+                          padding-top:11px; border-top:1px solid var(--border-subtle);
+                          font-size:12px; cursor:pointer;">
+              <input type="checkbox" id="bol_letterhead" checked style="margin-top:2px;">
+              <span>Print the Edge Metals letterhead<br>
+                <span style="color:var(--text-faint); font-size:11px;">The black band with the address and tax ID. The BILL OF LADING title and number always print.</span></span>
+            </label>
+          </div>
         </div>
         <!-- ALWAYS ON. Not part of any layout: a BOL with no number or no
              date is not a document anyone can act on, and the unit is what
@@ -5286,6 +5348,72 @@ function bolInit() {
   // silently for a quarter of her address book), and searchAddressBook's
   // widened alias-plus-raw match so a company name that only appears in the
   // address block is still findable.
+  // ── THE SHIPPER LOCK ──────────────────────────────────────────────────
+  // Apsara, 2026-09-29: "Make the shipper locked by default.If i want to
+  // edit,i have to remove the locl".
+  //
+  // Locked is the DOM's own `disabled`, not a CSS look — a field that only
+  // appears locked is still typed into by a tab-and-type, and on this field
+  // that is a document going out naming the wrong shipper.
+  //
+  // Declared on window so the loader at openBol can call it when a saved BOL
+  // already carries a shipper: that one opens unlocked, because she set it
+  // deliberately and reopening it behind a lock reads as "you cannot change
+  // this".
+  window.bolShipperLock = function bolShipperLock(locked) {
+    const btn = $('bolShipLock'), a = $('bol_shipper'), b = $('bol_shipper_address');
+    if (!btn || !a || !b) return;
+    a.disabled = !!locked; b.disabled = !!locked;
+    btn.setAttribute('aria-pressed', locked ? 'true' : 'false');
+    btn.innerHTML = locked ? '\u{1F512} Locked' : '\u{1F513} Unlocked';
+    btn.style.color = locked ? 'var(--text-muted)' : 'var(--status-warn)';
+    btn.style.borderColor = locked ? 'var(--border-default)' : 'var(--status-warn)';
+    btn.title = locked ? 'Unlock to change who is shipping' : 'Lock it again';
+    bolShipperNote();
+  };
+
+  // ── WHAT UNLOCKING COSTS, SAID BEFORE SHE GENERATES ───────────────────
+  // Her instruction: "If shipper is not edge metals ,remove the shipper sign
+  // picture.It should be blank". The PDF enforces that — the signature is
+  // Chandra Bose's and he signs for Edge Metals — but a rule the document
+  // applies silently is one she finds out about from a printed BOL. So the
+  // form says it while she is typing.
+  //
+  // The same loose name comparison as helpers/bolPdf.js, and deliberately so:
+  // two answers to "is this still Edge Metals" would eventually disagree, and
+  // the one she would believe is the form's while the PDF did something else.
+  function bolShipperIsEdgeMetals(name) {
+    const norm = (v) => String(v || '').toLowerCase().replace(/[.,]/g, ' ')
+      .replace(/\b(inc|incorporated|llc|l\.?l\.?c|co|corp|corporation|ltd|limited)\b/g, ' ')
+      .replace(/\s+/g, ' ').trim();
+    const typed = norm(name);
+    return !typed || typed === norm('Edge Metals Inc');
+  }
+  function bolShipperNote() {
+    const note = $('bolShipNote'), a = $('bol_shipper');
+    if (!note || !a) return;
+    const typed = a.value.trim();
+    if (!typed) {
+      note.style.color = 'var(--text-faint)';
+      note.textContent = 'Leave both blank and the BOL prints Edge Metals Inc, as it always has.';
+    } else if (bolShipperIsEdgeMetals(typed)) {
+      note.style.color = 'var(--text-faint)';
+      note.textContent = 'Still Edge Metals — the shipper signature will print as usual.';
+    } else {
+      note.style.color = 'var(--status-warn)';
+      note.textContent = 'Not Edge Metals: the shipper signature will be left BLANK for signing by hand.';
+    }
+  }
+  if ($('bolShipLock')) {
+    $('bolShipLock').addEventListener('click', () => {
+      const locked = $('bolShipLock').getAttribute('aria-pressed') === 'true';
+      window.bolShipperLock(!locked);
+      if (locked) $('bol_shipper').focus();      // unlocking: put her in the field
+    });
+    $('bol_shipper').addEventListener('input', bolShipperNote);
+    window.bolShipperLock(true);
+  }
+
   const inp = $('bol_consignee'), box = $('bolConsigneeList');
   inp.addEventListener('input', () => {
     const q = inp.value.trim().toLowerCase();
@@ -5403,6 +5531,13 @@ function bolPayload() {
     bol_date: $('bol_date').value,
     consignee_name: $('bol_consignee').value.trim(),
     consignee_address: $('bol_consignee_address').value,
+    // Blank is not a gap — it means Edge Metals. See the shipper block in the
+    // form above and SHIPPER_DEFAULT in helpers/bolPdf.js.
+    shipper_name: $('bol_shipper').value,
+    shipper_address: $('bol_shipper_address').value,
+    // Sent as the NEGATIVE of the tick, because the stored flag names the new
+    // behaviour — see hide_letterhead in helpers/bols.js.
+    hide_letterhead: !$('bol_letterhead').checked,
     po_number: $('bol_po').value.trim(),
     appointment_id: $('bol_appointment').value.trim(),
     pickup_date: $('bol_pickup_date').value,
@@ -5676,6 +5811,13 @@ async function bolEdit(id) {
   bolEditingId = bol.id;
   $('bol_consignee').value = bol.consignee_name || '';
   $('bol_consignee_address').value = bol.consignee_address || '';
+  // Absent means it printed, so an older BOL opens ticked.
+  $('bol_letterhead').checked = !bol.hide_letterhead;
+  $('bol_shipper').value = bol.shipper_name || '';
+  $('bol_shipper_address').value = bol.shipper_address || '';
+  // A saved BOL that HAS a shipper opens unlocked — she set it deliberately,
+  // and reopening it behind a lock reads as "you cannot change this".
+  if (typeof bolShipperLock === 'function') bolShipperLock(!(bol.shipper_name || bol.shipper_address));
   $('bol_no').value = bol.bol_no || '';
   $('bol_date').value = bol.bol_date || '';
   $('bol_po').value = bol.po_number || '';
@@ -5720,10 +5862,18 @@ async function bolEdit(id) {
 // half-filled under a new number.
 function bolClearForm() {
   bolEditingId = null;
-  ['bol_consignee', 'bol_consignee_address', 'bol_no', 'bol_po', 'bol_appointment',
+  ['bol_shipper', 'bol_shipper_address',
+   'bol_consignee', 'bol_consignee_address', 'bol_no', 'bol_po', 'bol_appointment',
    'bol_pickup_date', 'bol_pickup_time', 'bol_carrier', 'bol_driver',
    'bol_container', 'bol_seal', 'bol_notes'].forEach((id) => { if ($(id)) $(id).value = ''; });
   if ($('bol_unit')) $('bol_unit').value = 'lb';
+  // ── THE TWO THAT ARE NOT TEXT BOXES ─────────────────────────────────
+  // The loop above clears .value, which does nothing to a checkbox and
+  // nothing to the disabled state of the shipper pair. Cleared by hand:
+  // a new BOL starts with the letterhead ON and the shipper LOCKED, which
+  // is what both mean when nobody has touched them.
+  if ($('bol_letterhead')) $('bol_letterhead').checked = true;
+  if (typeof window.bolShipperLock === 'function') window.bolShipperLock(true);
   // Back to today, the same default a fresh panel gets — not blank, which
   // would make the next BOL silently generate with no date.
   if ($('bol_date')) $('bol_date').value = bolTodayStr();

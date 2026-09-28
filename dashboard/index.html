@@ -6574,8 +6574,19 @@ async function renderLedgerTab(kind) {
   // chassis weight as zero, because a zero tare silently inflates the net
   // weight and therefore the amount. That warning is worth nothing if the
   // table does not show it.
+  // ── THE TICK COLUMN ────────────────────────────────────────────────────
+  // Apsara, 2026-09-29: "What if i want to delte multiple rows in bills and
+  // invoice", and asked which ways in she needed: "1,2,3".
+  //
+  // JARVIS PROFILE ONLY. A single bill is an admin's to correct; a SELECTION
+  // is the one control on this screen that can empty a year in one press, so
+  // it sits behind the same lock as every other deletion of Edge Metals money
+  // (/api/ledger/bulk-delete/* is requireSuper — this is only the UI half, and
+  // hiding a button is not a permission).
+  const canBulk = IS_SUPER === true;
   const body = rows.length ? rows.map((r, i) => `
     <tr data-id="${esc(r.id)}" style="border-top:1px solid var(--line);">
+      ${canBulk ? `<td style="padding:7px 4px 7px 10px; width:26px;"><input type="checkbox" class="ledPick" data-id="${esc(r.id)}" aria-label="Select ${esc(r.container_no || r.id)}" style="cursor:pointer;"></td>` : ''}
       ${columns.map((c) => `<td style="padding:7px 9px; white-space:nowrap; ${c.derived ? 'color:var(--text-muted);' : ''}">${ledgerCell(r, c, K)}</td>`).join('')}
       <td style="padding:7px 9px; white-space:nowrap; position:sticky; right:0; background:var(--surface-card); box-shadow:-8px 0 8px -8px rgba(0,0,0,.55); z-index:2;">
         <!-- ── ON A SALE, MONEY COMES IN ────────────────────────────────
@@ -6633,7 +6644,7 @@ async function renderLedgerTab(kind) {
           ? ` <span title="You typed ${ledMoney(r.amount)}; the weight and price give ${ledMoney(r.computed_amount)}" style="color:var(--status-warn); font-family:var(--font-mono); font-size:10px;">⚠ ${ledMoney(r.amount_differs)}</span>` : ''}
       </td>
     </tr>`).join('')
-    : `<tr><td colspan="${columns.length + 1}" style="padding:26px; text-align:center; color:var(--text-faint); font-family:var(--font-mono); font-size:12px;">Nothing here yet.</td></tr>`;
+    : `<tr><td colspan="${columns.length + (canBulk ? 2 : 1)}" style="padding:26px; text-align:center; color:var(--text-faint); font-family:var(--font-mono); font-size:12px;">Nothing here yet.</td></tr>`;
 
   $('viewRoot').innerHTML = `
     <div style="max-width:100%; margin:0 auto; padding:34px 28px 80px;">
@@ -6710,10 +6721,24 @@ async function renderLedgerTab(kind) {
           ${activeFilterCount(f) ? `${activeFilterCount(f)} filter${activeFilterCount(f) === 1 ? '' : 's'} · ` : ''}${rows.length} of ${data.total_unfiltered ?? rows.length}
         </div>
       </div>
+      ${canBulk ? `<div id="ledSelBar" style="display:none; align-items:center; gap:10px; margin-bottom:10px; padding:9px 13px;
+           border:1px solid var(--accent); border-radius:var(--radius-sm); background:var(--surface-sunken);">
+        <span id="ledSelCount" style="font-family:var(--font-mono); font-size:11px; color:var(--text-body);"></span>
+        <div style="flex:1;"></div>
+        <button id="ledSelNone" class="btn btn-ghost" style="font-size:11px; padding:6px 12px;">Clear</button>
+        <button id="ledSelDel" class="btn btn-secondary" style="font-size:11px; padding:6px 14px; border-color:var(--status-warn); color:var(--status-warn);">Delete selected&hellip;</button>
+      </div>
+      <div id="ledUndoBar" style="display:none; align-items:center; gap:10px; margin-bottom:10px; padding:9px 13px;
+           border:1px solid var(--status-good, #4ade80); border-radius:var(--radius-sm); background:var(--surface-sunken);">
+        <span id="ledUndoWhat" style="font-family:var(--font-mono); font-size:11px; color:var(--text-body);"></span>
+        <div style="flex:1;"></div>
+        <button id="ledUndoGo" class="btn btn-ghost" style="font-size:11px; padding:6px 14px;">Put them back</button>
+      </div>` : ''}
       <div class="card" style="padding:0; overflow-x:auto;">
         <table style="width:100%; border-collapse:collapse; font-size:12px;">
           <thead>
             <tr style="background:var(--bg-sunken);">
+              ${canBulk ? '<th style="padding:8px 4px 8px 10px; width:26px;"><input type="checkbox" id="ledPickAll" title="Select every row shown" aria-label="Select every row shown" style="cursor:pointer;"></th>' : ''}
               ${columns.map((c) => `<th style="padding:8px 9px; text-align:left; white-space:nowrap; font-family:var(--font-mono); font-size:9px; letter-spacing:.1em; text-transform:uppercase; color:var(--text-muted);">${esc(c.label)}${c.derived ? '<span title="Computed by the server from the other columns — not typed" style="opacity:.6;"> ƒ</span>' : ''}</th>`).join('')}
               <th style="padding:8px 9px; position:sticky; right:0; background:var(--bg-sunken); box-shadow:-8px 0 8px -8px rgba(0,0,0,.55); z-index:3;"></th>
             </tr>
@@ -6724,6 +6749,14 @@ async function renderLedgerTab(kind) {
       <div style="margin-top:10px; font-family:var(--font-mono); font-size:10px; color:var(--text-faint);">
         <span id="ledBuild" title="Which build of the app you are looking at"></span>${rows.length} row${rows.length === 1 ? '' : 's'} · Edit and Delete stay pinned on the right as the table scrolls · ƒ columns are computed server-side · price shows /lb or /MT so a wrong unit is visible
       </div>
+      <button id="ledTop" title="Back to the newest ${kind === 'bills' ? 'bill' : 'invoice'}" aria-label="Back to the top of the list"
+        style="position:fixed; right:26px; bottom:26px; z-index:40; width:42px; height:42px; border-radius:50%;
+               display:none; align-items:center; justify-content:center; cursor:pointer;
+               background:var(--surface-card); color:var(--text-body);
+               border:1px solid var(--border-default); box-shadow:0 6px 18px rgba(0,0,0,.34);
+               transition:opacity .16s ease, transform .16s ease; opacity:0;">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5M5 12l7-7 7 7"/></svg>
+      </button>
     </div>`;
 
   // Applied on ENTER or on leaving the box, not on every keystroke: each
@@ -6741,6 +6774,228 @@ async function renderLedgerTab(kind) {
     el.addEventListener('keydown', (e) => { if (e.key === 'Enter') apply(); });
   });
   $('ledClear').onclick = () => { ledgerFilters[kind] = {}; renderLedgerTab(kind); };
+
+  // ── CLEARING SEVERAL ROWS ────────────────────────────────────────────
+  // Apsara, 2026-09-29: "What if i want to delte multiple rows in bills and
+  // invoice". Asked which ways in she needed she answered "1,2,3" — a bad
+  // import, a date range, and rows she ticks — and on a row with money against
+  // it: "Refuse it, delete the rest".
+  //
+  // All three are ONE modal with three radios, because they differ only in how
+  // the row list is chosen. The plan comes from the server and nothing has
+  // happened while she is reading it.
+  if (canBulk) {
+    const picked = () => [...document.querySelectorAll('.ledPick:checked')].map((c) => c.dataset.id);
+    const syncSel = () => {
+      const n = picked().length;
+      const bar = $('ledSelBar');
+      if (bar) { bar.style.display = n ? 'flex' : 'none'; }
+      const c = $('ledSelCount');
+      if (c) c.textContent = `${n} ${K.title.toLowerCase().replace(/s$/, '')}${n === 1 ? '' : 's'} selected`;
+      const all = $('ledPickAll');
+      const boxes = document.querySelectorAll('.ledPick');
+      if (all) {
+        all.checked = boxes.length > 0 && n === boxes.length;
+        all.indeterminate = n > 0 && n < boxes.length;
+      }
+    };
+    document.querySelectorAll('.ledPick').forEach((b) => b.addEventListener('change', syncSel));
+    if ($('ledPickAll')) {
+      $('ledPickAll').addEventListener('change', (e) => {
+        document.querySelectorAll('.ledPick').forEach((b) => { b.checked = e.target.checked; });
+        syncSel();
+      });
+    }
+    if ($('ledSelNone')) $('ledSelNone').onclick = () => {
+      document.querySelectorAll('.ledPick').forEach((b) => { b.checked = false; });
+      syncSel();
+    };
+    syncSel();
+
+    // ── THE UNDO STRIP ────────────────────────────────────────────────
+    // Shown only after a deletion in THIS session. The archive keeps every
+    // batch for ever, but a permanent "put something back" bar on a ledger
+    // is an invitation to restore a batch she deliberately cleared weeks ago.
+    const showUndo = (batch, n) => {
+      const bar = $('ledUndoBar');
+      if (!bar) return;
+      bar.style.display = 'flex';
+      $('ledUndoWhat').textContent = `${n} row${n === 1 ? '' : 's'} deleted — ${batch}`;
+      $('ledUndoGo').onclick = async () => {
+        $('ledUndoGo').disabled = true;
+        try {
+          const r = await api('/api/ledger/bulk-delete/restore', {
+            method: 'POST', body: JSON.stringify({ batch }) });
+          alert(`${r.restored} row${r.restored === 1 ? '' : 's'} put back.`);
+          renderLedgerTab(kind);
+        } catch (e) { $('ledUndoGo').disabled = false; alert(e.message || 'Could not restore'); }
+      };
+    };
+
+    if ($('ledSelDel')) $('ledSelDel').onclick = async () => {
+      let imports = [];
+      try { imports = (await api('/api/ledger/bulk-delete/batches')).imports || []; } catch (e) { imports = []; }
+
+      const filterWords = () => {
+        const bits = [];
+        if (f.from || f.to) bits.push(`${f.from || 'the start'} to ${f.to || 'today'}`);
+        for (const k of Object.keys(f)) {
+          if (k === 'from' || k === 'to') continue;
+          if (String(f[k] ?? '').trim() !== '') bits.push(`${k} ${f[k]}`);
+        }
+        return bits.join(', ');
+      };
+      const fw = filterWords();
+
+      const back = document.createElement('div');
+      back.className = 'modal-overlay';
+      back.style.display = 'flex';
+      back.innerHTML = `
+        <div class="modal" role="dialog" aria-modal="true" aria-label="Delete rows" style="max-width:640px; width:100%;">
+          <div class="modal-head" style="padding:18px 22px 12px; border-bottom:1px solid var(--border-subtle);">
+            <h3 style="margin:0; font-size:16px; text-transform:uppercase;">Delete ${esc(K.title.toLowerCase())}</h3>
+            <p style="margin:6px 0 0; font-size:12px; color:var(--text-muted);">
+              Nothing is removed until you press the red button. Anything with a payment,
+              a credit note or an open claim against it is refused and stays.</p>
+          </div>
+          <div class="modal-body" style="padding:18px 22px;">
+            <div style="display:flex; flex-direction:column; gap:9px; font-size:12.5px;">
+              <label style="display:flex; gap:9px; align-items:flex-start; cursor:pointer;">
+                <input type="radio" name="bdWay" value="picked" checked style="margin-top:3px;">
+                <span>The <strong>${picked().length}</strong> row${picked().length === 1 ? '' : 's'} I ticked</span></label>
+              <label style="display:flex; gap:9px; align-items:flex-start; cursor:${fw ? 'pointer' : 'not-allowed'}; opacity:${fw ? 1 : .45};">
+                <input type="radio" name="bdWay" value="filters" ${fw ? '' : 'disabled'} style="margin-top:3px;">
+                <span>Everything matching the filters on screen<br>
+                  <span style="color:var(--text-faint); font-family:var(--font-mono); font-size:11px;">${fw ? esc(fw) : 'set a From/To or another filter first'}</span></span></label>
+              <label style="display:flex; gap:9px; align-items:flex-start; cursor:${imports.length ? 'pointer' : 'not-allowed'}; opacity:${imports.length ? 1 : .45};">
+                <input type="radio" name="bdWay" value="import" ${imports.length ? '' : 'disabled'} style="margin-top:3px;">
+                <span>Everything from one import<br>
+                  <select id="bdImport" ${imports.length ? '' : 'disabled'} style="margin-top:5px; font-size:11.5px; padding:5px 8px; max-width:100%;">
+                    ${imports.map((b) => `<option value="${esc(b.batch)}">${esc(b.at || b.batch)} — ${b.bills} bills, ${b.sales} invoices${b.source ? ` (${esc(b.source)})` : ''}</option>`).join('')}
+                  </select></span></label>
+            </div>
+            <label style="display:block; margin-top:16px; font-size:11px; font-family:var(--font-mono); letter-spacing:.08em; text-transform:uppercase; color:var(--text-muted);">Why (kept with the archived rows)</label>
+            <input id="bdReason" placeholder="duplicate import, wrong year, typed twice&hellip;" style="width:100%; margin-top:5px; padding:8px 10px; font-size:12.5px;">
+            <div id="bdPlan" style="margin-top:16px; font-size:12px; color:var(--text-muted);">Checking&hellip;</div>
+          </div>
+          <div class="modal-foot" style="padding:14px 22px; border-top:1px solid var(--border-subtle); display:flex; gap:9px; justify-content:flex-end;">
+            <button id="bdCancel" class="btn btn-ghost" style="font-size:12px; padding:8px 16px;">Cancel</button>
+            <button id="bdGo" class="btn btn-secondary" disabled style="font-size:12px; padding:8px 18px; border-color:var(--status-warn); color:var(--status-warn);">Delete</button>
+          </div>
+        </div>`;
+      document.body.appendChild(back);
+      const close = () => back.remove();
+      back.querySelector('#bdCancel').onclick = close;
+      back.addEventListener('click', (e) => { if (e.target === back) close(); });
+
+      const selectorNow = () => {
+        const way = back.querySelector('input[name="bdWay"]:checked').value;
+        if (way === 'picked') return { ids: picked() };
+        if (way === 'import') return { import_batch: back.querySelector('#bdImport').value };
+        return { filters: f };
+      };
+
+      // ── THE PLAN IS ASKED FOR, NEVER GUESSED ────────────────────────
+      // Which rows are refused depends on payments, credit notes and claims
+      // the browser does not have. Working it out client-side would be a
+      // second set of guards, drifting from the real ones.
+      let planned = null;
+      const recheck = async () => {
+        const go = back.querySelector('#bdGo');
+        const out = back.querySelector('#bdPlan');
+        go.disabled = true;
+        out.textContent = 'Checking\u2026';
+        try {
+          planned = await api('/api/ledger/bulk-delete/plan', {
+            method: 'POST',
+            body: JSON.stringify({ kind, selector: selectorNow(), reason: back.querySelector('#bdReason').value }) });
+        } catch (e) {
+          planned = null;
+          out.innerHTML = `<span style="color:var(--status-warn);">${esc(e.message || 'Could not check')}</span>`;
+          return;
+        }
+        const g = planned.going.length, r = planned.refused.length;
+        out.innerHTML = `
+          <div style="font-size:13px; color:var(--text-body);"><strong>${g}</strong> will be deleted${r ? `, <strong>${r}</strong> refused` : ''}.</div>
+          ${r ? `<div style="margin-top:9px; max-height:170px; overflow-y:auto; border:1px solid var(--border-subtle); border-radius:var(--radius-sm); padding:9px 11px;">
+            ${planned.refused.map((x) => `<div style="font-size:11.5px; color:var(--status-warn); margin-bottom:5px;">${esc(x.what || x.id)} — ${esc(x.why)}</div>`).join('')}
+          </div>` : ''}`;
+        go.disabled = g === 0;
+        go.textContent = g ? `Delete ${g} row${g === 1 ? '' : 's'}` : 'Nothing to delete';
+      };
+      back.querySelectorAll('input[name="bdWay"]').forEach((el) => el.addEventListener('change', recheck));
+      back.querySelector('#bdImport').addEventListener('change', recheck);
+      await recheck();
+
+      back.querySelector('#bdGo').onclick = async () => {
+        const go = back.querySelector('#bdGo');
+        go.disabled = true; go.textContent = 'Deleting\u2026';
+        try {
+          // The SELECTOR goes back, not the row list — see the route. The
+          // server re-plans, so the guards are this instant's.
+          const res = await api('/api/ledger/bulk-delete/commit', {
+            method: 'POST',
+            body: JSON.stringify({ kind, selector: selectorNow(), reason: back.querySelector('#bdReason').value }) });
+          close();
+          await renderLedgerTab(kind);
+          if (res.removed) showUndo(res.batch, res.removed);
+          else alert('Nothing was deleted — every row was refused.');
+        } catch (e) {
+          go.disabled = false; go.textContent = 'Delete';
+          alert(e.message || 'Could not delete');
+        }
+      };
+    };
+  }
+
+  // ── BACK TO THE TOP OF THE LIST ──────────────────────────────────────
+  // Apsara, 2026-09-29: "There should be a arrow button in the bill/invoice
+  // when i scroll down to move to the top bill".
+  //
+  // THE PART THAT IS EASY TO GET WRONG: this page does not scroll the window.
+  // body is `overflow:hidden` (line ~74) and the scrolling element is
+  // #viewRoot (`flex:1; overflow-y:auto`). window.scrollTo(0, 0) here does
+  // nothing at all — the button would look right, press nicely and move the
+  // page not one pixel. Everything below talks to #viewRoot.
+  //
+  // Scoped to this function on purpose. renderLedgerTab is reached only with
+  // 'bills' and 'sales' (every call site checked), so the button exists on
+  // the two ledgers she named and nowhere else. It lives INSIDE the tab's own
+  // markup, so switching tabs removes it with the rest of the content.
+  {
+    const scroller = $('viewRoot');
+    const btn = $('ledTop');
+    if (scroller && btn) {
+      // One listener, always. renderLedgerTab runs again on every filter
+      // change, and #viewRoot outlives the tab — so without removing the
+      // previous handler first, a morning of filtering leaves dozens of them
+      // attached, all firing on every scroll event.
+      if (scroller._ledTopHandler) scroller.removeEventListener('scroll', scroller._ledTopHandler);
+
+      const SHOW_AFTER = 320;     // roughly one screen of rows
+      const sync = () => {
+        const on = scroller.scrollTop > SHOW_AFTER;
+        btn.style.display = on ? 'flex' : 'none';
+        btn.style.opacity = on ? '1' : '0';
+        btn.style.transform = on ? 'translateY(0)' : 'translateY(6px)';
+      };
+      scroller._ledTopHandler = sync;
+      scroller.addEventListener('scroll', sync, { passive: true });
+
+      btn.onclick = () => {
+        scroller.scrollTo({ top: 0, behavior: 'smooth' });
+        // The filter box is where she usually goes next after jumping up.
+        const q = document.querySelector('[data-led-filter="q"]');
+        if (q) setTimeout(() => { try { q.focus({ preventScroll: true }); } catch (e) { q.focus(); } }, 320);
+      };
+      btn.onmouseenter = () => { btn.style.borderColor = 'var(--accent)'; };
+      btn.onmouseleave = () => { btn.style.borderColor = 'var(--border-default)'; };
+
+      // A re-render after she had scrolled down keeps the scroll position, so
+      // decide the button's state now rather than waiting for the next scroll.
+      sync();
+    }
+  }
 
   // ── WHICH BUILD AM I LOOKING AT ──────────────────────────────────────
   // Apsara, 2026-09-10, twice: "Why edit option not there in bills?" and then

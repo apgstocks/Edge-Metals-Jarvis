@@ -128,11 +128,26 @@
 </head>
 <body>
 
+  <!-- ── THE LETTERHEAD IS OPTIONAL ─────────────────────────────────────
+       Apsara, 2026-09-29: "Make the letterhead of edge metals INc as
+       optional.Make a check box .if i select ,then edge metals letterhead
+       must appear".
+
+       Only the LEFT half of the band is the placeholder. BILL OF LADING and
+       the document number are not letterhead — they are what the page IS, and
+       a BOL with no title is not a document a carrier can act on. The right
+       block stays.
+
+       An EMPTY DIV is emitted when it is off, never nothing: .band is a
+       space-between flex row, so dropping the child entirely slides BILL OF
+       LADING across to the left margin. The spacer keeps the title where it
+       has always printed.
+
+       Absent means SHOWN. The flag in helpers/bols.js is hide_letterhead, so
+       every BOL saved before today — none of which has the field — keeps its
+       letterhead. The flag marks the new shape, never the old one. -->
   <div class="band">
-    <div>
-      <div class="co">EDGE METALS INC</div>
-      <div class="colines">14750 Devonshire Ln, Frisco, TX 75035<br>Tel (310) 938-2525 &nbsp;·&nbsp; Fax (425) 940-9408 &nbsp;·&nbsp; Tax ID 26-3269514</div>
-    </div>
+    {{letterhead}}
     <div class="right">
       <div class="kicker">BILL OF LADING</div>
       <div class="docno">{{bol_no}}</div>

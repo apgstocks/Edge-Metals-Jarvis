@@ -62,6 +62,34 @@ function buildRecord(input, prev) {
         bol_date: i.bol_date || null,
         consignee_name: String(i.consignee_name || '').trim(),
         consignee_address: i.consignee_address || '',
+        // ── SHIPPER, NOW HERS TO CHANGE ───────────────────────────────────
+        // Apsara, 2026-09-29: "I want shipper to be editable in BOL".
+        //
+        // It was hard-coded in helpers/bolPdf.js — Edge Metals Inc and its
+        // address, printed the same on every BOL — and a comment of MINE in
+        // assets/bol/template.html said it was "not a variable ... there is
+        // exactly one company issuing this document". That was my reading of
+        // 2026-09-15, not a ruling of hers, and she has now said otherwise.
+        //
+        // EMPTY MEANS EDGE METALS, and that is the whole safety of this
+        // change. Every BOL already saved has no shipper field at all, so it
+        // must keep printing what it prints today rather than a blank card on
+        // a document a driver signs. The default lives in bolPdf.js
+        // (SHIPPER_DEFAULT) and blank here resolves to it — so the flag says
+        // "this one is the new shape", never "this one is the old shape".
+        shipper_name: String(i.shipper_name || '').trim(),
+        shipper_address: i.shipper_address || '',
+        // ── LETTERHEAD OFF IS THE FLAG, NOT LETTERHEAD ON ─────────────────
+        // Apsara, 2026-09-29: "Make the letterhead of edge metals INc as
+        // optional.Make a check box .if i select ,then edge metals letterhead
+        // must appear".
+        //
+        // Named for the NEW behaviour on purpose. Stored as `letterhead:
+        // true`, every BOL already saved would read as false and reprint with
+        // no letterhead — and nobody would notice until one came back from a
+        // dock. hide_letterhead absent is falsy is "print it", which is what
+        // every existing record means.
+        hide_letterhead: i.hide_letterhead === true || i.hide_letterhead === 'true',
         po_number: String(i.po_number || '').trim(),
         appointment_id: String(i.appointment_id || '').trim(),
         pickup_date: i.pickup_date || null,

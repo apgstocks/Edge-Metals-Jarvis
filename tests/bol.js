@@ -641,9 +641,37 @@ section('G — the app');
            && b.appointment_id === 'APT-77213' && b.seal_no === '40217'
            && b.items[0].gross_weight === '46300' && b.items[0].tare_weight === '4120',
            JSON.stringify(b).slice(0, 240));
+        // ── ONE NAMED EXCEPTION, BECAUSE SHE NAMED IT ────────────────────
+        // Apsara, 2026-09-29: "I want shipper to be editable in BOL" and then
+        // "Make it available in website BOL" — website, asked for twice and
+        // marked urgent. So the Edge Yard app's BOL does NOT send a shipper,
+        // and that divergence is deliberate rather than drift. Same for
+        // hide_letterhead, from "Make the letterhead of edge metals INc as
+        // optional.Make a check box", asked for on the website BOL in the same
+        // run of messages.
+        //
+        // It is listed HERE, by name, rather than by loosening the comparison.
+        // This check exists because the two clients' Documents screens HAVE
+        // drifted before (#29, the stale address book), and a check relaxed to
+        // "close enough" would not have caught that one either. A field goes on
+        // this list only when she has said one client gets it; anything else
+        // still fails.
+        //
+        // The app is unharmed by the gap: no shipper_name means blank, and
+        // blank means Edge Metals Inc in helpers/bolPdf.js, which is exactly
+        // what the app printed yesterday. That is the whole point of the
+        // default — the new shape is the flag, never the old one.
+        const WEBSITE_ONLY = ['shipper_name', 'shipper_address', 'hide_letterhead'];
+        const appKeys = Object.keys(b).sort();
+        const webKeys = Object.keys(body).filter((k) => !WEBSITE_ONLY.includes(k)).sort();
         ck('  so both clients ask for one document, not two versions of it',
-           JSON.stringify(Object.keys(b).sort()) === JSON.stringify(Object.keys(body).sort()),
-           `app: ${Object.keys(b).sort().join(',')}\n        web: ${Object.keys(body).sort().join(',')}`);
+           JSON.stringify(appKeys) === JSON.stringify(webKeys),
+           `app: ${appKeys.join(',')}\n        web: ${webKeys.join(',')}`);
+        ck('  and the website extras are ONLY the ones she scoped to it',
+           WEBSITE_ONLY.every((k) => k in body),
+           `missing from the website payload: ${WEBSITE_ONLY.filter((k) => !(k in body)).join(',')}`);
+        ck('  the app sends none of them, so it prints the Edge Metals default',
+           WEBSITE_ONLY.every((k) => !(k in b)), Object.keys(b).join(','));
     }
 
     ck('  and nothing threw', appErrors.length === 0, appErrors.slice(0, 2).join(' | '));
@@ -920,6 +948,249 @@ console.log('\n=== the header reads the way she asked ===');
        d2.getElementById('bol_no').value);
 
     dom2.window.close();
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+section('SHIPPER — editable, locked, and the signature that comes off with it');
+// ══════════════════════════════════════════════════════════════════════════
+// Apsara, 2026-09-29, three messages: "I want shipper to be editable in BOL",
+// "Make it available in website BOL", and then the one that matters most —
+// "If shipper is not edge metals ,remove the shipper sign picture.It should be
+// blank".
+//
+// ── WHY THE SIGNATURE CHECK IS THE POINT OF THIS SECTION ──────────────────
+// The shipper block was hard-coded: Edge Metals Inc and its address, on every
+// BOL. Making it editable is a small change. Leaving Chandra Bose's signature
+// under a DIFFERENT company's name is not — it is his signature on a contract
+// of carriage for a party he does not act for, on the one document here that a
+// driver and a receiving dock both countersign. She caught that herself,
+// immediately, and it is the check most worth pinning down.
+//
+// ── AND WHY BLANK MUST MEAN EDGE METALS ───────────────────────────────────
+// Every BOL saved before today has no shipper field at all. If blank rendered
+// blank, reopening or reprinting any existing BOL would produce an empty
+// SHIPPER card on a document a dock keeps — and she would find out from a
+// refused delivery. The default is the safety, not a nicety.
+{
+    const base = {
+        bol_no: 'EM-2001', bol_date: '2026-09-29',
+        consignee_name: 'Eccomelt LLC',
+        consignee_address: 'Eccomelt LLC\n1234 Foundry Rd\nFontana, CA 92337',
+        items: [{ description: 'Al combo', pieces: 2, gross_weight: 1000, tare_weight: 100, net_weight: 900 }],
+    };
+    const flatten = (h) => h.replace(/data:image\/png;base64,[A-Za-z0-9+/=]+/g, 'IMG').replace(/\n\s*/g, ' ');
+    const build = (extra) => {
+        const h = bol.buildBolHtml({ ...base, ...extra }).html;
+        return { html: h, flat: flatten(h) };
+    };
+    const signed = (flat) => /<div class="sigink"[^>]*><img src="IMG"[^>]*><\/div>\s*<div class="sig">SHIPPER/.test(flat);
+
+    // ── 1. NOTHING SET — EXACTLY WHAT IT PRINTED YESTERDAY ────────────────
+    const asIs = build({});
+    ck('with no shipper set it still prints Edge Metals Inc',
+       asIs.html.includes('Edge Metals Inc'),
+       'every BOL saved before today has no shipper field — blank must not print blank');
+    ck('  with the Frisco address', asIs.html.includes('14750 Devonshire Ln')
+       && asIs.html.includes('Frisco, TX 75035'));
+    ck('  and the shipper line is still signed', signed(asIs.flat),
+       'an existing BOL must reprint identically');
+
+    // ── 2. A SHIPPER SHE TYPED ────────────────────────────────────────────
+    const other = build({ shipper_name: 'Gulf Coast Metals LLC',
+                          shipper_address: '900 Harbor Blvd\nHouston, TX 77029' });
+    ck('a typed shipper name prints', other.html.includes('Gulf Coast Metals LLC'));
+    ck('  and its address', other.html.includes('900 Harbor Blvd') && other.html.includes('Houston, TX 77029'));
+    // ── THE SHIPPER CARD ONLY — THE LETTERHEAD IS A SEPARATE QUESTION ─────
+    // The band at the top of the template (assets/bol/template.html:131) is
+    // Edge Metals' own letterhead: the name, the address, and TAX ID
+    // 26-3269514. It is NOT the shipper card, and this change deliberately
+    // leaves it alone.
+    //
+    // Making it follow the shipper would print Edge Metals' tax ID under
+    // another company's name, which is a worse document than one whose
+    // letterhead and shipper differ — and there is no other company's tax ID
+    // in this codebase to put there. Flagged to Apsara rather than decided
+    // here; if she wants the letterhead to follow too, it needs her to supply
+    // what goes in it.
+    //
+    // So the assertion is scoped to the card. The first version of this check
+    // searched the WHOLE page for the Frisco address and failed on the
+    // letterhead — asserting more than the feature claims.
+    const shipCard = (h) => {
+        const m = h.match(/<div class="card"><div class="lbl">SHIPPER<\/div>([\s\S]*?)<div class="card to">/);
+        return m ? m[1] : '';
+    };
+    ck('Edge Metals is GONE from the shipper card', !shipCard(other.html).includes('Edge Metals Inc'),
+       shipCard(other.html).slice(0, 160) || 'the shipper card could not be located in the HTML');
+    ck('  and the old Frisco address with it', !shipCard(other.html).includes('14750 Devonshire Ln'),
+       shipCard(other.html).slice(0, 160));
+    ck('  the letterhead is untouched — it is Edge Metals\' own tax ID',
+       other.html.includes('EDGE METALS INC') && other.html.includes('26-3269514'),
+       'removing the issuer from its own letterhead was never asked for');
+
+    // ── 3. HER INSTRUCTION: THE SIGNATURE COMES OFF ───────────────────────
+    ck('A DIFFERENT SHIPPER GETS NO SIGNATURE', !signed(other.flat),
+       "Chandra Bose signs for Edge Metals — his signature under another company's name");
+    ck('  no signature image anywhere on the page',
+       (other.flat.match(/<img/g) || []).length === 0,
+       'moved rather than removed is not removed');
+    ck('  but the strip keeps its height, so it can be signed by hand',
+       /<div class="sigink" style="height:30px;"><\/div>\s*<div class="sig">SHIPPER/.test(other.flat),
+       'a collapsed column shifts the whole signature strip up the page');
+
+    // ── 4. STILL EDGE METALS, TYPED IN A HURRY ────────────────────────────
+    // A loose comparison on the NAME only. Dropping her own signature because
+    // she typed a lowercase "inc" would be a worse bug than the one being
+    // fixed, and she would not know why it happened.
+    for (const name of ['Edge Metals Inc', 'edge metals inc', 'EDGE METALS INC.',
+                        'Edge Metals', '  Edge  Metals  Inc  ']) {
+        const v = build({ shipper_name: name });
+        ck(`  "${name}" is still Edge Metals, signature kept`, signed(v.flat),
+           'a spelling of her own company must not silently unsign her paperwork');
+    }
+
+    // A re-addressed Edge Metals — new suite, new phone — is still Edge Metals.
+    const moved = build({ shipper_name: 'Edge Metals Inc',
+                          shipper_address: '200 Legacy Dr Suite 4\nPlano, TX 75024' });
+    ck('re-addressing Edge Metals keeps the signature', signed(moved.flat));
+    ck('  and prints the new address', moved.html.includes('200 Legacy Dr Suite 4'));
+
+    // A near-miss must NOT keep it. This is the pair that proves the loose
+    // match is loose about spelling and strict about identity.
+    for (const name of ['Edge Yard', 'Edge Yard LLC', 'Edge Metal Works Inc', 'Metals Edge Inc']) {
+        const v = build({ shipper_name: name });
+        ck(`  "${name}" is NOT Edge Metals, signature removed`, !signed(v.flat),
+           'Edge Yard and Edge Metals are different companies');
+    }
+
+    // ── 5. IT IS STILL ESCAPED ────────────────────────────────────────────
+    const nasty = build({ shipper_name: '<script>x</script>Acme & Co',
+                          shipper_address: '<b>1 A St</b>' });
+    ck('a typed shipper is escaped, not injected',
+       !nasty.html.includes('<script>x</script>') && nasty.html.includes('&lt;script&gt;'),
+       'this string goes into a PDF template by dumb string replace');
+    ck('  and the ampersand survives as an entity', nasty.html.includes('Acme &amp; Co'));
+
+    // ── 6. NO PLACEHOLDER LEFT BEHIND ─────────────────────────────────────
+    ck('no unfilled placeholder on any of these',
+       [asIs, other, moved, nasty].every((v) => !/\{\{\s*shipper/.test(v.html)),
+       'a {{shipper_name}} printed literally on a BOL handed to a driver');
+
+    // ── 7. THE STORED RECORD KEEPS IT ─────────────────────────────────────
+    // The gap CLAUDE.md section 3 is about: the screen saves, the helper never
+    // hears the field, and Generate prints the default for ever.
+    const bols = require('../helpers/bols');
+    const rec = bols.buildRecord({ ...base, shipper_name: 'Gulf Coast Metals LLC',
+                                   shipper_address: '900 Harbor Blvd' }, null);
+    ck('buildRecord stores the shipper name', rec.shipper_name === 'Gulf Coast Metals LLC',
+       JSON.stringify(rec.shipper_name));
+    ck('  and the address', rec.shipper_address === '900 Harbor Blvd');
+    const plain = bols.buildRecord({ ...base }, null);
+    ck('  a record with no shipper keeps it EMPTY, not the default',
+       plain.shipper_name === '' && plain.shipper_address === '',
+       'the default belongs in one place (bolPdf) — baked into the record it could never be changed');
+
+    // ── 7b. THE LETTERHEAD, OPTIONAL ──────────────────────────────────────
+    // Apsara, 2026-09-29: "Make the letterhead of edge metals INc as
+    // optional.Make a check box .if i select ,then edge metals letterhead
+    // must appear".
+    //
+    // ABSENT MEANS SHOWN, and that is the whole safety of it. The flag is
+    // hide_letterhead, so every BOL saved before today — none of which has the
+    // field — still prints its band. Stored the other way round ("letterhead:
+    // true") every existing BOL would reprint bare and she would find out from
+    // a dock, which is precisely the failure the shipper default avoids.
+    const withHead = build({});
+    const noHead = build({ hide_letterhead: true });
+
+    ck('by default the letterhead prints', withHead.html.includes('EDGE METALS INC')
+       && withHead.html.includes('26-3269514'),
+       'an existing BOL carries no flag and must be unchanged');
+    ck('hide_letterhead takes the band off', !noHead.html.includes('EDGE METALS INC')
+       && !noHead.html.includes('26-3269514'),
+       'the tax ID is the part that must not print for someone else');
+    // Scoped to the BAND. With the letterhead off and no shipper typed, the
+    // SHIPPER CARD still says Edge Metals and still carries that street — and
+    // it should: she took the company header off, not the shipper. The first
+    // version of this check searched the whole page and failed on the card,
+    // asserting something the feature never claimed.
+    const band = (h) => (h.match(/<div class="band">([\s\S]*?)<\/div>\s*<div class="body">/) || [])[1] || h.slice(0, 0);
+    ck('  and the street address goes with it, out of the band',
+       !band(noHead.html).includes('14750 Devonshire Ln'),
+       band(noHead.html).slice(0, 160) || 'the band could not be located');
+    ck('  while the shipper card is untouched — that is a separate switch',
+       noHead.html.includes('14750 Devonshire Ln'),
+       'no shipper typed still means Edge Metals on the card');
+
+    // BILL OF LADING is not letterhead. A BOL with no title is not a document
+    // a carrier can act on, and she asked to remove the COMPANY band.
+    ck('BILL OF LADING still prints', noHead.html.includes('BILL OF LADING'),
+       'the title is what the page IS, not letterhead');
+    ck('  and so does the document number', noHead.html.includes('EM-2001'));
+
+    // ── THE SPACER ────────────────────────────────────────────────────────
+    // .band is display:flex; justify-content:space-between. Emitting NOTHING
+    // for the letterhead leaves one child, and BILL OF LADING slides to the
+    // left margin — a header that reads as a different document. An empty div
+    // holds the position.
+    ck('the band keeps both halves, so the title stays right',
+       /<div class="band">\s*<div><\/div>\s*<div class="right">/.test(noHead.html),
+       (noHead.html.match(/<div class="band">[\s\S]{0,120}/) || [''])[0]);
+
+    ck('no unfilled letterhead placeholder either',
+       !/\{\{\s*letterhead/.test(withHead.html) && !/\{\{\s*letterhead/.test(noHead.html));
+
+    // It is independent of the shipper: she may print Edge Metals' letterhead
+    // on a BOL shipped by someone else, or not. Two switches, two questions.
+    const other_noHead = build({ shipper_name: 'Gulf Coast Metals LLC', hide_letterhead: true });
+    ck('shipper and letterhead are independent switches',
+       other_noHead.html.includes('Gulf Coast Metals LLC')
+       && !other_noHead.html.includes('EDGE METALS INC')
+       && !signed(other_noHead.flat),
+       'neither one should be quietly deciding the other');
+
+    // Stored, and stored as the NEW shape.
+    const headRec = bols.buildRecord({ ...base }, null);
+    ck('a record with nothing said keeps the letterhead', headRec.hide_letterhead === false,
+       String(headRec.hide_letterhead));
+    const bareRec = bols.buildRecord({ ...base, hide_letterhead: true }, null);
+    ck('  and unticking is stored', bareRec.hide_letterhead === true);
+
+    // ── 8. THE LOCK, ON THE WEBSITE FORM ──────────────────────────────────
+    // "Make the shipper locked by default.If i want to edit,i have to remove
+    // the locl". Locked is the DOM's own `disabled`: a field that only LOOKS
+    // locked is still reached by tab-and-type, and on this field that is a
+    // document going out naming the wrong shipper.
+    const web = fs.readFileSync(path.join(ROOT, 'dashboard/documents.html'), 'utf8');
+    ck('the website form has a shipper box', /id="bol_shipper"/.test(web));
+    ck('  and a shipper address box', /id="bol_shipper_address"/.test(web));
+    ck('  both ship DISABLED in the markup, not merely styled',
+       /id="bol_shipper"[^>]*\bdisabled\b/.test(web) && /id="bol_shipper_address"[^>]*\bdisabled\b/.test(web),
+       'a lock that is only CSS is not a lock');
+    ck('  there is a control to take the lock off', /id="bolShipLock"/.test(web));
+    ck('  the form warns that the signature goes blank',
+       /signature will be left BLANK/i.test(web),
+       'a rule the PDF applies silently is one she learns about from a printed BOL');
+    ck('  and the payload sends both fields',
+       /shipper_name: \$\('bol_shipper'\)/.test(web) && /shipper_address: \$\('bol_shipper_address'\)/.test(web),
+       'the form having a box the payload does not carry is the classic gap');
+    ck('  reopening a saved BOL fills them back in',
+       /\$\('bol_shipper'\)\.value = bol\.shipper_name/.test(web));
+
+    // The letterhead checkbox, on the same form.
+    ck('the website form has a letterhead checkbox',
+       /id="bol_letterhead"[^>]*type="checkbox"|type="checkbox"[^>]*id="bol_letterhead"/.test(web));
+    ck('  TICKED in the markup, so a new BOL prints the band',
+       /<input type="checkbox" id="bol_letterhead" checked/.test(web),
+       'shipping it unticked would make every new BOL bare by default');
+    ck('  and it is sent as the negative, matching the stored flag',
+       /hide_letterhead: !\$\('bol_letterhead'\)\.checked/.test(web));
+    ck('  reopening an older BOL ticks it, because absent means it printed',
+       /\$\('bol_letterhead'\)\.checked = !bol\.hide_letterhead/.test(web));
+    ck('  and a NEW BOL resets to ticked and locked',
+       /\$\('bol_letterhead'\)\.checked = true/.test(web)
+       && /window\.bolShipperLock\(true\)/.test(web),
+       'the clear loop only sets .value, which does nothing to a checkbox');
 }
 
 console.log(`\n  ${pass} passed, ${fail} failed`);
