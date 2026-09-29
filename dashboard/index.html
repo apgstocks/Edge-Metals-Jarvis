@@ -6502,17 +6502,22 @@ const ledgerFilters = { bills: {}, sales: {} };
 const metalsTab = { bills: 'bills', sales: 'outgoing' };
 
 const METALS_TABS = {
-  // ── OUTGOING, REACHABLE FROM BILLS TOO ────────────────────────────────
-  // Apsara, 2026-09-29: "Add a outgoing tab in Bills.remove it from invoice
-  // register.." — asked whether that meant MOVING it, which would leave the
-  // Invoice section with no invoice table in it at all, she chose to have it
-  // in both.
+  // ── MONEY SENT TO SUPPLIERS ───────────────────────────────────────────
+  // Apsara, 2026-09-29: "in bill,i need to have a tab to show advance/payment
+  // send to suppliers .I dont want outgoing tab in bills".
   //
-  // It is the SAME screen, not a copy: both tabs call renderLedgerTab('sales'),
-  // so there is one renderer, one column list and one set of filters. Two
-  // copies of an invoice table would eventually disagree about a figure, and
-  // she would have no way of knowing which one was lying.
-  bills: [['bills', 'Bills'], ['outgoing', 'Outgoing'], ['trucking', 'Trucking']],
+  // Outgoing was added to Bills earlier the same day and removed here at her
+  // word — it is the invoice table, and the Invoice register is where it
+  // belongs. The `bar` option on renderLedgerTab existed only to support it
+  // and went with it, rather than staying behind as machinery in shared code
+  // that nothing calls.
+  //
+  // Payments is not the same thing wearing a different label. Bills says what
+  // is OWED to a supplier; this says what has been SENT to them — every
+  // payment and every advance, including credit not yet applied to a
+  // container. Until now that only existed inside the pay modal, one supplier
+  // at a time, and only while she was in the act of paying somebody.
+  bills: [['bills', 'Bills'], ['payments', 'Payments'], ['trucking', 'Trucking']],
   sales: [['outgoing', 'Outgoing'], ['incoming', 'Incoming'],
           ['freight', 'Freight'], ['commission', 'Commission'],
           // The join, and the reason the two sides were keyed the same way.
@@ -6539,10 +6544,7 @@ function wireMetalsTabs() {
       metalsTab[section] = tab;
       if (section === 'bills') {
         if (tab === 'trucking') return renderMetalsTruckingTab();
-        // Outgoing under Bills is the sales ledger drawn with the BILLS tab
-        // bar, so pressing it does not throw her into the Invoice section —
-        // see the `bar` option on renderLedgerTab.
-        if (tab === 'outgoing') return renderLedgerTab('sales', { bar: 'bills' });
+        if (tab === 'payments') return renderSupplierPaymentsTab();
         return renderLedgerTab('bills');
       }
       return tab === 'outgoing' ? renderLedgerTab('sales') : renderSalesSubTab(tab);
@@ -6560,20 +6562,7 @@ const SALES_TAB_TITLES = {
   commission: ['Invoice', 'Commission'],
 };
 
-// ── `bar` NAMES THE NEW SHAPE, NEVER THE OLD ONE ─────────────────────────
-// Apsara, 2026-09-29: "Add a outgoing tab in Bills".
-//
-// This function draws the tab bar of the section its KIND belongs to — sales
-// draws the Invoice bar, bills draws the Bills bar — which is right for every
-// caller that existed before today. The one new caller wants the sales table
-// UNDER the Bills bar, because pressing Outgoing inside Bills must not silently
-// move her to another section.
-//
-// So the option is `bar`, and leaving it out means exactly what every existing
-// call already meant. A flag that had to be SET to keep the old behaviour would
-// eventually not be set, and the twenty-odd existing callers would each draw
-// the wrong navigation.
-async function renderLedgerTab(kind, { bar = null } = {}) {
+async function renderLedgerTab(kind) {
   // Incoming, Freight and Commission are their own screens — they are not the
   // sales table with different columns, and pretending otherwise is how a
   // charge list ends up rendered as a row of blanks.
@@ -6752,7 +6741,7 @@ async function renderLedgerTab(kind, { bar = null } = {}) {
           </div>` : ''}
         </div>
       </div>
-      ${kind === 'sales' || kind === 'bills' ? metalsTabBar(bar || (kind === 'sales' ? 'sales' : 'bills')) : ''}
+      ${kind === 'sales' || kind === 'bills' ? metalsTabBar(kind === 'sales' ? 'sales' : 'bills') : ''}
       ${kind === 'sales' && (data.duplicates || []).length ? `<div style="margin-bottom:12px; padding:9px 12px; border:1px solid var(--status-warn); border-radius:var(--radius-sm); font-size:12px; color:var(--status-warn);">
         ${(data.duplicates || []).map((d) => `${esc(d.container_no)} appears ${d.ids.length} times under ${esc(d.booking_no)}`).join(' · ')}
         — usually a typo, occasionally a container split across two invoices. Worth a look either way: the margin against Bills counts it twice.
@@ -6836,12 +6825,12 @@ async function renderLedgerTab(kind, { bar = null } = {}) {
       const v = String(el.value || '').trim();
       if ((ledgerFilters[kind][key] || '') === v) return;   // nothing changed
       ledgerFilters[kind][key] = v;
-      renderLedgerTab(kind, { bar });
+      renderLedgerTab(kind);
     };
     el.addEventListener('change', apply);
     el.addEventListener('keydown', (e) => { if (e.key === 'Enter') apply(); });
   });
-  $('ledClear').onclick = () => { ledgerFilters[kind] = {}; renderLedgerTab(kind, { bar }); };
+  $('ledClear').onclick = () => { ledgerFilters[kind] = {}; renderLedgerTab(kind); };
 
   // ── THE UNAPPLIED ADVANCES LIST ──────────────────────────────────────
   // The strip says how much; this says which. A total alone does not tell her
@@ -6948,7 +6937,7 @@ async function renderLedgerTab(kind, { bar = null } = {}) {
           const r = await api('/api/ledger/bulk-delete/restore', {
             method: 'POST', body: JSON.stringify({ batch }) });
           alert(`${r.restored} row${r.restored === 1 ? '' : 's'} put back.`);
-          renderLedgerTab(kind, { bar });
+          renderLedgerTab(kind);
         } catch (e) { $('ledUndoGo').disabled = false; alert(e.message || 'Could not restore'); }
       };
     };
@@ -7058,7 +7047,7 @@ async function renderLedgerTab(kind, { bar = null } = {}) {
             method: 'POST',
             body: JSON.stringify({ kind, selector: selectorNow(), reason: back.querySelector('#bdReason').value }) });
           close();
-          await renderLedgerTab(kind, { bar });
+          await renderLedgerTab(kind);
           if (res.removed) showUndo(res.batch, res.removed);
           else alert('Nothing was deleted — every row was refused.');
         } catch (e) {
@@ -7159,7 +7148,7 @@ async function renderLedgerTab(kind, { bar = null } = {}) {
   wireMetalsTabs();
   if ($('btnFromBill')) $('btnFromBill').onclick = () => openFromBill();
   if ($('btnPay')) $('btnPay').onclick = () => openBillPayForm();
-  if ($('btnImport')) $('btnImport').onclick = () => openImportModal(kind, bar);
+  if ($('btnImport')) $('btnImport').onclick = () => openImportModal(kind);
   if ($('btnNameCleanup')) $('btnNameCleanup').onclick = () => openNameCleanup(kind === 'sales' ? 'customer' : 'supplier');
 
   // ── EXPORT WHAT IS ON SCREEN ─────────────────────────────────────────
@@ -7252,7 +7241,7 @@ async function renderLedgerTab(kind, { bar = null } = {}) {
         try {
           const r = await api('/api/import/' + encodeURIComponent(batch), { method: 'DELETE' });
           shut();
-          await renderLedgerTab(kind, { bar });
+          await renderLedgerTab(kind);
           alert(`Undone — ${Number(r.removed || 0).toLocaleString('en-US')} rows removed.`);
         } catch (err) {
           b.disabled = false; b.textContent = 'Undo last import';
@@ -7267,7 +7256,7 @@ async function renderLedgerTab(kind, { bar = null } = {}) {
       opt.onclick = (e) => { e.stopPropagation(); shut(); exportTo(opt.dataset.format, btn); };
     });
   }
-  $('btnAddLedger').onclick = () => openLedgerForm(kind, undefined, undefined, bar);
+  $('btnAddLedger').onclick = () => openLedgerForm(kind);
   // ── EDIT ─────────────────────────────────────────────────────────────
   // Apsara, 2026-09-10: "i want edit option in bill". Until now a typo in a
   // seal number meant deleting the row and typing all 18 fields again.
@@ -7297,12 +7286,12 @@ async function renderLedgerTab(kind, { bar = null } = {}) {
     if (kind === 'sales') {
       items.push(['Generate invoice & email', () => openGenerateInvoice(row)]);
     }
-    items.push(['Edit', () => openLedgerForm(kind, row, undefined, bar)]);
+    items.push(['Edit', () => openLedgerForm(kind, row)]);
     items.push(['Delete', async () => {
       if (!confirm('Delete this row?')) return;
       try {
         await api(`${K.path}/${encodeURIComponent(row.id)}`, { method: 'DELETE' });
-        renderLedgerTab(kind, { bar });
+        renderLedgerTab(kind);
       } catch (e) { alert(e.message || 'Could not delete'); }
     }, 'danger']);
     return items;
@@ -8053,6 +8042,134 @@ async function openGenerateInvoice(row) {
 // everything while the table shows a subset is what makes a filter something
 // she stops trusting.
 let truckingFilters = {};
+
+// ── WHAT HAS GONE OUT TO SUPPLIERS ───────────────────────────────────────
+// Apsara, 2026-09-29: "in bill,i need to have a tab to show advance/payment
+// send to suppliers .I dont want outgoing tab in bills".
+//
+// Bills answers "what do I owe". This answers "what have I sent" — every
+// payment and every advance against Edge Metals suppliers, newest first.
+// Until now that lived only inside the pay modal's "Already recorded" list,
+// one supplier at a time, and only while she was in the act of paying
+// somebody. There was nowhere to simply look.
+//
+// ── AN ADVANCE IS NOT A PAYMENT, AND THE DIFFERENCE IS MONEY ──────────────
+// helpers/billPayments.js: an advance is a payment whose allocations do not
+// yet add up to it, and the remainder is credit sitting with that supplier.
+// Both left the bank on the day they were made — so "sent" is the honest
+// total for both — but only the allocated part is attached to a container.
+// The two are shown in one list with the unapplied remainder called out,
+// because a screen that showed only payments would under-report what has
+// actually left the account.
+//
+// READ ONLY. Recording and applying stay in the pay sheet, which has the
+// guards. A second way to move money would be a second place for them to be
+// forgotten.
+let supplierPayFilter = { supplier: '', kind: '' };
+
+async function renderSupplierPaymentsTab() {
+  metalsTab.bills = 'payments';
+  const data = await api('/api/bill-payments');
+  const all = (data.payments || []).slice();
+
+  const round2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
+  const allocatedOf = (p) => round2((p.allocations || [])
+    .reduce((t, a) => t + (Number(a.amount) || 0), 0));
+
+  const rows = all.map((p) => {
+    const amount = Number(p.amount) || 0;
+    const used = allocatedOf(p);
+    return { ...p, used, left: round2(amount - used),
+             containers: (p.allocations || []).length };
+  }).filter((p) => {
+    if (supplierPayFilter.supplier
+        && !String(p.supplier || '').toLowerCase()
+             .includes(supplierPayFilter.supplier.toLowerCase())) return false;
+    if (supplierPayFilter.kind && p.kind !== supplierPayFilter.kind) return false;
+    return true;
+  }).sort((a, b) => String(b.date || '').localeCompare(String(a.date || '')));
+
+  // ── THE THREE FIGURES ─────────────────────────────────────────────────
+  // Sent is every row: an advance left the bank the day it was made, so
+  // leaving it out would under-report what has gone. Unapplied is the part
+  // of it not yet against a container — money she has already paid and can
+  // still spend.
+  const sent = round2(rows.reduce((t, p) => t + (Number(p.amount) || 0), 0));
+  const unapplied = round2(rows.reduce((t, p) => t + Math.max(0, p.left), 0));
+  const advCount = rows.filter((p) => p.kind === 'advance').length;
+
+  const card = (label, value, tone) => `
+    <div class="card" style="padding:12px;">
+      <div style="font-family:var(--font-mono); font-size:9px; letter-spacing:.12em; text-transform:uppercase; color:var(--text-muted);">${label}</div>
+      <div style="font-size:16px; font-weight:700; margin-top:4px; ${tone ? `color:${tone};` : ''}">${value}</div>
+    </div>`;
+
+  const kindPill = (p) => p.kind === 'advance'
+    ? `<span title="Credit against this supplier until it is put against a container" style="font-size:10px; padding:2px 8px; border-radius:var(--radius-sm); border:1px solid var(--accent); color:var(--accent);">advance</span>`
+    : `<span style="font-size:10px; padding:2px 8px; border-radius:var(--radius-sm); border:1px solid var(--border-default); color:var(--text-muted);">payment</span>`;
+
+  $('viewRoot').innerHTML = `
+    <div style="max-width:100%; margin:0 auto; padding:34px 28px 80px;">
+      <div class="eyebrow">Edge Metals</div>
+      <h2 style="font-size:19px; text-transform:uppercase; margin:0 0 14px;">Paid to suppliers</h2>
+      ${metalsTabBar('bills')}
+      <div style="display:grid; grid-template-columns:repeat(3, 1fr); gap:8px; margin-bottom:12px;">
+        ${card('Sent', ledMoney(sent))}
+        ${card('Unapplied', ledMoney(unapplied), unapplied > 0.005 ? 'var(--status-good, #4ade80)' : '')}
+        ${card('Advances', String(advCount))}
+      </div>
+      <div style="display:flex; flex-wrap:wrap; gap:8px; align-items:flex-end; margin-bottom:14px; padding:12px 14px; border:1px solid var(--border-subtle); border-radius:var(--radius-sm); background:var(--surface-sunken);">
+        <div><label style="display:block; font-family:var(--font-mono); font-size:9px; letter-spacing:.1em; text-transform:uppercase; color:var(--text-muted); margin-bottom:4px;">Supplier</label>
+          <input id="spSupplier" value="${esc(supplierPayFilter.supplier)}" placeholder="any" style="width:200px; padding:7px 9px; font-size:12.5px;"></div>
+        <div><label style="display:block; font-family:var(--font-mono); font-size:9px; letter-spacing:.1em; text-transform:uppercase; color:var(--text-muted); margin-bottom:4px;">Kind</label>
+          <select id="spKind" style="padding:7px 9px; font-size:12.5px;">
+            <option value=""${supplierPayFilter.kind === '' ? ' selected' : ''}>All</option>
+            <option value="payment"${supplierPayFilter.kind === 'payment' ? ' selected' : ''}>Payments</option>
+            <option value="advance"${supplierPayFilter.kind === 'advance' ? ' selected' : ''}>Advances</option>
+          </select></div>
+        <button id="spClear" class="btn btn-secondary" style="font-size:11px; padding:8px 14px;">Clear</button>
+        <div style="flex:1;"></div>
+        <div style="font-family:var(--font-mono); font-size:10px; color:var(--text-faint); padding-bottom:9px;">${rows.length} of ${all.length}</div>
+      </div>
+      <div class="card" style="padding:0; overflow-x:auto;">
+        <table style="width:100%; border-collapse:collapse; font-size:12px;">
+          <thead><tr style="background:var(--bg-sunken);">
+            ${['Date', 'Supplier', 'Kind', 'Method', 'Bank', 'Reference', 'Containers', 'Sent', 'Applied', 'Unapplied']
+              .map((h, i) => `<th style="padding:8px 9px; text-align:${i >= 7 ? 'right' : 'left'}; white-space:nowrap; font-family:var(--font-mono); font-size:9px; letter-spacing:.1em; text-transform:uppercase; color:var(--text-muted);">${h}</th>`).join('')}
+          </tr></thead>
+          <tbody>${rows.length ? rows.map((p) => `
+            <tr style="border-top:1px solid var(--line);">
+              <td style="padding:7px 9px; white-space:nowrap; font-family:var(--font-mono);">${esc(p.date || '—')}</td>
+              <td style="padding:7px 9px;">${esc(p.supplier || '—')}</td>
+              <td style="padding:7px 9px;">${kindPill(p)}</td>
+              <td style="padding:7px 9px;">${esc(p.mode || '—')}</td>
+              <td style="padding:7px 9px; color:var(--text-muted);">${esc(p.bank || (p.mode === 'Cash' ? 'cash' : '—'))}</td>
+              <td style="padding:7px 9px; color:var(--text-muted);">${esc(p.ref || '—')}</td>
+              <td style="padding:7px 9px; color:var(--text-muted);">${p.containers || 0}</td>
+              <td style="padding:7px 9px; text-align:right; font-family:var(--font-mono);">${ledMoney(p.amount)}</td>
+              <td style="padding:7px 9px; text-align:right; font-family:var(--font-mono); color:var(--text-muted);">${ledMoney(p.used)}</td>
+              <td style="padding:7px 9px; text-align:right; font-family:var(--font-mono); ${p.left > 0.005 ? 'color:var(--status-good, #4ade80);' : 'color:var(--text-faint);'}">${ledMoney(p.left)}</td>
+            </tr>`).join('')
+            : `<tr><td colspan="10" style="padding:26px; text-align:center; color:var(--text-faint); font-family:var(--font-mono); font-size:12px;">Nothing sent to a supplier yet.</td></tr>`}
+          </tbody>
+        </table>
+      </div>
+      <div style="margin-top:10px; font-family:var(--font-mono); font-size:10px; color:var(--text-faint);">
+        Read only — record and apply from Pay, on the Bills tab. An advance left the bank the day it was made; Unapplied is the part not yet against a container.
+      </div>
+    </div>`;
+
+  wireMetalsTabs();
+  const apply = () => {
+    supplierPayFilter.supplier = $('spSupplier').value.trim();
+    supplierPayFilter.kind = $('spKind').value;
+    renderSupplierPaymentsTab();
+  };
+  $('spSupplier').addEventListener('change', apply);
+  $('spSupplier').addEventListener('keydown', (e) => { if (e.key === 'Enter') apply(); });
+  $('spKind').addEventListener('change', apply);
+  $('spClear').onclick = () => { supplierPayFilter = { supplier: '', kind: '' }; renderSupplierPaymentsTab(); };
+}
 
 async function renderMetalsTruckingTab() {
   metalsTab.bills = 'trucking';
@@ -9452,11 +9569,7 @@ async function openNameCleanup(startField) {
 let importFile = null;      // { name, base64 }
 let importPreview = null;   // the last preview, or null
 
-// `bar` is carried only so the ledger this returns to draws the navigation she
-// came from — Outgoing reached from Bills must not land back on the Invoice
-// bar. Defaulting to null means every existing caller behaves exactly as it
-// did; see renderLedgerTab for why the flag names the new shape.
-async function openImportModal(kind, bar = null) {
+async function openImportModal(kind) {
   const L = LEDGER_LIGHT;
   importFile = null; importPreview = null;
   const fieldCss = `width:100%; height:34px; padding:0 10px; background:${L.paper}; border:1px solid ${L.line}; border-radius:var(--radius-sm); color:${L.ink}; outline:none; font-size:13px;`;
@@ -9706,7 +9819,7 @@ async function openImportModal(kind, bar = null) {
         <button id="impDone" class="btn btn-primary" style="font-size:12px; padding:8px 16px;">Done</button>
       </div>
       <div id="impErr"></div>`;
-    $('impDone').onclick = () => { close(); renderLedgerTab(kind, { bar }); };
+    $('impDone').onclick = () => { close(); renderLedgerTab(kind); };
     if ($('impUndo')) $('impUndo').onclick = () => undoBatch(r.batch, $('impUndo'));
   }
 
@@ -9719,7 +9832,7 @@ async function openImportModal(kind, bar = null) {
           Undone — ${n(r.removed)} rows removed.</div>
         <div style="border-top:1px solid ${L.line}; padding-top:14px; margin-top:16px; text-align:right;">
           <button id="impDone2" class="btn btn-primary" style="font-size:12px; padding:8px 16px;">Done</button></div>`;
-      $('impDone2').onclick = () => { close(); renderLedgerTab(kind, { bar }); };
+      $('impDone2').onclick = () => { close(); renderLedgerTab(kind); };
     } catch (e) {
       btn.disabled = false; btn.textContent = 'Undo this import';
       $('impErr').innerHTML = `<div style="margin-top:12px; padding:10px 12px; border:1px solid ${L.danger}; border-radius:var(--radius-sm); font-size:12px; color:${L.danger};">${esc(e.message || 'Could not undo.')}</div>`;
@@ -10174,10 +10287,7 @@ async function openBillPayForm(opts = {}) {
 // `existing` means editing a saved row, and conflating the two would have the
 // autosave issue a PUT against an id that is not there. Named `seed` because
 // `prefill` is already taken further down by the booking picker's markup.
-// `bar`, same reason as openImportModal: saving a row from Outgoing-inside-
-// Bills must redraw the Bills navigation, not the Invoice one. Last parameter
-// and optional, so the four existing call sites are untouched.
-function openLedgerForm(kind, existing, seed, bar = null) {
+function openLedgerForm(kind, existing, seed) {
   const K = LEDGER_KINDS[kind];
   const editing = !!(existing && existing.id);
   const all = ledgerState.fields || [];
@@ -10634,13 +10744,13 @@ function openLedgerForm(kind, existing, seed, bar = null) {
     if (onEscape) document.removeEventListener('keydown', onEscape);
     // Autosave may have created the row while she typed, so the table behind
     // has to catch up whichever way she leaves.
-    if (savedId || editing) renderLedgerTab(kind, { bar });
+    if (savedId || editing) renderLedgerTab(kind);
   };
   const onEscape = (e) => { if (e.key === 'Escape') close(); };
   document.addEventListener('keydown', onEscape);
   $('ledClose').onclick = close;
   // The bill/sales form autosaves, so reopening it loses nothing typed.
-  ledgerReopen = () => { close(); openLedgerForm(kind, existing, seed, bar); };
+  ledgerReopen = () => { close(); openLedgerForm(kind, existing, seed); };
   $('ledCancel').onclick = close;
 
   const readForm = () => {

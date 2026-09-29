@@ -1828,13 +1828,15 @@ section('G9 — the Trucking tab');
     await w.renderMetalsTruckingTab();
 
     const nav = [...doc.querySelectorAll('.nav-btn')].map((b) => b.dataset.tab);
-    // Outgoing joined this list on 2026-09-29 — Apsara: "Add a outgoing tab in
-    // Bills". Asserted in full rather than with `includes`, because the point
-    // of this check is that Trucking lives HERE and nowhere else, and a
-    // loosened comparison would stop noticing if it gained a nav entry too.
+    // Payments joined this list on 2026-09-29 — Apsara: "in bill,i need to have
+    // a tab to show advance/payment send to suppliers". Outgoing was briefly
+    // here the same day and was removed at her word. Asserted in full rather
+    // than with `includes`, because the point of this check is that Trucking
+    // lives HERE and nowhere else, and a loosened comparison would stop
+    // noticing if it gained a nav entry too.
     ck('Trucking is a tab inside Bills, where its data comes from',
        [...doc.querySelectorAll('.metals-tab[data-section="bills"]')].map((b) => b.dataset.tab).join(',')
-         === 'bills,outgoing,trucking',
+         === 'bills,payments,trucking',
        [...doc.querySelectorAll('.metals-tab[data-section="bills"]')].map((b) => b.dataset.tab).join(','));
     ck('  not a nav entry of its own', !nav.includes('metals-trucking'), nav.join(','));
     // ── THE ROSTER IS STILL REACHABLE ────────────────────────────────────
@@ -2309,101 +2311,129 @@ section('H — and the sheet write is coalesced, not one per keystroke');
 }
 
 // ══════════════════════════════════════════════════════════════════════════
-section('OUTGOING FROM BILLS — one screen, reachable from two places');
+section('PAID TO SUPPLIERS — the Bills tab that says what went out');
 // ══════════════════════════════════════════════════════════════════════════
-// Apsara, 2026-09-29: "Add a outgoing tab in Bills.remove it from invoice
-// register.." — asked whether that meant MOVING it, which would leave the
-// Invoice section with no invoice table at all, she chose to keep it in both.
+// Apsara, 2026-09-29: "in bill,i need to have a tab to show advance/payment
+// send to suppliers .I dont want outgoing tab in bills".
 //
-// ── ONE RENDERER, NOT A COPY ──────────────────────────────────────────────
-// Both tabs call renderLedgerTab('sales'). Two invoice tables would drift and
-// she would have no way of telling which was lying.
+// Outgoing was added to Bills earlier the same day and removed at her word;
+// the section that tested it went with it, along with the `bar` option on
+// renderLedgerTab, which existed only to support it. Machinery in shared code
+// that nothing calls is worse than no machinery.
 //
-// ── THE PART THAT IS EASY TO GET WRONG ────────────────────────────────────
-// renderLedgerTab draws the tab bar belonging to its KIND, so the sales table
-// shown under Bills drew the INVOICE bar — pressing Outgoing inside Bills
-// silently moved her to another section. Hence the `bar` option, which names
-// the NEW shape: leaving it out means what every existing call already meant.
-//
-// And it has to SURVIVE a re-render. Changing a filter, clearing, importing or
-// saving all redraw the ledger, and each of those calls that did not carry
-// `bar` would drop her back onto the Invoice bar mid-task.
+// ── THE FIGURE EASIEST TO GET WRONG ───────────────────────────────────────
+// An advance is a payment whose allocations do not yet add up to it. The cash
+// LEFT THE BANK on the day it was made, so it belongs in "sent" — but only
+// the allocated part is attached to a container. Counting only fully-applied
+// payments would under-report what has actually gone out, which on this
+// screen is the one number she is looking for.
 {
-    // A local sales route — this file has no shared salesRoute, only per-section
-    // inline ones. Two rows, so "it drew the sales table" is a countable claim.
-    const SROWS = [
-        { id: 'S1', customer: 'MK Trading', date: '08/01/2026', booking_no: 'DALA1',
-          container_no: 'HMMU1111111', photos: [], gross: 40000, truck: 14000,
-          container: 8000, chassis: 6000, boxes: 400, customer_price: 900 },
-        { id: 'S2', customer: 'SOLINE METAL', date: '08/02/2026', booking_no: 'DALA2',
-          container_no: 'HMMU2222222', photos: [], gross: 40000, truck: 14000,
-          container: 8000, chassis: 6000, boxes: 400, customer_price: 950 },
-    ].map(sales.withTotals);
-    const outRoute = (q) => {
-        const rows = sales.filterRows(SROWS, q);
-        return { sales: rows, summary: sales.summary(rows), columns: sales.tableColumns(),
-                 fields: sales.COLUMNS, groups: sales.GROUPS, writable: sales.WRITABLE,
-                 facets: sales.facets(SROWS), filterable: sales.FILTERABLE,
-                 duplicates: [], total_unfiltered: SROWS.length };
+    const PAYMENTS = {
+        payments: [
+            { id: 'P1', kind: 'payment', supplier: 'Calderon', date: '09/01/2026',
+              mode: 'Wire', bank: 'Chase', ref: 'W-1',
+              amount: 1000, allocations: [{ bill_id: 'B1', amount: 1000 }] },
+            { id: 'P2', kind: 'advance', supplier: 'Oakland Metals', date: '09/05/2026',
+              mode: 'Zelle', bank: 'BofA', ref: null,
+              amount: 800, allocations: [{ bill_id: 'B2', amount: 300 }] },
+            { id: 'P3', kind: 'advance', supplier: 'Calderon', date: '09/09/2026',
+              mode: 'Cash', bank: null, ref: null, amount: 500, allocations: [] },
+        ],
+        summary: {}, open_bills: [], credit: {}, modes: ['Wire'], banks: ['Chase'],
     };
-    const { w, dom } = await mount({ '/api/bills': billsRoute, '/api/sales': outRoute });
+    const { w, dom } = await mount({ '/api/bills': billsRoute, '/api/bill-payments': PAYMENTS });
     const doc = w.document;
-    const barTabs = () => [...doc.querySelectorAll('.metals-tab')]
-        .map((b) => `${b.dataset.section}:${b.dataset.tab}`);
-    const onTab = () => [...doc.querySelectorAll('.metals-tab')]
-        .find((b) => b.style.borderBottom && !/transparent/.test(b.style.borderBottom));
+    await w.renderSupplierPaymentsTab();
 
-    // The tab exists, in the Bills section.
-    await w.renderLedgerTab('bills');
-    ck('Bills has an Outgoing tab', barTabs().includes('bills:outgoing'), barTabs().join(' '));
-    ck('  and still has Bills and Trucking',
-       barTabs().includes('bills:bills') && barTabs().includes('bills:trucking'),
-       barTabs().join(' '));
+    const tabs = [...doc.querySelectorAll('.metals-tab[data-section="bills"]')].map((b) => b.dataset.tab);
+    ck('Payments is a tab inside Bills', tabs.includes('payments'), tabs.join(','));
+    ck('  and Outgoing is gone from Bills, as she asked',
+       !tabs.includes('outgoing'), tabs.join(','));
+    ck('  Bills and Trucking are untouched',
+       tabs.join(',') === 'bills,payments,trucking', tabs.join(','));
 
-    // The Invoice register KEEPS its own — she chose both.
-    await w.renderLedgerTab('sales');
-    ck('the Invoice register keeps its Outgoing tab', barTabs().includes('sales:outgoing'),
-       barTabs().join(' '));
-    ck('  and its other four', ['incoming', 'freight', 'commission', 'margin']
-       .every((t) => barTabs().includes(`sales:${t}`)), barTabs().join(' '));
+    const body = doc.getElementById('viewRoot').textContent;
+    const rows = doc.querySelectorAll('tbody tr');
+    ck('every payment and advance is listed', rows.length === 3, String(rows.length));
+    ck('  newest first', /09\/09\/2026/.test(rows[0].textContent), rows[0].textContent.trim().slice(0, 40));
 
-    // ── DRIVEN BY THE BUTTON, NOT BY POKING STATE ─────────────────────────
-    // metalsTab is a top-level `const`, so under w.eval it is not a property
-    // of window and cannot be set from here — the same trap this file already
-    // documents for IS_SUPER. Clicking is better anyway: it exercises
-    // wireMetalsTabs, which is the half that decides what Outgoing does.
-    await w.renderLedgerTab('bills');
-    const outBtn = doc.querySelector('.metals-tab[data-section="bills"][data-tab="outgoing"]');
-    ck('  and it is clickable', !!outBtn);
-    outBtn.click();
-    await new Promise((r) => setTimeout(r, 80));
-    ck('Outgoing inside Bills draws the BILLS navigation',
-       barTabs().every((t) => t.startsWith('bills:')), barTabs().join(' '));
-    ck('  and does not throw her into the Invoice section',
-       !barTabs().some((t) => t.startsWith('sales:')), barTabs().join(' '));
-    ck('  while showing the SALES rows', doc.querySelectorAll('tbody tr[data-id]').length === 2,
-       String(doc.querySelectorAll('tbody tr[data-id]').length));
-    ck('  with Outgoing marked as the one she is on',
-       onTab() && onTab().dataset.tab === 'outgoing',
-       onTab() ? onTab().dataset.tab : 'nothing marked');
+    // 1000 + 800 + 500. An advance left the bank too.
+    ck('SENT counts advances as well as payments', /2,300/.test(body),
+       'an advance that is missing from "sent" under-reports what has left the account');
+    // (800-300) + 500 = 1000 not yet against a container.
+    //
+    // Read off the CARD, not the page. "1,000" is also P1's amount, so a
+    // whole-page match was satisfied by an unrelated figure and stayed green
+    // with the unapplied total hard-wired to zero.
+    const cardVal = (label) => {
+        const el = [...doc.querySelectorAll('.card')]
+            .find((c) => new RegExp(`^\\s*${label}`, 'i').test(c.textContent.trim()));
+        return el ? el.textContent.replace(new RegExp(label, 'i'), '').trim() : null;
+    };
+    ck('  and UNAPPLIED is what is not yet on a container',
+       /1,000\.00/.test(cardVal('Unapplied') || ''), String(cardVal('Unapplied')));
+    ck('  SENT reads off its own card too',
+       /2,300\.00/.test(cardVal('Sent') || ''), String(cardVal('Sent')));
+    ck('  a fully applied payment shows nothing unapplied',
+       /0\.00/.test(rows[2].textContent), rows[2].textContent.trim().slice(-40));
 
-    // ── IT SURVIVES A RE-RENDER ───────────────────────────────────────────
-    // Every internal redraw has to carry the flag. A filter change that
-    // dropped it would move her to the Invoice section mid-task, and the only
-    // symptom would be the navigation quietly changing under her.
-    // ledgerFilters is another top-level const — pressing Clear is the real
-    // path and the one she would take.
-    doc.getElementById('ledClear').click();
+    // Cash has no bank, and an empty cell there reads as missing data.
+    //
+    // The BANK cell specifically. The Method cell beside it already says
+    // "Cash", so a whole-row match passed happily with the bank left as a
+    // dash — testing the column I was not changing.
+    const cellOf = (tr, i) => tr.querySelectorAll('td')[i].textContent.trim();
+    ck('a cash payment says cash in the BANK column, not a dash',
+       /^cash$/i.test(cellOf(rows[0], 4)),
+       `bank cell = ${JSON.stringify(cellOf(rows[0], 4))}`);
+    ck('  while a wire still names its bank',
+       /Chase/.test(cellOf(rows[2], 4)), cellOf(rows[2], 4));
+
+    // The two are not the same thing and the row says which it is.
+    ck('each row says whether it is an advance or a payment',
+       (body.match(/advance/g) || []).length >= 2 && /payment/.test(body));
+
+    // ── READ ONLY ─────────────────────────────────────────────────────────
+    // Recording and applying stay in the pay sheet, which has the guards. A
+    // second way to move money is a second place for them to be forgotten.
+    ck('nothing here moves money',
+       !doc.querySelector('#btnPay, .bpApply, #bpAdvSel'),
+       'recording belongs in the pay sheet, with the guards');
+    ck('  and it says so', /Read only/i.test(body));
+
+    // ── FILTERS ───────────────────────────────────────────────────────────
+    doc.getElementById('spKind').value = 'advance';
+    doc.getElementById('spKind').dispatchEvent(new w.Event('change'));
     await new Promise((r) => setTimeout(r, 60));
-    ck('clearing the filters keeps her in Bills',
-       barTabs().every((t) => t.startsWith('bills:')), barTabs().join(' '));
+    ck('filtering to advances drops the plain payment',
+       doc.querySelectorAll('tbody tr').length === 2,
+       String(doc.querySelectorAll('tbody tr').length));
 
-    // Without the flag it is the Invoice bar, which is correct for the
-    // Invoice section and is what every pre-existing caller still gets.
-    await w.renderLedgerTab('sales');
-    ck('a plain call still draws the Invoice bar, as it always did',
-       barTabs().some((t) => t.startsWith('sales:')), barTabs().join(' '));
+    doc.getElementById('spSupplier').value = 'calderon';
+    doc.getElementById('spSupplier').dispatchEvent(new w.Event('change'));
+    await new Promise((r) => setTimeout(r, 60));
+    ck('  and narrowing by supplier narrows further',
+       doc.querySelectorAll('tbody tr').length === 1,
+       doc.getElementById('viewRoot').textContent.slice(0, 120));
+
+    doc.getElementById('spClear').click();
+    await new Promise((r) => setTimeout(r, 60));
+    ck('  Clear brings them all back', doc.querySelectorAll('tbody tr').length === 3,
+       String(doc.querySelectorAll('tbody tr').length));
     dom.window.close();
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+section('THE `bar` OPTION IS GONE WITH THE TAB IT SERVED');
+// ══════════════════════════════════════════════════════════════════════════
+{
+    ck('renderLedgerTab takes only a kind again',
+       /async function renderLedgerTab\(kind\) \{/.test(html),
+       'an option nothing passes is machinery in shared code for no caller');
+    ck('  and no call site still threads one', !/renderLedgerTab\(kind, \{ bar \}\)/.test(html));
+    ck('  openLedgerForm is back to three arguments',
+       /function openLedgerForm\(kind, existing, seed\) \{/.test(html));
+    ck('  openImportModal to one', /async function openImportModal\(kind\) \{/.test(html));
 }
 
 // ══════════════════════════════════════════════════════════════════════════
