@@ -2330,7 +2330,12 @@ section('PAID TO SUPPLIERS — the Bills tab that says what went out');
 {
     const PAYMENTS = {
         payments: [
-            { id: 'P1', kind: 'payment', supplier: 'Calderon', date: '09/01/2026',
+            // ── THE TWO ORDERINGS MUST DISAGREE ───────────────────────
+            // Oakland Metals has TWO payments and Calderon one, and Oakland
+            // sorts LAST alphabetically. The first fixture had it the other
+            // way round, so "most paid first" and "alphabetical" produced the
+            // same list and sorting by name instead of by count was invisible.
+            { id: 'P1', kind: 'payment', supplier: 'Oakland Metals', date: '09/01/2026',
               mode: 'Wire', bank: 'Chase', ref: 'W-1',
               amount: 1000, allocations: [{ bill_id: 'B1', amount: 1000 }] },
             { id: 'P2', kind: 'advance', supplier: 'Oakland Metals', date: '09/05/2026',
@@ -2420,6 +2425,75 @@ section('PAID TO SUPPLIERS — the Bills tab that says what went out');
     await new Promise((r) => setTimeout(r, 60));
     ck('  Clear brings them all back', doc.querySelectorAll('tbody tr').length === 3,
        String(doc.querySelectorAll('tbody tr').length));
+
+    // ── IT MATCHES AS SHE TYPES ───────────────────────────────────────────
+    // Apsara, 2026-09-29: "in payment-suppliers,why it is not a drop
+    // down?match as i type". It shipped as a bare text box — an oversight,
+    // not a decision.
+    //
+    // The names come from the payments already on screen, so the only
+    // suppliers offered are ones she has actually sent money to, and there is
+    // no second definition of "her suppliers" to drift from this one.
+    const sup = doc.getElementById('spSupplier');
+    const menu = doc.getElementById('spSupplierAc');
+    ck('the supplier box has a dropdown', !!menu);
+
+    sup.dispatchEvent(new w.Event('focus'));
+    await new Promise((r) => setTimeout(r, 30));
+    let items = [...menu.querySelectorAll('.ac-item')].map((el) => el.textContent);
+    ck('  focusing it offers the suppliers she has paid',
+       items.length === 2 && items.join(' ').includes('Calderon')
+       && items.join(' ').includes('Oakland Metals'), items.join(' | '));
+    // Oakland Metals has two payments, Calderon one — and Oakland sorts LAST
+    // alphabetically, so this fails if the list is sorted by name.
+    ck('  the one she pays most is first', /Oakland/.test(items[0]), items.join(' | '));
+
+    sup.value = 'oak';
+    sup.dispatchEvent(new w.Event('input'));
+    await new Promise((r) => setTimeout(r, 30));
+    items = [...menu.querySelectorAll('.ac-item')].map((el) => el.textContent);
+    ck('  typing narrows it', items.length === 1 && /Oakland/.test(items[0]), items.join(' | '));
+
+    // ── mousedown, NOT click ──────────────────────────────────────────────
+    // Checked in the SOURCE, deliberately. jsdom does not fire blur when a
+    // mousedown lands elsewhere, so the race this guards against — blur
+    // closing the menu before a click can register, which is what "consignee
+    // not clickable" turned out to be — cannot be reproduced here. Swapping
+    // the handler to 'click' therefore keeps every behavioural check in this
+    // section green while breaking the control in a real browser.
+    //
+    // So the event name is asserted as the source-level fact it is.
+    const supAc = html.slice(html.indexOf("const inp = $('spSupplier'), menu = $('spSupplierAc');"),
+                             html.indexOf("inp.addEventListener('focus', open);"));
+    // An empty slice makes both regexes false and the check meaningless, so
+    // the slice is asserted before it is used. The first version of this did
+    // not, and stayed green with the handler swapped to 'click'.
+    ck('  the supplier type-ahead source was located', supAc.length > 200,
+       `slice is ${supAc.length} chars — indexOf missed`);
+    ck('  it picks on mousedown, not click',
+       supAc.length > 200 && /addEventListener\('mousedown'/.test(supAc)
+       && !/addEventListener\('click'/.test(supAc),
+       'on a click, blur closes the menu first and the pick never lands');
+
+    menu.querySelector('.ac-item').dispatchEvent(new w.MouseEvent('mousedown', { bubbles: true, cancelable: true }));
+    await new Promise((r) => setTimeout(r, 80));
+    ck('  picking one fills the box',
+       doc.getElementById('spSupplier').value === 'Oakland Metals',
+       doc.getElementById('spSupplier').value);
+    ck('  and filters the table to it — both of Oakland\'s rows',
+       doc.querySelectorAll('tbody tr').length === 2,
+       String(doc.querySelectorAll('tbody tr').length));
+
+    // A name she has never paid must still be typeable — an empty table is a
+    // fine answer; being unable to type is not.
+    const sup2 = doc.getElementById('spSupplier');
+    sup2.value = 'Nobody Ltd';
+    sup2.dispatchEvent(new w.Event('change'));
+    await new Promise((r) => setTimeout(r, 60));
+    ck('  a supplier with no payments gives an empty table, not a blocked box',
+       doc.getElementById('spSupplier').value === 'Nobody Ltd'
+       && /Nothing sent/.test(doc.getElementById('viewRoot').textContent),
+       doc.getElementById('viewRoot').textContent.slice(-120));
     dom.window.close();
 }
 
