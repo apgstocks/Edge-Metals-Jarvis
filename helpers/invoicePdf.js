@@ -1017,7 +1017,23 @@ function buildInvoiceClassicHtml(data) {
         // Without this the preferred break is mid-number at an underscore
         // instead of at the boundary between the two numbers.
         inv_no: escapeHtml(data.inv_no || '').replace(/([_,])/g, '$1<wbr>'),
-        item_label: escapeHtml(itemLabels(lineItems, data.inv_no)),
+        // ── HERS IF SHE TYPED ONE, DERIVED OTHERWISE ─────────────────────
+        // Apsara, 2026-09-29: "HAVE AN OPTION TO EDIT THE DESCRIPTION BELOW
+        // THE INVOICE NUMBER LIKE AL-AL COMBO".
+        //
+        // itemLabels() reads the line items and the invoice number and is
+        // right most of the time; this is the correction for when it is not.
+        //
+        // BLANK FALLS THROUGH TO THE DERIVATION, which is the whole of the
+        // safety here: every invoice generated before today, and every one
+        // where she leaves the box alone, prints exactly what it printed
+        // before. The override names the new shape, never the old one — a
+        // flag that had to be SET to keep the existing label would
+        // eventually not be set, and the header would quietly change on a
+        // document a customs broker reads.
+        item_label: escapeHtml(
+            String(data.item_label_override == null ? '' : data.item_label_override).trim()
+            || itemLabels(lineItems, data.inv_no)),
         inv_date: escapeHtml(formatDate(data.inv_date)),
         other_ref: otherRef,
         pl_refs_line: plRefs,

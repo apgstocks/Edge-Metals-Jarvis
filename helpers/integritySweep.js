@@ -132,11 +132,29 @@ const CHECKS = [
             // documents that both already exist, which is worse than saying
             // nothing. Grouped by container first, so the pair is named as
             // what it is.
+            // ── A LEAKED RECORD ID IS NOT A CONTAINER ────────────────────
+            // Apsara, 2026-09-29, reading this very report:
+            //
+            //   BILL_1789990307231_2eiz5 — DRM
+            //   "ignore all these things likle BILL_,SALE_"
+            //
+            // A Jarvis row id sitting in the container column. It can never
+            // join to anything and the sheet will never supply a matching
+            // half, so every night it reports a gap that cannot be closed —
+            // and a nightly report carrying items nobody can act on is a
+            // report that stops being read. Dropped here rather than in the
+            // email, so every consumer of this check agrees.
+            //
+            // Only the id shape is dropped, not everything odd: a genuinely
+            // unfamiliar container number is still worth her seeing.
+            const RECORD_ID = /^(BILL|SALE)_/i;
+
             const byContainer = new Map();
             for (const r of rows) {
                 if (r.state === 'closed') continue;
                 const c = String(r.container_no || '').trim().toUpperCase();
                 if (!c) continue;
+                if (RECORD_ID.test(c)) continue;
                 if (!byContainer.has(c)) byContainer.set(c, []);
                 byContainer.get(c).push(r);
             }

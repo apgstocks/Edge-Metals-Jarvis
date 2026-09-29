@@ -43,6 +43,11 @@
 const path = require('path');
 const ROOT = path.join(__dirname, '..');
 
+const argValue = (name) => {
+    const i = process.argv.indexOf(name);
+    return i === -1 ? null : process.argv[i + 1];
+};
+
 (async () => {
     const cfg = require(path.join(ROOT, 'config'));
     const sync = require(path.join(ROOT, 'helpers/metalsSheetSync'));
@@ -76,7 +81,22 @@ const ROOT = path.join(__dirname, '..');
     // ── WHICH CONTAINERS ──────────────────────────────────────────────────
     // Named on the command line, or worked out the same way the sweep does:
     // grouped by container, one side present and not the other.
-    let wanted = process.argv.slice(2).map(norm).filter(Boolean);
+    // ── 2025 IS NOT WANTED ────────────────────────────────────────────────
+    // Apsara, 2026-09-29, on the five the sync should have been offering —
+    // every one of them dated 2025: "if its 2025 i dont want it". Same rule
+    // as the Bills ledger, where she asked for 2026 only.
+    //
+    // COUNTED, NOT SILENT. A filter that quietly drops rows is how a real
+    // one goes missing; the summary says how many were set aside so the
+    // number is visible even when the list is not.
+    const YEAR_FROM = Number(argValue('--from') || 2026);
+    const ALL_YEARS = process.argv.includes('--all-years');
+    const yearOf = (row) => {
+        const m = String(row && row.date || '').match(/(20\d\d)/);
+        return m ? Number(m[1]) : null;
+    };
+
+    let wanted = process.argv.slice(2).filter((a) => !a.startsWith('--')).map(norm).filter(Boolean);
     if (!wanted.length) {
         const sides = new Map();
         const put = (side, c) => {
@@ -131,7 +151,56 @@ const ROOT = path.join(__dirname, '..');
         return null;
     };
 
-    const tally = { absent: 0, halfOnSheet: 0, rejected: 0, shouldOffer: 0 };
+    // ── WHAT KIND OF THING IS IN THE CONTAINER FIELD ──────────────────────
+    // The live run turned up three different problems wearing one label:
+    //   MSBU3351954   a real container, genuinely missing its other half
+    //   EMHU260742    4 letters + SIX digits — a container is 4 + 7, so the
+    //                 check digit was dropped when it was typed
+    //   PO6, LOCAL    not a container at all; a PO number or a placeholder
+    //                 sitting in the container field
+    // "Type in the missing half" is the right advice for the first and the
+    // wrong advice for the other two, so they are named apart.
+    const PROPER = /^[A-Z]{4}\d{7}$/;
+
+    // ── EMHU / UMX / ESE ARE LOCAL DELIVERIES, NOT TYPOS ──────────────────
+    // Apsara, 2026-09-29: "if its EMHU,UMX,ESE then its local delivery.we
+    // need to fi nd it out.but not right now."
+    //
+    // I had these down as MALFORMED — 4 letters + 6 digits where an ocean
+    // container is 4 + 7 — and this script offered to match them against a
+    // longer number on the sheet. That was wrong, and worth recording as
+    // wrong: they are local delivery references with their own shape, and
+    // "correcting" one would have destroyed a valid identifier that invoices
+    // and BOLs already carry.
+    //
+    // So they are named for what they are and NO correction is suggested.
+    // What a local reference should look like, and whether it should join a
+    // bill to a sale the way a container does, is task #144 and hers.
+    const LOCAL_PREFIX = /^(EMHU|UMXU|UMX|ESE)/;
+
+    // ── BILL_ / SALE_ ARE RECORD IDS THAT LEAKED INTO THE FIELD ───────────
+    // Apsara: "BILL_1789990307231_2eiz5 — DRM ignore all these things likle
+    // BILL_,SALE_". A Jarvis row id sitting in the container column. It
+    // cannot join to anything and it is not something the sheet will ever
+    // supply, so it is dropped before the report rather than listed as a
+    // container with a missing half.
+    const RECORD_ID = /^(BILL|SALE)_/i;
+
+    const kindOf = (c) => RECORD_ID.test(c) ? 'record-id'
+        : PROPER.test(c) ? 'proper'
+        : LOCAL_PREFIX.test(c) ? 'local-delivery'
+        : 'not-a-container';
+
+    // A dropped check digit means Jarvis's number can never equal the
+    // sheet's, so the other half looks absent when it is sitting right
+    // there. Any sheet container starting with the same ten characters is
+    // reported — not merged, reported. Correcting a container number on a
+    // live ledger is hers to do.
+    const allSheet = new Set([...sB.keys(), ...sS.keys()]);
+    const nearMatches = (c) => [...allSheet].filter((x) => x !== c && x.startsWith(c) && x.length > c.length);
+
+    const tally = { absent: 0, halfOnSheet: 0, rejected: 0, shouldOffer: 0,
+                    skippedYear: 0, localDelivery: 0, notContainer: 0, recordId: 0 };
 
     for (const c of wanted) {
         const haveBill = jB.has(c), haveSale = jS.has(c);
@@ -140,8 +209,36 @@ const ROOT = path.join(__dirname, '..');
         const rows = (missing === 'bill' ? sB.get(c) : sS.get(c)) || [];
         const other = (missing === 'bill' ? sS.get(c) : sB.get(c)) || [];
 
-        console.log(`\n  ${c}`);
+        // The year comes off whichever side Jarvis actually holds.
+        const mine = (haveBill ? jB.get(c) : jS.get(c)) || [];
+        const yr = mine.map(yearOf).find((y) => y) || null;
+        if (!ALL_YEARS && yr !== null && yr < YEAR_FROM) { tally.skippedYear += 1; continue; }
+
+        const kind = kindOf(c);
+        // Dropped silently on purpose — her instruction, and a leaked record
+        // id is noise, not a finding. Counted in the summary so the number
+        // is still visible.
+        if (kind === 'record-id') { tally.recordId += 1; continue; }
+        if (kind === 'local-delivery') tally.localDelivery += 1;
+        if (kind === 'not-a-container') tally.notContainer += 1;
+
+        console.log(`\n  ${c}${yr ? `   (${yr})` : ''}`);
         console.log(`      Jarvis has the ${side}; the ${missing} is missing`);
+
+        if (kind === 'local-delivery') {
+            console.log(`      -> A LOCAL DELIVERY, not an ocean container.`);
+            console.log(`         No correction offered: these are not typo'd container numbers`);
+            console.log(`         and changing one would destroy a reference that invoices and`);
+            console.log(`         BOLs already carry. What they should look like, and whether`);
+            console.log(`         they should join a bill to a sale, is open — task #144.`);
+            continue;
+        }
+        if (kind === 'not-a-container') {
+            console.log(`      -> NOT A CONTAINER NUMBER AT ALL. Something else is in that`);
+            console.log(`         field — a PO number, or a placeholder. Until it is a real`);
+            console.log(`         container this row can never join to anything.`);
+            continue;
+        }
 
         if (!rows.length && !other.length) {
             tally.absent += 1;
@@ -181,6 +278,14 @@ const ROOT = path.join(__dirname, '..');
     console.log(`  sheet is half-filled too     ${tally.halfOnSheet}`);
     console.log(`  REJECTED by looksLikeShipment ${tally.rejected}   <- silent, and fixable`);
     console.log(`  should already be offered    ${tally.shouldOffer}`);
+    console.log(`  ${'-'.repeat(74)}`);
+    console.log(`  local delivery (EMHU/UMX/ESE) ${tally.localDelivery}   (task #144 — not typos)`);
+    console.log(`  not a container at all       ${tally.notContainer}`);
+    console.log(`  leaked BILL_/SALE_ record id ${tally.recordId}   (ignored, her instruction)`);
+    if (!ALL_YEARS) {
+        console.log(`  set aside as before ${YEAR_FROM}      ${tally.skippedYear}   `
+            + `(her rule; --all-years to include)`);
+    }
     console.log('');
     if (tally.rejected) {
         console.log(`  The rejected ones are the finding. looksLikeShipment returns a bare`);

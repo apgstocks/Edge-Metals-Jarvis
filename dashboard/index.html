@@ -4022,6 +4022,30 @@ function queueLoadDraftSave() {
 // the ambiguity the separate store exists to prevent.
 async function clearLoadDraft() {
   if (draftTimer) { clearTimeout(draftTimer); draftTimer = null; }
+
+  // ── WAIT FOR AN AUTOSAVE STILL IN THE AIR ─────────────────────────────
+  // Apsara, 2026-09-30, on two identical loads a minute apart: "He just
+  // saved it first.then edit ,continue or cancel.he clicked continue,then it
+  // generated twice."
+  //
+  // currentDraftId is set only when the autosave POST RESOLVES. Press Save
+  // while one is still in flight and this ran with id === null, returned
+  // having deleted nothing, and the autosave then landed — leaving a draft
+  // on the server for a load that had just been saved for real.
+  //
+  // The Loads screen offers that orphan as "Unfinished load...". Continuing
+  // it calls openLoadDraft -> resetLoadModal, which sets editingLoadId to
+  // null, so the form is in CREATE mode and Save writes a SECOND load. Same
+  // seller, same weight, same money, sequential ids: EDGE_98 and EDGE_99.
+  //
+  // So the in-flight save is waited for rather than raced. BOUNDED, because
+  // a draft is a convenience and must never hold up the confirmation of a
+  // load that is already committed to disk.
+  const startedWaiting = Date.now();
+  while (draftSaveInFlight && Date.now() - startedWaiting < 3000) {
+    await new Promise((r) => setTimeout(r, 50));
+  }
+
   const id = currentDraftId;
   currentDraftId = null;
   setDraftStatus('none');

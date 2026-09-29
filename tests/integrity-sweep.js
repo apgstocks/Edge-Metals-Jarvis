@@ -263,6 +263,44 @@ section('F — it never writes');
        fs.readFileSync(path.join(TMP, 'bills.json'), 'utf8') === before);
 }
 
+// ══════════════════════════════════════════════════════════════════════════
+section('A LEAKED RECORD ID IS NOT A CONTAINER');
+// ══════════════════════════════════════════════════════════════════════════
+// Apsara, 2026-09-29, reading the live report: "BILL_1789990307231_2eiz5 —
+// DRM ignore all these things likle BILL_,SALE_".
+//
+// A Jarvis row id in the container column. It can never join to anything and
+// the sheet will never supply a matching half, so it reports a gap that
+// cannot be closed — every night, for ever. A nightly report carrying items
+// nobody can act on is one that stops being read, which is the whole value
+// of the sweep gone.
+{
+    const fs2 = require('fs');
+    const src = fs2.readFileSync(path.join(ROOT, 'helpers/integritySweep.js'), 'utf8');
+    const block = src.slice(src.indexOf("id: 'unjoined-containers'"),
+                            src.indexOf("id: 'unjoined-containers'") + 2600);
+
+    ck('the unjoined check drops BILL_/SALE_ ids',
+       /RECORD_ID\.test\(c\)\) continue;/.test(block),
+       'otherwise they are reported nightly and cannot ever be resolved');
+    ck('  matched case-insensitively', /\/\^\(BILL\|SALE\)_\/i/.test(block));
+
+    // It must drop ONLY that shape. An unfamiliar container number is still
+    // worth her seeing — over-filtering a report is the same failure as
+    // over-filling one.
+    const RECORD_ID = /^(BILL|SALE)_/i;
+    const drops = ['BILL_1789990307231_2eiz5', 'SALE_123_abc', 'bill_9_x'];
+    const keeps = ['MSBU3351954', 'EMHU260742', 'ESE107', 'PO6', 'LOCAL', 'BILLU1234567'];
+    ck('  every record id is dropped', drops.every((c) => RECORD_ID.test(c)),
+       drops.filter((c) => !RECORD_ID.test(c)).join(','));
+    ck('  and nothing else is', keeps.every((c) => !RECORD_ID.test(c)),
+       keeps.filter((c) => RECORD_ID.test(c)).join(','));
+    // BILLU1234567 is a real container prefix shape and must survive — the
+    // underscore is what makes an id an id.
+    ck('  a container merely STARTING with BILL survives',
+       !RECORD_ID.test('BILLU1234567'), 'the underscore is the tell, not the letters');
+}
+
 console.log(`\n  ${pass} passed, ${fail} failed`);
 if (fail) { console.log('\n  FAILED:\n' + failures.map((f) => '    - ' + f).join('\n')); process.exit(1); }
 
