@@ -2406,6 +2406,87 @@ section('OUTGOING FROM BILLS — one screen, reachable from two places');
     dom.window.close();
 }
 
+// ══════════════════════════════════════════════════════════════════════════
+section('SPECS — bigger, and back again');
+// ══════════════════════════════════════════════════════════════════════════
+// Apsara, 2026-09-29: "Next to toggle dark mode,add specs emoji.on clicking
+// it,font size of the page should increase to larger than current size.On
+// toggling off,it should get back to old font size".
+//
+// ── IT IS A ZOOM, AND THAT IS ON PURPOSE ──────────────────────────────────
+// Nearly every size in dashboard/index.html is an inline font-size in px.
+// Raising the root font-size would move the few rem values and leave the
+// tables, cards and forms untouched — the button would appear to do nothing.
+// zoom scales the rendered result, so it all grows together.
+{
+    const { w, dom } = await mount({ '/api/bills': billsRoute });
+    const doc = w.document;
+    await w.renderLedgerTab('bills');
+    // The control lives with the theme toggle, so it needs a form open.
+    w.openLedgerForm('bills');
+    await new Promise((r) => setTimeout(r, 40));
+
+    const specs = doc.getElementById('ledBig');
+    const theme = doc.getElementById('ledTheme');
+    ck('the specs button exists', !!specs);
+    ck('  it is the specs emoji', !!specs && /\u{1F453}/u.test(specs.textContent),
+       specs ? JSON.stringify(specs.textContent) : 'no button');
+    ck('  sitting next to the dark-mode toggle',
+       !!theme && !!specs && theme.nextElementSibling === specs,
+       'she asked for it beside that control, not somewhere else on the page');
+    // An emoji alone tells a screen reader "eyeglasses", which is not an
+    // instruction.
+    ck('  and it says what it does, not what it looks like',
+       !!specs && /bigger|size/i.test(specs.getAttribute('aria-label') || ''),
+       specs ? specs.getAttribute('aria-label') : '');
+
+    const zoomNow = () => doc.documentElement.style.zoom;
+    ck('nothing is zoomed to begin with', !zoomNow(), JSON.stringify(zoomNow()));
+
+    specs.click();
+    await new Promise((r) => setTimeout(r, 20));
+    ck('clicking it makes the page bigger', Number(zoomNow()) > 1,
+       JSON.stringify(zoomNow()));
+    ck('  and the button reads as on',
+       doc.getElementById('ledBig').getAttribute('aria-pressed') === 'true');
+    ck('  it is remembered, so she is not pressing it every morning',
+       w.localStorage.getItem('ledgerBigFont') === '1',
+       JSON.stringify(w.localStorage.getItem('ledgerBigFont')));
+
+    // ── AND BACK ──────────────────────────────────────────────────────────
+    // "On toggling off,it should get back to old font size". Cleared to ''
+    // rather than set to 1: an explicit zoom of 1 still makes the element a
+    // zoom container, which compounds oddly with the browser's own zoom.
+    doc.getElementById('ledBig').click();
+    await new Promise((r) => setTimeout(r, 20));
+    ck('clicking again puts it back exactly', zoomNow() === '',
+       `left at ${JSON.stringify(zoomNow())} — a zoom of 1 is not the same as none`);
+    ck('  and that is remembered too', w.localStorage.getItem('ledgerBigFont') === '0');
+
+    // ── IT DOES NOT THROW AWAY WHAT SHE WAS TYPING ────────────────────────
+    // The theme button reopens the form, because the forms bake the palette in
+    // at render time. A zoom is applied by the browser to what is already on
+    // screen, so reopening would only lose her half-typed row.
+    // Identified INSIDE the modal and given a value. The first version of this
+    // grabbed `doc.querySelector('input')`, which is the ledger FILTER box
+    // outside the form — it survives a rebuild either way, so the check passed
+    // happily with the rebuild mutation applied and tested nothing.
+    const modal = doc.getElementById('ledgerModal');
+    ck('  the form is open, so there is something to lose', !!modal);
+    const typed = modal.querySelector('input:not([type="checkbox"])');
+    ck('  with a field in it', !!typed);
+    typed.value = 'HALF-TYPED-HMMU9999999';
+
+    doc.getElementById('ledBig').click();
+    await new Promise((r) => setTimeout(r, 30));
+    const stillThere = doc.getElementById('ledgerModal');
+    ck('pressing the specs does not rebuild the open form',
+       stillThere === modal && typed.isConnected
+       && typed.value === 'HALF-TYPED-HMMU9999999',
+       'a repaint here would discard whatever she had half-typed');
+    dom.window.close();
+}
+
 console.log(`\n  ${pass} passed, ${fail} failed`);
 if (failures.length) { console.log('\n  failed:'); failures.forEach((f) => console.log('    · ' + f)); }
 process.exit(fail ? 1 : 0);

@@ -7440,6 +7440,69 @@ if (typeof window !== 'undefined' && !window.__ledThemeWired) {
   });
 }
 
+// ── THE SPECS ────────────────────────────────────────────────────────────
+// Apsara, 2026-09-29: "Next to toggle dark mode,add specs emoji.on clicking
+// it,font size of the page should increase to larger than current size.On
+// toggling off,it should get back to old font size".
+//
+// ── WHY THIS IS A ZOOM AND NOT A FONT SIZE, SAID PLAINLY ─────────────────
+// Almost every size in this file is an inline `font-size:13px`. Raising the
+// root font-size would move the handful of rem/em values and leave the
+// ledger tables, the cards and the forms — which is to say the page —
+// exactly as they were. It would look like the button did nothing.
+//
+// `zoom` scales the rendered result, so everything grows together and the
+// layout stays in proportion. It does mean padding and icons grow too, not
+// only the text. For reading glasses that is the behaviour you want; it is
+// still not literally what she asked for, so it is written down here rather
+// than quietly relabelled.
+//
+// ONE STEP, NOT A SLIDER. She asked for on and off.
+const BIG_ZOOM = 1.18;
+let LEDGER_BIG = (() => {
+  try { return localStorage.getItem('ledgerBigFont') === '1'; } catch (e) { return false; }
+})();
+
+function applyBigFont() {
+  const el = document.documentElement;
+  if (!el) return;
+  // Cleared to '' rather than set to '1' — an explicit zoom of 1 still makes
+  // the element a zoom container, and anything she sets in the browser's own
+  // zoom would then compound oddly against it.
+  el.style.zoom = LEDGER_BIG ? String(BIG_ZOOM) : '';
+  document.querySelectorAll('#ledBig').forEach((b) => {
+    b.setAttribute('aria-pressed', LEDGER_BIG ? 'true' : 'false');
+    b.title = LEDGER_BIG ? 'Back to the normal size' : 'Make everything bigger';
+  });
+}
+
+function setBigFont(on) {
+  LEDGER_BIG = !!on;
+  try { localStorage.setItem('ledgerBigFont', LEDGER_BIG ? '1' : '0'); } catch (e) { /* not fatal */ }
+  applyBigFont();
+}
+
+// Delegated for the same reason the theme button is: the control appears in
+// seven forms and an eighth will arrive without anyone remembering to bind it.
+//
+// It does NOT call ledgerReopen. The theme button has to, because the forms
+// bake the palette into their markup at render time; a zoom is applied by the
+// browser to what is already on screen, so reopening would only throw away
+// whatever she had half-typed.
+if (typeof window !== 'undefined' && !window.__ledBigWired) {
+  window.__ledBigWired = true;
+  document.addEventListener('click', (e) => {
+    const btn = e.target && e.target.closest && e.target.closest('#ledBig');
+    if (!btn) return;
+    setBigFont(!LEDGER_BIG);
+  });
+  // The saved choice has to be put back on load, or it lasts until reload and
+  // she has to press it every morning.
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', applyBigFont);
+  } else { applyBigFont(); }
+}
+
 // Set by whichever Edge Metals form is open, cleared when it closes.
 let ledgerReopen = null;
 
@@ -7459,9 +7522,17 @@ function setLedgerTheme(name) {
 function ledgerThemeToggle() {
   const L = LEDGER_LIGHT;
   const on = LEDGER_THEME_NAME === 'dark';
+  // The specs sit beside it — "Next to toggle dark mode,add specs emoji".
+  // Same size and border so the pair reads as one control, and the emoji is
+  // given an aria-label because a screen reader announcing "eyeglasses" is
+  // not an instruction.
   return `<button id="ledTheme" title="${on ? 'Switch to the paper sheet' : 'Switch to the dark sheet'}"
     aria-label="Switch sheet colour"
-    style="background:none; border:1px solid ${L.line}; border-radius:var(--radius-sm); padding:3px 9px; font-size:11px; color:${L.inkMuted}; cursor:pointer;">${on ? 'Paper' : 'Dark'}</button>`;
+    style="background:none; border:1px solid ${L.line}; border-radius:var(--radius-sm); padding:3px 9px; font-size:11px; color:${L.inkMuted}; cursor:pointer;">${on ? 'Paper' : 'Dark'}</button>`
+    + `<button id="ledBig" aria-pressed="${LEDGER_BIG ? 'true' : 'false'}"
+    title="${LEDGER_BIG ? 'Back to the normal size' : 'Make everything bigger'}"
+    aria-label="${LEDGER_BIG ? 'Back to the normal size' : 'Make everything bigger'}"
+    style="background:${LEDGER_BIG ? L.line : 'none'}; border:1px solid ${L.line}; border-radius:var(--radius-sm); padding:3px 9px; font-size:11px; line-height:1.3; color:${L.inkMuted}; cursor:pointer; margin-left:5px;">\u{1F453}</button>`;
 }
 
 // ── SELLING A CONTAINER SHE ALREADY BOUGHT ───────────────────────────────
