@@ -45,6 +45,24 @@
 //
 //   node scripts/eccomelt-import-plan.js --csv /path/to/tab.csv
 //   node scripts/eccomelt-import-plan.js --sheet <id> --gid <gid>
+//   node scripts/eccomelt-import-plan.js --sheet <id> --tab Eccomelt
+//
+// ── IT READS THE ECCOMELT SHAPE ONLY ──────────────────────────────────────
+// The FMC tab in the same workbook is a DIFFERENT DOCUMENT wearing the same
+// filename. Its columns are
+//
+//   Purchase Ticket | Date | Item | Gross | Tare | Net |
+//   Price/Payment Received | Amount | Payment from FMC | Paid
+//
+// — no Supplier column (Arturo is the whole tab), no Container number, no
+// per-load Price, and the rows for MONEY are interleaved with the rows for
+// LOADS: a ticket row is followed by dated payment rows carrying nothing but
+// an amount. Fed to the parser below, every one of those payment rows would
+// become a bill and an invoice for goods that never moved.
+//
+// So this refuses an unknown header rather than guessing at it. FMC needs
+// its own reader, written once its shape has been agreed — not this one
+// stretched until it fits both.
 //   node scripts/eccomelt-import-plan.js ... --json      machine-readable
 
 const fs = require('fs');
@@ -93,11 +111,15 @@ const money = (n) => (n === null || n === undefined) ? '—'
 async function readTable() {
     const file = arg('--csv');
     if (file) return parseCsv(fs.readFileSync(file, 'utf8'));
-    const id = arg('--sheet'), gid = arg('--gid');
-    if (!id || !gid) {
-        throw new Error('give either --csv <file> or --sheet <id> --gid <gid>');
+    const id = arg('--sheet'), gid = arg('--gid'), tab = arg('--tab');
+    if (!id || (!gid && !tab)) {
+        throw new Error('give either --csv <file>, or --sheet <id> with --gid <gid> or --tab <name>');
     }
-    const url = `https://docs.google.com/spreadsheets/d/${id}/export?format=csv&gid=${gid}`;
+    // A tab can be addressed BY NAME through gviz, which is easier than
+    // hunting a gid out of the URL bar. Same CSV either way.
+    const url = tab
+        ? `https://docs.google.com/spreadsheets/d/${id}/gviz/tq?tqx=out:csv&sheet=${encodeURIComponent(tab)}`
+        : `https://docs.google.com/spreadsheets/d/${id}/export?format=csv&gid=${gid}`;
     const res = await fetch(url);
     if (!res.ok) throw new Error(`Could not read the sheet (${res.status})`);
     return parseCsv(await res.text());
@@ -119,8 +141,17 @@ function build(table) {
         lgross: col('Loaded Gross'), dgross: col('Delivery Gross'),
         ltare: col('Loaded Tare'), dtare: col('Delivery Tare'),
     };
-    for (const [k, v] of Object.entries(C)) {
-        if (v === -1) throw new Error(`the tab has no "${k}" column — headers: ${hdr.filter(Boolean).join(', ')}`);
+    // ── REFUSE AN UNFAMILIAR TAB, LOUDLY ──────────────────────────────────
+    // Every column below is load-defining. A tab missing any of them is not
+    // this tab, and the FMC one in the same workbook is missing four. Being
+    // told so beats importing 574 rows of somebody else's layout.
+    const missing = Object.entries(C).filter(([, v]) => v === -1).map(([k]) => k);
+    if (missing.length) {
+        throw new Error(
+            `this does not look like the Eccomelt tab — no ${missing.join(', ')} column`
+            + `\n  headers found: ${hdr.filter(Boolean).join(' | ')}`
+            + `\n  The FMC tab has a different layout (Purchase Ticket / Payment from FMC /`
+            + `\n  Paid, with payment rows between the load rows) and needs its own reader.`);
     }
 
     const loads = [];
