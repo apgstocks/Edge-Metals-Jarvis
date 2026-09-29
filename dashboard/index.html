@@ -8131,8 +8131,22 @@ async function renderSupplierPaymentsTab() {
         ${card('Advances', String(advCount))}
       </div>
       <div style="display:flex; flex-wrap:wrap; gap:8px; align-items:flex-end; margin-bottom:14px; padding:12px 14px; border:1px solid var(--border-subtle); border-radius:var(--radius-sm); background:var(--surface-sunken);">
-        <div><label style="display:block; font-family:var(--font-mono); font-size:9px; letter-spacing:.1em; text-transform:uppercase; color:var(--text-muted); margin-bottom:4px;">Supplier</label>
-          <input id="spSupplier" value="${esc(supplierPayFilter.supplier)}" placeholder="any" style="width:200px; padding:7px 9px; font-size:12.5px;"></div>
+        <!-- ── MATCHES AS SHE TYPES ────────────────────────────────────
+             Apsara, 2026-09-29: "in payment-suppliers,why it is not a drop
+             down?match as i type". It shipped as a bare text box; that was
+             an oversight, not a decision.
+
+             The names come from THE PAYMENTS ALREADY ON SCREEN, not from the
+             address book or the supplier list — the only suppliers worth
+             offering here are the ones she has actually sent money to, and
+             they are already loaded, so there is nothing to fetch and no
+             second definition of "her suppliers" to drift.
+
+             Still a text box. Typing a name with no payments should show an
+             empty table rather than be impossible to type. -->
+        <div style="position:relative;"><label style="display:block; font-family:var(--font-mono); font-size:9px; letter-spacing:.1em; text-transform:uppercase; color:var(--text-muted); margin-bottom:4px;">Supplier</label>
+          <input id="spSupplier" autocomplete="off" value="${esc(supplierPayFilter.supplier)}" placeholder="any" style="width:200px; padding:7px 9px; font-size:12.5px;">
+          <div id="spSupplierAc" class="ac-dropdown hidden" style="width:200px;"></div></div>
         <div><label style="display:block; font-family:var(--font-mono); font-size:9px; letter-spacing:.1em; text-transform:uppercase; color:var(--text-muted); margin-bottom:4px;">Kind</label>
           <select id="spKind" style="padding:7px 9px; font-size:12.5px;">
             <option value=""${supplierPayFilter.kind === '' ? ' selected' : ''}>All</option>
@@ -8179,6 +8193,49 @@ async function renderSupplierPaymentsTab() {
   };
   $('spSupplier').addEventListener('change', apply);
   $('spSupplier').addEventListener('keydown', (e) => { if (e.key === 'Enter') apply(); });
+
+  // ── THE SUPPLIER TYPE-AHEAD ──────────────────────────────────────────
+  // Built from `all` — every payment loaded for this screen — so the list is
+  // exactly the suppliers she has sent money to. Counted, so the one she pays
+  // most is offered first rather than whoever happens to sort early.
+  {
+    const inp = $('spSupplier'), menu = $('spSupplierAc');
+    const seen = new Map();
+    for (const p of all) {
+      const name = String(p.supplier || '').trim();
+      if (!name) continue;
+      const k = name.toLowerCase();
+      const cur = seen.get(k);
+      if (cur) cur.n += 1; else seen.set(k, { name, n: 1 });
+    }
+    const names = [...seen.values()].sort((a, b) => (b.n - a.n) || a.name.localeCompare(b.name));
+
+    const close = () => { menu.classList.add('hidden'); menu.innerHTML = ''; };
+    const open = () => {
+      const q = inp.value.trim().toLowerCase();
+      const hits = (q ? names.filter((x) => x.name.toLowerCase().includes(q)) : names).slice(0, 10);
+      // A single exact match is the thing already typed — a dropdown showing
+      // only that covers the table for no gain.
+      if (!hits.length || (hits.length === 1 && hits[0].name.toLowerCase() === q)) return close();
+      menu.innerHTML = hits.map((x, i) =>
+        `<div class="ac-item" data-idx="${i}">${esc(x.name)}<span style="color:var(--text-faint); font-size:11px;">  ${x.n}</span></div>`).join('');
+      menu.classList.remove('hidden');
+      menu.querySelectorAll('.ac-item').forEach((el) => el.addEventListener('mousedown', (ev) => {
+        // mousedown, not click: blur fires first on a click and would close
+        // the menu before the click landed. Selection by index, never by
+        // parsing the label back out — the label carries a count too.
+        ev.preventDefault();
+        const hit = hits[Number(el.dataset.idx)];
+        if (hit) inp.value = hit.name;
+        close();
+        apply();
+      }));
+    };
+    inp.addEventListener('focus', open);
+    inp.addEventListener('input', open);
+    inp.addEventListener('blur', () => setTimeout(close, 150));
+    inp.addEventListener('keydown', (e) => { if (e.key === 'Escape') close(); });
+  }
   $('spKind').addEventListener('change', apply);
   $('spClear').onclick = () => { supplierPayFilter = { supplier: '', kind: '' }; renderSupplierPaymentsTab(); };
 }
