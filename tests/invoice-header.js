@@ -531,6 +531,69 @@ console.log('\n=== the two checkboxes cannot contradict each other ===');
   dom.window.close();
 }
 
+// ── THE DESCRIPTION UNDER THE NUMBER IS HERS TO OVERRIDE ──────────────────
+// Apsara, 2026-09-29: "HAVE AN OPTION TO EDIT THE DESCRIPTION BELOW THE
+// INVOICE NUMBER LIKE AL-AL COMBO".
+//
+// {{item_label}}, directly beneath {{inv_no}}, has always been derived by
+// itemLabels(). Her own example is exactly a case where the derivation is
+// not what she wants: it gives AL-ALUMINIUM COMBO where she wants AL-AL
+// COMBO, on a document a customs broker reads.
+//
+// BLANK MUST FALL THROUGH, and that is the whole safety of it. Every invoice
+// made before today carries no override, and every one where she leaves the
+// box alone must print what it printed before. An override that had to be
+// SET to keep the existing label would eventually not be set, and a live
+// header would change quietly.
+{
+    const { buildInvoiceClassicHtml } = require(R('helpers/invoicePdf'));
+    const base = {
+        inv_no: '260918_AP_26ARIS02', inv_date: '2026-09-18', buyer: 'Eccomelt LLC',
+        units: 'lb', line_items: [{ item_desc: 'Al combo', weight: 42180, rate: 1.66 }],
+    };
+    const labelOf = (extra) => {
+        const { html } = buildInvoiceClassicHtml({ ...base, ...extra });
+        const m = html.match(/font-size:8\.5pt;margin-top:1mm;">([\s\S]*?)<\/div>/);
+        return m ? m[1].replace(/<[^>]+>/g, '').trim() : null;
+    };
+
+    const derived = labelOf({});
+    ck('no override: the label is still derived', derived, 'AL-ALUMINIUM COMBO');
+    ck('her override prints instead', labelOf({ item_label_override: 'AL-AL COMBO' }), 'AL-AL COMBO');
+    ck('  and it is trimmed', labelOf({ item_label_override: '  AL-AL COMBO  ' }), 'AL-AL COMBO');
+
+    // Four shapes of "she did not type anything". The empty string is the
+    // one an empty box actually sends, and the easiest to get wrong.
+    ck('absent falls through',          labelOf({ item_label_override: undefined }), derived);
+    ck('empty string falls through',    labelOf({ item_label_override: '' }), derived);
+    ck('whitespace falls through',      labelOf({ item_label_override: '   ' }), derived);
+    ck('null falls through',            labelOf({ item_label_override: null }), derived);
+
+    // It reaches the template by dumb string replace, like everything here.
+    const nasty = buildInvoiceClassicHtml({ ...base, item_label_override: '<script>x</script>A&B' }).html;
+    ck('an override is escaped, not injected',
+       nasty.includes('&lt;script&gt;') && !nasty.includes('<script>x</script>'), true);
+    ck('  an ampersand survives as an entity', nasty.includes('A&amp;B'), true);
+    ck('  no placeholder left behind', /\{\{\s*item_label/.test(nasty), false);
+
+    // ── THE SCREEN ────────────────────────────────────────────────────────
+    const web = fs.readFileSync(R('dashboard/documents.html'), 'utf8');
+    ck('the form has a box for it', /id="inv_item_label"/.test(web), true);
+    ck('  below the invoice number, where she asked',
+       web.indexOf('id="inv_item_label"') > web.indexOf('id="inv_no"'), true);
+    ck('  the payload carries it',
+       /item_label_override: \$\('inv_item_label'\)\.value\.trim\(\)/.test(web), true);
+    ck('  reopening a generated invoice brings it back',
+       /\$\('inv_item_label'\)\.value = data\.item_label_override/.test(web), true);
+
+    // NOT pre-filled with the derived value: a box carrying it would send it
+    // every time, the override would always be set, and the derivation would
+    // become dead code that quietly stopped improving.
+    const tag = (web.match(/<input id="inv_item_label"[^>]*>/) || [''])[0];
+    ck('  the box ships EMPTY, so blank still means automatic', /\bvalue=/.test(tag), false);
+    ck('  and the placeholder says so', /placeholder="Automatic/.test(tag), true);
+}
+
 console.log(`\n  ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
 

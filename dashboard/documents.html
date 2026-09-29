@@ -668,6 +668,28 @@ body[data-theme="light"] {
         <div>
           <div class="section-label">Invoice Details</div>
           <div class="field"><label>Invoice No</label><input id="inv_no"></div>
+          <!-- ── THE LINE UNDER THE INVOICE NUMBER ────────────────────────
+               Apsara, 2026-09-29: "HAVE AN OPTION TO EDIT THE DESCRIPTION
+               BELOW THE INVOICE NUMBER LIKE AL-AL COMBO".
+
+               That line is {{item_label}} in assets/invoice-classic/
+               template.html, directly beneath {{inv_no}}. It has always been
+               DERIVED — helpers/invoicePdf.js itemLabels() reads the line
+               items, maps each to a code (AL-AL COMBO, AC-AUTO CAST,
+               SU-SEALED UNITS) and falls back to reading the codes out of
+               the invoice number. It gets that right most of the time and
+               there was no way to correct it when it did not.
+
+               BLANK MEANS AUTOMATIC. Deliberately not pre-filled with the
+               derived value: a box carrying that value would send it on
+               every generate, the override would always be set, and the
+               derivation would be dead code that quietly stopped improving.
+               Blank keeps it live and makes "she typed this" distinguishable
+               from "nobody touched it". -->
+          <div class="field"><label for="inv_item_label">Description under the number</label>
+            <input id="inv_item_label" autocomplete="off"
+              placeholder="Automatic — type here only to override (e.g. AL-AL COMBO)">
+          </div>
           <div class="field"><label>Invoice Date</label><input id="inv_date"></div>
           <div class="field"><label>Reference #</label><input id="inv_reference"></div>
           <div class="field"><label>Terms</label><input id="inv_terms"></div>
@@ -4910,6 +4932,10 @@ function applyInvoiceDataToForm(data) {
   // wins over the guess.
   if ($('inv_units')) $('inv_units').value = unitsOfData(data);
   $('inv_no').value = data.inv_no || '';
+  // Reopening a generated invoice must bring her override back with it, or
+  // pressing Generate again would silently revert the header to the derived
+  // label on a document she had already corrected.
+  if ($('inv_item_label')) $('inv_item_label').value = data.item_label_override || '';
   // Sheet dates arrive in assorted shapes; show MM/DD/YYYY here too.
   $('inv_date').value = toUsDate(toIsoDate(data.inv_date) || data.inv_date) || (data.inv_date || '');
   $('inv_reference').value = data.reference || '';
@@ -5126,6 +5152,10 @@ function collectInvoicePayload() {
 
   return {
     inv_no: $('inv_no').value.trim(),
+    // Empty string, not undefined: the PDF treats blank as "derive it", and
+    // an absent key would read the same but says less to anyone reading the
+    // payload in a log.
+    item_label_override: $('inv_item_label').value.trim(),
     inv_date: $('inv_date').value.trim(),
     reference: $('inv_reference').value.trim(),
     terms: $('inv_terms').value.trim(),
