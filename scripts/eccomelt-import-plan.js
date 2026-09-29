@@ -188,7 +188,19 @@ function build(table) {
             const item = get('item');
             const amount = num(get('amount'));
             if (!item && amount === null) continue;   // a subtotal row, not a line
-            cur.lines.push({ item, net: num(get('net')), price: num(get('price')), amount });
+            // ── A LINE'S WEIGHT IS NOT ALWAYS IN THE NET COLUMN ───────────
+            // The grade lines are inconsistent about where the weight goes.
+            // Mazariegos PO#4302902 puts 40,479 in Net; Calderon PO#4302763
+            // puts 39,025 in Delivery Gross. Reading only Net found nothing
+            // for Calderon and skipped a $71,297.06 load as weightless.
+            //
+            // Its three lines sum to 41,260 — exactly the Delivery Gross on
+            // its own header — so the weight was there, in the next column
+            // along.
+            cur.lines.push({
+                item, price: num(get('price')), amount,
+                net: num(get('net')) ?? num(get('dgross')) ?? num(get('lgross')),
+            });
         }
     }
     return loads;
@@ -281,11 +293,35 @@ function build(table) {
         }
     }
 
+    // ── NO WEIGHT AT ALL MEANS NO LOAD ────────────────────────────────────
+    // Apsara, 2026-09-29: "if gross,net not there,ignore it".
+    //
+    // Taken literally that would drop Calderon PO#4302763, and it should not:
+    // its header net is blank but its three grade lines carry
+    //     39,025 + 966 + 1,269 = 41,260
+    // which is EXACTLY the Delivery Gross on the header. The weight is there;
+    // it is written line-wise. Dropping it would have thrown away a
+    // $71,297.06 load on a formatting difference.
+    //
+    // So the net is taken from the header, else summed from the lines, and a
+    // load is ignored only when there is no weight ANYWHERE — header net,
+    // header gross and line nets all absent. That is a PO nothing has shipped
+    // against yet, which is what she means by "not there".
+    for (const l of loads) {
+        const lineNet = l.lines.reduce((t, x) => t + (x.net || 0), 0);
+        l.netFrom = 'header';
+        if (l.net === null && lineNet > 0) { l.net = Math.round(lineNet * 100) / 100; l.netFrom = 'lines'; }
+    }
+
     const creatable = [], skipped = [];
     for (const l of loads) {
         if (l.cancelled) { skipped.push({ ...l, why: 'marked CANCELLED on the sheet' }); continue; }
-        if (l.amount === null && l.net === null) {
-            skipped.push({ ...l, why: 'a PO with no load against it yet — nothing to invoice' });
+        if (l.net === null && l.gross === null) {
+            skipped.push({ ...l, why: 'no gross and no net anywhere — a PO with nothing shipped against it' });
+            continue;
+        }
+        if (l.net === null) {
+            skipped.push({ ...l, why: `gross ${l.gross} but no net, and none in its lines — cannot price it` });
             continue;
         }
         creatable.push(l);
@@ -324,7 +360,7 @@ function build(table) {
     for (const l of creatable) {
         console.log(`    ${(l.date || '—').padEnd(12)} ${l.supplier.slice(0, 16).padEnd(17)}`
             + `${(l.ref || '—').padEnd(14)} net ${String(l.net ?? '—').padEnd(9)}`
-            + `price ${'(empty)'.padEnd(9)}${l.container ? l.container : l.localNo + '  (generated)'}`);
+            + `${l.netFrom === 'lines' ? '(from lines) ' : ''}price ${'(empty)'.padEnd(9)}${l.container ? l.container : l.localNo + '  (generated)'}`);
     }
 
     console.log(`\n  INVOICES (${CUSTOMER}) — price and amount are on the tab`);
