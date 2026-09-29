@@ -138,6 +138,11 @@ function build(table) {
         item: col('Item'), net: col('Net'), price: col('Price'), amount: col('Amount'),
         deduct: col('Deductible'), recd: col('Received payment'),
         appt: col('Appointment Date'), pickup: col('Pickup Date'),
+        // The appointment NUMBER (4008260), not the date — a separate column
+        // further right, and the only short per-load identifier on the tab.
+        // Reading the date column for it is why the first version fell
+        // through to the long fallback on every row.
+        apptNo: col('Appointment'),
         lgross: col('Loaded Gross'), dgross: col('Delivery Gross'),
         ltare: col('Loaded Tare'), dtare: col('Delivery Tare'),
     };
@@ -167,6 +172,7 @@ function build(table) {
                 ref: get('ref').replace(/\s+/g, ' ').trim(),
                 container: get('container'),
                 date: get('appt') || get('pickup'),
+                apptNo: get('apptNo'),
                 item: get('item'),
                 gross: num(get('dgross')) ?? num(get('lgross')),
                 tare: num(get('dtare')) ?? num(get('ltare')),
@@ -200,6 +206,52 @@ function build(table) {
             }
         }
     }
+
+    // ── A LOCAL DELIVERY NUMBER, WHERE THERE IS NO CONTAINER ──────────────
+    // Apsara, 2026-09-29: "No container number -->You generate some local
+    // delivery number." 34 of 35 loads have none, and without one the bill
+    // and the invoice cannot join — helpers/margin.js keys on booking AND
+    // container, so each load would become two half-rows with its margin
+    // computed nowhere.
+    //
+    // THREE RULES, each of which would be a bug if broken:
+    //
+    //   DERIVED, NEVER COUNTED. The number comes from the row itself — her
+    //   appointment number where there is one, otherwise date + PO + net.
+    //   A running counter would hand the same load a different number on a
+    //   second run, so re-importing would DUPLICATE rather than match. This
+    //   script is meant to be run twice.
+    //
+    //   IDENTICAL ON BOTH SIDES. The bill and the invoice for one load get
+    //   the same string. That is the entire point; a number that differed
+    //   between them would join nothing while looking like it should.
+    //
+    //   OBVIOUSLY NOT A CONTAINER. Real ones are four letters and seven
+    //   digits (HMMU1234567). These are prefixed LCL- so nobody downstream —
+    //   a BOL, a broker, a packing list — can mistake one for a real
+    //   container. Nothing in this codebase validates the format (margin.js
+    //   only trims and upper-cases before joining), which is exactly why the
+    //   prefix has to carry the warning instead.
+    const localNo = (l) => {
+        const appt = String(l.apptNo || '').replace(/\D/g, '');
+        if (appt) return `LCL-${appt}`;
+        const d = String(l.date || '').replace(/\D/g, '');          // MMDDYYYY
+        const ref = String(l.ref || '').replace(/[^0-9]/g, '').slice(-6);
+        const net = l.net === null ? 'X' : String(Math.round(l.net));
+        return `LCL-${d || 'NODATE'}-${ref || 'NOPO'}-${net}`;
+    };
+    for (const l of loads) {
+        l.localNo = l.container ? null : localNo(l);
+        l.joinKey = l.container || l.localNo;
+    }
+    // Two loads landing on one number would silently merge into a single
+    // container — the opposite of the problem this solves.
+    const byKey = new Map();
+    for (const l of loads) {
+        if (!l.joinKey) continue;
+        byKey.set(l.joinKey, (byKey.get(l.joinKey) || []).concat([l]));
+    }
+    const collisions = [...byKey.entries()].filter(([, v]) => v.length > 1);
 
     // ── THE HEADER AMOUNT IS NOT ALWAYS THE AMOUNT ────────────────────────
     // On some loads the supplier row carries the whole figure. On others it
@@ -272,7 +324,7 @@ function build(table) {
     for (const l of creatable) {
         console.log(`    ${(l.date || '—').padEnd(12)} ${l.supplier.slice(0, 16).padEnd(17)}`
             + `${(l.ref || '—').padEnd(14)} net ${String(l.net ?? '—').padEnd(9)}`
-            + `price ${'(empty)'.padEnd(9)}${l.container ? l.container : 'NO CONTAINER'}`);
+            + `price ${'(empty)'.padEnd(9)}${l.container ? l.container : l.localNo + '  (generated)'}`);
     }
 
     console.log(`\n  INVOICES (${CUSTOMER}) — price and amount are on the tab`);
@@ -340,13 +392,25 @@ function build(table) {
 
     // ── WHAT WOULD STILL BE WRONG AFTERWARDS ──────────────────────────────
     const noContainer = creatable.filter((l) => !l.container);
+    if (collisions.length) {
+        console.log(`\n  TWO LOADS, ONE NUMBER — ${collisions.length}`);
+        console.log(`  ${'─'.repeat(W)}`);
+        console.log(`  These would merge into one container, which is worse than having none.\n`);
+        for (const [k, v] of collisions) {
+            console.log(`    ${k}`);
+            for (const l of v) console.log(`        ${(l.date || '—').padEnd(12)} ${l.supplier.padEnd(16)} ${l.ref || '—'}  net ${l.net ?? '—'}`);
+        }
+    }
+
     console.log(`\n  BEFORE YOU SAY YES`);
     console.log(`  ${'─'.repeat(W)}`);
-    console.log(`\n  · ${noContainer.length} of ${creatable.length} have NO CONTAINER NUMBER.`);
-    console.log(`    helpers/margin.js keys on booking AND container, so these bills and`);
-    console.log(`    invoices cannot join to each other. Each pair becomes two half-rows in`);
-    console.log(`    the margin report — the same defect scripts/why-unjoined.js already`);
-    console.log(`    finds 23 live instances of. Importing them adds ${noContainer.length} more.`);
+    console.log(`\n  · ${noContainer.length} of ${creatable.length} had no container number and were given a`);
+    console.log(`    LOCAL DELIVERY NUMBER (LCL-...), her instruction. The bill and the`);
+    console.log(`    invoice for one load share it, so each pair joins and its margin is`);
+    console.log(`    computed — without one they would be two half-rows, the same defect`);
+    console.log(`    scripts/why-unjoined.js already finds 23 live instances of.`);
+    console.log(`    Derived from the row, not counted, so running this twice matches`);
+    console.log(`    rather than duplicates. ${collisions.length === 0 ? 'No two loads share a number.' : String(collisions.length) + ' COLLIDE — see above.'}`);
     if (multi.length) {
         console.log(`\n  · ONE SUPPLIER, SEVERAL SPELLINGS:`);
         for (const [, set] of multi) console.log(`      ${[...set].join('  /  ')}`);
