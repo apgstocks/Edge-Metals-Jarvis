@@ -7698,6 +7698,29 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
         }
     });
 
+    // ── PORTS SHE HAS ACTUALLY USED ───────────────────────────────────────
+    // Apsara, 2026-09-29: "In port of discharge,save when generated,for say
+    // Busan,South Korea.Port of loading as Los Angeles,CA... I want a drop
+    // down to be added as i type."
+    //
+    // Not a shipped list of world seaports — see helpers/ports.js for why.
+    // The suggestions are her own history: every generated invoice's saved
+    // form state, plus the POL/POD already on her bookings so the dropdown is
+    // useful before she has generated anything.
+    //
+    // Read only, and it fails soft to an empty list: a type-ahead that 500s
+    // would block typing in the box it is meant to help with.
+    app.get('/api/ports', (req, res) => {
+        try {
+            const ports = require('./helpers/ports');
+            const which = req.query.which === 'loading' ? 'loading' : 'discharge';
+            res.json({ which, ports: ports.search(which, req.query.q || '', 10) });
+        } catch (e) {
+            console.error('[ports] lookup failed:', e.message);
+            res.json({ which: req.query.which || 'discharge', ports: [] });
+        }
+    });
+
     app.get('/api/customer-pricing/list', (req, res) => {
         try { res.json(proformaPricing.listCustomers()); }
         catch (e) { res.status(500).json({ error: e.message }); }

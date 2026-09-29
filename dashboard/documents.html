@@ -681,8 +681,29 @@ body[data-theme="light"] {
           <div class="field"><label>Booking #</label><input id="inv_booking"></div>
           <div class="field"><label>Seal #</label><input id="inv_seal"></div>
           <div class="field"><label>Place of Receipt</label><input id="inv_receipt"></div>
-          <div class="field"><label>Port of Loading</label><input id="inv_pol"></div>
-          <div class="field"><label>Port of Discharge</label><input id="inv_pod"></div>
+          <!-- ── THE PORTS SHE HAS ACTUALLY USED ───────────────────────
+               Apsara, 2026-09-29: "In port of discharge,save when generated,
+               for say Busan,South Korea.Port of loading as Los Angeles,CA.
+               These are jsut examples.I want a drop down to be added as i
+               type."
+
+               Not a shipped list of world seaports. She writes "Busan,South
+               Korea" and "Los Angeles,CA" — her own spellings, and those
+               exact strings print on the invoice a broker reads. A canonical
+               list would offer "Pusan, KR" and she would either pick
+               something that does not match her other paperwork or stop
+               using the dropdown. The suggestions are her own history: every
+               generated invoice, plus the POL/POD already on her bookings so
+               the list is useful before she has generated anything.
+
+               Still a plain text box. The dropdown offers; it never
+               constrains — a new port must be typeable the first time. -->
+          <div class="field" style="position:relative;"><label for="inv_pol">Port of Loading</label>
+            <input id="inv_pol" autocomplete="off">
+            <div id="invPolList" class="autocomplete-list hidden"></div></div>
+          <div class="field" style="position:relative;"><label for="inv_pod">Port of Discharge</label>
+            <input id="inv_pod" autocomplete="off">
+            <div id="invPodList" class="autocomplete-list hidden"></div></div>
           <div class="field"><label>Country of Origin</label><input id="inv_country_of_origin" value="USA"></div>
           <!-- ── HOW IT WAS LOADED ─────────────────────────────────────────
                Apsara, 2026-09-22: "When it is loosely loaded/pallets,ask when
@@ -4031,6 +4052,67 @@ $('inv_buyer').addEventListener('input', () => {
   renderInvBuyerList(searchAddressBook(q));
 });
 $('inv_buyer').addEventListener('blur', () => setTimeout(() => $('invBuyerList').classList.add('hidden'), 150));
+
+// ── PORT TYPE-AHEAD ────────────────────────────────────────────────────────
+// Apsara, 2026-09-29: "I want a drop down to be added as i type."
+//
+// One function for both boxes. Served from /api/ports, which reads her own
+// history — see helpers/ports.js for why this is not a canonical port list.
+//
+// THREE THINGS COPIED DELIBERATELY from the consignee box above, each of
+// which was learned the hard way there and is written up at
+// renderConsigneeList:
+//   · 'mousedown' with preventDefault, not 'click' — a click loses the race
+//     against the blur timer, which is what "consignee not clickable" was.
+//   · selection by data-idx into the rendered array, never by value parsing.
+//   · the blur hide is on a timer, so the mousedown lands first.
+//
+// It NEVER constrains the box. A port she has not used before has to be
+// typeable the first time, and the second time it will be in the list.
+function wirePortBox(inputId, listId, which) {
+  const inp = $(inputId), box = $(listId);
+  if (!inp || !box) return;
+  let shown = [];
+
+  const hide = () => { box.classList.add('hidden'); box.innerHTML = ''; };
+  const render = (rows) => {
+    shown = rows || [];
+    if (!shown.length) return hide();
+    box.innerHTML = shown.map((e, i) =>
+      `<div class="autocomplete-item" data-idx="${i}">${esc(e.value)}</div>`).join('');
+    box.classList.remove('hidden');
+    box.querySelectorAll('.autocomplete-item').forEach((el) =>
+      el.addEventListener('mousedown', (ev) => {
+        ev.preventDefault();
+        const hit = shown[Number(el.dataset.idx)];
+        if (hit) inp.value = hit.value;
+        hide();
+      }));
+  };
+
+  // Asked of the server on each keystroke, but only the LAST answer is drawn.
+  // Responses can come back out of order, and a slow reply for "bu" arriving
+  // after "busan" would repaint the list with the wrong, wider set under her
+  // cursor.
+  let seq = 0;
+  const look = async () => {
+    const mine = ++seq;
+    try {
+      const d = await api(`/api/ports?which=${encodeURIComponent(which)}&q=${encodeURIComponent(inp.value.trim())}`);
+      if (mine !== seq) return;
+      render(d.ports || []);
+    } catch (e) { hide(); }        // never block typing in the box it helps
+  };
+
+  inp.addEventListener('input', look);
+  // Focusing an empty box offers the ports she uses most, which is the whole
+  // point on a field she fills the same way most weeks.
+  inp.addEventListener('focus', look);
+  inp.addEventListener('blur', () => setTimeout(hide, 150));
+  inp.addEventListener('keydown', (e) => { if (e.key === 'Escape') hide(); });
+}
+wirePortBox('inv_pol', 'invPolList', 'loading');
+wirePortBox('inv_pod', 'invPodList', 'discharge');
 
 function showInvStep(n) {
   $('invStep1').closest('.card').classList.toggle('hidden', n !== 1);
