@@ -215,6 +215,11 @@ async function addOutboundLoad(entry) {
     // buildRecord also runs on every edit, and an edit must not mint a new
     // ticket or wipe the one this record was created with.
     rec.client_request_id = require('./oncePerSave').normTicket(entry.client_request_id);
+    // ── ONE DRAFT, ONE LOAD ──────────────────────────────────────────────
+    // Apsara, 2026-09-29: "ALWAYS ONE LOAD SHOULD BE CREATED". Per draft,
+    // never expires — see helpers/oncePerSave.js. Set outside buildRecord
+    // for the same reason as the ticket: an edit must not mint or wipe it.
+    rec.draft_id = require('./oncePerSave').normDraftId(entry.draft_id);
 
     // ── ONE SAVE, ONE RECORD ─────────────────────────────────────────────
     // Apsara, 2026-09-15: "I just added one.But two ones are created" — two
@@ -225,7 +230,9 @@ async function addOutboundLoad(entry) {
     // requests both find nothing and both write.
     let already = null;
     await mutateJson(cfg.OUTBOUND_LOADS_FILE, [], (loads) => {
-        already = require('./oncePerSave').findSpent(loads, rec.client_request_id);
+        const once = require('./oncePerSave');
+        already = once.findSpent(loads, rec.client_request_id)
+            || once.findByDraft(loads, rec.draft_id);
         if (already) return loads;   // returned unchanged — nothing is written
         // One buyer, one spelling — see the twin comment in helpers/loads.js.
         rec.buyer = require('./canonicalName').canonicalName(loads.map((l) => l.buyer), rec.buyer);
@@ -253,6 +260,18 @@ async function editOutboundLoad(id, entry) {
     if (prior) {
         patch.delivery_status = prior.delivery_status || 'in_transit';
         patch.delivered_at = prior.delivered_at || null;
+        // ── AND MUST NOT FREE THE DRAFT TO BECOME A SECOND LOAD ──────────
+        // buildRecord does not name draft_id, so without this line an edit
+        // wipes it — and the duplicate Apsara reported on 2026-09-29 came
+        // from a flow with an edit in the middle of it ("He just saved it
+        // first.then edit,continue or cancel.he clicked continue"). A load
+        // that forgets which draft it came from lets that draft create
+        // another one, which is the rule this is here to hold.
+        patch.draft_id = prior.draft_id || null;
+        // NOTE (mine, not hers): client_request_id is wiped by the same
+        // mechanism and is NOT restored here, because that is a separate
+        // pre-existing weakness and fixing it was not asked for. Flagged to
+        // Apsara 2026-09-30; a one-line change if she wants it.
     }
     // An edit invalidates the ticket. Same rule helpers/loads.js applies to a
     // purchase: the stored PDF shows the OLD figures, so leaving the link in

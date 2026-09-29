@@ -77,4 +77,54 @@ function findSpent(rows, ticket, { now = Date.now() } = {}) {
     return null;
 }
 
-module.exports = { findSpent, normTicket, TICKET_TTL_MS };
+// ── A DRAFT MAY BECOME AT MOST ONE LOAD, EVER ───────────────────────────────
+// Apsara, 2026-09-29, on a load that generated twice ("He just saved it
+// first.then edit,continue or cancel.he clicked continue,then it generated
+// twice"), rejecting a fix that only narrowed the window:
+//
+//     "NO..IT IS BUSINESS LOGIC LOSE.ALWAYS ONE LOAD SHOULD BE CREATED"
+//
+// She is right, and the ticket above cannot carry that rule. A ticket is
+// minted per SAVE ATTEMPT, so two deliberate saves of the same draft carry
+// two different tickets and both are honoured — which is correct for the
+// problem the ticket was built for, and wrong for this one. Continuing a
+// draft is not a retry; it is a second save attempt of the SAME piece of
+// paper, and a piece of paper is one delivery.
+//
+// So the DRAFT is the key. It is the only identifier that survives the
+// things that produced the duplicate: a race between the save and the
+// draft's deletion, the form being opened twice, the app and the website
+// both holding it, a network retry, a second Continue a week later.
+//
+// ── NO TTL HERE, DELIBERATELY (my call, not hers) ───────────────────────────
+// findSpent forgets a ticket after 24h, which is right for a retry: nothing
+// legitimately re-sends a day later, and tickets would otherwise accumulate
+// forever. A draft is the opposite. "ALWAYS ONE LOAD" has no clock in it —
+// a draft that became a load in June must not become a second one in
+// September. The lookup is over the loads that exist, so nothing accumulates
+// that was not already being stored.
+//
+// ── ABSENT MEANS TODAY'S BEHAVIOUR ──────────────────────────────────────────
+// A create with no draft id — the voice/assistant path, a straight-through
+// save that never autosaved, any caller written before this — returns null
+// here and proceeds exactly as it did. The flag marks the NEW shape; nothing
+// has to be set to keep an existing path working.
+function normDraftId(v) {
+    const s = String(v == null ? '' : v).trim();
+    // Shape-checked on purpose. An empty string, a stray null-as-text, or
+    // anything that is not one of helpers/loadDrafts.js's ids is not a draft,
+    // and must not become a key that two unrelated saves could share.
+    if (!s || s.length > 100 || !/^DRAFT_/.test(s)) return null;
+    return s;
+}
+
+function findByDraft(rows, draftId) {
+    const d = normDraftId(draftId);
+    if (!d) return null;
+    for (const r of (rows || [])) {
+        if (r && normDraftId(r.draft_id) === d) return r;
+    }
+    return null;
+}
+
+module.exports = { findSpent, normTicket, TICKET_TTL_MS, findByDraft, normDraftId };

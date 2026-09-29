@@ -1805,6 +1805,11 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
                 created_by: b.created_by || req.role || 'unknown',
                 // One-time ticket — see helpers/oncePerSave.js.
                 client_request_id: b.client_request_id,
+                // The draft this load is being typed up from, if any. One
+                // draft may become at most one load — Apsara, 2026-09-29:
+                // "ALWAYS ONE LOAD SHOULD BE CREATED". Optional: absent is
+                // the old behaviour, unchanged.
+                draft_id: b.draft_id,
             });
 
             const { uploadScaleTicketImage } = require('./helpers/drive');
@@ -5501,6 +5506,9 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
                 // save carrying a spent ticket gets the first record back
                 // instead of creating a second.
                 client_request_id: b.client_request_id,   // outbound
+                // One draft, one load — Apsara, 2026-09-29: "ALWAYS ONE LOAD
+                // SHOULD BE CREATED". Optional; absent is unchanged.
+                draft_id: b.draft_id,
             });
             // The load is saved either way. Scheduling the enquiry is a
             // second, weaker promise — an unknown trucker or a past ETA must

@@ -5574,6 +5574,14 @@ function wireLoadsEvents() {
         // Minted when the form opened — see resetLoadModal. Sent on CREATE
         // only; it is meaningless on an edit, which targets a known id.
         client_request_id: saveTicket,
+        // ── THE DRAFT THIS IS BEING TYPED UP FROM ──────────────────────
+        // Apsara, 2026-09-29, on a load that generated twice: "ALWAYS ONE
+        // LOAD SHOULD BE CREATED". The ticket above is per save attempt, so
+        // Save → edit → Continue mints two of them and both are honoured.
+        // This one is per draft and the server never forgets it, so the
+        // second save gets the FIRST load back. Null when the form never
+        // autosaved, which the server reads as "no draft".
+        draft_id: currentDraftId,
       };
       if (loadModalMode === 'sale') {
         // Outbound: the party typed into the seller field IS the buyer here,
@@ -5588,6 +5596,7 @@ function wireLoadsEvents() {
           weight_unit: payload.weight_unit,
           items: payload.items,
           client_request_id: payload.client_request_id,
+          draft_id: payload.draft_id,   // one draft, one load — see above
         };
         const sendSale = (extra) => (isEdit
           ? api(`/api/outbound-loads/${encodeURIComponent(editingLoadId)}`, { method: 'PUT', body: JSON.stringify({ ...salePayload, ...extra }) })

@@ -332,9 +332,17 @@ async function addLoad(entry) {
     // See helpers/oncePerSave.js for what was ruled out. The lookup runs
     // inside the mutator so it is under the file lock.
     rec.client_request_id = require('./oncePerSave').normTicket(entry.client_request_id);
+    // ── ONE DRAFT, ONE LOAD ──────────────────────────────────────────────
+    // Apsara, 2026-09-29: "ALWAYS ONE LOAD SHOULD BE CREATED". The ticket
+    // above is per save ATTEMPT and cannot carry that; this is per draft and
+    // never expires. See helpers/oncePerSave.js. Absent (voice path, a save
+    // that never autosaved) behaves exactly as before.
+    rec.draft_id = require('./oncePerSave').normDraftId(entry.draft_id);
     let already = null;
     await mutateJson(cfg.LOADS_FILE, [], (loads) => {
-        already = require('./oncePerSave').findSpent(loads, rec.client_request_id);
+        const once = require('./oncePerSave');
+        already = once.findSpent(loads, rec.client_request_id)
+            || once.findByDraft(loads, rec.draft_id);
         if (already) return loads;   // unchanged — nothing written
         // ── ONE SELLER, ONE SPELLING ─────────────────────────────────────
         // Apsara, 2026-09-16: "Sellers name/bUyers name-make it case
