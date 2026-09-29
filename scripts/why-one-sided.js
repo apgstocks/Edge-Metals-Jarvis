@@ -43,6 +43,11 @@
 const path = require('path');
 const ROOT = path.join(__dirname, '..');
 
+const argValue = (name) => {
+    const i = process.argv.indexOf(name);
+    return i === -1 ? null : process.argv[i + 1];
+};
+
 (async () => {
     const cfg = require(path.join(ROOT, 'config'));
     const sync = require(path.join(ROOT, 'helpers/metalsSheetSync'));
@@ -76,7 +81,22 @@ const ROOT = path.join(__dirname, '..');
     // ── WHICH CONTAINERS ──────────────────────────────────────────────────
     // Named on the command line, or worked out the same way the sweep does:
     // grouped by container, one side present and not the other.
-    let wanted = process.argv.slice(2).map(norm).filter(Boolean);
+    // ── 2025 IS NOT WANTED ────────────────────────────────────────────────
+    // Apsara, 2026-09-29, on the five the sync should have been offering —
+    // every one of them dated 2025: "if its 2025 i dont want it". Same rule
+    // as the Bills ledger, where she asked for 2026 only.
+    //
+    // COUNTED, NOT SILENT. A filter that quietly drops rows is how a real
+    // one goes missing; the summary says how many were set aside so the
+    // number is visible even when the list is not.
+    const YEAR_FROM = Number(argValue('--from') || 2026);
+    const ALL_YEARS = process.argv.includes('--all-years');
+    const yearOf = (row) => {
+        const m = String(row && row.date || '').match(/(20\d\d)/);
+        return m ? Number(m[1]) : null;
+    };
+
+    let wanted = process.argv.slice(2).filter((a) => !a.startsWith('--')).map(norm).filter(Boolean);
     if (!wanted.length) {
         const sides = new Map();
         const put = (side, c) => {
@@ -131,7 +151,29 @@ const ROOT = path.join(__dirname, '..');
         return null;
     };
 
-    const tally = { absent: 0, halfOnSheet: 0, rejected: 0, shouldOffer: 0 };
+    // ── WHAT KIND OF THING IS IN THE CONTAINER FIELD ──────────────────────
+    // The live run turned up three different problems wearing one label:
+    //   MSBU3351954   a real container, genuinely missing its other half
+    //   EMHU260742    4 letters + SIX digits — a container is 4 + 7, so the
+    //                 check digit was dropped when it was typed
+    //   PO6, LOCAL    not a container at all; a PO number or a placeholder
+    //                 sitting in the container field
+    // "Type in the missing half" is the right advice for the first and the
+    // wrong advice for the other two, so they are named apart.
+    const PROPER = /^[A-Z]{4}\d{7}$/;
+    const kindOf = (c) => PROPER.test(c) ? 'proper'
+        : /^[A-Z]{4}\d+$/.test(c) ? 'malformed' : 'not-a-container';
+
+    // A dropped check digit means Jarvis's number can never equal the
+    // sheet's, so the other half looks absent when it is sitting right
+    // there. Any sheet container starting with the same ten characters is
+    // reported — not merged, reported. Correcting a container number on a
+    // live ledger is hers to do.
+    const allSheet = new Set([...sB.keys(), ...sS.keys()]);
+    const nearMatches = (c) => [...allSheet].filter((x) => x !== c && x.startsWith(c) && x.length > c.length);
+
+    const tally = { absent: 0, halfOnSheet: 0, rejected: 0, shouldOffer: 0,
+                    skippedYear: 0, malformed: 0, notContainer: 0, nearFound: 0 };
 
     for (const c of wanted) {
         const haveBill = jB.has(c), haveSale = jS.has(c);
@@ -140,8 +182,39 @@ const ROOT = path.join(__dirname, '..');
         const rows = (missing === 'bill' ? sB.get(c) : sS.get(c)) || [];
         const other = (missing === 'bill' ? sS.get(c) : sB.get(c)) || [];
 
-        console.log(`\n  ${c}`);
+        // The year comes off whichever side Jarvis actually holds.
+        const mine = (haveBill ? jB.get(c) : jS.get(c)) || [];
+        const yr = mine.map(yearOf).find((y) => y) || null;
+        if (!ALL_YEARS && yr !== null && yr < YEAR_FROM) { tally.skippedYear += 1; continue; }
+
+        const kind = kindOf(c);
+        if (kind === 'malformed') tally.malformed += 1;
+        if (kind === 'not-a-container') tally.notContainer += 1;
+
+        console.log(`\n  ${c}${yr ? `   (${yr})` : ''}`);
         console.log(`      Jarvis has the ${side}; the ${missing} is missing`);
+
+        if (kind === 'malformed') {
+            const near = nearMatches(c);
+            console.log(`      -> NOT A VALID CONTAINER NUMBER: 4 letters + ${c.length - 4} digits, needs 7.`);
+            console.log(`         The check digit was dropped when it was typed, so this can`);
+            console.log(`         never equal the sheet's number even when both halves exist.`);
+            if (near.length) {
+                tally.nearFound += 1;
+                console.log(`         THE SHEET HAS: ${near.join(', ')}`);
+                console.log(`         Almost certainly the same container. Correcting it in Jarvis`);
+                console.log(`         is yours to do — this will not touch a live container number.`);
+            } else {
+                console.log(`         Nothing on the sheet starts with these ${c.length} characters either.`);
+            }
+            continue;
+        }
+        if (kind === 'not-a-container') {
+            console.log(`      -> NOT A CONTAINER NUMBER AT ALL. Something else is in that`);
+            console.log(`         field — a PO number, or a placeholder. Until it is a real`);
+            console.log(`         container this row can never join to anything.`);
+            continue;
+        }
 
         if (!rows.length && !other.length) {
             tally.absent += 1;
@@ -181,6 +254,14 @@ const ROOT = path.join(__dirname, '..');
     console.log(`  sheet is half-filled too     ${tally.halfOnSheet}`);
     console.log(`  REJECTED by looksLikeShipment ${tally.rejected}   <- silent, and fixable`);
     console.log(`  should already be offered    ${tally.shouldOffer}`);
+    console.log(`  ${'-'.repeat(74)}`);
+    console.log(`  malformed container number   ${tally.malformed}`
+        + (tally.nearFound ? `   (${tally.nearFound} match a longer one on the sheet)` : ''));
+    console.log(`  not a container at all       ${tally.notContainer}`);
+    if (!ALL_YEARS) {
+        console.log(`  set aside as before ${YEAR_FROM}      ${tally.skippedYear}   `
+            + `(her rule; --all-years to include)`);
+    }
     console.log('');
     if (tally.rejected) {
         console.log(`  The rejected ones are the finding. looksLikeShipment returns a bare`);
