@@ -270,6 +270,221 @@ section('E — the boxes on the screen');
        /catch \(e\) \{ hide\(\); \}/.test(fn));
 }
 
+// ══════════════════════════════════════════════════════════════════════════
+section('F — GENERATED INVOICES, LISTED AND EDITABLE');
+// ══════════════════════════════════════════════════════════════════════════
+// Apsara, 2026-09-29, same message: "Generated invoice should be editable.It
+// should display below the invoice things.with edit option."
+//
+// Until now the only way back to a generated invoice was the banner inside
+// Review and Generate, which appears ONLY once she has already loaded that
+// exact container — so re-editing meant remembering which container it was
+// and fetching it first. The list is the missing half.
+{
+    const http = require('http');
+    const iv = require(path.join(ROOT, 'helpers/invoiceVersions'));
+
+    write('invoice_versions.json', {
+        // ── THE TWO VERSIONS MUST DIFFER ──────────────────────────────────
+        // The first fixture here had identical buyer and inv_no on both, so
+        // reading the OLDEST version instead of the newest was invisible —
+        // the mutation passed. That is the exact bug worth catching: she
+        // corrects a buyer name, regenerates, and the list goes on showing
+        // the name she fixed.
+        HMMU1111111: [
+            { inv_no: 'EM-100-DRAFT', buyer: 'Eccomelt LL', container_no: 'HMMU1111111',
+              port_discharge: 'Pusan', saved_at: '2026-09-01T10:00:00Z' },
+            { inv_no: 'EM-100', buyer: 'Eccomelt LLC', container_no: 'HMMU1111111',
+              port_discharge: 'Busan, South Korea', line_items: [{ description: 'Al combo' }],
+              saved_at: '2026-09-02T10:00:00Z' },
+        ],
+        HMMU2222222: [
+            { inv_no: 'EM-101', buyer: 'MK Trading', container_no: 'HMMU2222222',
+              port_discharge: 'Nhava Sheva, India', saved_at: '2026-09-20T10:00:00Z' },
+        ],
+    });
+
+    const list = iv.listGeneratedInvoices();
+    ck('every generated container is listed', list.length === 2, String(list.length));
+    ck('  newest first — the one she wants to correct is the last one she made',
+       list[0].container === 'HMMU2222222', list.map((r) => r.container).join(','));
+    ck('  with what the row needs to be recognised',
+       list[0].inv_no === 'EM-101' && list[0].buyer === 'MK Trading'
+       && list[0].port_discharge === 'Nhava Sheva, India', JSON.stringify(list[0]));
+    ck('  and how many times it has been generated',
+       (list.find((r) => r.container === 'HMMU1111111') || {}).versions === 2,
+       JSON.stringify(list.find((r) => r.container === 'HMMU1111111')));
+
+    // ── THE ROW SHOWS THE LATEST VERSION, NOT THE FIRST ───────────────────
+    // She corrects a buyer name and regenerates; a row built from the oldest
+    // version would keep showing the name she fixed, and she would open it
+    // believing the correction never saved.
+    const em = list.find((r) => r.container === 'HMMU1111111') || {};
+    ck('  the row reflects the LATEST generate, not the first',
+       em.inv_no === 'EM-100' && em.buyer === 'Eccomelt LLC'
+       && em.port_discharge === 'Busan, South Korea', JSON.stringify(em));
+
+    // A SUMMARY, not the payloads. Sending ten full invoice payloads to draw
+    // a ten-row table would make this screen slower the more she used it.
+    ck('  the list does NOT carry the line items',
+       list.every((r) => !('line_items' in r)), JSON.stringify(list[0]));
+
+    // ── THROUGH THE REAL ROUTES ───────────────────────────────────────────
+    const { createApi } = require(path.join(ROOT, 'api'));
+    const app = createApi();
+    const server = await new Promise((r) => { const s = app.listen(0, '127.0.0.1', () => r(s)); });
+    const base = `http://127.0.0.1:${server.address().port}`;
+    const req = (method, pth, { sid } = {}) => new Promise((resolve, reject) => {
+        const headers = {};
+        if (sid) headers.Authorization = `Bearer ${sid}`;
+        const r2 = http.request(base + pth, { method, headers }, (res) => {
+            let raw = ''; res.on('data', (c) => { raw += c; });
+            res.on('end', () => { let j = null; try { j = JSON.parse(raw); } catch (e) {} resolve({ status: res.statusCode, json: j }); });
+        });
+        r2.on('error', reject); r2.end();
+    });
+    const sid = ((await (() => new Promise((resolve, reject) => {
+        const data = JSON.stringify({ password: process.env.ADMIN_PASSWORD });
+        const r2 = http.request(base + '/login', { method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(data) } },
+            (res) => { let raw = ''; res.on('data', (c) => { raw += c; });
+                       res.on('end', () => { let j = null; try { j = JSON.parse(raw); } catch (e) {} resolve({ json: j }); }); });
+        r2.on('error', reject); r2.write(data); r2.end();
+    }))()).json || {}).sid;
+
+    const got = await req('GET', '/api/invoice/history', { sid });
+    ck('the list route answers', got.status === 200, String(got.status));
+    ck('  with both containers', (got.json.invoices || []).length === 2,
+       JSON.stringify(got.json).slice(0, 160));
+
+    // Edit fetches the FULL payload — the same shape /api/invoice/preview
+    // returns, which is why the client can pour it straight into the form.
+    const pay = await req('GET', '/api/invoice/history/payload?container=HMMU1111111', { sid });
+    ck('the payload route answers', pay.status === 200, String(pay.status));
+    ck('  with the MOST RECENT version, not the first',
+       pay.json.payload && Array.isArray(pay.json.payload.line_items),
+       JSON.stringify(pay.json.payload || {}).slice(0, 160));
+    ck('  and strips saved_at out of the form state',
+       pay.json.payload && !('saved_at' in pay.json.payload),
+       'saved_at is not a form field and would be poured into the screen');
+    ck('  handing the timestamp back separately', !!pay.json.saved_at, String(pay.json.saved_at));
+
+    // ── NOTHING SAVED IS A 404, NOT A BLANK ───────────────────────────────
+    // An invoice generated before this store existed is a PDF and has no form
+    // state. Quietly returning an empty payload would wipe the screen she is
+    // on, which is worse than saying so.
+    const none = await req('GET', '/api/invoice/history/payload?container=NOPE0000000', { sid });
+    ck('a container with no saved form is a 404', none.status === 404, String(none.status));
+    ck('  and says why', /generated before|only the PDF/i.test((none.json || {}).error || ''),
+       JSON.stringify(none.json));
+
+    await new Promise((r) => server.close(r));
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+section('G — the list on the screen');
+// ══════════════════════════════════════════════════════════════════════════
+{
+    const web = fs.readFileSync(path.join(ROOT, 'dashboard/documents.html'), 'utf8');
+    ck('there is a generated-invoice list', /id="invGenList"/.test(web));
+    ck('  with an Edit on each row', /class="btn btn-secondary inv-gen-edit"/.test(web));
+
+    // ONE filler for all three ways in. A second one written for this list
+    // would drift, and the symptom is a field that silently stops being
+    // restored on one path only.
+    const fn = web.slice(web.indexOf('async function editGeneratedInvoice'),
+                         web.indexOf('if ($(\'btnInvGenRefresh\')'));
+    ck('Edit reuses applyInvoiceDataToForm, the same filler as the banner',
+       /applyInvoiceDataToForm\(d\.payload\)/.test(fn),
+       'a second filler would drift from the one Load previous edits uses');
+    ck('  and lands her on the review screen', /showInvStep\(3\)/.test(fn));
+    ck('  hiding the banner, which offers what she has just been given',
+       /invVersionBanner'\)\.classList\.add\('hidden'\)/.test(fn),
+       'an offer to load previous edits on top of the edits just loaded reads as a failure');
+
+    // Generating has to put the new invoice into the list, or she scrolls down
+    // to the list she was told about and does not find what she just made.
+    ck('a successful generate refreshes the list',
+       /try \{ loadGeneratedInvoices\(\); \} catch/.test(web),
+       'otherwise the only fix is reloading the page');
+    ck('  and a failed refresh cannot turn a good generate into an error',
+       /try \{ loadGeneratedInvoices\(\); \} catch \(e\) \{/.test(web));
+
+    // Outside the three steps, which are shown one at a time.
+    ck('the list is not inside invStep1/2/3',
+       web.indexOf('id="invGenList"') > web.indexOf('id="invStep3"')
+       && !/id="invStep3"[\s\S]{0,200}id="invGenList"/.test(web),
+       'a list that vanishes when she changes step is hardest to find when she wants it');
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+section('H — no route name is a prefix of another');
+// ══════════════════════════════════════════════════════════════════════════
+// The list was first called /api/invoice/generated, which CONTAINS the
+// existing /api/invoice/generate. tests/invoice-weight-guard.js matches the
+// generator by substring, so a GET of the list was counted as a POST to the
+// generator and the test reported three generate posts where there were two.
+// A log filter or a proxy rule would make the same mistake.
+//
+// Checked across the whole API rather than for this one pair: the trap is not
+// specific to invoices, and the next person adding /api/x/thing beside an
+// existing /api/x/thin deserves to be told at test time.
+{
+    const apiSrc = fs.readFileSync(path.join(ROOT, 'api.js'), 'utf8');
+    const routes = [...new Set(
+        [...apiSrc.matchAll(/app\.(?:get|post|put|patch|delete)\('(\/api\/[^']*)'/g)]
+            .map((m) => m[1])
+            // A path parameter is a wildcard, not a literal prefix — /api/x/:id
+            // and /api/x/list are told apart by the router, not by spelling.
+            .filter((r) => !r.includes(':'))
+    )];
+
+    // ── THREE THAT ALREADY EXISTED ────────────────────────────────────────
+    // Found by this check the first time it ran, and left alone. They are
+    // real — a substring matcher confuses /api/sales with /api/sales-receipts
+    // exactly as it confused generate with generated — but they have been
+    // live for a long time, both clients call them, and renaming a working
+    // route to satisfy a test I wrote today is precisely the widening this
+    // repo keeps paying for. Listed BY NAME rather than by loosening the
+    // rule, so anything new still fails. Flagged to Apsara; hers to call.
+    const KNOWN = new Set([
+        '/api/me  <  /api/metals-trucking',
+        '/api/sales  <  /api/sales-receipts',
+        '/api/sales  <  /api/sales-settlements',
+        // The same family as the bug that prompted this check: an invoice
+        // route whose name extends another invoice route. Anything matching
+        // /api/invoice/preview by substring also matches preview-multi.
+        '/api/invoice/preview  <  /api/invoice/preview-multi',
+    ]);
+
+    const clashes = [];
+    for (const a of routes) {
+        for (const b of routes) {
+            // b is a strict extension of a, and NOT at a path boundary —
+            // /api/invoice/generate vs /api/invoice/generated. A boundary
+            // ('/') is fine: /api/bills and /api/bills/import read cleanly
+            // and no substring matcher confuses them in practice.
+            if (a !== b && b.startsWith(a) && b[a.length] !== '/') {
+                const pair = `${a}  <  ${b}`;
+                if (!KNOWN.has(pair)) clashes.push(pair);
+            }
+        }
+    }
+    ck('no NEW API route is a bare prefix of another',
+       clashes.length === 0,
+       clashes.join('\n        ') || '');
+    // The allowlist must not quietly outlive the routes it excuses — three
+    // entries that no longer match anything would hide a fourth.
+    ck('  and every known exception still exists',
+       [...KNOWN].every((pair) => {
+           const [a, b] = pair.split('  <  ');
+           return routes.includes(a) && routes.includes(b);
+       }),
+       'a stale entry in the allowlist silently excuses nothing, or worse, something else');
+    ck('  and there are routes to check, so this is not vacuous',
+       routes.length > 40, `${routes.length} routes scanned`);
+}
+
 console.log(`\n  ${pass} passed, ${fail} failed`);
 if (fail) { console.log('\n  FAILED:\n' + failures.map((f) => '    - ' + f).join('\n')); process.exit(1); }
 

@@ -7721,6 +7721,52 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
         }
     });
 
+    // ── THE INVOICES SHE HAS GENERATED, AND THE ONE SHE WANTS BACK ────────
+    // Apsara, 2026-09-29: "Generated invoice should be editable.It should
+    // display below the invoice things.with edit option."
+    //
+    // The list is a summary per container; the full form payload comes from
+    // the second route, only when she presses Edit. Ten complete invoice
+    // payloads to draw a ten-row table would make the screen slower the more
+    // she used it.
+    // ── NAMED "history", NOT "generated" ──────────────────────────────────
+    // The first name was /api/invoice/generated, which CONTAINS the existing
+    // /api/invoice/generate as a substring. Anything matching by substring —
+    // tests/invoice-weight-guard.js's fetch stub did, and so would a log
+    // filter or a proxy rule — reads a GET of the list as a POST to the
+    // generator. That test started reporting three generate posts where there
+    // were two, and the "extra" one was this list loading.
+    //
+    // Renamed rather than papering over it in the test: a route whose name is
+    // a prefix of another route's is a trap for the next person too.
+    app.get('/api/invoice/history', requireAdmin, (req, res) => {
+        try { res.json({ invoices: invoiceVersions.listGeneratedInvoices() }); }
+        catch (e) {
+            console.error('[invoice] generated list failed:', e.message);
+            res.status(500).json({ error: e.message });
+        }
+    });
+
+    // The saved form state behind one of them. Same shape /api/invoice/preview
+    // returns, which is why the client can pour it straight into the review
+    // screen with applyInvoiceDataToForm.
+    //
+    // 404 rather than an empty object when there is nothing: an invoice
+    // generated before this store existed is a PDF and has no form state, and
+    // quietly handing back a blank payload would wipe the screen she is on.
+    app.get('/api/invoice/history/payload', requireAdmin, (req, res) => {
+        try {
+            const p = invoiceVersions.getLatestInvoicePayload(req.query.container || '');
+            if (!p) {
+                return res.status(404).json({
+                    error: 'No saved form for this container — it was generated before edits were kept, '
+                         + 'so only the PDF exists.' });
+            }
+            const { saved_at, ...payload } = p;
+            res.json({ container: req.query.container || '', saved_at: saved_at || null, payload });
+        } catch (e) { res.status(500).json({ error: e.message }); }
+    });
+
     app.get('/api/customer-pricing/list', (req, res) => {
         try { res.json(proformaPricing.listCustomers()); }
         catch (e) { res.status(500).json({ error: e.message }); }

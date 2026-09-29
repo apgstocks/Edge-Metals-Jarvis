@@ -69,4 +69,51 @@ function getLatestInvoicePayload(containerNo) {
     return list.length ? list[list.length - 1] : null;
 }
 
-module.exports = { saveInvoiceVersion, getInvoiceVersionSummary, getLatestInvoicePayload };
+// ── EVERY INVOICE SHE HAS GENERATED, NEWEST FIRST ─────────────────────────
+// Apsara, 2026-09-29: "Generated invoice should be editable.It should display
+// below the invoice things.with edit option."
+//
+// Until now the only way back to a generated invoice was the banner on the
+// review screen, which appears ONLY once she has already loaded that exact
+// container — so to re-edit an invoice she had to remember which container it
+// was and go and fetch it first. The list is the missing half: it shows what
+// there is, and Edit pours the saved payload back into the form.
+//
+// A SUMMARY, NOT THE PAYLOADS. Each entry is a handful of fields for the row;
+// the full form state (header, every line item) stays behind
+// getLatestInvoicePayload and is fetched only when she presses Edit. Sending
+// ten complete invoice payloads to render a ten-row table would make this
+// screen slower the longer she uses it.
+//
+// Reads what is there and nothing more — no backfill. An invoice generated
+// before this store existed is a PDF in documents_saved and has no form state
+// to edit, and inventing one would produce a document that looks right and is
+// not what was sent.
+function listGeneratedInvoices() {
+    const all = loadJson(cfg.INVOICE_VERSIONS_FILE, {}) || {};
+    const out = [];
+    for (const [container, versions] of Object.entries(all)) {
+        const list = Array.isArray(versions) ? versions : [];
+        if (!list.length) continue;
+        const last = list[list.length - 1];
+        if (!last) continue;
+        out.push({
+            container,
+            versions: list.length,
+            saved_at: last.saved_at || null,
+            // Whatever the row needs to be recognised. Named from the invoice
+            // form's own keys — this payload is the form, not a booking, so
+            // it is inv_no and buyer rather than invoice_no and customer.
+            inv_no: last.inv_no || last.invoice_no || '',
+            buyer: last.buyer || '',
+            port_discharge: last.port_discharge || '',
+        });
+    }
+    // Newest first: the one she wants to correct is almost always the last one
+    // she made, and scrolling a list to find it is how the wrong row gets
+    // opened.
+    return out.sort((a, b) => String(b.saved_at || '').localeCompare(String(a.saved_at || '')));
+}
+
+module.exports = { saveInvoiceVersion, getInvoiceVersionSummary, getLatestInvoicePayload,
+                   listGeneratedInvoices };
