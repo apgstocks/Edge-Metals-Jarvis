@@ -6518,7 +6518,19 @@ const METALS_TABS = {
   // container. Until now that only existed inside the pay modal, one supplier
   // at a time, and only while she was in the act of paying somebody.
   bills: [['bills', 'Bills'], ['payments', 'Payments'], ['trucking', 'Trucking']],
-  sales: [['outgoing', 'Outgoing'], ['incoming', 'Incoming'],
+  // ── THE LABEL IS 'Sales'; THE ID STAYS 'outgoing' ─────────────────────
+  // Apsara, 2026-09-29: "change the tab name of outgoing to sales in invoice
+  // tab" — and, a message earlier, having asked whether Incoming and Outgoing
+  // were customers and suppliers: they are both the CUSTOMER side. Outgoing
+  // was named for the direction the containers travel and Incoming for the
+  // direction the cash travels, which is why the pair read as opposites when
+  // they are not.
+  //
+  // ONLY the label changes. The id is what openTab, wireMetalsTabs,
+  // metalsTab.sales and every test key on; renaming it would be a rename of
+  // the tab's identity to fix the word on a button. A display string is the
+  // smallest change that does what she asked.
+  sales: [['sales', 'Sales'], ['incoming', 'Incoming'],
           ['freight', 'Freight'], ['commission', 'Commission'],
           // The join, and the reason the two sides were keyed the same way.
           ['margin', 'Margin']],

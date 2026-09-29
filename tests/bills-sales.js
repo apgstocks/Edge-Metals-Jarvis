@@ -758,7 +758,11 @@ section('F — who may see her supplier prices');
        !/id: 'sales-incoming'/.test(html) && !/id: 'metals-trucking'/.test(html),
        'six top-level entries for two subjects is clutter');
     ck('  and the strips name every view',
-       /\['outgoing', 'Outgoing'\]/.test(html) && /\['trucking', 'Trucking'\]/.test(html),
+       // Label 'Sales' since 2026-09-29 — Apsara: "change the tab name of
+       // outgoing to sales in invoice tab". The ID is still 'outgoing',
+       // which is what openTab and wireMetalsTabs key on, and that is the
+       // half this check is about.
+       /\['outgoing', 'Sales'\]/.test(html) && /\['trucking', 'Trucking'\]/.test(html),
        'a view with no tab is a view she cannot reach');
     ck('  and each one actually renders something',
        /if \(tab === 'bills'\) \{ metalsTab\.bills = 'bills'; return renderLedgerTab\('bills'\); \}/.test(html)
