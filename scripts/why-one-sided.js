@@ -161,8 +161,35 @@ const argValue = (name) => {
     // "Type in the missing half" is the right advice for the first and the
     // wrong advice for the other two, so they are named apart.
     const PROPER = /^[A-Z]{4}\d{7}$/;
-    const kindOf = (c) => PROPER.test(c) ? 'proper'
-        : /^[A-Z]{4}\d+$/.test(c) ? 'malformed' : 'not-a-container';
+
+    // ── EMHU / UMX / ESE ARE LOCAL DELIVERIES, NOT TYPOS ──────────────────
+    // Apsara, 2026-09-29: "if its EMHU,UMX,ESE then its local delivery.we
+    // need to fi nd it out.but not right now."
+    //
+    // I had these down as MALFORMED — 4 letters + 6 digits where an ocean
+    // container is 4 + 7 — and this script offered to match them against a
+    // longer number on the sheet. That was wrong, and worth recording as
+    // wrong: they are local delivery references with their own shape, and
+    // "correcting" one would have destroyed a valid identifier that invoices
+    // and BOLs already carry.
+    //
+    // So they are named for what they are and NO correction is suggested.
+    // What a local reference should look like, and whether it should join a
+    // bill to a sale the way a container does, is task #144 and hers.
+    const LOCAL_PREFIX = /^(EMHU|UMXU|UMX|ESE)/;
+
+    // ── BILL_ / SALE_ ARE RECORD IDS THAT LEAKED INTO THE FIELD ───────────
+    // Apsara: "BILL_1789990307231_2eiz5 — DRM ignore all these things likle
+    // BILL_,SALE_". A Jarvis row id sitting in the container column. It
+    // cannot join to anything and it is not something the sheet will ever
+    // supply, so it is dropped before the report rather than listed as a
+    // container with a missing half.
+    const RECORD_ID = /^(BILL|SALE)_/i;
+
+    const kindOf = (c) => RECORD_ID.test(c) ? 'record-id'
+        : PROPER.test(c) ? 'proper'
+        : LOCAL_PREFIX.test(c) ? 'local-delivery'
+        : 'not-a-container';
 
     // A dropped check digit means Jarvis's number can never equal the
     // sheet's, so the other half looks absent when it is sitting right
@@ -173,7 +200,7 @@ const argValue = (name) => {
     const nearMatches = (c) => [...allSheet].filter((x) => x !== c && x.startsWith(c) && x.length > c.length);
 
     const tally = { absent: 0, halfOnSheet: 0, rejected: 0, shouldOffer: 0,
-                    skippedYear: 0, malformed: 0, notContainer: 0, nearFound: 0 };
+                    skippedYear: 0, localDelivery: 0, notContainer: 0, recordId: 0 };
 
     for (const c of wanted) {
         const haveBill = jB.has(c), haveSale = jS.has(c);
@@ -188,25 +215,22 @@ const argValue = (name) => {
         if (!ALL_YEARS && yr !== null && yr < YEAR_FROM) { tally.skippedYear += 1; continue; }
 
         const kind = kindOf(c);
-        if (kind === 'malformed') tally.malformed += 1;
+        // Dropped silently on purpose — her instruction, and a leaked record
+        // id is noise, not a finding. Counted in the summary so the number
+        // is still visible.
+        if (kind === 'record-id') { tally.recordId += 1; continue; }
+        if (kind === 'local-delivery') tally.localDelivery += 1;
         if (kind === 'not-a-container') tally.notContainer += 1;
 
         console.log(`\n  ${c}${yr ? `   (${yr})` : ''}`);
         console.log(`      Jarvis has the ${side}; the ${missing} is missing`);
 
-        if (kind === 'malformed') {
-            const near = nearMatches(c);
-            console.log(`      -> NOT A VALID CONTAINER NUMBER: 4 letters + ${c.length - 4} digits, needs 7.`);
-            console.log(`         The check digit was dropped when it was typed, so this can`);
-            console.log(`         never equal the sheet's number even when both halves exist.`);
-            if (near.length) {
-                tally.nearFound += 1;
-                console.log(`         THE SHEET HAS: ${near.join(', ')}`);
-                console.log(`         Almost certainly the same container. Correcting it in Jarvis`);
-                console.log(`         is yours to do — this will not touch a live container number.`);
-            } else {
-                console.log(`         Nothing on the sheet starts with these ${c.length} characters either.`);
-            }
+        if (kind === 'local-delivery') {
+            console.log(`      -> A LOCAL DELIVERY, not an ocean container.`);
+            console.log(`         No correction offered: these are not typo'd container numbers`);
+            console.log(`         and changing one would destroy a reference that invoices and`);
+            console.log(`         BOLs already carry. What they should look like, and whether`);
+            console.log(`         they should join a bill to a sale, is open — task #144.`);
             continue;
         }
         if (kind === 'not-a-container') {
@@ -255,9 +279,9 @@ const argValue = (name) => {
     console.log(`  REJECTED by looksLikeShipment ${tally.rejected}   <- silent, and fixable`);
     console.log(`  should already be offered    ${tally.shouldOffer}`);
     console.log(`  ${'-'.repeat(74)}`);
-    console.log(`  malformed container number   ${tally.malformed}`
-        + (tally.nearFound ? `   (${tally.nearFound} match a longer one on the sheet)` : ''));
+    console.log(`  local delivery (EMHU/UMX/ESE) ${tally.localDelivery}   (task #144 — not typos)`);
     console.log(`  not a container at all       ${tally.notContainer}`);
+    console.log(`  leaked BILL_/SALE_ record id ${tally.recordId}   (ignored, her instruction)`);
     if (!ALL_YEARS) {
         console.log(`  set aside as before ${YEAR_FROM}      ${tally.skippedYear}   `
             + `(her rule; --all-years to include)`);
