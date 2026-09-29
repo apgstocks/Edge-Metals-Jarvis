@@ -238,8 +238,16 @@ section('D — her columns, in her order');
     // her sheet's one column ("Advance /Trucking") is where both figures come
     // from and reading them side by side is how she checks the split.
         'Supplier price', 'Supplier invoice amount', 'Trucker', 'Trucking', 'Advance',
-        'Payable', 'Balance', 'Photos'];
-    ck('the bill has her columns, less Carrier, plus Advance and Photos',
+    // ── PAID ──────────────────────────────────────────────────────────────
+    // Apsara, 2026-09-29: "What if i want to see the paid amount for bills".
+    //
+    // It was computed on every row all along and shown nowhere: the table
+    // had Payable, Advance and Balance, so the screen carried the RESULT of
+    // paying a supplier and never the payment. Between Payable and Balance
+    // because that is the order the arithmetic runs in — Payable − Paid −
+    // Advance = Balance.
+        'Payable', 'Paid', 'Balance', 'Photos'];
+    ck('the bill has her columns, less Carrier, plus Advance, Paid and Photos',
        bills.tableColumns().length === wanted.length, String(bills.tableColumns().length));
     ck('  Carrier is off the table but still on the form',
        !bills.tableColumns().some((c) => c.key === 'carrier')
@@ -269,7 +277,11 @@ section('D — her columns, in her order');
        JSON.stringify(Object.keys(bills.facets([]))));
     ck('  with every computed one marked',
        bills.COLUMNS.filter((c) => c.derived).map((c) => c.key).join(',')
-       === 'total,net_lb,net_mt,amount,net_payable,balance',
+    // Paid joins the computed list rather than the form: it is the sum of
+    // the records in bill_payments.json, and a figure typed into a box would
+    // override the real total on the row (withTotals reads b.paid first). A
+    // bill could then read as settled with no payment behind it.
+       === 'total,net_lb,net_mt,amount,net_payable,paid,balance',
        bills.COLUMNS.filter((c) => c.derived).map((c) => c.key).join(','));
     ck('    including Payable, so no client can post its own',
        !bills.WRITABLE.includes('net_payable'),
@@ -791,8 +803,13 @@ section('F — who may see her supplier prices');
     // reach the edit form; the CSS class it wears is not the point and never
     // was — the header of ledger-render.js says exactly this about exactly
     // this string.
+    // `row` in the SECOND slot is the whole claim — an edit passes the row as
+    // `existing`. The trailing arguments moved on 2026-09-29 when openLedgerForm
+    // gained `bar` (Apsara: "Add a outgoing tab in Bills"), so the match stops
+    // at the comma rather than the close bracket; pinning the exact arity was
+    // pinning the signature, not the behaviour.
     ck('  every row offers an edit, not just a delete',
-       /openLedgerForm\(kind, row\)/.test(html) && /class="row-menu-btn"/.test(html),
+       /openLedgerForm\(kind, row[,)]/.test(html) && /class="row-menu-btn"/.test(html),
        'a typo in a seal number should not mean retyping eighteen fields');
     // The signature grew a third argument on 2026-09-10 (`seed`, a suggestion
     // for a NEW row, from the bill a container was bought on). Matched on the
@@ -801,9 +818,16 @@ section('F — who may see her supplier prices');
        /function openLedgerForm\(kind, existing/.test(html)
        && (html.match(/const sections = groups\.map/g) || []).length === 1,
        'two copies of an 18-field layout is two things to keep in step');
+    // Same reason: `seed` stays THIRD, after `existing`. What must never change
+    // is the order of those two — a seed landing in the existing slot makes
+    // autosave PUT against an id that does not exist. `bar` was added after
+    // them, which is why it is last.
     ck('    and a suggestion is NOT passed as an existing row',
-       /function openLedgerForm\(kind, existing, seed\)/.test(html),
+       /function openLedgerForm\(kind, existing, seed[,)]/.test(html),
        'a seed in the existing slot would make autosave PUT against an id that is not there');
+    ck('      and anything added since sits AFTER seed, not between',
+       !/function openLedgerForm\(kind, existing, (?!seed)/.test(html),
+       'inserting an argument before seed silently reassigns every existing call');
     ck('  an edit sends the emptied fields too',
        /if \(!\(k in body\)\) body\[k\] = ''/.test(html),
        'the server PATCHes, so a dropped blank means the old value survives');
@@ -2536,6 +2560,150 @@ section('X — a container claimed twice, on either side');
 }
 
 if (server) server.close();
+// ══════════════════════════════════════════════════════════════════════════
+section('PAID — the column that was computed and never shown');
+// ══════════════════════════════════════════════════════════════════════════
+// Apsara, 2026-09-29: "What if i want to see the paid amount for bills".
+//
+// The answer was already on every row. withTotals() has returned `paid` since
+// bill payments existed, and Balance is Payable − Paid − Advance — so the
+// table showed the RESULT of paying a supplier and never the payment. Working
+// it out meant subtracting Balance from Payable in her head, and getting that
+// wrong is how a supplier gets paid twice.
+//
+// ── THE CHECK WORTH HAVING IS THE ONE ABOUT TYPING ────────────────────────
+// `paid` is the sum of the records in bill_payments.json. withTotals reads
+// b.paid off the row FIRST, so if this column ever became an ordinary form
+// field, a number typed into it would sit on the row and override the real
+// total — a bill reading as settled with no payment behind it, and the money
+// balancing nowhere. tableOnly keeps it off the form and WRITABLE keeps the
+// route from accepting one. Both, so neither is load-bearing alone.
+{
+    const b = require(path.join(ROOT, 'helpers/bills'));
+
+    ck('Paid is on the table', b.tableColumns().some((c) => c && c.key === 'paid'));
+    ck('  between Payable and Balance, the order the sum runs in',
+       b.TABLE_ORDER.indexOf('paid') > b.TABLE_ORDER.indexOf('net_payable')
+       && b.TABLE_ORDER.indexOf('paid') < b.TABLE_ORDER.indexOf('balance'),
+       b.TABLE_ORDER.slice(-5).join(','));
+
+    // ── NOT TYPEABLE, TWO WAYS ────────────────────────────────────────────
+    const col = b.COLUMNS.find((c) => c.key === 'paid');
+    ck('  it is NOT a form field', col.tableOnly === true,
+       'in the money group it would render as a box on the bill form');
+    ck('  and not in the money group either',
+       b.COLUMNS.filter((c) => c.group === 'money').every((c) => c.key !== 'paid'),
+       b.COLUMNS.filter((c) => c.group === 'money').map((c) => c.key).join(','));
+    ck('  the route will not accept one', !b.WRITABLE.includes('paid'),
+       'a POST carrying paid would land on the row and override the payments');
+    ck('  and it is marked computed, like Payable and Balance', col.derived === true);
+
+    // ── IT SHOWS THE REAL FIGURE ──────────────────────────────────────────
+    // paid is passed IN to withTotals by the ledger, from billPayments.
+    const row = b.withTotals({
+        id: 'PD1', supplier: 'Calderon', container_no: 'PDU1000001',
+        gross: 60000, truck: 14000, container: 5000, supplier_price: 0.32,
+        advance: 200, paid: 1500,
+    });
+    ck('the row carries what was actually paid', row.paid === 1500, String(row.paid));
+    ck('  and Balance is still Payable minus Paid minus Advance',
+       Math.abs(row.balance - (row.net_payable - 1500 - 200)) < 0.005,
+       `payable ${row.net_payable}, paid ${row.paid}, advance ${row.advance}, balance ${row.balance}`);
+
+    // Nothing paid is 0, not blank — a blank reads as "unknown" on a money
+    // column, and the answer here is known and is zero.
+    const none = b.withTotals({ id: 'PD2', supplier: 'Calderon', container_no: 'PDU1000002',
+                                gross: 60000, truck: 14000, container: 5000, supplier_price: 0.32 });
+    ck('a bill with no payments shows 0, not blank', none.paid === 0, String(none.paid));
+
+    // ── THE EXPORT CARRIES IT TOO ─────────────────────────────────────────
+    // Her call when asked: table AND export. They read one column list, so
+    // this is really a check that nothing filters tableOnly back out.
+    ck('the exported column list has Paid',
+       b.tableColumns().filter(Boolean).some((c) => c.key === 'paid'),
+       'the xlsx/PDF export reads tableColumns()');
+    ck('  and every column still resolves', b.tableColumns().every(Boolean),
+       'a key in TABLE_ORDER with no COLUMNS entry yields undefined and the export throws');
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+section('ADVANCES — money already with the supplier, finally visible');
+// ══════════════════════════════════════════════════════════════════════════
+// Apsara, 2026-09-29: "see all unapplied advacne against the suppl[i]er".
+//
+// helpers/billPayments.js has computed this for weeks. creditBySupplier(),
+// advancesFor(), advanceCredit() — all exported, all correct, and the ONLY
+// place any of them reached was the "who are you paying?" step of the pay
+// modal. So the figure was visible only to someone already in the act of
+// paying somebody, which is the one moment she does not need telling.
+//
+// The checks below are about the SHAPE the screen depends on, because that is
+// what would break silently: a badge reads credit[supplier] by name, and the
+// panel reads .available off each advance.
+{
+    const bp = require(path.join(ROOT, 'helpers/billPayments'));
+
+    ck('billPayments can list every advance', typeof bp.advancesFor === 'function');
+    ck('  and total them per supplier', typeof bp.creditBySupplier === 'function');
+
+    // The badge looks up credit[supplier] by NAME. If that map were ever keyed
+    // by id the badge would silently show nothing, for ever, with no error.
+    const credit = bp.creditBySupplier();
+    ck('credit is keyed by supplier NAME, which is what the row badge looks up',
+       Object.keys(credit).every((k) => !/^[0-9a-f-]{8,}$/i.test(k)),
+       Object.keys(credit).slice(0, 4).join(','));
+
+    // The panel prints amount / used / available per row.
+    const all = bp.advancesFor(null);
+    ck('every advance carries what is left on it',
+       all.every((a) => typeof a.available === 'number'),
+       'the panel prints .available and would render undefined');
+    ck('  and what has been applied so far',
+       all.every((a) => typeof a.used === 'number'));
+    ck('  available never exceeds the advance itself',
+       all.every((a) => (a.available || 0) <= (Number(a.amount) || 0) + 0.005),
+       'more credit than was ever paid would be money invented');
+
+    // ── THE ROUTES CARRY IT ───────────────────────────────────────────────
+    // The gap CLAUDE.md section 3 names: the helper is right, the screen is
+    // written, and the route never forwards the field.
+    const apiSrc = fs.readFileSync(path.join(ROOT, 'api.js'), 'utf8');
+    const billsRoute = (apiSrc.match(/app\.get\('\/api\/bills'[\s\S]*?\n    \}\);/) || [''])[0];
+    ck('/api/bills sends the credit map, so the badge has something to read',
+       /credit:/.test(billsRoute),
+       'the badge would be dead on arrival with no error anywhere');
+    ck('  and it fails soft — a bad advance must not empty the bills table',
+       /catch \(e\) \{ return \{\}; \}/.test(billsRoute),
+       'a table that will not load is far worse than a missing badge');
+    ck('/api/bill-payments sends the individual advances for the panel',
+       /advances: bp\.advancesFor\(null\)/.test(apiSrc));
+    ck('  filtered to the ones with something left',
+       /advances: bp\.advancesFor\(null\)\.filter\(\(a\) => \(a\.available \|\| 0\) > 0\.005\)/.test(apiSrc),
+       'a fully applied advance is history, not an open item');
+
+    // ── THE SCREEN ────────────────────────────────────────────────────────
+    const web = fs.readFileSync(path.join(ROOT, 'dashboard/index.html'), 'utf8');
+    ck('the bills table has a credit strip', /id="ledCreditBar"/.test(web));
+    ck('  with a way into the list', /id="ledCreditShow"/.test(web));
+    ck('  shown only when there IS credit',
+       /Object\.keys\(ledCredit\)\.length \? `<div id="ledCreditBar"/.test(web),
+       'a strip reading $0.00 on every visit is furniture, and furniture stops being read');
+
+    // ── BILLS ONLY ────────────────────────────────────────────────────────
+    // Credit against a SUPPLIER has no meaning on a sale, where the other
+    // party is a customer — a customer's credit lives in receipts and
+    // deductions. Showing the supplier figure on both would be a number that
+    // is wrong half the time, which is the exact shape of over-reach this
+    // repo keeps paying for.
+    ck('the strip is on BILLS only', /kind === 'bills' && Object\.keys\(ledCredit\)\.length/.test(web),
+       'a supplier advance on a customer invoice is simply the wrong number');
+    ck('  and so is the row badge',
+       /kind === 'bills' && ledCredit\[String\(r\.supplier/.test(web));
+    ck('  ledCredit is empty on the sales tab, whatever the route sent',
+       /const ledCredit = \(kind === 'bills' && data\.credit\) \? data\.credit : \{\};/.test(web),
+       'guarding only at the render site leaves the map live for the next reader');
+}
+
 console.log(`\n  ${pass} passed, ${fail} failed`);
 if (failures.length) { console.log('\n  failed:'); failures.forEach((f) => console.log('    · ' + f)); }
 process.exit(fail ? 1 : 0);

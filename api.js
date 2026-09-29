@@ -4090,6 +4090,26 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
                 duplicates: b.duplicates(all),
                 bills: rows,
                 summary: b.summary(rows),
+                // ── CREDIT SITTING WITH EACH SUPPLIER ────────────────────
+                // Apsara, 2026-09-29: "see all unapplied advacne against the
+                // suppl[i]er".
+                //
+                // An advance is a payment whose allocations do not yet add up
+                // to it; the remainder is credit against that supplier.
+                // helpers/billPayments.js has computed this for weeks —
+                // creditBySupplier() — and the ONLY place it reached was the
+                // "who are you paying?" step of the pay modal. So the figure
+                // existed and could not be seen unless she was already in the
+                // act of paying someone.
+                //
+                // Keyed by supplier name so the row badge can look up its own
+                // without a second request. Fails soft: a bills table that
+                // refuses to load because an advance could not be read would
+                // be far worse than one with no badges.
+                credit: (() => {
+                    try { return require('./helpers/billPayments').creditBySupplier(); }
+                    catch (e) { return {}; }
+                })(),
                 // Built from EVERY row, not the filtered ones, or narrowing by
                 // supplier would empty the supplier dropdown she just used.
                 facets: b.facets(all),
@@ -4621,6 +4641,12 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
                 // tick rather than making her remember which are open.
                 open_bills: unpaid,
                 credit: bp.creditBySupplier(),
+                // The individual advances behind those totals, so the panel can
+                // show WHICH payment is sitting unapplied and from when — a
+                // total alone does not tell her what to go and look at.
+                // Only the ones with something left; a fully applied advance is
+                // history, not an open item.
+                advances: bp.advancesFor(null).filter((a) => (a.available || 0) > 0.005),
                 modes: bp.BILL_PAYMENT_MODES,
                 banks: require('./helpers/banks').options(),
                 other: require('./helpers/banks').OTHER,
@@ -7670,6 +7696,75 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
             console.error('[invoice] versions lookup failed:', e.message);
             res.status(500).json({ error: e.message });
         }
+    });
+
+    // ── PORTS SHE HAS ACTUALLY USED ───────────────────────────────────────
+    // Apsara, 2026-09-29: "In port of discharge,save when generated,for say
+    // Busan,South Korea.Port of loading as Los Angeles,CA... I want a drop
+    // down to be added as i type."
+    //
+    // Not a shipped list of world seaports — see helpers/ports.js for why.
+    // The suggestions are her own history: every generated invoice's saved
+    // form state, plus the POL/POD already on her bookings so the dropdown is
+    // useful before she has generated anything.
+    //
+    // Read only, and it fails soft to an empty list: a type-ahead that 500s
+    // would block typing in the box it is meant to help with.
+    app.get('/api/ports', (req, res) => {
+        try {
+            const ports = require('./helpers/ports');
+            const which = req.query.which === 'loading' ? 'loading' : 'discharge';
+            res.json({ which, ports: ports.search(which, req.query.q || '', 10) });
+        } catch (e) {
+            console.error('[ports] lookup failed:', e.message);
+            res.json({ which: req.query.which || 'discharge', ports: [] });
+        }
+    });
+
+    // ── THE INVOICES SHE HAS GENERATED, AND THE ONE SHE WANTS BACK ────────
+    // Apsara, 2026-09-29: "Generated invoice should be editable.It should
+    // display below the invoice things.with edit option."
+    //
+    // The list is a summary per container; the full form payload comes from
+    // the second route, only when she presses Edit. Ten complete invoice
+    // payloads to draw a ten-row table would make the screen slower the more
+    // she used it.
+    // ── NAMED "history", NOT "generated" ──────────────────────────────────
+    // The first name was /api/invoice/generated, which CONTAINS the existing
+    // /api/invoice/generate as a substring. Anything matching by substring —
+    // tests/invoice-weight-guard.js's fetch stub did, and so would a log
+    // filter or a proxy rule — reads a GET of the list as a POST to the
+    // generator. That test started reporting three generate posts where there
+    // were two, and the "extra" one was this list loading.
+    //
+    // Renamed rather than papering over it in the test: a route whose name is
+    // a prefix of another route's is a trap for the next person too.
+    app.get('/api/invoice/history', requireAdmin, (req, res) => {
+        try { res.json({ invoices: invoiceVersions.listGeneratedInvoices() }); }
+        catch (e) {
+            console.error('[invoice] generated list failed:', e.message);
+            res.status(500).json({ error: e.message });
+        }
+    });
+
+    // The saved form state behind one of them. Same shape /api/invoice/preview
+    // returns, which is why the client can pour it straight into the review
+    // screen with applyInvoiceDataToForm.
+    //
+    // 404 rather than an empty object when there is nothing: an invoice
+    // generated before this store existed is a PDF and has no form state, and
+    // quietly handing back a blank payload would wipe the screen she is on.
+    app.get('/api/invoice/history/payload', requireAdmin, (req, res) => {
+        try {
+            const p = invoiceVersions.getLatestInvoicePayload(req.query.container || '');
+            if (!p) {
+                return res.status(404).json({
+                    error: 'No saved form for this container — it was generated before edits were kept, '
+                         + 'so only the PDF exists.' });
+            }
+            const { saved_at, ...payload } = p;
+            res.json({ container: req.query.container || '', saved_at: saved_at || null, payload });
+        } catch (e) { res.status(500).json({ error: e.message }); }
     });
 
     app.get('/api/customer-pricing/list', (req, res) => {

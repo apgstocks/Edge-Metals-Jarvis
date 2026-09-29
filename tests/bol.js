@@ -1187,6 +1187,25 @@ section('SHIPPER — editable, locked, and the signature that comes off with it'
        /hide_letterhead: !\$\('bol_letterhead'\)\.checked/.test(web));
     ck('  reopening an older BOL ticks it, because absent means it printed',
        /\$\('bol_letterhead'\)\.checked = !bol\.hide_letterhead/.test(web));
+    // ── AND IT IS NOT FULL WIDTH ──────────────────────────────────────
+    // Apsara, seeing the first version: "Why coming like this?" — with a
+    // screenshot of a checkbox stretched across the whole column and its
+    // label squeezed into a one-word-wide strip down the side.
+    //
+    // `.field input { width:100% }` in this file applies to a checkbox as
+    // readily as to a text box. Every other checkbox here already sets an
+    // explicit width for exactly that reason; this one did not.
+    const cbTag = (web.match(/<input type="checkbox" id="bol_letterhead"[^>]*>/) || [''])[0];
+    ck('  the checkbox sets its own width, or .field stretches it to 100%',
+       /width\s*:\s*(auto|\d+px)/.test(cbTag), cbTag || 'tag not found');
+    ck('  and does not flex-grow', /flex\s*:\s*none/.test(cbTag), cbTag);
+    ck('  its label text gets the rest of the row',
+       /<span style="flex:1; min-width:0;[^"]*">Print the Edge Metals letterhead/.test(web),
+       'without min-width:0 a flex child collapses to its longest word');
+    ck('  and reads in the body font, not the mono label font',
+       /font-family:var\(--font-sans\)[^"]*"[\s\S]{0,400}?id="bol_letterhead"/.test(web),
+       '.field label is var(--font-mono), which is right for a label and wrong for a sentence');
+
     ck('  and a NEW BOL resets to ticked and locked',
        /\$\('bol_letterhead'\)\.checked = true/.test(web)
        && /window\.bolShipperLock\(true\)/.test(web),

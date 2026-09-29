@@ -283,12 +283,33 @@ body[data-theme="light"] {
                  made before today changes. BILL OF LADING and the number are
                  NOT letterhead and always print; unticking removes only the
                  company band on the left. -->
-            <label style="display:flex; gap:8px; align-items:flex-start; margin-top:12px;
+            <!-- ── WIDTH:AUTO IS NOT COSMETIC HERE ─────────────────────
+                 `.field input { width:100% }` (line ~74) applies to a
+                 checkbox as readily as to a text box, so this control
+                 stretched the full 380px of the column and squeezed its own
+                 label into a one-word-wide strip down the right-hand side.
+                 Apsara saw it and asked "Why coming like this?".
+
+                 EVERY other checkbox in this file already carries an
+                 explicit width — 15px, 16px or auto — so the trap was known
+                 and I was the one who walked into it. 15px matches the ones
+                 beside it on the packing list and invoice panels.
+
+                 width and flex:none hold the box at its own size;
+                 flex:1 + min-width:0 give the text the rest of the row. The
+                 font is reset too: .field label uses the mono label face,
+                 which is right for a field label and wrong for a sentence.
+                 (No double hyphen in here, deliberately: this is an HTML
+                 comment and a run of them can close it early. See
+                 tests/comment-hygiene.js, which caught exactly that.) -->
+            <label style="display:flex; gap:9px; align-items:flex-start; margin-top:12px;
                           padding-top:11px; border-top:1px solid var(--border-subtle);
-                          font-size:12px; cursor:pointer;">
-              <input type="checkbox" id="bol_letterhead" checked style="margin-top:2px;">
-              <span>Print the Edge Metals letterhead<br>
-                <span style="color:var(--text-faint); font-size:11px;">The black band with the address and tax ID. The BILL OF LADING title and number always print.</span></span>
+                          font-size:12px; cursor:pointer; font-family:var(--font-sans);
+                          color:var(--text-body); margin-bottom:0;">
+              <input type="checkbox" id="bol_letterhead" checked
+                style="width:15px; height:15px; flex:none; margin:2px 0 0 0; padding:0; cursor:pointer;">
+              <span style="flex:1; min-width:0; line-height:1.5;">Print the Edge Metals letterhead
+                <span style="display:block; color:var(--text-faint); font-size:11px; margin-top:2px;">The black band with the address and tax ID. The BILL OF LADING title and number always print.</span></span>
             </label>
           </div>
         </div>
@@ -660,8 +681,29 @@ body[data-theme="light"] {
           <div class="field"><label>Booking #</label><input id="inv_booking"></div>
           <div class="field"><label>Seal #</label><input id="inv_seal"></div>
           <div class="field"><label>Place of Receipt</label><input id="inv_receipt"></div>
-          <div class="field"><label>Port of Loading</label><input id="inv_pol"></div>
-          <div class="field"><label>Port of Discharge</label><input id="inv_pod"></div>
+          <!-- ── THE PORTS SHE HAS ACTUALLY USED ───────────────────────
+               Apsara, 2026-09-29: "In port of discharge,save when generated,
+               for say Busan,South Korea.Port of loading as Los Angeles,CA.
+               These are jsut examples.I want a drop down to be added as i
+               type."
+
+               Not a shipped list of world seaports. She writes "Busan,South
+               Korea" and "Los Angeles,CA" — her own spellings, and those
+               exact strings print on the invoice a broker reads. A canonical
+               list would offer "Pusan, KR" and she would either pick
+               something that does not match her other paperwork or stop
+               using the dropdown. The suggestions are her own history: every
+               generated invoice, plus the POL/POD already on her bookings so
+               the list is useful before she has generated anything.
+
+               Still a plain text box. The dropdown offers; it never
+               constrains — a new port must be typeable the first time. -->
+          <div class="field" style="position:relative;"><label for="inv_pol">Port of Loading</label>
+            <input id="inv_pol" autocomplete="off">
+            <div id="invPolList" class="autocomplete-list hidden"></div></div>
+          <div class="field" style="position:relative;"><label for="inv_pod">Port of Discharge</label>
+            <input id="inv_pod" autocomplete="off">
+            <div id="invPodList" class="autocomplete-list hidden"></div></div>
           <div class="field"><label>Country of Origin</label><input id="inv_country_of_origin" value="USA"></div>
           <!-- ── HOW IT WAS LOADED ─────────────────────────────────────────
                Apsara, 2026-09-22: "When it is loosely loaded/pallets,ask when
@@ -810,6 +852,36 @@ body[data-theme="light"] {
         <button id="btnInvGenerate" type="button" class="btn btn-primary">Generate &amp; Download</button>
       </div>
     </div>
+  </div>
+
+  <!-- ── INVOICES SHE HAS ALREADY GENERATED ───────────────────────────────
+       Apsara, 2026-09-29: "Generated invoice should be editable.It should
+       display below the invoice things.with edit option."
+
+       Until now the only way back to a generated invoice was the banner
+       inside Review and Generate, which appears ONLY once she has already
+       loaded that exact container — so re-editing meant remembering which
+       container it was and going to fetch it first. This is the missing
+       half: it shows what there is.
+
+       OUTSIDE invStep1/2/3 on purpose. Those three are shown one at a time
+       by showInvStep(), and a list that vanished whenever she moved between
+       steps would be hardest to find at the moment she wanted it.
+
+       Only invoices generated since helpers/invoiceVersions.js shipped have
+       a stored form to edit. Anything older is a PDF in documents_saved and
+       nothing else — there is no honest backfill, so it is simply not
+       listed here rather than listed with an Edit that cannot work. -->
+  <div class="card" style="padding:20px 22px; margin-top:16px;">
+    <div style="display:flex; align-items:baseline; gap:10px; margin-bottom:4px;">
+      <div class="section-label" style="margin:0;">Generated invoices</div>
+      <div style="flex:1;"></div>
+      <button id="btnInvGenRefresh" type="button" class="btn btn-secondary" style="padding:4px 10px; font-size:10px;">Refresh</button>
+    </div>
+    <div style="font-size:11px; color:var(--text-faint); margin-bottom:10px;">
+      Edit reopens the invoice exactly as it was generated, so you can change it and generate again.
+    </div>
+    <div id="invGenList" style="font-size:12.5px; color:var(--text-muted);">Loading&hellip;</div>
   </div>
 
   <!-- ── Verification ─────────────────────────────────────────────────────── -->
@@ -4011,6 +4083,67 @@ $('inv_buyer').addEventListener('input', () => {
 });
 $('inv_buyer').addEventListener('blur', () => setTimeout(() => $('invBuyerList').classList.add('hidden'), 150));
 
+// ── PORT TYPE-AHEAD ────────────────────────────────────────────────────────
+// Apsara, 2026-09-29: "I want a drop down to be added as i type."
+//
+// One function for both boxes. Served from /api/ports, which reads her own
+// history — see helpers/ports.js for why this is not a canonical port list.
+//
+// THREE THINGS COPIED DELIBERATELY from the consignee box above, each of
+// which was learned the hard way there and is written up at
+// renderConsigneeList:
+//   · 'mousedown' with preventDefault, not 'click' — a click loses the race
+//     against the blur timer, which is what "consignee not clickable" was.
+//   · selection by data-idx into the rendered array, never by value parsing.
+//   · the blur hide is on a timer, so the mousedown lands first.
+//
+// It NEVER constrains the box. A port she has not used before has to be
+// typeable the first time, and the second time it will be in the list.
+function wirePortBox(inputId, listId, which) {
+  const inp = $(inputId), box = $(listId);
+  if (!inp || !box) return;
+  let shown = [];
+
+  const hide = () => { box.classList.add('hidden'); box.innerHTML = ''; };
+  const render = (rows) => {
+    shown = rows || [];
+    if (!shown.length) return hide();
+    box.innerHTML = shown.map((e, i) =>
+      `<div class="autocomplete-item" data-idx="${i}">${esc(e.value)}</div>`).join('');
+    box.classList.remove('hidden');
+    box.querySelectorAll('.autocomplete-item').forEach((el) =>
+      el.addEventListener('mousedown', (ev) => {
+        ev.preventDefault();
+        const hit = shown[Number(el.dataset.idx)];
+        if (hit) inp.value = hit.value;
+        hide();
+      }));
+  };
+
+  // Asked of the server on each keystroke, but only the LAST answer is drawn.
+  // Responses can come back out of order, and a slow reply for "bu" arriving
+  // after "busan" would repaint the list with the wrong, wider set under her
+  // cursor.
+  let seq = 0;
+  const look = async () => {
+    const mine = ++seq;
+    try {
+      const d = await api(`/api/ports?which=${encodeURIComponent(which)}&q=${encodeURIComponent(inp.value.trim())}`);
+      if (mine !== seq) return;
+      render(d.ports || []);
+    } catch (e) { hide(); }        // never block typing in the box it helps
+  };
+
+  inp.addEventListener('input', look);
+  // Focusing an empty box offers the ports she uses most, which is the whole
+  // point on a field she fills the same way most weeks.
+  inp.addEventListener('focus', look);
+  inp.addEventListener('blur', () => setTimeout(hide, 150));
+  inp.addEventListener('keydown', (e) => { if (e.key === 'Escape') hide(); });
+}
+wirePortBox('inv_pol', 'invPolList', 'loading');
+wirePortBox('inv_pod', 'invPodList', 'discharge');
+
 function showInvStep(n) {
   $('invStep1').closest('.card').classList.toggle('hidden', n !== 1);
   $('invStep2').classList.toggle('hidden', n !== 2);
@@ -4622,6 +4755,81 @@ async function refreshInvVersionBanner(containerNo) {
   }
 }
 $('btnInvVersionDismiss').addEventListener('click', () => $('invVersionBanner').classList.add('hidden'));
+// ── THE GENERATED-INVOICE LIST, AND EDIT ───────────────────────────────────
+// Apsara, 2026-09-29: "Generated invoice should be editable.It should display
+// below the invoice things.with edit option."
+//
+// Edit reuses applyInvoiceDataToForm — the SAME function "Load previous edits"
+// uses, and the same one loadInvoicePreview uses for fresh sheet data. Three
+// ways in, one function that fills the form. A second filler written for this
+// list would drift from it, and the symptom would be a field that silently
+// stops being restored on one path only.
+async function loadGeneratedInvoices() {
+  const box = $('invGenList');
+  if (!box) return;
+  try {
+    const { invoices } = await api('/api/invoice/history');
+    const rows = invoices || [];
+    box.innerHTML = rows.length
+      ? `<table style="width:100%; border-collapse:collapse; font-size:12.5px;">
+          <tr style="color:var(--text-muted); font-size:10px; letter-spacing:.08em;">
+            <th style="text-align:left; padding:5px 8px;">CONTAINER</th>
+            <th style="text-align:left; padding:5px 8px;">INVOICE</th>
+            <th style="text-align:left; padding:5px 8px;">BUYER</th>
+            <th style="text-align:left; padding:5px 8px;">DISCHARGE</th>
+            <th style="text-align:left; padding:5px 8px;">GENERATED</th>
+            <th></th>
+          </tr>
+          ${rows.map((r) => `
+            <tr style="border-top:1px solid var(--border-subtle);">
+              <td style="padding:6px 8px; font-family:var(--font-mono);">${esc(r.container)}</td>
+              <td style="padding:6px 8px;">${esc(r.inv_no || '—')}</td>
+              <td style="padding:6px 8px;">${esc(r.buyer || '—')}</td>
+              <td style="padding:6px 8px;">${esc(r.port_discharge || '—')}</td>
+              <td style="padding:6px 8px; color:var(--text-faint);">${esc(r.saved_at ? new Date(r.saved_at).toLocaleString() : '—')}${r.versions > 1 ? ` · ${r.versions} versions` : ''}</td>
+              <td style="padding:6px 8px; text-align:right;">
+                <button class="btn btn-secondary inv-gen-edit" data-container="${esc(r.container)}" style="font-size:11px; padding:4px 10px;">Edit</button>
+              </td>
+            </tr>`).join('')}
+        </table>`
+      : 'None yet. Generating an invoice saves it here, ready to edit and reissue.';
+    box.querySelectorAll('.inv-gen-edit').forEach((el) =>
+      el.addEventListener('click', () => editGeneratedInvoice(el.dataset.container)));
+  } catch (e) {
+    box.textContent = e.message;
+  }
+}
+
+// ── REOPENING ONE ──────────────────────────────────────────────────────────
+// Lands her on the review screen with every field as it was generated, so the
+// next Generate produces the corrected document rather than starting from the
+// raw sheet data again.
+//
+// The banner is hidden on arrival: it exists to offer exactly what she has
+// just been given, and an offer to "load previous edits" on top of the edits
+// she has this second loaded reads as though something did not work.
+async function editGeneratedInvoice(container) {
+  if (!container) return;
+  try {
+    const d = await api('/api/invoice/history/payload?container=' + encodeURIComponent(container));
+    if (!d || !d.payload) throw new Error('Nothing saved for this container.');
+    applyInvoiceDataToForm(d.payload);
+    invVersionLatest = null;
+    $('invVersionBanner').classList.add('hidden');
+    showInvStep(3);
+    // The list sits below three tall cards; without this she is looking at
+    // the bottom of the page while the form she just filled is off-screen
+    // above her.
+    const top = $('invStep3');
+    if (top && top.scrollIntoView) top.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  } catch (e) {
+    alert(e.message || 'Could not reopen that invoice');
+  }
+}
+
+if ($('btnInvGenRefresh')) $('btnInvGenRefresh').addEventListener('click', loadGeneratedInvoices);
+loadGeneratedInvoices();
+
 $('btnInvVersionLoad').addEventListener('click', () => {
   if (!invVersionLatest) return;
   applyInvoiceDataToForm(invVersionLatest);
@@ -5271,6 +5479,16 @@ $('btnInvGenerate').addEventListener('click', async () => {
       invMailFor = { container_no: payload.container_no, consignee: payload.consignee || '' };
       const sendBtn = $('btnInvSendMail');
       if (sendBtn) sendBtn.classList.remove('hidden');
+      // ── AND INTO THE LIST BELOW ───────────────────────────────────────
+      // The server has just written this generate to invoice_versions, so the
+      // list is now one row out of date. Without this she generates an
+      // invoice, scrolls down to the list she was told is there, and does not
+      // find it — and the only fix is reloading the page.
+      //
+      // Not awaited and never fatal: the document is already saved and
+      // downloaded, and a failed list refresh must not turn a successful
+      // generate into an error message.
+      try { loadGeneratedInvoices(); } catch (e) { /* the invoice is safe either way */ }
     }
     // Batch review queue: advance to the next group (single container or
     // booking-merged) instead of leaving her stuck on this screen. A brief
