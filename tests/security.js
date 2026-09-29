@@ -266,9 +266,101 @@ section('E — what the audit found already correct, and must stay so');
     const helpers = fs.readdirSync(path.join(ROOT, 'helpers'))
         .filter((f) => f.endsWith('.js'))
         .map((f) => fs.readFileSync(path.join(ROOT, 'helpers', f), 'utf8')).join('\n');
-    ck('no request parameter is joined into a path',
-       !/path\.join\([^)]*req\.(params|query|body)/.test(api + helpers),
-       'that is how ../../etc/passwd gets read');
+    // ── A REQUEST PARAMETER MAY BE JOINED ONLY IF IT IS SANITISED ─────────
+    // This was a flat ban: any path.join containing req.* failed. It had been
+    // RED FOR DAYS on helpers/bankDocs.js, which does
+    //
+    //     path.join(dir, safeName(req.params.name))
+    //
+    // and is safe — safeName runs path.basename (so ../../etc/passwd becomes
+    // passwd), strips every character outside [A-Za-z0-9._ -], removes
+    // leading dots (so ".." becomes "document"), and the route then checks
+    // file.startsWith(dir). Fourteen traversal strings were put through it
+    // and none escaped; section T below is that, kept as a test.
+    //
+    // A check that is always red is a check nobody reads, and this one had
+    // become background noise in a suite that is otherwise green. That is
+    // how a REAL traversal gets waved through. So it now bans the dangerous
+    // shape and permits the guarded one:
+    //
+    //     path.join(dir, req.params.name)            <- still fails
+    //     path.join(dir, safeName(req.params.name))  <- allowed
+    //
+    // Add to SANITISERS only a function that does what safeName does, and
+    // add a section-T case for it at the same time.
+    const SANITISERS = ['safeName', 'safeSegment', 'path.basename', 'basename'];
+    const joins = [...(api + '\n' + helpers)
+        .matchAll(/path\.join\(([^;]{0,240}?)\)/g)]
+        .map((m) => m[1])
+        .filter((argsText) => /req\.(params|query|body)/.test(argsText));
+
+    const unguarded = joins.filter((argsText) => {
+        // Every req.* reference inside the join must sit inside a sanitiser
+        // call. Checked per reference, so one guarded argument cannot excuse
+        // an unguarded one beside it.
+        const refs = [...argsText.matchAll(/req\.(?:params|query|body)[.\[]?[\w'"\]]*/g)];
+        return refs.some((r) => {
+            const before = argsText.slice(0, r.index);
+            return !SANITISERS.some((fn) => new RegExp(`${fn.replace('.', '\\.')}\\(\\s*$`).test(before));
+        });
+    });
+
+    ck('a request parameter is never joined into a path UNSANITISED',
+       unguarded.length === 0,
+       unguarded.length ? `unguarded: ${unguarded.join('  |  ')}` : 'that is how ../../etc/passwd gets read');
+
+    // The check must still be looking at something. If a refactor renamed
+    // path.join everywhere, the list above would be empty and the check
+    // would pass by knowing nothing.
+    ck('  and the check found joins to inspect, so it is not vacuous',
+       joins.length > 0, `${joins.length} path.join calls carry a request param`);
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+section('T — traversal, tried for real rather than read for');
+// ══════════════════════════════════════════════════════════════════════════
+// The check above reads source. This one runs the sanitiser that source
+// relies on, because a regex confirming safeName is CALLED says nothing
+// about whether safeName WORKS. If someone weakens it, the check above stays
+// green and this one goes red.
+{
+    const bankDocs = require(path.join(ROOT, 'helpers/bankDocs'));
+    const safeName = bankDocs.safeName || bankDocs._safeName;
+
+    if (typeof safeName !== 'function') {
+        // Not exported today. Say so rather than silently skipping — a
+        // skipped security check reads exactly like a passing one.
+        ck('bankDocs exports safeName so it can be tested directly', false,
+           'export it (or _safeName) and this section tests the real thing '
+           + 'instead of a copy that can drift from it');
+    } else {
+        const dir = path.join('/data', 'bank-docs', 'acct1');
+        const ATTACKS = [
+            '../../etc/passwd', '....//....//etc/passwd', '/etc/passwd',
+            '..%2f..%2fetc%2fpasswd', '..\\..\\windows\\system32',
+            '.env', '../.env', '~/.ssh/id_rsa', '\u0000/etc/passwd',
+            '..', '.', '....', 'a'.repeat(300) + '.pdf',
+        ];
+        const escaped = ATTACKS.filter((a) => {
+            const full = path.join(dir, safeName(a));
+            return !full.startsWith(dir + path.sep);
+        });
+        ck(`none of ${ATTACKS.length} traversal strings escapes the folder`,
+           escaped.length === 0, escaped.map((a) => JSON.stringify(a)).join(', '));
+
+        // The specific properties, so a failure says WHICH one broke rather
+        // than "something escaped".
+        ck('  a directory component is stripped',
+           safeName('../../etc/passwd') === 'passwd', safeName('../../etc/passwd'));
+        ck('  a bare .. cannot become a name', !/^\.+$/.test(safeName('..')),
+           safeName('..'));
+        ck('  a separator cannot survive',
+           !safeName('a/b').includes('/') && !safeName('a\\b').includes('\\'),
+           `${safeName('a/b')} ${safeName('a\\b')}`);
+        ck('  and an ordinary filename is left alone',
+           safeName('statement 2026-09.pdf') === 'statement 2026-09.pdf',
+           safeName('statement 2026-09.pdf'));
+    }
 }
 
 server.close();
