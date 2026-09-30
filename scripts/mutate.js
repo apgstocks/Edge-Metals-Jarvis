@@ -2763,6 +2763,58 @@ const MUTATIONS = [
       find: 'download?kind=proforma&file=${encodeURIComponent(m.file)}',
       to:   'download?kind=invoice&file=${encodeURIComponent(m.file)}' },
 
+    // ── SUPPLIER PREPAYMENT, EDGE YARD (2026-10-01) ─────────────────────
+    // Second attempt. The first shipped and was removed the same day; the
+    // ledger design is hers and kept, the cash handling is what was wrong.
+    // These four are the money.
+    { name: 'prepay: a CASH prepayment never leaves the petty cash box',
+      file: 'helpers/payments.js', suites: ['supplier-prepayment'],
+      find: "    const touchesPettyCash = mode === 'Cash' && !EDGE_METALS_KINDS.has(loadKind);\n\n    let cashEntry = null;\n    let cashTaken = null;\n    if (touchesPettyCash) {",
+      to:   "    const touchesPettyCash = mode === 'Cash' && !EDGE_METALS_KINDS.has(loadKind);\n\n    let cashEntry = null;\n    let cashTaken = null;\n    if (false) {" },
+
+    { name: 'prepay: applying it takes the cash out a SECOND time',
+      file: 'helpers/payments.js', suites: ['supplier-prepayment'],
+      find: '        from_prepayment: true,',
+      to:   '        from_prepayment: false,' },
+
+    // ── TWO MUTATIONS TRIED AND DELIBERATELY NOT KEPT, 2026-10-01 ───────
+    // Undoing an applied prepayment is protected TWICE and neither guard can
+    // be mutated to a red on its own:
+    //
+    //   · deleteByLoad / deletePayment skip rows flagged from_prepayment, so
+    //     reverseForPayment is never called for them;
+    //   · reverseForPayment itself bails on `if (!taken.length) return list`,
+    //     because an applied row's key matches no petty cash entry.
+    //
+    // Remove either and the other still holds, so each mutation survives
+    // alone — and removing both at once is not a mutation, it is a rewrite.
+    // A third fact makes it safer still: the reversal amount is the SUM of
+    // matching entries, and the sum of none is zero, so no arrangement of
+    // these two lines can move money.
+    //
+    // They are left out rather than parked as known survivors, because a
+    // permanently-red entry teaches everyone to skim the survivor list —
+    // which is the only interesting output this script has. The property is
+    // covered from the other side instead: tests/supplier-prepayment.js
+    // section E asserts both the balance AND that the petty cash book gains
+    // no phantom row, so a future refactor that collapses the two layers
+    // into one will fail there.
+
+    { name: 'prepay: over-applying is silently capped instead of refused',
+      file: 'helpers/payments.js', suites: ['supplier-prepayment'],
+      find: '    if (amount - remaining > CENT) throw new Error(`that prepayment only has ${remaining.toFixed(2)} left`);',
+      to:   '' },
+
+    { name: 'prepay: an unapplied prepayment carries a load_id',
+      file: 'helpers/payments.js', suites: ['supplier-prepayment'],
+      find: '        load_id: null,\n        load_kind: loadKind,\n        seller,',
+      to:   "        load_id: 'EDGE_1',\n        load_kind: loadKind,\n        seller," },
+
+    { name: 'prepay: remaining is stored instead of derived',
+      file: 'helpers/payments.js', suites: ['supplier-prepayment'],
+      find: '    return round2(num0(adv.amount) - used);',
+      to:   '    return round2(num0(adv.amount));' },
+
     { name: 'doc-kinds: the audit records verdicts it is not sure of',
       file: 'scripts/documents-folder-audit.js', suites: ['saved-doc-kinds'],
       find: "        if (WRITE_CACHE && require('../helpers/savedDocKinds').KNOWN.has(res.what)) {",

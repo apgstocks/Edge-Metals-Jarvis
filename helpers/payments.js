@@ -309,6 +309,206 @@ function newPaymentId() {
 // If an unapplied advance ever needs to be recovered, it is in payments.json
 // with is_advance: true — the money was never lost, only the feature.
 
+// ── SUPPLIER PREPAYMENT, EDGE YARD (2026-10-01) ──────────────────────────
+// Apsara: "Add a supplier prepayment option in loads", then "no for edge
+// yard" / "advance concept is for edge yard right now", then the brief that
+// decides the shape: "streamline the process".
+//
+// ── THIS IS THE SECOND ATTEMPT, AND THE FIRST ONE'S NOTES MATTER ─────────
+// An advance feature shipped on 2026-08-29 and she removed it the SAME DAY
+// ("remove that advance concept."). Reading that commit, what it shipped was
+// THREE surfaces: a credit strip above the deck, a separate Record-advance
+// form, and an apply panel inside the Pay modal. "Streamline the process" is
+// the same instruction again, said plainly. So the concept is hers and kept;
+// the ceremony is what goes.
+//
+// One place to put money in — the Pay form, with no load chosen. One place it
+// comes out — an inline line in the Pay form when that seller is holding
+// credit. No strip, no second form, nothing new to learn. Odoo settles a
+// supplier prepayment the same way: the payment sits as an outstanding credit
+// on the supplier and the bill offers it inline at the moment of paying,
+// rather than on a screen of its own.
+//
+// ── WHAT THE FIRST VERSION GOT WRONG ABOUT CASH ──────────────────────────
+// The old addAdvance wrote its own row with its own mutateJson, bypassing
+// addPayment — so a CASH advance never came out of the petty cash box. But
+// deleteByLoad's reversal loop matches `mode === 'Cash' &&
+// !EDGE_METALS_KINDS.has(p.load_kind)`, and an advance carried no load_kind
+// at all, so `has(undefined)` is false and the row WAS matched. Cash left the
+// drawer unrecorded on the way in, and a reversal was attempted on the way
+// out for an entry that had never been created.
+//
+// She pays suppliers in cash, so that is her box wrong in both directions.
+// Fixed two ways here: the withdrawal goes through the SAME
+// pettyCash.withdrawForPayment call an ordinary payment uses, and load_kind
+// is set EXPLICITLY to 'purchase' rather than left undefined — a guard that
+// works because a field is missing is a guard that breaks when someone adds
+// the field.
+//
+// ── AND WHAT IT GOT RIGHT, KEPT VERBATIM ────────────────────────────────
+//   · no load_id, so an unapplied prepayment can never make a load look
+//     part-paid;
+//   · never auto-applied — her choice, and the right one: money landing on a
+//     load with nobody deciding cannot be unpicked later;
+//   · remaining is DERIVED from what has been applied, never stored;
+//   · over-applying is refused, not silently capped.
+async function addPrepayment(input = {}) {
+    const seller = String(input.seller || '').trim();
+    if (!seller) throw new Error('a prepayment needs a supplier');
+    const amount = round2(toNum(input.amount));
+    if (amount == null) throw new Error('a payment amount is required');
+    if (amount <= 0) throw new Error('a payment amount must be greater than zero');
+    const mode = PAYMENT_MODES.find((m) => m.toLowerCase() === String(input.mode || '').trim().toLowerCase());
+    if (!mode) throw new Error(`payment mode must be one of: ${PAYMENT_MODES.join(', ')}`);
+
+    // Explicit, not inferred. A yard prepayment is cash going OUT of the yard
+    // box; stamping the kind makes every downstream allowlist test
+    // (EDGE_METALS_KINDS, the spend report, the petty-cash recompute) read the
+    // same answer as it would for an ordinary yard purchase payment.
+    const loadKind = 'purchase';
+    const touchesPettyCash = mode === 'Cash' && !EDGE_METALS_KINDS.has(loadKind);
+
+    let cashEntry = null;
+    let cashTaken = null;
+    if (touchesPettyCash) {
+        const petty = require('./pettyCash');
+        const res = await petty.withdrawForPayment({
+            amount,
+            // No load to name, and withdrawForPayment stores `loadId || null`
+            // so that is accepted. It does NOT take a seller — I tried
+            // passing one and it is silently dropped, which is worse than not
+            // passing it, so the supplier is stamped onto the entry after the
+            // fact below rather than pretended at here.
+            loadId: null,
+            paymentId: null,
+            date: input.paid_on,
+            createdBy: input.created_by || null,
+            allowPartial: input.allow_partial === true,
+            cashSource: input.cash_source,
+            allowBorrow: input.allow_borrow === true,
+        });
+        cashEntry = res.entry;
+        cashTaken = res.taken;
+    }
+
+    const record = {
+        id: `ADV_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+        is_advance: true,
+        // Kept as is_advance, NOT renamed to is_prepayment. There are legacy
+        // rows on her VM carrying this flag and four code paths that filter on
+        // it; a new name would make today's prepayments invisible to every one
+        // of them and leave the old money orphaned under a dead field.
+        load_id: null,
+        load_kind: loadKind,
+        seller,
+        mode,
+        amount,
+        paid_on: input.paid_on || new Date().toISOString().slice(0, 10),
+        reference: String(input.reference || '').trim() || null,
+        note: String(input.note || '').trim() || null,
+        cash_source: input.cash_source || null,
+        petty_cash_entry_id: cashEntry ? cashEntry.id : null,
+        cash_taken: cashTaken,
+        created_at: new Date().toISOString(),
+        created_by: input.created_by || null,
+        client_request_id: require('./oncePerSave').normTicket(input.client_request_id),
+    };
+
+    let already = null;
+    await mutateJson(cfg.PAYMENTS_FILE, [], (all) => {
+        const list = Array.isArray(all) ? all : [];
+        // Same one-save-one-record guard the load create paths use. A
+        // prepayment is money out of the drawer; a double-tap that records it
+        // twice is $3,000 of cash the book says left and did not.
+        already = require('./oncePerSave').findSpent(list, record.client_request_id);
+        if (already) return list;
+        list.push(record);
+        return list;
+    }, { strict: true });
+    return already || record;
+}
+
+const listPrepayments = (seller) => listPayments().filter((p) => p.is_advance
+    && (!seller || String(p.seller || '').toLowerCase() === String(seller).toLowerCase()));
+
+// How much of a prepayment is still unspent. DERIVED from what has been
+// applied out of it and never stored, for the same reason load balances are
+// derived: a stored remaining and its applications drift, and the drift is
+// invisible until she is short.
+function prepaymentRemaining(prepaymentId) {
+    const all = listPayments();
+    const adv = all.find((p) => p.id === prepaymentId && p.is_advance);
+    if (!adv) return 0;
+    const used = all
+        .filter((p) => p.applied_from === prepaymentId)
+        .reduce((a, p) => a + (toNum(p.amount) || 0), 0);
+    return round2(num0(adv.amount) - used);
+}
+
+// Unapplied credit a supplier is holding, and which prepayments it came from.
+function prepaymentCredit(seller) {
+    const rows = listPrepayments(seller).map((a) => ({
+        id: a.id, mode: a.mode, paid_on: a.paid_on, reference: a.reference,
+        amount: round2(a.amount), remaining: prepaymentRemaining(a.id),
+    })).filter((a) => a.remaining > CENT);
+    return {
+        seller: seller || null,
+        available: round2(rows.reduce((a, r) => a + r.remaining, 0)) || 0,
+        prepayments: rows,
+    };
+}
+
+// Puts prepaid money against a specific load. Creates an ORDINARY payment row
+// — it counts toward the balance, prints on the ticket and needs no special
+// case anywhere downstream — carrying applied_from so the prepayment's
+// remaining drops by the same amount.
+//
+// No petty cash movement here, deliberately: the cash left the drawer when the
+// prepayment was recorded. Taking it again now would debit the box twice for
+// one handful of notes.
+async function applyPrepayment(input = {}) {
+    const loadId = String(input.load_id || '').trim();
+    if (!loadId) throw new Error('load_id is required');
+    const prepaymentId = String(input.prepayment_id || '').trim();
+    const remaining = prepaymentRemaining(prepaymentId);
+    if (!remaining || remaining <= CENT) throw new Error('that prepayment has nothing left on it');
+    const amount = round2(toNum(input.amount));
+    if (amount == null || amount <= 0) throw new Error('a payment amount is required');
+    // Refused rather than silently capped. Quietly applying less than asked
+    // would leave her believing a load was settled when it was not.
+    if (amount - remaining > CENT) throw new Error(`that prepayment only has ${remaining.toFixed(2)} left`);
+
+    const adv = listPayments().find((p) => p.id === prepaymentId);
+    const record = {
+        id: newPaymentId(),
+        load_id: loadId,
+        load_kind: input.load_kind === 'sale' ? 'sale' : 'purchase',
+        mode: (adv && adv.mode) || 'Cash',
+        amount,
+        paid_on: input.paid_on || new Date().toISOString().slice(0, 10),
+        reference: (adv && adv.reference) || null,
+        note: 'Applied from prepayment',
+        applied_from: prepaymentId,
+        // ── NOT A FRESH CASH MOVEMENT ────────────────────────────────────
+        // petty_cash_entry_id stays null AND cash_taken stays null, so
+        // deleteByLoad's reversal loop has no entry key to return and
+        // reverseForPayment is never called for this row. Without this the
+        // loop would match it (mode Cash, kind purchase) and try to put money
+        // back that this row never took.
+        petty_cash_entry_id: null,
+        cash_taken: null,
+        from_prepayment: true,
+        created_at: new Date().toISOString(),
+        created_by: input.created_by || null,
+    };
+    await mutateJson(cfg.PAYMENTS_FILE, [], (all) => {
+        const list = Array.isArray(all) ? all : [];
+        list.push(record);
+        return list;
+    }, { strict: true });
+    return record;
+}
+
 async function addPayment(input = {}) {
     const loadId = String(input.load_id || '').trim();
     if (!loadId) throw new Error('load_id is required');
@@ -640,7 +840,16 @@ async function deletePayment(id) {
     // Works in BOTH directions without a branch: reverseForPayment negates
     // whatever it finds, so deleting a cash PURCHASE payment puts money back
     // in the box and deleting a cash SALE receipt takes it back out.
-    if (removed && doomed && doomed.mode === 'Cash' && !EDGE_METALS_KINDS.has(doomed.load_kind)) {
+    //
+    // ── AND A ROW APPLIED FROM A PREPAYMENT MOVED NO NOTES ───────────────
+    // Same reason as the twin guard in deleteByLoad: the cash left the drawer
+    // when the prepayment was recorded, not when it was applied to this load.
+    // Reversing here would credit the box with money it already gave out, and
+    // the prepayment's remaining balance — derived from applications — goes
+    // back up on its own when this row is removed, which is the correct and
+    // complete undo.
+    if (removed && doomed && !doomed.from_prepayment
+        && doomed.mode === 'Cash' && !EDGE_METALS_KINDS.has(doomed.load_kind)) {
         // By the withdrawal's own id when we have it, else by payment id —
         // reverseForPayment accepts either, and the entry id is the one that
         // survives a payment written before the link was stamped.
@@ -673,6 +882,32 @@ async function deletePaymentsForLoad(loadId) {
     }, { strict: true });
     for (const p of doomed) {
         if (p.mode !== 'Cash' || EDGE_METALS_KINDS.has(p.load_kind)) continue;   // see deletePayment
+        // ── A ROW THAT TOOK NO CASH GIVES NONE BACK ──────────────────────
+        // Added with supplier prepayments, 2026-10-01. Applying a prepayment
+        // to a load writes an ordinary Cash/purchase payment row, which the
+        // two tests above match — but that row moved no notes: the cash left
+        // the drawer when the PREPAYMENT was recorded. Without this, deleting
+        // such a load tries to reverse a petty cash entry that was never
+        // created, and `petty_cash_entry_id || p.id` makes it fall back to
+        // the payment id, so it is not even a clean miss.
+        //
+        // HOW MUCH THIS ACTUALLY PROTECTS, measured rather than assumed: a
+        // mutation deleting this line SURVIVED the suite, and the reason is
+        // that pettyCash.reverseForPayment already bails on `if
+        // (!taken.length) return list` — an unknown key matches no entry and
+        // moves no money. So this is the second layer, not the one holding
+        // the money up, and an earlier version of this comment claiming
+        // cash could be "credited back" was overstating it. It stays because
+        // it is free and because the day someone stamps a
+        // petty_cash_entry_id onto applied rows, this is what stops a double
+        // refund. The mutation that DOES bite is on reverseForPayment's own
+        // guard, and that is the one in the catalogue.
+        //
+        // Keyed on from_prepayment rather than on a null entry id, because a
+        // null entry id is ALSO what every payment written before
+        // petty_cash_entry_id existed carries, and those legacy rows do still
+        // want the id fallback. The flag marks the NEW shape, per CLAUDE.md.
+        if (p.from_prepayment) continue;
         const key = p.petty_cash_entry_id || p.id;
         try {
             await require('./pettyCash').reverseForPayment(key, { createdBy: null });
@@ -724,4 +959,7 @@ module.exports = {
     PAID_VIA, PAID_VIA_BY_KIND, paidViaRequired, paidViaLabel, resolvePaidVia, paidViaOptionsFor,
     listPayments, paymentsForLoad, addPayment,
     deletePayment, deletePaymentsForLoad, paymentSummary,
+    // Supplier prepayments, Edge Yard — see addPrepayment's header for why
+    // this is the second attempt and what the first one got wrong.
+    addPrepayment, listPrepayments, prepaymentRemaining, prepaymentCredit, applyPrepayment,
 };
