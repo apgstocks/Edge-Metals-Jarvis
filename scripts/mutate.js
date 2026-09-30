@@ -732,10 +732,23 @@ const MUTATIONS = [
       to:   '    if (POINTS_BACK.test(t)) {' },
 
     // ── EDGE METALS MONEY, 2026-09-10 ────────────────────────────────────
+    // ── REPAIRED 2026-09-30, AFTER IT SPENT WEEKS TESTING NOTHING ────────
+    // This was written against `drawsPettyCash = mode === 'Cash' && loadKind
+    // !== 'bill'`. That line was later refactored into touchesPettyCash and
+    // the allowlist below, and the mutation's pattern stopped matching — so
+    // it reported nothing, and "0 SURVIVED" on the petty-cash set quietly
+    // stopped including the check that matters most: Edge Metals cash must
+    // never come out of the Edge Yard box. CLAUDE.md rule 5.
+    //
+    // Nothing was wrong with the CODE. What was wrong is that the harness
+    // said 22 killed, 0 survived, and two of the twenty-four were measuring
+    // an unmutated file. That is exactly the first failure in this file's
+    // own header, and it is why `not applied` is reported as loudly as a
+    // survivor.
     { name: 'metals cash drains the EDGE YARD petty cash box',
       file: 'helpers/payments.js', suites: ['bills-sales'],
-      find: "const drawsPettyCash = mode === 'Cash' && loadKind !== 'bill';",
-      to:   "const drawsPettyCash = mode === 'Cash';" },
+      find: "    const touchesPettyCash = mode === 'Cash' && !EDGE_METALS_KINDS.has(loadKind);",
+      to:   "    const touchesPettyCash = mode === 'Cash';" },
     // ── TWO MUTATIONS TRIED AND DELIBERATELY NOT KEPT, 2026-09-10 ────────
     // Removing the `&& load_kind !== 'bill'` guard from either delete path in
     // helpers/payments.js SURVIVES, and it should: pettyCash.reverseForPayment
@@ -1095,10 +1108,24 @@ const MUTATIONS = [
       file: 'helpers/spendReport.js', suites: ['bills-sales'],
       find: "        else if (r.kind === 'sale_cost') saleCostTotal = round2(saleCostTotal + r.amount);",
       to:   '        else if (false) {}' },
+    // Repaired 2026-09-30 for the same reason as the one above: the set
+    // gained 'metals_trucking' and this pattern stopped matching.
     { name: 'an Edge Metals cash settlement drains the yard petty cash box',
       file: 'helpers/payments.js', suites: ['bills-sales'],
-      find: "const EDGE_METALS_KINDS = new Set(['bill', 'sale_cost']);",
-      to:   "const EDGE_METALS_KINDS = new Set(['bill']);" },
+      find: "const EDGE_METALS_KINDS = new Set(['bill', 'sale_cost', 'metals_trucking']);",
+      to:   "const EDGE_METALS_KINDS = new Set(['bill', 'metals_trucking']);" },
+
+    // ── AND THE MEMBER NOTHING EVER CHECKED ─────────────────────────────
+    // 'metals_trucking' was added to this set without a mutation of its
+    // own, and the only one pointing at the set had already gone stale. So
+    // from the day it landed until today, dropping it would have sent a
+    // metals haulage payment made in CASH out of the Edge Yard petty cash
+    // box, and the suite would have stayed green. Found by the harness
+    // reporting "2 not applied", not by reading the code.
+    { name: 'metals haulage paid in cash drains the yard petty cash box',
+      file: 'helpers/payments.js', suites: ['bills-sales'],
+      find: "const EDGE_METALS_KINDS = new Set(['bill', 'sale_cost', 'metals_trucking']);",
+      to:   "const EDGE_METALS_KINDS = new Set(['bill', 'sale_cost']);" },
     { name: 'a container already sold is offered for sale again',
       file: 'dashboard/index.html', suites: ['ledger-render'],
       find: "            <button class=\"fbPick\" data-id=\"${esc(b.id)}\" ${b.sold ? 'disabled' : ''}",
@@ -2638,6 +2665,67 @@ const MUTATIONS = [
       file: 'helpers/tools.js', suites: ['load-trucking'],
       find: "                summary: paymentSummary(id, require('./loads').payableOf(load)),",
       to:   '                summary: paymentSummary(id, load.amount),' },
+
+    // ── ONE DRAFT, ONE LOAD (2026-09-29) ────────────────────────────────
+    // Apsara, rejecting a fix that only narrowed the race window on a load
+    // that generated twice: "NO..IT IS BUSINESS LOGIC LOSE.ALWAYS ONE LOAD
+    // SHOULD BE CREATED".
+    //
+    // These five were run by hand when the invariant shipped, and that was
+    // not good enough: a mutation I ran once and described in a commit
+    // message is a claim, not a check. This file's own header says the
+    // catalogue is checked in precisely so "which mutations were run" stops
+    // being something I assert. Adding them late is the fix; the lesson is
+    // that a hand-run mutation is not done until it is in here.
+    { name: 'one-draft: the purchase path stops spending the draft id',
+      file: 'helpers/loads.js', suites: ['one-draft-one-load'],
+      find: "        already = once.findSpent(loads, rec.client_request_id)\n            || once.findByDraft(loads, rec.draft_id);",
+      to:   '        already = once.findSpent(loads, rec.client_request_id);' },
+
+    { name: 'one-draft: the sale path stops spending the draft id',
+      file: 'helpers/outboundLoads.js', suites: ['one-draft-one-load'],
+      find: "        already = once.findSpent(loads, rec.client_request_id)\n            || once.findByDraft(loads, rec.draft_id);",
+      to:   '        already = once.findSpent(loads, rec.client_request_id);' },
+
+    // The one that nearly shipped broken. buildRecord rebuilds a sale from a
+    // fixed field list, so an edit wipes anything it does not name — the trap
+    // helpers/outboundLoads.js already records springing on pdf_link and on
+    // delivery_status. Her duplicate came from a flow WITH an edit in the
+    // middle of it, so a load that forgets its draft hands the draft back its
+    // freedom to create a second one.
+    { name: 'one-draft: an EDIT frees the draft to create a second load',
+      file: 'helpers/outboundLoads.js', suites: ['one-draft-one-load'],
+      find: '        patch.draft_id = prior.draft_id || null;',
+      to:   '        patch.draft_id = null;' },
+
+    // A TTL is the plausible-looking change that quietly reintroduces the
+    // bug — findSpent has one, so copying it here looks like consistency.
+    // "ALWAYS ONE LOAD" has no clock in it.
+    { name: 'one-draft: the draft id expires after 24h like a save ticket',
+      file: 'helpers/oncePerSave.js', suites: ['one-draft-one-load'],
+      find: '        if (r && normDraftId(r.draft_id) === d) return r;',
+      to:   "        if (r && normDraftId(r.draft_id) === d) { const at = Date.parse(r.created_at || ''); if (isFinite(at) && (Date.now() - at) > TICKET_TTL_MS) continue; return r; }" },
+
+    { name: 'one-draft: the create route drops draft_id on the floor',
+      file: 'api.js', suites: ['one-draft-one-load'],
+      find: '                draft_id: b.draft_id,\n            });\n\n            const { uploadScaleTicketImage }',
+      to:   '            });\n\n            const { uploadScaleTicketImage }' },
+
+    // The client half. currentDraftId is nulled by clearLoadDraft, so a clear
+    // that runs BEFORE the payload is built sends null on every save and
+    // turns the whole guard off silently. My first version of this check
+    // searched forward from the payload and passed with the clear inserted
+    // before it — shaped like the code instead of like the property, which is
+    // the failure mode CLAUDE.md names. Only a mutation found it.
+    { name: 'one-draft: the website stops sending the draft id',
+      file: 'dashboard/index.html', suites: ['one-draft-one-load'],
+      find: '        draft_id: currentDraftId,',
+      to:   '        draft_id: null,' },
+
+    { name: 'one-draft: the app stops sending the draft id',
+      file: 'mobile-app/www/index.html', suites: ['one-draft-one-load'],
+      find: '        draft_id: currentDraftId,',
+      to:   '        draft_id: null,' },
 ];
 
 // ── CRASH-SAFE, NOT JUST EXIT-SAFE ───────────────────────────────────────
