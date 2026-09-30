@@ -2726,6 +2726,47 @@ const MUTATIONS = [
       file: 'mobile-app/www/index.html', suites: ['one-draft-one-load'],
       find: '        draft_id: currentDraftId,',
       to:   '        draft_id: null,' },
+
+    // ── PROFORMA IN PROFORMA, INVOICE IN INVOICE (2026-09-30) ───────────
+    // Apsara: "proform ashould be in proforma,inv in invoice" and "find a
+    // way to keep old invoice in inv tab only".
+    { name: 'doc-kinds: the proforma tab goes back to listing old invoices',
+      file: 'api.js', suites: ['saved-doc-kinds'],
+      find: '                proformas: split.proformas,',
+      to:   '                proformas: documentsSaved.listSavedProformas(),' },
+
+    // ── THE DANGEROUS DIRECTION ─────────────────────────────────────────
+    // This feature can fail two ways and they are not equal. Listing an
+    // invoice under proformas is untidy. Treating "not yet classified" as
+    // "not a proforma" makes documents vanish from EVERY tab the moment the
+    // cache is cold — a fresh VM, a deleted file — with no error anywhere
+    // and no way for her to know the app stopped listing them.
+    { name: 'doc-kinds: an UNCLASSIFIED file is dropped from the proforma tab',
+      file: 'helpers/documentsSaved.js', suites: ['saved-doc-kinds'],
+      find: "        if (kind && kind !== 'proforma') misfiled.push({ file: f, kind });",
+      to:   "        if (kind !== 'proforma') misfiled.push({ file: f, kind });" },
+
+    { name: 'doc-kinds: a stale verdict survives the file being replaced',
+      file: 'helpers/savedDocKinds.js', suites: ['saved-doc-kinds'],
+      find: '    if (stat && rec.size != null && Number(rec.size) !== Number(stat.size)) return null;',
+      to:   '' },
+
+    { name: 'doc-kinds: any string is accepted as a kind',
+      file: 'helpers/savedDocKinds.js', suites: ['saved-doc-kinds'],
+      find: '            if (!e || !e.filename || !KNOWN.has(e.kind)) continue;',
+      to:   '            if (!e || !e.filename) continue;' },
+
+    // A row that moves tab but keeps its real filing is only useful if the
+    // buttons still address it where it lives.
+    { name: 'doc-kinds: the invoice tab opens misfiled rows as kind=invoice',
+      file: 'dashboard/documents.html', suites: ['saved-doc-kinds'],
+      find: 'download?kind=proforma&file=${encodeURIComponent(m.file)}',
+      to:   'download?kind=invoice&file=${encodeURIComponent(m.file)}' },
+
+    { name: 'doc-kinds: the audit records verdicts it is not sure of',
+      file: 'scripts/documents-folder-audit.js', suites: ['saved-doc-kinds'],
+      find: "        if (WRITE_CACHE && require('../helpers/savedDocKinds').KNOWN.has(res.what)) {",
+      to:   '        if (WRITE_CACHE) {' },
 ];
 
 // ── CRASH-SAFE, NOT JUST EXIT-SAFE ───────────────────────────────────────

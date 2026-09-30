@@ -30,6 +30,11 @@
 //   node scripts/documents-folder-audit.js            every year
 //   node scripts/documents-folder-audit.js --from 2026-01-01
 //   node scripts/documents-folder-audit.js --verbose  list every file
+//   node scripts/documents-folder-audit.js --write-cache
+//        record what each one is, so the proforma tab stops listing old
+//        invoices and the invoice tab shows them instead. Apsara 2026-09-30:
+//        "find a way to keep old invoice in inv tab only". Still moves no
+//        files — only what each TAB shows changes.
 //
 // Run it on the VM:
 //   cd ~/Jarvis && node scripts/documents-folder-audit.js
@@ -40,6 +45,10 @@ const ROOT = path.join(__dirname, '..');
 
 const argv = process.argv.slice(2);
 const VERBOSE = argv.includes('--verbose');
+// Writes the classification cache the Documents tabs read. Separate from the
+// report on purpose: reading is always safe, and the only thing that changes
+// what she SEES is this flag.
+const WRITE_CACHE = argv.includes('--write-cache');
 const fromArg = (() => {
     const i = argv.indexOf('--from');
     return i >= 0 ? argv[i + 1] : null;
@@ -206,9 +215,24 @@ async function why(target) {
     const byFolder = {};
     const wrong = [];
     const unclear = [];
+    const learned = [];
 
     for (const f of kept) {
         const res = await classify(f.file);
+        // ── WHAT --write-cache IS FOR ─────────────────────────────────────
+        // Only a POSITIVE identification is recorded. "unreadable", "no
+        // text" and "unrecognised" are never written, because the tabs treat
+        // an absent verdict as "leave it where it is" — and a stored
+        // non-verdict would turn a parsing failure into a filing decision.
+        if (WRITE_CACHE && require('../helpers/savedDocKinds').KNOWN.has(res.what)) {
+            try {
+                const st = fs.statSync(f.file);
+                learned.push({
+                    filename: path.basename(f.file), kind: res.what,
+                    size: st.size, mtime: st.mtime.toISOString(),
+                });
+            } catch (e) { /* vanished mid-run; it simply stays unclassified */ }
+        }
         const key = `${f.folder} / ${res.what}`;
         byFolder[key] = (byFolder[key] || 0) + 1;
         const home = HOME[res.what];
@@ -256,6 +280,20 @@ async function why(target) {
             console.log(`    ${path.relative(SAVED, u.file)}  (${u.what}: ${u.why})`);
         }
         if (unclear.length > 20) console.log(`    … and ${unclear.length - 20} more`);
+    }
+    if (WRITE_CACHE) {
+        if (learned.length) {
+            await require('../helpers/savedDocKinds').record(learned);
+            console.log(`\n  RECORDED ${learned.length} verdict(s) — the Documents tabs will now`);
+            console.log(`  show each of these under the heading its own title says.`);
+            console.log(`  Nothing was moved, renamed or deleted.`);
+        } else {
+            console.log(`\n  Nothing positively identified, so nothing recorded. The tabs are`);
+            console.log(`  unchanged — an unreadable file is left exactly where it is.`);
+        }
+    } else if (wrong.length) {
+        console.log(`\n  To make the tabs match this report:`);
+        console.log(`      node scripts/documents-folder-audit.js --write-cache`);
     }
     console.log('');
 })().catch((e) => { console.error('\n  ' + (e.stack || e.message) + '\n'); process.exit(1); });

@@ -7809,9 +7809,29 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
     // this route doesn't need to change shape again later.
     app.get('/api/documents/saved', (req, res) => {
         try {
+            // ── PROFORMAS ONLY IN PROFORMA, INVOICES ONLY IN INVOICE ─────
+            // Apsara 2026-09-30: "proform ashould be in proforma,inv in
+            // invoice" and "find a way to keep old invoice in inv tab only".
+            //
+            // `proformas` NARROWS here: a file positively identified as a
+            // commercial invoice no longer appears under it. That is the
+            // requested change and it is the only one — the misfiled rows
+            // come back on their own key so the invoice tab can show them,
+            // with their real filing (kind: 'proforma') intact so Open and
+            // Delete keep working. Nothing on disk moves; see
+            // helpers/savedDocKinds.js for why not.
+            //
+            // A file nobody has classified stays under `proformas`, so a cold
+            // cache leaves today's behaviour exactly as it is rather than
+            // emptying the tab.
+            const split = documentsSaved.splitSavedProformas();
             res.json({
                 invoices: documentsSaved.listSavedInvoices(),
-                proformas: documentsSaved.listSavedProformas(),
+                proformas: split.proformas,
+                // Identified as belonging in the invoice tab, still filed
+                // under proforma/ on disk. Additive key — a client that does
+                // not know about it is unaffected.
+                misfiled_in_proforma: split.misfiled,
                 // Added 2026-09-15 with the BOL tab. Purely additive — the
                 // one consumer (dashboard/documents.html) destructures
                 // `{ proformas }` and is unaffected by a new key.
