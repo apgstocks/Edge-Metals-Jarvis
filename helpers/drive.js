@@ -276,7 +276,38 @@ async function listAllPdfs() {
     if (!cfg.GDRIVE_UPLOAD_FOLDER_ID) throw new Error('GDRIVE_UPLOAD_FOLDER_ID not configured');
     const files = [];
     let pageToken = null;
+    // ── A PAGINATION LOOP NEEDS A WAY OUT THAT IS NOT THE API'S GOODWILL ──
+    // `do { ... } while (pageToken)` trusts Drive to eventually stop sending
+    // a token. When it does not — a repeated token, which paginated APIs do
+    // return on shared drives under some conditions — this loops forever
+    // making network calls, and the only symptom is a job that never
+    // finishes and a quota that drains.
+    //
+    // Two guards, and NEITHER truncates silently: a repeated token is a bug
+    // in the exchange, and a page count this high means the folder outgrew
+    // the assumption this was written under. Both throw with what was
+    // collected so far named in the message, because a partial list returned
+    // as if it were complete is how an audit reports "these files are
+    // missing" about files that are simply on page 51.
+    const MAX_PAGES = 500;              // 50,000 PDFs at pageSize 100
+    const seenTokens = new Set();
+    let pages = 0;
     do {
+        if (pageToken) {
+            if (seenTokens.has(pageToken)) {
+                throw new Error(
+                    `Drive returned the same page token twice after ${files.length} file(s) — `
+                    + 'refusing to keep paging, because this list would never end and the '
+                    + 'result would be wrong anyway');
+            }
+            seenTokens.add(pageToken);
+        }
+        if (++pages > MAX_PAGES) {
+            throw new Error(
+                `Stopped after ${MAX_PAGES} pages (${files.length} file(s)) — the upload folder `
+                + 'is bigger than this was built for. Raise MAX_PAGES deliberately rather than '
+                + 'trusting a truncated list.');
+        }
         const res = await drive.files.list({
             q: `'${cfg.GDRIVE_UPLOAD_FOLDER_ID}' in parents and mimeType = 'application/pdf' and trashed = false`,
             fields: 'nextPageToken, files(id, name, modifiedTime)',
