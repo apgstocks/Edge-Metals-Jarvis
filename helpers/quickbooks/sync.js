@@ -142,6 +142,35 @@ function after(kind, id, change = 'saved') {
 // skipped, everything else goes through the same checks as a hook.
 async function sweep({ env = auth.qbEnv(), dryRun = false } = {}) {
     const res = { bill: {}, sale: {}, billpayment: {}, receipt: {} };
+    // ── PER-ROW DETAIL, ON A DRY RUN ONLY (2026-10-01) ─────────────────────
+    // Apsara: "Assign one agent for quickbook next".
+    //
+    // count() keeps the status and throws away WHICH row and WHY. So the
+    // nightly QuickBooks email can say "7 blocked" and never say which seven
+    // or what they are missing, and she has to run a terminal script to find
+    // out. An agent cannot work from a count either.
+    //
+    // So a dry run also keeps the rows. ADDITIVE: quickbooksNightly's
+    // summarise() reads res[kind][status] and is untouched; nothing else
+    // reads this object. Dry run only, because that is the path with no
+    // writes and no journal entries — the live path's detail already goes to
+    // the journal, which is the record that has to survive.
+    res.rows = [];
+    const keep = (k, row, r) => {
+        if (!r) return;
+        res.rows.push({
+            kind: k,
+            // Both, because push.js links by `id || container_no` and the
+            // consumer needs whichever one identifies the row.
+            id: (row && row.id) || null,
+            container_no: (row && row.container_no) || null,
+            party: (row && (row.supplier || row.customer)) || null,
+            invoice_no: (row && row.invoice_no) || null,
+            date: (row && row.date) || null,
+            status: r.status || 'error',
+            problems: Array.isArray(r.problems) ? r.problems.slice() : [],
+        });
+    };
     const count = (k, r) => { const s = (r && r.status) || 'error'; res[k][s] = (res[k][s] || 0) + 1; };
     // ── WHAT THE CUTOVER LEFT BEHIND (2026-09-26) ───────────────────────────
     // Rows older than the cutover are dropped here, before any push. That was
@@ -172,14 +201,30 @@ async function sweep({ env = auth.qbEnv(), dryRun = false } = {}) {
     const snaps = await snapshots(env);
     if (dryRun) {
         const B = require('../bills'), S = require('../sales');
-        for (const b of bills) count('bill', await push.pushBill(B.withTotals(b), snaps, { env, dryRun: true }).catch((e) => ({ status: 'error: ' + e.message })));
+        for (const b of bills) {
+            const r = await push.pushBill(B.withTotals(b), snaps, { env, dryRun: true }).catch((e) => ({ status: 'error: ' + e.message }));
+            count('bill', r); keep('bill', b, r);
+        }
         const byInv = {};
         for (const s of sales) { const n = push.docNumberFor(s); if (n) (byInv[n] = byInv[n] || []).push(S.withTotals(s)); }
-        for (const rows of Object.values(byInv)) count('sale', await pushInvoice.pushInvoice(rows, snaps, { env, dryRun: true }).catch((e) => ({ status: 'error: ' + e.message })));
+        for (const rows of Object.values(byInv)) {
+            const r = await pushInvoice.pushInvoice(rows, snaps, { env, dryRun: true }).catch((e) => ({ status: 'error: ' + e.message }));
+            // One invoice can cover several grade rows; the first carries the
+            // identifying invoice_no and container, which is what she looks
+            // the invoice up by.
+            count('sale', r); keep('sale', rows[0], r);
+        }
         // payments too — they only find their bill/invoice once it is linked
-        for (const p of bps) count('billpayment', await pushPayments.pushBillPayment(p, snaps, { env, dryRun: true }).catch((e) => ({ status: 'error: ' + e.message })));
-        for (const r of recs) count('receipt', await pushPayments.pushCustomerPayment(r, snaps, { env, dryRun: true,
-            saleInvoiceNo: (saleId) => { const s = S.getSale(saleId); return s && push.docNumberFor(s); } }).catch((e) => ({ status: 'error: ' + e.message })));
+        for (const p of bps) {
+            const r = await pushPayments.pushBillPayment(p, snaps, { env, dryRun: true }).catch((e) => ({ status: 'error: ' + e.message }));
+            count('billpayment', r); keep('billpayment', p, r);
+        }
+        for (const rec of recs) {
+            const r = await pushPayments.pushCustomerPayment(rec, snaps, { env, dryRun: true,
+                saleInvoiceNo: (saleId) => { const s = S.getSale(saleId); return s && push.docNumberFor(s); } })
+                .catch((e) => ({ status: 'error: ' + e.message }));
+            count('receipt', r); keep('receipt', rec, r);
+        }
         res.leftAlone = left;
         return res;
     }

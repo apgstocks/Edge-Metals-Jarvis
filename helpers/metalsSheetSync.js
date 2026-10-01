@@ -223,6 +223,41 @@ function differences(sheetRow, jarvisRow, watch) {
     return out;
 }
 
+// ── WHAT THE SHEET HAS AND JARVIS DOES NOT ─────────────────────────────────
+// Apsara, 2026-10-01: "check sheet properly,whatever is missed in jarvis fill
+// it. Every day,ensure that there is no discrepancy."
+//
+// This is NOT differences(). same() deliberately returns true when either
+// side is blank — "a field she has not filled in yet on one side is the
+// normal state of a live sheet" — and that is right for the disagreements
+// email, which exists to show her two conflicting numbers. A blank is not a
+// conflict.
+//
+// But it meant a blank was invisible to every consumer, and the 07:30 ledger
+// agent is built entirely around filling blanks. Its sheet source could only
+// ever propose and never fill, which is the half she asked for.
+//
+// So blanks get their own list rather than being folded into changedBills.
+// Folding them in would have put every empty seal_no into her nightly
+// DISAGREEMENTS section, which is the opposite of what that section is for.
+// Additive: metalsSheetSyncJob's report reads changedBills/changedSales by
+// name and ignores this.
+function blanksOnly(sheetRow, jarvisRow, watch) {
+    const out = [];
+    const flat = (v) => String(v == null ? '' : v).trim();
+    for (const f of watch) {
+        // freight is a shape mismatch, not a blank — see freightOf. The
+        // sheet has one number, Jarvis has a list with notes, and "filling"
+        // across that gap is exactly the wrong answer this file already
+        // learned once.
+        if (f === 'freight_charges') continue;
+        const theirs = flat(sheetRow[f]);
+        const mine = flat(jarvisRow[f]);
+        if (theirs && !mine) out.push({ field: f, sheet: sheetRow[f], jarvis: '' });
+    }
+    return out;
+}
+
 // ── THE DIFF ───────────────────────────────────────────────────────────────
 // Pure: hand it what the sheet says and what Jarvis holds, get back what would
 // happen. No fetching, no writing, no clock — which is what makes the night
@@ -234,6 +269,9 @@ function diff({ sheetBills = [], sheetSales = [], bills = [], sales = [] }) {
     for (const s of sales) { const k = saleKey(s); if (k) haveSales.set(k, s); }
 
     const report = { newBills: [], newSales: [], changedBills: [], changedSales: [],
+                     // Blanks, kept OUT of changedBills on purpose — see
+                     // blanksOnly. These are what the 07:30 agent fills.
+                     fillableBills: [], fillableSales: [],
                      unkeyed: [], notShipments: [] };
 
     for (const row of sheetBills) {
@@ -247,8 +285,17 @@ function diff({ sheetBills = [], sheetSales = [], bills = [], sales = [] }) {
         if (!k) { report.unkeyed.push({ kind: 'bill', row }); continue; }
         const mine = haveBills.get(k);
         if (!mine) { report.newBills.push(row); continue; }
+        const blank = blanksOnly(row, mine, BILL_WATCH);
+        if (blank.length) report.fillableBills.push({ key: k, row_id: mine && mine.id,
+            container_no: row.container_no, supplier: row.supplier, blanks: blank });
         const d = differences(row, mine, BILL_WATCH);
-        if (d.length) report.changedBills.push({ key: k, container_no: row.container_no, differences: d });
+        // row_id so a consumer can ACT on a difference rather than only
+        // print it. helpers/ledgerAgent.apply needs the row to patch, and
+        // without this it had nothing to write to — the sheet half produced
+        // findings nobody could apply. Additive: every existing reader
+        // ignores it.
+        if (d.length) report.changedBills.push({ key: k, row_id: mine && mine.id,
+            container_no: row.container_no, supplier: row.supplier, differences: d });
     }
     for (const row of sheetSales) {
         if (!looksLikeShipment(row)) { report.notShipments.push({ kind: 'sale', row }); continue; }
@@ -256,8 +303,14 @@ function diff({ sheetBills = [], sheetSales = [], bills = [], sales = [] }) {
         if (!k) { report.unkeyed.push({ kind: 'sale', row }); continue; }
         const mine = haveSales.get(k);
         if (!mine) { report.newSales.push(row); continue; }
+        const blank = blanksOnly(row, mine, SALE_WATCH);
+        if (blank.length) report.fillableSales.push({ key: k, row_id: mine && mine.id,
+            invoice_no: row.invoice_no, container_no: row.container_no,
+            customer: row.customer, blanks: blank });
         const d = differences(row, mine, SALE_WATCH);
-        if (d.length) report.changedSales.push({ key: k, invoice_no: row.invoice_no, container_no: row.container_no, differences: d });
+        if (d.length) report.changedSales.push({ key: k, row_id: mine && mine.id,
+            invoice_no: row.invoice_no, container_no: row.container_no,
+            customer: row.customer, differences: d });
     }
     return report;
 }
@@ -306,5 +359,5 @@ function summarise(report) {
     return head + tail + bad + nots + '.';
 }
 
-module.exports = { diff, differences, billKey, saleKey, same, fetchWorkbook, summarise,
+module.exports = { diff, differences, blanksOnly, billKey, saleKey, same, fetchWorkbook, summarise,
     looksLikeShipment, BILL_WATCH, SALE_WATCH };

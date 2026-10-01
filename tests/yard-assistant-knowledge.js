@@ -272,8 +272,16 @@ section('F — nothing new can write');
     for (const t of ['find_sales', 'sales_report', 'yard_profit']) {
         ck(`${t} is read-only`, !writes.includes(t), writes.join(', '));
     }
+    // ── record_prepayment JOINS THE LIST, DELIBERATELY (2026-10-01) ──────
+    // Apsara: "Add a supplier prepayment option in loads", "not only cash
+    // prepayment,advance can be in any form of payment na". The voice path
+    // records one, so it is a write and belongs here — this pin going red
+    // when it appeared is the guard doing exactly its job.
+    //
+    // Anything else arriving in this list is NOT declared and should be
+    // argued about before the pin is widened again.
     ck('  and the write list is unchanged',
-       writes.sort().join(',') === ['record_payment', 'add_trucker_bill', 'add_expense'].sort().join(','),
+       writes.sort().join(',') === ['record_payment', 'record_prepayment', 'add_trucker_bill', 'add_expense'].sort().join(','),
        writes.join(', '));
 }
 

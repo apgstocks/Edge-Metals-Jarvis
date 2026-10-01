@@ -74,9 +74,28 @@ for (const file of ['dashboard/index.html', 'mobile-app/www/index.html']) {
     const dom = mount(file);
     const w = dom.window;
 
-    // Two this month, five across two older months, one undated.
+    // ── THE FIXTURE HAD A DATE BOMB OF ITS OWN (found 2026-10-01) ────────
+    // "Two this month" was mk('B', daysAgo(1)) — and on the FIRST of a month
+    // yesterday is in the PREVIOUS month, so B stopped being one of the two
+    // and became a sixth folded day. That turned the hardcoded `=== 5`
+    // below red, on a day when nothing about the grouping had changed.
+    //
+    // Worse than always-red: it passes on 28 days out of 31 and fails on the
+    // 1st and 2nd, which is the kind of failure that gets re-run, shrugged
+    // at, and eventually deleted.
+    //
+    // So "this month" now means a day that IS in this month whatever the
+    // date: today, and the day after the 1st clipped to today. And the
+    // counts below are computed from this list rather than written down.
+    // BOTH on today. A second DISTINCT day in the current month does not
+    // exist on the 1st, so asking for one is asking the calendar for a
+    // favour. Two loads on one day exercises the same thing the section
+    // below actually checks — that this month renders as day sections with
+    // the newest open — without depending on the date.
+    //
+    // Two this month (same day), five across two older months, one undated.
     const loads = [
-        mk('A', daysAgo(0)), mk('B', daysAgo(1)),
+        mk('A', daysAgo(0)), mk('B', daysAgo(0)),
         mk('C', monthsAgo(1, 28)), mk('D', monthsAgo(1, 27)), mk('E', monthsAgo(1, 14)), mk('F', monthsAgo(1, 3)),
         mk('G', monthsAgo(2, 9)),
         mk('H', null),
@@ -101,8 +120,20 @@ for (const file of ['dashboard/index.html', 'mobile-app/www/index.html']) {
     // Her words are "once the month gets over". The screen she works in every
     // day must not get two folds deeper to tidy up last March.
     const dayTops = q('.load-date-section');
-    ck(`${who}: this month still shows as day sections`, dayTops.length >= 2,
-       dayTops.map((e) => e.querySelector('summary').textContent.trim()).join(' | '));
+    // ONE day section for this month's loads plus ONE for the undated — and
+    // asserted as that, rather than as ">= 2". The loose version passed on
+    // the 1st for the wrong reason: the two "this month" loads had silently
+    // collapsed into one day and the count was made up by the undated
+    // section, so a real regression in this-month grouping would have been
+    // invisible.
+    const thisMonthDays = new Set(loads
+        .filter((l) => l.date && l.date.slice(0, 7) === iso(now).slice(0, 7))
+        .map((l) => l.date));
+    const undated = loads.filter((l) => !l.date).length ? 1 : 0;
+    ck(`${who}: this month still shows as day sections`,
+       dayTops.length === thisMonthDays.size + undated,
+       `${dayTops.length} rendered; expected ${thisMonthDays.size} dated day(s) + ${undated} undated — `
+       + dayTops.map((e) => e.querySelector('summary').textContent.trim()).join(' | '));
     ck(`  ${who}: newest day still opens on arrival`, dayTops[0] && dayTops[0].hasAttribute('open'),
        'if today is shut, every visit starts with a click');
     ck(`  ${who}: and an undated load stays at the top level`,
@@ -126,10 +157,20 @@ for (const file of ['dashboard/index.html', 'mobile-app/www/index.html']) {
        months.map((m) => m.querySelector('.load-date-count').textContent).join(' | '));
     ck(`  ${who}: weeks inside months`, q('.load-month-section .load-week-section').length >= 3,
        `${q('.load-week-section').length} weeks`);
-    ck(`  ${who}: days inside weeks`, q('.load-week-section .load-day-section').length === 5,
-       `${q('.load-day-section').length} days — one per dated load in an older month`);
+    // ── COUNTED FROM THE FIXTURE, NOT WRITTEN DOWN ───────────────────────
+    // This said `=== 5`. Five was right for the list above on most days of
+    // the month and wrong on the 1st. The PROPERTY is "one folded day per
+    // distinct date that is not in the current month", so that is what is
+    // asserted — and it stays true whichever day the suite runs.
+    const thisMonth = iso(now).slice(0, 7);
+    const olderDays = new Set(loads
+        .filter((l) => l.date && l.date.slice(0, 7) !== thisMonth)
+        .map((l) => l.date));
+    ck(`  ${who}: days inside weeks`,
+       q('.load-week-section .load-day-section').length === olderDays.size,
+       `${q('.load-day-section').length} rendered, ${olderDays.size} distinct older dates in the fixture`);
     ck(`  ${who}: and cards inside days`,
-       q('.load-day-section .load-deck-grid').length === 5);
+       q('.load-day-section .load-deck-grid').length === olderDays.size);
 
     // Everything shut. A fold that opens by default is not a fold.
     ck(`  ${who}: every older fold starts closed`,

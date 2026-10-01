@@ -206,10 +206,19 @@ function openPos(store, now = Date.now()) {
 // Called by her: "close po 4302902". Deletion-free, same reasoning as the
 // mute fix — a release that depends on deleting a key fails silently in a
 // sandbox and leaves the thing it was releasing still held.
-function closePo(store, po, by = 'apsara') {
+// `at` is injectable, 2026-10-01. Not a feature — a test fix.
+// tests/emailwatch-signals.js AE14 asserted the history line said
+// "closed 2026-09" while this stamped the REAL clock, so it passed all
+// September and went red by itself on 1 October. A test that fails because
+// the month changed is a test that gets deleted, and this suite cannot
+// afford another one of those.
+//
+// Default unchanged, so workflow/actions.js:5136 — the only other caller —
+// behaves exactly as before.
+function closePo(store, po, by = 'apsara', at = null) {
     const key = String(po || '').trim();
     if (!key || !store.pos || !store.pos[key]) return null;
-    store.pos[key].closedAt = new Date().toISOString();
+    store.pos[key].closedAt = at || new Date().toISOString();
     store.pos[key].closedBy = by;
     return store.pos[key];
 }

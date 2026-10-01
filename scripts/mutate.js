@@ -2899,6 +2899,138 @@ const MUTATIONS = [
       find: '                const rep = this.report;',
       to:   "                const rep = this.report || require('./metalsSheetSync').fetchWorkbook('x');" },
 
+    // ── THE QUICKBOOKS GATE (2026-10-01) ────────────────────────────────
+    // Apsara: "so (bills+invoice) agent should talk to this agent."
+    //
+    // The gate that stops the ledger agent auto-filling a row that is
+    // already in QuickBooks. Without it the fill leaves her books saying one
+    // thing and Jarvis another, with nothing recording who changed it — the
+    // exact discrepancy the agent exists to prevent.
+    { name: 'qb-gate: a row already in QuickBooks is auto-filled anyway',
+      file: 'helpers/ledgerAgent.js', suites: ['qb-agent', 'ledger-agent'],
+      find: '            if (link.linked) {',
+      to:   '            if (false) {' },
+
+    // Fails OPEN instead of closed: a journal it cannot read reads as "not
+    // in QuickBooks", so an unreadable journal becomes permission to write
+    // over everything.
+    { name: 'qb-gate: cannot-check is treated as not-linked',
+      file: 'helpers/qbLinked.js', suites: ['qb-agent'],
+      find: '            linked: true,\n            by: null,\n            why: `could not check QuickBooks',
+      to:   '            linked: false,\n            by: null,\n            why: `could not check QuickBooks' },
+
+    // Only the id is checked, so a bill linked by CONTAINER (push.js links
+    // by `id || container_no`) reads as unlinked and gets written over.
+    { name: 'qb-gate: only the row id is checked, not the container',
+      file: 'helpers/qbLinked.js', suites: ['qb-agent'],
+      find: '        const ids = [row && row.id, row && row.container_no].map(norm).filter(Boolean);',
+      to:   '        const ids = [row && row.id].map(norm).filter(Boolean);' },
+
+    // ── THE HANDOFF (2026-10-01) ────────────────────────────────────────
+    // Urgency must not promote money past her. This is the "but this one is
+    // important" exception a money control exists to refuse.
+    { name: 'handoff: a blocking MONEY field becomes auto-writable',
+      file: 'helpers/ledgerAgent.js', suites: ['qb-agent'],
+      find: '            blocks_quickbooks: true,',
+      to:   '            blocks_quickbooks: true, fix: { ...f.fix, field: \'seal_no\' },' },
+
+    { name: 'handoff: nothing is ever marked as blocking her books',
+      file: 'helpers/ledgerAgent.js', suites: ['qb-agent'],
+      find: '        if (!hit) return f;',
+      to:   '        if (hit) return f;' },
+
+    // A QuickBooks-side problem handed to the ledger agent, which cannot
+    // create a vendor — so it would be chased for ever by the wrong agent.
+    { name: 'handoff: a QuickBooks-side problem is handed to the ledger agent',
+      file: 'helpers/qbAgent.js', suites: ['qb-agent'],
+      find: "            if (f.side !== 'jarvis' || !f.field) continue;",
+      to:   '            if (!f.field) continue;' },
+
+    // Payments are not a ledger row the agent fills; handing one over makes
+    // it chase a field on a store it does not write.
+    { name: 'handoff: payments are handed over as if they were ledger rows',
+      file: 'helpers/qbAgent.js', suites: ['qb-agent'],
+      find: '        if (!ledger) continue;              // payments are not a ledger row the agent fills',
+      to:   "        const _l = ledger || 'bills'; if (!_l) continue;" },
+
+    // ── WHAT THE QB AGENT CHASES (2026-10-01) ───────────────────────────
+    // before-cutover is her accountant's period. Chasing it would reopen a
+    // closed period she deliberately fenced off on 2026-09-26.
+    { name: 'qb-agent: a before-cutover row is chased',
+      file: 'helpers/qbAgent.js', suites: ['qb-agent'],
+      find: "        if (!/^(blocked|error)/i.test(str(r.status))) continue;",
+      to:   "        if (/^(created|exists)/i.test(str(r.status))) continue;" },
+
+    // An unrecognised problem guessed at rather than reported verbatim — a
+    // wrong guess here becomes a wrong auto-fill in her ledger.
+    { name: 'qb-agent: an unrecognised problem is guessed as a date blank',
+      file: 'helpers/qbAgent.js', suites: ['qb-agent'],
+      find: "    return { side: 'unknown', problem: p };",
+      to:   "    return { side: 'jarvis', field: 'date', problem: p };" },
+
+    // The sweep run LIVE instead of dry — this job must never push.
+    { name: 'qb-agent: the sweep is run live, not dry',
+      file: 'helpers/qbAgent.js', suites: ['qb-agent'],
+      find: '    const res = await run({ env, dryRun: true });',
+      to:   '    const res = await run({ env, dryRun: false });' },
+
+    // A failed sweep reported as a clean morning — the worst available lie,
+    // because it reads as good news.
+    { name: 'qb-agent: a failed sweep reads as nothing-blocked',
+      file: 'helpers/qbAgentJob.js', suites: ['qb-agent'],
+      find: '        lastLook = null;',
+      to:   '        lastLook = { blocked: [], rowsSeen: 0 };' },
+
+    // Marked as done on a failure, so a transient 401 at 07:25 is written
+    // off for the whole day.
+    { name: 'qb-agent: a failed sweep is marked as done anyway',
+      file: 'helpers/qbAgentJob.js', suites: ['qb-agent'],
+      find: '        const why = String((e && e.message) || e).slice(0, 200);',
+      to:   '        const why = String((e && e.message) || e).slice(0, 200); await mark(key);' },
+
+    // ── THE TWO JOBS STAY INDEPENDENT (2026-10-01) ──────────────────────
+    // Chaining them turns one outage into two.
+    { name: 'pair: the ledger agent refuses to run without a QuickBooks look',
+      file: 'helpers/ledgerAgentJob.js', suites: ['qb-agent'],
+      find: '        if (look) blocking = require(\'./qbAgent\').blockingFields(look);',
+      to:   "        blocking = require('./qbAgent').blockingFields(look);" },
+
+    // ── BLANKS VS DISAGREEMENTS (2026-10-01) ────────────────────────────
+    // same() returns true when either side is blank, so a blank can never
+    // reach changedBills. Folding blanks in would flood her nightly
+    // DISAGREEMENTS email with every empty seal_no.
+    { name: 'sheetfill: blanks are folded into the disagreements list',
+      file: 'helpers/metalsSheetSync.js', suites: ['metals-sheet-sync', 'ledger-agent'],
+      find: '        if (blank.length) report.fillableBills.push({ key: k, row_id: mine && mine.id,',
+      to:   '        if (blank.length) report.changedBills.push({ key: k, row_id: mine && mine.id,' },
+
+    { name: 'sheetfill: no blank is ever reported, so nothing can be filled',
+      file: 'helpers/metalsSheetSync.js', suites: ['ledger-agent', 'qb-agent'],
+      find: '        if (theirs && !mine) out.push({ field: f, sheet: sheetRow[f], jarvis: \'\' });',
+      to:   '        if (false) out.push({ field: f, sheet: sheetRow[f], jarvis: \'\' });' },
+
+    // A blank reported even when the SHEET is the empty one — "filling" a
+    // field from nothing, which would blank a value she already has.
+    { name: 'sheetfill: a blank on the SHEET side counts as fillable',
+      file: 'helpers/metalsSheetSync.js', suites: ['ledger-agent'],
+      find: '        if (theirs && !mine) out.push({ field: f, sheet: sheetRow[f], jarvis: \'\' });',
+      to:   '        if (!mine) out.push({ field: f, sheet: sheetRow[f], jarvis: \'\' });' },
+
+    // freight is a shape mismatch, not a blank: the sheet has one number,
+    // Jarvis has a charge list with notes. This file learned that once
+    // already (#142) and must not relearn it.
+    { name: 'sheetfill: freight is treated as a fillable blank',
+      file: 'helpers/metalsSheetSync.js', suites: ['metals-sheet-sync', 'ledger-agent'],
+      find: "        if (f === 'freight_charges') continue;",
+      to:   '' },
+
+    // The row id dropped from the report, so every finding the agent is
+    // willing to apply has nothing to apply it to — today's bug, pinned.
+    { name: 'sheetfill: the report carries no row id, so nothing can be written',
+      file: 'helpers/metalsSheetSync.js', suites: ['ledger-agent', 'qb-agent'],
+      find: '        if (blank.length) report.fillableBills.push({ key: k, row_id: mine && mine.id,',
+      to:   '        if (blank.length) report.fillableBills.push({ key: k, row_id: null,' },
+
     // ── THE TWO COMPANIES STAY APART (2026-10-01) ───────────────────────
     // "EDGE_9 — Ramesh never involve yard with this." The claim reminder was
     // put in the Edge Metals sweep and in the agent; both were wrong, and

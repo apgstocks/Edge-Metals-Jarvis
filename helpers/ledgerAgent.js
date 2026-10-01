@@ -105,6 +105,48 @@ function sort(findings) {
     return { settled, proposed, total: settled.length + proposed.length };
 }
 
+// ── WHAT QUICKBOOKS IS WAITING ON ─────────────────────────────────────────
+// Apsara, 2026-10-01: "so (bills+invoice) agent should talk to this agent."
+//
+// The QuickBooks agent knows which blanks are stopping rows entering her
+// books. It does NOT know what the values should be — only her sheet knows
+// that, and this agent is the one reading it. So the conversation is one
+// fact wide: WHICH FIELD ON WHICH ROW IS HOLDING UP THE BOOKS.
+//
+// What it changes is URGENCY, not the decision. A blank seal_no is untidy; a
+// blank date is stopping a bill entering her accounts. Both get filled from
+// the sheet by the same code — but the second is worth saying out loud, and
+// sorting first, and chasing when the sheet cannot answer it.
+//
+// It never makes a finding MORE writable. A money field blocking QuickBooks
+// is still proposed, because the gate that keeps money in front of her does
+// not get to be overridden by urgency — that is exactly the kind of "but this
+// one is important" exception that money controls exist to refuse.
+//
+// Pure, and takes the lookup rather than building it: this file does not
+// import qbAgent, so neither agent depends on the other at load time and
+// either can be tested without the other's token.
+function markBlocking(findings, blockingMap) {
+    const map = blockingMap || new Map();
+    if (!map.size) return Array.isArray(findings) ? findings : [];
+    return (Array.isArray(findings) ? findings : []).map((f) => {
+        if (!f || !f.fix || !f.fix.field) return f;
+        const ledger = str(f.ledger) || 'bills';
+        const hit = map.get(`${ledger}:${str(f.row_id)}:${str(f.fix.field)}`);
+        if (!hit) return f;
+        return {
+            ...f,
+            blocks_quickbooks: true,
+            detail: `${str(f.detail) ? `${f.detail}. ` : ''}QuickBooks cannot take this row until ${f.fix.field} is filled in.`,
+        };
+    });
+}
+
+// Urgent first, within whichever list they land in. A sort, not a filter —
+// nothing is hidden.
+const blockingFirst = (list) => [...(list || [])]
+    .sort((a, b) => (b && b.blocks_quickbooks ? 1 : 0) - (a && a.blocks_quickbooks ? 1 : 0));
+
 // ── WHAT A DAY'S RUN LOOKS LIKE ───────────────────────────────────────────
 // Reads the checks that already exist rather than re-deriving them. Each
 // source is wrapped: one throwing source must not cost her the whole report,
@@ -179,13 +221,44 @@ function defaultSources() {
             run() {
                 const rep = this.report;
                 const out = [];
-                const rows = (rep && Array.isArray(rep.differing)) ? rep.differing : [];
+                // ── THE REAL KEYS ────────────────────────────────────────
+                // The first version read `rep.differing`, which does not
+                // exist. metalsSheetSync returns changedBills and
+                // changedSales. Nothing threw — the source simply produced
+                // NOTHING, for ever, and the email looked clean. Caught by
+                // running the job end to end rather than by reading it.
+                //
+                // ── AND THE BLANKS COME FROM A DIFFERENT LIST ────────────
+                // changedBills/changedSales are DISAGREEMENTS only. The sync's
+                // same() returns true when either side is blank, on purpose
+                // ("a field she has not filled in yet on one side is the
+                // normal state of a live sheet") — so a blank never appears
+                // there, and this source's whole fill-what-is-missing half
+                // was unreachable. It could only ever propose.
+                //
+                // Her words were "whatever is missed in jarvis fill it", so
+                // metalsSheetSync now also reports fillableBills /
+                // fillableSales — blanks, kept out of the disagreements list
+                // so they do not flood her nightly email. Both lists are read
+                // here and carry the same shape; `differences` vs `blanks` is
+                // the only difference, and jarvisBlank sorts out the rest.
+                const rows = [
+                    ...((rep && rep.changedBills) || []).map((r) => ({ ...r, ledger: 'bills' })),
+                    ...((rep && rep.changedSales) || []).map((r) => ({ ...r, ledger: 'sales' })),
+                    ...((rep && rep.fillableBills) || []).map((r) => ({ ...r, ledger: 'bills', differences: r.blanks })),
+                    ...((rep && rep.fillableSales) || []).map((r) => ({ ...r, ledger: 'sales', differences: r.blanks })),
+                ];
                 for (const r of rows) {
                     for (const d of (r.differences || [])) {
                         const jarvisBlank = str(d.jarvis) === ''
                             || /^no [a-z ]+$/i.test(str(d.jarvis));
                         out.push({
                             check: 'sheet-diff',
+                            // Which ledger and which row — apply() cannot
+                            // write without both, and a finding that cannot
+                            // be acted on is a finding that wastes her time.
+                            ledger: r.ledger,
+                            row_id: r.row_id,
                             title: jarvisBlank ? 'Missing in Jarvis' : 'Jarvis and the sheet disagree',
                             what: `${r.container_no || r.key || '(no container)'}`
                                 + `${r.supplier || r.customer ? ` — ${r.supplier || r.customer}` : ''}`,
@@ -251,7 +324,19 @@ function reportText(run) {
         out.push('── WAITING FOR YOU ──────────────────────────────');
         for (const f of p) {
             out.push(`  · ${f.what || f.title}`);
-            if (f.detail) out.push(`      ${f.detail}`);
+            // ── DON'T SAY THE SAME FIELD TWICE ───────────────────────────
+            // The sheet source sets both a detail ("supplier_price: sheet
+            // says 0.34, Jarvis has nothing") and a fix on the SAME field,
+            // and printing both read as two findings about one blank. The
+            // fix line is the better of the two — it names where the number
+            // came from — so the detail is dropped when it is about the
+            // field the fix already covers. Keyed on the field name rather
+            // than on the sentence, so rewording a detail cannot resurrect
+            // the duplicate.
+            const fixField = f.fix && f.fix.field ? String(f.fix.field) : '';
+            const detailRepeats = fixField
+                && String(f.detail || '').trim().startsWith(`${fixField}:`);
+            if (f.detail && !detailRepeats) out.push(`      ${f.detail}`);
             // Both figures, always, when there are two. This is the whole
             // point of a proposal — she should not have to go and look one up
             // to judge the other.
@@ -283,7 +368,95 @@ function reportText(run) {
     return out.join('\n');
 }
 
+// ── WRITING THE SETTLED ONES ──────────────────────────────────────────────
+// The only function in this file that changes anything, and it re-decides
+// every fix for itself rather than trusting the `kind` it was handed.
+//
+// That is not paranoia about the caller — it is that sort() and apply() can
+// be separated by a screen, a queue or a night, and a finding classified as
+// settled an hour ago may be sitting next to a row she has edited since. The
+// classification is cheap; being wrong about it is not.
+//
+// ONE ROW AT A TIME, through editBill/editSale, which PATCH rather than
+// replace. helpers/loads.js records what happens when a writer rebuilds a
+// record wholesale — pdf_link vanished — and a bill has twenty-three columns.
+//
+// NOTHING IS OVERWRITTEN. A fix is applied only if the field is STILL blank
+// at write time. If she filled it in herself between the scan and the send,
+// hers wins and the fix is reported as skipped — she typed it for a reason,
+// and the sheet is not more right than the person looking at the paperwork.
+async function apply(findings, { kinds } = {}) {
+    const applied = [];
+    const skipped = [];
+    const failed = [];
+    const stores = kinds || {
+        bills: { list: () => require('./bills').list(), edit: (id, p) => require('./bills').editBill(id, p) },
+        sales: { list: () => require('./sales').list(), edit: (id, p) => require('./sales').editSale(id, p) },
+    };
+
+    // ── ASK QUICKBOOKS FIRST, ONCE ───────────────────────────────────────
+    // Apsara, 2026-10-01: "so (bills+invoice) agent should talk to this
+    // agent". This is that conversation, in the direction that prevents harm.
+    //
+    // A row already pushed to QuickBooks must not be auto-filled: QB is not
+    // re-pushed for an edit, so the fill would leave her books saying one
+    // thing and Jarvis another, with nothing recording who changed it. Her
+    // instruction for this agent was "ensure that there is no discrepancy" —
+    // an agent that silently creates one has failed at its only job.
+    //
+    // Read once per run from the local journal, not per row and not over the
+    // network. See helpers/qbLinked.js for why it fails CLOSED.
+    const qb = require('./qbLinked');
+    let qbKeys = null;
+    let qbKeysError = null;
+    try { qbKeys = qb.liveKeys(); } catch (e) { qbKeysError = String((e && e.message) || e); }
+
+    for (const f of (Array.isArray(findings) ? findings : [])) {
+        if (!f || !f.fix) continue;
+        // Re-decided here, every time.
+        if (classify(f.fix) !== SETTLED) { skipped.push({ ...f, why: 'not settled' }); continue; }
+        const ledger = str(f.ledger) || 'bills';
+        const store = stores[ledger];
+        if (!store) { failed.push({ ...f, error: `unknown ledger ${ledger}` }); continue; }
+        const id = str(f.row_id);
+        if (!id) { skipped.push({ ...f, why: 'no row id' }); continue; }
+
+        try {
+            const row = (store.list() || []).find((r) => r && String(r.id) === id);
+            if (!row) { skipped.push({ ...f, why: 'row is gone' }); continue; }
+
+            // ── THE QUICKBOOKS GATE ──────────────────────────────────────
+            // Checked against the ROW, after it is loaded, because the link
+            // may be on the container rather than the id — push.js links by
+            // `b.id || b.container_no`, and a finding only carries the id.
+            //
+            // Skipped, not failed: nothing is wrong. It becomes a proposal
+            // in the email, which is where she can act on it in both books
+            // at once. A failure would read as a bug and get ignored.
+            const link = qbKeys
+                ? qb.linkedRow(row, { kind: ledger, keys: qbKeys })
+                : { linked: true, why: `could not check QuickBooks (${qbKeysError}) — nothing changed behind your books` };
+            if (link.linked) {
+                skipped.push({ ...f, why: `${link.why}. Change it in both, or leave it.` });
+                continue;
+            }
+
+            if (str(row[f.fix.field]) !== '') {
+                skipped.push({ ...f, why: `already filled in — ${str(row[f.fix.field])}` });
+                continue;
+            }
+            await store.edit(id, { [f.fix.field]: f.fix.to });
+            applied.push({ ...f });
+        } catch (e) {
+            // A failure on one row must not stop the rest, and must be said.
+            failed.push({ ...f, error: String((e && e.message) || e).slice(0, 200) });
+        }
+    }
+    return { applied, skipped, failed };
+}
+
 module.exports = {
     SETTLED, PROPOSED, MONEY_FIELDS,
-    touchesMoney, classify, sort, collect, defaultSources, reportText,
+    touchesMoney, classify, sort, collect, defaultSources, reportText, apply,
+    markBlocking, blockingFirst,
 };

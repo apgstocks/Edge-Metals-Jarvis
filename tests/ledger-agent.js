@@ -220,7 +220,14 @@ section('G — FILLING WHAT THE SHEET HAS AND JARVIS DOES NOT');
     const src = agent.defaultSources().find((s) => s.id === 'sheet-diff');
     ck('the agent has a sheet-diff source', !!src);
 
-    src.report = { differing: [{ container_no: 'TGCU0053611', supplier: 'Calderon', differences: [
+    // ── THE SHAPE IS THE REAL ONE ────────────────────────────────────────
+    // These fixtures said `differing`, which metalsSheetSync has never
+    // produced — it returns changedBills and changedSales. Both the source
+    // and this file agreed on a key that did not exist, so every check here
+    // passed while the source produced nothing in production. Fixtures are
+    // now copied from the sync's own report, and section G asserts the two
+    // files still agree by running the real sync.
+    src.report = { changedBills: [{ key: 'k1', row_id: 'BILL_x', container_no: 'TGCU0053611', supplier: 'Calderon', differences: [
         { field: 'container_no', sheet: 'TGCU0053611', jarvis: '' },
         { field: 'supplier_price', sheet: '0.34', jarvis: '' },
         { field: 'booking_no', sheet: 'BK9', jarvis: 'BK7' },
@@ -255,7 +262,7 @@ section('G — FILLING WHAT THE SHEET HAS AND JARVIS DOES NOT');
 
     // Jarvis-side "no freight charge (2 other charges)" is the sheet sync's
     // way of saying a thing is absent. It must read as blank, not as a value.
-    src.report = { differing: [{ container_no: 'X', differences: [
+    src.report = { changedSales: [{ key: 'k2', row_id: 'SALE_x', container_no: 'X', differences: [
         { field: 'customer', sheet: 'Taewon', jarvis: 'no customer' },
     ] }] };
     ck('the sync\'s own "no X" phrasing counts as blank',
@@ -272,6 +279,170 @@ section('G — FILLING WHAT THE SHEET HAS AND JARVIS DOES NOT');
     const file = fs.readFileSync(path.join(ROOT, 'helpers/ledgerAgent.js'), 'utf8');
     ck('  and the agent never fetches a workbook itself',
        !/fetchWorkbook|googleapis|https?:\/\//.test(file));
+}
+
+
+// ── H — THE DAILY JOB, END TO END ─────────────────────────────────────────
+// Rule 3, and today is the argument for it. THREE bugs shipped past a green
+// unit suite in one sitting, and every one of them was a name:
+//
+//   · the source read `rep.differing`; the sync emits changedBills /
+//     changedSales. Nothing threw. The sheet half produced NOTHING, for
+//     ever, and the email looked clean.
+//   · the report carried no row id, so a finding the agent was willing to
+//     apply had nothing to apply it to.
+//   · the recipient read cfg.ALERT_EMAIL; the real export is ALERT_EMAIL_TO.
+//     Undefined meant "no recipient configured" — logged, never sent.
+//
+// All three are invisible to a test that hands the agent a fixture it also
+// wrote. So this section runs the REAL sync, feeds its REAL report to the
+// job, lets the job WRITE, and reads the figure back out of the store.
+{
+    section('H — the daily job, end to end');
+
+    const sync = require('../helpers/metalsSheetSync');
+    const bills = require('../helpers/bills');
+    const job = require('../helpers/ledgerAgentJob');
+
+    // ── WHAT THE SHEET SOURCE CAN AND CANNOT REACH ───────────────────────
+    // The first version of this section expected the agent to fill a blank
+    // booking_no from the sheet. It cannot, for two independent reasons, and
+    // discovering that is why this section exists:
+    //
+    //   · billKey is `booking|container`. A Jarvis bill with no booking
+    //     keys as `|TGCU0053611` and the sheet row as `BK9001|TGCU0053611`,
+    //     so they never meet — diff files the sheet row as a NEW bill, not
+    //     as a changed one. Filed as #150; it becomes a duplicate insert the
+    //     day SHEET_SYNC_WRITE=1 is set. NOT fixed here — changing the key
+    //     is her call, and her 2026-09-16 rule is what put it there.
+    //   · booking_no is not in BILL_WATCH, so it is not compared even when
+    //     the keys do match.
+    //
+    // So the fillable fields through this source are the watched non-money
+    // ones: date, supplier, seal_no, description. The fixture uses seal_no.
+    const bill = await bills.addBill({
+        container_no: 'TGCU0053611', booking_no: 'BK9001',
+        supplier: 'Calderon', date: '2026-09-20',
+    });
+
+    // ── THE CONTRACT, CHECKED AGAINST THE REAL FUNCTION ──────────────────
+    // Not a fixture I wrote. If metalsSheetSync renames a key again, this is
+    // the check that goes red instead of the agent going quiet.
+    const real = sync.diff({
+        sheetBills: [{
+            container_no: 'TGCU0053611', booking_no: 'BK9001', supplier: 'Calderon',
+            date: '2026-09-20',
+            seal_no: 'SL-77421',      // blank in Jarvis, one possible answer → fill
+            supplier_price: 0.34,     // blank in Jarvis, money → propose
+        }],
+        bills: [bill], sheetSales: [], sales: [],
+    });
+    ck('the real sync emits changedBills (not "differing")',
+       Array.isArray(real.changedBills) && !('differing' in real),
+       Object.keys(real).join(','));
+
+    // ── BLANKS ARE NOT DISAGREEMENTS, AND THAT IS WHY THERE ARE TWO LISTS ─
+    // same() returns true when either side is blank, so a blank can never
+    // reach changedBills. The agent needs blanks; her nightly DISAGREEMENTS
+    // email must not have them. Hence fillableBills. Both are asserted
+    // because the whole bug was a source reading a list that never filled.
+    ck('  blanks do NOT appear as disagreements',
+       real.changedBills.length === 0,
+       'a blank in her nightly DISAGREEMENTS section is noise — ' + JSON.stringify(real.changedBills));
+    ck('  blanks appear on their own list instead',
+       real.fillableBills.length === 1, JSON.stringify(real.fillableBills));
+    ck('  and it carries a row_id the agent can write to',
+       real.fillableBills[0] && real.fillableBills[0].row_id === bill.id,
+       JSON.stringify(real.fillableBills[0] || null));
+
+    // A REAL disagreement still lands on the disagreements list, with a row
+    // id too — the other half of the contract.
+    const conflict = sync.diff({
+        sheetBills: [{ container_no: 'TGCU0053611', booking_no: 'BK9001',
+                       supplier: 'Gomez', date: '2026-09-20' }],
+        bills: [bill], sheetSales: [], sales: [],
+    });
+    ck('  a real disagreement is still a disagreement, with a row id',
+       conflict.changedBills.length === 1
+       && conflict.changedBills[0].row_id === bill.id
+       && conflict.changedBills[0].differences.some((d) => d.field === 'supplier'),
+       JSON.stringify(conflict.changedBills[0] || null));
+
+    const agent = require('../helpers/ledgerAgent');
+    const src = agent.defaultSources().find((x) => x.id === 'sheet-diff');
+    src.report = real;
+    const got = src.run();
+    ck('  and the agent reads that real report rather than nothing',
+       got.length >= 1, `read ${got.length} findings from a report with a real difference`);
+
+    // ── THE WRITE ────────────────────────────────────────────────────────
+    let mailed = null;
+    const run = await job.run({
+        sheetReport: real,
+        send: (o) => { mailed = o; },
+        alreadySent: async () => false,
+        markSent: async () => {},
+    });
+
+    const after = bills.list().find((b) => b.id === bill.id);
+    ck('the blank non-money field is actually written to the row',
+       String(after.seal_no || '') === 'SL-77421',
+       `seal_no is ${JSON.stringify(after.seal_no)} — the agent reported it but wrote nothing`);
+    ck('  and the money field is NOT written',
+       after.supplier_price === undefined || after.supplier_price === null || after.supplier_price === '',
+       `supplier_price became ${JSON.stringify(after.supplier_price)} — the line was crossed`);
+    ck('  and the money field is in the email instead',
+       /supplier_price/.test(String(mailed && mailed.body)), String(mailed && mailed.body));
+    ck('nothing failed',
+       run.counts.failed === 0 && run.counts.skipped === 0, JSON.stringify(run.counts));
+
+    // ── THE RECIPIENT EXISTS ─────────────────────────────────────────────
+    // The whole bug was that it did not, and the failure was a log line.
+    ck('LEDGER_AGENT_EMAILS is a real config export',
+       'LEDGER_AGENT_EMAILS' in cfg,
+       'the job reads cfg.LEDGER_AGENT_EMAILS; undefined means it silently never sends');
+    const jobSrc = fs.readFileSync(path.join(ROOT, 'helpers/ledgerAgentJob.js'), 'utf8');
+    for (const name of (jobSrc.match(/cfg\.[A-Z_]+/g) || [])) {
+        const key = name.slice(4);
+        ck(`  cfg.${key} is exported by config.js`, key in cfg,
+           'a config name that does not exist reads as unset, which this job treats as "do not send"');
+    }
+
+    // ── THE VERB AGREES ──────────────────────────────────────────────────
+    // "1 thing need you" twice, because the phrase had two copies and fixing
+    // one did not fix the other. Checked on the SUBJECT, where the second
+    // copy lives.
+    ck('the subject says "1 thing needs you", not "1 thing need you"',
+       /1 thing needs you/.test(String(mailed && mailed.subject)), String(mailed && mailed.subject));
+
+    // ── NOT TWICE ABOUT ONE BLANK ────────────────────────────────────────
+    const once = agent.reportText({ proposed: [{
+        what: 'C1 — S', detail: 'supplier_price: sheet says 0.34, Jarvis has nothing',
+        fix: { field: 'supplier_price', from: '', to: '0.34', from_source: 'the sheet' } }], settled: [], broken: [] });
+    ck('one blank is reported once, not as two findings',
+       (once.match(/supplier_price/g) || []).length === 1, once);
+
+    // ── THE LIMITATION, PINNED ───────────────────────────────────────────
+    // If someone later makes billKey fall back to container-only, this goes
+    // red and they have to read #150 before shipping it. That is the point:
+    // the fallback would let the sheet overwrite the second trip of a
+    // trailer with the first trip's figures, which is the exact thing her
+    // booking+container rule exists to prevent.
+    const unbooked = await bills.addBill({ container_no: 'MSDU1161015', supplier: 'Calderon' });
+    const stillNew = sync.diff({
+        sheetBills: [{ container_no: 'MSDU1161015', booking_no: 'BK9002',
+                       supplier: 'Calderon', date: '2026-09-21' }],
+        bills: [unbooked], sheetSales: [], sales: [],
+    });
+    ck('a bill with no booking is reported as NEW, not matched (see #150)',
+       stillNew.newBills.length === 1 && stillNew.changedBills.length === 0,
+       'if this is now 0 new / 1 changed, billKey gained a container-only fallback — read #150');
+
+    // ── RULE 5, STILL ────────────────────────────────────────────────────
+    const agentSrc = fs.readFileSync(path.join(ROOT, 'helpers/ledgerAgent.js'), 'utf8');
+    ck('the ledger agent still never touches the yard',
+       !/yardClaims|yardLoads|require\(['"]\.\/loads['"]\)/.test(agentSrc),
+       'Edge Yard and Edge Metals are different companies');
 }
 
 console.log(`\n  ${pass} passed, ${fail} failed`);
