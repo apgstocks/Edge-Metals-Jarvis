@@ -46,6 +46,19 @@ write('petty_cash.json', [{ id: 'PC_1', kind: 'topup', amount: 1000 }]);
 write('loads.json', [{ id: 'EDGE_01', seller: 'Acme' }]);
 write('outbound_loads.json', []);
 write('expenses.json', [{ id: 'EXP_1', amount: 50 }]);
+// ── THE STORES CRITICAL GAINED ON 2026-10-02 ─────────────────────────────
+// Apsara: "Protect the data of edge yard no matter what." CRITICAL named
+// five stores; these were not among them, and critical_missing is the ONLY
+// mechanism that notices a store has vanished. They are in the fixture so
+// section D's "none missing" check keeps meaning what its name says — see
+// helpers/backup.js's CRITICAL_KEYS for why each one belongs.
+write('bill_payments.json', [{ id: 'BP_1', supplier: 'Ramesh', amount: 900, kind: 'advance' }]);
+write('sales_receipts.json', [{ id: 'RC_1', customer: 'MK', amount: 1200 }]);
+write('trucker_bills.json', [{ id: 'TB_1', trucker: 'Zimex', amount: 300 }]);
+write('yard_claims.json', [{ id: 'YCLM_1', load_id: 'EDGE_01', amount: 400, reason: 'dirt' }]);
+write('load_drafts.json', [{ id: 'DRAFT_1', seller: 'Acme' }]);
+write('item_types.json', [{ name: 'Al Combo' }]);
+write('item_aliases.json', { 'aluminium combo': 'Al Combo' });
 write('settings.json', { manager_number: '911234567890' });
 write('memory/facts.json', [{ id: 'F1', text: 'a fact' }]);
 // ── the things that must NOT travel ───────────────────────────────────────
@@ -149,7 +162,15 @@ section('D — the archive says what it is and what is missing');
     ck('it names the critical stores it DOES have',
        a._meta.critical_present.includes('payments.json') && a._meta.critical_present.includes('petty_cash.json'),
        '"is payments in here?" should not require reading the whole file');
-    ck('it lists none missing when none are', a._meta.critical_missing.length === 0);
+    // Named in the failure message, because "0 !== 3" tells you nothing about
+    // WHICH store the fixture is short of — and the fixture is now the thing
+    // that has to keep up with CRITICAL_KEYS.
+    ck('it lists none missing when none are', a._meta.critical_missing.length === 0,
+       `fixture is missing: ${a._meta.critical_missing.join(', ')} — add them above, `
+       + 'or they are not really critical');
+    // And the inverse, so the check above cannot pass by CRITICAL being empty.
+    ck('  and CRITICAL is not simply empty',
+       backup.CRITICAL.length >= 12, `${backup.CRITICAL.length} stores protected`);
     ck('it carries the unreadable ones', a._meta.problems.some(p => p.path === 'broken.json'));
 
     // Remove a critical store and confirm the archive SAYS SO rather than
@@ -188,7 +209,20 @@ section('E — an archive can actually be restored from');
 section('F — the schedule and the Drive side');
 {
     const sched = fs.readFileSync(path.join(ROOT, 'scheduler.js'), 'utf8');
-    ck('a nightly job is registered', /require\('\.\/helpers\/backup'\)\.runBackup\(\)/.test(sched));
+    // ── IT GOES THROUGH THE WATCHER NOW (2026-10-02) ─────────────────────
+    // This asserted the bare `require('./helpers/backup').runBackup()` call.
+    // That call WAS the hole: its only failure path was console.error, so a
+    // dead Drive token stopped the backups and told nobody. The schedule now
+    // calls backupWatch.nightly, which runs the same backup and speaks up.
+    //
+    // Both halves asserted: the new path present AND the old one gone. One
+    // without the other would let a second, silent path exist beside it.
+    ck('a nightly job is registered',
+       /require\('\.\/helpers\/backupWatch'\)\.nightly\(\)/.test(sched),
+       'the backup must run through the watcher, or a failure is a log line nobody reads');
+    ck('  and the old silent call is gone',
+       !/require\('\.\/helpers\/backup'\)\.runBackup\(\)/.test(sched),
+       'two paths means one of them is the one that stays quiet');
     // Compared as CLOCK TIMES, not as positions in the file. The first version
     // of this assertion checked that the backup's cron.schedule call appeared
     // earlier in scheduler.js than the fact replica's — which is meaningless:

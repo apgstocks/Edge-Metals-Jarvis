@@ -2899,6 +2899,94 @@ const MUTATIONS = [
       find: '                const rep = this.report;',
       to:   "                const rep = this.report || require('./metalsSheetSync').fetchWorkbook('x');" },
 
+    // ── PROTECTING THE YARD DATA (2026-10-02) ───────────────────────────
+    // Apsara: "Protect the data of edge yard no matter what."
+    // Every one of these turns the alarm off while leaving it looking armed,
+    // which is the shape all three original holes had.
+
+    // REMOVED, not unkilled: `trouble` is deliberately over-determined. A
+    // thrown backup ALSO shows up in health() as backup_failing_N, so
+    // neutering the `!!error` term alone changes no behaviour — the email
+    // still goes. An alarm with two independent reasons to fire is the right
+    // shape for the one thing that cannot be rebuilt, so the redundancy
+    // stays and the mutation goes. tests/backup-watch.js section C asserts
+    // the failure email directly.
+
+    // Same reasoning: a missing critical store also surfaces as
+    // health()'s backup_incomplete, so this term is belt to that braces.
+    // Section C asserts the INCOMPLETE email on its own.
+
+    { name: 'backup: a store that would not parse is ignored',
+      file: 'helpers/backupWatch.js', suites: ['backup-watch'],
+      find: '        || entry.unreadable.length',
+      to:   '        || false' },
+
+    // Staleness is the only thing that catches "it stopped a week ago".
+    { name: 'backup: staleness is never reported',
+      file: 'helpers/backupWatch.js', suites: ['backup-watch'],
+      find: "        else if (ageDays !== null && ageDays >= staleDays) problems.push(`backup_stale_${ageDays}d`);",
+      to:   '' },
+
+    { name: 'backup: a run of failures is not counted',
+      file: 'helpers/backupWatch.js', suites: ['backup-watch'],
+      find: '        if (failingFor > 0) problems.push(`backup_failing_${failingFor}`);',
+      to:   '' },
+
+    // The receipt read back through loadJson, which NEVER THROWS — so a
+    // CORRUPTED log reads as "no history" and health() calls that fine. The
+    // trap this hit for real.
+    // REMOVED: with `return []` in that catch, a DAMAGED log still reaches
+    // JSON.parse, which throws, which health()'s outer catch reports as
+    // backup_log_unreadable. The mutation only changes an EACCES file, which
+    // no fixture can create portably. The real defect it was written for —
+    // reading the receipt through loadJson, which never throws and so turned
+    // a corrupt log into 'no history' and healthz into 'fine' — is pinned by
+    // section B's 'an unreadable log is a problem, not an exception'.
+
+    // No history reported as stale: cries wolf on a fresh install, which is
+    // how an alarm gets muted on day one.
+    { name: 'backup: a fresh install is reported as a broken backup',
+      file: 'helpers/backupWatch.js', suites: ['backup-watch'],
+      find: '            return { known: false, problems: [], failingFor: 0, last: null,',
+      to:   "            return { known: true, problems: ['backup_stale_999d'], failingFor: 0, last: null," },
+
+    // The weekly heartbeat is what makes SILENCE a signal.
+    { name: 'backup: the Monday heartbeat is dropped, so silence means nothing',
+      file: 'helpers/backupWatch.js', suites: ['backup-watch'],
+      find: '    const heartbeat = !trouble && now.getDay() === 1;',
+      to:   '    const heartbeat = false;' },
+
+    // A send failure that throws takes the scheduler's catch with it.
+    { name: 'backup: a failed alert email throws at the scheduler',
+      file: 'helpers/backupWatch.js', suites: ['backup-watch'],
+      find: "        console.error('[BACKUP-WATCH] COULD NOT SEND THE BACKUP ALERT:', e.message);",
+      to:   "        throw e; // eslint-disable-line" },
+
+    // ── THE SAFETY NET THAT NAMES STORES ────────────────────────────────
+    { name: 'backup: CRITICAL shrinks back to the original five',
+      file: 'helpers/backup.js', suites: ['backup-watch', 'backup'],
+      find: "    'TRUCKER_BILLS_FILE', 'YARD_CLAIMS_FILE', 'LOAD_DRAFTS_FILE',\n    'ITEM_TYPES_FILE', 'ITEM_ALIASES_FILE',",
+      to:   '' },
+
+    // A config key that no longer exists must be loud, not a quietly
+    // shorter list of protected stores.
+    { name: 'backup: a vanished config key silently shrinks the safety net',
+      file: 'helpers/backup.js', suites: ['backup-watch'],
+      find: '        throw new Error(`backup CRITICAL_KEYS not in config: ${unknown.join(\', \')}`);',
+      to:   '' },
+
+    // ── /healthz IS THE ONLY OUTSIDE VIEW ───────────────────────────────
+    { name: 'backup: healthz stops reporting backup health',
+      file: 'api.js', suites: ['backup-watch'],
+      find: '                for (const p of bh.problems) problems.push(p);',
+      to:   '' },
+
+    // And it must not leak store names onto a public route.
+    { name: 'backup: healthz leaks which store is missing on a public route',
+      file: 'api.js', suites: ['backup-watch'],
+      find: '            const bh = require(\'./helpers/backupWatch\').health();',
+      to:   "            const bh = require('./helpers/backupWatch').health();\n            if (bh.criticalMissing && bh.criticalMissing.length) problems.push('missing_' + bh.criticalMissing[0]);" },
+
     // ── THE VOICE PATH (2026-10-02) ─────────────────────────────────────
     // CLAUDE.md: "Twice now that caller has been the voice/assistant path,
     // because it is the one without a form to put a field on." Built
