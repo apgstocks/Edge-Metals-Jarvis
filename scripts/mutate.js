@@ -2872,6 +2872,27 @@ const MUTATIONS = [
       find: '            if (banks.expectsBank(mode) && !bank) {',
       to:   '            if (banks.needsBank(mode) && !bank) {' },
 
+    // ── THE S.NO MUST IDENTIFY A PIECE (2026-10-01) ─────────────────────
+    // "Did you notice he s.no" — 42 of 53 serial numbers on her packing list
+    // were duplicates, because her sheet numbers each of six columns from 1.
+    { name: 'sno: her repeated column numbers print as the serial number again',
+      file: 'helpers/invoicePdf.js', suites: ['packing-list'],
+      find: "              notesIdentifyRows ? (String(item.note || '').trim() || String(i + 1)) : String(i + 1)),",
+      to:   "              String(item.note || '').trim() || String(i + 1))," },
+
+    // The other direction: ignoring her numbering entirely would throw away
+    // the thing it was added for — her #4 and a buyer's #4 being one bundle.
+    { name: 'sno: her own numbering is ignored even when it is unique',
+      file: 'helpers/invoicePdf.js', suites: ['packing-list'],
+      find: '    const notesIdentifyRows = filledNotes.length === printedNotes.length\n        && new Set(filledNotes).size === filledNotes.length;',
+      to:   '    const notesIdentifyRows = false;' },
+
+    // Half hers and half positions is a column meaning two things at once.
+    { name: 'sno: a partly-numbered tally mixes her numbers with positions',
+      file: 'helpers/invoicePdf.js', suites: ['packing-list'],
+      find: '    const notesIdentifyRows = filledNotes.length === printedNotes.length\n        && new Set(filledNotes).size === filledNotes.length;',
+      to:   '    const notesIdentifyRows = new Set(filledNotes).size === filledNotes.length;' },
+
     // ── THE SCAN CHECKS ITSELF AGAINST THE SHEET (2026-10-01) ───────────
     // Her packing list for TCLU 6619618 went out 238 lb short (821 read for
     // 1,059 — a value from the next column over) and 6,095 lb of totes light,

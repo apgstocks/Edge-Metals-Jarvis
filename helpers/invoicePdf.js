@@ -666,6 +666,36 @@ function buildInvoiceClassicHtml(data) {
     const numberCol = oneContainer && compact;
     const numberWidth = 9;
 
+    // ── HER NUMBERING ONLY WHEN IT IDENTIFIES A PIECE ────────────────────
+    // Apsara, 2026-10-01, on the packing list Jarvis generated from her weigh
+    // sheet for TCLU 6619618: "Did you notice he s.no".
+    //
+    // 42 of the 53 serial numbers on it were duplicates. Her sheet is written
+    // in SIX COLUMNS side by side — Junk Car, Al Cast, Container, and three
+    // more — and each column is numbered from 1 again. The scan carries each
+    // bundle's written number into `note`, and the rule above was "her own
+    // numbering wins". So the document printed five rows called #1, six called
+    // #2, and so on.
+    //
+    // That rule was right for what it was written for: ONE tally column, where
+    // her #4 and the buyer's #4 are the same bundle. It is wrong the moment
+    // the page has more than one column, and nothing about the output looks
+    // wrong — the numbers are all plausible and the weights are all correct.
+    //
+    // So the test is no longer "did she number it" but "does her numbering
+    // IDENTIFY a row". Unique across the printed rows → hers wins, exactly as
+    // before. Repeated → fall back to position, which is what a serial number
+    // on a packing list means: piece 34 of 53, resolvable by a buyer counting
+    // or by anyone raising a claim against one bundle.
+    //
+    // Decided from the data rather than from a setting, so the single-tally
+    // case she asked for keeps working with nothing to switch on, and the
+    // multi-column case fixes itself.
+    const printedNotes = lineItems.map((it) => String((it && it.note) || '').trim());
+    const filledNotes = printedNotes.filter(Boolean);
+    const notesIdentifyRows = filledNotes.length === printedNotes.length
+        && new Set(filledNotes).size === filledNotes.length;
+
     // What the dropped Container column gives back, minus what the line number
     // takes, shared among the weight columns so the table still fills the page.
     const weightCols = showItem ? 5 : 4;
@@ -676,7 +706,9 @@ function buildInvoiceClassicHtml(data) {
 
     const PACKING_COLUMNS = [
         ...(numberCol ? [{ head: '#', width: `${numberWidth}%`,
-          cell: (item, p, netLbs, netMt, i) => escapeHtml(String(item.note || '').trim() || String(i + 1)),
+          // Position unless her own numbers are unique — see notesIdentifyRows.
+          cell: (item, p, netLbs, netMt, i) => escapeHtml(
+              notesIdentifyRows ? (String(item.note || '').trim() || String(i + 1)) : String(i + 1)),
           sub: () => 'Subtotal',
           total: 'TOTAL' }] : []),
         ...(oneContainer ? [] : [{ head: 'Container', width: containerWidth,
