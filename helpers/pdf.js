@@ -807,8 +807,26 @@ function generateLoadPdf(load, opts = {}) {
                 // Sale tickets are excluded outright: a buyer's copy has no
                 // business carrying what she paid a hauler on the way in.
                 const trucking = !isSale ? Number(load.trucking_amount) || 0 : 0;
-                const netPayable = trucking > 0 && load.amount != null
-                    ? Math.round((load.amount - trucking) * 100) / 100 : null;
+                // ── A CLAIM SHE ADJUSTED IN, ON HIS TICKET ──────────────
+                // Apsara, 2026-10-01, asked whether a claim should appear on
+                // the seller's printed ticket: "Yes, as its own line saying
+                // Claim".
+                //
+                // He signs this. A ticket that quietly shows $4,400 on a
+                // $5,000 load is an argument in the yard next week, and the
+                // one person who cannot look it up is the man holding the
+                // pen. Trucking already earned its own line for the same
+                // reason (2026-09-16, "Show the deduction on the ticket the
+                // seller signs"); this is that decision applied to the other
+                // deduction.
+                //
+                // Sale tickets excluded with trucking, for the same reason: a
+                // buyer's copy carries nothing about what we claimed off a
+                // supplier.
+                const claim = !isSale ? Number(load.claim_amount) || 0 : 0;
+                const deducted = trucking + claim;
+                const netPayable = deducted > 0 && load.amount != null
+                    ? Math.round((load.amount - deducted) * 100) / 100 : null;
                 summaryBox = drawSummaryBox(doc, [
                     { label: 'Gross total',  value: load.gross_weight != null ? `${load.gross_weight} ${unit}` : '—' },
                     { label: 'Tare total',   value: load.tare_weight  != null ? `${load.tare_weight} ${unit}`  : '—' },
@@ -828,7 +846,17 @@ function generateLoadPdf(load, opts = {}) {
                         // hauler's name is on the load record and on the
                         // trucker bill; the seller needs the deduction, not
                         // the name of the company that earned it.
-                        { label: 'Less trucking', value: `-$${fmtAmount(trucking)}` },
+                        // Each deduction only when there IS one, so a load
+                        // with trucking and no claim prints exactly the three
+                        // rows it printed before this existed.
+                        ...(trucking > 0 ? [{ label: 'Less trucking', value: `-$${fmtAmount(trucking)}` }] : []),
+                        // Label kept short for the same hard reason as
+                        // 'Less trucking' above: 110pt of label column
+                        // against a fixed 19pt row. "Less claim" fits; the
+                        // reason for the claim does not, and lands on top of
+                        // the Net payable underneath. The reason lives on the
+                        // claim record, which is where she argues it from.
+                        ...(claim > 0 ? [{ label: 'Less claim', value: `-$${fmtAmount(claim)}` }] : []),
                         { label: 'Net payable', value: `$${fmtAmount(netPayable)}`, emphasize: true },
                     ] : []),
                 ], { reserve: wantsSig ? SIG_BLOCK_H : 0 });
@@ -1328,12 +1356,27 @@ function drawReceiptContent(doc, load, contentWidth, opts) {
     // the receipt it was. Purchases only — `partyWord` above is already the
     // kind test this file uses.
     const rcpTrucking = (opts && opts.kind === 'sale') ? 0 : Number(load.trucking_amount) || 0;
-    const rcpNet = rcpTrucking > 0 && load.amount != null
-        ? Math.round((load.amount - rcpTrucking) * 100) / 100 : null;
+    // A claim she adjusted in — Apsara 2026-10-01, "Yes, as its own line
+    // saying Claim". This slip matters MORE than the full ticket for it: it
+    // is the paper in his hand when the cash does not match, and a deduction
+    // he cannot read is the argument this line prevents. Unlike the summary
+    // box above there is no fixed row height here, so the reason could fit —
+    // it is still left off, because the slip is the receipt and not the
+    // correspondence, and a one-line reason invites being argued with as if
+    // it were the whole case.
+    const rcpClaim = (opts && opts.kind === 'sale') ? 0 : Number(load.claim_amount) || 0;
+    const rcpDeducted = rcpTrucking + rcpClaim;
+    const rcpNet = rcpDeducted > 0 && load.amount != null
+        ? Math.round((load.amount - rcpDeducted) * 100) / 100 : null;
     if (rcpNet !== null) {
         line(`Amount total: $${fmtAmount(load.amount)}`, { size: 9.5, gap: 0.5 });
-        line(`Less trucking${load.trucking_company ? ` (${load.trucking_company})` : ''}: -$${fmtAmount(rcpTrucking)}`,
-             { size: 8.5, color: MUTED, gap: 1 });
+        if (rcpTrucking > 0) {
+            line(`Less trucking${load.trucking_company ? ` (${load.trucking_company})` : ''}: -$${fmtAmount(rcpTrucking)}`,
+                 { size: 8.5, color: MUTED, gap: 1 });
+        }
+        if (rcpClaim > 0) {
+            line(`Less claim: -$${fmtAmount(rcpClaim)}`, { size: 8.5, color: MUTED, gap: 1 });
+        }
         line(`Net payable: $${fmtAmount(rcpNet)}`, { size: 11, bold: true, gap: 3 });
     } else {
         line(`Amount total: ${load.amount != null ? `$${fmtAmount(load.amount)}` : '—'}`, { size: 11, bold: true, gap: 3 });

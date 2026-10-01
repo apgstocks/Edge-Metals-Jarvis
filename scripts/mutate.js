@@ -2872,6 +2872,68 @@ const MUTATIONS = [
       find: '            if (banks.expectsBank(mode) && !bank) {',
       to:   '            if (banks.needsBank(mode) && !bank) {' },
 
+    // ── A CLAIM AGAINST A LOAD WE BOUGHT (2026-10-01) ───────────────────
+    // Apsara: "if payment is already made for that load-track separately...
+    // if load payment not already made,ask user whether it can be adjusted in
+    // load invoice?" and "remind user abut the claim every day".
+    { name: 'yclaim: an EDIT wipes the adjusted claim off the load',
+      file: 'helpers/loads.js', suites: ['yard-claims'],
+      find: '            l.net_payable = payableFrom(l.amount, l.trucking_amount, l.claim_amount);',
+      to:   '            l.net_payable = payableFrom(l.amount, l.trucking_amount);' },
+
+    { name: 'yclaim: a settled claim still reduces what he is owed',
+      file: 'helpers/yardClaims.js', suites: ['yard-claims'],
+      find: '        .filter((c) => !SETTLED.has(c.status))',
+      to:   '' },
+
+    // An overpaid load has negative outstanding. Without the floor,
+    // Math.min returns a NEGATIVE adjustment — which ADDS money to what he
+    // is owed, off the back of a claim against him.
+    { name: 'yclaim: an overpaid load produces a NEGATIVE adjustment',
+      file: 'helpers/yardClaims.js', suites: ['yard-claims'],
+      find: '    const canAdjust = round2(Math.max(0, Math.min(claim, Math.max(0, outstanding)))) || 0;',
+      to:   '    const canAdjust = round2(Math.min(claim, outstanding)) || 0;' },
+
+    { name: 'yclaim: an unpriced load is offered an adjustment anyway',
+      file: 'helpers/yardClaims.js', suites: ['yard-claims'],
+      find: "            state: 'unpriced', outstanding: null, claim,\n            can_adjust: 0, adjustable_now: 0, must_track: claim,",
+      to:   "            state: 'unpaid', outstanding: 0, claim,\n            can_adjust: claim, adjustable_now: claim, must_track: 0," },
+
+    { name: 'yclaim: a claim can be raised with no reason',
+      file: 'helpers/yardClaims.js', suites: ['yard-claims'],
+      find: "    if (!reason) throw new Error('what is the claim for? (short reason, e.g. \"20% dirt in the Al combo\")');",
+      to:   '' },
+
+    { name: 'yclaim: the daily reminder stops reminding',
+      file: 'helpers/integritySweep.js', suites: ['yard-claims'],
+      find: '            return yc.openForReminder().map((c) => ({',
+      to:   '            return [].map((c) => ({' },
+
+    { name: 'yclaim: the reminder loses the age that makes her act',
+      file: 'helpers/integritySweep.js', suites: ['yard-claims'],
+      find: "                    + (c.age_days === null ? '' : ` (${c.age_days} day${c.age_days === 1 ? '' : 's'} ago)`),",
+      to:   "                    + '',"},
+
+    { name: 'yclaim: the reminder shows newest first',
+      file: 'helpers/yardClaims.js', suites: ['yard-claims'],
+      find: '        .sort((a, b) => (b.age_days || 0) - (a.age_days || 0));',
+      to:   '        .sort((a, b) => (a.age_days || 0) - (b.age_days || 0));' },
+
+    { name: 'yclaim: the claim vanishes from the seller\'s ticket',
+      file: 'helpers/pdf.js', suites: ['yard-claims'],
+      find: "                        ...(claim > 0 ? [{ label: 'Less claim', value: `-$${fmtAmount(claim)}` }] : []),",
+      to:   '' },
+
+    { name: 'yclaim: and from the slip he walks away with',
+      file: 'helpers/pdf.js', suites: ['yard-claims'],
+      find: "            line(`Less claim: -$${fmtAmount(rcpClaim)}`, { size: 8.5, color: MUTED, gap: 1 });",
+      to:   '' },
+
+    { name: 'yclaim: a SALE ticket starts carrying it',
+      file: 'helpers/pdf.js', suites: ['yard-claims'],
+      find: '                const claim = !isSale ? Number(load.claim_amount) || 0 : 0;',
+      to:   '                const claim = Number(load.claim_amount) || 0;' },
+
     // ── SUPPLIER PREPAYMENT, EDGE YARD (2026-10-01) ─────────────────────
     // Second attempt. The first shipped and was removed the same day; the
     // ledger design is hers and kept, the cash handling is what was wrong.

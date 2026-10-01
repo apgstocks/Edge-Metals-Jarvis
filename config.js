@@ -571,6 +571,11 @@ const PROFORMA_VERSIONS_FILE = path.join(DATA_DIR, 'proforma_versions.json');
 // only". Filled on purpose by scripts/documents-folder-audit.js --write-cache;
 // see helpers/savedDocKinds.js for why it is a cache and not a live read.
 const SAVED_DOC_KINDS_FILE = path.join(DATA_DIR, 'saved_doc_kinds.json');
+// Claims against loads the YARD bought — Apsara 2026-10-01. Deliberately not
+// the export claims register (claims.json), which keys on invoice+container
+// and chases overseas buyers; see helpers/yardClaims.js for why they are
+// separate stores rather than one with two kinds of key.
+const YARD_CLAIMS_FILE = path.join(DATA_DIR, 'yard_claims.json');
 // Save-a-copy archive for generated Invoice/Proforma PDFs — mirrors the
 // datewise/container-wise (invoice) and flat (proforma) folder layout
 // Apsara originally asked for in the Flask app, kept identical here for
@@ -739,7 +744,7 @@ module.exports = {
     PRICE_SHEET_ID, PRICELIST_WEBHOOK_TOKEN,BOOKING_TRACKER_SHEET_ID,
     INVOICE_SHEET_ID, INVOICE_MAIN_GID, INVOICE_PACKING_GID,
     CLAIMS_SHEET_GID,
-    PROFORMA_PRICING_FILE, PROFORMA_VERSIONS_FILE, SAVED_DOC_KINDS_FILE, DOCUMENTS_SAVED_DIR,
+    PROFORMA_PRICING_FILE, PROFORMA_VERSIONS_FILE, SAVED_DOC_KINDS_FILE, YARD_CLAIMS_FILE, DOCUMENTS_SAVED_DIR,
     SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS, ALERT_EMAIL_TO,
     TWILIO_SID, TWILIO_AUTH_TOKEN, TWILIO_FROM, ALERT_SMS_TO,
     GEMINI_API_KEY_BACKUP,
