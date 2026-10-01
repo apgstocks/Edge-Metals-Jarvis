@@ -330,11 +330,75 @@ function resolve(kind, selector = {}) {
         throw new Error('no rows selected — a bulk delete with no filter would take the whole ledger');
     }
     const mod = kind === 'bills' ? require('./bills') : require('./sales');
-    const hit = mod.filterRows(rows, f);
+    let hit = mod.filterRows(rows, f);
     const said = [];
     if (f.from || f.to) said.push(`${f.from || 'the start'} to ${f.to || 'today'}`);
     for (const k of keys) { if (k !== 'from' && k !== 'to') said.push(`${k} ${f[k]}`); }
-    return { ids: hit.map((r) => String(r.id)), how: said.join(', ') };
+
+    // ── NEVER BREAK A JOIN THAT SURVIVES ─────────────────────────────────
+    // Apsara, 2026-10-01: "i dont want 2025 bills unless they have an invoice
+    // in 2026", and then "similarly i dont want 2025 old invoices".
+    //
+    // Written as a rule about JOINS rather than about 2025 and 2026, because
+    // that is what she is protecting. A container bought in 2025 and sold in
+    // 2026 is ONE trade straddling the year end. Delete the bill and the 2026
+    // invoice it belongs to is still there, now with no cost against it —
+    // margin.js computes a margin only when cost !== null, so that container
+    // silently stops having a margin at all. The revenue stays on the books
+    // and the profit on it becomes unanswerable.
+    //
+    // Hardcoding the years would mean coming back here every January, and
+    // would not cover the mirror case she asked for in the same breath.
+    //
+    // The join is booking+container, which is how margin.js pairs the two
+    // sides — the SAME function rather than a second rule, because a file
+    // that disagreed with margin.js about what a container is would delete
+    // rows margin.js is still counting.
+    if (selector.keep_joined !== false) {
+        const margin = require('./margin');
+        const otherMod = kind === 'bills' ? require('./sales') : require('./bills');
+        const doomed = new Set(hit.map((r) => String(r.id)));
+
+        // Every key the OTHER ledger holds that is NOT itself being deleted.
+        // "Not itself being deleted" matters: if she is clearing both sides of
+        // 2025 in two passes, a 2025 invoice must not preserve the 2025 bill
+        // that is going with it. Only rows outside this selection count as
+        // survivors, and the other side's selection is unknown here — so the
+        // conservative reading is used: everything on the other side counts,
+        // and a row is kept if ANY counterpart exists. She can still clear it
+        // by running the other side first, which is the order that cannot
+        // orphan anything.
+        const survivingKeys = new Set();
+        for (const o of otherMod.list()) {
+            if (!o) continue;
+            const container = String(o.container_no || '').trim();
+            if (!container) continue;
+            survivingKeys.add(margin.keyOf(o.booking_no, container));
+        }
+
+        const spared = hit.filter((r) => {
+            const container = String((r && r.container_no) || '').trim();
+            if (!container) return false;        // nothing to join on; not spared
+            return survivingKeys.has(margin.keyOf(r.booking_no, container));
+        });
+        if (spared.length) {
+            hit = hit.filter((r) => !spared.includes(r));
+            said.push(`sparing ${spared.length} that still ${spared.length === 1 ? 'has' : 'have'} `
+                + `${kind === 'bills' ? 'an invoice' : 'a bill'} on the other side`);
+        }
+        // Reported on the result so the screen can SHOW her which ones were
+        // spared and why, rather than her wondering where eleven went.
+        return {
+            ids: hit.map((r) => String(r.id)),
+            how: said.join(', '),
+            spared: spared.map((r) => ({
+                id: String(r.id), container_no: r.container_no, booking_no: r.booking_no,
+                date: r.date, why: `joined to ${kind === 'bills' ? 'an invoice' : 'a bill'} that is staying`,
+            })),
+        };
+    }
+
+    return { ids: hit.map((r) => String(r.id)), how: said.join(', '), spared: [] };
 }
 
 // plan(), reached by a selector instead of a hand-typed id list. Same guards,

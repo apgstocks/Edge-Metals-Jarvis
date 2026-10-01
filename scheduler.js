@@ -935,6 +935,36 @@ function buildYardReportText(dateKey, todays, allLoads) {
     // "LINKS ONLY, no attachments" comment in eodYardReport). Every report
     // since has told her to look at an attachment that wasn't there. It
     // reads as a bug in the send, and would have been chased as one.
+    // ── OPEN CLAIMS, ON THE YARD'S OWN CHANNEL ───────────────────────────
+    // Apsara, 2026-10-01: "remind user abut the claim every day" — and then,
+    // when the reminder had been put in the Edge Metals integrity sweep,
+    // "EDGE_9 — Ramesh never involve yard with this."
+    //
+    // She was right twice over. A claim against a load the YARD bought is
+    // Edge Yard's business, and this report is Edge Yard's channel: its own
+    // toggle, its own recipients, its own WhatsApp group under Settings >
+    // Yard. The metals sweep reads bills, sales and margin and should carry
+    // nothing from here.
+    //
+    // Appended rather than given its own send, so a claim open for a week
+    // does not become seven emails of its own — it sits under the day's
+    // loads, where whoever reads this is already looking.
+    //
+    // Best-effort: a claims file that cannot be read must not cost her the
+    // whole yard report, which is the part someone is waiting for.
+    let claimLines = [];
+    try {
+        const open = require('./helpers/yardClaims').openForReminder();
+        if (open.length) {
+            claimLines = ['', `*Open claims (${open.length})*`,
+                ...open.map((c) => `${c.load_id}${c.seller ? ` — ${c.seller}` : ''}: `
+                    + `${usd(c.amount)} · ${c.reason}`
+                    + (c.age_days == null ? '' : ` · ${c.age_days}d`))];
+        }
+    } catch (e) {
+        console.error('[SCHED] eod-yard-report: could not read open claims:', e.message);
+    }
+
     return [
         `*${cfg.COMPANY_NAME} — Yard Report — ${dateKey}*`,
         '',
@@ -942,6 +972,7 @@ function buildYardReportText(dateKey, todays, allLoads) {
         ...lines,
         '', '*Totals*',
         `Gross ${totals.gross} ${unit} · Tare ${totals.tare} ${unit} · Net ${totals.net} ${unit} · ${usd(totals.amount)}`,
+        ...claimLines,
     ].join('\n');
 }
 
@@ -1147,9 +1178,26 @@ async function eodYardReport() {
 // to see a report first. Either way the email goes out, including on failure
 // — a night it could not run is a night her ledgers did not get the new rows,
 // and silence would read as "nothing to add".
+// ── LAST NIGHT'S SHEET COMPARISON, KEPT FOR THE MORNING ──────────────────
+// The 23:15 sync already fetches her workbook and computes a field-by-field
+// comparison. The 07:30 ledger agent wants exactly that and must not fetch it
+// again — two pulls of the same sheet eight hours apart is double the Google
+// quota for one answer, and the second one can disagree with the first.
+//
+// In memory on purpose: if the process restarted overnight the agent simply
+// runs sweep-only, which is a smaller report rather than a wrong one.
+let lastSheetSyncReport = null;
+
 async function nightlyMetalsSheetSync() {
     const job = require('./helpers/metalsSheetSyncJob');
     const result = await job.runNightly({ write: true });
+    // Kept for the 07:30 ledger agent — see lastSheetSyncReport above. Set
+    // here rather than fetched there, so her workbook is pulled once a night
+    // and both jobs answer from the same comparison. A failed run leaves the
+    // previous night's report in place rather than a half one: `report` is
+    // absent on failure, and the agent running sweep-only is a smaller report
+    // rather than a wrong one.
+    if (result && result.report) lastSheetSyncReport = result.report;
     // ── A FAILURE MUST NOT READ LIKE A SUMMARY ────────────────────────────
     // This printed `result.error || summarise(...)`, so the night the job
     // threw "nothing planned to commit" the log said exactly that, in the
@@ -1201,6 +1249,45 @@ function start() {
     //
     // Silent when clean — see helpers/integritySweepJob.js. Everything it
     // notices, when it notices anything.
+    // ── 07:30 — the ledger agent ─────────────────────────────────────────
+    // Apsara, 2026-10-01: an agent for bills and invoices, scanning regularly,
+    // with its own daily email.
+    //
+    // AFTER the 06:30 sweep, so its findings are today's; and it reuses the
+    // 23:15 sheet sync's report rather than fetching her workbook a second
+    // time. BEFORE 08:00 so it lands with the morning digest instead of an
+    // hour behind it.
+    //
+    // markSent/alreadySent are handed in: they live here, on top of
+    // brain.proactive_sent, and the job deliberately names no module of its
+    // own after a first version invented two that do not exist.
+    // ── 07:25 — THE QUICKBOOKS AGENT, FIVE MINUTES AHEAD ─────────────────
+    // Apsara, 2026-10-01: "Assign one agent for quickbook next", "so
+    // (bills+invoice) agent should talk to this agent."
+    //
+    // It runs FIRST so the ledger agent knows which blanks are stopping rows
+    // entering her books, and chases those loudest. Five minutes rather than
+    // the same minute: the dry sweep talks to QuickBooks, and a slow morning
+    // must not make the ledger agent wait on it.
+    //
+    // The two are not chained. If this fails or QuickBooks is down, 07:30
+    // runs anyway with no blocking information — the blanks still get filled,
+    // they are just not marked urgent. Chaining them would turn one outage
+    // into two.
+    //
+    // Dry run always: this job cannot push, cannot create a vendor, cannot
+    // journal. QB_PROD_WRITES and QB_SYNC keep meaning what they meant.
+    cron.schedule('25 7 * * *', () => require('./helpers/qbAgentJob')
+        .run({ alreadySent, markSent })
+        .catch(e => console.error('[SCHED] qb-agent:', e)), TZ);
+
+    // 07:30 — reads the 07:25 result off qbAgentJob.look() by itself; it is
+    // not passed in, so a morning where 07:25 never ran is simply a morning
+    // with no blocking marks rather than a crash on an undefined argument.
+    cron.schedule('30 7 * * *', () => require('./helpers/ledgerAgentJob')
+        .run({ alreadySent, markSent, sheetReport: lastSheetSyncReport })
+        .catch(e => console.error('[SCHED] ledger-agent:', e)), TZ);
+
     cron.schedule('30 6 * * *',   () => require('./helpers/integritySweepJob').run()
         .catch(e => console.error('[SCHED] integrity-sweep:', e)), TZ);
     cron.schedule('45 22 * * *',  () => nightlyCutoffBackfill().catch(e => console.error('[SCHED] cutoff-backfill:', e)), TZ);

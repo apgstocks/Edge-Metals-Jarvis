@@ -2348,7 +2348,10 @@ section('AE — a purchase order is a live matter, not an email');
     {
         const store = { pos: {} };
         po.recordPoMovement(store, { po: '3', messageId: 'a', fromName: 'T', summary: 's', at: '2026-09-16T12:00:00Z' });
-        po.closePo(store, '3');
+        // A FIXED stamp. This used to rely on the real clock and so asserted
+        // "closed 2026-09" — true in September, false from 1 October, and
+        // nothing to do with the code it was testing.
+        po.closePo(store, '3', 'apsara', '2026-09-16T13:00:00Z');
         ck('AE13 a closed PO leaves her list',
             po.openPos(store, Date.parse('2026-09-17T12:00:00Z')).length === 0);
         // Deletion-free release, same reasoning as the mute fix: the record

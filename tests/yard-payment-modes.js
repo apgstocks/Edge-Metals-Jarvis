@@ -283,11 +283,38 @@ section('B — and the SERVER holds the rule, not just the dropdown');
     const kindFromLoad = /load\._kind \s*\|\|\s*load\.load_kind/.test(tools);
     const modesAskedForIt = /modesForKind\(\s*loadKind\s*\)/.test(tools)
         || /modesForKind\(load\._kind/.test(tools);
+
+    // ── THE BAN IS ON THE PAYMENT TOOL, NOT THE WHOLE FILE (2026-10-01) ──
+    // This used to forbid modesForKind('purchase') anywhere in tools.js, and
+    // went red when record_prepayment arrived — where hardcoding IS correct.
+    // A prepayment is money to a SUPPLIER by definition ("advance concept is
+    // for edge yard right now", and it is a supplier advance): there is no
+    // sale side to get wrong, and no load whose kind could be asked for,
+    // because a prepayment deliberately has no load_id.
+    //
+    // The property was always about record_payment, which CAN be either
+    // kind and must not guess. So the search is narrowed to that tool rather
+    // than the ban being dropped — dropping it would have lost the check
+    // that caught the original bug.
+    const payTool = tools.slice(tools.indexOf('record_payment:'));
+    const payToolOnly = payTool.slice(0, payTool.indexOf('record_prepayment:') > 0
+        ? payTool.indexOf('record_prepayment:') : payTool.length);
+    ck('  the slice really is the payment tool', /modesForKind/.test(payToolOnly)
+       && !/record_prepayment/.test(payToolOnly),
+       'if this is wrong the check below is measuring the wrong region, or nothing');
+
     ck('the yard assistant asks modesForKind for the load\'s own kind',
        kindFromLoad && modesAskedForIt
-       && !/modesForKind\(\s*'purchase'\s*\)/.test(tools)
+       && !/modesForKind\(\s*'purchase'\s*\)/.test(payToolOnly)
        && !/PAYMENT_MODES\.find/.test(tools),
        'two validators disagreeing shows up as a confirmed payment that then errors');
+
+    // And prepayment's hardcode is asserted as DELIBERATE rather than merely
+    // tolerated, so removing the reasoning is what goes red next time.
+    const prepay = tools.slice(tools.indexOf('record_prepayment:'));
+    ck('  a prepayment asks for purchase modes on purpose',
+       /modesForKind\('purchase'\)/.test(prepay.slice(0, 4000)),
+       'a supplier advance has no sale side and no load to take a kind from');
     ck('  and tells the model the two it may use',
        /describe: 'Cash or Bank transfer'/.test(tools));
 }

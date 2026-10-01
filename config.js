@@ -598,6 +598,15 @@ const SMTP_PORT     = parseInt(process.env.SMTP_PORT || '587', 10);
 const SMTP_USER     = process.env.SMTP_USER || '';
 const SMTP_PASS     = process.env.SMTP_PASS || '';
 const ALERT_EMAIL_TO = process.env.ALERT_EMAIL_TO || '';
+// ── WHO GETS THE DAILY LEDGER-AGENT NOTE ──────────────────────────────────
+// helpers/ledgerAgentJob.js referenced this before it existed, and fell back
+// to a cfg.ALERT_EMAIL that does not exist either (the real name is
+// ALERT_EMAIL_TO). Both undefined meant the job logged "no recipient
+// configured" and sent nothing — for ever, without erroring. Defined here so
+// an unset env still reaches her at the address every other alert uses.
+const LEDGER_AGENT_EMAILS = process.env.LEDGER_AGENT_EMAILS || ALERT_EMAIL_TO;
+// Who gets the 07:25 QuickBooks agent note. Same fallback, same reason.
+const QB_AGENT_EMAILS = process.env.QB_AGENT_EMAILS || ALERT_EMAIL_TO;
 const TWILIO_SID        = process.env.TWILIO_SID || '';
 const TWILIO_AUTH_TOKEN = process.env.TWILIO_AUTH_TOKEN || '';
 const TWILIO_FROM       = process.env.TWILIO_FROM || ''; // your Twilio phone number
@@ -745,7 +754,7 @@ module.exports = {
     INVOICE_SHEET_ID, INVOICE_MAIN_GID, INVOICE_PACKING_GID,
     CLAIMS_SHEET_GID,
     PROFORMA_PRICING_FILE, PROFORMA_VERSIONS_FILE, SAVED_DOC_KINDS_FILE, YARD_CLAIMS_FILE, DOCUMENTS_SAVED_DIR,
-    SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS, ALERT_EMAIL_TO,
+    SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS, ALERT_EMAIL_TO, LEDGER_AGENT_EMAILS, QB_AGENT_EMAILS,
     TWILIO_SID, TWILIO_AUTH_TOKEN, TWILIO_FROM, ALERT_SMS_TO,
     GEMINI_API_KEY_BACKUP,
     GROUP_TRUCKER, GROUP_SUPPLIER,

@@ -2872,6 +2872,312 @@ const MUTATIONS = [
       find: '            if (banks.expectsBank(mode) && !bank) {',
       to:   '            if (banks.needsBank(mode) && !bank) {' },
 
+    // ── FILLING WHAT THE SHEET HAS AND JARVIS DOES NOT (2026-10-01) ─────
+    // "for rest of the others,check sheet properly,whatever is missed in
+    // jarvis fill it." The split is blank-vs-contradiction, and both halves
+    // of it matter.
+    { name: 'sheetfill: a CONTRADICTION is auto-applied as if it were a gap',
+      file: 'helpers/ledgerAgent.js', suites: ['ledger-agent'],
+      find: '                                needs_her: !jarvisBlank,',
+      to:   '                                needs_her: false,' },
+
+    { name: 'sheetfill: nothing is ever filled, so the sheet half does nothing',
+      file: 'helpers/ledgerAgent.js', suites: ['ledger-agent'],
+      find: '                                needs_her: !jarvisBlank,',
+      to:   '                                needs_her: true,' },
+
+    // The sync says "no customer" / "no freight charge" when a thing is
+    // absent. Read as a VALUE, a real gap becomes a disagreement with a
+    // sentence in it and never gets filled.
+    { name: "sheetfill: the sync's own \"no X\" phrasing reads as a value",
+      file: 'helpers/ledgerAgent.js', suites: ['ledger-agent'],
+      find: "                            || /^no [a-z ]+$/i.test(str(d.jarvis));",
+      to:   '' },
+
+    { name: 'sheetfill: the agent fetches the workbook itself',
+      file: 'helpers/ledgerAgent.js', suites: ['ledger-agent'],
+      find: '                const rep = this.report;',
+      to:   "                const rep = this.report || require('./metalsSheetSync').fetchWorkbook('x');" },
+
+    // ── THE QUICKBOOKS GATE (2026-10-01) ────────────────────────────────
+    // Apsara: "so (bills+invoice) agent should talk to this agent."
+    //
+    // The gate that stops the ledger agent auto-filling a row that is
+    // already in QuickBooks. Without it the fill leaves her books saying one
+    // thing and Jarvis another, with nothing recording who changed it — the
+    // exact discrepancy the agent exists to prevent.
+    { name: 'qb-gate: a row already in QuickBooks is auto-filled anyway',
+      file: 'helpers/ledgerAgent.js', suites: ['qb-agent', 'ledger-agent'],
+      find: '            if (link.linked) {',
+      to:   '            if (false) {' },
+
+    // Fails OPEN instead of closed: a journal it cannot read reads as "not
+    // in QuickBooks", so an unreadable journal becomes permission to write
+    // over everything.
+    { name: 'qb-gate: cannot-check is treated as not-linked',
+      file: 'helpers/qbLinked.js', suites: ['qb-agent'],
+      find: '            linked: true,\n            by: null,\n            why: `could not check QuickBooks',
+      to:   '            linked: false,\n            by: null,\n            why: `could not check QuickBooks' },
+
+    // Only the id is checked, so a bill linked by CONTAINER (push.js links
+    // by `id || container_no`) reads as unlinked and gets written over.
+    { name: 'qb-gate: only the row id is checked, not the container',
+      file: 'helpers/qbLinked.js', suites: ['qb-agent'],
+      find: '        const ids = [row && row.id, row && row.container_no].map(norm).filter(Boolean);',
+      to:   '        const ids = [row && row.id].map(norm).filter(Boolean);' },
+
+    // ── THE HANDOFF (2026-10-01) ────────────────────────────────────────
+    // Urgency must not promote money past her. This is the "but this one is
+    // important" exception a money control exists to refuse.
+    { name: 'handoff: a blocking MONEY field becomes auto-writable',
+      file: 'helpers/ledgerAgent.js', suites: ['qb-agent'],
+      find: '            blocks_quickbooks: true,',
+      to:   '            blocks_quickbooks: true, fix: { ...f.fix, field: \'seal_no\' },' },
+
+    { name: 'handoff: nothing is ever marked as blocking her books',
+      file: 'helpers/ledgerAgent.js', suites: ['qb-agent'],
+      find: '        if (!hit) return f;',
+      to:   '        if (hit) return f;' },
+
+    // A QuickBooks-side problem handed to the ledger agent, which cannot
+    // create a vendor — so it would be chased for ever by the wrong agent.
+    { name: 'handoff: a QuickBooks-side problem is handed to the ledger agent',
+      file: 'helpers/qbAgent.js', suites: ['qb-agent'],
+      find: "            if (f.side !== 'jarvis' || !f.field) continue;",
+      to:   '            if (!f.field) continue;' },
+
+    // Payments are not a ledger row the agent fills; handing one over makes
+    // it chase a field on a store it does not write.
+    { name: 'handoff: payments are handed over as if they were ledger rows',
+      file: 'helpers/qbAgent.js', suites: ['qb-agent'],
+      find: '        if (!ledger) continue;              // payments are not a ledger row the agent fills',
+      to:   "        const _l = ledger || 'bills'; if (!_l) continue;" },
+
+    // ── WHAT THE QB AGENT CHASES (2026-10-01) ───────────────────────────
+    // before-cutover is her accountant's period. Chasing it would reopen a
+    // closed period she deliberately fenced off on 2026-09-26.
+    { name: 'qb-agent: a before-cutover row is chased',
+      file: 'helpers/qbAgent.js', suites: ['qb-agent'],
+      find: "        if (!/^(blocked|error)/i.test(str(r.status))) continue;",
+      to:   "        if (/^(created|exists)/i.test(str(r.status))) continue;" },
+
+    // An unrecognised problem guessed at rather than reported verbatim — a
+    // wrong guess here becomes a wrong auto-fill in her ledger.
+    { name: 'qb-agent: an unrecognised problem is guessed as a date blank',
+      file: 'helpers/qbAgent.js', suites: ['qb-agent'],
+      find: "    return { side: 'unknown', problem: p };",
+      to:   "    return { side: 'jarvis', field: 'date', problem: p };" },
+
+    // The sweep run LIVE instead of dry — this job must never push.
+    { name: 'qb-agent: the sweep is run live, not dry',
+      file: 'helpers/qbAgent.js', suites: ['qb-agent'],
+      find: '    const res = await run({ env, dryRun: true });',
+      to:   '    const res = await run({ env, dryRun: false });' },
+
+    // A failed sweep reported as a clean morning — the worst available lie,
+    // because it reads as good news.
+    { name: 'qb-agent: a failed sweep reads as nothing-blocked',
+      file: 'helpers/qbAgentJob.js', suites: ['qb-agent'],
+      find: '        lastLook = null;',
+      to:   '        lastLook = { blocked: [], rowsSeen: 0 };' },
+
+    // Marked as done on a failure, so a transient 401 at 07:25 is written
+    // off for the whole day.
+    { name: 'qb-agent: a failed sweep is marked as done anyway',
+      file: 'helpers/qbAgentJob.js', suites: ['qb-agent'],
+      find: '        const why = String((e && e.message) || e).slice(0, 200);',
+      to:   '        const why = String((e && e.message) || e).slice(0, 200); await mark(key);' },
+
+    // ── THE TWO JOBS STAY INDEPENDENT (2026-10-01) ──────────────────────
+    // Chaining them turns one outage into two.
+    { name: 'pair: the ledger agent refuses to run without a QuickBooks look',
+      file: 'helpers/ledgerAgentJob.js', suites: ['qb-agent'],
+      find: '        if (look) blocking = require(\'./qbAgent\').blockingFields(look);',
+      to:   "        blocking = require('./qbAgent').blockingFields(look);" },
+
+    // ── BLANKS VS DISAGREEMENTS (2026-10-01) ────────────────────────────
+    // same() returns true when either side is blank, so a blank can never
+    // reach changedBills. Folding blanks in would flood her nightly
+    // DISAGREEMENTS email with every empty seal_no.
+    { name: 'sheetfill: blanks are folded into the disagreements list',
+      file: 'helpers/metalsSheetSync.js', suites: ['metals-sheet-sync', 'ledger-agent'],
+      find: '        if (blank.length) report.fillableBills.push({ key: k, row_id: mine && mine.id,',
+      to:   '        if (blank.length) report.changedBills.push({ key: k, row_id: mine && mine.id,' },
+
+    { name: 'sheetfill: no blank is ever reported, so nothing can be filled',
+      file: 'helpers/metalsSheetSync.js', suites: ['ledger-agent', 'qb-agent'],
+      find: '        if (theirs && !mine) out.push({ field: f, sheet: sheetRow[f], jarvis: \'\' });',
+      to:   '        if (false) out.push({ field: f, sheet: sheetRow[f], jarvis: \'\' });' },
+
+    // A blank reported even when the SHEET is the empty one — "filling" a
+    // field from nothing, which would blank a value she already has.
+    { name: 'sheetfill: a blank on the SHEET side counts as fillable',
+      file: 'helpers/metalsSheetSync.js', suites: ['ledger-agent'],
+      find: '        if (theirs && !mine) out.push({ field: f, sheet: sheetRow[f], jarvis: \'\' });',
+      to:   '        if (!mine) out.push({ field: f, sheet: sheetRow[f], jarvis: \'\' });' },
+
+    // freight is a shape mismatch, not a blank: the sheet has one number,
+    // Jarvis has a charge list with notes. This file learned that once
+    // already (#142) and must not relearn it.
+    { name: 'sheetfill: freight is treated as a fillable blank',
+      file: 'helpers/metalsSheetSync.js', suites: ['metals-sheet-sync', 'ledger-agent'],
+      find: "        if (f === 'freight_charges') continue;",
+      to:   '' },
+
+    // The row id dropped from the report, so every finding the agent is
+    // willing to apply has nothing to apply it to — today's bug, pinned.
+    { name: 'sheetfill: the report carries no row id, so nothing can be written',
+      file: 'helpers/metalsSheetSync.js', suites: ['ledger-agent', 'qb-agent'],
+      find: '        if (blank.length) report.fillableBills.push({ key: k, row_id: mine && mine.id,',
+      to:   '        if (blank.length) report.fillableBills.push({ key: k, row_id: null,' },
+
+    // ── THE TWO COMPANIES STAY APART (2026-10-01) ───────────────────────
+    // "EDGE_9 — Ramesh never involve yard with this." The claim reminder was
+    // put in the Edge Metals sweep and in the agent; both were wrong, and
+    // rule 5 is the oldest rule in CLAUDE.md.
+    { name: 'twoco: the metals sweep reads the yard again',
+      file: 'helpers/integritySweep.js', suites: ['yard-claims'],
+      find: "    // ── WHAT IS DELIBERATELY NOT HERE: THE YARD'S OPEN CLAIMS ─────────────",
+      to:   "    { id: 'open-yard-claims', title: 'x', why: 'x', run() { return require('./yardClaims').openForReminder().map((c) => ({ what: c.load_id, detail: c.reason })); } },\n    // ── WHAT IS DELIBERATELY NOT HERE: THE YARD'S OPEN CLAIMS ─────────────" },
+
+    { name: 'twoco: the agent grows a yard source',
+      file: 'helpers/ledgerAgent.js', suites: ['ledger-agent'],
+      find: "        // ── NO YARD SOURCE HERE, AND THAT IS THE POINT ───────────────────",
+      to:   "        { id: 'yard-claims', run() { return require('./yardClaims').openForReminder().map((c) => ({ check: 'open-claim', what: c.load_id })); } },\n        // ── NO YARD SOURCE HERE, AND THAT IS THE POINT ───────────────────" },
+
+    // And the reminder must still actually reach her, on the yard's channel.
+    { name: 'twoco: the yard report stops carrying open claims',
+      file: 'scheduler.js', suites: ['yard-claims'],
+      find: '        ...claimLines,',
+      to:   '' },
+
+    { name: 'twoco: the yard report drops the age',
+      file: 'scheduler.js', suites: ['yard-claims'],
+      find: "                    + (c.age_days == null ? '' : ` · ${c.age_days}d`))];",
+      to:   "                    )];" },
+
+    // ── THE LEDGER AGENT'S SAFETY LINE (2026-10-01) ─────────────────────
+    // "Let an AI agent handle both bills and invoice" — and, asked what it
+    // may change alone, she chose only things with ONE possible answer.
+    // Every mutation here is an attempt to get money past that line.
+    { name: 'agent: money fields become auto-fixable',
+      file: 'helpers/ledgerAgent.js', suites: ['ledger-agent'],
+      find: '    if (touchesMoney(fix)) return PROPOSED;',
+      to:   '' },
+
+    // The dangerous one: a field the allowlist has never heard of. A check
+    // added next year inventing `freight_cost` must not be able to opt itself
+    // into auto-fixing money.
+    { name: 'agent: an unknown money-smelling field is auto-fixed',
+      file: 'helpers/ledgerAgent.js', suites: ['ledger-agent'],
+      find: "    return /price|amount|cost|paid|owed|total|\\$/.test(field);",
+      to:   '    return false;' },
+
+    { name: 'agent: a fix with no provenance is applied anyway',
+      file: 'helpers/ledgerAgent.js', suites: ['ledger-agent'],
+      find: '    if (!str(fix.from_source)) return PROPOSED;',
+      to:   '' },
+
+    { name: 'agent: a check flagging its own doubt is overridden',
+      file: 'helpers/ledgerAgent.js', suites: ['ledger-agent'],
+      find: '    if (fix.needs_her === true) return PROPOSED;',
+      to:   '' },
+
+    { name: 'agent: blanking a field counts as a tidy-up',
+      file: 'helpers/ledgerAgent.js', suites: ['ledger-agent'],
+      find: "    if (!str(fix.field) || fix.to === undefined || fix.to === null || str(fix.to) === '') return PROPOSED;",
+      to:   '    if (!str(fix.field)) return PROPOSED;' },
+
+    // The email must stay silent when there is nothing, or she stops opening
+    // it — including on the day it matters.
+    { name: 'agent: it emails her every day whether or not there is anything',
+      file: 'helpers/ledgerAgent.js', suites: ['ledger-agent'],
+      find: '    if (!s.length && !p.length && !broken.length) return null;',
+      to:   '' },
+
+    { name: 'agent: a check that stopped running is swallowed',
+      file: 'helpers/ledgerAgent.js', suites: ['ledger-agent'],
+      find: "            broken.push({ id: s.id, error: String((e && e.message) || e).slice(0, 200) });",
+      to:   '            /* swallowed */' },
+
+    // ── CLEARING 2025 WITHOUT ORPHANING A 2026 TRADE (2026-10-01) ───────
+    // "i dont want 2025 bills unless they have an invoice in 2026."
+    { name: 'keepjoin: a year-spanning trade loses its cost side',
+      file: 'helpers/ledgerBulkDelete.js', suites: ['ledger-bulk-delete'],
+      find: '    if (selector.keep_joined !== false) {',
+      to:   '    if (false) {' },
+
+    // Sparing silently is nearly as bad as not sparing: she selects eleven,
+    // ten go, and nothing says where the eleventh went.
+    { name: 'keepjoin: rows are spared without saying which',
+      file: 'helpers/ledgerBulkDelete.js', suites: ['ledger-bulk-delete'],
+      find: "            spared: spared.map((r) => ({",
+      to:   '            spared: [].map((r) => ({' },
+
+    // A row with no container has nothing to join ON. Sparing it would keep
+    // every containerless row for ever — the opposite of the request.
+    { name: 'keepjoin: a row with no container is spared anyway',
+      file: 'helpers/ledgerBulkDelete.js', suites: ['ledger-bulk-delete'],
+      find: "            if (!container) return false;        // nothing to join on; not spared",
+      to:   '            if (!container) return true;' },
+
+    // The join must be the SAME one margin.js uses, or this deletes rows
+    // margin.js is still counting.
+    { name: 'keepjoin: it joins on container alone, not booking+container',
+      file: 'helpers/ledgerBulkDelete.js', suites: ['ledger-bulk-delete'],
+      find: '            survivingKeys.add(margin.keyOf(o.booking_no, container));',
+      to:   '            survivingKeys.add(container);' },
+
+    { name: 'keepjoin: the override stops working',
+      file: 'helpers/ledgerBulkDelete.js', suites: ['ledger-bulk-delete'],
+      find: '    if (selector.keep_joined !== false) {',
+      to:   '    if (true) {' },
+
+    // ── BILL_/SALE_ IDS ARE NOT CONTAINERS, IN EVERY CHECK (2026-10-01) ─
+    // She said it twice. The first fix went into one of three checks that
+    // print `container_no || id`, so her list came back full of them.
+    { name: 'recid: unfinished-bills reports BILL_ ids again',
+      file: 'helpers/integritySweep.js', suites: ['integrity-sweep'],
+      find: '                .filter((b) => !noRealContainer(b))\n                .map((b) => ({ b, needs: bills.missingFor(b) || [] }))',
+      to:   '                .map((b) => ({ b, needs: bills.missingFor(b) || [] }))' },
+
+    { name: 'recid: incomplete-rows reports them again',
+      file: 'helpers/integritySweep.js', suites: ['integrity-sweep'],
+      find: '                .filter((b) => !noRealContainer(b))\n                .filter((b) => Array.isArray(b.incomplete) && b.incomplete.length)',
+      to:   '                .filter((b) => Array.isArray(b.incomplete) && b.incomplete.length)' },
+
+    { name: 'recid: the unjoined check reports them again',
+      file: 'helpers/integritySweep.js', suites: ['integrity-sweep'],
+      find: '                if (noRealContainer(r)) continue;',
+      to:   '' },
+
+    // The opposite error: a filter so wide it hides the findings she needs.
+    { name: 'recid: the filter swallows real containers too',
+      file: 'helpers/integritySweep.js', suites: ['integrity-sweep'],
+      find: "    return !c || RECORD_ID.test(c.toUpperCase());",
+      to:   '    return true;' },
+
+    // ── THE S.NO MUST IDENTIFY A PIECE (2026-10-01) ─────────────────────
+    // "Did you notice he s.no" — 42 of 53 serial numbers on her packing list
+    // were duplicates, because her sheet numbers each of six columns from 1.
+    { name: 'sno: her repeated column numbers print as the serial number again',
+      file: 'helpers/invoicePdf.js', suites: ['packing-list'],
+      find: "              notesIdentifyRows ? (String(item.note || '').trim() || String(i + 1)) : String(i + 1)),",
+      to:   "              String(item.note || '').trim() || String(i + 1))," },
+
+    // The other direction: ignoring her numbering entirely would throw away
+    // the thing it was added for — her #4 and a buyer's #4 being one bundle.
+    { name: 'sno: her own numbering is ignored even when it is unique',
+      file: 'helpers/invoicePdf.js', suites: ['packing-list'],
+      find: '    const notesIdentifyRows = filledNotes.length === printedNotes.length\n        && new Set(filledNotes).size === filledNotes.length;',
+      to:   '    const notesIdentifyRows = false;' },
+
+    // Half hers and half positions is a column meaning two things at once.
+    { name: 'sno: a partly-numbered tally mixes her numbers with positions',
+      file: 'helpers/invoicePdf.js', suites: ['packing-list'],
+      find: '    const notesIdentifyRows = filledNotes.length === printedNotes.length\n        && new Set(filledNotes).size === filledNotes.length;',
+      to:   '    const notesIdentifyRows = new Set(filledNotes).size === filledNotes.length;' },
+
     // ── THE SCAN CHECKS ITSELF AGAINST THE SHEET (2026-10-01) ───────────
     // Her packing list for TCLU 6619618 went out 238 lb short (821 read for
     // 1,059 — a value from the next column over) and 6,095 lb of totes light,
@@ -2938,16 +3244,8 @@ const MUTATIONS = [
       find: "    if (!reason) throw new Error('what is the claim for? (short reason, e.g. \"20% dirt in the Al combo\")');",
       to:   '' },
 
-    { name: 'yclaim: the daily reminder stops reminding',
-      file: 'helpers/integritySweep.js', suites: ['yard-claims'],
-      find: '            return yc.openForReminder().map((c) => ({',
-      to:   '            return [].map((c) => ({' },
-
-    { name: 'yclaim: the reminder loses the age that makes her act',
-      file: 'helpers/integritySweep.js', suites: ['yard-claims'],
-      find: "                    + (c.age_days === null ? '' : ` (${c.age_days} day${c.age_days === 1 ? '' : 's'} ago)`),",
-      to:   "                    + '',"},
-
+    
+    
     { name: 'yclaim: the reminder shows newest first',
       file: 'helpers/yardClaims.js', suites: ['yard-claims'],
       find: '        .sort((a, b) => (b.age_days || 0) - (a.age_days || 0));',

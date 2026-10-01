@@ -277,13 +277,29 @@ section('A LEAKED RECORD ID IS NOT A CONTAINER');
 {
     const fs2 = require('fs');
     const src = fs2.readFileSync(path.join(ROOT, 'helpers/integritySweep.js'), 'utf8');
-    const block = src.slice(src.indexOf("id: 'unjoined-containers'"),
-                            src.indexOf("id: 'unjoined-containers'") + 2600);
+    // Bounded by the NEXT check, not by a magic character count. The window
+    // was 2600 characters and adding a comment to the check pushed the guard
+    // past the end of it — a test that fails when a comment is written is a
+    // test that gets deleted rather than fixed.
+    const block = (() => {
+        const from = src.indexOf("id: 'unjoined-containers'");
+        const next = src.indexOf("        id: '", from + 10);
+        return src.slice(from, next > from ? next : src.length);
+    })();
 
+    // ── TESTED BY BEHAVIOUR, NOT BY WHERE THE LITERAL SITS ───────────────
+    // This pair used to grep the unjoined-containers block for the regex
+    // source. Both went red on 2026-10-01 when the rule was hoisted to module
+    // scope so all THREE checks could share it — a test failing because the
+    // code got more correct, which is the "shaped like the code rather than
+    // like the property" failure CLAUDE.md names. The rule it was guarding
+    // was right; where the characters lived was never the point.
     ck('the unjoined check drops BILL_/SALE_ ids',
-       /RECORD_ID\.test\(c\)\) continue;/.test(block),
+       /noRealContainer\(r\)\) continue;/.test(block),
        'otherwise they are reported nightly and cannot ever be resolved');
-    ck('  matched case-insensitively', /\/\^\(BILL\|SALE\)_\/i/.test(block));
+    ck('  and the rule itself is case-insensitive',
+       /const RECORD_ID = \/\^\(BILL\|SALE\)_\/i;/.test(src),
+       'her ids arrive lowercase from some paths');
 
     // It must drop ONLY that shape. An unfamiliar container number is still
     // worth her seeing — over-filtering a report is the same failure as
@@ -299,6 +315,65 @@ section('A LEAKED RECORD ID IS NOT A CONTAINER');
     // underscore is what makes an id an id.
     ck('  a container merely STARTING with BILL survives',
        !RECORD_ID.test('BILLU1234567'), 'the underscore is the tell, not the letters');
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+// BILL_ AND SALE_ IDS ARE NOT CONTAINERS — IN EVERY CHECK
+// ══════════════════════════════════════════════════════════════════════════
+// Apsara said this twice. The first time I applied it inside
+// unjoined-containers, the check I was looking at, and nowhere else. Her list
+// came back full of "BILL_1789990307231_rar5g — DRM: needs container no", and
+// the second time she said: "I told you explicitly dont combine BILL_ and
+// SALE_ in this checking."
+//
+// THREE checks print `container_no || id`, and only one had the filter. This
+// section exists so a fourth cannot be written without it.
+{
+    const fs2 = require('fs');
+    const os2 = require('os');
+    const path2 = require('path');
+    const TMP2 = fs2.mkdtempSync(path2.join(os2.tmpdir(), 'jarvis-sweepids-'));
+    const cfg2 = require('../config');
+    const keep = { b: cfg2.BILLS_FILE, s: cfg2.SALES_FILE, y: cfg2.YARD_CLAIMS_FILE };
+    cfg2.BILLS_FILE = path2.join(TMP2, 'bills.json');
+    cfg2.SALES_FILE = path2.join(TMP2, 'sales.json');
+    cfg2.YARD_CLAIMS_FILE = path2.join(TMP2, 'yc.json');
+    // Straight from the list she pasted on 2026-10-01.
+    fs2.writeFileSync(cfg2.BILLS_FILE, JSON.stringify([
+        { id: 'BILL_1789990307231_rar5g', supplier: 'DRM', date: '2026-01-05' },
+        { id: 'BILL_1789990307231_2eiz5', supplier: 'DRM', date: '2026-01-05' },
+        { id: 'BILL_1789990307232_dsns3', supplier: 'Elder Oklahoma', date: '2026-01-05' },
+        { id: 'BILL_1789990307238_karc7', supplier: 'Junk car', date: '2026-01-05' },
+        { id: 'B1', container_no: 'TGCU0053611', supplier: 'Calderon', date: '2026-01-05' },
+        { id: 'B2', container_no: 'MSDU1161015', supplier: 'Calderon', date: '2026-01-05' },
+    ]));
+    fs2.writeFileSync(cfg2.SALES_FILE, '[]');
+    fs2.writeFileSync(cfg2.YARD_CLAIMS_FILE, '[]');
+
+    const sweep2 = require('../helpers/integritySweep');
+    const res2 = sweep2.run();
+    const named = [];
+    for (const f of res2.findings) for (const i of (f.items || [])) named.push(String(i.what));
+
+    ck('no BILL_ or SALE_ id is named anywhere in the sweep',
+       !named.some((n) => /^(BILL|SALE)_/i.test(n)),
+       `still naming: ${named.filter((n) => /^(BILL|SALE)_/i.test(n)).join(', ')}`);
+    ck('  and the real containers are still reported',
+       named.some((n) => /TGCU0053611/.test(n)) && named.some((n) => /MSDU1161015/.test(n)),
+       'the filter must not take the findings she actually needs');
+
+    // The rule lives in ONE place. A private copy inside a check is how this
+    // went wrong the first time.
+    const src2 = fs2.readFileSync(path2.join(__dirname, '..', 'helpers/integritySweep.js'), 'utf8');
+    const decls = (src2.match(/const RECORD_ID = /g) || []).length;
+    ck('RECORD_ID is declared exactly once, at module scope', decls === 1,
+       `declared ${decls} times — a second private copy is what let one check keep reporting them`);
+    ck('and every check that names rows by container uses the shared helper',
+       (src2.match(/noRealContainer\(/g) || []).length >= 3,
+       'three checks print `container_no || id`; all three must filter');
+
+    cfg2.BILLS_FILE = keep.b; cfg2.SALES_FILE = keep.s; cfg2.YARD_CLAIMS_FILE = keep.y;
+    try { fs2.rmSync(TMP2, { recursive: true, force: true }); } catch (e) {}
 }
 
 console.log(`\n  ${pass} passed, ${fail} failed`);

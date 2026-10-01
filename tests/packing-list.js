@@ -1717,6 +1717,64 @@ section('S2. the invoice packing list keeps its shape');
        'that is exactly how 821 got in — the next column over');
 }
 
+// ══════════════════════════════════════════════════════════════════════════
+// THE S.NO MUST IDENTIFY A PIECE
+// ══════════════════════════════════════════════════════════════════════════
+// Apsara, 2026-10-01, on the same generated packing list: "Did you notice he
+// s.no". 42 of its 53 serial numbers were duplicates.
+//
+// Her weigh sheet is written in SIX columns side by side, each numbered from 1
+// again. The scan carries each bundle's written number into `note`, and
+// invoicePdf's rule was "her own numbering wins" — so the document printed
+// five rows called #1, six called #2. Nothing about it looked wrong: every
+// number is plausible and every weight was correct.
+//
+// That rule was right for what it was built for — ONE tally column, where her
+// #4 and a buyer's #4 are the same bundle. It is wrong the moment the page has
+// two columns. So the test became "does her numbering IDENTIFY a row" rather
+// than "did she number it".
+{
+    const src = fs.readFileSync(path.join(__dirname, '..', 'helpers/invoicePdf.js'), 'utf8');
+    ck('the number column decides from the data, not a setting',
+       /notesIdentifyRows/.test(src),
+       'a switch would mean remembering to flip it, on the one document that goes to customs');
+    ck('  unique notes still win, which is the case she asked for',
+       /notesIdentifyRows \? \(String\(item\.note \|\| ''\)\.trim\(\) \|\| String\(i \+ 1\)\) : String\(i \+ 1\)/.test(src));
+    ck('  and every row must carry one for them to be used',
+       /filledNotes\.length === printedNotes\.length/.test(src),
+       'half her numbers and half positions is a column that means two things');
+
+    // The decision, run on real shapes.
+    const decide = (notes) => {
+        const printed = notes.map((n) => String(n || '').trim());
+        const filled = printed.filter(Boolean);
+        const ok = filled.length === printed.length && new Set(filled).size === filled.length;
+        return printed.map((n, i) => (ok ? (n || String(i + 1)) : String(i + 1)));
+    };
+
+    // Her sheet: 10+10+10+10+10+3, each column numbered from 1.
+    const hers = [].concat(...[10, 10, 10, 10, 10, 3]
+        .map((n) => Array.from({ length: n }, (_, k) => String(k + 1))));
+    const out = decide(hers);
+    ck('her six-column sheet numbers 1..53 with no repeats',
+       out.length === 53 && new Set(out).size === 53 && out[0] === '1' && out[52] === '53',
+       `${out.length - new Set(out).size} duplicates`);
+    ck('  which is what made "piece #7" unanswerable before',
+       new Set(hers).size === 10 && hers.length === 53);
+
+    // A single tally — the case the feature exists for — is untouched.
+    ck('a single tally still prints HER numbers',
+       decide(['1', '2', '3', '4', '5']).join(' ') === '1 2 3 4 5');
+    ck('  including when she numbered them oddly',
+       decide(['A1', 'A2', 'A3']).join(' ') === 'A1 A2 A3',
+       'her reference is the point; it does not have to be a count');
+
+    // Partly numbered falls back wholesale rather than mixing.
+    ck('a partly-numbered tally uses positions throughout',
+       decide(['1', '', '3']).join(' ') === '1 2 3');
+    ck('no notes at all uses positions', decide(['', '', '']).join(' ') === '1 2 3');
+}
+
 console.log(`\n  ${pass} passed, ${fail} failed`);
 if (fail) { console.log('\n  FAILED:\n' + failures.map((f) => '    - ' + f).join('\n')); process.exit(1); }
 

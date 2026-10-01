@@ -341,6 +341,75 @@ section('K — FREIGHT IS NOT A FIELD ANY MORE (2026-09-28)');
 }
 
 // is still in flight is a green run that proved less than it says.
+// ── FREIGHT IS NOT A BLANK, IT IS A SHAPE MISMATCH ───────────────────────
+// Apsara, 2026-09-28, on a live dry run: "freight_charges: sheet 553 vs
+// Jarvis 170 — why?" The answer was that this file compared a dead column
+// (#142). Her sheet has ONE freight number; Jarvis has a charge LIST with
+// notes. They are not the same shape.
+//
+// blanksOnly() — added 2026-10-01 so the ledger agent can fill what the
+// sheet has and Jarvis does not — must therefore skip freight entirely. A
+// mutation that deleted that skip SURVIVED the suite, meaning the agent
+// could have been pointed at freight again with nothing going red, and the
+// 28 September lesson would have been relearned the expensive way.
+{
+    section('FREIGHT — never offered as a fillable blank');
+
+    const sheetSale = {
+        invoice_no: '26MK80', container_no: 'KOCU4930737', item: 'Al Combo',
+        date: '2026-09-20', customer: 'MK',
+        freight_charges: 553,          // the sheet's single column
+        consignee: 'MK Ltd',           // a genuine blank, for contrast
+    };
+    // Jarvis: freight lives in charges[], and freight_charges is the dead
+    // field left writable only so pre-10-September rows keep their money.
+    const mine = {
+        id: 'SALE_1', invoice_no: '26MK80', container_no: 'KOCU4930737', item: 'Al Combo',
+        date: '2026-09-20', customer: 'MK',
+        charges: [{ label: 'Ocean freight', amount: 170 }],
+    };
+
+    const fr = sync.diff({ sheetSales: [sheetSale], sales: [mine], sheetBills: [], bills: [] });
+    const fields = ((fr.fillableSales[0] || {}).blanks || []).map((b) => b.field);
+
+    ck('freight is NOT offered as something to fill',
+       !fields.includes('freight_charges'),
+       'the sheet has one number, Jarvis has a list with notes — "filling" across that gap '
+       + 'is the #142 mistake relearned: ' + JSON.stringify(fields));
+    ck('  but a real blank on the same row still is',
+       fields.includes('consignee'),
+       'if nothing is offered the check above passes while measuring nothing — ' + JSON.stringify(fields));
+
+    // And blanksOnly directly, so the property is pinned at the function and
+    // not only through diff's plumbing.
+    const direct = sync.blanksOnly(sheetSale, mine, ['freight_charges', 'consignee']);
+    ck('blanksOnly itself refuses freight',
+       direct.length === 1 && direct[0].field === 'consignee', JSON.stringify(direct));
+
+    // ── A BLANK ON THE SHEET IS NOT A BLANK TO FILL ──────────────────────
+    // `theirs && !mine` — both halves matter. Dropping the first reports a
+    // field as fillable when the SHEET is the empty one, and the agent then
+    // "fills" a value from nothing. On a field Jarvis already holds that is
+    // not a no-op: it is a blanking.
+    //
+    // The mutation for this was killed only by an email-grammar check in
+    // another file, which is coincidence rather than coverage, so the
+    // property gets its own check here.
+    const sheetEmpty = sync.blanksOnly(
+        { seal_no: '', supplier: '   ' },
+        { id: 'B1', seal_no: '', supplier: '' },
+        ['seal_no', 'supplier']);
+    ck('a field blank on BOTH sides is not fillable',
+       sheetEmpty.length === 0, JSON.stringify(sheetEmpty));
+    const wouldBlank = sync.blanksOnly(
+        { seal_no: '' },
+        { id: 'B1', seal_no: 'SL-REAL' },
+        ['seal_no']);
+    ck('  and a value Jarvis HAS is never offered to be overwritten by a blank',
+       wouldBlank.length === 0,
+       'this would hand the agent a fix that erases SL-REAL — ' + JSON.stringify(wouldBlank));
+}
+
 Promise.all(runs).then(() => {
     console.log(`\n  ${pass} passed, ${fail} failed`);
     if (failures.length) console.log('  failed: ' + failures.join(' | '));

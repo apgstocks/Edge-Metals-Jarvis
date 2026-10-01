@@ -47,6 +47,38 @@ const daysSince = (d) => {
 // Every one is wrapped by run() so a single broken check reports itself and
 // the other seven still run. A sweep that dies on its first problem tells her
 // nothing about the other six ledgers, which is the opposite of the point.
+// ── ROWS IDENTIFIED BY A RECORD ID, NOT A CONTAINER ──────────────────────
+// Apsara, twice: "BILL_1789990307231_2eiz5 — DRM ignore all these things likle
+// BILL_,SALE_", and again on 2026-10-01 after they were still in her list:
+// "I told you explicitly dont combine BILL_ and SALE_ in this checking."
+//
+// The first time, I applied this inside unjoined-containers — the check I
+// happened to be looking at — and nowhere else. unfinished-bills prints
+// `container_no || id`, so every row without a container came out as
+// "BILL_1789990307231_rar5g — DRM: needs container no" and her list was full
+// of them again. Fixing one call site of a rule she stated generally is the
+// same mistake CLAUDE.md's rule 1 is about, pointing the other way.
+//
+// So it lives HERE now, at module scope, and every check that reports rows by
+// container uses it. A new check written next month gets it by reaching for
+// the same helper rather than by remembering.
+const RECORD_ID = /^(BILL|SALE)_/i;
+
+// A row this sweep should not name by container, because it has none to name:
+// either the field is empty, or it holds the synthetic id the ledger gave it.
+//
+// WHAT THIS COSTS, said plainly rather than buried: a bill that genuinely
+// SHOULD have a container number and lost it is no longer reported either.
+// That is the trade she asked for twice, and the reason it is right is that
+// the rows carrying these ids are not containers at all — they are local
+// deliveries and one-off bills that will never have one, so the finding could
+// never be closed and a finding that cannot be closed is what makes a daily
+// report stop being read.
+const noRealContainer = (row) => {
+    const c = String((row && row.container_no) || '').trim();
+    return !c || RECORD_ID.test(c.toUpperCase());
+};
+
 const CHECKS = [
 
     // ── TWO BILLS ON ONE CONTAINER ────────────────────────────────────────
@@ -147,14 +179,18 @@ const CHECKS = [
             //
             // Only the id shape is dropped, not everything odd: a genuinely
             // unfamiliar container number is still worth her seeing.
-            const RECORD_ID = /^(BILL|SALE)_/i;
+            // RECORD_ID is now module-scope — see the comment there for why
+            // having a second private copy here was the bug.
 
             const byContainer = new Map();
             for (const r of rows) {
                 if (r.state === 'closed') continue;
                 const c = String(r.container_no || '').trim().toUpperCase();
                 if (!c) continue;
-                if (RECORD_ID.test(c)) continue;
+                // The SAME helper the other two checks use. This check had its
+                // own private copy of the rule, which is precisely why fixing
+                // it here left the other two reporting BILL_ ids for weeks.
+                if (noRealContainer(r)) continue;
                 if (!byContainer.has(c)) byContainer.set(c, []);
                 byContainer.get(c).push(r);
             }
@@ -201,6 +237,10 @@ const CHECKS = [
         run() {
             const bills = require('./bills');
             return bills.listWithTotals()
+                // Her instruction, applied at the SOURCE of this check rather
+                // than to the email: every consumer agrees, and a screen that
+                // calls run() sees the same list she does.
+                .filter((b) => !noRealContainer(b))
                 .map((b) => ({ b, needs: bills.missingFor(b) || [] }))
                 .filter((x) => x.needs.length)
                 // A bill typed this morning is not a problem; one from three
@@ -220,35 +260,20 @@ const CHECKS = [
         },
     },
 
-    // ── AN OPEN CLAIM AGAINST A LOAD WE BOUGHT ────────────────────────────
-    // Apsara, 2026-10-01: "remind user abut the claim every day".
+    // ── WHAT IS DELIBERATELY NOT HERE: THE YARD'S OPEN CLAIMS ─────────────
+    // They were here, for one afternoon, and Apsara took them out on
+    // 2026-10-01: "EDGE_9 — Ramesh never involve yard with this."
     //
-    // It rides HERE rather than in a reminder of its own, and that is the
-    // whole design. This sweep already goes out at 6:30am, she already reads
-    // it, and it is SILENT WHEN CLEAN — so no open claims means no new email,
-    // and settling a claim stops the reminder by itself with nothing to
-    // dismiss. A separate daily alert would be a second channel competing
-    // with this one, and the loser is whichever she starts ignoring.
+    // She is right and it is rule 5. Every other check in this file reads
+    // bills, sales or margin — Edge Metals' paperwork. A claim against a load
+    // the YARD bought is Edge Yard's, and the separation between the two
+    // companies is most of what this app is for. Putting them in one email
+    // because both happen to be "things that need attention" is the kind of
+    // tidying that quietly teaches her the two books are one book.
     //
-    // NO staleness filter, unlike the bill checks above. Those tolerate a row
-    // typed this morning because paperwork catches up on its own; a claim
-    // does not catch up on its own, it needs her to ring somebody. She asked
-    // for every day, so every day it is, from day one.
-    {
-        id: 'open-yard-claims',
-        title: 'Claims against yard loads that are still open',
-        why: 'a claim nobody chases is money we have written off by accident',
-        run() {
-            const yc = require('./yardClaims');
-            return yc.openForReminder().map((c) => ({
-                what: `${c.load_id}${c.seller ? ` — ${c.seller}` : ''} · $${Number(c.amount).toFixed(2)}`,
-                // Age is the point. "A claim is open" is not news on day one;
-                // "open 34 days" is the sentence that makes her act.
-                detail: `${c.reason} · raised ${c.raised_on}`
-                    + (c.age_days === null ? '' : ` (${c.age_days} day${c.age_days === 1 ? '' : 's'} ago)`),
-            }));
-        },
-    },
+    // They now ride the 8PM end-of-day yard report, which has its own
+    // toggle, its own recipients and its own WhatsApp group under
+    // Settings > Yard. Her daily reminder, on the yard's channel.
 
     // ── A ROW WITH NO DATE OR NO PARTY ────────────────────────────────────
     // compute() already marks these `incomplete` rather than refusing them,
@@ -261,6 +286,12 @@ const CHECKS = [
         run() {
             const bills = require('./bills');
             return bills.listWithTotals()
+                // Same rule, same reason — this check prints `container_no ||
+                // id` too, so without it her list fills with BILL_ ids from a
+                // third direction. THREE checks had the same shape and only
+                // one had the filter; that is what made "I told you
+                // explicitly" the right thing for her to say.
+                .filter((b) => !noRealContainer(b))
                 .filter((b) => Array.isArray(b.incomplete) && b.incomplete.length)
                 .map((b) => ({
                     what: `${b.container_no || b.id}`,
