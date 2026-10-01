@@ -943,6 +943,36 @@ section('G2 — the Pay form: one transfer, several containers');
     ck('  and back again if she changes her mind',
        doc.getElementById('bpBankField').style.display !== 'none');
 
+    // ── PICK A KIND FIRST (2026-10-02) ──────────────────────────────────
+    // Apsara: "instead of keeping save as advance as button, Give two option
+    // to choose from 1.Advance 2.Bill."
+    //
+    // There is no default, on purpose, so the container table is hidden and
+    // Record payment is dead until she chooses. Asserted before anything is
+    // typed, because "the form works once you pick" is only half the
+    // requirement — the other half is that it does nothing until you do.
+    const kindBtn = (k) => doc.querySelector(`.bpKind[data-kind="${k}"]`);
+    ck('both choices are offered',
+       !!kindBtn('advance') && !!kindBtn('payment'),
+       'Advance and Against a bill');
+    ck('  and nothing is chosen for her',
+       kindBtn('advance').getAttribute('aria-pressed') === 'false'
+       && kindBtn('payment').getAttribute('aria-pressed') === 'false',
+       'a default means a mis-click records money as the wrong kind');
+    ck('  the containers are hidden until she picks',
+       doc.getElementById('bpBillBlock').style.display === 'none',
+       'an advance has no containers, so offering them is an invitation to '
+       + 'allocate money that must not be allocated');
+    ck('  and Record payment does nothing yet',
+       doc.getElementById('bpSave').disabled === true,
+       doc.getElementById('bpSave').title);
+
+    kindBtn('payment').click();
+    ck('choosing Against a bill reveals the containers',
+       doc.getElementById('bpBillBlock').style.display !== 'none');
+    ck('  and marks the choice',
+       kindBtn('payment').getAttribute('aria-pressed') === 'true');
+
     const amt = doc.getElementById('bpAmount');
     amt.value = '7000'; fire(amt, 'input');
     ck('typing the amount shows it all still to allocate',
@@ -1009,12 +1039,41 @@ section('G2 — the Pay form: one transfer, several containers');
     const a2 = doc.getElementById('bpAmount');
     a2.value = '5000'; fire(a2, 'input');
     doc.getElementById('bpBank').value = 'Chase';
-    ck('an unallocated amount cannot be saved as a payment',
+    // ── THE ADVANCE PATH IS A CHOICE NOW, NOT A SECOND BUTTON ───────────
+    // "Save as advance" is gone. Picking Advance hides the containers and
+    // makes the ONE Record payment button mean advance.
+    const k2 = (k) => doc.querySelector(`.bpKind[data-kind="${k}"]`);
+    ck('with nothing chosen, an amount alone cannot be saved',
        doc.getElementById('bpSave').disabled === true);
-    ck('  but Save as advance is always available',
-       !!doc.getElementById('bpAdvance') && doc.getElementById('bpAdvance').disabled !== true,
-       'that is the escape hatch the server error tells her to use');
-    doc.getElementById('bpAdvance').click();
+    ck('  and the old "Save as advance" button is gone',
+       !doc.getElementById('bpAdvance'),
+       'the decision moved to the choice at the top of the form');
+    k2('advance').click();
+    ck('choosing Advance hides the containers',
+       doc.getElementById('bpBillBlock').style.display === 'none',
+       'there is nothing to allocate an advance against');
+    ck('  and an amount alone is now enough',
+       doc.getElementById('bpSave').disabled === false,
+       'requiring full allocation would make an advance impossible to record — '
+       + 'which is what the separate button existed to sidestep');
+    // ── SWITCHING MUST NOT CARRY ALLOCATIONS ACROSS ─────────────────────
+    // She ticks two containers, changes her mind, picks Advance. If the boxes
+    // kept their numbers the post would mark those containers paid out of
+    // money she has just said is an advance — money in two places at once,
+    // and the container reads as settled when nothing was settled.
+    k2('payment').click();
+    const firstRow = doc.querySelector('#bpRows input[data-bill]');
+    if (firstRow) { firstRow.value = '1200'; fire(firstRow, 'input'); }
+    ck('a typed allocation registers while Against-a-bill is chosen',
+       doc.getElementById('bpAllocated').textContent !== '$0.00',
+       doc.getElementById('bpAllocated').textContent);
+    k2('advance').click();
+    ck('switching to Advance clears what was allocated',
+       doc.getElementById('bpAllocated').textContent === '$0.00',
+       'otherwise an advance posts with containers attached — '
+       + doc.getElementById('bpAllocated').textContent);
+
+    doc.getElementById('bpSave').click();
     await new Promise((r) => setTimeout(r, 30));
     ck('the advance posts against the supplier',
        posted.length === 2 && posted[1].kind === 'advance' && posted[1].supplier === 'Eccomelt',
@@ -1175,8 +1234,9 @@ section('G3 — spending an advance she already paid');
        doc.getElementById('bpBank').closest('div').style.display === 'none' &&
        doc.getElementById('bpAmount').closest('div').style.display === 'none',
        'applying credit does not touch a bank account');
-    ck('  and so is "Save as advance"', !doc.getElementById('bpAdvance'),
-       'an advance cannot be turned into another advance');
+    ck('  and so is the Advance / Against-a-bill choice',
+       !doc.getElementById('bpKindChoice'),
+       'applying a credit is neither — an advance cannot be turned into another advance');
     ck('only this supplier’s containers are listed',
        doc.querySelectorAll('#bpRows tr[data-bill]').length === 1 &&
        !!doc.querySelector('#bpRows tr[data-bill="B1"]'),

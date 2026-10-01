@@ -1370,8 +1370,26 @@ function start() {
     // review and the 23:00 archive, before the 03:30 fact replica. Nothing
     // else is writing, so the archive is a clean point-in-time copy rather
     // than a set of files caught mid-change.
+    //
+    // ── 2026-10-02: IT TELLS HER WHEN IT BREAKS ───────────────────────────
+    // Apsara: "Protect the data of edge yard no matter what."
+    //
+    // This used to be runBackup() with a bare console.error catch. A Drive
+    // token expires, backups stop, and nobody is told — she keeps believing
+    // she has thirty dated copies of payments.json and finds out on the one
+    // day it matters. Every other consequential job here emails; the one
+    // guarding the money ledger did not.
+    //
+    // backupWatch.nightly writes a receipt, emails on any trouble, and sends
+    // one heartbeat line on Mondays so the ABSENCE of a message is a signal
+    // too. See its header for why "silent when clean" — right everywhere
+    // else in this codebase — is wrong for backups specifically.
+    //
+    // The catch stays, and still only logs: if the alerting itself throws,
+    // that must not take the scheduler down with it. /healthz is the backstop
+    // for "the backup is not running at all", which no email can cover.
     cron.schedule('0 2 * * *', () => {
-        require('./helpers/backup').runBackup()
+        require('./helpers/backupWatch').nightly()
             .catch(e => console.error('[SCHED] nightly data backup FAILED:', e.message));
     }, TZ);
 

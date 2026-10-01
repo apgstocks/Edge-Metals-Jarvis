@@ -348,7 +348,7 @@ const agent = require('../helpers/ledgerAgent');
     const ledgerJob = require('../helpers/ledgerAgentJob');
     const bills = require('../helpers/bills');
 
-    qbJob.forget();
+    await qbJob.forget();
 
     // A bill QuickBooks cannot take: no date. Her sheet has the date.
     const bill = await bills.addBill({
@@ -415,7 +415,7 @@ const agent = require('../helpers/ledgerAgent');
     // ── AND 07:30 SURVIVES 07:25 NEVER HAVING RUN ────────────────────────
     // Chaining them would turn one outage into two. This is the check that
     // keeps them independent.
-    qbJob.forget();
+    await qbJob.forget();
     const bill2 = await bills.addBill({ container_no: 'DDDD4444444', booking_no: 'BK4', supplier: 'Q' });
     const alone = await ledgerJob.run({
         sheetReport: { changedBills: [], changedSales: [], fillableSales: [], fillableBills: [{
@@ -431,7 +431,7 @@ const agent = require('../helpers/ledgerAgent');
        JSON.stringify(alone.broken));
 
     // ── A FAILED SWEEP IS NEWS, NOT SILENCE ──────────────────────────────
-    qbJob.forget();
+    await qbJob.forget();
     let failMail = null;
     const bad = await qbJob.run({
         sweep: async () => { throw new Error('401 unauthorized'); },
@@ -444,6 +444,19 @@ const agent = require('../helpers/ledgerAgent');
     ck('  and clears the cache so 07:30 is not told yesterday\'s news',
        qbJob.look() === null,
        'a stale blocking map would mark rows urgent that were fixed hours ago');
+    // ── AND THE ON-DISK COPY TOO ─────────────────────────────────────────
+    // look() reads through to the file when memory is empty, so clearing only
+    // the variable would leave chat answering from yesterday's file while the
+    // ledger agent correctly believed it knew nothing. Two caches, one of
+    // them stale, is worse than no cache.
+    const { loadJson } = require('../helpers/json');
+    // The file is emptied, not deleted — look() tests
+    // Array.isArray(saved.blocked), so {} reads as "no check yet" while the
+    // file's ABSENCE keeps its own meaning (never written at all).
+    const onDisk = loadJson(require('../config').QB_AGENT_LAST_FILE, null);
+    ck('    including the file, not just the variable',
+       !onDisk || !Array.isArray(onDisk.blocked),
+       'chat would answer from yesterday while the agent knew nothing — ' + JSON.stringify(onDisk));
 }
 
 
@@ -539,6 +552,213 @@ const agent = require('../helpers/ledgerAgent');
     ck('a kind QuickBooks does not know is not "linked"',
        qbLinked.linkedRow({ id: 'X' }, { kind: 'petty_cash' }).linked === false,
        'failing closed on an unknown KIND would freeze stores QuickBooks has nothing to do with');
+}
+
+
+// ── I — THE VOICE PATH, WHICH IS THE CALLER THAT ALWAYS BREAKS ────────────
+// CLAUDE.md, in her own words from 2026-09-17: "Twice now that caller has
+// been the voice/assistant path, because it is the one without a form to put
+// a field on." Both agents shipped yesterday with no way to ASK them
+// anything — they email on their own schedule and that is all.
+//
+// Built deliberately this time rather than discovered broken, and tested
+// THROUGH THE ROUTER rather than by calling the function: an action nothing
+// routes to is an action that does not exist.
+{
+    section('I — asking Jarvis what is stuck');
+
+    const brain = require('../workflow/brain.js');
+    const actions = require('../workflow/actions.js');
+    const job = require('../helpers/qbAgentJob');
+
+    const mk = (t) => ({ text: t, textLower: t.toLowerCase(), isManagerOrTeam: true,
+                         isTrucker: false, isSupplier: false, pendingAction: null,
+                         session: {}, activeBooking: null });
+    const intent = (t) => { const d = brain.policyDecide(mk(t)); return d && !d.needsAI ? d.intent : '(needsAI)'; };
+
+    // ── THE WORDS SHE WOULD ACTUALLY USE ─────────────────────────────────
+    for (const phrase of [
+        "what's stuck in quickbooks", 'what is stuck in quickbooks', 'whats blocked in qb',
+        'quickbooks status', 'qb problems', "what's not going into quickbooks",
+    ]) {
+        ck(`"${phrase}" routes`, intent(phrase) === 'qb_stuck', intent(phrase));
+    }
+    for (const phrase of ['check quickbooks', 'check qb now', 'refresh quickbooks', 'recheck qb']) {
+        ck(`"${phrase}" runs a fresh check`, intent(phrase) === 'qb_check_now', intent(phrase));
+    }
+
+    // ── AND THE ONES THAT MUST NOT ───────────────────────────────────────
+    // These regexes sit above the digest-index rules, the same hazard the PO
+    // routes documented. A route that swallows a neighbouring question is
+    // worse than a missing route, because it answers confidently.
+    // The last four deliberately CONTAIN the trigger words. A route matched
+    // on "stuck|blocked|pending|waiting" anywhere in the text would swallow
+    // all of them, and a mutation that widened the regex that way survived
+    // until these were added. Answering the wrong question confidently is
+    // worse than not answering.
+    for (const phrase of [
+        'close po 4302902', 'po 4302902', 'show pos', 'ignore 3', 'explain 4',
+        'waiting on hugo to pay',
+        'what is pending with the trucker',
+        'is the booking still blocked',
+        'what replies are pending',
+    ]) {
+        ck(`  "${phrase}" is NOT swallowed`, intent(phrase) !== 'qb_stuck' && intent(phrase) !== 'qb_check_now',
+           `${phrase} → ${intent(phrase)}`);
+    }
+
+    // ── THE ACTIONS EXIST AND ARE WIRED ──────────────────────────────────
+    // brain.js dispatches by name. A case pointing at a function that is not
+    // exported throws at run time, on her phone, which is the one place
+    // nobody is watching a stack trace.
+    ck('both actions are exported',
+       typeof actions.showQuickBooksStuck === 'function'
+       && typeof actions.checkQuickBooksNow === 'function');
+    const brainSrc = fs.readFileSync(path.join(ROOT, 'workflow/brain.js'), 'utf8');
+    for (const name of ['showQuickBooksStuck', 'checkQuickBooksNow']) {
+        ck(`  brain dispatches to ${name}`, brainSrc.includes(`actions.${name}(`));
+    }
+
+    // ── IT READS THE CACHE, IT DOES NOT SWEEP ────────────────────────────
+    // A chat answer that quietly costs tens of QuickBooks calls and tens of
+    // seconds is one she asks five times on a bad morning and then stops
+    // asking. Proved by handing it a sweep that FAILS the test if called.
+    await job.forget();
+    // _send is assigned by init(), not at module scope — without this every
+    // reply path throws "_send is not a function". Same shim the other
+    // action tests use (tests/cancel-loop.js).
+    const sent = [];
+    actions.init({
+        sendMessage: async (_id, t) => { sent.push(t); },
+        sendToManager: async () => {}, sendToTeam: async () => {}, pushAlert: async () => {},
+    });
+
+    const origSweep = require('../helpers/quickbooks/sync').sweep;
+    let sweepCalls = 0;
+    require('../helpers/quickbooks/sync').sweep = async (...a) => { sweepCalls += 1; return origSweep(...a); };
+
+    await actions.showQuickBooksStuck('TESTCHAT');
+    ck('with no check on record, it does NOT run a sweep',
+       sweepCalls === 0,
+       'a question must not cost a QuickBooks round trip — it offers "check quickbooks" instead');
+    ck('  and it says so rather than saying nothing is stuck',
+       /no QuickBooks check on record/.test(sent[0] || ''),
+       '"nothing is stuck" when nothing has been checked is the worst available answer — '
+       + JSON.stringify(sent[0]));
+
+    require('../helpers/quickbooks/sync').sweep = origSweep;
+
+    // ── AND THE OFFER IT MAKES IS A ROUTE THAT EXISTS ────────────────────
+    // The closePurchaseOrder lesson: a message that says 'say X' to a bot
+    // with no such route is the same class of failure as the APK Jarvis once
+    // promised and could not send. The PROMISE is the bug.
+    const actionSrc = fs.readFileSync(path.join(ROOT, 'workflow/actions.js'), 'utf8');
+    const offers = [...actionSrc.slice(actionSrc.indexOf('async function showQuickBooksStuck'),
+        actionSrc.indexOf('async function checkQuickBooksNow'))
+        .matchAll(/say "([^"]+)"/gi)].map((m) => m[1]);
+    ck(`every phrase it tells her to say has a route (${offers.join(', ')})`,
+       offers.length > 0 && offers.every((o) => intent(o) !== '(needsAI)'),
+       offers.map((o) => `${o} → ${intent(o)}`).join(' | '));
+
+    // ── THE ANSWER SPLITS THE SAME WAY THE EMAIL DOES ────────────────────
+    await job.remember({ at: '2026-10-02T07:25:00.000Z', rowsSeen: 9, blocked: [
+        { kind: 'bill', id: 'B1', container_no: 'TGCU0053611', party: 'Calderon',
+          found: [qb.classifyProblem('no bill date'),
+                  qb.classifyProblem('vendor "Calderon" not found in QuickBooks sandbox')] },
+    ] });
+    const r = await actions.showQuickBooksStuck('TESTCHAT');
+    ck('it reports the QuickBooks-side problem as hers',
+       r.action_taken === 'qb_stuck_listed' && r.hers === 1, JSON.stringify(r));
+    ck('  and the Jarvis blank is counted, not listed twice',
+       r.stuck === 1, JSON.stringify(r));
+
+    // ── A STALE ANSWER SAYS SO, IN THE MESSAGE ───────────────────────────
+    // Checked on the TEXT SHE READS, not on lookAt(). The first version
+    // asserted the data and a mutation that dropped the date from the
+    // message survived it — a list of stuck rows with no date is one she
+    // cannot judge, and "is this this morning's or last Tuesday's" decides
+    // whether she acts on it.
+    ck('the check carries WHEN it ran',
+       String(job.lookAt() || '').startsWith('2026-10-02'),
+       'a list of stuck rows with no date is one she cannot judge');
+    const listed = sent[sent.length - 1] || '';
+    ck('  and the message she reads says the date',
+       /checked 2026-10-02 07:25/.test(listed), JSON.stringify(listed.split('\n')[0]));
+
+    // ── THE HINT IS PHONE WORDING, NOT A TERMINAL INSTRUCTION ────────────
+    // Her 2026-09-26 words: "i basically want my website to handle whatever
+    // we can do from qb from here". Both of these survived as mutations
+    // until asserted on the message.
+    await job.remember({ at: '2026-10-02T07:25:00.000Z', rowsSeen: 3, blocked: [
+        { kind: 'bill', id: 'B9', container_no: 'ZZZZ1111111', party: 'Calderon',
+          found: [qb.classifyProblem('vendor "Calderon" not found in QuickBooks sandbox')] },
+    ] });
+    await actions.showQuickBooksStuck('TESTCHAT');
+    const vendorMsg = sent[sent.length - 1] || '';
+    ck('chat does NOT tell her to run a terminal script',
+       !/scripts\/|qb-create-party|\.js\b/.test(vendorMsg),
+       'she reads this on her phone — ' + JSON.stringify(vendorMsg));
+    ck('  it tells her the name must match exactly instead',
+       /exactly as Jarvis spells it/.test(vendorMsg),
+       'push.js matches on the confirmed name, so an almost-match blocks the row again tomorrow — '
+       + JSON.stringify(vendorMsg));
+    // And the EMAIL still names the script, because that is the better
+    // instruction at a keyboard. One source of truth, two renderings.
+    const emailText = qb.reportText({ rowsSeen: 3, blocked: [
+        { kind: 'bill', id: 'B9', container_no: 'ZZZZ1111111', party: 'Calderon',
+          found: [qb.classifyProblem('vendor "Calderon" not found in QuickBooks sandbox')] },
+    ] });
+    ck('  while the email keeps the script',
+       /qb-create-party/.test(emailText),
+       'the two channels must differ on purpose, not drift — ' + emailText);
+
+    // ── AND IT SURVIVES A RESTART ────────────────────────────────────────
+    // The whole reason the look is on disk: a deploy restarts pm2, and an
+    // empty answer at 10am reads as broken rather than as restarted.
+    const fresh = require('../helpers/json').loadJson(require('../config').QB_AGENT_LAST_FILE, null);
+    ck('the check is on disk, so a pm2 restart does not lose it',
+       fresh && Array.isArray(fresh.blocked) && fresh.blocked.length === 1,
+       JSON.stringify(fresh && Object.keys(fresh)));
+
+    // ── AN ACTUAL RESTART, NOT JUST A FILE THAT EXISTS ───────────────────
+    // The check above reads the file directly, so it passes whether or not
+    // look() can get at it — a mutation that made look() memory-only
+    // survived it. The PROPERTY is that a fresh process can answer, so the
+    // module is dropped from the require cache and re-loaded, which is what
+    // pm2 restart does.
+    const jobPath = require.resolve('../helpers/qbAgentJob');
+    delete require.cache[jobPath];
+    const rebooted = require('../helpers/qbAgentJob');
+    const afterBoot = rebooted.look();
+    ck('a restarted process can still answer "what\'s stuck"',
+       afterBoot && Array.isArray(afterBoot.blocked) && afterBoot.blocked.length === 1,
+       'look() has no memory after a restart and must read the file — otherwise chat says '
+       + '"no check yet" at 10am, which reads as broken rather than as restarted: '
+       + JSON.stringify(afterBoot));
+    ck('  and still knows when it ran',
+       String(rebooted.lookAt() || '').startsWith('2026-10-02'), String(rebooted.lookAt()));
+
+    // ── A FAILED SWEEP MUST EMPTY THE FILE TOO ───────────────────────────
+    // Its own fixture, because the earlier failure check ran when the file
+    // was already empty and so measured nothing. A mutation that cleared
+    // only the variable survived that.
+    await rebooted.remember({ at: '2026-10-02T07:25:00.000Z', rowsSeen: 2, blocked: [
+        { kind: 'bill', id: 'OLD1', container_no: 'OLDU0000000', found: [] }] });
+    await rebooted.run({
+        sweep: async () => { throw new Error('401 unauthorized'); },
+        send: async () => {}, alreadySent: async () => false, markSent: async () => {},
+    });
+    const afterFail = require('../helpers/json').loadJson(require('../config').QB_AGENT_LAST_FILE, null);
+    ck('a failed sweep empties the FILE, not just the variable',
+       !afterFail || !Array.isArray(afterFail.blocked) || !afterFail.blocked.length,
+       'chat would keep answering from yesterday\'s check while the ledger agent correctly '
+       + 'believed it knew nothing: ' + JSON.stringify(afterFail));
+    // And proved through a restart, which is the only way to tell the two
+    // caches apart.
+    delete require.cache[jobPath];
+    ck('  so a restart after a failure reports no check, not a stale one',
+       require('../helpers/qbAgentJob').look() === null,
+       'a stale blocking map marks rows urgent that were fixed hours ago');
 }
 
 console.log(`\n  ${pass} passed, ${fail} failed`);

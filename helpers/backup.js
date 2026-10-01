@@ -118,7 +118,73 @@ function collectStores(dir = cfg.DATA_DIR) {
 // The stores that would be unrecoverable if this file did not exist. Called
 // out by name in the archive so a restore can be sanity-checked at a glance —
 // "is payments in here?" should not require reading the whole thing.
-const CRITICAL = ['payments.json', 'petty_cash.json', 'loads.json', 'outbound_loads.json', 'expenses.json'];
+// ── WIDENED 2026-10-02: "Protect the data of edge yard no matter what" ────
+// The five originally named here were not all of the yard's money, and this
+// list is the ONLY safety net that names stores: critical_missing is how a
+// vanished store gets noticed, so a store absent from here can disappear
+// silently while the archive still looks complete.
+//
+// What was missing, and why each belongs:
+//
+//   bill_payments.json   money OUT to suppliers, every advance included. Its
+//                        own store precisely so it is not confused with
+//                        payments.json — which means payments.json being
+//                        present proves nothing about it.
+//   sales_receipts.json  money IN from customers: whether a load was paid for.
+//   trucker_bills.json   what is owed to haulers.
+//   yard_claims.json     claims against loads the yard bought (2026-10-01).
+//                        A claim is a thing she argues with a supplier about
+//                        a fortnight later, and it exists nowhere else.
+//   load_drafts.json     a part-entered load is work already done.
+//   item_types.json /
+//   item_aliases.json    the grade catalogue and the learned synonyms. Every
+//                        load's pricing reads them, and rebuilding means
+//                        re-deciding what each metal is and re-teaching every
+//                        spelling a supplier uses.
+//
+// Prepayments are NOT a separate store — they are rows in bill_payments.json
+// — and stock is derived from loads, so neither needs naming here.
+//
+// ── NAMED BY CONFIG KEY, NOT BY FILENAME ─────────────────────────────────
+// The first version of this widening wrote the filenames as literals, which
+// I had GUESSED. Two of them did not exist (STOCK_FILE, PREPAYMENTS_FILE),
+// and a guessed name in THIS list is the worst possible place for one: it
+// would sit in critical_missing every single night, so the one alarm that
+// means "a store has vanished" would cry wolf until it was ignored — and
+// meanwhile a store that really did vanish would be lost in the noise.
+//
+// Keys, resolved at run time, so a store that gets renamed moves with its
+// config entry. A key that is DELETED throws here rather than quietly
+// shrinking the safety net: see criticalNames().
+const CRITICAL_KEYS = [
+    'PAYMENTS_FILE', 'PETTY_CASH_FILE', 'LOADS_FILE', 'OUTBOUND_LOADS_FILE',
+    'EXPENSES_FILE', 'BILL_PAYMENTS_FILE', 'SALES_RECEIPTS_FILE',
+    'TRUCKER_BILLS_FILE', 'YARD_CLAIMS_FILE', 'LOAD_DRAFTS_FILE',
+    'ITEM_TYPES_FILE', 'ITEM_ALIASES_FILE',
+];
+
+// Resolved once, loudly. A missing key is a programming error — someone
+// removed or renamed a config entry without reading this list — and it must
+// not degrade into a shorter list of protected stores.
+function criticalNames() {
+    const out = [];
+    const unknown = [];
+    for (const k of CRITICAL_KEYS) {
+        const v = cfg[k];
+        if (typeof v !== 'string' || !v) { unknown.push(k); continue; }
+        out.push(path.basename(v));
+    }
+    if (unknown.length) {
+        // Thrown, not warned. runBackup catches and reports it, so the night
+        // this happens she is told the safety net is broken rather than
+        // simply getting a thinner one.
+        throw new Error(`backup CRITICAL_KEYS not in config: ${unknown.join(', ')}`);
+    }
+    return out;
+}
+
+// Kept as an exported array for the callers and tests that read it.
+const CRITICAL = criticalNames();
 
 function buildArchive(now = new Date()) {
     const { stores, problems } = collectStores();
@@ -174,4 +240,4 @@ async function runBackup({ keep = 30, now = new Date() } = {}) {
     return { name, file, meta: archive._meta, bytes: body.length, trimmed };
 }
 
-module.exports = { collectStores, buildArchive, runBackup, isSecret, CRITICAL, SECRET_PATTERNS, SKIP_DIRS };
+module.exports = { collectStores, buildArchive, runBackup, isSecret, CRITICAL, criticalNames, CRITICAL_KEYS, SECRET_PATTERNS, SKIP_DIRS };

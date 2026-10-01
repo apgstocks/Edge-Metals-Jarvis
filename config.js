@@ -576,6 +576,15 @@ const SAVED_DOC_KINDS_FILE = path.join(DATA_DIR, 'saved_doc_kinds.json');
 // and chases overseas buyers; see helpers/yardClaims.js for why they are
 // separate stores rather than one with two kinds of key.
 const YARD_CLAIMS_FILE = path.join(DATA_DIR, 'yard_claims.json');
+// ── THE 07:25 QUICKBOOKS CHECK, KEPT ON DISK (2026-10-02) ─────────────────
+// qbAgentJob held its result in module state so the 07:30 ledger agent could
+// read it. That works — one pm2 app, one process — right up until a restart,
+// and a deploy restarts it. Then "what's stuck in quickbooks" answers "no
+// check yet" at 10am, which reads as broken rather than as restarted.
+//
+// Small, overwritten each morning, and not money: losing it costs one stale
+// answer, never a figure.
+const QB_AGENT_LAST_FILE = path.join(DATA_DIR, 'qb_agent_last.json');
 // Save-a-copy archive for generated Invoice/Proforma PDFs — mirrors the
 // datewise/container-wise (invoice) and flat (proforma) folder layout
 // Apsara originally asked for in the Flask app, kept identical here for
@@ -607,6 +616,9 @@ const ALERT_EMAIL_TO = process.env.ALERT_EMAIL_TO || '';
 const LEDGER_AGENT_EMAILS = process.env.LEDGER_AGENT_EMAILS || ALERT_EMAIL_TO;
 // Who gets the 07:25 QuickBooks agent note. Same fallback, same reason.
 const QB_AGENT_EMAILS = process.env.QB_AGENT_EMAILS || ALERT_EMAIL_TO;
+// Who hears when the backup breaks. Its own setting because this is the one
+// alert that must not be muted with the others — see helpers/backupWatch.js.
+const BACKUP_ALERT_EMAILS = process.env.BACKUP_ALERT_EMAILS || ALERT_EMAIL_TO;
 const TWILIO_SID        = process.env.TWILIO_SID || '';
 const TWILIO_AUTH_TOKEN = process.env.TWILIO_AUTH_TOKEN || '';
 const TWILIO_FROM       = process.env.TWILIO_FROM || ''; // your Twilio phone number
@@ -753,8 +765,8 @@ module.exports = {
     PRICE_SHEET_ID, PRICELIST_WEBHOOK_TOKEN,BOOKING_TRACKER_SHEET_ID,
     INVOICE_SHEET_ID, INVOICE_MAIN_GID, INVOICE_PACKING_GID,
     CLAIMS_SHEET_GID,
-    PROFORMA_PRICING_FILE, PROFORMA_VERSIONS_FILE, SAVED_DOC_KINDS_FILE, YARD_CLAIMS_FILE, DOCUMENTS_SAVED_DIR,
-    SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS, ALERT_EMAIL_TO, LEDGER_AGENT_EMAILS, QB_AGENT_EMAILS,
+    PROFORMA_PRICING_FILE, PROFORMA_VERSIONS_FILE, SAVED_DOC_KINDS_FILE, YARD_CLAIMS_FILE, QB_AGENT_LAST_FILE, DOCUMENTS_SAVED_DIR,
+    SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS, ALERT_EMAIL_TO, LEDGER_AGENT_EMAILS, QB_AGENT_EMAILS, BACKUP_ALERT_EMAILS,
     TWILIO_SID, TWILIO_AUTH_TOKEN, TWILIO_FROM, ALERT_SMS_TO,
     GEMINI_API_KEY_BACKUP,
     GROUP_TRUCKER, GROUP_SUPPLIER,

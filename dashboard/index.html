@@ -3868,6 +3868,15 @@ let loadKindFilter = (() => {
     return LOAD_KINDS.some(([k]) => k === v) ? v : 'all';
   } catch (e) { return 'all'; }
 })();
+// ── WHICH MONTH IS FILTERED, IF ANY (2026-10-02) ─────────────────────────
+// Deliberately NOT remembered in localStorage, unlike loadKindFilter above.
+// A kind ("Purchases") is how she likes to work and is worth persisting. A
+// MONTH is where she happened to be looking once — restoring "September" a
+// fortnight later means opening the Loads tab and seeing none of this week's
+// work, with a control she has forgotten she set. The empty default is the
+// safe one.
+let loadMonthFilter = '';
+
 function paintLoadKindBar(count) {
   const bar = document.getElementById('loadKindBar');
   if (!bar) return;
@@ -10131,6 +10140,41 @@ async function openBillPayForm(opts = {}) {
               style="${fieldCss} background:${L.sunken}; color:${L.inkMuted}; cursor:default;"></div>
         </div>
 
+        ${applying ? '' : `
+        <!-- ── ADVANCE OR AGAINST A BILL (2026-10-02) ────────────────────────
+             Apsara: "instead of keeping save as advance as button, Give two
+             option to choose from 1.Advance 2.Bill. then straight away record
+             payment,cancel."
+
+             A CHOICE rather than two Save buttons. The old shape had the
+             decision hidden in which button you pressed, with the container
+             table always on screen even for an advance that has no containers.
+
+             NO DEFAULT, deliberately. Record payment stays disabled until she
+             picks one. Defaulting to either means a mis-click records money as
+             the wrong kind — and an advance recorded as a bill payment carries
+             allocations that make containers read as paid, which is the
+             expensive direction to be wrong in. -->
+        <div style="font-size:12px; color:${L.inkFaint}; margin:16px 0 6px;">What is this payment?</div>
+        <div id="bpKindChoice" style="display:flex; gap:8px;">
+          <button type="button" class="bpKind" data-kind="advance"
+            style="flex:1; padding:11px 14px; border:1px solid ${L.line}; border-radius:var(--radius-sm); background:${L.paper}; color:${L.ink}; font-size:13px; cursor:pointer; text-align:left;">
+            <div style="font-weight:500;">Advance</div>
+            <div style="font-size:11px; color:${L.inkFaint}; margin-top:2px;">Money up front, no container yet</div>
+          </button>
+          <button type="button" class="bpKind" data-kind="payment"
+            style="flex:1; padding:11px 14px; border:1px solid ${L.line}; border-radius:var(--radius-sm); background:${L.paper}; color:${L.ink}; font-size:13px; cursor:pointer; text-align:left;">
+            <div style="font-weight:500;">Against a bill</div>
+            <div style="font-size:11px; color:${L.inkFaint}; margin-top:2px;">${open.length
+              ? `${open.length} container${open.length === 1 ? '' : 's'} unpaid`
+              : `nothing unpaid for ${esc(supplier)}`}</div>
+          </button>
+        </div>`}
+
+        <!-- Hidden until she chooses "Against a bill". An advance has no
+             containers, so showing the table for one is an invitation to
+             allocate money that must not be allocated. -->
+        <div id="bpBillBlock" ${applying ? '' : 'style="display:none;"'}>
         <div style="display:flex; align-items:baseline; gap:8px; margin:14px 0 6px;">
           <span style="font-size:12px; color:${L.inkFaint};">Which containers does it cover?</span>
           <span style="flex:1;"></span>
@@ -10151,6 +10195,7 @@ async function openBillPayForm(opts = {}) {
           </table>
         </div>
         ${creditLines ? `<div style="margin-top:8px; font-size:11px; color:${L.inkFaint};">Credit on hand · ${creditLines}</div>` : ''}
+        </div><!-- /bpBillBlock -->
 
         ${applying ? '' : `
         <div style="font-size:12px; color:${L.inkFaint}; margin:16px 0 6px;">Already recorded</div>
@@ -10176,7 +10221,6 @@ async function openBillPayForm(opts = {}) {
           <div style="flex:1;"></div>
           <div style="display:flex; gap:8px;">
             <button id="bpCancel" class="btn btn-secondary" style="font-size:11px; padding:8px 16px; background:${L.paper}; color:${L.inkMuted}; border-color:${L.line};">Cancel</button>
-            ${applying ? '' : `<button id="bpAdvance" class="btn btn-secondary" style="font-size:11px; padding:8px 16px; background:${L.sunken}; color:${L.ink}; border-color:${L.line};">Save as advance</button>`}
             <button id="bpSave" class="btn btn-primary" style="font-size:11px; padding:8px 20px; background:${L.accent}; border-color:${L.accent}; color:${L.accentInk};">${applying ? 'Apply' : 'Record payment'}</button>
           </div>
         </div>
@@ -10225,6 +10269,19 @@ async function openBillPayForm(opts = {}) {
     const o = $('bpAdvSel') && $('bpAdvSel').selectedOptions[0];
     return o ? num(o.dataset.available) : 0;
   };
+  // ── WHICH KIND SHE PICKED ───────────────────────────────────────────────
+  // '' until she chooses. Not a boolean: three states matter (advance, bill,
+  // not decided yet) and a boolean would make "not decided" indistinguishable
+  // from "bill", which is the one that allocates money.
+  //
+  // DECLARED ABOVE retotal ON PURPOSE. retotal() runs once during the initial
+  // paint, before the handlers below are wired — with the declaration further
+  // down the function it was in the temporal dead zone and every open of this
+  // modal threw "Cannot access 'bpKind' before initialization". Caught by
+  // tests/ledger-render.js on the first run, which is the only reason it is
+  // not a white screen on the Bills tab.
+  let bpKind = '';
+
   const retotal = () => {
     const sent = sentAmount();
     const alloc = allocations().reduce((s, a) => s + a.amount, 0);
@@ -10238,17 +10295,31 @@ async function openBillPayForm(opts = {}) {
     // The button mirrors that rule rather than letting her fill the whole form
     // and be told no on submit. The rule lives on the server; this is only its
     // reflection, so the server stays the one that decides.
+    // ── THE CHOICE DECIDES WHAT "READY" MEANS (2026-10-02) ──────────────
+    // An ADVANCE has no containers, so requiring the amount to be fully
+    // allocated would make it impossible to record — which is what the old
+    // separate "Save as advance" button existed to sidestep.
+    // AGAINST A BILL keeps the existing rule exactly: cleanAllocations on the
+    // server refuses a payment whose allocations do not sum to the amount, and
+    // this is only that rule's reflection.
+    // NOTHING CHOSEN is not ready. See bpKindChoice for why there is no
+    // default.
     const settled = applying
       ? (sent > 0 && alloc > 0.005 && left > -0.005)   // partial is fine here
-      : (sent > 0 && Math.abs(left) < 0.005);
+      : (bpKind === 'advance' ? sent > 0
+        : (bpKind === 'payment' ? (sent > 0 && Math.abs(left) < 0.005)
+          : false));
     $('bpSave').disabled = !settled;
     $('bpSave').style.opacity = settled ? '1' : '.45';
     $('bpSave').style.cursor = settled ? 'pointer' : 'not-allowed';
     $('bpSave').title = settled ? (applying ? 'Apply this credit' : 'Record this payment')
-      : (sent <= 0 ? (applying ? 'No credit left on this advance' : 'Enter the amount that left the bank')
-        : (left < -0.005 ? `That is more than this ${applying ? 'advance has left' : 'transfer'}`
-          : (applying ? 'Put some of it against a container'
-            : `${money(left)} is not on any container yet — allocate it, or save it as an advance`)));
+      : (!applying && !bpKind ? 'Choose Advance or Against a bill first'
+        : (sent <= 0 ? (applying ? 'No credit left on this advance' : 'Enter the amount that left the bank')
+          : (left < -0.005 ? `That is more than this ${applying ? 'advance has left' : 'transfer'}`
+            : (applying ? 'Put some of it against a container'
+              // No longer "or save it as an advance" — that button is gone,
+              // and the way to record an advance now is to pick Advance above.
+              : `${money(left)} is not on any container yet — allocate it, or record it as an Advance instead`))));
   };
 
   // Ticking a container fills its balance in, capped by what is left of the
@@ -10323,6 +10394,28 @@ async function openBillPayForm(opts = {}) {
   });
   retotal();
 
+  const paintKindChoice = () => {
+    document.querySelectorAll('.bpKind').forEach((b) => {
+      const on = b.dataset.kind === bpKind;
+      b.style.borderColor = on ? L.accent : L.line;
+      b.style.background = on ? L.sunken : L.paper;
+      b.style.boxShadow = on ? `inset 0 0 0 1px ${L.accent}` : 'none';
+      b.setAttribute('aria-pressed', on ? 'true' : 'false');
+    });
+    const block = $('bpBillBlock');
+    if (block) block.style.display = bpKind === 'payment' ? '' : 'none';
+    // Choosing Advance clears any allocation already typed, so a half-filled
+    // bill payment cannot be submitted as an advance carrying containers.
+    if (bpKind === 'advance') {
+      document.querySelectorAll('#bpRows input[data-bill]').forEach((i) => { i.value = ''; });
+    }
+    retotal();
+  };
+
+  document.querySelectorAll('.bpKind').forEach((b) => {
+    b.onclick = () => { bpKind = b.dataset.kind; paintKindChoice(); };
+  });
+
   const send = async (asAdvance) => {
     $('bpErr').textContent = '';
     try {
@@ -10336,21 +10429,30 @@ async function openBillPayForm(opts = {}) {
         await renderLedgerTab('bills');
         return;
       }
+      // ── READ FROM THE CHOICE, NOT FROM WHICH BUTTON WAS PRESSED ───────
+      // There is one Record payment button now. Refused here as well as
+      // disabled above: a disabled button is a UI state, and this is money.
+      if (!bpKind) throw new Error('Choose Advance or Against a bill first');
       const body = {
-        kind: asAdvance ? 'advance' : 'payment',
+        kind: bpKind === 'advance' ? 'advance' : 'payment',
         date: $('bpDate').value, amount: $('bpAmount').value,
         mode: $('bpMode').value,
         bank: $('bpMode').value === 'Cash' ? '' : $('bpBank').value,
         ref: $('bpRef').value, supplier: $('bpSupplier').value,
-        allocations: allocations(),
+        // An advance sends NO allocations. Not "whatever happens to be in the
+        // boxes" — the table is hidden for an advance, so anything still in
+        // it is a leftover from before she switched, and sending it would
+        // mark containers paid out of money she said was an advance.
+        allocations: bpKind === 'advance' ? [] : allocations(),
       };
       await api('/api/bill-payments', { method: 'POST', body: JSON.stringify(body) });
       close();
       await renderLedgerTab('bills');
     } catch (e) { $('bpErr').textContent = e.message || 'Could not record it'; }
   };
-  $('bpSave').onclick = () => send(false);
-  if ($('bpAdvance')) $('bpAdvance').onclick = () => send(true);
+  $('bpSave').onclick = () => send();
+  // bpAdvance is gone — the kind comes from bpKindChoice now.
+  paintKindChoice();
 }
 
 // ── THE ADD FORM ─────────────────────────────────────────────────────────
@@ -11695,17 +11797,88 @@ function loadMonthLabel(key) {
 
 // Splits the deck into the part that stays flat (this month, plus anything
 // undated) and the older months, folded.
-function splitLoadsByRecency(loads) {
-  const thisMonth = new Date().toISOString().slice(0, 7);
+// ── LAST WEEK IS OPEN, THE REST FOLDS (2026-10-02) ───────────────────────
+// Apsara: "in collapse phase of Edge Yard-I want last week load to
+// visible.rest of them collapsible."
+//
+// This used to split on the CALENDAR MONTH: everything in the current month
+// stayed open. On the 28th that is four weeks of day sections before the
+// first fold, which is the scrolling the folding was meant to remove — and
+// on the 1st it is nothing at all, so the screen went from four weeks to one
+// day overnight.
+//
+// A ROLLING SEVEN DAYS, asked and confirmed: "always expanded... on a Monday
+// that includes last Thu-Sun, which is usually what you want to still see."
+// Same amount of work in view every day of the month, and no cliff on the
+// 1st.
+//
+// LOCAL days, not UTC. new Date().toISOString() in the old version took the
+// UTC date, so for the seven hours after 5pm Pacific it believed it was
+// already tomorrow — which on the last day of a month moved the whole
+// boundary a month early. Dates on a load are the yard's own day.
+// ── A FUNCTION, NOT A CONST, ON PURPOSE ──────────────────────────────────
+// tests/load-card-actions.js extracts single functions out of this file by
+// name (`function <name>(`) and evaluates them in isolation — which is how
+// it has twice caught a function quietly gaining a dependency on the global
+// scope. A `const LOAD_RECENT_DAYS = 7` here was not extractable, so
+// splitLoadsByRecency threw ReferenceError the moment that test ran it.
+//
+// Declaring it as a function keeps ONE source of truth for the seven and
+// keeps the extraction working. Copying the 7 into the test instead would
+// have left two numbers that can disagree.
+function loadRecentDays() { return 7; }
+
+function loadLocalDayKey(d) {
+  const t = new Date(d);
+  const p = (n) => String(n).padStart(2, '0');
+  return `${t.getFullYear()}-${p(t.getMonth() + 1)}-${p(t.getDate())}`;
+}
+
+function splitLoadsByRecency(loads, opts) {
+  const days = (opts && opts.days) || loadRecentDays();
+  const from = new Date();
+  // days - 1: seven days INCLUDING today, not today plus seven.
+  from.setDate(from.getDate() - (days - 1));
+  const cutoff = loadLocalDayKey(from);
   const recent = [], older = [];
   for (const l of (loads || [])) {
-    const key = loadMonthKey(l && l.date);
-    // Undated loads stay in the flat part. Filing them under a month would
+    const d = l && l.date ? String(l.date).slice(0, 10) : '';
+    // Undated loads stay in the open part. Filing them under a month would
     // mean inventing one, and they are the rows most likely to need fixing.
-    if (!key || key >= thisMonth) recent.push(l);
+    if (!d || d >= cutoff) recent.push(l);
     else older.push(l);
   }
   return { recent, older };
+}
+
+// Which months the data actually has, newest first, for the filter. Built
+// from the loads rather than from a calendar: offering a month with nothing
+// in it is a control that answers "no loads" and looks broken.
+function loadMonthsPresent(loads) {
+  const seen = new Map();
+  for (const l of (loads || [])) {
+    const k = loadMonthKey(l && l.date);
+    if (!k) continue;
+    seen.set(k, (seen.get(k) || 0) + 1);
+  }
+  return Array.from(seen.keys()).sort((a, b) => b.localeCompare(a))
+    .map((k) => ({ key: k, count: seen.get(k), label: loadMonthLabel(k) }));
+}
+
+function loadMonthLabel(key) {
+  const [y, m] = String(key || '').split('-');
+  const names = ['January', 'February', 'March', 'April', 'May', 'June',
+                 'July', 'August', 'September', 'October', 'November', 'December'];
+  const name = names[Number(m) - 1];
+  return name ? `${name} ${y}` : String(key || '');
+}
+
+// Undated loads are NOT swept into a month filter. They have no month, and
+// showing them under one would be the same invention splitLoadsByRecency
+// refuses to make.
+function filterLoadsByMonth(loads, key) {
+  if (!key) return loads || [];
+  return (loads || []).filter((l) => loadMonthKey(l && l.date) === key);
 }
 
 // [{ key, label, count, weeks: [{ key, label, count, days: [{key,label,loads}] }] }]
@@ -11743,15 +11916,19 @@ function groupLoadsByMonthWeekDay(loads) {
 
 function loadCountLabel(n) { return `${n} load${n === 1 ? '' : 's'}`; }
 
-function loadFoldedMonthsHtml(older) {
+// `allOpen` renders every fold expanded. Used when she has picked a month
+// from the filter: "If they select that month -all that months load should be
+// visible expanded." Default false, so nothing about the ordinary view moves.
+function loadFoldedMonthsHtml(older, allOpen) {
+  const o = allOpen ? ' open' : '';
   return groupLoadsByMonthWeekDay(older).map((m) => `
-    <details class="load-month-section">
+    <details class="load-month-section"${o}>
       <summary class="load-date-heading">${esc(m.label)}<span class="load-date-count">${loadCountLabel(m.count)}</span></summary>
       ${m.weeks.map((w) => `
-        <details class="load-week-section">
+        <details class="load-week-section"${o}>
           <summary class="load-week-heading">${esc(w.label)}<span class="load-date-count">${loadCountLabel(w.count)}</span></summary>
           ${w.days.map((d) => `
-            <details class="load-day-section">
+            <details class="load-day-section"${o}>
               <summary class="load-day-heading">${esc(d.label)}<span class="load-date-count">${loadCountLabel(d.loads.length)}</span></summary>
               <div class="load-deck-grid">${d.loads.map(loadCardHtml).join('')}</div>
             </details>`).join('')}
@@ -11780,17 +11957,29 @@ function loadDeckSectionsHtml(loads, emptyMsg, opts) {
 
   // This month stays as day sections; older months fold into
   // month -> week -> day. See splitLoadsByRecency for why.
+  // allOpen: she picked a month, so everything in view is expanded — the
+  // last-week/older split still applies, it is just all open.
+  const allOpen = !!(opts && opts.allOpen);
   const { recent, older } = splitLoadsByRecency(loads);
   const groups = groupLoadsByDate(recent);
   if (!groups.length && !older.length) {
     return empty;
   }
-  const days = groups.map((g, i) => `
-    <details class="load-date-section" ${i === 0 ? 'open' : ''}>
+  // ── EVERY DAY IN THE WEEK IS OPEN, NOT JUST THE NEWEST ─────────────────
+  // This was `i === 0` — only the most recent day. Under the old
+  // this-month rule that was right: the alternative was four weeks of open
+  // sections. Under "I want last week load to visible" it is wrong, and it
+  // was the first thing my own test caught: one open day and six shut is the
+  // scrolling the folding was meant to remove.
+  //
+  // `recent` IS the last seven days now, so opening all of it is exactly
+  // what she asked for and is bounded by the window rather than by a month.
+  const days = groups.map((g) => `
+    <details class="load-date-section" open>
       <summary class="load-date-heading">${esc(g.label)}<span class="load-date-count">${g.loads.length} load${g.loads.length === 1 ? '' : 's'}</span></summary>
       <div class="load-deck-grid">${g.loads.map(loadCardHtml).join('')}</div>
     </details>`).join('');
-  return days + (older.length ? loadFoldedMonthsHtml(older) : '');
+  return days + (older.length ? loadFoldedMonthsHtml(older, allOpen) : '');
 }
 
 
@@ -12817,6 +13006,15 @@ function renderLoads(loads) {
            then searches, which is the order they are read in. -->
       <div id="loadKindBar" style="display:flex; gap:6px; margin-bottom:10px;"></div>
       <input id="loadSearch" type="text" placeholder="Search by date, seller, item, price…" style="width:100%; padding:11px 14px; margin-bottom:10px; border:1px solid var(--border-default); border-radius:var(--radius-sm); font-size:13px; background:var(--surface-sunken); color:var(--text-strong);">
+      <!-- ── FILTER BY MONTH (2026-10-02) ─────────────────────────────────
+           Apsara: "Also give an option to filter by month.If they select
+           that month -all that months load should be visible expanded."
+           Beside the search rather than in a menu: it is a narrowing, and it
+           belongs with the other narrowings. Options are built from the
+           loads — see paintLoadMonthFilter. -->
+      <select id="loadMonthFilter" style="width:100%; padding:11px 14px; margin-bottom:10px; border:1px solid var(--border-default); border-radius:var(--radius-sm); font-size:13px; background:var(--surface-sunken); color:var(--text-strong);">
+        <option value="">All months</option>
+      </select>
 
       <!-- ── By item detail ────────────────────────────────────────────────
            Apsara, 2026-09-02: "when i type sealed units in load detail, its
@@ -13843,6 +14041,34 @@ function wireLoadsEvents() {
   const itemAc = $('itemFilterAc');
   const itemChosen = $('itemFilterChosen');
 
+  // ── THE MONTH CONTROL ─────────────────────────────────────────────────
+  // Options come from the DATA (loadMonthsPresent), not from a calendar:
+  // offering a month with no loads is a control that answers "no loads" and
+  // reads as broken.
+  //
+  // The selected value is preserved across repaints. Rebuilding the <select>
+  // without putting the choice back would silently reset the filter every
+  // time a load was saved, which looks like the filter forgetting itself.
+  const paintLoadMonthFilter = () => {
+    const sel = $('loadMonthFilter');
+    if (!sel) return;
+    const months = loadMonthsPresent(loadsCache);
+    // A month she has filtered to must stay in the list even if the other
+    // filters have narrowed it to nothing — otherwise the <select> loses the
+    // value it is showing and silently falls back to All.
+    if (loadMonthFilter && !months.some((m) => m.key === loadMonthFilter)) {
+      months.unshift({ key: loadMonthFilter, count: 0, label: loadMonthLabel(loadMonthFilter) });
+    }
+    const want = `${loadMonthFilter}|${months.map((m) => `${m.key}:${m.count}`).join(',')}`;
+    // Only touch the DOM when something actually changed — rewriting a
+    // <select> while it has focus closes the dropdown under her finger.
+    if (sel.dataset.state === want) return;
+    sel.dataset.state = want;
+    sel.innerHTML = `<option value="">All months</option>`
+      + months.map((m) => `<option value="${esc(m.key)}"${m.key === loadMonthFilter ? ' selected' : ''}>`
+        + `${esc(m.label)} — ${m.count} load${m.count === 1 ? '' : 's'}</option>`).join('');
+  };
+
   // ── one place that repaints the deck ──────────────────────────────────
   // Both controls funnel through here. Two paths that each render the deck
   // is how they end up disagreeing about what is on screen.
@@ -13854,6 +14080,19 @@ function wireLoadsEvents() {
     let rows = filterLoadsByKind(loadsCache, loadKindFilter);
     rows = filterLoads(rows, q);
     if (chosenItemDetail) rows = loadsWithItem(rows, chosenItemDetail);
+    // ── MONTH, LAST IN THE CHAIN (2026-10-02) ───────────────────────────
+    // Apsara: "Also give an option to filter by month.If they select that
+    // month -all that months load should be visible expanded."
+    //
+    // A FILTER, so it composes with the three above rather than competing —
+    // the failure the removed item-detail dropdown had. Last, because it is
+    // the coarsest: narrowing to October and then searching inside it is the
+    // order she would say it in.
+    //
+    // She chose "show only that month, fully expanded", so it hides the other
+    // months rather than merely opening one. Clearing it puts the normal view
+    // back.
+    if (loadMonthFilter) rows = filterLoadsByMonth(rows, loadMonthFilter);
     const narrowed = !!q || !!chosenItemDetail || loadKindFilter !== 'all';
     paintLoadKindBar(rows.length);
     // The figures at the top describe WHAT IS ON SCREEN — including the text
@@ -13868,7 +14107,15 @@ function wireLoadsEvents() {
     // open — grouping would hide most of the answer. Clearing both puts the
     // date sections back.
     $('loadDeck').innerHTML = loadDeckSectionsHtml(rows,
-      narrowed ? 'No loads match that filter.' : 'No loads yet.', { flat: narrowed });
+      (narrowed || loadMonthFilter) ? 'No loads match that filter.' : 'No loads yet.',
+      // flat stays driven by search/item/kind only. A month is a DATE
+      // narrowing, so the day headings are exactly what she still wants —
+      // flattening October would throw away the thing she filtered by.
+      { flat: narrowed, allOpen: !!loadMonthFilter });
+    // Rebuilt from the loads each paint: a month with nothing in it must not
+    // be offerable, and a newly-added load can create a month that was not
+    // there when the page loaded.
+    paintLoadMonthFilter();
     wireDeckEvents();
     if (itemChosen) {
       // Says what was picked and HOW MANY loads carry it, so a genuine zero
@@ -13902,6 +14149,22 @@ function wireLoadsEvents() {
   paintLoadKindBar();
 
   if (searchInput) searchInput.addEventListener('input', repaintDeck);
+  // ── THE MONTH CONTROL ────────────────────────────────────────────────
+  // Through repaintDeck like every other control — a second render path is
+  // how two of them end up disagreeing about what is on screen.
+  const monthSel = $('loadMonthFilter');
+  if (monthSel) {
+    monthSel.addEventListener('change', () => {
+      loadMonthFilter = String(monthSel.value || '');
+      repaintDeck();
+      // Back to the top: picking October and being left halfway down last
+      // week's loads reads as nothing having happened.
+      const deck = $('loadDeck');
+      if (deck && loadMonthFilter && deck.scrollIntoView) {
+        deck.scrollIntoView({ block: 'start', behavior: 'smooth' });
+      }
+    });
+  }
 
   if (itemToggle && itemInput && itemAc) {
     const closeAc = () => itemAc.classList.add('hidden');

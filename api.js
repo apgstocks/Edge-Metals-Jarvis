@@ -446,6 +446,39 @@ function createApi() {
             problems.push('heartbeat_unreadable');
         }
 
+        // ── IS THE YARD DATA STILL BEING COPIED OFF THIS BOX? ─────────────
+        // Apsara, 2026-10-02: "Protect the data of edge yard no matter what."
+        //
+        // The nightly backup emails when it RUNS AND GOES WRONG. It cannot
+        // report the worse case: the process is down or the cron never fires,
+        // so nothing runs and nothing complains. The outage hides itself, and
+        // it hides itself for exactly as long as nobody needs the data.
+        //
+        // This is the only place outside the box can see it. An external
+        // monitor already watches this route for a 503, so backups stopping
+        // now rings the same bell as Jarvis stopping — which is right, because
+        // a payment ledger that exists on one disk is the bigger of the two
+        // risks.
+        //
+        // NAMES AND COUNTS STAY OFF. This route is public by design (a monitor
+        // cannot carry a session cookie), so it says "backup_stale_4d" and
+        // never which store is missing. health() returns the names; the email
+        // uses them, this does not.
+        //
+        // NO history means NOT a problem: a fresh install, or the first night
+        // after this shipped, is not evidence of a broken backup. An alarm
+        // that cries wolf on day one is an alarm that gets muted.
+        try {
+            const bh = require('./helpers/backupWatch').health();
+            // Only after the boot grace, like the scan check above — a
+            // restart must not flap this on every deploy.
+            if (bh.known && uptime > HEALTHZ_BOOT_GRACE_S) {
+                for (const p of bh.problems) problems.push(p);
+            }
+        } catch (e) {
+            problems.push('backup_health_unreadable');
+        }
+
         // WHICH COMMIT IS ANSWERING — see helpers/version.js for why this is
         // on the PUBLIC route. It is the one field that settles "is the fix
         // deployed?" without either of us guessing, and it has to be reachable

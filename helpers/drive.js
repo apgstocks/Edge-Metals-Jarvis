@@ -591,6 +591,43 @@ async function uploadBackupJson(name, buffer) {
 // Drive's own trash for 30 days, same as everything else this app removes.
 // A backup routine that hard-deletes is one bad sort away from deleting the
 // wrong thing permanently.
+// ── READING A BACKUP BACK ─────────────────────────────────────────────────
+// Apsara, 2026-10-02: "Protect the data of edge yard no matter what."
+//
+// There was no way to GET a backup. uploadBackupJson and trimBackups
+// existed; nothing listed or downloaded. The restore lived as six lines of
+// fs.writeFileSync INSIDE tests/backup.js — which proves the archive is
+// sufficient, and leaves nobody a tool. On the day the VM dies, someone
+// writes that loop from scratch, under pressure, against a 2 MB JSON.
+//
+// These two are what scripts/restore-backup.js needs. READ ONLY: neither
+// creates, overwrites or trashes anything in Drive.
+async function listBackups() {
+    const drive = getDrive();
+    const parentId = await getOrCreateBackupsFolder(drive);
+    const list = await drive.files.list({
+        q: `'${parentId}' in parents and trashed = false and name contains 'jarvis-data-'`,
+        fields: 'files(id, name, size, modifiedTime)', pageSize: 200,
+        // Newest first by NAME, which is jarvis-data-YYYY-MM-DD and therefore
+        // sorts chronologically. Same reasoning as trimBackups: modifiedTime
+        // would make a re-uploaded old archive look like the newest.
+        orderBy: 'name desc',
+        supportsAllDrives: true, includeItemsFromAllDrives: true, corpora: 'allDrives',
+    });
+    return (list.data.files || []).map((f) => ({
+        id: f.id, name: f.name, bytes: Number(f.size) || null, modified: f.modifiedTime,
+        date: (String(f.name).match(/jarvis-data-(\d{4}-\d{2}-\d{2})/) || [])[1] || null,
+    }));
+}
+
+async function downloadBackupJson(fileId) {
+    const drive = getDrive();
+    const res = await drive.files.get(
+        { fileId, alt: 'media', supportsAllDrives: true },
+        { responseType: 'arraybuffer' });
+    return Buffer.from(res.data);
+}
+
 async function trimBackups(keep = 30) {
     const drive = getDrive();
     const parentId = await getOrCreateBackupsFolder(drive);
@@ -814,7 +851,7 @@ async function uploadYardChatLog(day, buffer) {
     return { fileId: created.data.id, name, webViewLink: created.data.webViewLink, replaced: false };
 }
 
-module.exports = { upsertReportFile, renameReportFile, uploadBackupJson, trimBackups, getOrCreateBackupsFolder, fetchPdfFromDrive, findPdfByBooking, uploadPdfToDrive, deletePdfByBooking, listAllPdfs, downloadPdfById, isConfirmationClassification, exportDocAsText, uploadScaleTicketImage, uploadLoadPdf, renameLoadSubfolder, trashLoadFolder, getOrCreateReportsFolder, uploadInventoryBackupXlsx, uploadDailyInventoryPdf, uploadYardChatLog };
+module.exports = { upsertReportFile, renameReportFile, uploadBackupJson, trimBackups, listBackups, downloadBackupJson, getOrCreateBackupsFolder, fetchPdfFromDrive, findPdfByBooking, uploadPdfToDrive, deletePdfByBooking, listAllPdfs, downloadPdfById, isConfirmationClassification, exportDocAsText, uploadScaleTicketImage, uploadLoadPdf, renameLoadSubfolder, trashLoadFolder, getOrCreateReportsFolder, uploadInventoryBackupXlsx, uploadDailyInventoryPdf, uploadYardChatLog };
 
 // ── Delete a booking's PDF from Drive (used by DELETE /api/bookings/:bkgNo) ──
 // Uses files.update with trashed=true instead of files.delete. The hard-delete

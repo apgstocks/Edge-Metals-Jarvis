@@ -2899,6 +2899,309 @@ const MUTATIONS = [
       find: '                const rep = this.report;',
       to:   "                const rep = this.report || require('./metalsSheetSync').fetchWorkbook('x');" },
 
+    // ── LAST WEEK OPEN, MONTH FILTER (2026-10-02) ───────────────────────
+    // Apsara: "in collapse phase of Edge Yard-I want last week load to
+    // visible.rest of them collapsible.Also give an option to filter by
+    // month.If they select that month -all that months load should be
+    // visible expanded."
+    //
+    // Both clients, because they are mirrors and the one that drifts is the
+    // one nobody is looking at.
+
+    { name: 'loads(website): back to a calendar month instead of a rolling week',
+      file: 'dashboard/index.html', suites: ['load-deck-grouping'],
+      find: "  const days = (opts && opts.days) || loadRecentDays();",
+      to:   "  const days = 400;" },
+
+    { name: 'loads(website): only the newest day opens again',
+      file: 'dashboard/index.html', suites: ['load-deck-grouping', 'load-card-actions'],
+      find: '  const days = groups.map((g) => `\n    <details class="load-date-section" open>',
+      to:   '  const days = groups.map((g, i) => `\n    <details class="load-date-section" ${i === 0 ? \'open\' : \'\'}>' },
+
+    { name: 'loads(website): a chosen month is NOT expanded',
+      file: 'dashboard/index.html', suites: ['load-deck-grouping'],
+      find: "  const allOpen = !!(opts && opts.allOpen);",
+      to:   '  const allOpen = false;' },
+
+    { name: 'loads(website): everything is expanded all the time',
+      file: 'dashboard/index.html', suites: ['load-deck-grouping'],
+      find: "  const allOpen = !!(opts && opts.allOpen);",
+      to:   '  const allOpen = true;' },
+
+    { name: 'loads(website): the month filter is never applied',
+      file: 'dashboard/index.html', suites: ['load-deck-grouping'],
+      find: "    if (loadMonthFilter) rows = filterLoadsByMonth(rows, loadMonthFilter);",
+      to:   '' },
+
+    { name: 'loads(website): an undated load is swept into every month',
+      file: 'dashboard/index.html', suites: ['load-deck-grouping'],
+      find: "  return (loads || []).filter((l) => loadMonthKey(l && l.date) === key);",
+      to:   '  return (loads || []).filter((l) => !l.date || loadMonthKey(l.date) === key);' },
+
+    { name: 'loads(website): the month list is a calendar, not the data',
+      file: 'dashboard/index.html', suites: ['load-deck-grouping'],
+      find: "    const k = loadMonthKey(l && l.date);\n    if (!k) continue;\n    seen.set(k, (seen.get(k) || 0) + 1);",
+      to:   "    const k = loadMonthKey(l && l.date);\n    if (!k) continue;\n    seen.set(k, 0);" },
+
+    { name: 'loads(website): months list oldest first',
+      file: 'dashboard/index.html', suites: ['load-deck-grouping'],
+      find: "  return Array.from(seen.keys()).sort((a, b) => b.localeCompare(a))",
+      to:   '  return Array.from(seen.keys()).sort((a, b) => a.localeCompare(b))' },
+
+    // UTC instead of the yard's own day: for the seven hours after 5pm
+    // Pacific it believes it is already tomorrow, which moves the whole
+    // week boundary a day early every evening.
+    { name: 'loads(website): the week boundary is computed in UTC',
+      file: 'dashboard/index.html', suites: ['load-deck-grouping'],
+      find: "function loadLocalDayKey(d) {\n  const t = new Date(d);",
+      to:   "function loadLocalDayKey(d) {\n  return new Date(d).toISOString().slice(0, 10);\n  const t = new Date(d);" },
+
+    // days - 1 is seven days INCLUDING today. Dropping it shows eight.
+    { name: 'loads(website): the window is off by one day',
+      file: 'dashboard/index.html', suites: ['load-deck-grouping'],
+      find: "  from.setDate(from.getDate() - (days - 1));",
+      to:   '  from.setDate(from.getDate() - days);' },
+
+    { name: 'loads(website): the month filter is persisted across sessions',
+      file: 'dashboard/index.html', suites: ['load-deck-grouping'],
+      find: "let loadMonthFilter = '';",
+      to:   "let loadMonthFilter = (() => { try { return localStorage.getItem('loadMonthFilter') || ''; } catch (e) { return ''; } })();" },
+
+    { name: 'loads(app): back to a calendar month instead of a rolling week',
+      file: 'mobile-app/www/index.html', suites: ['load-deck-grouping'],
+      find: "  const days = (opts && opts.days) || loadRecentDays();",
+      to:   "  const days = 400;" },
+
+    { name: 'loads(app): only the newest day opens again',
+      file: 'mobile-app/www/index.html', suites: ['load-deck-grouping', 'load-card-actions'],
+      find: '  const days = groups.map((g) => `\n    <details class="load-date-section" open>',
+      to:   '  const days = groups.map((g, i) => `\n    <details class="load-date-section" ${i === 0 ? \'open\' : \'\'}>' },
+
+    { name: 'loads(app): a chosen month is NOT expanded',
+      file: 'mobile-app/www/index.html', suites: ['load-deck-grouping'],
+      find: "  const allOpen = !!(opts && opts.allOpen);",
+      to:   '  const allOpen = false;' },
+
+    { name: 'loads(app): everything is expanded all the time',
+      file: 'mobile-app/www/index.html', suites: ['load-deck-grouping'],
+      find: "  const allOpen = !!(opts && opts.allOpen);",
+      to:   '  const allOpen = true;' },
+
+    { name: 'loads(app): the month filter is never applied',
+      file: 'mobile-app/www/index.html', suites: ['load-deck-grouping'],
+      find: "    if (loadMonthFilter) rows = filterLoadsByMonth(rows, loadMonthFilter);",
+      to:   '' },
+
+    { name: 'loads(app): an undated load is swept into every month',
+      file: 'mobile-app/www/index.html', suites: ['load-deck-grouping'],
+      find: "  return (loads || []).filter((l) => loadMonthKey(l && l.date) === key);",
+      to:   '  return (loads || []).filter((l) => !l.date || loadMonthKey(l.date) === key);' },
+
+    { name: 'loads(app): the month list is a calendar, not the data',
+      file: 'mobile-app/www/index.html', suites: ['load-deck-grouping'],
+      find: "    const k = loadMonthKey(l && l.date);\n    if (!k) continue;\n    seen.set(k, (seen.get(k) || 0) + 1);",
+      to:   "    const k = loadMonthKey(l && l.date);\n    if (!k) continue;\n    seen.set(k, 0);" },
+
+    { name: 'loads(app): months list oldest first',
+      file: 'mobile-app/www/index.html', suites: ['load-deck-grouping'],
+      find: "  return Array.from(seen.keys()).sort((a, b) => b.localeCompare(a))",
+      to:   '  return Array.from(seen.keys()).sort((a, b) => a.localeCompare(b))' },
+
+    // UTC instead of the yard's own day: for the seven hours after 5pm
+    // Pacific it believes it is already tomorrow, which moves the whole
+    // week boundary a day early every evening.
+    { name: 'loads(app): the week boundary is computed in UTC',
+      file: 'mobile-app/www/index.html', suites: ['load-deck-grouping'],
+      find: "function loadLocalDayKey(d) {\n  const t = new Date(d);",
+      to:   "function loadLocalDayKey(d) {\n  return new Date(d).toISOString().slice(0, 10);\n  const t = new Date(d);" },
+
+    // days - 1 is seven days INCLUDING today. Dropping it shows eight.
+    { name: 'loads(app): the window is off by one day',
+      file: 'mobile-app/www/index.html', suites: ['load-deck-grouping'],
+      find: "  from.setDate(from.getDate() - (days - 1));",
+      to:   '  from.setDate(from.getDate() - days);' },
+
+    { name: 'loads(app): the month filter is persisted across sessions',
+      file: 'mobile-app/www/index.html', suites: ['load-deck-grouping'],
+      find: "let loadMonthFilter = '';",
+      to:   "let loadMonthFilter = (() => { try { return localStorage.getItem('loadMonthFilter') || ''; } catch (e) { return ''; } })();" },
+
+    // ── PROTECTING THE YARD DATA (2026-10-02) ───────────────────────────
+    // Apsara: "Protect the data of edge yard no matter what."
+    // Every one of these turns the alarm off while leaving it looking armed,
+    // which is the shape all three original holes had.
+
+    // REMOVED, not unkilled: `trouble` is deliberately over-determined. A
+    // thrown backup ALSO shows up in health() as backup_failing_N, so
+    // neutering the `!!error` term alone changes no behaviour — the email
+    // still goes. An alarm with two independent reasons to fire is the right
+    // shape for the one thing that cannot be rebuilt, so the redundancy
+    // stays and the mutation goes. tests/backup-watch.js section C asserts
+    // the failure email directly.
+
+    // Same reasoning: a missing critical store also surfaces as
+    // health()'s backup_incomplete, so this term is belt to that braces.
+    // Section C asserts the INCOMPLETE email on its own.
+
+    { name: 'backup: a store that would not parse is ignored',
+      file: 'helpers/backupWatch.js', suites: ['backup-watch'],
+      find: '        || entry.unreadable.length',
+      to:   '        || false' },
+
+    // Staleness is the only thing that catches "it stopped a week ago".
+    { name: 'backup: staleness is never reported',
+      file: 'helpers/backupWatch.js', suites: ['backup-watch'],
+      find: "        else if (ageDays !== null && ageDays >= staleDays) problems.push(`backup_stale_${ageDays}d`);",
+      to:   '' },
+
+    { name: 'backup: a run of failures is not counted',
+      file: 'helpers/backupWatch.js', suites: ['backup-watch'],
+      find: '        if (failingFor > 0) problems.push(`backup_failing_${failingFor}`);',
+      to:   '' },
+
+    // The receipt read back through loadJson, which NEVER THROWS — so a
+    // CORRUPTED log reads as "no history" and health() calls that fine. The
+    // trap this hit for real.
+    // REMOVED: with `return []` in that catch, a DAMAGED log still reaches
+    // JSON.parse, which throws, which health()'s outer catch reports as
+    // backup_log_unreadable. The mutation only changes an EACCES file, which
+    // no fixture can create portably. The real defect it was written for —
+    // reading the receipt through loadJson, which never throws and so turned
+    // a corrupt log into 'no history' and healthz into 'fine' — is pinned by
+    // section B's 'an unreadable log is a problem, not an exception'.
+
+    // No history reported as stale: cries wolf on a fresh install, which is
+    // how an alarm gets muted on day one.
+    { name: 'backup: a fresh install is reported as a broken backup',
+      file: 'helpers/backupWatch.js', suites: ['backup-watch'],
+      find: '            return { known: false, problems: [], failingFor: 0, last: null,',
+      to:   "            return { known: true, problems: ['backup_stale_999d'], failingFor: 0, last: null," },
+
+    // The weekly heartbeat is what makes SILENCE a signal.
+    { name: 'backup: the Monday heartbeat is dropped, so silence means nothing',
+      file: 'helpers/backupWatch.js', suites: ['backup-watch'],
+      find: '    const heartbeat = !trouble && now.getDay() === 1;',
+      to:   '    const heartbeat = false;' },
+
+    // A send failure that throws takes the scheduler's catch with it.
+    { name: 'backup: a failed alert email throws at the scheduler',
+      file: 'helpers/backupWatch.js', suites: ['backup-watch'],
+      find: "        console.error('[BACKUP-WATCH] COULD NOT SEND THE BACKUP ALERT:', e.message);",
+      to:   "        throw e; // eslint-disable-line" },
+
+    // ── THE SAFETY NET THAT NAMES STORES ────────────────────────────────
+    { name: 'backup: CRITICAL shrinks back to the original five',
+      file: 'helpers/backup.js', suites: ['backup-watch', 'backup'],
+      find: "    'TRUCKER_BILLS_FILE', 'YARD_CLAIMS_FILE', 'LOAD_DRAFTS_FILE',\n    'ITEM_TYPES_FILE', 'ITEM_ALIASES_FILE',",
+      to:   '' },
+
+    // A config key that no longer exists must be loud, not a quietly
+    // shorter list of protected stores.
+    { name: 'backup: a vanished config key silently shrinks the safety net',
+      file: 'helpers/backup.js', suites: ['backup-watch'],
+      find: '        throw new Error(`backup CRITICAL_KEYS not in config: ${unknown.join(\', \')}`);',
+      to:   '' },
+
+    // ── /healthz IS THE ONLY OUTSIDE VIEW ───────────────────────────────
+    { name: 'backup: healthz stops reporting backup health',
+      file: 'api.js', suites: ['backup-watch'],
+      find: '                for (const p of bh.problems) problems.push(p);',
+      to:   '' },
+
+    // And it must not leak store names onto a public route.
+    { name: 'backup: healthz leaks which store is missing on a public route',
+      file: 'api.js', suites: ['backup-watch'],
+      find: '            const bh = require(\'./helpers/backupWatch\').health();',
+      to:   "            const bh = require('./helpers/backupWatch').health();\n            if (bh.criticalMissing && bh.criticalMissing.length) problems.push('missing_' + bh.criticalMissing[0]);" },
+
+    // ── THE VOICE PATH (2026-10-02) ─────────────────────────────────────
+    // CLAUDE.md: "Twice now that caller has been the voice/assistant path,
+    // because it is the one without a form to put a field on." Built
+    // deliberately this time, so these are the ways it can rot.
+
+    // A chat question that quietly runs a dry sweep: tens of QuickBooks
+    // calls and tens of seconds, every time she asks.
+    { name: 'voice: asking what is stuck runs a live sweep instead of reading the check',
+      file: 'workflow/actions.js', suites: ['qb-agent'],
+      find: '    const look = job.look();\n\n    if (!look) {',
+      to:   '    const look = job.look() || await job.preview();\n\n    if (!look) {' },
+
+    // "nothing is stuck" when nothing has been CHECKED — the worst available
+    // answer, because it reads as good news.
+    { name: 'voice: no check on record reads as nothing stuck',
+      file: 'workflow/actions.js', suites: ['qb-agent'],
+      find: "    if (!look) {",
+      to:   '    if (false) {' },
+
+    // The date dropped, so she cannot tell this morning's list from last
+    // Tuesday's — which is what decides whether she acts on it.
+    { name: 'voice: the answer no longer says when it was checked',
+      file: 'workflow/actions.js', suites: ['qb-agent'],
+      find: "    const when = String(job.lookAt() || '').slice(0, 16).replace('T', ' ');",
+      to:   "    const when = '';" },
+
+    // Jarvis blanks listed in chat as well as handled by the other agent, so
+    // one row appears in two places and both lists stop being read.
+    { name: 'voice: Jarvis blanks are listed in chat too, twice over',
+      file: 'workflow/actions.js', suites: ['qb-agent'],
+      find: "            if (f.side === 'jarvis') { handed += 1; continue; }",
+      to:   "            if (f.side === 'jarvis') { handed += 1; }" },
+
+    // A terminal instruction sent to her phone.
+    { name: 'voice: the chat hint tells her to run a terminal script',
+      file: 'workflow/actions.js', suites: ['qb-agent'],
+      find: "            const hint = agent.hintFor(f, { channel: 'chat' });",
+      to:   '            const hint = f.hint;' },
+
+    { name: 'voice: the phone wording is dropped, so both channels say the same thing',
+      file: 'helpers/qbAgent.js', suites: ['qb-agent'],
+      find: "    if (!hint || channel !== 'chat') return hint || '';",
+      to:   "    if (!hint) return '';" },
+
+    // ── THE PROMISE IS THE BUG (2026-10-02) ─────────────────────────────
+    // The answer tells her to say "check quickbooks". A route that stops
+    // resolving makes that line a lie, which is the same failure as the APK
+    // Jarvis once offered to send and could not.
+    { name: 'voice: "check quickbooks" stops routing, so the offer is a lie',
+      file: 'workflow/brain.js', suites: ['qb-agent'],
+      find: "            return { intent: 'qb_check_now', resolvedBy: 'policy', data: {} };",
+      to:   '            return null;' },
+
+    { name: 'voice: "what is stuck in quickbooks" stops routing',
+      file: 'workflow/brain.js', suites: ['qb-agent'],
+      find: "            return { intent: 'qb_stuck', resolvedBy: 'policy', data: {} };",
+      to:   '            return null;' },
+
+    // The regex widened so it swallows a neighbouring question. Worse than a
+    // missing route, because it answers confidently.
+    { name: 'voice: the stuck route widens and swallows other questions',
+      file: 'workflow/brain.js', suites: ['qb-agent', 'emailwatch-signals'],
+      find: "        if (/^(?:what(?:[’']?s| is)?\\s+)?(?:stuck|blocked|pending|waiting)\\s+(?:in|on|with)\\s+(?:qb|quick\\s?books)\\s*\\??$/i.test(ctx.text.trim())",
+      to:   '        if (/stuck|blocked|pending|waiting/i.test(ctx.text.trim())' },
+
+    // ── THE CACHE (2026-10-02) ──────────────────────────────────────────
+    // Memory only: a pm2 restart (every deploy) leaves chat answering "no
+    // check yet" at 10am, which reads as broken rather than as restarted.
+    { name: 'cache: the check is held in memory only, lost on restart',
+      file: 'helpers/qbAgentJob.js', suites: ['qb-agent'],
+      find: '    const saved = loadJson(cfgL.QB_AGENT_LAST_FILE, null);',
+      to:   '    const saved = null;' },
+
+    // forget() that does not actually forget. helpers/json.js:108 is
+    // `await mutator(data) ?? data`, so a mutator returning null means "no
+    // change" — the trap this hit for real.
+    { name: 'cache: forget() returns null, so json.js keeps the stale file',
+      file: 'helpers/qbAgentJob.js', suites: ['qb-agent'],
+      find: '        await mutateJson(cfgL.QB_AGENT_LAST_FILE, {}, () => ({}), { strict: true });',
+      to:   '        await mutateJson(cfgL.QB_AGENT_LAST_FILE, {}, () => null, { strict: true });' },
+
+    // A failed sweep clears memory but not the file, so chat answers from
+    // yesterday while the ledger agent correctly knows nothing.
+    { name: 'cache: a failed sweep clears memory but leaves the file',
+      file: 'helpers/qbAgentJob.js', suites: ['qb-agent'],
+      find: '        await forget();',
+      to:   '        lastLook = null;' },
+
     // ── THE QUICKBOOKS GATE (2026-10-01) ────────────────────────────────
     // Apsara: "so (bills+invoice) agent should talk to this agent."
     //

@@ -4675,17 +4675,88 @@ function loadMonthLabel(key) {
 
 // Splits the deck into the part that stays flat (this month, plus anything
 // undated) and the older months, folded.
-function splitLoadsByRecency(loads) {
-  const thisMonth = new Date().toISOString().slice(0, 7);
+// ── LAST WEEK IS OPEN, THE REST FOLDS (2026-10-02) ───────────────────────
+// Apsara: "in collapse phase of Edge Yard-I want last week load to
+// visible.rest of them collapsible."
+//
+// This used to split on the CALENDAR MONTH: everything in the current month
+// stayed open. On the 28th that is four weeks of day sections before the
+// first fold, which is the scrolling the folding was meant to remove — and
+// on the 1st it is nothing at all, so the screen went from four weeks to one
+// day overnight.
+//
+// A ROLLING SEVEN DAYS, asked and confirmed: "always expanded... on a Monday
+// that includes last Thu-Sun, which is usually what you want to still see."
+// Same amount of work in view every day of the month, and no cliff on the
+// 1st.
+//
+// LOCAL days, not UTC. new Date().toISOString() in the old version took the
+// UTC date, so for the seven hours after 5pm Pacific it believed it was
+// already tomorrow — which on the last day of a month moved the whole
+// boundary a month early. Dates on a load are the yard's own day.
+// ── A FUNCTION, NOT A CONST, ON PURPOSE ──────────────────────────────────
+// tests/load-card-actions.js extracts single functions out of this file by
+// name (`function <name>(`) and evaluates them in isolation — which is how
+// it has twice caught a function quietly gaining a dependency on the global
+// scope. A `const LOAD_RECENT_DAYS = 7` here was not extractable, so
+// splitLoadsByRecency threw ReferenceError the moment that test ran it.
+//
+// Declaring it as a function keeps ONE source of truth for the seven and
+// keeps the extraction working. Copying the 7 into the test instead would
+// have left two numbers that can disagree.
+function loadRecentDays() { return 7; }
+
+function loadLocalDayKey(d) {
+  const t = new Date(d);
+  const p = (n) => String(n).padStart(2, '0');
+  return `${t.getFullYear()}-${p(t.getMonth() + 1)}-${p(t.getDate())}`;
+}
+
+function splitLoadsByRecency(loads, opts) {
+  const days = (opts && opts.days) || loadRecentDays();
+  const from = new Date();
+  // days - 1: seven days INCLUDING today, not today plus seven.
+  from.setDate(from.getDate() - (days - 1));
+  const cutoff = loadLocalDayKey(from);
   const recent = [], older = [];
   for (const l of (loads || [])) {
-    const key = loadMonthKey(l && l.date);
-    // Undated loads stay in the flat part. Filing them under a month would
+    const d = l && l.date ? String(l.date).slice(0, 10) : '';
+    // Undated loads stay in the open part. Filing them under a month would
     // mean inventing one, and they are the rows most likely to need fixing.
-    if (!key || key >= thisMonth) recent.push(l);
+    if (!d || d >= cutoff) recent.push(l);
     else older.push(l);
   }
   return { recent, older };
+}
+
+// Which months the data actually has, newest first, for the filter. Built
+// from the loads rather than from a calendar: offering a month with nothing
+// in it is a control that answers "no loads" and looks broken.
+function loadMonthsPresent(loads) {
+  const seen = new Map();
+  for (const l of (loads || [])) {
+    const k = loadMonthKey(l && l.date);
+    if (!k) continue;
+    seen.set(k, (seen.get(k) || 0) + 1);
+  }
+  return Array.from(seen.keys()).sort((a, b) => b.localeCompare(a))
+    .map((k) => ({ key: k, count: seen.get(k), label: loadMonthLabel(k) }));
+}
+
+function loadMonthLabel(key) {
+  const [y, m] = String(key || '').split('-');
+  const names = ['January', 'February', 'March', 'April', 'May', 'June',
+                 'July', 'August', 'September', 'October', 'November', 'December'];
+  const name = names[Number(m) - 1];
+  return name ? `${name} ${y}` : String(key || '');
+}
+
+// Undated loads are NOT swept into a month filter. They have no month, and
+// showing them under one would be the same invention splitLoadsByRecency
+// refuses to make.
+function filterLoadsByMonth(loads, key) {
+  if (!key) return loads || [];
+  return (loads || []).filter((l) => loadMonthKey(l && l.date) === key);
 }
 
 // [{ key, label, count, weeks: [{ key, label, count, days: [{key,label,loads}] }] }]
@@ -4723,15 +4794,19 @@ function groupLoadsByMonthWeekDay(loads) {
 
 function loadCountLabel(n) { return `${n} load${n === 1 ? '' : 's'}`; }
 
-function loadFoldedMonthsHtml(older) {
+// `allOpen` renders every fold expanded. Used when she has picked a month
+// from the filter: "If they select that month -all that months load should be
+// visible expanded." Default false, so nothing about the ordinary view moves.
+function loadFoldedMonthsHtml(older, allOpen) {
+  const o = allOpen ? ' open' : '';
   return groupLoadsByMonthWeekDay(older).map((m) => `
-    <details class="load-month-section">
+    <details class="load-month-section"${o}>
       <summary class="load-date-heading">${esc(m.label)}<span class="load-date-count">${loadCountLabel(m.count)}</span></summary>
       ${m.weeks.map((w) => `
-        <details class="load-week-section">
+        <details class="load-week-section"${o}>
           <summary class="load-week-heading">${esc(w.label)}<span class="load-date-count">${loadCountLabel(w.count)}</span></summary>
           ${w.days.map((d) => `
-            <details class="load-day-section">
+            <details class="load-day-section"${o}>
               <summary class="load-day-heading">${esc(d.label)}<span class="load-date-count">${loadCountLabel(d.loads.length)}</span></summary>
               <div class="load-deck-grid">${d.loads.map(loadCardHtml).join('')}</div>
             </details>`).join('')}
@@ -4760,17 +4835,29 @@ function loadDeckSectionsHtml(loads, emptyMsg, opts) {
 
   // This month stays as day sections; older months fold into
   // month -> week -> day. See splitLoadsByRecency for why.
+  // allOpen: she picked a month, so everything in view is expanded — the
+  // last-week/older split still applies, it is just all open.
+  const allOpen = !!(opts && opts.allOpen);
   const { recent, older } = splitLoadsByRecency(loads);
   const groups = groupLoadsByDate(recent);
   if (!groups.length && !older.length) {
     return empty;
   }
-  const days = groups.map((g, i) => `
-    <details class="load-date-section" ${i === 0 ? 'open' : ''}>
+  // ── EVERY DAY IN THE WEEK IS OPEN, NOT JUST THE NEWEST ─────────────────
+  // This was `i === 0` — only the most recent day. Under the old
+  // this-month rule that was right: the alternative was four weeks of open
+  // sections. Under "I want last week load to visible" it is wrong, and it
+  // was the first thing my own test caught: one open day and six shut is the
+  // scrolling the folding was meant to remove.
+  //
+  // `recent` IS the last seven days now, so opening all of it is exactly
+  // what she asked for and is bounded by the window rather than by a month.
+  const days = groups.map((g) => `
+    <details class="load-date-section" open>
       <summary class="load-date-heading">${esc(g.label)}<span class="load-date-count">${g.loads.length} load${g.loads.length === 1 ? '' : 's'}</span></summary>
       <div class="load-deck-grid">${g.loads.map(loadCardHtml).join('')}</div>
     </details>`).join('');
-  return days + (older.length ? loadFoldedMonthsHtml(older) : '');
+  return days + (older.length ? loadFoldedMonthsHtml(older, allOpen) : '');
 }
 
 function renderLoads(loads) {
@@ -5061,6 +5148,15 @@ function renderLoads(loads) {
            then searches, which is the order they are read in. -->
       <div id="loadKindBar" style="display:flex; gap:6px; margin-bottom:10px;"></div>
       <input id="loadSearch" type="text" placeholder="Search by date, seller, item, price…" style="width:100%; padding:11px 14px; margin-bottom:10px; border:1px solid var(--border-default); border-radius:var(--radius-sm); font-size:13px; background:var(--surface-sunken); color:var(--text-strong);">
+      <!-- ── FILTER BY MONTH (2026-10-02) ─────────────────────────────────
+           Apsara: "Also give an option to filter by month.If they select
+           that month -all that months load should be visible expanded."
+           Beside the search rather than in a menu: it is a narrowing, and it
+           belongs with the other narrowings. Options are built from the
+           loads — see paintLoadMonthFilter. -->
+      <select id="loadMonthFilter" style="width:100%; padding:11px 14px; margin-bottom:10px; border:1px solid var(--border-default); border-radius:var(--radius-sm); font-size:13px; background:var(--surface-sunken); color:var(--text-strong);">
+        <option value="">All months</option>
+      </select>
 
       <!-- ── By item detail ────────────────────────────────────────────────
            Apsara, 2026-09-02: "when i type sealed units in load detail, its
@@ -5910,6 +6006,34 @@ function wireLoadsEvents() {
   const itemAc = $('itemFilterAc');
   const itemChosen = $('itemFilterChosen');
 
+  // ── THE MONTH CONTROL ─────────────────────────────────────────────────
+  // Options come from the DATA (loadMonthsPresent), not from a calendar:
+  // offering a month with no loads is a control that answers "no loads" and
+  // reads as broken.
+  //
+  // The selected value is preserved across repaints. Rebuilding the <select>
+  // without putting the choice back would silently reset the filter every
+  // time a load was saved, which looks like the filter forgetting itself.
+  const paintLoadMonthFilter = () => {
+    const sel = $('loadMonthFilter');
+    if (!sel) return;
+    const months = loadMonthsPresent(loadsCache);
+    // A month she has filtered to must stay in the list even if the other
+    // filters have narrowed it to nothing — otherwise the <select> loses the
+    // value it is showing and silently falls back to All.
+    if (loadMonthFilter && !months.some((m) => m.key === loadMonthFilter)) {
+      months.unshift({ key: loadMonthFilter, count: 0, label: loadMonthLabel(loadMonthFilter) });
+    }
+    const want = `${loadMonthFilter}|${months.map((m) => `${m.key}:${m.count}`).join(',')}`;
+    // Only touch the DOM when something actually changed — rewriting a
+    // <select> while it has focus closes the dropdown under her finger.
+    if (sel.dataset.state === want) return;
+    sel.dataset.state = want;
+    sel.innerHTML = `<option value="">All months</option>`
+      + months.map((m) => `<option value="${esc(m.key)}"${m.key === loadMonthFilter ? ' selected' : ''}>`
+        + `${esc(m.label)} — ${m.count} load${m.count === 1 ? '' : 's'}</option>`).join('');
+  };
+
   // ── one place that repaints the deck ──────────────────────────────────
   // Both controls funnel through here. Two paths that each render the deck
   // is how they end up disagreeing about what is on screen.
@@ -5921,6 +6045,19 @@ function wireLoadsEvents() {
     let rows = filterLoadsByKind(loadsCache, loadKindFilter);
     rows = filterLoads(rows, q);
     if (chosenItemDetail) rows = loadsWithItem(rows, chosenItemDetail);
+    // ── MONTH, LAST IN THE CHAIN (2026-10-02) ───────────────────────────
+    // Apsara: "Also give an option to filter by month.If they select that
+    // month -all that months load should be visible expanded."
+    //
+    // A FILTER, so it composes with the three above rather than competing —
+    // the failure the removed item-detail dropdown had. Last, because it is
+    // the coarsest: narrowing to October and then searching inside it is the
+    // order she would say it in.
+    //
+    // She chose "show only that month, fully expanded", so it hides the other
+    // months rather than merely opening one. Clearing it puts the normal view
+    // back.
+    if (loadMonthFilter) rows = filterLoadsByMonth(rows, loadMonthFilter);
     const narrowed = !!q || !!chosenItemDetail || loadKindFilter !== 'all';
     paintLoadKindBar(rows.length);
     // flat while EITHER is on. Once you have asked for one material you are
@@ -5928,7 +6065,15 @@ function wireLoadsEvents() {
     // open — grouping would hide most of the answer. Clearing both puts the
     // date sections back.
     $('loadDeck').innerHTML = loadDeckSectionsHtml(rows,
-      narrowed ? 'No loads match that filter.' : 'No loads yet.', { flat: narrowed });
+      (narrowed || loadMonthFilter) ? 'No loads match that filter.' : 'No loads yet.',
+      // flat stays driven by search/item/kind only. A month is a DATE
+      // narrowing, so the day headings are exactly what she still wants —
+      // flattening October would throw away the thing she filtered by.
+      { flat: narrowed, allOpen: !!loadMonthFilter });
+    // Rebuilt from the loads each paint: a month with nothing in it must not
+    // be offerable, and a newly-added load can create a month that was not
+    // there when the page loaded.
+    paintLoadMonthFilter();
     wireDeckEvents();
     if (itemChosen) {
       // Says what was picked and HOW MANY loads carry it, so a genuine zero
@@ -5962,6 +6107,22 @@ function wireLoadsEvents() {
   paintLoadKindBar();
 
   if (searchInput) searchInput.addEventListener('input', repaintDeck);
+  // ── THE MONTH CONTROL ────────────────────────────────────────────────
+  // Through repaintDeck like every other control — a second render path is
+  // how two of them end up disagreeing about what is on screen.
+  const monthSel = $('loadMonthFilter');
+  if (monthSel) {
+    monthSel.addEventListener('change', () => {
+      loadMonthFilter = String(monthSel.value || '');
+      repaintDeck();
+      // Back to the top: picking October and being left halfway down last
+      // week's loads reads as nothing having happened.
+      const deck = $('loadDeck');
+      if (deck && loadMonthFilter && deck.scrollIntoView) {
+        deck.scrollIntoView({ block: 'start', behavior: 'smooth' });
+      }
+    });
+  }
 
   if (itemToggle && itemInput && itemAc) {
     const closeAc = () => itemAc.classList.add('hidden');
@@ -6228,6 +6389,15 @@ let loadKindFilter = (() => {
     return LOAD_KINDS.some(([k]) => k === v) ? v : 'all';
   } catch (e) { return 'all'; }
 })();
+// ── WHICH MONTH IS FILTERED, IF ANY (2026-10-02) ─────────────────────────
+// Deliberately NOT remembered in localStorage, unlike loadKindFilter above.
+// A kind ("Purchases") is how she likes to work and is worth persisting. A
+// MONTH is where she happened to be looking once — restoring "September" a
+// fortnight later means opening the Loads tab and seeing none of this week's
+// work, with a control she has forgotten she set. The empty default is the
+// safe one.
+let loadMonthFilter = '';
+
 function paintLoadKindBar(count) {
   const bar = document.getElementById('loadKindBar');
   if (!bar) return;

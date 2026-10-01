@@ -239,7 +239,16 @@ for (const [label, src] of [['app', MOBILE], ['website', DASH]]) {
         (l) => `<card id="${l.id}">`,
         (s) => String(s),
         new Function(grab(src, 'groupLoadsByDate', label) + grab(src, 'formatLoadDateHeading', label) + '; return groupLoadsByDate;')(),
-        new Function(grab(src, 'splitLoadsByRecency', label) + grab(src, 'loadMonthKey', label) + '; return splitLoadsByRecency;')(),
+        // loadRecentDays and loadLocalDayKey joined the list on 2026-10-02,
+        // when "last week is open" replaced "this month is open". Both are
+        // declared as FUNCTIONS in the page so grab() can reach them — a
+        // const would not be extractable, and splitLoadsByRecency threw
+        // ReferenceError here the first time it depended on one.
+        new Function(grab(src, 'splitLoadsByRecency', label)
+            + grab(src, 'loadMonthKey', label)
+            + grab(src, 'loadRecentDays', label)
+            + grab(src, 'loadLocalDayKey', label)
+            + '; return splitLoadsByRecency;')(),
         // Folding is covered in full by tests/load-deck-grouping.js. Stubbed
         // to a marker here so this section can prove the flat view has no
         // folds without also re-testing how they are built.
@@ -265,11 +274,28 @@ for (const [label, src] of [['app', MOBILE], ['website', DASH]]) {
     ck(`${label}: and it is one grid`, (flat.match(/load-deck-grid/g) || []).length === 1);
     ck(`${label}: with every match visible`, ['A', 'B', 'C'].every((id) => flat.includes(`id="${id}"`)));
 
-    // THE POINT OF THE CHANGE. Only the first <details> renders open, so
-    // grouping a 3-result search across 2 days hid one of them behind a
-    // collapsed triangle. If this ever regresses, results go missing again.
-    ck(`${label}: grouping would have hidden a match, flat does not`,
-       (grouped.match(/<details/g) || []).length === 2 && (grouped.match(/open/g) || []).length === 1);
+    // ── WHY FLAT STILL MATTERS, FOR A NEW REASON (2026-10-02) ────────────
+    // This used to assert "two <details>, one open" — because only the
+    // newest day rendered open, so a 3-result search across 2 days hid one
+    // behind a collapsed triangle.
+    //
+    // That premise is gone: "I want last week load to visible" means every
+    // day inside the week now renders open, so grouping no longer hides a
+    // RECENT match. The flat view is still necessary, and the reason moved:
+    // a match on an OLDER load is three folds deep (month > week > day) and
+    // invisible until she opens all three. Which is worse, not better.
+    //
+    // So this is asserted where the risk actually is now.
+    const olderHit = { id: 'OLD', date: '2026-01-05', seller: 'Acme' };
+    const mixedGrouped = fn([...rows, olderHit], 'none', undefined);
+    const mixedFlat = fn([...rows, olderHit], 'none', { flat: true });
+    ck(`${label}: every day inside the week is open, so no recent match hides`,
+       (mixedGrouped.match(/<details class="load-date-section" open>/g) || []).length
+         === (mixedGrouped.match(/<details class="load-date-section"/g) || []).length,
+       'her words: "i want last week load to visible"');
+    ck(`${label}: but an OLDER match is folded away, which is why flat exists`,
+       /<folded n="1">/.test(mixedGrouped) && mixedFlat.includes('id="OLD"'),
+       'a search result three folds deep is a search result she will not find');
 
     // Newest first, undated last — the same ordering the groups produced,
     // just without the headings, so the flat view is not a random shuffle.
