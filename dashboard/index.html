@@ -10140,6 +10140,41 @@ async function openBillPayForm(opts = {}) {
               style="${fieldCss} background:${L.sunken}; color:${L.inkMuted}; cursor:default;"></div>
         </div>
 
+        ${applying ? '' : `
+        <!-- ── ADVANCE OR AGAINST A BILL (2026-10-02) ────────────────────────
+             Apsara: "instead of keeping save as advance as button, Give two
+             option to choose from 1.Advance 2.Bill. then straight away record
+             payment,cancel."
+
+             A CHOICE rather than two Save buttons. The old shape had the
+             decision hidden in which button you pressed, with the container
+             table always on screen even for an advance that has no containers.
+
+             NO DEFAULT, deliberately. Record payment stays disabled until she
+             picks one. Defaulting to either means a mis-click records money as
+             the wrong kind — and an advance recorded as a bill payment carries
+             allocations that make containers read as paid, which is the
+             expensive direction to be wrong in. -->
+        <div style="font-size:12px; color:${L.inkFaint}; margin:16px 0 6px;">What is this payment?</div>
+        <div id="bpKindChoice" style="display:flex; gap:8px;">
+          <button type="button" class="bpKind" data-kind="advance"
+            style="flex:1; padding:11px 14px; border:1px solid ${L.line}; border-radius:var(--radius-sm); background:${L.paper}; color:${L.ink}; font-size:13px; cursor:pointer; text-align:left;">
+            <div style="font-weight:500;">Advance</div>
+            <div style="font-size:11px; color:${L.inkFaint}; margin-top:2px;">Money up front, no container yet</div>
+          </button>
+          <button type="button" class="bpKind" data-kind="payment"
+            style="flex:1; padding:11px 14px; border:1px solid ${L.line}; border-radius:var(--radius-sm); background:${L.paper}; color:${L.ink}; font-size:13px; cursor:pointer; text-align:left;">
+            <div style="font-weight:500;">Against a bill</div>
+            <div style="font-size:11px; color:${L.inkFaint}; margin-top:2px;">${open.length
+              ? `${open.length} container${open.length === 1 ? '' : 's'} unpaid`
+              : `nothing unpaid for ${esc(supplier)}`}</div>
+          </button>
+        </div>`}
+
+        <!-- Hidden until she chooses "Against a bill". An advance has no
+             containers, so showing the table for one is an invitation to
+             allocate money that must not be allocated. -->
+        <div id="bpBillBlock" ${applying ? '' : 'style="display:none;"'}>
         <div style="display:flex; align-items:baseline; gap:8px; margin:14px 0 6px;">
           <span style="font-size:12px; color:${L.inkFaint};">Which containers does it cover?</span>
           <span style="flex:1;"></span>
@@ -10160,6 +10195,7 @@ async function openBillPayForm(opts = {}) {
           </table>
         </div>
         ${creditLines ? `<div style="margin-top:8px; font-size:11px; color:${L.inkFaint};">Credit on hand · ${creditLines}</div>` : ''}
+        </div><!-- /bpBillBlock -->
 
         ${applying ? '' : `
         <div style="font-size:12px; color:${L.inkFaint}; margin:16px 0 6px;">Already recorded</div>
@@ -10185,7 +10221,6 @@ async function openBillPayForm(opts = {}) {
           <div style="flex:1;"></div>
           <div style="display:flex; gap:8px;">
             <button id="bpCancel" class="btn btn-secondary" style="font-size:11px; padding:8px 16px; background:${L.paper}; color:${L.inkMuted}; border-color:${L.line};">Cancel</button>
-            ${applying ? '' : `<button id="bpAdvance" class="btn btn-secondary" style="font-size:11px; padding:8px 16px; background:${L.sunken}; color:${L.ink}; border-color:${L.line};">Save as advance</button>`}
             <button id="bpSave" class="btn btn-primary" style="font-size:11px; padding:8px 20px; background:${L.accent}; border-color:${L.accent}; color:${L.accentInk};">${applying ? 'Apply' : 'Record payment'}</button>
           </div>
         </div>
@@ -10234,6 +10269,19 @@ async function openBillPayForm(opts = {}) {
     const o = $('bpAdvSel') && $('bpAdvSel').selectedOptions[0];
     return o ? num(o.dataset.available) : 0;
   };
+  // ── WHICH KIND SHE PICKED ───────────────────────────────────────────────
+  // '' until she chooses. Not a boolean: three states matter (advance, bill,
+  // not decided yet) and a boolean would make "not decided" indistinguishable
+  // from "bill", which is the one that allocates money.
+  //
+  // DECLARED ABOVE retotal ON PURPOSE. retotal() runs once during the initial
+  // paint, before the handlers below are wired — with the declaration further
+  // down the function it was in the temporal dead zone and every open of this
+  // modal threw "Cannot access 'bpKind' before initialization". Caught by
+  // tests/ledger-render.js on the first run, which is the only reason it is
+  // not a white screen on the Bills tab.
+  let bpKind = '';
+
   const retotal = () => {
     const sent = sentAmount();
     const alloc = allocations().reduce((s, a) => s + a.amount, 0);
@@ -10247,17 +10295,31 @@ async function openBillPayForm(opts = {}) {
     // The button mirrors that rule rather than letting her fill the whole form
     // and be told no on submit. The rule lives on the server; this is only its
     // reflection, so the server stays the one that decides.
+    // ── THE CHOICE DECIDES WHAT "READY" MEANS (2026-10-02) ──────────────
+    // An ADVANCE has no containers, so requiring the amount to be fully
+    // allocated would make it impossible to record — which is what the old
+    // separate "Save as advance" button existed to sidestep.
+    // AGAINST A BILL keeps the existing rule exactly: cleanAllocations on the
+    // server refuses a payment whose allocations do not sum to the amount, and
+    // this is only that rule's reflection.
+    // NOTHING CHOSEN is not ready. See bpKindChoice for why there is no
+    // default.
     const settled = applying
       ? (sent > 0 && alloc > 0.005 && left > -0.005)   // partial is fine here
-      : (sent > 0 && Math.abs(left) < 0.005);
+      : (bpKind === 'advance' ? sent > 0
+        : (bpKind === 'payment' ? (sent > 0 && Math.abs(left) < 0.005)
+          : false));
     $('bpSave').disabled = !settled;
     $('bpSave').style.opacity = settled ? '1' : '.45';
     $('bpSave').style.cursor = settled ? 'pointer' : 'not-allowed';
     $('bpSave').title = settled ? (applying ? 'Apply this credit' : 'Record this payment')
-      : (sent <= 0 ? (applying ? 'No credit left on this advance' : 'Enter the amount that left the bank')
-        : (left < -0.005 ? `That is more than this ${applying ? 'advance has left' : 'transfer'}`
-          : (applying ? 'Put some of it against a container'
-            : `${money(left)} is not on any container yet — allocate it, or save it as an advance`)));
+      : (!applying && !bpKind ? 'Choose Advance or Against a bill first'
+        : (sent <= 0 ? (applying ? 'No credit left on this advance' : 'Enter the amount that left the bank')
+          : (left < -0.005 ? `That is more than this ${applying ? 'advance has left' : 'transfer'}`
+            : (applying ? 'Put some of it against a container'
+              // No longer "or save it as an advance" — that button is gone,
+              // and the way to record an advance now is to pick Advance above.
+              : `${money(left)} is not on any container yet — allocate it, or record it as an Advance instead`))));
   };
 
   // Ticking a container fills its balance in, capped by what is left of the
@@ -10332,6 +10394,28 @@ async function openBillPayForm(opts = {}) {
   });
   retotal();
 
+  const paintKindChoice = () => {
+    document.querySelectorAll('.bpKind').forEach((b) => {
+      const on = b.dataset.kind === bpKind;
+      b.style.borderColor = on ? L.accent : L.line;
+      b.style.background = on ? L.sunken : L.paper;
+      b.style.boxShadow = on ? `inset 0 0 0 1px ${L.accent}` : 'none';
+      b.setAttribute('aria-pressed', on ? 'true' : 'false');
+    });
+    const block = $('bpBillBlock');
+    if (block) block.style.display = bpKind === 'payment' ? '' : 'none';
+    // Choosing Advance clears any allocation already typed, so a half-filled
+    // bill payment cannot be submitted as an advance carrying containers.
+    if (bpKind === 'advance') {
+      document.querySelectorAll('#bpRows input[data-bill]').forEach((i) => { i.value = ''; });
+    }
+    retotal();
+  };
+
+  document.querySelectorAll('.bpKind').forEach((b) => {
+    b.onclick = () => { bpKind = b.dataset.kind; paintKindChoice(); };
+  });
+
   const send = async (asAdvance) => {
     $('bpErr').textContent = '';
     try {
@@ -10345,21 +10429,30 @@ async function openBillPayForm(opts = {}) {
         await renderLedgerTab('bills');
         return;
       }
+      // ── READ FROM THE CHOICE, NOT FROM WHICH BUTTON WAS PRESSED ───────
+      // There is one Record payment button now. Refused here as well as
+      // disabled above: a disabled button is a UI state, and this is money.
+      if (!bpKind) throw new Error('Choose Advance or Against a bill first');
       const body = {
-        kind: asAdvance ? 'advance' : 'payment',
+        kind: bpKind === 'advance' ? 'advance' : 'payment',
         date: $('bpDate').value, amount: $('bpAmount').value,
         mode: $('bpMode').value,
         bank: $('bpMode').value === 'Cash' ? '' : $('bpBank').value,
         ref: $('bpRef').value, supplier: $('bpSupplier').value,
-        allocations: allocations(),
+        // An advance sends NO allocations. Not "whatever happens to be in the
+        // boxes" — the table is hidden for an advance, so anything still in
+        // it is a leftover from before she switched, and sending it would
+        // mark containers paid out of money she said was an advance.
+        allocations: bpKind === 'advance' ? [] : allocations(),
       };
       await api('/api/bill-payments', { method: 'POST', body: JSON.stringify(body) });
       close();
       await renderLedgerTab('bills');
     } catch (e) { $('bpErr').textContent = e.message || 'Could not record it'; }
   };
-  $('bpSave').onclick = () => send(false);
-  if ($('bpAdvance')) $('bpAdvance').onclick = () => send(true);
+  $('bpSave').onclick = () => send();
+  // bpAdvance is gone — the kind comes from bpKindChoice now.
+  paintKindChoice();
 }
 
 // ── THE ADD FORM ─────────────────────────────────────────────────────────
