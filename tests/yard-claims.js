@@ -256,6 +256,30 @@ section('F — REMINDED EVERY DAY, ON THE YARD\'S OWN CHANNEL');
     ck('  and a broken claims file does not cost her the yard report',
        /could not read open claims/.test(sch),
        'the loads are the part someone is waiting for');
+
+    // ── OLDEST FIRST ─────────────────────────────────────────────────────
+    // Tested on openForReminder directly now. It used to be asserted through
+    // the sweep's output, and when the reminder moved to the yard report that
+    // assertion went with the section — leaving the sort untested, which a
+    // mutation reversing it proved by surviving.
+    //
+    // The order is the point: the claim nobody has chased longest is the one
+    // she needs at the top, and a list sorted newest-first buries it under
+    // things raised this week.
+    // Its own fixture: earlier sections settle every claim they raise, so by
+    // here the register is empty and an ordering assertion over nothing
+    // passes for the wrong reason.
+    fs.writeFileSync(cfg.YARD_CLAIMS_FILE, '[]');
+    await yc.raise({ load_id: 'EDGE_OLD', seller: 'Ramesh', amount: 450,
+        reason: '20% dirt', raised_on: '2026-08-01' });
+    await yc.raise({ load_id: 'EDGE_NEW', seller: 'Gomez', amount: 120,
+        reason: 'short 300 lb', raised_on: '2026-09-28' });
+    const ordered = yc.openForReminder();
+    ck('  the oldest claim is first in the list', ordered[0].load_id === 'EDGE_OLD',
+       ordered.map((c) => c.load_id).join(', '));
+    ck('  the reminder is ordered OLDEST first',
+       ordered.length >= 2 && (ordered[0].age_days || 0) >= (ordered[1].age_days || 0),
+       ordered.map((c) => `${c.load_id}:${c.age_days}d`).join(', '));
 }
 
 // ══════════════════════════════════════════════════════════════════════════
