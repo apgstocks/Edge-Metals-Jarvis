@@ -98,9 +98,46 @@ section('A — three buckets, and they always sum to the total');
     // still naming BofA — because the migration has not run yet — keeps its
     // money visible instead of vanishing from every bucket while still
     // counting in the total.
-    ck('  but un-migrated BofA money still shows, rather than disappearing',
-        petty.balanceBySource([{ cash_source: 'BofA', amount: 6000 }]).BofA === 6000,
-        'sourceOf keeps an unrecognised name as typed, for exactly this window');
+    // ── WHERE UN-MIGRATED MONEY NOW LANDS (2026-10-01) ───────────────────
+    // This check used to assert that a row naming 'BofA' kept its own bucket.
+    // Apsara changed that: "as of now put it n unassigned.ask the user to
+    // assign it correctly later.what if user wants to assign correct bank to
+    // previously added cash in yard".
+    //
+    // The INTENT behind the old check — money must not disappear — is the
+    // same, and is better served now. A bucket outside SOURCES could not be
+    // spent from at all: cleanSource throws on it, which is why her pay modal
+    // showed every account at zero while the cash sat in the file. Unassigned
+    // can be spent, and transfer(reason:'reassign') can put the right bank
+    // behind it later, which is the half she asked for.
+    const unmig = petty.balanceBySource([{ cash_source: 'BofA', amount: 6000 }]);
+    ck('  un-migrated BofA money reads as Unassigned, not its own bucket',
+        unmig.Unassigned === 6000 && unmig.BofA === undefined,
+        JSON.stringify(unmig));
+    ck('  and still none of it disappears',
+        petty.balanceOf([{ cash_source: 'BofA', amount: 6000 }]) === 6000);
+    // ── AND SHE IS TOLD THERE IS SOMETHING TO ASSIGN ─────────────────────
+    // Folding alone would hide it: the pre-split balance and her opening
+    // float would look like one pile. The rows keep their original name on
+    // disk, so this stays answerable until she reassigns.
+    {
+        const pend = petty.pendingAssignment([
+            { cash_source: 'BofA', amount: 6000 },
+            { cash_source: '', amount: 1500 },            // opening float
+            { cash_source: 'Edge Metals', amount: 400 },
+        ]);
+        ck('  pendingAssignment names it and totals it',
+            pend.total === 6000 && pend.names.BofA === 6000, JSON.stringify(pend));
+        // ── THE EXACT KEY SET, NOT THE ABSENCE OF ONE KEY ────────────────
+        // The first version checked !('' in pend.names), and a mutation that
+        // filed the float under '(blank)' SURVIVED it — the float was being
+        // reported, under a different label, and the check could not see it.
+        // An allowlist cannot be fooled by renaming the thing it forbids.
+        ck('    and reports NOTHING else — not the float, not a real account',
+            JSON.stringify(Object.keys(pend.names).sort()) === JSON.stringify(['BofA']),
+            `names: ${JSON.stringify(Object.keys(pend.names))} — a blank source never came out of a bank, `
+            + 'so asking her to assign it is a chore with no answer');
+    }
     // "Others" is banks.js's word for a bank that is not BofA or Chase. Two
     // meanings for one word on adjacent screens is the trap she avoided.
     ck('and the third bucket is NOT called Others', !petty.SOURCES.includes('Others'));

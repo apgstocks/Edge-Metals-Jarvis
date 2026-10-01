@@ -5164,6 +5164,16 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
                 entries: petty.history(200),
                 sources: petty.SOURCES,
                 by_source: petty.balanceBySource(petty.listEntries()),
+                // ── WHAT IS WAITING TO BE ASSIGNED ───────────────────────
+                // Apsara, 2026-10-01: "as of now put it n unassigned.ask the
+                // user to assign it correctly later". Cash recorded under a
+                // name this app no longer recognises now READS as Unassigned
+                // — spendable, and reassignable with transfer(reason:
+                // 'reassign'). That makes it usable but indistinguishable
+                // from her opening float, so the amount and the original
+                // names travel too. Additive key; a client that does not
+                // know it is unaffected.
+                pending_assignment: petty.pendingAssignment(petty.listEntries()),
                 // Added 2026-09-21, alongside again and for the same reason:
                 // BofA became two accounts belonging to two companies, and
                 // her answer was one total with the split underneath it.

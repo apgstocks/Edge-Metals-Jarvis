@@ -2812,6 +2812,40 @@ const MUTATIONS = [
       find: "            msg = `Your cash is filed under <strong>${stranded.map(esc).join('</strong>, <strong>')}</strong>`",
       to:   '            msg = `Some of your cash is elsewhere`' },
 
+    // ── UNRECOGNISED CASH READS AS UNASSIGNED (2026-10-01) ──────────────
+    // Apsara: "as of now put it n unassigned.ask the user to assign it
+    // correctly later.what if user wants to assign correct bank to previously
+    // added cash in yard".
+    { name: 'unassigned-fold: an unknown source keeps its own unspendable bucket',
+      file: 'helpers/pettyCash.js', suites: ['petty-cash-banks', 'pay-cash-empty-note'],
+      find: '    return hit || UNASSIGNED;',
+      to:   '    return hit || raw;' },
+
+    // Folding without the prompt makes the money usable but silent — her
+    // opening float and a pre-split bank balance become one pile and nobody
+    // is ever asked to sort it out. That is half the instruction missing.
+    { name: 'unassigned-fold: nothing is reported as needing assignment',
+      file: 'helpers/pettyCash.js', suites: ['petty-cash-banks'],
+      find: '        if (matchSource(raw)) continue;           // already a real account',
+      to:   '        continue;' },
+
+    // A blank source is the opening float. Counting it as pending asks her to
+    // assign money that never came out of a bank — a chore with no answer.
+    { name: 'unassigned-fold: the opening float is reported as needing assignment',
+      file: 'helpers/pettyCash.js', suites: ['petty-cash-banks'],
+      find: "        if (!raw) continue;                       // the opening float — not pending",
+      to:   "        if (!raw) { byName['(blank)'] = round2((byName['(blank)'] || 0) + (toNum(e && e.amount) || 0)); continue; }" },
+
+    { name: 'unassigned-fold: the route stops telling the client about it',
+      file: 'api.js', suites: ['pay-cash-empty-note'],
+      find: '                pending_assignment: petty.pendingAssignment(petty.listEntries()),',
+      to:   '                pending_assignment: { total: 0, names: {} },' },
+
+    { name: 'unassigned-fold: the pay modal stops asking her to assign it',
+      file: 'dashboard/index.html', suites: ['pay-cash-empty-note'],
+      find: '          } else if (known && pending > 0) {',
+      to:   '          } else if (false) {' },
+
     // ── ZELLE/CHEQUE BANK, OPTIONAL (2026-10-01) ────────────────────────
     // Apsara: "Zelle/Cheque also has a bank.but keep it as optional".
     //

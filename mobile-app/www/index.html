@@ -2512,13 +2512,33 @@ function openPayModal(loadId, kind, opts) {
                 .filter((k) => !srcs.includes(k) && (Number(pettyCash.by_source[k]) || 0) > 0)
             : [];
 
+          // ── WHAT IS WAITING TO BE ASSIGNED ─────────────────────────
+          // Apsara, 2026-10-01: "as of now put it n unassigned.ask the user
+          // to assign it correctly later". Since sourceOf folds an
+          // unrecognised name into Unassigned, that money is now spendable
+          // from this very dropdown — so the old "cannot pay from" sentence
+          // is no longer true and has gone. What remains is the ASK: say how
+          // much of Unassigned came out of a bank nobody has named yet, so
+          // she can put it right when she has a minute. Information, not a
+          // warning: she can pay today either way.
+          const pending = Number((pettyCash.pending_assignment || {}).total) || 0;
+          const pendingNames = Object.keys((pettyCash.pending_assignment || {}).names || {});
+
           let msg = '';
           if (known && listed === 0 && stranded.length) {
+            // Kept as a safety net, not an expected path: with folding there
+            // should be no bucket outside the list holding money. If one ever
+            // appears again, saying so beats showing zeros.
             msg = `Your cash is filed under <strong>${stranded.map(esc).join('</strong>, <strong>')}</strong>`
                 + ` — ${fmtAmount(stranded.reduce((t, k) => t + (Number(pettyCash.by_source[k]) || 0), 0))}`
-                + ` — which this list cannot pay from yet, so every account above reads zero.`
+                + ` — which this list cannot pay from, so every account above reads zero.`
                 + ` It is not lost. Move it to a named account on the <strong>Petty cash</strong> tab,`
                 + ` or pay by another mode for now.`;
+          } else if (known && pending > 0) {
+            msg = `${fmtAmount(pending)} of Unassigned came from`
+                + ` <strong>${pendingNames.map(esc).join('</strong>, <strong>')}</strong>`
+                + ` and has no account against it yet. You can pay from it now;`
+                + ` assign it to the right bank on the <strong>Petty cash</strong> tab when you have a minute.`;
           } else if (known && listed === 0 && whole === 0) {
             msg = 'There is no cash recorded in any account yet, so a cash payment has nothing to draw on.'
                 + ' Add your opening float on the <strong>Petty cash</strong> tab first — or pay by another mode.';

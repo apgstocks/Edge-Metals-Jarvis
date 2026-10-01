@@ -49,7 +49,7 @@ const CLIENTS = {
 // executed, so a change to its LOGIC fails this file even when the words
 // around it still look right. The shape it needs is tiny: srcs, held() and
 // a note object with classList.toggle.
-function decide(file, by_source, sources, balance) {
+function decide(file, by_source, sources, balance, pending_assignment) {
     const src = fs.readFileSync(file, 'utf8');
     // ── BRACE-BALANCED, NOT REGEX-TO-THE-FIRST-BRACE ──────────────────────
     // The first version matched lazily up to the next `}`, which worked only
@@ -73,7 +73,7 @@ function decide(file, by_source, sources, balance) {
         set innerHTML(v) { html = v; },
         get innerHTML() { return html; },
     };
-    const pettyCash = { by_source, sources, balance };
+    const pettyCash = { by_source, sources, balance, pending_assignment };
     const srcs = (pettyCash.sources || []).length ? pettyCash.sources
         : ['Edge Metals', 'AAA Investment', 'Chase Bank', 'Unassigned'];
     const held = (x) => Number((pettyCash.by_source || {})[x]) || 0;
@@ -174,6 +174,43 @@ section('C2 — HER ACTUAL CASE: cash present, every listed bucket zero');
 }
 
 // ══════════════════════════════════════════════════════════════════════════
+section('C3 — AFTER FOLDING: payable now, and she is asked to assign it');
+// ══════════════════════════════════════════════════════════════════════════
+// Apsara, 2026-10-01: "as of now put it n unassigned.ask the user to assign
+// it correctly later.what if user wants to assign correct bank to previously
+// added cash in yard".
+//
+// helpers/pettyCash.sourceOf now folds an unrecognised name into Unassigned,
+// so her 'BofA' cash arrives in a bucket this dropdown CAN pay from. The
+// "cannot pay from" sentence is therefore no longer true, and the screen's
+// job changes from explaining a dead end to asking her to tidy up.
+{
+    const folded = { 'Edge Metals': 0, 'AAA Investment': 0, 'Chase Bank': 0, Unassigned: 4200 };
+    const pend = { total: 4200, names: { BofA: 4200 } };
+    for (const [who, file] of Object.entries(CLIENTS)) {
+        const r = decide(file, folded, SOURCES, 4200, pend);
+        ck(`${who}: she is told what needs assigning`, r.shown === true);
+        ck(`${who}:   with the amount`, /4200\.00/.test(r.html), `said: ${r.html}`);
+        ck(`${who}:   and the name it came from`, /BofA/.test(r.html), `said: ${r.html}`);
+        ck(`${who}:   and told she can pay from it NOW`, /pay from it now/i.test(r.html),
+           'the old sentence said the opposite, and after folding that would be false');
+        ck(`${who}:   and it does NOT say the box is empty`, !/no cash recorded/i.test(r.html));
+        ck(`${who}:   and does NOT say it cannot be paid from`, !/cannot pay from/i.test(r.html),
+           'this is the stale sentence folding made untrue');
+    }
+    // Nothing pending and money on the list: silence.
+    for (const [who, file] of Object.entries(CLIENTS)) {
+        const r = decide(file, { ...folded, Unassigned: 4200 }, SOURCES, 4200, { total: 0, names: {} });
+        ck(`${who}: no note when nothing is pending`, r.shown === false);
+    }
+    // Still genuinely empty: the other sentence, unchanged.
+    for (const [who, file] of Object.entries(CLIENTS)) {
+        const r = decide(file, zeros, SOURCES, 0, { total: 0, names: {} });
+        ck(`${who}: an empty box still says so`, /no cash recorded/i.test(r.html), `said: ${r.html}`);
+    }
+}
+
+// ══════════════════════════════════════════════════════════════════════════
 section('D — the sentence names what to do');
 for (const [who, file] of Object.entries(CLIENTS)) {
     const src = fs.readFileSync(file, 'utf8');
@@ -192,6 +229,75 @@ for (const [who, file] of Object.entries(CLIENTS)) {
        'hard-coded copy in the markup is one of the two sentences shown unconditionally');
 }
 
-console.log(`\n  ${pass} passed, ${fail} failed`);
-if (failures.length) { console.log('\n  failed:'); failures.forEach((f) => console.log('    · ' + f)); }
-process.exit(fail ? 1 : 0);
+// ══════════════════════════════════════════════════════════════════════════
+section('E — END TO END: the route actually sends it');
+// ══════════════════════════════════════════════════════════════════════════
+// Every section above feeds the client block a pettyCash object by hand, so
+// all of them pass while /api/petty-cash quietly omits pending_assignment and
+// the screen asks her to assign nothing. A mutation blanking it in api.js
+// SURVIVED until this section existed — the exact gap CLAUDE.md rule 3 is
+// about: "the route does not forward the new field".
+(async () => {
+    const http = require('http');
+    const fs2 = require('fs');
+    const os = require('os');
+    const TMP = fs2.mkdtempSync(path.join(os.tmpdir(), 'jarvis-pendassign-'));
+    process.env.JARVIS_TEST = '1';
+    process.env.DATA_DIR = TMP;
+    process.env.APP_PASSWORD   = process.env.APP_PASSWORD   || 'user-pw-aaaaaaaaaaaa';
+    process.env.ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'admin-pw-bbbbbbbbbbb';
+    process.env.STAFF_PASSWORD = process.env.STAFF_PASSWORD || 'staff-pw-ccccccccccc';
+
+    const cfg = require(path.join(ROOT, 'config'));
+    cfg.PETTY_CASH_FILE = path.join(TMP, 'petty_cash.json');
+    // Her live shape: cash recorded under the pre-split name.
+    fs2.writeFileSync(cfg.PETTY_CASH_FILE, JSON.stringify([
+        { id: 'E1', kind: 'topup', cash_source: 'BofA', amount: 4200, date: '2026-08-01' },
+        { id: 'E2', kind: 'topup', cash_source: '', amount: 1000, date: '2026-08-02' },
+    ]));
+
+    const { createApi } = require(path.join(ROOT, 'api'));
+    const app = createApi();
+    const server = await new Promise((r) => { const sv = app.listen(0, '127.0.0.1', () => r(sv)); });
+    const base = `http://127.0.0.1:${server.address().port}`;
+    const req = (method, p2, { body, sid } = {}) => new Promise((resolve, reject) => {
+        const data = body == null ? null : JSON.stringify(body);
+        const headers = {};
+        if (data) { headers['Content-Type'] = 'application/json'; headers['Content-Length'] = Buffer.byteLength(data); }
+        if (sid) headers.Authorization = `Bearer ${sid}`;
+        const r2 = http.request(base + p2, { method, headers }, (res) => {
+            let raw = ''; res.on('data', (c) => { raw += c; });
+            res.on('end', () => { let j = null; try { j = JSON.parse(raw); } catch (e) {} resolve({ status: res.statusCode, json: j }); });
+        });
+        r2.on('error', reject); if (data) r2.write(data); r2.end();
+    });
+
+    const sid = ((await req('POST', '/login', { body: { password: process.env.ADMIN_PASSWORD } })).json || {}).sid;
+    ck('signed in', !!sid);
+    const r = await req('GET', '/api/petty-cash', { sid });
+    ck('the petty cash route answered', r.status === 200, `status ${r.status}`);
+    const j = r.json || {};
+    ck('it sends pending_assignment at all', !!j.pending_assignment,
+       'without this the screen can never ask her to assign anything');
+    ck('  with the amount', (j.pending_assignment || {}).total === 4200,
+       `total ${(j.pending_assignment || {}).total}`);
+    ck('  and the name it came from',
+       JSON.stringify(Object.keys((j.pending_assignment || {}).names || {})) === JSON.stringify(['BofA']),
+       JSON.stringify((j.pending_assignment || {}).names));
+    ck('  and the float is NOT in it', !('' in ((j.pending_assignment || {}).names || {})));
+    // And the money is where she can spend it.
+    ck('the cash reads as Unassigned, spendable', (j.by_source || {}).Unassigned === 5200,
+       `by_source: ${JSON.stringify(j.by_source)} — 4200 under BofA plus a 1000 float`);
+    ck('and the total is unchanged by the folding', j.balance && j.balance.total === 5200
+        || j.balance === 5200, `balance: ${JSON.stringify(j.balance)}`);
+
+    await new Promise((r2) => server.close(r2));
+    try { fs2.rmSync(TMP, { recursive: true, force: true }); } catch {}
+
+    console.log(`\n  ${pass} passed, ${fail} failed`);
+    if (failures.length) { console.log('\n  failed:'); failures.forEach((f) => console.log('    · ' + f)); }
+    process.exit(fail ? 1 : 0);
+})();
+
+const _skipTail = true;
+if (!_skipTail) console.log(`\n  ${pass} passed, ${fail} failed`);
