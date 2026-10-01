@@ -508,6 +508,98 @@ section('H — END TO END, through the real routes');
     await new Promise((r) => server.close(r));
 }
 
+// ══════════════════════════════════════════════════════════════════════════
+section('K — CLEARING 2025 WITHOUT ORPHANING A 2026 TRADE');
+// ══════════════════════════════════════════════════════════════════════════
+// Apsara, 2026-10-01: "i dont want 2025 bills unless they have an invoice in
+// 2026", then "similarly i dont want 2025 old invoices".
+//
+// Written as a rule about JOINS, not about those two years. A container
+// bought in 2025 and sold in 2026 is ONE trade across the year end: delete
+// the bill and the 2026 invoice is still on the books with no cost against
+// it, and margin.js computes a margin only when cost !== null — so that
+// container silently stops having a margin while its revenue stays. The
+// profit on it becomes unanswerable, and nothing anywhere says so.
+//
+// Hardcoding 2025/2026 would also mean editing this every January, and would
+// not cover the mirror case she asked for in the same breath.
+{
+    write('bills.json', [
+        // 2025, no counterpart anywhere — these are the ones she wants gone.
+        bill('B_OLD_1', 'OLDU1111111', { date: '2025-03-04' }),
+        bill('B_OLD_2', 'OLDU2222222', { date: '2025-07-19' }),
+        // 2025, but this container was SOLD in 2026. Must survive.
+        bill('B_SPAN', 'SPANU3333333', { date: '2025-11-28' }),
+        // 2026, outside the selection entirely.
+        bill('B_NEW', 'NEWU4444444', { date: '2026-02-02' }),
+    ]);
+    write('sales.json', [
+        sale('S_SPAN', 'SPANU3333333', { date: '2026-01-09' }),
+        sale('S_NEW', 'NEWU4444444', { date: '2026-02-11' }),
+    ]);
+
+    const sel = { filters: { from: '2025-01-01', to: '2025-12-31' } };
+    const got = bd.resolve('bills', sel);
+
+    ck('the two orphan 2025 bills are selected',
+       got.ids.sort().join(',') === 'B_OLD_1,B_OLD_2', got.ids.join(','));
+    ck('  the year-spanning bill is SPARED', !got.ids.includes('B_SPAN'),
+       'deleting it leaves the 2026 invoice with no cost and no margin');
+    ck('  and she is told which, and why',
+       got.spared.length === 1 && got.spared[0].id === 'B_SPAN'
+       && /invoice that is staying/.test(got.spared[0].why),
+       JSON.stringify(got.spared));
+    ck('  the sentence says how many were spared',
+       /sparing 1 that still has an invoice/.test(got.how), got.how);
+    ck('  and a 2026 bill was never in scope', !got.ids.includes('B_NEW'));
+
+    // ── THE MIRROR CASE, WHICH SHE ASKED FOR IN THE SAME BREATH ──────────
+    const gotS = bd.resolve('sales', { filters: { from: '2025-01-01', to: '2025-12-31' } });
+    ck('a 2025 invoice whose container has a bill is spared too',
+       gotS.spared.length === 0 && gotS.ids.length === 0,
+       'no 2025 invoices in this fixture — the selector must not invent any');
+
+    write('sales.json', [
+        sale('S_OLD', 'OLDU9999999', { date: '2025-05-05' }),       // orphan
+        sale('S_SPAN2', 'SPANU3333333', { date: '2025-06-06' }),    // bill exists
+        sale('S_NEW', 'NEWU4444444', { date: '2026-02-11' }),
+    ]);
+    const gotS2 = bd.resolve('sales', { filters: { from: '2025-01-01', to: '2025-12-31' } });
+    ck('the orphan 2025 invoice goes', gotS2.ids.join(',') === 'S_OLD', gotS2.ids.join(','));
+    ck('  and the one with a bill behind it is spared',
+       gotS2.spared.some((x) => x.id === 'S_SPAN2'));
+
+    // ── A ROW WITH NO CONTAINER CANNOT BE SPARED BY A JOIN ───────────────
+    // It has nothing to join ON. Sparing it would mean keeping every
+    // containerless row for ever, which is the opposite of what she asked.
+    write('bills.json', [
+        bill('B_NOCONT', '', { date: '2025-04-04' }),
+        bill('B_SPAN', 'SPANU3333333', { date: '2025-11-28' }),
+    ]);
+    const got3 = bd.resolve('bills', sel);
+    ck('a 2025 bill with NO container is still selected', got3.ids.includes('B_NOCONT'),
+       'nothing to join on is not the same as joined');
+
+    // ── AND IT CAN BE TURNED OFF DELIBERATELY ───────────────────────────
+    // She may genuinely want a container gone from both sides. The order that
+    // cannot orphan anything is to clear the other side first, but an
+    // explicit override beats her editing JSON by hand.
+    const forced = bd.resolve('bills', { ...sel, keep_joined: false });
+    ck('keep_joined:false takes the joined rows too', forced.ids.includes('B_SPAN'),
+       'an explicit override, because the alternative is her editing the file');
+    ck('  and reports nothing spared', (forced.spared || []).length === 0);
+
+    // ── THE GUARDS STILL RUN ────────────────────────────────────────────
+    // This is a SELECTOR. planBy must still refuse a row with a payment or a
+    // live claim against it — sparing is about joins, not about money.
+    write('bills.json', [bill('B_OLD_1', 'OLDU1111111', { date: '2025-03-04' })]);
+    write('sales.json', []);
+    const planned = bd.planBy('bills', sel, { reason: 'clearing 2025' });
+    ck('planBy routes through the same plan() guards',
+       Array.isArray(planned.going) && Array.isArray(planned.refused),
+       'a second entry point is a second place for the payment and claim checks to be forgotten');
+}
+
 console.log(`\n  ${pass} passed, ${fail} failed`);
 if (fail) { console.log('\n  FAILED:\n' + failures.map((f) => '    - ' + f).join('\n')); process.exit(1); }
 

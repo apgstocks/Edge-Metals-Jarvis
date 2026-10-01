@@ -2872,6 +2872,39 @@ const MUTATIONS = [
       find: '            if (banks.expectsBank(mode) && !bank) {',
       to:   '            if (banks.needsBank(mode) && !bank) {' },
 
+    // ── CLEARING 2025 WITHOUT ORPHANING A 2026 TRADE (2026-10-01) ───────
+    // "i dont want 2025 bills unless they have an invoice in 2026."
+    { name: 'keepjoin: a year-spanning trade loses its cost side',
+      file: 'helpers/ledgerBulkDelete.js', suites: ['ledger-bulk-delete'],
+      find: '    if (selector.keep_joined !== false) {',
+      to:   '    if (false) {' },
+
+    // Sparing silently is nearly as bad as not sparing: she selects eleven,
+    // ten go, and nothing says where the eleventh went.
+    { name: 'keepjoin: rows are spared without saying which',
+      file: 'helpers/ledgerBulkDelete.js', suites: ['ledger-bulk-delete'],
+      find: "            spared: spared.map((r) => ({",
+      to:   '            spared: [].map((r) => ({' },
+
+    // A row with no container has nothing to join ON. Sparing it would keep
+    // every containerless row for ever — the opposite of the request.
+    { name: 'keepjoin: a row with no container is spared anyway',
+      file: 'helpers/ledgerBulkDelete.js', suites: ['ledger-bulk-delete'],
+      find: "            if (!container) return false;        // nothing to join on; not spared",
+      to:   '            if (!container) return true;' },
+
+    // The join must be the SAME one margin.js uses, or this deletes rows
+    // margin.js is still counting.
+    { name: 'keepjoin: it joins on container alone, not booking+container',
+      file: 'helpers/ledgerBulkDelete.js', suites: ['ledger-bulk-delete'],
+      find: '            survivingKeys.add(margin.keyOf(o.booking_no, container));',
+      to:   '            survivingKeys.add(container);' },
+
+    { name: 'keepjoin: the override stops working',
+      file: 'helpers/ledgerBulkDelete.js', suites: ['ledger-bulk-delete'],
+      find: '    if (selector.keep_joined !== false) {',
+      to:   '    if (true) {' },
+
     // ── BILL_/SALE_ IDS ARE NOT CONTAINERS, IN EVERY CHECK (2026-10-01) ─
     // She said it twice. The first fix went into one of three checks that
     // print `container_no || id`, so her list came back full of them.
