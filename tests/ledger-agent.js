@@ -130,14 +130,30 @@ section('E — IT READS THE JOBS THAT ALREADY RUN');
 // Five jobs already scan. A sixth scanner would be a sixth voice telling her
 // slightly different things, so this one reads what they compute.
 {
+    // ── AND NOTHING FROM THE YARD ────────────────────────────────────────
+    // A yard-claims source sat in defaultSources for one afternoon. Apsara
+    // removed it: "EDGE_9 — Ramesh never involve yard with this."
+    //
+    // Her instruction was "handle both bills and invoice" — Edge Metals'
+    // paperwork. One agent reading both ledgers makes two sets of books look
+    // like one, which is what rule 5 exists to prevent. The yard's claims go
+    // out on the 8PM yard report instead.
     const yc = require('../helpers/yardClaims');
     await yc.raise({ load_id: 'EDGE_9', seller: 'Ramesh', amount: 450,
         reason: '20% dirt', raised_on: '2026-09-01' });
 
     const got = agent.collect();
-    ck('it collects from the existing checks', got.findings.length > 0);
-    ck('  including the open claim', got.findings.some((f) => f.check === 'open-claim'));
-    ck('  and nothing is broken', got.broken.length === 0, JSON.stringify(got.broken));
+    ck('every source is Edge Metals paperwork',
+       agent.defaultSources().every((s) => s.id !== 'yard-claims'),
+       'the agent handles bills and invoices; the yard has its own channel');
+    ck('  an open yard claim never reaches this report',
+       !got.findings.some((f) => f.check === 'open-claim' || /EDGE_9/.test(String(f.what || ''))),
+       JSON.stringify(got.findings.filter((f) => /EDGE_9/.test(String(f.what || '')))));
+    ck('  and the file does not reach for yardClaims either',
+       !/require\('\.\/yardClaims'\)/.test(
+           fs.readFileSync(path.join(ROOT, 'helpers/ledgerAgent.js'), 'utf8')),
+       'a single require is how the separation leaks back');
+    ck('  nothing is broken', got.broken.length === 0, JSON.stringify(got.broken));
 
     // Sweep findings arrive with no `fix`, so every one is a proposal. That is
     // correct and worth pinning: nothing from the sweep should ever be

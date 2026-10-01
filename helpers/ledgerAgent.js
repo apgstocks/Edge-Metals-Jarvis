@@ -149,21 +149,15 @@ function defaultSources() {
                 return out;
             },
         },
-        {
-            id: 'yard-claims',
-            // Her daily claim reminder, carried into the same report so an
-            // open claim is visible beside the paperwork it belongs to.
-            run() {
-                const yc = require('./yardClaims');
-                return yc.openForReminder().map((c) => ({
-                    check: 'open-claim',
-                    title: 'Claim still open',
-                    what: `${c.load_id}${c.seller ? ` — ${c.seller}` : ''}`,
-                    detail: `$${Number(c.amount).toFixed(2)} · ${c.reason}`
-                        + (c.age_days == null ? '' : ` · ${c.age_days} day${c.age_days === 1 ? '' : 's'} old`),
-                }));
-            },
-        },
+        // ── NO YARD SOURCE HERE, AND THAT IS THE POINT ───────────────────
+        // A yard-claims source sat here for one afternoon. Apsara removed it:
+        // "EDGE_9 — Ramesh never involve yard with this."
+        //
+        // Her instruction was "handle both bills and invoice" — Edge Metals'
+        // paperwork. A claim against a load the yard bought belongs to the
+        // other company, and it has its own daily channel: the 8PM yard
+        // report. One agent reading both ledgers would make two sets of books
+        // look like one, which is the thing rule 5 exists to prevent.
     ];
 }
 

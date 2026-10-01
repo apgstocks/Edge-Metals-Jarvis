@@ -2872,6 +2872,31 @@ const MUTATIONS = [
       find: '            if (banks.expectsBank(mode) && !bank) {',
       to:   '            if (banks.needsBank(mode) && !bank) {' },
 
+    // ── THE TWO COMPANIES STAY APART (2026-10-01) ───────────────────────
+    // "EDGE_9 — Ramesh never involve yard with this." The claim reminder was
+    // put in the Edge Metals sweep and in the agent; both were wrong, and
+    // rule 5 is the oldest rule in CLAUDE.md.
+    { name: 'twoco: the metals sweep reads the yard again',
+      file: 'helpers/integritySweep.js', suites: ['yard-claims'],
+      find: "    // ── WHAT IS DELIBERATELY NOT HERE: THE YARD'S OPEN CLAIMS ─────────────",
+      to:   "    { id: 'open-yard-claims', title: 'x', why: 'x', run() { return require('./yardClaims').openForReminder().map((c) => ({ what: c.load_id, detail: c.reason })); } },\n    // ── WHAT IS DELIBERATELY NOT HERE: THE YARD'S OPEN CLAIMS ─────────────" },
+
+    { name: 'twoco: the agent grows a yard source',
+      file: 'helpers/ledgerAgent.js', suites: ['ledger-agent'],
+      find: "        // ── NO YARD SOURCE HERE, AND THAT IS THE POINT ───────────────────",
+      to:   "        { id: 'yard-claims', run() { return require('./yardClaims').openForReminder().map((c) => ({ check: 'open-claim', what: c.load_id })); } },\n        // ── NO YARD SOURCE HERE, AND THAT IS THE POINT ───────────────────" },
+
+    // And the reminder must still actually reach her, on the yard's channel.
+    { name: 'twoco: the yard report stops carrying open claims',
+      file: 'scheduler.js', suites: ['yard-claims'],
+      find: '        ...claimLines,',
+      to:   '' },
+
+    { name: 'twoco: the yard report drops the age',
+      file: 'scheduler.js', suites: ['yard-claims'],
+      find: "                    + (c.age_days == null ? '' : ` · ${c.age_days}d`))];",
+      to:   "                    )];" },
+
     // ── THE LEDGER AGENT'S SAFETY LINE (2026-10-01) ─────────────────────
     // "Let an AI agent handle both bills and invoice" — and, asked what it
     // may change alone, she chose only things with ONE possible answer.
@@ -3060,16 +3085,8 @@ const MUTATIONS = [
       find: "    if (!reason) throw new Error('what is the claim for? (short reason, e.g. \"20% dirt in the Al combo\")');",
       to:   '' },
 
-    { name: 'yclaim: the daily reminder stops reminding',
-      file: 'helpers/integritySweep.js', suites: ['yard-claims'],
-      find: '            return yc.openForReminder().map((c) => ({',
-      to:   '            return [].map((c) => ({' },
-
-    { name: 'yclaim: the reminder loses the age that makes her act',
-      file: 'helpers/integritySweep.js', suites: ['yard-claims'],
-      find: "                    + (c.age_days === null ? '' : ` (${c.age_days} day${c.age_days === 1 ? '' : 's'} ago)`),",
-      to:   "                    + '',"},
-
+    
+    
     { name: 'yclaim: the reminder shows newest first',
       file: 'helpers/yardClaims.js', suites: ['yard-claims'],
       find: '        .sort((a, b) => (b.age_days || 0) - (a.age_days || 0));',

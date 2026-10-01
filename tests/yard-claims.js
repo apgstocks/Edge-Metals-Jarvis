@@ -222,50 +222,40 @@ section('E — ON THE TICKET HE SIGNS');
 }
 
 // ══════════════════════════════════════════════════════════════════════════
-section('F — REMINDED EVERY DAY, AND SILENT WHEN THERE IS NOTHING');
+section('F — REMINDED EVERY DAY, ON THE YARD\'S OWN CHANNEL');
 // ══════════════════════════════════════════════════════════════════════════
-// Her words: "remind user abut the claim every day". It rides on the 6:30am
-// sweep she already reads, which is silent when clean — so settling a claim
-// stops the reminder by itself, with nothing to dismiss, and no second daily
-// email competes with the first.
+// Her words: "remind user abut the claim every day".
+//
+// It went into the Edge Metals integrity sweep first, and she took it out:
+// "EDGE_9 — Ramesh never involve yard with this." Right, and it is rule 5.
+// Every check in that sweep reads bills, sales or margin — Edge Metals'
+// paperwork. A claim against a load the YARD bought belongs to the other
+// company, and mixing them in one email quietly teaches that the two sets of
+// books are one.
+//
+// Its home is the 8PM end-of-day yard report: its own toggle, its own
+// recipients, its own WhatsApp group under Settings > Yard.
 {
-    fs.writeFileSync(cfg.YARD_CLAIMS_FILE, '[]');
     const sweep = require('../helpers/integritySweep');
-    const idOf = (res) => (res.findings || []).filter((f) => f.id === 'open-yard-claims');
+    ck('the metals sweep carries NO yard claim check',
+       !(sweep.CHECKS || []).some((c) => c.id === 'open-yard-claims'),
+       'Edge Yard and Edge Metals are different companies — CLAUDE.md rule 5');
+    ck('  and reads nothing from yardClaims at all',
+       !/require\('\.\/yardClaims'\)/.test(
+           fs.readFileSync(path.join(ROOT, 'helpers/integritySweep.js'), 'utf8')),
+       'a single require is how the separation leaks back');
 
-    ck('no claims: the check says nothing', idOf(sweep.run()).length === 0,
-       'a reminder that fires on an empty register teaches her to skip the email');
-
-    await yc.raise({ load_id: 'EDGE_A', seller: 'Ramesh', amount: 450,
-        reason: '20% dirt in the Al combo', raised_on: '2026-09-01' });
-    await yc.raise({ load_id: 'EDGE_B', seller: 'Gomez', amount: 120,
-        reason: 'short 300 lb', raised_on: '2026-09-28' });
-
-    const found = idOf(sweep.run());
-    ck('two open claims are reported', found.length === 1 && found[0].count === 2);
-    const items = found[0].items;
-    ck('  oldest first', /EDGE_A/.test(items[0].what),
-       'the one ignored longest is the one she needs at the top');
-    ck('  with the seller and the amount', /Ramesh/.test(items[0].what) && /450/.test(items[0].what));
-    ck('  the reason, because that is what she argues from', /dirt/.test(items[0].detail));
-    ck('  and the AGE, which is the part that makes her act',
-       /30 days ago/.test(items[0].detail), items[0].detail);
-    ck('  singular day is not "1 days"', !/1 days ago/.test(items.map((i) => i.detail).join(' ')));
-
-    // Settling stops it. No dismiss, no snooze — the register IS the state.
-    for (const c of yc.openClaims()) await yc.settle(c.id, { how: 'adjusted' });
-    ck('settling them makes the reminder stop', idOf(sweep.run()).length === 0);
-}
-{
-    // The sweep must survive a broken check rather than losing the whole
-    // email — this one is new, so it is worth proving it is wired like the
-    // others.
-    const sweep = require('../helpers/integritySweep');
-    const res = sweep.run();
-    ck('the check is registered in the sweep',
-       (sweep.CHECKS || []).some((c) => c.id === 'open-yard-claims'));
-    ck('and the sweep reports it as one of its checks', res.checks >= 7);
-    ck('and nothing is broken', (res.broken || []).length === 0, JSON.stringify(res.broken));
+    const sch = fs.readFileSync(path.join(ROOT, 'scheduler.js'), 'utf8');
+    ck('the YARD report carries them instead', /Open claims \(\$\{open\.length\}\)/.test(sch));
+    ck('  with the amount, the reason and the age',
+       /\$\{c\.reason\}/.test(sch) && /c\.age_days/.test(sch) && /usd\(c\.amount\)/.test(sch),
+       '"open 34 days" is the sentence that makes her act');
+    ck('  appended to the day\'s report, not sent on its own',
+       /\.\.\.claimLines,/.test(sch),
+       'a claim open a week must not become seven emails of its own');
+    ck('  and a broken claims file does not cost her the yard report',
+       /could not read open claims/.test(sch),
+       'the loads are the part someone is waiting for');
 }
 
 // ══════════════════════════════════════════════════════════════════════════

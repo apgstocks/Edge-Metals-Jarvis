@@ -935,6 +935,36 @@ function buildYardReportText(dateKey, todays, allLoads) {
     // "LINKS ONLY, no attachments" comment in eodYardReport). Every report
     // since has told her to look at an attachment that wasn't there. It
     // reads as a bug in the send, and would have been chased as one.
+    // ── OPEN CLAIMS, ON THE YARD'S OWN CHANNEL ───────────────────────────
+    // Apsara, 2026-10-01: "remind user abut the claim every day" — and then,
+    // when the reminder had been put in the Edge Metals integrity sweep,
+    // "EDGE_9 — Ramesh never involve yard with this."
+    //
+    // She was right twice over. A claim against a load the YARD bought is
+    // Edge Yard's business, and this report is Edge Yard's channel: its own
+    // toggle, its own recipients, its own WhatsApp group under Settings >
+    // Yard. The metals sweep reads bills, sales and margin and should carry
+    // nothing from here.
+    //
+    // Appended rather than given its own send, so a claim open for a week
+    // does not become seven emails of its own — it sits under the day's
+    // loads, where whoever reads this is already looking.
+    //
+    // Best-effort: a claims file that cannot be read must not cost her the
+    // whole yard report, which is the part someone is waiting for.
+    let claimLines = [];
+    try {
+        const open = require('./helpers/yardClaims').openForReminder();
+        if (open.length) {
+            claimLines = ['', `*Open claims (${open.length})*`,
+                ...open.map((c) => `${c.load_id}${c.seller ? ` — ${c.seller}` : ''}: `
+                    + `${usd(c.amount)} · ${c.reason}`
+                    + (c.age_days == null ? '' : ` · ${c.age_days}d`))];
+        }
+    } catch (e) {
+        console.error('[SCHED] eod-yard-report: could not read open claims:', e.message);
+    }
+
     return [
         `*${cfg.COMPANY_NAME} — Yard Report — ${dateKey}*`,
         '',
@@ -942,6 +972,7 @@ function buildYardReportText(dateKey, todays, allLoads) {
         ...lines,
         '', '*Totals*',
         `Gross ${totals.gross} ${unit} · Tare ${totals.tare} ${unit} · Net ${totals.net} ${unit} · ${usd(totals.amount)}`,
+        ...claimLines,
     ].join('\n');
 }
 
