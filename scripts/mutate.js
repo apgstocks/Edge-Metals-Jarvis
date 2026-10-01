@@ -2872,6 +2872,30 @@ const MUTATIONS = [
       find: '            if (banks.expectsBank(mode) && !bank) {',
       to:   '            if (banks.needsBank(mode) && !bank) {' },
 
+    // ── BILL_/SALE_ IDS ARE NOT CONTAINERS, IN EVERY CHECK (2026-10-01) ─
+    // She said it twice. The first fix went into one of three checks that
+    // print `container_no || id`, so her list came back full of them.
+    { name: 'recid: unfinished-bills reports BILL_ ids again',
+      file: 'helpers/integritySweep.js', suites: ['integrity-sweep'],
+      find: '                .filter((b) => !noRealContainer(b))\n                .map((b) => ({ b, needs: bills.missingFor(b) || [] }))',
+      to:   '                .map((b) => ({ b, needs: bills.missingFor(b) || [] }))' },
+
+    { name: 'recid: incomplete-rows reports them again',
+      file: 'helpers/integritySweep.js', suites: ['integrity-sweep'],
+      find: '                .filter((b) => !noRealContainer(b))\n                .filter((b) => Array.isArray(b.incomplete) && b.incomplete.length)',
+      to:   '                .filter((b) => Array.isArray(b.incomplete) && b.incomplete.length)' },
+
+    { name: 'recid: the unjoined check reports them again',
+      file: 'helpers/integritySweep.js', suites: ['integrity-sweep'],
+      find: '                if (noRealContainer(r)) continue;',
+      to:   '' },
+
+    // The opposite error: a filter so wide it hides the findings she needs.
+    { name: 'recid: the filter swallows real containers too',
+      file: 'helpers/integritySweep.js', suites: ['integrity-sweep'],
+      find: "    return !c || RECORD_ID.test(c.toUpperCase());",
+      to:   '    return true;' },
+
     // ── THE S.NO MUST IDENTIFY A PIECE (2026-10-01) ─────────────────────
     // "Did you notice he s.no" — 42 of 53 serial numbers on her packing list
     // were duplicates, because her sheet numbers each of six columns from 1.
