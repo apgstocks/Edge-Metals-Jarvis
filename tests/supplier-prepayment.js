@@ -482,6 +482,103 @@ section('I — AND BY TALKING, which is the caller that keeps breaking');
        /paid by/i.test(threw2 || ''), String(threw2));
 }
 
+// ══════════════════════════════════════════════════════════════════════════
+section('J — BOTH SCREENS, AND THEY AGREE');
+// ══════════════════════════════════════════════════════════════════════════
+// Apsara: "streamline the process". The first version of this feature
+// shipped three surfaces and she deleted it the same day. So the checks here
+// are as much about what is NOT on screen as what is.
+{
+    const CLIENTS = {
+        website: path.join(ROOT, 'dashboard/index.html'),
+        app: path.join(ROOT, 'mobile-app/www/index.html'),
+    };
+    for (const [who, file] of Object.entries(CLIENTS)) {
+        const src = fs.readFileSync(file, 'utf8');
+
+        ck(`${who}: credit shows inside the Pay modal`, /id="payPrepayBox"/.test(src));
+        ck(`${who}: with an Apply control`, /id="btnApplyPrepay"/.test(src));
+        ck(`${who}: and a way to hold money as credit instead`, /id="pay_as_prepayment"/.test(src));
+
+        // ── ONE SURFACE, WHICH IS THE WHOLE BRIEF ────────────────────────
+        // The deleted version had a strip above the deck and a separate
+        // Record form. Both of those would be new top-level ids; the Pay
+        // modal's own box is the only place this is allowed to live.
+        ck(`${who}: there is NO separate prepayment tab or form`,
+           !/id="prepaymentTab"|id="prepayForm"|id="advanceStrip"|id="prepayStrip"/.test(src),
+           'she deleted a three-surface version of this the day it shipped');
+
+        // The credit lookup must not block the modal opening — she pressed
+        // Pay to record a payment, not to read a balance.
+        ck(`${who}: the credit lookup does not block the modal`,
+           /\n  refreshPrepayCredit\(\);\n/.test(src),
+           'awaiting it would make Pay feel broken on a slow network');
+        ck(`${who}: and a failed lookup never costs her the modal`,
+           /could not read supplier credit/.test(src));
+
+        // A prepayment is money going OUT. Offering it on a sale invites
+        // recording a customer's money as supplier credit.
+        ck(`${who}: hidden on a sale`,
+           /if \(sale \|\| !seller\) \{/.test(src));
+        ck(`${who}: and refused on a sale even if the box is somehow ticked`,
+           /does not apply to a sale/.test(src),
+           'belt and braces, because this one would be a wrong-signed ledger row');
+
+        // The offer is capped at what the load owes, so one click cannot
+        // overpay using money meant for another load.
+        ck(`${who}: the offered amount is capped by what the load owes`,
+           /Math\.min\(avail, pending\)/.test(src));
+
+        // load_id must be dropped, or the prepayment counts against the load.
+        ck(`${who}: load_id and load_kind are stripped from a prepayment`,
+           /const \{ load_id, load_kind, \.\.\.rest \} = body;/.test(src),
+           'a prepayment carrying a load_id is indistinguishable from an ordinary payment');
+        // ...and the rest of the resolved form is REUSED, not rebuilt.
+        ck(`${who}: and the rest of the form is reused, not rebuilt`,
+           /\.\.\.rest, seller: payingLoad\.seller,/.test(src),
+           'a second hand-built payload is how the two drift, and paid_via is always the field that goes');
+
+        // Oldest first, split across as many prepayments as it takes.
+        ck(`${who}: applying walks the prepayments oldest first`,
+           /String\(a\.paid_on \|\| ''\)\.localeCompare\(String\(b\.paid_on \|\| ''\)\)/.test(src));
+        ck(`${who}: and says so when the credit did not cover it`,
+           /was not covered/.test(src),
+           'a silent partial application leaves her believing a load is settled');
+    }
+
+    // ── AND THE TWO DO NOT DRIFT ─────────────────────────────────────────
+    // form-parity.js exists because these two screens have drifted before.
+    // This is the same rule for the three functions this feature added.
+    const a = fs.readFileSync(CLIENTS.website, 'utf8');
+    const b = fs.readFileSync(CLIENTS.app, 'utf8');
+    const grab = (src, marker) => {
+        const i = src.indexOf(marker);
+        if (i < 0) return null;
+        const open = src.indexOf('{', i);
+        let d = 0;
+        for (let k = open; k < src.length; k += 1) {
+            if (src[k] === '{') d += 1;
+            else if (src[k] === '}') { d -= 1; if (!d) return src.slice(open, k + 1); }
+        }
+        return null;
+    };
+    // ── CODE, NOT COMMENTARY ─────────────────────────────────────────
+    // The first version compared the raw text and failed: the website's copy
+    // carries the long reasoning and the phone's points at it. That is the
+    // RIGHT way round — duplicating three paragraphs would guarantee the two
+    // explanations drift — so the check compares what executes. A comment
+    // difference is not a behaviour difference, and a test that cannot tell
+    // them apart gets switched off.
+    const norm = (x) => String(x || '')
+        .split('\n').filter((l) => !/^\s*\/\//.test(l)).join('\n')
+        .replace(/\s+/g, ' ').trim();
+    const wa = grab(a, 'async function refreshPrepayCredit');
+    const wb = grab(b, 'async function refreshPrepayCredit');
+    ck('refreshPrepayCredit was found in both', !!wa && !!wb);
+    ck('  and is identical on both screens', norm(wa) === norm(wb),
+       'the money figure this draws is the same figure on both; a divergence here is two answers to one question');
+}
+
 console.log(`\n  ${pass} passed, ${fail} failed`);
 if (failures.length) { console.log('\n  failed:'); failures.forEach((f) => console.log('    · ' + f)); }
 try { fs.rmSync(TMP, { recursive: true, force: true }); } catch {}

@@ -2971,6 +2971,43 @@ const MUTATIONS = [
       find: "            const allowed = pay.modesForKind('purchase');",
       to:   "            const allowed = pay.PAYMENT_MODES;" },
 
+    // ── BOTH SCREENS (2026-10-01) ───────────────────────────────────────
+    { name: 'prepay-ui: a prepayment is saved carrying this load id',
+      file: 'dashboard/index.html', suites: ['supplier-prepayment'],
+      find: '        const { load_id, load_kind, ...rest } = body;',
+      to:   '        const rest = body;' },
+
+    { name: 'prepay-ui: the offer is not capped by what the load owes',
+      file: 'dashboard/index.html', suites: ['supplier-prepayment'],
+      find: '    const offer = isFinite(pending) && pending > 0 ? Math.min(avail, pending) : avail;',
+      to:   '    const offer = avail;' },
+
+    // The obvious mutation here — awaiting the lookup — is a SYNTAX error,
+    // because openPayModal is not async. The harness refused it and said so,
+    // which is the "not applied" report doing its job: an unapplied mutation
+    // measures nothing, and reporting it as a pass would have been a lie.
+    // The property is tested from the other end instead: the panel is only
+    // ever filled by this call, so removing it is the real regression.
+    { name: 'prepay-ui: the credit panel is never filled',
+      file: 'dashboard/index.html', suites: ['supplier-prepayment'],
+      find: '  refreshPrepayCredit();\n\n  $(\'payModal\').classList.remove(\'hidden\');',
+      to:   '  $(\'payModal\').classList.remove(\'hidden\');' },
+
+    { name: 'prepay-ui: credit is offered on a SALE too',
+      file: 'dashboard/index.html', suites: ['supplier-prepayment'],
+      find: '  if (sale || !seller) {',
+      to:   '  if (!seller) {' },
+
+    { name: 'prepay-ui: a partial application says nothing',
+      file: 'dashboard/index.html', suites: ['supplier-prepayment'],
+      find: "        $('payErr').textContent = `Applied what the credit had. ${payMoney(left)} of what you asked for was not covered.`;",
+      to:   '        /* silently partial */' },
+
+    { name: 'prepay-ui: the phone stops offering it at all',
+      file: 'mobile-app/www/index.html', suites: ['supplier-prepayment'],
+      find: '          <div id="payPrepayBox" class="hidden"',
+      to:   '          <div id="payPrepayBoxGone" class="hidden"' },
+
     { name: 'prepay: over-applying is silently capped instead of refused',
       file: 'helpers/payments.js', suites: ['supplier-prepayment'],
       find: '    if (amount - remaining > CENT) throw new Error(`that prepayment only has ${remaining.toFixed(2)} left`);',

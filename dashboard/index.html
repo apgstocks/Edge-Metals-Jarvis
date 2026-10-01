@@ -12275,8 +12275,80 @@ function openPayModal(loadId, kind, opts) {
     if ($('btnCancelPay')) $('btnCancelPay').textContent = historyOnly ? 'Close' : 'Cancel';
     if (ttl && historyOnly) ttl.textContent = sale ? 'Payments received' : 'Payments made';
   }
+  // ── WHAT THIS SUPPLIER IS ALREADY HOLDING ────────────────────────────
+  // Fired, not awaited. The modal must open at once: she pressed Pay to
+  // record a payment, and making that wait on a second request would make a
+  // working button feel broken whenever the network is slow. The box starts
+  // hidden and appears only if there is credit, so the common case — no
+  // prepayments — looks exactly as it did before this feature existed.
+  refreshPrepayCredit();
+
   $('payModal').classList.remove('hidden');
 }
+
+// ── PREPAID CREDIT IN THE PAY MODAL ────────────────────────────────────────
+// Apsara: "Add a supplier prepayment option in loads" / "streamline the
+// process" / "Build prepayment properly". See the markup for why this lives
+// in the modal she already opens rather than on a tab of its own.
+async function refreshPrepayCredit() {
+  const box = $('payPrepayBox');
+  const creditRow = $('payPrepayAsCreditRow');
+  if (!box || !creditRow) return;
+  const sale = payingLoad && payingLoad.kind === 'sale';
+  const seller = (payingLoad && payingLoad.seller) || '';
+
+  // A prepayment is money going OUT to a supplier. On a sale this whole idea
+  // is the wrong way round, and offering it would invite recording a
+  // customer's money as supplier credit.
+  if (sale || !seller) {
+    box.classList.add('hidden');
+    creditRow.classList.add('hidden');
+    return;
+  }
+
+  // The checkbox does not depend on the request: holding money as credit is
+  // offered whether or not any exists yet, because the first prepayment for
+  // a supplier has to start somewhere.
+  creditRow.classList.remove('hidden');
+  const lbl = $('payAsPrepaymentLabel');
+  if (lbl) lbl.textContent = `Hold as prepayment — credit ${seller}, not this load`;
+
+  try {
+    const c = await api('/api/prepayments/credit?seller=' + encodeURIComponent(seller));
+    const avail = Number(c && c.available) || 0;
+    // Guard against a slow answer for a supplier she has already navigated
+    // away from: by the time this lands she may have closed the modal and
+    // opened another row, and writing that row's panel with this row's
+    // figures is a wrong number on screen next to a Pay button.
+    if (!payingLoad || payingLoad.seller !== seller) return;
+    if (avail <= 0) {
+      box.classList.add('hidden');
+      return;
+    }
+    payPrepayCredit = c;
+    const pending = Number((payingLoad.payment || {}).pending);
+    // Offer the SMALLER of what the credit has and what the load still owes,
+    // so one click cannot turn a settled load into an overpayment with money
+    // meant for another load. The server refuses over-applying outright; this
+    // is so she never meets that refusal.
+    const offer = isFinite(pending) && pending > 0 ? Math.min(avail, pending) : avail;
+    $('payPrepayHeld').innerHTML =
+      `<strong>${esc(seller)}</strong> is holding ${payMoney(avail)} in prepayments.`;
+    $('pay_prepay_amount').value = offer ? offer.toFixed(2) : '';
+    $('payPrepayNote').textContent = isFinite(pending) && pending > 0 && avail > pending
+      ? `this load only owes ${payMoney(pending)}`
+      : '';
+    $('payPrepayApplyRow').classList.remove('hidden');
+    box.classList.remove('hidden');
+  } catch (e) {
+    // Never costs her the Pay modal. Credit she cannot see is a missing
+    // convenience; a modal that fails to open is a payment she cannot record.
+    console.error('[prepay] could not read supplier credit:', e.message);
+    box.classList.add('hidden');
+  }
+}
+
+let payPrepayCredit = null;
 
 function closePayModal() { $('payModal').classList.add('hidden'); payingLoad = null; }
 
@@ -12789,6 +12861,51 @@ function renderLoads(loads) {
         </div>
         <div class="modal-body">
           <div id="payLoadSummary" style="font-family:var(--font-mono); font-size:12px; color:var(--text-muted); margin-bottom:16px;"></div>
+
+          <!-- ── PREPAID CREDIT, OFFERED WHERE THE MONEY IS BEING SETTLED ──
+               Apsara: "Add a supplier prepayment option in loads", then
+               "streamline the process".
+
+               ONE surface. The first attempt at this feature shipped three —
+               a credit strip above the deck, a separate Record form, and an
+               apply panel — and she deleted it the same day it landed. Odoo
+               arrives at the same answer: a vendor prepayment sits as an
+               outstanding credit and the BILL offers it inline
+               ("Outstanding Debits: ADD") at the moment of paying. A row of
+               third-party Odoo modules exists purely to put advances on open
+               bills, which is a market telling you the separate screen does
+               not work.
+
+               So: no new tab, no new form. Credit shows here, in the modal
+               she already opens to settle this supplier, and the same modal
+               can hold money as credit instead of applying it.
+
+               Purchases only — a prepayment is money going OUT to a
+               supplier. openPayModal hides the whole block on a sale. -->
+          <div id="payPrepayBox" class="hidden" style="margin:-4px 0 16px; padding:10px 12px; border:1px solid var(--border); border-radius:8px; background:var(--bg-subtle, rgba(255,255,255,.02));">
+            <div id="payPrepayHeld" style="font-size:12px; line-height:1.5;"></div>
+            <div id="payPrepayApplyRow" class="hidden" style="display:flex; gap:8px; align-items:center; margin-top:8px; flex-wrap:wrap;">
+              <input id="pay_prepay_amount" type="number" step="any" placeholder="0.00" inputmode="decimal"
+                     style="width:120px;">
+              <button id="btnApplyPrepay" type="button" class="btn btn-secondary" style="padding:4px 12px; font-size:11px;">Apply to this load</button>
+              <span id="payPrepayNote" style="font-size:11px; color:var(--text-faint);"></span>
+            </div>
+          </div>
+
+          <!-- ── OR HOLD IT AS CREDIT INSTEAD ─────────────────────────────
+               The other half of the same surface. Ticking this records the
+               money against the SUPPLIER and not against this load, which is
+               what a prepayment is. The wording says so in full, because
+               "Pay" that deliberately does not pay this load is the one thing
+               here that could be misread — and the amount is real money.
+
+               Purchases only, same as the box above. -->
+          <div id="payPrepayAsCreditRow" class="hidden" style="margin:-8px 0 16px;">
+            <label style="display:flex; align-items:center; gap:8px; font-size:12px; cursor:pointer;">
+              <input type="checkbox" id="pay_as_prepayment" style="width:15px; height:15px; margin:0;">
+              <span id="payAsPrepaymentLabel">Hold as prepayment &mdash; credit this supplier, not this load</span>
+            </label>
+          </div>
           <div class="ld-grid-2">
             <div class="field">
               <label>Payment mode</label>
@@ -13098,6 +13215,54 @@ function wireLoadsEvents() {
   $('btnClosePay').addEventListener('click', closePayModal);
   $('btnCancelPay').addEventListener('click', closePayModal);
   $('pay_amount').addEventListener('input', updatePayPreview);
+  // ── APPLY PREPAID CREDIT — Odoo's "Outstanding Debits: ADD" ────────────
+  // One click, in the modal she is already in. No confirm: this moves money
+  // she has already paid onto a load she has chosen, the figure is in the box
+  // in front of her, and the payment it creates has the same ✕ in the history
+  // list as any other. A dialog here would be ceremony on a reversible act —
+  // and ceremony is what she deleted the first version for.
+  $('btnApplyPrepay').addEventListener('click', async () => {
+    const btn = $('btnApplyPrepay');
+    const amount = Number(($('pay_prepay_amount') || {}).value);
+    $('payErr').textContent = '';
+    if (!isFinite(amount) || amount <= 0) { $('payErr').textContent = 'How much of the credit should go on this load?'; return; }
+    const held = (payPrepayCredit && payPrepayCredit.prepayments) || [];
+    if (!held.length) { $('payErr').textContent = 'That supplier is not holding any prepayment now.'; return; }
+    btn.disabled = true; btn.textContent = 'Applying…';
+    try {
+      // ── OLDEST FIRST, AND SPLIT ACROSS AS MANY AS IT TAKES ────────────
+      // Credit is held per prepayment, not as one pot, because each one is a
+      // real transfer with its own date, bank and reference. So applying
+      // $2,000 when she has $1,200 and $800 has to walk them. Oldest first
+      // for the same reason stock does: the money that has been sitting
+      // longest gets used up, and she is not left with a trail of $3
+      // remainders on old transfers.
+      const rows = held.slice().sort((a, b) => String(a.paid_on || '').localeCompare(String(b.paid_on || '')));
+      let left = Math.round(amount * 100) / 100;
+      for (const r of rows) {
+        if (left <= 0.004) break;
+        const take = Math.min(Number(r.remaining) || 0, left);
+        if (take <= 0.004) continue;
+        await api('/api/prepayments/apply', { method: 'POST', body: JSON.stringify({
+          load_id: payingLoad.id, prepayment_id: r.id, amount: Math.round(take * 100) / 100,
+        }) });
+        left = Math.round((left - take) * 100) / 100;
+      }
+      if (left > 0.004) {
+        // Said rather than swallowed: a partial application leaves the load
+        // still owing, and she needs to know before she walks away.
+        $('payErr').textContent = `Applied what the credit had. ${payMoney(left)} of what you asked for was not covered.`;
+      }
+      await loadLoads();
+      // Reopen on the same row so she sees the new balance and the payment in
+      // the history, rather than being returned to the deck to find it.
+      openPayModal(payingLoad.id, payingLoad.kind);
+    } catch (e) {
+      $('payErr').textContent = e.message || 'Could not apply that credit.';
+    } finally {
+      btn.disabled = false; btn.textContent = 'Apply to this load';
+    }
+  });
   $('pay_mode').addEventListener('change', () => syncBankFields('pay'));
   $('pay_bank').addEventListener('change', () => syncBankFields('pay'));
   // Delegated: the history list is re-rendered after every change, so
@@ -13142,6 +13307,50 @@ function wireLoadsEvents() {
         // reads as unbanked cash.
         cash_source: ($('pay_cash_source') || {}).value || '',
       };
+
+      // ── HOLD IT AS CREDIT INSTEAD OF PUTTING IT ON THIS LOAD ──────────
+      // Apsara: "Add a supplier prepayment option in loads", "streamline the
+      // process". The SAME form, the same fields, a different destination —
+      // which is the whole reason this is a checkbox and not a second modal.
+      //
+      // Everything above has already been resolved for a supplier payment:
+      // the mode list, the bank, the Payment via answer, which cash. A
+      // prepayment needs exactly those, so reusing the body is not laziness
+      // — a second hand-built payload is how the two would drift, and the
+      // field that goes missing is always paid_via.
+      //
+      // load_id and load_kind are dropped deliberately: carrying them would
+      // make the row indistinguishable from an ordinary payment and it would
+      // start counting against this load's balance, which is the one thing a
+      // prepayment must never do.
+      const asPrepayment = !!($('pay_as_prepayment') && $('pay_as_prepayment').checked);
+      if (asPrepayment) {
+        if (payingLoad.kind === 'sale') {
+          $('payErr').textContent = 'A prepayment is money paid OUT to a supplier, so it does not apply to a sale.';
+          btn.disabled = false; btn.textContent = 'Record payment';
+          return;
+        }
+        const { load_id, load_kind, ...rest } = body;
+        try {
+          const out = await api('/api/prepayments', { method: 'POST', body: JSON.stringify({
+            ...rest, seller: payingLoad.seller,
+          }) });
+          await loadLoads();
+          closePayModal();
+          // Said out loud, because nothing on the deck will move: the load
+          // she had open still owes exactly what it did. Without this the
+          // screen looks like the save did nothing.
+          const held = ((out || {}).credit || {}).available;
+          alert(`Recorded as a prepayment. ${payingLoad.seller} is now holding `
+            + `${payMoney(held)} — apply it to a load from this same Pay box whenever you like.`);
+          return;
+        } catch (err2) {
+          $('payErr').textContent = err2.message || 'Could not record that prepayment.';
+          btn.disabled = false; btn.textContent = 'Record payment';
+          return;
+        }
+      }
+
       try {
         await api('/api/payments', { method: 'POST', body: JSON.stringify(body) });
       } catch (err) {
