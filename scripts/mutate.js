@@ -2936,6 +2936,41 @@ const MUTATIONS = [
       find: "        paid_via: (adv && adv.paid_via) || null,",
       to:   '        paid_via: null,' },
 
+    // ── THE ROUTES AND THE VOICE PATH (2026-10-01) ──────────────────────
+    // "Build prepayment properly". Helper-level mutations cannot see a route
+    // that forgets a field — which is exactly how paid_via broke live.
+    { name: 'prepay-route: the record route drops the bank and the company',
+      file: 'api.js', suites: ['supplier-prepayment'],
+      find: '            const rec = await pay.addPrepayment({\n                ...b, require_bank: clientKnowsBanks, created_by: (req.role || null),\n            });',
+      to:   '            const rec = await pay.addPrepayment({\n                seller: b.seller, amount: b.amount, mode: b.mode, created_by: (req.role || null),\n            });' },
+
+    { name: 'prepay-route: the apply route trusts the client figure instead of the ledger',
+      file: 'api.js', suites: ['supplier-prepayment'],
+      find: '                summary: pay.paymentSummary(b.load_id, load ? loads.payableOf(load) : null),',
+      to:   '                summary: { pending: b.amount },' },
+
+    { name: 'prepay-route: credit for ALL suppliers stops being answered',
+      file: 'api.js', suites: ['supplier-prepayment'],
+      find: '                if (c.available > 0) held[name] = c;',
+      to:   '                if (false) held[name] = c;' },
+
+    // The voice path's whole reason for shipping in this commit: it must
+    // refuse while she can still answer, not after she has said yes.
+    { name: 'prepay-voice: the paid-via rule is left until run()',
+      file: 'helpers/tools.js', suites: ['supplier-prepayment'],
+      find: "            pay.resolvePaidVia('purchase', mode, p.paid_via, bank);",
+      to:   '' },
+
+    { name: 'prepay-voice: it no longer says the money is against no load',
+      file: 'helpers/tools.js', suites: ['supplier-prepayment'],
+      find: "            warnings.push('This is not against any load — it sits as credit for '",
+      to:   "            if (false) warnings.push('This is not against any load — it sits as credit for '" },
+
+    { name: 'prepay-voice: any mode is accepted by voice',
+      file: 'helpers/tools.js', suites: ['supplier-prepayment'],
+      find: "            const allowed = pay.modesForKind('purchase');",
+      to:   "            const allowed = pay.PAYMENT_MODES;" },
+
     { name: 'prepay: over-applying is silently capped instead of refused',
       file: 'helpers/payments.js', suites: ['supplier-prepayment'],
       find: '    if (amount - remaining > CENT) throw new Error(`that prepayment only has ${remaining.toFixed(2)} left`);',

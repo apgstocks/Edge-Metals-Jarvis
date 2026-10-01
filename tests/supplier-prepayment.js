@@ -354,6 +354,134 @@ section('G — the legacy rows stay exactly as safe as before');
        'money that disappears from view is worse than money with an awkward label');
 }
 
+// ══════════════════════════════════════════════════════════════════════════
+section('H — END TO END, through the routes the screens will post to');
+// ══════════════════════════════════════════════════════════════════════════
+// Apsara, 2026-09-17: "ALwyas test end to end when you add a new feature."
+// Every section above calls the helper directly, and all of them pass while
+// a route forgets to forward a field — which is how paid_via broke live.
+{
+    const http = require('http');
+    const { createApi } = require(path.join(ROOT, 'api'));
+    const app = createApi();
+    const server = await new Promise((r) => { const sv = app.listen(0, '127.0.0.1', () => r(sv)); });
+    const base = `http://127.0.0.1:${server.address().port}`;
+    const req = (method, p2, { body, sid } = {}) => new Promise((resolve, reject) => {
+        const data = body == null ? null : JSON.stringify(body);
+        const headers = {};
+        if (data) { headers['Content-Type'] = 'application/json'; headers['Content-Length'] = Buffer.byteLength(data); }
+        if (sid) headers.Authorization = `Bearer ${sid}`;
+        const r2 = http.request(base + p2, { method, headers }, (res) => {
+            let raw = ''; res.on('data', (c) => { raw += c; });
+            res.on('end', () => { let j = null; try { j = JSON.parse(raw); } catch (e) {} resolve({ status: res.statusCode, json: j }); });
+        });
+        r2.on('error', reject); if (data) r2.write(data); r2.end();
+    });
+
+    const sid = ((await req('POST', '/login', { body: { password: process.env.ADMIN_PASSWORD } })).json || {}).sid;
+    ck('signed in', !!sid);
+
+    // Record one by Wire, which is the mode that needs the most fields.
+    const rec = await req('POST', '/api/prepayments', { sid, body: {
+        seller: 'Route Co', amount: 2500, mode: 'Wire', bank: 'Chase', paid_via: 'Edge Yard',
+        paid_on: '2026-10-01',
+    } });
+    ck('the route records it', rec.status === 200 && rec.json && rec.json.ok, JSON.stringify(rec.json));
+    ck('  and forwards the bank', (rec.json.prepayment || {}).bank === 'Chase',
+       'a wire with no bank cannot be matched to a statement');
+    ck('  and the company that paid', (rec.json.prepayment || {}).paid_via === 'Edge Yard',
+       'this is the field that broke live in September when a route dropped it');
+    ck('  and hands back the credit', (rec.json.credit || {}).available === 2500);
+
+    // The paid_via rule must bite at the ROUTE, not only in the helper.
+    const bad = await req('POST', '/api/prepayments', { sid, body: {
+        seller: 'NoVia Route', amount: 100, mode: 'Wire', bank: 'Chase',
+    } });
+    ck('a Wire with no "Payment via" is refused by the route', bad.status === 400
+        && /Payment via/i.test((bad.json || {}).error || ''), JSON.stringify(bad.json));
+
+    // What a supplier is holding, and the all-suppliers form the Pay modal
+    // needs in ONE call.
+    const one = await req('GET', '/api/prepayments/credit?seller=Route%20Co', { sid });
+    ck('credit for one supplier', one.status === 200 && one.json.available === 2500);
+    const all = await req('GET', '/api/prepayments/credit', { sid });
+    ck('and every supplier holding something, in one call',
+       all.status === 200 && (all.json.held || {})['Route Co']
+       && all.json.held['Route Co'].available === 2500,
+       JSON.stringify(all.json));
+
+    // Apply it to a load, which is the Odoo "Outstanding Debits: ADD".
+    await require('../helpers/json').mutateJson(cfg.LOADS_FILE, [], (l) => {
+        const list = Array.isArray(l) ? l : [];
+        list.unshift({ id: 'EDGE_R', date: '2026-10-02', seller: 'Route Co', amount: 4000, items: [], weight_unit: 'lb' });
+        return list;
+    });
+    const advId = (rec.json.credit.prepayments[0] || {}).id;
+    const ap = await req('POST', '/api/prepayments/apply', { sid, body: {
+        load_id: 'EDGE_R', prepayment_id: advId, amount: 1500,
+    } });
+    ck('the apply route works', ap.status === 200 && ap.json.ok, JSON.stringify(ap.json));
+    ck('  and recomputes the load from the ledger', (ap.json.summary || {}).pending === 2500,
+       `pending ${(ap.json.summary || {}).pending}`);
+    ck('  and says what is left on the prepayment', ap.json.remaining === 1000);
+    ck('  and the applied row inherits the form',
+       (ap.json.payment || {}).mode === 'Wire' && (ap.json.payment || {}).bank === 'Chase'
+       && (ap.json.payment || {}).paid_via === 'Edge Yard');
+
+    // Over-applying must be refused by the route too, with her figure in it.
+    const over = await req('POST', '/api/prepayments/apply', { sid, body: {
+        load_id: 'EDGE_R', prepayment_id: advId, amount: 99999,
+    } });
+    ck('over-applying is refused by the route', over.status === 400
+        && /only has 1000/.test((over.json || {}).error || ''), JSON.stringify(over.json));
+
+    await new Promise((r2) => server.close(r2));
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+section('I — AND BY TALKING, which is the caller that keeps breaking');
+// ══════════════════════════════════════════════════════════════════════════
+// CLAUDE.md records FOUR occasions where a requirement landed in shared
+// payment code and this path was the caller that could not satisfy it,
+// because it has no form to hang a field on. So the tool ships in the same
+// commit as the feature, and this section is the proof it can answer
+// everything addPrepayment asks for.
+{
+    const tools = require('../helpers/tools');
+    ck('the tool is registered', tools.TOOL_NAMES.includes('record_prepayment'));
+
+    const prop = await tools.buildWrite('record_prepayment', {
+        seller: 'Spoken Co', amount: 800, mode: 'Cash', cash_source: 'Edge Metals',
+    });
+    ck('it proposes a sentence she can check',
+       /Record a Cash prepayment of \$800\.00 to Spoken Co/.test(prop.summary), prop.summary);
+    ck('  and says it is against NO load',
+       (prop.warnings || []).some((w) => /not against any load/i.test(w)),
+       'she is confirming without a screen; if she meant an existing load this is what catches it');
+    ck('  and shows what the supplier would then hold',
+       prop.details.some(([k, v]) => /Held after/.test(k) && /800/.test(v)));
+
+    const before = readPayments().length;
+    ck('proposing writes nothing', before === readPayments().length);
+    const out = await prop.run();
+    ck('and running it records the prepayment', out.ok && !!out.prepayment_id);
+    ck('  and says the new total out loud', /holding \$800\.00/.test(out.said || ''), out.said);
+
+    // ── REFUSED AT PROPOSE, NOT AT RUN ───────────────────────────────────
+    // The exact 2026-09-17 failure: a rule that throws inside addPayment,
+    // reached only after she has already said yes.
+    let threw = null;
+    try { await tools.buildWrite('record_prepayment', { seller: 'X', amount: 10, mode: 'Wire', bank: 'Chase' }); }
+    catch (e) { threw = e.message; }
+    ck('a Wire with no company is refused AT PROPOSE', /Payment via/i.test(threw || ''), String(threw));
+
+    let threw2 = null;
+    try { await tools.buildWrite('record_prepayment', { seller: 'X', amount: 10, mode: 'Bank transfer' }); }
+    catch (e) { threw2 = e.message; }
+    ck('and a mode she removed from supplier pay is refused too',
+       /paid by/i.test(threw2 || ''), String(threw2));
+}
+
 console.log(`\n  ${pass} passed, ${fail} failed`);
 if (failures.length) { console.log('\n  failed:'); failures.forEach((f) => console.log('    · ' + f)); }
 try { fs.rmSync(TMP, { recursive: true, force: true }); } catch {}

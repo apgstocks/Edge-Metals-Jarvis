@@ -3939,6 +3939,95 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
         }
     });
 
+    // ── SUPPLIER PREPAYMENTS, EDGE YARD ──────────────────────────────────
+    // Apsara: "Add a supplier prepayment option in loads", "no for edge
+    // yard", "streamline the process", "Build prepayment properly".
+    //
+    // THREE routes, not a screen's worth. The shape is Odoo's, checked rather
+    // than remembered: a vendor prepayment sits as an OUTSTANDING CREDIT on
+    // the supplier, and the bill offers it inline — "Outstanding Debits: ADD"
+    // — at the moment of paying. Odoo's own forum threads and a row of
+    // third-party modules exist because surfacing advances on a separate
+    // screen is unpopular enough to be a market. The first attempt here
+    // shipped three surfaces and she deleted it the same day; this is why
+    // there is no fourth tab.
+    //
+    //   POST /api/prepayments                 record one (no load yet)
+    //   GET  /api/prepayments/credit?seller=  what a supplier is holding
+    //   POST /api/prepayments/apply           put some of it on a load
+    app.post('/api/prepayments', async (req, res) => {
+        try {
+            const pay = require('./helpers/payments');
+            const b = req.body || {};
+            // Same reasoning as /api/payments: whether the client SENT the
+            // field is the test, not whether the server would like it. An
+            // installed APK can be a week behind, and a prepayment refused in
+            // the yard because an old build has no bank dropdown is worse
+            // than one recorded with the bank unknown. See the long comment
+            // on that route.
+            const clientKnowsBanks = Object.prototype.hasOwnProperty.call(b, 'bank');
+            const rec = await pay.addPrepayment({
+                ...b, require_bank: clientKnowsBanks, created_by: (req.role || null),
+            });
+            res.json({
+                ok: true, prepayment: rec,
+                credit: pay.prepaymentCredit(rec.seller),
+            });
+        } catch (e) {
+            // Carried through with its figures, like the pay route, so the
+            // client can say WHICH bucket was short rather than flattening it
+            // to a sentence.
+            const body = { error: e.message };
+            if (e.code) body.code = e.code;
+            if (e.available != null) body.available = e.available;
+            if (e.bucket != null) body.bucket = e.bucket;
+            if (e.bucket_available != null) body.bucket_available = e.bucket_available;
+            if (e.shortfall != null) body.shortfall = e.shortfall;
+            if (Array.isArray(e.lenders)) body.lenders = e.lenders;
+            res.status(400).json(body);
+        }
+    });
+
+    app.get('/api/prepayments/credit', (req, res) => {
+        try {
+            const pay = require('./helpers/payments');
+            // No seller means every supplier holding something — what the Pay
+            // modal needs to decide whether to show its inline line at all,
+            // in ONE call rather than one per row.
+            const seller = String(req.query.seller || '').trim();
+            if (seller) return res.json(pay.prepaymentCredit(seller));
+            const held = {};
+            for (const p of pay.listPrepayments()) {
+                const name = String(p.seller || '').trim();
+                if (!name || held[name]) continue;
+                const c = pay.prepaymentCredit(name);
+                if (c.available > 0) held[name] = c;
+            }
+            res.json({ held });
+        } catch (e) { res.status(500).json({ error: e.message }); }
+    });
+
+    app.post('/api/prepayments/apply', async (req, res) => {
+        try {
+            const pay = require('./helpers/payments');
+            const b = req.body || {};
+            const rec = await pay.applyPrepayment({ ...b, created_by: (req.role || null) });
+            // The figures the card needs, recomputed from the ledger rather
+            // than returned from what the client sent.
+            const loads = require('./helpers/loads');
+            const load = loads.getLoad(b.load_id);
+            res.json({
+                ok: true,
+                payment: rec,
+                summary: pay.paymentSummary(b.load_id, load ? loads.payableOf(load) : null),
+                credit: pay.prepaymentCredit(rec.seller || (b.seller || '')),
+                remaining: pay.prepaymentRemaining(b.prepayment_id),
+            });
+        } catch (e) {
+            res.status(400).json({ error: e.message, code: e.code || undefined });
+        }
+    });
+
     // ── Trucker bills ─────────────────────────────────────────────────────
     // Apsara 2026-09-03: "now include a tab called trucker for everyone ... it
     // contains date, company name, load ticket number (optional), amount.
