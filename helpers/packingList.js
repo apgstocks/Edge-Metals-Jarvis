@@ -345,6 +345,23 @@ IT MAY BE EITHER OF TWO VERY DIFFERENT THINGS, and both are normal:
       already answers. Put the bundle's number (the "#1", "#2") in that row's
       "note".
 
+      A tally is often written in SEVERAL COLUMNS side by side, each headed
+      with a material ("Junk Car", "Al Cast") and each numbered from 1 again.
+      Read them COLUMN BY COLUMN, top to bottom, left to right — never across
+      the page. Picking up a number from the next column over is the single
+      commonest way this goes wrong, and it produces a weight that looks
+      perfectly plausible. Where a column is headed with a material, put that
+      heading in each of its rows' "item".
+
+      THE WRITING AT THE BOTTOM IS NOT DECORATION. A weigh sheet usually
+      carries its own arithmetic: a total under each column, and a summary
+      like "Gross Weight 56,320 - 6,095 tots = Net Weight 50,225". Those
+      figures are how the reading gets CHECKED, so capture them in
+      "written_totals" below exactly as written. Do not correct them, do not
+      compute them yourself, and do not leave them out because they are not
+      rows — if they disagree with the lines above, that disagreement is the
+      most useful thing on the page.
+
       READ EVERY NUMBERED LINE, including ones that continue onto a second
       sheet or a second photo, and including ones that have been crossed out
       and rewritten — use the CORRECTED figure where a line was amended.
@@ -363,6 +380,17 @@ IT MAY BE EITHER OF TWO VERY DIFFERENT THINGS, and both are normal:
   "customer": null,       // who it is going to — the consignee or buyer named on the list
   "weight_unit": null,    // "lb", "kg" or "mt" — whichever the weights on this document are in
   "item_description": null, // what is in the container when the document names ONE thing for the whole shipment, e.g. "Alternator". Leave null if the lines name different items — those go in each row's "item".
+  // ── WHAT THE SHEET SAYS ITS OWN NUMBERS ADD UP TO ──────────────────────
+  // Only what is actually WRITTEN. Null everywhere is the right answer for a
+  // document carrying no totals; an invented total would validate a
+  // misreading instead of catching it.
+  "written_totals": {
+    "columns": [],          // the total written UNDER each column, left to right, e.g. ["10,614", "10,972"]
+    "gross_weight": null,   // a written overall gross, e.g. "56,320"
+    "tare": null,           // a written deduction - often labelled "tots", "totes", "tare" or "boxes", e.g. "6,095"
+    "tare_label": null,     // the word actually used for it, e.g. "tots"
+    "net_weight": null      // a written overall net, e.g. "50,225"
+  },
   "rows": [               // one row per CONTAINER (shape A), per ITEM where a container is broken down by material, or per BUNDLE (shape B), in the order written
     {
       "container_no": null,        // the container this row is for, e.g. "TCLU1234567"
@@ -493,7 +521,98 @@ function normaliseScan(parsed) {
     const scanned_fields = Object.keys(fields).filter((k) => fields[k]);
     if (rows.length) scanned_fields.push('rows');
 
-    return { fields, rows, scanned_fields };
+    return { fields, rows, scanned_fields, check: checkAgainstWritten(rows, parsed.written_totals) };
+}
+
+// ── DOES THE READING ADD UP TO WHAT THE SHEET SAYS IT SHOULD? ─────────────
+// Apsara, 2026-10-01, on a packing list Jarvis generated from her weigh sheet:
+// one weight had been read as 821 where the paper said 1,059 — a value that
+// IS on the sheet, in the next column over, so nothing about it looked wrong.
+// 238 lb short on a customs document, and the only reason it was caught is
+// that she added the columns up by hand.
+//
+// She should not have to. Her sheet already carries the answer: a total under
+// every column and a Gross/tare/Net summary at the bottom. The scan now reads
+// those too (see the prompt), and this compares them against what was
+// extracted. The model checking its own arithmetic is worth little; the PAPER
+// checking it is worth a lot, because the totals were written by the person
+// who did the weighing, before any of this ran.
+//
+// It REPORTS, it does not repair. Which of the two figures is right is not
+// knowable from here — the sum could be wrong because a row was misread, or
+// because she mis-added, and both happen. Silently "correcting" either one
+// would replace a visible discrepancy with an invisible decision.
+function checkAgainstWritten(rows, written) {
+    const num = (v) => {
+        if (v == null) return null;
+        const n = Number(String(v).replace(/[^0-9.\-]/g, ''));
+        return isFinite(n) ? n : null;
+    };
+    const w = (written && typeof written === 'object') ? written : {};
+    const gross = (Array.isArray(rows) ? rows : [])
+        .map((r) => num(r && r.gross_weight_lbs)).filter((n) => n != null);
+    const read = Math.round(gross.reduce((a, b) => a + b, 0) * 100) / 100;
+
+    const out = { rows: gross.length, read_gross: read, discrepancies: [], tare: null };
+
+    // ── THE OVERALL GROSS ────────────────────────────────────────────────
+    const wGross = num(w.gross_weight);
+    if (wGross != null && Math.abs(wGross - read) > 0.5) {
+        out.discrepancies.push({
+            what: 'gross',
+            written: wGross,
+            read,
+            off_by: Math.round((read - wGross) * 100) / 100,
+            // Said plainly, because the number she needs is the DIFFERENCE —
+            // that is what she scans the columns for.
+            why: `the sheet totals ${wGross.toLocaleString()} lb but the ${gross.length} weights read add to ${read.toLocaleString()} lb`,
+        });
+    }
+
+    // ── AND EACH COLUMN, WHICH IS WHAT LOCALISES IT ──────────────────────
+    // The overall gross says something is wrong; the column totals say WHERE.
+    // On her sheet the Container column read 10,376 against a written 10,614,
+    // which points at ten numbers instead of fifty-three.
+    const cols = Array.isArray(w.columns) ? w.columns.map(num).filter((n) => n != null) : [];
+    if (cols.length) {
+        const colSum = Math.round(cols.reduce((a, b) => a + b, 0) * 100) / 100;
+        if (Math.abs(colSum - read) > 0.5) {
+            out.discrepancies.push({
+                what: 'columns',
+                written: colSum,
+                read,
+                off_by: Math.round((read - colSum) * 100) / 100,
+                why: `the ${cols.length} column totals written on the sheet add to ${colSum.toLocaleString()} lb, but the weights read add to ${read.toLocaleString()} lb`,
+            });
+        }
+        out.column_totals = cols;
+    }
+
+    // ── THE DEDUCTION THE SHEET WROTE DOWN AND NOBODY CARRIED ────────────
+    // The second half of what went wrong: her sheet deducts 6,095 lb of totes
+    // and the generated document showed tare 0 with Net = Gross — a 6,095 lb
+    // overstatement of net weight on a document a buyer pays on. The prompt
+    // never asked for it, so it was never dropped; it was never collected.
+    //
+    // Surfaced rather than applied. It is a CONTAINER-level deduction and the
+    // rows here are individual bundles, so where it belongs is a question for
+    // the form (boxes_weight_lbs on a row, or a tare row of its own) and not
+    // something to guess at while parsing.
+    const wTare = num(w.tare);
+    if (wTare != null && wTare > 0) {
+        out.tare = { amount: wTare, label: str(w.tare_label) || 'tare', net_written: num(w.net_weight) };
+        out.discrepancies.push({
+            what: 'tare',
+            written: wTare,
+            read: 0,
+            off_by: -wTare,
+            why: `the sheet deducts ${wTare.toLocaleString()} lb of ${str(w.tare_label) || 'tare'}`
+                + ' — put it on the form, or the net weight on this document is that much too high',
+        });
+    }
+
+    out.ok = out.discrepancies.length === 0;
+    return out;
 }
 
 // ── THE PDF ────────────────────────────────────────────────────────────────

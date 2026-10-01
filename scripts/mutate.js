@@ -2872,6 +2872,40 @@ const MUTATIONS = [
       find: '            if (banks.expectsBank(mode) && !bank) {',
       to:   '            if (banks.needsBank(mode) && !bank) {' },
 
+    // ── THE SCAN CHECKS ITSELF AGAINST THE SHEET (2026-10-01) ───────────
+    // Her packing list for TCLU 6619618 went out 238 lb short (821 read for
+    // 1,059 — a value from the next column over) and 6,095 lb of totes light,
+    // and nothing in the document showed either.
+    { name: 'plcheck: a misread gross is no longer caught',
+      file: 'helpers/packingList.js', suites: ['packing-list'],
+      find: '    if (wGross != null && Math.abs(wGross - read) > 0.5) {',
+      to:   '    if (false) {' },
+
+    { name: 'plcheck: the column totals stop localising it',
+      file: 'helpers/packingList.js', suites: ['packing-list'],
+      find: '        if (Math.abs(colSum - read) > 0.5) {',
+      to:   '        if (false) {' },
+
+    { name: 'plcheck: the dropped totes go unreported again',
+      file: 'helpers/packingList.js', suites: ['packing-list'],
+      find: '    if (wTare != null && wTare > 0) {',
+      to:   '    if (false) {' },
+
+    // The dangerous direction: a check that fires when the sheet carries no
+    // totals would cry wolf on every clean scan, and she would stop reading it.
+    { name: 'plcheck: it invents a discrepancy when nothing is written',
+      file: 'helpers/packingList.js', suites: ['packing-list'],
+      find: '    const wGross = num(w.gross_weight);',
+      to:   '    const wGross = num(w.gross_weight) || 0;' },
+
+    // Silently "fixing" the reading to match the paper would replace a
+    // visible discrepancy with an invisible decision — and the paper is not
+    // always right either: this very sheet has a 2 lb addition slip on it.
+    { name: 'plcheck: it quietly rewrites the reading to match the paper',
+      file: 'helpers/packingList.js', suites: ['packing-list'],
+      find: '    const out = { rows: gross.length, read_gross: read, discrepancies: [], tare: null };',
+      to:   '    const out = { rows: gross.length, read_gross: num(w.gross_weight) || read, discrepancies: [], tare: null };' },
+
     // ── A CLAIM AGAINST A LOAD WE BOUGHT (2026-10-01) ───────────────────
     // Apsara: "if payment is already made for that load-track separately...
     // if load payment not already made,ask user whether it can be adjusted in
