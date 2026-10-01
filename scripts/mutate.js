@@ -2872,6 +2872,50 @@ const MUTATIONS = [
       find: '            if (banks.expectsBank(mode) && !bank) {',
       to:   '            if (banks.needsBank(mode) && !bank) {' },
 
+    // ── THE LEDGER AGENT'S SAFETY LINE (2026-10-01) ─────────────────────
+    // "Let an AI agent handle both bills and invoice" — and, asked what it
+    // may change alone, she chose only things with ONE possible answer.
+    // Every mutation here is an attempt to get money past that line.
+    { name: 'agent: money fields become auto-fixable',
+      file: 'helpers/ledgerAgent.js', suites: ['ledger-agent'],
+      find: '    if (touchesMoney(fix)) return PROPOSED;',
+      to:   '' },
+
+    // The dangerous one: a field the allowlist has never heard of. A check
+    // added next year inventing `freight_cost` must not be able to opt itself
+    // into auto-fixing money.
+    { name: 'agent: an unknown money-smelling field is auto-fixed',
+      file: 'helpers/ledgerAgent.js', suites: ['ledger-agent'],
+      find: "    return /price|amount|cost|paid|owed|total|\\$/.test(field);",
+      to:   '    return false;' },
+
+    { name: 'agent: a fix with no provenance is applied anyway',
+      file: 'helpers/ledgerAgent.js', suites: ['ledger-agent'],
+      find: '    if (!str(fix.from_source)) return PROPOSED;',
+      to:   '' },
+
+    { name: 'agent: a check flagging its own doubt is overridden',
+      file: 'helpers/ledgerAgent.js', suites: ['ledger-agent'],
+      find: '    if (fix.needs_her === true) return PROPOSED;',
+      to:   '' },
+
+    { name: 'agent: blanking a field counts as a tidy-up',
+      file: 'helpers/ledgerAgent.js', suites: ['ledger-agent'],
+      find: "    if (!str(fix.field) || fix.to === undefined || fix.to === null || str(fix.to) === '') return PROPOSED;",
+      to:   '    if (!str(fix.field)) return PROPOSED;' },
+
+    // The email must stay silent when there is nothing, or she stops opening
+    // it — including on the day it matters.
+    { name: 'agent: it emails her every day whether or not there is anything',
+      file: 'helpers/ledgerAgent.js', suites: ['ledger-agent'],
+      find: '    if (!s.length && !p.length && !broken.length) return null;',
+      to:   '' },
+
+    { name: 'agent: a check that stopped running is swallowed',
+      file: 'helpers/ledgerAgent.js', suites: ['ledger-agent'],
+      find: "            broken.push({ id: s.id, error: String((e && e.message) || e).slice(0, 200) });",
+      to:   '            /* swallowed */' },
+
     // ── CLEARING 2025 WITHOUT ORPHANING A 2026 TRADE (2026-10-01) ───────
     // "i dont want 2025 bills unless they have an invoice in 2026."
     { name: 'keepjoin: a year-spanning trade loses its cost side',
