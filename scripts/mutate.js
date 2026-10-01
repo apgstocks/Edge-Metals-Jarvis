@@ -2763,6 +2763,32 @@ const MUTATIONS = [
       find: 'download?kind=proforma&file=${encodeURIComponent(m.file)}',
       to:   'download?kind=invoice&file=${encodeURIComponent(m.file)}' },
 
+    // ── ZELLE/CHEQUE BANK, OPTIONAL (2026-10-01) ────────────────────────
+    // Apsara: "Zelle/Cheque also has a bank.but keep it as optional".
+    //
+    // The second mutation here is the one that matters. Widening
+    // MODES_WITH_BANK makes needsBank('Zelle') true, and THREE existing
+    // callers already send require_bank for Zelle or for every non-cash mode
+    // — helpers/billPayments.js:226, helpers/salesSettlements.js:210,
+    // helpers/metalsTrucking.js:267. Without the expectsBank test in
+    // resolveForMode's required branch, all three would start demanding a
+    // bank for Zelle and Cheque, and "optional" would be reversed by a flag
+    // nobody touched.
+    { name: 'zelle-bank: a bank on a Zelle is refused again',
+      file: 'helpers/banks.js', suites: ['banks', 'supplier-prepayment'],
+      find: "const MODES_WITH_BANK = ['Wire', 'Bank transfer', 'Zelle', 'Cheque'];",
+      to:   "const MODES_WITH_BANK = ['Wire', 'Bank transfer'];" },
+
+    { name: 'zelle-bank: OPTIONAL becomes REQUIRED via a form flag',
+      file: 'helpers/banks.js', suites: ['banks'],
+      find: '        if (required && expectsBank(mode)) {',
+      to:   '        if (required) {' },
+
+    { name: 'zelle-bank: the voice path nags on every Zelle with no bank',
+      file: 'helpers/tools.js', suites: ['tools'],
+      find: '            if (banks.expectsBank(mode) && !bank) {',
+      to:   '            if (banks.needsBank(mode) && !bank) {' },
+
     // ── SUPPLIER PREPAYMENT, EDGE YARD (2026-10-01) ─────────────────────
     // Second attempt. The first shipped and was removed the same day; the
     // ledger design is hers and kept, the cash handling is what was wrong.

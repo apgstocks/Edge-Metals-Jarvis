@@ -70,12 +70,50 @@ const OTHER = 'Others';
 // resolveForMode throws for any mode not on this list, the same way it always
 // has for Cash. Both clients read this list from the server (bank_modes), so
 // the dropdown disappears without either of them being told separately.
-const MODES_WITH_BANK = ['Wire', 'Bank transfer'];
+// ── AND BACK ON, AS OPTIONAL (2026-10-01) ────────────────────────────────
+// Apsara: "Zelle/Cheque also has a bank.but keep it as optional".
+//
+// She is reversing the 2026-09-17 decision recorded above, which is hers to
+// reverse — a Zelle does leave an account. But "optional" is doing real work
+// in that sentence and the old code had no way to express it, because ONE
+// list was answering two different questions:
+//
+//   · may this mode carry a bank at all?   (is there a dropdown, is a value
+//     accepted or refused as a false statement)
+//   · is a bank EXPECTED on this mode?     (may a form demand one, and is
+//     its absence worth saying out loud)
+//
+// Wire and Bank transfer answer yes to both. Zelle and Cheque now answer yes
+// to the first and NO to the second. Collapsing them again is how "optional"
+// quietly becomes "required".
+const MODES_WITH_BANK = ['Wire', 'Bank transfer', 'Zelle', 'Cheque'];
 
-function needsBank(mode) {
+// ── WHY THIS SECOND LIST EXISTS, AND WHAT IT PROTECTS ────────────────────
+// helpers/tools.js:706 — the voice path — reads needsBank to decide whether
+// to WARN that no bank was recorded. Widening needsBank alone would make
+// every Zelle and every cheque she records by TALKING carry a warning about
+// the spend report, on a path with no dropdown to satisfy it. That is not a
+// break, it is worse in a quiet way: a nag on a correct action, which trains
+// people to ignore warnings.
+//
+// It is also the fourth time this file's shape has caught the same thing.
+// CLAUDE.md records three incidents where a requirement landed in shared
+// code and the voice path was the caller that could not satisfy it. So the
+// requirement stays on the narrow list and the voice path reads THAT.
+const MODES_EXPECTING_BANK = ['Wire', 'Bank transfer'];
+
+const inList = (list, mode) => {
     const m = String(mode || '').trim().toLowerCase();
-    return MODES_WITH_BANK.some((x) => x.toLowerCase() === m);
-}
+    return list.some((x) => x.toLowerCase() === m);
+};
+
+// MAY carry a bank. Keeps its name because resolveForMode's refusal branch
+// is its main caller and that meaning has not changed — only the membership.
+function needsBank(mode) { return inList(MODES_WITH_BANK, mode); }
+
+// A bank is EXPECTED here, so a form may demand one and its absence is worth
+// mentioning. Never true for Zelle or Cheque — that is what optional means.
+function expectsBank(mode) { return inList(MODES_EXPECTING_BANK, mode); }
 
 // ── WHAT SHE TYPED UNDER "OTHERS", KEPT ──────────────────────────────────
 // Her choice over a Banks screen: "Fixed three, but Others text is
@@ -172,7 +210,11 @@ async function resolveForMode(mode, bank, opts) {
     }
     const given = String(bank || '').trim();
     if (!given) {
-        if (required) {
+        // `required` is a form saying "I showed a dropdown, so I can insist".
+        // It only bites on a mode that EXPECTS a bank: a pay form that sends
+        // require_bank for every non-cash mode must not thereby make the
+        // optional ones mandatory. Apsara 2026-10-01: "keep it as optional".
+        if (required && expectsBank(mode)) {
             throw new Error(`Which bank did the ${mode} go out of? Pick one, or choose ${OTHER} and type it.`);
         }
         // Recorded as unknown, and the report says so. Not guessed at.
@@ -186,6 +228,6 @@ async function resolveForMode(mode, bank, opts) {
 }
 
 module.exports = {
-    BANKS, OTHER, MODES_WITH_BANK,
-    needsBank, options, learned, canonical, remember, resolveForMode,
+    BANKS, OTHER, MODES_WITH_BANK, MODES_EXPECTING_BANK,
+    needsBank, expectsBank, options, learned, canonical, remember, resolveForMode,
 };

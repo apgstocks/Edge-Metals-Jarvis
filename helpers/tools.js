@@ -703,7 +703,11 @@ const TOOLS = {
             // Said out loud rather than left blank. She is confirming a payment
             // she cannot see a form for, so the one field that will be missing
             // from the report has to be on the card in front of her.
-            if (banks.needsBank(mode) && !bank) {
+            // expectsBank, NOT needsBank. Zelle and Cheque may carry a bank
+            // from 2026-10-01 ("keep it as optional"), and warning here would
+            // nag on every Zelle she records by talking — a path with no
+            // dropdown to satisfy the warning. See helpers/banks.js.
+            if (banks.expectsBank(mode) && !bank) {
                 warnings.push(`No bank recorded for this ${mode} — it will show as "Not recorded" on the spend report.`);
             }
             // Said on the card, because confirming it is what authorises the

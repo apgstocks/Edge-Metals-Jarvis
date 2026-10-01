@@ -11819,10 +11819,17 @@ let bankOptions = ['BofA', 'Chase Bank'];
 // server's MODES_WITH_BANK. Kept in step anyway, or a Bank transfer chosen
 // before that response lands shows no bank field.
 // The fallback until the server's list lands. Kept in step with
-// helpers/banks.js's MODES_WITH_BANK — Zelle came off it on 2026-09-17
-// ("should not have bank for zelle"), and a stale fallback here would
-// show the bank row for the first moment after the modal opens.
-let bankModes = ['Wire', 'Bank transfer'];
+// helpers/banks.js's MODES_WITH_BANK, which has moved twice: Zelle came off
+// it on 2026-09-17 ("should not have bank for zelle"), then Zelle and Cheque
+// came back on as OPTIONAL on 2026-10-01 ("Zelle/Cheque also has a bank.but
+// keep it as optional"). A stale fallback here hides the bank row for the
+// first moment after the modal opens, which reads as the field not existing.
+//
+// This list is "may have a bank", i.e. show the row. It is NOT "must" —
+// banks.js keeps MODES_EXPECTING_BANK separately for that, and this client
+// must never send require_bank for Zelle or Cheque on the strength of
+// appearing here.
+let bankModes = ['Wire', 'Bank transfer', 'Zelle', 'Cheque'];
 let bankOther = 'Others';
 
 // ── AND SOMETHING HAS TO GO AND ASK ──────────────────────────────────────

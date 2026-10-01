@@ -192,6 +192,36 @@ section('E — the safety line did NOT move');
        prop.details.some(([k, v]) => k === 'Payment via' && v === 'Edge Yard'),
        'she confirms a wire without seeing which company it came out of');
 
+    // ── A ZELLE DOES NOT GET NAGGED ABOUT ITS BANK ───────────────────────
+    // Apsara, 2026-10-01: "Zelle/Cheque also has a bank.but keep it as
+    // optional". Optional means she is not told off for leaving it out.
+    //
+    // This exists because widening banks.js's MODES_WITH_BANK makes
+    // needsBank('Zelle') true, and this card's warning used to read
+    // needsBank. Every Zelle and every cheque recorded BY TALKING would have
+    // carried "No bank recorded ... will show as Not recorded on the spend
+    // report" — a warning on a correct action, on the one path with no
+    // dropdown to satisfy it. A mutation swapping expectsBank back to
+    // needsBank survived until this block existed.
+    {
+        const z = await tools.buildWrite('record_payment', { load_id: 'EDGE_02', amount: 50, mode: 'Zelle' });
+        const nags = (z.warnings || []).filter((w) => /No bank recorded/i.test(w));
+        ck('a Zelle proposed by voice is not nagged about its bank', nags.length === 0,
+           `warned: ${JSON.stringify(nags)}`);
+
+        const c = await tools.buildWrite('record_payment', { load_id: 'EDGE_02', amount: 50, mode: 'Cheque' });
+        ck('  nor a Cheque',
+           ((c.warnings || []).filter((w) => /No bank recorded/i.test(w))).length === 0);
+
+        // And the warning still fires where a bank IS expected, or this
+        // became "never warn", which is a different bug wearing the fix.
+        const w = await tools.buildWrite('record_payment',
+            { load_id: 'EDGE_02', amount: 50, mode: 'Wire', paid_via: 'Edge Yard' });
+        ck('  but a WIRE with no bank still says so',
+           ((w.warnings || []).filter((x) => /No bank recorded/i.test(x))).length === 1,
+           `warned: ${JSON.stringify(w.warnings)}`);
+    }
+
     // ── REFUSED AT PROPOSE, NOT AT RUN ───────────────────────────────────
     // Added 2026-09-17 after a live break: the paid-via rule was added to
     // addPayment and this tool had no box for it, so "record a wire payment

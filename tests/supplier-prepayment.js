@@ -118,15 +118,16 @@ section('B2 — ANY FORM OF PAYMENT, CARRYING WHAT THAT FORM NEEDS');
 // prepayment that looked fine and was missing the two facts that make a wire
 // traceable. This section is the one that would have caught that.
 {
-    // Which modes carry a bank is banks.js's MODES_WITH_BANK = ['Wire',
-    // 'Bank transfer'] — and Bank transfer is not a supplier mode, so on a
-    // prepayment only WIRE has a bank behind it. Zelle and Cheque are
-    // REFUSED one ("Zelle has no bank behind it"), per her 2026-09 decision.
-    // I had this wrong in the first version of this test and the delegation
-    // to banks.js is what got it right; that is the argument for delegating.
+    // Which modes carry a bank is banks.js's business, not this file's, and
+    // the list moved twice in two days: Zelle came OFF it on 2026-09-17 and
+    // Zelle and Cheque came back on as OPTIONAL on 2026-10-01 ("Zelle/Cheque
+    // also has a bank.but keep it as optional"). Both times the delegation
+    // to banks.js is what kept this path correct while I had the rule wrong
+    // in my head. That is the argument for delegating rather than copying a
+    // list in here.
     for (const [mode, extra, wantBank] of [
-        ['Zelle',  {}, null],
-        ['Cheque', {}, null],
+        ['Zelle',  {}, null],                                     // optional, omitted
+        ['Cheque', { bank: 'Chase' }, 'Chase'],                   // optional, given
         ['Wire',   { bank: 'Chase', paid_via: 'Edge Yard' }, 'Chase'],
     ]) {
         const before = cashInHand();
@@ -140,10 +141,14 @@ section('B2 — ANY FORM OF PAYMENT, CARRYING WHAT THAT FORM NEEDS');
         ck(`  and does not touch the petty cash box`, cashInHand() === before);
     }
     {
-        let threw = false;
-        try { await pay.addPrepayment({ seller: 'ZB Co', amount: 10, mode: 'Zelle', bank: 'Chase' }); }
-        catch (e) { threw = true; }
-        ck('a bank on a ZELLE prepayment is refused, same as everywhere else', threw);
+        // Apsara, 2026-10-01: "Zelle/Cheque also has a bank.but keep it as
+        // optional". A bank on a Zelle is now KEPT — and still never
+        // demanded, which is the half of the instruction a single list
+        // cannot express. See helpers/banks.js.
+        const p = await pay.addPrepayment({ seller: 'ZB Co', amount: 10, mode: 'Zelle', bank: 'Chase', created_by: 't' });
+        ck('a bank on a ZELLE prepayment is KEPT', p.bank === 'Chase', `stored ${JSON.stringify(p.bank)}`);
+        const p2 = await pay.addPrepayment({ seller: 'ZB2 Co', amount: 10, mode: 'Zelle', require_bank: true, created_by: 't' });
+        ck('  and a Zelle with no bank still saves, even from a form', p2.bank === null);
     }
 }
 {
