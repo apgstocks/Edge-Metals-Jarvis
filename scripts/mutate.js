@@ -2872,6 +2872,33 @@ const MUTATIONS = [
       find: '            if (banks.expectsBank(mode) && !bank) {',
       to:   '            if (banks.needsBank(mode) && !bank) {' },
 
+    // ── FILLING WHAT THE SHEET HAS AND JARVIS DOES NOT (2026-10-01) ─────
+    // "for rest of the others,check sheet properly,whatever is missed in
+    // jarvis fill it." The split is blank-vs-contradiction, and both halves
+    // of it matter.
+    { name: 'sheetfill: a CONTRADICTION is auto-applied as if it were a gap',
+      file: 'helpers/ledgerAgent.js', suites: ['ledger-agent'],
+      find: '                                needs_her: !jarvisBlank,',
+      to:   '                                needs_her: false,' },
+
+    { name: 'sheetfill: nothing is ever filled, so the sheet half does nothing',
+      file: 'helpers/ledgerAgent.js', suites: ['ledger-agent'],
+      find: '                                needs_her: !jarvisBlank,',
+      to:   '                                needs_her: true,' },
+
+    // The sync says "no customer" / "no freight charge" when a thing is
+    // absent. Read as a VALUE, a real gap becomes a disagreement with a
+    // sentence in it and never gets filled.
+    { name: "sheetfill: the sync's own \"no X\" phrasing reads as a value",
+      file: 'helpers/ledgerAgent.js', suites: ['ledger-agent'],
+      find: "                            || /^no [a-z ]+$/i.test(str(d.jarvis));",
+      to:   '' },
+
+    { name: 'sheetfill: the agent fetches the workbook itself',
+      file: 'helpers/ledgerAgent.js', suites: ['ledger-agent'],
+      find: '                const rep = this.report;',
+      to:   "                const rep = this.report || require('./metalsSheetSync').fetchWorkbook('x');" },
+
     // ── THE TWO COMPANIES STAY APART (2026-10-01) ───────────────────────
     // "EDGE_9 — Ramesh never involve yard with this." The claim reminder was
     // put in the Edge Metals sweep and in the agent; both were wrong, and

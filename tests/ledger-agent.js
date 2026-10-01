@@ -203,6 +203,77 @@ section('F — THE EMAIL, AND WHEN IT DOES NOT ARRIVE');
        'she asked to see what it changed');
 }
 
+// ══════════════════════════════════════════════════════════════════════════
+section('G — FILLING WHAT THE SHEET HAS AND JARVIS DOES NOT');
+// ══════════════════════════════════════════════════════════════════════════
+// Apsara, 2026-10-01: "for rest of the others,check sheet properly,whatever
+// is missed in jarvis fill it."
+//
+// metalsSheetSync.differences() has been computing these field by field for
+// weeks and nothing ever acted on one. The split falls out of the DATA rather
+// than needing a judgement:
+//
+//   Jarvis blank, sheet has it   → a gap being filled from the document she
+//                                  keeps it in. Nothing is overruled.
+//   Both set and disagreeing     → a contradiction. Only she knows which.
+{
+    const src = agent.defaultSources().find((s) => s.id === 'sheet-diff');
+    ck('the agent has a sheet-diff source', !!src);
+
+    src.report = { differing: [{ container_no: 'TGCU0053611', supplier: 'Calderon', differences: [
+        { field: 'container_no', sheet: 'TGCU0053611', jarvis: '' },
+        { field: 'supplier_price', sheet: '0.34', jarvis: '' },
+        { field: 'booking_no', sheet: 'BK9', jarvis: 'BK7' },
+        { field: 'customer', sheet: 'MK Trading', jarvis: 'MK Metal Trading' },
+    ] }] };
+    const out = agent.sort(src.run());
+
+    ck('a BLANK non-money field is filled from the sheet',
+       out.settled.length === 1 && out.settled[0].fix.field === 'container_no',
+       out.settled.map((f) => f.fix.field).join(', '));
+
+    // ── THE ONE THAT MUST NEVER BE AUTO-FILLED ───────────────────────────
+    // A blank price looks exactly as fillable as a blank container number,
+    // and it is the difference between a tidy-up and changing what a supplier
+    // is owed.
+    ck('a blank MONEY field is proposed, not filled',
+       out.proposed.some((f) => f.fix.field === 'supplier_price'),
+       'a gap in a price is still a price');
+
+    ck('a disagreement is proposed even on a non-money field',
+       out.proposed.some((f) => f.fix.field === 'booking_no'),
+       'a container typed in Jarvis and a different one on the sheet is a contradiction, not a gap');
+    ck('  and so is a name that merely differs',
+       out.proposed.some((f) => f.fix.field === 'customer'),
+       '"MK Trading" vs "MK Metal Trading" is hers to settle — she has said so before');
+
+    ck('the wording says which situation it is',
+       out.settled[0].title === 'Missing in Jarvis'
+       && out.proposed.some((f) => f.title === 'Jarvis and the sheet disagree'));
+    ck('  and both values are in the detail', /sheet says TGCU0053611, Jarvis has nothing/.test(out.settled[0].detail),
+       out.settled[0].detail);
+
+    // Jarvis-side "no freight charge (2 other charges)" is the sheet sync's
+    // way of saying a thing is absent. It must read as blank, not as a value.
+    src.report = { differing: [{ container_no: 'X', differences: [
+        { field: 'customer', sheet: 'Taewon', jarvis: 'no customer' },
+    ] }] };
+    ck('the sync\'s own "no X" phrasing counts as blank',
+       agent.sort(src.run()).settled.length === 1,
+       'otherwise a real gap is reported as a disagreement with a sentence');
+
+    // ── NO NETWORK IN THE AGENT ──────────────────────────────────────────
+    // The night job already fetched the workbook. A source that fetched
+    // again would double her Google calls and make this file untestable.
+    src.report = null;
+    ck('with no report handed in, it asks nobody and returns nothing',
+       src.run().length === 0,
+       'the night job holds the report and hands it in');
+    const file = fs.readFileSync(path.join(ROOT, 'helpers/ledgerAgent.js'), 'utf8');
+    ck('  and the agent never fetches a workbook itself',
+       !/fetchWorkbook|googleapis|https?:\/\//.test(file));
+}
+
 console.log(`\n  ${pass} passed, ${fail} failed`);
 if (failures.length) { console.log('\n  failed:'); failures.forEach((f) => console.log('    · ' + f)); }
 try { fs.rmSync(TMP, { recursive: true, force: true }); } catch {}

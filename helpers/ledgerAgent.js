@@ -149,6 +149,66 @@ function defaultSources() {
                 return out;
             },
         },
+        {
+            id: 'sheet-diff',
+            // ── WHERE THE SETTLED FIXES ACTUALLY COME FROM ───────────────
+            // Apsara, 2026-10-01: "for rest of the others,check sheet
+            // properly,whatever is missed in jarvis fill it."
+            //
+            // helpers/metalsSheetSync.differences() already compares her live
+            // sheet against Jarvis field by field and reports {field, sheet,
+            // jarvis}. The nightly job has been printing those for weeks and
+            // nothing has ever acted on one.
+            //
+            // The split falls out of the data rather than needing a rule:
+            //
+            //   Jarvis BLANK, the sheet has a value  → one possible answer.
+            //       Nothing is being overruled; a gap is being filled from
+            //       the document she keeps it in. SETTLED, unless the field
+            //       is money.
+            //   BOTH have values and they disagree   → two answers, and only
+            //       she knows which. ALWAYS a proposal, money or not: a
+            //       container number typed in Jarvis and a different one on
+            //       the sheet is not a gap, it is a contradiction.
+            //
+            // NO NETWORK IN HERE. The night job already fetched the workbook
+            // and holds the report; it hands it in. A source that fetched on
+            // its own would double her Google calls and make this file
+            // untestable without one.
+            report: null,
+            run() {
+                const rep = this.report;
+                const out = [];
+                const rows = (rep && Array.isArray(rep.differing)) ? rep.differing : [];
+                for (const r of rows) {
+                    for (const d of (r.differences || [])) {
+                        const jarvisBlank = str(d.jarvis) === ''
+                            || /^no [a-z ]+$/i.test(str(d.jarvis));
+                        out.push({
+                            check: 'sheet-diff',
+                            title: jarvisBlank ? 'Missing in Jarvis' : 'Jarvis and the sheet disagree',
+                            what: `${r.container_no || r.key || '(no container)'}`
+                                + `${r.supplier || r.customer ? ` — ${r.supplier || r.customer}` : ''}`,
+                            detail: `${d.field}: sheet says ${str(d.sheet) || '(blank)'}`
+                                + (jarvisBlank ? ', Jarvis has nothing' : `, Jarvis says ${str(d.jarvis)}`),
+                            fix: {
+                                field: d.field,
+                                from: d.jarvis,
+                                to: d.sheet,
+                                from_source: 'the sheet',
+                                // A disagreement is never settled, whatever
+                                // the field. classify() would already propose
+                                // it for money; this makes it explicit for
+                                // every other field too.
+                                needs_her: !jarvisBlank,
+                            },
+                        });
+                    }
+                }
+                return out;
+            },
+        },
+
         // ── NO YARD SOURCE HERE, AND THAT IS THE POINT ───────────────────
         // A yard-claims source sat here for one afternoon. Apsara removed it:
         // "EDGE_9 — Ramesh never involve yard with this."
