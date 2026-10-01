@@ -89,6 +89,36 @@ function listSavedProformas() {
     return fs.readdirSync(root).filter((f) => f.toLowerCase().endsWith('.pdf')).sort().reverse();
 }
 
+// ── WHICH OF THOSE ARE ACTUALLY PROFORMAS (2026-09-30) ────────────────────
+// Apsara: "proform ashould be in proforma,inv in invoice", and on the ones
+// already filed: "find a way to keep old invoice in inv tab only".
+//
+// A NEW function rather than a change to listSavedProformas above, because
+// that one is also what /api/proforma/copyable and the delete route reach
+// through, and narrowing it would quietly change what those see. The flag
+// marks the NEW shape: a caller that wants the split asks for the split.
+//
+// UNCLASSIFIED FILES STAY WITH THE PROFORMAS, DELIBERATELY. The cache is
+// filled on purpose (scripts/documents-folder-audit.js --write-cache), so
+// "not in the cache" means "nobody has read this one yet" — not "it is a
+// proforma" and certainly not "hide it". A document that vanishes from every
+// tab because a cache is cold is worse than one under the wrong heading: she
+// would go looking for a file the app had stopped admitting to.
+function splitSavedProformas() {
+    const all = listSavedProformas();
+    const kinds = require('./savedDocKinds');
+    const map = kinds.loadKinds();
+    const proformas = [];
+    const misfiled = [];
+    for (const f of all) {
+        const kind = kinds.kindOf(f, { kinds: map });
+        // Only a POSITIVE identification as something else moves a row out.
+        if (kind && kind !== 'proforma') misfiled.push({ file: f, kind });
+        else proformas.push(f);
+    }
+    return { proformas, misfiled };
+}
+
 // ── BILL OF LADING (2026-09-15) ─────────────────────────────────────────
 // Nested by date, NOT by container, which splits the difference between the
 // two layouts above and is a deliberate choice rather than a coin toss:
@@ -183,6 +213,6 @@ function deleteSaved({ kind, filename, date, container }) {
 module.exports = {
     safeName, SAVED_KINDS,
     saveInvoiceCopy, saveProformaCopy, saveBolCopy,
-    listSavedInvoices, listSavedProformas, listSavedBols,
+    listSavedInvoices, listSavedProformas, splitSavedProformas, listSavedBols,
     resolveSavedPath, deleteSaved,
 };

@@ -205,10 +205,75 @@ function sourceOf(entry) {
     const raw = String((entry && entry.cash_source) || '').trim();
     if (!raw) return UNASSIGNED;
     const hit = matchSource(raw);
-    // An unrecognised name is kept AS TYPED rather than forced to Unassigned.
-    // If a third bank is ever added, its old rows must not silently pour into
-    // the unbanked bucket — they would inflate a figure she reassigns from.
-    return hit || raw;
+    // ── AN UNRECOGNISED NAME READS AS UNASSIGNED (2026-10-01) ────────────
+    // Apsara: "as of now put it n unassigned.ask the user to assign it
+    // correctly later.what if user wants to assign correct bank to
+    // previously added cash in yard".
+    //
+    // This REVERSES the previous line, which kept such a name as typed. That
+    // reasoning was mine and it was wrong in the way that matters: a name
+    // outside SOURCES is a name nothing can spend from. cleanSource throws on
+    // it, so the pay modal showed every account at zero while her money sat
+    // in the file — see the note in both clients' cash rows. Keeping the name
+    // protected a tidy total at the cost of freezing real cash.
+    //
+    // Her version is also the more HONEST one. The alternative on the table
+    // was scripts/migrate-bofa-to-edge-metals.js, which rewrites 'BofA' to
+    // 'Edge Metals' — and that ASSERTS none of it was AAA Investment's. BofA
+    // split into two companies' accounts, so the app does not know that;
+    // only she does, row by row. "Unassigned" means exactly what is true:
+    // the money is there and nobody has said which account it belongs to.
+    //
+    // NOTHING IS LOST AND NOTHING IS REWRITTEN. The entry keeps its original
+    // cash_source on disk, so pendingAssignment() below can still say how
+    // much is waiting and what it was called. This changes how a row READS,
+    // not what it says.
+    //
+    // It also makes the reversal paths consistent: they stamp sourceOf() onto
+    // a refund, so a withdrawal recorded against 'BofA' used to be refunded
+    // into a bucket nothing could reach. Both halves now read as Unassigned
+    // and cancel out.
+    //
+    // cleanSource is deliberately NOT changed: a NEW row must still name a
+    // real account. This is about reading history, not about letting a client
+    // invent buckets.
+    return hit || UNASSIGNED;
+}
+
+// ── HOW MUCH OF UNASSIGNED IS WAITING TO BE ASSIGNED ─────────────────────
+// Apsara, 2026-10-01: "ask the user to assign it correctly later".
+//
+// Folding unknown names into Unassigned makes the money spendable, but on its
+// own it also makes it INVISIBLE as a thing needing attention — her opening
+// float and a pre-split BofA balance would look like one undifferentiated
+// pile. The names are still on the rows, so the distinction is recoverable,
+// and this is what recovers it.
+//
+// A BLANK source is NOT counted. That is the opening float: it never came out
+// of a bank and there is nothing to assign. Only a row that NAMES an account
+// this app no longer recognises is pending — it came from somewhere, and only
+// she knows where.
+//
+// Reassigning is already built: transfer() with reason 'reassign' puts a bank
+// behind unbanked cash as a dated entry. So this needs no new write path —
+// it needs her to be told there is something to do.
+function pendingAssignment(entries) {
+    const list = Array.isArray(entries) ? entries : [];
+    const byName = {};
+    let total = 0;
+    for (const e of list) {
+        const raw = String((e && e.cash_source) || '').trim();
+        if (!raw) continue;                       // the opening float — not pending
+        if (matchSource(raw)) continue;           // already a real account
+        const amt = toNum(e && e.amount) || 0;
+        byName[raw] = round2((byName[raw] || 0) + amt);
+        total = round2(total + amt);
+    }
+    // A name whose rows net to nothing is not worth asking about — it has
+    // already been spent or moved, and listing it would be a chore with no
+    // money behind it.
+    for (const k of Object.keys(byName)) if (!byName[k]) delete byName[k];
+    return { total: round2(total) || 0, names: byName };
 }
 
 // ── ONE NAME, AND NOTHING IS INFERRED FROM A PARTIAL ONE ──────────────────
@@ -974,7 +1039,7 @@ module.exports = {
     // clients and the server-side check read ONE list — the same reasoning
     // helpers/banks.js gives for its own: six copies of a dropdown drift
     // faster than three.
-    SOURCES, UNASSIGNED, sourceOf, cleanSource, balanceBySource, balances,
+    SOURCES, UNASSIGNED, sourceOf, pendingAssignment, cleanSource, balanceBySource, balances,
     transfer, borrowings, transfers, TRANSFER_REASONS,
     // Per-company, added 2026-09-21 when BofA became two accounts belonging
     // to two companies. Exported for the same reason SOURCES is: one map, not

@@ -906,6 +906,27 @@ body[data-theme="light"] {
     <div id="invGenList" style="font-size:12.5px; color:var(--text-muted);">Loading&hellip;</div>
   </div>
 
+  <!-- ── OLD INVOICES THAT WERE FILED AS PROFORMAS ─────────────────────────
+       Apsara, 2026-09-30: "proform ashould be in proforma,inv in invoice"
+       and "find a way to keep old invoice in inv tab only".
+
+       These are commercial invoices sitting in documents_saved/proforma/ —
+       nothing in the app files them there, so they predate this code or
+       arrived beside it. They are no longer listed under Saved proformas.
+
+       The card only appears when there are some, and it says plainly that
+       the file has not moved: Open and Delete still address it as a proforma
+       because that is where it is on disk. Pretending otherwise would give
+       her a row that does nothing when clicked. -->
+  <div id="invMisfiledCard" class="card hidden" style="padding:20px 22px; margin-top:16px;">
+    <div class="section-label" style="margin:0;">Older invoices filed under proforma</div>
+    <div style="font-size:11px; color:var(--text-faint); margin:6px 0 10px;">
+      These say &ldquo;Commercial Invoice&rdquo; on the document but are stored in the proforma
+      folder, so they no longer clutter Saved proformas. The files have not been moved.
+    </div>
+    <div id="invMisfiledList" style="font-size:12.5px; color:var(--text-muted);"></div>
+  </div>
+
   <!-- ── Verification ─────────────────────────────────────────────────────── -->
   <!-- Per Apsara: "under verification,create group as Frieght,Transport,
        Commission. Under Freight,Zimex. Under commission-Joey,Pan metal,
@@ -4786,9 +4807,54 @@ $('btnInvVersionDismiss').addEventListener('click', () => $('invVersionBanner').
 // ways in, one function that fills the form. A second filler written for this
 // list would drift from it, and the symptom would be a field that silently
 // stops being restored on one path only.
+// ── Older invoices filed under proforma ───────────────────────────────────
+// Apsara, 2026-09-30: "find a way to keep old invoice in inv tab only".
+//
+// Its own function, and its own try/catch, so a failure here can never take
+// the Generated invoices list down with it — this is the secondary list, and
+// losing the primary one to it would be a bad trade. Empty means the card
+// stays hidden: a permanently empty "older invoices" card on a clean archive
+// is furniture that teaches her to ignore that part of the screen.
+async function loadMisfiledInvoices() {
+  const card = $('invMisfiledCard');
+  const box = $('invMisfiledList');
+  if (!card || !box) return;
+  try {
+    const { misfiled_in_proforma } = await api('/api/documents/saved');
+    const rows = (misfiled_in_proforma || []).filter((m) => m && m.kind === 'invoice');
+    if (!rows.length) { card.classList.add('hidden'); box.innerHTML = ''; return; }
+    box.innerHTML = `<table style="width:100%; border-collapse:collapse; font-size:12.5px;">
+        <tr style="color:var(--text-muted); font-size:10px; letter-spacing:.08em;">
+          <th style="text-align:left; padding:5px 8px;">FILE</th><th></th><th></th>
+        </tr>
+        ${rows.map((m) => `<tr>
+          <td style="padding:5px 8px;">${esc(m.file)}</td>
+          <td style="padding:5px 8px;"><a href="/api/documents/download?kind=proforma&file=${encodeURIComponent(m.file)}" target="_blank">Open</a></td>
+          <td style="padding:5px 8px;"><button type="button" class="btn btn-secondary inv-mis-del" data-file="${esc(m.file)}" style="padding:3px 8px; font-size:10px;">Delete</button></td>
+        </tr>`).join('')}</table>`;
+    card.classList.remove('hidden');
+    // kind=proforma, because that is still where the file lives. Same route
+    // and same audit trail as deleting it from the proforma tab.
+    box.querySelectorAll('.inv-mis-del').forEach((el) => el.addEventListener('click', async () => {
+      if (!confirm(`Delete ${el.dataset.file}? The PDF and its record go.`)) return;
+      el.disabled = true;
+      try {
+        await api('/api/documents/saved?kind=proforma&file=' + encodeURIComponent(el.dataset.file), { method: 'DELETE' });
+        await loadMisfiledInvoices();
+      } catch (e) { el.disabled = false; alert('Could not delete: ' + e.message); }
+    }));
+  } catch (e) {
+    console.error('[documents] could not list older invoices filed under proforma:', e.message);
+    card.classList.add('hidden');
+  }
+}
+
 async function loadGeneratedInvoices() {
   const box = $('invGenList');
   if (!box) return;
+  // Fired alongside, not awaited — see loadMisfiledInvoices for why the two
+  // lists must not be able to fail together.
+  loadMisfiledInvoices();
   try {
     const { invoices } = await api('/api/invoice/history');
     const rows = invoices || [];

@@ -220,6 +220,36 @@ const CHECKS = [
         },
     },
 
+    // ── AN OPEN CLAIM AGAINST A LOAD WE BOUGHT ────────────────────────────
+    // Apsara, 2026-10-01: "remind user abut the claim every day".
+    //
+    // It rides HERE rather than in a reminder of its own, and that is the
+    // whole design. This sweep already goes out at 6:30am, she already reads
+    // it, and it is SILENT WHEN CLEAN — so no open claims means no new email,
+    // and settling a claim stops the reminder by itself with nothing to
+    // dismiss. A separate daily alert would be a second channel competing
+    // with this one, and the loser is whichever she starts ignoring.
+    //
+    // NO staleness filter, unlike the bill checks above. Those tolerate a row
+    // typed this morning because paperwork catches up on its own; a claim
+    // does not catch up on its own, it needs her to ring somebody. She asked
+    // for every day, so every day it is, from day one.
+    {
+        id: 'open-yard-claims',
+        title: 'Claims against yard loads that are still open',
+        why: 'a claim nobody chases is money we have written off by accident',
+        run() {
+            const yc = require('./yardClaims');
+            return yc.openForReminder().map((c) => ({
+                what: `${c.load_id}${c.seller ? ` — ${c.seller}` : ''} · $${Number(c.amount).toFixed(2)}`,
+                // Age is the point. "A claim is open" is not news on day one;
+                // "open 34 days" is the sentence that makes her act.
+                detail: `${c.reason} · raised ${c.raised_on}`
+                    + (c.age_days === null ? '' : ` (${c.age_days} day${c.age_days === 1 ? '' : 's'} ago)`),
+            }));
+        },
+    },
+
     // ── A ROW WITH NO DATE OR NO PARTY ────────────────────────────────────
     // compute() already marks these `incomplete` rather than refusing them,
     // deliberately — a form that refuses a real bill is a form she works

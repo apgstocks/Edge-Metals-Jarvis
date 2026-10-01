@@ -152,10 +152,31 @@ function cleanTrucking(entry) {
 
 // amount less haulage. null amount stays null — a load with no priced items
 // has no payable, and 0 - trucking would invent a debt the seller owes HER.
-function payableFrom(amount, trucking) {
+// ── AND A CLAIM, WHEN SHE HAS CHOSEN TO ADJUST ONE IN ────────────────────
+// Apsara, 2026-10-01: "if load payment not already made,ask user whether it
+// can be adjusted in load invoice?"
+//
+// A THIRD, OPTIONAL argument rather than a new function. Every existing
+// caller passes two and keeps the exact arithmetic it had — the deduction is
+// zero when nothing is passed, so a load with no claim is byte-identical to
+// before. helpers/yardActions.js:187 and the two call sites in this file all
+// read correctly unchanged.
+//
+// It folds into net_payable at WRITE time, exactly as trucking does, which
+// is the important part: payableOf stays a pure read of the record. Making
+// it consult the claims store instead would put a file read inside a
+// function with twenty callers, several of them in loops — yardBrief.js
+// calls it per load — and turn one figure into N reads.
+//
+// Only an ADJUSTED claim belongs here. A claim she is chasing separately
+// must NOT reduce what he is owed: she is going to pay him in full and get
+// the money back, and deducting it as well would pay him twice less.
+// helpers/yardClaims.js keeps those apart, and openAmountForLoad counts only
+// the unsettled ones for exactly this reason.
+function payableFrom(amount, trucking, claim) {
     const amt = toNum(amount);
     if (amt === null) return null;
-    return round2(amt - (toNum(trucking) || 0));
+    return round2(amt - (toNum(trucking) || 0) - (toNum(claim) || 0));
 }
 
 // THE SINGLE READER. Every place that asks "what is this seller owed" goes
@@ -306,7 +327,13 @@ async function addLoad(entry) {
         // these come straight off the request; editLoad is where absence has
         // to mean "leave it alone".
         ...cleanTrucking(entry),
-        net_payable   : payableFrom(totals.amount, entry.trucking_amount),
+        // ── A CLAIM SHE CHOSE TO ADJUST IN ──────────────────────────────
+        // Apsara 2026-10-01. Always null on a CREATE: a claim is raised
+        // against a load that already exists, never typed on the form that
+        // makes one. Present as a key from the start so no reader has to
+        // treat its absence as a special case.
+        claim_amount  : null,
+        net_payable   : payableFrom(totals.amount, entry.trucking_amount, null),
         weight_unit   : entry.weight_unit || 'lb',
         pdf_drive_id  : null, pdf_link: null,
         weights_pdf_drive_id: null, weights_pdf_link: null,
@@ -332,9 +359,17 @@ async function addLoad(entry) {
     // See helpers/oncePerSave.js for what was ruled out. The lookup runs
     // inside the mutator so it is under the file lock.
     rec.client_request_id = require('./oncePerSave').normTicket(entry.client_request_id);
+    // ── ONE DRAFT, ONE LOAD ──────────────────────────────────────────────
+    // Apsara, 2026-09-29: "ALWAYS ONE LOAD SHOULD BE CREATED". The ticket
+    // above is per save ATTEMPT and cannot carry that; this is per draft and
+    // never expires. See helpers/oncePerSave.js. Absent (voice path, a save
+    // that never autosaved) behaves exactly as before.
+    rec.draft_id = require('./oncePerSave').normDraftId(entry.draft_id);
     let already = null;
     await mutateJson(cfg.LOADS_FILE, [], (loads) => {
-        already = require('./oncePerSave').findSpent(loads, rec.client_request_id);
+        const once = require('./oncePerSave');
+        already = once.findSpent(loads, rec.client_request_id)
+            || once.findByDraft(loads, rec.draft_id);
         if (already) return loads;   // unchanged — nothing written
         // ── ONE SELLER, ONE SPELLING ─────────────────────────────────────
         // Apsara, 2026-09-16: "Sellers name/bUyers name-make it case
@@ -444,7 +479,14 @@ async function editLoad(id, entry) {
             // two assignments above — not from `entry`. The items can change
             // on an edit that never mentions trucking, and a net_payable left
             // over from the old amount is a wrong number that looks right.
-            l.net_payable = payableFrom(l.amount, l.trucking_amount);
+            // ── AND THE CLAIM, OR AN EDIT WIPES IT ──────────────────────
+            // l.claim_amount, NOT entry's: a claim is not on this form, so an
+            // edit never mentions it. Leave it out of this call and
+            // correcting a typo on a load silently hands the supplier back
+            // money she had deducted — the same trap this file already
+            // records springing on pdf_link, and outboundLoads.js on
+            // delivery_status and draft_id. Third time on this shape.
+            l.net_payable = payableFrom(l.amount, l.trucking_amount, l.claim_amount);
         }
         return loads;
     });

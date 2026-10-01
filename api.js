@@ -1805,6 +1805,11 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
                 created_by: b.created_by || req.role || 'unknown',
                 // One-time ticket — see helpers/oncePerSave.js.
                 client_request_id: b.client_request_id,
+                // The draft this load is being typed up from, if any. One
+                // draft may become at most one load — Apsara, 2026-09-29:
+                // "ALWAYS ONE LOAD SHOULD BE CREATED". Optional: absent is
+                // the old behaviour, unchanged.
+                draft_id: b.draft_id,
             });
 
             const { uploadScaleTicketImage } = require('./helpers/drive');
@@ -3934,6 +3939,95 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
         }
     });
 
+    // ── SUPPLIER PREPAYMENTS, EDGE YARD ──────────────────────────────────
+    // Apsara: "Add a supplier prepayment option in loads", "no for edge
+    // yard", "streamline the process", "Build prepayment properly".
+    //
+    // THREE routes, not a screen's worth. The shape is Odoo's, checked rather
+    // than remembered: a vendor prepayment sits as an OUTSTANDING CREDIT on
+    // the supplier, and the bill offers it inline — "Outstanding Debits: ADD"
+    // — at the moment of paying. Odoo's own forum threads and a row of
+    // third-party modules exist because surfacing advances on a separate
+    // screen is unpopular enough to be a market. The first attempt here
+    // shipped three surfaces and she deleted it the same day; this is why
+    // there is no fourth tab.
+    //
+    //   POST /api/prepayments                 record one (no load yet)
+    //   GET  /api/prepayments/credit?seller=  what a supplier is holding
+    //   POST /api/prepayments/apply           put some of it on a load
+    app.post('/api/prepayments', async (req, res) => {
+        try {
+            const pay = require('./helpers/payments');
+            const b = req.body || {};
+            // Same reasoning as /api/payments: whether the client SENT the
+            // field is the test, not whether the server would like it. An
+            // installed APK can be a week behind, and a prepayment refused in
+            // the yard because an old build has no bank dropdown is worse
+            // than one recorded with the bank unknown. See the long comment
+            // on that route.
+            const clientKnowsBanks = Object.prototype.hasOwnProperty.call(b, 'bank');
+            const rec = await pay.addPrepayment({
+                ...b, require_bank: clientKnowsBanks, created_by: (req.role || null),
+            });
+            res.json({
+                ok: true, prepayment: rec,
+                credit: pay.prepaymentCredit(rec.seller),
+            });
+        } catch (e) {
+            // Carried through with its figures, like the pay route, so the
+            // client can say WHICH bucket was short rather than flattening it
+            // to a sentence.
+            const body = { error: e.message };
+            if (e.code) body.code = e.code;
+            if (e.available != null) body.available = e.available;
+            if (e.bucket != null) body.bucket = e.bucket;
+            if (e.bucket_available != null) body.bucket_available = e.bucket_available;
+            if (e.shortfall != null) body.shortfall = e.shortfall;
+            if (Array.isArray(e.lenders)) body.lenders = e.lenders;
+            res.status(400).json(body);
+        }
+    });
+
+    app.get('/api/prepayments/credit', (req, res) => {
+        try {
+            const pay = require('./helpers/payments');
+            // No seller means every supplier holding something — what the Pay
+            // modal needs to decide whether to show its inline line at all,
+            // in ONE call rather than one per row.
+            const seller = String(req.query.seller || '').trim();
+            if (seller) return res.json(pay.prepaymentCredit(seller));
+            const held = {};
+            for (const p of pay.listPrepayments()) {
+                const name = String(p.seller || '').trim();
+                if (!name || held[name]) continue;
+                const c = pay.prepaymentCredit(name);
+                if (c.available > 0) held[name] = c;
+            }
+            res.json({ held });
+        } catch (e) { res.status(500).json({ error: e.message }); }
+    });
+
+    app.post('/api/prepayments/apply', async (req, res) => {
+        try {
+            const pay = require('./helpers/payments');
+            const b = req.body || {};
+            const rec = await pay.applyPrepayment({ ...b, created_by: (req.role || null) });
+            // The figures the card needs, recomputed from the ledger rather
+            // than returned from what the client sent.
+            const loads = require('./helpers/loads');
+            const load = loads.getLoad(b.load_id);
+            res.json({
+                ok: true,
+                payment: rec,
+                summary: pay.paymentSummary(b.load_id, load ? loads.payableOf(load) : null),
+                credit: pay.prepaymentCredit(rec.seller || (b.seller || '')),
+                remaining: pay.prepaymentRemaining(b.prepayment_id),
+            });
+        } catch (e) {
+            res.status(400).json({ error: e.message, code: e.code || undefined });
+        }
+    });
+
     // ── Trucker bills ─────────────────────────────────────────────────────
     // Apsara 2026-09-03: "now include a tab called trucker for everyone ... it
     // contains date, company name, load ticket number (optional), amount.
@@ -5159,6 +5253,16 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
                 entries: petty.history(200),
                 sources: petty.SOURCES,
                 by_source: petty.balanceBySource(petty.listEntries()),
+                // ── WHAT IS WAITING TO BE ASSIGNED ───────────────────────
+                // Apsara, 2026-10-01: "as of now put it n unassigned.ask the
+                // user to assign it correctly later". Cash recorded under a
+                // name this app no longer recognises now READS as Unassigned
+                // — spendable, and reassignable with transfer(reason:
+                // 'reassign'). That makes it usable but indistinguishable
+                // from her opening float, so the amount and the original
+                // names travel too. Additive key; a client that does not
+                // know it is unaffected.
+                pending_assignment: petty.pendingAssignment(petty.listEntries()),
                 // Added 2026-09-21, alongside again and for the same reason:
                 // BofA became two accounts belonging to two companies, and
                 // her answer was one total with the split underneath it.
@@ -5501,6 +5605,9 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
                 // save carrying a spent ticket gets the first record back
                 // instead of creating a second.
                 client_request_id: b.client_request_id,   // outbound
+                // One draft, one load — Apsara, 2026-09-29: "ALWAYS ONE LOAD
+                // SHOULD BE CREATED". Optional; absent is unchanged.
+                draft_id: b.draft_id,
             });
             // The load is saved either way. Scheduling the enquiry is a
             // second, weaker promise — an unknown trucker or a past ETA must
@@ -7801,9 +7908,29 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
     // this route doesn't need to change shape again later.
     app.get('/api/documents/saved', (req, res) => {
         try {
+            // ── PROFORMAS ONLY IN PROFORMA, INVOICES ONLY IN INVOICE ─────
+            // Apsara 2026-09-30: "proform ashould be in proforma,inv in
+            // invoice" and "find a way to keep old invoice in inv tab only".
+            //
+            // `proformas` NARROWS here: a file positively identified as a
+            // commercial invoice no longer appears under it. That is the
+            // requested change and it is the only one — the misfiled rows
+            // come back on their own key so the invoice tab can show them,
+            // with their real filing (kind: 'proforma') intact so Open and
+            // Delete keep working. Nothing on disk moves; see
+            // helpers/savedDocKinds.js for why not.
+            //
+            // A file nobody has classified stays under `proformas`, so a cold
+            // cache leaves today's behaviour exactly as it is rather than
+            // emptying the tab.
+            const split = documentsSaved.splitSavedProformas();
             res.json({
                 invoices: documentsSaved.listSavedInvoices(),
-                proformas: documentsSaved.listSavedProformas(),
+                proformas: split.proformas,
+                // Identified as belonging in the invoice tab, still filed
+                // under proforma/ on disk. Additive key — a client that does
+                // not know about it is unaffected.
+                misfiled_in_proforma: split.misfiled,
                 // Added 2026-09-15 with the BOL tab. Purely additive — the
                 // one consumer (dashboard/documents.html) destructures
                 // `{ proformas }` and is unaffected by a new key.

@@ -2248,10 +2248,17 @@ let bankOptions = ['BofA', 'Chase Bank'];
 // server's MODES_WITH_BANK. Kept in step anyway, or a Bank transfer chosen
 // before that response lands shows no bank field.
 // The fallback until the server's list lands. Kept in step with
-// helpers/banks.js's MODES_WITH_BANK — Zelle came off it on 2026-09-17
-// ("should not have bank for zelle"), and a stale fallback here would
-// show the bank row for the first moment after the modal opens.
-let bankModes = ['Wire', 'Bank transfer'];
+// helpers/banks.js's MODES_WITH_BANK, which has moved twice: Zelle came off
+// it on 2026-09-17 ("should not have bank for zelle"), then Zelle and Cheque
+// came back on as OPTIONAL on 2026-10-01 ("Zelle/Cheque also has a bank.but
+// keep it as optional"). A stale fallback here hides the bank row for the
+// first moment after the modal opens, which reads as the field not existing.
+//
+// This list is "may have a bank", i.e. show the row. It is NOT "must" —
+// banks.js keeps MODES_EXPECTING_BANK separately for that, and this client
+// must never send require_bank for Zelle or Cheque on the strength of
+// appearing here.
+let bankModes = ['Wire', 'Bank transfer', 'Zelle', 'Cheque'];
 let bankOther = 'Others';
 
 // ── AND SOMETHING HAS TO GO AND ASK ──────────────────────────────────────
@@ -2485,6 +2492,61 @@ function openPayModal(loadId, kind, opts) {
       const bankFor = (a) => (pettyCash.bank_of || {})[a] || a;
       const bankSel = $('pay_cash_bank');
       const label = $('pay_cash_source_label');
+
+      // Twin of the website's block — see dashboard/index.html for the full
+      // reasoning. Short version: Apsara 2026-10-01, "why it was all
+      // showiung 0 when i have available petty cash". Her rows are filed
+      // under a cash_source outside SOURCES ('BofA', pre-split), which
+      // balanceBySource counts and this picker cannot name. So the screen
+      // says WHICH situation she is in and names the money it can see but
+      // cannot spend, instead of showing four zeros or claiming the box is
+      // empty when it is not.
+      {
+        const note = $('pay_cash_empty');
+        if (note) {
+          const known = pettyCash.by_source && typeof pettyCash.by_source === 'object';
+          const listed = known ? srcs.reduce((t, a) => t + held(a), 0) : null;
+          const whole = Number(pettyCash.balance) || 0;
+          const stranded = known
+            ? Object.keys(pettyCash.by_source)
+                .filter((k) => !srcs.includes(k) && (Number(pettyCash.by_source[k]) || 0) > 0)
+            : [];
+
+          // ── WHAT IS WAITING TO BE ASSIGNED ─────────────────────────
+          // Apsara, 2026-10-01: "as of now put it n unassigned.ask the user
+          // to assign it correctly later". Since sourceOf folds an
+          // unrecognised name into Unassigned, that money is now spendable
+          // from this very dropdown — so the old "cannot pay from" sentence
+          // is no longer true and has gone. What remains is the ASK: say how
+          // much of Unassigned came out of a bank nobody has named yet, so
+          // she can put it right when she has a minute. Information, not a
+          // warning: she can pay today either way.
+          const pending = Number((pettyCash.pending_assignment || {}).total) || 0;
+          const pendingNames = Object.keys((pettyCash.pending_assignment || {}).names || {});
+
+          let msg = '';
+          if (known && listed === 0 && stranded.length) {
+            // Kept as a safety net, not an expected path: with folding there
+            // should be no bucket outside the list holding money. If one ever
+            // appears again, saying so beats showing zeros.
+            msg = `Your cash is filed under <strong>${stranded.map(esc).join('</strong>, <strong>')}</strong>`
+                + ` — ${fmtAmount(stranded.reduce((t, k) => t + (Number(pettyCash.by_source[k]) || 0), 0))}`
+                + ` — which this list cannot pay from, so every account above reads zero.`
+                + ` It is not lost. Move it to a named account on the <strong>Petty cash</strong> tab,`
+                + ` or pay by another mode for now.`;
+          } else if (known && pending > 0) {
+            msg = `${fmtAmount(pending)} of Unassigned came from`
+                + ` <strong>${pendingNames.map(esc).join('</strong>, <strong>')}</strong>`
+                + ` and has no account against it yet. You can pay from it now;`
+                + ` assign it to the right bank on the <strong>Petty cash</strong> tab when you have a minute.`;
+          } else if (known && listed === 0 && whole === 0) {
+            msg = 'There is no cash recorded in any account yet, so a cash payment has nothing to draw on.'
+                + ' Add your opening float on the <strong>Petty cash</strong> tab first — or pay by another mode.';
+          }
+          note.innerHTML = msg;
+          note.classList.toggle('hidden', !msg);
+        }
+      }
       // ALWAYS leaves pay_cash_source holding a real account, including when
       // the bank has only one. A hidden select holding nothing would post an
       // empty cash_source — how the pay modal broke in September.
@@ -2566,8 +2628,58 @@ function openPayModal(loadId, kind, opts) {
     if ($('btnSavePay')) $('btnSavePay').style.display = historyOnly ? 'none' : '';
     if ($('btnCancelPay')) $('btnCancelPay').textContent = historyOnly ? 'Close' : 'Cancel';
   }
+  // Fired, not awaited — the modal must open at once. Twin of the website's
+  // refreshPrepayCredit; see dashboard/index.html for the reasoning.
+  refreshPrepayCredit();
+
   $('payModal').classList.remove('hidden');
 }
+// ── PREPAID CREDIT IN THE PAY MODAL ────────────────────────────────────────
+// Twin of dashboard/index.html's. Kept byte-similar on purpose: the two
+// clients drifting on a money screen is what tests/form-parity.js exists to
+// catch, and the field that goes missing in a divergence is always the one
+// nobody looks at.
+let payPrepayCredit = null;
+
+async function refreshPrepayCredit() {
+  const box = $('payPrepayBox');
+  const creditRow = $('payPrepayAsCreditRow');
+  if (!box || !creditRow) return;
+  const sale = payingLoad && payingLoad.kind === 'sale';
+  const seller = (payingLoad && payingLoad.seller) || '';
+  if (sale || !seller) {
+    box.classList.add('hidden');
+    creditRow.classList.add('hidden');
+    return;
+  }
+  creditRow.classList.remove('hidden');
+  const lbl = $('payAsPrepaymentLabel');
+  if (lbl) lbl.textContent = `Hold as prepayment — credit ${seller}, not this load`;
+  try {
+    const c = await api('/api/prepayments/credit?seller=' + encodeURIComponent(seller));
+    const avail = Number(c && c.available) || 0;
+    // She may have closed this and opened another row while the request was
+    // in flight; writing that row's figures here is a wrong number next to a
+    // Pay button.
+    if (!payingLoad || payingLoad.seller !== seller) return;
+    if (avail <= 0) { box.classList.add('hidden'); return; }
+    payPrepayCredit = c;
+    const pending = Number((payingLoad.payment || {}).pending);
+    const offer = isFinite(pending) && pending > 0 ? Math.min(avail, pending) : avail;
+    $('payPrepayHeld').innerHTML =
+      `<strong>${esc(seller)}</strong> is holding ${payMoney(avail)} in prepayments.`;
+    $('pay_prepay_amount').value = offer ? offer.toFixed(2) : '';
+    $('payPrepayNote').textContent = isFinite(pending) && pending > 0 && avail > pending
+      ? `this load only owes ${payMoney(pending)}`
+      : '';
+    $('payPrepayApplyRow').classList.remove('hidden');
+    box.classList.remove('hidden');
+  } catch (e) {
+    console.error('[prepay] could not read supplier credit:', e.message);
+    box.classList.add('hidden');
+  }
+}
+
 
 function closePayModal() { $('payModal').classList.add('hidden'); payingLoad = null; }
 
@@ -4995,6 +5107,26 @@ function renderLoads(loads) {
         </div>
         <div class="modal-body">
           <div id="payLoadSummary" style="font-family:var(--font-mono); font-size:12px; color:var(--text-muted); margin-bottom:16px;"></div>
+
+          <!-- Prepaid credit, offered where the money is settled. ONE surface
+               — see dashboard/index.html for why (she deleted a three-surface
+               version the day it shipped, and Odoo offers advances inline on
+               the bill for the same reason). Purchases only: a prepayment is
+               money going OUT to a supplier. -->
+          <div id="payPrepayBox" class="hidden" style="margin:-4px 0 16px; padding:10px 12px; border:1px solid var(--border); border-radius:8px;">
+            <div id="payPrepayHeld" style="font-size:12px; line-height:1.5;"></div>
+            <div id="payPrepayApplyRow" class="hidden" style="display:flex; gap:8px; align-items:center; margin-top:8px; flex-wrap:wrap;">
+              <input id="pay_prepay_amount" type="number" step="any" placeholder="0.00" inputmode="decimal" style="width:120px;">
+              <button id="btnApplyPrepay" type="button" class="btn btn-secondary" style="padding:6px 14px; font-size:11px;">Apply to this load</button>
+              <span id="payPrepayNote" style="font-size:11px; color:var(--text-faint);"></span>
+            </div>
+          </div>
+          <div id="payPrepayAsCreditRow" class="hidden" style="margin:-8px 0 16px;">
+            <label style="display:flex; align-items:center; gap:8px; font-size:12px;">
+              <input type="checkbox" id="pay_as_prepayment" style="width:16px; height:16px; margin:0;">
+              <span id="payAsPrepaymentLabel">Hold as prepayment &mdash; credit this supplier, not this load</span>
+            </label>
+          </div>
           <div class="ld-grid-2">
             <div class="field">
               <label>Payment mode</label>
@@ -5055,6 +5187,16 @@ function renderLoads(loads) {
             <select id="pay_cash_bank" style="margin-bottom:10px;"></select>
             <label for="pay_cash_source" id="pay_cash_source_label">Which account</label>
             <select id="pay_cash_source"></select>
+            <!-- Apsara, 2026-09-29: "it has every thing as 0.Bofa ,chase,AAA,
+                 unassigned as 0". Four zeros and no explanation — the server
+                 already names the fix but only after Pay is pressed. Same
+                 note as the website; see dashboard/index.html for the
+                 reasoning and for why it is shown, not enforced. -->
+            <!-- Filled by JS: the sentence depends on WHICH situation she is
+                 in — no cash at all, or cash filed under a source this list
+                 cannot pay from. Empty here so neither version can be shown
+                 before the figures arrive. -->
+            <div id="pay_cash_empty" class="hidden" style="margin-top:10px; font-size:11.5px; line-height:1.5; color:#b45309;"></div>
           </div>
           <div class="ld-grid-2" style="margin-top:14px;">
             <div class="field"><label>Amount</label><input id="pay_amount" type="number" step="any" inputmode="decimal" placeholder="0.00"></div>
@@ -5232,6 +5374,40 @@ function wireLoadsEvents() {
   $('btnClosePay').addEventListener('click', closePayModal);
   $('btnCancelPay').addEventListener('click', closePayModal);
   $('pay_amount').addEventListener('input', updatePayPreview);
+  // Apply prepaid credit — Odoo's "Outstanding Debits: ADD", one click.
+  // Oldest prepayment first and split across as many as it takes: credit is
+  // held per transfer, each with its own date and bank, not as one pot.
+  $('btnApplyPrepay').addEventListener('click', async () => {
+    const btn = $('btnApplyPrepay');
+    const amount = Number(($('pay_prepay_amount') || {}).value);
+    $('payErr').textContent = '';
+    if (!isFinite(amount) || amount <= 0) { $('payErr').textContent = 'How much of the credit should go on this load?'; return; }
+    const held = (payPrepayCredit && payPrepayCredit.prepayments) || [];
+    if (!held.length) { $('payErr').textContent = 'That supplier is not holding any prepayment now.'; return; }
+    btn.disabled = true; btn.textContent = 'Applying…';
+    try {
+      const rows = held.slice().sort((a, b) => String(a.paid_on || '').localeCompare(String(b.paid_on || '')));
+      let left = Math.round(amount * 100) / 100;
+      for (const r of rows) {
+        if (left <= 0.004) break;
+        const take = Math.min(Number(r.remaining) || 0, left);
+        if (take <= 0.004) continue;
+        await api('/api/prepayments/apply', { method: 'POST', body: JSON.stringify({
+          load_id: payingLoad.id, prepayment_id: r.id, amount: Math.round(take * 100) / 100,
+        }) });
+        left = Math.round((left - take) * 100) / 100;
+      }
+      if (left > 0.004) {
+        $('payErr').textContent = `Applied what the credit had. ${payMoney(left)} of what you asked for was not covered.`;
+      }
+      await loadLoads();
+      openPayModal(payingLoad.id, payingLoad.kind);
+    } catch (e) {
+      $('payErr').textContent = e.message || 'Could not apply that credit.';
+    } finally {
+      btn.disabled = false; btn.textContent = 'Apply to this load';
+    }
+  });
   $('pay_mode').addEventListener('change', () => syncBankFields('pay'));
   $('pay_bank').addEventListener('change', () => syncBankFields('pay'));
   // Delegated: the history list re-renders after every change, so per-button
@@ -5273,6 +5449,37 @@ function wireLoadsEvents() {
         cash_source: ($('pay_cash_source') || {}).value || '',
         amount, paid_on: toIsoDate($('pay_date').value) || null, reference: $('pay_ref').value.trim() || null,
       };
+
+      // Hold it as credit instead of putting it on this load. The SAME form
+      // and the same resolved fields — mode, bank, Payment via, which cash —
+      // with load_id and load_kind dropped, because a prepayment carrying
+      // them would start counting against this load's balance. See
+      // dashboard/index.html for the long version.
+      const asPrepayment = !!($('pay_as_prepayment') && $('pay_as_prepayment').checked);
+      if (asPrepayment) {
+        if (payingLoad.kind === 'sale') {
+          $('payErr').textContent = 'A prepayment is money paid OUT to a supplier, so it does not apply to a sale.';
+          btn.disabled = false; btn.textContent = 'Record payment';
+          return;
+        }
+        const { load_id, load_kind, ...rest } = body;
+        try {
+          const out = await api('/api/prepayments', { method: 'POST', body: JSON.stringify({
+            ...rest, seller: payingLoad.seller,
+          }) });
+          await loadLoads();
+          closePayModal();
+          const held = ((out || {}).credit || {}).available;
+          alert(`Recorded as a prepayment. ${payingLoad.seller} is now holding `
+            + `${payMoney(held)} — apply it to a load from this same Pay box whenever you like.`);
+          return;
+        } catch (err2) {
+          $('payErr').textContent = err2.message || 'Could not record that prepayment.';
+          btn.disabled = false; btn.textContent = 'Record payment';
+          return;
+        }
+      }
+
       try {
         await api('/api/payments', { method: 'POST', body: JSON.stringify(body) });
       } catch (err) {
@@ -5574,6 +5781,14 @@ function wireLoadsEvents() {
         // Minted when the form opened — see resetLoadModal. Sent on CREATE
         // only; it is meaningless on an edit, which targets a known id.
         client_request_id: saveTicket,
+        // ── THE DRAFT THIS IS BEING TYPED UP FROM ──────────────────────
+        // Apsara, 2026-09-29, on a load that generated twice: "ALWAYS ONE
+        // LOAD SHOULD BE CREATED". The ticket above is per save attempt, so
+        // Save → edit → Continue mints two of them and both are honoured.
+        // This one is per draft and the server never forgets it, so the
+        // second save gets the FIRST load back. Null when the form never
+        // autosaved, which the server reads as "no draft".
+        draft_id: currentDraftId,
       };
       if (loadModalMode === 'sale') {
         // Outbound: the party typed into the seller field IS the buyer here,
@@ -5588,6 +5803,7 @@ function wireLoadsEvents() {
           weight_unit: payload.weight_unit,
           items: payload.items,
           client_request_id: payload.client_request_id,
+          draft_id: payload.draft_id,   // one draft, one load — see above
         };
         const sendSale = (extra) => (isEdit
           ? api(`/api/outbound-loads/${encodeURIComponent(editingLoadId)}`, { method: 'PUT', body: JSON.stringify({ ...salePayload, ...extra }) })

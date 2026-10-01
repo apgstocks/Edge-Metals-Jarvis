@@ -54,11 +54,23 @@ section('A — the two she named, and the escape hatch');
     // says is not there.
     ck('  Wire and Bank transfer are the modes that have a bank',
        banks.needsBank('Wire') && banks.needsBank('Bank transfer'));
-    ck('  Zelle does NOT', !banks.needsBank('Zelle'), 'her words, 2026-09-17');
-    ck('  Cash and Cheque do not either',
-       !banks.needsBank('Cash') && !banks.needsBank('Cheque'));
-    ck('  and the check is case-insensitive, because clients send what they send',
-       banks.needsBank('wire') && banks.needsBank('BANK TRANSFER') && !banks.needsBank('ZELLE'));
+    // ── ZELLE AND CHEQUE CAME BACK ON, AS OPTIONAL (2026-10-01) ──────────
+    // Apsara: "Zelle/Cheque also has a bank.but keep it as optional",
+    // reversing her 2026-09-17 decision. "Optional" is the whole content of
+    // the instruction, so the two questions are now asked separately and
+    // both are checked here. Collapsing them back into one list is how
+    // optional quietly becomes required.
+    ck('  Zelle and Cheque MAY carry one now',
+       banks.needsBank('Zelle') && banks.needsBank('Cheque'), 'her words, 2026-10-01');
+    ck('  but neither EXPECTS one — that is what optional means',
+       !banks.expectsBank('Zelle') && !banks.expectsBank('Cheque'));
+    ck('  Wire and Bank transfer expect one, as before',
+       banks.expectsBank('Wire') && banks.expectsBank('Bank transfer'));
+    ck('  Cash has none, either way',
+       !banks.needsBank('Cash') && !banks.expectsBank('Cash'));
+    ck('  and both checks are case-insensitive, because clients send what they send',
+       banks.needsBank('wire') && banks.needsBank('ZELLE')
+       && banks.expectsBank('BANK TRANSFER') && !banks.expectsBank('zelle'));
 }
 
 section('B — what it refuses, and why each one matters');
@@ -78,10 +90,10 @@ section('B — what it refuses, and why each one matters');
     ck('  and the refusal names the escape hatch',
        /Others/.test(msg) && /Wire/.test(msg), msg);
 
-    // 2. A BANK ON CASH IS A CLAIM THAT IS NOT TRUE — and since 2026-09-17,
-    //    the same goes for a Zelle. A NEW one carrying a bank is refused
-    //    rather than stored.
-    for (const mode of ['Cash', 'Cheque', 'Zelle']) {
+    // 2. A BANK ON CASH IS A CLAIM THAT IS NOT TRUE. Cash only, from
+    //    2026-10-01: Zelle and Cheque DO leave an account, so a bank on one
+    //    is a true statement she may or may not bother recording.
+    for (const mode of ['Cash']) {
         let threw = null;
         try { await banks.resolveForMode(mode, 'Chase Bank'); } catch (e) { threw = e.message; }
         // Refused whether or not the caller said it was required: a bank on a
@@ -90,6 +102,21 @@ section('B — what it refuses, and why each one matters');
         try { await banks.resolveForMode(mode, 'Chase Bank', { required: true }); } catch (e) { threwToo = e.message; }
         ck(`  ...and refused from the forms too`, !!threwToo, String(threwToo));
         ck(`a bank on a ${mode} payment is refused, not ignored`, !!threw, String(threw));
+    }
+
+    // ── OPTIONAL MEANS NEVER DEMANDED, NOT EVEN BY A FORM ────────────────
+    // require_bank is a pay form saying "I showed a dropdown, so I can
+    // insist". If that flag reached the optional modes, every Zelle typed on
+    // a form would start failing without a bank — the instruction reversed
+    // by a flag nobody changed.
+    for (const mode of ['Zelle', 'Cheque']) {
+        let kept = null, demanded = null;
+        try { kept = await banks.resolveForMode(mode, 'Chase Bank'); } catch (e) { kept = 'THREW: ' + e.message; }
+        try { demanded = await banks.resolveForMode(mode, '', { required: true }); } catch (e) { demanded = 'THREW: ' + e.message; }
+        ck(`a bank on a ${mode} is KEPT now`, kept === 'Chase Bank' || kept === 'Chase',
+           `stored as ${JSON.stringify(kept)}`);
+        ck(`  and a blank one is never demanded, even with require_bank`, demanded === null,
+           `got ${JSON.stringify(demanded)} — this is "optional" being overridden by a form flag`);
     }
     // REFUSED rather than silently dropped, and this is the assertion that
     // says so: a dropped field makes the form look like it saved something it

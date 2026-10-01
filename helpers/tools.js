@@ -538,6 +538,108 @@ const TOOLS = {
     // warnings, and a run() that is only ever called after the person
     // confirms. None of these writes anything when it is called.
 
+    // ── RECORD A SUPPLIER PREPAYMENT BY TALKING ──────────────────────────
+    // Apsara: "Add a supplier prepayment option in loads" / "edge yard" /
+    // "Build prepayment properly".
+    //
+    // THIS TOOL EXISTS IN THE SAME COMMIT AS THE FEATURE, which is the whole
+    // point. CLAUDE.md records four separate occasions when a requirement
+    // landed in shared payment code and THIS path was the caller that could
+    // not satisfy it — because it has no form to hang a field on. So every
+    // field helpers/payments.addPrepayment can demand has a box here:
+    // mode, bank, paid_via and cash_source. Checked by opening addPrepayment
+    // and listing what it reads, not by guessing.
+    //
+    // A prepayment has no load_id by design, so there is no id to validate
+    // against — the seller's NAME is all there is. That makes a misheard name
+    // the likeliest failure, and the propose card prints it back with the
+    // amount and what the supplier would then be holding, so she is agreeing
+    // to a sentence rather than a tool call.
+    record_prepayment: {
+        kind: 'write',
+        description: 'Record money paid to a supplier BEFORE there is a load for it — '
+            + 'held as credit against that supplier until it is put on a load.',
+        params: {
+            seller: { type: 'string', required: true, describe: 'the supplier who was paid' },
+            amount: { type: 'number', required: true },
+            mode: { type: 'string', required: true,
+                describe: require('./payments').modesForKind('purchase').join(', ') },
+            bank: { type: 'string', describe: 'which bank a Wire went out of, if she said' },
+            cash_source: { type: 'string', describe: 'on a CASH prepayment, which cash: '
+                + require('./pettyCash').SOURCES.filter((x) => x !== 'Unassigned').join(', ')
+                + ', or leave unsaid for unbanked cash' },
+            paid_via: { type: 'string', describe: 'Edge Yard, Edge Metals or AAA Investment — '
+                + 'whose money moved. Needed for a Wire.' },
+            paid_on: { type: 'date', describe: 'defaults to today' },
+            reference: { type: 'string' },
+            note: { type: 'string' },
+        },
+        propose: async (p) => {
+            const pay = require('./payments');
+            const seller = str(p.seller);
+            if (!seller) throw new Error('Which supplier was paid?');
+            const amount = Number(p.amount);
+            if (!isFinite(amount) || amount <= 0) throw new Error('How much was paid?');
+
+            const allowed = pay.modesForKind('purchase');
+            const mode = allowed.find((m) => m.toLowerCase() === str(p.mode).toLowerCase());
+            if (!mode) throw new Error(`A supplier is paid by ${allowed.join(', ')}.`);
+
+            // ── REFUSED AT PROPOSE, NOT AT RUN ───────────────────────────
+            // The 2026-09-17 lesson, applied up front this time: resolve the
+            // bank and the paid-via question HERE, while she can still answer
+            // it. A proposal that fails after she has said yes is exactly the
+            // failure propose-then-confirm exists to prevent.
+            const banks = require('./banks');
+            const bank = await banks.resolveForMode(mode, p.bank);
+            pay.resolvePaidVia('purchase', mode, p.paid_via, bank);
+
+            const before = pay.prepaymentCredit(seller);
+            const details = [
+                ['Supplier', seller],
+                ['Amount', money(amount)],
+                ['Mode', mode],
+            ];
+            if (bank) details.push(['Bank', bank]);
+            if (p.paid_via) details.push(['Payment via', str(p.paid_via)]);
+            if (mode === 'Cash') {
+                details.push(['Cash from', str(p.cash_source) || 'unbanked cash']);
+            }
+            details.push(['Already held for this supplier', money(before.available)]);
+            details.push(['Held after this', money(before.available + amount)]);
+
+            const warnings = [];
+            // Said out loud: a prepayment is not against any load yet, and
+            // she is confirming without a screen. If she meant to pay an
+            // EXISTING load, this is the sentence that catches it.
+            warnings.push('This is not against any load — it sits as credit for '
+                + `${seller} until you put it on one.`);
+            if (banks.expectsBank(mode) && !bank) {
+                warnings.push(`No bank recorded for this ${mode} — it will show as "Not recorded" on the spend report.`);
+            }
+
+            return {
+                summary: `Record a ${mode} prepayment of ${money(amount)} to ${seller}`,
+                details,
+                warnings,
+                run: async () => {
+                    const rec = await pay.addPrepayment({
+                        seller, amount, mode,
+                        bank: p.bank, paid_via: p.paid_via, cash_source: p.cash_source,
+                        paid_on: p.paid_on, reference: p.reference, note: p.note,
+                        created_by: 'jarvis',
+                    });
+                    const after = pay.prepaymentCredit(seller);
+                    return {
+                        ok: true,
+                        prepayment_id: rec.id,
+                        said: `Recorded. ${seller} is now holding ${money(after.available)} in prepayments.`,
+                    };
+                },
+            };
+        },
+    },
+
     record_payment: {
         kind: 'write',
         description: 'Record a payment against a purchase load.',
@@ -703,7 +805,11 @@ const TOOLS = {
             // Said out loud rather than left blank. She is confirming a payment
             // she cannot see a form for, so the one field that will be missing
             // from the report has to be on the card in front of her.
-            if (banks.needsBank(mode) && !bank) {
+            // expectsBank, NOT needsBank. Zelle and Cheque may carry a bank
+            // from 2026-10-01 ("keep it as optional"), and warning here would
+            // nag on every Zelle she records by talking — a path with no
+            // dropdown to satisfy the warning. See helpers/banks.js.
+            if (banks.expectsBank(mode) && !bank) {
                 warnings.push(`No bank recorded for this ${mode} — it will show as "Not recorded" on the spend report.`);
             }
             // Said on the card, because confirming it is what authorises the

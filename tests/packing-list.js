@@ -1618,6 +1618,105 @@ section('S2. the invoice packing list keeps its shape');
        'this is the exact regression CLAUDE.md opens with');
 }
 
+// ══════════════════════════════════════════════════════════════════════════
+// THE SCAN CHECKS ITSELF AGAINST THE SHEET'S OWN ARITHMETIC
+// ══════════════════════════════════════════════════════════════════════════
+// Apsara, 2026-10-01, on a packing list Jarvis generated from her weigh sheet
+// for TCLU 6619618. Two things were wrong with it and neither was visible on
+// the document:
+//
+//   1. One weight read 821 where the paper said 1,059. 821 IS on that sheet —
+//      Al Cast #10, the next column over — so the figure looked perfectly
+//      plausible. 238 lb short on a customs document.
+//   2. Every tare cell was 0, so it printed Net = Gross = 56,084. Her sheet
+//      deducts 6,095 lb of totes to a net of 50,225. A 6,095 lb overstatement
+//      of the figure a buyer pays on.
+//
+// The only reason either was caught is that she added the columns up by hand.
+// Her sheet already carries the answer — a total under every column and a
+// Gross/tots/Net summary — written by the person who did the weighing, before
+// any of this ran. So the scan now reads those too and compares.
+{
+    const pl = require('../helpers/packingList');
+    // Her real sheet, with the real misread in it: 821 at Container #10.
+    const asRead = [1149,1051,1018,910,1048,1302,1047,1039,945,1105,
+                    1102,1432,1166,988,1137,1032,1042,1115,1137,821,
+                    1104,1153,980,1096,954,1030,1004,1125,1109,821,
+                    1038,964,859,1436,1156,1172,1115,1587,1059,500,
+                    572,513,1244,982,1137,1157,938,1182,976,1197,
+                    1102,1187,1049];
+    const written = { columns: ['10,614','10,972','10,614','10,886','9,898','3,336'],
+                      gross_weight: '56,320', tare: '6,095', tare_label: 'tots',
+                      net_weight: '50,225' };
+    const scanOf = (weights, w) => pl.normaliseScan({
+        rows: weights.map((x) => ({ gross_weight_lbs: String(x) })), written_totals: w,
+    }).check;
+
+    const bad = scanOf(asRead, written);
+    ck('the misreading is CAUGHT', bad.ok === false,
+       'this is the document that went out at 56,084 with nobody the wiser');
+    ck('  and the gross discrepancy is named', bad.discrepancies.some((d) => d.what === 'gross'));
+    ck('  with the size of it', bad.discrepancies.some((d) => d.off_by === -236),
+       JSON.stringify(bad.discrepancies.map((d) => d.off_by)));
+    ck('  the column totals flag it too, which localises it',
+       bad.discrepancies.some((d) => d.what === 'columns'));
+    ck('  and the dropped totes are reported', bad.discrepancies.some((d) => d.what === 'tare'));
+    ck('  with the amount and the word SHE used for it',
+       bad.tare && bad.tare.amount === 6095 && bad.tare.label === 'tots',
+       JSON.stringify(bad.tare));
+    ck('  and the sentence says what happens if she ignores it',
+       bad.discrepancies.some((d) => d.what === 'tare' && /net weight on this document is that much too high/.test(d.why)));
+
+    // ── IT REPORTS, IT DOES NOT REPAIR ───────────────────────────────────
+    // Which figure is right is not knowable here: a row may be misread, or
+    // she may have mis-added. Both happen — this very sheet has a 2 lb
+    // addition slip in its own three-number column. "Correcting" either
+    // replaces a visible discrepancy with an invisible decision.
+    ck('nothing is silently corrected', bad.read_gross === 56084,
+       'the reading is reported as it was read');
+
+    // A clean read must stay quiet, or the warning becomes noise.
+    const good = asRead.slice(); good[29] = 1059;
+    const okCheck = scanOf(good, { ...written, gross_weight: '56,322',
+        columns: ['10,614','10,972','10,614','10,886','9,898','3,338'], tare: null });
+    ck('a clean read with no tare says nothing at all', okCheck.ok === true,
+       JSON.stringify(okCheck.discrepancies));
+
+    // No totals written = nothing to check against. Must not invent a problem.
+    const noTotals = scanOf(asRead, {});
+    ck('a sheet with no written totals raises nothing', noTotals.ok === true,
+       'an invented total would validate a misreading instead of catching it');
+    const noTotals2 = scanOf(asRead, null);
+    ck('  and a missing written_totals block does not throw', noTotals2.ok === true);
+
+    // The tare alone, with weights that do add up — the 6,095 case on its own.
+    const tareOnly = scanOf(good, { gross_weight: '56,322', tare: '6,095', tare_label: 'tots' });
+    ck('a correct reading that still drops the totes is NOT clean', tareOnly.ok === false);
+    ck('  and only the tare is raised', tareOnly.discrepancies.length === 1
+        && tareOnly.discrepancies[0].what === 'tare');
+
+    // Rounding: a half-pound difference is not a finding.
+    const tiny = scanOf(good, { gross_weight: '56,322' });
+    ck('an exact match is clean', tiny.ok === true);
+}
+
+// ── AND THE PROMPT ASKS FOR ALL OF IT ─────────────────────────────────────
+// The check above is worthless if the model is never asked for the totals.
+{
+    const src = fs.readFileSync(path.join(__dirname, '..', 'helpers/packingList.js'), 'utf8');
+    ck('the prompt asks for the written totals', /"written_totals"/.test(src));
+    ck('  including the tare and the word used for it',
+       /"tare_label"/.test(src) && /tots.*totes.*tare|totes/.test(src));
+    // Whitespace-tolerant: the instruction is line-wrapped in the prompt, and
+    // a check that breaks when a sentence rewraps is a check nobody keeps.
+    ck('  and says not to compute them itself',
+       /do not\s+compute them yourself/.test(src),
+       'a model inventing the total it is being checked against checks nothing');
+    ck('the prompt warns about reading ACROSS columns',
+       /never across\s*\n?\s*the page|COLUMN BY COLUMN/.test(src),
+       'that is exactly how 821 got in — the next column over');
+}
+
 console.log(`\n  ${pass} passed, ${fail} failed`);
 if (fail) { console.log('\n  FAILED:\n' + failures.map((f) => '    - ' + f).join('\n')); process.exit(1); }
 

@@ -732,10 +732,23 @@ const MUTATIONS = [
       to:   '    if (POINTS_BACK.test(t)) {' },
 
     // ── EDGE METALS MONEY, 2026-09-10 ────────────────────────────────────
+    // ── REPAIRED 2026-09-30, AFTER IT SPENT WEEKS TESTING NOTHING ────────
+    // This was written against `drawsPettyCash = mode === 'Cash' && loadKind
+    // !== 'bill'`. That line was later refactored into touchesPettyCash and
+    // the allowlist below, and the mutation's pattern stopped matching — so
+    // it reported nothing, and "0 SURVIVED" on the petty-cash set quietly
+    // stopped including the check that matters most: Edge Metals cash must
+    // never come out of the Edge Yard box. CLAUDE.md rule 5.
+    //
+    // Nothing was wrong with the CODE. What was wrong is that the harness
+    // said 22 killed, 0 survived, and two of the twenty-four were measuring
+    // an unmutated file. That is exactly the first failure in this file's
+    // own header, and it is why `not applied` is reported as loudly as a
+    // survivor.
     { name: 'metals cash drains the EDGE YARD petty cash box',
       file: 'helpers/payments.js', suites: ['bills-sales'],
-      find: "const drawsPettyCash = mode === 'Cash' && loadKind !== 'bill';",
-      to:   "const drawsPettyCash = mode === 'Cash';" },
+      find: "    const touchesPettyCash = mode === 'Cash' && !EDGE_METALS_KINDS.has(loadKind);",
+      to:   "    const touchesPettyCash = mode === 'Cash';" },
     // ── TWO MUTATIONS TRIED AND DELIBERATELY NOT KEPT, 2026-09-10 ────────
     // Removing the `&& load_kind !== 'bill'` guard from either delete path in
     // helpers/payments.js SURVIVES, and it should: pettyCash.reverseForPayment
@@ -1095,10 +1108,24 @@ const MUTATIONS = [
       file: 'helpers/spendReport.js', suites: ['bills-sales'],
       find: "        else if (r.kind === 'sale_cost') saleCostTotal = round2(saleCostTotal + r.amount);",
       to:   '        else if (false) {}' },
+    // Repaired 2026-09-30 for the same reason as the one above: the set
+    // gained 'metals_trucking' and this pattern stopped matching.
     { name: 'an Edge Metals cash settlement drains the yard petty cash box',
       file: 'helpers/payments.js', suites: ['bills-sales'],
-      find: "const EDGE_METALS_KINDS = new Set(['bill', 'sale_cost']);",
-      to:   "const EDGE_METALS_KINDS = new Set(['bill']);" },
+      find: "const EDGE_METALS_KINDS = new Set(['bill', 'sale_cost', 'metals_trucking']);",
+      to:   "const EDGE_METALS_KINDS = new Set(['bill', 'metals_trucking']);" },
+
+    // ── AND THE MEMBER NOTHING EVER CHECKED ─────────────────────────────
+    // 'metals_trucking' was added to this set without a mutation of its
+    // own, and the only one pointing at the set had already gone stale. So
+    // from the day it landed until today, dropping it would have sent a
+    // metals haulage payment made in CASH out of the Edge Yard petty cash
+    // box, and the suite would have stayed green. Found by the harness
+    // reporting "2 not applied", not by reading the code.
+    { name: 'metals haulage paid in cash drains the yard petty cash box',
+      file: 'helpers/payments.js', suites: ['bills-sales'],
+      find: "const EDGE_METALS_KINDS = new Set(['bill', 'sale_cost', 'metals_trucking']);",
+      to:   "const EDGE_METALS_KINDS = new Set(['bill', 'sale_cost']);" },
     { name: 'a container already sold is offered for sale again',
       file: 'dashboard/index.html', suites: ['ledger-render'],
       find: "            <button class=\"fbPick\" data-id=\"${esc(b.id)}\" ${b.sold ? 'disabled' : ''}",
@@ -2638,6 +2665,464 @@ const MUTATIONS = [
       file: 'helpers/tools.js', suites: ['load-trucking'],
       find: "                summary: paymentSummary(id, require('./loads').payableOf(load)),",
       to:   '                summary: paymentSummary(id, load.amount),' },
+
+    // ── ONE DRAFT, ONE LOAD (2026-09-29) ────────────────────────────────
+    // Apsara, rejecting a fix that only narrowed the race window on a load
+    // that generated twice: "NO..IT IS BUSINESS LOGIC LOSE.ALWAYS ONE LOAD
+    // SHOULD BE CREATED".
+    //
+    // These five were run by hand when the invariant shipped, and that was
+    // not good enough: a mutation I ran once and described in a commit
+    // message is a claim, not a check. This file's own header says the
+    // catalogue is checked in precisely so "which mutations were run" stops
+    // being something I assert. Adding them late is the fix; the lesson is
+    // that a hand-run mutation is not done until it is in here.
+    { name: 'one-draft: the purchase path stops spending the draft id',
+      file: 'helpers/loads.js', suites: ['one-draft-one-load'],
+      find: "        already = once.findSpent(loads, rec.client_request_id)\n            || once.findByDraft(loads, rec.draft_id);",
+      to:   '        already = once.findSpent(loads, rec.client_request_id);' },
+
+    { name: 'one-draft: the sale path stops spending the draft id',
+      file: 'helpers/outboundLoads.js', suites: ['one-draft-one-load'],
+      find: "        already = once.findSpent(loads, rec.client_request_id)\n            || once.findByDraft(loads, rec.draft_id);",
+      to:   '        already = once.findSpent(loads, rec.client_request_id);' },
+
+    // The one that nearly shipped broken. buildRecord rebuilds a sale from a
+    // fixed field list, so an edit wipes anything it does not name — the trap
+    // helpers/outboundLoads.js already records springing on pdf_link and on
+    // delivery_status. Her duplicate came from a flow WITH an edit in the
+    // middle of it, so a load that forgets its draft hands the draft back its
+    // freedom to create a second one.
+    { name: 'one-draft: an EDIT frees the draft to create a second load',
+      file: 'helpers/outboundLoads.js', suites: ['one-draft-one-load'],
+      find: '        patch.draft_id = prior.draft_id || null;',
+      to:   '        patch.draft_id = null;' },
+
+    // A TTL is the plausible-looking change that quietly reintroduces the
+    // bug — findSpent has one, so copying it here looks like consistency.
+    // "ALWAYS ONE LOAD" has no clock in it.
+    { name: 'one-draft: the draft id expires after 24h like a save ticket',
+      file: 'helpers/oncePerSave.js', suites: ['one-draft-one-load'],
+      find: '        if (r && normDraftId(r.draft_id) === d) return r;',
+      to:   "        if (r && normDraftId(r.draft_id) === d) { const at = Date.parse(r.created_at || ''); if (isFinite(at) && (Date.now() - at) > TICKET_TTL_MS) continue; return r; }" },
+
+    { name: 'one-draft: the create route drops draft_id on the floor',
+      file: 'api.js', suites: ['one-draft-one-load'],
+      find: '                draft_id: b.draft_id,\n            });\n\n            const { uploadScaleTicketImage }',
+      to:   '            });\n\n            const { uploadScaleTicketImage }' },
+
+    // The client half. currentDraftId is nulled by clearLoadDraft, so a clear
+    // that runs BEFORE the payload is built sends null on every save and
+    // turns the whole guard off silently. My first version of this check
+    // searched forward from the payload and passed with the clear inserted
+    // before it — shaped like the code instead of like the property, which is
+    // the failure mode CLAUDE.md names. Only a mutation found it.
+    { name: 'one-draft: the website stops sending the draft id',
+      file: 'dashboard/index.html', suites: ['one-draft-one-load'],
+      find: '        draft_id: currentDraftId,',
+      to:   '        draft_id: null,' },
+
+    { name: 'one-draft: the app stops sending the draft id',
+      file: 'mobile-app/www/index.html', suites: ['one-draft-one-load'],
+      find: '        draft_id: currentDraftId,',
+      to:   '        draft_id: null,' },
+
+    // ── PROFORMA IN PROFORMA, INVOICE IN INVOICE (2026-09-30) ───────────
+    // Apsara: "proform ashould be in proforma,inv in invoice" and "find a
+    // way to keep old invoice in inv tab only".
+    { name: 'doc-kinds: the proforma tab goes back to listing old invoices',
+      file: 'api.js', suites: ['saved-doc-kinds'],
+      find: '                proformas: split.proformas,',
+      to:   '                proformas: documentsSaved.listSavedProformas(),' },
+
+    // ── THE DANGEROUS DIRECTION ─────────────────────────────────────────
+    // This feature can fail two ways and they are not equal. Listing an
+    // invoice under proformas is untidy. Treating "not yet classified" as
+    // "not a proforma" makes documents vanish from EVERY tab the moment the
+    // cache is cold — a fresh VM, a deleted file — with no error anywhere
+    // and no way for her to know the app stopped listing them.
+    { name: 'doc-kinds: an UNCLASSIFIED file is dropped from the proforma tab',
+      file: 'helpers/documentsSaved.js', suites: ['saved-doc-kinds'],
+      find: "        if (kind && kind !== 'proforma') misfiled.push({ file: f, kind });",
+      to:   "        if (kind !== 'proforma') misfiled.push({ file: f, kind });" },
+
+    { name: 'doc-kinds: a stale verdict survives the file being replaced',
+      file: 'helpers/savedDocKinds.js', suites: ['saved-doc-kinds'],
+      find: '    if (stat && rec.size != null && Number(rec.size) !== Number(stat.size)) return null;',
+      to:   '' },
+
+    { name: 'doc-kinds: any string is accepted as a kind',
+      file: 'helpers/savedDocKinds.js', suites: ['saved-doc-kinds'],
+      find: '            if (!e || !e.filename || !KNOWN.has(e.kind)) continue;',
+      to:   '            if (!e || !e.filename) continue;' },
+
+    // A row that moves tab but keeps its real filing is only useful if the
+    // buttons still address it where it lives.
+    { name: 'doc-kinds: the invoice tab opens misfiled rows as kind=invoice',
+      file: 'dashboard/documents.html', suites: ['saved-doc-kinds'],
+      find: 'download?kind=proforma&file=${encodeURIComponent(m.file)}',
+      to:   'download?kind=invoice&file=${encodeURIComponent(m.file)}' },
+
+    // ── FOUR ZEROS WITH NO EXPLANATION (2026-09-29 / 2026-10-01) ────────
+    // Apsara: "it has every thing as 0.Bofa ,chase,AAA,unassigned as 0",
+    // then "did you fix", then the fact that changed the diagnosis:
+    // "why it was all showiung 0 when i have available petty cash".
+    //
+    // Four earlier entries here went NOT APPLIED when the block was
+    // rewritten for that last message — i.e. measured nothing, silently.
+    // Re-pointed; the first one is the falsehood the rewrite removed.
+    { name: 'cash-zero: it tells her the box is empty when it is NOT',
+      file: 'dashboard/index.html', suites: ['pay-cash-empty-note'],
+      find: '          if (known && listed === 0 && stranded.length) {',
+      to:   '          if (false) {' },
+
+    { name: 'cash-zero: the app tells her the box is empty when it is NOT',
+      file: 'mobile-app/www/index.html', suites: ['pay-cash-empty-note'],
+      find: '          if (known && listed === 0 && stranded.length) {',
+      to:   '          if (false) {' },
+
+    { name: 'cash-zero: the website goes back to saying nothing',
+      file: 'dashboard/index.html', suites: ['pay-cash-empty-note'],
+      find: "          note.classList.toggle('hidden', !msg);",
+      to:   "          note.classList.toggle('hidden', true);" },
+
+    { name: 'cash-zero: the app goes back to saying nothing',
+      file: 'mobile-app/www/index.html', suites: ['pay-cash-empty-note'],
+      find: "          note.classList.toggle('hidden', !msg);",
+      to:   "          note.classList.toggle('hidden', true);" },
+
+    // "Not loaded yet" read as "no cash" flashes a warning on every open and
+    // clears a second later, which teaches her to skip the one line here
+    // worth reading.
+    { name: 'cash-zero: it cries wolf while the figures are still loading',
+      file: 'dashboard/index.html', suites: ['pay-cash-empty-note'],
+      find: "          const known = pettyCash.by_source && typeof pettyCash.by_source === 'object';",
+      to:   '          const known = true;' },
+
+    // One empty bucket is an ordinary day — the borrow prompt covers it.
+    { name: 'cash-zero: it warns on one empty bucket among several',
+      file: 'dashboard/index.html', suites: ['pay-cash-empty-note'],
+      find: '          const listed = known ? srcs.reduce((t, a) => t + held(a), 0) : null;',
+      to:   '          const listed = known ? Math.min(...srcs.map((a) => held(a))) : null;' },
+
+    // The stranded money must be NAMED. "Some of your cash is elsewhere" is
+    // not actionable; "BofA — $4,200" tells her where to look.
+    { name: 'cash-zero: the stranded bucket is not named',
+      file: 'dashboard/index.html', suites: ['pay-cash-empty-note'],
+      find: "            msg = `Your cash is filed under <strong>${stranded.map(esc).join('</strong>, <strong>')}</strong>`",
+      to:   '            msg = `Some of your cash is elsewhere`' },
+
+    // ── UNRECOGNISED CASH READS AS UNASSIGNED (2026-10-01) ──────────────
+    // Apsara: "as of now put it n unassigned.ask the user to assign it
+    // correctly later.what if user wants to assign correct bank to previously
+    // added cash in yard".
+    { name: 'unassigned-fold: an unknown source keeps its own unspendable bucket',
+      file: 'helpers/pettyCash.js', suites: ['petty-cash-banks', 'pay-cash-empty-note'],
+      find: '    return hit || UNASSIGNED;',
+      to:   '    return hit || raw;' },
+
+    // Folding without the prompt makes the money usable but silent — her
+    // opening float and a pre-split bank balance become one pile and nobody
+    // is ever asked to sort it out. That is half the instruction missing.
+    { name: 'unassigned-fold: nothing is reported as needing assignment',
+      file: 'helpers/pettyCash.js', suites: ['petty-cash-banks'],
+      find: '        if (matchSource(raw)) continue;           // already a real account',
+      to:   '        continue;' },
+
+    // A blank source is the opening float. Counting it as pending asks her to
+    // assign money that never came out of a bank — a chore with no answer.
+    { name: 'unassigned-fold: the opening float is reported as needing assignment',
+      file: 'helpers/pettyCash.js', suites: ['petty-cash-banks'],
+      find: "        if (!raw) continue;                       // the opening float — not pending",
+      to:   "        if (!raw) { byName['(blank)'] = round2((byName['(blank)'] || 0) + (toNum(e && e.amount) || 0)); continue; }" },
+
+    { name: 'unassigned-fold: the route stops telling the client about it',
+      file: 'api.js', suites: ['pay-cash-empty-note'],
+      find: '                pending_assignment: petty.pendingAssignment(petty.listEntries()),',
+      to:   '                pending_assignment: { total: 0, names: {} },' },
+
+    { name: 'unassigned-fold: the pay modal stops asking her to assign it',
+      file: 'dashboard/index.html', suites: ['pay-cash-empty-note'],
+      find: '          } else if (known && pending > 0) {',
+      to:   '          } else if (false) {' },
+
+    // ── ZELLE/CHEQUE BANK, OPTIONAL (2026-10-01) ────────────────────────
+    // Apsara: "Zelle/Cheque also has a bank.but keep it as optional".
+    //
+    // The second mutation here is the one that matters. Widening
+    // MODES_WITH_BANK makes needsBank('Zelle') true, and THREE existing
+    // callers already send require_bank for Zelle or for every non-cash mode
+    // — helpers/billPayments.js:226, helpers/salesSettlements.js:210,
+    // helpers/metalsTrucking.js:267. Without the expectsBank test in
+    // resolveForMode's required branch, all three would start demanding a
+    // bank for Zelle and Cheque, and "optional" would be reversed by a flag
+    // nobody touched.
+    { name: 'zelle-bank: a bank on a Zelle is refused again',
+      file: 'helpers/banks.js', suites: ['banks', 'supplier-prepayment'],
+      find: "const MODES_WITH_BANK = ['Wire', 'Bank transfer', 'Zelle', 'Cheque'];",
+      to:   "const MODES_WITH_BANK = ['Wire', 'Bank transfer'];" },
+
+    { name: 'zelle-bank: OPTIONAL becomes REQUIRED via a form flag',
+      file: 'helpers/banks.js', suites: ['banks'],
+      find: '        if (required && expectsBank(mode)) {',
+      to:   '        if (required) {' },
+
+    { name: 'zelle-bank: the voice path nags on every Zelle with no bank',
+      file: 'helpers/tools.js', suites: ['tools'],
+      find: '            if (banks.expectsBank(mode) && !bank) {',
+      to:   '            if (banks.needsBank(mode) && !bank) {' },
+
+    // ── THE SCAN CHECKS ITSELF AGAINST THE SHEET (2026-10-01) ───────────
+    // Her packing list for TCLU 6619618 went out 238 lb short (821 read for
+    // 1,059 — a value from the next column over) and 6,095 lb of totes light,
+    // and nothing in the document showed either.
+    { name: 'plcheck: a misread gross is no longer caught',
+      file: 'helpers/packingList.js', suites: ['packing-list'],
+      find: '    if (wGross != null && Math.abs(wGross - read) > 0.5) {',
+      to:   '    if (false) {' },
+
+    { name: 'plcheck: the column totals stop localising it',
+      file: 'helpers/packingList.js', suites: ['packing-list'],
+      find: '        if (Math.abs(colSum - read) > 0.5) {',
+      to:   '        if (false) {' },
+
+    { name: 'plcheck: the dropped totes go unreported again',
+      file: 'helpers/packingList.js', suites: ['packing-list'],
+      find: '    if (wTare != null && wTare > 0) {',
+      to:   '    if (false) {' },
+
+    // The dangerous direction: a check that fires when the sheet carries no
+    // totals would cry wolf on every clean scan, and she would stop reading it.
+    { name: 'plcheck: it invents a discrepancy when nothing is written',
+      file: 'helpers/packingList.js', suites: ['packing-list'],
+      find: '    const wGross = num(w.gross_weight);',
+      to:   '    const wGross = num(w.gross_weight) || 0;' },
+
+    // Silently "fixing" the reading to match the paper would replace a
+    // visible discrepancy with an invisible decision — and the paper is not
+    // always right either: this very sheet has a 2 lb addition slip on it.
+    { name: 'plcheck: it quietly rewrites the reading to match the paper',
+      file: 'helpers/packingList.js', suites: ['packing-list'],
+      find: '    const out = { rows: gross.length, read_gross: read, discrepancies: [], tare: null };',
+      to:   '    const out = { rows: gross.length, read_gross: num(w.gross_weight) || read, discrepancies: [], tare: null };' },
+
+    // ── A CLAIM AGAINST A LOAD WE BOUGHT (2026-10-01) ───────────────────
+    // Apsara: "if payment is already made for that load-track separately...
+    // if load payment not already made,ask user whether it can be adjusted in
+    // load invoice?" and "remind user abut the claim every day".
+    { name: 'yclaim: an EDIT wipes the adjusted claim off the load',
+      file: 'helpers/loads.js', suites: ['yard-claims'],
+      find: '            l.net_payable = payableFrom(l.amount, l.trucking_amount, l.claim_amount);',
+      to:   '            l.net_payable = payableFrom(l.amount, l.trucking_amount);' },
+
+    { name: 'yclaim: a settled claim still reduces what he is owed',
+      file: 'helpers/yardClaims.js', suites: ['yard-claims'],
+      find: '        .filter((c) => !SETTLED.has(c.status))',
+      to:   '' },
+
+    // An overpaid load has negative outstanding. Without the floor,
+    // Math.min returns a NEGATIVE adjustment — which ADDS money to what he
+    // is owed, off the back of a claim against him.
+    { name: 'yclaim: an overpaid load produces a NEGATIVE adjustment',
+      file: 'helpers/yardClaims.js', suites: ['yard-claims'],
+      find: '    const canAdjust = round2(Math.max(0, Math.min(claim, Math.max(0, outstanding)))) || 0;',
+      to:   '    const canAdjust = round2(Math.min(claim, outstanding)) || 0;' },
+
+    { name: 'yclaim: an unpriced load is offered an adjustment anyway',
+      file: 'helpers/yardClaims.js', suites: ['yard-claims'],
+      find: "            state: 'unpriced', outstanding: null, claim,\n            can_adjust: 0, adjustable_now: 0, must_track: claim,",
+      to:   "            state: 'unpaid', outstanding: 0, claim,\n            can_adjust: claim, adjustable_now: claim, must_track: 0," },
+
+    { name: 'yclaim: a claim can be raised with no reason',
+      file: 'helpers/yardClaims.js', suites: ['yard-claims'],
+      find: "    if (!reason) throw new Error('what is the claim for? (short reason, e.g. \"20% dirt in the Al combo\")');",
+      to:   '' },
+
+    { name: 'yclaim: the daily reminder stops reminding',
+      file: 'helpers/integritySweep.js', suites: ['yard-claims'],
+      find: '            return yc.openForReminder().map((c) => ({',
+      to:   '            return [].map((c) => ({' },
+
+    { name: 'yclaim: the reminder loses the age that makes her act',
+      file: 'helpers/integritySweep.js', suites: ['yard-claims'],
+      find: "                    + (c.age_days === null ? '' : ` (${c.age_days} day${c.age_days === 1 ? '' : 's'} ago)`),",
+      to:   "                    + '',"},
+
+    { name: 'yclaim: the reminder shows newest first',
+      file: 'helpers/yardClaims.js', suites: ['yard-claims'],
+      find: '        .sort((a, b) => (b.age_days || 0) - (a.age_days || 0));',
+      to:   '        .sort((a, b) => (a.age_days || 0) - (b.age_days || 0));' },
+
+    { name: 'yclaim: the claim vanishes from the seller\'s ticket',
+      file: 'helpers/pdf.js', suites: ['yard-claims'],
+      find: "                        ...(claim > 0 ? [{ label: 'Less claim', value: `-$${fmtAmount(claim)}` }] : []),",
+      to:   '' },
+
+    { name: 'yclaim: and from the slip he walks away with',
+      file: 'helpers/pdf.js', suites: ['yard-claims'],
+      find: "            line(`Less claim: -$${fmtAmount(rcpClaim)}`, { size: 8.5, color: MUTED, gap: 1 });",
+      to:   '' },
+
+    { name: 'yclaim: a SALE ticket starts carrying it',
+      file: 'helpers/pdf.js', suites: ['yard-claims'],
+      find: '                const claim = !isSale ? Number(load.claim_amount) || 0 : 0;',
+      to:   '                const claim = Number(load.claim_amount) || 0;' },
+
+    // ── SUPPLIER PREPAYMENT, EDGE YARD (2026-10-01) ─────────────────────
+    // Second attempt. The first shipped and was removed the same day; the
+    // ledger design is hers and kept, the cash handling is what was wrong.
+    // These four are the money.
+    { name: 'prepay: a CASH prepayment never leaves the petty cash box',
+      file: 'helpers/payments.js', suites: ['supplier-prepayment'],
+      find: "    const touchesPettyCash = mode === 'Cash' && !EDGE_METALS_KINDS.has(loadKind);\n\n    let cashEntry = null;\n    let cashTaken = null;\n    if (touchesPettyCash) {",
+      to:   "    const touchesPettyCash = mode === 'Cash' && !EDGE_METALS_KINDS.has(loadKind);\n\n    let cashEntry = null;\n    let cashTaken = null;\n    if (false) {" },
+
+    { name: 'prepay: applying it takes the cash out a SECOND time',
+      file: 'helpers/payments.js', suites: ['supplier-prepayment'],
+      find: '        from_prepayment: true,',
+      to:   '        from_prepayment: false,' },
+
+    // ── TWO MUTATIONS TRIED AND DELIBERATELY NOT KEPT, 2026-10-01 ───────
+    // Undoing an applied prepayment is protected TWICE and neither guard can
+    // be mutated to a red on its own:
+    //
+    //   · deleteByLoad / deletePayment skip rows flagged from_prepayment, so
+    //     reverseForPayment is never called for them;
+    //   · reverseForPayment itself bails on `if (!taken.length) return list`,
+    //     because an applied row's key matches no petty cash entry.
+    //
+    // Remove either and the other still holds, so each mutation survives
+    // alone — and removing both at once is not a mutation, it is a rewrite.
+    // A third fact makes it safer still: the reversal amount is the SUM of
+    // matching entries, and the sum of none is zero, so no arrangement of
+    // these two lines can move money.
+    //
+    // They are left out rather than parked as known survivors, because a
+    // permanently-red entry teaches everyone to skim the survivor list —
+    // which is the only interesting output this script has. The property is
+    // covered from the other side instead: tests/supplier-prepayment.js
+    // section E asserts both the balance AND that the petty cash book gains
+    // no phantom row, so a future refactor that collapses the two layers
+    // into one will fail there.
+
+    // ── ANY FORM OF PAYMENT, CARRYING WHAT THAT FORM NEEDS ──────────────
+    // Apsara, 2026-10-01: "not only cash prepayment,advance can be in any
+    // form of payment na". My first cut accepted any mode and then dropped
+    // the fields non-cash modes depend on. These three are that gap.
+    { name: 'prepay: any payment mode is accepted, incl. ones she removed',
+      file: 'helpers/payments.js', suites: ['supplier-prepayment'],
+      find: "    const allowedModes = modesForKind(loadKind);",
+      to:   '    const allowedModes = PAYMENT_MODES.slice();' },
+
+    // The bank line is IDENTICAL in addPayment, so a bare pattern matched
+    // twice and the harness reported "not applied" — i.e. measured nothing.
+    // Anchored on the paidVia line that follows it only here.
+    { name: 'prepay: a wire records no bank',
+      file: 'helpers/payments.js', suites: ['supplier-prepayment'],
+      find: "    const bank = await banks.resolveForMode(mode, input.bank, { required: input.require_bank === true });\n    const paidVia = resolvePaidVia(loadKind, mode, input.paid_via, bank);",
+      to:   '    const bank = null;\n    const paidVia = resolvePaidVia(loadKind, mode, input.paid_via, bank);' },
+
+    { name: 'prepay: a wire never asks which company paid',
+      file: 'helpers/payments.js', suites: ['supplier-prepayment'],
+      find: '    const paidVia = resolvePaidVia(loadKind, mode, input.paid_via, bank);\n\n    const touchesPettyCash',
+      to:   '    const paidVia = null;\n\n    const touchesPettyCash' },
+
+    { name: 'prepay: applying loses the company that paid',
+      file: 'helpers/payments.js', suites: ['supplier-prepayment'],
+      find: "        paid_via: (adv && adv.paid_via) || null,",
+      to:   '        paid_via: null,' },
+
+    // ── THE ROUTES AND THE VOICE PATH (2026-10-01) ──────────────────────
+    // "Build prepayment properly". Helper-level mutations cannot see a route
+    // that forgets a field — which is exactly how paid_via broke live.
+    { name: 'prepay-route: the record route drops the bank and the company',
+      file: 'api.js', suites: ['supplier-prepayment'],
+      find: '            const rec = await pay.addPrepayment({\n                ...b, require_bank: clientKnowsBanks, created_by: (req.role || null),\n            });',
+      to:   '            const rec = await pay.addPrepayment({\n                seller: b.seller, amount: b.amount, mode: b.mode, created_by: (req.role || null),\n            });' },
+
+    { name: 'prepay-route: the apply route trusts the client figure instead of the ledger',
+      file: 'api.js', suites: ['supplier-prepayment'],
+      find: '                summary: pay.paymentSummary(b.load_id, load ? loads.payableOf(load) : null),',
+      to:   '                summary: { pending: b.amount },' },
+
+    { name: 'prepay-route: credit for ALL suppliers stops being answered',
+      file: 'api.js', suites: ['supplier-prepayment'],
+      find: '                if (c.available > 0) held[name] = c;',
+      to:   '                if (false) held[name] = c;' },
+
+    // The voice path's whole reason for shipping in this commit: it must
+    // refuse while she can still answer, not after she has said yes.
+    { name: 'prepay-voice: the paid-via rule is left until run()',
+      file: 'helpers/tools.js', suites: ['supplier-prepayment'],
+      find: "            pay.resolvePaidVia('purchase', mode, p.paid_via, bank);",
+      to:   '' },
+
+    { name: 'prepay-voice: it no longer says the money is against no load',
+      file: 'helpers/tools.js', suites: ['supplier-prepayment'],
+      find: "            warnings.push('This is not against any load — it sits as credit for '",
+      to:   "            if (false) warnings.push('This is not against any load — it sits as credit for '" },
+
+    { name: 'prepay-voice: any mode is accepted by voice',
+      file: 'helpers/tools.js', suites: ['supplier-prepayment'],
+      find: "            const allowed = pay.modesForKind('purchase');",
+      to:   "            const allowed = pay.PAYMENT_MODES;" },
+
+    // ── BOTH SCREENS (2026-10-01) ───────────────────────────────────────
+    { name: 'prepay-ui: a prepayment is saved carrying this load id',
+      file: 'dashboard/index.html', suites: ['supplier-prepayment'],
+      find: '        const { load_id, load_kind, ...rest } = body;',
+      to:   '        const rest = body;' },
+
+    { name: 'prepay-ui: the offer is not capped by what the load owes',
+      file: 'dashboard/index.html', suites: ['supplier-prepayment'],
+      find: '    const offer = isFinite(pending) && pending > 0 ? Math.min(avail, pending) : avail;',
+      to:   '    const offer = avail;' },
+
+    // The obvious mutation here — awaiting the lookup — is a SYNTAX error,
+    // because openPayModal is not async. The harness refused it and said so,
+    // which is the "not applied" report doing its job: an unapplied mutation
+    // measures nothing, and reporting it as a pass would have been a lie.
+    // The property is tested from the other end instead: the panel is only
+    // ever filled by this call, so removing it is the real regression.
+    { name: 'prepay-ui: the credit panel is never filled',
+      file: 'dashboard/index.html', suites: ['supplier-prepayment'],
+      find: '  refreshPrepayCredit();\n\n  $(\'payModal\').classList.remove(\'hidden\');',
+      to:   '  $(\'payModal\').classList.remove(\'hidden\');' },
+
+    { name: 'prepay-ui: credit is offered on a SALE too',
+      file: 'dashboard/index.html', suites: ['supplier-prepayment'],
+      find: '  if (sale || !seller) {',
+      to:   '  if (!seller) {' },
+
+    { name: 'prepay-ui: a partial application says nothing',
+      file: 'dashboard/index.html', suites: ['supplier-prepayment'],
+      find: "        $('payErr').textContent = `Applied what the credit had. ${payMoney(left)} of what you asked for was not covered.`;",
+      to:   '        /* silently partial */' },
+
+    { name: 'prepay-ui: the phone stops offering it at all',
+      file: 'mobile-app/www/index.html', suites: ['supplier-prepayment'],
+      find: '          <div id="payPrepayBox" class="hidden"',
+      to:   '          <div id="payPrepayBoxGone" class="hidden"' },
+
+    { name: 'prepay: over-applying is silently capped instead of refused',
+      file: 'helpers/payments.js', suites: ['supplier-prepayment'],
+      find: '    if (amount - remaining > CENT) throw new Error(`that prepayment only has ${remaining.toFixed(2)} left`);',
+      to:   '' },
+
+    { name: 'prepay: an unapplied prepayment carries a load_id',
+      file: 'helpers/payments.js', suites: ['supplier-prepayment'],
+      find: '        load_id: null,\n        load_kind: loadKind,\n        seller,',
+      to:   "        load_id: 'EDGE_1',\n        load_kind: loadKind,\n        seller," },
+
+    { name: 'prepay: remaining is stored instead of derived',
+      file: 'helpers/payments.js', suites: ['supplier-prepayment'],
+      find: '    return round2(num0(adv.amount) - used);',
+      to:   '    return round2(num0(adv.amount));' },
+
+    { name: 'doc-kinds: the audit records verdicts it is not sure of',
+      file: 'scripts/documents-folder-audit.js', suites: ['saved-doc-kinds'],
+      find: "        if (WRITE_CACHE && require('../helpers/savedDocKinds').KNOWN.has(res.what)) {",
+      to:   '        if (WRITE_CACHE) {' },
 ];
 
 // ── CRASH-SAFE, NOT JUST EXIT-SAFE ───────────────────────────────────────
