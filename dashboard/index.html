@@ -12116,12 +12116,61 @@ function openPayModal(loadId, kind, opts) {
       // server list not having arrived, and claiming "there is no cash"
       // while the figures are still loading would be a lie that clears
       // itself a second later, which is the worst kind.
+      //
+      // ── AND THE CASE THAT WAS ACTUALLY HAPPENING ──────────────────────
+      // Apsara, 2026-10-01: "Also check why it was all showiung 0 when i
+      // have available petty cash". She has cash. So "the box is empty" was
+      // the WRONG explanation, and a note saying so would have been a
+      // falsehood printed on the screen — worse than the four zeros it
+      // replaced.
+      //
+      // What is really happening: her rows are filed under a cash_source the
+      // four-bucket scheme does not recognise — 'BofA', from before it was
+      // split into Edge Metals and AAA Investment. balanceBySource KEEPS
+      // that key and counts it (see helpers/pettyCash.js), and
+      // petty.balance() includes it, so the money is right there in the
+      // response. This picker builds its list from SOURCES and reads held()
+      // for those four names only, so her money is in the payload and the
+      // dropdown steps over it.
+      //
+      // It is not selectable either, and that is the part no dropdown change
+      // can fix: withdrawForPayment calls cleanSource, which THROWS for any
+      // name outside SOURCES. Offering 'BofA' here would turn four silent
+      // zeros into an error after she pressed Pay. The only supported fix is
+      // scripts/migrate-bofa-to-edge-metals.js, which renames those rows —
+      // and that is hers to run, because it asserts none of that money was
+      // AAA Investment's.
+      //
+      // So the screen's job is to say WHICH of the two situations she is in,
+      // and name the money it can see but cannot spend.
       {
         const note = $('pay_cash_empty');
         if (note) {
+          // by_source absent is the server list not having arrived. Claiming
+          // anything then is a lie that clears itself a second later.
           const known = pettyCash.by_source && typeof pettyCash.by_source === 'object';
-          const total = known ? srcs.reduce((t, a) => t + held(a), 0) : null;
-          note.classList.toggle('hidden', !(known && total === 0));
+          const listed = known ? srcs.reduce((t, a) => t + held(a), 0) : null;
+          // Every row in the box, including sources this picker cannot name.
+          const whole = Number(pettyCash.balance) || 0;
+          // The buckets holding money that is not on the list.
+          const stranded = known
+            ? Object.keys(pettyCash.by_source)
+                .filter((k) => !srcs.includes(k) && (Number(pettyCash.by_source[k]) || 0) > 0)
+            : [];
+
+          let msg = '';
+          if (known && listed === 0 && stranded.length) {
+            msg = `Your cash is filed under <strong>${stranded.map(esc).join('</strong>, <strong>')}</strong>`
+                + ` — ${fmtAmount(stranded.reduce((t, k) => t + (Number(pettyCash.by_source[k]) || 0), 0))}`
+                + ` — which this list cannot pay from yet, so every account above reads zero.`
+                + ` It is not lost. Move it to a named account on the <strong>Petty cash</strong> tab,`
+                + ` or pay by another mode for now.`;
+          } else if (known && listed === 0 && whole === 0) {
+            msg = 'There is no cash recorded in any account yet, so a cash payment has nothing to draw on.'
+                + ' Add your opening float on the <strong>Petty cash</strong> tab first — or pay by another mode.';
+          }
+          note.innerHTML = msg;
+          note.classList.toggle('hidden', !msg);
         }
       }
 
@@ -12821,10 +12870,11 @@ function renderLoads(loads) {
 
                  Shown, not enforced: the box could be topped up in another
                  tab while this modal is open, and the server decides. -->
-            <div id="pay_cash_empty" class="hidden" style="margin-top:10px; font-size:11.5px; line-height:1.5; color:var(--warn, #b45309);">
-              There is no cash recorded in any account yet, so a cash payment has nothing to draw on.
-              Add your opening float on the <strong>Petty cash</strong> tab first &mdash; or pay by another mode.
-            </div>
+            <!-- Filled by JS: the sentence depends on WHICH situation she is
+                 in — no cash at all, or cash filed under a source this list
+                 cannot pay from. Empty here so neither version can be shown
+                 before the figures arrive. -->
+            <div id="pay_cash_empty" class="hidden" style="margin-top:10px; font-size:11.5px; line-height:1.5; color:var(--warn, #b45309);"></div>
           </div>
           <div class="ld-grid-2" style="margin-top:14px;">
             <div class="field"><label>Amount</label><input id="pay_amount" type="number" step="any" placeholder="0.00" inputmode="decimal"></div>

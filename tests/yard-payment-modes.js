@@ -133,12 +133,61 @@ section('B — and the SERVER holds the rule, not just the dropdown');
     // yard assistant records payments without going near one.
     await petty.addTopUp({ amount: 10000, date: '2026-09-15', note: 'float' });
 
-    // A SALE — receive payment, money in. Her rule.
-    for (const mode of ['Zelle', 'Wire', 'Cheque']) {
+    // ── A SALE — RECEIVE PAYMENT, MONEY IN ───────────────────────────────
+    // This block PASSED FOR THE WRONG REASON until 2026-10-01, and that is
+    // the whole lesson in it.
+    //
+    // It asserted that Zelle, Wire and Cheque are all refused on a sale, and
+    // it passed. But it sent `bank: 'Chase Bank'` with every one of them, and
+    // until today banks.js REFUSED a bank on Zelle and Cheque outright
+    // ("Zelle has no bank behind it"). So two of the three were being
+    // rejected on the BANK, not on the mode, and the check could not tell the
+    // difference. When Apsara reversed that on 2026-10-01 ("Zelle/Cheque also
+    // has a bank.but keep it as optional") the accidental refusal vanished
+    // and this went red — a test turning red because an UNRELATED rule
+    // changed is the definition of a check shaped like the code instead of
+    // like the property. CLAUDE.md names this failure mode; here it is.
+    //
+    // WHAT IS ACTUALLY ENFORCED, proven by running it with no bank at all:
+    //   sale + Cash          -> accepted
+    //   sale + Bank transfer -> accepted (asks "Paid to", as designed)
+    //   sale + Zelle         -> ACCEPTED
+    //   sale + Cheque        -> ACCEPTED
+    //   sale + Wire          -> refused
+    //
+    // So YARD_LOAD_MODES is Cash, Bank transfer, Zelle, Cheque — four — and
+    // BOTH clients offer the same four (dashboard/index.html:12062 and
+    // mobile-app/www/index.html:2565).
+    //
+    // HER WORDS, 2026-09-16, say two: "in receive payment-i should have only
+    // cash and bank transfer". That gap is REAL, it predates this change, and
+    // it is NOT closed here. Narrowing the server alone would leave both
+    // dropdowns offering a mode the server refuses — which is exactly the
+    // 2026-09-17 live breakage this same file's comments describe, where a
+    // <select> holding a value not in its list posted an empty mode. Closing
+    // it properly means server + both clients together, and it is her call
+    // whether the four-mode list she has been using for two weeks is now
+    // what she wants. Flagged to her 2026-10-01.
+    //
+    // Meanwhile this tests the property WITHOUT the bank confound, so it
+    // cannot pass by accident again.
+    for (const mode of ['Wire']) {
         let err = null;
-        try { await pay.addPayment({ load_id: `L_sale_${mode}`, load_kind: 'sale', mode, amount: 10, paid_on: '2026-09-16', bank: 'Chase Bank' }); }
+        try { await pay.addPayment({ load_id: `L_sale_${mode}`, load_kind: 'sale', mode, amount: 10, paid_on: '2026-09-16' }); }
         catch (e) { err = e; }
         ck(`receive payment cannot be ${mode}`, !!err, 'recorded anyway');
+        ck(`  and is refused on the MODE, not on a bank`,
+           !!err && /payment mode must be one of/.test(err.message),
+           `refused with: ${err && err.message}`);
+    }
+    // The four that ARE accepted, stated plainly so the gap above is visible
+    // in the output rather than only in a comment.
+    for (const mode of ['Cash', 'Zelle', 'Cheque']) {
+        let err = null;
+        try { await pay.addPayment({ load_id: `L_sale_ok_${mode}`, load_kind: 'sale', mode, amount: 10, paid_on: '2026-09-16' }); }
+        catch (e) { err = e; }
+        ck(`receive payment currently ACCEPTS ${mode} — her 2026-09-16 rule says only Cash and Bank transfer`,
+           !err, `refused with: ${err && err.message}`);
     }
 
     // ── AND A PURCHASE MUST STILL TAKE ALL FIVE ──────────────────────────

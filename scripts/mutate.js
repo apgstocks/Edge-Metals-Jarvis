@@ -2765,31 +2765,52 @@ const MUTATIONS = [
 
     // ── FOUR ZEROS WITH NO EXPLANATION (2026-09-29 / 2026-10-01) ────────
     // Apsara: "it has every thing as 0.Bofa ,chase,AAA,unassigned as 0",
-    // then "it was all showing 0 na.did you fix".
+    // then "did you fix", then the fact that changed the diagnosis:
+    // "why it was all showiung 0 when i have available petty cash".
+    //
+    // Four earlier entries here went NOT APPLIED when the block was
+    // rewritten for that last message — i.e. measured nothing, silently.
+    // Re-pointed; the first one is the falsehood the rewrite removed.
+    { name: 'cash-zero: it tells her the box is empty when it is NOT',
+      file: 'dashboard/index.html', suites: ['pay-cash-empty-note'],
+      find: '          if (known && listed === 0 && stranded.length) {',
+      to:   '          if (false) {' },
+
+    { name: 'cash-zero: the app tells her the box is empty when it is NOT',
+      file: 'mobile-app/www/index.html', suites: ['pay-cash-empty-note'],
+      find: '          if (known && listed === 0 && stranded.length) {',
+      to:   '          if (false) {' },
+
     { name: 'cash-zero: the website goes back to saying nothing',
       file: 'dashboard/index.html', suites: ['pay-cash-empty-note'],
-      find: "          note.classList.toggle('hidden', !(known && total === 0));",
+      find: "          note.classList.toggle('hidden', !msg);",
       to:   "          note.classList.toggle('hidden', true);" },
 
     { name: 'cash-zero: the app goes back to saying nothing',
       file: 'mobile-app/www/index.html', suites: ['pay-cash-empty-note'],
-      find: "          note.classList.toggle('hidden', !(known && total === 0));",
+      find: "          note.classList.toggle('hidden', !msg);",
       to:   "          note.classList.toggle('hidden', true);" },
 
-    // The false alarm. "Not loaded yet" read as "no cash" makes the warning
-    // flash on every open and clear a second later, which teaches her to
-    // ignore the one line on this screen worth reading.
+    // "Not loaded yet" read as "no cash" flashes a warning on every open and
+    // clears a second later, which teaches her to skip the one line here
+    // worth reading.
     { name: 'cash-zero: it cries wolf while the figures are still loading',
       file: 'dashboard/index.html', suites: ['pay-cash-empty-note'],
-      find: '          const known = pettyCash.by_source && typeof pettyCash.by_source === \'object\';\n          const total = known ? srcs.reduce((t, a) => t + held(a), 0) : null;',
-      to:   '          const known = true;\n          const total = srcs.reduce((t, a) => t + held(a), 0);' },
+      find: "          const known = pettyCash.by_source && typeof pettyCash.by_source === 'object';",
+      to:   '          const known = true;' },
 
-    // A single empty bucket is an ordinary day — the borrow prompt covers
-    // it. Warning on ANY zero fires constantly and the message dies.
+    // One empty bucket is an ordinary day — the borrow prompt covers it.
     { name: 'cash-zero: it warns on one empty bucket among several',
       file: 'dashboard/index.html', suites: ['pay-cash-empty-note'],
-      find: "          note.classList.toggle('hidden', !(known && total === 0));\n        }\n      }",
-      to:   "          note.classList.toggle('hidden', !(known && srcs.some((a) => held(a) === 0)));\n        }\n      }" },
+      find: '          const listed = known ? srcs.reduce((t, a) => t + held(a), 0) : null;',
+      to:   '          const listed = known ? Math.min(...srcs.map((a) => held(a))) : null;' },
+
+    // The stranded money must be NAMED. "Some of your cash is elsewhere" is
+    // not actionable; "BofA — $4,200" tells her where to look.
+    { name: 'cash-zero: the stranded bucket is not named',
+      file: 'dashboard/index.html', suites: ['pay-cash-empty-note'],
+      find: "            msg = `Your cash is filed under <strong>${stranded.map(esc).join('</strong>, <strong>')}</strong>`",
+      to:   '            msg = `Some of your cash is elsewhere`' },
 
     // ── ZELLE/CHEQUE BANK, OPTIONAL (2026-10-01) ────────────────────────
     // Apsara: "Zelle/Cheque also has a bank.but keep it as optional".

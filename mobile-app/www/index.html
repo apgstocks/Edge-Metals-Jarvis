@@ -2493,16 +2493,38 @@ function openPayModal(loadId, kind, opts) {
       const bankSel = $('pay_cash_bank');
       const label = $('pay_cash_source_label');
 
-      // Every bucket empty means the box has never been floated — a
-      // different situation from one empty bucket, which the borrow prompt
-      // already covers. by_source absent is the server list not having
-      // arrived, NOT emptiness. Twin of the website's block.
+      // Twin of the website's block — see dashboard/index.html for the full
+      // reasoning. Short version: Apsara 2026-10-01, "why it was all
+      // showiung 0 when i have available petty cash". Her rows are filed
+      // under a cash_source outside SOURCES ('BofA', pre-split), which
+      // balanceBySource counts and this picker cannot name. So the screen
+      // says WHICH situation she is in and names the money it can see but
+      // cannot spend, instead of showing four zeros or claiming the box is
+      // empty when it is not.
       {
         const note = $('pay_cash_empty');
         if (note) {
           const known = pettyCash.by_source && typeof pettyCash.by_source === 'object';
-          const total = known ? srcs.reduce((t, a) => t + held(a), 0) : null;
-          note.classList.toggle('hidden', !(known && total === 0));
+          const listed = known ? srcs.reduce((t, a) => t + held(a), 0) : null;
+          const whole = Number(pettyCash.balance) || 0;
+          const stranded = known
+            ? Object.keys(pettyCash.by_source)
+                .filter((k) => !srcs.includes(k) && (Number(pettyCash.by_source[k]) || 0) > 0)
+            : [];
+
+          let msg = '';
+          if (known && listed === 0 && stranded.length) {
+            msg = `Your cash is filed under <strong>${stranded.map(esc).join('</strong>, <strong>')}</strong>`
+                + ` — ${fmtAmount(stranded.reduce((t, k) => t + (Number(pettyCash.by_source[k]) || 0), 0))}`
+                + ` — which this list cannot pay from yet, so every account above reads zero.`
+                + ` It is not lost. Move it to a named account on the <strong>Petty cash</strong> tab,`
+                + ` or pay by another mode for now.`;
+          } else if (known && listed === 0 && whole === 0) {
+            msg = 'There is no cash recorded in any account yet, so a cash payment has nothing to draw on.'
+                + ' Add your opening float on the <strong>Petty cash</strong> tab first — or pay by another mode.';
+          }
+          note.innerHTML = msg;
+          note.classList.toggle('hidden', !msg);
         }
       }
       // ALWAYS leaves pay_cash_source holding a real account, including when
@@ -5080,10 +5102,11 @@ function renderLoads(loads) {
                  already names the fix but only after Pay is pressed. Same
                  note as the website; see dashboard/index.html for the
                  reasoning and for why it is shown, not enforced. -->
-            <div id="pay_cash_empty" class="hidden" style="margin-top:10px; font-size:11.5px; line-height:1.5; color:#b45309;">
-              There is no cash recorded in any account yet, so a cash payment has nothing to draw on.
-              Add your opening float on the <strong>Petty cash</strong> tab first &mdash; or pay by another mode.
-            </div>
+            <!-- Filled by JS: the sentence depends on WHICH situation she is
+                 in — no cash at all, or cash filed under a source this list
+                 cannot pay from. Empty here so neither version can be shown
+                 before the figures arrive. -->
+            <div id="pay_cash_empty" class="hidden" style="margin-top:10px; font-size:11.5px; line-height:1.5; color:#b45309;"></div>
           </div>
           <div class="ld-grid-2" style="margin-top:14px;">
             <div class="field"><label>Amount</label><input id="pay_amount" type="number" step="any" inputmode="decimal" placeholder="0.00"></div>

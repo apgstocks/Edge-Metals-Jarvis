@@ -49,24 +49,46 @@ const CLIENTS = {
 // executed, so a change to its LOGIC fails this file even when the words
 // around it still look right. The shape it needs is tiny: srcs, held() and
 // a note object with classList.toggle.
-function decide(file, by_source, sources) {
+function decide(file, by_source, sources, balance) {
     const src = fs.readFileSync(file, 'utf8');
-    const m = src.match(/const note = \$\('pay_cash_empty'\);\s*if \(note\) \{([\s\S]*?)\n(\s*)\}\n/);
-    if (!m) return { error: 'the pay_cash_empty block was not found — if it moved, fix this test rather than deleting it' };
+    // ── BRACE-BALANCED, NOT REGEX-TO-THE-FIRST-BRACE ──────────────────────
+    // The first version matched lazily up to the next `}`, which worked only
+    // while the block had no nested braces. The moment it grew an if/else it
+    // was being cut mid-expression and every check in this file failed with
+    // "Unexpected token )" — a test broken by the code getting MORE correct.
+    const start = src.indexOf("const note = $('pay_cash_empty');");
+    if (start < 0) return { error: 'the pay_cash_empty block was not found — if it moved, fix this test rather than deleting it' };
+    const bodyAt = src.indexOf('{', src.indexOf('if (note)', start));
+    let depth = 0, end = -1;
+    for (let i = bodyAt; i < src.length; i += 1) {
+        if (src[i] === '{') depth += 1;
+        else if (src[i] === '}') { depth -= 1; if (depth === 0) { end = i; break; } }
+    }
+    if (end < 0) return { error: 'the pay_cash_empty block never closes' };
+    const m = [null, src.slice(bodyAt + 1, end)];
     let hidden = null;
-    const note = { classList: { toggle: (_c, on) => { hidden = on; } } };
-    const pettyCash = { by_source, sources };
+    let html = '';
+    const note = {
+        classList: { toggle: (_c, on) => { hidden = on; } },
+        set innerHTML(v) { html = v; },
+        get innerHTML() { return html; },
+    };
+    const pettyCash = { by_source, sources, balance };
     const srcs = (pettyCash.sources || []).length ? pettyCash.sources
         : ['Edge Metals', 'AAA Investment', 'Chase Bank', 'Unassigned'];
     const held = (x) => Number((pettyCash.by_source || {})[x]) || 0;
     try {
         // eslint-disable-next-line no-new-func
-        new Function('note', 'pettyCash', 'srcs', 'held', m[1])(note, pettyCash, srcs, held);
+        const esc = (x) => String(x == null ? '' : x)
+            .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+        const fmtAmount = (n) => '$' + (Number(n) || 0).toFixed(2);
+        new Function('note', 'pettyCash', 'srcs', 'held', 'esc', 'fmtAmount', m[1])
+            (note, pettyCash, srcs, held, esc, fmtAmount);
     } catch (e) {
         return { error: 'THREW: ' + e.message };
     }
     // toggle(cls, true) HIDES. So the note is shown when hidden === false.
-    return { shown: hidden === false, hidden };
+    return { shown: hidden === false, hidden, html };
 }
 
 const SOURCES = ['Edge Metals', 'AAA Investment', 'Chase Bank', 'Unassigned'];
@@ -75,7 +97,7 @@ const zeros = { 'Edge Metals': 0, 'AAA Investment': 0, 'Chase Bank': 0, Unassign
 // ══════════════════════════════════════════════════════════════════════════
 section('A — her screen: every bucket zero');
 for (const [who, file] of Object.entries(CLIENTS)) {
-    const r = decide(file, zeros, SOURCES);
+    const r = decide(file, zeros, SOURCES, 0);
     ck(`${who}: the block was found and ran`, !r.error, r.error);
     ck(`${who}: the note IS shown`, r.shown === true,
        'this is exactly what she was looking at — four zeros and no explanation');
@@ -85,14 +107,14 @@ for (const [who, file] of Object.entries(CLIENTS)) {
 section('B — and stays quiet when there is money');
 for (const [who, file] of Object.entries(CLIENTS)) {
     ck(`${who}: money in one account hides it`,
-       decide(file, { ...zeros, 'Edge Metals': 500 }, SOURCES).shown === false);
+       decide(file, { ...zeros, 'Edge Metals': 500 }, SOURCES, 500).shown === false);
     // A single empty bucket is ordinary — the borrow prompt covers that, and
     // warning here would fire on a normal day.
     ck(`${who}: one empty bucket among several is NOT a warning`,
-       decide(file, { 'Edge Metals': 1200, 'AAA Investment': 0, 'Chase Bank': 300, Unassigned: 0 }, SOURCES).shown === false,
+       decide(file, { 'Edge Metals': 1200, 'AAA Investment': 0, 'Chase Bank': 300, Unassigned: 0 }, SOURCES, 1500).shown === false,
        'this fires on an ordinary day and the message stops being read');
     ck(`${who}: a tiny balance still counts as money`,
-       decide(file, { ...zeros, Unassigned: 0.01 }, SOURCES).shown === false);
+       decide(file, { ...zeros, Unassigned: 0.01 }, SOURCES, 0.01).shown === false);
 }
 
 // ══════════════════════════════════════════════════════════════════════════
@@ -100,26 +122,74 @@ section('C — NOT YET LOADED IS NOT EMPTY');
 // The false alarm that would train her to ignore this line.
 for (const [who, file] of Object.entries(CLIENTS)) {
     ck(`${who}: no by_source at all -> no claim`,
-       decide(file, undefined, SOURCES).shown === false,
+       decide(file, undefined, SOURCES, 0).shown === false,
        'claiming "there is no cash" while the figures are loading is a lie that clears itself');
-    ck(`${who}: null by_source -> no claim`, decide(file, null, SOURCES).shown === false);
+    ck(`${who}: null by_source -> no claim`, decide(file, null, SOURCES, 0).shown === false);
     // An empty object IS an answer: the server replied and nothing is held.
     ck(`${who}: an empty by_source object IS an answer, and shows the note`,
-       decide(file, {}, SOURCES).shown === true,
+       decide(file, {}, SOURCES, 0).shown === true,
        'every account reading 0 is the same situation however the server spelled it');
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+section('C2 — HER ACTUAL CASE: cash present, every listed bucket zero');
+// ══════════════════════════════════════════════════════════════════════════
+// Apsara, 2026-10-01: "Also check why it was all showiung 0 when i have
+// available petty cash."
+//
+// This is the case the first version of this feature got WRONG. Her rows are
+// filed under 'BofA' — the pre-split name — which balanceBySource keeps and
+// counts, and which petty.balance() includes. The picker lists SOURCES only,
+// so her money is in the payload and every bucket above reads zero.
+//
+// The first note said "There is no cash recorded in any account yet". That
+// is a FALSEHOOD printed on her screen, and worse than the four zeros it
+// replaced, because it would have sent her to add a float she already has.
+{
+    const legacy = { ...zeros, BofA: 4200 };
+    for (const [who, file] of Object.entries(CLIENTS)) {
+        const r = decide(file, legacy, SOURCES, 4200);
+        ck(`${who}: the note is shown`, r.shown === true);
+        ck(`${who}: it does NOT claim there is no cash`, !/no cash recorded/i.test(r.html),
+           `said: ${r.html}`);
+        ck(`${who}: it names where the money actually is`, /BofA/.test(r.html),
+           `said: ${r.html}`);
+        ck(`${who}: and says how much`, /4200\.00/.test(r.html), `said: ${r.html}`);
+        ck(`${who}: and says it is not lost`, /not lost/i.test(r.html));
+        ck(`${who}: and offers a way to pay today`, /another mode/i.test(r.html));
+    }
+    // Genuinely empty must still say the other thing — one message for both
+    // situations is how a true sentence becomes a false one.
+    for (const [who, file] of Object.entries(CLIENTS)) {
+        const r = decide(file, zeros, SOURCES, 0);
+        ck(`${who}: a genuinely empty box still says so`, /no cash recorded/i.test(r.html),
+           `said: ${r.html}`);
+        ck(`${who}:   and does not invent a stranded bucket`, !/filed under/i.test(r.html));
+    }
+    // Money on the list AND money off it: the list works, so no note.
+    for (const [who, file] of Object.entries(CLIENTS)) {
+        const r = decide(file, { ...zeros, 'Edge Metals': 100, BofA: 900 }, SOURCES, 1000);
+        ck(`${who}: no note when the listed accounts can pay`, r.shown === false);
+    }
 }
 
 // ══════════════════════════════════════════════════════════════════════════
 section('D — the sentence names what to do');
 for (const [who, file] of Object.entries(CLIENTS)) {
     const src = fs.readFileSync(file, 'utf8');
-    const block = src.slice(src.indexOf('id="pay_cash_empty"'), src.indexOf('id="pay_cash_empty"') + 600);
-    ck(`${who}: it says where to add cash`, /Petty cash/.test(block),
+    // The words now come from JS, because which sentence is true depends on
+    // which situation she is in. So they are checked on the OUTPUT.
+    const empty = decide(file, zeros, SOURCES, 0);
+    const strand = decide(file, { ...zeros, BofA: 50 }, SOURCES, 50);
+    ck(`${who}: the empty message says where to add cash`, /Petty cash/.test(empty.html),
        'a warning with no next step is just bad news');
-    ck(`${who}: and that another mode is available`, /another mode/i.test(block),
-       'she may need to pay this supplier today, and the box being empty is not a reason she cannot');
-    ck(`${who}: it starts hidden`, /id="pay_cash_empty" class="hidden"/.test(src),
-       'visible-by-default would show it for the instant before the figures arrive');
+    ck(`${who}: the stranded message does too`, /Petty cash/.test(strand.html));
+    ck(`${who}: both offer another mode`,
+       /another mode/i.test(empty.html) && /another mode/i.test(strand.html),
+       'she may need to pay this supplier today');
+    ck(`${who}: the element starts hidden and EMPTY`,
+       /id="pay_cash_empty" class="hidden"[^>]*><\/div>/.test(src),
+       'hard-coded copy in the markup is one of the two sentences shown unconditionally');
 }
 
 console.log(`\n  ${pass} passed, ${fail} failed`);
