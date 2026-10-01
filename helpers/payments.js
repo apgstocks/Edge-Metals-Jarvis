@@ -358,14 +358,43 @@ async function addPrepayment(input = {}) {
     const amount = round2(toNum(input.amount));
     if (amount == null) throw new Error('a payment amount is required');
     if (amount <= 0) throw new Error('a payment amount must be greater than zero');
-    const mode = PAYMENT_MODES.find((m) => m.toLowerCase() === String(input.mode || '').trim().toLowerCase());
-    if (!mode) throw new Error(`payment mode must be one of: ${PAYMENT_MODES.join(', ')}`);
-
-    // Explicit, not inferred. A yard prepayment is cash going OUT of the yard
-    // box; stamping the kind makes every downstream allowlist test
+    // Explicit, not inferred. A yard prepayment is money going OUT to a
+    // supplier; stamping the kind makes every downstream allowlist test
     // (EDGE_METALS_KINDS, the spend report, the petty-cash recompute) read the
     // same answer as it would for an ordinary yard purchase payment.
     const loadKind = 'purchase';
+
+    // ── ANY FORM OF PAYMENT, WITH EVERYTHING THAT FORM REQUIRES ──────────
+    // Apsara, 2026-10-01: "not only cash prepayment,advance can be in any
+    // form of payment na". She is right, and my first cut was wrong in a way
+    // that is worth spelling out: it ACCEPTED any mode and then dropped the
+    // fields the non-cash modes depend on. A Wire prepayment saved with no
+    // bank and no paid_via looks like it worked and is missing the two facts
+    // that make a wire traceable.
+    //
+    // Three fixes, all of them "use what addPayment uses":
+    //
+    //   1. modesForKind('purchase'), not PAYMENT_MODES. She removed Bank
+    //      transfer from paying a supplier on 2026-09-17 ("in load of
+    //      invoice pay-remove bank transfer"); validating against the full
+    //      list would have quietly let it back in on this one path.
+    //   2. banks.resolveForMode, so a Zelle/Wire/Cheque prepayment records
+    //      which account it left from and a bank on a CASH one is refused.
+    //   3. resolvePaidVia, so Wire asks "Payment via Edge Yard / Edge
+    //      Metals" here exactly as it does everywhere else.
+    //
+    // (3) is the one CLAUDE.md warns about three times: a requirement that
+    // lives in addPayment and is missed by a path that does not share it.
+    // This path IS the new caller, and skipping the question would put a
+    // prepayment in the books with no company against it.
+    const allowedModes = modesForKind(loadKind);
+    const mode = allowedModes.find((m) => m.toLowerCase() === String(input.mode || '').trim().toLowerCase());
+    if (!mode) throw new Error(`payment mode must be one of: ${allowedModes.join(', ')}`);
+
+    const banks = require('./banks');
+    const bank = await banks.resolveForMode(mode, input.bank, { required: input.require_bank === true });
+    const paidVia = resolvePaidVia(loadKind, mode, input.paid_via, bank);
+
     const touchesPettyCash = mode === 'Cash' && !EDGE_METALS_KINDS.has(loadKind);
 
     let cashEntry = null;
@@ -403,6 +432,12 @@ async function addPrepayment(input = {}) {
         seller,
         mode,
         amount,
+        // Carried for the same reason an ordinary payment carries them: a
+        // wire with no bank cannot be matched against a statement, and a
+        // wire with no paid_via is money leaving an account with no company
+        // named against it. Null for Cash, where neither is a true fact.
+        bank,
+        paid_via: paidVia,
         paid_on: input.paid_on || new Date().toISOString().slice(0, 10),
         reference: String(input.reference || '').trim() || null,
         note: String(input.note || '').trim() || null,
@@ -484,6 +519,12 @@ async function applyPrepayment(input = {}) {
         load_id: loadId,
         load_kind: input.load_kind === 'sale' ? 'sale' : 'purchase',
         mode: (adv && adv.mode) || 'Cash',
+        // Inherited from the prepayment, not re-asked. The money already
+        // moved, by that mode, from that bank, on that company's account —
+        // this row records where it landed, so asking again would invite a
+        // second, different answer about one transfer that already happened.
+        bank: (adv && adv.bank) || null,
+        paid_via: (adv && adv.paid_via) || null,
         amount,
         paid_on: input.paid_on || new Date().toISOString().slice(0, 10),
         reference: (adv && adv.reference) || null,

@@ -93,7 +93,10 @@ section('B — THE CASH ACTUALLY LEAVES THE BOX');
 }
 {
     const before = cashInHand();
-    await pay.addPrepayment({ seller: 'Wire Co', amount: 500, mode: 'Wire', created_by: 't' });
+    await pay.addPrepayment({
+        seller: 'Wire Co', amount: 500, mode: 'Wire',
+        bank: 'Chase', paid_via: 'Edge Yard', created_by: 't',
+    });
     ck('a WIRE prepayment does not touch the box', cashInHand() === before,
        'only cash comes out of the drawer');
 }
@@ -102,6 +105,96 @@ section('B — THE CASH ACTUALLY LEAVES THE BOX');
     ck('the cash prepayment is linked to its petty cash entry', !!p.petty_cash_entry_id,
        'without the link, an undo has to guess which withdrawal to reverse');
     ck('and records what was taken', p.cash_taken === 3000);
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+section('B2 — ANY FORM OF PAYMENT, CARRYING WHAT THAT FORM NEEDS');
+// ══════════════════════════════════════════════════════════════════════════
+// Apsara, 2026-10-01: "not only cash prepayment,advance can be in any form
+// of payment na".
+//
+// My first cut accepted any mode and then dropped the fields the non-cash
+// modes depend on — no bank, no paid_via. It would have saved a Wire
+// prepayment that looked fine and was missing the two facts that make a wire
+// traceable. This section is the one that would have caught that.
+{
+    // Which modes carry a bank is banks.js's MODES_WITH_BANK = ['Wire',
+    // 'Bank transfer'] — and Bank transfer is not a supplier mode, so on a
+    // prepayment only WIRE has a bank behind it. Zelle and Cheque are
+    // REFUSED one ("Zelle has no bank behind it"), per her 2026-09 decision.
+    // I had this wrong in the first version of this test and the delegation
+    // to banks.js is what got it right; that is the argument for delegating.
+    for (const [mode, extra, wantBank] of [
+        ['Zelle',  {}, null],
+        ['Cheque', {}, null],
+        ['Wire',   { bank: 'Chase', paid_via: 'Edge Yard' }, 'Chase'],
+    ]) {
+        const before = cashInHand();
+        const p = await pay.addPrepayment({
+            seller: `Supplier ${mode}`, amount: 111, mode, ...extra, created_by: 't',
+        });
+        ck(`a ${mode} prepayment saves`, !!p && p.mode === mode);
+        ck(`  and its bank is ${wantBank === null ? 'blank, as that mode has none' : wantBank}`,
+           p.bank === wantBank,
+           `bank stored as ${JSON.stringify(p.bank)}`);
+        ck(`  and does not touch the petty cash box`, cashInHand() === before);
+    }
+    {
+        let threw = false;
+        try { await pay.addPrepayment({ seller: 'ZB Co', amount: 10, mode: 'Zelle', bank: 'Chase' }); }
+        catch (e) { threw = true; }
+        ck('a bank on a ZELLE prepayment is refused, same as everywhere else', threw);
+    }
+}
+{
+    // Her instruction of 2026-09-17: "in load of invoice pay-remove bank
+    // transfer". Validating against the full PAYMENT_MODES list — which my
+    // first cut did — would have let it back in on this one path only.
+    let threw = false;
+    try { await pay.addPrepayment({ seller: 'BT Co', amount: 50, mode: 'Bank transfer', bank: 'Chase' }); }
+    catch (e) { threw = true; }
+    ck('Bank transfer is refused on a supplier prepayment', threw,
+       'she removed it from paying a supplier; this path must not reinstate it');
+}
+{
+    // The requirement CLAUDE.md records being missed three times — a rule in
+    // addPayment that a path not sharing it quietly skips. This path is the
+    // new caller.
+    let threw = null;
+    try { await pay.addPrepayment({ seller: 'NoVia Co', amount: 50, mode: 'Wire', bank: 'Chase' }); }
+    catch (e) { threw = e.message; }
+    ck('a WIRE with no "Payment via" is refused', /Payment via/i.test(threw || ''),
+       `threw ${JSON.stringify(threw)} — a wire with no company against it is money leaving an account with nobody named`);
+
+    const p = await pay.addPrepayment({
+        seller: 'Via Co', amount: 50, mode: 'Wire', bank: 'Chase',
+        paid_via: 'Edge Yard', created_by: 't',
+    });
+    ck('and it is stored when answered', p.paid_via === 'Edge Yard');
+}
+{
+    // A bank on cash is not a true sentence about where the money left —
+    // banks.js refuses it, and this path has to inherit that refusal.
+    let threw = false;
+    try { await pay.addPrepayment({ seller: 'CashBank Co', amount: 50, mode: 'Cash', bank: 'Chase' }); }
+    catch (e) { threw = true; }
+    ck('a bank on a CASH prepayment is refused', threw);
+}
+{
+    // Applying inherits the form — the transfer already happened, so asking
+    // again would invite a second, different answer about one movement.
+    const credit = pay.prepaymentCredit('Via Co');
+    await require('../helpers/json').mutateJson(cfg.LOADS_FILE, [], (l) => {
+        const list = Array.isArray(l) ? l : [];
+        list.unshift({ id: 'EDGE_W', date: '2026-10-02', seller: 'Via Co', amount: 100, items: [], weight_unit: 'lb' });
+        return list;
+    });
+    await pay.applyPrepayment({ load_id: 'EDGE_W', prepayment_id: credit.prepayments[0].id, amount: 50, created_by: 't' });
+    const applied = pay.paymentsForLoad('EDGE_W')[0];
+    ck('the applied row inherits the mode', applied.mode === 'Wire');
+    ck('and the bank', applied.bank === 'Chase');
+    ck('and the company that paid', applied.paid_via === 'Edge Yard',
+       'losing paid_via on application would drop the row out of her spend-by-company report');
 }
 
 // ══════════════════════════════════════════════════════════════════════════
@@ -227,8 +320,12 @@ section('E — UNDOING IT DOES NOT INVENT MONEY');
 section('F — one save, one prepayment');
 {
     const ticket = 'PREPAY_TICKET_1';
-    const a = await pay.addPrepayment({ seller: 'Twice Co', amount: 250, mode: 'Wire', client_request_id: ticket });
-    const b = await pay.addPrepayment({ seller: 'Twice Co', amount: 250, mode: 'Wire', client_request_id: ticket });
+    // Zelle on purpose: it needs neither a bank nor a "Payment via", so this
+    // section tests the ticket and only the ticket. The first draft used Wire
+    // and threw on the missing paid_via — a real requirement firing in a test
+    // that was not about it.
+    const a = await pay.addPrepayment({ seller: 'Twice Co', amount: 250, mode: 'Zelle', client_request_id: ticket });
+    const b = await pay.addPrepayment({ seller: 'Twice Co', amount: 250, mode: 'Zelle', client_request_id: ticket });
     ck('the second send creates nothing', a.id === b.id, `${a.id} vs ${b.id}`);
     ck('and only one row exists',
        readPayments().filter((r) => r.seller === 'Twice Co').length === 1,

@@ -2800,6 +2800,33 @@ const MUTATIONS = [
     // no phantom row, so a future refactor that collapses the two layers
     // into one will fail there.
 
+    // ── ANY FORM OF PAYMENT, CARRYING WHAT THAT FORM NEEDS ──────────────
+    // Apsara, 2026-10-01: "not only cash prepayment,advance can be in any
+    // form of payment na". My first cut accepted any mode and then dropped
+    // the fields non-cash modes depend on. These three are that gap.
+    { name: 'prepay: any payment mode is accepted, incl. ones she removed',
+      file: 'helpers/payments.js', suites: ['supplier-prepayment'],
+      find: "    const allowedModes = modesForKind(loadKind);",
+      to:   '    const allowedModes = PAYMENT_MODES.slice();' },
+
+    // The bank line is IDENTICAL in addPayment, so a bare pattern matched
+    // twice and the harness reported "not applied" — i.e. measured nothing.
+    // Anchored on the paidVia line that follows it only here.
+    { name: 'prepay: a wire records no bank',
+      file: 'helpers/payments.js', suites: ['supplier-prepayment'],
+      find: "    const bank = await banks.resolveForMode(mode, input.bank, { required: input.require_bank === true });\n    const paidVia = resolvePaidVia(loadKind, mode, input.paid_via, bank);",
+      to:   '    const bank = null;\n    const paidVia = resolvePaidVia(loadKind, mode, input.paid_via, bank);' },
+
+    { name: 'prepay: a wire never asks which company paid',
+      file: 'helpers/payments.js', suites: ['supplier-prepayment'],
+      find: '    const paidVia = resolvePaidVia(loadKind, mode, input.paid_via, bank);\n\n    const touchesPettyCash',
+      to:   '    const paidVia = null;\n\n    const touchesPettyCash' },
+
+    { name: 'prepay: applying loses the company that paid',
+      file: 'helpers/payments.js', suites: ['supplier-prepayment'],
+      find: "        paid_via: (adv && adv.paid_via) || null,",
+      to:   '        paid_via: null,' },
+
     { name: 'prepay: over-applying is silently capped instead of refused',
       file: 'helpers/payments.js', suites: ['supplier-prepayment'],
       find: '    if (amount - remaining > CENT) throw new Error(`that prepayment only has ${remaining.toFixed(2)} left`);',
