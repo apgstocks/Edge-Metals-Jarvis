@@ -2763,6 +2763,34 @@ const MUTATIONS = [
       find: 'download?kind=proforma&file=${encodeURIComponent(m.file)}',
       to:   'download?kind=invoice&file=${encodeURIComponent(m.file)}' },
 
+    // ── FOUR ZEROS WITH NO EXPLANATION (2026-09-29 / 2026-10-01) ────────
+    // Apsara: "it has every thing as 0.Bofa ,chase,AAA,unassigned as 0",
+    // then "it was all showing 0 na.did you fix".
+    { name: 'cash-zero: the website goes back to saying nothing',
+      file: 'dashboard/index.html', suites: ['pay-cash-empty-note'],
+      find: "          note.classList.toggle('hidden', !(known && total === 0));",
+      to:   "          note.classList.toggle('hidden', true);" },
+
+    { name: 'cash-zero: the app goes back to saying nothing',
+      file: 'mobile-app/www/index.html', suites: ['pay-cash-empty-note'],
+      find: "          note.classList.toggle('hidden', !(known && total === 0));",
+      to:   "          note.classList.toggle('hidden', true);" },
+
+    // The false alarm. "Not loaded yet" read as "no cash" makes the warning
+    // flash on every open and clear a second later, which teaches her to
+    // ignore the one line on this screen worth reading.
+    { name: 'cash-zero: it cries wolf while the figures are still loading',
+      file: 'dashboard/index.html', suites: ['pay-cash-empty-note'],
+      find: '          const known = pettyCash.by_source && typeof pettyCash.by_source === \'object\';\n          const total = known ? srcs.reduce((t, a) => t + held(a), 0) : null;',
+      to:   '          const known = true;\n          const total = srcs.reduce((t, a) => t + held(a), 0);' },
+
+    // A single empty bucket is an ordinary day — the borrow prompt covers
+    // it. Warning on ANY zero fires constantly and the message dies.
+    { name: 'cash-zero: it warns on one empty bucket among several',
+      file: 'dashboard/index.html', suites: ['pay-cash-empty-note'],
+      find: "          note.classList.toggle('hidden', !(known && total === 0));\n        }\n      }",
+      to:   "          note.classList.toggle('hidden', !(known && srcs.some((a) => held(a) === 0)));\n        }\n      }" },
+
     // ── ZELLE/CHEQUE BANK, OPTIONAL (2026-10-01) ────────────────────────
     // Apsara: "Zelle/Cheque also has a bank.but keep it as optional".
     //

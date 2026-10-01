@@ -12104,6 +12104,27 @@ function openPayModal(loadId, kind, opts) {
       const bankSel = $('pay_cash_bank');
       const label = $('pay_cash_source_label');
 
+      // ── FOUR ZEROS WITH NO EXPLANATION WAS THE BUG ────────────────────
+      // Apsara, 2026-09-29: "it has every thing as 0.Bofa ,chase,AAA,
+      // unassigned as 0". Decided on the TOTAL across accounts, not on the
+      // selected one: a single empty bucket is ordinary and the borrow
+      // prompt already covers it. Every bucket empty means the box has
+      // never been floated, which is a different situation and a different
+      // sentence.
+      //
+      // by_source missing entirely is NOT treated as empty — that is the
+      // server list not having arrived, and claiming "there is no cash"
+      // while the figures are still loading would be a lie that clears
+      // itself a second later, which is the worst kind.
+      {
+        const note = $('pay_cash_empty');
+        if (note) {
+          const known = pettyCash.by_source && typeof pettyCash.by_source === 'object';
+          const total = known ? srcs.reduce((t, a) => t + held(a), 0) : null;
+          note.classList.toggle('hidden', !(known && total === 0));
+        }
+      }
+
       // ── THE ACCOUNTS UNDER ONE BANK ───────────────────────────────────
       // Called on open and whenever the bank changes. It ALWAYS leaves
       // pay_cash_source holding a real account, including when the bank has
@@ -12784,6 +12805,26 @@ function renderLoads(loads) {
             <select id="pay_cash_bank" style="margin-bottom:10px;"></select>
             <label for="pay_cash_source" id="pay_cash_source_label">Which account</label>
             <select id="pay_cash_source"></select>
+            <!-- ── WHEN EVERY BUCKET READS ZERO, SAY WHY ──────────────────
+                 Apsara, 2026-09-29: "In load pay,for one of the load,when i
+                 click cash and choose bank-it has every thing as 0.Bofa
+                 ,chase,AAA,unassigned as 0."
+
+                 The dropdowns were doing exactly what they were built to do
+                 — showing each account and what it holds — and what they
+                 held was nothing. The server already refuses this with a
+                 sentence that names the fix ("Add cash on the Petty cash tab
+                 first"), but only AFTER she has chosen a bank, typed an
+                 amount and pressed Pay. Four zeros and no explanation is the
+                 screen declining to answer a question it already knows the
+                 answer to.
+
+                 Shown, not enforced: the box could be topped up in another
+                 tab while this modal is open, and the server decides. -->
+            <div id="pay_cash_empty" class="hidden" style="margin-top:10px; font-size:11.5px; line-height:1.5; color:var(--warn, #b45309);">
+              There is no cash recorded in any account yet, so a cash payment has nothing to draw on.
+              Add your opening float on the <strong>Petty cash</strong> tab first &mdash; or pay by another mode.
+            </div>
           </div>
           <div class="ld-grid-2" style="margin-top:14px;">
             <div class="field"><label>Amount</label><input id="pay_amount" type="number" step="any" placeholder="0.00" inputmode="decimal"></div>

@@ -2492,6 +2492,19 @@ function openPayModal(loadId, kind, opts) {
       const bankFor = (a) => (pettyCash.bank_of || {})[a] || a;
       const bankSel = $('pay_cash_bank');
       const label = $('pay_cash_source_label');
+
+      // Every bucket empty means the box has never been floated — a
+      // different situation from one empty bucket, which the borrow prompt
+      // already covers. by_source absent is the server list not having
+      // arrived, NOT emptiness. Twin of the website's block.
+      {
+        const note = $('pay_cash_empty');
+        if (note) {
+          const known = pettyCash.by_source && typeof pettyCash.by_source === 'object';
+          const total = known ? srcs.reduce((t, a) => t + held(a), 0) : null;
+          note.classList.toggle('hidden', !(known && total === 0));
+        }
+      }
       // ALWAYS leaves pay_cash_source holding a real account, including when
       // the bank has only one. A hidden select holding nothing would post an
       // empty cash_source — how the pay modal broke in September.
@@ -5062,6 +5075,15 @@ function renderLoads(loads) {
             <select id="pay_cash_bank" style="margin-bottom:10px;"></select>
             <label for="pay_cash_source" id="pay_cash_source_label">Which account</label>
             <select id="pay_cash_source"></select>
+            <!-- Apsara, 2026-09-29: "it has every thing as 0.Bofa ,chase,AAA,
+                 unassigned as 0". Four zeros and no explanation — the server
+                 already names the fix but only after Pay is pressed. Same
+                 note as the website; see dashboard/index.html for the
+                 reasoning and for why it is shown, not enforced. -->
+            <div id="pay_cash_empty" class="hidden" style="margin-top:10px; font-size:11.5px; line-height:1.5; color:#b45309;">
+              There is no cash recorded in any account yet, so a cash payment has nothing to draw on.
+              Add your opening float on the <strong>Petty cash</strong> tab first &mdash; or pay by another mode.
+            </div>
           </div>
           <div class="ld-grid-2" style="margin-top:14px;">
             <div class="field"><label>Amount</label><input id="pay_amount" type="number" step="any" inputmode="decimal" placeholder="0.00"></div>
