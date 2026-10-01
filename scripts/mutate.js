@@ -2899,6 +2899,133 @@ const MUTATIONS = [
       find: '                const rep = this.report;',
       to:   "                const rep = this.report || require('./metalsSheetSync').fetchWorkbook('x');" },
 
+    // ── LAST WEEK OPEN, MONTH FILTER (2026-10-02) ───────────────────────
+    // Apsara: "in collapse phase of Edge Yard-I want last week load to
+    // visible.rest of them collapsible.Also give an option to filter by
+    // month.If they select that month -all that months load should be
+    // visible expanded."
+    //
+    // Both clients, because they are mirrors and the one that drifts is the
+    // one nobody is looking at.
+
+    { name: 'loads(website): back to a calendar month instead of a rolling week',
+      file: 'dashboard/index.html', suites: ['load-deck-grouping'],
+      find: "  const days = (opts && opts.days) || loadRecentDays();",
+      to:   "  const days = 400;" },
+
+    { name: 'loads(website): only the newest day opens again',
+      file: 'dashboard/index.html', suites: ['load-deck-grouping', 'load-card-actions'],
+      find: '  const days = groups.map((g) => `\n    <details class="load-date-section" open>',
+      to:   '  const days = groups.map((g, i) => `\n    <details class="load-date-section" ${i === 0 ? \'open\' : \'\'}>' },
+
+    { name: 'loads(website): a chosen month is NOT expanded',
+      file: 'dashboard/index.html', suites: ['load-deck-grouping'],
+      find: "  const allOpen = !!(opts && opts.allOpen);",
+      to:   '  const allOpen = false;' },
+
+    { name: 'loads(website): everything is expanded all the time',
+      file: 'dashboard/index.html', suites: ['load-deck-grouping'],
+      find: "  const allOpen = !!(opts && opts.allOpen);",
+      to:   '  const allOpen = true;' },
+
+    { name: 'loads(website): the month filter is never applied',
+      file: 'dashboard/index.html', suites: ['load-deck-grouping'],
+      find: "    if (loadMonthFilter) rows = filterLoadsByMonth(rows, loadMonthFilter);",
+      to:   '' },
+
+    { name: 'loads(website): an undated load is swept into every month',
+      file: 'dashboard/index.html', suites: ['load-deck-grouping'],
+      find: "  return (loads || []).filter((l) => loadMonthKey(l && l.date) === key);",
+      to:   '  return (loads || []).filter((l) => !l.date || loadMonthKey(l.date) === key);' },
+
+    { name: 'loads(website): the month list is a calendar, not the data',
+      file: 'dashboard/index.html', suites: ['load-deck-grouping'],
+      find: "    const k = loadMonthKey(l && l.date);\n    if (!k) continue;\n    seen.set(k, (seen.get(k) || 0) + 1);",
+      to:   "    const k = loadMonthKey(l && l.date);\n    if (!k) continue;\n    seen.set(k, 0);" },
+
+    { name: 'loads(website): months list oldest first',
+      file: 'dashboard/index.html', suites: ['load-deck-grouping'],
+      find: "  return Array.from(seen.keys()).sort((a, b) => b.localeCompare(a))",
+      to:   '  return Array.from(seen.keys()).sort((a, b) => a.localeCompare(b))' },
+
+    // UTC instead of the yard's own day: for the seven hours after 5pm
+    // Pacific it believes it is already tomorrow, which moves the whole
+    // week boundary a day early every evening.
+    { name: 'loads(website): the week boundary is computed in UTC',
+      file: 'dashboard/index.html', suites: ['load-deck-grouping'],
+      find: "function loadLocalDayKey(d) {\n  const t = new Date(d);",
+      to:   "function loadLocalDayKey(d) {\n  return new Date(d).toISOString().slice(0, 10);\n  const t = new Date(d);" },
+
+    // days - 1 is seven days INCLUDING today. Dropping it shows eight.
+    { name: 'loads(website): the window is off by one day',
+      file: 'dashboard/index.html', suites: ['load-deck-grouping'],
+      find: "  from.setDate(from.getDate() - (days - 1));",
+      to:   '  from.setDate(from.getDate() - days);' },
+
+    { name: 'loads(website): the month filter is persisted across sessions',
+      file: 'dashboard/index.html', suites: ['load-deck-grouping'],
+      find: "let loadMonthFilter = '';",
+      to:   "let loadMonthFilter = (() => { try { return localStorage.getItem('loadMonthFilter') || ''; } catch (e) { return ''; } })();" },
+
+    { name: 'loads(app): back to a calendar month instead of a rolling week',
+      file: 'mobile-app/www/index.html', suites: ['load-deck-grouping'],
+      find: "  const days = (opts && opts.days) || loadRecentDays();",
+      to:   "  const days = 400;" },
+
+    { name: 'loads(app): only the newest day opens again',
+      file: 'mobile-app/www/index.html', suites: ['load-deck-grouping', 'load-card-actions'],
+      find: '  const days = groups.map((g) => `\n    <details class="load-date-section" open>',
+      to:   '  const days = groups.map((g, i) => `\n    <details class="load-date-section" ${i === 0 ? \'open\' : \'\'}>' },
+
+    { name: 'loads(app): a chosen month is NOT expanded',
+      file: 'mobile-app/www/index.html', suites: ['load-deck-grouping'],
+      find: "  const allOpen = !!(opts && opts.allOpen);",
+      to:   '  const allOpen = false;' },
+
+    { name: 'loads(app): everything is expanded all the time',
+      file: 'mobile-app/www/index.html', suites: ['load-deck-grouping'],
+      find: "  const allOpen = !!(opts && opts.allOpen);",
+      to:   '  const allOpen = true;' },
+
+    { name: 'loads(app): the month filter is never applied',
+      file: 'mobile-app/www/index.html', suites: ['load-deck-grouping'],
+      find: "    if (loadMonthFilter) rows = filterLoadsByMonth(rows, loadMonthFilter);",
+      to:   '' },
+
+    { name: 'loads(app): an undated load is swept into every month',
+      file: 'mobile-app/www/index.html', suites: ['load-deck-grouping'],
+      find: "  return (loads || []).filter((l) => loadMonthKey(l && l.date) === key);",
+      to:   '  return (loads || []).filter((l) => !l.date || loadMonthKey(l.date) === key);' },
+
+    { name: 'loads(app): the month list is a calendar, not the data',
+      file: 'mobile-app/www/index.html', suites: ['load-deck-grouping'],
+      find: "    const k = loadMonthKey(l && l.date);\n    if (!k) continue;\n    seen.set(k, (seen.get(k) || 0) + 1);",
+      to:   "    const k = loadMonthKey(l && l.date);\n    if (!k) continue;\n    seen.set(k, 0);" },
+
+    { name: 'loads(app): months list oldest first',
+      file: 'mobile-app/www/index.html', suites: ['load-deck-grouping'],
+      find: "  return Array.from(seen.keys()).sort((a, b) => b.localeCompare(a))",
+      to:   '  return Array.from(seen.keys()).sort((a, b) => a.localeCompare(b))' },
+
+    // UTC instead of the yard's own day: for the seven hours after 5pm
+    // Pacific it believes it is already tomorrow, which moves the whole
+    // week boundary a day early every evening.
+    { name: 'loads(app): the week boundary is computed in UTC',
+      file: 'mobile-app/www/index.html', suites: ['load-deck-grouping'],
+      find: "function loadLocalDayKey(d) {\n  const t = new Date(d);",
+      to:   "function loadLocalDayKey(d) {\n  return new Date(d).toISOString().slice(0, 10);\n  const t = new Date(d);" },
+
+    // days - 1 is seven days INCLUDING today. Dropping it shows eight.
+    { name: 'loads(app): the window is off by one day',
+      file: 'mobile-app/www/index.html', suites: ['load-deck-grouping'],
+      find: "  from.setDate(from.getDate() - (days - 1));",
+      to:   '  from.setDate(from.getDate() - days);' },
+
+    { name: 'loads(app): the month filter is persisted across sessions',
+      file: 'mobile-app/www/index.html', suites: ['load-deck-grouping'],
+      find: "let loadMonthFilter = '';",
+      to:   "let loadMonthFilter = (() => { try { return localStorage.getItem('loadMonthFilter') || ''; } catch (e) { return ''; } })();" },
+
     // ── PROTECTING THE YARD DATA (2026-10-02) ───────────────────────────
     // Apsara: "Protect the data of edge yard no matter what."
     // Every one of these turns the alarm off while leaving it looking armed,

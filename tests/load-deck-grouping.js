@@ -32,10 +32,37 @@ const ROOT = path.join(__dirname, '..');
 // The current month is decided from the clock, so the fixture is built
 // relative to today — hard-coded dates would start failing in October for a
 // reason that has nothing to do with the grouping.
+// ── LOCAL DAYS, NOT UTC (fixed 2026-10-02) ───────────────────────────────
+// `iso` was `d.toISOString().slice(0, 10)`, which is the UTC day. The code
+// under test computes its window from the LOCAL day, because a date on a
+// load is the yard's own day — so for part of every day the fixture was
+// building dates in a different calendar from the thing it was testing.
+//
+// It showed up as "a load SIX days old is still open" failing on a machine
+// at UTC+5:30: toISOString said 1 October while the app said the 2nd, so a
+// load the fixture placed exactly ON the boundary landed a day outside it.
+// In Pacific time the error runs the other way — after 5pm, UTC is already
+// tomorrow — which means this fixture has been a day off for seven hours of
+// every day since it was written, and nothing noticed because no check sat
+// on a boundary until now.
+//
+// monthsAgo had a hand-rolled `- getTimezoneOffset()` correction bolted on
+// for the same reason. With a local `iso` it is no longer needed.
 const now = new Date();
-const iso = (d) => d.toISOString().slice(0, 10);
+const iso = (d) => {
+    const p = (n) => String(n).padStart(2, '0');
+    return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+};
 const daysAgo = (n) => { const d = new Date(now); d.setDate(d.getDate() - n); return iso(d); };
-const monthsAgo = (n, day) => { const d = new Date(now.getFullYear(), now.getMonth() - n, day); return iso(new Date(d.getTime() - d.getTimezoneOffset() * 60000)); };
+const monthsAgo = (n, day) => iso(new Date(now.getFullYear(), now.getMonth() - n, day));
+
+// The page's own day heading format, so a boundary check can look for the
+// date rather than for a card id the real markup does not print.
+const formatLike = (ymd) => {
+    const [y, m, d] = String(ymd).split('-').map(Number);
+    return new Date(y, m - 1, d).toLocaleDateString('en-US',
+        { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' });
+};
 
 const mk = (id, date) => ({ id, date, seller: 'Ramesh', net_weight: 100, amount: 10, items: [], _kind: 'purchase' });
 
@@ -74,30 +101,37 @@ for (const file of ['dashboard/index.html', 'mobile-app/www/index.html']) {
     const dom = mount(file);
     const w = dom.window;
 
-    // ── THE FIXTURE HAD A DATE BOMB OF ITS OWN (found 2026-10-01) ────────
-    // "Two this month" was mk('B', daysAgo(1)) — and on the FIRST of a month
-    // yesterday is in the PREVIOUS month, so B stopped being one of the two
-    // and became a sixth folded day. That turned the hardcoded `=== 5`
-    // below red, on a day when nothing about the grouping had changed.
+    // ── THE RULE CHANGED, AND SO DID THE FIXTURE (2026-10-02) ───────────
+    // Apsara: "in collapse phase of Edge Yard-I want last week load to
+    // visible.rest of them collapsible." Confirmed as a ROLLING SEVEN DAYS,
+    // not the calendar week — so what is open no longer has anything to do
+    // with which month it is.
     //
-    // Worse than always-red: it passes on 28 days out of 31 and fails on the
-    // 1st and 2nd, which is the kind of failure that gets re-run, shrugged
-    // at, and eventually deleted.
+    // The old fixture said "two this month, five across two older months".
+    // Under the new rule those monthsAgo(1, 28) loads are four days old on
+    // the 2nd of a month and therefore OPEN, and forty days old on the 10th
+    // and therefore folded. That is the same date bomb this fixture has now
+    // had twice: a test that passes on most days and fails on a few is worse
+    // than one that always fails, because it gets re-run, shrugged at, and
+    // eventually deleted.
     //
-    // So "this month" now means a day that IS in this month whatever the
-    // date: today, and the day after the 1st clipped to today. And the
-    // counts below are computed from this list rather than written down.
-    // BOTH on today. A second DISTINCT day in the current month does not
-    // exist on the 1st, so asking for one is asking the calendar for a
-    // favour. Two loads on one day exercises the same thing the section
-    // below actually checks — that this month renders as day sections with
-    // the newest open — without depending on the date.
-    //
-    // Two this month (same day), five across two older months, one undated.
+    // So the fixture is now expressed in DAYS AGO, either side of the seven
+    // day line by a clear margin. Nothing here depends on today's date.
     const loads = [
-        mk('A', daysAgo(0)), mk('B', daysAgo(0)),
-        mk('C', monthsAgo(1, 28)), mk('D', monthsAgo(1, 27)), mk('E', monthsAgo(1, 14)), mk('F', monthsAgo(1, 3)),
-        mk('G', monthsAgo(2, 9)),
+        // Inside the week — must be open. Two distinct days, so the day
+        // grouping is actually exercised.
+        mk('A', daysAgo(0)), mk('B', daysAgo(0)), mk('C', daysAgo(3)),
+        // Clearly outside it — must fold. Spread across months so the
+        // month > week > day nesting has something to nest.
+        mk('D', daysAgo(20)), mk('E', daysAgo(21)), mk('F', daysAgo(45)),
+        mk('G', daysAgo(80)),
+        // ── ON THE LINE, BOTH SIDES ──────────────────────────────────────
+        // Seven days INCLUDING today, so day 6 is the last one in and day 7
+        // is the first one out. Without these two the fixture never touched
+        // the boundary, and a mutation that made the window eight days long
+        // SURVIVED the whole file — an off-by-one in exactly the place a
+        // rolling window gets them.
+        mk('IN6', daysAgo(6)), mk('OUT7', daysAgo(7)),
         mk('H', null),
     ];
 
@@ -120,22 +154,53 @@ for (const file of ['dashboard/index.html', 'mobile-app/www/index.html']) {
     // Her words are "once the month gets over". The screen she works in every
     // day must not get two folds deeper to tidy up last March.
     const dayTops = q('.load-date-section');
-    // ONE day section for this month's loads plus ONE for the undated — and
-    // asserted as that, rather than as ">= 2". The loose version passed on
-    // the 1st for the wrong reason: the two "this month" loads had silently
-    // collapsed into one day and the count was made up by the undated
-    // section, so a real regression in this-month grouping would have been
-    // invisible.
-    const thisMonthDays = new Set(loads
-        .filter((l) => l.date && l.date.slice(0, 7) === iso(now).slice(0, 7))
+    // ── THE LAST SEVEN DAYS ARE OPEN AT THE TOP LEVEL ────────────────────
+    // Computed from the fixture, not written down: one top-level day section
+    // per distinct date inside the window, plus one for the undated load.
+    // A hardcoded number here is what broke this file twice.
+    const WINDOW = 7;
+    const inWindow = new Set(loads
+        .filter((l) => l.date && l.date >= daysAgo(WINDOW - 1))
         .map((l) => l.date));
     const undated = loads.filter((l) => !l.date).length ? 1 : 0;
-    ck(`${who}: this month still shows as day sections`,
-       dayTops.length === thisMonthDays.size + undated,
-       `${dayTops.length} rendered; expected ${thisMonthDays.size} dated day(s) + ${undated} undated — `
+    ck(`${who}: the last week is open at the top level`,
+       dayTops.length === inWindow.size + undated,
+       `${dayTops.length} rendered; expected ${inWindow.size} day(s) in the last ${WINDOW} `
+       + `+ ${undated} undated — ` + dayTops.map((e) => e.querySelector('summary').textContent.trim()).join(' | '));
+    ck(`  ${who}: and EVERY one of them is open, not just the newest`,
+       dayTops.filter((e) => !/No date set/.test(e.textContent)).every((e) => e.hasAttribute('open')),
+       'her words were "i want last week load to visible" — one open day and six '
+       + 'shut is the scrolling this was meant to remove');
+    ck(`  ${who}: a load older than the week is NOT at the top level`,
+       !dayTops.some((e) => /ago/.test('') ) && q('.load-month-section').length > 0,
+       'the older ones have to be inside a folded month');
+    // ── THE BOUNDARY, NAMED ──────────────────────────────────────────────
+    const topText = dayTops.map((e) => e.textContent).join(' ');
+    const foldedText = q('.load-month-section').map((e) => e.textContent).join(' ');
+    // Asserted on the HEADINGS, which carry the date — the cards render real
+    // markup here and do not print their id.
+    const sixAgoHeading = formatLike(daysAgo(6));
+    ck(`  ${who}: a load SIX days old is still open`,
+       topText.includes(sixAgoHeading),
+       `expected a top-level section for ${daysAgo(6)} (${sixAgoHeading}); got `
        + dayTops.map((e) => e.querySelector('summary').textContent.trim()).join(' | '));
-    ck(`  ${who}: newest day still opens on arrival`, dayTops[0] && dayTops[0].hasAttribute('open'),
-       'if today is shut, every visit starts with a click');
+    const sevenAgoHeading = formatLike(daysAgo(7));
+    ck(`  ${who}: a load SEVEN days old is folded away`,
+       !topText.includes(sevenAgoHeading) && foldedText.includes(sevenAgoHeading),
+       'and day 7 is the first one out — an eight-day window is the off-by-one '
+       + 'a rolling window invites');
+
+    // ── THE YARD'S OWN DAY, NOT UTC ──────────────────────────────────────
+    // splitLoadsByRecency's cutoff used to come from toISOString(), which is
+    // UTC — so for the seven hours after 5pm Pacific it believed it was
+    // already tomorrow and moved the boundary a day early every evening.
+    // Asserted on the helper directly: in a UTC sandbox the two agree, so
+    // only a check on the COMPONENTS can tell them apart.
+    const probe = new Date(2026, 9, 2, 23, 30, 0);   // local 2026-10-02 23:30
+    ck(`  ${who}: the day key is the LOCAL day, not the UTC one`,
+       w.loadLocalDayKey(probe) === '2026-10-02',
+       `got ${w.loadLocalDayKey(probe)} — a date on a load is the yard's own day`);
+
     ck(`  ${who}: and an undated load stays at the top level`,
        dayTops.some((e) => /No date set/.test(e.textContent)),
        'filing an undated load under a month means inventing one, and those are the rows most likely to need fixing');
@@ -143,9 +208,17 @@ for (const file of ['dashboard/index.html', 'mobile-app/www/index.html']) {
     // ══════════════════════════════════════════════════════════════════════
     section(`${who} — C: older months fold, month > week > day`);
     // ══════════════════════════════════════════════════════════════════════
+    // ── COUNTED FROM THE FIXTURE ──────────────────────────────────────────
+    // Was `=== 2`, true of the old monthsAgo fixture and meaningless now
+    // that the fixture is expressed in days. The PROPERTY is "one folded
+    // month per distinct month outside the week".
+    const olderLoads = loads.filter((l) => l.date && l.date < daysAgo(WINDOW - 1));
+    const olderMonths = new Set(olderLoads.map((l) => l.date.slice(0, 7)));
+    const olderDays = new Set(olderLoads.map((l) => l.date));
     const months = q('.load-month-section');
-    ck(`${who}: the two older months are folded`, months.length === 2,
-       months.map((e) => e.querySelector('summary').textContent.trim()).join(' | '));
+    ck(`${who}: the older months are folded`, months.length === olderMonths.size,
+       `${months.length} rendered, ${olderMonths.size} distinct older months — `
+       + months.map((e) => e.querySelector('summary').textContent.trim()).join(' | '));
     // Newest month first. Asserted by DATE, not by comparing the rendered
     // labels — "August" sorts before "July" alphabetically, so a string
     // comparison here would pass on a list in the wrong order.
@@ -162,13 +235,9 @@ for (const file of ['dashboard/index.html', 'mobile-app/www/index.html']) {
     // the month and wrong on the 1st. The PROPERTY is "one folded day per
     // distinct date that is not in the current month", so that is what is
     // asserted — and it stays true whichever day the suite runs.
-    const thisMonth = iso(now).slice(0, 7);
-    const olderDays = new Set(loads
-        .filter((l) => l.date && l.date.slice(0, 7) !== thisMonth)
-        .map((l) => l.date));
     ck(`  ${who}: days inside weeks`,
        q('.load-week-section .load-day-section').length === olderDays.size,
-       `${q('.load-day-section').length} rendered, ${olderDays.size} distinct older dates in the fixture`);
+       `${q('.load-day-section').length} rendered, ${olderDays.size} distinct dates outside the week`);
     ck(`  ${who}: and cards inside days`,
        q('.load-day-section .load-deck-grid').length === olderDays.size);
 
@@ -222,6 +291,89 @@ for (const file of ['dashboard/index.html', 'mobile-app/www/index.html']) {
     // An empty deck must still say so rather than rendering nothing.
     const none = render(w, []);
     ck(`  ${who}: an empty deck says so`, /No loads yet/.test(none.getElementById('r').textContent));
+
+    // ══════════════════════════════════════════════════════════════════════
+    section(`${who} — F: filter by month`);
+    // ══════════════════════════════════════════════════════════════════════
+    // Apsara, 2026-10-02: "Also give an option to filter by month.If they
+    // select that month -all that months load should be visible expanded."
+    // Confirmed as a true filter: only that month, fully expanded.
+    {
+        // The page source, for the checks that have to see the WIRING — the
+        // handler is attached inside the Loads tab's setup, which needs the
+        // tab rendered, so these read the file the mount() came from.
+        const pageSrc = fs.readFileSync(path.join(ROOT, file), 'utf8');
+
+        // ── THE OPTIONS COME FROM THE DATA ───────────────────────────────
+        // A month with no loads in it is a control that answers "no loads"
+        // and reads as broken.
+        const present = w.loadMonthsPresent(loads);
+        const realMonths = new Set(loads.filter((l) => l.date).map((l) => l.date.slice(0, 7)));
+        ck(`${who}: the month list is built from the loads`,
+           present.length === realMonths.size, JSON.stringify(present.map((m) => m.key)));
+        ck(`  ${who}: newest month first`,
+           present.every((m, i) => i === 0 || present[i - 1].key > m.key),
+           present.map((m) => m.key).join(' '));
+        ck(`  ${who}: each carries its count`,
+           present.every((m) => m.count === loads.filter((l) => l.date && l.date.startsWith(m.key)).length),
+           JSON.stringify(present));
+        ck(`  ${who}: and a readable label, not the key`,
+           present.every((m) => /^[A-Z][a-z]+ \d{4}$/.test(m.label)),
+           present.map((m) => m.label).join(' | '));
+
+        // ── FILTERING ────────────────────────────────────────────────────
+        const target = present[present.length - 1].key;   // the oldest, safely outside the week
+        const only = w.filterLoadsByMonth(loads, target);
+        ck(`${who}: filtering keeps only that month`,
+           only.length > 0 && only.every((l) => l.date.startsWith(target)),
+           `${only.length} rows for ${target}`);
+        ck(`  ${who}: an undated load is NOT swept into a month`,
+           !only.some((l) => !l.date),
+           'it has no month; putting it in one is the invention splitLoadsByRecency refuses to make');
+        ck(`  ${who}: no filter means everything`,
+           w.filterLoadsByMonth(loads, '').length === loads.length);
+
+        // ── AND IT RENDERS EXPANDED ──────────────────────────────────────
+        // Her words: "all that months load should be visible expanded."
+        const picked = render(w, only, { allOpen: true });
+        const pq = (sel) => [...picked.querySelectorAll(sel)];
+        const folds = pq('.load-month-section, .load-week-section, .load-day-section, .load-date-section');
+        ck(`${who}: every fold is open when a month is picked`,
+           folds.length > 0 && folds.every((e) => e.hasAttribute('open')),
+           `${folds.filter((e) => !e.hasAttribute('open')).length} of ${folds.length} still shut`);
+        ck(`  ${who}: and every one of that month's loads is on screen`,
+           pq('.load-deck-grid > *').length === only.length,
+           `${pq('.load-deck-grid > *').length} of ${only.length}`);
+
+        // ── WITHOUT allOpen, NOTHING MOVED ───────────────────────────────
+        // The ordinary view must be exactly as it was. allOpen defaulting to
+        // true would quietly unfold her whole history.
+        const normal = render(w, loads);
+        const nq = (sel) => [...normal.querySelectorAll(sel)];
+        ck(`${who}: the unfiltered view still folds the older months`,
+           nq('.load-month-section').every((e) => !e.hasAttribute('open')),
+           'allOpen must default off — otherwise picking no month unfolds everything');
+
+        // ── THE CONTROL EXISTS AND IS WIRED ──────────────────────────────
+        // A <select> nothing listens to is decoration. Checked in the page
+        // source because the handler is attached inside the Loads tab's
+        // wiring, which needs the tab rendered.
+        ck(`${who}: the page has a month control`,
+           /id="loadMonthFilter"/.test(pageSrc), 'no control means no option to filter');
+        ck(`  ${who}: something listens to it`,
+           /\$\('loadMonthFilter'\)[\s\S]{0,400}addEventListener\('change'/.test(pageSrc),
+           'a select nothing listens to is decoration');
+        ck(`  ${who}: and it goes through the one repaint path`,
+           /loadMonthFilter = String\(monthSel\.value[\s\S]{0,200}repaintDeck\(\)/.test(pageSrc),
+           'a second render path is how two controls disagree about what is on screen');
+        ck(`  ${who}: the filter is applied in the repaint chain`,
+           /if \(loadMonthFilter\) rows = filterLoadsByMonth\(rows, loadMonthFilter\)/.test(pageSrc),
+           'the control can be set and change nothing otherwise');
+        ck(`  ${who}: and it is NOT persisted across sessions`,
+           !/localStorage[\s\S]{0,60}loadMonthFilter|loadMonthFilter[\s\S]{0,60}localStorage/.test(pageSrc),
+           'restoring "September" a fortnight later shows none of this week\'s work '
+           + 'with a control she has forgotten she set');
+    }
 
     dom.window.close();
 }
