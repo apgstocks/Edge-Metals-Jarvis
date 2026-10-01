@@ -2899,6 +2899,94 @@ const MUTATIONS = [
       find: '                const rep = this.report;',
       to:   "                const rep = this.report || require('./metalsSheetSync').fetchWorkbook('x');" },
 
+    // ── THE VOICE PATH (2026-10-02) ─────────────────────────────────────
+    // CLAUDE.md: "Twice now that caller has been the voice/assistant path,
+    // because it is the one without a form to put a field on." Built
+    // deliberately this time, so these are the ways it can rot.
+
+    // A chat question that quietly runs a dry sweep: tens of QuickBooks
+    // calls and tens of seconds, every time she asks.
+    { name: 'voice: asking what is stuck runs a live sweep instead of reading the check',
+      file: 'workflow/actions.js', suites: ['qb-agent'],
+      find: '    const look = job.look();\n\n    if (!look) {',
+      to:   '    const look = job.look() || await job.preview();\n\n    if (!look) {' },
+
+    // "nothing is stuck" when nothing has been CHECKED — the worst available
+    // answer, because it reads as good news.
+    { name: 'voice: no check on record reads as nothing stuck',
+      file: 'workflow/actions.js', suites: ['qb-agent'],
+      find: "    if (!look) {",
+      to:   '    if (false) {' },
+
+    // The date dropped, so she cannot tell this morning's list from last
+    // Tuesday's — which is what decides whether she acts on it.
+    { name: 'voice: the answer no longer says when it was checked',
+      file: 'workflow/actions.js', suites: ['qb-agent'],
+      find: "    const when = String(job.lookAt() || '').slice(0, 16).replace('T', ' ');",
+      to:   "    const when = '';" },
+
+    // Jarvis blanks listed in chat as well as handled by the other agent, so
+    // one row appears in two places and both lists stop being read.
+    { name: 'voice: Jarvis blanks are listed in chat too, twice over',
+      file: 'workflow/actions.js', suites: ['qb-agent'],
+      find: "            if (f.side === 'jarvis') { handed += 1; continue; }",
+      to:   "            if (f.side === 'jarvis') { handed += 1; }" },
+
+    // A terminal instruction sent to her phone.
+    { name: 'voice: the chat hint tells her to run a terminal script',
+      file: 'workflow/actions.js', suites: ['qb-agent'],
+      find: "            const hint = agent.hintFor(f, { channel: 'chat' });",
+      to:   '            const hint = f.hint;' },
+
+    { name: 'voice: the phone wording is dropped, so both channels say the same thing',
+      file: 'helpers/qbAgent.js', suites: ['qb-agent'],
+      find: "    if (!hint || channel !== 'chat') return hint || '';",
+      to:   "    if (!hint) return '';" },
+
+    // ── THE PROMISE IS THE BUG (2026-10-02) ─────────────────────────────
+    // The answer tells her to say "check quickbooks". A route that stops
+    // resolving makes that line a lie, which is the same failure as the APK
+    // Jarvis once offered to send and could not.
+    { name: 'voice: "check quickbooks" stops routing, so the offer is a lie',
+      file: 'workflow/brain.js', suites: ['qb-agent'],
+      find: "            return { intent: 'qb_check_now', resolvedBy: 'policy', data: {} };",
+      to:   '            return null;' },
+
+    { name: 'voice: "what is stuck in quickbooks" stops routing',
+      file: 'workflow/brain.js', suites: ['qb-agent'],
+      find: "            return { intent: 'qb_stuck', resolvedBy: 'policy', data: {} };",
+      to:   '            return null;' },
+
+    // The regex widened so it swallows a neighbouring question. Worse than a
+    // missing route, because it answers confidently.
+    { name: 'voice: the stuck route widens and swallows other questions',
+      file: 'workflow/brain.js', suites: ['qb-agent', 'emailwatch-signals'],
+      find: "        if (/^(?:what(?:[’']?s| is)?\\s+)?(?:stuck|blocked|pending|waiting)\\s+(?:in|on|with)\\s+(?:qb|quick\\s?books)\\s*\\??$/i.test(ctx.text.trim())",
+      to:   '        if (/stuck|blocked|pending|waiting/i.test(ctx.text.trim())' },
+
+    // ── THE CACHE (2026-10-02) ──────────────────────────────────────────
+    // Memory only: a pm2 restart (every deploy) leaves chat answering "no
+    // check yet" at 10am, which reads as broken rather than as restarted.
+    { name: 'cache: the check is held in memory only, lost on restart',
+      file: 'helpers/qbAgentJob.js', suites: ['qb-agent'],
+      find: '    const saved = loadJson(cfgL.QB_AGENT_LAST_FILE, null);',
+      to:   '    const saved = null;' },
+
+    // forget() that does not actually forget. helpers/json.js:108 is
+    // `await mutator(data) ?? data`, so a mutator returning null means "no
+    // change" — the trap this hit for real.
+    { name: 'cache: forget() returns null, so json.js keeps the stale file',
+      file: 'helpers/qbAgentJob.js', suites: ['qb-agent'],
+      find: '        await mutateJson(cfgL.QB_AGENT_LAST_FILE, {}, () => ({}), { strict: true });',
+      to:   '        await mutateJson(cfgL.QB_AGENT_LAST_FILE, {}, () => null, { strict: true });' },
+
+    // A failed sweep clears memory but not the file, so chat answers from
+    // yesterday while the ledger agent correctly knows nothing.
+    { name: 'cache: a failed sweep clears memory but leaves the file',
+      file: 'helpers/qbAgentJob.js', suites: ['qb-agent'],
+      find: '        await forget();',
+      to:   '        lastLook = null;' },
+
     // ── THE QUICKBOOKS GATE (2026-10-01) ────────────────────────────────
     // Apsara: "so (bills+invoice) agent should talk to this agent."
     //

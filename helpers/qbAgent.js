@@ -95,6 +95,38 @@ const QB_SIDE = [
 // and the disagreement is a real one that only she can call.
 const ARITHMETIC = /lines add to ([\d.]+) but Jarvis says ([\d.]+)/i;
 
+// ── THE SAME ADVICE, SAID DIFFERENTLY ON A PHONE (2026-10-02) ─────────────
+// The hints above name terminal scripts, which is right in an email she
+// reads at a desk and wrong in a chat message she reads on her phone. Her
+// 2026-09-26 words were "i basically want my website to handle whatever we
+// can do from qb from here" — so a chat hint telling her to open a terminal
+// is the opposite of that.
+//
+// WHAT IS ACTUALLY TRUE TODAY, and worth being exact about: the server HAS
+// POST /api/qb/create-party, but the QuickBooks page has NO CONTROL for it
+// (grep: zero hits in dashboard/index.html). So there is no on-screen way to
+// create a vendor from Jarvis, and a chat hint claiming otherwise would be
+// the promise-is-the-bug failure again. Until that button exists, the
+// honest phone answer is "add it in QuickBooks, the name must match" —
+// because push.js matches on the exact confirmed name, so a near-miss
+// spelling blocks the row again tomorrow.
+//
+// One function so the two channels cannot drift; the email keeps the script,
+// which is the better instruction when she is at a keyboard.
+const PHONE_HINT = [
+    [/qb-create-party/, 'add the name in QuickBooks exactly as Jarvis spells it — '
+        + 'an almost-match blocks the row again tomorrow'],
+    [/map the grade on the QuickBooks page/, 'map the grade on the QuickBooks page'],
+    [/create it there/, 'it has to be created in QuickBooks before the trucking line can post'],
+];
+
+function hintFor(finding, { channel = 'email' } = {}) {
+    const hint = str(finding && finding.hint);
+    if (!hint || channel !== 'chat') return hint || '';
+    for (const [re, phone] of PHONE_HINT) if (re.test(hint)) return phone;
+    return hint;
+}
+
 const str = (v) => String(v == null ? '' : v).trim();
 
 // ── ONE PROBLEM, CLASSIFIED ───────────────────────────────────────────────
@@ -204,8 +236,16 @@ function reportText(look_) {
         const who = [b.container_no, b.invoice_no, b.party].map(str).filter(Boolean).join(' / ') || b.id || '(unidentified row)';
         for (const f of b.found) {
             if (f.side === 'jarvis') { handed += 1; continue; }
+            // THROUGH hintFor, like the chat path. This read f.hint
+            // directly while the comment above claimed "one function so the
+            // two channels cannot drift" — so the function was the single
+            // source of truth for exactly one of its two callers, and a
+            // mutation that broke the channel switch could not be seen from
+            // the email at all. The comment was true of the intent and false
+            // of the code.
+            const emailHint = hintFor(f, { channel: 'email' });
             const line = `  · ${who}\n      ${f.what || f.problem}`
-                + (f.hint ? `\n      → ${f.hint}` : '');
+                + (emailHint ? `\n      → ${emailHint}` : '');
             (f.side === 'unknown' ? unknown : hers).push(line);
         }
     }
@@ -243,5 +283,5 @@ function reportText(look_) {
 
 module.exports = {
     JARVIS_BLANKS, QB_SIDE, LEDGER_FOR,
-    classifyProblem, look, tally, blockingFields, reportText,
+    classifyProblem, look, tally, blockingFields, reportText, hintFor, PHONE_HINT,
 };

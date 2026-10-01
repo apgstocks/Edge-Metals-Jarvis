@@ -8423,6 +8423,111 @@ async function showWritingStyle(chatId) {
     return { action_taken: 'writing_style_shown' };
 }
 
+
+// ── WHAT QUICKBOOKS IS STUCK ON ───────────────────────────────────────────
+// Apsara, 2026-10-01: "Assign one agent for quickbook next" / "so
+// (bills+invoice) agent should talk to this agent."
+//
+// The 07:25 agent emails this. An agent you can only hear from on its own
+// schedule is one you go looking in your inbox for, so she can ask.
+//
+// ── IT READS THE MORNING'S CHECK, IT DOES NOT RUN ONE ─────────────────────
+// A fresh dry sweep fetches her QuickBooks name snapshots and looks for
+// existing matches on every unblocked row. That is tens of API calls and
+// tens of seconds. A chat question that quietly cost that would be asked
+// five times in a row on a bad morning, and it would be slow in the way
+// that makes a person stop asking.
+//
+// So this reads the cached check and SAYS WHEN IT RAN. A list of stuck rows
+// with no date on it is a list she cannot judge — whether it is this
+// morning's or last Tuesday's decides whether she acts on it.
+async function showQuickBooksStuck(chatId) {
+    const job = require('../helpers/qbAgentJob');
+    const look = job.look();
+
+    if (!look) {
+        // NAMED, not silent, and the offer is a route that exists — see
+        // closePurchaseOrder's header for why that matters.
+        await _send(chatId, 'I have no QuickBooks check on record yet. It runs at 7:25 each '
+            + 'morning. Say "check quickbooks" and I\'ll run one now — it takes a moment, '
+            + 'because it asks QuickBooks about every row.');
+        return { action_taken: 'qb_stuck_no_check' };
+    }
+
+    const when = String(job.lookAt() || '').slice(0, 16).replace('T', ' ');
+    if (!look.blocked.length) {
+        await _send(chatId, `Nothing is stuck. Every row since the cutover goes into QuickBooks `
+            + `cleanly${when ? ` — checked ${when}` : ''}.`);
+        return { action_taken: 'qb_stuck_none' };
+    }
+
+    // The same split the email uses, and for the same reason: a row waiting
+    // on the ledger agent is not a row waiting on her, and listing them
+    // together is how a list stops being read.
+    const agent = require('../helpers/qbAgent');
+    const lines = [];
+    let handed = 0;
+    for (const b of look.blocked) {
+        const who = [b.container_no, b.invoice_no, b.party].map((x) => String(x || '').trim())
+            .filter(Boolean).join(' / ') || b.id || '(unidentified row)';
+        for (const f of (b.found || [])) {
+            if (f.side === 'jarvis') { handed += 1; continue; }
+            // Phone wording, not the email's — see qbAgent.hintFor. A chat
+            // message telling her to open a terminal is the opposite of
+            // "i basically want my website to handle whatever we can do
+            // from qb from here".
+            const hint = agent.hintFor(f, { channel: 'chat' });
+            lines.push(`• ${who}\n   ${f.what || f.problem}${hint ? `\n   → ${hint}` : ''}`);
+        }
+    }
+
+    const out = [];
+    out.push(lines.length
+        ? `${lines.length} thing${lines.length === 1 ? ' needs' : 's need'} you in QuickBooks`
+          + `${when ? ` (checked ${when})` : ''}:`
+        : `Nothing needs you${when ? ` (checked ${when})` : ''} —`);
+    if (lines.length) out.push('', ...lines.slice(0, 12));
+    if (lines.length > 12) out.push('', `…and ${lines.length - 12} more.`);
+    if (handed) {
+        out.push('', `${handed} blank${handed === 1 ? '' : 's'} in Jarvis ${handed === 1 ? 'is' : 'are'} `
+            + 'also holding rows up. The ledger agent fills what the sheet has at 7:30 '
+            + 'and asks you about the rest, so I haven\'t listed those twice.');
+    }
+    out.push('', `${look.blocked.length} of ${look.rowsSeen} rows stuck. Nothing was changed — `
+        + 'in Jarvis or in QuickBooks. Say "check quickbooks" for a fresh look.');
+    await _send(chatId, out.join('\n'));
+    return { action_taken: 'qb_stuck_listed', stuck: look.blocked.length, hers: lines.length };
+}
+
+// The fresh check. Exists because the answers above offer it.
+//
+// Still a DRY sweep: this cannot push, cannot create a vendor, cannot
+// journal. It is slow and it talks to QuickBooks, which is the whole reason
+// the question above reads a cache instead.
+async function checkQuickBooksNow(chatId) {
+    const job = require('../helpers/qbAgentJob');
+    // Said BEFORE the wait, not after. Thirty seconds of nothing reads as a
+    // bot that did not hear her.
+    await _send(chatId, 'Checking QuickBooks — asking it about every row since the cutover. '
+        + 'A moment. (Nothing will be changed.)');
+    try {
+        const look = await job.preview();
+        // Remembered, so the next "what\'s stuck" is instant and so the
+        // 7:30 ledger agent gets today\'s blocking list rather than this
+        // morning\'s.
+        await job.remember({ ...look, at: new Date().toISOString() });
+        return showQuickBooksStuck(chatId);
+    } catch (e) {
+        // An expired token is the likeliest failure by a long way, and it has
+        // a specific fix she can act on.
+        const why = String((e && e.message) || e);
+        await _send(chatId, `I couldn't check QuickBooks: ${why.slice(0, 180)}\n\n`
+            + 'If that mentions a token or authorisation, reconnect QuickBooks on the '
+            + 'QuickBooks page and ask me again. Nothing was changed.');
+        return { action_taken: 'qb_check_failed', error: why.slice(0, 200) };
+    }
+}
+
 module.exports = {
     metalsBriefing, metalsReport,
     replyToFocusedDigest, askWhichDigestItem, reviseDraftedEmail,
@@ -8468,6 +8573,8 @@ explainDigestItem,
 tellThreadStory,
 showPurchaseOrder,
 showPurchaseOrders,
+showQuickBooksStuck,
+checkQuickBooksNow,
     setReminder, showReminders, cancelReminder,
     askForScaleTickets, resumeQuoteWithScaleTickets,
     // Proforma raised from a customer's own email (2026-08-23).

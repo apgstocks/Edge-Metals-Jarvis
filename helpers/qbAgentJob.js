@@ -30,12 +30,72 @@
 
 const cfg = require('../config');
 
-// What the ledger agent reads at 07:30. Null until a run has happened, which
-// it treats as "no blocking information" rather than "nothing is blocked" —
-// the difference matters, so it is a null and not an empty Map.
+// ── WHAT THE LEDGER AGENT AND THE CHAT BOTH READ ──────────────────────────
+// Null until a run has happened, which is treated as "no blocking
+// information" rather than "nothing is blocked" — the difference matters, so
+// it is a null and not an empty Map.
+//
+// KEPT ON DISK AS WELL AS IN MEMORY. Module state is enough for the 07:30
+// handoff (one pm2 app, one process), but not for "what's stuck in
+// quickbooks" asked in chat: a deploy restarts the process, and an empty
+// cache at 10am reads as broken rather than as restarted. In memory first
+// because it is the hot path; the file is the fallback.
 let lastLook = null;
-const look = () => lastLook;
-const forget = () => { lastLook = null; };
+
+const look = () => {
+    if (lastLook) return lastLook;
+    // Read-through. loadJson NEVER THROWS — it returns the default and logs
+    // — so a missing or torn file reads as "no check yet", which is the
+    // honest answer rather than a crash in the morning's cron.
+    const cfgL = require('../config');
+    const { loadJson } = require('./json');
+    const saved = loadJson(cfgL.QB_AGENT_LAST_FILE, null);
+    if (!saved || !Array.isArray(saved.blocked)) return null;
+    lastLook = saved;
+    return lastLook;
+};
+
+// WHEN the check ran, so chat can say so. A list of stuck rows with no date
+// on it is a list she cannot judge — "is this this morning's or last
+// Tuesday's" decides whether she acts on it.
+const lookAt = () => {
+    const l = look();
+    return (l && l.at) || null;
+};
+
+const remember = async (result) => {
+    lastLook = result;
+    try {
+        const cfgL = require('../config');
+        const { mutateJson } = require('./json');
+        await mutateJson(cfgL.QB_AGENT_LAST_FILE, null, () => result, { strict: true });
+    } catch (e) {
+        // The handoff still works from memory, so this is a degraded cache
+        // and not a failed run. Said out loud rather than swallowed.
+        console.error('[qb-agent] could not persist the check:', e.message);
+    }
+};
+
+const forget = async () => {
+    lastLook = null;
+    try {
+        const cfgL = require('../config');
+        const { mutateJson } = require('./json');
+        // ── WHY {} AND NOT null ──────────────────────────────────────────
+        // helpers/json.js:108 is `await mutator(data) ?? data` — a mutator
+        // that returns null or undefined means "no change", so
+        // `() => null` here wrote NOTHING and the stale file survived a
+        // forget(). Chat would have kept answering from yesterday's check
+        // while the ledger agent correctly believed it knew nothing: two
+        // caches, one of them stale, which is worse than no cache.
+        //
+        // {} rather than deleting the file: look() tests
+        // Array.isArray(saved.blocked), so an empty object reads as "no
+        // check yet", and the file keeps existing so its absence still
+        // means something different (never written).
+        await mutateJson(cfgL.QB_AGENT_LAST_FILE, {}, () => ({}), { strict: true });
+    } catch { /* forgetting a cache is best-effort by definition */ }
+};
 
 // ── THE RUN ───────────────────────────────────────────────────────────────
 // `sweep`, `send`, `alreadySent` and `markSent` are injected for the same
@@ -66,7 +126,9 @@ async function run({ sweep, send, alreadySent, markSent, now = new Date() } = {}
         // the next run rather than written off for the day.
         const why = String((e && e.message) || e).slice(0, 200);
         console.error('[qb-agent] sweep failed:', why);
-        lastLook = null;
+        // BOTH, or the chat keeps answering from yesterday's file while the
+        // ledger agent correctly believes it knows nothing.
+        await forget();
         const to = recipients();
         if (to && send) {
             try {
@@ -81,7 +143,7 @@ async function run({ sweep, send, alreadySent, markSent, now = new Date() } = {}
 
     // Cached for the ledger agent BEFORE the email, so a send failure does
     // not cost the 07:30 run its blocking information.
-    lastLook = result;
+    await remember({ ...result, at: now.toISOString() });
 
     const text = agent.reportText(result);
     await mark(key);
@@ -123,4 +185,4 @@ function recipients() {
 // Everything except the email. What a route or a screen should call.
 const preview = (opts = {}) => require('./qbAgent').look(opts);
 
-module.exports = { run, preview, look, forget, recipients };
+module.exports = { run, preview, look, lookAt, remember, forget, recipients };

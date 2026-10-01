@@ -1643,6 +1643,34 @@ function policyDecide(ctx) {
             || /^(?:what|which)\s+(?:p\.?\s?o\.?s?|purchase\s+orders?)\s+(?:are\s+)?(?:open|live|outstanding|pending)\s*\??$/i.test(ctx.text.trim())) {
             return { intent: 'show_pos', resolvedBy: 'policy', data: {} };
         }
+        // ── WHAT QUICKBOOKS IS STUCK ON (2026-10-02) ────────────────────
+        // Apsara: "Assign one agent for quickbook next". The 07:25 agent
+        // emails her; this is the same answer when she asks for it, because
+        // an agent you can only hear from on its own schedule is one you
+        // check your inbox for.
+        //
+        // Policy-resolved rather than left to the model: these are the exact
+        // words for a question with one meaning, and a classifier round trip
+        // to decide them is latency and a chance to be wrong for nothing.
+        //
+        // READ FROM THE MORNING'S CHECK, not a fresh sweep — see
+        // actions.showQuickBooksStuck. A chat answer must not quietly cost
+        // thirty seconds and forty QuickBooks calls.
+        if (/^(?:what(?:[’']?s| is)?\s+)?(?:stuck|blocked|pending|waiting)\s+(?:in|on|with)\s+(?:qb|quick\s?books)\s*\??$/i.test(ctx.text.trim())
+            || /^(?:qb|quick\s?books)\s+(?:stuck|blocked|status|problems?|issues?)\s*\??$/i.test(ctx.text.trim())
+            || /^what(?:[’']?s| is)?\s+(?:not|n[’']?t)\s+going\s+into\s+(?:qb|quick\s?books)\s*\??$/i.test(ctx.text.trim())
+            || /^why\s+(?:is|are)?\s*(?:\w+\s+)?(?:not|n[’']?t)\s+in\s+(?:qb|quick\s?books)\s*\??$/i.test(ctx.text.trim())) {
+            return { intent: 'qb_stuck', resolvedBy: 'policy', data: {} };
+        }
+        // The fresh check. This route exists because the answer above OFFERS
+        // it — the closePurchaseOrder lesson: a message that says 'say X' to
+        // a bot with no such route is the same class of failure as the APK
+        // Jarvis once promised and could not send. The promise is the bug.
+        if (/^(?:check|recheck|re-check|refresh|run)\s+(?:qb|quick\s?books)(?:\s+now)?\s*$/i.test(ctx.text.trim())
+            || /^(?:check|run)\s+(?:qb|quick\s?books)\s+(?:again|check)\s*$/i.test(ctx.text.trim())) {
+            return { intent: 'qb_check_now', resolvedBy: 'policy', data: {} };
+        }
+
         // One PO's history. Requires the 4-12 digit shape, so "po 1" is not a
         // PO lookup — it is far more likely a digest index and must fall
         // through to the rules that handle those.
@@ -2721,6 +2749,8 @@ async function route(decision, ctx, sendMessage) {
         case 'close_po':              return actions.closePurchaseOrder(chatId, d.po);
         case 'show_po':               return actions.showPurchaseOrder(chatId, d.po);
         case 'show_pos':              return actions.showPurchaseOrders(chatId);
+        case 'qb_stuck':              return actions.showQuickBooksStuck(chatId);
+        case 'qb_check_now':          return actions.checkQuickBooksNow(chatId);
         case 'ignore_digest_item':      return actions.ignoreDigestItem(chatId, d.indices, d.all === true);
         case 'reply_email':             return actions.draftReplyForConfirm(chatId, d.target_name, d.email_details, bkg, ctx.text, extractScheduleClause(ctx.text));
         case 'backfill_cutoffs':         return actions.backfillCutoffs(chatId);
