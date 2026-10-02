@@ -8599,6 +8599,409 @@ async function draftClaimEmail(chatId, container) {
     return { action_taken: 'draft_claim_sent', claim_id: claim.id, needs: draft.needs.length };
 }
 
+
+// ── "I PAID 10000 ADVANCE TO INESH" ───────────────────────────────────────
+// Apsara, 2026-10-02, over WhatsApp:
+//
+//   "If user messages (only allowed users) jarvis and they say,I paid 10000
+//    advance to Inesh.It should able to undertsand that.If they didnt mention
+//    specifically-as advance.Just ask the user directly whether it is a
+//    advance or paid against bill?If advance,create an entry in bill pay
+//    against that supplier.Else Just show all the unpaid upto 5 containers
+//    with bill date and ask him to choose all those applicable.Post getting
+//    user input,Jarvis should create an entry in Bill Pay."
+//
+// The reading lives in helpers/supplierPayTalk.js — pure, no store, no
+// session — and the conversation lives here. The last two money paths that
+// broke in this codebase broke because the rule and the conversation were
+// tangled together and only one of them was tested.
+//
+// ── IT NEVER GUESSES THE KIND ─────────────────────────────────────────────
+// `advance` is only assumed when she SAID it. Her instruction is explicit:
+// if she did not, ASK. Guessed as an advance, the money sits as unapplied
+// credit while the container still reads unpaid; guessed the other way, it
+// marks containers settled out of money meant to be held. Both are worse
+// than one question.
+//
+// ── AND IT NEVER INVENTS A SUPPLIER ───────────────────────────────────────
+// A misheard name is money filed against the wrong person, found weeks later
+// when his account does not tie. resolve() returns a match or candidates,
+// never a guess.
+async function paySupplier(chatId, parsed, senderName) {
+    const talk = require('../helpers/supplierPayTalk');
+    const bp = require('../helpers/billPayments');
+    const bills = require('../helpers/bills');
+
+    const known = [...new Set(bills.list().map((b) => String(b && b.supplier || '').trim())
+        .filter(Boolean))];
+    const hit = talk.resolve(parsed.supplier, known);
+
+    if (!hit.match) {
+        const opts = (hit.candidates || []).slice(0, 6);
+        if (!opts.length) {
+            // NAMED, and not created. A supplier Jarvis has never billed is
+            // either a typo or genuinely new, and both want her eyes.
+            await _send(chatId, `I don't have a supplier matching "${parsed.supplier}". `
+                + 'Record it on the Bills page, or tell me the name as it is spelled there.');
+            return { action_taken: 'pay_supplier_unknown', typed: parsed.supplier };
+        }
+        await setPending(chatId, { type: 'await_pay_supplier', parsed, options: opts });
+        await _send(chatId, `Which one?\n${opts.map((o, i) => `  ${i + 1}. ${o}`).join('\n')}`);
+        return { action_taken: 'pay_supplier_which', options: opts.length };
+    }
+
+    return paySupplierKnown(chatId, { ...parsed, supplier: hit.match }, senderName);
+}
+
+// Supplier settled. Either record the advance she named, or ask which it is.
+async function paySupplierKnown(chatId, parsed, senderName) {
+    const money = (n) => '$' + Number(n || 0).toLocaleString('en-US',
+        { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+    if (parsed.saidAdvance) {
+        // ── THE MODE IS REQUIRED, SO IT IS ASKED ─────────────────────────
+        // billPayments refuses a payment whose mode is not one of Zelle /
+        // Wire / Cash. The first version of this flow neither asked nor
+        // passed one, so EVERY payment by message would have failed outright
+        // — which is the 2026-09-17 break in CLAUDE.md repeated word for
+        // word: a requirement added to shared code, and the caller that
+        // cannot satisfy it is the chat path, because it has no form to put
+        // a field on.
+        //
+        // It is NOT defaulted. She pays suppliers by Zelle AND by Wire, so a
+        // default is a wrong method recorded confidently on half of them —
+        // and the method is what she reconciles the bank statement against.
+        //
+        // The mode doubles as the confirmation: naming one from a list is an
+        // explicit act, not a passing message that happened to arrive, and it
+        // costs her one reply rather than two.
+        return askPayMode(chatId, { parsed, kind: 'advance' },
+            `Record ${money(parsed.amount)} as an ADVANCE to ${parsed.supplier}?\n\n`
+            + 'It will sit as credit against him until you apply it to a container.');
+    }
+    if (parsed.saidAgainstBill) return paySupplierBills(chatId, parsed);
+
+    // HER INSTRUCTION, VERBATIM: "If they didnt mention specifically-as
+    // advance.Just ask the user directly whether it is a advance or paid
+    // against bill?"
+    await setPending(chatId, { type: 'await_pay_kind', parsed });
+    await _send(chatId, `${money(parsed.amount)} to ${parsed.supplier} — is that an `
+        + '*advance*, or against a *bill*?');
+    return { action_taken: 'pay_supplier_ask_kind' };
+}
+
+// How the money went. Read from her own sentence when she said it ("I wired
+// 10000 to Inesh"), asked when she did not.
+function payModeIn(text) {
+    const t = String(text || '').toLowerCase();
+    if (/\bzelle\b/.test(t)) return 'Zelle';
+    if (/\bwire(d|s)?\b|\bbank transfer\b/.test(t)) return 'Wire';
+    if (/\bcash\b/.test(t)) return 'Cash';
+    return null;
+}
+
+// Which account it left. Required for Zelle and Wire; forbidden for Cash
+// — a bank on a cash payment is a false statement, and banks.resolveForMode
+// throws if one is supplied.
+function payBankIn(text) {
+    const t = String(text || '').toLowerCase();
+    const banks = require('../helpers/banks').BANKS;
+    return banks.find((b) => t.includes(b.toLowerCase()))
+        || (/\bbofa\b|bank of america/.test(t) ? 'BofA' : null)
+        || (/\bchase\b/.test(t) ? 'Chase Bank' : null);
+}
+
+// ── AND THEN WHICH BANK ──────────────────────────────────────────────────
+// Third required field found the same way as the first two: by running the
+// flow end to end rather than by reading the writer. Cash skips it.
+async function askPayBank(chatId, pending) {
+    const banks = require('../helpers/banks').BANKS;
+    const already = payBankIn((pending.parsed && pending.parsed.said) || '');
+    if (already) return paySupplierRecord(chatId, { ...pending, bank: already }, pending.senderName);
+    await setPending(chatId, { ...pending, type: 'await_pay_bank' });
+    await _send(chatId, `${pending.mode} from which account — `
+        + banks.map((b) => `*${b}*`).join(' or ') + '?');
+    return { action_taken: 'pay_supplier_ask_bank' };
+}
+
+// The last step before anything is written: the summary, then the mode.
+async function askPayMode(chatId, pending, summary) {
+    const bp = require('../helpers/billPayments');
+    const modes = bp.BILL_PAYMENT_MODES;
+    // Straight through when she already said how she sent it — asking a
+    // question she has already answered is how two messages become four.
+    const already = payModeIn((pending.parsed && pending.parsed.said) || '');
+    if (already) {
+        await setPending(chatId, { ...pending, type: 'await_pay_confirm', mode: already });
+        await _send(chatId, `${summary}\n\nSent by ${already}. Reply *yes* to record it `
+            + '— nothing is recorded until you do.');
+        return { action_taken: 'pay_supplier_confirm', mode: already };
+    }
+    await setPending(chatId, { ...pending, type: 'await_pay_confirm' });
+    await _send(chatId, `${summary}\n\nHow did you send it — `
+        + modes.map((m) => `*${m}*`).join(', ') + '? Nothing is recorded until you answer.');
+    return { action_taken: 'pay_supplier_ask_mode' };
+}
+
+// ── THE CONTAINERS, AS SHE ASKED FOR THEM ─────────────────────────────────
+// "Just show all the unpaid upto 5 containers with bill date and ask him to
+// choose all those applicable."
+async function paySupplierBills(chatId, parsed) {
+    const talk = require('../helpers/supplierPayTalk');
+    const bills = require('../helpers/bills');
+    const money = (n) => '$' + Number(n || 0).toLocaleString('en-US',
+        { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+    const open = talk.unpaidFor(bills.listWithTotals(), parsed.supplier);
+    if (!open.shown.length) {
+        // Nothing owing. Offered as an advance rather than refused — that is
+        // what the money IS when there is no bill to put it against, and the
+        // bill pay screen says the same thing in the same situation.
+        return askPayMode(chatId, { parsed, kind: 'advance' },
+            `Nothing is unpaid for ${parsed.supplier}, so there is no bill to put `
+            + `${money(parsed.amount)} against.\n\nRecord it as an ADVANCE instead?`);
+    }
+
+    const lines = open.shown.map((b, i) =>
+        `  ${i + 1}. ${b.container_no || '(no container)'}  ${b.date || '—'}  owing ${money(b.balance)}`);
+    await setPending(chatId, { type: 'await_pay_containers', parsed, offered: open.shown });
+    await _send(chatId,
+        `${money(parsed.amount)} to ${parsed.supplier} — which containers does it cover?\n\n`
+        + lines.join('\n')
+        + (open.more ? `\n\n(${open.more} more not shown — ${money(open.owed)} owing in total)` : '')
+        + '\n\nReply with the numbers, like *1,3* — or *all*.');
+    return { action_taken: 'pay_supplier_ask_containers', offered: open.shown.length };
+}
+
+// ── THE ONLY PLACE THAT WRITES ────────────────────────────────────────────
+// Through helpers/billPayments, the same functions the Bills page uses. No
+// second way to record a payment: two paths into one ledger is how the screen
+// and the chat end up disagreeing about what was paid.
+async function paySupplierRecord(chatId, pending, senderName) {
+    const bp = require('../helpers/billPayments');
+    const money = (n) => '$' + Number(n || 0).toLocaleString('en-US',
+        { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    const p = pending.parsed || {};
+
+    try {
+        if (pending.kind === 'advance') {
+            const rec = await bp.addAdvance({
+                supplier: p.supplier, amount: p.amount, mode: pending.mode, bank: pending.bank,
+                date: require('../helpers/time').todayLocal(),
+                ref: `WhatsApp — ${senderName || 'you'}`,
+            });
+            await _send(chatId, `Recorded. ${money(p.amount)} advance to ${p.supplier}.\n\n`
+                + `He is now holding ${money(bp.advanceCredit(p.supplier))} of your money. `
+                + 'Apply it to containers from the Bills page when the bill arrives.\n\n'
+                + 'Say *undo last payment* if that was wrong.');
+            return { action_taken: 'pay_supplier_recorded', kind: 'advance', id: rec && rec.id };
+        }
+
+        const rec = await bp.addBillPayment({
+            supplier: p.supplier, amount: p.amount, mode: pending.mode, bank: pending.bank,
+            date: require('../helpers/time').todayLocal(),
+            ref: `WhatsApp — ${senderName || 'you'}`,
+            allocations: pending.allocations || [],
+        });
+        const n = (pending.allocations || []).length;
+        await _send(chatId, `Recorded. ${money(p.amount)} to ${p.supplier} across `
+            + `${n} container${n === 1 ? '' : 's'}.`
+            + (pending.leftover > 0.005
+                ? `\n\n${money(pending.leftover)} was left over and is sitting as credit against him.`
+                : '')
+            + '\n\nSay *undo last payment* if that was wrong.');
+        return { action_taken: 'pay_supplier_recorded', kind: 'payment', id: rec && rec.id };
+    } catch (e) {
+        // The server's own rule, said in her words rather than as a stack
+        // trace. cleanAllocations refuses a payment whose allocations do not
+        // sum to the amount.
+        await _send(chatId, `I couldn't record that: ${String(e.message || e).slice(0, 180)}`);
+        return { action_taken: 'pay_supplier_failed', error: String(e.message || e).slice(0, 200) };
+    }
+}
+
+// ── UNDO ──────────────────────────────────────────────────────────────────
+// Apsara: "Also jarvis profile should have the access to delete/undo the Bill
+// pay as well." The website has had this behind the Jarvis profile since
+// 2026-09-03 (metalsCanDelete). This is the chat half.
+//
+// MANAGER ONLY, and that is deliberate: deleting a supplier payment reopens
+// containers and moves a balance. On the website it sits behind the Jarvis
+// profile, and the manager is this channel's equivalent — a team member can
+// RECORD a payment here but not remove one.
+async function undoBillPayment(chatId, { isManager } = {}) {
+    const bp = require('../helpers/billPayments');
+    const money = (n) => '$' + Number(n || 0).toLocaleString('en-US',
+        { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+    if (!isManager) {
+        await _send(chatId, 'Removing a supplier payment is manager-only — it reopens containers '
+            + 'and moves a balance. Ask Apsara, or do it from the Bills page with the Jarvis profile.');
+        return { action_taken: 'undo_bill_payment_refused' };
+    }
+
+    const all = bp.list();
+    const last = all.length ? all[all.length - 1] : null;
+    if (!last) {
+        await _send(chatId, 'There are no supplier payments recorded to undo.');
+        return { action_taken: 'undo_bill_payment_none' };
+    }
+
+    await setPending(chatId, { type: 'await_undo_pay_confirm', payment_id: last.id });
+    const n = (last.allocations || []).length;
+    await _send(chatId, `Remove this payment?\n\n  ${last.date || '—'}  ${last.supplier || '—'}  `
+        + `${money(last.amount)}${last.kind === 'advance' ? '  (advance)' : ''}\n`
+        + (n ? `  it covers ${n} container${n === 1 ? '' : 's'}, which will reopen\n` : '')
+        + '\nReply *yes* to remove it. This cannot be taken back.');
+    return { action_taken: 'undo_bill_payment_confirm', payment_id: last.id };
+}
+
+
+// ── THE ANSWER TO WHATEVER WAS ASKED ──────────────────────────────────────
+// One entry point for all five pendings, because brain.js routes them all to
+// one intent: the pending itself says which question is outstanding, and
+// re-deriving that from the text is how an answer to question A gets handled
+// as an answer to question B.
+//
+// EVERY BRANCH CLEARS ITS PENDING BEFORE ACTING, matching the 'select_supplier'
+// idiom above. A pending left set while the next action runs is a pending that
+// captures the NEXT message too.
+async function paySupplierAnswer(chatId, pending, answerText, senderName, { isManager } = {}) {
+    const talk = require('../helpers/supplierPayTalk');
+    const bills = require('../helpers/bills');
+    const text = String(answerText || '').trim();
+    const p = (pending && pending.parsed) || {};
+
+    switch (pending && pending.type) {
+
+    // Which of the names Jarvis offered.
+    case 'await_pay_supplier': {
+        // pickFrom returns { chosen: [...] }, NOT an array. Testing .length
+        // on the wrapper is always undefined, so every correct answer would
+        // have been met with "I didn't catch which one" — forever.
+        const picked = (talk.pickFrom(text, pending.options || []) || {}).chosen || [];
+        if (!picked.length) {
+            await _send(chatId, `I didn't catch which one. Reply with the number, or the name as listed.`);
+            return { action_taken: 'pay_supplier_repick' };
+        }
+        await clearPending(chatId);
+        return paySupplierKnown(chatId, { ...p, supplier: picked[0] }, senderName);
+    }
+
+    // Advance, or against a bill? Read with the SAME parser that read the
+    // original sentence — one place that decides what "advance" means.
+    case 'await_pay_kind': {
+        // parse() returns NULL when it cannot read the line, and a bare
+        // "advance" is exactly such a line. Reading .saidAdvance off it threw.
+        const said = talk.parse(text) || {};
+        if (said.saidAdvance || /^\s*advance\b/i.test(text)) {
+            await clearPending(chatId);
+            return paySupplierKnown(chatId, { ...p, saidAdvance: true }, senderName);
+        }
+        if (said.saidAgainstBill || /\bbill\b/i.test(text)) {
+            await clearPending(chatId);
+            return paySupplierBills(chatId, p);
+        }
+        await _send(chatId, 'Sorry — *advance*, or against a *bill*?');
+        return { action_taken: 'pay_supplier_reask_kind' };
+    }
+
+    // Which containers it covers.
+    case 'await_pay_containers': {
+        const offered = pending.offered || [];
+        const chosen = (talk.pickFrom(text, offered) || {}).chosen || [];
+        if (!chosen.length) {
+            await _send(chatId, 'I didn’t catch that. Reply with the numbers from the list, like *1,3* — or *all*.');
+            return { action_taken: 'pay_supplier_repick_containers' };
+        }
+        const split = talk.allocate(p.amount, chosen);
+        const money = (n) => '$' + Number(n || 0).toLocaleString('en-US',
+            { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+        // ── SHOWN BEFORE IT IS WRITTEN ───────────────────────────────────
+        // The allocation is arithmetic she did not do, against containers she
+        // picked by number. She sees the split and says yes; nothing is
+        // recorded on the strength of a one-word reply to a list.
+        const lines = split.allocations.map((a) =>
+            `  ${a.container_no || a.bill_id || '(container)'}  ${money(a.amount)}`);
+        await clearPending(chatId);
+        const res = await askPayMode(chatId,
+            { parsed: p, kind: 'payment', allocations: split.allocations, leftover: split.leftover },
+            `${money(p.amount)} to ${p.supplier}:\n\n${lines.join('\n')}`
+            + (split.leftover > 0.005
+                ? `\n\n${money(split.leftover)} left over — it will sit as credit against him.`
+                : '')
+            + (split.short > 0.005
+                ? `\n\nThis does not cover them in full — ${money(split.short)} would still be owing.`
+                : ''));
+        return { ...res, allocations: split.allocations.length };
+    }
+
+    case 'await_pay_confirm': {
+        // She either names the mode (which IS the confirmation) or says yes
+        // to a mode already read out of her original sentence.
+        const mode = payModeIn(text) || pending.mode || null;
+        if (!mode) {
+            const bp2 = require('../helpers/billPayments');
+            await _send(chatId, 'Sorry — how did you send it? '
+                + bp2.BILL_PAYMENT_MODES.map((m) => `*${m}*`).join(', ') + '.');
+            return { action_taken: 'pay_supplier_reask_mode' };
+        }
+        await clearPending(chatId);
+        // Cash needs no bank and must not carry one. Everything else does.
+        if (mode === 'Cash') return paySupplierRecord(chatId, { ...pending, mode }, senderName);
+        return askPayBank(chatId, { ...pending, mode, senderName });
+    }
+
+    case 'await_pay_bank': {
+        const bank = payBankIn(text);
+        if (!bank) {
+            const banks = require('../helpers/banks').BANKS;
+            await _send(chatId, 'Sorry — which account? '
+                + banks.map((b) => `*${b}*`).join(' or ') + '.');
+            return { action_taken: 'pay_supplier_reask_bank' };
+        }
+        await clearPending(chatId);
+        return paySupplierRecord(chatId, { ...pending, bank }, senderName);
+    }
+
+    // ── THE ONLY DESTRUCTIVE ONE ─────────────────────────────────────────
+    // Manager re-checked HERE as well as at the intent. undoBillPayment
+    // refused a non-manager before setting this pending, but a pending is a
+    // stored object and the message that answers it is a different message
+    // from a possibly different person in a group chat.
+    case 'await_undo_pay_confirm': {
+        await clearPending(chatId);
+        if (!isManager) {
+            await _send(chatId, 'Removing a supplier payment is manager-only.');
+            return { action_taken: 'undo_bill_payment_refused' };
+        }
+        const bp = require('../helpers/billPayments');
+        try {
+            const gone = bp.list().find((r) => r.id === pending.payment_id);
+            if (!gone) {
+                await _send(chatId, 'That payment is no longer there — nothing to remove.');
+                return { action_taken: 'undo_bill_payment_gone' };
+            }
+            await bp.deleteBillPayment(pending.payment_id);
+            const n = (gone.allocations || []).length;
+            await _send(chatId, `Removed. ${gone.supplier || ''} — $${Number(gone.amount || 0)
+                .toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+                + (n ? `, and ${n} container${n === 1 ? ' is' : 's are'} unpaid again.` : '.'));
+            return { action_taken: 'undo_bill_payment_done', payment_id: pending.payment_id };
+        } catch (e) {
+            await _send(chatId, `I couldn't remove it: ${String(e.message || e).slice(0, 180)}`);
+            return { action_taken: 'undo_bill_payment_failed', error: String(e.message || e).slice(0, 200) };
+        }
+    }
+
+    default:
+        await clearPending(chatId);
+        await _send(chatId, 'Sorry — I lost track of that. Say it again, like "I paid 10000 advance to Inesh".');
+        return { action_taken: 'pay_supplier_lost' };
+    }
+}
+
 module.exports = {
     metalsBriefing, metalsReport,
     replyToFocusedDigest, askWhichDigestItem, reviseDraftedEmail,
@@ -8647,6 +9050,12 @@ showPurchaseOrders,
 showQuickBooksStuck,
 checkQuickBooksNow,
 draftClaimEmail,
+paySupplier,
+paySupplierAnswer,
+paySupplierKnown,
+paySupplierBills,
+paySupplierRecord,
+undoBillPayment,
     setReminder, showReminders, cancelReminder,
     askForScaleTickets, resumeQuoteWithScaleTickets,
     // Proforma raised from a customer's own email (2026-08-23).

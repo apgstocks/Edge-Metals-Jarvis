@@ -594,6 +594,34 @@ function policyDecide(ctx) {
     // (the supplier), not just manager/team. Runs before everything else so a
     // supplier's yes/no/date reply is never mis-routed to the keyword grammar
     // in section D. ──────────────────────────────────────────────────────────
+    // "undo last payment" / "delete that payment" — Apsara: "Also jarvis
+    // profile should have the access to delete/undo the Bill pay as well."
+    // Deliberately narrow: it must say payment, and it must say undo. The
+    // action names what it is about to remove and waits for a yes.
+    if (!ctx.pendingAction && ctx.isManagerOrTeam
+        && /\b(undo|delete|remove|reverse|cancel)\b/i.test(ctx.text || '')
+        && /\b(payment|pay|bill\s*pay|advance)\b/i.test(ctx.text || '')) {
+        return { intent: 'undo_bill_payment', resolvedBy: 'policy', arbitrate: true, data: {} };
+    }
+
+    // ── "I paid 10000 advance to Inesh" / "paid 5000 to Mazariegos" ─────
+    // Policy, not the model: the amount and the name are the whole message,
+    // a regex reads them reliably, and a model that mis-hears either one
+    // files money against the wrong supplier. helpers/supplierPayTalk.js
+    // does the actual reading; this only decides that the sentence is about
+    // paying a supplier.
+    //
+    // NOT matched when it is a question ("how much did I pay Inesh?") — that
+    // is a report, and answering it by recording a payment would be the
+    // worst possible misread.
+    if (!ctx.pendingAction && ctx.isManagerOrTeam && !/\?\s*$/.test(ctx.text || '')) {
+        const talk = require('../helpers/supplierPayTalk');
+        const parsed = talk.parse(ctx.text || '');
+        if (parsed && parsed.amount > 0 && parsed.supplier) {
+            return { intent: 'pay_supplier', resolvedBy: 'policy', arbitrate: true, data: { parsed } };
+        }
+    }
+
     if (ctx.pendingAction?.type === 'await_ready_check') {
         const p = ctx.pendingAction;
         if (p.stage === 'yesno') {
@@ -630,6 +658,56 @@ function policyDecide(ctx) {
         if (/^\s*(no|nope|not yet|don'?t|wait)\b/i.test(t)) {
             return { intent: 'resolve_pending', resolvedBy: 'policy', data: { answer: 'no' } };
         }
+    }
+
+    // ── A0b3. "I paid 10000 advance to Inesh" — the answers ─────────────
+    // Apsara, 2026-10-02: "If user messages (only allowed users) jarvis and
+    // they say,I paid 10000 advance to Inesh.It should able to undertsand
+    // that... Just ask the user directly whether it is a advance or paid
+    // against bill?"
+    //
+    // Captured verbatim and resolved by the action, like the container-number
+    // and sale-invoice captures above: there is no fixed format to match, and
+    // the pending IS the validation. Reclassifying "1,3" or "advance" from
+    // scratch is how an answer to a question Jarvis asked ends up being read
+    // as a brand-new request.
+    if (ctx.pendingAction?.type === 'await_pay_kind') {
+        return { intent: 'pay_supplier_answer', resolvedBy: 'policy', data: { answer_text: ctx.text.trim() } };
+    }
+    if (ctx.pendingAction?.type === 'await_pay_containers') {
+        return { intent: 'pay_supplier_answer', resolvedBy: 'policy', data: { answer_text: ctx.text.trim() } };
+    }
+    if (ctx.pendingAction?.type === 'await_pay_supplier') {
+        return { intent: 'pay_supplier_answer', resolvedBy: 'policy', data: { answer_text: ctx.text.trim() } };
+    }
+    // ── THE TWO THAT MOVE MONEY NEED AN EXPLICIT YES ────────────────────
+    // Not "anything that is not no". A payment recorded because a passing
+    // message happened to arrive while a confirmation was open is a payment
+    // nobody meant to make, and the undo one reopens containers.
+    // ── THE MODE AND BANK ANSWERS ARE CAPTURED VERBATIM ─────────────────
+    // "Zelle" / "BofA" are the confirmation, not a yes. Routed like the other
+    // capture pendings and validated by the action, which writes nothing
+    // until it has a mode AND (for Zelle/Wire) a bank it recognises. A strict
+    // yes/no gate here answered "Zelle" with "reply yes or no", which is the
+    // flow talking past her.
+    if (ctx.pendingAction?.type === 'await_pay_confirm'
+        || ctx.pendingAction?.type === 'await_pay_bank') {
+        if (/^\s*(no|nope|cancel|stop|don'?t|wait)\b/i.test(t)) {
+            return { intent: 'resolve_pending', resolvedBy: 'policy', data: { answer: 'no' } };
+        }
+        return { intent: 'pay_supplier_answer', resolvedBy: 'policy', data: { answer_text: ctx.text.trim() } };
+    }
+    // Undo stays a strict yes/no: it is the one that destroys a record.
+    if (ctx.pendingAction?.type === 'await_undo_pay_confirm') {
+        if (/^\s*(yes|yeah|yep|yup|ok|okay|sure|do it|go ahead|confirm|correct|right)\b/i.test(t)) {
+            return { intent: 'pay_supplier_answer', resolvedBy: 'policy', data: { answer_text: 'yes' } };
+        }
+        if (/^\s*(no|nope|not yet|don'?t|wait|cancel|stop)\b/i.test(t)) {
+            return { intent: 'resolve_pending', resolvedBy: 'policy', data: { answer: 'no' } };
+        }
+        // Anything else re-asks rather than guessing either way.
+        return { intent: 'reply', resolvedBy: 'policy', data: { reply:
+            'Sorry — reply *yes* to record it, or *no* to leave it. Nothing is recorded either way yet.' } };
     }
 
     if (ctx.pendingAction?.type === 'await_sale_invoice') {
@@ -2710,6 +2788,26 @@ async function route(decision, ctx, sendMessage) {
         // Receivables (2026-08-22). `fact` carries the amount and `note` the
         // free-text remainder (date/method), per the prompt guidance.
         case 'show_receivables':       return actions.showReceivables(chatId, d.target_name || null);
+        // ── PAYING A SUPPLIER, BY MESSAGE ───────────────────────────
+        // isManagerOrTeam is checked at the intent above AND here: the
+        // intent gate stops a stranger's message being read as a payment,
+        // and this one stops any other route reaching the action. Two gates
+        // because this one writes money.
+        // `send`, not an invented actions.reply — case 'reply' below is the
+        // idiom, and actions.js exports no reply(). ctx.role === 'manager',
+        // not ctx.isManager, which does not exist on ctx either: buildContext
+        // returns `role` and `isManagerOrTeam` only. Both were mine, and both
+        // would have thrown on her first real message.
+        case 'pay_supplier':
+            if (!ctx.isManagerOrTeam) return send(chatId, 'Only Apsara and the team can record payments.');
+            return actions.paySupplier(chatId, d.parsed, ctx.senderName);
+        case 'pay_supplier_answer':
+            if (!ctx.isManagerOrTeam) return send(chatId, 'Only Apsara and the team can record payments.');
+            return actions.paySupplierAnswer(chatId, ctx.pendingAction, d.answer_text, ctx.senderName,
+                { isManager: ctx.role === 'manager' });
+        case 'undo_bill_payment':
+            if (!ctx.isManagerOrTeam) return send(chatId, 'Only Apsara and the team can record payments.');
+            return actions.undoBillPayment(chatId, { isManager: ctx.role === 'manager' });
         case 'record_payment':         return actions.recordPayment(chatId, { invoiceRef: d.target_name, amount: d.fact, paidOn: null, method: null, note: d.note }, ctx.senderName);
         case 'show_orphan_payments':   return actions.showOrphanPayments(chatId);
         // Opening-date watermark for the ledger (2026-08-22) — see

@@ -1000,9 +1000,12 @@ function renderRun(out) {
     const byKind = ['bill', 'sale', 'billpayment', 'receipt'].filter(k => la[k])
       .map(k => `${la[k]} ${k}${la[k] === 1 ? '' : 's'}`).join(', ');
     const why = Object.entries(la.why || {}).map(([w, n]) => `<tr><td class="mono r">${n}</td><td>${esc(w)}</td></tr>`).join('');
-    sec.push(`<h3 class="sec">Older than the cutover — left alone <span class="count">${s.left}</span></h3>
+    // "Period lock", matching what the nightly email and the rest of the page
+    // now call it — the same boundary under two names is how a question gets
+    // asked twice.
+    sec.push(`<h3 class="sec">Held back by the period lock <span class="count">${s.left}</span></h3>
       <div class="sub" style="padding:4px 2px 8px">${byKind}${la.from ? `, dated ${esc(la.from)}${la.to && la.to !== la.from ? ` to ${esc(la.to)}` : ''}` : ''}.
-      Deliberate — your books already hold that period. Move the boundary with the date chips above.</div>
+      Deliberate — your books already hold that period. Move the lock with the date chips above.</div>
       ${why ? `<table><tbody>${why}</tbody></table>` : ''}`);
   }
 
