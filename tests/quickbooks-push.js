@@ -41,19 +41,28 @@ const { beforeCutover } = require('../helpers/quickbooks/push');
 process.env.QB_CUTOVER_FILE = require('path').join(require('fs').mkdtempSync(require('path').join(require('os').tmpdir(), 'qbcut-')), 'cutover.json');
 const saved = [process.env.QB_CUTOVER_BILLS, process.env.QB_CUTOVER_INVOICES];
 delete process.env.QB_CUTOVER_BILLS; delete process.env.QB_CUTOVER_INVOICES;
-ck('production with no cutover refuses', /no bill cutover/.test(beforeCutover('bill', '2026-10-01', 'production')));
-ck('sandbox with no cutover allows', beforeCutover('bill', '2026-01-01', 'sandbox') === null);
+// Apsara, 2026-10-02: "remove that hard cutover days rules". A date was
+// always a blunt stand-in — true in September, wrong by October, and on the
+// VM it sat on the day it was typed while eight days of work were skipped in
+// silence. What it protected against is now asked directly: is it already in
+// QuickBooks, and is its cost already on a cheque with no document behind it.
+ck('with no lock set, a date no longer refuses anything', beforeCutover('bill', '2026-10-01', 'production') === null);
+ck('...in any environment', beforeCutover('bill', '2026-01-01', 'sandbox') === null);
+ck('...but a date that cannot be read is still refused, because it cannot be reasoned about',
+   /can't be read/.test(beforeCutover('bill', 'last Tuesday', 'production') || ''));
 process.env.QB_CUTOVER_BILLS = '2026-09-06'; process.env.QB_CUTOVER_INVOICES = '2026-08-28';
-ck('bill on 5 Sep (already hand-entered) refused', /before the cutover/.test(beforeCutover('bill', '2026-09-05', 'production')));
+ck('a period she LOCKS is still refused, and says she closed it deliberately',
+   /locked period/.test(beforeCutover('bill', '2026-09-05', 'production') || ''));
 ck('bill on 6 Sep allowed', beforeCutover('bill', '2026-09-06', 'production') === null);
 ck('Jan-May bill refused (no double cost)', beforeCutover('bill', '2026-03-20', 'production') !== null);
 ck('typed date 9/15/2026 is AFTER the 6 Sep cutover (was wrongly skipped)', beforeCutover('bill', '9/15/2026', 'production') === null);
-ck('typed date 9/5/2026 is before the cutover', /before the cutover/.test(beforeCutover('bill', '9/5/2026', 'production') || ''));
+ck('typed date 9/5/2026 is inside the locked period', /locked period/.test(beforeCutover('bill', '9/5/2026', 'production') || ''));
 ck('unreadable date refused, not skipped', /can't be read/.test(beforeCutover('bill', 'Sept 15', 'production') || ''));
 ck('isoDate normalises typed dates', require('../helpers/quickbooks/push').isoDate('9/15/2026') === '2026-09-15' && require('../helpers/quickbooks/push').isoDate('2026-09-15T00:00') === '2026-09-15');
 ck('invoice on 28 Aug allowed, 27 Aug refused', beforeCutover('invoice', '2026-08-28', 'production') === null && beforeCutover('invoice', '2026-08-27', 'production') !== null);
 process.env.QB_CUTOVER_BILLS = 'soon';
-ck('a malformed cutover is treated as unset (refuse)', beforeCutover('bill', '2026-12-01', 'production') !== null);
+ck('a malformed lock date is treated as no lock, not as a refusal of everything',
+   beforeCutover('bill', '2026-12-01', 'production') === null);
 if (saved[0] === undefined) delete process.env.QB_CUTOVER_BILLS; else process.env.QB_CUTOVER_BILLS = saved[0];
 if (saved[1] === undefined) delete process.env.QB_CUTOVER_INVOICES; else process.env.QB_CUTOVER_INVOICES = saved[1];
 const { docNumberFor } = require('../helpers/quickbooks/push');
@@ -80,6 +89,14 @@ const P = require('../helpers/quickbooks/push');
 const envWas = [process.env.QB_CUTOVER_BILLS, process.env.QB_CUTOVER_INVOICES];
 process.env.QB_CUTOVER_BILLS = '2026-09-24'; process.env.QB_CUTOVER_INVOICES = '2026-09-24';
 ck('with nothing saved, .env is what is in force', P.cutoverFor('bill', 'production') === '2026-09-24' && P.cutoverSource('bill') === 'env');
+ck('...and with nothing anywhere, there is simply no lock', (() => {
+    const was = [process.env.QB_CUTOVER_BILLS, process.env.QB_CUTOVER_INVOICES];
+    delete process.env.QB_CUTOVER_BILLS; delete process.env.QB_CUTOVER_INVOICES;
+    const none = P.cutoverFor('bill', 'production') === null && P.cutoverSource('bill') === 'unset';
+    if (was[0] !== undefined) process.env.QB_CUTOVER_BILLS = was[0];
+    if (was[1] !== undefined) process.env.QB_CUTOVER_INVOICES = was[1];
+    return none;
+})());
 P.saveCutover({ bills: '2026-09-06', invoices: '2026-08-28' }, 'test');
 ck('a saved cutover outranks .env — no SSH to move the boundary',
    P.cutoverFor('bill', 'production') === '2026-09-06' && P.cutoverSource('bill') === 'setting');

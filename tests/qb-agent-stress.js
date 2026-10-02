@@ -125,11 +125,21 @@ console.log('\n── WHERE THE MONEY IS RECORDED AS GOING ───────
 
 console.log('\n── WHAT IT MAY TOUCH AT ALL ──────────────────────────────────────');
 {
+    // The date rule is gone (2026-10-02). What stands in its place: a lock she
+    // sets deliberately, a date that cannot be read, and — the one no
+    // duplicate search can see — a container whose cost is already on a
+    // cheque with no document behind it.
     push.saveCutover({ bills: '2026-01-01', invoices: '2026-01-01' }, 'stress');
-    grade('a 2025 document is refused', 'safety', push.beforeCutover('bill', '2025-12-31', 'production') !== null);
+    grade('a period she locked is refused', 'safety', push.beforeCutover('bill', '2025-12-31', 'production') !== null);
     grade('a date that cannot be read is refused, not skipped', 'safety',
         /can't be read/.test(push.beforeCutover('bill', 'last Tuesday', 'production') || ''));
-    grade('a 2026 document is allowed', 'quality', push.beforeCutover('bill', '2026-03-01', 'production') === null);
+    grade('a document inside the open period is allowed', 'quality', push.beforeCutover('bill', '2026-03-01', 'production') === null);
+    push.setCutover({});
+    const src2 = fs.readFileSync(path.join(__dirname, '..', 'helpers', 'quickbooks', 'push.js'), 'utf8');
+    grade('the cost-already-on-a-cheque gate runs on every bill with a container', 'safety',
+        /if \(b\.container_no\)[\s\S]{0,200}costAlreadyOnACheque/.test(src2));
+    grade('...and it ASKS rather than entering', 'safety',
+        /costAlreadyOnACheque[\s\S]{0,200}status: 'ask'/.test(src2));
 }
 {
     const miscoded = { fixable: { rows: [{ id: '501', date: '2026-02-10', amount: 20000, containers: ['MRKU2278150'] }] },

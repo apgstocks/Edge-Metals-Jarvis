@@ -258,7 +258,7 @@ function cutoverFor(kind, env) {
     if (ISO_DAY.test(saved)) return saved;
     const fromEnv = cutoverEnv(kind);
     if (fromEnv) return fromEnv;
-    return env === 'production' ? null : '0000-00-00';
+    return null;
 }
 function cutoverSource(kind) {
     const k = CUT_KEY[kind] || kind;
@@ -312,18 +312,73 @@ function isoDate(v) {
 }
 const UNREADABLE = /can't be read/;
 
+// ── THE DATE RULE IS GONE (Apsara, 2026-10-02: "remove that hard cutover
+// days rules") ────────────────────────────────────────────────────────────
+// A date was always a blunt stand-in for the real question. It said "anything
+// before the 6th of September is her accountant's", which was true in
+// September and wrong by October — and on the VM it sat on the day it was
+// typed for eight days, skipping every row the sheet sync wrote, in silence.
+//
+// What the date was protecting against was never the date. It was three
+// things, and each can be asked directly:
+//   1. is it already in QuickBooks?            — the duplicate search
+//   2. is its cost already there without a
+//      document, on a cheque straight to Cost
+//      of Goods Sold?                          — evidenceGate(), below
+//   3. has she declared that period closed?    — an OPTIONAL lock, off unless
+//                                                she sets one
+// So a date is now a lock she may choose, not a rule the code insists on. An
+// unreadable date is still refused: a row whose date cannot be read cannot be
+// reasoned about at all.
 function beforeCutover(kind, date, env) {
-    const c = cutoverFor(kind, env);
-    if (c === null) return `no ${kind} cutover date set for production — refusing`;
     const d = isoDate(date);
     if (!d) return `${kind} date "${date}" can't be read — refusing`;
-    return d < c ? `${kind} dated ${d} is before the cutover (${c}) — her books already hold that period` : null;
+    const c = cutoverFor(kind, env);
+    if (c === null) return null;                 // no lock set: evidence decides
+    return d < c ? `${kind} dated ${d} is before the locked period (${c}) — she closed that period deliberately` : null;
+}
+
+// ── EVIDENCE, IN PLACE OF A DATE ──────────────────────────────────────────
+// The one thing no duplicate search can see: a container whose cost already
+// went to Cost of Goods Sold on a cheque with no bill behind it. There is no
+// document to find, so a bill for that container lands the cost a second
+// time. 16 of those on her 2026 books, $411,276.27, January to May — exactly
+// the period a date rule used to fence off.
+let costCache = { at: 0, env: null, rows: null };
+async function costAlreadyOnACheque(containerNo, { env = auth.qbEnv(), maxAgeMs = 30 * 60 * 1000 } = {}) {
+    if (!containerNo) return null;
+    const key = String(containerNo).toUpperCase().replace(/[^A-Z0-9]/g, '');
+    if (!costCache.rows || costCache.env !== env || Date.now() - costCache.at > maxAgeMs) {
+        const rows = [];
+        for (let start = 1; ; start += 1000) {
+            const r = await client.query(`select * from Purchase where TxnDate >= '${new Date().getFullYear()}-01-01' startposition ${start} maxresults 1000`, { env });
+            const got = r.Purchase || [];
+            for (const p of got) {
+                const lines = (p.Line || []).filter((l) => /cost of goods/i.test(((((l.AccountBasedExpenseLineDetail || {}).AccountRef) || {}).name) || ''));
+                if (!lines.length) continue;
+                const text = (p.Line || []).map((l) => l.Description || '').join(' ') + ' ' + (p.PrivateNote || '');
+                rows.push({ id: String(p.Id), date: p.TxnDate,
+                    amount: round2(lines.reduce((s, l) => s + Number(l.Amount || 0), 0)),
+                    containers: [...new Set((text.match(/[A-Z]{4}\d{7}/g) || []))].map((c) => c.toUpperCase()) });
+            }
+            if (got.length < 1000) break;
+        }
+        costCache = { at: Date.now(), env, rows };
+    }
+    const hit = (costCache.rows || []).find((p) => p.containers.includes(key));
+    return hit ? `${containerNo} already carries ${hit.amount} of cost on cheque #${hit.id} (${hit.date}) with no bill behind it — entering a bill would count it twice` : null;
 }
 
 async function pushBill(b, snapshots, { env = auth.qbEnv(), dryRun = true, fetchImpl } = {}) {
     const opts = { env, fetchImpl };
     const cut = beforeCutover('bill', b.date, env);
     if (cut) return { status: UNREADABLE.test(cut) ? 'blocked' : 'before-cutover', problems: [cut] };
+    // With no date rule, this is what stands in its place: a container whose
+    // cost is already in the books on a cheque, with no document to find.
+    if (b.container_no) {
+        const paidAlready = await costAlreadyOnACheque(b.container_no, { env }).catch(() => null);
+        if (paidAlready) return { status: 'ask', problems: [paidAlready] };
+    }
     const key = linkKey(env, 'bill', b.id || b.container_no);
     const linked = loadLinks()[key];
     if (linked) return { status: 'already-linked', qbId: linked.qbId };
@@ -357,4 +412,4 @@ async function pushBill(b, snapshots, { env = auth.qbEnv(), dryRun = true, fetch
     return { status: 'created', qbId: out.Bill.Id, total: out.Bill.TotalAmt, bill: out.Bill, journalId: je.id };
 }
 
-module.exports = { isoDate, pairFits, UNREADABLE, docNumberFor, confirmedName, idByName, ensureSandbox, saveLink, linkKey, cutoverFor, cutoverSource, cutoverStore, saveCutover, setCutover, clearCutover, beforeCutover, buildBill, resolveRefs, findExisting, findExistingDoc, judgeExisting, pushBill, loadLinks, LINKS_FILE, DOC_MAX };
+module.exports = { isoDate, pairFits, UNREADABLE, docNumberFor, confirmedName, idByName, ensureSandbox, saveLink, linkKey, cutoverFor, cutoverSource, cutoverStore, saveCutover, setCutover, clearCutover, costAlreadyOnACheque, beforeCutover, buildBill, resolveRefs, findExisting, findExistingDoc, judgeExisting, pushBill, loadLinks, LINKS_FILE, DOC_MAX };

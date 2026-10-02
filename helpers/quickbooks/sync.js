@@ -140,7 +140,14 @@ function after(kind, id, change = 'saved') {
 // Catches saves that arrived another way (imports, the invoice flow, a time
 // QB_SYNC was off or QuickBooks was down). Idempotent: linked records are
 // skipped, everything else goes through the same checks as a hook.
-async function sweep({ env = auth.qbEnv(), dryRun = false } = {}) {
+// ── A NIGHT'S WORK, NOT A YEAR'S ──────────────────────────────────────────
+// With the date rule gone the sweep sees every unlinked row in the ledgers —
+// 610 bills and 742 sales on her books the night this changed. Linked rows
+// cost nothing (the link is checked before any call), but the backlog does,
+// so a run takes the oldest `limit` of what is left and the next run takes
+// the next. The backlog drains over a few nights instead of one run timing
+// out and achieving nothing.
+async function sweep({ env = auth.qbEnv(), dryRun = false, limit = 200 } = {}) {
     const res = { bill: {}, sale: {}, billpayment: {}, receipt: {} };
     // ── PER-ROW DETAIL, ON A DRY RUN ONLY (2026-10-01) ─────────────────────
     // Apsara: "Assign one agent for quickbook next".
@@ -194,10 +201,17 @@ async function sweep({ env = auth.qbEnv(), dryRun = false } = {}) {
         noteLeft(k, kind, d, c);
         return false;
     };
-    const bills = require('../bills').list().filter((b) => since('bill', 'bill', b.date));
-    const sales = require('../sales').list().filter((s) => since('sale', 'invoice', s.date));
-    const bps = require('../billPayments').list().filter((p) => since('billpayment', 'bill', p.date));
-    const recs = require('../salesReceipts').list().filter((r) => since('receipt', 'invoice', r.date));
+    const oldestFirst = (rows) => rows.sort((a, b) => String(push.isoDate(a.date) || '').localeCompare(String(push.isoDate(b.date) || '')));
+    const cap = (rows, kind) => {
+        const all = oldestFirst(rows);
+        if (all.length <= limit) return all;
+        res[kind].waiting = all.length - limit;
+        return all.slice(0, limit);
+    };
+    const bills = cap(require('../bills').list().filter((b) => since('bill', 'bill', b.date)), 'bill');
+    const sales = cap(require('../sales').list().filter((s) => since('sale', 'invoice', s.date)), 'sale');
+    const bps = cap(require('../billPayments').list().filter((p) => since('billpayment', 'bill', p.date)), 'billpayment');
+    const recs = cap(require('../salesReceipts').list().filter((r) => since('receipt', 'invoice', r.date)), 'receipt');
     const snaps = await snapshots(env);
     if (dryRun) {
         const B = require('../bills'), S = require('../sales');
