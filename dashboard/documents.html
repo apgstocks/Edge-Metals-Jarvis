@@ -874,57 +874,58 @@ body[data-theme="light"] {
         <button id="btnInvGenerate" type="button" class="btn btn-primary">Generate &amp; Download</button>
       </div>
     </div>
-  </div>
 
-  <!-- ── INVOICES SHE HAS ALREADY GENERATED ───────────────────────────────
-       Apsara, 2026-09-29: "Generated invoice should be editable.It should
-       display below the invoice things.with edit option."
+    <!-- ── INVOICES SHE HAS ALREADY GENERATED ───────────────────────────────
+         Apsara, 2026-09-29: "Generated invoice should be editable.It should
+         display below the invoice things.with edit option."
 
-       Until now the only way back to a generated invoice was the banner
-       inside Review and Generate, which appears ONLY once she has already
-       loaded that exact container — so re-editing meant remembering which
-       container it was and going to fetch it first. This is the missing
-       half: it shows what there is.
+         Until now the only way back to a generated invoice was the banner
+         inside Review and Generate, which appears ONLY once she has already
+         loaded that exact container — so re-editing meant remembering which
+         container it was and going to fetch it first. This is the missing
+         half: it shows what there is.
 
-       OUTSIDE invStep1/2/3 on purpose. Those three are shown one at a time
-       by showInvStep(), and a list that vanished whenever she moved between
-       steps would be hardest to find at the moment she wanted it.
+         OUTSIDE invStep1/2/3 on purpose. Those three are shown one at a time
+         by showInvStep(), and a list that vanished whenever she moved between
+         steps would be hardest to find at the moment she wanted it.
 
-       Only invoices generated since helpers/invoiceVersions.js shipped have
-       a stored form to edit. Anything older is a PDF in documents_saved and
-       nothing else — there is no honest backfill, so it is simply not
-       listed here rather than listed with an Edit that cannot work. -->
-  <div class="card" style="padding:20px 22px; margin-top:16px;">
-    <div style="display:flex; align-items:baseline; gap:10px; margin-bottom:4px;">
-      <div class="section-label" style="margin:0;">Generated invoices</div>
-      <div style="flex:1;"></div>
-      <button id="btnInvGenRefresh" type="button" class="btn btn-secondary" style="padding:4px 10px; font-size:10px;">Refresh</button>
+         Only invoices generated since helpers/invoiceVersions.js shipped have
+         a stored form to edit. Anything older is a PDF in documents_saved and
+         nothing else — there is no honest backfill, so it is simply not
+         listed here rather than listed with an Edit that cannot work. -->
+    <div class="card" style="padding:20px 22px; margin-top:16px;">
+      <div style="display:flex; align-items:baseline; gap:10px; margin-bottom:4px;">
+        <div class="section-label" style="margin:0;">Generated invoices</div>
+        <div style="flex:1;"></div>
+        <button id="btnInvGenRefresh" type="button" class="btn btn-secondary" style="padding:4px 10px; font-size:10px;">Refresh</button>
+      </div>
+      <div style="font-size:11px; color:var(--text-faint); margin-bottom:10px;">
+        Edit reopens the invoice exactly as it was generated, so you can change it and generate again.
+      </div>
+      <div id="invGenList" style="font-size:12.5px; color:var(--text-muted);">Loading&hellip;</div>
     </div>
-    <div style="font-size:11px; color:var(--text-faint); margin-bottom:10px;">
-      Edit reopens the invoice exactly as it was generated, so you can change it and generate again.
+
+    <!-- ── OLD INVOICES THAT WERE FILED AS PROFORMAS ─────────────────────────
+         Apsara, 2026-09-30: "proform ashould be in proforma,inv in invoice"
+         and "find a way to keep old invoice in inv tab only".
+
+         These are commercial invoices sitting in documents_saved/proforma/ —
+         nothing in the app files them there, so they predate this code or
+         arrived beside it. They are no longer listed under Saved proformas.
+
+         The card only appears when there are some, and it says plainly that
+         the file has not moved: Open and Delete still address it as a proforma
+         because that is where it is on disk. Pretending otherwise would give
+         her a row that does nothing when clicked. -->
+    <div id="invMisfiledCard" class="card hidden" style="padding:20px 22px; margin-top:16px;">
+      <div class="section-label" style="margin:0;">Older invoices filed under proforma</div>
+      <div style="font-size:11px; color:var(--text-faint); margin:6px 0 10px;">
+        These say &ldquo;Commercial Invoice&rdquo; on the document but are stored in the proforma
+        folder, so they no longer clutter Saved proformas. The files have not been moved.
+      </div>
+      <div id="invMisfiledList" style="font-size:12.5px; color:var(--text-muted);"></div>
     </div>
-    <div id="invGenList" style="font-size:12.5px; color:var(--text-muted);">Loading&hellip;</div>
-  </div>
 
-  <!-- ── OLD INVOICES THAT WERE FILED AS PROFORMAS ─────────────────────────
-       Apsara, 2026-09-30: "proform ashould be in proforma,inv in invoice"
-       and "find a way to keep old invoice in inv tab only".
-
-       These are commercial invoices sitting in documents_saved/proforma/ —
-       nothing in the app files them there, so they predate this code or
-       arrived beside it. They are no longer listed under Saved proformas.
-
-       The card only appears when there are some, and it says plainly that
-       the file has not moved: Open and Delete still address it as a proforma
-       because that is where it is on disk. Pretending otherwise would give
-       her a row that does nothing when clicked. -->
-  <div id="invMisfiledCard" class="card hidden" style="padding:20px 22px; margin-top:16px;">
-    <div class="section-label" style="margin:0;">Older invoices filed under proforma</div>
-    <div style="font-size:11px; color:var(--text-faint); margin:6px 0 10px;">
-      These say &ldquo;Commercial Invoice&rdquo; on the document but are stored in the proforma
-      folder, so they no longer clutter Saved proformas. The files have not been moved.
-    </div>
-    <div id="invMisfiledList" style="font-size:12.5px; color:var(--text-muted);"></div>
   </div>
 
   <!-- ── Verification ─────────────────────────────────────────────────────── -->
