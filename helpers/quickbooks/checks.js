@@ -248,18 +248,49 @@ const DOMAIN_CHECKS = [
     },
 ];
 
+// Which standing rule, if any, can answer a finding from this check. A check
+// with no pattern can still be answered document by document.
+const PATTERN = {
+    duplicate: 'same-containers-same-total',
+    'same-number-two-parties': 'same-number-two-parties',
+    'generic-cogs': 'catch-all-cost-account',
+    'weight-drift': 'weight-drift',
+    'margin-upside-down': 'sold-under-cost',
+    'both-sides': 'supplier-and-customer',
+    'stale-open': 'open-past-a-year',
+};
+
 function run(ctx) {
     // the two sides are paired once, here, so every container check sees the
     // same pairing and they cannot disagree with each other
     if (!ctx.pairing) ctx.pairing = pairSides(ctx.bills || [], ctx.invoices || []);
+    // what she has already answered. Silenced, never deleted — a rule quietly
+    // hiding a growing pile is its own problem, so they stay counted.
+    let decided = null;
+    if (ctx.decisions !== false) {
+        try { decided = require('./decisions'); } catch { decided = null; }
+    }
     const out = [];
     for (const check of [...CHECKS, ...DOMAIN_CHECKS]) {
         let found = [];
         let error = null;
         try { found = check.run(ctx) || []; } catch (e) { error = e.message; }
+        let silenced = [];
+        if (decided && found.length) {
+            const pattern = PATTERN[check.id] || null;
+            const keep = [];
+            for (const f of found) {
+                const hit = decided.answered({ party: f.party, rows: [{ id: f.id }], id: f.id }, { pattern });
+                if (hit) silenced.push({ ...f, answeredAt: hit.at, answeredWhy: hit.reason, decision: hit.id });
+                else keep.push(f);
+            }
+            found = keep;
+        }
         out.push({ id: check.id, title: check.title, sure: check.sure, why: check.why,
             count: found.length, money: r2(found.reduce((s, f) => s + (Number(f.amount) || 0), 0)),
-            rows: found.sort((a, b) => (Number(b.amount) || 0) - (Number(a.amount) || 0)).slice(0, 50), error });
+            rows: found.sort((a, b) => (Number(b.amount) || 0) - (Number(a.amount) || 0)).slice(0, 50),
+            // what she has already answered, kept visible and counted
+            silenced: silenced.length, silencedRows: silenced.slice(0, 20), error });
     }
     return out.sort((a, b) => b.count - a.count);
 }

@@ -848,6 +848,30 @@ function mount(app, cfg) {
         } catch (e) { res.status(502).json({ error: `QuickBooks: ${e.message}` }); }
     });
 
+    // ── what she has already answered ──────────────────────────────────────
+    // An agent that asks the same question twice is a cron job with manners.
+    // These are her answers, kept in qb-settings so they travel in git, and
+    // revocable: a wrong rule must be as easy to take back as a wrong entry.
+    app.get('/api/qb/decisions', (req, res) => {
+        const d = require('./decisions');
+        res.json({ kinds: d.ABOUT, decisions: d.list({ about: req.query.about || null }) });
+    });
+
+    app.post('/api/qb/decisions', (req, res) => {
+        if (locked(req, res)) return;
+        try { res.json(require('./decisions').remember({ ...(req.body || {}), by: who(req) })); }
+        catch (e) { res.status(400).json({ error: e.message }); }
+    });
+
+    app.post('/api/qb/decisions/forget', (req, res) => {
+        if (locked(req, res)) return;
+        const id = String((req.body || {}).id || '').trim();
+        if (!id) return res.status(400).json({ error: 'which decision?' });
+        const gone = require('./decisions').forget(id);
+        if (!gone) return res.status(404).json({ error: `no decision ${id}` });
+        res.json({ ok: true, ...gone, note: 'it will be asked about again from the next run' });
+    });
+
     app.post('/api/qb/undo', async (req, res) => {
         if (locked(req, res)) return;
         const { journalId, reason, dryRun } = req.body || {};

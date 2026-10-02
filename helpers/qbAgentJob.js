@@ -30,6 +30,10 @@
 
 const cfg = require('../config');
 
+// One short question, one short answer, on the model she asked for.
+const askQb = async (prompt) => require('./gemini')
+    .callGeminiJSON(prompt, 1, null, { model: cfg.GEMINI_MODEL_QB });
+
 // ── WHAT THE LEDGER AGENT AND THE CHAT BOTH READ ──────────────────────────
 // Null until a run has happened, which is treated as "no blocking
 // information" rather than "nothing is blocked" — the difference matters, so
@@ -115,7 +119,10 @@ async function run({ sweep, send, alreadySent, markSent, now = new Date() } = {}
 
     let result = null;
     try {
-        result = await agent.look({ sweep });
+        // The model, on the QB tier, for the ONE question above: whose
+        // problem is an unrecognised refusal? Injected here rather than
+        // imported there, so helpers/qbAgent.js stays testable without a key.
+        result = await agent.look({ sweep, ask: askQb });
     } catch (e) {
         // ── A FAILED SWEEP IS NEWS, NOT SILENCE ──────────────────────────
         // An expired token or a QuickBooks outage means her books did not
