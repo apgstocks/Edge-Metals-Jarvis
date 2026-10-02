@@ -200,6 +200,9 @@ body { overflow-y:auto; }
 #loginScreen input { width:100%; padding:13px 14px; margin-top:16px; background:var(--surface-sunken); border:1px solid var(--border-default); border-radius:var(--radius-sm); color:var(--text-strong); font-size:16px; }
 #loginScreen button { width:100%; margin-top:18px; padding:13px 18px; }
 #loginErr { color:var(--status-danger); font-size:12px; margin-top:10px; min-height:14px; }
+#loginDiag { margin-top:10px; padding:10px; border:1px solid var(--border); border-radius:6px;
+  font-family:var(--font-mono,monospace); font-size:10.5px; line-height:1.5;
+  color:var(--text-muted); white-space:pre-wrap; user-select:text; -webkit-user-select:text; }
 
 /* ══════════════════════════════════════════════════════════════════════
    Loads tab CSS — copied VERBATIM from the <style> block inside
@@ -530,6 +533,10 @@ body { overflow-y:auto; }
     <input id="loginPw" type="password" placeholder="Password" autocomplete="current-password">
     <button id="btnLogin" class="btn btn-primary">Sign in</button>
     <div id="loginErr"></div>
+    <!-- Filled by diagnoseNetwork() when a sign-in fails at the network
+         level. Selectable on purpose: the point is that she can screenshot
+         or copy it rather than read four lines down a phone to someone. -->
+    <div id="loginDiag" class="hidden"></div>
     <!-- Server settings are NOT offered here — per Apsara 2026-08-29, "server
          settings should not come in sign in page. i dont want anyone to
          access it." Anyone holding the phone could previously repoint the app
@@ -6469,6 +6476,90 @@ function wireAdminServerBox() {
   });
 }
 
+// ── WHY COULD IT NOT REACH THE SERVER (2026-10-02) ───────────────────────
+// Apsara, after an outage that took two hours to pin down: "If app is failing
+// this, add a debug somewhere to know te exact reason".
+//
+// She is right, and the reason this is needed is a deliberate hole in the web
+// platform: fetch() reports EVERY network-level failure as the single string
+// "Failed to fetch". DNS miss, TLS rejected, connection refused, blocked by
+// the network, CORS preflight denied, HTTP/3 black-holed — one message for
+// all of them, on purpose, so a page cannot port-scan the user's network.
+//
+// So the app cannot be TOLD the reason. It has to go and find out, by making
+// a short series of probes that fail at different stages, and reporting which
+// stage was the first to break. That is what this does.
+//
+//   1. the internet at all   — is this wifi working for anything
+//   2. our host, no-cors     — did DNS + TCP + TLS to our domain succeed
+//   3. our host, real CORS   — did the browser accept the response
+//   4. the login preflight   — does OPTIONS /login come back clean
+//
+// no-cors on probe 2 is the important trick. It returns an OPAQUE response
+// that tells us nothing about the body, but it RESOLVES if the connection was
+// made. So probe 2 passing while probe 3 fails is the fingerprint of CORS or
+// a TLS-intercepting proxy, and probe 2 failing is the fingerprint of the
+// network blocking us outright. Those two were indistinguishable before.
+//
+// Every probe is time-bounded. A blocked network does not refuse, it stays
+// silent, and without the abort this diagnostic would be the thing that hangs.
+async function diagnoseNetwork(base) {
+    const probe = async (label, url, opts) => {
+        const o = opts || {};
+        const ctl = new AbortController();
+        const timer = setTimeout(() => ctl.abort(), o.timeout || 6000);
+        const t0 = Date.now();
+        try {
+            const r = await fetch(url, { method: o.method || 'GET', mode: o.mode,
+                                         cache: 'no-store', signal: ctl.signal });
+            return { label, ok: true, status: r.status, type: r.type, ms: Date.now() - t0 };
+        } catch (e) {
+            const aborted = e && (e.name === 'AbortError' || /abort/i.test(String(e.message || '')));
+            return { label, ok: false, ms: Date.now() - t0,
+                     err: aborted ? 'no answer (timed out)' : String((e && e.message) || e) };
+        } finally { clearTimeout(timer); }
+    };
+
+    const out = [];
+    // Android's own captive-portal endpoint. no-cors, no data leaves, and it
+    // is the one host a phone on wifi has already talked to.
+    out.push(await probe('internet', 'https://connectivitycheck.gstatic.com/generate_204',
+                         { mode: 'no-cors', timeout: 5000 }));
+    out.push(await probe('reach server', base, { mode: 'no-cors', timeout: 8000 }));
+    out.push(await probe('read /healthz', base + '/healthz', { timeout: 8000 }));
+    out.push(await probe('login preflight', base + '/login',
+                         { method: 'OPTIONS', timeout: 8000 }));
+    return out;
+}
+
+// Turns those four results into the one sentence worth reading first.
+// Ordered by which stage broke EARLIEST, because the first failure is the
+// cause and everything after it is a consequence.
+function readDiagnosis(r) {
+    const by = {};
+    r.forEach((x) => { by[x.label] = x; });
+    if (!by['internet'].ok) {
+        return 'This wifi is not reaching the internet at all. Nothing on the phone will work '
+             + 'until it does — try mobile data.';
+    }
+    if (!by['reach server'].ok) {
+        return 'The internet works here, but this network will not connect to '
+             + 'jarvis.edgemetals.com. That is the wifi blocking us, or its DNS refusing the '
+             + 'name. Mobile data will work; the wifi needs its filtering changed.';
+    }
+    if (!by['read /healthz'].ok) {
+        return 'The server was reached, but the reply was rejected before the app could read '
+             + 'it. That is usually a network that inspects HTTPS traffic, or a CORS problem. '
+             + 'Send this screen to Apsara.';
+    }
+    if (!by['login preflight'].ok) {
+        return 'The server answers, but it refused the sign-in request specifically. That is a '
+             + 'server-side CORS setting, not your network. Send this screen to Apsara.';
+    }
+    return 'Every check passed just now. The failure may have been momentary — try signing in '
+         + 'again.';
+}
+
 function wireServerBox() {
   // The visible "Server settings" button is gone from the sign-in card. What
   // is left is a deliberately undiscoverable recovery gesture: press and hold
@@ -6622,6 +6713,23 @@ async function doLogin() {
     // all": DNS, no route, dead host. So the address is the whole diagnosis,
     // and the recovery is the press-and-hold box on this same screen.
     const net = /failed to fetch|load failed|network ?request ?failed/i.test(String(err && err.message));
+    // ── AND THEN FIND OUT WHY ────────────────────────────────────────────
+    // Only on a network failure, and only after the message above is already
+    // on screen, so the probes never delay what she can already read.
+    if (net) {
+        const box = document.getElementById('loginDiag');
+        if (box) {
+            box.classList.remove('hidden');
+            box.textContent = 'Checking what is in the way...';
+            diagnoseNetwork(API_BASE).then((r) => {
+                const lines = r.map((x) => '  ' + (x.ok ? 'OK  ' : 'FAIL') + '  ' + x.label
+                    + '  ' + (x.ok ? (x.type === 'opaque' ? 'connected' : 'HTTP ' + x.status)
+                                   : x.err) + '  (' + x.ms + 'ms)');
+                box.textContent = readDiagnosis(r) + '\n\n' + lines.join('\n')
+                    + '\n\n' + API_BASE;
+            }).catch((e) => { box.textContent = 'The check itself failed: ' + ((e && e.message) || e); });
+        }
+    }
     $('loginErr').innerHTML = net
       ? `Couldn't reach the server at <b>${String(API_BASE).replace(/[<>&]/g, '')}</b>.`
         + `<div style="font-size:11px; margin-top:6px; color:var(--text-faint); line-height:1.5;">`
