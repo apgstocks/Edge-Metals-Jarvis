@@ -401,7 +401,147 @@ const ahead = (d) => new Date(NOW + d * 86400000).toISOString();
     }
 }
 
+
+// Sections A-H above are synchronous. Section I drives the real job, which is
+// async, so it and the summary run inside one IIFE — otherwise the totals
+// print before the chase has finished and a failure in it is invisible.
+(async () => {
+
+// ── I — THE CHASE, END TO END ─────────────────────────────────────────────
+// Rule 3. Her answer on the window was "there is no specific window - the
+// faster the better", so AGE is the whole mechanism: the chase gets louder
+// the longer something sits, and it does not stop.
+{
+    section('I — the morning chase');
+
+    const job = require('../helpers/claimsAgentJob');
+    const NOW = new Date('2026-10-02T12:00:00Z');
+    const back = (d) => new Date(NOW.getTime() - d * 86400000).toISOString();
+
+    const claims = [
+        { id: 'C1', customer: 'MK Trading', supplier: 'Calderon', container_no: 'TGCU0053611',
+          status: 'verified', claim_amount: 18400, our_claim: null, invoice_no: '26MK83',
+          date: '2026-08-20', invoice_weight: 24000, claimed_weight: 22650, shortage: 1350,
+          weight_unit: 'KG', created_at: back(40), history: [{ note: 'verified', at: back(34) }] },
+        { id: 'C2', customer: 'Taewon', supplier: 'Gomez', container_no: 'MSDU1161015',
+          status: 'verified', claim_amount: 2250, our_claim: null,
+          created_at: back(9), history: [{ note: 'verified', at: back(5) }] },
+        { id: 'C3', customer: 'MK', supplier: 'Hugo', container_no: 'KOCU4930737',
+          status: 'recovery_raised', claim_amount: 7000, our_claim: 6500, created_at: back(60),
+          history: [{ note: 'recovery raised on supplier', at: back(40) }] },
+        { id: 'C4', customer: 'Ala', supplier: 'Ramesh', container_no: 'ZZZZ1111111',
+          status: 'unverified', claim_amount: null, created_at: back(22), history: [] },
+    ];
+
+    let sent = null;
+    const r = await job.run({ claims, send: async (t) => { sent = t; },
+        alreadySent: async () => false, markSent: async () => {}, now: NOW });
+
+    ck('the chase goes out', r.sent === true && !!sent);
+    ck('  and LEADS with the money sitting on us',
+       /^\*\$20,650\.00 is sitting on us\*/.test(sent),
+       'that is the leak she named; it goes first — ' + String(sent).split('\n')[0]);
+    ck('  naming the supplier and the container, not an id',
+       /TGCU0053611 · Calderon/.test(sent), sent);
+    ck('  with the age in days',
+       /— 34d/.test(sent), 'ago is the whole argument when there is no deadline');
+
+    // ── LOUDER WITH AGE, SINCE THERE IS NO WINDOW ────────────────────────
+    ck('a 34-day claim is marked urgent',
+       /‼️ TGCU0053611/.test(sent), sent);
+    ck('  and a 5-day one is not',
+       !/‼️ MSDU1161015/.test(sent),
+       'if everything is urgent then nothing is, and she stops reading');
+    ck('the ladder is by age', job.loudnessFor(40) === 'urgent'
+       && job.loudnessFor(10) === 'named' && job.loudnessFor(1) === 'nudge',
+       `${job.loudnessFor(40)} / ${job.loudnessFor(10)} / ${job.loudnessFor(1)}`);
+
+    ck('the two totals stay apart in the message',
+       /Asked and not answered — \$6,500\.00/.test(sent), sent);
+    ck('the unquantified one is counted, never totalled',
+       /\(not priced\)/.test(sent) && /no figure yet/.test(sent), sent);
+
+    // ── SILENT WHEN THERE IS NOTHING ─────────────────────────────────────
+    let quiet = null;
+    const none = await job.run({ claims: [{ id: 'X', status: 'settled' }],
+        send: async (t) => { quiet = t; }, alreadySent: async () => false,
+        markSent: async () => {}, now: NOW });
+    ck('a clean day says nothing at all',
+       none.sent === false && quiet === null,
+       'a chase that arrives saying "nothing to chase" is one she stops reading');
+
+    // ── ONCE A DAY ───────────────────────────────────────────────────────
+    const twice = await job.run({ claims, send: async () => {},
+        alreadySent: async () => true, markSent: async () => {}, now: NOW });
+    ck('it does not chase twice in one day', twice.skipped === true);
+
+    // ── THE DRAFT ────────────────────────────────────────────────────────
+    const d = job.draftRecovery(claims[0], r.absorbing[0]);
+    ck('the draft says plainly it is not sent',
+       /DRAFT — not sent/.test(d.status), d.status);
+    ck('  it is addressed to the SUPPLIER, not the customer',
+       /Dear Calderon,/.test(d.body) && !/MK Trading/.test(d.body),
+       'we recover from the supplier; the customer is who deducted from us');
+    ck('  every figure comes from the record',
+       /24000 KG/.test(d.body) && /22650 KG/.test(d.body) && /1350 KG/.test(d.body)
+       && /\$18,400\.00/.test(d.body),
+       'a claim letter quoting a number that does not match her ledger is worse than none');
+    ck('  it asks how they want to settle',
+       /credit note|payment/.test(d.body));
+    ck('  and offers them a way to disagree with the figures',
+       /weighbridge/.test(d.body),
+       'a claim letter with no route to dispute is one that gets ignored');
+
+    // A draft with no amount must say so rather than leave a gap.
+    const noAmount = job.draftRecovery(
+        { supplier: 'Ramesh', container_no: 'ZZZZ1111111' },
+        { money: null });
+    ck('a draft with no figure refuses to invent one',
+       /\(to be confirmed\)/.test(noAmount.body) && noAmount.needs.length === 1,
+       JSON.stringify(noAmount.needs));
+
+    // ── THE COMMAND THE CHASE PROMISES ───────────────────────────────────
+    // The message ends with 'Say "draft claim <container>"'. A promise to a
+    // bot with no such route is the closePurchaseOrder failure.
+    const brain = require('../workflow/brain.js');
+    const mk = (t) => ({ text: t, textLower: t.toLowerCase(), isManagerOrTeam: true,
+                         isTrucker: false, isSupplier: false, pendingAction: null,
+                         session: {}, activeBooking: null });
+    const intent = (t) => { const x = brain.policyDecide(mk(t)); return x && !x.needsAI ? x.intent : '(needsAI)'; };
+    for (const phrase of ['draft claim TGCU0053611', 'write claim email for TGCU0053611',
+                          'prepare the claim TGCU0053611']) {
+        ck(`"${phrase}" routes`, intent(phrase) === 'draft_claim', intent(phrase));
+    }
+    const offered = (String(sent).match(/\*draft claim <container>\*/) || [])[0];
+    ck('  and the phrase the message offers is the one that routes',
+       !!offered && intent('draft claim TGCU0053611') === 'draft_claim',
+       'the promise is the bug if the route is missing');
+
+    const actions = require('../workflow/actions.js');
+    ck('the action exists and is wired',
+       typeof actions.draftClaimEmail === 'function');
+    const actionSrc = fs.readFileSync(path.join(ROOT, 'workflow/actions.js'), 'utf8');
+    const slice = actionSrc.slice(actionSrc.indexOf('async function draftClaimEmail'),
+        actionSrc.indexOf('async function draftClaimEmail') + 4000);
+    ck('  and it sends nothing to a supplier',
+       !/sendEmail|gmail/.test(slice),
+       'it writes the letter; she sends it');
+    ck('  nor writes to the claims register',
+       !/raiseRecovery|setStatus|update\(/.test(slice),
+       'raising the recovery is still her action — it is what moves the status');
+
+    // ── WIRED TO RUN ─────────────────────────────────────────────────────
+    const sched = fs.readFileSync(path.join(ROOT, 'scheduler.js'), 'utf8');
+    ck('the chase is on the schedule',
+       /require\('\.\/helpers\/claimsAgentJob'\)/.test(sched),
+       'an agent nobody runs is the register nobody read, one level up');
+    ck('  after the ledger agent, so the morning arrives in one block',
+       sched.indexOf("'45 7 * * *'") > 0 && sched.indexOf("'30 7 * * *'") > 0);
+}
+
 console.log(`\n  ${pass} passed, ${fail} failed`);
 if (failures.length) { console.log('\n  failed:'); failures.forEach((f) => console.log('    · ' + f)); }
 try { fs.rmSync(TMP, { recursive: true, force: true }); } catch {}
 process.exit(fail ? 1 : 0);
+
+})().catch((e) => { console.error('\n  THREW:', e.stack || e.message); process.exit(1); });

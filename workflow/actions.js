@@ -8528,6 +8528,77 @@ async function checkQuickBooksNow(chatId) {
     }
 }
 
+
+// ── WRITE THE RECOVERY EMAIL, DO NOT SEND IT ──────────────────────────────
+// Apsara, 2026-10-02, on claims: "thats where we are losing money", and she
+// gave the agent two powers — chase, and draft the recovery email — with no
+// authority over a figure.
+//
+// WHY A DRAFT IS THE WHOLE POINT. helpers/claims.js names the leak in its own
+// comment: "most of what Edge has absorbed is a recovery nobody raised." The
+// reason a recovery does not get raised is rarely that she decided against
+// it — it is that writing the email is a job, and the job never reaches the
+// top of the list. So the email arrives written. She reads it, corrects it,
+// sends it.
+//
+// IT SENDS NOTHING. Not to the supplier, not anywhere. The draft comes back
+// in the chat for her to copy or tell me to change. Nothing is written to the
+// claims register either: raising the recovery is still her action on the
+// claims page, because that is what moves a claim's status and puts a figure
+// against it.
+async function draftClaimEmail(chatId, container) {
+    const want = String(container || '').trim();
+    if (!want) {
+        await _send(chatId, 'Which claim? Say "draft claim TGCU0053611" with the container number.');
+        return { action_taken: 'draft_claim_no_container' };
+    }
+
+    let list = [];
+    try { list = require('../helpers/claims').list(); } catch (e) { list = []; }
+    const norm = (v) => String(v || '').replace(/\s+/g, '').toUpperCase();
+    const hits = list.filter((c) => c && (norm(c.container_no) === norm(want)
+        || norm(c.invoice_no) === norm(want) || String(c.id) === want));
+
+    if (!hits.length) {
+        // NAMED, not silent. She may have the container right and the claim
+        // may simply never have been created — saying "no such claim" would
+        // read as though the shipment does not exist.
+        await _send(chatId, `I have no claim on record for ${want}. `
+            + 'If one should exist, it is created from the claim mail — check the Claims page, '
+            + 'or forward me the mail.');
+        return { action_taken: 'draft_claim_unknown' };
+    }
+    if (hits.length > 1) {
+        await _send(chatId, `${hits.length} claims match ${want}. `
+            + hits.slice(0, 5).map((c, i) => `\n  ${i + 1}. ${c.container_no || '—'} / ${c.invoice_no || '—'} — ${c.status}`).join('')
+            + '\n\nSay the invoice number instead and I will take that one.');
+        return { action_taken: 'draft_claim_ambiguous', matches: hits.length };
+    }
+
+    const claim = hits[0];
+    const agent = require('../helpers/claimsAgent');
+    const job = require('../helpers/claimsAgentJob');
+    const assessed = agent.assess(claim, { now: Date.now() });
+    const draft = job.draftRecovery(claim, assessed);
+
+    const head = [];
+    head.push(`*${draft.status}*`);
+    if (draft.needs.length) {
+        // Said FIRST, because a draft missing the amount needs her before it
+        // needs sending, and that is a different action from "send this".
+        head.push('');
+        head.push('⚠️ ' + draft.needs.join('; '));
+    }
+    head.push('');
+    head.push(draft.body);
+    head.push('');
+    head.push('Copy it, or tell me what to change. When it has gone out, raise the '
+        + 'recovery on the Claims page so it stops showing as unasked.');
+
+    await _send(chatId, head.join('\n'));
+    return { action_taken: 'draft_claim_sent', claim_id: claim.id, needs: draft.needs.length };
+}
+
 module.exports = {
     metalsBriefing, metalsReport,
     replyToFocusedDigest, askWhichDigestItem, reviseDraftedEmail,
@@ -8575,6 +8646,7 @@ showPurchaseOrder,
 showPurchaseOrders,
 showQuickBooksStuck,
 checkQuickBooksNow,
+draftClaimEmail,
     setReminder, showReminders, cancelReminder,
     askForScaleTickets, resumeQuoteWithScaleTickets,
     // Proforma raised from a customer's own email (2026-08-23).

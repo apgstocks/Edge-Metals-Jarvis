@@ -1307,6 +1307,26 @@ function start() {
         .run({ alreadySent, markSent, sheetReport: lastSheetSyncReport })
         .catch(e => console.error('[SCHED] ledger-agent:', e)), TZ);
 
+    // ── 07:45 — THE CLAIMS CHASE ─────────────────────────────────────────
+    // Apsara, 2026-10-02: "for handling claims-I want to have an advanced
+    // agent because thats where we are losing money", and on the window:
+    // "there is no specific window - the faster the better."
+    //
+    // AFTER the ledger agent at 07:30, so the three morning messages arrive
+    // in one block rather than trickling, and last of them because it is the
+    // one she is most likely to act on immediately — a recovery email to
+    // write is a task, and tasks belong at the end of a briefing.
+    //
+    // No window to count down to means AGE is the whole mechanism: the chase
+    // gets louder the longer something sits, and it does not stop. See
+    // helpers/claimsAgentJob.js LOUDNESS.
+    //
+    // It writes nothing to the claims register and sends nothing to a
+    // supplier. Chase and draft; a person still raises the recovery.
+    cron.schedule('45 7 * * *', () => require('./helpers/claimsAgentJob')
+        .run({ send: (t) => _sendToManager(t), alreadySent, markSent })
+        .catch(e => console.error('[SCHED] claims-chase:', e)), TZ);
+
     cron.schedule('30 6 * * *',   () => require('./helpers/integritySweepJob').run()
         .catch(e => console.error('[SCHED] integrity-sweep:', e)), TZ);
     cron.schedule('45 22 * * *',  () => nightlyCutoffBackfill().catch(e => console.error('[SCHED] cutoff-backfill:', e)), TZ);

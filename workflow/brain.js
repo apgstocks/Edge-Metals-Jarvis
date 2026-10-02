@@ -1662,6 +1662,16 @@ function policyDecide(ctx) {
             || /^why\s+(?:is|are)?\s*(?:\w+\s+)?(?:not|n[’']?t)\s+in\s+(?:qb|quick\s?books)\s*\??$/i.test(ctx.text.trim())) {
             return { intent: 'qb_stuck', resolvedBy: 'policy', data: {} };
         }
+        // ── THE COMMAND THE CLAIMS CHASE PROMISES (2026-10-02) ──────────
+        // helpers/claimsAgentJob.js's morning message ends with
+        // 'Say "draft claim <container>"'. The closePurchaseOrder rule: a
+        // message that tells her to say something to a bot with no such
+        // route is the same failure as the APK Jarvis once offered and could
+        // not send. The promise IS the bug, so the route ships with the line.
+        if ((m = ctx.text.trim().match(/^(?:draft|write|prepare)\s+(?:the\s+)?claim\s+(?:email\s+)?(?:for\s+)?([A-Za-z]{4}\d{6,7}|\S+)\s*$/i))) {
+            return { intent: 'draft_claim', resolvedBy: 'policy', data: { container: m[1] } };
+        }
+
         // The fresh check. This route exists because the answer above OFFERS
         // it — the closePurchaseOrder lesson: a message that says 'say X' to
         // a bot with no such route is the same class of failure as the APK
@@ -2749,6 +2759,7 @@ async function route(decision, ctx, sendMessage) {
         case 'close_po':              return actions.closePurchaseOrder(chatId, d.po);
         case 'show_po':               return actions.showPurchaseOrder(chatId, d.po);
         case 'show_pos':              return actions.showPurchaseOrders(chatId);
+        case 'draft_claim':           return actions.draftClaimEmail(chatId, d.container);
         case 'qb_stuck':              return actions.showQuickBooksStuck(chatId);
         case 'qb_check_now':          return actions.checkQuickBooksNow(chatId);
         case 'ignore_digest_item':      return actions.ignoreDigestItem(chatId, d.indices, d.all === true);
