@@ -798,6 +798,34 @@ function mount(app, cfg) {
         } catch (e) { res.status(400).json({ error: e.message }); }
     });
 
+    // ── QB AGENT ───────────────────────────────────────────────────────────
+    // Apsara, 2026-10-02: "auto resolves discrepancy … whose only job is to
+    // make qb perfect." The survey is the scoreboard; the queue is what it
+    // would do, ask, propose or cannot touch; the run does only the `do`
+    // items, and dry unless she says otherwise.
+    app.get('/api/qb/agent', async (req, res) => {
+        const year = /^\d{4}$/.test(String(req.query.year || '')) ? Number(req.query.year) : new Date().getFullYear();
+        try {
+            const agent = require('./agent');
+            const surveyed = await agent.survey({ year, env: envOf() });
+            res.json({ ...surveyed, queue: agent.queue(surveyed), invariantList: agent.INVARIANTS });
+        } catch (e) { res.status(502).json({ error: `QuickBooks: ${e.message}` }); }
+    });
+
+    app.post('/api/qb/agent/run', async (req, res) => {
+        if (locked(req, res)) return;
+        const b = req.body || {};
+        const really = b.really === true;
+        if (really && String(b.confirm || '').trim().toUpperCase() !== 'RUN') {
+            return res.status(400).json({ error: 'to let the agent write, type RUN' });
+        }
+        try {
+            res.json(await require('./agent').run({
+                year: /^\d{4}$/.test(String(b.year || '')) ? Number(b.year) : new Date().getFullYear(),
+                env: envOf(), really, reason: b.reason }));
+        } catch (e) { res.status(400).json({ error: e.message }); }
+    });
+
     app.post('/api/qb/undo', async (req, res) => {
         if (locked(req, res)) return;
         const { journalId, reason, dryRun } = req.body || {};

@@ -155,10 +155,21 @@ async function openItems(env, { year = null } = {}) {
     };
 }
 
+// QuickBooks returns 100 rows unless told otherwise, and she has 377
+// accounts. Unpaginated, this read stopped at the first hundred — which is
+// why the books screen listed two payable accounts and not the third, the
+// one carrying 495 open bills and -5,154,868.75 (found 2026-10-02 by the
+// agent's own survey disagreeing with a direct query).
 async function accounts(env) {
-    const r = await client.query(
-        "select Id, Name, AccountType, AccountSubType, CurrentBalance from Account where Active = true", { env });
-    return (r.Account || []).map((a) => ({ id: String(a.Id), name: a.Name, type: a.AccountType, sub: a.AccountSubType, balance: r2(a.CurrentBalance) }));
+    const out = [];
+    for (let start = 1; ; start += 1000) {
+        const r = await client.query(
+            `select Id, Name, AccountType, AccountSubType, CurrentBalance from Account where Active = true startposition ${start} maxresults 1000`, { env });
+        const rows = r.Account || [];
+        out.push(...rows);
+        if (rows.length < 1000) break;
+    }
+    return out.map((a) => ({ id: String(a.Id), name: a.Name, type: a.AccountType, sub: a.AccountSubType, balance: r2(a.CurrentBalance) }));
 }
 
 // ── the one screen that answers "how are we doing" ─────────────────────────
