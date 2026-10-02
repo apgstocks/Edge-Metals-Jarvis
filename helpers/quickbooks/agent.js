@@ -208,4 +208,60 @@ async function run({ year = new Date().getFullYear(), env = auth.qbEnv(), really
     return out;
 }
 
-module.exports = { INVARIANTS, survey, queue, run, miscodedCheques, costAlreadyBooked };
+// ── THE VOICE ─────────────────────────────────────────────────────────────
+// One email a morning, written the way a person would write it: what it did,
+// what it is waiting on, what it is not allowed to touch, and the one number
+// that says whether this is getting better.
+const money = (n) => (n === null || n === undefined) ? '—'
+    : '$' + Number(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+function reportText(out) {
+    const s = out.survey || {};
+    const inv = s.invariants || {};
+    const L = [];
+
+    if (out.dryRun) L.push('DRY RUN — nothing was written. The agent writes when it is told to.', '');
+    const did = (out.did || []).find((d) => d.id === 'allocate');
+    L.push(did
+        ? `Placed ${money(did.placed)} across ${did.payments} payments${did.skipped ? `, ${did.skipped} skipped because they changed in QuickBooks` : ''}.`
+        : 'Nothing to place today.');
+    L.push('');
+    L.push(`You owe ${money(s.owe && s.owe.total)} · owed to you ${money(s.owedToYou && s.owedToYou.total)}`);
+    L.push('');
+
+    L.push('WHERE THE BOOKS ARE NOT YET RIGHT');
+    const line = (label, n, extra) => L.push(`  ${label}: ${money(n)}${extra ? ` — ${extra}` : ''}`);
+    if (inv.unallocated) line('Payments sitting on no bill', inv.unallocated.number,
+        `${inv.unallocated.count} payments; worst ${(inv.unallocated.worst || []).slice(0, 3).map((w) => `${w.party} ${money(w.amount)}`).join(', ')}`);
+    if (inv.duplicates) line('Documents doubled', inv.duplicates.number, `${inv.duplicates.count} to look at — a void cannot be undone, so they wait for you`);
+    if (inv.miscoded) line('Supplier money in cost of goods', inv.miscoded.number,
+        `${inv.miscoded.count} cheques; ${inv.miscoded.noPayee.count} of them (${money(inv.miscoded.noPayee.money)}) have no payee and will never be guessed`);
+    if (inv.payableAccounts && inv.payableAccounts.number > 1) {
+        L.push(`  Payable accounts in use: ${inv.payableAccounts.number} — ${(inv.payableAccounts.accounts || []).map((a) => `${a.name} ${money(a.balance)}`).join(' · ')}`);
+    }
+    L.push('  The bank For Review queue: no app can read it. Export it from the Banking screen.');
+
+    const asks = (out.asked || []).filter((i) => i.verdict === 'ask' || i.verdict === 'propose');
+    if (asks.length) {
+        L.push('', 'WAITING ON YOU');
+        for (const a of asks) L.push(`  ${a.title}${a.detail ? ` — ${a.detail}` : ''}`, `      ${a.note || ''}`);
+    }
+    if (Object.keys(s.errors || {}).length) {
+        L.push('', 'COULD NOT BE READ');
+        for (const [k, v] of Object.entries(s.errors)) L.push(`  ${k}: ${v}`);
+    }
+    L.push('', 'Open the QuickBooks page in Jarvis to act on any of this.');
+    return L.join('\n');
+}
+
+async function emailReport(out, opts = {}) {
+    const to = opts.to || process.env.QB_REPORT_TO || process.env.SHEET_SYNC_TO || 'apg0596@gmail.com';
+    const when = new Date().toLocaleDateString('en-US', { timeZone: 'America/Los_Angeles' });
+    const did = (out.did || []).find((d) => d.id === 'allocate');
+    const left = ((out.survey || {}).invariants || {}).unallocated;
+    const subject = `QB Agent — ${did && did.placed ? `${money(did.placed)} placed` : 'nothing placed'}`
+        + `${left && left.number ? `, ${money(left.number)} still loose` : ''}${out.dryRun ? ' (dry run)' : ''} — ${when}`;
+    return require('../gmail').sendEmail({ to, subject, body: reportText(out) });
+}
+
+module.exports = { INVARIANTS, survey, queue, run, reportText, emailReport, miscodedCheques, costAlreadyBooked };

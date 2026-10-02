@@ -207,7 +207,8 @@ async function loadStatus() {
       `<span class="chip act" data-todo="1" title="Everything QuickBooks is waiting on">what needs you</span>`,
       `<span class="chip act" data-books="1" title="The year, what is owed both ways, and the bank balances — read live from QuickBooks">the books</span>`,
       `<span class="chip act" data-find="1" title="Find a document in QuickBooks by number, container or amount">find</span>`,
-      `<span class="chip act" data-bank="1" title="The CSV you export from the Banking screen, matched line by line to what is open">bank lines</span>`,
+      `<span class="chip act" data-agent="1" title="What is not yet right in the books, and who can fix each one">QB Agent</span>`,
+      `<span class="chip act" data-bank="1" title=""The CSV you export from the Banking screen, matched line by line to what is open">bank lines</span>`,
       `<span class="chip act" data-allocate="1" title=""Payments that were never matched to a bill — the biggest single thing wrong with the books">place payments</span>`,
       `<span class="chip act" data-dupes="1" title=""The same money entered twice, per supplier and customer, and payments never applied">duplicates</span>`,
       `<span class="chip act" data-missing="1" title=""Your live sheet against your live books — what neither side has">sheet vs books</span>`,
@@ -723,6 +724,55 @@ function pickFile(accept, many) {
   });
 }
 
+/* ── QB AGENT ────────────────────────────────────────────────────────
+   "auto resolves discrepancy … whose only job is to make qb perfect."
+   The scoreboard: every invariant with the number that should be zero,
+   and an honest word on who can close it. It runs only what it is
+   allowed to run alone. */
+async function loadAgent() {
+  STATE.sel = null; renderList();
+  $('dname').textContent = 'QB Agent';
+  $('dmap').textContent = 'Reading the books and working out what is not yet right…';
+  $('dstats').innerHTML = ''; $('dtabs').innerHTML = '';
+  $('dbody').innerHTML = '<div class="empty">Surveying…</div>';
+  try {
+    const a = await api('/api/qb/agent');
+    STATE.agent = a;
+    const i = a.invariants || {};
+    $('dmap').textContent = `${a.year} · you owe ${money(a.owe && a.owe.total)} · owed to you ${money(a.owedToYou && a.owedToYou.total)}`;
+    $('dstats').innerHTML = [
+      ['Not yet placed', money(i.unallocated && i.unallocated.number), 'warn'],
+      ['Doubled', money(i.duplicates && i.duplicates.number), 'warn'],
+      ['Miscoded', money(i.miscoded && i.miscoded.number), 'warn'],
+      ['Payable accounts', (i.payableAccounts && i.payableAccounts.number) || '—', (i.payableAccounts && i.payableAccounts.number > 1) ? 'warn' : 'good'],
+    ].map(([k, v, cls]) => `<div class="stat"><div class="k">${k}</div><div class="v ${cls}">${v}</div></div>`).join('');
+    const badge = { do: 'in', ask: 'out', propose: 'out', blocked: 'bad' };
+    const says = { do: 'it does this itself', ask: 'it will not — you decide', propose: 'it has prepared this, waiting on you', blocked: 'nothing can do this through the API' };
+    $('dbody').innerHTML = `<table><thead><tr><th>What</th><th class="num">Money</th><th>Who</th><th>Why</th></tr></thead><tbody>${
+      (a.queue || []).map(q => `<tr><td><b>${q.title}</b>${q.detail ? `<br><span class="mono" style="color:var(--text-faint)">${q.detail}</span>` : ''}</td>
+        <td class="num">${q.money ? money(q.money) : ''}</td>
+        <td><span class="pill ${badge[q.verdict] || ''}">${q.verdict}</span><br><span style="color:var(--text-faint)">${says[q.verdict] || ''}</span></td>
+        <td style="color:var(--text-faint)">${q.note || ''}</td></tr>`).join('')}</tbody></table>
+      <div class="empty" style="padding:10px 8px">It runs itself at 00:30 Los Angeles, after the entry sweep, and emails you what it did. Writing needs QB_AGENT=on as well as the two existing switches.</div>`;
+    if (!STATE.unlocked) return;
+    const canDo = (a.queue || []).filter(q => q.verdict === 'do');
+    if (!canDo.length) return;
+    const ok = await confirmImpact({
+      title: 'Let the agent run now',
+      sub: canDo.map(q => q.title).join(' · '),
+      bodyHtml: `<div class="pk-none">It will only do what it is allowed to do alone: ${canDo.map(q => q.title.toLowerCase()).join(', ')}.</div>
+        <div class="pk-none">No money moves. It never voids, never deletes, never merges, and never touches a document it cannot prove is missing.</div>`,
+      mustType: 'RUN', okLabel: 'Run it',
+    });
+    if (!ok) return toast('Left alone. Nothing was written.', 'good');
+    toast('Running…');
+    const out = await api('/api/qb/agent/run', { really: true, confirm: 'RUN', reason: 'run from the QuickBooks page' });
+    const did = (out.did || [])[0];
+    toast(did ? `Placed ${money(did.placed)} across ${did.payments} payments.` : 'Nothing to do.', 'good');
+    await loadAgent();
+  } catch (e) { $('dbody').innerHTML = `<div class="empty">${e.message}</div>`; }
+}
+
 /* ── what is waiting on her ──────────────────────────────────────────
    The first thing the page shows, because "what do I still have to do"
    used to need a script and a read of its output. Unmatched names by
@@ -1145,6 +1195,7 @@ $('chips').addEventListener('click', (e) => {
   else if (chip.dataset.dupes) loadDuplicates();
   else if (chip.dataset.allocate) allocatePayments(null);
   else if (chip.dataset.bank) bankReview();
+  else if (chip.dataset.agent) loadAgent();
   else if (chip.dataset.older) pushOlderList();
   else if (chip.dataset.connect) connectQb();
 });

@@ -1231,6 +1231,25 @@ async function nightlyQuickBooks() {
     return out;
 }
 
+async function qbAgent() {
+    const agent = require('./helpers/quickbooks/agent');
+    // The agent writes only when both switches are on, exactly like the sweep
+    // before it. Off means a survey and an email that says so.
+    const live = String(process.env.QB_PROD_WRITES || '').toLowerCase() === 'on'
+        && String(process.env.QB_SYNC || '').toLowerCase() === 'on'
+        && String(process.env.QB_AGENT || '').toLowerCase() === 'on';
+    const out = await agent.run({ really: live, reason: 'QB Agent nightly run' });
+    const s = (out.survey || {}).invariants || {};
+    const did = (out.did || []).find((d) => d.id === 'allocate');
+    console.log(`[SCHED] qb-agent ${out.dryRun ? '(survey only)' : '(live)'}: placed ${did ? did.placed : 0}`
+        + `, still loose ${s.unallocated ? s.unallocated.number : '?'}`
+        + `, doubled ${s.duplicates ? s.duplicates.number : '?'}`
+        + `, miscoded ${s.miscoded ? s.miscoded.number : '?'}`);
+    try { await agent.emailReport(out); }
+    catch (e) { console.error('[SCHED] qb-agent email failed:', e.message); }
+    return out;
+}
+
 function start() {
     cron.schedule('0 8 * * *',    () => morningDigest().catch(e => console.error('[SCHED] digest:', e)), TZ);
     cron.schedule('15 8 * * *',   () => dailyTruckerCheck().catch(e => console.error('[SCHED] trucker-check:', e)), TZ);
@@ -1299,6 +1318,13 @@ function start() {
     // sync on purpose: that job fills the ledgers, this one pushes what it
     // filled. Same switches as ever — off means a dry run that says so.
     cron.schedule('0 0 * * *',    () => nightlyQuickBooks().catch(e => console.error('[SCHED] quickbooks:', e)), TZ);
+    // ── QB Agent, half an hour after the entry run ────────────────────────
+    // Apsara, 2026-10-02: "auto resolves discrepancy … whose only job is to
+    // make qb perfect." It runs AFTER the sweep on purpose: the sweep puts
+    // today's documents in, then the agent looks at the whole year and places
+    // what it can. Needs QB_AGENT=on as well as the two existing switches —
+    // a survey is free, writing is a decision.
+    cron.schedule('30 0 * * *',   () => qbAgent().catch(e => console.error('[SCHED] qb-agent:', e)), TZ);
     cron.schedule('* * * * *',    () => taskRunner().catch(e => console.error('[SCHED] tasks:',  e)),    TZ);
     cron.schedule('*/5 * * * *',  () => quoteEmailReplyWatch().catch(e => console.error('[SCHED] quote-email-poll:', e)), TZ);
     cron.schedule('*/5 * * * *',  () => contactQuoteEmailReplyWatch().catch(e => console.error('[SCHED] contact-quote-email-poll:', e)), TZ);
