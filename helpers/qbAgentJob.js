@@ -1,4 +1,18 @@
-// ── helpers/qbAgentJob.js — the QuickBooks agent's daily run ──────────────
+// ── helpers/qbAgentJob.js — the blocked-rows run ──────────────────────────
+// ── NAMED "BLOCKED ROWS", NOT "QB AGENT" (2026-10-02) ─────────────────────
+// That name belongs to helpers/quickbooks/agent.js: it is the one Apsara
+// asked for by it ("it is called agent qb"), and the one the QuickBooks
+// page's QB Agent tab opens. Two different jobs under one name made a
+// question about "the QB agent" ambiguous, in the logs and in her inbox.
+//
+// The split is worth stating plainly, because it is the reason both exist:
+//   QB Agent (00:30)     audits what is ALREADY INSIDE QuickBooks
+//   blocked rows (07:25) explains what CANNOT GET IN, and hands the
+//                        blocking fields to the ledger agent at 07:30
+//
+// QB_AGENT_EMAILS keeps its name: it is in her .env on the VM, and renaming
+// an environment variable to tidy a label is how a report silently loses its
+// recipient.
 // Apsara, 2026-10-01: "Assign one agent for quickbook next", "so
 // (bills+invoice) agent should talk to this agent".
 //
@@ -76,7 +90,7 @@ const remember = async (result) => {
     } catch (e) {
         // The handoff still works from memory, so this is a degraded cache
         // and not a failed run. Said out loud rather than swallowed.
-        console.error('[qb-agent] could not persist the check:', e.message);
+        console.error('[blocked-rows] could not persist the check:', e.message);
     }
 };
 
@@ -132,18 +146,18 @@ async function run({ sweep, send, alreadySent, markSent, now = new Date() } = {}
         // NOT marked as sent: a transient 500 at 07:25 should be retried by
         // the next run rather than written off for the day.
         const why = String((e && e.message) || e).slice(0, 200);
-        console.error('[qb-agent] sweep failed:', why);
+        console.error('[blocked-rows] sweep failed:', why);
         // BOTH, or the chat keeps answering from yesterday's file while the
         // ledger agent correctly believes it knows nothing.
         await forget();
         const to = recipients();
         if (to && send) {
             try {
-                await send({ to, subject: 'QuickBooks agent — could not check this morning',
+                await send({ to, subject: 'Blocked rows — could not check this morning',
                     body: `The QuickBooks check did not run.\n\n  ${why}\n\n`
                         + 'Nothing was changed. This usually means the QuickBooks token '
                         + 'needs reconnecting on the QuickBooks page.' });
-            } catch (e2) { console.error('[qb-agent] could not even send the failure:', e2.message); }
+            } catch (e2) { console.error('[blocked-rows] could not even send the failure:', e2.message); }
         }
         return { ok: false, error: why, sent: !!(to && send) };
     }
@@ -159,7 +173,7 @@ async function run({ sweep, send, alreadySent, markSent, now = new Date() } = {}
 
     const to = recipients();
     if (!to) {
-        console.log('[qb-agent] no recipient configured (QB_AGENT_EMAILS) — not sending');
+        console.log('[blocked-rows] no recipient configured (QB_AGENT_EMAILS) — not sending');
         return { ...result, sent: false, why: 'no recipient configured', text };
     }
 
@@ -169,15 +183,15 @@ async function run({ sweep, send, alreadySent, markSent, now = new Date() } = {}
     const mine = result.blocked.reduce((n, b) =>
         n + b.found.filter((f) => f.side !== 'jarvis').length, 0);
     const subject = mine
-        ? `QuickBooks agent — ${mine} thing${mine === 1 ? ' needs' : 's need'} you`
-        : 'QuickBooks agent — held up, but nothing needs you';
+        ? `Blocked rows — ${mine} thing${mine === 1 ? ' needs' : 's need'} you`
+        : 'Blocked rows — held up, but nothing needs you';
 
     try {
         const mail = send || ((o) => require('./gmail').sendEmail(o));
         await mail({ to, subject, body: text });
         return { ...result, sent: true, text };
     } catch (e) {
-        console.error('[qb-agent] send failed:', e.message);
+        console.error('[blocked-rows] send failed:', e.message);
         return { ...result, sent: false, error: e.message, text };
     }
 }

@@ -1226,8 +1226,19 @@ async function nightlyQuickBooks() {
     const s = job.summarise(out.result || {});
     if (out.error) console.error(`[SCHED] quickbooks FAILED — NOTHING WAS WRITTEN: ${out.error}`);
     else console.log(`[SCHED] quickbooks ${out.dryRun ? '(dry run)' : '(live)'}: entered ${s.made}, stuck ${s.blocked}, needs her ${s.asked}${s.errored ? `, errors ${s.errored}` : ''}${s.left ? `, left alone ${s.left} older than the cutover` : ''}`);
-    try { await job.emailReport(out); }
-    catch (e) { console.error('[SCHED] quickbooks email failed:', e.message); }
+    // ── INTO THE DIGEST, NOT STRAIGHT TO HER INBOX ───────────────────────
+    // Apsara chose one 07:25 email over three. The sweep still runs at 00:00
+    // and still WRITES at 00:00 — only the posting moved. job.emailReport is
+    // untouched and still used by scripts/qb-run.js and the tests.
+    //
+    // A FAILURE is the exception and goes at once: an expired token at
+    // midnight must not wait until 07:25, because those are seven hours in
+    // which she believes her books are being kept and they are not.
+    try {
+        if (out.error) await job.emailReport(out);
+        else await require('./helpers/qbDigest').record('sweep',
+            { text: job.reportText(out), summary: s, ok: true });
+    } catch (e) { console.error('[SCHED] quickbooks report failed:', e.message); }
     return out;
 }
 
@@ -1245,8 +1256,15 @@ async function qbAgent() {
         + `, still loose ${s.unallocated ? s.unallocated.number : '?'}`
         + `, doubled ${s.duplicates ? s.duplicates.number : '?'}`
         + `, miscoded ${s.miscoded ? s.miscoded.number : '?'}`);
-    try { await agent.emailReport(out); }
-    catch (e) { console.error('[SCHED] qb-agent email failed:', e.message); }
+    // Same arrangement as the sweep above: the agent is unchanged, its own
+    // emailReport is unchanged, only the delivery is pooled into the 07:25
+    // digest. A run that could not survey still mails immediately.
+    try {
+        const open = Object.values(s).filter((v) => v && v.number > 0).length;
+        if (out.error) await agent.emailReport(out);
+        else await require('./helpers/qbDigest').record('agent',
+            { text: agent.reportText(out), summary: { open }, ok: true });
+    } catch (e) { console.error('[SCHED] qb-agent report failed:', e.message); }
     return out;
 }
 
@@ -1296,9 +1314,42 @@ function start() {
     //
     // Dry run always: this job cannot push, cannot create a vendor, cannot
     // journal. QB_PROD_WRITES and QB_SYNC keep meaning what they meant.
+    // ── 07:25 — BLOCKED ROWS, AND THEN THE ONE EMAIL ─────────────────────
+    // Renamed from "QB agent": that name belongs to helpers/quickbooks/agent.js,
+    // which is the one she asked for by it ("it is called agent qb") and the
+    // one the QuickBooks page's QB Agent tab opens. This job reports what will
+    // not go IN; that one audits what is already inside. Two different things
+    // under one name made a question about "the QB agent" ambiguous.
+    //
+    // It posts the digest last, after recording its own part, so all three
+    // nights' reports leave in a single envelope. The send is deliberately
+    // chained rather than put on its own cron: a digest sent before this job
+    // recorded would be missing the part it was waiting for.
     cron.schedule('25 7 * * *', () => require('./helpers/qbAgentJob')
-        .run({ alreadySent, markSent })
-        .catch(e => console.error('[SCHED] qb-agent:', e)), TZ);
+        // A no-op sender, because this job must not post its own letter any
+        // more. Recording happens from the RESULT below rather than from this
+        // callback: run() skips the sender entirely when nothing is stuck, so
+        // a quiet morning would never record a part and the digest would
+        // report "blocked rows did not run" — a false alarm about the one
+        // thing it exists to be honest about.
+        .run({ alreadySent, markSent, send: async () => {} })
+        .then(async (r) => {
+            const digest = require('./helpers/qbDigest');
+            // `skipped` means it already ran today; leave whatever it recorded
+            // the first time rather than overwriting it with nothing.
+            if (!r || !r.skipped) {
+                const needsHer = (r && Array.isArray(r.blocked))
+                    ? r.blocked.reduce((n, b) => n + (b.found || [])
+                        .filter((f) => f.side !== 'jarvis').length, 0)
+                    : null;
+                await digest.record('blocked',
+                    { text: (r && r.text) || null, summary: { needsHer }, ok: !(r && r.error) });
+            }
+            return digest.send({ alreadySent, markSent });
+        })
+        .then((d) => console.log(`[SCHED] qb-digest: ${d.sent ? 'sent' : 'not sent'}`
+            + `${d.why ? ' — ' + d.why : ''}${d.error ? ' — ' + d.error : ''}`))
+        .catch(e => console.error('[SCHED] blocked-rows:', e)), TZ);
 
     // 07:30 — reads the 07:25 result off qbAgentJob.look() by itself; it is
     // not passed in, so a morning where 07:25 never ran is simply a morning

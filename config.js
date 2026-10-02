@@ -663,6 +663,9 @@ const ALERT_EMAIL_TO = process.env.ALERT_EMAIL_TO || '';
 const LEDGER_AGENT_EMAILS = process.env.LEDGER_AGENT_EMAILS || ALERT_EMAIL_TO;
 // Who gets the 07:25 QuickBooks agent note. Same fallback, same reason.
 const QB_AGENT_EMAILS = process.env.QB_AGENT_EMAILS || ALERT_EMAIL_TO;
+// Where the three nightly QuickBooks reports are collected between 00:00 and
+// 07:25, so she gets one email instead of three. See helpers/qbDigest.js.
+const QB_DIGEST_FILE = 'qb_digest.json';
 // Who hears when the backup breaks. Its own setting because this is the one
 // alert that must not be muted with the others — see helpers/backupWatch.js.
 const BACKUP_ALERT_EMAILS = process.env.BACKUP_ALERT_EMAILS || ALERT_EMAIL_TO;
@@ -813,7 +816,7 @@ module.exports = {
     INVOICE_SHEET_ID, INVOICE_MAIN_GID, INVOICE_PACKING_GID,
     CLAIMS_SHEET_GID,
     PROFORMA_PRICING_FILE, PROFORMA_VERSIONS_FILE, SAVED_DOC_KINDS_FILE, YARD_CLAIMS_FILE, QB_AGENT_LAST_FILE, DOCUMENTS_SAVED_DIR,
-    SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS, ALERT_EMAIL_TO, LEDGER_AGENT_EMAILS, QB_AGENT_EMAILS, BACKUP_ALERT_EMAILS,
+    SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS, ALERT_EMAIL_TO, LEDGER_AGENT_EMAILS, QB_AGENT_EMAILS, QB_DIGEST_FILE, BACKUP_ALERT_EMAILS,
     TWILIO_SID, TWILIO_AUTH_TOKEN, TWILIO_FROM, ALERT_SMS_TO,
     GEMINI_API_KEY_BACKUP,
     GROUP_TRUCKER, GROUP_SUPPLIER,
