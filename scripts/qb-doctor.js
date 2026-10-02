@@ -69,6 +69,40 @@ const exists = (p) => { try { return fs.existsSync(p); } catch { return false; }
         const d = push.cutoverFor(k, env), from = push.cutoverSource(k);
         say(!!d, `cutover ${k}s`, d ? `${d}  (${from})` : 'NOT SET — in production nothing will be entered');
     }
+    // ── WHAT THE BOUNDARY IS HOLDING BACK ─────────────────────────────────
+    // A cutover that is SET is not a cutover that is RIGHT. On 2026-10-02 the
+    // doctor said "nothing is obviously wrong" while the boundary sat on the
+    // day it was typed eight days earlier, and every row the sheet sync had
+    // written since was being skipped in silence. So it is not enough to
+    // report the date: report what is behind it.
+    try {
+        const links = push.loadLinks();
+        const linked = (kind, id) => !!links[push.linkKey(env, kind, id)];
+        const held = { bills: [], sales: [] };
+        for (const b of require('../helpers/bills').list()) {
+            const c = push.beforeCutover('bill', b.date, env);
+            if (c && !push.UNREADABLE.test(c) && !linked('bill', b.id)) held.bills.push(push.isoDate(b.date) || String(b.date));
+        }
+        const seen = new Set();
+        for (const sale of require('../helpers/sales').list()) {
+            const no = push.docNumberFor(sale);
+            if (no && seen.has(no)) continue;
+            if (no) seen.add(no);
+            const c = push.beforeCutover('invoice', sale.date, env);
+            if (c && !push.UNREADABLE.test(c) && !linked('invoice', no || sale.id)) held.sales.push(push.isoDate(sale.date) || String(sale.date));
+        }
+        const n = held.bills.length + held.sales.length;
+        const newest = [...held.bills, ...held.sales].sort().slice(-1)[0];
+        const oldest = [...held.bills, ...held.sales].sort()[0];
+        // Recent work behind the boundary is the tell: old rows behind it are
+        // the accountant's period and belong there; rows from the last
+        // fortnight are tonight's work being skipped.
+        const fresh = [...held.bills, ...held.sales].filter((d) => d >= new Date(Date.now() - 14 * 864e5).toISOString().slice(0, 10)).length;
+        say(fresh === 0, 'what the boundary holds back',
+            n === 0 ? 'nothing' : `${held.bills.length} bills, ${held.sales.length} invoices (${oldest} → ${newest})`
+                + (fresh ? `  — ${fresh} of them from the last fortnight, so TONIGHT'S WORK IS BEING SKIPPED` : '  — all older than a fortnight, which is the accountant\'s period'));
+    } catch (e) { say(null, 'what the boundary holds back', `could not work it out: ${e.message.slice(0, 50)}`); }
+
     for (const role of Object.keys(mapping.ACCOUNT_ROLES)) {
         const hit = mapping.matchParty(role, [], 'account');
         say(hit.status === 'confirmed', `role "${role}"`, hit.qb ? `#${hit.qb.Id} ${hit.qb.DisplayName}` : 'unmapped — a write that needs it will block');

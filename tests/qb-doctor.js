@@ -25,5 +25,12 @@ ck('it exits non-zero when something is wrong, so a deploy script can stop',
 ck('a missing cutover is called out as "nothing will be entered"', /nothing will be entered/.test(src));
 ck('an unmapped role is called out as a write that will block', /a write that needs it will block/.test(src));
 
+ck('it reports what the boundary is HOLDING BACK, not just the date',
+   /what the boundary holds back/.test(src), 'a cutover that is set is not a cutover that is right');
+ck('...and fails when recent work is behind it', /TONIGHT'S WORK IS BEING SKIPPED/.test(src));
+ck('...while old rows behind it read as the accountant\'s period, not an alarm',
+   /accountant\\'s period/.test(src) || /accountant/.test(src));
+ck('...and it only counts rows that are not already in QuickBooks', /loadLinks\(\)/.test(src));
+
 console.log(`\nqb-doctor: ${pass} passed, ${fail} failed`);
 if (fail) { console.log('FAILED: ' + failures.join(' | ')); process.exit(1); }
