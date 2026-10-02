@@ -6,6 +6,11 @@ node_modules/
 # the repo. The runtime store this line is for is the one at the ROOT.
 /data/
 bookings.json
+# The QuickBooks digest's overnight stash (helpers/qbDigest.js). A DATA file,
+# like bookings.json above — it was committed once by accident, and a tracked
+# data file means `git pull` on the VM overwrites whatever the live run had
+# collected that night.
+qb_digest.json
 *.log
 .DS_Store
 .wwebjs_cache/
