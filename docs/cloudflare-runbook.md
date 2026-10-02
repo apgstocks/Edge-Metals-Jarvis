@@ -24,8 +24,18 @@ followed — an expired certificate, a blocked IP, a bad DNS resolver, a
 TLS-intercepting proxy, and IP reputation. All six were checked and only this
 one survives.
 
-**Likely, not proven.** Several things changed that evening and it cannot be
-isolated after the fact. But it is the only explanation that fits the timing.
+**Confirmed by elimination, 2026-10-03.** Three things changed in the final
+Caddyfile and the live server was checked afterwards:
+
+| Change | State on the live server | Verdict |
+|---|---|---|
+| `protocols h1 h2` | `alt-svc` header gone | **live — the only candidate left** |
+| `key_type rsa2048` | chain still `YE2` / ISRG Root X2 (ECDSA) | never took effect; certificate theory dead |
+| `localhost` -> `127.0.0.1` | live | Caddy->Node leg only; identical for every client, so it cannot produce "fails on this wifi, works on mobile data" |
+
+Caddy keeps a valid certificate rather than reissuing one, so `key_type` did
+nothing. That leaves HTTP/3 as the only change capable of behaving differently
+per network.
 
 ## If a phone still cannot connect
 
