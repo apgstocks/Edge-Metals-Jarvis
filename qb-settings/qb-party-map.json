@@ -328,6 +328,54 @@
       "by": "apsara",
       "at": "2026-09-24T21:08:39.250Z",
       "reason": "FMC: one company, every spelling — 2026-09-25"
+    },
+    "ineshcoreschapin": {
+      "jarvisName": "Inesh Cores Chapin",
+      "qbId": "437",
+      "qbName": "Inesh Cores Chapin",
+      "by": "apsara",
+      "at": "2026-09-26T08:53:33.663Z",
+      "reason": "matched on the QuickBooks page"
+    },
+    "freddy": {
+      "jarvisName": "FREDDY",
+      "qbId": "421",
+      "qbName": "Freddy",
+      "by": "apsara",
+      "at": "2026-09-26T08:58:15.137Z",
+      "reason": "matched on the QuickBooks page"
+    },
+    "jgrecycling": {
+      "jarvisName": "J&G Recycling",
+      "qbId": "200000001",
+      "qbName": "J & G Recycling",
+      "by": "apsara",
+      "at": "2026-09-26T09:00:55.318Z",
+      "reason": "matched on the QuickBooks page"
+    },
+    "abantos": {
+      "jarvisName": "Abantos",
+      "qbId": "547",
+      "qbName": "Abantos",
+      "by": "apsara",
+      "at": "2026-09-26T09:01:11.463Z",
+      "reason": "matched on the QuickBooks page"
+    },
+    "aussins": {
+      "jarvisName": "Aussins",
+      "qbId": "541",
+      "qbName": "Aussins",
+      "by": "apsara",
+      "at": "2026-09-26T09:01:32.782Z",
+      "reason": "matched on the QuickBooks page"
+    },
+    "mbrecycling": {
+      "jarvisName": "MB RECYCLING",
+      "qbId": "467",
+      "qbName": "MB RECYCLING",
+      "by": "apsara",
+      "at": "2026-09-26T09:01:44.933Z",
+      "reason": "matched on the QuickBooks page"
     }
   },
   "customer": {
@@ -839,6 +887,134 @@
       "by": "apsara",
       "at": "2026-09-24T21:08:39.249Z",
       "reason": "FMC: one company, every spelling — 2026-09-25"
+    },
+    "mktrading": {
+      "jarvisName": "MK Trading",
+      "qbId": "449",
+      "qbName": "MK Trading",
+      "by": "apsara",
+      "at": "2026-09-26T08:51:01.098Z",
+      "reason": "matched on the QuickBooks page"
+    },
+    "solinemetal": {
+      "jarvisName": "SOLINE METAL",
+      "qbId": "427",
+      "qbName": "SOLINE METAL",
+      "by": "apsara",
+      "at": "2026-09-26T08:57:02.948Z",
+      "reason": "matched on the QuickBooks page"
+    },
+    "eccomelt": {
+      "jarvisName": "Eccomelt",
+      "qbId": "577",
+      "qbName": "eccomelt",
+      "by": "apsara",
+      "at": "2026-09-26T08:58:25.023Z",
+      "reason": "matched on the QuickBooks page"
+    },
+    "edgemetalsrecycling": {
+      "jarvisName": "Edge Metals Recycling",
+      "qbId": "568",
+      "qbName": "Edge Metals Recycling",
+      "by": "apsara",
+      "at": "2026-09-26T08:58:33.488Z",
+      "reason": "matched on the QuickBooks page"
+    },
+    "nicrometals": {
+      "jarvisName": "Nicro Metals",
+      "qbId": "472",
+      "qbName": "Nicro Metals",
+      "by": "apsara",
+      "at": "2026-09-26T08:58:44.903Z",
+      "reason": "matched on the QuickBooks page"
+    },
+    "nexttrading": {
+      "jarvisName": "Next Trading",
+      "qbId": "470",
+      "qbName": "Next Trading",
+      "by": "apsara",
+      "at": "2026-09-26T08:58:58.552Z",
+      "reason": "matched on the QuickBooks page"
+    },
+    "gcrecycling": {
+      "jarvisName": "G&C Recycling",
+      "qbId": "581",
+      "qbName": "G&C RECYCLING",
+      "by": "apsara",
+      "at": "2026-09-26T08:59:15.279Z",
+      "reason": "matched on the QuickBooks page"
+    },
+    "quantumsteels": {
+      "jarvisName": "Quantum Steels",
+      "qbId": "582",
+      "qbName": "QUANTUM STEELS",
+      "by": "apsara",
+      "at": "2026-09-26T08:59:21.552Z",
+      "reason": "matched on the QuickBooks page"
+    },
+    "varotrading": {
+      "jarvisName": "Varo Trading",
+      "qbId": "468",
+      "qbName": "Varo Trading",
+      "by": "apsara",
+      "at": "2026-09-26T08:59:37.848Z",
+      "reason": "matched on the QuickBooks page"
+    },
+    "dhatuinternationalpteltd": {
+      "jarvisName": "Dhatu International PTE LTD",
+      "qbId": "452",
+      "qbName": "Dhatu International PVT LTD",
+      "by": "apsara",
+      "at": "2026-09-26T08:59:49.898Z",
+      "reason": "matched on the QuickBooks page"
+    },
+    "nurmetals": {
+      "jarvisName": "NUR METALS",
+      "qbId": "505",
+      "qbName": "nur metals",
+      "by": "apsara",
+      "at": "2026-09-26T08:59:57.603Z",
+      "reason": "matched on the QuickBooks page"
+    },
+    "deacero": {
+      "jarvisName": "Deacero",
+      "qbId": "583",
+      "qbName": "Deacero",
+      "by": "apsara",
+      "at": "2026-09-26T09:00:27.607Z",
+      "reason": "matched on the QuickBooks page"
+    },
+    "dkusa": {
+      "jarvisName": "DKUSA",
+      "qbId": "569",
+      "qbName": "DKUSA",
+      "by": "apsara",
+      "at": "2026-09-26T09:00:47.792Z",
+      "reason": "matched on the QuickBooks page"
+    },
+    "dongametalcoltd": {
+      "jarvisName": "Dong-A Metal Co.,ltd",
+      "qbId": "399",
+      "qbName": "Dong-A Metal Co., Ltd",
+      "by": "apsara",
+      "at": "2026-09-26T09:02:57.368Z",
+      "reason": "matched on the QuickBooks page"
+    },
+    "aluzencoltd": {
+      "jarvisName": "Aluzen Co.,ltd",
+      "qbId": "407",
+      "qbName": "Aluzen Co., Ltd.",
+      "by": "apsara",
+      "at": "2026-09-26T09:03:05.653Z",
+      "reason": "matched on the QuickBooks page"
+    },
+    "jemulpometalcoltd": {
+      "jarvisName": "Jemulpo Metal Co., Ltd",
+      "qbId": "272",
+      "qbName": "Jemulpo Metal Co Ltd",
+      "by": "apsara",
+      "at": "2026-09-26T09:03:13.223Z",
+      "reason": "matched on the QuickBooks page"
     }
   },
   "item": {
@@ -1579,6 +1755,22 @@
       "by": "apsara",
       "at": "2026-09-23T18:37:17.349Z",
       "reason": "role \"prepayment\" — money wired to a supplier before his load arrives (her accountant books these to Vendor Payable)"
+    },
+    "trucking": {
+      "jarvisName": "trucking",
+      "qbId": "374",
+      "qbName": "Trucking",
+      "by": "apsara",
+      "at": "2026-10-02T06:12:13.792Z",
+      "reason": "role \"trucking\" — the trucking deducted on a supplier bill"
+    },
+    "bankcharges": {
+      "jarvisName": "bank charges",
+      "qbId": "9",
+      "qbName": "Bank Charges",
+      "by": "apsara",
+      "at": "2026-10-02T06:12:14.321Z",
+      "reason": "role \"bank charges\" — the fee a customer wire arrives short by"
     }
   }
 }
