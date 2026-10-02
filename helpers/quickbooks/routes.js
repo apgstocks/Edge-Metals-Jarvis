@@ -925,7 +925,11 @@ function mount(app, cfg) {
 
         try {
             const gemini = require('../gemini');
-            const out = await gemini.callGeminiJSON(prompt, 1);
+            // Best model: this answers "what does this party owe" off a
+            // 12k-character slab of her real ledger, and the follow-up it
+            // writes is acted on. See config.GEMINI_MODEL_QB.
+            const out = await gemini.callGeminiJSON(prompt, 1, null,
+                { model: require('../../config').GEMINI_MODEL_QB });
             if (out && out.answer) return res.json({ answer: String(out.answer), followUp: String(out.followUp || 'What would you like to check next on this account?'), context: !!name });
             throw new Error('no answer');
         } catch (e) {

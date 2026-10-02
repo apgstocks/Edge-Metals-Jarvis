@@ -274,6 +274,133 @@ const ahead = (d) => new Date(NOW + d * 86400000).toISOString();
        'Edge Yard claims are a different company and have the 8PM report');
 }
 
+
+// ── H — THE BEST MODEL, WHERE BEING WRONG COSTS MONEY ─────────────────────
+// Apsara, 2026-10-02: "Use the best model in google for QB and Claims."
+//
+// Checked against Google's own list (ai.google.dev/gemini-api/docs/models,
+// updated 2026-10-01) rather than from memory, because the codebase already
+// referenced models newer than anything I could assert:
+//   gemini-3.8-flash        STABLE, "our most intelligent Flash model ...
+//                           autonomous agents, complex enterprise workflows"
+//   gemini-3.1-pro-preview  Pro-tier but PREVIEW — restrictive rate limits,
+//                           and preview models are "deprecated with at least
+//                           2 weeks notice"
+// Claim mail is parsed by an unattended watcher every few minutes. A model
+// that vanishes on two weeks' notice would break that silently, and silence
+// is how the claims money went missing in the first place.
+{
+    section('H — the model on the money paths');
+
+    const cfgM = require('../config');
+    ck('claims gets an explicit model',
+       !!cfgM.GEMINI_MODEL_CLAIMS, String(cfgM.GEMINI_MODEL_CLAIMS));
+    ck('quickbooks gets one too',
+       !!cfgM.GEMINI_MODEL_QB, String(cfgM.GEMINI_MODEL_QB));
+    ck('  and it is a STABLE model, not a preview',
+       !/preview|exp\b/i.test(String(cfgM.GEMINI_MODEL_CLAIMS))
+       && !/preview|exp\b/i.test(String(cfgM.GEMINI_MODEL_QB)),
+       'an unattended parser must not sit on something that deprecates with '
+       + 'two weeks notice');
+    ck('  and not the access-limited 2.5 family',
+       !/^gemini-2\./.test(String(cfgM.GEMINI_MODEL_CLAIMS)),
+       'Google: "we are limiting access to the 2.5 models ... for any new '
+       + 'projects, use our latest models"');
+    ck('  better than the global default',
+       cfgM.GEMINI_MODEL_CLAIMS !== cfgM.GEMINI_MODEL,
+       'if these matched, the override would be doing nothing');
+
+    // ── THE OVERRIDE IS OPTIONAL, SO 45 CALLERS ARE UNTOUCHED ────────────
+    const gsrc = fs.readFileSync(path.join(ROOT, 'helpers/gemini.js'), 'utf8');
+    ck('the model argument is optional and last',
+       /callGeminiJSON\(prompt, retries = 2, schema = null, opts = \{\}\)/.test(gsrc),
+       'a required argument would have broken every existing call');
+    ck('  and an absent one still uses the configured default',
+       /wanted \|\| getModelName\(\)/.test(gsrc), 'no opts means exactly the old behaviour');
+
+    // ── THE CALL SITES ACTUALLY PASS IT ──────────────────────────────────
+    // A config entry nothing reads is a config entry that looks like it
+    // works. These are the five calls that matter.
+    const parseSrc = fs.readFileSync(path.join(ROOT, 'helpers/claimParse.js'), 'utf8');
+    ck('the claim mail parser asks for the claims model',
+       /GEMINI_MODEL_CLAIMS/.test(parseSrc),
+       'this is the call that reads a weight AND a unit off a supplier mail');
+
+    const kindSrc = fs.readFileSync(path.join(ROOT, 'helpers/claimKind.js'), 'utf8');
+    const kindCalls = (kindSrc.match(/callGeminiJSON\(/g) || []).length;
+    const kindModelled = (kindSrc.match(/\{ model: M\(\) \}/g) || []).length;
+    ck(`all ${kindCalls} claim-kind calls use it, not just the first`,
+       kindCalls > 0 && kindModelled === kindCalls,
+       `${kindModelled} of ${kindCalls} — a half-upgraded file is the drift this test exists for`);
+    ck('  through ONE helper, so they cannot drift apart',
+       /const M = \(\) => require\('\.\.\/config'\)\.GEMINI_MODEL_CLAIMS;/.test(kindSrc));
+
+    const qbSrc = fs.readFileSync(path.join(ROOT, 'helpers/quickbooks/routes.js'), 'utf8');
+    ck('the QuickBooks account answer uses the QB model',
+       /GEMINI_MODEL_QB/.test(qbSrc),
+       'it answers "what does this party owe" off her real ledger');
+
+    // ── TWO TIERS, NOT A SETTING PER FEATURE ─────────────────────────────
+    // Apsara, 2026-10-02: "For jarvis chat window,give access to latest model
+    // and same applicable for all complex things."
+    //
+    // The first cut added one config entry per path, which does not survive
+    // "and all complex things" — it becomes a setting per feature, and the
+    // day a model is superseded she has to find them all.
+    ck('there is a SMART tier the complex paths share',
+       !!cfgM.GEMINI_MODEL_SMART, String(cfgM.GEMINI_MODEL_SMART));
+    ck('  and the per-path names default to it rather than repeating a value',
+       cfgM.GEMINI_MODEL_CLAIMS === cfgM.GEMINI_MODEL_SMART
+       && cfgM.GEMINI_MODEL_QB === cfgM.GEMINI_MODEL_SMART
+       && cfgM.GEMINI_MODEL_CHAT === cfgM.GEMINI_MODEL_SMART,
+       'one place to change when the best model changes');
+    const cfgSrc = fs.readFileSync(path.join(ROOT, 'config.js'), 'utf8');
+    ck('  and they are DERIVED from it, not copies of the string',
+       /GEMINI_MODEL_CLAIMS = process\.env\.GEMINI_MODEL_CLAIMS \|\| GEMINI_MODEL_SMART/.test(cfgSrc)
+       && /GEMINI_MODEL_CHAT   = process\.env\.GEMINI_MODEL_CHAT   \|\| GEMINI_MODEL_SMART/.test(cfgSrc),
+       'three copies of a model name is three places to forget');
+
+    // ── THE CHAT WINDOWS ─────────────────────────────────────────────────
+    // The most visible thing Jarvis does: she asks a free-text question of
+    // her own business and acts on the answer.
+    const yardAsk = fs.readFileSync(path.join(ROOT, 'helpers/yardAsk.js'), 'utf8');
+    const yardCalls = (yardAsk.match(/callGeminiJSON\(prompt/g) || []).length;
+    const yardSmart = (yardAsk.match(/callGeminiJSON\(prompt, 1, null, SMART\)/g) || []).length;
+    ck(`the yard chat window uses it on all ${yardCalls} calls`,
+       yardCalls > 0 && yardSmart === yardCalls,
+       `${yardSmart} of ${yardCalls} — the retry landing on a weaker model than the first try `
+       + 'is the worst of both');
+
+    const askData = fs.readFileSync(path.join(ROOT, 'helpers/data/askData.js'), 'utf8');
+    ck('the data chat uses it to write the SQL',
+       /GEMINI_MODEL_CHAT/.test(askData),
+       'a wrong query does not error — it returns a confident number that is '
+       + 'not the answer');
+    ck('  and on the repair pass too',
+       (askData.match(/SMART\)/g) || []).length >= 2,
+       'the pass that FIXES a broken query is the one that needs the better model most');
+
+    // ── THE WORKHORSE IS STILL THE WORKHORSE ─────────────────────────────
+    // Not everything should move. Most of the 45 calls are a yes/no gate or
+    // a one-field extraction on a 5-minute loop, where cheap and fast is the
+    // right answer and a frontier model is money burnt for no better result.
+    ck('the cheap tier still exists and is still different',
+       cfgM.GEMINI_MODEL && cfgM.GEMINI_MODEL !== cfgM.GEMINI_MODEL_SMART,
+       'upgrading all 45 callers would multiply the bill for no better answer '
+       + 'on a yes/no gate');
+
+    // ── AND THE AGENTS THEMSELVES STAY DETERMINISTIC ─────────────────────
+    // Worth being explicit: the claims and QB AGENTS built today call no
+    // model at all. Deciding "this claim has sat 40 days and $18,400 is
+    // being absorbed" is arithmetic, and arithmetic should not be asked of
+    // a language model. The model reads MAIL; the agent does the maths.
+    for (const f of ['helpers/claimsAgent.js', 'helpers/qbAgent.js', 'helpers/ledgerAgent.js']) {
+        ck(`  ${f} still calls no model`,
+           !/gemini/i.test(fs.readFileSync(path.join(ROOT, f), 'utf8')),
+           'a figure she acts on should not depend on a sampling temperature');
+    }
+}
+
 console.log(`\n  ${pass} passed, ${fail} failed`);
 if (failures.length) { console.log('\n  failed:'); failures.forEach((f) => console.log('    · ' + f)); }
 try { fs.rmSync(TMP, { recursive: true, force: true }); } catch {}

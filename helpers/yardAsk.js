@@ -250,7 +250,16 @@ async function askYardInner(question, opts = {}) {
         // The shape is small enough to check here, which also avoids making
         // this file depend on zod loading, something helpers/gemini.js already
         // guards defensively.
-        let res = await callGeminiJSON(prompt, 1);
+        // ── THE CHAT WINDOW GETS THE BEST MODEL (2026-10-02) ──────────
+        // Apsara: "For jarvis chat window,give access to latest model and
+        // same applicable for all complex things."
+        //
+        // This is her asking a free-text question of her own business and
+        // ACTING on the answer. It is the single most visible thing Jarvis
+        // does, and the one where a weak answer reads as "Jarvis is dumb" —
+        // the exact complaint that started the answer-path logging.
+        const SMART = { model: require('../config').GEMINI_MODEL_CHAT };
+        let res = await callGeminiJSON(prompt, 1, null, SMART);
 
         // ── run whatever it asked to look up, then ask again ─────────────
         for (let round = 0; round < MAX_LOOKUPS; round += 1) {
@@ -274,7 +283,7 @@ async function askYardInner(question, opts = {}) {
             found.push({ name, params, result });
 
             prompt = buildPrompt();
-            res = await callGeminiJSON(prompt, 1);
+            res = await callGeminiJSON(prompt, 1, null, SMART);
         }
 
         const text = String((res && res.answer) || '').trim();

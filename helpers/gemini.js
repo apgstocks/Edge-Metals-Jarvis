@@ -99,12 +99,24 @@ function resolveCutoffDate(fields) {
 let lastFailure = null;
 function lastGeminiFailure() { return lastFailure; }
 
-async function callGeminiJSON(prompt, retries = 2, schema = null) {
+// ── A CALLER MAY ASK FOR A DIFFERENT MODEL (2026-10-02) ───────────────────
+// Apsara: "Use the best model in google for QB and Claims."
+//
+// Every one of the 45 callers shared one global model. That is right for most
+// of them — a yes/no classification does not need a frontier model — and
+// wrong for the two where being wrong costs money: reading a weight and a
+// UNIT off a claim mail, and answering a question about what a party owes.
+//
+// OPTIONAL AND LAST, so all 45 existing calls are untouched: no fourth
+// argument means getModelName(), exactly as before.
+async function callGeminiJSON(prompt, retries = 2, schema = null, opts = {}) {
     lastFailure = null;
+    const wanted = (opts && typeof opts.model === 'string' && opts.model.trim())
+        ? opts.model.trim() : null;
     for (let attempt = 0; attempt <= retries; attempt++) {
         try {
             const model  = getClient().getGenerativeModel({
-                model: getModelName(),
+                model: wanted || getModelName(),
                 generationConfig: { temperature: 0.1, responseMimeType: 'application/json' },
             });
             const result = await model.generateContent(prompt);

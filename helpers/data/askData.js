@@ -137,7 +137,16 @@ async function ask(question, opts = {}) {
     try { info = mirror.ensure(); }
     catch (e) { return { ok: false, spoken: `I can't read the ledgers right now: ${e.message}`, screen: null, error: e.message }; }
 
-    const plan0 = await callGeminiJSON(prompt(question, null, b.key));
+    // ── BEST MODEL: THIS ONE WRITES SQL ──────────────────────────────
+    // Apsara, 2026-09-23: "give all data access and possible advanced rag
+    // type chat bot with advanced options ... it should be world class", and
+    // 2026-10-02: "same applicable for all complex things".
+    //
+    // Turning a question into a query over her real schema is the hardest
+    // reasoning in this codebase, and a wrong query does not error — it
+    // returns a confident number that is simply not the answer.
+    const SMART = { model: require('../../config').GEMINI_MODEL_CHAT };
+    const plan0 = await callGeminiJSON(prompt(question, null, b.key), 2, null, SMART);
     if (!plan0) {
         return { ok: false, spoken: "I couldn't work that question into a query — the model didn't answer. Say it another way?", screen: null, error: 'no plan' };
     }
@@ -172,7 +181,7 @@ async function ask(question, opts = {}) {
         if (!plan || !plan.sql) { lastError = lastError || 'no SQL'; break; }
         console.warn(`[ASKDATA] first attempt failed (${lastError}) — repairing`);
         repaired = true;
-        const fixedPlan = await callGeminiJSON(prompt(question, { sql: (plan && plan.sql) || '', error: lastError }, b.key));
+        const fixedPlan = await callGeminiJSON(prompt(question, { sql: (plan && plan.sql) || '', error: lastError }, b.key), 2, null, SMART);
         if (!fixedPlan || !fixedPlan.sql) break;
         plan = fixedPlan;
     }

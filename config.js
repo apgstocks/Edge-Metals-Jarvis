@@ -374,6 +374,53 @@ const FILES = {
 // ── Env ───────────────────────────────────────────────────────────────────────
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY || '';
 const GEMINI_MODEL   = process.env.GEMINI_MODEL   || 'gemini-2.5-flash-lite';
+// ── TWO TIERS, NOT A SETTING PER FEATURE (2026-10-02) ─────────────────────
+// Apsara: "Use the best model in google for QB and Claims", then "For jarvis
+// chat window,give access to latest model and same applicable for all complex
+// things".
+//
+// The first version of this added GEMINI_MODEL_CLAIMS and GEMINI_MODEL_QB.
+// That does not survive "and all complex things" — it becomes a config entry
+// per feature, and the day a model is superseded she has to find all of them.
+// So there are TWO TIERS and each caller says which kind of work it is doing:
+//
+//   GEMINI_MODEL        the workhorse. 45 call sites, most of them a yes/no
+//                       gate or a one-field extraction, many on a 5-minute
+//                       loop. Cheap and fast is CORRECT here; a frontier
+//                       model on every inbox scan is money burnt for no
+//                       better answer.
+//   GEMINI_MODEL_SMART  anything where being wrong costs money, or where she
+//                       READS the answer and acts on it.
+//
+// WHY 3.8 FLASH AND NOT THE PRO PREVIEW. Checked against Google's own list
+// (ai.google.dev/gemini-api/docs/models, updated 2026-10-01) rather than from
+// memory — this codebase already referenced models newer than I could assert:
+//   gemini-3.8-flash        STABLE. "Our most intelligent Flash model,
+//                           engineered for long-horizon software engineering,
+//                           autonomous agents, and complex enterprise
+//                           workflows."
+//   gemini-3.1-pro-preview  Pro-tier but PREVIEW: restrictive rate limits,
+//                           and preview models are "deprecated with at least
+//                           2 weeks notice".
+// Several of these paths run UNATTENDED — claim mail is parsed by a watcher
+// nobody is sitting over. A model that disappears on two weeks' notice would
+// break that silently, and silence is how the claims money went missing in
+// the first place. Stable wins.
+//
+// ALSO: the 2.5 family is now access-limited. Google: "we are limiting access
+// to the 2.5 models to users who have actively used them in the past ... for
+// any new projects, use our latest models." The workhorse default below is
+// legacy and should move — deliberately NOT changed in passing, because
+// swapping the model under 45 callers at once is its own piece of work with
+// its own testing. Filed as #159.
+const GEMINI_MODEL_SMART = process.env.GEMINI_MODEL_SMART || 'gemini-3.8-flash';
+
+// Per-path overrides, defaulting to the tier. Present so one path can be
+// pinned or tried on something else without touching the others — not so
+// that each needs its own value.
+const GEMINI_MODEL_CLAIMS = process.env.GEMINI_MODEL_CLAIMS || GEMINI_MODEL_SMART;
+const GEMINI_MODEL_QB     = process.env.GEMINI_MODEL_QB     || GEMINI_MODEL_SMART;
+const GEMINI_MODEL_CHAT   = process.env.GEMINI_MODEL_CHAT   || GEMINI_MODEL_SMART;
 const API_PORT       = parseInt(process.env.API_PORT || '8080');
 const API_TOKEN      = process.env.API_TOKEN || '';        // simple bearer token for dashboard API
 const APP_PASSWORD   = process.env.APP_PASSWORD || '';     // password gate for the web app (browser sessions)
@@ -753,7 +800,7 @@ const BOOKINGS_MENU = [
 module.exports = {
     COMPANY_NAME,
     ROOT, DATA_DIR, MEMORY_DIR, LOGS_DIR, ...FILES,
-    GEMINI_API_KEY, GEMINI_MODEL,
+    GEMINI_API_KEY, GEMINI_MODEL, GEMINI_MODEL_SMART, GEMINI_MODEL_CLAIMS, GEMINI_MODEL_QB, GEMINI_MODEL_CHAT,
     API_PORT, API_TOKEN, APP_PASSWORD, ADMIN_PASSWORD, STAFF_PASSWORD, JARVIS_PASSWORD, SESSION_PATH,
     PLAID_CLIENT_ID, PLAID_SECRET, PLAID_ENV,
     SUPABASE_URL, SUPABASE_KEY,
