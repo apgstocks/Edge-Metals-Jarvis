@@ -1337,13 +1337,24 @@ function start() {
             const digest = require('./helpers/qbDigest');
             // `skipped` means it already ran today; leave whatever it recorded
             // the first time rather than overwriting it with nothing.
-            if (!r || !r.skipped) {
-                const needsHer = (r && Array.isArray(r.blocked))
-                    ? r.blocked.reduce((n, b) => n + (b.found || [])
-                        .filter((f) => f.side !== 'jarvis').length, 0)
-                    : null;
+            // ── IT REPORTS ONLY WHEN IT FAILED ───────────────────────
+            // Apsara: "why two qb Agents? one should be enough na." She was
+            // right — its report said what the 00:00 sweep already says. The
+            // job still runs, because the ledger agent at 07:30 needs the
+            // blocking fields it works out; it just stopped writing a letter
+            // about it.
+            //
+            // A FAILURE is still said, because then 07:30 is chasing without
+            // knowing which blanks are holding up her books, and a quieter
+            // ledger chase with no explanation is the kind of silence this
+            // whole file exists to prevent.
+            if (r && r.error) {
                 await digest.record('blocked',
-                    { text: (r && r.text) || null, summary: { needsHer }, ok: !(r && r.error) });
+                    { ok: false, summary: null,
+                      text: `The 07:25 blocked-rows check failed: ${String(r.error).slice(0, 200)}\n\n`
+                          + 'The ledger agent ran at 07:30 without knowing which blanks are\n'
+                          + 'holding rows out of QuickBooks, so its chase is less pointed today.\n'
+                          + 'What is stuck is still listed under "Entered overnight" above.' });
             }
             return digest.send({ alreadySent, markSent });
         })

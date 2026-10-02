@@ -44,7 +44,28 @@ const FILE = cfg.QB_DIGEST_FILE || 'qb_digest.json';
 const PARTS = [
     { id: 'sweep', title: 'Entered overnight', when: '00:00' },
     { id: 'agent', title: 'QB Agent — what is not right in the books', when: '00:30' },
-    { id: 'blocked', title: "Blocked rows — what would not go in", when: '07:25' },
+    // ── THE 07:25 JOB IS SILENT NOW (Apsara, 2026-10-02) ─────────────────
+    // "why two qb Agents? one should be enough na. What is the use?"
+    //
+    // She was right and I had defended it. Compared properly: the 00:00
+    // sweep ALREADY lists every stuck row with its reason —
+    //   bill Mazariegos HMMU4933766 — no supplier amount yet
+    // — and the 07:25 email reprinted the same rows with the same reasons,
+    // adding only a "how to ask for it" line. A second email to say what the
+    // first one said.
+    //
+    // What the job does that nothing else does is NOT the email: it works
+    // out WHICH LEDGER FIELD is blocking each row and hands that to the
+    // ledger agent at 07:30, which then chases those blanks first. That is
+    // invisible to her and worth keeping. So the job stays, the report goes.
+    //
+    // `optional` means: never reported as "did not run". It is expected to
+    // say nothing on a normal day, and flagging that every morning would be
+    // the false alarm this file exists to avoid. It still speaks up when it
+    // FAILED, because a failed 07:25 means the ledger agent is working blind
+    // at 07:30 and she should know why its chase got quieter.
+    { id: 'blocked', title: 'Blocked rows — the 07:25 check did not run', when: '07:25',
+      optional: true },
 ];
 
 // Older than this and the part is treated as never having run this cycle.
@@ -99,13 +120,18 @@ function compose({ now = new Date(), stash = null } = {}) {
     const missing = [];
     for (const p of PARTS) {
         const e = all[p.id];
-        if (!e || hoursOld(e.at, now) > STALE_HOURS) { missing.push(p); continue; }
+        if (!e || hoursOld(e.at, now) > STALE_HOURS) {
+            // An optional part that said nothing is a normal night, not a
+            // missing report.
+            if (!p.optional) missing.push(p);
+            continue;
+        }
         seen.push({ ...p, entry: e });
     }
 
     // Nothing ran at all. Worth a message of its own — three silent jobs is
     // not a quiet night, it is a scheduler that is not running.
-    if (!seen.length) {
+    if (!seen.length && !PARTS.every((p) => p.optional)) {
         return {
             subject: `QuickBooks — nothing ran last night (${when})`,
             body: ['None of the three QuickBooks jobs reported in the last '

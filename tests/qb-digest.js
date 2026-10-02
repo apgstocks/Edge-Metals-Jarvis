@@ -63,13 +63,15 @@ const NOW = new Date();
 
     const d = digest.compose({ now: NOW });
     ck('it composes one message', !!d && !!d.body);
-    ck('  carrying all three parts', d && d.parts.length === 3, JSON.stringify(d && d.parts));
+    ck('  carrying both reporting parts', d && d.parts.length >= 2, JSON.stringify(d && d.parts));
     ck('  with nothing reported missing', d && d.missing.length === 0, JSON.stringify(d && d.missing));
 
     // Each agent's own wording survives — this file never reformats their text.
     ck('the sweep\'s text is in it', /HMMU4933766/.test(d.body));
     ck('the QB Agent\'s text is in it', /unallocated/i.test(d.body));
-    ck('the blocked-rows text is in it', /no supplier amount yet/.test(d.body));
+    // Recorded here only because this fixture supplies it; on a normal night
+    // the 07:25 job records nothing at all (section J).
+    ck('a recorded blocked-rows note is carried', /no supplier amount yet/.test(d.body));
 
     // The scoreboard, so the night is readable without scrolling.
     ck('the subject carries the scoreboard', /entered 3/.test(d.subject), d.subject);
@@ -77,8 +79,7 @@ const NOW = new Date();
 
     // THE NAMES ARE DISTINCT. The whole point of the rename: two headings in
     // one email that cannot be told apart is worse than two emails.
-    ck('the two agents are named differently in the body',
-       /QB Agent/.test(d.body) && /Blocked rows/.test(d.body), d.body.slice(0, 400));
+    ck('the QB Agent section is named', /QB Agent/.test(d.body), d.body.slice(0, 400));
 }
 
 // ── B — A PART THAT NEVER ARRIVED IS SAID, NOT SKIPPED ────────────────────
@@ -132,7 +133,7 @@ const NOW = new Date();
     const d = digest.compose({ now: NOW });
     ck('it produces a message', !!d, 'three silent jobs producing no email is the alarm failing');
     ck('  saying nothing ran', /nothing ran/i.test(d.subject), d.subject);
-    ck('  and listing all three', /00:00/.test(d.body) && /00:30/.test(d.body) && /07:25/.test(d.body));
+    ck('  and listing the two that report', /00:00/.test(d.body) && /00:30/.test(d.body));
     ck('  and pointing at the likely cause', /scheduler/i.test(d.body), d.body);
 }
 
@@ -146,7 +147,7 @@ const NOW = new Date();
     await digest.clear();
     await digest.record('sweep', { text: null, summary: { made: 0 } });
     await digest.record('agent', { text: null, summary: { open: 0 } });
-    await digest.record('blocked', { text: null, summary: { needsHer: 0 } });
+    // No 'blocked' entry at all — that is a normal night now.
 
     ck('nothing is composed', digest.compose({ now: NOW }) === null,
        'a daily "nothing to report" is a mail she stops opening');
@@ -207,7 +208,10 @@ const NOW = new Date();
        /qbDigest'\)\s*\n?\s*\.record\('sweep'|\.record\('sweep'/.test(sched),
        'the sweep is still mailing on its own — that is email one of three back');
     ck('the 00:30 QB Agent records instead of mailing', /\.record\('agent'/.test(sched));
-    ck('the 07:25 job records its own part', /\.record\('blocked'/.test(sched));
+    ck('the 07:25 job still records WHEN IT FAILS', /\.record\('blocked'/.test(sched),
+       'a failed 07:25 leaves the ledger agent chasing blind at 07:30');
+    ck('  but only when it failed', /if \(r && r\.error\)/.test(sched),
+       'recording every morning puts back the second report she asked me to remove');
     ck('  and then posts the one envelope', /qbDigest'\)\.send\(|digest\.send\(/.test(sched));
 
     // ── THE FAILURE ESCAPE HATCH ─────────────────────────────────────────
@@ -251,6 +255,44 @@ const NOW = new Date();
     ck('QB_AGENT_EMAILS is NOT renamed',
        /QB_AGENT_EMAILS/.test(fs.readFileSync(path.join(ROOT, 'config.js'), 'utf8')),
        'renaming an env var to tidy a label is how a report loses its recipient');
+}
+
+// ── J — THE 07:25 JOB IS SILENT ON A NORMAL MORNING ───────────────────────
+// Apsara, 2026-10-02: "why two qb Agents? one should be enough na. What is
+// the use?"
+//
+// She was right and I had argued for keeping both. The 00:00 sweep already
+// lists every stuck row WITH its reason; the 07:25 report reprinted the same
+// rows and added a hint. What the job uniquely does is work out which ledger
+// field is blocking each row and hand that to the ledger agent at 07:30 —
+// which is not an email at all.
+//
+// So the property now: a normal morning produces NO blocked-rows section and
+// NO "did not run" complaint about it, and a FAILED morning still speaks up.
+{
+    section('J — one report, not two');
+
+    await digest.clear();
+    await digest.record('sweep', { text: 'STUCK — bill Mazariegos HMMU4933766 — no supplier amount yet',
+                                   summary: { made: 3, blocked: 1 } });
+    await digest.record('agent', { text: 'unallocated: $12,400', summary: { open: 1 } });
+    // Nothing from 07:25 — the normal case.
+
+    const d = digest.compose({ now: NOW });
+    ck('the digest still goes out', !!d);
+    ck('  with no blocked-rows section', !/Blocked rows/.test(d.body), d.body.slice(0, 500));
+    ck('  and NO complaint that 07:25 did not run', !d.missing.includes('blocked'),
+       JSON.stringify(d.missing) + ' — an optional part is expected to be quiet');
+    ck('  while the sweep still says what is stuck',
+       /no supplier amount yet/.test(d.body),
+       'this is the line that made the second report redundant');
+
+    // But a FAILURE is not swallowed.
+    await digest.record('blocked', { ok: false,
+        text: 'The 07:25 blocked-rows check failed: token expired' });
+    const bad = digest.compose({ now: NOW });
+    ck('a FAILED 07:25 is still reported', /07:25 blocked-rows check failed/.test(bad.body),
+       'silently failing means the 07:30 chase gets vaguer with no explanation');
 }
 
 console.log(`\n  ${pass} passed, ${fail} failed`);
