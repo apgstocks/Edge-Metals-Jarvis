@@ -50,6 +50,8 @@ const INVARIANTS = [
         who: 'proposal', why: 'Re-coding moves money out of cost of goods sold, which changes reported profit for a period that may be filed.' },
     { id: 'payableAccounts', title: 'One payables account, not two', unit: 'count',
         who: 'proposal', why: 'QuickBooks refuses an account merge over the API, so the documents move instead and she retires the empty account.' },
+    { id: 'receiptsUnapplied', title: 'Every receipt sits on an invoice', unit: 'money',
+        who: 'agent', why: 'Money already in the bank against no invoice — chase a customer for it and she is apologising by return of post.' },
     { id: 'unmatched', title: 'Every name maps to exactly one record', unit: 'count',
         who: 'agent', why: 'An exact name is matched automatically; a new one is always a question.' },
     { id: 'bankGap', title: 'Bank balance equals books balance', unit: 'money',
@@ -61,10 +63,11 @@ async function survey({ year = new Date().getFullYear(), env = auth.qbEnv() } = 
     const out = { year, env, at: new Date().toISOString(), invariants: {}, errors: {} };
     const safe = async (id, fn) => { try { return await fn(); } catch (e) { out.errors[id] = e.message; return null; } };
 
-    const [overview, dupes, miscoded] = await Promise.all([
+    const [overview, dupes, miscoded, ar] = await Promise.all([
         safe('books', () => books.overview(env, { year })),
         safe('duplicates', () => books.duplicates(env, { year })),
         safe('miscoded', () => miscodedCheques(year, env)),
+        safe('receivables', () => require('./receivables').survey({ env })),
     ]);
 
     const la = (overview && overview.owe) || null;
@@ -85,6 +88,15 @@ async function survey({ year = new Date().getFullYear(), env = auth.qbEnv() } = 
     out.invariants.payableAccounts = {
         number: overview ? (overview.payable || []).length : null,
         accounts: overview ? overview.payable : [],
+    };
+    out.invariants.receiptsUnapplied = {
+        number: ar ? ar.totals.received : null,
+        count: ar ? ar.customers.filter((c) => c.received > 0).length : null,
+        // the ones where writing to them would be a mistake
+        doNotChase: ar ? ar.customers.filter((c) => c.verdict === 'do-not-chase' || c.verdict === 'apply-first')
+            .map((c) => ({ customer: c.customer, open: c.open, received: c.received, why: c.why })) : [],
+        chase: ar ? ar.customers.filter((c) => c.verdict === 'chase')
+            .slice(0, 10).map((c) => ({ customer: c.customer, open: c.open, over60: r2(c.aging.d60 + c.aging.d90), pays: c.typicalDaysToPay })) : [],
     };
     out.invariants.bankGap = {
         number: null,
@@ -159,6 +171,12 @@ function queue(surveyed) {
             detail: `${inv.unallocated.worst.map((w) => `${w.party} ${w.amount}`).join(', ')}`,
             note: 'No money moves: no bank entry, no profit and loss, no change to the payable total.' });
     }
+    if (inv.receiptsUnapplied && inv.receiptsUnapplied.number > 0) {
+        items.push({ id: 'receiptsUnapplied', verdict: 'do', money: inv.receiptsUnapplied.number,
+            title: `${inv.receiptsUnapplied.count} customers have paid money that sits on no invoice`,
+            detail: (inv.receiptsUnapplied.doNotChase || []).map((c) => `${c.customer} ${c.received}`).join(', '),
+            note: 'Apply these BEFORE any reminder goes out — chasing someone for money already in the bank is the one mistake a customer remembers.' });
+    }
     if (inv.duplicates && inv.duplicates.number > 0) {
         items.push({ id: 'duplicates', verdict: 'ask', money: inv.duplicates.number,
             title: `${inv.duplicates.count} documents look doubled`,
@@ -208,4 +226,60 @@ async function run({ year = new Date().getFullYear(), env = auth.qbEnv(), really
     return out;
 }
 
-module.exports = { INVARIANTS, survey, queue, run, miscodedCheques, costAlreadyBooked };
+// ── THE VOICE ─────────────────────────────────────────────────────────────
+// One email a morning, written the way a person would write it: what it did,
+// what it is waiting on, what it is not allowed to touch, and the one number
+// that says whether this is getting better.
+const money = (n) => (n === null || n === undefined) ? '—'
+    : '$' + Number(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+function reportText(out) {
+    const s = out.survey || {};
+    const inv = s.invariants || {};
+    const L = [];
+
+    if (out.dryRun) L.push('DRY RUN — nothing was written. The agent writes when it is told to.', '');
+    const did = (out.did || []).find((d) => d.id === 'allocate');
+    L.push(did
+        ? `Placed ${money(did.placed)} across ${did.payments} payments${did.skipped ? `, ${did.skipped} skipped because they changed in QuickBooks` : ''}.`
+        : 'Nothing to place today.');
+    L.push('');
+    L.push(`You owe ${money(s.owe && s.owe.total)} · owed to you ${money(s.owedToYou && s.owedToYou.total)}`);
+    L.push('');
+
+    L.push('WHERE THE BOOKS ARE NOT YET RIGHT');
+    const line = (label, n, extra) => L.push(`  ${label}: ${money(n)}${extra ? ` — ${extra}` : ''}`);
+    if (inv.unallocated) line('Payments sitting on no bill', inv.unallocated.number,
+        `${inv.unallocated.count} payments; worst ${(inv.unallocated.worst || []).slice(0, 3).map((w) => `${w.party} ${money(w.amount)}`).join(', ')}`);
+    if (inv.duplicates) line('Documents doubled', inv.duplicates.number, `${inv.duplicates.count} to look at — a void cannot be undone, so they wait for you`);
+    if (inv.miscoded) line('Supplier money in cost of goods', inv.miscoded.number,
+        `${inv.miscoded.count} cheques; ${inv.miscoded.noPayee.count} of them (${money(inv.miscoded.noPayee.money)}) have no payee and will never be guessed`);
+    if (inv.payableAccounts && inv.payableAccounts.number > 1) {
+        L.push(`  Payable accounts in use: ${inv.payableAccounts.number} — ${(inv.payableAccounts.accounts || []).map((a) => `${a.name} ${money(a.balance)}`).join(' · ')}`);
+    }
+    L.push('  The bank For Review queue: no app can read it. Export it from the Banking screen.');
+
+    const asks = (out.asked || []).filter((i) => i.verdict === 'ask' || i.verdict === 'propose');
+    if (asks.length) {
+        L.push('', 'WAITING ON YOU');
+        for (const a of asks) L.push(`  ${a.title}${a.detail ? ` — ${a.detail}` : ''}`, `      ${a.note || ''}`);
+    }
+    if (Object.keys(s.errors || {}).length) {
+        L.push('', 'COULD NOT BE READ');
+        for (const [k, v] of Object.entries(s.errors)) L.push(`  ${k}: ${v}`);
+    }
+    L.push('', 'Open the QuickBooks page in Jarvis to act on any of this.');
+    return L.join('\n');
+}
+
+async function emailReport(out, opts = {}) {
+    const to = opts.to || process.env.QB_REPORT_TO || process.env.SHEET_SYNC_TO || 'apg0596@gmail.com';
+    const when = new Date().toLocaleDateString('en-US', { timeZone: 'America/Los_Angeles' });
+    const did = (out.did || []).find((d) => d.id === 'allocate');
+    const left = ((out.survey || {}).invariants || {}).unallocated;
+    const subject = `QB Agent — ${did && did.placed ? `${money(did.placed)} placed` : 'nothing placed'}`
+        + `${left && left.number ? `, ${money(left.number)} still loose` : ''}${out.dryRun ? ' (dry run)' : ''} — ${when}`;
+    return require('../gmail').sendEmail({ to, subject, body: reportText(out) });
+}
+
+module.exports = { INVARIANTS, survey, queue, run, reportText, emailReport, miscodedCheques, costAlreadyBooked };

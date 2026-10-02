@@ -195,6 +195,77 @@ section('A — the table actually draws');
     dom.window.close();
 }
 
+// ── THE TABLE IS SCANNABLE, AND NOTHING IS LOST ──────────────────────────
+// Apsara, 2026-10-02, with a screenshot: "It looks unprofessional and ugly.i
+// want this to be neat.when i click the bill,if it has multiple rows,i want
+// this to expand".
+//
+// TABLE_ORDER has 25 columns, every cell nowrap, so the table scrolled
+// sideways — and the actions cell is position:sticky; right:0, so it floated
+// OVER the scrolled content. That is the green credit badge sitting on top of
+// SEAL NO in her screenshot: the sticky column doing its job over a table
+// that should never have been that wide. Narrowing the table is the fix for
+// the ugliness AND for the overlap.
+//
+// The risk of narrowing is losing a field silently, so that is what most of
+// these check.
+section('A2 — the bills table is narrow, and the rest expands');
+{
+    const { w, dom } = await mount({ '/api/bills': billsRoute });
+    await w.renderLedgerTab('bills');
+    const doc = w.document;
+    const root = doc.getElementById('viewRoot');
+
+    const heads = [...root.querySelectorAll('thead th')]
+        .map((t) => t.textContent.replace(/ƒ/g, '').trim()).filter(Boolean);
+    ck('the table is down to a scannable set', heads.length <= 11,
+       `${heads.length} columns — ${heads.join(' | ')}`);
+    ck('  which is far fewer than the 25 the server sends',
+       heads.length < 20, heads.length + '');
+
+    // ── NOTHING IS LOST, ONLY MOVED ──────────────────────────────────────
+    // The expand has to carry every column the table dropped. A narrower
+    // table that quietly loses a field is worse than the wide one.
+    const firstRow = root.querySelector('tr.ledRow');
+    ck('every row is clickable', !!firstRow && /pointer/.test(firstRow.getAttribute('style') || ''));
+    const detail = root.querySelector('tr.ledDetail');
+    ck('  and carries a detail row', !!detail);
+    ck('  which starts hidden', detail && detail.style.display === 'none',
+       'expanding everything by default is the wall of text she is complaining about');
+
+    const shownKeys = heads.join(' | ');
+    const detailText = detail ? detail.textContent : '';
+    for (const label of ['Booking', 'Seal', 'Gross', 'Trucking']) {
+        ck(`  ${label} moved into the panel rather than vanishing`,
+           detailText.includes(label) || shownKeys.includes(label),
+           detailText.slice(0, 200));
+    }
+
+    // ── THE CLICK ────────────────────────────────────────────────────────
+    firstRow.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }));
+    ck('clicking the bill opens it', detail.style.display !== 'none');
+    firstRow.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }));
+    ck('  and clicking again closes it', detail.style.display === 'none');
+
+    // ── A CLICK THAT ALREADY MEANT SOMETHING STILL MEANS IT ──────────────
+    // Selecting three bills to delete and having the page grow by three
+    // panels underneath is the opposite of help.
+    const menuBtn = firstRow.querySelector('.row-menu-btn');
+    if (menuBtn) {
+        menuBtn.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }));
+        ck('clicking the actions menu does NOT also expand the row',
+           detail.style.display === 'none',
+           'the menu opens; the panel stays shut');
+    }
+    const tick = firstRow.querySelector('.ledPick');
+    if (tick) {
+        tick.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }));
+        ck('  nor does ticking it for deletion', detail.style.display === 'none');
+    }
+
+    dom.window.close();
+}
+
 section('B — carrier is off the table and still on the form');
 {
     // Apsara: "on bill after saving,i dont want carrier to be displayed.on

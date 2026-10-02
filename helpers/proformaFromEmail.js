@@ -111,7 +111,7 @@ const num = (v) => {
 // Normalises by hand for the same reason assess() does: the shape must not
 // depend on whether zod loaded.
 async function extractOrderFromEmail(email) {
-    const res = await callGeminiJSON(buildOrderPrompt(email), 2, OrderSchema);
+    const res = await callGeminiJSON(buildOrderPrompt(email), 2, OrderSchema, null, { model: require('../config').GEMINI_MODEL_SMART });
     if (!res || typeof res.is_order === 'undefined') return null;
     const items = (Array.isArray(res.items) ? res.items : [])
         .map((it) => ({

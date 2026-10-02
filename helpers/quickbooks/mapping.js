@@ -30,7 +30,21 @@ const path = require('path');
 const { normalizeName } = require('../nameMatch');
 const { DATA_DIR } = require('../../config');
 
-const MAP_FILE = () => process.env.QB_PARTY_MAP_FILE || path.join(DATA_DIR, 'qb-party-map.json');
+// ── WHERE THE CONFIRMED NAMES LIVE ─────────────────────────────────────────
+// The VM points QB_PARTY_MAP_FILE at qb-settings/qb-party-map.json so her
+// confirmations travel in git rather than in a runtime folder only one
+// machine has. The Mac never set it, so every check run from there read an
+// empty data/qb-party-map.json and reported roles as UNMAPPED that are
+// mapped in production — twice, out loud, on 2026-10-02.
+//
+// So the default now prefers the committed file when it exists. The env var
+// still wins, which is what tests and the VM rely on.
+const REPO_MAP = path.join(__dirname, '..', '..', 'qb-settings', 'qb-party-map.json');
+const MAP_FILE = () => {
+    if (process.env.QB_PARTY_MAP_FILE) return process.env.QB_PARTY_MAP_FILE;
+    try { if (fs.existsSync(REPO_MAP)) return REPO_MAP; } catch { /* fall through */ }
+    return path.join(DATA_DIR, 'qb-party-map.json');
+};
 // 'item' = her grade (Auto Cast, AL Combo…) against a QuickBooks Item. Same
 // rules as parties: a grade on the wrong item misstates what was sold, and
 // that is the figure her P&L-by-product and her ISRI reporting are read from.

@@ -169,7 +169,14 @@ const MIN_CONFIDENCE = Number(process.env.CLAIM_MIN_CONFIDENCE || 0.6);
 // trusted. Null always means "do nothing", never "create a blank claim".
 async function extract(email = {}) {
     let raw;
-    try { raw = await callGeminiJSON(buildPrompt(email), 1); }
+    // THE BEST MODEL GOOGLE HAS, because this is the call that reads a
+    // WEIGHT AND A UNIT off a supplier's mail. helpers/claims.js refuses to
+    // compute claim_amount until a human confirms both, precisely because a
+    // unit misread is a 1000x error — this is the read it is protecting
+    // against. See config.GEMINI_MODEL_CLAIMS for why 3.8 Flash and not the
+    // Pro preview.
+    try { raw = await callGeminiJSON(buildPrompt(email), 1, null,
+        { model: require('../config').GEMINI_MODEL_CLAIMS }); }
     catch (e) { console.warn('[CLAIM] extraction failed:', e.message); return null; }
     if (!raw || typeof raw !== 'object') return null;
     if (raw.is_claim !== true) return null;

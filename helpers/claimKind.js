@@ -32,6 +32,8 @@
 // report, and picked up by --reclassify later. That is strictly better than the
 // rules were: the rules did not fail safe, they failed confidently.
 const gemini = require('./gemini');
+// One place, so the three calls below cannot end up on different models.
+const M = () => require('../config').GEMINI_MODEL_CLAIMS;
 const claimKinds = require('./claimKinds');
 
 // Column headings that are sheet plumbing rather than subject matter. This is
@@ -110,7 +112,9 @@ function buildMatchPrompt(labelText, description, known) {
 // It never throws and never invents a kind.
 async function classify(text, opts = {}) {
     let raw = null;
-    try { raw = await gemini.callGeminiJSON(buildPrompt(text), 2); }
+    // Best model — what KIND of claim this is decides which register and
+    // which recovery path it takes. See config.GEMINI_MODEL_CLAIMS.
+    try { raw = await gemini.callGeminiJSON(buildPrompt(text), 2, null, { model: M() }); }
     catch (e) { return { ok: false, unresolved: `the call failed (${e.message})` }; }
     if (!raw || typeof raw !== 'object') return { ok: false, unresolved: 'the model did not answer' };
 
@@ -149,7 +153,7 @@ async function sameAs(labelText, description, known) {
     if (matchCache.has(key)) return matchCache.get(key);
     let out = null;
     try {
-        const raw = await gemini.callGeminiJSON(buildMatchPrompt(labelText, description, known), 1);
+        const raw = await gemini.callGeminiJSON(buildMatchPrompt(labelText, description, known), 1, null, { model: M() });
         const said = raw && raw.same_as ? String(raw.same_as).trim() : null;
         out = said && known.some((k) => k.slug === said) ? said : null;
     } catch (e) { out = null; }   // no answer means "a new kind", never a wrong merge
@@ -224,7 +228,7 @@ function buildConsolidatePrompt(named) {
 async function consolidate(named) {
     if (!named || named.length < 2) return null;
     let raw = null;
-    try { raw = await gemini.callGeminiJSON(buildConsolidatePrompt(named), 2); }
+    try { raw = await gemini.callGeminiJSON(buildConsolidatePrompt(named), 2, null, { model: M() }); }
     catch (e) { return null; }
     if (!raw || !Array.isArray(raw.kinds) || !raw.kinds.length || !raw.mapping || typeof raw.mapping !== 'object') return null;
 
