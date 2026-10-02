@@ -310,6 +310,35 @@ function newPaymentId() {
 // with is_advance: true — the money was never lost, only the feature.
 
 // ── SUPPLIER PREPAYMENT, EDGE YARD (2026-10-01) ──────────────────────────
+// ── ANY SELLER, AND IT STAYS EDGE YARD'S OWN (2026-10-02) ────────────────
+// Apsara, after seeing the checkbox read "Hold as prepayment — credit Edge
+// Metals Inc, not this load" on a yard load she had bought from Edge Metals:
+//
+//   "Prepayment option should be separte for edge ayrd. it is not restricted
+//    just for edge metals. any seller"
+//
+// Two things, and both are rules rather than observations:
+//
+//   1. ANY SELLER. The company name in that label is simply whoever sold
+//      that load — Edge Metals happened to be the seller. There is no
+//      company gate here and there must not be one: the only conditions are
+//      that the load is a PURCHASE (money going out) and that a seller is
+//      named. Pinned by tests/supplier-prepayment.js section F, because a
+//      well-meant "only for known suppliers" filter is exactly the kind of
+//      narrowing that looks like tidying.
+//
+//   2. IT IS NOT THE EDGE METALS "ADVANCE". I offered to make the two words
+//      match across the apps and she said no. They are different companies
+//      (see CLAUDE.md rule 5) with genuinely different stores —
+//      payments.json here, bill_payments.json for Edge Metals bills — and
+//      the shared vocabulary would be the first step towards someone
+//      deciding the shared store is tidier too. Her word for Edge Yard is
+//      "prepayment"; Edge Metals bills say "advance". Leave them apart.
+//
+// Recorded here, attributed, so the next person to notice the duplication
+// reaches this note before re-proposing the merge. I proposed it once; it is
+// her call and the call was no.
+
 // Apsara: "Add a supplier prepayment option in loads", then "no for edge
 // yard" / "advance concept is for edge yard right now", then the brief that
 // decides the shape: "streamline the process".

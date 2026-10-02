@@ -579,6 +579,74 @@ section('J — BOTH SCREENS, AND THEY AGREE');
        'the money figure this draws is the same figure on both; a divergence here is two answers to one question');
 }
 
+// ── K — ANY SELLER, AND NO COMPANY GATE ───────────────────────────────────
+// Apsara, 2026-10-02, having seen the checkbox read "credit Edge Metals Inc,
+// not this load" on a yard load she bought from Edge Metals:
+//
+//   "Prepayment option should be separte for edge ayrd. it is not restricted
+//    just for edge metals. any seller"
+//
+// The company name in that label is just whoever sold the load. Nothing here
+// is gated on who the seller is, and this section exists so nothing becomes
+// gated later — "only for suppliers we already know" is the kind of narrowing
+// that arrives looking like a safety check.
+section('K — a prepayment works for any seller');
+{
+    // Names deliberately unalike: a sister company, an ordinary scrap seller,
+    // a one-off walk-in, and one with punctuation in it.
+    const sellers = ['Edge Metals Inc', 'Mazariegos', 'Walk-in 2026-10-02', 'Carlos G & C'];
+    for (const seller of sellers) {
+        let rec = null, err = null;
+        try {
+            rec = await pay.addPrepayment({
+                seller, amount: 500, mode: 'Cash', cash_source: 'Edge Metals',
+                paid_on: '2026-10-02', created_by: 't',
+            });
+        } catch (e) { err = e; }
+        ck(`"${seller}" can hold a prepayment`, !!rec && !err,
+           err && err.message);
+        ck(`  credited to that seller, not a load`,
+           !!rec && !rec.load_id,
+           'a prepayment carrying a load_id makes that load read part-paid');
+    }
+
+    // And the credit is kept PER SELLER — one seller's prepayment must never
+    // be spendable against another's load. This is the failure that would not
+    // show up until a supplier's account did not tie, weeks later.
+    // prepaymentCredit(seller) -> { seller, available, prepayments[] }.
+    const credits = Object.fromEntries(sellers.map((x) => [x, pay.prepaymentCredit(x)]));
+    ck('each seller holds their own credit',
+       sellers.every((x) => Number(credits[x].available) >= 500),
+       JSON.stringify(Object.fromEntries(sellers.map((x) => [x, credits[x].available]))));
+    ck('  and a name nobody paid holds none',
+       Number(pay.prepaymentCredit('Nobody At All').available) === 0,
+       'credit leaking between sellers is a supplier account that will not tie');
+
+    // ── THE GATE THAT MUST NOT EXIST ─────────────────────────────────────
+    // Read as source, because the property is an ABSENCE and an absence
+    // cannot be proved by calling the function with the names I happened to
+    // think of.
+    const src = require('fs').readFileSync(
+        require('path').join(__dirname, '..', 'helpers/payments.js'), 'utf8');
+    const fn = src.slice(src.indexOf('async function addPrepayment'));
+    const body = fn.slice(0, fn.indexOf('\nasync function', 10) + 1 || 4000);
+    ck('addPrepayment names no company as a condition',
+       !/(Edge Metals|EDGE_METALS|Edge Yard)\s*(===|!==|\.includes|\.test)/.test(body),
+       'a company comparison inside the writer is the restriction she ruled out');
+
+    // The client gates it on purchase-vs-sale and a seller being named. Those
+    // two are correct and are the ONLY two.
+    const app = require('fs').readFileSync(
+        require('path').join(__dirname, '..', 'mobile-app/www/index.html'), 'utf8');
+    const refresh = app.slice(app.indexOf('async function refreshPrepayCredit'),
+                              app.indexOf('async function refreshPrepayCredit') + 900);
+    ck('the app hides it only for a sale or a missing seller',
+       /kind === 'sale'/.test(refresh) && /!seller/.test(refresh), refresh.slice(0, 300));
+    ck('  and names no company in that condition',
+       !/Edge Metals/.test(refresh),
+       'the label prints the seller; the CONDITION must not mention a company');
+}
+
 console.log(`\n  ${pass} passed, ${fail} failed`);
 if (failures.length) { console.log('\n  failed:'); failures.forEach((f) => console.log('    · ' + f)); }
 try { fs.rmSync(TMP, { recursive: true, force: true }); } catch {}

@@ -307,6 +307,11 @@ async function addPaymentRecord(input = {}, { advance = false } = {}) {
 }
 
 const addBillPayment = (input) => addPaymentRecord(input, { advance: false });
+// ── "ADVANCE" HERE, "PREPAYMENT" IN EDGE YARD — DELIBERATELY ─────────────
+// Apsara, 2026-10-02, asked whether to unify the two words: "Prepayment
+// option should be separte for edge ayrd. it is not restricted just for edge
+// metals." They are different companies with different stores, and the names
+// stay different. See the long note above addPrepayment in helpers/payments.js.
 const addAdvance = (input) => addPaymentRecord(input, { advance: true });
 
 // ── APPLYING AN ADVANCE MOVES NO MONEY ───────────────────────────────────
