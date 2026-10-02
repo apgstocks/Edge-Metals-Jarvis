@@ -176,7 +176,20 @@ async function apply(planned, { reason, env = auth.qbEnv(), by = 'apsara', reall
             try {
                 journal.record({ env, kind: 'billpayment', action: 'allocated',
                     qb: { id: String(live.Id), total: r2(live.TotalAmt) },
-                    jarvis: { vendor: row.vendor },
+                    // ── certain AND why, WRITTEN DOWN ────────────────────
+                    // Apsara, 2026-10-02, asked which of 60 allocations were
+                    // real matches and which were the oldest-first
+                    // convention. The answer was not in the journal: the
+                    // reason string listed WHAT was placed and never WHY, so
+                    // scripts/qb-review-allocations.js had to infer it from
+                    // the bills afterwards — and one case (a pick that
+                    // happens to settle a bill exactly) cannot be told apart
+                    // after the fact at all.
+                    //
+                    // Recorded now, so the next review reads it.
+                    jarvis: { vendor: row.vendor, certain: !!row.certain,
+                              why: (row.picks[0] || {}).why || null,
+                              bills: row.picks.length },
                     by, reason: `${out.reason} — placed ${r2(row.loose - row.leftOver)} across ${row.picks.map((p) => `#${p.billId}${p.doc ? ` (${p.doc})` : ''} ${p.take}`).join(', ')}` });
             } catch { /* client.js already logged the raw write */ }
             out.done.push({ id: row.id, vendor: row.vendor, placed: r2(row.loose - row.leftOver), bills: row.picks.length });
