@@ -149,13 +149,78 @@ function classifyProblem(problem) {
     return { side: 'unknown', problem: p };
 }
 
+// ── THE ONE PLACE A MODEL EARNS ITS KEEP (2026-10-02) ─────────────────────
+// Apsara: "use existing model plus for these things like QB agent,claims,chat
+// use 3.8."
+//
+// Everything above is deterministic on purpose: push.js's problem strings are
+// known text, matched exactly, and a regex that matches is worth more than a
+// model that probably matches. Routing money to the wrong person because a
+// sampling temperature went the other way is not a trade worth making.
+//
+// But classifyProblem has an `unknown` bucket, and today an unknown reason is
+// printed verbatim under "BLOCKED, REASON NOT RECOGNISED" and routed to
+// NOBODY. QuickBooks can refuse a push for reasons push.js never wrote —
+// "Vendor is inactive", a thrown API message, a new validation. Those are
+// real blocked rows, and they currently land in a section that says, in
+// effect, "something is wrong and I do not know what".
+//
+// So the model is asked ONE question, about ONE sentence, and only when the
+// table has already failed: WHOSE problem is this? It never produces a field
+// to fill, never a figure, and never overrides a reason the table matched.
+// The worst it can do is route a sentence to the wrong heading in an email.
+//
+// INJECTED, so helpers/qbAgent.js stays pure and testable without a key, and
+// so a model outage costs the classification and not the report.
+async function classifyUnknown(problem, { ask } = {}) {
+    const p = str(problem);
+    if (!p || !ask) return null;
+    const prompt = [
+        'A QuickBooks push was refused. Decide WHOSE problem it is.',
+        '',
+        '"jarvis"     — a value is missing or wrong in OUR records and we can fix it here.',
+        '"quickbooks" — something must be created or changed IN QuickBooks (a vendor,',
+        '               an item, an account, a setting). We cannot fix it from our side.',
+        '"her"        — a judgement call: two figures disagree, or it needs a decision.',
+        '"unknown"    — you cannot tell. Say this rather than guessing.',
+        '',
+        'Return JSON: {"side":"jarvis|quickbooks|her","what":"one short line in plain',
+        'English","hint":"what the person should actually do, one short line"}',
+        'If you are not confident, return {"side":"unknown"}.',
+        '',
+        'REFUSAL: ' + p,
+    ].join('\n');
+    try {
+        const out = await ask(prompt);
+        const side = str(out && out.side).toLowerCase();
+        // An answer outside the closed set is treated as no answer. A model
+        // inventing a fifth category would put a row under a heading that
+        // does not exist.
+        if (!['jarvis', 'quickbooks', 'her'].includes(side)) return null;
+        // NEVER a field. `jarvis` from the model means "our side" for the
+        // email's wording only — blockingFields() hands over nothing without
+        // a field, so this cannot reach the ledger agent and cause a write.
+        return {
+            side, problem: p,
+            what: str(out.what) || p,
+            hint: str(out.hint) || '',
+            // Marked, so the report can say this one was read rather than
+            // matched. She should know which lines are inference.
+            inferred: true,
+        };
+    } catch (e) {
+        // A model outage costs the classification, not the report.
+        return null;
+    }
+}
+
 // ── A DRY SWEEP, READ ─────────────────────────────────────────────────────
 // `sweep` is injected so this is testable without a QuickBooks token, and so
 // the job can hand in a sweep it already ran rather than running a second
 // one. A dry sweep still TALKS to QuickBooks for the rows that get past the
 // blocked checks (it looks for an existing match), so it is not free and must
 // not be run twice in a morning.
-async function look({ sweep, env } = {}) {
+async function look({ sweep, env, ask } = {}) {
     const run = sweep || ((o) => require('./quickbooks/sync').sweep(o));
     const res = await run({ env, dryRun: true });
     const rows = Array.isArray(res && res.rows) ? res.rows : [];
@@ -172,6 +237,21 @@ async function look({ sweep, env } = {}) {
             : [`the push failed: ${r.status}`];
         blocked.push({ ...r, found: parts.map(classifyProblem).filter(Boolean) });
     }
+
+    // ── AND ONLY THEN, THE MODEL ─────────────────────────────────────────
+    // Second pass, over the sentences the table could not place. Absent an
+    // `ask`, nothing happens and the behaviour is exactly as before.
+    if (ask) {
+        for (const b of blocked) {
+            for (let i = 0; i < b.found.length; i += 1) {
+                if (b.found[i] && b.found[i].side === 'unknown') {
+                    const better = await classifyUnknown(b.found[i].problem, { ask });
+                    if (better) b.found[i] = better;
+                }
+            }
+        }
+    }
+
     return { blocked, counts: tally(blocked), rowsSeen: rows.length };
 }
 
@@ -283,5 +363,5 @@ function reportText(look_) {
 
 module.exports = {
     JARVIS_BLANKS, QB_SIDE, LEDGER_FOR,
-    classifyProblem, look, tally, blockingFields, reportText, hintFor, PHONE_HINT,
+    classifyProblem, classifyUnknown, look, tally, blockingFields, reportText, hintFor, PHONE_HINT,
 };

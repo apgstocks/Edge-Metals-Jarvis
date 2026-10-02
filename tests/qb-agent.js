@@ -761,6 +761,94 @@ const agent = require('../helpers/ledgerAgent');
        'a stale blocking map marks rows urgent that were fixed hours ago');
 }
 
+
+// ── I — THE ONE QUESTION THE MODEL IS ASKED ───────────────────────────────
+// Apsara, 2026-10-02: "use existing model plus for these things like QB
+// agent,claims,chat use 3.8."
+//
+// Everything else in this agent is deterministic on purpose — push.js's
+// problem strings are known text, and a regex that matches beats a model that
+// probably matches when the output routes money. But the `unknown` bucket was
+// printed verbatim under "REASON NOT RECOGNISED" and routed to NOBODY, and
+// QuickBooks refuses pushes for reasons push.js never wrote.
+//
+// So: one question, one sentence, only after the table has failed. These
+// checks are about the fence around it.
+{
+    section('I — the model, only on what the table could not place');
+
+    const seen = [];
+    const ask = async (prompt) => {
+        seen.push(prompt);
+        return { side: 'quickbooks', what: 'the vendor is inactive in QuickBooks',
+                 hint: 'reactivate it there, then it will push' };
+    };
+    const sweepWith = (problems) => async () => ({ rows: [
+        { kind: 'bill', id: 'B1', container_no: 'TGCU0053611', status: 'blocked', problems }] });
+
+    // ── IT IS NOT ASKED ABOUT WHAT THE TABLE ALREADY KNOWS ───────────────
+    seen.length = 0;
+    const known = await qb.look({ sweep: sweepWith(['no bill date']), ask });
+    ck('a reason the table matches never reaches the model',
+       seen.length === 0,
+       'spending a model call to re-answer a regex that already answered is waste, '
+       + 'and a chance to disagree with it');
+    ck('  and it keeps the deterministic answer',
+       known.blocked[0].found[0].side === 'jarvis'
+       && known.blocked[0].found[0].field === 'date');
+
+    // ── IT IS ASKED ABOUT WHAT IT DOES NOT ───────────────────────────────
+    seen.length = 0;
+    const odd = await qb.look({
+        sweep: sweepWith(['Vendor is inactive in QuickBooks and cannot receive bills']), ask });
+    ck('an unrecognised refusal does reach it', seen.length === 1);
+    ck('  and comes back routed instead of unplaced',
+       odd.blocked[0].found[0].side === 'quickbooks', JSON.stringify(odd.blocked[0].found[0]));
+    ck('  marked as inferred, so she knows which lines were read rather than matched',
+       odd.blocked[0].found[0].inferred === true,
+       'a guess presented as a fact is the thing that makes a report untrustworthy');
+
+    // ── AND IT CAN NEVER REACH THE LEDGER ────────────────────────────────
+    // THE FENCE THAT MATTERS. A model answering "jarvis" must not be able to
+    // hand the ledger agent a field to write. blockingFields() requires BOTH
+    // a jarvis side and a field, and classifyUnknown never returns a field.
+    const sneaky = async () => ({ side: 'jarvis', field: 'amount', what: 'missing amount',
+                                  hint: 'fill it in' });
+    const tried = await qb.look({ sweep: sweepWith(['something nobody has ever seen']), ask: sneaky });
+    const handed = qb.blockingFields(tried);
+    ck('a model answer can NEVER hand a field to the ledger agent',
+       handed.size === 0,
+       'the model decides whose problem it is, never what to write — '
+       + JSON.stringify([...handed.keys()]));
+    ck('  because classifyUnknown returns no field at all',
+       !('field' in (tried.blocked[0].found[0] || {})),
+       JSON.stringify(tried.blocked[0].found[0]));
+
+    // ── A BAD ANSWER IS NO ANSWER ────────────────────────────────────────
+    for (const bad of [{ side: 'something-else' }, { side: '' }, {}, null]) {
+        const out = await qb.classifyUnknown('a strange refusal', { ask: async () => bad });
+        ck(`  a model answer of ${JSON.stringify(bad)} is discarded`, out === null,
+           'an invented fifth category would file a row under a heading that does not exist');
+    }
+    const threw = await qb.classifyUnknown('x', { ask: async () => { throw new Error('503'); } });
+    ck('a model outage costs the classification, not the report', threw === null);
+
+    // ── AND WITHOUT A MODEL, NOTHING CHANGES ─────────────────────────────
+    const none = await qb.look({ sweep: sweepWith(['Vendor is inactive']) });
+    ck('with no model supplied it behaves exactly as before',
+       none.blocked[0].found[0].side === 'unknown',
+       'the agent must still work with the key missing or the model down');
+
+    // ── THE JOB SUPPLIES IT, ON THE MODEL SHE NAMED ──────────────────────
+    const jobSrc = fs.readFileSync(path.join(ROOT, 'helpers/qbAgentJob.js'), 'utf8');
+    ck('the job asks on the QB tier',
+       /GEMINI_MODEL_QB/.test(jobSrc), 'claims, QB and chat all derive from SMART');
+    const agentSrc = fs.readFileSync(path.join(ROOT, 'helpers/qbAgent.js'), 'utf8');
+    ck('  and the agent itself still imports no model',
+       !/require\(['"]\.\/gemini['"]\)/.test(agentSrc),
+       'injected, so this file stays testable without a key');
+}
+
 console.log(`\n  ${pass} passed, ${fail} failed`);
 if (failures.length) { console.log('\n  failed:'); failures.forEach((f) => console.log('    · ' + f)); }
 try { fs.rmSync(TMP, { recursive: true, force: true }); } catch {}
