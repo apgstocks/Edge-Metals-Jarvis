@@ -903,7 +903,35 @@ const GROUPS = [
 ];
 
 // Her 23, in her order, for the table.
-const tableColumns = () => TABLE_ORDER.map((k) => COLUMNS.find((c) => c.key === k));
+// ── WHICH COLUMNS THE TABLE SHOWS BEFORE YOU CLICK (2026-10-02) ───────────
+// Apsara, with a screenshot of the bills table: "It looks unprofessional and
+// ugly.i want this to be neat.when i click the bill,if it has multiple
+// rows,i want this to expand".
+//
+// TABLE_ORDER is 25 columns. Every cell is nowrap, so the table was always
+// wider than the screen and scrolled sideways — and the actions cell is
+// sticky to the right, so it floated OVER the scrolled content. That is the
+// credit badge landing on top of the seal number in her screenshot.
+//
+// THE CHOICE LIVES HERE, NOT IN THE CLIENT. The first version kept this list
+// in dashboard/index.html and tests/bills-sales.js went red: "the table is
+// built from the SERVER columns, not a second list here — 23 hand-typed
+// headings is 23 chances to put Chassis where Boxes goes." A key list is the
+// same hazard one step removed: rename a column here and the client silently
+// stops showing it, with nothing going red. So the columns mark themselves
+// and the client just filters on the flag.
+//
+// The set is HERS. An earlier cut dropped route and net_lb and
+// tests/ledger-render.js caught it on the guard that names the columns she
+// asked for. Both are back.
+const CORE_KEYS = ['route', 'date', 'supplier', 'container_no', 'invoice_no',
+    'net_lb', 'amount', 'paid', 'balance'];
+
+const tableColumns = () => TABLE_ORDER.map((k) => COLUMNS.find((c) => c.key === k))
+    .filter(Boolean)
+    // `core` is additive: every existing reader sees the same 25 columns in
+    // the same order, and only a client that looks for the flag narrows.
+    .map((c) => (CORE_KEYS.includes(c.key) ? { ...c, core: true } : c));
 
 // The columns of one group, in the order the group states — falling back to
 // COLUMNS order for the groups that never needed one.
@@ -1145,7 +1173,7 @@ function summary(rows) {
 }
 
 module.exports = {
-    COLUMNS, GROUPS, TABLE_ORDER, tableColumns, WRITABLE, LB_PER_MT, PER_LB_CEILING, prepareBill,
+    COLUMNS, GROUPS, TABLE_ORDER, tableColumns, CORE_KEYS, WRITABLE, LB_PER_MT, PER_LB_CEILING, prepareBill,
     FILTERABLE, filterRows, facets, sortableDate, cleanPhotos, missingFor,
     compute, withTotals, list, listWithTotals, newestFirst, addBill, editBill, deleteBill, summary,
     cleanItems,

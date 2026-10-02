@@ -6645,14 +6645,77 @@ async function renderLedgerTab(kind) {
   // it sits behind the same lock as every other deletion of Edge Metals money
   // (/api/ledger/bulk-delete/* is requireSuper — this is only the UI half, and
   // hiding a button is not a permission).
+  // ── A SCANNABLE TABLE, AND THE REST ONE CLICK AWAY (2026-10-02) ───────
+  // Apsara, with a screenshot: "It looks unprofessional and ugly.i want this
+  // to be neat.when i click the bill,if it has multiple rows,i want this to
+  // expand".
+  //
+  // WHAT WAS ACTUALLY WRONG. The server sends 25 columns and every cell is
+  // white-space:nowrap, so the table was far wider than any screen and
+  // scrolled sideways. The actions cell is position:sticky; right:0 — correct
+  // on its own — which means it FLOATS OVER the scrolled content. That is the
+  // green credit badge sitting on top of the seal number in her screenshot:
+  // not a rendering bug, the sticky column doing its job over a table that
+  // should never have been that wide.
+  //
+  // So the fix for "ugly" and the fix for the overlap are the same fix: stop
+  // the sideways scroll. The columns she scans by stay; the rest go in a
+  // panel under the row, grouped the way the server already groups them.
+  // Nothing is removed — everything is one click nearer than a scrollbar.
+  //
+  // WHICH COLUMNS ARE CORE IS THE SERVER'S CALL. helpers/bills.js marks them,
+  // because a key list kept here is a second copy of the column definitions
+  // and drifts the moment one is renamed — the hazard tests/bills-sales.js
+  // already guards for headings.
+  //
+  // BILLS ONLY FOR NOW. This renderer is shared with sales, and CLAUDE.md's
+  // first rule is that a request about one screen changes that screen only.
+  // The flag marks the NEW shape, never the old: sales has no core-marked
+  // columns, so it renders exactly as before.
+  const anyCore = columns.some((c) => c && c.core);
+  const shown = anyCore ? columns.filter((c) => c.core) : columns;
+  const hidden = anyCore ? columns.filter((c) => !c.core) : [];
+
   const canBulk = IS_SUPER === true;
   // Supplier -> unapplied advance. From /api/bills (see the route), so the
   // table and the badges are one request and cannot disagree about a figure.
   const ledCredit = (kind === 'bills' && data.credit) ? data.credit : {};
+  // One detail panel per row, built from the columns the table no longer
+  // shows. Rendered WITH the row rather than on demand: the data is already
+  // here, and fetching on expand would make a click wait on a network for
+  // something that is sitting in memory.
+  const detailFor = (r) => {
+    if (!hidden.length) return '';
+    const byGroup = (ledgerState.groups || []).map((g) => {
+      const keys = Array.isArray(g.keys) ? g.keys : [];
+      const cols = hidden.filter((c) => keys.includes(c.key));
+      if (!cols.length) return '';
+      return `<div style="min-width:190px;">
+          <div style="font-family:var(--font-mono); font-size:9px; letter-spacing:.11em; text-transform:uppercase; color:var(--text-muted); margin-bottom:6px;">${esc(g.label || g.id)}</div>
+          ${cols.map((c) => `<div style="display:flex; gap:10px; padding:2px 0; font-size:12px;">
+              <span style="color:var(--text-faint); min-width:96px;">${esc(c.label || c.key)}</span>
+              <span style="color:var(--text-strong);">${ledgerCell(r, c, K) || '<span style=\"color:var(--text-faint)\">—</span>'}</span>
+            </div>`).join('')}
+        </div>`;
+    }).filter(Boolean).join('');
+    // Anything the server did not put in a group still has to appear, or the
+    // expand quietly loses a field. Grouped last, under its own heading.
+    const grouped = new Set((ledgerState.groups || []).flatMap((g) => g.keys || []));
+    const rest = hidden.filter((c) => !grouped.has(c.key));
+    const restBlock = rest.length ? `<div style="min-width:190px;">
+        <div style="font-family:var(--font-mono); font-size:9px; letter-spacing:.11em; text-transform:uppercase; color:var(--text-muted); margin-bottom:6px;">Weights and the rest</div>
+        ${rest.map((c) => `<div style="display:flex; gap:10px; padding:2px 0; font-size:12px;">
+            <span style="color:var(--text-faint); min-width:96px;">${esc(c.label || c.key)}</span>
+            <span style="color:var(--text-strong);">${ledgerCell(r, c, K) || '<span style=\"color:var(--text-faint)\">—</span>'}</span>
+          </div>`).join('')}
+      </div>` : '';
+    return `<div style="display:flex; flex-wrap:wrap; gap:26px; padding:14px 16px 16px; background:var(--surface-sunken); border-top:1px dashed var(--line);">${byGroup}${restBlock}</div>`;
+  };
+
   const body = rows.length ? rows.map((r, i) => `
-    <tr data-id="${esc(r.id)}" style="border-top:1px solid var(--line);">
+    <tr class="ledRow" data-id="${esc(r.id)}" style="border-top:1px solid var(--line); cursor:pointer;" title="Click for the full detail">
       ${canBulk ? `<td style="padding:7px 4px 7px 10px; width:26px;"><input type="checkbox" class="ledPick" data-id="${esc(r.id)}" aria-label="Select ${esc(r.container_no || r.id)}" style="cursor:pointer;"></td>` : ''}
-      ${columns.map((c) => `<td style="padding:7px 9px; white-space:nowrap; ${c.derived ? 'color:var(--text-muted);' : ''}">${ledgerCell(r, c, K)}</td>`).join('')}
+      ${shown.map((c) => `<td style="padding:8px 9px; white-space:nowrap; ${c.derived ? 'color:var(--text-muted);' : ''}">${ledgerCell(r, c, K)}</td>`).join('')}
       <td style="padding:7px 9px; white-space:nowrap; position:sticky; right:0; background:var(--surface-card); box-shadow:-8px 0 8px -8px rgba(0,0,0,.55); z-index:2;">
         <!-- ── ON A SALE, MONEY COMES IN ────────────────────────────────
              Apsara, 2026-09-15: "In add sales ,there should be receive payment
@@ -6725,8 +6788,11 @@ async function renderLedgerTab(kind) {
         ${(r.amount_differs !== null && r.amount_differs !== undefined)
           ? ` <span title="You typed ${ledMoney(r.amount)}; the weight and price give ${ledMoney(r.computed_amount)}" style="color:var(--status-warn); font-family:var(--font-mono); font-size:10px;">⚠ ${ledMoney(r.amount_differs)}</span>` : ''}
       </td>
-    </tr>`).join('')
-    : `<tr><td colspan="${columns.length + (canBulk ? 2 : 1)}" style="padding:26px; text-align:center; color:var(--text-faint); font-family:var(--font-mono); font-size:12px;">Nothing here yet.</td></tr>`;
+    </tr>
+    ${hidden.length ? `<tr class="ledDetail" data-for="${esc(r.id)}" style="display:none;">
+      <td colspan="${shown.length + (canBulk ? 2 : 1)}" style="padding:0;">${detailFor(r)}</td>
+    </tr>` : ''}`).join('')
+    : `<tr><td colspan="${shown.length + (canBulk ? 2 : 1)}" style="padding:26px; text-align:center; color:var(--text-faint); font-family:var(--font-mono); font-size:12px;">Nothing here yet.</td></tr>`;
 
   $('viewRoot').innerHTML = `
     <div style="max-width:100%; margin:0 auto; padding:34px 28px 80px;">
@@ -6841,7 +6907,7 @@ async function renderLedgerTab(kind) {
           <thead>
             <tr style="background:var(--bg-sunken);">
               ${canBulk ? '<th style="padding:8px 4px 8px 10px; width:26px;"><input type="checkbox" id="ledPickAll" title="Select every row shown" aria-label="Select every row shown" style="cursor:pointer;"></th>' : ''}
-              ${columns.map((c) => `<th style="padding:8px 9px; text-align:left; white-space:nowrap; font-family:var(--font-mono); font-size:9px; letter-spacing:.1em; text-transform:uppercase; color:var(--text-muted);">${esc(c.label)}${c.derived ? '<span title="Computed by the server from the other columns — not typed" style="opacity:.6;"> ƒ</span>' : ''}</th>`).join('')}
+              ${shown.map((c) => `<th style="padding:8px 9px; text-align:left; white-space:nowrap; font-family:var(--font-mono); font-size:9px; letter-spacing:.1em; text-transform:uppercase; color:var(--text-muted);">${esc(c.label)}${c.derived ? '<span title="Computed by the server from the other columns — not typed" style="opacity:.6;"> ƒ</span>' : ''}</th>`).join('')}
               <th style="padding:8px 9px; position:sticky; right:0; background:var(--bg-sunken); box-shadow:-8px 0 8px -8px rgba(0,0,0,.55); z-index:3;"></th>
             </tr>
           </thead>
@@ -7353,6 +7419,31 @@ async function renderLedgerTab(kind) {
   // On the bubble phase the handler's stopPropagation keeps this listener
   // from seeing clicks on the icon at all, which is exactly the intent: an
   // outside click closes, the icon itself toggles.
+
+  // ── CLICK A BILL TO SEE EVERYTHING ABOUT IT (2026-10-02) ──────────────
+  // Apsara: "when i click the bill,if it has multiple rows,i want this to
+  // expand". The eighteen columns the table no longer shows live in the
+  // panel under the row, grouped as the server groups them.
+  //
+  // THE WHOLE ROW IS THE TARGET, not a chevron: a 7px-tall triangle is a
+  // thing to aim at, and she is doing this on a laptop trackpad all day.
+  //
+  // EXCEPT where a click already means something else. A click on the tick
+  // box, on the actions menu, or on a link inside a cell must do THAT and
+  // not also unfold the row — selecting three bills to delete and having the
+  // page grow by three panels underneath is the opposite of help.
+  document.querySelectorAll('tr.ledRow').forEach((tr) => {
+    tr.addEventListener('click', (e) => {
+      if (e.target.closest('input, button, a, label, select')) return;
+      const detail = document.querySelector(`tr.ledDetail[data-for="${CSS.escape(tr.dataset.id || '')}"]`);
+      if (!detail) return;
+      const open = detail.style.display !== 'none';
+      detail.style.display = open ? 'none' : '';
+      // The row itself shows it is open, so a long panel still has a visible
+      // owner once the heading has scrolled past.
+      tr.style.background = open ? '' : 'var(--surface-sunken)';
+    });
+  });
 
   document.querySelectorAll('.row-menu-btn').forEach((b) => {
     b.onclick = (ev) => {
