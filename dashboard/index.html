@@ -10117,27 +10117,64 @@ async function openBillPayForm(opts = {}) {
   document.body.insertAdjacentHTML('beforeend', `
     <div id="bpModal" style="position:fixed; inset:0; background:rgba(0,0,0,.66); z-index:9100; display:flex; align-items:flex-start; justify-content:center; overflow-y:auto; padding:32px 16px;">
       <div class="card" style="width:min(860px,100%); padding:20px 22px 18px; background:${L.sunken}; border-color:${L.line};">
-        <div style="display:flex; align-items:baseline; justify-content:space-between; margin-bottom:16px;">
-          <h3 style="margin:0; font-size:16px; text-transform:none; color:${L.ink};">
-            ${applying ? 'Apply advance' : 'Record a payment'} — ${esc(supplier)}
-            ${applying ? '' : `<button id="bpWhoAgain" style="background:none; border:none; padding:0 0 0 6px; font-size:11px; color:${L.inkMuted}; text-decoration:underline dotted; cursor:pointer;">change</button>`}
-          </h3>
-          ${ledgerThemeToggle()}
-          <button id="bpClose" aria-label="Close" title="Close (Esc)" style="background:none; border:none; color:${L.inkMuted}; font-size:22px; line-height:1; cursor:pointer;">&times;</button>
-        </div>
+        <!-- ── HEADER, REDESIGNED (2026-10-02) ──────────────────────────────
+             Apsara: "it looks not professional and off", pasting what she
+             saw: Record a payment - Inesh Cores Chapin change / Paper (specs) x
 
-        <div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(140px,1fr)); gap:10px; margin-bottom:14px;${applying ? 'display:block;' : ''}">
+             THREE LAYOUT FAULTS, no content problem at all:
+
+             1. The row was flex with justify-content:space-between and THREE
+                children, so the sheet-colour and text-size controls landed
+                in the MIDDLE of the title bar. Reading aids, parked between
+                the name of the payment and the close button.
+             2. The change button sat INSIDE the h3, six pixels from the
+                supplier and inheriting a heading context, so it read as one
+                string: "Inesh Cores Chapin change". A supplier called
+                "Chapin change" is not a thing, but that is what the line
+                said.
+             3. The supplier appeared TWICE: in the title and again as a
+                readonly field at the end of the grid, repeating what the
+                heading already said and unable to be edited either way.
+
+             Now the title owns the first line with the close button, the
+             supplier gets a quieter line under it with the change control
+             clearly separate, and a rule closes the header off. Nothing is
+             removed: the specs button is hers by request and simply moves to
+             the footer, where a reading aid belongs. -->
+        <div style="display:flex; align-items:flex-start; justify-content:space-between; gap:16px;">
+          <div style="min-width:0;">
+            <h3 style="margin:0; font-size:17px; font-weight:600; letter-spacing:-.01em; text-transform:none; color:${L.ink};">${applying ? 'Apply advance' : 'Record a payment'}</h3>
+            <div style="margin-top:5px; font-size:12.5px; color:${L.inkMuted}; display:flex; align-items:center; gap:9px; flex-wrap:wrap;">
+              <span>to <span style="color:${L.ink}; font-weight:500;">${esc(supplier)}</span></span>
+              ${applying ? '' : `<button id="bpWhoAgain" title="Switch supplier" style="background:none; border:1px solid ${L.line}; border-radius:var(--radius-sm); padding:1px 9px; font-size:11px; color:${L.inkMuted}; cursor:pointer;">change</button>`}
+            </div>
+          </div>
+          <button id="bpClose" aria-label="Close" title="Close (Esc)" style="background:none; border:none; color:${L.inkMuted}; font-size:22px; line-height:1; cursor:pointer; margin:-2px -4px 0 0;">&times;</button>
+        </div>
+        <div style="height:1px; background:${L.line}; margin:15px 0 17px;"></div>
+
+        <!-- TWO ROWS, NOT SIX COLUMNS. auto-fit at minmax(140px,1fr) across
+             an 860px card put Date / Amount / Method / Bank / Reference /
+             Supplier on ONE line: six squashed boxes with nowrap labels,
+             which is the run-on she pasted. The two figures that matter,
+             when and how much, now get their own row at a readable width;
+             how it was sent follows underneath. -->
+        <div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(210px,1fr)); gap:13px; margin-bottom:13px;${applying ? 'display:block;' : ''}">
         ${applying ? `<div><label style="${lab}">Which advance</label>
           <select id="bpAdvSel" style="${fieldCss}">${advances.map((a) => `<option value="${esc(a.id)}" data-available="${esc(a.available)}">${esc(a.date)} · ${esc(a.mode)}${a.ref ? ' · ' + esc(a.ref) : ''} · ${money(a.available)} left</option>`).join('')}</select></div>` : ''}
           <div style="${applying ? 'display:none;' : ''}"><label style="${lab}">Date</label><input id="bpDate" placeholder="MM/DD/YYYY" autocomplete="off" style="${fieldCss}"></div>
           <div style="${applying ? 'display:none;' : ''}"><label style="${lab}">Amount sent</label><input id="bpAmount" inputmode="decimal" autocomplete="off" style="${fieldCss} text-align:right; font-family:var(--font-mono);"></div>
+        </div>
+        <div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(175px,1fr)); gap:13px; margin-bottom:15px;">
           <div style="${applying ? 'display:none;' : ''}"><label style="${lab}">Method</label><select id="bpMode" style="${fieldCss}">${(data.modes || []).map((m) => `<option>${esc(m)}</option>`).join('')}</select></div>
           <div id="bpBankField" style="${applying ? 'display:none;' : ''}"><label style="${lab}">Bank</label><select id="bpBank" style="${fieldCss}">${banks.map((b) => `<option>${esc(b)}</option>`).join('')}</select></div>
           <div style="${applying ? 'display:none;' : ''}"><label style="${lab}">Reference</label><input id="bpRef" autocomplete="off" placeholder="wire no" style="${fieldCss}"></div>
-          <div style="${applying ? 'display:none;' : ''}"><label style="${lab}">Supplier</label>
-            <input id="bpSupplier" readonly value="${esc(supplier || '')}" tabindex="-1"
-              title="Chosen at the start — use 'change' by the title to switch supplier"
-              style="${fieldCss} background:${L.sunken}; color:${L.inkMuted}; cursor:default;"></div>
+          <!-- The supplier is in the subtitle now. The element STAYS: send()
+               reads its value, and the tests assert it is readonly. Removing
+               it would break both. It is simply no longer a dead box
+               repeating the heading. -->
+          <div style="display:none;"><label style="${lab}">Supplier</label>
+            <input id="bpSupplier" readonly value="${esc(supplier || '')}" tabindex="-1" style="${fieldCss}"></div>
         </div>
 
         ${applying ? '' : `
@@ -10219,6 +10256,9 @@ async function openBillPayForm(opts = {}) {
           <div><div style="font-size:11px; color:${L.inkFaint};">Allocated</div><div id="bpAllocated" style="font-size:17px; font-weight:500; font-family:var(--font-mono); color:${L.ink};">$0.00</div></div>
           <div><div style="font-size:11px; color:${L.inkFaint};">Still to allocate</div><div id="bpLeft" style="font-size:17px; font-weight:500; font-family:var(--font-mono); color:${L.ink};">$0.00</div></div>
           <div style="flex:1;"></div>
+          <!-- Sheet colour and text size: a reading aid, so it sits with the
+               other chrome down here instead of inside the heading. -->
+          <div style="display:flex; align-items:center; margin-right:6px;">${ledgerThemeToggle()}</div>
           <div style="display:flex; gap:8px;">
             <button id="bpCancel" class="btn btn-secondary" style="font-size:11px; padding:8px 16px; background:${L.paper}; color:${L.inkMuted}; border-color:${L.line};">Cancel</button>
             <button id="bpSave" class="btn btn-primary" style="font-size:11px; padding:8px 20px; background:${L.accent}; border-color:${L.accent}; color:${L.accentInk};">${applying ? 'Apply' : 'Record payment'}</button>
