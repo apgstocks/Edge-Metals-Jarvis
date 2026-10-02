@@ -90,7 +90,10 @@ async function compare({ since = '2026-01-01', env = 'production' } = {}) {
     for (const [kind, rows] of [['bill', bills], ['invoice', sales]]) {
         for (const row of rows) {
             const { hit, how, fits, multi } = look(row, qb[kind]);
-            const side = cut[kind] && row.date >= cut[kind] ? 'jarvis' : 'accountant';
+            // No lock is now the normal state, and it means the row is JARVIS'S to
+            // enter. Reading a null cutover as "before it" put all of 2026 on the
+            // accountant's side of this screen and hid every real gap.
+            const side = !cut[kind] || row.date >= cut[kind] ? 'jarvis' : 'accountant';
             const base = { kind, date: row.date, party: row.party || '', container: row.container || '', no: row.no || '', amount: row.amount, side };
             if (!hit) { bump(`${kind} missing (${side})`, row.amount); findings.push({ ...base, status: 'missing', qb: null, note: '' }); continue; }
             if (fits) { bump(`${kind} agrees`, row.amount); continue; }

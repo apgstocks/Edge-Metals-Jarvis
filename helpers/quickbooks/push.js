@@ -208,9 +208,12 @@ async function findExisting(b, vendorId, opts) {
 // Apsara, 2026-09-22: "Jarvis fills everything after that". Her books are
 // complete by hand to 5 Sep 2026 (bills) and 27 Aug 2026 (invoices), and Jan–May
 // supplier wires were booked straight to Cost of Goods Sold with no bill —
-// a Jarvis bill for those containers would count the cost twice. So Jarvis
-// only ever enters documents dated AFTER the cutover. In production an unset
-// cutover refuses everything: no date is not the same as "all dates".
+// a Jarvis bill for those containers would count the cost twice.
+//
+// That WAS a date rule: nothing before the cutover, and in production an unset
+// cutover refused everything. Both are gone (2026-10-02). The cost-counted-
+// twice case is now asked directly, per container, in costAlreadyOnACheque();
+// an unset boundary means 2026 is open and the evidence decides.
 //
 // ── WHERE THE CUTOVER LIVES (2026-09-26) ────────────────────────────────────
 // It used to live only in .env. That meant moving the boundary was an SSH
@@ -230,14 +233,55 @@ const CUTOVER_FILE = () => process.env.QB_CUTOVER_FILE || path.join(DATA_DIR, 'q
 const CUT_KEY = { bill: 'bills', invoice: 'invoices' };
 const ISO_DAY = /^\d{4}-\d{2}-\d{2}$/;
 
+// ── "everyday that cut over should be toay" (Apsara, 2026-10-02) ───────────
+// A date pinned in a file is wrong the day after it is typed — that is how the
+// VM sat on 24 Sep for eight days skipping every row the sheet sync wrote. So
+// the boundary can now be the WORD "today" instead of a date, resolved at read
+// time: it moves with the day and never needs editing again.
+//
+// But read literally as a LOCK, "today" refuses every row dated before today —
+// which is every bill she enters for last week, and is exactly the silence
+// that was just removed. A boundary that is always today is only safe in one
+// direction, so there are two of them now:
+//
+//   HORIZON — always today, not configurable, no way to get it wrong.
+//             Nothing dated AFTER today is entered. A bill dated 2027 is a
+//             typo, not a document. This is the rolling boundary.
+//   LOCK    — optional, off unless she sets it. Refuses dates BEFORE it,
+//             for a period she closed on purpose. It accepts "today" too,
+//             because she may mean it, and the doctor says out loud what that
+//             costs: nothing back-dated gets in at all.
+const ROLLING = /^(today|rolling|auto)$/i;
+// "none" from the page is a DECISION, not an absence. If it merely deleted the
+// key, .env (QB_CUTOVER_BILLS=2026-09-24 is still on the VM) would quietly take
+// over and the click would appear to do nothing — the worst thing a screen can
+// do. So it is stored, and it outranks .env.
+const CLEARS = /^(none|off|open|clear|no lock|unset)$/i;
+function todayISO() {
+    try { return require('../time').todayLocal(); }
+    catch { return new Date().toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' }); }
+}
+// what a stored value MEANS today
+function cutValue(v) {
+    const s = String(v === undefined || v === null ? '' : v).trim();
+    if (ROLLING.test(s)) return todayISO();
+    return ISO_DAY.test(s) ? s : null;
+}
+// what gets written back — "today" stays the word, not the day it was typed
+function cutRaw(v) {
+    const s = String(v === undefined || v === null ? '' : v).trim();
+    if (ROLLING.test(s)) return 'today';
+    return ISO_DAY.test(s) ? s : null;
+}
+
 function cutoverStore() {
     try { const j = JSON.parse(fs.readFileSync(CUTOVER_FILE(), 'utf8')); return (j && typeof j === 'object') ? j : {}; }
     catch { return {}; }
 }
-function cutoverEnv(kind) {
-    const v = String(process.env[kind === 'bill' ? 'QB_CUTOVER_BILLS' : 'QB_CUTOVER_INVOICES'] || '').trim();
-    return ISO_DAY.test(v) ? v : null;
+function envRaw(kind) {
+    return cutRaw(process.env[kind === 'bill' ? 'QB_CUTOVER_BILLS' : 'QB_CUTOVER_INVOICES']);
 }
+function cutoverEnv(kind) { return cutValue(envRaw(kind)); }
 // For one process only, and only where a script means it: qb-push-list.js
 // pushes a list she has already reviewed, which is exactly the case where the
 // boundary should step aside. Nothing is written to the file.
@@ -245,27 +289,29 @@ let OVERRIDE = {};
 function setCutover(next = {}) {
     OVERRIDE = {};
     for (const k of ['bills', 'invoices']) {
-        const v = next[k] === undefined || next[k] === null ? '' : String(next[k]).trim();
-        if (ISO_DAY.test(v)) OVERRIDE[k] = v;
+        const v = cutRaw(next[k]);
+        if (v) OVERRIDE[k] = v;
     }
     return { ...OVERRIDE };
 }
 function clearCutover() { OVERRIDE = {}; }
-function cutoverFor(kind, env) {
+function cutoverRaw(kind) {
     const k = CUT_KEY[kind] || kind;
-    if (ISO_DAY.test(String(OVERRIDE[k] || ''))) return OVERRIDE[k];
-    const saved = String(cutoverStore()[k] || '').trim();
-    if (ISO_DAY.test(saved)) return saved;
-    const fromEnv = cutoverEnv(kind);
-    if (fromEnv) return fromEnv;
-    return null;
+    const over = cutRaw(OVERRIDE[k]);
+    if (over) return { raw: over, from: 'override' };
+    const savedRaw = String(cutoverStore()[k] || '').trim();
+    if (CLEARS.test(savedRaw)) return { raw: null, from: 'unlocked' };
+    const saved = cutRaw(savedRaw);
+    if (saved) return { raw: saved, from: 'setting' };
+    const fromEnv = envRaw(kind);
+    if (fromEnv) return { raw: fromEnv, from: 'env' };
+    return { raw: null, from: 'unset' };
 }
-function cutoverSource(kind) {
-    const k = CUT_KEY[kind] || kind;
-    if (ISO_DAY.test(String(OVERRIDE[k] || ''))) return 'override';
-    if (ISO_DAY.test(String(cutoverStore()[k] || '').trim())) return 'setting';
-    return cutoverEnv(kind) ? 'env' : 'unset';
-}
+function cutoverFor(kind, env) { return cutValue(cutoverRaw(kind).raw); }
+function cutoverSource(kind) { return cutoverRaw(kind).from; }
+// true when the lock is the word, not a day — the page and the doctor say so,
+// because "2026-10-02 (setting)" and "today, every day" are different facts.
+function cutoverIsRolling(kind) { return ROLLING.test(String(cutoverRaw(kind).raw || '')); }
 // Moving the boundary is a decision about her real books, so it is written
 // with who moved it and when. The last 25 moves stay in the file.
 function saveCutover(next = {}, who = '') {
@@ -274,9 +320,13 @@ function saveCutover(next = {}, who = '') {
     for (const k of ['bills', 'invoices']) {
         const v = next[k] === undefined || next[k] === null ? '' : String(next[k]).trim();
         if (!v) continue;
-        if (!ISO_DAY.test(v)) throw new Error(`the ${k} cutover must be a date like 2026-09-06 — got "${next[k]}"`);
-        if (store[k] !== v) changed[k] = v;
-        store[k] = v;
+        // No lock is the normal state now, so it has to be reachable from the
+        // page — not only by editing a file on the VM.
+        if (CLEARS.test(v)) { if (store[k] !== 'none') changed[k] = 'none'; store[k] = 'none'; continue; }
+        const raw = cutRaw(v);
+        if (!raw) throw new Error(`the ${k} cutover must be a date like 2026-09-06, or the word "today" — got "${next[k]}"`);
+        if (store[k] !== raw) changed[k] = raw;
+        store[k] = raw;
     }
     if (!Object.keys(changed).length) return { saved: store, changed };
     store.history = [{ at: new Date().toISOString(), by: who || 'jarvis', ...changed }, ...(store.history || [])].slice(0, 25);
@@ -333,10 +383,17 @@ const UNREADABLE = /can't be read/;
 function beforeCutover(kind, date, env) {
     const d = isoDate(date);
     if (!d) return `${kind} date "${date}" can't be read — refusing`;
+    // the rolling half: today, every day, and nothing past it
+    const t = todayISO();
+    if (d > t) return `${kind} dated ${d} is in the future (today is ${t}) — refusing until the date is fixed`;
     const c = cutoverFor(kind, env);
     if (c === null) return null;                 // no lock set: evidence decides
     return d < c ? `${kind} dated ${d} is before the locked period (${c}) — she closed that period deliberately` : null;
 }
+// Two reasons a row is refused that she must SEE rather than have counted as
+// "left alone": a date that cannot be read, and a date in the future. Both are
+// a row to fix, not a period to respect.
+const NEEDS_FIX = /can't be read|is in the future/;
 
 // ── EVIDENCE, IN PLACE OF A DATE ──────────────────────────────────────────
 // The one thing no duplicate search can see: a container whose cost already
@@ -371,24 +428,31 @@ async function costAlreadyOnACheque(containerNo, { env = auth.qbEnv(), maxAgeMs 
 
 async function pushBill(b, snapshots, { env = auth.qbEnv(), dryRun = true, fetchImpl } = {}) {
     const opts = { env, fetchImpl };
+    // Every decision goes in the journal (helpers/quickbooks/journal.js) — only
+    // on a real run; a dry run decides nothing. Apsara 2026-09-22: "everything
+    // should be tracked". This is set up BEFORE the gates below, because the
+    // nightly email takes its counts from the sweep but its REASONS from the
+    // journal: a gate that returned early produced "blocked: 3" with nothing
+    // beside it, which is a number she cannot act on.
+    const journal = require('./journal');
+    const jarvis = { id: b.id, container: b.container_no, invoice_no: docNumberFor(b), supplier: b.supplier, date: b.date, net_payable: b.net_payable };
+    const note = (action, extra) => { if (!dryRun) journal.record({ env, kind: 'bill', action, jarvis, qb: {}, ...extra }); };
+
     const cut = beforeCutover('bill', b.date, env);
-    if (cut) return { status: UNREADABLE.test(cut) ? 'blocked' : 'before-cutover', problems: [cut] };
+    if (cut) {
+        if (!NEEDS_FIX.test(cut)) return { status: 'before-cutover', problems: [cut] };
+        note('blocked', { reason: cut });
+        return { status: 'blocked', problems: [cut] };
+    }
     // With no date rule, this is what stands in its place: a container whose
     // cost is already in the books on a cheque, with no document to find.
     if (b.container_no) {
         const paidAlready = await costAlreadyOnACheque(b.container_no, { env }).catch(() => null);
-        if (paidAlready) return { status: 'ask', problems: [paidAlready] };
+        if (paidAlready) { note('asked', { reason: paidAlready }); return { status: 'ask', problems: [paidAlready] }; }
     }
     const key = linkKey(env, 'bill', b.id || b.container_no);
     const linked = loadLinks()[key];
     if (linked) return { status: 'already-linked', qbId: linked.qbId };
-
-    // Every decision goes in the journal (helpers/quickbooks/journal.js) — only
-    // on a real run; a dry run decides nothing. Apsara 2026-09-22: "everything
-    // should be tracked".
-    const journal = require('./journal');
-    const jarvis = { id: b.id, container: b.container_no, invoice_no: docNumberFor(b), supplier: b.supplier, date: b.date, net_payable: b.net_payable };
-    const note = (action, extra) => { if (!dryRun) journal.record({ env, kind: 'bill', action, jarvis, qb: {}, ...extra }); };
 
     const res = await resolveRefs(b, snapshots, opts);
     if (res.problems) { note('blocked', { reason: res.problems.join('; ') }); return { status: 'blocked', problems: res.problems }; }
@@ -412,4 +476,4 @@ async function pushBill(b, snapshots, { env = auth.qbEnv(), dryRun = true, fetch
     return { status: 'created', qbId: out.Bill.Id, total: out.Bill.TotalAmt, bill: out.Bill, journalId: je.id };
 }
 
-module.exports = { isoDate, pairFits, UNREADABLE, docNumberFor, confirmedName, idByName, ensureSandbox, saveLink, linkKey, cutoverFor, cutoverSource, cutoverStore, saveCutover, setCutover, clearCutover, costAlreadyOnACheque, beforeCutover, buildBill, resolveRefs, findExisting, findExistingDoc, judgeExisting, pushBill, loadLinks, LINKS_FILE, DOC_MAX };
+module.exports = { isoDate, pairFits, UNREADABLE, NEEDS_FIX, todayISO, cutValue, cutRaw, cutoverRaw, cutoverIsRolling, docNumberFor, confirmedName, idByName, ensureSandbox, saveLink, linkKey, cutoverFor, cutoverSource, cutoverStore, saveCutover, setCutover, clearCutover, costAlreadyOnACheque, beforeCutover, buildBill, resolveRefs, findExisting, findExistingDoc, judgeExisting, pushBill, loadLinks, LINKS_FILE, DOC_MAX };

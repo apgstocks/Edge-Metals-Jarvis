@@ -67,7 +67,13 @@ const exists = (p) => { try { return fs.existsSync(p); } catch { return false; }
     console.log('\n  boundary');
     for (const k of ['bill', 'invoice']) {
         const d = push.cutoverFor(k, env), from = push.cutoverSource(k);
-        say(!!d, `cutover ${k}s`, d ? `${d}  (${from})` : 'NOT SET — in production nothing will be entered');
+        // Unset is now the GOOD state: no period is locked, 2026 is open and
+        // the evidence gates decide. A set lock is the one worth a second look.
+        const rolling = push.cutoverIsRolling(k === 'bill' ? 'bill' : 'invoice');
+        say(!rolling, `period lock (${k}s)`,
+            !d ? 'none — 2026 is open, evidence decides (this is the normal state)'
+                : rolling ? `"today" → ${d}, and it MOVES EVERY DAY, so nothing back-dated can ever be entered — almost certainly not what you want`
+                    : `locked before ${d}  (${from})`);
     }
     // ── WHAT THE BOUNDARY IS HOLDING BACK ─────────────────────────────────
     // A cutover that is SET is not a cutover that is RIGHT. On 2026-10-02 the
@@ -81,7 +87,7 @@ const exists = (p) => { try { return fs.existsSync(p); } catch { return false; }
         const held = { bills: [], sales: [] };
         for (const b of require('../helpers/bills').list()) {
             const c = push.beforeCutover('bill', b.date, env);
-            if (c && !push.UNREADABLE.test(c) && !linked('bill', b.id)) held.bills.push(push.isoDate(b.date) || String(b.date));
+            if (c && !push.NEEDS_FIX.test(c) && !linked('bill', b.id)) held.bills.push(push.isoDate(b.date) || String(b.date));
         }
         const seen = new Set();
         for (const sale of require('../helpers/sales').list()) {
@@ -89,7 +95,7 @@ const exists = (p) => { try { return fs.existsSync(p); } catch { return false; }
             if (no && seen.has(no)) continue;
             if (no) seen.add(no);
             const c = push.beforeCutover('invoice', sale.date, env);
-            if (c && !push.UNREADABLE.test(c) && !linked('invoice', no || sale.id)) held.sales.push(push.isoDate(sale.date) || String(sale.date));
+            if (c && !push.NEEDS_FIX.test(c) && !linked('invoice', no || sale.id)) held.sales.push(push.isoDate(sale.date) || String(sale.date));
         }
         const n = held.bills.length + held.sales.length;
         const newest = [...held.bills, ...held.sales].sort().slice(-1)[0];
@@ -102,6 +108,21 @@ const exists = (p) => { try { return fs.existsSync(p); } catch { return false; }
             n === 0 ? 'nothing' : `${held.bills.length} bills, ${held.sales.length} invoices (${oldest} → ${newest})`
                 + (fresh ? `  — ${fresh} of them from the last fortnight, so TONIGHT'S WORK IS BEING SKIPPED` : '  — all older than a fortnight, which is the accountant\'s period'));
     } catch (e) { say(null, 'what the boundary holds back', `could not work it out: ${e.message.slice(0, 50)}`); }
+
+    // ── ROWS DATED AHEAD OF TODAY ─────────────────────────────────────────
+    // The rolling boundary (2026-10-02) refuses anything dated after today,
+    // where before it would have been entered. If her sheet carries invoices
+    // dated at the ETA rather than at issue, that is a real change in what
+    // goes in tonight — so it is counted here rather than discovered from a
+    // morning email.
+    try {
+        const t = push.todayISO();
+        const ahead = [];
+        for (const b of require('../helpers/bills').list()) { const d = push.isoDate(b.date); if (d && d > t) ahead.push(`bill ${d} ${b.supplier || ''}`.trim()); }
+        for (const sale of require('../helpers/sales').list()) { const d = push.isoDate(sale.date); if (d && d > t) ahead.push(`invoice ${d} ${sale.customer || ''}`.trim()); }
+        say(ahead.length === 0, 'dated after today', ahead.length === 0 ? `none (today is ${t})`
+            : `${ahead.length} row(s) dated ahead of ${t} — these are now REFUSED as typos: ${ahead.slice(0, 4).join(', ')}${ahead.length > 4 ? '…' : ''}`);
+    } catch (e) { say(null, 'dated after today', `could not work it out: ${e.message.slice(0, 50)}`); }
 
     for (const role of Object.keys(mapping.ACCOUNT_ROLES)) {
         const hit = mapping.matchParty(role, [], 'account');

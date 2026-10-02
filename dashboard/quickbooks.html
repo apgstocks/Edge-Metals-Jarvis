@@ -854,24 +854,30 @@ async function createParty(kind, jarvisName) {
   }
 }
 
-/* ── the cutover ─────────────────────────────────────────────────────
-   The boundary that decides what the nightly run will and will not touch.
-   It used to live only in .env, which meant an SSH session and a restart —
-   and a night where everything was silently skipped. Clicking it here moves
-   it, and the next run honours it with no restart. */
+/* ── the period lock ─────────────────────────────────────────────────
+   This used to be a date rule the code insisted on, and in production an
+   unset one refused everything. Both are gone (2026-10-02). It is now a lock
+   she may choose, normally OFF, and off is the healthy state: 2026 is open
+   and the evidence gates decide each row. The rolling boundary she asked for
+   is the other half and is not a setting at all — nothing dated after today
+   is entered, today being today, every day. */
 function cutChip(which, date, from) {
   const pinned = from === 'env', unset = from === 'unset' || !date;
-  const tip = unset ? 'No cutover set — nothing will be entered in production. Click to set it.'
-    : pinned ? 'Pinned in .env on this machine — remove that line for this to be editable here.'
-    : 'Jarvis enters nothing dated before this. Click to move it.';
-  return `<span class="chip ${unset ? 'warn' : ''} ${pinned ? '' : 'act'}" ${pinned ? '' : `data-cut="${which}"`} title="${tip}">${which} ≥ ${date || 'not set'}${pinned ? ' (.env)' : ''}</span>`;
+  const st = STATE.status && STATE.status.cutover || {};
+  const rolling = which === 'bills' ? st.billsRolling : st.invoicesRolling;
+  const tip = unset ? `No period locked — ${which} from any date in 2026 can be entered, and each row is judged on evidence (already in QuickBooks? cost already on a cheque?). This is the normal state. Click to lock a closed period.`
+    : rolling ? `Set to "today" (${date}), and it moves every day — so NOTHING back-dated can ever be entered, including last week\'s ${which}. Click to change it.`
+    : pinned ? `Locked before ${date} by .env on this machine — remove that line for this to be editable here.`
+    : `Locked: nothing dated before ${date} is entered. Click to move it, or set "none" to unlock.`;
+  const label = unset ? `${which}: no lock` : rolling ? `${which} locked ≥ today` : `${which} locked < ${date}`;
+  return `<span class="chip ${rolling ? 'warn' : unset ? 'good' : ''} ${pinned ? '' : 'act'}" ${pinned ? '' : `data-cut="${which}"`} title="${tip}">${label}${pinned ? ' (.env)' : ''}</span>`;
 }
 async function moveCutover(which) {
   if (!STATE.unlocked) return toast('Open the padlock first.', 'bad');
   const now = (STATE.status && STATE.status.cutover && STATE.status.cutover[which]) || '';
-  const next = await askText(`Enter nothing dated before this ${which === 'bills' ? 'bill' : 'invoice'} date`,
-    'Everything on or after it that is not in QuickBooks yet goes in on the next nightly run. Anything older is left to you — your books already hold that period, or the cost went straight to Cost of Goods Sold with no bill.',
-    'Date (YYYY-MM-DD)', now, 'Move it');
+  const next = await askText(`Lock the ${which === 'bills' ? 'bill' : 'invoice'} period before a date`,
+    'Leave this at “none” unless you have genuinely closed a period — 2026 is open by default and every row is already checked against QuickBooks and against the cheques, which is the real protection. Nothing dated after today is ever entered, whatever you put here. Typing “today” locks everything back-dated out, including last week.',
+    'Date (YYYY-MM-DD), “today”, or “none”', now, 'Save');
   if (!next || next === now) return;
   try {
     const out = await api('/api/qb/cutover', { [which]: next });
@@ -887,12 +893,141 @@ async function runNow() {
   toast(live ? 'Running — entering what it finds…' : 'Running — checking only…');
   try {
     const out = await api('/api/qb/run', { dryRun: !live });
-    $('answer').textContent = out.report || out.error || '';
-    $('answer').style.display = 'block';
+    renderRun(out);
     const s = out.summary || {};
     toast(`${out.dryRun ? 'Checked' : 'Entered'} ${s.made || 0}${s.blocked ? `, ${s.blocked} stuck` : ''}${s.asked ? `, ${s.asked} need you` : ''}${s.left ? `, ${s.left} older than the cutover` : ''}`, s.blocked || s.errored ? 'bad' : 'good');
     await loadStatus();
   } catch (e) { toast(e.message, 'bad'); }
+}
+
+/* ── WHAT THE RUN FOUND ───────────────────────────────────────────────
+   Apsara, 2026-10-02, with a screenshot: "on clicking run now in qb,its
+   coming like this ugly".
+
+   It was. The result went to $('answer') as textContent — and `.answer` is
+   the ASK JARVIS box: 13px, max-height 132px, and no white-space rule. The
+   string it was given is the NIGHTLY EMAIL BODY, which separates everything
+   with newlines. HTML collapses newlines, so forty stuck containers arrived
+   as one unbroken grey paragraph inside a box four lines tall, and the only
+   way to read any of it was to drag-select — which is exactly what her
+   screenshot shows her having done.
+
+   Three things were wrong and only one of them was cosmetic:
+     · an email body is not a UI. It is written to survive a mail client,
+       which is why it repeats the cutover explanation every single run.
+     · the Ask box is the wrong home. It is sized for one answer to one
+       question and it is where she looks for a REPLY, not a report.
+     · the page already draws this exact shape well. "What needs you" lists
+       stuck rows as a table with the reason in its own column, and she has
+       never once complained about that panel.
+
+   So the run result goes where it belongs — the detail pane, in the same
+   section/table idiom — and the Ask box is left to answer questions.
+   reportText() on the server is untouched: the nightly email wants to stay
+   plain text, and scheduler.js prints it too. */
+function renderRun(out) {
+  // The Ask box must not keep yesterday's answer underneath a fresh run —
+  // two unrelated results stacked in one view is how a stale line gets read
+  // as part of this morning's.
+  $('answer').style.display = 'none';
+  STATE.sel = null; renderList();
+
+  if (out.error) {
+    $('dname').textContent = 'The run could not finish';
+    $('dmap').textContent = 'Nothing further was written.';
+    $('dstats').innerHTML = ''; $('dtabs').innerHTML = '';
+    $('dbody').innerHTML = `<div class="empty" style="padding:14px">${esc(out.error)}</div>`;
+    return;
+  }
+
+  const s = out.summary || {};
+  const dry = out.dryRun;
+
+  $('dname').textContent = dry ? 'Checked — nothing was written' : 'Entered in QuickBooks';
+  $('dmap').textContent = dry
+    ? 'A dry run. This is what WOULD have happened; your books are untouched.'
+    : `Live run against ${out.env || 'QuickBooks'}. Click any line to open that name.`;
+
+  /* The four numbers, as the page's own stat blocks rather than a sentence.
+     "stuck" is the one she acts on, so it is not buried in a paragraph. */
+  /* .stat / .k / .v with the page's own tone classes — good, warn, bad.
+     Not hand-rolled colours: the P&L block above uses exactly this and a
+     second private style for the same idea is how a palette drifts. */
+  const stat = (label, v, tone) => !v ? '' :
+    `<div class="stat"><div class="k">${label}</div><div class="v ${tone || ''}">${v}</div></div>`;
+  $('dstats').innerHTML =
+      (stat(dry ? 'would enter' : 'entered', s.made || 0, 'good')
+    + stat('stuck', s.blocked || 0, 'bad')
+    + stat('need you', s.asked || 0, 'warn')
+    + stat('older than cutover', s.left || 0, '')
+    + stat('errored', s.errored || 0, 'bad'))
+    || '<div class="sub">Nothing to do — everything was already in QuickBooks.</div>';
+  $('dtabs').innerHTML = '';
+
+  const sec = [];
+
+  /* ── STUCK ───────────────────────────────────────────────────────────
+     Same columns as "what needs you", because it is the same information
+     and she should not have to learn two layouts for one fact. */
+  if ((out.blocked || []).length) {
+    sec.push(`<h3 class="sec">Stuck — Jarvis would not enter these <span class="count">${out.blocked.length}</span></h3>
+      <table><tbody>${out.blocked.slice(0, 40).map(b => `<tr class="click" data-open="${b.kind === 'invoice' ? 'customer' : 'vendor'}|${encodeURIComponent(b.who || '')}">
+        <td class="mono">${esc(b.kind)}</td><td>${esc(b.who) || '—'}</td>
+        <td class="mono">${esc(b.what)}</td><td>${esc(b.why)}</td></tr>`).join('')}</tbody></table>`
+      + (out.blocked.length > 40 ? `<div class="sub" style="padding:6px 2px">…and ${out.blocked.length - 40} more. The full list is on "what needs you".</div>` : ''));
+  } else if (s.blocked) {
+    /* HONEST ABOUT THE GAP. run() only reads the journal for per-row reasons
+       on a LIVE run, so a dry run knows the count and not the why. Saying so
+       beats drawing an empty table under a heading that promises rows. */
+    sec.push(`<h3 class="sec">Stuck <span class="count">${s.blocked}</span></h3>
+      <div class="sub" style="padding:6px 2px">A dry run counts these but does not record why each one stopped.
+      Open "what needs you" for the reasons, or run it live.</div>`);
+  }
+
+  if ((out.asked || []).length) {
+    sec.push(`<h3 class="sec">Needs you — the same money may already be there <span class="count">${out.asked.length}</span></h3>
+      <table><tbody>${out.asked.slice(0, 40).map(a => `<tr class="click" data-open="${a.kind === 'invoice' ? 'customer' : 'vendor'}|${encodeURIComponent(a.who || '')}">
+        <td class="mono">${esc(a.kind)}</td><td>${esc(a.who) || '—'}</td>
+        <td class="mono">${esc(a.what)}</td><td>${esc(a.why)}</td></tr>`).join('')}</tbody></table>`);
+  }
+
+  /* ── WHAT THE CUTOVER WALKED PAST ────────────────────────────────────
+     Kept, and kept visible. A run that skipped everything used to read
+     exactly like a quiet night — that is how days of sheet-sync rows went
+     unnoticed, and the email grew this section for that reason. */
+  const la = out.leftAlone;
+  if (la && s.left) {
+    const byKind = ['bill', 'sale', 'billpayment', 'receipt'].filter(k => la[k])
+      .map(k => `${la[k]} ${k}${la[k] === 1 ? '' : 's'}`).join(', ');
+    const why = Object.entries(la.why || {}).map(([w, n]) => `<tr><td class="mono r">${n}</td><td>${esc(w)}</td></tr>`).join('');
+    sec.push(`<h3 class="sec">Older than the cutover — left alone <span class="count">${s.left}</span></h3>
+      <div class="sub" style="padding:4px 2px 8px">${byKind}${la.from ? `, dated ${esc(la.from)}${la.to && la.to !== la.from ? ` to ${esc(la.to)}` : ''}` : ''}.
+      Deliberate — your books already hold that period. Move the boundary with the date chips above.</div>
+      ${why ? `<table><tbody>${why}</tbody></table>` : ''}`);
+  }
+
+  /* The per-kind counts last: useful, but never the thing she needs first. */
+  const kindRows = Object.entries(out.kinds || {})
+    .filter(([k, v]) => k !== 'leftAlone' && v && typeof v === 'object' && Object.keys(v).length)
+    .map(([k, v]) => `<tr><td class="mono"><b>${esc(k)}</b></td><td>${Object.entries(v)
+      .map(([st, n]) => `${esc(st)} ${n}`).join(' · ')}</td></tr>`).join('');
+  if (kindRows) sec.push(`<h3 class="sec">By record type</h3><table><tbody>${kindRows}</tbody></table>`);
+
+  $('dbody').innerHTML = sec.length ? sec.join('')
+    : `<div class="empty" style="padding:14px">${dry ? 'Nothing would have been entered' : 'Nothing needed entering'} — everything is already in QuickBooks.</div>`;
+
+  $('dbody').querySelectorAll('tr.click').forEach(tr => {
+    const [kind, name] = (tr.dataset.open || '').split('|');
+    if (name) tr.onclick = () => openParty(kind, decodeURIComponent(name));
+  });
+}
+
+/* A reason string comes from QuickBooks and from her own data — a supplier
+   named with an "&" is ordinary here, and it was being written into innerHTML
+   raw. Escaped at the point of use. */
+function esc(v) {
+  return String(v == null ? '' : v).replace(/[&<>"]/g, c =>
+    ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 }
 
 /* ── the party list ─────────────────────────────────────────────────── */

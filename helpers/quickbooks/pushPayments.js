@@ -163,7 +163,10 @@ async function pushPrepayment(p, snapshots, { env = auth.qbEnv(), dryRun = true,
     const opts = { env, fetchImpl };
     const jarvis = { id: p.id, supplier: p.supplier, date: p.date, amount: p.amount, mode: p.mode, bank: p.bank, kind: p.kind };
     const cut = push.beforeCutover('bill', p.date, env);
-    if (cut) return { status: push.UNREADABLE.test(cut) ? 'blocked' : 'before-cutover', problems: [cut] };
+    if (cut) {
+        if (push.NEEDS_FIX.test(cut) && !dryRun) require('./journal').record({ env, kind: 'prepayment', action: 'blocked', jarvis, qb: {}, reason: cut });
+        return { status: push.NEEDS_FIX.test(cut) ? 'blocked' : 'before-cutover', problems: [cut] };
+    }
     const key = push.linkKey(env, 'prepayment', p.id);
     if (push.loadLinks()[key]) return { status: 'already-linked', qbId: push.loadLinks()[key].qbId };
     const problems = [];
@@ -203,7 +206,10 @@ async function pushBillPayment(p, snapshots, { env = auth.qbEnv(), dryRun = true
     const opts = { env, fetchImpl };
     const jarvis = { id: p.id, supplier: p.supplier, date: p.date, amount: p.amount, mode: p.mode, bank: p.bank, kind: p.kind, allocations: p.allocations };
     const cut = push.beforeCutover('bill', p.date, env);
-    if (cut) return { status: push.UNREADABLE.test(cut) ? 'blocked' : 'before-cutover', problems: [cut] };
+    if (cut) {
+        if (push.NEEDS_FIX.test(cut) && !dryRun) require('./journal').record({ env, kind: 'billpayment', action: 'blocked', jarvis, qb: {}, reason: cut });
+        return { status: push.NEEDS_FIX.test(cut) ? 'blocked' : 'before-cutover', problems: [cut] };
+    }
     const key = push.linkKey(env, 'billpayment', p.id);
     if (push.loadLinks()[key]) return { status: 'already-linked', qbId: push.loadLinks()[key].qbId };
     const problems = [];
@@ -233,7 +239,10 @@ async function pushCustomerPayment(r, snapshots, { env = auth.qbEnv(), dryRun = 
     const opts = { env, fetchImpl };
     const jarvis = { id: r.id, customer: r.customer, date: r.date, amount: r.amount, mode: r.mode, bank: r.bank, allocations: r.allocations };
     const cut = push.beforeCutover('invoice', r.date, env);
-    if (cut) return { status: push.UNREADABLE.test(cut) ? 'blocked' : 'before-cutover', problems: [cut] };
+    if (cut) {
+        if (push.NEEDS_FIX.test(cut) && !dryRun) require('./journal').record({ env, kind: 'payment', action: 'blocked', jarvis, qb: {}, reason: cut });
+        return { status: push.NEEDS_FIX.test(cut) ? 'blocked' : 'before-cutover', problems: [cut] };
+    }
     const key = push.linkKey(env, 'payment', r.id);
     if (push.loadLinks()[key]) return { status: 'already-linked', qbId: push.loadLinks()[key].qbId };
     const problems = [];

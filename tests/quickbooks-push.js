@@ -35,6 +35,7 @@ ck('no price/amount blocks', buildBill(B.withTotals({ ...real, supplier_price: n
 ck('trucking without a Trucking account blocks', buildBill(real, { ...refs, truckingAccountId: null }).problems.some((p) => /Trucking/.test(p)));
 
 const { beforeCutover } = require('../helpers/quickbooks/push');
+const P0 = require('../helpers/quickbooks/push');
 // The saved cutover (data/qb-cutover.json) now outranks .env, so these tests
 // point it somewhere empty — otherwise what she last chose on the page would
 // decide whether they pass.
@@ -62,7 +63,27 @@ ck('isoDate normalises typed dates', require('../helpers/quickbooks/push').isoDa
 ck('invoice on 28 Aug allowed, 27 Aug refused', beforeCutover('invoice', '2026-08-28', 'production') === null && beforeCutover('invoice', '2026-08-27', 'production') !== null);
 process.env.QB_CUTOVER_BILLS = 'soon';
 ck('a malformed lock date is treated as no lock, not as a refusal of everything',
-   beforeCutover('bill', '2026-12-01', 'production') === null);
+   beforeCutover('bill', '2026-09-30', 'production') === null);
+// ── THE ROLLING BOUNDARY (Apsara, 2026-10-02: "everyday that cut over should
+// be toay") ──────────────────────────────────────────────────────────────────
+// Read as a lock, "today" refuses every back-dated row — last week's bills
+// included. So the boundary that is always today is the HORIZON instead: a
+// document dated after today is a typo, and no setting can get it wrong.
+const TODAY = P0.todayISO();
+const plus = (n) => new Date(Date.parse(TODAY + 'T12:00:00Z') + n * 864e5).toISOString().slice(0, 10);
+ck('today\'s own date is readable and is a plain ISO day', /^\d{4}-\d{2}-\d{2}$/.test(TODAY), TODAY);
+ck('a row dated today is entered', beforeCutover('bill', TODAY, 'production') === null);
+ck('a row dated tomorrow is refused — that is a typo, not a document',
+   /is in the future/.test(beforeCutover('bill', plus(1), 'production') || ''));
+ck('...and so is one dated next year', /is in the future/.test(beforeCutover('invoice', plus(365), 'production') || ''));
+ck('...and the refusal names today, so the message cannot go stale',
+   (beforeCutover('bill', plus(1), 'production') || '').includes(TODAY));
+ck('a row dated yesterday is still entered — the horizon only looks forward',
+   beforeCutover('bill', plus(-1), 'production') === null);
+ck('a future date is a row to FIX, not a period to respect', P0.NEEDS_FIX.test(beforeCutover('bill', plus(1), 'production')) === true);
+ck('...which is the same bucket as an unreadable one', P0.NEEDS_FIX.test(beforeCutover('bill', 'last Tuesday', 'production')) === true);
+ck('...and a locked period is NOT in that bucket (it is left alone, not fixed)',
+   P0.NEEDS_FIX.test('bill dated 2026-01-01 is before the locked period (2026-09-06)') === false);
 if (saved[0] === undefined) delete process.env.QB_CUTOVER_BILLS; else process.env.QB_CUTOVER_BILLS = saved[0];
 if (saved[1] === undefined) delete process.env.QB_CUTOVER_INVOICES; else process.env.QB_CUTOVER_INVOICES = saved[1];
 const { docNumberFor } = require('../helpers/quickbooks/push');
@@ -103,9 +124,27 @@ ck('a saved cutover outranks .env — no SSH to move the boundary',
 ck('...the invoice side moves too', P.cutoverFor('invoice', 'production') === '2026-08-28' && P.cutoverSource('invoice') === 'setting');
 ck('...and who moved it, and when, is kept', (P.cutoverStore().history || [])[0].by === 'test' && !!(P.cutoverStore().history || [])[0].at);
 let junk = null;
-try { P.saveCutover({ bills: 'today' }); } catch (e) { junk = e.message; }
+try { P.saveCutover({ bills: 'next Tuesday' }); } catch (e) { junk = e.message; }
 ck('a junk date is refused with a readable reason', /date like 2026-09-06/.test(junk || ''), junk);
 ck('...and the boundary it would have replaced still stands', P.cutoverFor('bill', 'production') === '2026-09-06');
+// "everyday that cut over should be toay": the word is stored as the word, so
+// it means the new day tomorrow instead of the day it was typed.
+P.saveCutover({ bills: 'today' }, 'test');
+ck('"today" is accepted as a lock value', P.cutoverFor('bill', 'production') === P.todayISO());
+ck('...and is stored as the WORD, so it moves with the day', P.cutoverStore().bills === 'today');
+ck('...and the page can tell that it is rolling, not a pinned date', P.cutoverIsRolling('bill') === true);
+ck('...a rolling lock does refuse yesterday — which is why the doctor shouts about it',
+   /locked period/.test(beforeCutover('bill', plus(-1), 'production') || ''));
+P.saveCutover({ bills: 'none' }, 'test');
+ck('"none" unlocks from the page — no lock is the normal state now',
+   P.cutoverFor('bill', 'production') === null, P.cutoverSource('bill'));
+ck('...and it BEATS .env, so the click is not silently undone by QB_CUTOVER_BILLS',
+   process.env.QB_CUTOVER_BILLS === '2026-09-24' && P.cutoverSource('bill') === 'unlocked');
+ck('...and the decision is on the record like any other move',
+   (P.cutoverStore().history || [])[0].bills === 'none');
+ck('...and a 2026 row then goes in on evidence alone', beforeCutover('bill', '2026-02-14', 'production') === null);
+P.saveCutover({ bills: '2026-09-06' }, 'test');
+ck('...and a real date can be put back', P.cutoverFor('bill', 'production') === '2026-09-06' && P.cutoverIsRolling('bill') === false);
 P.setCutover({ bills: '2026-01-01', invoices: '2026-01-01' });
 ck('a reviewed list can lift it for that run only', P.cutoverFor('bill', 'production') === '2026-01-01' && P.cutoverSource('bill') === 'override');
 P.clearCutover();

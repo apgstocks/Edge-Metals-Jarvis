@@ -101,11 +101,18 @@ function reportText(out) {
         for (const [why, n] of Object.entries(la.why || {})) lines.push(`  ${n} — ${why}`);
     }
     const cut = { bills: push.cutoverFor('bill', out.env), invoices: push.cutoverFor('invoice', out.env) };
-    const src = (k) => { const w = push.cutoverSource(k); return w === 'env' ? ' (pinned in .env)' : w === 'setting' ? '' : ' (NOT SET — nothing will be entered)'; };
-    lines.push('', `Cutover — bills from ${cut.bills || '(not set)'}${src('bill')}, invoices from ${cut.invoices || '(not set)'}${src('invoice')}.`,
-        'Anything older is deliberately left alone: her books already hold that period, or the cost went',
-        'straight to Cost of Goods Sold with no bill. Move the boundary on the QuickBooks page, or push a',
-        'reviewed list explicitly with scripts/qb-push-list.js.',
+    const src = (k) => {
+        const w = push.cutoverSource(k);
+        return w === 'env' ? ' (pinned in .env)' : w === 'override' ? ' (lifted for one run)'
+            : push.cutoverIsRolling(k) ? ' — set to "today", so it MOVES EVERY DAY and nothing back-dated can get in' : '';
+    };
+    const lock = (k, label) => cut[k === 'bill' ? 'bills' : 'invoices']
+        ? `${label} locked before ${cut[k === 'bill' ? 'bills' : 'invoices']}${src(k)}`
+        : `${label} open — no period locked`;
+    lines.push('', `Period lock — ${lock('bill', 'bills')}, ${lock('invoice', 'invoices')}. Nothing dated after ${push.todayISO()} is entered.`,
+        'With no lock, every 2026 row is fair game and each one is judged on evidence instead: already in',
+        'QuickBooks? cost already sitting on a cheque with no bill behind it? Lock a period on the',
+        'QuickBooks page only once you have genuinely closed it.',
         '', 'Open the QuickBooks page in Jarvis to fix a stuck row or undo anything here.');
     return lines.join('\n');
 }

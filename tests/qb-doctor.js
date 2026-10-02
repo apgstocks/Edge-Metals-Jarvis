@@ -22,8 +22,15 @@ ck('it checks the three nightly jobs exist', /15 23/.test(src) && /0 0 /.test(sr
 ck('it proves it can read her books, rather than assuming', /companyInfo/.test(src));
 ck('it exits non-zero when something is wrong, so a deploy script can stop',
    /process\.exit\(problems\.length \? 1 : 0\)/.test(src));
-ck('a missing cutover is called out as "nothing will be entered"', /nothing will be entered/.test(src));
+// 2026-10-02: unset is now the HEALTHY state — it used to mean "nothing will be
+// entered". What is worth a warning is the opposite: a lock, and above all a
+// rolling one, which blocks every back-dated row.
+ck('no lock is reported as the normal state, not as a fault', /this is the normal state/.test(src));
+ck('a rolling lock is called out for what it costs', /nothing back-dated can ever be entered/.test(src));
+ck('...and the doctor fails on one, because she almost certainly did not mean it', /say\(!rolling/.test(src));
 ck('an unmapped role is called out as a write that will block', /a write that needs it will block/.test(src));
+ck('it counts rows dated ahead of today, because those are newly refused',
+   /dated after today/.test(src) && /now REFUSED as typos/.test(src));
 
 ck('it reports what the boundary is HOLDING BACK, not just the date',
    /what the boundary holds back/.test(src), 'a cutover that is set is not a cutover that is right');

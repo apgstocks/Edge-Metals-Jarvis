@@ -266,6 +266,8 @@ function mount(app, cfg) {
             autoSync: String(process.env.QB_SYNC || 'off').toLowerCase() === 'on',
             cutover: { bills: push.cutoverFor('bill', env), invoices: push.cutoverFor('invoice', env),
                 billsFrom: push.cutoverSource('bill'), invoicesFrom: push.cutoverSource('invoice'),
+                billsRolling: push.cutoverIsRolling('bill'), invoicesRolling: push.cutoverIsRolling('invoice'),
+                today: push.todayISO(),
                 history: (push.cutoverStore().history || []).slice(0, 5) },
             nightly: { at: '00:00 Los Angeles', writes: require('../quickbooksNightly').enabled() },
             connected: auth.status(env).connected,
@@ -377,21 +379,23 @@ function mount(app, cfg) {
 
     // ── the cutover ────────────────────────────────────────────────────────
     // Apsara, 2026-09-26: "I want nightly report to run everyday to upload all
-    // the bills and invoices." The nightly run only ever touches rows dated on
-    // or after this boundary, so the boundary is the setting that decides what
-    // "all" means — and it belongs here, not in an SSH session. .env wins
-    // where it is set, and this says so rather than pretending to have saved.
+    // the bills and invoices." This is now a PERIOD LOCK, not a date rule: it
+    // is normally unset, and unset means 2026 is open. It takes a date, the
+    // word "today" (which then moves every day — and so blocks everything
+    // back-dated, which the page says out loud), or "none" to unlock.
     app.post('/api/qb/cutover', async (req, res) => {
         if (locked(req, res)) return;
         const { bills, invoices } = req.body || {};
-        if (!bills && !invoices) return res.status(400).json({ error: 'give a bills date, an invoices date, or both' });
+        if (!bills && !invoices) return res.status(400).json({ error: 'give a bills date, an invoices date, or both — or "none" to unlock' });
         try {
             const { changed } = push.saveCutover({ bills, invoices }, who(req));
             const env = envOf();
             const pinned = ['bill', 'invoice'].filter((k) => push.cutoverSource(k) === 'env');
             res.json({ ok: true, changed,
                 cutover: { bills: push.cutoverFor('bill', env), invoices: push.cutoverFor('invoice', env),
-                    billsFrom: push.cutoverSource('bill'), invoicesFrom: push.cutoverSource('invoice') },
+                    billsFrom: push.cutoverSource('bill'), invoicesFrom: push.cutoverSource('invoice'),
+                    billsRolling: push.cutoverIsRolling('bill'), invoicesRolling: push.cutoverIsRolling('invoice'),
+                    today: push.todayISO() },
                 note: pinned.length
                     ? `saved, but ${pinned.map((k) => k === 'bill' ? 'QB_CUTOVER_BILLS' : 'QB_CUTOVER_INVOICES').join(' and ')} in .env still wins — remove that line and restart for this to take effect`
                     : 'saved — the next run uses it, no restart needed' });
@@ -407,8 +411,32 @@ function mount(app, cfg) {
         const dryRun = (req.body || {}).dryRun !== false || !job.enabled();
         try {
             const out = await job.run({ dryRun });
-            res.json({ ok: out.ok, dryRun: out.dryRun, error: out.error,
-                summary: job.summarise(out.result || {}), report: job.reportText(out) });
+            // ── report IS AN EMAIL BODY; THE PAGE NEEDS THE PIECES ────────
+            // Apsara, 2026-10-02, with a screenshot of the run result: "on
+            // clicking run now in qb,its coming like this ugly".
+            //
+            // She was right, and it was not her browser. `report` is built by
+            // reportText() for the NIGHTLY EMAIL — plain text, newline
+            // separated — and the page was dropping it into a 132px box with
+            // textContent and no white-space rule, so every newline collapsed
+            // and forty stuck containers arrived as one grey paragraph.
+            //
+            // reportText is deliberately NOT changed: the nightly email is
+            // the right shape already and scheduler.js prints it too. The
+            // page gets the same facts as DATA and draws them itself, in the
+            // table idiom the "what needs you" panel already uses — which is
+            // the panel she has never complained about.
+            //
+            // Additive. `report` still goes out exactly as before, so a
+            // caller reading only that is untouched.
+            res.json({ ok: out.ok, dryRun: out.dryRun, error: out.error, env: out.env,
+                summary: job.summarise(out.result || {}), report: job.reportText(out),
+                kinds: out.result || {},
+                // NOTE: run() only reads the journal for these when the run
+                // was live — a dry run genuinely has no per-row reasons, and
+                // the page says so rather than drawing an empty table.
+                blocked: out.blocked || [], asked: out.asked || [],
+                leftAlone: (out.result || {}).leftAlone || null });
         } catch (e) { res.status(500).json({ error: e.message }); }
     });
 

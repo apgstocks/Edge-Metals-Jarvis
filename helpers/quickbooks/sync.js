@@ -193,11 +193,12 @@ async function sweep({ env = auth.qbEnv(), dryRun = false, limit = 200 } = {}) {
         const why = String(reason || '').replace(/\(\d{4}-\d{2}-\d{2}\)/, '').trim();
         left.why[why] = (left.why[why] || 0) + 1;
     };
-    // keep a row if it is after the cutover OR its date can't be read — the
-    // push functions then report it as blocked instead of it vanishing.
+    // keep a row if the boundary allows it OR its date is simply wrong (can't
+    // be read, or in the future) — the push functions then report it as blocked
+    // instead of it vanishing. Only a real period lock takes a row out.
     const since = (k, kind, d) => {
         const c = push.beforeCutover(kind, d, env);
-        if (!c || push.UNREADABLE.test(c)) return true;
+        if (!c || push.NEEDS_FIX.test(c)) return true;
         noteLeft(k, kind, d, c);
         return false;
     };

@@ -9,6 +9,8 @@
 //
 //   node scripts/qb-cutover.js
 //   node scripts/qb-cutover.js --bills=2026-09-06 --invoices=2026-08-28
+//   node scripts/qb-cutover.js --bills=none --invoices=none     (no lock)
+//   node scripts/qb-cutover.js --bills=today                    (rolling)
 //
 // The saved date outranks .env and takes effect on the next run — no restart.
 // Anything OLDER than the boundary is deliberately left to her: her books
@@ -27,8 +29,11 @@ const show = (label) => {
     const where = from === 'setting' ? 'saved setting (the page can move it)'
         : from === 'env' ? 'from .env — the saved setting is empty'
         : from === 'override' ? 'lifted for this process only'
-        : 'NOT SET — nothing will be entered in production';
-    console.log(`  ${label.padEnd(9)} ${String(push.cutoverFor(kind, env) || '—').padEnd(12)} ${where}`);
+        : from === 'unlocked' ? 'unlocked on purpose from the page (this beats .env)'
+        : 'no lock — 2026 is open and evidence decides. This is the normal state.';
+    const d = push.cutoverFor(kind, env);
+    const roll = push.cutoverIsRolling(kind) ? '  <- "today", MOVES EVERY DAY: nothing back-dated gets in' : '';
+    console.log(`  ${label.padEnd(9)} ${String(d || '—').padEnd(12)} ${where}${roll}`);
 };
 
 const bills = arg('bills'), invoices = arg('invoices');
@@ -36,7 +41,7 @@ if (bills || invoices) {
     const { changed } = push.saveCutover({ bills, invoices }, 'qb-cutover.js');
     console.log(Object.keys(changed).length ? `Moved: ${JSON.stringify(changed)}` : 'Nothing changed — those were already the dates.');
 }
-console.log(`QuickBooks cutover (${env}) — Jarvis enters nothing dated before these:`);
+console.log(`QuickBooks period lock (${env}) — normally none; nothing dated after ${push.todayISO()} is ever entered:`);
 show('bills'); show('invoices');
 const hist = (push.cutoverStore().history || []).slice(0, 3);
 if (hist.length) { console.log('Last moves:'); for (const h of hist) console.log(`  ${h.at} by ${h.by} — ${JSON.stringify({ ...h, at: undefined, by: undefined })}`); }

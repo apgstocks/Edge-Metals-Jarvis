@@ -101,7 +101,11 @@ async function pushInvoice(rows, snapshots, { env = auth.qbEnv(), dryRun = true,
     const opts = { env, fetchImpl };
     const first = rows[0] || {};
     const cut = push.beforeCutover('invoice', first.date, env);
-    if (cut) return { status: push.UNREADABLE.test(cut) ? 'blocked' : 'before-cutover', problems: [cut] };
+    if (cut) {
+        if (push.NEEDS_FIX.test(cut) && !dryRun) require('./journal').record({ env, kind: 'invoice', action: 'blocked',
+            jarvis: { ids: rows.map((x) => x.id), container: first.container_no, invoice_no: push.docNumberFor(first), customer: first.customer, date: first.date }, qb: {}, reason: cut });
+        return { status: push.NEEDS_FIX.test(cut) ? 'blocked' : 'before-cutover', problems: [cut] };
+    }
     const key = push.linkKey(env, 'invoice', push.docNumberFor(first) || first.container_no);
     const linked = push.loadLinks()[key];
     if (linked) return { status: 'already-linked', qbId: linked.qbId };
