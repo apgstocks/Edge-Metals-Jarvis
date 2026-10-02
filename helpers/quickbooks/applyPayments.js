@@ -49,6 +49,41 @@ async function pull(table, where, opts, cap = 4000) {
 const appliedOn = (p) => r2((p.Line || []).reduce((s, l) => s + ((l.LinkedTxn || []).length ? Number(l.Amount || 0) : 0), 0));
 const looseOn = (p) => r2(Number(p.TotalAmt || 0) - appliedOn(p));
 
+// ── THE MATCHING RULE, ON ITS OWN ─────────────────────────────────────────
+// Lifted out so it can be stress-tested without a network: this is the rule
+// that decides where her money is recorded as having gone, and it is the one
+// place a wrong answer is expensive. It mutates `left` on the bills it takes
+// from, so a caller spreading several payments over one list does not hand
+// the same balance out twice.
+//
+// Certainty is ranked, not averaged: a balance that equals the payment to the
+// cent is almost always the bill that was paid. Everything after that is
+// oldest-first, the way a payables clerk works a payment on account — and the
+// agent is only ever allowed to ACT on the first kind. The rest is a proposal
+// for a person.
+function choosePicks(amount, open) {
+    const picks = [];
+    let left = r2(amount);
+    const exact = open.find((b) => b.left > 0.005 && Math.abs(b.left - left) < 0.005);
+    if (exact) {
+        picks.push({ ...exact, take: exact.left, certain: true,
+            why: exact.left === exact.balance ? 'the open balance matches this payment to the cent'
+                : 'what is left open on this bill matches this payment to the cent' });
+        exact.left = 0;
+        return { picks, leftOver: 0 };
+    }
+    for (const b of open) {
+        if (left <= 0.005) break;
+        if (b.left <= 0.005) continue;
+        const take = r2(Math.min(b.left, left));
+        picks.push({ ...b, take, certain: false,
+            why: take === b.balance ? 'oldest bill still open — settles it' : 'oldest bill still open — part payment' });
+        b.left = r2(b.left - take);
+        left = r2(left - take);
+    }
+    return { picks, leftOver: r2(left) };
+}
+
 // ── THE PLAN ───────────────────────────────────────────────────────────────
 // Read-only. Every pairing it would make, with the reason it made it.
 async function plan({ vendor = null, vendorId = null, env = auth.qbEnv(), since = '2024-01-01', limit = 60 } = {}) {
@@ -86,28 +121,13 @@ async function plan({ vendor = null, vendorId = null, env = auth.qbEnv(), since 
         const open = openBy[vid] || [];
         let left = looseOn(p);
         out.totals.loose = r2(out.totals.loose + left);
-        const picks = [];
-
-        // 1. the bill whose balance IS this money
-        const exact = open.find((b) => b.left > 0 && Math.abs(b.left - left) < 0.005);
-        if (exact) { picks.push({ ...exact, take: exact.left,
-            why: exact.left === exact.balance ? 'the open balance matches this payment to the cent'
-                : 'what is left open on this bill matches this payment to the cent' });
-            exact.left = 0; left = 0; }
-
-        // 2. then oldest first
-        for (const b of open) {
-            if (left <= 0.005) break;
-            if (b.left <= 0.005) continue;
-            const take = r2(Math.min(b.left, left));
-            picks.push({ ...b, take, why: take === b.balance ? 'oldest bill still open — settles it' : 'oldest bill still open — part payment' });
-            b.left = r2(b.left - take);
-            left = r2(left - take);
-        }
+        const { picks, leftOver } = choosePicks(left, open);
+        left = leftOver;
 
         const row = { id: String(p.Id), date: p.TxnDate, vendor: (p.VendorRef || {}).name || '', vendorId: vid,
             total: r2(p.TotalAmt), alreadyApplied: appliedOn(p), loose: looseOn(p),
-            picks: picks.map((x) => ({ billId: x.id, doc: x.doc, date: x.date, total: x.total, balance: x.balance, take: x.take, why: x.why })),
+            picks: picks.map((x) => ({ billId: x.id, doc: x.doc, date: x.date, total: x.total, balance: x.balance, take: x.take, certain: !!x.certain, why: x.why })),
+            certain: picks.length === 1 && picks[0].certain,
             leftOver: r2(left) };
         if (!picks.length) out.unplaceable.push({ ...row, why: 'this supplier has no open bill to put it against — it may be a prepayment, or the bill is missing' });
         else {
@@ -170,4 +190,4 @@ async function apply(planned, { reason, env = auth.qbEnv(), by = 'apsara', reall
     return out;
 }
 
-module.exports = { plan, apply, looseOn, appliedOn };
+module.exports = { plan, apply, choosePicks, looseOn, appliedOn };
