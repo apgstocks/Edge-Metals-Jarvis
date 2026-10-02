@@ -6604,7 +6604,30 @@ async function doLogin() {
     IS_SUPER = data.super === true;
     await bootLoads();
   } catch (err) {
-    $('loginErr').textContent = err.message;
+    // ── SAY WHICH ADDRESS IT TRIED (2026-10-02) ───────────────────────────
+    // Apsara hit "failed to fetch" on the app while the website signed in
+    // fine. That message alone cost an hour of elimination: the server was
+    // up, CORS was correct, config.js was present and right, the preflight
+    // and the POST both verified by hand from a laptop. Every one of those
+    // checks was necessary ONLY because the app would not say where it had
+    // just tried to connect.
+    //
+    // API_BASE can come from three places — localStorage (what she last
+    // saved on this device, and it WINS), the bundled config.js, or the
+    // emulator fallback — and the one thing the error never mentioned was
+    // which. A stale stored address survives an APK upgrade, so the app can
+    // be pointed at a host that died weeks ago while config.js is perfect.
+    //
+    // "Failed to fetch" is the browser's word for "could not reach it at
+    // all": DNS, no route, dead host. So the address is the whole diagnosis,
+    // and the recovery is the press-and-hold box on this same screen.
+    const net = /failed to fetch|load failed|network ?request ?failed/i.test(String(err && err.message));
+    $('loginErr').innerHTML = net
+      ? `Couldn't reach the server at <b>${String(API_BASE).replace(/[<>&]/g, '')}</b>.`
+        + `<div style="font-size:11px; margin-top:6px; color:var(--text-faint); line-height:1.5;">`
+        + `That is where this app is pointed${storedApiBase() ? ' (saved on this device, which overrides the bundled address)' : ' (the address it shipped with)'}.`
+        + ` Press and hold the title above for 3 seconds to change it.</div>`
+      : String(err.message || 'Sign-in failed').replace(/[<>&]/g, '');
   } finally {
     btn.disabled = false; btn.textContent = 'Sign in';
   }
