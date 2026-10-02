@@ -1,3 +1,50 @@
+# RESOLVED 2026-10-03 — read this before doing any of the below
+
+The wifi problem that prompted this document **went away** after HTTP/3 was
+disabled in Caddy. Cloudflare was NOT needed, and Apsara declined it for a good
+reason: in Full (strict) mode Cloudflare decrypts the traffic, so supplier
+payments and bank details would pass through a third party in plaintext. The
+rest of this file is kept for the day the product outgrows one server — the
+DNS capture and the email warnings are still accurate and still useful.
+
+## What actually happened, as best we can tell
+
+Caddy advertises HTTP/3 by default, over **UDP** port 443:
+
+    alt-svc: h3=":443"; ma=2592000
+
+`ma=2592000` is **30 days**. Phones CACHE that advertisement. Many wifi
+networks allow TCP 443 and silently drop UDP 443, so the phone kept reaching
+for QUIC and failing, while mobile data (which carries UDP fine) worked.
+
+The part that cost hours: turning HTTP/3 off server-side stops Caddy
+ADVERTISING it, but does nothing about what phones have already stored. So the
+fix appeared not to work, HTTP/3 was wrongly ruled out, and five more theories
+followed — an expired certificate, a blocked IP, a bad DNS resolver, a
+TLS-intercepting proxy, and IP reputation. All six were checked and only this
+one survives.
+
+**Likely, not proven.** Several things changed that evening and it cannot be
+isolated after the fact. But it is the only explanation that fits the timing.
+
+## If a phone still cannot connect
+
+Its cached alt-svc entry is independent and may persist up to 30 days.
+Force-stop the app (Settings → Apps → Edge Trading → Force stop) or restart the
+phone. That clears it immediately.
+
+## The lesson worth keeping
+
+A server-side change does not take effect at the moment you make it when the
+client has cached the old behaviour. "I changed it and it did not help" is not
+evidence the change was wrong.
+
+And the reason this took hours rather than minutes: nothing reported from the
+failing devices. That gap is now closed — see helpers/clientErrors.js and the
+device line in the morning digest.
+
+---
+
 # Putting Jarvis behind Cloudflare — step by step
 
 Written 2026-10-02, the evening the Edge Yard app could not sign in on several
