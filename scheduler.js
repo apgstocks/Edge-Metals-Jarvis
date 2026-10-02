@@ -79,6 +79,22 @@ async function dailyTruckerCheck() {
 }
 
 // ── 8AM — morning digest ──────────────────────────────────────────────────────
+// ── DEVICES THAT COULD NOT REACH JARVIS ──────────────────────────────────
+// Apsara, 2026-10-02, after an outage nobody reported: "I cant afford
+// mistakes like this when i sell this to many customers."
+//
+// Returns null on a quiet night. A daily "no devices failed" is a line she
+// stops reading, and the morning it matters she stops reading that too.
+function deviceTroubleLine() {
+    try {
+        const ce = require('./helpers/clientErrors');
+        return ce.digestText(ce.summary({ hours: 24 }));
+    } catch (e) {
+        console.error('[DIGEST] could not read device reports:', e.message);
+        return null;
+    }
+}
+
 async function morningDigest() {
     const key = `daily_digest_${todayKey()}`;
     if (alreadySent(key)) return;
@@ -86,7 +102,21 @@ async function morningDigest() {
     const bookings = loadBookings();
     const workflow = loadWorkflow();
     const active   = Object.values(bookings);
-    if (!active.length) return;
+    if (!active.length) {
+        // ── A QUIET BOOKING DAY IS NOT A QUIET DAY ───────────────────────
+        // This used to return outright, which would have buried the device
+        // reports on exactly the kind of slow day when someone has time to
+        // notice they cannot sign in. The bookings digest still does not go
+        // out — there is nothing in it — but anything that could not reach
+        // Jarvis is still said.
+        const only = deviceTroubleLine();
+        if (only) {
+            await _sendToManager(only);
+            await markSent(key);
+            console.log('[SCHED] Morning digest: no bookings, device trouble reported');
+        }
+        return;
+    }
 
     const { laggingContainers, allContainersTerminal } = require('./helpers/containers');
 
@@ -121,6 +151,13 @@ async function morningDigest() {
         lines.push('', 'STUCK (48h+ no movement):');
         lines.push(...stuck.map(([bkgNo, wf]) => `- ${bkgNo} at ${stepLabel(wf.step)}`));
     }
+
+    // ── AND WHO COULD NOT GET IN ─────────────────────────────────────────
+    // Last, because it is rare — but FIRST among the things she can act on
+    // when it appears, because a staff member who cannot sign in has usually
+    // not told anyone. Silent on a normal morning.
+    const devices = deviceTroubleLine();
+    if (devices) lines.push('', devices);
 
     await _sendToManager(lines.join('\n'));
     await markSent(key);

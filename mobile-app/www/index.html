@@ -6476,6 +6476,55 @@ function wireAdminServerBox() {
   });
 }
 
+// ── A REPORT THAT SURVIVES NOT BEING ABLE TO SEND IT ─────────────────────
+// The whole difficulty of telling Apsara that a phone could not reach the
+// server is that the phone could not reach the server. There is nowhere to
+// send the report AT THE MOMENT it matters.
+//
+// So it is queued on the device and flushed on the next connection that
+// works — mobile data, a different wifi, tomorrow morning at the office. The
+// report carries its own timestamp, so arriving late costs nothing. This is
+// how crash reporters have always worked and it is the only shape that can
+// work here.
+//
+// Bounded at 20. A phone that has been offline for a week should send a
+// handful of examples, not a week of retries, and an unbounded queue in
+// localStorage eventually breaks the app it was meant to protect.
+var CLIENT_ERR_KEY = 'jarvis_client_errors';
+var CLIENT_ERR_MAX = 20;
+
+function queueClientError(entry) {
+    try {
+        var q = JSON.parse(localStorage.getItem(CLIENT_ERR_KEY) || '[]');
+        if (!Array.isArray(q)) q = [];
+        q.push(entry);
+        if (q.length > CLIENT_ERR_MAX) q = q.slice(q.length - CLIENT_ERR_MAX);
+        localStorage.setItem(CLIENT_ERR_KEY, JSON.stringify(q));
+    } catch (e) { /* a full or disabled localStorage must never break sign-in */ }
+}
+
+// Called after anything reaches the server successfully. Fire-and-forget on
+// purpose: this is diagnostics, and it must never delay or fail the thing the
+// person was actually doing.
+function flushClientErrors() {
+    var q;
+    try { q = JSON.parse(localStorage.getItem(CLIENT_ERR_KEY) || '[]'); }
+    catch (e) { return; }
+    if (!Array.isArray(q) || !q.length) return;
+    // Cleared BEFORE sending. If the send fails the reports are lost, and
+    // that is the right trade: keeping them would mean a device that can
+    // never deliver retries for ever, and the next failure re-queues anyway.
+    try { localStorage.removeItem(CLIENT_ERR_KEY); } catch (e) {}
+    q.forEach(function (entry) {
+        try {
+            fetch(API_BASE + '/api/client-errors', {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(entry), keepalive: true,
+            }).catch(function () {});
+        } catch (e) {}
+    });
+}
+
 // ── WHY COULD IT NOT REACH THE SERVER (2026-10-02) ───────────────────────
 // Apsara, after an outage that took two hours to pin down: "If app is failing
 // this, add a debug somewhere to know te exact reason".
@@ -6693,6 +6742,9 @@ async function doLogin() {
     setToken(data.sid);
     ROLE = data.role || 'user';
     IS_SUPER = data.super === true;
+    // The connection works right now, so anything this device could not
+    // report earlier goes up before we do anything else with the session.
+    try { flushClientErrors(); } catch (e) {}
     await bootLoads();
   } catch (err) {
     // ── SAY WHICH ADDRESS IT TRIED (2026-10-02) ───────────────────────────
@@ -6725,8 +6777,14 @@ async function doLogin() {
                 const lines = r.map((x) => '  ' + (x.ok ? 'OK  ' : 'FAIL') + '  ' + x.label
                     + '  ' + (x.ok ? (x.type === 'opaque' ? 'connected' : 'HTTP ' + x.status)
                                    : x.err) + '  (' + x.ms + 'ms)');
-                box.textContent = readDiagnosis(r) + '\n\n' + lines.join('\n')
-                    + '\n\n' + API_BASE;
+                const verdict = readDiagnosis(r);
+                box.textContent = verdict + '\n\n' + lines.join('\n') + '\n\n' + API_BASE;
+                // Queued for the next connection that works. She finds out
+                // from the device rather than from a staff member who assumed
+                // their phone was broken and said nothing.
+                queueClientError({ at: new Date().toISOString(), base: API_BASE,
+                    app_version: (window.APP_VERSION || ''), platform: navigator.userAgent,
+                    verdict: verdict, probes: r });
             }).catch((e) => { box.textContent = 'The check itself failed: ' + ((e && e.message) || e); });
         }
     }

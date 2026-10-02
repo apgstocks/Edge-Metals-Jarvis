@@ -420,6 +420,55 @@ function createApi() {
     // exposes no data, no counts, and nothing actionable to an attacker.
     const HEALTHZ_STALE_SCAN_MIN = 20;   // reply-watch cron is */5; four missed ticks
     const HEALTHZ_BOOT_GRACE_S = 900;    // don't call a fresh boot "stalled"
+    // ── THE PHONES REPORT WHAT THEY COULD NOT DO ─────────────────────────
+    // Apsara, 2026-10-02: "I cant afford mistakes like this when i sell this
+    // to many customers." Four hours went into guessing why some wifi
+    // networks would not let the app sign in, because nothing could tell us.
+    // This is how the next one takes minutes.
+    //
+    // ── UNAUTHENTICATED, AND THAT IS THE POINT ───────────────────────────
+    // A device reporting "I cannot reach the server" has not signed in — by
+    // definition. There is no token to present. So this is the only route in
+    // Jarvis a stranger can write to, and the limits below are doing the job
+    // authentication normally does:
+    //
+    //   16kb body      not the global 40mb. A report is a few hundred bytes;
+    //                  40mb from an open endpoint is a disk-filling tool.
+    //   30 per IP/hr   a phone retrying hard sends a handful. Thirty is
+    //                  generous for honesty and useless for flooding.
+    //   capped store   helpers/clientErrors trims to KEEP, oldest first, so
+    //                  this can never grow until the VM runs out of room.
+    //                  A diagnostic that causes an outage is worse than none.
+    //   whitelisted    clean() keeps six fields and discards the rest, so a
+    //                  later client change cannot start posting secrets that
+    //                  this would then faithfully write down.
+    //
+    // It always answers 204. Never an error, never a hint about what was
+    // rejected: an endpoint that tells an anonymous caller how its filter
+    // works is an endpoint being tuned against.
+    const clientErrHits = new Map();
+    app.post('/api/client-errors', express.json({ limit: '16kb' }), async (req, res) => {
+        res.status(204).end();
+        try {
+            const ip = String(req.headers['cf-connecting-ip']
+                || (req.headers['x-forwarded-for'] || '').split(',')[0]
+                || req.ip || '').trim().slice(0, 60);
+            const now = Date.now();
+            const hit = clientErrHits.get(ip);
+            if (!hit || now - hit.at > 3600000) clientErrHits.set(ip, { at: now, n: 1 });
+            else if (hit.n >= 30) return;
+            else hit.n += 1;
+            // Unbounded Maps are their own slow leak. Swept whenever it grows
+            // past a size no real fleet reaches.
+            if (clientErrHits.size > 500) {
+                for (const [k, v] of clientErrHits) if (now - v.at > 3600000) clientErrHits.delete(k);
+            }
+            await require('./helpers/clientErrors').record(req.body, { ip });
+        } catch (e) {
+            console.error('[CLIENT-ERR] could not record a device report:', e.message);
+        }
+    });
+
     app.get('/healthz', (req, res) => {
         const problems = [];
         let lastScanAt = null, staleMin = null;

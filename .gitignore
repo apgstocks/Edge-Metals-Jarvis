@@ -159,3 +159,4 @@ IMPORT-PREVIEW.md
 Claude outputs/
 mobile-app/android/app/build.gradle
 mobile-app/www/index.html
+client_errors.json
