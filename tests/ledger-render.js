@@ -1005,6 +1005,36 @@ section('G2 — the Pay form: one transfer, several containers');
     b3.value = '120'; fire(b3, 'input');
     ck('fully allocated turns the remainder green and unlocks Save',
        doc.getElementById('bpSave').disabled === false);
+
+    // ── SWITCHING TO ADVANCE MUST NOT CARRY ALLOCATIONS ACROSS ───────────
+    // Placed HERE, where this supplier actually has open containers — the
+    // first version of this check sat in the Eccomelt section, which has
+    // none, so `#bpRows input[data-bill]` was null, nothing was typed, and
+    // the check passed by measuring an empty form. It looked green and
+    // proved nothing.
+    //
+    // THE RISK: she ticks containers, changes her mind, picks Advance. If the
+    // boxes kept their numbers the post would mark those containers paid out
+    // of money she has just said is an advance — the money counted twice and
+    // the container reading settled when nothing was settled.
+    ck('  allocations are registered while Against-a-bill is chosen',
+       doc.getElementById('bpAllocated').textContent !== '$0.00',
+       doc.getElementById('bpAllocated').textContent);
+    kindBtn('advance').click();
+    ck('  switching to Advance clears every allocation',
+       doc.getElementById('bpAllocated').textContent === '$0.00',
+       'otherwise an advance posts with containers attached — '
+       + doc.getElementById('bpAllocated').textContent);
+    ck('    and the boxes themselves are empty, not just the total',
+       [...doc.querySelectorAll('#bpRows input[data-bill]')].every((i) => !i.value),
+       'a total of zero with numbers still in the boxes is one re-render away '
+       + 'from being sent');
+    // Back to Against-a-bill and re-allocate, so the rest of this section
+    // continues from the state it expects.
+    kindBtn('payment').click();
+    for (const b of ['B1', 'B2', 'B3']) pick(b);
+    const b3again = doc.querySelector('.bpAmt[data-bill="B3"]');
+    if (b3again) { b3again.value = '120'; fire(b3again, 'input'); }
     ck('  allocated reads back the full transfer',
        doc.getElementById('bpAllocated').textContent === '$7,000.00',
        doc.getElementById('bpAllocated').textContent);
@@ -1056,23 +1086,6 @@ section('G2 — the Pay form: one transfer, several containers');
        doc.getElementById('bpSave').disabled === false,
        'requiring full allocation would make an advance impossible to record — '
        + 'which is what the separate button existed to sidestep');
-    // ── SWITCHING MUST NOT CARRY ALLOCATIONS ACROSS ─────────────────────
-    // She ticks two containers, changes her mind, picks Advance. If the boxes
-    // kept their numbers the post would mark those containers paid out of
-    // money she has just said is an advance — money in two places at once,
-    // and the container reads as settled when nothing was settled.
-    k2('payment').click();
-    const firstRow = doc.querySelector('#bpRows input[data-bill]');
-    if (firstRow) { firstRow.value = '1200'; fire(firstRow, 'input'); }
-    ck('a typed allocation registers while Against-a-bill is chosen',
-       doc.getElementById('bpAllocated').textContent !== '$0.00',
-       doc.getElementById('bpAllocated').textContent);
-    k2('advance').click();
-    ck('switching to Advance clears what was allocated',
-       doc.getElementById('bpAllocated').textContent === '$0.00',
-       'otherwise an advance posts with containers attached — '
-       + doc.getElementById('bpAllocated').textContent);
-
     doc.getElementById('bpSave').click();
     await new Promise((r) => setTimeout(r, 30));
     ck('the advance posts against the supplier',

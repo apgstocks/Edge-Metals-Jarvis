@@ -152,3 +152,5 @@ IMPORT-PREVIEW.md
 
 # Scratch from assistant sessions — never part of the app.
 Claude outputs/
+mobile-app/android/app/build.gradle
+mobile-app/www/index.html

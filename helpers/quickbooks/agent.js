@@ -1,0 +1,211 @@
+// ── helpers/quickbooks/agent.js — QB Agent ─────────────────────────────────
+// Apsara, 2026-10-02: "an agent which handles qb completely … it is called
+// agent qb … auto resolves discrepancy … whose only job is to make qb
+// perfect."
+//
+// ── WHAT "PERFECT" MEANS, SO IT CAN BE MEASURED ───────────────────────────
+// Not "nothing open" — some bills are genuinely unpaid and that is correct
+// bookkeeping. Perfect is: every figure in QuickBooks is explainable and
+// agrees with something outside QuickBooks. That is a list of invariants,
+// each with a number that should be zero. The agent's whole job is driving
+// those numbers down and saying out loud which ones it may not touch.
+//
+// ── WHAT IT MAY DO ALONE ──────────────────────────────────────────────────
+// Only what is reversible AND certain: allocate a payment whose match is
+// unambiguous, enter a document it can PROVE is not already there, confirm a
+// name that is character-identical. Everything else is a question or a
+// proposal. It never voids, never deletes, never merges, never invents a
+// party, and never touches a document dated before 2026.
+//
+// ── THE EVIDENCE BOUNDARY (2026-10-02) ────────────────────────────────────
+// She asked for all of 2026, not just after the cutover. Taken literally that
+// means re-entering everything her accountant keyed by hand. So the date
+// boundary is replaced by an evidence one: the window is the whole year, and
+// nothing is entered until its absence is PROVED — by container within one
+// shipment cycle, by document number, by party+amount+date. And one case the
+// ordinary duplicate check cannot see: a container whose cost already went
+// straight to Cost of Goods Sold on a cheque has NO bill in QuickBooks, so
+// nothing is found and a new bill would double the cost. Those cheques are
+// read too.
+const books = require('./books');
+const applyPayments = require('./applyPayments');
+const journal = require('./journal');
+const push = require('./push');
+const auth = require('./auth');
+const client = require('./client');
+
+const r2 = (n) => Math.round(Number(n || 0) * 100) / 100;
+const KEY = (v) => String(v || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+
+// ── THE INVARIANTS ────────────────────────────────────────────────────────
+// Kept as data, in one place, so what the agent believes "correct" means can
+// be read in one sitting — and so a new one is a line here, not a change to
+// the loop. `who` is the honest part: most of these it cannot close alone.
+const INVARIANTS = [
+    { id: 'unallocated', title: 'Every payment sits on a document', unit: 'money',
+        who: 'agent', why: 'The money left the bank and QuickBooks knows it, but nothing says which bill it paid — so every bill reads open.' },
+    { id: 'duplicates', title: 'Every container bought once, sold once', unit: 'money',
+        who: 'her', why: 'Voiding cannot be undone, so the agent names them and she clears them.' },
+    { id: 'miscoded', title: 'Supplier money hits payables, not cost of goods', unit: 'money',
+        who: 'proposal', why: 'Re-coding moves money out of cost of goods sold, which changes reported profit for a period that may be filed.' },
+    { id: 'payableAccounts', title: 'One payables account, not two', unit: 'count',
+        who: 'proposal', why: 'QuickBooks refuses an account merge over the API, so the documents move instead and she retires the empty account.' },
+    { id: 'unmatched', title: 'Every name maps to exactly one record', unit: 'count',
+        who: 'agent', why: 'An exact name is matched automatically; a new one is always a question.' },
+    { id: 'bankGap', title: 'Bank balance equals books balance', unit: 'money',
+        who: 'blocked', why: 'Intuit exposes the For Review queue to no app. It needs her CSV export.' },
+];
+
+// ── SURVEY ────────────────────────────────────────────────────────────────
+async function survey({ year = new Date().getFullYear(), env = auth.qbEnv() } = {}) {
+    const out = { year, env, at: new Date().toISOString(), invariants: {}, errors: {} };
+    const safe = async (id, fn) => { try { return await fn(); } catch (e) { out.errors[id] = e.message; return null; } };
+
+    const [overview, dupes, miscoded] = await Promise.all([
+        safe('books', () => books.overview(env, { year })),
+        safe('duplicates', () => books.duplicates(env, { year })),
+        safe('miscoded', () => miscodedCheques(year, env)),
+    ]);
+
+    const la = (overview && overview.owe) || null;
+    out.invariants.unallocated = {
+        number: dupes ? dupes.unapplied.total : null,
+        count: dupes ? dupes.unapplied.payments : null,
+        worst: dupes ? dupes.unapplied.byParty.slice(0, 5) : [],
+    };
+    const side = (s) => (s ? r2(s.duplicate.cost + s.doubledLine.cost + s.sameContainer.cost) : 0);
+    out.invariants.duplicates = {
+        number: dupes ? r2(side(dupes.suppliers) + side(dupes.customers)) : null,
+        count: dupes ? (dupes.suppliers.duplicate.groups.length + dupes.suppliers.doubledLine.groups.length
+            + dupes.suppliers.sameContainer.groups.length + dupes.customers.duplicate.groups.length
+            + dupes.customers.doubledLine.groups.length + dupes.customers.sameContainer.groups.length) : null,
+        suppliers: dupes ? dupes.suppliers : null, customers: dupes ? dupes.customers : null,
+    };
+    out.invariants.miscoded = miscoded || { number: null };
+    out.invariants.payableAccounts = {
+        number: overview ? (overview.payable || []).length : null,
+        accounts: overview ? overview.payable : [],
+    };
+    out.invariants.bankGap = {
+        number: null,
+        banks: overview ? overview.banks : [],
+        note: 'needs the Banking export — Intuit exposes no API for the For Review queue',
+    };
+    out.owe = la;
+    out.owedToYou = overview ? overview.owedToYou : null;
+    return out;
+}
+
+// ── THE CHEQUES THAT BYPASSED PAYABLES ────────────────────────────────────
+// Supplier money paid straight to Cost of Goods Sold with no bill behind it.
+// Two reasons it matters: the supplier's balance never moves, and if a bill
+// is ever entered for the same container the cost lands twice.
+async function miscodedCheques(year, env) {
+    const since = `${year}-01-01`;
+    const rows = [];
+    let start = 1;
+    for (;;) {
+        const r = await client.query(`select * from Purchase where TxnDate >= '${since}' startposition ${start} maxresults 1000`, { env });
+        const got = r.Purchase || [];
+        rows.push(...got);
+        if (got.length < 1000) break;
+        start += 1000;
+    }
+    const hits = [];
+    for (const p of rows) {
+        const lines = (p.Line || []).filter((l) => /cost of goods/i.test((((l.AccountBasedExpenseLineDetail || {}).AccountRef) || {}).name || ''));
+        if (!lines.length) continue;
+        const text = (p.Line || []).map((l) => l.Description || '').join(' ') + ' ' + (p.PrivateNote || '');
+        hits.push({ id: String(p.Id), date: p.TxnDate, total: r2(p.TotalAmt),
+            payee: (p.EntityRef || {}).name || null, payeeId: String((p.EntityRef || {}).value || ''),
+            amount: r2(lines.reduce((s, l) => s + Number(l.Amount || 0), 0)),
+            containers: [...new Set(text.match(/[A-Z]{4}\d{7}/g) || [])] });
+    }
+    const named = hits.filter((h) => h.payee);
+    const anonymous = hits.filter((h) => !h.payee);
+    return {
+        number: r2(hits.reduce((s, h) => s + h.amount, 0)),
+        count: hits.length,
+        // the agent can place these; the nameless ones it cannot, and they are
+        // usually the bigger half
+        fixable: { count: named.length, money: r2(named.reduce((s, h) => s + h.amount, 0)), rows: named },
+        noPayee: { count: anonymous.length, money: r2(anonymous.reduce((s, h) => s + h.amount, 0)), rows: anonymous },
+        span: hits.length ? [hits.map((h) => h.date).sort()[0], hits.map((h) => h.date).sort().slice(-1)[0]] : null,
+    };
+}
+
+// Does a container already carry cost in QuickBooks WITHOUT a bill? If it
+// does, entering a bill for it doubles the cost — and no duplicate check sees
+// it, because there is no document to find.
+function costAlreadyBooked(containerNo, miscoded) {
+    if (!containerNo || !miscoded || !miscoded.fixable) return null;
+    const k = KEY(containerNo);
+    const all = [...(miscoded.fixable.rows || []), ...(miscoded.noPayee.rows || [])];
+    const hit = all.find((h) => h.containers.some((c) => KEY(c) === k));
+    return hit ? { cheque: hit.id, date: hit.date, amount: hit.amount,
+        why: `${containerNo} already has ${hit.amount} of cost on cheque #${hit.id} (${hit.date}) with no bill behind it — a bill here would count it twice` } : null;
+}
+
+// ── THE QUEUE ─────────────────────────────────────────────────────────────
+// Every invariant becomes items, each with a verdict. `do` is reversible AND
+// certain. Nothing else is ever done without her.
+function queue(surveyed) {
+    const items = [];
+    const inv = surveyed.invariants;
+
+    if (inv.unallocated && inv.unallocated.number > 0) {
+        items.push({ id: 'allocate', verdict: 'do', money: inv.unallocated.number,
+            title: `Place ${inv.unallocated.count} payments that sit on no bill`,
+            detail: `${inv.unallocated.worst.map((w) => `${w.party} ${w.amount}`).join(', ')}`,
+            note: 'No money moves: no bank entry, no profit and loss, no change to the payable total.' });
+    }
+    if (inv.duplicates && inv.duplicates.number > 0) {
+        items.push({ id: 'duplicates', verdict: 'ask', money: inv.duplicates.number,
+            title: `${inv.duplicates.count} documents look doubled`,
+            note: 'Voiding cannot be undone, so the agent will not. Each one opens with its impact on the page.' });
+    }
+    if (inv.miscoded && inv.miscoded.number > 0) {
+        items.push({ id: 'miscoded', verdict: 'propose', money: inv.miscoded.number,
+            title: `${inv.miscoded.count} cheques went straight to cost of goods sold`,
+            detail: `${inv.miscoded.fixable.count} have a payee (${inv.miscoded.fixable.money}); ${inv.miscoded.noPayee.count} have none (${inv.miscoded.noPayee.money})`,
+            note: 'Re-coding moves money out of cost of goods sold and changes reported profit. One approval, never silent. The nameless ones are never guessed.' });
+    }
+    if (inv.payableAccounts && inv.payableAccounts.number > 1) {
+        items.push({ id: 'payableAccounts', verdict: 'propose', money: null,
+            title: `${inv.payableAccounts.number} payable accounts are in use`,
+            detail: inv.payableAccounts.accounts.map((a) => `${a.name} ${a.balance}`).join(' · '),
+            note: 'QuickBooks refuses an account merge over the API. The documents can be moved onto one account; retiring the empty one is yours.' });
+    }
+    items.push({ id: 'bankGap', verdict: 'blocked', money: null,
+        title: 'The bank "For Review" queue cannot be read by any app',
+        note: 'Export it from the Banking screen and drop it on the bank lines screen.' });
+
+    return items.sort((a, b) => (b.money || 0) - (a.money || 0));
+}
+
+// ── THE RUN ───────────────────────────────────────────────────────────────
+// Dry by default. Only `do` items are ever executed, and today that is one
+// thing: placing payments whose match is unambiguous.
+async function run({ year = new Date().getFullYear(), env = auth.qbEnv(), really = false, reason } = {}) {
+    const surveyed = await survey({ year, env });
+    const items = queue(surveyed);
+    const out = { at: new Date().toISOString(), year, env, dryRun: !really, survey: surveyed, queue: items, did: [], asked: [] };
+
+    for (const item of items) {
+        if (item.verdict !== 'do') { out.asked.push(item); continue; }
+        if (item.id === 'allocate') {
+            const planned = await applyPayments.plan({ since: `${year}-01-01`, env });
+            const done = await applyPayments.apply(planned, {
+                reason: reason || 'QB Agent: payments recorded without being matched to their bills', env, really });
+            out.did.push({ id: item.id, placed: done.totals.placed, payments: done.totals.payments, skipped: done.skipped.length });
+        }
+    }
+    try {
+        journal.record({ env, kind: 'billpayment', action: 'allocated',
+            qb: {}, jarvis: { agent: 'qb' }, by: 'qb-agent',
+            reason: `QB Agent ${out.dryRun ? 'dry run' : 'run'}: ${out.did.map((d) => `${d.id} ${d.placed || ''}`).join('; ') || 'nothing to do'}` });
+    } catch { /* the raw write log already holds whatever reached her books */ }
+    return out;
+}
+
+module.exports = { INVARIANTS, survey, queue, run, miscodedCheques, costAlreadyBooked };
