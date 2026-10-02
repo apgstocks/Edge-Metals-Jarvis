@@ -826,6 +826,28 @@ function mount(app, cfg) {
         } catch (e) { res.status(400).json({ error: e.message }); }
     });
 
+    // ── what she is owed, and who to write to ──────────────────────────────
+    // Intuit's Payments agent predicts late payers and sends reminders. This
+    // does the same with what they cannot see — the container, the shipment,
+    // the customer's own habit, and above all the money already received and
+    // applied to nothing. It drafts; she sends.
+    app.get('/api/qb/receivables', async (req, res) => {
+        try { res.json(await require('./receivables').survey({ env: envOf() })); }
+        catch (e) { res.status(502).json({ error: `QuickBooks: ${e.message}` }); }
+    });
+
+    app.get('/api/qb/receivables/draft', async (req, res) => {
+        const who = String(req.query.customer || '').trim();
+        if (!who) return res.status(400).json({ error: 'which customer?' });
+        try {
+            const r = require('./receivables');
+            const all = await r.survey({ env: envOf() });
+            const c = all.customers.find((x) => x.customer === who);
+            if (!c) return res.status(404).json({ error: `nothing open for ${who}` });
+            res.json({ ...r.draft(c), verdict: c.verdict, why: c.why });
+        } catch (e) { res.status(502).json({ error: `QuickBooks: ${e.message}` }); }
+    });
+
     app.post('/api/qb/undo', async (req, res) => {
         if (locked(req, res)) return;
         const { journalId, reason, dryRun } = req.body || {};

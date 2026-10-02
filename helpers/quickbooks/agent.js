@@ -50,6 +50,8 @@ const INVARIANTS = [
         who: 'proposal', why: 'Re-coding moves money out of cost of goods sold, which changes reported profit for a period that may be filed.' },
     { id: 'payableAccounts', title: 'One payables account, not two', unit: 'count',
         who: 'proposal', why: 'QuickBooks refuses an account merge over the API, so the documents move instead and she retires the empty account.' },
+    { id: 'receiptsUnapplied', title: 'Every receipt sits on an invoice', unit: 'money',
+        who: 'agent', why: 'Money already in the bank against no invoice — chase a customer for it and she is apologising by return of post.' },
     { id: 'unmatched', title: 'Every name maps to exactly one record', unit: 'count',
         who: 'agent', why: 'An exact name is matched automatically; a new one is always a question.' },
     { id: 'bankGap', title: 'Bank balance equals books balance', unit: 'money',
@@ -61,10 +63,11 @@ async function survey({ year = new Date().getFullYear(), env = auth.qbEnv() } = 
     const out = { year, env, at: new Date().toISOString(), invariants: {}, errors: {} };
     const safe = async (id, fn) => { try { return await fn(); } catch (e) { out.errors[id] = e.message; return null; } };
 
-    const [overview, dupes, miscoded] = await Promise.all([
+    const [overview, dupes, miscoded, ar] = await Promise.all([
         safe('books', () => books.overview(env, { year })),
         safe('duplicates', () => books.duplicates(env, { year })),
         safe('miscoded', () => miscodedCheques(year, env)),
+        safe('receivables', () => require('./receivables').survey({ env })),
     ]);
 
     const la = (overview && overview.owe) || null;
@@ -85,6 +88,15 @@ async function survey({ year = new Date().getFullYear(), env = auth.qbEnv() } = 
     out.invariants.payableAccounts = {
         number: overview ? (overview.payable || []).length : null,
         accounts: overview ? overview.payable : [],
+    };
+    out.invariants.receiptsUnapplied = {
+        number: ar ? ar.totals.received : null,
+        count: ar ? ar.customers.filter((c) => c.received > 0).length : null,
+        // the ones where writing to them would be a mistake
+        doNotChase: ar ? ar.customers.filter((c) => c.verdict === 'do-not-chase' || c.verdict === 'apply-first')
+            .map((c) => ({ customer: c.customer, open: c.open, received: c.received, why: c.why })) : [],
+        chase: ar ? ar.customers.filter((c) => c.verdict === 'chase')
+            .slice(0, 10).map((c) => ({ customer: c.customer, open: c.open, over60: r2(c.aging.d60 + c.aging.d90), pays: c.typicalDaysToPay })) : [],
     };
     out.invariants.bankGap = {
         number: null,
@@ -158,6 +170,12 @@ function queue(surveyed) {
             title: `Place ${inv.unallocated.count} payments that sit on no bill`,
             detail: `${inv.unallocated.worst.map((w) => `${w.party} ${w.amount}`).join(', ')}`,
             note: 'No money moves: no bank entry, no profit and loss, no change to the payable total.' });
+    }
+    if (inv.receiptsUnapplied && inv.receiptsUnapplied.number > 0) {
+        items.push({ id: 'receiptsUnapplied', verdict: 'do', money: inv.receiptsUnapplied.number,
+            title: `${inv.receiptsUnapplied.count} customers have paid money that sits on no invoice`,
+            detail: (inv.receiptsUnapplied.doNotChase || []).map((c) => `${c.customer} ${c.received}`).join(', '),
+            note: 'Apply these BEFORE any reminder goes out — chasing someone for money already in the bank is the one mistake a customer remembers.' });
     }
     if (inv.duplicates && inv.duplicates.number > 0) {
         items.push({ id: 'duplicates', verdict: 'ask', money: inv.duplicates.number,
