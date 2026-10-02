@@ -24,26 +24,26 @@ Cloudflare will become authoritative for **every** DNS record on
 is good but not perfect, and a missing MX record means mail stops arriving with
 no error anywhere.
 
-So write down the truth first. On the VM, or any machine:
+**This is already done — see `docs/dns-before-cloudflare.md`.** Every record
+on the domain was captured on 2026-10-02 and written up as a checklist, along
+with who runs what (GoDaddy for DNS, Google Workspace for mail, a shared host
+for the website, the GCP VM for Jarvis).
+
+Read that file before Part 3 and keep it open while you work.
+
+To re-capture later — `dig` is not installed on the VM, so this uses Node,
+which is:
 
 ```bash
-for t in A AAAA MX TXT CNAME NS SRV; do
-  echo "--- $t ---"
-  dig +short $t edgemetals.com @8.8.8.8
-done
-echo "--- subdomains ---"
-dig +short A jarvis.edgemetals.com @8.8.8.8
-dig +short TXT _dmarc.edgemetals.com @8.8.8.8
-dig +short TXT google._domainkey.edgemetals.com @8.8.8.8
+node -e "
+const R=require('dns').promises.Resolver; const r=new R(); r.setServers(['8.8.8.8']);
+const q=async(l,f,h)=>{try{console.log(l,JSON.stringify(await r[f](h)))}catch(e){console.log(l,'none')}};
+(async()=>{ await q('A    ','resolve4','edgemetals.com');
+  await q('MX   ','resolveMx','edgemetals.com'); await q('TXT  ','resolveTxt','edgemetals.com');
+  await q('NS   ','resolveNs','edgemetals.com');
+  for (const h of ['jarvis','www','mail','ftp']) await q('A '+h,'resolve4',h+'.edgemetals.com');
+})();"
 ```
-
-**Copy the whole output into a file and keep it open.** This is both your
-checklist for Part 3 and your recovery if something goes missing.
-
-If you use Google Workspace, your MX records will look like
-`1 smtp.google.com` or the older five-record `aspmx.l.google.com` set. Whatever
-they are, they must appear in Cloudflare exactly as they are here — same
-values, same priorities.
 
 ---
 
