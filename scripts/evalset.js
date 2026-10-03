@@ -87,7 +87,33 @@ const limit = Number(flag('limit', 50)) || 50;
     const client = await gmail.getGmailRead();
     if (!client) { console.error('Gmail not authorised in this DATA_DIR.'); process.exit(1); }
 
-    const me = await gmail.getMyEmailAddress();
+    // THE INSTRUMENT WAS BROKEN, AND IT TOOK THE FIRST REAL RUN TO FIND IT
+    // (2026-10-03). This called getMyEmailAddress() with NO ARGUMENT, and that
+    // function is `async function getMyEmailAddress(gmail) { if (!gmail)
+    // return null; ... }` -- so `me` was null for every example ever built
+    // here.
+    //
+    // Consequence: addressing() got myAddress = null, could not derive a
+    // company domain, failed open on all 50 emails, and every single decision
+    // came back confidence-capped with "addressing not header-derived". The
+    // first reading this project ever took would have said 68% of her mail
+    // has broken addressing. It does not -- called with the client, addressing
+    // resolves cleanly on 50 of 50.
+    //
+    // An unused instrument is not a neutral thing. It rots, and the first
+    // reading off it is wrong in the direction of whatever broke.
+    const me = ((await gmail.getMyEmailAddress(client)) || '').toLowerCase() || null;
+    // HER address, not the mailbox's -- the distinction addressing() needs to
+    // tell "waiting on Apsara" from "waiting on anyone at Edge Metals".
+    // Production resolves it from the sender-read token (see replyWatch.run);
+    // settings.manager_email is unset on this deployment, so taking it from
+    // there made every eval example measure a different thing from production.
+    let managerEmail = null;
+    try {
+        const sr = gmail.getGmailSenderRead();
+        if (sr) managerEmail = ((await gmail.getMyEmailAddress(sr)) || '').toLowerCase() || null;
+    } catch (e) { /* falls back to the company-domain test, as production does */ }
+    if (!managerEmail) managerEmail = (require('../config').getSettings() || {}).manager_email || null;
     const refs = await gmail.listMessages(client, `in:inbox newer_than:${days}d`, limit * 3);
     console.log(`${(refs || []).length} message(s) in the last ${days} days; assessing up to ${limit}.\n`);
 
@@ -117,7 +143,7 @@ const limit = Number(flag('limit', 50)) || 50;
                 from, subject: h('subject'), date: gmail.parseEmailDate(h('date')), body: visible,
                 thread, attachments: rw.collectAttachmentNames(msg.payload || {}, pdfParts),
                 to: h('to'), cc: h('cc'), myAddress: me,
-                managerAddress: (require('../config').getSettings() || {}).manager_email || null,
+                managerAddress: managerEmail,
             });
         } catch (e) { /* a crash is itself a failing example, keep it */ }
 
