@@ -113,9 +113,16 @@ async function loadLoadings() {
             // Auto casting tense measures 21.85 MT here, which floors to 21
             // and ceils to 22 -- exactly the two numbers she gave. Al combo
             // measures 22.65, so 22 and 23 by the same rule.
+            // `mt`/`mtLc` (floor and floor+1 of the median) lived here for
+            // half a day and are gone: on 2026-10-03 she declared a FLAT
+            // standard -- "chrome wheels - it should also be 21mt" -- so the
+            // quantity no longer comes from this file at all. What is left is
+            // the measurement itself, which proformaFromEmail uses to CHALLENGE
+            // the declared standard when the two disagree. Dead fields are
+            // worse than missing ones: the next reader assumes something still
+            // reads them.
             const measured = median(w);
-            out.set(key, { mt: Math.floor(measured), mtLc: Math.floor(measured) + 1,
-                measured: Math.round(measured * 100) / 100, n: w.length,
+            out.set(key, { measured: Math.round(measured * 100) / 100, n: w.length,
                 min: Math.round(lo * 100) / 100, max: Math.round(hi * 100) / 100,
                 label: label.get(key) || key });
         }
@@ -128,10 +135,10 @@ async function loadLoadings() {
     return out;
 }
 
-// Returns { mt, mtLc, measured, n, min, max, label } or null. `mt` is the
-// nominal quantity for a normal (TT) proforma and `mtLc` the one for a letter
-// of credit; `measured` is the raw median, kept so the read-back can show the
-// basis rather than just the rounded answer. Never throws: a missing default
+// Returns { measured, n, min, max, label } or null. `measured` is the median
+// MT per single-material container from her own invoices. It is NOT the
+// quantity that goes on a document -- she declares that (21 MT, 22 under an
+// L/C). This is the evidence used to warn her when the two disagree. Never throws: a missing default
 // must leave the draft asking for a quantity, exactly as it does today.
 async function standardLoadFor(desc) {
     try {

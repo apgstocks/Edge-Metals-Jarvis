@@ -87,13 +87,14 @@ const section = (t) => console.log(`\n=== ${t} ===`);
 
     section('LA — the loading is remembered PER MATERIAL, from her own invoices');
     const wheels = await lh.standardLoadFor('Aluminium wheels clean');
-    ck('LA1 clean alu wheels load at ~14 MT, not 21', wheels && Math.round(wheels.mt) === 14,
-        wheels ? `${wheels.mt} MT over ${wheels.n}` : 'no default found');
+    ck('LA1 clean alu wheels MEASURE ~14 MT, not 21', wheels && Math.round(wheels.measured) === 14,
+        wheels ? `${wheels.measured} MT over ${wheels.n}` : 'no measurement found');
     const cast = await lh.standardLoadFor('Auto cast');
-    ck('LA2 auto cast loads at ~22 MT — her own "21 MT" confirmed independently',
-        cast && cast.mt >= 21 && cast.mt <= 23, cast ? `${cast.mt} MT over ${cast.n}` : 'none');
-    ck('LA3 the two differ by ~50%, which is why one number cannot serve both',
-        wheels && cast && (cast.mt / wheels.mt) > 1.4, wheels && cast ? `${cast.mt} vs ${wheels.mt}` : 'n/a');
+    ck('LA2 auto cast measures ~22 MT — her own "21 MT" confirmed independently',
+        cast && cast.measured >= 21 && cast.measured <= 23, cast ? `${cast.measured} MT over ${cast.n}` : 'none');
+    ck('LA3 the two differ by ~50%, which is what the warning is built on',
+        wheels && cast && (cast.measured / wheels.measured) > 1.4,
+        wheels && cast ? `${cast.measured} vs ${wheels.measured}` : 'n/a');
     ck('LA4 a material loaded 2.9-10.7 MT teaches NO default — it keeps asking',
         (await lh.standardLoadFor('Alum Scrap 356 Wheel')) === null);
     ck('LA5 a material never invoiced teaches no default', (await lh.standardLoadFor('Unobtainium')) === null);
@@ -101,7 +102,7 @@ const section = (t) => console.log(`\n=== ${t} ===`);
     // read as tonnes it would claim a 44,000 MT container.
     const dirty = await lh.standardLoadFor('Al Wheels Dirty');
     ck('LA6 pound weights are converted, not taken literally',
-        dirty && dirty.mt > 15 && dirty.mt < 21, dirty ? `${dirty.mt} MT` : 'none');
+        dirty && dirty.measured > 15 && dirty.measured < 21, dirty ? `${dirty.measured} MT` : 'none');
     ck('LA7 a two-material container teaches nothing about a single-material load',
         (await lh.standardLoadFor('Regular combo')) === null,
         JSON.stringify(await lh.standardLoadFor('Regular combo')));
@@ -125,8 +126,8 @@ const section = (t) => console.log(`\n=== ${t} ===`);
     section('LC — the draft tells the truth about which it is');
     const d1 = toProformaDraft(await groundRates({ consignee: 'Joey/Wooshin', container_count: 1,
         items: [{ desc: 'Aluminium wheels clean', qty: null, rate: 3095, rate_confidence: 0.9, rate_basis: 'per_mt' }] }), {});
-    ck('LC1 the quantity is filled from history, and shown as assumed', d1.items[0].qty != null
-        && (d1.assumed || []).some((a) => /14\.1/.test(a) && /past container/.test(a)),
+    ck('LC1 the quantity is filled with her declared standard, shown as assumed',
+        d1.items[0].qty === 21 && (d1.assumed || []).some((a) => /21 MT is the standard quantity/.test(a)),
         `qty ${d1.items[0].qty} / ${JSON.stringify(d1.assumed)}`);
     ck('LC2 a CONFIRMED rate lands in grounded', (d1.grounded || []).some((g) => /in line with/.test(g)),
         JSON.stringify(d1.grounded));
@@ -288,11 +289,11 @@ const section = (t) => console.log(`\n=== ${t} ===`);
     const lcDraft = toProformaDraft(await groundRates({ consignee: 'D', container_count: 1,
         payment_term: 'L/C at sight',
         items: [{ desc: 'Auto casting tense', qty: null, rate: 2035, rate_confidence: 0.9, rate_basis: 'per_mt' }] }), {});
-    ck('LG7 the L/C read-back says it is the L/C quantity and why',
-        (lcDraft.assumed || []).some((a) => /standard L\/C quantity/.test(a) && /must sit above the load/.test(a)),
+    ck('LG7 the L/C read-back says it is the L/C quantity',
+        (lcDraft.assumed || []).some((a) => /standard L\/C quantity for one container/.test(a)),
         JSON.stringify(lcDraft.assumed));
-    ck('LG8 and it still shows the measured median behind it',
-        (lcDraft.assumed || []).some((a) => /median 21\.88 MT across 3 past container/.test(a)),
+    ck('LG8 and it still shows the measured median behind it, as agreement',
+        (lcDraft.assumed || []).some((a) => /median 21\.88 MT across 3 past container\(s\), which agrees/.test(a)),
         JSON.stringify(lcDraft.assumed));
     ck('LG9 isLcOrder does not fire on ordinary TT wording',
         !isLcOrder({ payment_term: 'TT 7 days before arrival' })
@@ -303,6 +304,59 @@ const section = (t) => console.log(`\n=== ${t} ===`);
         items: [{ desc: 'Auto casting tense', qty: 19.5, rate: 2035, rate_confidence: 0.9, rate_basis: 'per_mt' }] }), {});
     ck('LG10 a stated tonnage wins over the standard, L/C or not', stated.items[0].qty === 19.5
         && !(stated.assumed || []).some((a) => /standard/.test(a)), `qty = ${stated.items[0].qty}`);
+
+    section('LH — she declares the standard; her invoices argue with it');
+    // Apsara: "chrome wheels - it should also be 21mt", after being shown that
+    // her own invoices put a chrome-wheels container at 14.01 MT.
+    //
+    // The measurement was re-checked before changing anything and it holds: a
+    // wheels container is ONE invoice line, and every one weighs 13.9-15.8 MT
+    // (MRKU6215437 14.007, HMMU6815119 13.989, KOCU4183842 14.288 -- three of
+    // them Joey's own boxes). 21 contradicts nine shipped containers by ~50%,
+    // far outside the "+/- 10% on weights" the proforma itself prints.
+    //
+    // SHE STILL GETS 21: the proforma is her document and a nominal
+    // pre-shipment quantity is a commercial convention, not a measurement.
+    // The measurement becomes a WARNING instead of the number. Policy from
+    // her, challenge from the data.
+    const qty2 = async (desc, term) => toProformaDraft(await groundRates({
+        consignee: 'X', container_count: 1, payment_term: term,
+        items: [{ desc, qty: null, rate: 3200, rate_confidence: 0.9, rate_basis: 'per_mt' }] }), {});
+
+    const cw = await qty2('Chrome wheels', null);
+    ck('LH1 chrome wheels now quote at 21 MT, as she asked', cw.items[0].qty === 21,
+        String(cw.items[0].qty));
+    ck('LH2 and the disagreement is RAISED, not swallowed',
+        (cw.unconfirmed || []).some((u) => /only ever loaded to a median 14\.01 MT/.test(u)),
+        JSON.stringify(cw.unconfirmed));
+    ck('LH3 the warning quantifies how far out it is', (cw.unconfirmed || []).some((u) => /50% out/.test(u)),
+        JSON.stringify(cw.unconfirmed));
+    ck('LH4 and names the tolerance the document prints',
+        (cw.unconfirmed || []).some((u) => /\+\/- 10%/.test(u)), JSON.stringify(cw.unconfirmed));
+    const cwLc = await qty2('Chrome wheels', 'L/C at sight');
+    ck('LH5 under an L/C it is 22, and still warned', cwLc.items[0].qty === 22
+        && (cwLc.unconfirmed || []).length > 0, `${cwLc.items[0].qty} / ${JSON.stringify(cwLc.unconfirmed)}`);
+
+    // A material that AGREES must stay quiet: auto cast runs 18.5-25.6 MT
+    // container to container, and warning on ordinary variation would make
+    // the warning worthless.
+    const ac = await qty2('Auto cast', null);
+    ck('LH6 auto cast quotes 21 with NO warning — history agrees', ac.items[0].qty === 21
+        && !(ac.unconfirmed || []).some((u) => /only ever loaded/.test(u)),
+        JSON.stringify(ac.unconfirmed));
+    ck('LH7 and the read-back says history agrees',
+        (ac.assumed || []).some((a) => /which agrees/.test(a)), JSON.stringify(ac.assumed));
+
+    // A material with no history at all: 21, and nothing to argue with.
+    const unknown = await qty2('Unobtainium', null);
+    ck('LH8 an unseen material still gets 21 MT', unknown.items[0].qty === 21);
+    ck('LH9 with no invented warning',
+        !(unknown.unconfirmed || []).some((u) => /only ever loaded/.test(u)),
+        JSON.stringify(unknown.unconfirmed));
+    // The warning is a DOUBT, so it belongs in unconfirmed (which blocks an
+    // auto-send gate), not in assumed.
+    ck('LH10 the disagreement is an unconfirmed doubt, not a bare assumption',
+        !(cw.assumed || []).some((a) => /only ever loaded/.test(a)), JSON.stringify(cw.assumed));
 
     console.log(`\n${pass} passed, ${fail} failed`);
     if (fail) { console.log('FAILED: ' + failures.join(', ')); process.exit(1); }

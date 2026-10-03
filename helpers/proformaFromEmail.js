@@ -255,6 +255,7 @@ function applyStandardQuantities(items) {
         if (it.qty != null) return { ...it, qty_assumed: false };
         let qty = null;
         let why = null;
+        let warn = null;
         // ORDER MATTERS. The PAIR rule wins over history, because history is
         // measured from SINGLE-material containers: "Al Combo loads 22.65 MT"
         // is true on its own and wrong for a box sharing with steel combo.
@@ -267,6 +268,7 @@ function applyStandardQuantities(items) {
         else if (it.standard_qty != null && items.length === 1) {
             qty = it.standard_qty;
             why = it.standard_qty_reason || null;
+            warn = it.standard_qty_warning || null;
         }
         // 21 only when auto cast is the whole load — an auto-cast line sharing
         // a container with something else is not the 21 MT pattern. Kept as
@@ -277,7 +279,7 @@ function applyStandardQuantities(items) {
         // when the sheet cannot be read at all; `lc_order` is stamped on the
         // item by groundRates so this stays a pure function of its input.
         else if (isAutoCast(it.desc) && items.length === 1) qty = it.lc_order ? 22 : 21;
-        return { ...it, qty, qty_assumed: qty != null, qty_reason: why };
+        return { ...it, qty, qty_assumed: qty != null, qty_reason: why, qty_warning: warn };
     });
 }
 
@@ -294,6 +296,17 @@ function applyStandardQuantities(items) {
 // rows against 612 TT ones, so this is a real second case and not an edge.
 // Matched on the terms as they are actually written there and in her mail:
 // "L/C", "LC", "letter of credit".
+// HER DECLARED STANDARD, in her own words: "by default if its a single
+// thing,its quantity is 21 MT", "Unless it is an LC where we need to put
+// 22 MT". One place, so a change is one line.
+const STANDARD_LOAD_MT = 21;
+const STANDARD_LOAD_LC = 22;
+// How far her invoice history may sit from the declared standard before the
+// read-back says so. 25% is deliberately well outside the "+/- 10% on
+// weights" the proforma prints: this is meant to catch a material that loads
+// nothing like 21 MT (wheels, at 14), not ordinary container-to-container
+// variation (auto cast runs 18.5-25.6 and must not warn).
+const LOADING_DISAGREEMENT = 0.25;
 const LC_TERMS = /\b(?:l\s*\/?\s*c|letter\s+of\s+credit)\b/i;
 function isLcOrder(order) {
     return LC_TERMS.test(String((order && (order.payment_term || order.terms)) || ''));
@@ -328,13 +341,37 @@ async function groundRates(order) {
         // have reached workflow/actions.js:8025 and replyWatch.js:3247 and
         // every test that builds a draft directly.
         if (next.qty == null) {
+            // ── SHE DECLARES THE STANDARD; HISTORY ARGUES WITH IT ──────────
+            // Apsara, 2026-10-03: "chrome wheels - it should also be 21mt",
+            // after being shown that her invoices put a chrome-wheels
+            // container at 14.01 MT.
+            //
+            // I checked the measurement again before changing anything, and it
+            // holds: a wheels container is ONE invoice line, and every one of
+            // them weighs 13.9-15.8 MT -- MRKU6215437 at 14.007, HMMU6815119
+            // at 13.989, KOCU4183842 at 14.288, three of those Joey's own
+            // boxes. So 21 contradicts nine of her own shipped containers by
+            // about 50%, far outside the "+/- 10% on weights" the proforma
+            // itself prints.
+            //
+            // SHE STILL GETS 21, because the proforma is her document and a
+            // nominal pre-shipment quantity is a commercial convention, not a
+            // measurement. What changes is that the measurement is not thrown
+            // away -- it becomes a WARNING on the read-back instead of the
+            // number. Policy from her, challenge from the data: that is the
+            // right split, and it is the one shape that gives her the figure
+            // she asked for without losing the fact that could stop a 7 MT
+            // overstatement on a letter of credit.
+            next.standard_qty = lc ? STANDARD_LOAD_LC : STANDARD_LOAD_MT;
+            next.standard_qty_reason = `${next.standard_qty} MT is the standard ${lc ? 'L/C ' : ''}quantity for one container`;
             const load = await standardLoadFor(next.desc).catch(() => null);
             if (load) {
-                // Which nominal figure depends on the PAYMENT TERMS, so it is
-                // decided here where the whole order is in hand, not inside
-                // applyStandardQuantities which only ever sees the items.
-                next.standard_qty = lc ? load.mtLc : load.mt;
-                next.standard_qty_reason = `${next.standard_qty} MT is the standard ${lc ? 'L/C ' : ''}quantity — ${load.label} has loaded to a median ${load.measured} MT across ${load.n} past container(s) (${load.min}-${load.max} MT)${lc ? ', and under an L/C the figure on the document must sit above the load' : ''}`;
+                const off = Math.abs(next.standard_qty - load.measured) / load.measured;
+                if (off > LOADING_DISAGREEMENT) {
+                    next.standard_qty_warning = `${next.standard_qty} MT is the standard, but ${load.label} has only ever loaded to a median ${load.measured} MT across ${load.n} container(s) (${load.min}-${load.max} MT) — ${Math.round(off * 100)}% out, and the document prints +/- 10%`;
+                } else {
+                    next.standard_qty_reason += ` — ${load.label} has loaded to a median ${load.measured} MT across ${load.n} past container(s), which agrees`;
+                }
             }
         }
         items.push(next);
@@ -412,6 +449,10 @@ function toProformaDraft(order, { fallbackConsignee } = {}) {
         // to 21 MT, which silently turned "the email doesn't say how much"
         // into a priced line on a document going to a customer.
         if (it.qty == null) needs.push('quantity');
+        // A standard that disagrees with her own shipments is NOT an
+        // assumption, it is a doubt -- so it goes to unconfirmed, which is
+        // what blocks an auto-send gate and prints with a warning mark.
+        if (it.qty_assumed && it.qty_warning) unconfirmed.push(it.qty_warning);
         if (it.qty_assumed) assumed.push(it.qty_reason
             ? `${it.desc}: ${it.qty} MT assumed — the email didn't say, and ${it.qty_reason}`
             : `${it.desc}: ${it.qty} MT assumed from standard container loading — the email didn't say`);
