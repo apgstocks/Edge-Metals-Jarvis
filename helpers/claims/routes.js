@@ -20,6 +20,7 @@ const claimKinds = require('../claimKinds');
 const importSheet = require('./importSheet');
 const claimScan = require('../claimScan');
 const report = require('./report');
+const claimPrice = require('../claimPrice');
 
 const bad = (res, msg, code = 400) => res.status(code).json({ error: msg });
 
@@ -105,7 +106,7 @@ function mount(app, cfg) {
     app.post('/api/claims/:id/edit', async (req, res) => {
         try {
             const b = req.body || {};
-            const allowed = ['customer', 'supplier', 'invoice_no', 'container_no', 'note', 'claim_type',
+            const allowed = ['customer', 'supplier', 'invoice_no', 'container_no', 'note', 'claim_type', 'claim_date', 'supplier_price', 'supplier_price_unit', 'supplier_price_source',
                 'sell_price', 'sell_price_unit', 'our_claim', 'evidence', 'stated_claim_amount'];
             const patch = {};
             for (const k of allowed) if (b[k] !== undefined) patch[k] = b[k];
@@ -344,6 +345,24 @@ function mount(app, cfg) {
             if (!held) return bad(res, 'that preview has expired — read the sheet again first');
             const r = await importSheet.reclassify(held.plan, { write: b.really === true });
             res.json({ ...r, wrote: b.really === true });
+        } catch (e) { bad(res, e.message, 500); }
+    });
+
+    // ── WHAT THE SUPPLIER'S OWN PRICE WAS ──────────────────────────────────
+    // Apsara, 2026-10-03: "You didnt mention supplier price in claim?"
+    //
+    // Read-only, and it writes nothing. It reports the rate off that
+    // container's purchase bill and what the shortage comes to at it; the page
+    // offers that figure and a person accepts it, because what is actually
+    // recovered is settled by negotiation. Where the bill cannot decide — no
+    // bill, no price on it, or several grades at several rates with nothing
+    // saying which was short — it answers with no rate and the reason, which
+    // is worth more on a document asking for money than a confident average.
+    app.get('/api/claims/:id/price', (req, res) => {
+        try {
+            const c = claims.get(req.params.id);
+            if (!c) return bad(res, 'no such claim', 404);
+            res.json(claimPrice.recoverableFor(c));
         } catch (e) { bad(res, e.message, 500); }
     });
 

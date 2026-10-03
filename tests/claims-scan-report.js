@@ -161,6 +161,19 @@ section('E — the document itself');
 
     const xlsx = await report.toWorkbook(b);
     ck('an excel version is produced too, because suppliers argue line by line', xlsx.length > 2000);
+    // The date column is the DOCUMENT's date where there is one. Everything in a
+    // sheet imported in one go shares a created_at, and a statement whose every
+    // line reads the import date is worse than useless — a supplier reads it as
+    // the claim date and disputes it.
+    {
+        const withDate = await claims.create({ customer: 'Zimex', supplier: 'Gomez', invoice_no: '26ME22', container_no: 'TGHU1112223', claim_date: '2026-05-18' }, 'test');
+        await claims.verify(withDate.id, { invoice_weight: 20, claimed_weight: 19, weight_unit: 'MT', sell_price: 2000, sell_price_unit: 'MT' }, 'test');
+        await claims.raiseRecovery(withDate.id, { our_claim: 2000 }, 'test');
+        const d = report.build({ supplier: 'Gomez' }).lines.find((l) => l.invoice_no === '26ME22');
+        ck('a line is dated by the document, not by the day it was filed', d && d.date === '2026-05-18', d && d.date);
+        await claims.setStatus(withDate.id, 'withdrawn', 'test', 'fixture only');
+    }
+
     ck('the filename names the supplier and the date', /^Claim-statement_Gomez_\d{4}-\d{2}-\d{2}\.pdf$/.test(report.filenameFor(b, 'pdf')), report.filenameFor(b, 'pdf'));
 }
 

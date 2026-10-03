@@ -414,8 +414,12 @@ function claimCard(c, i){
         (c.stated_claim_amount!=null ? ' The customer is asking <b>' + money(c.stated_claim_amount) + '</b> — that is their figure, not yet yours.' : '') + '</div></div>' +
       '<div class="card"><h3>Recovery from the supplier</h3><div class="grid">' +
         '<label class="f">Supplier<input class="f_sup" value="' + esc(c.supplier||'') + '" placeholder="who Edge bought from"></label>' +
+        '<label class="f">Their rate<input class="num f_srate" inputmode="decimal" value="' + (c.supplier_price ?? '') + '" placeholder="from the purchase bill"></label>' +
+        '<label class="f">Their rate is per<select class="f_srateUnit">' +
+          ['MT','LB','KG'].map(u => '<option value="' + u + '" ' + (((c.supplier_price_unit||unit||'MT')===u)?'selected':'') + '>' + u + '</option>').join('') +
+        '</select></label>' +
         '<label class="f">Recovering from them<input class="num f_ours" inputmode="decimal" value="' + (c.our_claim ?? '') + '" placeholder="—"></label>' +
-      '</div><div class="actions">' +
+      '</div><div class="billrate hint">Looking up the purchase bill\u2026</div><div class="actions">' +
         '<button class="btn go f_rec" type="button">Raise the recovery</button>' +
         '<button class="btn f_save" type="button">Save</button>' +
         '<button class="btn f_st" data-st="settled" type="button">Settled</button>' +
@@ -535,6 +539,8 @@ function wireClaim(c){
       const k = el.querySelector('.f_kind').value;
       const body = { supplier: el.querySelector('.f_sup').value.trim() };
       if (k !== '__new') body.claim_type = k;
+      const sp = numOf(el.querySelector('.f_srate').value);
+      if (sp !== null) { body.supplier_price = sp; body.supplier_price_unit = el.querySelector('.f_srateUnit').value; }
       await api('/api/claims/' + c.id + '/edit', body);
       toast('Saved.', 'ok'); await load();
     } catch (e) { toast(e.message, 'bad'); }
@@ -544,11 +550,43 @@ function wireClaim(c){
     if (ours === null) { toast('Put in what you are recovering from the supplier first.', 'bad'); return; }
     try {
       const sup = el.querySelector('.f_sup').value.trim();
-      if (sup && sup !== (c.supplier||'')) await api('/api/claims/' + c.id + '/edit', { supplier: sup });
+      const patch = {};
+      if (sup && sup !== (c.supplier||'')) patch.supplier = sup;
+      // The rate goes on the record WITH the figure, because the statement
+      // prints it and a rate recorded later would not be the one this amount
+      // was worked out at.
+      const sp = numOf(el.querySelector('.f_srate').value);
+      if (sp !== null) { patch.supplier_price = sp; patch.supplier_price_unit = el.querySelector('.f_srateUnit').value; }
+      if (Object.keys(patch).length) await api('/api/claims/' + c.id + '/edit', patch);
       await api('/api/claims/' + c.id + '/recovery', { our_claim: ours });
       toast('Recovery raised.', 'ok'); await load();
     } catch (e) { toast(e.message, 'bad'); }
   };
+  /* What the purchase bill says this supplier was paid. Read-only: it offers
+     the figure, it never writes it. Apsara, 2026-10-03: recovery is valued at
+     the supplier's own price, and where the bill holds several grades at
+     several rates it says so rather than averaging them. */
+  (async () => {
+    const box = el.querySelector('.billrate');
+    if (!box) return;
+    try {
+      const p = await api('/api/claims/' + c.id + '/price');
+      if (p.price === null) { box.innerHTML = '<b>·</b> No rate from the bill — ' + esc(p.why || 'nothing found') + '.'; return; }
+      const at = money(p.price) + '/' + esc(p.unit);
+      box.innerHTML = '<b>·</b> ' + esc(p.source) + ': <b>' + at + '</b>' +
+        (p.amount !== null ? ' \u2192 the shortage at their rate is <b>' + money(p.amount) + '</b> <button class="btn use_rate" type="button" style="margin-left:6px">Use it</button>'
+                           : ' \u2014 ' + esc(p.missing || 'nothing to work out yet')) +
+        (p.supplierMismatch ? '<br><b>·</b> This claim names <b>' + esc(p.supplierMismatch.onClaim) + '</b> but the bill for this container is from <b>' + esc(p.supplierMismatch.onBill) + '</b>. One of them is wrong.' : '');
+      const use = box.querySelector('.use_rate');
+      if (use) use.onclick = () => {
+        el.querySelector('.f_srate').value = p.price;
+        el.querySelector('.f_srateUnit').value = p.unit;
+        el.querySelector('.f_ours').value = p.amount;
+        toast('Filled from the bill. Nothing is saved until you raise the recovery.', 'ok');
+      };
+    } catch (e) { box.innerHTML = '<b>·</b> Could not read the purchase bill — ' + esc(e.message); }
+  })();
+
   el.querySelectorAll('.f_st').forEach(b => b.onclick = async () => {
     try { await api('/api/claims/' + c.id + '/status', { status: b.dataset.st }); toast('Marked ' + b.dataset.st + '.', 'ok'); await load(); }
     catch (e) { toast(e.message, 'bad'); }
@@ -701,6 +739,7 @@ function showScan(wrap, d, closeModal){
         customer: get('customer'), supplier: get('supplier'),
         invoice_no: get('invoice_no'), container_no: get('container_no'),
         stated_claim_amount: numOf(get('stated_claim_amount')),
+        claim_date: get('date'),
         claim_type: (d.kind && d.kind.slug) || '',
         note: get('what_is_claimed'),
         created_by: 'scan',

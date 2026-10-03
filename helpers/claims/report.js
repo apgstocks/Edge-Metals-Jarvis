@@ -55,7 +55,10 @@ function build(opts = {}) {
 
     const line = (c) => ({
         id: c.id,
-        date: String(c.created_at || '').slice(0, 10),
+        // In order: the date on the document, the date the first mail arrived,
+        // and only then the day it was filed. A statement whose every line reads
+        // today's date tells the supplier nothing and reads as carelessness.
+        date: String(c.claim_date || ((c.mail || [])[0] || {}).date || c.created_at || '').slice(0, 10),
         invoice_no: c.invoice_no || '',
         container_no: c.container_no || '',
         customer: c.customer || '',
@@ -67,6 +70,11 @@ function build(opts = {}) {
         shortage: num(c.shortage),
         shortage_pct: num(c.shortage_pct),
         claim_amount: num(c.claim_amount),
+        // Their own rate, off their own bill. A recoverable figure with no rate
+        // beside it is a number a supplier cannot reproduce, so the first thing
+        // they do is query it. Edge's sell_price is deliberately NOT here.
+        rate: num(c.supplier_price),
+        rate_unit: c.supplier_price_unit || '',
         our_claim: num(c.our_claim),
         status: c.status,
         sendable: SENDABLE.includes(c.status),
@@ -108,7 +116,11 @@ function build(opts = {}) {
 function toHtml(b) {
     const when = new Date(b.generatedAt).toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' });
     const to = b.addressedTo || (b.suppliers.length > 1 ? `${b.suppliers.length} suppliers` : '—');
-    const head = ['Date', 'Our invoice', 'Container', 'Customer', 'What is claimed', 'Invoiced', 'Received', 'Short', '%', 'Recoverable'];
+    // YOUR RATE, not ours. Apsara, 2026-10-03: "You didnt mention supplier price
+    // in claim?" — without it the last column is a number the supplier cannot
+    // reproduce, and an unexplained number is the one they query. It is their
+    // own price off their own bill; Edge's sell rate is not on this document.
+    const head = ['Date', 'Our invoice', 'Container', 'Customer', 'What is claimed', 'Invoiced', 'Received', 'Short', '%', 'Your rate', 'Recoverable'];
 
     const row = (l) => `<tr${l.sendable ? '' : ' class="info"'}>
       <td>${esc(l.date)}</td>
@@ -120,6 +132,7 @@ function toHtml(b) {
       <td class="r mono">${esc(wt(l.claimed_weight, l.unit))}</td>
       <td class="r mono">${esc(wt(l.shortage, l.unit))}</td>
       <td class="r mono">${l.shortage_pct === null ? '—' : esc(l.shortage_pct.toFixed(2)) + '%'}</td>
+      <td class="r mono">${l.rate === null ? '—' : esc(money(l.rate)) + '/' + esc(l.rate_unit || '')}</td>
       <td class="r mono strong">${l.sendable ? esc(money(l.our_claim)) : '—'}</td>
     </tr>`;
 
@@ -180,8 +193,8 @@ tfoot td{border-top:2px solid #1a1a1a;border-bottom:0;padding-top:7px;font-weigh
 
 <table>
   <thead><tr>${head.map((h, i) => `<th${i >= 5 ? ' class="r"' : ''}>${esc(h)}</th>`).join('')}</tr></thead>
-  <tbody>${b.lines.length ? b.lines.map(row).join('') : '<tr><td colspan="10" style="padding:16px;color:#777">No claims in this statement.</td></tr>'}</tbody>
-  ${b.totals.claims ? `<tfoot><tr><td colspan="9" class="r">Total recoverable</td><td class="r mono">${esc(money(b.totals.recoverable))}</td></tr></tfoot>` : ''}
+  <tbody>${b.lines.length ? b.lines.map(row).join('') : '<tr><td colspan="11" style="padding:16px;color:#777">No claims in this statement.</td></tr>'}</tbody>
+  ${b.totals.claims ? `<tfoot><tr><td colspan="10" class="r">Total recoverable</td><td class="r mono">${esc(money(b.totals.recoverable))}</td></tr></tfoot>` : ''}
 </table>
 
 <div class="total"><div class="box">
@@ -193,6 +206,8 @@ tfoot td{border-top:2px solid #1a1a1a;border-bottom:0;padding-top:7px;font-weigh
   ${b.includedUnverified && b.lines.some((l) => !l.sendable) ? '<p><strong>Lines marked “not yet verified”</strong> are shown for information only. Their weights have not yet been confirmed against the loading documents and they are excluded from the total above.</p>' : ''}
   ${b.noFigure.length ? `<p><strong>${b.noFigure.length} claim(s)</strong> in this statement have no recovery amount set against them yet; they are listed so the position is complete.</p>` : ''}
   <p>Weights are stated in the unit shown against each line, exactly as recorded on the claim documents. No conversion has been applied.</p>
+  ${b.lines.some((l) => l.rate !== null) ? '<p><strong>“Your rate”</strong> is the price on our purchase bill for that container — the rate we paid you for the material. Each recoverable amount is the shortage at that rate.</p>' : ''}
+  ${b.lines.some((l) => l.sendable && l.rate === null) ? '<p>Where no rate is shown, the amount is as agreed between us rather than calculated.</p>' : ''}
   <p>Please confirm acceptance or raise any query within 14 days of the date of this statement.</p>
 </div>
 
@@ -230,14 +245,14 @@ async function toWorkbook(built) {
     ws.addRow(['To', built.addressedTo || '']);
     ws.addRow([]);
     ws.addRow(['Date', 'Our invoice', 'Container', 'Customer', 'What is claimed', 'Unit',
-        'Invoiced weight', 'Received weight', 'Shortage', 'Shortage %', 'Recoverable from you', 'Status']);
+        'Invoiced weight', 'Received weight', 'Shortage', 'Shortage %', 'Your rate', 'Rate per', 'Recoverable from you', 'Status']);
     for (const l of built.lines) {
         ws.addRow([l.date, l.invoice_no, l.container_no, l.customer, l.kind + (l.sendable ? '' : ' (not yet verified)'),
             l.unit, l.invoice_weight, l.claimed_weight, l.shortage, l.shortage_pct,
-            l.sendable ? l.our_claim : null, l.status]);
+            l.rate, l.rate_unit, l.sendable ? l.our_claim : null, l.status]);
     }
     ws.addRow([]);
-    ws.addRow(['', '', '', '', '', '', '', '', '', 'Total recoverable', built.totals.recoverable]);
+    ws.addRow(['', '', '', '', '', '', '', '', '', '', '', 'Total recoverable', built.totals.recoverable]);
     ws.getRow(1).font = { bold: true, size: 13 };
     ws.getRow(5).font = { bold: true };
     ws.columns.forEach((c) => { c.width = 17; });

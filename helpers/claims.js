@@ -83,10 +83,21 @@ function blank() {
         invoice_no: '', container_no: '',
         invoice_weight: null, claimed_weight: null, weight_unit: null,
         shortage: null, shortage_pct: null,
+        // Edge's SELL rate. It values what the customer is claiming and it
+        // never leaves the building — printing it on a supplier statement
+        // hands them Edge's margin.
         sell_price: null, sell_price_unit: null,
+        // What Edge PAID this supplier, from that container's purchase bill.
+        // This is the rate the recovery is argued at, because it is the only
+        // one the supplier already agreed to. helpers/claimPrice.js finds it.
+        supplier_price: null, supplier_price_unit: null, supplier_price_source: '',
         claim_amount: null, our_claim: null,
         evidence: [], mail: [], quotes: {}, flags: [], history: [],
         note: '',
+        // The date ON the claim document, which is NOT created_at. A sheet
+        // imported in one go gives every row the same created_at, and a
+        // supplier reading that on a statement reads it as the claim date.
+        claim_date: null,
         created_at: null, created_by: '', updated_at: null,
     };
 }
