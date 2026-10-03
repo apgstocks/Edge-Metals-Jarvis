@@ -403,6 +403,89 @@ function invNoTailCodes(invNo) {
 // renders both results through the same list and the same downstream
 // select/preview/generate flow, so nothing after the search needs to know
 // which box the query came from.
+// ── EVERY INVOICE ON THE SHEET, ONE ROW EACH ─────────────────────────────
+// RESTORED 2026-10-03. This function was deleted by commit 8dc3495 ("INV BY
+// INV NO"), which wrote this file back from an older copy. helpers/
+// receivables.js:204 never stopped calling it, so every receivables question
+// has been throwing since — and on 2026-10-03 Apsara hit it twice over
+// WhatsApp as
+//
+//     Couldn't record that: invoiceSheet.listAllInvoices is not a function
+//
+// while trying to record a supplier payment, which is not even the same
+// feature. That deletion is the one scripts/check-action-wiring.js was
+// written for, and it has sat broken ever since because nothing routes an
+// INTENT at this function — the wiring check cannot see a helper calling a
+// helper.
+//
+// ── ONE ROW PER INVOICE, NOT PER CONTAINER ───────────────────────────────
+// The sheet is per container; an invoice can span several. receivables
+// subtracts the payments for an invoice number from the row it gets, so
+// returning one row per container would subtract the whole payment from EACH
+// of them and report an invoice as wildly overpaid.
+//
+// ── AND THE ARITHMETIC IS BORROWED, NOT RESTATED ─────────────────────────
+// amount = round2(weight * rate) PER LINE, then summed, then minus freight.
+// Rounding per line is deliberate (Apsara 2026-08-28): the printed total has
+// to equal what is beside each row when someone adds it up by hand. The same
+// call was lost once before, to commit 37b3513, and the Excel invoice quietly
+// began disagreeing with the PDF of the same invoice.
+//
+// So this computes it the way buildContainerInvoiceData and
+// buildMultiContainerInvoiceData compute it, deliberately identically. A
+// second answer to "what does this customer owe" is the kind of difference
+// that is found in a dispute rather than in a test.
+//
+// Freight: the first non-zero on the invoice, counted ONCE, and SUBTRACTED —
+// matching both builders above. Per invoice, not per line.
+async function listAllInvoices(forceRefresh) {
+    const { headers, rows } = await fetchRawSheet(forceRefresh);
+    const colMap = buildColumnMap(headers);
+    if (colMap.inv_no === -1) {
+        throw new Error('Invoice sheet has no "Inv No." column — cannot list invoices');
+    }
+
+    const byInv = new Map();
+    for (const row of rows) {
+        const d = rowToDict(row, colMap);
+        const invNo = safeStr(d.inv_no);
+        if (!invNo) continue;                       // a row with no invoice is not an invoice
+
+        const key = invNo.toUpperCase();
+        if (!byInv.has(key)) {
+            byInv.set(key, {
+                inv_no: invNo,
+                inv_date: safeStr(d.inv_date) || null,
+                consignee: safeStr(d.consignee) || null,
+                customer: safeStr(d.customer) || safeStr(d.consignee) || null,
+                containers: [],
+                subtotal: 0,
+                freight: 0,
+            });
+        }
+        const inv = byInv.get(key);
+
+        // Per line, rounded, exactly as the two document builders do it.
+        inv.subtotal = round2(inv.subtotal + round2(safeFloat(d.weight) * safeFloat(d.inv_price)));
+
+        if (!inv.freight) {
+            const fv = evalFreight(d.freight_charge);
+            if (fv > 0) inv.freight = fv;
+        }
+        const c = safeStr(d.container_no).toUpperCase();
+        if (c && !inv.containers.includes(c)) inv.containers.push(c);
+        // The sheet is not guaranteed to repeat the date on every row of a
+        // merged invoice; take the first one that has it rather than letting
+        // a blank later row blank the invoice.
+        if (!inv.inv_date && safeStr(d.inv_date)) inv.inv_date = safeStr(d.inv_date);
+    }
+
+    return [...byInv.values()].map((inv) => ({
+        ...inv,
+        final_amount: round2(inv.subtotal - inv.freight),
+    }));
+}
+
 async function findContainersByInvNo(invNoQuery) {
     const { headers, rows } = await fetchRawSheet();
     const colMap = buildColumnMap(headers);
@@ -747,7 +830,8 @@ function findPackingRow(packingRows, itemDesc) {
 
 module.exports = {
     ITEM_CODE_RULES, deriveItemCodeFromDesc, normalizeForItemMatch,
-    findContainersByInvNo, invNoTailCodes,
+    findContainersByInvNo,
+    listAllInvoices, invNoTailCodes,
     findContainersForBuyer,
     findContainersByNumber,
     buildContainerInvoiceData,
