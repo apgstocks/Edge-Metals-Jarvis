@@ -358,7 +358,20 @@ async function extractOrderFromEmail(email) {
     const pdfs = Array.isArray(email && email.pdfs) ? email.pdfs.filter((p) => p && p.base64) : [];
     if (pdfs.length) {
         const noFigures = !out.items.some((i) => i.qty != null || i.rate != null);
-        if (noFigures || !out.consignee) {
+        // ── AND ONLY ON MAIL THAT LOOKS LIKE AN ORDER ──────────────────────
+        // The first version of this guard was `noFigures || !out.consignee`,
+        // which is true of almost every email, so the audit immediately showed
+        // SIX smart-tier PDF reads on booking confirmations and statements --
+        // a cost I had added to every attachment in the scan loop. (To its
+        // credit the reader returned items=0 on all six and invented nothing;
+        // the problem was the spend and the latency, not the answers.)
+        //
+        // Narrowed to the measured case: the model already called it an order,
+        // or the body POINTS AT the attachment -- which is literally how hers
+        // read: "Please see the attached file for the additional P.O."
+        const points = /\b(see|find|attach(?:ed|ing)?|enclosed|per)\b[^.]{0,40}\b(attach(?:ed|ment)?|file|pdf|p\.?\s?o\.?|order|contract)\b/i
+            .test(String(email.body || ''));
+        if ((out.is_order || points) && (noFigures || !out.consignee)) {
             const { extractOrderPdfFields } = require('./gemini');
             // FIRST ATTACHMENT ONLY. An order mail carries one order document;
             // the rest are weight tickets, photos and specs, and reading five

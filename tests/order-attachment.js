@@ -143,6 +143,29 @@ const ECCOMELT = {
     ck('OF2 "please see the attached file" DOES read it', PDF_CALLS === 1, `calls = ${PDF_CALLS}`);
     ck('OF3 and the order comes back filled', filled.consignee === 'Metalco, Inc.'
         && filled.items.length === 1 && filled.items[0].rate === 330, JSON.stringify(filled.items));
+    // ── THE SPEND GUARD, which the audit caught me missing ─────────────────
+    // The first version fired on `noFigures || !out.consignee`, true of almost
+    // every email -- so the audit showed SIX smart-tier PDF reads on booking
+    // confirmations and statements. The reader invented nothing on any of them
+    // (items=0 each time); the problem was the cost and the latency added to
+    // every attachment in the scan loop.
+    const callsFor = async (body, isOrder) => {
+        const c = PDF_CALLS;
+        BODY_ORDER = { is_order: !!isOrder, confidence: 0.9, consignee: null, container_count: null,
+            items: [], missing: [], note: null };
+        await extractOrderFromEmail({ from: 'a@b.com', subject: 's', body, date: null,
+            pdfs: [{ filename: 'x.pdf', base64: 'JVBERi0x' }] });
+        return PDF_CALLS - c;
+    };
+    ck('OF5 a booking confirmation with a PDF is NOT read',
+        (await callsFor('Your booking has been confirmed. Vessel MSC AURORA 226E.', false)) === 0);
+    ck('OF6 nor a statement', (await callsFor('Statement for customer # 5453153 attached herewith for your records. Thank you.', false)) === 0,
+        'the body must POINT AT the attachment, not merely have one');
+    ck('OF7 but "please see the attached file" IS read',
+        (await callsFor('Please see the attached file for the additional P.O.', false)) === 1);
+    ck('OF8 and so is mail the model already called an order',
+        (await callsFor('Confirming our purchase as discussed.', true)) === 1);
+
     ck('OF4 no attachment, no call', (await (async () => {
         const c = PDF_CALLS;
         await extractOrderFromEmail({ from: 'a@b.com', subject: 'PO', body: 'nothing here', date: null });

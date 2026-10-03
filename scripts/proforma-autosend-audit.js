@@ -36,8 +36,26 @@ const limit = Number(flag('limit', 40)) || 40;
         const visible = rw.extractLatestMessage(body || msg.snippet || '');
         if (!visible) continue;
         looked++;
+        // THE ATTACHMENT, because since 2026-10-03 the pipeline reads it and
+        // an audit that does not is measuring a system that no longer exists.
+        // That is the same staleness that made the first evalset reading wrong.
+        //
+        // READ THE PDF-CALL COUNT IN THIS SCRIPT'S OUTPUT WITH CARE. This
+        // audit walks the WHOLE INBOX, so it offers every email with an
+        // attachment to the reader. Production does not: replyWatch calls
+        // draftProformaForOrder only `if (!f.is_order) continue;` -- "the
+        // handful of emails that ARE orders rather than the inbox"
+        // (replyWatch.js:4380). So a count of 5 here is 5 reads across 30 days
+        // of ALL mail, not 5 per scan.
+        let pdfs = [];
+        if (pdfParts && pdfParts.length) {
+            try {
+                const att = await gmail.downloadAttachment(client, msg.id, pdfParts[0]);
+                if (att && att.base64) pdfs = [att];
+            } catch (e) { /* judged on the body, as before */ }
+        }
         let order = null;
-        try { order = await extractOrderFromEmail({ from, subject: h('subject'), body: visible, date: null }); } catch (e) { continue; }
+        try { order = await extractOrderFromEmail({ from, subject: h('subject'), body: visible, date: null, pdfs }); } catch (e) { continue; }
         if (!order || !order.is_order) continue;
         orders++;
         const grounded = await groundRates(order).catch(() => order);
