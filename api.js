@@ -198,6 +198,25 @@ function createApi() {
             console.log('[AUTH] Jarvis profile enabled (top-level, audited to data/audit_log.json)');
         }
     }
+
+    // ── and which Gemini model each tier will really use (#159) ───────────
+    // Same reason as the block above: a config value that is silently
+    // overridden looks exactly like a config value that is being obeyed.
+    // getModelName() prefers data/settings.json's gemini_model over
+    // cfg.GEMINI_MODEL, and PUT /api/settings writes the whole default object
+    // back — so the model was frozen into that file the first time any
+    // setting was ever saved, and config.js has been a dead letter since.
+    //
+    // Printed, not enforced. See helpers/gemini.js's effectiveModels.
+    try {
+        for (const line of require('./helpers/gemini').modelReportLines()) {
+            if (/WARNING/.test(line)) console.warn(line);
+            else console.log(line);
+        }
+    } catch (e) {
+        // A report that cannot be produced must not stop the server booting.
+        console.warn('[GEMINI] could not report the effective models:', e.message);
+    }
     // Changed 2026-08-11: this GLOBAL parser used to cap every request body
     // at 2mb, registered before any route runs. Several routes below
     // (largeJson, defined at line ~491) were built to override that with a
