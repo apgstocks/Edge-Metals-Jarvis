@@ -160,3 +160,11 @@ Claude outputs/
 mobile-app/android/app/build.gradle
 mobile-app/www/index.html
 client_errors.json
+_to_delete/d2.js
+_to_delete/dump-fwd.js
+_to_delete/evalset-before.jsonl
+_to_delete/HEAD.lock.1791007225
+_to_delete/index.lock.1791007220
+_to_delete/index.lock.1791007598
+_to_delete/probe-fwd.js
+_to_delete/probe-thread.js
