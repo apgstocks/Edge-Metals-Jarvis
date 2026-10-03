@@ -132,7 +132,7 @@ section('F — the statement prints their rate and never Edge\'s');
     ck('the rate is printed', /1,780/.test(html), html.slice(0, 0));
     ck('Edge\'s sell rate of 2140 is NOT anywhere on it', !/2,140/.test(html) && !/2140/.test(html));
     ck('it explains what the rate is', /the rate we paid you/.test(html));
-    ck('the table still balances — 11 columns, footer spans 10', /colspan="10" class="r">Total recoverable/.test(html));
+    ck('the table still balances — 10 columns, footer spans 9', /colspan="9" class="r">Total recoverable/.test(html));
 
     const xlsx = await report.toWorkbook(b);
     ck('the workbook is produced with the extra columns', xlsx.length > 2000);
@@ -194,6 +194,27 @@ section('F3 — the document never contradicts itself');
     await claims.raiseRecovery(c.id, { our_claim: 1005 }, 'test');   // 0.5%, rounding
     ck('small rounding does not strip the rate', report.build({ supplier: 'Odd' }).lines[0].rate === 1000);
     await claims.setStatus(c.id, 'withdrawn', 'test', 'fixture only');
+}
+
+section('F4 — nothing that leaves the building names the customer');
+{
+    // Apsara, 2026-10-03: "if there is any company name mentioned in claim email
+    // of customer, then it should be hided." A supplier who learns which buyer
+    // the metal reached can go to them directly.
+    writeBills([{ id: 'b1', supplier: 'Gomez Metals', container_no: 'CAIU 9975642', supplier_price: 1780, price_unit: 'mt', items: [] }]);
+    const b = report.build({ supplier: 'Gomez Metals' });
+    ck('the customer is still in the JSON the PAGE reads', b.lines.some((l) => l.customer === 'Joey'), b.lines.map((l) => l.customer));
+
+    const html = report.toHtml(b);
+    ck('but it is NOT on the pdf/html statement', !/Joey/.test(html));
+    ck('and there is no Customer column at all', !/>Customer</.test(html));
+    ck('the lead no longer says "our customers"', !/raised by our customers/.test(html));
+    ck('the claim is still identifiable — container and our own invoice', /CAIU9975642/.test(html) && /26JY05/.test(html));
+    ck('the table still balances — 10 columns, footer spans 9', /colspan="9" class="r">Total recoverable/.test(html));
+
+    const xlsx = await report.toWorkbook(b);
+    const text = xlsx.toString('latin1');
+    ck('the excel version drops it too', !/Joey/.test(text) && xlsx.length > 2000);
 }
 
 section('G — through the route');

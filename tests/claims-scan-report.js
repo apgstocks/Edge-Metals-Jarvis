@@ -148,7 +148,12 @@ section('E — the document itself');
     const html = report.toHtml(b);
     ck('it is addressed and referenced', html.includes('Gomez') && html.includes(b.reference));
     ck('it leads with what is recoverable from them', /Amount recoverable from you/.test(html));
-    ck('it says the claims are the customers\'', /raised by our customers/.test(html));
+    // Was /raised by our customers/ until 2026-10-03. Apsara: "if there is any
+    // company name mentioned in claim email of customer, then it should be
+    // hided" — so the document no longer refers to a customer at all, and the
+    // Customer column is gone. claims-supplier-price.js F4 holds the full guard.
+    ck('it says the claims were raised against THEIR material, naming no customer',
+        /raised against material supplied by you/.test(html) && !/>Customer</.test(html));
     ck('it does NOT print what Edge itself absorbs — that is not their business',
         !/absorb/i.test(html) && !/Claimed against Edge/i.test(html));
     ck('it states that no unit conversion was applied', /No conversion has been applied/.test(html));

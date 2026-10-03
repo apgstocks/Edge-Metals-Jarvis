@@ -154,13 +154,25 @@ function toHtml(b) {
     // in claim?" — without it the last column is a number the supplier cannot
     // reproduce, and an unexplained number is the one they query. It is their
     // own price off their own bill; Edge's sell rate is not on this document.
-    const head = ['Date', 'Our invoice', 'Container', 'Customer', 'What is claimed', 'Invoiced', 'Received', 'Short', '%', 'Your rate', 'Recoverable'];
+    // ── THE CUSTOMER'S NAME DOES NOT GO ON THIS DOCUMENT ───────────────────
+    // Apsara, 2026-10-03: "if there is any company name mentioned in claim email
+    // of customer, then it should be hided."
+    //
+    // She said it about the supporting photos; it was already true of the
+    // statement itself, which printed a Customer column on every line. A
+    // supplier who learns which buyer the metal ended up with can go to them
+    // directly, and that is Edge's business gone, not a privacy nicety.
+    //
+    // Nothing is lost by removing it: the container number and Edge's own
+    // invoice number identify the claim completely, and they are the references
+    // a supplier checks against. `customer` stays in the JSON that the PAGE
+    // reads — it is only the documents that LEAVE the building that drop it.
+    const head = ['Date', 'Our invoice', 'Container', 'What is claimed', 'Invoiced', 'Received', 'Short', '%', 'Your rate', 'Recoverable'];
 
     const row = (l) => `<tr${l.sendable ? '' : ' class="info"'}>
       <td>${esc(l.date)}</td>
       <td class="mono">${esc(l.invoice_no || '—')}</td>
       <td class="mono">${esc(l.container_no || '—')}</td>
-      <td>${esc(l.customer || '—')}</td>
       <td>${esc(l.kind)}${l.sendable ? '' : '<span class="tag">not yet verified</span>'}</td>
       <td class="r mono">${esc(wt(l.invoice_weight, l.unit))}</td>
       <td class="r mono">${esc(wt(l.claimed_weight, l.unit))}</td>
@@ -224,12 +236,12 @@ tfoot td{border-top:2px solid #1a1a1a;border-bottom:0;padding-top:7px;font-weigh
   <div><div class="k">Total shortage</div><span class="mono">${esc(wt(b.totals.shortage, b.lines[0] ? b.lines[0].unit : ''))}</span></div>
 </div>
 
-<p class="lead">The claims below were raised by our customers against material supplied by you. Each one is supported by the customer's own claim documents, which we can forward on request. The amount shown in the final column is what we are recovering from you.</p>
+<p class="lead">The claims below were raised against material supplied by you, each one supported by the claim documents behind it, which we can forward on request. The amount shown in the final column is what we are recovering from you.</p>
 
 <table>
-  <thead><tr>${head.map((h, i) => `<th${i >= 5 ? ' class="r"' : ''}>${esc(h)}</th>`).join('')}</tr></thead>
-  <tbody>${b.lines.length ? b.lines.map(row).join('') : '<tr><td colspan="11" style="padding:16px;color:#777">No claims in this statement.</td></tr>'}</tbody>
-  ${b.totals.claims ? `<tfoot><tr><td colspan="10" class="r">Total recoverable</td><td class="r mono">${esc(money(b.totals.recoverable))}</td></tr></tfoot>` : ''}
+  <thead><tr>${head.map((h, i) => `<th${i >= 4 ? ' class="r"' : ''}>${esc(h)}</th>`).join('')}</tr></thead>
+  <tbody>${b.lines.length ? b.lines.map(row).join('') : '<tr><td colspan="10" style="padding:16px;color:#777">No claims in this statement.</td></tr>'}</tbody>
+  ${b.totals.claims ? `<tfoot><tr><td colspan="9" class="r">Total recoverable</td><td class="r mono">${esc(money(b.totals.recoverable))}</td></tr></tfoot>` : ''}
 </table>
 
 <div class="total"><div class="box">
@@ -280,16 +292,17 @@ async function toWorkbook(built) {
     ws.addRow([built.reference, new Date(built.generatedAt).toLocaleDateString('en-US')]);
     ws.addRow(['To', built.addressedTo || '']);
     ws.addRow([]);
-    ws.addRow(['Date', 'Our invoice', 'Container', 'Customer', 'What is claimed', 'Unit',
+    // Same rule as the PDF: this file is sent to the supplier, so no customer.
+    ws.addRow(['Date', 'Our invoice', 'Container', 'What is claimed', 'Unit',
         'Invoiced weight', 'Received weight', 'Shortage', 'Shortage %', 'Charged quantity', 'Your rate', 'Rate per', 'Recoverable from you', 'Status']);
     for (const l of built.lines) {
-        ws.addRow([l.date, l.invoice_no, l.container_no, l.customer, l.kind + (l.sendable ? '' : ' (not yet verified)'),
+        ws.addRow([l.date, l.invoice_no, l.container_no, l.kind + (l.sendable ? '' : ' (not yet verified)'),
             l.unit, l.invoice_weight, l.claimed_weight, l.shortage, l.shortage_pct,
             l.charge_qty === null ? l.shortage : l.charge_qty, l.rate, l.rate_unit,
             l.sendable ? l.our_claim : null, l.status]);
     }
     ws.addRow([]);
-    ws.addRow(['', '', '', '', '', '', '', '', '', '', '', '', 'Total recoverable', built.totals.recoverable]);
+    ws.addRow(['', '', '', '', '', '', '', '', '', '', '', 'Total recoverable', built.totals.recoverable]);
     ws.getRow(1).font = { bold: true, size: 13 };
     ws.getRow(5).font = { bold: true };
     ws.columns.forEach((c) => { c.width = 17; });
