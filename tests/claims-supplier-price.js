@@ -138,6 +138,64 @@ section('F — the statement prints their rate and never Edge\'s');
     ck('the workbook is produced with the extra columns', xlsx.length > 2000);
 }
 
+section('F2 — a rate per pound against a claim in tonnes');
+{
+    // Apsara, 2026-10-03: "What if the supplier price is in lbs?" The maths was
+    // already right; the DOCUMENT was not. A supplier reading "1 MT short" beside
+    // "$0.81/LB" has to find 2204.62 himself to check the amount — which is the
+    // same unexplained number the rate column exists to remove.
+    writeBills([{ id: 'b6', supplier: 'Calderon', container_no: 'TCNU1000001', supplier_price: 0.81, price_unit: 'lb', items: [] }]);
+    const c = claims.list().find((x) => String(x.container_no) === 'TCNU1000001');
+    await claims.update(c.id, { supplier_price: 0.81, supplier_price_unit: 'LB' }, 'test', 'rate from bill');
+    await claims.raiseRecovery(c.id, { our_claim: 1785.74 }, 'test');
+
+    const b = report.build({ supplier: 'Calderon' });
+    const l = b.lines.find((x) => x.container_no === 'TCNU1000001');
+    ck('the line carries the shortage converted into the rate\'s unit', l && Math.abs(l.charge_qty - 2204.623) < 0.01, l && l.charge_qty);
+    ck('the claim\'s own weights are NOT converted', l.shortage === 1 && l.unit === 'MT', { s: l.shortage, u: l.unit });
+
+    const html = report.toHtml(b);
+    ck('the document prints the quantity his rate is applied to', /on 2,204\.623 LB/.test(html));
+    ck('and the rate in his own unit', /\$0\.81\/LB/.test(html));
+    ck('the three numbers reconcile on the page', Math.abs(2204.62262 * 0.81 - 1785.74) < 0.01);
+    ck('the no-conversion note no longer claims nothing was converted',
+        /No conversion has been applied to them/.test(html) && /1 MT = 2,204\.62262 lb/.test(html));
+
+    // Same unit on both sides: nothing to convert, nothing extra printed.
+    const same = report.build({ supplier: 'Gomez Metals' }).lines.find((x) => x.invoice_no === '26JY05');
+    ck('a rate in the claim\'s own unit prints no conversion line', same && same.charge_qty === null, same && same.charge_qty);
+    ck('and the note is not shown for it', !/1 MT = 2,204\.62262 lb/.test(report.toHtml(report.build({ supplier: 'Gomez Metals' }))));
+}
+
+section('F3 — the document never contradicts itself');
+{
+    // our_claim is typed by a person; the rate and quantity are facts off the
+    // bill. When they disagree, the supplier is handed the one number on the
+    // page he can prove wrong — so the rate comes off that line instead.
+    writeBills([{ id: 'b7', supplier: 'Odd', container_no: 'ODDU0000009', supplier_price: 1000, price_unit: 'mt', items: [] }]);
+    const c = await claims.create({ supplier: 'Odd', container_no: 'ODDU0000009', note: 'short' }, 'test');
+    await claims.verify(c.id, { invoice_weight: 20, claimed_weight: 19, weight_unit: 'MT', sell_price: 2000, sell_price_unit: 'MT' }, 'test');
+    await claims.update(c.id, { supplier_price: 1000, supplier_price_unit: 'MT' }, 'test', 'rate');
+    await claims.raiseRecovery(c.id, { our_claim: 600 }, 'test');   // negotiated down from 1000
+
+    const b = report.build({ supplier: 'Odd' });
+    const l = b.lines[0];
+    ck('a rate that does not reconcile is taken off the line', l.rate === null, { rate: l.rate, ours: l.our_claim });
+    ck('the amount is untouched — nothing is adjusted to make it fit', l.our_claim === 600);
+    ck('she is told which line and by how much', b.notReconciled.length === 1 && b.notReconciled[0].atRate === 1000, b.notReconciled);
+    const html = report.toHtml(b);
+    ck('and the document says the amount is as agreed', /as agreed between us rather than calculated/.test(html));
+
+    await claims.raiseRecovery(c.id, { our_claim: 1000 }, 'test');
+    const b2 = report.build({ supplier: 'Odd' });
+    ck('a figure that DOES reconcile keeps its rate', b2.lines[0].rate === 1000, b2.lines[0].rate);
+    ck('and nothing is flagged', b2.notReconciled.length === 0);
+
+    await claims.raiseRecovery(c.id, { our_claim: 1005 }, 'test');   // 0.5%, rounding
+    ck('small rounding does not strip the rate', report.build({ supplier: 'Odd' }).lines[0].rate === 1000);
+    await claims.setStatus(c.id, 'withdrawn', 'test', 'fixture only');
+}
+
 section('G — through the route');
 {
     const app = express();
@@ -151,6 +209,8 @@ section('G — through the route');
         try { const r = await fetch(`http://127.0.0.1:${port}${p}`, { signal: ctl.signal }); clearTimeout(t); return { code: r.status, body: await r.json().catch(() => null) }; }
         catch (e) { clearTimeout(t); return { code: 'HUNG' }; }
     };
+    // Each section writes its own bills file, so put this one's back first.
+    writeBills([{ id: 'b1', supplier: 'Gomez Metals', container_no: 'CAIU 9975642', supplier_price: 1780, price_unit: 'mt', items: [] }]);
     const c = claims.list().find((x) => x.invoice_no === '26JY05');
     const r = await get('/api/claims/' + c.id + '/price');
     ck('GET /api/claims/:id/price answers with the rate', r.code === 200 && r.body.price === 1780, r.body);

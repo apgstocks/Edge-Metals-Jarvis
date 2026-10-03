@@ -574,7 +574,10 @@ function wireClaim(c){
       if (p.price === null) { box.innerHTML = '<b>·</b> No rate from the bill — ' + esc(p.why || 'nothing found') + '.'; return; }
       const at = money(p.price) + '/' + esc(p.unit);
       box.innerHTML = '<b>·</b> ' + esc(p.source) + ': <b>' + at + '</b>' +
-        (p.amount !== null ? ' \u2192 the shortage at their rate is <b>' + money(p.amount) + '</b> <button class="btn use_rate" type="button" style="margin-left:6px">Use it</button>'
+        (p.amount !== null ? ' \u2192 ' + (p.quantity !== undefined && p.unit !== (c.weight_unit || p.unit)
+              ? 'the ' + (c.shortage ?? '?') + ' ' + esc(c.weight_unit || '') + ' short is <b>' + Number(p.quantity).toLocaleString('en-US',{maximumFractionDigits:3}) + ' ' + esc(p.unit) + '</b> at their unit, so '
+              : 'the shortage at their rate is ') +
+            '<b>' + money(p.amount) + '</b> <button class="btn use_rate" type="button" style="margin-left:6px">Use it</button>'
                            : ' \u2014 ' + esc(p.missing || 'nothing to work out yet')) +
         (p.supplierMismatch ? '<br><b>·</b> This claim names <b>' + esc(p.supplierMismatch.onClaim) + '</b> but the bill for this container is from <b>' + esc(p.supplierMismatch.onBill) + '</b>. One of them is wrong.' : '');
       const use = box.querySelector('.use_rate');
@@ -814,6 +817,9 @@ function openStatement(pre){
         '<div class="hint" style="margin-top:0">To ' + esc(b.addressedTo || 'every supplier on these claims') + ' · ref ' + esc(b.reference) + '</div>' +
         (b.unverifiedCount && !b.includedUnverified ? '<div class="hint"><b>·</b> ' + b.unverifiedCount + ' unverified claim(s) are NOT in this — a reading, not a demand. Tick the box above to include them for information.</div>' : '') +
         ((b.noFigure || []).length ? '<div class="hint"><b>·</b> ' + b.noFigure.length + ' claim(s) have no recovery figure, so they add nothing to the total. Raise the recovery on them first.</div>' : '') +
+        ((b.notReconciled || []).length ? '<div class="hint"><b>·</b> ' + b.notReconciled.length + ' line(s) do not reconcile — ' +
+          b.notReconciled.map(n => esc(n.container_no || n.invoice_no) + ': ' + money(n.our_claim) + ' recorded, ' + money(n.atRate) + ' at the bill rate').join('; ') +
+          '. The rate is left OFF those lines, so the supplier is not handed a contradiction. Fix the figure or the rate if they should agree.</div>' : '') +
         (b.totals.claims ? '' : '<div class="hint"><b>·</b> Nothing to send. Confirm the weights and raise the recovery on at least one claim first.</div>') +
       '</div>';
     } catch (e) { $('#r_out', wrap).innerHTML = '<div class="card"><div class="why">' + esc(e.message) + '</div></div>'; }

@@ -21,6 +21,7 @@
 // ledger exports, through helpers/pdfQueue so two Chromiums never race.
 const claims = require('../claims');
 const claimKinds = require('../claimKinds');
+const claimPrice = require('../claimPrice');
 
 const money = (n) => (n === null || n === undefined || n === '') ? '—'
     : '$' + Number(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -75,6 +76,17 @@ function build(opts = {}) {
         // they do is query it. Edge's sell_price is deliberately NOT here.
         rate: num(c.supplier_price),
         rate_unit: c.supplier_price_unit || '',
+        // THE RATE IS OFTEN PER POUND WHILE THE CLAIM IS IN TONNES. Apsara,
+        // 2026-10-03: "What if the supplier price is in lbs?" — the conversion
+        // was already right in the code and wrong on the DOCUMENT: a supplier
+        // reading "1.922 MT short" beside "$0.81/LB" has to find 2204.62 for
+        // himself to check the amount, which is the same unexplained number
+        // this column was added to remove. So the quantity his rate is applied
+        // to is printed next to it, and only when the units actually differ —
+        // the claim's own weights are left exactly as recorded.
+        charge_qty: (c.supplier_price_unit && c.weight_unit && c.supplier_price_unit !== c.weight_unit)
+            ? (() => { const q = claimPrice.toUnit(num(c.shortage), c.weight_unit, c.supplier_price_unit); return q === null ? null : Math.round(q * 1000) / 1000; })()
+            : null,
         our_claim: num(c.our_claim),
         status: c.status,
         sendable: SENDABLE.includes(c.status),
@@ -82,7 +94,24 @@ function build(opts = {}) {
         note: c.note || '',
     });
 
-    const lines = rows.map(line);
+    // ── THE DOCUMENT MUST NOT CONTRADICT ITSELF ────────────────────────────
+    // our_claim is typed by a person, because what is recovered is negotiated.
+    // The rate and the quantity are facts off the purchase bill. So the three
+    // can disagree — and a statement that prints 1,521.19 LB at $0.74 next to
+    // $1,131.56 hands the supplier the one thing on the page he can prove is
+    // wrong, and he will use it to reopen the whole claim. Where they do not
+    // reconcile, the rate comes OFF that line and it reads as an agreed amount,
+    // which is what it actually is. Nothing is adjusted to make it fit.
+    const RECONCILE_TOL = 0.01;   // 1%, and never less than a dollar
+    const lines = rows.map(line).map((l) => {
+        if (l.rate === null || !l.sendable || !l.our_claim) return l;
+        const qty = l.charge_qty === null ? l.shortage : l.charge_qty;
+        if (qty === null) return l;
+        const implied = qty * l.rate;
+        const slack = Math.max(1, Math.abs(l.our_claim) * RECONCILE_TOL);
+        if (Math.abs(implied - l.our_claim) <= slack) return l;
+        return { ...l, rate: null, rate_unit: '', charge_qty: null, rate_hidden: Math.round(implied * 100) / 100 };
+    });
     const sendable = lines.filter((l) => l.sendable);
     const recoverable = sendable.reduce((t, l) => t + (l.our_claim || 0), 0);
     const suppliers = [...new Set(lines.map((l) => l.supplier).filter(Boolean))];
@@ -100,6 +129,11 @@ function build(opts = {}) {
         unverifiedCount: unverified.length,
         includedUnverified: !!opts.includeUnverified,
         noFigure,
+        // Lines whose rate was taken off because it did not reconcile with the
+        // amount. The page warns her BEFORE the document goes out; the supplier
+        // never sees a contradiction.
+        notReconciled: lines.filter((l) => l.rate_hidden !== undefined)
+            .map((l) => ({ invoice_no: l.invoice_no, container_no: l.container_no, our_claim: l.our_claim, atRate: l.rate_hidden })),
         totals: {
             claims: sendable.length,
             recoverable: Math.round(recoverable * 100) / 100,
@@ -132,13 +166,14 @@ function toHtml(b) {
       <td class="r mono">${esc(wt(l.claimed_weight, l.unit))}</td>
       <td class="r mono">${esc(wt(l.shortage, l.unit))}</td>
       <td class="r mono">${l.shortage_pct === null ? '—' : esc(l.shortage_pct.toFixed(2)) + '%'}</td>
-      <td class="r mono">${l.rate === null ? '—' : esc(money(l.rate)) + '/' + esc(l.rate_unit || '')}</td>
+      <td class="r mono">${l.rate === null ? '—' : esc(money(l.rate)) + '/' + esc(l.rate_unit || '')}${l.charge_qty === null ? '' : `<div class="conv">on ${esc(wt(l.charge_qty, l.rate_unit))}</div>`}</td>
       <td class="r mono strong">${l.sendable ? esc(money(l.our_claim)) : '—'}</td>
     </tr>`;
 
     return `<!doctype html><html><head><meta charset="utf-8"><title>${esc(b.reference)}</title>
 <style>
 @page { size: A4 landscape; margin: 14mm 12mm; }
+.conv{font-size:9px;color:#777;font-weight:400;letter-spacing:0}
 *{box-sizing:border-box}
 body{margin:0;font-family:"Helvetica Neue",Helvetica,Arial,sans-serif;color:#1a1a1a;font-size:9pt;line-height:1.45}
 .mono{font-family:"SF Mono",Menlo,Consolas,monospace;font-variant-numeric:tabular-nums}
@@ -205,7 +240,8 @@ tfoot td{border-top:2px solid #1a1a1a;border-bottom:0;padding-top:7px;font-weigh
 <div class="notes">
   ${b.includedUnverified && b.lines.some((l) => !l.sendable) ? '<p><strong>Lines marked “not yet verified”</strong> are shown for information only. Their weights have not yet been confirmed against the loading documents and they are excluded from the total above.</p>' : ''}
   ${b.noFigure.length ? `<p><strong>${b.noFigure.length} claim(s)</strong> in this statement have no recovery amount set against them yet; they are listed so the position is complete.</p>` : ''}
-  <p>Weights are stated in the unit shown against each line, exactly as recorded on the claim documents. No conversion has been applied.</p>
+  <p>Weights are stated in the unit shown against each line, exactly as recorded on the claim documents. No conversion has been applied to them.</p>
+  ${b.lines.some((l) => l.charge_qty !== null) ? '<p>Where our purchase rate is per a different unit, the shortage converted into that unit is shown beneath the rate, at 1 MT = 2,204.62262 lb. The recoverable amount is that quantity at that rate.</p>' : ''}
   ${b.lines.some((l) => l.rate !== null) ? '<p><strong>“Your rate”</strong> is the price on our purchase bill for that container — the rate we paid you for the material. Each recoverable amount is the shortage at that rate.</p>' : ''}
   ${b.lines.some((l) => l.sendable && l.rate === null) ? '<p>Where no rate is shown, the amount is as agreed between us rather than calculated.</p>' : ''}
   <p>Please confirm acceptance or raise any query within 14 days of the date of this statement.</p>
@@ -245,14 +281,15 @@ async function toWorkbook(built) {
     ws.addRow(['To', built.addressedTo || '']);
     ws.addRow([]);
     ws.addRow(['Date', 'Our invoice', 'Container', 'Customer', 'What is claimed', 'Unit',
-        'Invoiced weight', 'Received weight', 'Shortage', 'Shortage %', 'Your rate', 'Rate per', 'Recoverable from you', 'Status']);
+        'Invoiced weight', 'Received weight', 'Shortage', 'Shortage %', 'Charged quantity', 'Your rate', 'Rate per', 'Recoverable from you', 'Status']);
     for (const l of built.lines) {
         ws.addRow([l.date, l.invoice_no, l.container_no, l.customer, l.kind + (l.sendable ? '' : ' (not yet verified)'),
             l.unit, l.invoice_weight, l.claimed_weight, l.shortage, l.shortage_pct,
-            l.rate, l.rate_unit, l.sendable ? l.our_claim : null, l.status]);
+            l.charge_qty === null ? l.shortage : l.charge_qty, l.rate, l.rate_unit,
+            l.sendable ? l.our_claim : null, l.status]);
     }
     ws.addRow([]);
-    ws.addRow(['', '', '', '', '', '', '', '', '', '', '', 'Total recoverable', built.totals.recoverable]);
+    ws.addRow(['', '', '', '', '', '', '', '', '', '', '', '', 'Total recoverable', built.totals.recoverable]);
     ws.getRow(1).font = { bold: true, size: 13 };
     ws.getRow(5).font = { bold: true };
     ws.columns.forEach((c) => { c.width = 17; });
