@@ -43,7 +43,13 @@ const DIR = path.join(ROOT, 'tests');
 // they actually communicate with. Worth it immediately: trap-audit reports a
 // real hole — await_relay_reply swallowing new questions as answers — that
 // nothing else in the suite knows about.
-const REPORT_ONLY = new Set(['arbiter-live.js', 'trap-audit.js']);
+// qb-agent-stress.js joined them on 2026-10-03. It stresses 30 safety and
+// quality properties and prints a BUDGET ("safety: 19/19 held") instead of a
+// totals line, so the runner called it CRASHED on every single run while it
+// was in fact 30/30 green. A suite that is permanently red teaches you to
+// stop reading red, which is worse than not having it. Its exit code is
+// still judged below, so a real break there still fails the run.
+const REPORT_ONLY = new Set(['arbiter-live.js', 'trap-audit.js', 'qb-agent-stress.js']);
 
 const PER_SUITE_MS = Number(process.env.TEST_TIMEOUT_MS || 180000);
 const only = process.argv.slice(2).filter((a) => !a.startsWith('-'));
@@ -79,7 +85,12 @@ for (const f of files) {
     // my own mutations this week died by crashing — which would have read as
     // green under a runner that only looked for the word "FAIL".
     // An audit has no totals by design; only its exit code means anything.
-    const crashed = !m && !REPORT_ONLY.has(f);
+    // A suite that stands down because a model or native module is not on this
+    // machine (the ONNX wake/turn suites) says SKIPPED and exits 0. That is not
+    // a crash and it is not a pass either — call it what it is, so the only
+    // things wearing a ✗ are things that are actually wrong.
+    const skipped = !m && r.status === 0 && /^\s*SKIPPED\b/m.test(out);
+    const crashed = !m && !skipped && !REPORT_ONLY.has(f);
     const timedOut = r.error && r.error.code === 'ETIMEDOUT';
     const bad = crashed || failed > 0 || (r.status !== 0 && !failed);
     if (REPORT_ONLY.has(f) && !bad && !m) {
@@ -94,6 +105,7 @@ for (const f of files) {
 
     const state = timedOut ? `TIMED OUT after ${PER_SUITE_MS / 1000}s`
         : crashed ? 'CRASHED — no totals printed'
+        : skipped ? 'SKIPPED — not runnable here'
         : failed ? `${pass} passed, ${failed} FAILED`
         : (REPORT_ONLY.has(f) && !m) ? 'audit clean (report only)'
         : `${pass} passed`;

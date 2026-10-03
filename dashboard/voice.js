@@ -77,13 +77,51 @@
     // so the wake word works", which was wrong: SpeechRecognition in Chrome
     // is a GOOGLE SERVICE reached with keys Electron does not have. Proved on
     // her machine — "SPEECH ERROR: network", instantly — rather than argued.
+    //   4. SERVER (voice-server.js) — records the utterance and posts it to
+    //      /api/bot/voice-command, which transcribes it with the same engine
+    //      the phone's mic button and WhatsApp voice notes already use. It
+    //      needs nothing from the browser but MediaRecorder, so Firefox,
+    //      Safari, Edge and every phone browser can run the whole assistant.
+    //
+    //      Apsara, 2026-10-03: "I don't want to use Chrome... I want it to
+    //      work across all browsers and devices — that's what
+    //      productionisation of an app means." Only this one part of four was
+    //      ever Chrome's: the wake word and the end-of-turn model are our own
+    //      ONNX in WebAssembly, and the replies are WAVs from the server.
     var LOCAL = window.JarvisLocalRecognition || null;
-    var SR = LOCAL || window.SpeechRecognition || window.webkitSpeechRecognition || null;
-    // Safari reports webkitSpeechRecognition and then handles `continuous`
-    // badly. Irrelevant when the local engine is present, which is why this is
-    // checked second.
+    var BROWSER_SR = window.SpeechRecognition || window.webkitSpeechRecognition || null;
+    var SERVER_SR = (window.JarvisServerRecognition && window.JarvisServerRecognition.supported())
+        ? window.JarvisServerRecognition : null;
     var isSafari = /^((?!chrome|android|crios|edg).)*safari/i.test(navigator.userAgent);
-    var canWake = !!LOCAL || (!!SR && !isSafari);
+    var isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent)
+        || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+    // Safari reports webkitSpeechRecognition and then handles `continuous`
+    // badly — long-standing and documented, not a guess — so where the server
+    // engine exists it is preferred over Safari's own.
+    var SR = LOCAL || ((isSafari && SERVER_SR) ? SERVER_SR : (BROWSER_SR || SERVER_SR)) || null;
+    var usingServerSR = !!SR && SR === SERVER_SR;
+    console.log('[VOICE] transcription engine: ' + (LOCAL ? 'local whisper (desktop app)'
+        : usingServerSR ? 'server (/api/bot/voice-command)' : 'this browser\'s own speech API'));
+
+    // ── WHEN CAN IT LISTEN HANDS-FREE ────────────────────────────────────
+    // With Chrome's recogniser or the desktop app the microphone can stay
+    // open: the audio is scanned for "Hey Jarvis" and dropped.
+    //
+    // The SERVER engine must not do that — an open microphone there means
+    // uploading the room all day, which costs money per minute and records
+    // everything said near her desk. So the wake WORD model (wake-model.js,
+    // openWakeWord) listens locally and for free, and only when it fires does
+    // one utterance get recorded and sent. Hands-free on Firefox or Safari
+    // therefore depends on the wake model, not on the browser's speech API.
+    //
+    // On a PHONE it is press-to-talk whatever the engine. iOS decides the
+    // audio session itself, requires playback to start inside a tap, and
+    // suspends the microphone in the background; an always-listening page
+    // there is a battery drain that stops working the moment she switches
+    // apps. The button already says "Hold to talk" when canWake is false.
+    var canWake = !isIOS && (!!LOCAL
+        || (!!BROWSER_SR && !isSafari && !usingServerSR)
+        || (usingServerSR && !!window.JarvisWake));
 
     // ── THE WAKE WORD, AND WHAT THE MODEL ACTUALLY WRITES DOWN ───────────
     // This was /\b(hey |ok |okay )?jarvis\b/i — one spelling, exactly. That
@@ -191,6 +229,12 @@
 
     var state = VM.initial({ enabled: false, foreground: !document.hidden });
     var rec = null, captureTimer = null, heardDuringCapture = '';
+    // True between letting go of the button — or the server engine closing its
+    // own recording — and the transcript coming back. The capture is held open
+    // across that gap, or the words arrive after the turn has closed and are
+    // thrown away.
+    var awaitingTranscript = false;
+    var transcriptWait = null;
     // Set from the server's `awaiting` flag on every response, and consumed
     // exactly once by the speak() finish handler below. A variable rather
     // than state in voice-machine.js deliberately: that reducer exists to
@@ -1322,6 +1366,20 @@
                 // quietly: no chime, no "didn't catch that", no retry. That
                 // retry exists for an outstanding question, and firing it
                 // after an ordinary answer would nag her for not speaking.
+                // ── NOT ON THE SERVER ENGINE (2026-10-03) ────────────────
+                // This window is five seconds of microphone she did not ask
+                // for. On Chrome that costs nothing — the audio is scanned and
+                // dropped. On the server engine it is a recording and an
+                // upload after every answer, usually of silence. So there she
+                // says "Hey Jarvis" again (the wake model is still listening,
+                // locally and free) or taps the button. The window after a
+                // question JARVIS asked is kept, in the branch above: there
+                // she is expected to answer, so the recording is one she meant.
+                if (usingServerSR) {
+                    console.log('[VOICE] answered — the wake word opens the next turn '
+                        + '(this engine does not record while idle)');
+                    return;
+                }
                 console.log('[VOICE] follow-up window open — no wake word needed');
                 // lastAsked is deliberately NOT cleared here, unlike the
                 // question branch above. It is what the continuation window
@@ -1341,6 +1399,23 @@
     // ── the recogniser ────────────────────────────────────────────────────
     function startMic() {
         if (!SR || rec || speechUnavailable) return;
+        // ── THE SERVER ENGINE RECORDS A TURN, NEVER THE ROOM ─────────────
+        // With Chrome the microphone can sit open all day: the audio is
+        // streamed, scanned for "Hey Jarvis" and thrown away. The server
+        // engine UPLOADS what it records, so leaving it open would be a bill
+        // per minute and a recording of everything said near her desk.
+        //
+        // While nothing is being asked, the local wake-word model does the
+        // listening and this stands down. It starts when a capture is open —
+        // after the wake word, or after she taps the button. The guard mic
+        // (which hears "stop" over Jarvis's own voice) is Chrome-only for the
+        // same reason; on this engine barge-in is the wake word or the button.
+        if (usingServerSR && !state.capturing) {
+            console.log('[VOICE] waiting on the wake word'
+                + (window.JarvisWake ? ' (model, local)' : ' — tap to talk')
+                + '; the microphone opens when there is something to send');
+            return;
+        }
         rec = new SR();
         rec.continuous = canWake;
         rec.interimResults = true;
@@ -1526,6 +1601,19 @@
                 // SHE HAS SPOKEN. From here the short end-of-utterance window
                 // applies; before this, the long waiting-to-start one did.
                 if (saidMoreThanName()) heardAnything = true;
+                // ── THE SERVER ENGINE SPEAKS ONCE, AND THAT IS THE END ───
+                // Chrome streams: words arrive, then more words, and a pause
+                // decides the turn is over. The server engine transcribes a
+                // finished recording, so its one result IS the end of the
+                // turn. Waiting for a silence timer after it would add a
+                // second of nothing before Jarvis answers, and those timers
+                // would be watching a microphone that is already closed.
+                if (usingServerSR) {
+                    awaitingTranscript = false;
+                    clearTimeout(transcriptWait);
+                    finishCapture();
+                    return;
+                }
                 // She is still talking, so the clock starts again. This is
                 // the whole fix for being cut off: the window measures
                 // SILENCE, not elapsed time.
@@ -1596,6 +1684,14 @@
         };
 
         rec.onerror = function (ev) {
+            // The server engine holds the capture open while it transcribes.
+            // If that fails, the turn has to be closed here or the orb spins
+            // for ever on a question that will never be answered.
+            if (usingServerSR && awaitingTranscript) {
+                awaitingTranscript = false;
+                clearTimeout(transcriptWait);
+                if (state.capturing) finishCapture();
+            }
             var err = ev && ev.error;
             if (err === 'not-allowed' || err === 'service-not-allowed') {
                 // Continuing to show "Listening" without permission is a lie,
@@ -1658,6 +1754,24 @@
                         + networkErrors + '/' + NETWORK_ERRORS_BEFORE_GIVING_UP + ') — retrying');
                     say('Reconnecting…');
                     dispatch('RECOGNISER_STOPPED');   // the reducer restarts it
+                    return;
+                }
+                // ── IT FALLS BACK INSTEAD OF GIVING UP (2026-10-03) ──
+                // "Voice needs Google Chrome" was the right answer only while
+                // there was no other engine. There is one now: record the
+                // utterance and let the server transcribe it. So a browser
+                // whose speech service keeps failing — Electron, Edge, a
+                // blocked network — changes engine and carries on.
+                if (SERVER_SR && SR !== SERVER_SR) {
+                    SR = SERVER_SR;
+                    usingServerSR = true;
+                    canWake = !isIOS && !!window.JarvisWake;
+                    networkErrors = 0;
+                    console.warn('[VOICE] this browser\'s speech service kept failing'
+                        + ' — switching to server transcription'
+                        + (canWake ? ' (the wake word still runs here, locally)' : ' (tap to talk)'));
+                    say(canWake ? 'Say “Hey Jarvis”' : 'Tap to talk');
+                    dispatch('RECOGNISER_STOPPED');
                     return;
                 }
                 speechUnavailable = true;
@@ -2166,6 +2280,16 @@
     // below, so the capture resumes rather than restarting.
     function openCapture(opts) {
         var o = opts || {};
+        // ── THE SERVER ENGINE OPENS THE MICROPHONE HERE ──────────────────
+        // The reducer emits START_MIC only when the microphone goes from shut
+        // to open, and with voice enabled it already counts as open — Chrome's
+        // recogniser really is running, scanning for the wake word. The server
+        // engine deliberately is not (startMic stands down until there is
+        // something to send), so a capture opening produces no transition for
+        // the reducer to notice and nothing would ever record. Asked for
+        // directly instead, which is also the exact moment recording SHOULD
+        // begin: after the wake word, or after she taps the button.
+        if (usingServerSR && !rec) startMic();
         // ── THE SEED IS A PREFIX, NOT AN INITIAL VALUE ───────────────────
         // Setting heardDuringCapture alone was useless: the recogniser's very
         // next result does `heardDuringCapture = txt`, which OVERWRITES it.
@@ -2363,6 +2487,11 @@
         var q = withoutEcho(heardDuringCapture).replace(WAKE, '').trim();
         capturePrefix = '';
         dispatch('CAPTURE_END');
+        // The same asymmetry in reverse: with voice still enabled the reducer
+        // sees no reason to shut the microphone, which is right for Chrome and
+        // wrong here — the server engine would keep recording and uploading
+        // between turns. Closed explicitly, so a turn costs one recording.
+        if (usingServerSR && rec) stopMic();
         if (!q) {
             // ── AND IT NEVER DIES QUIETLY AGAIN ──────────────────────────
             // This bare return is what made the bug invisible. On a follow-up
@@ -2763,7 +2892,31 @@
         } else {
             // Press-to-talk: hold the button, speak, release.
             var down = function (e) { e.preventDefault(); dispatch('CAPTURE_START'); startMic(); };
-            var up = function () { finishCapture(); stopMic(); };
+            var up = function () {
+                // ── LETTING GO IS NOT THE ANSWER ARRIVING ────────────────
+                // With Chrome the words are already in hand when she lets go.
+                // With the server engine the recording still has to be sent
+                // and transcribed, so the capture is held open until the text
+                // comes back — closing it here would end the turn with nothing
+                // in it and answer "didn't catch that" to a sentence that was
+                // heard perfectly.
+                if (usingServerSR && rec) {
+                    awaitingTranscript = true;
+                    say('One moment…');
+                    clearTimeout(transcriptWait);
+                    // A safety net, not the normal path: if the server never
+                    // answers, the turn closes rather than hanging open.
+                    transcriptWait = setTimeout(function () {
+                        if (!awaitingTranscript) return;
+                        awaitingTranscript = false;
+                        console.warn('[VOICE] no transcript came back in time');
+                        finishCapture();
+                    }, 12000);
+                    try { rec.stop(); } catch (e) { stopMic(); }
+                    return;
+                }
+                finishCapture(); stopMic();
+            };
             t.addEventListener('mousedown', down);
             t.addEventListener('touchstart', down);
             window.addEventListener('mouseup', up);

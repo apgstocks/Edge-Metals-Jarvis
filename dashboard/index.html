@@ -14788,6 +14788,12 @@ boot();
        checks for window.JarvisLocalRecognition when choosing an engine. In a
        browser this file returns immediately — there is no bridge to use. -->
   <script src="voice-local.js"></script>
+  <!-- Speech-to-text for every browser that is not Chrome (2026-10-03).
+       Apsara: "I want it to work across all browsers and devices". Records the
+       utterance and posts it to /api/bot/voice-command — the route the phone's
+       mic button has used since August. MUST load before voice.js, which picks
+       its engine at startup. -->
+  <script src="voice-server.js"></script>
   <!-- "Hey Jarvis" as a keyword model (openWakeWord, 2026-09-20). BEFORE
        voice.js, which hands it the wake and starts/stops it. -->
   <script src="oww-core.js"></script>

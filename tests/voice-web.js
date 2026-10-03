@@ -31,6 +31,7 @@ const section = (t) => console.log('\n=== ' + t + ' ===');
 const ROOT = path.join(__dirname, '..');
 const MACHINE = fs.readFileSync(path.join(ROOT, 'dashboard/voice-machine.js'), 'utf8');
 const VOICE = fs.readFileSync(path.join(ROOT, 'dashboard/voice.js'), 'utf8');
+const SERVER_STT = fs.readFileSync(path.join(ROOT, 'dashboard/voice-server.js'), 'utf8');
 
 // A fake browser with a fake microphone and a fake voice, so every open and
 // close is observable.
@@ -39,7 +40,16 @@ const VOICE = fs.readFileSync(path.join(ROOT, 'dashboard/voice.js'), 'utf8');
 // OVER Jarvis needs Jarvis to still be talking, and the default mock finishes
 // before the test can say a word. Without it the whole BARGE section was
 // measuring the follow-up window instead.
-function browser({ chrome = true, voices = null, pref = null, reply = null, holdSpeech = false, before = null } = {}) {
+// `engine` decides which transcriber this fake browser has:
+//   'chrome' — window.SpeechRecognition, as Chrome does
+//   'server' — none of its own, so voice-server.js records and posts (Firefox)
+//   'both'   — Chrome's plus the server fallback, which is what production loads
+// `ios` makes it a phone, where hands-free is not allowed at all.
+// `stt` is what the server transcriber answers: a string, or {status, error}.
+// `wake` adds the wake-word model, which is what lets the server engine be
+// hands-free without ever holding the microphone open.
+function browser({ chrome = true, voices = null, pref = null, reply = null, holdSpeech = false, before = null,
+                   engine = 'chrome', ios = false, stt = 'hey jarvis what do we owe Acme', wake = false } = {}) {
     let held = null;
     const vc = new VirtualConsole();
     // runScripts 'outside-only' is what gives the window a real eval() with
@@ -81,10 +91,53 @@ function browser({ chrome = true, voices = null, pref = null, reply = null, hold
         error: (...a) => log.console.push(a.join(' ')),
     };
 
-    w.SpeechRecognition = FakeRecognition;
+    if (engine === 'chrome' || engine === 'both') w.SpeechRecognition = FakeRecognition;
     if (chrome) w.chrome = {};                       // what canWake keys off
     else Object.defineProperty(w.navigator, 'userAgent', {
         value: 'Mozilla/5.0 (Macintosh) AppleWebKit/605.1.15 Version/17.0 Safari/605.1.15', configurable: true });
+
+    // ── A BROWSER WITH NO SPEECH API OF ITS OWN (2026-10-03) ─────────────
+    // Firefox, Edge, Safari, every phone. voice-server.js records with
+    // MediaRecorder and posts the audio; these are the pieces it needs.
+    log.recordings = 0;
+    log.posted = [];
+    log.micOpens = 0;
+    if (engine === 'server' || engine === 'both') {
+        class FakeRecorder {
+            constructor(stream, opts) {
+                this.stream = stream; this.state = 'inactive';
+                this.mimeType = (opts && opts.mimeType) || 'audio/webm';
+                log.recordings += 1;
+                w.__recorder = this;
+            }
+            start() { this.state = 'recording'; }
+            stop() {
+                this.state = 'inactive';
+                if (this.ondataavailable) this.ondataavailable({ data: new w.Blob(['xxxx'], { type: this.mimeType }) });
+                if (this.onstop) this.onstop();
+            }
+        }
+        FakeRecorder.isTypeSupported = () => true;
+        w.MediaRecorder = FakeRecorder;
+        w.navigator.mediaDevices = {
+            getUserMedia: async () => { log.micOpens += 1; return { getTracks: () => [{ stop() {} }] }; },
+        };
+        w.__rms = 0.05;            // speaking; a test sets it to 0 to stop
+        // leadInMs is generous on purpose: Jarvis plays "Yes, boss?" when the
+        // capture opens and deafens the recogniser for its length, so the
+        // first few hundred milliseconds of a real turn are deaf by design.
+        w.JARVIS_STT_TUNING = { silenceMs: 30, minVoicedMs: 10, tickMs: 5, leadInMs: 4000, maxMs: 6000 };
+    }
+    if (ios) Object.defineProperty(w.navigator, 'userAgent', {
+        value: 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 '
+             + 'Version/18.0 Mobile/15E148 Safari/604.1', configurable: true });
+    if (wake) {
+        w.JarvisWake = {
+            onwake: null, threshold: 0.5,
+            start: () => Promise.resolve('on'), stop() {}, deafFor() {}, recent: () => [],
+            fire(score) { if (this.onwake) this.onwake(score === undefined ? 0.9 : score); },
+        };
+    }
 
     w.SpeechSynthesisUtterance = class { constructor(t) { this.text = t; } };
     // The voice list a real macOS Chrome offers, novelty voices and all.
@@ -154,8 +207,15 @@ function browser({ chrome = true, voices = null, pref = null, reply = null, hold
     // that threw on a missing fetch went unnoticed until the whole file
     // crashed.
     w.__ackFetches = [];
-    w.fetch = async (p) => {
+    w.fetch = async (p, opts) => {
         w.__ackFetches.push(p);
+        if (/\/api\/bot\/voice-command/.test(p)) {
+            const body = JSON.parse((opts && opts.body) || '{}');
+            log.posted.push({ bytes: (body.audio_base64 || '').length, mime: body.mime_type });
+            const a = typeof stt === 'string' ? { status: 200, text: stt } : stt;
+            return { ok: (a.status || 200) < 400, status: a.status || 200,
+                     json: async () => (a.text ? { ok: true, text: a.text } : { error: a.error || 'nothing' }) };
+        }
         // The VOICE is encoded in the sample rate, so the buffer that is
         // eventually played can be traced back to which voice it came from.
         // Without something distinguishable, "fetched both, played one" is
@@ -176,6 +236,17 @@ function browser({ chrome = true, voices = null, pref = null, reply = null, hold
                 getChannelData: () => new Float32Array(rate === 22050 ? 8820 : 9600),
             });
         }
+        createMediaStreamSource() { return { connect() {} }; }
+        createAnalyser() {
+            return { fftSize: 1024,
+                getFloatTimeDomainData(buf) {
+                    // One steady level, read from the test: __rms is the mean
+                    // square, so each sample is its square root.
+                    const v = Math.sqrt(w.__rms === undefined ? 0 : w.__rms);
+                    for (let k = 0; k < buf.length; k += 1) buf[k] = (k % 2 ? v : -v);
+                } };
+        }
+        close() {}
         createBuffer(ch, len, rate) {
             return { length: len, sampleRate: rate, getChannelData: () => new Float32Array(len) };
         }
@@ -209,6 +280,7 @@ function browser({ chrome = true, voices = null, pref = null, reply = null, hold
     if (typeof before === 'function') before(w);
     w.eval(MACHINE);
     if (!w.VoiceMachine) w.VoiceMachine = require(path.join(ROOT, 'dashboard/voice-machine.js'));
+    if (engine === 'server' || engine === 'both') w.eval(SERVER_STT);
     w.eval(VOICE);
     // jsdom in this mode leaves document.readyState at 'loading' for ever, so
     // voice.js's DOMContentLoaded handler would never fire and nothing would
@@ -1423,9 +1495,13 @@ section('G4 — the desktop app uses the LOCAL engine, and prefers it');
     const src = fs.readFileSync(path.join(ROOT, 'dashboard/voice.js'), 'utf8');
     const nc = src.split('\n').filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l)).join('\n');
 
-    ck('the local engine is checked FIRST', /var SR = LOCAL \|\| window\.SpeechRecognition/.test(nc),
+    // 2026-10-03: a FOURTH engine exists (voice-server.js — record and let the
+    // server transcribe, for every browser that is not Chrome). What these two
+    // guard is unchanged: LOCAL still wins wherever it exists, and it still
+    // enables the wake word on its own.
+    ck('the local engine is checked FIRST', /var SR = LOCAL \|\|/.test(nc),
        'falling back to it would mean Chrome wins on a machine where local is more private');
-    ck('  and it enables the wake word by itself', /var canWake = !!LOCAL \|\|/.test(nc),
+    ck('  and it enables the wake word by itself', /var canWake = [^;]*!!LOCAL/.test(nc),
        'the Safari check is irrelevant when we own the engine');
 
     // The Chrome-specific "network" diagnosis must not fire against the local
@@ -2166,7 +2242,10 @@ section('CUT — it does not cut her off mid-sentence');
     // moment the seed prefix changed that line. The behaviour is asserted
     // below anyway; this is the belt.
     ck('  and every word she says restarts it',
-       /if \(state\.capturing\) \{[\s\S]{0,600}armCaptureTimers\(\);/.test(VOICE),
+       // Widened 2026-10-03: the server engine's single-result branch now sits
+       // between the two, so the window grew. The property is the same — a
+       // word arriving inside a capture re-arms the silence timer.
+       /if \(state\.capturing\) \{[\s\S]{0,1600}armCaptureTimers\(\);/.test(VOICE),
        'without this the silence timer is just the old fixed window with a new name');
     ck('  with a hard cap so a stuck recogniser cannot hold the mic open',
        /HARD_CAP_MS/.test(VOICE));
@@ -2769,6 +2848,124 @@ section('FOLD — the bar is furniture, not a billboard');
     ck('  and the fold did not open itself doing it',
        b.doc.getElementById('jarvisVoiceBar').classList.contains('collapsed'),
        'a control click is not a request to unfold');
+}
+
+section('CROSS-BROWSER — a browser with no speech API of its own (2026-10-03)');
+{
+    // Apsara: "I don't want to use Chrome... I want it to work across all
+    // browsers and devices — that's what productionisation of an app means."
+    //
+    // Firefox, Edge, Safari, every phone: no usable speech recognition. The
+    // wake word and the end-of-turn model are ours and portable; only
+    // transcription was Chrome's. voice-server.js records the utterance and
+    // posts it to /api/bot/voice-command — the route the phone's mic button
+    // has used since August.
+    const quiet = (b) => { b.w.__rms = 0; };            // she stopped talking
+
+    {
+        const b = browser({ engine: 'server', wake: true });
+        ck('it does not turn itself off without Chrome',
+           !/needs Google Chrome/i.test(b.log.console.join(' ')) && !!b.w.JarvisVoice,
+           '"Voice needs Google Chrome" was the old answer and is no longer true');
+        ck('  it says which engine it picked',
+           b.log.console.some((l) => /transcription engine: server/.test(l)),
+           b.log.console.filter((l) => /engine/.test(l)).join(' | '));
+        ck('  and the wake word still makes it hands-free',
+           b.w.JarvisVoice.canWake === true,
+           'the wake MODEL runs locally, so hands-free does not need the browser to transcribe');
+
+        // THE COST GUARANTEE: while nothing is being asked, nothing records.
+        b.w.JarvisVoice.dispatch('USER_TOGGLE');
+        ck('turning it on does NOT start recording', b.log.recordings === 0 && b.log.posted.length === 0,
+           'an open microphone on this engine means uploading the room all day');
+        ck('  and it says what it is waiting for',
+           b.log.console.some((l) => /waiting on the wake word/.test(l)), b.log.console.slice(-3).join(' | '));
+    }
+
+    {
+        // The wake word fires → ONE utterance is recorded, sent, and answered.
+        const b = browser({ engine: 'server', wake: true, stt: 'what do we owe Acme' });
+        b.w.JarvisVoice.dispatch('USER_TOGGLE');
+        b.w.JarvisWake.fire(0.9);
+        await new Promise((r) => setTimeout(r, 20));
+        ck('the wake word opens the microphone', b.log.recordings === 1 && b.log.micOpens === 1,
+           `${b.log.recordings} recordings / ${b.log.micOpens} mic opens`);
+        // Jarvis says "Yes, boss?" first and deafens itself for the length of
+        // the clip, so going quiet before that window closes is not silence it
+        // can hear.  Wait the ack out, then fall quiet.
+        await new Promise((r) => setTimeout(r, 700));
+        quiet(b);
+        await new Promise((r) => setTimeout(r, 150));
+        ck('  the recording is posted to the server', b.log.posted.length === 1 && b.log.posted[0].bytes > 0,
+           JSON.stringify(b.log.posted));
+        ck('  with the format it actually recorded', /^audio\//.test((b.log.posted[0] || {}).mime || ''),
+           JSON.stringify(b.log.posted[0]));
+        ck('  and the transcript is asked exactly as Chrome\'s would be',
+           b.log.asked.length === 1 && /owe Acme/i.test(b.log.asked[0]), JSON.stringify(b.log.asked));
+        ck('  then it goes quiet again rather than recording on',
+           b.log.recordings === 1, `${b.log.recordings} recordings`);
+    }
+
+    {
+        // Press-and-talk: letting go is not the answer arriving.
+        const b = browser({ engine: 'server', ios: true, stt: 'how much do we owe Inesh' });
+        ck('a phone is never hands-free', b.w.JarvisVoice.canWake === false,
+           'iOS suspends the microphone in the background and decides the audio session itself');
+        const t = b.doc.getElementById('jvToggle');
+        t.dispatchEvent(new b.w.Event('mousedown'));
+        await new Promise((r) => setTimeout(r, 20));
+        ck('holding the button records', b.log.recordings === 1, `${b.log.recordings} recordings`);
+        b.w.dispatchEvent(new b.w.Event('mouseup'));
+        ck('  letting go does not answer an empty question yet',
+           b.log.asked.length === 0, JSON.stringify(b.log.asked));
+        await new Promise((r) => setTimeout(r, 60));
+        ck('  the question is asked once the transcript lands',
+           b.log.asked.length === 1 && /owe Inesh/i.test(b.log.asked[0]), JSON.stringify(b.log.asked));
+    }
+
+    {
+        // The server could not make it out: say so, close the turn, do not hang.
+        const b = browser({ engine: 'server', ios: true, stt: { status: 422, error: 'could not make that out' } });
+        const t = b.doc.getElementById('jvToggle');
+        t.dispatchEvent(new b.w.Event('mousedown'));
+        await new Promise((r) => setTimeout(r, 20));
+        b.w.dispatchEvent(new b.w.Event('mouseup'));
+        await new Promise((r) => setTimeout(r, 80));
+        ck('a recording it cannot read asks her to say it again, and asks nothing of the brain',
+           b.log.asked.length === 0 && !b.w.JarvisVoice.state().capturing,
+           JSON.stringify({ asked: b.log.asked, state: b.w.JarvisVoice.state() }));
+    }
+
+    {
+        // Chrome keeps its own path — no recording, no upload, live transcript.
+        const b = browser({ engine: 'both' });
+        ck('with Chrome present, Chrome is still used',
+           b.log.console.some((l) => /engine: this browser's own speech API/.test(l)),
+           b.log.console.filter((l) => /engine/.test(l)).join(' | '));
+        b.w.JarvisVoice.dispatch('USER_TOGGLE');
+        b.mic().hear('hey jarvis what is in inventory');
+        await new Promise((r) => setTimeout(r, 1400));
+        ck('  and nothing was ever recorded or uploaded',
+           b.log.recordings === 0 && b.log.posted.length === 0,
+           `${b.log.recordings} recordings / ${b.log.posted.length} posts`);
+    }
+
+    {
+        // Electron, Edge, a blocked network: Chrome's service keeps failing.
+        // The old answer was "Voice needs Google Chrome" and a dead feature.
+        const b = browser({ engine: 'both', wake: true, stt: 'what do we owe Acme' });
+        b.w.JarvisVoice.dispatch('USER_TOGGLE');
+        for (let i = 0; i < 4; i += 1) {
+            const m = b.mic();
+            if (m && m.onerror) m.onerror({ error: 'network' });
+            await new Promise((r) => setTimeout(r, 5));
+        }
+        ck('a failing speech service switches engines instead of giving up',
+           b.log.console.some((l) => /switching to server transcription/.test(l)),
+           b.log.console.filter((l) => /network|switching/.test(l)).slice(-3).join(' | '));
+        ck('  and it does not tell her to use Chrome any more',
+           !b.log.console.some((l) => /this build has no speech engine/i.test(l)));
+    }
 }
 
 console.log(`\n  ${pass} passed, ${fail} failed`);
