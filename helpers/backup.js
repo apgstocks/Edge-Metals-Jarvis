@@ -186,6 +186,59 @@ function criticalNames() {
 // Kept as an exported array for the callers and tests that read it.
 const CRITICAL = criticalNames();
 
+// ── "MISSING" MEANT TWO DIFFERENT THINGS (2026-10-03) ────────────────────
+// critical_missing was computed as "this name is not in the archive", which
+// cannot tell apart:
+//
+//   a store that VANISHED      — it was in last night's archive and is gone.
+//                                That is an emergency.
+//   a store never yet WRITTEN  — the feature has not been used, so the file
+//                                has never existed. That is a Tuesday.
+//
+// Both produced the same warning. On a fresh data directory ELEVEN critical
+// stores report missing, and the three that showed up on her live VM —
+// sales_receipts, trucker_bills, yard_claims — are almost certainly features
+// not yet used rather than data lost.
+//
+// I read that warning and told her twice, forcefully, that her Edge Yard data
+// was not being backed up and would not come back. That was a false alarm,
+// and it is precisely what the note above CRITICAL_KEYS warned would happen:
+// "it would sit in critical_missing every single night, so the one alarm that
+// means 'a store has vanished' would cry wolf until it was ignored".
+//
+// So the two are separated by MEMORY. A store that has ever been seen in a
+// previous archive is expected forever after; its absence is `vanished` and
+// that is the alarm. A store never seen is `not_yet_used` and says nothing.
+//
+// The ledger of what has been seen is kept in the backup log, which already
+// exists and is already trimmed. No new store, no new failure mode.
+function seenBefore() {
+    try {
+        const rows = require('./backupWatch').readLog();
+        const seen = new Set();
+        for (const r of (Array.isArray(rows) ? rows : [])) {
+            for (const n of (r && Array.isArray(r.stores_present) ? r.stores_present : [])) seen.add(n);
+        }
+        return seen;
+    } catch (e) {
+        // Unreadable history means we cannot prove a store ever existed. The
+        // safe reading is NOT to raise an emergency on that basis — a false
+        // "your data vanished" is worse than a quiet night, because the next
+        // one gets ignored.
+        return null;
+    }
+}
+
+function splitMissing(presentNames, critical, seen) {
+    const missing = critical.filter((n) => !presentNames.has(n));
+    if (!seen) return { vanished: [], not_yet_used: missing, history: 'unreadable' };
+    return {
+        vanished: missing.filter((n) => seen.has(n)),
+        not_yet_used: missing.filter((n) => !seen.has(n)),
+        history: 'read',
+    };
+}
+
 function buildArchive(now = new Date()) {
     const { stores, problems } = collectStores();
     const names = Object.keys(stores);
@@ -202,7 +255,26 @@ function buildArchive(now = new Date()) {
             // Present and readable, at the time of writing. Absent from this
             // list means it was missing or unparseable — see problems.
             critical_present: CRITICAL.filter((c) => names.includes(c)),
-            critical_missing: CRITICAL.filter((c) => !names.includes(c)),
+            // ── THE TWO KINDS OF ABSENT ──────────────────────────────────
+            // vanished:     was in a previous archive, is not here now. ALARM.
+            // not_yet_used: never seen in any archive — the feature has not
+            //               been used and the file has never existed. Quiet.
+            // critical_missing is kept as the union so older readers (the
+            // restore script, the tests, last week's archives) are unchanged.
+            ...(() => {
+                const present = new Set(names);
+                const split = splitMissing(present, CRITICAL, seenBefore());
+                return {
+                    critical_missing: [...split.vanished, ...split.not_yet_used],
+                    critical_vanished: split.vanished,
+                    critical_not_yet_used: split.not_yet_used,
+                    store_history: split.history,
+                };
+            })(),
+            // What this archive actually holds, so TOMORROW can tell a store
+            // that vanished from one that was never there. This is the memory
+            // the split above reads.
+            stores_present: names,
             problems,
             note: 'Credentials are deliberately excluded. Re-issue them from the Google console on restore.',
         },

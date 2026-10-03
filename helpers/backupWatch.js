@@ -132,8 +132,15 @@ function health({ now = Date.now(), staleDays = STALE_DAYS } = {}) {
         if (failingFor > 0) problems.push(`backup_failing_${failingFor}`);
         // A backup that RAN but came back without a critical store is a
         // backup that will not restore the thing it exists for.
+        // ── ONLY A STORE THAT VANISHED IS A PROBLEM ─────────────────────
+        // Older receipts have no criticalVanished field. They fall back to
+        // the empty array rather than to criticalMissing, deliberately: an
+        // archive written before this split cannot tell the two apart, and
+        // guessing "vanished" from it would re-raise the same false alarm
+        // against history that cannot answer back.
+        const vanished = (last && Array.isArray(last.criticalVanished)) ? last.criticalVanished : [];
         const missing = (last && Array.isArray(last.criticalMissing)) ? last.criticalMissing : [];
-        if (missing.length) problems.push('backup_incomplete');
+        if (vanished.length) problems.push('backup_store_vanished');
 
         return {
             known: true,
@@ -146,6 +153,7 @@ function health({ now = Date.now(), staleDays = STALE_DAYS } = {}) {
             // decides whether to use them; the email does, the endpoint
             // must not.
             criticalMissing: missing,
+            criticalVanished: vanished,
             lastError: lastAttempt && !lastAttempt.ok ? lastAttempt.error : null,
         };
     } catch (e) {
@@ -184,6 +192,15 @@ async function nightly({ runBackup, send, now = new Date(), staleDays = STALE_DA
         bytes: result ? result.bytes : null,
         storeCount: meta.store_count || null,
         criticalMissing: Array.isArray(meta.critical_missing) ? meta.critical_missing : [],
+        // ── THE MEMORY, AND THE TWO KINDS OF ABSENT (2026-10-03) ─────────
+        // stores_present is what makes tomorrow able to tell a store that
+        // VANISHED from one that was never written. criticalVanished is the
+        // alarm; criticalNotYetUsed is a feature she has not used and says
+        // nothing. They were one field, and reading it I told her twice that
+        // her Edge Yard data was gone when it had simply never existed.
+        storesPresent: Array.isArray(meta.stores_present) ? meta.stores_present : [],
+        criticalVanished: Array.isArray(meta.critical_vanished) ? meta.critical_vanished : [],
+        criticalNotYetUsed: Array.isArray(meta.critical_not_yet_used) ? meta.critical_not_yet_used : [],
         unreadable: Array.isArray(meta.problems) ? meta.problems.map((p) => p && p.path).filter(Boolean) : [],
     });
 
@@ -191,7 +208,7 @@ async function nightly({ runBackup, send, now = new Date(), staleDays = STALE_DA
     const h = health({ now: now.getTime(), staleDays });
 
     const trouble = !!error
-        || entry.criticalMissing.length
+        || (entry.criticalVanished || []).length
         || entry.unreadable.length
         || h.problems.length;
 
@@ -206,7 +223,7 @@ async function nightly({ runBackup, send, now = new Date(), staleDays = STALE_DA
 
     const subject = error
         ? 'BACKUP FAILED — the yard data was not copied last night'
-        : (entry.criticalMissing.length ? 'BACKUP INCOMPLETE — a critical store is missing'
+        : ((entry.criticalVanished || []).length ? 'A STORE THAT WAS BACKED UP IS GONE'
         : (h.problems.length ? 'BACKUP — something is wrong'
         : 'Backups are fine'));
 
@@ -252,10 +269,10 @@ function reportText({ entry, health: h, heartbeat }) {
                       : 'There is no successful backup on record at all.');
     }
 
-    if (entry.criticalMissing.length) {
+    if ((entry.criticalVanished || []).length) {
         L.push('');
         L.push('MISSING FROM THE ARCHIVE — these cannot be rebuilt from anywhere else:');
-        for (const m of entry.criticalMissing) L.push(`  · ${m}`);
+        for (const m of entry.criticalVanished) L.push(`  · ${m}`);
     }
     if (entry.unreadable.length) {
         L.push('');

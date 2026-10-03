@@ -110,11 +110,15 @@ const okRun = (over = {}) => ({ meta: { store_count: 12, critical_missing: [], p
        '"it has failed three nights and the last good copy is from the 28th" is a '
        + 'different sentence from "it failed" — ' + failing.last);
 
+    // criticalVanished, not criticalMissing — the latter includes stores that
+    // have never existed, which is not a problem and is the false alarm this
+    // split exists to kill.
     clearLog();
-    await watch.record({ at: new Date(now - 1 * DAY), ok: true, criticalMissing: ['payments.json'] });
+    await watch.record({ at: new Date(now - 1 * DAY), ok: true,
+                         criticalMissing: ['payments.json'], criticalVanished: ['payments.json'] });
     const incomplete = watch.health({ now });
     ck('a backup that RAN but lost a critical store is a problem',
-       incomplete.problems.includes('backup_incomplete'),
+       incomplete.problems.includes('backup_store_vanished'),
        'it will not restore the thing it exists for — ' + JSON.stringify(incomplete.problems));
 
     // NEVER THROWS: /healthz calls this, and a health endpoint that 500s is
@@ -165,14 +169,45 @@ const okRun = (over = {}) => ({ meta: { store_count: 12, critical_missing: [], p
     ck('  and it says so, so she knows what its absence means',
        /If it stops arriving/.test(mail.body), mail.body);
 
+    // ── ABSENT MEANS TWO DIFFERENT THINGS (2026-10-03) ──────────────────
+    // This used to alarm on critical_missing, which is just "not in the
+    // archive". On a fresh data directory that is ELEVEN stores, and on her
+    // live VM it was three — sales_receipts, trucker_bills, yard_claims —
+    // none of which had ever been written because those features were unused.
+    //
+    // I read that warning and told her twice, forcefully, that her Edge Yard
+    // data was not being backed up and would not come back. It was a false
+    // alarm, and the note above CRITICAL_KEYS had predicted exactly it: the
+    // alarm that means "a store has vanished" cries wolf until it is ignored.
+    //
+    // So: a store that was in a previous archive and is now gone is the
+    // alarm. A store never seen is silence.
     mail = null;
     clearLog();
     await watch.nightly({ runBackup: async () => okRun({ meta: { store_count: 11,
-        critical_missing: ['payments.json'], problems: [] } }), send, now: TUE });
-    ck('a missing critical store emails even on a "successful" night',
-       !!mail && /INCOMPLETE/.test(mail.subject), JSON.stringify(mail && mail.subject));
-    ck('  and names it',
-       /payments\.json/.test(mail.body), mail.body);
+        critical_missing: ['yard_claims.json'], critical_vanished: [],
+        critical_not_yet_used: ['yard_claims.json'], problems: [] } }), send, now: TUE });
+    ck('a store NEVER USED does not email', !mail,
+       'this is the false alarm that cost her two warnings about data she had not lost');
+
+    mail = null;
+    clearLog();
+    await watch.nightly({ runBackup: async () => okRun({ meta: { store_count: 11,
+        critical_missing: ['payments.json'], critical_vanished: ['payments.json'],
+        critical_not_yet_used: [], problems: [] } }), send, now: TUE });
+    ck('a store that VANISHED emails even on a "successful" night',
+       !!mail && /GONE/.test(mail.subject), JSON.stringify(mail && mail.subject));
+    ck('  and names it', !!mail && /payments\.json/.test(mail.body), mail && mail.body);
+
+    // An archive written BEFORE the split has no criticalVanished field. It
+    // must not be read as "everything vanished" — that would re-raise the
+    // same false alarm against history that cannot answer back.
+    mail = null;
+    clearLog();
+    await watch.nightly({ runBackup: async () => okRun({ meta: { store_count: 11,
+        critical_missing: ['payments.json', 'loads.json'], problems: [] } }), send, now: TUE });
+    ck('an OLD archive with no split does not alarm', !mail,
+       'pre-split receipts cannot tell the two apart; guessing is how the wolf gets cried');
 
     mail = null;
     clearLog();
