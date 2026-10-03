@@ -84,6 +84,15 @@ fs.mkdirSync(path.join(LIVE, 'logs'), { recursive: true });
 fs.writeFileSync(path.join(LIVE, 'logs', 'app.json'), JSON.stringify([{ line: 'noisy' }]));
 fs.mkdirSync(path.join(LIVE, 'documents_saved'), { recursive: true });
 fs.writeFileSync(path.join(LIVE, 'documents_saved', 'inv.json'), JSON.stringify({ n: 1 }));
+// ── THE WHATSAPP SESSION, WHICH IS 141 MB OF THE 149 ON HER VM ───────────
+// Chromium's own manifests, nested four deep. Not credentials — the real
+// session is LevelDB and sqlite, which this walker never takes because it
+// only collects .json. Excluded because a RESTORE would otherwise re-create
+// .wwebjs_auth/session/ holding manifests and nothing else: a half-populated
+// profile that fails obscurely, where an absent one cleanly asks for a QR.
+fs.mkdirSync(path.join(LIVE, '.wwebjs_auth', 'session', 'component_crx_cache'), { recursive: true });
+fs.writeFileSync(path.join(LIVE, '.wwebjs_auth', 'session', 'component_crx_cache', 'metadata.json'),
+    JSON.stringify({ chromium: 'internal' }));
 fs.writeFileSync(path.join(LIVE, 'notes.txt'), 'not json');
 fs.writeFileSync(path.join(LIVE, 'loads.json.lock'), '');
 
@@ -114,6 +123,9 @@ let archive = null;
     ck('  skipped directories are not in it',
        !Object.keys(archive.stores).some((k) => k.startsWith('logs/') || k.startsWith('documents_saved/')),
        Object.keys(archive.stores).filter((k) => k.includes('/')).join(', '));
+    ck('  and neither is the WhatsApp Chromium profile',
+       !Object.keys(archive.stores).some((k) => k.startsWith('.wwebjs_auth/')),
+       Object.keys(archive.stores).filter((k) => k.startsWith('.wwebjs_auth')).join(', '));
     ck('  but a real subdirectory IS',
        Object.prototype.hasOwnProperty.call(archive.stores, 'nested/deep/thing.json'));
 }
@@ -234,6 +246,9 @@ let result = null;
     }
     ck('  and neither did logs/ or documents_saved/',
        !fs.existsSync(path.join(fresh, 'logs')) && !fs.existsSync(path.join(fresh, 'documents_saved')));
+    ck('  and no half-populated WhatsApp profile was created',
+       !fs.existsSync(path.join(fresh, '.wwebjs_auth')),
+       'an absent session asks for a QR; a partial one fails obscurely');
     ck('  nor the non-JSON strays', !fs.existsSync(path.join(fresh, 'notes.txt')));
 
     // ── THE FORMAT MATCHES WHAT helpers/json.js WRITES ───────────────────

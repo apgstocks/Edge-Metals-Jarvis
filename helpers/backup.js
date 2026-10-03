@@ -81,7 +81,33 @@ const SECRET_PATTERNS = [
 // Not worth the bytes, or not restorable anyway: lock files are transient,
 // caches regenerate, and the binary folders are already on Drive in their own
 // right (photos and PDFs live under the load subfolders).
-const SKIP_DIRS = new Set(['voice-cache', 'logs', 'documents_saved', 'node_modules']);
+// ── .wwebjs_auth ADDED 2026-10-03, AND IT IS A RESTORE BUG NOT A LEAK ────
+// Found while measuring the data directory for the "should we move to a
+// database" question. DATA_DIR is 149 MB and 141 MB of it is this folder —
+// whatsapp-web.js's Chromium profile. The JSON stores are 3.59 MB.
+//
+// collectStores recurses into every directory not named here, so six files
+// were landing in the nightly archive:
+//   .wwebjs_auth/session/CertificateRevocation/.../manifest.json
+//   .wwebjs_auth/session/component_crx_cache/metadata.json          ... and so on
+//
+// SAID PLAINLY, because the obvious conclusion is the wrong one: these are
+// NOT credentials. They are Chromium extension manifests and certificate
+// revocation metadata, they total under a kilobyte, and the actual WhatsApp
+// session lives in LevelDB and sqlite files that this walker never collects
+// because it only takes .json. Nothing has leaked.
+//
+// The reason to exclude them is the RESTORE. helpers/restore.js writes back
+// every store in the archive, so restoring onto a fresh box re-creates
+// .wwebjs_auth/session/ containing manifests and nothing else — a
+// half-populated Chromium profile. An ABSENT session directory makes
+// whatsapp-web.js ask for a QR code, which is correct and obvious. A partial
+// one is the kind of state that fails in a way nobody can diagnose at the
+// moment they are rebuilding a server.
+//
+// The session is deliberately not backed up at all: re-pairing is one QR
+// scan, and a copied session is a second device logged into her WhatsApp.
+const SKIP_DIRS = new Set(['voice-cache', 'logs', 'documents_saved', 'node_modules', '.wwebjs_auth']);
 const isSecret = (name) => SECRET_PATTERNS.some((re) => re.test(name));
 
 // Walks data/ and returns { relativePath -> parsed JSON }. A store that fails

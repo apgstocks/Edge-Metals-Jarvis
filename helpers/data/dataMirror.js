@@ -186,12 +186,85 @@ function documentRows() {
     } catch (e) { return []; }
 }
 
+// ── SALE COSTS — THE LEDGER THE MIRROR WATCHED AND NEVER READ ────────────
+// Added 2026-10-03, on "migrate just the data, start with Edge Metals".
+//
+// signature() has listed SALES_SETTLEMENTS_FILE since this mirror was built,
+// so the database was rebuilt every time she paid a freight invoice or a
+// commission — and there was no table. The rebuild was pure cost: the money
+// went in the JSON and was invisible to every question Jarvis can answer.
+// "What did we pay Zimex this quarter" had no way to be right.
+//
+// ONE ROW PER ALLOCATION, like sales_receipts, not one per settlement. A
+// single payment can cover a charge on one container and a commission on
+// another, and a row per payment would force whoever writes the SQL to split
+// `amount` back out by hand — which is the arithmetic the database exists to
+// do. total_settlement carries the whole payment so "how much did that one
+// wire come to" is still answerable without summing.
+//
+// Read through salesSettlements.list() and payables(), the same functions the
+// screen uses, so a figure Jarvis states and a figure the Freight tab shows
+// cannot disagree.
+function settlementRows() {
+    const st = require('../salesSettlements');
+    // Built once rather than per allocation: payables() walks every sale.
+    const byKey = new Map();
+    try {
+        for (const p of st.payables()) byKey.set(p.key, p);
+    } catch (e) { /* a settlement whose charge was since deleted is still a payment */ }
+
+    const out = [];
+    for (const s of (st.list() || [])) {
+        const allocs = Array.isArray(s.allocations) ? s.allocations : [];
+        for (const a of allocs) {
+            const target = byKey.get(st.keyOf(a.sale_id, a.kind, a.charge_id)) || null;
+            out.push({
+                settlement_id: s.id,
+                date: iso(s.date), date_shown: s.date || null,
+                payee: s.payee || null,
+                kind: a.kind || null,
+                amount: n2(a.amount),
+                total_settlement: n2(s.amount),
+                method: s.mode || null,
+                bank: s.bank || null,
+                reference: s.ref || null,
+                note: s.note || null,
+                sale_id: a.sale_id || null,
+                charge_id: a.charge_id || null,
+                // From the payable, so a settlement can be read against the
+                // container it paid for without a second query. Null when the
+                // charge has since been changed or removed — which is a real
+                // state, not an error, and saying null is how it stays honest.
+                container_no: target ? (target.container_no || null) : null,
+                booking_no: target ? (target.booking_no || null) : null,
+                customer: target ? (target.customer || null) : null,
+                what: target ? (target.what || null) : null,
+            });
+        }
+        // A settlement with no allocations cannot happen through addSettlement
+        // — it refuses one — but an imported or hand-edited row could have
+        // none, and money that exists must appear somewhere rather than being
+        // silently dropped by a loop that found nothing to iterate.
+        if (!allocs.length) {
+            out.push({
+                settlement_id: s.id, date: iso(s.date), date_shown: s.date || null,
+                payee: s.payee || null, kind: null, amount: n2(s.amount),
+                total_settlement: n2(s.amount), method: s.mode || null, bank: s.bank || null,
+                reference: s.ref || null, note: s.note || null, sale_id: null, charge_id: null,
+                container_no: null, booking_no: null, customer: null, what: null,
+            });
+        }
+    }
+    return out;
+}
+
 const TABLES = {
     bills: billRows,
     bill_items: billItemRows,
     sales: saleRows,
     bill_payments: billPaymentRows,
     sales_receipts: receiptRows,
+    sales_settlements: settlementRows,
     trucking_bills: truckingRows,
     margin: marginRows,
     bookings: bookingRows,

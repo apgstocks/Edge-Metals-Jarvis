@@ -81,6 +81,31 @@ const TABLES = [
         columns: { receipt_id: 'id', date: 'receipt date', customer: 'who paid', amount: 'dollars in this allocation', total_receipt: 'the whole receipt', method: 'wire, cash…', bank: 'bank it landed in', reference: 'reference or note', sale_id: 'the sale row it was applied to, joins sales.sale_id', deducted: 'amount deducted rather than received', deduction_reason: 'why it was short' },
     },
     {
+        name: 'sales_settlements',
+        what: "Money Edge Metals PAID OUT on a sale — ocean freight, port charges, commission (Invoice → Freight and Invoice → Commission). "
+            + 'The outgoing twin of sales_receipts: a receipt is money in from a customer, a settlement is money out on the shipment. '
+            + "NOT supplier payments (bill_payments) and NOT the yard's costs.",
+        columns: {
+            settlement_id: 'id of the payment',
+            date: 'paid on, YYYY-MM-DD',
+            date_shown: 'the same date as she types it',
+            payee: 'who was paid — a forwarder, a broker, an agent. Free text, not checked against a list',
+            kind: "'charge' for a cost on the shipment, 'commission' for commission on the sale",
+            amount: 'dollars in THIS allocation — one row per thing the payment covered',
+            total_settlement: 'the whole payment, repeated on each of its rows. SUM(amount) per settlement_id equals it; do not SUM this column',
+            method: 'wire, Zelle, cash, cheque',
+            bank: 'bank it was paid from, when wire or Zelle',
+            reference: 'reference or note',
+            note: 'free note',
+            sale_id: 'the sale row it was paid against, joins sales.sale_id',
+            charge_id: "which charge on that sale, when kind is 'charge'",
+            container_no: 'container it relates to, null if the charge was changed or removed since',
+            booking_no: 'booking, same caveat',
+            customer: 'customer on that sale, same caveat',
+            what: "what the charge was for — 'Ocean freight', 'Commission' — same caveat",
+        },
+    },
+    {
         name: 'trucking_bills',
         what: "Edge Metals' trucking payables — what each trucking company is owed per container (Bills → Trucking). NOT the yard's trucker bills.",
         columns: { bill_id: 'the bill it belongs to', date: 'bill date, YYYY-MM-DD',
