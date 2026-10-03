@@ -824,6 +824,5 @@ section('J — the consignee stops at the end of the name');
 
 console.log(`\n  ${pass} passed, ${fail} failed`);
 if (failures.length) { console.log('\n  failed:'); failures.forEach((f) => console.log('    · ' + f)); }
-process.exit(fail ? 1 : 0);
-
 }
+process.exit(fail ? 1 : 0);

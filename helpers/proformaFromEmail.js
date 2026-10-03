@@ -53,7 +53,20 @@ try {
             qty: z.coerce.number().nullable().optional().default(null),
             rate: z.coerce.number().nullable().optional().default(null),
             rate_confidence: z.coerce.number().min(0).max(1).optional().default(0),
-            rate_basis: z.enum(['per_mt', 'per_lot', 'unknown']).optional().default('unknown'),
+            // 'per_lb' ADDED 2026-10-03, AND IT WAS A MONEY BUG, NOT A TIDY-UP.
+            // Measured while auditing auto-send: on Joey's "Confirmation of
+            // one container of Chrome wheels ... at $0.42/lb" the model
+            // returned rate_basis "per_lb", which was not in this enum, so the
+            // whole extraction FAILED SCHEMA three times and the order was
+            // lost. On "$0.42 per pound" for auto batteries it instead did the
+            // helpful thing and coerced the value into an allowed option --
+            // "per_mt". $0.42/lb vs $0.42/MT is a factor of 2,204.62.
+            //
+            // An enum that gives the model no honest option does not prevent a
+            // basis error, it MANUFACTURES one. She buys domestic scrap by the
+            // pound and exports by the tonne, so per-lb is her normal case,
+            // not an edge.
+            rate_basis: z.enum(['per_mt', 'per_lb', 'per_lot', 'unknown']).optional().default('unknown'),
         })).optional().default([]),
         missing: z.array(z.string()).optional().default([]),
         note: z.string().nullable().optional().default(null),
@@ -91,7 +104,7 @@ items: one entry per distinct material.
   desc: the material as the sender wrote it ("auto cast", "aluminium combo").
   qty: metric tonnes for that material if stated, else null.
   rate: the price figure as written, whatever basis it is on. null if none.
-  rate_basis: "per_mt" if that figure is plainly a price PER METRIC TONNE. "per_lot" if it is a total for the shipment, the container, or the whole order. "unknown" if the email does not make the basis clear. Be honest here rather than helpful — "unknown" is a perfectly good answer and is much safer than a wrong guess, because a per-lot figure used as a per-tonne rate multiplies the invoice by the tonnage.
+  rate_basis: "per_mt" if that figure is plainly a price PER METRIC TONNE. "per_lb" if it is a price PER POUND ($/lb, "per pound", "cents a pound", "/#") — this is common on domestic scrap and you must say so rather than converting it yourself. "per_lot" if it is a total for the shipment, the container, or the whole order. "unknown" if the email does not make the basis clear. Be honest here rather than helpful — "unknown" is a perfectly good answer and is much safer than a wrong guess, because a per-lot figure used as a per-tonne rate multiplies the invoice by the tonnage.
   rate_confidence: 0.0-1.0, how sure you are of the FIGURE itself (not its basis). Use 0.9+ only when the email plainly ties that number to that material.
 
 WHEN AN EMAIL CONTAINS SEVERAL PRICES: a message may quote a price to the end buyer, subtract agent commissions, and then state what WE receive ("your price is X"). The figure that belongs on our proforma is the one presented as ours. Put that in rate, and say in note what the other figures were and why you chose this one, so a human can check the choice.
@@ -119,7 +132,7 @@ async function extractOrderFromEmail(email) {
             qty: num(it && it.qty),
             rate: num(it && it.rate),
             rate_confidence: typeof (it && it.rate_confidence) === 'number' ? it.rate_confidence : 0,
-            rate_basis: ['per_mt', 'per_lot', 'unknown'].includes(it && it.rate_basis) ? it.rate_basis : 'unknown',
+            rate_basis: ['per_mt', 'per_lb', 'per_lot', 'unknown'].includes(it && it.rate_basis) ? it.rate_basis : 'unknown',
         }))
         .filter((it) => it.desc);
     return {
@@ -217,16 +230,41 @@ function toProformaDraft(order, { fallbackConsignee } = {}) {
         // therefore passed it straight through. A per-lot figure used as a
         // per-tonne rate multiplies the invoice by the tonnage: 2,420 becomes
         // 2,420 x 21 x 2 containers = $101,640 for a $2,420 order.
-        const basis = it.rate_basis || 'unknown';
-        const figureOk = it.rate != null && it.rate_confidence >= RATE_TRUST;
+        let basis = it.rate_basis || 'unknown';
+        let rate = it.rate;
+        // A PER-POUND PRICE IS REAL MONEY AND MUST BE CONVERTED, NOT GUESSED.
+        // The conversion is exact arithmetic (1 MT = 2204.62 lb), so it is
+        // done in code -- but the result is listed as an ASSUMPTION, never
+        // silently trusted, because the thing being assumed is that "$0.42"
+        // meant per pound. She sees the working and can correct it.
+        //
+        // WHY THIS HOLE EXISTED EVEN WITH judgeRate: history grounding does
+        // catch a stray $0.42 when there ARE past invoices for that material
+        // (0.42 falls far outside 0.3x-3x of any per-MT median, so basis comes
+        // back 'unknown' and the figure is blocked). With NO history for the
+        // material, judgeRate returns the model's own basis unchanged -- and
+        // the coerced 'per_mt' was then trusted. New material + per-lb quote
+        // was the live path to a 2,204x underpriced proforma.
+        let converted = null;
+        if (basis === 'per_lb' && it.rate != null) {
+            converted = Math.round(Number(it.rate) * 2204.62 * 100) / 100;
+            rate = converted;
+            basis = 'per_mt_converted';
+        }
+        const figureOk = rate != null && it.rate_confidence >= RATE_TRUST;
         const trusted = figureOk && basis === 'per_mt';
         // When history CONFIRMED the rate, say so — a figure checked against 42
         // past invoices is a different thing from one nobody questioned, and
         // she should be able to see which she's looking at.
         if (trusted && it.rate_reason) grounded.push(it.rate_reason);
-        if (it.rate != null && !trusted) {
+        if (converted != null) {
+            assumed.push(`${it.desc}: the email quoted $${it.rate}/lb, which is $${converted}/MT (x2204.62) — confirm that reading before this goes out`);
+        }
+        if (rate != null && !trusted) {
             if (it.rate_reason) { unconfirmed.push(it.rate_reason); }
-            else unconfirmed.push(basis === 'per_lot'
+            else unconfirmed.push(basis === 'per_mt_converted'
+                ? `${it.desc}: "$${it.rate}/lb" converted to $${converted}/MT — a converted price is never sent unchecked`
+                : basis === 'per_lot'
                 ? `${it.desc}: "${it.rate}" reads as a total for the lot, not a per-MT rate`
                 : basis === 'unknown'
                     ? `${it.desc}: "${it.rate}" — the email doesn't make clear whether that's per MT or a total`
@@ -237,7 +275,7 @@ function toProformaDraft(order, { fallbackConsignee } = {}) {
         // into a priced line on a document going to a customer.
         if (it.qty == null) needs.push('quantity');
         if (it.qty_assumed) assumed.push(`${it.desc}: ${it.qty} MT assumed from standard container loading — the email didn't say`);
-        return { desc: it.desc, qty: it.qty, rate: trusted ? it.rate : 0, qty_assumed: !!it.qty_assumed };
+        return { desc: it.desc, qty: it.qty, rate: trusted ? rate : 0, qty_assumed: !!it.qty_assumed };
     });
     if (!items.length) needs.push('material');
     if (items.some((i) => !i.rate)) needs.push('rate');
@@ -297,4 +335,9 @@ function toProformaDraft(order, { fallbackConsignee } = {}) {
     };
 }
 
-module.exports = { extractOrderFromEmail, toProformaDraft, groundRates, buildOrderPrompt, applyStandardQuantities, RATE_TRUST };
+module.exports = { extractOrderFromEmail, toProformaDraft, groundRates, buildOrderPrompt, applyStandardQuantities, RATE_TRUST, 
+    // Exported for tests ONLY. The enum inside it is what silently lost Joey's
+    // order: a rate_basis the schema does not allow fails validation three
+    // times and the whole extraction returns nothing. A unit test against
+    // toProformaDraft cannot see that, because it never goes through here.
+    OrderSchema: () => OrderSchema };
