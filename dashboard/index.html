@@ -8469,6 +8469,46 @@ async function renderMetalsTruckingTab() {
       <div style="margin-top:10px; font-family:var(--font-mono); font-size:10px; color:var(--text-faint);">
         ${rows.length} row${rows.length === 1 ? '' : 's'} · built from the bills, so a trucking amount changed there changes here · Edge Yard haulage lives under Truckers
       </div>
+
+      <!-- ── THE PAYMENTS THEMSELVES, AND THE WAY BACK OUT ──────────────
+           Apsara, 2026-10-03: "I want jarvis profile to have access to
+           delete payments on edge metals."
+
+           DELETE /api/metals-trucking/:id has existed, requireSuper, since
+           the tab was built. It removes the payment, unwinds its mirrored
+           ledger row and writes an audit entry naming the trucker and every
+           allocation. Nothing in either client ever called it. The table
+           above is built from the BILLS, so a payment that was wrong had no
+           row of its own to press anything on — the same shape as the
+           settled-load badge on 2026-09-23, where the route worked and the
+           screen holding the button was unreachable.
+
+           The payments were already on this response as data.payments
+           (mt.list()); they were simply never drawn. -->
+      ${(data.payments || []).length ? `
+      <div style="margin-top:22px;">
+        <div style="font-family:var(--font-mono); font-size:9px; letter-spacing:.12em; text-transform:uppercase; color:var(--text-muted); margin-bottom:7px;">Payments recorded</div>
+        <div class="card" style="padding:0; overflow-x:auto;">
+          <table style="width:100%; border-collapse:collapse; font-size:12px;">
+            <thead><tr style="background:var(--bg-sunken);">
+              ${['Date', 'Trucker', 'How', 'Reference', 'Covers', 'Amount', '']
+                .map((h, i) => `<th style="padding:8px 9px; text-align:${i === 5 ? 'right' : 'left'}; white-space:nowrap; font-family:var(--font-mono); font-size:9px; letter-spacing:.1em; text-transform:uppercase; color:var(--text-muted);">${h}</th>`).join('')}
+            </tr></thead>
+            <tbody>${[...(data.payments || [])].reverse().map((p) => `
+              <tr style="border-top:1px solid var(--line);">
+                <td style="padding:7px 9px; white-space:nowrap; font-family:var(--font-mono);">${ledText(p.date)}</td>
+                <td style="padding:7px 9px; white-space:nowrap;">${ledText(p.trucking_company)}</td>
+                <td style="padding:7px 9px; white-space:nowrap;">${esc(p.mode || '')}${p.bank ? ' · ' + esc(p.bank) : ''}</td>
+                <td style="padding:7px 9px; color:var(--text-muted);">${ledText(p.ref)}</td>
+                <td style="padding:7px 9px; white-space:nowrap; color:var(--text-muted);">${(p.allocations || []).length} container${(p.allocations || []).length === 1 ? '' : 's'}</td>
+                <td style="padding:7px 9px; text-align:right; font-family:var(--font-mono);">${ledMoney(p.amount)}</td>
+                <td style="padding:7px 9px; white-space:nowrap;">${metalsCanDelete()
+                  ? `<button class="trkPayDel" data-id="${esc(p.id)}" data-who="${esc(p.trucking_company || '')}" data-amount="${esc(ledMoney(p.amount))}" data-covers="${(p.allocations || []).length}" style="background:none; border:1px solid var(--line); border-radius:var(--radius-sm); padding:3px 9px; font-size:10px; color:var(--status-warn); cursor:pointer;">Delete</button>`
+                  : `<span title="Sign in with the Jarvis profile to remove a trucking payment" style="font-size:10px; color:var(--text-faint);">&mdash;</span>`}</td>
+              </tr>`).join('')}</tbody>
+          </table>
+        </div>
+      </div>` : ''}
     </div>`;
 
   // ENTER or blur, not every keystroke: each apply is a round trip.
@@ -8616,6 +8656,32 @@ async function renderMetalsTruckingTab() {
   wireMetalsTabs();
   $('trkClear').onclick = () => { truckingFilters = {}; renderMetalsTruckingTab(); };
   $('btnPayTrucking').onclick = () => openTruckingPay(data);
+
+  // ── REMOVING ONE ─────────────────────────────────────────────────────
+  // Says what goes with it before it goes. Deleting this payment reopens
+  // every container it covered and takes its ledger row with it, so the
+  // confirmation names both — "are you sure" on its own tells her nothing
+  // she did not already know.
+  document.querySelectorAll('.trkPayDel').forEach((btn) => {
+    btn.onclick = async () => {
+      const n = Number(btn.dataset.covers) || 0;
+      const ok = confirm(`Remove the ${btn.dataset.amount} payment to ${btn.dataset.who}?\n\n`
+        + `${n} container${n === 1 ? '' : 's'} go back to outstanding, and the payment `
+        + 'disappears from the spend report. This is written to the audit log.');
+      if (!ok) return;
+      btn.disabled = true;
+      try {
+        await api(`/api/metals-trucking/${encodeURIComponent(btn.dataset.id)}`, { method: 'DELETE' });
+        await renderMetalsTruckingTab();
+      } catch (e) {
+        btn.disabled = false;
+        // The route's own sentence, which names the Jarvis profile when that
+        // is the reason — a generic "could not delete" would hide the one
+        // fact that tells her what to do about it.
+        alert(e.message || 'Could not remove that payment.');
+      }
+    };
+  });
 }
 
 // ── PAYING A HAULIER ─────────────────────────────────────────────────────
@@ -8962,6 +9028,13 @@ async function renderPayables(which) {
   const outstanding = all.reduce((t, p) => t + Math.max(0, Number(p.balance) || 0), 0);
   const total = all.reduce((t, p) => t + (Number(p.amount) || 0), 0);
 
+  // A settlement belongs on this tab if ANY of its allocations is this kind.
+  // Newest first, the same way the receipts and bill-payment lists read.
+  const wantKind = which === 'commission' ? 'commission' : 'charge';
+  const settlementsHere = [...(data.settlements || [])]
+    .filter((s) => (s.allocations || []).some((a) => a && a.kind === wantKind))
+    .reverse();
+
   $('subBody').innerHTML = `
     <div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:10px; margin-bottom:14px;">
       ${[[which === 'commission' ? 'Commission' : 'Charges', salesMoney(total)],
@@ -8996,9 +9069,76 @@ async function renderPayables(which) {
           <td style="padding:7px 9px; text-align:right; font-family:var(--font-mono); color:${p.balance > 0.005 ? 'var(--text-primary)' : 'var(--status-good, #4ade80)'};">${p.balance > 0.005 ? salesMoney(p.balance) : 'settled'}</td>
         </tr>`).join('')
         : `<tr><td colspan="7" style="padding:22px; text-align:center; color:var(--text-muted);">Nothing here yet. ${which === 'commission' ? 'Set a commission rate on a container.' : 'Add a charge you pay to a container.'}</td></tr>`}</tbody>
-    </table></div>`;
+    </table></div>
+
+    <!-- ── THE SETTLEMENTS THEMSELVES ──────────────────────────────────
+         Apsara, 2026-10-03: "I want jarvis profile to have access to delete
+         payments on edge metals."
+
+         DELETE /api/sales-settlements/:id is requireSuper and has never had
+         a caller. This screen listed what is OWED and what has been paid
+         against it, with no row for the payment itself — so a settlement
+         entered against the wrong charge could be seen in the Paid column
+         and not reached. The route removes it, unwinds the mirrored ledger
+         row and audits it; data.settlements was already on the response.
+
+         SHOWN BY WHICH KIND IT TOUCHES, since one settlement may cover a
+         charge AND a commission. A mixed one appears on both tabs and says
+         so on each, because deleting it from here removes its other half
+         too and that is not a thing to discover afterwards. -->
+    ${settlementsHere.length ? `
+    <div style="margin-top:22px;">
+      <div style="font-family:var(--font-mono); font-size:9px; letter-spacing:.12em; text-transform:uppercase; color:var(--text-muted); margin-bottom:7px;">Payments recorded</div>
+      <div style="overflow-x:auto;"><table style="width:100%; border-collapse:collapse; font-size:12px;">
+        <thead><tr style="color:var(--text-muted); text-align:left;">
+          <th style="padding:6px 9px; font-weight:400;">Date</th>
+          <th style="padding:6px 9px; font-weight:400;">Paid to</th>
+          <th style="padding:6px 9px; font-weight:400;">How</th>
+          <th style="padding:6px 9px; font-weight:400;">Reference</th>
+          <th style="padding:6px 9px; font-weight:400;">Covers</th>
+          <th style="padding:6px 9px; font-weight:400; text-align:right;">Amount</th>
+          <th style="padding:6px 9px; font-weight:400;"></th>
+        </tr></thead>
+        <tbody>${settlementsHere.map((s) => {
+          const mixed = (s.allocations || []).some((a) => a.kind !== (which === 'commission' ? 'commission' : 'charge'));
+          return `
+          <tr style="border-top:1px solid var(--line);">
+            <td style="padding:7px 9px; white-space:nowrap; font-family:var(--font-mono);">${esc(s.date || '—')}</td>
+            <td style="padding:7px 9px;">${esc(s.payee || '—')}</td>
+            <td style="padding:7px 9px; white-space:nowrap;">${esc(s.mode || '')}${s.bank ? ' · ' + esc(s.bank) : ''}</td>
+            <td style="padding:7px 9px; color:var(--text-muted);">${esc(s.ref || '—')}</td>
+            <td style="padding:7px 9px; white-space:nowrap; color:var(--text-muted);">${(s.allocations || []).length} line${(s.allocations || []).length === 1 ? '' : 's'}${
+              mixed ? `<span title="This payment also covers the other tab — removing it here removes all of it" style="color:var(--status-warn);"> · spans both</span>` : ''}</td>
+            <td style="padding:7px 9px; text-align:right; font-family:var(--font-mono);">${salesMoney(s.amount)}</td>
+            <td style="padding:7px 9px; white-space:nowrap;">${metalsCanDelete()
+              ? `<button class="stlDel" data-id="${esc(s.id)}" data-who="${esc(s.payee || '')}" data-amount="${esc(salesMoney(s.amount))}" data-lines="${(s.allocations || []).length}" data-mixed="${mixed ? '1' : ''}" style="background:none; border:1px solid var(--line); border-radius:var(--radius-sm); padding:3px 9px; font-size:10px; color:var(--status-warn); cursor:pointer;">Delete</button>`
+              : `<span title="Sign in with the Jarvis profile to remove a payment" style="font-size:10px; color:var(--text-faint);">&mdash;</span>`}</td>
+          </tr>`;
+        }).join('')}</tbody>
+      </table></div>
+    </div>` : ''}`;
 
   $('btnSettle').onclick = () => openSettleForm(data, which);
+
+  document.querySelectorAll('.stlDel').forEach((btn) => {
+    btn.onclick = async () => {
+      const n = Number(btn.dataset.lines) || 0;
+      const ok = confirm(`Remove the ${btn.dataset.amount} payment to ${btn.dataset.who}?\n\n`
+        + `${n} line${n === 1 ? '' : 's'} go back to outstanding, and the payment disappears `
+        + 'from the spend report.'
+        + (btn.dataset.mixed ? '\n\nThis payment also covers the other tab. ALL of it is removed, not just the part shown here.' : '')
+        + '\n\nThis is written to the audit log.');
+      if (!ok) return;
+      btn.disabled = true;
+      try {
+        await api(`/api/sales-settlements/${encodeURIComponent(btn.dataset.id)}`, { method: 'DELETE' });
+        await renderPayables(which);
+      } catch (e) {
+        btn.disabled = false;
+        alert(e.message || 'Could not remove that payment.');
+      }
+    };
+  });
 }
 
 // ── ONE RECEIPT, SEVERAL CONTAINERS ──────────────────────────────────────
