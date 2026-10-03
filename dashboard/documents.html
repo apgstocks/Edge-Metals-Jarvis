@@ -1026,6 +1026,7 @@ body[data-theme="light"] {
         <button class="verify-subtab-btn active" data-verify-subtab="aj-transport">AJ Transport</button>
         <button class="verify-subtab-btn" data-verify-subtab="sher-trucking">Sher Trucking</button>
         <button class="verify-subtab-btn" data-verify-subtab="jio">Jio</button>
+        <button class="verify-subtab-btn" data-verify-subtab="gardunos">Garduno's</button>
         <button class="verify-subtab-btn" data-verify-subtab="ntg">NTG</button>
         <button class="verify-subtab-btn" data-verify-subtab="tql">TQL</button>
         <button class="verify-subtab-btn" data-verify-subtab="schneider">Schneider</button>
@@ -1183,6 +1184,59 @@ body[data-theme="light"] {
            screen, which is worse than an obviously-unfinished tab. The
            routing, buttons and panels are real; the parsing waits for a
            sample. -->
+      <!-- ── GARDUNO'S LOGISTICS ────────────────────────────────────────
+           Apsara, 2026-10-04: "I want to upload all these invoices in Edge
+           metals trucking under gardunos like AJ Transport".
+
+           Their invoice bills one line per BOOKING with its containers listed
+           in the description, plus a SCALE TICKETS line for the whole
+           invoice — so the server expands it to one row per container and
+           splits the scale money across them before this table ever sees it.
+           The warnings box below is where that expansion says what it would
+           not guess at. -->
+      <div id="verifyPanelGardunos" class="hidden">
+        <div class="section-label" style="margin-top:0;">Upload Garduno's Logistics invoices</div>
+        <label id="gardDropZone" style="display:flex; align-items:center; gap:16px; border:2px dashed var(--border-default); border-radius:var(--radius-sm); padding:18px 20px; background:var(--surface-sunken); cursor:pointer;">
+          <input type="file" id="gardPdfInput" accept="application/pdf" multiple class="hidden">
+          <span style="color:var(--accent); font-size:20px;">&#8682;</span>
+          <div>
+            <div style="font-size:13.5px; font-weight:600; color:var(--text-strong);" id="gardDropLabel">Drop Garduno's invoice PDFs here &mdash; multiple files supported</div>
+            <div style="font-family:var(--font-mono); font-size:11px; color:var(--text-faint); margin-top:3px;">One booking line listing several containers becomes one row per container, with the scale tickets split across them</div>
+          </div>
+        </label>
+        <div id="gardFileList" style="display:flex; flex-wrap:wrap; gap:6px; margin-top:10px;"></div>
+
+        <div style="margin-top:14px;">
+          <button id="btnGardVerify" type="button" class="btn btn-primary" style="padding:10px 18px;">Run Verification</button>
+        </div>
+
+        <div id="gardLoading" class="hidden" style="display:flex; align-items:center; gap:10px; margin-top:16px; font-size:12px; color:var(--text-muted);">
+          <span class="btn-spinner"></span> Reading the invoices, expanding each booking to its containers and checking them against the Invoice sheet&hellip;
+        </div>
+
+        <div id="gardSummary" class="hidden" style="display:flex; gap:10px; flex-wrap:wrap; margin-top:18px;"></div>
+        <!-- Everything the expansion would not decide by itself: a scale
+             quantity that does not match the container count, a line whose
+             qty x rate disagrees with its own amount, an invoice whose lines
+             do not add up to its printed total. Shown above the table, since
+             each one is a reason not to trust a row in it. -->
+        <div id="gardWarnings" class="hidden" style="margin-top:16px;"></div>
+        <div id="gardProposals" class="hidden" style="margin-top:18px;"></div>
+        <div id="gardResultsWrap" class="hidden" style="margin-top:14px;">
+          <div class="section-label">Garduno's invoices vs. Invoice sheet</div>
+          <div id="gardFilterNote" style="font-size:11px; color:var(--text-faint); margin-bottom:8px;"></div>
+          <div style="overflow-x:auto;">
+            <table class="data-table">
+              <thead><tr>
+                <th>Inv date</th><th>Invoice</th><th>Container</th><th>Booking</th>
+                <th style="text-align:right;">Line haul</th><th style="text-align:right;">Scale</th>
+                <th style="text-align:right;">Total</th><th>Status</th><th>File</th>
+              </tr></thead>
+              <tbody id="gardResultsBody"></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
       <div id="verifyPanelNtg" class="hidden">
         <div class="placeholder-note">NTG verification isn't wired up yet — send me one NTG invoice PDF and this becomes a working tab.<br><span style="font-size:11px;">I need to see the real layout to know which field carries the container or booking number, and which lines are line-haul vs. accessorial charges.</span></div>
       </div>
@@ -1486,12 +1540,13 @@ const VERIFY_GROUP_PANELS = { freight: 'verifyGroupFreight', transport: 'verifyG
 // in sync with each group's row of .verify-subtab-btn buttons above.
 const VERIFY_GROUP_SUBTABS = {
   freight: ['zimex'],
-  transport: ['aj-transport', 'sher-trucking', 'jio', 'ntg', 'tql', 'schneider'],
+  transport: ['aj-transport', 'sher-trucking', 'jio', 'gardunos', 'ntg', 'tql', 'schneider'],
   commission: ['joey', 'pan-metal'],
 };
 const VERIFY_SUBTAB_PANELS = {
   zimex: 'verifyPanelZimex',
   'aj-transport': 'verifyPanelAjTransport', 'sher-trucking': 'verifyPanelSherTrucking', 'jio': 'verifyPanelJio',
+  gardunos: 'verifyPanelGardunos',
   ntg: 'verifyPanelNtg', tql: 'verifyPanelTql', schneider: 'verifyPanelSchneider',
   joey: 'verifyPanelJoey', 'pan-metal': 'verifyPanelPanMetal',
 };
@@ -2534,6 +2589,115 @@ $('btnAjVerify').addEventListener('click', async () => {
   } finally {
     setButtonLoading(btn, false);
     $('ajLoading').classList.add('hidden');
+  }
+});
+
+// ── GARDUNO'S LOGISTICS ───────────────────────────────────────────────────
+// Same shape as the AJ Transport block above, and deliberately its own copy
+// rather than a shared one parameterised by hauler: helpers/truckingProposal.js
+// says why in its own words — "their invoices are not the same document and
+// will not stay the same shape as each other; a shared mapper would make every
+// future change to one of them a change to all three".
+let gardFiles = []; // [{ name, base64 }]
+function renderGardFileList() {
+  $('gardFileList').innerHTML = gardFiles.map((f, i) => `
+    <span style="font-size:11px; padding:4px 10px; border-radius:var(--radius-xs); background:var(--surface-sunken); border:1px solid var(--border-default); color:var(--text-body);">
+      ${esc(f.name)} <a href="#" data-i="${i}" class="gardRm" style="color:var(--text-faint); text-decoration:none;">&times;</a></span>`).join('');
+  document.querySelectorAll('.gardRm').forEach((el) => el.onclick = (e) => {
+    e.preventDefault();
+    gardFiles.splice(Number(el.dataset.i), 1);
+    renderGardFileList();
+  });
+  $('gardDropLabel').textContent = gardFiles.length
+    ? `${gardFiles.length} file${gardFiles.length === 1 ? '' : 's'} ready — drop more or click to add`
+    : "Drop Garduno's invoice PDFs here — multiple files supported";
+}
+function handleGardFiles(fileList) {
+  for (const f of fileList) {
+    if (f.type !== 'application/pdf') continue;
+    const reader = new FileReader();
+    reader.onload = () => {
+      gardFiles.push({ name: f.name, base64: reader.result.split(',')[1] });
+      renderGardFileList();
+    };
+    reader.readAsDataURL(f);
+  }
+}
+$('gardPdfInput').addEventListener('change', () => { handleGardFiles($('gardPdfInput').files); $('gardPdfInput').value = ''; });
+$('gardDropZone').addEventListener('dragover', (e) => { e.preventDefault(); });
+$('gardDropZone').addEventListener('drop', (e) => { e.preventDefault(); handleGardFiles(e.dataTransfer.files); });
+
+// ── WHAT THE EXPANSION WOULD NOT GUESS AT ────────────────────────────────
+// Shown ABOVE the table and never collapsed. Each of these is a reason a row
+// below it might be wrong, and a warning behind a toggle is a warning nobody
+// reads. Her rule for the scale tickets was flag-rather-than-divide, so this
+// box is where that promise is kept.
+function renderGardWarnings(result) {
+  const box = $('gardWarnings');
+  const warnings = (result && result.warnings) || [];
+  const invoices = (result && result.invoices) || [];
+  const unreconciled = invoices.filter((i) => i.reconciled === false);
+  const paid = invoices.filter((i) => i && i.balance_due === 0 && i.invoice_total);
+  if (!warnings.length && !unreconciled.length && !paid.length) {
+    box.classList.add('hidden'); box.innerHTML = ''; return;
+  }
+  const note = (text, tone) => `<div style="font-size:12px; padding:8px 12px; border-radius:var(--radius-xs); border:1px solid var(--border-default); background:${tone === 'bad' ? 'rgba(197,64,47,.12)' : 'var(--surface-sunken)'}; color:${tone === 'bad' ? '#e58a7c' : 'var(--text-body)'}; margin-bottom:6px;">${text}</div>`;
+  box.innerHTML =
+    unreconciled.map((i) => note(`<strong>${esc(i.source_file)}</strong> does not add up: its lines come to ${propMoney(i.accounted)} and the invoice says ${propMoney(i.invoice_total)}. Something was not read — check before accepting anything below.`, 'bad')).join('')
+    + warnings.map((w) => note(esc(w))).join('')
+    // Said plainly, because "Paid in Full" on a PDF is the thing most likely
+    // to be read as "already recorded". Importing writes the CHARGE only —
+    // her decision, 2026-10-04.
+    + paid.map((i) => note(`<strong>${esc(i.source_file)}</strong> is marked paid in full on the PDF. Only what is OWED is imported — record the payment yourself on the Trucking screen.`)).join('');
+  box.classList.remove('hidden');
+}
+
+function renderGardResults(result) {
+  VERIFY_RENDER.gard = () => renderGardResults(result);
+  const matched = result.matched || [];
+  $('gardSummary').innerHTML = verifyAllChip('gard', matched.length) + verifyStatusChips('gard', matched, [
+    { key: 'verified', label: 'Verified' }, { key: 'booking_mismatch', label: 'Booking mismatch' },
+    { key: 'not_in_sheet', label: 'Not on sheet' },
+  ]);
+  $('gardSummary').classList.remove('hidden');
+
+  const rows = verifyApply('gard', matched);
+  $('gardFilterNote').innerHTML = verifyFilterNote('gard', rows.length, matched.length);
+  $('gardResultsBody').innerHTML = rows.map((r) => `
+    <tr>
+      <td>${esc(fmtDate(r.invoice_date, '—'))}</td>
+      <td>${esc(r.invoice_no || '—')}</td>
+      <td style="font-family:var(--font-mono);">${esc(r.container_no || '—')}</td>
+      <td style="font-family:var(--font-mono);">${esc(r.booking_no || '—')}</td>
+      <td style="text-align:right; font-family:var(--font-mono);">${propMoney(r.line_haul)}</td>
+      <td style="text-align:right; font-family:var(--font-mono);">${r.extra_scale_charge ? propMoney(r.extra_scale_charge) : '—'}</td>
+      <td style="text-align:right; font-family:var(--font-mono);">${propMoney(r.total_amount)}</td>
+      <td>${ajBadge(r.status)}</td>
+      <td style="font-size:11px; color:var(--text-faint);">${esc(r.source_file || '—')}</td>
+    </tr>`).join('');
+  $('gardResultsWrap').classList.remove('hidden');
+}
+
+$('btnGardVerify').addEventListener('click', async () => {
+  verifyActive('gard').clear();
+  if (!gardFiles.length) { alert("Drop at least one Garduno's invoice PDF first."); return; }
+  const btn = $('btnGardVerify');
+  setButtonLoading(btn, true, 'Running…');
+  $('gardLoading').classList.remove('hidden');
+  $('gardSummary').classList.add('hidden');
+  $('gardWarnings').classList.add('hidden');
+  $('gardResultsWrap').classList.add('hidden');
+  $('gardProposals').classList.add('hidden'); $('gardProposals').innerHTML = '';
+  try {
+    const result = await api('/api/verify/gardunos', { method: 'POST', body: JSON.stringify({ pdfs: gardFiles }) });
+    renderGardWarnings(result);
+    renderGardResults(result);
+    renderBillProposals('gard', result);
+  } catch (e) {
+    alert(e.message);
+  } finally {
+    setButtonLoading(btn, false);
+    $('gardLoading').classList.add('hidden');
   }
 });
 

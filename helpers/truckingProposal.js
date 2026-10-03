@@ -64,7 +64,7 @@ const pos = (v) => { const n = money(v); return n !== null && n > 0 ? n : null; 
 // { invoice_date, booking_no, quantity, chassis, other_charges, amount } and
 // its own cross-check counts sheet rows per booking. AJ and Jio both carry a
 // container and are joined on it.
-const JOIN_BY = { aj: 'container', jio: 'container', sher: 'booking' };
+const JOIN_BY = { aj: 'container', jio: 'container', sher: 'booking', gardunos: 'container' };
 
 // ── THE CHARGE MAP, ONE PER HAULER, WRITTEN OUT LONGHAND ─────────────────
 // Three small functions rather than one clever table. Their invoices are not
@@ -113,8 +113,35 @@ function splitFromSher(rec) {
     return out;
 }
 
-const SPLIT_FROM = { aj: splitFromAj, jio: splitFromJio, sher: splitFromSher };
-const HAULER_LABEL = { aj: 'AJ Transport', jio: 'Jio', sher: 'Sher Trucking' };
+// ── GARDUNO'S LOGISTICS (2026-10-04) ─────────────────────────────────────
+// A fourth small function, for the reason the comment above gives: their
+// invoices are not the same document and will not stay the same shape.
+//
+// By the time a record reaches here, helpers/gardunosInvoice.expandInvoice()
+// has already turned one booking line covering six containers into six
+// records and split the scale tickets across them. So this is the simplest
+// mapper of the four — line haul and extra scale, both already per-container.
+//
+// NO dry_run: Garduno's does not bill one on any invoice seen so far, and
+// mapping a field they do not use would put a confident zero in a column
+// rather than leaving it absent.
+//
+// An unrecognised charge line is NOT silently folded in. expandInvoice keeps
+// it out of the container records and raises a warning the screen shows, so
+// anything that lands in `others` here got there from a named charge.
+function splitFromGardunos(rec) {
+    const out = { line_haul: pos(rec.line_haul != null ? rec.line_haul : rec.amount),
+                  extra_scale: pos(rec.extra_scale_charge), others: [] };
+    const other = pos(rec.other_charge);
+    if (other !== null) {
+        out.others.push({ what: 'Other charge', amount: other,
+            note: `From Garduno's Logistics invoice ${rec.invoice_no || '(no number)'} — the invoice did not name this charge.` });
+    }
+    return out;
+}
+
+const SPLIT_FROM = { aj: splitFromAj, jio: splitFromJio, sher: splitFromSher, gardunos: splitFromGardunos };
+const HAULER_LABEL = { aj: 'AJ Transport', jio: 'Jio', sher: 'Sher Trucking', gardunos: "Garduno's Logistics" };
 
 // What the bill says TODAY, for the side-by-side. Asked what should happen
 // when the invoice and the bill disagree, she chose to see both and change
@@ -266,4 +293,4 @@ function splitToSave(split, current) {
     };
 }
 
-module.exports = { proposals, splitToSave, JOIN_BY, splitFromAj, splitFromJio, splitFromSher, totalOf, disagreements, currentOf };
+module.exports = { proposals, splitToSave, JOIN_BY, splitFromAj, splitFromJio, splitFromSher, splitFromGardunos, totalOf, disagreements, currentOf };

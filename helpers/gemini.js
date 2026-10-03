@@ -750,6 +750,77 @@ Return the JSON object and nothing else.`;
 // CHARGE/EXTRA SCALE did before this was fixed. If a new charge type
 // starts showing up regularly, ask for its own named column same as these
 // two.
+// ── GARDUNO'S LOGISTICS — READ THE LINES, NOTHING ELSE ───────────────────
+// Apsara, 2026-10-04: "I want to upload all these invoices in Edge metals
+// trucking under gardunos like AJ Transport".
+//
+// DELIBERATELY DUMBER THAN THE AJ TRANSPORT PROMPT ABOVE. That one asks the
+// model to work out which charge belongs to which container and what each
+// sums to — which cannot be tested without calling Gemini, and when it is
+// wrong it is wrong in money, invisibly.
+//
+// A Garduno's invoice is regular: one line per BOOKING with its containers
+// listed in the description, at a per-container rate, then a SCALE TICKETS
+// line for the invoice. Expanding that into six container records is
+// arithmetic, so it lives in helpers/gardunosInvoice.js where the suite can
+// run it. The model's only job here is to transcribe the table.
+//
+// So: no attribution, no sums, no judgement. Read the rows.
+async function extractGardunosInvoiceRecords(pdfBase64, retries = 2) {
+    if (!pdfBase64) throw new Error('pdfBase64 required');
+
+    const prompt = `This PDF is an invoice from GARDUNO'S LOGISTICS INC, a drayage company, billed to Edge Metals. Transcribe its line-item table EXACTLY as printed. Do NOT calculate anything, do NOT combine or split rows, do NOT work out which charge belongs to which container — return one entry per printed row, in the order they appear. Return ONLY raw JSON, no markdown, no prose.
+
+{
+  "invoice_no": null,     // e.g. "169 REVISED" — exactly as printed next to "Invoice no.", INCLUDING any word like REVISED
+  "invoice_date": null,   // MM/DD/YYYY as printed next to "Invoice date"
+  "due_date": null,       // MM/DD/YYYY as printed next to "Due date", or null
+  "total": 0,             // the "Total" figure, plain number
+  "balance_due": 0,       // the "Balance due" figure, plain number (0 when paid in full)
+  "lines": [
+    {
+      "product": null,     // the "Product or service" cell, verbatim (e.g. "BKNG#PHX6A1731600" or "SCALE TICKETS")
+      "description": null, // the whole "Description" cell, verbatim, keeping its line breaks as \n — it lists the container numbers, one per line
+      "qty": 0,            // the Qty column, plain number
+      "rate": 0,           // the Rate column, plain number
+      "amount": 0          // the Amount column, plain number
+    }
+  ]
+}
+
+Return the JSON object and nothing else.`;
+
+    let lastErr = null;
+    for (let attempt = 0; attempt <= retries; attempt++) {
+        try {
+            const model = getClient().getGenerativeModel({
+                model: getModelName(),
+                generationConfig: { temperature: 0, responseMimeType: 'application/json' },
+            });
+            const result = await model.generateContent([
+                { text: prompt },
+                { inlineData: { mimeType: 'application/pdf', data: pdfBase64 } },
+            ]);
+            const parsed = extractJson(result.response.text());
+            if (parsed && Array.isArray(parsed.lines)) {
+                console.log(`[GEMINI] Garduno's invoice extraction: ${parsed.lines.length} line(s)`);
+                return parsed;
+            }
+            console.warn(`[GEMINI] Garduno's invoice extraction returned unparseable JSON (attempt ${attempt + 1})`);
+        } catch (err) {
+            lastErr = err;
+            const transient = /503|429|overloaded|unavailable|high demand/i.test(err.message);
+            console.error(`[GEMINI] Garduno's invoice extraction failed (attempt ${attempt + 1}${transient ? ', transient' : ''}):`, err.message);
+            if (attempt < retries && transient) {
+                await new Promise((r) => setTimeout(r, 1200 * (attempt + 1)));
+                continue;
+            }
+            if (!transient) break;
+        }
+    }
+    throw new Error(`Garduno's invoice extraction failed${lastErr ? ': ' + lastErr.message : ''}`);
+}
+
 async function extractAjTransportInvoiceRecords(pdfBase64, retries = 2) {
     if (!pdfBase64) throw new Error('pdfBase64 required');
 
@@ -4322,4 +4393,4 @@ function modelReportLines() {
 // alternative was a ninth near-identical extract* function living here, far
 // from the store it feeds.
 module.exports = {
-    extractOrderPdfFields, getClient, getModelName, effectiveModels, modelReportLines, callGeminiJSON, extractJson, lastGeminiFailure, extractPdfFields, extractBookingFieldsFromText, resolveCutoffDate, classifyDocument, extractScaleTicketFields, extractWeightFromImage, checkPhotoQuality, extractFreightInvoiceRecords, extractCommissionDebitNoteRecords, extractJioInvoiceRecords, extractSherTruckingInvoiceRecords, extractAjTransportInvoiceRecords, transcribeVoiceNote };
+    extractOrderPdfFields, getClient, getModelName, effectiveModels, modelReportLines, callGeminiJSON, extractJson, lastGeminiFailure, extractPdfFields, extractBookingFieldsFromText, resolveCutoffDate, classifyDocument, extractScaleTicketFields, extractWeightFromImage, checkPhotoQuality, extractFreightInvoiceRecords, extractCommissionDebitNoteRecords, extractJioInvoiceRecords, extractSherTruckingInvoiceRecords, extractAjTransportInvoiceRecords, extractGardunosInvoiceRecords, transcribeVoiceNote };

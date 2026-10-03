@@ -1475,6 +1475,100 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
         }
     });
 
+    // ── GARDUNO'S LOGISTICS ──────────────────────────────────────────────
+    // Apsara, 2026-10-04: "I want to upload all these invoices in Edge metals
+    // trucking under gardunos like AJ Transport".
+    //
+    // The shape differs from AJ Transport's and that is why the work is split
+    // in two. Garduno's bills one line per BOOKING with its containers listed
+    // in the description, at a per-container rate, plus a SCALE TICKETS line
+    // for the whole invoice. Turning that into one record per container is
+    // arithmetic, so helpers/gardunosInvoice.expandInvoice() does it and
+    // tests/gardunos-invoice.js runs it against her real invoice 169 — the
+    // model is asked only to transcribe the table.
+    //
+    // CHARGES ONLY. Her decision, asked directly: the import creates what is
+    // OWED and she records the payment herself on the Trucking screen. Invoice
+    // 169 says "Paid in Full" and this route still writes no payment — a PDF
+    // should not be able to decide that money left her account.
+    app.post('/api/verify/gardunos', largeJson, async (req, res) => {
+        try {
+            const { pdfs = [] } = req.body || {};
+            if (!Array.isArray(pdfs) || !pdfs.length) return res.status(400).json({ error: 'No PDFs provided.' });
+
+            const { extractGardunosInvoiceRecords } = require('./helpers/gemini');
+            const { expandInvoice } = require('./helpers/gardunosInvoice');
+            const { crossCheckGardunosRecords } = require('./helpers/invoiceVerify');
+
+            const perFile = await Promise.all(pdfs.map(async (pdf) => {
+                const name = pdf.name || 'unnamed.pdf';
+                try {
+                    const extracted = await extractGardunosInvoiceRecords(pdf.base64);
+                    const expanded = expandInvoice(extracted);
+                    return {
+                        source_file: name,
+                        invoice: {
+                            invoice_no: expanded.invoice_no, invoice_date: expanded.invoice_date,
+                            invoice_total: expanded.invoice_total, revised: expanded.revised,
+                            records_total: expanded.records_total, accounted: expanded.accounted,
+                            reconciled: expanded.reconciled,
+                            scale_total: expanded.scale_total, scale_applied: expanded.scale_applied,
+                            // Said out loud on the response, not only in a log:
+                            // "Paid in Full" is the single most likely thing to
+                            // be misread as "already recorded".
+                            balance_due: (extracted && extracted.balance_due) || 0,
+                        },
+                        warnings: expanded.warnings,
+                        records: expanded.records.map((r) => ({
+                            ...r,
+                            invoice_no: expanded.invoice_no,
+                            invoice_date: expanded.invoice_date,
+                            source_file: name,
+                        })),
+                    };
+                } catch (e) {
+                    console.error(`[verify/gardunos] extraction failed for ${name}:`, e.message);
+                    // One unreadable PDF must not lose the rest of the batch —
+                    // the same rule the AJ Transport route follows.
+                    return { source_file: name, invoice: null, warnings: [`Extraction failed: ${e.message}`],
+                             records: [{ container_no: null, amount: null, source_file: name, extraction_failed: true,
+                                         description: `Extraction failed: ${e.message}` }] };
+                }
+            }));
+
+            const pdfRecords = perFile.flatMap((f) => f.records);
+            const result = await crossCheckGardunosRecords(pdfRecords);
+
+            // Per-invoice totals and warnings ride alongside the matched rows,
+            // so the screen can show "this invoice did not add up" next to the
+            // containers it produced rather than as a detached banner.
+            // The same "put these on the bill" offer the other trucker tabs
+            // make — renderBillProposals() in the client is generic over the
+            // prefix, so the whole accept-into-trucking flow comes for free
+            // once the server names the hauler. Never fails the verification:
+            // she ran this to check an invoice, and a fault in the offer that
+            // follows must not cost her the check.
+            try {
+                result.bill_proposals = require('./helpers/truckingProposal')
+                    .proposals(result.matched, 'gardunos');
+            } catch (e) {
+                console.error('[verify/gardunos] bill proposals failed:', e.message);
+                result.bill_proposals = [];
+                result.bill_proposals_error = e.message;
+            }
+
+            result.invoices = perFile.map((f) => ({
+                source_file: f.source_file, ...(f.invoice || {}), warnings: f.warnings,
+            }));
+            result.warnings = perFile.flatMap((f) => f.warnings.map((w) => `${f.source_file}: ${w}`));
+
+            res.json(result);
+        } catch (e) {
+            console.error('[verify/gardunos] failed:', e.message);
+            res.status(500).json({ error: e.message });
+        }
+    });
+
     app.post('/api/verify/aj-transport', largeJson, async (req, res) => {
         try {
             const { pdfs = [] } = req.body || {};

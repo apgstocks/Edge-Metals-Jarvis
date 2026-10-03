@@ -621,10 +621,77 @@ async function crossCheckAjTransportRecords(pdfRecords) {
     return { matched, sheet_only: sheetOnly };
 }
 
+// ── GARDUNO'S LOGISTICS ────────────────────────────────────────────────────
+// Apsara, 2026-10-04: "under gardunos like AJ Transport".
+//
+// ITS OWN FUNCTION, NOT A WIDENED crossCheckAjTransportRecords. CLAUDE.md
+// rule 1: a request about one screen changes that screen. AJ Transport, Sher
+// and Jio each have their own, and the day Garduno's needs a different rule
+// — it already does, since its invoice bills per booking rather than per
+// container — a shared one would have to grow a flag, and the flag would
+// eventually be set wrong on somebody else's live invoice.
+//
+// Takes the records helpers/gardunosInvoice.expandInvoice() has already
+// produced: one per container, with the scale tickets split. The expansion
+// and the splitting are tested without Gemini in tests/gardunos-invoice.js;
+// this function only answers "is each of these containers on her sheet, and
+// does the booking agree".
+async function crossCheckGardunosRecords(pdfRecords) {
+    const containerIndex = await buildSheetContainerIndex();
+    const seenContainers = new Set();
+
+    const matched = (pdfRecords || []).map((rec) => {
+        const containerNo = normContainer(rec.container_no);
+        const bookingNo = normBooking(rec.booking_no);
+        const lineHaul = safeMoney(rec.line_haul) || 0;
+        const extraScaleCharge = safeMoney(rec.extra_scale_charge) || 0;
+        const otherCharge = safeMoney(rec.other_charge) || 0;
+        // Same shape the AJ Transport rows carry, so the review table and
+        // anything downstream reads one kind of row rather than two.
+        // dry_run_charge is always 0 here: Garduno's does not bill one, and a
+        // field that is present and meaningless is worse than one that is
+        // present and zero for a stated reason.
+        // Math.round rather than a round2 helper: this file does not have one,
+        // and inventing a second rounding convention in a file full of money is
+        // how two totals start disagreeing by a cent.
+        const totalAmount = Math.round((lineHaul + extraScaleCharge + otherCharge) * 100) / 100;
+        const base = {
+            ...rec, container_no: containerNo, booking_no: bookingNo,
+            line_haul: lineHaul, dry_run_charge: 0,
+            extra_scale_charge: extraScaleCharge, other_charge: otherCharge,
+            total_amount: totalAmount,
+        };
+        if (!containerNo) return { ...base, status: 'no_container_on_pdf', sheet: null };
+        const sheetRow = containerIndex.get(containerNo);
+        if (!sheetRow) return { ...base, status: 'not_in_sheet', sheet: null };
+        seenContainers.add(containerNo);
+        if (!sheetRow.booking_no) return { ...base, status: 'sheet_booking_blank', sheet: sheetRow };
+        if (bookingNo && bookingNo !== sheetRow.booking_no) {
+            return { ...base, status: 'booking_mismatch', sheet: sheetRow };
+        }
+        return { ...base, status: 'verified', sheet: sheetRow };
+    });
+
+    // ── THE SAME CAVEAT THE OTHER TRUCKER TABS CARRY ─────────────────────
+    // The sheet has no marker for which trucker hauled a container, so this
+    // is every container THIS upload did not claim — not "Garduno's missed
+    // these". Stated here as well as on the screen, because a list like this
+    // read as an alarm is how someone chases a container that was never
+    // Garduno's to begin with.
+    const sheetOnly = [];
+    for (const [containerNo, row] of containerIndex.entries()) {
+        if (seenContainers.has(containerNo)) continue;
+        sheetOnly.push(row);
+    }
+
+    return { matched, sheet_only: sheetOnly };
+}
+
 module.exports = {
     buildSheetFreightIndex, crossCheckZimexRecords, AMOUNT_TOLERANCE, parseSheetDate, inSelectedPeriod,
     buildSheetOrderIndex, crossCheckPanMetalRecords, extractOrderNoFromInvNo, COMMISSION_TOLERANCE,
     buildSheetContainerIndex, crossCheckJioRecords,
     buildSheetBookingIndex, crossCheckSherRecords,
     crossCheckAjTransportRecords,
+    crossCheckGardunosRecords,
 };
