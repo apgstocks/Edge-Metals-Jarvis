@@ -121,16 +121,21 @@ async function sendMessage(chatId, text, media = null) {
     }
 }
 
-async function sendToManager(text) {
+async function sendToManager(text, media = null) {
     const num = cfg.getManagerNumber();
     if (!num) { console.warn('[SEND] No manager number configured'); return false; }
-    return sendMessage(num + '@c.us', text);
+    return sendMessage(num + '@c.us', text, media);
 }
 
-async function sendToTeam(text) {
+// `media` added 2026-10-03. Apsara: "rather than auto send, send a message to
+// the internal group asking for confirmation to send" -- "With the attachment
+// of proforma". sendMessage has carried a media argument since the drive
+// flows; sendToTeam simply never passed it through, so the team group was
+// text-only for no reason other than the signature.
+async function sendToTeam(text, media = null) {
     const group = cfg.getTeamGroupId();
-    if (group) return sendMessage(group, text);
-    return sendToManager(text); // no team group → manager is the team
+    if (group) return sendMessage(group, text, media);
+    return sendToManager(text, media); // no team group → manager is the team
 }
 
 // ── Wire modules ───────────────────────────────────────────────────────────────

@@ -8289,21 +8289,26 @@ async function proformaCoveringNote(draft, invNo) {
     }
 }
 
-async function generateProformaFromPending(chatId, pending) {
-    const { draft, invNo, containerNos, replyTo, who } = pending;
-    const documentsSaved = require('../helpers/documentsSaved');
-    const path = require('path');
-
-    // Uses the address SHE SAW in the read-back, carried through on the
-    // pending, rather than resolving again here. Re-resolving would mean the
-    // document could carry a different address from the one she approved if
-    // the address book changed in between — unlikely, but it's the sort of
-    // gap that only shows up once, on a real document.
-    const addressLines = Array.isArray(pending.addressLines) ? pending.addressLines : [];
-
+// ── ONE PAYLOAD BUILDER, NOT TWO (2026-10-03) ──────────────────────────────
+// Apsara: "rather than auto send, send a message to the internal group asking
+// for confirmation to send" -- "With the attachment of proforma".
+//
+// Attaching the document to the approval request means the PDF is built
+// BEFORE the yes, and then emailed after it. Two places building a payload
+// would be two documents: this file already carries a scar from exactly that
+// (see prepareProformaNumbers -- "Two paths to one document is exactly where
+// that kind of divergence hides"). So the payload is built once, here, and
+// both the attachment and the email render from the same object.
+//
+// AND THAT IS THE REAL POINT OF HER CHANGE, beyond convenience. Today the
+// read-back is a TEXT SUMMARY and the PDF is generated after she says yes --
+// so the thing approved and the thing sent are not the same artifact. With
+// the attachment they are byte-identical.
+function buildProformaPayload(draft, invNo, containerNos, addressLines) {
     const itemCode = itemCodeFor(draft.items[0]?.desc);
-    const payload = {
+    return {
         inv_no: invNo || '',
+
         inv_date: new Date().toISOString().slice(0, 10),
         reference: '',
         qty_unit: 'MT',
@@ -8326,12 +8331,69 @@ async function generateProformaFromPending(chatId, pending) {
             items: draft.items.map((i) => ({ desc: i.desc, qty: i.qty, rate: i.rate, unit: 'MT' })),
         })),
     };
+}
 
-    let pdf;
+// Builds the proforma PDF for an APPROVAL REQUEST and archives it, so the
+// document can be attached to the message that asks for the yes. Returns
+// { media, pdfPath, filename, payload } or null -- never throws, because an
+// approval request that cannot attach a PDF must still go out as text rather
+// than vanish.
+async function buildApprovalAttachment(draft, invNo, containerNos, addressLines) {
     try {
-        pdf = await require('../helpers/proformaPdf').generateProformaDc2Pdf(payload);
-    } catch (err) {
-        return _send(chatId, `Couldn't build the proforma: ${err.message}`);
+        const payload = buildProformaPayload(draft, invNo, containerNos, addressLines);
+        const pdf = await require('../helpers/proformaPdf').generateProformaDc2Pdf(payload);
+        const filename = proformaFilename(payload.inv_no, containerNos || [], draft.consignee);
+        // Archived through the SAME store the sent document uses, so the file
+        // exists in Documents > Saved whether or not anyone ever says yes, and
+        // the path on the pending stays valid across a pm2 restart.
+        let pdfPath = null;
+        try { pdfPath = require('../helpers/documentsSaved').saveProformaCopy(pdf, filename); } catch (e) {
+            console.warn('[PROFORMA-APPROVAL] archive failed, attaching without a saved copy:', e.message);
+        }
+        return {
+            payload, pdfPath, filename,
+            media: { mimetype: 'application/pdf', base64: Buffer.from(pdf).toString('base64'), filename },
+        };
+    } catch (e) {
+        console.warn('[PROFORMA-APPROVAL] could not build the attachment, asking as text only:', e.message);
+        return null;
+    }
+}
+
+async function generateProformaFromPending(chatId, pending) {
+    const { draft, invNo, containerNos, replyTo, who } = pending;
+    const documentsSaved = require('../helpers/documentsSaved');
+    const path = require('path');
+
+    // Uses the address SHE SAW in the read-back, carried through on the
+    // pending, rather than resolving again here. Re-resolving would mean the
+    // document could carry a different address from the one she approved if
+    // the address book changed in between — unlikely, but it's the sort of
+    // gap that only shows up once, on a real document.
+    const addressLines = Array.isArray(pending.addressLines) ? pending.addressLines : [];
+
+    const payload = buildProformaPayload(draft, invNo, containerNos, addressLines);
+
+    // THE DOCUMENT SHE APPROVED, not a fresh render of it. When the approval
+    // request carried the PDF as an attachment, that exact file is what goes
+    // to the customer -- re-rendering here would mean the bytes in the group
+    // and the bytes in the buyer's inbox were two different documents, which
+    // is the whole thing attaching it was meant to close.
+    let pdf = null;
+    if (pending.pdfPath) {
+        try {
+            const fs = require('fs');
+            if (fs.existsSync(pending.pdfPath)) pdf = fs.readFileSync(pending.pdfPath);
+        } catch (e) {
+            console.warn('[PROFORMA-MAIL] could not reuse the approved PDF, re-rendering:', e.message);
+        }
+    }
+    if (!pdf) {
+        try {
+            pdf = await require('../helpers/proformaPdf').generateProformaDc2Pdf(payload);
+        } catch (err) {
+            return _send(chatId, `Couldn't build the proforma: ${err.message}`);
+        }
     }
 
     const filename = proformaFilename(payload.inv_no, containerNos, draft.consignee);
@@ -9088,7 +9150,7 @@ undoBillPayment,
     askForScaleTickets, resumeQuoteWithScaleTickets,
     // Proforma raised from a customer's own email (2026-08-23).
     startProformaFromEmail, generateProformaFromPending,
-    learnWritingStyle, showWritingStyle, rescanMail, prepareProformaNumbers,
+    learnWritingStyle, showWritingStyle, rescanMail, prepareProformaNumbers, buildApprovalAttachment, buildProformaPayload,
     scanPastCutoff,
     proformaCoveringNote, proformaTemplateNote,
 };

@@ -3657,6 +3657,31 @@ function senderLabel(from) {
 // can already answer "reply to 1" or "yes" and have Jarvis draft mail as Edge
 // Metals. Routing the digest there does not create that power, but it is the
 // first thing that puts it in front of them every hour. Flagged to her.
+// The message that asks for the yes. Deliberately short: the figures are on
+// the attached document, and a wall of text beside a PDF gets read instead of
+// it. What it must carry is WHO it is for, WHAT the total is -- so a wrong
+// document is obvious without opening it -- and every assumption, because an
+// assumed tonnage is the one thing the PDF itself cannot flag.
+function buildApprovalAsk(ready, prep, att) {
+    const d = ready.proforma || {};
+    const money = (n) => Number(n || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    const total = (d.items || []).reduce((sum, i) => sum + (i.qty || 0) * (i.rate || 0), 0) * (d.containerCount || 1);
+    const lines = [
+        `Proforma ready for ${d.consignee || 'a buyer'} — NOT SENT YET.`,
+        '',
+        `From ${ready.fromName || 'their email'}${d.containerCount ? `, ${d.containerCount} container(s)` : ''}`,
+        ...(d.items || []).map((i) => `  • ${i.desc} — ${i.qty} MT${i.qty_assumed ? '*' : ''} @ $${money(i.rate)}/MT`),
+        `Total: $${money(total)}`,
+    ];
+    if (prep && prep.invNo) lines.push(`Invoice no: ${prep.invNo}`);
+    // Assumptions and doubts, verbatim. These are the reason a human is being
+    // asked at all, so they are never summarised away.
+    (d.assumed || []).forEach((a) => lines.push(`* ${a}`));
+    (d.unconfirmed || []).forEach((u) => lines.push(`⚠ ${u}`));
+    lines.push('', `Reply "yes" and I'll email it to ${d.consignee || 'them'}. "no" and I'll leave it.`);
+    return lines.join('\n');
+}
+
 function digestAudience() {
     const settings = cfg.getSettings ? cfg.getSettings() : {};
     const group = settings.team_group_id || null;
@@ -4794,14 +4819,45 @@ async function run({ sendToManager, sendMessage: _sendMessage = null, dryRun = f
                 // uses, so both produce an identical document — see
                 // actions.prepareProformaNumbers.
                 const prep = await actions.prepareProformaNumbers(ready.proforma);
+                // ── THE DOCUMENT IS ATTACHED TO THE ASK (2026-10-03) ───────
+                // Apsara: "rather than auto send, send a message to the
+                // internal group asking for confirmation to send" -- "With the
+                // attachment of proforma".
+                //
+                // Her auto-send verdict stands (0 of 4 orders were safe to
+                // send unattended), and this is the right middle: Jarvis does
+                // all the work, the group sees the actual PDF, and a human
+                // says go.
+                //
+                // THE REAL GAIN IS NOT CONVENIENCE. Until now the read-back
+                // was a TEXT SUMMARY and the PDF was rendered AFTER the yes,
+                // so the thing approved and the thing sent were not the same
+                // artifact. generateProformaFromPending now reuses this exact
+                // file, so they are byte-identical.
+                //
+                // Non-fatal by construction: a failed render leaves `att`
+                // null and the ask goes out as text, exactly as before.
+                const att = await actions.buildApprovalAttachment(
+                    ready.proforma, prep.invNo, prep.containerNos, prep.addressLines);
                 const r = await actions.setPending(managerChat, {
                     type: 'confirm_proforma',
                     draft: ready.proforma,
                     invNo: prep.invNo, containerNos: prep.containerNos, addressLines: prep.addressLines,
                     replyTo: ready.from, who: ready.fromName,
+                    pdfPath: att && att.pdfPath ? att.pdfPath : null,
                     expires_in_ms: 30 * 60 * 1000,
                 });
                 if (r && r.queued) console.log(`[REPLYWATCH] proforma confirmation queued behind '${r.blockedBy}' rather than overwriting it`);
+                // The ask itself, with the PDF on it. Sent separately from the
+                // digest rather than appended to it: the digest is a list she
+                // reads, this is one decision with a document attached, and
+                // burying a $275,000 yes/no inside a numbered list is how it
+                // gets skimmed past.
+                if (att && att.media && _sendMessage && !dryRun) {
+                    const ok = await _sendMessage(managerChat,
+                        buildApprovalAsk(ready, prep, att), att.media);
+                    if (ok === false) console.warn('[REPLYWATCH] approval request with attachment was not delivered');
+                }
             }
         } catch (e) {
             console.warn('[REPLYWATCH] could not stage the proforma confirmation:', e.message);
@@ -4976,7 +5032,7 @@ async function run({ sendToManager, sendMessage: _sendMessage = null, dryRun = f
     return { checked, flagged: flagged.length, items: flagged, queued: store.undelivered.length, sent: delivered, chased: chaseUps.length, deadLettered: deadLettered.length };
 }
 
-module.exports = { run, senderKey, recordSenderEvent, senderHistoryLine, quoteAppearsIn, buildThreadLedger, threadMessageText, digestAudience, deliverDigestMessage, degenericiseSummary, resolveRelativeDates, isOwedItem, isBystanderItem, isColleagueItem, collectAttachmentNames, figureGap, parseMoneyFigure, addressing, newFence, defence, cleanLabel, normFigure, figureText, refreshSentIndex, sheWroteSince, MAX_ASSESS_ATTEMPTS, draftProformaForOrder, proformaDraftLines, buildPrompt, collectDeadlineReminders, buildDeadlineMessage, bulkMailSignal, FENCE, FENCE_END, buildDigest, buildChaseMessage, collectChaseUps, hasSheReplied, threadTail, threadMovedOn, closesLoopWithoutAsk, invoiceNumberIn, looksLikePaymentDemand, findPaymentEvidence, mutedReason, addMute, removeMute, activeMutes, MUTE_DAYS, extractLatestMessage, parseForward, stripTrailingSignature, senderLabel, assess, resolveDigestIndex, loadStore, saveStore, knownCounterpartyTest, importanceOf: importance.importanceOf, mergeMap, mergeList, mergePoRecord, laterOf, withSnapshot, poTracker, AGING_DAYS, RECHASE_DAYS, MAX_CHASES, NEVER_REPLY_PATTERNS,
+module.exports = { run, senderKey, recordSenderEvent, senderHistoryLine, quoteAppearsIn, buildThreadLedger, threadMessageText, digestAudience, buildApprovalAsk, deliverDigestMessage, degenericiseSummary, resolveRelativeDates, isOwedItem, isBystanderItem, isColleagueItem, collectAttachmentNames, figureGap, parseMoneyFigure, addressing, newFence, defence, cleanLabel, normFigure, figureText, refreshSentIndex, sheWroteSince, MAX_ASSESS_ATTEMPTS, draftProformaForOrder, proformaDraftLines, buildPrompt, collectDeadlineReminders, buildDeadlineMessage, bulkMailSignal, FENCE, FENCE_END, buildDigest, buildChaseMessage, collectChaseUps, hasSheReplied, threadTail, threadMovedOn, closesLoopWithoutAsk, invoiceNumberIn, looksLikePaymentDemand, findPaymentEvidence, mutedReason, addMute, removeMute, activeMutes, MUTE_DAYS, extractLatestMessage, parseForward, stripTrailingSignature, senderLabel, assess, resolveDigestIndex, loadStore, saveStore, knownCounterpartyTest, importanceOf: importance.importanceOf, mergeMap, mergeList, mergePoRecord, laterOf, withSnapshot, poTracker, AGING_DAYS, RECHASE_DAYS, MAX_CHASES, NEVER_REPLY_PATTERNS,
     // Exposed for tests/integration.js — deadline ranking and matter grouping
     // are pure functions and the parts most worth asserting directly.
     parseDeadline, daysUntilDeadline, applyDeadlineUrgency, deadlineIsShipmentDate, SHIPMENT_DATE, groupMatters, sameMatter,
