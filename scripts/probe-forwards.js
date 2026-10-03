@@ -1,7 +1,7 @@
 // Run the REAL pipeline on every forward in the window and print the decision.
 (async () => {
-    const gmail = require('./helpers/gmail');
-    const rw = require('./workflow/replyWatch');
+    const gmail = require('../helpers/gmail');
+    const rw = require('../workflow/replyWatch');
     const client = await gmail.getGmailRead();
     const me = ((await gmail.getMyEmailAddress(client)) || '').toLowerCase() || null;
     let managerEmail = null;

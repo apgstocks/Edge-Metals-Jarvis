@@ -56,7 +56,35 @@ const DAY_MS = 86400000;
 //
 // 4 to 12 digits: hers run 7 ("4302902"). Three or fewer matches a quantity,
 // a price or a time ("PO 12") often enough to be useless.
-const PO_REF = /\b(?:purchase\s+order|p\.?\s?o\.?)\s*(?:number|no\.?|#)?\s*[:#]?\s*(\d{4,12})\b/gi;
+// ── HER OWN POs DID NOT MATCH THIS (2026-10-03) ────────────────────────────
+// Measured while running the real pipeline over forwarded mail:
+//     "Fwd: New P.O. (Edge Metal) EMI-02 & 03"  ->  []
+//     "New P.O. (Edge Metal) EMI-01"            ->  []
+//     "PO 709275"                               ->  ['709275']
+// The tracker written to answer "why do all my POs get ignored" could not see
+// the numbering scheme Metalco actually uses for her. Digits-only was read off
+// a 20-day sample that happened to contain only carrier-style refs.
+//
+// THE HYPHEN IS LOAD-BEARING, and it is the reason this stays safe. The
+// obvious widening -- [A-Z]{2,6}[- ]?\d{1,6} -- reintroduces exactly the false
+// positive the comment below says would recur forever, because /i makes
+// [A-Z] match "Box" and "P.O. Box 90210" starts matching again. Requiring the
+// hyphen excludes it on shape rather than on a word blacklist that would need
+// extending every time a new signature line appears.
+const PO_ALNUM = String.raw`[A-Z]{2,6}-\d{1,6}`;
+const PO_DIGITS = String.raw`\d{4,12}`;
+const PO_REF = new RegExp(
+    // A SHORT PARENTHETICAL MAY SIT BETWEEN THE PHRASE AND THE REF, and this is
+    // not a corner case -- it is the literal subject line Metalco sends:
+    //     "New P.O. (Edge Metal) EMI-02 & 03"
+    // Bounded to 30 chars inside brackets so it cannot bridge a sentence.
+    String.raw`\b(?:purchase\s+order|p\.?\s?o\.?)s?\s*(?:number|no\.?|#)?\s*[:#]?\s*(?:\([^)]{0,30}\)\s*)?(` +
+    PO_ALNUM + '|' + PO_DIGITS + String.raw`)\b`, 'gi');
+
+// "EMI-02 & 03" IS TWO PURCHASE ORDERS. Her mail writes the second as a bare
+// number continuing the first prefix, and reading it as one PO loses a live
+// matter silently -- the worst failure shape this file has.
+const PO_CONTINUATION = /\G?\s*(?:&|and|,)\s*(\d{1,6})\b/gi;
 
 // "P.O. Box 90210" in an email signature is the false positive that would
 // recur forever — every message from that sender opening the same phantom PO.
@@ -74,7 +102,22 @@ function poReferencesIn(...texts) {
     for (const t of texts) {
         const s = String(t || '');
         if (!s) continue;
-        for (const m of s.matchAll(PO_REF)) found.add(m[1]);
+        for (const m of s.matchAll(PO_REF)) {
+            const ref = m[1];
+            found.add(ref);
+            // Continuations, e.g. "EMI-02 & 03" -> EMI-02 and EMI-03. Only for
+            // the prefixed form: "PO 709275 & 03" would be a quantity or a
+            // typo, not a second seven-digit order.
+            const pre = /^([A-Z]{2,6})-(\d{1,6})$/i.exec(ref);
+            if (!pre) continue;
+            let tail = s.slice(m.index + m[0].length);
+            let cm;
+            const cont = /^\s*(?:&|and|,)\s*(\d{1,6})\b/i;
+            while ((cm = cont.exec(tail))) {
+                found.add(`${pre[1]}-${cm[1].padStart(pre[2].length, '0')}`);
+                tail = tail.slice(cm[0].length);
+            }
+        }
     }
     return [...found];
 }
