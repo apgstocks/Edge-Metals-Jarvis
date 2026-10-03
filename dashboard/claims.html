@@ -324,12 +324,16 @@ function renderChips(){
     s.awaiting_recovery ? '<span class="chip bad">' + s.awaiting_recovery + ' recovery not raised</span>' : '',
     '<span class="chip">' + (s.containers || 0) + ' containers · ' + (s.total || 0) + ' claims</span>',
     '<span class="chip act" id="vocab">' + (STATE.kinds.length || 0) + ' kinds</span>',
+    '<span class="chip act" id="scanBtn" title="Photograph a surveyor report or a customer claim letter and let the model fill the form">Scan a document</span>',
+    '<span class="chip act" id="repBtn" title="Build the statement that goes to a supplier">Claim statement</span>',
     '<span class="chip act" id="impBtn">Import sheet</span>',
     '<span class="chip act" id="refresh">Refresh</span>',
   ].filter(Boolean).join('');
   const r = $('#refresh'); if (r) r.onclick = () => load(true);
   const v = $('#vocab'); if (v) v.onclick = openVocab;
   const ib = $('#impBtn'); if (ib) ib.onclick = openImport;
+  const sb = $('#scanBtn'); if (sb) sb.onclick = openScan;
+  const rb = $('#repBtn'); if (rb) rb.onclick = () => openStatement({});
 }
 function renderStrip(){
   const s = STATE.stats || {};
@@ -444,7 +448,9 @@ function renderDetail(){
       '<div class="sub">' + esc(g.customer || 'customer not named') + (g.invoices.length ? ' &nbsp;·&nbsp; ' + esc(g.invoices.join(', ')) : '') + '</div></div>' +
       '<div class="right">' + g.kinds.map(kindChip).join('') +
         '<span class="chip">recover from ' + esc(g.suppliers.join(', ') || 'nobody yet') + '</span>' +
-        '<span class="chip act" id="addClaim">+ another claim</span></div></div>' +
+        '<span class="chip act" id="addClaim">+ another claim</span>' +
+        (g.suppliers.length ? '<span class="chip act" id="contRep">statement to ' + esc(g.suppliers[0]) + '</span>' : '') +
+        '</div></div>' +
     '<div class="csum">' +
       '<div><span class="k">Claims on this container</span><span class="v">' + g.claims.length + '</span></div>' +
       '<div><span class="k">Claimed against Edge</span><span class="v">' + money(g.claimed) + '</span></div>' +
@@ -456,6 +462,8 @@ function renderDetail(){
   g.claims.forEach(c => wireClaim(c));
   const add = $('#addClaim');
   if (add) add.onclick = () => openNew({ container_no: g.container || g.key, customer: g.customer, invoice_no: g.invoices[0] || '' });
+  const cr = $('#contRep');
+  if (cr) cr.onclick = () => openStatement({ container: g.container || g.key, supplier: g.suppliers[0] || '' });
 }
 
 function readCard(el){
@@ -590,6 +598,192 @@ function openNew(pre){
     } catch (e) { toast(e.message, 'bad'); }
   };
   $('#n_cust', wrap).focus();
+}
+
+/* ── scanning a document ──────────────────────────────────────────────────
+   Apsara, 2026-10-02: "Add a scan page in claim sheet. When i scan pass it
+   across the model, and fill all the details by itself."
+
+   IT FILLS THE FORM AND STOPS. The mail path can check a quoted figure against
+   the source text it came from; a photograph has no source text, so there is
+   nothing to check against and the only verification is a person reading the
+   document next to the form. The words it read sit beside every field for
+   exactly that reason, and nothing is created until the button is pressed. */
+const SCAN_FIELDS = [
+  ['customer', 'Customer'], ['supplier', 'Supplier'],
+  ['invoice_no', 'Invoice no'], ['container_no', 'Container no'],
+  ['invoice_weight', 'Invoiced weight'], ['claimed_weight', 'Weight received'],
+  ['weight_unit', 'Unit'], ['stated_claim_amount', 'Amount they are asking'],
+  ['date', 'Date on the document'], ['what_is_claimed', 'What is claimed'],
+];
+function openScan(){
+  const wrap = document.createElement('div');
+  wrap.className = 'modal';
+  wrap.innerHTML = '<div class="box wide"><h3>Scan a claim document</h3>' +
+    '<div class="hint" style="margin-top:0">A surveyor outturn report, a weighbridge ticket or the customer’s own claim letter. Photograph the page, or pick a PDF.</div>' +
+    '<label class="f" style="margin-top:12px">Document' +
+      '<input id="s_file" type="file" accept="image/*,application/pdf" capture="environment">' +
+    '</label>' +
+    '<div class="actions"><button class="btn go" id="s_read" type="button">Read it</button>' +
+      '<button class="btn" id="s_cancel" type="button">Cancel</button>' +
+      '<span class="hint" style="margin:0" id="s_state"></span></div>' +
+    '<div id="s_out"></div></div>';
+  document.body.appendChild(wrap);
+  const close = () => wrap.remove();
+  wrap.onclick = (e) => { if (e.target === wrap) close(); };
+  $('#s_cancel', wrap).onclick = close;
+
+  let picked = null;
+  $('#s_file', wrap).onchange = (e) => { picked = e.target.files[0] || null; $('#s_state', wrap).textContent = picked ? picked.name : ''; };
+
+  $('#s_read', wrap).onclick = async () => {
+    if (!picked) { toast('Pick a photo or a PDF first.', 'bad'); return; }
+    const btn = $('#s_read', wrap); btn.disabled = true; btn.textContent = 'Reading…';
+    $('#s_out', wrap).innerHTML = '';
+    try {
+      const b64 = await new Promise((res, rej) => {
+        const fr = new FileReader();
+        fr.onload = () => res(String(fr.result).replace(/^data:[^,]+,/, ''));
+        fr.onerror = () => rej(new Error('that file could not be read on this device'));
+        fr.readAsDataURL(picked);
+      });
+      const r = await fetch('/api/claims/scan', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ base64: b64, mimeType: picked.type || 'image/jpeg' }),
+      });
+      const d = await r.json().catch(() => null);
+      if (r.status === 422 && d) { showNotClaim(wrap, d); return; }
+      if (!r.ok || !d) throw new Error((d && (d.error || d.reason)) || ('HTTP ' + r.status));
+      showScan(wrap, d, close);
+    } catch (e) {
+      $('#s_out', wrap).innerHTML = '<div class="card"><div class="why">It could not be read — ' + esc(e.message) + '</div></div>';
+      toast(e.message, 'bad');
+    } finally { btn.disabled = false; btn.textContent = 'Read it'; }
+  };
+}
+
+function showNotClaim(wrap, d){
+  $('#s_out', wrap).innerHTML = '<div class="card"><h3>That does not look like a claim</h3>' +
+    '<div class="hint" style="margin-top:0">' + esc(d.why || 'nothing on the page says anything is being claimed') + '</div>' +
+    '<div class="hint">Nothing was created. If it IS a claim, photograph the page that states the shortage — the page with the weights on it.</div></div>';
+}
+
+function showScan(wrap, d, closeModal){
+  const f = d.fields || {}, q = d.quotes || {};
+  const row = ([k, label]) => {
+    const v = f[k];
+    const quoted = q[k];
+    return '<label class="f">' + label +
+      '<input class="sf' + (k === 'invoice_no' || k === 'container_no' ? ' mono' : '') + '" data-k="' + k + '" value="' + esc(v == null ? '' : v) + '">' +
+      '<span class="hint" style="margin-top:4px">' + (quoted ? '“' + esc(quoted) + '”' : 'nothing quoted for this — check it yourself') + '</span></label>';
+  };
+  const noUnit = !f.weight_unit;
+  $('#s_out', wrap).innerHTML =
+    '<div class="card"><h3>' + esc(d.docType || 'claim document') + (d.confidence != null ? ' · ' + Math.round(d.confidence * 100) + '% sure' : '') + '</h3>' +
+      '<div class="why">' + esc(d.verification) + '</div>' +
+      (d.lowConfidence ? '<div class="hint"><b>·</b> It is not confident about this one. Read every figure against the document before you create anything.</div>' : '') +
+      ((d.unreadable || []).length ? '<div class="hint"><b>·</b> It could not read: ' + esc(d.unreadable.join(', ')) + '</div>' : '') +
+      (noUnit ? '<div class="hint"><b>·</b> the document did not state a unit, so no figure is worked out. A guess between MT and pounds is out by 2204x — set the unit in Confirm the weights.</div>' : '') +
+      (d.existing ? '<div class="hint"><b>·</b> ' + esc(d.existing.container_no || d.existing.invoice_no) + ' already has a claim (' + esc(d.existing.status) + '). Creating this makes a SECOND one — only do that if it is a different argument.</div>' : '') +
+    '</div>' +
+    '<div class="card"><h3>What it read</h3><div class="grid">' + SCAN_FIELDS.map(row).join('') + '</div>' +
+      '<div class="hint">Kind: ' + esc(d.kind && d.kind.slug ? kindLabel(d.kind.slug) : 'not worked out — it will be named when the claim is read') + '</div>' +
+      '<div class="actions"><button class="btn go" id="s_create" type="button">Create this claim, unverified</button>' +
+        '<span class="hint" style="margin:0">Weights and the unit are not stored from a scan — they are entered in Confirm the weights, where the unit is recorded with them.</span></div>' +
+    '</div>';
+
+  $('#s_create', wrap).onclick = async () => {
+    const get = (k) => { const el = wrap.querySelector('.sf[data-k="' + k + '"]'); return el ? el.value.trim() : ''; };
+    if (!get('container_no') && !get('invoice_no')) { toast('A claim needs at least a container number or an invoice number.', 'bad'); return; }
+    const btn = $('#s_create', wrap); btn.disabled = true; btn.textContent = 'Creating…';
+    try {
+      const rec = await api('/api/claims', {
+        customer: get('customer'), supplier: get('supplier'),
+        invoice_no: get('invoice_no'), container_no: get('container_no'),
+        stated_claim_amount: numOf(get('stated_claim_amount')),
+        claim_type: (d.kind && d.kind.slug) || '',
+        note: get('what_is_claimed'),
+        created_by: 'scan',
+      });
+      closeModal(); toast('Created, unverified. Confirm the weights next.', 'ok');
+      STATE.sel = String(rec.container_no || rec.invoice_no || '—').toUpperCase();
+      await load();
+    } catch (e) { btn.disabled = false; btn.textContent = 'Create this claim, unverified'; toast(e.message, 'bad'); }
+  };
+}
+
+/* ── the statement that goes to a supplier ────────────────────────────────
+   Apsara, 2026-10-02: "create claim report option where i can download the
+   report and share it with supplier".
+
+   An unverified claim is held OUT by default. It is a reading, not a demand,
+   and a figure sent to a supplier and then corrected downwards is worth less
+   than the same figure sent once. */
+function openStatement(pre){
+  const wrap = document.createElement('div');
+  wrap.className = 'modal';
+  wrap.innerHTML = '<div class="box wide"><h3>Claim statement' + (pre.container ? ' — ' + esc(pre.container) : '') + '</h3>' +
+    '<div class="hint" style="margin-top:0">The document a supplier is asked to pay against. It shows what is recoverable from them and nothing about what Edge absorbs.</div>' +
+    '<div class="grid" style="margin-top:12px">' +
+      '<label class="f">Supplier<select id="r_sup"><option value="">loading…</option></select></label>' +
+      '<label class="f">Only claims from<input id="r_from" type="date"></label>' +
+      '<label class="f">Up to<input id="r_to" type="date"></label>' +
+    '</div>' +
+    '<label class="f" style="margin-top:10px"><span><input type="checkbox" id="r_unv"> Include unverified claims</span>' +
+      '<span class="hint" style="margin-top:4px">Held back by default — an unverified claim is a reading, not a demand. Included, each one prints “not yet verified” and stays out of the total.</span></label>' +
+    '<label class="f"><span><input type="checkbox" id="r_set"> Include ones already settled</span></label>' +
+    '<div class="actions">' +
+      '<button class="btn go" id="r_pdf" type="button">Download PDF</button>' +
+      '<button class="btn" id="r_xls" type="button">Download Excel</button>' +
+      '<button class="btn" id="r_prev" type="button">Preview</button>' +
+      '<button class="btn" id="r_cancel" type="button">Cancel</button>' +
+    '</div>' +
+    '<div id="r_out"></div></div>';
+  document.body.appendChild(wrap);
+  const close = () => wrap.remove();
+  wrap.onclick = (e) => { if (e.target === wrap) close(); };
+  $('#r_cancel', wrap).onclick = close;
+
+  const qs = () => {
+    const p = new URLSearchParams();
+    const sup = $('#r_sup', wrap).value;
+    if (sup) p.set('supplier', sup);
+    if (pre.container) p.set('container', pre.container);
+    if ($('#r_from', wrap).value) p.set('from', $('#r_from', wrap).value);
+    if ($('#r_to', wrap).value) p.set('to', $('#r_to', wrap).value);
+    if ($('#r_unv', wrap).checked) p.set('includeUnverified', '1');
+    if ($('#r_set', wrap).checked) p.set('includeSettled', '1');
+    return p.toString();
+  };
+
+  (async () => {
+    try {
+      const r = await api('/api/claims/report/suppliers');
+      const list = r.suppliers || [];
+      $('#r_sup', wrap).innerHTML = '<option value="">every supplier</option>' +
+        list.map(s => '<option value="' + esc(s.supplier) + '"' + (pre.supplier === s.supplier ? ' selected' : '') + '>' +
+          esc(s.supplier) + ' — ' + money(s.recoverable) + (s.unverified ? ' (' + s.unverified + ' unverified)' : '') + '</option>').join('');
+      if (pre.supplier) $('#r_sup', wrap).value = pre.supplier;
+      await refresh();
+    } catch (e) { $('#r_sup', wrap).innerHTML = '<option value="">could not load suppliers</option>'; toast(e.message, 'bad'); }
+  })();
+
+  async function refresh(){
+    try {
+      const b = await api('/api/claims/report?' + qs());
+      $('#r_out', wrap).innerHTML = '<div class="card"><h3>' + b.totals.claims + ' claims · ' + money(b.totals.recoverable) + ' recoverable</h3>' +
+        '<div class="hint" style="margin-top:0">To ' + esc(b.addressedTo || 'every supplier on these claims') + ' · ref ' + esc(b.reference) + '</div>' +
+        (b.unverifiedCount && !b.includedUnverified ? '<div class="hint"><b>·</b> ' + b.unverifiedCount + ' unverified claim(s) are NOT in this — a reading, not a demand. Tick the box above to include them for information.</div>' : '') +
+        ((b.noFigure || []).length ? '<div class="hint"><b>·</b> ' + b.noFigure.length + ' claim(s) have no recovery figure, so they add nothing to the total. Raise the recovery on them first.</div>' : '') +
+        (b.totals.claims ? '' : '<div class="hint"><b>·</b> Nothing to send. Confirm the weights and raise the recovery on at least one claim first.</div>') +
+      '</div>';
+    } catch (e) { $('#r_out', wrap).innerHTML = '<div class="card"><div class="why">' + esc(e.message) + '</div></div>'; }
+  }
+  ['#r_sup', '#r_from', '#r_to', '#r_unv', '#r_set'].forEach(sel => { const el = $(sel, wrap); if (el) el.onchange = refresh; });
+
+  $('#r_prev', wrap).onclick = () => window.open('/api/claims/report?' + qs() + '&format=html', '_blank');
+  $('#r_pdf', wrap).onclick = () => { toast('Building the PDF…', 'ok'); window.location = '/api/claims/report?' + qs() + '&format=pdf'; };
+  $('#r_xls', wrap).onclick = () => { window.location = '/api/claims/report?' + qs() + '&format=xlsx'; };
 }
 
 /* ── importing a weight-shortage sheet ────────────────────────────────────

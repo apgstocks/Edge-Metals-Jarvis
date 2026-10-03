@@ -18,6 +18,8 @@ const claims = require('../claims');
 const claimWatch = require('../../workflow/claimWatch');
 const claimKinds = require('../claimKinds');
 const importSheet = require('./importSheet');
+const claimScan = require('../claimScan');
+const report = require('./report');
 
 const bad = (res, msg, code = 400) => res.status(code).json({ error: msg });
 
@@ -43,11 +45,6 @@ function mount(app, cfg) {
                 units: claims.UNITS,
             });
         } catch (e) { bad(res, e.message, 500); }
-    });
-
-    app.get('/api/claims/:id', (req, res) => {
-        const c = claims.get(req.params.id);
-        return c ? res.json(c) : bad(res, 'no such claim', 404);
     });
 
     // Manual entry, for a claim that arrives by phone or WhatsApp rather than
@@ -154,6 +151,102 @@ function mount(app, cfg) {
         } catch (e) { bad(res, e.message); }
     });
 
+    // ── SCANNING A DOCUMENT ────────────────────────────────────────────────
+    // Apsara, 2026-10-02: "Add a scan page in claim sheet. When i scan pass it
+    // across the model, and fill all the details by itself."
+    //
+    // It fills the form and stops. Nothing is created here — the figures on the
+    // page are the model's reading of a photograph, and the mail path has source
+    // text to check a quote against where this has none. So the human IS the
+    // verification step, and the response says so in those words.
+    app.post('/api/claims/scan', async (req, res) => {
+        try {
+            const b = req.body || {};
+            const base64 = String(b.base64 || '').replace(/^data:[^,]+,/, '');
+            if (!base64) return bad(res, 'no file was sent — pick a photo or a pdf first');
+            if (base64.length > 28 * 1024 * 1024) return bad(res, 'that file is too big — photograph the page rather than the whole report');
+            const d = await claimScan.scan({ base64, mimeType: b.mimeType || 'image/jpeg' });
+            // Not a claim document is an ANSWER, not a server fault: 422 so the
+            // page can say what it was instead of showing a red failure.
+            if (!d.ok) return res.status(422).json(d);
+            res.json(d);
+        } catch (e) {
+            console.error('[CLAIMS] scan failed:', e && e.stack || e);
+            bad(res, e.message, 500);
+        }
+    });
+
+    // ── THE STATEMENT THAT GOES TO A SUPPLIER ──────────────────────────────
+    // Apsara, 2026-10-02: "create claim report option where i can download the
+    // report and share it with supplier".
+    //
+    // ROUTE ORDER MATTERS AND THIS IS WHY. /api/claims/:id used to be declared
+    // above this, so Express matched "report" as a claim id and answered 404.
+    // Any new /api/claims/<word> route belongs HERE, above the wildcard at the
+    // bottom of this file.
+    const FORMATS = ['json', 'html', 'pdf', 'xlsx'];
+
+    // The picker: who is owed what, so she chooses a supplier rather than typing
+    // one. Ordered by what is recoverable, because that is the order she chases in.
+    app.get('/api/claims/report/suppliers', (req, res) => {
+        try {
+            const out = new Map();
+            for (const c of claims.list()) {
+                if (!c) continue;
+                const name = String(c.supplier || '').trim();
+                if (!name) continue;
+                if (['rejected', 'withdrawn'].includes(c.status)) continue;
+                if (!out.has(name)) out.set(name, { supplier: name, claims: 0, recoverable: 0, unverified: 0, settled: 0 });
+                const r = out.get(name);
+                if (c.status === 'settled') { r.settled += 1; continue; }
+                if (!report.SENDABLE.includes(c.status)) { r.unverified += 1; continue; }
+                r.claims += 1;
+                r.recoverable += Number(c.our_claim) || 0;
+            }
+            const suppliers = [...out.values()]
+                .map((r) => ({ ...r, recoverable: Math.round(r.recoverable * 100) / 100 }))
+                .sort((a, b2) => b2.recoverable - a.recoverable);
+            res.json({ suppliers });
+        } catch (e) { bad(res, e.message, 500); }
+    });
+
+    app.get('/api/claims/report', async (req, res) => {
+        try {
+            const q = req.query || {};
+            const format = String(q.format || 'json').toLowerCase();
+            if (!FORMATS.includes(format)) return bad(res, 'that format is not one I can make — json, html, pdf or xlsx');
+
+            const built = report.build({
+                supplier: q.supplier, container: q.container, claimId: q.claimId,
+                from: q.from, to: q.to,
+                // Both default to OFF. An unverified claim is a reading, not a
+                // demand, and a settled one is closed — neither belongs in a
+                // document a supplier is asked to pay against unless she says so.
+                includeUnverified: q.includeUnverified === '1' || q.includeUnverified === 'true',
+                includeSettled: q.includeSettled === '1' || q.includeSettled === 'true',
+            });
+
+            if (format === 'json') return res.json(built);
+            if (format === 'html') {
+                res.type('html');
+                return res.send(report.toHtml(built));
+            }
+            if (format === 'xlsx') {
+                const buf = await report.toWorkbook(built);
+                res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+                res.setHeader('Content-Disposition', `attachment; filename="${report.filenameFor(built, 'xlsx')}"`);
+                return res.send(buf);
+            }
+            const buf = await report.toPdf(built);
+            res.setHeader('Content-Type', 'application/pdf');
+            res.setHeader('Content-Disposition', `attachment; filename="${report.filenameFor(built, 'pdf')}"`);
+            return res.send(buf);
+        } catch (e) {
+            console.error('[CLAIMS] report failed:', e && e.stack || e);
+            bad(res, e.message, 500);
+        }
+    });
+
     // ── IMPORTING A SHEET FROM THE PAGE ────────────────────────────────────
     // Apsara, 2026-09-26: "if i upload the weight shortage sheet and ai to
     // classify them properly and put it into website, it should do that."
@@ -254,7 +347,17 @@ function mount(app, cfg) {
         } catch (e) { bad(res, e.message, 500); }
     });
 
-    console.log('[CLAIMS] routes mounted — /claims, /api/claims, /api/claim-kinds, /api/claims/import');
+    // ── THE WILDCARD, LAST, AND IT MUST STAY LAST ──────────────────────────
+    // /api/claims/:id matches /api/claims/report, /api/claims/scan and anything
+    // else with one segment. Declared above them it swallows them and answers
+    // 404 — which is exactly what happened on 2026-10-02 and cost an hour.
+    // ADD NEW /api/claims/<word> ROUTES ABOVE THIS LINE, NOT BELOW IT.
+    app.get('/api/claims/:id', (req, res) => {
+        const c = claims.get(req.params.id);
+        return c ? res.json(c) : bad(res, 'no such claim', 404);
+    });
+
+    console.log('[CLAIMS] routes mounted — /claims, /api/claims, /api/claim-kinds, /api/claims/import, /api/claims/scan, /api/claims/report');
 }
 
 module.exports = { mount };
