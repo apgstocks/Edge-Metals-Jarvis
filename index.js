@@ -146,6 +146,10 @@ actions.init({ sendMessage, sendToManager, sendToTeam, pushAlert: alerts.pushAle
 // never reach a group either of them is in — and sendMessage can reach any chat.
 require('./workflow/claimWatch').init({ sendToTeam });
 pricelist.init({ sendMessage, getBrowser: () => client.pupBrowser });
+// PDFs render as tabs in this same Chromium instead of launching their own —
+// see helpers/pdfBrowser.js. A getter, because pupBrowser exists only after
+// client.initialize() has launched it.
+require('./helpers/pdfBrowser').init({ getBrowser: () => client.pupBrowser });
 require('./helpers/notify').init({ pushAlert: alerts.pushAlert });
 
 // Bridge for the /api/bot/command endpoint — brain.process() takes a sendMessage

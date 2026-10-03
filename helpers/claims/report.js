@@ -271,14 +271,12 @@ async function toPdf(built, opts = {}) {
     const html = toHtml(built);
     if (opts.renderer) return opts.renderer(html);
     return require('../pdfQueue').run(async () => {
-        const puppeteer = require('puppeteer');
-        const browser = await puppeteer.launch({ headless: true, args: ['--no-sandbox', '--disable-setuid-sandbox'] });
-        try {
-            const page = await browser.newPage();
+        // A tab in WhatsApp's Chromium — see helpers/pdfBrowser.js.
+        return require('../pdfBrowser').withPage(async (page) => {
             await page.setContent(html, { waitUntil: 'networkidle0' });
             const pdf = await page.pdf({ printBackground: true, preferCSSPageSize: true });
             return Buffer.from(pdf);
-        } finally { await browser.close(); }
+        });
     }, `claim statement ${built.reference}`);
 }
 

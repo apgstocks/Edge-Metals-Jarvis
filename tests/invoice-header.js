@@ -251,7 +251,12 @@ console.log('\n=== separate invoice / packing list ===');
   const pdfSrc = fs.readFileSync(R('helpers/invoicePdf.js'), 'utf8');
   ck('combined stays the DEFAULT — no flag, no change', /if \(!opts\.separate\)/.test(pdfSrc), true);
   ck('separate returns both buffers', /return \{ invoice, packing \}/.test(pdfSrc), true);
-  ck('one browser launch for both documents', (pdfSrc.match(/puppeteer\.launch/g) || []).length, 1);
+  // 2026-10-03: the invoice no longer launches a Chromium at all — it gets
+  // a tab through helpers/pdfBrowser.js. The rule this guards is unchanged:
+  // both documents come from ONE page, so they cannot disagree about the
+  // data. One withPage call, and no launch of its own.
+  ck('one page for both documents', (pdfSrc.match(/pdfBrowser'\)\.withPage\(/g) || []).length, 1);
+  ck('...and no Chromium launched by the invoice itself', (pdfSrc.match(/puppeteer\.launch/g) || []).length, 0);
 
   const apiSrc = fs.readFileSync(R('api.js'), 'utf8');
   ck('the API reads the flag', /body\.separate === true/.test(apiSrc), true);

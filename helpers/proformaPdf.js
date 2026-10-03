@@ -20,7 +20,6 @@
 
 const fs   = require('fs');
 const path = require('path');
-const puppeteer = require('puppeteer');
 
 const ASSETS_DIR = path.join(__dirname, '..', 'assets', 'proforma-dc2');
 
@@ -262,13 +261,10 @@ async function generateProformaDc2PdfUnqueued(data, opts = {}) {
     const timer = require('./pdfTiming').start(`proforma ${(data && data.inv_no) || ''}`.trim());
     const { html } = buildProformaDc2Html(data);
     timer.mark('build-html');
-    const browser = await puppeteer.launch({
-        headless: true,
-        args: opts.launchArgs || ['--no-sandbox', '--disable-setuid-sandbox'],
-    });
-    timer.mark('launch-chromium');
+    // A tab in WhatsApp's Chromium — see helpers/pdfBrowser.js.
     try {
-        const page = await browser.newPage();
+      return await require('./pdfBrowser').withPage(async (page) => {
+        timer.mark('launch-chromium');
         await page.setContent(html, { waitUntil: 'networkidle0' });
         timer.mark('load-page');
         // One page, same rule as the invoice (Apsara 2026-08-29). This
@@ -291,8 +287,8 @@ async function generateProformaDc2PdfUnqueued(data, opts = {}) {
         // just the direct fs.writeFileSync smoke test (which happened to
         // work because fs.writeFileSync accepts any TypedArray fine).
         return Buffer.from(pdf);
+      }, { launchArgs: opts.launchArgs });
     } finally {
-        await browser.close();
         timer.mark('close-chromium');
         timer.done({ html_kb: Math.round(html.length / 1024) });
     }

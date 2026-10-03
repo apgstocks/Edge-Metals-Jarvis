@@ -30,7 +30,6 @@
 
 const fs   = require('fs');
 const path = require('path');
-const puppeteer = require('puppeteer');
 
 const ASSETS_DIR = path.join(__dirname, '..', 'assets', 'bol');
 const FONTS_DIR  = path.join(__dirname, '..', 'assets', 'proforma-dc2');
@@ -508,13 +507,10 @@ async function generateBolPdfUnqueued(data, opts = {}) {
     const timer = require('./pdfTiming').start(`bol ${(data && data.bol_no) || ''}`.trim());
     const { html } = buildBolHtml(data);
     timer.mark('build-html');
-    const browser = await puppeteer.launch({
-        headless: true,
-        args: opts.launchArgs || ['--no-sandbox', '--disable-setuid-sandbox'],
-    });
-    timer.mark('launch-chromium');
+    // A tab in WhatsApp's Chromium — see helpers/pdfBrowser.js.
     try {
-        const page = await browser.newPage();
+      return await require('./pdfBrowser').withPage(async (page) => {
+        timer.mark('launch-chromium');
         await page.setContent(html, { waitUntil: 'networkidle0' });
         timer.mark('load-page');
         const { pdfFittedToOnePage } = require('./pdfFit');
@@ -529,8 +525,8 @@ async function generateBolPdfUnqueued(data, opts = {}) {
         // puppeteer resolves page.pdf() with a Uint8Array, not a Buffer —
         // res.send() JSON-stringifies it byte by byte without this.
         return Buffer.from(pdf);
+      }, { launchArgs: opts.launchArgs });
     } finally {
-        await browser.close();
         timer.mark('close-chromium');
         timer.done({ html_kb: Math.round(html.length / 1024) });
     }

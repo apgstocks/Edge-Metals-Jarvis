@@ -17,7 +17,6 @@
 
 const fs = require('fs');
 const path = require('path');
-const puppeteer = require('puppeteer');
 const { round2 } = require('./money');
 
 const TEMPLATE_DIR = path.join(__dirname, '..', 'assets', 'invoice-classic');
@@ -1153,13 +1152,11 @@ async function renderModesUnqueued(html, modes, opts) {
     // named for the four things this function does, in order, so the log line
     // answers the question directly rather than needing arithmetic.
     const timer = require('./pdfTiming').start(`invoice ${(modes || []).join('+')}`);
-    const browser = await puppeteer.launch({
-        headless: true,
-        args: opts.launchArgs || ['--no-sandbox', '--disable-setuid-sandbox'],
-    });
-    timer.mark('launch-chromium');
+    // A tab in WhatsApp's Chromium, not a Chromium of its own — see
+    // helpers/pdfBrowser.js. 'launch-chromium' now times getting the tab.
     try {
-        const page = await browser.newPage();
+      return await require('./pdfBrowser').withPage(async (page) => {
+        timer.mark('launch-chromium');
         await page.setContent(html, { waitUntil: 'networkidle0' });
         timer.mark('load-page');
         const out = {};
@@ -1199,8 +1196,8 @@ async function renderModesUnqueued(html, modes, opts) {
             out[mode] = Buffer.from(pdf);
         }
         return out;
+      }, { launchArgs: opts.launchArgs });
     } finally {
-        await browser.close();
         timer.mark('close-chromium');
         timer.done({ html_kb: Math.round(String(html || '').length / 1024), modes: (modes || []).length });
     }
