@@ -110,13 +110,13 @@ currency: "USD", "EUR" etc, only if stated. null otherwise.
 trade_terms: e.g. "CIF Busan", "FOB Los Angeles", only if stated.
 port_discharge: destination port/country, only if stated.
 payment_term: e.g. "T/T 100% against shipping documents", only if stated.
-container_count: number of containers, only if stated as a number.
+container_count: number of containers, only if stated as a number. "5c", "2c", "10c" and "5 cntrs" MEAN FIVE/TWO/TEN CONTAINERS -- that is how this customer writes it, and the number belongs HERE, never in an item's qty. A REAL AND DANGEROUS MISREAD: "Daekwang confirmed 5c of Auto casting tense at $2,520 CIF Busan" was extracted as qty 5 METRIC TONNES with container_count null, which prices five containers of material at $12,600 instead of about $276,000. If a count like that appears, container_count is the count and qty stays null unless a tonnage is separately stated. BEWARE the other "c": in "(10c for Mr. Kim and 10c for Hynos included)" the 10c is a COMMISSION of $10 per tonne included in the price, not ten containers -- a number followed by "for <a person or company>" is a commission, not a count.
 
 items: one entry per distinct material.
   desc: the material as the sender wrote it ("auto cast", "aluminium combo").
-  qty: metric tonnes for that material if stated, else null.
+  qty: metric tonnes for that material if stated, else null. Only a figure actually given in TONNES (or lbs/kg you can convert). A container count is NOT a quantity -- see container_count above.
   rate: the price figure as written, whatever basis it is on. null if none.
-  rate_basis: "per_mt" if that figure is plainly a price PER METRIC TONNE. "per_lb" if it is a price PER POUND ($/lb, "per pound", "cents a pound", "/#") — this is common on domestic scrap and you must say so rather than converting it yourself. "per_lot" if it is a total for the shipment, the container, or the whole order. "unknown" if the email does not make the basis clear. Be honest here rather than helpful — "unknown" is a perfectly good answer and is much safer than a wrong guess, because a per-lot figure used as a per-tonne rate multiplies the invoice by the tonnage.
+  rate_basis: "per_mt" if that figure is plainly a price PER METRIC TONNE. A TRADE TERM IS NOT A BASIS: "$3,200 CIF Incheon", "2,520 CIF Busan", "$995 FOB" are all PER METRIC TONNE prices in this business, and CIF/CFR/FOB/DDP tells you who pays the freight, nothing whatever about per-tonne versus per-lot. All 759 rows of this company's invoice history are priced per metric tonne on CIF terms. Reading "CIF" as evidence of a lot price is a real error that has happened: it blocked a confirmed container of chrome wheels at $3,200 CIF Incheon. "per_lb" if it is a price PER POUND ($/lb, "per pound", "cents a pound", "/#") — this is common on domestic scrap and you must say so rather than converting it yourself. "per_lot" if it is a total for the shipment, the container, or the whole order. "unknown" if the email does not make the basis clear. Be honest here rather than helpful — "unknown" is a perfectly good answer and is much safer than a wrong guess, because a per-lot figure used as a per-tonne rate multiplies the invoice by the tonnage.
   rate_confidence: 0.0-1.0, how sure you are of the FIGURE itself (not its basis). Use 0.9+ only when the email plainly ties that number to that material.
 
 WHEN AN EMAIL CONTAINS SEVERAL PRICES: a message may quote a price to the end buyer, subtract agent commissions, and then state what WE receive ("your price is X"). The figure that belongs on our proforma is the one presented as ours. Put that in rate, and say in note what the other figures were and why you chose this one, so a human can check the choice.
@@ -135,6 +135,36 @@ const num = (v) => {
 
 // Normalises by hand for the same reason assess() does: the shape must not
 // depend on whether zod loaded.
+// ── "5c" MEANS FIVE CONTAINERS (2026-10-03) ────────────────────────────────
+// From her real mail: "Daekwang confirmed 5c of Auto casting tense at $2,520
+// CIF Busan (10c for Mr.Kim and 10c for Hynos included)". The first 5c is a
+// CONTAINER COUNT; both 10c are a $10/MT COMMISSION included in the price.
+//
+// The model first read the count as a quantity of 5 TONNES -- five containers
+// of material priced at $12,600 instead of about $276,000, and the draft came
+// back with needs: [] and nothing assumed, i.e. CLEAN. That is the worst shape
+// a bug can have here. Prompting fixed the qty misread but the model then
+// abstained on the count rather than risk the commission reading, which is the
+// right instinct and still leaves containerCount defaulting silently to 1.
+//
+// So the idiom is recovered in CODE, where it is a fixed pattern and not a
+// judgement: a small number followed by "c", NOT followed by "for <someone>".
+const CONTAINER_IDIOM = /\b(\d{1,2})\s*c(?:ntrs?|ontainers?)?\b(?!\s*(?:for|to)\b)/gi;
+function containerCountFromText(text) {
+    const t = String(text || '');
+    const hits = [];
+    for (const m of t.matchAll(CONTAINER_IDIOM)) {
+        const n = Number(m[1]);
+        // A container count on one order; 30 containers of anything is not
+        // this idiom, and 0 is not a count.
+        if (n >= 1 && n <= 30) hits.push(n);
+    }
+    // Only when the text is unambiguous about it. Two different counts means
+    // this needs a human, not a guess.
+    const uniq = [...new Set(hits)];
+    return uniq.length === 1 ? uniq[0] : null;
+}
+
 async function extractOrderFromEmail(email) {
     const res = await callGeminiJSON(buildOrderPrompt(email), 2, OrderSchema, null, { model: require('../config').GEMINI_MODEL_SMART });
     if (!res || typeof res.is_order === 'undefined') return null;
@@ -155,7 +185,9 @@ async function extractOrderFromEmail(email) {
         trade_terms: res.trade_terms ? String(res.trade_terms).trim() : null,
         port_discharge: res.port_discharge ? String(res.port_discharge).trim() : null,
         payment_term: res.payment_term ? String(res.payment_term).trim() : null,
-        container_count: num(res.container_count),
+        // The model abstains on this more often than it is wrong, so the
+        // idiom is recovered here rather than left to default to 1 in silence.
+        container_count: num(res.container_count) || containerCountFromText(email && email.body),
         items,
         missing: Array.isArray(res.missing) ? res.missing.map(String) : [],
         note: res.note ? String(res.note).trim() : null,
@@ -352,6 +384,13 @@ function toProformaDraft(order, { fallbackConsignee } = {}) {
     // name — Joey — on the document instead. Orders here routinely arrive
     // from an agent writing on a buyer's behalf, so this is the normal shape
     // of the data, not an edge case. If no buying company was read, ask.
+    // A SILENT DEFAULT OF 1 CONTAINER IS A PRICE ERROR OF (n-1) CONTAINERS.
+    // containerCount multiplies the whole total below, so defaulting it
+    // without saying so understated a five-container order by 80% while the
+    // draft reported nothing missing and nothing assumed.
+    if (!(order.container_count && order.container_count > 0)) {
+        assumed.push('1 container assumed — the email did not say how many');
+    }
     if (!order.consignee) needs.push('consignee');
     // The model's own "missing" list is authoritative too — it said qty was
     // missing on that same real email while the code cleared needs to empty
@@ -402,7 +441,7 @@ function toProformaDraft(order, { fallbackConsignee } = {}) {
     };
 }
 
-module.exports = { extractOrderFromEmail, toProformaDraft, groundRates, buildOrderPrompt, applyStandardQuantities, RATE_TRUST, 
+module.exports = { extractOrderFromEmail, toProformaDraft, groundRates, buildOrderPrompt, applyStandardQuantities, containerCountFromText, RATE_TRUST, 
     // Exported for tests ONLY. The enum inside it is what silently lost Joey's
     // order: a rate_basis the schema does not allow fails validation three
     // times and the whole extraction returns nothing. A unit test against

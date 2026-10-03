@@ -134,6 +134,63 @@ const section = (t) => console.log(`\n=== ${t} ===`);
         (d3.assumed || []).some((a) => /\$0\.42\/lb/.test(a) && /925\.94\/MT/.test(a)),
         JSON.stringify(d3.assumed));
 
+    section('LD — "5c" is five CONTAINERS, and a silent default is a price error');
+    // THE WORST SHAPE A BUG CAN HAVE HERE. Her real mail:
+    //   "Daekwang confirmed 5c of Auto casting tense at $2,520 CIF Busan
+    //    (10c for Mr.Kim and 10c for Hynos included)"
+    // was extracted as qty 5 TONNES, container_count null -- and the draft came
+    // back needs: [], nothing assumed, nothing unconfirmed. CLEAN. Five
+    // containers of material priced at $12,600 instead of about $276,000.
+    const { containerCountFromText } = require(R('helpers/proformaFromEmail.js'));
+    ck('LD1 "5c of Auto casting tense" is five containers',
+        containerCountFromText('Daekwang confirmed 5c of Auto casting tense at $2,520 CIF Busan') === 5,
+        String(containerCountFromText('Daekwang confirmed 5c of Auto casting tense at $2,520 CIF Busan')));
+    ck('LD2 "10c for Mr.Kim" is a COMMISSION, not ten containers',
+        containerCountFromText('at $2,520 CIF Busan (10c for Mr.Kim and 10c for Hynos included)') === null,
+        String(containerCountFromText('at $2,520 CIF Busan (10c for Mr.Kim and 10c for Hynos included)')));
+    ck('LD3 the real email, both idioms together, resolves to 5',
+        containerCountFromText('Daekwang confirmed 5c of Auto casting tense at $2,520 CIF Busan (10c for Mr.Kim and 10c for Hynos included)') === 5,
+        String(containerCountFromText('Daekwang confirmed 5c of Auto casting tense at $2,520 CIF Busan (10c for Mr.Kim and 10c for Hynos included)')));
+    ck('LD4 "2 containers" spelled out still reads',
+        containerCountFromText('confirmed 2 containers of auto casting tense') === 2);
+    ck('LD5 two DIFFERENT counts means a human decides, not a guess',
+        containerCountFromText('3c of auto cast and 7c of al combo') === null);
+    ck('LD6 a bare sentence yields no count', containerCountFromText('Please send the proforma today') === null);
+
+    // The multiplier must never default in silence: containerCount multiplies
+    // the whole total.
+    const noCount = toProformaDraft(await groundRates({ consignee: 'Daekwang', container_count: null,
+        items: [{ desc: 'Auto cast', qty: null, rate: 2270, rate_confidence: 0.9, rate_basis: 'per_mt' }] }), {});
+    ck('LD7 a defaulted container count is declared as an assumption',
+        (noCount.assumed || []).some((a) => /1 container assumed/.test(a)), JSON.stringify(noCount.assumed));
+    const withCount = toProformaDraft(await groundRates({ consignee: 'Daekwang', container_count: 5,
+        items: [{ desc: 'Auto cast', qty: null, rate: 2270, rate_confidence: 0.9, rate_basis: 'per_mt' }] }), {});
+    ck('LD8 a stated count carries no such assumption',
+        !(withCount.assumed || []).some((a) => /container assumed/.test(a)), JSON.stringify(withCount.assumed));
+    ck('LD9 and it multiplies the total', withCount.containerCount === 5);
+
+    section('LE — one invoice is not history');
+    // Splitting the bands by unit made some buckets tiny, and judgeRate then
+    // printed "in line with the 1 past invoice(s)" -- a band of median*0.3 to
+    // median*3 around a SINGLE point, confirming a figure against itself.
+    // CHROME WHEELS has exactly TWO per-MT rows in the fixture ($2,650 and
+    // $2,680 -- the other two chrome rows are per-pound purchases). $2,670
+    // sits right between them, so a band built on two points would "confirm"
+    // it. That is the circularity, and it must not be reported as evidence.
+    // (The first version of this test asked about a material the fixture does
+    // not contain at all, so it passed with the minimum disabled -- a fake
+    // test, caught by reverse verification.)
+    const thin = await rp.judgeRate('Chrome Wheels', 2670, 'per_mt');
+    ck('LE1 two invoices are not enough to confirm a rate', !thin.confirmed,
+        `confirmed = ${thin.confirmed}, reason = ${thin.reason}`);
+    ck('LE1b and it says how thin the evidence is', /only 2 past/.test(thin.reason || ''), thin.reason);
+    const thinLot = await rp.judgeRate('Chrome Wheels', 2670, 'per_lot');
+    ck('LE2 and thin history does NOT promote per_lot to per_mt',
+        thinLot.basis === 'per_lot', `basis = ${thinLot.basis}`);
+    const thick = await rp.judgeRate('Al Wheels Dirty', 1.60, 'per_lb');
+    ck('LE3 six per-pound purchases ARE enough', thick.confirmed === true,
+        `confirmed = ${thick.confirmed}, reason = ${thick.reason}`);
+
     console.log(`\n${pass} passed, ${fail} failed`);
     if (fail) { console.log('FAILED: ' + failures.join(', ')); process.exit(1); }
 })();

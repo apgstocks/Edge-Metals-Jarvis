@@ -137,6 +137,34 @@ async function judgeRate(desc, rate, modelBasis) {
     // would have confirmed it against per-pound purchase prices.
     const unit = modelBasis === 'per_lb' ? 'lb' : 'mt';
     const r = bands && bands[unit];
+    // ── ONE INVOICE IS NOT HISTORY (2026-10-03, same day, found by reading
+    // Joey's actual confirmation email). Splitting the bands by unit made some
+    // buckets tiny, and judgeRate then printed:
+    //
+    //     "GROUNDED  $3200/MT is in line with the 1 past clean Chrome wheels
+    //                invoice(s) (typically around $3200/MT)"
+    //
+    // That is circular. The band is median*0.3 to median*3 around a SINGLE
+    // data point, so it confirms any figure within a factor of three of
+    // itself, and then reports the agreement as evidence. I had just fixed
+    // "absence of evidence shown as evidence" and immediately replaced it with
+    // "one data point shown as evidence".
+    //
+    // Three rows, matching helpers/loadingHistory.js. Below that the figure is
+    // still allowed to price -- a new material has to be sellable -- but it is
+    // never reported as confirmed, so it cannot clear an auto-send gate.
+    const MIN_ROWS = 3;
+    if (r && r.n < MIN_ROWS) {
+        // PRESERVE THE MODEL'S BASIS, do not promote it. The first version of
+        // this branch returned 'per_mt' for anything that was not per_lb,
+        // which silently promoted a per_lot verdict to a per-tonne rate --
+        // reintroducing the $2,420-becomes-$101,640 bug this whole file exists
+        // to prevent. Thin history means "I cannot confirm this", not "it is
+        // per MT".
+        return { basis: modelBasis || 'unknown', confirmed: false,
+            reason: `only ${r.n} past ${desc} invoice(s) on record (around $${unit === 'lb' ? r.median + '/lb' : Math.round(r.median) + '/MT'}) — too few to confirm $${rate} against`,
+            range: r };
+    }
     if (!r) {
         const other = bands && bands[unit === 'mt' ? 'lb' : 'mt'];
         return { basis: modelBasis || 'unknown', confirmed: false,
