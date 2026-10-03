@@ -177,6 +177,135 @@ function scrubCommissionNote(note) {
     return null;
 }
 
+// ── READING THE ORDER OFF ITS ATTACHMENT (2026-10-03) ──────────────────────
+//
+// The last unread input. helpers/gemini.js extractOrderPdfFields does the
+// reading; this does the MERGING, and it is kept pure so it can be tested
+// without a model, a mailbox or a network.
+//
+// MEASURED ON FIVE REAL ORDER PDFs before any of this was written, and every
+// rule below comes from one of them:
+//
+//   EMI-01 (Metalco)      po MTC-100126-EMI-01, 2 containers, Steel Scrap HMS,
+//                         40 MT at $330/MT, FAS. The EMAIL BODY said none of
+//                         this -- it said "please see the attached file".
+//   PO 4302994 (Eccomelt) 40,000 LB of 356 wheels at $1.65/LB, and then three
+//                         lines of "1 LB" at $1.61/$1.15/$1.05. Those are
+//                         PRICE TIERS for downgrades, not things being bought.
+//   PO/EM03/26 (Tiyansh)  three materials at 2850/2250/1700 with qty null and
+//                         "Total combo load quantity is 20 MT across the
+//                         three materials" in prose.
+//
+// THREE RULES, in order of how much damage they prevent:
+//
+//  1. FILL BLANKS ONLY. What the email said always wins. The attachment is
+//     evidence about what the email left out, never a correction of what it
+//     stated -- a buyer who writes a revised price in the covering mail means
+//     it, and the PDF may be the superseded version.
+//  2. NOTHING IS CONVERTED BY THE MODEL. It returns the page's own number and
+//     the page's own unit; the arithmetic happens here. Today's per_lb bug was
+//     worth 2204.62x, and a model that converts is a model that can be wrong
+//     by that much silently.
+//  3. A PLACEHOLDER LINE IS NOT AN ORDER LINE. "1 LB" at a tier price would
+//     otherwise become a priced row on a document.
+const LB_PER_MT = 2204.62;
+// Under this many pounds is not a shipment. Eccomelt's tier rows are exactly
+// 1 LB; 50 is wide enough to catch any similar convention and far below the
+// ~40,000 lb a real container line carries.
+const PLACEHOLDER_LB = 50;
+function qtyToMt(qty, unit) {
+    const n = Number(qty);
+    if (!Number.isFinite(n) || n <= 0) return { mt: null, why: null };
+    const u = String(unit || '').trim().toLowerCase();
+    if (/^(mt|m\/?t|metric\s*ton(ne)?s?|tonnes?)$/.test(u)) return { mt: n, why: null };
+    if (/^(lbs?|pounds?|#)$/.test(u)) {
+        if (n < PLACEHOLDER_LB) return { mt: null, why: 'placeholder' };
+        return { mt: Math.round((n / LB_PER_MT) * 1000) / 1000, why: `${n} lb from the attached order = ${Math.round((n / LB_PER_MT) * 1000) / 1000} MT` };
+    }
+    if (/^(kgs?|kilos?|kilograms?)$/.test(u)) return { mt: Math.round((n / 1000) * 1000) / 1000, why: `${n} kg from the attached order = ${n / 1000} MT` };
+    // "tons" ALONE IS AMBIGUOUS -- a short ton is 0.907 MT and a long ton is
+    // 1.016, a 12% spread on every line. Refuse it rather than pick one.
+    if (/ton/.test(u)) return { mt: null, why: 'ambiguous-ton' };
+    // "containers" is a count, not a weight (the model is told to say so).
+    return { mt: null, why: null };
+}
+
+// Returns a NEW order object. `pdf` is extractOrderPdfFields' output, or null.
+function mergePdfOrder(order, pdf, { filename = null } = {}) {
+    const base = { ...(order || {}) };
+    if (!pdf || pdf.is_order_document !== true) return base;
+    const from = filename ? `the attached ${filename}` : 'the attached order';
+    const notes = [];
+    const take = (key, val) => {
+        if (base[key] == null || base[key] === '' ) {
+            if (val != null && val !== '') { base[key] = val; notes.push(key); }
+        }
+    };
+    take('consignee', pdf.buyer);
+    take('currency', pdf.currency);
+    take('trade_terms', pdf.trade_terms);
+    take('port_discharge', pdf.port_discharge);
+    take('payment_term', pdf.payment_term);
+    take('container_count', Number(pdf.container_count) > 0 ? Number(pdf.container_count) : null);
+
+    // ── ITEMS ─────────────────────────────────────────────────────────────
+    // Only when the email gave none, or gave them with no figures. Matching a
+    // PDF's line list against the email's by description is a guessing game
+    // this does not play: either the body described the order or it did not.
+    const emailItems = Array.isArray(base.items) ? base.items : [];
+    const emailHasFigures = emailItems.some((i) => i && (i.qty != null || i.rate != null));
+    if (!emailHasFigures) {
+        const containers = Number(base.container_count) > 0 ? Number(base.container_count) : 1;
+        const kept = [];
+        let dropped = 0, ambiguous = 0;
+        for (const it of (Array.isArray(pdf.items) ? pdf.items : [])) {
+            if (!it || !String(it.desc || '').trim()) continue;
+            const { mt, why } = qtyToMt(it.qty, it.qty_unit);
+            if (why === 'placeholder') { dropped++; continue; }
+            if (why === 'ambiguous-ton') ambiguous++;
+            let qty = mt;
+            let perContainer = null;
+            // A TONNAGE ON A MULTI-CONTAINER ORDER IS THE TOTAL. EMI-01 reads
+            // "40 MT" across 2 containers, and the proforma prices PER
+            // container. Flagged rather than done quietly: if the document
+            // meant 40 per box this halves her invoice, and that is exactly
+            // the kind of thing a human must see.
+            if (qty != null && containers > 1) {
+                perContainer = Math.round((qty / containers) * 1000) / 1000;
+                qty = perContainer;
+            }
+            kept.push({
+                desc: String(it.desc).trim(),
+                qty,
+                rate: Number.isFinite(Number(it.rate)) && Number(it.rate) > 0 ? Number(it.rate) : null,
+                rate_confidence: Number.isFinite(Number(it.rate_confidence)) ? Number(it.rate_confidence) : 0.9,
+                rate_basis: ['per_mt', 'per_lb', 'per_lot', 'unknown'].includes(it.rate_basis) ? it.rate_basis : 'unknown',
+                from_attachment: true,
+                qty_note: why && why !== 'placeholder' && why !== 'ambiguous-ton' ? why : null,
+                qty_per_container_of: perContainer != null ? containers : null,
+            });
+        }
+        if (kept.length) {
+            base.items = kept;
+            base.is_order = true;
+            notes.push(`${kept.length} item(s)`);
+            if (dropped) notes.push(`${dropped} placeholder line(s) ignored`);
+            if (ambiguous) notes.push(`${ambiguous} line(s) priced in "tons", which is ambiguous — left without a quantity`);
+        }
+    }
+    if (pdf.po_number && !base.po_number) base.po_number = String(pdf.po_number).trim();
+    if (notes.length) {
+        const added = `Read from ${from}: ${notes.join(', ')}.`;
+        base.note = base.note ? `${base.note} ${added}` : added;
+        base.from_attachment = true;
+    }
+    // The document's own note is worth carrying -- on Eccomelt's PO it is what
+    // explains the 1 LB rows, and on Tiyansh's it carries the combo total that
+    // is nowhere in the line items.
+    if (pdf.note) base.attachment_note = String(pdf.note).trim();
+    return base;
+}
+
 async function extractOrderFromEmail(email) {
     const res = await callGeminiJSON(buildOrderPrompt(email), 2, OrderSchema, null, { model: require('../config').GEMINI_MODEL_SMART });
     if (!res || typeof res.is_order === 'undefined') return null;
@@ -189,7 +318,7 @@ async function extractOrderFromEmail(email) {
             rate_basis: ['per_mt', 'per_lb', 'per_lot', 'unknown'].includes(it && it.rate_basis) ? it.rate_basis : 'unknown',
         }))
         .filter((it) => it.desc);
-    return {
+    const out = {
         is_order: res.is_order === true || res.is_order === 'true',
         confidence: typeof res.confidence === 'number' ? res.confidence : 0,
         consignee: res.consignee ? String(res.consignee).trim() : null,
@@ -215,6 +344,33 @@ async function extractOrderFromEmail(email) {
         // something worth checking and survives intact.
         note: scrubCommissionNote(res.note),
     };
+
+    // ── THEN THE ATTACHMENT, IF THE BODY LEFT A HOLE ───────────────────────
+    // Only when it would change the answer. "Please see the attached file for
+    // the additional P.O." leaves no material, no tonnage and no price, and
+    // that is the case worth a smart-model call on a 200KB PDF; an email that
+    // states its own figures is not.
+    //
+    // Caller-supplied bytes (email.pdfs = [{ filename, base64 }]) so this
+    // function stays free of Gmail: replyWatch and actions each already have a
+    // client and the message id, and the eval harness and the tests can hand
+    // in a fixture.
+    const pdfs = Array.isArray(email && email.pdfs) ? email.pdfs.filter((p) => p && p.base64) : [];
+    if (pdfs.length) {
+        const noFigures = !out.items.some((i) => i.qty != null || i.rate != null);
+        if (noFigures || !out.consignee) {
+            const { extractOrderPdfFields } = require('./gemini');
+            // FIRST ATTACHMENT ONLY. An order mail carries one order document;
+            // the rest are weight tickets, photos and specs, and reading five
+            // PDFs per email at the smart tier is a cost with no measured
+            // return. If this proves wrong it will show up as an order whose
+            // figures are in the second file, and that is a measurement, not
+            // a guess.
+            const fields = await extractOrderPdfFields(pdfs[0].base64).catch(() => null);
+            if (fields) return mergePdfOrder(out, fields, { filename: pdfs[0].filename });
+        }
+    }
+    return out;
 }
 
 // Anything at or below this is treated as "I think I read this, but check it"
@@ -452,12 +608,28 @@ function toProformaDraft(order, { fallbackConsignee } = {}) {
         // A standard that disagrees with her own shipments is NOT an
         // assumption, it is a doubt -- so it goes to unconfirmed, which is
         // what blocks an auto-send gate and prints with a warning mark.
+        // ── PROVENANCE, BECAUSE A FIGURE OFF A PDF IS NOT A FIGURE SHE SAW
+        // SOMEONE TYPE. The body said "please see the attached file"; every
+        // number here was read off that file by a model, so it is shown as
+        // read-from-attachment and never as grounded.
+        if (it.from_attachment) {
+            if (it.qty_per_container_of) {
+                // The one that can halve or double an invoice.
+                unconfirmed.push(`${it.desc}: the attached order states ${Math.round(it.qty * it.qty_per_container_of * 1000) / 1000} MT across ${it.qty_per_container_of} containers, so ${it.qty} MT per container — confirm that is how it was meant`);
+            }
+            if (it.qty_note) assumed.push(`${it.desc}: ${it.qty_note}`);
+            if (it.rate != null) assumed.push(`${it.desc}: $${it.rate} read off the attached order, not stated in the email`);
+        }
         if (it.qty_assumed && it.qty_warning) unconfirmed.push(it.qty_warning);
         if (it.qty_assumed) assumed.push(it.qty_reason
             ? `${it.desc}: ${it.qty} MT assumed — the email didn't say, and ${it.qty_reason}`
             : `${it.desc}: ${it.qty} MT assumed from standard container loading — the email didn't say`);
         return { desc: it.desc, qty: it.qty, rate: trusted ? rate : 0, qty_assumed: !!it.qty_assumed };
     });
+    // The document's own caveat. On Eccomelt's PO it is what explains the 1 LB
+    // rows; on Tiyansh's it carries the 20 MT combo total that appears nowhere
+    // in the line items.
+    if (order.attachment_note) unconfirmed.push(`the attached order says: ${order.attachment_note}`);
     if (!items.length) needs.push('material');
     if (items.some((i) => !i.rate)) needs.push('rate');
     // The SENDER IS NOT THE BUYER, and must never quietly become one. On a
@@ -523,7 +695,7 @@ function toProformaDraft(order, { fallbackConsignee } = {}) {
     };
 }
 
-module.exports = { extractOrderFromEmail, toProformaDraft, groundRates, buildOrderPrompt, applyStandardQuantities, containerCountFromText, scrubCommissionNote, isLcOrder, RATE_TRUST, 
+module.exports = { extractOrderFromEmail, toProformaDraft, groundRates, buildOrderPrompt, applyStandardQuantities, containerCountFromText, scrubCommissionNote, isLcOrder, mergePdfOrder, qtyToMt, RATE_TRUST, 
     // Exported for tests ONLY. The enum inside it is what silently lost Joey's
     // order: a rate_basis the schema does not allow fails validation three
     // times and the whole extraction returns nothing. A unit test against

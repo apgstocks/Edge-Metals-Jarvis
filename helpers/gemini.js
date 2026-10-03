@@ -37,7 +37,21 @@ function getClient() {
 function getModelName() {
     try {
         const { loadSettings } = require('./json');
-        return loadSettings().gemini_model || cfg.GEMINI_MODEL;
+        // ── TRIMMED, AND BLANK MEANS "NOT SET" (2026-10-03) ──────────────
+        // Was `loadSettings().gemini_model || cfg.GEMINI_MODEL`. A stored
+        // value of '   ' is truthy, so it was returned as the model name and
+        // every Gemini call in the process — classification, extraction, the
+        // claim watcher, the inbox scan — would be made against a model
+        // called three spaces and fail. Nothing writes that today; a text
+        // field cleared with the space bar would, and the failure would look
+        // like "the AI stopped working" with nothing pointing at a setting.
+        //
+        // This can only change the behaviour of a configuration that is
+        // already wholly broken: a blank now falls through to the config
+        // exactly as a missing key does.
+        const v = loadSettings().gemini_model;
+        const pinned = (typeof v === 'string') ? v.trim() : '';
+        return pinned || cfg.GEMINI_MODEL;
     } catch { return cfg.GEMINI_MODEL; }
 }
 
@@ -331,6 +345,109 @@ Convert all dates to MM/DD/YYYY. If the document uses DD/MM/YYYY, still output M
         }
     }
     if (lastErr) throw lastErr;
+    return null;
+}
+
+// ── Multimodal: read an ORDER off its PDF attachment ──────────────────────────
+//
+// THE LAST UNREAD INPUT (2026-10-03). Measured all day: every remaining
+// is_order miss and 3 of 10 confidence caps were an attachment nothing opens.
+// Her P.O.s say "Please see the attached file for the additional P.O." and the
+// quantities live in the PDF.
+//
+// WHY A NEW EXTRACTOR RATHER THAN THE EXISTING ONE. scripts/probe-order-
+// attachments.js ran the real machinery over six real order PDFs. The reading
+// was not "the PDFs are unreadable" -- classifyDocument named every one of
+// them correctly ("purchase order", "order confirmation", "purchase order
+// confirmation"). It was that extractPdfFields is a BOOKING extractor: it asks
+// for booking_number, carrier, cutoff, ERD, and on a purchase order it
+// honestly returns nulls. Nothing was asking for the material, the tonnage or
+// the price. The gap was a missing question, not a missing capability.
+//
+// EVERY HARD-WON RULE FROM TODAY IS RESTATED HERE, because this prompt is a
+// second doorway into the same pricing path and a rule enforced on one side
+// only is not enforced:
+//   · a trade term is not a price basis (CIF/FOB say who pays freight)
+//   · per_lb is a real answer -- she buys domestic scrap by the pound
+//   · "5c" is five containers, "10c for Mr.Kim" is a commission
+//   · an included commission never changes the rate
+// The basis and the unit come back as the DOCUMENT'S OWN WORDS and all
+// arithmetic is done in code. A model that converts is a model that can be
+// wrong by 2204.62x.
+async function extractOrderPdfFields(pdfBase64, retries = 2) {
+    if (!pdfBase64) throw new Error('pdfBase64 required');
+
+    const prompt = `You are reading a PURCHASE ORDER or ORDER CONFIRMATION for a scrap-metal exporter. Extract what was ordered. Return ONLY raw JSON — no markdown, no prose.
+
+{
+  "is_order_document": false,  // true if this document IS an order: a purchase order, an order confirmation, a sales contract or a signed quotation that commits to buying material. false for an invoice, a packing list, a bill of lading, a booking confirmation, a statement, a rate sheet or a brochure. Judge by what the document IS, not by whether order-shaped words appear in it.
+  "po_number": null,           // the order's own reference, exactly as printed, e.g. "EMI-02", "4302994", "PO-EM03/26", "MKED20260922-B"
+  "buyer": null,               // the company BUYING the material. On a purchase order issued TO the exporter, that is the company that issued the document.
+  "seller": null,              // the company selling. Usually Edge Metals / Edge Trading.
+  "currency": null,            // e.g. "USD"
+  "trade_terms": null,         // CIF, CFR, FOB, DDP, EXW — as printed
+  "port_discharge": null,      // city only
+  "payment_term": null,        // as printed, e.g. "T/T 7 days before arrival", "L/C at sight"
+  "container_count": null,     // NUMBER of containers if the document states one. "3x40HC" means 3. "1x20ft" means 1.
+  "container_size": null,      // e.g. "40HC", "20ft"
+  "items": [
+    {
+      "desc": null,            // the material, as printed
+      "qty": null,             // the NUMBER only, exactly as printed — do NOT convert it
+      "qty_unit": null,        // the unit as printed: "MT", "lbs", "kg", "tons", "containers" — whatever the document says. If the figure is a number of CONTAINERS and not a weight, say "containers" here.
+      "rate": null,            // the unit price, NUMBER only, exactly as printed — do NOT convert it
+      "rate_basis": null,      // "per_mt" if the price is per metric tonne. "per_lb" if per pound ($/lb, "per pound", "cents a pound", "/#") — common on domestic scrap, and a perfectly good answer. "per_lot" if it is a total for the container or the whole order. "unknown" if the document does not make it clear.
+      "rate_confidence": 0.0   // 0 to 1: how sure you are you read THIS number correctly off the page
+    }
+  ],
+  "note": null                 // one short sentence on anything a human should check. null if nothing.
+}
+
+A TRADE TERM IS NOT A PRICE BASIS. "$3,200 CIF Incheon" and "2,520 CIF Busan" are PER METRIC TONNE prices. CIF/CFR/FOB/DDP tells you who pays the freight and nothing whatever about per-tonne versus per-lot. Reading "CIF" as evidence of a lot price is a real error that has happened here.
+
+DO NOT CONVERT ANYTHING. Give the number and the unit exactly as the page prints them. If a line reads "92,594 lbs @ $0.42/lb", that is qty 92594, qty_unit "lbs", rate 0.42, rate_basis "per_lb" — not 42 MT and not $925/MT. The conversion is done in code, where it cannot be wrong.
+
+A CONTAINER COUNT IS NOT A QUANTITY. "5c", "2c", "3x40HC", "5 cntrs" are numbers of CONTAINERS and belong in container_count. Never put them in an item's qty unless the document really is ordering by the container, in which case qty_unit must say "containers".
+
+A COMMISSION STATED AS INCLUDED DOES NOT CHANGE THE PRICE. "(10c for Mr. Kim and 10c for Hynos included)" is a $10/MT commission already inside the figure. Report the stated price unchanged. Do not net it down and do not add a commission line.
+
+READ ONLY WHAT IS THERE. Every field may be null, and null is always better than a guess — a wrong tonnage or price on this document becomes a wrong tonnage or price on an invoice to a customer. Return the JSON object and nothing else.`;
+
+    let lastErr = null;
+    for (let attempt = 0; attempt <= retries; attempt++) {
+        try {
+            // The SMART tier, not the workhorse: this reads figures that end up
+            // on a priced document going to a customer, which is exactly the
+            // boundary config.js draws for GEMINI_MODEL_SMART.
+            const model = getClient().getGenerativeModel({
+                model: require('../config').GEMINI_MODEL_SMART || getModelName(),
+                generationConfig: { temperature: 0, responseMimeType: 'application/json' },
+            });
+            const result = await model.generateContent([
+                { text: prompt },
+                { inlineData: { mimeType: 'application/pdf', data: pdfBase64 } },
+            ]);
+            const fields = extractJson(result.response.text());
+            if (fields) {
+                const n = Array.isArray(fields.items) ? fields.items.length : 0;
+                console.log(`[GEMINI] order PDF: po=${fields.po_number || '?'} buyer=${fields.buyer || '?'} items=${n} containers=${fields.container_count ?? '?'}`);
+                return fields;
+            }
+            console.warn(`[GEMINI] order PDF returned unparseable JSON (attempt ${attempt + 1})`);
+        } catch (err) {
+            lastErr = err;
+            const transient = /503|429|overloaded|unavailable|high demand/i.test(err.message);
+            console.error(`[GEMINI] order PDF read failed (attempt ${attempt + 1}${transient ? ', transient' : ''}):`, err.message);
+            if (attempt < retries && transient) {
+                await new Promise(r => setTimeout(r, 1200 * (attempt + 1)));
+                continue;
+            }
+            // An unreadable attachment must leave the email judged on its body,
+            // exactly as it is today -- never crash the scan. Null, not throw.
+            return null;
+        }
+    }
+    if (lastErr) return null;
     return null;
 }
 
@@ -4073,9 +4190,136 @@ async function extractWeightFromImage(imageBase64, mimeType = 'image/jpeg', retr
     }
 }
 
+// ── WHICH MODEL IS ACTUALLY RUNNING (#159, 2026-10-03) ───────────────────
+// #159 says the workhorse is legacy and should move. Working out HOW to move
+// it turned up the reason it had not: changing cfg.GEMINI_MODEL, or the
+// GEMINI_MODEL env var, very likely does nothing on the live server.
+//
+// getModelName() reads loadSettings().gemini_model FIRST. loadSettings() is
+// loadJson(SETTINGS_FILE, {...defaults}), and loadJson returns the FILE AS IT
+// IS — it does not merge the defaults into it. On its own that would be fine:
+// a settings file with no gemini_model key falls through to the config.
+//
+// But PUT /api/settings saves `{ ...loadSettings(), ...req.body }`. So the
+// first time anyone ever saved ANY setting — the team group id, an email bcc,
+// the yard report addresses — the whole default object was written out with
+// it, and 'gemini-2.5-flash-lite' was frozen into data/settings.json. From
+// that moment the config default and the env var are both dead letters, and
+// a deploy that "moves the workhorse off the legacy model" moves nothing.
+//
+// That is a silent config failure of exactly the shape the JARVIS_PASSWORD
+// block in api.js exists to prevent, so this is the equivalent: it reports
+// what each tier will really use and WHERE the value came from. It decides
+// nothing and changes no model — a stored pin is still honoured, because
+// someone may have set it on purpose and quietly ignoring it would be the
+// same class of mistake in the other direction.
+//
+// THE LEGACY WARNING IS NOT COSMETIC. Google is "limiting access to the 2.5
+// models to users who have actively used them in the past"; this project has,
+// so it still works today, but it is a model on the way out being used by
+// unattended watchers — claim mail, the inbox scan — where a 404 would be
+// noticed late or not at all.
+const LEGACY_MODELS = /^gemini-2\.5/;
+
+// ── READS THE FILE, NOT loadSettings() ───────────────────────────────────
+// Found by this report's own test, and it is worse than the frozen-pin story
+// above. loadSettings() is loadJson(SETTINGS_FILE, {...defaults}) and the
+// DEFAULT OBJECT itself contains
+//
+//     gemini_model: process.env.GEMINI_MODEL || 'gemini-2.5-flash-lite'
+//
+// so loadSettings().gemini_model is never undefined — not even on a server
+// with no settings file at all. Which means the `|| cfg.GEMINI_MODEL` in
+// getModelName() is DEAD CODE: cfg.GEMINI_MODEL is never what decides. The
+// value always comes from either the stored file or that default's own env
+// lookup, and the config constant is decorative.
+//
+// Asking loadSettings() therefore cannot tell a deliberate stored pin from
+// the default handing back the same string, so this reads the file and looks
+// for the key. A report that cannot distinguish those two would have called
+// every server "pinned" and been useless.
+function storedPin() {
+    try {
+        const fs2 = require('fs');
+        if (!fs2.existsSync(cfg.SETTINGS_FILE)) return null;
+        const raw = JSON.parse(fs2.readFileSync(cfg.SETTINGS_FILE, 'utf8'));
+        if (!raw || typeof raw !== 'object') return null;
+        // A missing key gives undefined, which the typeof below rejects — so
+        // there is no hasOwnProperty test here. One was written, and no
+        // control could make it bite, because it could not: it is the same
+        // condition twice. Removed rather than left looking load-bearing.
+        const v = raw.gemini_model;
+        return (typeof v === 'string' && v.trim()) ? v.trim() : null;
+    } catch { return null; }
+}
+
+function effectiveModels() {
+    const pinned = storedPin();
+
+    // ── ASK THE FUNCTION THE CALLERS ASK ─────────────────────────────────
+    // getModelName(), not a second computation of the same thing. The first
+    // version worked it out itself as `pinned || cfg.GEMINI_MODEL` and was
+    // WRONG whenever the env var was what decided: cfg is cached at module
+    // load, while loadSettings()'s default reads process.env live. So the
+    // report said one model and the callers used another — a monitor that
+    // can disagree with the thing it monitors is worse than none.
+    const workhorse = getModelName();
+    const fromEnv = !!(process.env.GEMINI_MODEL || '').trim();
+    return {
+        workhorse,
+        // Which of the three possible sources actually decided it. 'settings'
+        // means the config and the env var are both being ignored.
+        workhorseFrom: pinned ? 'settings' : (fromEnv ? 'env' : 'config'),
+        // Only meaningful when workhorseFrom is 'settings': what the config
+        // WOULD have given, so the gap is visible rather than inferred.
+        configWouldGive: cfg.GEMINI_MODEL,
+        pinned,
+        smart: cfg.GEMINI_MODEL_SMART,
+        vision: getVisionModelName(),
+        visionFallback: FALLBACK_VISION_MODEL,
+        // Named rather than counted: a count goes stale and nobody updates it.
+        legacy: [
+            ['workhorse', workhorse],
+            ['vision', getVisionModelName()],
+            ['vision fallback', FALLBACK_VISION_MODEL],
+            ['smart', cfg.GEMINI_MODEL_SMART],
+        ].filter(([, m]) => LEGACY_MODELS.test(String(m || ''))).map(([k, m]) => `${k}=${m}`),
+    };
+}
+
+// The boot line, and the same text for scripts/gemini-model-report.js, so the
+// two can never say different things about the same server.
+function modelReportLines() {
+    const e = effectiveModels();
+    const out = [];
+    out.push(`[GEMINI] workhorse ${e.workhorse} (from ${e.workhorseFrom}) · smart ${e.smart} · vision ${e.vision}`);
+    // ── FIRES WHENEVER IT IS PINNED, NOT ONLY WHEN THEY DISAGREE ─────────
+    // The first version only spoke up once the pin and the config differed —
+    // which is to say, only after somebody had already changed config.js,
+    // deployed it, and had it do nothing. The dangerous state is the pin
+    // EXISTING, because that is when the config is inert; the two agreeing
+    // today is what makes it invisible. So it says so either way, and only
+    // the second sentence changes.
+    if (e.workhorseFrom === 'settings') {
+        out.push(`[GEMINI] NOTE: the workhorse is PINNED in data/settings.json to ${e.pinned}. `
+            + (e.pinned === e.configWouldGive
+                ? `config.js happens to agree (${e.configWouldGive}), so this looks fine and is not: `
+                  + 'the stored value wins, and editing config.js or GEMINI_MODEL will change nothing '
+                  + 'until that key is removed from the settings file.'
+                : `config.js says ${e.configWouldGive} and is being IGNORED — remove the key from the `
+                  + 'settings file for the config to take effect.'));
+    }
+    if (e.legacy.length) {
+        out.push(`[GEMINI] WARNING: still on a 2.5-family model — ${e.legacy.join(', ')}. `
+            + 'Google is limiting access to the 2.5 models; unattended watchers use these.');
+    }
+    return out;
+}
+
 // getClient/getModelName exported 2026-09-16 for helpers/packingList.js.
 // Every extraction in this file builds its own model with its own prompt and
 // generationConfig; a new one doing the same thing needs the client, and the
 // alternative was a ninth near-identical extract* function living here, far
 // from the store it feeds.
-module.exports = { getClient, getModelName, callGeminiJSON, extractJson, lastGeminiFailure, extractPdfFields, extractBookingFieldsFromText, resolveCutoffDate, classifyDocument, extractScaleTicketFields, extractWeightFromImage, checkPhotoQuality, extractFreightInvoiceRecords, extractCommissionDebitNoteRecords, extractJioInvoiceRecords, extractSherTruckingInvoiceRecords, extractAjTransportInvoiceRecords, transcribeVoiceNote };
+module.exports = {
+    extractOrderPdfFields, getClient, getModelName, effectiveModels, modelReportLines, callGeminiJSON, extractJson, lastGeminiFailure, extractPdfFields, extractBookingFieldsFromText, resolveCutoffDate, classifyDocument, extractScaleTicketFields, extractWeightFromImage, checkPhotoQuality, extractFreightInvoiceRecords, extractCommissionDebitNoteRecords, extractJioInvoiceRecords, extractSherTruckingInvoiceRecords, extractAjTransportInvoiceRecords, transcribeVoiceNote };

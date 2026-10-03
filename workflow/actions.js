@@ -7991,24 +7991,74 @@ async function startProformaFromEmail(chatId, targetName) {
 
     await _send(chatId, `Reading the latest mail from ${who}…`);
 
-    let mail;
+    let mail, gmail;
     try {
-        const gmail = getGmailRead();
+        gmail = getGmailRead();
         mail = await findLatestFrom(gmail, who);
     } catch (err) {
         return _send(chatId, `Couldn't reach Gmail: ${err.message}`);
     }
     if (!mail) return _send(chatId, `No recent email from ${who}. Check the name, or forward me the order and I'll read that.`);
 
-    const content = await getEmailContent(mail).catch(() => null);
+    // ── "send proforma to Joey" HAS BEEN DEAD, AND NO TEST SAW IT ──────────
+    // VERIFIED 2026-10-03. findLatestFrom resolves a loose name to an
+    // ADDRESS STRING -- that is what it returns, and actions.js:3130 uses it
+    // that way. This function then passed that string straight into
+    // getEmailContent, which is the MIME-payload walker:
+    //
+    //     getEmailContent('joey@hynos.co.kr')
+    //       -> { body: '', pdfParts: [], wasHtmlOnly: false }
+    //
+    // So `body` was always empty and every real invocation answered "Found an
+    // email from Joey but couldn't read anything in it." The feature she asked
+    // for on 2026-08-23 -- "Check mail from Joey and send proforma to her" --
+    // has never worked from the chat command.
+    //
+    // WHY 64 ASSERTIONS IN tests/proforma-send.js MISSED IT: every test stubs
+    // `gmail.findLatestFrom = async () => null`, which takes the "No recent
+    // email from X" branch two lines above and never reaches this one. A stub
+    // that always returns null tests the absence path and nothing else.
+    //
+    // The address is now used as an address: find that sender's latest message
+    // and read ITS payload. pdfParts comes back too, which is what lets the
+    // attachment reader see an order whose figures are in the PDF.
+    let content = null, pdfParts = [];
+    try {
+        const { listMessages, getMessage } = require('../helpers/gmail');
+        const refs = await listMessages(gmail, `from:${mail} newer_than:60d`, 1);
+        if (refs && refs.length) {
+            const full = await getMessage(gmail, refs[0].id);
+            const hs = (full.payload && full.payload.headers) || [];
+            const hdr = (n) => (hs.find((x) => (x.name || '').toLowerCase() === n) || {}).value || '';
+            const parsed = getEmailContent(full.payload || {});
+            pdfParts = parsed.pdfParts || [];
+            content = { body: parsed.body, from: hdr('from'), subject: hdr('subject'), date: hdr('date'), id: refs[0].id };
+        }
+    } catch (err) {
+        return _send(chatId, `Couldn't read ${who}'s mail: ${err.message}`);
+    }
     const body = extractLatestMessage(content?.body || '');
     if (!body) return _send(chatId, `Found an email from ${who} but couldn't read anything in it.`);
+
+    // The order document itself, when there is one. Same lazy shape as
+    // replyWatch.draftProformaForOrder: first attachment only, and
+    // extractOrderFromEmail reads it only if the body left a hole.
+    let pdfs = [];
+    if (pdfParts.length && content.id) {
+        try {
+            const { downloadAttachment } = require('../helpers/gmail');
+            const att = await downloadAttachment(gmail, content.id, pdfParts[0]);
+            if (att && att.base64) pdfs = [att];
+        } catch (e) {
+            console.warn('[PROFORMA-MAIL] could not download the order attachment:', e.message);
+        }
+    }
 
     let order;
     try {
         order = await extractOrderFromEmail({
             from: content?.from || who, subject: content?.subject || '',
-            body, date: content?.date || '',
+            body, date: content?.date || '', pdfs,
         });
     } catch (err) {
         return _send(chatId, `Couldn't read that email: ${err.message}`);

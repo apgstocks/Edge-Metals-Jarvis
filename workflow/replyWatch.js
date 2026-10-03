@@ -3234,12 +3234,28 @@ async function draftProformaForOrder(item, gmail) {
         const { getEmailContent, getMessage } = require('../helpers/gmail');
         const { extractOrderFromEmail, toProformaDraft, groundRates } = require('../helpers/proformaFromEmail');
         const full = await getMessage(gmail, item.id);
-        const { body } = getEmailContent(full.payload || {});
+        const { body, pdfParts } = getEmailContent(full.payload || {});
         const visible = extractLatestMessage(body || '');
         if (!visible) return null;
 
+        // THE ATTACHMENT BYTES (2026-10-03). Her P.O.s say "please see the
+        // attached file" and every figure is in the PDF; until today only the
+        // FILENAMES reached the pipeline. Downloaded lazily -- the first one
+        // only, and extractOrderFromEmail reads it only when the body left a
+        // hole, so an email that states its own figures costs nothing extra.
+        let pdfs = [];
+        if (pdfParts && pdfParts.length) {
+            try {
+                const { downloadAttachment } = require('../helpers/gmail');
+                const att = await downloadAttachment(gmail, item.id, pdfParts[0]);
+                if (att && att.base64) pdfs = [att];
+            } catch (e) {
+                console.warn('[REPLYWATCH] could not download the order attachment:', e.message);
+            }
+        }
+
         const order = await extractOrderFromEmail({
-            from: item.from, subject: item.subject, body: visible, date: null,
+            from: item.from, subject: item.subject, body: visible, date: null, pdfs,
         });
         if (!order || !order.is_order) return null;
 
