@@ -27,6 +27,7 @@
 #
 #   scripts/repo-lock.sh install          # add the pre-commit hook (once)
 #   scripts/repo-lock.sh acquire "what"   # take the lease before you edit
+#   scripts/repo-lock.sh renew ["what"]    # long task? the lease lapses at 20 min
 #   scripts/repo-lock.sh release          # give it back when committed
 #   scripts/repo-lock.sh status
 #   scripts/repo-lock.sh steal            # take it from an expired/dead holder
@@ -96,10 +97,41 @@ OWNER="$(cat "$LOCK/owner" 2>/dev/null || echo unknown)"
 WHAT="$(cat "$LOCK/what" 2>/dev/null || echo '(no description)')"
 NOW="$(date +%s)"
 case "$AT" in ''|*[!0-9]*) exit 0 ;; esac          # unreadable -> fail open
-[ $(( NOW - AT )) -gt "$TTL" ] && exit 0            # expired    -> fail open
 # Must match me() above exactly — see the note there on why no pid.
 ME="${JARVIS_AGENT:-$(basename "${HOME:-local}")@$(hostname -s 2>/dev/null || echo local)}"
 [ "$OWNER" = "$ME" ] && exit 0                      # mine       -> allow
+# ── AN EXPIRED LEASE STILL FAILS OPEN, BUT NO LONGER IN SILENCE ─────────
+# 2026-10-03. This was `[ ... -gt TTL ] && exit 0` above the owner check:
+# allowed, and said nothing. That silence is how the fourth collision
+# happened. A session held the lease, its task ran well past 20 minutes —
+# building, then a 227-file suite — the lease lapsed with no sign to
+# anybody, and the next commit took helpers/gemini.js with the other
+# session's uncommitted edits inside it, under a message about reading
+# order attachments.
+#
+# Expiry must keep failing open (design rule 1: never wedge the tree, a
+# dead session must not hold it hostage). But "the lease ran out" is not
+# the same fact as "nobody is working here", and only the first was ever
+# true. So it warns and allows.
+if [ $(( NOW - AT )) -gt "$TTL" ]; then
+    cat >&2 <<MSG
+
+  ─ NOTE: an EXPIRED lease was here ──────────────────────────────────────
+    $OWNER was working on: $WHAT
+    held $(( (NOW - AT) / 60 )) min, TTL is $(( TTL / 60 )) — so this is NOT being blocked.
+
+    That session may still be mid-edit; the lease only means it stopped
+    saying so. Before this commit lands, check that every staged file is
+    yours — a file you both touched comes with their changes in it,
+    because git cannot take half of one:
+
+        git diff --cached --name-only
+
+  ────────────────────────────────────────────────────────────────────────
+
+MSG
+    exit 0
+fi
 cat >&2 <<MSG
 
   ┌─ COMMIT BLOCKED ─────────────────────────────────────────────────────┐
@@ -164,6 +196,27 @@ HOOKEOF
     fi
     echo "BUSY — $(owner) has it ($(( $(age) / 60 )) min): $(what)"
     exit 1
+    ;;
+
+  # ── renew ──────────────────────────────────────────────────────────────
+  # `acquire` already renews a lease that is yours, and relying on that was
+  # the mistake: nothing in a long task ever calls acquire a second time, so
+  # the lease quietly lapses at 20 minutes while the work carries on. A task
+  # here routinely runs longer than that — the suite alone is ten minutes.
+  #
+  # Spelled as its own verb so it is discoverable in the usage block and
+  # obvious in a transcript. Raising the TTL instead would break design rule
+  # 1: a session that dies mid-edit must not hold the tree for an hour.
+  renew)
+    if [ ! -d "$LOCK" ] || released; then
+        echo "no lease to renew — acquire one first"; exit 1
+    fi
+    if [ "$(owner)" != "$(me)" ]; then
+        echo "held by $(owner), not you — nothing renewed"; exit 1
+    fi
+    now > "$LOCK/at"
+    [ -n "${2:-}" ] && echo "$2" > "$LOCK/what"
+    echo "renewed — $(what)"
     ;;
 
   release)
