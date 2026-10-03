@@ -21,6 +21,7 @@ const importSheet = require('./importSheet');
 const claimScan = require('../claimScan');
 const report = require('./report');
 const claimPrice = require('../claimPrice');
+const claimEvidence = require('../claimEvidence');
 
 const bad = (res, msg, code = 400) => res.status(code).json({ error: msg });
 
@@ -168,9 +169,14 @@ function mount(app, cfg) {
             if (base64.length > 28 * 1024 * 1024) return bad(res, 'that file is too big — photograph the page rather than the whole report');
             const d = await claimScan.scan({ base64, mimeType: b.mimeType || 'image/jpeg' });
             // Not a claim document is an ANSWER, not a server fault: 422 so the
-            // page can say what it was instead of showing a red failure.
+            // page can say what it was instead of showing a red failure. The
+            // file is NOT held in that case — there is no claim coming.
             if (!d.ok) return res.status(422).json(d);
-            res.json(d);
+            // Park the bytes so creating the claim keeps the photograph without
+            // the phone uploading it a second time. Bounded TTL and count; if it
+            // expires, the claim is still created, just without the document.
+            const scanId = claimEvidence.hold({ base64, mimeType: b.mimeType || 'image/jpeg', name: b.name || '' });
+            res.json({ ...d, scanId });
         } catch (e) {
             console.error('[CLAIMS] scan failed:', e && e.stack || e);
             bad(res, e.message, 500);
@@ -346,6 +352,40 @@ function mount(app, cfg) {
             const r = await importSheet.reclassify(held.plan, { write: b.really === true });
             res.json({ ...r, wrote: b.really === true });
         } catch (e) { bad(res, e.message, 500); }
+    });
+
+    // ── A CLAIM'S SUPPORTING DOCUMENTS ─────────────────────────────────────
+    // Apsara, 2026-10-03, asked where the supporting photos were. They were
+    // nowhere — the scan read its photograph and discarded it.
+    //
+    // THESE ARE INTERNAL. The stored link is a Shared Drive link, not a public
+    // one, and it is never printed on anything sent to a supplier: these pages
+    // carry the customer's name, and a supplier who learns which buyer the metal
+    // reached can go to them directly. See helpers/claimEvidence.js.
+    //
+    // The claim is never lost to a Drive failure — it already exists by the time
+    // this is called, so the worst case is a claim with no document and an error
+    // saying which.
+    app.post('/api/claims/:id/evidence', async (req, res) => {
+        try {
+            const b = req.body || {};
+            let payload = { base64: b.base64, mimeType: b.mimeType, name: b.name, by: b.by || 'manager' };
+            if (b.scanId) {
+                const h = claimEvidence.take(b.scanId);
+                if (!h) return bad(res, 'that scan has expired — the claim is fine, add the document again');
+                payload = { base64: h.base64, mimeType: h.mimeType, name: h.name || b.name, by: b.by || 'scan' };
+            }
+            const r = await claimEvidence.attach(req.params.id, payload);
+            res.json({ evidence: claimEvidence.list(r.claim), added: r.entry, already: r.already });
+        } catch (e) {
+            // A refusal is an answer, not a fault: a 404 or a rejected file type
+            // gets one line. Only something unexpected earns a stack in pm2 logs,
+            // or the one that matters is buried under the ones that do not.
+            const known = /no such claim|no file|not a document I can keep|too big|expired/.test(e.message || '');
+            if (known) console.log('[CLAIMS] evidence refused:', e.message);
+            else console.error('[CLAIMS] evidence attach failed:', e && e.stack || e);
+            bad(res, e.message, /no such claim/.test(e.message) ? 404 : 400);
+        }
     });
 
     // ── WHAT THE SUPPLIER'S OWN PRICE WAS ──────────────────────────────────

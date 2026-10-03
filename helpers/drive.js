@@ -267,6 +267,50 @@ async function uploadScaleTicketImage(ticketId, imageBase64, mimeType, originalF
     return created.data;
 }
 
+// ── Upload a claim's supporting document to Shared Drive ─────────────────────
+// The surveyor outturn report, the weighbridge ticket, the photo of the short
+// container. Same Shared Drive and service account as everything else here, so
+// no new Google setup: GDRIVE_CLAIMS_FOLDER_ID if set, else the existing
+// GDRIVE_UPLOAD_FOLDER_ID, with a subfolder per claim key (container or
+// invoice) so a container's documents sit together rather than in one flat pile.
+//
+// THE LINK IT RETURNS IS NOT PUBLIC, and that is deliberate. Nothing in this
+// file ever calls permissions.create. These documents carry the CUSTOMER's name
+// — Apsara, 2026-10-03: "if there is any company name mentioned in claim email
+// of customer, then it should be hided" — and a supplier who learns which buyer
+// the metal reached can go to them directly. The webViewLink is for Edge's own
+// staff, signed in to the Shared Drive. It must never be printed on a document
+// that leaves the building.
+//
+// Returns { fileId, name, webViewLink } or throws. Failing soft is the
+// CALLER's job: losing a photo must never lose the claim.
+async function uploadClaimDocument(claimKey, base64, mimeType, originalFilename) {
+    if (!claimKey) throw new Error('claimKey required');
+    if (!base64) throw new Error('document data required');
+
+    const drive = getDrive();
+    const { Readable } = require('stream');
+    const buffer = Buffer.from(base64, 'base64');
+
+    const mt = String(mimeType || 'image/jpeg');
+    const ext = mt.includes('pdf') ? 'pdf' : mt.includes('png') ? 'png' : mt.includes('heic') ? 'heic' : 'jpg';
+    const stem = String(originalFilename || '').replace(/\.[^.]+$/, '').replace(/[^A-Za-z0-9._-]+/g, '-').replace(/^-|-$/g, '').slice(0, 60);
+    const name = `${new Date().toISOString().slice(0, 10)}_${stem || 'document'}.${ext}`;
+
+    let parentId = cfg.GDRIVE_CLAIMS_FOLDER_ID || cfg.GDRIVE_UPLOAD_FOLDER_ID;
+    if (!parentId) throw new Error('GDRIVE_UPLOAD_FOLDER_ID (or GDRIVE_CLAIMS_FOLDER_ID) not configured');
+    parentId = await getOrCreateLoadSubfolder(drive, parentId, String(claimKey));
+
+    const created = await drive.files.create({
+        requestBody: { name, parents: [parentId] },
+        media: { mimeType: mt, body: Readable.from(buffer) },
+        fields: 'id, name, webViewLink',
+        supportsAllDrives: true,
+    });
+    console.log(`[DRIVE] Uploaded claim document ${name} for ${claimKey} (${created.data.id})`);
+    return created.data;
+}
+
 // ── List every PDF in the upload folder (paginated) ───────────────────────
 // Read-only — never touches file content or metadata. Built for one-off
 // audits (e.g. checking which stored "booking" PDFs are actually invoices
@@ -851,7 +895,7 @@ async function uploadYardChatLog(day, buffer) {
     return { fileId: created.data.id, name, webViewLink: created.data.webViewLink, replaced: false };
 }
 
-module.exports = { upsertReportFile, renameReportFile, uploadBackupJson, trimBackups, listBackups, downloadBackupJson, getOrCreateBackupsFolder, fetchPdfFromDrive, findPdfByBooking, uploadPdfToDrive, deletePdfByBooking, listAllPdfs, downloadPdfById, isConfirmationClassification, exportDocAsText, uploadScaleTicketImage, uploadLoadPdf, renameLoadSubfolder, trashLoadFolder, getOrCreateReportsFolder, uploadInventoryBackupXlsx, uploadDailyInventoryPdf, uploadYardChatLog };
+module.exports = { uploadClaimDocument, upsertReportFile, renameReportFile, uploadBackupJson, trimBackups, listBackups, downloadBackupJson, getOrCreateBackupsFolder, fetchPdfFromDrive, findPdfByBooking, uploadPdfToDrive, deletePdfByBooking, listAllPdfs, downloadPdfById, isConfirmationClassification, exportDocAsText, uploadScaleTicketImage, uploadLoadPdf, renameLoadSubfolder, trashLoadFolder, getOrCreateReportsFolder, uploadInventoryBackupXlsx, uploadDailyInventoryPdf, uploadYardChatLog };
 
 // ── Delete a booking's PDF from Drive (used by DELETE /api/bookings/:bkgNo) ──
 // Uses files.update with trashed=true instead of files.delete. The hard-delete

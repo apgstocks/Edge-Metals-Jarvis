@@ -527,6 +527,11 @@ const GDRIVE_UPLOAD_FOLDER_ID = process.env.GDRIVE_UPLOAD_FOLDER_ID || ''; // Fo
 // Drive setup; set this later if you want ticket photos filed separately from
 // booking PDFs. See helpers/drive.js's uploadScaleTicketImage().
 const GDRIVE_SCALE_TICKETS_FOLDER_ID = process.env.GDRIVE_SCALE_TICKETS_FOLDER_ID || '';
+// Where a claim's supporting documents land — the surveyor report, the
+// weighbridge ticket, the photo of the short container. Falls back to
+// GDRIVE_UPLOAD_FOLDER_ID so this works with no new Google setup, exactly as
+// the scale-ticket folder above does.
+const GDRIVE_CLAIMS_FOLDER_ID = process.env.GDRIVE_CLAIMS_FOLDER_ID || '';
 
 // Address book — real need found 2026-08-05: quote-request messages to
 // truckers need full pickup/delivery address blocks (yard/company name +
@@ -828,7 +833,7 @@ module.exports = {
     API_PORT, API_TOKEN, APP_PASSWORD, ADMIN_PASSWORD, STAFF_PASSWORD, JARVIS_PASSWORD, SESSION_PATH,
     PLAID_CLIENT_ID, PLAID_SECRET, PLAID_ENV,
     SUPABASE_URL, SUPABASE_KEY,
-    GDRIVE_KEYFILE, GDRIVE_FOLDER_ID, GDRIVE_UPLOAD_FOLDER_ID, GDRIVE_SCALE_TICKETS_FOLDER_ID,
+    GDRIVE_KEYFILE, GDRIVE_FOLDER_ID, GDRIVE_UPLOAD_FOLDER_ID, GDRIVE_SCALE_TICKETS_FOLDER_ID, GDRIVE_CLAIMS_FOLDER_ID,
     ADDRESS_BOOK_DOC_ID, ADDRESS_BOOK_FILE,
     QUOTE_REQUESTS_FILE, CONTACT_QUOTE_REQUESTS_FILE, CONTACTS_FILE, QUOTE_REMINDER_SCHEDULE_MIN, EMAIL_THREADS_FILE,
     GMAIL_CREDENTIALS_FILE, GMAIL_TOKEN_FILE, GMAIL_READ_TOKEN_FILE, GMAIL_WRITE_TOKEN_FILE, GMAIL_SENDER_READ_TOKEN_FILE, GMAIL_READ2_TOKEN_FILE, EMAIL_PROCESSED_FILE, REPLY_WATCH_FILE,

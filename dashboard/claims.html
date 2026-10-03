@@ -432,6 +432,18 @@ function claimCard(c, i){
       ((c.mail||[]).length ? '<div class="card"><h3>Mail trail — ' + c.mail.length + '</h3><div class="trail">' +
         c.mail.map(m => '<div class="mailrow"><span class="d">' + esc(String(m.date||'').slice(0,10)) + '</span><span class="s">' + esc(m.subject||'(no subject)') + '</span><span class="f">' + esc(m.from||'') + '</span></div>').join('') +
       '</div></div>' : '') +
+      '<div class="card"><h3>Supporting documents</h3>' +
+        (((c.evidence||[]).filter(e => e && e.url).length)
+          ? '<div class="quotes">' + c.evidence.filter(e => e && e.url).map(e =>
+              '<div class="q"><span class="qk">' + esc(String(e.added_at||'').slice(0,10)) + '</span>' +
+              '<span class="qv"><a href="' + esc(e.url) + '" target="_blank" rel="noopener">' + esc(e.name || 'document') + '</a>' +
+              (e.added_by ? ' \u00b7 ' + esc(e.added_by) : '') + '</span></div>').join('') + '</div>'
+          : '<div class="hint" style="margin-top:0">Nothing filed against this claim yet.</div>') +
+        '<label class="f" style="margin-top:10px">Add a document' +
+          '<input type="file" class="f_doc" accept="image/*,application/pdf" capture="environment">' +
+        '</label>' +
+        '<div class="hint">The surveyor report, the weighbridge ticket, a photo of the container. Kept on Edge\u2019s Drive for staff \u2014 these pages name the customer, so they are never linked on anything sent to a supplier.</div>' +
+      '</div>' +
       (c.note ? '<div class="card"><h3>Note</h3><div class="hint" style="margin-top:0">' + esc(c.note) + '</div></div>' : '') +
       ((c.history||[]).length ? '<div class="card"><h3>History</h3><div class="hist">' +
         c.history.slice().reverse().map(h => '<span>' + esc(String(h.at||'').slice(0,16).replace('T',' ')) + ' — ' + esc(h.what) + ' · ' + esc(h.by) + '</span>').join('') +
@@ -590,6 +602,24 @@ function wireClaim(c){
     } catch (e) { box.innerHTML = '<b>·</b> Could not read the purchase bill — ' + esc(e.message); }
   })();
 
+  const doc = el.querySelector('.f_doc');
+  if (doc) doc.onchange = async () => {
+    const f = doc.files[0];
+    if (!f) return;
+    doc.disabled = true;
+    toast('Filing ' + f.name + '\u2026', 'ok');
+    try {
+      const b64 = await new Promise((res, rej) => {
+        const fr = new FileReader();
+        fr.onload = () => res(String(fr.result).replace(/^data:[^,]+,/, ''));
+        fr.onerror = () => rej(new Error('that file could not be read on this device'));
+        fr.readAsDataURL(f);
+      });
+      await api('/api/claims/' + c.id + '/evidence', { base64: b64, mimeType: f.type || 'image/jpeg', name: f.name });
+      toast('Filed against this claim.', 'ok'); await load();
+    } catch (e) { doc.disabled = false; doc.value = ''; toast(e.message, 'bad'); }
+  };
+
   el.querySelectorAll('.f_st').forEach(b => b.onclick = async () => {
     try { await api('/api/claims/' + c.id + '/status', { status: b.dataset.st }); toast('Marked ' + b.dataset.st + '.', 'ok'); await load(); }
     catch (e) { toast(e.message, 'bad'); }
@@ -747,6 +777,13 @@ function showScan(wrap, d, closeModal){
         note: get('what_is_claimed'),
         created_by: 'scan',
       });
+      // The photograph is the evidence behind the figures. The claim is already
+      // created by this point, so a Drive failure costs the document, never the
+      // claim — and it says which.
+      if (d.scanId) {
+        try { await api('/api/claims/' + rec.id + '/evidence', { scanId: d.scanId, by: 'scan' }); }
+        catch (e) { toast('Claim created, but the scan could not be filed — ' + e.message, 'bad'); }
+      }
       closeModal(); toast('Created, unverified. Confirm the weights next.', 'ok');
       STATE.sel = String(rec.container_no || rec.invoice_no || '—').toUpperCase();
       await load();
