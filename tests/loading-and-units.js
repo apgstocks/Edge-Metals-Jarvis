@@ -253,6 +253,57 @@ const section = (t) => console.log(`\n=== ${t} ===`);
         /Do not include commission/.test(require(R('helpers/proformaFromEmail.js')).buildOrderPrompt(
             { from: 'a@b.com', subject: 's', body: 'b', date: null })));
 
+    section('LG — a quoted quantity is a WHOLE number: 21 normally, 22 on an L/C');
+    // Apsara: "21.85 MT instead of that make it standard as 21 MT", then
+    // "Unless it is an LC where we need to put 22 MT".
+    //
+    // A proforma is issued BEFORE loading, so 21.85 is false precision about a
+    // weight nobody has weighed. DOWN by default, UP under a letter of credit:
+    //   · On TT, quoting under what loads means the commercial invoice goes UP
+    //     at shipment. Quoting over means it goes DOWN -- the version a buyer
+    //     disputes.
+    //   · Under an L/C the credit is drawn against the quantity on the
+    //     document, so the nominal figure has to sit ABOVE the load.
+    // Auto casting tense measures 21.85 here, which floors to 21 and ceils to
+    // 22 -- her two numbers exactly. Her sheet carries 68 L/C rows against
+    // 612 TT, so this is a real second case.
+    const { isLcOrder } = require(R('helpers/proformaFromEmail.js'));
+    const qtyFor = async (term) => {
+        const d = toProformaDraft(await groundRates({ consignee: 'Daekwang', container_count: 5,
+            payment_term: term,
+            items: [{ desc: 'Auto casting tense', qty: null, rate: 2035, rate_confidence: 0.9, rate_basis: 'per_mt' }] }), {});
+        return d.items[0].qty;
+    };
+    ck('LG1 TT terms give the round 21 MT, not 21.85', (await qtyFor('TT 7 days before ETA')) === 21,
+        String(await qtyFor('TT 7 days before ETA')));
+    ck('LG2 no stated terms also give 21 MT', (await qtyFor(null)) === 21);
+    ck('LG3 "L/C at sight" gives 22 MT', (await qtyFor('L/C at sight')) === 22,
+        String(await qtyFor('L/C at sight')));
+    ck('LG4 bare "LC" gives 22 MT', (await qtyFor('LC')) === 22);
+    ck('LG5 "letter of credit 60 days" gives 22 MT', (await qtyFor('letter of credit 60 days')) === 22);
+    ck('LG6 the figure is always a whole number', Number.isInteger(await qtyFor('TT'))
+        && Number.isInteger(await qtyFor('L/C')));
+    // The read-back must show the BASIS, not just the rounded answer -- she
+    // should be able to see that 21 came from a measured 21.85.
+    const lcDraft = toProformaDraft(await groundRates({ consignee: 'D', container_count: 1,
+        payment_term: 'L/C at sight',
+        items: [{ desc: 'Auto casting tense', qty: null, rate: 2035, rate_confidence: 0.9, rate_basis: 'per_mt' }] }), {});
+    ck('LG7 the L/C read-back says it is the L/C quantity and why',
+        (lcDraft.assumed || []).some((a) => /standard L\/C quantity/.test(a) && /must sit above the load/.test(a)),
+        JSON.stringify(lcDraft.assumed));
+    ck('LG8 and it still shows the measured median behind it',
+        (lcDraft.assumed || []).some((a) => /median 21\.88 MT across 3 past container/.test(a)),
+        JSON.stringify(lcDraft.assumed));
+    ck('LG9 isLcOrder does not fire on ordinary TT wording',
+        !isLcOrder({ payment_term: 'TT 7 days before arrival' })
+        && !isLcOrder({ payment_term: 'cash against documents' }) && !isLcOrder({}));
+    // A quantity the EMAIL stated is never overwritten by either figure.
+    const stated = toProformaDraft(await groundRates({ consignee: 'D', container_count: 1,
+        payment_term: 'L/C at sight',
+        items: [{ desc: 'Auto casting tense', qty: 19.5, rate: 2035, rate_confidence: 0.9, rate_basis: 'per_mt' }] }), {});
+    ck('LG10 a stated tonnage wins over the standard, L/C or not', stated.items[0].qty === 19.5
+        && !(stated.assumed || []).some((a) => /standard/.test(a)), `qty = ${stated.items[0].qty}`);
+
     console.log(`\n${pass} passed, ${fail} failed`);
     if (fail) { console.log('FAILED: ' + failures.join(', ')); process.exit(1); }
 })();

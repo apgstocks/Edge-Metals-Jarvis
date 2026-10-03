@@ -92,7 +92,30 @@ async function loadLoadings() {
             if (w.length < MIN_CONTAINERS) continue;
             const lo = Math.min(...w), hi = Math.max(...w);
             if (!lo || hi / lo > MAX_SPREAD) continue;
-            out.set(key, { mt: Math.round(median(w) * 100) / 100, n: w.length,
+            // ── A QUOTED QUANTITY IS A WHOLE NUMBER (2026-10-03) ──────────
+            // Apsara: "21.85 MT instead of that make it standard as 21 MT",
+            // then "Unless it is an LC where we need to put 22 MT".
+            //
+            // The median is what a container ACTUALLY loaded to. A proforma is
+            // issued BEFORE loading, so it carries a nominal figure, and
+            // 21.85 on a document is false precision about a weight nobody has
+            // weighed yet.
+            //
+            // DOWN by default, UP under a letter of credit, and the direction
+            // is not arbitrary in either case:
+            //   · On TT terms, quoting under what will load means the
+            //     commercial invoice goes UP at shipment. Quoting over means
+            //     it goes DOWN, which is the version a buyer disputes.
+            //   · Under an LC the credit is drawn against the quantity on the
+            //     document, and exceeding it is a discrepancy the bank
+            //     rejects, so the nominal figure has to sit ABOVE the load.
+            //
+            // Auto casting tense measures 21.85 MT here, which floors to 21
+            // and ceils to 22 -- exactly the two numbers she gave. Al combo
+            // measures 22.65, so 22 and 23 by the same rule.
+            const measured = median(w);
+            out.set(key, { mt: Math.floor(measured), mtLc: Math.floor(measured) + 1,
+                measured: Math.round(measured * 100) / 100, n: w.length,
                 min: Math.round(lo * 100) / 100, max: Math.round(hi * 100) / 100,
                 label: label.get(key) || key });
         }
@@ -105,7 +128,10 @@ async function loadLoadings() {
     return out;
 }
 
-// Returns { mt, n, min, max, label } or null. Never throws: a missing default
+// Returns { mt, mtLc, measured, n, min, max, label } or null. `mt` is the
+// nominal quantity for a normal (TT) proforma and `mtLc` the one for a letter
+// of credit; `measured` is the raw median, kept so the read-back can show the
+// basis rather than just the rounded answer. Never throws: a missing default
 // must leave the draft asking for a quantity, exactly as it does today.
 async function standardLoadFor(desc) {
     try {

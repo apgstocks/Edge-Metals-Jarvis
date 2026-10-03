@@ -272,7 +272,11 @@ function applyStandardQuantities(items) {
         // a container with something else is not the 21 MT pattern. Kept as
         // the fallback for when the sheet cannot be read at all; history
         // independently measures this material at 21.9-22.1 MT.
-        else if (isAutoCast(it.desc) && items.length === 1) qty = 21;
+        // 21, or 22 under an L/C -- the two figures she gave, and the same
+        // direction the history-derived default takes. This branch only runs
+        // when the sheet cannot be read at all; `lc_order` is stamped on the
+        // item by groundRates so this stays a pure function of its input.
+        else if (isAutoCast(it.desc) && items.length === 1) qty = it.lc_order ? 22 : 21;
         return { ...it, qty, qty_assumed: qty != null, qty_reason: why };
     });
 }
@@ -286,9 +290,19 @@ function applyStandardQuantities(items) {
 // See helpers/ratePlausibility.js for why: the model called $2,420/MT for auto
 // casting tense a lot total, and 202 rows of her own invoices say it is an
 // ordinary rate.
+// A LETTER OF CREDIT CHANGES THE NOMINAL QUANTITY. Her sheet carries 68 L/C
+// rows against 612 TT ones, so this is a real second case and not an edge.
+// Matched on the terms as they are actually written there and in her mail:
+// "L/C", "LC", "letter of credit".
+const LC_TERMS = /\b(?:l\s*\/?\s*c|letter\s+of\s+credit)\b/i;
+function isLcOrder(order) {
+    return LC_TERMS.test(String((order && (order.payment_term || order.terms)) || ''));
+}
+
 async function groundRates(order) {
     const { judgeRate } = require('./ratePlausibility');
     const { standardLoadFor } = require('./loadingHistory');
+    const lc = isLcOrder(order);
     const items = [];
     for (const it of (order.items || [])) {
         // CONVERT BEFORE JUDGING, and this ordering was a bug the first time.
@@ -307,6 +321,7 @@ async function groundRates(order) {
         }
         const j = await judgeRate(pre.desc, pre.rate, pre.rate_basis).catch(() => null);
         let next = j ? { ...pre, rate_basis: j.basis, rate_reason: j.reason, rate_confirmed: !!j.confirmed } : { ...pre };
+        next.lc_order = lc;
         // THE QUANTITY IS GROUNDED THE SAME WAY THE RATE IS. Done here, in the
         // async grounding step that both callers already run, so
         // toProformaDraft stays synchronous -- changing its signature would
@@ -315,8 +330,11 @@ async function groundRates(order) {
         if (next.qty == null) {
             const load = await standardLoadFor(next.desc).catch(() => null);
             if (load) {
-                next.standard_qty = load.mt;
-                next.standard_qty_reason = `${load.mt} MT is what ${load.label} has loaded to across ${load.n} past container(s) (${load.min}-${load.max} MT)`;
+                // Which nominal figure depends on the PAYMENT TERMS, so it is
+                // decided here where the whole order is in hand, not inside
+                // applyStandardQuantities which only ever sees the items.
+                next.standard_qty = lc ? load.mtLc : load.mt;
+                next.standard_qty_reason = `${next.standard_qty} MT is the standard ${lc ? 'L/C ' : ''}quantity — ${load.label} has loaded to a median ${load.measured} MT across ${load.n} past container(s) (${load.min}-${load.max} MT)${lc ? ', and under an L/C the figure on the document must sit above the load' : ''}`;
             }
         }
         items.push(next);
@@ -464,7 +482,7 @@ function toProformaDraft(order, { fallbackConsignee } = {}) {
     };
 }
 
-module.exports = { extractOrderFromEmail, toProformaDraft, groundRates, buildOrderPrompt, applyStandardQuantities, containerCountFromText, scrubCommissionNote, RATE_TRUST, 
+module.exports = { extractOrderFromEmail, toProformaDraft, groundRates, buildOrderPrompt, applyStandardQuantities, containerCountFromText, scrubCommissionNote, isLcOrder, RATE_TRUST, 
     // Exported for tests ONLY. The enum inside it is what silently lost Joey's
     // order: a rate_basis the schema does not allow fails validation three
     // times and the whole extraction returns nothing. A unit test against
