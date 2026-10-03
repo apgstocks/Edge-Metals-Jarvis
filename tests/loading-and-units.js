@@ -57,6 +57,19 @@ const ROWS = [
 const real = require(R('helpers/invoiceSheet.js'));
 real.fetchRawSheet = async () => ({ headers: HEADERS, rows: ROWS });
 
+// Stubbed BEFORE proformaFromEmail loads: it destructures callGeminiJSON at
+// require time, so a later assignment is invisible to it. This exists so the
+// note scrub can be tested THROUGH extractOrderFromEmail -- reverse
+// verification showed that calling scrubCommissionNote directly proves the
+// function works and not that it is wired in, the same gap that hid half the
+// rate_basis bug this morning.
+const gem = require(R('helpers/gemini.js'));
+let AI_ORDER = null;
+gem.callGeminiJSON = async (_p, _n, schema) => {
+    if (!AI_ORDER) throw new Error('no stubbed order set');
+    return schema && schema.parse ? schema.parse(AI_ORDER) : AI_ORDER;
+};
+
 const lh = require(R('helpers/loadingHistory.js'));
 const rp = require(R('helpers/ratePlausibility.js'));
 const { groundRates, toProformaDraft } = require(R('helpers/proformaFromEmail.js'));
@@ -190,6 +203,55 @@ const section = (t) => console.log(`\n=== ${t} ===`);
     const thick = await rp.judgeRate('Al Wheels Dirty', 1.60, 'per_lb');
     ck('LE3 six per-pound purchases ARE enough', thick.confirmed === true,
         `confirmed = ${thick.confirmed}, reason = ${thick.reason}`);
+
+    section('LF — commission is never deducted, itemised, or mentioned');
+    // Apsara, 2026-10-03: "Do not include commission."
+    //
+    // VERIFIED AGAINST HER OWN INVOICES, not assumed from the instruction:
+    // Joey confirms "$2,520 CIF Busan (10c for Mr.Kim and 10c for Hynos
+    // included)" and she bills Joey/Daekwang Autocasting Tense at $2,520.00 --
+    // five rows of it, the confirmed figure exactly. So "do not include"
+    // means do not SHOW it and do not NET it out: the stated price stands.
+    // That distinction was worth $20/MT, about $2,180 on her five-container
+    // order, in either direction.
+    const { scrubCommissionNote } = require(R('helpers/proformaFromEmail.js'));
+    const gross = toProformaDraft(await groundRates({ consignee: 'Daekwang', container_count: 5,
+        items: [{ desc: 'Auto cast', qty: null, rate: 2520, rate_confidence: 0.9, rate_basis: 'per_mt' }] }), {});
+    ck('LF1 the stated price stands, not netted to 2500', gross.items[0].rate === 2520,
+        `rate = ${gross.items[0].rate}`);
+    ck('LF2 no commission line is added to the items', gross.items.length === 1
+        && !/commission/i.test(JSON.stringify(gross.items)), JSON.stringify(gross.items));
+    ck('LF3 a note that is ONLY about commission is dropped',
+        scrubCommissionNote('The price includes $10 Mr.Kim and $10 Hynos commission.') === null);
+    ck('LF4 and so is the wordier version the model actually produced',
+        scrubCommissionNote('The email mentions commissions for Mr. Kim and Hynos included in the price, but these are not deducted from the stated rate.') === null);
+    // The scrub must not become a way to lose a real warning.
+    const realWarning = 'The $2,420 figure may be a lot total rather than a per-MT rate; commission is included.';
+    ck('LF5 a note that ALSO raises a per-lot doubt survives intact',
+        scrubCommissionNote(realWarning) === realWarning, JSON.stringify(scrubCommissionNote(realWarning)));
+    ck('LF6 a note with nothing about commission is untouched',
+        scrubCommissionNote('Two materials share one price — check which applies.')
+            === 'Two materials share one price — check which applies.');
+    // THROUGH the real entry point, not just the helper.
+    const { extractOrderFromEmail } = require(R('helpers/proformaFromEmail.js'));
+    AI_ORDER = { is_order: true, confidence: 0.9, consignee: 'Daekwang', container_count: 5,
+        items: [{ desc: 'Auto casting tense', qty: null, rate: 2520, rate_confidence: 0.9, rate_basis: 'per_mt' }],
+        missing: [], note: 'The price includes $10 Mr.Kim and $10 Hynos commission.' };
+    const viaEntry = await extractOrderFromEmail({ from: 'Joey <joey@hynos.co.kr>',
+        subject: 'Confirmation of auto casting tense', body: 'Daekwang confirmed 5c at $2,520 CIF Busan', date: null });
+    ck('LF7 the scrub is WIRED IN — extractOrderFromEmail drops it too',
+        viaEntry && viaEntry.note === null, `note = ${JSON.stringify(viaEntry && viaEntry.note)}`);
+    ck('LF7b and the rate survives the same trip unchanged',
+        viaEntry && viaEntry.items[0].rate === 2520, `rate = ${viaEntry && viaEntry.items[0].rate}`);
+    AI_ORDER = { ...AI_ORDER, note: 'The $2,420 figure may be a lot total rather than a per-MT rate.' };
+    const kept = await extractOrderFromEmail({ from: 'a@b.com', subject: 's', body: 'b', date: null });
+    ck('LF7c a real warning still reaches her through the entry point',
+        kept && /lot total/.test(kept.note || ''), JSON.stringify(kept && kept.note));
+    AI_ORDER = null;
+
+    ck('LF8 the prompt states the rule, with her invoice evidence',
+        /Do not include commission/.test(require(R('helpers/proformaFromEmail.js')).buildOrderPrompt(
+            { from: 'a@b.com', subject: 's', body: 'b', date: null })));
 
     console.log(`\n${pass} passed, ${fail} failed`);
     if (fail) { console.log('FAILED: ' + failures.join(', ')); process.exit(1); }

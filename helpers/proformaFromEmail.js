@@ -119,6 +119,8 @@ items: one entry per distinct material.
   rate_basis: "per_mt" if that figure is plainly a price PER METRIC TONNE. A TRADE TERM IS NOT A BASIS: "$3,200 CIF Incheon", "2,520 CIF Busan", "$995 FOB" are all PER METRIC TONNE prices in this business, and CIF/CFR/FOB/DDP tells you who pays the freight, nothing whatever about per-tonne versus per-lot. All 759 rows of this company's invoice history are priced per metric tonne on CIF terms. Reading "CIF" as evidence of a lot price is a real error that has happened: it blocked a confirmed container of chrome wheels at $3,200 CIF Incheon. "per_lb" if it is a price PER POUND ($/lb, "per pound", "cents a pound", "/#") — this is common on domestic scrap and you must say so rather than converting it yourself. "per_lot" if it is a total for the shipment, the container, or the whole order. "unknown" if the email does not make the basis clear. Be honest here rather than helpful — "unknown" is a perfectly good answer and is much safer than a wrong guess, because a per-lot figure used as a per-tonne rate multiplies the invoice by the tonnage.
   rate_confidence: 0.0-1.0, how sure you are of the FIGURE itself (not its basis). Use 0.9+ only when the email plainly ties that number to that material.
 
+A COMMISSION STATED AS *INCLUDED* DOES NOT CHANGE THE RATE. Apsara, 2026-10-03: "Do not include commission." Her mail from Joey reads "$2,520 CIF Busan (10c for Mr.Kim and 10c for Hynos included)" and "$3,200 CIF incheon (10c for Mr. Kim and 10c for Hynos included)" -- a $10/MT commission to each agent, already inside the figure. VERIFIED AGAINST HER OWN INVOICES: she bills Joey/Daekwang Autocasting Tense at $2,520.00, five rows of it, the confirmed figure exactly. The commission is settled separately and never appears on, and is never deducted from, the proforma. So: put the STATED price in rate, unchanged. Do NOT net it down to $2,500. Do NOT add a commission line item. Do NOT mention the commission in note -- it is normal, it needs no checking, and this document goes to the buyer.
+
 WHEN AN EMAIL CONTAINS SEVERAL PRICES: a message may quote a price to the end buyer, subtract agent commissions, and then state what WE receive ("your price is X"). The figure that belongs on our proforma is the one presented as ours. Put that in rate, and say in note what the other figures were and why you chose this one, so a human can check the choice.
 
 missing: field names a proforma needs that this email does not give, from: consignee, material, quantity, rate, trade_terms, port_discharge, container_count.
@@ -165,6 +167,16 @@ function containerCountFromText(text) {
     return uniq.length === 1 ? uniq[0] : null;
 }
 
+// Words that mean the note is raising something OTHER than commission.
+const NOTE_SUBSTANCE = /\b(per[- ]?lot|per[- ]?tonne|per[- ]?mt|per[- ]?lb|total|lot price|two materials|both materials|ambiguous|unclear|quantity|tonnage|container count|which figure|conflict|discrepan)/i;
+function scrubCommissionNote(note) {
+    const t = note ? String(note).trim() : null;
+    if (!t) return null;
+    if (!/commission/i.test(t)) return t;
+    if (NOTE_SUBSTANCE.test(t)) return t;
+    return null;
+}
+
 async function extractOrderFromEmail(email) {
     const res = await callGeminiJSON(buildOrderPrompt(email), 2, OrderSchema, null, { model: require('../config').GEMINI_MODEL_SMART });
     if (!res || typeof res.is_order === 'undefined') return null;
@@ -190,7 +202,18 @@ async function extractOrderFromEmail(email) {
         container_count: num(res.container_count) || containerCountFromText(email && email.body),
         items,
         missing: Array.isArray(res.missing) ? res.missing.map(String) : [],
-        note: res.note ? String(res.note).trim() : null,
+        // A NOTE THAT IS ONLY ABOUT COMMISSION IS NOISE. Apsara: "Do not
+        // include commission." The prompt says not to mention it and the model
+        // still does, in two of her three real confirmations -- it is the most
+        // salient odd-looking thing in the email, so it keeps getting raised.
+        // It reaches her read-back, not the PDF, so this is noise rather than
+        // a leak; but a read-back that flags the normal case trains her to
+        // skim the one place she is meant to read carefully.
+        //
+        // Dropped only when commission is ALL the note says. A note that also
+        // raises a second price, a unit ambiguity or a shared price still has
+        // something worth checking and survives intact.
+        note: scrubCommissionNote(res.note),
     };
 }
 
@@ -441,7 +464,7 @@ function toProformaDraft(order, { fallbackConsignee } = {}) {
     };
 }
 
-module.exports = { extractOrderFromEmail, toProformaDraft, groundRates, buildOrderPrompt, applyStandardQuantities, containerCountFromText, RATE_TRUST, 
+module.exports = { extractOrderFromEmail, toProformaDraft, groundRates, buildOrderPrompt, applyStandardQuantities, containerCountFromText, scrubCommissionNote, RATE_TRUST, 
     // Exported for tests ONLY. The enum inside it is what silently lost Joey's
     // order: a rate_basis the schema does not allow fails validation three
     // times and the whole extraction returns nothing. A unit test against
