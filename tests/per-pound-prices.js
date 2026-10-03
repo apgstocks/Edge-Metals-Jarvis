@@ -42,8 +42,20 @@
     ck2('PL8 the SCHEMA accepts per_lb (the model really answers this)',
         !!schema && schema.safeParse(live).success,
         schema ? JSON.stringify(schema.safeParse(live).error && schema.safeParse(live).error.issues) : 'zod missing');
-    ck2('PL9 and still rejects a basis nobody defined',
-        !schema || !schema.safeParse({ ...live, items: [{ ...live.items[0], rate_basis: 'per_banana' }] }).success);
+    // REWRITTEN 2026-10-03, same day it was written. The first version
+    // asserted the schema REJECTS an unknown basis, and the live audit then
+    // showed rejection is the wrong behaviour: a third value I had not
+    // enumerated killed the whole extraction three attempts deep. An order
+    // lost is worse than a basis lost. What must hold is that an unrecognised
+    // basis cannot PRICE anything.
+    const odd = { ...live, items: [{ ...live.items[0], rate_basis: 'per_banana' }] };
+    ck2('PL9 an unrecognised basis does NOT destroy the order',
+        !schema || schema.safeParse(odd).success,
+        schema ? JSON.stringify(schema.safeParse(odd).error && schema.safeParse(odd).error.issues) : 'zod missing');
+    const oddDraft = toProformaDraft({ consignee: 'X', container_count: 1,
+        items: [{ desc: 'Chrome wheels', qty: 21, rate: 0.42, rate_confidence: 0.9, rate_basis: 'per_banana' }] }, {});
+    ck2('PL9b but it can never price a line either', oddDraft.items[0].rate === 0
+        && (oddDraft.needs || []).includes('rate'), JSON.stringify(oddDraft.needs));
     ck2('PL10 the prompt tells the model per_lb is an option',
         /per_lb/.test(require(require('path').join(__dirname, '..', 'helpers/proformaFromEmail.js')).buildOrderPrompt(
             { from: 'a@b.com', subject: 's', body: 'b', date: null })));

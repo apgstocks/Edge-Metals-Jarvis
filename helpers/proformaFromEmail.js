@@ -66,7 +66,19 @@ try {
             // basis error, it MANUFACTURES one. She buys domestic scrap by the
             // pound and exports by the tonne, so per-lb is her normal case,
             // not an edge.
-            rate_basis: z.enum(['per_mt', 'per_lb', 'per_lot', 'unknown']).optional().default('unknown'),
+            // A STRING, NOT AN ENUM, AND THAT IS THE REAL LESSON HERE.
+            // Adding 'per_lb' fixed the case I had measured and the audit
+            // immediately threw a THIRD value I had not: the whole extraction
+            // still died three attempts deep on
+            //   "expected one of per_mt|per_lb|per_lot|unknown".
+            // An enum on a free-text field the model fills is a tripwire --
+            // every vocabulary she or a counterparty uses that I have not
+            // enumerated destroys the entire order rather than degrading one
+            // field. The whitelist in extractOrderFromEmail already maps
+            // anything unrecognised to 'unknown', which blocks the rate from
+            // pricing. That is the correct failure: lose the basis, keep the
+            // order.
+            rate_basis: z.string().optional().default('unknown'),
         })).optional().default([]),
         missing: z.array(z.string()).optional().default([]),
         note: z.string().nullable().optional().default(null),
@@ -187,12 +199,26 @@ function applyStandardQuantities(items) {
     return items.map((it) => {
         if (it.qty != null) return { ...it, qty_assumed: false };
         let qty = null;
+        let why = null;
+        // ORDER MATTERS. The PAIR rule wins over history, because history is
+        // measured from SINGLE-material containers: "Al Combo loads 22.65 MT"
+        // is true on its own and wrong for a box sharing with steel combo.
         if (pairLoad && isAlCombo(it.desc)) qty = 13;
         else if (pairLoad && isSteelCombo(it.desc)) qty = 9;
+        // HER OWN INVOICES, next. Attached by groundRates (see
+        // helpers/loadingHistory.js). This is the answer to "All these would
+        // be saved in jarvis memory" -- it IS remembered, from 759 invoice
+        // rows, per material, rather than from one number generalised to all.
+        else if (it.standard_qty != null && items.length === 1) {
+            qty = it.standard_qty;
+            why = it.standard_qty_reason || null;
+        }
         // 21 only when auto cast is the whole load — an auto-cast line sharing
-        // a container with something else is not the 21 MT pattern.
+        // a container with something else is not the 21 MT pattern. Kept as
+        // the fallback for when the sheet cannot be read at all; history
+        // independently measures this material at 21.9-22.1 MT.
         else if (isAutoCast(it.desc) && items.length === 1) qty = 21;
-        return { ...it, qty, qty_assumed: qty != null };
+        return { ...it, qty, qty_assumed: qty != null, qty_reason: why };
     });
 }
 
@@ -207,10 +233,38 @@ function applyStandardQuantities(items) {
 // ordinary rate.
 async function groundRates(order) {
     const { judgeRate } = require('./ratePlausibility');
+    const { standardLoadFor } = require('./loadingHistory');
     const items = [];
     for (const it of (order.items || [])) {
-        const j = await judgeRate(it.desc, it.rate, it.rate_basis).catch(() => null);
-        items.push(j ? { ...it, rate_basis: j.basis, rate_reason: j.reason } : it);
+        // CONVERT BEFORE JUDGING, and this ordering was a bug the first time.
+        // judgeRate OVERWRITES rate_basis with its own verdict, so a per_lb
+        // figure arrived at toProformaDraft already relabelled 'unknown' and
+        // the conversion never fired -- meaning the per-lb fix worked only for
+        // materials with NO price history, the exact opposite of what is
+        // wanted. Converting here also means history grounding compares a
+        // per-MT figure against per-MT invoices, which is the only comparison
+        // that means anything.
+        let pre = { ...it };
+        if (pre.rate_basis === 'per_lb' && pre.rate != null) {
+            pre.rate_converted_from_lb = Number(pre.rate);
+            pre.rate = Math.round(Number(pre.rate) * 2204.62 * 100) / 100;
+            pre.rate_basis = 'per_mt';
+        }
+        const j = await judgeRate(pre.desc, pre.rate, pre.rate_basis).catch(() => null);
+        let next = j ? { ...pre, rate_basis: j.basis, rate_reason: j.reason, rate_confirmed: !!j.confirmed } : { ...pre };
+        // THE QUANTITY IS GROUNDED THE SAME WAY THE RATE IS. Done here, in the
+        // async grounding step that both callers already run, so
+        // toProformaDraft stays synchronous -- changing its signature would
+        // have reached workflow/actions.js:8025 and replyWatch.js:3247 and
+        // every test that builds a draft directly.
+        if (next.qty == null) {
+            const load = await standardLoadFor(next.desc).catch(() => null);
+            if (load) {
+                next.standard_qty = load.mt;
+                next.standard_qty_reason = `${load.mt} MT is what ${load.label} has loaded to across ${load.n} past container(s) (${load.min}-${load.max} MT)`;
+            }
+        }
+        items.push(next);
     }
     return { ...order, items };
 }
@@ -246,6 +300,13 @@ function toProformaDraft(order, { fallbackConsignee } = {}) {
         // the coerced 'per_mt' was then trusted. New material + per-lb quote
         // was the live path to a 2,204x underpriced proforma.
         let converted = null;
+        // Already converted upstream by groundRates (the normal production
+        // path). Surface it so it can never be sent without her seeing the
+        // working, but let the grounded figure price the line: the arithmetic
+        // is exact and judgeRate has checked it against her own invoices.
+        if (it.rate_converted_from_lb != null) {
+            assumed.push(`${it.desc}: the email quoted $${it.rate_converted_from_lb}/lb, which is $${it.rate}/MT (x2204.62) — confirm that reading before this goes out`);
+        }
         if (basis === 'per_lb' && it.rate != null) {
             converted = Math.round(Number(it.rate) * 2204.62 * 100) / 100;
             rate = converted;
@@ -256,7 +317,11 @@ function toProformaDraft(order, { fallbackConsignee } = {}) {
         // When history CONFIRMED the rate, say so — a figure checked against 42
         // past invoices is a different thing from one nobody questioned, and
         // she should be able to see which she's looking at.
-        if (trusted && it.rate_reason) grounded.push(it.rate_reason);
+        // Only a reason that CONFIRMS belongs in grounded. "No past per-MT
+        // invoice to check this against" is the opposite of grounding, and
+        // printing it there would show her an absence of evidence as evidence.
+        if (trusted && it.rate_reason && it.rate_confirmed) grounded.push(it.rate_reason);
+        else if (trusted && it.rate_reason) unconfirmed.push(it.rate_reason);
         if (converted != null) {
             assumed.push(`${it.desc}: the email quoted $${it.rate}/lb, which is $${converted}/MT (x2204.62) — confirm that reading before this goes out`);
         }
@@ -274,7 +339,9 @@ function toProformaDraft(order, { fallbackConsignee } = {}) {
         // to 21 MT, which silently turned "the email doesn't say how much"
         // into a priced line on a document going to a customer.
         if (it.qty == null) needs.push('quantity');
-        if (it.qty_assumed) assumed.push(`${it.desc}: ${it.qty} MT assumed from standard container loading — the email didn't say`);
+        if (it.qty_assumed) assumed.push(it.qty_reason
+            ? `${it.desc}: ${it.qty} MT assumed — the email didn't say, and ${it.qty_reason}`
+            : `${it.desc}: ${it.qty} MT assumed from standard container loading — the email didn't say`);
         return { desc: it.desc, qty: it.qty, rate: trusted ? rate : 0, qty_assumed: !!it.qty_assumed };
     });
     if (!items.length) needs.push('material');
