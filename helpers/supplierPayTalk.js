@@ -44,11 +44,22 @@ const str = (v) => String(v == null ? '' : v).trim();
 // ("AAA 1 Metals") and an amount never contains letters beyond k/K.
 const AMOUNT = String.raw`\$?\s*([\d,]+(?:\.\d{1,2})?)\s*(k)?`;
 
+// ── HOW SHE ACTUALLY OPENS THE SENTENCE ──────────────────────────────────
+// First live day, 2026-10-03. "Paid 123456 to drm" worked; "We paid 4000 to
+// Hugo" did not, because the pattern only allowed an optional "I". It fell
+// through to the model, landed on the INVOICE payment intent, and she got
+// "invoiceSheet.listAllInvoices is not a function" twice — a confusing error
+// about a different feature entirely.
+//
+// "payed" is here because she typed it. It is not a word, and correcting her
+// spelling is not the job; reading what she meant is.
+const OPENER = String.raw`^(?:(?:i|we)\s+)?(?:just\s+|already\s+)?(?:paid|payed|pay|sent|gave|transferred|wired)`;
+
 const PATTERNS = [
     // "I paid 10000 advance to Inesh" / "paid $10,000 to Inesh"
-    new RegExp(String.raw`^(?:i\s+)?(?:paid|sent|gave|transferred|wired)\s+${AMOUNT}\s*(advance|adv)?\s*(?:to|for)\s+(.+)$`, 'i'),
+    new RegExp(String.raw`${OPENER}\s+${AMOUNT}\s*(advance|adv)?\s*(?:to|for)\s+(.+)$`, 'i'),
     // "I paid Inesh 10000 advance" — name first
-    new RegExp(String.raw`^(?:i\s+)?(?:paid|sent|gave|transferred|wired)\s+(.+?)\s+${AMOUNT}\s*(advance|adv)?\s*$`, 'i'),
+    new RegExp(String.raw`${OPENER}\s+(.+?)\s+${AMOUNT}\s*(advance|adv)?\s*$`, 'i'),
     // "advance of 5000 to Inesh" / "advance 5000 to Inesh"
     new RegExp(String.raw`^(advance|adv)\s+(?:of\s+)?${AMOUNT}\s*(?:to|for)\s+(.+)$`, 'i'),
 ];
@@ -87,7 +98,19 @@ function parse(text) {
             .replace(SAYS_BILL, '')
             .replace(/\b(advance|adv)\b/gi, '')
             .replace(/\b(today|yesterday|now|just now)\b/gi, '')
-            .replace(/\bby\s+(cash|wire|zelle|cheque|check|bank\s*transfer)\b/gi, '')
+            // ── THE METHOD IS NOT PART OF THE NAME ───────────────────
+            // "Paid 4000 to Hugo via Zelle" asked for a supplier called
+            // "Hugo via Zelle", and so did "Hugo Zelle" and "arturo via
+            // zelle". She says how she sent it in the same breath as who she
+            // sent it to, which is natural, and the name is the one thing
+            // that must not be guessed — so the method is stripped WITH its
+            // connecting word, anywhere in the tail.
+            //
+            // Deliberately narrow: only the four modes the ledger accepts,
+            // and only as whole words. An unfamiliar word stays part of the
+            // name and becomes a question rather than being trimmed away.
+            .replace(/\s*\b(?:by|via|through|thru|using|on)\s+(cash|wire|zelle|cheque|check|bank\s*transfer)\b/gi, '')
+            .replace(/\s+\b(cash|wire|zelle|cheque|check|bank\s*transfer)\b\s*$/gi, '')
             .replace(/\s{2,}/g, ' ')
             .replace(/[.,;:!?]+$/, '')
             .trim();

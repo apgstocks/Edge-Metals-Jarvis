@@ -420,6 +420,19 @@ const GEMINI_MODEL_SMART = process.env.GEMINI_MODEL_SMART || 'gemini-3.8-flash';
 // that each needs its own value.
 const GEMINI_MODEL_CLAIMS = process.env.GEMINI_MODEL_CLAIMS || GEMINI_MODEL_SMART;
 const GEMINI_MODEL_QB     = process.env.GEMINI_MODEL_QB     || GEMINI_MODEL_SMART;
+// ── MONEY GETS THE GOOD MODEL (Apsara, 2026-10-03) ───────────────────────
+// "For payments use advanced gemini."
+//
+// Her first live morning: "We payed $4000 for Hugi" missed the payment regex,
+// went to the classifier on the LEGACY workhorse, and was filed as an invoice
+// payment — she got "invoiceSheet.listAllInvoices is not a function" twice
+// and no payment. A sentence about money being wrongly understood costs more
+// than the model does.
+//
+// Derived from SMART like the others, so there is still ONE place to change
+// the tier. Applied only when the message is about money — see brain.js — so
+// the cheap model keeps handling the ordinary traffic.
+const GEMINI_MODEL_PAY   = process.env.GEMINI_MODEL_PAY   || GEMINI_MODEL_SMART;
 const GEMINI_MODEL_CHAT   = process.env.GEMINI_MODEL_CHAT   || GEMINI_MODEL_SMART;
 const API_PORT       = parseInt(process.env.API_PORT || '8080');
 const API_TOKEN      = process.env.API_TOKEN || '';        // simple bearer token for dashboard API
@@ -811,7 +824,7 @@ const BOOKINGS_MENU = [
 module.exports = {
     COMPANY_NAME,
     ROOT, DATA_DIR, MEMORY_DIR, LOGS_DIR, ...FILES,
-    GEMINI_API_KEY, GEMINI_MODEL, GEMINI_MODEL_SMART, GEMINI_MODEL_CLAIMS, GEMINI_MODEL_QB, GEMINI_MODEL_CHAT,
+    GEMINI_API_KEY, GEMINI_MODEL, GEMINI_MODEL_SMART, GEMINI_MODEL_CLAIMS, GEMINI_MODEL_PAY, GEMINI_MODEL_QB, GEMINI_MODEL_CHAT,
     API_PORT, API_TOKEN, APP_PASSWORD, ADMIN_PASSWORD, STAFF_PASSWORD, JARVIS_PASSWORD, SESSION_PATH,
     PLAID_CLIENT_ID, PLAID_SECRET, PLAID_ENV,
     SUPABASE_URL, SUPABASE_KEY,

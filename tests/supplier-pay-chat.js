@@ -305,6 +305,86 @@ try {
     ck('  and records nothing', bp.list().length === before);
 }
 
+// ── L — THE FIRST LIVE MORNING, 2026-10-03 ────────────────────────────────
+// Four bugs showed up in one WhatsApp transcript. Each one is pinned here
+// with the sentence she actually typed, because a fixture invented to suit
+// the code is the one that passes while the real message breaks.
+{
+    section('L — what the first live morning found');
+
+    const talk = require(path.join(ROOT, 'helpers/supplierPayTalk'));
+
+    // ── 1. SHE DOES NOT START EVERY SENTENCE WITH "PAID" ─────────────────
+    // "We paid 4000 to Hugo" missed the regex, fell through to the
+    // classifier, was read as an INVOICE payment, and returned
+    // "invoiceSheet.listAllInvoices is not a function". Twice. No payment.
+    for (const [text, amount, supplier] of [
+        ['We paid 4000 to Hugo', 4000, 'Hugo'],
+        ['We payed $4000 for Hugi', 4000, 'Hugi'],
+        ['I just paid 500 to Inesh', 500, 'Inesh'],
+    ]) {
+        const p = talk.parse(text);
+        ck(`"${text}" is read`, !!p && p.amount === amount && p.supplier === supplier,
+           JSON.stringify(p));
+    }
+
+    // ── 2. THE METHOD IS NOT PART OF THE NAME ────────────────────────────
+    // "Paid 4000 to Hugo via Zelle" asked for a supplier literally called
+    // "Hugo via Zelle". She says how she sent it in the same breath as who
+    // she sent it to; that is normal, and the NAME is the one thing that
+    // must not be guessed.
+    for (const [text, supplier] of [
+        ['Paid 4000 to Hugo via Zelle', 'Hugo'],
+        ['Paid 4000 to Hugo Zelle', 'Hugo'],
+        ['Paid 246 to arturo via zelle', 'arturo'],
+        ['paid 900 to Mazariegos by wire', 'Mazariegos'],
+    ]) {
+        const p = talk.parse(text);
+        ck(`"${text}" -> "${supplier}"`, !!p && p.supplier === supplier, p && p.supplier);
+    }
+    // And a name that merely CONTAINS a mode word is not butchered.
+    ck('"Cash Metals Inc" survives as a name',
+       (talk.parse('Paid 100 to Cash Metals Inc') || {}).supplier === 'Cash Metals Inc',
+       (talk.parse('Paid 100 to Cash Metals Inc') || {}).supplier);
+
+    // ── 3. A NEW PAYMENT IS NEVER AN ANSWER ──────────────────────────────
+    // THE ONE THAT LOST MONEY. Mid-way through recording $246 to NUR METAL,
+    // Jarvis asked "how did you send it?" and she typed "Paid 123 to Inesh".
+    // That was captured as the answer, re-asked, and the $123 was never
+    // recorded and never mentioned again.
+    const pend = { type: 'await_pay_confirm', parsed: { amount: 246, supplier: 'NUR METAL' } };
+    const d = brain.policyDecide(mk('Paid 123 to Inesh', { pendingAction: pend }));
+    ck('a fresh payment ESCAPES an open question',
+       d && d.intent === 'pay_supplier', JSON.stringify(d && d.intent)
+       + ' — captured as an answer, this is money silently dropped');
+    ck('  carrying the NEW amount, not the pending one',
+       d && d.data && d.data.parsed && d.data.parsed.amount === 123,
+       JSON.stringify(d && d.data && d.data.parsed));
+
+    // The answers themselves must still be answers, or the flow cannot finish.
+    for (const [answer, type] of [['Advance', 'await_pay_kind'], ['Zelle', 'await_pay_confirm'],
+                                  ['Bofa', 'await_pay_bank'], ['1,3', 'await_pay_containers']]) {
+        const a = brain.policyDecide(mk(answer, { pendingAction: { type, parsed: {} } }));
+        ck(`  "${answer}" is still read as an answer`,
+           a && a.intent === 'pay_supplier_answer', JSON.stringify(a && a.intent));
+    }
+
+    // ── 4. MONEY GOES TO THE GOOD MODEL ──────────────────────────────────
+    // "For payments use advanced gemini." The classifier call had no model
+    // argument, so it ran on the legacy workhorse — which is what misread
+    // "We payed $4000 for Hugi" as an invoice payment.
+    const bsrc = fs.readFileSync(path.join(ROOT, 'workflow/brain.js'), 'utf8');
+    ck('the classifier upgrades money messages',
+       /GEMINI_MODEL_PAY/.test(bsrc), 'still on the cheap model for payments');
+    ck('  and still passes the cheap one for everything else',
+       /payOpts = MONEY_ISH\.test/.test(bsrc),
+       'upgrading all 40 call sites is not what she asked for');
+    const cfgM = require(path.join(ROOT, 'config'));
+    ck('  GEMINI_MODEL_PAY derives from SMART, so there is one place to change it',
+       cfgM.GEMINI_MODEL_PAY === cfgM.GEMINI_MODEL_SMART,
+       cfgM.GEMINI_MODEL_PAY + ' vs ' + cfgM.GEMINI_MODEL_SMART);
+}
+
 console.log(`\n  ${pass} passed, ${fail} failed`);
 if (failures.length) { console.log('\n  failed:'); failures.forEach((f) => console.log('    · ' + f)); }
 process.exit(fail ? 1 : 0);

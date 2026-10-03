@@ -241,7 +241,37 @@ const LIST_COMMAND = new RegExp([
     String.raw`^what am i ignoring\??$`,
 ].join('|'), 'i');
 
+// Loose on purpose: a false positive costs a fraction of a cent, a false
+// negative costs a payment.
+const MONEY_ISH = /\$|\b\d[\d,]*(?:\.\d+)?\s*(?:k\b)?|\b(paid|payed|pay|payment|advance|wire|wired|zelle|cheque|check|cash|owe[sd]?|invoice|bill)\b/i;
+
 function detectFreshCommand(ctx) {
+    // ── A NEW PAYMENT IS NEVER AN ANSWER (2026-10-03, live) ─────────────
+    // First morning of the WhatsApp payment flow. Mid-way through recording
+    // $246 to NUR METAL, Jarvis had asked "how did you send it?" and she
+    // typed:
+    //
+    //     Paid 123 to Inesh
+    //
+    // That was a NEW payment. It was captured as the answer to the mode
+    // question, Jarvis said "Sorry — how did you send it?", and the $123 to
+    // Inesh was never recorded and never mentioned again. She had no way to
+    // know it had been swallowed.
+    //
+    // A complete payment sentence — an amount AND a supplier — cannot be the
+    // answer to "advance or bill?", "Zelle, Wire or Cash?" or "which
+    // account?". Those answers are one or two words. So it is routed as a
+    // fresh request here, before any pending block sees it, using the SAME
+    // parser the action uses so the two can never disagree about what counts
+    // as a payment.
+    try {
+        const talk = require('../helpers/supplierPayTalk');
+        const parsed = talk.parse(ctx.text || '');
+        if (parsed && parsed.amount > 0 && parsed.supplier && !/\?\s*$/.test(ctx.text || '')) {
+            return { intent: 'pay_supplier', resolvedBy: 'policy', arbitrate: true, data: { parsed } };
+        }
+    } catch (e) { /* never let a diagnostic break the router */ }
+
     if (LIST_COMMAND.test(String(ctx.text || '').trim())) {
         // Re-routed through the normal grammar below rather than duplicated
         // here: one definition of what "ignore 1" means, not two that drift.
@@ -671,6 +701,9 @@ function policyDecide(ctx) {
     // the pending IS the validation. Reclassifying "1,3" or "advance" from
     // scratch is how an answer to a question Jarvis asked ends up being read
     // as a brand-new request.
+    if (ctx.pendingAction?.type === 'await_pay_reading') {
+        return { intent: 'pay_supplier_answer', resolvedBy: 'policy', data: { answer_text: ctx.text.trim() } };
+    }
     if (ctx.pendingAction?.type === 'await_pay_kind') {
         return { intent: 'pay_supplier_answer', resolvedBy: 'policy', data: { answer_text: ctx.text.trim() } };
     }
@@ -2612,7 +2645,55 @@ const SAFE_ACTIONS = new Set([
 ]);
 
 async function aiDecide(ctx) {
-    const decision = await callGeminiJSON(await buildPrompt(ctx));
+    // ── A SMALL QUESTION FIRST, BEFORE THE BIG ONE ──────────────────────
+    // Apsara, 2026-10-03: "If there is spelling mistake and they say we paid
+    // 4000 for Hugo. I want this to be read by model and comorehend the
+    // meaning. in case of doubt, ask user." — and in the same breath, that
+    // WhatsApp was taking over a minute to answer.
+    //
+    // Those are one problem. buildPrompt below carries every active booking,
+    // the port summary, every trucker and every supplier — tens of thousands
+    // of tokens — to answer "is this a payment?". That is the minute. So a
+    // money-looking message the regex could not read gets a SMALL dedicated
+    // prompt instead: one sentence, four fields, no business context.
+    //
+    // Nothing is recorded from it. It produces the same shape the regex
+    // produces, goes through the same confirm flow, and the supplier is still
+    // matched against her real list — a model that mishears a name must
+    // create a question, never a payment to the wrong person.
+    if (ctx.isManagerOrTeam && !ctx.pendingAction && MONEY_ISH.test(String(ctx.text || ''))) {
+        try {
+            const payAI = require('../helpers/supplierPayAI');
+            const parsed = await payAI.read(ctx.text, {
+                ask: (prompt) => callGeminiJSON(prompt, 1, null,
+                    { model: require('../config').GEMINI_MODEL_PAY }),
+            });
+            if (parsed) {
+                return { intent: 'pay_supplier', resolvedBy: 'policy+model',
+                         arbitrate: true, data: { parsed } };
+            }
+        } catch (e) {
+            // Never let the fast path take the slow path down with it.
+            console.error('[BRAIN] payment pre-read failed, falling through:', e.message);
+        }
+    }
+
+    // ── A SENTENCE ABOUT MONEY GETS THE GOOD MODEL ──────────────────────
+    // Apsara, 2026-10-03: "For payments use advanced gemini."
+    //
+    // This call had no model argument, so it ran on the legacy workhorse
+    // (gemini-2.5-flash-lite). That is what read "We payed $4000 for Hugi",
+    // decided it was an INVOICE payment, and handed her
+    // "invoiceSheet.listAllInvoices is not a function" — twice — while the
+    // $4,000 to a supplier went nowhere.
+    //
+    // Only money messages are upgraded. Everything else stays on the cheap
+    // model, because she asked for the better one "for these things", not for
+    // all forty call sites. The test is deliberately loose: a false positive
+    // costs a fraction of a cent, and a false negative costs a payment.
+    const payOpts = MONEY_ISH.test(String(ctx.text || ''))
+        ? { model: require('../config').GEMINI_MODEL_PAY } : undefined;
+    const decision = await callGeminiJSON(await buildPrompt(ctx), 2, null, payOpts);
     if (!decision) return { action: 'NEED_DATA', confidence: 0, reasoning: 'AI unavailable' };
 
     // Hard guard, not just a prompt instruction — these five represent a

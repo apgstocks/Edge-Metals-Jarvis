@@ -8632,6 +8632,24 @@ async function paySupplier(chatId, parsed, senderName) {
     const bp = require('../helpers/billPayments');
     const bills = require('../helpers/bills');
 
+    // ── WHEN THE MODEL READ IT AND WAS NOT SURE, ASK ─────────────────────
+    // Apsara, 2026-10-03: "in case of doubt, ask user."
+    //
+    // The regex path is certain by construction — it either matched or it did
+    // not. The model path can be half-sure, and a half-sure reading of a
+    // payment is exactly the thing that must not proceed quietly. So its own
+    // doubt is shown back to her in her own words, with what it thought she
+    // meant, before anything else happens.
+    if (parsed && parsed.viaModel && !parsed.confident) {
+        const money = (n) => '$' + Number(n || 0).toLocaleString('en-US',
+            { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+        await setPending(chatId, { type: 'await_pay_reading', parsed });
+        await _send(chatId, `I think you mean: ${money(parsed.amount)} paid to `
+            + `*${parsed.supplier}*.\n\nI am not certain I read that right. Reply *yes* if it `
+            + 'is, or just say it again with the amount and the name.');
+        return { action_taken: 'pay_supplier_confirm_reading' };
+    }
+
     const known = [...new Set(bills.list().map((b) => String(b && b.supplier || '').trim())
         .filter(Boolean))];
     const hit = talk.resolve(parsed.supplier, known);
@@ -8873,6 +8891,16 @@ async function paySupplierAnswer(chatId, pending, answerText, senderName, { isMa
     const p = (pending && pending.parsed) || {};
 
     switch (pending && pending.type) {
+
+    // She confirmed (or corrected) a reading the model was unsure about.
+    case 'await_pay_reading': {
+        await clearPending(chatId);
+        if (/^\s*(yes|yeah|yep|yup|ok|okay|correct|right|sure)\b/i.test(text)) {
+            return paySupplier(chatId, { ...p, confident: true }, senderName);
+        }
+        await _send(chatId, 'Left it. Say it again with the amount and the name and I will read it afresh.');
+        return { action_taken: 'pay_supplier_reading_rejected' };
+    }
 
     // Which of the names Jarvis offered.
     case 'await_pay_supplier': {
