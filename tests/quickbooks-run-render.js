@@ -374,6 +374,90 @@ function mount(extra = '') {
     }
 }
 
+// ── H — CREATE IT IN QUICKBOOKS (#152) ────────────────────────────────────
+// /api/qb/create-party and the client's createParty() have both existed all
+// along. The only way to reach them was: open the party, press "match it",
+// wait for the candidate list to load over the network, then press "create
+// it" INSIDE that dialog. Three steps and a round-trip to tell Jarvis
+// something she already knew when she opened the row.
+//
+// RENDERED, not grepped. tests/quickbooks-page.js checks this page by reading
+// its source, which proves a string exists and not that a button appears —
+// the exact weak assertion CLAUDE.md names. renderDetail builds that line
+// from four branches; only one of them should carry this button.
+{
+    section('H — a direct way to create the party');
+
+    if (JSDOM) {
+        // STATE is a top-level const, so it is not a property of window and
+        // `w.STATE.detail = ...` sets a stray global the page never reads.
+        // Same lesson as the padlock in section G: the assignment has to live
+        // inside the eval, so a setter is appended there.
+        const { w, err } = mount('STATE.unlocked = true;'
+            + 'window.__setDetail = (d) => { STATE.detail = d; };');
+        if (err) { ck('the page runs', false, err.message); }
+        else {
+            // The shape /api/qb/party really returns. The first version passed
+            // a thin object, renderDetail threw partway through, and a
+            // try/catch swallowed it — so the button appeared (drawn early)
+            // while the wiring at the end of the same function never ran, and
+            // the test reported "drawn but not wired" as though it were a
+            // product bug. The catch is gone: if renderDetail throws, this
+            // section should fail loudly rather than mislead.
+            const show = (mapping) => {
+                w.__setDetail({ kind: 'vendor', name: 'Nur Metal', mapping,
+                    totals: { bills: 0, invoices: 0, billsValue: 0, invoicesValue: 0,
+                              payments: 0, advances: 0 },
+                    bills: [], invoices: [], payments: [], advances: [],
+                    journal: [], qbBalance: null });
+                w.renderDetail();
+                return w.document.getElementById('dmap');
+            };
+
+            // UNMATCHED — this is the one case that needs it.
+            let dmap = show({});
+            ck('an unmatched party offers "create it in QuickBooks"',
+               !!w.document.getElementById('makeparty'), dmap && dmap.textContent);
+            ck('  and still offers "match it" beside it',
+               !!w.document.getElementById('remap'),
+               'they answer different questions: match = it IS there under another '
+               + 'spelling; create = it is NOT there');
+
+            // ── AND NOWHERE ELSE ─────────────────────────────────────────
+            // A create button on a party already IN QuickBooks is an invitation
+            // to make a duplicate, which is the one thing the QB Agent spends
+            // its mornings reporting.
+            dmap = show({ qbId: '123', qbName: 'NUR METAL', status: 'exact' });
+            ck('a MATCHED party does not offer it',
+               !w.document.getElementById('makeparty'),
+               'creating a second record for a party already in QuickBooks is how '
+               + 'the duplicates in her agent email get made');
+
+            dmap = show({ status: 'skip', note: 'not a QuickBooks party' });
+            ck('a party marked NOT a QuickBooks party does not offer it',
+               !w.document.getElementById('makeparty'), dmap && dmap.textContent);
+
+            dmap = show({ status: 'new' });
+            ck('one already marked "not in QuickBooks" does not offer it twice',
+               !w.document.getElementById('makeparty'), dmap && dmap.textContent);
+
+            // ── IT IS WIRED, NOT JUST DRAWN ──────────────────────────────
+            // A button with no handler is the failure this suite keeps
+            // finding: it looks finished and does nothing.
+            show({});
+            let asked = null;
+            w.createParty = (kind, name) => { asked = { kind, name }; };
+            w.document.getElementById('makeparty').click();
+            ck('clicking it calls createParty', !!asked, 'drawn but not wired');
+            ck('  with this party\'s kind and name',
+               asked && asked.kind === 'vendor' && asked.name === 'Nur Metal',
+               JSON.stringify(asked));
+
+            w.close();
+        }
+    }
+}
+
 console.log(`\n  ${pass} passed, ${fail} failed`);
 if (failures.length) { console.log('\n  failed:'); failures.forEach((f) => console.log('    · ' + f)); }
 process.exit(fail ? 1 : 0);

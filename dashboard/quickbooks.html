@@ -1079,7 +1079,25 @@ function renderDetail() {
       ? `not a QuickBooks party — ${mp.note || 'you marked it as not one'} · <button class="act" id="remap">change</button>`
       : mp.status === 'new'
         ? `you marked this as not in QuickBooks · <button class="act" id="remap">change</button>`
-        : `<span style="color:var(--red-500)">no QuickBooks match yet</span> · <button class="act" id="remap">match it</button>`;
+        // ── AND A WAY TO CREATE IT (2026-10-03, #152) ──────────────────
+        // /api/qb/create-party has existed all along, and so has
+        // createParty() below. The only way to reach either was: open the
+        // party, press "match it", wait for the candidate list to load, then
+        // press "create it in QuickBooks" inside that dialog. Three steps and
+        // a network round-trip to tell Jarvis something she already knew
+        // when she opened the row.
+        //
+        // The two are different answers to different questions, so they sit
+        // side by side rather than one inside the other:
+        //   match it   — it IS in QuickBooks, under some other spelling
+        //   create it  — it is NOT in QuickBooks, put it there
+        //
+        // Still never automatic. createParty asks for the QuickBooks name and
+        // the contact, and the route refuses to make a twin — Jarvis does not
+        // invent a party in her books, she does.
+        : `<span style="color:var(--red-500)">no QuickBooks match yet</span>`
+          + ` · <button class="act" id="remap">match it</button>`
+          + ` · <button class="act" id="makeparty" title="It is not in QuickBooks — add it">create it in QuickBooks</button>`;
   const gap = (d.qbBalance !== null && d.qbBalance !== undefined) ? null : null;
   $('dstats').innerHTML = [
     d.kind === 'vendor' ? ['Bills', money(t.bills), ''] : ['Invoices', money(t.invoices), ''],
@@ -1095,6 +1113,10 @@ function renderDetail() {
   $('dtabs').innerHTML = tabs.map(([id, label, n]) => `<button data-tab="${id}" class="${STATE.tab === id ? 'sel' : ''}">${label}<span class="count">${n}</span></button>`).join('');
   [...$('dtabs').querySelectorAll('button')].forEach(b => b.onclick = () => { STATE.tab = b.dataset.tab; renderDetail(); });
   const rm = $('remap'); if (rm) rm.onclick = remap;
+  // Same idiom as remap: the element only exists on an unmatched party, so
+  // it is looked up and guarded rather than assumed.
+  const mk = $('makeparty');
+  if (mk) mk.onclick = () => createParty(STATE.detail.kind, STATE.detail.name);
   const mg = $('mergeit'); if (mg) mg.onclick = mergeParty;
   renderTable();
 }
