@@ -57,14 +57,18 @@ const TODAY = [
     {
         signature: 'invoicesheet-listallinvoices-missing',
         title: 'invoiceSheet.listAllInvoices does not exist, and receivables.js still calls it',
-        area: 'invoice', severity: 'high', source: 'jarvis', status: 'open',
+        area: 'invoice', severity: 'high', source: 'jarvis', status: 'fixed',
         detail: 'helpers/receivables.js:204 calls invoiceSheet.listAllInvoices(). The '
             + 'function was deleted by commit 8dc3495 ("INV BY INV NO") and never restored — '
             + 'this is the deletion CLAUDE.md records as the reason '
             + 'scripts/check-action-wiring.js exists.\n\nShe hit it twice this morning as '
             + '"Couldn\'t record that: invoiceSheet.listAllInvoices is not a function". Any '
-            + 'path reaching receivables will hit it. NOT FIXED — needs the function back or '
-            + 'the caller changed, and that is a decision about what receivables should read.',
+            + 'path reaching receivables will hit it.\n\nFIXED: listAllInvoices is back, '
+            + 'and it is the one-row-per-INVOICE shape receivables needs rather than one row '
+            + 'per container — per-container rows would make it subtract the whole payment '
+            + 'from each and report the invoice as wildly overpaid. tests/invoice-list-all.js '
+            + 'checks the arithmetic against her per-line rounding rule, not against whatever '
+            + 'the function returns.',
     },
     {
         signature: 'whatsapp-slow-classifier-2026-10-03',
@@ -81,23 +85,33 @@ const TODAY = [
     {
         signature: 'healthz-503-on-backup-warning',
         title: '/healthz returns 503 because a backup is incomplete',
-        area: 'other', severity: 'normal', source: 'jarvis', status: 'open',
+        area: 'other', severity: 'normal', source: 'jarvis', status: 'fixed',
         detail: '/healthz returns 503 on ANY problem, and the backup check pushes '
             + '"backup_incomplete" into that list (introduced 783f4d2). A missing backup '
             + 'file is serious but it is not "this server cannot serve requests".\n\n'
             + 'Harmless today because nothing health-checks that route. The day anything '
             + 'does — a load balancer, an uptime monitor — an incomplete backup would pull '
-            + 'the whole site out of service. Should be 503 for "cannot serve", '
-            + '200-with-warnings for everything else.',
+            + 'the whole site out of service.\n\nFIXED: backup_incomplete is gone, replaced '
+            + 'by backup_store_vanished, which is a real alarm and no longer sits in the 503 '
+            + 'list. A missing backup file is serious and it is not "this server cannot '
+            + 'serve requests".',
     },
     {
-        signature: 'backup-missing-yard-stores',
-        title: 'yard_claims.json and trucker_bills.json are not in the nightly backup',
-        area: 'other', severity: 'blocker', source: 'jarvis', status: 'open',
-        detail: 'The nightly archive reports: MISSING sales_receipts.json, '
-            + 'trucker_bills.json, yard_claims.json.\n\nThis is the Edge Yard data she asked '
-            + 'to be protected "no matter what". If the VM were lost tonight those three '
-            + 'stores do not come back. Found by reading /healthz, not by anyone being told.',
+        signature: 'backup-missing-cannot-tell-vanished-from-unused',
+        title: 'The backup alarm could not tell a VANISHED store from one never written yet',
+        area: 'other', severity: 'high', source: 'jarvis', status: 'fixed',
+        detail: 'FILED AS A FALSE ALARM OF MINE, deliberately, so the next person does not '
+            + 'repeat it. I told her twice and forcefully that yard_claims.json and '
+            + 'trucker_bills.json were not being backed up and would not come back if the VM '
+            + 'were lost. That was WRONG, and I had to retract it.\n\nThe real defect was in '
+            + 'the check: critical_missing could not distinguish "this store existed and is '
+            + 'now gone" from "this store has never been written" — a fresh data directory '
+            + 'reports 11 missing. So the alarm fired on normal state and said something '
+            + 'frightening about her data.\n\nFIXED: seenBefore() + splitMissing(). An '
+            + 'archive records stores_present; a store that was there and is gone raises '
+            + 'critical_vanished (ALARM), one never used is critical_not_yet_used (silent). '
+            + 'Old receipts with no stores_present fall back to EMPTY rather than to '
+            + '"everything is missing". tests/backup-watch.js, 77 checks.',
     },
     {
         signature: 'phone-cannot-reach-jarvis-2026-10-03',
@@ -113,6 +127,38 @@ const TODAY = [
             + 'HTTP/3 was declared the fix and was not.\n\nSTILL UNKNOWN. Next facts needed: '
             + 'does the phone BROWSER load https://jarvis.edgemetals.com/healthz, and is '
             + 'Android Private DNS set on that phone.',
+    },
+    {
+        signature: 'metals-payment-delete-unreachable-2026-10-03',
+        title: 'Jarvis could delete Edge Metals trucking and sale-cost payments — with no button anywhere',
+        area: 'other', severity: 'high', source: 'her', status: 'fixed',
+        detail: 'She asked for the Jarvis profile to be able to delete Edge Metals '
+            + 'payments. It already could: all four ledgers have a requireSuper DELETE '
+            + 'route that unwinds the mirrored ledger row and audits itself. Two of them '
+            + 'had no caller in either client — DELETE /api/metals-trucking/:id and '
+            + 'DELETE /api/sales-settlements/:id. The Trucking table is built from the '
+            + 'BILLS, so a wrong payment had no row to press anything on; Freight and '
+            + 'Commission listed what was owed and what had been paid, never the payment. '
+            + 'Granted 2026-09-16, unreachable for two and a half weeks.\n\n'
+            + 'FIXED fc7cb08, client-only — both responses already carried the payments.\n\n'
+            + 'THIRD TIME for this shape (2026-09-23 settled-load badge, #152 QuickBooks '
+            + 'create). scripts/check-route-reach.js + tests/route-reach.js now walk from '
+            + 'every guarded mutating route to whether a client calls it, with the method.',
+    },
+    {
+        signature: 'item-aliases-forget-no-screen',
+        title: 'An item alias can be created and never removed — there is no alias screen at all',
+        area: 'other', severity: 'normal', source: 'jarvis', status: 'open',
+        detail: 'POST /api/item-aliases is called from the load form, so she can confirm '
+            + 'that two item descriptions mean the same metal. itemAliases.forget() and '
+            + 'DELETE /api/item-aliases exist and have no caller — and neither does GET '
+            + '/api/item-aliases, the list, so there is no screen showing what has been '
+            + 'remembered.\n\nThe route\'s own comment says source is forced to \'user\' '
+            + 'because "letting one wrong guess be permanent with nobody ever asked" was '
+            + 'the thing being avoided. A wrong answer from HER is now permanent for the '
+            + 'same reason.\n\nA wrong alias merges two metals on inventory and on an '
+            + 'invoice. NOT FIXED: where that screen belongs is her call, not a fix to '
+            + 'apply quietly. Found by scripts/check-route-reach.js.',
     },
     {
         signature: 'two-sessions-one-repo-stash-collision',
