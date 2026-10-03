@@ -89,6 +89,48 @@ case "${1:-status}" in
 set -uo pipefail
 [ -n "${JARVIS_UNLOCKED:-}" ] && exit 0
 GIT_DIR="$(git rev-parse --git-dir 2>/dev/null)" || exit 0
+
+# ── A MUTATION STILL ON DISK MUST NOT BE COMMITTED (#148) ───────────────
+# scripts/mutate.js saves the original to .mutate-restore.json before it
+# breaks a file, so a SIGKILLed run can be repaired — but only by the NEXT
+# mutate.js run, and nothing else in the repo had ever heard of that file.
+# The likeliest next action after an interrupted run is a commit, and a
+# commit of deliberately broken code is the worst outcome available here:
+# the suite goes red somewhere unrelated, or it does not and the break
+# ships.
+#
+# Checked BEFORE the lease, because this is true regardless of who holds
+# what. Fails open on anything unreadable, like everything else here.
+TREE_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || echo '')"
+SIDECAR="$TREE_ROOT/.mutate-restore.json"
+if [ -n "$TREE_ROOT" ] && [ -f "$SIDECAR" ]; then
+    MUT_FILE="$(sed -n 's/.*"file"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$SIDECAR" | head -1)"
+    if [ -n "$MUT_FILE" ]; then
+        STAGED_IT=""
+        git diff --cached --name-only 2>/dev/null | grep -qxF "$MUT_FILE" && STAGED_IT=yes
+        cat >&2 <<MSG
+
+  ┌─ A MUTATION IS STILL ON DISK ────────────────────────────────────────┐
+
+    $MUT_FILE was broken on purpose by scripts/mutate.js and a killed
+    run never put it back.
+$( [ -n "$STAGED_IT" ] && echo "
+    IT IS STAGED IN THIS COMMIT." )
+    Put it back first — either repairs it:
+
+      node scripts/mutate.js --list
+      git checkout -- $MUT_FILE
+
+  └──────────────────────────────────────────────────────────────────────┘
+
+MSG
+        # Staged -> refuse. Not staged -> warned, and allowed, because the
+        # commit may be unrelated and blocking it would wedge the tree over
+        # a file nobody is touching.
+        [ -n "$STAGED_IT" ] && exit 1
+    fi
+fi
+
 LOCK="$GIT_DIR/jarvis-tree.lock"
 [ -d "$LOCK" ] || exit 0
 TTL=1200

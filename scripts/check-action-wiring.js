@@ -21,6 +21,48 @@ const fs = require('fs');
 const path = require('path');
 
 const ROOT = path.join(__dirname, '..');
+
+// ── IS THERE A MUTATION STILL ON DISK? (#148, 2026-10-03) ────────────────
+// scripts/mutate.js writes the original to .mutate-restore.json BEFORE it
+// edits a file, so a run that is SIGKILLed can be repaired. It repairs itself
+// on its NEXT invocation — and that was the whole protection. Nothing else in
+// the repo had ever heard of that file: `grep -r mutate-restore` found it in
+// mutate.js and in .gitignore, nowhere else.
+//
+// So between the kill and the next mutation run, the tree carries code that
+// was deliberately broken and nobody is told. mutate.js's own header records
+// what that costs: "both times the next thing to fail was something
+// unrelated" — a suite reporting confusing failures in files nobody touched.
+//
+// This runs FIRST on `npm test`, which makes it the right place to say so:
+// better to refuse the suite in one line than to let 227 files argue with a
+// mutation. Named here rather than imported, because mutate.js is 3,949 lines
+// that build a client and must not be loaded to answer a one-line question.
+{
+    const SIDECAR = path.join(ROOT, '.mutate-restore.json');
+    try {
+        if (fs.existsSync(SIDECAR)) {
+            const s = JSON.parse(fs.readFileSync(SIDECAR, 'utf8'));
+            if (s && s.file) {
+                console.error(`\n✗ ${s.file} IS STILL MUTATED — a mutation run was killed.\n`);
+                console.error(`  killed during: ${s.mutation || '(unrecorded)'}`);
+                console.error('  The suite would now be testing deliberately broken code, and the');
+                console.error('  failures would point at files nobody touched.\n');
+                console.error('  Repair it, either way:');
+                console.error('    node scripts/mutate.js --list        (restores, then prints the catalogue)');
+                console.error(`    git checkout -- ${s.file}\n`);
+                process.exit(1);
+            }
+        }
+    } catch (e) {
+        // FAILS OPEN. An unreadable or half-written sidecar must not be able
+        // to stop the suite running — that would be a worse failure than the
+        // one being guarded against, and this check is not the point of the
+        // file it lives in.
+        console.warn('  (could not read .mutate-restore.json:', e.message + ')');
+    }
+}
+
 const brainSrc = fs.readFileSync(path.join(ROOT, 'workflow/brain.js'), 'utf8');
 const actions = require(path.join(ROOT, 'workflow/actions.js'));
 
