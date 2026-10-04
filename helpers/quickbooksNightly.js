@@ -98,7 +98,41 @@ function reportText(out) {
             .filter((k) => la[k]).map((k) => `${la[k]} ${k}${la[k] === 1 ? '' : 's'}`).join(', ');
         lines.push('', `OLDER THAN THE CUTOVER — ${s.left} record(s) were not touched: ${byKind}.`);
         if (la.from) lines.push(`  dated ${la.from}${la.to && la.to !== la.from ? ` to ${la.to}` : ''}`);
-        for (const [why, n] of Object.entries(la.why || {})) lines.push(`  ${n} — ${why}`);
+        // ── ONE LINE PER REASON, NOT PER DATE (2026-10-04) ───────────────
+        // This printed one line for every distinct `why` string, and
+        // push.js builds that string as
+        //   `${kind} dated ${d} is before the locked period (${c}) — …`
+        // with the DATE inside it. So every date became its own key and the
+        // 4 October email carried about 350 lines, each saying "she closed
+        // that period deliberately", for a fact that needs saying once.
+        //
+        // It is not a cosmetic complaint: the 24 STUCK rows — the only part
+        // of that email anyone can act on — were below all of it. A report
+        // nobody scrolls to the end of has lost the argument.
+        //
+        // Grouped by the reason with the date lifted out, counts summed, and
+        // the span shown. Display only; la.why is untouched for anything
+        // else reading it.
+        const grouped = new Map();
+        for (const [why, n] of Object.entries(la.why || {})) {
+            const m = /^(\w+) dated (\d{4}-\d{2}-\d{2}) (.*)$/.exec(why);
+            const key = m ? `${m[1]} ${m[3]}` : why;
+            const g = grouped.get(key) || { n: 0, dates: [] };
+            g.n += n;
+            if (m) g.dates.push(m[2]);
+            grouped.set(key, g);
+        }
+        for (const [why, g] of grouped) {
+            const span = g.dates.length
+                ? (() => {
+                    const d = g.dates.slice().sort();
+                    const first = d[0]; const last = d[d.length - 1];
+                    return ` — ${g.dates.length} date${g.dates.length === 1 ? '' : 's'}`
+                        + (first === last ? ` (${first})` : ` from ${first} to ${last}`);
+                })()
+                : '';
+            lines.push(`  ${g.n} — ${why}${span}`);
+        }
     }
     const cut = { bills: push.cutoverFor('bill', out.env), invoices: push.cutoverFor('invoice', out.env) };
     const src = (k) => {

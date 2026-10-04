@@ -249,8 +249,35 @@ function reportText(out) {
 
     L.push('WHERE THE BOOKS ARE NOT YET RIGHT');
     const line = (label, n, extra) => L.push(`  ${label}: ${money(n)}${extra ? ` — ${extra}` : ''}`);
-    if (inv.unallocated) line('Payments sitting on no bill', inv.unallocated.number,
-        `${inv.unallocated.count} payments; worst ${(inv.unallocated.worst || []).slice(0, 3).map((w) => `${w.party} ${money(w.amount)}`).join(', ')}`);
+    // ── WHAT IS LEFT, NOT WHAT WAS THERE BEFORE THIS RUN (2026-10-04) ────
+    // survey() is called ONCE, above the action loop, and this section read
+    // it straight. So on 4 October the email said
+    //
+    //    Placed $312,640.87 across 10 payments.
+    //    ...
+    //    Payments sitting on no bill: $312,640.87 — 10 payments
+    //
+    // the same money, to the cent, reported as done and as outstanding in
+    // one email. Nothing was wrong in QuickBooks: the agent had placed them
+    // and this line was quoting the state from before it did.
+    //
+    // Re-surveying would cost another sweep of her books for a figure that
+    // is already known — `did` says exactly what was placed — so it is
+    // subtracted instead, and the pre-run figure is kept visible so the run
+    // can be seen to have done something.
+    if (inv.unallocated) {
+        const placed = (did && did.placed) || 0;
+        const placedCount = (did && did.payments) || 0;
+        const leftMoney = Math.round((inv.unallocated.number - placed) * 100) / 100;
+        const leftCount = Math.max(0, inv.unallocated.count - placedCount);
+        if (leftMoney > 0.005) {
+            line('Payments sitting on no bill', leftMoney,
+                `${leftCount} payments${placed ? `, after the ${money(placed)} this run placed` : ''}`
+                + `; worst ${(inv.unallocated.worst || []).slice(0, 3).map((w) => `${w.party} ${money(w.amount)}`).join(', ')}`);
+        } else if (placed) {
+            L.push(`  Payments sitting on no bill: none left — this run placed all ${money(placed)} of it.`);
+        }
+    }
     if (inv.duplicates) line('Documents doubled', inv.duplicates.number, `${inv.duplicates.count} to look at — a void cannot be undone, so they wait for you`);
     if (inv.miscoded) line('Supplier money in cost of goods', inv.miscoded.number,
         `${inv.miscoded.count} cheques; ${inv.miscoded.noPayee.count} of them (${money(inv.miscoded.noPayee.money)}) have no payee and will never be guessed`);
@@ -276,9 +303,16 @@ async function emailReport(out, opts = {}) {
     const to = opts.to || process.env.QB_REPORT_TO || process.env.SHEET_SYNC_TO || 'apg0596@gmail.com';
     const when = new Date().toLocaleDateString('en-US', { timeZone: 'America/Los_Angeles' });
     const did = (out.did || []).find((d) => d.id === 'allocate');
-    const left = ((out.survey || {}).invariants || {}).unallocated;
+    // Same correction as reportText's: `left` is the PRE-RUN survey, so the
+    // subject said "$312,640.87 placed, $312,640.87 still loose" about one
+    // pile of money. The subject is the part she reads in a list of unread
+    // mail, so it is the worst place to be wrong by a whole run's work.
+    const surveyed = ((out.survey || {}).invariants || {}).unallocated;
+    const stillLoose = surveyed
+        ? Math.round((surveyed.number - ((did && did.placed) || 0)) * 100) / 100
+        : 0;
     const subject = `QB Agent — ${did && did.placed ? `${money(did.placed)} placed` : 'nothing placed'}`
-        + `${left && left.number ? `, ${money(left.number)} still loose` : ''}${out.dryRun ? ' (dry run)' : ''} — ${when}`;
+        + `${stillLoose > 0.005 ? `, ${money(stillLoose)} still loose` : ''}${out.dryRun ? ' (dry run)' : ''} — ${when}`;
     return require('../gmail').sendEmail({ to, subject, body: reportText(out) });
 }
 
