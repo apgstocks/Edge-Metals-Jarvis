@@ -803,6 +803,33 @@ function mount(app, cfg) {
         } catch (e) { res.status(400).json({ error: e.message }); }
     });
 
+    // ── THE BOOKS, ON DISK, FOR THE QUESTION CHANNEL ───────────────────────
+    // "How much do we owe Inesh" on WhatsApp used to be answered from Jarvis's
+    // own bills ledger. It is answered from her BOOKS now, through a snapshot
+    // the nightly run writes (helpers/quickbooks/snapshot.js) — a phone cannot
+    // wait for 610 bills over the API. This refreshes it on demand and says
+    // how old the current one is.
+    app.get('/api/qb/snapshot', (req, res) => {
+        const snap = require('./snapshot');
+        const s = snap.read();
+        if (!s) return res.json({ snapshot: null, note: 'QuickBooks has never been read for the question channel — POST here to take one' });
+        res.json({ at: s.at, env: s.env, since: s.since, minutes_old: snap.ageMinutes(), totals: s.totals,
+            over_applied: (s.over_applied || []).slice(0, 10) });
+    });
+
+    app.post('/api/qb/snapshot', async (req, res) => {
+        if (locked(req, res)) return;
+        try {
+            const s = await require('./snapshot').write({ env: envOf(),
+                since: /^\d{4}-\d{2}-\d{2}$/.test(String((req.body || {}).since || '')) ? req.body.since : '2026-01-01' });
+            // The mirror keys off the snapshot's mtime, but dropping the cache
+            // here means the next question does not wait for the next rebuild
+            // check to notice.
+            try { require('../data/dataMirror').invalidate(); } catch { /* the mtime still catches it */ }
+            res.json({ ok: true, at: s.at, totals: s.totals });
+        } catch (e) { res.status(502).json({ error: `QuickBooks: ${e.message}` }); }
+    });
+
     // ── CUSTOMER MONEY, PLACED ─────────────────────────────────────────────
     // The mirror of /api/qb/allocate on the receivables side: $131,763.84 is
     // in the bank against no invoice, and every one of those invoices reads
