@@ -45,7 +45,11 @@ const QB_TYPE = { bill: 'Bill', invoice: 'Invoice', billpayment: 'BillPayment', 
 // be possible from the page: "voiding or deleting anything should be there on
 // qb. Ensure the impact before changing any section." Neither can be taken
 // back, so the entry carries the impact she was shown before she said yes.
-const ACTIONS = ['created', 'linked-existing', 'asked', 'blocked', 'undone', 'unlinked', 'discrepancy', 'voided', 'deleted', 'allocated'];
+// 'moved-payable': a bill changed which payable account it sits on
+// (helpers/quickbooks/payables.js). Journalled like any other write because it
+// moves money between two accounts on her balance sheet, and because the undo
+// is the same write in reverse.
+const ACTIONS = ['created', 'linked-existing', 'asked', 'blocked', 'undone', 'unlinked', 'discrepancy', 'voided', 'deleted', 'allocated', 'moved-payable'];
 const round2 = (n) => Math.round(Number(n) * 100) / 100;
 
 // A crash can leave a half-written last line. Appending straight after it
