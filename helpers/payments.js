@@ -1027,6 +1027,14 @@ function paymentSummary(loadId, loadAmount) {
 module.exports = {
     PAYMENT_MODES, YARD_LOAD_MODES, PURCHASE_MODES, modesForKind,
     PAID_VIA, PAID_VIA_BY_KIND, paidViaRequired, paidViaLabel, resolvePaidVia, paidViaOptionsFor,
+    // ── EXPORTED 2026-10-06, for helpers/entities.js ─────────────────────
+    // Purely additive: nothing here changes, and no existing caller sees a
+    // difference. helpers/entities.js needs to know whose books a payments
+    // row belongs to, and this Set is the only place that is decided. It
+    // REQUIRES this rather than keeping its own copy, so that adding a
+    // fourth Edge Metals kind above changes the company statements too —
+    // a second hand-written list would not, and would be wrong silently.
+    EDGE_METALS_KINDS,
     listPayments, paymentsForLoad, addPayment,
     deletePayment, deletePaymentsForLoad, paymentSummary,
     // Supplier prepayments, Edge Yard — see addPrepayment's header for why
