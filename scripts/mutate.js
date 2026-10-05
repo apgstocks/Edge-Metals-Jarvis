@@ -3778,11 +3778,91 @@ for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP']) {
 // clean up after it. I hit exactly that today: a run was killed mid-mutation,
 // I ran `--list`, it printed a tidy catalogue and left workflow/brain.js
 // mutated on disk. Recovery must not be reachable only on the happy path.
+//
+// ── AND --once MUST BE DECIDED BEFORE THIS LINE ──────────────────────────
+// My first version of --once sat BELOW this call, and the "refuse to stack a
+// second mutation on an unrestored one" check could therefore never fire:
+// recoverFromCrash() had already consumed the sidecar and silently restored
+// the first file, so existsSync(SIDECAR) was false by the time the check ran.
+// The second mutation then went ahead on a tree that had just been quietly
+// repaired — which is the same class of bug this whole file exists to stop,
+// written into the fix for it. Caught by running the two commands in a row
+// and reading the output rather than the intention.
+// ── --once / --restore — THE AD-HOC PATH, WITH THE SAFETY ────────────────
+// Everything above protects the CATALOGUE. It does nothing for the way a
+// mutation actually gets written most of the time, which is by hand:
+//
+//     cp helpers/x.js /tmp/x.orig
+//     python3 -c "...replace one line..."
+//     node tests/x.js
+//     cp /tmp/x.orig helpers/x.js
+//
+// That loop has none of this file's protection — no sidecar, so the
+// pre-commit hook cannot see it, and no exit handler, so a timeout leaves
+// the mutation on disk with nothing anywhere recording that it is there. I
+// ran about ninety mutations that way on 2026-10-05 and two of the shell
+// calls timed out; it happened to be between loops rather than inside one.
+//
+// The protection existing is not the point if the unprotected path is the
+// convenient one. So the convenient path gets the protection:
+//
+//   node scripts/mutate.js --once helpers/x.js --find 'a' --to 'b'
+//   node tests/x.js                     # expect RED
+//   node scripts/mutate.js --restore    # always, and the hook catches a miss
+//
+// --once writes the sidecar BEFORE touching the file, verifies the file
+// really changed (a find string that matches nothing is the oldest way to
+// report a survivor that was never tested), and refuses to stack a second
+// mutation on top of an unrestored one.
+const argv = process.argv.slice(2);
+const flag = (name) => { const i = argv.indexOf(name); return i === -1 ? null : argv[i + 1]; };
+
+if (argv.includes('--restore')) {
+    if (!fs.existsSync(SIDECAR)) { console.log('Nothing to restore — no mutation is on disk.'); process.exit(0); }
+    recoverFromCrash();
+    console.log('Restored.');
+    process.exit(0);
+}
+
+if (argv.includes('--once')) {
+    const file = flag('--once');
+    const find = flag('--find');
+    const to = flag('--to');
+    if (!file || find == null || to == null) {
+        console.error('usage: node scripts/mutate.js --once <file> --find <string> --to <string>');
+        process.exit(2);
+    }
+    if (fs.existsSync(SIDECAR)) {
+        let prev = {}; try { prev = JSON.parse(fs.readFileSync(SIDECAR, 'utf8')); } catch (e) {}
+        console.error(`Refusing: ${prev.file || 'a file'} is ALREADY mutated and not restored.`);
+        console.error('Run: node scripts/mutate.js --restore');
+        process.exit(1);
+    }
+    const abs = R(file);
+    if (!fs.existsSync(abs)) { console.error(`no such file: ${file}`); process.exit(1); }
+    const before = fs.readFileSync(abs, 'utf8');
+    const count = before.split(find).length - 1;
+    // AMBIGUITY IS REFUSED. A find string that appears twice means the
+    // mutation lands somewhere other than where it was aimed — which is how
+    // three of my own controls this week hit the wrong function and were
+    // reported as survivors.
+    if (count === 0) { console.error('find string appears 0 times — the mutation would change nothing'); process.exit(1); }
+    if (count > 1) { console.error(`find string appears ${count} times — ambiguous; include more surrounding text`); process.exit(1); }
+    const after = before.replace(find, to);
+    if (after === before) { console.error('replacement produced an identical file'); process.exit(1); }
+    fs.writeFileSync(SIDECAR, JSON.stringify({ file, mutation: `--once ${file}`, original: before, at: new Date().toISOString() }));
+    fs.writeFileSync(abs, after);
+    console.log(`Mutated ${file}. Run the test, expect RED, then: node scripts/mutate.js --restore`);
+    process.exit(0);
+}
+
 recoverFromCrash();
 
 // ── RUNNING ──────────────────────────────────────────────────────────────
-const only = process.argv.slice(2).filter((a) => !a.startsWith('--'));
-const listOnly = process.argv.includes('--list');
+const only = argv.filter((a) => !a.startsWith('--')
+    // the values belonging to --once/--find/--to are not mutation filters
+    && a !== flag('--once') && a !== flag('--find') && a !== flag('--to'));
+const listOnly = argv.includes('--list');
 const chosen = MUTATIONS.filter((m) => !only.length || only.some((o) => m.name.includes(o) || m.file.includes(o)));
 
 if (listOnly) {
