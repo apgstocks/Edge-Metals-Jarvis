@@ -263,6 +263,49 @@ section('F — the schedule and the Drive side');
        'one rolling file is corrupt the night after a bad write corrupts a store');
 }
 
+// ── THE SENTENCE A PERSON READS ───────────────────────────────────────────
+// critical_missing is the union of vanished + not_yet_used, kept that way on
+// purpose so older readers are unaffected. The metadata split was added and
+// the LOG LINE was not, so the nightly warning on her VM read
+//
+//   [BACKUP] MISSING from this archive: sales_receipts.json,
+//            trucker_bills.json, yard_claims.json
+//
+// every night for three features she had not used yet — which is precisely
+// what the comment above CRITICAL_KEYS said must not happen: the one alarm
+// meaning "a store has vanished" crying wolf until it is ignored. A fix that
+// corrects the data and not the sentence has fixed nothing a human sees.
+{
+    section('the warning distinguishes vanished from never-written');
+
+    const src = fs.readFileSync(path.join(ROOT, 'helpers/backup.js'), 'utf8');
+    const tail = src.slice(src.indexOf('[BACKUP] ${name}'), src.indexOf('return { name, file, meta'));
+
+    ck('the loud line is driven by critical_VANISHED',
+       /critical_vanished[\s\S]{0,200}console\.warn/.test(tail), tail.slice(0, 200));
+    ck('  and says what vanished means, so it cannot be misread',
+       /in a previous archive and gone from this one/.test(tail), tail.slice(0, 300));
+    ck('never-written stores do NOT get a warning',
+       /critical_not_yet_used[\s\S]{0,160}console\.log/.test(tail)
+       && !/critical_not_yet_used[\s\S]{0,160}console\.warn/.test(tail),
+       'a Tuesday must not look like an emergency');
+    ck('  and the quiet line says nothing was lost',
+       /nothing lost/.test(tail), tail);
+
+    // An older archive has no split. It must fall back to the union rather
+    // than going silent — a missing store being quiet because the metadata
+    // shape is old would be a worse bug than the one being fixed.
+    ck('an archive with no split still reports the union',
+       /!archive\._meta\.critical_vanished && archive\._meta\.critical_missing\.length/.test(tail),
+       tail.slice(-400));
+
+    // And the metadata itself still carries all three, for the restore script
+    // and for last week's archives.
+    ck('critical_missing is still the union, so older readers are unchanged',
+       /critical_missing: \[\.\.\.split\.vanished, \.\.\.split\.not_yet_used\]/.test(src),
+       'the compatibility promise above it has to hold');
+}
+
 console.log(`\n  ${pass} passed, ${fail} failed`);
 if (failures.length) { console.log('\n  Failed:'); failures.forEach((f) => console.log('   - ' + f)); }
 try { fs.rmSync(TMP, { recursive: true, force: true }); } catch (e) {}

@@ -33,6 +33,56 @@
 # provider to do this: the MX records for bose@ and apsara@ live there, and
 # Jarvis reads that mailbox. Breaking email to fix a login would be a poor
 # trade. Add the one record where the DNS already is.
+# ── THE REPO COPY NOW MATCHES THE LIVE SERVER — 2026-10-05 ───────────────
+# This file did NOT carry the HTTP/3 fix. It was applied on the VM on
+# 2026-10-03 and never committed here, so a fresh clone plus the documented
+# `sudo cp Caddyfile /etc/caddy/Caddyfile` would have switched HTTP/3 back on
+# and reintroduced the outage. The server was right and the source of truth
+# was wrong, which is the worst way round: the regression would arrive on a
+# rebuild, months later, looking like a new bug.
+#
+# Copied from docs/cloudflare-runbook.md's "THE CURRENT CADDYFILE, AND WHY",
+# which is the record of what is actually running.
+#
+# WHY protocols h1 h2. Caddy advertises HTTP/3 by default over UDP 443 with
+#
+#     alt-svc: h3=":443"; ma=2592000
+#
+# ma=2592000 is THIRTY DAYS and clients cache it. Many wifi and corporate
+# networks pass TCP 443 and silently drop UDP 443, so those clients keep
+# reaching for QUIC and failing while mobile data works. Six theories were
+# checked on 2026-10-02/03 — expired certificate, blocked IP, bad resolver,
+# TLS-intercepting proxy, IP reputation, key type — and this was the only
+# survivor, because it is the only one that can behave differently per
+# network.
+#
+# THE TRAP: turning it off here stops Caddy ADVERTISING it and does nothing
+# about what a client already stored. A browser that cached the
+# advertisement before 2026-10-03 stays broken for up to 30 days — until
+# roughly 2026-11-02 — unless it is restarted or its cache cleared. "I
+# changed it and it did not help" is not evidence the change was wrong.
+#
+# `servers` is a GLOBAL option. I first wrote it inside the site block,
+# which Caddy rejects — that would have failed the config reload and taken
+# the site down to fix a problem the site did not have.
+#
+# key_type rsa2048 is INERT until the certificate is reissued; Caddy keeps a
+# valid one. Kept because the live file has it and this file must not drift
+# from the live file again.
+#
+# Cloudflare was considered and DECLINED, on her reasoning and it is sound:
+# in Full (strict) mode Cloudflare decrypts the traffic, so supplier payments
+# and bank details would cross a third party in plaintext. That objection got
+# STRONGER now that bank matching is in this repo.
+{
+	servers {
+		protocols h1 h2
+	}
+}
+
 jarvis.edgemetals.com {
-	reverse_proxy localhost:8080
+	tls {
+		key_type rsa2048
+	}
+	reverse_proxy 127.0.0.1:8080
 }

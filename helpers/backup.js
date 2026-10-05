@@ -329,7 +329,32 @@ async function runBackup({ keep = 30, now = new Date() } = {}) {
         console.warn('[BACKUP] could not trim old backups:', e.message);
     }
     console.log(`[BACKUP] ${name} — ${archive._meta.store_count} stores, ${body.length} bytes, ${trimmed} old removed`);
-    if (archive._meta.critical_missing.length) {
+    // ── THE SPLIT EXISTS; THIS LINE WAS STILL PRINTING THE UNION ─────────
+    // critical_missing is deliberately the union of vanished + not_yet_used,
+    // so older readers keep working. But this warning — the only part of it a
+    // person ever sees — was printing that union, which is exactly the thing
+    // the comment above CRITICAL_KEYS said must not happen: "it would sit in
+    // critical_missing every single night, so the one alarm that means 'a
+    // store has vanished' would cry wolf until it was ignored".
+    //
+    // It did. On her VM the nightly log has been carrying
+    //   [BACKUP] MISSING from this archive: sales_receipts.json,
+    //            trucker_bills.json, yard_claims.json
+    // for weeks, and those three are features not yet used. The data model
+    // was fixed and the sentence was not, so the alarm stayed worthless.
+    //
+    // VANISHED is the emergency and gets the loud line. Never-written is a
+    // Tuesday and gets a quiet one, phrased so it cannot be read as loss.
+    if (archive._meta.critical_vanished && archive._meta.critical_vanished.length) {
+        console.warn(`[BACKUP] VANISHED — in a previous archive and gone from this one: ${archive._meta.critical_vanished.join(', ')}`);
+    }
+    if (archive._meta.critical_not_yet_used && archive._meta.critical_not_yet_used.length) {
+        console.log(`[BACKUP] not yet used, nothing lost: ${archive._meta.critical_not_yet_used.join(', ')}`);
+    }
+    // An archive written by an older build has no split. Fall back to the
+    // union rather than going silent — a missing store must never be quiet
+    // just because the metadata shape is old.
+    if (!archive._meta.critical_vanished && archive._meta.critical_missing.length) {
         console.warn(`[BACKUP] MISSING from this archive: ${archive._meta.critical_missing.join(', ')}`);
     }
     if (archive._meta.problems.length) {
