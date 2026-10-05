@@ -277,23 +277,45 @@ function settlementRows() {
 // mid-refresh. helpers/quickbooks/snapshot.js writes it; the nightly run and
 // /api/qb/snapshot refresh it; signature() above rebuilds this mirror when it
 // changes. Nothing here is live, and qb_books.minutes_old says how stale.
+// ── A SANDBOX SNAPSHOT MUST NEVER ANSWER A PRODUCTION QUESTION ────────────
+// The snapshot file has one path, and whichever environment wrote it last
+// wins. A sandbox snapshot sitting on the live server would answer "how much
+// do we owe Inesh" with Intuit's sample-company figures, confidently, over
+// WhatsApp. That is the worst failure available here — worse than no answer
+// and worse than a stale one, because nothing about it looks wrong.
+//
+// So the environment is checked, and a mismatch is treated as NO SNAPSHOT
+// with the reason carried through to qb_books.note, where a reply can say it.
 function qbSnap() {
-    try { return require('../quickbooks/snapshot').read() || null; } catch { return null; }
+    try {
+        const s = require('../quickbooks/snapshot').read();
+        if (!s) return null;
+        let env = null;
+        try { env = require('../quickbooks/auth').qbEnv(); } catch { /* no env: trust the file */ }
+        if (env && s.env && String(s.env) !== String(env)) {
+            return { rejected: `the saved books are from ${s.env} but this server is on ${env} — refusing to answer with the wrong company's figures`, env: s.env, at: s.at };
+        }
+        return s;
+    } catch { return null; }
 }
 function qbBillRows() {
     const s = qbSnap();
+    if (s && s.rejected) return [];
     return (s && s.bills ? s.bills : []).map((b) => ({ ...b, as_of: String(s.at).slice(0, 10) }));
 }
 function qbInvoiceRows() {
     const s = qbSnap();
+    if (s && s.rejected) return [];
     return (s && s.invoices ? s.invoices : []).map((i) => ({ ...i, as_of: String(s.at).slice(0, 10) }));
 }
 function qbSupplierRows() {
     const s = qbSnap();
+    if (s && s.rejected) return [];
     return (s && s.suppliers ? s.suppliers : []).map((v) => ({ ...v, as_of: String(s.at).slice(0, 10) }));
 }
 function qbCustomerRows() {
     const s = qbSnap();
+    if (s && s.rejected) return [];
     return (s && s.customers ? s.customers : []).map((c) => ({ ...c, as_of: String(s.at).slice(0, 10) }));
 }
 // One row, so a question can say how old the figures are without a second
@@ -301,12 +323,15 @@ function qbCustomerRows() {
 // table that reads as "you owe nothing".
 function qbBooksRows() {
     const s = qbSnap();
-    if (!s) return [{ as_of: null, minutes_old: null, environment: null, owe: null, owed: null,
-        unapplied_paid: null, unapplied_received: null, bills: null, invoices: null, over_applied: null }];
+    const none = (note) => [{ as_of: null, minutes_old: null, environment: null, owe: null, owed: null,
+        unapplied_paid: null, unapplied_received: null, bills: null, invoices: null, over_applied: null, note }];
+    if (!s) return none('QuickBooks has never been read for the question channel');
+    if (s.rejected) return none(s.rejected);
     const t = s.totals || {};
     return [{ as_of: String(s.at).slice(0, 10), minutes_old: Math.round((Date.now() - Date.parse(s.at)) / 60000),
         environment: s.env || null, owe: t.owe, owed: t.owed, unapplied_paid: t.unapplied_paid,
-        unapplied_received: t.unapplied_received, bills: t.bills, invoices: t.invoices, over_applied: t.over_applied }];
+        unapplied_received: t.unapplied_received, bills: t.bills, invoices: t.invoices, over_applied: t.over_applied,
+        note: null }];
 }
 
 const TABLES = {

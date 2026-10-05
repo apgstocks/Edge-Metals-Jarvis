@@ -37,7 +37,7 @@ ck('...and qb_books says as_of is NULL, which is how a reply can say "never read
 // ── a snapshot on disk ────────────────────────────────────────────────────
 const AT = new Date(Date.now() - 90 * 60000).toISOString();
 fs.writeFileSync(process.env.QB_SNAPSHOT_FILE, JSON.stringify({
-    at: AT, env: 'production', since: '2026-01-01',
+    at: AT, env: 'sandbox', since: '2026-01-01',
     bills: [
         { qb_id: '1', doc_no: 'MID-1', date: '2026-03-01', supplier: 'Midland Metals', container_no: 'HMMU7010335', containers: 1, total: 16248, balance: 16248, payable_account: 'Vendor Payable', paid_by: 0 },
         { qb_id: '2', doc_no: 'MID-2', date: '2026-03-02', supplier: 'Midland Metals', container_no: 'TRHU1969614', containers: 1, total: 20000, balance: 0, payable_account: 'Vendor Payable', paid_by: 1 },
@@ -63,7 +63,7 @@ mirror.invalidate();
 const built = mirror.ensure({ force: true });
 const q = (sql) => { const r = engine.query(built.file, sql); return (r && r.rows) ? r.rows : r; };
 
-ck('the snapshot is read back', !!snap.read() && snap.read().env === 'production');
+ck('the snapshot is read back', !!snap.read() && snap.read().env === 'sandbox');
 ck('its age is reported in minutes, so an answer can say how stale it is',
    snap.ageMinutes() >= 89 && snap.ageMinutes() <= 91, snap.ageMinutes());
 ck('the mirror loads every qb table',
@@ -185,6 +185,30 @@ const MUST_REACH = [
 const missed = MUST_REACH.filter(([q, need]) => !schemaPick.pick(q, catalog).includes(need));
 ck(`every one of ${MUST_REACH.length} real questions still reaches the table its answer needs`,
    missed.length === 0, missed.map(([q, n]) => `${q} -> ${n}`));
+
+// ── A SANDBOX SNAPSHOT MUST NEVER ANSWER A PRODUCTION QUESTION ────────────
+// One file path, and whichever environment wrote it last wins. A sandbox
+// snapshot on the live server would answer "how much do we owe Inesh" with
+// Intuit's sample-company figures, confidently, over WhatsApp — worse than no
+// answer and worse than a stale one, because nothing about it looks wrong.
+const envWas = process.env.QB_ENV;
+process.env.QB_ENV = 'production';   // the file on disk says sandbox
+mirror.invalidate();
+const crossed = mirror.ensure({ force: true });
+const qx = (sql) => { const r = engine.query(crossed.file, sql); return (r && r.rows) ? r.rows : r; };
+ck('a snapshot from the other environment is REFUSED, not served',
+   crossed.counts.qb_bills === 0 && crossed.counts.qb_suppliers === 0 && crossed.counts.qb_customers === 0, crossed.counts);
+const rej = qx('SELECT as_of, owe, note FROM qb_books')[0];
+ck('...and qb_books carries no figures at all', rej.as_of === null && rej.owe === null, rej);
+ck('...but DOES carry a sentence a reply can say instead of reporting zero',
+   /refusing to answer with the wrong company/.test(rej.note || ''), rej.note);
+if (envWas === undefined) delete process.env.QB_ENV; else process.env.QB_ENV = envWas;
+mirror.invalidate();
+
+const doc = fs.readFileSync(path.join(__dirname, '..', 'scripts', 'qb-doctor.js'), 'utf8');
+ck('the doctor reports the books the question channel reads', /books for WhatsApp/.test(doc));
+ck('...and fails on never-read, wrong-environment and over-36-hours',
+   /NEVER READ/.test(doc) && /but this server is on/.test(doc) && /OLDER THAN 36 HOURS/.test(doc));
 
 try { fs.rmSync(tmp, { recursive: true, force: true }); } catch {}
 console.log(`\nqb-snapshot: ${pass} passed, ${fail} failed`);

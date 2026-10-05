@@ -208,6 +208,7 @@ const TABLES = [
             bills: 'how many bills are in the snapshot',
             invoices: 'how many invoices are in the snapshot',
             over_applied: 'documents with more applied to them than their own value — an anomaly worth naming, not a figure to add up',
+            note: 'why there are no figures, when there are none. NULL when the books were read normally. Say this sentence back rather than reporting zero.',
         },
     },
 ];

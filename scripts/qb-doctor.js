@@ -109,6 +109,35 @@ const exists = (p) => { try { return fs.existsSync(p); } catch { return false; }
                 + (fresh ? `  — ${fresh} of them from the last fortnight, so TONIGHT'S WORK IS BEING SKIPPED` : '  — all older than a fortnight, which is the accountant\'s period'));
     } catch (e) { say(null, 'what the boundary holds back', `could not work it out: ${e.message.slice(0, 50)}`); }
 
+    // ── THE BOOKS THE QUESTION CHANNEL READS ──────────────────────────────
+    // She asks "how much do we owe Inesh" on WhatsApp and that answer comes
+    // from a snapshot of her books on disk, written by the nightly run. Three
+    // ways it goes wrong, and the doctor has been wrong about exactly this
+    // class of thing before (2026-10-02: "Nothing is obviously wrong" while
+    // the cutover sat eight days stale):
+    //   never written  -> every money answer says "I have never read them"
+    //   stale          -> yesterday's figures, quoted all day
+    //   wrong env      -> SANDBOX figures answered on the live server
+    try {
+        const snapshot = require('../helpers/quickbooks/snapshot');
+        const s = snapshot.read();
+        const age = snapshot.ageMinutes();
+        if (!s) {
+            say(false, 'books for WhatsApp', 'NEVER READ — every money question will answer "I have not read your books". The nightly run writes it; take one now with scripts/qb-snapshot.js or POST /api/qb/snapshot');
+        } else if (String(s.env) !== String(env)) {
+            say(false, 'books for WhatsApp', `the snapshot is from ${s.env} but this server is on ${env} — it is REFUSED rather than answering with the wrong company's figures, so money questions have no answer until it is retaken`);
+        } else {
+            const t = s.totals || {};
+            // The nightly run is daily, so past ~36 hours it has not run or it
+            // failed, and nothing else would have said so.
+            const stale = age === null || age > 36 * 60;
+            say(!stale, 'books for WhatsApp',
+                `${t.bills} bills, ${t.invoices} invoices, read ${age} min ago (${s.env})`
+                + ` — owe ${t.owe}, owed ${t.owed}`
+                + (stale ? '  <- OLDER THAN 36 HOURS, so the nightly run has not written it and every answer is quoting figures from before then' : ''));
+        }
+    } catch (e) { say(null, 'books for WhatsApp', `could not work it out: ${e.message.slice(0, 60)}`); }
+
     // ── ROWS DATED AHEAD OF TODAY ─────────────────────────────────────────
     // The rolling boundary (2026-10-02) refuses anything dated after today,
     // where before it would have been entered. If her sheet carries invoices

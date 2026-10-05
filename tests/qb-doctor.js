@@ -31,6 +31,13 @@ ck('...and the doctor fails on one, because she almost certainly did not mean it
 ck('an unmapped role is called out as a write that will block', /a write that needs it will block/.test(src));
 ck('it counts rows dated ahead of today, because those are newly refused',
    /dated after today/.test(src) && /now REFUSED as typos/.test(src));
+// The WhatsApp money answers read a snapshot of her books. Never written,
+// stale, or from the wrong environment are three silent failures, and this
+// doctor has been wrong about exactly that class of thing before.
+ck('it checks the books the question channel reads', /books for WhatsApp/.test(src));
+ck('...and fails when they have never been read', /NEVER READ/.test(src));
+ck('...and when the snapshot is from the wrong environment', /but this server is on \$\{env\}/.test(src));
+ck('...and when the nightly run has stopped writing it', /OLDER THAN 36 HOURS/.test(src));
 
 ck('it reports what the boundary is HOLDING BACK, not just the date',
    /what the boundary holds back/.test(src), 'a cutover that is set is not a cutover that is right');
