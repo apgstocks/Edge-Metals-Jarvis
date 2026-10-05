@@ -1313,6 +1313,26 @@ function start() {
     cron.schedule('0 6 * * *',    () => pricelistFallback().catch(e => console.error('[SCHED] pricelist:', e)), TZ);
     cron.schedule('0 23 * * *',   () => autoArchive().catch(e => console.error('[SCHED] archive:', e)),  TZ);
     cron.schedule('0 7 * * *',    () => nightlyLogDigest().catch(e => console.error('[SCHED] log-digest:', e)), TZ);
+    // ── 05:45 — THE BANK, BEFORE ANY AGENT LOOKS AT IT ───────────────────
+    // Apsara, 2026-10-05: "i should nt struggle at all during tax filing."
+    // The matching screen has a Pull button because a person sometimes wants
+    // one now; this is so she never needs it.
+    //
+    // 05:45 and not 06:00: the 06:30 integrity sweep and the 07:25/07:30
+    // agents all read the ledgers, and a deposit that arrives after them is a
+    // deposit they discussed without knowing about. Banks post overnight, so
+    // by 05:45 yesterday has settled. It also keeps clear of the 06:00
+    // pricelist job rather than sharing a minute with it.
+    //
+    // SILENT WHEN IT WORKS. The exception is the whole reason this is a job
+    // and not a line: if the Plaid item dies, deposits simply stop arriving
+    // and the matching screen looks calm and empty rather than broken.
+    // Nothing else in the system would ever notice, so a dead feed — and a
+    // row the bank withdrew after she had allocated it — do get an email.
+    // See helpers/bankPullJob.js for which failures qualify and why.
+    cron.schedule('45 5 * * *',   () => require('./helpers/bankPullJob').run()
+        .then((r) => { if (r.ran) console.log(`[SCHED] bank-pull: +${r.added} ~${r.modified}${r.sent ? ' (emailed)' : ''}`); })
+        .catch(e => console.error('[SCHED] bank-pull:', e)), TZ);
     // ── THE LEDGERS, CHECKED AGAINST THEMSELVES ──────────────────────────
     // Apsara, 2026-09-26: "Is it possible to run an agent everyday in website
     // to find out any issue or discrepancy?"
