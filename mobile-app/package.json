@@ -7,7 +7,9 @@
     "sync": "cap sync",
     "android": "cap open android",
     "ios": "cap open ios",
-    "build:android": "cd android && ./gradlew assembleDebug"
+    "_comment_build": "ALWAYS SYNC FIRST. 2026-10-05: the client-side network diagnostics built on 10-03 lived in www/ and were never in android/app/src/main/assets/public/, because this script went straight to gradle. The APK on her phone therefore could not report anything, /api/client-errors stayed empty, and we spent two days with no evidence for a bug we had already built the instrument for. cap sync is what copies www into the android project; a build script that skips it ships whatever happens to be sitting there.",
+    "build:android": "npm run sync && cd android && ./gradlew assembleDebug",
+    "build:release": "npm run sync && cd android && ./gradlew assembleRelease"
   },
   "dependencies": {
     "@capacitor-community/speech-recognition": "^6.0.1",
