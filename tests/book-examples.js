@@ -58,13 +58,73 @@ const { book } = require(path.join(ROOT, 'helpers/data/books'));
 // rather than from a result row, because a query that legitimately returns
 // NOTHING on a given dataset still has to have the right shape — and on a
 // fresh fixture store most of these return nothing.
+// ── WHAT A ROW WILL ACTUALLY BE CALLED ───────────────────────────────────
+// This went red on 2026-10-05 against a correct example, which is the worst
+// way for a check to fail — it accuses working code. Two bugs, both from
+// parsing SQL with one regex:
+//
+//   1. /SELECT\s+([\s\S]*?)\s+FROM\s/ is NON-GREEDY, so it stops at the
+//      FIRST " FROM " — and in an example with a correlated subquery that
+//      FROM is INSIDE the subquery. The captured select list was
+//      "b.container_no, ROUND(SUM(b.total), 2) AS cost, (SELECT
+//      ROUND(SUM(i.total), 2)" and the aliases after it, revenue and margin,
+//      were never seen.
+//
+//   2. A qualified column with no alias — b.container_no — matched neither
+//      the "AS x" branch nor the bare-identifier branch, so it returned null
+//      and was dropped. SQLite names that result column container_no.
+//
+// Together they reported "selects [cost]" for SQL that really returns
+// container_no, cost, revenue and margin.
+//
+// The engine cannot be the oracle instead: sqlEngine.query derives `columns`
+// from the rows it got, so an example for a container with no data in the
+// mirror would return no columns at all and this check would false-alarm the
+// other way. So the parser is fixed rather than replaced: find the top-level
+// FROM by PAREN DEPTH, and name a column the way SQLite does.
+function topLevelSelectList(sql) {
+    const s = String(sql);
+    const m = /^\s*SELECT\s+(?:DISTINCT\s+)?/i.exec(s);
+    if (!m) return null;
+    const start = m[0].length;
+    let depth = 0;
+    for (let i = start; i < s.length; i += 1) {
+        const c = s[i];
+        if (c === '(') depth += 1;
+        else if (c === ')') depth -= 1;
+        else if (depth === 0 && /\s/.test(c) && /^from\s/i.test(s.slice(i + 1, i + 6))) {
+            return s.slice(start, i);
+        }
+    }
+    return null;                      // a SELECT with no FROM at all
+}
+
+function splitTopLevel(list) {
+    const out = [];
+    let depth = 0, cur = '';
+    for (const c of list) {
+        if (c === '(') depth += 1;
+        if (c === ')') depth -= 1;
+        if (c === ',' && depth === 0) { out.push(cur); cur = ''; continue; }
+        cur += c;
+    }
+    if (cur.trim()) out.push(cur);
+    return out;
+}
+
 function aliasesOf(sql) {
-    const m = String(sql).match(/^\s*SELECT\s+(?:DISTINCT\s+)?([\s\S]*?)\s+FROM\s/i);
-    if (!m) return [];
-    return m[1].split(/,(?![^()]*\))/).map((p) => {
+    const list = topLevelSelectList(sql);
+    if (list == null) return [];
+    return splitTopLevel(list).map((p) => {
         const t = p.trim();
         const as = t.match(/\sAS\s+([A-Za-z_][A-Za-z0-9_]*)\s*$/i);
         if (as) return as[1].toLowerCase();
+        // No alias: SQLite names the column after the last identifier, so
+        // b.container_no is container_no and a bare name is itself. An
+        // expression with no alias has no stable name and is left out — a
+        // headline cannot rely on one anyway.
+        const qualified = t.match(/^[A-Za-z_][A-Za-z0-9_]*\.([A-Za-z_][A-Za-z0-9_]*)$/);
+        if (qualified) return qualified[1].toLowerCase();
         const bare = t.match(/^([A-Za-z_][A-Za-z0-9_]*)$/);
         return bare ? bare[1].toLowerCase() : null;
     }).filter(Boolean);
