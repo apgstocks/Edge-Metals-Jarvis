@@ -457,9 +457,17 @@ function mount(app, cfg) {
                 .map((role) => ({ role, why: mapping.ACCOUNT_ROLES[role], ...readMapping('account', role) }))
                 .filter((r) => !r.qbId);
             const q = openQuestions(env);
+            // ── WHERE EACH STUCK ROW IS FIXED ────────────────────────────
+            // Computed on the SERVER so the page and the nightly mail cannot
+            // disagree about the same row. The page used to send every stuck
+            // row to openParty() — the supplier's QuickBooks name mapping —
+            // when 21 of the 24 on 4 October were a price missing on a bill,
+            // where the mapping is correct and irrelevant.
+            const { stuckFix } = require('./stuckFix');
+            const withFix = (rows) => rows.map((x) => ({ ...x, fix: stuckFix(x) }));
             res.json({ unmatched, roles,
-                stuck: q.filter((x) => x.action === 'blocked'),
-                asked: q.filter((x) => x.action === 'asked'),
+                stuck: withFix(q.filter((x) => x.action === 'blocked')),
+                asked: withFix(q.filter((x) => x.action === 'asked')),
                 counts: { unmatched: unmatched.length, roles: roles.length,
                     stuck: q.filter((x) => x.action === 'blocked').length,
                     asked: q.filter((x) => x.action === 'asked').length } });

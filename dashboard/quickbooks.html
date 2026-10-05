@@ -340,6 +340,59 @@ async function loadBooks() {
   } catch (e) { $('dbody').innerHTML = `<div class="empty">${e.message}</div>`; }
 }
 
+/* ── A STUCK ROW, AND WHERE IT IS ACTUALLY FIXED ──────────────────────
+   Apsara, 2026-10-05: "Improve jarvis specifically in qb area as of now".
+
+   Every stuck row used to do the same thing on click:
+       openParty(kind, name)   // the supplier's QuickBooks NAME mapping
+   On 4 October, 21 of the 24 were a price missing on a BILL. The mapping was
+   correct and had nothing to do with it; she clicked, landed somewhere fine
+   and irrelevant, and learned nothing. Opening the wrong screen costs more
+   than opening none.
+
+   `fix` comes from the SERVER (helpers/quickbooks/stuckFix.js) so the page
+   and the nightly mail describe a row the same way. There is deliberately no
+   deep link into Bills — dashboard/index.html has no openTab(), so a link
+   would be invented rather than used. It names the destination; it does not
+   pretend to be one. */
+function stuckRow(x) {
+  const f = x.fix || {};
+  const clickable = f.where === 'party' || f.where === 'item';
+  const open = clickable
+    ? ` class="click" data-open="${x.kind === 'invoice' ? 'customer' : 'vendor'}|${encodeURIComponent(x.who || '')}"`
+    : '';
+  // esc() ON EVERY FIELD. Caught by tests/quickbooks-run-render.js section B,
+  // which exists because "Carlos G & C" went into innerHTML raw once already.
+  // These strings are supplier names, container numbers and grade names — all
+  // typed by hand — so a name that looks like markup is an injection through
+  // her own data, and the fix is not to trust the shape of her typing.
+  const where = f.title
+    ? `<span class="pill">${esc(f.title)}</span> <span style="color:var(--text-faint)">${esc(f.detail || '')}</span>`
+    : `<span style="color:var(--text-faint)">${esc(x.why || '')}</span>`;
+  return `<tr${open}><td class="mono">${esc(x.kind)}</td><td>${esc(x.who || '—')}</td>`
+    + `<td class="mono">${esc(x.what || '')}</td><td>${where}</td></tr>`;
+}
+
+/* NINETEEN ROWS, ONE JOB. That morning's list read as nineteen separate
+   failures; it was one — yard grades bought without a price. Shown above the
+   table so the size of the actual job is the first thing on screen. */
+function stuckJobs(rows) {
+  const by = new Map();
+  for (const x of (rows || [])) {
+    const f = x.fix || {};
+    if (!f.where || f.where === 'unknown') continue;
+    const key = `${f.where}|${(f.detail || '').replace(/\d+/g, 'N').replace(/\([^)]*\)/g, '')}`;
+    const g = by.get(key) || { label: f.label || f.title, detail: f.detail, n: 0, where: f.where };
+    g.n += 1;
+    by.set(key, g);
+  }
+  const jobs = [...by.values()].sort((a, b) => b.n - a.n).filter((g) => g.n > 1);
+  if (!jobs.length) return '';
+  return `<div class="sub" style="margin:2px 0 8px">`
+    + jobs.map(g => `<span class="pill" style="margin-right:6px">${g.n}× ${esc(g.label)}</span>`).join('')
+    + `<span style="color:var(--text-faint)">— same fix, same screen</span></div>`;
+}
+
 /* ── HER SHEET AGAINST HER BOOKS ─────────────────────────────────────
    "run qb against my live sheet. if anything is missing, put a entry."
    Read-only: it says what is missing and on which side of the cutover it
@@ -792,7 +845,8 @@ async function loadTodo() {
     if (c.roles) sec.push(`<h3 class="sec">Account roles not set <span class="count">${c.roles}</span></h3>
       <table><tbody>${t.roles.map(r => `<tr class="click" data-role="${r.role}"><td><b>${r.role}</b></td><td>${r.why}</td><td class="r">set it</td></tr>`).join('')}</tbody></table>`);
     if (c.stuck) sec.push(`<h3 class="sec">Stuck — Jarvis would not enter these <span class="count">${c.stuck}</span></h3>
-      <table><tbody>${t.stuck.slice(0, 40).map(x => `<tr class="click" data-open="${x.kind === 'invoice' ? 'customer' : 'vendor'}|${encodeURIComponent(x.who)}"><td class="mono">${x.kind}</td><td>${x.who || '—'}</td><td class="mono">${x.what || ''}</td><td>${x.why}</td></tr>`).join('')}</tbody></table>`);
+      ${stuckJobs(t.stuck)}
+      <table><tbody>${t.stuck.slice(0, 40).map(stuckRow).join('')}</tbody></table>`);
     if (c.asked) sec.push(`<h3 class="sec">Needs you — the same money may already be there <span class="count">${c.asked}</span></h3>
       <table><tbody>${t.asked.slice(0, 40).map(x => `<tr class="click" data-open="${x.kind === 'invoice' ? 'customer' : 'vendor'}|${encodeURIComponent(x.who)}"><td class="mono">${x.kind}</td><td>${x.who || '—'}</td><td class="mono">${x.what || ''}</td><td>${x.why}</td></tr>`).join('')}</tbody></table>`);
     if (c.unmatched) sec.push(`<h3 class="sec">No QuickBooks match yet <span class="count">${c.unmatched}</span></h3>
@@ -971,9 +1025,8 @@ function renderRun(out) {
      and she should not have to learn two layouts for one fact. */
   if ((out.blocked || []).length) {
     sec.push(`<h3 class="sec">Stuck — Jarvis would not enter these <span class="count">${out.blocked.length}</span></h3>
-      <table><tbody>${out.blocked.slice(0, 40).map(b => `<tr class="click" data-open="${b.kind === 'invoice' ? 'customer' : 'vendor'}|${encodeURIComponent(b.who || '')}">
-        <td class="mono">${esc(b.kind)}</td><td>${esc(b.who) || '—'}</td>
-        <td class="mono">${esc(b.what)}</td><td>${esc(b.why)}</td></tr>`).join('')}</tbody></table>`
+      ${stuckJobs(out.blocked)}
+      <table><tbody>${out.blocked.slice(0, 40).map(stuckRow).join('')}</tbody></table>`
       + (out.blocked.length > 40 ? `<div class="sub" style="padding:6px 2px">…and ${out.blocked.length - 40} more. The full list is on "what needs you".</div>` : ''));
   } else if (s.blocked) {
     /* HONEST ABOUT THE GAP. run() only reads the journal for per-row reasons

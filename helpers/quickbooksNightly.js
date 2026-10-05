@@ -57,8 +57,14 @@ async function run(opts = {}) {
                 if (new Date(e.at).getTime() < since) continue;
                 const who = (e.jarvis && (e.jarvis.supplier || e.jarvis.customer)) || '';
                 const what = (e.jarvis && (e.jarvis.container || e.jarvis.id)) || '';
-                if (e.action === 'blocked') out.blocked.push({ kind: e.kind, who, what, why: e.reason || '' });
-                if (e.action === 'asked') out.asked.push({ kind: e.kind, who, what, why: e.reason || '' });
+                // `fix` says WHICH SCREEN answers the reason — see
+                // helpers/quickbooks/stuckFix.js. Attached here as well as on
+                // the route so the mail and the page describe a row the same
+                // way; it is derived, never stored.
+                const { stuckFix } = require('./quickbooks/stuckFix');
+                const row = { kind: e.kind, who, what, why: e.reason || '' };
+                if (e.action === 'blocked') out.blocked.push({ ...row, fix: stuckFix(row) });
+                if (e.action === 'asked') out.asked.push({ ...row, fix: stuckFix(row) });
             }
         }
         out.ok = true;
