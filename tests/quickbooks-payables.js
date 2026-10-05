@@ -10,6 +10,49 @@
 // shrink. Every test here guards that one line.
 const fs = require('fs'), path = require('path');
 process.env.QB_ENV = 'sandbox';
+
+// ── ISOLATION, BEFORE ANYTHING IS REQUIRED ───────────────────────────────
+// Written by me on 2026-10-05 WITHOUT this block, which is how it ended up
+// the only kind of test this repo must never ship: 142 of the other test
+// files set DATA_DIR and these did not, so this one read her real data
+// directory, loaded her real quickbooks-token.sandbox.json, and — once that
+// token aged past its refresh margin — fired a live HTTPS refresh at Intuit
+// with the REAL fetch. getAccessToken defaults fetchImpl to fetch, and the
+// fakeFetch below is passed to the API calls, not to the token path.
+//
+// On SUCCESS that refresh calls writeFileAtomic(tokenFile(env), stored) and
+// overwrites her token file. The failure was also invisible in the normal
+// way: every check printed PASS and the process then exited 1 from an async
+// continuation, which is the exact shape CLAUDE.md section 2 warns about.
+//
+// So: a temp DATA_DIR, a temp QB_TOKEN_FILE holding a token that is nowhere
+// near expiry, and a hard abort if either is not isolated. getAccessToken
+// then returns early and the token path is never reached at all.
+const os = require('os');
+const TMP = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvis-qb-payables-'));
+process.env.DATA_DIR = TMP;
+process.env.JARVIS_TEST = '1';
+process.env.QB_TOKEN_FILE = path.join(TMP, 'quickbooks-token.sandbox.json');
+fs.writeFileSync(process.env.QB_TOKEN_FILE, JSON.stringify({
+    access_token: 'test-access-token', refresh_token: 'test-refresh-token',
+    realmId: '9999999999', env: 'sandbox',
+    // Far future, so no refresh is ever attempted and nothing reaches out.
+    access_expires_at: Date.now() + 365 * 24 * 3600 * 1000,
+    refresh_expires_at: Date.now() + 365 * 24 * 3600 * 1000,
+}));
+{
+    const cfg = require('../config');
+    if (!String(cfg.DATA_DIR).startsWith(TMP)) {
+        console.error('  ABORT  config is not isolated — refusing to run against her real data');
+        process.exit(1);
+    }
+    const auth = require('../helpers/quickbooks/auth');
+    if (!String(auth.tokenFile ? auth.tokenFile('sandbox') : process.env.QB_TOKEN_FILE).startsWith(TMP)) {
+        console.error('  ABORT  the token file is not isolated — refusing to touch her QuickBooks token');
+        process.exit(1);
+    }
+}
+
 let pass = 0, fail = 0; const failures = [];
 const ck = (n, ok, extra) => { if (ok) { pass++; console.log('  PASS ', n); } else { fail++; failures.push(n); console.log('  FAIL ', n, extra === undefined ? '' : String(JSON.stringify(extra)).slice(0, 240)); } };
 

@@ -70,7 +70,55 @@ function writeFileAtomic(file, obj) {
     fs.renameSync(tmp, file);
 }
 
+// ── THE GUARD, AT THE ONE DOOR TO HER TOKEN ──────────────────────────────
+// Apsara's token is the standing ability to read and write her books, and a
+// refresh REPLACES the file — so a test that reaches this does not merely
+// read something private, it can invalidate her connection.
+//
+// On 2026-10-05 two test files I wrote the same day
+// (tests/quickbooks-payables.js, tests/quickbooks-apply-receipts.js) did
+// exactly that: they pinned QB_ENV but not DATA_DIR, loaded her real
+// quickbooks-token.sandbox.json, and once it aged past its refresh margin
+// fired a live HTTPS refresh at Intuit with the real fetch — getAccessToken
+// defaults fetchImpl to fetch, and their fakeFetch was only passed to the
+// API calls. Every check printed PASS and the process exited 1 from the
+// async continuation, which is why it read as flakiness rather than as a
+// test touching her credentials.
+//
+// Same shape as helpers/drive.js: the guard lives at the single door rather
+// than as a stub in each suite where it can be forgotten. Production never
+// sets JARVIS_TEST, so it is inert outside the runner, and a test that
+// legitimately needs a token pins QB_TOKEN_FILE at a temp file — which is
+// the seam that already existed and that these two now use.
+//
+// All fifteen other suites that require a QuickBooks helper were measured
+// against a deliberately unreadable token file and were unaffected, so
+// nothing depended on reading the real one.
+// ── THE CONDITION IS "IS THIS PATH ISOLATED", NOT "IS AN ENV VAR SET" ────
+// My first version refused whenever QB_TOKEN_FILE was unset, and
+// tests/quickbooks-auth.js went red on the first run — correctly isolated,
+// with DATA_DIR in a temp dir, and DELETING QB_TOKEN_FILE on purpose because
+// what it tests is that token files land under DATA_DIR. A guard that fails
+// a properly-written test teaches people to delete the guard.
+//
+// So the question asked is the real one: does this path point somewhere a
+// test created, or at her data? Every suite in this repo isolates with
+// fs.mkdtempSync(os.tmpdir()), and a production DATA_DIR is never under the
+// temp directory, so that is the discriminator. An explicitly pinned
+// QB_TOKEN_FILE under tmp is fine too.
+function assertTokenIsNotHers(env) {
+    if (process.env.JARVIS_TEST !== '1') return;
+    const file = tokenFile(env);
+    const tmp = require('os').tmpdir();
+    if (String(file).startsWith(tmp)) return;       // a temp file a test made
+    throw new Error(
+        `Refusing to read ${file} under JARVIS_TEST — that is her real QuickBooks token, `
+        + 'and a refresh would replace the file and could invalidate her connection. '
+        + 'Point DATA_DIR (or QB_TOKEN_FILE) at a temp directory in the test.');
+}
+
 function loadToken(env = qbEnv()) {
+    assertTokenIsNotHers(env);
     try { return JSON.parse(fs.readFileSync(tokenFile(env), 'utf8')); } catch { return null; }
 }
 
@@ -183,4 +231,10 @@ function status(env = qbEnv(), now = Date.now()) {
     };
 }
 
-module.exports = { qbEnv, credentials, tokenFile, buildAuthUrl, exchangeRedirect, getAccessToken, disconnect, status, toStored, SCOPE };
+module.exports = {
+    qbEnv, credentials, tokenFile, buildAuthUrl, exchangeRedirect, getAccessToken,
+    disconnect, status, toStored, SCOPE,
+    // Exported so a test can prove the guard is armed rather than trusting
+    // the comment above it.
+    assertTokenIsNotHers,
+};
