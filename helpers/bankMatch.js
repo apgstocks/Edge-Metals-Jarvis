@@ -265,9 +265,37 @@ function matchDeposit(deposit, openDocs, opts = {}) {
         const sum = round2(docs.reduce((t, d) => t + openBalance(d), 0));
         const { score, reasons } = scoreProposal({
             docs, deposit, used: Math.abs(round2(amount - sum)), patterns, partialDoc: null });
+        // ── A SHORT PAYMENT IS NOT A ROUNDED-UP ONE ──────────────────────
+        // When a tolerance was used, the difference is REAL money that did
+        // not arrive, and salesReceipts.js already has the right shape for
+        // it: an allocation for what landed plus a deduction classified as
+        // 'bank_charge' or 'discount'. Those are not the same thing — one is
+        // a cost to Edge Metals and the other reduces what was earned, and
+        // that file argues the distinction at length.
+        //
+        // So the shortfall is carried out explicitly rather than absorbed.
+        // My first version only mentioned it in `reasons`, which means the
+        // screen could have shown "to the cent" over a proposal that was
+        // thirty dollars short. The number has to travel with the
+        // allocation, not with the prose about it.
+        const short = Math.round((amount - sum) * -100) / 100;   // >0 when money is missing
         proposals.push({
             kind: docs.length === 1 ? 'exact' : 'combined',
-            allocations: docs.map((d) => ({ doc_id: d.id, label: d.label || d.id, amount: openBalance(d), clears: true })),
+            allocations: docs.map((d, i) => {
+                const bal = openBalance(d);
+                // The whole shortfall goes on the LAST allocation rather than
+                // being split, unless it divides exactly. Splitting $30 across
+                // three invoices gives $10 each and looks tidy, but she has one
+                // bank charge, not three, and three charges is a false
+                // statement about the bank.
+                const mine = i === docs.length - 1 ? short : 0;
+                return {
+                    doc_id: d.id, label: d.label || d.id,
+                    amount: round2(bal - mine),
+                    shortfall: round2(mine) || 0,
+                    clears: true,
+                };
+            }),
             leftover: 0, score, reasons,
         });
     }
@@ -285,8 +313,8 @@ function matchDeposit(deposit, openDocs, opts = {}) {
                 docs: [d], deposit, used: 0, patterns, partialDoc: d });
             proposals.push({
                 kind: 'partial',
-                allocations: [{ doc_id: d.id, label: d.label || d.id, amount, clears: false,
-                    leaves: round2(bal - amount) }],
+                allocations: [{ doc_id: d.id, label: d.label || d.id, amount, shortfall: 0,
+                    clears: false, leaves: round2(bal - amount) }],
                 leftover: 0, score, reasons: reasons.concat(
                     `${round2(bal - amount).toFixed(2)} would still be owed on it`),
             });
@@ -309,9 +337,10 @@ function matchDeposit(deposit, openDocs, opts = {}) {
                     docs: docs.concat([tail]), deposit, used: 0, patterns, partialDoc: tail });
                 proposals.push({
                     kind: 'combined_partial',
-                    allocations: docs.map((d) => ({ doc_id: d.id, label: d.label || d.id, amount: openBalance(d), clears: true }))
-                        .concat([{ doc_id: tail.id, label: tail.label || tail.id, amount: part, clears: false,
-                            leaves: round2(tailBal - part) }]),
+                    allocations: docs.map((d) => ({ doc_id: d.id, label: d.label || d.id,
+                        amount: openBalance(d), shortfall: 0, clears: true }))
+                        .concat([{ doc_id: tail.id, label: tail.label || tail.id, amount: part,
+                            shortfall: 0, clears: false, leaves: round2(tailBal - part) }]),
                     leftover: 0, score: round2(score - 0.1), reasons,
                 });
             }

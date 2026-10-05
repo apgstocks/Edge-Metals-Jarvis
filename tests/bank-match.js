@@ -88,6 +88,52 @@ const ids = (p) => (p ? p.allocations.map((a) => a.doc_id).join('+') : null);
     }
     ck('no proposal ever allocates more than the deposit', over.length === 0, over.join(' ; '));
 
+    // ── ONE-SIDED CHECKS SLEEP THROUGH HALF THE BUG ──────────────────────
+    // The check above only looks for OVER-allocation, and it duly passed
+    // while a combined short payment allocated 39,985 of a 39,970 deposit —
+    // fifteen dollars that existed in no record at all. The property is
+    // EQUALITY: every cent of the deposit lands somewhere, and the invoice
+    // side is accounted for by allocation + shortfall.
+    const mismatched = [];
+    const scenarios = [
+        { amt: 22000, pats: null }, { amt: 47310.22, pats: null },
+        { amt: 21970, pats: { feeAllowance: 30 } },
+        { amt: 39970, pats: { feeAllowance: 30, combines: true } },
+        { amt: 47280.22, pats: { feeAllowance: 30, combines: true } },
+        { amt: 10000, pats: null }, { amt: 7310.22, pats: null },
+    ];
+    for (const sc of scenarios) {
+        const r = m.matchDeposit(dep(sc.amt), DOCS, { ...as('Custom Alloys'), patternsFor: () => sc.pats });
+        for (const p of (r.proposals || [])) {
+            const paid = Math.round(p.allocations.reduce((t, a) => t + a.amount, 0) * 100) / 100;
+            if (Math.abs(paid - sc.amt) > 0.005) mismatched.push(`${sc.amt}: ${ids(p)} paid ${paid}`);
+            // And the invoice side closes: what each document was credited
+            // plus what was written off equals the balance it had.
+            for (const a of p.allocations) {
+                if (!a.clears) continue;
+                const d = DOCS.find((x) => x.id === a.doc_id);
+                const bal = m.openBalance(d);
+                if (Math.abs(a.amount + (a.shortfall || 0) - bal) > 0.005) {
+                    mismatched.push(`${sc.amt}: ${a.doc_id} ${a.amount}+${a.shortfall} != ${bal}`);
+                }
+            }
+        }
+    }
+    ck('  every cent of the deposit is allocated — not a cent more, not a cent less',
+       mismatched.length === 0, mismatched.join(' ; '));
+
+    // The shortfall must be ONE deduction, not one per invoice. She had one
+    // bank charge; three charges of $10 would be a false statement about the
+    // bank, and bankChargesTotal() would report three.
+    const multiShort = m.matchDeposit(dep(47280.22), DOCS,
+        { ...as('Custom Alloys'), patternsFor: () => ({ feeAllowance: 30, combines: true }) });
+    ck('  a shortfall across several invoices is ONE deduction, not split',
+       top(multiShort).allocations.filter((a) => (a.shortfall || 0) > 0).length === 1,
+       JSON.stringify(top(multiShort).allocations.map((a) => a.shortfall)));
+    ck('  and it is the full shortfall',
+       Math.abs(top(multiShort).allocations.reduce((t, a) => t + (a.shortfall || 0), 0) - 30) < 0.005,
+       JSON.stringify(top(multiShort).allocations.map((a) => a.shortfall)));
+
     // Aimed at the ACCEPTANCE test rather than the prune. The suffix-sum
     // prune is only a speed guard: disabling it costs time and changes no
     // answer, which is why mutating it left this file green. What actually
