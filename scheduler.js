@@ -412,8 +412,30 @@ async function nightlyLogDigest() {
     // The FULL list by email. The 15-row cap exists so a terminal stays
     // readable; an email has a scrollbar, and the row she needs is as likely
     // to be the sixteenth as the first.
-    const body = logDigest.render({ day: DAY, dayBefore, d, timings, audit, full: true });
+    let body = logDigest.render({ day: DAY, dayBefore, d, timings, audit, full: true });
     const subject = logDigest.subjectFor(DAY, d);
+
+    // ── WHAT THE PHONES COULD NOT DO (2026-10-05) ────────────────────────
+    // Apsara: "it's working for me. but people in us are facing issue."
+    //
+    // POST /api/client-errors has recorded exactly that since 2026-10-02 and
+    // NOTHING has ever read it — no route, no screen, no job called list(),
+    // summary() or digestText(). The reports were piling up in a file nobody
+    // opened, which is the same fault as a screen nobody can reach: it looks
+    // monitored and is not.
+    //
+    // It goes HERE rather than on a screen because the person who needs it is
+    // asleep in a different timezone from the person who hit the problem, and
+    // a diagnostic she has to remember to open is one she will open after the
+    // next four hours are lost, not before.
+    //
+    // 24 hours to match this digest's own window. Best-effort: a digest that
+    // fails to send because of its newest block helps nobody.
+    try {
+        const ce = require('./helpers/clientErrors');
+        const text = ce.digestText(ce.summary({ hours: 24 }));
+        if (text) body += `\n\n${'='.repeat(62)}\n${text}\n`;
+    } catch (e) { console.warn('[SCHED] log-digest: client errors unreadable:', e.message); }
 
     // ── WHERE IT GOES ────────────────────────────────────────────────────
     // ALERT_EMAIL_TO when it is configured, her own sending address
