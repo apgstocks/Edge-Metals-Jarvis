@@ -77,6 +77,7 @@ h2.sec{font-size:13px;margin:18px 0 8px;color:var(--text-muted);font-family:var(
 </header>
 <main>
   <div id="feednote"></div>
+  <div id="feed"></div>
   <div id="list"><div class="empty">Loading…</div></div>
   <div id="extras"></div>
 </main>
@@ -264,10 +265,67 @@ async function render() {
   renderExtras();
 }
 
+/* ── the feed ──────────────────────────────────────────────────────────
+   Linking is Plaid's own iframe: her bank password is typed into Plaid,
+   never into this server, which is the whole reason to use Link rather
+   than ask for credentials. The script is fetched only when she presses
+   Connect — in the <head> it would mean a CDN outage shows her a blank
+   matching screen, and matching does not need Link at all. */
+const PLAID_LINK_JS = 'https://cdn.plaid.com/link/v2/stable/link-initialize.js';
+function loadPlaidLink() {
+  if (window.Plaid) return Promise.resolve(true);
+  return new Promise((resolve) => {
+    const s = document.createElement('script');
+    s.src = PLAID_LINK_JS;
+    s.onload = () => resolve(!!window.Plaid);
+    s.onerror = () => resolve(false);
+    document.head.appendChild(s);
+  });
+}
+
+async function renderFeed() {
+  let p = null;
+  try { p = await api('/api/plaid/status'); } catch (e) { p = { error: e.message }; }
+  STATE.plaid = p;
+  if (p.error) {
+    $('feed').innerHTML = `<div class="card"><div class="lbl">bank feed</div><div class="note">${esc(p.error)}</div></div>`;
+    return;
+  }
+  const items = p.items || [];
+  const bits = [];
+  bits.push(`<span class="chip ${p.configured ? 'on' : 'warn'}">${p.configured ? 'keys set' : 'no keys'}</span>`);
+  bits.push(`<span class="chip ${p.env === 'production' ? 'on' : 'warn'}">${esc(p.env)}</span>`);
+  bits.push(`<span class="chip ${items.length ? 'on' : 'warn'}">${items.length} bank${items.length === 1 ? '' : 's'} linked</span>`);
+
+  const acts = [];
+  if (p.configured) {
+    acts.push('<button class="btn go" data-plaid="connect">Connect a bank</button>');
+    if (items.length) acts.push('<button class="btn" data-plaid="sync">Pull new transactions</button>');
+    /* Sandbox only. It is how the whole path — link, sync, match, confirm —
+       is provable before Plaid grants production access, which takes a
+       review. The server refuses this outside sandbox. */
+    if (p.env === 'sandbox') acts.push('<button class="btn" data-plaid="sandbox" title="Links a fake bank with made-up transactions, so the whole path can be tried before Plaid approves production">Link a test bank</button>');
+  }
+
+  $('feed').innerHTML = `<div class="card">
+    <div class="row1"><div class="lbl" style="margin-right:6px">bank feed</div>${bits.join('')}</div>
+    ${p.note ? `<div class="note">${esc(p.note)}</div>` : ''}
+    ${items.length ? `<div style="margin-top:8px">${items.map((i) => `<div class="row1" style="margin:3px 0">
+        <span class="desc">${esc(i.institution || 'bank')}</span>
+        <span class="when">${(i.accounts || []).map((a) => esc((a.name || '') + (a.mask ? ' ····' + a.mask : ''))).join(', ')}</span>
+        <span class="when">${i.last_sync_at ? 'pulled ' + esc(String(i.last_sync_at).slice(0, 16).replace('T', ' ')) : 'never pulled'}</span>
+        <button class="btn" data-unlink="${esc(i.item_id)}">Unlink</button>
+      </div>`).join('')}</div>` : ''}
+    <div class="acts">${acts.join('')}</div>
+    ${p.configured ? '' : '<div class="note">Set PLAID_CLIENT_ID and PLAID_SECRET in the server .env — they are on the Plaid dashboard under Developers / Keys.</div>'}
+  </div>`;
+}
+
 async function load() {
   try {
     STATE.data = await api('/api/bank/match');
     await render();
+    renderFeed();
   } catch (e) {
     $('list').innerHTML = `<div class="card"><div class="lbl">could not load</div><div class="note">${esc(e.message)}</div></div>`;
   }
@@ -296,10 +354,63 @@ function showExcluded() {
 }
 
 document.addEventListener('click', async (ev) => {
-  const t = ev.target.closest('[data-reload],[data-show],[data-learn],[data-learnfree],[data-forget],[data-exclude],[data-confirm]');
+  const t = ev.target.closest('[data-reload],[data-show],[data-learn],[data-learnfree],[data-forget],[data-exclude],[data-confirm],[data-plaid],[data-unlink]');
   if (!t) return;
 
   if (t.dataset.reload) return load();
+
+  if (t.dataset.unlink) {
+    if (!confirm('Unlink this bank? Jarvis stops pulling new transactions. The ones already pulled stay.')) return;
+    try { await api('/api/plaid/item', { method: 'DELETE', body: { item_id: t.dataset.unlink } });
+      toast('Unlinked', 'good'); load(); } catch (e) { toast(e.message, 'bad'); }
+    return;
+  }
+
+  if (t.dataset.plaid === 'sync') {
+    t.disabled = true; const was = t.textContent; t.textContent = 'Pulling…';
+    try {
+      const r = await api('/api/plaid/sync', { body: {} });
+      /* Partial failure comes back as a 200 with errors in it, because one
+         bank needing re-authentication must not throw away the other
+         bank's deposits. So both halves are reported. */
+      const parts = [`${r.added} new`, r.modified ? `${r.modified} corrected` : '', (r.removed || []).length ? `${r.removed.length} removed by the bank` : ''].filter(Boolean);
+      toast(parts.join(', ') || 'nothing new', 'good');
+      for (const e of (r.errors || [])) toast(`${e.institution || e.item_id}: ${e.error}`, 'bad');
+      if (r.truncated) toast('Stopped early — press again to keep pulling', 'bad');
+      load();
+    } catch (e) { toast(e.message, 'bad'); }
+    t.disabled = false; t.textContent = was;
+    return;
+  }
+
+  if (t.dataset.plaid === 'sandbox') {
+    try { await api('/api/plaid/sandbox-link', { body: {} }); toast('Test bank linked — now press Pull', 'good'); load(); }
+    catch (e) { toast(e.message, 'bad'); }
+    return;
+  }
+
+  if (t.dataset.plaid === 'connect') {
+    let token = null;
+    try { token = (await api('/api/plaid/link-token', { body: {} })).link_token; }
+    catch (e) { return toast(e.message, 'bad'); }
+    const ok = await loadPlaidLink();
+    /* Said out loud rather than failing silently: a blocked CDN is a
+       different problem from a wrong key, and they need different fixes. */
+    if (!ok) return toast('Could not load Plaid Link from the internet — check the server can reach cdn.plaid.com', 'bad');
+    window.Plaid.create({
+      token,
+      onSuccess: async (publicToken, meta) => {
+        try {
+          await api('/api/plaid/exchange', { body: { public_token: publicToken,
+            institution: (meta && meta.institution && meta.institution.name) || null } });
+          toast('Bank linked — now press Pull', 'good');
+          load();
+        } catch (e) { toast(e.message, 'bad'); }
+      },
+      onExit: (err) => { if (err) toast('Link closed: ' + (err.display_message || err.error_code || 'cancelled'), 'bad'); },
+    }).open();
+    return;
+  }
   if (t.dataset.show === 'aliases') return showAliases();
   if (t.dataset.show === 'excluded') return showExcluded();
 

@@ -295,6 +295,67 @@ function mount(app, cfg) {
         } catch (e) { res.status(400).json({ error: e.message }); }
     });
 
+    // ── THE FEED ─────────────────────────────────────────────────────────
+    // helpers/plaid.js holds the four calls. These routes exist so the whole
+    // path — link, sync, match, confirm — is reachable from the screen rather
+    // than from a shell on the VM.
+    //
+    // NOTHING HERE RETURNS THE ACCESS TOKEN. config.js:342: it "must never
+    // appear in an API response or a log line". plaid.itemsPublic() is the
+    // only shape that leaves, and tests/plaid.js searches every response for
+    // the fixture token rather than trusting that sentence.
+    app.get('/api/plaid/status', (req, res) => {
+        try { res.json(require('./plaid').status()); }
+        catch (e) { res.status(500).json({ error: e.message }); }
+    });
+
+    // A link token is short-lived and only starts Plaid's own iframe. Her
+    // bank password is typed into Plaid, never into this server — which is
+    // the entire reason to use Link rather than ask for credentials.
+    app.post('/api/plaid/link-token', async (req, res) => {
+        if (!admin(req, res)) return;
+        try { res.json(await require('./plaid').linkToken({})); }
+        catch (e) { res.status(400).json({ error: e.message }); }
+    });
+
+    app.post('/api/plaid/exchange', async (req, res) => {
+        if (!admin(req, res)) return;
+        const b = req.body || {};
+        try {
+            const out = await require('./plaid').exchange(b.public_token, { institution: b.institution || null });
+            res.json({ ok: true, ...out });
+        } catch (e) { res.status(400).json({ error: e.message }); }
+    });
+
+    // Sandbox only, and plaid.js refuses outside it. This is how the path is
+    // proved before Plaid grants production access, which takes a review.
+    app.post('/api/plaid/sandbox-link', async (req, res) => {
+        if (!admin(req, res)) return;
+        try {
+            const out = await require('./plaid').sandboxLink({});
+            res.json({ ok: true, ...out });
+        } catch (e) { res.status(400).json({ error: e.message }); }
+    });
+
+    app.post('/api/plaid/sync', async (req, res) => {
+        if (!admin(req, res)) return;
+        try {
+            const out = await require('./plaid').syncAll({});
+            // A partial failure is reported as a 200 with the errors in it,
+            // not a 500: one bank needing re-authentication must not hide the
+            // other bank's deposits, and a 500 would throw the good half away.
+            res.json(out);
+        } catch (e) { res.status(500).json({ error: e.message }); }
+    });
+
+    app.delete('/api/plaid/item', async (req, res) => {
+        if (!admin(req, res)) return;
+        const id = String(((req.body || {}).item_id) || req.query.item_id || '').trim();
+        if (!id) return res.status(400).json({ error: 'which item?' });
+        try { res.json(await require('./plaid').unlink(id, {})); }
+        catch (e) { res.status(400).json({ error: e.message }); }
+    });
+
     app.delete('/api/bank/aliases', async (req, res) => {
         if (!admin(req, res)) return;
         const descriptor = (req.body && req.body.descriptor) || req.query.descriptor;

@@ -65,6 +65,17 @@ const NOT_IN_ARCHIVE = [
     ['bank-item.json and bank-*.json', 'excluded on her instruction, 2026-09-03: the Plaid access token is '
         + 'not a copy of the data, it is the standing ability to fetch more. Re-link the bank. '
         + 'These exist on the VM and nowhere else — only the GCP disk snapshot has them.'],
+    // ── NOT RE-LINKABLE, UNLIKE THE REST OF bank-* ───────────────────────
+    // bank-learn.json is caught by the same pattern, but losing it is a
+    // different kind of loss and saying "re-link the bank" would be
+    // misleading. It holds every bank descriptor she has mapped to a
+    // customer — the answers behind "ask once". A re-link brings the
+    // transactions back; nothing brings these back except answering each
+    // payer again, one deposit at a time. Named separately so a restore does
+    // not report success while quietly having thrown that away.
+    ['bank-learn.json', 'the payer names she taught the bank matcher. A re-link does NOT restore these: '
+        + 'every unrecognised deposit will ask again until she re-answers it. '
+        + 'If that matters, keep a copy of this one file somewhere off the VM.'],
     ['documents_saved/', 'SKIP_DIRS — generated invoices and BOLs. They are on Drive in their own right.'],
     ['voice-cache/, logs/', 'SKIP_DIRS — transient, regenerate themselves'],
     ['.env', 'never in DATA_DIR; it is the passwords and API keys. Keep a copy somewhere else.'],

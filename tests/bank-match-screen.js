@@ -71,6 +71,7 @@ const MATCH = {
 };
 
 const posted = [];
+let PLAID = null;
 
 // ── fetch HAS TO EXIST BEFORE THE PAGE'S SCRIPT RUNS ─────────────────────
 // The page calls load() at the bottom of its script, which JSDOM executes
@@ -85,6 +86,13 @@ function makeDom(matchBody) {
             posted.push({ url, method: (opts && opts.method) || (body ? 'POST' : 'GET'), body });
             const u = String(url);
             if (u.startsWith('/api/bank/match')) return { ok: true, json: async () => matchBody };
+            if (u.startsWith('/api/plaid/status')) return { ok: true, json: async () => (PLAID || {
+                configured: true, env: 'sandbox', host: 'https://sandbox.plaid.com',
+                items: [{ item_id: 'item-1', institution: 'Bank of America', linked_at: '2026-10-01T00:00:00Z',
+                    cursor_set: true, last_sync_at: '2026-10-05T09:00:00Z',
+                    accounts: [{ account_id: 'a1', name: 'Business Checking', mask: '4321' }] }],
+                note: null }) };
+            if (u.startsWith('/api/plaid/')) return { ok: true, json: async () => ({ ok: true, link_token: 'link-sandbox-x' }) };
             if (u.startsWith('/api/bank/aliases')) return { ok: true, json: async () => ({ ok: true, aliases: [] }) };
             if (u.startsWith('/api/bank/exclude')) return { ok: true, json: async () => ({ ok: true }) };
             if (u.startsWith('/api/sales-receipts')) return { ok: true, json: async () => ({ ok: true, id: 'R1' }) };
@@ -362,15 +370,107 @@ let dom, w, doc;
     // bank route must be called by the page. Both directions, because the
     // first catches a typo and the second catches a dead permission.
     const calls = [...new Set([...HTML.matchAll(/'(\/api\/[a-z0-9/_-]+)'/g)].map((m) => m[1]))];
-    const served = [...routes.matchAll(/app\.(get|post|delete)\('(\/api\/bank\/[a-z-]+)'/g)].map((m) => m[2]);
-    const orphanCalls = calls.filter((u) => u.startsWith('/api/bank/') && !served.includes(u));
-    ck('every /api/bank URL the page calls exists on the server',
+    // BOTH prefixes. The first version only checked /api/bank, so the six
+    // /api/plaid routes added with the feed could have shipped with no
+    // button at all — the exact defect this section exists for, one feature
+    // along.
+    const served = [...routes.matchAll(/app\.(get|post|delete)\('(\/api\/(?:bank|plaid)\/[a-z-]+)'/g)].map((m) => m[2]);
+    const orphanCalls = calls.filter((u) => /^\/api\/(bank|plaid)\//.test(u) && !served.includes(u));
+    ck('every /api/bank and /api/plaid URL the page calls exists on the server',
        orphanCalls.length === 0, orphanCalls.join(', '));
+    // include is reached by the route's own test rather than a button: a row
+    // is put back from the excluded list, which is a later piece of screen.
     const unused = served.filter((u) => !calls.includes(u) && u !== '/api/bank/include');
-    ck('  and every bank route except include has a caller on this page',
+    ck('  and every other bank or plaid route has a caller on this page',
        unused.length === 0, unused.join(', ') + ' — a route with no button is the reconcile.js defect');
+    ck('  including all six feed routes',
+       ['status', 'link-token', 'exchange', 'sync', 'sandbox-link', 'item']
+           .every((x) => calls.includes('/api/plaid/' + x)),
+       JSON.stringify(calls.filter((u) => u.startsWith('/api/plaid'))));
     ck('  the page also posts to the receipts route rather than a bank one',
        calls.includes('/api/sales-receipts'), JSON.stringify(calls));
+}
+
+// ── K — THE FEED PANEL ────────────────────────────────────────────────────
+{
+    section('K — connecting the bank, from the screen');
+
+    const d7 = makeDom(MATCH); await settle(); await settle();
+    const feed = d7.window.document.getElementById('feed');
+    ck('the feed panel renders', !!feed && /bank feed/i.test(feed.textContent), (feed || {}).textContent);
+    ck('  it says the keys are set and which environment', /keys set/.test(feed.textContent)
+       && /sandbox/.test(feed.textContent), feed.textContent.slice(0, 160));
+    ck('  names the linked bank and the masked account',
+       /Bank of America/.test(feed.textContent) && /4321/.test(feed.textContent), feed.textContent.slice(0, 220));
+    ck('  offers a pull', !!feed.querySelector('[data-plaid="sync"]'));
+    ck('  and a connect', !!feed.querySelector('[data-plaid="connect"]'));
+    ck('  the test-bank button is offered in sandbox', !!feed.querySelector('[data-plaid="sandbox"]'));
+    ck('  and each bank can be unlinked', !!feed.querySelector('[data-unlink="item-1"]'));
+
+    // Plaid Link must NOT be in the head: a CDN outage would then be a blank
+    // matching screen, and matching needs nothing from Link.
+    ck('Plaid Link is not loaded until she presses Connect',
+       !/<script[^>]*cdn\.plaid\.com/.test(HTML) && /cdn\.plaid\.com/.test(HTML),
+       'it is fetched on demand, not in the critical path');
+
+    // With no keys the buttons must be gone and the fix named.
+    PLAID = { configured: false, env: 'sandbox', items: [], note: 'PLAID_CLIENT_ID and PLAID_SECRET are not set on this server' };
+    const d8 = makeDom(MATCH); await settle(); await settle();
+    const f8 = d8.window.document.getElementById('feed');
+    ck('with no keys it says so', /no keys/.test(f8.textContent), f8.textContent.slice(0, 160));
+    ck('  offers no connect button that could only fail',
+       !f8.querySelector('[data-plaid="connect"]') && !f8.querySelector('[data-plaid="sync"]'));
+    ck('  and names the two variables and where they come from',
+       /PLAID_CLIENT_ID/.test(f8.textContent) && /Developers \/ Keys/.test(f8.textContent),
+       f8.textContent.slice(0, 300));
+
+    // Production must not offer the fake-bank button.
+    PLAID = { configured: true, env: 'production', items: [], note: 'configured, but no bank is linked yet' };
+    const d9 = makeDom(MATCH); await settle(); await settle();
+    const f9 = d9.window.document.getElementById('feed');
+    ck('in production the test-bank button is not offered',
+       !f9.querySelector('[data-plaid="sandbox"]'), 'the server refuses it there anyway');
+    ck('  but connecting a real bank is', !!f9.querySelector('[data-plaid="connect"]'));
+    ck('  and "no bank linked yet" is distinguished from "nothing to reconcile"',
+       /no bank is linked yet/.test(f9.textContent), f9.textContent.slice(0, 200));
+    // ── PRESSING PULL, WITH ONE BANK BROKEN ──────────────────────────────
+    // A partial sync comes back 200 with the errors inside it, so that one
+    // bank needing re-authentication does not throw away the other bank's
+    // deposits. Which means the SCREEN is the only thing that can tell her
+    // the second bank failed — and swallowing that list left every other
+    // check in this file green.
+    PLAID = { configured: true, env: 'sandbox', items: [{ item_id: 'item-1', institution: 'BofA', accounts: [] }], note: null };
+    const toasts = [];
+    const d10 = new JSDOM(HTML, { runScripts: 'dangerously', url: 'https://localhost/bank-match',
+        beforeParse: (w) => {
+            w.fetch = async (url, opts) => {
+                const u = String(url);
+                if (u.startsWith('/api/bank/match')) return { ok: true, json: async () => MATCH };
+                if (u.startsWith('/api/plaid/status')) return { ok: true, json: async () => PLAID };
+                if (u.startsWith('/api/plaid/sync')) return { ok: true, json: async () => ({
+                    added: 3, modified: 1, removed: ['TX-9'], truncated: true,
+                    items: [{ item_id: 'item-1', institution: 'BofA', added: 3 }],
+                    errors: [{ item_id: 'item-2', institution: 'Chase', error: 'ITEM_LOGIN_REQUIRED — the user must repair this item' }],
+                }) };
+                return { ok: true, json: async () => ({ ok: true }) };
+            };
+        } });
+    await settle(); await settle();
+    const doc10 = d10.window.document;
+    // Toasts are appended to body; collect them as they appear.
+    const seen = () => [...doc10.querySelectorAll('.toast')].map((x) => x.textContent);
+    doc10.querySelector('[data-plaid="sync"]').click();
+    await settle(); await settle();
+    const all = seen().join(' | ');
+    ck('pressing Pull reports what arrived', /3 new/.test(all) && /1 corrected/.test(all), all);
+    ck('  and what the bank removed', /1 removed by the bank/.test(all), all);
+    ck('  the broken bank is NAMED, not swallowed',
+       /Chase/.test(all) && /ITEM_LOGIN_REQUIRED/.test(all), all);
+    ck('  and a sync that stopped early says so',
+       /Stopped early/.test(all), all);
+    void toasts;
+
+    PLAID = null;
 }
 
 console.log(`\n  ${pass} passed, ${fail} failed`);
