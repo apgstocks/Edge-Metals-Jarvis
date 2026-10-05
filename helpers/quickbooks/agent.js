@@ -78,14 +78,78 @@ async function survey({ year = new Date().getFullYear(), env = auth.qbEnv() } = 
         count: dupes ? dupes.unapplied.payments : null,
         worst: dupes ? dupes.unapplied.byParty.slice(0, 5) : [],
     };
+    // ── WHAT SHE HAS ALREADY ANSWERED (2026-10-05) ───────────────────────
+    // helpers/quickbooks/decisions.js opens by saying what it is for: "The
+    // difference between an agent and a cron job that nags is that the agent
+    // asks once." It was consulted in exactly one place — checks.js — and
+    // never by this agent. So the morning mail re-reported the same ten
+    // doubled documents and the same sixteen cheques every day, including
+    // the ones she had opened, judged and dismissed. An agent that cannot be
+    // told anything is one she stops reading, and then it is worse than
+    // nothing because the day something NEW appears it is in a list she has
+    // learned to skip.
+    //
+    // SILENCED IS NOT HIDDEN — checks.js's rule, copied deliberately: "a rule
+    // quietly hiding a growing pile is its own problem, so they stay
+    // counted". Every silenced finding is still counted and still reported
+    // as a count, with her own reason attached. Money never leaves the page
+    // because she pressed something once.
+    let decided = null;
+    try { decided = require('./decisions'); } catch { decided = null; }
+    const silence = (rows, about, pattern) => {
+        if (!decided || !Array.isArray(rows) || !rows.length) return { keep: rows || [], silenced: [] };
+        const keep = []; const silenced = [];
+        for (const f of rows) {
+            let hit = null;
+            try { hit = decided.answered(f, { about, pattern }); } catch (e) { hit = null; }
+            if (hit) silenced.push({ ...f, answeredAt: hit.at, answeredWhy: hit.reason, decision: hit.id });
+            else keep.push(f);
+        }
+        return { keep, silenced };
+    };
+
     const side = (s) => (s ? r2(s.duplicate.cost + s.doubledLine.cost + s.sameContainer.cost) : 0);
+    // Each of the six duplicate buckets is filtered, because a decision is
+    // about a PAIR of documents and lives in whichever bucket found them.
+    let dupSilenced = 0;
+    if (dupes && decided) {
+        for (const sideName of ['suppliers', 'customers']) {
+            for (const bucket of ['duplicate', 'doubledLine', 'sameContainer']) {
+                const b = dupes[sideName] && dupes[sideName][bucket];
+                if (!b || !Array.isArray(b.groups)) continue;
+                const r = silence(b.groups, 'duplicate', bucket);
+                dupSilenced += r.silenced.length;
+                b.groups = r.keep;
+                b.silencedGroups = r.silenced;
+                // The money figure must shrink with the list, or the total
+                // and the rows it is made of stop agreeing.
+                b.cost = r2(r.keep.reduce((t, g) => t + (Number(g.cost) || Number(g.amount) || 0), 0));
+            }
+        }
+    }
     out.invariants.duplicates = {
         number: dupes ? r2(side(dupes.suppliers) + side(dupes.customers)) : null,
         count: dupes ? (dupes.suppliers.duplicate.groups.length + dupes.suppliers.doubledLine.groups.length
             + dupes.suppliers.sameContainer.groups.length + dupes.customers.duplicate.groups.length
             + dupes.customers.doubledLine.groups.length + dupes.customers.sameContainer.groups.length) : null,
+        silenced: dupSilenced,
         suppliers: dupes ? dupes.suppliers : null, customers: dupes ? dupes.customers : null,
     };
+
+    // A cheque she has looked at and accepted — "that one really is cost of
+    // goods" — is an answer about a FINDING, not about a duplicate pair.
+    if (miscoded && decided) {
+        for (const pile of ['fixable', 'noPayee']) {
+            const r = silence(miscoded[pile].rows, 'finding', null);
+            miscoded[pile].rows = r.keep;
+            miscoded[pile].count = r.keep.length;
+            miscoded[pile].money = r2(r.keep.reduce((t, x) => t + (Number(x.amount) || 0), 0));
+            miscoded[pile].silenced = r.silenced;
+        }
+        miscoded.silenced = miscoded.fixable.silenced.length + miscoded.noPayee.silenced.length;
+        miscoded.count = miscoded.fixable.count + miscoded.noPayee.count;
+        miscoded.number = r2(miscoded.fixable.money + miscoded.noPayee.money);
+    }
     out.invariants.miscoded = miscoded || { number: null };
     // Not "there are three" but how much of the extra ones can actually be
     // emptied. A bill with a payment against it can never move (sandbox,
@@ -324,9 +388,28 @@ function reportText(out) {
             L.push(`  Payments sitting on no bill: none left — this run placed all ${money(placed)} of it.`);
         }
     }
-    if (inv.duplicates) line('Documents doubled', inv.duplicates.number, `${inv.duplicates.count} to look at — a void cannot be undone, so they wait for you`);
-    if (inv.miscoded) line('Supplier money in cost of goods', inv.miscoded.number,
-        `${inv.miscoded.count} cheques; ${inv.miscoded.noPayee.count} of them (${money(inv.miscoded.noPayee.money)}) have no payee and will never be guessed`);
+    if (inv.duplicates) line('Documents doubled', inv.duplicates.number,
+        `${inv.duplicates.count} to look at — a void cannot be undone, so they wait for you`
+        + (inv.duplicates.silenced ? `; ${inv.duplicates.silenced} not shown, you have already answered those` : ''));
+    if (inv.miscoded && inv.miscoded.number != null) line('Supplier money in cost of goods', inv.miscoded.number,
+        `${inv.miscoded.count} cheques; ${((inv.miscoded.noPayee || {}).count) || 0} of them (${money((inv.miscoded.noPayee || {}).money || 0)}) have no payee and will never be guessed`
+        + (inv.miscoded.silenced ? `; ${inv.miscoded.silenced} not shown, you have already answered those` : ''));
+
+    // ── SILENCED IS NOT HIDDEN ───────────────────────────────────────────
+    // Said once, plainly, with the way back. The risk of an agent that can be
+    // told to stop asking is that it stops asking about something that later
+    // matters — so the count is always on the page, and so is the fact that
+    // it is reversible. Without this line, "silenced" becomes "disappeared"
+    // within a week.
+    {
+        const quiet = ((inv.duplicates && inv.duplicates.silenced) || 0)
+            + ((inv.miscoded && inv.miscoded.silenced) || 0);
+        if (quiet) {
+            L.push(`  ${quiet} finding${quiet === 1 ? '' : 's'} above are not listed because you answered them `
+                + 'already. They are still counted, never deleted — the QuickBooks page lists them under '
+                + 'what you have decided, and any one of them can be un-answered.');
+        }
+    }
     // ── A PAYABLE BALANCE THAT EXPLAINS ITSELF (2026-10-05) ──────────────
     // This printed QuickBooks' raw signed balances:
     //
