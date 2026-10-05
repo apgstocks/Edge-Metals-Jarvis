@@ -31,8 +31,24 @@ function getDrive() {
     // So the guard lives HERE, at the single door to Drive, rather than being
     // repeated as a stub in each suite where it could be forgotten. Production
     // never sets JARVIS_TEST, so this is inert outside the runner.
-    if (process.env.JARVIS_TEST === '1') {
-        throw new Error('Drive is disabled under JARVIS_TEST — a test must not write to the live yard folder');
+    //
+    // ── AND IT DOES NOT DEPEND ON REMEMBERING THE FLAG (2026-10-05) ───────
+    // The flag alone was not enough. Running the suites a different way —
+    // `node tests/<file>.js` in a loop, without the env the runner sets —
+    // left this guard inert, and tests/yard-chat-log.js promptly overwrote
+    // the LIVE Drive file yard/log/2026-08-29.jsonl (created 29 Aug) with the
+    // single byte "x". That is the exact incident the flag was added to
+    // prevent, reproduced by bypassing the flag.
+    //
+    // A guard that only works when someone remembers to arm it is not a
+    // guard. So it also trips on what cannot be forgotten: the process was
+    // started on a file inside tests/. Nothing in production is, and a script
+    // that genuinely needs Drive is not either.
+    const entry = String((process.argv && process.argv[1]) || '');
+    const underTest = /(^|[\/\\])tests[\/\\][^\/\\]+\.js$/.test(entry);
+    if (process.env.JARVIS_TEST === '1' || underTest) {
+        throw new Error('Drive is disabled under JARVIS_TEST — a test must not write to the live yard folder'
+            + (underTest && process.env.JARVIS_TEST !== '1' ? ` (entry point ${entry} is under tests/, so the flag was not needed)` : ''));
     }
     if (driveClient) return driveClient;
     if (!fs.existsSync(cfg.GDRIVE_KEYFILE)) {

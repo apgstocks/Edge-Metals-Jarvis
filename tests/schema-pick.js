@@ -40,21 +40,59 @@ function tablesIn(sql, names) {
     return [...found];
 }
 
-section('A — at today\'s size it changes nothing');
+// ── A — PRUNING IS LIVE NOW, AND THAT HAPPENED BY ACCIDENT ────────────────
+// This section used to assert the opposite: "at today's size it changes
+// nothing", because the metals catalog had 11 tables against a FULL_BELOW of
+// 14 and the pruner was a deliberate no-op.
+//
+// On 2026-10-05 the five QuickBooks tables (qb_bills, qb_invoices,
+// qb_suppliers, qb_customers, qb_books) took it to 16, past the threshold. So
+// from that day a question is sent a SUBSET of the schema for the first time
+// — a behaviour change to every question she asks, arrived at as a side
+// effect of widening the catalog rather than as a decision.
+//
+// The old assertions are kept as history in this comment and replaced with
+// what has to hold now. Section B's forced-on tests were already the real
+// coverage; this section's job is the live default.
+section('A — the catalog has outgrown the threshold, so pruning is LIVE');
 {
     const all = catalog.tableNames();
-    ck(`the metals catalog has ${all.length} tables, under the ${pickmod.FULL_BELOW} threshold`,
-        all.length < pickmod.FULL_BELOW, `${all.length} vs ${pickmod.FULL_BELOW}`);
-    for (const q of ['how much do we owe Inesh', 'which bills are unfinished',
-                     'margin on KOCU4930737', 'what did we sell to MK Trading in August',
-                     'show me trucking', '']) {
+    ck(`the metals catalog has ${all.length} tables, at or past the ${pickmod.FULL_BELOW} threshold`,
+        all.length >= pickmod.FULL_BELOW, `${all.length} vs ${pickmod.FULL_BELOW}`);
+
+    // THE PROPERTY THAT MATTERS. A smaller schema is worthless if it dropped
+    // the one table the answer needed — that is worse than no pruning at all,
+    // because the model cannot write the right query and does not know why.
+    const NEEDS = [
+        ['how much do we owe Inesh', 'qb_suppliers'],
+        ['which bills are unfinished', 'bills'],
+        ['margin on KOCU4930737', 'margin'],
+        ['what did we sell to MK Trading in August', 'sales'],
+        ['show me trucking', 'trucking_bills'],
+        ['who owes us money', 'qb_customers'],
+        ['is quickbooks up to date', 'qb_books'],
+        ['what did we make on HMMU7010335', 'qb_bills'],
+    ];
+    for (const [q, need] of NEEDS) {
+        ck(`  "${q}" keeps ${need}`, pickmod.pick(q, catalog).includes(need),
+            pickmod.pick(q, catalog).join(','));
+    }
+
+    // AND IT MUST STILL FAIL OPEN. A question it cannot read is the case that
+    // has to send everything, not the case that sends its best guess.
+    for (const q of ['', '   ', 'hmm', 'what about that thing']) {
         const got = pickmod.pick(q, catalog);
-        ck(`  "${q || '(empty)'}" still sends every table`,
+        ck(`  "${q || '(empty)'}" falls back to every table`,
             got.length === all.length, `${got.length}/${all.length}`);
     }
+
+    // The yard catalog is still small, so Scout's side is genuinely unchanged
+    // — which is the control that proves the switch above is about size and
+    // not about something else that moved.
     const y = yardCatalog.tableNames();
-    ck(`the yard catalog (${y.length}) is untouched too`,
-        pickmod.pick('how much do we owe sellers', yardCatalog).length === y.length);
+    ck(`the yard catalog (${y.length}) is still under the threshold and untouched`,
+        y.length < pickmod.FULL_BELOW
+        && pickmod.pick('how much do we owe sellers', yardCatalog).length === y.length);
 }
 
 section('B — with pruning FORCED ON, her real questions keep what they need');
