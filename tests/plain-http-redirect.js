@@ -87,9 +87,14 @@ const viaCaddy = (p, extra = {}) => req(p, { Host: 'jarvis.edgemetals.com',
     const deep = await outside('/bank-match?from=2026-09-01&to=2026-09-30');
     ck('the path survives the redirect',
        /\/bank-match\?from=2026-09-01&to=2026-09-30$/.test(deep.location || ''), String(deep.location));
-    const health = await outside('/health');
-    ck('  and so does a plain path', deep.status === 301 && health.location === 'https://jarvis.edgemetals.com/health',
-       String(health.location));
+    // NOT /health — that is deliberately exempt so the load balancer's
+    // probe is not redirected (section C2). This check used to use it and
+    // went red the moment that exemption landed, which is the old test doing
+    // its job: a behaviour change should break a check, not slip past one.
+    const plain = await outside('/documents');
+    ck('  and so does a plain path',
+       deep.status === 301 && plain.location === 'https://jarvis.edgemetals.com/documents',
+       String(plain.location));
 
     ck('the redirect is 301 — permanent, so the bookmark itself heals',
        r.status === 301, String(r.status));
@@ -153,6 +158,52 @@ const viaCaddy = (p, extra = {}) => req(p, { Host: 'jarvis.edgemetals.com',
 
     const ipv6Loop = await req('/health', { Host: '[::1]:8080' });
     ck('an IPv6 loopback client is exempt too', ipv6Loop.status === 200, String(ipv6Loop.status));
+}
+
+// ── C2 — A HEALTH CHECK IS NEVER REDIRECTED ───────────────────────────────
+// Found live on 2026-10-05, minutes after the Google load balancer was
+// built: its backend came up UNHEALTHY. The checker polls
+// http://10.138.0.2:8080/health from Google's ranges — not loopback, no
+// X-Forwarded-Proto — so this middleware answered the probe with a 301, the
+// checker marked the VM dead, and the load balancer would have served 502 to
+// every visitor the moment DNS moved.
+//
+// This is the redirect's real blast radius. The loopback exemption was
+// written for `curl localhost`; a prober that is neither local nor HTTPS was
+// outside what I considered, and only building the load balancer exposed it.
+{
+    section('C2 — the load balancer\'s health check');
+
+    // From Google's documented health-check ranges, over plain HTTP.
+    const fromGoogle = (p) => req(p, { Host: '10.138.0.2:8080', 'X-Forwarded-For': '130.211.0.5' });
+    let r = await fromGoogle('/health');
+    ck('a probe from Google\'s range gets 200, not a redirect',
+       r.status === 200, `${r.status} ${r.location || ''}`);
+    ck('  and the real health body', /"status"\s*:\s*"ok"/.test(r.body), r.body.slice(0, 100));
+
+    r = await req('/health', { Host: '10.138.0.2:8080', 'X-Forwarded-For': '35.191.2.9' });
+    ck('the second Google range is exempt too', r.status === 200, String(r.status));
+
+    // The PATH is exempt as well, so any future checker works without
+    // anyone rediscovering this.
+    r = await req('/health', { Host: 'x', 'X-Forwarded-For': '203.0.113.9' });
+    ck('/health answers plainly whoever asks', r.status === 200,
+       `${r.status} — a health endpoint that redirects is not a health endpoint`);
+    r = await req('/healthz', { Host: 'x', 'X-Forwarded-For': '203.0.113.9' });
+    ck('  and so does /healthz', r.status === 200 || r.status === 503, String(r.status));
+
+    // Everything ELSE from an ordinary address still redirects — the
+    // exemption must not have become a hole.
+    r = await outside('/');
+    ck('an ordinary visitor is still redirected', r.status === 301, String(r.status));
+    r = await outside('/bank-match');
+    ck('  and so is every other path', r.status === 301, String(r.status));
+
+    // The two ranges must match the firewall rule that admits them.
+    const src = fs.readFileSync(path.join(ROOT, 'api.js'), 'utf8');
+    ck('the exempt ranges are Google\'s documented two',
+       /130\\\.211\\\.|130\.211\./.test(src) && /35\\\.191\\\.|35\.191\./.test(src),
+       'they must be the same two the allow-lb-health firewall rule admits');
 }
 
 // ── D — THE REDIRECT RUNS BEFORE THE AUTH GATE ────────────────────────────

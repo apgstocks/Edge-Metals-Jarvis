@@ -251,6 +251,31 @@ function createApi() {
         if (req.secure) return next();                       // came through Caddy
         const ip = String(req.ip || req.socket.remoteAddress || '');
         if (/^(::1|::ffff:127\.|127\.)/.test(ip)) return next();   // on the box itself
+
+        // ── A HEALTH CHECK MUST NEVER BE REDIRECTED ──────────────────────
+        // Caught on 2026-10-05 the moment the Google load balancer was
+        // built: its backend came up UNHEALTHY because the health checker
+        // polls http://10.138.0.2:8080/health from Google's own ranges —
+        // not loopback, and with no X-Forwarded-Proto — so this middleware
+        // answered the probe with a 301. A checker expecting 200 marks the
+        // backend dead, and the load balancer then serves 502 to everyone.
+        //
+        // That is this redirect's blast radius and I did not think of it.
+        // The loopback exemption was written for `curl localhost`; a prober
+        // that is neither local nor HTTPS was outside what I considered.
+        //
+        // TWO EXEMPTIONS, deliberately overlapping:
+        //   · /health answers plainly whoever asks. A health endpoint that
+        //     redirects is not a health endpoint, and this also covers any
+        //     future checker — uptime monitors, a second load balancer —
+        //     without anyone having to remember this comment exists.
+        //   · Google's documented health-check ranges, so the probe is safe
+        //     even if the path is ever renamed.
+        // 130.211.0.0/22 and 35.191.0.0/16 are fixed and documented by
+        // Google; they are the same two ranges the allow-lb-health firewall
+        // rule admits, so the two agree by construction.
+        if (req.path === '/health' || req.path === '/healthz') return next();
+        if (/^(::ffff:)?(130\.211\.|35\.191\.)/.test(ip)) return next();
         const host = String(req.headers.host || '');
         // Already on the real hostname over plain HTTP (port 80) — Caddy
         // handles that redirect itself; do not fight it.
