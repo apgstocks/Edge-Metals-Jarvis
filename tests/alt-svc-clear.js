@@ -163,10 +163,19 @@ const viaCaddy = (p) => get(p, { Host: 'jarvis.edgemetals.com', 'X-Forwarded-Pro
     ck('  and CORS is untouched',
        !!r.headers['access-control-allow-methods'], JSON.stringify(r.headers['access-control-allow-methods']));
 
-    // Exactly one Alt-Svc header. Two would be sent as a list and a client
-    // may take the first, which could be an advertisement.
+    // Exactly one Alt-Svc header FROM THIS APP — res.set replaces rather
+    // than appends, so the app can only ever emit one.
+    //
+    // On the wire there may be two. Verified 2026-10-05 after DNS moved to
+    // the Google load balancer: `curl -sI https://jarvis.edgemetals.com/health`
+    // returned `alt-svc: clear` twice, because Google's frontend echoes the
+    // backend value alongside its own. That is harmless — two erasers still
+    // erase — but it broke helpers/entrances.js, which read the joined
+    // "clear, clear" and would have emailed an HTTP/3 alarm nightly. The fix
+    // lives there, in advertisesHttp3(). This check stays scoped to the app
+    // on purpose: it is the only layer this repo controls.
     const raw = r.headers['alt-svc'];
-    ck('exactly one Alt-Svc value is sent, not a list',
+    ck('exactly one Alt-Svc value is sent BY THIS APP, not a list',
        typeof raw === 'string' && !raw.includes(','), JSON.stringify(raw));
 }
 

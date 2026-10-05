@@ -98,6 +98,35 @@ const APP_API_BASE = CANONICAL;
 const ok2xx = (s) => s >= 200 && s < 300;
 const ok3xx = (s) => s >= 300 && s < 400;
 
+// ── is this header advertising an alternative service? ───────────────────
+// Found live on 2026-10-05, minutes after DNS moved to the Google load
+// balancer. The response carried the header TWICE:
+//
+//     alt-svc: clear
+//     alt-svc: clear
+//
+// api.js:213 uses res.set, which REPLACES, so the app emits exactly one. The
+// second copy is added by Google's frontend, which echoes the backend value
+// alongside its own. fetch() joins repeated field lines with a comma, so
+// headers.get('alt-svc') returns "clear, clear" — and the check here used to
+// be `!== 'clear'`, which that fails. The nightly job would have emailed
+// "HTTP/3 is back on" every night, about a server doing exactly the right
+// thing. A check that cries wolf nightly is a check she learns to delete.
+//
+// So the value is read as what RFC 7838 says it is: a comma-separated LIST
+// of alternative-service entries, where "clear" is the eraser. Any number of
+// erasers is fine. One real entry is not — and the mixed case,
+// "clear, h3=\":443\"", is the one that actually appeared on the wire while
+// the QUIC override was still propagating, so it must stay caught.
+function advertisesHttp3(value) {
+    if (!value) return false;
+    return String(value)
+        .split(',')
+        .map((t) => t.trim())
+        .filter(Boolean)
+        .some((t) => t.toLowerCase() !== 'clear');
+}
+
 // A Location that lands on the canonical host over https. Checked as a
 // PREFIX rather than an exact match so a path-preserving redirect passes —
 // /health must arrive at /health, not at the dashboard root.
@@ -169,12 +198,15 @@ async function checkOne(entrance, { fetchImpl, timeoutMs = 15000 } = {}) {
         // the only acceptable value besides absent.
         const altSvc = (res.headers && typeof res.headers.get === 'function')
             ? res.headers.get('alt-svc') : null;
-        if (altSvc && String(altSvc).trim().toLowerCase() !== 'clear') {
+        if (advertisesHttp3(altSvc)) {
             return { ...base, ok: false, status, altSvc,
                 detail: `the server is advertising alt-svc: ${altSvc} — HTTP/3 is back on. `
                     + 'Networks that drop UDP 443 will start failing, mobile data will keep working, '
-                    + 'and clients cache this for up to 30 days. Put `protocols h1 h2` back in the '
-                    + 'Caddyfile global block and reload Caddy.' };
+                    + 'and clients cache this for up to 30 days. TWO things can advertise it now, so '
+                    + 'check both: the Google load balancer, with `gcloud compute '
+                    + 'target-https-proxies describe jarvis-https-proxy --global '
+                    + '--format=\'get(quicOverride)\'` — it must say DISABLE, not NONE; and Caddy, '
+                    + 'which needs `protocols h1 h2` in the Caddyfile global block and a reload.' };
         }
         return { ...base, ok: true, status, altSvc: altSvc || null };
     }
@@ -230,4 +262,5 @@ function report(res) {
     return L.join('\n');
 }
 
-module.exports = { ENTRANCES, CANONICAL, KNOWN_IP, APP_API_BASE, checkOne, checkAll, report, redirectsToCanonical };
+module.exports = { ENTRANCES, CANONICAL, KNOWN_IP, APP_API_BASE, checkOne, checkAll, report,
+    redirectsToCanonical, advertisesHttp3 };

@@ -202,6 +202,55 @@ const recording = (inner) => async (url, opts) => { calls.push(String(url)); ret
     ck('  case and spacing do not matter', res.ok === true, JSON.stringify(res.broken));
     res = await E.checkAll({ fetchImpl: withAltSvc(null) });
     ck('  and no header at all is fine too', res.ok === true, JSON.stringify(res.broken));
+
+    // ── THE HEADER ARRIVES TWICE THROUGH THE LOAD BALANCER ───────────────
+    // Observed on the wire 2026-10-05, right after DNS moved to the Google
+    // load balancer: `curl -sI https://jarvis.edgemetals.com/health` returned
+    // `alt-svc: clear` on two separate lines. api.js uses res.set, which
+    // replaces, so the app sent one; Google's frontend added the second.
+    // fetch() joins repeated field lines with a comma, so the check sees
+    // "clear, clear" — which the old `!== 'clear'` test failed, and the 05:40
+    // job would have emailed an HTTP/3 alarm every night about a correct
+    // server. Noise nightly is how a check gets switched off.
+    res = await E.checkAll({ fetchImpl: withAltSvc('clear, clear') });
+    ck('two "clear" headers joined by fetch do NOT raise a false alarm',
+       res.ok === true, JSON.stringify(res.broken));
+    res = await E.checkAll({ fetchImpl: withAltSvc('clear,clear,clear') });
+    ck('  nor three, nor spacing variations', res.ok === true, JSON.stringify(res.broken));
+    res = await E.checkAll({ fetchImpl: withAltSvc(' clear , CLEAR ') });
+    ck('  nor mixed case with padding', res.ok === true, JSON.stringify(res.broken));
+
+    // ── AND THE MIXED CASE MUST STILL BITE ───────────────────────────────
+    // This is the value that was ACTUALLY on the wire while --quic-override
+    // was still propagating: ours, then Google's advertisement. A client
+    // reads the whole list, so the h3 entry lands and gets cached for 30
+    // days. Tolerating repeated "clear" must not have widened into
+    // tolerating a list that contains a real entry — that would have
+    // silently undone the whole guard.
+    res = await E.checkAll({ fetchImpl: withAltSvc('clear, h3=":443"; ma=2592000') });
+    ck('"clear" followed by an h3 advertisement is still caught',
+       res.ok === false, JSON.stringify(res.broken));
+    ck('  and still treated as an outage', res.outage === true, String(res.outage));
+    let bb = res.broken.find((x) => x.id === 'canonical');
+    ck('  and names the load balancer, which is what advertises it now',
+       /quicOverride/.test(bb.detail), bb.detail);
+    ck('  and still names the Caddy fix, because Caddy is still running',
+       /protocols h1 h2/.test(bb.detail), bb.detail);
+    // Order must not matter — Google could prepend rather than append.
+    res = await E.checkAll({ fetchImpl: withAltSvc('h3=":443"; ma=2592000, clear') });
+    ck('  order does not matter: advertisement first is caught too',
+       res.ok === false, JSON.stringify(res.broken));
+
+    // The predicate on its own, so a mutation has somewhere precise to land.
+    ck('advertisesHttp3 is exported and judges each case',
+       E.advertisesHttp3('clear, clear') === false
+       && E.advertisesHttp3('clear') === false
+       && E.advertisesHttp3('') === false
+       && E.advertisesHttp3(null) === false
+       && E.advertisesHttp3('clear, h3=":443"') === true
+       && E.advertisesHttp3('h3=":443"; ma=2592000') === true
+       && E.advertisesHttp3('h2=":8443"') === true,
+       'any entry that is not "clear" is an advertisement');
 }
 
 // ── D — AN OUTAGE IS LOUDER, AND DIFFERENT ────────────────────────────────
