@@ -32,9 +32,16 @@ const n2 = (v) => (typeof v === 'number' && isFinite(v) ? v : (v === null || v =
 function signature() {
     const files = [cfg.BILLS_FILE, cfg.SALES_FILE, cfg.BILL_PAYMENTS_FILE, cfg.SALES_RECEIPTS_FILE,
         cfg.BOOKINGS_FILE, cfg.EDGE_INVENTORY_FILE, cfg.METALS_TRUCKING_FILE, cfg.SALES_SETTLEMENTS_FILE];
-    return files.map((f) => {
+    const own = files.map((f) => {
         try { const s = fs.statSync(f); return `${s.mtimeMs}:${s.size}`; } catch (e) { return '0'; }
     }).join('|');
+    // ── AND WHAT QUICKBOOKS SAYS (2026-10-05) ──────────────────────────────
+    // The snapshot is a ledger as far as this file is concerned: when it is
+    // rewritten the mirror must rebuild, or a WhatsApp answer keeps quoting
+    // last night's balances after the morning sync.
+    let qb = '0';
+    try { qb = require('../quickbooks/snapshot').stamp(); } catch { /* no snapshot yet */ }
+    return `${own}|qb:${qb}`;
 }
 
 function billRows() {
@@ -258,6 +265,50 @@ function settlementRows() {
     return out;
 }
 
+// ── QUICKBOOKS, AS FOUR TABLES ────────────────────────────────────────────
+// Apsara picked the WhatsApp question channel (2026-10-05). Until now it
+// answered "how much do we owe Inesh" from JARVIS's bills — and QuickBooks is
+// the system of record, holding her accountant's manual entries, $4.98M of
+// payments against no bill, and the 2026 duplicates. A confident figure from
+// the wrong book is how she quotes a supplier the wrong number.
+//
+// These read the SNAPSHOT FILE, never the API: a question from a phone cannot
+// wait for 610 bills over the network, and must still answer when the token is
+// mid-refresh. helpers/quickbooks/snapshot.js writes it; the nightly run and
+// /api/qb/snapshot refresh it; signature() above rebuilds this mirror when it
+// changes. Nothing here is live, and qb_books.minutes_old says how stale.
+function qbSnap() {
+    try { return require('../quickbooks/snapshot').read() || null; } catch { return null; }
+}
+function qbBillRows() {
+    const s = qbSnap();
+    return (s && s.bills ? s.bills : []).map((b) => ({ ...b, as_of: String(s.at).slice(0, 10) }));
+}
+function qbInvoiceRows() {
+    const s = qbSnap();
+    return (s && s.invoices ? s.invoices : []).map((i) => ({ ...i, as_of: String(s.at).slice(0, 10) }));
+}
+function qbSupplierRows() {
+    const s = qbSnap();
+    return (s && s.suppliers ? s.suppliers : []).map((v) => ({ ...v, as_of: String(s.at).slice(0, 10) }));
+}
+function qbCustomerRows() {
+    const s = qbSnap();
+    return (s && s.customers ? s.customers : []).map((c) => ({ ...c, as_of: String(s.at).slice(0, 10) }));
+}
+// One row, so a question can say how old the figures are without a second
+// call — and so "there is no snapshot yet" is an ANSWER rather than an empty
+// table that reads as "you owe nothing".
+function qbBooksRows() {
+    const s = qbSnap();
+    if (!s) return [{ as_of: null, minutes_old: null, environment: null, owe: null, owed: null,
+        unapplied_paid: null, unapplied_received: null, bills: null, invoices: null, over_applied: null }];
+    const t = s.totals || {};
+    return [{ as_of: String(s.at).slice(0, 10), minutes_old: Math.round((Date.now() - Date.parse(s.at)) / 60000),
+        environment: s.env || null, owe: t.owe, owed: t.owed, unapplied_paid: t.unapplied_paid,
+        unapplied_received: t.unapplied_received, bills: t.bills, invoices: t.invoices, over_applied: t.over_applied }];
+}
+
 const TABLES = {
     bills: billRows,
     bill_items: billItemRows,
@@ -270,6 +321,11 @@ const TABLES = {
     bookings: bookingRows,
     edge_inventory: inventoryRows,
     documents: documentRows,
+    qb_bills: qbBillRows,
+    qb_invoices: qbInvoiceRows,
+    qb_suppliers: qbSupplierRows,
+    qb_customers: qbCustomerRows,
+    qb_books: qbBooksRows,
 };
 
 let cache = null;

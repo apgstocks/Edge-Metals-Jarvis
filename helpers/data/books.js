@@ -84,6 +84,46 @@ const METALS_EXAMPLES = [
     // WHAT IS SITTING IN STOCK.
     { q: 'what is in edge inventory', sql: 'SELECT grade, ROUND(SUM(weight_lb), 0) AS pounds, COUNT(*) AS receipts FROM edge_inventory GROUP BY grade ORDER BY pounds DESC',
       shape: 'list', headline: '{count} grades in Edge inventory.', title: 'Edge inventory' },
+
+    // ── FROM QUICKBOOKS, NOT FROM WHAT SHE TYPED (2026-10-05) ────────────
+    // She picked the WhatsApp question channel over three other builds. The
+    // examples above all answer from JARVIS's ledgers, which answer "what have
+    // I entered" — a different question from "what do I owe". These answer
+    // from her books. The first one is the one she asks most, and the one that
+    // was being answered from the wrong table.
+    { q: 'how much do we owe Inesh', sql: "SELECT name, ROUND(balance, 2) AS owed, ROUND(unapplied_paid, 2) AS paid_but_unmatched FROM qb_suppliers WHERE lower(name) LIKE '%inesh%' AND balance != 0",
+      shape: 'single', headline: 'QuickBooks says we owe {name} {owed}.', formats: { owed: 'money', paid_but_unmatched: 'money' } },
+    { q: 'what do we owe altogether', sql: 'SELECT ROUND(owe, 2) AS owe, ROUND(unapplied_paid, 2) AS unmatched, as_of, minutes_old FROM qb_books',
+      shape: 'single', headline: 'We owe {owe} per QuickBooks as of {as_of}.', formats: { owe: 'money', unmatched: 'money', minutes_old: 'number' } },
+    { q: 'who owes us money', sql: 'SELECT name, ROUND(balance, 2) AS owes_us, ROUND(unapplied_received, 2) AS already_paid_unmatched FROM qb_customers WHERE balance > 0 ORDER BY balance DESC',
+      shape: 'list', headline: '{count} customers owe us money, per QuickBooks.', title: 'Owed to us' },
+
+    // HAS X PAID — the balance alone is not the answer. Money can be in the
+    // bank and matched to nothing, and chasing someone in that state is the
+    // one mistake a customer remembers.
+    { q: 'has Taewon paid', sql: "SELECT name, ROUND(balance, 2) AS still_owes, ROUND(unapplied_received, 2) AS received_unmatched FROM qb_customers WHERE lower(name) LIKE '%taewon%'",
+      shape: 'list', headline: 'What QuickBooks has for Taewon.', title: 'Taewon' },
+
+    // ONE CONTAINER, BOTH SIDES — the question QuickBooks itself cannot
+    // answer, because it does not know what a container is.
+    { q: 'what did we make on HMMU7010335', sql: "SELECT b.container_no, ROUND(SUM(b.total), 2) AS cost, (SELECT ROUND(SUM(i.total), 2) FROM qb_invoices i WHERE i.container_no = b.container_no) AS revenue, ROUND((SELECT SUM(i.total) FROM qb_invoices i WHERE i.container_no = b.container_no) - SUM(b.total), 2) AS margin FROM qb_bills b WHERE b.container_no = 'HMMU7010335' GROUP BY b.container_no",
+      shape: 'single', headline: '{container_no}: cost {cost}, invoiced {revenue}, margin {margin}.', formats: { cost: 'money', revenue: 'money', margin: 'money' } },
+    { q: 'which containers did we sell below cost', sql: "SELECT b.container_no, ROUND(SUM(b.total), 2) AS cost, (SELECT ROUND(SUM(i.total), 2) FROM qb_invoices i WHERE i.container_no = b.container_no) AS revenue FROM qb_bills b WHERE b.container_no IS NOT NULL GROUP BY b.container_no HAVING revenue IS NOT NULL AND revenue < cost ORDER BY (revenue - cost) ASC",
+      shape: 'list', headline: '{count} containers were invoiced for less than they cost.', title: 'Below cost, per QuickBooks' },
+
+    // BOUGHT AND NOT SOLD — cost sitting with no invoice against it.
+    { q: 'which containers have we bought but not invoiced', sql: "SELECT b.container_no, b.supplier, b.date, ROUND(SUM(b.total), 2) AS cost FROM qb_bills b WHERE b.container_no IS NOT NULL AND NOT EXISTS (SELECT 1 FROM qb_invoices i WHERE i.container_no = b.container_no) GROUP BY b.container_no ORDER BY b.date",
+      shape: 'list', headline: '{count} containers are bought with no invoice against them.', title: 'Bought, not sold' },
+
+    // WHICH BILLS, as opposed to how much. Note it does NOT total balances to
+    // answer what is owed — that is qb_suppliers, and the difference was
+    // $10.7M against $5.3M.
+    { q: 'which bills are still open in quickbooks', sql: "SELECT doc_no, date, supplier, container_no, ROUND(balance, 2) AS still_owed, payable_account FROM qb_bills WHERE balance > 0 ORDER BY date",
+      shape: 'list', headline: '{count} bills still have a balance in QuickBooks.', title: 'Open bills' },
+
+    // WHERE THE TWO BOOKS DISAGREE — the check she cannot do in QuickBooks.
+    { q: 'is quickbooks up to date', sql: 'SELECT as_of, minutes_old, bills, invoices, ROUND(owe, 2) AS owe, ROUND(unapplied_paid, 2) AS unapplied_paid, over_applied FROM qb_books',
+      shape: 'single', headline: 'QuickBooks was last read {minutes_old} minutes ago: {bills} bills, {invoices} invoices.', formats: { minutes_old: 'number', bills: 'number', invoices: 'number', owe: 'money', unapplied_paid: 'money' } },
 ];
 
 const YARD_EXAMPLES = [

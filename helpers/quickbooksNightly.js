@@ -21,6 +21,7 @@ const auth = require('./quickbooks/auth');
 const push = require('./quickbooks/push');
 
 const on = (v) => String(v || '').toLowerCase() === 'on';
+const money = (n) => `$${(Math.round((Number(n) || 0) * 100) / 100).toLocaleString('en-US', { minimumFractionDigits: 2 })}`;
 
 function enabled() {
     return on(process.env.QB_PROD_WRITES) && on(process.env.QB_SYNC);
@@ -67,6 +68,15 @@ async function run(opts = {}) {
                 if (e.action === 'asked') out.asked.push({ ...row, fix: stuckFix(row) });
             }
         }
+        // ── AND REFRESH WHAT THE QUESTION CHANNEL READS (2026-10-05) ──
+        // She asks "how much do we owe Inesh" on WhatsApp. That answer comes
+        // from a snapshot of her books on disk, never from a live call — a
+        // phone cannot wait for 610 bills. So the snapshot is rewritten here,
+        // after the sweep, while the token is already warm. It is best-effort:
+        // a failed snapshot must not fail the night's entry work, and a stale
+        // one still answers honestly because every answer carries its age.
+        try { out.snapshot = await require('./quickbooks/snapshot').write({ env }); }
+        catch (e) { out.snapshotError = e.message; }
         out.ok = true;
     } catch (e) {
         out.error = e.message;
@@ -154,6 +164,15 @@ function reportText(out) {
         'QuickBooks? cost already sitting on a cheque with no bill behind it? Lock a period on the',
         'QuickBooks page only once you have genuinely closed it.',
         '', 'Open the QuickBooks page in Jarvis to fix a stuck row or undo anything here.');
+    if (out.snapshot && out.snapshot.totals) {
+        const t = out.snapshot.totals;
+        lines.push('', `Books read for the question channel: ${t.bills} bills, ${t.invoices} invoices.`
+            + ` QuickBooks says we owe ${money(t.owe)} and are owed ${money(t.owed)}.`
+            + ` Ask on WhatsApp and that is the figure you get.`);
+    } else if (out.snapshotError) {
+        lines.push('', `The books were NOT read for the question channel: ${out.snapshotError}.`
+            + ' WhatsApp answers about money will quote whatever the last snapshot said, and will say how old it is.');
+    }
     return lines.join('\n');
 }
 

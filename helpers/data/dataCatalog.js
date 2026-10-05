@@ -131,6 +131,85 @@ const TABLES = [
         what: 'Documents generated and filed — invoices, proformas and BOLs. Use it to answer whether a document exists, not what it says.',
         columns: { kind: "'invoice', 'proforma' or 'bol'", filename: 'file name', container_no: 'container it belongs to', date: 'the day it was filed, YYYY-MM-DD', saved_at: 'timestamp' },
     },
+
+    // ── QUICKBOOKS: THE SAME MONEY, THE OTHER BOOK ────────────────────────
+    // The tables above are JARVIS's ledgers — what she typed. The five below
+    // are QUICKBOOKS — the accountant's book, which is the system of record
+    // for anything owed or owing. They disagree on purpose: QuickBooks holds
+    // entries her accountant made by hand that Jarvis never saw, and Jarvis
+    // holds containers QuickBooks has not been given yet. Answer "what do I
+    // owe" from QuickBooks; answer "what did we load" from Jarvis.
+    {
+        name: 'qb_suppliers',
+        what: 'What QUICKBOOKS says each supplier is owed. THE right source for "how much do we owe X" — this is the figure her accountant and QuickBooks itself report.',
+        columns: {
+            name: 'supplier name AS IT IS IN QUICKBOOKS, which can differ from bills.supplier in Jarvis',
+            balance: 'what QuickBooks says is owed to them, dollars, AFTER netting off any credit or prepayment. This is the answer to "what do we owe". Positive means Edge Metals owes them.',
+            unapplied_paid: 'money already PAID to them that is not matched to any bill. It is out of the bank but every bill it paid still reads open, so bill-level figures overstate the debt by this much.',
+            active: '1 if the supplier is active in QuickBooks',
+            as_of: 'the day the snapshot was taken, YYYY-MM-DD',
+        },
+    },
+    {
+        name: 'qb_customers',
+        what: 'What QUICKBOOKS says each customer owes Edge Metals. THE right source for "who owes us" and "has X paid".',
+        columns: {
+            name: 'customer name as it is in QuickBooks',
+            balance: 'what they still owe, dollars, after netting off credits. Positive means they owe Edge Metals.',
+            unapplied_received: 'money ALREADY RECEIVED from them that is not matched to any invoice. Their invoices still read open even though the cash arrived — NEVER chase a customer whose unapplied_received covers what they appear to owe.',
+            active: '1 if the customer is active in QuickBooks',
+            as_of: 'the day the snapshot was taken',
+        },
+    },
+    {
+        name: 'qb_bills',
+        what: 'The individual supplier bills in QuickBooks for 2026. Use it for WHICH bills, not for how much is owed in total (use qb_suppliers for that).',
+        columns: {
+            qb_id: "the bill's id in QuickBooks",
+            doc_no: "the supplier's invoice number on the bill",
+            date: 'bill date, YYYY-MM-DD',
+            supplier: 'supplier name in QuickBooks',
+            container_no: 'the container, read from the bill LINES. NULL on a bill with no container (a fee, a period summary, a truck)',
+            containers: 'how many distinct containers this one bill covers — more than 1 means it is a grouped or period bill',
+            total: 'the full amount of the bill',
+            balance: 'how much of it is still unpaid. 0 means settled. balance = total means nothing has been applied',
+            payable_account: 'which payable account it sits on. She runs more than one, so two bills can be owed on different accounts',
+            paid_by: 'how many payments or credits are linked to it. 0 means untouched',
+            as_of: 'the day the snapshot was taken',
+        },
+    },
+    {
+        name: 'qb_invoices',
+        what: 'The individual sales invoices in QuickBooks for 2026. Use it for WHICH invoices; use qb_customers for how much a customer owes.',
+        columns: {
+            qb_id: "the invoice's id in QuickBooks",
+            doc_no: 'her invoice number',
+            date: 'invoice date, YYYY-MM-DD',
+            customer: 'customer name in QuickBooks',
+            container_no: 'the container, read from the invoice LINES. NULL where there is none',
+            containers: 'how many distinct containers this invoice covers',
+            total: 'the invoiced amount',
+            balance: 'how much is still unpaid. 0 means paid',
+            due: 'due date, YYYY-MM-DD, where QuickBooks has one',
+            as_of: 'the day the snapshot was taken',
+        },
+    },
+    {
+        name: 'qb_books',
+        what: 'ONE ROW: the totals QuickBooks reports, and how old the snapshot is. Query it to say "as of last night" honestly, or to tell her the books have not been read yet.',
+        columns: {
+            as_of: 'the day the snapshot was taken, or NULL if QuickBooks has never been snapshotted',
+            minutes_old: 'how stale the figures are. NULL means there is no snapshot at all — say that rather than answering 0',
+            environment: "'production' or 'sandbox'",
+            owe: 'total owed to all suppliers, per QuickBooks',
+            owed: 'total owed to Edge Metals by all customers, per QuickBooks',
+            unapplied_paid: 'money paid to suppliers that is matched to no bill',
+            unapplied_received: 'money received from customers that is matched to no invoice',
+            bills: 'how many bills are in the snapshot',
+            invoices: 'how many invoices are in the snapshot',
+            over_applied: 'documents with more applied to them than their own value — an anomaly worth naming, not a figure to add up',
+        },
+    },
 ];
 
 // Her words for a number, so "what do we owe", "outstanding to suppliers" and
@@ -144,6 +223,12 @@ const DEFINITIONS = [
     'TRUCKING OWED = SUM(trucking_bills.balance) WHERE balance > 0.',
     'UNFINISHED / incomplete bills = bills.is_finished = 0, and still_needs says what is missing.',
     'A CONTAINER is identified by booking_no + container_no together, never by booking alone.',
+    'WHAT DO WE OWE / what is owed to a supplier, as the ACCOUNTANT would answer it = qb_suppliers.balance. Jarvis\'s own bills.balance answers "what have I typed in", which is a different question.',
+    'WHAT ARE WE OWED, as the accountant would answer it = qb_customers.balance, and qb_customers.unapplied_received must be mentioned whenever it is above zero.',
+    'HAS X PAID = qb_customers.balance for X, together with unapplied_received: a zero balance means paid, and a balance covered by unapplied_received means the money arrived but was never matched.',
+    'COST AND REVENUE FOR ONE CONTAINER, per QuickBooks = qb_bills.total against qb_invoices.total joined on container_no.',
+    'HOW OLD / up to date / as of / when QuickBooks was last read = qb_books.minutes_old and qb_books.as_of.',
+    'MONEY PAID BUT NOT MATCHED to a bill = qb_suppliers.unapplied_paid; money RECEIVED but not matched to an invoice = qb_customers.unapplied_received.',
 ];
 
 const GOTCHAS = [
@@ -154,6 +239,11 @@ const GOTCHAS = [
     'Names are typed by hand and drift ("Inesh" vs "Inesh Cores Chapin"). Match with LIKE and a wildcard on both sides, case-insensitively.',
     'Money is dollars. Round only in the final SELECT, never in the middle.',
     'Edge Yard (loads, yard inventory, petty cash, expenses, trucker bills) is NOT in this database. If a question is about the yard, say so instead of answering from these tables.',
+    'NEVER answer "what do we owe" by adding up qb_bills.balance. Doing that gave $10.7M when the real figure was $5.3M, because $4.98M of payments are recorded against no bill, so the bills they paid still read open. The answer is qb_suppliers.balance. The same trap exists on the customer side.',
+    'The qb_ tables are a SNAPSHOT, not live. Check qb_books.minutes_old and say how old the figures are. If qb_books.as_of is NULL, QuickBooks has never been read — say exactly that; do not report zero.',
+    'A supplier or customer name in the qb_ tables can differ from the same party in bills/sales ("TAEWON AUTOMOTIVE CO" and "TAEWON PRECEISION" are one company on two records). Match with LIKE on both sides, and never join the qb_ tables to bills/sales on name expecting a clean match.',
+    'Join qb_bills to qb_invoices on container_no for a per-container question, never on party or amount. container_no is NULL on fee and period-summary bills, so exclude NULLs in that join.',
+    'A container number only identifies one shipment within about 120 days — shipping lines reuse boxes. Do not treat the same container_no a year apart as the same load.',
 ];
 
 function tableNames() { return TABLES.map((t) => t.name); }
