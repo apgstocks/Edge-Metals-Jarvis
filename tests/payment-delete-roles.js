@@ -242,6 +242,135 @@ section('E — the buttons match the rules');
        'a button that simply vanishes reads as a bug, not as a rule');
 }
 
+// ── F — DELETE ON THE PAYMENTS TAB, WHERE THE PAYMENTS ARE ────────────────
+// Apsara, 2026-10-06: "Also i already told you that there should be an option
+// to delete the payment bill for edge metals", then "Unlock and delete".
+//
+// Delete already existed — inside openBillPayForm, the Pay modal on the Bills
+// tab. So the screen that LISTS her 46 supplier payments could not remove one,
+// while the form for MAKING a payment could. The tab said "Read only" in 10px
+// grey at the bottom, which is not a discoverable answer. She looked in the
+// right place and found nothing.
+//
+// Asked whether to open deletion up to Admin as well, she chose not to, and
+// said office staff also hold ADMIN_PASSWORD — which is exactly why the
+// 2026-09-16 Jarvis-only rule was right. So this adds a button, not a
+// permission. Section C above still proves the route itself refuses admin.
+section('F — the Payments tab can delete, on the Jarvis profile only');
+{
+    const web = fs.readFileSync(path.join(ROOT, 'dashboard/index.html'), 'utf8');
+
+    ck('the Payments tab has a Delete, gated the same way',
+       /metalsCanDelete\(\)[\s\S]{0,120}?`<button class="spDel"/.test(web),
+       'she was sent to this tab and found nothing to click');
+    ck('  and it posts to the same route the modal uses',
+       /\/api\/bill-payments\/\$\{encodeURIComponent\(btn\.dataset\.payment\)\}/.test(web));
+    ck('  hidden, it says how to get it back',
+       /Jarvis profile to remove a supplier payment/.test(web),
+       'a button that simply vanishes reads as a bug, not as a rule');
+
+    // ── THE COLUMN ARITHMETIC ────────────────────────────────────────────
+    // Adding a cell to the body and forgetting the header (or the empty
+    // state's colspan) shifts every figure one column left — Sent would
+    // print under Containers. It looks like a data bug and it is a typo.
+    const tabStart = web.indexOf('async function renderSupplierPaymentsTab');
+    const tabEnd = web.indexOf('const apply = () =>', tabStart);
+    const tab = web.slice(tabStart, tabEnd);
+    ck('  the header row still matches the body row',
+       /'Date', 'Supplier', 'Kind', 'Method', 'Bank', 'Reference', 'Containers', 'Sent', 'Applied', 'Unapplied', ''/.test(tab),
+       'a body cell with no header shifts every figure one column left');
+    ck('  and the empty state spans all of them',
+       /colspan="11"/.test(tab) && !/colspan="10"/.test(tab),
+       '"Nothing sent to a supplier yet" must not stop short of the table');
+
+    // The arming must say what it costs. "Are you sure?" is the same dialog
+    // for a typo and for reopening eleven settled containers.
+    ck('  the first click says how many containers reopen',
+       /Reopens \$\{n\} container/.test(tab), 'a count is the difference between a typo and real money');
+    ck('  and it disarms itself', /5000\)/.test(tab), 'a live delete button left hovering is a hazard');
+    ck('  a refusal is explained, not shown as a code',
+       /Jarvis profile only/.test(tab), 'a 403 here means the wrong profile, which is a sentence');
+
+    // ── THE FOOTER NOTE TELLS THE TRUTH IN BOTH STATES ───────────────────
+    // The first cut of this change dropped "Read only" for EVERYONE, and
+    // tests/ledger-render.js went red — correctly. Without the Jarvis
+    // profile this tab really is read only, and saying otherwise would be a
+    // lie to the session that most needs the explanation. With it, calling
+    // the tab read-only while it carries a Delete button is the other lie.
+    ck('  the note still says Read only when Delete is not offered',
+       /Read only — record and apply from Pay/.test(tab),
+       'a non-Jarvis session sees no Delete, so the tab is genuinely read only');
+    ck('  and names what Delete does when it IS offered',
+       /Delete reverses a payment and reopens its containers/.test(tab),
+       'the consequence belongs next to the button, not only inside it');
+
+    // It must NOT have quietly relaxed the Pay modal's own Delete.
+    ck('the Bills-tab modal Delete is untouched',
+       /metalsCanDelete\(\) \? `<button class="bpDel"/.test(web),
+       'the new screen must not have been built by moving the old one');
+}
+
+// ── F2 — END TO END, THROUGH THE ROUTES THE TAB REALLY USES ───────────────
+// "ALwyas test end to end when you add a new feature." A markup check and a
+// route check can both be green while the two never meet. This records a
+// payment through the route the Pay sheet posts to, reads it back from the
+// route this tab reads, deletes it through the route the new button calls,
+// and reads it back again. Measured as a DELTA, because sections B-D above
+// have already written to this store.
+section('F2 — record, see it, delete it, see it gone');
+{
+    const list = async (s) => (await req('GET', '/api/bill-payments', { sid: s })).json;
+
+    const before = await list(sid(jarvis));
+    const n0 = ((before && before.payments) || []).length;
+
+    const made = await req('POST', '/api/bill-payments', {
+        sid: sid(jarvis),
+        body: { supplier: 'DELETE-ME SUPPLY CO', amount: 1234.56, mode: 'Wire',
+                bank: 'BofA', date: '2026-10-06', kind: 'advance', allocations: [] },
+    });
+    ck('a supplier advance is recorded', made.status === 200 || made.status === 201,
+       `${made.status} ${JSON.stringify(made.json).slice(0, 160)}`);
+
+    const mid = await list(sid(jarvis));
+    const rows = (mid && mid.payments) || [];
+    ck('  and the Payments tab\'s own route returns it',
+       rows.length === n0 + 1, `${n0} -> ${rows.length}`);
+    const mine = rows.find((p) => p.supplier === 'DELETE-ME SUPPLY CO');
+    ck('  with an id the Delete button can use',
+       !!(mine && mine.id), JSON.stringify(mine && Object.keys(mine || {})).slice(0, 160));
+
+    // Exactly what the button does.
+    const gone = await req('DELETE', `/api/bill-payments/${encodeURIComponent(mine.id)}`, { sid: sid(jarvis) });
+    ck('the Jarvis profile may delete it', gone.status === 200,
+       `${gone.status} ${JSON.stringify(gone.json).slice(0, 160)}`);
+
+    const after = await list(sid(jarvis));
+    const left = (after && after.payments) || [];
+    ck('  and it is gone from the list the tab reads',
+       left.length === n0, `${n0} expected, got ${left.length}`);
+    ck('  with no trace of it by supplier either',
+       !left.some((p) => p.supplier === 'DELETE-ME SUPPLY CO'),
+       'a row removed from a count but still findable is not deleted');
+
+    // And the gate really is a gate, on the exact route the button calls.
+    const made2 = await req('POST', '/api/bill-payments', {
+        sid: sid(jarvis),
+        body: { supplier: 'ADMIN-CANNOT-TOUCH', amount: 99.99, mode: 'Wire',
+                bank: 'BofA', date: '2026-10-06', kind: 'advance', allocations: [] },
+    });
+    const victim = ((await list(sid(jarvis))).payments || []).find((p) => p.supplier === 'ADMIN-CANNOT-TOUCH');
+    ck('a second advance exists to try against', !!(victim && victim.id), String(made2.status));
+    const refused = await req('DELETE', `/api/bill-payments/${encodeURIComponent(victim.id)}`, { sid: sid(admin) });
+    ck('admin is refused by the server, not merely by a hidden button',
+       refused.status === 401 || refused.status === 403, String(refused.status));
+    const still = ((await list(sid(jarvis))).payments || []).some((p) => p.supplier === 'ADMIN-CANNOT-TOUCH');
+    ck('  and the payment really survived the refusal', still === true,
+       'a route that refuses but deletes anyway is the worst of both');
+    // Clean up so later runs of this file start where they started.
+    await req('DELETE', `/api/bill-payments/${encodeURIComponent(victim.id)}`, { sid: sid(jarvis) });
+}
+
 console.log(`\n  ${pass} passed, ${fail} failed`);
 if (failures.length) { console.log('\n  failed:'); failures.forEach((f) => console.log('    · ' + f)); }
 server.close();

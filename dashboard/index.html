@@ -8299,7 +8299,7 @@ async function renderSupplierPaymentsTab() {
       <div class="card" style="padding:0; overflow-x:auto;">
         <table style="width:100%; border-collapse:collapse; font-size:12px;">
           <thead><tr style="background:var(--bg-sunken);">
-            ${['Date', 'Supplier', 'Kind', 'Method', 'Bank', 'Reference', 'Containers', 'Sent', 'Applied', 'Unapplied']
+            ${['Date', 'Supplier', 'Kind', 'Method', 'Bank', 'Reference', 'Containers', 'Sent', 'Applied', 'Unapplied', '']
               .map((h, i) => `<th style="padding:8px 9px; text-align:${i >= 7 ? 'right' : 'left'}; white-space:nowrap; font-family:var(--font-mono); font-size:9px; letter-spacing:.1em; text-transform:uppercase; color:var(--text-muted);">${h}</th>`).join('')}
           </tr></thead>
           <tbody>${rows.length ? rows.map((p) => `
@@ -8314,17 +8314,92 @@ async function renderSupplierPaymentsTab() {
               <td style="padding:7px 9px; text-align:right; font-family:var(--font-mono);">${ledMoney(p.amount)}</td>
               <td style="padding:7px 9px; text-align:right; font-family:var(--font-mono); color:var(--text-muted);">${ledMoney(p.used)}</td>
               <td style="padding:7px 9px; text-align:right; font-family:var(--font-mono); ${p.left > 0.005 ? 'color:var(--status-good, #4ade80);' : 'color:var(--text-faint);'}">${ledMoney(p.left)}</td>
+              <td style="padding:7px 9px; text-align:right; white-space:nowrap;">${metalsCanDelete()
+                ? `<button class="spDel" data-payment="${esc(p.id)}" data-containers="${p.containers || 0}"
+                     style="background:none; border:1px solid var(--border-default); border-radius:var(--radius-sm); padding:3px 9px; font-size:11px; color:var(--danger, #f87171); cursor:pointer; white-space:nowrap;">Delete</button>`
+                : `<span title="Sign in with the Jarvis profile to remove a supplier payment" style="font-size:11px; color:var(--text-faint);">&mdash;</span>`}</td>
             </tr>`).join('')
-            : `<tr><td colspan="10" style="padding:26px; text-align:center; color:var(--text-faint); font-family:var(--font-mono); font-size:12px;">Nothing sent to a supplier yet.</td></tr>`}
+            : `<tr><td colspan="11" style="padding:26px; text-align:center; color:var(--text-faint); font-family:var(--font-mono); font-size:12px;">Nothing sent to a supplier yet.</td></tr>`}
           </tbody>
         </table>
       </div>
       <div style="margin-top:10px; font-family:var(--font-mono); font-size:10px; color:var(--text-faint);">
-        Read only — record and apply from Pay, on the Bills tab. An advance left the bank the day it was made; Unapplied is the part not yet against a container.
+        ${metalsCanDelete()
+          ? 'Delete reverses a payment and reopens its containers. Record and apply from Pay, on the Bills tab'
+          : 'Read only — record and apply from Pay, on the Bills tab'}. An advance left the bank the day it was made; Unapplied is the part not yet against a container.
       </div>
     </div>`;
 
   wireMetalsTabs();
+
+  // ── DELETE, WHERE THE PAYMENTS ACTUALLY ARE ──────────────────────────
+  // Apsara, 2026-10-06: "Also i already told you that there should be an
+  // option to delete the payment bill for edge metals", then "Unlock and
+  // delete" — having been sent to this tab and found nothing.
+  //
+  // She was right to look here and wrong to expect it. Delete DID exist,
+  // but only inside openBillPayForm — the Pay modal on the Bills tab. So
+  // the screen that LISTS her 46 payments could not remove one, while the
+  // form for MAKING a payment could. Nobody would guess that, and this tab
+  // said "Read only" in 10px grey at the bottom, which is not an answer.
+  //
+  // NOTHING ABOUT PERMISSION CHANGES HERE. Asked whether to open this up,
+  // she chose "just put Delete on the Payments tab" and said office staff
+  // also hold ADMIN_PASSWORD — which is exactly why her 2026-09-16 rule
+  // (Edge Metals ledger deletions are the Jarvis profile's) was right. Same
+  // metalsCanDelete() gate, same requireSuper route, same audit.
+  //
+  // The arming is deliberately the same two-click shape as the modal's: a
+  // first click that says what it is about to undo, and only a second that
+  // does it. It is written out here rather than shared with openBillPayForm
+  // because that modal is a working money path and quietly refactoring it
+  // to serve a new screen is how the supplier-payment break happened. The
+  // convergence is filed instead, so the duplication is a decision rather
+  // than an accident.
+  {
+    const disarm = (b) => {
+      b.textContent = 'Delete';
+      b.style.background = 'none';
+      b.style.color = 'var(--danger, #f87171)';
+    };
+    let armed = null;
+    document.querySelectorAll('.spDel').forEach((btn) => {
+      btn.onclick = async () => {
+        if (armed !== btn) {
+          document.querySelectorAll('.spDel').forEach(disarm);
+          armed = btn;
+          const n = Number(btn.dataset.containers || 0);
+          // The count is the point: an advance against nothing is a typo,
+          // an applied payment reopens containers that currently read as
+          // settled. One button, two very different consequences.
+          btn.textContent = n ? `Reopens ${n} container${n === 1 ? '' : 's'} — sure?` : 'Delete — sure?';
+          btn.style.background = 'var(--danger, #f87171)';
+          btn.style.color = '#FFFFFF';
+          setTimeout(() => { if (armed === btn) { armed = null; disarm(btn); } }, 5000);
+          return;
+        }
+        armed = null;
+        btn.disabled = true;
+        btn.textContent = 'Deleting…';
+        try {
+          await api(`/api/bill-payments/${encodeURIComponent(btn.dataset.payment)}`, { method: 'DELETE' });
+          // Re-render rather than removing the row: Sent, Unapplied and the
+          // advance count all moved, and a table that agrees with itself
+          // only in the row you happened to change is worse than a reload.
+          await renderSupplierPaymentsTab();
+        } catch (e) {
+          btn.disabled = false;
+          disarm(btn);
+          // Surfaced on the row, not in an alert — she is looking at the
+          // row, and a 403 here means the session is not the Jarvis
+          // profile, which is a sentence rather than a code.
+          btn.textContent = /403|forbidden/i.test(String(e && e.message))
+            ? 'Jarvis profile only' : 'Failed — try again';
+        }
+      };
+    });
+  }
+
   const apply = () => {
     supplierPayFilter.supplier = $('spSupplier').value.trim();
     supplierPayFilter.kind = $('spKind').value;
