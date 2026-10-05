@@ -2,7 +2,26 @@
 
 The Loads feature's gross/tare camera buttons use `getUserMedia()`. Browsers
 block that API outside a secure context — `https://`, or `http://localhost`.
-Jarvis today is reached at `http://35.233.131.198:8080` — plain HTTP, no TLS.
+~~Jarvis today is reached at `http://35.233.131.198:8080` — plain HTTP, no TLS.~~
+
+> **CORRECTED 2026-10-05. The line above was true when this was written and
+> has been false since 1 September.** It is the reason a dead URL kept
+> circulating: a customer in the US spent an afternoon on
+> `ERR_CONNECTION_TIMED_OUT` at that address, on two devices and on both
+> wifi and mobile data, while the server was perfectly healthy. Port 8080
+> never answered the outside world — Caddy terminates TLS on 443 and proxies
+> to `127.0.0.1:8080`.
+>
+> **The address is `https://jarvis.edgemetals.com`.** That is the only one to
+> share. `https://jarvis.edgemetals.com/health` returns `{"status":"ok"}` with
+> no login, which makes it the right thing to send someone who says they
+> cannot get in.
+>
+> Port 8080 now ANSWERS and redirects there (301, path preserved), so an old
+> bookmark heals itself the first time it is used — but that requires TCP 8080
+> to be open in the GCP firewall, which it is not by default. See api.js's
+> plain-HTTP middleware and tests/plain-http-redirect.js. It redirects only;
+> it never serves the app in cleartext.
 Everything else in the Loads feature works fine over plain HTTP; only the two
 camera buttons need this.
 

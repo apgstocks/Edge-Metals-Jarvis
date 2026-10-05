@@ -175,6 +175,52 @@ function createApi() {
             + 'Only correct if a proxy you control is in front of this.');
     }
 
+    // ── PORT 8080 ANSWERS, AND SENDS THEM TO HTTPS ───────────────────────
+    // Apsara, 2026-10-05: "make it reacgable at http://35.233.131.198:8080".
+    //
+    // The old bare-IP URL keeps circulating — HTTPS_SETUP.md still states it
+    // in the present tense at line 5 — and a customer in the US lost an
+    // afternoon to `ERR_CONNECTION_TIMED_OUT` on it. The address itself is
+    // not the problem; nothing was listening to the outside world on 8080,
+    // because Caddy terminates TLS on 443 and talks to 127.0.0.1:8080.
+    //
+    // So 8080 now answers and REDIRECTS. What it must never do is SERVE the
+    // app over plain HTTP:
+    //
+    //   · APP_PASSWORD is 4 characters and ADMIN_PASSWORD is 5 (see the boot
+    //     lines below), and there is no login lockout. In cleartext, on hotel
+    //     or cafe wifi, those are readable by anyone on the path — along with
+    //     supplier payments, bank details and the Plaid-fed ledger.
+    //   · getUserMedia() refuses to run outside a secure context, so the
+    //     camera buttons on Loads would break again. Avoiding that is the
+    //     entire reason HTTPS was set up.
+    //
+    // A redirect gives her what she asked for and costs none of that: the
+    // 301 happens BEFORE any password is typed, the path and query survive,
+    // and an old bookmark heals itself the first time it is used.
+    //
+    // HOW IT TELLS THE TWO APART. Caddy sets X-Forwarded-Proto: https on
+    // everything it proxies (confirmed in its own access log). A request
+    // arriving straight at 8080 has no such header. trust proxy is already
+    // set above, so req.secure reflects it rather than the raw socket.
+    //
+    // LOOPBACK IS EXEMPT, and that is not a detail: the VM's own health
+    // checks, `curl localhost:8080/health`, and anything pm2 or a cron job
+    // reaches for would otherwise be answered with a redirect to a hostname
+    // and a TLS handshake. That would have turned a URL fix into an outage.
+    app.use((req, res, next) => {
+        if (req.secure) return next();                       // came through Caddy
+        const ip = String(req.ip || req.socket.remoteAddress || '');
+        if (/^(::1|::ffff:127\.|127\.)/.test(ip)) return next();   // on the box itself
+        const host = String(req.headers.host || '');
+        // Already on the real hostname over plain HTTP (port 80) — Caddy
+        // handles that redirect itself; do not fight it.
+        if (/^jarvis\.edgemetals\.com/i.test(host)) return next();
+        const target = 'https://jarvis.edgemetals.com' + (req.originalUrl || '/');
+        res.set('Cache-Control', 'no-store');                // never cache a redirect of a login
+        return res.redirect(301, target);
+    });
+
     // ── say out loud whether the top-level profile is live ────────────────
     // A misconfigured JARVIS_PASSWORD fails SILENTLY at the login form: the
     // password is simply not recognised, which looks exactly like a typo. This
