@@ -8,8 +8,16 @@
 // Jarvis asks the metals book; Scout asks the yard book. Neither is given the
 // other's file, so the separation is not a filter anyone can forget.
 const METALS_EXAMPLES = [
-    { q: 'how much do we owe Inesh', sql: "SELECT supplier, ROUND(SUM(balance), 2) AS owed, COUNT(*) AS bills FROM bills WHERE balance > 0 AND lower(supplier) LIKE '%inesh%' GROUP BY supplier",
-      shape: 'single', headline: 'We owe {supplier} {owed} across {bills} bills.', formats: { owed: 'money', bills: 'number' } },
+    // ── NOT "how much do we owe" ANY MORE (2026-10-05) ───────────────────
+    // This example owned that question until QuickBooks arrived in the mirror.
+    // It cannot any longer: DEFINITIONS now says what she owes is
+    // qb_suppliers.balance, and leaving the same question on two examples
+    // pointed at two different tables is contradictory guidance on the most
+    // common question she asks — caught by tests/book-examples.js, which I
+    // had not run. What this query actually answers is what JARVIS holds, so
+    // that is what it is now asked.
+    { q: 'what have we entered in our own bills for Inesh', sql: "SELECT supplier, ROUND(SUM(balance), 2) AS owed, COUNT(*) AS bills FROM bills WHERE balance > 0 AND lower(supplier) LIKE '%inesh%' GROUP BY supplier",
+      shape: 'single', headline: 'Our own bills show {owed} outstanding to {supplier} across {bills} bills.', formats: { owed: 'money', bills: 'number' } },
     { q: 'which customers owe us money', sql: 'SELECT customer, ROUND(SUM(balance), 2) AS owed FROM sales WHERE balance > 0 GROUP BY customer ORDER BY owed DESC',
       shape: 'list', headline: '{count} customers owe us money.', title: 'Outstanding by customer' },
     { q: 'how many containers did we load this month', sql: "SELECT COUNT(DISTINCT container_no) AS containers FROM bills WHERE substr(date, 1, 7) = strftime('%Y-%m', 'now', 'localtime')",
