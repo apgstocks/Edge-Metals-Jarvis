@@ -152,6 +152,25 @@ async function sweepParty(party, mailboxes) {
     const foundPdfs = []; // [{ base64, filename, messageId, mailbox, subject, from, date }]
     let scanned = 0;
 
+    // ── Cross-mailbox dedup ───────────────────────────────────────────────
+    // Apsara, 2026-10-06: "if the same mail is there in both inbox, will it
+    // ignore one?" — it did NOT, before this. Gmail gives each mailbox its
+    // own internal message id, so a CC'd copy (same email, landed in both
+    // bose@ and apsara@) was being fetched, extracted, and cross-checked
+    // TWICE — double the Gemini calls, and the same real invoice showing up
+    // twice in the "missing" report. The RFC Message-ID header is identical
+    // across both copies of a genuinely duplicated email (unlike Gmail's own
+    // per-mailbox id), so that's the key used here. Case-insensitive lookup
+    // because header casing on the wire varies ("Message-ID" vs
+    // "Message-Id"). A message with no Message-ID header at all is never
+    // deduped — safer to risk a double-count than to silently drop a real
+    // invoice because of a missing header.
+    const seenRfcIds = new Set();
+    const getHeader = (hdrs, name) => {
+        const key = Object.keys(hdrs).find((k) => k.toLowerCase() === name.toLowerCase());
+        return key ? hdrs[key] : null;
+    };
+
     for (const mb of mailboxes) {
         let messages;
         try {
@@ -168,6 +187,16 @@ async function sweepParty(party, mailboxes) {
             const hdrs = Object.fromEntries((msg.payload.headers || []).map((h) => [h.name, h.value]));
             const subject = hdrs.Subject || '(no subject)';
             const from = hdrs.From || '(unknown sender)';
+
+            const rfcId = getHeader(hdrs, 'Message-ID');
+            if (rfcId) {
+                if (seenRfcIds.has(rfcId)) {
+                    console.log(`  [${party.label}] skipping duplicate — same Message-ID already seen in another mailbox: "${subject.slice(0, 50)}"`);
+                    continue;
+                }
+                seenRfcIds.add(rfcId);
+            }
+
             const { pdfParts } = gmail.getEmailContent(msg.payload);
             for (const part of pdfParts) {
                 let att;
