@@ -1335,6 +1335,28 @@ function start() {
     cron.schedule('0 6 * * *',    () => pricelistFallback().catch(e => console.error('[SCHED] pricelist:', e)), TZ);
     cron.schedule('0 23 * * *',   () => autoArchive().catch(e => console.error('[SCHED] archive:', e)),  TZ);
     cron.schedule('0 7 * * *',    () => nightlyLogDigest().catch(e => console.error('[SCHED] log-digest:', e)), TZ);
+    // ── 05:40 — CAN PEOPLE ACTUALLY GET IN ───────────────────────────────
+    // Apsara, 2026-10-05: "Find a permanent solution to fix this foreveer",
+    // after a customer in the US spent an afternoon on
+    // ERR_CONNECTION_TIMED_OUT at the pre-HTTPS address while the server was
+    // perfectly healthy.
+    //
+    // Nothing in this system had ever checked that its own public address
+    // answers. Every other watcher looks INWARD — at ledgers, at the sheet,
+    // at QuickBooks — and all of them were green while the front door was
+    // unreachable for the people who mattered. The first thing to find out
+    // was a customer.
+    //
+    // Five minutes ahead of the bank pull so that if the server is
+    // unreachable she hears THAT first, rather than reading a bank report
+    // from a machine nobody can log into.
+    //
+    // Silent when every address behaves. See helpers/entrances.js for which
+    // failures qualify and why a declared-dead address is never attempted.
+    cron.schedule('40 5 * * *',   () => require('./helpers/entrancesJob').run()
+        .then((r) => { if (!r.ok) console.warn('[SCHED] entrances: ' + r.broken.length + ' address(es) not working'); })
+        .catch(e => console.error('[SCHED] entrances:', e)), TZ);
+
     // ── 05:45 — THE BANK, BEFORE ANY AGENT LOOKS AT IT ───────────────────
     // Apsara, 2026-10-05: "i should nt struggle at all during tax filing."
     // The matching screen has a Pull button because a person sometimes wants
