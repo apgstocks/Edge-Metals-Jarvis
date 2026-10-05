@@ -42,10 +42,26 @@ const BILLS = {
     11: { Id: '11', DocNumber: 'A-11', TxnDate: '2026-03-02', TotalAmt: 300, Balance: 180, SyncToken: '0', LinkedTxn: [{ TxnId: '77', TxnType: 'BillPaymentCheck' }], VendorRef: { value: '5', name: 'Midland' }, APAccountRef: { value: '98' } },
     12: { Id: '12', DocNumber: 'A-12', TxnDate: '2026-03-03', TotalAmt: 50, Balance: 50, SyncToken: '0', LinkedTxn: [], VendorRef: { value: '5', name: 'Midland' }, APAccountRef: { value: '33' } },
 };
+// ── a payable account that belongs to ANOTHER COMPANY ─────────────────────
+// Her books carry "Accounts Payable - Zimex" alongside her own two. She has
+// said plainly that her companies' money is never netted or merged, so a
+// consolidation that swept those bills onto Edge Metals' payable would be the
+// one mistake this whole app exists to prevent.
+ck('a company qualifier after a dash is read as another company', P.companyOf('Accounts Payable - Zimex') === 'zimex');
+ck('...in brackets too', P.companyOf('Accounts Payable (Zimex)') === 'zimex');
+ck('...and after a colon', P.companyOf('A/P: Edge Yard') === 'edge yard');
+ck('a plain account has no company', P.companyOf('Vendor Payable') === '');
+ck('QuickBooks\' OWN default name is not a company — "Accounts Payable (A/P)" blocked every move on the first run',
+   P.companyOf('Accounts Payable (A/P)') === '');
+ck('...nor is an accounting word like Trade', P.companyOf('Accounts Payable - Trade') === '');
+ck('two plain payables are the same book', P.sameBook('Accounts Payable', 'Vendor Payable') === true);
+ck('a company payable is NOT the same book', P.sameBook('Accounts Payable', 'Accounts Payable - Zimex') === false);
+
 const ACCOUNTS = [
     { Id: '33', Name: 'Accounts Payable (A/P)', Active: true, CurrentBalance: -50 },
     { Id: '98', Name: 'Vendor Payable', Active: true, CurrentBalance: -280 },
     { Id: '99', Name: 'Old Payable', Active: false, CurrentBalance: 0 },
+    { Id: '77', Name: 'Accounts Payable - Zimex', Active: true, CurrentBalance: 0 },
 ];
 const writes = [];
 const ok = (body) => ({ ok: true, status: 200, text: async () => JSON.stringify(body) });
@@ -84,6 +100,26 @@ const F = { fetchImpl: fakeFetch, env: 'sandbox' };
     refused = null;
     try { await P.plan({ from: '98', to: '98', ...F }); } catch (e) { refused = e.message; }
     ck('from and to being the same is refused', /same account/.test(refused || ''), refused);
+
+    refused = null;
+    try { await P.plan({ from: '98', to: '77', ...F }); } catch (e) { refused = e.message; }
+    ck('THE COMPANY GUARD: moving her bills onto Zimex\'s payable is refused outright',
+       /two different companies/.test(refused || ''), refused);
+    ck('...and it says what she told us instead of just erroring',
+       /settle those with real payments each way/.test(refused || ''), refused);
+    refused = null;
+    try { await P.plan({ from: '77', to: '33', ...F }); } catch (e) { refused = e.message; }
+    ck('...and the other direction too', /two different companies/.test(refused || ''), refused);
+
+    const sv = await P.survey({ ...F });
+    // #98 holds two of the three bills, #33 one — so #98 is the suggestion,
+    // because consolidating onto it is the smaller job. It is only ever a
+    // suggestion: apply() refuses to run without her explicit from/to and ids.
+    ck('the survey suggests keeping the account carrying the most documents, within her own book',
+       sv.keep === '98', { keep: sv.keep });
+    ck('...and names another company\'s payable as separate, not as something to tidy away',
+       sv.separate.length === 1 && sv.separate[0].company === 'zimex' && /never moved between two companies/.test(sv.separate[0].why), sv.separate);
+    ck('...and an inactive empty account does not become the one to keep', sv.keep !== '99');
 
     const dry = await P.apply({ from: '98', to: '33', ids: ['10'], dryRun: true, ...F });
     ck('a dry run moves nothing', dry.moved.length === 1 && dry.moved[0].dryRun === true && writes.length === 0);

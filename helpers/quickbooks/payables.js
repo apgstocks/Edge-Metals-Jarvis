@@ -71,9 +71,39 @@ function whyHeld(bill) {
     return null;
 }
 
+// ── TWO COMPANIES ARE NOT TWO ACCOUNTS (2026-10-05) ───────────────────────
+// Her books carry THREE payable accounts, and one of them is "Accounts Payable
+// - Zimex". Apsara, 2026-09-21, on exactly this: Edge Metals and Edge Yard
+// "are different companies. A rule for one is not a rule for the other", and
+// she chose to settle inter-company balances with real payments each way — no
+// netting. A consolidation that cheerfully swept Zimex's bills onto Edge
+// Metals' payable would be one company absorbing another's money, which is
+// the one thing this app exists to prevent.
+//
+// So a qualifier after a dash, a colon or in brackets is read as a company,
+// and a move between two different ones is refused outright. It is not
+// something to warn about and proceed with.
+// Not every qualifier is a company. QuickBooks' own default account is called
+// "Accounts Payable (A/P)", and reading "A/P" as a company would have treated
+// the main payable as another company's book and blocked every move — found on
+// the first run of this, 2026-10-05.
+const NOT_A_COMPANY = /^(a\/p|ap|a\/r|ar|accounts? payable|payable|trade|main|default|old|new|current|sub|\d+)$/i;
+function companyOf(name) {
+    const parts = String(name || '').split(/\s[-\u2013\u2014]\s|\s*:\s*|\s*\(/);
+    if (parts.length < 2) return '';
+    const q = parts[1].replace(/\)\s*$/, '').trim();
+    if (!q || q.length <= 3 || NOT_A_COMPANY.test(q)) return '';
+    return q.toLowerCase();
+}
+function sameBook(a, b) {
+    const x = companyOf(a), y = companyOf(b);
+    return x === y;
+}
+
 async function accounts(env = auth.qbEnv(), fetchImpl) {
     const r = await client.query(`select * from Account where AccountType = 'Accounts Payable' maxresults 100`, { env, fetchImpl });
-    return (r.Account || []).map((a) => ({ id: String(a.Id), name: a.Name, active: a.Active !== false, balance: r2(a.CurrentBalance) }));
+    return (r.Account || []).map((a) => ({ id: String(a.Id), name: a.Name, active: a.Active !== false,
+        balance: r2(a.CurrentBalance), company: companyOf(a.Name) }));
 }
 
 // ── what is actually on each payable account ───────────────────────────────
@@ -96,9 +126,15 @@ async function survey({ env = auth.qbEnv(), fetchImpl } = {}) {
     // account carrying the most documents. Guessing by name ("Accounts
     // Payable") would pick the wrong one on books where the custom account is
     // the working one.
-    const keep = rows.slice().sort((x, y) => (y.movable + y.held + y.settled) - (x.movable + x.held + x.settled))[0] || null;
+    // Only the main book is consolidated. Another company's payable is not a
+    // duplicate to be tidied away — it is another company's.
+    const main = rows.filter((a) => !a.company);
+    const other = rows.filter((a) => a.company);
+    const keep = main.slice().sort((x, y) => (y.movable + y.held + y.settled) - (x.movable + x.held + x.settled))[0] || null;
     return { accounts: rows, keep: keep ? keep.id : null, count: rows.length,
-        consolidated: rows.filter((a) => a.movable + a.held + a.settled > 0).length <= 1 };
+        separate: other.map((a) => ({ id: a.id, name: a.name, company: a.company, balance: a.balance,
+            why: `"${a.name}" reads as ${a.company}'s payable, not this book's — bills are never moved between two companies` })),
+        consolidated: main.filter((a) => a.movable + a.held + a.settled > 0).length <= 1 };
 }
 
 // ── the move list, and what will not move ──────────────────────────────────
@@ -109,6 +145,13 @@ async function plan({ from, to, env = auth.qbEnv(), limit = 500, fetchImpl } = {
     const target = accs.find((a) => a.id === String(to));
     if (!target) throw new Error(`#${to} is not a payable account on these books`);
     if (!target.active) throw new Error(`#${to} ${target.name} is inactive — moving bills onto it would hide them`);
+    const source = accs.find((a) => a.id === String(from));
+    if (source && !sameBook(source.name, target.name)) {
+        const nameOf = (a) => companyOf(a.name) || 'this book';
+        throw new Error(`#${from} ${source.name} and #${to} ${target.name} read as two different companies`
+            + ` (${nameOf(source)} and ${nameOf(target)}). Bills are never moved between companies — you settle those with real payments each way.`
+            + ` If the names are misleading rather than the accounts, rename them in QuickBooks first.`);
+    }
 
     const bills = (await allBills(`TxnDate >= '2000-01-01'`, env, fetchImpl))
         .filter((b) => String((b.APAccountRef || {}).value || '') === String(from));
@@ -204,4 +247,4 @@ function reportText(s) {
     return L.join('\n');
 }
 
-module.exports = { survey, plan, apply, undo, accounts, untouched, paymentsOn, whyHeld, reportText };
+module.exports = { survey, plan, apply, undo, accounts, untouched, paymentsOn, whyHeld, reportText, companyOf, sameBook };

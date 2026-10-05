@@ -770,6 +770,52 @@ function mount(app, cfg) {
         } catch (e) { res.status(400).json({ error: e.message }); }
     });
 
+    // ── ONE PAYABLES ACCOUNT, NOT TWO ──────────────────────────────────────
+    // Apsara, 2026-09-30. QuickBooks refuses an account merge over the API, so
+    // the documents move instead. The hard limit, proved in sandbox on
+    // 2026-10-05 (scripts/qb-payables-proof.js): moving a bill that has been
+    // paid is ACCEPTED and silently unapplies the payment. Only untouched
+    // bills move, and the plan is always remade here from live data.
+    app.get('/api/qb/payables', async (req, res) => {
+        try { res.json(await require('./payables').survey({ env: envOf() })); }
+        catch (e) { res.status(502).json({ error: `QuickBooks: ${e.message}` }); }
+    });
+
+    app.post('/api/qb/payables/plan', async (req, res) => {
+        const b = req.body || {};
+        try { res.json(await require('./payables').plan({ from: b.from, to: b.to, env: envOf(), limit: Number(b.limit) || 500 })); }
+        catch (e) { res.status(400).json({ error: e.message }); }
+    });
+
+    app.post('/api/qb/payables/apply', async (req, res) => {
+        if (locked(req, res)) return;
+        const b = req.body || {};
+        const really = b.really === true;
+        if (really && String(b.confirm || '').trim().toUpperCase() !== 'MOVE') {
+            return res.status(400).json({ error: 'to move these for real, type MOVE' });
+        }
+        const pay = require('./payables');
+        try {
+            // Remade from live data, and then narrowed to what she picked —
+            // the browser's list may be minutes old, and a payment landing in
+            // between is exactly the case the guard exists for.
+            const planned = await pay.plan({ from: b.from, to: b.to, env: envOf(), limit: 1000 });
+            const movable = new Set(planned.move.map((x) => x.id));
+            const asked = (Array.isArray(b.ids) && b.ids.length ? b.ids.map(String) : planned.move.map((x) => x.id));
+            const ids = asked.filter((id) => movable.has(id));
+            const dropped = asked.filter((id) => !movable.has(id));
+            const out = await pay.apply({ from: b.from, to: b.to, ids, env: envOf(), dryRun: !really, who: who(req) });
+            res.json({ ...out, dropped, plan: { move: planned.move.length, held: planned.held.length, note: planned.note } });
+        } catch (e) { res.status(400).json({ error: e.message }); }
+    });
+
+    app.post('/api/qb/payables/undo', async (req, res) => {
+        if (locked(req, res)) return;
+        const b = req.body || {};
+        try { res.json(await require('./payables').undo({ qbId: b.qbId, back: b.back, env: envOf(), who: who(req) })); }
+        catch (e) { res.status(400).json({ error: e.message }); }
+    });
+
     // ── THE BANK'S "FOR REVIEW" LIST ───────────────────────────────────────
     // Apsara, 2026-09-26: "i need it." QuickBooks does not expose that queue
     // to ANY app — verified against her own books: there is no BankTransaction
