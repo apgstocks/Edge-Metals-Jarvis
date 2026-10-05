@@ -737,6 +737,39 @@ function mount(app, cfg) {
         catch (e) { res.status(502).json({ error: `QuickBooks: ${e.message}` }); }
     });
 
+    // ── THE CHEQUES THAT WENT STRAIGHT TO COST OF GOODS ───────────────────
+    // agent.js has computed these on every run since it was written: 16
+    // cheques, $411,276.27, each with its date, payee, amount and the
+    // containers named on it. The page did exactly one thing with all of it:
+    //
+    //     ['Miscoded', money(i.miscoded && i.miscoded.number), 'warn'],
+    //
+    // A number in a chip. Sixteen rows computed every morning and thrown
+    // away, while the mail says "One approval, never silent" about an
+    // approval that does not exist anywhere.
+    //
+    // READ-ONLY, DELIBERATELY. Re-coding moves money out of cost of goods
+    // sold and changes reported profit — that is a write against her books
+    // and a decision she has not made. This route only shows her what the
+    // agent already knows, which is the half that was missing.
+    app.get('/api/qb/miscoded', async (req, res) => {
+        const year = /^\d{4}$/.test(String(req.query.year || '')) ? Number(req.query.year) : new Date().getFullYear();
+        try {
+            const m = await require('./agent').miscodedCheques(year, envOf());
+            // Named first and biggest first inside each group: the ones with a
+            // payee are the ones she can do something about today, and the
+            // nameless ones are usually the larger pile — which is exactly why
+            // they must not sit at the top looking like the job.
+            const by = (a, b) => b.amount - a.amount;
+            res.json({
+                year, env: envOf(),
+                total: m.number, count: m.count, span: m.span,
+                named: { ...m.fixable, rows: (m.fixable.rows || []).slice().sort(by) },
+                nameless: { ...m.noPayee, rows: (m.noPayee.rows || []).slice().sort(by) },
+            });
+        } catch (e) { res.status(502).json({ error: `QuickBooks: ${e.message}` }); }
+    });
+
     // ── money paid, money matched ──────────────────────────────────────────
     // The single biggest thing wrong with her books: $4.96M of payments with
     // no allocation, so every bill reads open. Allocating moves nothing —
@@ -767,6 +800,39 @@ function mount(app, cfg) {
             const planned = await ap.plan({ vendor: b.vendor || null,
                 since: /^\d{4}-\d{2}-\d{2}$/.test(String(b.since || '')) ? b.since : '2024-01-01', env: envOf() });
             res.json(await ap.apply(planned, { reason: b.reason, really, by: who(req), env: envOf() }));
+        } catch (e) { res.status(400).json({ error: e.message }); }
+    });
+
+    // ── CUSTOMER MONEY, PLACED ─────────────────────────────────────────────
+    // The mirror of /api/qb/allocate on the receivables side: $131,763.84 is
+    // in the bank against no invoice, and every one of those invoices reads
+    // open. Placing moves no money. The plan is always remade here from live
+    // data — the browser's copy may be minutes old.
+    app.get('/api/qb/receipts', async (req, res) => {
+        try {
+            res.json(await require('./applyReceipts').plan({
+                customer: String(req.query.customer || '').trim() || null,
+                since: /^\d{4}-\d{2}-\d{2}$/.test(String(req.query.since || '')) ? req.query.since : '2026-01-01',
+                env: envOf(), limit: Number(req.query.limit) || 60,
+            }));
+        } catch (e) { res.status(502).json({ error: `QuickBooks: ${e.message}` }); }
+    });
+
+    app.post('/api/qb/receipts/apply', async (req, res) => {
+        if (locked(req, res)) return;
+        const b = req.body || {};
+        const really = b.really === true;
+        if (really && String(b.confirm || '').trim().toUpperCase() !== 'APPLY') {
+            return res.status(400).json({ error: 'to place these for real, type APPLY' });
+        }
+        const ar = require('./applyReceipts');
+        try {
+            const planned = await ar.plan({ customer: b.customer || null,
+                since: /^\d{4}-\d{2}-\d{2}$/.test(String(b.since || '')) ? b.since : '2026-01-01', env: envOf(), limit: 200 });
+            const only = Array.isArray(b.ids) && b.ids.length ? new Set(b.ids.map(String)) : null;
+            const narrowed = only ? { ...planned, receipts: (planned.receipts || []).filter((r) => only.has(r.id)) } : planned;
+            res.json(await ar.apply(narrowed, { reason: b.reason, really, by: who(req), env: envOf(),
+                certainOnly: b.certainOnly === true }));
         } catch (e) { res.status(400).json({ error: e.message }); }
     });
 

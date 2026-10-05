@@ -211,6 +211,7 @@ async function loadStatus() {
       `<span class="chip act" data-bank="1" title=""The CSV you export from the Banking screen, matched line by line to what is open">bank lines</span>`,
       `<span class="chip act" data-allocate="1" title=""Payments that were never matched to a bill — the biggest single thing wrong with the books">place payments</span>`,
       `<span class="chip act" data-dupes="1" title=""The same money entered twice, per supplier and customer, and payments never applied">duplicates</span>`,
+      `<span class="chip act" data-miscoded="1" title="Cheques posted straight to cost of goods sold instead of against a bill — the agent has listed them every morning and there was nowhere to look at them">miscoded cheques</span>`,
       `<span class="chip act" data-missing="1" title=""Your live sheet against your live books — what neither side has">sheet vs books</span>`,
       `<span class="chip act" data-older="1" title="Enter a reviewed list of rows from before the cutover">enter an older list</span>`,
       `<span class="chip ${s.connected ? '' : 'warn'} act" data-connect="1" title="${s.connected ? 'Reconnect QuickBooks — needed when the token is refused' : 'QuickBooks is not connected — nothing can be read or written until it is'}">${s.connected ? 'reconnect' : 'connect QuickBooks'}</span>`,
@@ -391,6 +392,61 @@ function stuckJobs(rows) {
   return `<div class="sub" style="margin:2px 0 8px">`
     + jobs.map(g => `<span class="pill" style="margin-right:6px">${g.n}× ${esc(g.label)}</span>`).join('')
     + `<span style="color:var(--text-faint)">— same fix, same screen</span></div>`;
+}
+
+/* ── CHEQUES THAT WENT STRAIGHT TO COST OF GOODS ──────────────────────
+   agent.js has computed these on every run since it was written — 16
+   cheques, $411,276.27 on 4 October, each with its date, payee, amount and
+   the containers named on it. The page showed one number in a chip and threw
+   the rows away, while the morning mail said "One approval, never silent"
+   about an approval that existed nowhere.
+
+   READ-ONLY. Re-coding moves money out of cost of goods sold and changes
+   reported profit; that is a write against her books and a decision she has
+   not made. This shows what the agent already knows, which is the half that
+   was missing. The named ones open the supplier — for those, the party IS
+   the next step. */
+async function loadMiscoded() {
+  $('dtitle').textContent = 'Cheques posted to cost of goods';
+  $('dbody').innerHTML = '<div class="empty">Reading your books…</div>';
+  try {
+    const d = await api('/api/qb/miscoded');
+    $('dmap').textContent = `${d.count} cheque${d.count === 1 ? '' : 's'} · ${money(d.total)}`
+      + (d.span ? ` · ${d.span[0]} to ${d.span[1]}` : '');
+    $('dstats').innerHTML = [
+      ['Has a payee', money(d.named.money), 'warn'],
+      ['No payee', money(d.nameless.money), 'bad'],
+      ['Cheques', d.count, 'warn'],
+    ].map(([k, v, cls]) => `<div class="stat"><div class="k">${esc(k)}</div><div class="v ${cls}">${esc(String(v))}</div></div>`).join('');
+
+    const rows = (list, nameless) => list.map(r => `<tr${nameless ? '' : ` class="click" data-open="vendor|${encodeURIComponent(r.payee || '')}"`}>
+      <td class="mono">${esc(r.date || '')}</td>
+      <td>${nameless ? '<span style="color:var(--text-faint)">no payee on the cheque</span>' : esc(r.payee)}</td>
+      <td class="num mono">${money(r.amount)}</td>
+      <td class="mono" style="color:var(--text-faint)">${esc((r.containers || []).join(', ') || '—')}</td>
+    </tr>`).join('');
+
+    const sec = [];
+    if (d.named.count) {
+      sec.push(`<h3 class="sec">Has a payee <span class="count">${d.named.count}</span></h3>
+        <div class="sub">The supplier is on the cheque, so each of these can be traced. Click one to open them.</div>
+        <table><thead><tr><th>Date</th><th>Payee</th><th class="num">In cost of goods</th><th>Containers named</th></tr></thead>
+        <tbody>${rows(d.named.rows, false)}</tbody></table>`);
+    }
+    if (d.nameless.count) {
+      sec.push(`<h3 class="sec">No payee <span class="count">${d.nameless.count}</span></h3>
+        <div class="sub">Nothing on these says who was paid, so neither Jarvis nor anyone else can guess it.
+        The containers below are whatever the cheque's own description mentions — that is the only thread back.
+        Usually the bigger half, which is why it is second: the pile you can act on is the one above.</div>
+        <table><thead><tr><th>Date</th><th>Payee</th><th class="num">In cost of goods</th><th>Containers named</th></tr></thead>
+        <tbody>${rows(d.nameless.rows, true)}</tbody></table>`);
+    }
+    $('dbody').innerHTML = sec.join('') || '<div class="empty">No cheques went straight to cost of goods this year.</div>';
+    $('dbody').querySelectorAll('tr.click').forEach(tr => tr.onclick = () => {
+      const [kind, name] = tr.dataset.open.split('|');
+      if (name) openParty(kind, decodeURIComponent(name));
+    });
+  } catch (e) { $('dbody').innerHTML = `<div class="empty">${esc(e.message)}</div>`; }
 }
 
 /* ── HER SHEET AGAINST HER BOOKS ─────────────────────────────────────
@@ -1406,6 +1462,7 @@ $('chips').addEventListener('click', (e) => {
   else if (chip.dataset.find) findDoc();
   else if (chip.dataset.missing) loadMissing();
   else if (chip.dataset.dupes) loadDuplicates();
+  else if (chip.dataset.miscoded) loadMiscoded();
   else if (chip.dataset.allocate) allocatePayments(null);
   else if (chip.dataset.bank) bankReview();
   else if (chip.dataset.agent) loadAgent();
