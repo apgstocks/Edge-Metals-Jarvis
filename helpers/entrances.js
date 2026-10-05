@@ -50,7 +50,10 @@ const ENTRANCES = [
         id: 'canonical',
         url: `${CANONICAL}/health`,
         expect: 'serve',
-        why: 'The front door. Everything else exists to point here.',
+        why: 'The front door. Everything else exists to point here. Also the one place '
+            + 'that can catch HTTP/3 coming back, which is what broke access on 2026-10-02 '
+            + 'and again on 2026-10-05 — a Caddy upgrade or a copied default Caddyfile '
+            + 'reinstates it silently and only some networks notice.',
         // If THIS fails, nobody can use Jarvis at all.
         severity: 'outage',
     },
@@ -147,9 +150,33 @@ async function checkOne(entrance, { fetchImpl, timeoutMs = 15000 } = {}) {
     const location = (res.headers && typeof res.headers.get === 'function') ? res.headers.get('location') : null;
 
     if (entrance.expect === 'serve') {
-        return ok2xx(status)
-            ? { ...base, ok: true, status }
-            : { ...base, ok: false, status, detail: `expected to serve, answered ${status}` };
+        if (!ok2xx(status)) {
+            return { ...base, ok: false, status, detail: `expected to serve, answered ${status}` };
+        }
+        // ── HTTP/3 MUST NOT COME BACK ────────────────────────────────────
+        // This is the check that stops 2026-10-02 and 2026-10-05 happening a
+        // third time. Caddy advertises HTTP/3 over UDP 443 by default, and
+        // many wifi networks carry TCP 443 while silently dropping UDP 443 —
+        // so an advertisement here means a subset of people, on a subset of
+        // networks, stop being able to reach Jarvis, for up to the THIRTY
+        // DAYS the advertisement is cached. Mobile data keeps working, which
+        // is what makes it look like anything other than what it is.
+        //
+        // A Caddy upgrade, a reinstall, or someone copying a default
+        // Caddyfile all bring it back silently. Nothing else in this system
+        // would notice. So the front-door check looks at the header every
+        // night, and "clear" — the RFC 7838 eraser we send deliberately — is
+        // the only acceptable value besides absent.
+        const altSvc = (res.headers && typeof res.headers.get === 'function')
+            ? res.headers.get('alt-svc') : null;
+        if (altSvc && String(altSvc).trim().toLowerCase() !== 'clear') {
+            return { ...base, ok: false, status, altSvc,
+                detail: `the server is advertising alt-svc: ${altSvc} — HTTP/3 is back on. `
+                    + 'Networks that drop UDP 443 will start failing, mobile data will keep working, '
+                    + 'and clients cache this for up to 30 days. Put `protocols h1 h2` back in the '
+                    + 'Caddyfile global block and reload Caddy.' };
+        }
+        return { ...base, ok: true, status, altSvc: altSvc || null };
     }
 
     // redirect

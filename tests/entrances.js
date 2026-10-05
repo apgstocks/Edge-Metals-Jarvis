@@ -158,6 +158,52 @@ const recording = (inner) => async (url, opts) => { calls.push(String(url)); ret
        /old address is dead/.test(sent[0].subject), sent[0].subject);
 }
 
+// ── C2 — HTTP/3 COMING BACK IS CAUGHT ─────────────────────────────────────
+// "I dont want to face it again n again." This is the check that makes that
+// true. A Caddy upgrade, a reinstall, or someone copying a default Caddyfile
+// re-enables HTTP/3 silently; networks that drop UDP 443 then start failing
+// while mobile data keeps working, and the advertisement is cached for 30
+// days before anyone can even measure the fix.
+{
+    section('C2 — the server advertising HTTP/3 again');
+
+    const withAltSvc = (value) => async (url) => {
+        const u = String(url);
+        const mk = (status, location) => ({ status, headers: { get: (k) => {
+            const key = String(k).toLowerCase();
+            if (key === 'location') return location || null;
+            if (key === 'alt-svc') return value;
+            return null;
+        } } });
+        if (u === 'https://jarvis.edgemetals.com/health') return mk(200);
+        if (u === 'http://jarvis.edgemetals.com/health') return mk(308, 'https://jarvis.edgemetals.com/health');
+        if (u === 'http://35.233.131.198:8080/health') return mk(301, 'https://jarvis.edgemetals.com/health');
+        throw new Error('unexpected ' + u);
+    };
+
+    let res = await E.checkAll({ fetchImpl: withAltSvc('h3=":443"; ma=2592000') });
+    ck('an h3 advertisement on the front door is caught', res.ok === false,
+       JSON.stringify(res.results.find((r) => r.id === 'canonical')));
+    const b = res.broken.find((x) => x.id === 'canonical');
+    ck('  and it says HTTP/3 is back on', /HTTP\/3 is back on/.test(b.detail), b.detail);
+    ck('  explains why only SOME networks will notice',
+       /drop UDP 443/.test(b.detail) && /mobile data will keep working/.test(b.detail), b.detail);
+    ck('  warns it is cached for 30 days', /30 days/.test(b.detail), b.detail);
+    ck('  and names the exact fix', /protocols h1 h2/.test(b.detail), b.detail);
+    // It is an OUTAGE severity, because a subset of people losing access is
+    // not a stale bookmark.
+    ck('  and it is treated as an outage, not a stale link', res.outage === true, JSON.stringify(res.outage));
+
+    // Our own eraser must NOT trip it.
+    res = await E.checkAll({ fetchImpl: withAltSvc('clear') });
+    ck('"clear" — the eraser we send on purpose — is accepted', res.ok === true,
+       JSON.stringify(res.broken));
+    res = await E.checkAll({ fetchImpl: withAltSvc('CLEAR') });
+    ck('  case and spacing do not matter', res.ok === true, JSON.stringify(res.broken));
+    res = await E.checkAll({ fetchImpl: withAltSvc(null) });
+    ck('  and no header at all is fine too', res.ok === true, JSON.stringify(res.broken));
+}
+
 // ── D — AN OUTAGE IS LOUDER, AND DIFFERENT ────────────────────────────────
 {
     section('D — when the front door itself is down');

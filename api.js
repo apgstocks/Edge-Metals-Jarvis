@@ -175,6 +175,45 @@ function createApi() {
             + 'Only correct if a proxy you control is in front of this.');
     }
 
+    // ── ERASE THE CACHED HTTP/3 ADVERTISEMENT — RFC 7838 ─────────────────
+    // Apsara, 2026-10-05: "They tokld that it is now working in mobile data
+    // but not wifi."
+    //
+    // That sentence is the signature, and docs/cloudflare-runbook.md wrote it
+    // down on 2026-10-02: "Many wifi networks allow TCP 443 and silently drop
+    // UDP 443, so the phone kept reaching for QUIC and failing, while mobile
+    // data (which carries UDP fine) worked."
+    //
+    // Caddy advertised HTTP/3 over UDP 443 as
+    //     alt-svc: h3=":443"; ma=2592000
+    // and ma=2592000 is THIRTY DAYS. HTTP/3 was switched off server-side on
+    // 2026-10-03 and the live server no longer advertises it — verified over
+    // the wire. But turning the advertisement off does nothing about the
+    // copies clients already stored. Those keep trying QUIC until they
+    // expire, around 2026-11-02.
+    //
+    // THE PART EVERYONE MISSES, INCLUDING ME FOR MOST OF TODAY: there is a
+    // server-side eraser. RFC 7838 section 3 defines the value "clear" —
+    // "any existing alternative services for the origin are invalidated".
+    // One header on one response and the stale entry is gone, on a device
+    // nobody has to touch, without a restart, a cache clear, or asking a
+    // customer in another country to do anything at all.
+    //
+    // Why it is safe to send always: the server does not offer HTTP/3, so
+    // there is nothing legitimate to advertise and nothing to break. The day
+    // HTTP/3 is deliberately turned back on, this line must go — and the
+    // Caddyfile's `protocols h1 h2` is the thing that would change first, so
+    // tests/alt-svc-clear.js asserts the two agree rather than letting them
+    // drift apart silently.
+    //
+    // It is set HERE rather than in the Caddyfile because this path deploys
+    // with the git pull + pm2 restart she already runs, and Caddy passes a
+    // backend header through untouched — it no longer sets alt-svc itself.
+    app.use((req, res, next) => {
+        res.set('Alt-Svc', 'clear');
+        next();
+    });
+
     // ── PORT 8080 ANSWERS, AND SENDS THEM TO HTTPS ───────────────────────
     // Apsara, 2026-10-05: "make it reacgable at http://35.233.131.198:8080".
     //
