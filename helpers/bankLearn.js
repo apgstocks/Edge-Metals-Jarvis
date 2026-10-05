@@ -127,32 +127,46 @@ function resolverFrom(aliases, customers) {
     };
 }
 
-// ── suggest: this is where containment lives, and it is NOT resolution ────
-// A bank descriptor is a customer name buried in noise, so containment is
-// the only thing that could ever match one. It is also exactly what
-// nameMatch.js refuses to do automatically, and it is right to refuse: "AJ"
-// is inside "AJAX TRADING".
+// ── suggest: this is where name matching lives, and it decides nothing ────
+// A bank descriptor is a customer name buried in noise, so some kind of
+// containment is the only thing that could ever match one. It is also
+// exactly what nameMatch.js refuses to do automatically, and it is right to
+// refuse: a near-miss resolves to the wrong company.
 //
-// So it is quarantined here as a suggestion for the screen, with three
-// guards, and it resolves nothing on its own:
-//   · the name must be long enough to be meaningful once normalised
-//   · it must be UNIQUE — two customers inside one descriptor is a question
-//   · the result is labelled a suggestion all the way to the screen
-const MIN_SUGGEST = 6;
+// ── THE GUARD I HAD HERE WAS A GUESS, AND IT IS GONE ─────────────────────
+// This used to require a minimum normalised name length (MIN_SUGGEST = 6) so
+// that "AJ" could not match "AJAX TRADING LLC". That is the right instinct
+// and the wrong mechanism: "Edge Scrap" is ten characters and both its words
+// are near-generic, so a length threshold waves it through anything.
+//
+// helpers/partyName.js answers the same question properly — a name counts
+// only when a word that is THEIRS ALONE appears, and when nothing
+// distinctive is left ("5 Core Trading Inc") only an outright containment of
+// the whole name counts. That logic was extracted from
+// scripts/qb-bank-match.js, where it has been running against her real bank
+// exports since September and where it was written because a similarity
+// match put a $60,000 wire against the wrong supplier.
+//
+// It is still only a SUGGESTION. Ambiguous hits are all returned rather than
+// the first shown as certain, and nothing here resolves anything: the engine
+// proposes, she decides, and her decision becomes an alias.
+const partyName = require('./partyName');
 
 function suggestParty(descriptor, customers) {
-    const d = normalizeName(descriptor);
-    if (!d) return [];
+    const d = String(descriptor || '');
+    if (!d.trim()) return [];
     const hits = [];
     for (const c of (customers || [])) {
-        const k = normalizeName(c);
-        if (!k || k.length < MIN_SUGGEST) continue;
-        if (d.includes(k)) hits.push({ customer: c, matched: k.length });
+        if (!String(c || '').trim()) continue;
+        if (!partyName.nameHit(d, c)) continue;
+        // How much of the name is actually distinctive. Used only to order
+        // the suggestions — a company identified by two words of its own is
+        // a better guess than one identified by a single short word.
+        const own = partyName.words(c);
+        hits.push({ customer: c, distinctive: own.length, len: partyName.squash(c).length });
     }
-    // Longest match first: "CUSTOM ALLOYS LLC" beats "CUSTOM" if both exist.
-    hits.sort((a, b) => b.matched - a.matched || String(a.customer).localeCompare(String(b.customer)));
-    // Ambiguous suggestions are still returned — the screen shows both and
-    // she picks. Hiding the second one would make a coin flip look certain.
+    hits.sort((a, b) => b.distinctive - a.distinctive || b.len - a.len
+        || String(a.customer).localeCompare(String(b.customer)));
     return hits.map((h) => ({ customer: h.customer, basis: 'name found in the bank description' }));
 }
 
@@ -230,5 +244,8 @@ function patternsFromHistory(receipts = [], salesById = new Map()) {
 
 module.exports = {
     FILE, listAliases, learnAlias, forgetAlias,
-    resolverFrom, suggestParty, patternsFromHistory, MIN_SUGGEST,
+    resolverFrom, suggestParty, patternsFromHistory,
+    // Re-exported so a caller has one place to look, and so a test can prove
+    // this file uses the shared logic rather than a copy of it.
+    partyName,
 };

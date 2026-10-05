@@ -109,38 +109,80 @@ if (!String(L.FILE()).startsWith(TMP)) {
     ck('  but an identical duplicate row still resolves', same('Edge Scrap') === 'Edge Scrap');
 }
 
-// ── C — SUGGESTIONS ARE QUARANTINED ───────────────────────────────────────
+// ── C — SUGGESTIONS ARE QUARANTINED, AND USE THE PROVEN NAME LOGIC ────────
+// This section used to check a MIN_SUGGEST length threshold of my own. That
+// guard is gone: helpers/partyName.js answers the same question with the
+// GENERIC trade-word list extracted from scripts/qb-bank-match.js, where it
+// has run against her real bank exports since September. The behaviours below
+// are the ones that logic was written for, including the 2026-09-23 incident
+// where a similarity match put a $60,000 wire against the wrong supplier.
 {
-    section('C — containment lives here, and decides nothing');
+    section('C — name matching lives here, and decides nothing');
 
-    const customers = ['Custom Alloys', 'AJ', 'AJAX TRADING LLC', 'Zimex Freight', 'Daekwang Metals'];
-    const s = L.suggestParty('WIRE IN CUSTOM ALLOYS LLC REF 88213', customers);
+    const customers = ['Custom Alloys', 'AJ', 'AJAX TRADING LLC', 'Zimex Freight',
+        'Daekwang Metals', '5 Core Trading Inc', 'Calderon Cores'];
+    const names = (d) => L.suggestParty(d, customers).map((x) => x.customer);
+
+    const s = L.suggestParty('WIRE TYPE:WIRE IN FROM CUSTOM ALLOYS LLC', customers);
     ck('a name inside the description is offered as a suggestion',
-       s.length === 1 && s[0].customer === 'Custom Alloys', JSON.stringify(s));
+       s.length === 1 && s[0].customer === 'Custom Alloys', JSON.stringify(names('WIRE TYPE:WIRE IN FROM CUSTOM ALLOYS LLC')));
     ck('  labelled as a suggestion, with its basis',
        s[0].basis === 'name found in the bank description', s[0].basis);
 
-    // THE GUARD nameMatch.js IS WARNING ABOUT. "AJ" is inside "AJAX TRADING".
-    const ajax = L.suggestParty('PAYMENT FROM AJAX TRADING LLC', customers);
-    ck('a two-letter customer is never suggested from a longer name',
-       !ajax.some((x) => x.customer === 'AJ'), JSON.stringify(ajax.map((x) => x.customer)));
-    ck('  the long name is', ajax.some((x) => x.customer === 'AJAX TRADING LLC'));
-    ck('  and the threshold is a named constant, not a magic number',
-       L.MIN_SUGGEST >= 4, String(L.MIN_SUGGEST));
+    // THE $60,000 INCIDENT. Both names end in a shared trade word, and a
+    // similarity score treats them as close relatives.
+    ck('"Inesh Cores Chapin" never suggests "Calderon Cores"',
+       !names('INESH CORES CHAPIN').includes('Calderon Cores'),
+       JSON.stringify(names('INESH CORES CHAPIN')));
+    ck('  in fact it suggests nobody at all',
+       names('INESH CORES CHAPIN').length === 0, JSON.stringify(names('INESH CORES CHAPIN')));
 
-    // Two customers inside one descriptor: BOTH are returned. Hiding the
-    // second would make a coin flip look certain.
+    // A two-letter customer inside a longer name. My length threshold got
+    // this right by luck; partyName gets it right because "AJ" has no word
+    // of its own longer than two letters and is too short to contain-match.
+    ck('a two-letter customer is never suggested from a longer name',
+       !names('PAYMENT FROM AJAX TRADING LLC').includes('AJ'),
+       JSON.stringify(names('PAYMENT FROM AJAX TRADING LLC')));
+    ck('  while the long name is', names('PAYMENT FROM AJAX TRADING LLC').includes('AJAX TRADING LLC'));
+
+    // A name made ENTIRELY of generic trade words. Nothing distinctive
+    // survives, so only an outright containment of the whole name counts —
+    // never a shared word like TRADING.
+    ck('a name of only generic words matches on the whole name',
+       names('5 CORE TRADING INC WIRE').includes('5 Core Trading Inc'),
+       JSON.stringify(names('5 CORE TRADING INC WIRE')));
+    ck('  but a shared trade word alone does not pull it in',
+       !names('ZIMEX TRADING TRANSFER').includes('5 Core Trading Inc'),
+       JSON.stringify(names('ZIMEX TRADING TRANSFER')));
+
+    ck('nothing recognisable suggests nothing',
+       names('ACH CREDIT 00912').length === 0, JSON.stringify(names('ACH CREDIT 00912')));
+    ck('  and an empty description suggests nothing',
+       L.suggestParty('', customers).length === 0 && L.suggestParty(null, customers).length === 0);
+
+    // Two customers in one description: BOTH returned. Hiding the second
+    // would make a coin flip look certain.
     const two = L.suggestParty('TRANSFER CUSTOM ALLOYS VIA ZIMEX FREIGHT', customers);
     ck('two possible customers in one description are both offered',
        two.length === 2, JSON.stringify(two.map((x) => x.customer)));
 
-    ck('nothing recognisable suggests nothing',
-       L.suggestParty('ACH CREDIT 00912', customers).length === 0);
+    // ── IT USES THE SHARED MODULE, NOT A COPY ────────────────────────────
+    // The whole reason partyName.js exists. A copy here would drift from the
+    // CSV path, and the drift would be invisible until a wire went to the
+    // wrong supplier again.
+    const src = fs.readFileSync(path.join(ROOT, 'helpers/bankLearn.js'), 'utf8');
+    ck('bankLearn requires helpers/partyName rather than carrying its own copy',
+       /require\('\.\/partyName'\)/.test(src) && !/const GENERIC = new Set/.test(src),
+       'a second copy of this list is a second thing to forget to update');
+    ck('  and the GENERIC list really is the one from the CSV path',
+       L.partyName.GENERIC === require(path.join(ROOT, 'helpers/partyName')).GENERIC
+       && L.partyName.GENERIC.has('CORES') && L.partyName.GENERIC.has('TRADING'),
+       'same object, so there is nothing to keep in step');
 
-    // The suggestion path must not have quietly become a resolver.
+    // And a suggestion still resolves nothing on its own.
     const r = L.resolverFrom([], customers);
-    ck('and a suggestion never resolves on its own',
-       r('WIRE IN CUSTOM ALLOYS LLC REF 88213') === null,
+    ck('a suggestion never resolves on its own',
+       r('WIRE TYPE:WIRE IN FROM CUSTOM ALLOYS LLC') === null,
        'the engine proposes; it never decides who paid');
 }
 

@@ -130,21 +130,18 @@ const days = (a, b) => Math.abs((new Date(a) - new Date(b)) / 864e5);
 // half the suppliers, so a name only counts when a word that is theirs alone
 // appears. Found 2026-09-23 on the real bank export, matching a $60,000 wire
 // to the wrong supplier.
-const GENERIC = new Set(['CORE', 'CORES', 'METAL', 'METALS', 'RECYCLING', 'RECYCLERS', 'TRADING', 'TRADE', 'AUTO', 'AUTOS', 'SCRAP', 'JUNK',
-    'TRANSPORT', 'TRUCKING', 'LOGISTICS', 'EXPORT', 'IMPORT', 'COMPANY', 'GROUP', 'ENTERPRISE', 'ENTERPRISES', 'INDUSTRIES', 'INDUSTRIAL',
-    'INC', 'LLC', 'LTD', 'CORP', 'THE', 'AND', 'YARD', 'SALES', 'SERVICES', 'SOLUTIONS', 'WIRE', 'TYPE', 'TRANSFER', 'BANK', 'AMERICA']);
-// 3 letters, not 4: "FMC Metal" is FMC plus a word every supplier shares.
-const words = (v) => String(v || '').toUpperCase().replace(/[^A-Z ]/g, ' ').split(/\s+/).filter((w) => w.length > 2 && !GENERIC.has(w));
-const squash = (v) => String(v || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
-const nameHit = (desc, party) => {
-    const d = ' ' + String(desc || '').toUpperCase().replace(/[^A-Z ]/g, ' ') + ' ';
-    const own = words(party);
-    if (own.length) return own.some((w) => d.includes(' ' + w) || d.includes(w + ' '));
-    // nothing distinctive left ("5 Core Trading Inc") — only an outright
-    // containment of the whole name counts, never a shared trade word.
-    const a = squash(party), b = squash(desc);
-    return a.length > 4 && b.includes(a);
-};
+// ── THE NAME LOGIC NOW LIVES IN helpers/partyName.js ─────────────────────
+// Moved out on 2026-10-05, unchanged, so the Plaid matcher
+// (helpers/bankMatch.js) and this CSV path cannot drift apart on the one
+// question that has already cost real money: whether a bank line is about a
+// given company. The GENERIC word list, words(), squash() and nameHit() are
+// all there, with the 2026-09-23 $60,000 incident recorded beside them.
+//
+// Nothing about this path's behaviour changed. The extraction was checked by
+// snapshotting words() and nameHit() over 437 description/party pairs before
+// and after and requiring a byte-identical result, not by reading the diff.
+const { words, squash, nameHit } = require('../helpers/partyName');
+void squash;
 
 // Most of the 661 pending lines are not trade at all — bank fees, the phone
 // bill, the IRS, loan repayments, transfers between her own accounts. They are

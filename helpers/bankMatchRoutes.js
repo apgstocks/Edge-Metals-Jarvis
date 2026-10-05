@@ -28,9 +28,12 @@
 // posts through, which is CLAUDE.md rule 3 read forwards instead of
 // backwards.
 
-const { loadJson } = require('./json');
 const bankMatch = require('./bankMatch');
 const bankLearn = require('./bankLearn');
+
+// Which company the receivables in sales.json belong to. Edge Metals, and
+// stated once here rather than guessed at three call sites.
+const METALS = 'Edge Metals INC';
 
 const round2 = (n) => (typeof n === 'number' && isFinite(n) ? Math.round(n * 100) / 100 : null);
 const num0 = (v) => { const n = Number(v); return isFinite(n) ? n : 0; };
@@ -111,18 +114,41 @@ function mount(app, cfg) {
             const salesById = new Map(all.map((s) => [s.id, { date: s.date, amount: round2(num0(s.receivable)) }]));
             const patterns = bankLearn.patternsFromHistory(receipts.list(), salesById);
 
-            // BANK_TX_FILE is written by the Plaid sync and is keyed by
-            // transaction_id. It is also in SECRET_PATTERNS — excluded from
-            // the nightly Drive backup — so nothing here logs a row of it.
-            const txs = loadJson(cfg.BANK_TX_FILE, []);
-            const rows = Array.isArray(txs) ? txs : (txs && Array.isArray(txs.transactions) ? txs.transactions : []);
-            let deposits = bankMatch.bankInflows(rows);
+            // ── THE ROWS COME THROUGH bankLedger, NOT RAW ────────────────
+            // This read raw JSON and handed it to bankMatch.bankInflows(),
+            // which expects PLAID's signed amount (negative = money in).
+            // bankLedger stores QuickBooks' shape instead — spent/received
+            // and a direction — so once rows arrived through ingestPlaid
+            // every deposit would have read as a withdrawal and NOTHING
+            // would have matched. It would have looked like the matcher was
+            // broken rather than the one line that converts between them.
+            //
+            // Going through worklist() is also what makes her exclusions
+            // real: a row she set aside must not come back as a proposal, or
+            // the Exclude button is decoration.
+            const ledger = require('./bankLedger');
+            const bankRows = ledger.list();
+            let deposits = ledger.worklist(bankRows)
+                .filter((t) => t.direction === 'in' && num0(t.received) > 0.005)
+                .map((t) => ({ id: t.id, date: t.date, amount: round2(num0(t.received)),
+                    descriptor: t.party || t.desc || '', account_id: t.account_id,
+                    company: t.company || null, desc: t.desc || '' }))
+                .sort((a, b) => String(b.date).localeCompare(String(a.date)));
+            const ledgerSummary = ledger.summary(bankRows);
 
             const from = String(req.query.from || '').slice(0, 10) || null;
             const to = String(req.query.to || '').slice(0, 10) || null;
             if (from) deposits = deposits.filter((d) => d.date >= from);
             if (to) deposits = deposits.filter((d) => d.date <= to);
             if (req.query.account) deposits = deposits.filter((d) => d.account_id === req.query.account);
+            // ── RULE 5: EDGE METALS AND EDGE TRADING ARE DIFFERENT ───────
+            // The receivables in sales.json are Edge Metals'. A deposit into
+            // the Edge Trading account must therefore never be offered
+            // against them — that is the separation most of this app exists
+            // for, and an amount coincidence across two companies would be
+            // the worst possible match.
+            const crossCompany = deposits.filter((d) => d.company && d.company !== METALS);
+            deposits = deposits.filter((d) => !d.company || d.company === METALS);
 
             const out = bankMatch.matchStatement({
                 deposits, openDocs: docs,
@@ -142,6 +168,11 @@ function mount(app, cfg) {
             res.json({
                 ...out,
                 from, to,
+                ledger: ledgerSummary,
+                // Named, not silently dropped: she needs to know these rows
+                // exist and why they are not here.
+                other_company: crossCompany.map((d) => ({ id: d.id, date: d.date,
+                    amount: d.amount, company: d.company, desc: d.desc })),
                 open_invoices: docs.length,
                 customers_with_open: [...new Set(docs.map((d) => d.party))].length,
                 // NOT a count of rows — the actual mismatches, because a
@@ -150,7 +181,7 @@ function mount(app, cfg) {
                 // Said plainly rather than left for her to infer from an
                 // empty list: no feed means no deposits, which is not the
                 // same as a clean reconciliation.
-                feed: rows.length ? 'bank-transactions.json' : 'none yet — connect the bank feed or no deposits have been pulled',
+                feed: bankRows.length ? 'bank-transactions.json' : 'none yet — connect the bank feed or no deposits have been pulled',
                 learned_names: aliases.length,
             });
         } catch (e) {

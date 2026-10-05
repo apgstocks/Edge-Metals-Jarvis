@@ -89,7 +89,19 @@ const balanceOf = (id) => {
     return row ? Math.round(Number(row.balance) * 100) / 100 : null;
 };
 
-const putDeposits = (rows) => fs.writeFileSync(cfg.BANK_TX_FILE, JSON.stringify(rows, null, 1));
+// ── DEPOSITS GO IN THE WAY THE PLAID SYNC WILL PUT THEM ──────────────────
+// Through helpers/bankLedger.fromPlaid, not as raw Plaid JSON. The route
+// reads bankLedger rows (spent/received/direction), and when it read raw
+// signed amounts instead, every deposit was taken for a withdrawal and
+// nothing matched. Writing raw rows here would hide exactly that class of
+// break, which is the whole point of an end-to-end test.
+const ledger = require(path.join(ROOT, 'helpers/bankLedger'));
+const ACCOUNTS = [
+    { id: 'bofa-1', company: 'Edge Metals INC' },
+    { id: 'chase-1', company: 'EDGE TRADING INC' },
+];
+const putDeposits = (rows) => fs.writeFileSync(cfg.BANK_TX_FILE,
+    JSON.stringify(rows.map((x) => ledger.fromPlaid(x, ACCOUNTS)).filter(Boolean), null, 1));
 
 (async () => {})();
 
@@ -433,6 +445,56 @@ let S1, S2, S3;
     ck('  and the bank charge becomes this customer\'s fee allowance',
        pats['Daekwang Metals'] && pats['Daekwang Metals'].feeAllowance === 25,
        JSON.stringify(pats['Daekwang Metals']));
+}
+
+// ── E3 — RULE 5, AND AN EXCLUSION THAT ACTUALLY EXCLUDES ──────────────────
+// Edge Metals and Edge Trading are different companies. The receivables in
+// sales.json are Edge Metals'; a deposit into the Edge Trading account must
+// never be offered against them, however neatly the amount fits.
+{
+    section('E3 — the other company, and the Exclude button');
+
+    const S = await mk('Rule Five Customer', 'EM-6001', '2026-09-01', 1000, 33);   // 33,000
+    await req('POST', '/api/bank/aliases', { sid, body: { descriptor: 'WIRE RULE FIVE', customer: 'Rule Five Customer' } });
+
+    // The SAME descriptor and the SAME amount, once per company.
+    putDeposits([
+        { transaction_id: 'TX-METALS', date: '2026-09-22', amount: -33000, name: 'WIRE RULE FIVE', account_id: 'bofa-1' },
+        { transaction_id: 'TX-TRADING', date: '2026-09-22', amount: -33000, name: 'WIRE RULE FIVE', account_id: 'chase-1' },
+    ]);
+    let r = await req('GET', '/api/bank/match', { sid });
+    const metals = r.json.rows.find((x) => x.deposit.id === 'TX-METALS');
+    ck('the Edge Metals deposit is matched', metals && metals.outcome === 'proposed',
+       metals && metals.outcome);
+    ck('  and the Edge Trading one is NOT even considered',
+       !r.json.rows.some((x) => x.deposit.id === 'TX-TRADING'),
+       JSON.stringify(r.json.rows.map((x) => x.deposit.id)));
+    ck('  but it is NAMED rather than silently dropped',
+       (r.json.other_company || []).some((x) => x.id === 'TX-TRADING' && /TRADING/i.test(x.company)),
+       JSON.stringify(r.json.other_company));
+
+    // The ledger summary reaches the screen, so the counts she reads are the
+    // ledger's own rather than a second tally.
+    ck('the ledger summary comes through', r.json.ledger && r.json.ledger.rows === 2,
+       JSON.stringify(r.json.ledger));
+
+    // EXCLUDE IT, and it must leave the worklist for real.
+    await ledger.exclude('TX-METALS', 'duplicate of a wire already recorded', 'apsara');
+    r = await req('GET', '/api/bank/match', { sid });
+    ck('an excluded deposit is no longer proposed against anything',
+       !r.json.rows.some((x) => x.deposit.id === 'TX-METALS'),
+       JSON.stringify(r.json.rows.map((x) => x.deposit.id)));
+    ck('  but it is still counted, with its money',
+       r.json.ledger.excluded.count === 1 && r.json.ledger.excluded.money === 33000,
+       JSON.stringify(r.json.ledger.excluded));
+
+    // And back again.
+    await ledger.include('TX-METALS', 'apsara');
+    r = await req('GET', '/api/bank/match', { sid });
+    ck('un-excluding brings it back as a proposal',
+       r.json.rows.some((x) => x.deposit.id === 'TX-METALS' && x.outcome === 'proposed'),
+       JSON.stringify(r.json.rows.map((x) => [x.deposit.id, x.outcome])));
+    void S;
 }
 
 // ── F — THERE IS NO SECOND WAY TO MARK AN INVOICE PAID ────────────────────

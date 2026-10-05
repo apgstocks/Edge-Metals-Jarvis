@@ -1,0 +1,309 @@
+// ── helpers/bankLedger.js — the bank row, QuickBooks' shape and then some ──
+//
+// Apsara, 2026-10-05: "plaid records should mimic quickbook bank transactions
+// but better than it."
+//
+// ── THE SHAPE IS QUICKBOOKS', DELIBERATELY AND EXACTLY ───────────────────
+// scripts/qb-bank-match.js already reads the CSV her QuickBooks Banking
+// screen exports, and normalises it to:
+//
+//     date  desc  party  category  spent  received  amount  direction
+//
+// Those are the field names used here, unchanged. Not for sentiment: it
+// means one matcher serves both the Plaid feed and the CSV export, the CSV
+// path she uses today keeps working, and the two can never drift into
+// disagreeing about what a bank row is. "Mimic QuickBooks" is therefore
+// literal — a Plaid row and a QuickBooks CSV row are the same record type.
+//
+// ── AND THEN THE PARTS QUICKBOOKS CANNOT HOLD ────────────────────────────
+// Each of these is a thing that has actually gone wrong in a QuickBooks
+// banking workflow, not a feature for its own sake:
+//
+//   raw        The untouched Plaid payload. QuickBooks overwrites the
+//              original once a row is categorised, so the evidence of what
+//              the bank actually said is gone by the time anyone asks.
+//              Immutable here: a re-parse can never destroy it.
+//
+//   company    Edge Metals or Edge Trading, derived from the account. These
+//              are DIFFERENT COMPANIES and a deposit into one must never be
+//              offered against the other's invoices. QuickBooks can only
+//              separate them by being two subscriptions.
+//
+//   history    Every state change, with who, when and why. QuickBooks keeps
+//              one status and no trail, so "why is this row excluded" has no
+//              answer in March when it matters.
+//
+//   excluded   QuickBooks' Exclude makes a row VANISH. Here it leaves the
+//              worklist and stays counted, with a running total, and can be
+//              un-excluded. Her own instruction, and the same doctrine as
+//              the QuickBooks agent's answered findings: silenced is never
+//              hidden, because a rule quietly hiding a growing pile is its
+//              own problem.
+//
+//   pending    Recorded, but held out of matching. A pending amount still
+//              changes and the row can vanish; QuickBooks shows them and
+//              they churn.
+//
+//   drift      If the bank restates a row she has already acted on, that is
+//              said LOUDLY rather than silently applied. This is the one
+//              QuickBooks gets most dangerously wrong: a re-download can
+//              move a figure under a decision already made.
+
+const path = require('path');
+const cfg = require('../config');
+const { loadJson, mutateJson } = require('./json');
+
+const round2 = (n) => (typeof n === 'number' && isFinite(n) ? Math.round(n * 100) / 100 : null);
+const num0 = (v) => { const n = Number(v); return isFinite(n) ? n : 0; };
+const day = (d) => String(d || '').slice(0, 10);
+
+function FILE() { return process.env.BANK_TX_FILE || cfg.BANK_TX_FILE; }
+
+// ── which company owns an account ────────────────────────────────────────
+// qb-settings/bank-accounts.json is the one place account numbers live, and
+// it already carries the company. Read from there rather than inventing a
+// second mapping that can disagree — Edge Metals and Edge Trading being
+// different companies is most of what this app is for.
+function companyOf(accountId, accounts) {
+    const list = Array.isArray(accounts) ? accounts : [];
+    const hit = list.find((a) => a && (a.id === accountId || a.plaid_account_id === accountId));
+    return hit ? (hit.company || null) : null;
+}
+
+function readAccounts() {
+    try {
+        const f = path.join(cfg.ROOT, 'qb-settings', 'bank-accounts.json');
+        const d = loadJson(f, { accounts: [] });
+        return Array.isArray(d && d.accounts) ? d.accounts : [];
+    } catch (e) { return []; }
+}
+
+// ── one Plaid transaction → one bank row ─────────────────────────────────
+// Plaid's convention, recorded in helpers/reconcile.js: a POSITIVE amount is
+// money LEAVING the account. Flipped exactly once, here, into QuickBooks'
+// spent/received pair so no caller has to remember it. Get this backwards and
+// every deposit reads as a withdrawal.
+function fromPlaid(tx, accounts) {
+    if (!tx) return null;
+    const id = tx.transaction_id || tx.id;
+    if (!id) return null;
+    const a = num0(tx.amount);
+    const spent = a > 0 ? round2(a) : 0;
+    const received = a < 0 ? round2(-a) : 0;
+    if (!spent && !received) return null;
+    const accountId = tx.account_id || null;
+    return {
+        // ── QuickBooks' columns ──────────────────────────────────────────
+        id,
+        date: day(tx.date || tx.authorized_date),
+        desc: String(tx.name || tx.original_description || '').trim(),
+        // QuickBooks' own From/To guess is the best signal in its export.
+        // Plaid's equivalent is merchant_name plus counterparties.
+        party: String(tx.merchant_name
+            || ((tx.counterparties || [])[0] || {}).name || '').trim(),
+        // Left blank on arrival. QuickBooks' category column is what the
+        // accountant has ALREADY set, and inventing one from Plaid's own
+        // taxonomy would put a guess in the column she reads as a decision.
+        category: '',
+        spent, received,
+        amount: round2(spent || received),
+        direction: spent ? 'out' : 'in',
+
+        // ── and the rest ─────────────────────────────────────────────────
+        account_id: accountId,
+        company: companyOf(accountId, accounts),
+        pending: !!tx.pending,
+        excluded: false,
+        excluded_reason: null,
+        // Immutable. Nothing in this file ever rewrites it after insert.
+        raw: tx,
+        first_seen: new Date().toISOString(),
+        last_seen: new Date().toISOString(),
+        history: [],
+        drift: null,
+    };
+}
+
+// ── the fields the BANK owns, versus the fields SHE owns ─────────────────
+// This split is the whole of upsert. A re-sync refreshes what the bank says
+// and must never touch what she decided.
+const BANK_FIELDS = ['date', 'desc', 'party', 'spent', 'received', 'amount', 'direction', 'pending'];
+const HERS = ['category', 'excluded', 'excluded_reason', 'history'];
+
+// A row she has acted on. Used only to decide whether a restated figure is
+// merely new information or a problem.
+const actedOn = (row) => !!(row && (row.excluded || (row.history || []).length || row.category));
+
+// ── upsert, keyed on transaction_id ──────────────────────────────────────
+// config.js:346 already says why: "keyed by Plaid's transaction_id so a
+// re-sync corrects a row rather than duplicating it". QuickBooks' bank feed
+// is notorious for re-downloading the same week twice.
+//
+// THE DRIFT CASE IS THE IMPORTANT ONE. If the bank restates the amount or
+// date of a row she has already excluded or categorised, applying it quietly
+// moves a figure under a decision already made — and at tax time nobody can
+// tell that happened. So the new values ARE taken (the bank is the authority
+// on what the bank did) and the change is recorded in `drift` and in history,
+// where the screen and the nightly sweep can both see it.
+function upsert(existingRows, incoming) {
+    const rows = Array.isArray(existingRows) ? existingRows.slice() : [];
+    const byId = new Map(rows.map((r, i) => [r.id, i]));
+    const report = { added: 0, refreshed: 0, unchanged: 0, drifted: [], skipped: 0 };
+
+    for (const fresh of (incoming || [])) {
+        // ── LOUD, NOT SILENT ─────────────────────────────────────────────
+        // This takes NORMALISED rows, not raw Plaid ones. A raw Plaid
+        // transaction has transaction_id and no id, so the original `continue`
+        // here dropped every single one and returned an empty list with no
+        // error — a caller who forgot fromPlaid() would see a clean sync of
+        // nothing. Found by my own smoke test making exactly that mistake.
+        //
+        // The money stores in this repo fail loudly for the same reason, so
+        // this throws rather than quietly agreeing.
+        if (!fresh || typeof fresh !== 'object') { report.skipped += 1; continue; }
+        if (!fresh.id) {
+            throw new Error(fresh.transaction_id
+                ? 'upsert takes normalised rows — call fromPlaid() on the Plaid transaction first'
+                : 'a bank row with no id cannot be keyed, and an unkeyed row duplicates on every sync');
+        }
+        if (!byId.has(fresh.id)) {
+            rows.push(fresh);
+            byId.set(fresh.id, rows.length - 1);
+            report.added += 1;
+            continue;
+        }
+        const old = rows[byId.get(fresh.id)];
+        const changed = BANK_FIELDS.filter((k) => JSON.stringify(old[k]) !== JSON.stringify(fresh[k]));
+        // A pending row becoming posted is the normal, expected change and is
+        // not drift — it is the whole reason pending rows are held back.
+        const onlyClearing = changed.length === 1 && changed[0] === 'pending' && old.pending && !fresh.pending;
+
+        const merged = { ...old };
+        for (const k of BANK_FIELDS) merged[k] = fresh[k];
+        for (const k of HERS) merged[k] = old[k];
+        merged.raw = old.raw;                   // immutable: the first thing the bank said
+        merged.first_seen = old.first_seen;
+        merged.last_seen = new Date().toISOString();
+        merged.history = (old.history || []).slice();
+
+        if (changed.length && actedOn(old) && !onlyClearing) {
+            const was = {}; const now = {};
+            for (const k of changed) { was[k] = old[k]; now[k] = fresh[k]; }
+            merged.drift = { at: merged.last_seen, fields: changed, was, now };
+            merged.history.push({ at: merged.last_seen, what: 'bank restated this row after it was acted on',
+                by: 'plaid sync', fields: changed, was, now });
+            report.drifted.push({ id: fresh.id, fields: changed, was, now });
+        } else if (changed.length) {
+            merged.drift = old.drift || null;
+        }
+
+        rows[byId.get(fresh.id)] = merged;
+        if (changed.length) report.refreshed += 1; else report.unchanged += 1;
+    }
+    return { rows, report };
+}
+
+// ── exclude: out of the worklist, never out of the books ─────────────────
+// Her instruction, 2026-10-05: hidden from the worklist, still counted, and
+// reversible. Every call leaves a history line, because "why is this
+// excluded" is a question asked months later by someone else.
+function setExcluded(rows, id, excluded, { reason = null, by = null } = {}) {
+    const out = (rows || []).map((r) => {
+        if (r.id !== id) return r;
+        const at = new Date().toISOString();
+        return {
+            ...r,
+            excluded: !!excluded,
+            excluded_reason: excluded ? (reason || null) : null,
+            history: (r.history || []).concat([{
+                at, by: by || null,
+                what: excluded ? 'excluded from the worklist' : 'put back in the worklist',
+                why: excluded ? (reason || null) : null,
+            }]),
+        };
+    });
+    const hit = out.find((r) => r.id === id) || null;
+    return { rows: out, row: hit };
+}
+
+// What she actually works through. Pending is held back because the amount
+// can still move; excluded is held back because she said so.
+function worklist(rows) {
+    return (rows || []).filter((r) => r && !r.pending && !r.excluded);
+}
+
+// ── the numbers at the top of the screen ─────────────────────────────────
+// Excluded and pending get their OWN totals rather than being quietly left
+// out of a single figure. A screen that shows one number has to be trusted;
+// a screen that shows what it set aside can be checked.
+function summary(rows) {
+    const all = (rows || []).filter(Boolean);
+    const sum = (list, k) => round2(list.reduce((t, r) => t + num0(r[k]), 0)) || 0;
+    const work = worklist(all);
+    const excluded = all.filter((r) => r.excluded);
+    const pending = all.filter((r) => r.pending);
+    return {
+        rows: all.length,
+        worklist: work.length,
+        in: { count: work.filter((r) => r.direction === 'in').length, money: sum(work.filter((r) => r.direction === 'in'), 'received') },
+        out: { count: work.filter((r) => r.direction === 'out').length, money: sum(work.filter((r) => r.direction === 'out'), 'spent') },
+        // STILL COUNTED. The point of the whole exclusion design.
+        excluded: { count: excluded.length, money: sum(excluded, 'amount') },
+        pending: { count: pending.length, money: sum(pending, 'amount') },
+        drifted: all.filter((r) => r.drift).length,
+        companies: [...new Set(all.map((r) => r.company).filter(Boolean))],
+        no_company: all.filter((r) => !r.company).length,
+    };
+}
+
+// ── disk ─────────────────────────────────────────────────────────────────
+// BANK_TX_FILE is in SECRET_PATTERNS, excluded from the nightly Drive
+// backup, so nothing here logs a row of it.
+function list() {
+    const raw = loadJson(FILE(), []);
+    if (Array.isArray(raw)) return raw;
+    if (raw && Array.isArray(raw.transactions)) return raw.transactions;
+    return [];
+}
+
+async function ingestPlaid(txs, { accounts = null } = {}) {
+    const acc = accounts || readAccounts();
+    const fresh = (txs || []).map((t) => fromPlaid(t, acc)).filter(Boolean);
+    let report = null;
+    await mutateJson(FILE(), [], (all) => {
+        const current = Array.isArray(all) ? all
+            : (all && Array.isArray(all.transactions) ? all.transactions : []);
+        const r = upsert(current, fresh);
+        report = r.report;
+        return r.rows;
+    });
+    return report;
+}
+
+async function exclude(id, reason, by) {
+    let row = null;
+    await mutateJson(FILE(), [], (all) => {
+        const current = Array.isArray(all) ? all : [];
+        const r = setExcluded(current, id, true, { reason, by });
+        row = r.row;
+        return r.rows;
+    });
+    return row;
+}
+
+async function include(id, by) {
+    let row = null;
+    await mutateJson(FILE(), [], (all) => {
+        const current = Array.isArray(all) ? all : [];
+        const r = setExcluded(current, id, false, { by });
+        row = r.row;
+        return r.rows;
+    });
+    return row;
+}
+
+module.exports = {
+    FILE, fromPlaid, upsert, setExcluded, worklist, summary,
+    list, ingestPlaid, exclude, include,
+    companyOf, readAccounts, BANK_FIELDS, HERS, actedOn,
+};
