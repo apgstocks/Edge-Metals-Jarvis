@@ -63,12 +63,13 @@ async function survey({ year = new Date().getFullYear(), env = auth.qbEnv() } = 
     const out = { year, env, at: new Date().toISOString(), invariants: {}, errors: {} };
     const safe = async (id, fn) => { try { return await fn(); } catch (e) { out.errors[id] = e.message; return null; } };
 
-    const [overview, dupes, miscoded, ar, payables] = await Promise.all([
+    const [overview, dupes, miscoded, ar, payables, receipts] = await Promise.all([
         safe('books', () => books.overview(env, { year })),
         safe('duplicates', () => books.duplicates(env, { year })),
         safe('miscoded', () => miscodedCheques(year, env)),
         safe('receivables', () => require('./receivables').survey({ env })),
         safe('payables', () => require('./payables').survey({ env })),
+        safe('receipts', () => require('./applyReceipts').plan({ env, since: `${year}-01-01`, limit: 200 })),
     ]);
 
     const la = (overview && overview.owe) || null;
@@ -105,6 +106,14 @@ async function survey({ year = new Date().getFullYear(), env = auth.qbEnv() } = 
     out.invariants.receiptsUnapplied = {
         number: ar ? ar.totals.received : null,
         count: ar ? ar.customers.filter((c) => c.received > 0).length : null,
+        // What can actually be placed, and how much of that to the cent. The
+        // queue said verdict 'do' against this from the day it was written
+        // while run() had no path for it at all — so these numbers exist to
+        // keep the claim and the code honest about each other.
+        placeable: receipts ? receipts.totals.placed : null,
+        certain: receipts ? receipts.totals.certain : null,
+        certainMoney: receipts ? r2((receipts.receipts || []).filter((x) => x.certain).reduce((t, x) => t + r2(x.loose - (x.leftOver || 0)), 0)) : null,
+        stuck: receipts ? (receipts.unplaceable || []).map((u) => ({ customer: u.customer, loose: u.loose, why: u.why, twin: u.twin || null })) : [],
         // the ones where writing to them would be a mistake
         doNotChase: ar ? ar.customers.filter((c) => c.verdict === 'do-not-chase' || c.verdict === 'apply-first')
             .map((c) => ({ customer: c.customer, open: c.open, received: c.received, why: c.why })) : [],
@@ -185,10 +194,19 @@ function queue(surveyed) {
             note: 'No money moves: no bank entry, no profit and loss, no change to the payable total.' });
     }
     if (inv.receiptsUnapplied && inv.receiptsUnapplied.number > 0) {
-        items.push({ id: 'receiptsUnapplied', verdict: 'do', money: inv.receiptsUnapplied.number,
-            title: `${inv.receiptsUnapplied.count} customers have paid money that sits on no invoice`,
-            detail: (inv.receiptsUnapplied.doNotChase || []).map((c) => `${c.customer} ${c.received}`).join(', '),
-            note: 'Apply these BEFORE any reminder goes out — chasing someone for money already in the bank is the one mistake a customer remembers.' });
+        const ru = inv.receiptsUnapplied;
+        // 'do' only where there is something it is actually allowed to do. A
+        // verdict of 'do' on work the agent cannot do is the worst line in
+        // this file: it reads as handled and nothing happens.
+        const canDo = (ru.certain || 0) > 0;
+        items.push({ id: 'receiptsUnapplied', verdict: canDo ? 'do' : 'ask', money: ru.number,
+            title: `${ru.count} customers have paid money that sits on no invoice`,
+            detail: (ru.certain !== null && ru.certain !== undefined
+                ? `${ru.certain} match an invoice to the cent (${ru.certainMoney}) and the agent places those; ${(ru.stuck || []).length} cannot be placed at all`
+                : (ru.doNotChase || []).map((c) => `${c.customer} ${c.received}`).join(', ')),
+            note: 'Apply these BEFORE any reminder goes out — chasing someone for money already in the bank is the one mistake a customer remembers.'
+                + ' Placing a receipt moves no money: it only says which invoice it was for.'
+                + ((ru.stuck || []).some((x) => x.twin) ? ' Some of it is on the wrong customer record, and QuickBooks refuses to link a receipt to another customer\'s invoice — those need the receipt moved, which is yours.' : '') });
     }
     if (inv.duplicates && inv.duplicates.number > 0) {
         items.push({ id: 'duplicates', verdict: 'ask', money: inv.duplicates.number,
@@ -230,6 +248,15 @@ async function run({ year = new Date().getFullYear(), env = auth.qbEnv(), really
 
     for (const item of items) {
         if (item.verdict !== 'do') { out.asked.push(item); continue; }
+        if (item.id === 'receiptsUnapplied') {
+            const applyReceipts = require('./applyReceipts');
+            const planned = await applyReceipts.plan({ since: `${year}-01-01`, env, limit: 200 });
+            const done = await applyReceipts.apply(planned, { certainOnly: true, really, env, by: 'qb-agent',
+                reason: reason || 'QB Agent: customer money in the bank with no invoice against it' });
+            out.did.push({ id: item.id, placed: done.totals.placed, receipts: done.totals.receipts,
+                leftForYou: done.skipped.length, unplaceable: (planned.unplaceable || []).length });
+            continue;
+        }
         if (item.id === 'allocate') {
             const planned = await applyPayments.plan({ since: `${year}-01-01`, env });
             const done = await applyPayments.apply(planned, {

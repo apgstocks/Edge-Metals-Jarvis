@@ -60,10 +60,26 @@ ck('the draft carries no recipient — she addresses it', /to: null/.test(src));
 const agent = require('../helpers/quickbooks/agent');
 ck('"every receipt sits on an invoice" is an invariant the agent owns',
    (agent.INVARIANTS.find((i) => i.id === 'receiptsUnapplied') || {}).who === 'agent');
-const q = agent.queue({ invariants: { receiptsUnapplied: { number: 131763.84, count: 5, doNotChase: [{ customer: 'TAEWON', received: 27099.79 }] },
-    unallocated: { number: 0 }, duplicates: { number: 0 }, miscoded: { number: 0 }, payableAccounts: { number: 1 }, bankGap: {} } });
-const item = q.find((x) => x.id === 'receiptsUnapplied') || {};
+// 2026-10-05: the verdict now depends on whether there is anything the agent
+// is actually ALLOWED to place. It may place a receipt that matches an open
+// invoice to the cent and nothing else, so 'do' is earned, not assumed — a
+// 'do' on work with no code behind it is what this invariant said for a
+// fortnight while run() skipped it entirely.
+const ask = (ru) => agent.queue({ invariants: { receiptsUnapplied: ru,
+    unallocated: { number: 0 }, duplicates: { number: 0 }, miscoded: { number: 0 }, payableAccounts: { number: 1 }, bankGap: {} } })
+    .find((x) => x.id === 'receiptsUnapplied') || {};
+
+const base = { number: 131763.84, count: 5, doNotChase: [{ customer: 'TAEWON', received: 27099.79 }] };
+const item = ask({ ...base, certain: 2, certainMoney: 4100, stuck: [] });
 ck('...and places it before any reminder goes out', item.verdict === 'do' && /BEFORE any reminder/.test(item.note || ''), item);
+ck('...saying how much of it it may place itself, and how much it may not',
+   /2 match an invoice to the cent/.test(item.detail || ''), item.detail);
+ck('with nothing matching to the cent it asks instead of claiming it will act',
+   ask({ ...base, certain: 0, certainMoney: 0, stuck: [] }).verdict === 'ask');
+ck('...and if the books could not be read at all, it still asks rather than promising',
+   ask({ ...base }).verdict === 'ask');
+ck('money on the wrong customer record is called out as hers to move',
+   /another customer/.test(ask({ ...base, certain: 1, certainMoney: 10, stuck: [{ customer: 'TAEWON AUTOMOTIVE CO', loose: 27099.79, twin: 'TAEWON PRECEISION' }] }).note || ''));
 
 console.log(`\nquickbooks-receivables: ${pass} passed, ${fail} failed`);
 if (fail) { console.log('FAILED: ' + failures.join(' | ')); process.exit(1); }
