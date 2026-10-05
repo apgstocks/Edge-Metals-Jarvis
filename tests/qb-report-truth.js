@@ -62,8 +62,11 @@ const OCT4 = () => ({
             ] },
             duplicates: { number: 194857.29, count: 10 },
             miscoded: { number: 411276.27, count: 16, noPayee: { count: 9, money: 265518.34 } },
+            // All THREE, as printed in her mail — the zero-balance Zimex
+            // account is the one that would otherwise read '$0.00 owed'.
             payableAccounts: { number: 3, accounts: [
                 { name: 'Accounts Payable', balance: -57224.15 },
+                { name: 'Accounts Payable - Zimex', balance: 0 },
                 { name: 'Vendor Payable', balance: -5113259.13 },
             ] },
         },
@@ -175,6 +178,59 @@ const OCT4 = () => ({
     } finally {
         gmail.sendEmail = realSend;
     }
+}
+
+// ── F — THE PAYABLE LINE THAT CAUSED AN ALARM IT COULD HAVE ANSWERED ──────
+// Her 4 October mail printed QuickBooks' raw signed balances:
+//
+//   Payable accounts in use: 3 — Accounts Payable $-57,224.15 ·
+//   Accounts Payable - Zimex $0.00 · Vendor Payable $-5,113,259.13
+//
+// Minus five million against a payable reads like a hole. It is not: those
+// are credit balances — what she owes — and 57,224.15 + 0 + 5,113,259.13 =
+// 5,170,483.28, the "You owe" figure at the top of the SAME email, to the
+// cent. I told her those two numbers were "almost certainly the same money
+// seen twice", meaning double-counted. They are a total and its components,
+// and they agree. The line held the answer to the alarm it was causing.
+{
+    section('F — payable accounts, in her real figures');
+
+    const text = agent.reportText(OCT4());
+
+    ck('each balance is shown as what it means',
+       /Accounts Payable \$57,224\.15 owed/.test(text) && /Vendor Payable \$5,113,259\.13 owed/.test(text),
+       (text.split('\n').find((l) => /Payable accounts/.test(l)) || '(missing)'));
+    ck('  a zero balance says so rather than printing $0.00 owed',
+       /Zimex nothing owed/.test(text),
+       (text.split('\n').find((l) => /Payable accounts/.test(l)) || ''));
+    ck('  and the minus sign is explained',
+       /means owed, not overdrawn/.test(text),
+       'the reader must not have to know QuickBooks sign conventions');
+    ck('  with the reconciliation stated',
+       /come to \$5,170,483\.28, which is the "You owe" figure above/.test(text),
+       (text.split('\n').find((l) => /come to/.test(l)) || '(missing)'));
+
+    // ── AND WHEN THEY DO NOT AGREE, WHICH IS THE POINT ───────────────────
+    // A line that always says "these add up" is decoration. The version that
+    // earns its place is the one that notices when they stop adding up.
+    const off = OCT4();
+    off.survey.owe.total = 4000000;
+    const t2 = agent.reportText(off);
+    ck('a mismatch is reported, with the gap',
+       /WORTH A LOOK/.test(t2) && /\$1,170,483\.28/.test(t2),
+       (t2.split('\n').find((l) => /WORTH A LOOK/.test(l)) || '(missing)'));
+    ck('  and it does not claim they reconcile',
+       !/which is the "You owe" figure/.test(t2));
+    ck('  nor does it assert the sign convention it could not verify',
+       /QuickBooks says -\$5,113,259\.13|QuickBooks says \$-5,113,259\.13/.test(t2),
+       (t2.split('\n').find((l) => /Payable accounts/.test(l)) || ''));
+
+    // One payable account is the ordinary case and must not grow a paragraph.
+    const one = OCT4();
+    one.survey.invariants.payableAccounts = { number: 1, accounts: [{ name: 'Accounts Payable', balance: -100 }] };
+    ck('a single payable account says nothing at all',
+       !/Payable accounts in use/.test(agent.reportText(one)),
+       'the line exists because THREE of them is the oddity');
 }
 
 // ── E — ONE LINE PER REASON, NOT PER DATE ─────────────────────────────────

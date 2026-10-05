@@ -63,11 +63,12 @@ async function survey({ year = new Date().getFullYear(), env = auth.qbEnv() } = 
     const out = { year, env, at: new Date().toISOString(), invariants: {}, errors: {} };
     const safe = async (id, fn) => { try { return await fn(); } catch (e) { out.errors[id] = e.message; return null; } };
 
-    const [overview, dupes, miscoded, ar] = await Promise.all([
+    const [overview, dupes, miscoded, ar, payables] = await Promise.all([
         safe('books', () => books.overview(env, { year })),
         safe('duplicates', () => books.duplicates(env, { year })),
         safe('miscoded', () => miscodedCheques(year, env)),
         safe('receivables', () => require('./receivables').survey({ env })),
+        safe('payables', () => require('./payables').survey({ env })),
     ]);
 
     const la = (overview && overview.owe) || null;
@@ -85,9 +86,21 @@ async function survey({ year = new Date().getFullYear(), env = auth.qbEnv() } = 
         suppliers: dupes ? dupes.suppliers : null, customers: dupes ? dupes.customers : null,
     };
     out.invariants.miscoded = miscoded || { number: null };
+    // Not "there are three" but how much of the extra ones can actually be
+    // emptied. A bill with a payment against it can never move (sandbox,
+    // 2026-10-05) and another company's payable is never touched, so the only
+    // honest figure is the movable part — the difference between a proposal
+    // she can act on and a complaint she cannot.
+    const extra = payables ? payables.accounts.filter((a) => !a.company && a.id !== payables.keep) : [];
     out.invariants.payableAccounts = {
-        number: overview ? (overview.payable || []).length : null,
-        accounts: overview ? overview.payable : [],
+        number: overview ? (overview.payable || []).length : (payables ? payables.accounts.length : null),
+        accounts: overview ? overview.payable : (payables ? payables.accounts : []),
+        keep: payables ? payables.keep : null,
+        separate: payables ? payables.separate : [],
+        movable: payables ? extra.reduce((t, a) => t + a.movable, 0) : null,
+        movableMoney: payables ? r2(extra.reduce((t, a) => t + a.movableMoney, 0)) : null,
+        held: payables ? extra.reduce((t, a) => t + a.held, 0) : null,
+        heldMoney: payables ? r2(extra.reduce((t, a) => t + a.heldMoney, 0)) : null,
     };
     out.invariants.receiptsUnapplied = {
         number: ar ? ar.totals.received : null,
@@ -189,10 +202,16 @@ function queue(surveyed) {
             note: 'Re-coding moves money out of cost of goods sold and changes reported profit. One approval, never silent. The nameless ones are never guessed.' });
     }
     if (inv.payableAccounts && inv.payableAccounts.number > 1) {
-        items.push({ id: 'payableAccounts', verdict: 'propose', money: null,
-            title: `${inv.payableAccounts.number} payable accounts are in use`,
-            detail: inv.payableAccounts.accounts.map((a) => `${a.name} ${a.balance}`).join(' · '),
-            note: 'QuickBooks refuses an account merge over the API. The documents can be moved onto one account; retiring the empty one is yours.' });
+        const pa = inv.payableAccounts;
+        const sep = (pa.separate || []).length ? ` ${(pa.separate || []).map((x) => x.name).join(', ')} belong to another company and are left alone.` : '';
+        items.push({ id: 'payableAccounts', verdict: 'propose', money: pa.movableMoney,
+            title: `${pa.number} payable accounts are in use`,
+            detail: (pa.accounts || []).map((a) => `${a.name} ${a.balance}`).join(' · ')
+                + (pa.movable !== null && pa.movable !== undefined ? ` — ${pa.movable} bill(s) can move onto #${pa.keep}, ${pa.held} cannot` : ''),
+            note: 'QuickBooks refuses an account merge over the API, so the documents move instead.'
+                + ' A bill that has already been paid is never moved: QuickBooks accepts the write and silently unapplies the payment'
+                + ' (sandbox, 2026-10-05), which would turn settled bills back into debts and add to the unallocated pile.'
+                + ' Those stay put until they are settled and age out.' + sep });
     }
     items.push({ id: 'bankGap', verdict: 'blocked', money: null,
         title: 'The bank "For Review" queue cannot be read by any app',
@@ -281,8 +300,44 @@ function reportText(out) {
     if (inv.duplicates) line('Documents doubled', inv.duplicates.number, `${inv.duplicates.count} to look at — a void cannot be undone, so they wait for you`);
     if (inv.miscoded) line('Supplier money in cost of goods', inv.miscoded.number,
         `${inv.miscoded.count} cheques; ${inv.miscoded.noPayee.count} of them (${money(inv.miscoded.noPayee.money)}) have no payee and will never be guessed`);
+    // ── A PAYABLE BALANCE THAT EXPLAINS ITSELF (2026-10-05) ──────────────
+    // This printed QuickBooks' raw signed balances:
+    //
+    //   Payable accounts in use: 3 — Accounts Payable $-57,224.15 ·
+    //   Accounts Payable - Zimex $0.00 · Vendor Payable $-5,113,259.13
+    //
+    // A reader sees minus five million against a payable and reasonably
+    // concludes something is badly wrong. It is not: those are credit
+    // balances, they are what she OWES, and 57,224.15 + 0 + 5,113,259.13 is
+    // 5,170,483.28 — the "You owe" figure at the top of this same email, to
+    // the cent. The line held the answer to the alarm it was causing.
+    //
+    // I spent a morning on that alarm, so the line now shows each balance as
+    // what it means and says whether the parts add up to the total.
+    //
+    // THE SIGN CONVENTION IS CHECKED, NOT ASSUMED. Rather than hard-coding
+    // "negative means owed", it compares the absolute sum against the figure
+    // QuickBooks itself reports for what is owed. When they agree it says so;
+    // when they do not it says THAT, which is a real finding and the whole
+    // reason to print the line at all.
     if (inv.payableAccounts && inv.payableAccounts.number > 1) {
-        L.push(`  Payable accounts in use: ${inv.payableAccounts.number} — ${(inv.payableAccounts.accounts || []).map((a) => `${a.name} ${money(a.balance)}`).join(' · ')}`);
+        const accs = inv.payableAccounts.accounts || [];
+        const owe = (s.owe && typeof s.owe.total === 'number') ? s.owe.total : null;
+        const sum = Math.round(accs.reduce((t, a) => t + Math.abs(Number(a.balance) || 0), 0) * 100) / 100;
+        const reconciles = owe !== null && Math.abs(sum - owe) <= 0.02;
+        L.push(`  Payable accounts in use: ${inv.payableAccounts.number} — `
+            + accs.map((a) => {
+                const n = Number(a.balance) || 0;
+                if (!n) return `${a.name} nothing owed`;
+                return `${a.name} ${money(Math.abs(n))}${reconciles ? ' owed' : ` (QuickBooks says ${money(n)})`}`;
+            }).join(' · '));
+        if (reconciles) {
+            L.push(`      These are credit balances — the minus sign in QuickBooks means owed, not overdrawn. `
+                + `They come to ${money(sum)}, which is the "You owe" figure above.`);
+        } else if (owe !== null) {
+            L.push(`      WORTH A LOOK: these come to ${money(sum)} but "You owe" says ${money(owe)}, `
+                + `a difference of ${money(Math.round((sum - owe) * 100) / 100)}. One of the two is not counting something.`);
+        }
     }
     L.push('  The bank For Review queue: no app can read it. Export it from the Banking screen.');
 
