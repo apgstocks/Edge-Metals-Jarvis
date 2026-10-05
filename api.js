@@ -8832,6 +8832,20 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
     // the four routes so this file keeps its shape.
     require('./helpers/bankDocs').mount(app, cfg);
 
+    // ── The bank matcher ──────────────────────────────────────────────────
+    // Apsara, 2026-10-05: "My biggest problem is matching only." One deposit
+    // against several invoices, advance then balance, and the names her bank
+    // puts on a wire. helpers/bankMatch.js is the engine, helpers/bankLearn.js
+    // is what it learns, and this mount is the thing helpers/reconcile.js
+    // never got — reconcile.js has been unreachable since 3 September with 41
+    // green checks and no caller, which is why scripts/check-route-reach.js
+    // now fails on a matcher nothing calls.
+    //
+    // Read-only. Confirming a match posts to POST /api/sales-receipts, the
+    // route the receipts screen already uses, so there is exactly one way to
+    // mark an invoice paid.
+    require('./helpers/bankMatchRoutes').mount(app, cfg);
+
     // ── Weight-shortage claims (Edge Metals) ──────────────────────────────
     // Apsara, 2026-09-26: "Revamp weight shortage sheet .. it should read the
     // mail with weight shortage detail and create automatically". The page and
