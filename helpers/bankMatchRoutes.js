@@ -79,6 +79,15 @@ function openReceivables(sales) {
 }
 
 function mount(app, cfg) {
+    // ── THE PAGE ─────────────────────────────────────────────────────────
+    // Same standalone-page pattern as /quickbooks and /edge-inventory, and
+    // the reason this whole file exists: helpers/reconcile.js has had no
+    // screen since 3 September. A route with no client is the same defect
+    // one step along, so the page lands in the same commit as the route.
+    app.get('/bank-match', (req, res) => {
+        res.sendFile(require('path').join(cfg.ROOT, 'dashboard', 'bank-match.html'));
+    });
+
     // Learning an alias decides which customer's invoices a future deposit is
     // allowed to pay, so it is an admin act — the same bar bankDocs.js sets
     // for changing a bank document.
@@ -132,7 +141,14 @@ function mount(app, cfg) {
                 .filter((t) => t.direction === 'in' && num0(t.received) > 0.005)
                 .map((t) => ({ id: t.id, date: t.date, amount: round2(num0(t.received)),
                     descriptor: t.party || t.desc || '', account_id: t.account_id,
-                    company: t.company || null, desc: t.desc || '' }))
+                    company: t.company || null, desc: t.desc || '',
+                    // Which account it landed in, in the words addReceipt
+                    // accepts, resolved once at ingest by bankLedger.bankOf
+                    // and stored on the row. A wire has to name one, so
+                    // pre-filling it saves a dropdown per row, and a wrong
+                    // guess is visible and editable rather than silently
+                    // posted.
+                    bank_guess: t.bank || null }))
                 .sort((a, b) => String(b.date).localeCompare(String(a.date)));
             const ledgerSummary = ledger.summary(bankRows);
 
@@ -147,8 +163,22 @@ function mount(app, cfg) {
             // against them — that is the separation most of this app exists
             // for, and an amount coincidence across two companies would be
             // the worst possible match.
+            // ── AN UNKNOWN COMPANY IS NOT A PASS ─────────────────────────
+            // My first version was `!d.company || d.company === METALS`,
+            // which reads as cautious and is the opposite. The account_id on
+            // a Plaid row is PLAID's id; qb-settings/bank-accounts.json is
+            // keyed by her own ids and carries no plaid_account_id yet. So
+            // in production company would be null on EVERY row and that
+            // filter would have matched Edge Trading deposits against Edge
+            // Metals invoices — the one thing rule 5 exists to prevent.
+            //
+            // Unmapped rows therefore get their own list and are NOT matched.
+            // That leaves the feature inert until the accounts are linked,
+            // which is correct: doing nothing beats crediting one company's
+            // money to the other, and the response says exactly what to add.
             const crossCompany = deposits.filter((d) => d.company && d.company !== METALS);
-            deposits = deposits.filter((d) => !d.company || d.company === METALS);
+            const unknownAccount = deposits.filter((d) => !d.company);
+            deposits = deposits.filter((d) => d.company === METALS);
 
             const out = bankMatch.matchStatement({
                 deposits, openDocs: docs,
@@ -173,6 +203,13 @@ function mount(app, cfg) {
                 // exist and why they are not here.
                 other_company: crossCompany.map((d) => ({ id: d.id, date: d.date,
                     amount: d.amount, company: d.company, desc: d.desc })),
+                // Not matched, and told why, with the fix named. An account
+                // whose company is unknown is a one-line edit away.
+                unknown_account: unknownAccount.map((d) => ({ id: d.id, date: d.date,
+                    amount: d.amount, account_id: d.account_id, desc: d.desc })),
+                unknown_account_fix: unknownAccount.length
+                    ? 'Add "plaid_account_id" to the matching entry in qb-settings/bank-accounts.json so Jarvis knows which company each account belongs to. Until then these are not matched against anything.'
+                    : null,
                 open_invoices: docs.length,
                 customers_with_open: [...new Set(docs.map((d) => d.party))].length,
                 // NOT a count of rows — the actual mismatches, because a
@@ -183,6 +220,13 @@ function mount(app, cfg) {
                 // same as a clean reconciliation.
                 feed: bankRows.length ? 'bank-transactions.json' : 'none yet — connect the bank feed or no deposits have been pulled',
                 learned_names: aliases.length,
+                // ── THE FORM IS SERVER-DRIVEN ────────────────────────────
+                // Confirming posts to POST /api/sales-receipts, which
+                // validates mode and bank against its own lists. A page
+                // carrying its own copy of those lists would drift and she
+                // would get a refusal with no way to see why.
+                modes: require('./salesReceipts').RECEIPT_MODES,
+                banks: (() => { try { return require('./banks').options(); } catch (e) { return []; } })(),
             });
         } catch (e) {
             res.status(500).json({ error: e.message });
@@ -205,6 +249,49 @@ function mount(app, cfg) {
             const row = await bankLearn.learnAlias(descriptor, customer,
                 { by: req.profile || req.role || null, why: why || null });
             res.json({ ok: true, alias: row });
+        } catch (e) { res.status(400).json({ error: e.message }); }
+    });
+
+    // ── set aside, never deleted ─────────────────────────────────────────
+    // Apsara, 2026-10-05, choosing how this should behave: "Hidden from the
+    // worklist, still counted and reversible". So this flips a flag and
+    // writes a history line; nothing is removed, and the money stays in the
+    // ledger's own total where the screen shows it.
+    //
+    // Admin, because excluding decides what she never sees again. A real
+    // payment that the bank miscategorised, excluded by someone guessing,
+    // would simply stop being offered.
+    app.post('/api/bank/exclude', async (req, res) => {
+        if (!admin(req, res)) return;
+        const b = req.body || {};
+        const id = String(b.id || '').trim();
+        if (!id) return res.status(400).json({ error: 'which row?' });
+        // A REASON IS REQUIRED. "Why is this excluded" is asked months later
+        // by someone who was not here, and an empty reason makes the history
+        // line worthless at exactly the moment it is needed.
+        const reason = String(b.reason || '').trim();
+        if (!reason) return res.status(400).json({ error: 'say why — an excluded row with no reason is unexplainable at tax time' });
+        try {
+            const ledger = require('./bankLedger');
+            if (!ledger.list().some((r) => r && r.id === id)) {
+                return res.status(404).json({ error: 'no bank row with that id' });
+            }
+            const row = await ledger.exclude(id, reason, req.profile || req.role || null);
+            res.json({ ok: true, row });
+        } catch (e) { res.status(400).json({ error: e.message }); }
+    });
+
+    app.post('/api/bank/include', async (req, res) => {
+        if (!admin(req, res)) return;
+        const id = String((req.body || {}).id || '').trim();
+        if (!id) return res.status(400).json({ error: 'which row?' });
+        try {
+            const ledger = require('./bankLedger');
+            if (!ledger.list().some((r) => r && r.id === id)) {
+                return res.status(404).json({ error: 'no bank row with that id' });
+            }
+            const row = await ledger.include(id, req.profile || req.role || null);
+            res.json({ ok: true, row });
         } catch (e) { res.status(400).json({ error: e.message }); }
     });
 

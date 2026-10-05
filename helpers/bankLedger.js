@@ -64,6 +64,38 @@ function FILE() { return process.env.BANK_TX_FILE || cfg.BANK_TX_FILE; }
 // it already carries the company. Read from there rather than inventing a
 // second mapping that can disagree — Edge Metals and Edge Trading being
 // different companies is most of what this app is for.
+// ── the short bank label the receipts store accepts ──────────────────────
+// bank-accounts.json names the institution ("Bank of America, N.A.");
+// helpers/banks.js owns the names addReceipt accepts ("BofA"). Those never
+// match as strings and banks.canonical() returns null for both of hers, so
+// the SWIFT code is the discriminator — the one field that identifies an
+// institution without ambiguity.
+//
+// Resolved HERE, at ingest, beside company, and stored on the row. It used
+// to be looked up again at request time in bankMatchRoutes, which meant two
+// independent mappings for the same fact: company came from the stored row
+// and the bank label from a fresh lookup, so they could disagree and one
+// could work while the other silently returned nothing.
+const SWIFT_TO_BANK = {
+    BOFA: 'BofA',           // BOFAUS3N — Edge Metals
+    CHAS: 'Chase Bank',     // CHASUS33 — Edge Trading
+};
+
+function bankOf(accountId, accounts) {
+    const hit = (Array.isArray(accounts) ? accounts : [])
+        .find((a) => a && (a.id === accountId || a.plaid_account_id === accountId));
+    if (!hit) return null;
+    const swift = String(hit.swift || '').trim().toUpperCase();
+    const guess = swift ? SWIFT_TO_BANK[swift.slice(0, 4)] : null;
+    if (!guess) return null;
+    // Checked against the live list, so a rename in banks.js returns null
+    // rather than a value addReceipt would reject.
+    try {
+        const opts = require('./banks').options() || [];
+        return opts.includes(guess) ? guess : null;
+    } catch (e) { return guess; }
+}
+
 function companyOf(accountId, accounts) {
     const list = Array.isArray(accounts) ? accounts : [];
     const hit = list.find((a) => a && (a.id === accountId || a.plaid_account_id === accountId));
@@ -112,6 +144,7 @@ function fromPlaid(tx, accounts) {
         // ── and the rest ─────────────────────────────────────────────────
         account_id: accountId,
         company: companyOf(accountId, accounts),
+        bank: bankOf(accountId, accounts),
         pending: !!tx.pending,
         excluded: false,
         excluded_reason: null,
@@ -305,5 +338,5 @@ async function include(id, by) {
 module.exports = {
     FILE, fromPlaid, upsert, setExcluded, worklist, summary,
     list, ingestPlaid, exclude, include,
-    companyOf, readAccounts, BANK_FIELDS, HERS, actedOn,
+    companyOf, bankOf, SWIFT_TO_BANK, readAccounts, BANK_FIELDS, HERS, actedOn,
 };

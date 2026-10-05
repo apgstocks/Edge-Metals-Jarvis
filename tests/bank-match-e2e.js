@@ -97,8 +97,12 @@ const balanceOf = (id) => {
 // break, which is the whole point of an end-to-end test.
 const ledger = require(path.join(ROOT, 'helpers/bankLedger'));
 const ACCOUNTS = [
-    { id: 'bofa-1', company: 'Edge Metals INC' },
-    { id: 'chase-1', company: 'EDGE TRADING INC' },
+    // swift is what identifies the institution unambiguously, and is how the
+    // route guesses which account to pre-fill on the Confirm form. A guess on
+    // the institution NAME put Chase on the Bank of America account.
+    { id: 'bofa-1', company: 'Edge Metals INC', bank: 'Bank of America, N.A.', swift: 'BOFAUS3N' },
+    { id: 'chase-1', company: 'EDGE TRADING INC', bank: 'JPMorgan Chase Bank, N.A.', swift: 'CHASUS33' },
+    { id: 'wells-9', company: 'Edge Metals INC', bank: 'Wells Fargo', swift: 'WFBIUS6S' },
 ];
 const putDeposits = (rows) => fs.writeFileSync(cfg.BANK_TX_FILE,
     JSON.stringify(rows.map((x) => ledger.fromPlaid(x, ACCOUNTS)).filter(Boolean), null, 1));
@@ -478,8 +482,24 @@ let S1, S2, S3;
     ck('the ledger summary comes through', r.json.ledger && r.json.ledger.rows === 2,
        JSON.stringify(r.json.ledger));
 
-    // EXCLUDE IT, and it must leave the worklist for real.
-    await ledger.exclude('TX-METALS', 'duplicate of a wire already recorded', 'apsara');
+    // EXCLUDE IT THROUGH THE ROUTE the screen posts to, not the helper.
+    const noReason = await req('POST', '/api/bank/exclude', { sid, body: { id: 'TX-METALS' } });
+    ck('excluding without a reason is refused', noReason.status === 400
+       && /unexplainable at tax time/.test((noReason.json || {}).error || ''),
+       noReason.status + ' ' + String(noReason.raw).slice(0, 160));
+    ck('  and a non-admin cannot exclude at all',
+       (await req('POST', '/api/bank/exclude', { sid: userSid, body: { id: 'TX-METALS', reason: 'x' } })).status === 403,
+       'excluding decides what she never sees again');
+    ck('  nor can a row that does not exist be excluded',
+       (await req('POST', '/api/bank/exclude', { sid, body: { id: 'NOPE', reason: 'x' } })).status === 404);
+
+    const exc = await req('POST', '/api/bank/exclude', { sid,
+        body: { id: 'TX-METALS', reason: 'duplicate of a wire already recorded' } });
+    ck('excluding with a reason works', exc.status === 200, String(exc.raw).slice(0, 160));
+    ck('  and the reason is on the row with who did it',
+       exc.json.row && exc.json.row.excluded_reason === 'duplicate of a wire already recorded'
+       && (exc.json.row.history || []).length === 1,
+       JSON.stringify(exc.json.row && exc.json.row.history));
     r = await req('GET', '/api/bank/match', { sid });
     ck('an excluded deposit is no longer proposed against anything',
        !r.json.rows.some((x) => x.deposit.id === 'TX-METALS'),
@@ -488,13 +508,88 @@ let S1, S2, S3;
        r.json.ledger.excluded.count === 1 && r.json.ledger.excluded.money === 33000,
        JSON.stringify(r.json.ledger.excluded));
 
-    // And back again.
-    await ledger.include('TX-METALS', 'apsara');
+    // And back again, also through the route.
+    const inc = await req('POST', '/api/bank/include', { sid, body: { id: 'TX-METALS' } });
+    ck('putting it back works through the route', inc.status === 200, String(inc.raw).slice(0, 140));
+    ck('  and both acts are in the history, not just the latest',
+       (inc.json.row.history || []).length === 2,
+       JSON.stringify((inc.json.row.history || []).map((h) => h.what)));
     r = await req('GET', '/api/bank/match', { sid });
     ck('un-excluding brings it back as a proposal',
        r.json.rows.some((x) => x.deposit.id === 'TX-METALS' && x.outcome === 'proposed'),
        JSON.stringify(r.json.rows.map((x) => [x.deposit.id, x.outcome])));
     void S;
+}
+
+// ── E4 — THE PAGE IS SERVED, AND THE FORM IS PRE-FILLED CORRECTLY ─────────
+{
+    section('E4 — the screen, and the account it pre-fills');
+
+    const page = await new Promise((resolve, reject) => {
+        const rq = http.request(base + '/bank-match', { method: 'GET',
+            headers: { Authorization: `Bearer ${sid}` } }, (res) => {
+            let raw = ''; res.on('data', (c) => { raw += c; });
+            res.on('end', () => resolve({ status: res.statusCode, raw }));
+        });
+        rq.on('error', reject); rq.end();
+    });
+    ck('/bank-match serves the page', page.status === 200, String(page.status));
+    ck('  and it is the matching screen', /Bank matching/.test(page.raw) && /api\/bank\/match/.test(page.raw),
+       page.raw.slice(0, 120));
+
+    putDeposits([
+        { transaction_id: 'TX-G1', date: '2026-09-23', amount: -500, name: 'WIRE X', account_id: 'bofa-1' },
+        { transaction_id: 'TX-G2', date: '2026-09-23', amount: -500, name: 'WIRE Y', account_id: 'wells-9' },
+    ]);
+    const r = await req('GET', '/api/bank/match', { sid });
+    const g1 = r.json.rows.find((x) => x.deposit.id === 'TX-G1');
+    const g2 = r.json.rows.find((x) => x.deposit.id === 'TX-G2');
+    // The bank label is resolved at INGEST by bankLedger.bankOf and stored
+    // on the row, the same single lookup that sets company — so what the
+    // route pre-fills is what the fixture's accounts say. It used to be a
+    // second, independent lookup at request time, which meant the company on
+    // a row and the bank on the same row came from different places and one
+    // could work while the other silently returned nothing.
+    ck('a BofA deposit pre-fills BofA, not the other bank',
+       g1 && g1.deposit.bank_guess === 'BofA', g1 && String(g1.deposit.bank_guess));
+    ck('  and an institution Jarvis does not know pre-fills NOTHING',
+       g2 && g2.deposit.bank_guess === null, g2 && String(g2.deposit.bank_guess));
+    ck('  which is the point: a name-based guess put Chase on the BofA account',
+       ledger.bankOf('wells-9', ACCOUNTS) === null
+       && ledger.bankOf('bofa-1', ACCOUNTS) === 'BofA'
+       && ledger.bankOf('chase-1', ACCOUNTS) === 'Chase Bank',
+       JSON.stringify(['bofa-1', 'chase-1', 'wells-9'].map((x) => ledger.bankOf(x, ACCOUNTS))));
+
+    // ── AN UNMAPPED ACCOUNT IS NOT MATCHED ───────────────────────────────
+    // An account_id the accounts file does not know gives company === null,
+    // and that must NOT fall through as "probably Edge Metals". My first
+    // filter was `!d.company || d.company === METALS`, which reads as
+    // cautious and is the opposite — in production, where bank-accounts.json
+    // carries no plaid_account_id at all, it would have matched every Edge
+    // Trading deposit against Edge Metals invoices.
+    putDeposits([
+        { transaction_id: 'TX-G1', date: '2026-09-23', amount: -500, name: 'WIRE X', account_id: 'bofa-1' },
+        { transaction_id: 'TX-G3', date: '2026-09-23', amount: -500, name: 'WIRE Z', account_id: 'unmapped-77' },
+    ]);
+    const r2 = await req('GET', '/api/bank/match', { sid });
+    ck('a deposit from an unmapped account is not matched at all',
+       !r2.json.rows.some((x) => x.deposit.id === 'TX-G3'),
+       JSON.stringify(r2.json.rows.map((x) => x.deposit.id)));
+    ck('  it is listed as an unknown account instead',
+       (r2.json.unknown_account || []).some((x) => x.id === 'TX-G3'),
+       JSON.stringify(r2.json.unknown_account));
+    ck('  with the one-line fix named',
+       /plaid_account_id/.test(r2.json.unknown_account_fix || ''), String(r2.json.unknown_account_fix));
+    ck('  while the mapped one still is matched',
+       r2.json.rows.some((x) => x.deposit.id === 'TX-G1'),
+       JSON.stringify(r2.json.rows.map((x) => x.deposit.id)));
+
+    ck('the form options come from the server',
+       (r.json.modes || []).includes('Wire') && (r.json.banks || []).includes('BofA'),
+       JSON.stringify({ modes: r.json.modes, banks: r.json.banks }));
+    ck('  and every pre-filled bank is one the receipts route accepts',
+       r.json.rows.every((x) => !x.deposit.bank_guess || r.json.banks.includes(x.deposit.bank_guess)),
+       JSON.stringify(r.json.rows.map((x) => x.deposit.bank_guess)));
 }
 
 // ── F — THERE IS NO SECOND WAY TO MARK AN INVOICE PAID ────────────────────
@@ -506,9 +601,16 @@ let S1, S2, S3;
 
     const src = fs.readFileSync(path.join(ROOT, 'helpers/bankMatchRoutes.js'), 'utf8');
     const code = src.replace(/\/\/.*$/gm, '').replace(/\/\*[\s\S]*?\*\//g, '');
-    const writes = (code.match(/app\.(post|put|patch|delete)\('\/api\/bank\/[a-z-]+'/g) || []);
-    ck('the only writes are about learning a name, not about money',
-       writes.every((w) => /aliases/.test(w)), writes.join(' '));
+    // ── THE INVARIANT IS ABOUT MONEY, NOT ABOUT ROUTE NAMES ──────────────
+    // My first version demanded every write here mention 'aliases', which
+    // went red the moment exclude/include landed — and those are legitimate:
+    // they change which rows are OFFERED, never what an invoice has been
+    // paid. The property worth guarding is that nothing here settles an
+    // invoice, so that is what is checked.
+    const writes = (code.match(/app\.(post|put|patch|delete)\('(\/api\/bank\/[a-z-]+)'/g) || []);
+    const ALLOWED = ['aliases', 'exclude', 'include'];
+    ck('every write here is about a name or the worklist, never about money',
+       writes.every((w) => ALLOWED.some((a) => w.includes(a))), writes.join(' '));
     ck('  nothing here calls addReceipt', !/addReceipt/.test(code),
        'confirming goes through POST /api/sales-receipts so there is one validation path');
     ck('  and nothing here writes a store directly',

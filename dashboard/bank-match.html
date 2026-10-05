@@ -1,0 +1,384 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Bank matching — Jarvis</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wght@700;800;900&family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+/* Design tokens copied from dashboard/quickbooks.html — standalone page,
+   kept in sync by hand, same as the others on this server. */
+:root{
+  --steel-900:#14181B; --steel-800:#1E2429; --steel-700:#2B3239; --steel-600:#3C454D;
+  --steel-500:#57616A; --steel-400:#7E8891; --steel-300:#A7B0B7; --steel-200:#CBD1D6;
+  --leaf-300:#7FD172; --leaf-400:#57BE49; --leaf-500:#3DA836; --leaf-600:#2E861F;
+  --green-500:#2F8F57; --amber-500:#D99A2B; --red-500:#C5402F; --blue-500:#3A6EA5;
+  --bg-base:#0C0E10; --surface-card:#14181B; --surface-sunken:#0F1214; --surface-hover:#181D21;
+  --text-strong:#FFFFFF; --text-body:#CBD1D6; --text-muted:#A7B0B7; --text-faint:#7E8891;
+  --border-subtle:#1E2429; --border-default:#2B3239; --ring:var(--leaf-500);
+  --font-display:'Archivo',sans-serif; --font-sans:'IBM Plex Sans',system-ui,sans-serif;
+  --font-mono:'IBM Plex Mono',ui-monospace,monospace;
+}
+*,*::before,*::after{box-sizing:border-box}
+body{margin:0;font-family:var(--font-sans);color:var(--text-body);background:var(--bg-base);-webkit-font-smoothing:antialiased;min-height:100vh}
+h1,h2,h3{font-family:var(--font-display);color:var(--text-strong);margin:0;font-weight:900;letter-spacing:-.02em}
+button{font:inherit;cursor:pointer}
+:focus-visible{outline:2px solid var(--ring);outline-offset:2px}
+.mono{font-family:var(--font-mono)}
+header{display:flex;align-items:center;gap:14px;padding:10px 16px;border-bottom:1px solid var(--border-default);background:var(--surface-card);position:sticky;top:0;z-index:10;flex-wrap:wrap}
+header h1{font-size:17px}
+header .back{color:var(--steel-400);font-size:13px;text-decoration:none}
+.chips{display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-left:auto}
+.chip{font-family:var(--font-mono);font-size:10.5px;letter-spacing:.06em;text-transform:uppercase;padding:3px 7px;border-radius:3px;border:1px solid var(--border-default);color:var(--text-muted);background:var(--surface-sunken);white-space:nowrap}
+.chip.on{color:var(--leaf-300);border-color:var(--leaf-600);background:rgba(87,190,73,.10)}
+.chip.warn{color:var(--amber-500);border-color:#5a4416;background:rgba(217,154,43,.10)}
+.chip.bad{color:var(--red-500);border-color:#5c2a22;background:rgba(197,64,47,.10)}
+.chip.act{cursor:pointer} .chip.act:hover{border-color:var(--text-body);color:var(--text-body)}
+main{padding:16px;max-width:1080px;margin:0 auto}
+.card{background:var(--surface-card);border:1px solid var(--border-default);border-radius:6px;padding:12px 14px;margin-bottom:10px}
+.lbl{font-family:var(--font-mono);font-size:9px;letter-spacing:.12em;text-transform:uppercase;color:var(--text-muted)}
+.row1{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap}
+.amt{font-family:var(--font-mono);font-size:19px;font-weight:600;color:var(--text-strong)}
+.desc{color:var(--text-body);font-size:13px}
+.when{font-family:var(--font-mono);font-size:11px;color:var(--text-faint)}
+.badge{font-family:var(--font-mono);font-size:10px;letter-spacing:.07em;text-transform:uppercase;padding:2px 6px;border-radius:3px;border:1px solid var(--border-default);color:var(--text-muted)}
+.badge.good{color:var(--leaf-300);border-color:var(--leaf-600)}
+.badge.ask{color:var(--amber-500);border-color:#5a4416}
+.badge.none{color:var(--steel-400)}
+.alloc{margin:8px 0 0;border-top:1px solid var(--border-subtle);padding-top:8px}
+.alloc table{width:100%;border-collapse:collapse;font-size:13px}
+.alloc td{padding:3px 0;vertical-align:top}
+.alloc td.n{text-align:right;font-family:var(--font-mono);white-space:nowrap}
+.why{margin:7px 0 0;padding:0 0 0 16px;color:var(--text-muted);font-size:12.5px}
+.why li{margin:2px 0}
+.acts{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px;align-items:center}
+.btn{background:var(--surface-sunken);border:1px solid var(--border-default);color:var(--text-body);border-radius:4px;padding:5px 10px;font-size:12.5px}
+.btn:hover{border-color:var(--text-body)}
+.btn.go{border-color:var(--leaf-600);color:var(--leaf-300)}
+.btn.go:hover{background:rgba(87,190,73,.10)}
+.btn.warn{border-color:#5a4416;color:var(--amber-500)}
+select,input[type=text]{background:var(--surface-sunken);border:1px solid var(--border-default);color:var(--text-body);border-radius:4px;padding:4px 6px;font:inherit;font-size:12.5px}
+.empty{color:var(--text-faint);font-size:13px;padding:10px 0}
+.note{color:var(--text-muted);font-size:12.5px;margin-top:4px}
+.rivals{margin-top:8px;border-left:2px solid #5a4416;padding-left:10px}
+.toast{position:fixed;bottom:16px;left:50%;transform:translateX(-50%);background:var(--surface-card);border:1px solid var(--border-default);color:var(--text-body);padding:9px 14px;border-radius:5px;font-size:13px;z-index:50;max-width:90vw}
+.toast.bad{border-color:#5c2a22;color:#f0b4ab}
+.toast.good{border-color:var(--leaf-600);color:var(--leaf-300)}
+h2.sec{font-size:13px;margin:18px 0 8px;color:var(--text-muted);font-family:var(--font-mono);letter-spacing:.1em;text-transform:uppercase;font-weight:600}
+</style>
+</head>
+<body>
+<header>
+  <a class="back" href="/">&larr; Jarvis</a>
+  <h1>Bank matching</h1>
+  <div class="chips" id="chips"></div>
+</header>
+<main>
+  <div id="feednote"></div>
+  <div id="list"><div class="empty">Loading…</div></div>
+  <div id="extras"></div>
+</main>
+<script>
+const $ = (id) => document.getElementById(id);
+let STATE = { data: null, aliases: [] };
+
+function toast(msg, cls) {
+  const t = document.createElement('div');
+  t.className = 'toast ' + (cls || '');
+  t.textContent = msg;
+  document.body.appendChild(t);
+  setTimeout(() => t.remove(), cls === 'bad' ? 9000 : 4000);
+}
+
+/* Every field below is her typing or her bank's, and it goes into innerHTML.
+   "Carlos G & C" is an ordinary supplier name here. */
+function esc(v) {
+  return String(v == null ? '' : v).replace(/[&<>"]/g, c =>
+    ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+}
+const money = (n) => (typeof n === 'number' && isFinite(n))
+  ? '$' + n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+  : '—';
+
+async function api(url, opts) {
+  const o = opts || {};
+  const r = await fetch(url, o.body
+    ? { method: o.method || 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(o.body) }
+    : { method: o.method || 'GET' });
+  const j = await r.json().catch(() => ({ error: 'bad response' }));
+  if (!r.ok) { const e = new Error(j.error || ('HTTP ' + r.status)); e.body = j; e.status = r.status; throw e; }
+  return j;
+}
+
+/* ── the strip of numbers ──────────────────────────────────────────────
+   Excluded and pending get their own chips rather than being quietly left
+   out of one figure. A screen that shows a single number has to be trusted;
+   one that shows what it set aside can be checked. */
+function renderChips() {
+  const d = STATE.data; if (!d) return;
+  const L = d.ledger || {};
+  const c = d.counts || {}, t = d.totals || {};
+  const bits = [
+    `<span class="chip ${c.confident ? 'on' : ''}">${c.confident || 0} ready · ${money(t.confident)}</span>`,
+    `<span class="chip ${(c.deposits - (c.confident || 0)) ? 'warn' : ''}">${Math.max(0, (c.deposits || 0) - (c.confident || 0))} need you · ${money(t.needs_you)}</span>`,
+    c.ambiguous ? `<span class="chip warn">${c.ambiguous} ambiguous</span>` : '',
+    c.no_party ? `<span class="chip warn">${c.no_party} unknown payer</span>` : '',
+    `<span class="chip">${d.open_invoices || 0} open invoices · ${d.customers_with_open || 0} customers</span>`,
+    (L.excluded && L.excluded.count) ? `<span class="chip act" data-show="excluded" title="Set aside, still counted — click to see them">${L.excluded.count} excluded · ${money(L.excluded.money)}</span>` : '',
+    (L.pending && L.pending.count) ? `<span class="chip">${L.pending.count} pending</span>` : '',
+    L.drifted ? `<span class="chip bad">${L.drifted} restated by the bank</span>` : '',
+    `<span class="chip act" data-show="aliases">${d.learned_names || 0} names learned</span>`,
+    (d.balance_disagreements || []).length ? `<span class="chip bad">${d.balance_disagreements.length} balance disagreements</span>` : '',
+    `<span class="chip act" data-reload="1">reload</span>`,
+  ].filter(Boolean);
+  $('chips').innerHTML = bits.join('');
+}
+
+const BADGE = {
+  proposed: ['good', 'matched'],
+  no_party: ['ask', 'who paid?'],
+  nothing_open: ['none', 'nothing open'],
+  more_than_owed: ['ask', 'more than owed'],
+  no_combination: ['ask', 'no combination'],
+  not_a_deposit: ['none', 'not a deposit'],
+};
+
+function allocTable(p) {
+  return `<div class="alloc"><table>${p.allocations.map((a) => `<tr>
+      <td>${esc(a.label)}${a.clears ? '' : ` <span class="badge ask">part</span>`}</td>
+      <td class="n">${money(a.amount)}</td>
+      <td class="n" style="color:var(--text-faint)">${a.shortfall ? 'short ' + money(a.shortfall)
+        : (a.clears ? '' : 'leaves ' + money(a.leaves))}</td>
+    </tr>`).join('')}</table></div>`;
+}
+
+/* Confirm posts to POST /api/sales-receipts — the route the receipts screen
+   already uses. There is no second way to mark an invoice paid, so this form
+   carries what addReceipt requires: a mode, and a bank when the mode has one. */
+function confirmForm(row, p, i) {
+  const d = STATE.data;
+  const modes = d.modes || ['Wire'];
+  const banks = d.banks || [];
+  const guess = row.deposit.bank_guess;
+  return `<div class="acts">
+    <select data-mode="${i}">${modes.map((m) => `<option${m === 'Wire' ? ' selected' : ''}>${esc(m)}</option>`).join('')}</select>
+    <select data-bank="${i}">
+      <option value="">which account?</option>
+      ${banks.map((b) => `<option${b === guess ? ' selected' : ''}>${esc(b)}</option>`).join('')}
+    </select>
+    <button class="btn go" data-confirm="${i}">Confirm — record this receipt</button>
+    <button class="btn warn" data-exclude="${esc(row.deposit.id)}">Not a customer payment</button>
+  </div>`;
+}
+
+function renderRow(row, i) {
+  const dep = row.deposit;
+  const [cls, label] = BADGE[row.outcome] || ['none', esc(row.outcome)];
+  const p = (row.proposals || [])[0];
+  const rivals = (row.proposals || []).slice(1);
+
+  let body = '';
+  if (row.note) body += `<div class="note">${esc(row.note)}</div>`;
+
+  if (row.outcome === 'no_party') {
+    const sg = row.suggestions || [];
+    body += sg.length
+      ? `<div class="acts">${sg.map((s) => `<button class="btn go" data-learn="${esc(s.customer)}" data-desc="${esc(dep.descriptor)}">This is ${esc(s.customer)}</button>`).join('')}
+           <span class="note">Answered once, every future deposit from them matches itself.</span></div>`
+      : `<div class="acts">
+           <input type="text" data-name="${i}" placeholder="type the customer's name" size="26">
+           <button class="btn go" data-learnfree="${i}" data-desc="${esc(dep.descriptor)}">Remember this payer</button>
+         </div>`;
+    body += `<div class="acts"><button class="btn warn" data-exclude="${esc(dep.id)}">Not a customer payment</button></div>`;
+  } else if (p) {
+    body += allocTable(p);
+    body += `<ul class="why">${p.reasons.map((x) => `<li>${esc(x)}</li>`).join('')}</ul>`;
+    if (row.ambiguous) {
+      body += `<div class="rivals"><div class="lbl">the other possibilities</div>
+        ${rivals.map((q) => allocTable(q)).join('')}</div>`;
+    }
+    if (row.truncated) {
+      body += `<div class="note">The search stopped early — there may be more combinations than these. Not the same as there being none.</div>`;
+    }
+    body += confirmForm(row, p, i);
+  } else {
+    body += `<div class="acts"><button class="btn warn" data-exclude="${esc(dep.id)}">Not a customer payment</button></div>`;
+  }
+
+  return `<div class="card" data-i="${i}">
+    <div class="row1">
+      <span class="amt">${money(dep.amount)}</span>
+      <span class="badge ${cls}">${label}</span>
+      ${row.ambiguous ? '<span class="badge ask">needs you</span>' : ''}
+      ${p && !row.ambiguous ? `<span class="badge ${p.score >= 0.8 ? 'good' : 'ask'}">${Math.round(p.score * 100)}%</span>` : ''}
+      <span class="when">${esc(dep.date)}</span>
+      ${row.party ? `<span class="desc">${esc(row.party)}</span>` : ''}
+    </div>
+    <div class="desc mono" style="font-size:11.5px;color:var(--text-faint);margin-top:2px">${esc(dep.descriptor || dep.desc || '(no description)')}</div>
+    ${body}
+  </div>`;
+}
+
+function renderExtras() {
+  const d = STATE.data; if (!d) return;
+  const out = [];
+
+  /* The bank restated a row she had already acted on. Loud, because the
+     figure moved under a decision already made. */
+  if ((d.ledger || {}).drifted) {
+    out.push(`<h2 class="sec">The bank changed its mind about ${d.ledger.drifted} row(s)</h2>
+      <div class="card"><div class="note">A row was restated after it had been excluded or categorised. The bank's figure is the one kept — this is here so you know it moved.</div></div>`);
+  }
+
+  /* Rule 5. Named rather than silently dropped. */
+  if ((d.other_company || []).length) {
+    out.push(`<h2 class="sec">Not Edge Metals — ${d.other_company.length} deposit(s) in another company's account</h2>
+      <div class="card">${d.other_company.map((x) => `<div class="row1" style="margin:3px 0">
+          <span class="amt" style="font-size:14px">${money(x.amount)}</span>
+          <span class="when">${esc(x.date)}</span>
+          <span class="desc">${esc(x.company)}</span>
+          <span class="desc" style="color:var(--text-faint)">${esc(x.desc)}</span>
+        </div>`).join('')}
+        <div class="note">These are not matched against Edge Metals invoices, because they are a different company.</div></div>`);
+  }
+
+  if ((d.balance_disagreements || []).length) {
+    out.push(`<h2 class="sec">${d.balance_disagreements.length} invoice balance(s) disagree</h2>
+      <div class="card">${d.balance_disagreements.map((x) => `<div class="desc">${esc(x.id)} — the sales screen says ${money(x.sales_js)}, this page computes ${money(x.here)}</div>`).join('')}
+      <div class="note">Nothing is matched against these until they agree.</div></div>`);
+  }
+  $('extras').innerHTML = out.join('');
+}
+
+async function render() {
+  const d = STATE.data;
+  renderChips();
+  $('feednote').innerHTML = /none yet/.test(d.feed || '')
+    ? `<div class="card"><div class="lbl">no bank feed</div><div class="note">${esc(d.feed)}</div></div>` : '';
+  const rows = d.rows || [];
+  $('list').innerHTML = rows.length
+    ? rows.map(renderRow).join('')
+    : `<div class="empty">No deposits to match${/none yet/.test(d.feed || '') ? '.' : ' in this window.'}</div>`;
+  renderExtras();
+}
+
+async function load() {
+  try {
+    STATE.data = await api('/api/bank/match');
+    await render();
+  } catch (e) {
+    $('list').innerHTML = `<div class="card"><div class="lbl">could not load</div><div class="note">${esc(e.message)}</div></div>`;
+  }
+}
+
+async function showAliases() {
+  try {
+    const { aliases } = await api('/api/bank/aliases');
+    $('extras').innerHTML = `<h2 class="sec">${aliases.length} name(s) you have taught it</h2>
+      <div class="card">${aliases.length ? aliases.map((a) => `<div class="row1" style="margin:4px 0">
+          <span class="desc mono" style="font-size:11.5px">${esc(a.descriptor)}</span>
+          <span class="desc">&rarr; ${esc(a.customer)}</span>
+          <span class="when">${esc(String(a.at || '').slice(0, 10))}${a.by ? ' · ' + esc(a.by) : ''}</span>
+          <button class="btn" data-forget="${esc(a.descriptor)}">Forget</button>
+        </div>`).join('') : '<div class="empty">Nothing learned yet.</div>'}
+      <div class="note">A wrong name here would misallocate every future deposit from that payer, so each one can be forgotten.</div></div>`;
+  } catch (e) { toast(e.message, 'bad'); }
+}
+
+function showExcluded() {
+  const L = (STATE.data || {}).ledger || {};
+  $('extras').innerHTML = `<h2 class="sec">Excluded — set aside, still counted</h2>
+    <div class="card"><div class="row1"><span class="amt">${money((L.excluded || {}).money)}</span>
+      <span class="desc">${(L.excluded || {}).count || 0} row(s)</span></div>
+      <div class="note">Excluded rows leave this worklist but stay in the ledger with their total, and any one of them can be put back. Nothing is deleted.</div></div>`;
+}
+
+document.addEventListener('click', async (ev) => {
+  const t = ev.target.closest('[data-reload],[data-show],[data-learn],[data-learnfree],[data-forget],[data-exclude],[data-confirm]');
+  if (!t) return;
+
+  if (t.dataset.reload) return load();
+  if (t.dataset.show === 'aliases') return showAliases();
+  if (t.dataset.show === 'excluded') return showExcluded();
+
+  if (t.dataset.learn || t.dataset.learnfree != null) {
+    const customer = t.dataset.learn
+      || (($(`list`).querySelector(`[data-name="${t.dataset.learnfree}"]`) || {}).value || '').trim();
+    if (!customer) return toast('Whose payment is it?', 'bad');
+    try {
+      await api('/api/bank/aliases', { body: { descriptor: t.dataset.desc, customer, why: 'confirmed on the bank matching screen' } });
+      toast(`Remembered: ${customer}`, 'good');
+      load();
+    } catch (e) { toast(e.message, 'bad'); }
+    return;
+  }
+
+  if (t.dataset.forget) {
+    try {
+      await api('/api/bank/aliases', { method: 'DELETE', body: { descriptor: t.dataset.forget } });
+      toast('Forgotten', 'good');
+      showAliases(); load();
+    } catch (e) { toast(e.message, 'bad'); }
+    return;
+  }
+
+  /* Excluding asks for a reason. "Why is this excluded" is a question asked
+     months later by someone who was not here. */
+  if (t.dataset.exclude) {
+    const reason = prompt('Why is this not a customer payment?\n(a card fee, an owner draw, a transfer between your own accounts…)');
+    if (reason === null) return;
+    try {
+      await api('/api/bank/exclude', { body: { id: t.dataset.exclude, reason } });
+      toast('Set aside — still counted, and reversible', 'good');
+      load();
+    } catch (e) { toast(e.message, 'bad'); }
+    return;
+  }
+
+  if (t.dataset.confirm != null) {
+    const i = Number(t.dataset.confirm);
+    const row = (STATE.data.rows || [])[i];
+    const p = (row.proposals || [])[0];
+    if (!row || !p) return;
+    const card = t.closest('.card');
+    const mode = (card.querySelector(`[data-mode="${i}"]`) || {}).value || '';
+    const bank = (card.querySelector(`[data-bank="${i}"]`) || {}).value || '';
+
+    /* The shortfall is a deduction, not a rounding. salesReceipts.js keeps
+       them apart because a bank charge is a cost to Edge Metals and a
+       discount reduces what was earned. If there is one, she says which. */
+    const short = p.allocations.reduce((s, a) => s + (a.shortfall || 0), 0);
+    let reason = null;
+    if (short > 0.005) {
+      const ans = prompt(`This deposit is ${money(short)} short of the invoice total.\n\nType "fee" if the bank took it in transit, or "discount" if you agreed to take less.`);
+      if (ans === null) return;
+      reason = /^f/i.test(ans) ? 'bank_charge' : (/^d/i.test(ans) ? 'discount' : null);
+      if (!reason) return toast('Not recorded — a shortfall has to be a fee or a discount', 'bad');
+    }
+
+    t.disabled = true; t.textContent = 'Recording…';
+    try {
+      await api('/api/sales-receipts', { body: {
+        date: row.deposit.date, amount: row.deposit.amount, mode, bank,
+        customer: row.party, ref: row.deposit.id,
+        note: 'matched from the bank feed',
+        allocations: p.allocations.map((a) => ({
+          sale_id: a.doc_id, amount: a.amount,
+          ...(a.shortfall ? { deduction_amount: a.shortfall, deduction_reason: reason } : {}),
+        })),
+      } });
+      toast('Receipt recorded', 'good');
+      load();
+    } catch (e) {
+      t.disabled = false; t.textContent = 'Confirm — record this receipt';
+      toast(e.message, 'bad');
+    }
+  }
+});
+
+load();
+</script>
+</body>
+</html>
