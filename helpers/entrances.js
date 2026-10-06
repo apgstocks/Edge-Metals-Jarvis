@@ -66,7 +66,21 @@ const ENTRANCES = [
     },
     {
         id: 'legacy-8080',
-        url: `http://${KNOWN_IP}:8080/health`,
+        // ── NOT /health, AND THAT IS THE WHOLE POINT ─────────────────────
+        // Probed /health until 2026-10-06, and it was wrong from the moment
+        // the health-check exemption landed the day before. api.js exempts
+        // /health from the plain-HTTP redirect on purpose, so Google's
+        // checker is not bounced — which means /health is the ONE path on
+        // this port guaranteed never to redirect. The check therefore read
+        // 200, concluded "it is SERVING here, and this address is plain
+        // HTTP", and would have emailed that every night: a false alarm, in
+        // alarming words, about a server behaving correctly. Verified on the
+        // live box: / and /documents both answer 301, /health answers 200.
+        //
+        // So it probes a path that is NOT exempt. Which is also the honest
+        // test — the question is whether an old bookmark lands on https, and
+        // nobody's old bookmark points at /health.
+        url: `http://${KNOWN_IP}:8080/`,
         expect: 'redirect',
         why: 'THE ADDRESS THAT CAUSED 2026-10-05. The only address that existed before '
             + 'the HTTPS migration, still written in old bookmarks, old emails and old '
@@ -227,26 +241,156 @@ async function checkOne(entrance, { fetchImpl, timeoutMs = 15000 } = {}) {
     return { ...base, ok: true, status, location };
 }
 
+// ── HOW MANY DAYS BEFORE THE CERTIFICATE RUNS OUT ────────────────────────
+// Debt created on 2026-10-05, written down the same day so it would not be
+// discovered by a customer.
+//
+// Caddy renewed its own certificate automatically and nothing here had to
+// care. Then the Google load balancer went in front, and the certificate it
+// serves is a COPY of Caddy's that I uploaded by hand on 2026-10-05. A copy
+// does not renew. It expires 2026-12-04, and the managed certificate meant
+// to take over (jarvis-cert) only provisions once DNS points at the load
+// balancer — so if that provisioning ever silently fails, the bridge
+// expires and the site stops, with a TLS error on every device at once.
+//
+// checkOne above would catch it — on the morning it breaks. That is an
+// outage with a warning time of zero, which is the shape of failure she
+// asked me to stop producing: "I dont want to face it again n again."
+//
+// fetch() cannot see the peer certificate — it is deliberately not exposed —
+// so this needs a raw TLS connection. `tlsImpl` is injected exactly like
+// fetchImpl, so the nightly job on the VM supplies the real one and tests
+// supply a stub, and this file still reaches no network of its own.
+const WARN_DAYS = 30;
+
+function daysUntil(notAfter, now) {
+    const end = new Date(notAfter).getTime();
+    if (!Number.isFinite(end)) return null;
+    return Math.floor((end - (now || Date.now())) / 86400000);
+}
+
+async function checkCertificate({ host, port = 443, tlsImpl, warnDays = WARN_DAYS,
+    timeoutMs = 15000, now } = {}) {
+    const target = host || new URL(CANONICAL).hostname;
+    const base = { host: target, warnDays };
+
+    // ── NO IMPLICIT FALLBACK TO node:tls, AND THAT IS THE POINT ──────────
+    // Written first as `tlsImpl || require('tls').connect`, which would have
+    // meant tests/entrances.js — calling checkAll with only a fetch stub —
+    // opened a REAL TLS connection to jarvis.edgemetals.com on every run.
+    // The suite must never touch her live services, and the header of this
+    // file promises it reaches no network of its own. A convenience default
+    // quietly broke both.
+    //
+    // So the caller injects: helpers/entrancesJob.js and
+    // scripts/check-entrances.js pass require('tls').connect, tests pass a
+    // stub, and anything that forgets gets "not attempted" rather than a
+    // surprise outbound connection.
+    //
+    // NOT ATTEMPTED is not the same as FAILED. It must never turn the
+    // nightly run red on its own — a check that cries wolf is one she learns
+    // to ignore, which is how the whole guard gets switched off.
+    const connect = tlsImpl;
+    if (typeof connect !== 'function') {
+        return { ...base, checked: false, ok: true,
+            detail: 'no TLS implementation was injected — not attempted. The nightly job and '
+                + 'scripts/check-entrances.js pass require(\'tls\').connect; without it the '
+                + 'expiry is simply not looked at, rather than reported as fine.' };
+    }
+
+    let cert;
+    try {
+        cert = await new Promise((resolve, reject) => {
+            const timer = setTimeout(() => reject(new Error('timed out')), timeoutMs);
+            let socket;
+            try {
+                socket = connect({ host: target, port, servername: target }, () => {
+                    clearTimeout(timer);
+                    // The LEAF certificate. getPeerCertificate() without
+                    // `true` returns exactly that, which is the one that
+                    // expires first and the one that stops the site.
+                    const c = socket.getPeerCertificate ? socket.getPeerCertificate() : null;
+                    try { socket.end(); } catch (e) {}
+                    resolve(c);
+                });
+            } catch (e) { clearTimeout(timer); return reject(e); }
+            if (socket && socket.on) {
+                socket.on('error', (e) => { clearTimeout(timer); reject(e); });
+            }
+        });
+    } catch (e) {
+        return { ...base, checked: false, ok: true,
+            detail: `could not read the certificate: ${String((e && e.message) || e)} — not attempted` };
+    }
+
+    if (!cert || !cert.valid_to) {
+        return { ...base, checked: false, ok: true, detail: 'the handshake returned no certificate — not attempted' };
+    }
+
+    const days = daysUntil(cert.valid_to, now);
+    const out = { ...base, checked: true, validTo: cert.valid_to,
+        subject: (cert.subject && cert.subject.CN) || null,
+        issuer: (cert.issuer && (cert.issuer.O || cert.issuer.CN)) || null, days };
+
+    if (days === null) {
+        return { ...out, checked: false, ok: true, detail: `unreadable expiry date: ${cert.valid_to}` };
+    }
+    if (days < 0) {
+        return { ...out, ok: false, expired: true,
+            detail: `THE CERTIFICATE EXPIRED ${Math.abs(days)} day(s) ago — every device is seeing a TLS error right now` };
+    }
+    if (days <= warnDays) {
+        return { ...out, ok: false,
+            detail: `the certificate expires in ${days} day(s), on ${cert.valid_to}. `
+                + 'If this is the hand-uploaded copy of Caddy\'s certificate it will NOT renew itself. Check '
+                + '`gcloud compute ssl-certificates describe jarvis-cert --global '
+                + '--format=\'get(managed.status)\'` — it must say ACTIVE, not PROVISIONING.' };
+    }
+    return { ...out, ok: true };
+}
+
 async function checkAll(opts = {}) {
     const results = [];
     for (const e of ENTRANCES) results.push(await checkOne(e, opts));
     const broken = results.filter((r) => !r.ok);
+    const certificate = await checkCertificate(opts);
     return {
         at: new Date().toISOString(),
         canonical: CANONICAL,
         results,
         broken,
+        // Kept beside `results` rather than inside it: an entrance either
+        // answers or does not, while a certificate that is fine today and
+        // gone in three weeks is a deadline, not a failure. Folding it in
+        // would make `broken` mean two different things.
+        certificate,
         // An outage and a stale bookmark need different urgency, so they are
         // counted apart rather than summed into "3 problems".
-        outage: broken.some((r) => r.severity === 'outage'),
+        outage: broken.some((r) => r.severity === 'outage') || certificate.expired === true,
         oldLinksDead: broken.some((r) => r.severity === 'old-link'),
-        ok: broken.length === 0,
+        certificateExpiring: certificate.ok === false,
+        ok: broken.length === 0 && certificate.ok !== false,
     };
 }
 
 function report(res) {
     const L = [];
     if (res.ok) return 'Every address answers as it should.';
+
+    // The certificate goes FIRST when it is the problem. It is the one
+    // failure here with a date attached, and a deadline buried under a list
+    // of addresses that are all working reads as noise.
+    const cert = res.certificate;
+    if (cert && cert.ok === false) {
+        L.push(`${cert.host} — the HTTPS certificate`);
+        L.push(`  ${cert.detail}`);
+        if (cert.issuer) L.push(`  issued by ${cert.issuer}${cert.subject ? ` for ${cert.subject}` : ''}`);
+        L.push('  why it matters: when this expires every device gets a TLS error at the same '
+            + 'moment, on every network, and there is no partial version of it. The load balancer '
+            + 'serves a copy that was uploaded by hand on 2026-10-05 and does not renew itself.');
+        L.push('');
+    }
+
     for (const b of res.broken) {
         L.push(`${b.url}`);
         L.push(`  ${b.detail}`);
@@ -263,4 +407,4 @@ function report(res) {
 }
 
 module.exports = { ENTRANCES, CANONICAL, KNOWN_IP, APP_API_BASE, checkOne, checkAll, report,
-    redirectsToCanonical, advertisesHttp3 };
+    redirectsToCanonical, advertisesHttp3, checkCertificate, daysUntil, WARN_DAYS };

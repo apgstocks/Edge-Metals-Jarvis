@@ -18,7 +18,9 @@
 const E = require('../helpers/entrances');
 
 (async () => {
-    const res = await E.checkAll({});
+    // helpers/entrances.js opens no sockets of its own, so the certificate
+    // expiry is only looked at when something injects a way to connect.
+    const res = await E.checkAll({ tlsImpl: require('tls').connect });
     console.log(`\nENTRANCES — ${res.at}\n`);
     for (const r of res.results) {
         const mark = r.skipped ? ' -- ' : (r.ok ? ' ok ' : ' !! ');
@@ -26,6 +28,16 @@ const E = require('../helpers/entrances');
         console.log(`         expect ${r.expect}${r.status ? `, got ${r.status}` : ''}${r.location ? ` -> ${r.location}` : ''}`);
         if (!r.ok || r.skipped) console.log(`         ${r.detail || ''}`);
     }
+
+    // The deadline, printed whether or not it is close — "expires in 58 days"
+    // is the line that makes the Dec 4 hand-off visible on an ordinary day,
+    // instead of only in the week it becomes a problem.
+    const c = res.certificate || {};
+    const cmark = !c.checked ? ' -- ' : (c.ok ? ' ok ' : ' !! ');
+    console.log(`[${cmark}] https://${c.host || '?'} — certificate`);
+    console.log(c.checked
+        ? `         expires ${c.validTo} — ${c.days} day(s) left${c.issuer ? `, issued by ${c.issuer}` : ''}`
+        : `         ${c.detail || 'not attempted'}`);
     console.log('');
     if (res.ok) { console.log('Every address answers as it should.\n'); process.exit(0); }
     console.log(E.report(res));
