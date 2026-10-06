@@ -34,6 +34,7 @@
 
 const path = require('path');
 const crypto = require('crypto');
+const fs = require('fs');
 const ROOT = path.join(__dirname, '..');
 const cfg = require(path.join(ROOT, 'config'));
 const gmail = require(path.join(ROOT, 'helpers/gmail'));
@@ -54,6 +55,15 @@ const LIMIT = Number(arg('--limit')) || 200;
 // (Jio, Sher, AJ Transport, Pan metal), exactly as the Verify tab does.
 // Default is report-only.
 const WRITE = argv.includes('--write');
+// --save-samples [dir]: write every unique PDF found to <dir>/<party>/ (default
+// data/sample-invoices, gitignored with the rest of data/). --save-only: do that
+// and STOP — no Gemini, no sheet check, no logging — so it runs anywhere Gmail
+// works. Purpose: NTG / TQL / Schneider are inert tabs in documents.html
+// because "the parsing waits for a sample"; this fetches the samples.
+const SAVE_ONLY = argv.includes('--save-only');
+const SAVE_DIR = (SAVE_ONLY || argv.includes('--save-samples'))
+    ? path.resolve(ROOT, (arg('--save-samples') && !arg('--save-samples').startsWith('--')) ? arg('--save-samples') : 'data/sample-invoices')
+    : null;
 const TRUCKING_CAP = 3000; // per load, for the Jio / Sher / AJ Transport tabs
 
 // ── Party registry ─────────────────────────────────────────────────────────
@@ -197,6 +207,7 @@ async function sweepParty(party, mailboxes) {
     const seenPdfHashes = new Set();
     let dupPdfs = 0;
     let outboundSkipped = 0;
+    let saved = 0;
     // Edge's OWN outbound packs ('Documents of 26MT12/…', 'Proforma for …') carry
     // Edge's commercial invoices, packing lists and marine certificates. They
     // mention carriers/truckers in passing and are NOT vendor invoices. First
@@ -250,9 +261,22 @@ async function sweepParty(party, mailboxes) {
                 if (seenPdfHashes.has(hash)) { dupPdfs += 1; continue; }
                 seenPdfHashes.add(hash);
                 foundPdfs.push({ base64: att.base64, filename: att.filename, messageId: m.id, mailbox: mb.address, subject, from, date: hdrs.Date || '' });
+                if (SAVE_DIR) {
+                    const d = new Date(hdrs.Date || ''); const ymd = Number.isFinite(d.getTime()) ? d.toISOString().slice(0, 10) : 'undated';
+                    const dir = path.join(SAVE_DIR, party.key); fs.mkdirSync(dir, { recursive: true });
+                    const safe = String(att.filename || 'invoice.pdf').replace(/[^A-Za-z0-9._-]+/g, '_');
+                    fs.writeFileSync(path.join(dir, `${ymd}_${hash.slice(0, 8)}_${safe}`), Buffer.from(att.base64, 'base64'));
+                    saved += 1;
+                }
             }
         }
     }
+
+    if (SAVE_ONLY) {
+        console.log(`  Saved ${saved} PDF(s) to ${path.join(SAVE_DIR, party.key)}`);
+        return { scanned, pdfsFound: foundPdfs.length, dupPdfs, outboundSkipped, recordsExtracted: 0, missing: [], missingNoAmount: 0, verifiedCount: 0, unchecked: 0, statusCounts: {}, recMoney: () => 0, matched: [] };
+    }
+    if (SAVE_DIR) console.log(`  Saved ${saved} PDF(s) to ${path.join(SAVE_DIR, party.key)}`);
 
     // Extract every PDF found, tag with its source email so a "not in
     // sheet" hit in the report can be traced straight back to the email.
