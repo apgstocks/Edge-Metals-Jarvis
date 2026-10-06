@@ -68,10 +68,24 @@ const cr = (lines, account) => sum(on(lines, account), 'credit');
     const r = P.post('metals-purchase', { entity: 'edge-metals', amount: 10000, trucking: 800 });
     ck('a bill posts', r.lines.length === 3 && r.problems.length === 0, JSON.stringify(r));
     ck('  debits equal credits', sum(r.lines, 'debit') === sum(r.lines, 'credit'), JSON.stringify(r.lines));
-    ck('  material and trucking are separate costs',
-       dr(r.lines, '5000') === 9200 && dr(r.lines, '5200') === 800,
-       'her CPA will want freight separable from the metal');
-    ck('  and the supplier is owed the whole thing', cr(r.lines, '2010') === 10000);
+    // ── THE COST IS GROSS; THE DEBT IS SPLIT ─────────────────────────────
+    // bills.js:402-408 names the chain: `amount` is what the metal came to,
+    // `net_payable` is what the SUPPLIER is owed after the haulage she pays
+    // on their behalf. So the metal cost 10,000 — the haulage is not an
+    // extra cost, it is part of that figure, recovered by paying the
+    // supplier 800 less.
+    //
+    // This is a PRESENTATION CHOICE and it is hers to overturn: freight no
+    // longer appears as its own cost-of-sales line on a purchase. Recording
+    // it as one would either double-count the 10,000 or contradict her own
+    // naming of `amount`.
+    ck('  the metal is costed at the gross invoice figure',
+       dr(r.lines, '5000') === 10000, 'amount is "what the metal came to"');
+    ck('  the supplier is owed the NET', cr(r.lines, '2010') === 9200,
+       'net_payable is "what the supplier is owed"');
+    ck('  and the haulage she covers is owed to the hauler',
+       cr(r.lines, '2050') === 800,
+       'a liability, not a second cost — the cost was recognised once, at gross');
 
     // ── THE BALANCE GUARD, TESTED DIRECTLY ───────────────────────────────
     // Every rule in the file balances by construction, so deleting the

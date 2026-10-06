@@ -64,11 +64,29 @@ const RULES = {
     // The material becomes a cost; the supplier becomes owed. Trucking on
     // the same bill is its own line because it is a different cost of sale
     // and her CPA will want it separable.
+    // ── `amount` IS THE SUPPLIER'S INVOICE FIGURE, GROSS ─────────────────
+    // bills.js:402-408 names the chain and it is worth repeating here,
+    // because getting it backwards is a money error that still balances:
+    //
+    //   amount        what the metal came to
+    //   − trucking    haulage she pays on the supplier's behalf
+    //   = net_payable what the supplier is owed
+    //
+    // So the COST is the gross figure — the metal really did cost that —
+    // while the supplier is owed the net, and the haulage she covers for
+    // them is a liability to whoever hauled it.
+    //
+    // The first version took net_payable as `amount` AND subtracted
+    // trucking again, booking material at 37,000 on a 40,000 bill. It
+    // balanced perfectly, which is exactly why tests/books-build.js asserts
+    // the figure rather than merely that something posted.
     'metals-purchase': (tx) => {
-        const material = r2(num(tx.amount) - num(tx.trucking));
-        const debits = [['5000', material]];
-        if (num(tx.trucking) > 0) debits.push(['5200', r2(num(tx.trucking))]);
-        return { debits, credits: [['2010', r2(num(tx.amount))]] };
+        const gross = r2(num(tx.amount));
+        const trucking = r2(num(tx.trucking));
+        const owedToSupplier = r2(gross - trucking);
+        const credits = [['2010', owedToSupplier]];
+        if (trucking > 0) credits.push(['2050', trucking]);
+        return { debits: [['5000', gross]], credits };
     },
 
     // ── EDGE METALS: an invoice ──────────────────────────────────────────

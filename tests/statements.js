@@ -80,10 +80,17 @@ const YARD = { entity: 'edge-trading' };
     ck('the yard balances too, separately', ty.balanced === true, `${ty.debit} vs ${ty.credit}`);
 
     // Balance shown on the account's own normal side.
+    // 9,200 owed on the bill — the 10,000 invoice less the 800 haulage she
+    // covers for the supplier (bills.js:402-408) — less the 2,000 of the
+    // payment that was applied. The remaining 3,000 of that payment is an
+    // advance, and sits on 1350 rather than reducing this.
     const payable = tb.accounts.find((a) => a.code === '2010');
     ck('a payable shows its balance on the credit side',
-       payable.normal === 'credit' && payable.balance === 8000,
+       payable.normal === 'credit' && payable.balance === 7200,
        JSON.stringify(payable));
+    ck('  and the haulage is owed separately, to the hauler',
+       (tb.accounts.find((a) => a.code === '2050') || {}).balance === 800,
+       JSON.stringify(tb.accounts.find((a) => a.code === '2050')));
     // 49,000 received, less the 5,000 supplier payment, the 35 bank charge
     // and the 4,000 Edge Metals put up for the yard. That last one is the
     // point: it is money that left Edge Metals' bank for someone else's
