@@ -170,6 +170,7 @@ If a container number isn't present but a booking number is, still return the re
 const NEW_PARTIES = [
     { key: 'tql', label: 'TQL', query: `${YEAR_SCOPE} ("TQL" OR "Total Quality Logistics")`, idFields: ['container_no', 'booking_no'] },
     { key: 'ntg', label: 'NTG', query: `${YEAR_SCOPE} ("NTG" OR "Nolan Transportation")`, idFields: ['container_no', 'booking_no'] },
+    { key: 'schneider', label: 'Schneider', query: `${YEAR_SCOPE} ("Schneider National" OR "Schneider Logistics" OR "Schneider Freight")`, idFields: ['container_no', 'booking_no'] },
     { key: 'eaglebrit', label: 'EagleBrit', query: `${YEAR_SCOPE} ("EagleBrit" OR "Eagle Brit")`, idFields: ['container_no', 'booking_no'] },
 ].map((p) => ({ ...p, extract: genericExtractInvoiceRecords, crossCheck: (recs) => verify.crossCheckJioRecords(recs), unverified: true }));
 
