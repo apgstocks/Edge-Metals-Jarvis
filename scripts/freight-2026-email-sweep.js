@@ -50,6 +50,10 @@ if (!argv.includes('--verbose')) {
 const arg =(name) => { const i = argv.indexOf(name); return i === -1 ? null : (argv[i + 1] || ''); };
 const ONLY = arg('--party') ? arg('--party').split(',').map((s) => s.trim().toLowerCase()).filter(Boolean) : null;
 const LIMIT = Number(arg('--limit')) || 200;
+// --write: log VERIFIED rows into each party's tab on the Edge Metals sheet
+// (Jio, Sher, AJ Transport, Pan metal), exactly as the Verify tab does.
+// Default is report-only.
+const WRITE = argv.includes('--write');
 
 // ── Party registry ─────────────────────────────────────────────────────────
 // query: broad name-based Gmail search — deliberately loose (better to pull
@@ -70,6 +74,7 @@ const PARTIES = [
         query: `${YEAR_SCOPE} "jio"`,
         extract: (b) => gemini.extractJioInvoiceRecords(b),
         crossCheck: (recs) => verify.crossCheckJioRecords(recs),
+        sheetLog: { tab: 'Jio', fn: (m) => require(path.join(ROOT, 'helpers/jioSheetLog')).logJioVerification(m) },
         idFields: ['container_no'],
     },
     {
@@ -77,6 +82,7 @@ const PARTIES = [
         query: `${YEAR_SCOPE} "sher trucking"`, // bare "sher" dropped 2026-10-06: it pulled Edge's own sealed-units invoice into this party's results
         extract: (b) => gemini.extractSherTruckingInvoiceRecords(b),
         crossCheck: (recs) => verify.crossCheckSherRecords(recs),
+        sheetLog: { tab: 'Sher', fn: (m) => require(path.join(ROOT, 'helpers/sherSheetLog')).logSherVerification(m) },
         idFields: ['booking_no'],
     },
     {
@@ -84,6 +90,7 @@ const PARTIES = [
         query: `${YEAR_SCOPE} ("AJ Transport" OR "AJ Trans")`,
         extract: (b) => gemini.extractAjTransportInvoiceRecords(b),
         crossCheck: (recs) => verify.crossCheckAjTransportRecords(recs),
+        sheetLog: { tab: 'AJ Transport', fn: (m) => require(path.join(ROOT, 'helpers/ajTransportSheetLog')).logAjTransportVerification(m) },
         idFields: ['container_no'],
     },
     {
@@ -91,6 +98,7 @@ const PARTIES = [
         query: `${YEAR_SCOPE} ("pan metal" OR "panmetal")`,
         extract: (b) => gemini.extractCommissionDebitNoteRecords(b),
         crossCheck: (recs) => verify.crossCheckPanMetalRecords(recs),
+        sheetLog: { tab: 'Pan metal', fn: (m) => require(path.join(ROOT, 'helpers/panMetalSheetLog')).logPanMetalVerification(m) },
         idFields: ['order_no'],
     },
     {
@@ -280,7 +288,7 @@ async function sweepParty(party, mailboxes) {
     for (const r of all) if (r.status !== 'verified' && r.status !== 'match' && r.status !== 'not_in_sheet') statusCounts[r.status] = (statusCounts[r.status] || 0) + 1;
     const unchecked = Object.values(statusCounts).reduce((a, n) => a + n, 0);
 
-    return { scanned, pdfsFound: foundPdfs.length, dupPdfs, recordsExtracted: allRecords.length, missing, missingNoAmount, verifiedCount, unchecked, statusCounts, recMoney };
+    return { scanned, pdfsFound: foundPdfs.length, dupPdfs, recordsExtracted: allRecords.length, missing, missingNoAmount, verifiedCount, unchecked, statusCounts, recMoney, matched: all };
 }
 
 (async () => {
@@ -341,6 +349,40 @@ async function sweepParty(party, mailboxes) {
             }
             if (r.unchecked) {
                 console.log(`  Could not be checked, by reason: ${Object.entries(r.statusCounts).map(([s, n]) => `${s}=${n}`).join(', ')}`);
+            }
+
+            // ── Logging verified rows into the party's tab (opt-in) ──────
+            // Apsara, 2026-10-06: "IT SHOULD BE ADDED NA?" — yes, but only
+            // VERIFIED rows, which is what the Verify tab already does and
+            // what each *SheetLog.js enforces itself (a not-in-sheet or
+            // booking-mismatch row is the error she wants SEEN, never
+            // written as if confirmed). Same functions, same upsert key
+            // (container / booking / inv no.), so a re-run updates rows in
+            // place instead of duplicating. Oldest invoice first so that if
+            // a container appears on several invoices the LATEST one is the
+            // one left standing (upsertRowsByKey keeps the last occurrence).
+            // CAUTION: an existing row for the same key is OVERWRITTEN with
+            // the PDF's figures — a hand-edit made in that tab since is lost.
+            if (party.sheetLog) {
+                const verified = (r.matched || []).filter((x) => x.status === 'verified');
+                if (!WRITE) {
+                    console.log(`  ${verified.length} verified row(s) are ready to log into the "${party.sheetLog.tab}" tab — NOT written (add --write).`);
+                } else if (!verified.length) {
+                    console.log(`  Nothing verified to log into "${party.sheetLog.tab}".`);
+                } else {
+                    const ts = (x) => { const t = Date.parse(x.invoice_date || ''); return Number.isFinite(t) ? t : 0; };
+                    const ordered = [...r.matched].sort((a, b) => ts(a) - ts(b));
+                    try {
+                        const res = await party.sheetLog.fn(ordered);
+                        console.log(`  WROTE to "${party.sheetLog.tab}" tab: ${res.logged || 0} new row(s), ${res.updated || 0} existing row(s) updated.`);
+                    } catch (e) {
+                        console.error(`  FAILED writing to "${party.sheetLog.tab}" tab:`, e.message);
+                    }
+                }
+            } else if (party.key === 'zimex') {
+                console.log('  (Zimex has no sheet tab — its figures are offered as a charge on the sale row via the Verify tab; not written from here.)');
+            } else if (party.key === 'gardunos') {
+                console.log("  (Garduno's has no sheet tab — it produces bill proposals via the Verify tab; not written from here.)");
             }
             console.log('');
         }
