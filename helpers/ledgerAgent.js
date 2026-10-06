@@ -385,7 +385,20 @@ function reportText(run) {
 // at write time. If she filled it in herself between the scan and the send,
 // hers wins and the fix is reported as skipped — she typed it for a reason,
 // and the sheet is not more right than the person looking at the paperwork.
-async function apply(findings, { kinds } = {}) {
+// `allowMoney` — DEFAULT FALSE, so every existing caller behaves exactly as
+// it did. The 07:30 agent passes nothing and still cannot write a money
+// field; that refusal is the rule, not an accident, and it stays.
+//
+// The flag marks the NEW shape rather than the old one (CLAUDE.md: "a flag
+// that must be set to keep an existing document unchanged will eventually
+// not be set"). Only scripts/fill-money-blanks.js sets it, and only after
+// Apsara has seen every figure and typed --apply.
+//
+// Why here rather than a second apply() in that script: the QuickBooks gate
+// below is the part that must not be duplicated. A row already pushed to QB
+// must never be auto-filled, it fails CLOSED when QB cannot be reached, and
+// a second copy of that logic would drift from this one silently.
+async function apply(findings, { kinds, allowMoney = false } = {}) {
     const applied = [];
     const skipped = [];
     const failed = [];
@@ -414,7 +427,21 @@ async function apply(findings, { kinds } = {}) {
     for (const f of (Array.isArray(findings) ? findings : [])) {
         if (!f || !f.fix) continue;
         // Re-decided here, every time.
-        if (classify(f.fix) !== SETTLED) { skipped.push({ ...f, why: 'not settled' }); continue; }
+        //
+        // With allowMoney, a finding that is proposed ONLY because it touches
+        // money is let through — and nothing else is. A fix with no field, no
+        // value, no provenance, or an explicit needs_her is still refused,
+        // because those are not "money needs her consent", they are "we do
+        // not actually know the answer".
+        const kind = classify(f.fix);
+        if (kind !== SETTLED) {
+            const onlyBecauseMoney = allowMoney
+                && touchesMoney(f.fix)
+                && str(f.fix.field) && f.fix.to !== undefined && f.fix.to !== null && str(f.fix.to) !== ''
+                && str(f.fix.from_source)
+                && f.fix.needs_her !== true;
+            if (!onlyBecauseMoney) { skipped.push({ ...f, why: 'not settled' }); continue; }
+        }
         const ledger = str(f.ledger) || 'bills';
         const store = stores[ledger];
         if (!store) { failed.push({ ...f, error: `unknown ledger ${ledger}` }); continue; }
