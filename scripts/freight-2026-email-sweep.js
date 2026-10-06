@@ -54,6 +54,7 @@ const LIMIT = Number(arg('--limit')) || 200;
 // (Jio, Sher, AJ Transport, Pan metal), exactly as the Verify tab does.
 // Default is report-only.
 const WRITE = argv.includes('--write');
+const TRUCKING_CAP = 3000; // per load, for the Jio / Sher / AJ Transport tabs
 
 // ── Party registry ─────────────────────────────────────────────────────────
 // query: broad name-based Gmail search — deliberately loose (better to pull
@@ -194,6 +195,14 @@ async function sweepParty(party, mailboxes) {
     const seenRfcIds = new Set();
     const seenPdfHashes = new Set();
     let dupPdfs = 0;
+    let outboundSkipped = 0;
+    // Edge's OWN outbound packs ('Documents of 26MT12/…', 'Proforma for …') carry
+    // Edge's commercial invoices, packing lists and marine certificates. They
+    // mention carriers/truckers in passing and are NOT vendor invoices. First
+    // --write run logged a $25,418.22 'Sher' row from one of them (the
+    // sealed-units sale invoice 260903_SU_26NUR02), and a $64,593.76 Zimex
+    // 'missing' was a marine certificate's insured value.
+    const OUTBOUND_PACK = /\b(documents of|proforma for|revised proforma)\b/i;
     const getHeader = (hdrs, name) => {
         const key = Object.keys(hdrs).find((k) => k.toLowerCase() === name.toLowerCase());
         return key ? hdrs[key] : null;
@@ -215,6 +224,7 @@ async function sweepParty(party, mailboxes) {
             const hdrs = Object.fromEntries((msg.payload.headers || []).map((h) => [h.name, h.value]));
             const subject = hdrs.Subject || '(no subject)';
             const from = hdrs.From || '(unknown sender)';
+            if (OUTBOUND_PACK.test(subject)) { outboundSkipped += 1; continue; }
 
             const rfcId = getHeader(hdrs, 'Message-ID');
             if (rfcId) {
@@ -288,11 +298,11 @@ async function sweepParty(party, mailboxes) {
     for (const r of all) if (r.status !== 'verified' && r.status !== 'match' && r.status !== 'not_in_sheet') statusCounts[r.status] = (statusCounts[r.status] || 0) + 1;
     const unchecked = Object.values(statusCounts).reduce((a, n) => a + n, 0);
 
-    return { scanned, pdfsFound: foundPdfs.length, dupPdfs, recordsExtracted: allRecords.length, missing, missingNoAmount, verifiedCount, unchecked, statusCounts, recMoney, matched: all };
+    return { scanned, pdfsFound: foundPdfs.length, dupPdfs, outboundSkipped, recordsExtracted: allRecords.length, missing, missingNoAmount, verifiedCount, unchecked, statusCounts, recMoney, matched: all };
 }
 
 (async () => {
-    console.log(`\nFREIGHT INVOICE SWEEP — 2026, report only, nothing written\n`);
+    console.log(`\nFREIGHT INVOICE SWEEP — 2026, ${WRITE ? 'WRITE MODE: verified rows ARE being logged to the party tabs' : 'report only, nothing written'}\n`);
 
     let mailboxes;
     try { mailboxes = await gmail.getGmailReadMailboxes(); }
@@ -334,7 +344,7 @@ async function sweepParty(party, mailboxes) {
             console.log(`── ${party.label}${party.unverified ? ' (generic match — unverified prompt, lower confidence)' : ''} ──────────────────────────────────────`);
             const r = await sweepParty(party, mailboxes);
             out.push({ party, ...r });
-            console.log(`  Emails matched: ${r.scanned}   Unique PDFs: ${r.pdfsFound} (+${r.dupPdfs} identical repeats skipped)   Line items: ${r.recordsExtracted}`);
+            console.log(`  Emails matched: ${r.scanned}   Unique PDFs: ${r.pdfsFound} (+${r.dupPdfs} identical repeats skipped)   Line items: ${r.recordsExtracted}   Edge outbound doc-packs skipped: ${r.outboundSkipped}`);
             console.log(`  Checked OK: ${r.verifiedCount}   Missing (with an amount): ${r.missing.length}   Not-in-sheet but no amount: ${r.missingNoAmount}   COULD NOT BE CHECKED: ${r.unchecked}`);
             if (r.missing.length) {
                 console.log(`  >> NOT IN THE SHEET, with money on them:`);
@@ -364,14 +374,28 @@ async function sweepParty(party, mailboxes) {
             // CAUTION: an existing row for the same key is OVERWRITTEN with
             // the PDF's figures — a hand-edit made in that tab since is lost.
             if (party.sheetLog) {
-                const verified = (r.matched || []).filter((x) => x.status === 'verified');
+                // Pan Metal's good status is 'match', the others' is 'verified'
+                // (first --write run printed "nothing verified" for Pan Metal
+                // while 48 rows had matched — this filter only looked for
+                // 'verified'). Each *SheetLog re-filters to its own status.
+                const good = (r.matched || []).filter((x) => x.status === 'verified' || x.status === 'match');
+                // Sanity cap for the three trucker tabs: a drayage invoice
+                // line is hundreds of dollars, never tens of thousands.
+                const TRUCKER = ['jio', 'sher', 'ajtransport'].includes(party.key);
+                const rowAmt = (x) => Number(x.net_amount ?? x.total_amount ?? x.amount ?? 0) / (Number(x.quantity) > 0 ? Number(x.quantity) : 1);
+                const suspicious = TRUCKER ? good.filter((x) => rowAmt(x) > TRUCKING_CAP) : [];
+                const loggable = good.filter((x) => !suspicious.includes(x));
+                if (suspicious.length) {
+                    console.log(`  NOT LOGGED — ${suspicious.length} row(s) over $${TRUCKING_CAP} per load, too large for a trucking line (probably not a ${party.label} invoice): ` +
+                        suspicious.map((x) => `${x.booking_no || x.container_no || '?'} ${money(rowAmt(x))}`).join('; '));
+                }
                 if (!WRITE) {
-                    console.log(`  ${verified.length} verified row(s) are ready to log into the "${party.sheetLog.tab}" tab — NOT written (add --write).`);
-                } else if (!verified.length) {
-                    console.log(`  Nothing verified to log into "${party.sheetLog.tab}".`);
+                    console.log(`  ${loggable.length} verified row(s) are ready to log into the "${party.sheetLog.tab}" tab — NOT written (add --write).`);
+                } else if (!loggable.length) {
+                    console.log(`  Nothing to log into "${party.sheetLog.tab}".`);
                 } else {
                     const ts = (x) => { const t = Date.parse(x.invoice_date || ''); return Number.isFinite(t) ? t : 0; };
-                    const ordered = [...r.matched].sort((a, b) => ts(a) - ts(b));
+                    const ordered = [...loggable].sort((a, b) => ts(a) - ts(b));
                     try {
                         const res = await party.sheetLog.fn(ordered);
                         console.log(`  WROTE to "${party.sheetLog.tab}" tab: ${res.logged || 0} new row(s), ${res.updated || 0} existing row(s) updated.`);
@@ -394,7 +418,7 @@ async function sweepParty(party, mailboxes) {
     const results = [...trustedResults, ...newResults];
 
     console.log('══════════════════════════════════════════════════════════');
-    console.log('SUMMARY — nothing was written to the sheet, bills.json, or anywhere else.\n');
+    console.log(WRITE ? 'SUMMARY — verified rows were logged to the party tabs above (see WROTE lines). Nothing else was written.\n' : 'SUMMARY — nothing was written to the sheet, bills.json, or anywhere else.\n');
     console.log(`  ${'party'.padEnd(14)} ${'missing'.padStart(7)} ${'checked-ok'.padStart(11)} ${'unchecked'.padStart(10)}   (line items / unique PDFs)`);
     for (const r of results) {
         console.log(`  ${r.party.label.padEnd(14)} ${String(r.missing.length).padStart(7)} ${String(r.verifiedCount).padStart(11)} ${String(r.unchecked).padStart(10)}   (${r.recordsExtracted} / ${r.pdfsFound})${r.party.unverified ? '   [unverified]' : ''}`);
