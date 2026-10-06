@@ -228,20 +228,23 @@ async function mirrorToLedger(rec) {
     });
 }
 
-async function addPaymentRecord(input = {}, { advance = false } = {}) {
+// ── THE RULES, LIFTED OUT SO EDIT CANNOT GROW A SECOND COPY ──────────────
+// Extracted 2026-10-07, unchanged, when editBillPayment was added. Every
+// rule below was already here and still runs in the same order for every
+// existing caller — addPaymentRecord simply calls this first now.
+//
+// It exists because an edit has to enforce exactly what a create enforces.
+// A second copy of "a bank is required for Zelle and Wire" would be correct
+// on the day it was written and wrong the day one of them changed, and the
+// two would disagree about money with nothing saying which was right.
+//
+// PURE: validates and returns the clean fields. It writes nothing and
+// touches no store, so it can also back a preview that changes nothing.
+function validatePaymentInput(input = {}, { advance = false } = {}) {
     const amount = round2(num(input.amount));
     if (amount === null || amount <= 0) throw new Error('a payment amount is required');
     const mode = BILL_PAYMENT_MODES.find((m) => m.toLowerCase() === String(input.mode || '').trim().toLowerCase());
     if (!mode) throw new Error(`payment mode must be one of: ${BILL_PAYMENT_MODES.join(', ')}`);
-    // ── CASH HAS NO BANK, AND NO PETTY CASH EITHER ───────────────────────
-    // Apsara, 2026-09-10: "Always add cash as payment method". Cash was left
-    // off this list on 2026-09-10 morning because of the petty-cash
-    // entanglement; asked directly, her answer was "No — Edge Metals cash is
-    // separate", so helpers/payments.js skips the box for load_kind 'bill'
-    // and this mode is now safe to offer.
-    //
-    // A bank on a cash payment is a false statement, so it is not merely
-    // optional here — banks.resolveForMode throws if one is supplied.
     if (mode !== 'Cash' && !String(input.bank || '').trim()) {
         throw new Error('a bank is required for Zelle and Wire');
     }
@@ -249,29 +252,45 @@ async function addPaymentRecord(input = {}, { advance = false } = {}) {
     if (advance && !String(input.supplier || '').trim()) {
         throw new Error('an advance needs a supplier — it is credit against them until you apply it');
     }
-    // A payment names its supplier too, as of 2026-09-10: the form asks who
-    // is being paid BEFORE anything else, so there is no longer a path that
-    // legitimately leaves this blank, and an unnamed payment is one that
-    // cannot be checked against the containers it claims to settle.
     if (!advance && !String(input.supplier || '').trim()) {
         throw new Error('a payment needs a supplier — choose who is being paid');
     }
-
     const allocations = cleanAllocations(input.allocations, amount, {
         allowUnallocated: advance,
         supplier: String(input.supplier || '').trim() || null,
     });
-
-    const rec = {
-        id: newId(),
-        kind: advance ? 'advance' : 'payment',
-        date: String(input.date).trim(),
-        amount,
-        mode,
+    return {
+        amount, mode,
         bank: mode === 'Cash' ? null : String(input.bank).trim(),
+        date: String(input.date).trim(),
         ref: String(input.ref || '').trim() || null,
         supplier: String(input.supplier || '').trim() || null,
         note: String(input.note || '').trim() || null,
+        allocations,
+    };
+}
+
+async function addPaymentRecord(input = {}, { advance = false } = {}) {
+    // Every rule now lives in validatePaymentInput above, unchanged and in
+    // the same order. The comments that explained each one stayed with the
+    // rules; what follows is the record and the two writes.
+    const v = validatePaymentInput(input, { advance });
+    const { amount, mode, allocations } = v;
+
+    // Built from the VALIDATED fields, not from `input` again. Re-deriving
+    // `bank: mode === 'Cash' ? null : input.bank.trim()` here would be a
+    // second copy of a rule that already ran, and the day one of them
+    // changes they disagree about money with nothing saying which is right.
+    const rec = {
+        id: newId(),
+        kind: advance ? 'advance' : 'payment',
+        date: v.date,
+        amount,
+        mode,
+        bank: v.bank,
+        ref: v.ref,
+        supplier: v.supplier,
+        note: v.note,
         allocations,
         created_at: new Date().toISOString(),
         created_by: input.created_by || null,
@@ -344,6 +363,189 @@ async function applyAdvance(paymentId, allocations = []) {
 
 // Deleting a payment removes its ledger row too, or her report keeps counting
 // money that is no longer recorded as paid. Same rule loads already follow.
+// ── EDITING A RECORDED PAYMENT ───────────────────────────────────────────
+// Apsara, 2026-10-07: "give option to pay multiple invoices together and
+// option to edit". Paying several at once already worked — allocations have
+// always been a list. Editing did not exist anywhere: every payment path in
+// this system is record-and-delete only, so fixing a typo meant deleting the
+// payment and entering it again, which reopens containers in between and
+// loses what the original said.
+//
+// Asked what an edit should do about the containers it had already settled,
+// she chose: "Recompute everything, show me before saving." So previewEdit
+// below computes the consequences and writes NOTHING; editBillPayment is the
+// second step, and the screen is expected to show the first.
+//
+// Asked what should happen to a payment already pushed to QuickBooks:
+// "Refuse, and tell me to change both." That is the same rule the 07:30
+// ledger agent already follows, and it fails CLOSED — if QuickBooks cannot
+// be reached, the edit is refused rather than risked.
+
+// What this edit would do, computed against the current ledger. Pure: no
+// writes, so a screen can show it before she commits.
+function previewEdit(id, patch = {}) {
+    const before = list().find((p) => p.id === id);
+    if (!before) throw new Error(`no payment ${id}`);
+
+    const merged = {
+        amount: patch.amount !== undefined ? patch.amount : before.amount,
+        mode: patch.mode !== undefined ? patch.mode : before.mode,
+        bank: patch.bank !== undefined ? patch.bank : before.bank,
+        date: patch.date !== undefined ? patch.date : before.date,
+        ref: patch.ref !== undefined ? patch.ref : before.ref,
+        supplier: patch.supplier !== undefined ? patch.supplier : before.supplier,
+        note: patch.note !== undefined ? patch.note : before.note,
+        allocations: patch.allocations !== undefined ? patch.allocations : before.allocations,
+    };
+    // Validated by the SAME rules a new payment faces. An edit that could
+    // store something a create would refuse is a second, laxer way in.
+    const after = validatePaymentInput(merged, { advance: before.kind === 'advance' });
+
+    // ── WHAT MOVES, PER BILL ─────────────────────────────────────────────
+    // The figure she actually cares about: which containers stop being
+    // settled and which become settled. Computed as a DELTA against this
+    // payment's own allocations, so other payments against the same bill are
+    // untouched by the arithmetic.
+    const was = new Map();
+    for (const a of (before.allocations || [])) was.set(String(a.bill_id), round2((was.get(String(a.bill_id)) || 0) + (num(a.amount) || 0)));
+    const will = new Map();
+    for (const a of (after.allocations || [])) will.set(String(a.bill_id), round2((will.get(String(a.bill_id)) || 0) + (num(a.amount) || 0)));
+
+    const bills = require('./bills').listWithTotals();
+    const byId = new Map(bills.map((b) => [String(b.id), b]));
+    const touched = [...new Set([...was.keys(), ...will.keys()])];
+
+    const changes = touched.map((billId) => {
+        const b = byId.get(billId) || null;
+        const owed = b && b.net_payable != null ? round2(num(b.net_payable)) : null;
+        // What every OTHER payment has put against this bill.
+        const otherPaid = round2(allocationsFor(billId)
+            .filter((a) => String(a.payment_id || a.paymentId || '') !== String(id))
+            .reduce((s, a) => s + (num(a.amount) || 0), 0)) || 0;
+        const paidBefore = round2(otherPaid + (was.get(billId) || 0));
+        const paidAfter = round2(otherPaid + (will.get(billId) || 0));
+        const settledBefore = owed !== null && paidBefore + 0.005 >= owed;
+        const settledAfter = owed !== null && paidAfter + 0.005 >= owed;
+        return {
+            bill_id: billId,
+            container_no: b ? (b.container_no || null) : null,
+            supplier: b ? (b.supplier || null) : null,
+            owed,
+            paid_before: paidBefore, paid_after: paidAfter,
+            settled_before: settledBefore, settled_after: settledAfter,
+            // The sentence a screen can show without doing arithmetic itself.
+            effect: settledBefore && !settledAfter ? 'reopens'
+                : !settledBefore && settledAfter ? 'becomes settled'
+                : paidBefore === paidAfter ? 'unchanged' : 'amount changes',
+        };
+    }).sort((a, b) => String(a.container_no || '').localeCompare(String(b.container_no || '')));
+
+    return {
+        id,
+        before: { amount: before.amount, mode: before.mode, bank: before.bank, date: before.date,
+            ref: before.ref, supplier: before.supplier, allocations: before.allocations || [] },
+        after: { amount: after.amount, mode: after.mode, bank: after.bank, date: after.date,
+            ref: after.ref, supplier: after.supplier, allocations: after.allocations },
+        changes,
+        reopens: changes.filter((c) => c.effect === 'reopens').length,
+        settles: changes.filter((c) => c.effect === 'becomes settled').length,
+        // A money change needs the ledger row rewritten too; a reference typo
+        // does not. Said out loud so the caller knows what it is asking for.
+        touchesLedger: round2(num(before.amount)) !== after.amount
+            || String(before.mode) !== after.mode
+            || String(before.bank || '') !== String(after.bank || '')
+            || String(before.date) !== after.date
+            || String(before.supplier || '') !== String(after.supplier || '')
+            || String(before.ref || '') !== String(after.ref || ''),
+    };
+}
+
+async function editBillPayment(id, patch = {}, { actor = null } = {}) {
+    const before = list().find((p) => p.id === id);
+    if (!before) throw new Error(`no payment ${id}`);
+
+    // ── THE QUICKBOOKS GATE, FAILING CLOSED ──────────────────────────────
+    // Her answer, 2026-10-07: "Refuse, and tell me to change both."
+    // QuickBooks is not re-pushed on an edit, so a silent change here leaves
+    // her books and Jarvis disagreeing with nothing recording who moved what.
+    try {
+        const qb = require('./qbLinked');
+        const link = qb.linkedRow(before, { kind: 'bill_payments', keys: qb.liveKeys() });
+        if (link && link.linked) {
+            throw new Error(`this payment is already in QuickBooks (${link.why}). `
+                + 'Change it in both, or delete it there first — an edit here alone would '
+                + 'leave your books and Jarvis disagreeing.');
+        }
+    } catch (e) {
+        if (/already in QuickBooks/.test(String(e && e.message))) throw e;
+        // Could not ASK QuickBooks. Refuse rather than risk it — the same
+        // direction ledgerAgent fails in, and for the same reason.
+        throw new Error(`could not check QuickBooks (${(e && e.message) || e}), so this edit is `
+            + 'refused rather than risked. Nothing was changed.');
+    }
+
+    const plan = previewEdit(id, patch);
+    const after = plan.after;
+
+    // The ledger mirror is rebuilt only when something it carries changed.
+    // Done BEFORE the store write, the same order addPaymentRecord uses and
+    // for the same reason: better a payment she re-enters than one that is
+    // in the Bills tab and missing from her spend report.
+    // ── OLD OUT, NEW IN, AND PUT IT BACK IF THE NEW ONE FAILS ────────────
+    // deletePaymentsForLoad keys on the PAYMENT id, and the rebuilt mirror
+    // carries the same id — so mirroring first and deleting second would
+    // remove both rows and leave the spend report blind to this payment
+    // entirely. The order has to be delete, then mirror.
+    //
+    // Which means a failure between the two would lose the ledger row for a
+    // payment that still exists. So a failed re-mirror restores the ORIGINAL
+    // before rethrowing, and the store write below never runs — she is left
+    // exactly where she started rather than half-edited.
+    let ledgerId = before.ledger_payment_id || null;
+    if (plan.touchesLedger) {
+        const { deletePaymentsForLoad } = require('./payments');
+        await deletePaymentsForLoad(before.id);
+        try {
+            const mirrored = await mirrorToLedger({ ...before, ...after, id: before.id });
+            ledgerId = mirrored && mirrored.id ? mirrored.id : null;
+        } catch (e) {
+            try { await mirrorToLedger(before); } catch (e2) {
+                console.error('[BILL-PAY] the edit failed AND the original ledger row could not be '
+                    + 'restored. The payment is unchanged in the Bills tab but missing from the '
+                    + 'spend report:', e2.message);
+            }
+            throw new Error(`could not rewrite the ledger row (${(e && e.message) || e}) — `
+                + 'nothing was changed');
+        }
+    }
+
+    await mutateJson(cfg.BILL_PAYMENTS_FILE, [], (all) => {
+        const rows = Array.isArray(all) ? all : [];
+        const i = rows.findIndex((r) => r && r.id === id);
+        if (i === -1) throw new Error(`payment ${id} disappeared while being edited`);
+        rows[i] = {
+            ...rows[i],
+            date: after.date, amount: after.amount, mode: after.mode, bank: after.bank,
+            ref: after.ref, supplier: after.supplier, note: after.note,
+            allocations: after.allocations,
+            ledger_payment_id: ledgerId,
+            // The original is kept. An edit that erases what the row used to
+            // say is a deletion wearing a friendlier word.
+            edited_at: new Date().toISOString(),
+            edited_by: actor || null,
+            edit_history: [...(rows[i].edit_history || []), {
+                at: new Date().toISOString(), by: actor || null,
+                was: { date: before.date, amount: before.amount, mode: before.mode,
+                    bank: before.bank, ref: before.ref, supplier: before.supplier,
+                    allocations: before.allocations || [] },
+            }],
+        };
+        return rows;
+    }, { strict: true });
+
+    return { ...plan, applied: true };
+}
+
 async function deleteBillPayment(id) {
     const doomed = list().find((p) => p.id === id);
     if (!doomed) throw new Error(`no payment ${id}`);
@@ -379,5 +581,9 @@ module.exports = {
     list, allocationsFor, paidFor, paidByBill,
     advancesFor, advanceCredit, creditBySupplier,
     addBillPayment, addAdvance, applyAdvance, deleteBillPayment, summary,
+    // Added 2026-10-07. previewEdit writes nothing and is what the screen
+    // shows her BEFORE editBillPayment is called — her own choice:
+    // "Recompute everything, show me before saving."
+    validatePaymentInput, previewEdit, editBillPayment,
     cleanAllocations, sameSupplier,
 };
