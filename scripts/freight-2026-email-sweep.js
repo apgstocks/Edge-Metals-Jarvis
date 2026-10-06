@@ -33,6 +33,7 @@
 //   node scripts/freight-2026-email-sweep.js --limit 300          (per party, per mailbox)
 
 const path = require('path');
+const crypto = require('crypto');
 const ROOT = path.join(__dirname, '..');
 const cfg = require(path.join(ROOT, 'config'));
 const gmail = require(path.join(ROOT, 'helpers/gmail'));
@@ -40,7 +41,13 @@ const gemini = require(path.join(ROOT, 'helpers/gemini'));
 const verify = require(path.join(ROOT, 'helpers/invoiceVerify'));
 
 const argv = process.argv.slice(2);
-const arg = (name) => { const i = argv.indexOf(name); return i === -1 ? null : (argv[i + 1] || ''); };
+// The extractors log one "[GEMINI] ..." line per PDF — hundreds per run,
+// which buried the actual report last time. Hidden unless --verbose.
+if (!argv.includes('--verbose')) {
+    const origLog = console.log;
+    console.log = (...a) => { if (typeof a[0] === 'string' && a[0].startsWith('[GEMINI]')) return; origLog(...a); };
+}
+const arg =(name) => { const i = argv.indexOf(name); return i === -1 ? null : (argv[i + 1] || ''); };
 const ONLY = arg('--party') ? arg('--party').split(',').map((s) => s.trim().toLowerCase()).filter(Boolean) : null;
 const LIMIT = Number(arg('--limit')) || 200;
 
@@ -67,7 +74,7 @@ const PARTIES = [
     },
     {
         key: 'sher', label: 'Sher Trucking',
-        query: `${YEAR_SCOPE} ("sher trucking" OR "sher")`,
+        query: `${YEAR_SCOPE} "sher trucking"`, // bare "sher" dropped 2026-10-06: it pulled Edge's own sealed-units invoice into this party's results
         extract: (b) => gemini.extractSherTruckingInvoiceRecords(b),
         crossCheck: (recs) => verify.crossCheckSherRecords(recs),
         idFields: ['booking_no'],
@@ -89,7 +96,18 @@ const PARTIES = [
     {
         key: 'gardunos', label: "Garduno's",
         query: `${YEAR_SCOPE} ("garduno" OR "gardunos")`,
-        extract: (b) => gemini.extractGardunosInvoiceRecords(b),
+        // BUG FOUND 2026-10-06 in the first real run: this extractor returns
+        // { lines: [...] }, not { records: [...] } like the others, so reading
+        // `.records` silently dropped every Garduno's line (the log showed 15
+        // lines extracted, the report said 0). api.js's /api/verify/gardunos
+        // runs the result through expandInvoice() to get per-container
+        // records and stamps invoice_no/date on each — mirrored exactly here.
+        extract: async (b) => {
+            const ex = await gemini.extractGardunosInvoiceRecords(b);
+            if (!ex || !Array.isArray(ex.lines) || !ex.lines.length) return { records: [] };
+            const exp = require(path.join(ROOT, 'helpers/gardunosInvoice')).expandInvoice(ex);
+            return { records: (exp.records || []).map((r) => ({ ...r, invoice_no: exp.invoice_no, invoice_date: exp.invoice_date })) };
+        },
         crossCheck: (recs) => verify.crossCheckGardunosRecords(recs),
         idFields: ['container_no'],
     },
@@ -166,6 +184,8 @@ async function sweepParty(party, mailboxes) {
     // deduped — safer to risk a double-count than to silently drop a real
     // invoice because of a missing header.
     const seenRfcIds = new Set();
+    const seenPdfHashes = new Set();
+    let dupPdfs = 0;
     const getHeader = (hdrs, name) => {
         const key = Object.keys(hdrs).find((k) => k.toLowerCase() === name.toLowerCase());
         return key ? hdrs[key] : null;
@@ -202,6 +222,14 @@ async function sweepParty(party, mailboxes) {
                 let att;
                 try { att = await gmail.downloadAttachment(mb.client, m.id, part); }
                 catch (e) { console.error(`  [${party.label}] could not download attachment on "${subject.slice(0, 50)}":`, e.message); continue; }
+                // Same PDF bytes arriving in a reply, a forward, a second
+                // thread: the first real run extracted GLTOER-27715 four
+                // times over. Message-ID can't catch that (different
+                // emails); the content hash can. Processed once, first
+                // sighting wins.
+                const hash = crypto.createHash('sha256').update(att.base64).digest('hex');
+                if (seenPdfHashes.has(hash)) { dupPdfs += 1; continue; }
+                seenPdfHashes.add(hash);
                 foundPdfs.push({ base64: att.base64, filename: att.filename, messageId: m.id, mailbox: mb.address, subject, from, date: hdrs.Date || '' });
             }
         }
@@ -229,10 +257,30 @@ async function sweepParty(party, mailboxes) {
         catch (e) { console.error(`  [${party.label}] cross-check against the sheet failed:`, e.message); }
     }
 
-    const missing = (crossChecked.matched || []).filter((r) => r.status === 'not_in_sheet');
-    const other = (crossChecked.matched || []).filter((r) => r.status !== 'verified' && r.status !== 'match' && r.status !== 'not_in_sheet');
+    // ── What "missing" honestly means ─────────────────────────────────────
+    // First real run: Zimex reported 89 "missing" and every one was a $0.00
+    // booking-confirmation PDF (DALA…) pulled in because the email merely
+    // MENTIONED Zimex. A not_in_sheet row only counts as a missing INVOICE
+    // when it carries money. Rows with no amount are reported as a count,
+    // not a list — they are almost certainly not invoices.
+    const recMoney = (r) => { const v = r.amount != null ? r.amount : r.commission; const n = Number(v); return Number.isFinite(n) ? n : 0; };
+    const all = crossChecked.matched || [];
+    const notInSheet = all.filter((r) => r.status === 'not_in_sheet');
+    const missingNoAmount = notInSheet.filter((r) => recMoney(r) <= 0).length;
+    // Same invoice line seen more than once (different PDFs, same content)
+    // collapses to one row with a count.
+    const uniq = new Map();
+    for (const r of notInSheet.filter((x) => recMoney(x) > 0)) {
+        const k = [...party.idFields.map((f) => r[f] || ''), r.invoice_no || '', recMoney(r)].join('|');
+        if (uniq.has(k)) uniq.get(k).seen += 1; else uniq.set(k, { ...r, seen: 1 });
+    }
+    const missing = [...uniq.values()];
+    const verifiedCount = all.filter((r) => r.status === 'verified' || r.status === 'match').length;
+    const statusCounts = {};
+    for (const r of all) if (r.status !== 'verified' && r.status !== 'match' && r.status !== 'not_in_sheet') statusCounts[r.status] = (statusCounts[r.status] || 0) + 1;
+    const unchecked = Object.values(statusCounts).reduce((a, n) => a + n, 0);
 
-    return { scanned, pdfsFound: foundPdfs.length, recordsExtracted: allRecords.length, missing, other };
+    return { scanned, pdfsFound: foundPdfs.length, dupPdfs, recordsExtracted: allRecords.length, missing, missingNoAmount, verifiedCount, unchecked, statusCounts, recMoney };
 }
 
 (async () => {
@@ -242,7 +290,26 @@ async function sweepParty(party, mailboxes) {
     try { mailboxes = await gmail.getGmailReadMailboxes(); }
     catch (e) { console.error('Could not open any read mailbox:', e.message); process.exit(1); }
     if (!mailboxes.length) { console.error('No readable Gmail mailbox configured — nothing to scan.'); process.exit(1); }
-    console.log(`Scanning mailbox(es): ${mailboxes.map((m) => m.address).join(', ')}\n`);
+    console.log(`Scanning mailbox(es): ${mailboxes.map((m) => `${m.role}=${m.address}`).join(', ')}\n`);
+
+    // ── Coverage guard ────────────────────────────────────────────────────
+    // Apsara asked specifically for bose@edgemetals.com to be scanned. The
+    // first real run scanned apsara@ only and still printed a confident
+    // report. A sweep that silently skips the mailbox carrier mail lands in
+    // is worse than no sweep, so it now refuses unless bose@ is present
+    // (or she explicitly says she knows, with --allow-single-mailbox).
+    const hasBose = mailboxes.some((m) => /^bose@/i.test(m.address || ''));
+    if (!hasBose && !argv.includes('--allow-single-mailbox')) {
+        console.error('STOPPED: bose@edgemetals.com is not among the mailboxes being scanned.');
+        console.error('  Resolved: ' + mailboxes.map((m) => `${m.role}=${m.address}`).join(', '));
+        console.error('  If the read2 token was authorised while signed into apsara@, it resolves to the same');
+        console.error('  account as "read" and is skipped as a duplicate. Re-run');
+        console.error('    node scripts/gmail-auth.js --role=read2');
+        console.error('  in a browser profile signed into bose@edgemetals.com only (or an incognito window),');
+        console.error('  then check:  node -e "require(\'./helpers/gmail.js\').getGmailReadMailboxes().then(m => console.log(m.map(x => x.role + \' = \' + x.address)))"');
+        console.error('  To run anyway on what is configured: add --allow-single-mailbox.');
+        process.exit(2);
+    }
 
     const parties = ONLY ? PARTIES.filter((p) => ONLY.includes(p.key)) : PARTIES;
     const newParties = ONLY ? NEW_PARTIES.filter((p) => ONLY.includes(p.key)) : NEW_PARTIES;
@@ -259,18 +326,21 @@ async function sweepParty(party, mailboxes) {
             console.log(`── ${party.label}${party.unverified ? ' (generic match — unverified prompt, lower confidence)' : ''} ──────────────────────────────────────`);
             const r = await sweepParty(party, mailboxes);
             out.push({ party, ...r });
-            console.log(`  Emails matched: ${r.scanned}   PDFs with attachments: ${r.pdfsFound}   Line items extracted: ${r.recordsExtracted}`);
+            console.log(`  Emails matched: ${r.scanned}   Unique PDFs: ${r.pdfsFound} (+${r.dupPdfs} identical repeats skipped)   Line items: ${r.recordsExtracted}`);
+            console.log(`  Checked OK: ${r.verifiedCount}   Missing (with an amount): ${r.missing.length}   Not-in-sheet but no amount: ${r.missingNoAmount}   COULD NOT BE CHECKED: ${r.unchecked}`);
             if (r.missing.length) {
-                console.log(`  >> ${r.missing.length} NOT IN THE SHEET:`);
+                console.log(`  >> NOT IN THE SHEET, with money on them:`);
                 for (const rec of r.missing) {
                     const id = party.idFields.map((f) => rec[f]).filter(Boolean).join(' / ') || '(no reference number on the PDF)';
-                    console.log(`     - ${id}   ${money(rec.amount)}   from "${rec.source_subject.slice(0, 60)}" (${rec.source_date || 'no date'}, ${rec.source_file})`);
+                    const inv = rec.invoice_no ? ` inv ${rec.invoice_no}` : '';
+                    console.log(`     - ${id}${inv}   ${money(r.recMoney(rec))}${rec.seen > 1 ? ` (x${rec.seen})` : ''}   from "${rec.source_subject.slice(0, 60)}" (${rec.source_date || 'no date'}, ${rec.source_file})`);
                 }
-            } else {
-                console.log(`  Nothing missing — every extracted line item matched the sheet.`);
             }
-            if (r.other.length) {
-                console.log(`  (${r.other.length} other row(s) need a look — mismatch/blank/unreadable, not a clean "missing" case.)`);
+            if (r.missingNoAmount) {
+                console.log(`  (${r.missingNoAmount} not-in-sheet row(s) carried no amount — typically booking confirmations / certificates / the party merely mentioned in the email, not invoices. Not listed.)`);
+            }
+            if (r.unchecked) {
+                console.log(`  Could not be checked, by reason: ${Object.entries(r.statusCounts).map(([s, n]) => `${s}=${n}`).join(', ')}`);
             }
             console.log('');
         }
@@ -283,9 +353,11 @@ async function sweepParty(party, mailboxes) {
 
     console.log('══════════════════════════════════════════════════════════');
     console.log('SUMMARY — nothing was written to the sheet, bills.json, or anywhere else.\n');
+    console.log(`  ${'party'.padEnd(14)} ${'missing'.padStart(7)} ${'checked-ok'.padStart(11)} ${'unchecked'.padStart(10)}   (line items / unique PDFs)`);
     for (const r of results) {
-        console.log(`  ${r.party.label.padEnd(14)} ${String(r.missing.length).padStart(3)} missing   (${r.recordsExtracted} line items checked across ${r.pdfsFound} PDFs)${r.party.unverified ? '   [unverified]' : ''}`);
+        console.log(`  ${r.party.label.padEnd(14)} ${String(r.missing.length).padStart(7)} ${String(r.verifiedCount).padStart(11)} ${String(r.unchecked).padStart(10)}   (${r.recordsExtracted} / ${r.pdfsFound})${r.party.unverified ? '   [unverified]' : ''}`);
     }
+    console.log('\n  "unchecked" rows are NOT proven present in the sheet — the check could not run on them. Read that column before trusting a low "missing" count.');
     const totalMissing = results.reduce((a, r) => a + r.missing.length, 0);
     console.log(`\n  ${totalMissing} total candidate(s) across all parties.`);
     if (totalMissing) {
