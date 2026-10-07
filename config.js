@@ -226,6 +226,8 @@ const FILES = {
     PARTY_INVOICE_PAYMENTS_FILE: path.join(DATA_DIR, 'party_invoice_payments.json'),
     // The ONE lock over the invoice register and the carrier invoice lists — see helpers/partyInvoices.js
     PARTY_INVOICES_LOCK_FILE: path.join(DATA_DIR, 'party_invoices_lock.json'),
+    // Nightly mail sweep -> register: what each night found, and when the morning email last went — see helpers/partyInvoiceNightly.js
+    PARTY_INVOICE_NIGHTLY_FILE: path.join(DATA_DIR, 'party_invoice_nightly.json'),
     // ── EDGE METALS MATERIAL RECEIVED, ITEMISED FROM A PACKING LIST ──────
     // Apsara, 2026-09-11: "sometimes,we get packing list when we deliver the
     // load. that packing list contains items that needs to stored in

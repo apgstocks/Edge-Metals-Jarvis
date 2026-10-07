@@ -1494,6 +1494,21 @@ function start() {
         .catch(e => console.error('[SCHED] integrity-sweep:', e)), TZ);
     cron.schedule('45 22 * * *',  () => nightlyCutoffBackfill().catch(e => console.error('[SCHED] cutoff-backfill:', e)), TZ);
     cron.schedule('15 23 * * *',  () => nightlyMetalsSheetSync().catch(e => console.error('[SCHED] metals-sheet-sync:', e)), TZ);
+    // ── Freight / trucker invoice sweep, right after the sheet sync (Apsara, 2026-10-08) ─────────────
+    // "Every night along with the shipment sweep ... if found, upload it to the Jarvis website directly
+    // against the party, and notify next day what the new additions are." 23:30 so it never overlaps
+    // the 23:15 sync's writes; the note goes at 07:50, after the other morning mails. Imports into the
+    // invoice register ONLY (helpers/partyInvoiceNightly.js) — no sheet write, no bills.
+    // PARTY_INVOICE_SWEEP=off switches both off.
+    cron.schedule('30 23 * * *',  () => require('./helpers/partyInvoiceNightly').runNightly()
+        .then((r) => {
+            if (r.skipped) return console.log(`[SCHED] party-invoice-sweep skipped: ${r.skipped}`);
+            if (r.run.ok) console.log(`[SCHED] party-invoice-sweep: read ${r.run.read} line(s) from the last ${r.run.days} day(s) — ${r.run.added} added, ${r.run.updated} refreshed, ${r.run.kept_locked} left alone`);
+            else console.error(`[SCHED] party-invoice-sweep FAILED — NOTHING WAS ADDED: ${r.run.error}`);
+        })
+        .catch(e => console.error('[SCHED] party-invoice-sweep:', e)), TZ);
+    cron.schedule('50 7 * * *',   () => require('./helpers/partyInvoiceNightly').sendDigest()
+        .catch(e => console.error('[SCHED] party-invoice-digest:', e)), TZ);
     // ── QuickBooks, 45 minutes after the sheet sync ───────────────────────
     // Apsara, 2026-09-25, comparing Jarvis to a commercial product: "Their
     // QuickBooks integration will be cleaner — fix this." The gap was not the

@@ -78,7 +78,11 @@ const TRUCKING_CAP = 3000; // per load, for the Jio / Sher / AJ Transport tabs
 // a few irrelevant hits for her to skip than to silently miss a real
 // invoice because the query was too narrow). Scoped to 2026 and PDF
 // attachments only, matching how every one of these PDFs actually arrives.
-const YEAR_SCOPE = 'after:2026/1/1 before:2027/1/1 has:attachment filename:pdf';
+// --newer-than 3d: only mail from the last N days instead of all of 2026. For the NIGHTLY run
+// (helpers/partyInvoiceNightly.js); without the flag the query is exactly what it always was.
+const NEWER_THAN = (arg('--newer-than') || '').match(/^\d{1,3}d$/) ? arg('--newer-than') : null;
+const DATE_SCOPE = NEWER_THAN ? `newer_than:${NEWER_THAN}` : 'after:2026/1/1 before:2027/1/1';
+const YEAR_SCOPE = `${DATE_SCOPE} has:attachment filename:pdf`;
 const PARTIES = [
     {
         key: 'zimex', label: 'Zimex',
@@ -221,7 +225,7 @@ const money = (n) => (n == null ? '—' : `$${Number(n).toLocaleString('en-US', 
 // <SAVE_DIR>/<party>/emails/ so the remittance layout can be read from real
 // mail. Read-only; Gmail only, no Gemini.
 async function dumpEmails(party, mailboxes) {
-    const query = party.query.replace(YEAR_SCOPE, 'after:2026/1/1 before:2027/1/1');
+    const query = party.query.replace(YEAR_SCOPE, DATE_SCOPE);
     const seen = new Set();
     let saved = 0;
     const subjects = [];
