@@ -827,6 +827,35 @@ const MUTATIONS = [
     // PROPERTY and not the markup's length: the old 120-character proximity
     // regex went red when Edit was added beside Delete, and would have stayed
     // green if Delete had escaped the gate. This is the inverse.
+    // ── THE TRUCKING AND SALE-COST EDIT ROUTES ────────────────────────
+    { name: 'trucking: the edit route drops the patch on the floor',
+      file: 'api.js', suites: ['payment-edit-all'],
+      find: 'await mt.editTruckingPayment(id, req.body || {}, { actor: actorOf(req) });',
+      to:   'await mt.editTruckingPayment(id, {}, { actor: actorOf(req) });' },
+    { name: 'trucking: the edit route is open to admin',
+      file: 'api.js', suites: ['payment-edit-all', 'security'],
+      find: "app.put('/api/metals-trucking/:id', requireSuper, largeJson,",
+      to:   "app.put('/api/metals-trucking/:id', largeJson," },
+    { name: 'sale costs: the edit route drops the patch on the floor',
+      file: 'api.js', suites: ['payment-edit-all'],
+      find: 'await st.editSettlement(id, req.body || {}, { actor: actorOf(req) });',
+      to:   'await st.editSettlement(id, {}, { actor: actorOf(req) });' },
+    { name: 'sale costs: the edit route is open to admin',
+      file: 'api.js', suites: ['payment-edit-all', 'security'],
+      find: "app.put('/api/sales-settlements/:id', requireSuper, largeJson,",
+      to:   "app.put('/api/sales-settlements/:id', largeJson," },
+    { name: 'sale costs: the preview route writes instead of previewing',
+      file: 'api.js', suites: ['payment-edit-all'],
+      find: 'plan: st.previewSettlementEdit(String(req.params.id), req.body || {})',
+      to:   'plan: await st.editSettlement(String(req.params.id), req.body || {})' },
+    // Proves the "names the path literally" check is about the GUARD being
+    // able to see the route, not about the letters happening to be present:
+    // this is the exact regression editPaymentFlow's first draft caused.
+    { name: 'the trucking Edit button hides its path from check-route-reach',
+      file: 'dashboard/index.html', suites: ['payment-edit-all'],
+      find: "save: (body) => api('/api/metals-trucking/' + encodeURIComponent(btn.dataset.id),",
+      to:   "save: (body) => api(['/api', 'metals-trucking', btn.dataset.id].join('/'),",
+      },
     { name: 'the Payments tab offers Delete with no Jarvis profile',
       file: 'dashboard/index.html', suites: ['payment-delete-roles'],
       find: ': `<span title="Sign in with the Jarvis profile to change a supplier payment"',

@@ -5456,6 +5456,90 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
         } catch (e) { res.status(400).json({ error: e.message }); }
     });
 
+    // ── EDIT A TRUCKING PAYMENT ───────────────────────────────────────────
+    // The third of the three cost types she named ("trucker/commission/
+    // freight ... and option to edit"). Same shape as the bill-payments pair
+    // above, and registered explicitly for the same reason: a loop over a
+    // table makes check-route-reach.js read "/api/${slug}/:id" literally and
+    // the dead-route guard stops guarding.
+    //
+    // NOT factored into a shared helper with the bill-payments routes, even
+    // though the bodies rhyme. The 404 strings differ ("no trucking payment"
+    // vs "no payment"), the audit actions differ, and the two stores are
+    // deliberately separate (see helpers/metalsTrucking.js on why). A shared
+    // route factory would be exactly the "requirement in shared code" that
+    // CLAUDE.md rule 1 is written about — and the caller that could not
+    // satisfy it would be whichever of these two changes next.
+    app.post('/api/metals-trucking/:id/preview-edit', requireSuper, largeJson, async (req, res) => {
+        try {
+            const mt = require('./helpers/metalsTrucking');
+            return res.json({ ok: true, plan: mt.previewTruckingEdit(String(req.params.id), req.body || {}) });
+        } catch (e) {
+            const msg = String((e && e.message) || e);
+            return res.status(/^no trucking payment/.test(msg) ? 404 : 400).json({ error: msg });
+        }
+    });
+
+    app.put('/api/metals-trucking/:id', requireSuper, largeJson, async (req, res) => {
+        try {
+            const mt = require('./helpers/metalsTrucking');
+            const audit = require('./helpers/audit');
+            const id = String(req.params.id);
+            if (!mt.list().find((p) => p && p.id === id)) {
+                return res.status(404).json({ error: `no trucking payment ${id}` });
+            }
+            const result = await mt.editTruckingPayment(id, req.body || {}, { actor: actorOf(req) });
+            await audit.record({
+                action: 'edit-metals-trucking', subject: id,
+                actor: actorOf(req), role: req.role, ip: req.ip,
+                detail: { company: 'edge-metals', before: result.before,
+                    after: result.after, changes: result.changes },
+            }).catch(() => {});
+            return res.json({ ok: true, ...result });
+        } catch (e) {
+            const msg = String((e && e.message) || e);
+            const code = /QuickBooks/.test(msg) ? 409
+                : /^no trucking payment/.test(msg) ? 404 : 400;
+            return res.status(code).json({ error: msg });
+        }
+    });
+
+    // ── EDIT A SALE COST: COMMISSION OR FREIGHT ───────────────────────────
+    // The other two of the three. One store covers both, because both are a
+    // cost settled against a SALE — see helpers/salesSettlements.js.
+    app.post('/api/sales-settlements/:id/preview-edit', requireSuper, largeJson, async (req, res) => {
+        try {
+            const st = require('./helpers/salesSettlements');
+            return res.json({ ok: true, plan: st.previewSettlementEdit(String(req.params.id), req.body || {}) });
+        } catch (e) {
+            const msg = String((e && e.message) || e);
+            return res.status(/^no settlement/.test(msg) ? 404 : 400).json({ error: msg });
+        }
+    });
+
+    app.put('/api/sales-settlements/:id', requireSuper, largeJson, async (req, res) => {
+        try {
+            const st = require('./helpers/salesSettlements');
+            const audit = require('./helpers/audit');
+            const id = String(req.params.id);
+            if (!st.list().find((p) => p && p.id === id)) {
+                return res.status(404).json({ error: `no settlement ${id}` });
+            }
+            const result = await st.editSettlement(id, req.body || {}, { actor: actorOf(req) });
+            await audit.record({
+                action: 'edit-sale-cost', subject: id,
+                actor: actorOf(req), role: req.role, ip: req.ip,
+                detail: { company: 'edge-metals', before: result.before,
+                    after: result.after, changes: result.changes },
+            }).catch(() => {});
+            return res.json({ ok: true, ...result });
+        } catch (e) {
+            const msg = String((e && e.message) || e);
+            const code = /QuickBooks/.test(msg) ? 409 : /^no settlement/.test(msg) ? 404 : 400;
+            return res.status(code).json({ error: msg });
+        }
+    });
+
     app.get('/api/sales-settlements', (req, res) => {
         try {
             const st = require('./helpers/salesSettlements');

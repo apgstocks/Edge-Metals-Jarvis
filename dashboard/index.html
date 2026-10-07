@@ -8402,88 +8402,19 @@ async function renderSupplierPaymentsTab() {
     });
   }
 
-  // ── EDIT, WITH THE CONSEQUENCES SHOWN FIRST ──────────────────────────
-  // Apsara, 2026-10-07, asked what an edit should do about the containers a
-  // payment had already settled: "Recompute everything, show me before
-  // saving." So this asks the server to COMPUTE the edit without doing it,
-  // shows what moves, and only writes when she presses the second button.
-  //
-  // Amount and reference only, for now. Re-allocating across containers
-  // belongs in the Pay sheet where the container picker already lives, and
-  // building a second allocation editor here would be two places to get the
-  // same arithmetic wrong.
   document.querySelectorAll('.spEdit').forEach((btn) => {
-    btn.onclick = async () => {
-      const id = btn.dataset.payment;
-      const row = rows.find((r) => String(r.id) === String(id));
-      if (!row) return;
-
-      // ── WHY THIS REFUSES A MULTI-CONTAINER PAYMENT ───────────────────
-      // Changing the amount alone is only meaningful when there is one
-      // thing to change it against. A payment split over three containers
-      // has no single right answer for where $2,000 should come off, and
-      // the server correctly refuses an amount that no longer matches its
-      // allocations ("allocations come to $5000.00 but the payment is
-      // $3000.00") — which the end-to-end test found by trying exactly
-      // that. Guessing a split here would be inventing her allocations.
-      const allocs = (row.allocations || []);
-      if (allocs.length > 1) {
-        alert(`This payment covers ${allocs.length} containers, so changing the amount means `
-            + 'deciding how much comes off each one.\n\nDo that from Pay on the Bills tab, where '
-            + 'the container list is — or delete this payment and record it again.');
-        return;
-      }
-
-      const amount = prompt(`Amount for this payment (now ${ledMoney(row.amount)}):`,
-                            String(row.amount));
-      if (amount === null) return;                       // she changed her mind
-      const value = Number(String(amount).replace(/[$,\s]/g, ''));
-      if (!isFinite(value) || value <= 0) { alert('That is not an amount.'); return; }
-      // The single allocation follows the amount. Unambiguous, because there
-      // is only one place it can go.
-      const patch = allocs.length === 1
-        ? { amount: value, allocations: [{ bill_id: allocs[0].bill_id, amount: value }] }
-        : { amount: value };
-
-      btn.disabled = true; btn.textContent = 'Checking…';
-      let plan = null;
-      try {
-        const r = await api(`/api/bill-payments/${encodeURIComponent(id)}/preview-edit`,
-                            { method: 'POST', body: JSON.stringify(patch) });
-        plan = r.plan;
-      } catch (e) {
-        btn.disabled = false; btn.textContent = 'Edit';
-        // The server's sentence, not a code — it already says whether this is
-        // a bank it does not know or a payment QuickBooks is holding.
-        alert(String((e && e.message) || e));
-        return;
-      }
-
-      // ── WHAT SHE IS ABOUT TO DO, IN HER TERMS ────────────────────────
-      const lines = (plan.changes || []).map((c) => {
-        const what = c.container_no || c.bill_id;
-        if (c.effect === 'reopens') return `  ${what} REOPENS — it will owe money again`;
-        if (c.effect === 'becomes settled') return `  ${what} becomes settled`;
-        if (c.effect === 'unchanged') return `  ${what} unchanged`;
-        return `  ${what}: paid ${ledMoney(c.paid_before)} → ${ledMoney(c.paid_after)}`;
-      });
-      const ok = confirm(
-        `Change this payment from ${ledMoney(plan.before.amount)} to ${ledMoney(plan.after.amount)}?\n\n`
-        + (lines.length ? lines.join('\n') + '\n\n' : '')
-        + (plan.reopens ? `${plan.reopens} container(s) will owe money again.\n\n` : '')
-        + 'The original is kept, and this is written to the audit log.');
-      if (!ok) { btn.disabled = false; btn.textContent = 'Edit'; return; }
-
-      btn.textContent = 'Saving…';
-      try {
-        await api(`/api/bill-payments/${encodeURIComponent(id)}`,
-                  { method: 'PUT', body: JSON.stringify(patch) });
-        await renderSupplierPaymentsTab();
-      } catch (e) {
-        btn.disabled = false; btn.textContent = 'Edit';
-        alert(String((e && e.message) || e));
-      }
-    };
+    btn.onclick = () => editPaymentFlow({
+      btn,
+      id: btn.dataset.payment,
+      row: rows.find((r) => String(r.id) === String(btn.dataset.payment)),
+      preview: (body) => api('/api/bill-payments/' + encodeURIComponent(btn.dataset.payment) + '/preview-edit',
+                             { method: 'POST', body }),
+      save: (body) => api('/api/bill-payments/' + encodeURIComponent(btn.dataset.payment),
+                          { method: 'PUT', body }),
+      noun: 'containers',
+      elsewhere: 'Pay on the Bills tab',
+      reload: renderSupplierPaymentsTab,
+    });
   });
 
   const apply = () => {
@@ -8679,8 +8610,9 @@ async function renderMetalsTruckingTab() {
                 <td style="padding:7px 9px; white-space:nowrap; color:var(--text-muted);">${(p.allocations || []).length} container${(p.allocations || []).length === 1 ? '' : 's'}</td>
                 <td style="padding:7px 9px; text-align:right; font-family:var(--font-mono);">${ledMoney(p.amount)}</td>
                 <td style="padding:7px 9px; white-space:nowrap;">${metalsCanDelete()
-                  ? `<button class="trkPayDel" data-id="${esc(p.id)}" data-who="${esc(p.trucking_company || '')}" data-amount="${esc(ledMoney(p.amount))}" data-covers="${(p.allocations || []).length}" style="background:none; border:1px solid var(--line); border-radius:var(--radius-sm); padding:3px 9px; font-size:10px; color:var(--status-warn); cursor:pointer;">Delete</button>`
-                  : `<span title="Sign in with the Jarvis profile to remove a trucking payment" style="font-size:10px; color:var(--text-faint);">&mdash;</span>`}</td>
+                  ? `<button class="trkPayEdit" data-id="${esc(p.id)}" style="background:none; border:1px solid var(--line); border-radius:var(--radius-sm); padding:3px 9px; font-size:10px; color:var(--text-body); cursor:pointer; margin-right:6px;">Edit</button>`
+                    + `<button class="trkPayDel" data-id="${esc(p.id)}" data-who="${esc(p.trucking_company || '')}" data-amount="${esc(ledMoney(p.amount))}" data-covers="${(p.allocations || []).length}" style="background:none; border:1px solid var(--line); border-radius:var(--radius-sm); padding:3px 9px; font-size:10px; color:var(--status-warn); cursor:pointer;">Delete</button>`
+                  : `<span title="Sign in with the Jarvis profile to change a trucking payment" style="font-size:10px; color:var(--text-faint);">&mdash;</span>`}</td>
               </tr>`).join('')}</tbody>
           </table>
         </div>
@@ -8857,6 +8789,24 @@ async function renderMetalsTruckingTab() {
         alert(e.message || 'Could not remove that payment.');
       }
     };
+  });
+
+  // ── CHANGING ONE ─────────────────────────────────────────────────────
+  // The trucker half of "option to edit". Same two-step as the supplier
+  // payments tab, because it is the same function — see editPaymentFlow.
+  document.querySelectorAll('.trkPayEdit').forEach((btn) => {
+    btn.onclick = () => editPaymentFlow({
+      btn,
+      id: btn.dataset.id,
+      row: (data.payments || []).find((p) => String(p.id) === String(btn.dataset.id)),
+      preview: (body) => api('/api/metals-trucking/' + encodeURIComponent(btn.dataset.id) + '/preview-edit',
+                             { method: 'POST', body }),
+      save: (body) => api('/api/metals-trucking/' + encodeURIComponent(btn.dataset.id),
+                          { method: 'PUT', body }),
+      noun: 'containers',
+      elsewhere: 'Pay on this tab',
+      reload: renderMetalsTruckingTab,
+    });
   });
 }
 
@@ -9287,8 +9237,9 @@ async function renderPayables(which) {
               mixed ? `<span title="This payment also covers the other tab — removing it here removes all of it" style="color:var(--status-warn);"> · spans both</span>` : ''}</td>
             <td style="padding:7px 9px; text-align:right; font-family:var(--font-mono);">${salesMoney(s.amount)}</td>
             <td style="padding:7px 9px; white-space:nowrap;">${metalsCanDelete()
-              ? `<button class="stlDel" data-id="${esc(s.id)}" data-who="${esc(s.payee || '')}" data-amount="${esc(salesMoney(s.amount))}" data-lines="${(s.allocations || []).length}" data-mixed="${mixed ? '1' : ''}" style="background:none; border:1px solid var(--line); border-radius:var(--radius-sm); padding:3px 9px; font-size:10px; color:var(--status-warn); cursor:pointer;">Delete</button>`
-              : `<span title="Sign in with the Jarvis profile to remove a payment" style="font-size:10px; color:var(--text-faint);">&mdash;</span>`}</td>
+              ? `<button class="stlEdit" data-id="${esc(s.id)}" style="background:none; border:1px solid var(--line); border-radius:var(--radius-sm); padding:3px 9px; font-size:10px; color:var(--text-body); cursor:pointer; margin-right:6px;">Edit</button>`
+                + `<button class="stlDel" data-id="${esc(s.id)}" data-who="${esc(s.payee || '')}" data-amount="${esc(salesMoney(s.amount))}" data-lines="${(s.allocations || []).length}" data-mixed="${mixed ? '1' : ''}" style="background:none; border:1px solid var(--line); border-radius:var(--radius-sm); padding:3px 9px; font-size:10px; color:var(--status-warn); cursor:pointer;">Delete</button>`
+              : `<span title="Sign in with the Jarvis profile to change a payment" style="font-size:10px; color:var(--text-faint);">&mdash;</span>`}</td>
           </tr>`;
         }).join('')}</tbody>
       </table></div>
@@ -9314,6 +9265,28 @@ async function renderPayables(which) {
         alert(e.message || 'Could not remove that payment.');
       }
     };
+  });
+
+  // ── CHANGING ONE ─────────────────────────────────────────────────────
+  // Commission and freight, the other two cost types she named. Both live in
+  // one store, so one button serves both tabs.
+  //
+  // A settlement that SPANS both tabs is already refused by editPaymentFlow,
+  // because spanning means more than one allocation — the "spans both" warning
+  // on Delete has no twin here for that reason, not by omission.
+  document.querySelectorAll('.stlEdit').forEach((btn) => {
+    btn.onclick = () => editPaymentFlow({
+      btn,
+      id: btn.dataset.id,
+      row: (data.settlements || []).find((s) => String(s.id) === String(btn.dataset.id)),
+      preview: (body) => api('/api/sales-settlements/' + encodeURIComponent(btn.dataset.id) + '/preview-edit',
+                             { method: 'POST', body }),
+      save: (body) => api('/api/sales-settlements/' + encodeURIComponent(btn.dataset.id),
+                          { method: 'PUT', body }),
+      noun: 'lines',
+      elsewhere: 'Record a payment on this tab',
+      reload: () => renderPayables(which),
+    });
   });
 }
 
@@ -13045,6 +13018,116 @@ function payCanDelete() {
 // this stops a button being offered that the server would refuse.
 function metalsCanDelete() {
   return IS_SUPER === true;
+}
+
+// ── EDIT A RECORDED PAYMENT, WITH THE CONSEQUENCES SHOWN FIRST ──────────
+// Apsara, 2026-10-06, asked for "option to edit" alongside recording the
+// payment of trucker / commission / freight, and on 2026-10-07, asked what an
+// edit should do about what a payment had already settled: "Recompute
+// everything, show me before saving." So this asks the server to COMPUTE the
+// edit without doing it, shows what moves, and only writes when she presses
+// the second button.
+//
+// ── WHY ONE FUNCTION AND NOT THREE COPIES ──────────────────────────────
+// Four tabs now edit a payment: supplier payments, trucking, and commission
+// and freight (which share one store). The conversation is identical on all
+// of them — the same two-step, the same refusal, the same sentences — and
+// #182 is open precisely because the two supplier-payment DELETE buttons were
+// written twice and drifted. What differs between the four is data, not
+// behaviour, so the differences are arguments.
+//
+// This is deliberately a CLIENT helper and not a shared server helper. Three
+// routes call three different store helpers with three different 404 strings;
+// a shared route factory would be the "requirement added to shared code" that
+// CLAUDE.md rule 1 is written about. Here, every caller is a button on a
+// screen I can see, and tests/payment-edit.js exercises all four.
+//
+// Amount only, for now. Re-allocating across several containers belongs in the
+// Pay sheet where the picker already lives; a second allocation editor here
+// would be two places to get the same arithmetic wrong.
+// ── WHY THE CALLER PASSES TWO CLOSURES AND NOT A BASE PATH ──────────────
+// The first version took `base` and built `${base}/${id}/preview-edit` here.
+// check-route-reach.js promptly reported all three PUTs as "a permission that
+// exists and cannot be used": it reads string literals out of each api() call,
+// and a path assembled from a variable has no literal to read. That is the
+// same mistake as registering the routes in a loop, made one file over — and
+// #166 is open because thirteen routes are already invisible to that guard.
+// So each screen keeps its own endpoint in plain sight, and this function
+// keeps the conversation. The repo's tooling reads source, so source is what
+// has to be readable.
+async function editPaymentFlow({ btn, preview, save, id, row, noun, elsewhere, reload }) {
+  if (!row || !id) return;
+  const label = btn.textContent;
+  const restore = () => { btn.disabled = false; btn.textContent = label; };
+
+  // ── WHY THIS REFUSES A SPLIT PAYMENT ─────────────────────────────────
+  // Changing the amount alone is only meaningful when there is ONE thing to
+  // change it against. A payment split three ways has no single right answer
+  // for where $2,000 comes off, and the server correctly refuses an amount
+  // that no longer matches its allocations ("allocations come to $5000.00 but
+  // the payment is $3000.00") — which the end-to-end test found by trying
+  // exactly that, after this screen had shipped sending amount alone. Picking
+  // a split here would be inventing her allocations.
+  const allocs = (row.allocations || []);
+  if (allocs.length > 1) {
+    alert(`This payment covers ${allocs.length} ${noun}, so changing the amount means `
+        + `deciding how much comes off each one.\n\nDo that from ${elsewhere}, where the `
+        + `list is — or delete this payment and record it again.`);
+    return;
+  }
+
+  const typed = prompt(`Amount for this payment (now ${ledMoney(row.amount)}):`, String(row.amount));
+  if (typed === null) return;                            // she changed her mind
+  const value = Number(String(typed).replace(/[$,\s]/g, ''));
+  if (!isFinite(value) || value <= 0) { alert('That is not an amount.'); return; }
+
+  // The single allocation follows the amount. Unambiguous, because there is
+  // only one place it can go. SPREAD rather than naming the key: a trucking
+  // allocation identifies a bill, a sale cost identifies a sale AND a charge,
+  // and copying the whole row keeps both correct. Each store's own
+  // cleanAllocations rebuilds from the fields it recognises, so extras are
+  // dropped rather than trusted.
+  const patch = allocs.length === 1
+    ? { amount: value, allocations: [{ ...allocs[0], amount: value }] }
+    : { amount: value };
+
+  btn.disabled = true; btn.textContent = 'Checking…';
+  let plan = null;
+  try {
+    const r = await preview(JSON.stringify(patch));
+    plan = r.plan;
+  } catch (e) {
+    restore();
+    // The server's sentence, not a code — it already says whether this is a
+    // bank it does not know, or a payment QuickBooks is holding.
+    alert(String((e && e.message) || e));
+    return;
+  }
+  if (!plan || !plan.before || !plan.after) { restore(); alert('The server sent no plan back.'); return; }
+
+  // ── WHAT SHE IS ABOUT TO DO, IN HER TERMS ────────────────────────────
+  const lines = (plan.changes || []).map((c) => {
+    const what = c.container_no || c.bill_id || c.sale_id || c.invoice_no || '';
+    if (c.effect === 'reopens') return `  ${what} REOPENS — it will owe money again`;
+    if (c.effect === 'becomes settled') return `  ${what} becomes settled`;
+    if (c.effect === 'unchanged') return `  ${what} unchanged`;
+    return `  ${what}: paid ${ledMoney(c.paid_before)} → ${ledMoney(c.paid_after)}`;
+  });
+  const ok = confirm(
+    `Change this payment from ${ledMoney(plan.before.amount)} to ${ledMoney(plan.after.amount)}?\n\n`
+    + (lines.length ? lines.join('\n') + '\n\n' : '')
+    + (plan.reopens ? `${plan.reopens} ${noun.replace(/s$/, '')}(s) will owe money again.\n\n` : '')
+    + 'The original is kept, and this is written to the audit log.');
+  if (!ok) { restore(); return; }
+
+  btn.textContent = 'Saving…';
+  try {
+    await save(JSON.stringify(patch));
+    await reload();
+  } catch (e) {
+    restore();
+    alert(String((e && e.message) || e));
+  }
 }
 
 function renderPayHistory() {

@@ -34,6 +34,15 @@ const TMP = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvis-payedit-all-'));
 process.env.DATA_DIR = TMP;
 process.env.JARVIS_TEST = '1';
 
+// ── SET BEFORE config IS REQUIRED, AND THAT IS NOT A STYLE CHOICE ────────
+// config.js reads these ONCE at load. Section F's first draft set them inside
+// the section, after the require below, and every signed-in request came back
+// 401 — which reads exactly like a broken permission guard rather than a test
+// that configured itself too late. tests/payment-edit.js lost the same hour.
+process.env.APP_PASSWORD = 'user-pw-aaaaaaaaaaaa';
+process.env.ADMIN_PASSWORD = 'admin-pw-bbbbbbbbbbb';
+process.env.JARVIS_PASSWORD = 'jarvis-pw-ddddddddddd';
+
 const ROOT = path.join(__dirname, '..');
 const cfg = require(path.join(ROOT, 'config'));
 if (!String(cfg.DATA_DIR).startsWith(TMP)) {
@@ -60,7 +69,16 @@ fs.writeFileSync(cfg.SALES_FILE, JSON.stringify([{
     item: 'Cu', weight: 20000, weight_unit: 'lb',
     invoice_price: 1.5, price_unit: 'lb',
     commission_per_mt: 30,
-    charges: [{ id: 'C1', label: 'Ocean freight', amount: 500, payer: 'edge' }],
+    // ── direction: 'out', AND THAT WAS A BUG IN THIS FIXTURE ─────────────
+    // This charge was seeded as { label, amount, payer } with no direction.
+    // payables() skips any charge whose direction is not 'out' ("'in' is a
+    // receivable"), so it produced NO freight payable at all — and sections
+    // B–E, which say they cover freight AND commission, were only ever
+    // exercising commission. The file's own header claimed both. Found by
+    // section F asking for an outstanding freight charge and being told
+    // there wasn't one.
+    charges: [{ id: 'C1', direction: 'out', what: 'Ocean freight',
+                why: 'Zimex, CONT1', amount: 500 }],
 }], null, 2));
 fs.writeFileSync(cfg.BILLS_FILE, JSON.stringify([
     { id: 'B1', container_no: 'CONT1', booking_no: 'BK1', date: '2026-03-01',
@@ -286,6 +304,183 @@ fs.writeFileSync(cfg.BILLS_FILE, JSON.stringify([
     const same = ST.previewSettlementEdit(global.__ST_ID, {});
     ck('an empty patch changes nothing',
        same.dropped === 0 && same.added === 0 && same.touchesLedger === false, JSON.stringify(same.dropped));
+}
+
+// ── F — END TO END, THROUGH THE ROUTES THE SCREENS REALLY CALL ────────────
+// "ALwyas test end to end when you add a new feature." Sections B–E prove the
+// two helpers are right; they were right for a day while NOTHING could reach
+// them, because the routes did not exist. This section is the part that would
+// have noticed.
+//
+// It also checks the screens, for the specific reason that the supplier-
+// payment Edit button shipped sending `{ amount }` alone and the server
+// correctly refused every fully-allocated payment. A button wired to a route
+// is not a working feature until the thing it sends is accepted.
+{
+    section('F — both edits, over HTTP, and the buttons that call them');
+
+    const http = require('http');
+
+    const { createApi } = require(path.join(ROOT, 'api'));
+    const app = createApi();
+    const server = await new Promise((r) => { const s = app.listen(0, '127.0.0.1', () => r(s)); });
+    const base = `http://127.0.0.1:${server.address().port}`;
+
+    const req = (method, p, { body, sid } = {}) => new Promise((resolve, reject) => {
+        const data = body == null ? null : JSON.stringify(body);
+        const headers = {};
+        if (data) { headers['Content-Type'] = 'application/json'; headers['Content-Length'] = Buffer.byteLength(data); }
+        if (sid) headers.Authorization = `Bearer ${sid}`;
+        const r = http.request(base + p, { method, headers }, (res) => {
+            let raw = ''; res.on('data', (c) => { raw += c; });
+            res.on('end', () => { let j = null; try { j = JSON.parse(raw); } catch (e) {} resolve({ status: res.statusCode, json: j }); });
+        });
+        r.on('error', reject); if (data) r.write(data); r.end();
+    });
+    const login = async (pw) => {
+        const r = await req('POST', '/login', { body: { password: pw } });
+        return (r.json && (r.json.sid || r.json.session_id)) || null;
+    };
+    const jarvis = await login(process.env.JARVIS_PASSWORD);
+    const admin = await login(process.env.ADMIN_PASSWORD);
+    ck('the Jarvis profile can sign in', !!jarvis, String(jarvis));
+
+    // ── TRUCKING, THE THIRD COST TYPE ────────────────────────────────────
+    // A FRESH payment on B2 only. Earlier sections already moved B1 around,
+    // and a test that depends on where they left it breaks the day one of
+    // them changes — so this makes its own and measures its own delta.
+    const mk = await req('POST', '/api/metals-trucking', { sid: jarvis, body: {
+        amount: 150, mode: 'Wire', bank: 'BofA', date: '2026-03-20',
+        trucking_company: 'AJ Transport', allocations: [{ bill_id: 'B2', amount: 150 }],
+    } });
+    ck('a trucking payment is recorded over HTTP',
+       mk.status === 200 || mk.status === 201, `${mk.status} ${JSON.stringify(mk.json)}`);
+    const tid = (mk.json && (mk.json.id || (mk.json.payment && mk.json.payment.id)))
+        || (TR.list().slice(-1)[0] || {}).id;
+    ck('  and it has an id', !!tid, String(tid));
+
+    const tPatch = { amount: 90, allocations: [{ bill_id: 'B2', amount: 90 }] };
+    const tBefore = JSON.stringify(TR.list().find((p) => p.id === tid));
+    const tPrev = await req('POST', `/api/metals-trucking/${tid}/preview-edit`, { sid: jarvis, body: tPatch });
+    ck('the trucking preview route answers', tPrev.status === 200,
+       `${tPrev.status} ${JSON.stringify(tPrev.json)}`);
+    ck('  with a plan naming the new amount',
+       !!(tPrev.json && tPrev.json.plan && tPrev.json.plan.after && tPrev.json.plan.after.amount === 90),
+       JSON.stringify(tPrev.json && tPrev.json.plan && tPrev.json.plan.after));
+    ck('  and it wrote NOTHING',
+       JSON.stringify(TR.list().find((p) => p.id === tid)) === tBefore,
+       'a preview route that writes is the worst kind of surprise');
+
+    const tPut = await req('PUT', `/api/metals-trucking/${tid}`, { sid: jarvis, body: tPatch });
+    ck('the trucking edit route applies it', tPut.status === 200,
+       `${tPut.status} ${JSON.stringify(tPut.json)}`);
+    ck('  and the amount really changed in the store',
+       (TR.list().find((p) => p.id === tid) || {}).amount === 90,
+       'the route forwarded the patch, which is the thing that breaks');
+    const tAdmin = await req('PUT', `/api/metals-trucking/${tid}`, { sid: admin, body: {
+        amount: 80, allocations: [{ bill_id: 'B2', amount: 80 }],
+    } });
+    ck('  admin is refused by the trucking route',
+       tAdmin.status === 401 || tAdmin.status === 403, String(tAdmin.status));
+    ck('    and the payment survived the refusal',
+       (TR.list().find((p) => p.id === tid) || {}).amount === 90);
+    const tGone = await req('PUT', '/api/metals-trucking/NOPE', { sid: jarvis, body: { amount: 1 } });
+    ck('  a missing trucking payment is a 404, not a 500', tGone.status === 404, String(tGone.status));
+
+    // ── COMMISSION AND FREIGHT ───────────────────────────────────────────
+    // Freight this time, not commission: section B already edited the
+    // commission, and the FREIGHT branch of the same store deserves its own
+    // trip through the route.
+    const CHG = ST.payables().find((p) => p.kind === 'charge' && p.balance > 0.005);
+    ck('the seeded sale still has freight outstanding', !!CHG, JSON.stringify(CHG));
+    if (CHG) {
+        const half = Math.round((CHG.balance / 2) * 100) / 100;
+        const alloc = { sale_id: CHG.sale_id, kind: 'charge', charge_id: CHG.charge_id, amount: CHG.balance };
+        const sMk = await req('POST', '/api/sales-settlements', { sid: jarvis, body: {
+            amount: CHG.balance, mode: 'Wire', bank: 'BofA', date: '2026-03-20',
+            payee: 'Zimex', allocations: [alloc],
+        } });
+        ck('a freight settlement is recorded over HTTP',
+           sMk.status === 200 || sMk.status === 201, `${sMk.status} ${JSON.stringify(sMk.json)}`);
+        const sid2 = (sMk.json && (sMk.json.id || (sMk.json.settlement && sMk.json.settlement.id)))
+            || (ST.list().slice(-1)[0] || {}).id;
+
+        const sPatch = { amount: half, allocations: [{ ...alloc, amount: half }] };
+        const sBefore = JSON.stringify(ST.list().find((s) => s.id === sid2));
+        const sPrev = await req('POST', `/api/sales-settlements/${sid2}/preview-edit`,
+                                { sid: jarvis, body: sPatch });
+        ck('the settlement preview route answers', sPrev.status === 200,
+           `${sPrev.status} ${JSON.stringify(sPrev.json)}`);
+        ck('  with a plan naming the new amount',
+           !!(sPrev.json && sPrev.json.plan && sPrev.json.plan.after && sPrev.json.plan.after.amount === half),
+           JSON.stringify(sPrev.json && sPrev.json.plan && sPrev.json.plan.after));
+        ck('  and it wrote NOTHING',
+           JSON.stringify(ST.list().find((s) => s.id === sid2)) === sBefore,
+           'a preview route that writes is the worst kind of surprise');
+
+        const sPut = await req('PUT', `/api/sales-settlements/${sid2}`, { sid: jarvis, body: sPatch });
+        ck('the settlement edit route applies it', sPut.status === 200,
+           `${sPut.status} ${JSON.stringify(sPut.json)}`);
+        ck('  and the amount really changed in the store',
+           (ST.list().find((s) => s.id === sid2) || {}).amount === half,
+           'the route forwarded the patch');
+        const sAdmin = await req('PUT', `/api/sales-settlements/${sid2}`, { sid: admin, body: sPatch });
+        ck('  admin is refused by the settlement route',
+           sAdmin.status === 401 || sAdmin.status === 403, String(sAdmin.status));
+        const sGone = await req('PUT', '/api/sales-settlements/NOPE', { sid: jarvis, body: { amount: 1 } });
+        ck('  a missing settlement is a 404, not a 500', sGone.status === 404, String(sGone.status));
+    }
+
+    // ── THE BUTTONS, AND THE PATCH THEY REALLY SEND ──────────────────────
+    const web = fs.readFileSync(path.join(ROOT, 'dashboard/index.html'), 'utf8');
+    for (const [what, cls, route] of [
+        ['trucking', 'trkPayEdit', '/api/metals-trucking/'],
+        ['sale costs', 'stlEdit', '/api/sales-settlements/'],
+    ]) {
+        ck(`the ${what} tab has an Edit button`, web.includes(`class="${cls}"`), cls);
+        void route;
+        ck(`  and it is gated on metalsCanDelete, like Delete beside it`,
+           new RegExp(`metalsCanDelete\\(\\)[\\s\\S]{0,200}?class="${cls}"`).test(web),
+           'the routes are requireSuper');
+    }
+
+    // ONE flow, not three copies — #182 is open because two Delete buttons
+    // were written twice and drifted. If this count ever rises, the next edit
+    // screen was copy-pasted instead of calling the flow.
+    // Counted at the CALL, not by name: `editPaymentFlow({` matches the
+    // definition too, so the first draft read 4 and reported a copy-paste
+    // that was not there.
+    // ── ASK THE DEAD-ROUTE GUARD ITSELF ──────────────────────────────────
+    // editPaymentFlow's first draft took a base path and assembled the URL
+    // inside the shared function. check-route-reach.js reads string literals
+    // out of each api() call, so all three PUTs instantly became "a permission
+    // that exists and cannot be used" — the same class of mistake as
+    // registering routes in a loop, one file over.
+    //
+    // A regex here looked right and was NOT: with the path hidden behind
+    // a join(), `api\('/api/metals-trucking/'[^;]*?method: 'PUT'` still
+    // matched, because it ran from the PREVIEW call's literal to the SAVE
+    // call's method — the two are separated by a comma, not a semicolon. It
+    // survived its own mutation. So this runs the real tool and reads its
+    // verdict, which is the only thing that was ever being claimed.
+    const reach = require('child_process').spawnSync(
+        process.execPath, [path.join(ROOT, 'scripts/check-route-reach.js')],
+        { encoding: 'utf8' });
+    const reachOut = String(reach.stdout || '') + String(reach.stderr || '');
+    for (const put of ['PUT    /api/metals-trucking/:id',
+                       'PUT    /api/sales-settlements/:id',
+                       'PUT    /api/bill-payments/:id']) {
+        ck(`check-route-reach can see ${put.replace(/\s+/g, ' ')}`,
+           !reachOut.includes(put),
+           'the screen builds this path from a variable, so the guard cannot see it');
+    }
+
+    const callers = (web.match(/=>\s*editPaymentFlow\(\{/g) || []).length;
+    ck('all three Edit buttons share ONE flow',
+       callers === 3 && /async function editPaymentFlow/.test(web),
+       `${callers} call sites found`);
+
+    server.close();
 }
 
 console.log(`\n  ${pass} passed, ${fail} failed`);
