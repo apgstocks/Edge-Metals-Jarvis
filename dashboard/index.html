@@ -8402,6 +8402,90 @@ async function renderSupplierPaymentsTab() {
     });
   }
 
+  // ── EDIT, WITH THE CONSEQUENCES SHOWN FIRST ──────────────────────────
+  // Apsara, 2026-10-07, asked what an edit should do about the containers a
+  // payment had already settled: "Recompute everything, show me before
+  // saving." So this asks the server to COMPUTE the edit without doing it,
+  // shows what moves, and only writes when she presses the second button.
+  //
+  // Amount and reference only, for now. Re-allocating across containers
+  // belongs in the Pay sheet where the container picker already lives, and
+  // building a second allocation editor here would be two places to get the
+  // same arithmetic wrong.
+  document.querySelectorAll('.spEdit').forEach((btn) => {
+    btn.onclick = async () => {
+      const id = btn.dataset.payment;
+      const row = rows.find((r) => String(r.id) === String(id));
+      if (!row) return;
+
+      // ── WHY THIS REFUSES A MULTI-CONTAINER PAYMENT ───────────────────
+      // Changing the amount alone is only meaningful when there is one
+      // thing to change it against. A payment split over three containers
+      // has no single right answer for where $2,000 should come off, and
+      // the server correctly refuses an amount that no longer matches its
+      // allocations ("allocations come to $5000.00 but the payment is
+      // $3000.00") — which the end-to-end test found by trying exactly
+      // that. Guessing a split here would be inventing her allocations.
+      const allocs = (row.allocations || []);
+      if (allocs.length > 1) {
+        alert(`This payment covers ${allocs.length} containers, so changing the amount means `
+            + 'deciding how much comes off each one.\n\nDo that from Pay on the Bills tab, where '
+            + 'the container list is — or delete this payment and record it again.');
+        return;
+      }
+
+      const amount = prompt(`Amount for this payment (now ${ledMoney(row.amount)}):`,
+                            String(row.amount));
+      if (amount === null) return;                       // she changed her mind
+      const value = Number(String(amount).replace(/[$,\s]/g, ''));
+      if (!isFinite(value) || value <= 0) { alert('That is not an amount.'); return; }
+      // The single allocation follows the amount. Unambiguous, because there
+      // is only one place it can go.
+      const patch = allocs.length === 1
+        ? { amount: value, allocations: [{ bill_id: allocs[0].bill_id, amount: value }] }
+        : { amount: value };
+
+      btn.disabled = true; btn.textContent = 'Checking…';
+      let plan = null;
+      try {
+        const r = await api(`/api/bill-payments/${encodeURIComponent(id)}/preview-edit`,
+                            { method: 'POST', body: JSON.stringify(patch) });
+        plan = r.plan;
+      } catch (e) {
+        btn.disabled = false; btn.textContent = 'Edit';
+        // The server's sentence, not a code — it already says whether this is
+        // a bank it does not know or a payment QuickBooks is holding.
+        alert(String((e && e.message) || e));
+        return;
+      }
+
+      // ── WHAT SHE IS ABOUT TO DO, IN HER TERMS ────────────────────────
+      const lines = (plan.changes || []).map((c) => {
+        const what = c.container_no || c.bill_id;
+        if (c.effect === 'reopens') return `  ${what} REOPENS — it will owe money again`;
+        if (c.effect === 'becomes settled') return `  ${what} becomes settled`;
+        if (c.effect === 'unchanged') return `  ${what} unchanged`;
+        return `  ${what}: paid ${ledMoney(c.paid_before)} → ${ledMoney(c.paid_after)}`;
+      });
+      const ok = confirm(
+        `Change this payment from ${ledMoney(plan.before.amount)} to ${ledMoney(plan.after.amount)}?\n\n`
+        + (lines.length ? lines.join('\n') + '\n\n' : '')
+        + (plan.reopens ? `${plan.reopens} container(s) will owe money again.\n\n` : '')
+        + 'The original is kept, and this is written to the audit log.');
+      if (!ok) { btn.disabled = false; btn.textContent = 'Edit'; return; }
+
+      btn.textContent = 'Saving…';
+      try {
+        await api(`/api/bill-payments/${encodeURIComponent(id)}`,
+                  { method: 'PUT', body: JSON.stringify(patch) });
+        await renderSupplierPaymentsTab();
+      } catch (e) {
+        btn.disabled = false; btn.textContent = 'Edit';
+        alert(String((e && e.message) || e));
+      }
+    };
+  });
+
   const apply = () => {
     supplierPayFilter.supplier = $('spSupplier').value.trim();
     supplierPayFilter.kind = $('spKind').value;

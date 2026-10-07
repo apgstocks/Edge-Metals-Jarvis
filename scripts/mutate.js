@@ -802,6 +802,39 @@ const MUTATIONS = [
       file: 'api.js', suites: ['bills-sales'],
       find: "ship.logBillSafely({ ...bill, paid: paid[bill.id] || 0 }, 'payment-removed');",
       to:   "void ship;" },
+    // ── THE TWO EDIT ROUTES ───────────────────────────────────────────
+    // CLAUDE.md rule 3 names the exact gap these cover: "the route does not
+    // forward the new field to the helper". So the mutations break the
+    // FORWARDING, not the helper — the helper has its own 40-odd checks and
+    // they all stayed green when the route was a stub.
+    { name: 'the edit route drops the patch on the floor',
+      file: 'api.js', suites: ['payment-edit'],
+      find: 'await bp.editBillPayment(id, req.body || {}, { actor: actorOf(req) });',
+      to:   'await bp.editBillPayment(id, {}, { actor: actorOf(req) });' },
+    { name: 'the preview route previews a DIFFERENT payment',
+      file: 'api.js', suites: ['payment-edit'],
+      find: 'bp.previewEdit(String(req.params.id), req.body || {})',
+      to:   'bp.previewEdit(String(req.params.id), {})' },
+    { name: 'the edit route is open to admin, not just Jarvis',
+      file: 'api.js', suites: ['payment-edit', 'security'],
+      find: "app.put('/api/bill-payments/:id', requireSuper, largeJson,",
+      to:   "app.put('/api/bill-payments/:id', largeJson," },
+    { name: 'a refusal from the edit helper becomes a 500',
+      file: 'api.js', suites: ['payment-edit'],
+      find: 'return res.status(/^no payment/.test(msg) ? 404 : 400).json({ error: msg });',
+      to:   'throw e;' },
+    // Proves the rewritten gate check in payment-delete-roles.js tests the
+    // PROPERTY and not the markup's length: the old 120-character proximity
+    // regex went red when Edit was added beside Delete, and would have stayed
+    // green if Delete had escaped the gate. This is the inverse.
+    { name: 'the Payments tab offers Delete with no Jarvis profile',
+      file: 'dashboard/index.html', suites: ['payment-delete-roles'],
+      find: ': `<span title="Sign in with the Jarvis profile to change a supplier payment"',
+      to:   ': `<button class="spDel"><span title="Sign in with the Jarvis profile to change a supplier payment"' },
+    { name: 'the Edit button changes the amount and ORPHANS the allocation',
+      file: 'dashboard/index.html', suites: ['payment-edit'],
+      find: '        ? { amount: value, allocations: [{ bill_id: allocs[0].bill_id, amount: value }] }',
+      to:   '        ? { amount: value }' },
     { name: 'a part-allocated transfer can be saved as a full payment',
       file: 'dashboard/index.html', suites: ['ledger-render'],
       find: '      : (sent > 0 && Math.abs(left) < 0.005);',

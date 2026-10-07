@@ -31,6 +31,12 @@ const section = (t) => console.log('\n=== ' + t + ' ===');
 const TMP = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvis-payedit-'));
 process.env.DATA_DIR = TMP;
 process.env.JARVIS_TEST = '1';
+// Set BEFORE config is required — it reads them once at load, so setting
+// them later leaves the Jarvis profile "not configured" and every guarded
+// route answers 401 for a reason that has nothing to do with the test.
+process.env.APP_PASSWORD = 'user-pw-aaaaaaaaaaaa';
+process.env.ADMIN_PASSWORD = 'admin-pw-bbbbbbbbbbb';
+process.env.JARVIS_PASSWORD = 'jarvis-pw-ddddddddddd';
 
 const ROOT = path.join(__dirname, '..');
 const cfg = require(path.join(ROOT, 'config'));
@@ -245,6 +251,138 @@ fs.writeFileSync(cfg.BILLS_FILE, JSON.stringify([
     ck('an empty patch changes nothing',
        same.reopens === 0 && same.settles === 0 && same.touchesLedger === false,
        JSON.stringify({ r: same.reopens, s: same.settles, l: same.touchesLedger }));
+}
+
+// ── G — END TO END, THROUGH THE ROUTES THE SCREEN REALLY CALLS ────────────
+// "ALwyas test end to end when you add a new feature." The helper being
+// right and the screen having a button are both worthless if the route
+// between them does not forward the patch — which is the gap CLAUDE.md
+// names: "the route does not forward the new field to the helper".
+{
+    section('G — the preview and the edit, over HTTP');
+
+    const http = require('http');
+    const { createApi } = require(path.join(ROOT, 'api'));
+    const app = createApi();
+    const server = await new Promise((r) => { const s = app.listen(0, '127.0.0.1', () => r(s)); });
+    const base = `http://127.0.0.1:${server.address().port}`;
+
+    const req = (method, p, { body, sid } = {}) => new Promise((resolve, reject) => {
+        const data = body == null ? null : JSON.stringify(body);
+        const headers = {};
+        if (data) { headers['Content-Type'] = 'application/json'; headers['Content-Length'] = Buffer.byteLength(data); }
+        if (sid) headers.Authorization = `Bearer ${sid}`;
+        const r = http.request(base + p, { method, headers }, (res) => {
+            let raw = ''; res.on('data', (c) => { raw += c; });
+            res.on('end', () => { let j = null; try { j = JSON.parse(raw); } catch (e) {} resolve({ status: res.statusCode, json: j }); });
+        });
+        r.on('error', reject); if (data) r.write(data); r.end();
+    });
+    const login = async (pw) => {
+        const r = await req('POST', '/login', { body: { password: pw } });
+        return (r.json && (r.json.sid || r.json.session_id)) || null;
+    };
+    const jarvis = await login(process.env.JARVIS_PASSWORD);
+    const admin = await login(process.env.ADMIN_PASSWORD);
+
+    // Record a fresh payment through the real route.
+    const made = await req('POST', '/api/bill-payments', { sid: jarvis, body: {
+        amount: 5000, mode: 'Wire', bank: 'BofA', date: '2026-03-20', supplier: 'DRM',
+        allocations: [{ bill_id: 'B1', amount: 5000 }],
+    } });
+    ck('a payment is recorded over HTTP', made.status === 200 || made.status === 201, String(made.status));
+    const pid = (made.json && (made.json.id || (made.json.payment && made.json.payment.id)))
+        || (BP.list().slice(-1)[0] || {}).id;
+    ck('  and it has an id', !!pid, String(pid));
+
+    // An amount that no longer matches its allocations must be REFUSED, not
+    // quietly accepted — otherwise $2,000 of this payment covers nothing and
+    // the bill looks paid money that was never sent. This is what the screen
+    // used to send, before it learned to move the allocation too.
+    const orphan = await req('POST', `/api/bill-payments/${pid}/preview-edit`,
+        { sid: jarvis, body: { amount: 3000 } });
+    ck('an amount that orphans its allocations is refused', orphan.status === 400,
+       `${orphan.status} ${JSON.stringify(orphan.json)}`);
+    ck('  and the refusal says both figures',
+       !!(orphan.json && /5000/.test(String(orphan.json.error)) && /3000/.test(String(orphan.json.error))),
+       JSON.stringify(orphan.json));
+
+    // PREVIEW: must change nothing. The allocation moves WITH the amount —
+    // the patch the Edit button now sends for a single-allocation payment.
+    const patch = { amount: 3000, allocations: [{ bill_id: 'B1', amount: 3000 }] };
+    const before = JSON.stringify(BP.list().find((p) => p.id === pid));
+    const prev = await req('POST', `/api/bill-payments/${pid}/preview-edit`,
+        { sid: jarvis, body: patch });
+    ck('the preview route answers', prev.status === 200, `${prev.status} ${JSON.stringify(prev.json)}`);
+    const plan = (prev.json && prev.json.plan) || null;
+    ck('  with a plan', !!plan, JSON.stringify(prev.json));
+    ck('  that names the new amount', !!(plan && plan.after && plan.after.amount === 3000),
+       JSON.stringify(plan && plan.after));
+    ck('  and it wrote NOTHING',
+       JSON.stringify(BP.list().find((p) => p.id === pid)) === before,
+       'a preview route that writes is the worst kind of surprise');
+
+    // THE ROUTE MUST FORWARD THE PATCH — the gap CLAUDE.md names.
+    const put = await req('PUT', `/api/bill-payments/${pid}`, { sid: jarvis, body: patch });
+    ck('the edit route applies it', put.status === 200, `${put.status} ${JSON.stringify(put.json)}`);
+    ck('  and the amount really changed in the store',
+       (BP.list().find((p) => p.id === pid) || {}).amount === 3000,
+       'the route forwarded the field, which is the thing that breaks');
+
+    // Guarded like DELETE beside it.
+    // A VALID patch on purpose: if it were invalid, a 400 could be mistaken for
+    // a refusal and this check would pass even with the guard removed.
+    const asAdmin = await req('PUT', `/api/bill-payments/${pid}`, { sid: admin, body: {
+        amount: 2000, allocations: [{ bill_id: 'B1', amount: 2000 }],
+    } });
+    ck('admin is refused by the route',
+       asAdmin.status === 401 || asAdmin.status === 403, String(asAdmin.status));
+    ck('  and the payment survived the refusal',
+       (BP.list().find((p) => p.id === pid) || {}).amount === 3000, 'refusing but writing is the worst of both');
+    const prevAdmin = await req('POST', `/api/bill-payments/${pid}/preview-edit`,
+        { sid: admin, body: { amount: 2000 } });
+    ck('  the preview is guarded too',
+       prevAdmin.status === 401 || prevAdmin.status === 403, String(prevAdmin.status));
+
+    // A payment that is not there.
+    const gone = await req('PUT', '/api/bill-payments/NOPE', { sid: jarvis, body: { amount: 1 } });
+    ck('a missing payment is a 404, not a 500', gone.status === 404, String(gone.status));
+    // A bad edit is the caller's fault, not a crash.
+    const bad = await req('PUT', `/api/bill-payments/${pid}`, { sid: jarvis, body: { mode: 'Bitcoin' } });
+    ck('an invalid edit is a 400 with the reason',
+       bad.status === 400 && /payment mode must be one of/.test(String(bad.json && bad.json.error)),
+       `${bad.status} ${JSON.stringify(bad.json)}`);
+
+    // And the screen really calls both.
+    const web = fs.readFileSync(path.join(ROOT, 'dashboard/index.html'), 'utf8');
+    ck('the Payments tab calls the preview before the edit',
+       /preview-edit/.test(web) && web.indexOf('preview-edit') < web.lastIndexOf("method: 'PUT'"),
+       'showing her first is the whole rule she gave');
+    ck('  and the Edit button is Jarvis-only, like Delete',
+       /metalsCanDelete\(\)[\s\S]{0,160}?spEdit/.test(web), 'the route is requireSuper');
+
+    // ── THE PATCH THE SCREEN BUILDS, PUT THROUGH THE REAL ROUTE ───────
+    // A regex on the handler proves the letters are there. This lifts the
+    // handler's patch EXPRESSION out of the page, evaluates it over a real
+    // payment, and posts the result — so "the Edit button sends something
+    // the server accepts" is tested rather than asserted. The screen used
+    // to send amount alone, which the server refuses; nothing in the page
+    // could have told me that.
+    const expr = (web.match(/const patch = allocs\.length === 1\s*([\s\S]*?);\n/) || [])[1];
+    ck('the Edit handler has a patch expression to test', !!expr, 'the handler was renamed');
+    if (expr) {
+        const build = new Function('allocs', 'value', `return (allocs.length === 1 ${expr});`);
+        const live = BP.list().find((p) => p.id === pid) || {};
+        const built = build(live.allocations || [], 1500);
+        const sent = await req('PUT', `/api/bill-payments/${pid}`, { sid: jarvis, body: built });
+        ck("the screen's own patch is ACCEPTED by the route", sent.status === 200,
+           `${sent.status} ${JSON.stringify(sent.json)} — patch was ${JSON.stringify(built)}`);
+        ck('  and the amount it asked for is what landed',
+           (BP.list().find((p) => p.id === pid) || {}).amount === 1500,
+           JSON.stringify(BP.list().find((p) => p.id === pid)));
+    }
+
+    server.close();
 }
 
 console.log(`\n  ${pass} passed, ${fail} failed`);

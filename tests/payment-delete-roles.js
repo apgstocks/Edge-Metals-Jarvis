@@ -260,9 +260,36 @@ section('F — the Payments tab can delete, on the Jarvis profile only');
 {
     const web = fs.readFileSync(path.join(ROOT, 'dashboard/index.html'), 'utf8');
 
+    // ── WHY THIS IS NOT A PROXIMITY REGEX ANY MORE ────────────────────
+    // It used to be /metalsCanDelete\(\)[\s\S]{0,120}?`<button class="spDel"/
+    // — Delete within 120 characters of the gate. On 2026-10-07 an Edit
+    // button was added to the same cell, inside the same gate, and this went
+    // red: 120 characters is a fact about the markup's length, not about who
+    // may delete. A check that breaks when something correct is added beside
+    // it is a check that gets deleted. So test the PROPERTY: the button lives
+    // in the gate's true branch, and the false branch offers nothing to click.
+    // BOUNDED to the one cell. Unbounded, this slice ran to the end of the
+    // 14,000-line page, so indexOf(': `<span') found some OTHER tab's false
+    // branch and the check passed while the mutation stood — a quieter second
+    // version of the same "matched nothing it meant to" failure.
+    const cellAt = web.indexOf('${metalsCanDelete()', web.indexOf('class="spEdit"') - 400);
+    const cell = web.slice(cellAt, web.indexOf('</td>', cellAt) + 5);
+    // The anchor must be FOUND, asserted on its own line. A first attempt at
+    // this check located the false branch by searching for its text and, when
+    // a mutation changed that text, quietly tested an empty string and passed
+    // — the "pattern that matched nothing" failure scripts/mutate.js's own
+    // header is about. If the branch cannot be located, that is a red test,
+    // not a silent skip.
+    const elseAt = cell.indexOf(': `<span');
+    ck('the gate\'s two branches can be located at all', elseAt > 0,
+       'the Payments tab cell was restructured — this check now proves nothing');
+    const gated = elseAt > 0 ? cell.slice(0, elseAt) : '\u0000';
+    const ungated = elseAt > 0 ? cell.slice(elseAt, cell.indexOf('</td>', elseAt)) : '<button';
     ck('the Payments tab has a Delete, gated the same way',
-       /metalsCanDelete\(\)[\s\S]{0,120}?`<button class="spDel"/.test(web),
+       /class="spDel"/.test(gated),
        'she was sent to this tab and found nothing to click');
+    ck('  and without the Jarvis profile there is no button at all',
+       !/<button/.test(ungated), `the ungated branch was: ${ungated.slice(0, 200)}`);
     ck('  and it posts to the same route the modal uses',
        /\/api\/bill-payments\/\$\{encodeURIComponent\(btn\.dataset\.payment\)\}/.test(web));
     ck('  hidden, it says how to get it back',
