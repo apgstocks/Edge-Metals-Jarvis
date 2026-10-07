@@ -1745,15 +1745,41 @@ async function loadParty(subtab) {
       + '<div class="placeholder-note" style="margin-bottom:8px">No paid column: these carriers send a PDF '
         + 'invoice and no remittance, so Jarvis has never been told what is settled. '
         + 'Payments against them live on the container bill (Bills → Trucking).</div>'
-      + '<table class="data-table"><thead><tr><th>Invoice</th><th>Date</th><th>Container / Booking</th>'
-        + '<th style="text-align:right">Amount</th><th>Checked</th><th>Source</th></tr></thead><tbody>'
-      + rows.map((r) => '<tr><td>' + esc(r.invoice_no || '—') + '</td>'
+      + '<div style="margin-bottom:6px;"><button type="button" class="btn partyDelSel" style="padding:5px 12px;color:#e58a7c;" disabled>Delete selected</button>'
+        + ' <span style="font-size:11px;color:var(--text-faint);">Removes the line from Jarvis only (needs the Jarvis profile). A re-import can bring it back unless it is edited in the Invoice register.</span></div>'
+      + '<table class="data-table"><thead><tr><th></th><th>Invoice</th><th>Date</th><th>Container / Booking</th>'
+        + '<th style="text-align:right">Amount</th><th>Checked</th><th>Source</th><th></th></tr></thead><tbody>'
+      + rows.map((r) => '<tr><td><input type="checkbox" class="partyCk" data-id="' + esc(r.id) + '"></td><td>' + esc(r.invoice_no || '—') + '</td>'
           + '<td>' + esc(r.invoice_date || '') + '</td>'
           + '<td>' + esc(r.container_no || r.booking_no || r.hbl_no || '') + '</td>'
           + '<td style="text-align:right">' + m(r.amount) + '</td>'
           + '<td>' + esc(PARTY_CHECK[r.check_status] || r.check_status || '') + '</td>'
-          + '<td style="font-size:11px">' + esc(r.source_subject || r.source_file || '') + '</td></tr>').join('')
+          + '<td style="font-size:11px">' + esc(r.source_subject || r.source_file || '') + '</td>'
+          + '<td><a href="#" class="partyDel" data-id="' + esc(r.id) + '" style="color:#e58a7c;">Delete</a></td></tr>').join('')
       + '</tbody></table>';
+    // Delete: one line, or several ticked ones. The server decides (Jarvis profile; refuses a line with a payment against it).
+    const delBtn = box.querySelector('.partyDelSel');
+    const ticked = () => [...box.querySelectorAll('.partyCk:checked')].map((el) => el.dataset.id);
+    const refresh = () => { const n = ticked().length; delBtn.disabled = !n; delBtn.textContent = n ? 'Delete selected (' + n + ')' : 'Delete selected'; };
+    box.querySelectorAll('.partyCk').forEach((el) => el.addEventListener('change', refresh));
+    const removeIds = async (ids) => {
+      const failed = [];
+      for (const id of ids) {
+        try { await api('/api/party-invoices/' + encodeURIComponent(id), { method: 'DELETE' }); }
+        catch (e) { const r = rows.find((x) => x.id === id) || {}; failed.push((r.invoice_no || '') + ' ' + (r.container_no || r.booking_no || '') + ': ' + e.message); }
+      }
+      if (failed.length) alert(failed.length + ' of ' + ids.length + ' not deleted:\n' + failed.slice(0, 8).join('\n'));
+      await loadParty(subtab);
+    };
+    box.querySelectorAll('.partyDel').forEach((el) => el.addEventListener('click', (e) => {
+      e.preventDefault();
+      const r = rows.find((x) => x.id === el.dataset.id) || {};
+      if (confirm('Delete invoice ' + (r.invoice_no || '') + ' ' + (r.container_no || r.booking_no || '') + ' (' + m(r.amount) + ')?\n\nRemoves it from Jarvis only. A re-import can bring it back.')) removeIds([el.dataset.id]);
+    }));
+    delBtn.addEventListener('click', () => {
+      const ids = ticked();
+      if (ids.length && confirm('Delete ' + ids.length + ' invoice line(s)?\n\nRemoves them from Jarvis only. A re-import can bring them back.')) removeIds(ids);
+    });
   } catch (e) { box.textContent = 'Could not load: ' + e.message; }
 }
 

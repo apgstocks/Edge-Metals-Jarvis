@@ -127,6 +127,11 @@ const mk = (party, inv, line, amount, extra = {}) => PI.normalize({ party, invoi
     ck('screen calls every route tested here', ['/api/party-invoices/sync', "/api/party-invoice-payments'", '/api/party-invoices/\' + encodeURIComponent'].every((x) => html.includes(x)));
     ck('Pay modal: mode default is IN the list (an unlisted default posts an empty mode)', /regModes\.map\(\(m, i\) => `<option value="\$\{esc\(m\)\}"\$\{i === 0 \? ' selected'/.test(html));
     ck('Sync / Edit / Delete / Pay controls present', ['btnRegSync', 'btnRegPay', 'regEdit', 'regDel'].every((x) => html.includes(x)));
+    // The Transport / Freight / Commission list tabs (loadParty) carry Delete too — the same DELETE route tested above.
+    const lp = html.slice(html.indexOf('async function loadParty('), html.indexOf("document.querySelectorAll('.verify-subtab-btn').forEach((b) => b.addEventListener('click', () => {\n  const k"));
+    ck('list tabs: a Delete link per row and a ticked "Delete selected"', /class="partyDel"/.test(lp) && /partyDelSel/.test(lp) && /partyCk/.test(lp));
+    ck('list tabs: delete calls the route the e2e section just exercised, method DELETE', /api\('\/api\/party-invoices\/' \+ encodeURIComponent\(id\), \{ method: 'DELETE' \}\)/.test(lp));
+    ck('list tabs: asks before deleting, and reports lines the server refused', /confirm\(/.test(lp) && /not deleted/.test(lp));
     server.close();
     console.log(`\n${pass} passed, ${fail} failed`); process.exit(fail ? 1 : 0);
 })().catch((e) => { console.error(e); process.exit(1); });
