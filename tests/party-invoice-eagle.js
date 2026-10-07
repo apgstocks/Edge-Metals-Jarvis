@@ -12,6 +12,7 @@ let pass = 0, fail = 0;
 const ck = (n, c, x) => { if (c) { pass++; console.log('  PASS  ' + n); } else { fail++; console.log('  FAIL  ' + n); if (x) console.log('        ' + x); } };
 const section = (t) => console.log('\n=== ' + t + ' ===');
 const PI = require(path.join(ROOT, 'helpers/partyInvoices'));
+const round = (n) => Math.round(n * 100) / 100;
 const rej = async (p) => { try { await p; return null; } catch (e) { return e.message; } };
 // What helpers/eagleInvoice.normalize().record + the sweep's tagging produce, from the real invoices.
 const X170815 = { party: 'eaglebrit', invoice_no: 'XSINV/170815', kind: 'invoice', invoice_date: '07/16/2026', booking_no: 'EBKG17421250', containers: ['FCIU4595798', 'GLDU9430528', 'MSBU1973496', 'TGBU3049592'], amount: 5970, status: 'partly_in_sheet', source_file: 'x.pdf' };
@@ -76,6 +77,34 @@ const X172994 = { party: 'eaglebrit', invoice_no: 'XSINV/172994', kind: 'invoice
     ck('...but a negative correction is fine', (await PI.editRow(credit.id, { amount: -2100 })).amount === -2100);
     ck('an ordinary invoice still cannot go negative', /greater than 0/.test(await rej(PI.editRow(inv.id, { amount: -5 }))));
     ck('a re-import of the original export does not undo the edited credit note (marked edited)', (await PI.upsertMany([PI.normalize(CRN).row])).kept_locked === 1 && PI.list().find((r) => r.id === credit.id).amount === -2100);
+
+    section('C. a credit note CANCELS its invoice (they are not duplicates)');
+    {
+        const mkE = (no, kind, bk, amt, cont) => PI.normalize({ party: 'eaglebrit', invoice_no: no, kind, invoice_date: '07/09/2026', booking_no: bk, containers: cont, amount: amt, status: 'verified' }).row;
+        await PI.upsertMany([
+            mkE('XSINV/169064', 'invoice', 'EBKG17543290', 144.92, ['MEDU1418364']), mkE('XSINV/169841', 'invoice', 'EBKG17543290', 267.56, ['MEDU1418364']),
+            mkE('XSINV/168815', 'invoice', 'EBKG17543290', 1530, ['MEDU1418364']), mkE('XSCRN/015595', 'credit_note', 'EBKG17543290', -412.48, ['MEDU1418364']),
+            mkE('XSINV/162666', 'invoice', 'EBKG16091344', 3575, ['SEGU2695755']), mkE('XSINV/162940', 'invoice', 'EBKG16091344', 75, ['SEGU2695755']), mkE('XSCRN/015105', 'credit_note', 'EBKG16091344', -75, ['SEGU2695755']),
+            mkE('XSINV/999', 'invoice', 'EBKG1', 500, ['AAAA1111111']), mkE('XSCRN/998', 'credit_note', 'EBKG1', -480, ['AAAA1111111']),   // no exact fit
+        ]);
+        const w = PI.withPaid(); const g = (no) => w.find((r) => r.invoice_no === no);
+        ck('one credit note cancels a SINGLE invoice of the same booking (75 / −75)', g('XSINV/162940').pay_status === 'cancelled' && g('XSINV/162940').cancelled_by === 'XSCRN/015105' && g('XSCRN/015105').cancels.join() === 'XSINV/162940');
+        ck('...and the OTHER invoice on that booking (3,575) is left alone', g('XSINV/162666').pay_status === 'unpaid' && g('XSINV/162666').balance === 3575);
+        ck('one credit note can reverse TWO invoices (144.92 + 267.56 = 412.48)', g('XSINV/169064').cancelled_by === 'XSCRN/015595' && g('XSINV/169841').cancelled_by === 'XSCRN/015595' && g('XSCRN/015595').cancels.length === 2);
+        ck('the unrelated invoice on that booking (1,530) stays owed', g('XSINV/168815').pay_status === 'unpaid');
+        ck('NO exact fit => no match, nothing guessed (500 vs −480)', g('XSINV/999').pay_status === 'unpaid' && g('XSCRN/998').pay_status !== 'cancelled');
+        ck('a cancelled invoice has zero balance, so it cannot be paid', g('XSINV/162940').balance === 0 && /cancelled by credit note XSCRN\/015105/.test(await rej(PI.addPayment({ amount: 75, paid_on: '2026-10-07', mode: 'Wire', allocations: [{ row_id: g('XSINV/162940').id, amount: 75 }] }))));
+        const out = PI.summary().eagle.outstanding;
+        // Section B edited credit note 015704 to −2,100, so it no longer exactly reverses 171581 (2,180):
+        // that pair is UNMATCHED now (2,180 owed, −2,100 credit) — correct, nothing guessed.
+        // Owed: 1,030 (172994) + 2,180 − 2,100 (unmatched pair) + 1,530 + 3,575 + 500 − 480 (unmatched 999/998).
+        ck('outstanding: cancelled pairs count as NOTHING, unmatched credits stay negative', out === round(1030 + 2180 - 2100 + 1530 + 3575 + 500 - 480), String(out));
+        // a PAID invoice is never auto-cancelled: that would be a refund due
+        const paidInv = g('XSINV/168815');
+        await PI.addPayment({ amount: 1530, paid_on: '2026-07-20', mode: 'Wire', allocations: [{ row_id: paidInv.id, amount: 1530 }] });
+        await PI.upsertMany([mkE('XSCRN/777', 'credit_note', 'EBKG17543290', -1530, ['MEDU1418364'])]);
+        ck('a credit against an already-PAID invoice is NOT treated as a cancellation (refund due, your call)', PI.withPaid().find((r) => r.invoice_no === 'XSINV/168815').pay_status === 'paid' && PI.withPaid().find((r) => r.invoice_no === 'XSCRN/777').pay_status !== 'cancelled');
+    }
 
     section('the sweep entry and the screen');
     const sweep = fs.readFileSync(path.join(ROOT, 'scripts/freight-2026-email-sweep.js'), 'utf8');

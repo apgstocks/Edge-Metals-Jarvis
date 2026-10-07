@@ -152,9 +152,38 @@ async function setLock(unlock, { actor = null } = {}) {
 // A change made while unlocked keeps it open; a lock that expired mid-session is not revived.
 async function touchLock() { if (isUnlocked()) await setLock(true); }
 
+// ── A CREDIT NOTE CANCELS THE INVOICE(S) IT REVERSES ───────────────────────
+// Eagle Trans cancels an invoice by issuing a credit note for the same booking: XSINV/171581 +2,180
+// then XSCRN/015704 −2,180; and XSCRN/015595 −412.48 reversed two July add-ons (267.56 + 144.92).
+// Left as two rows they look like duplicates AND the invoice still shows as owed — one click from
+// being paid. A credit is matched to a single invoice of the same party + booking with exactly the
+// opposite amount, or else to a small set of them (up to 3) that add up to it. Never matched to an
+// invoice that has already been paid (that is a refund due, not a cancellation), and never guessed:
+// no exact fit means no match, and both rows stay as they are.
+function cancellations(rows, paid) {
+    const byInvoice = new Map(), matchedCredits = new Map();
+    const credits = rows.filter((r) => r.amount < 0 && r.booking_no);
+    for (const c of credits) {
+        const pool = rows.filter((r) => r.party === c.party && r.booking_no === c.booking_no && r.amount > 0 && !byInvoice.has(r.id) && !(paid[r.id] > 0));
+        const want = round2(-c.amount);
+        let hit = pool.filter((r) => Math.abs(r.amount - want) < 0.005).slice(0, 1);
+        if (!hit.length) {
+            outer: for (let a = 0; a < pool.length; a++) for (let b = a + 1; b < pool.length; b++) {
+                if (Math.abs(pool[a].amount + pool[b].amount - want) < 0.005) { hit = [pool[a], pool[b]]; break outer; }
+                for (let d = b + 1; d < pool.length; d++) if (Math.abs(pool[a].amount + pool[b].amount + pool[d].amount - want) < 0.005) { hit = [pool[a], pool[b], pool[d]]; break outer; }
+            }
+        }
+        if (hit.length) { hit.forEach((r) => byInvoice.set(r.id, c.invoice_no)); matchedCredits.set(c.id, hit.map((r) => r.invoice_no)); }
+    }
+    return { byInvoice, matchedCredits };
+}
+
 function withPaid(rows = list(), pays = payments()) {
     const paid = paidByRow(pays);
+    const canc = cancellations(rows, paid);
     return rows.map((r) => {
+        if (canc.byInvoice.has(r.id)) return { ...r, paid: 0, balance: 0, pay_status: 'cancelled', cancelled_by: canc.byInvoice.get(r.id) };
+        if (canc.matchedCredits.has(r.id)) return { ...r, paid: 0, balance: 0, pay_status: 'cancelled', cancels: canc.matchedCredits.get(r.id) };
         const p = paid[r.id] || 0, balance = round2(r.amount - p);
         return { ...r, paid: p, balance, pay_status: p <= 0 ? 'unpaid' : (balance > 0.005 ? 'part' : 'paid') };
     });
@@ -235,6 +264,7 @@ function validatePayment(input = {}) {
     if (!allocs.length) throw new Error('pick at least one invoice line to pay');
     const seen = new Set(), clean = [];
     const already = paidByRow();
+    const canc = cancellations([...rows.values()], already);
     for (const a of allocs) {
         const row = rows.get(a && a.row_id);
         if (!row) throw new Error(`no invoice line ${a && a.row_id}`);
@@ -242,6 +272,7 @@ function validatePayment(input = {}) {
         seen.add(row.id);
         const amt = num(a.amount);
         if (amt === null || amt <= 0) throw new Error(`allocation for ${row.invoice_no || row.container_no || row.id} must be greater than 0`);
+        if (canc.byInvoice.has(row.id)) throw new Error(`${row.invoice_no || row.id} was cancelled by credit note ${canc.byInvoice.get(row.id)} — nothing to pay`);
         const owed = round2(row.amount - (already[row.id] || 0));
         if (amt > owed + 0.005) throw new Error(`${row.invoice_no || row.container_no || row.id} owes only ${owed.toFixed(2)}, cannot allocate ${amt.toFixed(2)}`);
         clean.push({ row_id: row.id, amount: amt });
@@ -317,9 +348,10 @@ function summary(rows = list()) {
     for (const p of Object.keys(PARTIES)) {
         const r = rows.filter((x) => x.party === p);
         const paidMap = paidByRow();
+        const canc = cancellations(rows, paidMap);   // a cancelled invoice and its credit note both count as nothing owed
         out[p] = { label: PARTIES[p], count: r.length, total: Math.round(r.reduce((a, x) => a + x.amount, 0) * 100) / 100,
             // Credit notes (negative) net against the invoices they cancel; a positive line is never below 0.
-            outstanding: round2(r.reduce((a, x) => a + (x.amount < 0 ? x.amount : Math.max(0, x.amount - (paidMap[x.id] || 0))), 0)),
+            outstanding: round2(r.reduce((a, x) => a + (canc.byInvoice.has(x.id) || canc.matchedCredits.has(x.id) ? 0 : (x.amount < 0 ? x.amount : Math.max(0, x.amount - (paidMap[x.id] || 0)))), 0)),
             not_on_sheet: r.filter((x) => x.check_status === 'not_in_sheet').length,
             verified: r.filter((x) => x.check_status === 'verified' || x.check_status === 'match').length };
     }
@@ -327,6 +359,6 @@ function summary(rows = list()) {
 }
 
 module.exports = { PARTIES, TRUCKING_CAP, MODES, normalize, amountOf, list, upsertMany, summary,
-    payments, paidByRow, withPaid, editRow, deleteRow, addPayment, deletePayment, validatePayment, EDITABLE,
+    payments, paidByRow, withPaid, cancellations, editRow, deleteRow, addPayment, deletePayment, validatePayment, EDITABLE,
     baseInvoice, isRevised, supersedePlan, supersedeApply,
     LOCK_MS, lockState, isUnlocked, setLock, copyRow };
