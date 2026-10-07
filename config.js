@@ -222,6 +222,8 @@ const FILES = {
     CARRIER_INVOICES_FILE: path.join(DATA_DIR, 'carrier_invoices.json'),
     // Zimex / Jio / Sher / Pan Metal / AJ Transport / Garduno's invoices read from email — see helpers/partyInvoices.js
     PARTY_INVOICES_FILE: path.join(DATA_DIR, 'party_invoices.json'),
+    // One payment across several register invoices — see helpers/partyInvoices.js
+    PARTY_INVOICE_PAYMENTS_FILE: path.join(DATA_DIR, 'party_invoice_payments.json'),
     // ── EDGE METALS MATERIAL RECEIVED, ITEMISED FROM A PACKING LIST ──────
     // Apsara, 2026-09-11: "sometimes,we get packing list when we deliver the
     // load. that packing list contains items that needs to stored in

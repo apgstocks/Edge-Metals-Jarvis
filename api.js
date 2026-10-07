@@ -5438,18 +5438,89 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
     });
 
     // ── Invoice register: Zimex / Jio / Sher / Pan Metal / AJ Transport / Garduno's ──
-    // READ-ONLY. Rows come from scripts/party-invoices-import.js (the email sweep's
-    // export). Nothing else reads this store; it is not a bill, sale or book entry.
+    // Rows come from scripts/party-invoices-import.js (the email sweep's export) or
+    // POST /api/party-invoices/sync (the sheet tabs). It is not a bill, sale or book
+    // entry; payments here (helpers/partyInvoices.js) are a register-only record and
+    // post nothing to bills, the books, bank matching or QuickBooks.
     app.get('/api/party-invoices', (req, res) => {
         try {
             const pi = require('./helpers/partyInvoices');
-            const all = pi.list();
-            const { party, status, q } = req.query || {};
+            const pays = pi.payments();
+            const all = pi.withPaid(pi.list(), pays);
+            const { party, status, pay, q } = req.query || {};
             const needle = String(q || '').trim().toLowerCase();
             const rows = all.filter((r) => (!party || r.party === party)
                 && (!status || (status === 'on_sheet' ? (r.check_status === 'verified' || r.check_status === 'match') : r.check_status === status))
+                && (!pay || r.pay_status === pay)
                 && (!needle || [r.invoice_no, r.container_no, r.booking_no, r.hbl_no].some((v) => String(v || '').toLowerCase().includes(needle))));
-            res.json({ rows, summary: pi.summary(all), parties: pi.PARTIES });
+            res.json({ rows, summary: pi.summary(pi.list()), parties: pi.PARTIES, modes: pi.MODES, payments: pays });
+        } catch (e) { res.status(500).json({ error: e.message }); }
+    });
+
+    // Edit one line. Locks it, so a re-import or a sheet sync never overwrites the edit.
+    app.put('/api/party-invoices/:id', async (req, res) => {
+        try {
+            const pi = require('./helpers/partyInvoices');
+            const audit = require('./helpers/audit');
+            const id = String(req.params.id);
+            const before = pi.list().find((r) => r.id === id);
+            if (!before) return res.status(404).json({ error: `no invoice line ${id}` });
+            const row = await pi.editRow(id, req.body || {}, { actor: actorOf(req) });
+            await audit.record({ action: 'edit-party-invoice', subject: id, actor: actorOf(req), role: req.role, ip: req.ip,
+                detail: { company: 'edge-metals', party: before.party, invoice_no: before.invoice_no, before: Object.fromEntries(Object.keys(req.body || {}).filter((k) => pi.EDITABLE.includes(k)).map((k) => [k, before[k] === undefined ? null : before[k]])) } });
+            res.json({ ok: true, row });
+        } catch (e) { res.status(400).json({ error: e.message }); }
+    });
+
+    app.delete('/api/party-invoices/:id', requireSuper, async (req, res) => {
+        try {
+            const pi = require('./helpers/partyInvoices');
+            const audit = require('./helpers/audit');
+            const id = String(req.params.id);
+            const doomed = pi.list().find((r) => r.id === id);
+            if (!doomed) return res.status(404).json({ error: `no invoice line ${id}` });
+            const entry = await audit.record({ action: 'delete-party-invoice', subject: id, actor: actorOf(req), role: req.role, ip: req.ip,
+                detail: { company: 'edge-metals', party: doomed.party, invoice_no: doomed.invoice_no, container_no: doomed.container_no, booking_no: doomed.booking_no, amount: doomed.amount } });
+            await pi.deleteRow(id);
+            await audit.complete(entry, 'done', {});
+            res.json({ ok: true, removed: true });
+        } catch (e) { res.status(400).json({ error: e.message }); }
+    });
+
+    // ONE payment, MANY lines: { amount, paid_on, mode, ref?, note?, allocations: [{ row_id, amount }] }.
+    app.post('/api/party-invoice-payments', async (req, res) => {
+        try {
+            const pi = require('./helpers/partyInvoices');
+            const audit = require('./helpers/audit');
+            const rec = await pi.addPayment(req.body || {}, { actor: actorOf(req) });
+            await audit.record({ action: 'pay-party-invoices', subject: rec.id, actor: actorOf(req), role: req.role, ip: req.ip,
+                detail: { company: 'edge-metals', party: rec.party, amount: rec.amount, mode: rec.mode, paid_on: rec.paid_on, lines: rec.allocations.length } });
+            res.json({ ok: true, payment: rec });
+        } catch (e) { res.status(400).json({ error: e.message }); }
+    });
+
+    app.delete('/api/party-invoice-payments/:id', requireSuper, async (req, res) => {
+        try {
+            const pi = require('./helpers/partyInvoices');
+            const audit = require('./helpers/audit');
+            const id = String(req.params.id);
+            const doomed = pi.payments().find((p) => p.id === id);
+            if (!doomed) return res.status(404).json({ error: `no payment ${id}` });
+            const entry = await audit.record({ action: 'delete-party-invoice-payment', subject: id, actor: actorOf(req), role: req.role, ip: req.ip,
+                detail: { company: 'edge-metals', party: doomed.party, amount: doomed.amount, mode: doomed.mode, paid_on: doomed.paid_on, allocations: doomed.allocations } });
+            await pi.deletePayment(id);
+            await audit.complete(entry, 'done', { reopened: doomed.allocations.length });
+            res.json({ ok: true, removed: true });
+        } catch (e) { res.status(400).json({ error: e.message }); }
+    });
+
+    // Sync from the Google tabs. ?dry=1 reports without writing. Only ADDS lines Jarvis lacks;
+    // a line that already exists is never changed — a differing amount is reported.
+    app.post('/api/party-invoices/sync', async (req, res) => {
+        try {
+            const sync = require('./helpers/partyInvoiceSheetSync');
+            const dry = String(req.query.dry || (req.body || {}).dry || '') === '1' || (req.body || {}).dry === true;
+            res.json({ ok: true, ...(await sync.sync({ dryRun: dry, readTabsFn: app.locals.partyInvoiceReadTabs })) });
         } catch (e) { res.status(500).json({ error: e.message }); }
     });
 

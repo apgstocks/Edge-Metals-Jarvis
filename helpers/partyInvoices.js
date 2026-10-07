@@ -4,10 +4,21 @@
 // copying the sheet tabs into bills (that is scripts/trucker-tabs-to-bills.js).
 //
 // A REGISTER, NOT A LEDGER. Own store (party_invoices.json). Nothing reads it except the
-// register tab: it is not a bill, a sale, a payment or a book entry, so it changes no
-// balance and no statement. It records WHAT EACH PARTY BILLED and whether the line was
-// found on the Invoice sheet. It says NOTHING about paid/unpaid — a PDF invoice carries
-// no payment, and a guess would look reconciled.
+// register tab: it is not a bill, a sale or a book entry, so it changes no supplier balance
+// and no statement. It records WHAT EACH PARTY BILLED and whether the line was found on the
+// Invoice sheet.
+//
+// ── PAYING (added 2026-10-07: "edit, delete, pay ... a single payment against multiple") ──
+// Payments live in their OWN store (party_invoice_payments.json), one payment allocated
+// across one or more invoice lines of ONE party. Paid / balance / status of a line are
+// DERIVED from those allocations — never typed onto the row, so there is no second figure
+// to disagree with. This is a register-only record of what was paid; it posts nothing to
+// bills, the books, bank matching or QuickBooks.
+//
+// Rules that protect the figures: allocations must add up to the payment exactly; a line
+// can never be paid more than it is owed; a payment never spans two parties; an edit may
+// not take a line's amount below what has been paid against it; a line with money paid
+// against it cannot be deleted until that payment is.
 //
 // One row per invoice LINE (a container, a booking or an HBL), keyed
 // party + invoice_no + line key, so a re-import updates in place. A row with `locked`
@@ -62,6 +73,7 @@ const list = () => { const r = loadJson(cfg.PARTY_INVOICES_FILE, []); return Arr
 // rows: normalize().row[]. Returns { added, updated, kept_locked }.
 async function upsertMany(rows) {
     let added = 0, updated = 0, keptLocked = 0;
+    const paidNow = paidByRow();
     await mutateJson(cfg.PARTY_INVOICES_FILE, [], (cur) => {
         const arr = Array.isArray(cur) ? cur : [];
         const at = new Map(arr.map((r, i) => [r.key, i]));
@@ -69,6 +81,8 @@ async function upsertMany(rows) {
             const now = new Date().toISOString();
             if (!at.has(row.key)) { arr.push({ id: `PI_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`, ...row, createdAt: now, updatedAt: now }); at.set(row.key, arr.length - 1); added++; }
             else if (arr[at.get(row.key)].locked) keptLocked++;
+            // A re-import must not lower a line below what has already been paid against it.
+            else if (row.amount + 0.005 < (paidNow[arr[at.get(row.key)].id] || 0)) keptLocked++;
             else { const i = at.get(row.key); arr[i] = { ...arr[i], ...row, updatedAt: now }; updated++; }
         }
         return arr;
@@ -76,15 +90,116 @@ async function upsertMany(rows) {
     return { added, updated, kept_locked: keptLocked };
 }
 
+
+// ── DERIVED PAYMENT FIGURES ───────────────────────────────────────────────
+const MODES = ['Wire', 'Zelle', 'Cash', 'Cheque'];
+const round2 = (n) => Math.round(n * 100) / 100;
+const payments = () => { const r = loadJson(cfg.PARTY_INVOICE_PAYMENTS_FILE, []); return Array.isArray(r) ? r : []; };
+function paidByRow(pays = payments(), { excluding = null } = {}) {
+    const out = {};
+    for (const p of pays) { if (excluding && p.id === excluding) continue; for (const a of p.allocations || []) out[a.row_id] = round2((out[a.row_id] || 0) + a.amount); }
+    return out;
+}
+function withPaid(rows = list(), pays = payments()) {
+    const paid = paidByRow(pays);
+    return rows.map((r) => {
+        const p = paid[r.id] || 0, balance = round2(r.amount - p);
+        return { ...r, paid: p, balance, pay_status: p <= 0 ? 'unpaid' : (balance > 0.005 ? 'part' : 'paid') };
+    });
+}
+
+const EDITABLE = ['invoice_no', 'invoice_date', 'container_no', 'booking_no', 'hbl_no', 'amount', 'note'];
+const UPPER = ['container_no', 'booking_no', 'hbl_no'];
+
+// Edit one line. Marks it `locked` so a later import/sync never overwrites a hand edit, and keeps
+// what it was before. The row's key never changes, so a re-import cannot re-add the original.
+async function editRow(id, patch = {}, { actor = null } = {}) {
+    const clean = {};
+    for (const k of EDITABLE) if (k in patch) {
+        if (k === 'amount') { const n = num(patch.amount); if (n === null || n <= 0) throw new Error('amount must be greater than 0'); clean.amount = n; }
+        else clean[k] = UPPER.includes(k) ? (up(patch[k]) || null) : (txt(patch[k]) || null);
+    }
+    if (!Object.keys(clean).length) throw new Error('nothing to change');
+    let saved = null, problem = null;
+    const paid = paidByRow();
+    await mutateJson(cfg.PARTY_INVOICES_FILE, [], (cur) => {
+        const arr = Array.isArray(cur) ? cur : [];
+        const i = arr.findIndex((r) => r.id === id);
+        if (i === -1) { problem = `no invoice line ${id}`; return arr; }
+        if ('amount' in clean && clean.amount + 0.005 < (paid[id] || 0)) { problem = `${(paid[id] || 0).toFixed(2)} has already been paid against this line — the amount cannot go below that`; return arr; }
+        const before = {}; for (const k of Object.keys(clean)) before[k] = arr[i][k] === undefined ? null : arr[i][k];
+        arr[i] = { ...arr[i], ...clean, locked: true, updatedAt: new Date().toISOString(),
+            edit_history: [...(arr[i].edit_history || []), { at: new Date().toISOString(), by: actor, before }] };
+        saved = arr[i];
+        return arr;
+    }, { strict: true });
+    if (problem) throw new Error(problem);
+    return withPaid([saved])[0];
+}
+
+async function deleteRow(id) {
+    if ((paidByRow()[id] || 0) > 0) throw new Error('money has been paid against this line — delete that payment first');
+    let found = false;
+    await mutateJson(cfg.PARTY_INVOICES_FILE, [], (cur) => { const arr = Array.isArray(cur) ? cur : []; const n = arr.filter((r) => r.id !== id); found = n.length !== arr.length; return n; }, { strict: true });
+    if (!found) throw new Error(`no invoice line ${id}`);
+    return { ok: true };
+}
+
+// ONE payment, MANY invoice lines (of one party). allocations: [{ row_id, amount }].
+function validatePayment(input = {}) {
+    const rows = new Map(list().map((r) => [r.id, r]));
+    const amount = num(input.amount);
+    if (amount === null || amount <= 0) throw new Error('payment amount must be greater than 0');
+    const mode = MODES.find((m) => m.toLowerCase() === txt(input.mode).toLowerCase());
+    if (!mode) throw new Error(`payment mode must be one of: ${MODES.join(', ')}`);
+    const paidOn = txt(input.paid_on);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(paidOn) || Number.isNaN(Date.parse(paidOn))) throw new Error('paid_on must be a date, YYYY-MM-DD');
+    const allocs = Array.isArray(input.allocations) ? input.allocations : [];
+    if (!allocs.length) throw new Error('pick at least one invoice line to pay');
+    const seen = new Set(), clean = [];
+    const already = paidByRow();
+    for (const a of allocs) {
+        const row = rows.get(a && a.row_id);
+        if (!row) throw new Error(`no invoice line ${a && a.row_id}`);
+        if (seen.has(row.id)) throw new Error('the same invoice line is listed twice');
+        seen.add(row.id);
+        const amt = num(a.amount);
+        if (amt === null || amt <= 0) throw new Error(`allocation for ${row.invoice_no || row.container_no || row.id} must be greater than 0`);
+        const owed = round2(row.amount - (already[row.id] || 0));
+        if (amt > owed + 0.005) throw new Error(`${row.invoice_no || row.container_no || row.id} owes only ${owed.toFixed(2)}, cannot allocate ${amt.toFixed(2)}`);
+        clean.push({ row_id: row.id, amount: amt });
+    }
+    const parties = new Set(clean.map((a) => rows.get(a.row_id).party));
+    if (parties.size > 1) throw new Error('one payment goes to one party — these lines belong to different parties');
+    const sum = round2(clean.reduce((t, a) => t + a.amount, 0));
+    if (Math.abs(sum - amount) > 0.005) throw new Error(`allocations come to ${sum.toFixed(2)} but the payment is ${amount.toFixed(2)}`);
+    return { party: [...parties][0], amount, mode, paid_on: paidOn, ref: txt(input.ref) || null, note: txt(input.note) || null, allocations: clean };
+}
+
+async function addPayment(input = {}, { actor = null } = {}) {
+    const rec = { id: `PIP_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`, ...validatePayment(input), created_by: actor, createdAt: new Date().toISOString() };
+    await mutateJson(cfg.PARTY_INVOICE_PAYMENTS_FILE, [], (cur) => [...(Array.isArray(cur) ? cur : []), rec], { strict: true });
+    return rec;
+}
+async function deletePayment(id) {
+    let found = false;
+    await mutateJson(cfg.PARTY_INVOICE_PAYMENTS_FILE, [], (cur) => { const arr = Array.isArray(cur) ? cur : []; const n = arr.filter((p) => p.id !== id); found = n.length !== arr.length; return n; }, { strict: true });
+    if (!found) throw new Error(`no payment ${id}`);
+    return { ok: true };
+}
+
 function summary(rows = list()) {
     const out = {};
     for (const p of Object.keys(PARTIES)) {
         const r = rows.filter((x) => x.party === p);
+        const paidMap = paidByRow();
         out[p] = { label: PARTIES[p], count: r.length, total: Math.round(r.reduce((a, x) => a + x.amount, 0) * 100) / 100,
+            outstanding: round2(r.reduce((a, x) => a + Math.max(0, x.amount - (paidMap[x.id] || 0)), 0)),
             not_on_sheet: r.filter((x) => x.check_status === 'not_in_sheet').length,
             verified: r.filter((x) => x.check_status === 'verified' || x.check_status === 'match').length };
     }
     return out;
 }
 
-module.exports = { PARTIES, TRUCKING_CAP, normalize, amountOf, list, upsertMany, summary };
+module.exports = { PARTIES, TRUCKING_CAP, MODES, normalize, amountOf, list, upsertMany, summary,
+    payments, paidByRow, withPaid, editRow, deleteRow, addPayment, deletePayment, validatePayment, EDITABLE };

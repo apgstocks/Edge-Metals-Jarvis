@@ -1283,12 +1283,32 @@ body[data-theme="light"] {
         <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin-bottom:12px;">
           <select id="regParty" class="inp" style="padding:6px 10px;"><option value="">All parties</option></select>
           <select id="regStatus" class="inp" style="padding:6px 10px;">
-            <option value="">Any status</option><option value="on_sheet">On the Invoice sheet</option><option value="not_in_sheet">NOT on the sheet</option>
+            <option value="">Any sheet status</option><option value="on_sheet">On the Invoice sheet</option><option value="not_in_sheet">NOT on the sheet</option>
+          </select>
+          <select id="regPay" class="inp" style="padding:6px 10px;">
+            <option value="">Paid or unpaid</option><option value="unpaid">Unpaid</option><option value="part">Part paid</option><option value="paid">Paid</option>
           </select>
           <input id="regQ" class="inp" placeholder="Invoice / container / booking" style="padding:6px 10px; min-width:200px;">
+          <span style="flex:1;"></span>
+          <button id="btnRegSync" type="button" class="btn" style="padding:7px 14px;">Sync from sheet</button>
+          <button id="btnRegPay" type="button" class="btn btn-primary" style="padding:7px 14px;" disabled>Pay selected</button>
         </div>
         <div id="regSummary" style="font-size:12px; margin-bottom:10px; color:var(--text-muted);"></div>
+        <div id="regSyncNote" class="hidden" style="font-size:12px; margin-bottom:10px;"></div>
         <div id="regBody" class="muted">Loading…</div>
+        <div class="section-label" style="margin-top:22px;">Payments</div>
+        <div id="regPayments" class="muted" style="font-size:12px;"></div>
+      </div>
+      <div id="regModal" class="hidden" style="position:fixed; inset:0; background:rgba(0,0,0,.55); z-index:900; display:none; align-items:center; justify-content:center;">
+        <div style="background:var(--surface-raised, #1b1f23); border:1px solid var(--border-default); border-radius:var(--radius-sm); padding:20px 22px; width:min(560px, 94vw); max-height:88vh; overflow:auto;">
+          <div id="regModalTitle" style="font-size:15px; font-weight:700; margin-bottom:12px;"></div>
+          <div id="regModalBody"></div>
+          <div id="regModalErr" style="color:#e58a7c; font-size:12px; margin-top:10px;"></div>
+          <div style="display:flex; gap:8px; justify-content:flex-end; margin-top:14px;">
+            <button id="regModalCancel" type="button" class="btn" style="padding:8px 16px;">Cancel</button>
+            <button id="regModalSave" type="button" class="btn btn-primary" style="padding:8px 16px;">Save</button>
+          </div>
+        </div>
       </div>
     </div>
 
@@ -2951,31 +2971,120 @@ $('btnEagleVerify').addEventListener('click', async () => {
 });
 
 
-// ── Invoice register (read-only) ────────────────────────────────────────────
-// Lists helpers/partyInvoices rows. No paid/unpaid: a PDF invoice has no payment.
-let regLoaded = false;
+// ── Invoice register: sync from sheet, edit, delete, pay ─────────────────────
+// Apsara, 2026-10-07: "sync from sheet, edit, delete, pay ... single inv payment against
+// multiple". Rows: helpers/partyInvoices. A payment is allocated across the ticked lines of
+// ONE party; paid / balance are derived on the server. It records what was paid and posts
+// nothing to bills, the books or QuickBooks. Delete needs the Jarvis profile (like every
+// other ledger delete); the server says so if it is refused.
+let regLoaded = false, regRows = [], regParties = {}, regModes = ['Wire', 'Zelle', 'Cash', 'Cheque'];
+const regSel = new Set();
+function regOpen(title, bodyHtml, onSave) {
+  $('regModalTitle').textContent = title; $('regModalBody').innerHTML = bodyHtml; $('regModalErr').textContent = '';
+  $('regModal').classList.remove('hidden'); $('regModal').style.display = 'flex';
+  $('regModalSave').onclick = async () => {
+    $('regModalErr').textContent = '';
+    try { await onSave(); regClose(); await loadRegister(); } catch (e) { $('regModalErr').textContent = e.message; }
+  };
+}
+function regClose() { $('regModal').classList.add('hidden'); $('regModal').style.display = 'none'; }
+$('regModalCancel').addEventListener('click', regClose);
+const regLabel = (r) => `${esc(r.invoice_no || '—')} · ${esc(r.container_no || r.booking_no || r.hbl_no || '')}`;
+const regToday = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
+function regUpdatePayBtn() { $('btnRegPay').disabled = !regSel.size; $('btnRegPay').textContent = regSel.size ? `Pay selected (${regSel.size})` : 'Pay selected'; }
+
 async function loadRegister() {
   const body = $('regBody');
   try {
     const qs = new URLSearchParams();
     if ($('regParty').value) qs.set('party', $('regParty').value);
     if ($('regStatus').value) qs.set('status', $('regStatus').value);
+    if ($('regPay').value) qs.set('pay', $('regPay').value);
     if ($('regQ').value.trim()) qs.set('q', $('regQ').value.trim());
     const d = await api('/api/party-invoices?' + qs.toString());
+    regParties = d.parties || {}; regModes = d.modes || regModes;
     if (!regLoaded) {
-      $('regParty').innerHTML = '<option value="">All parties</option>' + Object.entries(d.parties || {}).map(([k, v]) => `<option value="${esc(k)}">${esc(v)}</option>`).join('');
+      $('regParty').innerHTML = '<option value="">All parties</option>' + Object.entries(regParties).map(([k, v]) => `<option value="${esc(k)}">${esc(v)}</option>`).join('');
       regLoaded = true;
     }
     const sm = d.summary || {};
-    $('regSummary').innerHTML = Object.values(sm).filter((x) => x.count).map((x) => `${esc(x.label)}: <b>${x.count}</b> lines ${propMoney(x.total)}${x.not_on_sheet ? ` · <span style="color:#e3b567;">${x.not_on_sheet} not on sheet</span>` : ''}`).join(' &nbsp;|&nbsp; ') || 'Nothing imported yet.';
-    const rows = (d.rows || []).slice().sort((a, b) => String(b.invoice_date || '').localeCompare(String(a.invoice_date || '')));
-    if (!rows.length) { body.innerHTML = '<div class="placeholder-note">No invoices to show. They are read from email by <code>scripts/party-invoices-import.js</code>.</div>'; return; }
-    body.innerHTML = '<div style="overflow-x:auto;"><table class="data-table"><thead><tr><th>Party</th><th>Inv date</th><th>Invoice</th><th>Container</th><th>Booking / HBL</th><th style="text-align:right;">Amount</th><th>On sheet?</th><th>From</th></tr></thead><tbody>'
-      + rows.map((r) => `<tr><td>${esc((d.parties || {})[r.party] || r.party)}</td><td>${esc(r.invoice_date || '')}</td><td>${esc(r.invoice_no || '—')}</td><td style="font-family:var(--font-mono);">${esc(r.container_no || '—')}</td><td style="font-family:var(--font-mono);">${esc(r.booking_no || r.hbl_no || '—')}</td><td style="text-align:right; font-family:var(--font-mono);">${propMoney(r.amount)}</td><td>${ajBadge(r.check_status === 'match' ? 'verified' : (r.check_status || 'no_container_on_pdf'))}</td><td style="font-size:11px; color:var(--text-faint);">${esc(r.source_file || '')}</td></tr>`).join('')
+    $('regSummary').innerHTML = Object.values(sm).filter((x) => x.count).map((x) => `${esc(x.label)}: <b>${x.count}</b> lines ${propMoney(x.total)} · owed <b>${propMoney(x.outstanding)}</b>${x.not_on_sheet ? ` · <span style="color:#e3b567;">${x.not_on_sheet} not on sheet</span>` : ''}`).join(' &nbsp;|&nbsp; ') || 'Nothing imported yet.';
+    regRows = (d.rows || []).slice().sort((a, b) => String(b.invoice_date || '').localeCompare(String(a.invoice_date || '')));
+    for (const id of [...regSel]) if (!regRows.some((r) => r.id === id)) regSel.delete(id);
+    regUpdatePayBtn();
+    if (!regRows.length) body.innerHTML = '<div class="placeholder-note">No invoices to show. Use <b>Sync from sheet</b>, or import from email with <code>scripts/party-invoices-import.js</code>.</div>';
+    else body.innerHTML = '<div style="overflow-x:auto;"><table class="data-table"><thead><tr><th></th><th>Party</th><th>Inv date</th><th>Invoice</th><th>Container</th><th>Booking / HBL</th><th style="text-align:right;">Amount</th><th style="text-align:right;">Paid</th><th style="text-align:right;">Balance</th><th>Pay</th><th>On sheet?</th><th></th></tr></thead><tbody>'
+      + regRows.map((r) => `<tr><td><input type="checkbox" class="regCk" data-id="${esc(r.id)}"${regSel.has(r.id) ? ' checked' : ''}${r.balance <= 0.005 ? ' disabled' : ''}></td><td>${esc(regParties[r.party] || r.party)}</td><td>${esc(r.invoice_date || '')}</td><td>${esc(r.invoice_no || '—')}${r.locked ? ' <span title="edited by hand — imports and syncs will not overwrite it" style="color:var(--text-faint);">✎</span>' : ''}</td><td style="font-family:var(--font-mono);">${esc(r.container_no || '—')}</td><td style="font-family:var(--font-mono);">${esc(r.booking_no || r.hbl_no || '—')}</td><td style="text-align:right; font-family:var(--font-mono);">${propMoney(r.amount)}</td><td style="text-align:right; font-family:var(--font-mono);">${r.paid ? propMoney(r.paid) : '—'}</td><td style="text-align:right; font-family:var(--font-mono);">${propMoney(r.balance)}</td><td>${esc(r.pay_status)}</td><td>${ajBadge(r.check_status === 'match' ? 'verified' : (r.check_status || 'no_container_on_pdf'))}</td><td style="white-space:nowrap;"><a href="#" class="regEdit" data-id="${esc(r.id)}">Edit</a> · <a href="#" class="regDel" data-id="${esc(r.id)}" style="color:#e58a7c;">Delete</a></td></tr>`).join('')
       + '</tbody></table></div>';
+    document.querySelectorAll('.regCk').forEach((el) => el.addEventListener('change', () => { if (el.checked) regSel.add(el.dataset.id); else regSel.delete(el.dataset.id); regUpdatePayBtn(); }));
+    document.querySelectorAll('.regEdit').forEach((el) => el.addEventListener('click', (e) => { e.preventDefault(); regEdit(el.dataset.id); }));
+    document.querySelectorAll('.regDel').forEach((el) => el.addEventListener('click', (e) => { e.preventDefault(); regDelete(el.dataset.id); }));
+    const pays = (d.payments || []).slice().sort((a, b) => String(b.paid_on).localeCompare(String(a.paid_on)));
+    $('regPayments').innerHTML = pays.length ? pays.map((p) => `<div style="padding:5px 0; border-bottom:1px solid var(--border-subtle);">${esc(p.paid_on)} · <b>${esc(regParties[p.party] || p.party)}</b> · ${propMoney(p.amount)} by ${esc(p.mode)}${p.ref ? ' · ' + esc(p.ref) : ''} · ${p.allocations.length} invoice line${p.allocations.length === 1 ? '' : 's'}${p.note ? ' · ' + esc(p.note) : ''} <a href="#" class="regPayDel" data-id="${esc(p.id)}" style="color:#e58a7c; margin-left:8px;">Delete</a></div>`).join('') : 'No payments recorded.';
+    document.querySelectorAll('.regPayDel').forEach((el) => el.addEventListener('click', (e) => { e.preventDefault(); regDeletePayment(el.dataset.id); }));
   } catch (e) { body.textContent = 'Could not load: ' + e.message; }
 }
-['regParty', 'regStatus'].forEach((id) => $(id).addEventListener('change', loadRegister));
+
+function regEdit(id) {
+  const r = regRows.find((x) => x.id === id); if (!r) return;
+  const f = (k, label, v, type) => `<label style="display:block; font-size:12px; margin-bottom:8px;">${label}<input data-k="${k}" type="${type || 'text'}" value="${esc(v == null ? '' : v)}" class="inp" style="display:block; width:100%; padding:7px 10px; margin-top:3px;"></label>`;
+  regOpen(`Edit — ${regParties[r.party] || r.party}`,
+    f('invoice_no', 'Invoice no.', r.invoice_no) + f('invoice_date', 'Invoice date', r.invoice_date) + f('container_no', 'Container', r.container_no) + f('booking_no', 'Booking', r.booking_no) + f('hbl_no', 'HBL', r.hbl_no) + f('amount', 'Amount', r.amount, 'number') + f('note', 'Note', r.note)
+    + (r.paid ? `<div style="font-size:11px; color:var(--text-faint);">${propMoney(r.paid)} is already paid against this line, so the amount cannot go below that.</div>` : '')
+    + '<div style="font-size:11px; color:var(--text-faint); margin-top:6px;">Saving locks this line: imports and sheet syncs will not overwrite it.</div>',
+    async () => {
+      const patch = {};
+      document.querySelectorAll('#regModalBody [data-k]').forEach((el) => { patch[el.dataset.k] = el.value; });
+      await api('/api/party-invoices/' + encodeURIComponent(id), { method: 'PUT', body: JSON.stringify(patch) });
+    });
+}
+async function regDelete(id) {
+  const r = regRows.find((x) => x.id === id); if (!r) return;
+  if (!confirm(`Delete ${regParties[r.party] || r.party} line ${r.invoice_no || ''} ${r.container_no || r.booking_no || ''} (${r.amount})?\n\nThis removes it from the register only. A re-import or sheet sync can bring it back unless you edit it instead.`)) return;
+  try { await api('/api/party-invoices/' + encodeURIComponent(id), { method: 'DELETE' }); regSel.delete(id); await loadRegister(); } catch (e) { alert(e.message); }
+}
+async function regDeletePayment(id) {
+  if (!confirm('Delete this payment? The invoice lines it paid become unpaid again.')) return;
+  try { await api('/api/party-invoice-payments/' + encodeURIComponent(id), { method: 'DELETE' }); await loadRegister(); } catch (e) { alert(e.message); }
+}
+
+// ONE payment across the ticked lines. The amount is the SUM of the allocations, so it can never disagree with them.
+$('btnRegPay').addEventListener('click', () => {
+  const rows = regRows.filter((r) => regSel.has(r.id));
+  if (!rows.length) return;
+  if (new Set(rows.map((r) => r.party)).size > 1) { alert('One payment goes to one party. Tick lines of a single party.'); return; }
+  const body = `<div style="display:flex; gap:10px; flex-wrap:wrap;">
+      <label style="font-size:12px;">Paid on<input id="regPayDate" type="date" value="${regToday()}" class="inp" style="display:block; padding:7px 10px; margin-top:3px;"></label>
+      <label style="font-size:12px;">Mode<select id="regPayMode" class="inp" style="display:block; padding:7px 10px; margin-top:3px;">${regModes.map((m, i) => `<option value="${esc(m)}"${i === 0 ? ' selected' : ''}>${esc(m)}</option>`).join('')}</select></label>
+      <label style="font-size:12px; flex:1;">Reference<input id="regPayRef" class="inp" style="display:block; width:100%; padding:7px 10px; margin-top:3px;"></label></div>
+    <div style="font-size:12px; margin:12px 0 4px; color:var(--text-muted);">Pay to <b>${esc(regParties[rows[0].party] || rows[0].party)}</b> — split across ${rows.length} line${rows.length === 1 ? '' : 's'} (change any amount to part-pay):</div>
+    ${rows.map((r) => `<div style="display:flex; gap:8px; align-items:center; padding:4px 0;"><span style="flex:1; font-size:12px;">${regLabel(r)} <span style="color:var(--text-faint);">owes ${propMoney(r.balance)}</span></span><input class="regAlloc inp" data-id="${esc(r.id)}" type="number" step="0.01" min="0" max="${r.balance}" value="${r.balance}" style="width:110px; padding:6px 8px; text-align:right;"></div>`).join('')}
+    <div style="text-align:right; font-size:13px; margin-top:8px;">Payment total <b id="regPayTotal"></b></div>
+    <label style="display:block; font-size:12px; margin-top:8px;">Note<input id="regPayNote" class="inp" style="display:block; width:100%; padding:7px 10px; margin-top:3px;"></label>`;
+  regOpen('Pay selected invoices', body, async () => {
+    const allocations = [...document.querySelectorAll('.regAlloc')].map((el) => ({ row_id: el.dataset.id, amount: Number(el.value) })).filter((a) => a.amount > 0);
+    const amount = Math.round(allocations.reduce((t, a) => t + a.amount, 0) * 100) / 100;
+    await api('/api/party-invoice-payments', { method: 'POST', body: JSON.stringify({ amount, paid_on: $('regPayDate').value, mode: $('regPayMode').value, ref: $('regPayRef').value, note: $('regPayNote').value, allocations }) });
+    regSel.clear();
+  });
+  const tot = () => { $('regPayTotal').textContent = propMoney(Math.round([...document.querySelectorAll('.regAlloc')].reduce((t, el) => t + (Number(el.value) || 0), 0) * 100) / 100); };
+  document.querySelectorAll('.regAlloc').forEach((el) => el.addEventListener('input', tot)); tot();
+});
+
+$('btnRegSync').addEventListener('click', async () => {
+  const btn = $('btnRegSync'); setButtonLoading(btn, true, 'Syncing…');
+  const note = $('regSyncNote'); note.classList.add('hidden');
+  try {
+    const r = await api('/api/party-invoices/sync', { method: 'POST', body: JSON.stringify({}) });
+    note.innerHTML = `Sheet sync: <b>${r.added}</b> new line${r.added === 1 ? '' : 's'} added, ${r.already_there} already in Jarvis (left as they are).`
+      + (r.differs && r.differs.length ? `<div style="color:#e3b567; margin-top:4px;">${r.differs.length} line(s) differ from the sheet — Jarvis was NOT changed: ${r.differs.slice(0, 6).map((x) => `${esc(regParties[x.party] || x.party)} ${esc(x.invoice_no || x.line || '')} Jarvis ${propMoney(x.jarvis)} vs sheet ${propMoney(x.sheet)}`).join('; ')}${r.differs.length > 6 ? '…' : ''}</div>` : '')
+      + (r.problems && r.problems.length ? `<div style="color:#e58a7c; margin-top:4px;">${r.problems.map(esc).join('; ')}</div>` : '')
+      + `<div style="color:var(--text-faint); margin-top:4px;">Zimex and Garduno's have no sheet tab, so they are not synced.</div>`;
+    note.classList.remove('hidden'); await loadRegister();
+  } catch (e) { note.textContent = e.message; note.classList.remove('hidden'); }
+  finally { setButtonLoading(btn, false); }
+});
+['regParty', 'regStatus', 'regPay'].forEach((id) => $(id).addEventListener('change', loadRegister));
 $('regQ').addEventListener('input', () => { clearTimeout(window.__regT); window.__regT = setTimeout(loadRegister, 250); });
 document.querySelectorAll('.verify-group-btn').forEach((b) => b.addEventListener('click', () => { if (b.dataset.verifyGroup === 'register') loadRegister(); }));
 
