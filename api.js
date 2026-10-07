@@ -5453,7 +5453,7 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
                 && (!status || (status === 'on_sheet' ? (r.check_status === 'verified' || r.check_status === 'match') : r.check_status === status))
                 && (!pay || r.pay_status === pay)
                 && (!needle || [r.invoice_no, r.container_no, r.booking_no, r.hbl_no].some((v) => String(v || '').toLowerCase().includes(needle))));
-            res.json({ rows, summary: pi.summary(pi.list()), parties: pi.PARTIES, modes: pi.MODES, payments: pays });
+            res.json({ rows, summary: pi.summary(pi.list()), parties: pi.PARTIES, modes: pi.MODES, payments: pays, lock: pi.lockState() });
         } catch (e) { res.status(500).json({ error: e.message }); }
     });
 
@@ -5487,19 +5487,16 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
         } catch (e) { res.status(400).json({ error: e.message }); }
     });
 
-    // Lock / unlock one line, and copy one (unlocked) line. Every line is locked by default;
-    // an unlock lasts helpers/partyInvoices.UNLOCK_MS, then closes by itself.
-    app.post('/api/party-invoices/:id/unlock', async (req, res) => {
+    // THE ONE LOCK over the register and the carrier lists. Locked by default; unlocking makes every
+    // line editable and gives each row Copy and Delete. It closes by itself (helpers/partyInvoices.LOCK_MS).
+    app.post('/api/party-invoices/lock', async (req, res) => {
         try {
             const pi = require('./helpers/partyInvoices');
-            const out = await pi.setLock(String(req.params.id), true);
-            await require('./helpers/audit').record({ action: 'unlock-party-invoice', subject: out.id, actor: actorOf(req), role: req.role, ip: req.ip, detail: { company: 'edge-metals', until: out.unlocked_until } });
-            res.json({ ok: true, ...out });
+            const unlock = !!(req.body || {}).unlock;
+            const state = await pi.setLock(unlock, { actor: actorOf(req) });
+            await require('./helpers/audit').record({ action: unlock ? 'unlock-party-invoices' : 'lock-party-invoices', subject: 'party-invoices', actor: actorOf(req), role: req.role, ip: req.ip, detail: { company: 'edge-metals', until: state.until } });
+            res.json({ ok: true, lock: state });
         } catch (e) { res.status(400).json({ error: e.message }); }
-    });
-    app.post('/api/party-invoices/:id/lock', async (req, res) => {
-        try { res.json({ ok: true, ...(await require('./helpers/partyInvoices').setLock(String(req.params.id), false)) }); }
-        catch (e) { res.status(400).json({ error: e.message }); }
     });
     app.post('/api/party-invoices/:id/copy', async (req, res) => {
         try {

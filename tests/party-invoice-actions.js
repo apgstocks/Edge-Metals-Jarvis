@@ -51,18 +51,31 @@ const mk = (party, inv, line, amount, extra = {}) => PI.normalize({ party, invoi
     ck('now the line can be deleted', !PI.list().some((r) => r.invoice_no === 'J2'));
     ck('deleting a payment / row that does not exist errors', /no payment/.test(await rej(PI.deletePayment('nope'))) && /no invoice line/.test(await rej(PI.deleteRow('nope'))));
 
-    section('lock (helpers default to the old behaviour; the routes enforce)');
+    section('the ONE lock (helpers default to the old behaviour; the routes enforce)');
     {
         const lid = PI.list().find((r) => r.invoice_no === 'A1').id;
-        ck('a line with no unlock stamp is locked', PI.isUnlocked(PI.list().find((r) => r.id === lid)) === false);
-        ck('enforceLock refuses edit / copy / delete on a locked line', /locked/.test(await rej(PI.editRow(lid, { note: 'n' }, { enforceLock: true }))) && /locked/.test(await rej(PI.copyRow(lid, { enforceLock: true }))) && /locked/.test(await rej(PI.deleteRow(lid, { enforceLock: true }))));
+        ck('locked by default (no stamp on disk)', PI.lockState().unlocked === false && PI.isUnlocked() === false);
+        ck('enforceLock refuses edit / copy / delete while locked', /locked/.test(await rej(PI.editRow(lid, { note: 'n' }, { enforceLock: true }))) && /locked/.test(await rej(PI.copyRow(lid, { enforceLock: true }))) && /locked/.test(await rej(PI.deleteRow(lid, { enforceLock: true }))));
         ck('without the flag the helpers behave as before (importer, supersede script, suites)', (await PI.editRow(lid, { note: 'script edit' })).note === 'script edit');
-        await PI.setLock(lid, true);
-        ck('unlock stamps one line; a future/blank/expired stamp is locked', PI.isUnlocked(PI.list().find((r) => r.id === lid)) && !PI.isUnlocked({ unlocked_at: new Date(Date.now() + 3600e3).toISOString() }) && !PI.isUnlocked({ unlocked_at: new Date(Date.now() - 11 * 60e3).toISOString() }) && !PI.isUnlocked({}));
+        const st = await PI.setLock(true, { actor: 't' });
+        ck('unlock opens EVERY line at once (one lock, not per row)', st.unlocked === true && PI.isUnlocked() && st.lock_minutes === 30);
         const cp = await PI.copyRow(lid, { enforceLock: true });
-        ck('copy: new id, new key, locked, source=copy, same figures', cp.id !== lid && cp.key !== PI.list().find((r) => r.id === lid).key && cp.is_unlocked === false && cp.source === 'copy' && cp.amount === 850);
-        await PI.deleteRow(cp.id);
-        await PI.setLock(lid, false);
+        ck('copy: new id, new key, source=copy, edited-mark, same figures, no payments', cp.id !== lid && cp.key !== PI.list().find((r) => r.id === lid).key && cp.source === 'copy' && cp.locked === true && cp.amount === 850 && cp.paid === 0);
+        ck('editing while unlocked does NOT re-lock (rows stay editable)', (await PI.editRow(lid, { note: 'again' }, { enforceLock: true })).note === 'again' && PI.isUnlocked());
+        await PI.deleteRow(cp.id, { enforceLock: true });
+        ck('delete works while unlocked', !PI.list().some((r) => r.id === cp.id));
+        const f = path.join(TMP, 'party_invoices_lock.json');
+        fs.writeFileSync(f, JSON.stringify({ unlocked_at: new Date(Date.now() - 31 * 60 * 1000).toISOString() }));
+        ck('the lock closes by ITSELF after 30 minutes of no change', PI.isUnlocked() === false && /locked/.test(await rej(PI.editRow(lid, { note: 'late' }, { enforceLock: true }))));
+        fs.writeFileSync(f, JSON.stringify({ unlocked_at: new Date(Date.now() - 20 * 60 * 1000).toISOString() }));
+        await PI.editRow(lid, { note: 'renews' }, { enforceLock: true });
+        ck('a change made while unlocked RENEWS it', Date.now() - Date.parse(JSON.parse(fs.readFileSync(f, 'utf8')).unlocked_at) < 5000);
+        fs.writeFileSync(f, JSON.stringify({ unlocked_at: new Date(Date.now() - 40 * 60 * 1000).toISOString() }));
+        await rej(PI.editRow(lid, { note: 'x' }, { enforceLock: true }));
+        ck('an EXPIRED lock is not revived by a refused change', PI.isUnlocked() === false);
+        ck('a stamp in the future is not "unlocked"', (fs.writeFileSync(f, JSON.stringify({ unlocked_at: new Date(Date.now() + 3600e3).toISOString() })), PI.isUnlocked() === false));
+        await PI.setLock(false);
+        ck('Lock closes it at once', PI.isUnlocked() === false);
     }
 
     section('sheet sync rules (pure)');
@@ -122,34 +135,34 @@ const mk = (party, inv, line, amount, extra = {}) => PI.normalize({ party, invoi
     ck('pay filter reaches the store', (await req('GET', '/api/party-invoices?pay=part', { sid: admin })).json.rows.every((r) => r.pay_status === 'part'));
     ck('the payment is listed', after.payments.length === 1 && after.payments[0].ref === 'E2E');
 
-    const unl = (rid, sid) => req('POST', `/api/party-invoices/${rid}/unlock`, { sid });
-    // LOCK (every line starts locked): refused until unlocked; paying was never blocked (proved above).
+    const setLockRoute = (unlock, sid) => req('POST', '/api/party-invoices/lock', { sid, body: { unlock } });
+    ck('the list reports the lock, LOCKED to start', list0.lock && list0.lock.unlocked === false);
     const lockedPut = await req('PUT', `/api/party-invoices/${r2.id}`, { sid: admin, body: { note: 'x' } });
-    ck('a LOCKED line cannot be edited through the route', lockedPut.status === 400 && /locked/.test(lockedPut.json.error), JSON.stringify(lockedPut.json));
-    ck('a LOCKED line cannot be copied', (await req('POST', `/api/party-invoices/${r2.id}/copy`, { sid: admin })).status === 400);
-    ck('a LOCKED line cannot be deleted (even by the Jarvis profile)', /locked/.test((await req('DELETE', `/api/party-invoices/${r2.id}`, { sid: jarvis })).json.error));
-    ck('the list says every line is locked', (await req('GET', '/api/party-invoices', { sid: admin })).json.rows.every((r) => r.is_unlocked === false));
-    ck('unlock opens that ONE line', (await unl(r2.id, admin)).json.is_unlocked === true && (await req('GET', '/api/party-invoices', { sid: admin })).json.rows.filter((r) => r.is_unlocked).length === 1);
+    ck('LOCKED: a line cannot be edited through the route', lockedPut.status === 400 && /locked/.test(lockedPut.json.error), JSON.stringify(lockedPut.json));
+    ck('LOCKED: cannot copy', (await req('POST', `/api/party-invoices/${r2.id}/copy`, { sid: admin })).status === 400);
+    ck('LOCKED: cannot delete (even as the Jarvis profile)', /locked/.test((await req('DELETE', `/api/party-invoices/${r2.id}`, { sid: jarvis })).json.error));
+    ck('paying works while LOCKED (proved above, and again after unlock)', ok.status === 200);
+    const un1 = await setLockRoute(true, admin);
+    ck('one Unlock opens the whole register', un1.json.lock.unlocked === true && (await req('GET', '/api/party-invoices', { sid: admin })).json.lock.unlocked === true);
     const put = await req('PUT', `/api/party-invoices/${r2.id}`, { sid: admin, body: { note: 'checked with Jio' } });
     ck('edit through the route', put.status === 200 && put.json.row.locked === true && put.json.row.note === 'checked with Jio');
-    ck('saving an edit RE-LOCKS the line', (await req('GET', '/api/party-invoices', { sid: admin })).json.rows.find((r) => r.id === r2.id).is_unlocked === false);
-    await unl(r2.id, admin);
+    ck('every row is editable in place after the one unlock (a second edit works, no re-unlock)', (await req('PUT', `/api/party-invoices/${r1.id}`, { sid: admin, body: { note: 'second row' } })).status === 200);
     ck('edit below paid refused with the reason', (await req('PUT', `/api/party-invoices/${r2.id}`, { sid: admin, body: { amount: 1 } })).status === 400);
     // COPY
     const cp = await req('POST', `/api/party-invoices/${r2.id}/copy`, { sid: admin });
-    ck('copy of an unlocked line makes a NEW line, locked, carrying no payment', cp.status === 200 && cp.json.row.id !== r2.id && cp.json.row.is_unlocked === false && cp.json.row.paid === 0 && cp.json.row.copied_from === r2.id && cp.json.row.amount === r2.amount, JSON.stringify(cp.json));
+    ck('Copy makes a NEW line carrying no payment', cp.status === 200 && cp.json.row.id !== r2.id && cp.json.row.paid === 0 && cp.json.row.copied_from === r2.id && cp.json.row.amount === r2.amount, JSON.stringify(cp.json));
     ck('the copy cannot be re-added or overwritten by a re-import (own key, marked edited)', cp.json.row.key !== r2.key && cp.json.row.locked === true);
     ck('the original is untouched by the copy', PI.list().find((r) => r.id === r2.id).amount === r2.amount);
     // EXPIRY: an unlock is not forever
-    const stale = JSON.parse(fs.readFileSync(path.join(TMP, 'party_invoices.json'), 'utf8')); stale.find((r) => r.id === r2.id).unlocked_at = new Date(Date.now() - 11 * 60 * 1000).toISOString(); fs.writeFileSync(path.join(TMP, 'party_invoices.json'), JSON.stringify(stale));
-    ck('an unlock EXPIRES after ten minutes by itself', (await req('POST', `/api/party-invoices/${r2.id}/copy`, { sid: admin })).status === 400);
-    await unl(r2.id, admin);
-    ck('Lock closes it at once', (await req('POST', `/api/party-invoices/${r2.id}/lock`, { sid: admin })).json.is_unlocked === false);
-    ck('paying a LOCKED line still works', (await req('POST', '/api/party-invoice-payments', { sid: admin, body: { amount: 10, paid_on: '2026-10-07', mode: 'Wire', allocations: [{ row_id: r2.id, amount: 10 }] } })).status === 200);
+    fs.writeFileSync(path.join(TMP, 'party_invoices_lock.json'), JSON.stringify({ unlocked_at: new Date(Date.now() - 31 * 60 * 1000).toISOString() }));
+    ck('the unlock EXPIRES by itself (31 min with no change) — the route refuses again', (await req('POST', `/api/party-invoices/${r2.id}/copy`, { sid: admin })).status === 400);
+    await setLockRoute(true, admin);
+    ck('Lock closes it at once', (await setLockRoute(false, admin)).json.lock.unlocked === false);
+    ck('paying while LOCKED still works', (await req('POST', '/api/party-invoice-payments', { sid: admin, body: { amount: 10, paid_on: '2026-10-07', mode: 'Wire', allocations: [{ row_id: r2.id, amount: 10 }] } })).status === 200);
     const lastPay = (await req('GET', '/api/party-invoices', { sid: admin })).json.payments.find((p) => p.amount === 10);
     await req('DELETE', `/api/party-invoice-payments/${lastPay.id}`, { sid: jarvis });
 
-    await unl(r1.id, admin);
+    await setLockRoute(true, admin);
     const delAdmin = await req('DELETE', `/api/party-invoices/${r1.id}`, { sid: admin });
     ck('delete is locked to the Jarvis profile (admin refused, 403)', delAdmin.status === 403);
     const delPayAdmin = await req('DELETE', `/api/party-invoice-payments/${ok.json.payment.id}`, { sid: admin });
@@ -157,22 +170,21 @@ const mk = (party, inv, line, amount, extra = {}) => PI.normalize({ party, invoi
     const delPaidRow = await req('DELETE', `/api/party-invoices/${r1.id}`, { sid: jarvis });
     ck('even the Jarvis profile cannot delete a line with money paid against it', delPaidRow.status === 400 && /delete that payment first/.test(delPaidRow.json.error));
     ck('delete the payment as the Jarvis profile', (await req('DELETE', `/api/party-invoice-payments/${ok.json.payment.id}`, { sid: jarvis })).status === 200);
-    await unl(r1.id, jarvis);
     ck('then the line deletes', (await req('DELETE', `/api/party-invoices/${r1.id}`, { sid: jarvis })).status === 200 && !PI.list().some((r) => r.id === r1.id));
     ck('404 on a line that does not exist', (await req('DELETE', '/api/party-invoices/NOPE', { sid: jarvis })).status === 404);
-    ck('unlock of a line that does not exist errors', (await unl('NOPE', admin)).status === 400);
     ck('nothing was written to bills, sales or the books', ['bills.json', 'sales.json', 'bill_payments.json', 'metals_trucking.json'].every((f) => !fs.existsSync(path.join(TMP, f))));
 
     const html = fs.readFileSync(path.join(ROOT, 'dashboard/documents.html'), 'utf8');
     ck('screen calls every route tested here', ['/api/party-invoices/sync', "/api/party-invoice-payments'", '/api/party-invoices/\' + encodeURIComponent'].every((x) => html.includes(x)));
     ck('Pay modal: mode default is IN the list (an unlisted default posts an empty mode)', /regModes\.map\(\(m, i\) => `<option value="\$\{esc\(m\)\}"\$\{i === 0 \? ' selected'/.test(html));
-    ck('Sync / Edit / Delete / Pay controls present', ['btnRegSync', 'btnRegPay', 'regEdit', 'regDel'].every((x) => html.includes(x)));
+    ck('Sync / Edit / Delete / Pay controls present', ['btnRegSync', 'btnRegPay', 'partyEdit', 'regDel', 'rowCopy'].every((x) => html.includes(x)));
     // The Transport / Freight / Commission list tabs (loadParty) carry Delete too — the same DELETE route tested above.
     const lp = html.slice(html.indexOf('async function loadParty('), html.indexOf("document.querySelectorAll('.verify-subtab-btn').forEach((b) => b.addEventListener('click', () => {\n  const k"));
-    ck('list tabs: a lock cell per row (Delete inside it) and a ticked "Delete selected"', /lockCell\(r, \{ edit: false, del: 'partyDel' \}\)/.test(lp) && /partyDelSel/.test(lp) && /partyCk/.test(lp));
+    ck('list tabs: a lock cell per row (Delete inside it) and a ticked "Delete selected"', /rowTools\(r, 'partyDel'\)/.test(lp) && /partyDelSel/.test(lp) && /partyCk/.test(lp));
     ck('list tabs: delete calls the route the e2e section just exercised, method DELETE', /api\('\/api\/party-invoices\/' \+ encodeURIComponent\(id\), \{ method: 'DELETE' \}\)/.test(lp));
-    ck('both screens use the shared lock cell (Unlock -> Copy / Delete / Lock) and bind it', (html.match(/lockCell\(/g) || []).length >= 3 && /bindLockActions\(body, loadRegister\)/.test(html) && /bindLockActions\(box, \(\) => loadParty\(subtab\)\)/.test(html));
-    ck('delete links have DISTINCT classes per screen (a shared one would fire two handlers)', /lockCell\(r, \{ edit: false, del: 'partyDel' \}\)/.test(html) && /del = 'regDel'/.test(html));
+    ck('both screens show the ONE lock bar and bind it', (html.match(/lockBar\(\)/g) || []).length >= 3 && /bindPartyLock\(body, loadRegister\)/.test(html) && /bindPartyLock\(box, \(\) => loadParty\(subtab\)\)/.test(html) && /api\/party-invoices\/lock/.test(html));
+    ck('cells are inputs only while unlocked; Copy / Delete only while unlocked', /function editCell[\s\S]*?if \(!partyLock\.unlocked\) return esc/.test(html) && /function rowTools[\s\S]*?partyLock\.unlocked/.test(html));
+    ck('delete links have DISTINCT classes per screen (a shared one would fire two handlers)', /rowTools\(r, 'partyDel'\)/.test(html) && /rowTools\(r, del = 'regDel'\)/.test(html));
     ck('list tabs: asks before deleting, and reports lines the server refused', /confirm\(/.test(lp) && /not deleted/.test(lp));
     server.close();
     console.log(`\n${pass} passed, ${fail} failed`); process.exit(fail ? 1 : 0);
