@@ -87,7 +87,12 @@ const fakeSweep = (records, { fail = null } = {}) => { const calls = []; const f
     ck('subject says how many are new', /Invoice register: 2 new/.test(d.subject), d.subject);
     { const f = path.join(TMP, 'party_invoice_nightly.json'); const cur = JSON.parse(fs.readFileSync(f, 'utf8')); cur.digest_through = new Date(base).toISOString(); fs.writeFileSync(f, JSON.stringify(cur)); }   // the last note went out just before the E run
     const note = await N.sendDigest({ send: async (m) => { sent.push(m); }, now: Date.now() + 60000 });
-    ck('sent to her by default, once', sent.length === 1 && /apg0596@gmail\.com/.test(sent[0].to) && /Invoice register: \d+ new/.test(sent[0].subject));
+    ck('sent once, to bose@, apsara@ and accounts@edgemetals.com — all three on the one email', sent.length === 1 && ['bose@edgemetals.com', 'apsara@edgemetals.com', 'accounts@edgemetals.com'].every((a) => sent[0].to.includes(a)) && !/gmail/.test(sent[0].to) && /Invoice register: \d+ new/.test(sent[0].subject), sent[0] && sent[0].to);
+    {   // the REAL MIME builder must accept that To value as three recipients (a stubbed sender would hide a bad header)
+        const raw = Buffer.from(require(path.join(ROOT, 'helpers/gmail')).buildMimeMessage({ to: sent[0].to, subject: sent[0].subject, body: sent[0].body }), 'base64').toString('utf8');
+        const toLine = (raw.match(/^To: (.*)$/mi) || [])[1] || '';
+        ck('the MIME To header carries all three addresses', ['bose@', 'apsara@', 'accounts@'].every((a) => toLine.includes(a)), toLine);
+    }
     await N.runNightly({ exec: fakeSweep([]), now: base + 60000 + DAY / 2 });   // the next night finds nothing
     const nextDay = await N.sendDigest({ send: async (m) => { sent.push(m); }, now: base + 60000 + DAY });
     ck('the next note does not repeat them (the "since" mark moved)', nextDay.fresh.length === 0 && sent.length === 2);

@@ -28,6 +28,7 @@ const ROOT = path.join(__dirname, '..');
 // register (their remittances are read by helpers/carrierRemittance.js).
 const SWEEP_PARTIES = ['zimex', 'jio', 'sher', 'ajtransport', 'panmetal', 'gardunos', 'eaglebrit'];
 const MIN_DAYS = 3, MAX_DAYS = 30, KEEP_RUNS = 20, TIMEOUT_MS = 45 * 60 * 1000;
+const DIGEST_TO = 'bose@edgemetals.com, apsara@edgemetals.com, accounts@edgemetals.com';
 const enabled = () => String(process.env.PARTY_INVOICE_SWEEP || 'on').toLowerCase() !== 'off';
 
 const state = () => { const s = loadJson(cfg.PARTY_INVOICE_NIGHTLY_FILE, {}); return s && typeof s === 'object' && !Array.isArray(s) ? s : {}; };
@@ -121,10 +122,11 @@ async function sendDigest({ send = null, now = Date.now() } = {}) {
     if (!enabled()) return { skipped: 'PARTY_INVOICE_SWEEP=off' };
     const s = state();
     const d = buildDigest({ since: s.digest_through, now });
-    const to = process.env.PARTY_INVOICE_DIGEST_TO || process.env.SHEET_SYNC_TO || 'apg0596@gmail.com';
+    // Apsara, 2026-10-08: "send to bose, apsara@edgemetals.com, accounts@edgemetals.com" (comma-separated, as the To header takes it).
+    const to = process.env.PARTY_INVOICE_DIGEST_TO || DIGEST_TO;
     await (send || ((m) => require('./gmail').sendEmail(m)))({ to, subject: d.subject, body: d.body });
     await save((cur) => ({ ...cur, digest_through: new Date(now).toISOString(), last_digest: { at: new Date(now).toISOString(), new: d.fresh.length, failed: d.failed } }));
     return d;
 }
 
-module.exports = { runNightly, sendDigest, buildDigest, windowDays, importRecords, enabled, SWEEP_PARTIES, MIN_DAYS, MAX_DAYS };
+module.exports = { DIGEST_TO, runNightly, sendDigest, buildDigest, windowDays, importRecords, enabled, SWEEP_PARTIES, MIN_DAYS, MAX_DAYS };
