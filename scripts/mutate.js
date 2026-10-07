@@ -857,6 +857,20 @@ const MUTATIONS = [
       find: 'function bankInflows(txs = []) {',
       to:   "function bankInflows(txs = []) {\n    void require('./notTrade');" },
 
+    // ── THE FOUR TRANSPORT TABS ───────────────────────────────────────
+    { name: 'transport: clicking AJ/Sher/Jio/Gardunos loads nothing again',
+      file: 'dashboard/documents.html', suites: ['party-invoices'],
+      find: '  if (PARTY_OF_SUBTAB[k]) loadParty(k);',
+      to:   '  void k;' },
+    { name: 'transport: wiring the four breaks NTG/TQL/Schneider',
+      file: 'dashboard/documents.html', suites: ['party-invoices', 'carrier-invoices-route'],
+      find: '  if (CARRIER_KEYS[k]) loadCarrier(k);',
+      to:   '  void 0;' },
+    { name: 'transport: a fabricated Paid $0.00 appears for the PDF carriers',
+      file: 'dashboard/documents.html', suites: ['party-invoices'],
+      find: "+ '<table class=\"data-table\"><thead><tr><th>Invoice</th><th>Date</th><th>Container / Booking</th>'",
+      to:   "+ '<table class=\"data-table\"><thead><tr><th>Invoice</th><th>Date</th><th>Paid</th><th>Container / Booking</th>'" },
+
     // ── THE PAID DATE ON THE TRANSPORT TAB ────────────────────────────
     { name: 'carriers: the Paid on column disappears again',
       file: 'dashboard/documents.html', suites: ['carrier-invoices-route'],

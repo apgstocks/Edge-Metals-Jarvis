@@ -88,5 +88,60 @@ section('B. end to end');
     ck('Register group wired (button, panel, maps)', /data-verify-group="register"/.test(html) && /register: 'verifyGroupRegister'/.test(html) && /register: 'verifyPanelRegister'/.test(html) && /register: \['register'\]/.test(html));
     ck('existing groups untouched', ['freight', 'transport', 'commission'].every((g) => html.includes(`data-verify-group="${g}"`)));
     server.close();
-    console.log(`\n${pass} passed, ${fail} failed`); process.exit(fail ? 1 : 0);
+    
+// ── THE FOUR TRANSPORT TABS SHE SAID WERE EMPTY ───────────────────────────
+// Apsara, 2026-10-07: "Transport -all data should be filled".
+//
+// The Transport group has seven sub-tabs; only NTG, TQL and Schneider listed
+// invoices. AJ Transport, Sher Trucking, Jio and Garduno's were verification
+// forms with nothing showing what the carrier had billed — while their
+// invoices sat in this store behind a route the Invoice Register already used.
+{
+    const fs2 = require('fs');
+    const path2 = require('path');
+    const page = fs2.readFileSync(path2.join(__dirname, '..', 'dashboard/documents.html'), 'utf8');
+    console.log('\n=== the four Transport tabs are filled from this store ===');
+
+    ck('all four sub-tabs map to a party',
+       /'aj-transport': 'ajtransport'/.test(page) && /'sher-trucking': 'sher'/.test(page)
+       && /jio: 'jio'/.test(page) && /gardunos: 'gardunos'/.test(page),
+       (page.match(/const PARTY_OF_SUBTAB = \{[^}]*\}/) || [''])[0]);
+    ck('  and clicking one loads it', /if \(PARTY_OF_SUBTAB\[k\]\) loadParty\(k\);/.test(page),
+       'a loader nothing calls is the dead-screen pattern again');
+    ck('  from the read-only party route', /\/api\/party-invoices\?party=/.test(page));
+    ck('  without touching the carrier loader beside it',
+       /if \(CARRIER_KEYS\[k\]\) loadCarrier\(k\);/.test(page),
+       'NTG/TQL/Schneider must keep their own table');
+
+    // ── NO PAID COLUMN HERE, AND THAT IS THE POINT ───────────────────────
+    // This store's own header: "It says NOTHING about paid/unpaid — a PDF
+    // invoice carries no remittance." NTG/TQL/Schneider know what is paid
+    // because those carriers email one. Printing "Paid $0.00" for these four
+    // would assert, in a column she reads as fact, that nothing has been
+    // settled — when the truth is this store was never told either way.
+    // Sliced FORWARD from loadParty. A first version searched for the
+    // subtab-click line from the start of the file and found an EARLIER
+    // occurrence of the same selector, so end < start and the slice was empty
+    // — every check below it then passed against "". The length guard is what
+    // caught it, which is why it is here rather than implied.
+    const startAt = page.indexOf('async function loadParty');
+    const block = page.slice(startAt, page.indexOf('.verify-subtab-btn', startAt));
+    ck('the four-tab table was located', block.length > 400 && block.length < 6000,
+       `${block.length} chars — if this is wrong the next checks prove nothing`);
+    ck('  it shows the amount billed', /Amount/.test(block));
+    ck('  and NEVER a paid figure', !/>Paid</.test(block) && !/paid_dates/.test(block),
+       'a fabricated zero is worse than a blank column');
+    ck('  and says why the column is absent',
+       /no remittance|No paid column/i.test(block),
+       'an unexplained missing column reads as a bug');
+    ck('  and points at where payments really live',
+       /Bills . Trucking|Bills &rarr; Trucking|Bills → Trucking/.test(block),
+       'she must be told where to go, not just what is missing');
+
+    ck('it flags invoices that are NOT on the sheet',
+       /not_in_sheet/.test(block) && /not on the sheet/i.test(block),
+       'the one thing this store does know beyond the amount');
+}
+
+console.log(`\n${pass} passed, ${fail} failed`); process.exit(fail ? 1 : 0);
 })().catch((e) => { console.error(e); process.exit(1); });

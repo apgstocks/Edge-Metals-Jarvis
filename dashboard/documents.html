@@ -1652,7 +1652,83 @@ async function loadCarrier(c) {
       + '</tbody></table>';
   } catch (e) { box.textContent = 'Could not load: ' + e.message; }
 }
-document.querySelectorAll('.verify-subtab-btn').forEach((b) => b.addEventListener('click', () => { if (CARRIER_KEYS[b.dataset.verifySubtab]) loadCarrier(b.dataset.verifySubtab); }));
+
+// ── THE OTHER FOUR TRANSPORT TABS ────────────────────────────────────────
+// Apsara, 2026-10-07: "Transport -all data should be filled".
+//
+// The Transport group has seven sub-tabs. Only NTG, TQL and Schneider showed
+// an invoice list — they come from helpers/carrierInvoices.js. AJ Transport,
+// Sher Trucking, Jio and Garduno's were verification panels only: upload a
+// PDF, check it against the sheet, and nothing listing what the carrier has
+// actually billed.
+//
+// Their invoices DO exist, in helpers/partyInvoices.js, behind the read-only
+// /api/party-invoices route the Invoice Register already uses. So this is
+// wiring, not new data.
+//
+// ── THESE FOUR HAVE NO PAID COLUMN, AND THAT IS NOT AN OMISSION ──────────
+// partyInvoices says so in its own header: "It says NOTHING about
+// paid/unpaid — a PDF invoice carries no remittance." NTG/TQL/Schneider know
+// what is paid because those carriers EMAIL a remittance; a Jio PDF does not.
+// Showing "Paid $0.00" for these four would state, in a column she reads as
+// fact, that nothing has been paid — when the truth is that this store has
+// never been told either way. So the column is absent and the note says why.
+//
+// The container is injected rather than written into the four panels' markup:
+// each one is a working verification form and the rule is to add beside, not
+// edit around.
+const PARTY_OF_SUBTAB = { 'aj-transport': 'ajtransport', 'sher-trucking': 'sher', jio: 'jio', gardunos: 'gardunos' };
+const PARTY_CHECK = { verified: 'on the sheet', match: 'on the sheet',
+  not_in_sheet: 'NOT on the sheet', booking_mismatch: 'booking does not match' };
+
+async function loadParty(subtab) {
+  const party = PARTY_OF_SUBTAB[subtab];
+  if (!party) return;
+  const panel = $(VERIFY_SUBTAB_PANELS[subtab]);
+  if (!panel) return;
+  let box = $('partyBody_' + party);
+  if (!box) {
+    panel.insertAdjacentHTML('beforeend',
+      '<div style="margin-top:22px;border-top:1px solid var(--border-subtle,#2B3239);padding-top:14px">'
+      + '<div id="partyBody_' + party + '"></div></div>');
+    box = $('partyBody_' + party);
+  }
+  box.innerHTML = '<div class="placeholder-note">Loading invoices…</div>';
+  try {
+    const d = await api('/api/party-invoices?party=' + encodeURIComponent(party));
+    const rows = (d.rows || []).slice()
+      .sort((a, b) => String(b.invoice_date || '').localeCompare(String(a.invoice_date || '')));
+    const m = (n) => '$' + Number(n || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    if (!rows.length) {
+      box.innerHTML = '<div class="placeholder-note">No invoices recorded for this carrier yet. '
+        + 'They are read from their emails by <code>scripts/party-invoices-import.js</code>.</div>';
+      return;
+    }
+    const billed = rows.reduce((t, r) => t + Number(r.amount || 0), 0);
+    const offSheet = rows.filter((r) => r.check_status === 'not_in_sheet').length;
+    box.innerHTML = '<div style="margin-bottom:8px;font-size:12px;">Edge Metals · ' + rows.length
+        + ' invoices · billed <b>' + m(billed) + '</b>'
+        + (offSheet ? ' · <b>' + offSheet + ' not on the sheet</b>' : '') + '</div>'
+      + '<div class="placeholder-note" style="margin-bottom:8px">No paid column: these carriers send a PDF '
+        + 'invoice and no remittance, so Jarvis has never been told what is settled. '
+        + 'Payments against them live on the container bill (Bills → Trucking).</div>'
+      + '<table class="data-table"><thead><tr><th>Invoice</th><th>Date</th><th>Container / Booking</th>'
+        + '<th style="text-align:right">Amount</th><th>Checked</th><th>Source</th></tr></thead><tbody>'
+      + rows.map((r) => '<tr><td>' + esc(r.invoice_no || '—') + '</td>'
+          + '<td>' + esc(r.invoice_date || '') + '</td>'
+          + '<td>' + esc(r.container_no || r.booking_no || r.hbl_no || '') + '</td>'
+          + '<td style="text-align:right">' + m(r.amount) + '</td>'
+          + '<td>' + esc(PARTY_CHECK[r.check_status] || r.check_status || '') + '</td>'
+          + '<td style="font-size:11px">' + esc(r.source_subject || r.source_file || '') + '</td></tr>').join('')
+      + '</tbody></table>';
+  } catch (e) { box.textContent = 'Could not load: ' + e.message; }
+}
+
+document.querySelectorAll('.verify-subtab-btn').forEach((b) => b.addEventListener('click', () => {
+  const k = b.dataset.verifySubtab;
+  if (CARRIER_KEYS[k]) loadCarrier(k);
+  if (PARTY_OF_SUBTAB[k]) loadParty(k);
+}));
 
 // Year select — current year down to 3 years back covers realistic lookback
 // without a free-typed field; matches the old verify.html tool's fixed
