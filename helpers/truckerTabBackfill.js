@@ -88,4 +88,28 @@ function plan(tabs, allBills) {
     return out;
 }
 
-module.exports = { plan, recordsFromTab, dedupe, hasTrucking };
+// ── WHAT --write WOULD DO TO EACH SUPPLIER'S BALANCE (report only) ─────────────────────────────
+// Adding a trucking figure to a bill lowers what is owed to its SUPPLIER by that amount (balance =
+// amount − trucking − paid). On a bill the supplier has already been paid in full, that pushes the
+// balance below zero: a credit she did not mean to create. The count-only report cannot show that, so
+// this prices each supplier before anything is written. Pure: plan().to_add + the bills in, numbers out.
+function balanceImpact(toAdd, allBills) {
+    const byId = new Map(allBills.map((b) => [b.id, b]));
+    const bySupplier = new Map();
+    for (const item of toAdd) {
+        const c = item.candidates && item.candidates[0]; const b = c && byId.get(c.bill_id);
+        if (!b) continue;
+        const name = String(b.supplier || '(no supplier)').trim() || '(no supplier)';
+        const s = bySupplier.get(name) || { supplier: name, bills: 0, haulage: 0, before: 0, after: 0, negative: [], fully_paid: [] };
+        const before = Number(b.balance) || 0, add = Number(item.proposed_total) || 0, after = Math.round((before - add) * 100) / 100;
+        s.bills += 1; s.haulage = Math.round((s.haulage + add) * 100) / 100;
+        s.before = Math.round((s.before + before) * 100) / 100; s.after = Math.round((s.after + after) * 100) / 100;
+        const ref = item.container_no || item.booking_no || b.id;
+        if (after < -0.005) s.negative.push({ ref, invoice_no: item.invoice_no || null, before, haulage: add, after });
+        if (before <= 0.005 && (Number(b.paid) || 0) > 0) s.fully_paid.push(ref);
+        bySupplier.set(name, s);
+    }
+    return [...bySupplier.values()].sort((a, b) => b.haulage - a.haulage);
+}
+
+module.exports = { plan, recordsFromTab, dedupe, hasTrucking, balanceImpact };

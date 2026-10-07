@@ -78,6 +78,17 @@ async function main() {
     section('Could not be matched at all', p.no_key);
     const addTotal = p.to_add.reduce((a, i) => a + i.proposed_total, 0);
     console.log(`\nWould add ${p.to_add.length} bill(s), ${$(addTotal)} of haulage in total.`);
+    // What that does to each SUPPLIER's balance (haulage comes off what they are owed). Report only.
+    const impact = B.balanceImpact(p.to_add, all);
+    if (impact.length) {
+        console.log('\nEFFECT ON WHAT EACH SUPPLIER IS OWED (balance now -> after --write):');
+        for (const s of impact) console.log(`   ${s.supplier.slice(0, 28).padEnd(28)} ${String(s.bills).padStart(3)} bill(s)  haulage ${$(s.haulage).padStart(11)}   owed ${$(s.before).padStart(12)} -> ${$(s.after).padStart(12)}`);
+        const neg = impact.flatMap((s) => s.negative.map((n) => ({ ...n, supplier: s.supplier })));
+        if (neg.length) {
+            console.log(`\n   !! ${neg.length} bill(s) would go BELOW ZERO (the supplier was already paid; haulage would leave a credit). Check these before --write:`);
+            neg.forEach((n) => console.log(`      ${n.supplier.slice(0, 22).padEnd(22)} ${String(n.ref).padEnd(14)} owed ${$(n.before)} - haulage ${$(n.haulage)} = ${$(n.after)}   inv ${n.invoice_no || '—'}`));
+        } else console.log('\n   No bill would go below zero.');
+    }
     if (!WRITE) return console.log('Add --write to apply those, and only those.\n');
     let ok = 0, bad = 0;
     const todo = LIMIT == null ? p.to_add : p.to_add.slice(0, LIMIT);

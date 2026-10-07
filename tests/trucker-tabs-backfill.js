@@ -71,6 +71,24 @@ section('B. against a real ledger, applied for real');
     const p2 = B.plan({ jio: JIO, sher: SHER, aj: AJ }, all());
     ck('IDEMPOTENT: a second run has nothing left to add', p2.to_add.length === 0 && p2.already_there.length === 4, `${p2.to_add.length} / ${p2.already_there.length}`);
     ck('and the disagreement is still reported, still unresolved', p2.differs.length === 1);
+
+    section('C. what --write would do to each SUPPLIER (report only)');
+    {
+        const mkBill = (id, supplier, balance, paid) => ({ id, supplier, balance, paid });
+        const bs = [mkBill('b1', 'Mazariegos', 5000, 0), mkBill('b2', 'Mazariegos', 400, 600), mkBill('b3', 'Aguilar', 0, 2000), mkBill('b4', 'Aguilar', 3000, 0)];
+        const item = (bill, total, ref) => ({ candidates: [{ bill_id: bill }], proposed_total: total, container_no: ref, invoice_no: 'I-' + ref });
+        const imp = B.balanceImpact([item('b1', 1000, 'C1'), item('b2', 700, 'C2'), item('b3', 650, 'C3'), item('b4', 500, 'C4')], bs);
+        const maz = imp.find((s) => s.supplier === 'Mazariegos'), agu = imp.find((s) => s.supplier === 'Aguilar');
+        ck('totals per supplier: haulage and balance before -> after', maz.bills === 2 && maz.haulage === 1700 && maz.before === 5400 && maz.after === 3700, JSON.stringify(maz));
+        ck('a bill the supplier was already paid on would go NEGATIVE — flagged with the figures', agu.negative.length === 1 && agu.negative[0].ref === 'C3' && agu.negative[0].after === -650, JSON.stringify(agu.negative));
+        ck('...and so would a part-paid one whose balance is smaller than the haulage (400 - 700)', maz.negative.length === 1 && maz.negative[0].ref === 'C2' && maz.negative[0].after === -300);
+        ck('a fully-paid bill is named', agu.fully_paid.join() === 'C3');
+        ck('a bill that stays positive is not flagged', !maz.negative.some((n) => n.ref === 'C1') && !agu.negative.some((n) => n.ref === 'C4'));
+        ck('sorted by the most haulage first', imp[0].supplier === 'Mazariegos');
+        ck('an unknown bill id is skipped, not a crash', B.balanceImpact([item('nope', 5, 'X')], bs).length === 0);
+        const src = fs.readFileSync(path.join(ROOT, 'scripts/trucker-tabs-to-bills.js'), 'utf8');
+        ck('the report prints it BEFORE the --write gate, so it is seen without writing', src.indexOf('EFFECT ON WHAT EACH SUPPLIER IS OWED') > -1 && src.indexOf('EFFECT ON WHAT EACH SUPPLIER IS OWED') < src.indexOf("if (!WRITE) return console.log('Add --write"));
+    }
     console.log(`\n${pass} passed, ${fail} failed`);
     process.exit(fail ? 1 : 0);
 })().catch((e) => { console.error(e); process.exit(1); });
