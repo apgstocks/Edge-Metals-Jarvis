@@ -5465,7 +5465,7 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
             const id = String(req.params.id);
             const before = pi.list().find((r) => r.id === id);
             if (!before) return res.status(404).json({ error: `no invoice line ${id}` });
-            const row = await pi.editRow(id, req.body || {}, { actor: actorOf(req) });
+            const row = await pi.editRow(id, req.body || {}, { actor: actorOf(req), enforceLock: true });
             await audit.record({ action: 'edit-party-invoice', subject: id, actor: actorOf(req), role: req.role, ip: req.ip,
                 detail: { company: 'edge-metals', party: before.party, invoice_no: before.invoice_no, before: Object.fromEntries(Object.keys(req.body || {}).filter((k) => pi.EDITABLE.includes(k)).map((k) => [k, before[k] === undefined ? null : before[k]])) } });
             res.json({ ok: true, row });
@@ -5481,9 +5481,32 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
             if (!doomed) return res.status(404).json({ error: `no invoice line ${id}` });
             const entry = await audit.record({ action: 'delete-party-invoice', subject: id, actor: actorOf(req), role: req.role, ip: req.ip,
                 detail: { company: 'edge-metals', party: doomed.party, invoice_no: doomed.invoice_no, container_no: doomed.container_no, booking_no: doomed.booking_no, amount: doomed.amount } });
-            await pi.deleteRow(id);
+            await pi.deleteRow(id, { enforceLock: true });
             await audit.complete(entry, 'done', {});
             res.json({ ok: true, removed: true });
+        } catch (e) { res.status(400).json({ error: e.message }); }
+    });
+
+    // Lock / unlock one line, and copy one (unlocked) line. Every line is locked by default;
+    // an unlock lasts helpers/partyInvoices.UNLOCK_MS, then closes by itself.
+    app.post('/api/party-invoices/:id/unlock', async (req, res) => {
+        try {
+            const pi = require('./helpers/partyInvoices');
+            const out = await pi.setLock(String(req.params.id), true);
+            await require('./helpers/audit').record({ action: 'unlock-party-invoice', subject: out.id, actor: actorOf(req), role: req.role, ip: req.ip, detail: { company: 'edge-metals', until: out.unlocked_until } });
+            res.json({ ok: true, ...out });
+        } catch (e) { res.status(400).json({ error: e.message }); }
+    });
+    app.post('/api/party-invoices/:id/lock', async (req, res) => {
+        try { res.json({ ok: true, ...(await require('./helpers/partyInvoices').setLock(String(req.params.id), false)) }); }
+        catch (e) { res.status(400).json({ error: e.message }); }
+    });
+    app.post('/api/party-invoices/:id/copy', async (req, res) => {
+        try {
+            const pi = require('./helpers/partyInvoices');
+            const row = await pi.copyRow(String(req.params.id), { actor: actorOf(req), enforceLock: true });
+            await require('./helpers/audit').record({ action: 'copy-party-invoice', subject: row.id, actor: actorOf(req), role: req.role, ip: req.ip, detail: { company: 'edge-metals', copied_from: row.copied_from } });
+            res.json({ ok: true, row });
         } catch (e) { res.status(400).json({ error: e.message }); }
     });
 

@@ -1746,7 +1746,7 @@ async function loadParty(subtab) {
         + 'invoice and no remittance, so Jarvis has never been told what is settled. '
         + 'Payments against them live on the container bill (Bills → Trucking).</div>'
       + '<div style="margin-bottom:6px;"><button type="button" class="btn partyDelSel" style="padding:5px 12px;color:#e58a7c;" disabled>Delete selected</button>'
-        + ' <span style="font-size:11px;color:var(--text-faint);">Removes the line from Jarvis only (needs the Jarvis profile). A re-import can bring it back unless it is edited in the Invoice register.</span></div>'
+        + ' <span style="font-size:11px;color:var(--text-faint);">Lines are locked: press 🔒 Unlock on a line to copy or delete it. Delete needs the Jarvis profile and only removes the line from Jarvis; a re-import can bring it back.</span></div>'
       + '<table class="data-table"><thead><tr><th></th><th>Invoice</th><th>Date</th><th>Container / Booking</th>'
         + '<th style="text-align:right">Amount</th><th>Checked</th><th>Source</th><th></th></tr></thead><tbody>'
       + rows.map((r) => '<tr><td><input type="checkbox" class="partyCk" data-id="' + esc(r.id) + '"></td><td>' + esc(r.invoice_no || '—') + '</td>'
@@ -1755,7 +1755,7 @@ async function loadParty(subtab) {
           + '<td style="text-align:right">' + m(r.amount) + '</td>'
           + '<td>' + esc(PARTY_CHECK[r.check_status] || r.check_status || '') + '</td>'
           + '<td style="font-size:11px">' + esc(r.source_subject || r.source_file || '') + '</td>'
-          + '<td><a href="#" class="partyDel" data-id="' + esc(r.id) + '" style="color:#e58a7c;">Delete</a></td></tr>').join('')
+          + '<td style="white-space:nowrap">' + lockCell(r, { edit: false, del: 'partyDel' }) + '</td></tr>').join('')
       + '</tbody></table>';
     // Delete: one line, or several ticked ones. The server decides (Jarvis profile; refuses a line with a payment against it).
     const delBtn = box.querySelector('.partyDelSel');
@@ -1771,6 +1771,7 @@ async function loadParty(subtab) {
       if (failed.length) alert(failed.length + ' of ' + ids.length + ' not deleted:\n' + failed.slice(0, 8).join('\n'));
       await loadParty(subtab);
     };
+    bindLockActions(box, () => loadParty(subtab));
     box.querySelectorAll('.partyDel').forEach((el) => el.addEventListener('click', (e) => {
       e.preventDefault();
       const r = rows.find((x) => x.id === el.dataset.id) || {};
@@ -3003,6 +3004,27 @@ $('btnEagleVerify').addEventListener('click', async () => {
 // ONE party; paid / balance are derived on the server. It records what was paid and posts
 // nothing to bills, the books or QuickBooks. Delete needs the Jarvis profile (like every
 // other ledger delete); the server says so if it is refused.
+// ── Lock / Copy, shared by the Invoice register and the Transport / Freight / Commission lists ──
+// Every line is LOCKED until you unlock it; an unlock lasts ten minutes (the server decides) and
+// closes again on Save or on Lock. Unlocked = Copy / Edit / Delete are available for that ONE line.
+// Paying never needs an unlock. The server enforces all of this; these are only the buttons.
+function lockCell(r, { edit = true, del = 'regDel' } = {}) {
+  if (!r.is_unlocked) return `<a href="#" class="rowUnlock" data-id="${esc(r.id)}" title="Unlock this line to copy, edit or delete it">🔒 Unlock</a>`;
+  return `<a href="#" class="rowCopy" data-id="${esc(r.id)}">Copy</a>`
+    + (edit ? ` · <a href="#" class="regEdit" data-id="${esc(r.id)}">Edit</a>` : '')
+    + ` · <a href="#" class="${del}" data-id="${esc(r.id)}" style="color:#e58a7c;">Delete</a>`
+    + ` · <a href="#" class="rowLock" data-id="${esc(r.id)}" title="Lock this line again">🔓 Lock</a>`;
+}
+function bindLockActions(root, reload) {
+  const call = async (el, path, body) => {
+    try { await api('/api/party-invoices/' + encodeURIComponent(el.dataset.id) + path, { method: 'POST', body: JSON.stringify(body || {}) }); await reload(); }
+    catch (e) { alert(e.message); }
+  };
+  root.querySelectorAll('.rowUnlock').forEach((el) => el.addEventListener('click', (e) => { e.preventDefault(); call(el, '/unlock'); }));
+  root.querySelectorAll('.rowLock').forEach((el) => el.addEventListener('click', (e) => { e.preventDefault(); call(el, '/lock'); }));
+  root.querySelectorAll('.rowCopy').forEach((el) => el.addEventListener('click', (e) => { e.preventDefault(); call(el, '/copy'); }));
+}
+
 let regLoaded = false, regRows = [], regParties = {}, regModes = ['Wire', 'Zelle', 'Cash', 'Cheque'];
 const regSel = new Set();
 function regOpen(title, bodyHtml, onSave) {
@@ -3040,11 +3062,12 @@ async function loadRegister() {
     regUpdatePayBtn();
     if (!regRows.length) body.innerHTML = '<div class="placeholder-note">No invoices to show. Use <b>Sync from sheet</b>, or import from email with <code>scripts/party-invoices-import.js</code>.</div>';
     else body.innerHTML = '<div style="overflow-x:auto;"><table class="data-table"><thead><tr><th></th><th>Party</th><th>Inv date</th><th>Invoice</th><th>Container</th><th>Booking / HBL</th><th style="text-align:right;">Amount</th><th style="text-align:right;">Paid</th><th style="text-align:right;">Balance</th><th>Pay</th><th>On sheet?</th><th></th></tr></thead><tbody>'
-      + regRows.map((r) => `<tr><td><input type="checkbox" class="regCk" data-id="${esc(r.id)}"${regSel.has(r.id) ? ' checked' : ''}${r.balance <= 0.005 ? ' disabled' : ''}></td><td>${esc(regParties[r.party] || r.party)}</td><td>${esc(r.invoice_date || '')}</td><td>${esc(r.invoice_no || '—')}${r.locked ? ' <span title="edited by hand — imports and syncs will not overwrite it" style="color:var(--text-faint);">✎</span>' : ''}</td><td style="font-family:var(--font-mono);">${esc(r.container_no || '—')}</td><td style="font-family:var(--font-mono);">${esc(r.booking_no || r.hbl_no || '—')}</td><td style="text-align:right; font-family:var(--font-mono);">${propMoney(r.amount)}</td><td style="text-align:right; font-family:var(--font-mono);">${r.paid ? propMoney(r.paid) : '—'}</td><td style="text-align:right; font-family:var(--font-mono);">${propMoney(r.balance)}</td><td>${esc(r.pay_status)}</td><td>${ajBadge(r.check_status === 'match' ? 'verified' : (r.check_status || 'no_container_on_pdf'))}</td><td style="white-space:nowrap;"><a href="#" class="regEdit" data-id="${esc(r.id)}">Edit</a> · <a href="#" class="regDel" data-id="${esc(r.id)}" style="color:#e58a7c;">Delete</a></td></tr>`).join('')
+      + regRows.map((r) => `<tr><td><input type="checkbox" class="regCk" data-id="${esc(r.id)}"${regSel.has(r.id) ? ' checked' : ''}${r.balance <= 0.005 ? ' disabled' : ''}></td><td>${esc(regParties[r.party] || r.party)}</td><td>${esc(r.invoice_date || '')}</td><td>${esc(r.invoice_no || '—')}${r.locked ? ' <span title="edited by hand — imports and syncs will not overwrite it" style="color:var(--text-faint);">✎</span>' : ''}</td><td style="font-family:var(--font-mono);">${esc(r.container_no || '—')}</td><td style="font-family:var(--font-mono);">${esc(r.booking_no || r.hbl_no || '—')}</td><td style="text-align:right; font-family:var(--font-mono);">${propMoney(r.amount)}</td><td style="text-align:right; font-family:var(--font-mono);">${r.paid ? propMoney(r.paid) : '—'}</td><td style="text-align:right; font-family:var(--font-mono);">${propMoney(r.balance)}</td><td>${esc(r.pay_status)}</td><td>${ajBadge(r.check_status === 'match' ? 'verified' : (r.check_status || 'no_container_on_pdf'))}</td><td style="white-space:nowrap;">${lockCell(r)}</td></tr>`).join('')
       + '</tbody></table></div>';
     document.querySelectorAll('.regCk').forEach((el) => el.addEventListener('change', () => { if (el.checked) regSel.add(el.dataset.id); else regSel.delete(el.dataset.id); regUpdatePayBtn(); }));
-    document.querySelectorAll('.regEdit').forEach((el) => el.addEventListener('click', (e) => { e.preventDefault(); regEdit(el.dataset.id); }));
-    document.querySelectorAll('.regDel').forEach((el) => el.addEventListener('click', (e) => { e.preventDefault(); regDelete(el.dataset.id); }));
+    bindLockActions(body, loadRegister);
+    body.querySelectorAll('.regEdit').forEach((el) => el.addEventListener('click', (e) => { e.preventDefault(); regEdit(el.dataset.id); }));
+    body.querySelectorAll('.regDel').forEach((el) => el.addEventListener('click', (e) => { e.preventDefault(); regDelete(el.dataset.id); }));
     const pays = (d.payments || []).slice().sort((a, b) => String(b.paid_on).localeCompare(String(a.paid_on)));
     $('regPayments').innerHTML = pays.length ? pays.map((p) => `<div style="padding:5px 0; border-bottom:1px solid var(--border-subtle);">${esc(p.paid_on)} · <b>${esc(regParties[p.party] || p.party)}</b> · ${propMoney(p.amount)} by ${esc(p.mode)}${p.ref ? ' · ' + esc(p.ref) : ''} · ${p.allocations.length} invoice line${p.allocations.length === 1 ? '' : 's'}${p.note ? ' · ' + esc(p.note) : ''} <a href="#" class="regPayDel" data-id="${esc(p.id)}" style="color:#e58a7c; margin-left:8px;">Delete</a></div>`).join('') : 'No payments recorded.';
     document.querySelectorAll('.regPayDel').forEach((el) => el.addEventListener('click', (e) => { e.preventDefault(); regDeletePayment(el.dataset.id); }));

@@ -109,11 +109,39 @@ function paidByRow(pays = payments(), { excluding = null } = {}) {
     for (const p of pays) { if (excluding && p.id === excluding) continue; for (const a of p.allocations || []) out[a.row_id] = round2((out[a.row_id] || 0) + a.amount); }
     return out;
 }
+// ── LOCK (Apsara, 2026-10-07: "lock option; on unlocking, copy and delete row by row") ──
+// Every line is LOCKED by default. Unlocking opens THAT ONE line for Copy / Edit / Delete for
+// UNLOCK_MS, then it closes again by itself — no job needed, the stamp simply expires. Paying
+// is not an edit to the invoice, so a locked line can still be paid.
+//
+// NOT the same as `locked` on a row, which predates this: that flag means "edited by hand —
+// an import or sheet sync must not overwrite it". It is untouched, and shown as ✎, not a padlock.
+//
+// The helpers below default to the OLD behaviour (no lock check) so existing callers — the
+// importer, the supersede script, the suites — are unchanged; the HTTP routes pass
+// { enforceLock: true }. A lock enforced only by the screen is not a lock.
+const UNLOCK_MS = 10 * 60 * 1000;
+const isUnlocked = (r, now = Date.now()) => !!(r && r.unlocked_at && now - Date.parse(r.unlocked_at) < UNLOCK_MS && now - Date.parse(r.unlocked_at) >= 0);
+function assertUnlocked(r, what) { if (!isUnlocked(r)) throw new Error(`this line is locked — unlock it before you ${what}`); }
+async function setLock(id, unlock) {
+    let row = null;
+    await mutateJson(cfg.PARTY_INVOICES_FILE, [], (cur) => {
+        const arr = Array.isArray(cur) ? cur : [];
+        const i = arr.findIndex((r) => r.id === id);
+        if (i === -1) return arr;
+        arr[i] = { ...arr[i], unlocked_at: unlock ? new Date().toISOString() : null };
+        row = arr[i];
+        return arr;
+    }, { strict: true });
+    if (!row) throw new Error(`no invoice line ${id}`);
+    return { id, is_unlocked: isUnlocked(row), unlocked_until: row.unlocked_at ? new Date(Date.parse(row.unlocked_at) + UNLOCK_MS).toISOString() : null };
+}
+
 function withPaid(rows = list(), pays = payments()) {
     const paid = paidByRow(pays);
     return rows.map((r) => {
         const p = paid[r.id] || 0, balance = round2(r.amount - p);
-        return { ...r, paid: p, balance, pay_status: p <= 0 ? 'unpaid' : (balance > 0.005 ? 'part' : 'paid') };
+        return { ...r, paid: p, balance, pay_status: p <= 0 ? 'unpaid' : (balance > 0.005 ? 'part' : 'paid'), is_unlocked: isUnlocked(r) };
     });
 }
 
@@ -122,7 +150,7 @@ const UPPER = ['container_no', 'booking_no', 'hbl_no'];
 
 // Edit one line. Marks it `locked` so a later import/sync never overwrites a hand edit, and keeps
 // what it was before. The row's key never changes, so a re-import cannot re-add the original.
-async function editRow(id, patch = {}, { actor = null } = {}) {
+async function editRow(id, patch = {}, { actor = null, enforceLock = false } = {}) {
     const clean = {};
     for (const k of EDITABLE) if (k in patch) {
         if (k === 'amount') { const n = num(patch.amount); if (n === null || n <= 0) throw new Error('amount must be greater than 0'); clean.amount = n; }
@@ -135,9 +163,12 @@ async function editRow(id, patch = {}, { actor = null } = {}) {
         const arr = Array.isArray(cur) ? cur : [];
         const i = arr.findIndex((r) => r.id === id);
         if (i === -1) { problem = `no invoice line ${id}`; return arr; }
+        if (enforceLock && !isUnlocked(arr[i])) { problem = 'this line is locked — unlock it before you edit it'; return arr; }
         if ('amount' in clean && clean.amount + 0.005 < (paid[id] || 0)) { problem = `${(paid[id] || 0).toFixed(2)} has already been paid against this line — the amount cannot go below that`; return arr; }
         const before = {}; for (const k of Object.keys(clean)) before[k] = arr[i][k] === undefined ? null : arr[i][k];
         arr[i] = { ...arr[i], ...clean, locked: true, updatedAt: new Date().toISOString(),
+            // Saving closes the line again ("re-locks when you're done") — only when the lock is being enforced.
+            ...(enforceLock ? { unlocked_at: null } : {}),
             edit_history: [...(arr[i].edit_history || []), { at: new Date().toISOString(), by: actor, before }] };
         saved = arr[i];
         return arr;
@@ -146,7 +177,24 @@ async function editRow(id, patch = {}, { actor = null } = {}) {
     return withPaid([saved])[0];
 }
 
-async function deleteRow(id) {
+
+// Copy one line into a NEW line of its own (new id, new key, no payments carried over). The copy
+// is created LOCKED, like every line; it is marked edited so an import never touches it, and it
+// remembers where it came from.
+async function copyRow(id, { actor = null, enforceLock = false } = {}) {
+    const src = list().find((r) => r.id === id);
+    if (!src) throw new Error(`no invoice line ${id}`);
+    if (enforceLock) assertUnlocked(src, 'copy it');
+    const now = new Date().toISOString();
+    const copy = { ...src, id: `PI_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+        key: `${src.key}#copy-${Date.now().toString(36)}`, source: 'copy', copied_from: src.id, locked: true, unlocked_at: null,
+        edit_history: [], createdAt: now, updatedAt: now, created_by: actor };
+    await mutateJson(cfg.PARTY_INVOICES_FILE, [], (cur) => [...(Array.isArray(cur) ? cur : []), copy], { strict: true });
+    return withPaid([copy])[0];
+}
+
+async function deleteRow(id, { enforceLock = false } = {}) {
+    if (enforceLock) assertUnlocked(list().find((r) => r.id === id), 'delete it');
     if ((paidByRow()[id] || 0) > 0) throw new Error('money has been paid against this line — delete that payment first');
     let found = false;
     await mutateJson(cfg.PARTY_INVOICES_FILE, [], (cur) => { const arr = Array.isArray(cur) ? cur : []; const n = arr.filter((r) => r.id !== id); found = n.length !== arr.length; return n; }, { strict: true });
@@ -259,4 +307,5 @@ function summary(rows = list()) {
 
 module.exports = { PARTIES, TRUCKING_CAP, MODES, normalize, amountOf, list, upsertMany, summary,
     payments, paidByRow, withPaid, editRow, deleteRow, addPayment, deletePayment, validatePayment, EDITABLE,
-    baseInvoice, isRevised, supersedePlan, supersedeApply };
+    baseInvoice, isRevised, supersedePlan, supersedeApply,
+    UNLOCK_MS, isUnlocked, setLock, copyRow };
