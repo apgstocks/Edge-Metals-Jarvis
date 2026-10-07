@@ -5601,6 +5601,37 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
         } catch (e) { res.status(500).json({ error: e.message }); }
     });
 
+    // ── THE PACK SHE SENDS HER CPA ────────────────────────────────────────
+    // Her stated purpose for the whole books stack: "The year-end pack for
+    // your CPA", read by "You, then your CPA". Everything above renders in a
+    // browser; this is the only way the figures leave it.
+    //
+    // ONE COMPANY per workbook — statements.js refuses to combine them and a
+    // tab-per-company file would be read as a group return.
+    app.get('/api/books/pack', async (req, res) => {
+        try {
+            const E = require('./helpers/entities');
+            const B = require('./helpers/booksBuild');
+            const P = require('./helpers/booksPack');
+            const q = req.query || {};
+            const entity = String(q.entity || '').trim();
+            if (!E.get(entity)) return res.status(400).json({ error: `no company ${entity}` });
+            const from = String(q.from || '').trim() || null;
+            const to = String(q.to || '').trim() || null;
+
+            const built = B.build({ from, to });
+            const { workbook, filename } = await P.toWorkbook(built, { entity, from, to });
+            const buf = await workbook.xlsx.writeBuffer();
+            res.setHeader('Content-Type',
+                'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+            // The filename carries DRAFT-INCOMPLETE when the journal was not
+            // complete, because a file gets forwarded without the email that
+            // explained it.
+            res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+            return res.end(Buffer.from(buf));
+        } catch (e) { return res.status(400).json({ error: e.message }); }
+    });
+
     // One account's history, on demand. Separate because the general ledger
     // needs an account and nobody wants all 34 at once.
     app.get('/api/books/account/:code', (req, res) => {

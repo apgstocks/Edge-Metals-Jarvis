@@ -98,6 +98,7 @@ tr.sub td{color:var(--text-muted);font-size:11.5px;text-transform:uppercase;font
     <div><label class="lbl" for="from">From</label><input type="text" id="from" placeholder="YYYY-MM-DD" size="11" autocomplete="off"></div>
     <div><label class="lbl" for="to">To</label><input type="text" id="to" placeholder="YYYY-MM-DD" size="11" autocomplete="off"></div>
     <button class="btn go" id="run">Show the books</button>
+    <button class="btn" id="pack" title="An Excel workbook: the statements, the general ledger, and what is missing">Pack for the CPA</button>
     <div style="flex:1"></div>
     <span class="mono" id="built" style="font-size:10px;color:var(--text-faint)"></span>
   </div>
@@ -318,6 +319,12 @@ async function load() {
   $('from').value = `${y}-01-01`;
   $('to').value = `${y}-12-31`;
   $('run').onclick = load;
+  // ── THE PACK ──────────────────────────────────────────────────────────
+  // A plain link, not fetch-then-blob: the browser's own download gets the
+  // filename off Content-Disposition, which is where the DRAFT-INCOMPLETE
+  // warning lives. Rebuilding the name here would be a second place for it
+  // to be wrong, and the wrong one would be the one on her disk.
+  $('pack').onclick = () => { window.location.href = '/api/books/pack?' + qs(); };
   document.querySelectorAll('#tabs button').forEach((b) => {
     b.onclick = () => {
       document.querySelectorAll('#tabs button').forEach((x) => x.classList.remove('sel'));

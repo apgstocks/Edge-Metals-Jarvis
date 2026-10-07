@@ -827,6 +827,44 @@ const MUTATIONS = [
     // PROPERTY and not the markup's length: the old 120-character proximity
     // regex went red when Edit was added beside Delete, and would have stayed
     // green if Delete had escaped the gate. This is the inverse.
+    // ── THE CPA PACK ──────────────────────────────────────────────────
+    // "The year-end pack for your CPA." The dangerous failure is not a broken
+    // workbook — it is a CLEAN-LOOKING one built from an incomplete journal,
+    // which a CPA cannot tell by looking. Every mutation here removes a
+    // warning rather than a number.
+    { name: 'pack: the filename stops saying DRAFT-INCOMPLETE',
+      file: 'helpers/booksPack.js', suites: ['books-pack'],
+      find: "    return `Books-${who}-${span}${complete ? '' : '-DRAFT-INCOMPLETE'}.xlsx`;",
+      to:   '    return `Books-${who}-${span}.xlsx`;' },
+    { name: 'pack: page one says the books are fine regardless',
+      file: 'helpers/booksPack.js', suites: ['books-pack'],
+      find: "        titleBlock(ws, head(verdict.trustworthy",
+      to:   "        titleBlock(ws, head(true" },
+    { name: 'pack: the unplaced rows get no sheet of their own',
+      file: 'helpers/booksPack.js', suites: ['books-pack'],
+      find: "    if ((built.unplaced || []).length) {\n        const ws = wb.addWorksheet('Unplaced rows');",
+      to:   "    if (false) {\n        const ws = wb.addWorksheet('Unplaced rows');" },
+    { name: 'pack: accounts missing from the chart are dropped from the pack',
+      file: 'helpers/booksPack.js', suites: ['books-pack'],
+      find: "        for (const u of (t.unknown || [])) {",
+      to:   "        for (const u of []) {" },
+    { name: 'pack: the short trading name goes on the filing heading',
+      file: 'helpers/booksPack.js', suites: ['books-pack'],
+      find: '    const legal = ent.legalName || ent.uiName;',
+      to:   '    const legal = ent.uiName;' },
+    { name: 'pack: a missing tax id is left blank instead of called out',
+      file: 'helpers/booksPack.js', suites: ['books-pack'],
+      find: '        if (!ent.taxId) {',
+      to:   '        if (false) {' },
+    { name: 'pack: the workbook is built from a SECOND journal, not the one on screen',
+      file: 'api.js', suites: ['books-pack'],
+      find: '            const { workbook, filename } = await P.toWorkbook(built, { entity, from, to });',
+      to:   "            const { workbook, filename } = await P.toWorkbook(B.build({ from: '1900-01-01', to: '1900-12-31' }), { entity, from, to });" },
+    { name: 'pack: the download loses its filename header',
+      file: 'api.js', suites: ['books-pack'],
+      find: "            res.setHeader('Content-Disposition', `attachment; filename=\"${filename}\"`);",
+      to:   '            void filename;' },
+
     // ── THE BOOKS PORTAL AND ITS AGENT ────────────────────────────────
     // The engine shipped a day before anything could reach it, so these aim at
     // the two things that would make the portal lie quietly rather than break
