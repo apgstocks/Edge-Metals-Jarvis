@@ -1677,7 +1677,20 @@ async function loadCarrier(c) {
 // The container is injected rather than written into the four panels' markup:
 // each one is a working verification form and the rule is to add beside, not
 // edit around.
-const PARTY_OF_SUBTAB = { 'aj-transport': 'ajtransport', 'sher-trucking': 'sher', jio: 'jio', gardunos: 'gardunos' };
+// ── EVERY PARTY THE STORE KNOWS, NOT JUST THE TRANSPORT ONES ────────────
+// First cut wired only the four Transport sub-tabs, because the ask was
+// "Transport -all data should be filled". helpers/partyInvoices.js knows SIX
+// parties, and the other two sit in different groups — Zimex under Freight,
+// Pan Metal under Commission — so their tabs stayed empty while their
+// invoices sat in the same store behind the same route. Apsara, immediately:
+// "Why zimex ,jio bills not there?"
+//
+// Keyed by SUB-TAB, which is why this map exists at all: the sub-tab ids are
+// hyphenated ('aj-transport', 'pan-metal') and the store's party ids are not.
+const PARTY_OF_SUBTAB = {
+  'aj-transport': 'ajtransport', 'sher-trucking': 'sher', jio: 'jio', gardunos: 'gardunos',
+  zimex: 'zimex', 'pan-metal': 'panmetal',
+};
 const PARTY_CHECK = { verified: 'on the sheet', match: 'on the sheet',
   not_in_sheet: 'NOT on the sheet', booking_mismatch: 'booking does not match' };
 

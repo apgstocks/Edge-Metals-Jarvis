@@ -857,6 +857,11 @@ const MUTATIONS = [
       find: 'function bankInflows(txs = []) {',
       to:   "function bankInflows(txs = []) {\n    void require('./notTrade');" },
 
+    { name: 'transport: a party in the store loses its sub-tab wiring',
+      file: 'dashboard/documents.html', suites: ['party-invoices'],
+      find: "  zimex: 'zimex', 'pan-metal': 'panmetal',",
+      to:   "  'pan-metal': 'panmetal'," },
+
     // ── THE FOUR TRANSPORT TABS ───────────────────────────────────────
     { name: 'transport: clicking AJ/Sher/Jio/Gardunos loads nothing again',
       file: 'dashboard/documents.html', suites: ['party-invoices'],

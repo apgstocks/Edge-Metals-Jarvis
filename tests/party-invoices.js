@@ -100,12 +100,29 @@ section('B. end to end');
     const fs2 = require('fs');
     const path2 = require('path');
     const page = fs2.readFileSync(path2.join(__dirname, '..', 'dashboard/documents.html'), 'utf8');
+    const PI_SRC = fs2.readFileSync(path2.join(__dirname, '..', 'helpers/partyInvoices.js'), 'utf8');
     console.log('\n=== the four Transport tabs are filled from this store ===');
 
-    ck('all four sub-tabs map to a party',
-       /'aj-transport': 'ajtransport'/.test(page) && /'sher-trucking': 'sher'/.test(page)
-       && /jio: 'jio'/.test(page) && /gardunos: 'gardunos'/.test(page),
-       (page.match(/const PARTY_OF_SUBTAB = \{[^}]*\}/) || [''])[0]);
+    // ── EVERY PARTY, COMPUTED — NOT A LIST I REMEMBERED TO UPDATE ────────
+    // The first version named the four Transport sub-tabs by hand and passed
+    // while Zimex and Pan Metal, which live in the same store but in the
+    // Freight and Commission groups, showed nothing. Apsara found that in
+    // about a minute: "Why zimex ,jio bills not there?".
+    //
+    // So this derives the expectation from helpers/partyInvoices.js itself. A
+    // seventh party added to that store with no sub-tab wiring turns this red
+    // instead of quietly shipping another empty tab.
+    const storeParties = [...PI_SRC.match(/const PARTIES = \{([^}]*)\}/)[1]
+        .matchAll(/(\w+):/g)].map((m) => m[1]);
+    const mapSrc = (page.match(/const PARTY_OF_SUBTAB = \{[\s\S]*?\};/) || [''])[0];
+    const wired = [...mapSrc.matchAll(/: '(\w+)'/g)].map((m) => m[1]);
+    const unwired = storeParties.filter((p) => !wired.includes(p));
+    ck('EVERY party in the store has a sub-tab wired to it',
+       storeParties.length > 0 && unwired.length === 0,
+       `store knows ${storeParties.join(', ')} — nothing shows for: ${unwired.join(', ')}`);
+    ck('  including the two outside the Transport group',
+       wired.includes('zimex') && wired.includes('panmetal'),
+       'Zimex is under Freight and Pan Metal under Commission; both were missed');
     ck('  and clicking one loads it', /if \(PARTY_OF_SUBTAB\[k\]\) loadParty\(k\);/.test(page),
        'a loader nothing calls is the dead-screen pattern again');
     ck('  from the read-only party route', /\/api\/party-invoices\?party=/.test(page));
