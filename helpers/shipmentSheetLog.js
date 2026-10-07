@@ -183,6 +183,34 @@ async function reconcileHeader(sheets, spreadsheetId, tabName, wanted) {
     return { changed: true, rows_remapped: remapped.length };
 }
 
+// ── THE TAB MUST BE WIDE ENOUGH FOR ITS OWN HEADER ───────────────────────
+// 2026-10-07, found by a backfill that edited five bills: every one logged
+// "Range (Shipment!AA1) exceeds grid limits. Max columns: 26". A Google sheet
+// tab is created 26 columns wide, and this header is now 28 (the Bills table's
+// columns + Carrier + Priced per + the key). ensureTab writes the header at the
+// next free cell, which was column AA — past the edge of the grid — so since the
+// header crossed 26 columns, EVERY bill save has failed to reach this tab (the
+// bill itself saved; logBillSafely only warns). It is not specific to a backfill.
+//
+// Widened here, in this file only: proformaSheetLog.ensureTab is shared by the
+// Jio, Sher, AJ, Pan Metal and Proforma tabs, none of which has this problem,
+// and changing it would change them. Only ever ADDS columns, never removes.
+async function ensureGridColumns(sheets, spreadsheetId, tabName, needed) {
+    const meta = await sheets.spreadsheets.get({ spreadsheetId, fields: 'sheets.properties' });
+    const tab = (meta.data.sheets || []).map((x) => x.properties).find((p) => p && p.title === tabName);
+    if (!tab) return { widened: false, reason: 'no such tab yet' };
+    const have = tab.gridProperties && tab.gridProperties.columnCount;
+    if (!have || have >= needed) return { widened: false, columns: have };
+    await sheets.spreadsheets.batchUpdate({
+        spreadsheetId,
+        requestBody: { requests: [{ updateSheetProperties: {
+            properties: { sheetId: tab.sheetId, gridProperties: { columnCount: needed } },
+            fields: 'gridProperties.columnCount',
+        } }] },
+    });
+    return { widened: true, from: have, to: needed };
+}
+
 // Local rather than imported: proformaSheetLog does not export its own.
 function columnLetterOf(n) {
     let s = ''; let i = n;
@@ -231,6 +259,9 @@ async function logBillToSheet(bill) {
     const spreadsheetId = await proforma.getOrCreateSpreadsheetId();
     // Creates "Shipment" the first time and backfills the header if a column
     // was added since — ensureTab already does both.
+    // A tab that already exists but is narrower than the header must be widened
+    // BEFORE ensureTab writes to it (see ensureGridColumns).
+    await ensureGridColumns(sheets, spreadsheetId, TAB_NAME, headerRow().length);
     await proforma.ensureTab(sheets, spreadsheetId, TAB_NAME, headerRow());
     // ensureTab handles a NEW tab and an APPENDED column; this handles the
     // case it explicitly refuses — a header whose order changed. Must run
@@ -299,6 +330,6 @@ function writeNow(bill, why) {
         });
 }
 
-module.exports = { TAB_NAME, headerRow, rowFor, rowsFor, keyColumnLetter, reconcileHeader,
+module.exports = { TAB_NAME, headerRow, rowFor, rowsFor, keyColumnLetter, reconcileHeader, ensureGridColumns,
     KEY_LABEL, logBillToSheet, logBillSafely,
     flushPending, COALESCE_MS };
