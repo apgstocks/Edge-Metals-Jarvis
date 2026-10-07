@@ -29,7 +29,8 @@ const X172994 = { party: 'eaglebrit', invoice_no: 'XSINV/172994', kind: 'invoice
     ck('the check status the cross-check gave is kept', a.row.check_status === 'partly_in_sheet');
     const c = n(CRN);
     ck('a credit note keeps its NEGATIVE amount and is marked', c.row.amount === -2180 && c.row.kind === 'credit_note');
-    ck('a negative on any OTHER party is a misread, skipped', /negative/.test(n({ party: 'jio', invoice_no: 'J', container_no: 'AAAA1111111', net_amount: -50 }).skip) && /negative/.test(n({ party: 'zimex', hbl_no: 'H', amount: -5 }).skip));
+    ck('a negative on ANY party is kept as a credit (Zimex has 133 in 2026 — dropping them was a regression)', n({ party: 'zimex', invoice_no: 'ZC', hbl_no: 'H', amount: -5 }).row.kind === 'credit_note' && n({ party: 'jio', invoice_no: 'J', container_no: 'AAAA1111111', net_amount: -50 }).row.amount === -50);
+    ck('and a positive line is never marked a credit', n({ party: 'zimex', invoice_no: 'Z', hbl_no: 'H', amount: 5 }).row.kind === undefined);
     ck('Eagle is NOT subject to the trucker $3,000 cap', !!n({ ...X170815, amount: 20000 }).row);
     ck('an Eagle record with no total is skipped', !!n({ ...X170815, amount: null }).skip);
 
@@ -40,6 +41,8 @@ const X172994 = { party: 'eaglebrit', invoice_no: 'XSINV/172994', kind: 'invoice
     const run = (...x) => execFileSync('node', [path.join(ROOT, 'scripts/party-invoices-import.js'), '--file', exp, ...x], { env: process.env, encoding: 'utf8' });
     const prev = run();
     ck('preview names Eagle Trans, writes nothing', /Eagle Trans/.test(prev) && /PREVIEW/.test(prev) && !fs.existsSync(path.join(TMP, 'party_invoices.json')));
+    const only = run('--party', 'eaglebrit');
+    ck('--party scopes the preview (Eagle Trans only; no other party listed)', /Eagle Trans/.test(only) && !/Zimex|Jio|Sher/.test(only.split('Left out')[0]));
     ck('--write: 4 lines (3 invoices + the credit note); the unreadable one is left out', /Wrote: 4 added/.test(run('--write')));
     ck('idempotent', /Wrote: 0 added, 4 updated/.test(run('--write')));
     const sm = PI.summary().eagle;

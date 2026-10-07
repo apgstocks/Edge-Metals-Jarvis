@@ -59,8 +59,9 @@ function normalize(rec) {
     if (rec.extraction_failed) return { skip: 'extraction failed' };
     const amount = amountOf(party, rec);
     if (amount === null || amount === 0) return { skip: 'no amount (booking confirmation / certificate, not an invoice)' };
-    // Only Eagle Trans issues credit notes (XSCRN, negative). For every other party a negative is a misread.
-    if (amount < 0 && !(party === 'eagle' && rec.kind === 'credit_note')) return { skip: 'negative amount' };
+    // A negative line is a credit (Zimex has 133 of them in 2026) and is kept, as it always was — an earlier
+    // revision of this file skipped negatives for every party but Eagle, which silently dropped them from
+    // the import. It is marked credit_note so it cannot be paid or edited to a positive.
     // Per load, for sher: the invoice amount covers `quantity` loads.
     const perLoad = TRUCKERS.includes(party) ? amount / (Number(rec.quantity) > 0 ? Number(rec.quantity) : 1) : 0;
     if (TRUCKERS.includes(party) && perLoad > TRUCKING_CAP) return { skip: `over $${TRUCKING_CAP} per load — probably not a ${PARTIES[party]} invoice` };
@@ -75,7 +76,8 @@ function normalize(rec) {
             party, key: `${party}:${baseInvoice(invoiceNo) || '(none)'}:${(party === 'eagle' && up(rec.booking_no)) || line || '(none)'}`,
             invoice_no: invoiceNo || null, revised: isRevised(invoiceNo), invoice_date: txt(rec.invoice_date) || null,
             container_no: containers.join(',') || up(rec.container_no) || null, booking_no: up(rec.booking_no) || null, hbl_no: up(rec.hbl_no) || null,
-            ...(party === 'eagle' ? { kind: rec.kind === 'credit_note' ? 'credit_note' : 'invoice', containers } : {}),
+            ...(amount < 0 || rec.kind === 'credit_note' ? { kind: 'credit_note' } : {}),
+            ...(party === 'eagle' ? { containers } : {}),
             amount, quantity: num(rec.quantity),
             check_status: txt(rec.status) || null,            // verified / match / not_in_sheet / booking_mismatch / …
             source_file: txt(rec.source_file) || null, source_subject: txt(rec.source_subject) || null,
