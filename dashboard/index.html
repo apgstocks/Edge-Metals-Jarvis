@@ -1047,6 +1047,17 @@ const NAV_ITEMS = [
   // padlock is opened, and the server refuses every change unless the session
   // is admin, so a staff login can look and not touch.
   { id: 'quickbooks', label: 'QuickBooks', group: 'Edge Metals' },
+  // ── BOOKS ────────────────────────────────────────────────────────────
+  // Apsara, 2026-10-06: "Make the qb thing as separate portal". A separate
+  // page (/books, dashboard/books.html) for the same reason QuickBooks is
+  // one: it is a different question. QuickBooks asks whether Intuit agrees
+  // with us and needs a live connection; Books is derived from her own
+  // records and works without one.
+  //
+  // 'Both companies', not 'Edge Metals': the portal switches between Edge
+  // Metals, Edge Trading and AAA Investment, which is most of its point
+  // (CLAUDE.md rule 5 — they are different companies and file separately).
+  { id: 'books', label: 'Books', group: 'Both companies' },
 
   // ── BANK ──────────────────────────────────────────────────────────────
   // Apsara, 2026-10-05: "Where is bank match in jarvis?" — it was nowhere.
@@ -1339,6 +1350,7 @@ function renderNav() {
     if (b.dataset.tab === 'documents') { window.location.href = '/documents'; return; }
     if (b.dataset.tab === 'edge-inventory') { window.location.href = '/edge-inventory'; return; }
     if (b.dataset.tab === 'quickbooks') { window.location.href = '/quickbooks'; return; }
+    if (b.dataset.tab === 'books') { window.location.href = '/books'; return; }
     if (b.dataset.tab === 'bank') { window.location.href = '/bank-match'; return; }
     if (b.dataset.tab === 'claims') { window.location.href = '/claims'; return; }
     if (b.dataset.tab === 'design-bol') { window.location.href = '/design/bol'; return; }

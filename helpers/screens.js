@@ -53,6 +53,11 @@ const SCREENS = [
     { key: 'outbound-loads', label: 'Outbound Loads', company: 'yard', href: '/outbound-loads', say: ['outbound loads', 'outbound', 'yard sales'] },
     // Both / system
     { key: 'spend', label: 'Spend Report', company: 'both', tab: 'spend', say: ['spend report', 'spending', 'spend'] },
+    // "Jarvis, open the books". company 'both' because the portal switches
+    // between all three companies; it is nobody's single company screen.
+    { key: 'books', label: 'Books', company: 'both', href: '/books',
+      say: ['books', 'the books', 'books portal', 'trial balance', 'profit and loss',
+            'p and l', 'balance sheet', 'general ledger', 'ledger'] },
     { key: 'tasks', label: 'Tasks', company: 'system', tab: 'tasks', say: ['tasks', 'reminders', 'scheduled tasks'] },
     { key: 'bugzilla', label: 'Bugzilla', company: 'both', tab: 'bugzilla', say: ['bugzilla', 'bugs', 'bug list', 'bug tracker', 'issues'] },
     { key: 'facts', label: 'Facts', company: 'system', tab: 'facts', say: ['facts', 'memory', 'what you remember'] },

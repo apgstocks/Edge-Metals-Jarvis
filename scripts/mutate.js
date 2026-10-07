@@ -827,6 +827,52 @@ const MUTATIONS = [
     // PROPERTY and not the markup's length: the old 120-character proximity
     // regex went red when Edit was added beside Delete, and would have stayed
     // green if Delete had escaped the gate. This is the inverse.
+    // ── THE BOOKS PORTAL AND ITS AGENT ────────────────────────────────
+    // The engine shipped a day before anything could reach it, so these aim at
+    // the two things that would make the portal lie quietly rather than break
+    // loudly: a finding that stops firing, and a figure counted for the wrong
+    // company.
+    { name: 'books: an empty company claims another company\'s transactions',
+      file: 'helpers/booksAgent.js', suites: ['books-portal'],
+      find: '    const mine = built.lines.filter((l) => l.entity === entity',
+      to:   '    const mine = built.lines.filter((l) => true' },
+    { name: 'books: the two companies may disagree on what they owe each other',
+      file: 'helpers/booksAgent.js', suites: ['books-portal'],
+      find: '    if (!ic.agrees) {',
+      to:   '    if (false) {' },
+    { name: 'books: an account missing from the chart is not reported',
+      file: 'helpers/booksAgent.js', suites: ['books-portal'],
+      find: "    for (const u of (tb.unknown || [])) {",
+      to:   "    for (const u of []) {" },
+    { name: 'books: an unbalanced trial balance is only a warning',
+      file: 'helpers/booksAgent.js', suites: ['books-portal'],
+      find: "            code: 'trial-balance-unbalanced', severity: 'blocker',",
+      to:   "            code: 'trial-balance-unbalanced', severity: 'normal'," },
+    { name: 'books: the verdict vouches for figures it should not',
+      file: 'helpers/booksAgent.js', suites: ['books-portal'],
+      find: "        trustworthy: !findings.some((f) => f.severity === 'blocker' || f.severity === 'high'),",
+      to:   '        trustworthy: true,' },
+    { name: 'books: a matched inter-company pair is reported as a mismatch',
+      file: 'helpers/booksAgent.js', suites: ['books-portal'],
+      find: '        agrees: Math.abs(r2(due - owed)) < 0.005,',
+      to:   '        agrees: false,' },
+    { name: 'books: the agent is computed from a SECOND build, not the one on screen',
+      file: 'api.js', suites: ['books-portal'],
+      find: '                    const r = A.review(built, { entity, from, to });',
+      to:   "                    const r = A.review(B.build({ from: '1900-01-01', to: '1900-12-31' }), { entity, from, to });" },
+    { name: 'books: the portal page is no longer served',
+      file: 'api.js', suites: ['books-portal'],
+      find: "    app.get('/books', (req, res) => {",
+      to:   "    app.get('/books-DEAD', (req, res) => {" },
+    { name: 'books: the sidebar entry has no handler, so the tab does nothing',
+      file: 'dashboard/index.html', suites: ['books-portal'],
+      find: "    if (b.dataset.tab === 'books') { window.location.href = '/books'; return; }",
+      to:   '    void 0;' },
+    { name: 'books: the material cost is taken net of trucking (the money bug)',
+      file: 'helpers/booksBuild.js', suites: ['books-portal', 'books-build'],
+      find: '            amount: num(b.amount),\n            trucking: num(b.trucking_amount_used',
+      to:   '            amount: num(b.net_payable),\n            trucking: num(b.trucking_amount_used' },
+
     // ── #182: THE TWO DELETE BUTTONS, CONVERGED ───────────────────────
     { name: 'the Pay sheet keeps a private copy of the arming logic again',
       file: 'dashboard/index.html', suites: ['payment-delete-roles'],

@@ -1,0 +1,333 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Books — Jarvis</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wght@700;800;900&family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+/* Design tokens copied from dashboard/quickbooks.html — standalone page, kept
+   in sync by hand, same as the others.
+
+   ── WHY THIS IS ITS OWN PAGE ─────────────────────────────────────────────
+   Apsara, 2026-10-06: "Make the qb thing as separate portal". #170: "Books
+   portal: its own section, not bolted onto the QB page". The QuickBooks page
+   answers "does Intuit agree with us" and needs a live connection. This page
+   answers "what do our own books say", derived from her own stores, and works
+   with no connection at all. Two different questions, two pages. */
+:root{
+  --steel-900:#14181B; --steel-800:#1E2429; --steel-700:#2B3239; --steel-600:#3C454D;
+  --steel-500:#57616A; --steel-400:#7E8891; --steel-300:#A7B0B7; --steel-200:#CBD1D6;
+  --leaf-300:#7FD172; --leaf-400:#57BE49; --leaf-500:#3DA836; --leaf-600:#2E861F;
+  --green-500:#2F8F57; --amber-500:#D99A2B; --red-500:#C5402F; --blue-500:#3A6EA5;
+  --bg-base:#0C0E10; --surface-card:#14181B; --surface-sunken:#0F1214; --surface-hover:#181D21;
+  --text-strong:#FFFFFF; --text-body:#CBD1D6; --text-muted:#A7B0B7; --text-faint:#7E8891;
+  --border-subtle:#1E2429; --border-default:#2B3239; --ring:var(--leaf-500);
+  --font-display:'Archivo',sans-serif; --font-sans:'IBM Plex Sans',system-ui,sans-serif;
+  --font-mono:'IBM Plex Mono',ui-monospace,monospace;
+}
+*,*::before,*::after{box-sizing:border-box}
+body{margin:0;font-family:var(--font-sans);color:var(--text-body);background:var(--bg-base);-webkit-font-smoothing:antialiased;min-height:100vh}
+h1,h2,h3{font-family:var(--font-display);color:var(--text-strong);margin:0;font-weight:900;letter-spacing:-.02em}
+button{font:inherit;cursor:pointer}
+:focus-visible{outline:2px solid var(--ring);outline-offset:2px}
+.mono{font-family:var(--font-mono)}
+header{display:flex;align-items:center;gap:14px;padding:10px 16px;border-bottom:1px solid var(--border-default);background:var(--surface-card);flex-wrap:wrap}
+header h1{font-size:17px}
+header .back{color:var(--steel-400);font-size:13px;text-decoration:none}
+.wrap{max-width:1180px;margin:0 auto;padding:16px}
+.controls{display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;padding:12px 14px;border:1px solid var(--border-subtle);border-radius:4px;background:var(--surface-sunken);margin-bottom:14px}
+label.lbl{display:block;font-family:var(--font-mono);font-size:9px;letter-spacing:.1em;text-transform:uppercase;color:var(--text-muted);margin-bottom:4px}
+select,input[type=text]{padding:7px 9px;font-size:12.5px;font-family:var(--font-sans);background:var(--surface-card);color:var(--text-body);border:1px solid var(--border-default);border-radius:3px;outline:none}
+.btn{padding:7px 14px;font-size:12px;border-radius:3px;border:1px solid var(--border-default);background:var(--surface-card);color:var(--text-body)}
+.btn.go{background:var(--leaf-600);border-color:var(--leaf-600);color:#fff;font-weight:600}
+.btn:hover{border-color:var(--text-body)}
+/* ── the verdict, which leads ─────────────────────────────────────────────
+   A books page's first job is to say whether its own numbers can be trusted.
+   An incomplete journal produces a smaller profit than the truth and looks
+   exactly like a correct one, so the banner is above the figures, not under
+   them. */
+.verdict{padding:13px 15px;border-radius:4px;border:1px solid;margin-bottom:14px}
+.verdict.ok{border-color:var(--leaf-600);background:rgba(87,190,73,.08)}
+.verdict.warn{border-color:#5a4416;background:rgba(217,154,43,.09)}
+.verdict.bad{border-color:#5d2620;background:rgba(197,64,47,.10)}
+.verdict h2{font-size:14px;margin-bottom:5px}
+.verdict.ok h2{color:var(--leaf-300)} .verdict.warn h2{color:var(--amber-500)} .verdict.bad h2{color:var(--red-500)}
+.verdict p{margin:0;font-size:12.5px;color:var(--text-muted)}
+.finding{border-top:1px solid var(--border-subtle);padding:10px 0 2px}
+.finding:first-of-type{border-top:0}
+.fsev{font-family:var(--font-mono);font-size:9px;letter-spacing:.1em;text-transform:uppercase;padding:2px 6px;border-radius:2px;margin-right:7px}
+.fsev.blocker{background:rgba(197,64,47,.18);color:var(--red-500)}
+.fsev.high{background:rgba(217,154,43,.16);color:var(--amber-500)}
+.fsev.normal{background:var(--surface-hover);color:var(--text-faint)}
+.fwhat{font-size:13px;color:var(--text-strong);font-weight:600}
+.fwhy{font-size:12px;color:var(--text-muted);margin:4px 0 0}
+.ffix{font-size:12px;color:var(--text-body);margin:5px 0 0}
+.ffix b{color:var(--leaf-300);font-weight:600}
+.tabs{display:flex;gap:4px;border-bottom:1px solid var(--border-default);margin-bottom:14px;flex-wrap:wrap}
+.tabs button{padding:8px 13px;border:0;background:none;color:var(--text-muted);font-size:13px;border-bottom:2px solid transparent}
+.tabs button.sel{color:var(--text-strong);border-bottom-color:var(--leaf-500);font-weight:600}
+.card{border:1px solid var(--border-subtle);border-radius:4px;background:var(--surface-card);overflow-x:auto;margin-bottom:14px}
+table{width:100%;border-collapse:collapse;font-size:12.5px}
+th{text-align:left;padding:8px 10px;background:var(--surface-sunken);font-family:var(--font-mono);font-size:9px;letter-spacing:.1em;text-transform:uppercase;color:var(--text-muted);font-weight:400;white-space:nowrap}
+td{padding:7px 10px;border-top:1px solid var(--border-subtle)}
+td.n,th.n{text-align:right;font-family:var(--font-mono);white-space:nowrap}
+tr.tot td{border-top:1px solid var(--border-default);font-weight:700;color:var(--text-strong)}
+tr.sub td{color:var(--text-muted);font-size:11.5px;text-transform:uppercase;font-family:var(--font-mono);letter-spacing:.08em;background:var(--surface-sunken)}
+.acct{color:var(--leaf-300);text-decoration:none;cursor:pointer}
+.acct:hover{text-decoration:underline}
+.empty{padding:22px;text-align:center;color:var(--text-faint);font-family:var(--font-mono);font-size:12px}
+.note{font-family:var(--font-mono);font-size:10px;color:var(--text-faint);margin-top:8px}
+.hdr{display:flex;justify-content:space-between;align-items:baseline;padding:11px 14px;border-bottom:1px solid var(--border-subtle)}
+.hdr h3{font-size:13px}
+.hdr .sub{font-family:var(--font-mono);font-size:10px;color:var(--text-faint)}
+</style>
+</head>
+<body>
+<header>
+  <a class="back" href="/">&larr; Jarvis</a>
+  <h1>Books</h1>
+  <span class="mono" style="font-size:10px;color:var(--text-faint)">derived from her own records &middot; nothing here is stored</span>
+</header>
+
+<div class="wrap">
+  <div class="controls">
+    <div><label class="lbl" for="company">Company</label><select id="company"></select></div>
+    <div><label class="lbl" for="from">From</label><input type="text" id="from" placeholder="YYYY-MM-DD" size="11" autocomplete="off"></div>
+    <div><label class="lbl" for="to">To</label><input type="text" id="to" placeholder="YYYY-MM-DD" size="11" autocomplete="off"></div>
+    <button class="btn go" id="run">Show the books</button>
+    <div style="flex:1"></div>
+    <span class="mono" id="built" style="font-size:10px;color:var(--text-faint)"></span>
+  </div>
+
+  <div id="verdict"></div>
+
+  <div class="tabs" id="tabs">
+    <button data-view="pl" class="sel">Profit &amp; Loss</button>
+    <button data-view="bs">Balance Sheet</button>
+    <button data-view="tb">Trial Balance</button>
+    <button data-view="gl">Account history</button>
+  </div>
+
+  <div id="body"><div class="empty">Pick a company and press Show the books.</div></div>
+</div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s === null || s === undefined ? '' : s)
+  .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+const money = (n) => (n === null || n === undefined || isNaN(Number(n)))
+  ? '&mdash;'
+  : '$' + Number(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+// ── NO BROWSER STORAGE FOR THE FIGURES ──────────────────────────────────
+// The company and dates are the only thing remembered, and only in memory for
+// this visit. A cached trial balance is a second truth, which is the one thing
+// helpers/postings.js exists to avoid: the journal is re-derived on every
+// request so there is never a stored figure to go stale.
+const STATE = { data: null, view: 'pl', account: null };
+
+async function api(url) {
+  const r = await fetch(url);
+  const j = await r.json().catch(() => ({ error: 'bad response' }));
+  if (!r.ok) { const e = new Error(j.error || ('HTTP ' + r.status)); e.body = j; throw e; }
+  return j;
+}
+
+const qs = () => {
+  const p = new URLSearchParams();
+  p.set('entity', $('company').value);
+  if ($('from').value.trim()) p.set('from', $('from').value.trim());
+  if ($('to').value.trim()) p.set('to', $('to').value.trim());
+  return p.toString();
+};
+
+// ── THE VERDICT ─────────────────────────────────────────────────────────
+// The agent's findings, worst first, each with the place she would go. It
+// leads the page because a figure she cannot trust is worse than no figure.
+function renderVerdict(a) {
+  if (!a) { $('verdict').innerHTML = ''; return; }
+  const cls = a.counts.blocker ? 'bad' : (a.counts.high ? 'warn' : (a.findings.length ? 'warn' : 'ok'));
+  const head = a.counts.blocker
+    ? 'These figures are wrong — do not use them yet'
+    : a.counts.high
+      ? 'These figures are incomplete'
+      : a.findings.length ? 'Worth knowing' : 'The books add up';
+  $('verdict').innerHTML = `
+    <div class="verdict ${cls}">
+      <h2>${esc(head)}</h2>
+      <p>${esc(a.summary || '')}</p>
+      ${a.findings.map((f) => `
+        <div class="finding">
+          <div><span class="fsev ${esc(f.severity)}">${esc(f.severity)}</span><span class="fwhat">${esc(f.what)}</span></div>
+          <p class="fwhy">${esc(f.why)}</p>
+          <p class="ffix"><b>What to do:</b> ${esc(f.fix)}${f.where ? ` <span class="mono" style="color:var(--text-faint)">(${esc(f.where)})</span>` : ''}</p>
+        </div>`).join('')}
+    </div>`;
+}
+
+const rows = (list) => list.map((a) => `
+  <tr><td><a class="acct" data-acct="${esc(a.code)}">${esc(a.code)}</a> &nbsp;${esc(a.name)}</td>
+      <td class="n">${money(a.balance)}</td></tr>`).join('');
+
+function renderPL(d) {
+  const p = d.profitAndLoss;
+  const sec = (title, list, total) => `
+    <tr class="sub"><td>${esc(title)}</td><td class="n">${money(total)}</td></tr>
+    ${list.length ? rows(list) : '<tr><td colspan="2" style="color:var(--text-faint)">nothing</td></tr>'}`;
+  return `
+    <div class="card">
+      <div class="hdr"><h3>Profit &amp; Loss &mdash; ${esc(d.legalName || d.entityName)}</h3>
+        <span class="sub">${esc(d.from || 'the beginning')} to ${esc(d.to || 'today')}</span></div>
+      <table>
+        <tbody>
+          ${sec('Income', p.income, p.incomeTotal)}
+          ${sec('Cost of material sold', p.cogs, p.cogsTotal)}
+          <tr class="tot"><td>Gross profit</td><td class="n">${money(p.grossProfit)}</td></tr>
+          ${sec('Expenses', p.expense, p.expenseTotal)}
+          <tr class="tot"><td>Net income</td><td class="n">${money(p.netIncome)}</td></tr>
+        </tbody>
+      </table>
+    </div>`;
+}
+
+function renderBS(d) {
+  const b = d.balanceSheet;
+  const sec = (title, list, total) => `
+    <tr class="sub"><td>${esc(title)}</td><td class="n">${money(total)}</td></tr>
+    ${list.length ? rows(list) : '<tr><td colspan="2" style="color:var(--text-faint)">nothing</td></tr>'}`;
+  return `
+    <div class="card">
+      <div class="hdr"><h3>Balance Sheet &mdash; ${esc(d.legalName || d.entityName)}</h3>
+        <span class="sub">as at ${esc(d.to || 'today')}</span></div>
+      <table>
+        <tbody>
+          ${sec('Assets', b.assets, b.assetTotal)}
+          ${sec('Liabilities', b.liabilities, b.liabilityTotal)}
+          ${sec('Equity', b.equity, b.equityTotal)}
+          <tr><td>Net income for the period</td><td class="n">${money(b.netIncome)}</td></tr>
+          <tr class="tot"><td>Liabilities, equity and profit</td><td class="n">${money(b.rightSide)}</td></tr>
+          ${b.balances ? '' : `<tr class="tot"><td style="color:var(--red-500)">Out by</td>
+            <td class="n" style="color:var(--red-500)">${money(b.difference)}</td></tr>`}
+        </tbody>
+      </table>
+    </div>`;
+}
+
+function renderTB(d) {
+  const t = d.trialBalance;
+  return `
+    <div class="card">
+      <div class="hdr"><h3>Trial Balance &mdash; ${esc(d.legalName || d.entityName)}</h3>
+        <span class="sub">${t.balanced ? 'balanced' : 'DOES NOT BALANCE'}</span></div>
+      <table>
+        <thead><tr><th>Account</th><th>Type</th><th class="n">Debit</th><th class="n">Credit</th><th class="n">Balance</th></tr></thead>
+        <tbody>
+          ${t.accounts.map((a) => `
+            <tr><td><a class="acct" data-acct="${esc(a.code)}">${esc(a.code)}</a> &nbsp;${esc(a.name)}</td>
+                <td class="mono" style="font-size:11px;color:var(--text-faint)">${esc(a.type)}</td>
+                <td class="n">${money(a.debit)}</td><td class="n">${money(a.credit)}</td>
+                <td class="n">${money(a.balance)}</td></tr>`).join('')}
+          <tr class="tot"><td colspan="2">Total</td><td class="n">${money(t.debit)}</td>
+              <td class="n">${money(t.credit)}</td><td class="n"></td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="note">Click an account code to see every entry in it.</div>`;
+}
+
+async function renderGL(d) {
+  if (!STATE.account) {
+    return '<div class="empty">Pick an account from the Trial Balance to see its history.</div>';
+  }
+  try {
+    const r = await api(`/api/books/account/${encodeURIComponent(STATE.account)}?${qs()}`);
+    const g = r.ledger;
+    return `
+      <div class="card">
+        <div class="hdr"><h3>${esc(g.code)} &nbsp;${esc(g.name)}</h3>
+          <span class="sub">closing ${money(g.closing)}</span></div>
+        <table>
+          <thead><tr><th>Date</th><th>What</th><th>Who</th><th class="n">Debit</th><th class="n">Credit</th><th class="n">Running</th></tr></thead>
+          <tbody>
+            ${g.entries.length ? g.entries.map((e) => `
+              <tr><td class="mono">${esc(e.date || '')}</td>
+                  <td>${esc(e.kind || e.memo || '')}</td>
+                  <td style="color:var(--text-muted)">${esc(e.party || '')}</td>
+                  <td class="n">${e.debit ? money(e.debit) : ''}</td>
+                  <td class="n">${e.credit ? money(e.credit) : ''}</td>
+                  <td class="n">${money(e.running)}</td></tr>`).join('')
+              : '<tr><td colspan="6" class="empty">No entries in this account for this range.</td></tr>'}
+          </tbody>
+        </table>
+      </div>`;
+  } catch (e) {
+    return `<div class="empty" style="color:var(--red-500)">${esc(e.message)}</div>`;
+  }
+}
+
+async function paint() {
+  const d = STATE.data;
+  if (!d) return;
+  const out = STATE.view === 'pl' ? renderPL(d)
+    : STATE.view === 'bs' ? renderBS(d)
+    : STATE.view === 'tb' ? renderTB(d)
+    : await renderGL(d);
+  $('body').innerHTML = out;
+  document.querySelectorAll('.acct').forEach((a) => {
+    a.onclick = () => {
+      STATE.account = a.dataset.acct;
+      STATE.view = 'gl';
+      document.querySelectorAll('#tabs button').forEach((b) =>
+        b.classList.toggle('sel', b.dataset.view === 'gl'));
+      paint();
+    };
+  });
+}
+
+async function load() {
+  $('body').innerHTML = '<div class="empty">Building the books from her records…</div>';
+  $('verdict').innerHTML = '';
+  try {
+    const d = await api('/api/books?' + qs());
+    STATE.data = d;
+    const b = d.build;
+    $('built').textContent = `${b.transactions} transactions · ${b.lines} journal lines`
+      + (b.complete ? '' : ' · INCOMPLETE');
+    renderVerdict(d.agent);
+    await paint();
+  } catch (e) {
+    $('body').innerHTML = `<div class="empty" style="color:var(--red-500)">${esc(e.message)}</div>`;
+  }
+}
+
+(async () => {
+  try {
+    const first = await api('/api/books');
+    $('company').innerHTML = (first.companies || [])
+      .map((c) => `<option value="${esc(c.id)}">${esc(c.name)}</option>`).join('');
+  } catch (e) {
+    $('body').innerHTML = `<div class="empty" style="color:var(--red-500)">${esc(e.message)}</div>`;
+    return;
+  }
+  // The current year, which is what she wants nine times in ten, and it makes
+  // the page useful on arrival instead of empty.
+  const y = new Date().getFullYear();
+  $('from').value = `${y}-01-01`;
+  $('to').value = `${y}-12-31`;
+  $('run').onclick = load;
+  document.querySelectorAll('#tabs button').forEach((b) => {
+    b.onclick = () => {
+      document.querySelectorAll('#tabs button').forEach((x) => x.classList.remove('sel'));
+      b.classList.add('sel');
+      STATE.view = b.dataset.view;
+      paint();
+    };
+  });
+  await load();
+})();
+</script>
+</body>
+</html>

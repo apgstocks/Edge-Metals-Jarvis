@@ -5541,7 +5541,13 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
             // convenience — it is a number that describes nobody. The list of
             // companies is returned so the screen can offer the choice rather
             // than guess.
-            const companies = E.ENTITIES.map((e) => ({ id: e.id, name: e.name }));
+            // uiName for the switcher, legalName and taxId for the statement
+            // headings — a pack going to her CPA has to carry the filing name,
+            // not the short one. There is no `e.name` on an entity; reading it
+            // gave the agent sentences beginning "undefined:".
+            const companies = E.ENTITIES.map((e) => ({
+                id: e.id, name: e.uiName, legalName: e.legalName, taxId: e.taxId || null,
+            }));
             if (!entity) {
                 return res.json({ needs_entity: true, companies, accounts: C.ACCOUNTS });
             }
@@ -5553,8 +5559,17 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
             const opts = { entity, from, to };
             const packed = S.pack(built.lines, opts);
 
+            // The chosen company's names at the TOP level, not only inside the
+            // agent's verdict: the statement headings read them, and a P&L
+            // whose heading is blank is not a document she can send anyone.
+            // legalName is what a CPA needs — Edge Trading trades as "Edge
+            // Yard", so the short name on a filing would be wrong.
+            const chosen = E.get(entity);
             res.json({
                 companies, entity, from, to,
+                entityName: chosen.uiName,
+                legalName: chosen.legalName || chosen.uiName,
+                taxId: chosen.taxId || null,
                 accounts: C.ACCOUNTS,
                 // What the journal was built from, and what it could not
                 // place. `complete` false means the statements below are
@@ -5568,6 +5583,19 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
                     problems: built.problems,
                     notes: built.notes,
                 },
+                // ── THE AGENT'S VERDICT, FROM THIS BUILD ──────────────────
+                // Computed from the SAME journal as the statements beside it.
+                // Run as a second request it could disagree with the numbers
+                // on screen, which is the one thing a page about trust must
+                // never do.
+                agent: (() => {
+                    const A = require('./helpers/booksAgent');
+                    const r = A.review(built, { entity, from, to });
+                    // summary() is the one sentence the page leads with, so it
+                    // travels WITH the findings it summarises rather than being
+                    // rebuilt in the browser from the same data.
+                    return { ...r, summary: A.summary(r) };
+                })(),
                 ...packed,
             });
         } catch (e) { res.status(500).json({ error: e.message }); }
@@ -9220,6 +9248,14 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
             res.set('Cache-Control', 'no-cache');
             res.send('(function(){var module={exports:{}};\n' + src + '\nwindow.JarvisMelspec=module.exports;})();\n');
         } catch (e) { res.status(500).type('text/javascript').send('/* melspec unavailable: ' + String(e.message).replace(/\*\//g, '') + ' */'); }
+    });
+
+    // ── THE BOOKS PORTAL ─────────────────────────────────────────────────
+    // Its own page, like /quickbooks, because it answers a different question
+    // (#170). Served explicitly rather than by static middleware so that
+    // scripts/check-route-reach.js and the screens registry can both see it.
+    app.get('/books', (req, res) => {
+        res.sendFile(path.join(cfg.ROOT, 'dashboard', 'books.html'));
     });
 
     app.get('/documents', (req, res) => {
