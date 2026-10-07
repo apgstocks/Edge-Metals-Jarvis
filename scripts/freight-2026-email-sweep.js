@@ -61,6 +61,13 @@ const WRITE = argv.includes('--write');
 // works. Purpose: NTG / TQL / Schneider are inert tabs in documents.html
 // because "the parsing waits for a sample"; this fetches the samples.
 const SAVE_ONLY = argv.includes('--save-only');
+// --export-json [file]: ALSO write every extracted line (all statuses) to a JSON
+// file, for scripts/party-invoices-import.js. Writes only that one local file —
+// nothing to the sheet, bills or any store. Default data/party-invoices-2026.json.
+const EXPORT_JSON = argv.includes('--export-json')
+    ? path.resolve(ROOT, (arg('--export-json') && !arg('--export-json').startsWith('--')) ? arg('--export-json') : 'data/party-invoices-2026.json')
+    : null;
+const exported = [];
 const SAVE_DIR = (SAVE_ONLY || argv.includes('--save-samples'))
     ? path.resolve(ROOT, (arg('--save-samples') && !arg('--save-samples').startsWith('--')) ? arg('--save-samples') : 'data/sample-invoices')
     : null;
@@ -414,6 +421,7 @@ async function sweepParty(party, mailboxes) {
             console.log(`── ${party.label}${party.unverified ? ' (generic match — unverified prompt, lower confidence)' : ''} ──────────────────────────────────────`);
             const r = await sweepParty(party, mailboxes);
             out.push({ party, ...r });
+            if (EXPORT_JSON) for (const rec of (r.matched || [])) exported.push({ party: party.key, ...rec });
             console.log(`  Emails matched: ${r.scanned}   Unique PDFs: ${r.pdfsFound} (+${r.dupPdfs} identical repeats skipped)   Line items: ${r.recordsExtracted}   Edge outbound doc-packs skipped: ${r.outboundSkipped}`);
             console.log(`  Checked OK: ${r.verifiedCount}   Missing (with an amount): ${r.missing.length}   Not-in-sheet but no amount: ${r.missingNoAmount}   COULD NOT BE CHECKED: ${r.unchecked}`);
             if (r.missing.length) {
@@ -504,6 +512,11 @@ async function sweepParty(party, mailboxes) {
         console.log('  For TQL/NTG/EagleBrit specifically: confirm each hit is really that');
         console.log('  company (the generic prompt has no party-specific validation) before');
         console.log('  treating any of them as a new company to create.');
+    }
+    if (EXPORT_JSON) {
+        fs.mkdirSync(path.dirname(EXPORT_JSON), { recursive: true });
+        fs.writeFileSync(EXPORT_JSON, JSON.stringify({ exported_at: new Date().toISOString(), mailboxes: mailboxes.map((m) => m.address), records: exported }, null, 1));
+        console.log(`  Exported ${exported.length} extracted line(s) to ${EXPORT_JSON} — next: node scripts/party-invoices-import.js`);
     }
     console.log('');
 })().catch((e) => { console.error('\nSweep failed:', e); process.exit(1); });

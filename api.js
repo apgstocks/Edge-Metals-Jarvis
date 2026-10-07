@@ -5437,6 +5437,22 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
         } catch (e) { res.status(500).json({ error: e.message }); }
     });
 
+    // ── Invoice register: Zimex / Jio / Sher / Pan Metal / AJ Transport / Garduno's ──
+    // READ-ONLY. Rows come from scripts/party-invoices-import.js (the email sweep's
+    // export). Nothing else reads this store; it is not a bill, sale or book entry.
+    app.get('/api/party-invoices', (req, res) => {
+        try {
+            const pi = require('./helpers/partyInvoices');
+            const all = pi.list();
+            const { party, status, q } = req.query || {};
+            const needle = String(q || '').trim().toLowerCase();
+            const rows = all.filter((r) => (!party || r.party === party)
+                && (!status || (status === 'on_sheet' ? (r.check_status === 'verified' || r.check_status === 'match') : r.check_status === status))
+                && (!needle || [r.invoice_no, r.container_no, r.booking_no, r.hbl_no].some((v) => String(v || '').toLowerCase().includes(needle))));
+            res.json({ rows, summary: pi.summary(all), parties: pi.PARTIES });
+        } catch (e) { res.status(500).json({ error: e.message }); }
+    });
+
     // ── Edge Metals carrier invoices (NTG / TQL / Schneider) ─────────────
     // READ-ONLY. Rows come from scripts/carrier-invoices-import.js; nothing
     // here writes, and nothing else reads this store (helpers/carrierInvoices.js).

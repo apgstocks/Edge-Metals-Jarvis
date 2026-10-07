@@ -948,6 +948,7 @@ body[data-theme="light"] {
       <button class="verify-group-btn active" data-verify-group="freight">Freight</button>
       <button class="verify-group-btn" data-verify-group="transport">Transport</button>
       <button class="verify-group-btn" data-verify-group="commission">Commission</button>
+      <button class="verify-group-btn" data-verify-group="register">Invoice register</button>
     </div>
 
     <!-- ── Freight ─────────────────────────────────────────────────────── -->
@@ -1272,6 +1273,25 @@ body[data-theme="light"] {
     </div>
 
     <!-- ── Commission ──────────────────────────────────────────────────── -->
+    <!-- ── Invoice register (read-only) ─────────────────────────────────────
+         Apsara, 2026-10-07: "similar for zimex, jio, sher, pan metal, AJ,
+         Gardunos". Every 2026 invoice line each party sent, read from email by
+         scripts/party-invoices-import.js. Says nothing about paid/unpaid — a PDF
+         invoice carries no payment. Not a bill, sale or book entry. -->
+    <div id="verifyGroupRegister" class="hidden">
+      <div id="verifyPanelRegister">
+        <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin-bottom:12px;">
+          <select id="regParty" class="inp" style="padding:6px 10px;"><option value="">All parties</option></select>
+          <select id="regStatus" class="inp" style="padding:6px 10px;">
+            <option value="">Any status</option><option value="on_sheet">On the Invoice sheet</option><option value="not_in_sheet">NOT on the sheet</option>
+          </select>
+          <input id="regQ" class="inp" placeholder="Invoice / container / booking" style="padding:6px 10px; min-width:200px;">
+        </div>
+        <div id="regSummary" style="font-size:12px; margin-bottom:10px; color:var(--text-muted);"></div>
+        <div id="regBody" class="muted">Loading…</div>
+      </div>
+    </div>
+
     <div id="verifyGroupCommission" class="hidden">
       <div style="display:flex; gap:4px; margin-bottom:18px;">
         <button class="verify-subtab-btn active" data-verify-subtab="joey">Joey</button>
@@ -1557,7 +1577,7 @@ document.querySelectorAll('.subtab-btn').forEach((b) => b.addEventListener('clic
 // data-verify-subtab + a name→element-id lookup, so a new entity under an
 // existing group, or a whole new group, is just another button + panel +
 // one lookup-table line — not a rewrite of either switcher.
-const VERIFY_GROUP_PANELS = { freight: 'verifyGroupFreight', transport: 'verifyGroupTransport', commission: 'verifyGroupCommission' };
+const VERIFY_GROUP_PANELS = { freight: 'verifyGroupFreight', transport: 'verifyGroupTransport', commission: 'verifyGroupCommission', register: 'verifyGroupRegister' };
 // Every entity's subtab key, in display order, per group — doubles as the
 // "which subtab do I reset to when this group is (re)selected" list. Keep
 // in sync with each group's row of .verify-subtab-btn buttons above.
@@ -1565,13 +1585,14 @@ const VERIFY_GROUP_SUBTABS = {
   freight: ['zimex', 'eagle'],
   transport: ['aj-transport', 'sher-trucking', 'jio', 'gardunos', 'ntg', 'tql', 'schneider'],
   commission: ['joey', 'pan-metal'],
+  register: ['register'],
 };
 const VERIFY_SUBTAB_PANELS = {
   zimex: 'verifyPanelZimex', eagle: 'verifyPanelEagle',
   'aj-transport': 'verifyPanelAjTransport', 'sher-trucking': 'verifyPanelSherTrucking', 'jio': 'verifyPanelJio',
   gardunos: 'verifyPanelGardunos',
   ntg: 'verifyPanelNtg', tql: 'verifyPanelTql', schneider: 'verifyPanelSchneider',
-  joey: 'verifyPanelJoey', 'pan-metal': 'verifyPanelPanMetal',
+  joey: 'verifyPanelJoey', 'pan-metal': 'verifyPanelPanMetal', register: 'verifyPanelRegister',
 };
 function setVerifyGroup(name) {
   document.querySelectorAll('.verify-group-btn').forEach((b) => b.classList.toggle('active', b.dataset.verifyGroup === name));
@@ -2820,6 +2841,35 @@ $('btnEagleVerify').addEventListener('click', async () => {
   } catch (e) { alert(e.message); }
   finally { setButtonLoading(btn, false); $('eagleLoading').classList.add('hidden'); }
 });
+
+
+// ── Invoice register (read-only) ────────────────────────────────────────────
+// Lists helpers/partyInvoices rows. No paid/unpaid: a PDF invoice has no payment.
+let regLoaded = false;
+async function loadRegister() {
+  const body = $('regBody');
+  try {
+    const qs = new URLSearchParams();
+    if ($('regParty').value) qs.set('party', $('regParty').value);
+    if ($('regStatus').value) qs.set('status', $('regStatus').value);
+    if ($('regQ').value.trim()) qs.set('q', $('regQ').value.trim());
+    const d = await api('/api/party-invoices?' + qs.toString());
+    if (!regLoaded) {
+      $('regParty').innerHTML = '<option value="">All parties</option>' + Object.entries(d.parties || {}).map(([k, v]) => `<option value="${esc(k)}">${esc(v)}</option>`).join('');
+      regLoaded = true;
+    }
+    const sm = d.summary || {};
+    $('regSummary').innerHTML = Object.values(sm).filter((x) => x.count).map((x) => `${esc(x.label)}: <b>${x.count}</b> lines ${propMoney(x.total)}${x.not_on_sheet ? ` · <span style="color:#e3b567;">${x.not_on_sheet} not on sheet</span>` : ''}`).join(' &nbsp;|&nbsp; ') || 'Nothing imported yet.';
+    const rows = (d.rows || []).slice().sort((a, b) => String(b.invoice_date || '').localeCompare(String(a.invoice_date || '')));
+    if (!rows.length) { body.innerHTML = '<div class="placeholder-note">No invoices to show. They are read from email by <code>scripts/party-invoices-import.js</code>.</div>'; return; }
+    body.innerHTML = '<div style="overflow-x:auto;"><table class="data-table"><thead><tr><th>Party</th><th>Inv date</th><th>Invoice</th><th>Container</th><th>Booking / HBL</th><th style="text-align:right;">Amount</th><th>On sheet?</th><th>From</th></tr></thead><tbody>'
+      + rows.map((r) => `<tr><td>${esc((d.parties || {})[r.party] || r.party)}</td><td>${esc(r.invoice_date || '')}</td><td>${esc(r.invoice_no || '—')}</td><td style="font-family:var(--font-mono);">${esc(r.container_no || '—')}</td><td style="font-family:var(--font-mono);">${esc(r.booking_no || r.hbl_no || '—')}</td><td style="text-align:right; font-family:var(--font-mono);">${propMoney(r.amount)}</td><td>${ajBadge(r.check_status === 'match' ? 'verified' : (r.check_status || 'no_container_on_pdf'))}</td><td style="font-size:11px; color:var(--text-faint);">${esc(r.source_file || '')}</td></tr>`).join('')
+      + '</tbody></table></div>';
+  } catch (e) { body.textContent = 'Could not load: ' + e.message; }
+}
+['regParty', 'regStatus'].forEach((id) => $(id).addEventListener('change', loadRegister));
+$('regQ').addEventListener('input', () => { clearTimeout(window.__regT); window.__regT = setTimeout(loadRegister, 250); });
+document.querySelectorAll('.verify-group-btn').forEach((b) => b.addEventListener('click', () => { if (b.dataset.verifyGroup === 'register') loadRegister(); }));
 
 // ── Address book typeahead (buyer/consignee) ─────────────────────────────
 let addressBook = [];

@@ -220,6 +220,8 @@ const FILES = {
     METALS_TRUCKING_FILE: path.join(DATA_DIR, 'metals_trucking.json'),
     // Edge Metals local-delivery carriers (NTG, TQL, Schneider) — own store, see helpers/carrierInvoices.js
     CARRIER_INVOICES_FILE: path.join(DATA_DIR, 'carrier_invoices.json'),
+    // Zimex / Jio / Sher / Pan Metal / AJ Transport / Garduno's invoices read from email — see helpers/partyInvoices.js
+    PARTY_INVOICES_FILE: path.join(DATA_DIR, 'party_invoices.json'),
     // ── EDGE METALS MATERIAL RECEIVED, ITEMISED FROM A PACKING LIST ──────
     // Apsara, 2026-09-11: "sometimes,we get packing list when we deliver the
     // load. that packing list contains items that needs to stored in
