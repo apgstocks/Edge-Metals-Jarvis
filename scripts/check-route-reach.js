@@ -148,35 +148,109 @@ function splitTop(s) {
 }
 
 // ── every guarded mutating route on the server ───────────────────────────
+// ── DISCOVERY BY CONTENT, NOT BY FILENAME ────────────────────────────────
+// 2026-10-07. This used to collect api.js plus any file under helpers/ whose
+// NAME matched /routes?\.js$/. Two holes, both proved by experiment before
+// being fixed, and both the same shape as every other failure in this file's
+// history — a pattern that matched less than it claimed:
+//
+//   · helpers/bankMatchRoutes.js ends in a capital-R "Routes.js", and the
+//     pattern was case-sensitive, so that file was never opened. A guarded,
+//     uncalled DELETE planted in it left the report completely unchanged —
+//     still "55 guarded mutating routes", still one unreachable. Nine Plaid
+//     and bank-alias routes live there.
+//   · helpers/bankDocs.js registers two mutating routes and matches no
+//     filename convention at all.
+//
+// A guard whose coverage depends on what someone named a file is a guard that
+// quietly shrinks. So the files are found by looking for route registration
+// IN them. tests/ and scripts/ are excluded deliberately: nothing there
+// registers a real route, and scripts/mutate.js holds route strings as
+// mutation-catalogue DATA that would be read as routes.
 function routeFiles() {
-    const out = [path.join(ROOT, 'api.js')];
+    const out = [];
+    const SKIP = new Set(['node_modules', '.git', 'tests', 'scripts', 'builds',
+        'data', 'assets', 'docs', 'dashboard', 'mobile-app', 'desktop']);
     const walk = (p) => {
         if (!fs.existsSync(p)) return;
         for (const e of fs.readdirSync(p, { withFileTypes: true })) {
+            if (SKIP.has(e.name)) continue;
             const q = path.join(p, e.name);
             if (e.isDirectory()) walk(q);
-            else if (/routes?\.js$/.test(e.name)) out.push(q);
+            else if (e.name.endsWith('.js')
+                     && /\bapp\.(post|delete|put|patch)\s*\(/.test(fs.readFileSync(q, 'utf8'))) {
+                out.push(q);
+            }
         }
     };
-    walk(path.join(ROOT, 'helpers'));
-    return out;
+    walk(ROOT);
+    return out.sort();
 }
 
 const GATES = ['requireSuper', 'requireAdmin'];
-function routes() {
+
+// ── THE GATE MAY SIT ANYWHERE BEFORE THE HANDLER ─────────────────────────
+// This used to require the gate IMMEDIATELY after the path. Swapping two
+// middleware arguments — `largeJson, requireSuper` instead of `requireSuper,
+// largeJson` — dropped the count from 55 to 54 and silently removed a real
+// guarded route from this check's remit. Express does not care about the
+// order, so neither can this.
+//
+// The tail is read with argsAt() rather than a line-bounded regex, for the
+// reason already written at the top of this file: a call's arguments can
+// contain parens, and stopping at the first one is how five correct routes
+// were reported broken.
+// Exported as its own function so tests/route-reach.js can feed it SOURCE
+// TEXT, the way section B already does for the call parser. Reading today's
+// repo back to itself proves nothing — both of the holes fixed on 2026-10-07
+// were invisible to a check that only ever looked at the live code.
+function routesIn(src, file = '(source)') {
     const out = [];
-    for (const f of routeFiles()) {
-        const src = fs.readFileSync(f, 'utf8');
-        const re = new RegExp(
-            `app\\.(post|delete|put|patch)\\(\\s*['"\`]([^'"\`]+)['"\`]\\s*,\\s*(${GATES.join('|')})`, 'g');
-        for (const m of src.matchAll(re)) {
-            out.push({
-                method: m[1].toUpperCase(), route: m[2], gate: m[3],
-                file: path.relative(ROOT, f),
-            });
+    const verb = /\bapp\.(post|delete|put|patch)\s*\(/g;
+    {
+        for (const m of [...src.matchAll(verb)]) {
+            // ── ONLY THE MIDDLEWARE LIST IS READ, NOT THE WHOLE CALL ──────
+            // A first version of this called argsAt() to get every argument
+            // and then walked them. It LOST SIX routes — /api/expenses/:id,
+            // /api/bol/generate and four more — because argsAt() counts
+            // quotes and backticks across the entire handler body, and these
+            // handlers are hundreds of lines of HTML templates and regexes.
+            // One desync and it runs to end-of-file and returns null, so a
+            // perfectly ordinary `app.delete('/x', requireAdmin, ...)` simply
+            // vanished. The count fell from 55 to 49 and the report still
+            // looked healthy, which is this whole file's recurring nightmare.
+            //
+            // Nothing here needs the end of the call. A middleware list is a
+            // handful of identifiers between the path and the handler, so the
+            // window is small, bounded, and cannot desync on a body it never
+            // reads.
+            const afterVerb = src.slice(m.index + m[0].length, m.index + m[0].length + 400);
+            const lit = /^\s*(['"`])([^'"`\n]+)\1\s*,/.exec(afterVerb);
+            if (!lit) continue;                       // a path built from a variable
+            // A template path interpolates, so there is no literal to compare
+            // against a client call. Recorded, it becomes a permanent false
+            // alarm nobody can clear — `/api/${name}` matching nothing forever.
+            // api.js registers one such family today and it is ungated, so
+            // this costs nothing now and stops a wolf-cry the day it is gated.
+            if (lit[2].includes('${')) continue;
+            const rest = afterVerb.slice(lit[0].length);
+            // The handler starts at the first `function`, `=>`'s parameter
+            // list, or `(req`-shaped callback. Everything before it is
+            // middleware. Cutting here is what stops a `requireSuper`
+            // mentioned inside a handler from counting as a gate.
+            const stop = rest.search(/\basync\b|\bfunction\b|\(\s*req|\)\s*=>|=>/);
+            const mids = stop === -1 ? rest : rest.slice(0, stop);
+            const gate = GATES.find((g) => new RegExp(`\\b${g}\\b`).test(mids));
+            if (!gate) continue;
+            out.push({ method: m[1].toUpperCase(), route: lit[2], gate, file });
         }
     }
     return out;
+}
+
+function routes() {
+    return routeFiles().flatMap(
+        (f) => routesIn(fs.readFileSync(f, 'utf8'), path.relative(ROOT, f)));
 }
 
 // ── KNOWN AND DELIBERATE ─────────────────────────────────────────────────
@@ -211,7 +285,7 @@ function unreachableRoutes() {
     return { routes: ROUTES, calls: CALLS, unreachable: out };
 }
 
-module.exports = { unreachableRoutes, callsIn, routes, clientFiles, BY_DESIGN };
+module.exports = { unreachableRoutes, callsIn, routes, routesIn, routeFiles, clientFiles, BY_DESIGN };
 
 // ── printed only when run directly ───────────────────────────────────────
 // require()d from tests/route-reach.js, where a report on stdout would be

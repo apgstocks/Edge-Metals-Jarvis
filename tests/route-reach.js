@@ -189,6 +189,97 @@ const KNOWN_OPEN = {
        + 'stale APK asset make a route look reachable');
 }
 
+// ── E — THE ROUTE SIDE OF THE PARSER ──────────────────────────────────────
+// Section B covers the CALL parser. Until 2026-10-07 nothing covered the
+// ROUTE parser, and it had two holes — each one proved by planting a guarded,
+// uncalled route and watching the report stay healthy:
+//
+//   · routeFiles() collected api.js plus any file under helpers/ whose NAME
+//     matched /routes?\.js$/, case-sensitive. helpers/bankMatchRoutes.js ends
+//     in a capital-R "Routes.js" and was never opened — nine Plaid and
+//     bank-alias routes live there. helpers/bankDocs.js has two mutating
+//     routes and matches no convention at all. Coverage that depends on what
+//     someone named a file is coverage that quietly shrinks.
+//   · the gate had to be the argument IMMEDIATELY after the path. Writing
+//     `largeJson, requireSuper` instead of `requireSuper, largeJson` dropped
+//     the count from 55 to 54 and removed a real route from the check's remit.
+//     The only symptom was a number nobody reads.
+//
+// Fed as source text for the same reason as section B: a check that reads
+// today's repo back to itself would have passed throughout both holes.
+{
+    section('E — the route parser, on the shapes that were invisible');
+
+    const R = (src) => reach.routesIn(src);
+
+    let r = R(`app.delete('/api/x/:id', requireSuper, async (req, res) => { res.json({}); });`);
+    ck('the plain shape', r.length === 1 && r[0].method === 'DELETE'
+       && r[0].route === '/api/x/:id' && r[0].gate === 'requireSuper', JSON.stringify(r));
+
+    // HOLE 2. Express does not care about middleware order, so neither can this.
+    r = R(`app.put('/api/x/:id', largeJson, requireSuper, async (req, res) => {});`);
+    ck('  a gate AFTER another middleware still counts',
+       r.length === 1 && r[0].gate === 'requireSuper', JSON.stringify(r));
+
+    r = R(`app.post('/api/x', upload.single('file'), requireAdmin, (req, res) => {});`);
+    ck('  and a gate after a middleware that is itself a CALL',
+       r.length === 1 && r[0].gate === 'requireAdmin', JSON.stringify(r));
+
+    // The opposite error: counting a route as guarded because the word
+    // appears somewhere in its handler. That would hide a genuinely open
+    // route behind a mention of the thing that does not protect it.
+    r = R(`app.post('/api/open', async (req, res) => {
+             if (req.role === 'x') return requireSuper;   // not a gate
+           });`);
+    ck('  but the word inside a HANDLER is not a gate', r.length === 0, JSON.stringify(r));
+
+    // An ungated route is not this check's business — it has no permission to
+    // be unusable. Counting them would add ~140 entries of noise, and the
+    // script's own header says five false alarms is worse than no guard.
+    r = R(`app.post('/api/open', async (req, res) => { res.json({}); });`);
+    ck('  an ungated route is not collected at all', r.length === 0, JSON.stringify(r));
+
+    // A path built from a variable cannot be matched against a client call,
+    // so it is skipped rather than recorded as the literal '${name}'.
+    r = R('app.post(`/api/${name}`, requireAdmin, (req, res) => {});');
+    ck('  a path built from a variable is skipped, not recorded as the template',
+       r.length === 0, JSON.stringify(r));
+
+    // ── A LONG HANDLER MUST NOT SWALLOW THE ROUTE ────────────────────────
+    // A first attempt at fixing hole 2 read the WHOLE call with argsAt() and
+    // lost six real routes — /api/expenses/:id, /api/bol/generate and four
+    // more — because argsAt() tracks quotes across the entire handler body,
+    // and one apostrophe or regex in hundreds of lines of HTML template
+    // desynced it into returning null. The count fell 55 → 49 and the report
+    // still looked healthy.
+    r = R(`app.delete('/api/expenses/:id', requireAdmin, async (req, res) => {
+             const s = \`it's a template with 'quotes' and a regex /['"]/ in it\`;
+             const t = "and a \\" escaped quote";
+             res.json({ s, t });
+           });`);
+    ck('  a handler full of quotes and regexes does not hide its own route',
+       r.length === 1 && r[0].route === '/api/expenses/:id', JSON.stringify(r));
+
+    // HOLE 1, on the live repo: the two files that were never opened.
+    const files = reach.routeFiles().map((f) => path.relative(ROOT, f));
+    for (const f of ['helpers/bankMatchRoutes.js', 'helpers/bankDocs.js',
+                     'helpers/claims/routes.js', 'helpers/quickbooks/routes.js', 'api.js']) {
+        ck(`  ${f} is one of the files the check reads`, files.includes(f), files.join(', '));
+    }
+    // Discovery is by CONTENT, so renaming a file cannot remove it from the
+    // check. This is the property, stated without naming a convention.
+    ck('  every file that registers a mutating route is read',
+       files.length >= 5, `${files.length} files: ${files.join(', ')}`);
+
+    // The count, pinned. Not a target — a tripwire. It may legitimately rise
+    // when routes are added; it must never FALL without someone deleting a
+    // route on purpose, because a silent fall is what both holes looked like.
+    const live = reach.routes().length;
+    ck('the guarded-route count has not silently fallen', live >= 55,
+       `${live} guarded mutating routes — was 55 on 2026-10-07. If routes were `
+       + 'deliberately removed, lower this number in the same commit.');
+}
+
 console.log(`\n  ${pass} passed, ${fail} failed`);
 if (failures.length) { console.log('\n  failed:'); failures.forEach((f) => console.log('    · ' + f)); }
 process.exit(fail ? 1 : 0);

@@ -827,6 +827,27 @@ const MUTATIONS = [
     // PROPERTY and not the markup's length: the old 120-character proximity
     // regex went red when Edit was added beside Delete, and would have stayed
     // green if Delete had escaped the gate. This is the inverse.
+    // ── THE DEAD-ROUTE GUARD'S OWN TWO HOLES ──────────────────────────
+    // Both were live until 2026-10-07, and both were invisible because
+    // nothing fed the ROUTE parser anything but today's repo. These put each
+    // hole back and check that tests/route-reach.js section E now bites.
+    { name: 'route-reach: files found by NAME again, so capital-R Routes.js is skipped',
+      file: 'scripts/check-route-reach.js', suites: ['route-reach'],
+      find: "&& /\\bapp\\.(post|delete|put|patch)\\s*\\(/.test(fs.readFileSync(q, 'utf8'))",
+      to:   "&& /routes?\\.js$/.test(e.name)" },
+    { name: 'route-reach: the gate must sit immediately after the path again',
+      file: 'scripts/check-route-reach.js', suites: ['route-reach'],
+      find: 'const stop = rest.search(/\\basync\\b|\\bfunction\\b|\\(\\s*req|\\)\\s*=>|=>/);',
+      to:   'const stop = 0;' },
+    { name: 'route-reach: a requireSuper inside a HANDLER counts as a gate',
+      file: 'scripts/check-route-reach.js', suites: ['route-reach'],
+      find: 'const mids = stop === -1 ? rest : rest.slice(0, stop);',
+      to:   'const mids = rest;' },
+    { name: 'route-reach: a template path is recorded, inventing a false alarm',
+      file: 'scripts/check-route-reach.js', suites: ['route-reach'],
+      find: "if (lit[2].includes('${')) continue;",
+      to:   "void 0;" },
+
     // ── THE TRUCKING AND SALE-COST EDIT ROUTES ────────────────────────
     { name: 'trucking: the edit route drops the patch on the floor',
       file: 'api.js', suites: ['payment-edit-all'],
