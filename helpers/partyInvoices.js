@@ -89,7 +89,7 @@ async function upsertMany(rows) {
             if (!at.has(row.key)) { arr.push({ id: `PI_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`, ...row, createdAt: now, updatedAt: now }); at.set(row.key, arr.length - 1); added++; }
             else if (arr[at.get(row.key)].locked) keptLocked++;
             // The ORIGINAL never overwrites a REVISED line that is already here, whatever order they arrive in.
-            else if (arr[at.get(row.key)].revised && !row.revised) keptLocked++;
+            else if (isRevised(arr[at.get(row.key)].invoice_no) && !row.revised) keptLocked++;
             // A re-import must not lower a line below what has already been paid against it.
             else if (row.amount + 0.005 < (paidNow[arr[at.get(row.key)].id] || 0)) keptLocked++;
             else { const i = at.get(row.key); arr[i] = { ...arr[i], ...row, updatedAt: now }; updated++; }
@@ -212,7 +212,9 @@ function supersedePlan(rows = list(), pays = payments()) {
     for (const r of rows) { const k = `${r.party}|${baseInvoice(r.invoice_no)}`; if (!groups.has(k)) groups.set(k, []); groups.get(k).push(r); }
     const out = { remove: [], blocked: [], only_on_original: [], ambiguous: [], keep: [] };
     for (const g of groups.values()) {
-        const rev = g.filter((r) => r.revised), orig = g.filter((r) => !r.revised);
+        // Derived from the printed invoice number, NOT the stored `revised` flag: rows imported
+        // before that flag existed have none, and those are exactly the duplicates to clean up.
+        const rev = g.filter((r) => isRevised(r.invoice_no)), orig = g.filter((r) => !isRevised(r.invoice_no));
         if (!rev.length || !orig.length) continue;
         const revNos = [...new Set(rev.map((r) => r.invoice_no))];
         if (revNos.length > 1) { out.ambiguous.push({ base: baseInvoice(rev[0].invoice_no), revisions: revNos }); continue; }
@@ -235,7 +237,7 @@ async function supersedeApply() {
         await mutateJson(cfg.PARTY_INVOICES_FILE, [], (cur) => {
             const arr = (Array.isArray(cur) ? cur : []).filter((r) => !doomed.has(r.id));
             // A revised line keeps one key (the base), so a later re-import of the original cannot re-add it.
-            for (const r of arr) if (r.revised) r.key = `${r.party}:${baseInvoice(r.invoice_no)}:${r.container_no || r.booking_no || r.hbl_no || '(none)'}`;
+            for (const r of arr) if (isRevised(r.invoice_no)) { r.revised = true; r.key = `${r.party}:${baseInvoice(r.invoice_no)}:${r.container_no || r.booking_no || r.hbl_no || '(none)'}`; }
             return arr;
         }, { strict: true });
     }

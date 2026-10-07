@@ -36,12 +36,12 @@ const ORIG = ['HMMU4357974', ...REV];
     section('B. her existing duplicate data, cleaned up (report first)');
     // Reproduce what is already in her store: both versions keyed by the FULL printed number (the old key).
     fs.writeFileSync(path.join(TMP, 'party_invoices.json'), JSON.stringify([
-        ...REV.map((c, i) => ({ id: `R${i}`, party: 'gardunos', key: `gardunos:166 revised:${c}`, invoice_no: '166 revised', revised: true, container_no: c, amount: 930, check_status: 'verified' })),
-        ...ORIG.map((c, i) => ({ id: `O${i}`, party: 'gardunos', key: `gardunos:166:${c}`, invoice_no: '166', revised: false, container_no: c, amount: 930, check_status: 'verified' })),
+        ...REV.map((c, i) => ({ id: `R${i}`, party: 'gardunos', key: `gardunos:166 revised:${c}`, invoice_no: '166 revised', container_no: c, amount: 930, check_status: 'verified' })),   // NO `revised` field: imported before it existed
+        ...ORIG.map((c, i) => ({ id: `O${i}`, party: 'gardunos', key: `gardunos:166:${c}`, invoice_no: '166', container_no: c, amount: 930, check_status: 'verified' })),
     ]));
     ck('before: 13 lines, $12,090 (the double count)', PI.list().length === 13 && PI.summary().gardunos.total === 12090);
     const plan = PI.supersedePlan();
-    ck('plan: 6 originals replaced', plan.remove.length === 6 && plan.remove.every((r) => !r.revised));
+    ck('plan: 6 originals replaced (legacy rows with no stored flag)', plan.remove.length === 6 && plan.remove.every((r) => r.invoice_no === '166'));
     ck('plan: HMMU4357974 flagged "only on the original", NOT removed', plan.only_on_original.length === 1 && plan.only_on_original[0].container_no === 'HMMU4357974');
     const prev = execFileSync('node', [path.join(ROOT, 'scripts/party-invoices-import.js'), '--supersede'], { env: process.env, encoding: 'utf8' });
     ck('the script preview writes nothing', /PREVIEW/.test(prev) && PI.list().length === 13);
@@ -50,7 +50,7 @@ const ORIG = ['HMMU4357974', ...REV];
     rows = PI.list();
     ck('--write removes the 6 replaced originals', /Removed 6/.test(done) && rows.length === 7);
     ck('total is now $6,510 (6 revised + the one only on the original)', PI.summary().gardunos.total === 6510, String(PI.summary().gardunos.total));
-    ck('revised rows were re-keyed to the base, so a re-import cannot re-add the original', rows.filter((r) => r.revised).every((r) => r.key.startsWith('gardunos:166:')));
+    ck('revised rows were re-keyed to the base and flagged, so a re-import cannot re-add the original', rows.filter((r) => r.revised).length === 6 && rows.filter((r) => r.revised).every((r) => r.key.startsWith('gardunos:166:')));
     const re = await PI.upsertMany(ORIG.map((c) => ROW('166', c)));
     ck('a later re-import of the ORIGINAL changes nothing', PI.list().length === 7 && re.added === 0, JSON.stringify(re));
     ck('idempotent: a second --supersede finds nothing to remove', PI.supersedePlan().remove.length === 0);
