@@ -821,6 +821,51 @@ Return the JSON object and nothing else.`;
     throw new Error(`Garduno's invoice extraction failed${lastErr ? ': ' + lastErr.message : ''}`);
 }
 
+// ── EAGLE TRANS SHIPPING & LOGISTICS (EagleBrit) ───────────────────────────
+// Apsara, 2026-10-07: "yes.build". Same rule as the Garduno's prompt above: the
+// model TRANSCRIBES, helpers/eagleInvoice.js does every sum. An XSINV invoice
+// bills one booking in one total; there is no per-container amount to read.
+async function extractEagleInvoiceRecords(pdfBase64, retries = 2) {
+    if (!pdfBase64) throw new Error('pdfBase64 required');
+    const prompt = `This PDF is an INVOICE (XSINV/...) or CREDIT NOTE (XSCRN/...) from EAGLE TRANS SHIPPING & LOGISTICS LLC, an ocean freight forwarder, billed to Edge Metals. Transcribe what is printed. Do NOT calculate, split or infer anything. Return ONLY raw JSON, no markdown.
+
+{
+  "invoice_no": null,    // the document number printed top right, e.g. "XSINV/172994" or "XSCRN/015704"
+  "document_type": null, // "invoice" or "credit note"
+  "invoice_date": null,  // "Date of Invoice", MM/DD/YYYY (the printed form is DD/MM/YYYY — convert it)
+  "job_ref": null,       // "Our Job Ref", e.g. "UHSE/092987"
+  "booking_no": null,    // "Booking Ref", e.g. "EBKG18168515"
+  "mbl": null,           // "MBL"
+  "hbl": null,           // "HBL"
+  "containers": [],      // EVERY container number printed under Marks and Numbers (4 letters + 7 digits), one string each
+  "charges": [ { "description": null, "amount": 0 } ], // each charge line e.g. FREIGHT, DOCUMENTATION FEE, with its printed amount (negative on a credit note)
+  "total_due": 0,        // the "TOTAL DUE" figure, plain number, negative if shown negative
+  "currency": "USD"
+}
+
+Return the JSON object and nothing else.`;
+    let lastErr = null;
+    for (let attempt = 0; attempt <= retries; attempt++) {
+        try {
+            const model = getClient().getGenerativeModel({ model: getModelName(), generationConfig: { temperature: 0, responseMimeType: 'application/json' } });
+            const result = await model.generateContent([{ text: prompt }, { inlineData: { mimeType: 'application/pdf', data: pdfBase64 } }]);
+            const parsed = extractJson(result.response.text());
+            if (parsed && typeof parsed === 'object') {
+                console.log(`[GEMINI] Eagle invoice extraction: ${parsed.invoice_no || '(no number)'}, ${(parsed.containers || []).length} container(s)`);
+                return parsed;
+            }
+            console.warn(`[GEMINI] Eagle invoice extraction returned unparseable JSON (attempt ${attempt + 1})`);
+        } catch (err) {
+            lastErr = err;
+            const transient = /503|429|overloaded|unavailable|high demand/i.test(err.message);
+            console.error(`[GEMINI] Eagle invoice extraction failed (attempt ${attempt + 1}${transient ? ', transient' : ''}):`, err.message);
+            if (attempt < retries && transient) { await new Promise((r) => setTimeout(r, 1200 * (attempt + 1))); continue; }
+            if (!transient) break;
+        }
+    }
+    throw new Error(`Eagle invoice extraction failed${lastErr ? ': ' + lastErr.message : ''}`);
+}
+
 async function extractAjTransportInvoiceRecords(pdfBase64, retries = 2) {
     if (!pdfBase64) throw new Error('pdfBase64 required');
 
@@ -4393,4 +4438,4 @@ function modelReportLines() {
 // alternative was a ninth near-identical extract* function living here, far
 // from the store it feeds.
 module.exports = {
-    extractOrderPdfFields, getClient, getModelName, effectiveModels, modelReportLines, callGeminiJSON, extractJson, lastGeminiFailure, extractPdfFields, extractBookingFieldsFromText, resolveCutoffDate, classifyDocument, extractScaleTicketFields, extractWeightFromImage, checkPhotoQuality, extractFreightInvoiceRecords, extractCommissionDebitNoteRecords, extractJioInvoiceRecords, extractSherTruckingInvoiceRecords, extractAjTransportInvoiceRecords, extractGardunosInvoiceRecords, transcribeVoiceNote };
+    extractOrderPdfFields, getClient, getModelName, effectiveModels, modelReportLines, callGeminiJSON, extractJson, lastGeminiFailure, extractPdfFields, extractBookingFieldsFromText, resolveCutoffDate, classifyDocument, extractScaleTicketFields, extractWeightFromImage, checkPhotoQuality, extractFreightInvoiceRecords, extractCommissionDebitNoteRecords, extractJioInvoiceRecords, extractSherTruckingInvoiceRecords, extractAjTransportInvoiceRecords, extractGardunosInvoiceRecords, extractEagleInvoiceRecords, transcribeVoiceNote };

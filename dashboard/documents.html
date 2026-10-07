@@ -954,6 +954,7 @@ body[data-theme="light"] {
     <div id="verifyGroupFreight">
     <div style="display:flex; gap:4px; margin-bottom:18px;">
       <button class="verify-subtab-btn active" data-verify-subtab="zimex">Zimex</button>
+      <button class="verify-subtab-btn" data-verify-subtab="eagle">Eagle Trans</button>
     </div>
 
     <div id="verifyPanelZimex">
@@ -1017,6 +1018,37 @@ body[data-theme="light"] {
         </div>
       </div>
 
+    </div>
+
+    <!-- ── Eagle Trans (EagleBrit) — ocean freight, verify only ─────────────
+         Apsara, 2026-10-07. One row per INVOICE: Eagle bills a booking in one
+         total, so there is no per-container amount to show. Nothing here writes
+         to the sheet, a bill or a sale. -->
+    <div id="verifyPanelEagle" class="hidden">
+      <div class="section-label" style="margin-top:0;">Upload Eagle Trans invoices (XSINV) and credit notes (XSCRN)</div>
+      <label id="eagleDropZone" style="display:flex; align-items:center; gap:16px; border:2px dashed var(--border-default); border-radius:var(--radius-sm); padding:18px 20px; background:var(--surface-sunken); cursor:pointer;">
+        <input type="file" id="eaglePdfInput" accept="application/pdf" multiple class="hidden">
+        <span style="color:var(--accent); font-size:20px;">&#8682;</span>
+        <div>
+          <div style="font-size:13.5px; font-weight:600; color:var(--text-strong);" id="eagleDropLabel">Drop Eagle Trans invoice PDFs here &mdash; multiple files supported</div>
+          <div style="font-family:var(--font-mono); font-size:11px; color:var(--text-faint); margin-top:3px;">Checks that every container on each invoice is on the Invoice sheet. Read-only: nothing is saved.</div>
+        </div>
+      </label>
+      <div id="eagleFileList" style="display:flex; flex-wrap:wrap; gap:6px; margin-top:10px;"></div>
+      <div style="margin-top:14px;"><button id="btnEagleVerify" type="button" class="btn btn-primary" style="padding:10px 18px;">Run Verification</button></div>
+      <div id="eagleLoading" class="hidden" style="display:flex; align-items:center; gap:10px; margin-top:16px; font-size:12px; color:var(--text-muted);"><span class="btn-spinner"></span> Reading the invoices and checking their containers against the Invoice sheet&hellip;</div>
+      <div id="eagleSummary" class="hidden" style="display:flex; gap:10px; flex-wrap:wrap; margin-top:18px;"></div>
+      <div id="eagleWarnings" class="hidden" style="margin-top:16px;"></div>
+      <div id="eagleResultsWrap" class="hidden" style="margin-top:14px;">
+        <div class="section-label">Eagle Trans invoices vs. Invoice sheet</div>
+        <div id="eagleFilterNote" style="font-size:11px; color:var(--text-faint); margin-bottom:8px;"></div>
+        <div style="overflow-x:auto;">
+          <table class="data-table">
+            <thead><tr><th>Inv date</th><th>Document</th><th>Booking</th><th>Containers</th><th style="text-align:right;">Amount</th><th>Status</th><th>File</th></tr></thead>
+            <tbody id="eagleResultsBody"></tbody>
+          </table>
+        </div>
+      </div>
     </div>
     </div>
 
@@ -1530,12 +1562,12 @@ const VERIFY_GROUP_PANELS = { freight: 'verifyGroupFreight', transport: 'verifyG
 // "which subtab do I reset to when this group is (re)selected" list. Keep
 // in sync with each group's row of .verify-subtab-btn buttons above.
 const VERIFY_GROUP_SUBTABS = {
-  freight: ['zimex'],
+  freight: ['zimex', 'eagle'],
   transport: ['aj-transport', 'sher-trucking', 'jio', 'gardunos', 'ntg', 'tql', 'schneider'],
   commission: ['joey', 'pan-metal'],
 };
 const VERIFY_SUBTAB_PANELS = {
-  zimex: 'verifyPanelZimex',
+  zimex: 'verifyPanelZimex', eagle: 'verifyPanelEagle',
   'aj-transport': 'verifyPanelAjTransport', 'sher-trucking': 'verifyPanelSherTrucking', 'jio': 'verifyPanelJio',
   gardunos: 'verifyPanelGardunos',
   ntg: 'verifyPanelNtg', tql: 'verifyPanelTql', schneider: 'verifyPanelSchneider',
@@ -2532,6 +2564,9 @@ const AJ_STATUS_BADGE = {
   no_container_on_pdf: { label: 'No container read', bg: 'rgba(217,154,43,.15)', color: '#e3b567' },
   sheet_booking_blank: { label: 'Sheet booking blank', bg: 'rgba(126,136,145,.15)', color: '#a7b0b7' },
   extraction_failed: { label: 'Extraction failed', bg: 'rgba(197,64,47,.15)', color: '#e58a7c' },
+  partly_in_sheet: { label: 'Partly on sheet', bg: 'rgba(217,154,43,.15)', color: '#e3b567' },
+  total_mismatch: { label: 'Total mismatch', bg: 'rgba(197,64,47,.15)', color: '#e58a7c' },
+  credit_note: { label: 'Credit note', bg: 'rgba(126,136,145,.15)', color: '#a7b0b7' },
 };
 function ajBadge(status) {
   const b = AJ_STATUS_BADGE[status] || { label: status, bg: 'rgba(126,136,145,.15)', color: '#a7b0b7' };
@@ -2711,6 +2746,79 @@ $('btnGardVerify').addEventListener('click', async () => {
     setButtonLoading(btn, false);
     $('gardLoading').classList.add('hidden');
   }
+});
+
+// ── EAGLE TRANS (EagleBrit) ───────────────────────────────────────────────
+// Its own block, like Garduno's: one row per INVOICE, read-only (no sheet log,
+// no bill proposals). See helpers/eagleInvoice.js.
+let eagleFiles = []; // [{ name, base64 }]
+function renderEagleFileList() {
+  $('eagleFileList').innerHTML = eagleFiles.map((f, i) => `
+    <span style="font-size:11px; padding:4px 10px; border-radius:var(--radius-xs); background:var(--surface-sunken); border:1px solid var(--border-default); color:var(--text-body);">
+      ${esc(f.name)} <a href="#" data-i="${i}" class="eagleRm" style="color:var(--text-faint); text-decoration:none;">&times;</a></span>`).join('');
+  document.querySelectorAll('.eagleRm').forEach((el) => el.onclick = (e) => { e.preventDefault(); eagleFiles.splice(Number(el.dataset.i), 1); renderEagleFileList(); });
+  $('eagleDropLabel').textContent = eagleFiles.length
+    ? `${eagleFiles.length} file${eagleFiles.length === 1 ? '' : 's'} ready — drop more or click to add`
+    : 'Drop Eagle Trans invoice PDFs here — multiple files supported';
+}
+function handleEagleFiles(fileList) {
+  for (const f of fileList) {
+    if (f.type !== 'application/pdf') continue;
+    const reader = new FileReader();
+    reader.onload = () => { eagleFiles.push({ name: f.name, base64: reader.result.split(',')[1] }); renderEagleFileList(); };
+    reader.readAsDataURL(f);
+  }
+}
+$('eaglePdfInput').addEventListener('change', () => { handleEagleFiles($('eaglePdfInput').files); $('eaglePdfInput').value = ''; });
+$('eagleDropZone').addEventListener('dragover', (e) => { e.preventDefault(); });
+$('eagleDropZone').addEventListener('drop', (e) => { e.preventDefault(); handleEagleFiles(e.dataTransfer.files); });
+
+function renderEagleResults(result) {
+  VERIFY_RENDER.eagle = () => renderEagleResults(result);
+  const matched = result.matched || [];
+  $('eagleSummary').innerHTML = verifyAllChip('eagle', matched.length) + verifyStatusChips('eagle', matched, [
+    { key: 'verified', label: 'Verified' }, { key: 'partly_in_sheet', label: 'Partly on sheet' },
+    { key: 'not_in_sheet', label: 'Not on sheet' }, { key: 'credit_note', label: 'Credit note' },
+    { key: 'total_mismatch', label: 'Total mismatch' },
+  ]);
+  $('eagleSummary').classList.remove('hidden');
+  const rows = verifyApply('eagle', matched);
+  $('eagleFilterNote').innerHTML = verifyFilterNote('eagle', rows.length, matched.length);
+  $('eagleResultsBody').innerHTML = rows.map((r) => `
+    <tr>
+      <td>${esc(fmtDate(r.invoice_date, '—'))}</td>
+      <td>${esc(r.invoice_no || '—')}</td>
+      <td style="font-family:var(--font-mono);">${esc(r.booking_no || '—')}</td>
+      <td style="font-family:var(--font-mono); font-size:11px;">${(r.containers || []).map((c) => `<div${(r.containers_missing || []).includes(c) ? ' style="color:#e3b567;" title="not on the Invoice sheet"' : ''}>${esc(c)}</div>`).join('') || '—'}</td>
+      <td style="text-align:right; font-family:var(--font-mono);">${r.amount == null ? '—' : propMoney(r.amount)}</td>
+      <td>${ajBadge(r.status)}</td>
+      <td style="font-size:11px; color:var(--text-faint);">${esc(r.source_file || '—')}</td>
+    </tr>`).join('');
+  $('eagleResultsWrap').classList.remove('hidden');
+}
+function renderEagleWarnings(result) {
+  const box = $('eagleWarnings');
+  const notes = [...(result.warnings || [])];
+  const c = result.credits || {};
+  (c.cancelled || []).forEach((x) => notes.push(`${x.credit_note} cancels ${x.invoice} (${propMoney(x.amount)}) — net nothing owed on that pair.`));
+  if (!notes.length) { box.classList.add('hidden'); box.innerHTML = ''; return; }
+  box.innerHTML = notes.map((t) => `<div style="font-size:12px; padding:8px 12px; border-radius:var(--radius-xs); border:1px solid var(--border-default); background:var(--surface-sunken); color:var(--text-body); margin-bottom:6px;">${esc(t)}</div>`).join('')
+    + (c.net != null ? `<div style="font-size:12px; color:var(--text-muted);">Net across this upload: <strong style="color:var(--text-strong);">${propMoney(c.net)}</strong></div>` : '');
+  box.classList.remove('hidden');
+}
+$('btnEagleVerify').addEventListener('click', async () => {
+  verifyActive('eagle').clear();
+  if (!eagleFiles.length) { alert('Drop at least one Eagle Trans invoice PDF first.'); return; }
+  const btn = $('btnEagleVerify');
+  setButtonLoading(btn, true, 'Running…');
+  $('eagleLoading').classList.remove('hidden');
+  $('eagleSummary').classList.add('hidden'); $('eagleWarnings').classList.add('hidden'); $('eagleResultsWrap').classList.add('hidden');
+  try {
+    const result = await api('/api/verify/eagle', { method: 'POST', body: JSON.stringify({ pdfs: eagleFiles }) });
+    renderEagleWarnings(result);
+    renderEagleResults(result);
+  } catch (e) { alert(e.message); }
+  finally { setButtonLoading(btn, false); $('eagleLoading').classList.add('hidden'); }
 });
 
 // ── Address book typeahead (buyer/consignee) ─────────────────────────────

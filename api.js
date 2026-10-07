@@ -1679,6 +1679,37 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
         }
     });
 
+    // ── EAGLE TRANS SHIPPING & LOGISTICS (EagleBrit) — ocean freight ─────
+    // Apsara, 2026-10-07: "yes.build". VERIFY ONLY: reads the PDFs and checks the
+    // containers against the Invoice sheet. It does not write to the sheet, a
+    // bill or a sale — where Eagle's freight should land is hers to decide.
+    app.post('/api/verify/eagle', largeJson, async (req, res) => {
+        try {
+            const { pdfs = [] } = req.body || {};
+            if (!Array.isArray(pdfs) || !pdfs.length) return res.status(400).json({ error: 'No PDFs provided.' });
+            const { extractEagleInvoiceRecords } = require('./helpers/gemini');
+            const eagle = require('./helpers/eagleInvoice');
+            const { crossCheckEagleRecords } = require('./helpers/invoiceVerify');
+            const perFile = await Promise.all(pdfs.map(async (pdf) => {
+                const name = pdf.name || 'unnamed.pdf';
+                try {
+                    const n = eagle.normalize(await extractEagleInvoiceRecords(pdf.base64), name);
+                    return { record: n.record, warnings: n.warnings.map((w) => `${name}: ${w}`) };
+                } catch (e) {
+                    console.error(`[verify/eagle] extraction failed for ${name}:`, e.message);
+                    return { record: { invoice_no: null, kind: 'invoice', containers: [], amount: null, source_file: name, extraction_failed: true }, warnings: [`${name}: extraction failed: ${e.message}`] };
+                }
+            }));
+            const result = await crossCheckEagleRecords(perFile.map((f) => f.record));
+            result.warnings = perFile.flatMap((f) => f.warnings);
+            result.credits = eagle.pairCredits(result.matched);
+            res.json(result);
+        } catch (e) {
+            console.error('[verify/eagle] failed:', e.message);
+            res.status(500).json({ error: e.message });
+        }
+    });
+
     app.post('/api/verify/aj-transport', largeJson, async (req, res) => {
         try {
             const { pdfs = [] } = req.body || {};
@@ -5466,6 +5497,99 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
             await mt.deleteTruckingPayment(id);
             await audit.complete(entry, 'done', { reopened: (doomed.allocations || []).length });
             res.json({ ok: true, removed: true });
+        } catch (e) { res.status(400).json({ error: e.message }); }
+    });
+
+    // ── THE BOOKS: TRIAL BALANCE, LEDGER, P&L, BALANCE SHEET ──────────────
+    // Apsara, 2026-10-06: "Make the qb thing as separate portal" and "Include
+    // all the options oin quickbook and beter than it".
+    //
+    // The engine for this shipped on 2026-10-06 — helpers/entities.js,
+    // chartOfAccounts.js, postings.js, statements.js, booksBuild.js, 1,344
+    // lines and some 370 assertions — AND NOTHING COULD REACH IT. No route,
+    // no screen. She could not look at a single statement. That is the same
+    // dead-code failure scripts/check-route-reach.js exists to catch, and the
+    // guard could not see it because there was no route to be unreachable.
+    // Writing the engine and stopping is the mistake; this is the other half.
+    //
+    // ── ONE BUILD SERVES ALL FOUR STATEMENTS ──────────────────────────────
+    // booksBuild.build() re-derives the journal from her stores on every call
+    // — nothing is stored, so there is never a second truth to reconcile. The
+    // four statements are then computed from THAT ONE journal, in one request,
+    // so the P&L and the balance sheet cannot be built from different reads of
+    // a store that changed in between. That is also why there is no separate
+    // /api/books/pnl route: four routes would be four builds.
+    //
+    // READ-ONLY. GET, no gate beyond the session: looking at her own books is
+    // not a privileged act, and nothing here writes.
+    app.get('/api/books', (req, res) => {
+        try {
+            const E = require('./helpers/entities');
+            const C = require('./helpers/chartOfAccounts');
+            const S = require('./helpers/statements');
+            const B = require('./helpers/booksBuild');
+
+            const q = req.query || {};
+            const from = String(q.from || '').trim() || null;
+            const to = String(q.to || '').trim() || null;
+            const entity = String(q.entity || '').trim() || null;
+
+            // ── THE ENTITY IS REQUIRED, AND THAT IS DELIBERATE ────────────
+            // statements.js throws without one: "there is no combined
+            // taxpayer". Edge Metals, Edge Trading and AAA Investment file
+            // separately (CLAUDE.md rule 5), so a combined P&L is not a
+            // convenience — it is a number that describes nobody. The list of
+            // companies is returned so the screen can offer the choice rather
+            // than guess.
+            const companies = E.ENTITIES.map((e) => ({ id: e.id, name: e.name }));
+            if (!entity) {
+                return res.json({ needs_entity: true, companies, accounts: C.ACCOUNTS });
+            }
+            if (!E.get(entity)) {
+                return res.status(400).json({ error: `no company ${entity}`, companies });
+            }
+
+            const built = B.build({ from, to });
+            const opts = { entity, from, to };
+            const packed = S.pack(built.lines, opts);
+
+            res.json({
+                companies, entity, from, to,
+                accounts: C.ACCOUNTS,
+                // What the journal was built from, and what it could not
+                // place. `complete` false means the statements below are
+                // SMALLER than the truth and look exactly like correct ones,
+                // so the screen must show this, not tuck it away.
+                build: {
+                    transactions: built.transactions,
+                    lines: built.lines.length,
+                    complete: built.complete,
+                    unplaced: built.unplaced,
+                    problems: built.problems,
+                    notes: built.notes,
+                },
+                ...packed,
+            });
+        } catch (e) { res.status(500).json({ error: e.message }); }
+    });
+
+    // One account's history, on demand. Separate because the general ledger
+    // needs an account and nobody wants all 34 at once.
+    app.get('/api/books/account/:code', (req, res) => {
+        try {
+            const E = require('./helpers/entities');
+            const S = require('./helpers/statements');
+            const B = require('./helpers/booksBuild');
+            const q = req.query || {};
+            const entity = String(q.entity || '').trim();
+            if (!E.get(entity)) return res.status(400).json({ error: `no company ${entity}` });
+            const from = String(q.from || '').trim() || null;
+            const to = String(q.to || '').trim() || null;
+            const built = B.build({ from, to });
+            return res.json({
+                ledger: S.generalLedger(built.lines,
+                    { entity, from, to, account: String(req.params.code) }),
+            });
         } catch (e) { res.status(400).json({ error: e.message }); }
     });
 

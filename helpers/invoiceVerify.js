@@ -687,6 +687,40 @@ async function crossCheckGardunosRecords(pdfRecords) {
     return { matched, sheet_only: sheetOnly };
 }
 
+// ── EAGLE TRANS (EagleBrit) — ocean freight, one record per INVOICE ────────
+// Apsara, 2026-10-07: "yes.build". Takes helpers/eagleInvoice.normalize()
+// records. ITS OWN FUNCTION (CLAUDE.md rule 1): it is not the Zimex check (keyed
+// on HBL, compares an amount) and not the trucker checks (one record per
+// container). An Eagle invoice bills a booking in one total, so the question is
+// "is every container it names on her sheet" — the amount cannot be compared
+// because the sheet has no Eagle figure, and inventing one would look reconciled.
+//
+// The booking is NOT compared with the sheet's Booking No.: Eagle's EBKG number
+// is the forwarder's own reference, and the sheet's column holds the carrier
+// booking. They are different numbers for the same shipment, so a mismatch would
+// be noise. Shown on the row for the person reading it, never judged.
+async function crossCheckEagleRecords(pdfRecords) {
+    const containerIndex = await buildSheetContainerIndex();
+    const seen = new Set();
+    const matched = (pdfRecords || []).map((rec) => {
+        const containers = (rec.containers || []).map(normContainer).filter(Boolean);
+        const onSheet = containers.filter((c) => containerIndex.has(c));
+        const missing = containers.filter((c) => !containerIndex.has(c));
+        onSheet.forEach((c) => seen.add(c));
+        const base = { ...rec, containers, containers_on_sheet: onSheet, containers_missing: missing,
+            sheet: onSheet.length ? containerIndex.get(onSheet[0]) : null };
+        if (rec.extraction_failed) return { ...base, status: 'extraction_failed' };
+        if (rec.kind === 'credit_note') return { ...base, status: 'credit_note' };
+        if (!containers.length) return { ...base, status: 'no_container_on_pdf' };
+        if (rec.reconciled === false) return { ...base, status: 'total_mismatch' };
+        if (missing.length) return { ...base, status: onSheet.length ? 'partly_in_sheet' : 'not_in_sheet' };
+        return { ...base, status: 'verified' };
+    });
+    // No reverse check: the sheet has no marker for which forwarder moved a
+    // container, so "on the sheet, not on these invoices" would list nearly every row.
+    return { matched };
+}
+
 module.exports = {
     buildSheetFreightIndex, crossCheckZimexRecords, AMOUNT_TOLERANCE, parseSheetDate, inSelectedPeriod,
     buildSheetOrderIndex, crossCheckPanMetalRecords, extractOrderNoFromInvNo, COMMISSION_TOLERANCE,
@@ -694,4 +728,5 @@ module.exports = {
     buildSheetBookingIndex, crossCheckSherRecords,
     crossCheckAjTransportRecords,
     crossCheckGardunosRecords,
+    crossCheckEagleRecords,
 };
