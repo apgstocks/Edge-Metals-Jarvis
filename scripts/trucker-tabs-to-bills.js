@@ -7,6 +7,7 @@
 //   node scripts/trucker-tabs-to-bills.js            # REPORT ONLY, writes nothing
 //   node scripts/trucker-tabs-to-bills.js --write    # apply the unambiguous ones
 //   node scripts/trucker-tabs-to-bills.js --detail   # list every row, not just counts
+//   node scripts/trucker-tabs-to-bills.js --write --limit 5   # apply just 5 first, check supplier balances, then the rest
 //
 // RUN IT ON THE VM: the bills are in DATA_DIR there. Elsewhere it compares the
 // sheet against an empty ledger and says so.
@@ -24,6 +25,9 @@ const tp = require(path.join(ROOT, 'helpers/truckingProposal'));
 const argv = process.argv.slice(2);
 const WRITE = argv.includes('--write');
 const DETAIL = argv.includes('--detail');
+// --limit N applies only the first N (oldest-listed first), so the effect on supplier balances can be checked before the rest.
+const li = argv.indexOf('--limit');
+const LIMIT = li !== -1 ? Math.max(0, parseInt(argv[li + 1], 10) || 0) : null;
 const $ = (n) => (n == null ? '—' : `$${Number(n).toLocaleString('en-US', { minimumFractionDigits: 2 })}`);
 
 // Mirrors the accept-trucking route, line for line.
@@ -76,7 +80,9 @@ async function main() {
     console.log(`\nWould add ${p.to_add.length} bill(s), ${$(addTotal)} of haulage in total.`);
     if (!WRITE) return console.log('Add --write to apply those, and only those.\n');
     let ok = 0, bad = 0;
-    for (const item of p.to_add) { try { await applyOne(item); ok++; } catch (e) { bad++; console.log(`  FAILED ${item.container_no || item.booking_no}: ${e.message}`); } }
+    const todo = LIMIT == null ? p.to_add : p.to_add.slice(0, LIMIT);
+    if (LIMIT != null) console.log(`--limit ${LIMIT}: applying ${todo.length} of ${p.to_add.length}`);
+    for (const item of todo) { try { await applyOne(item); ok++; } catch (e) { bad++; console.log(`  FAILED ${item.container_no || item.booking_no}: ${e.message}`); } }
     console.log(`\nApplied ${ok}${bad ? `, ${bad} failed` : ''}. Nothing else was touched.\n`);
 }
 
