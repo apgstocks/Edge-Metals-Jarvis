@@ -5110,6 +5110,95 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
     // Deleting an ADVANCE also un-applies whatever it was covering, which
     // raises those containers' balances. That is correct, and it is why the
     // response says which containers moved: the UI names them before asking.
+    // ── EDITING A RECORDED PAYMENT ───────────────────────────────────────
+    // Apsara, 2026-10-07: "give option to pay multiple invoices together and
+    // option to edit". Paying several at once already worked; editing existed
+    // on no payment path at all, so a typo meant delete-and-re-enter, which
+    // reopens containers in between and loses what the original said.
+    //
+    // Six routes, three pairs. The PREVIEW is a separate GET that writes
+    // nothing — her rule was "Recompute everything, show me before saving",
+    // and a screen cannot honour that if the only way to find out is to do it.
+    //
+    // requireSuper on every one, matching DELETE beside it: changing what a
+    // payment settled moves a supplier's running account and reopens
+    // containers, which is the reason Edge Metals ledger changes are the
+    // Jarvis profile's (her rule, 2026-09-16). Office staff hold the admin
+    // password — she confirmed that on 2026-10-06 — so admin is not enough.
+    //
+    // The QuickBooks refusal lives in the helpers, not here, so the voice
+    // path and any future caller get it too. api.js only reports it.
+    // ── EDITING A RECORDED PAYMENT ───────────────────────────────────────
+    // Apsara, 2026-10-07: "give option to pay multiple invoices together and
+    // option to edit". Paying several at once already worked; editing existed
+    // on no payment path at all, so a typo meant delete-and-re-enter, which
+    // reopens containers in between and loses what the original said.
+    //
+    // TWO ROUTES, FOR THE ONE SCREEN THAT CALLS THEM. The helpers also carry
+    // editSettlement and editTruckingPayment, and they are deliberately NOT
+    // routed yet: tests/route-reach.js refuses a guarded route with no
+    // client, and it is right to — "a guarded route nothing calls is a
+    // permission that cannot be used". #152 and #165 are both that mistake.
+    // Those two get their routes when their screens are built.
+    //
+    // REGISTERED EXPLICITLY, not in a loop over a table. A first version did
+    // the clever thing and check-route-reach.js read the path as the literal
+    // "/api/${slug}/:id" — defeating the very guard that exists because
+    // routes went dead here before. The repo's tooling reads source, so
+    // source is what has to be readable.
+    //
+    // requireSuper on both, matching DELETE beside them: changing what a
+    // payment settled moves a supplier's running account and reopens
+    // containers, which is why Edge Metals ledger changes are the Jarvis
+    // profile's (her rule, 2026-09-16, and office staff hold the admin
+    // password — she confirmed that on 2026-10-06).
+    //
+    // The QuickBooks refusal lives in the helper, not here, so the voice path
+    // and any future caller inherit it. api.js only reports it.
+
+    // Show, change nothing — "Recompute everything, show me before saving".
+    app.post('/api/bill-payments/:id/preview-edit', requireSuper, largeJson, async (req, res) => {
+        try {
+            const bp = require('./helpers/billPayments');
+            return res.json({ ok: true, plan: bp.previewEdit(String(req.params.id), req.body || {}) });
+        } catch (e) {
+            // A refusal is a sentence she can act on — an unknown bank, a
+            // mode that is not offered. 400, not 500: nothing is broken.
+            const msg = String((e && e.message) || e);
+            return res.status(/^no payment/.test(msg) ? 404 : 400).json({ error: msg });
+        }
+    });
+
+    // And then do it.
+    app.put('/api/bill-payments/:id', requireSuper, largeJson, async (req, res) => {
+        try {
+            const bp = require('./helpers/billPayments');
+            const audit = require('./helpers/audit');
+            const id = String(req.params.id);
+            if (!bp.list().find((p) => p && p.id === id)) {
+                return res.status(404).json({ error: `no payment ${id}` });
+            }
+            const result = await bp.editBillPayment(id, req.body || {}, { actor: actorOf(req) });
+
+            // Audited with both sides. The helper keeps edit_history on the
+            // row too; this is the same event where she reads who changed what.
+            await audit.record({
+                action: 'edit-bill-payment', subject: id,
+                actor: actorOf(req), role: req.role, ip: req.ip,
+                detail: { company: 'edge-metals', before: result.before,
+                    after: result.after, changes: result.changes },
+            }).catch(() => {});
+
+            return res.json({ ok: true, ...result });
+        } catch (e) {
+            const msg = String((e && e.message) || e);
+            // The QuickBooks refusal is a 409: the request is fine, the state
+            // of her books is what says no.
+            const code = /QuickBooks/.test(msg) ? 409 : /^no payment/.test(msg) ? 404 : 400;
+            return res.status(code).json({ error: msg });
+        }
+    });
+
     app.delete('/api/bill-payments/:id', requireSuper, async (req, res) => {
         try {
             const bp = require('./helpers/billPayments');

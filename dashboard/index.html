@@ -8315,9 +8315,11 @@ async function renderSupplierPaymentsTab() {
               <td style="padding:7px 9px; text-align:right; font-family:var(--font-mono); color:var(--text-muted);">${ledMoney(p.used)}</td>
               <td style="padding:7px 9px; text-align:right; font-family:var(--font-mono); ${p.left > 0.005 ? 'color:var(--status-good, #4ade80);' : 'color:var(--text-faint);'}">${ledMoney(p.left)}</td>
               <td style="padding:7px 9px; text-align:right; white-space:nowrap;">${metalsCanDelete()
-                ? `<button class="spDel" data-payment="${esc(p.id)}" data-containers="${p.containers || 0}"
+                ? `<button class="spEdit" data-payment="${esc(p.id)}"
+                     style="background:none; border:1px solid var(--border-default); border-radius:var(--radius-sm); padding:3px 9px; font-size:11px; color:var(--text-body); cursor:pointer; white-space:nowrap; margin-right:6px;">Edit</button>`
+                  + `<button class="spDel" data-payment="${esc(p.id)}" data-containers="${p.containers || 0}"
                      style="background:none; border:1px solid var(--border-default); border-radius:var(--radius-sm); padding:3px 9px; font-size:11px; color:var(--danger, #f87171); cursor:pointer; white-space:nowrap;">Delete</button>`
-                : `<span title="Sign in with the Jarvis profile to remove a supplier payment" style="font-size:11px; color:var(--text-faint);">&mdash;</span>`}</td>
+                : `<span title="Sign in with the Jarvis profile to change a supplier payment" style="font-size:11px; color:var(--text-faint);">&mdash;</span>`}</td>
             </tr>`).join('')
             : `<tr><td colspan="11" style="padding:26px; text-align:center; color:var(--text-faint); font-family:var(--font-mono); font-size:12px;">Nothing sent to a supplier yet.</td></tr>`}
           </tbody>
