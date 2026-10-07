@@ -80,9 +80,16 @@ const newId = () => `MTP_${Date.now()}_${Math.random().toString(36).slice(2, 7)}
 const sameCompany = (a, b) =>
     String(a || '').trim().toLowerCase() === String(b || '').trim().toLowerCase();
 
-function paidByBill() {
+// ── `excluding` — DEFAULT NOTHING, SO EVERY EXISTING CALLER IS UNCHANGED ─
+// Added 2026-10-07 for editTruckingPayment, the same shape
+// salesSettlements.js took the same day. A payment's OWN allocations are
+// part of what made its containers look settled, so validating an edit
+// against "what is outstanding" would refuse to let her touch any payment
+// that actually paid something — which is most of them.
+function paidByBill({ excluding = null } = {}) {
     const out = {};
     for (const p of list()) {
+        if (excluding && String(p.id) === String(excluding)) continue;
         for (const a of (p.allocations || [])) {
             out[a.bill_id] = round2((out[a.bill_id] || 0) + (num(a.amount) || 0));
         }
@@ -97,9 +104,9 @@ function paidByBill() {
 //
 // A bill with NEITHER is not here at all: nothing about it suggests haulage,
 // and inventing a row for every bill would bury the ones that mean something.
-function payables() {
+function payables({ excluding = null } = {}) {
     const bills = require('./bills');
-    const paid = paidByBill();
+    const paid = paidByBill({ excluding });
     const out = [];
 
     for (const b of bills.listWithTotals()) {
@@ -209,10 +216,10 @@ function facets(rows) {
     };
 }
 
-function cleanAllocations(input, amount, { company = null } = {}) {
+function cleanAllocations(input, amount, { company = null, excluding = null } = {}) {
     // Only priced hauls can be paid. A 'missing' row has no figure to settle
     // against, and allowing one would let a payment invent the amount.
-    const open = new Map(payables().filter((p) => p.priced).map((p) => [p.bill_id, p]));
+    const open = new Map(payables({ excluding }).filter((p) => p.priced).map((p) => [p.bill_id, p]));
     const out = [];
 
     for (const a of (input || [])) {
@@ -269,7 +276,12 @@ async function mirrorToLedger(rec) {
     });
 }
 
-async function addTruckingPayment(input = {}) {
+// ── THE RULES, LIFTED OUT SO EDIT CANNOT GROW A SECOND COPY ──────────────
+// Extracted 2026-10-07, unchanged and in the same order, when
+// editTruckingPayment was added — the same move billPayments.js and
+// salesSettlements.js made the same day, for the same reason: an edit must
+// enforce exactly what a create enforces. Pure; writes nothing.
+function validateTruckingInput(input = {}, { excluding = null } = {}) {
     const amount = round2(num(input.amount));
     if (amount === null || amount <= 0) throw new Error('a payment amount is required');
     const mode = TRUCKING_MODES.find((m) => m.toLowerCase() === String(input.mode || '').trim().toLowerCase());
@@ -279,20 +291,33 @@ async function addTruckingPayment(input = {}) {
     if ((mode === 'Wire' || mode === 'Zelle') && !String(input.bank || '').trim()) {
         throw new Error('a bank is required for Zelle and Wire');
     }
-
     const company = String(input.trucking_company).trim();
-    const allocations = cleanAllocations(input.allocations, amount, { company });
+    const allocations = cleanAllocations(input.allocations, amount, { company, excluding });
     if (!allocations.length) throw new Error('nothing was allocated — which container is this paying for?');
-
-    const rec = {
-        id: newId(),
-        date: String(input.date).trim(),
-        amount,
-        mode,
+    return {
+        amount, mode,
         bank: (mode === 'Wire' || mode === 'Zelle') ? String(input.bank).trim() : null,
+        date: String(input.date).trim(),
         ref: String(input.ref || '').trim() || null,
         trucking_company: company,
         note: String(input.note || '').trim() || null,
+        allocations,
+    };
+}
+
+async function addTruckingPayment(input = {}) {
+    const v = validateTruckingInput(input);
+    const { amount, mode, allocations } = v;
+
+    const rec = {
+        id: newId(),
+        date: v.date,
+        amount,
+        mode,
+        bank: v.bank,
+        ref: v.ref,
+        trucking_company: v.trucking_company,
+        note: v.note,
         allocations,
         created_at: new Date().toISOString(),
         created_by: input.created_by || null,
@@ -309,6 +334,144 @@ async function addTruckingPayment(input = {}) {
         return rows;
     });
     return rec;
+}
+
+// ── EDITING A TRUCKING PAYMENT ───────────────────────────────────────────
+// The third of the three cost types Apsara named on 2026-10-07. Same two
+// rules as the supplier and settlement paths:
+//   containers  "Recompute everything, show me before saving."
+//   QuickBooks  "Refuse, and tell me to change both."
+function previewTruckingEdit(id, patch = {}) {
+    const before = list().find((p) => p.id === id);
+    if (!before) throw new Error(`no trucking payment ${id}`);
+
+    const merged = {
+        amount: patch.amount !== undefined ? patch.amount : before.amount,
+        mode: patch.mode !== undefined ? patch.mode : before.mode,
+        bank: patch.bank !== undefined ? patch.bank : before.bank,
+        date: patch.date !== undefined ? patch.date : before.date,
+        ref: patch.ref !== undefined ? patch.ref : before.ref,
+        trucking_company: patch.trucking_company !== undefined
+            ? patch.trucking_company : before.trucking_company,
+        note: patch.note !== undefined ? patch.note : before.note,
+        allocations: patch.allocations !== undefined ? patch.allocations : before.allocations,
+    };
+    // Its own allocations taken out first — see paidByBill.
+    const after = validateTruckingInput(merged, { excluding: id });
+
+    const sum = (allocs) => {
+        const m = new Map();
+        for (const a of (allocs || [])) {
+            const k = String(a.bill_id || a.id || '');
+            m.set(k, round2((m.get(k) || 0) + (num(a.amount) || 0)));
+        }
+        return m;
+    };
+    const was = sum(before.allocations);
+    const will = sum(after.allocations);
+
+    const owedBy = new Map();
+    try { for (const p of payables()) owedBy.set(String(p.bill_id || p.id), p); } catch (e) { /* needs bills */ }
+
+    const changes = [...new Set([...was.keys(), ...will.keys()])].map((billId) => {
+        const p = owedBy.get(billId) || null;
+        const paidBefore = was.get(billId) || 0;
+        const paidAfter = will.get(billId) || 0;
+        return {
+            bill_id: billId,
+            container_no: p ? (p.container_no || null) : null,
+            trucking_company: p ? (p.trucking_company || null) : null,
+            owed: p && p.amount != null ? round2(num(p.amount)) : null,
+            paid_before: paidBefore, paid_after: paidAfter,
+            effect: paidBefore === paidAfter ? 'unchanged'
+                : paidAfter === 0 ? 'no longer paid by this payment'
+                : paidBefore === 0 ? 'now paid by this payment' : 'amount changes',
+        };
+    }).sort((a, b) => String(a.container_no || '').localeCompare(String(b.container_no || '')));
+
+    return {
+        id,
+        before: { amount: before.amount, mode: before.mode, bank: before.bank, date: before.date,
+            ref: before.ref, trucking_company: before.trucking_company,
+            allocations: before.allocations || [] },
+        after: { amount: after.amount, mode: after.mode, bank: after.bank, date: after.date,
+            ref: after.ref, trucking_company: after.trucking_company, allocations: after.allocations },
+        changes,
+        dropped: changes.filter((c) => c.effect === 'no longer paid by this payment').length,
+        added: changes.filter((c) => c.effect === 'now paid by this payment').length,
+        touchesLedger: round2(num(before.amount)) !== after.amount
+            || String(before.mode) !== after.mode
+            || String(before.bank || '') !== String(after.bank || '')
+            || String(before.date) !== after.date
+            || String(before.trucking_company || '') !== String(after.trucking_company || '')
+            || String(before.ref || '') !== String(after.ref || ''),
+    };
+}
+
+async function editTruckingPayment(id, patch = {}, { actor = null } = {}) {
+    const before = list().find((p) => p.id === id);
+    if (!before) throw new Error(`no trucking payment ${id}`);
+
+    try {
+        const qb = require('./qbLinked');
+        const link = qb.linkedRow(before, { kind: 'metals_trucking', keys: qb.liveKeys() });
+        if (link && link.linked) {
+            throw new Error(`this trucking payment is already in QuickBooks (${link.why}). `
+                + 'Change it in both, or delete it there first — an edit here alone would '
+                + 'leave your books and Jarvis disagreeing.');
+        }
+    } catch (e) {
+        if (/already in QuickBooks/.test(String(e && e.message))) throw e;
+        throw new Error(`could not check QuickBooks (${(e && e.message) || e}), so this edit is `
+            + 'refused rather than risked. Nothing was changed.');
+    }
+
+    const plan = previewTruckingEdit(id, patch);
+    const after = plan.after;
+
+    // Delete then mirror — deletePaymentsForLoad keys on this payment's id,
+    // which a rebuilt mirror also carries, so the other order removes both.
+    let ledgerId = before.ledger_payment_id || null;
+    if (plan.touchesLedger) {
+        const { deletePaymentsForLoad } = require('./payments');
+        await deletePaymentsForLoad(before.id);
+        try {
+            const mirrored = await mirrorToLedger({ ...before, ...after, id: before.id });
+            ledgerId = mirrored && mirrored.id ? mirrored.id : null;
+        } catch (e) {
+            try { await mirrorToLedger(before); } catch (e2) {
+                console.error('[TRUCKING] the edit failed AND the original ledger row could not be '
+                    + 'restored:', e2.message);
+            }
+            throw new Error(`could not rewrite the ledger row (${(e && e.message) || e}) — `
+                + 'nothing was changed');
+        }
+    }
+
+    await mutateJson(cfg.METALS_TRUCKING_FILE, [], (all) => {
+        const rows = Array.isArray(all) ? all : [];
+        const i = rows.findIndex((r) => r && r.id === id);
+        if (i === -1) throw new Error(`trucking payment ${id} disappeared while being edited`);
+        rows[i] = {
+            ...rows[i],
+            date: after.date, amount: after.amount, mode: after.mode, bank: after.bank,
+            ref: after.ref, trucking_company: after.trucking_company, note: after.note,
+            allocations: after.allocations,
+            ledger_payment_id: ledgerId,
+            edited_at: new Date().toISOString(),
+            edited_by: actor || null,
+            edit_history: [...(rows[i].edit_history || []), {
+                at: new Date().toISOString(), by: actor || null,
+                was: { date: before.date, amount: before.amount, mode: before.mode,
+                    bank: before.bank, ref: before.ref,
+                    trucking_company: before.trucking_company,
+                    allocations: before.allocations || [] },
+            }],
+        };
+        return rows;
+    }, { strict: true });
+
+    return { ...plan, applied: true };
 }
 
 async function deleteTruckingPayment(id) {
@@ -333,4 +496,7 @@ module.exports = {
     list, addTruckingPayment, deleteTruckingPayment,
     payables, filterPayables, summary, facets, paidByBill,
     cleanAllocations, sameCompany,
+    // Added 2026-10-07 — the third of the cost types she named. Same two
+    // rules as the other paths: preview first, refuse if in QuickBooks.
+    validateTruckingInput, previewTruckingEdit, editTruckingPayment,
 };
