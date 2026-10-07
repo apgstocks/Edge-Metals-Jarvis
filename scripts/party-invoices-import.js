@@ -4,6 +4,8 @@
 //   1. node scripts/freight-2026-email-sweep.js --export-json     (report-only sweep; needs Gmail + Gemini)
 //   2. node scripts/party-invoices-import.js                      (PREVIEW — writes nothing)
 //   3. node scripts/party-invoices-import.js --write              (save to party_invoices.json)
+//   node scripts/party-invoices-import.js --supersede          (PREVIEW: revised invoices vs the originals they replace)
+//   node scripts/party-invoices-import.js --supersede --write  (remove the superseded originals)
 // Safe to re-run: upserts by party + invoice no. + container/booking/HBL; hand-edited rows are kept.
 const fs = require('fs'), path = require('path');
 const ROOT = path.join(__dirname, '..');
@@ -14,6 +16,21 @@ const fi = argv.indexOf('--file');
 const FILE = fi !== -1 ? path.resolve(argv[fi + 1]) : path.join(ROOT, 'data/party-invoices-2026.json');
 const $ = (n) => `$${Number(n).toLocaleString('en-US', { minimumFractionDigits: 2 })}`;
 
+if (argv.includes('--supersede')) {
+    (async () => {
+        const p = PI.supersedePlan();
+        const show = (r) => `   ${(PI.PARTIES[r.party] || r.party).padEnd(14)} ${String(r.invoice_no).padEnd(16)} ${(r.container_no || r.booking_no || r.hbl_no || '').padEnd(14)} ${$(r.amount)}`;
+        console.log(`\nRevised invoices vs their originals.  ${WRITE ? 'APPLYING' : 'PREVIEW, nothing written'}\n`);
+        console.log(`Originals replaced by a revision (would be removed): ${p.remove.length}  ${$(p.remove.reduce((a, r) => a + r.amount, 0))}`); p.remove.forEach((r) => console.log(show(r)));
+        if (p.blocked.length) { console.log(`\nKept — NOT removed, you decide: ${p.blocked.length}`); p.blocked.forEach((b) => console.log(show(b.row) + `   (${b.why})`)); }
+        if (p.only_on_original.length) { console.log(`\nOn the ORIGINAL but missing from the revision — kept, check with the party: ${p.only_on_original.length}`); p.only_on_original.forEach((r) => console.log(show(r))); }
+        if (p.ambiguous.length) { console.log(`\nSeveral different revisions of one invoice — left alone: ${p.ambiguous.map((a) => `${a.base} (${a.revisions.join(' / ')})`).join('; ')}`); }
+        if (!WRITE) return console.log('\nAdd --write to remove the replaced originals.\n');
+        const r = await PI.supersedeApply();
+        console.log(`\nRemoved ${r.removed} superseded original line(s).\n`);
+    })().catch((e) => { console.error('failed:', e.message); process.exit(1); });
+    return;
+}
 if (!fs.existsSync(FILE)) { console.error(`No export at ${FILE}.\nRun first:  node scripts/freight-2026-email-sweep.js --export-json`); process.exit(1); }
 const data = JSON.parse(fs.readFileSync(FILE, 'utf8'));
 const rows = new Map(), skipped = {};

@@ -36,6 +36,13 @@ const num = (v) => { if (v === null || v === undefined || v === '') return null;
 const txt = (v) => String(v == null ? '' : v).trim();
 const up = (v) => txt(v).toUpperCase().replace(/\s+/g, '');
 
+// "166 REVISED" replaces "166". The line's identity is the BASE number, so a revised
+// invoice and the original it replaces are the same line, not two (Apsara, 2026-10-07,
+// pasting Garduno's 166 listed twice: "166 revised" and "166", six containers each at $930).
+const REVISED_RE = /\s*\b(REV(ISED|ISION)?|CORRECTED|AMENDED)\b.*$/i;
+const baseInvoice = (no) => txt(no).replace(REVISED_RE, '').trim();
+const isRevised = (no) => REVISED_RE.test(txt(no)) && baseInvoice(no) !== '';
+
 // What this line is worth, by party — the same field order the sweep itself reads.
 function amountOf(party, r) {
     if (party === 'panmetal') return num(r.commission != null ? r.commission : r.amount);
@@ -57,8 +64,8 @@ function normalize(rec) {
     if (!line && !invoiceNo) return { skip: 'no invoice number and no container/booking/HBL to key it on' };
     return {
         row: {
-            party, key: `${party}:${invoiceNo || '(none)'}:${line || '(none)'}`,
-            invoice_no: invoiceNo || null, invoice_date: txt(rec.invoice_date) || null,
+            party, key: `${party}:${baseInvoice(invoiceNo) || '(none)'}:${line || '(none)'}`,
+            invoice_no: invoiceNo || null, revised: isRevised(invoiceNo), invoice_date: txt(rec.invoice_date) || null,
             container_no: up(rec.container_no) || null, booking_no: up(rec.booking_no) || null, hbl_no: up(rec.hbl_no) || null,
             amount, quantity: num(rec.quantity),
             check_status: txt(rec.status) || null,            // verified / match / not_in_sheet / booking_mismatch / …
@@ -81,6 +88,8 @@ async function upsertMany(rows) {
             const now = new Date().toISOString();
             if (!at.has(row.key)) { arr.push({ id: `PI_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`, ...row, createdAt: now, updatedAt: now }); at.set(row.key, arr.length - 1); added++; }
             else if (arr[at.get(row.key)].locked) keptLocked++;
+            // The ORIGINAL never overwrites a REVISED line that is already here, whatever order they arrive in.
+            else if (arr[at.get(row.key)].revised && !row.revised) keptLocked++;
             // A re-import must not lower a line below what has already been paid against it.
             else if (row.amount + 0.005 < (paidNow[arr[at.get(row.key)].id] || 0)) keptLocked++;
             else { const i = at.get(row.key); arr[i] = { ...arr[i], ...row, updatedAt: now }; updated++; }
@@ -188,6 +197,51 @@ async function deletePayment(id) {
     return { ok: true };
 }
 
+
+// ── REVISED INVOICES SUPERSEDE THEIR ORIGINAL ──────────────────────────────
+// Report first. supersedePlan() is pure; supersedeApply() writes. It removes the ORIGINAL
+// line only when a REVISED line for the same party + base invoice + container/booking/HBL
+// exists, and it never removes one that has money paid against it or that she edited by
+// hand — those are reported for her to decide. A line that is on the original but NOT on
+// the revision is kept and flagged: the revision may have dropped it, or the read may have
+// missed it, and only she knows which.
+function supersedePlan(rows = list(), pays = payments()) {
+    const paid = paidByRow(pays);
+    const lineOf = (r) => r.container_no || r.booking_no || r.hbl_no || '';
+    const groups = new Map();
+    for (const r of rows) { const k = `${r.party}|${baseInvoice(r.invoice_no)}`; if (!groups.has(k)) groups.set(k, []); groups.get(k).push(r); }
+    const out = { remove: [], blocked: [], only_on_original: [], ambiguous: [], keep: [] };
+    for (const g of groups.values()) {
+        const rev = g.filter((r) => r.revised), orig = g.filter((r) => !r.revised);
+        if (!rev.length || !orig.length) continue;
+        const revNos = [...new Set(rev.map((r) => r.invoice_no))];
+        if (revNos.length > 1) { out.ambiguous.push({ base: baseInvoice(rev[0].invoice_no), revisions: revNos }); continue; }
+        const revLines = new Set(rev.map(lineOf));
+        for (const o of orig) {
+            if (!revLines.has(lineOf(o))) { out.only_on_original.push(o); continue; }
+            if ((paid[o.id] || 0) > 0) out.blocked.push({ row: o, why: `${paid[o.id]} already paid against the original` });
+            else if (o.locked) out.blocked.push({ row: o, why: 'edited by hand' });
+            else out.remove.push(o);
+        }
+        out.keep.push(...rev);
+    }
+    return out;
+}
+
+async function supersedeApply() {
+    const plan = supersedePlan();
+    const doomed = new Set(plan.remove.map((r) => r.id));
+    if (doomed.size) {
+        await mutateJson(cfg.PARTY_INVOICES_FILE, [], (cur) => {
+            const arr = (Array.isArray(cur) ? cur : []).filter((r) => !doomed.has(r.id));
+            // A revised line keeps one key (the base), so a later re-import of the original cannot re-add it.
+            for (const r of arr) if (r.revised) r.key = `${r.party}:${baseInvoice(r.invoice_no)}:${r.container_no || r.booking_no || r.hbl_no || '(none)'}`;
+            return arr;
+        }, { strict: true });
+    }
+    return { removed: doomed.size, plan };
+}
+
 function summary(rows = list()) {
     const out = {};
     for (const p of Object.keys(PARTIES)) {
@@ -202,4 +256,5 @@ function summary(rows = list()) {
 }
 
 module.exports = { PARTIES, TRUCKING_CAP, MODES, normalize, amountOf, list, upsertMany, summary,
-    payments, paidByRow, withPaid, editRow, deleteRow, addPayment, deletePayment, validatePayment, EDITABLE };
+    payments, paidByRow, withPaid, editRow, deleteRow, addPayment, deletePayment, validatePayment, EDITABLE,
+    baseInvoice, isRevised, supersedePlan, supersedeApply };
