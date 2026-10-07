@@ -203,6 +203,47 @@ function groupNtgPayments(records) {
     return list.sort(byDate);
 }
 
+// ── Parsed records -> carrier-invoice rows (helpers/carrierInvoices.js shape) ──
+// `recs` = parseSavedEmail() results for ONE mailbox set. Pure; writes nothing.
+// Returns { rows, skipped }. `skipped` is what could not become a row, with why —
+// a paid TQL PO that never appeared in a reminder has no invoice amount, and an
+// invented amount would look reconciled, so it is reported instead.
+function buildCarrierRows(recs) {
+    const rows = [], skipped = [];
+    const by = (k, p) => (recs || []).filter((r) => r && r.party === p && r.kind === k);
+    // TQL: latest reminder per PO; paid if a payment mail names the PO.
+    const pays = by('payment', 'tql');
+    const latest = new Map();
+    for (const r of by('open_invoices', 'tql').sort((a, b) => String(a.date).localeCompare(String(b.date))))
+        for (const row of r.rows) latest.set(row.ref, { ...row, seen: r.date });
+    for (const row of latest.values()) {
+        const hit = pays.filter((p) => p.refs.includes(row.ref));
+        const paid = hit.length ? (hit.length === 1 && hit[0].refs.length === 1 ? hit[0].amount : row.amount) : 0;
+        const note = hit.length && paid > row.amount ? `paid ${paid} against an invoice of ${row.amount} — check with TQL` : null;
+        rows.push({ carrier: 'tql', ref: row.ref, amount: row.amount, paid, invoice_date: row.invoice_date, lane: row.lane,
+            paid_dates: hit.map((p) => p.date), evidence: note || (hit.length ? 'TQL payment mail' : `TQL reminder ${row.seen}`) });
+    }
+    for (const p of pays) for (const po of p.refs) if (!latest.has(po) && !skipped.some((x) => x.carrier === 'tql' && x.ref === po)) skipped.push({ carrier: 'tql', ref: po, why: 'paid, but never on a TQL reminder — no invoice amount' });
+    // NTG: invoices from statements; amounts from payment tables for any not on a statement.
+    const paidBy = new Map(), paidOn = new Map();
+    for (const p of groupNtgPayments(recs)) for (const i of p.invoices) {
+        paidBy.set(i.invoice, (paidBy.get(i.invoice) || 0) + (i.amount || 0));
+        paidOn.set(i.invoice, [...(paidOn.get(i.invoice) || []), p.date]);
+    }
+    const inv = new Map();
+    for (const s of by('statement', 'ntg').sort((a, b) => String(a.date).localeCompare(String(b.date))))
+        for (const r of s.rows) inv.set(r.invoice, { amount: r.amount, invoice_date: r.invoice_date, seen: s.date });
+    for (const [n, i] of inv) rows.push({ carrier: 'ntg', ref: n, amount: i.amount, paid: Math.min(paidBy.get(n) || 0, i.amount), invoice_date: i.invoice_date,
+        paid_dates: paidOn.get(n) || [], evidence: paidBy.has(n) ? 'NTG payment mail' : `NTG statement ${i.seen}` });
+    for (const [n, amt] of paidBy) if (!inv.has(n)) rows.push({ carrier: 'ntg', ref: n, amount: amt, paid: amt, invoice_date: null, paid_dates: paidOn.get(n), evidence: 'NTG payment mail (not on any saved statement)' });
+    // Schneider: one row per Pay-by-Link order; paid only if a PAID mail exists.
+    const ord = new Map();
+    for (const r of by('pay_by_link', 'schneider')) { const c = ord.get(r.order) || { ...r, paid: false }; c.paid = c.paid || r.paid; ord.set(r.order, c); }
+    for (const o of ord.values()) rows.push({ carrier: 'schneider', ref: o.order, amount: o.amount, paid: o.paid ? o.amount : 0, invoice_date: o.date,
+        lane: o.loads.length ? `loads ${o.loads.join(', ')}` : null, paid_dates: o.paid ? [o.date] : [], evidence: o.paid ? 'Schneider PAID mail' : 'Schneider Pay by Link' });
+    return { rows, skipped };
+}
+
 // One entry point: give it a saved email's text, get back the first record any
 // parser recognises, or null.
 function parseSavedEmail(text) {
@@ -215,4 +256,4 @@ function parseSavedEmail(text) {
     return null;
 }
 
-module.exports = { splitSaved, parseSavedEmail, parseTqlPayment, parseTqlInvoices, parseNtgPayment, parseNtgStatement, parseNtgInvoiceNotice, parseSchneiderPayByLink, groupNtgPayments, money, usToIso };
+module.exports = { splitSaved, parseSavedEmail, parseTqlPayment, parseTqlInvoices, parseNtgPayment, parseNtgStatement, parseNtgInvoiceNotice, parseSchneiderPayByLink, groupNtgPayments, buildCarrierRows, money, usToIso };

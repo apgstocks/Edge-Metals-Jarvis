@@ -128,5 +128,32 @@ section('E. Report end to end (real script, saved-email folder, read-only)');
     fs.rmSync(dir, { recursive: true, force: true });
 }
 
+section('F. Import rows (buildCarrierRows) + importer end to end');
+{
+    const recs = [tqlPay, tqlInv, ntgSched, ntgConf, ntgOpen, ntgCard, schn('Pay by Link', 'Mon, 05 Oct 2026 10:00:00 +0000')].map(R.parseSavedEmail);
+    const { rows, skipped } = R.buildCarrierRows(recs);
+    const f = (c, r) => rows.find((x) => x.carrier === c && x.ref === r);
+    ck('TQL unpaid PO: open, outstanding = amount', f('tql', '37359825') && f('tql', '37359825').paid === 0);
+    ck('TQL paid PO not on a reminder is skipped, not invented', skipped.some((s) => s.ref === '37612468') && !f('tql', '37612468'));
+    ck('NTG invoice on open statement, unpaid', f('ntg', '9621418') && f('ntg', '9621418').paid === 0 && f('ntg', '9621418').amount === 4900);
+    ck('NTG invoice paid via payment mail, not on a statement, gets its own row', f('ntg', '9183459') && f('ntg', '9183459').paid === 750);
+    ck('NTG paid is counted once despite confirmation mail', rows.filter((x) => x.carrier === 'ntg').reduce((a, x) => a + x.paid, 0) === 3550 + 1600);
+    ck('Schneider unpaid order: paid 0', f('schneider', '123456789012') && f('schneider', '123456789012').paid === 0);
+    ck('buildCarrierRows(null) is safe', R.buildCarrierRows(null).rows.length === 0);
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'carrier-imp-')), data = fs.mkdtempSync(path.join(os.tmpdir(), 'carrier-data-'));
+    const put = (party, name, txt) => { fs.mkdirSync(path.join(dir, party, 'emails'), { recursive: true }); fs.writeFileSync(path.join(dir, party, 'emails', name), txt); };
+    put('tql', 'b.txt', tqlInv); put('ntg', 'c.txt', ntgOpen);
+    const run = (...a) => execFileSync('node', [path.join(__dirname, '../scripts/carrier-invoices-import.js'), ...a], { env: { ...process.env, CARRIER_EMAIL_DIR: dir, DATA_DIR: data, JARVIS_TEST: '1' }, encoding: 'utf8' });
+    const file = path.join(data, 'carrier_invoices.json');
+    const dry = run();
+    ck('dry run writes nothing', /DRY RUN/.test(dry) && !fs.existsSync(file));
+    run('--write');
+    const saved = JSON.parse(fs.readFileSync(file, 'utf8'));
+    ck('--write saves 4 Edge Metals rows', saved.length === 4 && saved.every((r) => r.company === 'Edge Metals'), String(saved.length));
+    run('--write');
+    ck('second --write adds no duplicates', JSON.parse(fs.readFileSync(file, 'utf8')).length === 4);
+    fs.rmSync(dir, { recursive: true, force: true }); fs.rmSync(data, { recursive: true, force: true });
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
