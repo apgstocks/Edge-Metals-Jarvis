@@ -188,16 +188,33 @@ function main() {
     console.log(`  Overstated across the group, proven : ${money(a)}`);
     console.log(`  Possibly overstated on top of that  : ${money(b)}`);
     console.log(`  Worst case                          : ${money(a + b)}\n`);
-    if (!a && !b) {
+    const duplicated = !!(a || b);
+    if (!duplicated) {
         console.log('  Nothing overlaps, so the two stores are not describing the same');
         console.log('  haulage today. The structure still allows it — the books post both');
         console.log('  paths — so this is worth re-running after any bulk import.\n');
-        return;
+        if (!truckerBills.length) {
+            console.log('  The trucker bills store is EMPTY, which is why: there is nothing');
+            console.log('  on the second path to collide with the 118-odd bills carrying');
+            console.log('  their own haulage. The misfiling risk below is dormant, not');
+            console.log('  absent — the first row written to that store books to Edge Yard.\n');
+        }
     }
 
+    // ── ALWAYS, NOT ONLY WHEN THERE IS A DUPLICATE ────────────────────────
+    // This used to sit after an early `return` in the no-overlap branch. On
+    // her real data the overlap is zero — so the run she actually did skipped
+    // the carriers section entirely, which is the one thing she had asked
+    // about ("zimex ,eagle brit,pan metal ,tql,schneider,aj transport,sher,
+    // jio bills are not there..."). An early return that skips the answer to
+    // the question is worse than no script: it reads as "nothing to report".
     carriersNotInTheBooks();
 
     console.log('── HER DECISIONS, WHICH THIS SCRIPT WILL NOT MAKE ─────────────────\n');
+    if (!duplicated) {
+        console.log('  (1 and 2 are dormant today — nothing is duplicated. They stay');
+        console.log('   written down because the structure still allows it.)\n');
+    }
     console.log('  1. WHOSE COST IS A HAULIER INVOICE? Today the store decides, flatly:');
     console.log('     every trucker bill is Edge Yard\'s. But a hauler invoice for an Edge');
     console.log('     Metals container is Edge Metals\' cost, and booking it to Edge Yard');
