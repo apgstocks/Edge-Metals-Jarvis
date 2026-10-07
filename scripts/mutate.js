@@ -827,6 +827,25 @@ const MUTATIONS = [
     // PROPERTY and not the markup's length: the old 120-character proximity
     // regex went red when Edit was added beside Delete, and would have stayed
     // green if Delete had escaped the gate. This is the inverse.
+    // ── #182: THE TWO DELETE BUTTONS, CONVERGED ───────────────────────
+    { name: 'the Pay sheet keeps a private copy of the arming logic again',
+      file: 'dashboard/index.html', suites: ['payment-delete-roles'],
+      find: "    selector: '.bpDel',",
+      to:   "    selector: '.bpDel-PRIVATE-COPY'," },
+    { name: 'the armed Delete no longer says how many containers reopen',
+      file: 'dashboard/index.html', suites: ['payment-delete-roles', 'ledger-render'],
+      find: "btn.textContent = n ? `${label} — reopens ${n} container${n === 1 ? '' : 's'}?`",
+      to:   "btn.textContent = n ? `${label} — sure?`" },
+    { name: 'the armed Delete never disarms itself',
+      file: 'dashboard/index.html', suites: ['payment-delete-roles'],
+      find: "        setTimeout(() => { if (armed === btn) { armed = null; disarm(btn); } }, 5000);",
+      to:   "        void 0;" },
+    // NOT a fourth entry for `if (armed !== btn)` — 'one click deletes a
+    // payment, with no confirm' already does exactly that, and now that the
+    // logic is shared there is only ONE occurrence of it to mutate. Two
+    // entries with the same find string would both pass and tell me nothing
+    // twice. Its suite list is widened instead.
+
     // ── THE DEAD-ROUTE GUARD'S OWN TWO HOLES ──────────────────────────
     // Both were live until 2026-10-07, and both were invisible because
     // nothing fed the ROUTE parser anything but today's repo. These put each
@@ -890,7 +909,7 @@ const MUTATIONS = [
       find: '      : (sent > 0 && Math.abs(left) < 0.005);',
       to:   '      : (sent > 0);' },
     { name: 'one click deletes a payment, with no confirm',
-      file: 'dashboard/index.html', suites: ['ledger-render'],
+      file: 'dashboard/index.html', suites: ['ledger-render', 'payment-delete-roles'],
       find: '      if (armed !== btn) {',
       to:   '      if (false) {' },
     { name: 'a new bill is dated by the browser clock, not by Los Angeles',

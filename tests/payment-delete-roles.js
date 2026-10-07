@@ -290,8 +290,16 @@ section('F — the Payments tab can delete, on the Jarvis profile only');
        'she was sent to this tab and found nothing to click');
     ck('  and without the Jarvis profile there is no button at all',
        !/<button/.test(ungated), `the ungated branch was: ${ungated.slice(0, 200)}`);
+    // Read with the REAL call parser rather than matched as a spelling. This
+    // used to assert the template-literal form, and went red on 2026-10-07
+    // when the call became string concatenation — which it had to, so
+    // check-route-reach.js can see the path literal. The spelling is not the
+    // property; a DELETE going to that route is.
+    const reach = require(path.join(ROOT, 'scripts/check-route-reach.js'));
     ck('  and it posts to the same route the modal uses',
-       /\/api\/bill-payments\/\$\{encodeURIComponent\(btn\.dataset\.payment\)\}/.test(web));
+       reach.callsIn(web).some((c) => c.method === 'DELETE'
+           && c.url.startsWith('/api/bill-payments/')),
+       'no DELETE call to /api/bill-payments/ anywhere in the client');
     ck('  hidden, it says how to get it back',
        /Jarvis profile to remove a supplier payment/.test(web),
        'a button that simply vanishes reads as a bug, not as a rule');
@@ -312,9 +320,42 @@ section('F — the Payments tab can delete, on the Jarvis profile only');
 
     // The arming must say what it costs. "Are you sure?" is the same dialog
     // for a typo and for reopening eleven settled containers.
+    // ── NOW SHARED, SO ASSERTED WHERE IT LIVES ───────────────────────────
+    // These two were matched inside the Payments tab's own slice, because the
+    // arm-then-confirm logic was written inline there — and a second copy was
+    // written inline in the Pay sheet, which is #182 and which had already
+    // drifted to a different sentence. Both now call armThenConfirm, so the
+    // count and the 5-second disarm are asserted on the shared helper, and
+    // the tab is checked for USING it. Asserting on the page alone would pass
+    // if this button quietly stopped going through the helper.
+    ck('  the Payments tab arms through the shared helper',
+       /armThenConfirm\(\{\s*\n?\s*selector: '\.spDel'/.test(web),
+       'a private copy of the arming logic is how the two buttons drifted');
+    const helper = web.slice(web.indexOf('function armThenConfirm'),
+                             web.indexOf('function editPaymentFlow'));
+    ck('    and the helper was located', helper.length > 200 && helper.length < 4000,
+       `${helper.length} chars — if this is wrong the next two checks prove nothing`);
     ck('  the first click says how many containers reopen',
-       /Reopens \$\{n\} container/.test(tab), 'a count is the difference between a typo and real money');
-    ck('  and it disarms itself', /5000\)/.test(tab), 'a live delete button left hovering is a hazard');
+       /reopens \$\{n\} container/i.test(helper),
+       'a count is the difference between a typo and real money');
+    ck('  and it disarms itself', /5000\)/.test(helper),
+       'a live delete button left hovering is a hazard');
+
+    // ── #182: THE TWO BUTTONS CANNOT DRIFT APART AGAIN ───────────────────
+    // Both delete a supplier payment through the same route. They were
+    // written on different days and had already drifted to two different
+    // sentences for the same irreversible act — "Reopens 2 containers —
+    // sure?" on the Payments tab, "Delete — reopens 2 containers?" in the Pay
+    // sheet. The wording now comes from one place. If a third delete button
+    // appears with its own private copy, this goes red.
+    const armCallers = (web.match(/armThenConfirm\(\{/g) || []).length - 1;  // minus the definition
+    ck('both supplier-payment Delete buttons arm through ONE implementation',
+       armCallers === 2
+       && /selector: '\.spDel'/.test(web) && /selector: '\.bpDel'/.test(web),
+       `${armCallers} caller(s) — expected the Payments tab and the Pay sheet`);
+    ck('  and neither keeps a private copy of the arming logic',
+       (web.match(/armed !== btn/g) || []).length === 1,
+       'more than one `armed !== btn` means the logic was copied, not shared');
     ck('  a refusal is explained, not shown as a code',
        /Jarvis profile only/.test(tab), 'a 403 here means the wrong profile, which is a sentence');
 

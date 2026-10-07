@@ -8358,49 +8358,27 @@ async function renderSupplierPaymentsTab() {
   // to serve a new screen is how the supplier-payment break happened. The
   // convergence is filed instead, so the duplication is a decision rather
   // than an accident.
-  {
-    const disarm = (b) => {
-      b.textContent = 'Delete';
-      b.style.background = 'none';
-      b.style.color = 'var(--danger, #f87171)';
-    };
-    let armed = null;
-    document.querySelectorAll('.spDel').forEach((btn) => {
-      btn.onclick = async () => {
-        if (armed !== btn) {
-          document.querySelectorAll('.spDel').forEach(disarm);
-          armed = btn;
-          const n = Number(btn.dataset.containers || 0);
-          // The count is the point: an advance against nothing is a typo,
-          // an applied payment reopens containers that currently read as
-          // settled. One button, two very different consequences.
-          btn.textContent = n ? `Reopens ${n} container${n === 1 ? '' : 's'} — sure?` : 'Delete — sure?';
-          btn.style.background = 'var(--danger, #f87171)';
-          btn.style.color = '#FFFFFF';
-          setTimeout(() => { if (armed === btn) { armed = null; disarm(btn); } }, 5000);
-          return;
-        }
-        armed = null;
-        btn.disabled = true;
-        btn.textContent = 'Deleting…';
-        try {
-          await api(`/api/bill-payments/${encodeURIComponent(btn.dataset.payment)}`, { method: 'DELETE' });
-          // Re-render rather than removing the row: Sent, Unapplied and the
-          // advance count all moved, and a table that agrees with itself
-          // only in the row you happened to change is worse than a reload.
-          await renderSupplierPaymentsTab();
-        } catch (e) {
-          btn.disabled = false;
-          disarm(btn);
-          // Surfaced on the row, not in an alert — she is looking at the
-          // row, and a 403 here means the session is not the Jarvis
-          // profile, which is a sentence rather than a code.
-          btn.textContent = /403|forbidden/i.test(String(e && e.message))
-            ? 'Jarvis profile only' : 'Failed — try again';
-        }
-      };
-    });
-  }
+  // The arm-then-confirm wording and timing live in armThenConfirm, shared
+  // with the pay-history button that posts to this same route (#182).
+  armThenConfirm({
+    selector: '.spDel',
+    danger: 'var(--danger, #f87171)',
+    onConfirm: async (btn) => {
+      await api('/api/bill-payments/' + encodeURIComponent(btn.dataset.payment),
+                { method: 'DELETE' });
+      // Re-render rather than removing the row: Sent, Unapplied and the
+      // advance count all moved, and a table that agrees with itself only in
+      // the row you happened to change is worse than a reload.
+      await renderSupplierPaymentsTab();
+    },
+    // Surfaced on the row, not in an alert — she is looking at the row, and a
+    // 403 here means the session is not the Jarvis profile, which is a
+    // sentence rather than a code.
+    onError: (btn, e) => {
+      btn.textContent = /403|forbidden/i.test(String(e && e.message))
+        ? 'Jarvis profile only' : 'Failed — try again';
+    },
+  });
 
   document.querySelectorAll('.spEdit').forEach((btn) => {
     btn.onclick = () => editPaymentFlow({
@@ -10782,35 +10760,25 @@ async function openBillPayForm(opts = {}) {
   // The server audits every one of these (api.js, delete-bill-payment) and
   // re-mirrors the affected containers to the Shipment tab, so the sheet
   // does not keep showing a payment that no longer exists.
-  const disarm = (b) => { b.textContent = 'Delete'; b.style.background = 'none'; b.style.color = L.danger; };
-  let armed = null;
-  document.querySelectorAll('.bpDel').forEach((btn) => {
-    btn.onclick = async () => {
-      if (armed !== btn) {
-        document.querySelectorAll('.bpDel').forEach(disarm);
-        armed = btn;
-        const n = Number(btn.dataset.containers || 0);
-        btn.textContent = n ? `Delete — reopens ${n} container${n === 1 ? '' : 's'}?` : 'Delete — sure?';
-        btn.style.background = L.danger; btn.style.color = '#FFFFFF';
-        setTimeout(() => { if (armed === btn) { armed = null; disarm(btn); } }, 5000);
-        return;
-      }
-      armed = null;
-      btn.disabled = true; btn.textContent = 'Deleting…';
-      try {
-        await api(`/api/bill-payments/${encodeURIComponent(btn.dataset.payment)}`, { method: 'DELETE' });
-        // Reopen rather than splice the row out: the balances, the credit on
-        // hand and the open-container list all moved, and a list that agrees
-        // with itself only in the part you happened to change is worse than
-        // a reload.
-        close();
-        await renderLedgerTab('bills');
-        await openBillPayForm();
-      } catch (e) {
-        btn.disabled = false; disarm(btn);
-        $('bpErr').textContent = e.message || 'Could not delete that payment';
-      }
-    };
+  // Shared with the Payments tab's own Delete (#182) — same route, same
+  // consequence, so the same sentence and the same 5-second disarm.
+  armThenConfirm({
+    selector: '.bpDel',
+    danger: L.danger,
+    onConfirm: async (btn) => {
+      await api('/api/bill-payments/' + encodeURIComponent(btn.dataset.payment),
+                { method: 'DELETE' });
+      // Reopen rather than splice the row out: the balances, the credit on
+      // hand and the open-container list all moved, and a list that agrees
+      // with itself only in the part you happened to change is worse than a
+      // reload.
+      close();
+      await renderLedgerTab('bills');
+      await openBillPayForm();
+    },
+    onError: (btn, e) => {
+      $('bpErr').textContent = e.message || 'Could not delete that payment';
+    },
   });
   retotal();
 
@@ -13018,6 +12986,64 @@ function payCanDelete() {
 // this stops a button being offered that the server would refuse.
 function metalsCanDelete() {
   return IS_SUPER === true;
+}
+
+// ── ARM, THEN CONFIRM — ONE IMPLEMENTATION ──────────────────────────────
+// #182. Two buttons delete a supplier payment: one on the Payments tab
+// (.spDel) and one in the pay history inside the Pay sheet (.bpDel). Same
+// route, same consequence, written on different days — and they had already
+// drifted:
+//
+//   Payments tab   "Reopens 2 containers — sure?"
+//   pay history    "Delete — reopens 2 containers?"
+//
+// Two different sentences for the same irreversible action, which is how a
+// later change to one of them silently fails to reach the other. The wording
+// now comes from here. I picked the pay-history phrasing, which keeps the word
+// Delete visible in the armed state: someone who looks away and back can still
+// tell what pressing it does. That choice was mine, not Apsara's.
+//
+// What legitimately differs between the two stays an argument: the colour
+// source (the Pay sheet runs in the ledger's own palette), where an error is
+// shown, and what to reload afterwards.
+function armThenConfirm({ selector, danger, label = 'Delete', onConfirm, onError }) {
+  const all = () => document.querySelectorAll(selector);
+  const disarm = (b) => {
+    b.textContent = label;
+    b.style.background = 'none';
+    b.style.color = danger;
+  };
+  let armed = null;
+  all().forEach((btn) => {
+    btn.onclick = async () => {
+      if (armed !== btn) {
+        all().forEach(disarm);
+        armed = btn;
+        // The count is the point: an advance against nothing is a typo, an
+        // applied payment reopens containers that currently read as settled.
+        // One button, two very different consequences.
+        const n = Number(btn.dataset.containers || 0);
+        btn.textContent = n ? `${label} — reopens ${n} container${n === 1 ? '' : 's'}?`
+                            : `${label} — sure?`;
+        btn.style.background = danger;
+        btn.style.color = '#FFFFFF';
+        // Disarms itself, so a button left armed on a screen she walked away
+        // from is not a live delete waiting for a stray click.
+        setTimeout(() => { if (armed === btn) { armed = null; disarm(btn); } }, 5000);
+        return;
+      }
+      armed = null;
+      btn.disabled = true;
+      btn.textContent = 'Deleting…';
+      try {
+        await onConfirm(btn);
+      } catch (e) {
+        btn.disabled = false;
+        disarm(btn);
+        onError(btn, e);
+      }
+    };
+  });
 }
 
 // ── EDIT A RECORDED PAYMENT, WITH THE CONSEQUENCES SHOWN FIRST ──────────
