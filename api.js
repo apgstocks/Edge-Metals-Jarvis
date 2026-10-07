@@ -5406,6 +5406,19 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
         } catch (e) { res.status(500).json({ error: e.message }); }
     });
 
+    // ── Edge Metals carrier invoices (NTG / TQL / Schneider) ─────────────
+    // READ-ONLY. Rows come from scripts/carrier-invoices-import.js; nothing
+    // here writes, and nothing else reads this store (helpers/carrierInvoices.js).
+    app.get('/api/carrier-invoices', (req, res) => {
+        try {
+            const ci = require('./helpers/carrierInvoices');
+            const all = ci.list();
+            const { carrier, status } = req.query || {};
+            const rows = all.filter((r) => (!carrier || r.carrier === carrier) && (!status || r.status === status));
+            res.json({ rows, summary: ci.summary(all), carriers: ci.CARRIERS, statuses: ci.STATUSES });
+        } catch (e) { res.status(500).json({ error: e.message }); }
+    });
+
     app.get('/api/metals-trucking', (req, res) => {
         try {
             const mt = require('./helpers/metalsTrucking');

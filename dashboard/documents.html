@@ -1175,15 +1175,12 @@ body[data-theme="light"] {
            Added 2026-09-01 per Apsara: "add a new tabs like NTG,TQL,
            Schenider in transport".
 
-           Deliberately INERT until a real invoice from each has been read.
-           Every working carrier tab here is built on an extractor tuned to
-           that carrier's exact invoice layout — Jio's "W/O Ref" container
-           field, AJ's "Dry Run" and "Extra Scale" charge lines, Sher's
-           booking-quantity column. Writing those blind produces a tab that
-           looks finished and quietly mis-reads money on a reconciliation
-           screen, which is worse than an obviously-unfinished tab. The
-           routing, buttons and panels are real; the parsing waits for a
-           sample. -->
+           UPDATE 2026-10-07: these three carriers send TEXT remittances, not
+           PDFs, so there is no extractor to tune. The panels below are
+           READ-ONLY lists of Edge Metals carrier invoices (store:
+           helpers/carrierInvoices.js, fed from email by
+           scripts/carrier-invoices-import.js). Apsara chose Edge Metals and
+           a separate store; nothing here writes or verifies anything. -->
       <!-- ── GARDUNO'S LOGISTICS ────────────────────────────────────────
            Apsara, 2026-10-04: "I want to upload all these invoices in Edge
            metals trucking under gardunos like AJ Transport".
@@ -1237,15 +1234,9 @@ body[data-theme="light"] {
           </div>
         </div>
       </div>
-      <div id="verifyPanelNtg" class="hidden">
-        <div class="placeholder-note">NTG verification isn't wired up yet — send me one NTG invoice PDF and this becomes a working tab.<br><span style="font-size:11px;">I need to see the real layout to know which field carries the container or booking number, and which lines are line-haul vs. accessorial charges.</span></div>
-      </div>
-      <div id="verifyPanelTql" class="hidden">
-        <div class="placeholder-note">TQL verification isn't wired up yet — send me one TQL invoice PDF and this becomes a working tab.<br><span style="font-size:11px;">I need to see the real layout to know which field carries the container or booking number, and which lines are line-haul vs. accessorial charges.</span></div>
-      </div>
-      <div id="verifyPanelSchneider" class="hidden">
-        <div class="placeholder-note">Schneider verification isn't wired up yet — send me one Schneider invoice PDF and this becomes a working tab.<br><span style="font-size:11px;">I need to see the real layout to know which field carries the container or booking number, and which lines are line-haul vs. accessorial charges.</span></div>
-      </div>
+      <div id="verifyPanelNtg" class="hidden"><div id="carrierBody_ntg" class="muted" style="padding:12px;">Loading…</div></div>
+      <div id="verifyPanelTql" class="hidden"><div id="carrierBody_tql" class="muted" style="padding:12px;">Loading…</div></div>
+      <div id="verifyPanelSchneider" class="hidden"><div id="carrierBody_schneider" class="muted" style="padding:12px;">Loading…</div></div>
     </div>
 
     <!-- ── Commission ──────────────────────────────────────────────────── -->
@@ -1569,6 +1560,27 @@ function setVerifySubtab(name) {
   Object.entries(VERIFY_SUBTAB_PANELS).forEach(([key, id]) => $(id).classList.toggle('hidden', key !== name));
 }
 document.querySelectorAll('.verify-subtab-btn').forEach((b) => b.addEventListener('click', () => setVerifySubtab(b.dataset.verifySubtab)));
+
+// ── NTG / TQL / Schneider: Edge Metals carrier invoices (read-only) ─────────
+// No PDF to verify — these carriers send text remittances. The rows come from
+// the email importer (scripts/carrier-invoices-import.js); this only shows them.
+const CARRIER_KEYS = { ntg: 'NTG invoice', tql: 'TQL PO', schneider: 'Order ID' };
+async function loadCarrier(c) {
+  const box = $('carrierBody_' + c);
+  if (!box) return;
+  try {
+    const d = await api('/api/carrier-invoices?carrier=' + encodeURIComponent(c));
+    const rows = (d.rows || []).slice().sort((a, b) => String(b.invoice_date || '').localeCompare(String(a.invoice_date || '')));
+    const m = (n) => '$' + Number(n || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    const s = (d.summary || {})[c] || { count: 0, billed: 0, outstanding: 0 };
+    if (!rows.length) { box.innerHTML = '<div class="placeholder-note">No ' + esc(c.toUpperCase()) + ' invoices recorded yet. They are read from the carrier’s emails by <code>scripts/carrier-invoices-import.js</code>.</div>'; return; }
+    box.innerHTML = '<div style="margin-bottom:8px;font-size:12px;">Edge Metals · ' + s.count + ' invoices · billed ' + m(s.billed) + ' · <b>outstanding ' + m(s.outstanding) + '</b></div>'
+      + '<table class="data-table"><thead><tr><th>' + esc(CARRIER_KEYS[c]) + '</th><th>Date</th><th>Detail</th><th style="text-align:right">Amount</th><th style="text-align:right">Paid</th><th>Status</th><th>Source</th></tr></thead><tbody>'
+      + rows.map((r) => '<tr><td>' + esc(r.ref) + '</td><td>' + esc(r.invoice_date || '') + '</td><td>' + esc(r.lane || '') + '</td><td style="text-align:right">' + m(r.amount) + '</td><td style="text-align:right">' + m(r.paid) + '</td><td>' + esc(r.status) + '</td><td style="font-size:11px">' + esc(r.evidence || '') + '</td></tr>').join('')
+      + '</tbody></table>';
+  } catch (e) { box.textContent = 'Could not load: ' + e.message; }
+}
+document.querySelectorAll('.verify-subtab-btn').forEach((b) => b.addEventListener('click', () => { if (CARRIER_KEYS[b.dataset.verifySubtab]) loadCarrier(b.dataset.verifySubtab); }));
 
 // Year select — current year down to 3 years back covers realistic lookback
 // without a free-typed field; matches the old verify.html tool's fixed
