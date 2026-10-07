@@ -186,6 +186,45 @@ const NEW_PARTIES = [
 
 const money = (n) => (n == null ? '—' : `$${Number(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`);
 
+// ── --save-emails: dump the EMAIL TEXT, no PDF required ───────────────────
+// Apsara, 2026-10-07: for NTG / TQL / Schneider "there is no pdf, in mail
+// there will be payment remittance" and "you have swept my mail already".
+// The sweep never saw those: its query demands a PDF attachment and it only
+// printed totals. This saves each matching email (headers + body text) to
+// <SAVE_DIR>/<party>/emails/ so the remittance layout can be read from real
+// mail. Read-only; Gmail only, no Gemini.
+async function dumpEmails(party, mailboxes) {
+    const query = party.query.replace(YEAR_SCOPE, 'after:2026/1/1 before:2027/1/1');
+    const seen = new Set();
+    let saved = 0;
+    const subjects = [];
+    const dir = path.join(SAVE_DIR || path.resolve(ROOT, 'data/sample-invoices'), party.key, 'emails');
+    fs.mkdirSync(dir, { recursive: true });
+    for (const mb of mailboxes) {
+        let messages = [];
+        try { messages = await gmail.listMessages(mb.client, query, LIMIT); }
+        catch (e) { console.error(`  [${party.label}] search failed on ${mb.role}:`, e.message); continue; }
+        for (const m of messages) {
+            let msg;
+            try { msg = await gmail.getMessage(mb.client, m.id); } catch (e) { continue; }
+            const hdrs = Object.fromEntries((msg.payload.headers || []).map((h) => [h.name.toLowerCase(), h.value]));
+            const rfc = hdrs['message-id'];
+            if (rfc) { if (seen.has(rfc)) continue; seen.add(rfc); }
+            let body = '';
+            try { body = (gmail.getEmailContent(msg.payload).body || '').trim(); } catch (e) { /* header-only is still useful */ }
+            const d = new Date(hdrs.date || ''); const ymd = Number.isFinite(d.getTime()) ? d.toISOString().slice(0, 10) : 'undated';
+            const subj = hdrs.subject || '(no subject)';
+            const safe = subj.replace(/[^A-Za-z0-9]+/g, '_').slice(0, 50);
+            fs.writeFileSync(path.join(dir, `${ymd}_${m.id.slice(0, 8)}_${safe}.txt`),
+                `From: ${hdrs.from || ''}\nTo: ${hdrs.to || ''}\nDate: ${hdrs.date || ''}\nSubject: ${subj}\nMailbox: ${mb.address}\n\n${body}\n`);
+            subjects.push(`${ymd}  ${subj.slice(0, 90)}`);
+            saved += 1;
+        }
+    }
+    console.log(`── ${party.label}: saved ${saved} email(s) to ${dir}`);
+    subjects.sort().reverse().slice(0, 25).forEach((x) => console.log(`     ${x}`));
+}
+
 async function sweepParty(party, mailboxes) {
     const foundPdfs = []; // [{ base64, filename, messageId, mailbox, subject, from, date }]
     let scanned = 0;
@@ -359,6 +398,12 @@ async function sweepParty(party, mailboxes) {
     if (!parties.length && !newParties.length) {
         console.error(`--party matched nothing. Known keys: ${[...PARTIES, ...NEW_PARTIES].map((p) => p.key).join(', ')}`);
         process.exit(1);
+    }
+
+    if (argv.includes('--save-emails')) {
+        for (const party of [...parties, ...newParties]) await dumpEmails(party, mailboxes);
+        console.log('\nDone — emails saved, nothing sent anywhere, nothing written to the sheet.');
+        return;
     }
 
     async function runGroup(list, heading) {
