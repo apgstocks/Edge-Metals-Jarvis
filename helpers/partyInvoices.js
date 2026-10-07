@@ -26,7 +26,9 @@
 const cfg = require('../config');
 const { loadJson, mutateJson } = require('./json');
 
-const PARTIES = { zimex: 'Zimex', jio: 'Jio', sher: 'Sher Trucking', ajtransport: 'AJ Transport', panmetal: 'Pan Metal', gardunos: "Garduno's" };
+const PARTIES = { zimex: 'Zimex', eagle: 'Eagle Trans', jio: 'Jio', sher: 'Sher Trucking', ajtransport: 'AJ Transport', panmetal: 'Pan Metal', gardunos: "Garduno's" };
+// The sweep calls Eagle Trans 'eaglebrit'.
+const ALIAS = { eaglebrit: 'eagle' };
 // Same ceiling the sweep uses for its trucker tab logging: a drayage line is hundreds of
 // dollars; above this on a trucker is almost certainly Edge's own outbound invoice.
 const TRUCKING_CAP = 3000;
@@ -51,22 +53,29 @@ function amountOf(party, r) {
 
 // One export record -> a register row, or { skip: reason }.
 function normalize(rec) {
-    const party = txt(rec && rec.party).toLowerCase();
+    const rawParty = txt(rec && rec.party).toLowerCase();
+    const party = ALIAS[rawParty] || rawParty;
     if (!PARTIES[party]) return { skip: 'unknown party' };
     if (rec.extraction_failed) return { skip: 'extraction failed' };
     const amount = amountOf(party, rec);
     if (amount === null || amount === 0) return { skip: 'no amount (booking confirmation / certificate, not an invoice)' };
+    // Only Eagle Trans issues credit notes (XSCRN, negative). For every other party a negative is a misread.
+    if (amount < 0 && !(party === 'eagle' && rec.kind === 'credit_note')) return { skip: 'negative amount' };
     // Per load, for sher: the invoice amount covers `quantity` loads.
     const perLoad = TRUCKERS.includes(party) ? amount / (Number(rec.quantity) > 0 ? Number(rec.quantity) : 1) : 0;
     if (TRUCKERS.includes(party) && perLoad > TRUCKING_CAP) return { skip: `over $${TRUCKING_CAP} per load — probably not a ${PARTIES[party]} invoice` };
-    const line = up(rec.container_no) || up(rec.booking_no) || up(rec.hbl_no) || up(rec.order_no);
+    // Eagle bills a BOOKING in one total with several containers: one register line per INVOICE,
+    // containers kept as a list (the figure is never divided across them).
+    const containers = party === 'eagle' ? (Array.isArray(rec.containers) ? rec.containers.map(up).filter(Boolean) : []) : [];
+    const line = containers.join(',') || up(rec.container_no) || up(rec.booking_no) || up(rec.hbl_no) || up(rec.order_no);
     const invoiceNo = txt(rec.invoice_no);
     if (!line && !invoiceNo) return { skip: 'no invoice number and no container/booking/HBL to key it on' };
     return {
         row: {
-            party, key: `${party}:${baseInvoice(invoiceNo) || '(none)'}:${line || '(none)'}`,
+            party, key: `${party}:${baseInvoice(invoiceNo) || '(none)'}:${(party === 'eagle' && up(rec.booking_no)) || line || '(none)'}`,
             invoice_no: invoiceNo || null, revised: isRevised(invoiceNo), invoice_date: txt(rec.invoice_date) || null,
-            container_no: up(rec.container_no) || null, booking_no: up(rec.booking_no) || null, hbl_no: up(rec.hbl_no) || null,
+            container_no: containers.join(',') || up(rec.container_no) || null, booking_no: up(rec.booking_no) || null, hbl_no: up(rec.hbl_no) || null,
+            ...(party === 'eagle' ? { kind: rec.kind === 'credit_note' ? 'credit_note' : 'invoice', containers } : {}),
             amount, quantity: num(rec.quantity),
             check_status: txt(rec.status) || null,            // verified / match / not_in_sheet / booking_mismatch / …
             source_file: txt(rec.source_file) || null, source_subject: txt(rec.source_subject) || null,
@@ -91,7 +100,7 @@ async function upsertMany(rows) {
             // The ORIGINAL never overwrites a REVISED line that is already here, whatever order they arrive in.
             else if (isRevised(arr[at.get(row.key)].invoice_no) && !row.revised) keptLocked++;
             // A re-import must not lower a line below what has already been paid against it.
-            else if (row.amount + 0.005 < (paidNow[arr[at.get(row.key)].id] || 0)) keptLocked++;
+            else if ((paidNow[arr[at.get(row.key)].id] || 0) > 0 && row.amount + 0.005 < paidNow[arr[at.get(row.key)].id]) keptLocked++;
             else { const i = at.get(row.key); arr[i] = { ...arr[i], ...row, updatedAt: now }; updated++; }
         }
         return arr;
@@ -158,7 +167,12 @@ async function editRow(id, patch = {}, { actor = null, enforceLock = false } = {
     if (enforceLock) assertUnlocked('edit a line');
     const clean = {};
     for (const k of EDITABLE) if (k in patch) {
-        if (k === 'amount') { const n = num(patch.amount); if (n === null || n <= 0) throw new Error('amount must be greater than 0'); clean.amount = n; }
+        if (k === 'amount') {
+            const n = num(patch.amount);
+            const isCredit = (list().find((r) => r.id === id) || {}).kind === 'credit_note';   // a credit note stays negative
+            if (n === null || (isCredit ? n >= 0 : n <= 0)) throw new Error(isCredit ? 'a credit note amount must be less than 0' : 'amount must be greater than 0');
+            clean.amount = n;
+        }
         else clean[k] = UPPER.includes(k) ? (up(patch[k]) || null) : (txt(patch[k]) || null);
     }
     if (!Object.keys(clean).length) throw new Error('nothing to change');
@@ -168,7 +182,7 @@ async function editRow(id, patch = {}, { actor = null, enforceLock = false } = {
         const arr = Array.isArray(cur) ? cur : [];
         const i = arr.findIndex((r) => r.id === id);
         if (i === -1) { problem = `no invoice line ${id}`; return arr; }
-        if ('amount' in clean && clean.amount + 0.005 < (paid[id] || 0)) { problem = `${(paid[id] || 0).toFixed(2)} has already been paid against this line — the amount cannot go below that`; return arr; }
+        if ('amount' in clean && (paid[id] || 0) > 0 && clean.amount + 0.005 < paid[id]) { problem = `${(paid[id] || 0).toFixed(2)} has already been paid against this line — the amount cannot go below that`; return arr; }
         const before = {}; for (const k of Object.keys(clean)) before[k] = arr[i][k] === undefined ? null : arr[i][k];
         arr[i] = { ...arr[i], ...clean, locked: true, updatedAt: new Date().toISOString(),
             edit_history: [...(arr[i].edit_history || []), { at: new Date().toISOString(), by: actor, before }] };
@@ -302,7 +316,8 @@ function summary(rows = list()) {
         const r = rows.filter((x) => x.party === p);
         const paidMap = paidByRow();
         out[p] = { label: PARTIES[p], count: r.length, total: Math.round(r.reduce((a, x) => a + x.amount, 0) * 100) / 100,
-            outstanding: round2(r.reduce((a, x) => a + Math.max(0, x.amount - (paidMap[x.id] || 0)), 0)),
+            // Credit notes (negative) net against the invoices they cancel; a positive line is never below 0.
+            outstanding: round2(r.reduce((a, x) => a + (x.amount < 0 ? x.amount : Math.max(0, x.amount - (paidMap[x.id] || 0))), 0)),
             not_on_sheet: r.filter((x) => x.check_status === 'not_in_sheet').length,
             verified: r.filter((x) => x.check_status === 'verified' || x.check_status === 'match').length };
     }

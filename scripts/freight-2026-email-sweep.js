@@ -191,6 +191,26 @@ const NEW_PARTIES = [
     { key: 'eaglebrit', label: 'EagleBrit', query: `${YEAR_SCOPE} ("EagleBrit" OR "Eagle Brit")`, idFields: ['container_no', 'booking_no'] },
 ].map((p) => ({ ...p, extract: genericExtractInvoiceRecords, crossCheck: (recs) => verify.crossCheckJioRecords(recs), unverified: true }));
 
+// ── EAGLE TRANS gets its OWN extractor, check and query (2026-10-07) ─────────
+// The generic entry above matched the word "EagleBrit" and so pulled in Edge's own Chase ACH
+// payment screenshots (10 of them, read as "20 line items, none checkable"). Eagle's real
+// documents are XSINV invoices / XSCRN credit notes whose PDF is named for the number, so this
+// entry asks for those only, reads them with the Eagle prompt (helpers/gemini.js
+// extractEagleInvoiceRecords, normalised by helpers/eagleInvoice.js) and checks their
+// containers against the sheet (crossCheckEagleRecords). Replaces the generic one for eaglebrit ONLY.
+{
+    const i = NEW_PARTIES.findIndex((p) => p.key === 'eaglebrit');
+    const eagle = require(path.join(ROOT, 'helpers/eagleInvoice'));
+    NEW_PARTIES[i] = {
+        key: 'eaglebrit', label: 'Eagle Trans', unverified: false,
+        query: `${YEAR_SCOPE} (from:eagleinbrit.com OR to:invoices.us@eagleinbrit.com) (XSINV OR XSCRN)`,
+        pdfName: /xs(inv|crn)|invoice/i,
+        idFields: ['booking_no', 'invoice_no'],
+        extract: async (b) => ({ records: [eagle.normalize(await gemini.extractEagleInvoiceRecords(b)).record] }),
+        crossCheck: (recs) => verify.crossCheckEagleRecords(recs),
+    };
+}
+
 const money = (n) => (n == null ? '—' : `$${Number(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`);
 
 // ── --save-emails: dump the EMAIL TEXT, no PDF required ───────────────────
@@ -295,6 +315,9 @@ async function sweepParty(party, mailboxes) {
 
             const { pdfParts } = gmail.getEmailContent(msg.payload);
             for (const part of pdfParts) {
+                // Optional per-party filter on the attachment's filename (only Eagle sets one): its mail also
+                // carries booking confirmations, bills of lading and bank screenshots that are not invoices.
+                if (party.pdfName && !party.pdfName.test(part.filename || '')) continue;
                 let att;
                 try { att = await gmail.downloadAttachment(mb.client, m.id, part); }
                 catch (e) { console.error(`  [${party.label}] could not download attachment on "${subject.slice(0, 50)}":`, e.message); continue; }

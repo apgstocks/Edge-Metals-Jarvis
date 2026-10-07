@@ -1709,10 +1709,11 @@ async function loadCarrier(c) {
 // hyphenated ('aj-transport', 'pan-metal') and the store's party ids are not.
 const PARTY_OF_SUBTAB = {
   'aj-transport': 'ajtransport', 'sher-trucking': 'sher', jio: 'jio', gardunos: 'gardunos',
-  zimex: 'zimex', 'pan-metal': 'panmetal',
+  zimex: 'zimex', 'pan-metal': 'panmetal', eagle: 'eagle',
 };
 const PARTY_CHECK = { verified: 'on the sheet', match: 'on the sheet',
-  not_in_sheet: 'NOT on the sheet', booking_mismatch: 'booking does not match' };
+  not_in_sheet: 'NOT on the sheet', booking_mismatch: 'booking does not match',
+  partly_in_sheet: 'only some containers on the sheet', credit_note: 'credit note', total_mismatch: 'lines do not add to the total' };
 
 async function loadParty(subtab) {
   const party = PARTY_OF_SUBTAB[subtab];

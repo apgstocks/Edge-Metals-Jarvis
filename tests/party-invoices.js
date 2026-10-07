@@ -72,7 +72,7 @@ section('B. end to end');
     ck('route needs a login', [401, 403].includes((await req('GET', '/api/party-invoices')).status));
     const sid = (await req('POST', '/login', { body: { password: process.env.ADMIN_PASSWORD } })).json.sid;
     const all = (await req('GET', '/api/party-invoices', { sid })).json;
-    ck('route returns the 6 imported lines + the party list', all.rows.length === 6 && Object.keys(all.parties).length === 6, String(all.rows.length));
+    ck('route returns the 6 imported lines + the party list (7 parties since Eagle Trans joined)', all.rows.length === 6 && Object.keys(all.parties).length === 7, String(all.rows.length));
     ck('party filter reaches the store: Jio -> 1 line', (await req('GET', '/api/party-invoices?party=jio', { sid })).json.rows.length === 1);
     ck('"NOT on sheet" filter: Sher + AJ', (await req('GET', '/api/party-invoices?status=not_in_sheet', { sid })).json.rows.map((r) => r.party).sort().join() === 'ajtransport,sher');
     ck('"On the sheet" filter counts verified AND Pan Metal "match"', (await req('GET', '/api/party-invoices?status=on_sheet', { sid })).json.rows.length === 4);
