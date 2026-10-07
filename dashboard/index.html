@@ -1054,10 +1054,20 @@ const NAV_ITEMS = [
   // with us and needs a live connection; Books is derived from her own
   // records and works without one.
   //
-  // 'Both companies', not 'Edge Metals': the portal switches between Edge
-  // Metals, Edge Trading and AAA Investment, which is most of its point
-  // (CLAUDE.md rule 5 — they are different companies and file separately).
-  { id: 'books', label: 'Books', group: 'Both companies' },
+  // ── 'Edge Metals', DIRECTLY UNDER QuickBooks — HER CALL ──────────────
+  // Apsara, 2026-10-07: "Built it professionally.under quickbook tab",
+  // after looking for it and not finding it.
+  //
+  // I had filed it under 'Both companies' because the portal switches
+  // between Edge Metals, Edge Trading and AAA Investment, so it is not one
+  // company's screen. That reasoning was right and the placement was still
+  // wrong: 'Both companies' is a DIFFERENT heading further down the rail,
+  // so someone looking beside QuickBooks does not see it. Where she looks
+  // for it beats where it logically belongs.
+  //
+  // It sits immediately after the QuickBooks entry in this array, and the
+  // group sort is stable, so the two are adjacent in the rail.
+  { id: 'books', label: 'Books', group: 'Edge Metals' },
 
   // ── BANK ──────────────────────────────────────────────────────────────
   // Apsara, 2026-10-05: "Where is bank match in jarvis?" — it was nowhere.

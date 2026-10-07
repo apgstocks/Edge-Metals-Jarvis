@@ -290,6 +290,40 @@ const A = require(path.join(ROOT, 'helpers/booksAgent'));
     const page = fs.readFileSync(path.join(ROOT, 'dashboard/books.html'), 'utf8');
 
     ck('the server serves the page', /app\.get\('\/books'/.test(api));
+
+    // ── WHERE SHE ACTUALLY LOOKS FOR IT ──────────────────────────────────
+    // Apsara, 2026-10-07: "Built it professionally.under quickbook tab",
+    // after opening Jarvis and not finding it. I had filed it under a 'Both
+    // companies' heading — correct reasoning (the portal switches between all
+    // three companies) and the wrong placement, because that is a different
+    // heading further down the rail. Where she looks beats where it belongs.
+    const navAt = web.indexOf("{ id: 'books'");
+    const qbAt = web.indexOf("{ id: 'quickbooks'");
+    ck('Books is in the Edge Metals group, not a heading of its own',
+       /\{ id: 'books', label: 'Books', group: 'Edge Metals' \}/.test(web),
+       (web.match(/\{ id: 'books'[^}]*\}/) || [''])[0]);
+    ck('  and immediately after QuickBooks, so the two are adjacent',
+       qbAt > 0 && navAt > qbAt
+       && !/\{ id: '(?!books|quickbooks)[a-z-]+'/.test(web.slice(qbAt, navAt)),
+       'another entry crept between them, so the group sort will separate them');
+
+    // ── THE TWO PORTALS NAME EACH OTHER ──────────────────────────────────
+    // They stay two pages: #170 is her own earlier decision that Books must
+    // not be bolted onto the QB page, and the lifecycles differ — QuickBooks
+    // holds a connection and a lock, Books holds neither. The switcher is what
+    // makes them read as one portal with two tabs without merging them.
+    const qbPage = fs.readFileSync(path.join(ROOT, 'dashboard/quickbooks.html'), 'utf8');
+    for (const [name, src, self, other] of [
+        ['the Books page', page, '/books', '/quickbooks'],
+        ['the QuickBooks page', qbPage, '/quickbooks', '/books'],
+    ]) {
+        ck(`${name} offers both portals`,
+           src.includes(`href="${self}"`) && src.includes(`href="${other}"`),
+           'a tab strip that only names itself is not a tab strip');
+        ck('  and marks which one it is on',
+           new RegExp(`href="${self}" aria-current="page"`).test(src),
+           'both tabs looking unselected is worse than no tabs');
+    }
     ck('the sidebar offers it', /\{ id: 'books', label: 'Books'/.test(web));
     ck('  and clicking it goes to the page',
        /dataset\.tab === 'books'[\s\S]{0,60}\/books/.test(web),

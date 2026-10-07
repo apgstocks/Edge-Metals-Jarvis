@@ -34,6 +34,21 @@ h1,h2,h3{font-family:var(--font-display);color:var(--text-strong);margin:0;font-
 button{font:inherit;cursor:pointer}
 :focus-visible{outline:2px solid var(--ring);outline-offset:2px}
 .mono{font-family:var(--font-mono)}
+
+/* ── THE TWO PORTALS, SIDE BY SIDE ───────────────────────────────────────
+   Apsara, 2026-10-07: "under quickbook tab". These are two pages, not one
+   with tabs, because they answer different questions and #170 is her own
+   earlier decision that Books must not be bolted onto the QB page. So they
+   stay separate and each names the other, which is what makes them feel like
+   one portal with two tabs without merging two unrelated page lifecycles —
+   QuickBooks holds a connection and a lock; Books holds neither. */
+.portal{display:flex;gap:2px;margin-left:4px}
+.portal a{font-family:var(--font-mono);font-size:11px;letter-spacing:.04em;padding:5px 11px;
+  border:1px solid var(--border-default);border-radius:3px;text-decoration:none;
+  color:var(--text-muted);background:var(--surface-sunken);white-space:nowrap}
+.portal a:hover{color:var(--text-body);border-color:var(--text-faint)}
+.portal a[aria-current="page"]{color:var(--text-strong);background:var(--surface-hover);
+  border-color:var(--leaf-600)}
 header{display:flex;align-items:center;gap:14px;padding:10px 16px;border-bottom:1px solid var(--border-default);background:var(--surface-card);flex-wrap:wrap}
 header h1{font-size:17px}
 header .back{color:var(--steel-400);font-size:13px;text-decoration:none}
@@ -89,6 +104,10 @@ tr.sub td{color:var(--text-muted);font-size:11.5px;text-transform:uppercase;font
 <header>
   <a class="back" href="/">&larr; Jarvis</a>
   <h1>Books</h1>
+  <nav class="portal" aria-label="Accounting portals">
+    <a href="/quickbooks">QuickBooks</a>
+    <a href="/books" aria-current="page">Books</a>
+  </nav>
   <span class="mono" style="font-size:10px;color:var(--text-faint)">derived from her own records &middot; nothing here is stored</span>
 </header>
 

@@ -895,6 +895,22 @@ const MUTATIONS = [
       find: "            res.setHeader('Content-Disposition', `attachment; filename=\"${filename}\"`);",
       to:   '            void filename;' },
 
+    // ── WHERE SHE LOOKS FOR THE BOOKS PORTAL ──────────────────────────
+    // She opened Jarvis, could not find it, and said so. The placement is
+    // now a tested fact rather than a judgement I get to revisit.
+    { name: 'books: the portal drifts back to a heading of its own',
+      file: 'dashboard/index.html', suites: ['books-portal'],
+      find: "  { id: 'books', label: 'Books', group: 'Edge Metals' },",
+      to:   "  { id: 'books', label: 'Books', group: 'Both companies' }," },
+    { name: 'books: the QuickBooks page stops offering the Books tab',
+      file: 'dashboard/quickbooks.html', suites: ['books-portal'],
+      find: '    <a href="/books">Books</a>',
+      to:   '    <span>Books</span>' },
+    { name: 'books: neither tab shows which page you are on',
+      file: 'dashboard/books.html', suites: ['books-portal'],
+      find: '    <a href="/books" aria-current="page">Books</a>',
+      to:   '    <a href="/books">Books</a>' },
+
     // ── THE BOOKS PORTAL AND ITS AGENT ────────────────────────────────
     // The engine shipped a day before anything could reach it, so these aim at
     // the two things that would make the portal lie quietly rather than break
