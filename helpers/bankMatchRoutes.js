@@ -180,6 +180,37 @@ function mount(app, cfg) {
             const unknownAccount = deposits.filter((d) => !d.company);
             deposits = deposits.filter((d) => d.company === METALS);
 
+            // ── WHAT WAS NEVER TRADE, SET ASIDE HERE AND NOT IN THE ENGINE ───
+            // #167. Most of a bank feed is not a customer or a supplier — bank
+            // fees, the phone bill, the IRS, loan repayments, transfers between
+            // her own accounts. Without this every one of them reached
+            // matchDeposit, failed to resolve to a party, and came back as
+            // `no_party`: "name it once and every future deposit from them
+            // matches itself". For a bank charge that is an invitation to alias
+            // a fee to a customer, and on the CSV path MOST of 661 pending
+            // lines were this — a review queue made mostly of questions with
+            // no right answer, which is how a queue stops being read.
+            //
+            // ── WHY NOT INSIDE helpers/bankMatch.js ──────────────────────────
+            // I put it there first. tests/bank-match.js section I went red, and
+            // correctly: that file is asserted to require NOTHING — no store,
+            // no fs, no QuickBooks — which is what makes the matching engine
+            // auditable, and one `require` of a pure helper is still the first
+            // crack in it. The invariant is worth more than my convenience.
+            //
+            // It also belongs here on the merits. Deciding WHAT IS TRADE is
+            // curating the feed; the engine's job is matching what it is given.
+            // This is the same shape as crossCompany and unknownAccount
+            // directly above — partition, then report the set-aside rows under
+            // their own name so she knows they exist and why they are not in
+            // the queue.
+            const { notTrade } = require('./notTrade');
+            const notTradeRows = deposits
+                .map((d) => ({ row: d, why: notTrade(d) }))
+                .filter((x) => x.why);
+            const asideIds = new Set(notTradeRows.map((x) => x.row.id));
+            deposits = deposits.filter((d) => !asideIds.has(d.id));
+
             const out = bankMatch.matchStatement({
                 deposits, openDocs: docs,
                 resolveParty,
@@ -203,6 +234,12 @@ function mount(app, cfg) {
                 // exist and why they are not here.
                 other_company: crossCompany.map((d) => ({ id: d.id, date: d.date,
                     amount: d.amount, company: d.company, desc: d.desc })),
+                // Set aside, with the RULE that set each one aside — a line
+                // that merely vanished from the queue would be a figure she
+                // cannot account for at tax time.
+                not_trade: notTradeRows.map((x) => ({ id: x.row.id, date: x.row.date,
+                    amount: x.row.amount, desc: x.row.desc || x.row.descriptor || null,
+                    why: x.why })),
                 // Not matched, and told why, with the fix named. An account
                 // whose company is unknown is a one-line edit away.
                 unknown_account: unknownAccount.map((d) => ({ id: d.id, date: d.date,

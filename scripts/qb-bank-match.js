@@ -147,13 +147,11 @@ void squash;
 // bill, the IRS, loan repayments, transfers between her own accounts. They are
 // the accountant's work and no bill or invoice will ever match them, so they
 // are set aside by name rather than left as 39 lines of "nothing matches".
-const NOT_TRADE_CATEGORY = /(bank charge|loan|tax|office|travel|phone|insurance|payroll|meals|fuel|rent|utilit|interest|owner|equit)/i;
-const NOT_TRADE_DESC = /(transfer fee|analysis fee|service charge|verizon|arco|internal revenue|ondeck|acura|payroll|interest)/i;
-function notTrade(line) {
-    if (NOT_TRADE_CATEGORY.test(line.category || '')) return `already categorized as ${line.category}`;
-    if (NOT_TRADE_DESC.test(line.desc || '')) return 'not a supplier or customer payment';
-    return null;
-}
+// Extracted to helpers/notTrade.js on 2026-10-07 so the Plaid matcher answers
+// this the same way — same reason partyName.js was extracted on 2026-10-05.
+// The patterns moved; the behaviour did not, and tests/bank-notTrade.js
+// section A proves it over this file's own fixture lines.
+const { notTrade } = require('../helpers/notTrade');
 
 // A customer wire almost never equals the invoice: the banks take their cut on
 // the way. Apsara, 2026-09-21: "A but keep track of whatevers marked" — the

@@ -827,6 +827,36 @@ const MUTATIONS = [
     // PROPERTY and not the markup's length: the old 120-character proximity
     // regex went red when Edit was added beside Delete, and would have stayed
     // green if Delete had escaped the gate. This is the inverse.
+    // ── #167 notTrade ON THE PLAID PATH ───────────────────────────────
+    { name: 'not-trade: a bank fee is offered to her as an unnamed customer again',
+      file: 'helpers/bankMatchRoutes.js', suites: ['bank-not-trade', 'bank-match-screen'],
+      find: '            const asideIds = new Set(notTradeRows.map((x) => x.row.id));',
+      to:   '            const asideIds = new Set();' },
+    { name: 'not-trade: the set-aside rows vanish instead of being reported',
+      file: 'helpers/bankMatchRoutes.js', suites: ['bank-not-trade', 'bank-match-screen'],
+      find: '                not_trade: notTradeRows.map((x) => ({ id: x.row.id, date: x.row.date,',
+      to:   '                not_trade: [].map((x) => ({ id: x.row.id, date: x.row.date,' },
+    { name: 'not-trade: the category rule stops firing',
+      file: 'helpers/notTrade.js', suites: ['bank-not-trade'],
+      find: '    if (cats && NOT_TRADE_CATEGORY.test(cats)) {',
+      to:   '    if (false) {' },
+    { name: 'not-trade: the description rule stops firing',
+      file: 'helpers/notTrade.js', suites: ['bank-not-trade'],
+      find: "    if (desc && NOT_TRADE_DESC.test(desc)) return 'not a supplier or customer payment';",
+      to:   '    void desc;' },
+    { name: 'not-trade: the reason truncates the category, changing the CSV wording',
+      file: 'helpers/notTrade.js', suites: ['bank-not-trade'],
+      find: '        return `already categorized as ${cats}`;',
+      to:   "        return `already categorized as ${String(cats).split(/\\s+/).slice(0, 4).join(' ')}`;" },
+    { name: 'not-trade: it sets aside a real customer wire too',
+      file: 'helpers/notTrade.js', suites: ['bank-not-trade'],
+      find: '    return null;\n}\n\nmodule.exports = { notTrade, NOT_TRADE_CATEGORY, NOT_TRADE_DESC };',
+      to:   "    return 'set aside';\n}\n\nmodule.exports = { notTrade, NOT_TRADE_CATEGORY, NOT_TRADE_DESC };" },
+    { name: 'not-trade: the engine takes a require, breaking its purity',
+      file: 'helpers/bankMatch.js', suites: ['bank-match', 'bank-not-trade'],
+      find: 'function bankInflows(txs = []) {',
+      to:   "function bankInflows(txs = []) {\n    void require('./notTrade');" },
+
     // ── THE CPA PACK ──────────────────────────────────────────────────
     // "The year-end pack for your CPA." The dangerous failure is not a broken
     // workbook — it is a CLEAN-LOOKING one built from an incomplete journal,
