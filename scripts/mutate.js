@@ -857,6 +857,20 @@ const MUTATIONS = [
       find: 'function bankInflows(txs = []) {',
       to:   "function bankInflows(txs = []) {\n    void require('./notTrade');" },
 
+    // ── THE PAID DATE ON THE TRANSPORT TAB ────────────────────────────
+    { name: 'carriers: the Paid on column disappears again',
+      file: 'dashboard/documents.html', suites: ['carrier-invoices-route'],
+      find: "<th>Paid on</th>",
+      to:   "<th></th>" },
+    { name: 'carriers: only the FIRST remittance date is shown, not the latest',
+      file: 'dashboard/documents.html', suites: ['carrier-invoices-route'],
+      find: '  const last = String(d[d.length - 1]).slice(0, 10);',
+      to:   '  const last = String(d[0]).slice(0, 10);' },
+    { name: 'carriers: several remittances collapse to one date with no hint',
+      file: 'dashboard/documents.html', suites: ['carrier-invoices-route'],
+      find: "  return d.length > 1 ? last + ' (+' + (d.length - 1) + ')' : last;",
+      to:   '  return last;' },
+
     // ── THE CPA PACK ──────────────────────────────────────────────────
     // "The year-end pack for your CPA." The dangerous failure is not a broken
     // workbook — it is a CLEAN-LOOKING one built from an incomplete journal,

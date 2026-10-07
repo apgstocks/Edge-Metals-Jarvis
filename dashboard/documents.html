@@ -1618,6 +1618,25 @@ document.querySelectorAll('.verify-subtab-btn').forEach((b) => b.addEventListene
 // No PDF to verify — these carriers send text remittances. The rows come from
 // the email importer (scripts/carrier-invoices-import.js); this only shows them.
 const CARRIER_KEYS = { ntg: 'NTG invoice', tql: 'TQL PO', schneider: 'Order ID' };
+
+// ── WHEN IT WAS PAID ─────────────────────────────────────────────────────
+// Apsara, 2026-10-07: "Also it would be better if we have the paid date".
+//
+// The date was already in the store — helpers/carrierInvoices.js has carried
+// `paid_dates` since the importer was written, and /api/carrier-invoices
+// returns the whole row. It was simply never drawn. So this is a column, not
+// a schema change, and no import has to be re-run to see history.
+//
+// paid_dates is an ARRAY because a carrier can remit against one invoice more
+// than once. The LATEST is shown, with the count beside it when there were
+// several — collapsing three remittances into one date silently would make a
+// part-paid invoice look settled in a day it was not.
+function paidOn(r) {
+  const d = (r && Array.isArray(r.paid_dates) ? r.paid_dates : []).filter(Boolean).slice().sort();
+  if (!d.length) return '';
+  const last = String(d[d.length - 1]).slice(0, 10);
+  return d.length > 1 ? last + ' (+' + (d.length - 1) + ')' : last;
+}
 async function loadCarrier(c) {
   const box = $('carrierBody_' + c);
   if (!box) return;
@@ -1628,8 +1647,8 @@ async function loadCarrier(c) {
     const s = (d.summary || {})[c] || { count: 0, billed: 0, outstanding: 0 };
     if (!rows.length) { box.innerHTML = '<div class="placeholder-note">No ' + esc(c.toUpperCase()) + ' invoices recorded yet. They are read from the carrier’s emails by <code>scripts/carrier-invoices-import.js</code>.</div>'; return; }
     box.innerHTML = '<div style="margin-bottom:8px;font-size:12px;">Edge Metals · ' + s.count + ' invoices · billed ' + m(s.billed) + ' · <b>outstanding ' + m(s.outstanding) + '</b></div>'
-      + '<table class="data-table"><thead><tr><th>' + esc(CARRIER_KEYS[c]) + '</th><th>Date</th><th>Detail</th><th style="text-align:right">Amount</th><th style="text-align:right">Paid</th><th>Status</th><th>Source</th></tr></thead><tbody>'
-      + rows.map((r) => '<tr><td>' + esc(r.ref) + '</td><td>' + esc(r.invoice_date || '') + '</td><td>' + esc(r.lane || '') + '</td><td style="text-align:right">' + m(r.amount) + '</td><td style="text-align:right">' + m(r.paid) + '</td><td>' + esc(r.status) + '</td><td style="font-size:11px">' + esc(r.evidence || '') + '</td></tr>').join('')
+      + '<table class="data-table"><thead><tr><th>' + esc(CARRIER_KEYS[c]) + '</th><th>Date</th><th>Detail</th><th style="text-align:right">Amount</th><th style="text-align:right">Paid</th><th>Paid on</th><th>Status</th><th>Source</th></tr></thead><tbody>'
+      + rows.map((r) => '<tr><td>' + esc(r.ref) + '</td><td>' + esc(r.invoice_date || '') + '</td><td>' + esc(r.lane || '') + '</td><td style="text-align:right">' + m(r.amount) + '</td><td style="text-align:right">' + m(r.paid) + '</td><td style="white-space:nowrap">' + esc(paidOn(r)) + '</td><td>' + esc(r.status) + '</td><td style="font-size:11px">' + esc(r.evidence || '') + '</td></tr>').join('')
       + '</tbody></table>';
   } catch (e) { box.textContent = 'Could not load: ' + e.message; }
 }

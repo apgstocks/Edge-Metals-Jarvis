@@ -49,6 +49,55 @@ const ck = (n, c, x) => { if (c) { pass++; console.log('  PASS  ' + n); } else {
     ck('panels exist for all three, plus bodies', ['ntg', 'tql', 'schneider'].every((c) => html.includes(`id="carrierBody_${c}"`)));
     ck('other carrier panels untouched', ['verifyPanelZimex', 'verifyPanelJio', 'verifyPanelGardunos', 'verifyPanelPanMetal'].every((id) => html.includes(`id="${id}"`)));
     server.close();
-    console.log(`\n${pass} passed, ${fail} failed`);
+    
+// ── THE PAID DATE SHE ASKED FOR ───────────────────────────────────────────
+// Apsara, 2026-10-07, looking at the Transport tab: "Also it would be better
+// if we have the paid date".
+//
+// It was already in the store. helpers/carrierInvoices.js has carried
+// `paid_dates` since the importer was written and the route returns the whole
+// row, so this was a column that had never been drawn — not a schema change,
+// and no import has to be re-run to see history. The checks below pin both
+// halves: the route must keep handing the dates over, and the tab must keep
+// showing them.
+{
+    console.log('\n=== paid date — in the store, now on the screen ===');
+
+    const fs2 = require('fs');
+    const path2 = require('path');
+    const page = fs2.readFileSync(path2.join(__dirname, '..', 'dashboard/documents.html'), 'utf8');
+
+    ck('the carrier table has a Paid on column',
+       /<th>Paid on<\/th>/.test(page), 'the date is in the data; it was never drawn');
+    ck('  and the row renders it', /paidOn\(r\)/.test(page));
+    ck('  from paid_dates, not from a new field',
+       /r\.paid_dates/.test(page), 'no import has to be re-run to see history');
+
+    // The helper, exercised rather than read. paid_dates is an ARRAY because a
+    // carrier can remit against one invoice more than once; collapsing several
+    // into one date silently would make a part-paid invoice look settled on a
+    // day it was not.
+    const m = page.match(/function paidOn\(r\) \{[\s\S]*?\n\}/);
+    ck('paidOn is there to test', !!m);
+    if (m) {
+        const paidOn = new Function('r', m[0].replace(/^function paidOn\(r\) \{/, '').replace(/\}$/, ''));
+        const cases = [
+            [{ paid_dates: [] }, '', 'never paid'],
+            [{}, '', 'no field at all'],
+            [{ paid_dates: null }, '', 'a null where an array should be'],
+            [{ paid_dates: ['2026-08-19'] }, '2026-08-19', 'paid once'],
+            [{ paid_dates: ['2026-08-19T10:00:00Z'] }, '2026-08-19', 'a timestamp is trimmed to the day'],
+            [{ paid_dates: ['2026-09-01', '2026-08-19'] }, '2026-09-01 (+1)', 'two remittances, latest first'],
+            [{ paid_dates: ['2026-07-01', '2026-08-19', '2026-09-01'] }, '2026-09-01 (+2)', 'three'],
+            [{ paid_dates: [null, '2026-08-19'] }, '2026-08-19', 'a null among the dates'],
+        ];
+        for (const [row, want, why] of cases) {
+            const got = paidOn(row);
+            ck(`  ${why}`, got === want, `want ${JSON.stringify(want)}, got ${JSON.stringify(got)}`);
+        }
+    }
+}
+
+console.log(`\n${pass} passed, ${fail} failed`);
     process.exit(fail ? 1 : 0);
 })().catch((e) => { console.error(e); process.exit(1); });
