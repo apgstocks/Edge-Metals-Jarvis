@@ -1043,6 +1043,38 @@ const MUTATIONS = [
       find: "        noFeedRows: feed.rows.length === 0,",
       to:   "        noFeedRows: false," },
 
+    // ── THE AGENT'S PLAN VERIFIER — THE ONLY THING IN THE WAY ────────
+    // A model proposes; this is what stands between a plausible plan and
+    // her ledger. Each mutation is a way a wrong plan would get through.
+    { name: 'plan: a container can be billed twice',
+      file: 'helpers/ledgerPlan.js', suites: ['ledger-plan'],
+      find: "            if (home && home !== b.id) {",
+      to:   "            if (false) {" },
+    { name: 'plan: a container can end up on no bill at all',
+      file: 'helpers/ledgerPlan.js', suites: ['ledger-plan'],
+      find: "        if (!containerHome(bills, c)) {",
+      to:   "        if (false) {" },
+    { name: 'plan: a payment can be applied beyond what was received',
+      file: 'helpers/ledgerPlan.js', suites: ['ledger-plan'],
+      find: "            if (want > free + CENT) {",
+      to:   "            if (false) {" },
+    { name: 'plan: an invented bill id is accepted',
+      file: 'helpers/ledgerPlan.js', suites: ['ledger-plan'],
+      find: "            if (k === 'bill_id' && !billById.has(String(v))) bad(i, `there is no bill ${v}`);",
+      to:   "            if (false) bad(i, `there is no bill ${v}`);" },
+    { name: 'plan: a forward reference is allowed, so the plan can cycle',
+      file: 'helpers/ledgerPlan.js', suites: ['ledger-plan'],
+      find: "                if (j >= i) { bad(i, `${v} points at step ${j + 1}, which has not happened yet`); continue; }",
+      to:   "                if (false) { bad(i, 'x'); continue; }" },
+    { name: 'plan: an unknown field is silently dropped instead of refused',
+      file: 'helpers/ledgerPlan.js', suites: ['ledger-plan'],
+      find: "            if (!allowed.has(k)) bad(i, `${s.op} does not take \"${k}\" — it would be silently ignored`);",
+      to:   "            if (false) bad(i, 'x');" },
+    { name: 'plan: an operation outside the vocabulary is let through',
+      file: 'helpers/ledgerPlan.js', suites: ['ledger-plan'],
+      find: "        if (!spec) { bad(i, `\"${s && s.op}\" is not an operation Jarvis will perform`); return; }",
+      to:   "        if (!spec) { return; }" },
+
     // ── THE REVIEW QUEUE — "LIKE QB, BUT BETTER", 2026-10-08 ─────────
     { name: 'review: a guess from a descriptor joins the bulk-post offer',
       file: 'helpers/bankReview.js', suites: ['bank-review'],
