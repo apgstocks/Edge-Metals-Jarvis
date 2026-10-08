@@ -62,7 +62,33 @@ const C = require('./chartOfAccounts');
 const CENT = 0.005;
 const r2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
 const num = (v) => { const n = Number(v); return isFinite(n) ? n : 0; };
-const day = (d) => String(d || '').slice(0, 10);
+// ── HER DATES COME IN TWO SHAPES, AND ONE OF THEM SORTS WRONG ───────────
+// Apsara's payment rows carry both '2026-07-27' and '09/09/2026' — the
+// second written by the US-format date picker. `slice(0,10)` kept both as
+// they were, and every comparison in this file is a STRING comparison, so:
+//
+//     '09/09/2026' >= '2026-01-01'   is FALSE
+//
+// Every US-format row therefore dropped out of any windowed reconciliation,
+// silently. It only looked right because the default window is "everything",
+// where no comparison happens — so the bug was invisible until the first
+// time she narrowed a date range, which is exactly when she would have
+// trusted the answer.
+//
+// Normalised here rather than in her data: reformatting dates across the
+// payment stores is a migration, and this file must read what is there.
+// Anything unrecognised is returned as-is, so a shape nobody anticipated
+// is not silently turned into a wrong date.
+function day(d) {
+    const s = String(d == null ? '' : d).trim();
+    if (!s) return '';
+    const us = s.match(/^(\d{1,2})[/-](\d{1,2})[/-](\d{4})$/);
+    if (us) {
+        const [, m, dd, y] = us;
+        return `${y}-${String(m).padStart(2, '0')}-${String(dd).padStart(2, '0')}`;
+    }
+    return s.slice(0, 10);
+}
 
 // ── which chart account is which bank ────────────────────────────────────
 // Read off the chart, where 1010 already carries `bank: 'BofA'` and 1020
@@ -202,6 +228,13 @@ function reconcile({ lines = [], rows = [], bank = null, code = null, from = nul
         bank: feed.bank, code: acct,
         name: (bankAccounts().find((a) => a.code === acct) || {}).name || acct,
         from: from || null, to: to || null,
+        // ── NOTHING TO COMPARE IS NOT THE SAME AS NOTHING WRONG ─────────
+        // With no bank rows at all, `agrees` is false and both gaps equal
+        // her whole ledger — arithmetically correct and useless as a
+        // finding. A caller must be able to tell "the two sides disagree"
+        // from "there is only one side", because they look identical in
+        // the numbers and mean opposite things.
+        noFeedRows: feed.rows.length === 0,
         books: { in: books.in, out: books.out, net: books.net, byEntity: books.byEntity, lines: books.lines.length },
         feed: { in: feed.in, out: feed.out, net: feed.net, rows: feed.rows.length,
                 excluded: feed.excluded, pendingHeldBack: feed.pendingHeldBack },
@@ -236,6 +269,33 @@ function unexplained({ lines = [], rows = [], bank = null, code = null, from = n
 
     const books = ledgerSide(lines, { code: acct, from, to });
     const feed = bankSide(rows, { bank, code: acct, from, to });
+
+    // ── NO BANK ROWS AT ALL IS NOT 66 FINDINGS ──────────────────────────
+    // Apsara, 2026-10-08, on the first real screen: "no structure.nothing
+    // was there.how can you expect a customer to pay me from this."
+    //
+    // The feed held nothing for this account, so every payment in her books
+    // came back as "the bank never did this" — sixty-six rows of it. Every
+    // line was true and the list was worthless: it was ONE fact, that there
+    // is no feed, printed once per payment.
+    //
+    // A comparison needs two sides. With nothing on the bank's side there
+    // is no comparison to make, so this says so and stops, rather than
+    // reciting her own ledger back at her as if it were a problem.
+    if (!feed.rows.length) {
+        return {
+            ok: true, noFeedRows: true,
+            bank: feed.bank, code: acct, from: from || null, to: to || null, days,
+            bankNotInBooks: { in: [], out: [] },
+            booksNotInBank: { in: [], out: [] },
+            // What IS worth saying: how much of her own record is sitting
+            // here waiting for a feed to check it against.
+            booksWaiting: { count: books.inRows.length + books.outRows.length,
+                            money: r2(books.in + books.out) },
+            clean: false,
+            why: 'no bank rows for this account yet, so there is nothing to compare',
+        };
+    }
 
     const near = (a, b) => {
         const ms = Math.abs(new Date(day(a) + 'T00:00:00Z') - new Date(day(b) + 'T00:00:00Z'));
@@ -278,9 +338,28 @@ function unexplained({ lines = [], rows = [], bank = null, code = null, from = n
         source: p.l.source || null, memo: p.l.memo || null,
     });
 
+    // ── NO BANK ROWS AT ALL IS NOT 66 FINDINGS ──────────────────────────
+    // Apsara, 2026-10-08, looking at the first real screen: "no
+    // structure.nothing was there.how can you expect a customer to pay me
+    // from this."
+    //
+    // She had linked a bank whose feed held nothing for this account, so
+    // every payment in her books came back as "the bank never did this" —
+    // sixty-six rows of it. Each line was true and the list was worthless:
+    // it was ONE fact, that there is no feed, printed once per payment.
+    //
+    // A comparison needs two sides. With nothing on the bank's side there
+    // is no comparison to report, so this says that instead, and the
+    // screen stops there rather than reciting her own ledger back at her.
+    const noFeedRows = feed.rows.length === 0;
+
     return {
         ok: true,
         bank: feed.bank, code: acct, from: from || null, to: to || null, days,
+        // The caller must be able to tell "nothing disagrees" from "nothing
+        // to compare". They look identical in the numbers and mean opposite
+        // things.
+        noFeedRows,
         // The bank moved money Jarvis has no record of. This is the half that
         // costs her money, because an unrecorded receipt is an invoice still
         // chasing a customer who has paid.

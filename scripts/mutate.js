@@ -1029,6 +1029,20 @@ const MUTATIONS = [
       find: "        if (process.env.JARVIS_TEST === '1' && !process.env.BANK_ACCOUNTS_FILE) {",
       to:   "        if (false) {" },
 
+    // ── WHAT SHE SAW ON THE FIRST REAL SCREEN, 2026-10-08 ────────────
+    { name: 'bankrec: a US-format date drops out of a window again',
+      file: 'helpers/bankReconcile.js', suites: ['bank-reconcile'],
+      find: "    const us = s.match(/^(\\d{1,2})[/-](\\d{1,2})[/-](\\d{4})$/);",
+      to:   "    const us = null;" },
+    { name: 'bankrec: no bank rows goes back to listing her whole ledger',
+      file: 'helpers/bankReconcile.js', suites: ['bank-reconcile'],
+      find: "    if (!feed.rows.length) {\n        return {\n            ok: true, noFeedRows: true,",
+      to:   "    if (false) {\n        return {\n            ok: true, noFeedRows: true," },
+    { name: 'bankrec: the screen cannot tell an empty feed from a disagreement',
+      file: 'helpers/bankReconcile.js', suites: ['bank-reconcile'],
+      find: "        noFeedRows: feed.rows.length === 0,",
+      to:   "        noFeedRows: false," },
+
     // ── THE ACCOUNT JOIN — THE SILENT FAILURE AFTER LINKING ──────────
     { name: 'join: two accounts ending the same are joined to one anyway',
       file: 'helpers/bankLedger.js', suites: ['bank-ledger'],

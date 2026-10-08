@@ -344,6 +344,40 @@ async function renderFeed() {
      single figure would read as agreement on the day she most needs to look.
    · An incomplete journal is shown FIRST, because every figure under it is
      a floor rather than a total. */
+/* One party per line, biggest first, capped. Sixty rows of "Mario" is one
+   supplier and one question; sixty lines is neither — and a list that
+   scrolls past the screen is a list nobody reads to the end of. */
+const SHOW_GROUPS = 6;
+function groupBlock(groups, heading) {
+  if (!groups.length) return '';
+  const shown = groups.slice(0, SHOW_GROUPS);
+  const rest = groups.slice(SHOW_GROUPS);
+  const restMoney = rest.reduce((t, g) => t + g.money, 0);
+  const restRows = rest.reduce((t, g) => t + g.n, 0);
+  return `<div class="note" style="margin-top:10px">${esc(heading)}:</div>
+    <table style="width:100%; border-collapse:collapse; font-size:12px; margin-top:4px;">
+      ${shown.map((g) => `<tr style="border-bottom:1px solid var(--border-subtle)">
+        <td style="padding:4px 8px 4px 0; font-weight:600;">${esc(g.party)}</td>
+        <td style="padding:4px 8px; color:var(--text-faint); white-space:nowrap;">${g.n} row${g.n === 1 ? '' : 's'}</td>
+        <td style="padding:4px 8px; color:var(--text-faint); white-space:nowrap;">${esc(fmtDay(g.first))}${g.first === g.last ? '' : ' – ' + esc(fmtDay(g.last))}</td>
+        <td style="padding:4px 0; text-align:right; font-family:var(--font-mono); white-space:nowrap;">${money(g.money)}</td>
+      </tr>`).join('')}
+      ${rest.length ? `<tr><td colspan="3" style="padding:4px 0; color:var(--text-faint);">
+        and ${rest.length} other part${rest.length === 1 ? 'y' : 'ies'}, ${restRows} row(s)</td>
+        <td style="padding:4px 0; text-align:right; font-family:var(--font-mono); color:var(--text-faint);">${money(restMoney)}</td></tr>` : ''}
+    </table>`;
+}
+
+/* Her payment rows carry both '2026-07-27' and '09/09/2026'. Shown one way
+   here whatever is stored, because two date formats in one column is the
+   detail that makes a screen look unfinished. */
+function fmtDay(d) {
+  const s = String(d == null ? '' : d).trim();
+  const us = s.match(/^(\d{1,2})[/-](\d{1,2})[/-](\d{4})$/);
+  const iso = us ? `${us[3]}-${String(us[1]).padStart(2, '0')}-${String(us[2]).padStart(2, '0')}` : s.slice(0, 10);
+  return /^\d{4}-\d{2}-\d{2}$/.test(iso) ? iso : s;
+}
+
 async function renderReconcile() {
   let d = null;
   try { d = await api('/api/bank/reconcile'); } catch (e) { d = { error: e.message }; }
@@ -388,12 +422,48 @@ async function renderReconcile() {
       continue;
     }
     const u = b.unexplained || {};
+
+    /* ── NOTHING TO COMPARE IS ONE SENTENCE, NOT SIXTY-SIX ROWS ──────
+       Apsara, 2026-10-08: "no structure.nothing was there.how can you
+       expect a customer to pay me from this."
+       She was right, and the fix is not prettier rows. With no feed for
+       an account, every payment in her books came back as "the bank
+       never did this" — one fact, printed once per payment. */
+    if (r.noFeedRows) {
+      const w = (u.booksWaiting || {});
+      out.push(`<div class="card">
+        <div class="row1">
+          <span class="lbl">${esc(r.name || b.bank)}</span>
+          <span class="chip warn">no bank rows yet</span>
+        </div>
+        <div class="note" style="margin-top:6px">Jarvis has ${w.count || 0} payment(s) of its own
+        against this account, ${money(w.money || 0)} in all, and nothing from the bank to check them
+        against. That is not a disagreement — it is one missing side. Link the account, or pull
+        transactions, and this becomes a real comparison.</div>
+      </div>`);
+      continue;
+    }
+
+    /* Grouped by party, not listed flat. Sixty rows of "Mario" is one
+       supplier and one question; sixty lines is neither. */
+    const byParty = (rows, label) => {
+      const m = new Map();
+      for (const x of rows) {
+        const k = x.party || x.desc || x.kind || '(no name)';
+        const cur = m.get(k) || { party: k, n: 0, money: 0, first: x.date, last: x.date, kind: x.kind };
+        cur.n += 1; cur.money += Number(x.amount) || 0;
+        if (String(x.date) < String(cur.first)) cur.first = x.date;
+        if (String(x.date) > String(cur.last)) cur.last = x.date;
+        m.set(k, cur);
+      }
+      return [...m.values()].sort((a, c) => c.money - a.money).map((g) => ({ ...g, which: label }));
+    };
     const orphans = [].concat(
-      ((u.bankNotInBooks || {}).in || []).map((x) => ({ ...x, which: 'arrived, not recorded' })),
-      ((u.bankNotInBooks || {}).out || []).map((x) => ({ ...x, which: 'left, not recorded' })));
+      byParty((u.bankNotInBooks || {}).in || [], 'arrived, not recorded'),
+      byParty((u.bankNotInBooks || {}).out || [], 'left, not recorded'));
     const mine = [].concat(
-      ((u.booksNotInBank || {}).in || []).map((x) => ({ ...x, which: 'recorded as received, the bank never did' })),
-      ((u.booksNotInBank || {}).out || []).map((x) => ({ ...x, which: 'recorded as paid, the bank never did' })));
+      byParty((u.booksNotInBank || {}).in || [], 'recorded as received'),
+      byParty((u.booksNotInBank || {}).out || [], 'recorded as paid'));
 
     out.push(`<div class="card">
       <div class="row1">
@@ -416,21 +486,8 @@ async function renderReconcile() {
       ${r.feed.excluded.count ? `<div class="note">${r.feed.excluded.count} excluded row(s) are still IN the bank
         total above (${money(r.feed.excluded.out)} out, ${money(r.feed.excluded.in)} in) — the money moved
         whatever you decided it was for.</div>` : ''}
-      ${orphans.length ? `<div class="note" style="margin-top:8px">The bank moved money Jarvis has no record of:</div>
-        ${orphans.map((x) => `<div class="row1" style="margin:3px 0">
-          <span class="amt" style="font-size:13px">${money(x.amount)}</span>
-          <span class="when">${esc(x.date)}</span>
-          <span class="desc">${esc(x.which)}</span>
-          <span class="desc" style="color:var(--text-faint)">${esc(x.party || x.desc || '')}</span>
-        </div>`).join('')}` : ''}
-      ${mine.length ? `<div class="note" style="margin-top:8px">Jarvis recorded money moving that the bank did not —
-        usually entered twice, or entered before it was sent:</div>
-        ${mine.map((x) => `<div class="row1" style="margin:3px 0">
-          <span class="amt" style="font-size:13px">${money(x.amount)}</span>
-          <span class="when">${esc(x.date)}</span>
-          <span class="desc">${esc(x.kind)}${x.party ? ' · ' + esc(x.party) : ''}</span>
-          <span class="desc" style="color:var(--text-faint)">${esc(x.entity)}</span>
-        </div>`).join('')}` : ''}
+      ${groupBlock(orphans, 'The bank moved money Jarvis has no record of')}
+      ${groupBlock(mine, 'Jarvis recorded money moving that the bank did not — usually entered twice, or entered before it was sent')}
       <div class="note" style="margin-top:8px">${esc(r.compares)}. ${esc(r.anchorNeeded)}.</div>
     </div>`);
   }

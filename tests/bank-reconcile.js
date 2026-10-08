@@ -227,6 +227,75 @@ const B = (o) => ({ id: 'b1', date: '2026-04-10', desc: '', party: '', category:
     ck('a line before the window is not counted', s.out === 700, String(s.out));
 }
 
+// ── J1 — HER TWO DATE FORMATS, AND THE ROWS THAT VANISHED ─────────────────
+// Apsara's payment rows carry both '2026-07-27' and '09/09/2026' — the
+// second from the US-format date picker. Every comparison in this file is a
+// STRING comparison, and '09/09/2026' >= '2026-01-01' is FALSE, so every
+// US-format row silently dropped out of any windowed reconciliation.
+//
+// It looked right because the default window is "everything", where no
+// comparison happens. The bug was invisible until the first time she
+// narrowed a date range — which is exactly when she would have trusted the
+// answer.
+{
+    section('J1 — a US-format date is not a smaller date');
+    const P = (d) => L({ credit: 1000, date: d, kind: 'supplier-payment' });
+    const mixed = [P('2026-09-09'), P('09/09/2026'), P('9/9/2026')];
+
+    const windowed = R.ledgerSide(mixed, { code: '1010', from: '2026-01-01', to: '2026-12-31' });
+    ck('all three shapes survive a date window', windowed.lines.length === 3, String(windowed.lines.length));
+    ck('  and the total is the real one, not two thirds of it',
+       windowed.out === 3000, String(windowed.out));
+
+    // Outside the window it must still be EXCLUDED — a normaliser that
+    // lets everything through is the same bug pointing the other way.
+    const before = R.ledgerSide([P('09/09/2026')], { code: '1010', from: '2026-10-01', to: '2026-12-31' });
+    ck('a US-format date before the window is still excluded', before.lines.length === 0);
+
+    // And the two sides must now meet: her books in US format, the bank in
+    // ISO, same day, same amount.
+    const u = R.unexplained({ lines: [P('09/09/2026')], bank: 'BofA',
+        rows: [B({ id: 'w', spent: 1000, amount: 1000, direction: 'out', date: '2026-09-09' })] });
+    ck('a US-format payment matches its ISO bank row', u.clean === true,
+       JSON.stringify(u.bankNotInBooks.out.concat(u.booksNotInBank.out)));
+
+    // Anything unrecognised is left alone rather than turned into a wrong
+    // date — a normaliser that guesses is worse than one that abstains.
+    ck('an unrecognised shape is not invented into a date',
+       R.ledgerSide([P('sometime in May')], { code: '1010' }).lines.length === 1);
+}
+
+// ── J1b — NO BANK ROWS IS ONE SENTENCE, NOT SIXTY-SIX FINDINGS ────────────
+// Apsara, 2026-10-08, on the first real screen: "no structure.nothing was
+// there.how can you expect a customer to pay me from this."
+//
+// The feed held nothing for that account, so every payment in her books came
+// back as "the bank never did this" — sixty-six rows. Each line true, the
+// list worthless: one fact, that there is no feed, printed once per payment.
+{
+    section('J1b — nothing to compare is not the same as nothing agreeing');
+    const books = [L({ credit: 1000, party: 'Mario' }), L({ credit: 2000, party: 'Hugo' })];
+    const u = R.unexplained({ lines: books, rows: [], bank: 'BofA' });
+
+    ck('with no bank rows, NOTHING is reported as unexplained',
+       u.booksNotInBank.out.length === 0 && u.bankNotInBooks.out.length === 0,
+       JSON.stringify(u.booksNotInBank.out));
+    ck('  and the answer says why, in one sentence',
+       u.noFeedRows === true && /nothing to compare/.test(u.why || ''), u.why);
+    ck('  while still saying how much of her own record is waiting',
+       u.booksWaiting.count === 2 && u.booksWaiting.money === 3000, JSON.stringify(u.booksWaiting));
+    ck('  and it is NOT called clean — there is simply one side', u.clean === false);
+
+    // The reconciliation must carry the same flag, or the screen cannot
+    // tell "the two sides disagree" from "there is only one side". The
+    // figures are identical in both cases and mean opposite things.
+    const rec = R.reconcile({ lines: books, rows: [], bank: 'BofA' });
+    ck('the reconciliation flags it too', rec.noFeedRows === true);
+    ck('  and once a bank row exists, the flag clears',
+       R.reconcile({ lines: books, bank: 'BofA',
+           rows: [B({ id: 'x', spent: 1000, amount: 1000, direction: 'out' })] }).noFeedRows === false);
+}
+
 // ── J2 — IS THE FEED EVEN ALIVE ───────────────────────────────────────────
 // A Plaid Item dies quietly — ITEM_LOGIN_REQUIRED after a bank password
 // change, or consent expiring — and nothing throws; the sync just returns
