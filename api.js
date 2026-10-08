@@ -5545,8 +5545,14 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
     });
 
     // ── Edge Metals carrier invoices (NTG / TQL / Schneider) ─────────────
-    // READ-ONLY. Rows come from scripts/carrier-invoices-import.js; nothing
-    // here writes, and nothing else reads this store (helpers/carrierInvoices.js).
+    // READ for everyone; two WRITE routes below for rows she adds by hand.
+    // Rows still come from scripts/carrier-invoices-import.js in the normal
+    // case, and nothing else reads this store (helpers/carrierInvoices.js).
+    //
+    // The comment here used to say READ-ONLY and that stopped being true on
+    // 2026-10-08 — Apsara: "If source is manual ,pay button can be there na".
+    // Saying so rather than leaving the old claim, because a stale "nothing
+    // here writes" is exactly the kind of note someone trusts later.
     app.get('/api/carrier-invoices', (req, res) => {
         try {
             const ci = require('./helpers/carrierInvoices');
@@ -5555,6 +5561,50 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
             const rows = all.filter((r) => (!carrier || r.carrier === carrier) && (!status || r.status === status));
             res.json({ rows, summary: ci.summary(all), carriers: ci.CARRIERS, statuses: ci.STATUSES });
         } catch (e) { res.status(500).json({ error: e.message }); }
+    });
+
+    // ── A CARRIER INVOICE SHE TYPES ───────────────────────────────────────
+    // Apsara, 2026-10-08: "If source is manual ,pay button can be there na".
+    //
+    // requireSuper, matching every other path that moves Edge Metals money:
+    // her rule from 2026-09-16, and office staff hold the admin password.
+    app.post('/api/carrier-invoices', requireSuper, largeJson, async (req, res) => {
+        try {
+            const ci = require('./helpers/carrierInvoices');
+            const audit = require('./helpers/audit');
+            const row = await ci.addManual(req.body || {}, { actor: actorOf(req) });
+            await audit.record({
+                action: 'add-carrier-invoice', subject: row.id,
+                actor: actorOf(req), role: req.role, ip: req.ip,
+                detail: { company: 'edge-metals', carrier: row.carrier, ref: row.ref,
+                    amount: row.amount, source: 'manual' },
+            }).catch(() => {});
+            return res.json({ ok: true, row });
+        } catch (e) { return res.status(400).json({ error: String((e && e.message) || e) }); }
+    });
+
+    // ── PAYING ONE ────────────────────────────────────────────────────────
+    // The helper refuses an IMPORTED row and says why; this only reports it.
+    // 409 rather than 400 for that case: the request is well formed, it is the
+    // row's own provenance that says no.
+    app.post('/api/carrier-invoices/:id/pay', requireSuper, largeJson, async (req, res) => {
+        try {
+            const ci = require('./helpers/carrierInvoices');
+            const audit = require('./helpers/audit');
+            const id = String(req.params.id);
+            const row = await ci.payManual(id, req.body || {}, { actor: actorOf(req) });
+            await audit.record({
+                action: 'pay-carrier-invoice', subject: id,
+                actor: actorOf(req), role: req.role, ip: req.ip,
+                detail: { company: 'edge-metals', carrier: row.carrier, ref: row.ref,
+                    amount: Number((req.body || {}).amount), paid: row.paid, status: row.status },
+            }).catch(() => {});
+            return res.json({ ok: true, row });
+        } catch (e) {
+            const msg = String((e && e.message) || e);
+            const code = /own email/.test(msg) ? 409 : /^no carrier invoice/.test(msg) ? 404 : 400;
+            return res.status(code).json({ error: msg });
+        }
     });
 
     app.get('/api/metals-trucking', (req, res) => {

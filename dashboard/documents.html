@@ -1657,6 +1657,71 @@ function paidOn(r) {
   const last = String(d[d.length - 1]).slice(0, 10);
   return d.length > 1 ? last + ' (+' + (d.length - 1) + ')' : last;
 }
+// ── PAY ONLY WHAT SHE TYPED ──────────────────────────────────────────────
+// Apsara, 2026-10-08: "If source is manual ,pay button can be there na".
+//
+// An IMPORTED row's paid figure comes from the carrier's own remittance mail.
+// Offering Pay on it would create a second answer to "is this settled", and
+// the two would disagree the first time a remittance arrived late. A MANUAL
+// row has no mail behind it and never will, so she is its only source and
+// there is nothing to contradict.
+//
+// The server refuses it too (helpers/carrierInvoices.js payManual) — this is
+// the button not being there, not the rule. Hiding a control is a courtesy;
+// the refusal is the boundary.
+function payCell(r) {
+  const left = Math.max(0, Number(r.amount || 0) - Number(r.paid || 0));
+  if (r.source !== 'manual') {
+    return '<span title="This came from the carrier’s own email, so their remittance says what is paid" style="font-size:11px;opacity:.5">from their mail</span>';
+  }
+  if (left <= 0.005) return '<span style="font-size:11px;opacity:.5">settled</span>';
+  return '<button class="ciPay btn" data-id="' + esc(r.id) + '" data-ref="' + esc(r.ref)
+    + '" data-left="' + left.toFixed(2) + '" style="font-size:11px;padding:3px 9px">Pay</button>';
+}
+
+async function addCarrierInvoice(c) {
+  const ref = prompt(CARRIER_KEYS[c] + ' — the number on the invoice:');
+  if (ref === null || !String(ref).trim()) return;
+  const amount = prompt('Amount of the ' + c.toUpperCase() + ' invoice ' + ref + ':');
+  if (amount === null) return;
+  const n = Number(String(amount).replace(/[$,\s]/g, ''));
+  if (!isFinite(n) || n <= 0) { alert('That is not an amount.'); return; }
+  const date = prompt('Invoice date (YYYY-MM-DD), or leave blank:', new Date().toISOString().slice(0, 10));
+  if (date === null) return;
+  const lane = prompt('What was it for? (loads, lane — optional)') || '';
+  try {
+    // api(path, opts) SPREADS opts into fetch — it is not (path, body). A
+    // first version passed a bare object, which fetch read as a GET carrying
+    // stray properties: no method, no body, and the route never reached.
+    // check-route-reach.js caught it by still calling both routes unreachable.
+    await api('/api/carrier-invoices', { method: 'POST', body: JSON.stringify({
+      carrier: c, ref: String(ref).trim(), amount: n,
+      invoice_date: String(date).trim() || null, lane: lane.trim() || null }) });
+    await loadCarrier(c);
+  } catch (e) { alert(String((e && e.message) || e)); }
+}
+
+async function payCarrierInvoice(c, id, ref, left) {
+  const amount = prompt('How much was paid against ' + ref + '?\n\n'
+    + '$' + left.toFixed(2) + ' is still outstanding.', left.toFixed(2));
+  if (amount === null) return;
+  const n = Number(String(amount).replace(/[$,\s]/g, ''));
+  if (!isFinite(n) || n <= 0) { alert('That is not an amount.'); return; }
+  const date = prompt('Paid on (YYYY-MM-DD):', new Date().toISOString().slice(0, 10));
+  if (date === null) return;
+  const payRef = prompt('Reference (wire number, cheque — optional)') || '';
+  try {
+    await api('/api/carrier-invoices/' + encodeURIComponent(id) + '/pay',
+      { method: 'POST', body: JSON.stringify({
+        amount: n, date: String(date).trim(), ref: payRef.trim() || null }) });
+    await loadCarrier(c);
+  } catch (e) {
+    // The server's own sentence. A 403 here means the session is not the
+    // Jarvis profile, which is a fact she can act on; a code is not.
+    alert(String((e && e.message) || e));
+  }
+}
+
 async function loadCarrier(c) {
   const box = $('carrierBody_' + c);
   if (!box) return;
@@ -1665,11 +1730,25 @@ async function loadCarrier(c) {
     const rows = (d.rows || []).slice().sort((a, b) => String(b.invoice_date || '').localeCompare(String(a.invoice_date || '')));
     const m = (n) => '$' + Number(n || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
     const s = (d.summary || {})[c] || { count: 0, billed: 0, outstanding: 0 };
-    if (!rows.length) { box.innerHTML = '<div class="placeholder-note">No ' + esc(c.toUpperCase()) + ' invoices recorded yet. They are read from the carrier’s emails by <code>scripts/carrier-invoices-import.js</code>.</div>'; return; }
-    box.innerHTML = '<div style="margin-bottom:8px;font-size:12px;">Edge Metals · ' + s.count + ' invoices · billed ' + m(s.billed) + ' · <b>outstanding ' + m(s.outstanding) + '</b></div>'
-      + '<table class="data-table"><thead><tr><th>' + esc(CARRIER_KEYS[c]) + '</th><th>Date</th><th>Detail</th><th style="text-align:right">Amount</th><th style="text-align:right">Paid</th><th>Paid on</th><th>Status</th><th>Source</th></tr></thead><tbody>'
-      + rows.map((r) => '<tr><td>' + esc(r.ref) + '</td><td>' + esc(r.invoice_date || '') + '</td><td>' + esc(r.lane || '') + '</td><td style="text-align:right">' + m(r.amount) + '</td><td style="text-align:right">' + m(r.paid) + '</td><td style="white-space:nowrap">' + esc(paidOn(r)) + '</td><td>' + esc(r.status) + '</td><td style="font-size:11px">' + esc(r.evidence || '') + '</td></tr>').join('')
+    if (!rows.length) {
+      // The Add button lives here too. Without it a carrier with no imported
+      // rows yet could never be given one by hand — the empty state would be
+      // a dead end, which is how the whole tab felt before today.
+      box.innerHTML = '<div class="placeholder-note">No ' + esc(c.toUpperCase()) + ' invoices recorded yet. They are read from the carrier’s emails by <code>scripts/carrier-invoices-import.js</code>.</div>'
+        + '<div style="margin-top:8px"><button id="ciAdd_' + c + '" class="btn" style="font-size:11px;padding:4px 10px">Add invoice</button></div>';
+      const a0 = $('ciAdd_' + c); if (a0) a0.onclick = () => addCarrierInvoice(c);
+      return;
+    }
+    box.innerHTML = '<div style="margin-bottom:8px;font-size:12px;display:flex;align-items:center;gap:10px;">'
+        + '<span>Edge Metals · ' + s.count + ' invoices · billed ' + m(s.billed) + ' · <b>outstanding ' + m(s.outstanding) + '</b></span>'
+        + '<button id="ciAdd_' + c + '" class="btn" style="font-size:11px;padding:4px 10px">Add invoice</button></div>'
+      + '<table class="data-table"><thead><tr><th>' + esc(CARRIER_KEYS[c]) + '</th><th>Date</th><th>Detail</th><th style="text-align:right">Amount</th><th style="text-align:right">Paid</th><th>Paid on</th><th>Status</th><th>Source</th><th></th></tr></thead><tbody>'
+      + rows.map((r) => '<tr><td>' + esc(r.ref) + '</td><td>' + esc(r.invoice_date || '') + '</td><td>' + esc(r.lane || '') + '</td><td style="text-align:right">' + m(r.amount) + '</td><td style="text-align:right">' + m(r.paid) + '</td><td style="white-space:nowrap">' + esc(paidOn(r)) + '</td><td>' + esc(r.status) + '</td><td style="font-size:11px">' + esc(r.evidence || '') + '</td>'
+          + '<td style="white-space:nowrap">' + payCell(r) + '</td></tr>').join('')
       + '</tbody></table>';
+    box.querySelectorAll('.ciPay').forEach((b) => { b.onclick = () => payCarrierInvoice(c, b.dataset.id, b.dataset.ref, Number(b.dataset.left)); });
+    const add = $('ciAdd_' + c);
+    if (add) add.onclick = () => addCarrierInvoice(c);
   } catch (e) { box.textContent = 'Could not load: ' + e.message; }
 }
 

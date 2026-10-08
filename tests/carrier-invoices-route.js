@@ -5,6 +5,10 @@ const ROOT = path.join(__dirname, '..');
 process.env.DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'carrier-route-'));
 process.env.JARVIS_TEST = '1';
 process.env.APP_PASSWORD = 'user-pw-aaaaaaaaaaaa'; process.env.ADMIN_PASSWORD = 'admin-pw-bbbbbbbbbbb'; process.env.STAFF_PASSWORD = 'staff-pw-ccccccccccc';
+// Added 2026-10-08. The write routes below are requireSuper — Edge Metals money
+// is the Jarvis profile's (her rule, 2026-09-16; office staff hold the admin
+// password). Set BEFORE config is required, which reads these once at load.
+process.env.JARVIS_PASSWORD = 'jarvis-pw-ddddddddddd';
 let pass = 0, fail = 0;
 const ck = (n, c, x) => { if (c) { pass++; console.log('  PASS  ' + n); } else { fail++; console.log('  FAIL  ' + n); if (x) console.log('        ' + x); } };
 (async () => {
@@ -21,8 +25,14 @@ const ck = (n, c, x) => { if (c) { pass++; console.log('  PASS  ' + n); } else {
     });
     const noAuth = await req('GET', '/api/carrier-invoices');
     ck('route needs a login', noAuth.status === 401 || noAuth.status === 403, String(noAuth.status));
-    const sid = ((await req('POST', '/login', { body: { password: process.env.ADMIN_PASSWORD } })).json || {}).sid;
-    ck('signed in', !!sid);
+    const adminSid = ((await req('POST', '/login', { body: { password: process.env.ADMIN_PASSWORD } })).json || {}).sid;
+    ck('signed in', !!adminSid);
+    // The READ checks keep running as admin, deliberately: reading the register
+    // is not privileged and that is worth holding. The write checks below use
+    // the Jarvis profile, which is what the new routes require.
+    const sid = adminSid;
+    const jarvisSid = ((await req('POST', '/login', { body: { password: process.env.JARVIS_PASSWORD } })).json || {}).sid;
+    ck('  and the Jarvis profile too', !!jarvisSid);
     const empty = await req('GET', '/api/carrier-invoices', { sid });
     ck('empty store answers 200 with no rows', empty.status === 200 && empty.json.rows.length === 0 && empty.json.carriers.length === 3, JSON.stringify(empty.json));
     await CI.upsertMany([
@@ -40,15 +50,25 @@ const ck = (n, c, x) => { if (c) { pass++; console.log('  PASS  ' + n); } else {
     const before = fs.readFileSync(require(path.join(ROOT, 'config')).CARRIER_INVOICES_FILE, 'utf8');
     await req('GET', '/api/carrier-invoices?carrier=tql', { sid });
     ck('GET writes nothing', fs.readFileSync(require(path.join(ROOT, 'config')).CARRIER_INVOICES_FILE, 'utf8') === before);
+    // ── THIS USED TO SAY "no write route exists" ─────────────────────────
+    // True when it was written; false since 2026-10-08, when Apsara asked for
+    // a Pay button on manual rows. It kept PASSING either way, because `sid`
+    // here is the ADMIN session and the new route is requireSuper — so the
+    // label would have gone on asserting, to whoever read it next, that this
+    // store cannot be written. The check now says what it actually proves.
     const post = await req('POST', '/api/carrier-invoices', { sid, body: { carrier: 'tql', ref: '1', amount: 5 } });
-    ck('no write route exists (POST refused)', post.status >= 400);
+    ck('the write route refuses ADMIN — Edge Metals money is the Jarvis profile\'s',
+       post.status === 401 || post.status === 403, String(post.status));
     // The page: the three tabs call this exact route and no longer say "not wired up".
     const html = fs.readFileSync(path.join(ROOT, 'dashboard/documents.html'), 'utf8');
     ck('page reads the route the test just exercised', /api\('\/api\/carrier-invoices\?carrier='/.test(html));
     ck('NTG/TQL/Schneider placeholders are gone', !/NTG verification isn't wired up|TQL verification isn't wired up|Schneider verification isn't wired up/.test(html));
     ck('panels exist for all three, plus bodies', ['ntg', 'tql', 'schneider'].every((c) => html.includes(`id="carrierBody_${c}"`)));
     ck('other carrier panels untouched', ['verifyPanelZimex', 'verifyPanelJio', 'verifyPanelGardunos', 'verifyPanelPanMetal'].every((id) => html.includes(`id="${id}"`)));
-    server.close();
+    // server.close() MOVED to the end of the file on 2026-10-08. It sat here,
+    // and the manual-invoice section appended after it got 'socket hang up'
+    // on its first request — the server was already shut. The route was fine;
+    // the harness had gone home.
     
 // ── THE PAID DATE SHE ASKED FOR ───────────────────────────────────────────
 // Apsara, 2026-10-07, looking at the Transport tab: "Also it would be better
@@ -97,6 +117,107 @@ const ck = (n, c, x) => { if (c) { pass++; console.log('  PASS  ' + n); } else {
         }
     }
 }
+
+
+// ── THE MANUAL ROW, AND THE ONE IT MAY NOT TOUCH ──────────────────────────
+// Apsara, 2026-10-08: "If source is manual ,pay button can be there na".
+//
+// Her rule resolves the conflict the read-only design existed to avoid: an
+// IMPORTED row's truth is the carrier's remittance mail, a MANUAL row has no
+// mail behind it and never will. The refusal is the feature, so it is tested
+// harder than the happy path.
+{
+    console.log('\n=== a row she typed, and the imported one beside it ===');
+
+    const fs3 = require('fs');
+    const path3 = require('path');
+    const page = fs3.readFileSync(path3.join(__dirname, '..', 'dashboard/documents.html'), 'utf8');
+    const CI = require(path3.join(__dirname, '..', 'helpers/carrierInvoices'));
+    const cfg = require(path3.join(__dirname, '..', 'config'));
+
+    // An imported row to protect, written straight to the store.
+    fs3.writeFileSync(cfg.CARRIER_INVOICES_FILE, JSON.stringify([{
+        id: 'CI_mail', company: 'Edge Metals', key: 'schneider:ORD-1', carrier: 'schneider',
+        ref: 'ORD-1', amount: 4450, paid: 0, status: 'open', paid_dates: [],
+        evidence: 'Schneider Pay by Link',
+    }], null, 2));
+
+    const made = await req('POST', '/api/carrier-invoices', { sid: jarvisSid, body: {
+        carrier: 'tql', ref: 'PO-9001', amount: 1850, invoice_date: '2026-10-01', lane: 'Dallas' } });
+    ck('a hand-typed invoice is accepted', made.status === 200,
+       `${made.status} ${JSON.stringify(made.json)}`);
+    const row = made.json && made.json.row;
+    ck('  marked manual AND locked', !!row && row.source === 'manual' && row.locked === true,
+       JSON.stringify(row && { s: row.source, l: row.locked }));
+    ck('  so the next import cannot overwrite her figures',
+       /locked/.test(fs3.readFileSync(path3.join(__dirname, '..', 'helpers/carrierInvoices.js'), 'utf8')));
+    ck('  and it starts open', !!row && row.paid === 0 && row.status === 'open');
+
+    const part = await req('POST', `/api/carrier-invoices/${row.id}/pay`,
+        { sid: jarvisSid, body: { amount: 1000, date: '2026-10-05', ref: 'WIRE-77' } });
+    ck('a part payment is recorded', part.status === 200 && part.json.row.paid === 1000
+       && part.json.row.status === 'part', `${part.status} ${JSON.stringify(part.json)}`);
+    ck('  and the paid date is kept', (part.json.row.paid_dates || []).includes('2026-10-05'));
+
+    const rest = await req('POST', `/api/carrier-invoices/${row.id}/pay`,
+        { sid: jarvisSid, body: { amount: 850, date: '2026-10-07' } });
+    ck('paying the rest settles it', rest.status === 200 && rest.json.row.status === 'paid'
+       && rest.json.row.paid === 1850, JSON.stringify(rest.json && rest.json.row));
+    ck('  with BOTH dates, not the last one only',
+       (rest.json.row.paid_dates || []).length === 2,
+       JSON.stringify(rest.json.row.paid_dates));
+
+    // ── THE REFUSALS ─────────────────────────────────────────────────────
+    const onMail = await req('POST', '/api/carrier-invoices/CI_mail/pay',
+        { sid: jarvisSid, body: { amount: 100, date: '2026-10-05' } });
+    ck('paying an IMPORTED row is refused', onMail.status === 409,
+       `${onMail.status} ${JSON.stringify(onMail.json)}`);
+    ck('  with a 409, because the request is fine and the row\'s provenance says no',
+       onMail.status === 409 && /own email/.test(String(onMail.json && onMail.json.error)),
+       JSON.stringify(onMail.json));
+    ck('  and it is left untouched',
+       (CI.list().find((r) => r.id === 'CI_mail') || {}).paid === 0);
+
+    const over = await req('POST', `/api/carrier-invoices/${row.id}/pay`,
+        { sid: jarvisSid, body: { amount: 1, date: '2026-10-08' } });
+    ck('overpaying is refused with both figures', over.status === 400
+       && /1851\.00/.test(String(over.json.error)) && /1850\.00/.test(String(over.json.error)),
+       JSON.stringify(over.json));
+
+    const dup = await req('POST', '/api/carrier-invoices', { sid: jarvisSid, body: {
+        carrier: 'schneider', ref: 'ORD-1', amount: 50 } });
+    ck('typing a ref that already exists is REFUSED, not merged', dup.status === 400
+       && /already here/.test(String(dup.json.error)),
+       'upsertMany merges by carrier+ref so a re-import is safe; typing one is not the same act');
+
+    const noDate = await req('POST', `/api/carrier-invoices/${row.id}/pay`, { sid: jarvisSid, body: { amount: 5 } });
+    ck('a payment with no date is refused', noDate.status === 400, JSON.stringify(noDate.json));
+    const gone = await req('POST', '/api/carrier-invoices/NOPE/pay',
+        { sid: jarvisSid, body: { amount: 5, date: '2026-10-08' } });
+    ck('a missing invoice is a 404, not a 500', gone.status === 404, String(gone.status));
+
+    const asAdmin = await req('POST', '/api/carrier-invoices', { sid: adminSid, body: {
+        carrier: 'ntg', ref: 'N-1', amount: 10 } });
+    ck('admin is refused — Edge Metals money is the Jarvis profile\'s',
+       asAdmin.status === 401 || asAdmin.status === 403, String(asAdmin.status));
+
+    // ── AND THE SCREEN ───────────────────────────────────────────────────
+    ck('the tab offers Add invoice', /id="ciAdd_/.test(page));
+    ck('  on the empty state too, or a carrier with no rows is a dead end',
+       (page.match(/ciAdd_/g) || []).length >= 3, 'summary line, empty state, and the handler');
+    ck('Pay is drawn only for a manual row',
+       /r\.source !== 'manual'/.test(page) && /class="ciPay/.test(page),
+       (page.match(/function payCell[\s\S]{0,400}/) || [''])[0].slice(0, 200));
+    ck('  and an imported row says where its figure comes from',
+       /from their mail/.test(page));
+    ck('the calls use the page\'s real api(path, opts) shape',
+       /api\('\/api\/carrier-invoices', \{ method: 'POST'/.test(page),
+       'api() SPREADS opts into fetch; a bare object is a GET with stray keys');
+
+    fs3.writeFileSync(cfg.CARRIER_INVOICES_FILE, '[]');
+}
+
+    server.close();
 
 console.log(`\n${pass} passed, ${fail} failed`);
     process.exit(fail ? 1 : 0);
