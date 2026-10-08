@@ -1043,6 +1043,28 @@ const MUTATIONS = [
       find: "        noFeedRows: feed.rows.length === 0,",
       to:   "        noFeedRows: false," },
 
+    // ── THE PLAN ROUTES — PREVIEW AND APPLY, 2026-10-08 ──────────────
+    { name: 'planroute: an ordinary admin can move money between containers',
+      file: 'helpers/ledgerPlanRoutes.js', suites: ['ledger-plan-routes'],
+      find: "        if (!req.isSuper) {",
+      to:   "        if (false) {" },
+    { name: 'planroute: preview hands back a diff for a plan it refused',
+      file: 'helpers/ledgerPlanRoutes.js', suites: ['ledger-plan-routes'],
+      find: "                diff: v.ok ? v.simulation.diff : null,",
+      to:   "                diff: v.simulation ? v.simulation.diff : null," },
+    { name: 'planroute: the planId becomes optional, so a retry applies twice',
+      file: 'helpers/ledgerPlanRoutes.js', suites: ['ledger-plan-routes'],
+      find: "        if (!planId) return res.status(400).json({ error: 'send a planId so a retry cannot apply it twice' });",
+      to:   "        if (false) return res.status(400).json({ error: 'x' });" },
+    { name: 'planroute: a stale-world refusal is reported as a bad request',
+      file: 'helpers/ledgerPlanRoutes.js', suites: ['ledger-plan-routes'],
+      find: "                const conflict = /already been applied|changed since you were shown/.test(out.why || '');",
+      to:   "                const conflict = false;" },
+    { name: 'planroute: the log stops carrying her own words',
+      file: 'helpers/ledgerPlanRoutes.js', suites: ['ledger-plan-routes'],
+      find: "                    asked: (e.detail || {}).asked || null,",
+      to:   "                    asked: null," },
+
     // ── APPLYING A PLAN — THE ONLY PART THAT CAN LOSE DATA ───────────
     { name: 'apply: the world moving since the preview is ignored',
       file: 'helpers/ledgerApply.js', suites: ['ledger-apply'],

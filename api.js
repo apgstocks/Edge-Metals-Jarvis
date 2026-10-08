@@ -9594,6 +9594,14 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
     // route the receipts screen already uses, so there is exactly one way to
     // mark an invoice paid.
     require('./helpers/bankMatchRoutes').mount(app, cfg);
+    // ── THE LEDGER PLAN ROUTES ───────────────────────────────────────────
+    // Apsara, 2026-10-08: the agent that can "remove this container from
+    // the <billno>… and then match it with this payment". Preview and
+    // apply, split so there is a moment at which she has seen the figures
+    // and not yet committed to them. helpers/ledgerPlan.js and
+    // ledgerApply.js were both written today and reached by nothing until
+    // this line — the state helpers/reconcile.js sat in for a month.
+    require('./helpers/ledgerPlanRoutes').mount(app, cfg);
 
     // ── Weight-shortage claims (Edge Metals) ──────────────────────────────
     // Apsara, 2026-09-26: "Revamp weight shortage sheet .. it should read the
