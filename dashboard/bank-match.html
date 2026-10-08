@@ -78,6 +78,12 @@ h2.sec{font-size:13px;margin:18px 0 8px;color:var(--text-muted);font-family:var(
 <main>
   <div id="feednote"></div>
   <div id="feed"></div>
+  <!-- Apsara, 2026-10-08: "so that i dont need to look out for statements
+       whether payment received or sent ever again." ABOVE the matching list
+       on purpose. The list is work to do; this is the answer to the question
+       she actually asked, and an answer below a scrolling worklist is an
+       answer she has to go looking for. -->
+  <div id="recon"></div>
   <div id="list"><div class="empty">Loading…</div></div>
   <div id="extras"></div>
 </main>
@@ -321,11 +327,108 @@ async function renderFeed() {
   </div>`;
 }
 
+/* ── DOES THE BANK AGREE WITH THE BOOKS? ──────────────────────────────
+   Apsara, 2026-10-08: "so that i dont need to look out for statements
+   whether payment received or sent ever again."
+
+   Three rules this block follows, each because the opposite would be worse
+   than showing nothing:
+
+   · It says "movement agrees", never "all clear". helpers/bankReconcile.js
+     compares what moved inside a window, which is the only figure both
+     sides can honestly produce — her ledger and the Plaid feed start on
+     different days, so their running totals differ by an opening balance
+     for ever. Printing "all clear" would be a claim nobody computed.
+   · Money in and money out are separate lines even when they cancel. A
+     missing $5,000 receipt and a missing $5,000 payment net to zero, and a
+     single figure would read as agreement on the day she most needs to look.
+   · An incomplete journal is shown FIRST, because every figure under it is
+     a floor rather than a total. */
+async function renderReconcile() {
+  let d = null;
+  try { d = await api('/api/bank/reconcile'); } catch (e) { d = { error: e.message }; }
+  STATE.recon = d;
+  if (d.error) {
+    $('recon').innerHTML = `<div class="card"><div class="lbl">bank vs books</div>
+      <div class="note">${esc(d.error)}</div></div>`;
+    return;
+  }
+  const out = [];
+  const j = d.journal || {};
+  if (!j.complete) {
+    out.push(`<div class="card"><div class="lbl">the books are not complete yet</div>
+      <div class="note">${(j.problems || []).length} entr${(j.problems || []).length === 1 ? 'y' : 'ies'} could not be
+      posted${j.unplaced ? ' and ' + j.unplaced + ' row(s) sit on no company' : ''}. Every figure below is a
+      floor, not a total — fix these first or the agreement means nothing.</div>
+      ${(j.problems || []).slice(0, 6).map((p) => `<div class="desc">${esc(p)}</div>`).join('')}</div>`);
+  }
+
+  out.push(`<h2 class="sec">${d.nothingNeedsYou
+    ? 'Nothing needs you — the bank and the books moved the same money'
+    : 'The bank and the books do not agree yet'}</h2>`);
+
+  for (const b of (d.banks || [])) {
+    const r = b.reconcile || {};
+    if (!r.ok) {
+      out.push(`<div class="card"><div class="lbl">${esc(b.bank)}</div><div class="note">${esc(r.problem || '')}</div></div>`);
+      continue;
+    }
+    const u = b.unexplained || {};
+    const orphans = [].concat(
+      ((u.bankNotInBooks || {}).in || []).map((x) => ({ ...x, which: 'arrived, not recorded' })),
+      ((u.bankNotInBooks || {}).out || []).map((x) => ({ ...x, which: 'left, not recorded' })));
+    const mine = [].concat(
+      ((u.booksNotInBank || {}).in || []).map((x) => ({ ...x, which: 'recorded as received, the bank never did' })),
+      ((u.booksNotInBank || {}).out || []).map((x) => ({ ...x, which: 'recorded as paid, the bank never did' })));
+
+    out.push(`<div class="card">
+      <div class="row1">
+        <span class="lbl">${esc(r.name || b.bank)}</span>
+        <span class="chip ${r.agrees ? 'on' : 'warn'}">${r.agrees ? 'movement agrees' : 'does not agree'}</span>
+      </div>
+      <div class="row1" style="margin-top:6px">
+        <span class="desc">in — bank ${money(r.feed.in)} · books ${money(r.books.in)}</span>
+        <span class="amt" style="color:${Math.abs(r.inGap) < 0.005 ? 'var(--text-faint)' : '#EA3323'}">${money(r.inGap)}</span>
+      </div>
+      <div class="row1">
+        <span class="desc">out — bank ${money(r.feed.out)} · books ${money(r.books.out)}</span>
+        <span class="amt" style="color:${Math.abs(r.outGap) < 0.005 ? 'var(--text-faint)' : '#EA3323'}">${money(r.outGap)}</span>
+      </div>
+      ${(r.books.byEntity || []).length > 1 ? `<div class="note">One bank account, several sets of books:
+        ${(r.books.byEntity || []).map((e) => esc(e.entity) + ' ' + money(e.net)).join(' · ')}</div>` : ''}
+      ${r.feed.pendingHeldBack ? `<div class="note">${r.feed.pendingHeldBack} pending row(s) held back — a pending
+        amount still changes and the row can vanish, so counting it would send you looking for a problem that
+        resolves itself overnight.</div>` : ''}
+      ${r.feed.excluded.count ? `<div class="note">${r.feed.excluded.count} excluded row(s) are still IN the bank
+        total above (${money(r.feed.excluded.out)} out, ${money(r.feed.excluded.in)} in) — the money moved
+        whatever you decided it was for.</div>` : ''}
+      ${orphans.length ? `<div class="note" style="margin-top:8px">The bank moved money Jarvis has no record of:</div>
+        ${orphans.map((x) => `<div class="row1" style="margin:3px 0">
+          <span class="amt" style="font-size:13px">${money(x.amount)}</span>
+          <span class="when">${esc(x.date)}</span>
+          <span class="desc">${esc(x.which)}</span>
+          <span class="desc" style="color:var(--text-faint)">${esc(x.party || x.desc || '')}</span>
+        </div>`).join('')}` : ''}
+      ${mine.length ? `<div class="note" style="margin-top:8px">Jarvis recorded money moving that the bank did not —
+        usually entered twice, or entered before it was sent:</div>
+        ${mine.map((x) => `<div class="row1" style="margin:3px 0">
+          <span class="amt" style="font-size:13px">${money(x.amount)}</span>
+          <span class="when">${esc(x.date)}</span>
+          <span class="desc">${esc(x.kind)}${x.party ? ' · ' + esc(x.party) : ''}</span>
+          <span class="desc" style="color:var(--text-faint)">${esc(x.entity)}</span>
+        </div>`).join('')}` : ''}
+      <div class="note" style="margin-top:8px">${esc(r.compares)}. ${esc(r.anchorNeeded)}.</div>
+    </div>`);
+  }
+  $('recon').innerHTML = out.join('');
+}
+
 async function load() {
   try {
     STATE.data = await api('/api/bank/match');
     await render();
     renderFeed();
+    renderReconcile();
   } catch (e) {
     $('list').innerHTML = `<div class="card"><div class="lbl">could not load</div><div class="note">${esc(e.message)}</div></div>`;
   }

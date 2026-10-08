@@ -82,12 +82,73 @@ function redact(text) {
 
 const fail = (msg) => { throw new Error(redact(msg)); };
 
+// ── READ ONLY, ENFORCED — NOT A CONVENTION ───────────────────────────────
+// Apsara, 2026-10-08: "Also i want read only access for plaid account from
+// jarvis.never write".
+//
+// Jarvis was ALREADY read-only in practice — `products: ['transactions']`
+// grants history and nothing else, and no money-movement endpoint is called
+// anywhere in this repo. But "no caller happens to do it" is not a rule, it
+// is a coincidence that holds until someone adds a feature. Plaid's API has
+// endpoints that move real money (/transfer/authorization/create,
+// /transfer/create, /payment_initiation/payment/create) and endpoints that
+// alter her Items. Reaching any of them is one `call('/transfer/create')`
+// away, and the thing that would stop it is this list.
+//
+// So the allowlist is the rule, and it is checked BEFORE the network call.
+// A new endpoint does not work until someone adds it here, which makes the
+// decision visible in a diff instead of invisible in a feature.
+//
+// ── THE ONE PERMITTED WRITE, AND WHOSE CALL IT WAS ───────────────────────
+// /item/remove deletes an Item at Plaid's end, so it is strictly a write. I
+// asked rather than decide it: offered local-forget-only, keep-it, or drop
+// the button, and Apsara, 2026-10-08, chose "Keep Unlink calling Plaid" —
+// one write, and only this one, to remove her own connection. It is named
+// here with that provenance so nobody later reads the list as "writes are
+// fine if they seem harmless".
+const READ_ONLY = new Set([
+    '/link/token/create',               // starts Link; grants nothing by itself
+    '/item/public_token/exchange',      // turns her consent into a read token
+    '/accounts/get',                    // cached balance + account list, free
+    '/accounts/balance/get',            // real-time balance. BILLED PER CALL
+    '/transactions/sync',               // the feed
+    '/institutions/get',                // which banks use OAuth
+]);
+// HER DECISION, 2026-10-08, recorded above. Separate from READ_ONLY so the
+// read list stays honestly a read list.
+const PERMITTED_WRITES = new Set(['/item/remove']);
+// Sandbox-only, and the env check is the point: these create fake data and
+// must be impossible against production even if a route is left exposed.
+const SANDBOX_ONLY = new Set([
+    '/sandbox/public_token/create',
+    '/sandbox/item/reset_login',
+    '/sandbox/item/fire_webhook',
+]);
+
+function assertReadOnly(endpoint) {
+    const e = String(endpoint || '');
+    if (READ_ONLY.has(e) || PERMITTED_WRITES.has(e)) return;
+    if (SANDBOX_ONLY.has(e)) {
+        if (env() === 'sandbox') return;
+        fail(`${e} is a sandbox endpoint and PLAID_ENV is ${env()} — refused. `
+            + 'Sandbox helpers must never run against her real bank.');
+    }
+    fail(`Jarvis is read-only at Plaid, so ${e} is refused before any request is sent. `
+        + 'Apsara asked for read-only access on 2026-10-08. If a new endpoint is genuinely '
+        + 'needed, add it to READ_ONLY in helpers/plaid.js and say in the commit why it '
+        + 'only reads — do not route around this.');
+}
+
 // ── one POST ─────────────────────────────────────────────────────────────
 // fetchImpl is injectable so a test never reaches the network, and the
 // default is the global fetch rather than a module-level capture — the
 // mistake that let a QuickBooks token refresh escape a stubbed suite this
 // morning was exactly a default that was not overridable at the call site.
 async function call(endpoint, body, { fetchImpl, timeoutMs = 30000 } = {}) {
+    // FIRST, before the configured() check and before any network. A refusal
+    // must not depend on whether her keys happen to be set, or the guard
+    // would be absent on exactly the machine where it is being developed.
+    assertReadOnly(endpoint);
     if (!configured()) {
         fail('Plaid is not configured — set PLAID_CLIENT_ID and PLAID_SECRET in the server .env. '
             + 'They are on the Plaid dashboard under Developers / Keys, and they do not belong in a chat.');
@@ -159,15 +220,48 @@ async function saveItem(item) {
     return item;
 }
 
+// ── WHAT SHE CONSENTS TO AT THE BANK ─────────────────────────────────────
+// The endpoint allowlist above governs what this server asks Plaid for. This
+// governs something different and in some ways more important: what the bank
+// is told Jarvis may do, on the consent screen SHE reads during Link.
+//
+// `transactions` is history. It is the whole feature. Of the products that
+// are not here, two matter: `auth` hands over the account and routing number,
+// which is what an ACH debit needs, and `transfer`/`payment_initiation` are
+// money movement outright. Adding `auth` would not break a test by itself —
+// it would simply widen what her bank believes she agreed to, invisibly. So
+// the list is frozen, named, and asserted in tests/plaid.js.
+const READ_PRODUCTS = ['transactions'];
+const MONEY_PRODUCTS = ['auth', 'transfer', 'payment_initiation', 'signal', 'identity_verification'];
+
+function assertReadProducts(products) {
+    const bad = (products || []).filter((p) => MONEY_PRODUCTS.includes(String(p)));
+    if (bad.length) {
+        fail(`refusing to ask her bank for ${bad.join(', ')} — Jarvis reads transactions and `
+            + 'nothing else. Apsara asked for read-only access on 2026-10-08, and this is the '
+            + 'consent screen she signs at the bank, not an internal setting.');
+    }
+}
+
 // ── step 1: a link token, for the browser ────────────────────────────────
 // Short-lived and not a credential for anything but starting Link. She
 // completes the bank login in Plaid's own iframe; her bank password never
 // touches this server, which is the entire point of Link.
+//
+// ── NO redirect_uri, AND THAT IS A DECISION ──────────────────────────────
+// BofA and Chase are OAuth banks, so Link leaves the page and comes back.
+// Plaid's OAuth guide: desktop web works WITHOUT a redirect_uri, because it
+// opens the bank in a pop-up. A redirect_uri is required for webviews — and
+// the Edge Yard Android app IS a webview. So linking a bank is a DESKTOP
+// WEBSITE job, once per bank, and the app is deliberately not a place it can
+// be done. Adding android_package_name would make the phone a second place
+// her bank credentials get entered, for a thing she does twice ever.
 async function linkToken({ fetchImpl, userId = 'edge-jarvis' } = {}) {
+    assertReadProducts(READ_PRODUCTS);
     const r = await call('/link/token/create', {
         user: { client_user_id: String(userId) },
         client_name: 'Jarvis — Edge Metals',
-        products: ['transactions'],
+        products: READ_PRODUCTS,
         country_codes: ['US'],
         language: 'en',
     }, { fetchImpl });
@@ -282,7 +376,7 @@ async function syncAll({ fetchImpl } = {}) {
 async function sandboxLink({ fetchImpl, institutionId = 'ins_109508' } = {}) {
     if (env() !== 'sandbox') fail(`sandboxLink is sandbox-only; PLAID_ENV is ${env()}`);
     const r = await call('/sandbox/public_token/create', {
-        institution_id: institutionId, initial_products: ['transactions'],
+        institution_id: institutionId, initial_products: READ_PRODUCTS,
     }, { fetchImpl });
     return exchange(r.public_token, { fetchImpl, institution: institutionId });
 }
@@ -320,4 +414,9 @@ module.exports = {
     env, host, configured, status, redact,
     items, itemsPublic, linkToken, exchange, syncItem, syncAll, sandboxLink, unlink,
     ITEM_FILE, HOSTS,
+    // Exported so tests/plaid.js can assert the rule rather than trust the
+    // comment above it — and so a reviewer can see the whole permitted
+    // surface in one place without reading the file.
+    READ_ONLY, PERMITTED_WRITES, SANDBOX_ONLY, READ_PRODUCTS, MONEY_PRODUCTS,
+    assertReadOnly, assertReadProducts, call,
 };

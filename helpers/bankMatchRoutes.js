@@ -337,6 +337,58 @@ function mount(app, cfg) {
     // path — link, sync, match, confirm — is reachable from the screen rather
     // than from a shell on the VM.
     //
+    // ── GET /api/bank/reconcile ──────────────────────────────────────────
+    // Apsara, 2026-10-08: "so that i dont need to look out for statements
+    // whether payment received or sent ever again."
+    //
+    // Read-only, and it answers the completeness question rather than the
+    // matching one. helpers/bankReconcile.js's header has the full reasoning;
+    // the part that matters at this layer is that it builds the journal from
+    // booksBuild and NOT from a per-company statement, because 1010 is one
+    // real bank account drawn on by more than one of her companies.
+    //
+    // ── WHY NO /accounts/balance/get CALL HERE ───────────────────────────
+    // Plaid bills a flat fee for every successful Balance call, and this
+    // route is hit on every page load. Hanging a billed call off a page load
+    // is a monthly invoice that grows with how often she refreshes. The
+    // movement comparison needs no live balance at all, so it makes no call.
+    app.get('/api/bank/reconcile', (req, res) => {
+        try {
+            const BB = require('./booksBuild');
+            const BR = require('./bankReconcile');
+            const ledger = require('./bankLedger');
+
+            const from = String(req.query.from || '').slice(0, 10) || null;
+            const to = String(req.query.to || '').slice(0, 10) || null;
+            const days = Math.max(0, Math.min(45, Number(req.query.days) || 4));
+
+            const built = BB.build({ from, to });
+            const rows = ledger.list();
+
+            const banks = BR.bankAccounts().map((a) => {
+                const rec = BR.reconcile({ lines: built.lines, rows, code: a.code, bank: a.bank, from, to });
+                const un = BR.unexplained({ lines: built.lines, rows, code: a.code, bank: a.bank, from, to, days });
+                return { ...a, reconcile: rec, unexplained: un };
+            });
+
+            res.json({
+                from, to, days,
+                banks,
+                // An incomplete journal makes every figure above a floor
+                // rather than a total, so it travels WITH them. The books
+                // portal learned this the hard way: a statement built from an
+                // incomplete journal looks exactly like a correct one.
+                journal: { complete: built.complete, problems: built.problems || [],
+                           unplaced: (built.unplaced || []).length, transactions: built.transactions },
+                // True only when every bank agrees AND nothing is unexplained
+                // AND the journal posted everything. Any one of those failing
+                // means a statement still has something to tell her.
+                nothingNeedsYou: built.complete
+                    && banks.every((b) => b.reconcile.ok && b.reconcile.agrees && b.unexplained.clean),
+            });
+        } catch (e) { res.status(500).json({ error: e.message }); }
+    });
+
     // NOTHING HERE RETURNS THE ACCESS TOKEN. config.js:342: it "must never
     // appear in an API response or a log line". plaid.itemsPublic() is the
     // only shape that leaves, and tests/plaid.js searches every response for

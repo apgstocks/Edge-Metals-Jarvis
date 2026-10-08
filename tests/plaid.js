@@ -320,6 +320,109 @@ const Q = require(path.join(ROOT, 'helpers/plaid'));
        (code.match(/throw new Error\([^)]*/g) || []).join(' | '));
 }
 
+// ── H — READ ONLY, AND PROVED BY NAMING THE WRITES ────────────────────────
+// Apsara, 2026-10-08: "Also i want read only access for plaid account from
+// jarvis.never write".
+//
+// The weak version of this test asserts that helpers/plaid.js does not call
+// /transfer/create today. That passes on every repo that has never thought
+// about it, and goes on passing until the day someone adds one. So this
+// section drives the guard with Plaid's actual money-movement endpoints and
+// requires a REFUSAL for each — the thing that keeps being true after a
+// feature nobody has written yet.
+{
+    section('H — read only, enforced');
+
+    // Plaid's endpoints that move money or alter her authorisations. If Plaid
+    // adds one, this list is where it goes.
+    const MOVES_MONEY = [
+        '/transfer/create',
+        '/transfer/authorization/create',
+        '/transfer/cancel',
+        '/payment_initiation/payment/create',
+        '/payment_initiation/recipient/create',
+        '/bank_transfer/create',
+        '/signal/evaluate',
+        '/auth/get',
+        '/processor/token/create',
+        '/item/access_token/invalidate',
+        '/item/webhook/update',
+    ];
+    let refused = 0;
+    const allowedByMistake = [];
+    for (const e of MOVES_MONEY) {
+        try { P.assertReadOnly(e); allowedByMistake.push(e); }
+        catch (err) { refused += 1; }
+    }
+    ck('every money-movement endpoint is refused before any request',
+       refused === MOVES_MONEY.length, 'allowed: ' + allowedByMistake.join(', '));
+    ck('  and /auth/get in particular — it hands over the routing number',
+       allowedByMistake.indexOf('/auth/get') === -1);
+    ck('  and the refusal says it is her rule, not a bug',
+       (() => { try { P.assertReadOnly('/transfer/create'); return false; }
+                catch (e) { return /read-only/i.test(e.message); } })());
+
+    // ── AND THE GUARD IS ACTUALLY WIRED INTO call() ──────────────────────
+    // The three checks above drive assertReadOnly() directly. All three stayed
+    // green when `assertReadOnly(endpoint)` was commented out of call(), which
+    // is the only line that makes any of it matter — a unit test passing while
+    // the wiring is gone, which is what CLAUDE.md §3 is about. So this drives
+    // the real door and asserts the request never left: a guard that throws
+    // AFTER fetch has run is not a guard.
+    let reached = 0;
+    const spy = async () => { reached += 1; return { ok: true, status: 200, text: async () => '{}' }; };
+    let threw = null;
+    try { await P.call('/transfer/create', { amount: '1.00' }, { fetchImpl: spy }); }
+    catch (e) { threw = e; }
+    ck('call() itself refuses a write endpoint', !!threw && /read-only/i.test(threw.message),
+       threw ? threw.message : 'it did not throw');
+    ck('  and no request was sent', reached === 0, `fetch ran ${reached} time(s)`);
+
+    // The six Jarvis actually uses still work, or the guard has locked the
+    // feature out instead of locking the writes out.
+    let readsOk = 0;
+    for (const e of ['/link/token/create', '/item/public_token/exchange', '/accounts/get',
+                     '/transactions/sync', '/accounts/balance/get', '/institutions/get']) {
+        try { P.assertReadOnly(e); readsOk += 1; } catch (err) {}
+    }
+    ck('the read endpoints are all still allowed', readsOk === 6, String(readsOk));
+
+    // HER decision, 2026-10-08: "Keep Unlink calling Plaid". Asserted so the
+    // exception stays an exception of ONE, with her name on it.
+    ck('unlinking her own connection is the ONE permitted write — her call',
+       P.PERMITTED_WRITES.has('/item/remove') && P.PERMITTED_WRITES.size === 1,
+       [...P.PERMITTED_WRITES].join(', '));
+
+    // A sandbox helper against production would create fake rows in her real
+    // feed, which is a data-integrity problem dressed as a convenience.
+    const realEnv = process.env.PLAID_ENV;
+    ck('sandbox helpers work in sandbox',
+       (() => { try { P.assertReadOnly('/sandbox/public_token/create'); return true; } catch (e) { return false; } })());
+    process.env.PLAID_ENV = 'production';
+    for (const k of Object.keys(require.cache)) if (k.startsWith(ROOT)) delete require.cache[k];
+    const P2 = require(path.join(ROOT, 'helpers/plaid'));
+    ck('  and are refused against production',
+       (() => { try { P2.assertReadOnly('/sandbox/public_token/create'); return false; }
+                catch (e) { return /sandbox endpoint/i.test(e.message); } })());
+    process.env.PLAID_ENV = realEnv;
+    for (const k of Object.keys(require.cache)) if (k.startsWith(ROOT)) delete require.cache[k];
+
+    // ── WHAT HER BANK IS TOLD, WHICH IS NOT THE SAME THING ───────────────
+    // The allowlist governs this server. `products` governs the consent
+    // screen SHE reads at the bank. `auth` would widen that invisibly — no
+    // endpoint call, no test failure, just a broader permission she granted.
+    const P3 = require(path.join(ROOT, 'helpers/plaid'));
+    ck('Link asks her bank for transactions and nothing else',
+       P3.READ_PRODUCTS.length === 1 && P3.READ_PRODUCTS[0] === 'transactions',
+       P3.READ_PRODUCTS.join(', '));
+    ck('  and asking for auth or transfer is refused',
+       (() => { try { P3.assertReadProducts(['transactions', 'auth']); return false; }
+                catch (e) { return /read-only/i.test(e.message); } })());
+    const src = fs.readFileSync(path.join(ROOT, 'helpers/plaid.js'), 'utf8');
+    ck('  and no products array in the file names one of them',
+       !/products:\s*\[[^\]]*['"](auth|transfer|payment_initiation|signal)['"]/.test(src));
+}
+
 console.log(`\n  ${pass} passed, ${fail} failed`);
 if (failures.length) { console.log('\n  failed:'); failures.forEach((f) => console.log('    · ' + f)); }
 process.exit(fail ? 1 : 0);
