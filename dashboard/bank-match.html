@@ -354,6 +354,20 @@ async function renderReconcile() {
     return;
   }
   const out = [];
+  /* ── IS THE FEED ALIVE? FIRST, ABOVE EVERYTHING ────────────────────
+     A reconciliation is only as true as the date of the data under it.
+     A dead Plaid connection throws nothing — the sync just returns no
+     rows — so on a quiet day every figure below would agree perfectly
+     about a feed that stopped a fortnight ago. This sits at the top
+     because it is the one line that invalidates the rest. */
+  const f = d.feed || {};
+  if (!f.ok) {
+    out.push(`<div class="card"><div class="lbl">the bank feed is not current</div>
+      <div class="note">${esc(f.note || 'the feed has not synced recently')}${
+        f.lastSyncAt ? ' — last sync ' + esc(String(f.lastSyncAt).slice(0, 10)) : ''}.
+      Everything below is computed from whatever was pulled before that, so it cannot tell you
+      about anything that has happened since.</div></div>`);
+  }
   const j = d.journal || {};
   if (!j.complete) {
     out.push(`<div class="card"><div class="lbl">the books are not complete yet</div>

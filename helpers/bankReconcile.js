@@ -298,6 +298,93 @@ function unexplained({ lines = [], rows = [], bank = null, code = null, from = n
     };
 }
 
+// ── IS THE FEED ALIVE? ───────────────────────────────────────────────────
+// A reconciliation is only as true as the date of the data under it, and a
+// Plaid Item dies quietly: ITEM_LOGIN_REQUIRED after she changes her bank
+// password, or consent expiring. Nothing throws — the nightly sync just
+// returns no rows. Two failure modes follow, and neither announces itself:
+//
+//   · on a quiet day both sides are unchanged, so everything agrees about a
+//     feed that stopped a fortnight ago. "Nothing needs you", said falsely,
+//     is the worst sentence this code can produce.
+//   · on a busy day her payments have no bank rows to meet, so a gap grows
+//     that reads as missing money when the answer is "nothing is connected".
+//
+// ── WHY IT LIVES HERE AND NOT IN THE ROUTE ─────────────────────────────
+// It was inline in bankMatchRoutes.js first. The mutation "a stale feed is
+// judged fresh" then SURVIVED, because Plaid is not configured in the test
+// environment so the branch never ran — arithmetic that cannot be reached
+// by a test is arithmetic nobody is checking. Out here it takes items and a
+// clock as arguments and the staleness rule is pinned.
+//
+// Takes plaid.itemsPublic() shape — which never carries the access token.
+const STALE_AFTER_DAYS = 2;   // the pull is 05:45 daily; a quiet weekend is normal
+
+function feedHealth(items, { now = new Date(), configured = true } = {}) {
+    if (!configured) {
+        return { linked: 0, lastSyncAt: null, staleDays: null, ok: false,
+            note: 'Plaid is not configured on this server' };
+    }
+    const list = Array.isArray(items) ? items : [];
+    if (!list.length) {
+        return { linked: 0, lastSyncAt: null, staleDays: null, ok: false,
+            note: 'no bank is linked yet' };
+    }
+    // The NEWEST sync across items, because one healthy bank must not hide a
+    // dead one — but the note names the count so two banks and one sync is
+    // visible rather than averaged away.
+    const syncs = list.map((i) => i && i.last_sync_at).filter(Boolean).sort();
+    const newest = syncs.length ? syncs[syncs.length - 1] : null;
+    if (!newest) {
+        return { linked: list.length, lastSyncAt: null, staleDays: null, ok: false,
+            note: 'linked, but it has never synced' };
+    }
+    const staleDays = Math.floor((now.getTime() - new Date(newest).getTime()) / 86400000);
+    const everySynced = list.every((i) => i && i.last_sync_at);
+    if (!everySynced) {
+        return { linked: list.length, lastSyncAt: newest, staleDays, ok: false,
+            note: `${list.length - syncs.length} of ${list.length} linked banks have never synced` };
+    }
+    return {
+        linked: list.length, lastSyncAt: newest, staleDays,
+        ok: staleDays <= STALE_AFTER_DAYS,
+        note: staleDays > STALE_AFTER_DAYS
+            ? `the last successful sync was ${staleDays} days ago — the connection may need `
+              + 're-authenticating at the bank'
+            : null,
+    };
+}
+
+// ── THE SENTENCE SHE ACTS ON ─────────────────────────────────────────────
+// "Nothing needs you" is the whole point of the screen and the one output
+// that can do real harm, because she will stop looking on the strength of
+// it. It was assembled inline in the route, and the mutation "nothing needs
+// you ignores an incomplete journal" then SURVIVED: Plaid is unconfigured
+// under test so `feed.ok` was already false, and a second broken guard
+// changed nothing. Two guards in one expression, where either being false
+// hides the other being broken.
+//
+// Out here each clause is checkable on its own, and the function returns
+// WHY rather than only whether — so the screen can say which of the four
+// things is untrue instead of a bare no.
+//
+// All four must hold. They are in this order deliberately: the first is
+// about whether there IS data, the rest are about what the data says, and
+// the first is the only one that can be false while the others are
+// serenely true.
+function nothingNeedsYou({ feed, journalComplete, banks } = {}) {
+    const reasons = [];
+    if (!feed || !feed.ok) reasons.push(feed && feed.note ? feed.note : 'the bank feed is not current');
+    if (!journalComplete) reasons.push('the journal could not post everything, so every figure is a floor');
+    for (const b of (Array.isArray(banks) ? banks : [])) {
+        if (!b || !b.reconcile || !b.reconcile.ok) { reasons.push(`${(b && b.bank) || 'a bank'} could not be reconciled`); continue; }
+        if (!b.reconcile.agrees) reasons.push(`${b.bank} does not agree with the books`);
+        if (!b.unexplained || !b.unexplained.clean) reasons.push(`${b.bank} has rows nobody has explained`);
+    }
+    return { ok: reasons.length === 0, reasons };
+}
+
 module.exports = {
-    bankAccounts, codeForBank, ledgerSide, bankSide, reconcile, unexplained, CENT,
+    bankAccounts, codeForBank, ledgerSide, bankSide, reconcile, unexplained,
+    feedHealth, nothingNeedsYou, STALE_AFTER_DAYS, CENT,
 };

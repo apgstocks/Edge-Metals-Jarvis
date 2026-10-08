@@ -365,26 +365,69 @@ function mount(app, cfg) {
             const built = BB.build({ from, to });
             const rows = ledger.list();
 
+            // ── IS THE FEED EVEN ALIVE? ──────────────────────────────────
+            // Added 2026-10-08, a day after the rest of this route, having
+            // read Plaid's webhook documentation and realised what it meant
+            // for what I had already shipped.
+            //
+            // A Plaid Item dies on its own: ITEM_LOGIN_REQUIRED after she
+            // changes her bank password, or consent expiring. Nothing throws
+            // — the nightly sync simply returns no rows. Without this check
+            // the page then has two failure modes and no way to tell them
+            // apart:
+            //
+            //   · on a quiet day both sides are unchanged, so it says
+            //     "movement agrees" about a feed that stopped a fortnight
+            //     ago. That is the sentence she asked for, said falsely.
+            //   · on a busy day her recorded payments have no bank rows to
+            //     match, so it shows a growing out-gap she would chase as
+            //     missing money when the answer is "nothing is connected".
+            //
+            // So freshness travels WITH the figures, and a stale feed makes
+            // nothingNeedsYou false. A reconciliation is only as true as the
+            // date of the data under it.
+            // The rule itself is BR.feedHealth — see its header. It was
+            // inline here and the mutation "a stale feed is judged fresh"
+            // survived, because Plaid is unconfigured under test so this
+            // branch never ran. Arithmetic a test cannot reach is
+            // arithmetic nobody is checking.
+            let feed;
+            try {
+                const P = require('./plaid');
+                feed = BR.feedHealth(P.configured() ? P.itemsPublic() : [],
+                    { configured: P.configured() });
+            } catch (e) {
+                feed = { linked: 0, lastSyncAt: null, staleDays: null, ok: false, note: e.message };
+            }
+
             const banks = BR.bankAccounts().map((a) => {
                 const rec = BR.reconcile({ lines: built.lines, rows, code: a.code, bank: a.bank, from, to });
                 const un = BR.unexplained({ lines: built.lines, rows, code: a.code, bank: a.bank, from, to, days });
                 return { ...a, reconcile: rec, unexplained: un };
             });
 
+            const verdict = BR.nothingNeedsYou({
+                feed, journalComplete: built.complete, banks });
+
             res.json({
                 from, to, days,
                 banks,
+                feed,
                 // An incomplete journal makes every figure above a floor
                 // rather than a total, so it travels WITH them. The books
                 // portal learned this the hard way: a statement built from an
                 // incomplete journal looks exactly like a correct one.
                 journal: { complete: built.complete, problems: built.problems || [],
                            unplaced: (built.unplaced || []).length, transactions: built.transactions },
-                // True only when every bank agrees AND nothing is unexplained
-                // AND the journal posted everything. Any one of those failing
-                // means a statement still has something to tell her.
-                nothingNeedsYou: built.complete
-                    && banks.every((b) => b.reconcile.ok && b.reconcile.agrees && b.unexplained.clean),
+                // ── THE SENTENCE SHE ACTS ON ─────────────────────
+                // Composed by BR.nothingNeedsYou, not here. It was four
+                // clauses in one expression and the mutation that broke
+                // the journal clause survived, because feed.ok was already
+                // false under test and hid it. Out in the helper each
+                // clause is checkable on its own, and `because` lets the
+                // screen say WHICH of the four is untrue.
+                nothingNeedsYou: verdict.ok,
+                because: verdict.reasons,
             });
         } catch (e) { res.status(500).json({ error: e.message }); }
     });

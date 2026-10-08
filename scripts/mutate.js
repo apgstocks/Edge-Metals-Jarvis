@@ -986,13 +986,39 @@ const MUTATIONS = [
       find: '            out: bookOut.filter((p) => !p.taken).map((p) => ledgerOrphan(p, \'out\')),',
       to:   "            out: []," },
     { name: 'bankrec: "nothing needs you" ignores an incomplete journal',
-      file: 'helpers/bankMatchRoutes.js', suites: ['bank-reconcile'],
-      find: '                nothingNeedsYou: built.complete\n                    && banks.every',
-      to:   '                nothingNeedsYou: true\n                    && banks.every' },
+      file: 'helpers/bankReconcile.js', suites: ['bank-reconcile'],
+      find: "    if (!journalComplete) reasons.push(",
+      to:   "    if (false) reasons.push(" },
+    { name: 'bankrec: a bank that disagrees still says nothing needs you',
+      file: 'helpers/bankReconcile.js', suites: ['bank-reconcile'],
+      find: "        if (!b.reconcile.agrees) reasons.push(",
+      to:   "        if (false) reasons.push(" },
+    { name: 'bankrec: unexplained rows stop counting against the verdict',
+      file: 'helpers/bankReconcile.js', suites: ['bank-reconcile'],
+      find: "        if (!b.unexplained || !b.unexplained.clean) reasons.push(",
+      to:   "        if (false) reasons.push(" },
     { name: 'bankrec: the screen stops calling the route, like reconcile.js did',
       file: 'dashboard/bank-match.html', suites: ['bank-reconcile'],
       find: '    renderReconcile();',
       to:   '    if (false) renderReconcile();' },
+
+    { name: 'bankrec: a dead bank feed still reports "nothing needs you"',
+      file: 'helpers/bankReconcile.js', suites: ['bank-reconcile'],
+      find: "    if (!feed || !feed.ok) reasons.push(",
+      to:   "    if (false) reasons.push(" },
+    { name: 'bankrec: a stale feed is judged fresh',
+      file: 'helpers/bankReconcile.js', suites: ['bank-reconcile'],
+      find: "        ok: staleDays <= STALE_AFTER_DAYS,",
+      to:   "        ok: true," },
+    { name: 'bankrec: one healthy bank hides a dead one',
+      file: 'helpers/bankReconcile.js', suites: ['bank-reconcile'],
+      find: "    if (!everySynced) {",
+      to:   "    if (false) {" },
+    // DROPPED: "a never-synced item counts as alive". Removing the !newest
+    // branch changes no outcome — when no item has ever synced, the
+    // !everySynced branch below returns ok:false anyway. The branch stays in
+    // the code for a readable note; a mutation that cannot change behaviour
+    // tests nothing and a green on it means nothing.
 
     // ── READ ONLY AT PLAID — HER RULE, 2026-10-08 ─────────────────────
     // The guard is only worth having if removing it turns something red.

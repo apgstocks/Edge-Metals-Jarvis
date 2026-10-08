@@ -227,6 +227,94 @@ const B = (o) => ({ id: 'b1', date: '2026-04-10', desc: '', party: '', category:
     ck('a line before the window is not counted', s.out === 700, String(s.out));
 }
 
+// ── J2 — IS THE FEED EVEN ALIVE ───────────────────────────────────────────
+// A Plaid Item dies quietly — ITEM_LOGIN_REQUIRED after a bank password
+// change, or consent expiring — and nothing throws; the sync just returns
+// no rows. So every figure in this file can be perfectly correct about data
+// that stopped arriving a fortnight ago.
+//
+// This lives in the helper and not in the route because when the rule WAS in
+// the route, the mutation "a stale feed is judged fresh" survived: Plaid is
+// unconfigured under test, so the branch never ran. A check that cannot be
+// reached is not a check.
+{
+    section('J2 — a reconciliation is only as true as its date');
+    const daysAgo = (n) => new Date(Date.now() - n * 86400000).toISOString();
+
+    ck('no Plaid keys is said plainly, not treated as healthy',
+       R.feedHealth([], { configured: false }).ok === false);
+    ck('linked nothing is different from linked and quiet',
+       /no bank is linked/.test(R.feedHealth([], {}).note));
+    ck('linked but never synced is NOT ok',
+       R.feedHealth([{ item_id: 'a' }], {}).ok === false,
+       JSON.stringify(R.feedHealth([{ item_id: 'a' }], {})));
+
+    const fresh = R.feedHealth([{ item_id: 'a', last_sync_at: daysAgo(1) }], {});
+    ck('yesterday is fine — the pull is daily and weekends are quiet', fresh.ok === true, JSON.stringify(fresh));
+    const stale = R.feedHealth([{ item_id: 'a', last_sync_at: daysAgo(9) }], {});
+    ck('nine days is not', stale.ok === false, JSON.stringify(stale));
+    ck('  and it says what to DO — re-authenticate at the bank',
+       /re-authenticat/.test(stale.note), stale.note);
+    ck('  and names how many days, so she can judge it herself',
+       stale.staleDays === 9, String(stale.staleDays));
+
+    // ── ONE HEALTHY BANK MUST NOT HIDE A DEAD ONE ────────────────────────
+    // She has two. Taking the newest sync across both and calling that fresh
+    // is how Chase could be disconnected for a month behind a healthy BofA.
+    const mixed = R.feedHealth([{ item_id: 'a', last_sync_at: daysAgo(1) }, { item_id: 'b' }], {});
+    ck('two banks where only one has ever synced is NOT ok', mixed.ok === false, JSON.stringify(mixed));
+    ck('  and the note names the count rather than averaging it away',
+       /1 of 2/.test(mixed.note), mixed.note);
+
+    ck('the staleness threshold is a named constant, not a number in a branch',
+       R.STALE_AFTER_DAYS === 2, String(R.STALE_AFTER_DAYS));
+}
+
+// ── J3 — "NOTHING NEEDS YOU", CLAUSE BY CLAUSE ────────────────────────────
+// The one output that can do real harm, because she stops looking on the
+// strength of it. It was four clauses in one expression inside the route,
+// and the mutation that broke the journal clause SURVIVED — Plaid is
+// unconfigured under test so feed.ok was already false and hid it. Two
+// guards where either being false conceals the other being broken.
+//
+// So each clause gets its own check, with the other three held true.
+{
+    section('J3 — four things must all hold, and each is checked alone');
+    const okFeed = { ok: true, note: null };
+    const okBank = { bank: 'BofA', reconcile: { ok: true, agrees: true }, unexplained: { clean: true } };
+    const all = { feed: okFeed, journalComplete: true, banks: [okBank] };
+
+    ck('all four true is the only way to get a yes', R.nothingNeedsYou(all).ok === true,
+       JSON.stringify(R.nothingNeedsYou(all)));
+
+    const noFeed = R.nothingNeedsYou({ ...all, feed: { ok: false, note: 'the last sync was 9 days ago' } });
+    ck('a dead feed alone is enough to say no', noFeed.ok === false);
+    ck('  and the reason is the feed, in words she can act on',
+       /9 days/.test(noFeed.reasons.join(' ')), JSON.stringify(noFeed.reasons));
+
+    const noJournal = R.nothingNeedsYou({ ...all, journalComplete: false });
+    ck('an incomplete journal alone is enough to say no', noJournal.ok === false);
+    ck('  and says every figure is a floor',
+       /floor/.test(noJournal.reasons.join(' ')), JSON.stringify(noJournal.reasons));
+
+    const disagrees = R.nothingNeedsYou({ ...all,
+        banks: [{ ...okBank, reconcile: { ok: true, agrees: false } }] });
+    ck('a bank that does not agree is enough to say no', disagrees.ok === false);
+    ck('  and names which bank', /BofA/.test(disagrees.reasons.join(' ')), JSON.stringify(disagrees.reasons));
+
+    const unex = R.nothingNeedsYou({ ...all, banks: [{ ...okBank, unexplained: { clean: false } }] });
+    ck('rows nobody has explained are enough to say no', unex.ok === false);
+
+    // Two banks: one healthy, one not. The healthy one must not carry the
+    // verdict — she has two and they fail independently.
+    const mixed = R.nothingNeedsYou({ ...all, banks: [okBank,
+        { bank: 'Chase Bank', reconcile: { ok: true, agrees: false }, unexplained: { clean: true } }] });
+    ck('one healthy bank does not vouch for the other', mixed.ok === false);
+    ck('  and the failing one is the one named',
+       /Chase/.test(mixed.reasons.join(' ')) && !/BofA/.test(mixed.reasons.join(' ')),
+       JSON.stringify(mixed.reasons));
+}
+
 // ── K — END TO END, AND REACHABLE ─────────────────────────────────────────
 // Apsara, 2026-09-17: "ALwyas test end to end when you add a new feature."
 //
@@ -306,6 +394,26 @@ const B = (o) => ({ id: 'b1', date: '2026-04-10', desc: '', party: '', category:
                         banksAgree: (broken.banks || []).map((b) => b.reconcile.agrees) }));
     fs.writeFileSync(cfg.CARRIER_INVOICES_FILE, '[]');
 
+    // ── A DEAD FEED IS NOT A CLEAN ONE ───────────────────────────────────
+    // Added the day after the rest of this file, from reading Plaid's
+    // webhook documentation: an Item dies on its own — ITEM_LOGIN_REQUIRED
+    // after a bank password change, or consent expiring — and nothing
+    // throws. The sync simply returns no rows.
+    //
+    // So on a quiet day both sides are unchanged and every figure agrees,
+    // about a feed that stopped weeks ago. That is the exact sentence she
+    // asked for ("nothing needs you"), said falsely, which makes it the
+    // worst output this route can produce. Nothing is linked in this test
+    // environment, so the unhealthy case is the one under test here.
+    ck('the answer carries whether the feed is even alive', !!d.feed,
+       JSON.stringify(Object.keys(d)));
+    ck('  and says plainly that nothing is linked', d.feed.ok === false
+       && /not configured|no bank is linked|never synced|days ago/.test(d.feed.note || ''),
+       JSON.stringify(d.feed));
+    ck('"nothing needs you" is impossible while the feed is not current',
+       d.nothingNeedsYou === false, JSON.stringify({ feed: d.feed, nothing: d.nothingNeedsYou }));
+    // (the screen-order check for this lives below, once `page` is read)
+
     // No live Balance call. Plaid bills a flat fee per successful
     // /accounts/balance/get, and this route is hit on every page load — a
     // billed call hanging off a page load is an invoice that grows with how
@@ -332,6 +440,13 @@ const B = (o) => ({ id: 'b1', date: '2026-04-10', desc: '', party: '', category:
     // comment explaining why "all clear" must not be printed — a check that
     // reads prose as if it were output.
     const shown = page.replace(/\/\*[\s\S]*?\*\//g, '').replace(/<!--[\s\S]*?-->/g, '');
+    // The staleness notice must come FIRST. It is the one line that
+    // invalidates everything under it, and a warning below the figures is a
+    // warning she reads after she has already believed them.
+    ck('  and the feed warning sits above the figures, not below them',
+       /the bank feed is not current/.test(page)
+       && page.indexOf('the bank feed is not current') < page.indexOf('the books are not complete yet'),
+       String(page.indexOf('the bank feed is not current')));
     ck('  and it says "movement agrees", never "all clear"',
        /movement agrees/.test(shown) && !/all clear/i.test(shown),
        (shown.match(/.{0,40}all clear.{0,40}/i) || [''])[0]);
