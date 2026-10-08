@@ -901,6 +901,12 @@ const MUTATIONS = [
       file: 'dashboard/documents.html', suites: ['carrier-invoices-route'],
       find: "    : (Number(r.paid) > 0.005",
       to:   "    : (false" },
+    // ── BANK AND ROUTING NUMBERS BEHIND THE ADMIN GUARD ───────────────
+    { name: 'bankdocs: the account-number read loses its role check again',
+      file: 'helpers/bankDocs.js', suites: ['bank-accounts'],
+      find: "        if (!admin(req, res)) return;\n        try {\n            const d = readAccounts(cfg);",
+      to:   "        try {\n            const d = readAccounts(cfg);" },
+
     // ── THE UNIT ON FIRST PAINT — HER BUG, 2026-10-08 ─────────────────
     // "first time on saving showing properly.but on edit,it is refactoring".
     // One multiplication existing in three places, two of them fixed in

@@ -39,6 +39,25 @@ const ck = (n, ok, extra) => { if (ok) { pass++; console.log('  PASS ', n); } el
     ck('the route serves them', r.status === 200 && j.accounts.length === d.accounts.length);
     ck('each account comes with its documents list', j.accounts.every((a) => Array.isArray(a.documents)));
 
+    // ── AND ONLY TO AN ADMIN, FROM 2026-10-08 ────────────────────────────
+    // The record carries accountNumber, wireRouting, achRouting, swift and
+    // taxId for both companies. Until today the read had no role check while
+    // upload and delete did, so any signed-in session — APP_PASSWORD is four
+    // characters and shared — could fetch the company's banking details.
+    //
+    // Asserted on the RESPONSE, not by grepping for the guard: a guard that
+    // is present and not reached is the shape this very route already had.
+    role = 'user';
+    const asUser = await fetch(base + '/api/bank-accounts');
+    const userBody = await asUser.text();
+    ck('a non-admin session cannot read the account numbers', asUser.status === 403,
+       `${asUser.status} ${userBody.slice(0, 120)}`);
+    ck('  and no account number is in the refusal either',
+       !/accountNumber|wireRouting|achRouting|swift|taxId/i.test(userBody), userBody.slice(0, 160));
+    role = 'staff';
+    ck('nor a staff session', (await fetch(base + '/api/bank-accounts')).status === 403);
+    role = 'admin';
+
     const id = d.accounts[0].id;
     const pdf = Buffer.from('%PDF-1.4 a voided cheque').toString('base64');
     const up = await post(`/api/bank-accounts/${id}/docs`, { filename: 'voided cheque.pdf', base64: pdf });

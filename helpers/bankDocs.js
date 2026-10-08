@@ -50,7 +50,28 @@ function mount(app, cfg) {
         return true;
     };
 
+    // ── READING THESE IS ADMIN TOO, FROM 2026-10-08 ──────────────────────
+    // This route returned accountNumber, wireRouting, achRouting, swift and
+    // taxId for both companies to ANY signed-in session. The `admin` guard
+    // four lines above was applied to upload and to delete and not to the
+    // read — which reads as an oversight rather than a decision, because
+    // nothing is more sensitive on this route than the thing that was open.
+    //
+    // Found while assembling answers for Plaid's security questionnaire, and
+    // it is the kind of answer that fails one: APP_PASSWORD is four
+    // characters, shared, with no lockout, so "any signed-in session" is a
+    // low bar for a company's bank and routing numbers.
+    //
+    // ── WHAT THIS CHANGES FOR HER, AND HOW TO PUT IT BACK ────────────────
+    // ONE screen: the Bank tab in Documents (dashboard/documents.html
+    // bankInit, the only caller). Staff never reached it — the path is not in
+    // STAFF_ALLOWED_PATH_PREFIXES — so the change is that a `user`-role login
+    // now gets 403 there instead of the account numbers. Nothing prints these
+    // onto an invoice or a PDF: no helper outside this file reads
+    // accountNumber, wireRouting or achRouting at all, so no document changes.
+    // If Apsara wants the tab back for everyone, delete the two lines below.
     app.get('/api/bank-accounts', (req, res) => {
+        if (!admin(req, res)) return;
         try {
             const d = readAccounts(cfg);
             d.accounts = d.accounts.map((a) => ({ ...a, documents: listDocs(cfg, a.id) }));
