@@ -187,12 +187,21 @@ if (!todo.length) {
 // quiet about its own blind spot sends her looking at the wrong list.
 if (env === 'production') {
     console.log('── AND THE ONE I CANNOT SEE FROM HERE ────────────────────────────\n');
-    console.log('  BofA and Chase are OAuth institutions. Production keys alone are not');
-    console.log('  enough: Plaid\'s compliance centre must be complete — company profile,');
-    console.log('  application display information, the MSA and the security');
-    console.log('  questionnaire — and each institution shows as approved on');
-    console.log('  https://dashboard.plaid.com/settings/compliance/us-oauth-institutions\n');
-    console.log('  Plaid say access arrives "within hours of completing the registration');
-    console.log('  requirements". Until it does, Connect a bank will fail at the bank\'s');
-    console.log('  own site and nothing in Jarvis can tell you why.\n');
+    console.log('  BofA and Chase are OAuth institutions, so linking depends on Plaid');
+    console.log('  having REGISTERED this app with each of them. Nothing on this machine');
+    console.log('  knows whether that has happened. One page says:\n');
+    console.log('    https://dashboard.plaid.com/settings/compliance/us-oauth-institutions\n');
+    console.log('  If both show approved, go and link. If they do not, Connect a bank');
+    console.log('  fails at the BANK\'S own site and nothing in Jarvis can explain why —');
+    console.log('  so check the page first rather than debugging from this end.\n');
+    // Corrected 2026-10-08. The first version of this note said the
+    // compliance centre MUST be complete before any OAuth bank will
+    // connect. Plaid's OAuth guide is narrower: "If you are on a Trial
+    // plan, you do not need to complete these requirements until you
+    // upgrade to a paid plan." Production access can therefore be enough
+    // on its own, and telling her otherwise sent her to do paperwork when
+    // she could have been linking.
+    console.log('  On a TRIAL plan the compliance centre does not have to be complete');
+    console.log('  first — Plaid only require it on upgrade to a paid plan. On a paid');
+    console.log('  plan it does, and registration then takes hours, not minutes.\n');
 }
