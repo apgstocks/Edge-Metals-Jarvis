@@ -1,0 +1,64 @@
+# ── Dependabot ───────────────────────────────────────────────────────────
+# Apsara, 2026-10-08, attested to Plaid that Edge Metals monitors
+# end-of-life software and patches vulnerabilities within a defined SLA.
+# Before today there was no dependency monitoring of any kind: the only
+# workflow in .github is path-filtered to the iOS build, and `npm audit` had
+# never run anywhere. This is the half that raises the patch; the half that
+# NOTICES is helpers/depAudit.js, on the nightly sweep she already reads.
+#
+# ── WHY BOTH, AND NOT JUST THIS ─────────────────────────────────────────
+# Dependabot reads the REPOSITORY. What is actually exposed is whatever is
+# installed on the VM, and those are not the same thing here: the lockfile
+# is a month out of step with package.json, and deployment is `git pull`
+# typed by hand. So this keeps the repo current and depAudit.js reports on
+# the running machine. Either alone would attest to the wrong thing.
+#
+# ── GROUPED, AND WEEKLY, ON PURPOSE ─────────────────────────────────────
+# One person maintains this. Twenty open pull requests is the same as none,
+# because nobody reads them — so patch and minor updates arrive as ONE pull
+# request a week and majors come separately, where they can be read.
+#
+# NOTHING HERE MERGES ANYTHING. No auto-merge, by choice: this repo deploys
+# by hand to a single VM that runs the yard, and a dependency that updates
+# itself into production on a Tuesday is how the scale tickets stop
+# printing. A pull request is a suggestion; `bash ship.sh` is still hers.
+version: 2
+updates:
+  - package-ecosystem: "npm"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "06:00"
+      timezone: "America/Los_Angeles"
+    open-pull-requests-limit: 5
+    labels:
+      - "dependencies"
+    commit-message:
+      prefix: "deps"
+    groups:
+      # Everything safe, once a week, as one thing to read.
+      routine:
+        patterns: ["*"]
+        update-types: ["patch", "minor"]
+    ignore:
+      # ── NAMED, NOT SILENTLY SKIPPED ──────────────────────────────────
+      # puppeteer and whatsapp-web.js move together: whatsapp-web.js drives
+      # a real Chromium and pins what it can work with, so bumping puppeteer
+      # underneath it has broken the WhatsApp path before. npm's own audit
+      # fix for this chain is a semver-major DOWNGRADE, which is not a
+      # remediation. Majors for these two are read by a person, not grouped.
+      - dependency-name: "puppeteer"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "whatsapp-web.js"
+        update-types: ["version-update:semver-major"]
+
+  # The workflow files themselves. A pinned action that goes unmaintained is
+  # the same EOL problem one layer out, and it is the layer with repository
+  # write access.
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "monthly"
+    labels:
+      - "dependencies"

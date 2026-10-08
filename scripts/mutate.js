@@ -901,6 +901,39 @@ const MUTATIONS = [
       file: 'dashboard/documents.html', suites: ['carrier-invoices-route'],
       find: "    : (Number(r.paid) > 0.005",
       to:   "    : (false" },
+    // ── EOL / PATCH-SLA MONITORING — SHE ATTESTED TO IT, 2026-10-08 ───
+    // An attestation signed to Plaid and passed to her banks. Each of these
+    // is a way the monitor could go quietly blind while the tick stays on.
+    // NOTE: `clean: vulns.checked && findings.length === 0` is deliberately
+    // belt-and-braces — a broken scan ALSO pushes a finding, so dropping the
+    // `vulns.checked &&` changes nothing today and is not worth a mutation.
+    // It stays in the code because it keeps `clean` honest if that finding
+    // is ever removed. The mutation below tests the guard that CAN break.
+    { name: 'depaudit: the test guard swallows an injected stub too',
+      file: 'helpers/integritySweepJob.js', suites: ['dep-audit'],
+      find: "    if (process.env.JARVIS_TEST === '1' && !auditImpl) return { lines: [], findings: 0, dep: null };",
+      to:   "    if (process.env.JARVIS_TEST === '1') return { lines: [], findings: 0, dep: null };" },
+    { name: 'depaudit: a failed npm audit is swallowed instead of reported',
+      file: 'helpers/depAudit.js', suites: ['dep-audit'],
+      find: "    if (!vulns.checked) {",
+      to:   "    if (false) {" },
+    { name: 'depaudit: an unknown Node major is treated as supported',
+      file: 'helpers/depAudit.js', suites: ['dep-audit'],
+      find: "    } else if (!node.known) {",
+      to:   "    } else if (false) {" },
+    { name: 'depaudit: unmaintained packages stop being named',
+      file: 'helpers/depAudit.js', suites: ['dep-audit'],
+      find: "    for (const e of eolInUse) {",
+      to:   "    for (const e of []) {" },
+    { name: 'depaudit: the nightly job stops running the check at all',
+      file: 'helpers/integritySweepJob.js', suites: ['dep-audit'],
+      find: "    const deps = await depSection(auditImpl ? { auditImpl } : {});",
+      to:   "    const deps = { lines: [], findings: 0, dep: null };" },
+    { name: 'depaudit: a dependency finding alone no longer breaks the silence',
+      file: 'helpers/integritySweepJob.js', suites: ['dep-audit'],
+      find: "    res.clean = res.clean && deps.findings === 0;",
+      to:   "    res.clean = res.clean;" },
+
     // ── BANK AND ROUTING NUMBERS BEHIND THE ADMIN GUARD ───────────────
     { name: 'bankdocs: the account-number read loses its role check again',
       file: 'helpers/bankDocs.js', suites: ['bank-accounts'],

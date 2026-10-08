@@ -23,13 +23,77 @@ function subjectFor(res) {
     if (res.clean) return 'Jarvis: nothing to report';
     const n = res.total;
     const worst = res.findings[0];
+    // A ledger finding still names the subject when there is one, because
+    // that is what she acts on the same morning. A dependency finding alone
+    // gets its own subject rather than the misleading "0 things to look at".
+    if (!n) return 'Jarvis: a dependency needs attention';
     return `Jarvis: ${n} thing${n === 1 ? '' : 's'} to look at — ${worst ? worst.title.toLowerCase() : 'see inside'}`;
 }
 
-async function run({ send = true, force = false } = {}) {
+// ── THE DEPENDENCY SECTION ───────────────────────────────────────────────
+// Apsara, 2026-10-08, attested to Plaid that Edge Metals "monitors
+// end-of-life (EOL) software in use" and "patches identified
+// vulnerabilities within a defined SLA". Neither had anything behind it:
+// no dependency scanning anywhere, and the only GitHub workflow is
+// path-filtered to the iOS build. This is what makes the first one true and
+// gives the second something to measure against.
+//
+// ── IT RIDES THIS JOB AND NOT integritySweep.js, DELIBERATELY ───────────
+// integritySweep.run() is SYNCHRONOUS and calls every check synchronously
+// (integritySweep.js:329-331). `npm audit` is a subprocess, so putting it in
+// CHECKS would mean making that function async — and every caller of a
+// shared function would have to be found and changed to await it, for one
+// new check. This job is already async because it sends mail, so the audit
+// is awaited here and appended to the report. integritySweep.js is untouched.
+//
+// SILENT WHEN CLEAN, the same rule as the rest of this job: a dependency
+// section that says "nothing" every morning is one she stops reading.
+async function depSection({ auditImpl } = {}) {
+    // ── OFF UNDER JARVIS_TEST UNLESS A STUB IS HANDED IN ─────────────────
+    // The same doctrine helpers/drive.js uses, and for the same reason. The
+    // real check shells out to `npm audit`, which wants the registry — so
+    // without this guard every existing test that calls this job would make
+    // a network request, and tests/integrity-sweep.js's "nothing is sent
+    // when clean" went red the moment the section was added, because
+    // pdf-parse genuinely is unmaintained and the job correctly stopped
+    // being silent.
+    //
+    // That red was right about the code and wrong about the test's subject:
+    // that test is about the LEDGER sweep's silence, not about
+    // dependencies. So the dependency section is opt-in under test, and
+    // tests/dep-audit.js opts in with a stub on every call.
+    if (process.env.JARVIS_TEST === '1' && !auditImpl) return { lines: [], findings: 0, dep: null };
+    let dep = null;
+    try { dep = await require('./depAudit').run(auditImpl ? { auditImpl } : {}); }
+    catch (e) {
+        // A broken check reports itself. Silence here would mean the
+        // attestation is backed by a thing that stopped working.
+        return { lines: ['', 'DEPENDENCIES', '  the dependency check did not run: ' + String(e.message || e).slice(0, 200)],
+            findings: 1, dep: null };
+    }
+    if (!dep.findings.length) return { lines: [], findings: 0, dep };
+    const lines = ['', 'DEPENDENCIES AND END-OF-LIFE SOFTWARE'];
+    for (const f of dep.findings) {
+        lines.push(`  [${f.severity}] ${f.what}`);
+        lines.push(`      ${f.why}`);
+        lines.push(`      → ${f.action}`);
+    }
+    lines.push(`  (Node ${dep.node.version}${dep.node.eol ? `, supported until ${dep.node.eol}` : ''}`
+        + `; ${dep.packages == null ? 'package count unknown' : dep.packages + ' packages installed'})`);
+    return { lines, findings: dep.findings.length, dep };
+}
+
+async function run({ send = true, force = false, auditImpl = null } = {}) {
     const sweep = require('./integritySweep');
     const res = sweep.run();
-    const text = sweep.reportText(res);
+    const deps = await depSection(auditImpl ? { auditImpl } : {});
+    const text = sweep.reportText(res) + (deps.lines.length ? '\n' + deps.lines.join('\n') + '\n' : '');
+
+    // A dependency finding is a reason to send even when the ledger agrees
+    // with itself. Recomputed rather than mutating res, so the sweep's own
+    // notion of clean is still reported unchanged to any caller reading it.
+    res.clean = res.clean && deps.findings === 0;
+    res.dependencies = deps.dep;
 
     if (!send) return { ...res, text, sent: false, why: 'send:false' };
     if (res.clean && !force && process.env.SWEEP_SEND_ALWAYS !== '1') {
