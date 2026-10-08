@@ -144,13 +144,19 @@ try {
         for (const r of rows.filter((x) => !has(x.plaid_account_id))) {
             say(`          ${r.id} (${r.company || 'no company'})`);
         }
-        todo.push('AFTER LINKING, put each Plaid account_id into '
-            + 'qb-settings/bank-accounts.json as plaid_account_id. Right now both rows '
-            + 'carry only a local slug, so every transaction will arrive with no company '
-            + 'and no bank against it — the feed fills, and the reconciliation shows '
-            + 'ZERO for both banks because it filters on them. That looks exactly like '
-            + '"Plaid sent nothing", so it is the wrong thing to debug. The ids are in '
-            + 'the response from Connect a bank, and on /bank-match under each linked bank.');
+        // NOT a task for her — exchange() fills this in on link, matching
+        // Plaid's mask against the accountNumber already stored. Listed
+        // anyway because until a bank IS linked it reads as unjoined, and
+        // a preflight that stays silent about the most consequential field
+        // in the file is not worth running. Phrased as "expect this to
+        // clear" rather than "go and do this".
+        todo.push('Nothing to do — this clears itself when you link. exchange() matches '
+            + 'Plaid\'s last-four against the account number already in the file and '
+            + 'writes plaid_account_id. Run this script again after linking: if it still '
+            + 'says NO, the join did not happen, and THAT is worth stopping for — '
+            + 'without it every transaction arrives with no company and no bank, the feed '
+            + 'fills, and the reconciliation reports ZERO for both banks because it '
+            + 'filters on them. It looks exactly like "Plaid sent nothing".');
     }
 } catch (e) { say(no(`chart check failed: ${e.message}`)); }
 
