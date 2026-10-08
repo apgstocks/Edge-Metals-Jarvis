@@ -239,7 +239,14 @@ function buildCarrierRows(recs) {
     // Schneider: one row per Pay-by-Link order; paid only if a PAID mail exists.
     const ord = new Map();
     for (const r of by('pay_by_link', 'schneider')) { const c = ord.get(r.order) || { ...r, paid: false }; c.paid = c.paid || r.paid; ord.set(r.order, c); }
+    // `loads` travels as an ARRAY as well as in the prose `lane`. It was parsed
+    // and then flattened into "loads 3010354116, 3010355035" and thrown away,
+    // so the screen had a sentence where it needed a list — Apsara, 2026-10-08,
+    // wanting a row she can open to see "what is what". Splitting the AMOUNT
+    // across them is not possible and not attempted: Pay-by-Link bills one
+    // figure for the whole order and the email carries no per-load number.
     for (const o of ord.values()) rows.push({ carrier: 'schneider', ref: o.order, amount: o.amount, paid: o.paid ? o.amount : 0, invoice_date: o.date,
+        loads: o.loads.slice(),
         lane: o.loads.length ? `loads ${o.loads.join(', ')}` : null, paid_dates: o.paid ? [o.date] : [], evidence: o.paid ? 'Schneider PAID mail' : 'Schneider Pay by Link' });
     return { rows, skipped };
 }

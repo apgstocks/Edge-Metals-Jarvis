@@ -217,6 +217,61 @@ const ck = (n, c, x) => { if (c) { pass++; console.log('  PASS  ' + n); } else {
     fs3.writeFileSync(cfg.CARRIER_INVOICES_FILE, '[]');
 }
 
+
+    // ── WHAT AN INVOICE COVERS, ON CLICK ─────────────────────────────────
+    // Apsara, 2026-10-08: "One container per row should be there.when i click
+    // on tht row,i can show detailed split of what is what".
+    //
+    // Two facts had to come first, and both say no to the literal ask:
+    //   · helpers/carrierRemittance.js's own header — these three bill
+    //     "domestic loads (CA→TX, Oakland→Eccomelt), not containers". There is
+    //     no container number in the data to put one per row.
+    //   · one Schneider order settles several LOADS for ONE figure. Her
+    //     $9,700 row covers two. The email carries no per-load amount, so a
+    //     row each would mean inventing two numbers that add up.
+    // So the row opens instead, and says what it covers without dividing it.
+    console.log('\n=== what the invoice covers, without inventing a split ===');
+
+    const page2 = fs.readFileSync(path.join(ROOT, 'dashboard/documents.html'), 'utf8');
+    ck('the loads survive as a LIST, not only as prose',
+       /loads: Array\.isArray\(i\.loads\)/.test(
+         fs.readFileSync(path.join(__dirname, '..', 'helpers/carrierInvoices.js'), 'utf8')),
+       'they were parsed and flattened into "loads A, B" and thrown away');
+    ck('  and the parser passes them through',
+       /loads: o\.loads\.slice\(\)/.test(
+         fs.readFileSync(path.join(__dirname, '..', 'helpers/carrierRemittance.js'), 'utf8')));
+
+    ck('the row opens on click', /class="ciRow"/.test(page2) && /ciSplit/.test(page2));
+    ck('  and Pay still works without opening it',
+       /ev\.target\.closest\('button'\)/.test(page2),
+       'clicking Pay must not also toggle the row');
+
+    // The helper, exercised. This is where a guessed split would show up.
+    const sm = page2.match(/function splitOf\(r\) \{[\s\S]*?\n\}/);
+    ck('splitOf is there to test', !!sm);
+    if (sm) {
+        const splitOf = new Function('r', 'esc',
+            sm[0].replace(/^function splitOf\(r\) \{/, '').replace(/\}$/, ''));
+        const run = (r) => splitOf(r, (x) => String(x == null ? '' : x));
+
+        const two = run({ loads: ['3010354116', '3010355035'], amount: 9700, carrier: 'schneider' });
+        ck('two loads are both listed', /3010354116/.test(two) && /3010355035/.test(two));
+        ck('  the invoice total is shown once', (two.match(/9,700\.00/g) || []).length >= 1);
+        ck('  and NEITHER load is given a made-up share',
+           !/4,850\.00/.test(two) && /not split/.test(two),
+           'half of 9,700 is 4,850 — that number must not appear anywhere');
+        ck('  with the reason in her words', /carrier did not/.test(two));
+
+        const one = run({ loads: ['3010756059'], amount: 4450, carrier: 'schneider' });
+        ck('a single load DOES carry the whole amount', /4,450\.00/.test(one) && !/not split/.test(one),
+           'there is nothing to divide, so saying "not split" would be noise');
+
+        const none = run({ loads: [], amount: 100, lane: null, carrier: 'ntg' });
+        ck('an invoice naming no loads says so', /does not say which loads/.test(none));
+        const prose = run({ loads: [], amount: 100, lane: 'Oakland to Frisco', carrier: 'ntg' });
+        ck('  and falls back to the prose when there is some', /Oakland to Frisco/.test(prose));
+    }
+
     server.close();
 
 console.log(`\n${pass} passed, ${fail} failed`);

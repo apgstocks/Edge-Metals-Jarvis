@@ -876,6 +876,26 @@ const MUTATIONS = [
       find: "+ '<table class=\"data-table\"><thead><tr><th>Invoice</th><th>Date</th><th>Container / Booking</th>'",
       to:   "+ '<table class=\"data-table\"><thead><tr><th>Invoice</th><th>Date</th><th>Paid</th><th>Container / Booking</th>'" },
 
+    // ── WHAT AN INVOICE COVERS ────────────────────────────────────────
+    // The expensive failure here is not a missing list — it is a GUESSED
+    // split, two numbers that add up and mean nothing.
+    { name: 'carriers: the invoice total is divided evenly between its loads',
+      file: 'dashboard/documents.html', suites: ['carrier-invoices-route'],
+      find: "        + (loads.length === 1 ? m(r.amount) : 'not split — ' + esc(r.carrier.toUpperCase()) + ' billed one figure for the order')",
+      to:   '        + m(r.amount / loads.length)' },
+    { name: 'carriers: the loads are dropped on the way into the store',
+      file: 'helpers/carrierInvoices.js', suites: ['carrier-invoices-route'],
+      find: '                loads: Array.isArray(i.loads) ? i.loads.slice() : [],',
+      to:   '                loads: [],' },
+    { name: 'carriers: the parser stops passing the load list through',
+      file: 'helpers/carrierRemittance.js', suites: ['carrier-invoices-route', 'carrier-remittance'],
+      find: '        loads: o.loads.slice(),',
+      to:   '        loads: [],' },
+    { name: 'carriers: clicking Pay also opens the row',
+      file: 'dashboard/documents.html', suites: ['carrier-invoices-route'],
+      find: "        if (ev.target.closest('button')) return;   // Pay is its own action",
+      to:   '        void ev;' },
+
     // ── MANUAL CARRIER INVOICES, AND THE ROW THEY MAY NOT TOUCH ───────
     { name: 'carriers: an IMPORTED invoice becomes payable by hand',
       file: 'helpers/carrierInvoices.js', suites: ['carrier-invoices-route'],

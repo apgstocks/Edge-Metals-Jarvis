@@ -1679,6 +1679,40 @@ function payCell(r) {
     + '" data-left="' + left.toFixed(2) + '" style="font-size:11px;padding:3px 9px">Pay</button>';
 }
 
+// ── WHAT THIS INVOICE COVERS ─────────────────────────────────────────────
+// Apsara, 2026-10-08: "One container per row should be there.when i click on
+// tht row,i can show detailed split of what is what".
+//
+// ── THEY ARE LOADS, NOT CONTAINERS, AND THE AMOUNT DOES NOT DIVIDE ───────
+// helpers/carrierRemittance.js says it in its own header: these three bill
+// "domestic loads (CA→TX, Oakland→Eccomelt), not containers". There is no
+// container number in a Schneider Pay-by-Link mail to put one per row.
+//
+// And one order can settle several loads for ONE figure — her $9,700 row
+// covers 3010354116 and 3010355035. The email carries no per-load amount, so
+// splitting it would mean inventing two numbers that add up. This lists what
+// the invoice covers and says the amount is for the order, which is the
+// honest version of the same question.
+function splitOf(r) {
+  const loads = Array.isArray(r.loads) ? r.loads.filter(Boolean) : [];
+  const m = (n) => '$' + Number(n || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  if (!loads.length) {
+    return '<span style="font-size:12px;opacity:.7">'
+      + (r.lane ? 'Covers: ' + esc(r.lane) : 'This invoice does not say which loads it covers.')
+      + '</span>';
+  }
+  return '<div style="font-size:12px;margin-bottom:6px">This invoice covers <b>' + loads.length
+      + ' load' + (loads.length === 1 ? '' : 's') + '</b>, billed as one amount of <b>' + m(r.amount) + '</b>:</div>'
+    + '<table class="data-table" style="margin:0"><thead><tr><th>Load</th><th>Share of the invoice</th></tr></thead><tbody>'
+    + loads.map((l) => '<tr><td>' + esc(l) + '</td><td style="opacity:.65">'
+        + (loads.length === 1 ? m(r.amount) : 'not split — ' + esc(r.carrier.toUpperCase()) + ' billed one figure for the order')
+        + '</td></tr>').join('')
+    + '</tbody></table>'
+    + (loads.length > 1 ? '<div style="font-size:11px;opacity:.6;margin-top:6px">'
+        + 'Jarvis will not divide ' + m(r.amount) + ' between them: the carrier did not, and a '
+        + 'guessed split would be two numbers that happen to add up.</div>' : '');
+}
+
 async function addCarrierInvoice(c) {
   const ref = prompt(CARRIER_KEYS[c] + ' — the number on the invoice:');
   if (ref === null || !String(ref).trim()) return;
@@ -1743,9 +1777,20 @@ async function loadCarrier(c) {
         + '<span>Edge Metals · ' + s.count + ' invoices · billed ' + m(s.billed) + ' · <b>outstanding ' + m(s.outstanding) + '</b></span>'
         + '<button id="ciAdd_' + c + '" class="btn" style="font-size:11px;padding:4px 10px">Add invoice</button></div>'
       + '<table class="data-table"><thead><tr><th>' + esc(CARRIER_KEYS[c]) + '</th><th>Date</th><th>Detail</th><th style="text-align:right">Amount</th><th style="text-align:right">Paid</th><th>Paid on</th><th>Status</th><th>Source</th><th></th></tr></thead><tbody>'
-      + rows.map((r) => '<tr><td>' + esc(r.ref) + '</td><td>' + esc(r.invoice_date || '') + '</td><td>' + esc(r.lane || '') + '</td><td style="text-align:right">' + m(r.amount) + '</td><td style="text-align:right">' + m(r.paid) + '</td><td style="white-space:nowrap">' + esc(paidOn(r)) + '</td><td>' + esc(r.status) + '</td><td style="font-size:11px">' + esc(r.evidence || '') + '</td>'
-          + '<td style="white-space:nowrap">' + payCell(r) + '</td></tr>').join('')
+      + rows.map((r, i) => '<tr class="ciRow" data-i="' + i + '" style="cursor:pointer"><td>' + esc(r.ref) + '</td><td>' + esc(r.invoice_date || '') + '</td><td>' + esc(r.lane || '') + '</td><td style="text-align:right">' + m(r.amount) + '</td><td style="text-align:right">' + m(r.paid) + '</td><td style="white-space:nowrap">' + esc(paidOn(r)) + '</td><td>' + esc(r.status) + '</td><td style="font-size:11px">' + esc(r.evidence || '') + '</td>'
+          + '<td style="white-space:nowrap">' + payCell(r) + '</td></tr>'
+          + '<tr class="ciSplit" data-i="' + i + '" style="display:none"><td colspan="9" style="padding:10px 14px;background:rgba(255,255,255,.03)">'
+          + splitOf(r) + '</td></tr>').join('')
       + '</tbody></table>';
+    // Click the invoice row to open what it covers. Not a hover: on the phone
+    // there is no hover, and this table is read on one.
+    box.querySelectorAll('.ciRow').forEach((tr) => {
+      tr.onclick = (ev) => {
+        if (ev.target.closest('button')) return;   // Pay is its own action
+        const d = box.querySelector('.ciSplit[data-i="' + tr.dataset.i + '"]');
+        if (d) d.style.display = d.style.display === 'none' ? '' : 'none';
+      };
+    });
     box.querySelectorAll('.ciPay').forEach((b) => { b.onclick = () => payCarrierInvoice(c, b.dataset.id, b.dataset.ref, Number(b.dataset.left)); });
     const add = $('ciAdd_' + c);
     if (add) add.onclick = () => addCarrierInvoice(c);

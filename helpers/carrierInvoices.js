@@ -61,7 +61,13 @@ async function upsertMany(items) {
             const at = arr.findIndex((r) => r.key === key);
             const base = { company: 'Edge Metals', key, carrier: i.carrier, ref: String(i.ref).trim(), amount, paid,
                 status: statusOf(amount, paid), invoice_date: i.invoice_date || null, lane: i.lane || null,
-                paid_dates: i.paid_dates || [], evidence: i.evidence || null, updatedAt: new Date().toISOString() };
+                paid_dates: i.paid_dates || [], evidence: i.evidence || null,
+                // The loads this invoice settles, as a list. One Schneider
+                // order can cover several; the row keeps them so the screen
+                // can show WHICH, without pretending to know how the amount
+                // divides between them — the carrier billed one figure.
+                loads: Array.isArray(i.loads) ? i.loads.slice() : [],
+                updatedAt: new Date().toISOString() };
             if (at === -1) { arr.push({ id: `CI_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`, ...base, createdAt: base.updatedAt }); added++; }
             else if (arr[at].locked) { /* hers — leave */ }
             else { arr[at] = { ...arr[at], ...base }; updated++; }
