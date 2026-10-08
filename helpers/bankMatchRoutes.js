@@ -409,6 +409,69 @@ function mount(app, cfg) {
         } catch (e) { res.status(500).json({ error: e.message }); }
     });
 
+    // ── POST /api/bank/review/match ──────────────────────────────────────
+    // Apsara, 2026-10-08: "wire them".
+    //
+    // ── ONLY THE MATCH BUTTON IS WIRED, AND THAT IS THE POINT ───────────
+    // The queue shows five states. This route serves exactly one of them,
+    // because a match is the only action that CREATES NOTHING — it ties a
+    // bank row to a payment she already recorded, so no money moves and no
+    // figure changes. That is what makes it safe to offer in bulk and safe
+    // for the overnight auto-tick.
+    //
+    // "Add as a carrier bill" is a different animal wearing a similar
+    // button: it writes a new record into her books. It goes through
+    // ledgerPlan/ledgerApply — verify, preview the per-supplier diff,
+    // confirm, apply with an undo — and until that is wired the screen
+    // renders those rows WITHOUT a button rather than with a dead one.
+    // Half-wiring a create is worse than not wiring it.
+    //
+    // The row must still be in the queue as a `match`. The screen's idea of
+    // the state is from whenever it last loaded; the server recomputes and
+    // refuses if the row has moved on — the same world-moved guard as
+    // ledgerApply, for the same reason.
+    app.post('/api/bank/review/match', async (req, res) => {
+        if (!admin(req, res)) return;
+        const id = String((req.body || {}).id || '').trim();
+        if (!id) return res.status(400).json({ error: 'which row?' });
+        try {
+            const ledger = require('./bankLedger');
+            const BO = require('./bankOut');
+            const BR = require('./bankReview');
+            const BRec = require('./bankReconcile');
+            const BB = require('./booksBuild');
+
+            const rows = ledger.list();
+            if (!rows.some((r) => r && r.id === id)) {
+                return res.status(404).json({ error: 'no bank row with that id' });
+            }
+
+            const built = BB.build({});
+            const results = BRec.bankAccounts()
+                .flatMap((a) => BO.sweep({ rows, lines: built.lines, code: a.code }).results);
+            const row = BR.queue({ withdrawalResults: results }).rows.find((r) => r.id === id);
+
+            if (!row) {
+                return res.status(409).json({ error: 'that row is no longer in the review queue — '
+                    + 'it may already be matched, or excluded. Reload and look again.' });
+            }
+            if (row.state !== 'match') {
+                // Named states, not a generic refusal: "Choose" and "Add"
+                // are different problems and she needs to know which.
+                return res.status(409).json({ error: row.state === 'choose'
+                    ? 'several recorded payments fit this exactly — Jarvis will not pick one'
+                    : `this row is "${row.label}", not a match — it would CREATE a record, which `
+                      + 'goes through the plan screen so you can see the effect first',
+                    state: row.state, why: row.why });
+            }
+
+            const keys = ((row.match || {}).payments || []).map((p) => p.key);
+            const saved = await ledger.markMatched(id, { keys, why: row.why },
+                { by: req.profile || req.role || null, how: 'her' });
+            res.json({ ok: true, row: saved, matched: keys.length });
+        } catch (e) { res.status(400).json({ error: e.message }); }
+    });
+
     // ── GET /api/bank/reconcile ──────────────────────────────────────────
     // Apsara, 2026-10-08: "so that i dont need to look out for statements
     // whether payment received or sent ever again."

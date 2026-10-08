@@ -70,7 +70,17 @@ const DEFAULTS = {
 // the shapes silently disagree.
 function withdrawals(rows = []) {
     return (rows || [])
-        .filter((r) => r && !r.pending && !r.excluded && num(r.spent) > CENT)
+        // ── AND NOT ALREADY TICKED OFF ──────────────────────────────────
+        // `matched` is set by bankLedger.markMatched when she presses Match
+        // or the overnight auto-tick does. Without this the row comes
+        // straight back next time the queue is built, the button looks
+        // broken, and she presses it again — which is how a feature gets
+        // abandoned on its first morning.
+        //
+        // Same shape as `excluded` above and for the same reason: a row she
+        // has dealt with must leave the worklist, while still being
+        // COUNTED and reversible. Silenced is never hidden.
+        .filter((r) => r && !r.pending && !r.excluded && !r.matched && num(r.spent) > CENT)
         .map((r) => ({
             id: r.id,
             date: day(r.date),

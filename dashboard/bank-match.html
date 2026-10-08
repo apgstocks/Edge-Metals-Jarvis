@@ -519,6 +519,7 @@ async function renderReview() {
       <div class="note">${esc(d.error)}</div></div>`;
     return;
   }
+  STATE.review = d;
   const q = d.queue || { rows: [], counts: {} };
   const out = [];
 
@@ -546,6 +547,20 @@ async function renderReview() {
     </div><div class="note">Only exact matches. Anything combined, approximate or ambiguous stays here.</div></div>`);
   }
 
+  /* ── THE ROWS THAT WOULD CREATE A RECORD GET NO BUTTON YET ──────────
+     "Add as a carrier bill" writes a new record into her books. It goes
+     through ledgerPlan/ledgerApply — verify, preview the per-supplier
+     diff, confirm, apply with an undo — and that is not wired. So those
+     rows show WHAT Jarvis would do, as a label, and no button.
+     A dead button is worse than a missing one: she presses it, nothing
+     happens, and she stops trusting the screen. */
+  const creates = q.rows.filter((r) => r.state === 'add' || r.state === 'choose' || r.state === 'ask');
+  if (creates.length) {
+    out.push(`<div class="card"><div class="note">${creates.length} row(s) below would CREATE a record
+      rather than tie two together. Those go through the plan screen, so you can see what each one does
+      to what you owe before it happens — not built yet, so they are listed without a button.</div></div>`);
+  }
+
   out.push('<div class="card">' + q.rows.map((r) => {
     const warn = r.state === 'choose' ? ' style="color:var(--status-warning)"' : '';
     return `<div class="row1" style="margin:6px 0; align-items:flex-start;">
@@ -555,13 +570,58 @@ async function renderReview() {
         <div class="note" style="margin:2px 0 0">${esc(r.why || '')}</div>
       </span>
       <span class="amt" style="font-size:13px; white-space:nowrap;">${money(r.amount)}</span>
-      <button class="btn ${r.state === 'match' ? 'go' : ''}" data-reviewact="${esc(r.id)}"
-        data-state="${esc(r.state)}">${esc(r.label)}</button>
+      ${r.state === 'match'
+        ? `<button class="btn go" data-reviewmatch="${esc(r.id)}">Match</button>`
+        : `<span class="chip ${r.state === 'choose' ? 'warn' : ''}" title="${esc(r.why || '')}">${esc(r.label)}</span>`}
     </div>`;
   }).join('') + '</div>');
 
   $('review').innerHTML = out.join('');
 }
+
+/* ── THE TWO BUTTONS THAT EXIST ────────────────────────────────────────
+   Match only. See renderReview's note: a match ties two existing records
+   together and creates nothing, which is what makes it safe to press in
+   bulk. Anything that CREATES goes through the plan screen. */
+async function doMatch(id) {
+  try {
+    const r = await api('/api/bank/review/match', { body: { id } });
+    toast(`Matched · ${r.matched} payment(s)`, 'good');
+    return true;
+  } catch (e) {
+    /* 409 means the row moved on since the page loaded — already matched,
+       excluded, or no longer an exact match. The server recomputes rather
+       than trusting what the screen thinks, so this is the honest answer
+       and not a failure. */
+    toast(e.message, 'bad');
+    return false;
+  }
+}
+
+document.addEventListener('click', async (ev) => {
+  const one = ev.target.closest('[data-reviewmatch]');
+  if (one) {
+    one.disabled = true;
+    if (await doMatch(one.getAttribute('data-reviewmatch'))) renderReview();
+    else { one.disabled = false; renderReview(); }
+    return;
+  }
+  const all = ev.target.closest('[data-reviewall]');
+  if (all) {
+    all.disabled = true;
+    /* One at a time, deliberately — bankLedger.markMatched is one row, one
+       lock, one atomic write. A failure half way therefore leaves the ones
+       before it genuinely matched and SAYS SO, instead of one opaque batch
+       that either worked or did not. */
+    const ids = ((STATE.review && STATE.review.queue.rows) || [])
+      .filter((r) => r.state === 'match').map((r) => r.id);
+    let ok = 0;
+    for (const id of ids) { if (await doMatch(id)) ok += 1; else break; }
+    toast(ok === ids.length ? `Matched all ${ok}` : `Matched ${ok} of ${ids.length} — stopped at the first problem`,
+      ok === ids.length ? 'good' : 'bad');
+    renderReview();
+  }
+});
 
 async function load() {
   try {

@@ -337,6 +337,41 @@ function upsert(existingRows, incoming) {
 // Her instruction, 2026-10-05: hidden from the worklist, still counted, and
 // reversible. Every call leaves a history line, because "why is this
 // excluded" is a question asked months later by someone else.
+// ── TICKING A ROW OFF AGAINST A PAYMENT SHE ALREADY RECORDED ────────────
+// Apsara, 2026-10-08, on the review queue: "like qb with match,post".
+//
+// A MATCH CREATES NOTHING. It ties a bank row to a record that already
+// exists, so no money moves and no figure changes — which is exactly why
+// it is the one action safe to offer in bulk, and the one the overnight
+// auto-tick is allowed to take. "Post" is the other button and it CREATES
+// a record; the two look alike on screen and must never be confused here.
+//
+// Stored on the row, in `matched`, which HERS already preserves across a
+// re-sync (see the note on BANK_FIELDS above) — so a bank restating a
+// ticked row surfaces as drift rather than quietly losing the tick.
+//
+// REVERSIBLE, and the history says who and how. `how` is 'auto' or 'her':
+// the morning list has to be able to name what Jarvis ticked by itself,
+// because an auto-tick she never saw is the one most worth being able to
+// find again.
+function setMatched(rows, id, match, { by = null, how = 'her' } = {}) {
+    const out = (rows || []).map((r) => {
+        if (r.id !== id) return r;
+        const at = new Date().toISOString();
+        return {
+            ...r,
+            matched: match ? { at, by: by || null, how, keys: (match.keys || []) } : null,
+            history: (r.history || []).concat([{
+                at, by: by || null,
+                what: match ? `matched to a recorded payment (${how})` : 'match undone',
+                why: match && match.why ? match.why : null,
+            }]),
+        };
+    });
+    const hit = out.find((r) => r.id === id) || null;
+    return { rows: out, row: hit };
+}
+
 function setExcluded(rows, id, excluded, { reason = null, by = null } = {}) {
     const out = (rows || []).map((r) => {
         if (r.id !== id) return r;
@@ -421,6 +456,21 @@ async function exclude(id, reason, by) {
     return row;
 }
 
+// Persisted the same way exclude/include are — one mutateJson, one lock,
+// one atomic write. Deliberately NOT a bulk function: "match all" is the
+// screen pressing this N times, so a failure half way leaves N-1 ticked
+// and says so, rather than one opaque batch that either worked or did not.
+async function markMatched(id, match, opts = {}) {
+    let row = null;
+    await mutateJson(FILE(), [], (all) => {
+        const current = Array.isArray(all) ? all : [];
+        const r = setMatched(current, id, match, opts);
+        row = r.row;
+        return r.rows;
+    });
+    return row;
+}
+
 async function include(id, by) {
     let row = null;
     await mutateJson(FILE(), [], (all) => {
@@ -435,5 +485,5 @@ async function include(id, by) {
 module.exports = {
     FILE, fromPlaid, upsert, setExcluded, worklist, summary,
     list, ingestPlaid, exclude, include,
-    companyOf, bankOf, SWIFT_TO_BANK, readAccounts, accountsFile, joinPlaidAccounts, BANK_FIELDS, HERS, actedOn,
+    companyOf, bankOf, SWIFT_TO_BANK, readAccounts, accountsFile, joinPlaidAccounts, setMatched, markMatched, BANK_FIELDS, HERS, actedOn,
 };

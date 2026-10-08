@@ -159,6 +159,64 @@ const sid = ((await req('POST', '/login', { body: { password: process.env.ADMIN_
        JSON.stringify(after.queue.rows.map((r) => r.id)));
 }
 
+// ── D2 — PRESSING MATCH ──────────────────────────────────────────────────
+// Apsara, 2026-10-08: "wire them". Only ONE of the five states is wired,
+// and the restraint is the design: a match CREATES NOTHING — it ties a
+// bank row to a payment she already recorded — which is what makes it safe
+// to press in bulk and safe for an overnight auto-tick. Anything that
+// creates a record goes through the plan screen.
+{
+    section('D2 — the Match button');
+    // A withdrawal with a supplier payment behind it, so the queue calls it
+    // a match rather than offering to create something.
+    const bills = require(path.join(ROOT, 'helpers/bills'));
+    await bills.addBill({ supplier: 'Hugo', date: '2026-05-01', container_no: 'MATCHME1',
+        supplier_price: 0.30 });
+
+    const paired = { id: 'bk3', date: '2026-05-02', desc: 'WIRE TO HUGO', party: 'Hugo',
+        category: '', spent: 7777, received: 0, amount: 7777, direction: 'out',
+        bank: 'BofA', company: 'Edge Metals INC', pending: false, excluded: false };
+    const all = JSON.parse(fs.readFileSync(process.env.BANK_TX_FILE, 'utf8'));
+    fs.writeFileSync(process.env.BANK_TX_FILE, JSON.stringify(all.concat([paired]), null, 2));
+
+    // Nothing in her books pays 7,777, so this is NOT a match — and the
+    // route must refuse rather than tick off a row that matches nothing.
+    const wrong = await req('POST', '/api/bank/review/match', { sid, body: { id: 'bk3' } });
+    ck('a row that is not an exact match is REFUSED', wrong.status === 409,
+       `${wrong.status} ${JSON.stringify(wrong.json)}`);
+    ck('  and says which state it actually is', !!(wrong.json || {}).state,
+       JSON.stringify(wrong.json));
+    ck('  and for an "add" row, says it would CREATE a record',
+       /CREATE a record/.test(JSON.stringify(wrong.json)) || (wrong.json || {}).state === 'choose',
+       JSON.stringify(wrong.json));
+
+    const missing = await req('POST', '/api/bank/review/match', { sid, body: { id: 'nope' } });
+    ck('an unknown row is a 404', missing.status === 404, String(missing.status));
+    ck('a row id is required', (await req('POST', '/api/bank/review/match', { sid, body: {} })).status === 400);
+
+    // ── AND A ROW THAT IS TICKED LEAVES THE QUEUE ────────────────────────
+    // Without this it comes straight back, the button looks broken, and she
+    // presses it again — which is how a feature is abandoned on its first
+    // morning.
+    const ledger = require(path.join(ROOT, 'helpers/bankLedger'));
+    await ledger.markMatched('bk3', { keys: ['x'], why: 'test' }, { by: 'test', how: 'her' });
+    const after = (await req('GET', '/api/bank/review', { sid })).json;
+    ck('a matched row leaves the review queue',
+       !after.queue.rows.some((r) => r.id === 'bk3'),
+       JSON.stringify(after.queue.rows.map((r) => r.id)));
+
+    // Silenced is never hidden: the tick is on the row, reversible, and
+    // the history says who and how.
+    const saved = ledger.list().find((r) => r.id === 'bk3');
+    ck('  but the row still exists, with the tick on it', !!saved && !!saved.matched,
+       JSON.stringify(saved && saved.matched));
+    ck('  recording who and whether it was auto or her',
+       saved.matched.by === 'test' && saved.matched.how === 'her', JSON.stringify(saved.matched));
+    ck('  and a history line that can be read back later',
+       (saved.history || []).some((h) => /matched to a recorded payment/.test(h.what)),
+       JSON.stringify(saved.history));
+}
+
 // ── E — AND A HUMAN CAN REACH IT ────────────────────────────────────────
 // helpers/reconcile.js is the precedent: it worked perfectly from 3
 // September and had no screen, so nobody used it. A route with no client
@@ -183,8 +241,21 @@ const sid = ((await req('POST', '/login', { body: { password: process.env.ADMIN_
        /Only exact matches/.test(page));
     // Buttons come from the server's state vocabulary; the page must not
     // invent an action the server will not perform.
-    ck('  the button label comes from the server, not the page',
-       /data-reviewact=.*\$\{esc\(r\.id\)\}/.test(page) && /\$\{esc\(r\.label\)\}/.test(page));
+    ck('  Match is a button and posts to the route',
+       /data-reviewmatch=/.test(page) && page.includes("api('/api/bank/review/match'"));
+    // A dead button is worse than a missing one: she presses it, nothing
+    // happens, and she stops trusting the screen. So rows that would
+    // CREATE a record render as a label, not a control.
+    // No `||` fallback. My first version offered a second pattern that
+    // matched whether or not the ternary was keyed on the state, so the
+    // mutation "the screen gives a dead button to rows it cannot act on"
+    // survived it. An alternative in an assertion is usually a way of
+    // making it pass.
+    ck('  a row that would create a record gets a label, not a button',
+       /\$\{r\.state === 'match'\s*\n\s*\? `<button class="btn go" data-reviewmatch/.test(page),
+       'the Match button must be behind a state check, not rendered for every row');
+    ck('  and the page says those go through the plan screen, which is not built',
+       /not built yet/.test(page));
 }
 
 server.close();
