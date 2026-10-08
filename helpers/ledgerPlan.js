@@ -76,6 +76,30 @@ const OPS = {
         optional: ['note'],
         what: (o) => `put container ${o.container_no} on bill ${o.bill_id}`,
     },
+    // ── DELETE. HER CALL, 2026-10-08: "add delete option" ────────────────
+    // I had left it out and written a test asserting the vocabulary had no
+    // delete in it, on the argument that accounting corrects by reversing.
+    // She asked for it; it is her ledger and her decision, and the argument
+    // was never that delete is unthinkable — helpers/ledgerBulkDelete.js
+    // has existed since 2026-09-29 because she asked for it then too.
+    //
+    // So this is not a new delete. It is the AGENT reaching the one that
+    // already exists, and inheriting its doctrine wholesale: plan, commit,
+    // restore, never a bare splice. That file's header lists the two quiet
+    // failures a bare delete causes — orphaned money (a payment allocated
+    // to an id nothing answers to, so it stops being attached to a cost
+    // without showing as missing anywhere) and no way back.
+    //
+    // The verifier below therefore refuses a delete that would orphan a
+    // payment, and the container check already refuses one that would make
+    // a container's cost disappear. Those two refusals are what make this
+    // safe to hand to a model; without them it is the most dangerous
+    // operation in the vocabulary by a distance.
+    'delete-bill': {
+        needs: ['bill_id'],
+        optional: ['note'],
+        what: (o) => `delete bill ${o.bill_id}`,
+    },
     'match-payment': {
         needs: ['payment_id', 'bill_id', 'amount'],
         optional: ['note'],
@@ -177,6 +201,14 @@ function simulateInto(steps, world) {
     const payById = new Map(payments.map((p) => [String(p.id), p]));
     const problems = [];
     const madeAt = new Map();      // step index → the bill it created
+    // ── EVERY CONTAINER THE PLAN DISTURBS, HOWEVER IT DISTURBS IT ───────
+    // Collected during simulation, NOT read off the plan text. The first
+    // version gathered them from `steps.filter(s => s.container_no)` — so a
+    // bare `delete-bill` never mentioned its cargo, the orphan check below
+    // never considered it, and deleting a bill with a container on it made
+    // that container's cost vanish with no complaint. The dangerous shape:
+    // a safety check that cannot see the case it exists for.
+    const disturbed = new Set();
     const bad = (i, why) => problems.push({ step: i + 1, why });
 
     const resolveBill = (v, i) => {
@@ -202,6 +234,7 @@ function simulateInto(steps, world) {
                 return bad(i, `container ${c} is not on bill ${b.id} — it is on `
                     + (containerHome(bills, c) || 'no bill at all'));
             }
+            disturbed.add(c);
             b.containers = b.containers.filter((x) => x !== c);
             return;
         }
@@ -221,7 +254,37 @@ function simulateInto(steps, world) {
                 return bad(i, `container ${c} is still on bill ${home} — take it off there first, `
                     + 'or it will be billed twice');
             }
+            disturbed.add(c);
             if (!b.containers.includes(c)) b.containers.push(c);
+            return;
+        }
+        if (s.op === 'delete-bill') {
+            const b = resolveBill(s.bill_id, i);
+            if (!b) return bad(i, `bill ${s.bill_id} is not there to delete`);
+            // ── ORPHANED MONEY, THE FAILURE THAT HIDES ──────────────────
+            // ledgerBulkDelete.js's header names it: a payment reaches a
+            // bill through its allocations, so deleting the bill leaves
+            // the payment allocated to an id nothing answers to. The money
+            // left the account and belongs to no container — it does not
+            // show as missing anywhere, it simply stops being a cost.
+            const stuck = payments.filter((p) => (p.applied || [])
+                .some((a) => String(a.bill_id) === String(b.id)));
+            if (stuck.length) {
+                return bad(i, `bill ${b.id} has ${stuck.length} payment(s) against it `
+                    + `(${stuck.map((p) => p.id).join(', ')}) — unmatch them first, or the money `
+                    + 'is left pointing at a bill that no longer exists');
+            }
+            // Its containers become homeless here; the plan-wide check at
+            // the end is what catches that, so a delete is allowed when
+            // the plan re-homes them and refused when it does not. They
+            // have to be ADDED to `disturbed` for that check to see them —
+            // the delete step never names them.
+            for (const c of (b.containers || [])) disturbed.add(String(c));
+            b.containers = [];
+            b.deleted = true;
+            const at = bills.indexOf(b);
+            if (at > -1) bills.splice(at, 1);
+            byId.delete(String(b.id));
             return;
         }
         if (s.op === 'match-payment') {
@@ -256,8 +319,7 @@ function simulateInto(steps, world) {
     // cost of sales entirely. Her sentence always pairs the two, but a
     // plan that drops the second half is exactly the shape a half-finished
     // generation produces, and it understates her costs silently.
-    const touched = new Set(steps.filter((s) => s.container_no).map((s) => String(s.container_no)));
-    for (const c of touched) {
+    for (const c of disturbed) {
         if (!containerHome(bills, c)) {
             problems.push({ step: 0, why: `container ${c} would end up on no bill at all — `
                 + 'its cost would disappear from the books' });
@@ -327,4 +389,93 @@ function describe(plan) {
     }));
 }
 
-module.exports = { OPS, verify, simulateInto, describe, diffOf, containersOf, containerHome, CENT };
+// ── WHAT GETS WRITTEN DOWN ──────────────────────────────────────────────
+// Apsara, 2026-10-08: "make it log every change we are doing in qb/books so
+// that we can check it later."
+//
+// helpers/audit.js already exists and is append-only — nothing in the
+// codebase deletes from it, deliberately, because a profile that can erase
+// a paid load can erase the evidence that money moved. This produces the
+// RECORD; audit.js stores it. Separated for the usual reason: a function
+// that both decides and persists cannot be run to see what it would say.
+//
+// ── WHAT A USEFUL ENTRY HAS IN IT ───────────────────────────────────────
+// "Bill BILL_914 updated" is the log everyone writes and nobody can use. In
+// March the question is never what changed, it is WHY, WHO asked, and what
+// the figures were on either side. So an entry carries four things:
+//
+//   asked     her sentence, verbatim. The agent's reading of it is an
+//             interpretation; this is the thing she actually typed, and it
+//             is the only part no later bug can corrupt.
+//   plan      the typed operations, so the interpretation can be judged
+//             against the sentence rather than taken on trust.
+//   diff      what each supplier was owed before and after. The figure she
+//             would have checked at the time, preserved at the time.
+//   reverse   the plan that undoes it. Recorded BEFORE applying, because
+//             after a bad apply is exactly when it cannot be computed.
+function auditRecord({ asked, plan, verification, actor = null, at = new Date() } = {}) {
+    const v = verification || {};
+    return {
+        kind: 'ledger-plan',
+        at: at.toISOString(),
+        actor: actor || null,
+        // Her words, untouched. Truncated only to keep one entry from
+        // filling the log, and the truncation is visible.
+        asked: String(asked || '').slice(0, 1000),
+        truncated: String(asked || '').length > 1000,
+        steps: describe(plan),
+        plan: Array.isArray(plan) ? plan : [],
+        ok: !!v.ok,
+        problems: v.problems || [],
+        // Only present when it verified — a diff from a plan that was
+        // refused would read as something that happened.
+        diff: v.ok && v.simulation ? v.simulation.diff : null,
+    };
+}
+
+// ── THE UNDO ────────────────────────────────────────────────────────────
+// Every operation has an inverse, and the vocabulary was chosen so that it
+// does. `idMap` carries the real ids the apply layer created, because a
+// reverse plan referring to "#2" undoes nothing once the plan is real.
+//
+// Reversed in REVERSE ORDER, which is the part that is easy to get wrong:
+// undoing a detach before undoing the attach that followed it would put a
+// container on two bills on the way back, and the verifier would refuse
+// its own undo.
+function reverseOf(plan, idMap = {}) {
+    const real = (v) => (isRef(v) && idMap[v] ? idMap[v] : v);
+    const out = [];
+    for (let i = (Array.isArray(plan) ? plan.length : 0) - 1; i >= 0; i -= 1) {
+        const s = plan[i];
+        if (s.op === 'create-bill') {
+            out.push({ op: 'delete-bill', bill_id: idMap[`#${i + 1}`] || `#${i + 1}`,
+                note: 'undo: this bill was created by a plan' });
+        } else if (s.op === 'detach-container') {
+            out.push({ op: 'attach-container', bill_id: real(s.bill_id), container_no: s.container_no,
+                note: 'undo: put it back where it was' });
+        } else if (s.op === 'attach-container') {
+            out.push({ op: 'detach-container', bill_id: real(s.bill_id), container_no: s.container_no,
+                note: 'undo: take it off again' });
+        } else if (s.op === 'match-payment') {
+            out.push({ op: 'unmatch-payment', payment_id: s.payment_id, bill_id: real(s.bill_id),
+                note: 'undo: unapply this payment' });
+        } else if (s.op === 'unmatch-payment') {
+            out.push({ op: 'match-payment', payment_id: s.payment_id, bill_id: real(s.bill_id),
+                amount: num(s.amount), note: 'undo: reapply this payment' });
+        } else if (s.op === 'delete-bill') {
+            // ── THE ONE THAT CANNOT BE EXPRESSED IN THE VOCABULARY ──────
+            // Un-deleting is a RESTORE, not a create: the bill had an id,
+            // a history and its own fields, and re-creating it would make
+            // a different record wearing the same supplier's name.
+            // ledgerBulkDelete.js already archives a deleted row for
+            // exactly this, so the undo is a restore from that archive and
+            // the entry says so rather than pretending otherwise.
+            out.push({ op: 'restore-bill', bill_id: real(s.bill_id),
+                note: 'undo: restore from the delete archive, not re-create' });
+        }
+    }
+    return out;
+}
+
+module.exports = { OPS, verify, simulateInto, describe, diffOf, containersOf, containerHome,
+    auditRecord, reverseOf, CENT };

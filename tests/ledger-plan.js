@@ -176,13 +176,19 @@ const WORLD = () => ({
 {
     section('D — it can only propose what Jarvis will do');
     ck('an operation outside the vocabulary is refused',
-       P.verify([{ op: 'delete-bill', bill_id: 'BILL_914' }], WORLD()).ok === false);
-    // Accounting corrects by REVERSING, never by erasing. audit.js already
-    // records why: a profile that can erase a paid load can erase the
-    // evidence that money moved.
-    ck('  and there is no delete in the vocabulary at all',
-       !Object.keys(P.OPS).some((k) => /delete|remove|erase|drop/.test(k)),
-       Object.keys(P.OPS).join(', '));
+       P.verify([{ op: 'rewrite-history', bill_id: 'BILL_914' }], WORLD()).ok === false);
+
+    // ── DELETE IS IN, AND IT IS HERS ─────────────────────────────────────
+    // I left it out and asserted here that the vocabulary had none, on the
+    // argument that accounting corrects by reversing. Apsara, 2026-10-08:
+    // "add delete option". Her ledger, her call — and the argument was
+    // never that delete is unthinkable, since ledgerBulkDelete.js has
+    // existed since 2026-09-29 because she asked for it then as well.
+    //
+    // What survives of the argument is the two guards below, which are the
+    // same two that file already enforces.
+    ck('delete IS in the vocabulary — her decision, 2026-10-08',
+       !!P.OPS['delete-bill'], Object.keys(P.OPS).join(', '));
 
     // A field the executor would ignore is worse than a rejected one: the
     // plan says something that will not happen, and the preview agrees
@@ -201,6 +207,112 @@ const WORLD = () => ({
     ck('an empty plan is refused', P.verify([], WORLD()).ok === false);
     ck('every problem names the step it came from',
        P.verify([{ op: 'nonsense' }], WORLD()).problems.every((p) => typeof p.step === 'number'));
+}
+
+// ── D2 — DELETE, AND THE TWO THINGS IT MUST NOT DO ───────────────────────
+{
+    section('D2 — deleting a bill');
+    const plain = P.verify([
+        { op: 'detach-container', bill_id: 'BILL_915', container_no: 'MSKU7654321' },
+        { op: 'attach-container', bill_id: 'BILL_914', container_no: 'MSKU7654321' },
+        { op: 'delete-bill', bill_id: 'BILL_915' },
+    ], WORLD());
+    ck('a bill emptied of its container can be deleted', plain.ok === true,
+       JSON.stringify(plain.problems));
+
+    // ── ORPHANED MONEY, THE FAILURE THAT HIDES ───────────────────────────
+    // ledgerBulkDelete.js's header names it: a payment reaches a bill
+    // through its allocations, so deleting the bill leaves the payment
+    // pointing at an id nothing answers to. The money left the account and
+    // belongs to no container — and it shows as missing nowhere.
+    const paid = P.verify([
+        { op: 'detach-container', bill_id: 'BILL_914', container_no: 'TGHU1234567' },
+        { op: 'attach-container', bill_id: 'BILL_915', container_no: 'TGHU1234567' },
+        { op: 'delete-bill', bill_id: 'BILL_914' },
+    ], WORLD());
+    ck('a bill with a payment against it is NOT deleted', paid.ok === false,
+       JSON.stringify(paid.problems));
+    ck('  and it names the payment and says to unmatch it first',
+       /PAY_78/.test(JSON.stringify(paid.problems)) && /unmatch/.test(JSON.stringify(paid.problems)),
+       JSON.stringify(paid.problems));
+
+    // Deleting a bill that still holds a container would make that
+    // container's cost disappear. The plan-wide check catches it, so a
+    // delete is allowed when the plan re-homes the container and refused
+    // when it does not — which is the difference between a correction and
+    // a quiet loss.
+    const withCargo = P.verify([{ op: 'delete-bill', bill_id: 'BILL_915' }], WORLD());
+    ck('a bill still holding a container is NOT deleted', withCargo.ok === false,
+       JSON.stringify(withCargo.problems));
+    ck('  because the container would end up on no bill',
+       /no bill at all|disappear from the books/.test(JSON.stringify(withCargo.problems)));
+}
+
+// ── D3 — EVERY CHANGE IS WRITTEN DOWN, AND EVERY CHANGE HAS AN UNDO ──────
+// Apsara, 2026-10-08: "make it log every change we are doing in qb/books so
+// that we can check it later."
+{
+    section('D3 — the log entry, and the undo');
+    const plan = [
+        { op: 'detach-container', bill_id: 'BILL_914', container_no: 'TGHU1234567' },
+        { op: 'create-bill', supplier: 'Hugo', date: '2026-01-03', container_no: 'TGHU1234567' },
+        { op: 'match-payment', payment_id: 'PAY_77', bill_id: '#2', amount: 12000 },
+    ];
+    const v = P.verify(plan, WORLD());
+    const rec = P.auditRecord({ asked: 'move TGHU1234567 off BILL_914 onto a new bill on 3 Jan and match 12000 of PAY_77',
+        plan, verification: v, actor: 'apsara' });
+
+    ck('the entry keeps HER WORDS, not only the plan',
+       /move TGHU1234567 off BILL_914/.test(rec.asked), rec.asked);
+    ck('  and the plan, so the reading can be judged against the sentence',
+       rec.plan.length === 3 && rec.steps.length === 3);
+    ck('  and the figures as they were at the time',
+       Array.isArray(rec.diff) && rec.diff.some((r) => r.supplier === 'Hugo'));
+    ck('  and who asked', rec.actor === 'apsara');
+
+    // A refused plan must not carry a diff — a diff reads as something
+    // that happened.
+    const refused = P.auditRecord({ asked: 'x', plan: [{ op: 'nope' }],
+        verification: P.verify([{ op: 'nope' }], WORLD()) });
+    ck('a refused plan is logged WITHOUT a diff',
+       refused.ok === false && refused.diff === null && refused.problems.length > 0,
+       JSON.stringify(refused.problems));
+
+    // ── AND THE REFUSAL THAT HAPPENS *DURING* SIMULATION ─────────────────
+    // The check above uses a plan that fails before simulation starts, so
+    // there is no diff to leak and it passes however the code is written —
+    // the mutation "a refused plan is logged with a diff" survived it.
+    // This one gets as far as a simulated world and is refused there, so a
+    // diff genuinely exists and must still be withheld. A diff on a
+    // refused plan reads as something that happened.
+    const orphanPlan = [{ op: 'detach-container', bill_id: 'BILL_914', container_no: 'TGHU1234567' }];
+    const orphanV = P.verify(orphanPlan, WORLD());
+    ck('  the simulated-and-refused case really does produce a diff',
+       orphanV.ok === false && !!orphanV.simulation && orphanV.simulation.diff.length > 0,
+       JSON.stringify(orphanV.problems));
+    const orphanRec = P.auditRecord({ asked: 'take it off', plan: orphanPlan, verification: orphanV });
+    ck('  and the log still withholds it', orphanRec.diff === null, JSON.stringify(orphanRec.diff));
+
+    // ── THE UNDO, IN REVERSE ORDER ───────────────────────────────────────
+    // Undoing the detach before undoing the attach would put the container
+    // on two bills on the way back, and the verifier would refuse its own
+    // undo. So the order is the part worth asserting.
+    const rev = P.reverseOf(plan, { '#2': 'BILL_NEW_1' });
+    ck('the undo is the plan backwards', rev.length === 3);
+    ck('  unapplying the payment first', rev[0].op === 'unmatch-payment', JSON.stringify(rev[0]));
+    ck('  then deleting the bill it created', rev[1].op === 'delete-bill'
+       && rev[1].bill_id === 'BILL_NEW_1', JSON.stringify(rev[1]));
+    ck('  then putting the container back where it was',
+       rev[2].op === 'attach-container' && rev[2].bill_id === 'BILL_914', JSON.stringify(rev[2]));
+    ck('  and the real id is used, not the #2 placeholder',
+       !JSON.stringify(rev).includes('"#2"'), JSON.stringify(rev));
+
+    // Un-deleting is a RESTORE, not a create: the bill had an id, a history
+    // and its own fields. Re-creating it would make a different record
+    // wearing the same supplier's name.
+    const undel = P.reverseOf([{ op: 'delete-bill', bill_id: 'BILL_915' }]);
+    ck('undoing a delete is a restore, never a re-create',
+       undel[0].op === 'restore-bill', JSON.stringify(undel));
 }
 
 // ── E — IT CHANGES NOTHING ───────────────────────────────────────────────

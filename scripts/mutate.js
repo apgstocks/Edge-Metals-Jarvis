@@ -1043,6 +1043,32 @@ const MUTATIONS = [
       find: "        noFeedRows: feed.rows.length === 0,",
       to:   "        noFeedRows: false," },
 
+    // ── DELETE, AND THE LOG — BOTH HERS, 2026-10-08 ──────────────────
+    { name: 'plan: deleting a bill orphans the payments against it',
+      file: 'helpers/ledgerPlan.js', suites: ['ledger-plan'],
+      find: "            if (stuck.length) {",
+      to:   "            if (false) {" },
+    { name: 'plan: a deleted bill\'s containers vanish unnoticed',
+      file: 'helpers/ledgerPlan.js', suites: ['ledger-plan'],
+      find: "            for (const c of (b.containers || [])) disturbed.add(String(c));",
+      to:   "            ;" },
+    { name: 'plan: a refused plan is logged with a diff, as if it happened',
+      file: 'helpers/ledgerPlan.js', suites: ['ledger-plan'],
+      find: "        diff: v.ok && v.simulation ? v.simulation.diff : null,",
+      to:   "        diff: v.simulation ? v.simulation.diff : null," },
+    { name: 'plan: the log forgets her own words and keeps only the plan',
+      file: 'helpers/ledgerPlan.js', suites: ['ledger-plan'],
+      find: "        asked: String(asked || '').slice(0, 1000),",
+      to:   "        asked: ''," },
+    { name: 'plan: the undo runs forwards, so it undoes itself wrongly',
+      file: 'helpers/ledgerPlan.js', suites: ['ledger-plan'],
+      find: "    for (let i = (Array.isArray(plan) ? plan.length : 0) - 1; i >= 0; i -= 1) {",
+      to:   "    for (let i = 0; i < (Array.isArray(plan) ? plan.length : 0); i += 1) {" },
+    { name: 'plan: undoing a delete re-creates instead of restoring',
+      file: 'helpers/ledgerPlan.js', suites: ['ledger-plan'],
+      find: "            out.push({ op: 'restore-bill', bill_id: real(s.bill_id),",
+      to:   "            out.push({ op: 'create-bill', bill_id: real(s.bill_id)," },
+
     // ── THE AGENT'S PLAN VERIFIER — THE ONLY THING IN THE WAY ────────
     // A model proposes; this is what stands between a plausible plan and
     // her ledger. Each mutation is a way a wrong plan would get through.
