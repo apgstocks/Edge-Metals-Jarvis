@@ -1753,11 +1753,35 @@ const RISK_COLOR = { high: 'var(--status-danger)', medium: 'var(--status-warning
 const RISK_LABEL = { high: 'High risk', medium: 'Medium risk', low: 'On track', done: 'Complete' };
 let boardData = null;
 let boardFilter = 'all';
-function renderBoard(data) { boardData = data; boardFilter = 'all'; renderBoardView(); }
+// Apsara 2026-10-08 ("FIT INTO JARVIS", from a tracking-dashboard reel): a
+// pipeline strip above the list and a 7-dot tracker in each row. Board screen
+// only — the data was already there (/api/dashboard sends stageIndex and
+// stages). boardStage is null for "all stages", else a stage index 0–6; it
+// combines with the risk filter rather than replacing it (that was my call).
+let boardStage = null;
+const BOARD_STAGE_FALLBACK = ['Not Started', 'Assigned to Supplier', 'Forwarded to Trucker', 'Empty Dropped', 'Load Ready', 'Picked Up', 'Ingated'];
+function boardStepper(b, n) {
+  const idx = Number.isInteger(b.stageIndex) ? b.stageIndex : 0;
+  const done = b.risk === 'done';
+  const fill = done ? 'var(--steel-400)' : 'var(--accent)';
+  let html = '';
+  for (let i = 0; i < n; i++) {
+    if (i > 0) html += `<span style="flex:1; min-width:6px; height:2px; background:${i <= idx ? fill : 'var(--border-default)'};"></span>`;
+    const cur = i === idx && !done;
+    html += cur
+      ? `<span data-step="current" style="flex:none; width:14px; height:14px; border-radius:50%; box-sizing:border-box; background:var(--bg-base); border:3px solid ${RISK_COLOR[b.risk]}; outline:2px solid ${RISK_COLOR[b.risk]}; outline-offset:2px;"></span>`
+      : `<span style="flex:none; width:10px; height:10px; border-radius:50%; box-sizing:border-box; ${i < idx || done ? 'background:' + fill + ';' : 'border:2px solid var(--steel-600);'}"></span>`;
+  }
+  return `<div class="board-stepper" role="img" aria-label="Stage ${idx + 1} of ${n}: ${esc(b.stageName || '')}" style="display:flex; align-items:center;">${html}</div>`;
+}
+function renderBoard(data) { boardData = data; boardFilter = 'all'; boardStage = null; renderBoardView(); }
 function renderBoardView() {
   const data = boardData;
   const { counts, alerts, bookings } = data;
-  const filtered = boardFilter === 'all' ? bookings : bookings.filter(b => b.risk === boardFilter);
+  const stageNames = Array.isArray(data.stages) && data.stages.length ? data.stages : BOARD_STAGE_FALLBACK;
+  const byRisk = boardFilter === 'all' ? bookings : bookings.filter(b => b.risk === boardFilter);
+  const filtered = boardStage === null ? byRisk : byRisk.filter(b => b.stageIndex === boardStage);
+  const stageCounts = stageNames.map((_, i) => byRisk.filter(b => b.stageIndex === i).length);
   const kpiDefs = ['high', 'medium', 'low', 'done'];
   $('viewRoot').innerHTML = `
     <section style="max-width:1240px; margin:0 auto; padding:38px 40px 80px;">
@@ -1782,6 +1806,23 @@ function renderBoardView() {
             <div style="font-family:var(--font-mono); font-size:10.5px; font-weight:600; letter-spacing:.16em; text-transform:uppercase; color:${RISK_COLOR[k]}; margin-top:12px;">${RISK_LABEL[k]}</div>
           </button>
         `).join('')}
+      </div>
+      <div style="display:flex; align-items:center; gap:12px; margin-bottom:12px;">
+        <span style="font-family:var(--font-mono); font-size:11px; font-weight:600; letter-spacing:.2em; text-transform:uppercase; color:var(--accent-onSoft);">// Pipeline</span>
+        <span style="flex:1; height:1px; background:var(--border-subtle);"></span>
+        <span style="font-family:var(--font-mono); font-size:10.5px; color:var(--text-faint);">${boardStage === null ? 'Tap a stage to filter' : esc(stageNames[boardStage]) + ' · tap again to clear'}</span>
+      </div>
+      <div class="card" style="padding:16px 14px 12px; margin-bottom:36px; overflow-x:auto;">
+        <div style="position:relative; display:grid; grid-template-columns:repeat(${stageNames.length}, minmax(96px,1fr)); min-width:${stageNames.length * 96}px;">
+          <span style="position:absolute; left:${50 / stageNames.length}%; right:${50 / stageNames.length}%; top:22px; height:2px; background:var(--border-default);"></span>
+          ${stageNames.map((name, i) => {
+            const on = boardStage === i, has = stageCounts[i] > 0;
+            return `<button type="button" class="board-stage" data-stage="${i}" aria-pressed="${on}" title="${esc(name)}" style="all:unset; cursor:pointer; position:relative; display:flex; flex-direction:column; align-items:center; gap:8px; padding:6px 4px 8px; border-radius:var(--radius-sm); text-align:center;">
+              <span style="position:relative; display:flex; align-items:center; justify-content:center; width:32px; height:32px; border-radius:50%; box-sizing:border-box; font-family:var(--font-mono); font-size:13px; font-weight:600; ${on ? 'background:var(--accent); color:var(--bg-base); border:2px solid var(--leaf-300);' : has ? 'background:var(--surface-sunken); color:var(--text-strong); border:2px solid var(--accent);' : 'background:var(--surface-sunken); color:var(--text-faint); border:2px solid var(--border-default);'}">${stageCounts[i]}</span>
+              <span style="font-family:var(--font-mono); font-size:10px; font-weight:600; letter-spacing:.08em; text-transform:uppercase; line-height:1.3; max-width:110px; color:${on ? 'var(--text-strong)' : has ? 'var(--text-body)' : 'var(--text-faint)'};">${esc(name)}</span>
+            </button>`;
+          }).join('')}
+        </div>
       </div>
       ${alerts.length ? `
         <div style="display:flex; align-items:center; gap:12px; margin-bottom:14px;">
@@ -1809,8 +1850,10 @@ function renderBoardView() {
               <div style="font-size:12.5px; color:var(--text-body); margin-top:5px;">${esc(b.route)}</div>
             </div>
             <div style="padding:0 28px; border-right:1px solid var(--border-subtle);">
-              <div style="display:flex; align-items:baseline; gap:8px;">
+              ${boardStepper(b, stageNames.length)}
+              <div style="display:flex; align-items:baseline; flex-wrap:wrap; gap:8px; margin-top:10px;">
                 <span style="font-family:var(--font-mono); font-size:12px; font-weight:600; letter-spacing:.1em; text-transform:uppercase; color:var(--text-strong);">${esc(b.stageName)}</span>
+                <span style="font-family:var(--font-mono); font-size:10.5px; color:var(--text-faint);">${(Number.isInteger(b.stageIndex) ? b.stageIndex : 0) + 1}/${stageNames.length}</span>
                 ${b.subBranch ? `<span style="font-size:11.5px; color:var(--text-muted);">${esc(b.subBranch)}</span>` : ''}
               </div>
             </div>
@@ -1826,6 +1869,11 @@ function renderBoardView() {
       </div>
     </section>`;
   document.querySelectorAll('.board-filter').forEach(el => el.addEventListener('click', () => { boardFilter = el.dataset.filter; renderBoardView(); }));
+  document.querySelectorAll('.board-stage').forEach(el => el.addEventListener('click', () => {
+    const i = Number(el.dataset.stage);
+    boardStage = boardStage === i ? null : i;
+    renderBoardView();
+  }));
 }
 
 // ── Shared: contact-option builder for booking container dropdowns ────────
