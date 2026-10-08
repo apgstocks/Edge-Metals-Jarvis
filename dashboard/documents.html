@@ -1693,6 +1693,19 @@ function payCell(r) {
 // splitting it would mean inventing two numbers that add up. This lists what
 // the invoice covers and says the amount is for the order, which is the
 // honest version of the same question.
+//
+// ── AND IT STOPS HERE. HER CALL, 2026-10-08 ─────────────────────────────
+// She asked for a third level: click a load, see its split. There is nothing
+// to show — the row holds the load NUMBER and nothing else, and Schneider's
+// id is joined to no Edge Metals record (no carrier_load, no load_ref;
+// Jarvis's own load_number is a short sequential yard one). Offered the two
+// ways to create that join — she types a container per load, or Jarvis
+// proposes from date and lane and she confirms — she said: "Boss keep lcoal
+// as it is..".
+//
+// So the local-delivery carriers stay as they are. Do NOT add a per-container
+// drill-down here on the assumption it was merely unfinished: it was looked
+// at, costed and declined. If that changes, the blocker is the join.
 function splitOf(r) {
   const loads = Array.isArray(r.loads) ? r.loads.filter(Boolean) : [];
   const m = (n) => '$' + Number(n || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
