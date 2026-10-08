@@ -102,12 +102,90 @@ function companyOf(accountId, accounts) {
     return hit ? (hit.company || null) : null;
 }
 
+// ── WHERE THE ACCOUNT FILE IS, AND WHY IT IS OVERRIDABLE ────────────────
+// Under cfg.ROOT, not DATA_DIR, because it is in git deliberately —
+// bankDocs.js:7 records that so "changing an account number is one edit in
+// one file that travels", rather than a hunt through saved PDFs.
+//
+// That also means it is NOT isolated by a test's DATA_DIR. It was read-only
+// until 2026-10-08, when exchange() started WRITING plaid_account_id into
+// it on link; the moment anything writes here, a test that exercises that
+// path edits her real banking file in the repo. So the path is overridable
+// the same way BANK_ITEM_FILE is, and tests point it at a temp copy.
+function accountsFile() {
+    return process.env.BANK_ACCOUNTS_FILE || path.join(cfg.ROOT, 'qb-settings', 'bank-accounts.json');
+}
+
 function readAccounts() {
     try {
-        const f = path.join(cfg.ROOT, 'qb-settings', 'bank-accounts.json');
-        const d = loadJson(f, { accounts: [] });
+        const d = loadJson(accountsFile(), { accounts: [] });
         return Array.isArray(d && d.accounts) ? d.accounts : [];
     } catch (e) { return []; }
+}
+
+// ── JOINING A LINKED PLAID ACCOUNT TO HER OWN RECORD OF IT ───────────────
+// Apsara, 2026-10-08: "i dont want human intervention between jarvis and
+// plaid." This removes the one manual step that was left after linking, and
+// it removes a silent failure at the same time.
+//
+// companyOf and bankOf above match a Plaid row's account_id against `a.id`
+// OR `a.plaid_account_id`. Today `id` is a local slug ("edge-metals-bofa")
+// and plaid_account_id is null on both accounts — so the moment a bank is
+// linked, EVERY transaction arrives with company:null and bank:null.
+//
+// Nothing throws. The feed fills, and helpers/bankReconcile.js — which
+// filters rows by bank — finds none for either account and reports zeroes
+// against a full ledger. That reads as "Plaid sent nothing", which is the
+// wrong thing to spend an afternoon debugging.
+//
+// ── MATCHED ON THE LAST FOUR DIGITS, WHICH IS EXACT ─────────────────────
+// Plaid returns `mask`: the last four digits of the account. She already
+// stores the full accountNumber. So this is a lookup, not a guess — and
+// that matters, because the wrong join would file Edge Metals' deposits
+// into Edge Trading's books, which is most of what entities.js exists to
+// prevent.
+//
+// Names are NOT used. "Bank of America, N.A." versus Plaid's "Plaid
+// Checking" would need fuzzy matching, and nameMatch.js already records
+// what a near-miss costs when money is on the other side of it.
+//
+// AMBIGUITY IS REFUSED, NOT RESOLVED. Two accounts ending in the same four
+// digits is rare and real; picking one would be the single most expensive
+// thing this function could do, so it reports and changes nothing.
+function joinPlaidAccounts(accounts, plaidAccounts) {
+    const mine = Array.isArray(accounts) ? accounts : [];
+    const theirs = Array.isArray(plaidAccounts) ? plaidAccounts : [];
+    const last4 = (v) => String(v || '').replace(/\D/g, '').slice(-4);
+
+    const joined = [];
+    const ambiguous = [];
+    const unmatched = [];
+
+    for (const p of theirs) {
+        const mask = last4(p && p.mask);
+        if (!mask || mask.length < 4) { unmatched.push({ account_id: p && p.account_id, why: 'Plaid gave no mask' }); continue; }
+        const hits = mine.filter((a) => a && last4(a.accountNumber) === mask);
+        if (hits.length === 1) {
+            joined.push({ id: hits[0].id, account_id: p.account_id, mask, company: hits[0].company || null });
+        } else if (hits.length > 1) {
+            ambiguous.push({ account_id: p.account_id, mask, candidates: hits.map((h) => h.id) });
+        } else {
+            unmatched.push({ account_id: p.account_id, mask,
+                why: `no account in bank-accounts.json ends ${mask}` });
+        }
+    }
+
+    // Returns the NEW array rather than writing. Same doctrine as the rest
+    // of this file: a function that both decides and persists cannot be run
+    // to see what it would do.
+    const next = mine.map((a) => {
+        const hit = joined.find((j) => j.id === a.id);
+        if (!hit) return a;
+        if (a.plaid_account_id === hit.account_id) return a;
+        return { ...a, plaid_account_id: hit.account_id };
+    });
+    const changed = next.filter((a, i) => a !== mine[i]).length;
+    return { accounts: next, joined, ambiguous, unmatched, changed };
 }
 
 // ── one Plaid transaction → one bank row ─────────────────────────────────
@@ -357,5 +435,5 @@ async function include(id, by) {
 module.exports = {
     FILE, fromPlaid, upsert, setExcluded, worklist, summary,
     list, ingestPlaid, exclude, include,
-    companyOf, bankOf, SWIFT_TO_BANK, readAccounts, BANK_FIELDS, HERS, actedOn,
+    companyOf, bankOf, SWIFT_TO_BANK, readAccounts, accountsFile, joinPlaidAccounts, BANK_FIELDS, HERS, actedOn,
 };

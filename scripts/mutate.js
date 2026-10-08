@@ -1024,6 +1024,25 @@ const MUTATIONS = [
     // the code for a readable note; a mutation that cannot change behaviour
     // tests nothing and a green on it means nothing.
 
+    { name: 'join: a test is allowed to rewrite her real banking file',
+      file: 'helpers/plaid.js', suites: ['plaid'],
+      find: "        if (process.env.JARVIS_TEST === '1' && !process.env.BANK_ACCOUNTS_FILE) {",
+      to:   "        if (false) {" },
+
+    // ── THE ACCOUNT JOIN — THE SILENT FAILURE AFTER LINKING ──────────
+    { name: 'join: two accounts ending the same are joined to one anyway',
+      file: 'helpers/bankLedger.js', suites: ['bank-ledger'],
+      find: "        if (hits.length === 1) {",
+      to:   "        if (hits.length >= 1) {" },
+    { name: 'join: an account she never recorded is invented into the file',
+      file: 'helpers/bankLedger.js', suites: ['bank-ledger'],
+      find: "        if (!mask || mask.length < 4) { unmatched.push",
+      to:   "        if (false) { unmatched.push" },
+    { name: 'join: re-linking rewrites the file every time',
+      file: 'helpers/bankLedger.js', suites: ['bank-ledger'],
+      find: "        if (a.plaid_account_id === hit.account_id) return a;",
+      to:   "        if (false) return a;" },
+
     // ── THE PUBLIC WEBHOOK ROUTE — HER RULE, 2026-10-08 ──────────────
     // "i dont want human intervention between jarvis and plaid." The cost
     // is an unauthenticated POST route on the box holding her ledger, and

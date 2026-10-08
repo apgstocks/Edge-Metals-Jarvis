@@ -36,6 +36,16 @@ process.env.BANK_TX_FILE = path.join(TMP, 'bank-transactions.json');
 process.env.PLAID_CLIENT_ID = 'cid-TESTCLIENT123';
 process.env.PLAID_SECRET = 'sek-TESTSECRET456';
 process.env.PLAID_ENV = 'sandbox';
+// exchange() writes plaid_account_id into qb-settings/bank-accounts.json on
+// link (2026-10-08). That file lives under cfg.ROOT, not DATA_DIR, because
+// it is in git on purpose — so without this line section F's sandboxLink
+// rewrote HER REAL banking file on every run. helpers/plaid.js now refuses
+// outright when this is unset under JARVIS_TEST; the copy is so the join is
+// still genuinely exercised rather than skipped.
+process.env.BANK_ACCOUNTS_FILE = path.join(TMP, 'bank-accounts.json');
+fs.writeFileSync(process.env.BANK_ACCOUNTS_FILE, JSON.stringify({ accounts: [
+    { id: 'edge-metals-bofa', company: 'Edge Metals INC', accountNumber: '0000 1111' },
+] }, null, 2));
 
 const ROOT = path.join(__dirname, '..');
 const cfg = require(path.join(ROOT, 'config'));
@@ -421,6 +431,57 @@ const Q = require(path.join(ROOT, 'helpers/plaid'));
     const src = fs.readFileSync(path.join(ROOT, 'helpers/plaid.js'), 'utf8');
     ck('  and no products array in the file names one of them',
        !/products:\s*\[[^\]]*['"](auth|transfer|payment_initiation|signal)['"]/.test(src));
+}
+
+// ── I — IT MUST NOT BE ABLE TO EDIT HER REAL BANKING FILE ────────────────
+// exchange() writes plaid_account_id into qb-settings/bank-accounts.json on
+// link. That file sits under cfg.ROOT rather than DATA_DIR — deliberately,
+// because it is in git so an account number is one edit in one place — and
+// DATA_DIR isolation therefore does not cover it.
+//
+// It bit immediately: the first run of this suite after that write landed
+// rewrote her real file, two companies' account and routing numbers,
+// tracked in git. The change was only unicode escapes, which is precisely
+// why it would have gone unnoticed until it was something worse.
+//
+// Setting BANK_ACCOUNTS_FILE at the top of this file fixes THIS suite. The
+// check below is for the next one, because "remember to set the env var" is
+// not a safeguard.
+{
+    section('I — the real bank-accounts.json is out of reach under test');
+    const real = path.join(ROOT, 'qb-settings', 'bank-accounts.json');
+    const before = fs.existsSync(real) ? fs.readFileSync(real, 'utf8') : null;
+
+    const saved = process.env.BANK_ACCOUNTS_FILE;
+    delete process.env.BANK_ACCOUNTS_FILE;
+    for (const k of Object.keys(require.cache)) if (k.startsWith(ROOT)) delete require.cache[k];
+    const P9 = require(path.join(ROOT, 'helpers/plaid'));
+
+    // ── REPORTED, NOT THROWN, AND THAT IS DELIBERATE ────────────────────
+    // exchange() wraps the join in a try/catch because the item — and the
+    // access token, the thing that cannot be recreated without her going
+    // back to the bank — is already saved by then. A join she can fix in a
+    // file is not worth losing a link over. So the refusal arrives in
+    // `join.problem`, and my first version of this check looked for a
+    // thrown error and failed. The test was wrong, not the code.
+    let out = null, threw = null;
+    try {
+        out = await P9.exchange(PUBLIC, { fetchImpl: fakeFetch({
+            '/item/public_token/exchange': { access_token: TOKEN, item_id: 'item-guard' },
+            '/accounts/get': { accounts: [{ account_id: 'acc-1', name: 'Checking', mask: '1111' }] },
+        }) });
+    } catch (e) { threw = e.message; }
+
+    ck('a suite that forgets BANK_ACCOUNTS_FILE is refused, not indulged',
+       !!out && /BANK_ACCOUNTS_FILE/.test(String(out.join && out.join.problem)),
+       JSON.stringify(out && out.join) + (threw ? ` threw: ${threw}` : ''));
+    ck('  and the LINK still succeeded — the token is not worth losing over a join',
+       !!out && out.item_id === 'item-guard', String(threw));
+    ck('  and her real file is byte-for-byte unchanged',
+       before === (fs.existsSync(real) ? fs.readFileSync(real, 'utf8') : null));
+
+    process.env.BANK_ACCOUNTS_FILE = saved;
+    for (const k of Object.keys(require.cache)) if (k.startsWith(ROOT)) delete require.cache[k];
 }
 
 console.log(`\n  ${pass} passed, ${fail} failed`);

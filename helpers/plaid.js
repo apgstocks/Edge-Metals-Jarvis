@@ -317,8 +317,55 @@ async function exchange(publicToken, { fetchImpl, institution = null } = {}) {
         cursor: null,
         accounts,
     });
+    // ── JOIN HER OWN RECORD TO THE PLAID ACCOUNT, NOW ───────────────────
+    // Apsara, 2026-10-08: "i dont want human intervention between jarvis
+    // and plaid." This was the last manual step after linking, and skipping
+    // it fails SILENTLY: bankLedger.companyOf/bankOf match a row's
+    // account_id against bank-accounts.json, so with no plaid_account_id
+    // every transaction arrives with company:null and bank:null, the feed
+    // fills, and the reconciliation reports zeroes against a full ledger.
+    // That looks exactly like "Plaid sent nothing".
+    //
+    // Matched on the last four digits — Plaid's `mask` against the
+    // accountNumber she already stores — so it is a lookup, not a guess.
+    // joinPlaidAccounts refuses ambiguity rather than picking; the wrong
+    // join would file Edge Metals' deposits into Edge Trading's books.
+    //
+    // A FAILURE HERE MUST NOT UNDO THE LINK. The item is already saved
+    // above and the access token is the thing that cannot be recreated
+    // without her going back to the bank. So this is reported, never
+    // thrown: a join she can fix in a file is not worth losing a link over.
+    let join = { changed: 0, joined: [], ambiguous: [], unmatched: [] };
+    try {
+        const ledger = require('./bankLedger');
+        const file = ledger.accountsFile();   // overridable, so a test never edits the real one
+        // ── AND REFUSED OUTRIGHT UNDER TEST, LIKE drive.js ──────────────
+        // Overridable is not the same as safe: tests/plaid.js exercises
+        // this path through sandboxLink and, until BANK_ACCOUNTS_FILE was
+        // set there, every run rewrote her real qb-settings file — the one
+        // holding two companies' account numbers, tracked in git. It was
+        // only reformatting unicode escapes, which is exactly why nobody
+        // would have noticed before it did something worse.
+        //
+        // So the test environment must POINT somewhere, not merely be
+        // allowed to. A suite that forgets gets a clear refusal instead of
+        // a silent edit to her banking file.
+        if (process.env.JARVIS_TEST === '1' && !process.env.BANK_ACCOUNTS_FILE) {
+            fail('refusing to write qb-settings/bank-accounts.json under JARVIS_TEST — '
+                + 'set BANK_ACCOUNTS_FILE to a temp copy first');
+        }
+        await mutateJson(file, { accounts: [] }, (cur) => {
+            const d = (cur && typeof cur === 'object' && !Array.isArray(cur)) ? cur : { accounts: [] };
+            const res = ledger.joinPlaidAccounts(Array.isArray(d.accounts) ? d.accounts : [], accounts);
+            join = { changed: res.changed, joined: res.joined, ambiguous: res.ambiguous, unmatched: res.unmatched };
+            return { ...d, accounts: res.accounts };
+        }, { strict: true });
+    } catch (e) {
+        join.problem = `could not write the account join: ${e.message}`;
+    }
+
     // Deliberately not the token.
-    return { item_id: r.item_id, accounts, institution: institution || null };
+    return { item_id: r.item_id, accounts, institution: institution || null, join };
 }
 
 // ── step 3: pull, forever after ──────────────────────────────────────────

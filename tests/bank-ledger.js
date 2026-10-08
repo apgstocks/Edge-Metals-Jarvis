@@ -322,6 +322,95 @@ const norm = (list) => list.map((t) => L.fromPlaid(t, ACC));
     }
 }
 
+// ── JOINING A LINKED ACCOUNT TO HER OWN RECORD OF IT ─────────────────────
+// Apsara, 2026-10-08: "i dont want human intervention between jarvis and
+// plaid." Filling plaid_account_id in by hand after linking was the last
+// manual step, and skipping it FAILS SILENTLY — companyOf and bankOf match
+// on it, so without it every row arrives with company:null and bank:null,
+// the feed fills, and the reconciliation reports zeroes against a full
+// ledger. That reads as "Plaid sent nothing".
+//
+// The join is on the last four digits: Plaid's `mask` against the
+// accountNumber she already stores. A lookup, not a guess — which is the
+// point, because the wrong join files Edge Metals' deposits into Edge
+// Trading's books.
+{
+    section('joining a Plaid account to bank-accounts.json');
+    const MINE = [
+        { id: 'edge-metals-bofa', company: 'Edge Metals INC', accountNumber: '325070 4471' },
+        { id: 'edge-trading-chase', company: 'EDGE TRADING INC', accountNumber: '883-120-9930' },
+    ];
+
+    const good = L.joinPlaidAccounts(MINE, [
+        { account_id: 'plaid_bofa', mask: '4471' },
+        { account_id: 'plaid_chase', mask: '9930' },
+    ]);
+    ck('both accounts are joined on their last four digits', good.changed === 2, JSON.stringify(good.joined));
+    ck('  and each one gets the right company\'s id',
+       good.accounts.find((a) => a.id === 'edge-metals-bofa').plaid_account_id === 'plaid_bofa'
+       && good.accounts.find((a) => a.id === 'edge-trading-chase').plaid_account_id === 'plaid_chase',
+       JSON.stringify(good.accounts.map((a) => [a.id, a.plaid_account_id])));
+    // Punctuation and spacing differ between how Plaid and she write a
+    // number; only the digits are compared.
+    ck('  despite the spaces and dashes she writes them with', good.ambiguous.length === 0);
+
+    // ── AMBIGUITY IS REFUSED, NOT RESOLVED ───────────────────────────────
+    // Two accounts ending in the same four digits is rare and real. Picking
+    // one would quietly file one company's money into the other's books,
+    // which is most of what entities.js exists to prevent.
+    const two = L.joinPlaidAccounts(
+        [{ id: 'a', accountNumber: '111 1234' }, { id: 'b', accountNumber: '999-1234' }],
+        [{ account_id: 'p', mask: '1234' }]);
+    ck('two accounts ending the same are NOT joined', two.changed === 0);
+    ck('  and both candidates are named, so she can settle it',
+       two.ambiguous.length === 1 && two.ambiguous[0].candidates.join(',') === 'a,b',
+       JSON.stringify(two.ambiguous));
+
+    const stranger = L.joinPlaidAccounts(MINE, [{ account_id: 'p', mask: '0000' }]);
+    ck('an account she has never recorded is reported, not invented',
+       stranger.changed === 0 && stranger.unmatched.length === 1, JSON.stringify(stranger.unmatched));
+    ck('  and the others are left exactly as they were',
+       stranger.accounts.every((a, i) => a === MINE[i]));
+
+    const noMask = L.joinPlaidAccounts(MINE, [{ account_id: 'p' }]);
+    ck('an account Plaid gave no mask for is reported, not guessed at',
+       noMask.changed === 0 && /no mask/.test(noMask.unmatched[0].why), JSON.stringify(noMask.unmatched));
+
+    // ── AND THE FILE IT WRITES TO IS NOT HERS, UNDER TEST ────────────────
+    // qb-settings/bank-accounts.json lives under cfg.ROOT, not DATA_DIR,
+    // because it is in git on purpose. That was harmless while it was only
+    // ever READ — exchange() started writing plaid_account_id into it on
+    // 2026-10-08, and from that moment a test touching the link path would
+    // edit her real banking file in the working tree. (Something already
+    // rewrote it once today; the change was only unicode escapes, but the
+    // mechanism is what matters.) Overridable the same way BANK_ITEM_FILE
+    // is, so a test can point it somewhere safe.
+    const realPath = L.accountsFile();
+    ck('the accounts file path is overridable, so a test cannot edit hers',
+       typeof L.accountsFile === 'function' && /bank-accounts\.json$/.test(realPath), realPath);
+    process.env.BANK_ACCOUNTS_FILE = path.join(os.tmpdir(), 'jarvis-test-accounts.json');
+    for (const k of Object.keys(require.cache)) if (k.includes('bankLedger')) delete require.cache[k];
+    const L2 = require(path.join(ROOT, 'helpers/bankLedger'));
+    ck('  and the override is honoured',
+       L2.accountsFile() === process.env.BANK_ACCOUNTS_FILE, L2.accountsFile());
+    delete process.env.BANK_ACCOUNTS_FILE;
+    for (const k of Object.keys(require.cache)) if (k.includes('bankLedger')) delete require.cache[k];
+
+    // Re-linking the same bank must not churn the file. mutateJson writes
+    // whatever comes back, so a function that always returns new objects
+    // would rewrite a file holding her account numbers on every link.
+    const again = L.joinPlaidAccounts(good.accounts, [{ account_id: 'plaid_bofa', mask: '4471' }]);
+    ck('re-linking the same bank changes nothing', again.changed === 0, String(again.changed));
+
+    // The reason the whole thing exists: with the join done, a Plaid row
+    // resolves to a company. Without it, it resolves to nothing.
+    ck('a joined account resolves a Plaid row to its company',
+       L.companyOf('plaid_chase', good.accounts) === 'EDGE TRADING INC',
+       String(L.companyOf('plaid_chase', good.accounts)));
+    ck('  and an unjoined one resolves to nothing at all — the silent failure',
+       L.companyOf('plaid_chase', MINE) === null, String(L.companyOf('plaid_chase', MINE)));
+}
+
 console.log(`\n  ${pass} passed, ${fail} failed`);
 if (failures.length) { console.log('\n  failed:'); failures.forEach((f) => console.log('    · ' + f)); }
 process.exit(fail ? 1 : 0);
