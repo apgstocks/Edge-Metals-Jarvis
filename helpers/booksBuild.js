@@ -188,17 +188,46 @@ function build({ from, to } = {}) {
         }
         // An IMPORTED row carries `paid` with no payments[] behind it — the
         // carrier's remittance mail said so and never said from which account.
-        // Posted anyway, so it surfaces as the problem it is instead of
-        // leaving 2050 owing money the carrier has already been sent.
+        //
+        // ── APSARA, 2026-10-08: "it is from BofA only" ───────────────────
+        // Asked about exactly these rows — the ones imported from a carrier's
+        // remittance mail — and that is the only place the answer is applied.
+        // Her local carriers are paid out of Bank of America, so the credit
+        // goes to 1010 instead of being left as a could-not-post problem.
+        //
+        // ── WHY THE ANSWER IS NOT IN bankAccount() ───────────────────────
+        // bankAccount() in helpers/postings.js is shared by every rule that
+        // touches money — supplier payments, customer receipts, expenses. A
+        // default of BofA there would mean a payment where the bank was left
+        // BLANK quietly credits BofA, and `payManual` writes
+        // `bank: input.bank || null`, so a payment SHE typed with the bank
+        // field empty would post against an account she never chose. That is
+        // the shape CLAUDE.md §1 is about: a rule that is right on one screen
+        // landing in code other callers reach.
+        //
+        // So the answer is stamped here, on the one tx this build emits for
+        // an imported row, and `source !== 'manual'` is the gate. The gate
+        // marks the NEW shape, not the old one: a row she typed by hand is
+        // NOT covered by her rule. (addManual sets `paid: 0` and payManual
+        // appends to payments[] for every increment, so a manual row has no
+        // unexplained remainder to begin with — the gate is belt and braces,
+        // and it is what stops her sentence spreading if that ever changes.)
         const recorded = (Array.isArray(ci.payments) ? ci.payments : [])
             .reduce((t, x) => t + num(x.amount), 0);
         const unexplained = Math.round((num(ci.paid) - recorded) * 100) / 100;
         if (unexplained > 0.005) {
+            const imported = ci.source !== 'manual';
             txs.push({
                 kind: 'carrier-invoice-payment', entity: p.ledger,
                 date: (ci.paid_dates || []).slice(-1)[0] || ci.invoice_date,
                 amount: unexplained, party: ci.carrier, ref: ci.ref,
-                mode: null, bank: null,
+                mode: imported ? 'bank transfer' : null,
+                bank: imported ? 'BofA' : null,
+                // Kept on the tx so the general ledger can say WHY it says
+                // BofA. Nothing read it off the remittance mail; it is her
+                // standing answer, and a reader of the GL deserves to know
+                // the difference between a recorded fact and a known default.
+                bank_assumed: imported || undefined,
                 source: { store: 'carrier_invoices', id: ci.id },
             });
         }

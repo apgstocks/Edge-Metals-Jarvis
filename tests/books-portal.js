@@ -367,10 +367,21 @@ const A = require(path.join(ROOT, 'helpers/booksAgent'));
         // billed, unpaid
         { id: 'B', company: 'Edge Metals', key: 'schneider:O1', carrier: 'schneider', ref: 'O1',
           amount: 4450, paid: 0, status: 'open', invoice_date: '2026-03-02', paid_dates: [] },
-        // the carrier's mail says paid; it never said from which account
+        // the carrier's mail says paid; it never said from which account.
+        // Apsara, 2026-10-08: "it is from BofA only" — so this one posts.
         { id: 'C', company: 'Edge Metals', key: 'schneider:O2', carrier: 'schneider', ref: 'O2',
           amount: 9700, paid: 9700, status: 'paid', invoice_date: '2026-03-03',
           paid_dates: ['2026-03-20'], evidence: 'Schneider PAID mail' },
+        // ── THE GUARD ON HER SENTENCE ────────────────────────────────────
+        // A row she typed, carrying a paid figure with no payment behind it.
+        // addManual/payManual cannot currently produce this, which is the
+        // point: her answer was about the IMPORTED rows, so if this one ever
+        // arises it must still be a problem rather than a silent BofA credit.
+        // This check is what fails if the default is ever moved into
+        // bankAccount() where every caller reaches it.
+        { id: 'D', company: 'Edge Metals', key: 'ntg:H9', carrier: 'ntg', ref: 'H9',
+          amount: 600, paid: 600, status: 'paid', invoice_date: '2026-03-04',
+          paid_dates: ['2026-03-21'], source: 'manual' },
     ], null, 2));
     for (const k of Object.keys(require.cache)) if (k.startsWith(ROOT)) delete require.cache[k];
     const B2 = require(path.join(ROOT, 'helpers/booksBuild'));
@@ -403,33 +414,43 @@ const A = require(path.join(ROOT, 'helpers/booksAgent'));
     const at = (t, code) => { const a = t.accounts.find((x) => x.code === code); return a ? a.balance : 0; };
     const bal = (code) => Math.round((at(tb, code) - at(tb0, code)) * 100) / 100;
 
-    ck('the store reaches the journal at all', built.transactions >= 3, String(built.transactions));
-    ck('all three invoices land in 5100 Freight and shipping — HER choice',
-       bal('5100') === 16000, `5100 is ${bal('5100')}, expected 1850 + 4450 + 9700`);
+    ck('the store reaches the journal at all', built.transactions >= 4, String(built.transactions));
+    ck('all four invoices land in 5100 Freight and shipping — HER choice',
+       bal('5100') === 16600, `5100 is ${bal('5100')}, expected 1850 + 4450 + 9700 + 600`);
     ck('  and NOT in 6110 operating, which is below gross profit',
        bal('6110') === 0, `6110 is ${bal('6110')}`);
     const pl = S2.profitAndLoss(built.lines, { entity: 'edge-metals' });
     const pl0 = S3.profitAndLoss(without.lines, { entity: 'edge-metals' });
     ck('  so it is a cost of the material sold',
-       Math.round((pl.cogsTotal - pl0.cogsTotal) * 100) / 100 === 16000
+       Math.round((pl.cogsTotal - pl0.cogsTotal) * 100) / 100 === 16600
        && Math.round((pl.expenseTotal - pl0.expenseTotal) * 100) / 100 === 0,
        `cogs moved ${pl.cogsTotal - pl0.cogsTotal}, expense moved ${pl.expenseTotal - pl0.expenseTotal}`);
 
-    ck('a payment with a named bank credits that bank',
-       bal('1010') === -1850, `BofA is ${bal('1010')}, expected the 1,850 paid out`);
-    ck('  and relieves what is owed the carrier',
-       bal('2050') === 14150,
-       `2050 is ${bal('2050')} — 4,450 unpaid plus 9,700 whose payment could not post`);
+    // ── HER ANSWER, ON THE ROWS SHE WAS ASKED ABOUT ──────────────────────
+    // Apsara, 2026-10-08: "it is from BofA only". So A's named BofA payment
+    // and C's imported remittance both leave 1010 — 1,850 + 9,700 — and the
+    // only thing still owed the carriers is B's unpaid 4,450.
+    ck('a named bank and an imported remittance both credit BofA — HER answer',
+       bal('1010') === -11550, `BofA is ${bal('1010')}, expected -(1850 + 9700)`);
+    ck('  and relieves what is owed the carriers',
+       bal('2050') === 5050,
+       `2050 is ${bal('2050')} — 4,450 unpaid plus D's 600 that still cannot post`);
+    const o2 = (built.problems || []).find((p) => /O2/.test(String(p)));
+    ck('  so the Schneider PAID mail is no longer a could-not-post problem',
+       !o2, String(o2));
 
-    // ── THE ONE THAT MATTERS ─────────────────────────────────────────────
-    // An imported row says the money went and never says from where. Crediting
-    // a bank anyway balances perfectly and is wrong in two places at once.
-    const problem = (built.problems || []).find((p) => /O2/.test(String(p)));
-    ck('a payment with no bank is a PROBLEM, not a guessed credit', !!problem,
-       JSON.stringify(built.problems));
+    // ── AND THE SENTENCE DOES NOT SPREAD ─────────────────────────────────
+    // D is a row SHE typed. Her answer was about the imported ones, so this
+    // one is still a problem. If this check goes green with the others, the
+    // BofA default has escaped into shared code and a payment she records
+    // with the bank left blank is silently crediting an account she never
+    // picked — the helpers/postings.js bankAccount() mistake, undone.
+    const manual = (built.problems || []).find((p) => /H9/.test(String(p)));
+    ck('a HAND-TYPED payment with no bank is still a PROBLEM, not a guess',
+       !!manual, JSON.stringify(built.problems));
     ck('  naming the carrier, the invoice and the amount',
-       !!problem && /schneider/i.test(problem) && /9700/.test(problem),
-       String(problem));
+       !!manual && /ntg/i.test(manual) && /600/.test(manual),
+       String(manual));
     ck('  and the build reports itself incomplete', built.complete === false);
     const verdict = A2.review(built, { entity: 'edge-metals' });
     ck('  so the agent refuses to vouch for the figures',

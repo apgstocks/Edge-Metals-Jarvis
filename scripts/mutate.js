@@ -901,6 +901,18 @@ const MUTATIONS = [
       file: 'dashboard/documents.html', suites: ['carrier-invoices-route'],
       find: "    : (Number(r.paid) > 0.005",
       to:   "    : (false" },
+    // ── "it is from BofA only" — HER ANSWER, AND ITS BLAST RADIUS ─────
+    // Two mutations because the answer has two halves and only one of them
+    // is about getting a figure right. The second is about her sentence not
+    // spreading past the rows she was asked about.
+    { name: 'books: an imported remittance goes back to having no bank',
+      file: 'helpers/booksBuild.js', suites: ['books-portal', 'books-build'],
+      find: "            const imported = ci.source !== 'manual';",
+      to:   '            const imported = false;' },
+    { name: 'books: her BofA answer spreads to payments SHE typed',
+      file: 'helpers/booksBuild.js', suites: ['books-portal', 'books-build'],
+      find: "            const imported = ci.source !== 'manual';",
+      to:   '            const imported = true;' },
     { name: 'books: the agent ignores what the journal could not post',
       file: 'helpers/booksAgent.js', suites: ['books-portal'],
       find: '    for (const p of (built.problems || [])) {',
