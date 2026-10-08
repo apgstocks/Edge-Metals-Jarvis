@@ -84,6 +84,16 @@ const ACTIONS = [
     // all appeared at the same second with nothing saying why.
     'import-workbook',            // bills and invoices created from a spreadsheet
     'undo-import', 'merge-suppliers', 'undo-supplier-merge', 'merge-names', 'undo-name-merge',                // one import removed whole
+    // ── A PLAN THE AGENT APPLIED ────────────────────────────────────────
+    // Apsara, 2026-10-08: "make it log every change we are doing in qb/books
+    // so that we can check it later." One sentence of hers becomes several
+    // writes across two stores, and the entry is the only place her WORDS,
+    // the plan they were read as, the figures either side and the undo all
+    // sit together. Separate from the deletes above because the question
+    // "what did the agent do" must be answerable without reading every
+    // entry's detail — and because a plan that was REFUSED is worth keeping
+    // too, which none of the others are.
+    'ledger-plan',                // a multi-step correction proposed by the agent
 ];
 
 function listEntries() {

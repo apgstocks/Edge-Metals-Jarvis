@@ -292,6 +292,22 @@ function simulateInto(steps, world) {
             const p = payById.get(String(s.payment_id));
             if (!b) return bad(i, `bill ${s.bill_id} is not there to match against`);
             if (!p) return bad(i, `there is no payment ${s.payment_id}`);
+            // ── THE REFUSAL THAT LIVES IN ANOTHER FILE ──────────────────
+            // billPayments.editBillPayment REFUSES a payment already linked
+            // into QuickBooks — her rule, 2026-10-07: "Refuse, and tell me
+            // to change both", because an edit here alone leaves her books
+            // and Jarvis disagreeing with nothing recording who moved what.
+            //
+            // The verifier knew nothing about it, so a plan touching a
+            // linked payment would verify, be previewed, be approved, and
+            // only THEN fail — CLAUDE.md's named trap, a requirement in
+            // shared code that one caller cannot satisfy, discovered by
+            // whoever happens to use that path. Checked here instead,
+            // while she can still do something about it.
+            if (p.qb_linked) {
+                return bad(i, `payment ${p.id} is already in QuickBooks — change it in both, or `
+                    + 'remove it there first. Jarvis will not edit one side on its own');
+            }
             const want = r2(num(s.amount));
             const already = r2(p.applied.reduce((t, a) => t + num(a.amount), 0));
             const free = r2(num(p.amount) - already);
@@ -305,6 +321,13 @@ function simulateInto(steps, world) {
         if (s.op === 'unmatch-payment') {
             const p = payById.get(String(s.payment_id));
             if (!p) return bad(i, `there is no payment ${s.payment_id}`);
+            // Same gate as match-payment, and for the same reason — taking
+            // an allocation OFF a QuickBooks-linked payment desynchronises
+            // the two sides exactly as putting one on does.
+            if (p.qb_linked) {
+                return bad(i, `payment ${p.id} is already in QuickBooks — change it in both, or `
+                    + 'remove it there first. Jarvis will not edit one side on its own');
+            }
             const b = resolveBill(s.bill_id, i);
             const before = p.applied.length;
             p.applied = p.applied.filter((a) => String(a.bill_id) !== String(b ? b.id : s.bill_id));
