@@ -877,10 +877,14 @@ const MUTATIONS = [
       to:   "+ '<table class=\"data-table\"><thead><tr><th>Invoice</th><th>Date</th><th>Paid</th><th>Container / Booking</th>'" },
 
     // ── 5100 FOR THE LOCAL CARRIERS, AND THE LINK THAT OPENS ONE ──────
-    { name: 'books: carrier freight lands in 6110 operating instead of 5100',
+    { name: 'books: carrier trucking lands in 6110 operating instead of 5200',
       file: 'helpers/postings.js', suites: ['books-portal', 'postings'],
-      find: "        debits: [['5100', r2(num(tx.amount))]],\n        credits: [['2050', r2(num(tx.amount))]],",
-      to:   "        debits: [['6110', r2(num(tx.amount))]],\n        credits: [['2050', r2(num(tx.amount))]]," },
+      find: "    'carrier-invoice': (tx) => ({\n        debits: [['5200', r2(num(tx.amount))]],",
+      to:   "    'carrier-invoice': (tx) => ({\n        debits: [['6110', r2(num(tx.amount))]]," },
+    { name: 'books: carrier trucking drifts back to 5100 ocean freight',
+      file: 'helpers/postings.js', suites: ['books-portal', 'postings'],
+      find: "    'carrier-invoice': (tx) => ({\n        debits: [['5200', r2(num(tx.amount))]],",
+      to:   "    'carrier-invoice': (tx) => ({\n        debits: [['5100', r2(num(tx.amount))]]," },
     { name: 'books: a carrier payment with no bank is credited to BofA anyway',
       file: 'helpers/postings.js', suites: ['books-portal', 'postings'],
       find: "        const bank = bankAccount(tx);\n        if (!bank) {\n            return { problem: `${tx.party || 'a carrier'} invoice",

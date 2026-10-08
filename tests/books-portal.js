@@ -415,10 +415,26 @@ const A = require(path.join(ROOT, 'helpers/booksAgent'));
     const bal = (code) => Math.round((at(tb, code) - at(tb0, code)) * 100) / 100;
 
     ck('the store reaches the journal at all', built.transactions >= 4, String(built.transactions));
-    ck('all four invoices land in 5100 Freight and shipping — HER choice',
-       bal('5100') === 16600, `5100 is ${bal('5100')}, expected 1850 + 4450 + 9700 + 600`);
+    // ── 5200 TRUCKING, AND SHE CORRECTED ME TO IT ────────────────────────
+    // Apsara, 2026-10-08, first "5100 for them", then later the same day
+    // "5200 THEN .CHECK QUICKBOOK". The QuickBooks check is what settles it:
+    // qb-party-map.json already maps the role "trucking" to her real
+    // QuickBooks account 374, "Trucking". So these post where her accountant
+    // already looks, and 5100 stays what the chart says it is — OCEAN
+    // freight.
+    ck('all four invoices land in 5200 Trucking — HER choice, corrected',
+       bal('5200') === 16600, `5200 is ${bal('5200')}, expected 1850 + 4450 + 9700 + 600`);
+    ck('  and NOT in 5100, which the chart reserves for ocean freight',
+       bal('5100') === 0, `5100 is ${bal('5100')}`);
     ck('  and NOT in 6110 operating, which is below gross profit',
        bal('6110') === 0, `6110 is ${bal('6110')}`);
+    // The reason the correction matters beyond tidiness: 'trucker-bill' has
+    // always debited 5200, so leaving carrier invoices on 5100 split one
+    // kind of cost across two accounts and understated her trucking total
+    // wherever anyone read only one of them.
+    ck('  which is the same account trucker bills already use',
+       require(path.join(ROOT, 'helpers/postings')).RULES['trucker-bill']({
+           entity: 'edge-metals', amount: 100 }).debits[0][0] === '5200');
     const pl = S2.profitAndLoss(built.lines, { entity: 'edge-metals' });
     const pl0 = S3.profitAndLoss(without.lines, { entity: 'edge-metals' });
     ck('  so it is a cost of the material sold',

@@ -152,17 +152,29 @@ const RULES = {
         credits: [['4100', r2(num(tx.amount))]],
     }),
     // ── A LOCAL-DELIVERY CARRIER'S INVOICE ───────────────────────────────
-    // Apsara, 2026-10-08, asked which account: "5100 for them". So NTG, TQL
-    // and Schneider are 5100 Freight and shipping — a COST OF THE MATERIAL
-    // SOLD, above gross profit — not 6110 Freight (operating). The chart
-    // carries both deliberately and she chose; this comment records that it
-    // was her call, because the two sit on opposite sides of gross profit and
-    // the next person to read this will want to know who decided.
+    // ── 5200 TRUCKING. HER DECISION, AND SHE CORRECTED ME ────────────────
+    // Apsara, 2026-10-08, asked which account, first said "5100 for them"
+    // and later the same day "5200 THEN .CHECK QUICKBOOK". 5200 Trucking is
+    // the answer and the QuickBooks check confirms it: qb-party-map.json
+    // already maps the role "trucking" to her real QuickBooks account id
+    // 374, named "Trucking". So these post where her accountant already
+    // looks for them, instead of into 5100 Freight and shipping, which the
+    // chart reserves for OCEAN freight.
+    //
+    // It also makes the two trucking paths agree. 'trucker-bill' below has
+    // always debited 5200; a carrier invoice going to 5100 would have split
+    // the same kind of cost across two accounts, so her trucking total
+    // would have been understated wherever anyone read one of them.
+    //
+    // BOTH of her answers are recorded rather than just the last one,
+    // because the first is in a commit message and in memory, and a reader
+    // finding 5200 here after reading 5100 there deserves to know which
+    // way the correction went and that it was hers both times.
     //
     // The credit is 2050 Accrued trucking and freight, which the chart already
     // describes as "Hauliers and carriers billed but unpaid".
     'carrier-invoice': (tx) => ({
-        debits: [['5100', r2(num(tx.amount))]],
+        debits: [['5200', r2(num(tx.amount))]],
         credits: [['2050', r2(num(tx.amount))]],
     }),
 
