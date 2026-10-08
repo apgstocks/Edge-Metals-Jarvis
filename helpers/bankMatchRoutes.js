@@ -337,6 +337,78 @@ function mount(app, cfg) {
     // path — link, sync, match, confirm — is reachable from the screen rather
     // than from a shell on the VM.
     //
+    // ── GET /api/bank/review ─────────────────────────────────────────────
+    // Apsara, 2026-10-08: "i want like pending,posted transactions like qb
+    // with match,post", and "add as a carrier bill that is also better".
+    //
+    // One queue covering BOTH directions. /api/bank/match above is money
+    // IN only and always has been — bankOut.js, written this morning, is
+    // the other half and had no route at all, which made it as dead as
+    // reconcile.js was for a month.
+    //
+    // ── WHY THIS DOES NOT REUSE THE HANDLER ABOVE ───────────────────────
+    // The obvious move is to extract /api/bank/match's 165 lines into a
+    // function and call it from both. I did not, and the reason is worth
+    // recording rather than rediscovering: that handler serves the screen
+    // she uses, my local store is empty, and I cannot prove an extraction
+    // is behaviour-preserving against data I do not have. The
+    // helpers/partyName.js precedent is that an extraction must change
+    // NOTHING and be proven by snapshot — and the snapshot is exactly what
+    // is unavailable here.
+    //
+    // So this composes the same pieces in the same order, and
+    // tests/bank-review-route.js asserts the two routes agree on the
+    // inflow rows for identical input. That catches the drift an
+    // extraction would have prevented, without touching a live screen on
+    // the strength of a test that cannot see her data.
+    app.get('/api/bank/review', (req, res) => {
+        try {
+            const ledger = require('./bankLedger');
+            const BO = require('./bankOut');
+            const BR = require('./bankReview');
+            const BB = require('./booksBuild');
+            const BRec = require('./bankReconcile');
+
+            const from = String(req.query.from || '').slice(0, 10) || null;
+            const to = String(req.query.to || '').slice(0, 10) || null;
+            const rows = ledger.list();
+
+            // ── MONEY OUT, AGAINST WHAT THE JOURNAL SAYS SHE PAID ───────
+            // The journal, not the six payment stores: booksBuild already
+            // enumerates every store that moves money, so a store added
+            // later is matched the day it is posted rather than needing a
+            // second enumeration kept in step.
+            const built = BB.build({ from, to });
+            const outByBank = BRec.bankAccounts().map((a) => ({
+                ...a,
+                sweep: BO.sweep({ rows, lines: built.lines, code: a.code, from, to }),
+            }));
+            const withdrawalResults = outByBank.flatMap((b) => b.sweep.results);
+
+            // Money IN is NOT computed here. Mixing a half-built inflow
+            // path into this route would be the duplication the note above
+            // refuses — the screen asks /api/bank/match for that side, and
+            // the queue merges them client-side until one of the two is
+            // genuinely extractable.
+            const queue = BR.queue({ withdrawalResults });
+
+            res.json({
+                from, to,
+                queue,
+                // Per bank, so one dead feed cannot hide behind the other.
+                banks: outByBank.map((b) => ({ code: b.code, bank: b.bank, name: b.name,
+                    recorded: b.sweep.recorded, counts: b.sweep.counts,
+                    autoCount: b.sweep.autoCount, unclaimed: b.sweep.unclaimed.length })),
+                journal: { complete: built.complete, problems: (built.problems || []).length },
+                // Same rule as /api/bank/reconcile: an incomplete journal
+                // makes every figure a floor, and the screen must say so
+                // before it shows a queue built on one.
+                note: built.complete ? null
+                    : 'the journal could not post everything, so payments may be missing from this queue',
+            });
+        } catch (e) { res.status(500).json({ error: e.message }); }
+    });
+
     // ── GET /api/bank/reconcile ──────────────────────────────────────────
     // Apsara, 2026-10-08: "so that i dont need to look out for statements
     // whether payment received or sent ever again."

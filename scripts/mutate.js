@@ -1131,6 +1131,19 @@ const MUTATIONS = [
       find: "        if (!spec) { bad(i, `\"${s && s.op}\" is not an operation Jarvis will perform`); return; }",
       to:   "        if (!spec) { return; }" },
 
+    { name: 'reviewroute: money out stops reaching the queue',
+      file: 'helpers/bankMatchRoutes.js', suites: ['bank-review-route'],
+      find: "            const withdrawalResults = outByBank.flatMap((b) => b.sweep.results);",
+      to:   "            const withdrawalResults = [];" },
+    { name: 'reviewroute: an incomplete journal is not mentioned',
+      file: 'helpers/bankMatchRoutes.js', suites: ['bank-review-route'],
+      find: "                note: built.complete ? null",
+      to:   "                note: true ? null" },
+    { name: 'reviewroute: the screen stops calling it, like reconcile.js did',
+      file: 'dashboard/bank-match.html', suites: ['bank-review-route'],
+      find: "    renderReview();",
+      to:   "    if (false) renderReview();" },
+
     // ── THE REVIEW QUEUE — "LIKE QB, BUT BETTER", 2026-10-08 ─────────
     { name: 'review: a guess from a descriptor joins the bulk-post offer',
       file: 'helpers/bankReview.js', suites: ['bank-review'],

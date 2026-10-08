@@ -84,6 +84,10 @@ h2.sec{font-size:13px;margin:18px 0 8px;color:var(--text-muted);font-family:var(
        she actually asked, and an answer below a scrolling worklist is an
        answer she has to go looking for. -->
   <div id="recon"></div>
+  <!-- Money OUT. /api/bank/match below is money IN and always has been, so
+       until today half her bank had no screen at all. Apsara, 2026-10-08:
+       "i want like pending,posted transactions like qb with match,post". -->
+  <div id="review"></div>
   <div id="list"><div class="empty">Loading…</div></div>
   <div id="extras"></div>
 </main>
@@ -494,12 +498,78 @@ async function renderReconcile() {
   $('recon').innerHTML = out.join('');
 }
 
+/* ── MONEY OUT, LAID OUT THE WAY SHE ALREADY READS ONE ────────────────
+   Apsara, 2026-10-08: "i want like pending,posted transactions like qb
+   with match,post", then on a mock-up, "add as a carrier bill that is
+   also better".
+
+   QuickBooks' shape, her words in the buttons. She reads the QuickBooks
+   banking screen fluently, so borrowing its structure costs no learning;
+   naming the RECORD a button will create beats QuickBooks' generic "Add"
+   plus a category dropdown, because what she cares about is what exists
+   afterwards.
+
+   The states and their buttons come from the server — helpers/bankReview
+   .js — so the screen cannot invent an action the server will not take. */
+async function renderReview() {
+  let d = null;
+  try { d = await api('/api/bank/review'); } catch (e) { d = { error: e.message }; }
+  if (d.error) {
+    $('review').innerHTML = `<div class="card"><div class="lbl">money out</div>
+      <div class="note">${esc(d.error)}</div></div>`;
+    return;
+  }
+  const q = d.queue || { rows: [], counts: {} };
+  const out = [];
+
+  out.push(`<h2 class="sec">For review <span style="color:var(--text-faint); font-weight:400;">${q.rows.length}</span></h2>`);
+
+  /* Same rule as the reconciliation above: an incomplete journal makes
+     every figure a floor, and a SHORT queue reads as a quiet morning. */
+  if (d.note) out.push(`<div class="card"><div class="note">${esc(d.note)}</div></div>`);
+
+  if (!q.rows.length) {
+    out.push('<div class="card"><div class="note">Nothing waiting. Every withdrawal the bank has sent '
+      + 'is either matched to a payment you recorded, or set aside.</div></div>');
+    $('review').innerHTML = out.join('');
+    return;
+  }
+
+  /* The one-press offer covers EXACT MATCHES only. A match creates
+     nothing — it ties two existing records together. Creating records in
+     bulk from a guess about a descriptor is a different and much worse
+     offer wearing the same button, which is what QuickBooks does. */
+  if (q.canPostAll) {
+    out.push(`<div class="card"><div class="row1">
+      <span class="desc">${q.canPostAll} row(s) match a payment you already recorded, to the cent.</span>
+      <button class="btn go" data-reviewall="1">Match all ${q.canPostAll}</button>
+    </div><div class="note">Only exact matches. Anything combined, approximate or ambiguous stays here.</div></div>`);
+  }
+
+  out.push('<div class="card">' + q.rows.map((r) => {
+    const warn = r.state === 'choose' ? ' style="color:var(--status-warning)"' : '';
+    return `<div class="row1" style="margin:6px 0; align-items:flex-start;">
+      <span class="when" style="min-width:68px">${esc(fmtDay(r.date))}</span>
+      <span class="desc" style="flex:1; min-width:0;">
+        <span${warn}>${esc(r.descriptor || '(no description)')}</span>
+        <div class="note" style="margin:2px 0 0">${esc(r.why || '')}</div>
+      </span>
+      <span class="amt" style="font-size:13px; white-space:nowrap;">${money(r.amount)}</span>
+      <button class="btn ${r.state === 'match' ? 'go' : ''}" data-reviewact="${esc(r.id)}"
+        data-state="${esc(r.state)}">${esc(r.label)}</button>
+    </div>`;
+  }).join('') + '</div>');
+
+  $('review').innerHTML = out.join('');
+}
+
 async function load() {
   try {
     STATE.data = await api('/api/bank/match');
     await render();
     renderFeed();
     renderReconcile();
+    renderReview();
   } catch (e) {
     $('list').innerHTML = `<div class="card"><div class="lbl">could not load</div><div class="note">${esc(e.message)}</div></div>`;
   }
