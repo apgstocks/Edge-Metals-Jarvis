@@ -348,7 +348,22 @@ function createApi() {
     // down is now redundant (harmless — it just never fires) but left in
     // place rather than removed under time pressure; a future cleanup could
     // delete it without changing behavior.
-    app.use(express.json({ limit: '40mb' }));
+    // ── rawBody, FOR THE PLAID WEBHOOK ONLY ───────────────────────────────
+    // Plaid signs the SHA-256 of the exact bytes it sent, and its docs warn
+    // the hash "is sensitive to the whitespace in the webhook body". Once
+    // express.json has parsed and we re-serialise, the hash cannot match
+    // however identical the object looks — so the raw buffer has to be kept
+    // before parsing.
+    //
+    // ONLY for that path. Keeping a 40 MB buffer on every request to hold
+    // one small webhook would double the memory cost of every photo upload
+    // on a box with max_memory_restart at 1500M.
+    app.use(express.json({
+        limit: '40mb',
+        verify: (req, res, buf) => {
+            if (req.url && req.url.split('?')[0] === '/api/plaid/webhook') req.rawBody = buf;
+        },
+    }));
 
     // ── GZIP ──────────────────────────────────────────────────────────────
     // Apsara, 2026-09-19: "When i click Bill,it takes like 5 seconds to load
@@ -803,6 +818,96 @@ function createApi() {
         if (sid) sessions.delete(sid);
         res.setHeader('Set-Cookie', 'sid=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0');
         res.json({ ok: true });
+    });
+
+    // ── POST /api/plaid/webhook — PUBLIC, AND THE ONLY THING GUARDING IT
+    //    IS A SIGNATURE ──────────────────────────────────────────────────
+    // Apsara, 2026-10-08: "i dont want human intervention between jarvis and
+    // plaid." The nightly 05:45 pull needs nobody, but it finds out a
+    // connection has died up to a day late and only by a figure going
+    // stale. This is how Plaid says it within the hour.
+    //
+    // ── REGISTERED HERE, ABOVE THE SESSION GATE, DELIBERATELY ───────────
+    // Plaid cannot log in. Rather than carve a hole in the gate below with
+    // a path condition — the kind of exemption that grows a second entry,
+    // then a third — the route is simply mounted before it. The exemption
+    // is then structural and visible: everything after this line is gated,
+    // this one line is not, and you can see which by reading downwards.
+    //
+    // NOTHING IS TRUSTED UNTIL THE SIGNATURE CHECKS OUT. The body is not
+    // read, no sync is started and no mail is sent before
+    // plaidWebhook.verify returns ok — see that file for the five steps.
+    // Plaid's source IPs are published but deliberately NOT used as a
+    // guard: they "are subject to change", and an IP allowlist that silently
+    // goes stale is a feed that silently stops.
+    app.post('/api/plaid/webhook', async (req, res) => {
+        const W = require('./helpers/plaidWebhook');
+        const raw = req.rawBody || Buffer.from(JSON.stringify(req.body || {}));
+        let v;
+        try {
+            v = await W.verify(raw, req.headers, {
+                getKey: (kid) => require('./helpers/plaid').verificationKey(kid),
+            });
+        } catch (e) { v = { ok: false, why: e.message, transient: true }; }
+
+        if (!v.ok) {
+            // ── 403 vs 503, AND WHY THE DIFFERENCE MATTERS ──────────────
+            // Plaid retries any non-200 for 24 hours. A FORGERY must not be
+            // retried — 403 and it stops. But a genuine webhook we could not
+            // verify because the key fetch failed must come back, or a real
+            // disconnection notice is lost to a bad minute of network.
+            console.warn(`[PLAID] webhook refused: ${v.why}`);
+            return res.status(W.statusFor(v.why)).json({ error: 'webhook not verified' });
+        }
+
+        // ── ANSWER FIRST, WORK AFTER ────────────────────────────────────
+        // Plaid treats no response within 10 seconds as a failed delivery
+        // and retries. syncAll pages through a bank and can take longer than
+        // that, so the 200 goes now and the work happens on the next tick.
+        // Plaid's own guidance: keep the receiver as simple as possible.
+        res.json({ ok: true });
+
+        const what = W.classify(req.body || {});
+        setImmediate(() => {
+            Promise.resolve()
+                .then(async () => {
+                    if (what.action === 'sync') {
+                        // Cursor-based, so a duplicate or out-of-order
+                        // webhook re-syncs harmlessly — which is exactly the
+                        // idempotence Plaid's best-practice note asks for.
+                        const out = await require('./helpers/plaid').syncAll({});
+                        console.log(`[PLAID] webhook ${what.code}: +${out.added} ~${out.modified}`);
+                        return;
+                    }
+                    if (what.action === 'hers') {
+                        // ── THE ONE HUMAN STEP PLAID'S DESIGN REQUIRES ──
+                        // Re-authenticating at the bank happens on the
+                        // BANK'S OWN SITE. No API can do it, so this is the
+                        // single place her rule cannot be honoured — and the
+                        // whole point of the webhook is that she hears about
+                        // it in an hour instead of from a stale figure two
+                        // days later.
+                        console.error(`[PLAID] ${what.code} on item ${what.itemId} — needs re-authentication`);
+                        try {
+                            // POSITIONAL — alerts.js:98 is
+                            // sendEmailAlert(subject, body). Passing an
+                            // object would have mailed "[object Object]"
+                            // with no body, and the one alert that exists
+                            // to reach her would have arrived meaningless.
+                            const alerts = require('./alerts');
+                            await alerts.sendEmailAlert(
+                                'Jarvis: the bank feed needs you to sign in again',
+                                `Plaid says ${what.code}.\n\n${what.why}\n\n`
+                                + 'Until it is reconnected the bank feed stops, and the reconciliation '
+                                + 'on /bank-match will say so rather than claiming everything agrees.\n\n'
+                                + 'Open /bank-match and press Connect a bank to re-authenticate.');
+                        } catch (e) { console.error('[PLAID] could not send the re-auth alert:', e.message); }
+                        return;
+                    }
+                    console.log(`[PLAID] webhook ${what.code} — ${what.why}`);
+                })
+                .catch((e) => console.error('[PLAID] webhook handling failed:', e.message));
+        });
     });
 
     // ── Session gate on everything else ───────────────────────────────────────

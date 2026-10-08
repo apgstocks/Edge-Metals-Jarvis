@@ -113,6 +113,14 @@ const READ_ONLY = new Set([
     '/accounts/balance/get',            // real-time balance. BILLED PER CALL
     '/transactions/sync',               // the feed
     '/institutions/get',                // which banks use OAuth
+    // ── ADDED 2026-10-08, AND IT IS A READ ────────────────────────────────
+    // Apsara: "i dont want human intervention between jarvis and plaid."
+    // Webhooks are how Plaid tells this server a connection has died
+    // without her noticing a stale figure two days later. Verifying one
+    // needs the public key that signed it, and this is the endpoint that
+    // returns it. It takes a key id and returns a PUBLIC key: it reads, it
+    // changes nothing, and it carries no account data.
+    '/webhook_verification_key/get',
 ]);
 // HER DECISION, 2026-10-08, recorded above. Separate from READ_ONLY so the
 // read list stays honestly a read list.
@@ -258,14 +266,26 @@ function assertReadProducts(products) {
 // her bank credentials get entered, for a thing she does twice ever.
 async function linkToken({ fetchImpl, userId = 'edge-jarvis' } = {}) {
     assertReadProducts(READ_PRODUCTS);
-    const r = await call('/link/token/create', {
+    const body = {
         user: { client_user_id: String(userId) },
         client_name: 'Jarvis — Edge Metals',
         products: READ_PRODUCTS,
         country_codes: ['US'],
         language: 'en',
-    }, { fetchImpl });
-    return { link_token: r.link_token, expiration: r.expiration };
+    };
+    // ── WHERE PLAID SHOULD PUSH ─────────────────────────────────────────
+    // Apsara, 2026-10-08: "i dont want human intervention between jarvis
+    // and plaid." Set here rather than in the dashboard because the webhook
+    // belongs to the Item, and an Item linked without one never sends.
+    //
+    // OMITTED WHEN NOT CONFIGURED, rather than guessed. A wrong URL means
+    // Plaid retries into nothing for 24 hours per event and the Dashboard
+    // logs fill with failures — and the fallback is not silence, it is the
+    // 05:45 pull, which still works. Plaid requires a public https URL with
+    // a valid certificate, so localhost cannot be used even in sandbox.
+    if (cfg.PLAID_WEBHOOK_URL) body.webhook = cfg.PLAID_WEBHOOK_URL;
+    const r = await call('/link/token/create', body, { fetchImpl });
+    return { link_token: r.link_token, expiration: r.expiration, webhook: body.webhook || null };
 }
 
 // ── step 2: the public token becomes an access token ─────────────────────
@@ -396,6 +416,26 @@ async function unlink(itemId, { fetchImpl } = {}) {
     return { item_id: itemId, removed: true };
 }
 
+// ── the public key that signed a webhook ─────────────────────────────────
+// Cached by key id. Plaid rotates these, and the kid in the JWT header says
+// which one to ask for, so the cache is keyed on it rather than being a
+// single slot — a single slot silently refetches on every rotation and,
+// worse, would hand back the wrong key if two arrived interleaved.
+//
+// A key that could not be fetched is NOT cached. Caching a failure would
+// turn one bad minute into a permanently unverifiable webhook stream.
+const KEY_CACHE = new Map();
+
+async function verificationKey(keyId, { fetchImpl } = {}) {
+    const kid = String(keyId || '').trim();
+    if (!kid) fail('no key id — the webhook JWT header had no kid');
+    if (KEY_CACHE.has(kid)) return KEY_CACHE.get(kid);
+    const r = await call('/webhook_verification_key/get', { key_id: kid }, { fetchImpl });
+    if (!r || !r.key) fail('Plaid returned no verification key');
+    KEY_CACHE.set(kid, r.key);
+    return r.key;
+}
+
 function status() {
     return {
         configured: configured(),
@@ -417,6 +457,7 @@ module.exports = {
     // Exported so tests/plaid.js can assert the rule rather than trust the
     // comment above it — and so a reviewer can see the whole permitted
     // surface in one place without reading the file.
+    verificationKey,
     READ_ONLY, PERMITTED_WRITES, SANDBOX_ONLY, READ_PRODUCTS, MONEY_PRODUCTS,
     assertReadOnly, assertReadProducts, call,
 };

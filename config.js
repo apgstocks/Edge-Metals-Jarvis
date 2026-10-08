@@ -485,6 +485,22 @@ const JARVIS_PASSWORD = process.env.JARVIS_PASSWORD || '';
 const PLAID_CLIENT_ID = process.env.PLAID_CLIENT_ID || '';
 const PLAID_SECRET    = process.env.PLAID_SECRET    || '';
 const PLAID_ENV       = process.env.PLAID_ENV       || 'sandbox';
+// ── WHERE PLAID PUSHES, 2026-10-08 ───────────────────────────────────────
+// Apsara: "i dont want human intervention between jarvis and plaid." The
+// nightly pull finds out about a dead connection up to a day late; a webhook
+// says it within the hour. Empty by default and OMITTED from the link token
+// when empty, because a wrong URL makes Plaid retry into nothing for 24
+// hours per event rather than failing visibly.
+//
+// Must be a public https URL with a valid certificate — Plaid will not post
+// to localhost, so this cannot be exercised against a laptop even in
+// sandbox. The real value is https://jarvis.edgemetals.com/api/plaid/webhook
+// and it goes in the VM's .env, not here.
+//
+// The route it points at is PUBLIC and unauthenticated by necessity: Plaid
+// cannot log in. helpers/plaidWebhook.js is the whole of its protection —
+// an ES256 signature, a five-minute replay window and a body-hash check.
+const PLAID_WEBHOOK_URL = process.env.PLAID_WEBHOOK_URL || '';
 const SESSION_PATH   = process.env.SESSION_PATH || path.join(DATA_DIR, '.wwebjs_auth');
 
 // Google Drive (booking PDFs) — service-account JSON path
@@ -841,7 +857,7 @@ module.exports = {
     ROOT, DATA_DIR, MEMORY_DIR, LOGS_DIR, ...FILES,
     GEMINI_API_KEY, GEMINI_MODEL, GEMINI_MODEL_SMART, GEMINI_MODEL_CLAIMS, GEMINI_MODEL_PAY, GEMINI_MODEL_QB, GEMINI_MODEL_CHAT,
     API_PORT, API_TOKEN, APP_PASSWORD, ADMIN_PASSWORD, STAFF_PASSWORD, JARVIS_PASSWORD, SESSION_PATH,
-    PLAID_CLIENT_ID, PLAID_SECRET, PLAID_ENV,
+    PLAID_CLIENT_ID, PLAID_SECRET, PLAID_ENV, PLAID_WEBHOOK_URL,
     SUPABASE_URL, SUPABASE_KEY,
     GDRIVE_KEYFILE, GDRIVE_FOLDER_ID, GDRIVE_UPLOAD_FOLDER_ID, GDRIVE_SCALE_TICKETS_FOLDER_ID, GDRIVE_CLAIMS_FOLDER_ID,
     ADDRESS_BOOK_DOC_ID, ADDRESS_BOOK_FILE,

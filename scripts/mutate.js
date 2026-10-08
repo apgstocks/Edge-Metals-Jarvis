@@ -1020,6 +1020,43 @@ const MUTATIONS = [
     // the code for a readable note; a mutation that cannot change behaviour
     // tests nothing and a green on it means nothing.
 
+    // ── THE PUBLIC WEBHOOK ROUTE — HER RULE, 2026-10-08 ──────────────
+    // "i dont want human intervention between jarvis and plaid." The cost
+    // is an unauthenticated POST route on the box holding her ledger, and
+    // a signature is all that guards it. Each of these opens that door.
+    { name: 'webhook: alg is no longer pinned to ES256',
+      file: 'helpers/plaidWebhook.js', suites: ['plaid-webhook'],
+      find: "    if (header.alg !== 'ES256') {",
+      to:   "    if (false) {" },
+    { name: 'webhook: the body hash is never compared',
+      file: 'helpers/plaidWebhook.js', suites: ['plaid-webhook'],
+      find: "    const body = hashMatches(rawBody, payload.request_body_sha256);",
+      to:   "    const body = { ok: true };" },
+    { name: 'webhook: a replayed webhook is accepted',
+      file: 'helpers/plaidWebhook.js', suites: ['plaid-webhook'],
+      find: "    if (ageSeconds > MAX_AGE_SECONDS) {",
+      to:   "    if (false) {" },
+    { name: 'webhook: the ECDSA signature encoding is left to default DER',
+      file: 'helpers/plaidWebhook.js', suites: ['plaid-webhook'],
+      find: "        good = crypto.verify('sha256', signed, { key, dsaEncoding: 'ieee-p1363' }, sig);",
+      to:   "        good = crypto.verify('sha256', signed, key, sig);" },
+    { name: 'webhook: an unknown Plaid code triggers a sync',
+      file: 'helpers/plaidWebhook.js', suites: ['plaid-webhook'],
+      find: "    return { action: 'ignore', itemId, code: code || '(none)', why: `nothing in Jarvis acts on ${type}/${code}` };",
+      to:   "    return { action: 'sync', itemId, code: code || '(none)', why: 'assumed' };" },
+    { name: 'webhook: a disconnection no longer reaches her',
+      file: 'helpers/plaidWebhook.js', suites: ['plaid-webhook'],
+      find: "    if (NEEDS_HER.has(code)) {",
+      to:   "    if (false) {" },
+    { name: 'webhook: a forgery is answered 503 and retried for 24 hours',
+      file: 'helpers/plaidWebhook.js', suites: ['plaid-webhook'],
+      find: "        ? 503 : 403;",
+      to:   "        ? 503 : 503;" },
+    { name: 'webhook: the raw body is captured for every request, not one path',
+      file: 'api.js', suites: ['plaid-webhook'],
+      find: "            if (req.url && req.url.split('?')[0] === '/api/plaid/webhook') req.rawBody = buf;",
+      to:   "            req.rawBody = buf;" },
+
     // ── READ ONLY AT PLAID — HER RULE, 2026-10-08 ─────────────────────
     // The guard is only worth having if removing it turns something red.
     { name: 'plaid: the read-only guard is skipped before the request',
