@@ -161,11 +161,30 @@ function fromPlaid(tx, accounts) {
 // This split is the whole of upsert. A re-sync refreshes what the bank says
 // and must never touch what she decided.
 const BANK_FIELDS = ['date', 'desc', 'party', 'spent', 'received', 'amount', 'direction', 'pending'];
-const HERS = ['category', 'excluded', 'excluded_reason', 'history'];
+// ── `matched` ADDED 2026-10-08, AND WHY IT LIVES HERE ────────────────────
+// Apsara: "...whether payment received or sent ever again." Ticking a
+// withdrawal off against the payment Jarvis already recorded needs somewhere
+// to remember the tick. A new store was the obvious shape and is worse in
+// three ways, each of which this file already solved:
+//
+//   · the tick survives a re-sync for free, because HERS is exactly the list
+//     upsert() preserves when the bank restates a row;
+//   · it inherits the DRIFT case — if the bank changes the amount of a row
+//     she has ticked, that is recorded rather than quietly applied;
+//   · bank-transactions.json is already excluded from the nightly Drive
+//     backup by filename, and a tick carries the same information as the row
+//     it sits on. A second file would have needed that decision made again.
+//
+// It holds { keys, at, by, how } — `how` being 'auto' or 'her', so the
+// morning list can name what Jarvis ticked by itself.
+const HERS = ['category', 'excluded', 'excluded_reason', 'history', 'matched'];
 
 // A row she has acted on. Used only to decide whether a restated figure is
-// merely new information or a problem.
-const actedOn = (row) => !!(row && (row.excluded || (row.history || []).length || row.category));
+// merely new information or a problem. A MATCHED row counts: a bank that
+// restates the amount of a withdrawal already ticked off against a recorded
+// payment is precisely the case drift exists to surface.
+const actedOn = (row) => !!(row && (row.excluded || (row.history || []).length
+    || row.category || row.matched));
 
 // ── upsert, keyed on transaction_id ──────────────────────────────────────
 // config.js:346 already says why: "keyed by Plaid's transaction_id so a

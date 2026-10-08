@@ -564,6 +564,69 @@ section('G — END TO END, through the route the screen actually posts to');
     server.close();
 }
 
+// ══════════════════════════════════════════════════════════════════════════
+section('H — OPENING a saved row, which is where it was wrong');
+// ══════════════════════════════════════════════════════════════════════════
+// Apsara, 2026-10-08: "when i enter everything in lbs,and change it to lb in
+// price,first time on saving showing properly.but on edit,it is refactoring".
+// Her screenshot: a sale of 46,560 lb at 330, the select correctly showing
+// /MT, the Amount box reading $15,364,800 — which is 46,560 × 330, the POUND
+// arithmetic, under a tonne price.
+//
+// ── WHY EVERY CHECK IN THIS FILE STAYED GREEN THROUGH IT ────────────────
+// There are THREE places this multiplication happens and I only updated two
+// on 2026-09-24: recomputeRowTotals() on the client, computeItem() on the
+// server, and the initial render inside renderItemRows(). The first two were
+// right. Every test above — and every test anywhere — drives the recompute,
+// because that is what typing does. Nothing drove a cold OPEN of a saved
+// row, so the one unfixed path was also the one untested path.
+//
+// So this section renders the Amount box the way the modal does when it
+// opens, from the stored item, touching nothing. Her exact figures.
+{
+    const HER_NET = 46560;       // 61,040 gross − 14,480 tare
+    const HER_PRICE = 330;
+    const WRONG = 15364800;                                   // net × price
+    const RIGHT = Math.round(HER_NET / 2204.62 * HER_PRICE * 100) / 100;
+
+    for (const [name, src] of [['website', DASH], ['app', APP]]) {
+        // Pull the four lines that compute `amount` for a row at render time
+        // and run them, rather than asserting on their text — a ternary is
+        // exactly the thing that gets inverted, and text-matching the old
+        // shape is the check CLAUDE.md §2 warns about.
+        const m = src.match(/const price = parseFloat\(it\.price\);[\s\S]*?const amount = \(qtyRow[^\n]*\n/);
+        ck(`${name}: the render-time amount block is findable`, !!m);
+        if (!m) continue;
+        const body = 'const net = it.net;\n' + m[0] + '; return amount;';
+        // eslint-disable-next-line no-new-func
+        const renderAmount = new Function('it', body);
+
+        ck(`${name}: a /MT row opens at the TONNE figure, not the pound one`,
+           renderAmount({ net: HER_NET, price: HER_PRICE, unit: 'mt' }) === RIGHT,
+           String(renderAmount({ net: HER_NET, price: HER_PRICE, unit: 'mt' })));
+        ck(`${name}:   and specifically not her $15,364,800`,
+           renderAmount({ net: HER_NET, price: HER_PRICE, unit: 'mt' }) !== WRONG);
+        // The other half of the same rule: every load already on file has no
+        // unit, and opening one must compute exactly as it always did.
+        ck(`${name}: a /lb row is unchanged`,
+           renderAmount({ net: HER_NET, price: HER_PRICE, unit: 'lb' }) === WRONG);
+        ck(`${name}:   and a row with NO unit is unchanged too`,
+           renderAmount({ net: HER_NET, price: HER_PRICE, unit: undefined }) === WRONG);
+        ck(`${name}:   'MT' upper case counts as tonnes here as well`,
+           renderAmount({ net: HER_NET, price: HER_PRICE, unit: 'MT' }) === RIGHT);
+
+        // ── THE TWO PATHS MUST AGREE ────────────────────────────────────
+        // The real defect was not a wrong formula, it was TWO formulas. So
+        // the lasting check is that the render path and the recompute path
+        // use the same constant and the same branch.
+        const recompute = (src.match(/const perMt = \(row\.querySelector[\s\S]*?const amount = \(qty[^\n]*\n/) || [''])[0];
+        ck(`${name}: render and recompute use the same divisor`,
+           /2204\.62/.test(m[0]) && /2204\.62/.test(recompute));
+        ck(`${name}:   and both branch on 'mt' alone, so lb and blank are one case`,
+           /=== 'mt'/.test(m[0]) && /=== 'mt'/.test(recompute));
+    }
+}
+
 console.log(`\n  ${pass} passed, ${fail} failed`);
 if (fail) { console.log('\n  FAILED:\n' + failures.map((f) => '    - ' + f).join('\n')); process.exit(1); }
 

@@ -4541,7 +4541,29 @@ function renderItemRows() {
     const g = parseFloat(it.gross_weight), t = parseFloat(it.tare_weight);
     const net = (isFinite(g) && isFinite(t)) ? Math.round((g - t) * 100) / 100 : null;
     const price = parseFloat(it.price);
-    const amount = (net != null && isFinite(price)) ? Math.round(net * price * 100) / 100 : null;
+    // ── THE UNIT, ON FIRST PAINT TOO ────────────────────────────────────
+    // Apsara, 2026-10-08, reopening a saved sale: "first time on saving
+    // showing properly.but on edit,it is refactoring". Her screenshot showed
+    // 46,560 lb at 330 /MT reading $15,364,800 — which is 46,560 × 330, the
+    // POUND arithmetic, under a select correctly showing /MT.
+    //
+    // This line was `net * price`, with no unit in it. recomputeRowTotals()
+    // forty lines up has always been right, so the figure was correct the
+    // moment anything in the row was touched and wrong every time the modal
+    // was merely OPENED — which is exactly "fine on save, wrong on edit".
+    //
+    // My bug, from 2026-09-24: I added the unit to the recompute path and to
+    // the server's computeItem, and left the initial render on the old
+    // formula. Two of the three places were updated, which is why every test
+    // stayed green — they all drive the recompute.
+    //
+    // Nothing was ever SAVED wrong: syncItemsFromDom does not post `amount`,
+    // and helpers/loads.js and helpers/outboundLoads.js both recompute it
+    // from the unit. This was a lie on screen, not in the ledger — but a lie
+    // large enough that correcting it by hand would have made it real.
+    const perMtRow = String(it.unit || '').trim().toLowerCase() === 'mt';
+    const qtyRow = (net != null && perMtRow) ? net / 2204.62 : net;
+    const amount = (qtyRow != null && isFinite(price)) ? Math.round(qtyRow * price * 100) / 100 : null;
     // One flat row of columns (see .item-row grid below) instead of the old
     // 3-stacked-boxes layout — per Apsara, wanted item detail condensed to a
     // single line per item. Per-field <label>s are gone in favor of one

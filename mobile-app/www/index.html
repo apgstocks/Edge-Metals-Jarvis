@@ -2765,7 +2765,21 @@ function renderItemRows() {
     const g = parseFloat(it.gross_weight), t = parseFloat(it.tare_weight);
     const net = (isFinite(g) && isFinite(t)) ? Math.round((g - t) * 100) / 100 : null;
     const price = parseFloat(it.price);
-    const amount = (net != null && isFinite(price)) ? Math.round(net * price * 100) / 100 : null;
+    // ── THE UNIT, ON FIRST PAINT TOO ────────────────────────────────────
+    // Same fix as dashboard/index.html, same day, and the comment there has
+    // the full story. Short version: this line was `net * price` with no
+    // unit in it, so reopening a /MT row showed the POUND figure — 46,560 lb
+    // at 330 /MT reading $15,364,800 — while recomputeRowTotals(), which
+    // runs the moment anything is touched, was always right. Correct on
+    // save, wrong on open.
+    //
+    // Ported here in the SAME commit rather than left for the next APK.
+    // These two screens are the same form and the phone is where loads are
+    // actually entered, standing at the scale; a fix that lands on the
+    // website first means the wrong figure is on the device being used.
+    const perMtRow = String(it.unit || '').trim().toLowerCase() === 'mt';
+    const qtyRow = (net != null && perMtRow) ? net / 2204.62 : net;
+    const amount = (qtyRow != null && isFinite(price)) ? Math.round(qtyRow * price * 100) / 100 : null;
     // One flat row of columns (see .item-row grid below) instead of the old
     // 3-stacked-boxes layout — per Apsara, wanted item detail condensed to a
     // single line per item. Per-field <label>s are gone in favor of one

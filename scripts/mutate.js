@@ -901,6 +901,23 @@ const MUTATIONS = [
       file: 'dashboard/documents.html', suites: ['carrier-invoices-route'],
       find: "    : (Number(r.paid) > 0.005",
       to:   "    : (false" },
+    // ── THE UNIT ON FIRST PAINT — HER BUG, 2026-10-08 ─────────────────
+    // "first time on saving showing properly.but on edit,it is refactoring".
+    // One multiplication existing in three places, two of them fixed in
+    // September. These pin the third, on both clients.
+    { name: 'units: opening a saved /MT row shows the pound figure again (website)',
+      file: 'dashboard/index.html', suites: ['load-item-units'],
+      find: '    const qtyRow = (net != null && perMtRow) ? net / 2204.62 : net;',
+      to:   '    const qtyRow = net;' },
+    { name: 'units: opening a saved /MT row shows the pound figure again (app)',
+      file: 'mobile-app/www/index.html', suites: ['load-item-units'],
+      find: '    const qtyRow = (net != null && perMtRow) ? net / 2204.62 : net;',
+      to:   '    const qtyRow = net;' },
+    { name: 'units: a row with no unit starts being treated as tonnes',
+      file: 'dashboard/index.html', suites: ['load-item-units'],
+      find: "    const perMtRow = String(it.unit || '').trim().toLowerCase() === 'mt';",
+      to:   "    const perMtRow = String(it.unit || '').trim().toLowerCase() !== 'lb';" },
+
     // ── DOES THE BANK AGREE WITH THE BOOKS — HER GOAL, 2026-10-08 ─────
     // "so that i dont need to look out for statements whether payment
     // received or sent ever again". Each of these is a way the screen could
