@@ -41,6 +41,17 @@ const FILES = {
     BRAIN_FILE       : path.join(DATA_DIR, 'brain.json'),
     ALERTS_FILE      : path.join(DATA_DIR, 'alerts.json'),
     SETTINGS_FILE    : path.join(DATA_DIR, 'settings.json'),
+    // ── EVERY SCHEDULED JOB'S PULSE (2026-10-08) ─────────────────────────
+    // Apsara: "if something is broke - i should know". 31 cron jobs ran in
+    // this process and exactly ONE of them recorded that it had run
+    // (gmail_watcher_last_run), and that one read null. A job that dies is
+    // invisible, because its only symptom is an ABSENCE.
+    //
+    // Its OWN FILE, deliberately not settings.json: settings is written by
+    // many paths and has eaten fields before (see the saveStore allowlist
+    // scars in workflow/replyWatch.js). A pulse written every minute does
+    // not belong in the same file as her configuration.
+    HEARTBEAT_FILE   : path.join(DATA_DIR, 'heartbeat.json'),
     TRANSCRIPTS_FILE : path.join(DATA_DIR, 'transcripts.json'),
     FACTS_FILE       : path.join(DATA_DIR, 'facts.json'),
     TRUST_LEDGER_FILE: path.join(DATA_DIR, 'trust_ledger.json'),

@@ -3,7 +3,15 @@
 // (ERD/cutoff) is a US port date. Dedup via brain.proactive_sent so a restart
 // mid-day never double-sends.
 
-const cron = require('node-cron');
+// ── EVERY JOB NOW LEAVES A PULSE (2026-10-08) ──────────────────────────────
+// Apsara: "if something is broke - i should know." 31 jobs were scheduled
+// here and exactly ONE recorded that it ran (settings.gmail_watcher_last_run,
+// which read null), so a job that died was invisible -- its only symptom an
+// absence. helpers/heartbeat.js wraps cron.schedule and keeps its signature,
+// so all 31 call sites below are UNTOUCHED: hand-editing them would have been
+// 31 chances to drop a .catch or a timezone, and a scheduler that throws at
+// startup takes every job down, which is worse than the gap being closed.
+const cron = require('./helpers/heartbeat').instrument(require('node-cron'));
 const { usd } = require('./helpers/money');
 const { loadBookings, loadWorkflow, mutateBrain, loadBrain,
         mutateJson, loadHistory } = require('./helpers/json');
@@ -380,6 +388,32 @@ async function stallWatch() {
 // thing. The SUBJECT carries the verdict — "clean", "3 new problems", "2
 // POSSIBLE LOST WRITES" — so a clean day costs her one glance at a subject
 // line and never needs opening.
+// Reads helpers/heartbeat.js and messages her ONLY when something is wrong.
+// Deliberately quiet on a healthy system -- see the cron comment above.
+async function healthWatch() {
+    const hb = require('./helpers/heartbeat');
+    const s = hb.status();
+    if (!s.total) {
+        // Nothing has reported at all. On the very first run after deploy
+        // that is normal, so it is logged rather than sent.
+        console.log('[HEALTH] no jobs have reported in yet');
+        return { sent: false, reason: 'nothing-reported' };
+    }
+    if (s.healthy) {
+        console.log(`[HEALTH] all ${s.total} scheduled jobs on time`);
+        return { sent: false, reason: 'healthy' };
+    }
+    const body = 'Jarvis health check\n\n' + hb.report();
+    try {
+        await _sendToManager(body);
+        console.warn(`[HEALTH] reported ${s.failing.length} failing, ${s.late.length} late, ${s.silent.length} never-run`);
+        return { sent: true, failing: s.failing.length, late: s.late.length, silent: s.silent.length };
+    } catch (err) {
+        console.error('[HEALTH] could not deliver the health report:', err.message);
+        return { sent: false, reason: 'send-failed' };
+    }
+}
+
 async function nightlyLogDigest() {
     const path = require('path');
     const fs = require('fs');
@@ -1335,6 +1369,19 @@ function start() {
     cron.schedule('0 6 * * *',    () => pricelistFallback().catch(e => console.error('[SCHED] pricelist:', e)), TZ);
     cron.schedule('0 23 * * *',   () => autoArchive().catch(e => console.error('[SCHED] archive:', e)),  TZ);
     cron.schedule('0 7 * * *',    () => nightlyLogDigest().catch(e => console.error('[SCHED] log-digest:', e)), TZ);
+    // ── AND SOMETHING HAS TO READ THE PULSE (2026-10-08) ──────────────────
+    // A heartbeat nobody looks at is the same as no heartbeat. Three times a
+    // day, and it SAYS NOTHING WHEN ALL IS WELL -- a monitor that reports
+    // every morning that everything is fine is a monitor she learns to
+    // scroll past, and then it may as well not exist. One message, only when
+    // a job has failed, gone late, or never run at all.
+    //
+    // HONEST LIMIT, stated here because it would otherwise be assumed away:
+    // this runs INSIDE the same process as the jobs it watches, so it catches
+    // a JOB dying. It cannot catch the PROCESS dying -- if pm2 stops or the
+    // VM goes down, nothing here fires, because nothing here is running.
+    // That needs a check from outside the box, and it is not this.
+    cron.schedule('5 7,13,20 * * *', () => healthWatch().catch(e => console.error('[SCHED] health-watch:', e)), TZ);
     // ── 05:40 — CAN PEOPLE ACTUALLY GET IN ───────────────────────────────
     // Apsara, 2026-10-05: "Find a permanent solution to fix this foreveer",
     // after a customer in the US spent an afternoon on

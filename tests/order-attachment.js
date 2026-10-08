@@ -102,10 +102,29 @@ const ECCOMELT = {
     ck('OC3 the division is raised as an unconfirmed doubt, not done quietly',
         (d.unconfirmed || []).some((u) => /40 MT across 2 containers, so 20 MT per container/.test(u)),
         JSON.stringify(d.unconfirmed));
-    ck('OC4 a figure read off a PDF is shown as read, never as grounded',
-        (d.assumed || []).some((a) => /\$330 read off the attached order/.test(a))
-        && !(d.grounded || []).some((g) => /330/.test(g)),
-        `${JSON.stringify(d.assumed)} / ${JSON.stringify(d.grounded)}`);
+    // ── REWRITTEN 2026-10-08, AND THE REASON MATTERS ───────────────────────
+    // This asserted that a PDF-read figure is "never grounded". It passed on
+    // 2026-10-03 and failed five days later -- not because the code changed,
+    // but because HER DATA did: she now has five invoices for Steel Scrap for
+    // Smelting HMS at around $330/MT, so judgeRate legitimately confirms the
+    // figure and says so in `grounded`.
+    //
+    // The original assertion was simply wrong. Being read off a PDF and being
+    // confirmed against her own invoice history are INDEPENDENT facts, and a
+    // figure that is both is better evidenced, not worse. What must actually
+    // hold is that the PROVENANCE is always stated -- she is never left
+    // thinking she saw someone type it.
+    ck('OC4 a figure read off a PDF always says so',
+        (d.assumed || []).some((a) => /\$330 read off the attached order, not stated in the email/.test(a)),
+        JSON.stringify(d.assumed));
+    // And the data-independent half: a material with no history cannot be
+    // confirmed, however it was read.
+    const unseen = toProformaDraft(await groundRates(mergePdfOrder(
+        { is_order: false, consignee: null, items: [] },
+        { ...EMI01, items: [{ desc: 'Unobtainium Scrap', qty: 40, qty_unit: 'mt', rate: 330, rate_basis: 'per_mt', rate_confidence: 1 }] },
+        { filename: 'x.pdf' })), {});
+    ck('OC4b and with no history behind it, it is not confirmed',
+        !(unseen.grounded || []).length, JSON.stringify(unseen.grounded));
     ck('OC5 the document\'s own caveat reaches her',
         (d.unconfirmed || []).some((u) => /5 pictures per container/.test(u)), JSON.stringify(d.unconfirmed));
 
