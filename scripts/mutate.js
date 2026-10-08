@@ -1043,6 +1043,24 @@ const MUTATIONS = [
       find: "        noFeedRows: feed.rows.length === 0,",
       to:   "        noFeedRows: false," },
 
+    // ── THE REVIEW QUEUE — "LIKE QB, BUT BETTER", 2026-10-08 ─────────
+    { name: 'review: a guess from a descriptor joins the bulk-post offer',
+      file: 'helpers/bankReview.js', suites: ['bank-review'],
+      find: "        canPostAll: by('match').length,",
+      to:   "        canPostAll: by('match').length + by('add').length," },
+    { name: 'review: an unrecognised payee defaults to an expense',
+      file: 'helpers/bankReview.js', suites: ['bank-review'],
+      find: "    for (const k of KINDS) if (k.re.test(d)) return k;\n    return null;",
+      to:   "    for (const k of KINDS) if (k.re.test(d)) return k;\n    return { kind: 'expense', label: 'Add as an expense', account: '6300' };" },
+    { name: 'review: an ambiguous row quietly picks the first match',
+      file: 'helpers/bankReview.js', suites: ['bank-review'],
+      find: "    if (res.outcome === 'ambiguous') {",
+      to:   "    if (false) {" },
+    { name: 'review: money out drops off the queue again',
+      file: 'helpers/bankReview.js', suites: ['bank-review'],
+      find: "        .concat((withdrawalResults || []).map(fromWithdrawal))",
+      to:   "        .concat([])" },
+
     // ── THE ACCOUNT JOIN — THE SILENT FAILURE AFTER LINKING ──────────
     { name: 'join: two accounts ending the same are joined to one anyway',
       file: 'helpers/bankLedger.js', suites: ['bank-ledger'],
