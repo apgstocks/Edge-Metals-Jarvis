@@ -343,6 +343,102 @@ const A = require(path.join(ROOT, 'helpers/booksAgent'));
        'a stored trial balance is a second truth');
 }
 
+// ── E — THE LOCAL-DELIVERY CARRIERS, IN THE BOOKS ─────────────────────────
+// Apsara, 2026-10-08, asked which account: "5100 for them".
+//
+// Until today this store reached NO statement — scripts/trucking-double-count.js
+// found it sitting outside the books entirely, so freight was understated by
+// whatever was in it and the CPA pack was missing it.
+//
+// I wired it and checked it by hand in a throwaway script. Four mutations then
+// survived — 6110 instead of 5100, a missing bank credited to BofA anyway, the
+// store dropped from the journal, the rows filed under Edge Yard — because a
+// hand check is not a test. This section is what should have been written
+// first.
+{
+    section('E — NTG / TQL / Schneider freight, posted');
+
+    fs.writeFileSync(cfg.CARRIER_INVOICES_FILE, JSON.stringify([
+        // paid by hand, with the bank named
+        { id: 'A', company: 'Edge Metals', key: 'tql:P1', carrier: 'tql', ref: 'P1',
+          amount: 1850, paid: 1850, status: 'paid', invoice_date: '2026-03-01',
+          paid_dates: ['2026-03-10'], source: 'manual',
+          payments: [{ amount: 1850, date: '2026-03-10', mode: 'Wire', bank: 'BofA' }] },
+        // billed, unpaid
+        { id: 'B', company: 'Edge Metals', key: 'schneider:O1', carrier: 'schneider', ref: 'O1',
+          amount: 4450, paid: 0, status: 'open', invoice_date: '2026-03-02', paid_dates: [] },
+        // the carrier's mail says paid; it never said from which account
+        { id: 'C', company: 'Edge Metals', key: 'schneider:O2', carrier: 'schneider', ref: 'O2',
+          amount: 9700, paid: 9700, status: 'paid', invoice_date: '2026-03-03',
+          paid_dates: ['2026-03-20'], evidence: 'Schneider PAID mail' },
+    ], null, 2));
+    for (const k of Object.keys(require.cache)) if (k.startsWith(ROOT)) delete require.cache[k];
+    const B2 = require(path.join(ROOT, 'helpers/booksBuild'));
+    const S2 = require(path.join(ROOT, 'helpers/statements'));
+    const E2 = require(path.join(ROOT, 'helpers/entities'));
+    const A2 = require(path.join(ROOT, 'helpers/booksAgent'));
+
+    ck('a carrier invoice is Edge Metals\' cost',
+       E2.STORE_LEDGER.carrier_invoices === 'edge-metals',
+       'carrierInvoices.js stamps company:"Edge Metals" on every row it writes');
+
+    // ── A DELTA, NOT AN ABSOLUTE ─────────────────────────────────────────
+    // CLAUDE.md §3 says it plainly, and I ignored it: section A's bill and
+    // sale are still in the store, so 5100 came to 56,000 and 2050 to 17,150
+    // and three checks failed against figures that were correct. Measured
+    // against the SAME build with the carrier store emptied, so an unrelated
+    // fixture moving cannot break this.
+    const withCarriers = B2.build({ from: '2026-01-01', to: '2026-12-31' });
+    const carriersOnly = JSON.parse(fs.readFileSync(cfg.CARRIER_INVOICES_FILE, 'utf8'));
+    fs.writeFileSync(cfg.CARRIER_INVOICES_FILE, '[]');
+    for (const k of Object.keys(require.cache)) if (k.startsWith(ROOT)) delete require.cache[k];
+    const B3 = require(path.join(ROOT, 'helpers/booksBuild'));
+    const S3 = require(path.join(ROOT, 'helpers/statements'));
+    const without = B3.build({ from: '2026-01-01', to: '2026-12-31' });
+    fs.writeFileSync(cfg.CARRIER_INVOICES_FILE, JSON.stringify(carriersOnly, null, 2));
+
+    const built = withCarriers;
+    const tb = S2.trialBalance(built.lines, { entity: 'edge-metals' });
+    const tb0 = S3.trialBalance(without.lines, { entity: 'edge-metals' });
+    const at = (t, code) => { const a = t.accounts.find((x) => x.code === code); return a ? a.balance : 0; };
+    const bal = (code) => Math.round((at(tb, code) - at(tb0, code)) * 100) / 100;
+
+    ck('the store reaches the journal at all', built.transactions >= 3, String(built.transactions));
+    ck('all three invoices land in 5100 Freight and shipping — HER choice',
+       bal('5100') === 16000, `5100 is ${bal('5100')}, expected 1850 + 4450 + 9700`);
+    ck('  and NOT in 6110 operating, which is below gross profit',
+       bal('6110') === 0, `6110 is ${bal('6110')}`);
+    const pl = S2.profitAndLoss(built.lines, { entity: 'edge-metals' });
+    const pl0 = S3.profitAndLoss(without.lines, { entity: 'edge-metals' });
+    ck('  so it is a cost of the material sold',
+       Math.round((pl.cogsTotal - pl0.cogsTotal) * 100) / 100 === 16000
+       && Math.round((pl.expenseTotal - pl0.expenseTotal) * 100) / 100 === 0,
+       `cogs moved ${pl.cogsTotal - pl0.cogsTotal}, expense moved ${pl.expenseTotal - pl0.expenseTotal}`);
+
+    ck('a payment with a named bank credits that bank',
+       bal('1010') === -1850, `BofA is ${bal('1010')}, expected the 1,850 paid out`);
+    ck('  and relieves what is owed the carrier',
+       bal('2050') === 14150,
+       `2050 is ${bal('2050')} — 4,450 unpaid plus 9,700 whose payment could not post`);
+
+    // ── THE ONE THAT MATTERS ─────────────────────────────────────────────
+    // An imported row says the money went and never says from where. Crediting
+    // a bank anyway balances perfectly and is wrong in two places at once.
+    const problem = (built.problems || []).find((p) => /O2/.test(String(p)));
+    ck('a payment with no bank is a PROBLEM, not a guessed credit', !!problem,
+       JSON.stringify(built.problems));
+    ck('  naming the carrier, the invoice and the amount',
+       !!problem && /schneider/i.test(problem) && /9700/.test(problem),
+       String(problem));
+    ck('  and the build reports itself incomplete', built.complete === false);
+    const verdict = A2.review(built, { entity: 'edge-metals' });
+    ck('  so the agent refuses to vouch for the figures',
+       verdict.trustworthy === false, A2.summary(verdict));
+
+    fs.writeFileSync(cfg.CARRIER_INVOICES_FILE, '[]');
+    for (const k of Object.keys(require.cache)) if (k.startsWith(ROOT)) delete require.cache[k];
+}
+
 console.log(`\n  ${pass} passed, ${fail} failed`);
 if (failures.length) { console.log('\n  failed:'); failures.forEach((f) => console.log('    · ' + f)); }
 try { fs.rmSync(TMP, { recursive: true, force: true }); } catch (e) {}

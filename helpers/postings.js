@@ -151,6 +151,37 @@ const RULES = {
         debits: [['1200', r2(num(tx.amount))]],
         credits: [['4100', r2(num(tx.amount))]],
     }),
+    // ── A LOCAL-DELIVERY CARRIER'S INVOICE ───────────────────────────────
+    // Apsara, 2026-10-08, asked which account: "5100 for them". So NTG, TQL
+    // and Schneider are 5100 Freight and shipping — a COST OF THE MATERIAL
+    // SOLD, above gross profit — not 6110 Freight (operating). The chart
+    // carries both deliberately and she chose; this comment records that it
+    // was her call, because the two sit on opposite sides of gross profit and
+    // the next person to read this will want to know who decided.
+    //
+    // The credit is 2050 Accrued trucking and freight, which the chart already
+    // describes as "Hauliers and carriers billed but unpaid".
+    'carrier-invoice': (tx) => ({
+        debits: [['5100', r2(num(tx.amount))]],
+        credits: [['2050', r2(num(tx.amount))]],
+    }),
+
+    // ── AND PAYING ONE ───────────────────────────────────────────────────
+    // Separate from the invoice so an unpaid one still shows as owed. Follows
+    // 'supplier-payment' exactly on the bank: a payment whose account cannot
+    // be identified is a PROBLEM, not a guess. An imported "Schneider PAID
+    // mail" row says the money went but never which account it left, so it
+    // surfaces as a problem she can answer rather than a credit invented
+    // against BofA — which would balance perfectly and be wrong.
+    'carrier-invoice-payment': (tx) => {
+        const bank = bankAccount(tx);
+        if (!bank) {
+            return { problem: `${tx.party || 'a carrier'} invoice ${tx.ref || ''} is marked paid `
+                + `${r2(num(tx.amount))} but nothing says which account it left`.replace(/\s+/g, ' ') };
+        }
+        return { debits: [['2050', r2(num(tx.amount))]], credits: [[bank, r2(num(tx.amount))]] };
+    },
+
     'trucker-bill': (tx) => ({
         debits: [['5200', r2(num(tx.amount))]],
         credits: [['2050', r2(num(tx.amount))]],

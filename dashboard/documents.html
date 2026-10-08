@@ -1726,6 +1726,51 @@ function splitOf(r) {
         + 'guessed split would be two numbers that happen to add up.</div>' : '');
 }
 
+// ── WHAT THE LINK OPENS ──────────────────────────────────────────────────
+// A number she clicks expecting "detailed" has to show more than the loads.
+// So: the money, what it covers, and every payment recorded against it —
+// which is also the only place the payments[] written by payManual can be
+// seen at all.
+function detailOf(r) {
+  const m = (n) => '$' + Number(n || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const left = Math.max(0, Number(r.amount || 0) - Number(r.paid || 0));
+  const pays = Array.isArray(r.payments) ? r.payments : [];
+
+  const money = '<div style="display:flex;gap:22px;flex-wrap:wrap;font-size:12px;margin-bottom:10px">'
+    + '<span>Billed <b>' + m(r.amount) + '</b></span>'
+    + '<span>Paid <b>' + m(r.paid) + '</b></span>'
+    + '<span>Outstanding <b style="color:' + (left > 0.005 ? 'var(--amber-500,#D99A2B)' : 'var(--leaf-300,#7FD172)') + '">'
+      + m(left) + '</b></span>'
+    + (r.invoice_date ? '<span style="opacity:.6">Invoiced ' + esc(r.invoice_date) + '</span>' : '')
+    + '</div>';
+
+  // Where the figure came from, named. On an imported row this is the whole
+  // reason Pay is not offered, so it belongs in the detail and not only in a
+  // greyed cell on the table.
+  const prov = '<div style="font-size:11px;opacity:.65;margin-bottom:10px">'
+    + (r.source === 'manual'
+        ? 'Added by hand' + (r.added_by ? ' (' + esc(r.added_by) + ')' : '') + ' — Jarvis is the only record of this one.'
+        : 'From ' + esc(r.evidence || 'the carrier’s email') + ' — what it says is paid comes from their remittance.')
+    + '</div>';
+
+  const payments = pays.length
+    ? '<div style="font-size:12px;margin-bottom:6px"><b>Payments recorded</b></div>'
+      + '<table class="data-table" style="margin:0 0 12px"><thead><tr><th>Date</th><th style="text-align:right">Amount</th><th>How</th><th>Reference</th></tr></thead><tbody>'
+      + pays.slice().sort((a, b) => String(a.date).localeCompare(String(b.date)))
+          .map((x) => '<tr><td>' + esc(x.date || '') + '</td><td style="text-align:right">' + m(x.amount) + '</td>'
+            + '<td>' + esc([x.mode, x.bank].filter(Boolean).join(' · ') || '—') + '</td>'
+            + '<td>' + esc(x.ref || '') + '</td></tr>').join('')
+      + '</tbody></table>'
+    : (Number(r.paid) > 0.005
+        ? '<div style="font-size:11px;opacity:.65;margin-bottom:12px">'
+          + m(r.paid) + ' is marked paid, but no payment was recorded in Jarvis — the carrier’s '
+          + 'mail said so and did not say from which account. The books flag this rather than '
+          + 'guessing a bank.</div>'
+        : '');
+
+  return money + prov + payments + splitOf(r);
+}
+
 async function addCarrierInvoice(c) {
   const ref = prompt(CARRIER_KEYS[c] + ' — the number on the invoice:');
   if (ref === null || !String(ref).trim()) return;
@@ -1790,18 +1835,33 @@ async function loadCarrier(c) {
         + '<span>Edge Metals · ' + s.count + ' invoices · billed ' + m(s.billed) + ' · <b>outstanding ' + m(s.outstanding) + '</b></span>'
         + '<button id="ciAdd_' + c + '" class="btn" style="font-size:11px;padding:4px 10px">Add invoice</button></div>'
       + '<table class="data-table"><thead><tr><th>' + esc(CARRIER_KEYS[c]) + '</th><th>Date</th><th>Detail</th><th style="text-align:right">Amount</th><th style="text-align:right">Paid</th><th>Paid on</th><th>Status</th><th>Source</th><th></th></tr></thead><tbody>'
-      + rows.map((r, i) => '<tr class="ciRow" data-i="' + i + '" style="cursor:pointer"><td>' + esc(r.ref) + '</td><td>' + esc(r.invoice_date || '') + '</td><td>' + esc(r.lane || '') + '</td><td style="text-align:right">' + m(r.amount) + '</td><td style="text-align:right">' + m(r.paid) + '</td><td style="white-space:nowrap">' + esc(paidOn(r)) + '</td><td>' + esc(r.status) + '</td><td style="font-size:11px">' + esc(r.evidence || '') + '</td>'
+      + rows.map((r, i) => '<tr><td><a class="ciRef" data-i="' + i + '" href="#" style="color:var(--leaf-300,#7FD172);text-decoration:none;border-bottom:1px dotted currentColor">' + esc(r.ref) + '</a></td><td>' + esc(r.invoice_date || '') + '</td><td>' + esc(r.lane || '') + '</td><td style="text-align:right">' + m(r.amount) + '</td><td style="text-align:right">' + m(r.paid) + '</td><td style="white-space:nowrap">' + esc(paidOn(r)) + '</td><td>' + esc(r.status) + '</td><td style="font-size:11px">' + esc(r.evidence || '') + '</td>'
           + '<td style="white-space:nowrap">' + payCell(r) + '</td></tr>'
           + '<tr class="ciSplit" data-i="' + i + '" style="display:none"><td colspan="9" style="padding:10px 14px;background:rgba(255,255,255,.03)">'
-          + splitOf(r) + '</td></tr>').join('')
+          + detailOf(r) + '</td></tr>').join('')
       + '</tbody></table>';
-    // Click the invoice row to open what it covers. Not a hover: on the phone
-    // there is no hover, and this table is read on one.
-    box.querySelectorAll('.ciRow').forEach((tr) => {
-      tr.onclick = (ev) => {
-        if (ev.target.closest('button')) return;   // Pay is its own action
-        const d = box.querySelector('.ciSplit[data-i="' + tr.dataset.i + '"]');
-        if (d) d.style.display = d.style.display === 'none' ? '' : 'none';
+    // ── THE INVOICE NUMBER IS THE LINK, NOT THE ROW ──────────────────────
+    // Apsara, 2026-10-08: "Instead of expanding,can i hae like qb,cinvoice no
+    // as clicakble,on clicking it,it will show detailed".
+    //
+    // She is right and the first version was the wrong instinct. A whole-row
+    // click is invisible until someone happens to try it, and it COLLIDED
+    // with Pay — the handler needed a special case that ignored clicks landing
+    // on a button, or paying an invoice also toggled its detail. That
+    // workaround is gone with the row click it existed for. A link on the number
+    // is the QuickBooks convention she already reads fluently, it announces
+    // itself, and the collision disappears because the link is the only
+    // thing that opens anything.
+    box.querySelectorAll('.ciRef').forEach((a) => {
+      a.onclick = (ev) => {
+        ev.preventDefault();
+        const d = box.querySelector('.ciSplit[data-i="' + a.dataset.i + '"]');
+        if (!d) return;
+        const open = d.style.display !== 'none';
+        // One at a time. Several open panels in a list of invoices is a wall
+        // of text to scroll past to reach the next number.
+        box.querySelectorAll('.ciSplit').forEach((x) => { x.style.display = 'none'; });
+        d.style.display = open ? 'none' : '';
       };
     });
     box.querySelectorAll('.ciPay').forEach((b) => { b.onclick = () => payCarrierInvoice(c, b.dataset.id, b.dataset.ref, Number(b.dataset.left)); });

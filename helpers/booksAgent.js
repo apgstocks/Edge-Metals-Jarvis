@@ -217,6 +217,28 @@ function review(built, { entity, from = null, to = null } = {}) {
         });
     }
 
+    // 5a. THE JOURNAL ITSELF COULD NOT POST SOMETHING. postings.js returns a
+    //     `problem` instead of a guess when it cannot place an entry — a
+    //     carrier payment whose bank nothing names, say. Those lines are
+    //     simply ABSENT from the statements, so a liability stays owed that
+    //     has been paid, and the trial balance still balances.
+    //
+    //     This agent did not look at them. It checked the balance, the chart,
+    //     the unplaced rows and the inter-company pair, and reported "books
+    //     balance, nothing unplaced" over a journal that had refused to post
+    //     a $9,700 payment. Found by a mutation surviving.
+    for (const p of (built.problems || [])) {
+        add({
+            code: 'could-not-post', severity: 'high',
+            what: 'an entry could not be posted, so it is on no statement',
+            why: String(p),
+            money: 0,
+            fix: 'Answer what the entry is missing — usually which account the money '
+                + 'left — and it posts on the next build.',
+            where: null,
+        });
+    }
+
     // 5. A STORE THAT WOULD NOT LOAD. booksBuild carries on and notes it, which
     //    is right — one unreadable store must not take the whole P&L down — but
     //    the statements are then built from less than everything.

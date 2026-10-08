@@ -156,6 +156,54 @@ function build({ from, to } = {}) {
         });
     }
 
+    // ── LOCAL-DELIVERY CARRIERS: NTG, TQL, SCHNEIDER ─────────────────────
+    // Apsara, 2026-10-08: "5100 for them". Until today this store reached no
+    // statement at all — scripts/trucking-double-count.js found it sitting
+    // outside the books entirely, so freight was understated by whatever was
+    // in it and the CPA pack was missing it.
+    //
+    // TWO transactions per invoice, not one. The invoice is the cost and the
+    // liability; the payment is separate so an unpaid invoice still shows as
+    // owed, and so a payment with no identifiable bank becomes a PROBLEM
+    // rather than a guessed credit (see postings.js).
+    for (const ci of safely('carrier_invoices', () => require('./carrierInvoices').list(), notes)) {
+        if (!inRange(ci.invoice_date)) continue;
+        const p = place('carrier_invoices', ci, unplaced); if (!p) continue;
+        txs.push({
+            kind: 'carrier-invoice', entity: p.ledger, date: ci.invoice_date,
+            amount: num(ci.amount), party: ci.carrier, ref: ci.ref,
+            memo: ci.lane || null,
+            source: { store: 'carrier_invoices', id: ci.id },
+        });
+        // Each recorded payment on its own, so two part payments are two
+        // credits on the dates they happened rather than one lump.
+        for (const pay of (Array.isArray(ci.payments) ? ci.payments : [])) {
+            if (!inRange(pay.date)) continue;
+            txs.push({
+                kind: 'carrier-invoice-payment', entity: p.ledger, date: pay.date,
+                amount: num(pay.amount), party: ci.carrier, ref: ci.ref,
+                mode: pay.mode || null, bank: pay.bank || null,
+                source: { store: 'carrier_invoices', id: ci.id },
+            });
+        }
+        // An IMPORTED row carries `paid` with no payments[] behind it — the
+        // carrier's remittance mail said so and never said from which account.
+        // Posted anyway, so it surfaces as the problem it is instead of
+        // leaving 2050 owing money the carrier has already been sent.
+        const recorded = (Array.isArray(ci.payments) ? ci.payments : [])
+            .reduce((t, x) => t + num(x.amount), 0);
+        const unexplained = Math.round((num(ci.paid) - recorded) * 100) / 100;
+        if (unexplained > 0.005) {
+            txs.push({
+                kind: 'carrier-invoice-payment', entity: p.ledger,
+                date: (ci.paid_dates || []).slice(-1)[0] || ci.invoice_date,
+                amount: unexplained, party: ci.carrier, ref: ci.ref,
+                mode: null, bank: null,
+                source: { store: 'carrier_invoices', id: ci.id },
+            });
+        }
+    }
+
     // ── EXPENSES ─────────────────────────────────────────────────────────
     // The category chooses the account and postings.js refuses an unknown
     // one. That refusal is the point: it surfaces an account the chart is

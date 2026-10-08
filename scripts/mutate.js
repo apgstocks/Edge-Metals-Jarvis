@@ -876,6 +876,36 @@ const MUTATIONS = [
       find: "+ '<table class=\"data-table\"><thead><tr><th>Invoice</th><th>Date</th><th>Container / Booking</th>'",
       to:   "+ '<table class=\"data-table\"><thead><tr><th>Invoice</th><th>Date</th><th>Paid</th><th>Container / Booking</th>'" },
 
+    // ── 5100 FOR THE LOCAL CARRIERS, AND THE LINK THAT OPENS ONE ──────
+    { name: 'books: carrier freight lands in 6110 operating instead of 5100',
+      file: 'helpers/postings.js', suites: ['books-portal', 'postings'],
+      find: "        debits: [['5100', r2(num(tx.amount))]],\n        credits: [['2050', r2(num(tx.amount))]],",
+      to:   "        debits: [['6110', r2(num(tx.amount))]],\n        credits: [['2050', r2(num(tx.amount))]]," },
+    { name: 'books: a carrier payment with no bank is credited to BofA anyway',
+      file: 'helpers/postings.js', suites: ['books-portal', 'postings'],
+      find: "        const bank = bankAccount(tx);\n        if (!bank) {\n            return { problem: `${tx.party || 'a carrier'} invoice",
+      to:   "        const bank = bankAccount(tx) || '1010';\n        if (false) {\n            return { problem: `${tx.party || 'a carrier'} invoice" },
+    { name: 'books: the carrier store drops out of the journal again',
+      file: 'helpers/booksBuild.js', suites: ['books-portal', 'books-build'],
+      find: "    for (const ci of safely('carrier_invoices', () => require('./carrierInvoices').list(), notes)) {",
+      to:   '    for (const ci of []) {' },
+    { name: 'books: carrier invoices are filed under Edge Yard',
+      file: 'helpers/entities.js', suites: ['entities', 'books-portal'],
+      find: "    carrier_invoices: 'edge-metals',",
+      to:   "    carrier_invoices: 'edge-trading'," },
+    { name: 'carriers: the invoice number stops being a link',
+      file: 'dashboard/documents.html', suites: ['carrier-invoices-route'],
+      find: "<a class=\"ciRef\" data-i=\"' + i + '\"",
+      to:   "<span data-i=\"' + i + '\"" },
+    { name: 'carriers: a mail-paid invoice shows nothing where the payments go',
+      file: 'dashboard/documents.html', suites: ['carrier-invoices-route'],
+      find: "    : (Number(r.paid) > 0.005",
+      to:   "    : (false" },
+    { name: 'books: the agent ignores what the journal could not post',
+      file: 'helpers/booksAgent.js', suites: ['books-portal'],
+      find: '    for (const p of (built.problems || [])) {',
+      to:   '    for (const p of []) {' },
+
     // ── WHAT AN INVOICE COVERS ────────────────────────────────────────
     // The expensive failure here is not a missing list — it is a GUESSED
     // split, two numbers that add up and mean nothing.

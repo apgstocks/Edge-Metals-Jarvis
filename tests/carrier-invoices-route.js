@@ -241,10 +241,22 @@ const ck = (n, c, x) => { if (c) { pass++; console.log('  PASS  ' + n); } else {
        /loads: o\.loads\.slice\(\)/.test(
          fs.readFileSync(path.join(__dirname, '..', 'helpers/carrierRemittance.js'), 'utf8')));
 
-    ck('the row opens on click', /class="ciRow"/.test(page2) && /ciSplit/.test(page2));
-    ck('  and Pay still works without opening it',
-       /ev\.target\.closest\('button'\)/.test(page2),
-       'clicking Pay must not also toggle the row');
+    // ── THE NUMBER IS THE LINK, NOT THE ROW ──────────────────────────────
+    // Apsara, 2026-10-08: "Instead of expanding,can i hae like qb,cinvoice no
+    // as clicakble,on clicking it,it will show detailed". The row-click was
+    // my instinct and hers is better: invisible until tried, and it COLLIDED
+    // with Pay — paying an invoice also toggled its detail, which I had to
+    // special-case. A link on the number has no such collision to fix.
+    ck('the invoice number is the link', /class="ciRef"/.test(page2) && /ciSplit/.test(page2));
+    ck('  and the row itself is NOT clickable any more',
+       !/class="ciRow"/.test(page2),
+       'two things opening the same panel is how the Pay collision happened');
+    ck('  and no special case is needed to protect Pay',
+       !/ev\.target\.closest\('button'\)/.test(page2),
+       'the workaround should have gone with the row click it existed for');
+    ck('  only one detail is open at a time',
+       /querySelectorAll\('\.ciSplit'\)\.forEach\(\(x\) => \{ x\.style\.display = 'none'; \}\)/.test(page2),
+       'a list of open panels is a wall to scroll past to reach the next number');
 
     // The helper, exercised. This is where a guessed split would show up.
     const sm = page2.match(/function splitOf\(r\) \{[\s\S]*?\n\}/);
@@ -266,7 +278,36 @@ const ck = (n, c, x) => { if (c) { pass++; console.log('  PASS  ' + n); } else {
         ck('a single load DOES carry the whole amount', /4,450\.00/.test(one) && !/not split/.test(one),
            'there is nothing to divide, so saying "not split" would be noise');
 
-        const none = run({ loads: [], amount: 100, lane: null, carrier: 'ntg' });
+        // ── AND WHAT THE LINK OPENS ──────────────────────────────────────────
+    const dm = page2.match(/function detailOf\(r\) \{[\s\S]*?\n\}/);
+    ck('detailOf is there to test', !!dm);
+    if (dm) {
+        const detailOf = new Function('r', 'esc', 'splitOf',
+            dm[0].replace(/^function detailOf\(r\) \{/, '').replace(/\}$/, ''));
+        const D = (r) => detailOf(r, (x) => String(x == null ? '' : x), (x) => run(x));
+
+        const manual = D({ carrier: 'tql', ref: 'P1', amount: 1850, paid: 1000, source: 'manual',
+            added_by: 'apsara', loads: [], invoice_date: '2026-10-01',
+            payments: [{ amount: 1000, date: '2026-10-05', mode: 'Wire', bank: 'BofA', ref: 'W-77' }] });
+        ck('the detail shows billed, paid and outstanding',
+           /1,850\.00/.test(manual) && /1,000\.00/.test(manual) && /850\.00/.test(manual));
+        ck('  and every payment recorded against it',
+           /2026-10-05/.test(manual) && /BofA/.test(manual) && /W-77/.test(manual),
+           'this is the ONLY place payments[] can be seen at all');
+        ck('  and says it was added by hand', /Added by hand/.test(manual) && /apsara/.test(manual));
+
+        // The case that must not read as "nothing happened".
+        const mailPaid = D({ carrier: 'schneider', ref: 'O2', amount: 9700, paid: 9700,
+            evidence: 'Schneider PAID mail', loads: ['3010354116', '3010355035'], payments: [] });
+        ck('a mail-paid invoice explains why no payment is listed',
+           /no payment was recorded in Jarvis/.test(mailPaid)
+           && /did not say from which account/.test(mailPaid),
+           'an empty payments table on a PAID invoice reads as data loss');
+        ck('  and names the mail it came from', /Schneider PAID mail/.test(mailPaid));
+        ck('  and still shows what it covers', /3010354116/.test(mailPaid));
+    }
+
+    const none = run({ loads: [], amount: 100, lane: null, carrier: 'ntg' });
         ck('an invoice naming no loads says so', /does not say which loads/.test(none));
         const prose = run({ loads: [], amount: 100, lane: 'Oakland to Frisco', carrier: 'ntg' });
         ck('  and falls back to the prose when there is some', /Oakland to Frisco/.test(prose));

@@ -138,6 +138,11 @@ const STORE_LEDGER = {
     sales_settlements: 'edge-metals',
     metals_trucking: 'edge-metals',
     edge_inventory: 'edge-metals',
+    // NTG, TQL and Schneider. helpers/carrierInvoices.js is titled "EDGE
+    // METALS local-delivery carriers" and stamps company:'Edge Metals' on
+    // every row it writes, so this is read off the data rather than decided
+    // here. Added 2026-10-08 when Apsara picked the account for them.
+    carrier_invoices: 'edge-metals',
 
     // Edge Trading — the yard
     loads: 'edge-trading',
