@@ -199,10 +199,15 @@ const settle = (ms = 120) => new Promise((r) => setTimeout(r, ms));
     ck('ticking it fetches the same range a year earlier',
        calls.some((c) => /from=2025-01-01/.test(c) && /to=2025-12-31/.test(c)),
        JSON.stringify(calls.slice(-2)));
+    // Guarded rather than dereferenced: a mutation that stops rendering the
+    // headline figures should make these FAIL and name themselves, not crash
+    // the file. A crashed run still exits non-zero, but it says nothing about
+    // which property was lost.
     const lead = d.querySelector('#kpis .kpi.lead');
-    ck('  and the profit shows the change', /100%/.test(lead.textContent), lead.textContent);
-    ck('  naming the figure it is comparing with', /\$232k last year/.test(lead.textContent),
-       lead.textContent);
+    ck('  and the profit shows the change', !!lead && /100%/.test(lead.textContent),
+       lead && lead.textContent);
+    ck('  naming the figure it is comparing with',
+       !!lead && /\$232k last year/.test(lead.textContent), lead && lead.textContent);
 }
 {
     const { dom } = boot({ priorHasData: false });
@@ -213,7 +218,7 @@ const settle = (ms = 120) => new Promise((r) => setTimeout(r, ms));
     await settle(200);
     const lead = d.querySelector('#kpis .kpi.lead');
     ck('a year with nothing in it shows NO delta rather than a made-up one',
-       !/%/.test(lead.textContent), lead.textContent);
+       !!lead && !/%/.test(lead.textContent), lead && lead.textContent);
     ck('  and says why, instead of looking broken',
        /no figures for the same period last year/.test(d.getElementById('built').textContent),
        d.getElementById('built').textContent);
