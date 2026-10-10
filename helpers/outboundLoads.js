@@ -57,8 +57,9 @@ function normaliseDraws(raw) {
         .filter((d) => d.load_id && d.weight != null && d.weight > 0);
 }
 
-// The same 2204.62 as helpers/loads.js and the invoice side.
-const LB_PER_MT = 2204.62;
+// The divisors live in helpers/priceUnits.js since 2026-10-10 — see the note
+// in computeItem below on why importing that table is not the coupling this
+// file's header warns against.
 
 function computeItem(it) {
     const gross = toNum(it.gross_weight);
@@ -83,14 +84,37 @@ function computeItem(it) {
     // the scale said, and only the quantity the price multiplies changes.
     // 'lb' and a missing unit take the same branch, so every outbound load
     // already on file is arithmetically untouched.
-    const perMt = String(it.unit || '').trim().toLowerCase() === 'mt';
-    const qty = (net != null && perMt) ? net / LB_PER_MT : net;
-    const amount = (qty != null && price != null) ? round2(qty * price) : null;
+    // ── AND SINCE 2026-10-10, FIVE UNITS — HER CALL, BOTH SIDES ────────────
+    // Asked whether net ton, gross ton and /piece should reach sales as well
+    // as purchases, she said both. Which is the same answer she gave in
+    // September and for the same reason: this screen SHARES the purchase
+    // modal, so a unit the form can offer and this function cannot compute
+    // gets booked at the pound figure, 2,204 times over on an /MT row.
+    //
+    // The divisors are in helpers/priceUnits.js now rather than a fourth
+    // private copy of the table. That is a change this file's header argues
+    // against — it says the item math is duplicated deliberately rather than
+    // reaching into loads.js internals — and the argument still holds: this
+    // does NOT import loads.js. priceUnits.js is a pure table with no store,
+    // no state and nothing inbound-specific in it, which is the thing that
+    // made the duplication worth avoiding.
+    const PU = require('./priceUnits');
+    const pieces = toNum(it.pieces);
+    const unit = PU.normalise(it.unit);
+    if (unit === null) {
+        throw new Error(`"${it.unit}" is not a unit Jarvis prices in — a sale item takes `
+            + PU.ORDER.map((k) => PU.LABEL[k]).join(', '));
+    }
+    const amount = PU.amountFor({ unit, net, pieces, price });
     return {
         draws: normaliseDraws(it && it.draws),
         description: it.description || '',
         gross_weight: gross, tare_weight: tare, net_weight: net,
-        price, unit: perMt ? 'mt' : (it.unit || ''), amount,
+        // '' stays '' when it is pounds — see loads.js on why this is not
+        // quietly migrated to 'lb' one row at a time.
+        price, unit: unit === 'lb' ? (it.unit || '') : unit,
+        pieces: PU.isCounted(unit) ? pieces : null,
+        amount,
     };
 }
 function sumItems(items) {

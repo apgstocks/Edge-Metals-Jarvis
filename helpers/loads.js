@@ -68,11 +68,13 @@ function normalizeSellerPhone(raw) {
 // numbers; the client sends its own live-computed net/amount too, but they
 // get recomputed here from gross/tare/price rather than trusted as-is, same
 // as it always has been for the whole-load version of this math.
-// The same 2204.62 the invoice side uses (helpers/invoicePdf.js,
-// dashboard/documents.html). One number, written down once per file rather
-// than imported, because a require cycle here would be worse than a repeated
-// constant — but if it ever changes it changes in all of them.
-const LB_PER_MT = 2204.62;
+// ── THE CONSTANT MOVED, 2026-10-10 ──────────────────────────────────────
+// It used to live here as `LB_PER_MT = 2204.62`, with a comment promising
+// that "if it ever changes it changes in all of them" across the four
+// copies. That promise is what helpers/priceUnits.js now keeps mechanically,
+// and three more units arrived today — so the copy here would have been a
+// dead constant still claiming to be authoritative, which is worse than no
+// comment at all. The divisors are in priceUnits.LB_PER.
 
 function computeItem(it) {
     const gross = toNum(it.gross_weight);
@@ -96,13 +98,47 @@ function computeItem(it) {
     // multiplies changes, so a pound row is arithmetically untouched — 'lb'
     // and a missing unit both take the same branch, which is what makes every
     // load already on file safe.
-    const perMt = String(it.unit || '').trim().toLowerCase() === 'mt';
-    const qty = (net != null && perMt) ? net / LB_PER_MT : net;
-    const amount = (qty != null && price != null) ? round2(qty * price) : null;
+    //
+    // ── AND SINCE 2026-10-10, FIVE UNITS RATHER THAN TWO ────────────────────
+    // Apsara: "in edge yard app,in addition to lbs-MT-Item can be /piece as
+    // well. and gross ton and net ton as well." Net ton is 2,000 lb and gross
+    // ton is 2,240 — twelve per cent apart, and both are called "a ton" in
+    // conversation, which is the whole reason they are separate codes here
+    // rather than one.
+    //
+    // The divisors moved to helpers/priceUnits.js because this arithmetic
+    // existed in FOUR places and three units in four copies is how they
+    // drift. /piece is not a divisor at all — it multiplies a COUNT, which is
+    // the `pieces` field below, new today.
+    //
+    // priceUnits.qtyFor THROWS on a unit it does not recognise instead of
+    // treating it as pounds. That is deliberate and it is the point: a row
+    // marked /piece that fell through to the pound branch would price 46,560
+    // lb at $5 a piece as $232,800, and nobody would see it. The throw
+    // reaches addLoad's caller as a 500 with the unit named in it, which is
+    // noisy and recoverable; the silent version is neither.
+    const PU = require('./priceUnits');
+    const pieces = toNum(it.pieces);
+    const unit = PU.normalise(it.unit);
+    if (unit === null) {
+        throw new Error(`"${it.unit}" is not a unit Jarvis prices in — a load item takes `
+            + PU.ORDER.map((k) => PU.LABEL[k]).join(', '));
+    }
+    const amount = PU.amountFor({ unit, net, pieces, price });
     return {
         description: it.description || '',
         gross_weight: gross, tare_weight: tare, net_weight: net,
-        price, unit: perMt ? 'mt' : (it.unit || ''), amount,
+        // STORED AS '' WHEN IT IS POUNDS AND WAS ALREADY ''. Writing 'lb'
+        // into every historic row on its next edit would be a migration
+        // nobody asked for, performed one row at a time by whoever happened
+        // to open a load — and the sheet sync compares these fields, so it
+        // would report disagreements she did not cause.
+        price, unit: unit === 'lb' ? (it.unit || '') : unit,
+        // Only ever set for a counted unit. A pieces value left on a row
+        // whose unit was changed back to a weight is dropped rather than
+        // carried, so it cannot come back to life if the unit changes again.
+        pieces: PU.isCounted(unit) ? pieces : null,
+        amount,
         // Carried forward from the incoming item if present — matters for
         // EDITS, where the client sends back photo links an item already
         // has so they aren't lost just because that item wasn't

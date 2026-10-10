@@ -4449,6 +4449,48 @@ function itemDescSuggestions() {
 // doesn't fight the user's cursor position while typing; syncItemsFromDom()
 // (called right after, on the same input event) is what actually persists
 // the values into currentLoadItems.
+// ── MODULE SCOPE, NOT INSIDE recomputeRowTotals ────────────────────────
+// It was first placed inside that function, which made LB_PER_UNIT a
+// block-scoped const — so renderItemRows() threw ReferenceError on
+// unitOf and the Loads form opened with ZERO item rows. The page's JS
+// still parsed and tests/price-units.js still matched the table in the
+// source, because neither of those boots the DOM. tests/item-row-net.js
+// does, and that is what caught it.
+// ── WHAT A PRICE IS PER ─────────────────────────────────────────────────
+// Apsara, 2026-10-10, asked for /piece, net ton and gross ton in the EDGE
+// YARD APP — and, asked whether this screen should offer them too, chose
+// display-only: the picker here stays /lb and /MT.
+//
+// COMPUTING them is not optional, though, and that distinction is the whole
+// reason this table is here. helpers/loads.js recomputes every row on save
+// and wins. A website that could not READ 'nt' would show the pound figure
+// for a row the app priced per net ton, she would press Save, and the amount
+// would jump by a factor of 2,000 after the fact — which is the same class
+// of thing as the $15m display bug, just arriving a moment later.
+//
+// THE SAME NUMBERS AS helpers/priceUnits.js, and tests/price-units.js reads
+// this table out of the HTML and compares it, because the comment this
+// replaced said "Same constant, deliberately" and that is a promise, not a
+// check.
+const LB_PER_UNIT = { lb: 1, nt: 2000, gt: 2240, mt: 2204.62, piece: null };
+const UNIT_LABEL = { lb: '/lb', nt: '/net ton', gt: '/gross ton', mt: '/MT', piece: '/piece' };
+// An unrecognised unit returns null and the caller shows no amount. It must
+// never fall through to pounds.
+function unitOf(u) {
+  const k = String(u == null ? '' : u).trim().toLowerCase();
+  if (k === '') return 'lb';
+  return Object.prototype.hasOwnProperty.call(LB_PER_UNIT, k) ? k : null;
+}
+function qtyForUnit(unit, net, pieces) {
+  const u = unitOf(unit);
+  if (u === null) return null;
+  if (u === 'piece') {
+    const c = parseFloat(pieces);
+    return (isFinite(c) && c >= 0) ? c : null;
+  }
+  return (net == null || !isFinite(net)) ? null : net / LB_PER_UNIT[u];
+}
+
 function recomputeRowTotals(row) {
   // ── type="number" REPORTS AN EMPTY VALUE FOR ANYTHING IT CANNOT PARSE ──
   // This is the whole reason a weight can vanish without a trace. On a
@@ -4523,8 +4565,11 @@ function recomputeRowTotals(row) {
   // Mirrors computeItem in helpers/loads.js, which is the source of truth and
   // recomputes this on save; if the two ever disagree the server wins and the
   // figure on screen was a lie. Same constant, deliberately.
-  const perMt = (row.querySelector('.ld-item-unit')?.value || 'lb') === 'mt';
-  const qty = (net != null && perMt) ? net / 2204.62 : net;
+  // Reads the row's CURRENT unit, whatever it is — including one this
+  // screen's own picker cannot set, because the app can and the server
+  // recomputes from it.
+  const unitNow = row.querySelector('.ld-item-unit')?.value || 'lb';
+  const qty = qtyForUnit(unitNow, net, row.querySelector('.ld-item-pieces')?.value);
   const amount = (qty != null && isFinite(price)) ? Math.round(qty * price * 100) / 100 : null;
   row.querySelector('.ld-item-amount').value = fmtAmount(amount);
   // Totals refresh here rather than at each call site. recomputeRowTotals is
@@ -4609,8 +4654,10 @@ function renderItemRows() {
     // and helpers/loads.js and helpers/outboundLoads.js both recompute it
     // from the unit. This was a lie on screen, not in the ledger — but a lie
     // large enough that correcting it by hand would have made it real.
-    const perMtRow = String(it.unit || '').trim().toLowerCase() === 'mt';
-    const qtyRow = (net != null && perMtRow) ? net / 2204.62 : net;
+    // Same function as the typing path above — the only way the two cannot
+    // disagree again. This line is where the $15m came from: it had no unit
+    // in it at all.
+    const qtyRow = qtyForUnit(it.unit, net, it.pieces);
     const amount = (qtyRow != null && isFinite(price)) ? Math.round(qtyRow * price * 100) / 100 : null;
     // One flat row of columns (see .item-row grid below) instead of the old
     // 3-stacked-boxes layout — per Apsara, wanted item detail condensed to a
@@ -4662,11 +4709,42 @@ function renderItemRows() {
       <div class="ld-item-price-wrap"><span class="ld-mobile-label">Price</span>
         <div class="ld-item-price-inputs">
           <input class="ld-item-price" type="number" step="any" placeholder="0" title="Price" value="${it.price ?? ''}">
-          <select class="ld-item-unit" title="Is this price per pound or per tonne?">
-            <option value="lb"${String(it.unit || '').trim().toLowerCase() === 'mt' ? '' : ' selected'}>/lb</option>
-            <option value="mt"${String(it.unit || '').trim().toLowerCase() === 'mt' ? ' selected' : ''}>/MT</option>
+          <!-- ── TWO OPTIONS, HER CALL — AND A THIRD THAT PROTECTS THE ROW ──
+               Asked whether this screen should offer net ton, gross ton and
+               /piece as well, she chose display-only: pick them in the Edge
+               Yard app, read them here.
+
+               But a two-option <select> handed a value it has no option for
+               silently becomes "" — which is how a pay modal posted an empty
+               mode in September — and syncItemsFromDom's 'or lb' fallback would
+               then turn that into POUNDS. So opening a /net ton load on this
+               screen and pressing Save, changing nothing, would have
+               repriced it by a factor of 2,000.
+
+               So when the row carries a unit this picker does not offer, it
+               is rendered as a disabled option AND selected. Disabled means
+               she cannot newly choose it here; selected means the value
+               round-trips untouched through a save. Switching it to /lb or
+               /MT is still possible, because that is a decision she made
+               rather than one the markup made for her. -->
+          <select class="ld-item-unit" title="What is this price per? Net ton, gross ton and /piece are set in the Edge Yard app">
+            ${(() => {
+              const cur = unitOf(it.unit) || 'lb';
+              const here = ['lb', 'mt'];
+              const opts = here.map((u) => `<option value="${u}"${cur === u ? ' selected' : ''}>${UNIT_LABEL[u]}</option>`);
+              if (!here.includes(cur)) {
+                opts.push(`<option value="${cur}" selected disabled>${UNIT_LABEL[cur]} (set in the app)</option>`);
+              }
+              return opts.join('');
+            })()}
           </select>
         </div>
+        <!-- Hidden, not absent. This screen does not let her EDIT a count —
+             that is the app's job by her choice — but the value has to be on
+             the page for syncItemsFromDom to post it back, or saving a
+             counted row here would blank its amount. A /piece row shows the
+             count beside the amount in the read-only view below. -->
+        <input type="hidden" class="ld-item-pieces" value="${it.pieces ?? ''}">
       </div>
       <div class="ld-item-amount-wrap"><span class="ld-mobile-label">Amount</span><input class="ld-item-amount" type="text" inputmode="decimal" disabled title="Amount" value="${amount != null ? fmtAmount(amount) : ''}"></div>
       <div class="ld-item-actions">
@@ -4766,8 +4844,18 @@ function renderItemRows() {
       // a 30,000 lb row that is a twenty-four-million-dollar load and a
       // signed ticket to match. Recalling one half of a pair is worse than
       // recalling neither.
+      // unitOf() rather than last.unit raw. This screen's picker offers
+      // only /lb and /MT by her choice, so recalling a grade last bought
+      // per NET TON would set <select>.value to a value it has no option
+      // for — which silently becomes '' and then POUNDS on save. unitOf
+      // returns null for anything this picker cannot represent and the
+      // fallback is lb, which is at least a unit she can see.
       const unitSel = row.querySelector('.ld-item-unit');
-      if (unitSel) unitSel.value = last ? last.unit : 'lb';
+      if (unitSel) {
+        const want = last && unitOf(last.unit);
+        const canShow = want && [...unitSel.options].some((o) => o.value === want);
+        unitSel.value = canShow ? want : 'lb';
+      }
       recomputeRowTotals(row);
     };
 
@@ -4899,6 +4987,13 @@ function syncItemsFromDom() {
       // of the wire. It stays out of the phone grid by living inside the
       // price cell, so that layout is not disturbed a second time.
       unit : row.querySelector('.ld-item-unit')?.value || 'lb',
+      // ── THE COUNT ROUND-TRIPS EVEN THOUGH THIS SCREEN CANNOT SET IT ────
+      // A /piece row's amount IS its count times its price. If this screen
+      // posted no `pieces`, computeItem would see undefined, store null, and
+      // the amount would go blank — so opening a counted load here and
+      // saving would erase the figure. Carried in a hidden input rather than
+      // left out.
+      pieces: row.querySelector('.ld-item-pieces')?.value ?? '',
       grossPhoto: prev.grossPhoto || null,
       tarePhoto : prev.tarePhoto  || null,
       gross_photo_link: prev.gross_photo_link || null,

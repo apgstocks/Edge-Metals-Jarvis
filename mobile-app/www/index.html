@@ -257,7 +257,9 @@ body { overflow-y:auto; }
       .ld-item-header, .item-row { display:grid; grid-template-columns:0.9fr 120px 120px 92px 124px 100px 62px; gap:6px; align-items:center; min-width:674px; }
       .ld-item-price-inputs { display:flex; gap:4px; align-items:center; min-width:0; }
       .ld-item-price-inputs .ld-item-price { flex:1 1 auto; min-width:0; }
-      .ld-item-price-inputs .ld-item-unit { flex:0 0 auto; width:56px; padding:6px 2px; font-family:var(--font-mono); font-size:11px; }
+      /* 92px, not 56: '/gross ton' is the longest label and a select that
+     clips its own option is how someone picks the wrong ton. */
+  .ld-item-price-inputs .ld-item-unit { flex:0 0 auto; width:92px; padding:6px 2px; font-family:var(--font-mono); font-size:11px; }
       .ld-item-header { font-family:var(--font-mono); font-size:9.5px; font-weight:600; letter-spacing:.06em; text-transform:uppercase; color:var(--text-muted); padding:0 2px 6px; }
       .item-row { margin-bottom:5px; }
       #draftBar { display:flex; align-items:center; gap:10px; margin-bottom:16px; padding:10px 14px;
@@ -1635,6 +1637,48 @@ function addressBookExactMatch(name) {
 // doesn't fight the user's cursor position while typing; syncItemsFromDom()
 // (called right after, on the same input event) is what actually persists
 // the values into currentLoadItems.
+// ── MODULE SCOPE, NOT INSIDE recomputeRowTotals ────────────────────────
+// It was first placed inside that function, which made LB_PER_UNIT a
+// block-scoped const — so renderItemRows() threw ReferenceError on
+// unitOf and the Loads form opened with ZERO item rows. The page's JS
+// still parsed and tests/price-units.js still matched the table in the
+// source, because neither of those boots the DOM. tests/item-row-net.js
+// does, and that is what caught it.
+// ── WHAT A PRICE IS PER ─────────────────────────────────────────────────
+// Apsara, 2026-10-10: "in edge yard app,in addition to lbs-MT-Item can be
+// /piece as well. and gross ton and net ton as well."
+//
+// THE SAME NUMBERS AS helpers/priceUnits.js, and tests/price-units.js reads
+// this table out of the HTML and compares it. A comment promising the
+// constants match is what the old code had, in both clients, while one of
+// them was wrong — that is where the $15m figure came from.
+//
+// Net ton is the US short ton, gross ton is the UK long ton. Twelve per cent
+// apart and both called "a ton" out loud, which is why they are separate
+// codes rather than one. `piece` is null because it is not a weight: it
+// multiplies a COUNT.
+const LB_PER_UNIT = { lb: 1, nt: 2000, gt: 2240, mt: 2204.62, piece: null };
+const UNIT_LABEL = { lb: '/lb', nt: '/net ton', gt: '/gross ton', mt: '/MT', piece: '/piece' };
+// '' is pounds, and that is a fact about her data rather than a convenience:
+// every row saved before 2026-09-24 has no unit on it and they are all pound
+// rows. An unrecognised unit returns null and the caller shows no amount —
+// it must NEVER fall through to pounds, which would price a /piece row's
+// 46,560 lb at $5 a piece as $232,800.
+function unitOf(u) {
+  const k = String(u == null ? '' : u).trim().toLowerCase();
+  if (k === '') return 'lb';
+  return Object.prototype.hasOwnProperty.call(LB_PER_UNIT, k) ? k : null;
+}
+function qtyForUnit(unit, net, pieces) {
+  const u = unitOf(unit);
+  if (u === null) return null;
+  if (u === 'piece') {
+    const c = parseFloat(pieces);
+    return (isFinite(c) && c >= 0) ? c : null;
+  }
+  return (net == null || !isFinite(net)) ? null : net / LB_PER_UNIT[u];
+}
+
 function recomputeRowTotals(row) {
   // ── type="number" REPORTS AN EMPTY VALUE FOR ANYTHING IT CANNOT PARSE ──
   // This is the whole reason a weight can vanish without a trace. On a
@@ -1700,6 +1744,7 @@ function recomputeRowTotals(row) {
     grossEl.style.borderColor = badGross ? 'var(--status-danger)' : '';
     tareEl.style.borderColor  = badTare  ? 'var(--status-danger)' : '';
   }
+
   const price = parseFloat(row.querySelector('.ld-item-price').value);
   // ── THE PRICE IS PER POUND, OR PER TONNE ────────────────────────────────
   // THE NET IS NOT CONVERTED. It stays in pounds, as the weighbridge read
@@ -1709,9 +1754,14 @@ function recomputeRowTotals(row) {
   // Mirrors computeItem in helpers/loads.js, which is the source of truth and
   // recomputes this on save; if the two ever disagree the server wins and the
   // figure on screen was a lie. Same constant, deliberately.
-  const perMt = (row.querySelector('.ld-item-unit')?.value || 'lb') === 'mt';
-  const qty = (net != null && perMt) ? net / 2204.62 : net;
+  const unitNow = row.querySelector('.ld-item-unit')?.value || 'lb';
+  const qty = qtyForUnit(unitNow, net, row.querySelector('.ld-item-pieces')?.value);
   const amount = (qty != null && isFinite(price)) ? Math.round(qty * price * 100) / 100 : null;
+  // The Pieces box only exists for a counted unit, and the weight boxes stay
+  // put — she still weighs the truck, and the seller signs a ticket with that
+  // weight on it. Only what the price multiplies changes.
+  const pieceWrap = row.querySelector('.ld-item-pieces-wrap');
+  if (pieceWrap) pieceWrap.style.display = (unitOf(unitNow) === 'piece') ? '' : 'none';
   row.querySelector('.ld-item-amount').value = fmtAmount(amount);
   // Refreshed here rather than at each call site. recomputeRowTotals is called
   // from typing AND from the scale scanner filling a weight in, so putting it
@@ -2777,8 +2827,11 @@ function renderItemRows() {
     // These two screens are the same form and the phone is where loads are
     // actually entered, standing at the scale; a fix that lands on the
     // website first means the wrong figure is on the device being used.
-    const perMtRow = String(it.unit || '').trim().toLowerCase() === 'mt';
-    const qtyRow = (net != null && perMtRow) ? net / 2204.62 : net;
+    // THIS is the line that produced $15m on 2026-10-09 — it had no unit in
+    // it at all while the typing path above was unit-aware, so reopening a
+    // priced row showed the pound figure. Same function as the typing path
+    // now, which is the only way the two cannot disagree again.
+    const qtyRow = qtyForUnit(it.unit, net, it.pieces);
     const amount = (qtyRow != null && isFinite(price)) ? Math.round(qtyRow * price * 100) / 100 : null;
     // One flat row of columns (see .item-row grid below) instead of the old
     // 3-stacked-boxes layout — per Apsara, wanted item detail condensed to a
@@ -2830,11 +2883,25 @@ function renderItemRows() {
       <div class="ld-item-price-wrap"><span class="ld-mobile-label">Price</span>
         <div class="ld-item-price-inputs">
           <input class="ld-item-price" type="number" step="any" placeholder="0" title="Price" value="${it.price ?? ''}">
-          <select class="ld-item-unit" title="Is this price per pound or per tonne?">
-            <option value="lb"${String(it.unit || '').trim().toLowerCase() === 'mt' ? '' : ' selected'}>/lb</option>
-            <option value="mt"${String(it.unit || '').trim().toLowerCase() === 'mt' ? ' selected' : ''}>/MT</option>
+          <select class="ld-item-unit" title="What is this price per?">
+            ${['lb', 'nt', 'gt', 'mt', 'piece'].map((u) => `<option value="${u}"${(unitOf(it.unit) || 'lb') === u ? ' selected' : ''}>${UNIT_LABEL[u]}</option>`).join('')}
           </select>
         </div>
+      </div>
+      <!-- ── PIECES, AND ONLY FOR A /piece ROW ────────────────────────────
+           Apsara, 2026-10-10, asked for /piece alongside the weights. It is
+           the one option that is not a divisor: every other unit divides the
+           net weight, and a piece price has nothing to divide, so it needs a
+           count. There was no such field on a load item until today.
+           Hidden unless the unit is /piece, because an always-visible empty
+           box on a form used standing at a scale is one more thing to
+           mis-read. Gross, tare and net stay exactly where they are — the
+           truck is still weighed and the ticket she prints still carries
+           that weight; only what the price multiplies changes. -->
+      <div class="ld-item-pieces-wrap" style="display:${unitOf(it.unit) === 'piece' ? '' : 'none'}">
+        <span class="ld-mobile-label">Pieces</span>
+        <input class="ld-item-pieces" type="number" step="1" min="0" placeholder="0"
+               title="How many pieces" value="${it.pieces ?? ''}">
       </div>
       <div class="ld-item-amount-wrap"><span class="ld-mobile-label">Amount</span><input class="ld-item-amount" type="text" inputmode="decimal" disabled title="Amount" value="${amount != null ? fmtAmount(amount) : ''}"></div>
       <div class="ld-item-actions">
@@ -2942,8 +3009,17 @@ function renderItemRows() {
       // a 30,000 lb row that is a twenty-four-million-dollar load and a
       // signed ticket to match. Recalling one half of a pair is worse than
       // recalling neither.
+      // unitOf() rather than last.unit raw: a stored unit the picker has no
+      // option for would set <select>.value to a value not in its list,
+      // which silently becomes '' — the exact failure that made a pay modal
+      // post an empty mode in September. unitOf returns null for anything
+      // unrecognised and this falls back to lb rather than to blank.
       const unitSel = row.querySelector('.ld-item-unit');
-      if (unitSel) unitSel.value = last ? last.unit : 'lb';
+      if (unitSel) unitSel.value = (last && unitOf(last.unit)) || 'lb';
+      // And the COUNT travels with them for a /piece row, for the same
+      // reason the unit does: half a recalled pair is worse than none.
+      const pcs = row.querySelector('.ld-item-pieces');
+      if (pcs && last && unitOf(last.unit) === 'piece') pcs.value = last.pieces ?? '';
       recomputeRowTotals(row);
     };
 
@@ -3028,6 +3104,12 @@ function renderItemRows() {
     const src = currentLoadItems[idx] || blankLoadItem();
     currentLoadItems.splice(idx + 1, 0, Object.assign(blankLoadItem(), {
       description : src.description || '',
+      // The unit and, for a /piece row, the count — copied for the same
+      // reason the price is: several identical drums are the common case,
+      // and a duplicate that silently reverted to pounds would reprice the
+      // row by 2,204 without anyone touching it.
+      unit        : src.unit || 'lb',
+      pieces      : src.pieces ?? '',
       gross_weight: src.gross_weight ?? '',
       // ?? ONLY CATCHES null AND undefined, NOT ''. syncItemsFromDom stores
       // these as raw input strings, so a tare the operator had cleared comes
@@ -3073,6 +3155,13 @@ function syncItemsFromDom() {
       // of the wire. It stays out of the phone grid by living inside the
       // price cell, so that layout is not disturbed a second time.
       unit : row.querySelector('.ld-item-unit')?.value || 'lb',
+      // ── AND THE COUNT, FOR A /piece ROW ────────────────────────────────
+      // Posted unconditionally rather than only when the unit is /piece:
+      // computeItem on the server drops it for a weight row anyway, and a
+      // field the client sometimes omits is the shape that loses a value on
+      // an edit. Read as a raw string like the weights above — syncItemsFromDom
+      // stores what was typed and the server is what parses it.
+      pieces: row.querySelector('.ld-item-pieces')?.value ?? '',
       grossPhoto: prev.grossPhoto || null,
       tarePhoto : prev.tarePhoto  || null,
       gross_photo_link: prev.gross_photo_link || null,
@@ -4149,7 +4238,10 @@ function showCaptureMenu(anchorBtn, { onCamera, onFiles }) {
 // tare_weight defaults to "0" now — mirrors dashboard/index.html, see its
 // comment for why (Apsara 2026-08-15).
 function blankLoadItem() {
-  return { description: '', gross_weight: '', tare_weight: '0', price: '', unit: '', grossPhoto: null, tarePhoto: null, gross_photo_link: null, tare_photo_link: null, gross_photo_drive_id: null, tare_photo_drive_id: null };
+  // `unit: ''` is pounds — the default, and what every historic row has.
+  // `pieces: ''` rather than 0, because an empty count means "not typed" and
+  // a zero means "nothing was delivered", and those are different answers.
+  return { description: '', gross_weight: '', tare_weight: '0', price: '', unit: '', pieces: '', grossPhoto: null, tarePhoto: null, gross_photo_link: null, tare_photo_link: null, gross_photo_drive_id: null, tare_photo_drive_id: null };
 }
 
 // Local (not UTC) YYYY-MM-DD — a load dated by UTC-conversion could land on

@@ -105,6 +105,29 @@ section('A — the server arithmetic, and every load already on file');
     ck('and it survives a round trip to disk', back.items[1].amount === EXPECT_MT && back.items[1].unit === 'mt');
 }
 
+
+// ── LIFTING THE CLIENT'S OWN HELPERS, NOT REWRITING THEM ─────────────────
+// Correction, 2026-10-10. The harnesses below first DEFINED their own
+// unitOf/qtyForUnit matching the client's — and a mutation that made the
+// website's unitOf treat a blank unit as TONNES survived, because no test
+// ever executed the website's copy. A harness that reimplements the thing it
+// is testing tests the harness.
+//
+// So the functions are pulled out of the HTML and evaluated. If a client
+// changes how it reads a unit, these change with it.
+function clientUnitHelpers(src, who) {
+    const grab = (name) => {
+        const m = src.match(new RegExp('function ' + name + '\\([\\s\\S]*?\\n\\}'));
+        if (!m) throw new Error(`${who}: could not lift ${name}() out of the page`);
+        return m[0];
+    };
+    const table = (src.match(/const LB_PER_UNIT = \{[^}]*\};/) || [])[0];
+    if (!table) throw new Error(`${who}: no LB_PER_UNIT table on the page`);
+    // eslint-disable-next-line no-new-func
+    return new Function(`${table}\n${grab('unitOf')}\n${grab('qtyForUnit')}\n`
+        + 'return { unitOf, qtyForUnit, LB_PER_UNIT };')();
+}
+
 // ══════════════════════════════════════════════════════════════════════════
 section('B — both screens: a select, defaulting to lb');
 // ══════════════════════════════════════════════════════════════════════════
@@ -112,11 +135,40 @@ section('B — both screens: a select, defaulting to lb');
     for (const [name, src] of [['website', DASH], ['app', APP]]) {
         ck(`${name}: the row has a unit control`, /class="ld-item-unit"/.test(src));
         const sel = (src.match(/<select class="ld-item-unit"[\s\S]*?<\/select>/) || [''])[0];
-        ck(`${name}:   offering lb and MT, and nothing else`,
-           (sel.match(/<option value="/g) || []).length === 2
-           && /value="lb"/.test(sel) && /value="mt"/.test(sel), sel.slice(0, 120));
-        ck(`${name}: the client converts the same way the server does`,
-           /net \/ 2204\.62/.test(src));
+        // ── UPDATED 2026-10-10: FIVE UNITS, AND NOT THE SAME FIVE ────────
+        // Apsara: "in edge yard app,in addition to lbs-MT-Item can be
+        // /piece as well. and gross ton and net ton as well." — and, asked
+        // whether the website should offer them too, she chose display-only.
+        // So the two screens legitimately differ now, and asserting "lb and
+        // MT and nothing else" for both would be asserting the old feature.
+        //
+        // What has NOT changed is the property underneath: every option the
+        // picker offers must be one the arithmetic can compute, and the
+        // default must be lb. Both are still checked, below and in
+        // tests/price-units.js.
+        const offered = [...sel.matchAll(/<option value="\$\{?u?\}?"/g)].length
+            ? null  // generated from an array — read the array instead
+            : [...sel.matchAll(/<option value="([a-z]+)"/g)].map((m) => m[1]);
+        const srcArray = (sel.match(/\[((?:\s*'[a-z]+'\s*,?)+)\]/) || [null, ''])[1]
+            .split(',').map((x) => x.trim().replace(/'/g, '')).filter(Boolean);
+        const list = offered && offered.length ? offered : srcArray;
+        if (name === 'app') {
+            ck('app:   offers all five units she asked for',
+               ['lb', 'nt', 'gt', 'mt', 'piece'].every((u) => list.includes(u)),
+               JSON.stringify(list));
+        } else {
+            ck('website:   offers lb and MT only — her call, display-only',
+               list.length === 2 && list.includes('lb') && list.includes('mt'),
+               JSON.stringify(list));
+        }
+        // The conversion check used to look for the literal `net / 2204.62`.
+        // The divisors are a table now (helpers/priceUnits.js, mirrored
+        // inline in both clients) so a literal would be the drift coming
+        // back. What matters is that the client's table is the server's, and
+        // tests/price-units.js section E compares them number by number.
+        ck(`${name}: the client carries the server's unit table`,
+           /LB_PER_UNIT\s*=\s*\{[^}]*mt:\s*2204\.62/.test(src)
+           && /qtyForUnit\(/.test(src));
         ck(`${name}: the posted item carries the unit`,
            /unit : row\.querySelector\('\.ld-item-unit'\)\?\.value \|\| 'lb'/.test(src));
         // A <select> is not an <input>. Without its own listener the amount
@@ -139,10 +191,21 @@ section('B — both screens: a select, defaulting to lb');
         ck(`${name}: the select template is there to render`, !!m);
         if (!m) continue;
         const tpl = m[0];
+        // The templates call unitOf() and UNIT_LABEL now, and the app's
+        // builds its options with a nested template literal — so escaping
+        // every backtick (as this did) turned the inner one into a syntax
+        // error and the whole file CRASHED after printing passes. A crash
+        // exits non-zero so the suite was honest, but it named no property.
+        //
+        // Evaluated as a function body with the two helpers passed in, and
+        // the backticks left alone.
+        const UNIT_LABEL = { lb: '/lb', nt: '/net ton', gt: '/gross ton', mt: '/MT', piece: '/piece' };
+        const { unitOf } = clientUnitHelpers(src, name);
         const render = (unit) => {
             const it = { unit };
             // eslint-disable-next-line no-new-func
-            return new Function('it', 'return `' + tpl.replace(/`/g, '\\`') + '`;')(it);
+            return new Function('it', 'unitOf', 'UNIT_LABEL',
+                'return `' + tpl + '`;')(it, unitOf, UNIT_LABEL);
         };
         const selectedValue = (html) => {
             const d = new JSDOM(`<form>${html}</form>`);
@@ -167,10 +230,19 @@ section('C — the price recall carries its unit');
     for (const [name, src] of [['website', DASH], ['app', APP]]) {
         ck(`${name}: lastPriceForDescription returns the unit with the price`,
            /return \{ price: it\.price, unit:/.test(src));
+        // ── PROPERTY, NOT TEXT, SINCE 2026-10-10 ─────────────────────────
+        // This matched the exact line `unitSel.value = last ? last.unit :
+        // 'lb'`. Both clients had to change that line for the new units —
+        // a stored 'nt' handed to a <select> with no 'nt' option silently
+        // becomes '', which is how the pay modal posted an empty mode in
+        // September — so matching the old text would have failed for a
+        // correct change. What must hold is that the recall sets the select
+        // AND falls back to lb, and that it goes through unitOf rather than
+        // trusting a stored string.
         ck(`${name}: applying it sets the select too`,
-           /if \(unitSel\) unitSel\.value = last \? last\.unit : 'lb';/.test(src));
+           /unitSel\.value =/.test(src) && /unitOf\(last\.unit\)/.test(src), 'unitSel.value / unitOf');
         ck(`${name}:   and a grade with no history falls back to lb, not to whatever was there`,
-           /last \? last\.unit : 'lb'/.test(src));
+           /\|\| 'lb'/.test(src) || /: 'lb'/.test(src));
     }
 
     // The function itself, lifted out and run: an MT row must come back as MT.
@@ -598,32 +670,72 @@ section('H — OPENING a saved row, which is where it was wrong');
         ck(`${name}: the render-time amount block is findable`, !!m);
         if (!m) continue;
         const body = 'const net = it.net;\n' + m[0] + '; return amount;';
+        // qtyForUnit and unitOf are the clients' own helpers as of
+        // 2026-10-10 — the same shape as helpers/priceUnits.js, which both
+        // clients mirror inline because a browser cannot require. Passed in
+        // rather than redefined loosely, so this harness computes with the
+        // real table and tests/price-units.js section E is what proves that
+        // table matches the server's.
+        const { unitOf, qtyForUnit } = clientUnitHelpers(src, name);
         // eslint-disable-next-line no-new-func
-        const renderAmount = new Function('it', body);
+        const renderAmount = new Function('it', 'qtyForUnit', 'unitOf', body)
+            .bind(null);
+        const amountOf = (it) => renderAmount(it, qtyForUnit, unitOf);
 
         ck(`${name}: a /MT row opens at the TONNE figure, not the pound one`,
-           renderAmount({ net: HER_NET, price: HER_PRICE, unit: 'mt' }) === RIGHT,
-           String(renderAmount({ net: HER_NET, price: HER_PRICE, unit: 'mt' })));
+           amountOf({ net: HER_NET, price: HER_PRICE, unit: 'mt' }) === RIGHT,
+           String(amountOf({ net: HER_NET, price: HER_PRICE, unit: 'mt' })));
         ck(`${name}:   and specifically not her $15,364,800`,
-           renderAmount({ net: HER_NET, price: HER_PRICE, unit: 'mt' }) !== WRONG);
+           amountOf({ net: HER_NET, price: HER_PRICE, unit: 'mt' }) !== WRONG);
         // The other half of the same rule: every load already on file has no
         // unit, and opening one must compute exactly as it always did.
         ck(`${name}: a /lb row is unchanged`,
-           renderAmount({ net: HER_NET, price: HER_PRICE, unit: 'lb' }) === WRONG);
+           amountOf({ net: HER_NET, price: HER_PRICE, unit: 'lb' }) === WRONG);
         ck(`${name}:   and a row with NO unit is unchanged too`,
-           renderAmount({ net: HER_NET, price: HER_PRICE, unit: undefined }) === WRONG);
+           amountOf({ net: HER_NET, price: HER_PRICE, unit: undefined }) === WRONG);
         ck(`${name}:   'MT' upper case counts as tonnes here as well`,
-           renderAmount({ net: HER_NET, price: HER_PRICE, unit: 'MT' }) === RIGHT);
+           amountOf({ net: HER_NET, price: HER_PRICE, unit: 'MT' }) === RIGHT);
 
         // ── THE TWO PATHS MUST AGREE ────────────────────────────────────
         // The real defect was not a wrong formula, it was TWO formulas. So
         // the lasting check is that the render path and the recompute path
         // use the same constant and the same branch.
-        const recompute = (src.match(/const perMt = \(row\.querySelector[\s\S]*?const amount = \(qty[^\n]*\n/) || [''])[0];
-        ck(`${name}: render and recompute use the same divisor`,
-           /2204\.62/.test(m[0]) && /2204\.62/.test(recompute));
-        ck(`${name}:   and both branch on 'mt' alone, so lb and blank are one case`,
-           /=== 'mt'/.test(m[0]) && /=== 'mt'/.test(recompute));
+        // ── STRENGTHENED 2026-10-10 ─────────────────────────────────────
+        // This used to assert the literal `2204.62` and `=== 'mt'` appeared
+        // in BOTH blocks. That was a check shaped like the code: it would
+        // have gone red for the right reason today and for the wrong one —
+        // the divisor is a table now and `=== 'mt'` is gone because there
+        // are five units.
+        //
+        // The property was never the literal. It was that the render path
+        // and the recompute path do the SAME arithmetic, because the real
+        // defect was not a wrong formula, it was TWO formulas. They now
+        // call one function, which is strictly stronger than sharing a
+        // constant, so that is what is asserted.
+        const recompute = (src.match(/const unitNow = \(?row\.querySelector[\s\S]*?const amount = \(qty[^\n]*\n/) || [''])[0];
+        ck(`${name}: the recompute block is findable`, !!recompute, recompute.slice(0, 80));
+        ck(`${name}: render and recompute call the SAME function`,
+           /qtyForUnit\(/.test(m[0]) && /qtyForUnit\(/.test(recompute),
+           `${/qtyForUnit\(/.test(m[0])} ${/qtyForUnit\(/.test(recompute)}`);
+        ck(`${name}:   and neither carries a divisor of its own any more`,
+           !/\/\s*2204\.62/.test(m[0]) && !/\/\s*2204\.62/.test(recompute));
+
+        // ── THE NEW UNITS, ON THE PATH THAT WAS WRONG ───────────────────
+        // Her request of 2026-10-10. This is the cold-open path — the one
+        // that produced $15,364,800 — so each new unit is opened here too
+        // rather than only being posted through a route.
+        ck(`${name}: a /net ton row opens at 23.28 x price`,
+           amountOf({ net: HER_NET, price: 300, unit: 'nt' }) === 6984,
+           String(amountOf({ net: HER_NET, price: 300, unit: 'nt' })));
+        ck(`${name}:   a /gross ton row at 20.7857 x price, which is NOT the same`,
+           amountOf({ net: HER_NET, price: 300, unit: 'gt' }) === 6235.71,
+           String(amountOf({ net: HER_NET, price: 300, unit: 'gt' })));
+        ck(`${name}:   and a /piece row on its COUNT, not its weight`,
+           amountOf({ net: HER_NET, price: 5, unit: 'piece', pieces: 12 }) === 60,
+           String(amountOf({ net: HER_NET, price: 5, unit: 'piece', pieces: 12 })));
+        ck(`${name}:   a unit neither screen knows shows NO amount, not pounds`,
+           amountOf({ net: HER_NET, price: HER_PRICE, unit: 'bushel' }) === null,
+           String(amountOf({ net: HER_NET, price: HER_PRICE, unit: 'bushel' })));
     }
 }
 

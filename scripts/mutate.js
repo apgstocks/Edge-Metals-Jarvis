@@ -948,18 +948,32 @@ const MUTATIONS = [
     // "first time on saving showing properly.but on edit,it is refactoring".
     // One multiplication existing in three places, two of them fixed in
     // September. These pin the third, on both clients.
+    // ── RE-POINTED 2026-10-10, AND THAT IS THE INTERESTING PART ──────────
+    // These three guard the $15m regression — the cold-open path that
+    // priced a /MT row by the pound. They matched `perMtRow` and the
+    // literal 2204.62, both of which went away when the five units landed,
+    // so all three reported NOT APPLIED: pattern found 0 times.
+    //
+    // mutate.js's own header says it, and it is why that report exists: "a
+    // mutation that was never applied cannot be killed". Three guards on the
+    // most expensive bug in this repo had quietly stopped testing anything,
+    // and only the NOT APPLIED line said so. Re-pointed at the lines that
+    // replaced them.
     { name: 'units: opening a saved /MT row shows the pound figure again (website)',
       file: 'dashboard/index.html', suites: ['load-item-units'],
-      find: '    const qtyRow = (net != null && perMtRow) ? net / 2204.62 : net;',
+      find: '    const qtyRow = qtyForUnit(it.unit, net, it.pieces);',
       to:   '    const qtyRow = net;' },
     { name: 'units: opening a saved /MT row shows the pound figure again (app)',
       file: 'mobile-app/www/index.html', suites: ['load-item-units'],
-      find: '    const qtyRow = (net != null && perMtRow) ? net / 2204.62 : net;',
+      find: '    const qtyRow = qtyForUnit(it.unit, net, it.pieces);',
       to:   '    const qtyRow = net;' },
+    // The other half of the same rule: a row with no unit is a POUND row,
+    // and every load entered before 2026-09-24 is one. This used to invert
+    // the `=== 'mt'` test; now it makes a blank unit mean tonnes.
     { name: 'units: a row with no unit starts being treated as tonnes',
-      file: 'dashboard/index.html', suites: ['load-item-units'],
-      find: "    const perMtRow = String(it.unit || '').trim().toLowerCase() === 'mt';",
-      to:   "    const perMtRow = String(it.unit || '').trim().toLowerCase() !== 'lb';" },
+      file: 'dashboard/index.html', suites: ['load-item-units', 'price-units'],
+      find: "  if (k === '') return 'lb';\n  return Object.prototype.hasOwnProperty.call(LB_PER_UNIT, k) ? k : null;",
+      to:   "  if (k === '') return 'mt';\n  return Object.prototype.hasOwnProperty.call(LB_PER_UNIT, k) ? k : null;" },
 
     // ── DOES THE BANK AGREE WITH THE BOOKS — HER GOAL, 2026-10-08 ─────
     // "so that i dont need to look out for statements whether payment
@@ -1182,6 +1196,65 @@ const MUTATIONS = [
       file: 'helpers/bankReview.js', suites: ['bank-review'],
       find: "    { re: /\\b(ntg|tql|schneider)\\b/i, postable: true,",
       to:   "    { re: /\\b(ntg|tql|schneider|jio|sher)\\b/i, postable: true," },
+
+    // ── /lb, /net ton, /gross ton, /MT, /piece — HERS, 2026-10-10 ────────
+    // "in edge yard app,in addition to lbs-MT-Item can be /piece as well.
+    // and gross ton and net ton as well."
+    //
+    // Net ton is 2,000 lb and gross ton is 2,240 — twelve per cent apart,
+    // and both are "a ton" out loud. These mutations swap one for the other,
+    // because a check that cannot tell them apart is the one that matters.
+    { name: 'units: a net ton becomes a gross ton',
+      file: 'helpers/priceUnits.js', suites: ['price-units', 'price-units-e2e'],
+      find: "    nt: 2000,          // net ton, a.k.a. short ton — the US one",
+      to:   "    nt: 2240,          // net ton, a.k.a. short ton — the US one" },
+    { name: 'units: a gross ton becomes a net ton',
+      file: 'helpers/priceUnits.js', suites: ['price-units', 'price-units-e2e'],
+      find: "    gt: 2240,          // gross ton, a.k.a. long ton — the UK one",
+      to:   "    gt: 2000,          // gross ton, a.k.a. long ton — the UK one" },
+    // The yard's tonne, not Edge Metals'. I reached for the wrong company's
+    // constant twice while building this, so it is pinned.
+    { name: 'units: the tonne becomes the Edge Metals constant',
+      file: 'helpers/priceUnits.js', suites: ['price-units'],
+      find: "    mt: 2204.62,       // metric tonne, as the yard has always computed it",
+      to:   "    mt: 2204.62262,    // metric tonne, as the yard has always computed it" },
+    // ── THE $15m SHAPE, AND THE ONE THING THAT STOPS IT ──────────────────
+    // An unknown unit treated as pounds prices a /piece row's 46,560 lb at
+    // $5 a piece as $232,800. The throw is the feature.
+    { name: 'units: an unknown unit falls through to pounds instead of throwing',
+      file: 'helpers/priceUnits.js', suites: ['price-units', 'price-units-e2e'],
+      find: "    if (u === null) {\n        throw new Error(`\"${unit}\" is not a unit Jarvis prices in — it takes `",
+      to:   "    if (false) {\n        throw new Error(`\"${unit}\" is not a unit Jarvis prices in — it takes `" },
+    { name: 'units: a counted row is priced on its WEIGHT, not its count',
+      file: 'helpers/priceUnits.js', suites: ['price-units', 'price-units-e2e'],
+      find: "    if (COUNTED.has(u)) {",
+      to:   "    if (false) {" },
+    // Zero is "nothing was delivered"; null is "she has not typed it". A
+    // check that conflates them hides a missing count behind a $0.00 row.
+    { name: 'units: a count of zero reads as "not typed yet"',
+      file: 'helpers/priceUnits.js', suites: ['price-units', 'price-units-e2e'],
+      find: "        if (c === null || c < 0) return null;",
+      to:   "        if (c === null || c <= 0) return null;" },
+    { name: 'units: an empty unit stops meaning pounds, so every historic row breaks',
+      file: 'helpers/priceUnits.js', suites: ['price-units', 'price-units-e2e'],
+      find: "    if (u === '') return 'lb';",
+      to:   "    if (u === '') return null;" },
+    // A stray count left on a row whose unit went back to /lb must not
+    // reprice it — otherwise changing the unit twice prices by the count.
+    { name: 'units: pieces is read on a weight row too',
+      file: 'helpers/loads.js', suites: ['price-units-e2e'],
+      find: "        pieces: PU.isCounted(unit) ? pieces : null,\n        amount,",
+      to:   "        pieces,\n        amount," },
+    { name: 'units: the sale side keeps the old two-unit arithmetic',
+      file: 'helpers/outboundLoads.js', suites: ['price-units-e2e'],
+      find: "    const amount = PU.amountFor({ unit, net, pieces, price });",
+      to:   "    const amount = (net != null && price != null) ? round2(net * price) : null;" },
+    // The clients. The $15m bug was the COLD-OPEN path having no unit in it
+    // while the typing path did, so both get a mutation.
+    { name: 'units: the website cannot read a unit its own picker lacks',
+      file: 'dashboard/index.html', suites: ['price-units'],
+      find: "const LB_PER_UNIT = { lb: 1, nt: 2000, gt: 2240, mt: 2204.62, piece: null };\nconst UNIT_LABEL = { lb: '/lb', nt: '/net ton', gt: '/gross ton', mt: '/MT', piece: '/piece' };\n// An unrecognised unit returns null and the caller shows no amount. It must",
+      to:   "const LB_PER_UNIT = { lb: 1, mt: 2204.62 };\nconst UNIT_LABEL = { lb: '/lb', nt: '/net ton', gt: '/gross ton', mt: '/MT', piece: '/piece' };\n// An unrecognised unit returns null and the caller shows no amount. It must" },
 
     // ── THE AGENT'S PLAN VERIFIER — THE ONLY THING IN THE WAY ────────
     // A model proposes; this is what stands between a plausible plan and
