@@ -258,7 +258,14 @@ section('H — the fence helpers really resolve across the circular boundary');
     const p = claimParse.buildPrompt({ from: 'a@b.c', subject: 's', body: 'b' });
     ck('claimParse reached replyWatch newFence/defence at call time', /BEGIN UNTRUSTED EMAIL CONTENT EMAIL-[0-9a-f]{16}/.test(p));
     ck('replyWatch calls the claim hook', /claimWatch\.consider\(/.test(fs.readFileSync(R('workflow/replyWatch.js'), 'utf8')));
-    ck('and passes dryRun through', /claimWatch[\s\S]{0,400}dryRun,/.test(fs.readFileSync(R('workflow/replyWatch.js'), 'utf8')));
+    // Was /claimWatch[\s\S]{0,400}dryRun,/ — a proximity check, which went red
+    // on 2026-10-10 when a comment was added inside the same call. The property
+    // is that dryRun is in THAT call's arguments, so match the call itself.
+    {
+        const rw = fs.readFileSync(R('workflow/replyWatch.js'), 'utf8');
+        const call = (rw.match(/claimWatch\.consider\(\{[\s\S]*?\n\s*\}\);/) || [''])[0];
+        ck('and passes dryRun through', /(^|[\s,{])dryRun\s*[,}]/.test(call), call.slice(-120));
+    }
     ck('claim tasks are kept out of the spoken brief',
         /startsWith\('claim_'\)/.test(fs.readFileSync(R('helpers/metalsBrief.js'), 'utf8')));
 }

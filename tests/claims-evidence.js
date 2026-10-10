@@ -42,7 +42,12 @@ const report = require(R('helpers/claims/report.js'));
 const routes = require(R('helpers/claims/routes.js'));
 const gemini = require(R('helpers/gemini.js'));
 
+// Distinct bytes per document ON PURPOSE. Evidence is deduplicated on a sha256
+// of the content (a mail thread re-attaches its report on every reply), so a
+// fixture that sends the same bytes twice is testing the dedupe, not the file.
 const B64 = Buffer.from('not really a jpeg but it is bytes').toString('base64');
+let nth = 0;
+const freshB64 = () => Buffer.from('document number ' + (++nth) + ' — distinct bytes').toString('base64');
 
 (async () => {
 
@@ -56,29 +61,39 @@ section('A — a document is kept against the claim');
     ck('with a link, a name and who added it', r.entry.url && r.entry.name && r.entry.added_by === 'apsara', r.entry);
     ck('and a history line says so', claims.get(c.id).history.some((h) => /supporting document/.test(h.what)));
 
-    await claimEvidence.attach(c.id, { base64: B64, mimeType: 'application/pdf', name: 'weighbridge.pdf' });
+    await claimEvidence.attach(c.id, { base64: freshB64(), mimeType: 'application/pdf', name: 'weighbridge.pdf' });
     ck('a second document is added, not replacing the first', claimEvidence.list(claims.get(c.id)).length === 2);
+
+    // The same bytes again is the reply-chain case: a thread re-attaches its
+    // report on every reply, and the file id cannot catch that because each
+    // upload is a new Drive file.
+    const uploadsBefore = UPLOADS.length;
+    const dup = await claimEvidence.attach(c.id, { base64: B64, mimeType: 'image/jpeg', name: 'surveyor report (1).jpg' });
+    ck('the same document twice is recognised by its bytes', dup.already === true, dup.entry && dup.entry.name);
+    ck('and is not uploaded again', UPLOADS.length === uploadsBefore, { before: uploadsBefore, now: UPLOADS.length });
+    ck('the claim still has two, not three', claimEvidence.list(claims.get(c.id)).length === 2);
 }
 
 section('B — what it refuses');
 {
     const c = claims.list()[0];
+    const uploadsAtB = UPLOADS.length;
     let msg = '';
     try { await claimEvidence.attach(c.id, { base64: '', mimeType: 'image/jpeg' }); } catch (e) { msg = e.message; }
     ck('no file is refused in words', /no file/.test(msg), msg);
 
     msg = '';
-    try { await claimEvidence.attach(c.id, { base64: B64, mimeType: 'application/zip' }); } catch (e) { msg = e.message; }
+    try { await claimEvidence.attach(c.id, { base64: freshB64(), mimeType: 'application/zip' }); } catch (e) { msg = e.message; }
     ck('a zip is not a document it will keep', /not a document I can keep/.test(msg), msg);
 
     msg = '';
-    try { await claimEvidence.attach('nosuchclaim', { base64: B64, mimeType: 'image/jpeg' }); } catch (e) { msg = e.message; }
+    try { await claimEvidence.attach('nosuchclaim', { base64: freshB64(), mimeType: 'image/jpeg' }); } catch (e) { msg = e.message; }
     ck('an unknown claim is refused', /no such claim/.test(msg), msg);
 
     const big = 'A'.repeat(Math.ceil((claimEvidence.MAX_BYTES + 1024) * 4 / 3));
     msg = '';
     try { await claimEvidence.attach(c.id, { base64: big, mimeType: 'image/jpeg' }); } catch (e) { msg = e.message; }
-    ck('an oversized file is refused BEFORE the upload', /too big/.test(msg) && UPLOADS.length === 2, { msg, uploads: UPLOADS.length });
+    ck('an oversized file is refused BEFORE the upload', /too big/.test(msg) && UPLOADS.length === uploadsAtB, { msg, uploads: UPLOADS.length });
 }
 
 section('C — Drive failing must not lose the claim');
@@ -88,7 +103,7 @@ section('C — Drive failing must not lose the claim');
     const evBefore = claimEvidence.list(claims.get(c.id)).length;
     FAIL_NEXT = 'Drive is unreachable';
     let msg = '';
-    try { await claimEvidence.attach(c.id, { base64: B64, mimeType: 'image/jpeg' }); } catch (e) { msg = e.message; }
+    try { await claimEvidence.attach(c.id, { base64: freshB64(), mimeType: 'image/jpeg' }); } catch (e) { msg = e.message; }
     ck('the error surfaces', /unreachable/.test(msg), msg);
     ck('the claim is untouched', claims.list().length === before && claimEvidence.list(claims.get(c.id)).length === evBefore);
     ck('and nothing half-written was recorded', !claimEvidence.list(claims.get(c.id)).some((e) => !e.url));
@@ -140,10 +155,10 @@ section('F — through the routes');
     };
     const c = claims.list().find((x) => x.invoice_no === '26JY05');
 
-    const r = await post('/api/claims/' + c.id + '/evidence', { base64: B64, mimeType: 'image/jpeg', name: 'third.jpg' });
+    const r = await post('/api/claims/' + c.id + '/evidence', { base64: freshB64(), mimeType: 'image/jpeg', name: 'third.jpg' });
     ck('POST /api/claims/:id/evidence files it', r.code === 200 && r.body.evidence.length === 3, r.body && (r.body.error || r.body.evidence.length));
 
-    const miss = await post('/api/claims/nosuchid/evidence', { base64: B64, mimeType: 'image/jpeg' });
+    const miss = await post('/api/claims/nosuchid/evidence', { base64: freshB64(), mimeType: 'image/jpeg' });
     ck('an unknown claim is a 404, not a 500', miss.code === 404, miss.code);
 
     const stale = await post('/api/claims/' + c.id + '/evidence', { scanId: 'scan_gone' });
@@ -155,7 +170,7 @@ section('F — through the routes');
     gemini.getClient = () => ({ getGenerativeModel: () => ({ generateContent: async () => ({ response: { text: () => JSON.stringify(SCAN) } }) }) });
     gemini.callGeminiJSON = async () => ({ label: 'weight shortage', description: 'short', quote: 'short', confidence: 0.9, why: 'x' });
 
-    const scanned = await post('/api/claims/scan', { base64: B64, mimeType: 'image/jpeg', name: 'outturn.jpg' });
+    const scanned = await post('/api/claims/scan', { base64: freshB64(), mimeType: 'image/jpeg', name: 'outturn.jpg' });
     ck('the scan route parks the file and names the id', scanned.code === 200 && /^scan_/.test(scanned.body.scanId || ''), scanned.body && scanned.body.scanId);
 
     const made = await post('/api/claims', { container_no: 'ZZZU1111111', supplier: 'Gomez' });
@@ -167,7 +182,7 @@ section('F — through the routes');
     ck('the same id cannot be used twice', again.code >= 400, again.code);
 
     SCAN = { is_claim_document: false, why: 'a packing list' };
-    const notClaim = await post('/api/claims/scan', { base64: B64, mimeType: 'image/jpeg' });
+    const notClaim = await post('/api/claims/scan', { base64: freshB64(), mimeType: 'image/jpeg' });
     ck('a non-claim document is not parked — no claim is coming', notClaim.code === 422 && !notClaim.body.scanId, notClaim.body && notClaim.body.scanId);
 
     server.close();

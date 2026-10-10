@@ -27,6 +27,7 @@ const claims = require('../helpers/claims');
 const tasks = require('../helpers/tasks');
 const { gate, extract } = require('../helpers/claimParse');
 const claimKind = require('../helpers/claimKind');
+const claimEvidence = require('../helpers/claimEvidence');
 
 let _sendToTeam = async () => {};
 function init({ sendToTeam } = {}) {
@@ -147,7 +148,7 @@ async function closeTodos(container_no, type) {
 // ── THE HOOK ────────────────────────────────────────────────────────────────
 // Returns a small verdict object for tests and logs. It never throws — the
 // caller is replyWatch's per-message loop and must not be disturbed.
-async function consider({ messageId, threadId, from, subject, body, mailbox, dryRun = false } = {}) {
+async function consider({ messageId, threadId, from, subject, body, mailbox, payload, fetchPart, dryRun = false } = {}) {
     try {
         if (!messageId) return { skipped: 'no message id' };
         const g = gate({ subject, body, from });
@@ -205,12 +206,31 @@ async function consider({ messageId, threadId, from, subject, body, mailbox, dry
             await raiseVerifyTodo(rec);
         }
 
+        // ── WHAT THE MAIL BROUGHT WITH IT ──────────────────────────────────
+        // Apsara, 2026-10-10. The surveyor's report is usually attached to the
+        // very mail that raises the claim, and until now it was read for its
+        // filename and dropped. This files it.
+        //
+        // IT HAPPENS HERE, after the claim exists, and nowhere earlier. The
+        // mail loop sees every message in the mailbox; downloading attachments
+        // before knowing a message is a claim would be most of a Gmail quota
+        // spent on newsletters. A claim is the admission ticket.
+        //
+        // fromMail never throws and the claim is already written, so the worst
+        // case is a claim with no document and a line in the log. dryRun never
+        // reaches this — it returned above.
+        let attached = null;
+        if (payload && typeof fetchPart === 'function') {
+            attached = await claimEvidence.fromMail(rec.id, { payload, fetchPart, by: 'email' });
+            if (attached.filed) console.log(`[CLAIM] filed ${attached.filed} attachment(s) on ${rec.id}: ${attached.names.join(', ')}`);
+        }
+
         await markProcessed(messageId, isNew ? `created ${rec.id}` : `updated ${rec.id}`);
         if (isNew || changed) {
             try { await _sendToTeam(notifyText(rec, { isNew, changed })); }
             catch (e) { console.warn('[CLAIM] team notify failed:', e.message); }
         }
-        return { claim_id: rec.id, created: isNew, changed, confidence: got.confidence };
+        return { claim_id: rec.id, created: isNew, changed, confidence: got.confidence, attached };
     } catch (e) {
         console.error('[CLAIM] consider failed:', e.message);
         return { error: e.message };

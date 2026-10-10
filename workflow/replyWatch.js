@@ -4027,12 +4027,22 @@ async function run({ sendToManager, sendMessage: _sendMessage = null, dryRun = f
         // because the claim parser reuses this module's fence helpers.
         try {
             const claimWatch = require('./claimWatch');
+            // Required here, like claimWatch above, and for the same reason: this
+            // block must be able to fail without the digest failing with it.
+            const { downloadAttachment } = require('../helpers/gmail');
             await claimWatch.consider({
                 messageId: ref.id,
                 threadId: msg.threadId,
                 from, subject,
                 body: visible,
                 mailbox: (typeof me === 'string' ? me : ''),
+                // The attachments, lazily. This loop reads every message in the
+                // mailbox, so NOTHING is downloaded here: claimWatch asks for a
+                // part only after it has decided this mail is a claim, which is
+                // a handful of messages a week rather than all of them. The
+                // payload is already in hand — only the bytes cost a round trip.
+                payload: msg.payload || null,
+                fetchPart: (part) => downloadAttachment(gmail, ref.id, { filename: part.filename, body: { attachmentId: part.attachmentId } }),
                 dryRun,
             });
         } catch (e) { console.warn('[REPLYWATCH] claim check failed, carrying on:', e.message); }
