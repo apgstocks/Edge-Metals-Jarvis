@@ -258,7 +258,7 @@ console.log('\n=== separate invoice / packing list ===');
   ck('one page for both documents', (pdfSrc.match(/pdfBrowser'\)\.withPage\(/g) || []).length, 1);
   ck('...and no Chromium launched by the invoice itself', (pdfSrc.match(/puppeteer\.launch/g) || []).length, 0);
 
-  const apiSrc = fs.readFileSync(R('api.js'), 'utf8');
+  const apiSrc = require('../helpers/sourceParts').apiSource();
   ck('the API reads the flag', /body\.separate === true/.test(apiSrc), true);
   ck('...and names the files the way her old tool did',
      /_INVOICE\.pdf/.test(apiSrc) && /_PACKING_LIST\.pdf/.test(apiSrc), true);
@@ -495,7 +495,7 @@ console.log('\n=== invoice only ===');
   await generateInvoiceClassicPdf(data, { separate: true, invoiceOnly: true, render: d2.render });
   ck('invoice only BEATS separate if both arrive', d2.seen, ['invoice']);
 
-  const apiSrc2 = fs.readFileSync(R('api.js'), 'utf8');
+  const apiSrc2 = require('../helpers/sourceParts').apiSource();
   ck('the API reads the flag', /body\.invoice_only === true/.test(apiSrc2), true);
   ck('...and stops separate from overriding it',
      /const separate = !invoiceOnly &&/.test(apiSrc2), true);

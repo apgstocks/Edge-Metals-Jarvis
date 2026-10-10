@@ -276,7 +276,7 @@ const noSettings = () => { try { fs.unlinkSync(cfg.SETTINGS_FILE); } catch (e) {
        !/saveSettings|writeFileSync|mutateJson|saveJson/.test(src),
        'it reports on a live production data file; it must not edit one');
 
-    const api = fs.readFileSync(path.join(ROOT, 'api.js'), 'utf8');
+    const api = require('../helpers/sourceParts').apiSource();
     ck('  and the boot report is wrapped so it cannot stop the server',
        /try \{[\s\S]{0,400}modelReportLines\(\)[\s\S]{0,400}catch/.test(api));
 }

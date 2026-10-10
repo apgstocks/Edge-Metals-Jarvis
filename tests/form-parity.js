@@ -119,7 +119,7 @@ ck('net total is right', /data-label="Net">7,305</.test(web));
   // staff list for the same reason. So the fix is to SAY so, never to widen
   // the allowlist — pinned here so nobody "fixes" it the easy way.
   {
-    const apiSrc = fs.readFileSync(R+'api.js','utf8');
+    const apiSrc = require('../helpers/sourceParts').apiSource();
     const line = (apiSrc.match(/const STAFF_ALLOWED_PATH_PREFIXES = \[[^\]]*\]/) || [''])[0];
     ck('bot: /api/yard/ask stays OFF the staff allowlist',
        !/yard/.test(line),

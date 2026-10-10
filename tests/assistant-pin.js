@@ -101,7 +101,7 @@ section('B. the pin is what gets sent');
 // ── C. THE SERVER HONOURS IT ────────────────────────────────────────────────
 section('C. /api/voice/ask takes the instruction');
 {
-    const api = fs.readFileSync(path.join(ROOT, 'api.js'), 'utf8');
+    const api = require('../helpers/sourceParts').apiSource();
     const route = api.slice(api.indexOf("app.post('/api/voice/ask'"), api.indexOf("app.post('/api/voice/ask'") + 3000);
     ck('the route reads an explicit agent', /req\.body \|\| \{\}\)\.agent/.test(route));
     ck('  and honours only the two real names',

@@ -364,7 +364,7 @@ let dom, w, doc;
     ck('  from a file that exists', fs.existsSync(path.join(ROOT, 'dashboard/bank-match.html')));
     ck('  and the mount is wired into api.js',
        /require\('\.\/helpers\/bankMatchRoutes'\)\.mount\(app, cfg\)/.test(
-           fs.readFileSync(path.join(ROOT, 'api.js'), 'utf8')));
+           require('../helpers/sourceParts').apiSource()));
 
     // Every /api/ URL the page calls must exist on the server, and every
     // bank route must be called by the page. Both directions, because the

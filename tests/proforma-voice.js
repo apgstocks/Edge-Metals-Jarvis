@@ -193,7 +193,7 @@ section('F — the wiring in api.js');
     // Gmail, WhatsApp and a Gemini key. What matters is the ORDER — the
     // draft is consulted BEFORE the router, or a mid-proforma answer goes to
     // the wrong assistant.
-    const all = require('fs').readFileSync(path.join(ROOT, 'api.js'), 'utf8');
+    const all = require('../helpers/sourceParts').apiSource();
     // SCOPED TO THE VOICE HANDLER. My first version searched the whole file
     // and compared against the FIRST askYard require anywhere in it — which
     // belongs to /api/yard/ask, a different endpoint several hundred lines

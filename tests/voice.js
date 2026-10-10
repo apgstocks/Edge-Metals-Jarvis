@@ -201,7 +201,7 @@ console.log('\n─ voice: routing and speech ───────────�
        /for \(let attempt = 1; attempt <= 3/.test(src));
     ck('  but does not retry auth or quota errors',
        /401\|403\|400/.test(src));
-    const api = fs.readFileSync(path.join(R, 'api.js'), 'utf8');
+    const api = require('../helpers/sourceParts').apiSource();
     ck('a failed synthesis returns 503, not 500', /voice\/say[\s\S]{0,900}status\(503\)/.test(api));
     const html = fs.readFileSync(path.join(R, 'mobile-app/www/index.html'), 'utf8');
     ck('the app shows the text before it plays anything',

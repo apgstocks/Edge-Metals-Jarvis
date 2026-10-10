@@ -214,7 +214,7 @@ section('C — the Spend report keeps track of it');
        /not recorded/i.test(r.paidViaColumns[r.paidViaColumns.length - 1]),
        JSON.stringify(r.paidViaColumns));
 
-    const api = fs.readFileSync(path.join(ROOT, 'api.js'), 'utf8');
+    const api = require('../helpers/sourceParts').apiSource();
     ck('the route passes the filter through', /paidVia: req\.query\.paid_via/.test(api));
 }
 

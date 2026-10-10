@@ -118,7 +118,7 @@ const viaCaddy = (p) => get(p, { Host: 'jarvis.edgemetals.com', 'X-Forwarded-Pro
        redirected.headers.location === 'https://jarvis.edgemetals.com/',
        String(redirected.headers.location));
 
-    const src = fs.readFileSync(path.join(ROOT, 'api.js'), 'utf8');
+    const src = require('../helpers/sourceParts').apiSource();
     const alt = src.indexOf("res.set('Alt-Svc', 'clear')");
     const redir = src.indexOf('const target = \'https://jarvis.edgemetals.com\'');
     ck('the eraser is installed BEFORE the redirect middleware',
@@ -143,7 +143,7 @@ const viaCaddy = (p) => get(p, { Host: 'jarvis.edgemetals.com', 'X-Forwarded-Pro
     // The day HTTP/3 is deliberately re-enabled, "clear" becomes wrong — it
     // would erase an advertisement we meant to make. Tying the two together
     // means that change cannot be made silently.
-    const api = fs.readFileSync(path.join(ROOT, 'api.js'), 'utf8');
+    const api = require('../helpers/sourceParts').apiSource();
     const erasing = /res\.set\('Alt-Svc', 'clear'\)/.test(api);
     const http3off = /protocols\s+h1\s+h2/.test(config);
     ck('the eraser and the protocol setting agree with each other',

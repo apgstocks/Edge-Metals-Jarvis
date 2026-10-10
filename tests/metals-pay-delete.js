@@ -563,7 +563,7 @@ if (JSDOM) {
 
     // Server side: all four routes still requireSuper. A client-only change
     // should not have touched this, and the check costs nothing.
-    const api = fs.readFileSync(path.join(ROOT, 'api.js'), 'utf8');
+    const api = require('../helpers/sourceParts').apiSource();
     for (const r of ['/api/bill-payments/:id', '/api/sales-receipts/:id',
                      '/api/metals-trucking/:id', '/api/sales-settlements/:id']) {
         const re = new RegExp(`app\\.delete\\('${r.replace(/[/:]/g, (c) => '\\' + c)}',\\s*requireSuper`);

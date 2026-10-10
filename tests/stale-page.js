@@ -124,7 +124,7 @@ section('B. the handler stays inside the dashboard directory');
         ck(`  ${probe} does not leak`, !leaked, `${r.status} ${String(r.body).slice(0, 60)}`);
     }
 
-    const api = fs.readFileSync(path.join(ROOT, 'api.js'), 'utf8');
+    const api = require('../helpers/sourceParts').apiSource();
     ck('  and the containment check is there for the day it is needed',
        /if \(!file\.startsWith\(path\.join\(cfg\.ROOT, 'dashboard'\) \+ path\.sep\)\) return next\(\);/.test(api),
        'a filesystem read named by user input with nothing standing in front of it');

@@ -117,7 +117,7 @@ section('C — the hook is in ONE place, reached by both generation paths');
 
     // Both generators call it. Read from the source rather than remembered.
     const acts = fs.readFileSync(path.join(ROOT, 'workflow/actions.js'), 'utf8');
-    const api = fs.readFileSync(path.join(ROOT, 'api.js'), 'utf8');
+    const api = require('../helpers/sourceParts').apiSource();
     ck('  the WhatsApp/voice generator calls it',
        /recordFromGeneration\(/.test(acts));
     ck('  and so does the Documents page',
@@ -229,7 +229,7 @@ section('H — the yard staff cannot reach it');
     // /api/item-types IS staff-allowed, because the load form needs it at the
     // scale. The selling catalogue is not, and the prefix list is the only
     // thing enforcing that.
-    const api = fs.readFileSync(path.join(ROOT, 'api.js'), 'utf8');
+    const api = require('../helpers/sourceParts').apiSource();
     const line = /const STAFF_ALLOWED_PATH_PREFIXES = \[([^\]]+)\]/.exec(api);
     ck('the staff allow-list was found', !!line);
     ck('  /api/item-types is on it', /\/api\/item-types/.test(line[1]),

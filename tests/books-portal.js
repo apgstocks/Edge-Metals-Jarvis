@@ -284,7 +284,7 @@ const A = require(path.join(ROOT, 'helpers/booksAgent'));
 {
     section('D — reachable three ways, not none');
 
-    const api = fs.readFileSync(path.join(ROOT, 'api.js'), 'utf8');
+    const api = require('../helpers/sourceParts').apiSource();
     const web = fs.readFileSync(path.join(ROOT, 'dashboard/index.html'), 'utf8');
     const scr = fs.readFileSync(path.join(ROOT, 'helpers/screens.js'), 'utf8');
     const page = fs.readFileSync(path.join(ROOT, 'dashboard/books.html'), 'utf8');

@@ -209,7 +209,7 @@ section('G — both clients actually mint and send one');
     }
     // The server has to actually read it off the body, or every ticket above
     // is decoration.
-    const api = fs.readFileSync(path.join(__dirname, '..', 'api.js'), 'utf8');
+    const api = require('../helpers/sourceParts').apiSource();
     ck('the server reads the ticket off the request body',
        (api.match(/client_request_id: b\.client_request_id,/g) || []).length === 2,
        'both the /api/loads and /api/outbound-loads routes must pass it through');

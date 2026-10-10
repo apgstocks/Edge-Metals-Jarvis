@@ -356,7 +356,7 @@ q.reset();
 // else stays parallel, so this file must not have crept into the routes.
 section('F. only the rendering is serialised');
 {
-    const api = fs.readFileSync(path.join(ROOT, 'api.js'), 'utf8');
+    const api = require('../helpers/sourceParts').apiSource();
     ck('no route is wrapped in the queue', !/pdfQueue/.test(api),
        'the queue reached the HTTP layer, and now logins and downloads serialise too');
 

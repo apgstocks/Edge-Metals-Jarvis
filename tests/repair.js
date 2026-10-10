@@ -248,7 +248,7 @@ section('E — nothing to take back is SAID, not swallowed');
 
 section('F — wired ahead of everything that would eat it');
 {
-    const api = fs.readFileSync(path.join(ROOT, 'api.js'), 'utf8');
+    const api = require('../helpers/sourceParts').apiSource();
     const iRepair = api.indexOf('const scope = await repair.classify');
     const iAmend = api.indexOf("brainPending.type === 'confirm_proforma'");
     const iHandle = api.indexOf('pro.handle(asked');
@@ -299,7 +299,7 @@ section('G — the voices');
        'two names for one voice is a wrong-voice bug waiting to happen');
     ck('  and the dashboard too', /voice: 'Orus'/.test(dv));
     ck('  with Charon still allowed, so it can be put back',
-       /'Orus', 'Charon', 'Leda'/.test(fs.readFileSync(path.join(ROOT, 'api.js'), 'utf8')));
+       /'Orus', 'Charon', 'Leda'/.test(require('../helpers/sourceParts').apiSource()));
 
     // ── BOLD MUST NOT MEAN SLOW ──────────────────────────────────────────
     // She rejected the butler direction once: "i dont like ironman jarvis. it

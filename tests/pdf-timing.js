@@ -235,7 +235,7 @@ section('E — every renderer is wired, including the one she did not ask about'
            'a document that throws mid-render must still report where the time went');
         ck(`  ${f} passes the timer to the fitter`, /timer,/.test(src));
     }
-    const api = fs.readFileSync(path.join(ROOT, 'api.js'), 'utf8');
+    const api = require('../helpers/sourceParts').apiSource();
     ck('and there is a route to read it without shell access',
        /\/api\/pdf-timings/.test(api) && /requireAdmin/.test(api.slice(api.indexOf('/api/pdf-timings') - 120, api.indexOf('/api/pdf-timings') + 120)));
 }

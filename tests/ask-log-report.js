@@ -79,7 +79,7 @@ section('A — every answer path logs, and it is the FUNCTION that does it');
 
     // The three routes must still just call askYard — if one starts calling
     // askYardInner it escapes the log.
-    const apiSrc = fs.readFileSync(path.join(ROOT, 'api.js'), 'utf8');
+    const apiSrc = require('../helpers/sourceParts').apiSource();
     ck('  and no route reaches past the wrapper', !/askYardInner/.test(apiSrc),
        'calling the inner function directly is how a path goes dark');
 

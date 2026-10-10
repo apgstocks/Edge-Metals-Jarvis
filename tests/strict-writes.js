@@ -209,7 +209,7 @@ section('E. no write is left floating');
 
     // The routes catch. A 500 she can see beats a save that quietly did
     // nothing — but only if the process is still up to send it.
-    const api = fs.readFileSync(path.join(ROOT, 'api.js'), 'utf8').split('\n');
+    const api = require('../helpers/sourceParts').apiSource().split('\n');
     let unprotected = 0;
     api.forEach((l, i) => {
         if (!re.test(l)) return;

@@ -123,7 +123,7 @@ section('D — filters and edges');
 // ── E. the bug found while writing this ───────────────────────────────────
 section('E — /api/loads/<word> routes are not swallowed by /api/loads/:id');
 {
-    const src = fs.readFileSync(path.join(ROOT, 'api.js'), 'utf8');
+    const src = require('../helpers/sourceParts').apiSource();
     const at = (p) => src.indexOf(`app.get('${p}'`);
     const byId = at('/api/loads/:id');
     ck('/api/loads/:id is registered', byId > 0);

@@ -181,7 +181,7 @@ section('B2 — re-sign is gone once money is booked, but a FIRST sign is not');
        'a signed+paid load that shows nothing is indistinguishable from an unsigned one');
 
     // The endpoint is untouched, exactly as with Delete and Pay.
-    const api = fs.readFileSync(path.join(ROOT, 'api.js'), 'utf8');
+    const api = require('../helpers/sourceParts').apiSource();
     ck('POST /api/loads/:id/signature still exists', /app\.post\('\/api\/loads\/:id\/signature'/.test(api));
     // The reason the rule exists at all: signing REBUILDS the documents.
     ck('signing still regenerates the ticket and receipt', /generateAndStoreLoadPdfs\(signed/.test(api),
@@ -209,7 +209,7 @@ section('C — the card wires the rules, it does not just define them');
 // ── 4. the server did NOT lose the routes ─────────────────────────────────
 section('D — hiding a button is not the same as removing an endpoint');
 {
-    const api = fs.readFileSync(path.join(ROOT, 'api.js'), 'utf8');
+    const api = require('../helpers/sourceParts').apiSource();
     // Deliberate: the UI guard stops a mistake, the route stays because
     // removing it is a breaking API change and because the yard assistant,
     // the tests and any older installed APK all still call it.

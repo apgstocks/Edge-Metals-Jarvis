@@ -152,7 +152,7 @@ section('C — a filename is user input');
     // What can be held is that the route CARRIES requireAdmin, and that the
     // unauthenticated request is refused. Both below, and the first one is
     // the one that would catch someone removing it.
-    const apiSrc = fs.readFileSync(path.join(ROOT, 'api.js'), 'utf8');
+    const apiSrc = require('../helpers/sourceParts').apiSource();
     ck('the delete route is admin-only',
        /app\.delete\('\/api\/documents\/saved', requireAdmin,/.test(apiSrc),
        'documents are Edge Metals; staff are deliberately kept out of them');

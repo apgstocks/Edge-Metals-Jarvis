@@ -440,7 +440,7 @@ section('F. who it goes to and what it says');
 // one existing caller. Both are checked.
 section('G. nothing that already worked changed');
 {
-    const api = fs.readFileSync(R('api.js'), 'utf8');
+    const api = require('../helpers/sourceParts').apiSource();
     const actionsSrc = fs.readFileSync(R('workflow/actions.js'), 'utf8');
 
     // 1. /api/invoice/generate still REFUSES on a weight mismatch. The new

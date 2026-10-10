@@ -322,7 +322,7 @@ section('7 — WhatsApp down: answered, but never silently');
        JSON.stringify(j.sent));
 
     // The mechanism, so a rewrite cannot quietly lose it.
-    const api = require('fs').readFileSync(path.join(__dirname, '..', 'api.js'), 'utf8');
+    const api = require('../helpers/sourceParts').apiSource();
     ck('the fallback captures replies to HER chat',
        /if \(to === chatId\) \{\s*\n\s*capture\.replies\.push/.test(api),
        'without this the answer itself is lost too, not just the outbound message');
@@ -609,7 +609,7 @@ section('15 — and an unanswerable follow-up says so, never nothing');
 
     // THE BACKSTOP. Every branch is supposed to say something; this is the
     // one place that can guarantee it.
-    const api = require('fs').readFileSync(path.join(__dirname, '..', 'api.js'), 'utf8');
+    const api = require('../helpers/sourceParts').apiSource();
     ck('an empty answer can never leave the endpoint',
        /a branch produced an EMPTY answer/.test(api)
        && /if \(typeof payload\.answer !== 'string' \|\| !payload\.answer\.trim\(\)\)/.test(api),

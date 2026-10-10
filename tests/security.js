@@ -111,7 +111,7 @@ section('B — the escape hatches work');
     // The failure mode here is being locked out of her own app from a phone,
     // with no laptop nearby. Both hatches are asserted because an untested
     // escape hatch is not one.
-    const src = fs.readFileSync(path.join(ROOT, 'api.js'), 'utf8');
+    const src = require('../helpers/sourceParts').apiSource();
     ck('an extra origin can be added by env', /CORS_ALLOWED_ORIGINS/.test(src));
     ck('  and the wildcard can be restored by env', /CORS_ALLOW_ALL/.test(src));
     ck('a refused origin is logged with the value it saw', /refused origin \$\{origin\}/.test(src),
@@ -187,7 +187,7 @@ section('D — failed sign-ins are counted, and nothing is blocked');
        warnings.some((w) => /Nothing is being blocked/.test(w)),
        'so a log reader does not assume they are protected');
 
-    const src = fs.readFileSync(path.join(ROOT, 'api.js'), 'utf8');
+    const src = require('../helpers/sourceParts').apiSource();
     ck('  the counter is bounded', /FAILED_LOGIN_MAX_IPS/.test(src),
        'an unbounded map is a memory problem handed to an attacker');
     ck('  a success clears it', /failedLogins\.delete/.test(src));
@@ -218,7 +218,7 @@ section('E2 — moving behind a reverse proxy does not corrupt the audit log');
     ck('with no proxy configured, a forged X-Forwarded-For is ignored', true,
        'asserted through the app default: trust proxy is off unless TRUST_PROXY is set');
 
-    const src = fs.readFileSync(path.join(ROOT, 'api.js'), 'utf8');
+    const src = require('../helpers/sourceParts').apiSource();
     ck('trusting the proxy is opt-in', /const trustProxy = process\.env\.TRUST_PROXY;/.test(src)
        && /if \(trustProxy\) \{/.test(src),
        'on by default, any caller could write any address into the audit log');
@@ -236,7 +236,7 @@ section('E2 — moving behind a reverse proxy does not corrupt the audit log');
 
 section('E — what the audit found already correct, and must stay so');
 {
-    const api = fs.readFileSync(path.join(ROOT, 'api.js'), 'utf8');
+    const api = require('../helpers/sourceParts').apiSource();
 
     // Timing-safe comparison. A plain === leaks the password a character at a
     // time to anyone patient enough to measure.

@@ -496,7 +496,7 @@ section('M — the endpoint uses the understanding version');
     // resolveSmart is async. Wiring it in without awaiting yields a Promise,
     // and `ref.text` on a Promise is undefined — which reaches the brain as
     // the literal string "undefined". Every test above would still pass.
-    const api = require('fs').readFileSync(path.join(ROOT, 'api.js'), 'utf8')
+    const api = require('../helpers/sourceParts').apiSource()
         .split('\n').map((l) => l.replace(/\/\/.*$/, '')).join('\n');
     ck('api.js calls resolveSmart', /mem\.resolveSmart\(/.test(api));
     ck('  and awaits it', /await mem\.resolveSmart\(stripped\)/.test(api),
@@ -611,7 +611,7 @@ section('CENTER — "the erd of that booking" with ten on screen');
     // "Yes — 10 bookings from Houston." singles nothing out, and centring on
     // rows[0] regardless would make "that booking" a guess in a resolution's
     // clothing.
-    const api = require('fs').readFileSync(path.join(ROOT, 'api.js'), 'utf8');
+    const api = require('../helpers/sourceParts').apiSource();
     ck('the list answer sets the center only when it named a cutoff',
        /if \(\/cutoff\/i\.test\(said\)\) mem\.setCenter\(cards\.rows\[0\]\);/.test(api),
        'centring on a sentence that singled nothing out is a guess');

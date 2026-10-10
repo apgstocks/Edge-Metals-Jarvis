@@ -451,7 +451,7 @@ section('H. the panel can say it');
 
     // The preview has to CARRY the names, or the datalist is empty however
     // well the form is wired.
-    const api = fs.readFileSync(path.join(ROOT, 'api.js'), 'utf8');
+    const api = require('../helpers/sourceParts').apiSource();
     // The route is registered with the FIELD as a path parameter, so it is
     // ':field', not 'supplier' — an earlier rename substituted the call site
     // and missed the registration, and the slice came back empty.

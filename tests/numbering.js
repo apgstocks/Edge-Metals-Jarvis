@@ -409,7 +409,7 @@ section('F — the numbers reach the document she is shown');
 
     // THE ORDER IN api.js. Minting after the preview is the bug; the source
     // has to show the mint happening first.
-    const api = fs.readFileSync(path.join(ROOT, 'api.js'), 'utf8');
+    const api = require('../helpers/sourceParts').apiSource();
     const iMint = api.indexOf('prepareProformaNumbers(step.draft)');
     const iDraw = api.indexOf('buildProformaDc2Html');
     ck('the numbers are minted BEFORE the preview is drawn',

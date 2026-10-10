@@ -369,7 +369,7 @@ section('H — nothing else changed');
     // And the amendment lock is untouched — stated here because it is the
     // deliberate exception to "make it dynamic", and a future reader should
     // find the reason next to the tests rather than only in a commit message.
-    const api = fs.readFileSync(path.join(ROOT, 'api.js'), 'utf8');
+    const api = require('../helpers/sourceParts').apiSource();
     ck('the amendment exception is still deterministic',
        /brainPending\.type === 'confirm_proforma'\s*\n?\s*&& pro\.isStaged\(\)/.test(api),
        'a trucker confirm is confirm_forward and never reaches this branch — THAT is '

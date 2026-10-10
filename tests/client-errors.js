@@ -192,7 +192,7 @@ const probes = (firstFail) => ['internet', 'reach server', 'read /healthz', 'log
 {
     section('F — the plumbing exists end to end');
 
-    const api = fs.readFileSync(path.join(ROOT, 'api.js'), 'utf8');
+    const api = require('../helpers/sourceParts').apiSource();
     ck('the route exists', /app\.post\('\/api\/client-errors'/.test(api));
     ck('  with its OWN small body limit, not the 40mb global',
        /\/api\/client-errors',\s*express\.json\(\{\s*limit:\s*'16kb'/.test(api),

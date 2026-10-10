@@ -34,7 +34,7 @@ const ck = (n, c, extra) => {
 const section = (t) => console.log('\n=== ' + t + ' ===');
 
 const ROOT = path.join(__dirname, '..');
-const all = require('fs').readFileSync(path.join(ROOT, 'api.js'), 'utf8');
+const all = require('../helpers/sourceParts').apiSource();
 const from = all.indexOf("app.post('/api/voice/ask'");
 const nextRoute = all.indexOf('\n    app.', from + 10);
 const segRaw = all.slice(from, nextRoute === -1 ? all.length : nextRoute);

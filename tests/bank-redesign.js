@@ -558,7 +558,7 @@ server.close();
     ck('  including DELETE on transfers and rules',
        /api\('\/api\/intercompany\/transfers', \{ method: 'DELETE'/.test(HTML) && /api\('\/api\/bank\/rules', \{ method: 'DELETE'/.test(HTML));
     const ir = fs.readFileSync(path.join(ROOT, 'helpers/interCompanyRoutes.js'), 'utf8');
-    ck('the transfers routes are mounted', /require\('\.\/helpers\/interCompanyRoutes'\)\.mount\(app\)/.test(fs.readFileSync(path.join(ROOT, 'api.js'), 'utf8'))
+    ck('the transfers routes are mounted', /require\('\.\/helpers\/interCompanyRoutes'\)\.mount\(app\)/.test(require('../helpers/sourceParts').apiSource())
        && /app\.post\('\/api\/intercompany\/transfers'/.test(ir) && /app\.delete\('\/api\/intercompany\/transfers'/.test(ir));
 }
 

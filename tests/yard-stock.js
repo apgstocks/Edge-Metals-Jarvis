@@ -218,7 +218,7 @@ section('D — a sale is saved, edited and deleted; inventory follows each time'
 
         section('E — staff permissions, read from api.js not restated');
         {
-            const src = fs.readFileSync(path.join(__dirname, '..', 'api.js'), 'utf8');
+            const src = require('../helpers/sourceParts').apiSource();
             const list = JSON.parse('[' + src.match(/const STAFF_ALLOWED_PATH_PREFIXES = \[([^\]]+)\]/)[1].replace(/'/g, '"') + ']');
             const allowed = (p) => list.some((x) => p === x || p.startsWith(x + '/'));
             ck('staff can work loads', allowed('/api/loads'));
@@ -237,7 +237,7 @@ section('D — a sale is saved, edited and deleted; inventory follows each time'
             // handler because the bug was the CONTRACT, and a mock of the
             // endpoint would have agreed with whatever it was told.
             {
-                const api = fs.readFileSync(path.join(__dirname, '..', 'api.js'), 'utf8');
+                const api = require('../helpers/sourceParts').apiSource();
                 const handler = api.slice(api.indexOf("app.get('/api/outbound-loads'"));
                 const body = handler.slice(0, handler.indexOf('});'));
                 ck('GET /api/outbound-loads responds with a bare array, like /api/loads',

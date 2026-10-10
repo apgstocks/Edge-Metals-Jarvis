@@ -291,7 +291,7 @@ section('H — a parked draft does not outlive its usefulness');
 
     // The endpoint has to let it through even while the brain holds a
     // question, or "hold this" gets read as an answer to "Send it?".
-    const api = fs.readFileSync(path.join(ROOT, 'api.js'), 'utf8');
+    const api = require('../helpers/sourceParts').apiSource();
     // Apsara, 2026-09-07: "it has to work dynamically." The two regexes are
     // now the offline net inside helpers/draftIntent.js; the decision itself
     // is the model's, so this reads the classifier call rather than the

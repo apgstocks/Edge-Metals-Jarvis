@@ -200,7 +200,7 @@ const viaCaddy = (p, extra = {}) => req(p, { Host: 'jarvis.edgemetals.com',
     ck('  and so is every other path', r.status === 301, String(r.status));
 
     // The two ranges must match the firewall rule that admits them.
-    const src = fs.readFileSync(path.join(ROOT, 'api.js'), 'utf8');
+    const src = require('../helpers/sourceParts').apiSource();
     ck('the exempt ranges are Google\'s documented two',
        /130\\\.211\\\.|130\.211\./.test(src) && /35\\\.191\\\.|35\.191\./.test(src),
        'they must be the same two the allow-lb-health firewall rule admits');
@@ -217,7 +217,7 @@ const viaCaddy = (p, extra = {}) => req(p, { Host: 'jarvis.edgemetals.com',
     ck('a guarded API path still redirects rather than returning 401',
        r.status === 301, `${r.status} — a 401 here would read as a permissions problem`);
 
-    const src = fs.readFileSync(path.join(ROOT, 'api.js'), 'utf8');
+    const src = require('../helpers/sourceParts').apiSource();
     const mw = src.indexOf("app.use((req, res, next) => {\n        if (req.secure) return next();");
     const trust = src.indexOf("app.set('trust proxy', hops)");
     ck('  and it sits AFTER trust proxy, or req.secure would read the raw socket',

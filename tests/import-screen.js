@@ -511,7 +511,7 @@ section('H. when the server refuses');
 // UTC archive fix on 2026-09-18 had to touch three files at once.
 section('I. the gates behind the screen');
 {
-    const api = fs.readFileSync(path.join(ROOT, 'api.js'), 'utf8');
+    const api = require('../helpers/sourceParts').apiSource();
     const line = (p) => (api.split('\n').find((l) => l.includes(p)) || '');
     ck('preview is admin-gated', /requireAdmin/.test(line("'/api/import/preview'")));
     ck('commit is admin-gated', /requireAdmin/.test(line("'/api/import/commit'")));

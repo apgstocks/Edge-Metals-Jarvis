@@ -430,7 +430,7 @@ section('H — no route name is a prefix of another');
 // specific to invoices, and the next person adding /api/x/thing beside an
 // existing /api/x/thin deserves to be told at test time.
 {
-    const apiSrc = fs.readFileSync(path.join(ROOT, 'api.js'), 'utf8');
+    const apiSrc = require('../helpers/sourceParts').apiSource();
     const routes = [...new Set(
         [...apiSrc.matchAll(/app\.(?:get|post|put|patch|delete)\('(\/api\/[^']*)'/g)]
             .map((m) => m[1])

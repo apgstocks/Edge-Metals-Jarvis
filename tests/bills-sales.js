@@ -707,7 +707,7 @@ section('E2 — photos, filters, and the Shipment sheet row');
     ck('a sheet failure is caught, not thrown at the Save',
        /\.catch\(\(e\) =>/.test(src) && /the bill IS saved/.test(src),
        'Drive being unreachable is not a reason to lose eighteen typed fields');
-    const apiSrc = fs.readFileSync(path.join(ROOT, 'api.js'), 'utf8');
+    const apiSrc = require('../helpers/sourceParts').apiSource();
     const postIdx = apiSrc.indexOf("app.post('/api/bills'");
     const seg = apiSrc.slice(postIdx, postIdx + 900);
     ck('  and it runs AFTER the bill is stored',
@@ -929,7 +929,7 @@ section('K — deleting a payment takes everything it touched with it');
     // 2026-09-10), so this is asserted against the source. Weak, and named as
     // weak: what it catches is the mirror being dropped from the delete path,
     // which is how the sheet ends up showing a payment that no longer exists.
-    const apiSrc = fs.readFileSync(path.join(ROOT, 'api.js'), 'utf8');
+    const apiSrc = require('../helpers/sourceParts').apiSource();
     const delRoute = apiSrc.slice(apiSrc.indexOf("app.delete('/api/bill-payments/:id'"),
                                   apiSrc.indexOf("app.get('/api/sales'"));
     ck('  and the Shipment tab is told the payment is gone',
@@ -2671,7 +2671,7 @@ section('ADVANCES — money already with the supplier, finally visible');
     // ── THE ROUTES CARRY IT ───────────────────────────────────────────────
     // The gap CLAUDE.md section 3 names: the helper is right, the screen is
     // written, and the route never forwards the field.
-    const apiSrc = fs.readFileSync(path.join(ROOT, 'api.js'), 'utf8');
+    const apiSrc = require('../helpers/sourceParts').apiSource();
     const billsRoute = (apiSrc.match(/app\.get\('\/api\/bills'[\s\S]*?\n    \}\);/) || [''])[0];
     ck('/api/bills sends the credit map, so the badge has something to read',
        /credit:/.test(billsRoute),

@@ -215,7 +215,7 @@ const BODY = JSON.stringify({ webhook_type: 'TRANSACTIONS', webhook_code: 'SYNC_
     ck('  and it is in READ_ONLY, not in the permitted-writes set',
        !require(path.join(ROOT, 'helpers/plaid')).PERMITTED_WRITES.has('/webhook_verification_key/get'));
 
-    const api = fs.readFileSync(path.join(ROOT, 'api.js'), 'utf8');
+    const api = require('../helpers/sourceParts').apiSource();
     ck('the raw body is captured for the webhook path only',
        /req\.url\.split\('\?'\)\[0\] === '\/api\/plaid\/webhook'/.test(api));
     ck('the route is registered ABOVE the session gate',

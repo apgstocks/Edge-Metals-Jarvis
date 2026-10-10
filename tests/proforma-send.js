@@ -332,7 +332,7 @@ section('D2 — "wait. change these and create"');
 
 section('E — the handover is wired, and awaited');
 {
-    const api = fs.readFileSync(path.join(ROOT, 'api.js'), 'utf8')
+    const api = require('../helpers/sourceParts').apiSource()
         .split('\n').map((l) => l.replace(/\/\/.*$/, '')).join('\n');
 
     ck('the voice flow stages a confirm_proforma pending',

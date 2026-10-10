@@ -330,7 +330,7 @@ section('F — both clients send it, and the server reads it');
            src.slice(payloadAt).includes('clearLoadDraft();'),
            'never clearing it leaves her Continue prompt on a load that already exists');
     }
-    const api = fs.readFileSync(path.join(ROOT, 'api.js'), 'utf8');
+    const api = require('../helpers/sourceParts').apiSource();
     ck('both create routes read draft_id off the body',
        (api.match(/draft_id: b\.draft_id,/g) || []).length === 2,
        '/api/loads and /api/outbound-loads must each forward it');

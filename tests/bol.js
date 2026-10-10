@@ -810,7 +810,7 @@ section('H — the store behind Edit');
 
     // And the archive folder has to agree with the paper, or a BOL raised in
     // the evening is filed under a day nobody looks in.
-    const apiTxt = fs.readFileSync(path.join(ROOT, 'api.js'), 'utf8');
+    const apiTxt = require('../helpers/sourceParts').apiSource();
     const block = apiTxt.slice(apiTxt.indexOf('const savedDate = body.bol_date'), apiTxt.indexOf('const savedDate = body.bol_date') + 220);
     ck('  and the server files it under the same day',
        /America\/Los_Angeles/.test(block) && !/toISOString/.test(block),
@@ -830,7 +830,7 @@ section('I — Generate hands back the file');
         // stored record's own `last_saved_date: savedDate,` line satisfies,
         // so deleting the real one from the response left this green. A
         // mutation doing exactly that survived until the two were told apart.
-        const apiSrc = fs.readFileSync(path.join(ROOT, 'api.js'), 'utf8');
+        const apiSrc = require('../helpers/sourceParts').apiSource();
         ck('the route returns the date the archive filed it under',
            /saved_filename: path\.basename\(savedPath\),\s*\n\s*saved_date: savedDate,/.test(apiSrc),
            'without it the client has to guess the folder, and guesses wrong ' +

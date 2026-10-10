@@ -250,7 +250,7 @@ section('D. index.html, which is re-sent on every load by design');
 // export out of gzip, so it is exercised here as a real request, not grepped.
 section('E. binaries stay out of it');
 {
-    const api = fs.readFileSync(path.join(ROOT, 'api.js'), 'utf8');
+    const api = require('../helpers/sourceParts').apiSource();
 
     ck('res.sendFile and res.download are not wrapped',
        !/res\.(sendFile|download)\s*=/.test(api),
@@ -300,7 +300,7 @@ section('E. binaries stay out of it');
 // so the failure path has to hand back the original body.
 section('F. it cannot take a response down with it');
 {
-    const api = fs.readFileSync(path.join(ROOT, 'api.js'), 'utf8');
+    const api = require('../helpers/sourceParts').apiSource();
     const block = api.slice(api.indexOf('const COMPRESSIBLE'), api.indexOf('const COMPRESSIBLE') + 3000);
     ck('the wrapper catches and falls back to the plain body',
        /catch \(e\) \{[\s\S]{0,400}return sendRaw\(body\);/.test(block),

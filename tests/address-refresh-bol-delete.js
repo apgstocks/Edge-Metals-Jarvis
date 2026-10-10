@@ -249,7 +249,7 @@ section('C2 — nothing else latches for the session');
     // And it cannot go stale in a way that matters anyway: the SERVER resolves
     // the layout again from the consignee when it builds the PDF.
     ck('  and the server resolves it again at generate time regardless',
-       /layoutFor\(body\.consignee_name\)/.test(fs.readFileSync(path.join(ROOT, 'api.js'), 'utf8')),
+       /layoutFor\(body\.consignee_name\)/.test(require('../helpers/sourceParts').apiSource()),
        'so even a phone that never refreshed prints the right document');
 }
 

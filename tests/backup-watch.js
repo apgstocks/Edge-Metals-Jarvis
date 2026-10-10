@@ -266,7 +266,7 @@ const okRun = (over = {}) => ({ meta: { store_count: 12, critical_missing: [], p
     // An email cannot report that the process is down: no cron fires, so
     // nothing sends. An external monitor already watches this route for a
     // 503, which is why backups belong on it.
-    const api = fs.readFileSync(path.join(ROOT, 'api.js'), 'utf8');
+    const api = require('../helpers/sourceParts').apiSource();
     const healthz = api.slice(api.indexOf("app.get('/healthz'"), api.indexOf("app.get('/healthz'") + 4000);
     ck('healthz reads backup health',
        /backupWatch'\)\.health\(\)/.test(healthz),
