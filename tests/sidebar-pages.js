@@ -102,9 +102,8 @@ ck('the same staff rows (loads, petty, trucker-bills)', !!staffSrc && JSON.strin
 // ══════════════════════════════════════════════════════════════════════════
 section('B — every page loads the rail, once, in the right place');
 // ══════════════════════════════════════════════════════════════════════════
-// Bank (bank-match.html) is NOT in this list by her choice on 2026-10-08 —
-// it had uncommitted work. When it is added, move it into WITH_RAIL.
-const WITH_RAIL = { documents: 'documents', quickbooks: 'quickbooks', books: 'books', claims: 'claims',
+// Bank joined on 2026-10-10 — held back on 10-08 only while it had unsaved work.
+const WITH_RAIL = { 'bank-match': 'bank', documents: 'documents', quickbooks: 'quickbooks', books: 'books', claims: 'claims',
     'edge-inventory': 'edge-inventory', 'outbound-loads': 'outbound-loads', 'address-book': 'address-book',
     'quote-requests': 'quote-requests', 'design-bol': 'design-bol' };
 for (const [file, id] of Object.entries(WITH_RAIL)) {
@@ -150,9 +149,11 @@ section('C — the rail on a page: rows, roles, links, behaviour');
     const grp = head.dataset.coGroup;
     head.click();
     ck('tapping the heading opens that group', [...d.querySelectorAll(`#jvNav a.jv-row[data-co-group="${grp}"]`)].every((a) => !a.classList.contains('jv-folded')));
-    // Collapse remembered with the app's own key
+    // Collapsing works on the page, but is NOT written to the app's setting
+    // (Apsara 2026-10-10: "Why sidebar coming on top").
     d.getElementById('jvCollapse').click();
-    ck('collapsing is remembered under the app\'s key', w.localStorage.getItem('navCollapsed') === '1' && d.documentElement.classList.contains('jv-collapsed'));
+    ck('collapsing works on the page', d.documentElement.classList.contains('jv-collapsed'));
+    ck('  and does not touch the app\'s own collapsed setting', w.localStorage.getItem('navCollapsed') === null);
     // Burger
     d.getElementById('jvBurger').click();
     ck('the burger opens it', d.getElementById('jvSidebar').classList.contains('open') && d.getElementById('jvBurger').getAttribute('aria-expanded') === 'true');
@@ -161,7 +162,7 @@ section('C — the rail on a page: rows, roles, links, behaviour');
 }
 {
     const w = await mountRail({ role: 'admin', page: 'books', storage: { navCollapsed: '1' } });
-    ck('a page opens collapsed if she collapsed it elsewhere', w.document.documentElement.classList.contains('jv-collapsed'));
+    ck('a page opens with the menu OPEN even if the app\'s menu is collapsed', !w.document.documentElement.classList.contains('jv-collapsed'));
 }
 {
     const w = await mountRail({ role: 'staff', page: 'documents' });
@@ -256,7 +257,6 @@ section('E — end to end: real server, real login, every page served with it');
         const js = await req('GET', '/sidebar.js', { sid });
         ck('/sidebar.js is served as JavaScript', js.status === 200 && /javascript/.test(js.type) && js.raw.includes('jvSidebar'), `${js.status} ${js.type}`);
         for (const [id, href] of Object.entries(L.PAGE_HREF)) {
-            if (id === 'bank') continue; // her choice: Bank later
             const pg = await req('GET', href, { sid });
             ck(`${href} is served with the rail`, pg.status === 200 && pg.raw.includes(`<script src="/sidebar.js" data-page="${id}" defer></script>`), `${pg.status}`);
         }

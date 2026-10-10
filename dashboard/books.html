@@ -16,7 +16,40 @@
    portal: its own section, not bolted onto the QB page". The QuickBooks page
    answers "does Intuit agree with us" and needs a live connection. This page
    answers "what do our own books say", derived from her own stores, and works
-   with no connection at all. Two different questions, two pages. */
+   with no connection at all. Two different questions, two pages.
+
+   ── REDESIGNED 2026-10-10 ────────────────────────────────────────────────
+   Apsara: "Design the books page even more better", then "Right now it looks
+   ugly and not friendly."
+
+   The old page was an accountant's printout: you landed on a two-column table
+   of account codes at 12.5px, every row led by a number nobody thinks in
+   ("5200  Trucking"), and the one figure anyone actually opens a books page
+   for — did we make money — was the LAST row of the table. Nothing was
+   bigger than anything else, so nothing was findable, and the dates were two
+   free-text boxes wanting YYYY-MM-DD.
+
+   Four things changed, in order of how much they matter:
+
+     1 THE ANSWER IS FIRST. Four figures at the top, net income largest. A
+       statement is the evidence; the answer should not need scrolling to.
+     2 NAMES BEFORE CODES. The account name is the strong text; the code is
+       small and muted beside it. She thinks in "Trucking", not 5200. The
+       code is still there, still clickable, because it is what ties to
+       QuickBooks.
+     3 PROPORTION, NOT JUST AMOUNT. A bar on each row showing its share of
+       its section. "Where did the money go" is a shape question and a column
+       of numbers answers it slowly.
+     4 PERIODS SHE CAN PICK. Chips — this month, this quarter, this year,
+       last year — because typing 2026-01-01 is not an interface. The two
+       date boxes survive behind Custom for the one time in ten she wants an
+       odd range.
+
+   And a comparison: the same range a year earlier, fetched as a second
+   request, shown as a delta on the four headline figures only. $175,000 means
+   nothing on its own. It is confined to the headlines rather than every row
+   because a per-row delta on a chart of accounts that gained an account mid
+   year reads as a change in the business when it is a change in the chart. */
 :root{
   --steel-900:#14181B; --steel-800:#1E2429; --steel-700:#2B3239; --steel-600:#3C454D;
   --steel-500:#57616A; --steel-400:#7E8891; --steel-300:#A7B0B7; --steel-200:#CBD1D6;
@@ -49,30 +82,62 @@ button{font:inherit;cursor:pointer}
 .portal a:hover{color:var(--text-body);border-color:var(--text-faint)}
 .portal a[aria-current="page"]{color:var(--text-strong);background:var(--surface-hover);
   border-color:var(--leaf-600)}
-header{display:flex;align-items:center;gap:14px;padding:10px 16px;border-bottom:1px solid var(--border-default);background:var(--surface-card);flex-wrap:wrap}
+header{display:flex;align-items:center;gap:14px;padding:10px 16px;border-bottom:1px solid var(--border-default);background:var(--surface-card);flex-wrap:wrap;position:sticky;top:0;z-index:5}
 header h1{font-size:17px}
 header .back{color:var(--steel-400);font-size:13px;text-decoration:none}
-.wrap{max-width:1180px;margin:0 auto;padding:16px}
-.controls{display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;padding:12px 14px;border:1px solid var(--border-subtle);border-radius:4px;background:var(--surface-sunken);margin-bottom:14px}
-label.lbl{display:block;font-family:var(--font-mono);font-size:9px;letter-spacing:.1em;text-transform:uppercase;color:var(--text-muted);margin-bottom:4px}
-select,input[type=text]{padding:7px 9px;font-size:12.5px;font-family:var(--font-sans);background:var(--surface-card);color:var(--text-body);border:1px solid var(--border-default);border-radius:3px;outline:none}
-.btn{padding:7px 14px;font-size:12px;border-radius:3px;border:1px solid var(--border-default);background:var(--surface-card);color:var(--text-body)}
+header .back:hover{color:var(--text-body)}
+.wrap{max-width:1180px;margin:0 auto;padding:18px 16px 40px}
+
+/* ── THE TOOLBAR ─────────────────────────────────────────────────────────
+   Company, then period, then the two things she does with a finished set of
+   books: send it to the CPA, or print it. */
+.bar{display:flex;gap:12px;flex-wrap:wrap;align-items:center;margin-bottom:16px}
+.pick{display:flex;align-items:center;gap:8px}
+.pick .lbl{font-family:var(--font-mono);font-size:9px;letter-spacing:.1em;text-transform:uppercase;color:var(--text-faint)}
+select,input[type=text]{padding:8px 10px;font-size:13px;font-family:var(--font-sans);background:var(--surface-card);color:var(--text-body);border:1px solid var(--border-default);border-radius:4px;outline:none}
+select:hover,input[type=text]:hover{border-color:var(--text-faint)}
+#company{font-weight:600;color:var(--text-strong);min-width:170px}
+/* Period chips. The whole reason the old controls felt unfriendly was two
+   boxes wanting YYYY-MM-DD; nine times in ten she wants a named period. */
+.chips{display:flex;gap:0;border:1px solid var(--border-default);border-radius:4px;overflow:hidden}
+.chips button{padding:8px 12px;border:0;border-right:1px solid var(--border-default);
+  background:var(--surface-card);color:var(--text-muted);font-size:12.5px;white-space:nowrap}
+.chips button:last-child{border-right:0}
+.chips button:hover{background:var(--surface-hover);color:var(--text-body)}
+.chips button.on{background:var(--leaf-600);color:#fff;font-weight:600}
+#custom{display:none;gap:8px;align-items:center}
+#custom.show{display:flex}
+.spacer{flex:1}
+.btn{padding:8px 14px;font-size:12.5px;border-radius:4px;border:1px solid var(--border-default);background:var(--surface-card);color:var(--text-body)}
+.btn:hover{border-color:var(--text-body);background:var(--surface-hover)}
 .btn.go{background:var(--leaf-600);border-color:var(--leaf-600);color:#fff;font-weight:600}
-.btn:hover{border-color:var(--text-body)}
-/* ── the verdict, which leads ─────────────────────────────────────────────
+.btn.go:hover{background:var(--leaf-500);border-color:var(--leaf-500)}
+.cmp{display:flex;align-items:center;gap:7px;font-size:12.5px;color:var(--text-muted);
+  padding:8px 12px;border:1px solid var(--border-default);border-radius:4px;background:var(--surface-card)}
+.cmp input{accent-color:var(--leaf-500);width:14px;height:14px}
+
+/* ── THE VERDICT, WHICH STILL LEADS ──────────────────────────────────────
    A books page's first job is to say whether its own numbers can be trusted.
-   An incomplete journal produces a smaller profit than the truth and looks
-   exactly like a correct one, so the banner is above the figures, not under
-   them. */
-.verdict{padding:13px 15px;border-radius:4px;border:1px solid;margin-bottom:14px}
-.verdict.ok{border-color:var(--leaf-600);background:rgba(87,190,73,.08)}
-.verdict.warn{border-color:#5a4416;background:rgba(217,154,43,.09)}
-.verdict.bad{border-color:#5d2620;background:rgba(197,64,47,.10)}
-.verdict h2{font-size:14px;margin-bottom:5px}
-.verdict.ok h2{color:var(--leaf-300)} .verdict.warn h2{color:var(--amber-500)} .verdict.bad h2{color:var(--red-500)}
-.verdict p{margin:0;font-size:12.5px;color:var(--text-muted)}
-.finding{border-top:1px solid var(--border-subtle);padding:10px 0 2px}
-.finding:first-of-type{border-top:0}
+   An incomplete journal produces a SMALLER profit than the truth and looks
+   exactly like a correct one, so this sits above the figures.
+
+   It used to dump every finding, always, which is how a warning becomes
+   wallpaper. Now it is one line and a count, and it opens. A blocker opens
+   itself — if the figures are wrong she should not have to click to find out
+   why. */
+.trust{border:1px solid;border-radius:6px;margin-bottom:16px;overflow:hidden}
+.trust.ok{border-color:var(--leaf-600);background:rgba(87,190,73,.06)}
+.trust.warn{border-color:#5a4416;background:rgba(217,154,43,.07)}
+.trust.bad{border-color:#5d2620;background:rgba(197,64,47,.08)}
+.trust summary{display:flex;align-items:center;gap:11px;padding:12px 15px;cursor:pointer;list-style:none}
+.trust summary::-webkit-details-marker{display:none}
+.dot{width:9px;height:9px;border-radius:50%;flex:0 0 auto}
+.trust.ok .dot{background:var(--leaf-400)} .trust.warn .dot{background:var(--amber-500)} .trust.bad .dot{background:var(--red-500)}
+.trust .head{font-family:var(--font-display);font-weight:900;font-size:14px;color:var(--text-strong);letter-spacing:-.01em}
+.trust .says{font-size:12.5px;color:var(--text-muted)}
+.trust .count{margin-left:auto;font-family:var(--font-mono);font-size:10.5px;color:var(--text-faint);white-space:nowrap}
+.trust .inner{padding:0 15px 13px}
+.finding{border-top:1px solid var(--border-subtle);padding:11px 0 3px}
 .fsev{font-family:var(--font-mono);font-size:9px;letter-spacing:.1em;text-transform:uppercase;padding:2px 6px;border-radius:2px;margin-right:7px}
 .fsev.blocker{background:rgba(197,64,47,.18);color:var(--red-500)}
 .fsev.high{background:rgba(217,154,43,.16);color:var(--amber-500)}
@@ -81,23 +146,129 @@ select,input[type=text]{padding:7px 9px;font-size:12.5px;font-family:var(--font-
 .fwhy{font-size:12px;color:var(--text-muted);margin:4px 0 0}
 .ffix{font-size:12px;color:var(--text-body);margin:5px 0 0}
 .ffix b{color:var(--leaf-300);font-weight:600}
-.tabs{display:flex;gap:4px;border-bottom:1px solid var(--border-default);margin-bottom:14px;flex-wrap:wrap}
-.tabs button{padding:8px 13px;border:0;background:none;color:var(--text-muted);font-size:13px;border-bottom:2px solid transparent}
+
+/* ── THE ANSWER, BEFORE THE EVIDENCE ─────────────────────────────────────
+   Net income is the figure the page exists to produce, so it is the biggest
+   thing on it. It used to be the last row of a table. */
+.kpis{display:grid;grid-template-columns:1.3fr 1fr 1fr 1fr;gap:12px;margin-bottom:18px}
+.kpi{border:1px solid var(--border-subtle);border-radius:6px;background:var(--surface-card);padding:14px 16px}
+.kpi.lead{background:linear-gradient(180deg,var(--surface-hover),var(--surface-card))}
+.kpi .k{font-family:var(--font-mono);font-size:9.5px;letter-spacing:.12em;text-transform:uppercase;color:var(--text-faint)}
+.kpi .v{font-family:var(--font-display);font-weight:900;font-size:26px;color:var(--text-strong);letter-spacing:-.03em;margin-top:7px;line-height:1.05}
+.kpi.lead .v{font-size:34px}
+.kpi .v.up{color:var(--leaf-300)} .kpi .v.down{color:var(--red-500)}
+.kpi .d{font-size:11.5px;margin-top:6px;color:var(--text-faint);font-family:var(--font-mono)}
+.kpi .d .arrow{font-weight:700}
+.kpi .d.up .arrow{color:var(--leaf-400)} .kpi .d.down .arrow{color:var(--red-500)}
+.kpi .sub{font-size:11.5px;color:var(--text-muted);margin-top:5px}
+
+.tabs{display:flex;gap:3px;border-bottom:1px solid var(--border-default);margin-bottom:16px;flex-wrap:wrap}
+.tabs button{padding:9px 14px;border:0;background:none;color:var(--text-muted);font-size:13px;border-bottom:2px solid transparent}
+.tabs button:hover{color:var(--text-body)}
 .tabs button.sel{color:var(--text-strong);border-bottom-color:var(--leaf-500);font-weight:600}
-.card{border:1px solid var(--border-subtle);border-radius:4px;background:var(--surface-card);overflow-x:auto;margin-bottom:14px}
+.tabs button:disabled{color:var(--steel-600);cursor:default}
+
+.card{border:1px solid var(--border-subtle);border-radius:6px;background:var(--surface-card);margin-bottom:16px;overflow:hidden}
+.card .hdr{padding:14px 16px;border-bottom:1px solid var(--border-subtle);background:var(--surface-sunken)}
+.card .hdr h3{font-size:14px}
+.card .hdr .sub{font-family:var(--font-mono);font-size:10.5px;color:var(--text-faint);margin-top:4px;display:block}
+.card .hdr .plain{font-size:12px;color:var(--text-muted);margin-top:6px}
+
+/* ── A STATEMENT ROW ─────────────────────────────────────────────────────
+   Name first and strong, code small and muted beside it, then the bar, then
+   the money. The old row was `5200  Trucking` with the code as the only
+   coloured thing on the line. */
+.stmt{display:block}
+.srow{display:grid;grid-template-columns:1fr 92px 130px;align-items:center;gap:14px;
+  padding:9px 16px;border-top:1px solid var(--border-subtle)}
+.srow:hover{background:var(--surface-hover)}
+.srow .nm{font-size:13px;color:var(--text-body)}
+.srow .cd{font-family:var(--font-mono);font-size:10px;color:var(--text-faint);
+  background:var(--surface-sunken);border:1px solid var(--border-subtle);border-radius:3px;
+  padding:1px 5px;margin-left:8px;text-decoration:none;cursor:pointer}
+.srow .cd:hover{color:var(--leaf-300);border-color:var(--leaf-600)}
+.srow .amt{text-align:right;font-family:var(--font-mono);font-size:13px;color:var(--text-strong)}
+/* ── .prop, NOT .bar ──────────────────────────────────────────────────────
+   It WAS .bar, which is also the toolbar's class. The second rule won, so
+   `height:5px; overflow:hidden` landed on the toolbar and clipped the company
+   picker, the period chips and both buttons down to a five-pixel sliver. The
+   page still "worked" — every control was there and clickable in the DOM —
+   which is why reading the file did not show it and looking at it did. */
+.prop{height:5px;border-radius:3px;background:var(--surface-sunken);overflow:hidden}
+.prop i{display:block;height:100%;border-radius:3px}
+.prop.inc i{background:var(--leaf-500)}
+.prop.cost i{background:var(--amber-500)}
+.prop.exp i{background:var(--blue-500)}
+/* Section head: the label and the subtotal, set apart from the rows under it. */
+.shead{display:grid;grid-template-columns:1fr 130px;gap:14px;padding:12px 16px 9px;
+  border-top:1px solid var(--border-default);background:var(--surface-sunken)}
+.shead .t{font-family:var(--font-mono);font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:var(--text-muted)}
+.shead .n{text-align:right;font-family:var(--font-mono);font-size:13px;font-weight:600;color:var(--text-strong)}
+/* The two figures a P&L is read for. Banded so the eye lands on them. */
+.band{display:grid;grid-template-columns:1fr 160px;gap:14px;align-items:baseline;
+  padding:14px 16px;border-top:1px solid var(--border-default);background:var(--surface-hover)}
+.band .t{font-family:var(--font-display);font-weight:900;font-size:14px;color:var(--text-strong)}
+.band .t small{display:block;font-family:var(--font-sans);font-weight:400;font-size:11.5px;color:var(--text-faint);letter-spacing:0;margin-top:3px}
+.band .n{text-align:right;font-family:var(--font-display);font-weight:900;font-size:21px;color:var(--text-strong);letter-spacing:-.02em}
+.band.final{background:linear-gradient(180deg,var(--surface-hover),var(--surface-card))}
+.band.final .n{font-size:26px}
+.band .n.up{color:var(--leaf-300)} .band .n.down{color:var(--red-500)}
+.none{padding:9px 16px;border-top:1px solid var(--border-subtle);font-size:12px;color:var(--text-faint);font-style:italic}
+
+/* The balance sheet reads as two sides. One stacked table is why it felt
+   like a data dump — nobody reads a balance sheet top to bottom. */
+.two{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+.two .card{margin-bottom:0}
+.outby{padding:12px 16px;border-top:1px solid #5d2620;background:rgba(197,64,47,.10);
+  display:flex;justify-content:space-between;align-items:baseline}
+.outby .t{font-size:13px;color:var(--red-500);font-weight:600}
+.outby .n{font-family:var(--font-mono);font-size:14px;color:var(--red-500)}
+
 table{width:100%;border-collapse:collapse;font-size:12.5px}
-th{text-align:left;padding:8px 10px;background:var(--surface-sunken);font-family:var(--font-mono);font-size:9px;letter-spacing:.1em;text-transform:uppercase;color:var(--text-muted);font-weight:400;white-space:nowrap}
-td{padding:7px 10px;border-top:1px solid var(--border-subtle)}
+th{text-align:left;padding:9px 12px;background:var(--surface-sunken);font-family:var(--font-mono);font-size:9px;letter-spacing:.1em;text-transform:uppercase;color:var(--text-muted);font-weight:400;white-space:nowrap}
+td{padding:8px 12px;border-top:1px solid var(--border-subtle)}
+tbody tr:hover{background:var(--surface-hover)}
 td.n,th.n{text-align:right;font-family:var(--font-mono);white-space:nowrap}
-tr.tot td{border-top:1px solid var(--border-default);font-weight:700;color:var(--text-strong)}
-tr.sub td{color:var(--text-muted);font-size:11.5px;text-transform:uppercase;font-family:var(--font-mono);letter-spacing:.08em;background:var(--surface-sunken)}
-.acct{color:var(--leaf-300);text-decoration:none;cursor:pointer}
-.acct:hover{text-decoration:underline}
-.empty{padding:22px;text-align:center;color:var(--text-faint);font-family:var(--font-mono);font-size:12px}
-.note{font-family:var(--font-mono);font-size:10px;color:var(--text-faint);margin-top:8px}
-.hdr{display:flex;justify-content:space-between;align-items:baseline;padding:11px 14px;border-bottom:1px solid var(--border-subtle)}
-.hdr h3{font-size:13px}
-.hdr .sub{font-family:var(--font-mono);font-size:10px;color:var(--text-faint)}
+tr.tot td{border-top:1px solid var(--border-default);font-weight:700;color:var(--text-strong);background:var(--surface-sunken)}
+.acct{color:var(--text-body);text-decoration:none;cursor:pointer}
+.acct:hover{color:var(--leaf-300);text-decoration:underline}
+.code{font-family:var(--font-mono);font-size:10px;color:var(--text-faint);margin-right:8px}
+.pill{font-family:var(--font-mono);font-size:9.5px;letter-spacing:.06em;text-transform:uppercase;
+  color:var(--text-faint);border:1px solid var(--border-subtle);border-radius:3px;padding:1px 6px}
+
+.empty{padding:40px 22px;text-align:center;color:var(--text-faint)}
+.empty .big{font-family:var(--font-display);font-weight:900;font-size:15px;color:var(--text-muted);margin-bottom:6px}
+.empty .small{font-size:12.5px}
+.crumb{display:flex;align-items:center;gap:8px;margin-bottom:12px;font-size:12.5px}
+.crumb button{background:none;border:0;color:var(--leaf-300);padding:0;font-size:12.5px}
+.crumb button:hover{text-decoration:underline}
+.crumb .sep{color:var(--text-faint)}
+.skel{height:13px;border-radius:3px;background:linear-gradient(90deg,var(--surface-hover),var(--surface-sunken),var(--surface-hover));background-size:200% 100%;animation:sh 1.1s linear infinite}
+@keyframes sh{0%{background-position:200% 0}100%{background-position:-200% 0}}
+.foot{font-family:var(--font-mono);font-size:10px;color:var(--text-faint);margin-top:10px}
+
+@media (max-width:900px){
+  .kpis{grid-template-columns:1fr 1fr}
+  .two{grid-template-columns:1fr}
+  .srow{grid-template-columns:1fr 110px;gap:10px}
+  .srow .prop{display:none}
+}
+@media (max-width:560px){
+  .kpis{grid-template-columns:1fr}
+  .chips{width:100%}
+  .chips button{flex:1}
+}
+/* Printing a P&L is a real thing she does — it goes in a folder or to the
+   bank. The chrome goes, the paper stays white. */
+@media print{
+  header,.bar,.tabs,.foot,#sidebar,.portal{display:none!important}
+  body{background:#fff;color:#111}
+  .card,.kpi{border-color:#bbb;background:#fff;break-inside:avoid}
+  .card .hdr,.shead,.band,tr.tot td{background:#f4f4f4}
+  h1,h2,h3,.band .t,.band .n,.kpi .v,.srow .amt,.shead .n{color:#111}
+  .srow .nm,td{color:#222}
+  .trust{break-inside:avoid}
+}
 </style>
 </head>
 <body>
@@ -108,30 +279,48 @@ tr.sub td{color:var(--text-muted);font-size:11.5px;text-transform:uppercase;font
     <a href="/quickbooks">QuickBooks</a>
     <a href="/books" aria-current="page">Books</a>
   </nav>
-  <span class="mono" style="font-size:10px;color:var(--text-faint)">derived from her own records &middot; nothing here is stored</span>
+  <span class="mono" style="font-size:10px;color:var(--text-faint)">built from your own records &middot; nothing here is stored</span>
 </header>
 
 <div class="wrap">
-  <div class="controls">
-    <div><label class="lbl" for="company">Company</label><select id="company"></select></div>
-    <div><label class="lbl" for="from">From</label><input type="text" id="from" placeholder="YYYY-MM-DD" size="11" autocomplete="off"></div>
-    <div><label class="lbl" for="to">To</label><input type="text" id="to" placeholder="YYYY-MM-DD" size="11" autocomplete="off"></div>
-    <button class="btn go" id="run">Show the books</button>
-    <button class="btn" id="pack" title="An Excel workbook: the statements, the general ledger, and what is missing">Pack for the CPA</button>
-    <div style="flex:1"></div>
-    <span class="mono" id="built" style="font-size:10px;color:var(--text-faint)"></span>
+  <div class="bar">
+    <div class="pick">
+      <span class="lbl">Company</span>
+      <select id="company" aria-label="Company"></select>
+    </div>
+    <div class="chips" id="chips" role="group" aria-label="Period">
+      <button data-p="month">This month</button>
+      <button data-p="quarter">This quarter</button>
+      <button data-p="year" class="on">This year</button>
+      <button data-p="last-year">Last year</button>
+      <button data-p="custom">Custom</button>
+    </div>
+    <div id="custom">
+      <input type="text" id="from" placeholder="YYYY-MM-DD" size="11" autocomplete="off" aria-label="From">
+      <span style="color:var(--text-faint)">&rarr;</span>
+      <input type="text" id="to" placeholder="YYYY-MM-DD" size="11" autocomplete="off" aria-label="To">
+      <button class="btn go" id="run">Show</button>
+    </div>
+    <label class="cmp" title="Fetches the same range a year earlier and shows the change">
+      <input type="checkbox" id="compare"> vs last year
+    </label>
+    <div class="spacer"></div>
+    <button class="btn" id="print" title="Print or save this view as a PDF">Print</button>
+    <button class="btn go" id="pack" title="An Excel workbook: the statements, the general ledger, and what is missing">Pack for the CPA</button>
   </div>
 
   <div id="verdict"></div>
+  <div id="kpis"></div>
 
   <div class="tabs" id="tabs">
     <button data-view="pl" class="sel">Profit &amp; Loss</button>
     <button data-view="bs">Balance Sheet</button>
     <button data-view="tb">Trial Balance</button>
-    <button data-view="gl">Account history</button>
+    <button data-view="gl" id="tabgl">Account history</button>
   </div>
 
-  <div id="body"><div class="empty">Pick a company and press Show the books.</div></div>
+  <div id="body"></div>
+  <div class="foot" id="built"></div>
 </div>
 
 <script>
@@ -141,13 +330,23 @@ const esc = (s) => String(s === null || s === undefined ? '' : s)
 const money = (n) => (n === null || n === undefined || isNaN(Number(n)))
   ? '&mdash;'
   : '$' + Number(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+// Headline figures are read at a glance, so they lose the cents. The
+// statements below keep them — a P&L that rounds is not a P&L.
+const short = (n) => {
+  if (n === null || n === undefined || isNaN(Number(n))) return '&mdash;';
+  const v = Number(n), a = Math.abs(v), s = v < 0 ? '-$' : '$';
+  if (a >= 1e6) return s + (a / 1e6).toFixed(2).replace(/\.00$/, '') + 'm';
+  if (a >= 1e3) return s + Math.round(a / 1e3).toLocaleString('en-US') + 'k';
+  return s + a.toFixed(0);
+};
+const pct = (n, d) => (!d || isNaN(Number(n))) ? null : (Number(n) / Number(d)) * 100;
 
 // ── NO BROWSER STORAGE FOR THE FIGURES ──────────────────────────────────
 // The company and dates are the only thing remembered, and only in memory for
 // this visit. A cached trial balance is a second truth, which is the one thing
 // helpers/postings.js exists to avoid: the journal is re-derived on every
 // request so there is never a stored figure to go stale.
-const STATE = { data: null, view: 'pl', account: null };
+const STATE = { data: null, prior: null, view: 'pl', account: null, period: 'year' };
 
 async function api(url) {
   const r = await fetch(url);
@@ -156,17 +355,44 @@ async function api(url) {
   return j;
 }
 
-const qs = () => {
+const qs = (from, to) => {
   const p = new URLSearchParams();
   p.set('entity', $('company').value);
-  if ($('from').value.trim()) p.set('from', $('from').value.trim());
-  if ($('to').value.trim()) p.set('to', $('to').value.trim());
+  const f = from !== undefined ? from : $('from').value.trim();
+  const t = to !== undefined ? to : $('to').value.trim();
+  if (f) p.set('from', f);
+  if (t) p.set('to', t);
   return p.toString();
+};
+
+// ── NAMED PERIODS ───────────────────────────────────────────────────────
+// Built from the local date, not UTC: a books page opened at 9pm Pacific must
+// not think it is already tomorrow and roll into next month. Same reason
+// todayLocalDateStr exists in the loads screens.
+const iso = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+function rangeFor(p) {
+  const now = new Date();
+  const y = now.getFullYear(), m = now.getMonth();
+  if (p === 'month') return [iso(new Date(y, m, 1)), iso(new Date(y, m + 1, 0))];
+  if (p === 'quarter') { const q = Math.floor(m / 3) * 3; return [iso(new Date(y, q, 1)), iso(new Date(y, q + 3, 0))]; }
+  if (p === 'last-year') return [`${y - 1}-01-01`, `${y - 1}-12-31`];
+  return [`${y}-01-01`, `${y}-12-31`];
+}
+// The same range, a year earlier. Shifting the YEAR rather than subtracting
+// 365 days keeps "this month" comparing with the same month, which is the
+// comparison she would make by hand.
+const shiftYear = (s) => {
+  const m = /^(\d{4})(-\d{2}-\d{2})$/.exec(String(s || ''));
+  return m ? `${Number(m[1]) - 1}${m[2]}` : '';
 };
 
 // ── THE VERDICT ─────────────────────────────────────────────────────────
 // The agent's findings, worst first, each with the place she would go. It
 // leads the page because a figure she cannot trust is worse than no figure.
+//
+// One line by default, and it OPENS. Dumping every finding on every load is
+// how a warning turns into wallpaper — but a blocker opens itself, because
+// if the figures are wrong she should not have to click to learn why.
 function renderVerdict(a) {
   if (!a) { $('verdict').innerHTML = ''; return; }
   const cls = a.counts.blocker ? 'bad' : (a.counts.high ? 'warn' : (a.findings.length ? 'warn' : 'ok'));
@@ -175,79 +401,160 @@ function renderVerdict(a) {
     : a.counts.high
       ? 'These figures are incomplete'
       : a.findings.length ? 'Worth knowing' : 'The books add up';
+  const n = a.findings.length;
+  const count = n ? `${n} thing${n === 1 ? '' : 's'} to look at` : 'nothing to fix';
   $('verdict').innerHTML = `
-    <div class="verdict ${cls}">
-      <h2>${esc(head)}</h2>
-      <p>${esc(a.summary || '')}</p>
-      ${a.findings.map((f) => `
+    <details class="trust ${cls}" ${a.counts.blocker ? 'open' : ''}>
+      <summary>
+        <span class="dot"></span>
+        <span><span class="head">${esc(head)}</span>
+          ${a.summary ? `<span class="says"> &mdash; ${esc(a.summary)}</span>` : ''}</span>
+        <span class="count">${esc(count)}</span>
+      </summary>
+      ${n ? `<div class="inner">${a.findings.map((f) => `
         <div class="finding">
           <div><span class="fsev ${esc(f.severity)}">${esc(f.severity)}</span><span class="fwhat">${esc(f.what)}</span></div>
           <p class="fwhy">${esc(f.why)}</p>
           <p class="ffix"><b>What to do:</b> ${esc(f.fix)}${f.where ? ` <span class="mono" style="color:var(--text-faint)">(${esc(f.where)})</span>` : ''}</p>
-        </div>`).join('')}
+        </div>`).join('')}</div>` : ''}
+    </details>`;
+}
+
+// ── THE FOUR FIGURES ────────────────────────────────────────────────────
+// Net income leads and is the largest thing on the page. The delta is shown
+// only when a prior period was fetched AND had something in it — "up 100%
+// from nothing" is not information.
+function renderKpis() {
+  const d = STATE.data;
+  if (!d) { $('kpis').innerHTML = ''; return; }
+  const p = d.profitAndLoss, b = d.balanceSheet;
+  const pr = STATE.prior;
+  const delta = (now, then) => {
+    if (pr === null || then === null || then === undefined || !isFinite(then) || Math.abs(then) < 0.005) return '';
+    const ch = ((Number(now) - Number(then)) / Math.abs(Number(then))) * 100;
+    const up = ch >= 0;
+    return `<div class="d ${up ? 'up' : 'down'}"><span class="arrow">${up ? '▲' : '▼'}</span> `
+      + `${Math.abs(ch).toFixed(ch >= 10 || ch <= -10 ? 0 : 1)}% vs ${esc(short(then))} last year</div>`;
+  };
+  const margin = pct(p.grossProfit, p.incomeTotal);
+  const priorMargin = pr ? pct(pr.profitAndLoss.grossProfit, pr.profitAndLoss.incomeTotal) : null;
+  const marginLine = (priorMargin === null || !isFinite(priorMargin))
+    ? `<div class="sub">${esc(short(p.grossProfit))} of ${esc(short(p.incomeTotal))}</div>`
+    : `<div class="d ${margin >= priorMargin ? 'up' : 'down'}"><span class="arrow">${margin >= priorMargin ? '▲' : '▼'}</span> `
+      + `${Math.abs(margin - priorMargin).toFixed(1)} pts vs ${priorMargin.toFixed(1)}% last year</div>`;
+  $('kpis').innerHTML = `
+    <div class="kpis">
+      <div class="kpi lead">
+        <div class="k">${Number(p.netIncome) >= 0 ? 'Profit' : 'Loss'} for the period</div>
+        <div class="v ${Number(p.netIncome) >= 0 ? 'up' : 'down'}">${esc(short(p.netIncome))}</div>
+        ${delta(p.netIncome, pr && pr.profitAndLoss.netIncome)}
+        ${pr === null ? `<div class="sub">${esc(money(p.netIncome))}</div>` : ''}
+      </div>
+      <div class="kpi">
+        <div class="k">Revenue</div>
+        <div class="v">${esc(short(p.incomeTotal))}</div>
+        ${delta(p.incomeTotal, pr && pr.profitAndLoss.incomeTotal)}
+      </div>
+      <div class="kpi">
+        <div class="k">Gross margin</div>
+        <div class="v">${margin === null || !isFinite(margin) ? '&mdash;' : margin.toFixed(1) + '%'}</div>
+        ${marginLine}
+      </div>
+      <div class="kpi">
+        <div class="k">What the business holds</div>
+        <div class="v">${esc(short(b.assetTotal))}</div>
+        <div class="sub">owes ${esc(short(b.liabilityTotal))}</div>
+      </div>
     </div>`;
 }
 
-const rows = (list) => list.map((a) => `
-  <tr><td><a class="acct" data-acct="${esc(a.code)}">${esc(a.code)}</a> &nbsp;${esc(a.name)}</td>
-      <td class="n">${money(a.balance)}</td></tr>`).join('');
+// One statement row: name, code, share-of-section bar, amount.
+const srow = (a, max, tone) => {
+  const w = (max > 0) ? Math.max(1.5, (Math.abs(Number(a.balance) || 0) / max) * 100) : 0;
+  return `<div class="srow">
+    <div><span class="nm">${esc(a.name)}</span><a class="cd" data-acct="${esc(a.code)}"
+      title="Every entry in this account">${esc(a.code)}</a></div>
+    <div class="prop ${tone}"><i style="width:${w.toFixed(1)}%"></i></div>
+    <div class="amt">${money(a.balance)}</div>
+  </div>`;
+};
+const section = (title, list, total, tone) => {
+  const max = list.reduce((m, a) => Math.max(m, Math.abs(Number(a.balance) || 0)), 0);
+  return `<div class="shead"><div class="t">${esc(title)}</div><div class="n">${money(total)}</div></div>`
+    + (list.length ? list.map((a) => srow(a, max, tone)).join('')
+      : '<div class="none">nothing in this period</div>');
+};
 
 function renderPL(d) {
   const p = d.profitAndLoss;
-  const sec = (title, list, total) => `
-    <tr class="sub"><td>${esc(title)}</td><td class="n">${money(total)}</td></tr>
-    ${list.length ? rows(list) : '<tr><td colspan="2" style="color:var(--text-faint)">nothing</td></tr>'}`;
+  const net = Number(p.netIncome) || 0;
   return `
     <div class="card">
-      <div class="hdr"><h3>Profit &amp; Loss &mdash; ${esc(d.legalName || d.entityName)}</h3>
-        <span class="sub">${esc(d.from || 'the beginning')} to ${esc(d.to || 'today')}</span></div>
-      <table>
-        <tbody>
-          ${sec('Income', p.income, p.incomeTotal)}
-          ${sec('Cost of material sold', p.cogs, p.cogsTotal)}
-          <tr class="tot"><td>Gross profit</td><td class="n">${money(p.grossProfit)}</td></tr>
-          ${sec('Expenses', p.expense, p.expenseTotal)}
-          <tr class="tot"><td>Net income</td><td class="n">${money(p.netIncome)}</td></tr>
-        </tbody>
-      </table>
-    </div>`;
+      <div class="hdr">
+        <h3>Profit &amp; Loss &mdash; ${esc(d.legalName || d.entityName)}</h3>
+        <span class="sub">${esc(d.from || 'the beginning')} to ${esc(d.to || 'today')}</span>
+        <div class="plain">What came in, what it cost, and what was left.</div>
+      </div>
+      <div class="stmt">
+        ${section('Income', p.income, p.incomeTotal, 'inc')}
+        ${section('Cost of material sold', p.cogs, p.cogsTotal, 'cost')}
+        <div class="band">
+          <div class="t">Gross profit<small>Revenue less what the material itself cost</small></div>
+          <div class="n ${Number(p.grossProfit) >= 0 ? 'up' : 'down'}">${money(p.grossProfit)}</div>
+        </div>
+        ${section('Running costs', p.expense, p.expenseTotal, 'exp')}
+        <div class="band final">
+          <div class="t">${net >= 0 ? 'Profit' : 'Loss'} for the period<small>Gross profit less running costs</small></div>
+          <div class="n ${net >= 0 ? 'up' : 'down'}">${money(p.netIncome)}</div>
+        </div>
+      </div>
+    </div>
+    <div class="foot">Tap any account code to see every entry behind it.</div>`;
 }
 
 function renderBS(d) {
   const b = d.balanceSheet;
-  const sec = (title, list, total) => `
-    <tr class="sub"><td>${esc(title)}</td><td class="n">${money(total)}</td></tr>
-    ${list.length ? rows(list) : '<tr><td colspan="2" style="color:var(--text-faint)">nothing</td></tr>'}`;
-  return `
+  const half = (title, plain, blocks) => `
     <div class="card">
-      <div class="hdr"><h3>Balance Sheet &mdash; ${esc(d.legalName || d.entityName)}</h3>
-        <span class="sub">as at ${esc(d.to || 'today')}</span></div>
-      <table>
-        <tbody>
-          ${sec('Assets', b.assets, b.assetTotal)}
-          ${sec('Liabilities', b.liabilities, b.liabilityTotal)}
-          ${sec('Equity', b.equity, b.equityTotal)}
-          <tr><td>Net income for the period</td><td class="n">${money(b.netIncome)}</td></tr>
-          <tr class="tot"><td>Liabilities, equity and profit</td><td class="n">${money(b.rightSide)}</td></tr>
-          ${b.balances ? '' : `<tr class="tot"><td style="color:var(--red-500)">Out by</td>
-            <td class="n" style="color:var(--red-500)">${money(b.difference)}</td></tr>`}
-        </tbody>
-      </table>
+      <div class="hdr"><h3>${esc(title)}</h3><div class="plain">${esc(plain)}</div></div>
+      <div class="stmt">${blocks}</div>
     </div>`;
+  return `
+    <div class="two">
+      ${half('What it owns', 'Cash, stock and anything owed to the business.',
+        section('Assets', b.assets, b.assetTotal, 'inc'))}
+      ${half('What it owes, and what is left over',
+        'Debts first, then the owners’ share — the two sides must come to the same figure.',
+        section('Liabilities', b.liabilities, b.liabilityTotal, 'cost')
+        + section('Equity', b.equity, b.equityTotal, 'exp')
+        + `<div class="band">
+             <div class="t">${Number(b.netIncome) >= 0 ? 'Profit' : 'Loss'} for the period</div>
+             <div class="n ${Number(b.netIncome) >= 0 ? 'up' : 'down'}">${money(b.netIncome)}</div>
+           </div>`
+        + `<div class="band final"><div class="t">Total</div>
+             <div class="n">${money(b.rightSide)}</div></div>`)}
+    </div>
+    ${b.balances ? '' : `<div class="card"><div class="outby">
+        <span class="t">The two sides do not agree &mdash; something is missing from the journal</span>
+        <span class="n">out by ${money(b.difference)}</span></div></div>`}
+    <div class="foot">Assets ${money(b.assetTotal)} against ${money(b.rightSide)} on the other side${b.balances ? ' &mdash; they agree.' : '.'}</div>`;
 }
 
 function renderTB(d) {
   const t = d.trialBalance;
   return `
     <div class="card">
-      <div class="hdr"><h3>Trial Balance &mdash; ${esc(d.legalName || d.entityName)}</h3>
-        <span class="sub">${t.balanced ? 'balanced' : 'DOES NOT BALANCE'}</span></div>
+      <div class="hdr">
+        <h3>Trial Balance &mdash; ${esc(d.legalName || d.entityName)}</h3>
+        <span class="sub">${t.balanced ? 'debits and credits agree' : 'DOES NOT BALANCE'}</span>
+        <div class="plain">Every account, with the debits and credits behind its balance. This is the working underneath the two statements.</div>
+      </div>
       <table>
         <thead><tr><th>Account</th><th>Type</th><th class="n">Debit</th><th class="n">Credit</th><th class="n">Balance</th></tr></thead>
         <tbody>
           ${t.accounts.map((a) => `
-            <tr><td><a class="acct" data-acct="${esc(a.code)}">${esc(a.code)}</a> &nbsp;${esc(a.name)}</td>
-                <td class="mono" style="font-size:11px;color:var(--text-faint)">${esc(a.type)}</td>
+            <tr><td><span class="code">${esc(a.code)}</span><a class="acct" data-acct="${esc(a.code)}">${esc(a.name)}</a></td>
+                <td><span class="pill">${esc(a.type)}</span></td>
                 <td class="n">${money(a.debit)}</td><td class="n">${money(a.credit)}</td>
                 <td class="n">${money(a.balance)}</td></tr>`).join('')}
           <tr class="tot"><td colspan="2">Total</td><td class="n">${money(t.debit)}</td>
@@ -255,20 +562,26 @@ function renderTB(d) {
         </tbody>
       </table>
     </div>
-    <div class="note">Click an account code to see every entry in it.</div>`;
+    <div class="foot">Click an account name to see every entry in it.</div>`;
 }
 
 async function renderGL(d) {
   if (!STATE.account) {
-    return '<div class="empty">Pick an account from the Trial Balance to see its history.</div>';
+    return `<div class="card"><div class="empty">
+      <div class="big">No account picked yet</div>
+      <div class="small">Open Profit &amp; Loss or Trial Balance and tap an account to see its history.</div>
+    </div></div>`;
   }
   try {
     const r = await api(`/api/books/account/${encodeURIComponent(STATE.account)}?${qs()}`);
     const g = r.ledger;
     return `
+      <div class="crumb"><button id="backtb">&larr; All accounts</button>
+        <span class="sep">/</span><span class="mono" style="color:var(--text-faint)">${esc(g.code)}</span>
+        <span>${esc(g.name)}</span></div>
       <div class="card">
-        <div class="hdr"><h3>${esc(g.code)} &nbsp;${esc(g.name)}</h3>
-          <span class="sub">closing ${money(g.closing)}</span></div>
+        <div class="hdr"><h3>${esc(g.name)}</h3>
+          <span class="sub">${esc(g.code)} &middot; closing balance ${money(g.closing)} &middot; ${g.entries.length} entr${g.entries.length === 1 ? 'y' : 'ies'}</span></div>
         <table>
           <thead><tr><th>Date</th><th>What</th><th>Who</th><th class="n">Debit</th><th class="n">Credit</th><th class="n">Running</th></tr></thead>
           <tbody>
@@ -279,13 +592,34 @@ async function renderGL(d) {
                   <td class="n">${e.debit ? money(e.debit) : ''}</td>
                   <td class="n">${e.credit ? money(e.credit) : ''}</td>
                   <td class="n">${money(e.running)}</td></tr>`).join('')
-              : '<tr><td colspan="6" class="empty">No entries in this account for this range.</td></tr>'}
+              : '<tr><td colspan="6"><div class="empty"><div class="small">Nothing posted to this account in this period.</div></div></td></tr>'}
           </tbody>
         </table>
       </div>`;
   } catch (e) {
-    return `<div class="empty" style="color:var(--red-500)">${esc(e.message)}</div>`;
+    return `<div class="card"><div class="empty"><div class="big" style="color:var(--red-500)">Could not read that account</div>
+      <div class="small">${esc(e.message)}</div></div></div>`;
   }
+}
+
+function wireAccountLinks() {
+  document.querySelectorAll('[data-acct]').forEach((a) => {
+    a.onclick = (ev) => {
+      ev.preventDefault();
+      STATE.account = a.dataset.acct;
+      STATE.view = 'gl';
+      document.querySelectorAll('#tabs button').forEach((b) =>
+        b.classList.toggle('sel', b.dataset.view === 'gl'));
+      paint();
+    };
+  });
+  const back = $('backtb');
+  if (back) back.onclick = () => {
+    STATE.view = 'tb';
+    document.querySelectorAll('#tabs button').forEach((b) =>
+      b.classList.toggle('sel', b.dataset.view === 'tb'));
+    paint();
+  };
 }
 
 async function paint() {
@@ -296,31 +630,57 @@ async function paint() {
     : STATE.view === 'tb' ? renderTB(d)
     : await renderGL(d);
   $('body').innerHTML = out;
-  document.querySelectorAll('.acct').forEach((a) => {
-    a.onclick = () => {
-      STATE.account = a.dataset.acct;
-      STATE.view = 'gl';
-      document.querySelectorAll('#tabs button').forEach((b) =>
-        b.classList.toggle('sel', b.dataset.view === 'gl'));
-      paint();
-    };
-  });
+  wireAccountLinks();
 }
 
 async function load() {
-  $('body').innerHTML = '<div class="empty">Building the books from her records…</div>';
+  $('body').innerHTML = `<div class="card"><div style="padding:16px">
+    <div class="skel" style="width:40%;margin-bottom:12px"></div>
+    <div class="skel" style="width:85%;margin-bottom:9px"></div>
+    <div class="skel" style="width:70%;margin-bottom:9px"></div>
+    <div class="skel" style="width:78%"></div></div></div>`;
   $('verdict').innerHTML = '';
+  $('kpis').innerHTML = '';
   try {
     const d = await api('/api/books?' + qs());
     STATE.data = d;
+    // ── THE COMPARISON, AS A SECOND REQUEST ─────────────────────────────
+    // Fetched after the main one and never allowed to break it: a year with
+    // no data is a normal answer, not an error, so a failure here leaves the
+    // deltas off rather than emptying the page.
+    STATE.prior = null;
+    if ($('compare').checked) {
+      try {
+        const pf = shiftYear(d.from), pt = shiftYear(d.to);
+        if (pf && pt) {
+          const p = await api('/api/books?' + qs(pf, pt));
+          if (p && p.build && p.build.transactions > 0) STATE.prior = p;
+        }
+      } catch (e) { STATE.prior = null; }
+    }
     const b = d.build;
-    $('built').textContent = `${b.transactions} transactions · ${b.lines} journal lines`
-      + (b.complete ? '' : ' · INCOMPLETE');
+    $('built').innerHTML = `Built from ${b.transactions.toLocaleString('en-US')} transactions `
+      + `and ${b.lines.toLocaleString('en-US')} journal lines`
+      + (b.complete ? '.' : ' &middot; <b style="color:var(--amber-500)">INCOMPLETE</b> — the figures above are smaller than the truth.')
+      + ($('compare').checked && STATE.prior === null ? ' &middot; no figures for the same period last year, so no comparison is shown.' : '');
     renderVerdict(d.agent);
+    renderKpis();
     await paint();
   } catch (e) {
-    $('body').innerHTML = `<div class="empty" style="color:var(--red-500)">${esc(e.message)}</div>`;
+    $('body').innerHTML = `<div class="card"><div class="empty">
+      <div class="big" style="color:var(--red-500)">Could not build the books</div>
+      <div class="small">${esc(e.message)}</div></div></div>`;
   }
+}
+
+function setPeriod(p) {
+  STATE.period = p;
+  document.querySelectorAll('#chips button').forEach((b) => b.classList.toggle('on', b.dataset.p === p));
+  if (p === 'custom') { $('custom').classList.add('show'); return; }
+  $('custom').classList.remove('show');
+  const [f, t] = rangeFor(p);
+  $('from').value = f; $('to').value = t;
+  load();
 }
 
 (async () => {
@@ -329,15 +689,22 @@ async function load() {
     $('company').innerHTML = (first.companies || [])
       .map((c) => `<option value="${esc(c.id)}">${esc(c.name)}</option>`).join('');
   } catch (e) {
-    $('body').innerHTML = `<div class="empty" style="color:var(--red-500)">${esc(e.message)}</div>`;
+    $('body').innerHTML = `<div class="card"><div class="empty">
+      <div class="big" style="color:var(--red-500)">Could not reach the books</div>
+      <div class="small">${esc(e.message)}</div></div></div>`;
     return;
   }
-  // The current year, which is what she wants nine times in ten, and it makes
-  // the page useful on arrival instead of empty.
-  const y = new Date().getFullYear();
-  $('from').value = `${y}-01-01`;
-  $('to').value = `${y}-12-31`;
+  // This year, which is what she wants nine times in ten, and it makes the
+  // page useful on arrival instead of empty.
+  const [f, t] = rangeFor('year');
+  $('from').value = f; $('to').value = t;
   $('run').onclick = load;
+  $('company').onchange = load;
+  $('compare').onchange = load;
+  $('print').onclick = () => window.print();
+  document.querySelectorAll('#chips button').forEach((b) => {
+    b.onclick = () => setPeriod(b.dataset.p);
+  });
   // ── THE PACK ──────────────────────────────────────────────────────────
   // A plain link, not fetch-then-blob: the browser's own download gets the
   // filename off Content-Disposition, which is where the DRAFT-INCOMPLETE

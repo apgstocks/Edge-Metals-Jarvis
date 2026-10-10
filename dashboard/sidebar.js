@@ -25,7 +25,7 @@
 // It asks /api/me for the role (the same call index.html makes), draws the
 // same rows with the same admin / staff rules, the same company switcher
 // (same localStorage key, so the choice follows her between pages), the same
-// four folding groups, and the same collapse preference ('navCollapsed').
+// four folding groups. It always opens on the left on a computer screen.
 // A row that is a standalone page navigates to it; a row that is a tab of
 // the app goes to /#tab=<id>, which index.html's boot() opens.
 //
@@ -110,7 +110,6 @@
   // ── end of the copied block ───────────────────────────────────────────
 
   const NAV_CO_KEY = 'jarvisNavCompany';
-  const COLLAPSE_KEY = 'navCollapsed';
   const me = document.currentScript;
   const PAGE = (me && me.dataset && me.dataset.page) || '';
 
@@ -196,7 +195,7 @@ html.jv-collapsed #jvBurger { display:flex; }
       b.setAttribute('aria-label', on ? 'Expand the menu' : 'Collapse the menu');
       b.title = on ? 'Expand the menu' : 'Collapse the menu';
     }
-    if (remember) store.set(COLLAPSE_KEY, on ? '1' : '0');
+    // Not remembered (see start of render): `remember` is ignored on purpose.
   }
   function close() {
     const s = document.getElementById('jvSidebar'), bd = document.getElementById('jvBackdrop'), bu = document.getElementById('jvBurger');
@@ -285,7 +284,11 @@ html.jv-collapsed #jvBurger { display:flex; }
       location.href = '/login';
     });
     document.addEventListener('keydown', (e) => { if (e.key === 'Escape') close(); });
-    if (store.get(COLLAPSE_KEY) === '1') setCollapsed(true, false);
+    // ALWAYS OPEN on arrival, on a computer screen. Apsara, 2026-10-10, with a
+    // screenshot of Books showing only the ☰ button: "Why sidebar coming on
+    // top". It had copied the app's collapsed setting, so every page opened
+    // with the menu hidden. Collapsing still works on the page; it is simply
+    // not carried over, and never written back to the app's own setting.
   }
 
   function start() {

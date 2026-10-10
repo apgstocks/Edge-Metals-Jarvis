@@ -1197,6 +1197,55 @@ const MUTATIONS = [
       find: "    { re: /\\b(ntg|tql|schneider)\\b/i, postable: true,",
       to:   "    { re: /\\b(ntg|tql|schneider|jio|sher)\\b/i, postable: true," },
 
+    // ── THE BOOKS PAGE, REDESIGNED 2026-10-10 ───────────────────────────
+    // Apsara: "Design the books page even more better" / "Right now it looks
+    // ugly and not friendly."
+    //
+    // The first one is the defect that actually shipped and that reading the
+    // file could not find: `.bar` was the toolbar's class AND the proportion
+    // bar's, so `height:5px; overflow:hidden` clipped the company picker, the
+    // period chips and both buttons to a sliver. Every control was present
+    // and clickable; it was five pixels tall.
+    { name: 'books: the toolbar and the proportion bar share a class again',
+      file: 'dashboard/books.html', suites: ['books-page'],
+      find: '.prop{height:5px;border-radius:3px;background:var(--surface-sunken);overflow:hidden}',
+      to:   '.bar{height:5px;border-radius:3px;background:var(--surface-sunken);overflow:hidden}' },
+    // The answer is the reason the page exists. It used to be the last row of
+    // a table.
+    { name: 'books: the headline figures stop being rendered',
+      file: 'dashboard/books.html', suites: ['books-page'],
+      find: "  $('kpis').innerHTML = `\n    <div class=\"kpis\">",
+      to:   "  $('kpis').innerHTML = ``; if (0) $('kpis').innerHTML = `\n    <div class=\"kpis\">" },
+    { name: 'books: gross margin is read off income instead of computed',
+      file: 'dashboard/books.html', suites: ['books-page'],
+      find: '  const margin = pct(p.grossProfit, p.incomeTotal);',
+      to:   '  const margin = pct(p.incomeTotal, p.incomeTotal);' },
+    // "Up 100% from nothing" is not information.
+    { name: 'books: a prior year with no data still produces a delta',
+      file: 'dashboard/books.html', suites: ['books-page'],
+      find: '          if (p && p.build && p.build.transactions > 0) STATE.prior = p;',
+      to:   '          if (p) STATE.prior = p;' },
+    // A blocker she has to click to discover is a blocker she discovers late.
+    { name: 'books: a blocker no longer opens itself',
+      file: 'dashboard/books.html', suites: ['books-page'],
+      find: "    <details class=\"trust ${cls}\" ${a.counts.blocker ? 'open' : ''}>",
+      to:   '    <details class="trust ${cls}">' },
+    // The balance sheet not agreeing means something is missing from the
+    // journal — the one thing on that tab she must not miss.
+    { name: 'books: the balance sheet stops saying the two sides disagree',
+      file: 'dashboard/books.html', suites: ['books-page'],
+      find: "    ${b.balances ? '' : `<div class=\"card\"><div class=\"outby\">",
+      to:   "    ${true ? '' : `<div class=\"card\"><div class=\"outby\">" },
+    // Named periods were the single biggest unfriendliness in the old page.
+    { name: 'books: picking a period stops refetching',
+      file: 'dashboard/books.html', suites: ['books-page'],
+      find: '  $(\'from\').value = f; $(\'to\').value = t;\n  load();\n}',
+      to:   '  $(\'from\').value = f; $(\'to\').value = t;\n}' },
+    { name: 'books: the name stops leading a statement row',
+      file: 'dashboard/books.html', suites: ['books-page'],
+      find: '    <div><span class="nm">${esc(a.name)}</span><a class="cd" data-acct="${esc(a.code)}"',
+      to:   '    <div><a class="cd" data-acct="${esc(a.code)}"><span class="nm">${esc(a.name)}</span></a><a style="display:none" data-x="${esc(a.code)}"' },
+
     // ── /lb, /net ton, /gross ton, /MT, /piece — HERS, 2026-10-10 ────────
     // "in edge yard app,in addition to lbs-MT-Item can be /piece as well.
     // and gross ton and net ton as well."
