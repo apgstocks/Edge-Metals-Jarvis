@@ -158,6 +158,14 @@ const server = http.createServer(async (req, res) => {
             queue: require('./helpers/pdfQueue').snapshot(),
             browser: require('./helpers/pdfBrowser').snapshot() });
     }
+    // ── WHERE THE SECONDS WENT, FOR THE OTHER PROCESS TO ASK ────────────
+    // Every render happens here now, so the timings do too — and
+    // /api/pdf-timings over in the main process answered with an empty list,
+    // which reads as "nothing is happening". It asks this.
+    if (req.method === 'GET' && req.url === '/timings') {
+        const t = require('./helpers/pdfTiming');
+        return send(200, { ok: true, pid: process.pid, recent: t.recent(50), summary: t.summary() });
+    }
     if (req.method !== 'POST' || req.url !== '/render') return send(404, { ok: false, error: 'not found' });
 
     try {

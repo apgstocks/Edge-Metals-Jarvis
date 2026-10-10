@@ -501,6 +501,88 @@ const okHandler = (req, res) => {
        /signatureDataUrl\(\)/.test(inv));
 }
 
+// ── I — THE ONE URL STILL ANSWERS "WHERE DID THE SECONDS GO" ─────────────
+// Apsara opened /api/pdf-timings twice after the split and got
+// {"summary":[],"recent":[]} both times. Nothing was broken: the timer runs
+// in whichever process rendered, so once the renderer took the job the main
+// process had nothing to report. An empty list reads as "nothing is
+// happening", which is the opposite of the truth and the opposite of what a
+// diagnostic is for.
+//
+// I predicted this in the same message that shipped the split and then left
+// it open, so this section is the part that stops it being a comment.
+{
+    section('I — timings from both processes, in one place');
+
+    // Pooled and summarised ONCE. Averaging the two processes' summaries
+    // would be dominated by whichever did fewer documents — and the renderer
+    // does nearly all of them while the fallback does the odd one.
+    const t = require(path.join(ROOT, 'helpers/pdfTiming'));
+    const pooled = [
+        { label: 'invoice both', at: '2026-10-10T15:00:00Z', total_ms: 1800,
+          phases: [{ phase: 'load-page', ms: 1100 }] },
+        { label: 'invoice both', at: '2026-10-10T15:01:00Z', total_ms: 2000,
+          phases: [{ phase: 'load-page', ms: 1300 }] },
+    ];
+    const sum = t.summaryOf(pooled);
+    ck('two documents summarise as two runs', sum[0].runs === 2, JSON.stringify(sum));
+    ck('  averaged across both, not across two averages',
+       sum[0].avg_total_ms === 1900, String(sum[0].avg_total_ms));
+    ck('  and the phases too', sum[0].avg_phases[0].avg_ms === 1200, JSON.stringify(sum[0].avg_phases));
+    ck('summary() still answers for this process alone',
+       Array.isArray(t.summary()), typeof t.summary());
+
+    // ── THE RENDERER HANDS ITS TIMINGS OVER ──────────────────────────────
+    const r = await fakeRenderer((req, res) => {
+        if (req.url === '/timings') {
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            return res.end(JSON.stringify({ ok: true, pid: 999,
+                recent: [{ label: 'invoice both', at: '2026-10-10T15:02:00Z', total_ms: 1850,
+                           phases: [{ phase: 'load-page', ms: 1120 }] }],
+                summary: [] }));
+        }
+        res.writeHead(404); res.end('{}');
+    });
+    const got = await RC.timings();
+    ck('the client can ask the renderer what it has been doing',
+       !!got && got.recent.length === 1, JSON.stringify(got));
+    ck('  and gets the pid, so two processes can be told apart',
+       got.pid === 999, String(got && got.pid));
+    await r.close();
+
+    // ── AND A RENDERER THAT IS DOWN DOES NOT BREAK THE PAGE ──────────────
+    // A diagnostic that errors when the thing it diagnoses is down is worse
+    // than useless — it hides the figures this process DOES have.
+    const none = await RC.timings();
+    ck('no renderer means null, not a thrown error', none === null, JSON.stringify(none));
+
+    const hang = await fakeRenderer(() => { /* never answers */ });
+    const t0 = Date.now();
+    const slow = await Promise.race([
+        RC.timings(),
+        new Promise((r2) => setTimeout(() => r2('NEVER GAVE UP'), 4000)),
+    ]);
+    ck('a wedged renderer gives up quickly rather than hanging the page',
+       slow === null, String(slow));
+    ck('  in about two seconds, not the render leash',
+       Date.now() - t0 < 3500, `${Date.now() - t0}ms`);
+    await hang.close();
+
+    // The route itself must pool them and say which process each came from.
+    const doc = fs.readFileSync(path.join(ROOT, 'routes/documents.js'), 'utf8');
+    const route = doc.slice(doc.indexOf("app.get('/api/pdf-timings'"));
+    const body = route.slice(0, route.indexOf('\n    });'));
+    ck('the route asks the render process too', /renderClient'\)\.timings\(\)/.test(body));
+    ck('  pools both before summarising', /summaryOf\(pooled\)/.test(body));
+    ck('  tags each entry with the process that produced it',
+       /where: 'jarvis'/.test(body) && /where: 'jarvis-render'/.test(body));
+    ck('  and says plainly when the renderer did not answer',
+       /reachable: false/.test(body),
+       'an empty list and an unreachable renderer are different problems');
+    ck('  without letting that failure break the route',
+       /catch \(e\) \{ remote = null; \}/.test(body));
+}
+
 console.log(`\n  ${pass} passed, ${fail} failed`);
 if (failures.length) { console.log('\n  failed:'); failures.forEach((f) => console.log('    · ' + f)); }
 try { fs.rmSync(TMP, { recursive: true, force: true }); } catch (e) {}

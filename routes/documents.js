@@ -578,10 +578,43 @@ module.exports = function (app, ctx) {
     // In memory and capped at the last fifty. Admin-only for no security
     // reason beyond consistency — it holds document numbers and durations,
     // nothing else.
-    app.get('/api/pdf-timings', requireAdmin, (req, res) => {
+    //
+    // ── BOTH PROCESSES, OR IT ANSWERS "NOTHING IS HAPPENING" ────────────
+    // Rendering moved into its own process on 2026-10-10, so an invoice's
+    // timings live THERE. This route kept reporting only its own ring and
+    // answered {"summary":[],"recent":[]} — which reads as broken when the
+    // truth is "it happened in the other process". Apsara hit that twice,
+    // which is twice more than a diagnostic should ever mislead. I had even
+    // predicted it in the same breath as shipping the split, and then left
+    // it open.
+    //
+    // The entries are POOLED and summarised once rather than averaging two
+    // summaries: the renderer does nearly every document and the in-process
+    // fallback the odd one, so averaging the two would be dominated by
+    // whichever did least.
+    //
+    // A renderer that is down does not break this. timings() resolves null
+    // and the answer is this process's own figures — exactly what it showed
+    // before the split — with `renderer.reachable: false` saying so, because
+    // an empty list and an unreachable renderer are different problems.
+    app.get('/api/pdf-timings', requireAdmin, async (req, res) => {
         try {
             const t = require('./helpers/pdfTiming');
-            res.json({ summary: t.summary(), recent: t.recent(Number(req.query.n) || 20) });
+            const n = Number(req.query.n) || 20;
+            const mine = t.recent(200).map((e) => ({ ...e, where: 'jarvis' }));
+            let remote = null;
+            try { remote = await require('./helpers/renderClient').timings(); } catch (e) { remote = null; }
+            const theirs = ((remote && remote.recent) || []).map((e) => ({ ...e, where: 'jarvis-render' }));
+            const pooled = mine.concat(theirs)
+                .sort((a, b) => String(b.at || '').localeCompare(String(a.at || '')));
+            res.json({
+                summary: t.summaryOf(pooled),
+                recent: pooled.slice(0, n),
+                renderer: remote
+                    ? { reachable: true, pid: remote.pid, documents: theirs.length }
+                    : { reachable: false,
+                        note: 'the render process did not answer — these figures are this process only' },
+            });
         } catch (e) { res.status(500).json({ error: e.message }); }
     });
 

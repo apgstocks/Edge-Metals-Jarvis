@@ -1230,6 +1230,36 @@ const MUTATIONS = [
       find: '        const shared = sharedBrowser();\n        if (shared) {',
       to:   '        const shared = null;\n        if (shared) {' },
 
+    // ── THE DIAGNOSTIC THAT WENT BLIND AFTER THE SPLIT ──────────────────
+    // She opened /api/pdf-timings twice and got {"summary":[],"recent":[]}.
+    // Nothing was broken: the timer runs in whichever process rendered, so
+    // the main process had nothing to report. An empty list reads as
+    // "nothing is happening", which is the opposite of the truth.
+    { name: 'timings: the route forgets to ask the render process',
+      file: 'routes/documents.js', suites: ['render-client'],
+      find: "            try { remote = await require('./helpers/renderClient').timings(); } catch (e) { remote = null; }",
+      to:   '            remote = null;' },
+    { name: 'timings: a renderer that is down takes the whole route with it',
+      file: 'routes/documents.js', suites: ['render-client'],
+      find: "            try { remote = await require('./helpers/renderClient').timings(); } catch (e) { remote = null; }",
+      to:   "            remote = await require('./helpers/renderClient').timings();" },
+    { name: 'timings: an unreachable renderer looks the same as no documents',
+      file: 'routes/documents.js', suites: ['render-client'],
+      find: "                    : { reachable: false,",
+      to:   "                    : { reachable: true," },
+    // Averaging two summaries instead of pooling the entries is dominated by
+    // whichever process did fewer documents.
+    { name: 'timings: two averages are averaged instead of the entries pooled',
+      file: 'helpers/pdfTiming.js', suites: ['render-client'],
+      find: 'function summaryOf(entries) {\n    const byKind = new Map();\n    for (const e of (entries || [])) {',
+      to:   'function summaryOf(entries) {\n    const byKind = new Map();\n    for (const e of (entries || []).slice(0, 1)) {' },
+    // A diagnostic that hangs the page it is meant to inform is worse than
+    // one that says nothing.
+    { name: 'timings: asking a wedged renderer hangs the page',
+      file: 'helpers/renderClient.js', suites: ['render-client'],
+      find: '        req.setTimeout(2000, () => { req.destroy(); resolve(null); });',
+      to:   '        ;' },
+
     // ── "Fix it.why its taking more time to generate", 2026-10-10 ──────
     // networkidle0 waits for load and THEN for 500ms in which no request
     // starts. These documents have no network to go quiet, so that half

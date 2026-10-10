@@ -97,9 +97,21 @@ function recent(n) {
 
 // Rolled up by document kind, because the useful question is not "how long did
 // that one take" but "where does the time go every time".
-function summary() {
+// ── SUMMARISE ANY SET OF ENTRIES, NOT JUST THIS PROCESS'S ───────────────
+// Rendering moved into its own process on 2026-10-10, so the timings for an
+// invoice live THERE and /api/pdf-timings in the main process answered with
+// an empty list — which reads as "nothing is happening" when the truth is
+// "it happened somewhere else". Apsara hit that twice.
+//
+// Taking the entries as an argument means the route can POOL both processes
+// and summarise once. Averaging the two summaries instead would be wrong
+// whenever the two did different numbers of documents, which is the normal
+// case: the renderer does all of them and the fallback does the odd one.
+function summary() { return summaryOf(ring); }
+
+function summaryOf(entries) {
     const byKind = new Map();
-    for (const e of ring) {
+    for (const e of (entries || [])) {
         const kind = String(e.label || '').split(/\s+/)[0] || 'document';
         if (!byKind.has(kind)) byKind.set(kind, { kind, runs: 0, total_ms: 0, phases: new Map() });
         const g = byKind.get(kind);
@@ -122,4 +134,4 @@ function summary() {
 
 function reset() { ring.length = 0; }
 
-module.exports = { start, recent, summary, reset, MAX_KEPT };
+module.exports = { start, recent, summary, summaryOf, reset, MAX_KEPT };

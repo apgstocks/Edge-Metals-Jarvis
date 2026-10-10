@@ -154,6 +154,32 @@ async function render(job, inProcess) {
     }
 }
 
+// ── ASKING THE RENDERER WHAT IT HAS BEEN DOING ──────────────────────────
+// Read-only, short, and NEVER allowed to break the caller: a renderer that
+// is down must make /api/pdf-timings show the main process's own figures,
+// not an error page. Returns null when there is nothing to say.
+function timings() {
+    if (!available()) return Promise.resolve(null);
+    return new Promise((resolve) => {
+        const req = http.request({ socketPath: SOCKET, path: '/timings', method: 'GET' }, (res) => {
+            const chunks = [];
+            res.on('data', (c) => chunks.push(c));
+            res.on('end', () => {
+                try {
+                    const j = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+                    resolve(j && j.ok ? j : null);
+                } catch (e) { resolve(null); }
+            });
+        });
+        // Far shorter than a render's leash: this is a diagnostic, and a
+        // diagnostic that hangs the page it is meant to inform is worse than
+        // one that says nothing.
+        req.setTimeout(2000, () => { req.destroy(); resolve(null); });
+        req.on('error', () => resolve(null));
+        req.end();
+    });
+}
+
 const snapshot = () => ({ ...stats, socket: SOCKET, available: available() });
 
-module.exports = { render, available, snapshot, SOCKET, TIMEOUT_MS };
+module.exports = { render, timings, available, snapshot, SOCKET, TIMEOUT_MS };
