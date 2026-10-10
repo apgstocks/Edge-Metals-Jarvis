@@ -49,10 +49,23 @@ if (!String(cfg.DATA_DIR).startsWith(TMP)) { console.error('  ABORT  config not 
 const drive = require(path.join(ROOT, 'helpers/drive'));
 let uploads = [];           // every filename this run tried to upload
 let failUpload = null;      // substring: an upload whose name matches throws
+let failUploadMessageless = false;  // throw the AggregateError she actually hit
 drive.uploadLoadPdf = async (loadId, buf, nameOverride) => {
     const name = nameOverride || `${loadId}.pdf`;
     uploads.push(name);
-    if (failUpload && name.includes(failUpload)) throw new Error(`stub: Drive refused ${name}`);
+    if (failUpload && name.includes(failUpload)) {
+        // ── THE SHAPE THAT PRODUCED detail: null ────────────────────────
+        // An Error with a tidy .message is the easy case and the one that
+        // was never broken. Drive is reached over the network, and when
+        // every address for a host fails Node throws an AggregateError
+        // whose .message is '' — so this stub throws what really happened
+        // to EDGE_130, not what is convenient to assert on.
+        if (failUploadMessageless) throw new AggregateError([
+            new Error(`connect ETIMEDOUT 142.250.72.42:443 (${name})`),
+            new Error('connect ECONNREFUSED 142.250.72.43:443'),
+        ]);
+        throw new Error(`stub: Drive refused ${name}`);
+    }
     return { id: `drive_${name}`, webViewLink: `https://drive.test/${name}` };
 };
 
@@ -166,6 +179,101 @@ section('E — the main ticket is not best-effort');
     ck('a main-ticket upload failure throws', !!threw, 'it was swallowed — the route would answer ok:true');
     ck('  and does not mark the load generated', loads.getLoad(hard.id).status !== 'pdf_generated',
        loads.getLoad(hard.id).status);
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+section('F — the diagnosis that was not recorded');
+// EDGE_130, 2026-10-09T00:00:36.217Z, detail: null. The nightly end-of-day
+// yard report runs at 20:00 America/New_York, which IS 00:00:00Z — so this
+// was set 36 seconds into that job, not by anything she pressed. And the
+// reason was lost because callers passed `e.message`, which is the EMPTY
+// STRING on the error class Node throws when every address for a host fails.
+
+{
+    const { describeError, buildWarning } = require(path.join(ROOT, 'helpers/loadWarnings'));
+
+    // The exact shape that produced `detail: null`.
+    const agg = new AggregateError([
+        new Error('connect ETIMEDOUT 142.250.72.42:443'),
+        new Error('connect ECONNREFUSED 142.250.72.43:443'),
+    ]);
+    ck('an AggregateError really does have an empty .message', agg.message === '',
+       'if this is ever false the bug being fixed here did not exist');
+    const d = describeError(agg);
+    ck('describeError still gets something out of it', !!d, `got ${JSON.stringify(d)}`);
+    ck('  naming the underlying failures', /ETIMEDOUT/.test(d) && /ECONNREFUSED/.test(d), d);
+    ck('buildWarning handed the ERROR records that reason',
+       !!buildWarning('receipt_pdf_failed', agg).detail, 'this is the null she was looking at');
+    // Backwards compatible: five other call sites still pass e.message.
+    ck('a plain string still works', describeError('ENOTFOUND www.googleapis.com')
+        === 'ENOTFOUND www.googleapis.com');
+    ck('and nothing stays nothing', describeError(null) === null && describeError('') === null);
+    // The code is the most useful part and must survive on its own — a
+    // googleapis rejection often carries ENOTFOUND with no useful message.
+    ck('a bare code is enough to record', /ENOTFOUND/.test(describeError({ code: 'ENOTFOUND' }) || ''));
+    ck('  and an HTTP status is kept', /403/.test(describeError({ response: { status: 403 } }) || ''),
+       '403 vs 500 is permissions vs wait five minutes');
+    ck('detail is still capped', buildWarning('receipt_pdf_failed',
+        new Error('x'.repeat(900))).detail.length <= 300);
+
+    // It must not be shown to the operator. The banner renders w.message.
+    const w = buildWarning('receipt_pdf_failed', agg);
+    ck('the operator message is still plain English', !/ETIMEDOUT/.test(w.message), w.message);
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+section('G — a render failure and a Drive failure say different things');
+// They shared one try and one sentence. "could not be generated" is what she
+// was shown for what was almost certainly a connection problem, and the two
+// have opposite instructions: try again now, versus wait for the network.
+
+{
+    const mk = async (seller) => loads.addLoad({ date: '2026-10-10', seller, items: ITEMS });
+
+    const rendFail = await mk('Vikram');
+    failReceipt = true;
+    const a = await generateAndStoreLoadPdfs(rendFail);
+    failReceipt = false;
+    ck('a render failure reports receipt_pdf_failed', codesOf(a).includes('receipt_pdf_failed'),
+       `got ${codesOf(a)}`);
+    ck('  and nothing was uploaded for it', !a.receipt_pdf_link);
+
+    const upFail = await mk('Anita');
+    failUpload = 'receipt_';
+    const b = await generateAndStoreLoadPdfs(upFail);
+    failUpload = null;
+    ck('an upload failure reports receipt_upload_failed', codesOf(b).includes('receipt_upload_failed'),
+       `got ${codesOf(b)}`);
+    ck('  NOT the render code', !codesOf(b).includes('receipt_pdf_failed'),
+       'blaming the renderer for Drive is what sent her looking in the wrong place');
+    const msg = (b.warnings || []).find(x => x.code === 'receipt_upload_failed').message;
+    ck('  and it tells her to wait for the connection', /connection/i.test(msg), msg);
+    ck('  while the main ticket is still fine', !!b.pdf_link && b.status === 'pdf_generated');
+
+    // ── END TO END ON THE REAL FAULT, NOT A CONVENIENT ONE ──────────────
+    // Section F proves describeError can handle an AggregateError. That is a
+    // helper test, and a helper test being green is how the first version of
+    // this shipped: what matters is whether a messageless error driven
+    // through generateAndStoreLoadPdfs lands a reason ON THE LOAD.
+    const aggFail = await mk('Deepak');
+    failUpload = 'receipt_'; failUploadMessageless = true;
+    const e2e = await generateAndStoreLoadPdfs(aggFail);
+    failUpload = null; failUploadMessageless = false;
+    const aw = (e2e.warnings || []).find(x => x.code === 'receipt_upload_failed');
+    ck('a messageless network failure still warns', !!aw, `got ${codesOf(e2e)}`);
+    ck('  AND records a reason — this is the detail: null she was shown',
+       !!(aw && aw.detail), `detail=${aw && aw.detail}`);
+    ck('  naming the actual fault', /ETIMEDOUT|ECONNREFUSED/.test((aw && aw.detail) || ''),
+       aw && aw.detail);
+    // On disk, not just in the response: she read this out of loads.json.
+    const diskW = (loads.getLoad(aggFail.id).warnings || [])
+        .find(x => x.code === 'receipt_upload_failed');
+    ck('  and it is on disk, where she looked', !!(diskW && diskW.detail), JSON.stringify(diskW));
+
+    // The new code has to be clearable too, or the badge is permanent.
+    const c = await generateAndStoreLoadPdfs(loads.getLoad(upFail.id));
+    ck('a later good run clears receipt_upload_failed', codesOf(c).length === 0, `got ${codesOf(c)}`);
+    ck('  and on disk', onDisk(upFail.id).length === 0, `disk ${onDisk(upFail.id)}`);
 }
 
 // ══════════════════════════════════════════════════════════════════════════

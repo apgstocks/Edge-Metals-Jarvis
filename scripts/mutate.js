@@ -1251,6 +1251,68 @@ const MUTATIONS = [
       find: '         data-bank="${esc(a.bank || \'\')}" data-mask="${esc(a.mask || \'\')}"',
       to:   '         data-bank="" data-mask=""' },
 
+    // ── THE WARNING THAT OUTLIVED ITS OWN FIX ───────────────────────────
+    // Apsara, 2026-10-10, EDGE_130: "when i try to print pos receipt,it is
+    // generating,but still this error is showing in my load." The clear ran;
+    // the object handed back predated it. `load` is the record as it arrived,
+    // so taking the warnings from it reproduces exactly what the stale array
+    // held — a load whose receipt is fixed, reported with the old complaint.
+    { name: 'warnings: a fixed load is reported with the warning it just cleared',
+      file: 'helpers/loadsPdf.js', suites: ['load-warning-clear'],
+      find: '    return getLoad(load.id) || null;',
+      to:   '    return { ...(getLoad(load.id) || {}), warnings: load.warnings };' },
+    { name: 'warnings: a successful regenerate no longer clears the old complaint',
+      file: 'helpers/loadsPdf.js', suites: ['load-warning-clear'],
+      find: "'weights_pdf_failed', 'receipt_pdf_failed', 'receipt_upload_failed']);",
+      to:   "'weights_pdf_failed']);" },
+    { name: 'warnings: a failed receipt is logged and nothing else',
+      file: 'helpers/loadsPdf.js', suites: ['load-warning-clear'],
+      find: "        warnings.push(buildWarning('receipt_pdf_failed', e));",
+      to:   '        /* swallowed */' },
+    { name: 'warnings: losing the main ticket becomes best-effort too',
+      file: 'helpers/loadsPdf.js', suites: ['load-warning-clear'],
+      find: '    const file = await uploadLoadPdf(load.id, buf);',
+      to:   "    let file = { id: null, webViewLink: null };\n    try { file = await uploadLoadPdf(load.id, buf); } catch (e) { console.error(e.message); }" },
+
+    // ── THE detail: null SHE WAS LOOKING AT ─────────────────────────────
+    // Four ways to get back to a warning that records no reason. The first is
+    // the literal regression: pass .message again, and the AggregateError a
+    // failed Drive connection throws contributes the empty string.
+    { name: 'diagnosis: the receipt failure records e.message again, so a network fault records nothing',
+      file: 'helpers/loadsPdf.js', suites: ['load-warning-clear'],
+      find: "        warnings.push(buildWarning('receipt_upload_failed', e));",
+      to:   "        warnings.push(buildWarning('receipt_upload_failed', e.message));" },
+    { name: 'diagnosis: describeError ignores the nested errors — the only place the cause is written',
+      file: 'helpers/loadWarnings.js', suites: ['load-warning-clear'],
+      find: '    if (Array.isArray(e.errors) && e.errors.length) {',
+      to:   '    if (false) {' },
+    { name: 'diagnosis: the error code is dropped, so ENOTFOUND never reaches the record',
+      file: 'helpers/loadWarnings.js', suites: ['load-warning-clear'],
+      find: '    if (e.code) bits.push(String(e.code));',
+      to:   '    if (false) bits.push(String(e.code));' },
+    { name: 'diagnosis: the HTTP status is dropped — 403 and 500 become the same warning',
+      file: 'helpers/loadWarnings.js', suites: ['load-warning-clear'],
+      find: '    if (status && !bits.includes(String(status))) bits.push(`status ${status}`);',
+      to:   '    /* dropped */' },
+    // The cap is not cosmetic: a googleapis rejection can carry a kilobyte of
+    // HTML, and this lands in loads.json, which every load read parses.
+    { name: 'diagnosis: detail is no longer capped, so one failure bloats loads.json',
+      file: 'helpers/loadWarnings.js', suites: ['load-warning-clear'],
+      find: '        detail: (() => { const d = describeError(detail); return d ? d.slice(0, 300) : null; })(),',
+      to:   '        detail: describeError(detail),' },
+    // Splitting render from upload exists so the instruction is right. One
+    // sentence for both is what sent her looking at the renderer.
+    { name: 'diagnosis: a Drive failure blames the renderer again',
+      file: 'helpers/loadWarnings.js', suites: ['load-warning-clear'],
+      find: "    receipt_upload_failed: 'The POS receipt was made but could not be saved to Drive. Use Generate PDF again once the connection is back — the main ticket is unaffected.',",
+      to:   "    receipt_upload_failed: 'The POS receipt could not be generated. The main ticket is unaffected.'," },
+    // The banner is for a yard operator. A raw exception there is the reason
+    // buildWarning keeps message and detail apart at all.
+    { name: 'diagnosis: the raw exception is shown to whoever is at the scale',
+      file: 'helpers/loadWarnings.js', suites: ['load-warning-clear'],
+      find: '        message: MESSAGES[code] || code,',
+      to:   '        message: describeError(detail) || MESSAGES[code] || code,' },
+
     // ── THE DIAGNOSTIC THAT WENT BLIND AFTER THE SPLIT ──────────────────
     // She opened /api/pdf-timings twice and got {"summary":[],"recent":[]}.
     // Nothing was broken: the timer runs in whichever process rendered, so

@@ -75,8 +75,12 @@ async function generateAndStoreLoadPdfs(load, opts = {}) {
             const weightsFile = await uploadLoadPdf(load.id, weightsBuf, `weights_${load.id}.pdf`);
             weightsPatch = { weights_pdf_drive_id: weightsFile.id, weights_pdf_link: weightsFile.webViewLink };
         } catch (e) {
-            console.error(`[loadsPdf] weights-pdf generation failed for ${load.id}:`, e.message);
-            warnings.push(buildWarning('weights_pdf_failed', e.message));
+            // `e`, not `e.message` — see describeError in loadWarnings.js. A
+            // network failure to Drive arrives as an AggregateError whose
+            // .message is '', so passing the message recorded nothing.
+            const { describeError } = require('./loadWarnings');
+            console.error(`[loadsPdf] weights-pdf failed for ${load.id}:`, describeError(e));
+            warnings.push(buildWarning('weights_pdf_failed', e));
         }
     }
 
@@ -87,14 +91,31 @@ async function generateAndStoreLoadPdfs(load, opts = {}) {
     // trip needed. Best-effort same as the weights PDF: a render/upload
     // failure here shouldn't block the main ticket from counting as
     // generated.
+    //
+    // ── GENERATING AND UPLOADING ARE SEPARATE FAILURES (2026-10-10) ──────
+    // They shared one `try`, so "The POS receipt could not be generated"
+    // was also what she saw when Drive was unreachable — and Drive is by
+    // far the likelier of the two, because generating is pdfkit in this
+    // process with no network and no browser. Her EDGE_130 warning sent
+    // whoever read it looking at a renderer that had worked fine.
     let receiptPatch = {};
+    let receiptBuf = null;
     try {
-        const receiptBuf = await generateLoadReceiptPdf(load, opts);
-        const receiptFile = await uploadLoadPdf(load.id, receiptBuf, `receipt_${load.id}.pdf`);
-        receiptPatch = { receipt_pdf_drive_id: receiptFile.id, receipt_pdf_link: receiptFile.webViewLink };
+        receiptBuf = await generateLoadReceiptPdf(load, opts);
     } catch (e) {
-        console.error(`[loadsPdf] receipt-pdf generation failed for ${load.id}:`, e.message);
-        warnings.push(buildWarning('receipt_pdf_failed', e.message));
+        const { describeError } = require('./loadWarnings');
+        console.error(`[loadsPdf] receipt-pdf RENDER failed for ${load.id}:`, describeError(e));
+        warnings.push(buildWarning('receipt_pdf_failed', e));
+    }
+    if (receiptBuf) {
+        try {
+            const receiptFile = await uploadLoadPdf(load.id, receiptBuf, `receipt_${load.id}.pdf`);
+            receiptPatch = { receipt_pdf_drive_id: receiptFile.id, receipt_pdf_link: receiptFile.webViewLink };
+        } catch (e) {
+            const { describeError } = require('./loadWarnings');
+            console.error(`[loadsPdf] receipt-pdf UPLOAD failed for ${load.id}:`, describeError(e));
+            warnings.push(buildWarning('receipt_upload_failed', e));
+        }
     }
 
     // pdf_template_version records WHICH layout produced this file, so a
@@ -107,7 +128,9 @@ async function generateAndStoreLoadPdfs(load, opts = {}) {
     // always clear its warnings — a successful Regenerate must wipe the
     // previous complaint, or the badge never goes away and stops meaning
     // anything. Sub-document warnings are then re-applied if they recurred.
-    await clearLoadWarnings(load.id, ['pdf_generate_failed', 'pdf_upload_failed', 'weights_pdf_failed', 'receipt_pdf_failed']);
+    // receipt_upload_failed belongs in this list for the same reason as the
+    // rest: a code that is never cleared is a badge that never goes away.
+    await clearLoadWarnings(load.id, ['pdf_generate_failed', 'pdf_upload_failed', 'weights_pdf_failed', 'receipt_pdf_failed', 'receipt_upload_failed']);
     if (warnings.length) {
         const withWarn = await setLoadWarnings(load.id, warnings);
         if (withWarn) return withWarn;

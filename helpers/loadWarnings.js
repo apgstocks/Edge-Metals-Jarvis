@@ -33,10 +33,68 @@ const MESSAGES = {
     pdf_generate_failed : 'The PDF could not be generated. Use Regenerate PDF to try again.',
     weights_pdf_failed  : 'The weights PDF could not be generated. The main ticket is unaffected.',
     receipt_pdf_failed  : 'The POS receipt could not be generated. The main ticket is unaffected.',
+    // Split out 2026-10-10: these two shared one message, and the one she
+    // was shown blamed the renderer for what was almost certainly Drive.
+    // "Generate PDF again" is the right instruction for a connection
+    // problem and the wrong one for a render problem, which is why they
+    // cannot keep sharing a sentence.
+    receipt_upload_failed: 'The POS receipt was made but could not be saved to Drive. Use Generate PDF again once the connection is back — the main ticket is unaffected.',
     sheet_sync_failed   : 'This load is saved, but the Google Sheet could not be updated. It will retry on the next change.',
     drive_cleanup_failed: 'Drive files for this load could not be removed.',
 };
 
+// ── describeError — because .message is EMPTY for the likeliest failure ──
+//
+// Apsara, 2026-10-10, on EDGE_130: "I dont even have any idea what caused
+// this error." Neither did anyone, and this function is why. The warning she
+// was looking at read:
+//
+//     "code": "receipt_pdf_failed",
+//     "detail": null,
+//     "at": "2026-10-09T00:00:36.217Z"
+//
+// `detail: null` because callers passed `e.message`, and the error class most
+// likely to arrive here has none. When Node connects to a host that resolves
+// to several addresses and every attempt fails, it does NOT throw an Error —
+// it throws an AggregateError whose `.message` is the empty string and whose
+// real content is in `.errors`. Every Drive call in this app goes through
+// exactly that path. So the one failure that was always going to happen is
+// the one that recorded nothing.
+//
+// What this keeps, in order of usefulness: the code (ENOTFOUND, ETIMEDOUT —
+// the thing that actually names the fault), the message, the class, and for
+// an AggregateError the nested messages, which is the only place the cause is
+// written down at all. Still truncated, still never shown to a yard operator.
+function describeError(e) {
+    if (e === null || e === undefined) return null;
+    if (typeof e === 'string') return e || null;
+
+    const bits = [];
+    if (e.code) bits.push(String(e.code));
+    if (e.message) bits.push(String(e.message));
+    // The class only earns a place when it is the only thing distinguishing
+    // this from a blank record — "Error:" in front of a message is noise.
+    if (!bits.length && e.name) bits.push(String(e.name));
+    if (Array.isArray(e.errors) && e.errors.length) {
+        const inner = e.errors.slice(0, 4)
+            .map(x => (x && (x.message || x.code)) || String(x)).filter(Boolean);
+        if (inner.length) bits.push(`[${e.name || 'AggregateError'}: ${inner.join('; ')}]`);
+    }
+    // A Drive/googleapis rejection carries its HTTP status somewhere else
+    // entirely, and "403" vs "500" is the difference between a permissions
+    // problem and waiting five minutes.
+    const status = e.status || e.code === undefined && e.response && e.response.status;
+    if (status && !bits.includes(String(status))) bits.push(`status ${status}`);
+
+    const out = bits.join(' ').trim();
+    // Last resort rather than first: String(someAggregateError) is the word
+    // "AggregateError" and nothing else, which is how we got here.
+    return out || (String(e) !== '[object Object]' ? String(e) : null) || null;
+}
+
+// `detail` may be an Error or a string: every caller before 2026-10-10 passed
+// `e.message`, which still works, and the ones that matter now pass `e` so
+// describeError can get at what .message threw away.
 function buildWarning(code, detail) {
     return {
         code,
@@ -44,7 +102,7 @@ function buildWarning(code, detail) {
         // The raw error is kept for whoever debugs it later, but is NOT what
         // the operator is shown — "ENOTFOUND www.googleapis.com" helps nobody
         // at a weighbridge.
-        detail: detail ? String(detail).slice(0, 300) : null,
+        detail: (() => { const d = describeError(detail); return d ? d.slice(0, 300) : null; })(),
         at: new Date().toISOString(),
     };
 }
@@ -87,4 +145,4 @@ async function clearLoadWarnings(loadId, codes) {
     return updated;
 }
 
-module.exports = { buildWarning, setLoadWarnings, clearLoadWarnings, MESSAGES };
+module.exports = { buildWarning, describeError, setLoadWarnings, clearLoadWarnings, MESSAGES };
