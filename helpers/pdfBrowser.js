@@ -34,7 +34,30 @@
 
 const puppeteer = require('puppeteer');
 
-const IDLE_MS = Number(process.env.PDF_BROWSER_IDLE_MS) || 60 * 1000;
+// ── KEEPING IT, OR CLOSING IT ───────────────────────────────────────────
+// 60 seconds was right while this ran INSIDE the main process: a Chromium
+// sitting idle there is memory stolen from 275 routes and 34 cron jobs, so
+// closing it was the polite thing to do.
+//
+// It is wrong inside render-server.js, and her first real document proved it
+// in the worst way — 2026-10-10 14:37, after the split went live:
+//
+//   [PDF-TIME] invoice both total 14211ms — launch-chromium 11844ms,
+//              load-page 1641ms, fit(1 passes) 231ms, render 468ms
+//
+// Eighty-three per cent of it was launching Chromium, because the render
+// process never gets WhatsApp's browser (init() is only called from
+// index.js) and had closed its own one minute after the last document. On
+// this VM a cold launch costs ELEVEN AND A HALF SECONDS, so an invoice
+// generated twice an hour paid it every time — 2.7s before the split,
+// 14.2s after. I made her occasional document five times slower.
+//
+// 0 or less means KEEP IT. A process whose only job is rendering has
+// nothing to be polite to, and `|| 60 * 1000` could not express that —
+// Number('0') is falsy, so passing 0 silently meant 60 seconds.
+const IDLE_RAW = process.env.PDF_BROWSER_IDLE_MS;
+const IDLE_MS = (IDLE_RAW === undefined || IDLE_RAW === '') ? 60 * 1000 : Number(IDLE_RAW);
+const KEEP_WARM = !(IDLE_MS > 0);
 const VIEWPORT = { width: 800, height: 600 };   // puppeteer.launch's default — what every document was laid out in
 const OWN_ARGS = ['--no-sandbox', '--disable-setuid-sandbox'];
 
@@ -144,6 +167,10 @@ function ownBrowser() {
 }
 
 function scheduleIdleClose() {
+    // The render process keeps its browser for the life of the process. The
+    // cost is one resident Chromium; the saving is 11.8 seconds on every
+    // document that arrives after a quiet minute.
+    if (KEEP_WARM) return;
     if (!own || inUse > 0) return;
     if (idleTimer) clearTimeout(idleTimer);
     idleTimer = setTimeout(async () => {
@@ -211,6 +238,22 @@ async function withPage(fn, opts = {}) {
     }
 }
 
+// ── WARM IT BEFORE ANYONE ASKS ──────────────────────────────────────────
+// Even with KEEP_WARM, the FIRST document after a restart pays the cold
+// launch — and a restart is exactly when she is most likely to be watching.
+// render-server.js calls this at boot so the eleven seconds are spent while
+// nobody is waiting. Deliberately not fatal: a failure here is the same
+// situation as today, where the first document launches it.
+async function warm() {
+    if (process.env.PDF_BROWSER === 'own' || !sharedBrowser()) {
+        try { await ownBrowser(); return true; } catch (e) {
+            console.warn('[PDF] could not pre-warm Chromium — the first document will launch it:', e.message);
+            return false;
+        }
+    }
+    return false;
+}
+
 async function shutdown() {
     if (idleTimer) { clearTimeout(idleTimer); idleTimer = null; }
     const p = own; own = null;
@@ -233,5 +276,6 @@ function _resetForTests() {
     for (const k of Object.keys(stats)) stats[k] = 0;
 }
 
-module.exports = { init, withPage, shutdown, snapshot, _resetForTests,
+module.exports = { init, withPage, warm, shutdown, snapshot, _resetForTests,
+    KEEP_WARM,
     IDLE_MS, VIEWPORT, SHARED_MS, COOLDOWN_MS };

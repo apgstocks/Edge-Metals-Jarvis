@@ -1230,6 +1230,33 @@ const MUTATIONS = [
       find: '        const shared = sharedBrowser();\n        if (shared) {',
       to:   '        const shared = null;\n        if (shared) {' },
 
+    // ── THE REGRESSION HER FIRST REAL DOCUMENT FOUND, 14:37 ─────────────
+    //   [PDF-TIME] invoice both total 14211ms — launch-chromium 11844ms
+    // The render process never gets WhatsApp's browser, so it uses its own —
+    // and pdfBrowser closed that one minute after the last document. A cold
+    // launch costs ~11.5s on her VM, so an invoice generated twice an hour
+    // paid it every time: 2.7s before the split, 14.2s after.
+    { name: 'warm: the renderer goes back to closing its browser after a minute',
+      file: 'helpers/pdfBrowser.js', suites: ['render-client'],
+      find: '    if (KEEP_WARM) return;',
+      to:   '    ;' },
+    // `|| 60 * 1000` could not express "never close": Number('0') is falsy,
+    // so passing 0 silently meant the very value being overridden.
+    { name: 'warm: zero silently means sixty seconds again',
+      file: 'helpers/pdfBrowser.js', suites: ['render-client'],
+      find: "const IDLE_MS = (IDLE_RAW === undefined || IDLE_RAW === '') ? 60 * 1000 : Number(IDLE_RAW);",
+      to:   'const IDLE_MS = Number(IDLE_RAW) || 60 * 1000;' },
+    { name: 'warm: the main process starts holding a Chromium resident too',
+      file: 'ecosystem.config.js', suites: ['render-client'],
+      find: "            PDF_BROWSER_IDLE_MS: '0',",
+      to:   "            PDF_BROWSER_IDLE_MS: '60000'," },
+    // The FIRST document after a restart is when she is most likely to be
+    // watching, so it must not pay the eleven seconds either.
+    { name: 'warm: nothing is warmed at boot, so the first document pays for it',
+      file: 'render-server.js', suites: ['render-client'],
+      find: "    require('./helpers/pdfBrowser').warm().then((did) => {",
+      to:   "    if (false) require('./helpers/pdfBrowser').warm().then((did) => {" },
+
     // ── RENDERING IN ITS OWN PROCESS, 2026-10-10 ────────────────────────
     // Apsara: "think like a production system." One pm2 process held 275
     // routes, 34 crons, WhatsApp's Chromium and every render under a 1500M

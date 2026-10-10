@@ -180,6 +180,21 @@ process.on('SIGTERM', () => shutdown('SIGTERM'));
 
 (async () => {
     await clearStaleSocket();
+    // ── WARM CHROMIUM BEFORE THE FIRST DOCUMENT ──────────────────────────
+    // Her first real document through this process, 2026-10-10 14:37, spent
+    // 11,844ms of its 14,211ms launching Chromium. Launching at boot moves
+    // that cost to a moment when nobody is waiting, and PDF_BROWSER_IDLE_MS=0
+    // (set for this app in ecosystem.config.js) keeps it so the second
+    // document and the two-hundredth do not pay it either.
+    //
+    // Not awaited: the socket must start accepting immediately, because
+    // helpers/renderClient.js only falls back when it cannot CONNECT — a
+    // renderer that is slow to listen would quietly send everything back
+    // in-process and look like it was working.
+    require('./helpers/pdfBrowser').warm().then((did) => {
+        if (did) console.log('[RENDER] Chromium warmed and will be kept');
+    });
+
     server.listen(SOCKET, () => {
         // 0600: only the user running pm2 can talk to it. The default would
         // be whatever the umask says, and "whatever the umask says" is not an

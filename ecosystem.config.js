@@ -108,7 +108,27 @@ module.exports = {
         merge_logs: true,
         time: true,
 
-        env: { NODE_ENV: 'production' },
+        env: {
+            NODE_ENV: 'production',
+            // ── KEEP CHROMIUM, DO NOT CLOSE IT AFTER A QUIET MINUTE ──────
+            // The default is 60s, which is right inside the main process —
+            // an idle browser there is memory taken from 275 routes and 34
+            // crons. It is wrong here, and her first document proved it:
+            //
+            //   14:37  invoice both total 14211ms
+            //          launch-chromium 11844ms  (83%)
+            //
+            // A cold Chromium launch costs ELEVEN AND A HALF SECONDS on this
+            // box, so an invoice generated twice an hour paid it every time.
+            // This process exists only to render; it has nothing to be
+            // polite to. 0 means keep it.
+            PDF_BROWSER_IDLE_MS: '0',
+            // And use its OWN browser rather than looking for WhatsApp's,
+            // which lives in the other process and is not reachable from
+            // here. Stating it saves a pointless check per document and
+            // makes the intent obvious to whoever reads this next.
+            PDF_BROWSER: 'own',
+        },
         watch: false,
     }],
 };

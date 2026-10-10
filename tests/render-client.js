@@ -339,6 +339,113 @@ const okHandler = (req, res) => {
        /render job too large/.test(srv));
 }
 
+// ── G — THE REGRESSION HER FIRST REAL DOCUMENT FOUND ─────────────────────
+// 2026-10-10 14:37, minutes after the split went live:
+//
+//   [PDF-TIME] invoice both total 14211ms — launch-chromium 11844ms,
+//              load-page 1641ms, fit(1 passes) 231ms, render 468ms
+//
+// Eighty-three per cent of it was launching Chromium. The render process
+// never gets WhatsApp's browser — pdfBrowser.init() is only called from
+// index.js — so it uses its own, and pdfBrowser closed that one minute
+// after the last document. A cold launch costs ~11.5s on her VM, so an
+// invoice generated twice an hour paid it EVERY time: 2.7s before the
+// split, 14.2s after. The split made her occasional document five times
+// slower, and only production said so.
+//
+// Two things stop it, and both are checked here rather than in a comment.
+{
+    section('G — the renderer keeps its browser warm');
+
+    // `|| 60 * 1000` could not express "never close": Number('0') is falsy,
+    // so passing 0 silently meant sixty seconds — the exact value being
+    // overridden. That is why this reads the parsed result, not the env var.
+    const fresh = (env) => {
+        const before = { ...process.env };
+        Object.assign(process.env, env);
+        for (const k of Object.keys(require.cache)) {
+            if (/helpers\/pdfBrowser\.js$/.test(k)) delete require.cache[k];
+        }
+        const mod = require(path.join(ROOT, 'helpers/pdfBrowser'));
+        process.env = before;
+        return mod;
+    };
+
+    const dflt = fresh({ PDF_BROWSER_IDLE_MS: '' });
+    ck('inside the main process it still closes after a quiet minute',
+       dflt.IDLE_MS === 60000 && dflt.KEEP_WARM === false,
+       `${dflt.IDLE_MS} ${dflt.KEEP_WARM}`);
+
+    const warm = fresh({ PDF_BROWSER_IDLE_MS: '0' });
+    ck('0 means KEEP IT, not "fall back to sixty seconds"',
+       warm.KEEP_WARM === true, `IDLE_MS ${warm.IDLE_MS} KEEP_WARM ${warm.KEEP_WARM}`);
+    ck('  which is the bug: Number(\'0\') is falsy, so `|| 60000` silently ignored it',
+       warm.IDLE_MS === 0, String(warm.IDLE_MS));
+
+    const neg = fresh({ PDF_BROWSER_IDLE_MS: '-1' });
+    ck('  and so does anything below zero', neg.KEEP_WARM === true, String(neg.IDLE_MS));
+
+    // The pm2 app is what actually sets it, so an entry that drifts puts the
+    // eleven seconds straight back.
+    const eco = require(path.join(ROOT, 'ecosystem.config.js'));
+    const r = eco.apps.find((a) => a.name === 'jarvis-render');
+    ck('the render app tells it to keep the browser', r.env.PDF_BROWSER_IDLE_MS === '0',
+       JSON.stringify(r.env));
+    ck('  and to use its own, since WhatsApp\'s lives in the other process',
+       r.env.PDF_BROWSER === 'own', JSON.stringify(r.env));
+    const main = eco.apps.find((a) => a.name === 'jarvis');
+    ck('  while the MAIN process is left alone to close its idle browser',
+       !main.env.PDF_BROWSER_IDLE_MS,
+       'a Chromium kept resident there is memory taken from 275 routes and 34 crons');
+
+    // And the first document after a restart must not pay it either — a
+    // restart is exactly when she is most likely to be watching.
+    const srv = fs.readFileSync(path.join(ROOT, 'render-server.js'), 'utf8');
+    // ── THE LINE, NOT JUST THE TEXT ──────────────────────────────────────
+    // This was `/pdfBrowser'\)\.warm\(\)/.test(srv)` — a text match, which
+    // a mutation satisfied with DEAD CODE: prefixing `if (false) ` leaves
+    // the call written down and never executed, and the check stayed green.
+    // The same trap tests/pdf-queue.js solved by slicing the wrapper's body.
+    // So the STATEMENT is read: warming must not sit behind a condition.
+    const warmLine = (srv.split('\n').find((l) => /pdfBrowser'\)\.warm\(\)/.test(l)) || '');
+    ck('the renderer warms Chromium at boot', !!warmLine, 'no warm() call at all');
+    ck('  unconditionally, not behind a guard that can be flipped off',
+       !!warmLine && !/\bif\s*\(/.test(warmLine), warmLine.trim().slice(0, 90));
+    ck('  without awaiting it, so the socket accepts immediately',
+       !/await require\('\.\/helpers\/pdfBrowser'\)\.warm\(\)/.test(srv),
+       'a renderer slow to listen sends everything back in-process and looks like it is working');
+    ck('  and warming is exported to be called', typeof dflt.warm === 'function');
+
+    // ── AND THE BROWSER REALLY IS KEPT ───────────────────────────────────
+    // Everything above reads a CONSTANT. The mutation that deletes
+    // `if (KEEP_WARM) return;` from scheduleIdleClose leaves every one of
+    // them true and closes the browser anyway — it survived until this
+    // existed. So: drive it, and watch whether close() is called.
+    const driveIdle = async (env, waitMs) => {
+        const mod = fresh(env);
+        let closed = 0;
+        const page = { setViewport: async () => {}, setDefaultNavigationTimeout() {},
+            setDefaultTimeout() {}, close: async () => {}, render: async () => 'PDF' };
+        mod._resetForTests();
+        mod.init({ getBrowser: () => null,
+                   launch: async () => ({ newPage: async () => page, close: async () => { closed += 1; } }) });
+        await mod.withPage(async (pg) => pg.render());
+        await new Promise((r) => setTimeout(r, waitMs));
+        return { closed, open: mod.snapshot().ownOpen };
+    };
+
+    const kept = await driveIdle({ PDF_BROWSER_IDLE_MS: '0', PDF_BROWSER: 'own' }, 120);
+    ck('a renderer that was told to keep its browser STILL HAS IT',
+       kept.closed === 0 && kept.open === true,
+       `closed ${kept.closed}, open ${kept.open}`);
+
+    const dropped = await driveIdle({ PDF_BROWSER_IDLE_MS: '20', PDF_BROWSER: 'own' }, 150);
+    ck('  while a short idle still closes it, as the main process wants',
+       dropped.closed === 1, `closed ${dropped.closed}`);
+    ck('  so the difference is behaviour, not a constant nobody reads',
+       kept.closed !== dropped.closed, `${kept.closed} vs ${dropped.closed}`);
+}
+
 console.log(`\n  ${pass} passed, ${fail} failed`);
 if (failures.length) { console.log('\n  failed:'); failures.forEach((f) => console.log('    · ' + f)); }
 try { fs.rmSync(TMP, { recursive: true, force: true }); } catch (e) {}
