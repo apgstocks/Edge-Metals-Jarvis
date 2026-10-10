@@ -101,7 +101,7 @@ async function generateAndStoreLoadPdfs(load, opts = {}) {
     // later change can flag it as out of date rather than leaving the
     // operator to compare two tickets and guess which is right. See
     // PDF_TEMPLATE_VERSION in helpers/pdf.js.
-    const loads = await updateLoad(load.id, { pdf_drive_id: file.id, pdf_link: file.webViewLink, status: 'pdf_generated', pdf_template_version: PDF_TEMPLATE_VERSION, pdf_generated_at: new Date().toISOString(), ...weightsPatch, ...receiptPatch });
+    await updateLoad(load.id, { pdf_drive_id: file.id, pdf_link: file.webViewLink, status: 'pdf_generated', pdf_template_version: PDF_TEMPLATE_VERSION, pdf_generated_at: new Date().toISOString(), ...weightsPatch, ...receiptPatch });
 
     // The main ticket succeeded if we got here (a failure there throws), so
     // always clear its warnings — a successful Regenerate must wipe the
@@ -112,7 +112,24 @@ async function generateAndStoreLoadPdfs(load, opts = {}) {
         const withWarn = await setLoadWarnings(load.id, warnings);
         if (withWarn) return withWarn;
     }
-    return loads.find(l => l.id === load.id) || null;
+    // ── RE-READ, DO NOT REUSE updateLoad'S ARRAY (2026-10-10) ───────────
+    // Apsara: "when i try to print pos receipt,it is generating,but still
+    // this error is showing in my load."
+    //
+    // updateLoad returns the store as it stood at ITS write — which is
+    // BEFORE clearLoadWarnings ran. So a regenerate that fixed the problem
+    // handed the client back a load still wearing the warning it had just
+    // cleared on disk: the badge only went away on the next full reload,
+    // and until then the screen said the receipt had failed while the
+    // Print button happily opened it.
+    //
+    // Reading again after the clear costs one file read on a path that has
+    // already generated up to three PDFs and talked to Drive three times.
+    // The alternative — threading the cleared array through — makes the
+    // return value depend on which of two writes happened last, which is
+    // exactly the bug.
+    const { getLoad } = require('./loads');
+    return getLoad(load.id) || null;
 }
 
 module.exports = { generateAndStoreLoadPdfs };
