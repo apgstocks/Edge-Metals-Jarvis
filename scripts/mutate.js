@@ -1230,6 +1230,26 @@ const MUTATIONS = [
       find: '        const shared = sharedBrowser();\n        if (shared) {',
       to:   '        const shared = null;\n        if (shared) {' },
 
+    // ── "Fix it.why its taking more time to generate", 2026-10-10 ──────
+    // networkidle0 waits for load and THEN for 500ms in which no request
+    // starts. These documents have no network to go quiet, so that half
+    // second was pure waiting — about a third of load-page's 1641ms.
+    { name: 'wait: the renderer goes back to waiting for a quiet network',
+      file: 'render-server.js', suites: ['render-client'],
+      find: "            await page.setContent(html, { waitUntil: 'load' });",
+      to:   "            await page.setContent(html, { waitUntil: 'networkidle0' });" },
+    { name: 'wait: the two paths stop agreeing on how long to wait',
+      file: 'helpers/invoicePdf.js', suites: ['render-client'],
+      find: "        await page.setContent(html, { waitUntil: 'load' });",
+      to:   "        await page.setContent(html, { waitUntil: 'networkidle0' });" },
+    // The faster-still option that is WRONG: domcontentloaded can fire
+    // before the signature image is decoded, and her broker's document
+    // carries her signature.
+    { name: 'wait: faster still, by not waiting for the signature to decode',
+      file: 'render-server.js', suites: ['render-client'],
+      find: "            await page.setContent(html, { waitUntil: 'load' });",
+      to:   "            await page.setContent(html, { waitUntil: 'domcontentloaded' });" },
+
     // ── THE REGRESSION HER FIRST REAL DOCUMENT FOUND, 14:37 ─────────────
     //   [PDF-TIME] invoice both total 14211ms — launch-chromium 11844ms
     // The render process never gets WhatsApp's browser, so it uses its own —

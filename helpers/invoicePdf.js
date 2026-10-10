@@ -1195,7 +1195,24 @@ async function renderModesUnqueued(html, modes, opts) {
     try {
       return await require('./pdfBrowser').withPage(async (page) => {
         timer.mark('launch-chromium');
-        await page.setContent(html, { waitUntil: 'networkidle0' });
+        // ── 'load', NOT 'networkidle0' (2026-10-10) ──────────────────
+        // Apsara, on a 14.2s invoice: "Fix it.why its taking more time
+        // to generate". Her own [PDF-TIME] line said load-page was 1641ms
+        // of it, and about 500ms of that was this one word.
+        //
+        // networkidle0 means "wait for load, THEN for 500ms during which
+        // no request starts". These documents have no network to go
+        // quiet: every one was checked — no <link>, no <script>, no
+        // @font-face, no url(), no http(s) anywhere. The only subresource
+        // is the signature, an <img> with a data: URL.
+        //
+        // 'load' waits for exactly the same subresources — the signature
+        // included — and skips only the arbitrary half-second afterwards.
+        // So this is not "wait for less"; it is "stop waiting for a
+        // network that does not exist". domcontentloaded WOULD be wait-
+        // for-less, and would be wrong: it can fire before that image is
+        // decoded, and her broker's document carries her signature.
+        await page.setContent(html, { waitUntil: 'load' });
         timer.mark('load-page');
         const out = {};
         for (const mode of modes) {

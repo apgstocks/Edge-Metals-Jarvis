@@ -446,6 +446,61 @@ const okHandler = (req, res) => {
        kept.closed !== dropped.closed, `${kept.closed} vs ${dropped.closed}`);
 }
 
+// ── H — THE HALF-SECOND SPENT WAITING FOR NOTHING ────────────────────────
+// Apsara, on a 14.2s invoice: "Fix it.why its taking more time to
+// generate". Her [PDF-TIME] line put 1641ms in load-page, and roughly 500ms
+// of that was one word.
+//
+// networkidle0 means "wait for load, THEN for 500ms in which no request
+// starts". These documents have no network to go quiet — no <link>, no
+// <script>, no @font-face, no url(), no http(s) anywhere in the template.
+// So the wait could never end sooner than half a second, and never had
+// anything to wait for.
+{
+    section('H — load, not networkidle0, and not domcontentloaded either');
+    const inv = fs.readFileSync(path.join(ROOT, 'helpers/invoicePdf.js'), 'utf8');
+    const srv = fs.readFileSync(path.join(ROOT, 'render-server.js'), 'utf8');
+
+    for (const [who, src] of [['the render process', srv], ['the in-process fallback', inv]]) {
+        const call = (src.match(/setContent\(html, \{[^}]*\}\)/) || [''])[0];
+        ck(`${who} waits for load`, /waitUntil: 'load'/.test(call), call);
+        ck(`  and no longer for a network that cannot go quiet`,
+           !/waitUntil: 'networkidle0'/.test(call), call);
+        // ── AND NOT domcontentloaded ─────────────────────────────────────
+        // That WOULD be waiting for less, and it would be wrong: the
+        // signature is an <img> with a data: URL, and domcontentloaded can
+        // fire before it is decoded. Her broker's document carries her
+        // signature, so "faster" that drops it is not faster.
+        ck(`  nor domcontentloaded, which could drop the signature`,
+           !/domcontentloaded/.test(call), call);
+    }
+
+    // The two paths must agree, or the document depends on which rendered it
+    // — the same reason PAGE and FIT are stated once.
+    const callOf = (src) => (src.match(/setContent\(html, \{[^}]*\}\)/) || [''])[0];
+    ck('both paths wait the same way', callOf(srv) === callOf(inv),
+       `${callOf(srv)}  vs  ${callOf(inv)}`);
+
+    // The claim the change rests on, checked rather than remembered: if a
+    // template ever gains a stylesheet, a web font or a remote image, 'load'
+    // still covers it — but it is worth knowing the day it happens.
+    // ── SCAN THE CODE, NOT THE PROSE ABOUT IT ────────────────────────────
+    // This first scanned the whole file and failed immediately — on the
+    // comment I had just written, which says "no url(), no http(s)". A check
+    // that a note explaining it can break is a check that will be deleted by
+    // whoever hits it next, so comments come out before the scan.
+    const codeOnly = inv.split('\n')
+        .filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l))
+        .join('\n');
+    const subresource = /<link|<script|@font-face|url\(|https?:\/\//;
+    ck('the invoice template still pulls nothing over the network',
+       !subresource.test(codeOnly),
+       (codeOnly.match(subresource) || [''])[0]
+       + ' — a template that gained a remote resource makes this change worth re-reading');
+    ck('  its only subresource is the signature, inline as a data: URL',
+       /signatureDataUrl\(\)/.test(inv));
+}
+
 console.log(`\n  ${pass} passed, ${fail} failed`);
 if (failures.length) { console.log('\n  failed:'); failures.forEach((f) => console.log('    · ' + f)); }
 try { fs.rmSync(TMP, { recursive: true, force: true }); } catch (e) {}
