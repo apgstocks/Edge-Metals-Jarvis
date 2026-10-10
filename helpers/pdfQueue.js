@@ -47,29 +47,70 @@ const MAX_WAITING = 12;
 // ~8s for a slow BOL; this is for a WEDGE, not a slow document.
 const JOB_TIMEOUT_MS = 90 * 1000;
 
-let busy = false;
+// ── HOW MANY AT ONCE, AND WHY IT IS NO LONGER ONE ───────────────────────
+// Apsara, 2026-10-10: "what if many people share the website and try to
+// download simulatenously", then "i want everything to handle fast-its a
+// quick business".
+//
+// This file serialised to ONE render for a specific, correct reason, written
+// at the top: each document launched its OWN Chromium, 300–400 MB a time, and
+// two at once asked a small VM for the better part of a gigabyte.
+//
+// THAT REASON EXPIRED ON 2026-10-03. helpers/pdfBrowser.js stopped launching a
+// browser per document and started opening a TAB in the Chromium WhatsApp
+// already runs — tens of MB, not hundreds. The serialisation stayed because
+// nobody revisited it, so every extra person pressing Download has been
+// waiting behind a limit that was protecting against a cost that no longer
+// exists. With a ~5s document and twelve in the line, the last person waited
+// a minute for no reason.
+//
+// THREE, NOT UNLIMITED. Tabs are cheap, not free, and pm2's
+// max_memory_restart is still the thing that takes WhatsApp down with it. The
+// number is deliberately small and deliberately an env var: PDF_CONCURRENCY=1
+// restores the old behaviour exactly, with no deploy.
+//
+// AND IT DROPS BACK TO ONE WHEN WE ARE ON OUR OWN CHROMIUM. If WhatsApp's
+// browser has stalled, pdfBrowser falls back to launching ours — and then a
+// render really is a heavyweight thing again. Running three of those
+// concurrently on a small VM is the 2026-09-18 outage rebuilt by hand. So the
+// limit is read fresh for every scheduling decision rather than fixed at boot.
+const LIMIT = Math.max(1, Number(process.env.PDF_CONCURRENCY) || 3);
+
+function limitNow() {
+    if (LIMIT === 1) return 1;
+    try {
+        // Lazy require: pdfQueue must not need pdfBrowser to exist, so the
+        // queue keeps working in the suites that test it on its own.
+        const snap = require('./pdfBrowser').snapshot();
+        if (snap && snap.sharedStalled) return 1;
+    } catch (e) { /* no browser module here — keep the configured limit */ }
+    return LIMIT;
+}
+
+let running = 0;
 const waiting = [];
 
 // Stats, so a "why was that slow" question has an answer other than a guess.
-const stats = { ran: 0, queued: 0, refused: 0, timedOut: 0, maxDepth: 0 };
+const stats = { ran: 0, queued: 0, refused: 0, timedOut: 0, maxDepth: 0, maxRunning: 0 };
 
-function depth() { return waiting.length + (busy ? 1 : 0); }
+function depth() { return waiting.length + running; }
 
 function next() {
-    if (busy || !waiting.length) return;
+    if (running >= limitNow() || !waiting.length) return;
     const job = waiting.shift();
-    busy = true;
+    running += 1;
+    if (running > stats.maxRunning) stats.maxRunning = running;
 
     let settled = false;
     const release = (why) => {
         if (settled) return;
         settled = true;
         if (why === 'timeout') stats.timedOut += 1;
-        busy = false;
+        running -= 1;
         // setImmediate, not a direct call: starting the next job inside this
         // one's own resolution would grow the stack by one frame per document
         // on a busy day, and the failure would look like a Chromium problem.
-        setImmediate(next);
+        setImmediate(drain);
     };
 
     // ── THE TIMEOUT IS PER JOB, NOT A MODULE CONSTANT ────────────────────
@@ -109,7 +150,7 @@ function run(fn, label = 'document', opts = {}) {
             return reject(e);
         }
         stats.ran += 1;
-        if (busy) {
+        if (running >= limitNow()) {
             stats.queued += 1;
             // Logged, because "it took nine seconds" and "it waited six of
             // them behind someone else" are different answers to the same
@@ -120,14 +161,26 @@ function run(fn, label = 'document', opts = {}) {
                        label: String(label || 'document').slice(0, 60),
                        timeoutMs: opts && opts.timeoutMs });
         if (depth() > stats.maxDepth) stats.maxDepth = depth();
-        next();
+        drain();
     });
 }
 
 // For tests and for an admin route that wants to say how busy this has been.
-function snapshot() { return { ...stats, busy, waiting: waiting.length }; }
+// Start as many as the limit allows. next() takes one; a release can free a
+// slot while the limit has ALSO risen (the shared browser came back), and a
+// single next() would leave the queue running below capacity until the next
+// document happened to arrive.
+function drain() {
+    let guard = MAX_WAITING + LIMIT + 1;   // cannot spin: every pass shifts or stops
+    while (guard-- > 0 && waiting.length && running < limitNow()) next();
+}
+
+function snapshot() {
+    return { ...stats, running, busy: running > 0, limit: limitNow(),
+             configuredLimit: LIMIT, waiting: waiting.length };
+}
 function reset() {
-    busy = false; waiting.length = 0;
+    running = 0; waiting.length = 0;
     Object.assign(stats, { ran: 0, queued: 0, refused: 0, timedOut: 0, maxDepth: 0 });
 }
 

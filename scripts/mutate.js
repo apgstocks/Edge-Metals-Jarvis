@@ -1197,6 +1197,62 @@ const MUTATIONS = [
       find: "    { re: /\\b(ntg|tql|schneider)\\b/i, postable: true,",
       to:   "    { re: /\\b(ntg|tql|schneider|jio|sher)\\b/i, postable: true," },
 
+    // ── "Navigation timeout of 30000 ms exceeded", 2026-10-10 ───────────
+    // Every document renders in a tab of WhatsApp's Chromium. When that
+    // browser accepts the tab and then stops answering, isConnected() still
+    // says true — so the old code chose it for ever and every invoice,
+    // packing list, BOL, proforma and ledger export failed identically with
+    // no path back.
+    { name: 'pdf: a wedged WhatsApp browser is chosen again anyway',
+      file: 'helpers/pdfBrowser.js', suites: ['pdf-browser'],
+      find: '    if (sharedIsCoolingOff()) return null;',
+      to:   '    if (false) return null;' },
+    { name: 'pdf: a failure on the shared tab is not retried on our own browser',
+      file: 'helpers/pdfBrowser.js', suites: ['pdf-browser'],
+      find: '                if (page) { markStalled(e); if (opts.noRetry) throw e; stats.retried += 1; }',
+      to:   '                if (page) { markStalled(e); throw e; }' },
+    // The shared tab must fail FAST — ten seconds, not thirty. Every document
+    // is inline HTML, so a tab that has not finished is stuck, not slow.
+    { name: 'pdf: the shared tab goes back to the 30s default leash',
+      file: 'helpers/pdfBrowser.js', suites: ['pdf-browser'],
+      find: '                await setLeash(page, SHARED_MS);',
+      to:   '                ;' },
+    // The tab must be closed even when the render failed, or a wedged browser
+    // also leaks tabs in the one process that has to stay up.
+    { name: 'pdf: the tab is left open when the render failed',
+      file: 'helpers/pdfBrowser.js', suites: ['pdf-browser'],
+      find: '                if (page) { try { await page.close(); } catch { /* tab already gone */ } }\n            }\n        }\n\n        // ── SECOND CHOICE',
+      to:   '                ;\n            }\n        }\n\n        // ── SECOND CHOICE' },
+    // And the fallback must not quietly become the normal path — that would
+    // undo the whole reason PDFs moved into WhatsApp's browser on 3 Oct.
+    { name: 'pdf: every document uses our own Chromium, healthy shared or not',
+      file: 'helpers/pdfBrowser.js', suites: ['pdf-browser'],
+      find: '        const shared = sharedBrowser();\n        if (shared) {',
+      to:   '        const shared = null;\n        if (shared) {' },
+
+    // ── "i want everything to handle fast-its a quick business" ─────────
+    // The queue ran ONE document at a time because each used to launch its own
+    // 300–400MB Chromium. Documents became TABS on 2026-10-03 and the limit
+    // was never revisited, so the twelfth person in the line waited minutes
+    // for a cost that no longer existed.
+    { name: 'pdf queue: back to one document at a time',
+      file: 'helpers/pdfQueue.js', suites: ['pdf-queue'],
+      find: 'const LIMIT = Math.max(1, Number(process.env.PDF_CONCURRENCY) || 3);',
+      to:   'const LIMIT = 1;' },
+    // Tabs are cheap; our OWN Chromium is not. Three of those at once on a
+    // small VM is the 2026-09-18 outage rebuilt by hand.
+    { name: 'pdf queue: three heavy renders at once when the shared browser is down',
+      file: 'helpers/pdfQueue.js', suites: ['pdf-queue'],
+      find: '        if (snap && snap.sharedStalled) return 1;',
+      to:   '        if (false) return 1;' },
+    // A release frees one slot, but the LIMIT can also rise (the shared
+    // browser came back). Starting only one job would leave the queue running
+    // below capacity until the next document happened to arrive.
+    { name: 'pdf queue: only one job starts even when several slots are free',
+      file: 'helpers/pdfQueue.js', suites: ['pdf-queue'],
+      find: '    while (guard-- > 0 && waiting.length && running < limitNow()) next();',
+      to:   '    if (waiting.length && running < limitNow()) next();' },
+
     // ── THE BOOKS PAGE, REDESIGNED 2026-10-10 ───────────────────────────
     // Apsara: "Design the books page even more better" / "Right now it looks
     // ugly and not friendly."

@@ -56,8 +56,22 @@ process.on('exit', (code) => {
 
 (async () => {
 
-// ── A. One at a time ────────────────────────────────────────────────────────
-section('A. only one job runs at once');
+// ── A. BOUNDED, NOT SERIAL ──────────────────────────────────────────────────
+// This section used to be called "only one job runs at once" and asserted
+// peak concurrency of exactly 1. That was right while every document launched
+// its OWN 300–400MB Chromium — the whole reason this file exists (Apsara,
+// 2026-09-18: "parallel simulatenous connection should be allowed in website
+// and document").
+//
+// helpers/pdfBrowser.js stopped launching a browser per document on
+// 2026-10-03; a document is a TAB. So on 2026-10-10 — "i want everything to
+// handle fast-its a quick business" — the limit went to three.
+//
+// The PROPERTY this section protects has not changed and is the one that
+// matters: the number of simultaneous renders is BOUNDED and everything
+// submitted still comes back. Only the bound moved, so the check reads it
+// from the queue instead of pinning 1.
+section('A. renders are bounded, and nothing is dropped');
 q.reset();
 {
     let running = 0, peak = 0;
@@ -67,13 +81,19 @@ q.reset();
         running -= 1;
         return 'done';
     };
-    const results = await Promise.all([q.run(job, 'a'), q.run(job, 'b'), q.run(job, 'c')]);
-    ck('THREE AT ONCE NEVER OVERLAP', peak === 1, `peak concurrency was ${peak}`);
-    ck('  and all three still succeed', results.join(',') === 'done,done,done',
+    const lim = q.snapshot().limit;
+    const n = lim + 2;                       // two more than can run together
+    const results = await Promise.all(
+        Array.from({ length: n }, (_, i) => q.run(job, `a${i}`)));
+    ck('NEVER MORE THAN THE LIMIT AT ONCE', peak === lim, `peak ${peak}, limit ${lim}`);
+    ck('  and it is more than one, so the second person is not simply waiting',
+       lim > 1 || process.env.PDF_CONCURRENCY === '1', `limit ${lim}`);
+    ck('  and every one of them still succeeds', results.every((r) => r === 'done'),
        'the queue dropped work instead of delaying it — she pressed Generate and got nothing');
-    ck('  two of them had to wait', q.snapshot().queued === 2, JSON.stringify(q.snapshot()));
+    ck('  the ones over the limit had to wait', q.snapshot().queued === n - lim,
+       JSON.stringify(q.snapshot()));
     ck('  and the queue is empty afterwards',
-       q.snapshot().busy === false && q.snapshot().waiting === 0, JSON.stringify(q.snapshot()));
+       q.snapshot().running === 0 && q.snapshot().waiting === 0, JSON.stringify(q.snapshot()));
 }
 
 // ── B. Order ────────────────────────────────────────────────────────────────
@@ -128,18 +148,34 @@ q.reset();
     // NOTHING — next() closes over the internal binding — so the wedge was
     // never actually stepped over and the check failed for the right reason.
     // Ninety seconds cannot be waited out in a suite, so the seam is real.
-    let wedgedFinished = false;
-    const wedged = q.run(() => new Promise((r) => setTimeout(() => { wedgedFinished = true; r('late'); }, 400)),
-                         'wedged', { timeoutMs: 60 });
+    // ── EVERY SLOT WEDGED, NOT JUST ONE ──────────────────────────────────
+    // With one render at a time, a single wedged job blocked everything and
+    // one was enough to test with. Since 2026-10-10 the queue runs `limit`
+    // at once, so ONE wedge leaves free slots and the job behind it sails
+    // through without the timeout ever mattering — the check passed while
+    // proving nothing, and `timedOut` was read before the timer had fired.
+    // Saturating is what reproduces the real situation.
+    let wedgedFinished = 0;
+    const lim = q.snapshot().limit;
+    const wedges = Array.from({ length: lim }, (_, i) =>
+        q.run(() => new Promise((r) => setTimeout(() => { wedgedFinished += 1; r('late'); }, 400)),
+              `wedged${i}`, { timeoutMs: 60 }));
     await sleep(20);
+    ck('every slot is held by a wedged job', q.snapshot().running === lim,
+       JSON.stringify(q.snapshot()));
     const behind = q.run(async () => 'got through', 'behind');
 
-    const got = await Promise.race([behind, sleep(300).then(() => 'STILL WAITING')]);
+    const got = await Promise.race([behind, sleep(500).then(() => 'STILL WAITING')]);
     ck('a document behind a wedged one still generates', got === 'got through',
-       'it waited behind a job that never finished — the hang this queue could have caused');
-    ck('  and the wedge is counted, not hidden', q.snapshot().timedOut >= 1, JSON.stringify(q.snapshot()));
-    ck('  while the stuck job is left to finish on its own', wedgedFinished === false);
-    await wedged;   // let it land so it does not leak into the next section
+       'it waited behind jobs that never finished — the hang this queue could have caused');
+    ck('  and the wedge is counted, not hidden', q.snapshot().timedOut >= lim,
+       JSON.stringify(q.snapshot()));
+    // Not killed — the queue does not own the browser those jobs are driving
+    // and cannot safely tear one down. It only stops them being everyone
+    // else's problem. Zero FINISHED so far is what says they are still going.
+    ck('  while the stuck jobs are left to finish on their own', wedgedFinished === 0,
+       String(wedgedFinished));
+    await Promise.all(wedges);   // let it land so it does not leak into the next section
 }
 
 // ── E. The line has a length ────────────────────────────────────────────────
@@ -151,7 +187,15 @@ q.reset();
     const held = [];
     const slow = () => new Promise((r) => held.push(r));
     const runs = [];
-    for (let i = 0; i < q.MAX_WAITING + 1; i++) runs.push(q.run(slow, `j${i}`).catch((e) => e));
+    // ── FILL THE LINE FROM THE QUEUE'S OWN NUMBERS ───────────────────────
+    // This used to submit MAX_WAITING + 1 and expect the next to be refused,
+    // which was right while exactly ONE job ran at a time. Since 2026-10-10
+    // the queue runs `limit` concurrently (3 by default), so the running ones
+    // do not occupy the WAITING line and the refusal arrives later. Reading
+    // the limit from snapshot() keeps this correct at any PDF_CONCURRENCY
+    // instead of pinning the arithmetic of one setting.
+    const lim = q.snapshot().limit;
+    for (let i = 0; i < lim + q.MAX_WAITING; i++) runs.push(q.run(slow, `j${i}`).catch((e) => e));
     // One more than fits.
     const overflow = await q.run(slow, 'one too many').catch((e) => e);
     ck('past the limit it REFUSES rather than queueing for ever',
@@ -172,6 +216,139 @@ q.reset();
     await Promise.all(runs);
     ck('  and the whole backlog drains', q.snapshot().waiting === 0 && q.snapshot().busy === false,
        JSON.stringify(q.snapshot()));
+}
+
+// ── E2. MANY PEOPLE DOWNLOADING AT ONCE ─────────────────────────────────────
+// Apsara, 2026-10-10: "what if many people share the website and try to
+// download simulatenously" and "i want everything to handle fast-its a quick
+// business".
+//
+// This file serialised to ONE render because each document launched its own
+// 300–400MB Chromium. helpers/pdfBrowser.js stopped doing that on 2026-10-03
+// — a document is a TAB now — so the limit was protecting against a cost that
+// no longer exists, and the twelfth person in the line was waiting minutes
+// for nothing.
+section('E2. more than one document renders at a time');
+q.reset();
+{
+    const held = [];
+    const slow = () => new Promise((r) => held.push(r));
+    const runs = [];
+    for (let i = 0; i < 6; i++) runs.push(q.run(slow, `c${i}`).catch((e) => e));
+    await sleep(20);
+    const snap = q.snapshot();
+    ck('three documents render at once, not one', snap.running === 3, JSON.stringify(snap));
+    ck('  and the rest wait rather than being refused', snap.waiting === 3, JSON.stringify(snap));
+    ck('  the limit is reported, so "why was that slow" has an answer',
+       snap.limit === 3 && snap.configuredLimit === 3, JSON.stringify(snap));
+    while (held.length) held.shift()('done');
+    for (let i = 0; i < 200 && (held.length || q.snapshot().waiting || q.snapshot().running); i++) {
+        while (held.length) held.shift()('done');
+        await sleep(5);
+    }
+    await Promise.all(runs);
+    ck('  and every one of them finishes', q.snapshot().waiting === 0 && q.snapshot().running === 0,
+       JSON.stringify(q.snapshot()));
+    ck('  the high-water mark is recorded', q.snapshot().maxRunning === 3, JSON.stringify(q.snapshot()));
+}
+
+// ── E3. AND IT DROPS BACK TO ONE WHEN WE ARE ON OUR OWN CHROMIUM ────────────
+// The tabs are only cheap while they are tabs. If WhatsApp's browser has
+// stalled, pdfBrowser falls back to launching OUR Chromium — and three of
+// those at once on a small VM is the 2026-09-18 outage rebuilt by hand.
+section('E3. a stalled shared browser makes it serial again');
+q.reset();
+{
+    const pb = require(path.join(ROOT, 'helpers/pdfBrowser'));
+    // Put pdfBrowser into the stalled state the honest way — through a failed
+    // render on a browser that hands out a tab and then hangs — rather than
+    // poking at its internals, which would stop testing the real path the
+    // moment that state is stored differently.
+    const hangPage = { setViewport: async () => {}, setDefaultNavigationTimeout() {},
+        setDefaultTimeout() {}, close: async () => {},
+        render: async () => { const e = new Error('Navigation timeout'); e.name = 'TimeoutError'; throw e; } };
+    const okPage = { setViewport: async () => {}, setDefaultNavigationTimeout() {},
+        setDefaultTimeout() {}, close: async () => {}, render: async () => 'PDF' };
+    pb._resetForTests();
+    pb.init({ getBrowser: () => ({ isConnected: () => true, newPage: async () => hangPage }),
+              launch: async () => ({ newPage: async () => okPage }) });
+    await pb.withPage(async (pg) => pg.render());
+    ck('the shared browser is now marked stalled', pb.snapshot().sharedStalled === true);
+
+    const held = [];
+    const slow = () => new Promise((r) => held.push(r));
+    const runs = [];
+    for (let i = 0; i < 4; i++) runs.push(q.run(slow, `s${i}`).catch((e) => e));
+    await sleep(20);
+    ck('  so the queue renders ONE at a time again', q.snapshot().running === 1,
+       JSON.stringify(q.snapshot()));
+    ck('  and says so', q.snapshot().limit === 1 && q.snapshot().configuredLimit === 3,
+       JSON.stringify(q.snapshot()));
+    for (let i = 0; i < 200 && (held.length || q.snapshot().waiting || q.snapshot().running); i++) {
+        while (held.length) held.shift()('done');
+        await sleep(5);
+    }
+    await Promise.all(runs);
+    ck('  and the backlog still drains', q.snapshot().waiting === 0 && q.snapshot().running === 0,
+       JSON.stringify(q.snapshot()));
+    pb._resetForTests();
+    pb.init({ getBrowser: () => null, launch: (o) => require('puppeteer').launch(o) });
+}
+
+// ── E4. WHEN THE SHARED BROWSER COMES BACK ──────────────────────────────────
+// The case the drain LOOP exists for, and the only one that distinguishes it
+// from starting a single job per release.
+//
+// While WhatsApp's Chromium is stalled the limit is 1, so a backlog builds
+// behind one render. When the cooldown passes the limit goes back to 3 — and
+// the next release frees ONE slot while THREE are now allowed. Starting one
+// job per release would leave the queue running at a third of capacity until
+// another document happened to arrive, which on a quiet afternoon could be
+// minutes. She would see the backlog crawl and nothing in the log would say
+// why.
+section('E4. the backlog catches up the moment capacity returns');
+q.reset();
+{
+    const pb = require(path.join(ROOT, 'helpers/pdfBrowser'));
+    const hangPage = { setViewport: async () => {}, setDefaultNavigationTimeout() {},
+        setDefaultTimeout() {}, close: async () => {},
+        render: async () => { const e = new Error('Navigation timeout'); e.name = 'TimeoutError'; throw e; } };
+    pb._resetForTests();
+    pb.init({ getBrowser: () => ({ isConnected: () => true, newPage: async () => hangPage }),
+              launch: async () => ({ newPage: async () => ({ setViewport: async () => {},
+                  setDefaultNavigationTimeout() {}, setDefaultTimeout() {},
+                  close: async () => {}, render: async () => 'PDF' }) }) });
+    await pb.withPage(async (pg) => pg.render());
+    ck('the shared browser is stalled, so the limit is 1', q.snapshot().limit === 1);
+
+    const held = [];
+    const slow = () => new Promise((r) => held.push(r));
+    const runs = [];
+    for (let i = 0; i < 4; i++) runs.push(q.run(slow, `b${i}`).catch((e) => e));
+    await sleep(20);
+    ck('  one renders, three wait', q.snapshot().running === 1 && q.snapshot().waiting === 3,
+       JSON.stringify(q.snapshot()));
+
+    // The cooldown passes — WhatsApp's browser is usable again.
+    pb._resetForTests();
+    pb.init({ getBrowser: () => null, launch: async () => ({ newPage: async () => ({}) }) });
+    ck('  capacity is back', q.snapshot().limit === 3, JSON.stringify(q.snapshot()));
+
+    // ONE job finishes. That frees one slot while THREE are now allowed.
+    held.shift()('done');
+    await sleep(30);
+    ck('the whole backlog starts, not one job per finished document',
+       q.snapshot().running === 3, JSON.stringify(q.snapshot()));
+
+    for (let i = 0; i < 200 && (held.length || q.snapshot().waiting || q.snapshot().running); i++) {
+        while (held.length) held.shift()('done');
+        await sleep(5);
+    }
+    await Promise.all(runs);
+    ck('  and it drains', q.snapshot().waiting === 0 && q.snapshot().running === 0,
+       JSON.stringify(q.snapshot()));
+    pb._resetForTests();
+    pb.init({ getBrowser: () => null, launch: (o) => require('puppeteer').launch(o) });
 }
 
 // ── F. IT DOES NOT MAKE THE APP SINGLE-USER ─────────────────────────────────

@@ -35,6 +35,117 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
     const idx = fs.readFileSync(path.join(ROOT, 'index.js'), 'utf8');
     ck('index.js hands WhatsApp\'s browser to pdfBrowser', /pdfBrowser'\)\.init\(\{ getBrowser: \(\) => client\.pupBrowser \}\)/.test(idx));
 
+    // ══════════════════════════════════════════════════════════════════════
+    // ── A CONNECTED BROWSER THAT DOES NOT ANSWER ──────────────────────────
+    // Apsara, 2026-10-10: "Navigation timeout of 30000 ms exceeded when i
+    // click download invoice."
+    //
+    // WhatsApp's Chromium hands out the tab and then stops responding —
+    // reconnecting, throttled, or wedged. isConnected() still says true, so
+    // sharedBrowser() kept choosing it and EVERY document failed the same
+    // way, for ever, with no path back but a human noticing and setting
+    // PDF_BROWSER=own.
+    //
+    // Fake browsers, deliberately: this is about the DECISION pdfBrowser
+    // makes, and it has to be checked on the machines that cannot start
+    // Chromium too — which is every machine this suite runs on today, since
+    // the real-Chromium half below skips. The bug would have shipped behind
+    // that skip.
+    // ══════════════════════════════════════════════════════════════════════
+    {
+        const pb = require(path.join(ROOT, 'helpers/pdfBrowser'));
+        const mkPage = ({ hang = false } = {}) => ({
+            closed: false,
+            setViewport: async () => {},
+            leash: null,
+            setDefaultNavigationTimeout(ms) { this.leash = ms; },
+            setDefaultTimeout(ms) { this.leash = ms; },
+            // A hanging tab: the render never finishes and puppeteer throws
+            // its TimeoutError at whatever leash it was given.
+            render: async () => { if (hang) { const e = new Error('Navigation timeout of 10000 ms exceeded'); e.name = 'TimeoutError'; throw e; } return 'PDF'; },
+            close: async function () { this.closed = true; },
+        });
+        const mkBrowser = (opts = {}) => {
+            const pages = [];
+            return { pages, isConnected: () => true,
+                newPage: async () => { const pg = mkPage(opts); pages.push(pg); return pg; } };
+        };
+
+        console.log('\n=== a wedged WhatsApp browser falls back instead of failing ===');
+        const wedged = mkBrowser({ hang: true });
+        const ours = mkBrowser({ hang: false });
+        // Stand in for puppeteer.launch's result without launching anything.
+        pb._resetForTests();
+        pb.init({ getBrowser: () => wedged, launch: async () => ours });
+
+        try {
+            // Caught, not awaited bare: a mutation that stops the retry makes
+            // withPage THROW, and an uncaught throw here crashes the file
+            // instead of naming the property that was lost.
+            let out = null, threw = null;
+            try { out = await pb.withPage(async (page) => page.render()); } catch (e) { threw = e; }
+            ck('a document still comes back when WhatsApp\'s browser hangs',
+               out === 'PDF', threw ? ('threw: ' + threw.message) : String(out));
+            ck('  it was tried on WhatsApp\'s browser first', wedged.pages.length === 1,
+               String(wedged.pages.length));
+            ck('  and the tab there was CLOSED, not leaked into the one process that must stay up',
+               !!wedged.pages[0] && wedged.pages[0].closed === true,
+               JSON.stringify(!!wedged.pages[0]));
+            ck('  then rendered on our own Chromium', ours.pages.length === 1);
+            const snap = pb.snapshot();
+            ck('  and the stall is recorded, so "why was that slow" has an answer',
+               snap.sharedStalled === true && /timeout/i.test(snap.sharedStalledWhy || ''),
+               JSON.stringify(snap.sharedStalledWhy));
+
+            // ── AND THE NEXT DOCUMENT DOES NOT PAY THE SAME TEN SECONDS ───
+            // Without the cooldown every invoice would re-test the wedged
+            // browser. With five people downloading at once that is five more
+            // ten-second waits for nothing.
+            const before = wedged.pages.length;
+            const out2 = await pb.withPage(async (page) => page.render());
+            ck('the NEXT document skips the wedged browser entirely',
+               out2 === 'PDF' && wedged.pages.length === before,
+               `${before} → ${wedged.pages.length}`);
+            ck('  going straight to the one that works', ours.pages.length === 2);
+
+            // ── A HEALTHY SHARED BROWSER IS STILL PREFERRED ───────────────
+            // The whole point of 2026-10-03 was to stop launching a 300–400MB
+            // Chromium per document. The fallback must not quietly become the
+            // normal path.
+            pb._resetForTests();
+            const healthy = mkBrowser({ hang: false });
+            pb.init({ getBrowser: () => healthy, launch: async () => ours });
+            let out3 = null;
+            try { out3 = await pb.withPage(async (page) => page.render()); } catch (e) { out3 = 'threw: ' + e.message; }
+            ck('a working WhatsApp browser is still used, not our own',
+               out3 === 'PDF' && healthy.pages.length === 1 && ours.pages.length === 2,
+               `shared ${healthy.pages.length} own ${ours.pages.length} out ${out3}`);
+            ck('  and its tab is closed too',
+               !!healthy.pages[0] && healthy.pages[0].closed === true,
+               JSON.stringify(!!healthy.pages[0]));
+
+            // ── APPLIED, not merely DECLARED ─────────────────────────────
+            // This first asserted `pb.SHARED_MS === 10000` — the value of a
+            // constant, which stays true when the line that USES it is
+            // deleted. The mutation "the shared tab goes back to the 30s
+            // default leash" survived it. What matters is that the tab was
+            // handed the shorter leash.
+            ck('the shared tab is actually GIVEN the short leash',
+               !!wedged.pages[0] && wedged.pages[0].leash === pb.SHARED_MS,
+               wedged.pages[0] ? String(wedged.pages[0].leash) : 'no shared tab was opened at all');
+            ck('  which is 10 seconds, not puppeteer\'s 30',
+               pb.SHARED_MS === 10000, String(pb.SHARED_MS));
+            ck('  and our own Chromium keeps the full one, being the last resort',
+               !!ours.pages[0] && ours.pages[0].leash === null,
+               ours.pages[0] ? String(ours.pages[0].leash) : 'our own browser was never used');
+        } finally {
+            pb._resetForTests();
+            // Put the real launcher back, or every suite after this one in the
+            // same process renders into a fake browser.
+            pb.init({ getBrowser: () => null, launch: (o) => require('puppeteer').launch(o) });
+        }
+    }
+
     let waPup;
     try { waPup = require(path.join(ROOT, 'node_modules/whatsapp-web.js/node_modules/puppeteer')); }
     catch { waPup = require('puppeteer'); }
