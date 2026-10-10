@@ -29,8 +29,34 @@ const wt = (n, unit) => (n === null || n === undefined || n === '') ? '—'
     : Number(n).toLocaleString('en-US', { maximumFractionDigits: 3 }) + (unit ? ' ' + unit : '');
 const esc = (s) => String(s == null ? '' : s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 const num = (v) => { const n = Number(v); return Number.isFinite(n) ? n : null; };
+// Blank stays blank. num(null) is 0 — Number(null) === 0 — and a contamination
+// claim, which has no shortage, printed "Short: 0 MT" and had its rate hidden as
+// "not reconciling" with 0 × rate. Found by tests/claims-assess.js, 2026-10-10.
+const nnum = (v) => (v === null || v === undefined || v === '' ? null : num(v));
+// What the supplier's rate is applied to: the shortage on a weight claim, the
+// weight that was not metal on a contamination claim. A downgrade is a price
+// gap, so there is no quantity his rate applies to and the amount is agreed.
+const basisOf = (c) => {
+    const a = c.assessment || 'weight';
+    if (a === 'contamination') return nnum(c.contaminated_weight);
+    if (a === 'grade') return null;
+    return nnum(c.shortage);
+};
 
 const SENDABLE = ['verified', 'recovery_raised', 'settled'];
+
+// ── FOR THE SUPPLIER, AND ONLY THE SUPPLIER (2026-10-10) ─────────────────
+// Apsara: "dont include customer info in this. i want claim report to be sent
+// to supplier only. dont make it too much detailed". So there is ONE version,
+// the one a supplier receives: no customer, no sell rate, no remarks, no
+// document names — and for a contamination or downgrade claim, one short line
+// saying what it is, not a table of everything on file.
+const FINDING_LABEL = { dirt: 'Dirt / soil', rubber_plastic: 'Rubber / plastic', iron_attached: 'Iron or steel attached',
+    oil_moisture: 'Oil / moisture', other_metals: 'Other metals mixed in', wood_paper: 'Wood / paper',
+    sealed_hazard: 'Sealed items — radioactive or explosive' };
+const MEASURED_LABEL = { surveyor: 'Independent surveyor', split_sample: 'Split sample, tested',
+    sorted_weighed: 'Sorted and weighed by the receiver', photos_only: 'Receiver\u2019s photos only' };
+
 
 // ── BUILD ───────────────────────────────────────────────────────────────────
 // opts: { supplier, container, claimId, includeUnverified, includeSettled, from, to }
@@ -66,16 +92,17 @@ function build(opts = {}) {
         supplier: c.supplier || '',
         kind: claimKinds.label(c.claim_type),
         unit: c.weight_unit || '',
-        invoice_weight: num(c.invoice_weight),
-        claimed_weight: num(c.claimed_weight),
-        shortage: num(c.shortage),
-        shortage_pct: num(c.shortage_pct),
-        claim_amount: num(c.claim_amount),
+        invoice_weight: nnum(c.invoice_weight),
+        claimed_weight: nnum(c.claimed_weight),
+        shortage: nnum(c.shortage),
+        shortage_pct: nnum(c.shortage_pct),
+        claim_amount: nnum(c.claim_amount),
         // Their own rate, off their own bill. A recoverable figure with no rate
         // beside it is a number a supplier cannot reproduce, so the first thing
         // they do is query it. Edge's sell_price is deliberately NOT here.
-        rate: num(c.supplier_price),
-        rate_unit: c.supplier_price_unit || '',
+        rate: (c.assessment === 'grade') ? null : nnum(c.supplier_price),
+        rate_unit: (c.assessment === 'grade') ? '' : (c.supplier_price_unit || ''),
+        basis: basisOf(c),
         // THE RATE IS OFTEN PER POUND WHILE THE CLAIM IS IN TONNES. Apsara,
         // 2026-10-03: "What if the supplier price is in lbs?" — the conversion
         // was already right in the code and wrong on the DOCUMENT: a supplier
@@ -85,13 +112,25 @@ function build(opts = {}) {
         // to is printed next to it, and only when the units actually differ —
         // the claim's own weights are left exactly as recorded.
         charge_qty: (c.supplier_price_unit && c.weight_unit && c.supplier_price_unit !== c.weight_unit)
-            ? (() => { const q = claimPrice.toUnit(num(c.shortage), c.weight_unit, c.supplier_price_unit); return q === null ? null : Math.round(q * 1000) / 1000; })()
+            ? (() => { const b = basisOf(c); if (b === null) return null; const q = claimPrice.toUnit(b, c.weight_unit, c.supplier_price_unit); return q === null ? null : Math.round(q * 1000) / 1000; })()
             : null,
-        our_claim: num(c.our_claim),
+        our_claim: nnum(c.our_claim),
         status: c.status,
         sendable: SENDABLE.includes(c.status),
         evidence: (c.quotes && c.quotes.claim_type) ? String(c.quotes.claim_type).slice(0, 90) : '',
         note: c.note || '',
+        // ── how it was assessed — safe for a supplier (2026-10-10) ──────────
+        assessment: claims.ASSESSMENTS.includes(c.assessment) ? c.assessment : 'weight',
+        findings: (c.findings || []).filter((f) => FINDING_LABEL[f]).map((f) => FINDING_LABEL[f]),
+        measured_by: MEASURED_LABEL[c.measured_by] || '',
+        contam_accepted_pct: num(c.contam_accepted_pct),
+        contaminated_weight: num(c.contaminated_weight),
+        grade_sold: c.grade_sold || '', grade_received: c.grade_received || '',
+        grade_weight: num(c.grade_weight),
+        tolerance_pct: num(c.tolerance_pct), claimable_shortage: num(c.claimable_shortage),
+        // `customer` stays in the JSON the PAGE reads (the report modal shows
+        // it to her). The DOCUMENT never prints it — see toHtml.
+        customer: c.customer || '',
     });
 
     // ── THE DOCUMENT MUST NOT CONTRADICT ITSELF ────────────────────────────
@@ -105,7 +144,7 @@ function build(opts = {}) {
     const RECONCILE_TOL = 0.01;   // 1%, and never less than a dollar
     const lines = rows.map(line).map((l) => {
         if (l.rate === null || !l.sendable || !l.our_claim) return l;
-        const qty = l.charge_qty === null ? l.shortage : l.charge_qty;
+        const qty = l.charge_qty === null ? l.basis : l.charge_qty;
         if (qty === null) return l;
         const implied = qty * l.rate;
         const slack = Math.max(1, Math.abs(l.our_claim) * RECONCILE_TOL);
@@ -146,27 +185,42 @@ function build(opts = {}) {
 
 // ── HTML ────────────────────────────────────────────────────────────────────
 // Light, printable, and plain. This leaves the building, so it looks like a trade
-// document and not like the dashboard.
+// document and not like the dashboard. Laid out 2026-10-10 to the design Apsara
+// approved on the canvas: a summary table, then what each claim actually is.
+//
+// THE CUSTOMER'S NAME DOES NOT GO ON THE SUPPLIER VERSION. Apsara, 2026-10-03:
+// "if there is any company name mentioned in claim email of customer, then it
+// should be hided." A supplier who learns which buyer the metal ended up with can
+// go to them directly. The container and Edge's invoice number identify a claim
+// completely. Remarks and document names are free text that can name the
+// customer too, so they are never printed at all.
+//
+// YOUR RATE, not ours. Apsara, 2026-10-03: "You didnt mention supplier price in
+// claim?" — it is their own price off their own bill; Edge's sell rate is not on
+// the supplier version.
+// One line, only where the table cannot say it: what was found in a
+// contamination claim, or which grades in a downgrade. A weight claim's line in
+// the table already says everything.
+function detailLine(l) {
+    if (l.assessment === 'contamination') {
+        const bits = [];
+        if (l.findings.length) bits.push('found: ' + l.findings.join(', ').toLowerCase());
+        if (l.contam_accepted_pct !== null) bits.push(`${l.contam_accepted_pct}% of ${wt(l.invoice_weight, l.unit)} accepted as not metal (${wt(l.contaminated_weight, l.unit)})`);
+        if (l.measured_by) bits.push('measured by: ' + l.measured_by.toLowerCase());
+        return bits.length ? `<li><span class="mono">${esc(l.container_no || l.invoice_no || '—')}</span> — ${esc(l.kind)}: ${esc(bits.join('; '))}.</li>` : '';
+    }
+    if (l.assessment === 'grade') {
+        const bits = [];
+        if (l.grade_sold || l.grade_received) bits.push(`sold as ${l.grade_sold || '—'}, received as ${l.grade_received || '—'}`);
+        if (l.grade_weight !== null) bits.push(`${wt(l.grade_weight, l.unit)} affected`);
+        return bits.length ? `<li><span class="mono">${esc(l.container_no || l.invoice_no || '—')}</span> — ${esc(l.kind)}: ${esc(bits.join('; '))}.</li>` : '';
+    }
+    return '';
+}
+
 function toHtml(b) {
     const when = new Date(b.generatedAt).toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' });
     const to = b.addressedTo || (b.suppliers.length > 1 ? `${b.suppliers.length} suppliers` : '—');
-    // YOUR RATE, not ours. Apsara, 2026-10-03: "You didnt mention supplier price
-    // in claim?" — without it the last column is a number the supplier cannot
-    // reproduce, and an unexplained number is the one they query. It is their
-    // own price off their own bill; Edge's sell rate is not on this document.
-    // ── THE CUSTOMER'S NAME DOES NOT GO ON THIS DOCUMENT ───────────────────
-    // Apsara, 2026-10-03: "if there is any company name mentioned in claim email
-    // of customer, then it should be hided."
-    //
-    // She said it about the supporting photos; it was already true of the
-    // statement itself, which printed a Customer column on every line. A
-    // supplier who learns which buyer the metal ended up with can go to them
-    // directly, and that is Edge's business gone, not a privacy nicety.
-    //
-    // Nothing is lost by removing it: the container number and Edge's own
-    // invoice number identify the claim completely, and they are the references
-    // a supplier checks against. `customer` stays in the JSON that the PAGE
-    // reads — it is only the documents that LEAVE the building that drop it.
     const head = ['Date', 'Our invoice', 'Container', 'What is claimed', 'Invoiced', 'Received', 'Short', '%', 'Your rate', 'Recoverable'];
 
     const row = (l) => `<tr${l.sendable ? '' : ' class="info"'}>
@@ -179,15 +233,18 @@ function toHtml(b) {
       <td class="r mono">${esc(wt(l.shortage, l.unit))}</td>
       <td class="r mono">${l.shortage_pct === null ? '—' : esc(l.shortage_pct.toFixed(2)) + '%'}</td>
       <td class="r mono">${l.rate === null ? '—' : esc(money(l.rate)) + '/' + esc(l.rate_unit || '')}${l.charge_qty === null ? '' : `<div class="conv">on ${esc(wt(l.charge_qty, l.rate_unit))}</div>`}</td>
-      <td class="r mono strong">${l.sendable ? esc(money(l.our_claim)) : '—'}</td>
+      <td class="r mono strong">${l.sendable && l.our_claim !== null ? esc(money(l.our_claim)) : '—'}</td>
     </tr>`;
+
+    const notesOn = b.lines.map(detailLine).filter(Boolean);
+    const details = notesOn.length ? `<ul class="what">${notesOn.join('')}</ul>` : '';
 
     return `<!doctype html><html><head><meta charset="utf-8"><title>${esc(b.reference)}</title>
 <style>
-@page { size: A4 landscape; margin: 14mm 12mm; }
-.conv{font-size:9px;color:#777;font-weight:400;letter-spacing:0}
+@page { size: Letter; margin: 14mm 12mm; }
+.conv{font-size:8px;color:#777;font-weight:400;letter-spacing:0}
 *{box-sizing:border-box}
-body{margin:0;font-family:"Helvetica Neue",Helvetica,Arial,sans-serif;color:#1a1a1a;font-size:9pt;line-height:1.45}
+body{margin:0;font-family:"Helvetica Neue",Helvetica,Arial,sans-serif;color:#1a1a1a;font-size:8.6pt;line-height:1.45}
 .mono{font-family:"SF Mono",Menlo,Consolas,monospace;font-variant-numeric:tabular-nums}
 .r{text-align:right}.strong{font-weight:700}
 header{display:flex;align-items:flex-start;gap:20px;border-bottom:2px solid #1a1a1a;padding-bottom:10px}
@@ -196,22 +253,24 @@ header .sub{font-size:8pt;color:#555;margin-top:2px}
 header .right{margin-left:auto;text-align:right}
 header .doc{font-size:12pt;font-weight:700;letter-spacing:.06em;text-transform:uppercase}
 header .ref{font-size:8pt;color:#555;margin-top:3px}
-.meta{display:flex;gap:34px;margin:12px 0 4px}
-.meta div{font-size:9pt}
+.meta{display:flex;gap:30px;flex-wrap:wrap;margin:12px 0 4px}
 .meta .k{font-size:7.5pt;letter-spacing:.07em;text-transform:uppercase;color:#777;margin-bottom:2px}
-.lead{margin:10px 0 2px;font-size:9pt;color:#333;max-width:none}
-table{width:100%;border-collapse:collapse;margin-top:10px}
-th{text-align:left;font-size:7.5pt;letter-spacing:.05em;text-transform:uppercase;color:#555;border-bottom:1px solid #999;padding:5px 6px;white-space:nowrap}
+.lead{margin:10px 0 2px;color:#333}
+table{width:100%;border-collapse:collapse}
+table.sum{margin-top:10px}
+th{text-align:left;font-size:7pt;letter-spacing:.05em;text-transform:uppercase;color:#555;border-bottom:1px solid #999;padding:5px 5px;white-space:nowrap;background:#f1f3f4}
 th.r{text-align:right}
-td{padding:5px 6px;border-bottom:1px solid #e4e4e4;vertical-align:top}
+td{padding:5px 5px;border-bottom:1px solid #e4e4e4;vertical-align:top}
 tr.info td{color:#777;font-style:italic}
 .tag{display:inline-block;margin-left:6px;font-size:7pt;font-style:normal;border:1px solid #bbb;border-radius:2px;padding:0 4px;color:#777}
 tfoot td{border-top:2px solid #1a1a1a;border-bottom:0;padding-top:7px;font-weight:700}
+.what{margin:10px 0 0;padding-left:18px;color:#333}
+.what li{margin:0 0 3px}
 .total{margin-top:14px;display:flex;justify-content:flex-end}
 .total .box{border:1.5px solid #1a1a1a;padding:9px 16px;text-align:right;min-width:230px}
 .total .k{font-size:7.5pt;letter-spacing:.07em;text-transform:uppercase;color:#555}
 .total .v{font-size:15pt;font-weight:800;margin-top:2px}
-.notes{margin-top:16px;font-size:8pt;color:#555;border-top:1px solid #ddd;padding-top:9px}
+.notes{margin-top:16px;font-size:7.8pt;color:#555;border-top:1px solid #ddd;padding-top:9px}
 .notes p{margin:0 0 5px}
 .sign{margin-top:22px;display:flex;justify-content:space-between;align-items:flex-end}
 .sign .for{font-size:8.5pt}
@@ -223,7 +282,7 @@ tfoot td{border-top:2px solid #1a1a1a;border-bottom:0;padding-top:7px;font-weigh
     <div class="sub">Los Angeles, California, USA</div>
   </div>
   <div class="right">
-    <div class="doc">Claim Statement</div>
+    <div class="doc">Claim Report</div>
     <div class="ref mono">${esc(b.reference)}</div>
     <div class="ref">${esc(when)}</div>
   </div>
@@ -233,16 +292,18 @@ tfoot td{border-top:2px solid #1a1a1a;border-bottom:0;padding-top:7px;font-weigh
   <div><div class="k">To</div><strong>${esc(to)}</strong></div>
   ${b.container ? `<div><div class="k">Container</div><span class="mono">${esc(b.container)}</span></div>` : ''}
   <div><div class="k">Claims</div>${b.totals.claims}</div>
-  <div><div class="k">Total shortage</div><span class="mono">${esc(wt(b.totals.shortage, b.lines[0] ? b.lines[0].unit : ''))}</span></div>
+  ${b.lines.some((l) => l.shortage !== null) ? `<div><div class="k">Total shortage</div><span class="mono">${esc(wt(b.totals.shortage, b.lines[0] ? b.lines[0].unit : ''))}</span></div>` : ''}
 </div>
 
 <p class="lead">The claims below were raised against material supplied by you, each one supported by the claim documents behind it, which we can forward on request. The amount shown in the final column is what we are recovering from you.</p>
 
-<table>
+<table class="sum">
   <thead><tr>${head.map((h, i) => `<th${i >= 4 ? ' class="r"' : ''}>${esc(h)}</th>`).join('')}</tr></thead>
-  <tbody>${b.lines.length ? b.lines.map(row).join('') : '<tr><td colspan="10" style="padding:16px;color:#777">No claims in this statement.</td></tr>'}</tbody>
+  <tbody>${b.lines.length ? b.lines.map(row).join('') : '<tr><td colspan="10" style="padding:16px;color:#777">No claims in this report.</td></tr>'}</tbody>
   ${b.totals.claims ? `<tfoot><tr><td colspan="9" class="r">Total recoverable</td><td class="r mono">${esc(money(b.totals.recoverable))}</td></tr></tfoot>` : ''}
 </table>
+
+${details}
 
 <div class="total"><div class="box">
   <div class="k">Amount recoverable from you</div>
@@ -250,13 +311,13 @@ tfoot td{border-top:2px solid #1a1a1a;border-bottom:0;padding-top:7px;font-weigh
 </div></div>
 
 <div class="notes">
-  ${b.includedUnverified && b.lines.some((l) => !l.sendable) ? '<p><strong>Lines marked “not yet verified”</strong> are shown for information only. Their weights have not yet been confirmed against the loading documents and they are excluded from the total above.</p>' : ''}
-  ${b.noFigure.length ? `<p><strong>${b.noFigure.length} claim(s)</strong> in this statement have no recovery amount set against them yet; they are listed so the position is complete.</p>` : ''}
+  ${b.includedUnverified && b.lines.some((l) => !l.sendable) ? '<p><strong>Lines marked “not yet verified”</strong> are shown for information only. Their figures have not yet been confirmed against the loading documents and they are excluded from the total above.</p>' : ''}
+  ${b.noFigure.length ? `<p><strong>${b.noFigure.length} claim(s)</strong> in this report have no recovery amount set against them yet; they are listed so the position is complete.</p>` : ''}
   <p>Weights are stated in the unit shown against each line, exactly as recorded on the claim documents. No conversion has been applied to them.</p>
   ${b.lines.some((l) => l.charge_qty !== null) ? '<p>Where our purchase rate is per a different unit, the shortage converted into that unit is shown beneath the rate, at 1 MT = 2,204.62262 lb. The recoverable amount is that quantity at that rate.</p>' : ''}
   ${b.lines.some((l) => l.rate !== null) ? '<p><strong>“Your rate”</strong> is the price on our purchase bill for that container — the rate we paid you for the material. Each recoverable amount is the shortage at that rate.</p>' : ''}
   ${b.lines.some((l) => l.sendable && l.rate === null) ? '<p>Where no rate is shown, the amount is as agreed between us rather than calculated.</p>' : ''}
-  <p>Please confirm acceptance or raise any query within 14 days of the date of this statement.</p>
+  <p>Please confirm acceptance or raise any query within 14 days of the date of this report.</p>
 </div>
 
 <div class="sign">
@@ -277,7 +338,7 @@ async function toPdf(built, opts = {}) {
             const pdf = await page.pdf({ printBackground: true, preferCSSPageSize: true });
             return Buffer.from(pdf);
         });
-    }, `claim statement ${built.reference}`);
+    }, `claim report ${built.reference}`);
 }
 
 // ── XLSX ────────────────────────────────────────────────────────────────────
@@ -285,8 +346,8 @@ async function toPdf(built, opts = {}) {
 async function toWorkbook(built) {
     const ExcelJS = require('exceljs');
     const wb = new ExcelJS.Workbook();
-    const ws = wb.addWorksheet('Claim statement');
-    ws.addRow(['EDGE METALS INC — CLAIM STATEMENT']);
+    const ws = wb.addWorksheet('Claim report');
+    ws.addRow(['EDGE METALS INC — CLAIM REPORT']);
     ws.addRow([built.reference, new Date(built.generatedAt).toLocaleDateString('en-US')]);
     ws.addRow(['To', built.addressedTo || '']);
     ws.addRow([]);
@@ -310,7 +371,7 @@ async function toWorkbook(built) {
 function filenameFor(built, ext) {
     const when = new Date(built.generatedAt).toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' });
     const who = (built.addressedTo || built.container || 'all').replace(/[^A-Za-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'all';
-    return `Claim-statement_${who}_${when}.${ext}`;
+    return `Claim-report_${who}_${when}.${ext}`;
 }
 
 module.exports = { build, toHtml, toPdf, toWorkbook, filenameFor, SENDABLE };

@@ -350,5 +350,8 @@ $('btnSyncAddressBook').addEventListener('click', async () => {
 api('/api/address-book').then(data => { addressBookData = data; renderResults(); })
   .catch(e => { resultsEl.innerHTML = `<div style="font-family:var(--font-mono); font-size:11.5px; color:var(--status-danger);">${esc(e.message)}</div>`; });
 </script>
+<!-- The app's sidebar on this page too (Apsara 2026-10-08: "i want the sidebar to appear in all pages").
+     dashboard/sidebar.js; hidden when printing. -->
+<script src="/sidebar.js" data-page="address-book" defer></script>
 </body>
 </html>

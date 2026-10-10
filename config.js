@@ -52,6 +52,19 @@ const FILES = {
     // scars in workflow/replyWatch.js). A pulse written every minute does
     // not belong in the same file as her configuration.
     HEARTBEAT_FILE   : path.join(DATA_DIR, 'heartbeat.json'),
+    // ── WHAT JARVIS DECIDED, AND WHAT SHE THEN DID (2026-10-08) ──────────
+    // Apsara: "make it learn everything". Jarvis records what it DECIDED and
+    // never what HAPPENED, so every correction she makes -- "this can be
+    // ignored", "they just asked for booking, why is it on WhatsApp" -- is a
+    // labelled training example that currently exists only in a chat log
+    // nothing reads.
+    //
+    // APPEND-ONLY, and that is the whole design. Every data-loss scar in this
+    // repo is a write clobbering another write: saveStore's field allowlist
+    // has silently eaten six fields, mutateJson contends on a lock. A log
+    // that is only ever appended to cannot clobber anything, needs no lock,
+    // and survives two processes writing at once.
+    OUTCOMES_FILE    : path.join(DATA_DIR, 'outcomes.jsonl'),
     TRANSCRIPTS_FILE : path.join(DATA_DIR, 'transcripts.json'),
     FACTS_FILE       : path.join(DATA_DIR, 'facts.json'),
     TRUST_LEDGER_FILE: path.join(DATA_DIR, 'trust_ledger.json'),

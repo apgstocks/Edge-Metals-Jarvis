@@ -76,11 +76,34 @@ function mount(app, cfg) {
                 weight_unit: b.weight_unit,
                 sell_price: b.sell_price,
                 sell_price_unit: b.sell_price_unit,
+                // Optional (2026-10-10). Absent = no allowance, as before.
+                tolerance_pct: b.tolerance_pct,
             }, b.by || 'manager');
             await claimWatch.closeTodos(rec.container_no || rec.invoice_no, 'claim_verify');
             if (!rec.our_claim) await claimWatch.raiseRecoveryTodo(rec);
             res.json(rec);
         } catch (e) { bad(res, e.message); }
+    });
+
+    // ── ASSESS — contamination and downgrade claims (2026-10-10) ───────────
+    // The sibling of verify for the two kinds of arithmetic that are not
+    // invoiced-minus-received. Same consequences, deliberately: confirming the
+    // figure cancels the chase and raises the recovery to-do, so a
+    // contamination claim cannot fall out of the to-do list just because it
+    // was not a weight claim.
+    app.post('/api/claims/:id/assess', async (req, res) => {
+        try {
+            const b = req.body || {};
+            const pick = ['assessment', 'weight_unit', 'invoice_weight', 'sell_price', 'sell_price_unit',
+                'contam_claimed_pct', 'contam_accepted_pct', 'findings', 'measured_by',
+                'grade_sold', 'grade_received', 'grade_weight', 'grade_price_sold', 'grade_price_received'];
+            const fields = {};
+            for (const k of pick) if (b[k] !== undefined) fields[k] = b[k];
+            const rec = await claims.assess(req.params.id, fields, b.by || 'manager');
+            await claimWatch.closeTodos(rec.container_no || rec.invoice_no, 'claim_verify');
+            if (!rec.our_claim) await claimWatch.raiseRecoveryTodo(rec);
+            res.json(rec);
+        } catch (e) { bad(res, e.message, /no such claim/.test(e.message) ? 404 : 400); }
     });
 
     app.post('/api/claims/:id/recovery', async (req, res) => {
@@ -108,9 +131,17 @@ function mount(app, cfg) {
         try {
             const b = req.body || {};
             const allowed = ['customer', 'supplier', 'invoice_no', 'container_no', 'note', 'claim_type', 'claim_date', 'supplier_price', 'supplier_price_unit', 'supplier_price_source',
-                'sell_price', 'sell_price_unit', 'our_claim', 'evidence', 'stated_claim_amount'];
+                'sell_price', 'sell_price_unit', 'our_claim', 'evidence', 'stated_claim_amount',
+                // 2026-10-10 — words and choices, never money. A figure only
+                // changes through verify or assess.
+                'remarks', 'assessment', 'findings', 'measured_by', 'contam_claimed_pct',
+                'grade_sold', 'grade_received', 'tolerance_pct'];
             const patch = {};
             for (const k of allowed) if (b[k] !== undefined) patch[k] = b[k];
+            if (patch.assessment !== undefined && patch.assessment !== null && !claims.ASSESSMENTS.includes(patch.assessment)) return bad(res, 'assessment must be weight, contamination or grade');
+            if (patch.findings !== undefined) patch.findings = (Array.isArray(patch.findings) ? patch.findings : []).filter((f) => claims.FINDINGS.includes(f));
+            if (patch.measured_by !== undefined && patch.measured_by !== null && !claims.MEASURED_BY.includes(patch.measured_by)) return bad(res, 'that is not a way of measuring I know');
+            if (patch.remarks !== undefined) patch.remarks = String(patch.remarks || '').slice(0, 2000);
             if (!Object.keys(patch).length) return bad(res, 'nothing to change');
             const rec = await claims.update(req.params.id, patch, b.by || 'manager', 'edited on the claims page');
             res.json(rec);
@@ -223,6 +254,8 @@ function mount(app, cfg) {
             const format = String(q.format || 'json').toLowerCase();
             if (!FORMATS.includes(format)) return bad(res, 'that format is not one I can make — json, html, pdf or xlsx');
 
+            // Supplier only (Apsara, 2026-10-10: "i want claim report to be sent
+            // to supplier only"). There is no internal version to ask for.
             const built = report.build({
                 supplier: q.supplier, container: q.container, claimId: q.claimId,
                 from: q.from, to: q.to,

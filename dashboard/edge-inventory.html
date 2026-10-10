@@ -444,5 +444,8 @@ loadSuppliers().then(loadSupplier).catch((e) => {
   $('acctBox').innerHTML = `<div style="padding:30px; text-align:center; color:var(--status-danger); font-family:var(--font-mono); font-size:12px;">${esc(e.message)}</div>`;
 });
 </script>
+<!-- The app's sidebar on this page too (Apsara 2026-10-08: "i want the sidebar to appear in all pages").
+     dashboard/sidebar.js; hidden when printing. -->
+<script src="/sidebar.js" data-page="edge-inventory" defer></script>
 </body>
 </html>

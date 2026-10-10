@@ -44,6 +44,29 @@ const FLAG_FIGURE_CHANGED = 'figure_changed';
 const FLAG_NO_SUPPLIER = 'supplier_unknown';
 const FLAG_KIND_UNKNOWN = 'kind_unknown';
 
+// ── HOW A CLAIM IS ASSESSED (2026-10-10) ────────────────────────────────────
+// Apsara: "Add like remarks if its foreign material with a downloadable claim
+// report", and the Claims page "should be the most user friendly tab".
+//
+// A claim KIND is the model's free-form name for it (claimKinds.js) and stays
+// that way. The ASSESSMENT is a different, closed question — how is the money
+// worked out — and there are only three answers:
+//   weight        invoiced minus received, at a rate          (verify(), unchanged)
+//   contamination a share of the net weight was not the metal (assess())
+//   grade         the metal arrived as a cheaper grade         (assess())
+// Keeping them apart means a kind she renames tomorrow still assesses the way
+// it did today, and no kind name is ever written into the code.
+// null means "never chosen" and is treated as weight, which is what every claim
+// before this date was.
+const ASSESSMENTS = ['weight', 'contamination', 'grade'];
+// What can be found in a container. Shown as tick boxes; `sealed_hazard` is the
+// one that is not a price question at all (radioactive or explosive items —
+// every scrap shipment into India carries a declaration that there are none).
+const FINDINGS = ['dirt', 'rubber_plastic', 'iron_attached', 'oil_moisture', 'other_metals', 'wood_paper', 'sealed_hazard'];
+// How the contamination was measured. Strength is shown on the page so a
+// deduction backed only by the customer's photos is not argued as if surveyed.
+const MEASURED_BY = ['surveyor', 'split_sample', 'sorted_weighed', 'photos_only'];
+
 const newId = () => `clm_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
 const norm = (s) => String(s == null ? '' : s).toUpperCase().replace(/[^A-Z0-9]/g, '');
 const num = (v) => { const n = Number(String(v == null ? '' : v).replace(/[$,\s]/g, '')); return Number.isFinite(n) ? n : null; };
@@ -98,6 +121,20 @@ function blank() {
         // imported in one go gives every row the same created_at, and a
         // supplier reading that on a statement reads it as the claim date.
         claim_date: null,
+        // ── added 2026-10-10, all optional; a claim without them behaves
+        // exactly as before. See ASSESSMENTS above.
+        assessment: null,
+        findings: [], measured_by: null,
+        contam_claimed_pct: null, contam_accepted_pct: null, contaminated_weight: null,
+        grade_sold: '', grade_received: '', grade_weight: null,
+        grade_price_sold: null, grade_price_received: null,
+        // Contract tolerance on a weight shortage. Blank = no allowance, which
+        // is how every claim was worked out before it existed.
+        tolerance_pct: null, claimable_shortage: null,
+        // Her own words about the claim. Printed on the INTERNAL report only:
+        // a remark is free text and can name the customer, so it never goes on
+        // the document a supplier receives.
+        remarks: '',
         created_at: null, created_by: '', updated_at: null,
     };
 }
@@ -170,17 +207,87 @@ async function verify(id, fields = {}, by = 'manager') {
     // The rate may be quoted per a different unit than the weights — she buys
     // in pounds and the commercial invoice prints MT. Convert the SHORTAGE
     // into the rate's unit rather than converting the rate.
+    // ── CONTRACT TOLERANCE, ONLY WHEN SOMEONE STATES ONE (2026-10-10) ──────
+    // A blank tolerance means none — the figure is worked out exactly as it
+    // always was. `shortage` stays the real difference; only the CLAIMABLE part
+    // shrinks, so the page and the report can show both.
+    const stated = (v) => v !== undefined && v !== null && String(v).trim() !== '';
+    const tolerance_pct = stated(fields.tolerance_pct) ? num(fields.tolerance_pct)
+        : (fields.tolerance_pct === undefined && stated(c.tolerance_pct) ? num(c.tolerance_pct) : null);
+    if (tolerance_pct !== null && (tolerance_pct < 0 || tolerance_pct > 20)) throw new Error('a tolerance must be between 0% and 20%');
+    const claimable_shortage = tolerance_pct === null ? null
+        : Math.max(0, Math.round((shortage - invoice_weight * tolerance_pct / 100) * 1e6) / 1e6);
+    const charged = claimable_shortage === null ? shortage : claimable_shortage;
+
     let claim_amount = null;
     if (sell_price !== null) {
-        const shortInRateUnit = sell_price_unit === unit ? shortage : convert(shortage, unit, sell_price_unit);
+        const shortInRateUnit = sell_price_unit === unit ? charged : convert(charged, unit, sell_price_unit);
         if (shortInRateUnit !== null) claim_amount = Math.round(shortInRateUnit * sell_price * 100) / 100;
     }
 
     return update(id, {
         weight_unit: unit, invoice_weight, claimed_weight, sell_price, sell_price_unit,
-        shortage, shortage_pct, claim_amount,
+        shortage, shortage_pct, claim_amount, tolerance_pct, claimable_shortage,
+        // verify() IS the weight arithmetic, so a claim confirmed here is a
+        // weight claim, whatever it was assessed as before.
+        assessment: 'weight',
         status: c.status === 'unverified' ? 'verified' : c.status,
     }, by, 'verified');
+}
+
+// ── ASSESS — contamination and grade claims (2026-10-10) ───────────────────
+// The same contract as verify(): the money is computed here, from figures a
+// person typed, in a unit a person chose — never on creation, never guessed.
+// Weight claims still go through verify(); this refuses them so there is one
+// path per kind of arithmetic.
+async function assess(id, fields = {}, by = 'manager') {
+    const c = get(id);
+    if (!c) throw new Error('no such claim');
+    const kind = fields.assessment;
+    if (kind === 'weight') throw new Error('a weight shortage is confirmed through verify, not assess');
+    if (!ASSESSMENTS.includes(kind)) throw new Error('assessment must be contamination or grade');
+
+    const unit = UNITS.includes(fields.weight_unit) ? fields.weight_unit : (UNITS.includes(c.weight_unit) ? c.weight_unit : null);
+    if (!unit) throw new Error('assessing a claim needs the weight unit — MT, LB or KG');
+    const given = (k) => (fields[k] !== undefined ? fields[k] : c[k]);
+    const has = (v) => v !== undefined && v !== null && String(v).trim() !== '';
+    const sell_price = has(given('sell_price')) ? num(given('sell_price')) : null;
+    const sell_price_unit = UNITS.includes(fields.sell_price_unit) ? fields.sell_price_unit
+        : UNITS.includes(c.sell_price_unit) ? c.sell_price_unit : unit;
+
+    const patch = { assessment: kind, weight_unit: unit, status: c.status === 'unverified' ? 'verified' : c.status };
+    let claim_amount = null;
+
+    if (kind === 'contamination') {
+        const invoice_weight = has(given('invoice_weight')) ? num(given('invoice_weight')) : null;
+        const accepted = has(given('contam_accepted_pct')) ? num(given('contam_accepted_pct')) : null;
+        if (invoice_weight === null || invoice_weight <= 0) throw new Error('assessing contamination needs the net weight that was invoiced');
+        if (accepted === null) throw new Error('assessing contamination needs the share Edge accepts was not metal — a percentage');
+        if (accepted < 0 || accepted > 100) throw new Error('a contamination share must be between 0% and 100%');
+        const claimedPct = has(given('contam_claimed_pct')) ? num(given('contam_claimed_pct')) : null;
+        const contaminated_weight = Math.round(invoice_weight * accepted / 100 * 1e6) / 1e6;
+        if (sell_price !== null) {
+            const q = sell_price_unit === unit ? contaminated_weight : convert(contaminated_weight, unit, sell_price_unit);
+            if (q !== null) claim_amount = Math.round(q * sell_price * 100) / 100;
+        }
+        const findings = Array.isArray(given('findings')) ? given('findings').filter((f) => FINDINGS.includes(f)) : [];
+        const measured_by = MEASURED_BY.includes(given('measured_by')) ? given('measured_by') : null;
+        Object.assign(patch, { invoice_weight, contam_accepted_pct: accepted, contam_claimed_pct: claimedPct,
+            contaminated_weight, findings, measured_by, sell_price, sell_price_unit });
+    } else {
+        const w = has(given('grade_weight')) ? num(given('grade_weight')) : null;
+        const sold = has(given('grade_price_sold')) ? num(given('grade_price_sold')) : null;
+        const recv = has(given('grade_price_received')) ? num(given('grade_price_received')) : null;
+        if (w === null || w <= 0) throw new Error('assessing a downgrade needs the weight that was affected');
+        if (sold === null || recv === null) throw new Error('assessing a downgrade needs both prices — the grade sold and the grade received');
+        if (recv > sold) throw new Error('the received grade is priced above the grade sold — that is not a downgrade');
+        // Both prices are per the claim's weight unit; the page labels them so.
+        claim_amount = Math.round(w * (sold - recv) * 100) / 100;
+        Object.assign(patch, { grade_weight: w, grade_price_sold: sold, grade_price_received: recv,
+            grade_sold: String(given('grade_sold') || '').slice(0, 80), grade_received: String(given('grade_received') || '').slice(0, 80) });
+    }
+    patch.claim_amount = claim_amount;
+    return update(id, patch, by, kind === 'contamination' ? 'contamination assessed' : 'downgrade assessed');
 }
 
 // Recovery from the supplier. This is the half of a claim that is actually
@@ -249,7 +356,8 @@ function stats(rows) {
 }
 
 module.exports = {
-    list, get, findByKey, keyOf, create, update, verify, raiseRecovery, setStatus, addMail, stats,
+    list, get, findByKey, keyOf, create, update, verify, assess, raiseRecovery, setStatus, addMail, stats,
+    ASSESSMENTS, FINDINGS, MEASURED_BY,
     convert, toMT, newId, blank,
     STATUSES, UNITS,
     FLAG_NO_UNIT, FLAG_UNKNOWN_CONTAINER, FLAG_FIGURE_CHANGED, FLAG_NO_SUPPLIER, FLAG_KIND_UNKNOWN,

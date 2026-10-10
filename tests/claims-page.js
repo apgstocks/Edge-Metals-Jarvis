@@ -35,7 +35,12 @@ console.log('\n=== A — the page is part of this app, not a stranger to it ==='
         tokens.every((t) => HTML.includes(t) && qb.includes(t)),
         tokens.filter((t) => !HTML.includes(t)));
     ck('it links back to Jarvis like the other standalone pages', /class="back" href="\/"/.test(HTML));
-    ck('no external script is pulled in', !/<script[^>]+src=/i.test(HTML));
+    // 2026-10-08: the app's own /sidebar.js is allowed — Apsara: "i want the
+    // sidebar to appear in all pages". Anything else (a CDN, another site)
+    // still fails here; the point was never to load a stranger's code.
+    ck('no external script is pulled in',
+        [...HTML.matchAll(/<script[^>]+src="([^"]*)"/gi)].every((m) => m[1] === '/sidebar.js'),
+        [...HTML.matchAll(/<script[^>]+src="([^"]*)"/gi)].map((m) => m[1]).join(', '));
     ck('it works down to phone width', /@media \(max-width:1020px\)/.test(HTML));
     ck('the nav knows about it', /dataset\.tab === 'claims'/.test(fs.readFileSync(path.join(__dirname, '..', 'dashboard', 'index.html'), 'utf8')));
 }

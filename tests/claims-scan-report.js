@@ -179,7 +179,9 @@ section('E — the document itself');
         await claims.setStatus(withDate.id, 'withdrawn', 'test', 'fixture only');
     }
 
-    ck('the filename names the supplier and the date', /^Claim-statement_Gomez_\d{4}-\d{2}-\d{2}\.pdf$/.test(report.filenameFor(b, 'pdf')), report.filenameFor(b, 'pdf'));
+    // Was Claim-statement_… until 2026-10-10, when Apsara replaced the old
+    // statement with the new claim report: "use the latest one you created".
+    ck('the filename names the supplier and the date', /^Claim-report_Gomez_\d{4}-\d{2}-\d{2}\.pdf$/.test(report.filenameFor(b, 'pdf')), report.filenameFor(b, 'pdf'));
 }
 
 section('F — through the routes the page uses');
@@ -225,7 +227,7 @@ section('F — through the routes the page uses');
     const html = await get('/api/claims/report?supplier=Gomez&format=html');
     ck('html comes back as html', html.code === 200 && /text\/html/.test(html.ct));
     const xl = await get('/api/claims/report?supplier=Gomez&format=xlsx');
-    ck('xlsx comes back as a download', xl.code === 200 && /attachment; filename="Claim-statement_Gomez/.test(xl.cd || ''), xl.cd);
+    ck('xlsx comes back as a download', xl.code === 200 && /attachment; filename="Claim-report_Gomez/.test(xl.cd || ''), xl.cd);
     const bad = await get('/api/claims/report?supplier=Gomez&format=docx');
     ck('an unknown format is refused, in words', bad.code === 400 && /json, html, pdf or xlsx/.test(bad.body.error));
 
@@ -257,10 +259,13 @@ section('G — the controls are on the page');
     ck('it warns that a scan is the model\'s reading, not a fact', /verification/.test(HTML));
     ck('a missing unit is called out rather than filled in', /the document did not state a unit/.test(HTML));
     ck('creating from a scan says it is unverified', /Create this claim, unverified/.test(HTML));
-    ck('there is a statement button', /id="repBtn"/.test(HTML) && /Claim statement/.test(HTML));
+    // Renamed 2026-10-10 — the claim report replaced the statement (Apsara).
+    ck('there is a supplier report button', /id="repBtn"/.test(HTML) && /Claim report for a supplier/.test(HTML));
     ck('it explains why unverified claims are held back', /a reading, not a demand/.test(HTML));
     ck('it offers pdf, excel and a preview', /Download PDF/.test(HTML) && /Download Excel/.test(HTML) && /Preview/.test(HTML));
-    ck('a container can produce a statement to its own supplier', /statement to /.test(HTML));
+    // Was a "statement to <supplier>" chip; now the container's Claim report
+    // menu, scoped to that container and its supplier (2026-10-10).
+    ck('a container can produce a report for its own supplier', /<b>Claim report<\/b> · PDF/.test(HTML) && /report\?container=/.test(HTML));
 }
 
 console.log(`\n  ${pass} passed, ${fail} failed`);

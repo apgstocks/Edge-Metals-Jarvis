@@ -182,35 +182,219 @@ label.f input:disabled{color:var(--steel-500)}
 .modal .box{background:var(--surface-card);border:1px solid var(--border-default);border-radius:7px;padding:18px 20px;width:100%;max-width:560px;max-height:88vh;overflow-y:auto}
 .modal h3{font-family:var(--font-display);font-size:16px;color:var(--text-strong);margin-bottom:12px}
 
+/* ══ THE 2026-10-10 LAYOUT ═══════════════════════════════════════════════════
+   Apsara: "Claim page looks very ugly. it is not user friendly right now" and
+   "It should be professional, helpful, most user friendly easing the users work
+   in every way". Built to the design she approved on the canvas.
+   Everything above this line is kept because the modals (new claim, scan,
+   import, kinds, report) still use it; the rules below lay out the page. */
+body{height:auto;min-height:100vh;overflow:auto;display:block;font-size:14px;line-height:1.5}
+.wrap{max-width:1400px;margin:0 auto;padding:26px 28px 60px}
+header.top{display:flex;align-items:flex-end;justify-content:space-between;gap:20px;padding:0;border:0;background:transparent;margin-bottom:18px;flex-wrap:wrap}
+header.top .back{display:inline-block;margin-bottom:8px;font-size:12.5px}
+header.top .eyebrow{font-family:var(--font-mono);font-size:11px;font-weight:600;letter-spacing:.2em;text-transform:uppercase;color:var(--copper-300)}
+header.top h1{font-size:32px;line-height:1.05;margin-top:4px}
+header.top .lede{color:var(--text-muted);font-size:13.5px;margin-top:6px}
+.acts{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+.b{height:40px;padding:0 16px;border-radius:4px;border:1px solid var(--border-default);background:var(--surface-card);color:var(--text-body);font-size:13px;font-weight:600;display:inline-flex;align-items:center;gap:8px;white-space:nowrap}
+.b:hover{border-color:var(--steel-500);color:#fff}
+.b.pri{background:var(--leaf-600);border-color:var(--leaf-600);color:#fff;font-weight:700}
+.b.pri:hover{background:var(--leaf-500);border-color:var(--leaf-500)}
+.b.sm{height:34px;padding:0 12px;font-size:12.5px}
+.b.xs{height:30px;padding:0 10px;font-size:12px}
+.b:disabled{opacity:.45;cursor:not-allowed}
+.b svg{width:16px;height:16px;flex:none}
+
+/* a menu is a <details>: keyboard and screen readers get it for free */
+details.menu{position:relative}
+details.menu > summary{list-style:none}
+details.menu > summary::-webkit-details-marker{display:none}
+details.menu .pop{position:absolute;right:0;top:calc(100% + 6px);min-width:250px;background:var(--surface-card);border:1px solid var(--border-default);border-radius:6px;box-shadow:0 14px 34px rgba(0,0,0,.5);padding:6px;z-index:30}
+details.menu .pop button,details.menu .pop a{display:block;width:100%;text-align:left;padding:9px 12px;border:0;border-radius:4px;background:transparent;color:var(--text-body);font-size:13px;text-decoration:none}
+details.menu .pop button:hover,details.menu .pop a:hover{background:var(--steel-800);color:#fff}
+details.menu .pop .sub{display:block;color:var(--text-faint);font-size:11.5px;margin-top:1px}
+details.menu .pop hr{border:0;border-top:1px solid var(--border-subtle);margin:4px 0}
+
+.wait{display:flex;align-items:center;justify-content:space-between;gap:14px;border-radius:6px;padding:12px 16px;margin-bottom:16px;flex-wrap:wrap}
+.wait.on{background:rgba(194,94,34,.12);border:1px solid rgba(215,126,61,.45)}
+.wait.ok{background:rgba(61,168,54,.08);border:1px solid rgba(61,168,54,.35)}
+.wait .dot{width:8px;height:8px;border-radius:50%;background:var(--copper-300);flex:none}
+.wait.ok .dot{background:var(--leaf-400)}
+.wait strong{color:#fff}
+.wait .what{color:var(--text-body)}
+
+.kpis{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin-bottom:20px}
+.kpi{background:var(--surface-card);border:1px solid var(--border-subtle);border-radius:6px;padding:15px 18px}
+.kpi .k{font-size:12.5px;color:var(--text-muted);font-weight:500}
+.kpi .v{font-family:var(--font-mono);font-size:25px;font-weight:600;line-height:1.2;margin-top:6px;color:#fff}
+.kpi .s{font-size:12px;color:var(--text-faint);margin-top:3px}
+.kpi.got .v{color:var(--leaf-300)}
+.kpi.loss .v{color:var(--copper-300)}
+.kpi.todo .v{color:var(--amber-500)}
+
+.cols{display:grid;grid-template-columns:340px minmax(0,1fr);gap:18px;align-items:start}
+.listp{background:var(--surface-card);border:1px solid var(--border-subtle);border-radius:6px;overflow:hidden;position:sticky;top:14px;max-height:calc(100vh - 28px);display:flex;flex-direction:column}
+.listp .search{padding:12px;border:0;display:block}
+.listp .search input{width:100%;height:40px;padding:0 12px;border-radius:4px;border:1px solid var(--border-default);background:var(--surface-sunken);color:#fff;font-size:13.5px}
+.tabs{display:flex;padding:0 10px;border-bottom:1px solid var(--border-subtle);overflow-x:auto}
+.tabs button{border:0;background:transparent;padding:10px 9px 9px;font-size:12.5px;font-weight:600;color:var(--text-muted);border-bottom:2px solid transparent;white-space:nowrap}
+.tabs button.sel{color:#fff;border-bottom-color:var(--leaf-400)}
+.tabs button .n{font-family:var(--font-mono);font-size:11px;padding:1px 6px;border-radius:9px;margin-left:4px;background:var(--steel-800);color:var(--text-muted)}
+.tabs button.sel .n{background:var(--leaf-600);color:#fff}
+.listp .rows{overflow-y:auto}
+.prow{display:block;width:100%;text-align:left;border:0;border-bottom:1px solid var(--border-subtle);border-left:3px solid transparent;background:transparent;padding:12px 14px;color:inherit}
+.prow:hover{background:var(--surface-hover)}
+.prow.sel{background:var(--surface-hover);border-left-color:var(--leaf-400);box-shadow:none}
+.prow .t{display:flex;justify-content:space-between;gap:10px;align-items:baseline}
+.prow .who{color:#fff;font-weight:600;font-size:13.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.prow .amt{font-family:var(--font-mono);font-weight:600;color:#fff;font-size:13px;white-space:nowrap}
+.prow .m{display:flex;align-items:center;gap:8px;margin-top:4px;flex-wrap:wrap}
+.prow .cid{font-family:var(--font-mono);font-size:11.5px;color:var(--text-muted)}
+.prow .kinds{margin-top:8px}
+.st{font-size:11.5px;font-weight:600;padding:1px 8px;border-radius:10px;white-space:nowrap}
+.st.todo{background:rgba(217,154,43,.18);color:#F5C04A}
+.st.wait{background:rgba(61,168,54,.16);color:var(--leaf-300)}
+.st.done{background:var(--steel-800);color:var(--text-muted)}
+
+.chead{background:var(--surface-card);border:1px solid var(--border-subtle);border-radius:6px;padding:18px 20px;margin-bottom:14px}
+.chead .top2{display:flex;justify-content:space-between;align-items:flex-start;gap:14px;flex-wrap:wrap}
+.chead h2{font-family:var(--font-mono);font-size:20px;font-weight:600;letter-spacing:0}
+.chead .sub{color:var(--text-muted);font-size:13px;margin-top:2px}
+.chead .why3{color:var(--text-faint);font-size:12px;margin-top:8px;max-width:640px;line-height:1.55}
+.csum2{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));margin-top:16px;border-top:1px solid var(--border-subtle);padding-top:14px;gap:10px}
+.csum2 .k{font-size:12px;color:var(--text-muted)}
+.csum2 .v{font-family:var(--font-mono);font-size:18px;color:#fff;font-weight:600}
+.csum2 .v.got{color:var(--leaf-300)}.csum2 .v.loss{color:var(--copper-300)}
+
+.claim{background:var(--surface-card);border:1px solid var(--border-default);border-radius:6px;margin:0 0 14px;overflow:visible}
+.claim > .ch{display:flex;align-items:center;gap:10px;padding:14px 18px;border-bottom:1px solid var(--border-subtle);background:transparent;flex-wrap:wrap}
+.claim > .ch .n{font-family:var(--font-mono);font-size:12px;color:var(--text-faint)}
+.claim > .ch .amt{margin-left:auto;font-family:var(--font-mono);font-weight:600;color:#fff;font-size:14px}
+.claim > .ch .amtk{font-size:12px;color:var(--text-muted);margin-left:auto}
+.claim > .ch .amtk + .amt{margin-left:0}
+.life{display:flex;align-items:flex-start;padding:16px 18px 4px}
+.life .bar{flex:1;height:2px;margin-top:13px;background:var(--border-default)}
+.life .bar.on{background:var(--leaf-500)}
+.life .stp{display:flex;flex-direction:column;align-items:center;gap:6px;width:104px;flex:none}
+.life .dot{width:28px;height:28px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-family:var(--font-mono);font-size:12px;font-weight:600;background:var(--surface-sunken);color:var(--text-faint);border:2px solid var(--border-default)}
+.life .stp.done .dot{background:var(--leaf-500);border-color:var(--leaf-500);color:var(--bg-base)}
+.life .stp.now .dot{background:var(--bg-base);color:#fff;border-color:#F5C04A;box-shadow:0 0 0 4px rgba(245,192,74,.18)}
+.life .stp.closed .dot{background:var(--steel-700);border-color:var(--steel-700);color:var(--text-muted)}
+.life .lbl{font-size:11.5px;font-weight:600;text-align:center;color:var(--text-faint)}
+.life .stp.now .lbl{color:#fff}.life .stp.done .lbl{color:var(--text-body)}
+.next{margin:6px 18px 0;padding:10px 12px;border-radius:4px;background:var(--surface-sunken);border:1px solid var(--border-subtle);font-size:13px;color:var(--text-body)}
+.next b{color:#fff}
+.cb2{padding:4px 18px 16px}
+.cb2 .flagbox{margin-top:12px;padding:10px 12px;border-left:3px solid var(--amber-500);background:rgba(217,154,43,.07);border-radius:0 4px 4px 0}
+.cb2 .flagbox .hint{margin:0}
+.cb2 .flagbox .hint + .hint{margin-top:4px}
+
+details.sec{border-top:1px solid var(--border-subtle);margin-top:14px}
+details.sec > summary{list-style:none;cursor:pointer;display:flex;align-items:center;gap:10px;padding:13px 0 10px}
+details.sec > summary::-webkit-details-marker{display:none}
+details.sec > summary::before{content:'▸';color:var(--text-faint);font-size:11px;transition:transform .15s}
+details.sec[open] > summary::before{transform:rotate(90deg)}
+details.sec > summary .t{font-family:var(--font-display);font-weight:800;color:#fff;font-size:15px;letter-spacing:-.01em}
+details.sec > summary .c{font-family:var(--font-mono);font-size:11px;color:var(--text-faint)}
+details.sec > summary .r2{margin-left:auto;color:var(--text-faint);font-size:12px;text-align:right}
+details.sec.minor > summary .t{font-family:var(--font-sans);font-size:13px;font-weight:600}
+.sec .lede2{color:var(--text-muted);font-size:12.5px;margin:0 0 12px}
+
+.seg{display:inline-flex;background:var(--surface-sunken);border:1px solid var(--border-default);border-radius:4px;padding:2px;flex-wrap:wrap}
+.seg button{border:0;background:transparent;padding:7px 13px;border-radius:3px;font-size:12.5px;font-weight:600;color:var(--text-muted)}
+.seg button.sel{background:var(--steel-700);color:#fff}
+.rowline{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:14px}
+.rowline .lab{font-size:12px;color:var(--text-muted)}
+.chips2{display:flex;gap:6px;flex-wrap:wrap}
+.chips2 button{border:1px solid var(--border-default);background:var(--surface-sunken);color:var(--text-body);padding:6px 12px;border-radius:16px;font-size:12.5px;font-weight:600}
+.chips2 button.sel{border-color:var(--leaf-500);background:rgba(61,168,54,.16);color:#fff}
+.chips2 button.sel.danger{border-color:var(--red-500);background:rgba(197,64,47,.18)}
+.stop{display:flex;gap:12px;align-items:flex-start;background:rgba(197,64,47,.14);border:1px solid var(--red-500);border-radius:4px;padding:12px 14px;margin:0 0 14px}
+.stop .bang{color:#F2A99E;font-weight:800;font-size:16px;line-height:1.2}
+.stop strong{color:#fff}
+.stop div div{color:var(--text-body);font-size:12.5px;margin-top:2px}
+label.f{font-size:12px;letter-spacing:0;text-transform:none;color:var(--text-muted)}
+label.f input,label.f select,label.f textarea{height:38px;padding:0 10px;font-size:14px;background:var(--surface-sunken);color:#fff}
+label.f textarea{height:auto;padding:10px 12px;font-family:var(--font-sans);font-size:13.5px;line-height:1.5;resize:vertical;border-radius:4px;border:1px solid var(--border-default)}
+.units button{height:38px;padding:0 4px}
+.calc{background:var(--surface-sunken);gap:12px 28px}
+.calc .k{font-size:12px;letter-spacing:0;text-transform:none;color:var(--text-muted)}
+.calc .s2{font-size:11.5px;color:var(--text-faint)}
+.calc .s2.warn{color:#F5C04A}.calc .s2.good{color:var(--leaf-300)}.calc .s2.bad{color:#F2A99E}
+.calc .v.good{color:var(--leaf-300)}.calc .v.warn{color:#F5C04A}.calc .v.bad{color:#F2A99E}
+.actions{margin-top:14px}
+.btn.go{background:var(--leaf-600);border-color:var(--leaf-600);color:#fff}
+.btn.go:hover{background:var(--leaf-500)}
+.quick{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px;align-items:center}
+.quick .lab{font-size:11.5px;color:var(--text-faint)}
+.quick button{border:1px dashed var(--steel-600);background:transparent;color:var(--text-body);padding:4px 10px;border-radius:12px;font-size:12px}
+.saved{font-size:11.5px;color:var(--leaf-300);margin-left:8px}
+.cfoot{display:flex;align-items:center;gap:10px;padding:12px 18px;border-top:1px solid var(--border-subtle);flex-wrap:wrap}
+.cfoot .grow{flex:1}
+.closem .pop button.armed{background:rgba(197,64,47,.18);color:#fff}
+
+.blank{height:auto;padding:70px 20px;background:var(--surface-card);border:1px dashed var(--border-default);border-radius:6px;text-align:center}
+.blank .big{color:#fff;font-weight:600;font-size:15px}
+.back2{display:none}
+#fabNew{display:none}
+
 @media (max-width:1020px){
-  .strip{grid-template-columns:repeat(2,1fr)}
-  main{grid-template-columns:1fr;overflow-y:auto}
-  aside{border-right:0;border-bottom:1px solid var(--border-default);max-height:42vh}
-  body{overflow:auto;height:auto;min-height:100vh}
+  .wrap{padding:16px 16px 100px}
+  header.top h1{font-size:26px}
+  header.top .acts .b.pri{display:none}
+  .kpis{grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
+  .kpi .v{font-size:20px}
+  .cols{grid-template-columns:1fr}
+  .listp{position:static;max-height:none}
+  body.show-detail .listp,body.show-detail .kpis,body.show-detail .wait{display:none}
+  body:not(.show-detail) .detailp{display:none}
+  .back2{display:inline-flex;margin-bottom:12px}
+  .csum2{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .life .stp{width:72px}.life .lbl{font-size:10.5px}
+  .grid{grid-template-columns:1fr 1fr}
+  #fabNew{display:flex;position:fixed;left:16px;right:16px;bottom:16px;height:50px;justify-content:center;font-size:15px;z-index:20;box-shadow:0 10px 24px rgba(0,0,0,.5)}
+  body.show-detail #fabNew{display:none}
 }
+@media (max-width:520px){
+  .grid{grid-template-columns:1fr}
+  .chead .top2 .acts{width:100%}
+}
+
+
 </style>
 </head>
 <body>
 
-<header>
-  <a class="back" href="/">&larr; Jarvis</a>
-  <h1>Claims</h1>
-  <div class="chips" id="chips"></div>
+<div class="wrap">
+<header class="top">
+  <div>
+    <a class="back" href="/">&larr; Jarvis</a>
+    <div class="eyebrow">// Edge Metals</div>
+    <h1>Claims</h1>
+    <div class="lede">What customers claimed per container, and what Edge got back from the supplier.</div>
+  </div>
+  <div class="acts" id="chips"></div>
 </header>
 
-<div class="strip" id="strip"></div>
+<div id="wait"></div>
+<div class="kpis" id="strip"></div>
 
-<main>
-  <aside>
+<main class="cols">
+  <aside class="listp">
     <div class="search">
-      <input id="q" type="search" placeholder="Container, invoice, customer, supplier" aria-label="Search claims">
-      <button id="newBtn" type="button" title="Enter a claim that came in by phone or WhatsApp">New</button>
+      <input id="q" type="search" placeholder="Search container, invoice, customer, supplier" aria-label="Search claims">
     </div>
-    <div class="tabsel" id="tabs"></div>
+    <div class="tabs" id="tabs" role="tablist" aria-label="Which claims"></div>
     <div class="rows" id="rows"></div>
   </aside>
-  <section class="detail" id="detail"></section>
+  <section class="detailp">
+    <button type="button" class="b sm back2" id="backList">&larr; All claims</button>
+    <div id="detail"></div>
+  </section>
 </main>
+</div>
+
+<button type="button" class="b pri" id="fabNew">+ New claim</button>
 
 <script>
 /* Claims, grouped the way a container actually is: one container can carry a
@@ -222,7 +406,7 @@ const MT = { MT:1, LB:1/2204.62, KG:1/1000 };
 const STATE = { claims:[], stats:{}, kinds:[], sel:null, tab:'needs', q:'' };
 const $ = (s, root) => (root || document).querySelector(s);
 const esc = (s) => String(s==null?'':s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
-const money = (n) => (n===null||n===undefined||n==='') ? '—' : '$' + Number(n).toLocaleString('en-US',{maximumFractionDigits:2});
+const money = (n) => (n===null||n===undefined||n==='') ? '—' : '$' + Number(n).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2});
 const numOf = (v) => { if (v===null||v===undefined||v==='') return null; const n = Number(String(v).replace(/[$,\s]/g,'')); return Number.isFinite(n) ? n : null; };
 /* The vocabulary comes from the server, which got it from the model. A slug with
    no entry yet still reads sensibly; a claim with no kind at all says so. */
@@ -317,62 +501,187 @@ const kindChip = (t) => t
   ? '<span class="kind" style="--kh:' + kindHue(t) + '" title="' + esc(kindLabel(t)) + '">' + esc(kindLabel(t)) + '</span>'
   : '<span class="kind none">not classified yet</span>';
 
+/* ══ THE PAGE, 2026-10-10 ═════════════════════════════════════════════════
+   Apsara: "It should be professional, helpful, most user friendly easing the
+   users work in every way." What that means here, in order:
+     · one obvious next step on every claim, with the button for it;
+     · nothing worked out by hand — the fair figure and the gap to what the
+       customer asked appear as she types;
+     · nothing typed is lost when the page refreshes after another action;
+     · closing a claim is kept away from the main button and asks twice.
+   The maths and the per-container grouping above are unchanged. */
+
+/* ── how the money is worked out: a closed set, kept apart from the KIND ──
+   The kind is the model's free-form name (and she renames and merges them);
+   the assessment is which arithmetic applies. A claim never assessed is a
+   weight claim, which is what every claim before 2026-10-10 was. */
+const ASSESS = [
+  { id:'weight',        label:'Weight shortage' },
+  { id:'contamination', label:'Foreign material' },
+  { id:'grade',         label:'Grade downgrade' },
+];
+const FINDINGS = [
+  ['dirt','Dirt / soil'], ['rubber_plastic','Rubber / plastic'], ['iron_attached','Iron or steel attached'],
+  ['oil_moisture','Oil / moisture'], ['other_metals','Other metals mixed in'], ['wood_paper','Wood / paper'],
+  ['sealed_hazard','Sealed items — radioactive or explosive'],
+];
+const MEASURED = [
+  ['surveyor','Independent surveyor'], ['split_sample','Split sample / lab'],
+  ['sorted_weighed','Sorted and weighed'], ['photos_only','Customer photos only'],
+];
+/* What each method is worth in an argument. An inspector "won't guarantee
+   anything they haven't viewed or witnessed" — photos alone rarely hold. */
+const STRENGTH = {
+  surveyor:       ['Strong', 'good', 'an independent survey settles most disputes'],
+  split_sample:   ['Strong', 'good', 'both sides hold the same sample'],
+  sorted_weighed: ['Medium', 'warn', 'their own sort — ask to witness it or re-weigh'],
+  photos_only:    ['Weak',   'bad',  'photos alone rarely hold — ask for a survey or a split sample'],
+};
+const QUICK = ['Photos attached', 'Surveyor appointed', 'Asked for a split sample', 'Customer agreed on a call', 'Supplier informed'];
+
+/* Edits she has typed but not saved, per claim, so a refresh caused by
+   another action does not wipe them. Cleared once that claim is saved. */
+STATE.drafts = {};
+STATE.pick = {};
+
+function assessOf(c){
+  if (STATE.pick[c.id] && STATE.pick[c.id].assessment) return STATE.pick[c.id].assessment;
+  if (c.assessment) return c.assessment;
+  /* the last time a claim of this kind was assessed, use the same arithmetic —
+     learned from her own choices, never from a list of kind names */
+  const prev = STATE.claims.filter(x => x.id !== c.id && x.claim_type && x.claim_type === c.claim_type && x.assessment)
+    .sort((a,b) => String(b.updated_at||'').localeCompare(String(a.updated_at||'')))[0];
+  return prev ? prev.assessment : 'weight';
+}
+function pickOf(c){
+  if (!STATE.pick[c.id]) STATE.pick[c.id] = {
+    findings: Array.isArray(c.findings) ? c.findings.slice() : [],
+    measured_by: c.measured_by || null,
+    unit: c.weight_unit || null,
+  };
+  return STATE.pick[c.id];
+}
+
+/* the weight maths with an optional contract tolerance — compute() is the
+   server's verify() maths and is left exactly as the test lifts it */
+function computeWeight(f){
+  const r = compute(f);
+  r.claimable = null;
+  if (r.shortage !== null && f.tol !== null && f.tol !== undefined && f.inv !== null) {
+    r.claimable = Math.max(0, Math.round((r.shortage - f.inv * f.tol / 100) * 1e6) / 1e6);
+    if (f.rate !== null && MT[f.rateUnit]) {
+      const q = f.rateUnit === f.unit ? r.claimable : (r.claimable * MT[f.unit]) / MT[f.rateUnit];
+      r.amount = Math.round(q * f.rate * 100) / 100;
+    }
+  }
+  return r;
+}
+/* mirrors claims.assess() for contamination */
+function computeContam({ inv, pct, unit, rate, rateUnit }){
+  const out = { weight:null, amount:null };
+  if (inv === null || pct === null || !unit) return out;
+  out.weight = Math.round(inv * pct / 100 * 1e6) / 1e6;
+  if (rate !== null && MT[rateUnit]) {
+    const q = rateUnit === unit ? out.weight : (out.weight * MT[unit]) / MT[rateUnit];
+    out.amount = Math.round(q * rate * 100) / 100;
+  }
+  return out;
+}
+/* mirrors claims.assess() for a downgrade */
+function computeGrade({ w, sold, recv }){
+  if (w === null || sold === null || recv === null) return { gap:null, amount:null };
+  return { gap: Math.round((sold - recv) * 100) / 100, amount: Math.round(w * (sold - recv) * 100) / 100 };
+}
+
+const icon = (d) => '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="' + d + '"/></svg>';
+
 function renderChips(){
   const s = STATE.stats || {};
-  $('#chips').innerHTML = [
-    s.unverified ? '<span class="chip warn">' + s.unverified + ' to verify</span>' : '<span class="chip on">nothing to verify</span>',
-    s.awaiting_recovery ? '<span class="chip bad">' + s.awaiting_recovery + ' recovery not raised</span>' : '',
-    '<span class="chip">' + (s.containers || 0) + ' containers · ' + (s.total || 0) + ' claims</span>',
-    '<span class="chip act" id="vocab">' + (STATE.kinds.length || 0) + ' kinds</span>',
-    '<span class="chip act" id="scanBtn" title="Photograph a surveyor report or a customer claim letter and let the model fill the form">Scan a document</span>',
-    '<span class="chip act" id="repBtn" title="Build the statement that goes to a supplier">Claim statement</span>',
-    '<span class="chip act" id="impBtn">Import sheet</span>',
-    '<span class="chip act" id="refresh">Refresh</span>',
-  ].filter(Boolean).join('');
-  const r = $('#refresh'); if (r) r.onclick = () => load(true);
-  const v = $('#vocab'); if (v) v.onclick = openVocab;
-  const ib = $('#impBtn'); if (ib) ib.onclick = openImport;
-  const sb = $('#scanBtn'); if (sb) sb.onclick = openScan;
-  const rb = $('#repBtn'); if (rb) rb.onclick = () => openStatement({});
+  /* The old row of eight look-alike chips became ONE primary action, one
+     secondary, and a menu for the occasional ones. */
+  $('#chips').innerHTML =
+    '<button type="button" class="b scanlbl" id="scanBtn" title="Photograph a surveyor report or a customer claim letter and let the model fill the form">' + icon('M4 8V5a1 1 0 0 1 1-1h3 M16 4h3a1 1 0 0 1 1 1v3 M20 16v3a1 1 0 0 1-1 1h-3 M8 20H5a1 1 0 0 1-1-1v-3 M8 12h8') + 'Scan a document</button>' +
+    '<button type="button" class="b pri" id="newBtn" title="Enter a claim that came in by phone or WhatsApp">+ New claim</button>' +
+    '<details class="menu" id="moreMenu"><summary class="b" role="button" aria-label="More actions">More ▾</summary><div class="pop">' +
+      '<button type="button" id="repBtn">Claim report for a supplier<span class="sub">every claim for one supplier, as a PDF or Excel</span></button>' +
+      '<button type="button" id="impBtn">Import sheet</button>' +
+      '<button type="button" id="vocab">Kinds of claim (' + (STATE.kinds.length || 0) + ')</button>' +
+      '<hr><button type="button" id="refresh">Refresh</button>' +
+    '</div></details>';
+  const closeMenu = () => { const m = $('#moreMenu'); if (m) m.open = false; };
+  $('#scanBtn').onclick = () => { closeMenu(); openScan(); };
+  $('#newBtn').onclick = () => openNew();
+  $('#repBtn').onclick = () => { closeMenu(); openStatement({}); };
+  $('#impBtn').onclick = () => { closeMenu(); openImport(); };
+  $('#vocab').onclick = () => { closeMenu(); openVocab(); };
+  $('#refresh').onclick = () => { closeMenu(); load(true); };
 }
+
 function renderStrip(){
   const s = STATE.stats || {};
+  const todo = (s.unverified || 0) + (s.awaiting_recovery || 0);
+  const parts = [];
+  if (s.unverified) parts.push(s.unverified + (s.unverified === 1 ? ' claim' : ' claims') + ' to assess');
+  if (s.awaiting_recovery) parts.push(s.awaiting_recovery + (s.awaiting_recovery === 1 ? ' recovery' : ' recoveries') + ' not raised with the supplier');
+  $('#wait').innerHTML = todo
+    ? '<div class="wait on"><div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap"><span class="dot"></span><strong>' + todo + (todo === 1 ? ' thing is' : ' things are') + ' waiting on you</strong><span class="what">' + esc(parts.join(' · ')) + '</span></div>' +
+      '<button type="button" class="b sm" id="showMe">Show me</button></div>'
+    : '<div class="wait ok"><div style="display:flex;align-items:center;gap:12px"><span class="dot"></span><strong>Nothing is waiting on you</strong><span class="what">every claim has been assessed and every recovery raised</span></div></div>';
+  const sm = $('#showMe');
+  if (sm) sm.onclick = () => { STATE.tab = 'needs'; renderTabs(); renderRows(); const first = visible()[0]; if (first) pickContainer(first.key); };
   $('#strip').innerHTML = [
-    ['Claimed against Edge', money(s.claimed), (s.containers||0) + ' containers', ''],
-    ['Recovered from suppliers', money(s.recovered), (s.recovery_rate||0) + '% of claimed value', 'rec'],
-    ['Absorbed by Edge', money(s.net), 'what the claims cost', 'net'],
-    ['Waiting on someone', (s.unverified||0) + ' + ' + (s.awaiting_recovery||0), 'to verify + to recover', 'todo'],
-  ].map(t => '<div class="tile ' + t[3] + '"><span class="k">' + t[0] + '</span><span class="v">' + t[1] + '</span><span class="s">' + t[2] + '</span></div>').join('');
+    ['Customers claimed', money(s.claimed), (s.containers||0) + ' containers · ' + (s.total||0) + ' claims', ''],
+    ['Got back from suppliers', money(s.recovered), (s.recovery_rate||0) + '% of what was claimed', 'got'],
+    ['Edge’s loss so far', money(s.net), 'claimed minus got back', 'loss'],
+    ['Waiting on you', String(todo), (s.unverified||0) + ' to assess · ' + (s.awaiting_recovery||0) + ' to recover', 'todo'],
+  ].map(t => '<div class="kpi ' + t[3] + '"><div class="k">' + t[0] + '</div><div class="v">' + t[1] + '</div><div class="s">' + t[2] + '</div></div>').join('');
 }
+
 function renderTabs(){
   const all = containers();
   $('#tabs').innerHTML = TABS.map(t => {
     const keep = STATE.tab; STATE.tab = t.id;
     const n = all.filter(inTab).length;
     STATE.tab = keep;
-    return '<button type="button" data-t="' + t.id + '" class="' + (STATE.tab===t.id?'sel':'') + '">' + t.label + ' ' + n + '</button>';
+    return '<button type="button" role="tab" aria-selected="' + (STATE.tab===t.id) + '" data-t="' + t.id + '" class="' + (STATE.tab===t.id?'sel':'') + '">' + t.label + '<span class="n">' + n + '</span></button>';
   }).join('');
   $('#tabs').querySelectorAll('button').forEach(b => b.onclick = () => { STATE.tab = b.dataset.t; renderTabs(); renderRows(); });
 }
 
+/* one line of plain English for where a container stands */
+function rowStatus(g){
+  if (g.claims.every(c => ['settled','rejected','withdrawn'].includes(c.status))) return ['Closed', 'done'];
+  const unv = g.claims.filter(c => c.status === 'unverified').length;
+  if (unv) return [unv + ' to assess', 'todo'];
+  if (g.claims.some(c => c.status === 'verified' && !numOf(c.our_claim))) return ['Recovery not raised', 'todo'];
+  return ['Waiting on supplier', 'wait'];
+}
+
+function pickContainer(key){
+  STATE.sel = key;
+  document.body.classList.add('show-detail');
+  renderRows(); renderDetail();
+  if (window.matchMedia && window.matchMedia('(max-width:1020px)').matches) window.scrollTo(0, 0);
+}
+
 function renderRows(){
   const rows = visible();
-  if (!rows.length){ $('#rows').innerHTML = '<div class="empty">No containers here.</div>'; return; }
+  if (!rows.length){
+    $('#rows').innerHTML = '<div class="empty">' + (STATE.q ? 'Nothing matches “' + esc(STATE.q) + '”.' : STATE.tab === 'needs' ? 'Nothing needs you right now.' : 'No containers here.') + '</div>';
+    return;
+  }
   $('#rows').innerHTML = rows.map(g => {
     const amt = g.claimed > 0 ? money(g.claimed) : '—';
-    return '<div class="prow ' + (STATE.sel===g.key?'sel':'') + '" data-k="' + esc(g.key) + '" tabindex="0">' +
-      '<div class="t"><span class="who">' + esc(g.customer || 'Customer not named') + '</span><span class="amt">' + amt + '</span></div>' +
-      '<div class="b"><span class="cid">' + esc(g.key) + '</span>' +
-        (g.claims.length > 1 ? '<span class="cid">' + g.claims.length + ' claims</span>' : '') +
-        (g.needs ? '<span class="pill p-open"><i></i>' + g.needs + ' to do</span>' : '') + '</div>' +
-      '<div class="kinds">' + g.kinds.map(kindChip).join('') + '</div>' +
-    '</div>';
+    const st = rowStatus(g);
+    return '<button type="button" class="prow ' + (STATE.sel===g.key?'sel':'') + '" data-k="' + esc(g.key) + '"' + (STATE.sel===g.key?' aria-current="true"':'') + '>' +
+      '<span class="t"><span class="who">' + esc(g.customer || 'Customer not named') + '</span><span class="amt">' + amt + '</span></span>' +
+      '<span class="m"><span class="cid">' + esc(g.key) + '</span>' +
+        (g.claims.length > 1 ? '<span class="cid">· ' + g.claims.length + ' claims</span>' : '') +
+        '<span class="st ' + st[1] + '">' + esc(st[0]) + '</span></span>' +
+      '<span class="kinds">' + g.kinds.map(kindChip).join('') + '</span>' +
+    '</button>';
   }).join('');
-  $('#rows').querySelectorAll('.prow').forEach(el => {
-    const pick = () => { STATE.sel = el.dataset.k; renderRows(); renderDetail(); };
-    el.onclick = pick;
-    el.onkeydown = (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); pick(); } };
-  });
+  $('#rows').querySelectorAll('.prow').forEach(el => { el.onclick = () => pickContainer(el.dataset.k); });
 }
 
 const FLAG_TEXT = {
@@ -382,104 +691,234 @@ const FLAG_TEXT = {
   supplier_unknown: 'No supplier on this claim, so there is nobody to recover from. The whole amount lands on Edge.',
 };
 
-function claimCard(c, i){
-  const unit = c.weight_unit || '';
+/* where a claim stands, as four steps */
+function stage(c){
+  if (c.status === 'unverified') return 1;
+  if (c.status === 'verified') return 2;
+  if (c.status === 'recovery_raised') return 3;
+  return 4;
+}
+function lifeBar(c){
+  const steps = ['Received', 'Assess', 'Recover', 'Settle'];
+  const now = stage(c);
+  const closed = ['rejected','withdrawn'].includes(c.status);
+  return '<div class="life" role="img" aria-label="' + (closed ? 'Closed — ' + esc(c.status) : 'Step ' + (now + 1) + ' of 4: ' + steps[Math.min(now,3)]) + '">' +
+    steps.map((s, i) => {
+      const cls = closed ? (i === 0 ? 'done' : 'closed') : i < now ? 'done' : i === now ? 'now' : '';
+      return (i ? '<span class="bar' + (!closed && i <= now ? ' on' : '') + '"></span>' : '') +
+        '<span class="stp ' + cls + '"><span class="dot">' + (cls === 'done' ? '✓' : (i + 1)) + '</span><span class="lbl">' + s + '</span></span>';
+    }).join('') + '</div>';
+}
+function nextLine(c){
+  if (c.status === 'unverified') return '<b>Next:</b> assess the claim below — the figure is worked out as you type.';
+  if (c.status === 'verified' && !numOf(c.our_claim)) return '<b>Next:</b> raise the recovery with ' + esc(c.supplier || 'the supplier') + ' — this is where money is lost when nobody does it.';
+  if (c.status === 'verified') return '<b>Next:</b> raise the recovery so it stops showing as unasked.';
+  if (c.status === 'recovery_raised') return '<b>Waiting on ' + esc(c.supplier || 'the supplier') + '.</b> Mark it settled when the money is agreed.';
+  if (c.status === 'settled') return '<b>Settled.</b> Nothing left to do.';
+  return '<b>Closed — ' + esc(c.status) + '.</b>';
+}
+
+function claimCard(c, i, g){
+  const unit = pickOf(c).unit || c.weight_unit || '';
   const flags = (c.flags || []).filter(f => FLAG_TEXT[f]);
   const why = (c.quotes || {}).claim_type || '';
+  const a = assessOf(c);
+  const pk = pickOf(c);
+  const st = stage(c);
+  const live = !['settled','rejected','withdrawn'].includes(c.status);
+  const unitOpt = (cur) => ['MT','LB','KG'].map(u => '<option value="' + u + '" ' + (cur===u?'selected':'') + '>' + u + '</option>').join('');
+  const fld = (label, cls, val, ph, extra) => '<label class="f">' + label + '<input class="num ' + cls + '" data-k="' + cls + '" inputmode="decimal" value="' + esc(val ?? '') + '" placeholder="' + esc(ph || '—') + '"' + (extra || '') + '></label>';
+  const txt = (label, cls, val, ph) => '<label class="f">' + label + '<input class="' + cls + '" data-k="' + cls + '" value="' + esc(val ?? '') + '" placeholder="' + esc(ph || '') + '"></label>';
+
+  const assessed = c.claim_amount != null;
+  const assessSummary = assessed ? money(c.claim_amount) + ' · ' + esc((ASSESS.find(x => x.id === (c.assessment || 'weight')) || {}).label || '') : 'not assessed yet';
+
   return '<div class="claim" data-cid="' + c.id + '">' +
     '<div class="ch"><span class="n">#' + (i+1) + '</span>' + kindChip(c.claim_type) + pill(c.status) +
       (c.invoice_no ? '<span class="n">' + esc(c.invoice_no) + '</span>' : '') +
       '<span class="amt">' + (c.claim_amount!=null ? money(c.claim_amount) : (c.stated_claim_amount!=null ? money(c.stated_claim_amount) + ' asked' : '—')) + '</span></div>' +
-    '<div class="cb">' +
-      (why ? '<div class="card"><div class="why">Kind read from: “' + esc(why) + '”</div></div>' : '') +
-      (flags.length ? '<div class="card">' + flags.map(f => '<div class="hint" style="margin-top:0"><b>·</b> ' + esc(FLAG_TEXT[f]) + '</div>').join('') + '</div>' : '') +
-      '<div class="card"><h3>Confirm the weights</h3><div class="grid">' +
-        '<label class="f">Invoiced weight<input class="num f_inv" inputmode="decimal" value="' + (c.invoice_weight ?? '') + '" placeholder="—"></label>' +
-        '<label class="f">Weight they received<input class="num f_recv" inputmode="decimal" value="' + (c.claimed_weight ?? '') + '" placeholder="—"></label>' +
-        '<label class="f">Unit for both<div class="units f_unit">' +
-          ['MT','LB','KG'].map(u => '<button type="button" data-u="' + u + '" class="' + (unit===u?'sel':'') + ' ' + (unit?'':'need') + '">' + u + '</button>').join('') +
-        '</div></label>' +
-        '<label class="f">Rate<input class="num f_rate" inputmode="decimal" value="' + (c.sell_price ?? '') + '" placeholder="e.g. 2140"></label>' +
-        '<label class="f">Rate is per<select class="f_rateUnit">' +
-          ['MT','LB','KG'].map(u => '<option value="' + u + '" ' + (((c.sell_price_unit||unit||'MT')===u)?'selected':'') + '>' + u + '</option>').join('') +
-        '</select></label>' +
-        '<label class="f">Kind of claim<select class="f_kind">' +
-          '<option value="">not classified yet</option>' +
-          STATE.kinds.map(k => '<option value="' + esc(k.slug) + '" ' + (c.claim_type===k.slug?'selected':'') + '>' + esc(k.label) + '</option>').join('') +
-          '<option value="__new">name a new kind…</option>' +
-        '</select></label>' +
-      '</div><div class="calc"></div>' +
-      '<div class="actions"><button class="btn go f_verify" type="button">Confirm and work out the claim</button><span class="hint" style="margin:0" id="why"></span></div>' +
-      '<div class="hint">Nothing here is filled in from the mail unless the mail said it in words.' +
-        (c.stated_claim_amount!=null ? ' The customer is asking <b>' + money(c.stated_claim_amount) + '</b> — that is their figure, not yet yours.' : '') + '</div></div>' +
-      '<div class="card"><h3>Recovery from the supplier</h3><div class="grid">' +
-        '<label class="f">Supplier<input class="f_sup" value="' + esc(c.supplier||'') + '" placeholder="who Edge bought from"></label>' +
-        '<label class="f">Their rate<input class="num f_srate" inputmode="decimal" value="' + (c.supplier_price ?? '') + '" placeholder="from the purchase bill"></label>' +
-        '<label class="f">Their rate is per<select class="f_srateUnit">' +
-          ['MT','LB','KG'].map(u => '<option value="' + u + '" ' + (((c.supplier_price_unit||unit||'MT')===u)?'selected':'') + '>' + u + '</option>').join('') +
-        '</select></label>' +
-        '<label class="f">Recovering from them<input class="num f_ours" inputmode="decimal" value="' + (c.our_claim ?? '') + '" placeholder="—"></label>' +
-      '</div><div class="billrate hint">Looking up the purchase bill\u2026</div><div class="actions">' +
-        '<button class="btn go f_rec" type="button">Raise the recovery</button>' +
-        '<button class="btn f_save" type="button">Save</button>' +
-        '<button class="btn f_st" data-st="settled" type="button">Settled</button>' +
-        '<button class="btn warn f_st" data-st="rejected" type="button">Rejected</button>' +
-        '<button class="btn danger f_st" data-st="withdrawn" type="button">Withdrawn</button>' +
-      '</div></div>' +
-      (Object.keys(c.quotes||{}).filter(k => k !== 'claim_type').length ? '<div class="card"><h3>Read from the mail, word for word</h3><div class="quotes">' +
+    lifeBar(c) +
+    '<div class="next">' + nextLine(c) + '</div>' +
+    '<div class="cb2">' +
+      (why || flags.length ? '<div class="flagbox">' +
+        (why ? '<div class="why">Kind read from: “' + esc(why) + '”</div>' : '') +
+        flags.map(f => '<div class="hint" data-flag="' + f + '"><b>·</b> ' + esc(FLAG_TEXT[f]) + '</div>').join('') + '</div>' : '') +
+
+      /* ── 1. ASSESS ─────────────────────────────────────────────────── */
+      '<details class="sec" data-sec="assess"' + (st === 1 ? ' open' : '') + '><summary><span class="t">Assess the claim</span><span class="r2">' + assessSummary + '</span></summary>' +
+        '<div class="rowline"><span class="lab">How the money is worked out</span><div class="seg" role="radiogroup" aria-label="How the money is worked out">' +
+          ASSESS.map(x => '<button type="button" role="radio" aria-checked="' + (a===x.id) + '" class="f_as' + (a===x.id?' sel':'') + '" data-a="' + x.id + '">' + x.label + '</button>').join('') +
+        '</div></div>' +
+        '<div class="grid">' +
+          '<label class="f">Kind of claim<select class="f_kind">' +
+            '<option value="">not classified yet</option>' +
+            STATE.kinds.map(k => '<option value="' + esc(k.slug) + '" ' + (c.claim_type===k.slug?'selected':'') + '>' + esc(k.label) + '</option>').join('') +
+            '<option value="__new">name a new kind…</option>' +
+          '</select></label>' +
+          '<label class="f">Unit for the weights<div class="units f_unit">' +
+            ['MT','LB','KG'].map(u => '<button type="button" data-u="' + u + '" class="' + (unit===u?'sel':'') + ' ' + (unit?'':'need') + '">' + u + '</button>').join('') +
+          '</div></label>' +
+        '</div>' +
+
+        /* weight */
+        '<div class="pane" data-pane="weight"' + (a==='weight'?'':' hidden') + '>' +
+          '<div class="lede2" style="margin-top:14px">From the invoice and what the customer says they received. Nothing is filled in from the mail unless the mail said it in words.</div>' +
+          '<div class="grid">' +
+            fld('Weight we invoiced', 'f_inv', c.invoice_weight) +
+            fld('Weight they received', 'f_recv', c.claimed_weight) +
+            fld('Sale rate', 'f_rate', c.sell_price, 'e.g. 2140') +
+            '<label class="f">Rate is per<select class="f_rateUnit" data-k="f_rateUnit">' + unitOpt(c.sell_price_unit||unit||'MT') + '</select></label>' +
+            fld('Contract tolerance %', 'f_tol', c.tolerance_pct, 'blank = none') +
+          '</div><div class="calc c_w"></div>' +
+          '<div class="actions"><button class="btn go f_verify" type="button">Confirm the weights and work out the claim</button><span class="hint" style="margin:0" id="why"></span></div>' +
+        '</div>' +
+
+        /* contamination */
+        '<div class="pane" data-pane="contamination"' + (a==='contamination'?'':' hidden') + '>' +
+          '<div class="lede2" style="margin-top:14px">Record what was found and how it was measured. A deduction is only as strong as the evidence behind it.</div>' +
+          '<div class="rowline" style="margin-bottom:8px"><span class="lab">What was found — pick all that apply</span></div>' +
+          '<div class="chips2 f_found" style="margin-bottom:12px">' + FINDINGS.map(f => '<button type="button" aria-pressed="' + pk.findings.includes(f[0]) + '" data-f="' + f[0] + '" class="' + (pk.findings.includes(f[0]) ? 'sel' : '') + (f[0]==='sealed_hazard' ? ' danger' : '') + '">' + f[1] + '</button>').join('') + '</div>' +
+          '<div class="stop c_stop"' + (pk.findings.includes('sealed_hazard') ? '' : ' hidden') + '><span class="bang">!</span><div><strong>Stop — this is a customs and safety matter, not a price deduction.</strong><div>Every scrap shipment into India carries a declaration of no radioactive material or explosives. Tell the owner before replying to the customer or agreeing any figure.</div></div></div>' +
+          '<div class="rowline" style="margin-bottom:8px"><span class="lab">How it was measured</span></div>' +
+          '<div class="chips2 f_meas" style="margin-bottom:12px" role="radiogroup" aria-label="How it was measured">' + MEASURED.map(m => '<button type="button" role="radio" aria-checked="' + (pk.measured_by===m[0]) + '" data-m="' + m[0] + '" class="' + (pk.measured_by===m[0] ? 'sel' : '') + '">' + m[1] + '</button>').join('') + '</div>' +
+          '<div class="grid">' +
+            fld('Net weight invoiced', 'f_cinv', c.invoice_weight) +
+            fld('Share they claim is not metal %', 'f_cpct', c.contam_claimed_pct, 'e.g. 4') +
+            fld('Share Edge accepts %', 'f_apct', c.contam_accepted_pct, 'e.g. 3.5') +
+            fld('Sale rate', 'f_crate', c.sell_price, 'e.g. 2140') +
+            '<label class="f">Rate is per<select class="f_crateUnit" data-k="f_crateUnit">' + unitOpt(c.sell_price_unit||unit||'MT') + '</select></label>' +
+          '</div><div class="calc c_c"></div>' +
+          '<div class="actions"><button class="btn go f_assess" data-kind="contamination" type="button">Confirm the assessment</button><span class="hint c_why" style="margin:0"></span></div>' +
+        '</div>' +
+
+        /* grade */
+        '<div class="pane" data-pane="grade"' + (a==='grade'?'':' hidden') + '>' +
+          '<div class="lede2" style="margin-top:14px">A downgrade is the price gap between the grade sold and the grade received, on the weight affected — not the whole container.</div>' +
+          '<div class="grid">' +
+            txt('Grade we sold', 'f_gsold', c.grade_sold, 'as on the contract') +
+            txt('Grade they say arrived', 'f_grecv', c.grade_received, 'as in their claim') +
+            fld('Weight affected', 'f_gw', c.grade_weight) +
+            fld('Our price for the grade sold, per unit', 'f_gps', c.grade_price_sold) +
+            fld('Price of the grade received, per unit', 'f_gpr', c.grade_price_received) +
+          '</div><div class="calc c_g"></div>' +
+          '<div class="actions"><button class="btn go f_assess" data-kind="grade" type="button">Confirm the assessment</button><span class="hint g_why" style="margin:0"></span></div>' +
+        '</div>' +
+
+        '<div class="hint">Nothing here is filled in from the mail unless the mail said it in words.' +
+          (c.stated_claim_amount!=null ? ' The customer is asking <b>' + money(c.stated_claim_amount) + '</b> — that is their figure, not yet yours.' : '') + '</div>' +
+      '</details>' +
+
+      /* ── 2. RECOVER ────────────────────────────────────────────────── */
+      '<details class="sec" data-sec="recover"' + (st === 2 || st === 3 ? ' open' : '') + '><summary><span class="t">Recover from the supplier</span><span class="r2">' + (numOf(c.our_claim) ? money(c.our_claim) + ' raised' : esc(c.supplier || 'no supplier yet')) + '</span></summary>' +
+        '<div class="grid">' +
+          '<label class="f">Supplier<input class="f_sup" data-k="f_sup" value="' + esc(c.supplier||'') + '" placeholder="who Edge bought from"></label>' +
+          fld('Their rate', 'f_srate', c.supplier_price, 'from the purchase bill') +
+          '<label class="f">Their rate is per<select class="f_srateUnit" data-k="f_srateUnit">' + unitOpt(c.supplier_price_unit||unit||'MT') + '</select></label>' +
+          fld('Recovering from them', 'f_ours', c.our_claim) +
+        '</div><div class="billrate hint">Looking up the purchase bill…</div><div class="actions">' +
+          '<button class="btn go f_rec" type="button">Raise the recovery</button>' +
+          '<button class="btn f_save" type="button">Save without raising</button>' +
+        '</div>' +
+      '</details>' +
+
+      /* ── 3. REMARKS — always in view ───────────────────────────────── */
+      '<div style="margin-top:14px">' +
+        '<label class="f">Remarks <span style="color:var(--text-faint)">— saved as you leave the box · for Edge only, never printed on the claim report</span>' +
+          '<textarea rows="3" class="f_remarks" data-k="f_remarks" placeholder="What happened, what was agreed, who said what">' + esc(c.remarks || '') + '</textarea></label>' +
+        '<div class="quick"><span class="lab">Quick add:</span>' + QUICK.map(q => '<button type="button" class="f_q" data-q="' + esc(q) + '">+ ' + esc(q) + '</button>').join('') + '<span class="saved" hidden>Saved</span></div>' +
+      '</div>' +
+
+      /* ── the record, folded away ───────────────────────────────────── */
+      (Object.keys(c.quotes||{}).filter(k => k !== 'claim_type').length ? '<details class="sec minor"><summary><span class="t">Read from the mail, word for word</span><span class="c">' + Object.keys(c.quotes).filter(k => k !== 'claim_type').length + '</span></summary><div class="quotes" style="padding-bottom:6px">' +
         Object.entries(c.quotes).filter(([k]) => k !== 'claim_type').map(([k,v]) => '<div class="q"><span class="qk">' + esc(k.replace(/_/g,' ')) + '</span><span class="qv">' + esc(v) + '</span></div>').join('') +
-      '</div></div>' : '') +
-      ((c.mail||[]).length ? '<div class="card"><h3>Mail trail — ' + c.mail.length + '</h3><div class="trail">' +
+      '</div></details>' : '') +
+      ((c.mail||[]).length ? '<details class="sec minor"><summary><span class="t">Mail trail</span><span class="c">' + c.mail.length + '</span><span class="r2">last ' + esc(String((c.mail[c.mail.length-1]||{}).date||'').slice(0,10)) + '</span></summary><div class="trail" style="padding-bottom:6px">' +
         c.mail.map(m => '<div class="mailrow"><span class="d">' + esc(String(m.date||'').slice(0,10)) + '</span><span class="s">' + esc(m.subject||'(no subject)') + '</span><span class="f">' + esc(m.from||'') + '</span></div>').join('') +
-      '</div></div>' : '') +
-      '<div class="card"><h3>Supporting documents</h3>' +
+      '</div></details>' : '') +
+      '<details class="sec minor"' + ((c.evidence||[]).filter(e => e && e.url).length ? '' : ' open') + '><summary><span class="t">Supporting documents</span><span class="c">' + (c.evidence||[]).filter(e => e && e.url).length + '</span></summary>' +
         (((c.evidence||[]).filter(e => e && e.url).length)
           ? '<div class="quotes">' + c.evidence.filter(e => e && e.url).map(e =>
               '<div class="q"><span class="qk">' + esc(String(e.added_at||'').slice(0,10)) + '</span>' +
               '<span class="qv"><a href="' + esc(e.url) + '" target="_blank" rel="noopener">' + esc(e.name || 'document') + '</a>' +
-              (e.added_by ? ' \u00b7 ' + esc(e.added_by) : '') + '</span></div>').join('') + '</div>'
+              (e.added_by ? ' · ' + esc(e.added_by) : '') + '</span></div>').join('') + '</div>'
           : '<div class="hint" style="margin-top:0">Nothing filed against this claim yet.</div>') +
         '<label class="f" style="margin-top:10px">Add a document' +
           '<input type="file" class="f_doc" accept="image/*,application/pdf" capture="environment">' +
         '</label>' +
-        '<div class="hint">The surveyor report, the weighbridge ticket, a photo of the container. Kept on Edge\u2019s Drive for staff \u2014 these pages name the customer, so they are never linked on anything sent to a supplier.</div>' +
-      '</div>' +
-      (c.note ? '<div class="card"><h3>Note</h3><div class="hint" style="margin-top:0">' + esc(c.note) + '</div></div>' : '') +
-      ((c.history||[]).length ? '<div class="card"><h3>History</h3><div class="hist">' +
+        '<div class="hint" style="padding-bottom:6px">The surveyor report, the weighbridge ticket, a photo of the container. Kept on Edge’s Drive for staff — these pages name the customer, so they are never linked on anything sent to a supplier.</div>' +
+      '</details>' +
+      (c.note ? '<details class="sec minor"><summary><span class="t">Note</span></summary><div class="hint" style="margin-top:0;padding-bottom:6px">' + esc(c.note) + '</div></details>' : '') +
+      ((c.history||[]).length ? '<details class="sec minor"><summary><span class="t">History</span><span class="c">' + c.history.length + '</span></summary><div class="hist" style="padding-bottom:6px">' +
         c.history.slice().reverse().map(h => '<span>' + esc(String(h.at||'').slice(0,16).replace('T',' ')) + ' — ' + esc(h.what) + ' · ' + esc(h.by) + '</span>').join('') +
-      '</div></div>' : '') +
-    '</div></div>';
+      '</div></details>' : '') +
+    '</div>' +
+    '<div class="cfoot"><span class="grow"></span>' +
+      (live ? '<details class="menu closem"><summary class="b xs" role="button">Close this claim ▾</summary><div class="pop">' +
+        '<button type="button" class="f_st" data-st="settled">Settled<span class="sub">the money is agreed</span></button>' +
+        '<button type="button" class="f_st" data-st="rejected">Rejected<span class="sub">Edge does not accept it</span></button>' +
+        '<button type="button" class="f_st" data-st="withdrawn">Withdrawn<span class="sub">the customer dropped it</span></button>' +
+      '</div></details>' : '') +
+    '</div>' +
+  '</div>';
 }
+
+function reportMenu(g){
+  const cont = encodeURIComponent(g.container || g.key);
+  const sup = g.suppliers.length === 1 ? '&supplier=' + encodeURIComponent(g.suppliers[0]) : '';
+  const base = '/api/claims/report?container=' + cont + sup;
+  return '<details class="menu"><summary class="b sm" role="button">' + icon('M12 4v11 M7 10l5 5 5-5 M5 20h14') + 'Claim report ▾</summary><div class="pop" style="min-width:300px">' +
+    '<a href="' + base + '&format=pdf"><b>Claim report</b> · PDF<span class="sub">For ' + esc(g.suppliers[0] || 'the supplier') + ' — no customer name, no sale prices, no remarks</span></a>' +
+    '<a href="' + base + '&format=xlsx">Claim report · Excel<span class="sub">the same lines, for a supplier who argues them one by one</span></a>' +
+    '<a href="' + base + '&format=html" target="_blank" rel="noopener">Preview before sending</a>' +
+  '</div></details>';
+}
+
+function snapshotDrafts(){
+  document.querySelectorAll('.claim[data-cid]').forEach(el => {
+    const d = {};
+    el.querySelectorAll('[data-k]').forEach(i => { d[i.dataset.k] = i.value; });
+    const open = [...el.querySelectorAll('details.sec[data-sec]')].reduce((o, x) => { o[x.dataset.sec] = x.open; return o; }, {});
+    STATE.drafts[el.dataset.cid] = { values: d, open };
+  });
+}
+function restoreDrafts(){
+  document.querySelectorAll('.claim[data-cid]').forEach(el => {
+    const d = STATE.drafts[el.dataset.cid];
+    if (!d) return;
+    el.querySelectorAll('[data-k]').forEach(i => { if (d.values[i.dataset.k] !== undefined) i.value = d.values[i.dataset.k]; });
+    el.querySelectorAll('details.sec[data-sec]').forEach(x => { if (d.open[x.dataset.sec] !== undefined) x.open = d.open[x.dataset.sec]; });
+  });
+}
+function savedClaim(id){ delete STATE.drafts[id]; delete STATE.pick[id]; }
 
 function renderDetail(){
   const g = containers().find(x => x.key === STATE.sel);
   const d = $('#detail');
+  snapshotDrafts();
   if (!g){
-    d.innerHTML = '<div class="blank"><div>Pick a container on the left.</div>' +
-      '<div style="max-width:450px;text-align:center;line-height:1.6">One container can carry more than one claim, and they are rarely the same kind — a weight shortage, a grade downgrade and foreign material are three different arguments with the customer and three different recoveries from the supplier.</div></div>';
+    d.innerHTML = '<div class="blank"><div class="big">Pick a container on the left.</div>' +
+      '<div style="max-width:470px;margin:8px auto 0;line-height:1.6;color:var(--text-faint)">One container can carry more than one claim, and they are rarely the same kind — a weight shortage, a grade downgrade and foreign material are three different arguments with the customer and three different recoveries from the supplier.</div></div>';
     return;
   }
   d.innerHTML =
-    '<div class="dhead"><div><h2>' + esc(g.key) + '</h2>' +
-      '<div class="sub">' + esc(g.customer || 'customer not named') + (g.invoices.length ? ' &nbsp;·&nbsp; ' + esc(g.invoices.join(', ')) : '') + '</div></div>' +
-      '<div class="right">' + g.kinds.map(kindChip).join('') +
-        '<span class="chip">recover from ' + esc(g.suppliers.join(', ') || 'nobody yet') + '</span>' +
-        '<span class="chip act" id="addClaim">+ another claim</span>' +
-        (g.suppliers.length ? '<span class="chip act" id="contRep">statement to ' + esc(g.suppliers[0]) + '</span>' : '') +
-        '</div></div>' +
-    '<div class="csum">' +
-      '<div><span class="k">Claims on this container</span><span class="v">' + g.claims.length + '</span></div>' +
-      '<div><span class="k">Claimed against Edge</span><span class="v">' + money(g.claimed) + '</span></div>' +
-      '<div><span class="k">Recovered</span><span class="v">' + money(g.recovered) + '</span></div>' +
-      '<div><span class="k">Absorbed</span><span class="v hi">' + money(g.net) + '</span></div>' +
-    '</div>' +
-    g.claims.map(claimCard).join('');
+    '<div class="chead"><div class="top2"><div><h2>' + esc(g.key) + '</h2>' +
+      '<div class="sub">' + esc(g.customer || 'customer not named') + (g.invoices.length ? ' &nbsp;·&nbsp; ' + esc(g.invoices.join(', ')) : '') +
+        ' &nbsp;·&nbsp; recover from ' + esc(g.suppliers.join(', ') || 'nobody yet') + '</div>' +
+      (g.claims.length > 1 ? '<div class="why3">' + g.claims.length + ' claims on this container. They are rarely the same kind — three different arguments with the customer and three different recoveries from the supplier — so each is worked out on its own.</div>' : '') +
+      '</div>' +
+      '<div class="acts">' + reportMenu(g) + '<button type="button" class="b sm" id="addClaim">+ another claim</button></div></div>' +
+      '<div class="csum2">' +
+        '<div><div class="k">Claims</div><div class="v">' + g.claims.length + '</div></div>' +
+        '<div><div class="k">Customer claimed</div><div class="v">' + money(g.claimed) + '</div></div>' +
+        '<div><div class="k">Got back</div><div class="v got">' + money(g.recovered) + '</div></div>' +
+        '<div><div class="k">Edge’s loss</div><div class="v loss">' + money(g.net) + '</div></div>' +
+      '</div></div>' +
+    g.claims.map((c, i) => claimCard(c, i, g)).join('');
 
+  restoreDrafts();
   g.claims.forEach(c => wireClaim(c));
   const add = $('#addClaim');
   if (add) add.onclick = () => openNew({ container_no: g.container || g.key, customer: g.customer, invoice_no: g.invoices[0] || '' });
-  const cr = $('#contRep');
-  if (cr) cr.onclick = () => openStatement({ container: g.container || g.key, supplier: g.suppliers[0] || '' });
 }
 
 function readCard(el){
@@ -490,31 +929,82 @@ function readCard(el){
     unit: sel ? sel.dataset.u : null,
     rate: numOf(el.querySelector('.f_rate').value),
     rateUnit: el.querySelector('.f_rateUnit').value,
+    tol: numOf(el.querySelector('.f_tol').value),
   };
 }
+function gapLine(ours, asked){
+  if (ours === null || asked === null || asked === undefined) return '';
+  const d = Math.round((asked - ours) * 100) / 100;
+  if (Math.abs(d) < 0.005) return '<span class="s2 good">exactly what they ask</span>';
+  return d > 0 ? '<span class="s2 warn">' + money(d) + ' less than they ask</span>' : '<span class="s2 bad">' + money(-d) + ' more than they ask — check the figures</span>';
+}
 function renderCalc(el){
+  const c = STATE.claims.find(x => x.id === el.dataset.cid) || {};
   const f = readCard(el);
-  const r = compute(f);
-  el.querySelector('.calc').innerHTML = [
-    ['Shortage', r.shortage === null ? '—' : r.shortage.toFixed(3) + (f.unit ? ' ' + f.unit : ''), r.shortage===null?'muted':''],
-    ['Of invoiced weight', r.pct === null ? '—' : r.pct.toFixed(2) + '%', r.pct===null?'muted':(r.pct>=2?'hi':'')],
-    ['Claim against Edge', r.amount === null ? '—' : money(r.amount), r.amount===null?'muted':'hi'],
-  ].map(x => '<div><span class="k">' + x[0] + '</span><span class="v ' + x[2] + '">' + x[1] + '</span></div>').join('');
+  const r = computeWeight(f);
+  el.querySelector('.c_w').innerHTML = [
+    ['Short by', r.shortage === null ? '—' : r.shortage.toFixed(3) + (f.unit ? ' ' + f.unit : ''), r.shortage===null?'muted':'', r.pct !== null && r.pct >= 2 ? '<span class="s2 warn">' + r.pct.toFixed(2) + '% of what we invoiced</span>' : (r.pct !== null ? '<span class="s2">' + r.pct.toFixed(2) + '% of what we invoiced</span>' : '')],
+    ['Claimable after tolerance', r.claimable === null ? '—' : r.claimable.toFixed(3) + ' ' + f.unit, r.claimable===null?'muted':'', r.claimable === null ? '<span class="s2">no tolerance set</span>' : ''],
+    ['Fair claim, by our numbers', r.amount === null ? '—' : money(r.amount), r.amount===null?'muted':'hi', gapLine(r.amount, numOf(c.stated_claim_amount))],
+  ].map(x => '<div><span class="k">' + x[0] + '</span><span class="v ' + x[2] + '">' + x[1] + '</span>' + x[3] + '</div>').join('');
   const why = !f.unit ? 'Pick the unit first.'
     : (f.inv === null || f.recv === null) ? 'Both weights are needed.'
     : f.rate === null ? 'Without a rate this records the shortage but no amount.' : '';
   el.querySelector('#why').textContent = why;
   el.querySelector('.f_verify').disabled = !f.unit || f.inv === null || f.recv === null;
+
+  /* contamination */
+  const pk = pickOf(c);
+  const cc = computeContam({ inv: numOf(el.querySelector('.f_cinv').value), pct: numOf(el.querySelector('.f_apct').value), unit: f.unit,
+    rate: numOf(el.querySelector('.f_crate').value), rateUnit: el.querySelector('.f_crateUnit').value });
+  const ev = STRENGTH[pk.measured_by];
+  el.querySelector('.c_c').innerHTML =
+    '<div><span class="k">Weight that was not metal</span><span class="v ' + (cc.weight===null?'muted':'') + '">' + (cc.weight === null ? '—' : cc.weight.toFixed(3) + ' ' + f.unit) + '</span></div>' +
+    '<div><span class="k">Fair claim, by our numbers</span><span class="v ' + (cc.amount===null?'muted':'hi') + '">' + (cc.amount === null ? '—' : money(cc.amount)) + '</span>' + gapLine(cc.amount, numOf(c.stated_claim_amount)) + '</div>' +
+    '<div><span class="k">Evidence strength</span><span class="v ' + (ev ? ev[1] : 'muted') + '">' + (ev ? ev[0] : '—') + '</span><span class="s2">' + (ev ? esc(ev[2]) : 'say how it was measured') + '</span></div>';
+  const cWhy = !f.unit ? 'Pick the unit first.' : numOf(el.querySelector('.f_cinv').value) === null ? 'The net weight invoiced is needed.'
+    : numOf(el.querySelector('.f_apct').value) === null ? 'Say what share Edge accepts.' : '';
+  el.querySelector('.c_why').textContent = cWhy;
+  el.querySelector('.f_assess[data-kind="contamination"]').disabled = !!cWhy;
+
+  /* grade */
+  const gg = computeGrade({ w: numOf(el.querySelector('.f_gw').value), sold: numOf(el.querySelector('.f_gps').value), recv: numOf(el.querySelector('.f_gpr').value) });
+  el.querySelector('.c_g').innerHTML =
+    '<div><span class="k">Price gap</span><span class="v ' + (gg.gap===null?'muted':(gg.gap < 0 ? 'bad' : '')) + '">' + (gg.gap === null ? '—' : money(gg.gap) + (f.unit ? ' /' + f.unit : '')) + '</span>' + (gg.gap !== null && gg.gap < 0 ? '<span class="s2 bad">the received grade is worth more — not a downgrade</span>' : '') + '</div>' +
+    '<div><span class="k">Fair claim, by our numbers</span><span class="v ' + (gg.amount===null?'muted':'hi') + '">' + (gg.amount === null || gg.gap < 0 ? '—' : money(gg.amount)) + '</span>' + (gg.gap >= 0 ? gapLine(gg.amount, numOf(c.stated_claim_amount)) : '') + '</div>';
+  const gWhy = !f.unit ? 'Pick the unit first.' : gg.gap === null ? 'The weight affected and both prices are needed.' : gg.gap < 0 ? 'The prices are the wrong way round.' : '';
+  el.querySelector('.g_why').textContent = gWhy;
+  el.querySelector('.f_assess[data-kind="grade"]').disabled = !!gWhy;
 }
 
 function wireClaim(c){
   const el = document.querySelector('.claim[data-cid="' + c.id + '"]');
   if (!el) return;
-  el.querySelectorAll('.f_inv,.f_recv,.f_rate').forEach(i => i.oninput = () => renderCalc(el));
-  el.querySelector('.f_rateUnit').onchange = () => renderCalc(el);
+  const pk = pickOf(c);
+  el.querySelectorAll('input.num,.f_rateUnit,.f_crateUnit').forEach(i => { i.oninput = () => renderCalc(el); i.onchange = () => renderCalc(el); });
   el.querySelectorAll('.f_unit button').forEach(b => b.onclick = () => {
     el.querySelectorAll('.f_unit button').forEach(x => { x.classList.remove('sel'); x.classList.remove('need'); });
-    b.classList.add('sel'); renderCalc(el);
+    b.classList.add('sel'); pk.unit = b.dataset.u;
+    const nf = el.querySelector('[data-flag="unit_not_stated"]'); if (nf) nf.hidden = true;
+    renderCalc(el);
+  });
+  /* switching the arithmetic is remembered for the claim the moment it is saved */
+  el.querySelectorAll('.f_as').forEach(b => b.onclick = () => {
+    STATE.pick[c.id] = Object.assign(pk, { assessment: b.dataset.a });
+    el.querySelectorAll('.f_as').forEach(x => { const on = x === b; x.classList.toggle('sel', on); x.setAttribute('aria-checked', on); });
+    el.querySelectorAll('.pane').forEach(p => { p.hidden = p.dataset.pane !== b.dataset.a; });
+    renderCalc(el);
+  });
+  el.querySelectorAll('.f_found button').forEach(b => b.onclick = () => {
+    const f = b.dataset.f, i = pk.findings.indexOf(f);
+    if (i === -1) pk.findings.push(f); else pk.findings.splice(i, 1);
+    b.classList.toggle('sel', i === -1); b.setAttribute('aria-pressed', i === -1);
+    el.querySelector('.c_stop').hidden = !pk.findings.includes('sealed_hazard');
+  });
+  el.querySelectorAll('.f_meas button').forEach(b => b.onclick = () => {
+    pk.measured_by = b.dataset.m;
+    el.querySelectorAll('.f_meas button').forEach(x => { const on = x === b; x.classList.toggle('sel', on); x.setAttribute('aria-checked', on); });
+    renderCalc(el);
   });
   renderCalc(el);
 
@@ -522,12 +1012,35 @@ function wireClaim(c){
     const f = readCard(el);
     try {
       const kind = el.querySelector('.f_kind').value;
-      if (kind !== (c.claim_type || 'other')) await api('/api/claims/' + c.id + '/edit', { claim_type: kind });
-      await api('/api/claims/' + c.id + '/verify', { invoice_weight:f.inv, claimed_weight:f.recv, weight_unit:f.unit, sell_price:f.rate, sell_price_unit:f.rateUnit });
+      if (kind !== '__new' && kind !== (c.claim_type || '')) await api('/api/claims/' + c.id + '/edit', { claim_type: kind });
+      await api('/api/claims/' + c.id + '/verify', { invoice_weight:f.inv, claimed_weight:f.recv, weight_unit:f.unit, sell_price:f.rate, sell_price_unit:f.rateUnit, tolerance_pct: f.tol === null ? '' : f.tol });
+      savedClaim(c.id);
       toast('Confirmed. The chase is cancelled and a recovery to-do is raised.', 'ok');
       await load();
     } catch (e) { toast(e.message, 'bad'); }
   };
+  el.querySelectorAll('.f_assess').forEach(btn => btn.onclick = async () => {
+    const unit = (el.querySelector('.f_unit button.sel') || {}).dataset;
+    const body = { assessment: btn.dataset.kind, weight_unit: unit ? unit.u : null };
+    if (btn.dataset.kind === 'contamination') Object.assign(body, {
+      invoice_weight: numOf(el.querySelector('.f_cinv').value), contam_claimed_pct: numOf(el.querySelector('.f_cpct').value),
+      contam_accepted_pct: numOf(el.querySelector('.f_apct').value), sell_price: numOf(el.querySelector('.f_crate').value),
+      sell_price_unit: el.querySelector('.f_crateUnit').value, findings: pk.findings.slice(), measured_by: pk.measured_by,
+    });
+    else Object.assign(body, {
+      grade_sold: el.querySelector('.f_gsold').value.trim(), grade_received: el.querySelector('.f_grecv').value.trim(),
+      grade_weight: numOf(el.querySelector('.f_gw').value), grade_price_sold: numOf(el.querySelector('.f_gps').value),
+      grade_price_received: numOf(el.querySelector('.f_gpr').value),
+    });
+    try {
+      const kind = el.querySelector('.f_kind').value;
+      if (kind !== '__new' && kind !== (c.claim_type || '')) await api('/api/claims/' + c.id + '/edit', { claim_type: kind });
+      await api('/api/claims/' + c.id + '/assess', body);
+      savedClaim(c.id);
+      toast(pk.findings.includes('sealed_hazard') ? 'Assessed — and tell the owner about the sealed items before anything else.' : 'Assessed. The chase is cancelled and a recovery to-do is raised.', pk.findings.includes('sealed_hazard') ? 'bad' : 'ok');
+      await load();
+    } catch (e) { toast(e.message, 'bad'); }
+  });
   el.querySelector('.f_kind').onchange = () => {
     const sel = el.querySelector('.f_kind');
     if (sel.value !== '__new') return;
@@ -535,9 +1048,9 @@ function wireClaim(c){
     // the moment she uses it.
     const row = document.createElement('div');
     row.className = 'actions';
-    row.innerHTML = '<input class="k_new" placeholder="what kind of claim is this? two or three words" style="flex:1;padding:7px 9px;border-radius:4px;border:1px solid var(--border-default);background:var(--bg-base);color:var(--text-body)">' +
+    row.innerHTML = '<input class="k_new" placeholder="what kind of claim is this? two or three words" style="flex:1;height:38px;padding:0 10px;border-radius:4px;border:1px solid var(--border-default);background:var(--bg-base);color:var(--text-body)">' +
       '<button class="btn go k_ok" type="button">Use it</button>';
-    sel.parentNode.appendChild(row);
+    sel.closest('.grid').after(row);
     row.querySelector('.k_ok').onclick = async () => {
       const label = row.querySelector('.k_new').value.trim();
       if (!label) { toast('Give it a name first.', 'bad'); return; }
@@ -546,6 +1059,26 @@ function wireClaim(c){
     };
     row.querySelector('.k_new').focus();
   };
+
+  /* remarks save themselves — "nothing typed is lost" */
+  const rem = el.querySelector('.f_remarks');
+  const savedTag = el.querySelector('.saved');
+  const saveRemarks = async () => {
+    const v = rem.value.trim();
+    if (v === String(c.remarks || '').trim()) return;
+    try {
+      await api('/api/claims/' + c.id + '/edit', { remarks: v });
+      c.remarks = v;
+      if (STATE.drafts[c.id]) delete STATE.drafts[c.id].values.f_remarks;
+      savedTag.hidden = false; setTimeout(() => { savedTag.hidden = true; }, 2200);
+    } catch (e) { toast('Remarks not saved — ' + e.message, 'bad'); }
+  };
+  rem.onblur = saveRemarks;
+  el.querySelectorAll('.f_q').forEach(b => b.onclick = () => {
+    rem.value = (rem.value.replace(/\s*$/, '') ? rem.value.replace(/\s*$/, '') + ' ' : '') + b.dataset.q + '.';
+    saveRemarks();
+  });
+
   el.querySelector('.f_save').onclick = async () => {
     try {
       const k = el.querySelector('.f_kind').value;
@@ -554,6 +1087,7 @@ function wireClaim(c){
       const sp = numOf(el.querySelector('.f_srate').value);
       if (sp !== null) { body.supplier_price = sp; body.supplier_price_unit = el.querySelector('.f_srateUnit').value; }
       await api('/api/claims/' + c.id + '/edit', body);
+      savedClaim(c.id);
       toast('Saved.', 'ok'); await load();
     } catch (e) { toast(e.message, 'bad'); }
   };
@@ -564,13 +1098,14 @@ function wireClaim(c){
       const sup = el.querySelector('.f_sup').value.trim();
       const patch = {};
       if (sup && sup !== (c.supplier||'')) patch.supplier = sup;
-      // The rate goes on the record WITH the figure, because the statement
+      // The rate goes on the record WITH the figure, because the report
       // prints it and a rate recorded later would not be the one this amount
       // was worked out at.
       const sp = numOf(el.querySelector('.f_srate').value);
       if (sp !== null) { patch.supplier_price = sp; patch.supplier_price_unit = el.querySelector('.f_srateUnit').value; }
       if (Object.keys(patch).length) await api('/api/claims/' + c.id + '/edit', patch);
       await api('/api/claims/' + c.id + '/recovery', { our_claim: ours });
+      savedClaim(c.id);
       toast('Recovery raised.', 'ok'); await load();
     } catch (e) { toast(e.message, 'bad'); }
   };
@@ -586,11 +1121,11 @@ function wireClaim(c){
       if (p.price === null) { box.innerHTML = '<b>·</b> No rate from the bill — ' + esc(p.why || 'nothing found') + '.'; return; }
       const at = money(p.price) + '/' + esc(p.unit);
       box.innerHTML = '<b>·</b> ' + esc(p.source) + ': <b>' + at + '</b>' +
-        (p.amount !== null ? ' \u2192 ' + (p.quantity !== undefined && p.unit !== (c.weight_unit || p.unit)
+        (p.amount !== null ? ' → ' + (p.quantity !== undefined && p.unit !== (c.weight_unit || p.unit)
               ? 'the ' + (c.shortage ?? '?') + ' ' + esc(c.weight_unit || '') + ' short is <b>' + Number(p.quantity).toLocaleString('en-US',{maximumFractionDigits:3}) + ' ' + esc(p.unit) + '</b> at their unit, so '
               : 'the shortage at their rate is ') +
             '<b>' + money(p.amount) + '</b> <button class="btn use_rate" type="button" style="margin-left:6px">Use it</button>'
-                           : ' \u2014 ' + esc(p.missing || 'nothing to work out yet')) +
+                           : ' — ' + esc(p.missing || 'nothing to work out yet')) +
         (p.supplierMismatch ? '<br><b>·</b> This claim names <b>' + esc(p.supplierMismatch.onClaim) + '</b> but the bill for this container is from <b>' + esc(p.supplierMismatch.onBill) + '</b>. One of them is wrong.' : '');
       const use = box.querySelector('.use_rate');
       if (use) use.onclick = () => {
@@ -607,7 +1142,7 @@ function wireClaim(c){
     const f = doc.files[0];
     if (!f) return;
     doc.disabled = true;
-    toast('Filing ' + f.name + '\u2026', 'ok');
+    toast('Filing ' + f.name + '…', 'ok');
     try {
       const b64 = await new Promise((res, rej) => {
         const fr = new FileReader();
@@ -620,8 +1155,17 @@ function wireClaim(c){
     } catch (e) { doc.disabled = false; doc.value = ''; toast(e.message, 'bad'); }
   };
 
+  /* Closing is two taps, on purpose: the first arms the choice, the second
+     does it. A rejected claim that was meant to be settled is real money. */
   el.querySelectorAll('.f_st').forEach(b => b.onclick = async () => {
-    try { await api('/api/claims/' + c.id + '/status', { status: b.dataset.st }); toast('Marked ' + b.dataset.st + '.', 'ok'); await load(); }
+    if (!b.classList.contains('armed')) {
+      el.querySelectorAll('.f_st').forEach(x => x.classList.remove('armed'));
+      b.classList.add('armed');
+      const sub = b.querySelector('.sub'); if (sub) { sub.dataset.was = sub.dataset.was || sub.textContent; sub.textContent = 'tap again to mark it ' + b.dataset.st; }
+      setTimeout(() => { b.classList.remove('armed'); if (sub && sub.dataset.was) sub.textContent = sub.dataset.was; }, 4000);
+      return;
+    }
+    try { await api('/api/claims/' + c.id + '/status', { status: b.dataset.st }); savedClaim(c.id); toast('Marked ' + b.dataset.st + '.', 'ok'); await load(); }
     catch (e) { toast(e.message, 'bad'); }
   });
 }
@@ -801,7 +1345,7 @@ function showScan(wrap, d, closeModal){
 function openStatement(pre){
   const wrap = document.createElement('div');
   wrap.className = 'modal';
-  wrap.innerHTML = '<div class="box wide"><h3>Claim statement' + (pre.container ? ' — ' + esc(pre.container) : '') + '</h3>' +
+  wrap.innerHTML = '<div class="box wide"><h3>Claim report for a supplier' + (pre.container ? ' — ' + esc(pre.container) : '') + '</h3>' +
     '<div class="hint" style="margin-top:0">The document a supplier is asked to pay against. It shows what is recoverable from them and nothing about what Edge absorbs.</div>' +
     '<div class="grid" style="margin-top:12px">' +
       '<label class="f">Supplier<select id="r_sup"><option value="">loading…</option></select></label>' +
@@ -1087,15 +1631,24 @@ async function load(announce){
     STATE.claims = j.claims || [];
     STATE.stats = j.stats || {};
     STATE.kinds = j.kinds || [];
-    if (!containers().some(g => g.key === STATE.sel)) STATE.sel = (visible()[0] || {}).key || null;
+    const wide = !(window.matchMedia && window.matchMedia('(max-width:1020px)').matches);
+    if (!containers().some(g => g.key === STATE.sel)) STATE.sel = wide ? ((visible()[0] || {}).key || null) : null;
     renderChips(); renderStrip(); renderTabs(); renderRows(); renderDetail();
     if (announce) toast('Up to date.', 'ok');
   } catch (e) { toast('Could not load claims — ' + e.message, 'bad'); }
 }
 
 $('#q').oninput = (e) => { STATE.q = e.target.value; renderRows(); };
-$('#newBtn').onclick = () => openNew();
+$('#fabNew').onclick = () => openNew();
+$('#backList').onclick = () => { document.body.classList.remove('show-detail'); window.scrollTo(0, 0); };
+/* a menu closes when you click away from it, as menus do */
+document.addEventListener('click', (e) => {
+  document.querySelectorAll('details.menu[open]').forEach(m => { if (!m.contains(e.target)) m.open = false; });
+});
 load();
 </script>
+<!-- The app's sidebar on this page too (Apsara 2026-10-08: "i want the sidebar to appear in all pages").
+     dashboard/sidebar.js; hidden when printing. -->
+<script src="/sidebar.js" data-page="claims" defer></script>
 </body>
 </html>

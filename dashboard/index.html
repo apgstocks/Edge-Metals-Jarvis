@@ -15357,6 +15357,23 @@ async function boot() {
   // only one visible item that doesn't match the loaded content. Send them
   // straight to Loads instead.
   if (ROLE === 'staff') CURRENT_TAB = 'loads';
+  // ── /#tab=<id>: THE WAY BACK IN FROM A STANDALONE PAGE ─────────────────
+  // Apsara 2026-10-08: "i want the sidebar to appear in all pages". The
+  // standalone pages draw the same rail from dashboard/sidebar.js, and a row
+  // there that is a tab of THIS app links to /#tab=bookings. Without this the
+  // app would always open on Board and the click would look ignored.
+  // Only a tab this role can see: the same filter renderNav applies, so a
+  // hand-typed hash cannot draw a tab the rail would not show. The server
+  // checks every route behind it anyway. The hash is then removed, so a
+  // reload lands where it always has. (Accepting only NAV_ITEMS ids was my
+  // call — the screen ids are the vocabulary the rail already uses.)
+  try {
+    const want = (String(location.hash || '').match(/^#tab=([a-z-]+)$/) || [])[1];
+    const allowed = want && NAV_ITEMS.some((n) => n.id === want && (!n.adminOnly || ROLE === 'admin')
+      && (ROLE !== 'staff' || n.id === 'loads' || n.id === 'petty' || n.id === 'trucker-bills'));
+    if (allowed) CURRENT_TAB = want;
+    if (want) history.replaceState(null, '', location.pathname + location.search);
+  } catch (e) { /* a bad hash is not a reason to fail boot */ }
   // NOTE — wireTruckerModals() used to be called HERE and it broke the whole
   // dashboard. boot() runs from the inline script partway down the document;
   // the trucker modals are markup at the very end, after that script. So at
