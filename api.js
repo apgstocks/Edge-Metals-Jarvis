@@ -888,6 +888,11 @@ function createApi() {
                         // it in an hour instead of from a stale figure two
                         // days later.
                         console.error(`[PLAID] ${what.code} on item ${what.itemId} — needs re-authentication`);
+                        // Stored on the item, so /bank-match shows a Reconnect
+                        // button on THAT bank rather than the news living only
+                        // in an email.
+                        try { await require('./helpers/plaid').markNeedsLogin(what.itemId, what.code); }
+                        catch (e) { console.error('[PLAID] could not store the re-auth flag:', e.message); }
                         try {
                             // POSITIONAL — alerts.js:98 is
                             // sendEmailAlert(subject, body). Passing an
@@ -900,7 +905,8 @@ function createApi() {
                                 `Plaid says ${what.code}.\n\n${what.why}\n\n`
                                 + 'Until it is reconnected the bank feed stops, and the reconciliation '
                                 + 'on /bank-match will say so rather than claiming everything agrees.\n\n'
-                                + 'Open /bank-match and press Connect a bank to re-authenticate.');
+                                + 'Open /bank-match and press Sign in again on that bank. (Not "Connect a bank" — that would '
+                                + 'link the same accounts a second time.)');
                         } catch (e) { console.error('[PLAID] could not send the re-auth alert:', e.message); }
                         return;
                     }
@@ -9594,6 +9600,9 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
     // route the receipts screen already uses, so there is exactly one way to
     // mark an invoice paid.
     require('./helpers/bankMatchRoutes').mount(app, cfg);
+    // Transfers between her own companies, recorded as loans — its own file
+    // because it writes books and bankMatchRoutes.js deliberately does not.
+    require('./helpers/interCompanyRoutes').mount(app);
     // ── THE LEDGER PLAN ROUTES ───────────────────────────────────────────
     // Apsara, 2026-10-08: the agent that can "remove this container from
     // the <billno>… and then match it with this payment". Preview and

@@ -534,7 +534,7 @@ let S1, S2, S3;
         rq.on('error', reject); rq.end();
     });
     ck('/bank-match serves the page', page.status === 200, String(page.status));
-    ck('  and it is the matching screen', /Bank matching/.test(page.raw) && /api\/bank\/match/.test(page.raw),
+    ck('  and it is the matching screen', /<h1>Bank<\/h1>/.test(page.raw) && /api\/bank\/match/.test(page.raw),
        page.raw.slice(0, 120));
 
     putDeposits([
@@ -608,7 +608,11 @@ let S1, S2, S3;
     // paid. The property worth guarding is that nothing here settles an
     // invoice, so that is what is checked.
     const writes = (code.match(/app\.(post|put|patch|delete)\('(\/api\/bank\/[a-z-]+)'/g) || []);
-    const ALLOWED = ['aliases', 'exclude', 'include'];
+    // 'rules' (2026-10-09): a rule only SETS ASIDE rows, through the same
+    // ledger.exclude as the exclude route — it changes what is offered, never
+    // what an invoice has been paid. Transfers between her companies DO write
+    // books, which is why they live in helpers/interCompanyRoutes.js.
+    const ALLOWED = ['aliases', 'exclude', 'include', 'rules'];
     ck('every write here is about a name or the worklist, never about money',
        writes.every((w) => ALLOWED.some((a) => w.includes(a))), writes.join(' '));
     ck('  nothing here calls addReceipt', !/addReceipt/.test(code),

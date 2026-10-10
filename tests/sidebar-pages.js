@@ -149,11 +149,15 @@ section('C — the rail on a page: rows, roles, links, behaviour');
     const grp = head.dataset.coGroup;
     head.click();
     ck('tapping the heading opens that group', [...d.querySelectorAll(`#jvNav a.jv-row[data-co-group="${grp}"]`)].every((a) => !a.classList.contains('jv-folded')));
-    // Collapsing works on the page, but is NOT written to the app's setting
-    // (Apsara 2026-10-10: "Why sidebar coming on top").
+    // Collapsed on arrival (Apsara 2026-10-10: "i want sidebar to be collapsed
+    // in all page except landing page"), as a strip on the LEFT, not a bar on
+    // top ("Why sidebar coming on top").
+    ck('every page opens with the menu collapsed', d.documentElement.classList.contains('jv-collapsed'));
+    ck('  shown as a thin strip on the left, with the ☰ in it', !!d.getElementById('jvStrip') && /html\.jv-collapsed body \{ padding-left:56px; padding-top:0; \}/.test(SIDEBAR));
     d.getElementById('jvCollapse').click();
-    ck('collapsing works on the page', d.documentElement.classList.contains('jv-collapsed'));
-    ck('  and does not touch the app\'s own collapsed setting', w.localStorage.getItem('navCollapsed') === null);
+    ck('the menu can be opened out on the page', !d.documentElement.classList.contains('jv-collapsed'));
+    ck('  and that never touches the app\'s own collapsed setting', w.localStorage.getItem('navCollapsed') === null);
+    d.getElementById('jvCollapse').click();
     // Burger
     d.getElementById('jvBurger').click();
     ck('the burger opens it', d.getElementById('jvSidebar').classList.contains('open') && d.getElementById('jvBurger').getAttribute('aria-expanded') === 'true');
@@ -161,8 +165,8 @@ section('C — the rail on a page: rows, roles, links, behaviour');
     ck('tapping outside closes it', !d.getElementById('jvSidebar').classList.contains('open'));
 }
 {
-    const w = await mountRail({ role: 'admin', page: 'books', storage: { navCollapsed: '1' } });
-    ck('a page opens with the menu OPEN even if the app\'s menu is collapsed', !w.document.documentElement.classList.contains('jv-collapsed'));
+    const w = await mountRail({ role: 'admin', page: 'books', storage: { navCollapsed: '0' } });
+    ck('a page opens collapsed even when the dashboard\'s menu is open', w.document.documentElement.classList.contains('jv-collapsed'));
 }
 {
     const w = await mountRail({ role: 'staff', page: 'documents' });

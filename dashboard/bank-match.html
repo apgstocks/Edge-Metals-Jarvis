@@ -3,18 +3,23 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Bank matching — Jarvis</title>
+<title>Bank — Jarvis</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Archivo:wght@700;800;900&family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
 <style>
 /* Design tokens copied from dashboard/quickbooks.html — standalone page,
-   kept in sync by hand, same as the others on this server. */
+   kept in sync by hand, same as the others on this server.
+
+   Layout: Apsara, 2026-10-09, "redesign the bank tab mimicking quickbook but
+   in a better way" — account cards across the top, one review queue with
+   tabs, and every row saying in words WHY Jarvis thinks what it thinks. */
 :root{
   --steel-900:#14181B; --steel-800:#1E2429; --steel-700:#2B3239; --steel-600:#3C454D;
   --steel-500:#57616A; --steel-400:#7E8891; --steel-300:#A7B0B7; --steel-200:#CBD1D6;
   --leaf-300:#7FD172; --leaf-400:#57BE49; --leaf-500:#3DA836; --leaf-600:#2E861F;
-  --green-500:#2F8F57; --amber-500:#D99A2B; --red-500:#C5402F; --blue-500:#3A6EA5;
+  --green-500:#2F8F57; --amber-500:#D99A2B; --amber-300:#F5C04A; --red-500:#C5402F; --blue-500:#3A6EA5;
+  --copper-300:#E29C68;
   --bg-base:#0C0E10; --surface-card:#14181B; --surface-sunken:#0F1214; --surface-hover:#181D21;
   --text-strong:#FFFFFF; --text-body:#CBD1D6; --text-muted:#A7B0B7; --text-faint:#7E8891;
   --border-subtle:#1E2429; --border-default:#2B3239; --ring:var(--leaf-500);
@@ -27,73 +32,220 @@ h1,h2,h3{font-family:var(--font-display);color:var(--text-strong);margin:0;font-
 button{font:inherit;cursor:pointer}
 :focus-visible{outline:2px solid var(--ring);outline-offset:2px}
 .mono{font-family:var(--font-mono)}
-header{display:flex;align-items:center;gap:14px;padding:10px 16px;border-bottom:1px solid var(--border-default);background:var(--surface-card);position:sticky;top:0;z-index:10;flex-wrap:wrap}
-header h1{font-size:17px}
-header .back{color:var(--steel-400);font-size:13px;text-decoration:none}
-.chips{display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-left:auto}
+[hidden]{display:none!important}
+
+/* ── header: title, date range, refresh ─────────────────────────────── */
+header{display:flex;align-items:center;gap:12px 16px;padding:12px 20px;border-bottom:1px solid var(--border-default);background:var(--surface-card);position:sticky;top:0;z-index:10;flex-wrap:wrap}
+header h1{font-size:22px;margin-right:4px}
+.range{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.range label{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--text-muted)}
+.range input[type=date]{background:var(--surface-sunken);border:1px solid var(--border-default);color:var(--text-strong);border-radius:4px;height:34px;padding:0 8px;font:500 13px var(--font-mono);color-scheme:dark;cursor:pointer}
+.range input[type=date]:hover{border-color:var(--steel-500)}
+.presets{display:flex;gap:4px;flex-wrap:wrap}
+.preset{height:30px;padding:0 10px;border-radius:15px;border:1px solid var(--border-default);background:transparent;color:var(--text-body);font-size:12.5px;font-weight:600}
+.preset:hover{border-color:var(--steel-400)}
+.preset.on{background:var(--leaf-600);border-color:var(--leaf-600);color:#fff}
+.hdr-right{margin-left:auto;display:flex;gap:8px;align-items:center}
+
+main{padding:16px 20px 60px;max-width:1240px;margin:0 auto}
+
+/* ── account cards ──────────────────────────────────────────────────── */
+.accts{display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:10px;margin-bottom:12px}
+.acct{background:var(--surface-card);border:1px solid var(--border-subtle);border-radius:6px;padding:12px 14px;min-width:0}
+.acct.warn{border-color:#8A6416}
+.acct .co{font-family:var(--font-mono);font-size:9.5px;font-weight:600;letter-spacing:.12em;text-transform:uppercase;color:var(--copper-300)}
+.acct .bk{color:var(--text-strong);font-weight:700;font-size:14px;margin-top:2px}
+.acct .bk .mask{font-family:var(--font-mono);color:var(--text-muted);font-weight:500}
+.acct .big{font-family:var(--font-mono);font-size:19px;color:var(--text-strong);font-weight:600;margin-top:6px}
+.acct .sub{font-size:12px;color:var(--text-muted);margin-top:2px}
+.pill{display:inline-block;margin-top:8px;font-size:11px;font-weight:600;padding:2px 9px;border-radius:10px}
+.pill.ok{background:rgba(61,168,54,.16);color:var(--leaf-300)}
+.pill.warn{background:rgba(217,154,43,.18);color:var(--amber-300)}
+.pill.off{background:rgba(126,136,145,.16);color:var(--steel-300)}
+
+.repair{background:rgba(217,154,43,.10);border:1px solid #8A6416;border-radius:6px;padding:12px 14px;margin-bottom:12px;display:flex;gap:12px;align-items:center;flex-wrap:wrap}
+.repair .t{color:var(--text-strong);font-weight:600;font-size:14px}
+.repair .s{color:var(--text-body);font-size:12.5px}
+.btn.amber{background:var(--amber-500);border-color:var(--amber-500);color:#0C0E10;font-weight:700}
+
+.coming{display:flex;gap:10px;align-items:center;flex-wrap:wrap;background:var(--surface-sunken);border:1px solid var(--border-subtle);border-radius:6px;padding:10px 14px;margin-bottom:14px}
+.coming .ttl{font-family:var(--font-mono);font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:var(--text-muted)}
+.coming .tot{font-family:var(--font-mono);color:var(--text-strong);font-weight:600}
+.coming .inv{font-size:12px;color:var(--text-body);border:1px solid var(--border-default);border-radius:12px;padding:2px 9px;white-space:nowrap}
+.coming .inv .old{color:var(--amber-300)}
+
+/* ── tabs + toolbar ─────────────────────────────────────────────────── */
+.tabs{display:flex;gap:2px;border-bottom:1px solid var(--border-default);margin-bottom:12px;overflow-x:auto}
+.tab{background:transparent;border:0;border-bottom:2px solid transparent;color:var(--text-muted);padding:10px 14px;font-weight:600;font-size:13.5px;white-space:nowrap}
+.tab:hover{color:var(--text-body)}
+.tab.on{color:var(--text-strong);border-bottom-color:var(--leaf-500)}
+.tab .n{font-family:var(--font-mono);font-size:11px;color:var(--text-faint);margin-left:4px}
+.toolbar{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:12px}
+.seg{display:inline-flex;border:1px solid var(--border-default);border-radius:4px;overflow:hidden}
+.seg button{background:transparent;border:0;color:var(--text-body);padding:6px 12px;font-size:12.5px;font-weight:600}
+.seg button+button{border-left:1px solid var(--border-default)}
+.seg button.on{background:var(--steel-700);color:#fff}
+.search{flex:1;min-width:180px;max-width:340px;height:32px;background:var(--surface-sunken);border:1px solid var(--border-default);color:var(--text-body);border-radius:4px;padding:0 10px;font:inherit;font-size:13px}
+.keys{font-size:11px;color:var(--text-faint)}
+.keys kbd{font-family:var(--font-mono);border:1px solid var(--border-default);border-bottom-width:2px;border-radius:3px;padding:0 4px;font-size:10.5px;color:var(--text-muted)}
+
+.chips{display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-bottom:12px}
 .chip{font-family:var(--font-mono);font-size:10.5px;letter-spacing:.06em;text-transform:uppercase;padding:3px 7px;border-radius:3px;border:1px solid var(--border-default);color:var(--text-muted);background:var(--surface-sunken);white-space:nowrap}
 .chip.on{color:var(--leaf-300);border-color:var(--leaf-600);background:rgba(87,190,73,.10)}
 .chip.warn{color:var(--amber-500);border-color:#5a4416;background:rgba(217,154,43,.10)}
 .chip.bad{color:var(--red-500);border-color:#5c2a22;background:rgba(197,64,47,.10)}
 .chip.act{cursor:pointer} .chip.act:hover{border-color:var(--text-body);color:var(--text-body)}
-main{padding:16px;max-width:1080px;margin:0 auto}
+
+/* ── rows ───────────────────────────────────────────────────────────── */
 .card{background:var(--surface-card);border:1px solid var(--border-default);border-radius:6px;padding:12px 14px;margin-bottom:10px}
+#list .card,.tcard{border-left:4px solid var(--steel-500)}
+#list .card.sure{border-left-color:var(--leaf-500)}
+#list .card.likely{border-left-color:var(--amber-500)}
+.tcard{border-left-color:var(--blue-500)!important}
+.card.focus{outline:2px solid var(--ring);outline-offset:1px}
 .lbl{font-family:var(--font-mono);font-size:9px;letter-spacing:.12em;text-transform:uppercase;color:var(--text-muted)}
 .row1{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap}
 .amt{font-family:var(--font-mono);font-size:19px;font-weight:600;color:var(--text-strong)}
+.amt.in{color:var(--leaf-300)}
 .desc{color:var(--text-body);font-size:13px}
 .when{font-family:var(--font-mono);font-size:11px;color:var(--text-faint)}
 .badge{font-family:var(--font-mono);font-size:10px;letter-spacing:.07em;text-transform:uppercase;padding:2px 6px;border-radius:3px;border:1px solid var(--border-default);color:var(--text-muted)}
 .badge.good{color:var(--leaf-300);border-color:var(--leaf-600)}
 .badge.ask{color:var(--amber-500);border-color:#5a4416}
 .badge.none{color:var(--steel-400)}
+.badge.blue{color:#9cc3ec;border-color:#2c4f75}
 .alloc{margin:8px 0 0;border-top:1px solid var(--border-subtle);padding-top:8px}
 .alloc table{width:100%;border-collapse:collapse;font-size:13px}
 .alloc td{padding:3px 0;vertical-align:top}
 .alloc td.n{text-align:right;font-family:var(--font-mono);white-space:nowrap}
 .why{margin:7px 0 0;padding:0 0 0 16px;color:var(--text-muted);font-size:12.5px}
 .why li{margin:2px 0}
+.hint{margin-top:8px;padding:8px 10px;border-radius:4px;background:rgba(58,110,165,.12);border:1px solid #2c4f75;color:#cfe0f3;font-size:12.5px}
+.hint a{color:#9cc3ec}
 .acts{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px;align-items:center}
-.btn{background:var(--surface-sunken);border:1px solid var(--border-default);color:var(--text-body);border-radius:4px;padding:5px 10px;font-size:12.5px}
+.btn{background:var(--surface-sunken);border:1px solid var(--border-default);color:var(--text-body);border-radius:4px;padding:6px 11px;font-size:12.5px}
 .btn:hover{border-color:var(--text-body)}
 .btn.go{border-color:var(--leaf-600);color:var(--leaf-300)}
 .btn.go:hover{background:rgba(87,190,73,.10)}
+.btn.solid{background:var(--leaf-600);border-color:var(--leaf-600);color:#fff;font-weight:700}
 .btn.warn{border-color:#5a4416;color:var(--amber-500)}
-select,input[type=text]{background:var(--surface-sunken);border:1px solid var(--border-default);color:var(--text-body);border-radius:4px;padding:4px 6px;font:inherit;font-size:12.5px}
+.btn.quiet{border-color:transparent;background:transparent;color:var(--text-muted)}
+.btn.quiet:hover{color:var(--text-body);border-color:var(--border-default)}
+select,input[type=text]{background:var(--surface-sunken);border:1px solid var(--border-default);color:var(--text-body);border-radius:4px;padding:5px 7px;font:inherit;font-size:12.5px}
 .empty{color:var(--text-faint);font-size:13px;padding:10px 0}
 .note{color:var(--text-muted);font-size:12.5px;margin-top:4px}
 .rivals{margin-top:8px;border-left:2px solid #5a4416;padding-left:10px}
+.legs{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px}
+.leg{background:var(--surface-sunken);border:1px solid var(--border-subtle);border-radius:4px;padding:8px 10px;font-size:12.5px;min-width:0}
+.leg .when{display:block}
+.surebar{display:flex;gap:12px;align-items:center;flex-wrap:wrap;background:rgba(61,168,54,.08);border:1px solid var(--leaf-600);border-radius:6px;padding:10px 14px;margin-bottom:10px}
 .toast{position:fixed;bottom:16px;left:50%;transform:translateX(-50%);background:var(--surface-card);border:1px solid var(--border-default);color:var(--text-body);padding:9px 14px;border-radius:5px;font-size:13px;z-index:50;max-width:90vw}
 .toast.bad{border-color:#5c2a22;color:#f0b4ab}
 .toast.good{border-color:var(--leaf-600);color:var(--leaf-300)}
 h2.sec{font-size:13px;margin:18px 0 8px;color:var(--text-muted);font-family:var(--font-mono);letter-spacing:.1em;text-transform:uppercase;font-weight:600}
+h2.sec .n{color:var(--text-faint);font-weight:400}
+
+@media (max-width:720px){
+  header{padding:10px 16px;position:static}
+  .coming .inv:nth-of-type(n+7){display:none} /* ttl, total, text, then three invoices */
+  header h1{font-size:20px}
+  .hdr-right{margin-left:0}
+  .range{width:100%}
+  .range label{flex:1}
+  .range input[type=date]{flex:1;min-width:0}
+  main{padding:12px 16px 60px}
+  .accts{display:flex;overflow-x:auto;scroll-snap-type:x mandatory;padding-bottom:4px}
+  .acct{flex:none;width:250px;scroll-snap-align:start}
+  .legs{grid-template-columns:1fr}
+  .keys{display:none}
+  .search{max-width:none}
+  .acts .btn{min-height:40px}
+}
+@media print{ header,.tabs,.toolbar,.acts{display:none} }
 </style>
 </head>
 <body>
 <header>
-  <a class="back" href="/">&larr; Jarvis</a>
-  <h1>Bank matching</h1>
-  <div class="chips" id="chips"></div>
+  <h1>Bank</h1>
+  <!-- Apsara, 2026-10-09: "add a date from,to with date picker. on clicking
+       date-it should get selected and picker closes. then this year,last
+       year,month". Native date inputs: a click on a day selects it and the
+       picker closes on its own, in every browser she uses, with no library.
+       The range is sent to every bank route as ?from=&to=. -->
+  <div class="range" id="range">
+    <label>From <input type="date" id="from" aria-label="From date"></label>
+    <label>To <input type="date" id="to" aria-label="To date"></label>
+    <div class="presets" id="presets">
+      <button type="button" class="preset" data-preset="month">This month</button>
+      <button type="button" class="preset" data-preset="lastmonth">Last month</button>
+      <button type="button" class="preset" data-preset="year">This year</button>
+      <button type="button" class="preset" data-preset="lastyear">Last year</button>
+      <button type="button" class="preset" data-preset="all">All dates</button>
+    </div>
+  </div>
+  <div class="hdr-right">
+    <button type="button" class="btn" data-plaid="sync" id="pullTop" hidden>↻ Pull new transactions</button>
+  </div>
 </header>
 <main>
-  <div id="feednote"></div>
-  <div id="feed"></div>
+  <div id="repair"></div>
+  <div id="accounts" class="accts"></div>
+  <div id="coming"></div>
+
+  <nav class="tabs" role="tablist" id="tabs">
+    <button type="button" class="tab on" role="tab" data-tab="review" aria-selected="true">For review<span class="n" id="n-review"></span></button>
+    <button type="button" class="tab" role="tab" data-tab="aside" aria-selected="false">Set aside &amp; recorded<span class="n" id="n-aside"></span></button>
+    <button type="button" class="tab" role="tab" data-tab="recon" aria-selected="false">Bank vs books</button>
+    <button type="button" class="tab" role="tab" data-tab="setup" aria-selected="false">Connections &amp; rules</button>
+  </nav>
+
+  <section data-pane="review">
+    <div class="toolbar">
+      <div class="seg" id="dir" role="group" aria-label="Show money in or out">
+        <button type="button" class="on" data-dir="all">All</button>
+        <button type="button" data-dir="in">Money in</button>
+        <button type="button" data-dir="out">Money out</button>
+      </div>
+      <input class="search" id="q" type="search" placeholder="Search name, description or amount" aria-label="Search">
+      <span class="keys"><kbd>/</kbd> search · <kbd>J</kbd><kbd>K</kbd> move · <kbd>1</kbd>–<kbd>4</kbd> tabs</span>
+    </div>
+    <div class="chips" id="chips"></div>
+    <div id="feednote"></div>
+    <!-- Money between her own companies first: it is never income, and a
+         transfer that reached the customer list below would invite exactly
+         the wrong click. -->
+    <div id="transfers"></div>
+    <div id="inblock">
+      <h2 class="sec">Money in <span class="n" id="n-in"></span></h2>
+      <div id="sure"></div>
+      <div id="list"><div class="empty">Loading…</div></div>
+    </div>
+    <!-- Money OUT. Apsara, 2026-10-08: "i want like pending,posted
+         transactions like qb with match,post". -->
+    <div id="review"></div>
+  </section>
+
+  <section data-pane="aside" hidden>
+    <div id="recorded"></div>
+    <div id="extras"></div>
+  </section>
+
   <!-- Apsara, 2026-10-08: "so that i dont need to look out for statements
-       whether payment received or sent ever again." ABOVE the matching list
-       on purpose. The list is work to do; this is the answer to the question
-       she actually asked, and an answer below a scrolling worklist is an
-       answer she has to go looking for. -->
-  <div id="recon"></div>
-  <!-- Money OUT. /api/bank/match below is money IN and always has been, so
-       until today half her bank had no screen at all. Apsara, 2026-10-08:
-       "i want like pending,posted transactions like qb with match,post". -->
-  <div id="review"></div>
-  <div id="list"><div class="empty">Loading…</div></div>
-  <div id="extras"></div>
+       whether payment received or sent ever again." -->
+  <section data-pane="recon" hidden>
+    <div id="recon"></div>
+  </section>
+
+  <section data-pane="setup" hidden>
+    <div id="feed"></div>
+    <div id="rules"></div>
+    <div class="card"><div class="row1"><span class="desc">Names Jarvis has learned for payers</span>
+      <button type="button" class="btn" data-show="aliases">Show them</button></div></div>
+  </section>
 </main>
 <script>
 const $ = (id) => document.getElementById(id);
-let STATE = { data: null, aliases: [] };
+let STATE = { data: null, aliases: [], tab: 'review', dir: 'all', q: '', range: { from: '', to: '', preset: 'all' } };
 
 function toast(msg, cls) {
   const t = document.createElement('div');
@@ -112,15 +264,60 @@ function esc(v) {
 const money = (n) => (typeof n === 'number' && isFinite(n))
   ? '$' + n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
   : '—';
+const COMPANY = { 'edge-metals': 'Edge Metals', 'edge-trading': 'Edge Yard', 'aaa-investment': 'AAA Investment' };
+
+/* ── the date range ─────────────────────────────────────────────────────
+   Added to every GET that reads bank figures, in ONE place, so no list on
+   this page can quietly show a different window from the one above it. */
+const RANGED = /^\/api\/(bank\/(match|review|reconcile|overview)|intercompany\/transfers)$/;
+function withRange(url) {
+  const { from, to } = STATE.range;
+  if (!RANGED.test(url) || (!from && !to)) return url;
+  const qs = [from ? 'from=' + from : '', to ? 'to=' + to : ''].filter(Boolean).join('&');
+  return url + (url.includes('?') ? '&' : '?') + qs;
+}
 
 async function api(url, opts) {
   const o = opts || {};
-  const r = await fetch(url, o.body
+  const r = await fetch(o.body ? url : withRange(url), o.body
     ? { method: o.method || 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(o.body) }
     : { method: o.method || 'GET' });
   const j = await r.json().catch(() => ({ error: 'bad response' }));
   if (!r.ok) { const e = new Error(j.error || ('HTTP ' + r.status)); e.body = j; e.status = r.status; throw e; }
   return j;
+}
+
+const pad = (n) => String(n).padStart(2, '0');
+const ymd = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+function presetRange(p) {
+  const now = new Date(); const y = now.getFullYear(); const m = now.getMonth();
+  if (p === 'month') return { from: ymd(new Date(y, m, 1)), to: ymd(new Date(y, m + 1, 0)) };
+  if (p === 'lastmonth') return { from: ymd(new Date(y, m - 1, 1)), to: ymd(new Date(y, m, 0)) };
+  if (p === 'year') return { from: `${y}-01-01`, to: `${y}-12-31` };
+  if (p === 'lastyear') return { from: `${y - 1}-01-01`, to: `${y - 1}-12-31` };
+  return { from: '', to: '' };
+}
+function paintRange() {
+  $('from').value = STATE.range.from || '';
+  $('to').value = STATE.range.to || '';
+  document.querySelectorAll('[data-preset]').forEach((b) => b.classList.toggle('on', b.dataset.preset === STATE.range.preset));
+}
+/* The choice is remembered per browser — a convenience, so a failed read
+   just means "all dates", which is what the page did before. */
+function saveRange() { try { localStorage.setItem('bank.range', JSON.stringify(STATE.range)); } catch (e) { /* private window */ } }
+function loadRange() {
+  try {
+    const r = JSON.parse(localStorage.getItem('bank.range') || 'null');
+    if (r && typeof r === 'object') {
+      // A remembered preset is recomputed, so "This month" stays this month.
+      STATE.range = r.preset && r.preset !== 'custom' ? { ...presetRange(r.preset), preset: r.preset }
+        : { from: r.from || '', to: r.to || '', preset: 'custom' };
+    }
+  } catch (e) { /* nothing remembered */ }
+}
+function setRange(next) {
+  if (next.from && next.to && next.from > next.to) { toast('The From date is after the To date', 'bad'); paintRange(); return; }
+  STATE.range = next; saveRange(); paintRange(); load();
 }
 
 /* ── the strip of numbers ──────────────────────────────────────────────
@@ -179,9 +376,25 @@ function confirmForm(row, p, i) {
       <option value="">which account?</option>
       ${banks.map((b) => `<option${b === guess ? ' selected' : ''}>${esc(b)}</option>`).join('')}
     </select>
-    <button class="btn go" data-confirm="${i}">Confirm — record this receipt</button>
+    <button class="btn solid" data-confirm="${i}">Confirm — record this receipt</button>
     <button class="btn warn" data-exclude="${esc(row.deposit.id)}">Not a customer payment</button>
   </div>`;
+}
+
+/* ── the claim hint ─────────────────────────────────────────────────────
+   Suggestion only. The server found a claim on the same invoice for about
+   what this payment leaves unpaid — the customer most likely deducted it.
+   Nothing is settled from here. */
+function claimHint(row) {
+  const h = row.claim_hint; if (!h) return '';
+  return `<div class="hint">Leaves ${money(h.gap)} unpaid on ${esc(h.invoice_no)} — there is a claim on that invoice
+    for ${money(h.claim_amount)}${h.status ? ' (' + esc(String(h.status).replace(/_/g, ' ')) + ')' : ''}. The customer probably deducted it.
+    <a href="/claims">Open the claim</a></div>`;
+}
+
+function sureOf(row) {
+  const p = (row.proposals || [])[0];
+  return !!(p && row.outcome === 'proposed' && !row.ambiguous && p.score >= 0.95);
 }
 
 function renderRow(row, i) {
@@ -202,10 +415,12 @@ function renderRow(row, i) {
            <input type="text" data-name="${i}" placeholder="type the customer's name" size="26">
            <button class="btn go" data-learnfree="${i}" data-desc="${esc(dep.descriptor)}">Remember this payer</button>
          </div>`;
-    body += `<div class="acts"><button class="btn warn" data-exclude="${esc(dep.id)}">Not a customer payment</button></div>`;
+    body += `<div class="acts"><button class="btn warn" data-exclude="${esc(dep.id)}">Not a customer payment</button>
+      ${ruleBtn(dep.descriptor || dep.desc, 'in')}</div>`;
   } else if (p) {
     body += allocTable(p);
     body += `<ul class="why">${p.reasons.map((x) => `<li>${esc(x)}</li>`).join('')}</ul>`;
+    body += claimHint(row);
     if (row.ambiguous) {
       body += `<div class="rivals"><div class="lbl">the other possibilities</div>
         ${rivals.map((q) => allocTable(q)).join('')}</div>`;
@@ -218,9 +433,10 @@ function renderRow(row, i) {
     body += `<div class="acts"><button class="btn warn" data-exclude="${esc(dep.id)}">Not a customer payment</button></div>`;
   }
 
-  return `<div class="card" data-i="${i}">
+  const tone = sureOf(row) ? 'sure' : (p ? 'likely' : '');
+  return `<div class="card ${tone}" data-i="${i}" data-dir="in" data-k="${esc([dep.descriptor, dep.desc, row.party, dep.amount, dep.date].join(' ').toLowerCase())}">
     <div class="row1">
-      <span class="amt">${money(dep.amount)}</span>
+      <span class="amt in">${money(dep.amount)}</span>
       <span class="badge ${cls}">${label}</span>
       ${row.ambiguous ? '<span class="badge ask">needs you</span>' : ''}
       ${p && !row.ambiguous ? `<span class="badge ${p.score >= 0.8 ? 'good' : 'ask'}">${Math.round(p.score * 100)}%</span>` : ''}
@@ -230,6 +446,25 @@ function renderRow(row, i) {
     <div class="desc mono" style="font-size:11.5px;color:var(--text-faint);margin-top:2px">${esc(dep.descriptor || dep.desc || '(no description)')}</div>
     ${body}
   </div>`;
+}
+
+/* ── "confirm all sure matches" ─────────────────────────────────────────
+   Narrow on purpose. Only a row that is one clear answer at 95%+, that
+   clears its invoices with nothing short (a shortfall needs the fee-or-
+   discount question), whose account is known, and whose description says
+   how it came (WIRE or ZELLE) — because the receipt records a mode and a
+   wrong mode is a wrong record. Everything else stays a one-at-a-time
+   decision. */
+function bulkable(row) {
+  if (!sureOf(row)) return null;
+  const p = row.proposals[0];
+  if (p.allocations.some((a) => a.shortfall || !a.clears)) return null;
+  if (!row.deposit.bank_guess) return null;
+  const modes = (STATE.data.modes || []);
+  const desc = String(row.deposit.descriptor || row.deposit.desc || '');
+  const mode = /\bZELLE\b/i.test(desc) ? 'Zelle' : (/\bWIRE\b/i.test(desc) ? 'Wire' : null);
+  if (!mode || !modes.includes(mode)) return null;
+  return mode;
 }
 
 function renderExtras() {
@@ -255,6 +490,21 @@ function renderExtras() {
         <div class="note">These are not matched against Edge Metals invoices, because they are a different company.</div></div>`);
   }
 
+  if ((d.not_trade || []).length) {
+    out.push(`<h2 class="sec">Not a customer or supplier — ${d.not_trade.length} line(s)</h2>
+      <div class="card">${d.not_trade.map((x) => `<div class="row1" style="margin:3px 0">
+          <span class="amt" style="font-size:14px">${money(x.amount)}</span>
+          <span class="when">${esc(x.date)}</span>
+          <span class="desc" style="color:var(--text-faint)">${esc(x.desc)}</span>
+          <span class="badge none">${esc(x.why)}</span>
+        </div>`).join('')}</div>`);
+  }
+
+  if ((d.unknown_account || []).length) {
+    out.push(`<h2 class="sec">${d.unknown_account.length} deposit(s) in an account Jarvis cannot place on a company</h2>
+      <div class="card"><div class="note">${esc(d.unknown_account_fix || '')}</div></div>`);
+  }
+
   if ((d.balance_disagreements || []).length) {
     out.push(`<h2 class="sec">${d.balance_disagreements.length} invoice balance(s) disagree</h2>
       <div class="card">${d.balance_disagreements.map((x) => `<div class="desc">${esc(x.id)} — the sales screen says ${money(x.sales_js)}, this page computes ${money(x.here)}</div>`).join('')}
@@ -271,8 +521,135 @@ async function render() {
   const rows = d.rows || [];
   $('list').innerHTML = rows.length
     ? rows.map(renderRow).join('')
-    : `<div class="empty">No deposits to match${/none yet/.test(d.feed || '') ? '.' : ' in this window.'}</div>`;
+    : `<div class="empty">No deposits to match${/none yet/.test(d.feed || '') ? '.' : ' in these dates.'}</div>`;
+  $('n-in').textContent = rows.length ? String(rows.length) : '';
+
+  const bulk = rows.map((r, i) => ({ r, i, mode: bulkable(r) })).filter((x) => x.mode);
+  STATE.bulk = bulk;
+  $('sure').innerHTML = bulk.length > 1 ? `<div class="surebar">
+      <span class="desc"><b style="color:#fff">${bulk.length}</b> deposits are sure matches — each pays its invoices in full, the account and the way it came are known.</span>
+      <button class="btn solid" data-sureall="1">Confirm all ${bulk.length}</button>
+    </div>` : '';
   renderExtras();
+  countTabs();
+  applyFilter();
+}
+
+/* ── account cards, the repair banner, and what is coming in ───────────
+   From /api/bank/overview. A failure here hides these three and leaves the
+   queue working — the queue does not need them. */
+async function renderOverview() {
+  let o = null;
+  try { o = await api('/api/bank/overview'); } catch (e) { o = null; }
+  STATE.overview = o;
+  if (!o) { $('accounts').innerHTML = ''; $('repair').innerHTML = ''; $('coming').innerHTML = ''; return; }
+
+  const day = (s) => s ? String(s).slice(0, 10) : '';
+  const cards = (o.accounts || []).map((a) => {
+    const needs = a.needs_login;
+    const status = needs ? ['warn', 'Needs you to sign in']
+      : (a.linked ? ['ok', 'Connected' + (a.last_sync_at ? ' · pulled ' + day(a.last_sync_at) : '')]
+        : ['off', 'Not linked to the bank feed']);
+    const figure = a.balance != null
+      ? `<div class="big">${money(a.balance)}</div><div class="sub">balance at last pull · ${esc(day(a.balance_as_of))}</div>`
+      : `<div class="big" style="font-size:15px">in ${money(a.in)} · out ${money(a.out)}</div>
+         <div class="sub">${a.rows || 0} line(s) in these dates${a.waiting ? ' · ' + a.waiting + ' not dealt with' : ''}</div>`;
+    return `<div class="acct ${needs ? 'warn' : ''}">
+      <div class="co">${esc(a.company || 'Not placed on a company')}</div>
+      <div class="bk">${esc(a.bank || 'Bank')} ${a.mask ? `<span class="mask">••${esc(a.mask)}</span>` : ''}</div>
+      ${figure}
+      <span class="pill ${status[0]}">${esc(status[1])}</span>
+      ${a.unassigned ? '<div class="sub">Jarvis does not know which company this account belongs to, so its lines are not matched.</div>' : ''}
+    </div>`;
+  });
+  for (const m of (o.missing || [])) {
+    cards.push(`<div class="acct">
+      <div class="co">${esc(m.company)}</div>
+      <div class="bk">No bank account in Jarvis yet</div>
+      <div class="sub" style="margin-top:6px">Its money is only seen when it reaches one of the other accounts.
+        Add its account (with the last four digits) to Jarvis and link it, and its transfers and supplier payments match on their own.</div>
+      <span class="pill off">Not set up</span>
+    </div>`);
+  }
+  $('accounts').innerHTML = cards.join('');
+
+  /* The one thing only she can do: sign in at the bank again. Update mode
+     re-uses the existing link, so history and the cursor are kept. */
+  const needs = (o.accounts || []).filter((a) => a.needs_login && a.item_id);
+  const seen = new Set();
+  $('repair').innerHTML = needs.filter((a) => !seen.has(a.item_id) && seen.add(a.item_id)).map((a) => `<div class="repair">
+      <div style="flex:1;min-width:220px">
+        <div class="t">${esc(a.institution || a.bank)}${a.mask ? ' ••' + esc(a.mask) : ''} needs you to sign in again</div>
+        <div class="s">Usually after a password change. New lines stop arriving until you do; everything already pulled is kept.</div>
+      </div>
+      <button class="btn amber" data-plaid="reconnect" data-item="${esc(a.item_id)}">Sign in again</button>
+    </div>`).join('');
+
+  const c = o.coming_in || {};
+  $('coming').innerHTML = c.count ? `<div class="coming">
+      <span class="ttl">Coming in</span>
+      <span class="tot">${money(c.total)}</span>
+      <span class="desc">across ${c.count} open invoice${c.count === 1 ? '' : 's'} — oldest first:</span>
+      ${(c.invoices || []).map((x) => `<span class="inv">${esc(x.customer)} · ${esc(x.invoice_no || '')} · ${money(x.open)}${x.days != null ? ` · <span class="${x.days > 60 ? 'old' : ''}">${x.days}d</span>` : ''}</span>`).join('')}
+    </div>` : '';
+}
+
+/* ── BETWEEN YOUR COMPANIES ────────────────────────────────────────────
+   Apsara, 2026-10-09: transfers between Edge Metals, Edge Yard and AAA
+   Investment are never income — "put it as loan for now". Recording one
+   books a loan on both companies at once (Due from / Due to related
+   companies); Undo takes both back out. */
+function legHtml(leg, label) {
+  if (!leg) return `<div class="leg"><span class="lbl">${esc(label)}</span><div class="note">Not in the bank feed — that account is not linked.</div></div>`;
+  return `<div class="leg"><span class="lbl">${esc(label)}</span>
+    <span class="when">${esc(leg.date)} · ${esc(leg.bank || '')}</span>
+    <div class="desc mono" style="font-size:11.5px;color:var(--text-faint);overflow-wrap:anywhere">${esc(leg.desc || '(no description)')}</div></div>`;
+}
+async function renderTransfers() {
+  let t = null;
+  try { t = await api('/api/intercompany/transfers'); } catch (e) { t = null; }
+  STATE.transfers = t;
+  if (!t) { $('transfers').innerHTML = ''; $('recorded').innerHTML = ''; countTabs(); return; }
+  const props = [...(t.proposed || []), ...(t.one_sided || [])];
+  $('transfers').innerHTML = props.length ? `<h2 class="sec">Between your companies <span class="n">${props.length}</span></h2>
+    ${props.map((p) => `<div class="card tcard" data-dir="${p.in_row && !p.out_row ? 'in' : (p.out_row && !p.in_row ? 'out' : 'both')}"
+        data-k="${esc([COMPANY[p.from], COMPANY[p.to], p.amount, p.date, (p.out_row || {}).desc, (p.in_row || {}).desc].join(' ').toLowerCase())}">
+      <div class="row1">
+        <span class="amt">${money(p.amount)}</span>
+        <span class="badge blue">${esc(COMPANY[p.from] || p.from)} → ${esc(COMPANY[p.to] || p.to)}</span>
+        <span class="badge ${p.sure ? 'good' : 'ask'}">${p.sure ? 'both sides found' : 'check'}</span>
+        <span class="when">${esc(p.date)}</span>
+      </div>
+      <div class="legs">${legHtml(p.out_row, 'left ' + (COMPANY[p.from] || ''))}${legHtml(p.in_row, 'arrived at ' + (COMPANY[p.to] || ''))}</div>
+      <ul class="why">${(p.reasons || []).map((x) => `<li>${esc(x)}</li>`).join('')}</ul>
+      <div class="acts">
+        <button class="btn solid" data-transfer="${esc(p.id)}">Record as a loan</button>
+        <span class="note">Not income. Books ${esc(COMPANY[p.from])} as lending and ${esc(COMPANY[p.to])} as borrowing — your CPA can change the treatment later.</span>
+      </div>
+    </div>`).join('')}` : '';
+
+  const rec = t.recorded || [];
+  $('recorded').innerHTML = `<h2 class="sec">Transfers recorded as loans <span class="n">${rec.length}</span></h2>
+    <div class="card">${rec.length ? rec.map((r) => `<div class="row1" style="margin:4px 0">
+        <span class="amt" style="font-size:14px">${money(r.amount)}</span>
+        <span class="when">${esc(r.date)}</span>
+        <span class="desc">${esc(COMPANY[r.from] || r.from)} → ${esc(COMPANY[r.to] || r.to)}</span>
+        <span class="desc" style="color:var(--text-faint);flex:1;min-width:120px">${esc(r.desc || '')}</span>
+        <button class="btn quiet" data-untransfer="${esc(r.id)}">Undo</button>
+      </div>`).join('') : '<div class="empty">None in these dates.</div>'}</div>`;
+  countTabs();
+  applyFilter();
+}
+
+function countTabs() {
+  const ins = ((STATE.data || {}).rows || []).length;
+  const outs = (((STATE.review || {}).queue || {}).rows || []).length;
+  const tr = STATE.transfers ? ((STATE.transfers.proposed || []).length + (STATE.transfers.one_sided || []).length) : 0;
+  const n = ins + outs + tr;
+  $('n-review').textContent = n ? String(n) : '';
+  const L = ((STATE.data || {}).ledger || {});
+  const aside = ((L.excluded || {}).count || 0) + ((STATE.transfers || {}).recorded || []).length;
+  $('n-aside').textContent = aside ? String(aside) : '';
 }
 
 /* ── the feed ──────────────────────────────────────────────────────────
@@ -297,6 +674,7 @@ async function renderFeed() {
   let p = null;
   try { p = await api('/api/plaid/status'); } catch (e) { p = { error: e.message }; }
   STATE.plaid = p;
+  $('pullTop').hidden = !(p && p.configured && (p.items || []).length);
   if (p.error) {
     $('feed').innerHTML = `<div class="card"><div class="lbl">bank feed</div><div class="note">${esc(p.error)}</div></div>`;
     return;
@@ -320,15 +698,44 @@ async function renderFeed() {
   $('feed').innerHTML = `<div class="card">
     <div class="row1"><div class="lbl" style="margin-right:6px">bank feed</div>${bits.join('')}</div>
     ${p.note ? `<div class="note">${esc(p.note)}</div>` : ''}
-    ${items.length ? `<div style="margin-top:8px">${items.map((i) => `<div class="row1" style="margin:3px 0">
+    ${items.length ? `<div style="margin-top:8px">${items.map((i) => `<div class="row1" style="margin:5px 0">
         <span class="desc">${esc(i.institution || 'bank')}</span>
         <span class="when">${(i.accounts || []).map((a) => esc((a.name || '') + (a.mask ? ' ····' + a.mask : ''))).join(', ')}</span>
         <span class="when">${i.last_sync_at ? 'pulled ' + esc(String(i.last_sync_at).slice(0, 16).replace('T', ' ')) : 'never pulled'}</span>
+        ${i.needs_login ? `<button class="btn amber" data-plaid="reconnect" data-item="${esc(i.item_id)}">Sign in again</button>` : ''}
         <button class="btn" data-unlink="${esc(i.item_id)}">Unlink</button>
       </div>`).join('')}</div>` : ''}
     <div class="acts">${acts.join('')}</div>
+    ${items.length ? '<div class="note">If a bank asks you to log in again, use "Sign in again" on that bank — "Connect a bank" would link the same accounts a second time.</div>' : ''}
     ${p.configured ? '' : '<div class="note">Set PLAID_CLIENT_ID and PLAID_SECRET in the server .env — they are on the Plaid dashboard under Developers / Keys.</div>'}
   </div>`;
+}
+
+/* ── RULES ──────────────────────────────────────────────────────────────
+   "Lines like this are always a bank charge." A rule SETS ASIDE matching
+   lines with the rule as the reason — reversible, explained, and it creates
+   nothing in the books. Made from a row she is looking at, so it carries
+   that row's direction: a money-out rule can never swallow a customer's
+   wire. */
+function ruleBtn(desc, dir) {
+  if (!desc) return '';
+  return `<button class="btn quiet" data-rule-desc="${esc(desc)}" data-rule-dir="${esc(dir)}" title="Set aside this line and every future line like it">Always set aside lines like this</button>`;
+}
+async function renderRules() {
+  let r = null;
+  try { r = await api('/api/bank/rules'); } catch (e) { r = null; }
+  STATE.rules = r;
+  if (!r) { $('rules').innerHTML = ''; return; }
+  const rows = r.rules || [];
+  $('rules').innerHTML = `<h2 class="sec">Rules <span class="n">${rows.length}</span></h2>
+    <div class="card">${rows.length ? rows.map((x) => `<div class="row1" style="margin:4px 0">
+        <span class="badge ${x.direction === 'in' ? 'good' : 'none'}">money ${esc(x.direction)}</span>
+        <span class="desc mono" style="font-size:12px">contains “${esc(x.text)}”</span>
+        <span class="desc">→ ${esc(x.label)}</span>
+        <span class="when">${esc(String(x.at || '').slice(0, 10))}${x.by ? ' · ' + esc(x.by) : ''}</span>
+        <button class="btn quiet" data-rule-del="${esc(x.text)}" data-rule-deldir="${esc(x.direction)}">Delete</button>
+      </div>`).join('') : '<div class="empty">No rules yet. Use "Always set aside lines like this" on a row in the review list.</div>'}
+      <div class="note">A rule sets lines aside with the rule written as the reason. They stay counted in the bank total and each one can be put back. Deleting a rule leaves what it already set aside where it is.</div></div>`;
 }
 
 /* ── DOES THE BANK AGREE WITH THE BOOKS? ──────────────────────────────
@@ -503,14 +910,9 @@ async function renderReconcile() {
    with match,post", then on a mock-up, "add as a carrier bill that is
    also better".
 
-   QuickBooks' shape, her words in the buttons. She reads the QuickBooks
-   banking screen fluently, so borrowing its structure costs no learning;
-   naming the RECORD a button will create beats QuickBooks' generic "Add"
-   plus a category dropdown, because what she cares about is what exists
-   afterwards.
-
-   The states and their buttons come from the server — helpers/bankReview
-   .js — so the screen cannot invent an action the server will not take. */
+   QuickBooks' shape, her words in the buttons. The states and their
+   buttons come from the server — helpers/bankReview.js — so the screen
+   cannot invent an action the server will not take. */
 async function renderReview() {
   let d = null;
   try { d = await api('/api/bank/review'); } catch (e) { d = { error: e.message }; }
@@ -523,37 +925,36 @@ async function renderReview() {
   const q = d.queue || { rows: [], counts: {} };
   const out = [];
 
-  out.push(`<h2 class="sec">For review <span style="color:var(--text-faint); font-weight:400;">${q.rows.length}</span></h2>`);
+  out.push(`<h2 class="sec">Money out <span class="n">${q.rows.length}</span></h2>`);
 
-  /* Same rule as the reconciliation above: an incomplete journal makes
-     every figure a floor, and a SHORT queue reads as a quiet morning. */
+  /* Same rule as the reconciliation: an incomplete journal makes every
+     figure a floor, and a SHORT queue reads as a quiet morning. */
   if (d.note) out.push(`<div class="card"><div class="note">${esc(d.note)}</div></div>`);
 
   if (!q.rows.length) {
     out.push('<div class="card"><div class="note">Nothing waiting. Every withdrawal the bank has sent '
       + 'is either matched to a payment you recorded, or set aside.</div></div>');
     $('review').innerHTML = out.join('');
+    countTabs();
     return;
   }
 
   /* The one-press offer covers EXACT MATCHES only. A match creates
-     nothing — it ties two existing records together. Creating records in
-     bulk from a guess about a descriptor is a different and much worse
-     offer wearing the same button, which is what QuickBooks does. */
+     nothing — it ties two existing records together. */
   if (q.canPostAll) {
-    out.push(`<div class="card"><div class="row1">
+    out.push(`<div class="surebar">
       <span class="desc">${q.canPostAll} row(s) match a payment you already recorded, to the cent.</span>
-      <button class="btn go" data-reviewall="1">Match all ${q.canPostAll}</button>
-    </div><div class="note">Only exact matches. Anything combined, approximate or ambiguous stays here.</div></div>`);
+      <button class="btn solid" data-reviewall="1">Match all ${q.canPostAll}</button>
+      <span class="note" style="margin:0">Only exact matches. Anything combined, approximate or ambiguous stays here.</span>
+    </div>`);
   }
 
   /* ── THE ROWS THAT WOULD CREATE A RECORD GET NO BUTTON YET ──────────
      "Add as a carrier bill" writes a new record into her books. It goes
-     through ledgerPlan/ledgerApply — verify, preview the per-supplier
-     diff, confirm, apply with an undo — and that is not wired. So those
-     rows show WHAT Jarvis would do, as a label, and no button.
-     A dead button is worse than a missing one: she presses it, nothing
-     happens, and she stops trusting the screen. */
+     through ledgerPlan/ledgerApply — verify, preview, confirm, apply with
+     an undo — and that is not wired. So those rows show WHAT Jarvis would
+     do, as a label, and no button. A dead button is worse than a missing
+     one. */
   const creates = q.rows.filter((r) => r.state === 'add' || r.state === 'choose' || r.state === 'ask');
   if (creates.length) {
     out.push(`<div class="card"><div class="note">${creates.length} row(s) below would CREATE a record
@@ -561,44 +962,109 @@ async function renderReview() {
       to what you owe before it happens — not built yet, so they are listed without a button.</div></div>`);
   }
 
-  out.push('<div class="card">' + q.rows.map((r) => {
-    const warn = r.state === 'choose' ? ' style="color:var(--status-warning)"' : '';
-    return `<div class="row1" style="margin:6px 0; align-items:flex-start;">
-      <span class="when" style="min-width:68px">${esc(fmtDay(r.date))}</span>
-      <span class="desc" style="flex:1; min-width:0;">
-        <span${warn}>${esc(r.descriptor || '(no description)')}</span>
-        <div class="note" style="margin:2px 0 0">${esc(r.why || '')}</div>
-      </span>
-      <span class="amt" style="font-size:13px; white-space:nowrap;">${money(r.amount)}</span>
-      ${r.state === 'match'
-        ? `<button class="btn go" data-reviewmatch="${esc(r.id)}">Match</button>`
-        : `<span class="chip ${r.state === 'choose' ? 'warn' : ''}" title="${esc(r.why || '')}">${esc(r.label)}</span>`}
+  out.push(q.rows.map((r) => {
+    const warn = r.state === 'choose' ? ' style="color:var(--amber-500)"' : '';
+    return `<div class="card" data-dir="out" data-k="${esc([r.descriptor, r.amount, r.date, r.label].join(' ').toLowerCase())}" style="border-left:4px solid ${r.state === 'match' ? 'var(--leaf-500)' : 'var(--steel-500)'}">
+      <div class="row1" style="align-items:flex-start;">
+        <span class="when" style="min-width:76px">${esc(fmtDay(r.date))}</span>
+        <span class="desc" style="flex:1; min-width:0;">
+          <span${warn}>${esc(r.descriptor || '(no description)')}</span>
+          <div class="note" style="margin:2px 0 0">${esc(r.why || '')}</div>
+        </span>
+        <span class="amt" style="font-size:15px; white-space:nowrap;">−${money(r.amount)}</span>
+      </div>
+      <div class="acts" style="margin-top:6px">
+        ${r.state === 'match'
+          ? `<button class="btn solid" data-reviewmatch="${esc(r.id)}">Match</button>`
+          : `<span class="chip ${r.state === 'choose' ? 'warn' : ''}" title="${esc(r.why || '')}">${esc(r.label)}</span>`}
+        ${r.state === 'match' ? '' : ruleBtn(r.descriptor, 'out')}
+      </div>
     </div>`;
-  }).join('') + '</div>');
+  }).join(''));
 
   $('review').innerHTML = out.join('');
+  countTabs();
+  applyFilter();
 }
 
-/* ── THE TWO BUTTONS THAT EXIST ────────────────────────────────────────
-   Match only. See renderReview's note: a match ties two existing records
-   together and creates nothing, which is what makes it safe to press in
-   bulk. Anything that CREATES goes through the plan screen. */
+/* ── THE MATCH BUTTON ──────────────────────────────────────────────────
+   A match ties two existing records together and creates nothing, which
+   is what makes it safe to press in bulk. */
 async function doMatch(id) {
   try {
     const r = await api('/api/bank/review/match', { body: { id } });
     toast(`Matched · ${r.matched} payment(s)`, 'good');
     return true;
   } catch (e) {
-    /* 409 means the row moved on since the page loaded — already matched,
-       excluded, or no longer an exact match. The server recomputes rather
-       than trusting what the screen thinks, so this is the honest answer
-       and not a failure. */
+    /* 409 means the row moved on since the page loaded. The server
+       recomputes rather than trusting the screen, so this is the honest
+       answer and not a failure. */
     toast(e.message, 'bad');
     return false;
   }
 }
 
+/* ── tabs, money in/out, search, keyboard ─────────────────────────────── */
+function showTab(name) {
+  STATE.tab = name;
+  document.querySelectorAll('[data-tab]').forEach((b) => {
+    const on = b.dataset.tab === name;
+    b.classList.toggle('on', on); b.setAttribute('aria-selected', on ? 'true' : 'false');
+  });
+  document.querySelectorAll('[data-pane]').forEach((p) => { p.hidden = p.dataset.pane !== name; });
+}
+function applyFilter() {
+  const q = STATE.q.trim().toLowerCase();
+  const dir = STATE.dir;
+  document.querySelectorAll('[data-pane="review"] .card[data-dir]').forEach((c) => {
+    const d = c.dataset.dir;
+    const dirOk = dir === 'all' || d === dir || d === 'both';
+    const qOk = !q || (c.dataset.k || '').includes(q) || c.textContent.toLowerCase().includes(q);
+    c.hidden = !(dirOk && qOk);
+  });
+  $('inblock').hidden = dir === 'out';
+  $('review').hidden = dir === 'in';
+}
+function moveFocus(step) {
+  const cards = [...document.querySelectorAll('[data-pane="review"] .card[data-dir]')].filter((c) => !c.hidden);
+  if (!cards.length) return;
+  let i = cards.findIndex((c) => c.classList.contains('focus'));
+  cards.forEach((c) => c.classList.remove('focus'));
+  i = Math.max(0, Math.min(cards.length - 1, i + step));
+  cards[i].classList.add('focus');
+  cards[i].scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+}
+document.addEventListener('keydown', (ev) => {
+  const typing = /^(INPUT|SELECT|TEXTAREA)$/.test((ev.target && ev.target.tagName) || '');
+  if (typing || ev.metaKey || ev.ctrlKey || ev.altKey) return;
+  if (ev.key === '/') { ev.preventDefault(); showTab('review'); $('q').focus(); return; }
+  const tabs = ['review', 'aside', 'recon', 'setup'];
+  if (/^[1-4]$/.test(ev.key)) { showTab(tabs[Number(ev.key) - 1]); return; }
+  if (ev.key === 'j') moveFocus(1);
+  if (ev.key === 'k') moveFocus(-1);
+});
+$('q').addEventListener('input', (ev) => { STATE.q = ev.target.value || ''; applyFilter(); });
+
+/* A click anywhere on the box opens the calendar (where the browser allows
+   it), and picking a day selects it and closes the calendar by itself. */
+for (const id of ['from', 'to']) {
+  const el = $(id);
+  el.addEventListener('click', () => { try { if (el.showPicker) el.showPicker(); } catch (e) { /* not allowed here */ } });
+  el.addEventListener('change', () => setRange({ ...STATE.range, [id]: el.value || '', preset: 'custom' }));
+}
+
 document.addEventListener('click', async (ev) => {
+  const tab = ev.target.closest('[data-tab]');
+  if (tab) return showTab(tab.dataset.tab);
+  const pre = ev.target.closest('[data-preset]');
+  if (pre) return setRange({ ...presetRange(pre.dataset.preset), preset: pre.dataset.preset });
+  const dirb = ev.target.closest('[data-dir]');
+  if (dirb && dirb.closest('#dir')) {
+    STATE.dir = dirb.dataset.dir;
+    document.querySelectorAll('#dir [data-dir]').forEach((b) => b.classList.toggle('on', b === dirb));
+    return applyFilter();
+  }
+
   const one = ev.target.closest('[data-reviewmatch]');
   if (one) {
     one.disabled = true;
@@ -610,9 +1076,8 @@ document.addEventListener('click', async (ev) => {
   if (all) {
     all.disabled = true;
     /* One at a time, deliberately — bankLedger.markMatched is one row, one
-       lock, one atomic write. A failure half way therefore leaves the ones
-       before it genuinely matched and SAYS SO, instead of one opaque batch
-       that either worked or did not. */
+       lock, one atomic write. A failure half way leaves the ones before it
+       genuinely matched and SAYS SO. */
     const ids = ((STATE.review && STATE.review.queue.rows) || [])
       .filter((r) => r.state === 'match').map((r) => r.id);
     let ok = 0;
@@ -620,6 +1085,79 @@ document.addEventListener('click', async (ev) => {
     toast(ok === ids.length ? `Matched all ${ok}` : `Matched ${ok} of ${ids.length} — stopped at the first problem`,
       ok === ids.length ? 'good' : 'bad');
     renderReview();
+    return;
+  }
+
+  /* Record a transfer between her companies as a loan. */
+  const tr = ev.target.closest('[data-transfer]');
+  if (tr) {
+    const t = STATE.transfers || {};
+    const p = [...(t.proposed || []), ...(t.one_sided || [])].find((x) => x.id === tr.dataset.transfer);
+    if (!p) return;
+    tr.disabled = true; tr.textContent = 'Recording…';
+    try {
+      await api('/api/intercompany/transfers', { body: { from: p.from, to: p.to, amount: p.amount,
+        out_id: p.out_row ? p.out_row.id : null, in_id: p.in_row ? p.in_row.id : null, treatment: 'loan' } });
+      toast(`Recorded as a loan: ${COMPANY[p.from]} → ${COMPANY[p.to]} ${money(p.amount)}`, 'good');
+      load();
+    } catch (e) { tr.disabled = false; tr.textContent = 'Record as a loan'; toast(e.message, 'bad'); }
+    return;
+  }
+  const un = ev.target.closest('[data-untransfer]');
+  if (un) {
+    if (!confirm('Undo this transfer? The loan comes off both companies\' books and the bank lines go back in the review list.')) return;
+    try { await api('/api/intercompany/transfers', { method: 'DELETE', body: { id: un.dataset.untransfer } });
+      toast('Undone', 'good'); load(); } catch (e) { toast(e.message, 'bad'); }
+    return;
+  }
+
+  /* A rule from a row: say what it is, see how many lines it covers, then
+     decide. Nothing happens before the second answer. */
+  const rb = ev.target.closest('[data-rule-desc]');
+  if (rb) {
+    const dir = rb.dataset.ruleDir;
+    const guess = String(rb.dataset.ruleDesc || '').toUpperCase().replace(/[#:]?\b[\dA-Z]*\d{3,}[\dA-Z]*\b/g, ' ').replace(/\s+/g, ' ').trim();
+    const text = prompt('Set aside every money-' + dir + ' line whose description contains:', guess);
+    if (text === null) return;
+    const labels = ((STATE.rules || {}).labels || ['Bank charge']);
+    const label = prompt('What are these lines? (for example: ' + labels.join(', ') + ')', labels[0]);
+    if (label === null) return;
+    try {
+      const dry = await api('/api/bank/rules', { body: { text, direction: dir, label, dry: true } });
+      if (!confirm(`This sets aside ${dry.would} line(s) now (${money(dry.money)}), and every future money-${dir} line containing “${dry.rule.text}”, as "${dry.rule.label}".\n\nEach one can be put back. Go ahead?`)) return;
+      const r = await api('/api/bank/rules', { body: { text, direction: dir, label } });
+      toast(`Rule saved · ${r.applied} line(s) set aside`, 'good');
+      load();
+    } catch (e) { toast(e.message, 'bad'); }
+    return;
+  }
+  const rd = ev.target.closest('[data-rule-del]');
+  if (rd) {
+    try { await api('/api/bank/rules', { method: 'DELETE', body: { text: rd.dataset.ruleDel, direction: rd.dataset.ruleDeldir } });
+      toast('Rule deleted — lines it already set aside stay set aside', 'good'); renderRules(); } catch (e) { toast(e.message, 'bad'); }
+    return;
+  }
+
+  /* Confirm every sure deposit, one receipt at a time, stopping at the
+     first refusal — the same discipline as "Match all" above. */
+  const sa = ev.target.closest('[data-sureall]');
+  if (sa) {
+    const list = STATE.bulk || [];
+    if (!confirm(`Record ${list.length} receipts? Each pays its invoices in full.`)) return;
+    sa.disabled = true;
+    let ok = 0;
+    for (const { r, mode } of list) {
+      const p = r.proposals[0];
+      try {
+        await api('/api/sales-receipts', { body: {
+          date: r.deposit.date, amount: r.deposit.amount, mode, bank: r.deposit.bank_guess,
+          customer: r.party, ref: r.deposit.id, note: 'matched from the bank feed',
+          allocations: p.allocations.map((a) => ({ sale_id: a.doc_id, amount: a.amount })) } });
+        ok += 1;
+      } catch (e) { toast(`Stopped at ${r.party} ${money(r.deposit.amount)}: ${e.message}`, 'bad'); break; }
+    }
+    toast(ok === list.length ? `Recorded all ${ok}` : `Recorded ${ok} of ${list.length}`, ok === list.length ? 'good' : 'bad');
+    load();
   }
 });
 
@@ -627,9 +1165,12 @@ async function load() {
   try {
     STATE.data = await api('/api/bank/match');
     await render();
+    renderOverview();
+    renderTransfers();
     renderFeed();
     renderReconcile();
     renderReview();
+    renderRules();
   } catch (e) {
     $('list').innerHTML = `<div class="card"><div class="lbl">could not load</div><div class="note">${esc(e.message)}</div></div>`;
   }
@@ -638,6 +1179,7 @@ async function load() {
 async function showAliases() {
   try {
     const { aliases } = await api('/api/bank/aliases');
+    showTab('aside');
     $('extras').innerHTML = `<h2 class="sec">${aliases.length} name(s) you have taught it</h2>
       <div class="card">${aliases.length ? aliases.map((a) => `<div class="row1" style="margin:4px 0">
           <span class="desc mono" style="font-size:11.5px">${esc(a.descriptor)}</span>
@@ -651,10 +1193,12 @@ async function showAliases() {
 
 function showExcluded() {
   const L = (STATE.data || {}).ledger || {};
-  $('extras').innerHTML = `<h2 class="sec">Excluded — set aside, still counted</h2>
+  showTab('aside');
+  renderExtras();
+  $('extras').insertAdjacentHTML('afterbegin', `<h2 class="sec">Excluded — set aside, still counted</h2>
     <div class="card"><div class="row1"><span class="amt">${money((L.excluded || {}).money)}</span>
       <span class="desc">${(L.excluded || {}).count || 0} row(s)</span></div>
-      <div class="note">Excluded rows leave this worklist but stay in the ledger with their total, and any one of them can be put back. Nothing is deleted.</div></div>`;
+      <div class="note">Excluded rows leave this worklist but stay in the ledger with their total, and any one of them can be put back. Nothing is deleted.</div></div>`);
 }
 
 document.addEventListener('click', async (ev) => {
@@ -677,7 +1221,8 @@ document.addEventListener('click', async (ev) => {
       /* Partial failure comes back as a 200 with errors in it, because one
          bank needing re-authentication must not throw away the other
          bank's deposits. So both halves are reported. */
-      const parts = [`${r.added} new`, r.modified ? `${r.modified} corrected` : '', (r.removed || []).length ? `${r.removed.length} removed by the bank` : ''].filter(Boolean);
+      const parts = [`${r.added} new`, r.modified ? `${r.modified} corrected` : '', (r.removed || []).length ? `${r.removed.length} removed by the bank` : '',
+        (r.rules && r.rules.applied) ? `${r.rules.applied} set aside by your rules` : ''].filter(Boolean);
       toast(parts.join(', ') || 'nothing new', 'good');
       for (const e of (r.errors || [])) toast(`${e.institution || e.item_id}: ${e.error}`, 'bad');
       if (r.truncated) toast('Stopped early — press again to keep pulling', 'bad');
@@ -690,6 +1235,30 @@ document.addEventListener('click', async (ev) => {
   if (t.dataset.plaid === 'sandbox') {
     try { await api('/api/plaid/sandbox-link', { body: {} }); toast('Test bank linked — now press Pull', 'good'); load(); }
     catch (e) { toast(e.message, 'bad'); }
+    return;
+  }
+
+  /* Sign in again to a bank already linked — Plaid's update mode. Same
+     link, same history; nothing to exchange afterwards, so the server just
+     clears the flag and pulls. */
+  if (t.dataset.plaid === 'reconnect') {
+    const item = t.dataset.item;
+    let token = null;
+    try { token = (await api('/api/plaid/link-token', { body: { item_id: item } })).link_token; }
+    catch (e) { return toast(e.message, 'bad'); }
+    const ok = await loadPlaidLink();
+    if (!ok) return toast('Could not load Plaid Link from the internet — check the server can reach cdn.plaid.com', 'bad');
+    window.Plaid.create({
+      token,
+      onSuccess: async () => {
+        try {
+          const r = await api('/api/plaid/reconnected', { body: { item_id: item } });
+          toast(`Signed in again · ${r.added || 0} new line(s)`, 'good');
+          load();
+        } catch (e) { toast(e.message, 'bad'); }
+      },
+      onExit: (err) => { if (err) toast('Sign-in closed: ' + (err.display_message || err.error_code || 'cancelled'), 'bad'); },
+    }).open();
     return;
   }
 
@@ -763,11 +1332,14 @@ document.addEventListener('click', async (ev) => {
 
     /* The shortfall is a deduction, not a rounding. salesReceipts.js keeps
        them apart because a bank charge is a cost to Edge Metals and a
-       discount reduces what was earned. If there is one, she says which. */
+       discount reduces what was earned. If there is one, she says which —
+       and if it looks like her customer's claim, the question says so. */
     const short = p.allocations.reduce((s, a) => s + (a.shortfall || 0), 0);
     let reason = null;
     if (short > 0.005) {
-      const ans = prompt(`This deposit is ${money(short)} short of the invoice total.\n\nType "fee" if the bank took it in transit, or "discount" if you agreed to take less.`);
+      const h = row.claim_hint;
+      const hint = h ? `\n\nIt is close to the claim on ${h.invoice_no} (${money(h.claim_amount)}) — if the customer deducted their claim, that is a "discount".` : '';
+      const ans = prompt(`This deposit is ${money(short)} short of the invoice total.\n\nType "fee" if the bank took it in transit, or "discount" if you agreed to take less.${hint}`);
       if (ans === null) return;
       reason = /^f/i.test(ans) ? 'bank_charge' : (/^d/i.test(ans) ? 'discount' : null);
       if (!reason) return toast('Not recorded — a shortfall has to be a fee or a discount', 'bad');
@@ -793,6 +1365,8 @@ document.addEventListener('click', async (ev) => {
   }
 });
 
+loadRange();
+paintRange();
 load();
 </script>
 <!-- The app's sidebar on this page too (Apsara 2026-10-08: "i want the sidebar to appear in all pages").

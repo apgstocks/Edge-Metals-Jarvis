@@ -242,8 +242,89 @@ function patternsFromHistory(receipts = [], salesById = new Map()) {
     return out;
 }
 
+// ── RULES: "a line like this is always X" ────────────────────────────────
+// Apsara approved, on the Bank mock-up, remembering that a line such as
+// "WIRE IN FEE" is a bank charge so she is never asked again.
+//
+// What a rule DOES is deliberately small: it SETS ASIDE matching rows, with
+// the rule written into the reason, exactly as if she had pressed "Set aside"
+// and typed it. That is reversible (Put back), explainable at tax time, and
+// creates nothing in her books. A rule that CREATED expense records from a
+// description would be the bulk-create-from-a-guess this screen refuses
+// everywhere else.
+//
+// Guard rails, each because the opposite has a cost:
+//   · a rule has a direction (in or out). "WIRE IN" as a money-in rule would
+//     set aside every customer's wire, so a rule can only be made from a row
+//     she is looking at, and it takes that row's direction;
+//   · the text must be 4+ characters and not only digits;
+//   · rows already matched or already set aside are never touched.
+const RULE_LABELS = ['Bank charge', 'Transfer fee', 'Card fee', 'Tax payment', 'Loan repayment', 'Owner', 'Not business'];
+const ruleKey = (t) => String(t || '').toUpperCase().replace(/\s+/g, ' ').trim();
+
+function listRules() {
+    const raw = loadJson(FILE(), DEFAULT);
+    return raw && Array.isArray(raw.rules) ? raw.rules.slice() : [];
+}
+
+function cleanRule(input) {
+    const b = input || {};
+    const text = ruleKey(b.text);
+    if (text.length < 4 || /^[\d\s.,-]+$/.test(text)) throw new Error('a rule needs at least four letters of the bank description');
+    const direction = String(b.direction || '');
+    if (!['in', 'out'].includes(direction)) throw new Error('a rule is for money in or money out — make it from a row');
+    const label = String(b.label || '').trim();
+    if (!label) throw new Error('say what these lines are — for example "Bank charge"');
+    return { text, direction, label };
+}
+
+function ruleHits(rule, rows) {
+    return (rows || []).filter((r) => r && !r.excluded && !r.matched && r.direction === rule.direction
+        && ruleKey(`${r.desc || ''} ${r.party || ''}`).includes(rule.text));
+}
+
+async function addRule(input, { by = null } = {}) {
+    const r = cleanRule(input);
+    const row = { ...r, at: new Date().toISOString(), by: by || null };
+    await mutateJson(FILE(), DEFAULT, (all) => {
+        const s = (all && typeof all === 'object' && !Array.isArray(all)) ? all : { aliases: [] };
+        s.rules = (Array.isArray(s.rules) ? s.rules : []).filter((x) => !(x.text === r.text && x.direction === r.direction));
+        s.rules.push(row);
+        return s;
+    });
+    return row;
+}
+
+async function deleteRule(text, direction) {
+    const t = ruleKey(text);
+    let gone = null;
+    await mutateJson(FILE(), DEFAULT, (all) => {
+        const s = (all && typeof all === 'object' && !Array.isArray(all)) ? all : { aliases: [] };
+        const rows = Array.isArray(s.rules) ? s.rules : [];
+        gone = rows.find((x) => x.text === t && x.direction === direction) || null;
+        s.rules = rows.filter((x) => !(x.text === t && x.direction === direction));
+        return s;
+    });
+    return gone;
+}
+
+// Sets aside every live row a rule covers. Returns what it did, per rule.
+async function applyRules({ by = 'rule', only = null } = {}) {
+    const ledger = require('./bankLedger');
+    const rules = only ? [only] : listRules();
+    const done = [];
+    for (const rule of rules) {
+        for (const row of ruleHits(rule, ledger.list())) {
+            await ledger.exclude(row.id, `${rule.label} — rule "${rule.text}"`, by);
+            done.push({ id: row.id, rule: rule.text, label: rule.label });
+        }
+    }
+    return { applied: done.length, rows: done };
+}
+
 module.exports = {
     FILE, listAliases, learnAlias, forgetAlias,
+    RULE_LABELS, listRules, cleanRule, ruleHits, addRule, deleteRule, applyRules,
     resolverFrom, suggestParty, patternsFromHistory,
     // Re-exported so a caller has one place to look, and so a test can prove
     // this file uses the shared logic rather than a copy of it.

@@ -142,6 +142,31 @@ const RULES = {
         return { debits, credits: [['1200', r2(received + shortfall)]] };
     },
 
+    // ── MONEY BETWEEN HER OWN COMPANIES, AS A LOAN ───────────────────────
+    // Apsara, 2026-10-09: "put it as loan for now" — her CPA decides between
+    // loan and owner's transfer later. helpers/interCompany.js holds the
+    // records; this is the posting.
+    //
+    // Lender's books: Dr 1400 Due from related companies / Cr its bank.
+    // Borrower's books: Dr its bank / Cr 2400 Due to related companies.
+    // The borrower's half travels as `mirror` so post() can refuse BOTH when
+    // either is wrong — a one-sided inter-company entry unbalances two
+    // companies at once and is close to impossible to find later.
+    'inter-company-loan': (tx) => {
+        if (!tx.borrower || !E.get(tx.borrower)) return { problem: 'no borrowing company' };
+        if (tx.borrower === tx.entity) return { problem: 'a company cannot lend to itself' };
+        if (!BANK_ACCOUNTS.has(String(tx.fromBank)) || !BANK_ACCOUNTS.has(String(tx.toBank))) {
+            return { problem: 'cannot tell which bank account one side moved through' };
+        }
+        const amt = r2(num(tx.amount));
+        return {
+            debits: [['1400', amt]], credits: [[String(tx.fromBank), amt]],
+            mirror: { entity: tx.borrower, kind: 'inter-company-loan',
+                memo: `borrowed from ${E.get(tx.entity) ? E.get(tx.entity).uiName : tx.entity}`,
+                debits: [[String(tx.toBank), amt]], credits: [['2400', amt]] },
+        };
+    },
+
     // ── THE YARD ─────────────────────────────────────────────────────────
     'yard-purchase': (tx) => ({
         debits: [['5000', r2(num(tx.amount))]],
@@ -285,7 +310,22 @@ function post(kind, tx = {}) {
     // Another company's money settled this. Redirect the bank side here and
     // emit the matching entry on their books.
     let mirror = null;
-    if (t.paidBy && t.paidBy !== t.entity && E.get(t.paidBy)) {
+    // A rule that carries its own other half (inter-company-loan). Checked
+    // the same way as this half; any problem below clears BOTH.
+    if (built.mirror) {
+        const m = built.mirror;
+        if (!E.get(m.entity)) { out.problems.push(`${kind}: the other company is unknown`); return out; }
+        const md = (m.debits || []).filter(([, a]) => Math.abs(a) >= CENT);
+        const mc = (m.credits || []).filter(([, a]) => Math.abs(a) >= CENT);
+        const sd = r2(md.reduce((x, [, a]) => x + a, 0)), sc = r2(mc.reduce((x, [, a]) => x + a, 0));
+        if (!md.length || Math.abs(sd - sc) >= CENT) {
+            out.problems.push(`${kind}: the other company's half does not balance — neither half posted`);
+            return out;
+        }
+        mirror = { date: t.date || null, entity: m.entity, kind: m.kind || kind,
+            source: t.source || null, memo: m.memo || null, debits: md, credits: mc };
+    }
+    if (!built.mirror && t.paidBy && t.paidBy !== t.entity && E.get(t.paidBy)) {
         const bankLine = [...debits, ...credits].find(([a]) => BANK_ACCOUNTS.has(a));
         if (bankLine) {
             debits = redirectBankToInterCompany(debits);

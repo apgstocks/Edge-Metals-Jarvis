@@ -279,7 +279,9 @@ const sid = ((await req('POST', '/login', { body: { password: process.env.ADMIN_
     // survived it. An alternative in an assertion is usually a way of
     // making it pass.
     ck('  a row that would create a record gets a label, not a button',
-       /\$\{r\.state === 'match'\s*\n\s*\? `<button class="btn go" data-reviewmatch/.test(page),
+       // 2026-10-09 redesign: the Match button became `btn solid`. The class
+       // is styling; the property is that it sits behind the state ternary.
+       /\$\{r\.state === 'match'\s*\n\s*\? `<button class="btn (?:go|solid)" data-reviewmatch/.test(page),
        'the Match button must be behind a state check, not rendered for every row');
     ck('  and the page says those go through the plan screen, which is not built',
        /not built yet/.test(page));

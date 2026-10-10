@@ -211,6 +211,13 @@ function itemsPublic() {
         linked_at: i.linked_at || null,
         cursor_set: !!i.cursor,
         last_sync_at: i.last_sync_at || null,
+        // Set by the webhook or a failed pull; cleared by the next good pull.
+        // Not a secret — it is the one thing the screen most needs to say.
+        needs_login: i.needs_login || null,
+        // Balances Plaid already sent WITH a transactions pull, if it did.
+        // No /accounts/balance/get call is made for these: that endpoint is
+        // billed per call (see bankMatchRoutes /api/bank/reconcile).
+        balances: i.balances || null,
         accounts: (i.accounts || []).map((a) => ({
             account_id: a.account_id, name: a.name || null,
             mask: a.mask || null, subtype: a.subtype || null,
@@ -264,7 +271,7 @@ function assertReadProducts(products) {
 // WEBSITE job, once per bank, and the app is deliberately not a place it can
 // be done. Adding android_package_name would make the phone a second place
 // her bank credentials get entered, for a thing she does twice ever.
-async function linkToken({ fetchImpl, userId = 'edge-jarvis' } = {}) {
+async function linkToken({ fetchImpl, userId = 'edge-jarvis', itemId = null } = {}) {
     assertReadProducts(READ_PRODUCTS);
     const body = {
         user: { client_user_id: String(userId) },
@@ -273,6 +280,22 @@ async function linkToken({ fetchImpl, userId = 'edge-jarvis' } = {}) {
         country_codes: ['US'],
         language: 'en',
     };
+    // ── UPDATE MODE: SIGNING BACK IN TO A BANK ALREADY LINKED ────────────
+    // When the bank wants her to log in again (password changed, consent
+    // renewed), pressing "Connect a bank" would create a SECOND item for the
+    // same accounts — two feeds, every transaction twice. Plaid's update mode
+    // re-authenticates the EXISTING item instead: same access token, same
+    // cursor, history kept. Plaid requires `products` to be left out here.
+    // The access token goes to Plaid in this request body and nowhere else.
+    let mode = 'new';
+    if (itemId) {
+        const item = items().find((i) => i.item_id === itemId);
+        if (!item) fail(`no linked item ${itemId}`);
+        if (!item.access_token) fail(`item ${itemId} has no access token — unlink it and connect again`);
+        body.access_token = item.access_token;
+        delete body.products;
+        mode = 'update';
+    }
     // ── WHERE PLAID SHOULD PUSH ─────────────────────────────────────────
     // Apsara, 2026-10-08: "i dont want human intervention between jarvis
     // and plaid." Set here rather than in the dashboard because the webhook
@@ -285,7 +308,7 @@ async function linkToken({ fetchImpl, userId = 'edge-jarvis' } = {}) {
     // a valid certificate, so localhost cannot be used even in sandbox.
     if (cfg.PLAID_WEBHOOK_URL) body.webhook = cfg.PLAID_WEBHOOK_URL;
     const r = await call('/link/token/create', body, { fetchImpl });
-    return { link_token: r.link_token, expiration: r.expiration, webhook: body.webhook || null };
+    return { link_token: r.link_token, expiration: r.expiration, webhook: body.webhook || null, mode };
 }
 
 // ── step 2: the public token becomes an access token ─────────────────────
@@ -380,6 +403,7 @@ async function syncItem(itemId, { fetchImpl, pageCap = 20 } = {}) {
 
     let cursor = item.cursor || null;
     const added = [], modified = [], removed = [];
+    let balances = null;
     let pages = 0, truncated = false;
 
     for (;;) {
@@ -393,6 +417,15 @@ async function syncItem(itemId, { fetchImpl, pageCap = 20 } = {}) {
         added.push(...(r.added || []));
         modified.push(...(r.modified || []));
         removed.push(...(r.removed || []));
+        if (Array.isArray(r.accounts) && r.accounts.length) {
+            balances = {};
+            for (const a of r.accounts) {
+                if (!a || !a.account_id || !a.balances) continue;
+                balances[a.account_id] = { current: a.balances.current ?? null,
+                    available: a.balances.available ?? null,
+                    currency: a.balances.iso_currency_code || null, as_of: new Date().toISOString() };
+            }
+        }
         cursor = r.next_cursor || cursor;
         pages += 1;
 
@@ -403,7 +436,10 @@ async function syncItem(itemId, { fetchImpl, pageCap = 20 } = {}) {
         if (pages >= pageCap) { truncated = true; break; }
     }
 
-    await saveItem({ ...item, cursor, last_sync_at: new Date().toISOString() });
+    // A good pull proves the login works, so a "needs you to sign in" flag
+    // from an earlier webhook is cleared here rather than left to nag.
+    await saveItem({ ...item, cursor, last_sync_at: new Date().toISOString(), needs_login: null,
+        ...(balances ? { balances } : {}) });
     return { item_id: itemId, added, modified, removed, pages, truncated, cursor_advanced: cursor !== (item.cursor || null) };
 }
 
@@ -429,8 +465,15 @@ async function syncAll({ fetchImpl } = {}) {
             // One bank failing must not stop the other. ITEM_LOGIN_REQUIRED on
             // Chase should not hide BofA's deposits.
             out.errors.push({ item_id: i.item_id, institution: i.institution || null, error: redact(e.message) });
+            const code = (String(e.message).match(/ITEM_LOGIN_REQUIRED|PENDING_DISCONNECT|PENDING_EXPIRATION/) || [])[0];
+            if (code) { try { await markNeedsLogin(i.item_id, code); } catch (x) { /* the error above still reports it */ } }
         }
     }
+    // Her standing rules ("WIRE IN FEE is a bank charge") apply to whatever
+    // just arrived. Each one sets a row aside WITH the rule as the reason, so
+    // it is reversible and explainable; nothing is created or deleted.
+    try { out.rules = await require('./bankLearn').applyRules({ by: 'rule' }); }
+    catch (e) { out.rules_error = e.message; }
     return out;
 }
 
@@ -483,6 +526,22 @@ async function verificationKey(keyId, { fetchImpl } = {}) {
     return r.key;
 }
 
+// ── the bank wants her to sign in again ──────────────────────────────────
+// Written by the webhook (ITEM_LOGIN_REQUIRED, PENDING_DISCONNECT,
+// PENDING_EXPIRATION) and by a pull that failed with one of those. Stored on
+// the item so the screen can show a Reconnect button on the right account,
+// instead of the alert living only in an email.
+async function markNeedsLogin(itemId, code) {
+    const item = items().find((i) => i.item_id === itemId);
+    if (!item) return null;
+    return saveItem({ ...item, needs_login: { code: String(code || 'ITEM_LOGIN_REQUIRED'), at: new Date().toISOString() } });
+}
+async function clearNeedsLogin(itemId) {
+    const item = items().find((i) => i.item_id === itemId);
+    if (!item) fail(`no linked item ${itemId}`);
+    return saveItem({ ...item, needs_login: null });
+}
+
 function status() {
     return {
         configured: configured(),
@@ -500,6 +559,7 @@ function status() {
 module.exports = {
     env, host, configured, status, redact,
     items, itemsPublic, linkToken, exchange, syncItem, syncAll, sandboxLink, unlink,
+    markNeedsLogin, clearNeedsLogin,
     ITEM_FILE, HOSTS,
     // Exported so tests/plaid.js can assert the rule rather than trust the
     // comment above it — and so a reviewer can see the whole permitted

@@ -25,7 +25,7 @@
 // It asks /api/me for the role (the same call index.html makes), draws the
 // same rows with the same admin / staff rules, the same company switcher
 // (same localStorage key, so the choice follows her between pages), the same
-// four folding groups. It always opens on the left on a computer screen.
+// four folding groups. It starts collapsed — a thin strip on the left with ☰.
 // A row that is a standalone page navigates to it; a row that is a tab of
 // the app goes to /#tab=<id>, which index.html's boot() opens.
 //
@@ -162,20 +162,26 @@ html.jv-has-nav body { padding-left:252px; box-sizing:border-box; }
 #jvBurger { display:none; position:fixed; top:14px; left:14px; z-index:41; width:40px; height:40px; align-items:center; justify-content:center; flex-direction:column; gap:5px; background:var(--steel-950,#0C0E10); border:1px solid var(--steel-700,#2B3239); border-radius:4px; cursor:pointer; padding:0; }
 #jvBurger span { display:block; width:18px; height:2px; background:#fff; border-radius:2px; }
 #jvBackdrop { display:none; position:fixed; inset:0; background:rgba(0,0,0,.55); z-index:39; }
-html.jv-collapsed body { padding-left:0; padding-top:58px; }
+/* Collapsed on a computer = a thin strip down the LEFT with the ☰ in it, not a
+   bar across the top. Apsara, 2026-10-10: "Why sidebar coming on top". */
+#jvStrip { display:none; position:fixed; left:0; top:0; bottom:0; width:56px; z-index:38; background:var(--steel-950,#0C0E10); border-right:1px solid var(--steel-800,#1E2429); }
+html.jv-collapsed body { padding-left:56px; padding-top:0; }
+html.jv-collapsed #jvStrip { display:block; }
 html.jv-collapsed #jvSidebar { width:min(82vw,300px); transform:translateX(-100%); box-shadow:0 0 50px rgba(0,0,0,.6); }
-html.jv-collapsed #jvBurger { display:flex; }
+html.jv-collapsed #jvBurger { display:flex; left:8px; }
 #jvSidebar.open { transform:translateX(0) !important; }
 #jvBackdrop.open { display:block; }
 #jvSidebar.open .jv-brand { padding-left:66px; }
 @media (max-width:860px) {
-  html.jv-has-nav body { padding-left:0; padding-top:58px; }
+  html.jv-has-nav body, html.jv-collapsed body { padding-left:0; padding-top:58px; }
+  html.jv-collapsed #jvStrip { display:none; }
+  html.jv-collapsed #jvBurger { left:14px; }
   #jvSidebar { width:min(82vw,300px); transform:translateX(-100%); box-shadow:0 0 50px rgba(0,0,0,.6); }
   #jvBurger { display:flex; }
   #jvCollapse { display:none; }
 }
 @media print {
-  #jvSidebar, #jvBurger, #jvBackdrop { display:none !important; }
+  #jvSidebar, #jvBurger, #jvBackdrop, #jvStrip { display:none !important; }
   html.jv-has-nav body, html.jv-collapsed body { padding-left:0 !important; padding-top:0 !important; }
 }`;
 
@@ -254,6 +260,10 @@ html.jv-collapsed #jvBurger { display:flex; }
     const backdrop = document.createElement('div');
     backdrop.id = 'jvBackdrop';
 
+    const strip = document.createElement('div');
+    strip.id = 'jvStrip';
+    strip.setAttribute('aria-hidden', 'true');
+    document.body.prepend(strip);
     document.body.prepend(backdrop);
     document.body.prepend(burger);
     document.body.prepend(aside);
@@ -284,11 +294,12 @@ html.jv-collapsed #jvBurger { display:flex; }
       location.href = '/login';
     });
     document.addEventListener('keydown', (e) => { if (e.key === 'Escape') close(); });
-    // ALWAYS OPEN on arrival, on a computer screen. Apsara, 2026-10-10, with a
-    // screenshot of Books showing only the ☰ button: "Why sidebar coming on
-    // top". It had copied the app's collapsed setting, so every page opened
-    // with the menu hidden. Collapsing still works on the page; it is simply
-    // not carried over, and never written back to the app's own setting.
+    // COLLAPSED ON ARRIVAL, on every page that uses this file. Apsara,
+    // 2026-10-10: "i want sidebar to be collapsed in all page except landing
+    // page". The landing page is the dashboard (index.html), which has its own
+    // sidebar and never loads this file, so it is unaffected. Opening the menu
+    // here is not remembered and never touches the app's own setting.
+    setCollapsed(true, false);
   }
 
   function start() {

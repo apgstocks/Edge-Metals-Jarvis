@@ -78,6 +78,26 @@ function openReceivables(sales) {
     return { docs, disagreements };
 }
 
+// Every bank row interCompany.detect() proposes as a transfer between her
+// own companies. Both queues leave these out and the screen shows them in
+// their own section, so a transfer is never asked about as a customer
+// payment or a supplier payment.
+function transferRowIds(rows) {
+    try {
+        const IC = require('./interCompany');
+        const f = IC.detect(rows);
+        // Rows already recorded as a transfer too: bankLedger.worklist keeps
+        // matched rows, so without this a recorded transfer's deposit came
+        // straight back as an unknown payer.
+        const ids = new Set((rows || []).filter((r) => IC.linked(r)).map((r) => r.id));
+        for (const p of [...f.pairs, ...f.oneSided]) {
+            if (p.out_row) ids.add(p.out_row.id);
+            if (p.in_row) ids.add(p.in_row.id);
+        }
+        return ids;
+    } catch (e) { return new Set(); }
+}
+
 function mount(app, cfg) {
     // ── THE PAGE ─────────────────────────────────────────────────────────
     // Same standalone-page pattern as /quickbooks and /edge-inventory, and
@@ -211,6 +231,16 @@ function mount(app, cfg) {
             const asideIds = new Set(notTradeRows.map((x) => x.row.id));
             deposits = deposits.filter((d) => !asideIds.has(d.id));
 
+            // ── MONEY FROM HER OWN COMPANIES IS NEVER INCOME ─────────────
+            // Apsara, 2026-10-09. A deposit that interCompany.detect() pairs
+            // with money leaving Edge Yard or AAA Investment (or that names
+            // one of them) is shown under "Between your companies" on the
+            // same tab, NOT offered against a customer's invoice. Same
+            // partition shape as not_trade above: moved, and named.
+            const transferIds = transferRowIds(bankRows);
+            const transferRows = deposits.filter((d) => transferIds.has(d.id));
+            deposits = deposits.filter((d) => !transferIds.has(d.id));
+
             const out = bankMatch.matchStatement({
                 deposits, openDocs: docs,
                 resolveParty,
@@ -226,6 +256,34 @@ function mount(app, cfg) {
                 }
             }
 
+            // ── A SHORT PAYMENT THAT LOOKS LIKE HER CUSTOMER'S CLAIM ─────
+            // A HINT, never an action. When what a deposit leaves unpaid on
+            // one invoice is within a few dollars of a claim already raised
+            // on that invoice, the row says so. Settling the claim from here
+            // is not wired: the deduction reasons feed the QuickBooks push
+            // (quickbooks/pushPayments.js knows bank_charge and discount
+            // only), so adding a third is a change to that path, not to this
+            // screen.
+            try {
+                const claims = require('./claims').list();
+                const docById = new Map(docs.map((d) => [d.id, d]));
+                const norm = (v) => String(v || '').trim().toUpperCase();
+                for (const r of out.rows) {
+                    const p = (r.proposals || [])[0];
+                    if (!p || (p.allocations || []).length !== 1) continue;
+                    const a = p.allocations[0];
+                    const gap = round2(num0(a.shortfall) || num0(a.leaves));
+                    const doc = docById.get(a.doc_id);
+                    if (!(gap > 0.005) || !doc || !doc.invoice_no) continue;
+                    const c = claims.find((x) => x && norm(x.invoice_no) === norm(doc.invoice_no)
+                        && num0(x.claim_amount) > 0
+                        && Math.abs(num0(x.claim_amount) - gap) <= Math.max(5, gap * 0.02)
+                        && !['rejected', 'withdrawn'].includes(x.status));
+                    if (c) r.claim_hint = { claim_id: c.id, invoice_no: doc.invoice_no,
+                        claim_amount: round2(num0(c.claim_amount)), gap, status: c.status };
+                }
+            } catch (e) { /* a hint that cannot be computed is simply not shown */ }
+
             res.json({
                 ...out,
                 from, to,
@@ -237,6 +295,8 @@ function mount(app, cfg) {
                 // Set aside, with the RULE that set each one aside — a line
                 // that merely vanished from the queue would be a figure she
                 // cannot account for at tax time.
+                // On the screen under "Between your companies".
+                transfer_rows: transferRows.map((d) => ({ id: d.id, date: d.date, amount: d.amount, desc: d.desc })),
                 not_trade: notTradeRows.map((x) => ({ id: x.row.id, date: x.row.date,
                     amount: x.row.amount, desc: x.row.desc || x.row.descriptor || null,
                     why: x.why })),
@@ -379,9 +439,13 @@ function mount(app, cfg) {
             // later is matched the day it is posted rather than needing a
             // second enumeration kept in step.
             const built = BB.build({ from, to });
+            // Money leaving for one of her own companies is shown under
+            // "Between your companies", not asked about here as a payment.
+            const tIds = transferRowIds(rows);
+            const sweepRows = rows.filter((r) => !tIds.has(r.id));
             const outByBank = BRec.bankAccounts().map((a) => ({
                 ...a,
-                sweep: BO.sweep({ rows, lines: built.lines, code: a.code, from, to }),
+                sweep: BO.sweep({ rows: sweepRows, lines: built.lines, code: a.code, from, to }),
             }));
             const withdrawalResults = outByBank.flatMap((b) => b.sweep.results);
 
@@ -581,8 +645,26 @@ function mount(app, cfg) {
     // the entire reason to use Link rather than ask for credentials.
     app.post('/api/plaid/link-token', async (req, res) => {
         if (!admin(req, res)) return;
-        try { res.json(await require('./plaid').linkToken({})); }
+        // item_id present = SIGN IN AGAIN to a bank already linked (Plaid's
+        // update mode). Absent = link a new bank, exactly as before.
+        const itemId = String(((req.body || {}).item_id) || '').trim() || null;
+        try { res.json(await require('./plaid').linkToken({ itemId })); }
         catch (e) { res.status(400).json({ error: e.message }); }
+    });
+
+    // After she signs back in through update mode there is no new token to
+    // exchange — the old one works again. This clears the flag and pulls, so
+    // the screen shows the result of the fix rather than the old warning.
+    app.post('/api/plaid/reconnected', async (req, res) => {
+        if (!admin(req, res)) return;
+        const id = String(((req.body || {}).item_id) || '').trim();
+        if (!id) return res.status(400).json({ error: 'which bank?' });
+        try {
+            const P = require('./plaid');
+            await P.clearNeedsLogin(id);
+            const out = await P.syncAll({});
+            res.json({ ok: true, ...out });
+        } catch (e) { res.status(400).json({ error: e.message }); }
     });
 
     app.post('/api/plaid/exchange', async (req, res) => {
@@ -621,6 +703,126 @@ function mount(app, cfg) {
         if (!id) return res.status(400).json({ error: 'which item?' });
         try { res.json(await require('./plaid').unlink(id, {})); }
         catch (e) { res.status(400).json({ error: e.message }); }
+    });
+
+    // ── GET /api/bank/overview — the account cards and "coming in" ──────
+    // Apsara, 2026-10-09, on the Bank mock-up: one card per company account
+    // (Edge Metals BofA, AAA Investment, Edge Yard Chase), a warning on the
+    // one that needs signing in again, and what customers still owe.
+    //
+    // Read-only and makes NO billed Plaid call. A balance is shown only when
+    // Plaid sent one WITH an ordinary transactions pull; otherwise the card
+    // shows what moved in the chosen dates, and says which it is.
+    app.get('/api/bank/overview', (req, res) => {
+        try {
+            const ledger = require('./bankLedger');
+            const E = require('./entities');
+            const P = require('./plaid');
+            const from = String(req.query.from || '').slice(0, 10) || null;
+            const to = String(req.query.to || '').slice(0, 10) || null;
+            const rows = ledger.list();
+            const inDates = (r) => (!from || String(r.date) >= from) && (!to || String(r.date) <= to);
+            const items = P.configured() ? P.itemsPublic() : [];
+            const plaidAcct = new Map();
+            for (const it of items) for (const a of (it.accounts || [])) plaidAcct.set(a.account_id, { it, a });
+
+            const last4 = (v) => String(v || '').replace(/\D/g, '').slice(-4);
+            const mine = ledger.readAccounts();
+            const cards = [];
+            const seenPlaid = new Set();
+            const totals = (ids) => {
+                const rs = rows.filter((r) => ids.includes(r.account_id) && !r.pending && inDates(r));
+                const sum = (k) => round2(rs.reduce((t, r) => t + num0(r[k]), 0)) || 0;
+                return { in: sum('received'), out: sum('spent'), rows: rs.length,
+                    waiting: rs.filter((r) => !r.excluded && !r.matched).length };
+            };
+            for (const a of mine) {
+                const ent = E.resolve(a.company);
+                const pid = a.plaid_account_id || null;
+                const hit = pid ? plaidAcct.get(pid) : null;
+                if (pid) seenPlaid.add(pid);
+                const ids = [a.id, pid].filter(Boolean);
+                const bal = hit && hit.it.balances ? hit.it.balances[pid] : null;
+                cards.push({
+                    key: a.id, entity: ent, company: ent ? E.get(ent).uiName : a.company,
+                    bank: /chase/i.test(a.bank || '') ? 'Chase' : (/america/i.test(a.bank || '') ? 'Bank of America' : (a.bank || '')),
+                    mask: last4(a.accountNumber) || (hit && hit.a.mask) || null,
+                    linked: !!hit, item_id: hit ? hit.it.item_id : null,
+                    institution: hit ? hit.it.institution : null,
+                    last_sync_at: hit ? hit.it.last_sync_at : null,
+                    needs_login: hit ? hit.it.needs_login : null,
+                    balance: bal ? bal.current : null, balance_as_of: bal ? bal.as_of : null,
+                    ...totals(ids),
+                });
+            }
+            // Linked at Plaid but not in her account list: shown, not guessed
+            // into a company — the same rule as /api/bank/match.
+            for (const [pid, { it, a }] of plaidAcct) {
+                if (seenPlaid.has(pid)) continue;
+                const bal = it.balances ? it.balances[pid] : null;
+                cards.push({ key: pid, entity: null, company: null, bank: it.institution || 'Bank',
+                    mask: a.mask || null, linked: true, item_id: it.item_id, institution: it.institution,
+                    last_sync_at: it.last_sync_at, needs_login: it.needs_login,
+                    balance: bal ? bal.current : null, balance_as_of: bal ? bal.as_of : null,
+                    unassigned: true, ...totals([pid]) });
+            }
+            // A company with no bank account record at all (AAA today).
+            const covered = new Set(cards.map((c) => c.entity).filter(Boolean));
+            const missing = E.ENTITIES.filter((e) => !covered.has(e.id))
+                .map((e) => ({ entity: e.id, company: e.uiName, banks: e.banks }));
+
+            // Coming in: what customers still owe Edge Metals, oldest first.
+            let coming = { total: 0, count: 0, invoices: [] };
+            try {
+                const { docs } = openReceivables(require('./sales').listWithTotals());
+                const today = new Date().toISOString().slice(0, 10);
+                const list = docs.map((d) => ({ id: d.id, invoice_no: d.invoice_no, customer: d.party,
+                    date: d.date, open: bankMatch.openBalance(d),
+                    days: d.date ? Math.max(0, Math.round((Date.parse(today) - Date.parse(d.date)) / 86400000)) : null }))
+                    .sort((x, y) => String(x.date).localeCompare(String(y.date)));
+                coming = { total: round2(list.reduce((t, x) => t + x.open, 0)) || 0, count: list.length,
+                    invoices: list.slice(0, 8) };
+            } catch (e) { coming.error = e.message; }
+
+            res.json({ from, to, accounts: cards, missing, coming_in: coming,
+                needs_login: items.filter((i) => i.needs_login).map((i) => ({ item_id: i.item_id,
+                    institution: i.institution, ...i.needs_login })) });
+        } catch (e) { res.status(500).json({ error: e.message }); }
+    });
+
+    // ── RULES: "lines like this are always a bank charge" ────────────────
+    // POST with dry:true answers "how many rows would this set aside?" so the
+    // screen can say the number before anything happens.
+    app.get('/api/bank/rules', (req, res) => {
+        res.json({ rules: bankLearn.listRules(), labels: bankLearn.RULE_LABELS });
+    });
+    app.post('/api/bank/rules', async (req, res) => {
+        if (!admin(req, res)) return;
+        const b = req.body || {};
+        try {
+            const rule = bankLearn.cleanRule(b);
+            const hits = bankLearn.ruleHits(rule, require('./bankLedger').list());
+            if (b.dry) {
+                return res.json({ ok: true, dry: true, rule, would: hits.length,
+                    money: round2(hits.reduce((t, r) => t + num0(r.amount != null ? Math.abs(r.amount) : (r.spent || r.received)), 0)) || 0,
+                    sample: hits.slice(0, 5).map((r) => ({ id: r.id, date: r.date, desc: r.desc || r.party || '' })) });
+            }
+            const saved = await bankLearn.addRule(rule, { by: req.profile || req.role || null });
+            const applied = await bankLearn.applyRules({ by: req.profile || req.role || 'rule', only: saved });
+            res.json({ ok: true, rule: saved, ...applied });
+        } catch (e) { res.status(400).json({ error: e.message }); }
+    });
+    app.delete('/api/bank/rules', async (req, res) => {
+        if (!admin(req, res)) return;
+        const b = req.body || {};
+        try {
+            const gone = await bankLearn.deleteRule(b.text, b.direction);
+            if (!gone) return res.status(404).json({ error: 'no such rule' });
+            // Rows it already set aside STAY set aside — each one is a decision
+            // with its own reason and history, and putting forty rows back in
+            // the queue because a rule was tidied away would be a surprise.
+            res.json({ ok: true, deleted: gone });
+        } catch (e) { res.status(400).json({ error: e.message }); }
     });
 
     app.delete('/api/bank/aliases', async (req, res) => {

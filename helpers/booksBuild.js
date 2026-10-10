@@ -249,6 +249,17 @@ function build({ from, to } = {}) {
         });
     }
 
+    // ── MONEY BETWEEN HER OWN COMPANIES ──────────────────────────────────
+    // Apsara, 2026-10-09: transfers between Edge Metals, Edge Yard and AAA
+    // Investment are never income — "put it as loan for now". Each record
+    // already names both companies, so it does not go through place(): the
+    // lender is `from`, the borrower `to`, and postings.js posts both halves
+    // or neither.
+    for (const t of safely('inter_company', () => require('./interCompany').list(), notes)) {
+        if (!inRange(t.date)) continue;
+        txs.push(require('./interCompany').toTx(t));
+    }
+
     const j = P.journal(txs);
     return {
         from: from || null, to: to || null,
