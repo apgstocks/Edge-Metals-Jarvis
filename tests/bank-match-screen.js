@@ -374,7 +374,14 @@ let dom, w, doc;
     // /api/plaid routes added with the feed could have shipped with no
     // button at all — the exact defect this section exists for, one feature
     // along.
-    const served = [...routes.matchAll(/app\.(get|post|delete)\('(\/api\/(?:bank|plaid)\/[a-z-]+)'/g)].map((m) => m[2]);
+    // ── NESTED PATHS COUNT TOO ───────────────────────────────────────────
+    // `[a-z-]+` matched ONE segment, so /api/bank/review/match — mounted at
+    // bankMatchRoutes.js:433 and called by the page — read as unserved and
+    // this check went red on a route that exists. The regex was shaped like
+    // the paths that happened to exist when it was written, which is
+    // CLAUDE.md §2's second failure shape: a check that passes until the
+    // code moves, then fails for the wrong reason.
+    const served = [...routes.matchAll(/app\.(get|post|delete)\('(\/api\/(?:bank|plaid)\/[a-z/-]+)'/g)].map((m) => m[2]);
     const orphanCalls = calls.filter((u) => /^\/api\/(bank|plaid)\//.test(u) && !served.includes(u));
     ck('every /api/bank and /api/plaid URL the page calls exists on the server',
        orphanCalls.length === 0, orphanCalls.join(', '));

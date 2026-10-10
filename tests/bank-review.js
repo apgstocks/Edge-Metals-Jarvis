@@ -70,15 +70,58 @@ const wd = (o) => ({ ...o, row: { id: 'w', date: '2026-10-04', amount: 1000, des
 // is what record you will have afterwards.
 {
     section('B — the button names the record, not the category');
-    const aj = R.fromWithdrawal(wd({ row: { descriptor: 'AJ TRANSPORT LLC ACH DEBIT' }, outcome: 'not_recorded' }));
-    ck('a hauler by name becomes "Add as a carrier bill"',
-       aj.state === 'add' && aj.label === 'Add as a carrier bill', JSON.stringify(aj.label));
-    ck('  and carries the account it would post to', aj.account === '5200', aj.account);
-    for (const n of ['NTG', 'TQL', 'Schneider', 'Sher', 'Jio', 'Zimex']) {
+    const ntg = R.fromWithdrawal(wd({ row: { descriptor: 'NTG LOGISTICS ACH DEBIT' }, outcome: 'not_recorded' }));
+    ck('a carrier by name becomes "Add as a carrier bill"',
+       ntg.state === 'add' && ntg.label === 'Add as a carrier bill', JSON.stringify(ntg.label));
+    ck('  and carries the account it would post to', ntg.account === '5200', ntg.account);
+    for (const n of ['NTG', 'TQL', 'Schneider']) {
         ck(`  ${n} too`, R.fromWithdrawal(wd({ row: { descriptor: `${n} PAYMENT` }, outcome: 'not_recorded' })).state === 'add');
     }
     const fee = R.fromWithdrawal(wd({ row: { descriptor: 'MONTHLY MAINTENANCE FEE' }, outcome: 'not_recorded' }));
     ck('a bank fee becomes "Add as a bank charge"', fee.label === 'Add as a bank charge', fee.label);
+
+    // ── A BUTTON WHOSE EXECUTOR WOULD REFUSE IT ──────────────────────────
+    // Correction, 2026-10-10. The first version of this file asserted that
+    // AJ Transport, Sher, Jio and Zimex all became `add` — and they did.
+    // There is no store that would have taken the record:
+    //
+    //   carrierInvoices.CARRIERS  tql, ntg, schneider. addManual() exists.
+    //   partyInvoices.PARTIES     zimex, eagle, jio, sher, ajtransport,
+    //                             panmetal, gardunos. Rows come from her
+    //                             Google sheet via upsertMany(), there is
+    //                             no single-row add, and it has a lock.
+    //
+    // So the test was green on a promise nothing could keep — CLAUDE.md's
+    // named trap (a requirement in shared code one caller cannot satisfy)
+    // one layer up, with a BUTTON as the thing that cannot be satisfied.
+    // Pressing it would have gone to carrierInvoices.addManual and come
+    // back "carrier must be one of tql, ntg, schneider".
+    const CI = require(path.join(ROOT, 'helpers/carrierInvoices'));
+    const PI = require(path.join(ROOT, 'helpers/partyInvoices'));
+    for (const n of ['AJ TRANSPORT LLC', 'SHER TRUCKING', 'JIO', 'ZIMEX', "GARDUNO'S",
+                     'EAGLE BRIT', 'PAN METAL']) {
+        const r = R.fromWithdrawal(wd({ row: { descriptor: `${n} ACH DEBIT` }, outcome: 'not_recorded' }));
+        ck(`  ${n} is NOT offered a button no store would honour`, r.state === 'ask', JSON.stringify(r));
+        // It still says what Jarvis knew it was — the row is not dumber for
+        // being honest about what one press can do.
+        ck(`    but Jarvis still recognised it`, r.kind === 'party-invoice', JSON.stringify(r.kind));
+        ck(`    and says where to pay it instead`, /Transport tab|sheet/.test(r.why || ''), r.why);
+    }
+
+    // ── AND THE TABLE STAYS IN STEP WITH THE STORE ───────────────────────
+    // bankReview.js is pure and may not require either store, so the
+    // invariant lives here: every name the carrier-bill rule claims must be
+    // one carrierInvoices will actually accept. The next person to add a
+    // hauler will add it to a regex and not read the comment above it.
+    const carrierRule = R.KINDS.find((k) => k.kind === 'carrier-bill');
+    ck('the carrier-bill rule matches every carrier the store accepts',
+       CI.CARRIERS.every((c) => carrierRule.re.test(c)), JSON.stringify(CI.CARRIERS));
+    ck('  and matches NO party-register hauler',
+       !Object.keys(PI.PARTIES).some((p) => carrierRule.re.test(p)),
+       Object.keys(PI.PARTIES).filter((p) => carrierRule.re.test(p)).join(','));
+    ck('  and every postable kind names the store that will take it',
+       R.KINDS.filter((k) => k.postable).every((k) => !!k.store),
+       JSON.stringify(R.KINDS.map((k) => [k.kind, k.postable, k.store])));
 
     // ── AND IT REFUSES TO GUESS WHEN IT CANNOT TELL ──────────────────────
     // A fallback of "Add as an expense" would be a category chosen by the

@@ -203,8 +203,58 @@ function fakeAudit() {
     ck('the bills store is protected', files.some((f) => /bills\.json$/.test(f)), JSON.stringify(files));
     ck('and the bill-payments store is protected',
        files.some((f) => /bill_payments\.json$/.test(f)), JSON.stringify(files));
+    // Added with the carrier operations, 2026-10-10. A list that does not
+    // name a file the plan writes is not a rollback, it is a rollback of
+    // two files out of three.
+    ck('and the carrier-invoices store is protected',
+       files.some((f) => /carrier_invoices\.json$/.test(f)), JSON.stringify(files));
     ck('every file in the list is inside the test DATA_DIR',
        files.every((f) => String(f).startsWith(TMP)), JSON.stringify(files));
+}
+
+// ── G — AND THE CARRIER FILE IS REALLY PUT BACK ──────────────────────────
+// Section F asserts the LIST. That is a check shaped like the code rather
+// than like the property — CLAUDE.md §2's second failure shape — and on its
+// own it would pass while the snapshot restored nothing. So this drives the
+// whole path: a two-step plan whose first step writes a carrier bill for
+// real and whose second step throws.
+//
+// A delta, not an absolute: earlier sections have already written to this
+// store.
+{
+    section('G — a carrier write, rolled back');
+    const CI = require(path.join(ROOT, 'helpers/carrierInvoices'));
+    // A row that was already there, so "put back" means something more
+    // than "the file is empty again".
+    await CI.addManual({ carrier: 'tql', ref: 'PO-BEFORE', amount: 1000 }, { actor: 'fixture' });
+    const before = CI.list().length;
+    const beforeBytes = JSON.stringify(CI.list());
+
+    const audit = fakeAudit();
+    const realRun = LA.runStep;
+    const boom = async (step, i, idMap) => {
+        if (step.op === 'pay-carrier-invoice' && step.date === '1999-01-01') throw new Error('disk full');
+        return realRun(step, i, idMap);
+    };
+    const res = await LA.apply({
+        plan: [
+            { op: 'create-carrier-invoice', carrier: 'ntg', ref: 'NTG-ROLLBACK', amount: 400 },
+            { op: 'pay-carrier-invoice', carrier_invoice_id: '#1', amount: 400, date: '1999-01-01' },
+        ],
+        asked: 'add it and pay it', planId: 'PLAN_G', audit, runStepImpl: boom,
+    });
+
+    ck('the apply reports failure', res.ok === false && res.rolledBack === true, JSON.stringify(res));
+    ck('  naming step 2', /step 2 failed/.test(res.why), res.why);
+    // THE POINT OF THIS SECTION. Step 1 genuinely wrote a row; if
+    // carrier_invoices.json is not in filesAtRisk, it is still there.
+    ck('the carrier bill step 1 wrote is GONE', !CI.list().some((r) => r.ref === 'NTG-ROLLBACK'),
+       JSON.stringify(CI.list().map((r) => r.ref)));
+    ck('  and the store is back to the count it had', CI.list().length === before,
+       `${before} → ${CI.list().length}`);
+    ck('  byte-for-byte, including the row that was there before',
+       JSON.stringify(CI.list()) === beforeBytes,
+       JSON.stringify(CI.list().map((r) => r.ref)));
 }
 
 console.log(`\n  ${pass} passed, ${fail} failed`);

@@ -56,6 +56,22 @@ const WORLD = () => ({
     ],
 });
 
+// The carrier half of the world, added 2026-10-10 with the two carrier
+// operations. `carrierNames` is what carrierInvoices.CARRIERS really is;
+// the row shapes are what readWorld() hands over.
+const CWORLD = () => ({
+    ...WORLD(),
+    carrierNames: ['tql', 'ntg', 'schneider'],
+    carrierInvoices: [
+        { id: 'CI_1', carrier: 'ntg', ref: 'NTG-5512', amount: 2180, paid: 0,
+          status: 'open', source: 'manual' },
+        // Imported, so payManual REFUSES it — its truth is the carrier's own
+        // remittance mail.
+        { id: 'CI_2', carrier: 'tql', ref: 'PO-99812', amount: 4400, paid: 0,
+          status: 'open', source: 'import' },
+    ],
+});
+
 // ── A — HER SENTENCE, END TO END ─────────────────────────────────────────
 {
     section('A — her sentence, as a plan');
@@ -313,6 +329,181 @@ const WORLD = () => ({
     const undel = P.reverseOf([{ op: 'delete-bill', bill_id: 'BILL_915' }]);
     ck('undoing a delete is a restore, never a re-create',
        undel[0].op === 'restore-bill', JSON.stringify(undel));
+}
+
+// ── F — THE CARRIER OPERATIONS, AND THE THREE REFUSALS THEY MIRROR ──────
+// Added 2026-10-10 because bankReview.js's "Add as a carrier bill" button
+// had no executor anywhere — the vocabulary had create-bill (suppliers) and
+// nothing for helpers/carrierInvoices.js.
+//
+// Every refusal here mirrors a throw inside carrierInvoices.js. They are
+// mirrored rather than left to the apply because a plan is approved on its
+// preview: a refusal that only appears during the apply is one she sees
+// AFTER committing, and then the rollback has to be trusted rather than
+// avoided. This is CLAUDE.md's named trap — a requirement in shared code
+// that one caller cannot satisfy — checked on the side where she can still
+// do something about it.
+{
+    section('F — carrier bills');
+    const ok = P.verify([{ op: 'create-carrier-invoice', carrier: 'ntg', ref: 'NTG-9001',
+        amount: 3400 }], CWORLD());
+    ck('adding a carrier bill verifies', ok.ok === true, JSON.stringify(ok.problems));
+    ck('  and the diff is on the CARRIER side, not the supplier side',
+       ok.simulation.diff.length === 0 && ok.simulation.carrierDiff.length === 1,
+       JSON.stringify([ok.simulation.diff, ok.simulation.carrierDiff]));
+    const ntg = ok.simulation.carrierDiff[0];
+    ck('  NTG is owed 3,400 more', ntg.carrier === 'ntg' && ntg.owed.change === 3400,
+       JSON.stringify(ntg));
+    ck('  and it is one more invoice, not one more bill',
+       ntg.invoices.before === 1 && ntg.invoices.after === 2, JSON.stringify(ntg.invoices));
+    ck('  and it reads back in her words',
+       /add a carrier bill: NTG NTG-9001 for 3400\.00/.test(P.describe(
+           [{ op: 'create-carrier-invoice', carrier: 'ntg', ref: 'NTG-9001', amount: 3400 }])[0].says),
+       JSON.stringify(P.describe([{ op: 'create-carrier-invoice', carrier: 'ntg', ref: 'NTG-9001', amount: 3400 }])));
+
+    // ── THE HAULER THAT IS NOT A CARRIER ─────────────────────────────────
+    // bankReview.js offered "Add as a carrier bill" for ten haulers;
+    // carrierInvoices accepts three. The other seven are in
+    // partyInvoices.js, a register fed from her Google sheet by
+    // upsertMany() with no single-row add — so a row invented from a bank
+    // descriptor is the exact record the sheet reconciliation then reports
+    // as "NOT on the sheet". A problem manufactured by the fix.
+    const jio = P.verify([{ op: 'create-carrier-invoice', carrier: 'jio', ref: 'J-1',
+        amount: 500 }], CWORLD());
+    ck('a party-register hauler is refused', jio.ok === false, JSON.stringify(jio.problems));
+    ck('  naming the three it does take', /tql, ntg, schneider/.test(JSON.stringify(jio.problems)),
+       JSON.stringify(jio.problems));
+    ck('  and saying where to pay it instead',
+       /Transport tab/.test(JSON.stringify(jio.problems)), JSON.stringify(jio.problems));
+
+    // A validation that vanishes when its input is missing is the quietest
+    // way to let a bad value through. The first version read
+    // `carrierNames.length && !includes(c)`, which SKIPPED the check in
+    // exactly the case where it matters.
+    const noList = P.verify([{ op: 'create-carrier-invoice', carrier: 'ntg', ref: 'N-1', amount: 10 }],
+        { ...WORLD(), carrierInvoices: [], carrierNames: [] });
+    ck('no carrier list means no carrier bill, not an unchecked one',
+       noList.ok === false && /cannot read the carrier list/.test(JSON.stringify(noList.problems)),
+       JSON.stringify(noList.problems));
+
+    // addManual THROWS on a duplicate carrier+ref — "open that row instead
+    // of adding it again".
+    const dup = P.verify([{ op: 'create-carrier-invoice', carrier: 'ntg', ref: 'NTG-5512',
+        amount: 2180 }], CWORLD());
+    ck('a ref already on the list is refused', dup.ok === false
+       && /already on the carrier list/.test(JSON.stringify(dup.problems)), JSON.stringify(dup.problems));
+    // And one the PLAN itself adds twice, which no store read would catch.
+    const dupInPlan = P.verify([
+        { op: 'create-carrier-invoice', carrier: 'tql', ref: 'PO-7', amount: 100 },
+        { op: 'create-carrier-invoice', carrier: 'tql', ref: 'PO-7', amount: 100 },
+    ], CWORLD());
+    ck('  including one the plan adds twice itself', dupInPlan.ok === false,
+       JSON.stringify(dupInPlan.problems));
+
+    ck('a zero amount is refused',
+       P.verify([{ op: 'create-carrier-invoice', carrier: 'ntg', ref: 'N-2', amount: 0 }],
+           CWORLD()).ok === false);
+    ck('an empty ref is refused',
+       P.verify([{ op: 'create-carrier-invoice', carrier: 'ntg', ref: '  ', amount: 10 }],
+           CWORLD()).ok === false);
+
+    // ── PAYING ONE ───────────────────────────────────────────────────────
+    const pay = P.verify([{ op: 'pay-carrier-invoice', carrier_invoice_id: 'CI_1',
+        amount: 2180, date: '2026-10-09' }], CWORLD());
+    ck('paying a manual carrier bill verifies', pay.ok === true, JSON.stringify(pay.problems));
+    ck('  and NTG is owed 2,180 less',
+       pay.simulation.carrierDiff[0].owed.change === -2180,
+       JSON.stringify(pay.simulation.carrierDiff));
+
+    // payManual refuses an imported row: its truth is the carrier's own
+    // remittance, and a payment recorded here would be a second answer to
+    // "is this paid" that disagrees the first time a remittance arrives
+    // late. The verifier has to know that or every imported row gets a
+    // button that fails.
+    const imported = P.verify([{ op: 'pay-carrier-invoice', carrier_invoice_id: 'CI_2',
+        amount: 100, date: '2026-10-09' }], CWORLD());
+    ck('an IMPORTED carrier bill cannot be paid by a plan', imported.ok === false,
+       JSON.stringify(imported.problems));
+    ck('  and says the remittance is the source of truth',
+       /remittance/.test(JSON.stringify(imported.problems)), JSON.stringify(imported.problems));
+
+    const over = P.verify([{ op: 'pay-carrier-invoice', carrier_invoice_id: 'CI_1',
+        amount: 2500, date: '2026-10-09' }], CWORLD());
+    ck('overpaying a carrier bill is refused', over.ok === false
+       && /2500\.00 against a carrier bill of 2180\.00/.test(JSON.stringify(over.problems)),
+       JSON.stringify(over.problems));
+    ck('a carrier bill that is not there cannot be paid',
+       P.verify([{ op: 'pay-carrier-invoice', carrier_invoice_id: 'CI_404', amount: 1,
+           date: '2026-10-09' }], CWORLD()).ok === false);
+    ck('a date that is not YYYY-MM-DD is refused — payManual throws on one',
+       P.verify([{ op: 'pay-carrier-invoice', carrier_invoice_id: 'CI_1', amount: 1,
+           date: '9-oct-26' }], CWORLD()).ok === false);
+
+    // Add it and pay it in one plan, by reference.
+    const both = P.verify([
+        { op: 'create-carrier-invoice', carrier: 'schneider', ref: 'ORD-31', amount: 900 },
+        { op: 'pay-carrier-invoice', carrier_invoice_id: '#1', amount: 900, date: '2026-10-09' },
+    ], CWORLD());
+    ck('add-then-pay in one plan verifies by reference', both.ok === true, JSON.stringify(both.problems));
+    const sch = both.simulation.carrierDiff.find((r) => r.carrier === 'schneider');
+    ck('  and nets to nothing owed', sch.owed.change === 0 && sch.billed.change === 900,
+       JSON.stringify(sch));
+    ck('a reference to a step that creates a BILL, not a carrier bill, is refused',
+       P.verify([
+           { op: 'create-bill', supplier: 'Hugo', date: '2026-01-03', container_no: 'X1' },
+           { op: 'pay-carrier-invoice', carrier_invoice_id: '#1', amount: 1, date: '2026-10-09' },
+       ], CWORLD()).ok === false);
+}
+
+// ── G — THE TWO THAT CANNOT BE TAKEN BACK ───────────────────────────────
+// reverseOf's header used to open "every operation has an inverse, and the
+// vocabulary was chosen so that it does". That stopped being true the
+// moment the carrier operations landed: carrierInvoices.js exports
+// addManual and payManual and nothing that reverses either — no delete, no
+// un-pay.
+//
+// The dangerous shape was not the irreversibility, it was reverseOf's
+// if/else chain, which SKIPPED an op it did not recognise without a word.
+// An undo containing one would have reported success having undone only
+// part of the plan, leaving the books in a state neither she nor the plan
+// describes.
+{
+    section('G — irreversible operations are declared, never skipped');
+    const plan = [{ op: 'create-carrier-invoice', carrier: 'ntg', ref: 'N-7', amount: 50 }];
+    const r = P.reversibility(plan);
+    ck('reversibility says no', r.ok === false && r.irreversible.length === 1, JSON.stringify(r));
+    // Guarded rather than indexed straight in: a mutation that empties
+    // this array should make the check FAIL and name itself, not crash the
+    // file. A crashed run still exits non-zero, but it does not say which
+    // property was lost.
+    ck('  naming the step and the reason',
+       !!r.irreversible[0] && r.irreversible[0].step === 1 && /no delete/.test(r.irreversible[0].why),
+       JSON.stringify(r.irreversible));
+    ck('paying one cannot be taken back either',
+       P.reversibility([{ op: 'pay-carrier-invoice', carrier_invoice_id: 'CI_1', amount: 1,
+           date: '2026-10-09' }]).ok === false);
+    ck('a plan of ordinary operations IS reversible',
+       P.reversibility([{ op: 'detach-container', bill_id: 'BILL_914', container_no: 'TGHU1234567' },
+           { op: 'create-bill', supplier: 'Hugo', date: '2026-01-03' }]).ok === true);
+
+    // ── AND THE UNDO IS LOUD ABOUT IT ────────────────────────────────────
+    const rev = P.reverseOf(plan);
+    ck('the undo contains a refusal step, not a gap', rev.length === 1
+       && rev[0].op === 'cannot-undo', JSON.stringify(rev));
+    ck('  carrying which step it was and why',
+       !!rev[0] && rev[0].was === 'create-carrier-invoice' && /no delete/.test(rev[0].why),
+       JSON.stringify(rev[0]));
+    // Fatal to the WHOLE reverse plan, deliberately: `cannot-undo` is not
+    // in OPS, so verify() refuses it and nothing is applied. A partial undo
+    // is the worst of the three outcomes.
+    ck('  and running that undo is refused outright, so nothing is half-undone',
+       P.verify(rev, CWORLD()).ok === false, JSON.stringify(P.verify(rev, CWORLD()).problems));
+
+    // The silent-skip hole, closed for every FUTURE op too — not just the
+    // two that exist today.
+    const future = P.reverseOf([{ op: 'some-op-added-next-year', bill_id: 'BILL_914' }]);
+    ck('an op reverseOf has never heard of also becomes a refusal, not a gap',
+       future.length === 1 && !!future[0] && future[0].op === 'cannot-undo', JSON.stringify(future));
 }
 
 // ── E — IT CHANGES NOTHING ───────────────────────────────────────────────

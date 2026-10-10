@@ -65,16 +65,19 @@ const OPS = {
         needs: ['supplier', 'date'],
         optional: ['container_no', 'booking_no', 'invoice_no', 'supplier_price', 'price_unit', 'note'],
         what: (o) => `create a bill for ${o.supplier} dated ${o.date}`,
+        reversible: true,
     },
     'detach-container': {
         needs: ['bill_id', 'container_no'],
         optional: ['note'],
         what: (o) => `take container ${o.container_no} off bill ${o.bill_id}`,
+        reversible: true,
     },
     'attach-container': {
         needs: ['bill_id', 'container_no'],
         optional: ['note'],
         what: (o) => `put container ${o.container_no} on bill ${o.bill_id}`,
+        reversible: true,
     },
     // ── DELETE. HER CALL, 2026-10-08: "add delete option" ────────────────
     // I had left it out and written a test asserting the vocabulary had no
@@ -99,16 +102,68 @@ const OPS = {
         needs: ['bill_id'],
         optional: ['note'],
         what: (o) => `delete bill ${o.bill_id}`,
+        // Reversible because ledgerBulkDelete.js archives the row — see
+        // reverseOf, which emits `restore-bill` rather than a re-create.
+        reversible: true,
     },
     'match-payment': {
         needs: ['payment_id', 'bill_id', 'amount'],
         optional: ['note'],
         what: (o) => `apply ${o.amount} of payment ${o.payment_id} to bill ${o.bill_id}`,
+        reversible: true,
     },
     'unmatch-payment': {
         needs: ['payment_id', 'bill_id'],
         optional: ['note'],
         what: (o) => `take payment ${o.payment_id} back off bill ${o.bill_id}`,
+        reversible: true,
+    },
+
+    // ── THE CARRIERS, AND THE THREE WHOSE BUTTON HAS AN EXECUTOR ─────────
+    // Added 2026-10-10 so the bank review queue's "Add as a carrier bill"
+    // reaches something. It had no executor at all — bankReview.js offered
+    // the button for ten haulers and the vocabulary had no carrier
+    // operation in it.
+    //
+    // Scope, deliberately narrow: helpers/carrierInvoices.js, whose
+    // CARRIERS are tql / ntg / schneider. The other seven haulers live in
+    // helpers/partyInvoices.js, which is a REGISTER fed from her Google
+    // sheet by upsertMany() — no single-row add, and a lock. Those are
+    // excluded here and in bankReview.js, because a row invented from a
+    // bank descriptor is the exact record the sheet reconciliation then
+    // reports as "NOT on the sheet".
+    //
+    // ── AND NEITHER ONE CAN BE UNDONE ────────────────────────────────────
+    // This is the uncomfortable part, and it is declared rather than
+    // papered over. carrierInvoices.js exports addManual and payManual and
+    // NOTHING THAT REVERSES EITHER — no delete, no un-pay. The header above
+    // reverseOf used to say "every operation has an inverse, and the
+    // vocabulary was chosen so that it does"; these two are the first that
+    // do not, so `reversible: false` is a field on the op rather than a
+    // remark, reverseOf emits an explicit refusal step instead of silently
+    // skipping them, and reversibility() lets the screen warn her BEFORE
+    // she approves rather than after.
+    //
+    // Giving carrierInvoices.js a delete would make them reversible. That
+    // is a widening of a store the Transport tab already uses, so it is
+    // hers to say yes to — CLAUDE.md §1 — and not something to slip in
+    // under a feature she asked for elsewhere.
+    'create-carrier-invoice': {
+        needs: ['carrier', 'ref', 'amount'],
+        optional: ['invoice_date', 'lane', 'note'],
+        what: (o) => `add a carrier bill: ${String(o.carrier || '').toUpperCase()} `
+            + `${o.ref} for ${num(o.amount).toFixed(2)}`,
+        reversible: false,
+        why_not: 'carrierInvoices.js has no delete — a carrier bill added by a plan '
+            + 'cannot be removed by one',
+    },
+    'pay-carrier-invoice': {
+        needs: ['carrier_invoice_id', 'amount', 'date'],
+        optional: ['mode', 'bank', 'ref', 'note'],
+        what: (o) => `pay ${num(o.amount).toFixed(2)} against carrier bill `
+            + `${o.carrier_invoice_id} on ${o.date}`,
+        reversible: false,
+        why_not: 'carrierInvoices.js has no un-pay — payManual only ever appends',
     },
 };
 
@@ -138,9 +193,21 @@ function verify(plan, world = {}) {
 
     if (!steps.length) return { ok: false, problems: [{ step: 0, why: 'the plan is empty' }] };
 
+    // ── THE CARRIER SIDE OF THE WORLD ───────────────────────────────────
+    // `carrierNames` is passed IN rather than required from
+    // carrierInvoices.js, for the same reason `bills` is: this function has
+    // to be runnable against a hypothetical. It also means the list cannot
+    // drift from the store — readWorld() reads it from the module itself,
+    // and a carrier the store would refuse is refused here instead, where
+    // she can still see why.
+    const carriers = Array.isArray(world.carrierInvoices) ? world.carrierInvoices : [];
+    const carrierNames = Array.isArray(world.carrierNames) ? world.carrierNames : [];
+
     const billById = new Map(bills.map((b) => [String(b.id), b]));
     const payById = new Map(payments.map((p) => [String(p.id), p]));
+    const ciById = new Map(carriers.map((c) => [String(c.id), c]));
     const created = new Set();      // indices that create a bill
+    const createdCI = new Set();    // indices that create a carrier invoice
 
     // ── PASS 1: is each step well formed, and do its ids exist? ─────────
     steps.forEach((s, i) => {
@@ -157,8 +224,46 @@ function verify(plan, world = {}) {
             created.add(i);
             if (s.date && !ISO.test(String(s.date))) bad(i, `"${s.date}" is not a date as YYYY-MM-DD`);
         }
+        // ── THE CARRIER THE STORE WILL ACTUALLY TAKE ────────────────────
+        // carrierInvoices.validate() refuses a carrier outside its own
+        // list, an empty ref and an amount of zero. Checked HERE as well,
+        // against the same list read from the same module, because the
+        // alternative is the shape CLAUDE.md names: a plan that verifies,
+        // is previewed, is approved, and only then comes back "carrier
+        // must be one of tql, ntg, schneider".
+        if (s.op === 'create-carrier-invoice') {
+            createdCI.add(i);
+            const c = String(s.carrier || '').trim().toLowerCase();
+            // No list means the store could not be read, and a carrier
+            // name cannot be checked against nothing. Refused rather than
+            // waved through: `carrierNames.length && ...` would have
+            // SKIPPED the check in exactly the case where it matters, and
+            // a validation that disappears when its input is missing is
+            // the quietest way to let a bad value through.
+            if (!carrierNames.length) {
+                bad(i, 'Jarvis cannot read the carrier list, so it will not add a carrier bill');
+            } else if (c && !carrierNames.includes(c)) {
+                bad(i, `"${s.carrier}" is not a carrier Jarvis can bill — it takes `
+                    + `${carrierNames.join(', ')}. The other haulers (Zimex, AJ Transport, `
+                    + 'Sher, Jio, Garduno\'s, Pan Metal, Eagle) are in the party register, '
+                    + 'which is fed from your sheet — pay those from the Transport tab');
+            }
+            if (s.ref !== undefined && !String(s.ref).trim()) bad(i, 'a carrier bill needs a ref');
+            if (num(s.amount) <= CENT) bad(i, 'a carrier bill needs an amount greater than zero');
+            if (s.invoice_date && !ISO.test(String(s.invoice_date))) {
+                bad(i, `"${s.invoice_date}" is not a date as YYYY-MM-DD`);
+            }
+        }
+        if (s.op === 'pay-carrier-invoice') {
+            if (num(s.amount) <= CENT) bad(i, 'a carrier payment needs an amount greater than zero');
+            // payManual throws on anything that is not YYYY-MM-DD, so an
+            // unparseable date must not reach it.
+            if (s.date !== undefined && !ISO.test(String(s.date))) {
+                bad(i, `"${s.date}" is not a date as YYYY-MM-DD`);
+            }
+        }
         // Reference resolution. A forward reference is a cycle.
-        for (const k of ['bill_id', 'payment_id']) {
+        for (const k of ['bill_id', 'payment_id', 'carrier_invoice_id']) {
             const v = s[k];
             if (v === undefined) continue;
             if (isRef(v)) {
@@ -166,10 +271,16 @@ function verify(plan, world = {}) {
                 if (!(j >= 0 && j < steps.length)) { bad(i, `${v} points at no step`); continue; }
                 if (j >= i) { bad(i, `${v} points at step ${j + 1}, which has not happened yet`); continue; }
                 if (k === 'bill_id' && !created.has(j)) bad(i, `${v} is not a step that creates a bill`);
+                if (k === 'carrier_invoice_id' && !createdCI.has(j)) {
+                    bad(i, `${v} is not a step that creates a carrier bill`);
+                }
                 continue;
             }
             if (k === 'bill_id' && !billById.has(String(v))) bad(i, `there is no bill ${v}`);
             if (k === 'payment_id' && !payById.has(String(v))) bad(i, `there is no payment ${v}`);
+            if (k === 'carrier_invoice_id' && !ciById.has(String(v))) {
+                bad(i, `there is no carrier bill ${v}`);
+            }
         }
         if (s.op === 'match-payment' && num(s.amount) <= CENT) {
             bad(i, 'a match needs an amount greater than zero');
@@ -182,7 +293,7 @@ function verify(plan, world = {}) {
     // isolation, because the dangerous mistakes are only visible in
     // sequence: detaching a container and never re-attaching it, or
     // applying two payments that are each fine and together overpay.
-    const sim = simulateInto(steps, { bills, payments });
+    const sim = simulateInto(steps, { bills, payments, carrierInvoices: carriers });
     problems.push(...sim.problems);
 
     return { ok: problems.length === 0, problems, simulation: sim };
@@ -197,8 +308,11 @@ function verify(plan, world = {}) {
 function simulateInto(steps, world) {
     const bills = world.bills.map((b) => ({ ...b, containers: containersOf(b) }));
     const payments = world.payments.map((p) => ({ ...p, applied: [...(p.applied || [])] }));
+    const carriers = (world.carrierInvoices || []).map((c) => ({ ...c }));
     const byId = new Map(bills.map((b) => [String(b.id), b]));
     const payById = new Map(payments.map((p) => [String(p.id), p]));
+    const ciById = new Map(carriers.map((c) => [String(c.id), c]));
+    const madeCIAt = new Map();     // step index → the carrier bill it created
     const problems = [];
     const madeAt = new Map();      // step index → the bill it created
     // ── EVERY CONTAINER THE PLAN DISTURBS, HOWEVER IT DISTURBS IT ───────
@@ -334,6 +448,60 @@ function simulateInto(steps, world) {
             if (p.applied.length === before) {
                 bad(i, `payment ${p.id} is not applied to bill ${s.bill_id}, so there is nothing to undo`);
             }
+            return;
+        }
+        // ── THE CARRIER SIDE ────────────────────────────────────────────
+        // Three refusals, each one mirroring a throw inside
+        // carrierInvoices.js. They are mirrored rather than discovered at
+        // apply time because a plan is approved on its preview: a refusal
+        // that only surfaces during the apply is a refusal she sees after
+        // committing, and the rollback then has to be trusted instead of
+        // avoided.
+        if (s.op === 'create-carrier-invoice') {
+            seq += 1;
+            const carrier = String(s.carrier || '').trim().toLowerCase();
+            const ref = String(s.ref || '').trim();
+            const key = `${carrier}:${ref}`;
+            // addManual THROWS on a duplicate carrier+ref rather than
+            // merging — "open that row instead of adding it again". Rows
+            // created EARLIER IN THIS PLAN count, so a plan that adds the
+            // same invoice twice is caught before the first write.
+            if (carriers.some((c) => c && !c.gone
+                && `${String(c.carrier || '').toLowerCase()}:${String(c.ref || '').trim()}` === key)) {
+                return bad(i, `${carrier.toUpperCase()} ${ref} is already on the carrier list — `
+                    + 'open that row instead of adding it again');
+            }
+            const c = { id: `NEWCI_${seq}`, carrier, ref, amount: r2(num(s.amount)),
+                paid: 0, status: 'open', source: 'manual', isNew: true };
+            carriers.push(c); ciById.set(c.id, c); madeCIAt.set(i, c);
+            return;
+        }
+        if (s.op === 'pay-carrier-invoice') {
+            const c = isRef(s.carrier_invoice_id)
+                ? madeCIAt.get(refIndex(s.carrier_invoice_id))
+                : ciById.get(String(s.carrier_invoice_id));
+            if (!c) return bad(i, `carrier bill ${s.carrier_invoice_id} is not there to pay`);
+            // ── THE IMPORTED ROW, AND WHY IT IS REFUSED ─────────────────
+            // payManual refuses any row whose source is not 'manual': an
+            // imported row's truth is the carrier's own remittance mail,
+            // and recording a payment here would create a second answer to
+            // "is this paid" that disagrees the first time a remittance
+            // arrives late. The verifier has to know that, or every
+            // imported row gets a button that fails.
+            if (c.source !== 'manual') {
+                return bad(i, `${String(c.carrier || '').toUpperCase()} ${c.ref} came from the `
+                    + 'carrier\'s own email, so what it says is paid comes from their '
+                    + 'remittance — record this where the money left instead');
+            }
+            const want = r2(num(s.amount));
+            const paid = r2(num(c.paid) + want);
+            if (paid > r2(num(c.amount)) + CENT) {
+                return bad(i, `that would pay ${paid.toFixed(2)} against a carrier bill of `
+                    + `${r2(num(c.amount)).toFixed(2)}`);
+            }
+            c.paid = paid;
+            c.status = paid + CENT >= r2(num(c.amount)) ? 'paid' : 'part';
+            return;
         }
     });
 
@@ -349,7 +517,50 @@ function simulateInto(steps, world) {
         }
     }
 
-    return { problems, bills, payments, diff: diffOf(world, { bills, payments }) };
+    return { problems, bills, payments, carriers,
+        diff: diffOf(world, { bills, payments }),
+        // ── A SECOND ARRAY, NOT MORE ROWS IN THE FIRST ──────────────────
+        // A supplier row and a carrier row have different keys, and one
+        // array holding both shapes is the thing every consumer then has
+        // to branch on — including ledgerApply.sameDiff, whose comparison
+        // reads r.supplier and would read `undefined` for every carrier
+        // row and so compare them all as equal. That is a world-moved
+        // check with a hole in it, which is worse than not having one.
+        carrierDiff: carrierDiffOf(world.carrierInvoices || [], carriers) };
+}
+
+// Per carrier, the same three figures she acts on. Separate from diffOf
+// because the carrier store has no containers and no supplier.
+function carrierDiffOf(before, after) {
+    const roll = (rows) => {
+        const m = new Map();
+        for (const c of rows || []) {
+            const k = String(c.carrier || '(no carrier)').toLowerCase();
+            const cur = m.get(k) || { carrier: k, billed: 0, paid: 0, invoices: 0 };
+            cur.billed += num(c.amount); cur.paid += num(c.paid); cur.invoices += 1;
+            m.set(k, cur);
+        }
+        return m;
+    };
+    const a = roll(before);
+    const b2 = roll(after);
+    const rows = [];
+    for (const n of new Set([...a.keys(), ...b2.keys()])) {
+        const x = a.get(n) || { billed: 0, paid: 0, invoices: 0 };
+        const y = b2.get(n) || { billed: 0, paid: 0, invoices: 0 };
+        const row = {
+            carrier: n,
+            billed: { before: r2(x.billed), after: r2(y.billed), change: r2(y.billed - x.billed) },
+            paid: { before: r2(x.paid), after: r2(y.paid), change: r2(y.paid - x.paid) },
+            owed: { before: r2(x.billed - x.paid), after: r2(y.billed - y.paid),
+                    change: r2((y.billed - y.paid) - (x.billed - x.paid)) },
+            invoices: { before: x.invoices, after: y.invoices },
+        };
+        if (row.billed.change || row.paid.change || row.invoices.before !== row.invoices.after) {
+            rows.push(row);
+        }
+    }
+    return rows.sort((p, q) => Math.abs(q.owed.change) - Math.abs(p.owed.change));
 }
 
 const containersOf = (b) => {
@@ -453,13 +664,48 @@ function auditRecord({ asked, plan, verification, actor = null, at = new Date() 
         // Only present when it verified — a diff from a plan that was
         // refused would read as something that happened.
         diff: v.ok && v.simulation ? v.simulation.diff : null,
+        carrierDiff: v.ok && v.simulation ? (v.simulation.carrierDiff || []) : null,
     };
 }
 
+// ── WHICH OF THESE CAN BE TAKEN BACK ────────────────────────────────────
+// Asked BEFORE she approves, not after. Returned as its own answer rather
+// than folded into the reverse plan, because "this cannot be undone" is
+// something the confirmation screen has to be able to say in advance — by
+// the time she is looking for the Undo button it is not information, it is
+// an apology.
+function reversibility(plan) {
+    const steps = Array.isArray(plan) ? plan : [];
+    const stuck = [];
+    steps.forEach((s, i) => {
+        const spec = OPS[s && s.op];
+        // An op that is not in the vocabulary is not reversible either, and
+        // saying so is better than treating the unknown as harmless.
+        if (!spec) { stuck.push({ step: i + 1, op: s && s.op, why: 'not an operation Jarvis performs' }); return; }
+        if (spec.reversible !== true) {
+            stuck.push({ step: i + 1, op: s.op, why: spec.why_not || 'no inverse exists' });
+        }
+    });
+    return { ok: stuck.length === 0, irreversible: stuck };
+}
+
 // ── THE UNDO ────────────────────────────────────────────────────────────
-// Every operation has an inverse, and the vocabulary was chosen so that it
-// does. `idMap` carries the real ids the apply layer created, because a
-// reverse plan referring to "#2" undoes nothing once the plan is real.
+// `idMap` carries the real ids the apply layer created, because a reverse
+// plan referring to "#2" undoes nothing once the plan is real.
+//
+// This used to open "every operation has an inverse, and the vocabulary was
+// chosen so that it does". That stopped being true on 2026-10-10, when the
+// two carrier operations arrived against a store with no delete and no
+// un-pay. The chain below therefore ends in an explicit `cannot-undo`
+// step rather than falling off the end:
+//
+// `cannot-undo` is deliberately NOT in OPS, so verify() refuses the whole
+// reverse plan with "is not an operation Jarvis will perform" and NOTHING
+// is applied. A partial undo — the reversible half run, the rest silently
+// dropped — is the worst of the three outcomes, because the books end up in
+// a state neither she nor the plan describes. Before this, an op the chain
+// did not recognise was skipped without a word, so an undo containing one
+// would have reported success having undone only some of it.
 //
 // Reversed in REVERSE ORDER, which is the part that is easy to get wrong:
 // undoing a detach before undoing the attach that followed it would put a
@@ -495,10 +741,17 @@ function reverseOf(plan, idMap = {}) {
             // the entry says so rather than pretending otherwise.
             out.push({ op: 'restore-bill', bill_id: real(s.bill_id),
                 note: 'undo: restore from the delete archive, not re-create' });
+        } else {
+            // Everything else, including the two carrier operations and any
+            // op added later without an inverse. Loud, and fatal to the
+            // whole reverse plan by design.
+            const spec = OPS[s.op] || {};
+            out.push({ op: 'cannot-undo', was: s.op, step: i + 1,
+                why: spec.why_not || `there is no inverse for "${s.op}"` });
         }
     }
     return out;
 }
 
-module.exports = { OPS, verify, simulateInto, describe, diffOf, containersOf, containerHome,
-    auditRecord, reverseOf, CENT };
+module.exports = { OPS, verify, simulateInto, describe, diffOf, carrierDiffOf,
+    containersOf, containerHome, auditRecord, reverseOf, reversibility, CENT };

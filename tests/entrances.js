@@ -439,6 +439,20 @@ const recording = (inner) => async (url, opts) => { calls.push(String(url)); ret
     };
     const NOW = Date.parse('2026-10-06T00:00:00Z');
     const inDays = (n) => new Date(NOW + n * 86400000).toUTCString();
+    // ── AND THE SAME THING OFF THE REAL CLOCK ────────────────────────────
+    // Correction, 2026-10-10, found by `npm test` rather than by running the
+    // files I remembered. checkCertificate() takes an injectable `now` and
+    // the checks above pin it to NOW. run() does NOT — it reads the real
+    // date — so a fixture built from NOW drifts away from it one day at a
+    // time. On 2026-10-06 `inDays(3)` was three days out; today it is a day
+    // in the PAST, so the job correctly reported "HAS EXPIRED" and the
+    // check looking for "expires in 0-3 days" went red.
+    //
+    // The comment beside that check already said "a test that breaks at
+    // midnight is a test that gets deleted" and used a RANGE for exactly
+    // that reason. The range was not the problem: the fixture's BASE was.
+    // Anything handed to run() is therefore built from the real clock.
+    const inRealDays = (n) => new Date(Date.now() + n * 86400000).toUTCString();
 
     let c = await E.checkCertificate({ tlsImpl: certAt(inDays(59)), now: NOW });
     ck('a certificate 59 days out is fine', c.ok === true && c.checked === true, JSON.stringify(c));
@@ -542,7 +556,7 @@ const recording = (inner) => async (url, opts) => { calls.push(String(url)); ret
         const sent = [];
         const r = await J.run({
             fetchImpl: healthy(),
-            tlsImpl: certAt(inDays(3)),
+            tlsImpl: certAt(inRealDays(3)),
             sendEmail: async (m) => sent.push(m),
             to: 'x@y.com',
         });
@@ -564,7 +578,7 @@ const recording = (inner) => async (url, opts) => { calls.push(String(url)); ret
     // And it stays silent when there is nothing to say.
     {
         const sent = [];
-        await J.run({ fetchImpl: healthy(), tlsImpl: certAt(inDays(70)),
+        await J.run({ fetchImpl: healthy(), tlsImpl: certAt(inRealDays(70)),
             sendEmail: async (m) => sent.push(m), to: 'x@y.com' });
         ck('  while a healthy certificate sends nothing at all',
            sent.length === 0, JSON.stringify(sent.map((m) => m.subject)));

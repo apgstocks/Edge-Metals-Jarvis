@@ -182,6 +182,137 @@ const PLAN = () => ([
        (await req('GET', '/api/ledger/plan/log', { sid: adminSid })).status === 403);
 }
 
+// ── E — THE CARRIER BILL, THROUGH THE ROUTES THE SCREEN POSTS TO ─────────
+// Apsara, 2026-09-17: "ALwyas test end to end when you add a new feature."
+//
+// This is the section that would have caught the thing wrong with the first
+// version: bankReview.js offered "Add as a carrier bill" for ten haulers
+// and the plan vocabulary had no carrier operation at all, so the button
+// had nothing to post to. Helper tests were green on both sides of a gap
+// nothing crossed.
+//
+// Everything here measures a DELTA against what the carrier store held a
+// moment earlier. Sections A–D above have already written to this DATA_DIR,
+// and a test that breaks when an unrelated fixture moves is a test that
+// gets deleted.
+{
+    section('E — a carrier bill, end to end');
+    const CI = require(path.join(ROOT, 'helpers/carrierInvoices'));
+    const before = CI.list().length;
+    const owedNtg = () => CI.list().filter((r) => r.carrier === 'ntg')
+        .reduce((t, r) => t + (Number(r.amount) || 0) - (Number(r.paid) || 0), 0);
+    const owedBefore = owedNtg();
+
+    const PLAN_CI = () => ([{ op: 'create-carrier-invoice', carrier: 'ntg',
+        ref: 'NTG-E2E-1', amount: 2180 }]);
+
+    const pre = await req('POST', '/api/ledger/plan/preview', { sid: superSid, body: { plan: PLAN_CI() } });
+    ck('the preview verifies a carrier bill', pre.status === 200 && pre.json.ok === true,
+       `${pre.status} ${pre.raw.slice(0, 200)}`);
+    ck('  and the figures travel on the CARRIER diff, not the supplier one',
+       Array.isArray(pre.json.carrierDiff) && pre.json.carrierDiff.length === 1
+       && (pre.json.diff || []).length === 0, JSON.stringify([pre.json.diff, pre.json.carrierDiff]));
+    // ── SAID BEFORE SHE PRESSES ──────────────────────────────────────────
+    // carrierInvoices.js has no delete, so this one genuinely cannot be
+    // taken back. By the time she is looking for an Undo button, that is
+    // not information, it is an apology.
+    ck('  and the preview WARNS it cannot be undone',
+       pre.json.undo && pre.json.undo.ok === false
+       && /no delete/.test(JSON.stringify(pre.json.undo.irreversible)),
+       JSON.stringify(pre.json.undo));
+    ck('  and the preview wrote nothing', CI.list().length === before);
+
+    const ok = await req('POST', '/api/ledger/plan/apply', { sid: superSid, body: {
+        plan: PLAN_CI(), planId: 'PCI1', asked: 'add the NTG bill for 2180',
+        approvedDiff: pre.json.approvedDiff,
+        approvedCarrierDiff: pre.json.approvedCarrierDiff } });
+    ck('apply lands the carrier bill', ok.status === 200 && ok.json.ok === true, JSON.stringify(ok.json));
+    ck('  one more row in the carrier store', CI.list().length - before === 1,
+       `${before} → ${CI.list().length}`);
+    const made = CI.list().find((r) => r.ref === 'NTG-E2E-1');
+    ck('  with the carrier, ref and amount it was given',
+       made && made.carrier === 'ntg' && Number(made.amount) === 2180, JSON.stringify(made));
+    ck('  marked manual, so she can pay it', made && made.source === 'manual', made && made.source);
+    ck('  and NTG is owed 2,180 more than before', owedNtg() - owedBefore === 2180,
+       `${owedBefore} → ${owedNtg()}`);
+    ck('  and the apply says plainly that it cannot be undone',
+       ok.json.reversible === false, JSON.stringify(ok.json.reversible));
+
+    // ── PAYING IT, THROUGH THE SAME TWO ROUTES ───────────────────────────
+    const payPlan = () => ([{ op: 'pay-carrier-invoice', carrier_invoice_id: made.id,
+        amount: 2180, date: '2026-10-09' }]);
+    const pre2 = await req('POST', '/api/ledger/plan/preview', { sid: superSid, body: { plan: payPlan() } });
+    ck('the payment previews', pre2.json.ok === true, JSON.stringify(pre2.json.problems));
+    const owedMid = owedNtg();
+    const paid = await req('POST', '/api/ledger/plan/apply', { sid: superSid, body: {
+        plan: payPlan(), planId: 'PCI2', asked: 'pay it',
+        approvedDiff: pre2.json.approvedDiff,
+        approvedCarrierDiff: pre2.json.approvedCarrierDiff } });
+    ck('the payment applies', paid.status === 200 && paid.json.ok === true, JSON.stringify(paid.json));
+    ck('  and NTG is owed 2,180 LESS than a moment ago', owedMid - owedNtg() === 2180,
+       `${owedMid} → ${owedNtg()}`);
+    ck('  the row reads paid', (CI.list().find((r) => r.id === made.id) || {}).status === 'paid',
+       JSON.stringify(CI.list().find((r) => r.id === made.id)));
+
+    // ── THE SAME REF AGAIN ───────────────────────────────────────────────
+    // addManual throws on a duplicate; the verifier mirrors it, so she is
+    // told at the preview rather than after approving.
+    const again = await req('POST', '/api/ledger/plan/preview', { sid: superSid,
+        body: { plan: PLAN_CI() } });
+    ck('adding the same ref twice is refused at the PREVIEW', again.json.ok === false
+       && /already on the carrier list/.test(JSON.stringify(again.json.problems)),
+       JSON.stringify(again.json.problems));
+    ck('  and no diff comes back with the refusal', again.json.carrierDiff === null,
+       JSON.stringify(again.json.carrierDiff));
+
+    // ── A HAULER THE STORE WOULD REFUSE ──────────────────────────────────
+    // The whole reason this work started. Jio is in partyInvoices.js, not
+    // carrierInvoices.js, and the regex in bankReview.js used to offer it a
+    // button whose executor would have come back "carrier must be one of
+    // tql, ntg, schneider".
+    const jio = await req('POST', '/api/ledger/plan/preview', { sid: superSid, body: {
+        plan: [{ op: 'create-carrier-invoice', carrier: 'jio', ref: 'J-1', amount: 500 }] } });
+    ck('a party-register hauler is refused through the route too', jio.json.ok === false,
+       JSON.stringify(jio.json.problems));
+    ck('  and nothing was added', CI.list().filter((r) => r.carrier === 'jio').length === 0);
+
+    // ── AND THE WORLD-MOVED CHECK COVERS THE CARRIER SIDE ────────────────
+    // This is the hole that would have existed had carrierDiff been folded
+    // into the supplier array: sameDiff reads r.supplier, which is
+    // undefined on every carrier row, so all of them compare equal and the
+    // guard passes while a carrier bill moves underneath it. A guard with a
+    // hole is worse than no guard, because it is trusted.
+    const pre3 = await req('POST', '/api/ledger/plan/preview', { sid: superSid, body: {
+        plan: [{ op: 'create-carrier-invoice', carrier: 'tql', ref: 'PO-E2E-9', amount: 100 }] } });
+    const staleCarrier = [{ carrier: 'tql', billed: { before: 0, after: 999 },
+        paid: { before: 0, after: 0 }, owed: { before: 0, after: 999 },
+        invoices: { before: 0, after: 1 } }];
+    const movedCount = CI.list().length;
+    const moved2 = await req('POST', '/api/ledger/plan/apply', { sid: superSid, body: {
+        plan: [{ op: 'create-carrier-invoice', carrier: 'tql', ref: 'PO-E2E-9', amount: 100 }],
+        planId: 'PCI3', approvedDiff: pre3.json.approvedDiff,
+        approvedCarrierDiff: staleCarrier } });
+    ck('a carrier apply against figures she never saw is a 409', moved2.status === 409,
+       `${moved2.status} ${moved2.raw.slice(0, 200)}`);
+    ck('  and nothing was written', CI.list().length === movedCount,
+       `${movedCount} → ${CI.list().length}`);
+}
+
+// ── F — THE LOG CARRIES THE CARRIER FIGURES AND THE UNDO VERDICT ─────────
+{
+    section('F — the log, for the carrier plans');
+    const got = await req('GET', '/api/ledger/plan/log', { sid: superSid });
+    const rows = (got.json || {}).rows || [];
+    const ci = rows.find((r) => /add the NTG bill/.test(r.asked || ''));
+    ck('the carrier plan is in the log', !!ci, JSON.stringify(rows.map((r) => r.asked)));
+    ck('  with her words', /2180/.test(ci.asked), ci.asked);
+    ck('  and the carrier figures as they were', Array.isArray(ci.carrierDiff)
+       && ci.carrierDiff.some((r) => r.carrier === 'ntg'), JSON.stringify(ci.carrierDiff));
+    ck('  and says on the record that it cannot be undone',
+       ci.reversible === false && (ci.irreversible || []).length === 1,
+       JSON.stringify([ci.reversible, ci.irreversible]));
+}
+
 server.close();
 
 console.log(`\n  ${pass} passed, ${fail} failed`);

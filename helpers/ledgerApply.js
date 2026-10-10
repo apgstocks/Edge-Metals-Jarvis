@@ -55,7 +55,15 @@ const num = (v) => { const n = Number(v); return isFinite(n) ? n : 0; };
 // snapshot — it cannot be taken BEFORE the writing starts, which is the
 // only moment it is worth anything.
 function filesAtRisk() {
-    return [cfg.BILLS_FILE, cfg.BILL_PAYMENTS_FILE || path.join(cfg.DATA_DIR, 'bill_payments.json')]
+    return [cfg.BILLS_FILE,
+        cfg.BILL_PAYMENTS_FILE || path.join(cfg.DATA_DIR, 'bill_payments.json'),
+        // Added with the carrier operations, 2026-10-10. A snapshot that
+        // does not cover a file the plan writes is not a rollback, it is a
+        // rollback of two files out of three — and the carrier bill added
+        // by step 1 would survive the failure of step 2 with nothing saying
+        // so. This list being hand-written is exactly why it has to be
+        // updated in the same commit as any new executor.
+        cfg.CARRIER_INVOICES_FILE || path.join(cfg.DATA_DIR, 'carrier_invoices.json')]
         .filter(Boolean);
 }
 
@@ -102,6 +110,19 @@ function sameDiff(a, b) {
     const key = (d) => JSON.stringify((d || []).map((r) => [r.supplier,
         r.billed.before, r.billed.after, r.paid.before, r.paid.after,
         r.bills.before, r.bills.after, r.containers.before, r.containers.after]));
+    return key(a) === key(b);
+}
+
+// The same check for the carrier rows, which have no supplier and no
+// containers. Kept as a SECOND function rather than widened into the one
+// above: a comparison reading r.supplier against a carrier row reads
+// `undefined` on both sides and declares every carrier change identical,
+// so the world-moved guard would pass while a carrier bill moved underneath
+// it. A guard with a hole is worse than no guard, because it is trusted.
+function sameCarrierDiff(a, b) {
+    const key = (d) => JSON.stringify((d || []).map((r) => [r.carrier,
+        r.billed.before, r.billed.after, r.paid.before, r.paid.after,
+        r.invoices.before, r.invoices.after]));
     return key(a) === key(b);
 }
 
@@ -167,7 +188,25 @@ function readWorld() {
         applied: (p.allocations || []).map((a) => ({ bill_id: a.bill_id, amount: num(a.amount) })),
         qb_linked: linked(p),
     }));
-    return { bills, payments };
+    // ── THE CARRIER SIDE ────────────────────────────────────────────────
+    // Both the rows and the LIST OF CARRIERS the store will accept, read
+    // from carrierInvoices.js itself so the verifier cannot hold a stale
+    // copy. bankReview.js's first version hard-coded ten hauler names
+    // against a store that takes three; the fix is not a better hard-coded
+    // list, it is not having one.
+    let carrierInvoices = [];
+    let carrierNames = [];
+    try {
+        const CI = require('./carrierInvoices');
+        carrierNames = CI.CARRIERS.slice();
+        carrierInvoices = (CI.list() || []).map((c) => ({
+            id: c.id, carrier: c.carrier, ref: c.ref,
+            amount: num(c.amount), paid: num(c.paid),
+            status: c.status, source: c.source,
+        }));
+    } catch (e) { carrierInvoices = []; carrierNames = []; }
+
+    return { bills, payments, carrierInvoices, carrierNames };
 }
 
 // ── APPLY ───────────────────────────────────────────────────────────────
@@ -180,6 +219,7 @@ function readWorld() {
 // snapshot, then a throw, then rollback — proves the pieces and not the
 // wiring, which is the gap CLAUDE.md §3 keeps finding.
 async function apply({ plan, asked, actor = null, planId = null, approvedDiff = null,
+                       approvedCarrierDiff = null,
                        audit = require('./audit'), now = new Date(),
                        runStepImpl = runStep } = {}) {
     const world = readWorld();
@@ -196,11 +236,19 @@ async function apply({ plan, asked, actor = null, planId = null, approvedDiff = 
             problems: v.problems, planId, applied: false };
     }
 
-    // DEFENCE 1.
+    // DEFENCE 1. Both halves of the diff, because a plan can move a carrier
+    // bill without touching a supplier at all — and then the supplier diff
+    // is identical on both sides and says nothing.
     if (approvedDiff && !sameDiff(approvedDiff, v.simulation.diff)) {
         return { ok: false, why: 'the books changed since you were shown this — nothing has been '
             + 'applied. Look at the new figures and confirm again.',
             planId, applied: false, approvedDiff, currentDiff: v.simulation.diff };
+    }
+    if (approvedCarrierDiff && !sameCarrierDiff(approvedCarrierDiff, v.simulation.carrierDiff)) {
+        return { ok: false, why: 'the carrier list changed since you were shown this — nothing has '
+            + 'been applied. Look at the new figures and confirm again.',
+            planId, applied: false, approvedCarrierDiff,
+            currentCarrierDiff: v.simulation.carrierDiff };
     }
 
     // The undo, computed and WRITTEN DOWN BEFORE anything happens. After a
@@ -243,9 +291,13 @@ async function apply({ plan, asked, actor = null, planId = null, approvedDiff = 
     // written before it was, is worse than no entry: it is evidence of
     // something that did not happen.
     const reverse = LP.reverseOf(plan, idMap);
+    // Recorded beside the undo so the log answers "can this be taken back"
+    // without re-deriving it from a vocabulary that may have changed since.
+    const undoable = LP.reversibility(plan);
     const rec = LP.auditRecord({ asked, plan, verification: v, actor, at: now });
     let logged = true;
-    try { await writeAudit(audit, rec, { plan_id: planId, applied: true, reverse, created: idMap }); }
+    try { await writeAudit(audit, rec, { plan_id: planId, applied: true, reverse, created: idMap,
+        reversible: undoable.ok, irreversible: undoable.irreversible }); }
     catch (e) {
         // The writes HAPPENED. Failing to log them does not unhappen them,
         // and rolling back a successful apply because the log failed would
@@ -256,7 +308,8 @@ async function apply({ plan, asked, actor = null, planId = null, approvedDiff = 
     }
 
     return { ok: true, applied: true, planId, steps: done, created: idMap, reverse, logged,
-        diff: v.simulation.diff };
+        diff: v.simulation.diff, carrierDiff: v.simulation.carrierDiff || [],
+        reversible: undoable.ok, irreversible: undoable.irreversible };
 }
 
 // One step, through the helper that owns the store. Each throws on refusal,
@@ -314,8 +367,39 @@ async function runStep(step, i, idMap) {
         await bp.editBillPayment(step.payment_id, { allocations: next });
         return { unmatched: id };
     }
+    // ── THE CARRIER OPERATIONS ───────────────────────────────────────────
+    // Through carrierInvoices.js, never its file. That module owns the
+    // collision refusal, the imported-row refusal and the overpay refusal,
+    // and all three are MIRRORED in the verifier so she sees them on the
+    // preview — but the real ones stay here, because a verifier running
+    // against a snapshot of the world is not a lock. Between preview and
+    // apply the importer can land the very invoice the plan is adding, and
+    // then it is addManual's throw that stops it, not the simulation's.
+    if (step.op === 'create-carrier-invoice') {
+        const CI = require('./carrierInvoices');
+        const made = await CI.addManual({
+            carrier: String(step.carrier || '').trim().toLowerCase(),
+            ref: step.ref, amount: step.amount,
+            invoice_date: step.invoice_date || null, lane: step.lane || null,
+        }, { actor: 'ledger plan' });
+        const id = made && made.id;
+        if (!id) throw new Error('carrierInvoices.addManual returned no id');
+        idMap[`#${i + 1}`] = id;
+        return { created: id };
+    }
+    if (step.op === 'pay-carrier-invoice') {
+        const CI = require('./carrierInvoices');
+        const id = String(step.carrier_invoice_id).startsWith('#')
+            ? idMap[String(step.carrier_invoice_id)] : step.carrier_invoice_id;
+        if (!id) throw new Error(`${step.carrier_invoice_id} resolved to no carrier bill`);
+        await CI.payManual(id, { amount: step.amount, date: step.date,
+            mode: step.mode || null, bank: step.bank || null, ref: step.ref || null },
+        { actor: 'ledger plan' });
+        return { paid: r2(num(step.amount)), against: id };
+    }
     throw new Error(`no executor for "${step.op}" — the verifier let through an operation `
         + 'this file cannot perform, which should be impossible');
 }
 
-module.exports = { apply, readWorld, snapshot, rollback, sameDiff, alreadyApplied, filesAtRisk, runStep };
+module.exports = { apply, readWorld, snapshot, rollback, sameDiff, sameCarrierDiff,
+    alreadyApplied, filesAtRisk, runStep };

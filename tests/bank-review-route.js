@@ -49,7 +49,12 @@ const row = {
 };
 const orphan = { ...row, id: 'bk2', date: '2026-04-12', spent: 955, amount: 955,
     desc: 'MONTHLY MAINTENANCE FEE', party: '' };
-fs.writeFileSync(process.env.BANK_TX_FILE, JSON.stringify([row, orphan], null, 2));
+// A carrier carrierInvoices.js will actually take, added 2026-10-10 beside
+// the hauler it will not. The pair is the point: one row earns a button and
+// one does not, and before today both got one.
+const carrier = { ...row, id: 'bk3', date: '2026-04-13', spent: 1420, amount: 1420,
+    desc: 'NTG LOGISTICS ACH DEBIT', party: 'NTG LOGISTICS' };
+fs.writeFileSync(process.env.BANK_TX_FILE, JSON.stringify([row, orphan, carrier], null, 2));
 
 const { createApi } = require(path.join(ROOT, 'api'));
 const app = createApi();
@@ -94,10 +99,32 @@ const sid = ((await req('POST', '/login', { body: { password: process.env.ADMIN_
        JSON.stringify(ids));
     ck('  every row is money out, since nothing came in', d.queue.rows.every((r) => r.direction === 'out'));
 
+    // ── CORRECTED 2026-10-10 ─────────────────────────────────────────────
+    // This used to assert that AJ Transport came back as `add` with "Add as
+    // a carrier bill", and it did. There was no store that would have
+    // taken the record: carrierInvoices.js accepts tql, ntg and schneider,
+    // and AJ Transport is in partyInvoices.js — a register fed from her
+    // Google sheet by upsertMany(), with no single-row add and a lock.
+    // Pressing the button would have reached addManual and come back
+    // "carrier must be one of tql, ntg, schneider".
+    //
+    // So the row still SAYS what Jarvis knows it is, and no longer offers a
+    // one-press that nothing could honour. See tests/bank-review.js
+    // section B for the full list and the invariant that keeps the regex in
+    // step with the store.
     const aj = d.queue.rows.find((r) => r.id === 'bk1');
-    ck('the hauler is offered as a carrier bill — her wording',
-       aj.state === 'add' && aj.label === 'Add as a carrier bill', JSON.stringify(aj));
-    ck('  and carries the account it would post to', aj.account === '5200', aj.account);
+    ck('a party-register hauler is recognised but NOT offered a carrier-bill button',
+       aj.state === 'ask' && aj.kind === 'party-invoice', JSON.stringify(aj));
+    ck('  and is told where to pay it instead', /Transport tab/.test(aj.why || ''), aj.why);
+
+    // The carrier that IS in carrierInvoices still gets the button, which
+    // is the half of this that has to keep working.
+    const ntgRow = d.queue.rows.find((r) => /NTG/.test(r.descriptor || ''));
+    ck('an NTG row IS offered a carrier bill — her wording',
+       !!ntgRow && ntgRow.state === 'add' && ntgRow.label === 'Add as a carrier bill',
+       JSON.stringify(ntgRow));
+    ck('  and carries the account it would post to', ntgRow && ntgRow.account === '5200',
+       ntgRow && ntgRow.account);
     const fee = d.queue.rows.find((r) => r.id === 'bk2');
     ck('the bank fee is offered as a bank charge', fee.label === 'Add as a bank charge', fee.label);
     ck('every row says why', d.queue.rows.every((r) => String(r.why || '').trim().length > 0));

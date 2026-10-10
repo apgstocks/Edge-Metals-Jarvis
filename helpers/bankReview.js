@@ -61,13 +61,47 @@ const STATES = ['match', 'add', 'choose', 'ask', 'done'];
 // Returns null rather than a default. "Add as an expense" as a fallback
 // would be a category chosen by the absence of information, and 6300 would
 // slowly fill with things nobody classified.
+//
+// ── KNOWING WHAT IT IS AND BEING ABLE TO POST IT ARE TWO THINGS ─────────
+// Correction, 2026-10-10, mine: the first version of this table offered
+// "Add as a carrier bill" for ten haulers. Only THREE of them have a store
+// that will take one.
+//
+//   carrierInvoices.js  CARRIERS = tql, ntg, schneider. Edge Metals
+//                       domestic loads, own file, and addManual() is a real
+//                       hand-add path. A button here reaches an executor.
+//   partyInvoices.js    PARTIES = zimex, eagle, jio, sher, ajtransport,
+//                       panmetal, gardunos. A REGISTER, not a bill store:
+//                       its rows come from her Google sheet via
+//                       upsertMany(), there is no single-row add, and the
+//                       thing has a lock. Inventing a row from a bank
+//                       descriptor would create exactly the record the
+//                       sheet reconciliation then reports as NOT on the
+//                       sheet — a problem manufactured by the fix.
+//
+// So `postable` is the gate, and it is the structural kind rather than a
+// comment, because the next person to add a hauler here will add it to a
+// regex and not read this. CLAUDE.md's named trap is a requirement landing
+// in shared code that one caller cannot satisfy; this is the same trap one
+// layer up — a BUTTON whose executor would refuse it. The row still says
+// what Jarvis knows the payment is; it just does not pretend one press
+// files it.
 const KINDS = [
-    { re: /\b(ntg|tql|schneider|aj\s*transport|sher|jio|garduno)/i,
-      kind: 'carrier-bill', label: 'Add as a carrier bill', account: '5200' },
-    { re: /\b(zimex|eagle\s*brit|pan\s*metal)/i,
-      kind: 'carrier-bill', label: 'Add as a carrier bill', account: '5200' },
+    // The three carrierInvoices.CARRIERS accepts, and no more. Kept in step
+    // by tests/bank-review.js, which requires that module and compares.
+    { re: /\b(ntg|tql|schneider)\b/i, postable: true,
+      kind: 'carrier-bill', label: 'Add as a carrier bill', account: '5200',
+      store: 'carrier_invoices' },
+    { re: /\b(zimex|eagle\s*brit|pan\s*metal|aj\s*transport|sher|jio|garduno)/i,
+      postable: false,
+      kind: 'party-invoice', label: 'Tell Jarvis what this is', account: '5200',
+      store: 'party_invoices',
+      note: 'this is a party-register hauler — its invoice comes from your '
+          + 'sheet, so pay it from the Transport tab rather than creating one here' },
     { re: /\b(service charge|maintenance fee|monthly fee|wire fee|overdraft|nsf)\b/i,
-      kind: 'bank-charge', label: 'Add as a bank charge', account: '6300' },
+      postable: true,
+      kind: 'bank-charge', label: 'Add as a bank charge', account: '6300',
+      store: 'journal' },
 ];
 
 function guessKind(descriptor) {
@@ -124,9 +158,16 @@ function fromWithdrawal(res) {
     // "Post" tells her nothing, "Add as a carrier bill" tells her what will
     // exist when she presses it.
     const k = guessKind(base.descriptor);
-    if (k) {
+    // `add` ONLY where a store will take the record. A recognised hauler
+    // with no hand-add path is still named on the row — she gets to see
+    // Jarvis knew what it was — but as `ask`, with where to go instead.
+    if (k && k.postable) {
         return { ...base, state: 'add', label: k.label, kind: k.kind, account: k.account,
             why: `nothing recorded matches this, and the description names ${base.descriptor.trim()}` };
+    }
+    if (k) {
+        return { ...base, state: 'ask', label: k.label, kind: k.kind,
+            why: k.note || 'nothing recorded matches this withdrawal' };
     }
     return { ...base, state: 'ask', label: 'Tell Jarvis what this is',
         why: res.note || 'nothing recorded matches this withdrawal' };

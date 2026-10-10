@@ -1121,6 +1121,68 @@ const MUTATIONS = [
       find: "            out.push({ op: 'restore-bill', bill_id: real(s.bill_id),",
       to:   "            out.push({ op: 'create-bill', bill_id: real(s.bill_id)," },
 
+    // ── THE CARRIER OPERATIONS, 2026-10-10 ───────────────────────────
+    // Added because bankReview.js's "Add as a carrier bill" button had no
+    // executor at all. Each mutation here removes one refusal that mirrors
+    // a throw inside carrierInvoices.js — the refusals are the feature, and
+    // a refusal nothing drives is a refusal that will be deleted by
+    // whoever next tidies the file.
+    { name: 'carrier plan: any hauler may be billed, not only the three the store takes',
+      file: 'helpers/ledgerPlan.js', suites: ['ledger-plan', 'ledger-plan-routes'],
+      find: "            } else if (c && !carrierNames.includes(c)) {",
+      to:   "            } else if (false) {" },
+    { name: 'carrier plan: a missing carrier list waves the check through',
+      file: 'helpers/ledgerPlan.js', suites: ['ledger-plan'],
+      find: "            if (!carrierNames.length) {",
+      to:   "            if (false) {" },
+    { name: 'carrier plan: a duplicate ref is added again instead of refused',
+      file: 'helpers/ledgerPlan.js', suites: ['ledger-plan', 'ledger-plan-routes'],
+      find: "            if (carriers.some((c) => c && !c.gone",
+      to:   "            if (false && carriers.some((c) => c && !c.gone" },
+    { name: 'carrier plan: an IMPORTED row can be paid, so Jarvis argues with the remittance',
+      file: 'helpers/ledgerPlan.js', suites: ['ledger-plan'],
+      find: "            if (c.source !== 'manual') {",
+      to:   "            if (false) {" },
+    { name: 'carrier plan: a carrier bill can be overpaid',
+      file: 'helpers/ledgerPlan.js', suites: ['ledger-plan'],
+      find: "            if (paid > r2(num(c.amount)) + CENT) {",
+      to:   "            if (false) {" },
+    // The silent-skip hole. Before this, reverseOf's chain fell off the end
+    // for an op it did not recognise, so an undo containing one reported
+    // success having undone only part of the plan.
+    { name: 'carrier plan: reverseOf silently skips what it cannot undo',
+      file: 'helpers/ledgerPlan.js', suites: ['ledger-plan'],
+      find: "            const spec = OPS[s.op] || {};\n            out.push({ op: 'cannot-undo', was: s.op, step: i + 1,",
+      to:   "            const spec = OPS[s.op] || {};\n            if (false) out.push({ op: 'cannot-undo', was: s.op, step: i + 1," },
+    { name: 'carrier plan: everything is declared reversible, including what has no inverse',
+      file: 'helpers/ledgerPlan.js', suites: ['ledger-plan', 'ledger-plan-routes'],
+      find: "        if (spec.reversible !== true) {",
+      to:   "        if (false) {" },
+    // The world-moved check, carrier half. This is the hole that would have
+    // existed had carrierDiff been folded into the supplier array.
+    { name: 'carrier apply: the world-moved check ignores the carrier figures',
+      file: 'helpers/ledgerApply.js', suites: ['ledger-plan-routes'],
+      find: "    if (approvedCarrierDiff && !sameCarrierDiff(approvedCarrierDiff, v.simulation.carrierDiff)) {",
+      to:   "    if (false) {" },
+    { name: 'carrier apply: the rollback does not cover the carrier file',
+      file: 'helpers/ledgerApply.js', suites: ['ledger-apply'],
+      find: "        cfg.CARRIER_INVOICES_FILE || path.join(cfg.DATA_DIR, 'carrier_invoices.json')]",
+      to:   "        null]" },
+
+    // ── THE BUTTON WHOSE EXECUTOR WOULD HAVE REFUSED IT ──────────────
+    // bankReview.js offered "Add as a carrier bill" for ten haulers;
+    // carrierInvoices accepts three, and the other seven are in
+    // partyInvoices.js with no single-row add at all. `postable` is the
+    // gate, and it has to be driven or it will be removed as noise.
+    { name: 'bank review: a hauler no store will take is still offered a button',
+      file: 'helpers/bankReview.js', suites: ['bank-review'],
+      find: "    if (k && k.postable) {",
+      to:   "    if (k) {" },
+    { name: 'bank review: the carrier rule widens back to the party-register haulers',
+      file: 'helpers/bankReview.js', suites: ['bank-review'],
+      find: "    { re: /\\b(ntg|tql|schneider)\\b/i, postable: true,",
+      to:   "    { re: /\\b(ntg|tql|schneider|jio|sher)\\b/i, postable: true," },
+
     // ── THE AGENT'S PLAN VERIFIER — THE ONLY THING IN THE WAY ────────
     // A model proposes; this is what stands between a plausible plan and
     // her ledger. Each mutation is a way a wrong plan would get through.

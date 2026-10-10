@@ -65,7 +65,22 @@ function mount(app, cfg) {
                 // which is what makes the refusal explainable to her rather
                 // than "your session expired".
                 approvedDiff: v.ok ? v.simulation.diff : null,
+                // ── THE CARRIER HALF, AND WHY IT IS SEPARATE ────────────
+                // A plan can add or pay a carrier bill and touch no
+                // supplier at all, in which case `diff` above is empty and
+                // says nothing happened. Both travel, and the apply call
+                // sends both back, so the world-moved check covers a
+                // carrier change too.
+                carrierDiff: v.ok ? (v.simulation.carrierDiff || []) : null,
+                approvedCarrierDiff: v.ok ? (v.simulation.carrierDiff || []) : null,
                 reverse: v.ok ? LP.reverseOf(plan) : null,
+                // ── SAID BEFORE SHE PRESSES, NOT AFTER ──────────────────
+                // The two carrier operations have no inverse:
+                // carrierInvoices.js has no delete and no un-pay. By the
+                // time she is looking for an Undo button, "this cannot be
+                // undone" is not information, it is an apology — so it
+                // goes on the confirmation screen.
+                undo: LP.reversibility(plan),
             });
         } catch (e) { res.status(500).json({ error: e.message }); }
     });
@@ -93,6 +108,7 @@ function mount(app, cfg) {
                 asked: String(body.asked || ''),
                 actor: req.profile || req.role || null,
                 approvedDiff: body.approvedDiff || null,
+                approvedCarrierDiff: body.approvedCarrierDiff || null,
             });
             // 409 for "the world moved" and "already applied": both mean
             // the request was reasonable and the state is not what it
@@ -100,6 +116,14 @@ function mount(app, cfg) {
             // malformed request and send her looking at the wrong thing.
             if (!out.ok) {
                 const conflict = /already been applied|changed since you were shown/.test(out.why || '');
+                // The carrier refusal's wording ends "...confirm again" via
+                // a different sentence, so it is matched explicitly rather
+                // than trusted to the regex above. A 400 here would read as
+                // a malformed request and send her looking at the plan
+                // instead of at the figures.
+                if (/carrier list changed since/.test(out.why || '')) {
+                    return res.status(409).json(out);
+                }
                 return res.status(conflict ? 409 : 400).json(out);
             }
             res.json(out);
@@ -128,6 +152,9 @@ function mount(app, cfg) {
                     applied: !!(e.detail || {}).applied,
                     steps: (e.detail || {}).steps || [],
                     diff: (e.detail || {}).diff || null,
+                    carrierDiff: (e.detail || {}).carrierDiff || null,
+                    reversible: (e.detail || {}).reversible,
+                    irreversible: (e.detail || {}).irreversible || [],
                     problems: (e.detail || {}).problems || [],
                     // The undo travels with the entry so that undoing is a
                     // question of reading the log, not of recomputing a
