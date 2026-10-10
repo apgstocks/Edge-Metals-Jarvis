@@ -43,7 +43,7 @@ if (!String(cfg.DATA_DIR).startsWith(TMP)) { console.error('  ABORT  config not 
 const pay = require(path.join(ROOT, 'helpers/payments'));
 const petty = require(path.join(ROOT, 'helpers/pettyCash'));
 const spend = require(path.join(ROOT, 'helpers/spendReport'));
-const DASH = fs.readFileSync(path.join(ROOT, 'dashboard/index.html'), 'utf8');
+const DASH = require('../helpers/sourceParts').indexHtml();
 const APP = fs.readFileSync(path.join(ROOT, 'mobile-app/www/index.html'), 'utf8');
 
 (async () => {

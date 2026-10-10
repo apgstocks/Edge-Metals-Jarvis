@@ -42,7 +42,7 @@ const ck = (label, ok, detail) => {
 const section = (t) => console.log('\n=== ' + t + ' ===');
 
 const ROOT = path.join(__dirname, '..');
-const HTML = fs.readFileSync(path.join(ROOT, 'dashboard/index.html'), 'utf8');
+const HTML = require('../helpers/sourceParts').indexHtml();
 
 // NAV_ITEMS is a top-level `const`, so it is NOT a property of window and
 // cannot be read off the rendered page — it has to come from the source.

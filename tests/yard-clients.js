@@ -16,7 +16,7 @@ const section = (t) => console.log('\n=== ' + t + ' ===');
 
 const ROOT = path.join(__dirname, '..');
 const MOBILE = fs.readFileSync(path.join(ROOT, 'mobile-app/www/index.html'), 'utf8');
-const DASH = fs.readFileSync(path.join(ROOT, 'dashboard/index.html'), 'utf8');
+const DASH = require('../helpers/sourceParts').indexHtml();
 const mobileJs = MOBILE.match(/<script>([\s\S]*?)<\/script>/)[1];
 
 section('A — "Hey Jarvis"');

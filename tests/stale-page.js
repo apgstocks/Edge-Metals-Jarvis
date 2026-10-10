@@ -89,7 +89,7 @@ section('A. the page carries its own build');
        /no-cache/.test(page.headers['cache-control'] || ''), page.headers['cache-control']);
 
     // ── AND THE FOOTER COMPARES THEM ────────────────────────────────────
-    const src = fs.readFileSync(path.join(ROOT, 'dashboard/index.html'), 'utf8');
+    const src = require('../helpers/sourceParts').indexHtml();
     ck('the footer reads the page\'s own build', /meta\[name="jarvis-build"\]/.test(src));
     ck('  and says RELOAD when the two disagree',
        /this page is build \$\{pageBuild\}, the server is on \$\{v\.short\} — RELOAD/.test(src),

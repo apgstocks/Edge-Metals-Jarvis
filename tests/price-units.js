@@ -172,7 +172,7 @@ const PU = require(path.join(ROOT, 'helpers/priceUnits'));
 {
     section('E — the clients carry the same numbers');
     const app = fs.readFileSync(path.join(ROOT, 'mobile-app/www/index.html'), 'utf8');
-    const web = fs.readFileSync(path.join(ROOT, 'dashboard/index.html'), 'utf8');
+    const web = require('../helpers/sourceParts').indexHtml();
 
     // Each client declares its table as LB_PER_UNIT = { ... }. Parsed rather
     // than eyeballed, so adding a sixth unit to the module and forgetting a
@@ -215,7 +215,7 @@ const PU = require(path.join(ROOT, 'helpers/priceUnits'));
 {
     section('F — display everywhere, picker in the app only');
     const app = fs.readFileSync(path.join(ROOT, 'mobile-app/www/index.html'), 'utf8');
-    const web = fs.readFileSync(path.join(ROOT, 'dashboard/index.html'), 'utf8');
+    const web = require('../helpers/sourceParts').indexHtml();
     // Both pickers BUILD their options from an array now rather than listing
     // them as literal markup, so the array is what to read. My first version
     // of this check scanned for `<option value="...">` and went red on both

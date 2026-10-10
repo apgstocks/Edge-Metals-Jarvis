@@ -156,7 +156,7 @@ section('F — an old ticket does not swallow a new save');
 
 section('G — both clients actually mint and send one');
 {
-    const web = fs.readFileSync(path.join(__dirname, '..', 'dashboard/index.html'), 'utf8');
+    const web = require('../helpers/sourceParts').indexHtml();
     const app = fs.readFileSync(path.join(__dirname, '..', 'mobile-app/www/index.html'), 'utf8');
     for (const [label, src] of [['website', web], ['app', app]]) {
         // Minted in resetLoadModal — i.e. when the form OPENS. A ticket made

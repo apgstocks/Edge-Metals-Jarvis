@@ -16,7 +16,7 @@
 const fs=require('fs'),path=require('path');
 const R=path.join(__dirname,'..')+path.sep;
 function grabFrom(file,name){
-  const src=fs.readFileSync(R+file,'utf8');
+  const src=file==='dashboard/index.html' ? require('../helpers/sourceParts').indexHtml() : fs.readFileSync(R+file,'utf8');
   const i=src.indexOf('function '+name+'('); if(i<0) throw new Error(name+' not in '+file);
   let d=0,j=src.indexOf('{',i);
   for(let k=j;k<src.length;k++){if(src[k]==='{')d++;else if(src[k]==='}'){d--;if(!d)return src.slice(i,k+1);}}
@@ -57,7 +57,7 @@ ck('net total is right', /data-label="Net">7,305</.test(web));
 
 // ── structural parity of the two forms ─────────────────────────────────────
 {
-  const web = fs.readFileSync(R+'dashboard/index.html','utf8');
+  const web = require('../helpers/sourceParts').indexHtml();
   const app = fs.readFileSync(R+'mobile-app/www/index.html','utf8');
   for (const [label, src] of [['website', web], ['app', app]]) {
     ck(`${label}: Buyer box removed`, !/id="ld_buyer"/.test(src));
@@ -125,7 +125,7 @@ ck('net total is right', /data-label="Net">7,305</.test(web));
        !/yard/.test(line),
        'the assistant can read spend_report; letting staff reach it undoes the payments boundary');
   }
-  ck('both hosts include it', /yard-bot\.js/.test(fs.readFileSync(R+'dashboard/index.html','utf8'))
+  ck('both hosts include it', /yard-bot\.js/.test(require('../helpers/sourceParts').indexHtml())
      && /yard-bot\.js/.test(fs.readFileSync(R+'mobile-app/www/index.html','utf8')));
   // This used to assert the widget was read-only. That WAS the boundary, and
   // the comment here said any change to it "needs a different conversation" —
@@ -161,7 +161,7 @@ ck('net total is right', /data-label="Net">7,305</.test(web));
 
 // ── payments exist on BOTH, and agree ──────────────────────────────────────
 {
-  const web = fs.readFileSync(R+'dashboard/index.html','utf8');
+  const web = require('../helpers/sourceParts').indexHtml();
   const app = fs.readFileSync(R+'mobile-app/www/index.html','utf8');
   for (const [label, src] of [['website', web], ['app', app]]) {
     ck(`${label}: has a Pay button on the load card`, /btn-pay-load/.test(src));
@@ -216,7 +216,7 @@ ck('net total is right', /data-label="Net">7,305</.test(web));
 
 // ── the draft autosave exists on BOTH, and agrees ──────────────────────────
 {
-  const web = fs.readFileSync(R+'dashboard/index.html','utf8');
+  const web = require('../helpers/sourceParts').indexHtml();
   const app = fs.readFileSync(R+'mobile-app/www/index.html','utf8');
   for (const [label, src] of [['website', web], ['app', app]]) {
     ck(`${label}: autosaves the load form`, /queueLoadDraftSave/.test(src));
@@ -407,7 +407,7 @@ ck('net total is right', /data-label="Net">7,305</.test(web));
 // the output.
 {
   for (const p of ['dashboard/index.html','mobile-app/www/index.html']) {
-    const src = fs.readFileSync(R+p,'utf8');
+    const src = p === 'dashboard/index.html' ? require('../helpers/sourceParts').indexHtml() : fs.readFileSync(R+p,'utf8');
     const grab = (n) => { const i=src.indexOf('function '+n+'('); if(i<0) return null;
       let d=0,j=src.indexOf('{',i);
       for(let k=j;k<src.length;k++){ if(src[k]==='{')d++; else if(src[k]==='}'){d--; if(!d) return src.slice(i,k+1);} } };
@@ -485,7 +485,7 @@ ck('net total is right', /data-label="Net">7,305</.test(web));
 // was the one place it never reached, which is where she looks while working.
 {
   for (const p of ['dashboard/index.html','mobile-app/www/index.html']) {
-    const src = fs.readFileSync(R+p,'utf8');
+    const src = p === 'dashboard/index.html' ? require('../helpers/sourceParts').indexHtml() : fs.readFileSync(R+p,'utf8');
     const grab = (n) => { const i=src.indexOf('function '+n+'('); if(i<0) return null;
       let d=0,j=src.indexOf('{',i);
       for(let k=j;k<src.length;k++){ if(src[k]==='{')d++; else if(src[k]==='}'){d--; if(!d) return src.slice(i,k+1);} } };
@@ -602,7 +602,7 @@ ck('net total is right', /data-label="Net">7,305</.test(web));
 // PINNED ON BOTH FILES because the screen exists twice, which is this file's
 // whole reason to exist. The app is the one she was actually looking at.
 {
-  const dash = fs.readFileSync(R + 'dashboard/index.html', 'utf8');
+  const dash = require('../helpers/sourceParts').indexHtml();
   const mob  = fs.readFileSync(R + 'mobile-app/www/index.html', 'utf8');
 
   for (const [label, src] of [['dashboard', dash], ['mobile', mob]]) {
@@ -648,7 +648,7 @@ ck('net total is right', /data-label="Net">7,305</.test(web));
 // screens share are asserted on both files here, and every rule below is one
 // somebody could plausibly "simplify" on one side alone.
 {
-  const dash = fs.readFileSync(R+'dashboard/index.html','utf8');
+  const dash = require('../helpers/sourceParts').indexHtml();
   const mob  = fs.readFileSync(R+'mobile-app/www/index.html','utf8');
 
   for (const [label, src] of [['dashboard', dash], ['mobile', mob]]) {

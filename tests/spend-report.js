@@ -356,7 +356,7 @@ section('I — narrowing to just Zelle / just Wire / just Cash');
     // zelle amount should come not everything." Drawing seven columns of
     // dashes is technically filtered and reads as unfiltered.
     for (const [label, src] of [['app', fs.readFileSync(path.join(ROOT, 'mobile-app/www/index.html'), 'utf8')],
-                                ['website', fs.readFileSync(path.join(ROOT, 'dashboard/index.html'), 'utf8')]]) {
+                                ['website', require('../helpers/sourceParts').indexHtml()]]) {
         ck(`${label}: the table shows only the chosen method's column`,
            /const cols = rep\.method \? \[rep\.method\] : \(rep\.columns \|\| \[\]\);/.test(src),
            'six columns of dashes beside the one you asked for looks like nothing was filtered');

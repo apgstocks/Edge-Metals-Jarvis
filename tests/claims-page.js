@@ -42,7 +42,7 @@ console.log('\n=== A — the page is part of this app, not a stranger to it ==='
         [...HTML.matchAll(/<script[^>]+src="([^"]*)"/gi)].every((m) => m[1] === '/sidebar.js'),
         [...HTML.matchAll(/<script[^>]+src="([^"]*)"/gi)].map((m) => m[1]).join(', '));
     ck('it works down to phone width', /@media \(max-width:1020px\)/.test(HTML));
-    ck('the nav knows about it', /dataset\.tab === 'claims'/.test(fs.readFileSync(path.join(__dirname, '..', 'dashboard', 'index.html'), 'utf8')));
+    ck('the nav knows about it', /dataset\.tab === 'claims'/.test(require('../helpers/sourceParts').indexHtml()));
 }
 
 console.log('\n=== B — the preview maths are the server maths ===');

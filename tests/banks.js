@@ -250,7 +250,7 @@ section('E — filtering by bank narrows every figure, not just the rows');
 
 section('F — both clients offer the same thing, and neither invents it');
 {
-    const web = fs.readFileSync(path.join(ROOT, 'dashboard/index.html'), 'utf8');
+    const web = require('../helpers/sourceParts').indexHtml();
     const app = fs.readFileSync(path.join(ROOT, 'mobile-app/www/index.html'), 'utf8');
 
     for (const [name, src] of [['website', web], ['mobile app', app]]) {

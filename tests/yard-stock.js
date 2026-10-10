@@ -247,7 +247,9 @@ section('D — a sale is saved, edited and deleted; inventory follows each time'
                 // And the clients must not re-introduce the `|| []` guard that
                 // cannot actually protect a .map call.
                 for (const p of ['dashboard/index.html', 'mobile-app/www/index.html']) {
-                    const s = fs.readFileSync(path.join(__dirname, '..', p), 'utf8');
+                    const s = p === 'dashboard/index.html'
+                        ? require('../helpers/sourceParts').indexHtml()
+                        : fs.readFileSync(path.join(__dirname, '..', p), 'utf8');
                     ck(`${p} merges sales through asArray, not a truthiness guard`,
                         /asArray\(sales\)\.map/.test(s) && !/\(sales \|\| \[\]\)\.map/.test(s));
                     ck(`${p} defines asArray`, /function asArray/.test(s));

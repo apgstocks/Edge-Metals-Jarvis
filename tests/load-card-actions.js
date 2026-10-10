@@ -34,7 +34,7 @@ const section = (t) => console.log('\n=== ' + t + ' ===');
 
 const ROOT = path.join(__dirname, '..');
 const MOBILE = fs.readFileSync(path.join(ROOT, 'mobile-app/www/index.html'), 'utf8');
-const DASH = fs.readFileSync(path.join(ROOT, 'dashboard/index.html'), 'utf8');
+const DASH = require('../helpers/sourceParts').indexHtml();
 
 // Pulls one named function out of a client, by source text. Throws rather than
 // returning undefined: a silently missing function would make every assertion

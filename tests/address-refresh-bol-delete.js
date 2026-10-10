@@ -48,7 +48,7 @@ if (!String(cfg.DATA_DIR).startsWith(TMP)) { console.error('  ABORT  config not 
 
 const APP = fs.readFileSync(path.join(ROOT, 'mobile-app/www/index.html'), 'utf8');
 const WEB = fs.readFileSync(path.join(ROOT, 'dashboard/documents.html'), 'utf8');
-const WEB_DASH = fs.readFileSync(path.join(ROOT, 'dashboard/index.html'), 'utf8');
+const WEB_DASH = require('../helpers/sourceParts').indexHtml();
 
 // Comments are STRIPPED before any source scan below. Twice already in this
 // project an assertion has been satisfied by the comment explaining the rule

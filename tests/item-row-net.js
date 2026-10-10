@@ -46,7 +46,7 @@ const ROUTES = {
 };
 
 function boot(file) {
-    const HTML = fs.readFileSync(path.join(ROOT, file), 'utf8');
+    const HTML = file === 'dashboard/index.html' ? require('../helpers/sourceParts').indexHtml() : fs.readFileSync(path.join(ROOT, file), 'utf8');
     const errors = [];
     const dom = new JSDOM(HTML, {
         runScripts: 'dangerously', url: 'http://localhost/',
@@ -234,7 +234,7 @@ section('the source of the bug, stated once');
     // a test that claims to cover a path it cannot reach is worse than one
     // that admits it.
     for (const f of ['dashboard/index.html', 'mobile-app/www/index.html']) {
-        const code = fs.readFileSync(path.join(ROOT, f), 'utf8');
+        const code = f === 'dashboard/index.html' ? require('../helpers/sourceParts').indexHtml() : fs.readFileSync(path.join(ROOT, f), 'utf8');
         const at = code.indexOf('function recomputeRowTotals');
         const fn = code.slice(at, at + 5200);
         ck(`${f.split('/')[0]}: unparseable input is detected via validity.badInput`,
@@ -246,7 +246,7 @@ section('the source of the bug, stated once');
     }
 
     for (const [label, file] of [['website', 'dashboard/index.html'], ['app', 'mobile-app/www/index.html']]) {
-        const src = fs.readFileSync(path.join(ROOT, file), 'utf8');
+        const src = file === 'dashboard/index.html' ? require('../helpers/sourceParts').indexHtml() : fs.readFileSync(path.join(ROOT, file), 'utf8');
         ck(`${label}: the duplicate no longer relies on ?? to catch a blank tare`,
            !/tare_weight : src\.tare_weight \?\? '0'/.test(src),
            "`?? '0'` reads as a default and is not one for an empty string");

@@ -39,7 +39,7 @@ const sales = require(path.join(ROOT, 'helpers/sales'));
 let JSDOM = null;
 try { ({ JSDOM } = require('jsdom')); } catch (e) { /* reported below */ }
 
-const html = fs.readFileSync(path.join(ROOT, 'dashboard/index.html'), 'utf8');
+const html = require('../helpers/sourceParts').indexHtml();
 const SCRIPT = [...html.matchAll(/<script(?![^>]*\bsrc=)[^>]*>([\s\S]*?)<\/script>/g)]
     .map((m) => m[1]).join('\n');
 
@@ -620,7 +620,7 @@ section('F4 — "ugly and clumsy": the six things that were wrong');
         // this filtered lines starting with // or <!--, and then failed on the
         // multi-line HTML comment that explains the very bug — a lint tripping
         // over its own documentation, for the second time today.
-        const whole = fs.readFileSync(path.join(ROOT, 'dashboard/index.html'), 'utf8')
+        const whole = require('../helpers/sourceParts').indexHtml()
             .replace(/<!--[\s\S]*?-->/g, '')
             .replace(/^\s*\/\/.*$/gm, '');
         const src = whole.split('\n');
@@ -1903,7 +1903,7 @@ section('G8 — the sheet has two palettes and she picks');
     ck('the status colours belong to the palette, not to the form',
        w.ledgerTheme().danger === '#F09595' && w.ledgerTheme().ok === '#5DCAA5',
        JSON.stringify([w.ledgerTheme().danger, w.ledgerTheme().ok]));
-    const html = fs.readFileSync(path.join(ROOT, 'dashboard/index.html'), 'utf8');
+    const html = require('../helpers/sourceParts').indexHtml();
     ck('  with no form carrying a hex of its own',
        !/#B3261E|#2F7D22|#8A6D00/.test(html),
        'eleven hardcoded status colours is eleven places to miss');
@@ -2302,7 +2302,7 @@ section('G11 — typing the item lines and the haulage split');
         // Comment lines stripped first — the note above paintItems QUOTES the
         // broken form to explain it, and a lint that flags its own
         // documentation is a lint people delete.
-        const src = fs.readFileSync(path.join(ROOT, 'dashboard/index.html'), 'utf8')
+        const src = require('../helpers/sourceParts').indexHtml()
             .split('\n').filter((l) => !/^\s*\/\//.test(l)).join('\n');
         const doubled = src.match(/\$\{cell\([^}]*\}\s*style=/g) || [];
         ck('  no caller writes a style attribute alongside cell(), which emits its own',

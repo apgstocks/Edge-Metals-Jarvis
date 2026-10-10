@@ -354,7 +354,7 @@ fs.writeFileSync(cfg.BILLS_FILE, JSON.stringify([
        `${bad.status} ${JSON.stringify(bad.json)}`);
 
     // And the screen really calls both.
-    const web = fs.readFileSync(path.join(ROOT, 'dashboard/index.html'), 'utf8');
+    const web = require('../helpers/sourceParts').indexHtml();
     ck('the Payments tab calls the preview before the edit',
        /preview-edit/.test(web) && web.indexOf('preview-edit') < web.lastIndexOf("method: 'PUT'"),
        'showing her first is the whole rule she gave');

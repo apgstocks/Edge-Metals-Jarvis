@@ -736,7 +736,7 @@ section('F — who may see her supplier prices');
     ck('  nor write one', w.status === 403, String(w.status));
 
     // The nav hides them too — UX only, the server above is the boundary.
-    const html = fs.readFileSync(path.join(ROOT, 'dashboard/index.html'), 'utf8');
+    const html = require('../helpers/sourceParts').indexHtml();
     // Sales became FOUR entries on 2026-09-10 — "i told that i want sales to
     // be in different tabs na" — so this now checks that every one of them is
     // under Operations rather than that a single 'Sales' label exists.
@@ -1646,7 +1646,7 @@ section('Q — the customer box, and the figures that move as she types');
     ck('  without saving a row', (await req('GET', '/api/sales', { sid: admin }))
        .json.sales.every((x) => x.container_no !== 'FACU9'));
 
-    const html = fs.readFileSync(path.join(ROOT, 'dashboard/index.html'), 'utf8');
+    const html = require('../helpers/sourceParts').indexHtml();
     const cards = /sales: \{[\s\S]*?cards: \[([\s\S]*?)\],\n  \},/.exec(html);
     ck('the live strip names the invoice amount and the commission',
        !!cards && /'amount'/.test(cards[1]) && /'commission_amount'/.test(cards[1]),
@@ -2686,7 +2686,7 @@ section('ADVANCES — money already with the supplier, finally visible');
        'a fully applied advance is history, not an open item');
 
     // ── THE SCREEN ────────────────────────────────────────────────────────
-    const web = fs.readFileSync(path.join(ROOT, 'dashboard/index.html'), 'utf8');
+    const web = require('../helpers/sourceParts').indexHtml();
     ck('the bills table has a credit strip', /id="ledCreditBar"/.test(web));
     ck('  with a way into the list', /id="ledCreditShow"/.test(web));
     ck('  shown only when there IS credit',

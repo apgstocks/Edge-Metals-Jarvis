@@ -46,7 +46,7 @@ const ck = (n, c, extra) => {
 const section = (t) => console.log('\n=== ' + t + ' ===');
 
 const ROOT = path.join(__dirname, '..');
-const HTML = fs.readFileSync(path.join(ROOT, 'dashboard/index.html'), 'utf8');
+const HTML = require('../helpers/sourceParts').indexHtml();
 
 // NAV_ITEMS is a top-level const, so it is not a window property — read the
 // declaration out of the source, the way page-headings.js does.

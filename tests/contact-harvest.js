@@ -542,7 +542,7 @@ section('E2. six at once, not six times');
 // ── F. THE SCREEN ───────────────────────────────────────────────────────────
 section('F. the button is where she was looking');
 {
-    const src = fs.readFileSync(path.join(ROOT, 'dashboard/index.html'), 'utf8');
+    const src = require('../helpers/sourceParts').indexHtml();
     ck('Email contacts has a Learn from my mail button',
        /id="btnHarvestContacts"/.test(src) && /Learn from my mail/.test(src),
        'she asked while looking at this tab, not at a chat window');

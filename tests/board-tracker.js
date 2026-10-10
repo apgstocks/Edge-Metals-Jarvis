@@ -38,7 +38,7 @@ const ROOT = path.join(__dirname, '..');
 const cfg = require(path.join(ROOT, 'config'));
 if (!String(cfg.DATA_DIR).startsWith(TMP)) { console.error('  ABORT  config not isolated'); process.exit(1); }
 const { updateWorkflow } = require(path.join(ROOT, 'helpers/json'));
-const DASH = fs.readFileSync(path.join(ROOT, 'dashboard/index.html'), 'utf8');
+const DASH = require('../helpers/sourceParts').indexHtml();
 
 // Mount the real dashboard script and hand it a payload, the way the Board
 // tab does: renderBoard(await api('/api/dashboard')).

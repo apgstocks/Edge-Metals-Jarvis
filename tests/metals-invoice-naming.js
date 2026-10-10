@@ -47,7 +47,7 @@ if (!String(cfg.DATA_DIR).startsWith(TMP)) { console.error('  ABORT  config not 
 
 const { JSDOM } = require('jsdom');
 const sales = require(path.join(ROOT, 'helpers/sales'));
-const html = fs.readFileSync(path.join(ROOT, 'dashboard/index.html'), 'utf8');
+const html = require('../helpers/sourceParts').indexHtml();
 const APP = fs.readFileSync(path.join(ROOT, 'mobile-app/www/index.html'), 'utf8');
 const SCRIPT = [...html.matchAll(/<script(?![^>]*src=)[^>]*>([\s\S]*?)<\/script>/g)].map((m) => m[1]).join('\n');
 
@@ -160,7 +160,7 @@ section('B — the wire did NOT move');
     // ── AND THE STORED SHAPE ─────────────────────────────────────────────
     // Records already on file are keyed this way. Renaming them to match a
     // screen would mean rewriting her data to change a word.
-    const src = fs.readFileSync(path.join(ROOT, 'dashboard/index.html'), 'utf8');
+    const src = require('../helpers/sourceParts').indexHtml();
     const K = src.slice(src.indexOf('  sales: {'), src.indexOf('  sales: {') + 400);
     ck("the ledger key is still 'sales'", /path: '\/api\/sales'/.test(K), K.slice(0, 160));
     ck("  listKey still 'sales', itemKey still 'sale'",

@@ -42,7 +42,7 @@ const bills = require(path.join(ROOT, 'helpers/bills'));
 let JSDOM = null;
 try { ({ JSDOM } = require('jsdom')); } catch (e) { /* reported below */ }
 
-const html = fs.readFileSync(path.join(ROOT, 'dashboard/index.html'), 'utf8');
+const html = require('../helpers/sourceParts').indexHtml();
 const SCRIPT = [...html.matchAll(/<script(?![^>]*\bsrc=)[^>]*>([\s\S]*?)<\/script>/g)]
     .map((m) => m[1]).join('\n');
 
@@ -463,7 +463,7 @@ section('G. undo on the Jarvis profile');
     // error "so that not knowing the history does not stop her importing" —
     // right for a decoration, wrong for the only route out of a bad import.
     // Three outcomes, three different things on screen.
-    const src2 = fs.readFileSync(path.join(ROOT, 'dashboard/index.html'), 'utf8');
+    const src2 = require('../helpers/sourceParts').indexHtml();
     const lb = src2.slice(src2.indexOf('async function loadBatches'),
                           src2.indexOf('async function loadBatches') + 2200);
     ck('  a failed list says so', /Could not load the list of past imports/.test(lb),

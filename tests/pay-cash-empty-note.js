@@ -50,7 +50,7 @@ const CLIENTS = {
 // around it still look right. The shape it needs is tiny: srcs, held() and
 // a note object with classList.toggle.
 function decide(file, by_source, sources, balance, pending_assignment) {
-    const src = fs.readFileSync(file, 'utf8');
+    const src = file === CLIENTS.website ? require('../helpers/sourceParts').indexHtml() : fs.readFileSync(file, 'utf8');
     // ── BRACE-BALANCED, NOT REGEX-TO-THE-FIRST-BRACE ──────────────────────
     // The first version matched lazily up to the next `}`, which worked only
     // while the block had no nested braces. The moment it grew an if/else it
@@ -213,7 +213,7 @@ section('C3 — AFTER FOLDING: payable now, and she is asked to assign it');
 // ══════════════════════════════════════════════════════════════════════════
 section('D — the sentence names what to do');
 for (const [who, file] of Object.entries(CLIENTS)) {
-    const src = fs.readFileSync(file, 'utf8');
+    const src = file === CLIENTS.website ? require('../helpers/sourceParts').indexHtml() : fs.readFileSync(file, 'utf8');
     // The words now come from JS, because which sentence is true depends on
     // which situation she is in. So they are checked on the OUTPUT.
     const empty = decide(file, zeros, SOURCES, 0);

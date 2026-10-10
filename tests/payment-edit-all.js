@@ -432,7 +432,7 @@ fs.writeFileSync(cfg.BILLS_FILE, JSON.stringify([
     }
 
     // ── THE BUTTONS, AND THE PATCH THEY REALLY SEND ──────────────────────
-    const web = fs.readFileSync(path.join(ROOT, 'dashboard/index.html'), 'utf8');
+    const web = require('../helpers/sourceParts').indexHtml();
     for (const [what, cls, route] of [
         ['trucking', 'trkPayEdit', '/api/metals-trucking/'],
         ['sale costs', 'stlEdit', '/api/sales-settlements/'],

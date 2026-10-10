@@ -55,7 +55,7 @@ const sales = require(path.join(ROOT, 'helpers/sales'));
 let JSDOM = null;
 try { ({ JSDOM } = require('jsdom')); } catch (e) { /* reported below */ }
 
-const html = fs.readFileSync(path.join(ROOT, 'dashboard/index.html'), 'utf8');
+const html = require('../helpers/sourceParts').indexHtml();
 const SCRIPT = [...html.matchAll(/<script(?![^>]*\bsrc=)[^>]*>([\s\S]*?)<\/script>/g)]
     .map((m) => m[1]).join('\n');
 

@@ -219,7 +219,7 @@ section('E — the buttons match the rules');
     // UI guards, not security — every one of these hits a route that rechecks.
     // Asserted so a button is not offered that the server will refuse, which
     // reads to her as the app being broken.
-    const web = fs.readFileSync(path.join(ROOT, 'dashboard/index.html'), 'utf8');
+    const web = require('../helpers/sourceParts').indexHtml();
     const app2 = fs.readFileSync(path.join(ROOT, 'mobile-app/www/index.html'), 'utf8');
 
     for (const [label, src] of [['website', web], ['app', app2]]) {
@@ -258,7 +258,7 @@ section('E — the buttons match the rules');
 // permission. Section C above still proves the route itself refuses admin.
 section('F — the Payments tab can delete, on the Jarvis profile only');
 {
-    const web = fs.readFileSync(path.join(ROOT, 'dashboard/index.html'), 'utf8');
+    const web = require('../helpers/sourceParts').indexHtml();
 
     // ── WHY THIS IS NOT A PROXIMITY REGEX ANY MORE ────────────────────
     // It used to be /metalsCanDelete\(\)[\s\S]{0,120}?`<button class="spDel"/

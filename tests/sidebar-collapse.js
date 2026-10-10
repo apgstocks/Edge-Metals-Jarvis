@@ -31,7 +31,7 @@ const ck = (n, c, extra) => {
 const section = (t) => console.log('\n=== ' + t + ' ===');
 
 const ROOT = path.join(__dirname, '..');
-const HTML = fs.readFileSync(path.join(ROOT, 'dashboard/index.html'), 'utf8');
+const HTML = require('../helpers/sourceParts').indexHtml();
 const SCRIPT = [...HTML.matchAll(/<script(?![^>]*src=)[^>]*>([\s\S]*?)<\/script>/g)].map((m) => m[1]).join('\n');
 
 // A store that can be made to throw, because localStorage does exactly that in

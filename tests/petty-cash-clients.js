@@ -23,7 +23,7 @@ const section = (t) => console.log('\n=== ' + t + ' ===');
 const ROOT = path.join(__dirname, '..');
 const CLIENTS = [
     ['app', fs.readFileSync(path.join(ROOT, 'mobile-app/www/index.html'), 'utf8')],
-    ['website', fs.readFileSync(path.join(ROOT, 'dashboard/index.html'), 'utf8')],
+    ['website', require('../helpers/sourceParts').indexHtml()],
 ];
 const pending = [];
 const nocomment = (t) => String(t).split('\n').filter((l) => !/^\s*\/\//.test(l)).join('\n');

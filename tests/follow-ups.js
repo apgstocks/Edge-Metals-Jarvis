@@ -114,7 +114,7 @@ section('E — they are offers, and nothing acts behind them');
     }
     // And the screen draws them as chips that ASK — they re-enter the normal
     // command path rather than doing anything themselves.
-    const dash = fs.readFileSync(path.join(ROOT, 'dashboard/index.html'), 'utf8');
+    const dash = require('../helpers/sourceParts').indexHtml();
     ck('the command centre draws them as chips', /class="bot-chip"/.test(dash));
     ck('  and a chip asks the question rather than acting',
         /data-ask=/.test(dash) && /sendBotCommand\(\);/.test(dash));

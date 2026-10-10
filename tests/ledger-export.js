@@ -386,7 +386,7 @@ section('E. the export menu, on the real screen');
     if (!JSDOM) {
         ck('jsdom is installed', false, 'the screen half cannot be tested — run npm install');
     } else {
-        const html = fs.readFileSync(path.join(ROOT, 'dashboard/index.html'), 'utf8');
+        const html = require('../helpers/sourceParts').indexHtml();
         const SCRIPT = [...html.matchAll(/<script(?![^>]*\bsrc=)[^>]*>([\s\S]*?)<\/script>/g)]
             .map((m) => m[1]).join('\n');
         const dom = new JSDOM(html, { runScripts: 'outside-only', url: 'http://localhost/' });

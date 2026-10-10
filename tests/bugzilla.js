@@ -182,7 +182,7 @@ section('E. it files itself — an unanswered question and a crash');
 
 section('F. the tab itself');
 {
-    const html = fs.readFileSync(R('dashboard/index.html'), 'utf8');
+    const html = require('../helpers/sourceParts').indexHtml();
     ck('the nav has a Bugzilla tab', /\{ id: 'bugzilla',\s+label: 'Bugzilla'/.test(html));
     ck('  it renders', /if \(tab === 'bugzilla'\) return renderBugzilla\(\);/.test(html) && /async function renderBugzilla\(\)/.test(html));
     // Staff keep their Edge-Yard-only sidebar (tests/page-headings.js), so

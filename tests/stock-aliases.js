@@ -323,7 +323,7 @@ section('H — the clients still ask about the NAME');
     // would teach her to click through a prompt whose real answer is "you
     // typed it differently", and the stock figure would stay wrong.
     for (const [label, file] of [['website', 'dashboard/index.html'], ['app', 'mobile-app/www/index.html']]) {
-        const src = fs.readFileSync(path.join(ROOT, file), 'utf8');
+        const src = file === 'dashboard/index.html' ? require('../helpers/sourceParts').indexHtml() : fs.readFileSync(path.join(ROOT, file), 'utf8');
         const fn = src.slice(src.indexOf('async function handleStockShort'),
                              src.indexOf('async function handleStockShort') + 3000).replace(/\/\/[^\n]*/g, '');
         ck(`${label}: the naming question is still asked`,

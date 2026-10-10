@@ -103,7 +103,7 @@ section('C — the WEBSITE is untouched');
     // She said "in app". A desktop browser has no soft keyboard, and blurring
     // there would break tab-through-the-form — a different screen, changed for
     // a reason that does not apply to it. Rule 1 of CLAUDE.md.
-    const DASH = fs.readFileSync(path.join(ROOT, 'dashboard/index.html'), 'utf8');
+    const DASH = require('../helpers/sourceParts').indexHtml();
     const DOCS = fs.readFileSync(path.join(ROOT, 'dashboard/documents.html'), 'utf8');
     ck('the dashboard has no blurPicked', !/blurPicked\(/.test(DASH));
     ck('  nor does documents.html', !/blurPicked\(/.test(DOCS));

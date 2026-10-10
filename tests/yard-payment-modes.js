@@ -60,7 +60,7 @@ const pay = require(path.join(ROOT, 'helpers/payments'));
 const petty = require(path.join(ROOT, 'helpers/pettyCash'));
 const banks = require(path.join(ROOT, 'helpers/banks'));
 
-const DASH = fs.readFileSync(path.join(ROOT, 'dashboard/index.html'), 'utf8');
+const DASH = require('../helpers/sourceParts').indexHtml();
 const APP = fs.readFileSync(path.join(ROOT, 'mobile-app/www/index.html'), 'utf8');
 
 // The <select id="pay_mode"> block, comments stripped. Comments are removed

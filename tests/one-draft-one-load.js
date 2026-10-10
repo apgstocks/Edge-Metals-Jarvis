@@ -300,7 +300,7 @@ section('F — both clients send it, and the server reads it');
         app    : path.join(ROOT, 'mobile-app/www/index.html'),
     };
     for (const [label, file] of Object.entries(files)) {
-        const src = fs.readFileSync(file, 'utf8');
+        const src = label === 'website' ? require('../helpers/sourceParts').indexHtml() : fs.readFileSync(file, 'utf8');
         ck(`${label}: the purchase payload carries the draft id`,
            /draft_id: currentDraftId,/.test(src),
            'saveTicket is per attempt; only currentDraftId identifies the piece of paper');

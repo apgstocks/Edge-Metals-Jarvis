@@ -82,7 +82,7 @@ const { createApi } = require(path.join(ROOT, 'api'));
 let JSDOM = null;
 try { ({ JSDOM } = require('jsdom')); } catch (e) { /* reported where it matters */ }
 
-const html = fs.readFileSync(path.join(ROOT, 'dashboard/index.html'), 'utf8');
+const html = require('../helpers/sourceParts').indexHtml();
 const SCRIPT = [...html.matchAll(/<script(?![^>]*\bsrc=)[^>]*>([\s\S]*?)<\/script>/g)]
     .map((m) => m[1]).join('\n');
 
@@ -553,7 +553,7 @@ if (!JSDOM) {
 if (JSDOM) {
     section('E — the two ledgers that already had a button');
 
-    const src = fs.readFileSync(path.join(ROOT, 'dashboard/index.html'), 'utf8');
+    const src = require('../helpers/sourceParts').indexHtml();
     ck('metalsCanDelete is still the one gate, unchanged',
        /function metalsCanDelete\(\) \{\s*return IS_SUPER === true;\s*\}/.test(src),
        'the new buttons reuse it rather than inventing a second rule');

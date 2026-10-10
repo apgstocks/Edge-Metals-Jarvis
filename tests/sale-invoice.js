@@ -1118,7 +1118,7 @@ section('I. the three screens');
         ck('jsdom is installed so the screen can be rendered', false,
            'this is NOT a pass — run npm install');
     } else {
-        const pageHtml = fs.readFileSync(R('dashboard/index.html'), 'utf8');
+        const pageHtml = require('../helpers/sourceParts').indexHtml();
         const SCRIPT = (pageHtml.match(/<script>([\s\S]*?)<\/script>/g) || [])
             .map((b) => b.replace(/^<script>/, '').replace(/<\/script>$/, '')).join('\n');
 

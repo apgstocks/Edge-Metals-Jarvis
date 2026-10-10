@@ -494,7 +494,7 @@ section('J — BOTH SCREENS, AND THEY AGREE');
         app: path.join(ROOT, 'mobile-app/www/index.html'),
     };
     for (const [who, file] of Object.entries(CLIENTS)) {
-        const src = fs.readFileSync(file, 'utf8');
+        const src = who === 'website' ? require('../helpers/sourceParts').indexHtml() : fs.readFileSync(file, 'utf8');
 
         ck(`${who}: credit shows inside the Pay modal`, /id="payPrepayBox"/.test(src));
         ck(`${who}: with an Apply control`, /id="btnApplyPrepay"/.test(src));
@@ -549,7 +549,7 @@ section('J — BOTH SCREENS, AND THEY AGREE');
     // ── AND THE TWO DO NOT DRIFT ─────────────────────────────────────────
     // form-parity.js exists because these two screens have drifted before.
     // This is the same rule for the three functions this feature added.
-    const a = fs.readFileSync(CLIENTS.website, 'utf8');
+    const a = require('../helpers/sourceParts').indexHtml();
     const b = fs.readFileSync(CLIENTS.app, 'utf8');
     const grab = (src, marker) => {
         const i = src.indexOf(marker);

@@ -284,7 +284,7 @@ section('E. the phone does the same thing');
     for (const [who, f] of Object.entries({ documents: 'dashboard/documents.html',
                                             dashboard: 'dashboard/index.html',
                                             app: 'mobile-app/www/index.html' })) {
-        const src = fs.readFileSync(path.join(ROOT, f), 'utf8');
+        const src = f === 'dashboard/index.html' ? require('../helpers/sourceParts').indexHtml() : fs.readFileSync(path.join(ROOT, f), 'utf8');
         ck(`${who}'s api() carries every field the route sent`,
            /for \(const k of Object\.keys\(data \|\| \{\}\)\)/.test(src),
            'a route\'s structured extras would arrive nowhere, silently');

@@ -388,7 +388,7 @@ section('I — the app and the website agree');
     // shipped broken to the one nobody tested. Both files, every time.
     const CLIENTS = [
         ['app', fs.readFileSync(path.join(ROOT, 'mobile-app/www/index.html'), 'utf8')],
-        ['website', fs.readFileSync(path.join(ROOT, 'dashboard/index.html'), 'utf8')],
+        ['website', require('../helpers/sourceParts').indexHtml()],
     ];
     // Comments are stripped before matching — a comment describing the thing
     // being asserted has passed this kind of check four times in this repo.
@@ -447,7 +447,7 @@ section('I — the app and the website agree');
     const appSrc = fs.readFileSync(path.join(ROOT, 'mobile-app/www/index.html'), 'utf8');
     const resign = nocomment(grab(appSrc, 'loadIsResignable'));
     ck('app: re-sign is offered to Jarvis', /if \(IS_SUPER\) return true;/.test(resign));
-    const site = fs.readFileSync(path.join(ROOT, 'dashboard/index.html'), 'utf8');
+    const site = require('../helpers/sourceParts').indexHtml();
     ck('  and the website genuinely has no signing to mirror', !/seller_signature/.test(site),
        'if this ever fails, the website grew a signature pad and needs the same rule');
 

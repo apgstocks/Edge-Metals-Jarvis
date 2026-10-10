@@ -106,7 +106,7 @@ function scan(src) {
 section('A — no comment leaks into the page');
 // ══════════════════════════════════════════════════════════════════════════
 for (const f of FILES) {
-    const src = fs.readFileSync(path.join(ROOT, f), 'utf8');
+    const src = f === 'dashboard/index.html' ? require('../helpers/sourceParts').indexHtml() : fs.readFileSync(path.join(ROOT, f), 'utf8');
     const r = scan(src);
     ck(`${f}: every "-->" closes a comment`, r.strays.length === 0,
        r.strays.map((s) => `line ${s.line}: …${s.text} -->`).join('\n        ')
@@ -122,7 +122,7 @@ section('B — and none of them is one step away from leaking');
 // comment carrying one is not broken today and breaks the moment anyone adds
 // a ">" after it, or reflows the paragraph.
 for (const f of FILES) {
-    const src = fs.readFileSync(path.join(ROOT, f), 'utf8');
+    const src = f === 'dashboard/index.html' ? require('../helpers/sourceParts').indexHtml() : fs.readFileSync(path.join(ROOT, f), 'utf8');
     const r = scan(src);
     const risky = r.comments.filter((c) => /--/.test(c.body));
     ck(`${f}: no run of hyphens inside a comment`, risky.length === 0,

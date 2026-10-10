@@ -183,7 +183,7 @@ function clientChecks() {
             { load_id: 'EDGE_01', date: '2026-08-10', seller: 'Acme', pdf_link: 'https://d/1', description: 'Sealed Units', gross_weight: 1000, tare_weight: 100, net_weight: 900, price: 0.5, amount: 450, unit: 'lb' },
         ] };
 
-    const html = fs.readFileSync(path.join(ROOT, 'dashboard/index.html'), 'utf8');
+    const html = require('../helpers/sourceParts').indexHtml();
     const errs = []; const vc = new VirtualConsole(); vc.on('jsdomError', (e) => errs.push(e.message));
     let opened = null;
     const dom = new JSDOM(html, { runScripts: 'dangerously', virtualConsole: vc, url: 'https://edge.local/', pretendToBeVisual: true,
@@ -251,7 +251,7 @@ function clientChecks() {
 // correct was never the problem.
 section('G — a paint path without wiring is a dead feature');
 for (const [name, file] of [['app', 'mobile-app/www/index.html'], ['website', 'dashboard/index.html']]) {
-    const src = fs.readFileSync(path.join(ROOT, file), 'utf8');
+    const src = file === 'dashboard/index.html' ? require('../helpers/sourceParts').indexHtml() : fs.readFileSync(path.join(ROOT, file), 'utf8');
 
     ck(`${name}: the wiring is one shared function`, /function wireInvLineToggles\(from, to\)/.test(src),
        'inline copies are how one path keeps it and another quietly does not');

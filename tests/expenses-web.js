@@ -32,7 +32,7 @@ const ck = (label, ok, detail) => {
 const section = (t) => console.log('\n=== ' + t + ' ===');
 
 const ROOT = path.join(__dirname, '..');
-const HTML = fs.readFileSync(path.join(ROOT, 'dashboard/index.html'), 'utf8');
+const HTML = require('../helpers/sourceParts').indexHtml();
 
 const EXPENSES = {
     ok: true,
@@ -99,7 +99,7 @@ section('A — the tab is reachable and lists what was spent');
     // that. So it is read from source rather than off the window, where it
     // was undefined and two assertions failed for a reason that had nothing
     // to do with the tab.
-    const src = fs.readFileSync(path.join(ROOT, 'dashboard/index.html'), 'utf8');
+    const src = require('../helpers/sourceParts').indexHtml();
     // Was a grep for the whole entry verbatim, group name included. It broke
     // the day the sidebar was regrouped by company ('Yard' → 'Edge Yard') —
     // a purely visual change that has nothing to do with whether the Expenses
@@ -121,7 +121,7 @@ section('A — the tab is reachable and lists what was spent');
     // assertion still passed.
     ck('  and clicking it actually reaches the tab',
        /if \(tab === 'expenses'\) return renderExpensesTab\(\);/
-         .test(fs.readFileSync(path.join(ROOT, 'dashboard/index.html'), 'utf8')),
+         .test(require('../helpers/sourceParts').indexHtml()),
        'defined but unrouted is the shape that passed every grep');
 
     await w.renderExpensesTab();

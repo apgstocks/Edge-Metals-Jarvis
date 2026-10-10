@@ -13,7 +13,7 @@
 // this tests the shipped logic rather than a paraphrase of it.
 const fs=require('fs');
 const path=require('path');
-const src=fs.readFileSync(path.join(__dirname,'..','dashboard','index.html'),'utf8');
+const src=require('../helpers/sourceParts').indexHtml();
 const grab=(name)=>{ const i=src.indexOf('function '+name+'('); if(i<0) throw new Error('not found: '+name);
   let d=0,j=src.indexOf('{',i); for(let k=j;k<src.length;k++){ if(src[k]==='{')d++; else if(src[k]==='}'){d--; if(!d) return src.slice(i,k+1);} } };
 const itemHasContent=eval('('+grab('itemHasContent')+')');

@@ -36,7 +36,7 @@ const section = (t) => console.log('\n=== ' + t + ' ===');
 
 const ROOT = path.join(__dirname, '..');
 const DASH = path.join(ROOT, 'dashboard');
-const INDEX = fs.readFileSync(path.join(DASH, 'index.html'), 'utf8');
+const INDEX = require('../helpers/sourceParts').indexHtml();
 const SIDEBAR = fs.readFileSync(path.join(DASH, 'sidebar.js'), 'utf8');
 
 const evalLit = (txt) => { try { return eval('(' + txt + ')'); } catch (e) { return undefined; } };

@@ -429,7 +429,7 @@ section('H — the tab switch paints from cache, then corrects itself');
 section('I — the yard assistant, and every overlay, survive a session expiry');
 {
     const appSrc = fs.readFileSync(path.join(ROOT, 'mobile-app/www/index.html'), 'utf8');
-    const siteSrc = fs.readFileSync(path.join(ROOT, 'dashboard/index.html'), 'utf8');
+    const siteSrc = require('../helpers/sourceParts').indexHtml();
 
     // Apsara 2026-09-03: "my yard assistant is missing now ... post restart."
     // It was not the code — the bubble mounts and un-hides correctly in both
@@ -483,7 +483,9 @@ section('J — boot() finishes and paints a navigation');
     // to be.
     const { JSDOM, VirtualConsole } = require('jsdom');
     for (const [label, dir] of [['website', 'dashboard'], ['app', 'mobile-app/www']]) {
-        const html = fs.readFileSync(path.join(ROOT, dir, 'index.html'), 'utf8');
+        const html = dir === 'dashboard'
+            ? require('../helpers/sourceParts').indexHtml()
+            : fs.readFileSync(path.join(ROOT, dir, 'index.html'), 'utf8');
         const errors = [];
         const vc = new VirtualConsole();
         vc.on('jsdomError', (e) => {
@@ -541,7 +543,9 @@ section('J — boot() finishes and paints a navigation');
 section('K — modal wiring cannot take the page down again');
 {
     for (const [label, dir] of [['website', 'dashboard'], ['app', 'mobile-app/www']]) {
-        const src = fs.readFileSync(path.join(ROOT, dir, 'index.html'), 'utf8');
+        const src = dir === 'dashboard'
+            ? require('../helpers/sourceParts').indexHtml()
+            : fs.readFileSync(path.join(ROOT, dir, 'index.html'), 'utf8');
         const nc = src.split('\n').filter((l) => !/^\s*(\/\/|\*|<!--)/.test(l)).join('\n');
         // Not called at boot any more — that ordering is the bug.
         const bootBlock = label === 'website'

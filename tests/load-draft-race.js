@@ -54,7 +54,7 @@ const grabFrom = (src, name) => {
 
 (async () => {
 for (const file of ['dashboard/index.html', 'mobile-app/www/index.html']) {
-    const src = fs.readFileSync(path.join(ROOT, file), 'utf8');
+    const src = file === 'dashboard/index.html' ? require('../helpers/sourceParts').indexHtml() : fs.readFileSync(path.join(ROOT, file), 'utf8');
     const fnSrc = grabFrom(src, 'clearLoadDraft');
     console.log(`\n=== ${file} ===`);
 

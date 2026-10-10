@@ -47,7 +47,7 @@ process.env.JARVIS_TEST = '1';
 const ROOT = path.join(__dirname, '..');
 const cfg = require(path.join(ROOT, 'config'));
 
-const DASH = fs.readFileSync(path.join(ROOT, 'dashboard/index.html'), 'utf8');
+const DASH = require('../helpers/sourceParts').indexHtml();
 const APP  = fs.readFileSync(path.join(ROOT, 'mobile-app/www/index.html'), 'utf8');
 
 // 30,000 lb is a real load size. At $0.36/lb it is $10,800; the same metal at

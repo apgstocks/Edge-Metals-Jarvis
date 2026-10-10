@@ -431,7 +431,7 @@ section('G. two names she says are the same');
 // The helper being right proves nothing about whether the panel can reach it.
 section('H. the panel can say it');
 {
-    const src = fs.readFileSync(path.join(ROOT, 'dashboard/index.html'), 'utf8');
+    const src = require('../helpers/sourceParts').indexHtml();
     const panel = src.slice(src.indexOf('async function openNameCleanup'),
                             src.indexOf('// ── IMPORTING A SHIPMENTS WORKBOOK'));
     // NOT named smFrom/smTo: tests/mobile-layout.js requires every field whose
