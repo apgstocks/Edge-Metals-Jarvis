@@ -361,8 +361,7 @@ section('F. only the rendering is serialised');
        'the queue reached the HTTP layer, and now logins and downloads serialise too');
 
     for (const [file, fn] of [['helpers/bolPdf.js', 'generateBolPdf'],
-                              ['helpers/proformaPdf.js', 'generateProformaDc2Pdf'],
-                              ['helpers/invoicePdf.js', 'renderModes']]) {
+                              ['helpers/proformaPdf.js', 'generateProformaDc2Pdf']]) {
         const src = fs.readFileSync(path.join(ROOT, file), 'utf8');
         // ── READ THE WRAPPER'S BODY, NOT THE WHOLE FILE ──────────────────
         // This was "does pdfQueue appear anywhere in this file", and a
@@ -380,6 +379,47 @@ section('F. only the rendering is serialised');
         ck(`  and ${fn} keeps an unqueued inner function`,
            new RegExp(`${fn}Unqueued`).test(src),
            'the body was inlined into the wrapper, so the slot covers the wrong span');
+    }
+
+    // ── renderModes IS QUEUED TWICE OVER, SINCE 2026-10-10 ───────────────
+    // It used to be checked by the same rule as the two above: the first
+    // thing the wrapper returns must be pdfQueue.run(. It no longer is, and
+    // that is the change rather than a regression — rendering moved into its
+    // own process (helpers/renderClient.js, render-server.js) so that one
+    // document could stop restarting the API for every customer.
+    //
+    // The PROPERTY is unchanged and is what matters: nothing reaches
+    // renderModesUnqueued without taking a slot somewhere. Both paths take
+    // one —
+    //
+    //   the render process   queues in render-server.js, beside the memory
+    //                        the job actually costs
+    //   falling back here    queues in this process, exactly as before
+    //
+    // so this reads the fallback rather than the first return. An early
+    // return above it still fails, which is the dead-code case the slicing
+    // above exists for.
+    {
+        const src = fs.readFileSync(path.join(ROOT, 'helpers/invoicePdf.js'), 'utf8');
+        const start = src.indexOf('async function renderModes(');
+        const body = start >= 0 ? src.slice(start, src.indexOf('\n}', start)) : '';
+        const afterFirstReturn = body.slice(body.indexOf('return')).trim();
+        ck('renderModes goes through the render process',
+           start >= 0 && afterFirstReturn.startsWith("return require('./renderClient').render("),
+           'helpers/invoicePdf.js renders without asking the render process first');
+        ck('  and its FALLBACK still takes a slot in this process',
+           /renderClient'\)\.render\(job, \(\) => require\('\.\/pdfQueue'\)\.run\(/.test(body),
+           'falling back would render unqueued — three people pressing Generate at once '
+           + 'would launch three Chromiums in the process that must stay up');
+        ck('  and renderModes keeps an unqueued inner function',
+           /renderModesUnqueued/.test(src),
+           'the body was inlined into the wrapper, so the slot covers the wrong span');
+        // The render process must queue too, or moving the work out moved the
+        // backpressure out with it.
+        const srv = fs.readFileSync(path.join(ROOT, 'render-server.js'), 'utf8');
+        ck('  and the render process queues on its own side',
+           /pdfQueue'\)\.run\(/.test(srv),
+           'the renderer would run every job at once and OOM itself');
     }
 
     // The packing list renders through invoicePdf's renderModes, so it is

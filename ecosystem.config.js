@@ -69,5 +69,46 @@ module.exports = {
         // itself (data/*.json is written constantly) would restart it in a
         // loop.
         watch: false,
+    }, {
+        // ── DOCUMENTS, IN A PROCESS OF THEIR OWN (2026-10-10) ────────────
+        // Apsara: "think like a production system", after an invoice
+        // download failed with a 30-second navigation timeout.
+        //
+        // Until this, the one process above held 275 HTTP routes, 34 cron
+        // jobs, the WhatsApp client and its Chromium, and every PDF render,
+        // under the 1500M cap. So one large document could cross the cap and
+        // restart ALL of it: the API for every customer, the WhatsApp
+        // session, 34 jobs mid-flight, and every queued document, since
+        // helpers/pdfQueue.js's line is an in-memory array.
+        //
+        // Now a document that goes wrong takes down documents. This entry is
+        // what makes that true.
+        //
+        // NOT STARTING IT IS SUPPORTED. helpers/renderClient.js falls back to
+        // rendering inside the main process whenever the socket is absent, so
+        // `pm2 delete jarvis-render` is a complete rollback and nothing
+        // breaks in between.
+        name: 'jarvis-render',
+        script: 'render-server.js',
+        cwd: __dirname,
+
+        autorestart: true,
+        exp_backoff_restart_delay: 1000,
+        max_restarts: 15,
+        min_uptime: '60s',
+
+        // Lower than jarvis's 1500M on purpose. This process holds Chromium
+        // and nothing else, so it should be restarted well before it can
+        // threaten the box the other process is living on — the restart costs
+        // one fallback render, which the client already handles.
+        max_memory_restart: '700M',
+
+        out_file: 'data/logs/render-out.log',
+        error_file: 'data/logs/render-error.log',
+        merge_logs: true,
+        time: true,
+
+        env: { NODE_ENV: 'production' },
+        watch: false,
     }],
 };

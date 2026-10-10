@@ -1139,10 +1139,48 @@ function buildInvoiceClassicHtml(data) {
 // invoice and the packing list (helpers/packingList.js calls renderModes),
 // so queueing here covers both. Tests that inject their own renderer never
 // reach this function and are unaffected. See helpers/pdfQueue.js.
+// The invoice's page, stated once. Its @page is 210mm x 297mm — real A4 —
+// and the fitter measures against that, not against the 816px width, which
+// is the box every one of these documents has always been laid out in.
+// Saying only the width let the height default to 297 by luck rather than by
+// statement, which is a different thing to rely on.
+const PAGE = { width: '816px', printBackground: true, preferCSSPageSize: true };
+const FIT = { pageHeightMm: 297, pageWidthMm: 210 };
+
 async function renderModes(html, modes, opts) {
-    return require('./pdfQueue').run(
+    // ── THE RENDER PROCESS, IF IT IS THERE ───────────────────────────────
+    // Apsara, 2026-10-10: "think like a production system."
+    //
+    // One pm2 process was carrying 275 routes, 34 crons, WhatsApp's Chromium
+    // and every render under a 1500M cap — so a single large document could
+    // restart the API for every customer and silently drop the whole queue.
+    // render-server.js owns Chromium now; this asks it.
+    //
+    // THE FALLBACK IS NOT OPTIONAL. No socket, a stale one, a timeout, a bad
+    // answer — helpers/renderClient.js ends every one of them by calling the
+    // function below, which is exactly the code that ran before today. So a
+    // renderer that is not installed, not started, or mid-restart behaves
+    // precisely as this did yesterday.
+    //
+    // The queue moved WITH the work: when the render process takes the job it
+    // queues there, beside the memory the job actually costs. Only the
+    // in-process path still queues here, which is what it has always done.
+    const job = {
+        html, modes,
+        // ── ONE DEFINITION, OR THE DOCUMENT DEPENDS ON WHICH PATH RAN ────
+        // These were about to exist twice: once here for the render process
+        // and once inside renderModesUnqueued for the in-process path. Two
+        // copies of a page setup means an invoice that is 816px wide down
+        // one path and something else down the other, and the only way to
+        // notice is a broker querying a document. PAGE and FIT are the
+        // single source; the wire carries them rather than the renderer
+        // knowing them.
+        pdfOptions: PAGE, fitOpts: FIT,
+        label: `invoice ${(modes || []).join('+')}`,
+    };
+    return require('./renderClient').render(job, () => require('./pdfQueue').run(
         () => renderModesUnqueued(html, modes, opts),
-        `invoice ${(modes || []).join('+')}`);
+        `invoice ${(modes || []).join('+')}`));
 }
 
 async function renderModesUnqueued(html, modes, opts) {
@@ -1182,15 +1220,11 @@ async function renderModesUnqueued(html, modes, opts) {
             // so each needs measuring on its own. Fitting once outside would
             // scale all three by whatever the longest one needed.
             const { pdfFittedToOnePage } = require('./pdfFit');
-            const pdf = await pdfFittedToOnePage(page, {
-                width: '816px',
-                printBackground: true,
-                preferCSSPageSize: true,
-                // Its @page is 210mm x 297mm — real A4 — and the fitter
-                // measures against that, not against the 816px width above.
-                // Saying only the width let it default to 297 by luck rather
-                // than by statement.
-            }, { pageHeightMm: 297, pageWidthMm: 210, timer, label: `invoice ${mode}` });
+            // PAGE and FIT, not a second copy of the same numbers — see the
+            // note in renderModes. The render process gets these over the
+            // wire from the very same constants.
+            const pdf = await pdfFittedToOnePage(page, PAGE,
+                { ...FIT, timer, label: `invoice ${mode}` });
             // Same Uint8Array -> Buffer gotcha documented in proformaPdf.js —
             // res.send() needs a real Buffer or it JSON-stringifies byte-by-byte.
             out[mode] = Buffer.from(pdf);
@@ -1251,4 +1285,5 @@ async function generateInvoiceClassicPdf(data, opts = {}) {
     return { invoice, packing };
 }
 
-module.exports = { buildInvoiceClassicHtml, generateInvoiceClassicPdf, renderModes, extractInvoiceHeader };
+module.exports = { buildInvoiceClassicHtml, generateInvoiceClassicPdf, renderModes,
+                   extractInvoiceHeader, PAGE, FIT };

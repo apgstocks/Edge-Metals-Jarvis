@@ -1230,6 +1230,59 @@ const MUTATIONS = [
       find: '        const shared = sharedBrowser();\n        if (shared) {',
       to:   '        const shared = null;\n        if (shared) {' },
 
+    // ── RENDERING IN ITS OWN PROCESS, 2026-10-10 ────────────────────────
+    // Apsara: "think like a production system." One pm2 process held 275
+    // routes, 34 crons, WhatsApp's Chromium and every render under a 1500M
+    // cap, so one large document could restart all of it and silently drop
+    // the whole queue.
+    //
+    // THE FALLBACK IS THE SAFETY. Splitting the process must not turn a slow
+    // invoice into a missing one, so every one of these removes a way back.
+    { name: 'render: a missing render process fails instead of rendering here',
+      file: 'helpers/renderClient.js', suites: ['render-client'],
+      find: "    if (!available()) { note('no-socket'); return inProcess(); }",
+      to:   "    if (!available()) { throw new Error('no render process'); }" },
+    { name: 'render: a wedged renderer is waited on for ever',
+      file: 'helpers/renderClient.js', suites: ['render-client'],
+      find: '        req.setTimeout(TIMEOUT_MS, () => { req.destroy(new Error(`render process did not answer in ${TIMEOUT_MS}ms`)); });',
+      to:   '        ;' },
+    { name: 'render: a failed render is rethrown instead of falling back',
+      file: 'helpers/renderClient.js', suites: ['render-client'],
+      find: '        console.warn(`[RENDER] falling back to in-process (${why}): ${e.message}`);\n        return inProcess();',
+      to:   '        console.warn(`[RENDER] falling back to in-process (${why}): ${e.message}`);\n        throw e;' },
+    // A renderer that answers 500, or answers nonsense after a half-finished
+    // deploy, must be treated as a failure — not as a document.
+    { name: 'render: a 500 from the renderer is accepted as a document',
+      file: 'helpers/renderClient.js', suites: ['render-client'],
+      find: '                if (res.statusCode !== 200) {',
+      to:   '                if (false) {' },
+    { name: 'render: an answer with no pdfs in it is accepted',
+      file: 'helpers/renderClient.js', suites: ['render-client'],
+      find: '                if (!parsed || !parsed.ok || !parsed.pdfs) {',
+      to:   '                if (false) {' },
+    // The label is the diagnosis. A stale socket reported as a refusal sends
+    // whoever reads the log looking for a renderer that is running.
+    { name: 'render: a stale socket is misreported as a refusal',
+      file: 'helpers/renderClient.js', suites: ['render-client'],
+      find: "            : /ECONNREFUSED|ENOENT|EPIPE|ECONNRESET|socket hang up/.test(e.message) ? 'stale-socket'",
+      to:   "            : /ECONNREFUSED|ENOENT/.test(e.message) ? 'stale-socket'" },
+    // A caller that forgets its fallback has quietly made the render process
+    // a single point of failure for its document.
+    { name: 'render: a caller may render with no fallback at all',
+      file: 'helpers/renderClient.js', suites: ['render-client'],
+      find: "    if (typeof inProcess !== 'function') {",
+      to:   "    if (false) {" },
+    { name: 'render: the off switch stops working',
+      file: 'helpers/renderClient.js', suites: ['render-client'],
+      find: "    if (process.env.RENDER_IN_PROCESS === '1') { note('disabled'); return inProcess(); }",
+      to:   "    ;" },
+    // The page setup must come from ONE definition or the document depends on
+    // which path rendered it.
+    { name: 'render: the wire carries its own copy of the page setup',
+      file: 'helpers/invoicePdf.js', suites: ['render-client'],
+      find: '        pdfOptions: PAGE, fitOpts: FIT,',
+      to:   "        pdfOptions: { width: '816px', printBackground: true, preferCSSPageSize: true },\n        fitOpts: { pageHeightMm: 297, pageWidthMm: 210 }," },
+
     // ── "i want everything to handle fast-its a quick business" ─────────
     // The queue ran ONE document at a time because each used to launch its own
     // 300–400MB Chromium. Documents became TABS on 2026-10-03 and the limit
