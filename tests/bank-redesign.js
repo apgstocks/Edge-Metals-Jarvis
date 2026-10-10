@@ -365,6 +365,17 @@ const bal = (entity, account) => {
     const d = await req('DELETE', '/api/bank/rules', { sid, body: { text: 'WIRE IN FEE', direction: 'out' } });
     ck('deleting the rule works', d.status === 200);
     ck('  and leaves what it set aside where it is', ledger.list().find((x) => x.id === 'FEE-1').excluded === true);
+
+    // The Set aside tab lists each line, with its reason, and Put back works.
+    const sa = await req('GET', '/api/bank/set-aside', { sid });
+    const feeRow = (sa.json.rows || []).find((x) => x.id === 'FEE-1');
+    ck('the set-aside route lists each line', sa.status === 200 && sa.json.count === 2 && !!feeRow, sa.raw.slice(0, 300));
+    ck('  with the reason and the money', feeRow && /rule "WIRE IN FEE"/.test(feeRow.reason) && feeRow.amount === 15 && feeRow.direction === 'out');
+    const ranged = await req('GET', '/api/bank/set-aside?from=2026-09-15&to=2026-09-30', { sid });
+    ck('  and respects the dates', ranged.json.count === 1 && ranged.json.rows[0].id === 'FEE-2', JSON.stringify(ranged.json.rows));
+    const back = await req('POST', '/api/bank/include', { sid, body: { id: 'FEE-1' } });
+    ck('Put back returns the line to the queue', back.status === 200 && !ledger.list().find((x) => x.id === 'FEE-1').excluded
+       && !((await req('GET', '/api/bank/set-aside', { sid })).json.rows || []).some((x) => x.id === 'FEE-1'));
 }
 
 {
@@ -418,7 +429,17 @@ server.close();
     const HTML = fs.readFileSync(path.join(ROOT, 'dashboard/bank-match.html'), 'utf8');
     const urls = [];
     const RESP = {
-        '/api/bank/match': { rows: [], counts: { deposits: 0 }, totals: {}, ledger: { excluded: { count: 0 }, pending: { count: 0 } }, feed: 'bank-transactions.json', modes: ['Wire'], banks: ['BofA'] },
+        '/api/bank/match': { rows: [
+            { deposit: { id: 'D1', date: '2026-10-08', amount: 24850, descriptor: 'WIRE IN CUSTOMER A', bank_guess: 'BofA' }, party: 'Customer A', outcome: 'proposed', ambiguous: false,
+              proposals: [{ kind: 'exact', score: 0.99, allocations: [{ doc_id: 'S1', label: 'EM-0412 (Auto Cast)', amount: 24850, shortfall: 0, clears: true }], reasons: ['one invoice, to the cent'] }] },
+            { deposit: { id: 'D2', date: '2026-10-07', amount: 9700, descriptor: 'WIRE IN CUSTOMER E', bank_guess: 'BofA' }, party: 'Customer E', outcome: 'proposed', ambiguous: false,
+              proposals: [{ kind: 'exact', score: 0.9, allocations: [{ doc_id: 'S2', label: 'EM-0420', amount: 9700, shortfall: 300, clears: true }], reasons: ['short'] }] },
+            { deposit: { id: 'D3', date: '2026-10-05', amount: 3400, descriptor: 'DEPOSIT REF 88213' }, outcome: 'no_party', ambiguous: false, proposals: [], suggestions: [] },
+            { deposit: { id: 'D4', date: '2026-10-04', amount: 10000, descriptor: 'WIRE IN C TRADING', bank_guess: 'BofA' }, party: 'Customer C', outcome: 'proposed', ambiguous: false,
+              proposals: [{ kind: 'partial', score: 0.9, allocations: [{ doc_id: 'S3', label: 'EM-0388', amount: 10000, shortfall: 0, clears: false, leaves: 5200 }], reasons: ['part'] }] }],
+          counts: { deposits: 4, confident: 2, no_party: 1 }, totals: { confident: 34550, needs_you: 3400 }, open_invoices: 6, customers_with_open: 5,
+          ledger: { excluded: { count: 1, money: 15 }, pending: { count: 0 } }, feed: 'bank-transactions.json', modes: ['Wire'], banks: ['BofA'] },
+        '/api/bank/set-aside': { count: 1, money: 15, rows: [{ id: 'F1', date: '2026-10-04', desc: 'WIRE IN FEE <i>', amount: 15, direction: 'out', reason: 'Bank charge — rule "WIRE IN FEE"' }] },
         '/api/bank/overview': { accounts: [
             { key: 'a', company: 'Edge Metals', bank: 'Bank of America', mask: '3301', linked: true, item_id: 'item-1', institution: 'Bank of America', last_sync_at: '2026-10-08T05:45:00Z', needs_login: null, balance: 148320.55, balance_as_of: '2026-10-08T05:45:00Z', in: 0, out: 0, rows: 0 },
             { key: 'b', company: 'Edge Yard', bank: 'Chase', mask: '4410', linked: true, item_id: 'item-2', institution: 'Chase', needs_login: { code: 'ITEM_LOGIN_REQUIRED' }, balance: null, in: 100, out: 50, rows: 2 }],
@@ -444,6 +465,9 @@ server.close();
     await new Promise((r) => setTimeout(r, 60));
     const d = dom.window.document;
     const y = new Date().getFullYear() - 1;
+    ck('the time frames are a dropdown, showing the remembered one',
+       d.getElementById('preset').tagName === 'SELECT' && d.getElementById('preset').value === 'lastyear'
+       && [...d.querySelectorAll('#preset option')].map((o) => o.value).join(',') === 'all,month,lastmonth,year,lastyear,custom');
     ck('a remembered preset is applied to the date boxes', d.getElementById('from').value === `${y}-01-01` && d.getElementById('to').value === `${y}-12-31`);
     ck('  and sent to every bank read', ['/api/bank/match', '/api/bank/review', '/api/bank/reconcile', '/api/bank/overview', '/api/intercompany/transfers']
        .every((p) => urls.some((u) => u.startsWith(p + '?') && u.includes(`from=${y}-01-01`) && u.includes(`to=${y}-12-31`))), urls.join(' '));
@@ -451,7 +475,9 @@ server.close();
     const accts = d.getElementById('accounts').textContent;
     ck('account cards: company, bank, mask, balance', /Edge Metals/.test(accts) && /••3301/.test(accts) && /\$148,320\.55/.test(accts), accts.slice(0, 200));
     ck('  the Chase card says it needs signing in', /Needs you to sign in/.test(accts));
-    ck('  AAA Investment is shown as not set up', /AAA Investment/.test(accts) && /Not set up/.test(accts));
+    // A slim line under the cards since 2026-10-10, not a card of its own.
+    const miss = d.getElementById('missing').textContent;
+    ck('  AAA Investment is shown as not set up', /AAA Investment/.test(miss) && /Not set up/.test(miss), miss);
     ck('the repair banner offers Sign in again on THAT bank', !!d.querySelector('#repair [data-plaid="reconnect"][data-item="item-2"]'));
     ck('  and so does the feed panel', !!d.querySelector('#feed [data-plaid="reconnect"][data-item="item-2"]'));
     ck('coming in is shown, with names escaped', /\$10,000\.00/.test(d.getElementById('coming').textContent)
@@ -470,7 +496,8 @@ server.close();
 
     // Picking a preset reloads with that range; a From after To is refused.
     urls.length = 0;
-    d.querySelector('[data-preset="all"]').click();
+    d.getElementById('preset').value = 'all';
+    d.getElementById('preset').dispatchEvent(new dom.window.Event('change'));
     await new Promise((r) => setTimeout(r, 30));
     ck('"All dates" sends no range', urls.some((u) => u === '/api/bank/match') && !urls.some((u) => u.includes('from=')), urls.join(' '));
     urls.length = 0;
@@ -491,8 +518,41 @@ server.close();
     d.querySelector('[data-tab="recon"]').click();
     ck('tabs switch panes', d.querySelector('[data-pane="recon"]').hidden === false && d.querySelector('[data-pane="review"]').hidden === true);
 
+    // ── the round-2 layout (2026-10-10, "build everything") ──
+    const r1 = d.querySelector('#list .row[data-i="0"]'), r2 = d.querySelector('#list .row[data-i="1"]'), r3 = d.querySelector('#list .row[data-i="2"]');
+    ck('each deposit is one collapsed line', r1 && !r1.classList.contains('open') && !!r1.querySelector('.sum') && !!r1.querySelector('.detail'));
+    ck('  the line says what Jarvis thinks and the amount', /Pays EM-0412/.test(r1.querySelector('.sum').textContent)
+       && /\$24,850\.00/.test(r1.querySelector('.sum .amt').textContent), r1.querySelector('.sum').textContent);
+    ck('  a clean, sure row can be confirmed from the line', !!r1.querySelector('.sum [data-confirm]'));
+    ck('  a short row cannot — its line button opens it, because the fee-or-discount question comes first',
+       !r2.querySelector('.sum [data-confirm]') && !!r2.querySelector('.sum [data-open]') && /short \$300\.00/.test(r2.querySelector('.sum').textContent));
+    ck('  nor can a part payment', (() => { const rr = d.querySelector('#list .row[data-i="3"]'); return rr && !rr.querySelector('.sum [data-confirm]') && /leaves/.test(rr.querySelector('.sum').textContent); })());
+    ck('  an unknown payer\'s line says Name payer', /Name payer/.test(r3.querySelector('.sum').textContent));
+    r1.querySelector('.sum .who').click();
+    ck('clicking the line opens the row', r1.classList.contains('open') && r1.querySelector('.sum').getAttribute('aria-expanded') === 'true');
+    r1.querySelector('.sum .who').click();
+    ck('  and again closes it', !r1.classList.contains('open'));
+    r2.querySelector('[data-open]').click();
+    ck('  Review opens it too', r2.classList.contains('open'));
+    const chipsTxt = d.getElementById('chips').textContent;
+    ck('the summary line keeps the counts but drops the repeats', /2 ready/.test(chipsTxt) && /1 excluded/.test(chipsTxt)
+       && !/open invoices/.test(chipsTxt) && !/reload/i.test(chipsTxt), chipsTxt);
+    ck('  and Reload moved to the header', !!d.querySelector('header [data-reload]'));
+    ck('coming in is one closed line until opened', d.querySelector('#coming details.coming') && !d.querySelector('#coming details').open
+       && /oldest 75 days/.test(d.getElementById('coming').textContent));
+    const card0 = d.querySelector('#accounts .acct');
+    ck('every account card shows in and out first, balance as a second line',
+       /in\s*\$0\.00/.test(card0.querySelector('.big').textContent) && /Balance \$148,320\.55/.test(card0.querySelector('.bal').textContent));
+    ck('a money-out line that would create a record shows a muted label, not a box',
+       !!d.querySelector('#review .sum .needs') && !d.querySelector('#review .chip'));
+    const aside = d.getElementById('asidelist');
+    ck('Set aside lists each line with its reason, escaped', /rule "WIRE IN FEE"/.test(aside.textContent) && !aside.querySelector('i'));
+    aside.querySelector('[data-include="F1"]').click();
+    await new Promise((r) => setTimeout(r, 30));
+    ck('  and Put back posts to the include route', posted.some((p) => p.u === '/api/bank/include' && p.body.id === 'F1'));
+
     // Every new route has a caller on this page.
-    for (const u of ['/api/bank/overview', '/api/bank/rules', '/api/plaid/reconnected', '/api/intercompany/transfers']) {
+    for (const u of ['/api/bank/overview', '/api/bank/rules', '/api/plaid/reconnected', '/api/intercompany/transfers', '/api/bank/set-aside', '/api/bank/include']) {
         ck(`the page calls ${u}`, HTML.includes(`'${u}'`));
     }
     ck('  including DELETE on transfers and rules',

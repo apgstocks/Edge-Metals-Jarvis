@@ -41,10 +41,7 @@ header h1{font-size:22px;margin-right:4px}
 .range label{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--text-muted)}
 .range input[type=date]{background:var(--surface-sunken);border:1px solid var(--border-default);color:var(--text-strong);border-radius:4px;height:34px;padding:0 8px;font:500 13px var(--font-mono);color-scheme:dark;cursor:pointer}
 .range input[type=date]:hover{border-color:var(--steel-500)}
-.presets{display:flex;gap:4px;flex-wrap:wrap}
-.preset{height:30px;padding:0 10px;border-radius:15px;border:1px solid var(--border-default);background:transparent;color:var(--text-body);font-size:12.5px;font-weight:600}
-.preset:hover{border-color:var(--steel-400)}
-.preset.on{background:var(--leaf-600);border-color:var(--leaf-600);color:#fff}
+.preset-sel{height:34px;padding:0 10px;font-weight:600;font-size:13px;color:var(--text-strong);cursor:pointer}
 .hdr-right{margin-left:auto;display:flex;gap:8px;align-items:center}
 
 main{padding:16px 20px 60px;max-width:1240px;margin:0 auto}
@@ -56,7 +53,14 @@ main{padding:16px 20px 60px;max-width:1240px;margin:0 auto}
 .acct .co{font-family:var(--font-mono);font-size:9.5px;font-weight:600;letter-spacing:.12em;text-transform:uppercase;color:var(--copper-300)}
 .acct .bk{color:var(--text-strong);font-weight:700;font-size:14px;margin-top:2px}
 .acct .bk .mask{font-family:var(--font-mono);color:var(--text-muted);font-weight:500}
-.acct .big{font-family:var(--font-mono);font-size:19px;color:var(--text-strong);font-weight:600;margin-top:6px}
+.acct .big{font-family:var(--font-mono);font-size:15px;color:var(--text-strong);font-weight:600;margin-top:8px;display:flex;gap:14px;flex-wrap:wrap}
+.acct .big .i{color:var(--leaf-300)}
+.acct .big small{display:block;font:500 9.5px var(--font-mono);letter-spacing:.1em;text-transform:uppercase;color:var(--text-faint)}
+.acct .bal{font-size:12px;color:var(--text-body);margin-top:6px}
+.acct .bal b{font-family:var(--font-mono);color:var(--text-strong)}
+.missing{display:flex;gap:10px;align-items:center;flex-wrap:wrap;font-size:12.5px;color:var(--text-muted);border:1px dashed var(--border-default);border-radius:6px;padding:8px 12px;margin:-2px 0 12px}
+.missing b{color:var(--text-body)}
+.missing .pill{margin-top:0}
 .acct .sub{font-size:12px;color:var(--text-muted);margin-top:2px}
 .pill{display:inline-block;margin-top:8px;font-size:11px;font-weight:600;padding:2px 9px;border-radius:10px}
 .pill.ok{background:rgba(61,168,54,.16);color:var(--leaf-300)}
@@ -68,7 +72,13 @@ main{padding:16px 20px 60px;max-width:1240px;margin:0 auto}
 .repair .s{color:var(--text-body);font-size:12.5px}
 .btn.amber{background:var(--amber-500);border-color:var(--amber-500);color:#0C0E10;font-weight:700}
 
-.coming{display:flex;gap:10px;align-items:center;flex-wrap:wrap;background:var(--surface-sunken);border:1px solid var(--border-subtle);border-radius:6px;padding:10px 14px;margin-bottom:14px}
+.coming{background:var(--surface-sunken);border:1px solid var(--border-subtle);border-radius:6px;margin-bottom:14px}
+.coming summary{display:flex;gap:10px;align-items:center;flex-wrap:wrap;padding:10px 14px;cursor:pointer;list-style:none}
+.coming summary::-webkit-details-marker{display:none}
+.coming summary .more{margin-left:auto;font-size:12px;color:var(--text-muted)}
+.coming summary .more::after{content:' ▸'}
+.coming[open] summary .more::after{content:' ▾'}
+.coming .invs{display:flex;gap:6px;flex-wrap:wrap;padding:0 14px 12px}
 .coming .ttl{font-family:var(--font-mono);font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:var(--text-muted)}
 .coming .tot{font-family:var(--font-mono);color:var(--text-strong);font-weight:600}
 .coming .inv{font-size:12px;color:var(--text-body);border:1px solid var(--border-default);border-radius:12px;padding:2px 9px;white-space:nowrap}
@@ -89,12 +99,20 @@ main{padding:16px 20px 60px;max-width:1240px;margin:0 auto}
 .keys{font-size:11px;color:var(--text-faint)}
 .keys kbd{font-family:var(--font-mono);border:1px solid var(--border-default);border-bottom-width:2px;border-radius:3px;padding:0 4px;font-size:10.5px;color:var(--text-muted)}
 
-.chips{display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-bottom:12px}
+/* Status chips stay boxed where they label a thing (feed panel, Bank vs
+   books). The summary line above the queue is plain sentence text: the same
+   figures, readable at a glance instead of nine boxes in capitals. */
 .chip{font-family:var(--font-mono);font-size:10.5px;letter-spacing:.06em;text-transform:uppercase;padding:3px 7px;border-radius:3px;border:1px solid var(--border-default);color:var(--text-muted);background:var(--surface-sunken);white-space:nowrap}
 .chip.on{color:var(--leaf-300);border-color:var(--leaf-600);background:rgba(87,190,73,.10)}
 .chip.warn{color:var(--amber-500);border-color:#5a4416;background:rgba(217,154,43,.10)}
 .chip.bad{color:var(--red-500);border-color:#5c2a22;background:rgba(197,64,47,.10)}
 .chip.act{cursor:pointer} .chip.act:hover{border-color:var(--text-body);color:var(--text-body)}
+.chips{display:flex;gap:4px 0;flex-wrap:wrap;align-items:center;margin-bottom:12px;font-size:12.5px;color:var(--text-muted)}
+.chips .chip{font:inherit;letter-spacing:0;text-transform:none;border:0;background:none;padding:0;color:inherit}
+.chips .chip+.chip::before{content:'·';margin:0 8px;color:var(--steel-500);display:inline-block;text-decoration:none}
+.chips .chip.on{color:var(--leaf-300)} .chips .chip.warn{color:var(--amber-300)} .chips .chip.bad{color:#f0a196}
+.chips .chip.act{text-decoration:underline;text-decoration-color:var(--steel-500);text-underline-offset:3px}
+.chips .chip.act:hover{color:var(--text-strong)}
 
 /* ── rows ───────────────────────────────────────────────────────────── */
 .card{background:var(--surface-card);border:1px solid var(--border-default);border-radius:6px;padding:12px 14px;margin-bottom:10px}
@@ -145,9 +163,46 @@ select,input[type=text]{background:var(--surface-sunken);border:1px solid var(--
 h2.sec{font-size:13px;margin:18px 0 8px;color:var(--text-muted);font-family:var(--font-mono);letter-spacing:.1em;text-transform:uppercase;font-weight:600}
 h2.sec .n{color:var(--text-faint);font-weight:400}
 
+/* ── ONE LINE PER BANK LINE, OPENS ON CLICK ─────────────────────────────
+   Apsara, 2026-10-10, "build everything" on the layout review: five
+   deposits filled a screen. Collapsed, each row is date · who · what Jarvis
+   thinks · how sure · amount · one button, amounts in one right-hand column
+   the way QuickBooks lays them out. The detail (invoices, reasons, the form)
+   is all still in the row, opened by a click or Enter. */
+.row{padding:0;margin-bottom:6px}
+.row .sum{display:grid;grid-template-columns:84px minmax(0,1.3fr) minmax(0,1.5fr) 92px 128px 128px 14px;gap:12px;align-items:center;padding:10px 14px;cursor:pointer}
+.row .sum:hover{background:var(--surface-hover)}
+.row .sum .who{min-width:0}
+.row .sum .who strong{display:block;color:var(--text-strong);font-weight:600;font-size:13.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.row .sum .who .d{display:block;font:11px var(--font-mono);color:var(--text-faint);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.row .sum .sug{font-size:12.5px;color:var(--text-body);min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.row .sum .amt{font-size:15px;text-align:right;white-space:nowrap}
+.row .sum .go{text-align:right}
+.row .sum .go .btn{white-space:nowrap}
+.row .sum .chev{color:var(--text-faint);font-size:11px;transition:transform .15s}
+.row.open .sum .chev{transform:rotate(90deg)}
+.row .detail{display:none;padding:2px 14px 14px;border-top:1px solid var(--border-subtle)}
+.row.open .detail{display:block}
+.needs{font-size:12px;color:var(--text-muted);font-style:italic;white-space:nowrap}
+/* Set aside list */
+.xrow{display:grid;grid-template-columns:84px minmax(0,1.4fr) minmax(0,1.4fr) 120px auto;gap:12px;align-items:center;padding:8px 0;border-bottom:1px solid var(--border-subtle);font-size:13px}
+.xrow:last-child{border-bottom:0}
+.xrow .d{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text-body)}
+.xrow .why2{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text-muted);font-size:12px}
+.xrow .a{font-family:var(--font-mono);text-align:right;white-space:nowrap}
+
 @media (max-width:720px){
   header{padding:10px 16px;position:static}
-  .coming .inv:nth-of-type(n+7){display:none} /* ttl, total, text, then three invoices */
+  /* Every time frame but Custom fills the boxes itself, so on a phone they
+     are hidden until Custom is chosen. */
+  .range.named label{display:none}
+  .row .sum{grid-template-columns:minmax(0,1fr) auto;grid-template-areas:"who amt" "sug go";row-gap:4px}
+  .row .sum .when,.row .sum .chev{display:none}
+  .row .sum .who{grid-area:who} .row .sum .amt{grid-area:amt}
+  .row .sum .sug{grid-area:sug} .row .sum .go{grid-area:go}
+  .row .sum .conf{display:none}
+  .xrow{grid-template-columns:minmax(0,1fr) auto}
+  .xrow .when,.xrow .why2{display:none}
   header h1{font-size:20px}
   .hdr-right{margin-left:0}
   .range{width:100%}
@@ -175,21 +230,25 @@ h2.sec .n{color:var(--text-faint);font-weight:400}
   <div class="range" id="range">
     <label>From <input type="date" id="from" aria-label="From date"></label>
     <label>To <input type="date" id="to" aria-label="To date"></label>
-    <div class="presets" id="presets">
-      <button type="button" class="preset" data-preset="month">This month</button>
-      <button type="button" class="preset" data-preset="lastmonth">Last month</button>
-      <button type="button" class="preset" data-preset="year">This year</button>
-      <button type="button" class="preset" data-preset="lastyear">Last year</button>
-      <button type="button" class="preset" data-preset="all">All dates</button>
-    </div>
+    <!-- Apsara, 2026-10-10: "put these time frames in drop down". -->
+    <select id="preset" class="preset-sel" aria-label="Time frame">
+      <option value="all">All dates</option>
+      <option value="month">This month</option>
+      <option value="lastmonth">Last month</option>
+      <option value="year">This year</option>
+      <option value="lastyear">Last year</option>
+      <option value="custom">Custom dates</option>
+    </select>
   </div>
   <div class="hdr-right">
+    <button type="button" class="btn quiet" data-reload="1" title="Reload this page's figures">Reload</button>
     <button type="button" class="btn" data-plaid="sync" id="pullTop" hidden>↻ Pull new transactions</button>
   </div>
 </header>
 <main>
   <div id="repair"></div>
   <div id="accounts" class="accts"></div>
+  <div id="missing"></div>
   <div id="coming"></div>
 
   <nav class="tabs" role="tablist" id="tabs">
@@ -226,6 +285,7 @@ h2.sec .n{color:var(--text-faint);font-weight:400}
   </section>
 
   <section data-pane="aside" hidden>
+    <div id="asidelist"></div>
     <div id="recorded"></div>
     <div id="extras"></div>
   </section>
@@ -269,7 +329,7 @@ const COMPANY = { 'edge-metals': 'Edge Metals', 'edge-trading': 'Edge Yard', 'aa
 /* ── the date range ─────────────────────────────────────────────────────
    Added to every GET that reads bank figures, in ONE place, so no list on
    this page can quietly show a different window from the one above it. */
-const RANGED = /^\/api\/(bank\/(match|review|reconcile|overview)|intercompany\/transfers)$/;
+const RANGED = /^\/api\/(bank\/(match|review|reconcile|overview|set-aside)|intercompany\/transfers)$/;
 function withRange(url) {
   const { from, to } = STATE.range;
   if (!RANGED.test(url) || (!from && !to)) return url;
@@ -300,7 +360,8 @@ function presetRange(p) {
 function paintRange() {
   $('from').value = STATE.range.from || '';
   $('to').value = STATE.range.to || '';
-  document.querySelectorAll('[data-preset]').forEach((b) => b.classList.toggle('on', b.dataset.preset === STATE.range.preset));
+  $('preset').value = STATE.range.preset || 'all';
+  $('range').classList.toggle('named', (STATE.range.preset || 'all') !== 'custom');
 }
 /* The choice is remembered per browser — a convenience, so a failed read
    just means "all dates", which is what the page did before. */
@@ -333,13 +394,11 @@ function renderChips() {
     `<span class="chip ${(c.deposits - (c.confident || 0)) ? 'warn' : ''}">${Math.max(0, (c.deposits || 0) - (c.confident || 0))} need you · ${money(t.needs_you)}</span>`,
     c.ambiguous ? `<span class="chip warn">${c.ambiguous} ambiguous</span>` : '',
     c.no_party ? `<span class="chip warn">${c.no_party} unknown payer</span>` : '',
-    `<span class="chip">${d.open_invoices || 0} open invoices · ${d.customers_with_open || 0} customers</span>`,
     (L.excluded && L.excluded.count) ? `<span class="chip act" data-show="excluded" title="Set aside, still counted — click to see them">${L.excluded.count} excluded · ${money(L.excluded.money)}</span>` : '',
     (L.pending && L.pending.count) ? `<span class="chip">${L.pending.count} pending</span>` : '',
     L.drifted ? `<span class="chip bad">${L.drifted} restated by the bank</span>` : '',
     `<span class="chip act" data-show="aliases">${d.learned_names || 0} names learned</span>`,
     (d.balance_disagreements || []).length ? `<span class="chip bad">${d.balance_disagreements.length} balance disagreements</span>` : '',
-    `<span class="chip act" data-reload="1">reload</span>`,
   ].filter(Boolean);
   $('chips').innerHTML = bits.join('');
 }
@@ -397,6 +456,34 @@ function sureOf(row) {
   return !!(p && row.outcome === 'proposed' && !row.ambiguous && p.score >= 0.95);
 }
 
+/* What Jarvis thinks, in a few words, for the collapsed line. */
+function suggestion(row) {
+  const p = (row.proposals || [])[0];
+  if (row.outcome === 'no_party') return 'Who sent this? Name the payer once';
+  if (row.outcome === 'more_than_owed') return 'More than this customer owes';
+  if (row.outcome === 'nothing_open') return 'Nothing open for this customer';
+  if (!p) return (BADGE[row.outcome] || ['', row.outcome])[1];
+  const labels = p.allocations.map((a) => String(a.label || '').split(' (')[0]);
+  const short = p.allocations.reduce((t, a) => t + (a.shortfall || 0), 0);
+  const left = p.allocations.reduce((t, a) => t + (a.clears ? 0 : (a.leaves || 0)), 0);
+  let txt = (p.allocations.length > 1 ? 'Pays ' + labels.join(' + ') : 'Pays ' + labels[0]);
+  if (left > 0.005) txt = 'Part-pays ' + labels.join(' + ') + ' · leaves ' + money(left);
+  else if (short > 0.005) txt += ' · short ' + money(short);
+  if (row.ambiguous) txt += ' — or another invoice';
+  return txt;
+}
+
+/* One button on the collapsed line, and only when pressing it cannot
+   surprise her: one clear answer, nothing short, the account known. Every
+   other row's button opens the row instead. */
+function quickConfirm(row) {
+  const p = (row.proposals || [])[0];
+  // A part payment, or one that looks like the customer's claim, is a
+  // judgement — those open the row so she reads it before recording.
+  return !!(p && row.outcome === 'proposed' && !row.ambiguous && row.deposit.bank_guess && !row.claim_hint
+    && !p.allocations.some((a) => a.shortfall || !a.clears));
+}
+
 function renderRow(row, i) {
   const dep = row.deposit;
   const [cls, label] = BADGE[row.outcome] || ['none', esc(row.outcome)];
@@ -434,17 +521,28 @@ function renderRow(row, i) {
   }
 
   const tone = sureOf(row) ? 'sure' : (p ? 'likely' : '');
-  return `<div class="card ${tone}" data-i="${i}" data-dir="in" data-k="${esc([dep.descriptor, dep.desc, row.party, dep.amount, dep.date].join(' ').toLowerCase())}">
-    <div class="row1">
-      <span class="amt in">${money(dep.amount)}</span>
-      <span class="badge ${cls}">${label}</span>
-      ${row.ambiguous ? '<span class="badge ask">needs you</span>' : ''}
-      ${p && !row.ambiguous ? `<span class="badge ${p.score >= 0.8 ? 'good' : 'ask'}">${Math.round(p.score * 100)}%</span>` : ''}
+  const conf = row.ambiguous ? '<span class="badge ask">needs you</span>'
+    : (p ? `<span class="badge ${p.score >= 0.8 ? 'good' : 'ask'}">${Math.round(p.score * 100)}%</span>`
+      : `<span class="badge ${cls}">${label}</span>`);
+  const go = quickConfirm(row)
+    ? `<button class="btn solid" data-confirm="${i}">Confirm</button>`
+    : `<button class="btn" data-open="1">${row.outcome === 'no_party' ? 'Name payer' : 'Review'}</button>`;
+  return `<div class="card row ${tone}" data-i="${i}" data-dir="in" data-k="${esc([dep.descriptor, dep.desc, row.party, dep.amount, dep.date].join(' ').toLowerCase())}">
+    <div class="sum" data-toggle="1" role="button" tabindex="0" aria-expanded="false">
       <span class="when">${esc(dep.date)}</span>
-      ${row.party ? `<span class="desc">${esc(row.party)}</span>` : ''}
+      <span class="who"><strong>${esc(row.party || dep.descriptor || dep.desc || '(no description)')}</strong>
+        <span class="d">${esc(dep.descriptor || dep.desc || '')}</span></span>
+      <span class="sug">${esc(suggestion(row))}</span>
+      <span class="conf">${conf}</span>
+      <span class="amt in">${money(dep.amount)}</span>
+      <span class="go">${go}</span>
+      <span class="chev">▶</span>
     </div>
-    <div class="desc mono" style="font-size:11.5px;color:var(--text-faint);margin-top:2px">${esc(dep.descriptor || dep.desc || '(no description)')}</div>
-    ${body}
+    <div class="detail">
+      <div class="row1" style="margin-top:10px"><span class="badge ${cls}">${label}</span>
+        ${row.ambiguous ? '<span class="badge ask">needs you</span>' : ''}</div>
+      ${body}
+    </div>
   </div>`;
 }
 
@@ -542,7 +640,7 @@ async function renderOverview() {
   let o = null;
   try { o = await api('/api/bank/overview'); } catch (e) { o = null; }
   STATE.overview = o;
-  if (!o) { $('accounts').innerHTML = ''; $('repair').innerHTML = ''; $('coming').innerHTML = ''; return; }
+  if (!o) { for (const id of ['accounts', 'missing', 'repair', 'coming']) $(id).innerHTML = ''; return; }
 
   const day = (s) => s ? String(s).slice(0, 10) : '';
   const cards = (o.accounts || []).map((a) => {
@@ -550,10 +648,13 @@ async function renderOverview() {
     const status = needs ? ['warn', 'Needs you to sign in']
       : (a.linked ? ['ok', 'Connected' + (a.last_sync_at ? ' · pulled ' + day(a.last_sync_at) : '')]
         : ['off', 'Not linked to the bank feed']);
-    const figure = a.balance != null
-      ? `<div class="big">${money(a.balance)}</div><div class="sub">balance at last pull · ${esc(day(a.balance_as_of))}</div>`
-      : `<div class="big" style="font-size:15px">in ${money(a.in)} · out ${money(a.out)}</div>
-         <div class="sub">${a.rows || 0} line(s) in these dates${a.waiting ? ' · ' + a.waiting + ' not dealt with' : ''}</div>`;
+    /* The SAME figures on every card, so two accounts can be compared at a
+       glance: what came in and went out in the chosen dates. The balance is
+       a second line, shown only when Plaid sent one with an ordinary pull. */
+    const figure = `<div class="big"><span><small>in</small><span class="i">${money(a.in)}</span></span>
+        <span><small>out</small>${money(a.out)}</span></div>
+      <div class="sub">${a.rows || 0} line(s) in these dates${a.waiting ? ' · ' + a.waiting + ' not dealt with' : ''}</div>
+      ${a.balance != null ? `<div class="bal">Balance <b>${money(a.balance)}</b> at last pull · ${esc(day(a.balance_as_of))}</div>` : ''}`;
     return `<div class="acct ${needs ? 'warn' : ''}">
       <div class="co">${esc(a.company || 'Not placed on a company')}</div>
       <div class="bk">${esc(a.bank || 'Bank')} ${a.mask ? `<span class="mask">••${esc(a.mask)}</span>` : ''}</div>
@@ -562,16 +663,12 @@ async function renderOverview() {
       ${a.unassigned ? '<div class="sub">Jarvis does not know which company this account belongs to, so its lines are not matched.</div>' : ''}
     </div>`;
   });
-  for (const m of (o.missing || [])) {
-    cards.push(`<div class="acct">
-      <div class="co">${esc(m.company)}</div>
-      <div class="bk">No bank account in Jarvis yet</div>
-      <div class="sub" style="margin-top:6px">Its money is only seen when it reaches one of the other accounts.
-        Add its account (with the last four digits) to Jarvis and link it, and its transfers and supplier payments match on their own.</div>
-      <span class="pill off">Not set up</span>
-    </div>`);
-  }
   $('accounts').innerHTML = cards.join('');
+  /* A company with no account record is one slim line, not a whole card. */
+  $('missing').innerHTML = (o.missing || []).map((m) => `<div class="missing">
+      <b>${esc(m.company)}</b><span class="pill off">Not set up</span>
+      <span>No bank account in Jarvis yet — add it (last four digits) and link it, and its transfers and supplier payments match on their own.</span>
+    </div>`).join('');
 
   /* The one thing only she can do: sign in at the bank again. Update mode
      re-uses the existing link, so history and the cursor are kept. */
@@ -586,12 +683,16 @@ async function renderOverview() {
     </div>`).join('');
 
   const c = o.coming_in || {};
-  $('coming').innerHTML = c.count ? `<div class="coming">
-      <span class="ttl">Coming in</span>
-      <span class="tot">${money(c.total)}</span>
-      <span class="desc">across ${c.count} open invoice${c.count === 1 ? '' : 's'} — oldest first:</span>
-      ${(c.invoices || []).map((x) => `<span class="inv">${esc(x.customer)} · ${esc(x.invoice_no || '')} · ${money(x.open)}${x.days != null ? ` · <span class="${x.days > 60 ? 'old' : ''}">${x.days}d</span>` : ''}</span>`).join('')}
-    </div>` : '';
+  /* One line until she opens it: what customers owe is context for the
+     bank, not work in it. */
+  const oldest = (c.invoices || []).reduce((m, x) => Math.max(m, x.days || 0), 0);
+  $('coming').innerHTML = c.count ? `<details class="coming">
+      <summary><span class="ttl">Coming in</span>
+        <span class="tot">${money(c.total)}</span>
+        <span class="desc">across ${c.count} open invoice${c.count === 1 ? '' : 's'}${oldest ? ` · oldest <span style="color:${oldest > 60 ? 'var(--amber-300)' : 'inherit'}">${oldest} days</span>` : ''}</span>
+        <span class="more">Show</span></summary>
+      <div class="invs">${(c.invoices || []).map((x) => `<span class="inv">${esc(x.customer)} · ${esc(x.invoice_no || '')} · ${money(x.open)}${x.days != null ? ` · <span class="${x.days > 60 ? 'old' : ''}">${x.days}d</span>` : ''}</span>`).join('')}</div>
+    </details>` : '';
 }
 
 /* ── BETWEEN YOUR COMPANIES ────────────────────────────────────────────
@@ -964,20 +1065,26 @@ async function renderReview() {
 
   out.push(q.rows.map((r) => {
     const warn = r.state === 'choose' ? ' style="color:var(--amber-500)"' : '';
-    return `<div class="card" data-dir="out" data-k="${esc([r.descriptor, r.amount, r.date, r.label].join(' ').toLowerCase())}" style="border-left:4px solid ${r.state === 'match' ? 'var(--leaf-500)' : 'var(--steel-500)'}">
-      <div class="row1" style="align-items:flex-start;">
-        <span class="when" style="min-width:76px">${esc(fmtDay(r.date))}</span>
-        <span class="desc" style="flex:1; min-width:0;">
-          <span${warn}>${esc(r.descriptor || '(no description)')}</span>
-          <div class="note" style="margin:2px 0 0">${esc(r.why || '')}</div>
-        </span>
-        <span class="amt" style="font-size:15px; white-space:nowrap;">−${money(r.amount)}</span>
-      </div>
-      <div class="acts" style="margin-top:6px">
-        ${r.state === 'match'
+    /* A row that would CREATE a record shows what Jarvis would do as a
+       muted label, not a button-shaped box: there is nothing to press until
+       the plan screen exists, and a box that looks pressable is the one
+       she would press. */
+    return `<div class="card row" data-dir="out" data-k="${esc([r.descriptor, r.amount, r.date, r.label].join(' ').toLowerCase())}" style="border-left:4px solid ${r.state === 'match' ? 'var(--leaf-500)' : 'var(--steel-500)'}">
+      <div class="sum" data-toggle="1" role="button" tabindex="0" aria-expanded="false">
+        <span class="when">${esc(fmtDay(r.date))}</span>
+        <span class="who"><strong${warn}>${esc(r.descriptor || '(no description)')}</strong></span>
+        <span class="sug">${esc(r.why || '')}</span>
+        <span class="conf"></span>
+        <span class="amt">−${money(r.amount)}</span>
+        <span class="go">${r.state === 'match'
           ? `<button class="btn solid" data-reviewmatch="${esc(r.id)}">Match</button>`
-          : `<span class="chip ${r.state === 'choose' ? 'warn' : ''}" title="${esc(r.why || '')}">${esc(r.label)}</span>`}
-        ${r.state === 'match' ? '' : ruleBtn(r.descriptor, 'out')}
+          : `<span class="needs" title="${esc(r.why || '')}">${esc(r.label)}</span>`}</span>
+        <span class="chev">▶</span>
+      </div>
+      <div class="detail">
+        <div class="note" style="margin-top:10px">${esc(r.why || '')}</div>
+        ${r.state === 'match' ? '' : `<div class="note">Jarvis would: <strong>${esc(r.label)}</strong> — that creates a record, so it goes through the plan screen, which is not built yet.</div>`}
+        <div class="acts">${r.state === 'match' ? '' : ruleBtn(r.descriptor, 'out')}</div>
       </div>
     </div>`;
   }).join(''));
@@ -1040,6 +1147,10 @@ document.addEventListener('keydown', (ev) => {
   if (ev.key === '/') { ev.preventDefault(); showTab('review'); $('q').focus(); return; }
   const tabs = ['review', 'aside', 'recon', 'setup'];
   if (/^[1-4]$/.test(ev.key)) { showTab(tabs[Number(ev.key) - 1]); return; }
+  if (ev.key === 'Enter' || ev.key === 'o') {
+    const f = document.querySelector('[data-pane="review"] .card.focus.row');
+    if (f) { ev.preventDefault(); toggleRow(f); return; }
+  }
   if (ev.key === 'j') moveFocus(1);
   if (ev.key === 'k') moveFocus(-1);
 });
@@ -1047,6 +1158,17 @@ $('q').addEventListener('input', (ev) => { STATE.q = ev.target.value || ''; appl
 
 /* A click anywhere on the box opens the calendar (where the browser allows
    it), and picking a day selects it and closes the calendar by itself. */
+/* Custom keeps whatever dates are in the boxes and opens the From calendar;
+   every other choice fills both boxes and reloads. */
+$('preset').addEventListener('change', () => {
+  const p = $('preset').value;
+  if (p === 'custom') {
+    STATE.range = { ...STATE.range, preset: 'custom' }; saveRange(); paintRange();
+    try { if ($('from').showPicker) $('from').showPicker(); } catch (e) { $('from').focus(); }
+    return;
+  }
+  setRange({ ...presetRange(p), preset: p });
+});
 for (const id of ['from', 'to']) {
   const el = $(id);
   el.addEventListener('click', () => { try { if (el.showPicker) el.showPicker(); } catch (e) { /* not allowed here */ } });
@@ -1054,10 +1176,23 @@ for (const id of ['from', 'to']) {
 }
 
 document.addEventListener('click', async (ev) => {
+  // Opening a row: a click anywhere on its line except a control on it.
+  const opener = ev.target.closest('[data-open]');
+  if (opener) { toggleRow(opener.closest('.row')); return; }
+  const line = ev.target.closest('[data-toggle]');
+  if (line && !ev.target.closest('button, select, input, a, label')) { toggleRow(line.closest('.row')); return; }
+
+  const inc = ev.target.closest('[data-include]');
+  if (inc) {
+    inc.disabled = true;
+    try { await api('/api/bank/include', { body: { id: inc.dataset.include } });
+      toast('Put back in the review list', 'good'); load(); }
+    catch (e) { inc.disabled = false; toast(e.message, 'bad'); }
+    return;
+  }
+
   const tab = ev.target.closest('[data-tab]');
   if (tab) return showTab(tab.dataset.tab);
-  const pre = ev.target.closest('[data-preset]');
-  if (pre) return setRange({ ...presetRange(pre.dataset.preset), preset: pre.dataset.preset });
   const dirb = ev.target.closest('[data-dir]');
   if (dirb && dirb.closest('#dir')) {
     STATE.dir = dirb.dataset.dir;
@@ -1171,6 +1306,7 @@ async function load() {
     renderReconcile();
     renderReview();
     renderRules();
+    renderAside();
   } catch (e) {
     $('list').innerHTML = `<div class="card"><div class="lbl">could not load</div><div class="note">${esc(e.message)}</div></div>`;
   }
@@ -1192,13 +1328,38 @@ async function showAliases() {
 }
 
 function showExcluded() {
-  const L = (STATE.data || {}).ledger || {};
   showTab('aside');
   renderExtras();
-  $('extras').insertAdjacentHTML('afterbegin', `<h2 class="sec">Excluded — set aside, still counted</h2>
-    <div class="card"><div class="row1"><span class="amt">${money((L.excluded || {}).money)}</span>
-      <span class="desc">${(L.excluded || {}).count || 0} row(s)</span></div>
-      <div class="note">Excluded rows leave this worklist but stay in the ledger with their total, and any one of them can be put back. Nothing is deleted.</div></div>`);
+  renderAside();
+  try { $('asidelist').scrollIntoView({ block: 'start' }); } catch (e) { /* jsdom */ }
+}
+
+/* ── SET ASIDE, ONE LINE EACH, WITH PUT BACK ───────────────────────────
+   Until now this tab showed a total and nothing else, so a line set aside
+   by hand or by a rule could not be found again or put back from the
+   screen. Each one keeps its reason, and Put back returns it to the queue. */
+async function renderAside() {
+  let x = null;
+  try { x = await api('/api/bank/set-aside'); } catch (e) { x = null; }
+  if (!x) { $('asidelist').innerHTML = ''; return; }
+  const rows = x.rows || [];
+  $('asidelist').innerHTML = `<h2 class="sec">Set aside <span class="n">${x.count} · ${money(x.money)}</span></h2>
+    <div class="card">${rows.length ? rows.map((r) => `<div class="xrow">
+        <span class="when">${esc(fmtDay(r.date))}</span>
+        <span class="d">${esc(r.desc || '(no description)')}</span>
+        <span class="why2" title="${esc(r.reason || '')}">${esc(r.reason || 'no reason given')}${r.by ? ' · ' + esc(r.by) : ''}</span>
+        <span class="a">${r.direction === 'out' ? '−' : '+'}${money(r.amount)}</span>
+        <button class="btn quiet" data-include="${esc(r.id)}">Put back</button>
+      </div>`).join('') : '<div class="empty">Nothing set aside in these dates.</div>'}
+      ${x.truncated ? `<div class="note">Showing the latest 300 of ${x.count}. Narrow the dates to see the rest.</div>` : ''}
+      <div class="note">Set-aside lines leave the review list but stay in the bank total, because the money still moved. Nothing is deleted.</div></div>`;
+}
+
+function toggleRow(card) {
+  if (!card) return;
+  const open = !card.classList.contains('open');
+  card.classList.toggle('open', open);
+  const sum = card.querySelector('.sum'); if (sum) sum.setAttribute('aria-expanded', open ? 'true' : 'false');
 }
 
 document.addEventListener('click', async (ev) => {

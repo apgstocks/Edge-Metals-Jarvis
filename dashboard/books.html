@@ -96,15 +96,13 @@ header .back:hover{color:var(--text-body)}
 .pick .lbl{font-family:var(--font-mono);font-size:9px;letter-spacing:.1em;text-transform:uppercase;color:var(--text-faint)}
 select,input[type=text]{padding:8px 10px;font-size:13px;font-family:var(--font-sans);background:var(--surface-card);color:var(--text-body);border:1px solid var(--border-default);border-radius:4px;outline:none}
 select:hover,input[type=text]:hover{border-color:var(--text-faint)}
+input[type=date]{padding:7px 9px;font:500 13px var(--font-mono);background:var(--surface-card);color:var(--text-strong);border:1px solid var(--border-default);border-radius:4px;color-scheme:dark;cursor:pointer}
+input[type=date]:hover{border-color:var(--text-faint)}
 #company{font-weight:600;color:var(--text-strong);min-width:170px}
-/* Period chips. The whole reason the old controls felt unfriendly was two
-   boxes wanting YYYY-MM-DD; nine times in ten she wants a named period. */
-.chips{display:flex;gap:0;border:1px solid var(--border-default);border-radius:4px;overflow:hidden}
-.chips button{padding:8px 12px;border:0;border-right:1px solid var(--border-default);
-  background:var(--surface-card);color:var(--text-muted);font-size:12.5px;white-space:nowrap}
-.chips button:last-child{border-right:0}
-.chips button:hover{background:var(--surface-hover);color:var(--text-body)}
-.chips button.on{background:var(--leaf-600);color:#fff;font-weight:600}
+/* Period. The whole reason the old controls felt unfriendly was two boxes
+   wanting YYYY-MM-DD; nine times in ten she wants a named period. Chips until
+   2026-10-10, a dropdown since ("put these time frames in drop down"). */
+#period{font-weight:600;color:var(--text-strong);min-width:150px}
 #custom{display:none;gap:8px;align-items:center}
 #custom.show{display:flex}
 .spacer{flex:1}
@@ -255,8 +253,8 @@ tr.tot td{border-top:1px solid var(--border-default);font-weight:700;color:var(-
 }
 @media (max-width:560px){
   .kpis{grid-template-columns:1fr}
-  .chips{width:100%}
-  .chips button{flex:1}
+  .pick{width:100%}
+  #period,#company{flex:1}
 }
 /* Printing a P&L is a real thing she does — it goes in a folder or to the
    bank. The chrome goes, the paper stays white. */
@@ -288,17 +286,26 @@ tr.tot td{border-top:1px solid var(--border-default);font-weight:700;color:var(-
       <span class="lbl">Company</span>
       <select id="company" aria-label="Company"></select>
     </div>
-    <div class="chips" id="chips" role="group" aria-label="Period">
-      <button data-p="month">This month</button>
-      <button data-p="quarter">This quarter</button>
-      <button data-p="year" class="on">This year</button>
-      <button data-p="last-year">Last year</button>
-      <button data-p="custom">Custom</button>
+    <!-- Apsara, 2026-10-10: "put these time frames in drop down". One select
+         instead of a row of five chips; Custom still reveals the date boxes. -->
+    <div class="pick">
+      <span class="lbl">Period</span>
+      <select id="period" aria-label="Period">
+        <option value="month">This month</option>
+        <option value="quarter">This quarter</option>
+        <option value="year" selected>This year</option>
+        <option value="last-year">Last year</option>
+        <option value="custom">Custom dates…</option>
+      </select>
     </div>
     <div id="custom">
-      <input type="text" id="from" placeholder="YYYY-MM-DD" size="11" autocomplete="off" aria-label="From">
+      <!-- Apsara, 2026-10-10: "why date picker not there in books". Native
+           date boxes, the same as /bank-match: clicking a day selects it and
+           the calendar closes on its own. Picking a date reloads by itself
+           once both ends are set; Show stays for anyone who looks for it. -->
+      <input type="date" id="from" aria-label="From">
       <span style="color:var(--text-faint)">&rarr;</span>
-      <input type="text" id="to" placeholder="YYYY-MM-DD" size="11" autocomplete="off" aria-label="To">
+      <input type="date" id="to" aria-label="To">
       <button class="btn go" id="run">Show</button>
     </div>
     <label class="cmp" title="Fetches the same range a year earlier and shows the change">
@@ -675,7 +682,7 @@ async function load() {
 
 function setPeriod(p) {
   STATE.period = p;
-  document.querySelectorAll('#chips button').forEach((b) => b.classList.toggle('on', b.dataset.p === p));
+  $('period').value = p;
   if (p === 'custom') { $('custom').classList.add('show'); return; }
   $('custom').classList.remove('show');
   const [f, t] = rangeFor(p);
@@ -701,10 +708,21 @@ function setPeriod(p) {
   $('run').onclick = load;
   $('company').onchange = load;
   $('compare').onchange = load;
+  // A click anywhere on a date box opens the calendar where the browser
+  // allows it; choosing a day closes it and, once both ends are set and in
+  // order, shows that period.
+  for (const id of ['from', 'to']) {
+    const el = $(id);
+    el.addEventListener('click', () => { try { if (el.showPicker) el.showPicker(); } catch (e) { /* not allowed here */ } });
+    el.addEventListener('change', () => {
+      const f = $('from').value, t = $('to').value;
+      if (!f || !t) return;
+      if (f > t) { $('body').innerHTML = '<div class="card"><div class="empty"><div class="small">The From date is after the To date — pick dates in order.</div></div></div>'; return; }
+      load();
+    });
+  }
   $('print').onclick = () => window.print();
-  document.querySelectorAll('#chips button').forEach((b) => {
-    b.onclick = () => setPeriod(b.dataset.p);
-  });
+  $('period').onchange = () => setPeriod($('period').value);
   // ── THE PACK ──────────────────────────────────────────────────────────
   // A plain link, not fetch-then-blob: the browser's own download gets the
   // filename off Content-Disposition, which is where the DRAFT-INCOMPLETE

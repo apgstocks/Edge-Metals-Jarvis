@@ -148,20 +148,22 @@ const settle = (ms = 120) => new Promise((r) => setTimeout(r, ms));
     await settle(250);
     const d = dom.window.document, w = dom.window;
 
-    const chips = [...d.querySelectorAll('#chips button')].map((b) => b.dataset.p);
+    // A dropdown since 2026-10-10 ("put these time frames in drop down").
+    const chips = [...d.querySelectorAll('#period option')].map((b) => b.value);
     ck('named periods are offered', chips.length === 5, JSON.stringify(chips));
     ck('  this month, this quarter, this year, last year and custom',
        ['month', 'quarter', 'year', 'last-year', 'custom'].every((p) => chips.includes(p)),
        JSON.stringify(chips));
     ck('this year is the one selected on arrival',
-       d.querySelector('#chips button.on').dataset.p === 'year');
+       d.getElementById('period').value === 'year');
     ck('  so the page is useful on arrival, not empty',
        calls.some((c) => /\/api\/books\?.*entity=/.test(c)), JSON.stringify(calls.slice(0, 3)));
     ck('the date boxes are hidden until Custom is picked',
        !d.getElementById('custom').classList.contains('show'));
 
     const before = calls.length;
-    d.querySelector('[data-p="last-year"]').dispatchEvent(new w.MouseEvent('click', { bubbles: true }));
+    d.getElementById('period').value = 'last-year';
+    d.getElementById('period').dispatchEvent(new w.Event('change', { bubbles: true }));
     await settle(150);
     const y = new Date().getFullYear();
     ck('picking a period refetches', calls.length > before, `${before} → ${calls.length}`);
@@ -170,7 +172,8 @@ const settle = (ms = 120) => new Promise((r) => setTimeout(r, ms));
     ck('  and the range is a whole year', calls[calls.length - 1].includes(`to=${y - 1}-12-31`),
        calls[calls.length - 1]);
 
-    d.querySelector('[data-p="custom"]').dispatchEvent(new w.MouseEvent('click', { bubbles: true }));
+    d.getElementById('period').value = 'custom';
+    d.getElementById('period').dispatchEvent(new w.Event('change', { bubbles: true }));
     await settle(60);
     ck('Custom reveals the two date boxes',
        d.getElementById('custom').classList.contains('show'));
@@ -378,6 +381,36 @@ const settle = (ms = 120) => new Promise((r) => setTimeout(r, ms));
     ck('there is a print stylesheet, because a P&L goes in a folder',
        /@media print/.test(HTML));
     ck('  and a button that uses it', !!d.getElementById('print'));
+}
+
+// ── DATE PICKERS ──────────────────────────────────────────────────────────
+// Apsara, 2026-10-10: "why date picker not there in books". The Custom boxes
+// are real date inputs now, and choosing a day reloads by itself once both
+// ends are set — no typing YYYY-MM-DD, no hunting for Show.
+{
+    section('date pickers on Custom');
+    const { dom, calls } = boot();
+    await settle(250);
+    const d = dom.window.document, w = dom.window;
+    ck('From and To are date inputs, not text boxes',
+       d.getElementById('from').type === 'date' && d.getElementById('to').type === 'date');
+    d.getElementById('period').value = 'custom';
+    d.getElementById('period').dispatchEvent(new w.Event('change', { bubbles: true }));
+    await settle(60);
+    d.getElementById('from').value = '2026-03-01';
+    d.getElementById('to').value = '2026-03-31';
+    const n = calls.length;
+    d.getElementById('to').dispatchEvent(new w.Event('change'));
+    await settle(120);
+    ck('choosing the second date loads that period by itself',
+       calls.slice(n).some((c) => c.includes('from=2026-03-01') && c.includes('to=2026-03-31')),
+       JSON.stringify(calls.slice(n)));
+    const m = calls.length;
+    d.getElementById('from').value = '2026-04-15';
+    d.getElementById('from').dispatchEvent(new w.Event('change'));
+    await settle(120);
+    ck('  a From after the To loads nothing and says why',
+       calls.length === m && /after the To date/.test(d.getElementById('body').textContent));
 }
 
 console.log(`\n  ${pass} passed, ${fail} failed`);

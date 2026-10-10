@@ -378,6 +378,32 @@ function mount(app, cfg) {
         } catch (e) { res.status(400).json({ error: e.message }); }
     });
 
+    // ── GET /api/bank/set-aside — what was set aside, one line each ──────
+    // The Set aside tab showed a TOTAL and nothing else, so a line set aside
+    // by hand or by a rule could not be found again or put back from the
+    // screen. Read-only; Put back is POST /api/bank/include above.
+    app.get('/api/bank/set-aside', (req, res) => {
+        try {
+            const from = String(req.query.from || '').slice(0, 10) || null;
+            const to = String(req.query.to || '').slice(0, 10) || null;
+            const rows = require('./bankLedger').list()
+                .filter((r) => r && r.excluded)
+                .filter((r) => (!from || String(r.date) >= from) && (!to || String(r.date) <= to))
+                .sort((a, b) => String(b.date).localeCompare(String(a.date)));
+            const last = (r) => [...(r.history || [])].reverse().find((h) => /excluded/.test(h.what || '')) || {};
+            res.json({
+                from, to, count: rows.length,
+                money: round2(rows.reduce((t, r) => t + num0(r.amount), 0)) || 0,
+                // Capped, and the cap is said: a list that silently stopped at
+                // 200 would read as "that is all of them".
+                rows: rows.slice(0, 300).map((r) => ({ id: r.id, date: r.date, desc: r.desc || r.party || '',
+                    amount: round2(num0(r.amount)), direction: r.direction, company: r.company || null,
+                    reason: r.excluded_reason || null, by: last(r).by || null, at: last(r).at || null })),
+                truncated: rows.length > 300,
+            });
+        } catch (e) { res.status(500).json({ error: e.message }); }
+    });
+
     app.post('/api/bank/include', async (req, res) => {
         if (!admin(req, res)) return;
         const id = String((req.body || {}).id || '').trim();
