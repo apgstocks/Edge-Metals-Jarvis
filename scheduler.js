@@ -1537,6 +1537,19 @@ function start() {
         .run({ send: (t) => _sendToManager(t), alreadySent, markSent })
         .catch(e => console.error('[SCHED] claims-chase:', e)), TZ);
 
+    // ── Booking Agent — does the carrier agree with our dates? ───────────
+    // Apsara, 2026-10-03: "Build Maersk api integration to Booking Agent."
+    // Twice a day because lines move cutoffs during the working day, and a
+    // morning-only check finds an afternoon change the next morning — after
+    // the trucker has been dispatched. 07:15 lands before the QB / ledger /
+    // claims block; 14:15 catches the day's changes while there is still time
+    // to act. Silent when Maersk agrees; each disagreement is said once.
+    // Read-only: it never writes bookings.json. Does nothing at all until
+    // MAERSK_CONSUMER_KEY is set. See helpers/bookingAgent.js.
+    cron.schedule('15 7,14 * * *', () => require('./helpers/bookingAgentJob')
+        .run({ send: (t) => _sendToManager(t), alreadySent, markSent })
+        .catch(e => console.error('[SCHED] booking-agent:', e)), TZ);
+
     cron.schedule('30 6 * * *',   () => require('./helpers/integritySweepJob').run()
         .catch(e => console.error('[SCHED] integrity-sweep:', e)), TZ);
     cron.schedule('45 22 * * *',  () => nightlyCutoffBackfill().catch(e => console.error('[SCHED] cutoff-backfill:', e)), TZ);
