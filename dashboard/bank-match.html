@@ -160,6 +160,16 @@ main{padding:16px 20px 60px;max-width:1240px;margin:0 auto}
 .btn.quiet:hover{color:var(--text-body);border-color:var(--border-default)}
 select,input[type=text]{background:var(--surface-sunken);border:1px solid var(--border-default);color:var(--text-body);border-radius:4px;padding:5px 7px;font:inherit;font-size:12.5px}
 .empty{color:var(--text-faint);font-size:13px;padding:10px 0}
+/* ── Paged, scrolling lists — Apsara, 2026-10-11: "scrollable div just like
+   quickbook with pages". The list scrolls inside its own box so the toolbar
+   and the date range stay put; pages keep a long history from becoming one
+   endless page. */
+.scrollbox{max-height:64vh;overflow-y:auto;overscroll-behavior:contain;padding-right:4px}
+.pager{display:flex;align-items:center;gap:10px;flex-wrap:wrap;justify-content:flex-end;font-size:12px;color:var(--text-muted);padding:8px 2px 14px}
+.pager .of{margin-right:auto;font-family:var(--font-mono, monospace)}
+.pager button{background:var(--surface-card);border:1px solid var(--border-default);color:inherit;border-radius:4px;padding:4px 10px;cursor:pointer;font-size:12px}
+.pager button:disabled{opacity:.4;cursor:default}
+.pager select{background:var(--surface-card);border:1px solid var(--border-default);color:inherit;border-radius:4px;padding:3px 6px;font-size:12px}
 .note{color:var(--text-muted);font-size:12.5px;margin-top:4px}
 .rivals{margin-top:8px;border-left:2px solid #5a4416;padding-left:10px}
 .legs{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px}
@@ -286,11 +296,13 @@ h2.sec .n{color:var(--text-faint);font-weight:400}
     <div id="inblock">
       <h2 class="sec">Money in <span class="n" id="n-in"></span></h2>
       <div id="sure"></div>
-      <div id="list"><div class="empty">Loading…</div></div>
+      <div id="list" class="scrollbox"><div class="empty">Loading…</div></div>
+      <div class="pager" id="pager-in" hidden></div>
     </div>
     <!-- Money OUT. Apsara, 2026-10-08: "i want like pending,posted
          transactions like qb with match,post". -->
     <div id="review"></div>
+    <div class="pager" id="pager-out" hidden></div>
   </section>
 
   <section data-pane="aside" hidden>
@@ -314,7 +326,10 @@ h2.sec .n{color:var(--text-faint);font-weight:400}
 </main>
 <script>
 const $ = (id) => document.getElementById(id);
-let STATE = { data: null, aliases: [], tab: 'review', dir: 'all', q: '', range: { from: '', to: '', preset: 'all' } };
+let STATE = { data: null, aliases: [], tab: 'review', dir: 'all', q: '', range: { from: '', to: '', preset: 'all' },
+  page: { in: 1, out: 1 }, pageSize: 50 };
+const PAGE_SIZES = [25, 50, 100, 250];
+try { const ps = Number(localStorage.getItem('bank.pageSize')); if (PAGE_SIZES.includes(ps)) STATE.pageSize = ps; } catch (e) { /* private window */ }
 
 function toast(msg, cls) {
   const t = document.createElement('div');
@@ -1075,7 +1090,8 @@ async function renderReview() {
       to what you owe before it happens — not built yet, so they are listed without a button.</div></div>`);
   }
 
-  out.push(q.rows.map((r) => {
+  // Only the rows scroll — the heading and the Match-all bar stay in view.
+  out.push('<div class="scrollbox" id="reviewrows">' + q.rows.map((r) => {
     const warn = r.state === 'choose' ? ' style="color:var(--amber-500)"' : '';
     /* A row that would CREATE a record shows what Jarvis would do as a
        muted label, not a button-shaped box: there is nothing to press until
@@ -1099,7 +1115,7 @@ async function renderReview() {
         <div class="acts">${r.state === 'match' ? '' : ruleBtn(r.descriptor, 'out')}</div>
       </div>
     </div>`;
-  }).join(''));
+  }).join('') + '</div>');
 
   $('review').innerHTML = out.join('');
   countTabs();
@@ -1132,23 +1148,83 @@ function showTab(name) {
   });
   document.querySelectorAll('[data-pane]').forEach((p) => { p.hidden = p.dataset.pane !== name; });
 }
+// Filter FIRST, then page: the search and the in/out switch look at every
+// transaction, and the pages are cut from what matched. Paging first would
+// make a search answer "nothing" for a row that is simply on page 3.
+// Transfers between her own companies are never paged — they sit above both
+// lists and are few.
+const PAGED = { in: '#list', out: '#review' };
 function applyFilter() {
   const q = STATE.q.trim().toLowerCase();
   const dir = STATE.dir;
-  document.querySelectorAll('[data-pane="review"] .card[data-dir]').forEach((c) => {
+  const matches = (c) => {
     const d = c.dataset.dir;
     const dirOk = dir === 'all' || d === dir || d === 'both';
     const qOk = !q || (c.dataset.k || '').includes(q) || c.textContent.toLowerCase().includes(q);
-    c.hidden = !(dirOk && qOk);
+    return dirOk && qOk;
+  };
+  document.querySelectorAll('[data-pane="review"] .card[data-dir]').forEach((c) => {
+    if (!c.closest('#list, #review')) c.hidden = !matches(c);
   });
+  for (const [key, sel] of Object.entries(PAGED)) {
+    const cards = [...document.querySelectorAll(`${sel} .card[data-dir]`)];
+    const hit = cards.filter(matches);
+    const size = STATE.pageSize;
+    const pages = Math.max(1, Math.ceil(hit.length / size));
+    STATE.page[key] = Math.min(Math.max(1, STATE.page[key] || 1), pages);
+    const start = (STATE.page[key] - 1) * size;
+    const shown = new Set(hit.slice(start, start + size));
+    cards.forEach((c) => { c.hidden = !shown.has(c); });
+    paintPager(key, hit.length, start, Math.min(start + size, hit.length), pages);
+  }
   $('inblock').hidden = dir === 'out';
   $('review').hidden = dir === 'in';
+  $('pager-out').hidden = dir === 'in' || $('pager-out').hidden;
 }
+function paintPager(key, total, from, to, pages) {
+  const el = $('pager-' + key);
+  if (!el) return;
+  // One page and nothing to choose: no bar at all, like QuickBooks.
+  if (total <= PAGE_SIZES[0]) { el.hidden = true; el.innerHTML = ''; return; }
+  el.hidden = false;
+  const p = STATE.page[key];
+  el.innerHTML = `<span class="of">${from + 1}–${to} of ${total}</span>
+    <button type="button" data-pg="${key}" data-go="first" ${p <= 1 ? 'disabled' : ''} aria-label="First page">«</button>
+    <button type="button" data-pg="${key}" data-go="prev" ${p <= 1 ? 'disabled' : ''}>‹ Previous</button>
+    <span>Page ${p} of ${pages}</span>
+    <button type="button" data-pg="${key}" data-go="next" ${p >= pages ? 'disabled' : ''}>Next ›</button>
+    <button type="button" data-pg="${key}" data-go="last" ${p >= pages ? 'disabled' : ''} aria-label="Last page">»</button>
+    <label>Rows <select data-pgsize="1">${PAGE_SIZES.map((n) => `<option value="${n}" ${n === STATE.pageSize ? 'selected' : ''}>${n}</option>`).join('')}</select></label>`;
+}
+function goPage(key, where) {
+  const box = document.querySelector(key === 'out' ? '#reviewrows' : '#list');
+  if (where === 'first') STATE.page[key] = 1;
+  else if (where === 'prev') STATE.page[key] -= 1;
+  else if (where === 'next') STATE.page[key] += 1;
+  else if (where === 'last') STATE.page[key] = 1e9;   // clamped in applyFilter
+  applyFilter();
+  if (box) box.scrollTop = 0;
+}
+function resetPages() { STATE.page = { in: 1, out: 1 }; }
 function moveFocus(step) {
   const cards = [...document.querySelectorAll('[data-pane="review"] .card[data-dir]')].filter((c) => !c.hidden);
   if (!cards.length) return;
   let i = cards.findIndex((c) => c.classList.contains('focus'));
   cards.forEach((c) => c.classList.remove('focus'));
+  // Past the last card of a page, J turns the page (K the other way) — the
+  // keyboard should not stop dead at row 50 of 812.
+  const key = cards[i] && cards[i].closest('#review') ? 'out' : 'in';
+  if (i + step >= cards.length || (i >= 0 && i + step < 0)) {
+    const before = STATE.page[key];
+    STATE.page[key] += step > 0 ? 1 : -1;
+    applyFilter();
+    if (STATE.page[key] !== before) {
+      const now = [...document.querySelectorAll(`${PAGED[key]} .card[data-dir]`)].filter((c) => !c.hidden);
+      const t = step > 0 ? now[0] : now[now.length - 1];
+      if (t) { t.classList.add('focus'); t.scrollIntoView({ block: 'nearest' }); }
+      return;
+    }
+  }
   i = Math.max(0, Math.min(cards.length - 1, i + step));
   cards[i].classList.add('focus');
   cards[i].scrollIntoView({ block: 'nearest', behavior: 'smooth' });
@@ -1166,7 +1242,14 @@ document.addEventListener('keydown', (ev) => {
   if (ev.key === 'j') moveFocus(1);
   if (ev.key === 'k') moveFocus(-1);
 });
-$('q').addEventListener('input', (ev) => { STATE.q = ev.target.value || ''; applyFilter(); });
+$('q').addEventListener('input', (ev) => { STATE.q = ev.target.value || ''; resetPages(); applyFilter(); });
+document.addEventListener('change', (ev) => {
+  const ps = ev.target.closest && ev.target.closest('[data-pgsize]');
+  if (!ps) return;
+  STATE.pageSize = Number(ps.value) || 50;
+  try { localStorage.setItem('bank.pageSize', String(STATE.pageSize)); } catch (e) { /* private window */ }
+  resetPages(); applyFilter();
+});
 
 /* A click anywhere on the box opens the calendar (where the browser allows
    it), and picking a day selects it and closes the calendar by itself. */
@@ -1188,6 +1271,8 @@ for (const id of ['from', 'to']) {
 }
 
 document.addEventListener('click', async (ev) => {
+  const pg = ev.target.closest('[data-pg]');
+  if (pg) { if (!pg.disabled) goPage(pg.dataset.pg, pg.dataset.go); return; }
   // Opening a row: a click anywhere on its line except a control on it.
   const opener = ev.target.closest('[data-open]');
   if (opener) { toggleRow(opener.closest('.row')); return; }
@@ -1209,6 +1294,7 @@ document.addEventListener('click', async (ev) => {
   if (dirb && dirb.closest('#dir')) {
     STATE.dir = dirb.dataset.dir;
     document.querySelectorAll('#dir [data-dir]').forEach((b) => b.classList.toggle('on', b === dirb));
+    resetPages();
     return applyFilter();
   }
 
@@ -1309,6 +1395,7 @@ document.addEventListener('click', async (ev) => {
 });
 
 async function load() {
+  resetPages();
   try {
     STATE.data = await api('/api/bank/match');
     await render();
