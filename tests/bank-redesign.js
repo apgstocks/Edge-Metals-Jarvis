@@ -442,7 +442,10 @@ server.close();
         '/api/bank/set-aside': { count: 1, money: 15, rows: [{ id: 'F1', date: '2026-10-04', desc: 'WIRE IN FEE <i>', amount: 15, direction: 'out', reason: 'Bank charge — rule "WIRE IN FEE"' }] },
         '/api/bank/overview': { accounts: [
             { key: 'a', company: 'Edge Metals', bank: 'Bank of America', mask: '3301', linked: true, item_id: 'item-1', institution: 'Bank of America', last_sync_at: '2026-10-08T05:45:00Z', needs_login: null, balance: 148320.55, balance_as_of: '2026-10-08T05:45:00Z', in: 0, out: 0, rows: 0 },
-            { key: 'b', company: 'Edge Yard', bank: 'Chase', mask: '4410', linked: true, item_id: 'item-2', institution: 'Chase', needs_login: { code: 'ITEM_LOGIN_REQUIRED' }, balance: null, in: 100, out: 50, rows: 2 }],
+            { key: 'b', company: 'Edge Yard', bank: 'Chase', mask: '4410', linked: true, item_id: 'item-2', institution: 'Chase', needs_login: { code: 'ITEM_LOGIN_REQUIRED' }, balance: null, in: 100, out: 50, rows: 2 },
+            /* The case she was actually looking at on 2026-10-10: an account
+               Jarvis knows about that has never been linked to the feed. */
+            { key: 'c', company: 'Edge Metals', bank: 'Bank of America', mask: '9902', linked: false, item_id: null, institution: null, needs_login: null, balance: null, in: 0, out: 0, rows: 0 }],
             missing: [{ entity: 'aaa-investment', company: 'AAA Investment' }],
             coming_in: { total: 10000, count: 1, invoices: [{ customer: 'Carlos G & C <i>', invoice_no: 'EM-1', open: 10000, days: 75 }] } },
         '/api/intercompany/transfers': { proposed: [{ id: 'pair:o|i', from: 'edge-trading', to: 'edge-metals', amount: 5000, date: '2026-09-10', sure: true,
@@ -478,6 +481,33 @@ server.close();
     // A slim line under the cards since 2026-10-10, not a card of its own.
     const miss = d.getElementById('missing').textContent;
     ck('  AAA Investment is shown as not set up', /AAA Investment/.test(miss) && /Not set up/.test(miss), miss);
+    /* ── CONNECT, ON THE ACCOUNT THAT IS NOT CONNECTED ───────────────────
+       Apsara, 2026-10-10, looking at Bank of America ••3301 under Edge
+       Metals: "Connect option should be here in EDGE METALS ... Not linked
+       to the bank feed not somewhere else."
+       The button existed, in the Plaid block further down — the right place
+       to connect A bank and the wrong place to connect THIS one. */
+    const cards = [...d.querySelectorAll('#accounts .acct')];
+    const unlinked = cards.find((c) => /9902/.test(c.textContent));
+    ck('the unlinked account says so', unlinked && /Not linked to the bank feed/.test(unlinked.textContent),
+       unlinked && unlinked.textContent);
+    ck('  and offers Connect ON THAT CARD, beside the sentence stating the problem',
+       !!unlinked && !!unlinked.querySelector('[data-plaid="connect"]'),
+       'she had to go looking for it in another block');
+    ck('  carrying which account she pressed it on',
+       !!unlinked && unlinked.querySelector('[data-plaid="connect"]').dataset.mask === '9902'
+       && /Bank of America/.test(unlinked.querySelector('[data-plaid="connect"]').dataset.bank),
+       unlinked && unlinked.querySelector('[data-plaid="connect"]').outerHTML);
+
+    const linked = cards.find((c) => /3301/.test(c.textContent));
+    ck('an account already connected is NOT offered Connect',
+       !!linked && !linked.querySelector('[data-plaid="connect"]'),
+       'a Connect button on a connected account is an invitation to link it twice');
+    const stale = cards.find((c) => /4410/.test(c.textContent));
+    ck('  nor is one that just needs signing in again',
+       !!stale && !stale.querySelector('[data-plaid="connect"]'),
+       'that one needs Plaid update mode, which keeps its history — connecting afresh would lose it');
+
     ck('the repair banner offers Sign in again on THAT bank', !!d.querySelector('#repair [data-plaid="reconnect"][data-item="item-2"]'));
     ck('  and so does the feed panel', !!d.querySelector('#feed [data-plaid="reconnect"][data-item="item-2"]'));
     ck('coming in is shown, with names escaped', /\$10,000\.00/.test(d.getElementById('coming').textContent)

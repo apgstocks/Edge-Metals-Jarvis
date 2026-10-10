@@ -1230,6 +1230,27 @@ const MUTATIONS = [
       find: '        const shared = sharedBrowser();\n        if (shared) {',
       to:   '        const shared = null;\n        if (shared) {' },
 
+    // ── "Connect option should be here in EDGE METALS", 2026-10-10 ──────
+    // The button existed, in the Plaid block further down the page — the
+    // right place to connect A bank and the wrong place to connect THIS
+    // one. The card already said the account was not linked; the thing that
+    // fixes that belongs beside the sentence stating the problem.
+    { name: 'connect: the unlinked account card loses its Connect button again',
+      file: 'dashboard/bank-match.html', suites: ['bank-redesign'],
+      find: '      ${(!a.linked && !a.needs_login) ? `<button class="btn go link" data-plaid="connect"',
+      to:   '      ${false ? `<button class="btn go link" data-plaid="connect"' },
+    // A Connect button on an account that IS connected invites linking it
+    // twice; on one that needs signing in again it would lose the history
+    // that Plaid update mode keeps.
+    { name: 'connect: every account card offers Connect, linked or not',
+      file: 'dashboard/bank-match.html', suites: ['bank-redesign'],
+      find: '      ${(!a.linked && !a.needs_login) ? `<button class="btn go link" data-plaid="connect"',
+      to:   '      ${true ? `<button class="btn go link" data-plaid="connect"' },
+    { name: 'connect: the button no longer says which account it is for',
+      file: 'dashboard/bank-match.html', suites: ['bank-redesign'],
+      find: '         data-bank="${esc(a.bank || \'\')}" data-mask="${esc(a.mask || \'\')}"',
+      to:   '         data-bank="" data-mask=""' },
+
     // ── THE DIAGNOSTIC THAT WENT BLIND AFTER THE SPLIT ──────────────────
     // She opened /api/pdf-timings twice and got {"summary":[],"recent":[]}.
     // Nothing was broken: the timer runs in whichever process rendered, so

@@ -50,6 +50,15 @@ main{padding:16px 20px 60px;max-width:1240px;margin:0 auto}
 .accts{display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:10px;margin-bottom:12px}
 .acct{background:var(--surface-card);border:1px solid var(--border-subtle);border-radius:6px;padding:12px 14px;min-width:0}
 .acct.warn{border-color:#8A6416}
+/* ── CONNECT, ON THE ACCOUNT THAT IS NOT CONNECTED ───────────────────────
+   Apsara, 2026-10-10, looking at Bank of America ••3301 under Edge Metals:
+   "Connect option should be here in EDGE METALS ... Not linked to the bank
+   feed not somewhere else."
+   It existed, in the Plaid block further down the page — which is the right
+   place to connect A bank and the wrong place to connect THIS one. The card
+   already says the account is not linked; the thing that fixes that belongs
+   on the same card, next to the sentence stating the problem. */
+.acct .link{margin-top:8px;display:block;width:100%}
 .acct .co{font-family:var(--font-mono);font-size:9.5px;font-weight:600;letter-spacing:.12em;text-transform:uppercase;color:var(--copper-300)}
 .acct .bk{color:var(--text-strong);font-weight:700;font-size:14px;margin-top:2px}
 .acct .bk .mask{font-family:var(--font-mono);color:var(--text-muted);font-weight:500}
@@ -660,6 +669,9 @@ async function renderOverview() {
       <div class="bk">${esc(a.bank || 'Bank')} ${a.mask ? `<span class="mask">••${esc(a.mask)}</span>` : ''}</div>
       ${figure}
       <span class="pill ${status[0]}">${esc(status[1])}</span>
+      ${(!a.linked && !a.needs_login) ? `<button class="btn go link" data-plaid="connect"
+         data-bank="${esc(a.bank || '')}" data-mask="${esc(a.mask || '')}"
+         title="Sign in at ${esc(a.bank || 'the bank')} and let Jarvis pull this account's lines">Connect</button>` : ''}
       ${a.unassigned ? '<div class="sub">Jarvis does not know which company this account belongs to, so its lines are not matched.</div>' : ''}
     </div>`;
   });
@@ -1437,7 +1449,16 @@ document.addEventListener('click', async (ev) => {
         try {
           await api('/api/plaid/exchange', { body: { public_token: publicToken,
             institution: (meta && meta.institution && meta.institution.name) || null } });
-          toast('Bank linked — now press Pull', 'good');
+          /* Which account she pressed Connect on, when she pressed it on a
+             card. The exchange joins Plaid's accounts to hers by the last
+             four digits (helpers/bankLedger.joinPlaidAccounts), so if she
+             picked a different account at the bank this one stays unlinked
+             — and the re-render below is what tells her, honestly, rather
+             than a message claiming success. */
+          const want = t.dataset.mask
+              ? ` — ${t.dataset.bank || 'that bank'} ••${t.dataset.mask} should now show Connected`
+              : '';
+          toast('Bank linked' + want + ' — now press Pull', 'good');
           load();
         } catch (e) { toast(e.message, 'bad'); }
       },
