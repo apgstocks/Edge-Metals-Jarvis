@@ -146,6 +146,29 @@ function reportIn(text) {
     return null;
 }
 
+// ── A supplier's account: paid, advances, pending — and what went wrong ──
+// Apsara, 2026-10-10: "How much have we paid for supplier A so far including
+// advance. and check how much is pending. If i paid more than what was
+// already there ... help me in finding out where it gone wrong exactly."
+// helpers/supplierAudit.js does the work; this only chooses one supplier or
+// the overview. Read only, like every report in this file.
+function supplierAccount(opts = {}) {
+    const audit = require('./supplierAudit');
+    if (opts.supplier) return audit.answer(opts.supplier);
+    const names = require('./supplierAccount').suppliers();
+    if (!names.length) return { spoken: 'There are no supplier bills or payments yet.', screen: 'Supplier accounts — none yet.' };
+    const all = names.map((n) => audit.audit(n));
+    const over = all.filter((a) => a.overpaid > 0).sort((a, b) => b.overpaid - a.overpaid);
+    const owing = all.filter((a) => a.pending > audit.SLACK).sort((a, b) => b.pending - a.pending);
+    const totalOwed = owing.reduce((t, a) => t + a.pending, 0);
+    const spoken = (owing.length ? `We owe ${money(totalOwed)} across ${plural(owing.length, 'supplier')}.` : 'We owe no supplier anything.')
+        + (over.length ? ` ${plural(over.length, 'supplier looks', 'suppliers look')} overpaid — ${over.slice(0, 3).map((a) => a.supplier).join(', ')}. Name one and I'll find where it went wrong.` : '');
+    const screen = ['SUPPLIER ACCOUNTS',
+        ...(over.length ? ['OVERPAID', ...over.slice(0, 10).map((a) => `• ${a.supplier} — ${cents(a.overpaid)} more than owed`)] : []),
+        ...(owing.length ? ['OWED', ...owing.slice(0, 15).map((a) => `• ${a.supplier} — ${cents(a.pending)}`)] : [])].join('\n');
+    return { spoken, screen };
+}
+
 function run(report, opts = {}) {
     switch (report) {
         case 'margin': return margin(opts);
@@ -154,9 +177,10 @@ function run(report, opts = {}) {
         case 'commission': return settlements('commission', opts);
         case 'edge_inventory': return edgeInventory(opts);
         case 'quotes': return quotes(opts);
+        case 'supplier_account': return supplierAccount(opts);
         default: return null;
     }
 }
 
-module.exports = { run, reportIn, margin, trucking, settlements, edgeInventory, quotes,
-    REPORTS: ['margin', 'trucking', 'freight', 'commission', 'edge_inventory', 'quotes'] };
+module.exports = { run, reportIn, margin, trucking, settlements, edgeInventory, quotes, supplierAccount,
+    REPORTS: ['margin', 'trucking', 'freight', 'commission', 'edge_inventory', 'quotes', 'supplier_account'] };

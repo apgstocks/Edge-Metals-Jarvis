@@ -5758,7 +5758,7 @@ async function metalsBriefing(chatId) {
 async function metalsReport(chatId, report, who) {
     const mr = require('../helpers/metalsReports');
     const opts = report === 'trucking' ? { company: who }
-        : report === 'edge_inventory' ? { supplier: who }
+        : (report === 'edge_inventory' || report === 'supplier_account') ? { supplier: who }
         : (report === 'freight' || report === 'commission') ? { customer: who } : {};
     let out;
     try { out = mr.run(report, opts); }
@@ -5767,7 +5767,7 @@ async function metalsReport(chatId, report, who) {
         return { action_taken: 'metals_report_failed' };
     }
     if (!out) {
-        await _send(chatId, 'Which one — margin, trucking, freight, commission, Edge Inventory or quote requests?');
+        await _send(chatId, 'Which one — margin, trucking, freight, commission, Edge Inventory, quote requests or a supplier account?');
         return { action_taken: 'metals_report_unknown' };
     }
     await _send(chatId, out.screen);
