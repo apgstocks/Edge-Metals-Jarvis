@@ -277,6 +277,87 @@ section('G — a render failure and a Drive failure say different things');
 }
 
 // ══════════════════════════════════════════════════════════════════════════
+section('H — why EDGE_130 was touched at all');
+// The end-of-day guard was `if (l.pdf_link && l.weights_pdf_link) skip`. A
+// load with no scale photos NEVER gets weights_pdf_link — that document is
+// deliberately skipped because there are no photos for it to carry — so the
+// guard asked for a field that could not exist, and rebuilt and re-uploaded
+// every photo-less load's documents on its own evening for nothing.
+
+{
+    const { hasReportablePdfs, hasScalePhotosOn } = require(path.join(ROOT, 'helpers/loadsPdf'));
+
+    const NOPHOTO = [{ description: 'Brass', gross_weight: 8000, tare_weight: 500, price: 2, unit: 'lb' }];
+    const bare = await loads.addLoad({ date: '2026-10-10', seller: 'Kiran', items: NOPHOTO });
+    ck('a load with no scale photos has no photos', !hasScalePhotosOn(bare));
+    ck('  and one with them does', hasScalePhotosOn({ items: ITEMS }));
+    // A TARE-only load is photo-backed too. The weights PDF prints a photo
+    // link under each weight it has, and the operator who photographed the
+    // empty truck and not the full one still produced evidence. Checking
+    // only gross is the drift this one shared definition exists to stop —
+    // and it would quietly put those loads back into the nightly rebuild.
+    ck('  a tare photo alone still counts',
+       hasScalePhotosOn({ items: [{ tare_photo_link: 'https://drive.test/tare.jpg' }] }),
+       'checking only gross_photo_link sends tare-only loads back into the nightly rebuild');
+    ck('  and an empty load counts as neither',
+       !hasScalePhotosOn({ items: [] }) && !hasScalePhotosOn({}) && !hasScalePhotosOn(null));
+
+    uploads = [];
+    const done = await generateAndStoreLoadPdfs(bare);
+    ck('generating it makes the ticket and the receipt, not the weights PDF',
+       uploads.length === 2, uploads.join(', '));
+    ck('  so weights_pdf_link is absent BY DESIGN', !done.weights_pdf_link);
+
+    // THE BUG: the old guard. Spelled out rather than referenced, because the
+    // point is that this expression is false on a load that is complete.
+    ck('THE OLD GUARD said this complete load was unfinished',
+       !(done.pdf_link && done.weights_pdf_link),
+       'if this is ever false the regeneration never happened and this section is pointless');
+    ck('THE FIX: the load is recognised as having what the report links',
+       hasReportablePdfs(done));
+
+    // And it must still catch a load that genuinely IS missing something.
+    ck('a load with photos but no weights PDF still needs generating',
+       !hasReportablePdfs({ pdf_link: 'x', items: ITEMS }));
+    ck('a load with no ticket always needs generating',
+       !hasReportablePdfs({ items: NOPHOTO }));
+    ck('  and one with both is done', hasReportablePdfs({ pdf_link: 'x', weights_pdf_link: 'y', items: ITEMS }));
+    // The receipt is deliberately NOT in the guard: the email links the
+    // ticket and the weights PDF only, so rebuilding three documents to
+    // backfill a receipt nobody links is work for nobody.
+    ck('a missing receipt does NOT trigger a rebuild',
+       hasReportablePdfs({ pdf_link: 'x', receipt_pdf_link: null, items: NOPHOTO }),
+       'the end-of-day email never links the receipt');
+
+    // ── END TO END THROUGH THE REAL LOOP ────────────────────────────────
+    // The predicate being right is not the fix; the scheduler using it is.
+    // Counting Drive uploads is the only way to see the redundant work,
+    // which is what actually failed on 2026-10-08.
+    // Comments stripped first. The replaced guard is QUOTED in the comment
+    // explaining why it went, so scanning the raw file finds the old code in
+    // the prose about the old code — the same trap that broke the
+    // subresource scan in helpers/pdfBrowser.js earlier today.
+    const sched = fs.readFileSync(path.join(ROOT, 'scheduler.js'), 'utf8')
+        .replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+    ck('the end-of-day report uses the shared rule', /hasReportablePdfs\(l\)/.test(sched));
+    ck('  and no longer asks for weights_pdf_link directly',
+       !/if \(l\.pdf_link && l\.weights_pdf_link\)/.test(sched),
+       'the guard that could not be satisfied is still there');
+
+    uploads = [];
+    const todays = [loads.getLoad(bare.id), loads.getLoad(clean.id)];
+    for (const l of todays) {
+        if (hasReportablePdfs(l)) continue;
+        await generateAndStoreLoadPdfs(l);
+    }
+    ck('a second evening over finished loads uploads NOTHING',
+       uploads.length === 0, `re-uploaded: ${uploads.join(', ') || 'none'}`);
+    ck('  and neither load picked up a warning',
+       onDisk(bare.id).length === 0 && onDisk(clean.id).length === 0,
+       `${onDisk(bare.id)} / ${onDisk(clean.id)}`);
+}
+
+// ══════════════════════════════════════════════════════════════════════════
 console.log(`\n${pass} passed, ${fail} failed`);
 if (failures.length) { console.log('Failures:'); failures.forEach(f => console.log('  - ' + f)); }
 try { fs.rmSync(TMP, { recursive: true, force: true }); } catch (e) {}

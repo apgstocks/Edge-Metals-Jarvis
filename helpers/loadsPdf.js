@@ -8,6 +8,39 @@ const { generateLoadPdf, generateWeightsPdf, generateLoadReceiptPdf, PDF_TEMPLAT
 const { uploadLoadPdf } = require('./drive');
 const { updateLoad } = require('./loads');
 
+// ── WILL THIS LOAD EVER HAVE A WEIGHTS PDF? ─────────────────────────────
+// Added 2026-08-12 per Apsara: the weights PDF exists to be photo-backed
+// proof of weight, so if no scale photos were ever captured for this load
+// there is nothing for it to prove and it shouldn't be produced at all —
+// previously it was generated unconditionally, yielding a document whose
+// whole purpose (the photo links under each weight) was empty.
+//
+// EXPORTED 2026-10-10, and the reason is EDGE_130. The end-of-day yard
+// report's guard was `if (l.pdf_link && l.weights_pdf_link) skip`, so a
+// photo-less load — which by the rule above can NEVER have
+// weights_pdf_link — failed that test every time and had all of its
+// documents rebuilt and re-uploaded on its own evening, for nothing. The
+// third upload failed, and that is the warning she found the next morning.
+//
+// So the scheduler has to know this rule, and there must be exactly ONE
+// copy of it: a second inline `.some(it => it.gross_photo_link ...)` over
+// there is two definitions of "photo-backed" waiting to disagree, and the
+// one that drifts would silently start rebuilding documents again.
+function hasScalePhotosOn(load) {
+    const items = Array.isArray(load && load.items) ? load.items : [];
+    return items.some(it => it && (it.gross_photo_link || it.tare_photo_link));
+}
+
+// Does this load already hold every document the end-of-day report LINKS?
+// Deliberately not "every document it could have": the report emails
+// pdf_link and weights_pdf_link and nothing else (scheduler.js ~1224), so
+// the POS receipt is none of its business. Rebuilding three documents to
+// backfill a receipt the email never mentions would be work for nobody.
+function hasReportablePdfs(load) {
+    if (!load || !load.pdf_link) return false;
+    return !!load.weights_pdf_link || !hasScalePhotosOn(load);
+}
+
 // Generates the priced ticket + the separate weights-only PDF + the POS
 // receipt-format PDF for a load, uploads all three to Drive, and patches
 // the load record with the resulting links — returns the UPDATED load
@@ -53,13 +86,7 @@ async function generateAndStoreLoadPdfs(load, opts = {}) {
     const buf = await generateLoadPdf(load, { ...opts, payment });
     const file = await uploadLoadPdf(load.id, buf);
 
-    // Added 2026-08-12 per Apsara: the weights PDF exists to be photo-backed
-    // proof of weight, so if no scale photos were ever captured for this load
-    // there is nothing for it to prove and it shouldn't be produced at all —
-    // previously it was generated unconditionally, yielding a document whose
-    // whole purpose (the photo links under each weight) was empty.
-    const items = Array.isArray(load.items) ? load.items : [];
-    const hasScalePhotos = items.some(it => it.gross_photo_link || it.tare_photo_link);
+    const hasScalePhotos = hasScalePhotosOn(load);
 
     // Warnings are recorded on the load so a failed sub-document is visible
     // in the UI instead of only in pm2 logs (helpers/loadWarnings.js).
@@ -155,4 +182,4 @@ async function generateAndStoreLoadPdfs(load, opts = {}) {
     return getLoad(load.id) || null;
 }
 
-module.exports = { generateAndStoreLoadPdfs };
+module.exports = { generateAndStoreLoadPdfs, hasScalePhotosOn, hasReportablePdfs };

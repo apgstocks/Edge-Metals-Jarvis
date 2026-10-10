@@ -1174,10 +1174,24 @@ async function eodYardReport() {
     // trying to attach/link them — a load only gets PDFs once someone hits
     // "Generate PDF" on the card, so this generates on the fly for any load
     // still sitting at status:'open' rather than silently omitting it.
-    const { generateAndStoreLoadPdfs } = require('./helpers/loadsPdf');
+    //
+    // ── THE GUARD ASKED FOR A FIELD THAT CANNOT EXIST (2026-10-10) ──────
+    // It used to read `if (l.pdf_link && l.weights_pdf_link)`. A load with no
+    // scale photos deliberately never GETS weights_pdf_link — helpers/
+    // loadsPdf.js skips that document because there are no photos for it to
+    // carry — so every photo-less load failed this test on its own evening
+    // and had all of its documents rebuilt and re-uploaded to Drive for
+    // nothing. On 2026-10-08 the third of those uploads failed, which is the
+    // ⚠ Apsara found on EDGE_130 the next morning, 36 seconds after this
+    // job started.
+    //
+    // hasReportablePdfs asks the question this loop actually means: does the
+    // load already hold what the email below LINKS? It lives next to the
+    // weights-PDF rule it depends on, so the two cannot drift apart.
+    const { generateAndStoreLoadPdfs, hasReportablePdfs } = require('./helpers/loadsPdf');
     const withPdfs = [];
     for (const l of todays) {
-        if (l.pdf_link && l.weights_pdf_link) { withPdfs.push(l); continue; }
+        if (hasReportablePdfs(l)) { withPdfs.push(l); continue; }
         try {
             const updated = await generateAndStoreLoadPdfs(l);
             withPdfs.push(updated || l);

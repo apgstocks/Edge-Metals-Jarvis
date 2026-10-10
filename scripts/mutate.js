@@ -1313,6 +1313,40 @@ const MUTATIONS = [
       find: '        message: MESSAGES[code] || code,',
       to:   '        message: describeError(detail) || MESSAGES[code] || code,' },
 
+    // ── THE NIGHTLY REBUILD THAT HAD NOTHING TO REBUILD ─────────────────
+    // The first of these is the bug itself: the guard that asks for a field
+    // a photo-less load deliberately never gets. It must be caught by a
+    // test that counts Drive uploads, not one that only reads the predicate.
+    { name: 'eod: the guard asks for a weights PDF a photo-less load cannot have',
+      file: 'helpers/loadsPdf.js', suites: ['load-warning-clear'],
+      find: '    return !!load.weights_pdf_link || !hasScalePhotosOn(load);',
+      to:   '    return !!load.weights_pdf_link;' },
+    // The other direction: skip everything, and a load that really is
+    // missing its ticket is emailed with no link at all.
+    { name: 'eod: every load counts as finished, so a missing ticket is never made',
+      file: 'helpers/loadsPdf.js', suites: ['load-warning-clear'],
+      find: '    if (!load || !load.pdf_link) return false;',
+      to:   '    if (!load) return false;' },
+    // The receipt is deliberately out of the guard. Putting it in rebuilds
+    // three documents to backfill one the email never links.
+    { name: 'eod: a missing receipt drags the whole load through a rebuild',
+      file: 'helpers/loadsPdf.js', suites: ['load-warning-clear'],
+      find: '    return !!load.weights_pdf_link || !hasScalePhotosOn(load);',
+      to:   '    return !!load.receipt_pdf_link && (!!load.weights_pdf_link || !hasScalePhotosOn(load));' },
+    // One definition of "photo-backed", in one place. A tare-only load is
+    // still photo-backed — the half-checked version is the drift this
+    // extraction exists to prevent.
+    { name: 'eod: a tare photo stops counting as a scale photo',
+      file: 'helpers/loadsPdf.js', suites: ['load-warning-clear'],
+      find: '    return items.some(it => it && (it.gross_photo_link || it.tare_photo_link));',
+      to:   '    return items.some(it => it && it.gross_photo_link);' },
+    // And the scheduler has to USE it. A correct predicate nobody calls is
+    // how reconcile.js went dead.
+    { name: 'eod: the report goes back to its own inline guard',
+      file: 'scheduler.js', suites: ['load-warning-clear'],
+      find: '        if (hasReportablePdfs(l)) { withPdfs.push(l); continue; }',
+      to:   '        if (l.pdf_link && l.weights_pdf_link) { withPdfs.push(l); continue; }' },
+
     // ── THE DIAGNOSTIC THAT WENT BLIND AFTER THE SPLIT ──────────────────
     // She opened /api/pdf-timings twice and got {"summary":[],"recent":[]}.
     // Nothing was broken: the timer runs in whichever process rendered, so
