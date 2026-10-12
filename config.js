@@ -525,6 +525,22 @@ const PLAID_ENV       = process.env.PLAID_ENV       || 'sandbox';
 // cannot log in. helpers/plaidWebhook.js is the whole of its protection —
 // an ES256 signature, a five-minute replay window and a body-hash check.
 const PLAID_WEBHOOK_URL = process.env.PLAID_WEBHOOK_URL || '';
+// ── HOW MUCH HISTORY A NEW BANK LINK ASKS FOR ───────────────────────────
+// Apsara, 2026-10-12: "all the transactions from plaid is from 2026-07-14
+// to 2026-10-09.why not 2026 datas are sent?" — 2026-07-14 was exactly 90
+// days earlier, which is Plaid's default when days_requested is not set.
+//
+// 730 days is Plaid's maximum and the default here on purpose: the ledger
+// this feed is matched against holds 2025 bills, so a window that starts
+// inside 2026 cannot reach them. Lower it only if a first link is taking
+// too long to populate — Plaid's documented cost of a wider window is a
+// longer initial historical poll.
+//
+// SET ONCE, PER ITEM, AT LINK TIME. Plaid does not allow it to be changed
+// afterwards, so changing this env does nothing to a bank already
+// connected; that bank has to be unlinked and linked again. See the long
+// note in helpers/plaid.js's linkToken.
+const PLAID_DAYS_REQUESTED = process.env.PLAID_DAYS_REQUESTED || '730';
 const SESSION_PATH   = process.env.SESSION_PATH || path.join(DATA_DIR, '.wwebjs_auth');
 
 // Google Drive (booking PDFs) — service-account JSON path
@@ -881,7 +897,7 @@ module.exports = {
     ROOT, DATA_DIR, MEMORY_DIR, LOGS_DIR, ...FILES,
     GEMINI_API_KEY, GEMINI_MODEL, GEMINI_MODEL_SMART, GEMINI_MODEL_CLAIMS, GEMINI_MODEL_PAY, GEMINI_MODEL_QB, GEMINI_MODEL_CHAT,
     API_PORT, API_TOKEN, APP_PASSWORD, ADMIN_PASSWORD, STAFF_PASSWORD, JARVIS_PASSWORD, SESSION_PATH,
-    PLAID_CLIENT_ID, PLAID_SECRET, PLAID_ENV, PLAID_WEBHOOK_URL,
+    PLAID_CLIENT_ID, PLAID_SECRET, PLAID_ENV, PLAID_WEBHOOK_URL, PLAID_DAYS_REQUESTED,
     SUPABASE_URL, SUPABASE_KEY,
     GDRIVE_KEYFILE, GDRIVE_FOLDER_ID, GDRIVE_UPLOAD_FOLDER_ID, GDRIVE_SCALE_TICKETS_FOLDER_ID, GDRIVE_CLAIMS_FOLDER_ID,
     ADDRESS_BOOK_DOC_ID, ADDRESS_BOOK_FILE,

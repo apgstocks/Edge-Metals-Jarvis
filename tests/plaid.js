@@ -484,6 +484,91 @@ const Q = require(path.join(ROOT, 'helpers/plaid'));
     for (const k of Object.keys(require.cache)) if (k.startsWith(ROOT)) delete require.cache[k];
 }
 
+// ── J — HOW FAR BACK A NEW LINK ASKS FOR ──────────────────────────────────
+// Apsara, 2026-10-12: "all the transactions from plaid is from 2026-07-14 to
+// 2026-10-09.why not 2026 datas are sent?"
+//
+// 2026-07-14 was EXACTLY 90 days before she asked, and 90 is Plaid's
+// documented default when transactions.days_requested is not sent. The body
+// did not send it. So the Item was only ever GRANTED 90 days, and
+// /transactions/sync had nothing older to give however often it ran — it was
+// never a sync problem, and no amount of re-syncing would have found it.
+//
+// This section asserts the REQUEST BODY, because that is the only place the
+// decision exists. There is no response to check and no stored field to
+// read: Plaid fixes the window when the Item is created and, per its docs,
+// the value "cannot be updated" afterwards. A test that waited for evidence
+// in the data would have to wait for a re-link to prove anything.
+{
+    section('J — the history window a new link asks for');
+
+    for (const k of Object.keys(require.cache)) if (k.startsWith(ROOT)) delete require.cache[k];
+    const Z = require(path.join(ROOT, 'helpers/plaid'));
+
+    calls.length = 0;
+    await Z.linkToken({ fetchImpl: fakeFetch(LINK_OK) });
+    const newBody = calls.find((c) => /link\/token\/create/.test(c.url)).body;
+
+    ck('a NEW link asks for a window at all', !!(newBody.transactions
+        && Number(newBody.transactions.days_requested) > 0),
+       JSON.stringify(newBody.transactions) + ' — unset means Plaid uses 90 days');
+    // 730 is Plaid's maximum. It matters here and is not a round number: the
+    // ledger this feed is matched against holds 2025 bills, so a window that
+    // starts inside 2026 cannot reach them.
+    ck('  two years of it, which is Plaid\'s maximum',
+       newBody.transactions.days_requested === 730, String(newBody.transactions.days_requested));
+    // The property, not the constant: whatever the number is, it must be far
+    // enough back to reach last year. A mutation that sets 90 has to turn
+    // this red for the reason she actually cares about.
+    ck('  far enough back to reach a 2025 bill',
+       newBody.transactions.days_requested >= 400,
+       `${newBody.transactions.days_requested} days does not reach last year`);
+    ck('and it is still read-only — no money product crept in',
+       JSON.stringify(newBody.products) === JSON.stringify(['transactions']),
+       JSON.stringify(newBody.products));
+
+    // ── UPDATE MODE MUST NOT SEND IT ────────────────────────────────────
+    // Update mode re-authenticates an EXISTING Item, where the window is
+    // already fixed and `products` is deliberately omitted. Sending it there
+    // is meaningless at best, and this is the caller that would be missed:
+    // it is the same shape of mistake as a rule landing on every path when
+    // it belonged to one screen.
+    const items = Z.items ? Z.items() : [];
+    const existing = (items || []).find((i) => i.access_token);
+    if (!existing) {
+        ck('an item exists to test update mode against', false,
+           'section C/F should have left one — skipping would hide the caller that breaks');
+    } else {
+        calls.length = 0;
+        await Z.linkToken({ itemId: existing.item_id, fetchImpl: fakeFetch(LINK_OK) });
+        const upd = calls.find((c) => /link\/token\/create/.test(c.url)).body;
+        ck('an UPDATE link omits the window', upd.transactions === undefined,
+           JSON.stringify(upd.transactions));
+        ck('  and still omits products, as Plaid requires', upd.products === undefined);
+        ck('  while carrying the access token for the item being re-authed',
+           upd.access_token === existing.access_token);
+    }
+
+    // The env override, clamped. 730 is Plaid's ceiling and a larger number
+    // is an API error, not a bigger window.
+    process.env.PLAID_DAYS_REQUESTED = '99999';
+    for (const k of Object.keys(require.cache)) if (k.startsWith(ROOT)) delete require.cache[k];
+    const Z2 = require(path.join(ROOT, 'helpers/plaid'));
+    calls.length = 0;
+    await Z2.linkToken({ fetchImpl: fakeFetch(LINK_OK) });
+    ck('an over-large setting is clamped to 730, not sent',
+       calls.find((c) => /link\/token\/create/.test(c.url)).body.transactions.days_requested === 730);
+    process.env.PLAID_DAYS_REQUESTED = '180';
+    for (const k of Object.keys(require.cache)) if (k.startsWith(ROOT)) delete require.cache[k];
+    const Z3 = require(path.join(ROOT, 'helpers/plaid'));
+    calls.length = 0;
+    await Z3.linkToken({ fetchImpl: fakeFetch(LINK_OK) });
+    ck('  and a deliberate smaller window is honoured',
+       calls.find((c) => /link\/token\/create/.test(c.url)).body.transactions.days_requested === 180,
+       'she may want a shorter first poll');
+    delete process.env.PLAID_DAYS_REQUESTED;
+}
+
 console.log(`\n  ${pass} passed, ${fail} failed`);
 if (failures.length) { console.log('\n  failed:'); failures.forEach((f) => console.log('    · ' + f)); }
 process.exit(fail ? 1 : 0);

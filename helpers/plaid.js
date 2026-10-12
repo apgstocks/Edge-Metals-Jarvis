@@ -280,6 +280,33 @@ async function linkToken({ fetchImpl, userId = 'edge-jarvis', itemId = null } = 
         country_codes: ['US'],
         language: 'en',
     };
+    // ── HOW FAR BACK, ASKED FOR ONCE AND NEVER AGAIN ─────────────────────
+    // Apsara, 2026-10-12: "all the transactions from plaid is from
+    // 2026-07-14 to 2026-10-09.why not 2026 datas are sent?"
+    //
+    // 2026-07-14 is EXACTLY 90 days before that question. This body did not
+    // set days_requested, so Plaid used its documented default of 90, and
+    // /transactions/sync then has nothing older to hand over however often
+    // it runs. It was never a sync problem.
+    //
+    // THE PART THAT MATTERS OPERATIONALLY: Plaid's docs say this value
+    // "cannot be updated" once Transactions has been added to an Item. There
+    // is no setting to widen the window later and no sync that recovers it —
+    // the only way is to remove the Item and link the bank again. So this
+    // has to be right BEFORE a bank is connected, which is exactly where she
+    // is: the sandbox item is still linked and BofA and Chase are not.
+    //
+    // 730 is Plaid's maximum, and it is the right ask for this app rather
+    // than a round number: the ledger it matches against holds 2025 bills,
+    // so a window that starts inside 2026 cannot match them. The documented
+    // cost of asking for more is a longer first historical poll, not a
+    // larger bill — worth her confirming against her own plan, but it is not
+    // a per-day charge.
+    //
+    // NEW MODE ONLY. Update mode re-authenticates an EXISTING item, where
+    // this value is already fixed and `products` is deliberately omitted;
+    // sending it there would be meaningless at best.
+    const DAYS = Math.min(730, Math.max(1, Number(cfg.PLAID_DAYS_REQUESTED) || 730));
     // ── UPDATE MODE: SIGNING BACK IN TO A BANK ALREADY LINKED ────────────
     // When the bank wants her to log in again (password changed, consent
     // renewed), pressing "Connect a bank" would create a SECOND item for the
@@ -288,12 +315,15 @@ async function linkToken({ fetchImpl, userId = 'edge-jarvis', itemId = null } = 
     // cursor, history kept. Plaid requires `products` to be left out here.
     // The access token goes to Plaid in this request body and nowhere else.
     let mode = 'new';
+    body.transactions = { days_requested: DAYS };
     if (itemId) {
         const item = items().find((i) => i.item_id === itemId);
         if (!item) fail(`no linked item ${itemId}`);
         if (!item.access_token) fail(`item ${itemId} has no access token — unlink it and connect again`);
         body.access_token = item.access_token;
         delete body.products;
+        // Already fixed on this Item — see the days_requested note above.
+        delete body.transactions;
         mode = 'update';
     }
     // ── WHERE PLAID SHOULD PUSH ─────────────────────────────────────────

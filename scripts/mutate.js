@@ -1251,6 +1251,34 @@ const MUTATIONS = [
       find: '         data-bank="${esc(a.bank || \'\')}" data-mask="${esc(a.mask || \'\')}"',
       to:   '         data-bank="" data-mask=""' },
 
+    // ── NINETY DAYS, BECAUSE NOBODY ASKED FOR MORE ──────────────────────
+    // Apsara, 2026-10-12: "all the transactions from plaid is from
+    // 2026-07-14 to 2026-10-09.why not 2026 datas are sent?" 2026-07-14 was
+    // exactly 90 days earlier — Plaid's default when days_requested is not
+    // sent. The first mutation is the bug as it stood.
+    { name: 'plaid: a new link stops asking for history, so Plaid grants 90 days',
+      file: 'helpers/plaid.js', suites: ['plaid'],
+      find: '    body.transactions = { days_requested: DAYS };',
+      to:   '    /* unset — Plaid defaults to 90 */' },
+    { name: 'plaid: the window shrinks to 90 and cannot reach a 2025 bill',
+      file: 'config.js', suites: ['plaid'],
+      find: "const PLAID_DAYS_REQUESTED = process.env.PLAID_DAYS_REQUESTED || '730';",
+      to:   "const PLAID_DAYS_REQUESTED = process.env.PLAID_DAYS_REQUESTED || '90';" },
+    // Over Plaid's ceiling is an API error, not a bigger window — so a
+    // mistyped env must be clamped rather than forwarded.
+    { name: 'plaid: an over-large setting is forwarded instead of clamped',
+      file: 'helpers/plaid.js', suites: ['plaid'],
+      find: '    const DAYS = Math.min(730, Math.max(1, Number(cfg.PLAID_DAYS_REQUESTED) || 730));',
+      to:   '    const DAYS = Number(cfg.PLAID_DAYS_REQUESTED) || 730;' },
+    // THE CALLER THAT WOULD BE MISSED. Update mode re-authenticates an
+    // existing Item, where the window is already fixed and products is
+    // omitted. This is the same shape as a rule landing on every path when
+    // it belonged to one screen.
+    { name: 'plaid: update mode sends a window the Item cannot change',
+      file: 'helpers/plaid.js', suites: ['plaid'],
+      find: "        // Already fixed on this Item — see the days_requested note above.\n        delete body.transactions;",
+      to:   '        /* left on the body */' },
+
     // ── THE CRASH REPORTS THAT NOTHING READ ─────────────────────────────
     // Apsara, 2026-10-12: "Why there is no provision for USers,incidents,
     // crash report?" The capture was complete since 2026-09-06 and no route
