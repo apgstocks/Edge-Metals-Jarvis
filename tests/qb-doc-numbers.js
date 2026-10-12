@@ -99,6 +99,27 @@ section('B2 — second look: same party + same total, container not named');
     ck('a different total stays NO MATCH', g('WWWU0000003').status === 'none');
 }
 
+section('B3 — the real misses from the first live run');
+{
+    const live = q.fromQuickBooks({ bills: [
+        { Id: '38598', DocNumber: 'Local_eccomelt', TxnDate: '2026-05-28', TotalAmt: 60284, VendorRef: { name: 'Mazariegos' }, PrivateNote: 'EMHU260742', Line: [] },
+        { Id: '38905', DocNumber: 'EMHU273618', TxnDate: '2026-06-04', TotalAmt: 60649.2, VendorRef: { name: 'Inesh Cores Chapin' }, PrivateNote: 'EMHU273618', Line: [] },
+        { Id: '50001', DocNumber: 'LOCAL-260917-03IHEF', TxnDate: '2026-09-17', TotalAmt: 10974, VendorRef: { name: 'Junk car' }, PrivateNote: '', Line: [] },
+        { Id: '50002', DocNumber: 'LOCAL-260911-0MDDQY', TxnDate: '2026-09-11', TotalAmt: 10974, VendorRef: { name: 'Junk car' }, PrivateNote: '', Line: [] }] });
+    const jb = [
+        { id: 'x1', container_no: 'EMHU260742', supplier: 'Mazariegos', date: '2026-05-28', invoice_no: '' },
+        { id: 'x2', container_no: 'EMHU273618', supplier: 'Inesh Cores Chapin', date: '2026-06-04', invoice_no: '' },
+        { id: 'abc03iHEF', container_no: '4009760', supplier: 'Junk car', date: '2026-09-17', invoice_no: '' },
+        { id: 'zz', container_no: '4009761', supplier: 'Junk car', date: '2026-09-18', invoice_no: '' }];
+    const out = q.plan({ sales: [], bills: jb, qbDocs: live, salesWithTotals: () => ({}),
+        billsWithTotals: (b) => ({ net_payable: { x1: 60284, x2: 60649.2, abc03iHEF: 10974, zz: 10664 }[b.id] }) });
+    const g = (c) => out.find((r) => r.container === c);
+    ck('a 6-digit container named in the memo, same party + total -> SURE', g('EMHU260742').status === 'sure' && g('EMHU260742').qb.doc === 'Local_eccomelt', JSON.stringify(g('EMHU260742').status));
+    ck('  and the doc number that is just the container is taken as it is', g('EMHU273618').status === 'sure' && g('EMHU273618').qb.doc === 'EMHU273618');
+    ck('Jarvis\'s own LOCAL number picks the right one of two same-total documents', g('4009760').status === 'sure' && g('4009760').qb.doc === 'LOCAL-260917-03IHEF', JSON.stringify(g('4009760')));
+    ck('a bare reference number is NOT searched for in free text', g('4009761').status === 'none', g('4009761').status);
+}
+
 // ══════════════════════════════════════════════════════════════════════════
 section('C — apply writes SURE rows only, and never over a number');
 // ══════════════════════════════════════════════════════════════════════════

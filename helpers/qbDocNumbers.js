@@ -43,10 +43,21 @@ function fromQuickBooks({ invoices = [], bills = [] }) {
     const shape = (kind, x, ref) => ({
         kind, id: String(x.Id), doc: norm(x.DocNumber), date: String(x.TxnDate || '').slice(0, 10),
         party: norm((x[ref] || {}).name), containers: containersOfDoc(x), total: r2(x.TotalAmt),
+        text: [x.PrivateNote, (x.Line || []).map((l) => l.Description).filter(Boolean).join(' ')].join(' ').toUpperCase().replace(/[^A-Z0-9]/g, ''),
         memo: [x.PrivateNote, (x.Line || []).map((l) => l.Description).filter(Boolean).join(' / ')].filter(Boolean).join(' | ').replace(/\s+/g, ' ').slice(0, 140),
     });
     return [...invoices.map((x) => shape('invoice', x, 'CustomerRef')), ...bills.map((x) => shape('bill', x, 'VendorRef'))];
 }
+
+// ── HER CONTAINER NUMBERS ARE NOT ALWAYS 4 LETTERS + 7 DIGITS ────────────────
+// The first live run (2026-10-12) missed four bills whose QuickBooks memo was
+// exactly the container, same party, same total to the cent: EMHU260742,
+// EMHU273618, UMXU935580, UMXU268411 — six digits, no check digit. The
+// 4+7 pattern above never saw them. So a Jarvis container that looks like a
+// container at all (4 letters + 6 or 7 digits) is also looked for AS TYPED in
+// the document's text. Reference numbers (4009760, PO#...) are never searched
+// this way: a bare number inside free text is not proof of anything.
+const CONTAINERISH = /^[A-Z]{4}\d{6,7}$/;
 
 // The same shape out of the nightly snapshot rows (helpers/quickbooks/snapshot.js),
 // which keep only the first container: a document with more is marked so it can
@@ -77,6 +88,16 @@ function groupSales(sales, withTotals) {
     }
     return [...groups.values()];
 }
+// The number push.js gives a row with no container: LOCAL-<yymmdd>-<last 6 of
+// the id>. Rows pushed that way carry it in QuickBooks while Jarvis kept the
+// field blank, so it can be recomputed exactly — no guessing from amounts.
+function localDocFor(r) {
+    let d = norm(r.date);
+    if (!/^\d{4}-\d{2}-\d{2}/.test(d)) { try { d = require('./bills').sortableDate(d) || ''; } catch (e) { d = ''; } }
+    const ymd = d.replace(/-/g, '').slice(2, 8);
+    const id = norm(r.id).replace(/[^A-Za-z0-9]/g, '').slice(-6).toUpperCase();
+    return ymd.length === 6 && id ? `LOCAL-${ymd}-${id}` : '';
+}
 function groupBills(bills, withTotals) {
     const out = [];
     for (const b of bills) {
@@ -84,14 +105,26 @@ function groupBills(bills, withTotals) {
         // Push builds the QuickBooks bill at net_payable (amount less trucking).
         const t = withTotals(b);
         out.push({ kind: 'bill', store: 'bills', container: norm(b.container_no).toUpperCase(), party: norm(b.supplier),
-            date: b.date, ids: [b.id], total: r2(t.net_payable != null ? t.net_payable : t.amount) });
+            date: b.date, ids: [b.id], total: r2(t.net_payable != null ? t.net_payable : t.amount), localDoc: localDocFor(b) });
     }
     return out;
 }
 
 function judge(group, qbDocs) {
-    const hits = qbDocs.filter((d) => d.kind === group.kind && d.containers.includes(group.container));
     const base = { ...group, qb: null, status: 'ask', why: '' };
+    // Exactly the number Jarvis would have made for this row: no doubt about whose it is.
+    if (group.localDoc) {
+        const mine = qbDocs.filter((d) => d.kind === group.kind && d.doc === group.localDoc);
+        if (mine.length === 1) {
+            const d = mine[0];
+            if (!partyAgrees(group.party, d.party)) return { ...base, qb: d, why: `Jarvis's own number ${d.doc} exists, but the party differs: "${group.party}" vs "${d.party}"` };
+            if (Math.abs(group.total - d.total) >= 0.005) return { ...base, qb: d, why: `Jarvis's own number ${d.doc} exists, but total differs: Jarvis ${group.total} vs QuickBooks ${d.total}` };
+            return { ...base, qb: d, status: 'sure', why: 'the LOCAL number Jarvis made for this row, same party, same total' };
+        }
+    }
+    const asTyped = CONTAINERISH.test(flat(group.container)) ? flat(group.container) : null;
+    const hits = qbDocs.filter((d) => d.kind === group.kind
+        && (d.containers.includes(group.container) || (asTyped && d.text && d.text.includes(asTyped))));
     if (!hits.length) return { ...base, status: 'none', why: 'no QuickBooks document carries this container' };
     if (hits.length > 1) return { ...base, qb: hits, why: `${hits.length} QuickBooks documents carry this container (${hits.map((h) => '#' + h.id + ' ' + (h.doc || 'no number')).join(', ')})` };
     const d = hits[0];
