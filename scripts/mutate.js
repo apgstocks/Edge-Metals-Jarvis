@@ -1251,6 +1251,64 @@ const MUTATIONS = [
       find: '         data-bank="${esc(a.bank || \'\')}" data-mask="${esc(a.mask || \'\')}"',
       to:   '         data-bank="" data-mask=""' },
 
+    // ── A RE-LINK MUST NOT DOUBLE HER LEDGER ────────────────────────────
+    // Apsara, 2026-10-12: "i need 2026 transactions from 01-01-2026" — which
+    // needs a re-link, which reissues every transaction_id and account_id.
+    // These mutations are all about money going wrong quietly.
+    //
+    // THE EXPENSIVE ONE FIRST. Many-to-one pairing folds two genuine $500
+    // deposits on the same day into one row, and she is short $500 with
+    // nothing saying so.
+    { name: 'relink: pairing stops being one-to-one, so two identical deposits become one',
+      file: 'helpers/bankRelink.js', suites: ['bank-relink'],
+      find: '        const idx = bucket.find((i) => !claimed.has(i));',
+      to:   '        const idx = bucket[0];' },
+    // Direction out of the key pairs a $4,200 payment with a $4,200 receipt.
+    { name: 'relink: direction leaves the key, so a payment can pair with a receipt',
+      file: 'helpers/bankRelink.js', suites: ['bank-relink'],
+      find: "    return [row.date || '', row.direction || '', amt.toFixed(2), normDesc(row.desc)].join('|');",
+      to:   "    return [row.date || '', amt.toFixed(2), normDesc(row.desc)].join('|');" },
+    { name: 'relink: the date leaves the key, so any same-amount row pairs',
+      file: 'helpers/bankRelink.js', suites: ['bank-relink'],
+      find: "    return [row.date || '', row.direction || '', amt.toFixed(2), normDesc(row.desc)].join('|');",
+      to:   "    return [row.direction || '', amt.toFixed(2), normDesc(row.desc)].join('|');" },
+    // account_id IS reissued on re-link. Putting it back in the key means
+    // nothing ever pairs and the duplication happens anyway.
+    { name: 'relink: account_id goes into the key, so nothing pairs at all',
+      file: 'helpers/bankRelink.js', suites: ['bank-relink'],
+      find: "    return [row.date || '', row.direction || '', amt.toFixed(2), normDesc(row.desc)].join('|');",
+      to:   "    return [row.account_id || '', row.date || '', row.direction || '', amt.toFixed(2), normDesc(row.desc)].join('|');" },
+    // The stale-plan refusal. Without it, re-keying onto an id a sync has
+    // already inserted puts two rows under one id.
+    { name: 'relink: a stale plan is applied anyway, putting two rows under one id',
+      file: 'helpers/bankRelink.js', suites: ['bank-relink'],
+      find: '            if (byId.has(p.new_id)) {',
+      to:   '            if (false) {' },
+    // strict:true is what makes the refusal reach the caller. Without it
+    // mutateJson logs and returns, and apply() reports success.
+    { name: 'relink: the refusal is swallowed, so a refused apply reports success',
+      file: 'helpers/bankRelink.js', suites: ['bank-relink'],
+      find: '    }, { strict: true });',
+      to:   '    });' },
+    // Her own work is the entire reason to re-key rather than re-insert.
+    { name: 'relink: the re-keyed row loses the match she made on it',
+      file: 'helpers/bankRelink.js', suites: ['bank-relink'],
+      find: '            row.id = p.new_id;',
+      to:   '            row.id = p.new_id; row.matched = null; row.category = \'\';' },
+    // The stale join: bank and company are derived from account_id, so
+    // leaving the old one attributes every paired row to a dead account.
+    { name: 'relink: the account id is left stale after the re-key',
+      file: 'helpers/bankRelink.js', suites: ['bank-relink'],
+      find: '            if (p.new_account_id) row.account_id = p.new_account_id;',
+      to:   '            /* left stale */' },
+    // AND THE ONE THAT PROTECTS EVERY ORDINARY SYNC. Teaching the routine
+    // path to match on the natural key is the tempting fix and the one that
+    // silently swallows a real second transaction.
+    { name: 'relink: the natural key is wired into every routine sync',
+      file: 'helpers/bankLedger.js', suites: ['bank-relink'],
+      find: '        if (!byId.has(fresh.id)) {',
+      to:   "        const nk = require('./bankRelink').keyOf(fresh);\n        const twin = rows.findIndex((r) => require('./bankRelink').keyOf(r) === nk);\n        if (!byId.has(fresh.id) && twin < 0) {" },
+
     // ── NINETY DAYS, BECAUSE NOBODY ASKED FOR MORE ──────────────────────
     // Apsara, 2026-10-12: "all the transactions from plaid is from
     // 2026-07-14 to 2026-10-09.why not 2026 datas are sent?" 2026-07-14 was
