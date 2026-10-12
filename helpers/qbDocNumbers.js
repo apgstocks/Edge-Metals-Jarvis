@@ -162,9 +162,14 @@ function plan({ sales, bills, qbDocs, salesWithTotals, billsWithTotals }) {
 // SURE group. `edit` is injected (sales.editSale / bills.editBill) so a test
 // never reaches the live ledgers. Re-checks that the row is STILL blank, so a
 // number she typed since the list was made is never overwritten.
-async function apply(results, { editSale, editBill, getSale, getBill }) {
+//
+// skipLabels (opt-in): leave out a QuickBooks "number" with no digit in it —
+// "Local", "local delivery" — which is a word someone typed, shared by many
+// documents, and would make the nightly push see several matches for the row.
+async function apply(results, { editSale, editBill, getSale, getBill, skipLabels = false }) {
     const done = [], skipped = [];
     for (const r of results.filter((x) => x.status === 'sure')) {
+        if (skipLabels && !/\d/.test(r.qb.doc)) { skipped.push({ id: r.ids.join(','), container: r.container, why: `"${r.qb.doc}" is a label, not a number` }); continue; }
         for (const id of r.ids) {
             const cur = r.store === 'sales' ? getSale(id) : getBill(id);
             if (!cur || norm(cur.invoice_no)) { skipped.push({ id, container: r.container, why: 'no longer blank' }); continue; }

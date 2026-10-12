@@ -130,6 +130,16 @@ ck('only SURE groups are written', edits.every(([id]) => ['s1', 's1b'].includes(
 ck('  the blank row got the QuickBooks number', edits.some(([id, p]) => id === 's1' && p.invoice_no === '1043'));
 ck('  a number typed since the list was made is NOT overwritten', !edits.some(([id]) => id === 's1b') && out.skipped.some((s) => s.id === 's1b'));
 
+{
+    const sure = [{ status: 'sure', store: 'bills', ids: ['p1'], container: 'C1', qb: { doc: 'Local' } }, { status: 'sure', store: 'bills', ids: ['p2'], container: 'C2', qb: { doc: 'EMHU273618' } }];
+    const w = [];
+    const o2 = await q.apply(sure, { editSale: async () => {}, editBill: async (id, p) => w.push([id, p.invoice_no]), getSale: () => null, getBill: () => ({ invoice_no: '' }), skipLabels: true });
+    ck('skipLabels leaves out "Local" and writes the real number', JSON.stringify(w) === JSON.stringify([['p2', 'EMHU273618']]) && o2.skipped.length === 1, JSON.stringify([w, o2.skipped]));
+    const w2 = [];
+    await q.apply(sure, { editSale: async () => {}, editBill: async (id, p) => w2.push(id), getSale: () => null, getBill: () => ({ invoice_no: '' }) });
+    ck('without it, both are written (as she asked: keep it as per QuickBooks)', w2.length === 2);
+}
+
 // ══════════════════════════════════════════════════════════════════════════
 section('D — the sweep: a filled number is not a different invoice');
 // ══════════════════════════════════════════════════════════════════════════

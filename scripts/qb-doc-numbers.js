@@ -7,6 +7,7 @@
 //   node scripts/qb-doc-numbers.js --since=2026-01-01
 //   node scripts/qb-doc-numbers.js --live --by-amount   # also look for same party + same total when the container is not named (leads only, never auto-filled)
 //   node scripts/qb-doc-numbers.js --apply         # write the SURE ones only
+//   node scripts/qb-doc-numbers.js --apply --skip-labels   # ...but not words like "Local" that have no digit
 //
 // Run it where the real ledgers are (the VM). Default is a dry run; it writes
 // a CSV beside the other reports and changes nothing. --apply puts the number
@@ -70,7 +71,8 @@ const flag = (k) => process.argv.includes(`--${k}`);
     console.log('written:', file);
 
     if (!flag('apply')) { console.log('DRY RUN — nothing was changed. Add --apply to fill the SURE rows.'); return; }
-    const out = await q.apply(results, { editSale: sales.editSale, editBill: bills.editBill, getSale: sales.getSale, getBill: (id) => bills.list().find((b) => b.id === id) });
-    console.log(`filled ${out.done.length} row(s); skipped ${out.skipped.length} that were no longer blank.`);
+    const out = await q.apply(results, { editSale: sales.editSale, editBill: bills.editBill, getSale: sales.getSale, getBill: (id) => bills.list().find((b) => b.id === id), skipLabels: flag('skip-labels') });
+    console.log(`filled ${out.done.length} row(s); skipped ${out.skipped.length}.`);
+    for (const k of out.skipped) console.log(`  skipped ${k.container}: ${k.why}`);
     for (const d of out.done) console.log(`  ${d.store} ${d.container} -> ${d.invoice_no}`);
 })().catch((e) => { console.error('qb-doc-numbers failed:', e.message); process.exit(1); });
