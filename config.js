@@ -530,17 +530,25 @@ const PLAID_WEBHOOK_URL = process.env.PLAID_WEBHOOK_URL || '';
 // to 2026-10-09.why not 2026 datas are sent?" — 2026-07-14 was exactly 90
 // days earlier, which is Plaid's default when days_requested is not set.
 //
-// 730 days is Plaid's maximum and the default here on purpose: the ledger
-// this feed is matched against holds 2025 bills, so a window that starts
-// inside 2026 cannot reach them. Lower it only if a first link is taking
-// too long to populate — Plaid's documented cost of a wider window is a
-// longer initial historical poll.
+// Then, asked how far back: "i need 2026 transactions from 01-01-2026" and
+// "i just need 2026 data". So 2026 is the requirement, and 2025 is not.
 //
-// SET ONCE, PER ITEM, AT LINK TIME. Plaid does not allow it to be changed
-// afterwards, so changing this env does nothing to a bank already
-// connected; that bank has to be unlinked and linked again. See the long
-// note in helpers/plaid.js's linkToken.
-const PLAID_DAYS_REQUESTED = process.env.PLAID_DAYS_REQUESTED || '730';
+// (I had defaulted this to Plaid's maximum of 730 on the reasoning that her
+// ledger holds 2025 bills. That was MY inference, not her instruction, and
+// she has since said otherwise — recorded here because a guess of mine
+// written up as a requirement is the worst way to file a decision.)
+//
+// 365, not 285. The window is a ROLLING LOOKBACK from the day the bank is
+// linked, not a fixed start date — 285 days reaches 1 January only if the
+// link happens today, and the distance grows by a day every day. Since
+// Plaid will not let the window be changed afterwards, undersizing it is
+// the mistake that costs a second unlink/re-link. A year covers her ask
+// with ~80 days of margin and still polls faster than two years would.
+//
+// SET ONCE, PER ITEM, AT LINK TIME. Changing this env does nothing to a
+// bank already connected; that bank has to be unlinked and linked again
+// (scripts/bank-relink.js). See the long note in helpers/plaid.js.
+const PLAID_DAYS_REQUESTED = process.env.PLAID_DAYS_REQUESTED || '365';
 const SESSION_PATH   = process.env.SESSION_PATH || path.join(DATA_DIR, '.wwebjs_auth');
 
 // Google Drive (booking PDFs) — service-account JSON path

@@ -1318,16 +1318,24 @@ const MUTATIONS = [
       file: 'helpers/plaid.js', suites: ['plaid'],
       find: '    body.transactions = { days_requested: DAYS };',
       to:   '    /* unset — Plaid defaults to 90 */' },
-    { name: 'plaid: the window shrinks to 90 and cannot reach a 2025 bill',
+    { name: 'plaid: the window goes back to 90 days and cannot reach January',
       file: 'config.js', suites: ['plaid'],
-      find: "const PLAID_DAYS_REQUESTED = process.env.PLAID_DAYS_REQUESTED || '730';",
+      find: "const PLAID_DAYS_REQUESTED = process.env.PLAID_DAYS_REQUESTED || '365';",
       to:   "const PLAID_DAYS_REQUESTED = process.env.PLAID_DAYS_REQUESTED || '90';" },
+    // Trimmed to EXACTLY the distance to 1 January. This is the plausible
+    // mistake — it looks like precisely what she asked for — and it is wrong
+    // because the window is a rolling lookback from the link date, so it
+    // reaches January only if the link happens the same day she asked.
+    { name: 'plaid: the window is trimmed to exactly 1 January, leaving no margin',
+      file: 'config.js', suites: ['plaid'],
+      find: "const PLAID_DAYS_REQUESTED = process.env.PLAID_DAYS_REQUESTED || '365';",
+      to:   "const PLAID_DAYS_REQUESTED = process.env.PLAID_DAYS_REQUESTED || '284';" },
     // Over Plaid's ceiling is an API error, not a bigger window — so a
     // mistyped env must be clamped rather than forwarded.
     { name: 'plaid: an over-large setting is forwarded instead of clamped',
       file: 'helpers/plaid.js', suites: ['plaid'],
-      find: '    const DAYS = Math.min(730, Math.max(1, Number(cfg.PLAID_DAYS_REQUESTED) || 730));',
-      to:   '    const DAYS = Number(cfg.PLAID_DAYS_REQUESTED) || 730;' },
+      find: '    const DAYS = Math.min(730, Math.max(1, Number(cfg.PLAID_DAYS_REQUESTED) || 365));',
+      to:   '    const DAYS = Number(cfg.PLAID_DAYS_REQUESTED) || 365;' },
     // THE CALLER THAT WOULD BE MISSED. Update mode re-authenticates an
     // existing Item, where the window is already fixed and products is
     // omitted. This is the same shape as a rule landing on every path when

@@ -296,17 +296,22 @@ async function linkToken({ fetchImpl, userId = 'edge-jarvis', itemId = null } = 
     // has to be right BEFORE a bank is connected, which is exactly where she
     // is: the sandbox item is still linked and BofA and Chase are not.
     //
-    // 730 is Plaid's maximum, and it is the right ask for this app rather
-    // than a round number: the ledger it matches against holds 2025 bills,
-    // so a window that starts inside 2026 cannot match them. The documented
-    // cost of asking for more is a longer first historical poll, not a
-    // larger bill — worth her confirming against her own plan, but it is not
-    // a per-day charge.
+    // HOW FAR BACK IS HERS: "i need 2026 transactions from 01-01-2026" and
+    // "i just need 2026 data". 365 days, not Plaid's 730 maximum and not the
+    // 285 that merely reaches 1 January — because this is a ROLLING LOOKBACK
+    // from the day the bank is linked, not a fixed start date, and the
+    // distance to 1 January grows by a day every day. Undersizing a value
+    // Plaid will not let us change afterwards is what costs a second
+    // unlink/re-link. The figure itself lives in config.js, with the note on
+    // why 730 was wrong — it rested on an inference of mine about her 2025
+    // bills that she has since corrected.
     //
     // NEW MODE ONLY. Update mode re-authenticates an EXISTING item, where
     // this value is already fixed and `products` is deliberately omitted;
     // sending it there would be meaningless at best.
-    const DAYS = Math.min(730, Math.max(1, Number(cfg.PLAID_DAYS_REQUESTED) || 730));
+    // Clamped to Plaid's own 1..730: over the ceiling is an API error, not a
+    // bigger window, so a mistyped env must not reach the request.
+    const DAYS = Math.min(730, Math.max(1, Number(cfg.PLAID_DAYS_REQUESTED) || 365));
     // ── UPDATE MODE: SIGNING BACK IN TO A BANK ALREADY LINKED ────────────
     // When the bank wants her to log in again (password changed, consent
     // renewed), pressing "Connect a bank" would create a SECOND item for the

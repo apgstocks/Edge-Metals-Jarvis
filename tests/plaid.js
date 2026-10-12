@@ -512,17 +512,21 @@ const Q = require(path.join(ROOT, 'helpers/plaid'));
     ck('a NEW link asks for a window at all', !!(newBody.transactions
         && Number(newBody.transactions.days_requested) > 0),
        JSON.stringify(newBody.transactions) + ' — unset means Plaid uses 90 days');
-    // 730 is Plaid's maximum. It matters here and is not a round number: the
-    // ledger this feed is matched against holds 2025 bills, so a window that
-    // starts inside 2026 cannot reach them.
-    ck('  two years of it, which is Plaid\'s maximum',
-       newBody.transactions.days_requested === 730, String(newBody.transactions.days_requested));
-    // The property, not the constant: whatever the number is, it must be far
-    // enough back to reach last year. A mutation that sets 90 has to turn
-    // this red for the reason she actually cares about.
-    ck('  far enough back to reach a 2025 bill',
-       newBody.transactions.days_requested >= 400,
-       `${newBody.transactions.days_requested} days does not reach last year`);
+    // Her ask: "i need 2026 transactions from 01-01-2026", "i just need 2026
+    // data". A year, not Plaid's 730 maximum — 730 was an inference of mine
+    // about her 2025 bills, which she corrected.
+    ck('  a year of it', newBody.transactions.days_requested === 365,
+       String(newBody.transactions.days_requested));
+    // THE PROPERTY, not the constant, and this is the subtle part: the window
+    // is a rolling lookback from the LINK DATE, not a fixed start. 2026-01-01
+    // was 285 days before she asked, so anything at or under that reaches
+    // January only if the link happens that same day — and Plaid will not let
+    // the value be changed afterwards. A mutation that sets 90, or that trims
+    // this to exactly 285, has to turn this red.
+    const TO_JAN_1 = 284;              // 2026-01-01 → 2026-10-12, when she asked
+    ck('  with margin over the 284 days to 1 January, because the window does not grow',
+       newBody.transactions.days_requested > TO_JAN_1,
+       `${newBody.transactions.days_requested} days leaves no room if the link slips`);
     ck('and it is still read-only — no money product crept in',
        JSON.stringify(newBody.products) === JSON.stringify(['transactions']),
        JSON.stringify(newBody.products));
