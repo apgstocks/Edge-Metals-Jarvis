@@ -267,6 +267,7 @@ function synthesise(text, voice) {
                 }
                 try {
                     const j = JSON.parse(d);
+                    try { require('./aiUsage').record({ model: MODEL, usage: j.usageMetadata, label: 'tts' }); } catch (e) { /* never the reason speech fails */ }
                     const cand = (j.candidates || [])[0];
                     // A 200 with no audio is a real outcome, not a parse bug:
                     // the model can stop for its own reasons (quota, a safety

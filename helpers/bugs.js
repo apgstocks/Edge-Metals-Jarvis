@@ -56,6 +56,55 @@ function clean(input = {}) {
     };
 }
 
+// ── THE MEMORY BANK: HAS THIS HAPPENED BEFORE? ─────────────────────────────
+// Apsara, 2026-10-12: "an issue happened ... we resolved it using some steps.
+// If that issue happens again it would be better if the agent remembers it so
+// that it doesn't have to perform the same investigation from scratch."
+//
+// Decided with her: the memory IS Bugzilla (it already holds the fix note and
+// history; a second list would drift), it advises and never acts, and both
+// Jarvis and the builder look here first.
+//
+// Only a RESOLVED item WITH a fix note counts as something to remember: a
+// "fixed" with no note is exactly what cannot be reused. Matching is plain
+// word overlap (no model call, so it costs nothing and cannot fail a crash
+// report), and words containing digits are ignored because ids, containers
+// and timestamps differ on every occurrence of the same problem.
+const STOP = new Set(['that', 'this', 'with', 'from', 'have', 'were', 'when', 'what', 'then', 'there', 'their',
+    'which', 'would', 'could', 'should', 'about', 'after', 'before', 'into', 'than', 'also', 'does', 'doesn',
+    'didn', 'error', 'broke', 'jarvis', 'asked', 'times', 'answered', 'couldn', 'cannot', 'because']);
+function tokens(text) {
+    return new Set(String(text || '').toLowerCase().split(/[^a-z0-9_]+/)
+        .filter((w) => w.length >= 4 && !/\d/.test(w) && !STOP.has(w)));
+}
+const MIN_SHARED = 3, MIN_RATIO = 0.5;
+const MIN_FIX_NOTE = 15;
+// `rows` is passed by fileBug (inside its lock); otherwise the saved list.
+function findSimilar(text, { limit = 3, rows = null, signature = null, exclude = null } = {}) {
+    const q = tokens(text);
+    const out = [];
+    for (const b of (rows || list())) {
+        if (!b || b.id === exclude || !(b.status === 'fixed' || b.status === 'verified')) continue;
+        if (!str(b.fix_note, 400)) continue;
+        let score = 0;
+        if (signature && b.signature === signature) score = 1;
+        else if (q.size) {
+            const t = tokens(`${b.title} ${b.detail} ${b.cause || ''} ${b.keywords || ''}`);
+            let shared = 0;
+            for (const w of q) if (t.has(w)) shared++;
+            if (shared >= MIN_SHARED && shared / q.size >= MIN_RATIO) score = shared / q.size;
+        }
+        if (score > 0) out.push({ score, b });
+    }
+    out.sort((a, z) => z.score - a.score || (z.b.status === 'verified') - (a.b.status === 'verified'));
+    return out.slice(0, limit).map(({ score, b }) => ({
+        id: b.id, title: b.title, status: b.status, cause: b.cause || null, fix_note: b.fix_note,
+        commit: b.commit || null, fixed_at: b.fixed_at || null, verified: b.status === 'verified',
+        score: Math.round(score * 100) / 100,
+    }));
+}
+const brief = (m) => ({ id: m.id, title: m.title, status: m.status, cause: m.cause, fix_note: m.fix_note, commit: m.commit });
+
 // One item. `history` is the point of the file: who said what, when.
 async function fileBug(input = {}) {
     const rec = clean(input);
@@ -70,6 +119,13 @@ async function fileBug(input = {}) {
                 hit.times = (hit.times || 1) + 1;
                 hit.last_seen_at = now();
                 hit.updated_at = now();
+                // Marked fixed and it happened again: the fix did not hold. That is
+                // the single most useful thing the list can say, so it is recorded.
+                if (hit.status === 'fixed') {
+                    hit.recurred_after_fix = true;
+                    hit.history = Array.isArray(hit.history) ? hit.history : [];
+                    hit.history.push({ at: now(), by: rec.reporter || rec.source, what: 'seen again after being marked fixed', note: null });
+                }
                 saved = hit;
                 return rows;
             }
@@ -82,6 +138,15 @@ async function fileBug(input = {}) {
             fixed_at: null, verified_at: null, fix_note: null, commit: null,
             history: [{ at: now(), what: 'filed', by: rec.reporter || rec.source, note: rec.detail || null }],
         };
+        // Seen before? Attach what worked last time. Advice only: nothing is applied.
+        try {
+            const known = findSimilar(`${rec.title} ${rec.detail}`, { rows, signature: rec.signature, limit: 2 });
+            if (known.length) {
+                row.known_fix = known.map(brief);
+                row.recurrence_of = known[0].id;
+                row.history.push({ at: now(), by: 'jarvis', what: `looks like ${known[0].id}, which was ${known[0].status}`, note: known[0].fix_note });
+            }
+        } catch (e) { /* remembering is a help; it must never stop a bug being filed */ }
         rows.push(row);
         saved = row;
         return rows;
@@ -100,11 +165,18 @@ async function update(id, patch = {}, by = null) {
         const before = b.status;
         if (patch.status !== undefined) {
             if (!STATUSES.includes(patch.status)) { problem = `status must be one of ${STATUSES.join(', ')}`; return rows; }
+            // A fix with no usable note is a fix nobody can recognise or reuse, so it
+            // is refused here (not just asked for in the screen): the voice, the API
+            // and the tab all arrive at this one gate. Apsara, 2026-10-12.
+            if (patch.status === 'fixed' && before !== 'fixed') {
+                const note = str(patch.fix_note !== undefined ? patch.fix_note : b.fix_note, 400);
+                if (note.length < MIN_FIX_NOTE) { problem = `say what the fix was (what caused it and the steps that worked) before marking it fixed — at least ${MIN_FIX_NOTE} characters`; return rows; }
+            }
             b.status = patch.status;
             if (patch.status === 'fixed') b.fixed_at = now();
             if (patch.status === 'verified') b.verified_at = now();
         }
-        for (const k of ['title', 'detail', 'area', 'severity', 'fix_note', 'commit']) {
+        for (const k of ['title', 'detail', 'area', 'severity', 'fix_note', 'commit', 'cause', 'keywords']) {
             if (patch[k] !== undefined) b[k] = str(patch[k], k === 'detail' ? 2000 : 400) || null;
         }
         b.updated_at = now();
@@ -190,5 +262,5 @@ async function autoFileCrash(err, where) {
     });
 }
 
-module.exports = { list, filter, get, fileBug, update, summary, autoFileQuestion, autoFileCrash,
+module.exports = { list, filter, get, fileBug, update, summary, autoFileQuestion, autoFileCrash, findSimilar,
     STATUSES, SEVERITIES, SOURCES, AREAS, sigOf };

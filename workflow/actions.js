@@ -4545,8 +4545,19 @@ async function setBugList(chatId, ids) { _bugLists[chatId] = { ids, at: Date.now
 function resolveBugRef(chatId, ref) {
     const bugs = require('../helpers/bugs');
     const raw = String(ref || '').trim();
-    const byId = bugs.get(raw.toUpperCase());
+    // Ids are BUG-001-a1b2: the suffix is lower-case hex, so upper-casing what she
+    // said never matched a full id. Match ignoring case, and accept the short
+    // "BUG-001" she is likely to say when it is unambiguous.
+    const lc = raw.toLowerCase();
+    const all = bugs.list();
+    const byId = all.find((b) => b && String(b.id).toLowerCase() === lc);
     if (byId) return byId;
+    const short = /^bug[- ]?(\d{1,4})$/.exec(lc);
+    if (short) {
+        const pre = `bug-${short[1].padStart(3, '0')}-`;
+        const hits = all.filter((b) => b && String(b.id).toLowerCase().startsWith(pre));
+        if (hits.length === 1) return hits[0];
+    }
     const n = parseInt(raw, 10);
     const held = _bugLists[chatId];
     if (Number.isInteger(n) && held && Date.now() - held.at < BUG_LIST_TTL_MS && n >= 1 && n <= held.ids.length) {
@@ -4567,6 +4578,14 @@ async function closeBugForConfirm(chatId, { ref, note = null, status = 'fixed' }
         await _send(chatId, `I can't tell which one you mean. Say "show me the bugs" and then the number, or give me the id.`);
         require('../helpers/wa-state').sayAloud("I can't tell which one you mean — say show me the bugs first.");
         return { action_taken: 'bug_not_found' };
+    }
+    // A fix is only worth remembering if it says what happened. Ask for it now,
+    // rather than staging a yes/no that update() would refuse a moment later.
+    if (status !== 'verified' && bug.status !== 'fixed' && String(note || bug.fix_note || '').trim().length < 15) {
+        const ask = `What was the fix for ${bug.id}? Tell me the cause and the steps that worked — say "close ${bug.id} fixed by ..." — so I can recognise it if it comes back.`;
+        await _send(chatId, ask);
+        require('../helpers/wa-state').sayAloud('What was the fix? Tell me the cause and what you did.');
+        return { action_taken: 'bug_close_needs_note', id: bug.id };
     }
     const staged = await setPending(chatId, {
         type: 'await_bug_close', bug_id: bug.id, new_status: status === 'verified' ? 'verified' : 'fixed', note,

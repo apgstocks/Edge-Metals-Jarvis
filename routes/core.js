@@ -63,6 +63,15 @@ module.exports = function (app, ctx) {
         } catch (e) { res.status(500).json({ error: e.message }); }
     });
 
+    // "Has this happened before?" — the resolved items with a fix note that look
+    // like this text. Same access as the list itself; read-only.
+    app.get('/api/bugs/similar', (req, res) => {
+        try {
+            const q = String(req.query.q || '').slice(0, 1000);
+            res.json({ matches: q.trim() ? require('./helpers/bugs').findSimilar(q, { limit: 5 }) : [] });
+        } catch (e) { res.status(500).json({ error: e.message }); }
+    });
+
     app.post('/api/bugs', async (req, res) => {
         try {
             const bugs = require('./helpers/bugs');

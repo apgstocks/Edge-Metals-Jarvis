@@ -1564,6 +1564,9 @@ function start() {
         .run({ send: (t) => _sendToManager(t), alreadySent, markSent })
         .catch(e => console.error('[SCHED] booking-agent:', e)), TZ);
 
+    // Apsara, 2026-10-12: "constantly monitoring cost". Hourly; speaks at most
+    // once per Pacific day. See helpers/aiCostWatch.js.
+    cron.schedule('20 * * * *',   () => require('./helpers/aiCostWatch').check().catch(e => console.error('[SCHED] ai-cost-watch:', e)), TZ);
     cron.schedule('30 6 * * *',   () => require('./helpers/integritySweepJob').run()
         .catch(e => console.error('[SCHED] integrity-sweep:', e)), TZ);
     cron.schedule('45 22 * * *',  () => nightlyCutoffBackfill().catch(e => console.error('[SCHED] cutoff-backfill:', e)), TZ);

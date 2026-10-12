@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AI usage — Jarvis</title>
+<style>
+/* Apsara, 2026-10-12: "observability should be there ... what actions does that
+   agent perform, constantly monitoring cost so that I can keep track of it."
+   Standalone page like /books. Read-only: it changes nothing. Tokens are exact;
+   cost is an ESTIMATE until real rates are put in data/ai-prices.json, and the
+   page says so whenever that is true. */
+:root{
+  --bg:#0C0E10; --card:#14181B; --sunk:#0F1214; --line:#2B3239; --soft:#1E2429;
+  --strong:#FFFFFF; --body:#CBD1D6; --muted:#A7B0B7; --faint:#7E8891;
+  --ok:#3DA836; --warn:#D99A2B; --bad:#C5402F; --bar:#3A6EA5;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--body);font:14px/1.5 "IBM Plex Sans",system-ui,sans-serif}
+header{display:flex;align-items:center;gap:16px;padding:14px 20px;border-bottom:1px solid var(--soft)}
+header a{color:var(--muted);text-decoration:none}
+h1{margin:0;font-size:18px;color:var(--strong)}
+main{max-width:1100px;margin:0 auto;padding:20px 16px 60px}
+.tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:12px;margin-bottom:16px}
+.tile{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:14px 16px}
+.tile .k{font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--faint)}
+.tile .v{font-size:26px;font-weight:700;color:var(--strong);margin-top:2px}
+.tile .s{font-size:12px;color:var(--muted)}
+.tile.hot .v{color:var(--bad)}
+.note{background:var(--sunk);border:1px solid var(--line);border-left:3px solid var(--warn);border-radius:6px;padding:9px 12px;margin:0 0 10px;font-size:12.5px}
+.note.bad{border-left-color:var(--bad)}
+section{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:16px;margin-bottom:16px}
+h2{margin:0 0 10px;font-size:13px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted)}
+table{width:100%;border-collapse:collapse;font-size:13px}
+th{text-align:left;font-size:11px;letter-spacing:.06em;color:var(--faint);padding:5px 8px}
+td{padding:6px 8px;border-top:1px solid var(--soft)}
+td.n,th.n{text-align:right;font-variant-numeric:tabular-nums}
+.bars{display:flex;align-items:flex-end;gap:3px;height:90px}
+.bars div{flex:1;background:var(--bar);min-width:3px;border-radius:2px 2px 0 0;position:relative}
+.bars div.today{background:var(--ok)}
+.bars div.over{background:var(--bad)}
+.feed li{list-style:none;padding:7px 0;border-top:1px solid var(--soft);display:flex;gap:10px}
+.feed{margin:0;padding:0}
+.feed .t{color:var(--faint);min-width:140px;font-variant-numeric:tabular-nums}
+.feed .src{min-width:84px;color:var(--muted);text-transform:uppercase;font-size:11px;letter-spacing:.06em;padding-top:2px}
+.feed .bad{color:var(--bad)}
+select{background:var(--sunk);color:var(--body);border:1px solid var(--line);border-radius:6px;padding:4px 8px}
+.muted{color:var(--faint)}
+</style>
+</head>
+<body>
+<header>
+  <a href="/">&larr; Jarvis</a>
+  <h1>AI usage &amp; activity</h1>
+  <span style="flex:1"></span>
+  <label class="muted">Period
+    <select id="days"><option value="7">7 days</option><option value="30" selected>30 days</option><option value="90">90 days</option></select>
+  </label>
+</header>
+<main>
+  <div id="notes"></div>
+  <div class="tiles" id="tiles"></div>
+  <section><h2>Estimated spend per day (Pacific time)</h2><div class="bars" id="bars"></div><div class="muted" id="barnote" style="font-size:12px;margin-top:6px"></div></section>
+  <section><h2>Who is using it</h2><div id="callers"></div></section>
+  <section><h2>By model</h2><div id="models"></div></section>
+  <section><h2>What Jarvis did recently</h2><ul class="feed" id="feed"></ul><div class="muted" id="problems" style="font-size:12px;margin-top:8px"></div></section>
+</main>
+<script>
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s == null ? '' : s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+const usd = (n) => '$' + (Number(n) || 0).toFixed(Number(n) < 1 ? 3 : 2);
+const num = (n) => (Number(n) || 0).toLocaleString('en-US');
+async function api(url) {
+  const r = await fetch(url);
+  if (r.status === 401) { location.href = '/login'; throw new Error('signed out'); }
+  const j = await r.json().catch(() => ({ error: 'bad response' }));
+  if (!r.ok) throw new Error(j.error || ('HTTP ' + r.status));
+  return j;
+}
+function table(rows, cols) {
+  if (!rows.length) return '<div class="muted">Nothing recorded in this period yet.</div>';
+  return '<table><thead><tr>' + cols.map((c) => `<th class="${c.n ? 'n' : ''}">${c.h}</th>`).join('') + '</tr></thead><tbody>'
+    + rows.map((r) => '<tr>' + cols.map((c) => `<td class="${c.n ? 'n' : ''}">${c.f(r)}</td>`).join('') + '</tr>').join('') + '</tbody></table>';
+}
+async function load() {
+  const days = Number($('days').value);
+  try {
+    const s = await api('/api/ai-usage?days=' + days);
+    const sevenDays = Object.entries(s.byDay).filter(([d]) => d >= new Date(Date.now() - 6 * 864e5).toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' })).reduce((a, [, b]) => a + b.usd, 0);
+    const notes = [];
+    if (!s.recording) notes.push('<div class="note bad">Recording is switched off in this environment (test mode), so nothing new is being counted.</div>');
+    if (s.estimated) notes.push('<div class="note">Cost is an <b>estimate</b>: tokens are exact, prices are not confirmed. Put the real rates from the Google Cloud billing page in <code>data/ai-prices.json</code> to firm it up.</div>');
+    if (s.unpriced.length) notes.push(`<div class="note bad">No price set for <b>${s.unpriced.map(esc).join(', ')}</b> — its cost is <b>not</b> in the totals below.</div>`);
+    $('notes').innerHTML = notes.join('');
+    const over = s.todayUsd >= s.limit_usd;
+    $('tiles').innerHTML = [
+      ['Today', usd(s.todayUsd), `limit ${usd(s.limit_usd)} / day`, over],
+      ['Last 7 days', usd(sevenDays), ''],
+      [`Last ${days} days`, usd(s.total.usd), `${num(s.calls)} AI calls`],
+      ['Failed calls', num(s.total.failed), 'in this period', s.total.failed > 0 && s.total.failed / Math.max(s.calls, 1) > 0.1],
+      ['Tokens', num(s.total.inTok + s.total.outTok + s.total.thinkTok), `${num(s.total.inTok)} in · ${num(s.total.outTok + s.total.thinkTok)} out`],
+    ].map(([k, v, sub, hot]) => `<div class="tile ${hot ? 'hot' : ''}"><div class="k">${k}</div><div class="v">${v}</div><div class="s">${sub || '&nbsp;'}</div></div>`).join('');
+    const dayKeys = Object.keys(s.byDay).sort();
+    const max = Math.max(0.0001, ...dayKeys.map((d) => s.byDay[d].usd));
+    $('bars').innerHTML = dayKeys.map((d) => `<div class="${d === s.today ? 'today' : ''} ${s.byDay[d].usd >= s.limit_usd ? 'over' : ''}" style="height:${Math.max(3, Math.round(s.byDay[d].usd / max * 100))}%" title="${d}: ${usd(s.byDay[d].usd)} · ${s.byDay[d].calls} calls"></div>`).join('');
+    $('barnote').textContent = dayKeys.length ? `Tallest day ${usd(max)}. Green is today; red is a day over the limit.` : 'No AI calls recorded yet — figures appear after the next call.';
+    const byUsd = (o) => Object.entries(o).sort((a, b) => b[1].usd - a[1].usd);
+    $('callers').innerHTML = table(byUsd(s.byCaller), [
+      { h: 'JOB / PART OF JARVIS', f: ([k]) => esc(k) }, { h: 'CALLS', n: 1, f: ([, b]) => num(b.calls) },
+      { h: 'FAILED', n: 1, f: ([, b]) => num(b.failed) }, { h: 'TOKENS IN', n: 1, f: ([, b]) => num(b.inTok) },
+      { h: 'TOKENS OUT', n: 1, f: ([, b]) => num(b.outTok + b.thinkTok) }, { h: 'EST. COST', n: 1, f: ([, b]) => usd(b.usd) }]);
+    $('models').innerHTML = table(byUsd(s.byModel), [
+      { h: 'MODEL', f: ([k]) => esc(k) }, { h: 'CALLS', n: 1, f: ([, b]) => num(b.calls) },
+      { h: 'RATE IN / OUT PER 1M', n: 1, f: ([k]) => s.prices[k] ? `$${s.prices[k].in} / $${s.prices[k].out}${s.prices[k].est !== false ? ' (est.)' : ''}` : '<span style="color:var(--bad)">not set</span>' },
+      { h: 'EST. COST', n: 1, f: ([, b]) => usd(b.usd) }]);
+  } catch (e) { $('notes').innerHTML = `<div class="note bad">${esc(e.message)}</div>`; }
+  try {
+    const a = await api('/api/activity?limit=80');
+    $('feed').innerHTML = a.items.length ? a.items.map((i) => `<li><span class="t">${esc(new Date(i.at).toLocaleString())}</span><span class="src">${esc(i.source)}</span><span class="${i.ok === false ? 'bad' : ''}"><b>${esc(i.actor)}</b> — ${esc(i.what)}${i.detail ? ` <span class="muted">· ${esc(i.detail)}</span>` : ''}</span></li>`).join('') : '<li class="muted">Nothing recorded yet.</li>';
+    $('problems').textContent = (a.problems || []).length ? 'Could not read: ' + a.problems.join('; ') : '';
+  } catch (e) { $('feed').innerHTML = `<li class="bad">${esc(e.message)}</li>`; }
+}
+$('days').addEventListener('change', load);
+load();
+setInterval(load, 60000);
+</script>
+<script src="/sidebar.js" data-page="ai-usage" defer></script>
+</body>
+</html>

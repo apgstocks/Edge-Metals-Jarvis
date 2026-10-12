@@ -146,6 +146,11 @@ section('D. by voice — file, list, and close only after a yes');
     ck('on yes it is marked fixed, with the note', after.status === 'fixed' && /echo guard/.test(after.fix_note), JSON.stringify({ s: after.status, n: after.fix_note }));
     ck('  but not verified — that is still hers to say', after.verified_at === null);
 
+    // Apsara, 2026-10-12: a fix with no note is not remembered, so voice asks for it.
+    const noNote = await actions.closeBugForConfirm(chat, { ref: '1' });
+    ck('closing by voice with no fix described asks for it instead of staging', noNote.action_taken === 'bug_close_needs_note' && !actions.getPending(chat), JSON.stringify(noNote));
+    ck('  and the item is untouched', bugs.get(listed[0].id).status === 'open');
+
     const notFound = await actions.closeBugForConfirm(chat, { ref: '99' });
     ck('a number that is not on the list is refused, not guessed', notFound.action_taken === 'bug_not_found');
     await j.stop();

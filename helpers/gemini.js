@@ -30,6 +30,11 @@ function getClient() {
     if (!genAI) {
         if (!cfg.GEMINI_API_KEY) throw new Error('GEMINI_API_KEY missing');
         genAI = new GoogleGenerativeAI(cfg.GEMINI_API_KEY);
+        // Apsara, 2026-10-12: every call is counted (tokens, job, cost) by
+        // wrapping the client ONCE here. helpers/aiUsage.js returns the model's
+        // answer untouched and can never be the reason a call fails; if the
+        // wrapper itself cannot load, the plain client is used as before.
+        try { genAI = require('./aiUsage').instrumentClient(genAI); } catch (e) { console.error('[AI-USAGE] not recording:', e.message); }
     }
     return genAI;
 }
@@ -2380,7 +2385,7 @@ async function leanGeminiWeightRead(imageBase64) {
     ].join('\n');
     try {
         const { GoogleGenerativeAI } = require('@google/generative-ai');
-        const model = new GoogleGenerativeAI(cfg.GEMINI_API_KEY)
+        const model = getClient()
             .getGenerativeModel({ model: cfg.GEMINI_MODEL || 'gemini-2.0-flash' });
         const res = await model.generateContent([prompt, { inlineData: { mimeType: 'image/jpeg', data: imageBase64 } }]);
         const out = (res.response.text() || '').trim();

@@ -190,6 +190,24 @@ module.exports = function (app, ctx) {
     // One place that answers "what is this load worth", for either store, so
     // the payment routes and the load listings cannot disagree about the
     // figure a balance is measured against.
+    // ── AI USAGE AND ACTIVITY (2026-10-12) ──────────────────────────────
+    // Apsara: "observability should be there ... what actions does that agent
+    // perform, constantly monitoring cost". Read-only. Admin only: it shows
+    // what the business is spending. See helpers/aiUsage.js, activityFeed.js.
+    app.get('/api/ai-usage', requireAdmin, (req, res) => {
+        try {
+            const days = Math.min(Math.max(parseInt(req.query.days, 10) || 30, 1), 365);
+            const aiUsage = require('./helpers/aiUsage'), watch = require('./helpers/aiCostWatch');
+            res.json({ ok: true, ...aiUsage.summarise({ days }), limit_usd: watch.limitUsd(),
+                prices: aiUsage.prices(), recording: aiUsage.enabled() });
+        } catch (e) { res.status(500).json({ error: e.message }); }
+    });
+    app.get('/api/activity', requireAdmin, (req, res) => {
+        try {
+            const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 100, 1), 500);
+            res.json({ ok: true, ...require('./helpers/activityFeed').feed({ limit }) });
+        } catch (e) { res.status(500).json({ error: e.message }); }
+    });
 // @@chunk-end
 
 };

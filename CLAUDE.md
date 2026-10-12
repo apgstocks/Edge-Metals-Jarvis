@@ -105,3 +105,21 @@ still living with the bug.
 
 Said repeatedly, and worth repeating here. A rule for one is not a rule for the
 other, and the separation is most of what this app is for.
+
+## 6. Look in Bugzilla before investigating a bug
+
+Apsara, 2026-10-12: "if that issue happens again ... the agent remembers it so
+it doesn't have to perform the same investigation from scratch."
+
+Resolved bugs with a fix note are Jarvis's memory of what has gone wrong and
+what worked. Before investigating a reported fault, search it:
+
+    node scripts/known-issues.js "what went wrong, in her words"
+
+It runs where `data/bugs.json` is (the VM), or point it at a copy with
+`--file path/to/bugs.json`. A match is a head start, not a verdict: confirm the
+cause still applies before reusing the fix. When you fix something, write the
+CAUSE and the STEPS into the fix note (Bugzilla → Mark fixed, or `PATCH
+/api/bugs/:id`), or the next person starts from scratch anyway. If a match says
+"came back after being marked fixed", the earlier fix was wrong or partial;
+say so rather than repeating it.

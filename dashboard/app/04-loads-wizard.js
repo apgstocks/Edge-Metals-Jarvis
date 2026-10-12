@@ -70,6 +70,8 @@ async function renderBugzilla() {
                 </div>
                 ${b.detail ? `<div style="font-size:12px; color:var(--text-body); margin-top:7px; white-space:pre-wrap;">${esc(String(b.detail).slice(0, 600))}</div>` : ''}
                 ${b.fix_note ? `<div style="font-size:12px; color:var(--status-success); margin-top:7px;">Fix: ${esc(b.fix_note)}</div>` : ''}
+                ${b.recurred_after_fix ? `<div style="font-size:12px; color:var(--status-danger, #C5402F); margin-top:7px;">Came back after being marked fixed — the fix did not hold.</div>` : ''}
+                ${(b.known_fix || []).length ? `<div style="font-size:12px; color:var(--text-body); margin-top:7px; border-left:2px solid var(--text-faint); padding-left:8px;">Seen before — ${(b.known_fix || []).map(k => `<b>${esc(k.id)}</b> (${esc(k.status)}): ${esc(k.cause ? k.cause + ' — ' : '')}${esc(k.fix_note)}`).join('<br>')}</div>` : ''}
               </div>
               ${isAdmin ? `<div style="display:flex; flex-direction:column; gap:6px; flex-shrink:0;">
                 ${b.status === 'open' ? `<button class="btn btn-dark bug-fix" data-id="${esc(b.id)}" style="white-space:nowrap;">Mark fixed…</button>` : ''}
@@ -103,7 +105,7 @@ async function renderBugzilla() {
   // A fix with no note is the thing she cannot revisit, so the note is asked
   // for here rather than being optional.
   document.querySelectorAll('.bug-fix').forEach(b => b.addEventListener('click', () => {
-    const note = prompt('What was the fix? (so you can check it later)');
+    const note = prompt('What was the fix? Say what caused it and the steps that worked, so it can be recognised and fixed faster if it happens again.');
     if (note === null) return;
     patch(b.dataset.id, { status: 'fixed', fix_note: note });
   }));

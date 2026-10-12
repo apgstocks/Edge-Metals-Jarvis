@@ -151,7 +151,12 @@ function instrument(cronModule, { onBeat = null } = {}) {
             const t0 = Date.now();
             record(name, { started: new Date(t0).toISOString() });
             try {
-                const out = await fn(...args);
+                // Apsara, 2026-10-12: AI calls made inside this job are counted
+                // against its name (helpers/aiUsage.js). If that cannot load the
+                // job runs exactly as before.
+                let run = () => fn(...args);
+                try { const au = require('./aiUsage'); run = () => au.runAs(name, () => fn(...args)); } catch (e) { /* attribution is optional */ }
+                const out = await run();
                 const t1 = Date.now();
                 const prev = load().jobs[name] || {};
                 record(name, {
