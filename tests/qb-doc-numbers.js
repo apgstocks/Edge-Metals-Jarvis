@@ -85,6 +85,20 @@ const multi = q.plan({ sales: [], bills: [{ id: 'b2', container_no: 'JJJU1010101
     qbDocs: docs, salesWithTotals: () => ({}), billsWithTotals: () => ({ net_payable: 4500 }) });
 ck('a bill that covers two containers (her memo lists several) is ASK, never SURE', multi[0].status === 'ask' && /several containers/.test(multi[0].why), JSON.stringify(multi[0]));
 
+section('B2 — second look: same party + same total, container not named');
+{
+    const inv2 = q.fromQuickBooks({ invoices: [qbInv('31', '2001', 'Acme Metals', 6000, [], 'trailer load Sept')], bills: [qbBill('41', '7001', 'Sup One', 3000, 'weekly statement'), qbBill('42', '7002', 'Sup One', 3000, 'other')] });
+    const rows = q.plan({ sales: [S('x1', 'XXXU0000001', 'Acme Metals', 0)], bills: [{ id: 'bx', container_no: 'YYYU0000002', supplier: 'Sup One', date: '2026-09-01', invoice_no: '' }, { id: 'bz', container_no: 'WWWU0000003', supplier: 'Sup One', date: '2026-09-01', invoice_no: '' }],
+        qbDocs: inv2, salesWithTotals: () => ({ amount: 6000 }), billsWithTotals: (b) => ({ net_payable: b.id === 'bx' ? 3000 : 1234 }) });
+    ck('without the second look all three are NO MATCH', rows.every((r) => r.status === 'none'));
+    const second = q.byAmount(rows, inv2);
+    const g = (c) => second.find((r) => r.container === c);
+    ck('one invoice with the same party and total -> a lead (ASK), carrying its memo', g('XXXU0000001').status === 'ask' && /trailer load Sept/.test(g('XXXU0000001').why), g('XXXU0000001').why);
+    ck('  never SURE, however clean the match', !second.some((r) => r.status === 'sure'));
+    ck('two bills share the party and total -> ASK listing both numbers', g('YYYU0000002').status === 'ask' && /7001, 7002/.test(g('YYYU0000002').why), g('YYYU0000002').why);
+    ck('a different total stays NO MATCH', g('WWWU0000003').status === 'none');
+}
+
 // ══════════════════════════════════════════════════════════════════════════
 section('C — apply writes SURE rows only, and never over a number');
 // ══════════════════════════════════════════════════════════════════════════

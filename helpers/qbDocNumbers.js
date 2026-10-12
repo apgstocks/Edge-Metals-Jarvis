@@ -43,6 +43,7 @@ function fromQuickBooks({ invoices = [], bills = [] }) {
     const shape = (kind, x, ref) => ({
         kind, id: String(x.Id), doc: norm(x.DocNumber), date: String(x.TxnDate || '').slice(0, 10),
         party: norm((x[ref] || {}).name), containers: containersOfDoc(x), total: r2(x.TotalAmt),
+        memo: [x.PrivateNote, (x.Line || []).map((l) => l.Description).filter(Boolean).join(' / ')].filter(Boolean).join(' | ').replace(/\s+/g, ' ').slice(0, 140),
     });
     return [...invoices.map((x) => shape('invoice', x, 'CustomerRef')), ...bills.map((x) => shape('bill', x, 'VendorRef'))];
 }
@@ -102,6 +103,23 @@ function judge(group, qbDocs) {
     return { ...out, status: 'sure', why: 'one document, same party, same total' };
 }
 
+// ── SECOND LOOK: SAME PARTY, SAME TOTAL, CONTAINER NOT NAMED ───────────────
+// The container search finds nothing when QuickBooks documents do not name the
+// container in a line or memo. For those rows (status 'none', money on them),
+// look for a document of the same kind, same party, same total to the cent.
+// NEVER 'sure': a matching amount is a lead, not proof — she decides.
+function byAmount(results, qbDocs) {
+    return results.map((r) => {
+        if (r.status !== 'none' || !(r.total > 0)) return r;
+        const hits = qbDocs.filter((d) => d.kind === r.kind && d.doc && Math.abs(d.total - r.total) < 0.005 && partyAgrees(r.party, d.party));
+        if (!hits.length) return r;
+        return { ...r, status: 'ask', qb: hits.length === 1 ? hits[0] : hits,
+            why: hits.length === 1
+                ? `same party and total, container not named — QuickBooks #${hits[0].id} dated ${hits[0].date}: "${hits[0].memo || 'no memo'}"`
+                : `${hits.length} QuickBooks documents share this party and total (${hits.map((h) => h.doc).join(', ')})` };
+    });
+}
+
 // Pure: what the lists would say.
 function plan({ sales, bills, qbDocs, salesWithTotals, billsWithTotals }) {
     return [...groupSales(sales, salesWithTotals), ...groupBills(bills, billsWithTotals)].map((g) => judge(g, qbDocs));
@@ -124,4 +142,4 @@ async function apply(results, { editSale, editBill, getSale, getBill }) {
     return { done, skipped };
 }
 
-module.exports = { containersOfDoc, fromQuickBooks, fromSnapshot, groupSales, groupBills, judge, plan, apply, partyAgrees };
+module.exports = { byAmount, containersOfDoc, fromQuickBooks, fromSnapshot, groupSales, groupBills, judge, plan, apply, partyAgrees };

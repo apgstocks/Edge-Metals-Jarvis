@@ -5,6 +5,7 @@
 //   node scripts/qb-doc-numbers.js                 # dry run: list only (snapshot)
 //   node scripts/qb-doc-numbers.js --live          # read QuickBooks now instead
 //   node scripts/qb-doc-numbers.js --since=2026-01-01
+//   node scripts/qb-doc-numbers.js --live --by-amount   # also look for same party + same total when the container is not named (leads only, never auto-filled)
 //   node scripts/qb-doc-numbers.js --apply         # write the SURE ones only
 //
 // Run it where the real ledgers are (the VM). Default is a dry run; it writes
@@ -44,10 +45,11 @@ const flag = (k) => process.argv.includes(`--${k}`);
         source = `snapshot of ${snap.at} (${require('../helpers/quickbooks/snapshot').ageMinutes()} min old)`;
     }
 
-    const results = q.plan({
+    let results = q.plan({
         sales: sales.list().filter((s) => String(s.date || '') >= since), bills: bills.list().filter((b) => String(b.date || '') >= since),
         qbDocs, salesWithTotals: sales.withTotals, billsWithTotals: bills.withTotals,
     });
+    if (flag('by-amount')) results = q.byAmount(results, qbDocs);
     const by = (s) => results.filter((r) => r.status === s);
     console.log(`Jarvis rows with a blank Invoice no. since ${since}, against ${source}\n`);
     for (const [label, st] of [['SURE — would be filled', 'sure'], ['ASK — QuickBooks has something, but I am not certain', 'ask'], ['NO MATCH — nothing to put back', 'none']]) {
