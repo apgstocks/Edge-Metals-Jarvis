@@ -22,6 +22,9 @@
 const sync = require('./metalsSheetSync');
 
 const enabled = () => String(process.env.SHEET_SYNC_WRITE || '').trim() === '1';
+const DEFAULT_SINCE = '2026-01-01';
+const sinceDate = () => (process.env.SHEET_SYNC_SINCE === undefined
+    ? DEFAULT_SINCE : (String(process.env.SHEET_SYNC_SINCE).trim() || null));
 
 // ── THE REPORT ─────────────────────────────────────────────────────────────
 // Plain text, because she reads it on a phone at 6am. The summary line first
@@ -65,6 +68,11 @@ function reportText(report, { dryRun, committed }) {
         if (changed.length > 30) L.push(`  … ${changed.length - 30} more`);
     }
 
+    if ((report.beforeCutoff || []).length) {
+        L.push('', `LEFT OUT — dated before ${report.since} (${report.beforeCutoff.length})`);
+        L.push('  Not added to Jarvis. Rows already in Jarvis are still compared as usual.');
+    }
+
     if (report.unkeyed.length) {
         L.push('', `UNREADABLE (${report.unkeyed.length}) — no booking and no container, so they cannot be matched`);
         L.push('  These are skipped every night rather than added every night.');
@@ -86,6 +94,11 @@ async function runNightly(opts = {}) {
         const sales = require('./sales').list();
         const report = sync.diff({
             sheetBills: parsed.bills || [], sheetSales: parsed.sales || [], bills, sales,
+            // Apsara, 2026-10-12: nothing from 2025 or earlier is added by the
+            // nightly sweep. Only THIS caller opts in; see diff() for why.
+            // SHEET_SYNC_SINCE overrides it (set to an empty string to turn the
+            // cut-off off again).
+            since: opts.since !== undefined ? opts.since : sinceDate(),
         });
         out.report = report;
 

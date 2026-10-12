@@ -516,7 +516,7 @@ server.close();
     ck('the transfer is shown: Edge Yard → Edge Metals', tcard && /Edge Yard → Edge Metals/.test(tcard.textContent));
     ck('  escaped', tcard && !tcard.querySelector('b'));
     ck('  with Record as a loan', !!d.querySelector('[data-transfer="pair:o|i"]'));
-    ck('a money-out line that would create a record gets the rule offer', !!d.querySelector('#review [data-rule-desc]'));
+    ck('a money-out line that would create a record gets the rule offer', !!d.querySelector('#list .card[data-dir="out"] [data-rule-desc]'));
 
     d.querySelector('[data-transfer="pair:o|i"]').click();
     await new Promise((r) => setTimeout(r, 30));
@@ -544,7 +544,10 @@ server.close();
 
     // Money in / out filter hides the other block.
     d.querySelector('#dir [data-dir="in"]').click();
-    ck('"Money in" hides the money-out list', d.getElementById('review').hidden === true && d.getElementById('inblock').hidden === false);
+    // 2026-10-11: one list, by date — "Money in" hides the withdrawals IN it
+    // and the money-out bar above it.
+    ck('"Money in" hides the money-out rows and bar', d.getElementById('review').hidden === true && d.getElementById('inblock').hidden === false
+       && [...d.querySelectorAll('#list .card[data-dir="out"]')].every((c) => c.hidden));
     d.querySelector('[data-tab="recon"]').click();
     ck('tabs switch panes', d.querySelector('[data-pane="recon"]').hidden === false && d.querySelector('[data-pane="review"]').hidden === true);
 
@@ -574,7 +577,7 @@ server.close();
     ck('every account card shows in and out first, balance as a second line',
        /in\s*\$0\.00/.test(card0.querySelector('.big').textContent) && /Balance \$148,320\.55/.test(card0.querySelector('.bal').textContent));
     ck('a money-out line that would create a record shows a muted label, not a box',
-       !!d.querySelector('#review .sum .needs') && !d.querySelector('#review .chip'));
+       !!d.querySelector('#list .card[data-dir="out"] .sum .needs') && !d.querySelector('#list .card[data-dir="out"] .chip'));
     const aside = d.getElementById('asidelist');
     ck('Set aside lists each line with its reason, escaped', /rule "WIRE IN FEE"/.test(aside.textContent) && !aside.querySelector('i'));
     aside.querySelector('[data-include="F1"]').click();

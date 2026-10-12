@@ -262,17 +262,57 @@ function blanksOnly(sheetRow, jarvisRow, watch) {
 // Pure: hand it what the sheet says and what Jarvis holds, get back what would
 // happen. No fetching, no writing, no clock — which is what makes the night
 // job's decision testable without a network or a live ledger.
-function diff({ sheetBills = [], sheetSales = [], bills = [], sales = [] }) {
+//
+// ── `since`: NOTHING OLDER THAN THIS IS ADDED (2026-10-12) ─────────────────
+// Apsara: "i dont want 2025 row bills and shipments in sweep into jarvis from
+// sheet on every day". OPT-IN: pass { since: 'YYYY-MM-DD' } and a sheet row
+// dated before it is not queued as new — it is listed in report.beforeCutoff
+// so she can see what was left out. Without `since` this behaves exactly as
+// before, because scripts/fill-money-blanks.js and scripts/why-one-sided.js
+// call diff() too and were not asked to change.
+//
+// ONLY THE INSERT PATH. A row already in Jarvis is still compared (changed /
+// fillable) whatever its date; deciding whether old rows should also stop
+// being compared is a separate question for her. A date that is not
+// YYYY-MM-DD is not blocked: better one extra row she can see than a real
+// shipment dropped because its date was written oddly.
+const ISO_DAY = /^\d{4}-\d{2}-\d{2}$/;
+const olderThan = (row, since) => {
+    const d = String((row && row.date) || '').trim().slice(0, 10);
+    return !!since && ISO_DAY.test(d) && ISO_DAY.test(since) && d < since;
+};
+function diff({ sheetBills = [], sheetSales = [], bills = [], sales = [], since = null }) {
     const haveBills = new Map();
     for (const b of bills) { const k = billKey(b); if (k) haveBills.set(k, b); }
     const haveSales = new Map();
     for (const s of sales) { const k = saleKey(s); if (k) haveSales.set(k, s); }
+    // ── A BLANK INVOICE NO. ON EITHER SIDE IS NOT A DIFFERENT INVOICE ─────
+    // Apsara, 2026-10-12: where the sheet's invoice cell is empty but
+    // QuickBooks made a number and it was put into Jarvis, "keep it as per
+    // quickbook. I don't want to make them back to empty on daily sweep".
+    // saleKey includes the invoice number, so `|CONT|ITEM` (sheet, blank) and
+    // `1043|CONT|ITEM` (Jarvis, filled) never met, and the sweep queued the
+    // sheet row as NEW — a duplicate invoice, every time the sweep ran.
+    // So when the full key finds nothing, a stored row on the SAME container
+    // and item is the same row if either side's number is blank. Two rows
+    // with DIFFERENT non-blank numbers stay separate (split billing).
+    const looseKey = (r) => {
+        const c = norm(r && r.container_no), g = norm(r && (r.item || r.description));
+        return c ? `${c}|${g}` : null;
+    };
+    const haveSalesLoose = new Map();
+    for (const s of sales) {
+        const lk = looseKey(s);
+        if (!lk) continue;
+        if (!haveSalesLoose.has(lk)) haveSalesLoose.set(lk, []);
+        haveSalesLoose.get(lk).push(s);
+    }
 
     const report = { newBills: [], newSales: [], changedBills: [], changedSales: [],
                      // Blanks, kept OUT of changedBills on purpose — see
                      // blanksOnly. These are what the 07:30 agent fills.
                      fillableBills: [], fillableSales: [],
-                     unkeyed: [], notShipments: [] };
+                     unkeyed: [], notShipments: [], beforeCutoff: [], since: since || null };
 
     for (const row of sheetBills) {
         // A legend line or a note to herself is not a bill. Reported, never
@@ -284,7 +324,11 @@ function diff({ sheetBills = [], sheetSales = [], bills = [], sales = [] }) {
         // duplicate added every night after.
         if (!k) { report.unkeyed.push({ kind: 'bill', row }); continue; }
         const mine = haveBills.get(k);
-        if (!mine) { report.newBills.push(row); continue; }
+        if (!mine) {
+            if (olderThan(row, since)) report.beforeCutoff.push({ kind: 'bill', row });
+            else report.newBills.push(row);
+            continue;
+        }
         const blank = blanksOnly(row, mine, BILL_WATCH);
         if (blank.length) report.fillableBills.push({ key: k, row_id: mine && mine.id,
             container_no: row.container_no, supplier: row.supplier, blanks: blank });
@@ -301,8 +345,17 @@ function diff({ sheetBills = [], sheetSales = [], bills = [], sales = [] }) {
         if (!looksLikeShipment(row)) { report.notShipments.push({ kind: 'sale', row }); continue; }
         const k = saleKey(row);
         if (!k) { report.unkeyed.push({ kind: 'sale', row }); continue; }
-        const mine = haveSales.get(k);
-        if (!mine) { report.newSales.push(row); continue; }
+        let mine = haveSales.get(k);
+        if (!mine) {
+            const cands = haveSalesLoose.get(looseKey(row)) || [];
+            const sheetBlank = !norm(row.invoice_no);
+            mine = cands.find((c) => sheetBlank || !norm(c.invoice_no));
+        }
+        if (!mine) {
+            if (olderThan(row, since)) report.beforeCutoff.push({ kind: 'sale', row });
+            else report.newSales.push(row);
+            continue;
+        }
         const blank = blanksOnly(row, mine, SALE_WATCH);
         if (blank.length) report.fillableSales.push({ key: k, row_id: mine && mine.id,
             invoice_no: row.invoice_no, container_no: row.container_no,
@@ -356,7 +409,9 @@ function summarise(report) {
     const bad = report.unkeyed.length ? `, ${report.unkeyed.length} unreadable` : '';
     const nots = (report.notShipments || []).length
         ? `, ${report.notShipments.length} not shipment rows` : '';
-    return head + tail + bad + nots + '.';
+    const old = (report.beforeCutoff || []).length
+        ? `, ${report.beforeCutoff.length} older than ${report.since} left out` : '';
+    return head + tail + bad + nots + old + '.';
 }
 
 module.exports = { diff, differences, blanksOnly, billKey, saleKey, same, fetchWorkbook, summarise,

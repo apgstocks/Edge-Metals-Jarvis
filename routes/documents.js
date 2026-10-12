@@ -700,6 +700,50 @@ module.exports = function (app, ctx) {
         }
     });
 
+    // ── CLEAN UP OLD SAVED DOCUMENTS (2026-10-12) ───────────────────────
+    // Apsara: "i want clean up option in documents.i dont want to store old
+    // invoices" -> Invoice, Packing and Proforma tabs; rules: older than N
+    // days and/or keep only the latest version. See helpers/documentCleanup.js
+    // for what each tab's clean-up removes and the one guard it carries.
+    //
+    // TWO STEPS, ON PURPOSE. Preview changes nothing. The real call must name
+    // the count the preview showed (expected_count); if the lists moved in
+    // between, it refuses (409) rather than delete a different set than the
+    // one she read. New routes only: the existing per-file Delete is untouched.
+    app.post('/api/documents/cleanup/preview', requireAdmin, (req, res) => {
+        try { res.json({ ok: true, plan: require('./helpers/documentCleanup').plan(req.body || {}) }); }
+        catch (e) { res.status(400).json({ error: e.message }); }
+    });
+    app.post('/api/documents/cleanup', requireAdmin, async (req, res) => {
+        try {
+            const cleanup = require('./helpers/documentCleanup');
+            const b = req.body || {};
+            const p = cleanup.plan(b);
+            if (!Number.isInteger(b.expected_count) || b.expected_count !== p.count) {
+                return res.status(409).json({
+                    error: `The list changed since the preview (it showed ${b.expected_count}, there are now ${p.count}). Preview again.`,
+                    code: 'PREVIEW_STALE' });
+            }
+            if (!p.count) return res.json({ ok: true, done: { packing: 0, invoice_forms: 0, invoice_versions: 0, proforma: 0, failed: [] }, skipped: p.skipped });
+            const audit = require('./helpers/audit');
+            const entry = await audit.record({
+                action: 'cleanup-saved-documents', subject: p.params.kinds.join(','),
+                actor: actorOf(req), role: req.role, ip: req.ip,
+                detail: { rule: p.params, packing: p.packing.map((r) => r.label),
+                          invoice: p.invoice.map((r) => `${r.label} (${r.mode})`),
+                          proforma: p.proforma.map((r) => r.file) },
+            });
+            let result;
+            try { result = await cleanup.apply(b); }
+            catch (e) { await audit.complete(entry, 'failed', { reason: e.message }); throw e; }
+            await audit.complete(entry, result.done.failed.length ? 'partial' : 'done', result.done);
+            res.json({ ok: true, done: result.done, skipped: p.skipped });
+        } catch (e) {
+            console.error('[documents] cleanup failed:', e);
+            res.status(500).json({ error: e.message });
+        }
+    });
+
     // ── Commercial Invoice ────────────────────────────────────────────────
     // Added per Apsara: "build invoice now.similar to proforma ask me who is
     // the buyer.then follow python anywhere invoice flow" — see

@@ -76,6 +76,12 @@ const ACTIONS = [
     // in a broker's inbox. The only trace of a deleted commercial invoice is
     // otherwise that it is not there any more.
     'delete-saved-document',      // an archived proforma/invoice/BOL/packing PDF
+    // Apsara, 2026-10-12: "i want clean up option in documents.i dont want to
+    // store old invoices". A BULK removal of saved invoice forms, packing list
+    // records and proforma PDFs older than a cutoff she chose. One entry per
+    // run, with the rule and the list in detail, because the individual
+    // documents will not be there to ask about afterwards.
+    'cleanup-saved-documents',
     // ── A SPREADSHEET IMPORT ────────────────────────────────────────────
     // Apsara, 2026-09-19, asking for an upload button. One press creates
     // hundreds of financial records at once and the undo removes them again,

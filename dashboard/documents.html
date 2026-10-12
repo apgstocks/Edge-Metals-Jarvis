@@ -511,6 +511,7 @@ body[data-theme="light"] {
     <div class="card" style="padding:20px 22px;">
       <div style="font-size:13px; font-weight:700; color:var(--text-strong); margin-bottom:10px;">Saved packing lists</div>
       <div id="pkSavedList" style="font-size:12.5px; color:var(--text-muted);">Loading…</div>
+      <div data-cleanup="packing"></div>
     </div>
   </div>
 
@@ -903,6 +904,7 @@ body[data-theme="light"] {
         Edit reopens the invoice exactly as it was generated, so you can change it and generate again.
       </div>
       <div id="invGenList" style="font-size:12.5px; color:var(--text-muted);">Loading&hellip;</div>
+      <div data-cleanup="invoice"></div>
     </div>
 
     <!-- ── OLD INVOICES THAT WERE FILED AS PROFORMAS ─────────────────────────
@@ -1477,6 +1479,7 @@ body[data-theme="light"] {
 
     <div class="section-label">Saved proformas</div>
     <div id="pfSavedList"></div>
+    <div data-cleanup="proforma"></div>
   </div>
 
   <!-- ── Pricing memory setup modal ──────────────────────────────────────── -->
@@ -5656,6 +5659,90 @@ async function loadMisfiledInvoices() {
     card.classList.add('hidden');
   }
 }
+
+// ── CLEAN UP OLD SAVED DOCUMENTS ────────────────────────────────────────────
+// Apsara, 2026-10-12: "i want clean up option in documents.i dont want to
+// store old invoices" -> the Invoice, Packing and Proforma tabs. Built as ONE
+// panel mounted three times (<div data-cleanup="...">), so the three tabs
+// cannot drift apart. Nothing else on those tabs changed.
+//
+// Preview first, always: the button that deletes only appears after a preview
+// that found something, and it says the count it is about to remove.
+const CLEANUP_COPY = {
+  invoice:  { noun: 'saved invoice forms', rules: true,
+              what: 'Removes the saved FORM (the rows with an Edit button). Archived PDFs are not touched.' },
+  packing:  { noun: 'saved packing lists', rules: false,
+              what: 'Removes the saved packing list record. Archived PDFs are not touched.' },
+  proforma: { noun: 'saved proformas', rules: false,
+              what: 'Removes the saved proforma PDF file and its stored form.' },
+};
+function cleanupRefresh(kind) {
+  if (kind === 'invoice') loadGeneratedInvoices();
+  else if (kind === 'packing') loadSavedPackingLists();
+  else if (kind === 'proforma') loadSavedProformas();
+}
+function cleanupBuild(root) {
+  const kind = root.dataset.cleanup, c = CLEANUP_COPY[kind];
+  if (!c || root.dataset.built) return;
+  root.dataset.built = '1';
+  root.innerHTML = `
+    <div style="margin-top:14px; border-top:1px solid var(--border-subtle); padding-top:10px;">
+      <button type="button" class="btn btn-secondary cu-open" style="font-size:11px; padding:4px 10px;">Clean up old ${c.noun}…</button>
+      <div class="cu-panel hidden" style="margin-top:10px; font-size:12px; color:var(--text-muted);">
+        <div style="margin-bottom:8px;">${c.what}</div>
+        <label style="display:flex; align-items:center; gap:6px; margin-bottom:6px;">
+          <input type="checkbox" class="cu-age" checked> older than
+          <input type="number" class="cu-days" value="90" min="7" step="1" style="width:70px;"> days
+        </label>
+        ${c.rules ? `<label style="display:flex; align-items:center; gap:6px; margin-bottom:6px;">
+          <input type="checkbox" class="cu-latest"> regenerated copies: keep only the latest version of each container
+        </label>` : ''}
+        <button type="button" class="btn btn-secondary cu-preview" style="font-size:11px; padding:4px 10px;">Preview</button>
+        <span class="cu-msg" style="margin-left:8px;"></span>
+        <div class="cu-result" style="margin-top:8px;"></div>
+      </div>
+    </div>`;
+  const q = (s) => root.querySelector(s);
+  const body = () => ({
+    kinds: [kind],
+    olderThanDays: q('.cu-age').checked ? Number(q('.cu-days').value) : null,
+    keepLatestOnly: !!(q('.cu-latest') && q('.cu-latest').checked),
+  });
+  q('.cu-open').addEventListener('click', () => q('.cu-panel').classList.toggle('hidden'));
+  q('.cu-preview').addEventListener('click', async () => {
+    const msg = q('.cu-msg'), out = q('.cu-result');
+    msg.textContent = 'Checking…'; out.innerHTML = '';
+    try {
+      const b = body();
+      const { plan } = await api('/api/documents/cleanup/preview', { method: 'POST', body: JSON.stringify(b) });
+      const rows = [...plan.invoice.map((r) => `${r.label} — ${r.detail} — ${r.mode === 'all' ? 'whole entry (' + r.versions + ' version' + (r.versions === 1 ? '' : 's') + ')' : 'drop ' + r.dropping + ' older version' + (r.dropping === 1 ? '' : 's')}`),
+                    ...plan.packing.map((r) => `${r.label} — ${r.detail}`),
+                    ...plan.proforma.map((r) => r.file)];
+      const skipped = plan.skipped.map((s) => `${s.label}: kept — ${s.reason}`);
+      msg.textContent = plan.count ? '' : 'Nothing matches.';
+      out.innerHTML = (plan.count
+          ? `<div style="max-height:180px; overflow:auto; border:1px solid var(--border-subtle); border-radius:6px; padding:6px 8px; margin-bottom:8px;">${rows.map((r) => `<div>${esc(r)}</div>`).join('')}</div>
+             <button type="button" class="btn btn-primary cu-go" style="font-size:11px; padding:5px 12px;">Delete ${plan.count} ${c.noun}</button>`
+          : '')
+        + (skipped.length ? `<div style="margin-top:8px; color:var(--text-faint);">${skipped.map((s) => `<div>${esc(s)}</div>`).join('')}</div>` : '');
+      const go = out.querySelector('.cu-go');
+      if (go) go.addEventListener('click', async () => {
+        if (!confirm(`Delete ${plan.count} ${c.noun}?\n\nThis cannot be undone. It is recorded in the audit log.`)) return;
+        go.disabled = true;
+        try {
+          const r = await api('/api/documents/cleanup', { method: 'POST', body: JSON.stringify({ ...b, expected_count: plan.count }) });
+          const d = r.done || {};
+          const n = (d.packing || 0) + (d.invoice_forms || 0) + (d.proforma || 0) + (d.invoice_versions || 0);
+          out.innerHTML = ''; msg.textContent = `Done — removed ${n}.` + ((d.failed || []).length ? ` ${d.failed.length} could not be removed.` : '');
+          cleanupRefresh(kind);
+        } catch (e) { go.disabled = false; msg.textContent = e.message; }
+      });
+    } catch (e) { msg.textContent = e.message; }
+  });
+}
+function cleanupMountAll() { document.querySelectorAll('[data-cleanup]').forEach(cleanupBuild); }
+if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', cleanupMountAll);
+else cleanupMountAll();
 
 async function loadGeneratedInvoices() {
   const box = $('invGenList');
