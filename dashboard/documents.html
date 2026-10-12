@@ -691,7 +691,11 @@ body[data-theme="light"] {
             <input id="inv_item_label" autocomplete="off"
               placeholder="Automatic — type here only to override (e.g. AL-AL COMBO)">
           </div>
-          <div class="field"><label>Invoice Date</label><input id="inv_date"></div>
+          <!-- The only date box on this page with neither a placeholder nor a
+               calendar, while its proforma twin pf_inv_date has both. Wired
+               below with the rest. The VALUE it posts is deliberately left
+               alone — see the note at the save. -->
+          <div class="field"><label>Invoice Date</label><input id="inv_date" placeholder="MM/DD/YYYY" autocomplete="off"></div>
           <div class="field"><label>Reference #</label><input id="inv_reference"></div>
           <div class="field"><label>Terms</label><input id="inv_terms"></div>
           <!-- Moved here from the Buyer + Vessel column, per Apsara: "make
@@ -5813,6 +5817,13 @@ async function editGeneratedInvoice(container) {
 if ($('btnInvGenRefresh')) $('btnInvGenRefresh').addEventListener('click', loadGeneratedInvoices);
 loadGeneratedInvoices();
 
+// Apsara, 2026-10-11: "wherever date is used,date picker should be hthere".
+// inv_date was the one date box on this page without one. Wired at top level
+// rather than in a tab opener because, unlike pf_inv_date, nothing resets its
+// value when the Invoice tab is shown — so there is no per-open hook to hang
+// it on, and re-wiring on every open would rebuild the wrapper each time.
+wireUsDateField('inv_date');
+
 $('btnInvVersionLoad').addEventListener('click', () => {
   if (!invVersionLatest) return;
   applyInvoiceDataToForm(invVersionLatest);
@@ -6117,6 +6128,19 @@ function collectInvoicePayload() {
     // an absent key would read the same but says less to anyone reading the
     // payload in a log.
     item_label_override: $('inv_item_label').value.trim(),
+    // ── LEFT RAW ON PURPOSE, 2026-10-11, AND IT IS A QUESTION FOR HER ───
+    // The proforma's equivalent four thousand lines up is
+    // `toIsoDate($('pf_inv_date').value)`, and its comment says why that
+    // matters there: proformaSheetLog.js builds the Inv No with
+    // `inv_date.replace(/-/g,'').slice(2)`, so an un-normalised
+    // "09/01/2026" turns every invoice number into "/01/2026".
+    //
+    // This path posts whatever is in the box. Whether it SHOULD normalise is
+    // a question about what the invoice route and the saved record expect,
+    // not a formatting preference, and changing what a customer-facing
+    // invoice posts is not something to do on my own judgement. Raised with
+    // Apsara; the calendar button added above changes nothing here, because
+    // the field already held MM/DD/YYYY (see applyInvoiceDataToForm).
     inv_date: $('inv_date').value.trim(),
     reference: $('inv_reference').value.trim(),
     terms: $('inv_terms').value.trim(),

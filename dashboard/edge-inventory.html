@@ -178,6 +178,92 @@ const price = (r) => r.price_mixed ? '<span style="color:var(--text-faint); font
 const fmtDate = (iso, fb) => { if (!iso) return fb || ''; const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso); return m ? `${m[2]}/${m[3]}/${m[1]}` : iso; };
 const toIso = (v) => { const m = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/.exec(String(v || '').trim()); return m ? `${m[3]}-${String(m[1]).padStart(2, '0')}-${String(m[2]).padStart(2, '0')}` : ''; };
 
+// ── THE CALENDAR BUTTON THIS PAGE NEVER GOT ─────────────────────────────
+// Apsara, 2026-09-02: "date picker should be there wherever date used." Said
+// again 2026-10-11, because this page was missed: its three date boxes carry
+// the MM/DD/YYYY placeholder and nothing else, so From, To and a receipt's
+// Date could only be TYPED. Every other screen got the 📅 when
+// wireUsDateField was written; this one is a standalone page that does not
+// load dashboard/app/01-core.js and so never saw it.
+//
+// A COPY, and not by preference. 01-core.js is 999 lines, redefines $ and
+// esc, and at its line 843 does $('hamburgerBtn').addEventListener(...) —
+// loading it here would throw on an element this page does not have. The
+// right answer is a shared dashboard/dates.js that all thirteen pages
+// include, and that is a refactor across thirteen pages, not a bug fix. Left
+// for Apsara to say yes to.
+//
+// WHY NOT <input type="date"> — her two rules pull against each other:
+//   "wherever date applicable it should be mm/dd/yyyy only" (2026-09-01)
+//   "date picker should be there wherever date used"        (2026-09-02)
+// A native date input renders in the DEVICE's locale and cannot be forced,
+// so on a phone set to en-IN it shows DD/MM/YYYY and breaks the first rule.
+// The visible box stays text and stays MM/DD/YYYY; an invisible native input
+// beside it exists only to open the platform calendar.
+function wireUsDateField(id) {
+  const el = typeof id === 'string' ? $(id) : id;
+  if (!el || el.dataset.dpWired) return;
+  el.dataset.dpWired = '1';
+
+  // Tidy on blur, so "9/1/2026" settles as "09/01/2026". Deliberately reuses
+  // this page's own toIso rather than importing a second, more forgiving
+  // parser: two date parsers on one screen is how one of them drifts. The
+  // cost is that a 2-digit year ("9/1/26") is not tidied here, because toIso
+  // does not accept one — it is also not ACCEPTED anywhere on this page, so
+  // tidying it would be the only place that pretended it was valid.
+  el.addEventListener('blur', () => {
+    const iso = toIso(el.value);
+    if (!iso) return;
+    const [y, m, d] = iso.split('-');
+    el.value = `${m}/${d}/${y}`;
+  });
+
+  const wrap = document.createElement('span');
+  wrap.style.cssText = 'position:relative; display:block; width:100%;';
+  el.parentNode.insertBefore(wrap, el);
+  wrap.appendChild(el);
+  el.style.paddingRight = '38px';           // room for the button
+
+  const native = document.createElement('input');
+  native.type = 'date';
+  native.tabIndex = -1;
+  native.setAttribute('aria-hidden', 'true');
+  // Not display:none — a hidden input cannot be focused, and showPicker()
+  // throws on one that is not rendered. Zero-size and transparent instead.
+  native.style.cssText = 'position:absolute; right:8px; bottom:0; width:1px; height:1px; opacity:0; border:0; padding:0; pointer-events:none;';
+
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.setAttribute('aria-label', 'Open the calendar');
+  btn.textContent = '📅';
+  btn.style.cssText = 'position:absolute; right:4px; top:50%; transform:translateY(-50%); '
+    + 'background:transparent; border:0; padding:4px 6px; font-size:15px; line-height:1; cursor:pointer;';
+
+  wrap.appendChild(native);
+  wrap.appendChild(btn);
+
+  btn.addEventListener('click', (ev) => {
+    ev.preventDefault();
+    // Seed it with whatever the box already says, so it opens on the month
+    // being looked at rather than today.
+    native.value = toIso(el.value) || '';
+    try {
+      if (typeof native.showPicker === 'function') native.showPicker();
+      else native.click();
+    } catch (e) { native.click(); }
+  });
+
+  native.addEventListener('change', () => {
+    if (!native.value) return;
+    const [y, m, d] = native.value.split('-');
+    el.value = `${m}/${d}/${y}`;
+    // The From/To filters reload on their own events. A picked date that
+    // fired nothing would sit there looking applied and not be.
+    el.dispatchEvent(new Event('input', { bubbles: true }));
+    el.dispatchEvent(new Event('change', { bubbles: true }));
+  });
+}
+
 let SUPPLIER = '';
 let DATA = null;
 let subtab = 'account';
@@ -372,6 +458,13 @@ async function loadSupplier() {
 $('supPick').addEventListener('change', () => { SUPPLIER = $('supPick').value; loadSupplier(); });
 $('btnApply').addEventListener('click', loadSupplier);
 $('btnClear').addEventListener('click', () => { $('fFrom').value = ''; $('fTo').value = ''; $('fStorage').value = ''; loadSupplier(); });
+
+// Every date box on this page gets its calendar. Wired HERE, once, rather
+// than where each one is filled in: rm_date is populated when the delivery
+// modal opens, and wiring it there would rebuild the wrapper on every open.
+// All three elements are in the static markup, so they exist by now, and
+// wireUsDateField's dpWired flag makes a second call a no-op anyway.
+['fFrom', 'fTo', 'rm_date'].forEach(wireUsDateField);
 
 // ── THE DELIVERY FORM ──────────────────────────────────────────────────
 // "mimic add load form but we will have only seller in form" — a party, a

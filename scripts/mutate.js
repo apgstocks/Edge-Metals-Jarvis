@@ -1251,6 +1251,52 @@ const MUTATIONS = [
       find: '         data-bank="${esc(a.bank || \'\')}" data-mask="${esc(a.mask || \'\')}"',
       to:   '         data-bank="" data-mask=""' },
 
+    // ── A CALENDAR WHEREVER A DATE IS, ASKED THREE TIMES ────────────────
+    // 2026-09-01 "wherever date applicable it should be mm/dd/yyyy only",
+    // 2026-09-02 "date picker should be there wherever date used", and
+    // 2026-10-11 again. Three times because it was answered three times by
+    // hand and nothing watched for the next field. The first two mutations
+    // are the four fields that were actually missing; the rest are the ways
+    // the mechanism can be present and still not work.
+    { name: 'dates: the Edge Inventory filters and receipt date lose their calendar',
+      file: 'dashboard/edge-inventory.html', suites: ['date-pickers'],
+      find: "['fFrom', 'fTo', 'rm_date'].forEach(wireUsDateField);",
+      to:   '/* unwired */' },
+    { name: 'dates: the invoice date loses its calendar again',
+      file: 'dashboard/documents.html', suites: ['date-pickers'],
+      find: "wireUsDateField('inv_date');",
+      to:   '/* unwired */' },
+    // Rule 1. A native date input renders in the DEVICE's locale, so the
+    // invoice date would read DD/MM/YYYY on her phone and MM/DD/YYYY on the
+    // Mac — on a document a customer receives.
+    { name: 'dates: the invoice date becomes a native picker, so its format follows the device',
+      file: 'dashboard/documents.html', suites: ['date-pickers'],
+      find: '<input id="inv_date" placeholder="MM/DD/YYYY" autocomplete="off">',
+      to:   '<input id="inv_date" type="date">' },
+    // display:none is the trap: showPicker() throws on an element that is
+    // not rendered, so the 📅 silently does nothing.
+    { name: 'dates: the hidden input is display:none, so the button does nothing',
+      file: 'dashboard/edge-inventory.html', suites: ['date-pickers'],
+      find: "  native.style.cssText = 'position:absolute; right:8px; bottom:0; width:1px; height:1px; opacity:0; border:0; padding:0; pointer-events:none;';",
+      to:   "  native.style.cssText = 'display:none;';" },
+    // A picked date that fires nothing sits in the box looking applied while
+    // the list below it still shows the old range.
+    { name: 'dates: picking a date does not tell the filters it changed',
+      file: 'dashboard/edge-inventory.html', suites: ['date-pickers'],
+      find: "    el.dispatchEvent(new Event('input', { bubbles: true }));",
+      to:   '    /* silent */' },
+    { name: 'dates: wiring a field twice nests a second wrapper around it',
+      file: 'dashboard/edge-inventory.html', suites: ['date-pickers'],
+      find: '  if (!el || el.dataset.dpWired) return;',
+      to:   '  if (!el) return;' },
+    // A sweep that finds nothing reports all-clear. The MM/DD/YYYY
+    // placeholder IS the marker, so renaming it must make the test say it has
+    // gone blind rather than pass over an empty list.
+    { name: 'dates: the sweep goes blind because the marker changed',
+      file: 'tests/date-pickers.js', suites: ['date-pickers'],
+      find: '        if (!/placeholder="MM\\/DD\\/YYYY"/.test(m[0])) continue;',
+      to:   '        if (!/placeholder="DD-MM-YY"/.test(m[0])) continue;' },
+
     // ── THE WARNING THAT OUTLIVED ITS OWN FIX ───────────────────────────
     // Apsara, 2026-10-10, EDGE_130: "when i try to print pos receipt,it is
     // generating,but still this error is showing in my load." The clear ran;
