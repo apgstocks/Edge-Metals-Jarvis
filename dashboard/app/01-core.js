@@ -555,6 +555,20 @@ const NAV_ITEMS = [
   // that page's content lives on this same one now.
   { id: 'quote-requests', label: 'Quote Requests', group: 'Contacts & Outreach', adminOnly: true },
 
+  // Health — Apsara 2026-10-12: "Why there is no provision for USers,
+  // incidents,crash report?" Crashes, restarts, device reports and job
+  // state, all of which were already being collected and none of which
+  // anything read (helpers/healthReport.js explains at length). adminOnly
+  // because a stack trace names files and sometimes fragments of what was
+  // being processed when it threw — same tier as WhatsApp and Facts.
+  //
+  // MUST STAY IN STEP with dashboard/sidebar.js: tests/sidebar-pages.js
+  // compares the two lists row for row, and a standalone page registered in
+  // only one of them appears on some screens and not others.
+  { id: 'health',    label: 'Health',   group: 'System', adminOnly: true },
+  // Apsara, 2026-10-12: AI usage, cost and what Jarvis did. Its own page (/ai-usage).
+  { id: 'ai-usage',  label: 'AI usage', group: 'System', adminOnly: true },
+
   // App-wide configuration.
   { id: 'settings',  label: 'Settings', group: 'System', adminOnly: true },
 ];
@@ -684,6 +698,7 @@ const NAV_ICONS = {
   'address-book':'M6 3h13v18H6z M6 8H3 M6 12H3 M6 16H3 M12.5 11a2 2 0 1 0 0-4 2 2 0 0 0 0 4 M9 16a3.5 3.5 0 0 1 7 0',
   'quote-requests':'M4 5h16v11H8l-4 4z M8 9h8 M8 12h5',
   'design-bol':'M4 4h16v16H4z M4 9h16 M9 9v11',
+  health:'M3 12h4l2-5 3 10 2-5h7',
   settings:'M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6 M19.4 15a1.6 1.6 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.6 1.6 0 0 0-2.7 1.1V21a2 2 0 1 1-4 0v-.1A1.6 1.6 0 0 0 7.5 19.4a2 2 0 1 1-2.8-2.8l.1-.1A1.6 1.6 0 0 0 3 13.7a2 2 0 1 1 0-4h.1A1.6 1.6 0 0 0 4.6 7.5a2 2 0 1 1 2.8-2.8l.1.1A1.6 1.6 0 0 0 10.3 3a2 2 0 1 1 4 0v.1a1.6 1.6 0 0 0 2.7 1.5 2 2 0 1 1 2.8 2.8l-.1.1a1.6 1.6 0 0 0 1.1 2.7H21a2 2 0 1 1 0 4h-.1a1.6 1.6 0 0 0-1.5 1z',
 };
 function navIcon(id) {
@@ -790,12 +805,14 @@ function renderNav() {
     if (b.dataset.tab === 'quote-requests') { window.location.href = '/quote-requests'; return; }
     if (b.dataset.tab === 'outbound-loads') { window.location.href = '/outbound-loads'; return; }
     if (b.dataset.tab === 'documents') { window.location.href = '/documents'; return; }
+    if (b.dataset.tab === 'ai-usage') { window.location.href = '/ai-usage'; return; }
     if (b.dataset.tab === 'edge-inventory') { window.location.href = '/edge-inventory'; return; }
     if (b.dataset.tab === 'quickbooks') { window.location.href = '/quickbooks'; return; }
     if (b.dataset.tab === 'books') { window.location.href = '/books'; return; }
     if (b.dataset.tab === 'bank') { window.location.href = '/bank-match'; return; }
     if (b.dataset.tab === 'claims') { window.location.href = '/claims'; return; }
     if (b.dataset.tab === 'design-bol') { window.location.href = '/design/bol'; return; }
+    if (b.dataset.tab === 'health') { window.location.href = '/health-report'; return; }
     switchTab(b.dataset.tab); closeMobileSidebar();
   }));
 

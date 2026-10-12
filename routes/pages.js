@@ -58,8 +58,46 @@ module.exports = function (app, ctx) {
         res.sendFile(path.join(cfg.ROOT, 'dashboard', 'books.html'));
     });
 
+    // AI usage and activity (2026-10-12) — read-only; the data routes behind it
+    // (/api/ai-usage, /api/activity) are admin-only.
+    app.get('/ai-usage', (req, res) => {
+        res.sendFile(path.join(cfg.ROOT, 'dashboard', 'ai-usage.html'));
+    });
+
     app.get('/documents', (req, res) => {
         res.sendFile(path.join(cfg.ROOT, 'dashboard', 'documents.html'));
+    });
+
+    // ── THE HEALTH PAGE ──────────────────────────────────────────────────
+    // Apsara, 2026-10-12: "Why there is no provision for USers,incidents,
+    // crash report?" The crash reports existed — helpers/crashlog.js has
+    // written every stack since 2026-09-06 — and nothing read them, so the
+    // only way to see one was to ssh to the VM and cat a file.
+    //
+    // The SHELL is served like every other standalone page. The DATA is
+    // behind requireAdmin on GET /api/health-report (routes/admin.js), which
+    // is the boundary that matters: a stack trace is the sensitive part, not
+    // the HTML that lays it out, and the page itself says plainly when the
+    // session cannot read it rather than showing a blank panel.
+    //
+    // ── '/health-report', NOT '/health' ──────────────────────────────────
+    // /health is ALREADY TAKEN, by api.js:536, and it is load-bearing: a
+    // one-line liveness probe that api.js:277 deliberately exempts from
+    // auth so an uptime monitor can watch it without a session. Registering
+    // this page there would either have been shadowed by it (what actually
+    // happened — the page answered 200 with the probe's JSON and no rail)
+    // or, registered earlier, would have turned an unauthenticated probe
+    // into an HTML page and quietly broken monitoring.
+    //
+    // Caught by tests/sidebar-pages.js, which fetches every PAGE_HREF off a
+    // real server and checks the rail tag came back. Worth noting as the
+    // kind of thing a screen-only test cannot see: the markup was correct
+    // and the ROUTE was wrong.
+    //
+    // The name also pairs with GET /api/health-report, so the page and its
+    // data are findable from each other.
+    app.get('/health-report', (req, res) => {
+        res.sendFile(path.join(cfg.ROOT, 'dashboard', 'health.html'));
     });
 
     // Edge Inventory — per-supplier deliveries and their running account.

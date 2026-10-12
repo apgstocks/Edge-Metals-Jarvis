@@ -66,13 +66,22 @@
     { id: 'address-book', label: 'Address Book', group: 'Contacts & Outreach', adminOnly: true },
     { id: 'design-bol', label: 'BOL', group: 'Design', adminOnly: true },
     { id: 'quote-requests', label: 'Quote Requests', group: 'Contacts & Outreach', adminOnly: true },
+    // Health — Apsara 2026-10-12: "Why there is no provision for USers,
+    // incidents,crash report?" Crashes, restarts, device reports and job
+    // state, all of which were already being collected and none of which
+    // anything read. adminOnly: a stack trace names files and sometimes
+    // fragments of what was being processed, so it sits at the same tier as
+    // WhatsApp and Facts.
+    { id: 'health', label: 'Health', group: 'System', adminOnly: true },
+    { id: 'ai-usage', label: 'AI usage', group: 'System', adminOnly: true },
     { id: 'settings', label: 'Settings', group: 'System', adminOnly: true },
   ];
   // The rows that are their own pages — index.html's renderNav click handler.
   const PAGE_HREF = {
     'address-book': '/address-book', 'quote-requests': '/quote-requests', 'outbound-loads': '/outbound-loads',
     documents: '/documents', 'edge-inventory': '/edge-inventory', quickbooks: '/quickbooks', books: '/books',
-    bank: '/bank-match', claims: '/claims', 'design-bol': '/design/bol',
+    bank: '/bank-match', claims: '/claims', 'design-bol': '/design/bol', 'ai-usage': '/ai-usage',
+    health: '/health-report',
   };
   const STAFF_TABS = ['loads', 'petty', 'trucker-bills'];
   const FOLD_GROUPS = ['Design', 'Bot & Automation', 'Contacts & Outreach', 'System'];
@@ -105,6 +114,7 @@
     'address-book':'M6 3h13v18H6z M6 8H3 M6 12H3 M6 16H3 M12.5 11a2 2 0 1 0 0-4 2 2 0 0 0 0 4 M9 16a3.5 3.5 0 0 1 7 0',
     'quote-requests':'M4 5h16v11H8l-4 4z M8 9h8 M8 12h5',
     'design-bol':'M4 4h16v16H4z M4 9h16 M9 9v11',
+    health:'M3 12h4l2-5 3 10 2-5h7',
     settings:'M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6 M19.4 15a1.6 1.6 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.6 1.6 0 0 0-2.7 1.1V21a2 2 0 1 1-4 0v-.1A1.6 1.6 0 0 0 7.5 19.4a2 2 0 1 1-2.8-2.8l.1-.1A1.6 1.6 0 0 0 3 13.7a2 2 0 1 1 0-4h.1A1.6 1.6 0 0 0 4.6 7.5a2 2 0 1 1 2.8-2.8l.1.1A1.6 1.6 0 0 0 10.3 3a2 2 0 1 1 4 0v.1a1.6 1.6 0 0 0 2.7 1.5 2 2 0 1 1 2.8 2.8l-.1.1a1.6 1.6 0 0 0 1.1 2.7H21a2 2 0 1 1 0 4h-.1a1.6 1.6 0 0 0-1.5 1z',
   };
   // ── end of the copied block ───────────────────────────────────────────

@@ -664,6 +664,47 @@ module.exports = function (app, ctx) {
     // API_TOKEN gate as everything else (that middleware runs earlier, at
     // the top of this file) even though express.static would technically
     // have served dashboard/address-book.html anyway once mounted.
+    // ── GET /api/health-report — the front door for evidence we keep ─────
+    //
+    // Apsara, 2026-10-12: "Why there is no provision for USers,incidents,
+    // crash report?" For crash reports, the capture was already complete and
+    // good (helpers/crashlog.js, written after the ten-and-a-half-hour
+    // outage on 2026-09-01) and nothing read it. There was a POST
+    // /api/client-errors so a phone could report, and no GET to read it
+    // back; nothing served LOGS_DIR at all. So the only way to see a crash
+    // was to ssh to the VM and cat a file.
+    //
+    // ── requireAdmin, AND WHY NOT LOWER ─────────────────────────────────
+    // A stack trace names files, line numbers and sometimes fragments of
+    // whatever was being processed when it threw. That is the same tier of
+    // thing as the WhatsApp QR, which requireAdmin already gates, so it gets
+    // the same gate. The 'staff' role is additionally refused by the
+    // default-deny prefix list in api.js — /api/health-report is not in
+    // STAFF_ALLOWED_PATH_PREFIXES and must never be added to it.
+    //
+    // ── READ-ONLY, AND IT TAKES NO FILENAME ─────────────────────────────
+    // No query parameter reaches the filesystem. The window and the crash
+    // count are NUMBERS, clamped here, and helpers/healthReport.js finds
+    // crash files by glob and checks each resolved path is inside LOGS_DIR.
+    // Accepting ?file= would be one line and a path-traversal hole into the
+    // directory next to her stores and her Google credentials.
+    app.get('/api/health-report', requireAdmin, (req, res) => {
+        try {
+            const n = (v, dflt, min, max) => {
+                const x = Number(v);
+                return Number.isFinite(x) ? Math.min(max, Math.max(min, Math.round(x))) : dflt;
+            };
+            res.json(require('../helpers/healthReport').report({
+                windowHours: n(req.query.hours, 48, 1, 24 * 30),
+                crashLimit: n(req.query.crashes, 20, 1, 100),
+            }));
+        } catch (err) {
+            // A health endpoint that 500s tells you nothing about health.
+            // Answer with the failure as DATA so the page can show it.
+            console.error('[API] health-report failed:', err.message);
+            res.json({ ok: false, at: new Date().toISOString(), error: String(err.message || err) });
+        }
+    });
 // @@chunk-end
 
 };

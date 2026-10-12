@@ -93,7 +93,14 @@ ck('the same group order', JSON.stringify(evalLit(orderSrc)) === JSON.stringify(
 // Which rows are pages, and where they go — read from renderNav's handler.
 const APP_HREF = {};
 for (const m of INDEX.matchAll(/if \(b\.dataset\.tab === '([a-z-]+)'\) \{ window\.location\.href = '([^']+)'; return; \}/g)) APP_HREF[m[1]] = m[2];
-ck('index.html has its ten standalone pages', Object.keys(APP_HREF).length === 10, JSON.stringify(APP_HREF));
+// Twelve as of 2026-10-12: AI usage and Health both joined today (Health per
+// Apsara, "Why there is no provision for USers,incidents,crash report?").
+// The exact count is the point of this check — adding a page has to be a
+// deliberate edit here, because a page registered in one nav list and not the
+// other appears on some screens and not others. It earned its keep twice in
+// one afternoon: two people added a page and each was made to notice the
+// other's.
+ck('index.html has its twelve standalone pages', Object.keys(APP_HREF).length === 12, JSON.stringify(APP_HREF));
 ck('the same pages, to the same addresses', JSON.stringify(Object.entries(APP_HREF).sort()) === JSON.stringify(Object.entries(L.PAGE_HREF).sort()),
    JSON.stringify(L.PAGE_HREF));
 const staffSrc = (INDEX.match(/ROLE !== 'staff' \|\| n\.id === 'loads' \|\| n\.id === 'petty' \|\| n\.id === 'trucker-bills'/) || [])[0];

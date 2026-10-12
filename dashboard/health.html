@@ -1,0 +1,308 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Health — Jarvis</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wght@700;800;900&family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+/* Design tokens copied from dashboard/claims.html — standalone page, kept in
+   sync by hand, same as the others. */
+:root{
+  --steel-900:#14181B; --steel-800:#1E2429; --steel-700:#2B3239; --steel-600:#3C454D;
+  --steel-500:#57616A; --steel-400:#7E8891; --steel-300:#A7B0B7; --steel-200:#CBD1D6;
+  --leaf-300:#7FD172; --leaf-400:#57BE49; --leaf-500:#3DA836; --leaf-600:#2E861F;
+  --copper-300:#E29C68; --copper-400:#D77E3D;
+  --green-500:#2F8F57; --amber-500:#D99A2B; --red-500:#C5402F; --blue-500:#3A6EA5;
+  --bg-base:#0C0E10; --surface-card:#14181B; --surface-sunken:#0F1214; --surface-hover:#181D21;
+  --text-strong:#FFFFFF; --text-body:#CBD1D6; --text-muted:#A7B0B7; --text-faint:#7E8891;
+  --border-subtle:#1E2429; --border-default:#2B3239; --ring:var(--leaf-500);
+  --font-display:'Archivo',sans-serif; --font-sans:'IBM Plex Sans',system-ui,sans-serif;
+  --font-mono:'IBM Plex Mono',ui-monospace,monospace;
+}
+*,*::before,*::after{box-sizing:border-box}
+body{margin:0;font-family:var(--font-sans);color:var(--text-body);background:var(--bg-base);-webkit-font-smoothing:antialiased}
+h1,h2,h3{font-family:var(--font-display);color:var(--text-strong);margin:0;font-weight:900;letter-spacing:-.02em}
+button{font:inherit;cursor:pointer}
+.mono{font-family:var(--font-mono)}
+.num{font-family:var(--font-mono);font-variant-numeric:tabular-nums}
+:focus-visible{outline:2px solid var(--ring);outline-offset:2px}
+
+.wrap{max-width:1180px;margin:0 auto;padding:22px 22px 80px}
+header.top{display:flex;gap:16px;align-items:flex-start;margin-bottom:20px;flex-wrap:wrap}
+header.top .back{color:var(--steel-400);font-size:13px;text-decoration:none}
+header.top .back:hover{color:var(--text-body)}
+.eyebrow{font-family:var(--font-mono);font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--text-faint);margin:7px 0 3px}
+header.top h1{font-size:30px}
+.lede{font-size:13.5px;color:var(--text-muted);margin-top:5px;max-width:62ch}
+.acts{margin-left:auto;display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.b{padding:8px 13px;border-radius:5px;border:1px solid var(--border-default);background:var(--surface-card);color:var(--text-body);font-size:13px;font-weight:600}
+.b:hover{border-color:var(--steel-500);background:var(--surface-hover)}
+.b.pri{border-color:var(--leaf-600);background:rgba(87,190,73,.14);color:var(--leaf-300)}
+
+/* ── the four tiles: is it up, is it stable, are the phones ok, are the
+      jobs running. Nothing else belongs at the top of this page. ───────── */
+.kpis{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin-bottom:18px}
+.kpi{background:var(--surface-card);border:1px solid var(--border-subtle);border-radius:7px;padding:13px 15px}
+.kpi .k{font-family:var(--font-mono);font-size:10.5px;letter-spacing:.07em;text-transform:uppercase;color:var(--text-faint)}
+.kpi .v{font-family:var(--font-mono);font-size:23px;font-weight:600;color:var(--text-strong);line-height:1.2;margin-top:3px}
+.kpi .s{font-size:11.5px;color:var(--text-faint);margin-top:2px}
+.kpi.good .v{color:var(--leaf-300)}
+.kpi.warn .v{color:var(--amber-500)}
+.kpi.bad  .v{color:#f0b3aa}
+
+section.card{background:var(--surface-card);border:1px solid var(--border-subtle);border-radius:7px;margin-bottom:16px;overflow:hidden}
+section.card > h2{font-size:14px;padding:12px 15px;border-bottom:1px solid var(--border-subtle);display:flex;align-items:center;gap:9px}
+section.card > h2 .n{font-family:var(--font-mono);font-size:11px;font-weight:500;color:var(--text-faint);letter-spacing:.04em}
+.pad{padding:13px 15px}
+.empty{padding:16px 15px;font-size:13px;color:var(--text-faint)}
+.err{padding:12px 15px;font-size:12.5px;color:#f0b3aa;background:rgba(197,64,47,.09);border-top:1px solid var(--red-500)}
+
+table{width:100%;border-collapse:collapse}
+th{text-align:left;font-family:var(--font-mono);font-size:10px;letter-spacing:.07em;text-transform:uppercase;color:var(--text-faint);font-weight:500;padding:8px 15px;border-bottom:1px solid var(--border-subtle);background:var(--surface-sunken);white-space:nowrap}
+td{padding:9px 15px;font-size:12.5px;border-bottom:1px solid var(--border-subtle);vertical-align:top}
+tr:last-child td{border-bottom:0}
+td.t{font-family:var(--font-mono);font-size:11.5px;color:var(--text-muted);white-space:nowrap}
+
+/* A stack trace is the whole point of a crash report, so it gets room and a
+   monospace font, and it does not wrap mid-token. */
+details.crash{border-bottom:1px solid var(--border-subtle)}
+details.crash:last-child{border-bottom:0}
+details.crash > summary{padding:10px 15px;cursor:pointer;display:flex;gap:12px;align-items:baseline;font-size:12.5px}
+details.crash > summary:hover{background:var(--surface-hover)}
+details.crash > summary .when{font-family:var(--font-mono);font-size:11.5px;color:var(--text-muted);white-space:nowrap}
+details.crash > summary .what{color:#f0b3aa;font-weight:600;min-width:0;overflow-wrap:anywhere}
+pre.stack{margin:0;padding:12px 15px 15px;background:var(--surface-sunken);border-top:1px solid var(--border-subtle);font-family:var(--font-mono);font-size:11.5px;line-height:1.55;color:var(--text-body);overflow-x:auto;white-space:pre}
+
+.tag{font-family:var(--font-mono);font-size:10px;letter-spacing:.05em;text-transform:uppercase;padding:2px 6px;border-radius:3px;border:1px solid var(--border-default);color:var(--text-muted)}
+.tag.boot{color:var(--leaf-300);border-color:var(--leaf-600)}
+.tag.crash{color:#f0b3aa;border-color:var(--red-500)}
+.tag.shutdown{color:var(--text-faint)}
+
+@media (max-width:1020px){
+  .wrap{padding:16px 16px 80px}
+  header.top h1{font-size:25px}
+  .kpis{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .kpi .v{font-size:20px}
+}
+@media (max-width:520px){ .kpis{grid-template-columns:1fr} }
+</style>
+</head>
+<body>
+
+<div class="wrap">
+<header class="top">
+  <div>
+    <a class="back" href="/">&larr; Jarvis</a>
+    <div class="eyebrow">// System</div>
+    <h1>Health</h1>
+    <!-- Apsara, 2026-10-12: "Why there is no provision for USers,incidents,
+         crash report?" The crash reports existed and nothing read them. This
+         page is the front door — read-only, and it answers the question the
+         2026-09-01 outage could not: when, what threw, and whether anything
+         asked it to stop. -->
+    <div class="lede">Every restart, every crash with its stack, what the phones could not reach, and which scheduled jobs are running. All times are Los Angeles, the same clock the schedules use. Read-only — nothing on this page changes anything.</div>
+  </div>
+  <div class="acts">
+    <span class="mono" id="asof" style="font-size:11px;color:var(--text-faint)"></span>
+    <button class="b pri" id="btnReload">Reload</button>
+  </div>
+</header>
+
+<div class="kpis" id="kpis"></div>
+<div id="body"></div>
+</div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+
+// Dates are MM/DD/YYYY wherever they are SHOWN — the rule from 2026-09-01.
+// Here they carry a time too, because thirty seconds is the difference between
+// "the nightly job did it" and "someone was using it": that is exactly how
+// EDGE_130 was pinned on the end-of-day report, 36 seconds after it started.
+//
+// ── LA TIME, STATED, NOT THE VIEWER'S ───────────────────────────────────
+// The logs are written in UTC. new Date(iso) formatted with getHours() would
+// render in whatever zone the BROWSER is in, so the same crash would read
+// 19:00 on the VM, 12:00 on her Mac and 00:30 on a phone set to IST — and a
+// page used to line a crash up against a cron schedule cannot have a moving
+// clock. Every other dated decision in this app is evaluated in
+// America/Los_Angeles (helpers/time.js, the invoice archive, the yard
+// report), so this matches, and the heading says which zone it is rather
+// than leaving her to guess.
+const LA = 'America/Los_Angeles';
+function stamp(iso) {
+  if (!iso) return '—';
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return String(iso);
+  const f = new Intl.DateTimeFormat('en-US', {
+    timeZone: LA, month: '2-digit', day: '2-digit', year: 'numeric',
+    hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false,
+  }).formatToParts(d).reduce((o, p) => (o[p.type] = p.value, o), {});
+  return `${f.month}/${f.day}/${f.year} ${f.hour}:${f.minute}:${f.second}`;
+}
+function ago(iso) {
+  const t = Date.parse(iso || '');
+  if (!t) return '';
+  const s = Math.max(0, Math.round((Date.now() - t) / 1000));
+  if (s < 60) return `${s}s ago`;
+  if (s < 3600) return `${Math.round(s / 60)}m ago`;
+  if (s < 86400) return `${Math.round(s / 3600)}h ago`;
+  return `${Math.round(s / 86400)}d ago`;
+}
+function dur(s) {
+  s = Number(s) || 0;
+  if (s < 60) return `${s}s`;
+  if (s < 3600) return `${Math.floor(s / 60)}m ${s % 60}s`;
+  if (s < 86400) return `${Math.floor(s / 3600)}h ${Math.floor((s % 3600) / 60)}m`;
+  return `${Math.floor(s / 86400)}d ${Math.floor((s % 86400) / 3600)}h`;
+}
+
+// ── A SECTION THAT CANNOT READ ITS SOURCE SAYS SO ───────────────────────
+// The server already reports each section's failure as data rather than
+// 500ing the page. Rendering that is the other half: a blank panel on a
+// health page is indistinguishable from "everything is fine".
+const problem = (part, what) => (part && part.ok === false)
+  ? `<div class="err">Could not read ${esc(what)}: ${esc(part.error || 'no reason given')}</div>` : '';
+
+function kpis(d) {
+  const p = d.process || {}, b = d.boots || {}, c = d.crashes || {}, j = (d.jobs && d.jobs.status) || {};
+  const dev = (d.devices && d.devices.summary) || null;
+  const unexplained = Number(b.unexplained_restarts || 0);
+  const crashCount = Number(c.total || 0);
+  const badJobs = (j.failing || []).length + (j.late || []).length;
+  // Device failures: the summary is null when there were none in the window,
+  // which is the good case and must not render as "unknown".
+  const devBad = dev ? (dev.devices || dev.count || (dev.stages || []).reduce((n, s) => n + (s.count || 0), 0) || 0) : 0;
+  const tile = (cls, k, v, s) => `<div class="kpi ${cls}"><div class="k">${esc(k)}</div><div class="v">${esc(v)}</div><div class="s">${esc(s)}</div></div>`;
+  $('kpis').innerHTML = [
+    tile(p.uptime_s > 3600 ? 'good' : 'warn', 'This process', dur(p.uptime_s),
+         `pid ${p.pid ?? '—'} · ${p.rss_mb ?? '—'}MB of ${p.restart_ceiling_mb ?? '—'}MB`),
+    tile(unexplained > 0 ? 'bad' : 'good', 'Unexplained restarts', String(unexplained),
+         `${b.boots ?? 0} boot(s) in ${b.window_hours ?? 48}h`),
+    tile(crashCount > 0 ? 'bad' : 'good', 'Crash reports', String(crashCount),
+         crashCount ? `newest ${ago((c.items && c.items[0] || {}).at)}` : 'none on disk'),
+    tile(badJobs > 0 ? 'warn' : 'good', 'Jobs needing attention', String(badJobs),
+         `${(j.ok || []).length} healthy · ${devBad} device report(s)`),
+  ].join('');
+}
+
+function crashesCard(c) {
+  if (c && c.ok === false) return `<section class="card"><h2>Crashes</h2>${problem(c, 'the crash files')}</section>`;
+  const items = (c && c.items) || [];
+  const extra = (c && c.total > c.shown) ? `<span class="n">showing ${c.shown} of ${c.total}</span>` : '';
+  if (!items.length) {
+    return `<section class="card"><h2>Crashes <span class="n">crash-*.log</span></h2>
+      <div class="empty">No crash files. Jarvis has not thrown an uncaught error since these logs began.</div></section>`;
+  }
+  return `<section class="card"><h2>Crashes <span class="n">crash-*.log</span>${extra}</h2>` + items.map((x) => `
+    <details class="crash">
+      <summary><span class="when">${esc(stamp(x.at))}</span><span class="what">${esc(x.headline || x.file)}</span></summary>
+      ${x.error ? `<div class="err">${esc(x.error)}</div>`
+        : `<pre class="stack">${esc(x.stack || '(empty)')}</pre>`}
+    </details>`).join('') + `</section>`;
+}
+
+function bootsCard(b) {
+  if (b && b.ok === false) return `<section class="card"><h2>Restarts</h2>${problem(b, 'jarvis.log')}</section>`;
+  const items = (b.items || []).slice().reverse();
+  const head = `<section class="card"><h2>Restarts <span class="n">last ${esc(b.window_hours)}h · jarvis.log</span></h2>`;
+  if (!items.length) return head + `<div class="empty">Nothing logged in this window.</div></section>`;
+  return head + `<table><thead><tr><th>When</th><th>What</th><th>Line</th></tr></thead><tbody>`
+    + items.map((x) => `<tr><td class="t">${esc(stamp(x.at))}</td>
+        <td><span class="tag ${esc(x.kind)}">${esc(x.kind)}</span></td>
+        <td style="overflow-wrap:anywhere">${esc(x.line)}</td></tr>`).join('')
+    + `</tbody></table></section>`;
+}
+
+function devicesCard(d) {
+  if (d && d.ok === false) return `<section class="card"><h2>Phones</h2>${problem(d, 'the device reports')}</section>`;
+  const rows = (d && d.recent) || [];
+  const head = `<section class="card"><h2>Phones <span class="n">what the app could not reach</span></h2>`;
+  if (!rows.length) {
+    return head + `<div class="empty">No device has reported a failure. The app reports these by itself — nothing to do here.</div></section>`;
+  }
+  return head + `<table><thead><tr><th>When</th><th>Where</th><th>Failed at</th><th>Detail</th></tr></thead><tbody>`
+    + rows.map((r) => {
+        const probes = Array.isArray(r.probes) ? r.probes : [];
+        const firstBad = probes.find((p) => !p.ok);
+        return `<tr><td class="t">${esc(stamp(r.at))}</td>
+          <td class="t">${esc(r.base || r.platform || '—')}</td>
+          <td>${firstBad ? `<span class="tag crash">${esc(firstBad.label)}</span>` : '<span class="tag">—</span>'}</td>
+          <td class="t">${esc(probes.map((p) => `${p.label}:${p.ok ? 'ok' : (p.status || 'fail')}`).join('  '))}</td></tr>`;
+      }).join('')
+    + `</tbody></table></section>`;
+}
+
+function jobsCard(j) {
+  if (j && j.ok === false) return `<section class="card"><h2>Scheduled jobs</h2>${problem(j, 'the heartbeat state')}</section>`;
+  const s = (j && j.status) || {};
+  const groups = [['failing', 'Failing'], ['late', 'Late'], ['silent', 'Never run'], ['ok', 'Healthy']];
+  const rows = [];
+  for (const [key, label] of groups) {
+    for (const job of (s[key] || [])) {
+      rows.push(`<tr><td>${esc(job.name)}</td>
+        <td><span class="tag ${key === 'ok' ? 'boot' : (key === 'failing' ? 'crash' : '')}">${esc(label)}</span></td>
+        <td class="t">${esc(job.last_ok ? stamp(job.last_ok) + ' · ' + ago(job.last_ok) : '—')}</td>
+        <td class="t" style="overflow-wrap:anywhere">${esc(job.error || '')}</td></tr>`);
+    }
+  }
+  const head = `<section class="card"><h2>Scheduled jobs <span class="n">heartbeat</span></h2>`;
+  if (!rows.length) return head + `<div class="empty">No job has checked in yet.</div></section>`;
+  return head + `<table><thead><tr><th>Job</th><th>State</th><th>Last good run</th><th>Error</th></tr></thead><tbody>${rows.join('')}</tbody></table></section>`;
+}
+
+function documentsCard(d) {
+  if (d && d.ok === false) return `<section class="card"><h2>Documents</h2>${problem(d, 'the PDF queue')}</section>`;
+  const q = (d && d.queue) || {}, r = (d && d.renderer) || null;
+  const row = (k, v) => `<tr><td>${esc(k)}</td><td class="t">${esc(v)}</td></tr>`;
+  const reasons = r && r.byReason ? Object.entries(r.byReason).map(([k, n]) => `${k}×${n}`).join(', ') : '';
+  return `<section class="card"><h2>Documents <span class="n">queue and the render process</span></h2>
+    <table><tbody>
+      ${row('In the queue now', `${q.running ?? 0} running, ${q.queued ?? 0} waiting (limit ${q.limit ?? '—'})`)}
+      ${r ? row('Render process', r.available ? 'reachable' : 'not reachable — documents render in the main process')
+          : row('Render process', 'not configured')}
+      ${r ? row('Asked / served / fell back', `${r.asked ?? 0} / ${r.served ?? 0} / ${r.fellBack ?? 0}${reasons ? ' — ' + reasons : ''}`) : ''}
+      ${r && r.lastError ? row('Last fallback reason', r.lastError) : ''}
+    </tbody></table></section>`;
+}
+
+async function load() {
+  $('body').innerHTML = `<div class="empty">Reading…</div>`;
+  let d = null;
+  try {
+    const res = await fetch('/api/health-report?hours=48');
+    // 401/403 is the normal answer for a session without the admin password,
+    // and saying so beats a blank page or "failed to fetch".
+    if (res.status === 401 || res.status === 403) {
+      $('body').innerHTML = `<section class="card"><div class="empty">This page needs the admin password. Sign in from <a href="/" style="color:var(--leaf-300)">Jarvis</a> and come back.</div></section>`;
+      return;
+    }
+    d = await res.json();
+  } catch (e) {
+    $('body').innerHTML = `<section class="card"><div class="err">Could not reach the server: ${esc(e.message || e)}</div></section>`;
+    return;
+  }
+  if (!d || d.ok === false) {
+    $('body').innerHTML = `<section class="card"><div class="err">${esc((d && d.error) || 'the server could not build the report')}</div></section>`;
+    return;
+  }
+  $('asof').textContent = `as of ${stamp(d.at)}`;
+  kpis(d);
+  // Crashes first: it is the question that brings anyone to this page.
+  $('body').innerHTML = crashesCard(d.crashes) + bootsCard(d.boots)
+    + devicesCard(d.devices) + jobsCard(d.jobs) + documentsCard(d.documents);
+}
+
+$('btnReload').addEventListener('click', load);
+load();
+</script>
+
+<!-- The shared left rail, same as every other standalone page — see
+     dashboard/sidebar.js. -->
+<script src="/sidebar.js" data-page="health" defer></script>
+</body>
+</html>

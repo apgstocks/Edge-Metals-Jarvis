@@ -1251,6 +1251,74 @@ const MUTATIONS = [
       find: '         data-bank="${esc(a.bank || \'\')}" data-mask="${esc(a.mask || \'\')}"',
       to:   '         data-bank="" data-mask=""' },
 
+    // ── THE CRASH REPORTS THAT NOTHING READ ─────────────────────────────
+    // Apsara, 2026-10-12: "Why there is no provision for USers,incidents,
+    // crash report?" The capture was complete since 2026-09-06 and no route
+    // served it. These mutations are in two groups, and the second group is
+    // the one that matters: this module reads a directory that sits next to
+    // her stores, her bank data and her Google credentials.
+    { name: 'health: the report is served to anyone who asks',
+      file: 'routes/admin.js', suites: ['health-page'],
+      find: "    app.get('/api/health-report', requireAdmin, (req, res) => {",
+      to:   "    app.get('/api/health-report', (req, res) => {" },
+    // suites: health-page only, deliberately. sidebar-pages would be a second
+    // killer, but on 2026-10-12 it was red for an unrelated reason (the new
+    // /ai-usage page shipped without the shared rail script) and a mutation
+    // list that depends on someone else's suite being green measures nothing
+    // on the afternoon theirs breaks.
+    { name: 'health: the page takes /health, shadowing the uptime probe',
+      file: 'routes/pages.js', suites: ['health-page'],
+      find: "    app.get('/health-report', (req, res) => {",
+      to:   "    app.get('/health', (req, res) => {" },
+    // THE SECURITY PROPERTY. A loose pattern matches crash-report.bak, and
+    // the next careless neighbour in that directory is whatever someone
+    // leaves there.
+    { name: 'health: the crash-file pattern goes loose and picks up neighbours',
+      file: 'helpers/healthReport.js', suites: ['health-page'],
+      find: 'const CRASH_NAME = /^crash-[0-9TZ:.\\-]+\\.log$/;',
+      to:   'const CRASH_NAME = /^crash-/;' },
+    { name: 'health: safeInLogs stops checking, so a path can escape the log directory',
+      file: 'helpers/healthReport.js', suites: ['health-page'],
+      find: '    return resolved === base || resolved.startsWith(base + path.sep);',
+      to:   '    return true;' },
+    // The classic near-miss: /data/logs-old starts with /data/logs.
+    { name: 'health: the path check accepts a sibling directory with the same prefix',
+      file: 'helpers/healthReport.js', suites: ['health-page'],
+      find: '    return resolved === base || resolved.startsWith(base + path.sep);',
+      to:   '    return resolved.startsWith(base);' },
+    { name: 'health: the whole log file is read, so a 5MB log becomes a 5MB response',
+      file: 'helpers/healthReport.js', suites: ['health-page'],
+      find: '        const start = Math.max(0, size - bytes);',
+      to:   '        const start = 0;' },
+    { name: 'health: the query window is obeyed instead of clamped',
+      file: 'routes/admin.js', suites: ['health-page'],
+      find: '                return Number.isFinite(x) ? Math.min(max, Math.max(min, Math.round(x))) : dflt;',
+      to:   '                return Number.isFinite(x) ? x : dflt;' },
+    // Each section is wrapped so one unreadable source cannot blank the page.
+    // Unwrap it and the page a broken system needs goes empty.
+    { name: 'health: one unreadable source blanks the whole page',
+      file: 'helpers/healthReport.js', suites: ['health-page'],
+      find: '        catch (e) { out[name] = { ok: false, error: String((e && e.message) || e) }; }',
+      to:   '        catch (e) { throw e; }' },
+    // The stack is the whole value — a list of timestamps answers "did it
+    // crash", which she already knew on 2026-09-01.
+    { name: 'health: crashes are listed without their stacks',
+      file: 'helpers/healthReport.js', suites: ['health-page'],
+      find: '            stack: t.text,',
+      to:   '            stack: null,' },
+    // Boots minus shutdowns is the crash-loop signal. Drop it and a process
+    // restarting every forty seconds looks healthy.
+    { name: 'health: restarts nobody asked for stop being counted',
+      file: 'helpers/healthReport.js', suites: ['health-page'],
+      find: "        unexplained_restarts: Math.max(0, count('boot') - count('shutdown') - 1),",
+      to:   '        unexplained_restarts: 0,' },
+    // A moving clock makes the page useless for lining a crash up against a
+    // cron schedule — the exact reasoning that pinned EDGE_130.
+    { name: 'health: times follow the viewer\'s machine instead of LA',
+      file: 'dashboard/health.html', suites: ['health-page'],
+      find: '    timeZone: LA, month: \'2-digit\', day: \'2-digit\', year: \'numeric\',',
+      to:   "    month: '2-digit', day: '2-digit', year: 'numeric'," },
+
     // ── A CALENDAR WHEREVER A DATE IS, ASKED THREE TIMES ────────────────
     // 2026-09-01 "wherever date applicable it should be mm/dd/yyyy only",
     // 2026-09-02 "date picker should be there wherever date used", and
