@@ -160,6 +160,11 @@ async function writeAudit(audit, rec, extra) {
     });
 }
 
+const containersOfRow = (b) => {
+    const c = b && (b.containers != null ? b.containers : b.container_no);
+    return (Array.isArray(c) ? c : [c]).map((x) => String(x == null ? '' : x).trim()).filter(Boolean);
+};
+
 // ── reading the world the verifier needs ────────────────────────────────
 function readWorld() {
     const bills = require('./bills').listWithTotals();
@@ -183,6 +188,32 @@ function readWorld() {
             return !!(l && l.linked);
         } catch (e) { return false; }
     };
+    // ── AND WHICH BILLS ─────────────────────────────────────────────────
+    // push.js treats a pushed bill as 'already-linked' and never re-sends an
+    // edit, so detaching a container from (or deleting) a bill QuickBooks
+    // already holds leaves the two sets of books disagreeing with nothing
+    // recording who moved what. The payment gate above was written for that
+    // exact reason and stopped at payments; bills were the same hole.
+    //
+    // FAILS CLOSED, unlike the payment flag: linkedRow() returns linked:true
+    // when it cannot read the journal ("cannot tell" must not read as "safe
+    // to change"). A bill is checked by its id, its container_no AND every
+    // container on it, because a bill pushed before it had an id is linked by
+    // container (qbLinked.js says why).
+    const billLinked = (b) => {
+        const L = require('./qbLinked');
+        const rows = [b].concat(containersOfRow(b).map((c) => ({ container_no: c })));
+        for (const r of rows) {
+            const l = L.linkedRow(r, { kind: 'bills', keys: qbKeys });
+            if (l && l.linked) return l.why || 'already in QuickBooks';
+        }
+        return null;
+    };
+    const billsOut = bills.map((b) => {
+        let why = null;
+        try { why = billLinked(b); } catch (e) { why = 'could not check QuickBooks'; }
+        return why ? { ...b, qb_linked: true, qb_why: why } : b;
+    });
     const payments = bp.list().map((p) => ({
         id: p.id, party: p.supplier || p.party || null, date: p.date, amount: num(p.amount),
         applied: (p.allocations || []).map((a) => ({ bill_id: a.bill_id, amount: num(a.amount) })),
@@ -206,7 +237,7 @@ function readWorld() {
         }));
     } catch (e) { carrierInvoices = []; carrierNames = []; }
 
-    return { bills, payments, carrierInvoices, carrierNames };
+    return { bills: billsOut, payments, carrierInvoices, carrierNames };
 }
 
 // ── APPLY ───────────────────────────────────────────────────────────────

@@ -343,6 +343,10 @@ function simulateInto(steps, world) {
         if (s.op === 'detach-container') {
             const b = resolveBill(s.bill_id, i);
             if (!b) return bad(i, `bill ${s.bill_id} is not there to take a container off`);
+            if (b.qb_linked && !b.isNew) {
+                return bad(i, `bill ${b.id} is already in QuickBooks — change it in both, or `
+                    + 'remove it there first. Jarvis will not edit one side on its own');
+            }
             const c = String(s.container_no);
             if (!b.containers.includes(c)) {
                 return bad(i, `container ${c} is not on bill ${b.id} — it is on `
@@ -355,6 +359,10 @@ function simulateInto(steps, world) {
         if (s.op === 'attach-container') {
             const b = resolveBill(s.bill_id, i);
             if (!b) return bad(i, `bill ${s.bill_id} is not there to put a container on`);
+            if (b.qb_linked && !b.isNew) {
+                return bad(i, `bill ${b.id} is already in QuickBooks — change it in both, or `
+                    + 'remove it there first. Jarvis will not edit one side on its own');
+            }
             const c = String(s.container_no);
             const home = containerHome(bills, c);
             if (home && home !== b.id) {
@@ -375,6 +383,10 @@ function simulateInto(steps, world) {
         if (s.op === 'delete-bill') {
             const b = resolveBill(s.bill_id, i);
             if (!b) return bad(i, `bill ${s.bill_id} is not there to delete`);
+            if (b.qb_linked && !b.isNew) {
+                return bad(i, `bill ${b.id} is already in QuickBooks — change it in both, or `
+                    + 'remove it there first. Jarvis will not edit one side on its own');
+            }
             // ── ORPHANED MONEY, THE FAILURE THAT HIDES ──────────────────
             // ledgerBulkDelete.js's header names it: a payment reaches a
             // bill through its allocations, so deleting the bill leaves

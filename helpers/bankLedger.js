@@ -207,6 +207,17 @@ function fromPlaid(tx, accounts) {
         id,
         date: day(tx.date || tx.authorized_date),
         desc: String(tx.name || tx.original_description || '').trim(),
+        // ── THE BANK'S FULL TEXT, KEPT BESIDE desc AND NOT INSTEAD OF IT ────
+        // Plaid's `name` is a cleaned, shortened form; original_description is
+        // what the bank printed. desc stays the short one on purpose: it is
+        // part of bankRelink.keyOf (date|direction|amount|normalised desc), so
+        // lengthening it would stop old short rows pairing with fresh long ones
+        // on a re-link. Display-only, and kept out of BANK_FIELDS so a re-sync
+        // that adds it is not reported as the bank restating a row she acted on.
+        memo: (() => {
+            const full = String(tx.original_description || '').trim();
+            return full && full !== String(tx.name || '').trim() ? full : '';
+        })(),
         // QuickBooks' own From/To guess is the best signal in its export.
         // Plaid's equivalent is merchant_name plus counterparties.
         party: String(tx.merchant_name
@@ -311,6 +322,9 @@ function upsert(existingRows, incoming) {
         const merged = { ...old };
         for (const k of BANK_FIELDS) merged[k] = fresh[k];
         for (const k of HERS) merged[k] = old[k];
+        // memo is not a BANK_FIELD (no drift), but a newly-arrived one must land
+        // and an existing one must survive a sync that did not carry it.
+        merged.memo = fresh.memo || old.memo || '';
         merged.raw = old.raw;                   // immutable: the first thing the bank said
         merged.first_seen = old.first_seen;
         merged.last_seen = new Date().toISOString();

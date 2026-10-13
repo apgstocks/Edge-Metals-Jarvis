@@ -161,7 +161,7 @@ function mount(app, cfg) {
                 .filter((t) => t.direction === 'in' && num0(t.received) > 0.005)
                 .map((t) => ({ id: t.id, date: t.date, amount: round2(num0(t.received)),
                     descriptor: t.party || t.desc || '', account_id: t.account_id,
-                    company: t.company || null, desc: t.desc || '',
+                    company: t.company || null, desc: t.desc || '', memo: t.memo || '',
                     // Which account it landed in, in the words addReceipt
                     // accepts, resolved once at ingest by bankLedger.bankOf
                     // and stored on the row. A wire has to name one, so

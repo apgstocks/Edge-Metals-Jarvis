@@ -581,6 +581,7 @@ function renderRow(row, i) {
       <span class="chev">▶</span>
     </div>
     <div class="detail">
+      ${bankTextHtml(row.bank_text || dep.memo || dep.desc, dep.descriptor)}
       <div class="row1" style="margin-top:10px"><span class="badge ${cls}">${label}</span>
         ${row.ambiguous ? '<span class="badge ask">needs you</span>' : ''}</div>
       ${body}
@@ -1322,6 +1323,7 @@ async function renderReview() {
         <span class="chev">▶</span>
       </div>
       <div class="detail">
+        ${bankTextHtml(r.bank_text, r.descriptor)}
         <div class="note" style="margin-top:10px">${esc(r.why || '')}</div>
         ${r.state === 'match' ? '' : (r.kind === 'carrier-bill' ? planHtml(r) : categoriseHtml(r))}
         <div class="acts">${r.state === 'match' ? '' : ruleBtn(r.descriptor, 'out')}</div>
@@ -1725,6 +1727,14 @@ async function renderAside() {
       </div>`).join('') : '<div class="empty">Nothing set aside in these dates.</div>'}
       ${x.truncated ? `<div class="note">Showing the latest 300 of ${x.count}. Narrow the dates to see the rest.</div>` : ''}
       <div class="note">Set-aside lines leave the review list but stay in the bank total, because the money still moved. Nothing is deleted.</div></div>`;
+}
+
+/* The bank's own words, in full, wrapped — the summary line is clipped to one
+   line, and for a wire the part that says which invoice it pays comes last. */
+function bankTextHtml(text, shown) {
+  const t = String(text || '').trim();
+  if (!t || t === String(shown || '').trim()) return '';
+  return `<div class="desc mono" style="margin-top:10px;font-size:11.5px;color:var(--text-faint);overflow-wrap:anywhere;white-space:normal"><b>Bank says:</b> ${esc(t)}</div>`;
 }
 
 function toggleRow(card) {

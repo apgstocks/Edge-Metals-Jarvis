@@ -246,6 +246,121 @@ async function apply(file, thePlan) {
     return result;
 }
 
+// ── dedupe — AFTER the sync has already inserted the new item's rows ──────
+// Apsara, 2026-10-14, with the Bank screen showing every deposit from 11 Aug
+// to 6 Oct twice: "They are duplicate entries in bank. Remove the duplicate."
+//
+// plan()/apply() above are for the moment BEFORE the new item's rows are
+// stored. The 05:45 pull or the webhook gets there first, so by the time she
+// looks, the store holds both copies, and apply() — correctly — refuses to
+// re-key an old row onto an id the store already owns. scripts/bank-relink.js
+// says it supports that state; it does not. This is the tool that does.
+//
+// ── WHAT COUNTS AS A DUPLICATE (and what never does) ──────────────────────
+// Two rows with the same keyOf() (date, direction, amount, normalised desc)
+// that sit on DIFFERENT accounts, one of them on an account the live item
+// still reports and one not. That is the re-link signature: Plaid reissues
+// account_id with the Item.
+//
+// Two identical rows on the SAME account are NEVER touched. Two genuine $500
+// cash deposits on one day is real, and cleaning one away leaves her $500
+// short with nothing saying so — the exact reason bankLedger.upsert refuses
+// to merge on a natural key.
+//
+// ── WHICH COPY GOES ───────────────────────────────────────────────────────
+// A row anything depends on is never removed: she acted on it (matched,
+// categorised, excluded, history), or another store points at its id
+// (bank_entries.bank_row_id, interCompany.bank_rows — passed in as `refs`).
+//   · exactly one copy is depended on → the OTHER goes
+//   · neither is depended on          → the OLD-account copy goes, so the
+//                                       survivor is the one the live item
+//                                       refreshes in place
+//   · both are depended on            → both stay, and it is REPORTED
+// Counts are paired one-to-one, so 2 old + 1 fresh removes one and leaves
+// two, never zero.
+const dependedOn = (r, refs) => !!(r && (actedOn(r) || (refs && refs.has(r.id))));
+
+function dedupe(rows, { liveAccountIds = [], refs = new Set() } = {}) {
+    const all = Array.isArray(rows) ? rows : [];
+    const live = new Set(liveAccountIds);
+    if (!live.size) return { ok: false, why: 'no live account ids supplied, so old and current rows cannot be told apart', remove: [], kept_both: [], counts: {} };
+
+    const buckets = new Map();
+    all.forEach((r) => {
+        const k = keyOf(r);
+        if (!k || !r.id) return;
+        if (!buckets.has(k)) buckets.set(k, []);
+        buckets.get(k).push(r);
+    });
+
+    const remove = [], keptBoth = [];
+    for (const [k, group] of buckets) {
+        const fresh = group.filter((r) => r.account_id && live.has(r.account_id));
+        const old = group.filter((r) => !(r.account_id && live.has(r.account_id)));
+        // A group entirely on one side is not a re-link duplicate.
+        if (!fresh.length || !old.length) continue;
+        // Same-account twins are legitimate; only cross-account pairs count,
+        // and `old` and `fresh` are by construction on different accounts.
+        const n = Math.min(fresh.length, old.length);
+        const usedFresh = new Set(), usedOld = new Set();
+        for (let i = 0; i < n; i++) {
+            // Prefer pairing a depended-on row with its counterpart so the
+            // survivor is deterministic.
+            const o = old.filter((r) => !usedOld.has(r.id))[0];
+            const f = fresh.filter((r) => !usedFresh.has(r.id))[0];
+            usedOld.add(o.id); usedFresh.add(f.id);
+            const od = dependedOn(o, refs), fd = dependedOn(f, refs);
+            if (od && fd) {
+                keptBoth.push({ key: k, old_id: o.id, fresh_id: f.id, why: 'both copies carry work or are referenced elsewhere' });
+            } else if (od) {
+                remove.push({ id: f.id, keep: o.id, which: 'current-item copy', why: 'the older copy carries your work', date: f.date, amount: Number(f.amount), direction: f.direction, desc: f.desc });
+            } else {
+                remove.push({ id: o.id, keep: f.id, which: 'old-item copy', why: fd ? 'the current copy carries your work' : 'neither carries work; the current copy is the one the bank refreshes', date: o.date, amount: Number(o.amount), direction: o.direction, desc: o.desc });
+            }
+        }
+    }
+    return {
+        ok: true, at: new Date().toISOString(),
+        counts: { rows: all.length, remove: remove.length, kept_both: keptBoth.length },
+        remove, kept_both: keptBoth,
+    };
+}
+
+// Atomic, and ARCHIVES what it removes (one JSON line per row, with the id of
+// the copy it duplicated) so a removal can be reversed by hand. The archive
+// line is written INSIDE the locked section and BEFORE the store is
+// rewritten: if the archive cannot be written the mutator throws and the
+// store is untouched; if the store write then fails there is a stray archive
+// line, which is harmless. Never a removal without a record of it.
+// Refuses if the store moved since the plan.
+async function applyDedupe(file, thePlan, { archiveFile, by = null } = {}) {
+    const remove = (thePlan && Array.isArray(thePlan.remove)) ? thePlan.remove : [];
+    if (!remove.length) return { ok: true, removed: 0 };
+    if (!archiveFile) throw new Error('refusing to remove rows without somewhere to archive them');
+    const fs = require('fs');
+    let removed = 0;
+    await mutateJson(file, [], (all) => {
+        const rows = Array.isArray(all) ? all : (all && Array.isArray(all.transactions) ? all.transactions : []);
+        const byId = new Map(rows.map((r) => [r && r.id, r]));
+        const problems = [];
+        for (const x of remove) {
+            const gone = byId.get(x.id), kept = byId.get(x.keep);
+            if (!gone) problems.push(`${x.id} is no longer in the store`);
+            else if (!kept) problems.push(`${x.keep} (the copy to keep) is no longer in the store`);
+            else if (x.id === x.keep) problems.push(`${x.id} would remove its own survivor`);
+        }
+        if (problems.length) throw new Error('refusing to remove duplicates: ' + problems.slice(0, 5).join('; ')
+            + ' — make a fresh plan and review it again');
+        const ids = new Set(remove.map((x) => x.id));
+        const now = new Date().toISOString();
+        fs.appendFileSync(archiveFile, remove.map((x) => JSON.stringify({
+            removed_at: now, by, kept_id: x.keep, reason: x.why, row: byId.get(x.id) })).join('\n') + '\n');
+        removed = ids.size;
+        return rows.filter((r) => !(r && ids.has(r.id)));
+    }, { strict: true });
+    return { ok: true, removed };
+}
+
 // Convenience for the script: read the store without going through
 // bankLedger, so a re-link can be planned on a COPY of the file before
 // anything is done to the live one.
@@ -254,4 +369,4 @@ const read = (file) => {
     return Array.isArray(all) ? all : (all && Array.isArray(all.transactions) ? all.transactions : []);
 };
 
-module.exports = { plan, apply, read, keyOf, normDesc };
+module.exports = { plan, apply, read, keyOf, normDesc, dedupe, applyDedupe };

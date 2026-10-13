@@ -257,6 +257,63 @@ function fakeAudit() {
        JSON.stringify(CI.list().map((r) => r.ref)));
 }
 
+// ── H — A BILL QUICKBOOKS ALREADY HOLDS, THROUGH THE REAL CODE ───────────
+// Real stores, and the REAL qbLinked/push.linkKey — only the journal file is
+// faked, so the key the test plants is the key push.js would really write.
+{
+    section('H — a bill already in QuickBooks (real qbLinked, fake journal)');
+    const push = require(path.join(ROOT, 'helpers/quickbooks/push'));
+    const jPath = require.resolve(path.join(ROOT, 'helpers/quickbooks/journal'));
+    const realJ = require.cache[jPath];
+    const useJournal = (active) => {
+        require.cache[jPath] = { id: jPath, filename: jPath, loaded: true,
+            exports: { ...(realJ ? realJ.exports : {}), active } };
+    };
+    const restore = () => { if (realJ) require.cache[jPath] = realJ; else delete require.cache[jPath]; };
+
+    await bills.addBill({ supplier: 'Qbert', date: '2026-03-01', container_no: 'QBQU1111111', supplier_price: 0.3 });
+    const qb = bills.list().find((b) => b.container_no === 'QBQU1111111');
+    const env = require(path.join(ROOT, 'helpers/quickbooks/auth')).qbEnv();
+    const audit = fakeAudit();
+    const detach = [{ op: 'detach-container', bill_id: qb.id, container_no: 'QBQU1111111' },
+                    { op: 'create-bill', supplier: 'Qbert', date: '2026-03-05', container_no: 'QBQU1111111' }];
+    const countBefore = bills.list().length;
+
+    // linked by id
+    useJournal(() => [{ linkKey: push.linkKey(env, 'bill', qb.id) }]);
+    let w = LA.readWorld();
+    ck('readWorld marks a bill linked by its id', w.bills.find((b) => b.id === qb.id).qb_linked === true);
+    ck('  and does not mark the others', w.bills.filter((b) => b.id !== qb.id).every((b) => !b.qb_linked));
+    let res = await LA.apply({ plan: detach, asked: 'move it', planId: 'PLAN_H1', audit });
+    ck('apply REFUSES a plan that edits it', res.ok === false && /does not verify/.test(res.why), JSON.stringify(res.why));
+    ck('  naming QuickBooks and "both"', /already in QuickBooks/.test(JSON.stringify(res.problems)) && /both/.test(JSON.stringify(res.problems)), JSON.stringify(res.problems));
+    ck('  and wrote NOTHING', bills.list().length === countBefore
+        && bills.list().find((b) => b.id === qb.id).container_no === 'QBQU1111111');
+
+    // linked only by container (pushed before it had an id)
+    useJournal(() => [{ linkKey: push.linkKey(env, 'bill', 'QBQU1111111') }]);
+    w = LA.readWorld();
+    ck('a bill linked only by container is also caught', w.bills.find((b) => b.id === qb.id).qb_linked === true);
+
+    // cannot read the journal at all → closed, not open
+    useJournal(() => { throw new Error('journal unreadable'); });
+    w = LA.readWorld();
+    ck('if QuickBooks state cannot be read, bills are treated as LINKED (fail closed)',
+       w.bills.length > 0 && w.bills.every((b) => b.qb_linked === true), String(w.bills.filter((b) => !b.qb_linked).length));
+    res = await LA.apply({ plan: detach, asked: 'move it', planId: 'PLAN_H2', audit });
+    ck('  and an edit is refused rather than risked', res.ok === false);
+
+    // control: nothing linked → the very same plan applies
+    useJournal(() => []);
+    res = await LA.apply({ plan: detach, asked: 'move it', planId: 'PLAN_H3', audit });
+    ck('control: with nothing linked the same plan applies', res.ok === true, JSON.stringify(res.why || res.problems));
+
+    // the flag is for the verifier only — it must not reach the stored rows
+    ck('qb_linked / qb_why never leak into the bills store',
+       !bills.list().some((b) => 'qb_linked' in b || 'qb_why' in b));
+    restore();
+}
+
 console.log(`\n  ${pass} passed, ${fail} failed`);
 if (failures.length) { console.log('\n  failed:'); failures.forEach((f) => console.log('    · ' + f)); }
 try { fs.rmSync(TMP, { recursive: true, force: true }); } catch (e) {}

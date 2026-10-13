@@ -447,6 +447,11 @@ async function syncItem(itemId, { fetchImpl, pageCap = 20 } = {}) {
             access_token: item.access_token,
             ...(cursor ? { cursor } : {}),
             count: 500,
+            // Without this Plaid sends only its cleaned-up `name`, which for a
+            // wire is the first ~half of what the bank printed (the part after
+            // "PMT DET:" is what says which invoice it pays). Display only —
+            // see `memo` in bankLedger.fromPlaid for why desc is NOT replaced.
+            options: { include_original_description: true },
         }, { fetchImpl });
 
         added.push(...(r.added || []));

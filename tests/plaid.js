@@ -204,6 +204,8 @@ const Q = require(path.join(ROOT, 'helpers/plaid'));
             page += 1;
             if (page === 1) {
                 ck('    the first sync sends no cursor', body.cursor === undefined, JSON.stringify(body.cursor));
+                ck('    and asks for the bank\'s full description (the wire memo)',
+                   !!body.options && body.options.include_original_description === true, JSON.stringify(body.options));
                 return { added: [tx('T1', -47000, 'WIRE IN A'), tx('T2', 12000, 'CHECK 1041')],
                     modified: [], removed: [], next_cursor: 'cur-1', has_more: true };
             }

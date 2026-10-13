@@ -506,6 +506,61 @@ const CWORLD = () => ({
        future.length === 1 && !!future[0] && future[0].op === 'cannot-undo', JSON.stringify(future));
 }
 
+// ── F — A BILL QUICKBOOKS ALREADY HOLDS ──────────────────────────────────
+// push.js never re-sends an edit to a pushed bill ('already-linked'), so a
+// plan that takes a container off one, puts one on, or deletes it leaves
+// Jarvis and her books disagreeing with nothing recording who moved what.
+// Her rule for payments (2026-10-07) is "Refuse, and tell me to change
+// both"; the verifier enforced it for payments and said nothing for bills.
+{
+    section('F — a bill already in QuickBooks');
+    const linkedWorld = () => {
+        const w = WORLD();
+        w.bills[0].qb_linked = true;           // BILL_914
+        return w;
+    };
+    const said = (v) => (v.problems || []).map((x) => x.why).join(' | ');
+
+    let v = P.verify([{ op: 'detach-container', bill_id: 'BILL_914', container_no: 'TGHU1234567' }], linkedWorld());
+    ck('taking a container off a QuickBooks bill is REFUSED', v.ok === false, said(v));
+    ck('  and says to change both', /already in QuickBooks/.test(said(v)) && /both/.test(said(v)), said(v));
+
+    v = P.verify([{ op: 'attach-container', bill_id: 'BILL_914', container_no: 'ZZZU0000001' }], linkedWorld());
+    ck('putting a container on one is REFUSED', v.ok === false && /already in QuickBooks/.test(said(v)), said(v));
+
+    v = P.verify([{ op: 'delete-bill', bill_id: 'BILL_914' }], linkedWorld());
+    ck('deleting one is REFUSED', v.ok === false && /already in QuickBooks/.test(said(v)), said(v));
+
+    // The guard must not be a guard that always fires.
+    v = P.verify([{ op: 'detach-container', bill_id: 'BILL_915', container_no: 'MSKU7654321' },
+                  { op: 'create-bill', supplier: 'Mario', date: '2026-02-01', container_no: 'MSKU7654321' }],
+                 linkedWorld());
+    ck('a bill that is NOT linked is untouched by the rule', v.ok === true, said(v));
+
+    // The same plan that fixes a container onto a brand-new bill is fine
+    // even when the OLD bill is the linked one only if the old bill is not
+    // being edited — creating a bill never touches QuickBooks.
+    v = P.verify([{ op: 'create-bill', supplier: 'Hugo', date: '2026-02-01', container_no: 'NEWU1111111' }],
+                 linkedWorld());
+    ck('creating a bill is never blocked by someone else being linked', v.ok === true, said(v));
+
+    // Matching a payment to a linked bill is how the NEXT push attaches it;
+    // that is the normal flow, so it is deliberately not refused.
+    v = P.verify([{ op: 'match-payment', payment_id: 'PAY_77', bill_id: 'BILL_914', amount: 1000 }],
+                 linkedWorld());
+    ck('matching a (not-linked) payment to a linked bill is still allowed', v.ok === true, said(v));
+
+    // Payments keep their own gate, which had no test until now.
+    const pw = WORLD(); pw.payments[0].qb_linked = true;
+    v = P.verify([{ op: 'match-payment', payment_id: 'PAY_77', bill_id: 'BILL_914', amount: 1000 }], pw);
+    ck('a linked PAYMENT is still refused (gate had no test before)',
+       v.ok === false && /already in QuickBooks/.test(said(v)), said(v));
+    v = P.verify([{ op: 'unmatch-payment', payment_id: 'PAY_78', bill_id: 'BILL_914' }],
+                 (() => { const w = WORLD(); w.payments[1].qb_linked = true; return w; })());
+    ck('  and so is taking an allocation off one',
+       v.ok === false && /already in QuickBooks/.test(said(v)), said(v));
+}
+
 // ── E — IT CHANGES NOTHING ───────────────────────────────────────────────
 // The whole value of layers 3 and 4 is that they can be run on a plan
 // before it is real. A verifier that writes is not a verifier.

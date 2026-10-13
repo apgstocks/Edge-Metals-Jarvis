@@ -86,6 +86,7 @@ function withdrawals(rows = []) {
             date: day(r.date),
             amount: r2(num(r.spent)),
             descriptor: r.party || r.desc || '',
+            desc: r.desc || '', memo: r.memo || '',
             bank: r.bank || null,
             company: r.company || null,
         }))

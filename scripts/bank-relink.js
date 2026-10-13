@@ -86,6 +86,10 @@ const money = (n) => '$' + Number(n || 0).toLocaleString('en-US', { minimumFract
     }
     console.log(`  linked items: ${linked.map((i) => `${i.institution || i.item_id}`).join(', ')}`);
 
+    // !! KNOWN LIMIT (found 2026-10-14): once the sync HAS stored the new item's
+    // rows, apply() below refuses — it will not re-key an old row onto an id the
+    // store already owns. That state is what actually happens (the 05:45 pull
+    // beats her to it), and its fix is scripts/bank-dedupe.js, not this.
     // Rows whose id the store has never seen are, by definition, the new
     // item's. Taking them from the store means this works AFTER the sync has
     // already inserted the duplicates — which is the state she will actually
