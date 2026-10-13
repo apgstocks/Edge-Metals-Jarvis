@@ -615,6 +615,7 @@ function renderChips(){
     '<button type="button" class="b pri" id="newBtn" title="Enter a claim that came in by phone or WhatsApp">+ New claim</button>' +
     '<details class="menu" id="moreMenu"><summary class="b" role="button" aria-label="More actions">More ▾</summary><div class="pop">' +
       '<button type="button" id="repBtn">Claim report for a supplier<span class="sub">every claim for one supplier, as a PDF or Excel</span></button>' +
+      '<button type="button" id="mailBtn">Read a mail Jarvis missed<span class="sub">search your mailbox, pick the mail, Jarvis reads it as a claim</span></button>' +
       '<button type="button" id="impBtn">Import sheet</button>' +
       '<button type="button" id="vocab">Kinds of claim (' + (STATE.kinds.length || 0) + ')</button>' +
       '<hr><button type="button" id="refresh">Refresh</button>' +
@@ -623,6 +624,7 @@ function renderChips(){
   $('#scanBtn').onclick = () => { closeMenu(); openScan(); };
   $('#newBtn').onclick = () => openNew();
   $('#repBtn').onclick = () => { closeMenu(); openStatement({}); };
+  $('#mailBtn').onclick = () => { closeMenu(); openReadMail(); };
   $('#impBtn').onclick = () => { closeMenu(); openImport(); };
   $('#vocab').onclick = () => { closeMenu(); openVocab(); };
   $('#refresh').onclick = () => { closeMenu(); load(true); };
@@ -1266,6 +1268,46 @@ const SCAN_FIELDS = [
   ['weight_unit', 'Unit'], ['stated_claim_amount', 'Amount they are asking'],
   ['date', 'Date on the document'], ['what_is_claimed', 'What is claimed'],
 ];
+function openReadMail(){
+  const wrap = document.createElement('div');
+  wrap.className = 'modal';
+  wrap.innerHTML = '<div class="box wide"><h3>Read a mail Jarvis missed</h3>' +
+    '<div class="hint" style="margin-top:0">Type a container number, a word from the subject, or the sender. Pick the mail and Jarvis reads it as a claim and fills the claim from it. If the claim already exists, only its blank fields are filled — nothing you confirmed is changed.</div>' +
+    '<div class="actions"><input id="m_q" placeholder="e.g. MSMU1152787 or Quantum Steels" style="flex:1;height:38px;padding:0 10px;border-radius:4px;border:1px solid var(--border-default);background:var(--bg-base);color:var(--text-body)">' +
+    '<button class="btn go" id="m_go" type="button">Search</button><button class="btn" id="m_x" type="button">Close</button></div>' +
+    '<div id="m_out"></div></div>';
+  document.body.appendChild(wrap);
+  const close = () => wrap.remove();
+  wrap.onclick = (e) => { if (e.target === wrap) close(); };
+  $('#m_x', wrap).onclick = close;
+  const out = $('#m_out', wrap);
+  const run = async () => {
+    const q = $('#m_q', wrap).value.trim();
+    out.innerHTML = '<div class="hint">Searching your mailboxes…</div>';
+    try {
+      const d = await api('/api/claims/mail/search', { q });
+      if (!d.mails.length) { out.innerHTML = '<div class="hint">No mail found for that. Try the container number alone.</div>'; return; }
+      out.innerHTML = d.mails.map((m, i) => '<div class="card" style="margin-top:10px"><div><b>' + esc(m.subject || '(no subject)') + '</b></div>' +
+        '<div class="hint" style="margin:2px 0">' + esc(m.from) + ' · ' + esc(String(m.date).slice(0,10)) + (m.seen_by_jarvis ? ' · Jarvis already looked at this: ' + esc(m.seen_by_jarvis) : '') + '</div>' +
+        '<div class="hint" style="margin:2px 0">' + esc(m.snippet) + '</div>' +
+        '<div class="actions"><button class="btn go m_read" data-i="' + i + '" type="button">Read this as a claim</button><span class="hint m_res" style="margin:0"></span></div></div>').join('');
+      out.querySelectorAll('.m_read').forEach(b => b.onclick = async () => {
+        const m = d.mails[Number(b.dataset.i)], res = b.parentNode.querySelector('.m_res');
+        b.disabled = true; res.textContent = 'Reading…';
+        try {
+          const v = await api('/api/claims/mail/read', { id: m.id, mailbox: m.mailbox });
+          if (v.claim_id) { res.textContent = v.created ? 'Claim created.' : (v.changed ? 'Existing claim updated.' : 'Existing claim — nothing new to add.'); toast(res.textContent, 'ok'); await load(); }
+          else res.textContent = 'Not made into a claim — ' + (v.skipped === 'not a claim after extraction' ? 'the model did not read it as a claim, or found no container or invoice to attach it to.' : (v.skipped || 'unknown reason')) ;
+        } catch (e) { res.textContent = e.message; toast(e.message, 'bad'); }
+        finally { b.disabled = false; }
+      });
+    } catch (e) { out.innerHTML = '<div class="hint">' + esc(e.message) + '</div>'; }
+  };
+  $('#m_go', wrap).onclick = run;
+  $('#m_q', wrap).onkeydown = (e) => { if (e.key === 'Enter') run(); };
+  $('#m_q', wrap).focus();
+}
+
 function openScan(){
   const wrap = document.createElement('div');
   wrap.className = 'modal';

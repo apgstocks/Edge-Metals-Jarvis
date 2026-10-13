@@ -149,13 +149,16 @@ async function closeTodos(container_no, type) {
 // ── THE HOOK ────────────────────────────────────────────────────────────────
 // Returns a small verdict object for tests and logs. It never throws — the
 // caller is replyWatch's per-message loop and must not be disturbed.
-async function consider({ messageId, threadId, from, subject, body, mailbox, payload, fetchPart, dryRun = false } = {}) {
+async function consider({ messageId, threadId, from, subject, body, mailbox, payload, fetchPart, dryRun = false, force = false } = {}) {
     try {
         if (!messageId) return { skipped: 'no message id' };
         const g = gate({ subject, body, from });
-        if (!g.hit) return { skipped: 'gate', why: g.why };
+        // `force` is the manual "read this mail" door (helpers/claims/readMail.js):
+        // it steps over the gate and the processed list and NOTHING else — the
+        // model still has to call it a claim, and the claim key still dedupes.
+        if (!g.hit && !force) return { skipped: 'gate', why: g.why };
 
-        if (!dryRun && processed()[messageId]) return { skipped: 'already processed' };
+        if (!dryRun && !force && processed()[messageId]) return { skipped: 'already processed' };
 
         const got = await extract({ from, subject, body });
         if (!got) {

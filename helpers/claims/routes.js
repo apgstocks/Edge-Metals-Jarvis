@@ -22,6 +22,7 @@ const claimScan = require('../claimScan');
 const report = require('./report');
 const claimPrice = require('../claimPrice');
 const claimEvidence = require('../claimEvidence');
+const readMail = require('./readMail');
 
 const bad = (res, msg, code = 400) => res.status(code).json({ error: msg });
 
@@ -223,6 +224,22 @@ function mount(app, cfg) {
     // above this, so Express matched "report" as a claim id and answered 404.
     // Any new /api/claims/<word> route belongs HERE, above the wildcard at the
     // bottom of this file.
+    // ── FORCE JARVIS TO READ A MAIL IT MISSED (2026-10-14) ─────────────────
+    // Declared above the /api/claims/:id wildcard, like every other word here.
+    app.post('/api/claims/mail/search', async (req, res) => {
+        try { res.json({ mails: await readMail.search((req.body || {}).q) }); }
+        catch (e) { bad(res, e.message); }
+    });
+    app.post('/api/claims/mail/read', async (req, res) => {
+        try {
+            const b = req.body || {};
+            const v = await readMail.read({ id: b.id, mailbox: b.mailbox });
+            if (v.error) return bad(res, v.error, 500);
+            // A skip is an ANSWER (the model said it is not a claim), not a fault.
+            res.json(v);
+        } catch (e) { bad(res, e.message); }
+    });
+
     const FORMATS = ['json', 'html', 'pdf', 'xlsx'];
 
     // The picker: who is owed what, so she chooses a supplier rather than typing
