@@ -113,6 +113,22 @@ const routes = require(R('helpers/claims/routes.js'));
     ck('ONE report for the container, TWO rows', rep.lines.length === 2 && (html.match(/<tr[^>]*>\s*<td>/g) || []).length === 2, rep.lines.length);
     ck('  the quality row says its quantity in place of the empty weight cells', /colspan="4">1\.005 MT claimed/.test(html));
 
+    // ── delete a claim: archived first, only ITS to-dos cancelled ──
+    const tasksLib = require(R('helpers/tasks.js'));
+    const d1 = two[0], d2 = two[1];
+    const t1 = tasksLib.loadTasks().filter((t) => t.claim_id === d1.id && t.status === 'pending').length;
+    const t2 = tasksLib.loadTasks().filter((t) => t.claim_id === d2.id && t.status === 'pending').length;
+    r = await post('/api/claims/' + d1.id + '/delete', {});
+    ck('delete removes the claim from the register', r.code === 200 && !claims.get(d1.id) && !!claims.get(d2.id), JSON.stringify(r.body));
+    const arch = JSON.parse(fs.readFileSync(path.join(TMP, 'claims-deleted.json'), 'utf8'));
+    ck('  the whole record is archived first', arch.length === 1 && arch[0].claim.id === d1.id && arch[0].claim.stated_qty === d1.stated_qty);
+    ck('  its own to-dos are cancelled, the other claim\'s are kept', t1 > 0 && tasksLib.loadTasks().filter((t) => t.claim_id === d1.id && t.status === 'pending').length === 0
+        && tasksLib.loadTasks().filter((t) => t.claim_id === d2.id && t.status === 'pending').length === t2);
+    r = await post('/api/claims/nope/delete', {});
+    ck('  an unknown claim is a 404', r.code === 404);
+    const rep2 = require(R('helpers/claims/report.js')).build({ container: 'CCCU3333333', supplier: 'Gomez' });
+    ck('  the container report now has one row', rep2.lines.length === 1);
+
     server.close();
     console.log(`\n  ${pass} passed, ${fail} failed`); process.exit(fail ? 1 : 0);
 })().catch((e) => { console.error(e); process.exit(1); });

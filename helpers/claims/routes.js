@@ -129,6 +129,23 @@ function mount(app, cfg) {
         } catch (e) { bad(res, e.message); }
     });
 
+    // Delete. Archived first (claims.remove), then this claim's OWN pending
+    // to-dos are cancelled by claim id — never by container, which would also
+    // cancel the chase on a second claim against the same box.
+    app.post('/api/claims/:id/delete', async (req, res) => {
+        try {
+            const tasks = require('../tasks');
+            const rec = await claims.remove(req.params.id, (req.body || {}).by || 'manager');
+            let cancelled = 0;
+            try {
+                for (const t of tasks.loadTasks().filter((t) => t && t.status === 'pending' && t.claim_id === rec.id)) {
+                    await tasks.archive(t.id, { status: 'cancelled', result_note: 'claim_deleted' }); cancelled++;
+                }
+            } catch (e) { console.warn('[CLAIM] to-dos not cancelled after delete:', e.message); }
+            res.json({ ok: true, deleted: rec.id, container_no: rec.container_no, todos_cancelled: cancelled });
+        } catch (e) { bad(res, e.message, /no such claim/.test(e.message) ? 404 : 500); }
+    });
+
     app.post('/api/claims/:id/edit', async (req, res) => {
         try {
             const b = req.body || {};

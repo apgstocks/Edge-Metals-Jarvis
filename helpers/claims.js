@@ -307,6 +307,22 @@ async function assess(id, fields = {}, by = 'manager') {
     return update(id, patch, by, kind === 'contamination' ? 'contamination assessed' : kind === 'quality' ? 'quality claim assessed' : 'downgrade assessed');
 }
 
+// ── DELETE (2026-10-14) ────────────────────────────────────────────────────
+// Apsara: "Option to delete a claim add it". A claim is a money record, so it
+// is never just dropped: the whole record is written to claims-deleted.json
+// FIRST (and the delete refused if that write fails), then taken out of the
+// register. The archive is what makes a mistaken delete recoverable by hand.
+// Documents already filed on Drive are left where they are.
+const ARCHIVE = () => path.join(cfg.DATA_DIR, 'claims-deleted.json');
+async function remove(id, by = 'manager') {
+    const c = get(id);
+    if (!c) throw new Error('no such claim');
+    const now = new Date().toISOString();
+    await mutateJson(ARCHIVE(), [], (all) => { all.push({ deleted_at: now, deleted_by: by, claim: c }); return all; }, { strict: true });
+    await mutateJson(FILE(), [], (all) => all.filter((x) => !(x && x.id === id)), { strict: true });
+    return c;
+}
+
 // Recovery from the supplier. This is the half of a claim that is actually
 // actionable, and the half that keeps not happening: most of what Edge has
 // absorbed is a recovery nobody raised.
@@ -373,7 +389,7 @@ function stats(rows) {
 }
 
 module.exports = {
-    list, get, findByKey, keyOf, create, update, verify, assess, raiseRecovery, setStatus, addMail, stats,
+    list, get, findByKey, keyOf, create, update, verify, assess, raiseRecovery, setStatus, addMail, stats, remove,
     ASSESSMENTS, FINDINGS, MEASURED_BY,
     convert, toMT, newId, blank,
     STATUSES, UNITS,

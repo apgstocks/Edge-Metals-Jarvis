@@ -125,6 +125,7 @@ aside{border-right:1px solid var(--border-default);background:var(--surface-sunk
 .s-verified{color:var(--blue-500);background:rgba(58,110,165,.16)}
 .s-recovery_raised{color:var(--leaf-300);background:rgba(87,190,73,.13)}
 .s-settled{color:var(--steel-300);background:rgba(126,136,145,.13)}
+.f_del{color:var(--bad,#e5736b)}.f_del.armed{background:var(--bad,#e5736b);color:#0b0d0f;border-color:transparent}
 .s-rejected,.s-withdrawn{color:var(--steel-400);background:rgba(126,136,145,.09)}
 
 section.detail{overflow-y:auto;min-height:0;padding:18px 22px 40px}
@@ -876,7 +877,7 @@ function claimCard(c, i, g){
         c.history.slice().reverse().map(h => '<span>' + esc(String(h.at||'').slice(0,16).replace('T',' ')) + ' — ' + esc(h.what) + ' · ' + esc(h.by) + '</span>').join('') +
       '</div></details>' : '') +
     '</div>' +
-    '<div class="cfoot"><span class="grow"></span>' +
+    '<div class="cfoot"><button type="button" class="b xs f_del" title="Remove this claim from the register">Delete claim</button><span class="grow"></span>' +
       (live ? '<details class="menu closem"><summary class="b xs" role="button">Close this claim ▾</summary><div class="pop">' +
         '<button type="button" class="f_st" data-st="settled">Settled<span class="sub">the money is agreed</span></button>' +
         '<button type="button" class="f_st" data-st="rejected">Rejected<span class="sub">Edge does not accept it</span></button>' +
@@ -1190,6 +1191,20 @@ function wireClaim(c){
       await api('/api/claims/' + c.id + '/evidence', { base64: b64, mimeType: f.type || 'image/jpeg', name: f.name });
       toast('Filed against this claim.', 'ok'); await load();
     } catch (e) { doc.disabled = false; doc.value = ''; toast(e.message, 'bad'); }
+  };
+
+  /* Deleting is two taps as well, and says what it takes with it. The record is
+     archived on the server first, so a mistake can be put back by hand. */
+  const delBtn = el.querySelector('.f_del');
+  if (delBtn) delBtn.onclick = async () => {
+    if (!delBtn.classList.contains('armed')) {
+      delBtn.classList.add('armed'); delBtn.dataset.was = delBtn.textContent;
+      delBtn.textContent = ['recovery_raised','settled'].includes(c.status) ? 'Recovery already ' + c.status.replace('_',' ') + ' — tap again to delete' : 'Tap again to delete for good';
+      setTimeout(() => { delBtn.classList.remove('armed'); if (delBtn.dataset.was) delBtn.textContent = delBtn.dataset.was; }, 4000);
+      return;
+    }
+    try { await api('/api/claims/' + c.id + '/delete', {}); toast('Claim deleted.', 'ok'); await load(); }
+    catch (e) { toast(e.message, 'bad'); }
   };
 
   /* Closing is two taps, on purpose: the first arms the choice, the second
