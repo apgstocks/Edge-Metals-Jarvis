@@ -1251,6 +1251,57 @@ const MUTATIONS = [
       find: '         data-bank="${esc(a.bank || \'\')}" data-mask="${esc(a.mask || \'\')}"',
       to:   '         data-bank="" data-mask=""' },
 
+    // ── THE GATE HAS TO ASK, AND THE KEY MUST NOT WEAKEN ────────────────
+    // Her mail named PO10554 and no container, so the gate dropped it. The
+    // fix is in two halves and both can rot independently.
+    { name: 'claimgate: the gate stops asking about her orders, so a PO mail is dropped again',
+      file: 'helpers/claimParse.js', suites: ['claim-po-gate'],
+      find: '    const hit = language && (containers.length > 0 || orders.length > 0);',
+      to:   '    const hit = language && containers.length > 0;' },
+    // THE OTHER DIRECTION, and the expensive one: language alone would send
+    // every mail mentioning a weight to the model, five watchers over.
+    { name: 'claimgate: language alone opens the gate, so every weight mail costs a model call',
+      file: 'helpers/claimParse.js', suites: ['claim-po-gate'],
+      find: '    const hit = language && (containers.length > 0 || orders.length > 0);',
+      to:   '    const hit = language;' },
+    // An unreadable sales store must degrade, not throw inside replyWatch's
+    // per-message loop.
+    { name: 'claimgate: a torn sales file throws instead of degrading',
+      file: 'helpers/claimParse.js', suites: ['claim-po-gate'],
+      find: '    } catch (e) {\n        // A missing or unreadable sales store must not stop a mail that DOES',
+      to:   '    } finally {\n        // A missing or unreadable sales store must not stop a mail that DOES' },
+    // The fill. Without it the gate passes and extraction still refuses, so
+    // the mail is dropped one step later than before.
+    { name: 'claimgate: the order is resolved but the container is never filled',
+      file: 'helpers/claimParse.js', suites: ['claim-po-gate'],
+      find: '            fields.container_no = resolved.container_no;',
+      to:   '            /* not filled */' },
+    // WHAT THE BUYER WROTE MUST WIN. Overwriting his container with hers is
+    // how a claim gets argued about the wrong box.
+    { name: 'claimgate: her order overwrites the container the buyer quoted',
+      file: 'helpers/claimParse.js', suites: ['claim-po-gate'],
+      find: '        if (!fields.container_no && resolved.container_no) {',
+      to:   '        if (resolved.container_no) {' },
+    // An ambiguous PO must fill nothing. Taking the first of three attaches
+    // the claim to the wrong container.
+    { name: 'claimgate: an ambiguous PO takes the first of three containers',
+      file: 'helpers/claimParse.js', suites: ['claim-po-gate'],
+      find: '            if (hits.length === 1) resolved = hits[0];',
+      to:   '            if (hits.length) resolved = hits[0];' },
+    // THE 2204x GUARD on the fill: sales.js stores pounds, her mails quote
+    // MT, and filling one beside the other is the error this file exists to
+    // refuse.
+    { name: 'claimgate: her pounds figure fills an MT claim',
+      file: 'helpers/claimParse.js', suites: ['claim-po-gate'],
+      find: "            && resolved.invoice_weight_unit && fields.weight_unit\n            && String(fields.weight_unit).toLowerCase() === resolved.invoice_weight_unit) {",
+      to:   '            ) {' },
+    // Provenance. "Which order did this attach to, and why" has to be
+    // answerable from the claim, not from a log line that has rotated away.
+    { name: 'claimgate: the fill records no provenance',
+      file: 'helpers/claimParse.js', suites: ['claim-po-gate'],
+      find: '            quotes.container_no = from;',
+      to:   '            /* no quote */' },
+
     // ── "PO10554" IS AN ORDER SHE ALREADY HAS ───────────────────────────
     // Apsara, 2026-10-14: a claim mail naming a PO and no container was
     // dropped by claimParse's gate before anything read it. "It wll be in
