@@ -1251,6 +1251,69 @@ const MUTATIONS = [
       find: '         data-bank="${esc(a.bank || \'\')}" data-mask="${esc(a.mask || \'\')}"',
       to:   '         data-bank="" data-mask=""' },
 
+    // ── "PO10554" IS AN ORDER SHE ALREADY HAS ───────────────────────────
+    // Apsara, 2026-10-14: a claim mail naming a PO and no container was
+    // dropped by claimParse's gate before anything read it. "It wll be in
+    // reference of order details in my sheet", so resolution is a lookup in
+    // her own data — NOT a /PO\s?\d+/ pattern, which would send every mail
+    // containing "PO" and digits to the model.
+    { name: 'claimref: matching goes back to a pattern, so any PO-shaped text resolves',
+      file: 'helpers/claimRef.js', suites: ['claim-ref'],
+      find: '        const rows = byRef.get(tok);',
+      to:   "        const rows = /^PO\\d+$/.test(tok) ? [{ sale: salesRows()[0] || {}, matched_field: 'reference' }] : byRef.get(tok);" },
+    // The junk every real sheet carries. Without the filter, "NA" or "TBD"
+    // in the reference column makes almost any mail a claim about that row.
+    { name: 'claimref: "NA" and "TBD" become matchable references',
+      file: 'helpers/claimRef.js', suites: ['claim-ref'],
+      find: '    if (JUNK.has(n)) return false;',
+      to:   '    /* junk allowed */' },
+    { name: 'claimref: a two-character reference is matchable, so it hits on anything',
+      file: 'helpers/claimRef.js', suites: ['claim-ref'],
+      find: '    if (n.length < 4) return false;          // needs enough body to be distinctive',
+      to:   '    if (n.length < 1) return false;' },
+    // THE 2204x TRAP. sales.js stores weight in POUNDS and her claim mails
+    // quote MT. A bare number travelling without its unit is the error
+    // claimParse.js leaves weight_unit null to avoid.
+    { name: 'claimref: the invoiced weight travels without its unit',
+      file: 'helpers/claimRef.js', suites: ['claim-ref'],
+      find: "                invoice_weight_unit: (sale.weight ?? null) === null ? null : 'lb',",
+      to:   '                invoice_weight_unit: null,' },
+    { name: 'claimref: the weight is relabelled MT, which is how a 2204x error starts',
+      file: 'helpers/claimRef.js', suites: ['claim-ref'],
+      find: "                invoice_weight_unit: (sale.weight ?? null) === null ? null : 'lb',",
+      to:   "                invoice_weight_unit: 'mt'," },
+    // A sale has no supplier (sales.js:190 — the purchase side lives on the
+    // Bill). Inventing one puts a guess where claimPrice.js does the real
+    // lookup, and a claim naming the wrong supplier argues at the wrong party.
+    { name: 'claimref: a supplier is invented from the customer field',
+      file: 'helpers/claimRef.js', suites: ['claim-ref'],
+      find: '                item: sale.item || null,',
+      to:   '                item: sale.item || null,\n                supplier: sale.customer || null,' },
+    // ── THE TWO BUGS MY OWN TESTS CAUGHT, PINNED SO THEY CANNOT RETURN ──
+    // Deduping by order BEFORE the tier is settled defeats narrow(): the PO
+    // token comes first, every order is claimed at the reference tier, and
+    // the container match is skipped as already seen.
+    { name: 'claimref: orders are deduped before the tier is settled, so a named container is ignored',
+      file: 'helpers/claimRef.js', suites: ['claim-ref'],
+      find: '            hits.push({\n                // How it was found, because "why did this claim attach to',
+      to:   '            if (hits.some((h) => h.sale_id === (sale.id || null))) continue;\n            hits.push({\n                // How it was found, because "why did this claim attach to' },
+    { name: 'claimref: the most specific identifier stops winning',
+      file: 'helpers/claimRef.js', suites: ['claim-ref'],
+      find: '    return narrow(hits);',
+      to:   '    return dedupe(hits);' },
+    // The tokeniser's greedy run with a length cap split CCCU3333333 in half
+    // and lost the second container named in one mail.
+    { name: 'claimref: the tokeniser stops joining neighbours, so "PO 10554" is two words',
+      file: 'helpers/claimRef.js', suites: ['claim-ref'],
+      find: '        if (i + 1 < words.length) out.add(words[i] + words[i + 1]);',
+      to:   '        /* no pairs */' },
+    // An order added by a sheet sync has to be visible to the NEXT mail, not
+    // after a restart — which is why the cache is keyed on mtime.
+    { name: 'claimref: the index caches forever, so a new order needs a restart',
+      file: 'helpers/claimRef.js', suites: ['claim-ref'],
+      find: '    if (CACHE.key === key) return CACHE.byRef;',
+      to:   '    if (CACHE.byRef.size) return CACHE.byRef;' },
+
     // ── A RE-LINK MUST NOT DOUBLE HER LEDGER ────────────────────────────
     // Apsara, 2026-10-12: "i need 2026 transactions from 01-01-2026" — which
     // needs a re-link, which reissues every transaction_id and account_id.
