@@ -1281,6 +1281,28 @@ function openReadMail(){
   wrap.onclick = (e) => { if (e.target === wrap) close(); };
   $('#m_x', wrap).onclick = close;
   const out = $('#m_out', wrap);
+  const readOne = (m, attach) => api('/api/claims/mail/read', { id: m.id, mailbox: m.mailbox, attach });
+  /* When Jarvis is not sure, it says why and ASKS — never a silent drop. */
+  const explainSkip = (btn, m, v, res) => {
+    const w = v.why || {};
+    if (w.reason === 'no_key') {
+      const c = w.candidates || [];
+      if (!c.length) { res.textContent = 'I read it as a claim but cannot tell which shipment it is about — none of your orders is named in it. Add the claim by hand with + New claim.'; return; }
+      res.innerHTML = 'This looks like a claim, but it could be any of these shipments. Which one?<div style="display:flex;flex-direction:column;gap:6px;margin-top:6px">' +
+        c.map((x, k) => '<button type="button" class="btn m_pick" data-k="' + k + '">' + esc([x.container_no, x.invoice_no, x.customer, x.item].filter(Boolean).join(' · ')) + '</button>').join('') + '</div>';
+      res.querySelectorAll('.m_pick').forEach(p => p.onclick = async () => {
+        const x = c[Number(p.dataset.k)]; res.textContent = 'Reading…';
+        try {
+          const v2 = await readOne(m, { container_no: x.container_no, invoice_no: x.invoice_no });
+          if (v2.claim_id) { res.textContent = v2.created ? 'Claim created.' : 'Existing claim updated.'; toast(res.textContent, 'ok'); await load(); }
+          else explainSkip(btn, m, v2, res);
+        } catch (e) { res.textContent = e.message; }
+      });
+    } else if (w.reason === 'not_claim') res.textContent = 'The model did not read this as a claim: ' + (w.model_reason || 'no reason given') + '. If it is one, add it by hand with + New claim.';
+    else if (w.reason === 'low_confidence') res.textContent = 'The model was not sure it is a claim (' + Math.round((w.confidence || 0) * 100) + '% — ' + (w.model_reason || '') + '). Add it by hand if it is.';
+    else if (w.reason === 'model_error') res.textContent = 'The reader failed (' + (w.detail || 'no answer') + '). Try again in a minute.';
+    else res.textContent = 'Not made into a claim — ' + (v.skipped || 'unknown reason');
+  };
   const run = async () => {
     const q = $('#m_q', wrap).value.trim();
     out.innerHTML = '<div class="hint">Searching your mailboxes…</div>';
@@ -1295,9 +1317,9 @@ function openReadMail(){
         const m = d.mails[Number(b.dataset.i)], res = b.parentNode.querySelector('.m_res');
         b.disabled = true; res.textContent = 'Reading…';
         try {
-          const v = await api('/api/claims/mail/read', { id: m.id, mailbox: m.mailbox });
+          const v = await readOne(m, null);
           if (v.claim_id) { res.textContent = v.created ? 'Claim created.' : (v.changed ? 'Existing claim updated.' : 'Existing claim — nothing new to add.'); toast(res.textContent, 'ok'); await load(); }
-          else res.textContent = 'Not made into a claim — ' + (v.skipped === 'not a claim after extraction' ? 'the model did not read it as a claim, or found no container or invoice to attach it to.' : (v.skipped || 'unknown reason')) ;
+          else explainSkip(b, m, v, res);
         } catch (e) { res.textContent = e.message; toast(e.message, 'bad'); }
         finally { b.disabled = false; }
       });

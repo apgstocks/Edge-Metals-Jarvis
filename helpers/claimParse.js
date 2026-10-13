@@ -161,11 +161,12 @@ function buildPrompt(email) {
         fieldList,
         '  },',
         '  "quotes": { "<field name>": "<verbatim span from the email>" },',
+        '  "lines": [],   // ONLY when the mail raises two or more SEPARATE claims on the container (e.g. a quality claim AND a weight shortage claim). One entry each: { "label": "short name of that claim", "quote": "verbatim span covering that claim", "stated_qty": n|null, "stated_qty_unit": "MT|LB|KG"|null, "stated_rate": n|null, "stated_rate_unit": "MT|LB|KG"|null, "stated_claim_amount": n|null, "invoice_weight": n|null, "claimed_weight": n|null, "weight_unit": "MT|LB|KG"|null }. Same rules: only what the email says, never computed. Otherwise leave it [].',
         '  "confidence": 0.0 to 1.0,',
         '  "reason": "one short sentence on what this email is"',
         '}',
         '',
-        'Set is_claim false for a booking, a quote, an invoice being sent, a payment advice, or a mail that merely mentions weight. A claim is someone saying they received less than they were invoiced, or asking for money because of it.',
+        'Set is_claim false for a booking, a quote, an invoice being sent, a payment advice, or a mail that merely mentions weight. A claim is someone saying they received less than they were invoiced, or asking for money because of it. A QUALITY claim also counts: someone saying the material that arrived was not what was sold (wrong grade, contamination, foreign material, damage) and asking for a deduction or credit.',
         '',
         `FROM: ${defence(email.from || '')}`,
         `SUBJECT: ${defence(email.subject || '')}`,
@@ -210,7 +211,11 @@ const MIN_CONFIDENCE = Number(process.env.CLAIM_MIN_CONFIDENCE || 0.6);
 
 // Returns null when this is not a claim, or when the model could not be
 // trusted. Null always means "do nothing", never "create a blank claim".
-async function extract(email = {}) {
+async function extract(email = {}, { diag = null, attach = null } = {}) {
+    // `diag` (optional) is filled with WHY a null came back, so the manual
+    // "read this mail" screen can say what happened and ask her, instead of a
+    // shrug. The watcher passes nothing and behaves exactly as before.
+    const why = (reason, extra) => { if (diag) Object.assign(diag, { reason }, extra || {}); return null; };
     let raw;
     // THE BEST MODEL GOOGLE HAS, because this is the call that reads a
     // WEIGHT AND A UNIT off a supplier's mail. helpers/claims.js refuses to
@@ -220,13 +225,13 @@ async function extract(email = {}) {
     // Pro preview.
     try { raw = await callGeminiJSON(buildPrompt(email), 1, null,
         { model: require('../config').GEMINI_MODEL_CLAIMS }); }
-    catch (e) { console.warn('[CLAIM] extraction failed:', e.message); return null; }
-    if (!raw || typeof raw !== 'object') return null;
-    if (raw.is_claim !== true) return null;
+    catch (e) { console.warn('[CLAIM] extraction failed:', e.message); return why('model_error', { detail: e.message }); }
+    if (!raw || typeof raw !== 'object') return why('model_error', { detail: 'no answer' });
+    if (raw.is_claim !== true) return why('not_claim', { model_reason: clean(raw.reason) });
     const confidence = Number(raw.confidence);
     if (Number.isFinite(confidence) && confidence < MIN_CONFIDENCE) {
         console.log(`[CLAIM] skipped, confidence ${confidence} < ${MIN_CONFIDENCE}`);
-        return null;
+        return why('low_confidence', { confidence, model_reason: clean(raw.reason) });
     }
 
     const f = raw.fields || {};
@@ -262,6 +267,28 @@ async function extract(email = {}) {
         // a mail as for a sheet row, by the model and not by this prompt.
     };
 
+    // ── SEVERAL CLAIMS IN ONE MAIL (2026-10-14) ─────────────────────────
+    // "two rows one for each claim inside one claim report against that
+    // container". A line is kept only if its own quote is really in the mail,
+    // and a number or unit is kept only if it appears INSIDE that quote — the
+    // same standard as the single-claim fields, applied per line.
+    const lines = [];
+    if (Array.isArray(f.lines || raw.lines)) {
+        const hay = `${email.subject || ''}\n${email.body || ''}`.toLowerCase().replace(/\s+/g, ' ');
+        for (const L of (f.lines || raw.lines).slice(0, 4)) {
+            const q = clean(L && L.quote), label = clean(L && L.label);
+            if (!q || !label || !hay.includes(q.toLowerCase().replace(/\s+/g, ' '))) continue;
+            const qn = q.replace(/,/g, '').toLowerCase();
+            const num = (v) => { const n = asNum(v); return n !== null && qn.includes(String(n)) ? n : null; };
+            const unit = (v) => { const u = asUnit(v); return u && qn.includes(u.toLowerCase()) ? u : null; };
+            lines.push({ label, quote: q,
+                stated_qty: num(L.stated_qty), stated_qty_unit: unit(L.stated_qty_unit),
+                stated_rate: num(L.stated_rate), stated_rate_unit: unit(L.stated_rate_unit),
+                stated_claim_amount: num(L.stated_claim_amount),
+                invoice_weight: num(L.invoice_weight), claimed_weight: num(L.claimed_weight), weight_unit: unit(L.weight_unit) });
+        }
+    }
+
     // ── FILL THE KEY FROM HER OWN ORDER, DO NOT WEAKEN IT ───────────────
     // Her mail named PO10554 and no container, so the guard below dropped
     // it. The fix is NOT to let a claim be keyed on a reference: claims
@@ -280,11 +307,20 @@ async function extract(email = {}) {
     // ambiguous, and picking the first would attach the claim to the wrong
     // box. Those keep the old behaviour and stay for a person.
     let resolved = null;
+    let orderHits = [];
     if (!fields.container_no || !fields.invoice_no) {
         try {
             const hits = require('./claimRef').resolve(`${email.subject || ''}\n${email.body || ''}`);
+            orderHits = hits;
             if (hits.length === 1) resolved = hits[0];
         } catch (e) { resolved = null; }
+    }
+    // She chose the order herself, when asked (manual read only). What she
+    // picked is stronger than any guess: used for the blanks, never over what
+    // the mail itself said.
+    if (!resolved && attach && (attach.container_no || attach.invoice_no)) {
+        if (!fields.container_no && attach.container_no) { fields.container_no = String(attach.container_no).toUpperCase(); quotes.container_no = 'chosen by Apsara when asked'; }
+        if (!fields.invoice_no && attach.invoice_no) { fields.invoice_no = String(attach.invoice_no); quotes.invoice_no = 'chosen by Apsara when asked'; }
     }
     if (resolved) {
         const from = `her own order details: ${resolved.matched_field} ${resolved.matched}`;
@@ -317,8 +353,16 @@ async function extract(email = {}) {
         fields.order_ref = resolved.reference || null;
     }
 
-    if (!fields.container_no && !fields.invoice_no) return null;   // nothing to key on
-    return { fields, quotes, order: resolved,
+    if (!fields.container_no && !fields.invoice_no) {
+        // Nothing to key on. Say which of her orders it could be, so she can
+        // be ASKED rather than the mail being dropped.
+        const seen = new Set();
+        const candidates = orderHits.filter((h) => h.container_no || h.invoice_no).filter((h) => {
+            const k = `${h.container_no}|${h.invoice_no}`; if (seen.has(k)) return false; seen.add(k); return true;
+        }).slice(0, 12).map((h) => ({ container_no: h.container_no || '', invoice_no: h.invoice_no || '', customer: h.customer || '', item: h.item || '', reference: h.reference || '' }));
+        return why('no_key', { candidates });
+    }
+    return { fields, quotes, order: resolved, lines: lines.length >= 2 ? lines : [],
         confidence: Number.isFinite(confidence) ? confidence : null, reason: clean(raw.reason) };
 }
 

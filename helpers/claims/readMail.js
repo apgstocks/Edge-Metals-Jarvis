@@ -48,7 +48,7 @@ async function search(text, { max = 8 } = {}) {
     return out.slice(0, max * 2);
 }
 
-async function read({ id, mailbox }) {
+async function read({ id, mailbox, attach = null }) {
     if (!id) throw new Error('which mail?');
     const boxes = await gmailLib.getGmailReadMailboxes();
     const box = boxes.find((b) => b.address === String(mailbox || '').toLowerCase()) || (boxes.length === 1 ? boxes[0] : null);
@@ -64,7 +64,7 @@ async function read({ id, mailbox }) {
         from: hdr(msg, 'From'), subject: hdr(msg, 'Subject'), body: text,
         mailbox: box.address, payload: msg.payload || null,
         fetchPart: (part) => gmailLib.downloadAttachment(box.client, id, { filename: part.filename, body: { attachmentId: part.attachmentId } }),
-        force: true,
+        force: true, attach,
     });
     return verdict;
 }

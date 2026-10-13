@@ -233,10 +233,12 @@ function toHtml(b) {
       <td class="mono">${esc(l.invoice_no || '—')}</td>
       <td class="mono">${esc(l.container_no || '—')}</td>
       <td>${esc(l.kind)}${l.sendable ? '' : '<span class="tag">not yet verified</span>'}</td>
-      <td class="r mono">${esc(wt(l.invoice_weight, l.unit))}</td>
+      ${l.assessment === 'quality' && l.quality_qty !== null
+        ? `<td class="r mono" colspan="4">${esc(wt(l.quality_qty, l.unit))} claimed</td>`
+        : `<td class="r mono">${esc(wt(l.invoice_weight, l.unit))}</td>
       <td class="r mono">${esc(wt(l.claimed_weight, l.unit))}</td>
       <td class="r mono">${esc(wt(l.shortage, l.unit))}</td>
-      <td class="r mono">${l.shortage_pct === null ? '—' : esc(l.shortage_pct.toFixed(2)) + '%'}</td>
+      <td class="r mono">${l.shortage_pct === null ? '—' : esc(l.shortage_pct.toFixed(2)) + '%'}</td>`}
       <td class="r mono">${l.rate === null ? '—' : esc(money(l.rate)) + '/' + esc(l.rate_unit || '')}${l.charge_qty === null ? '' : `<div class="conv">on ${esc(wt(l.charge_qty, l.rate_unit))}</div>`}</td>
       <td class="r mono strong">${l.sendable && l.our_claim !== null ? esc(money(l.our_claim)) : '—'}</td>
     </tr>`;

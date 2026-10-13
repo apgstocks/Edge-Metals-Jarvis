@@ -149,7 +149,7 @@ async function closeTodos(container_no, type) {
 // ── THE HOOK ────────────────────────────────────────────────────────────────
 // Returns a small verdict object for tests and logs. It never throws — the
 // caller is replyWatch's per-message loop and must not be disturbed.
-async function consider({ messageId, threadId, from, subject, body, mailbox, payload, fetchPart, dryRun = false, force = false } = {}) {
+async function consider({ messageId, threadId, from, subject, body, mailbox, payload, fetchPart, dryRun = false, force = false, attach = null } = {}) {
     try {
         if (!messageId) return { skipped: 'no message id' };
         const g = gate({ subject, body, from });
@@ -160,10 +160,13 @@ async function consider({ messageId, threadId, from, subject, body, mailbox, pay
 
         if (!dryRun && !force && processed()[messageId]) return { skipped: 'already processed' };
 
-        const got = await extract({ from, subject, body });
+        const diag = {};
+        const got = await extract({ from, subject, body }, force ? { diag, attach } : {});
         if (!got) {
-            if (!dryRun) await markProcessed(messageId, 'not a claim');
-            return { skipped: 'not a claim after extraction' };
+            // A mail she is being ASKED about is not written off: if it needs her
+            // to pick an order, marking it processed would hide it from the next try.
+            if (!dryRun && !(force && diag.reason === 'no_key')) await markProcessed(messageId, 'not a claim');
+            return { skipped: 'not a claim after extraction', ...(force ? { why: diag } : {}) };
         }
 
         const f = got.fields;
@@ -172,6 +175,51 @@ async function consider({ messageId, threadId, from, subject, body, mailbox, pay
 
         if (dryRun) {
             return { dryRun: true, would: existing ? 'update' : 'create', fields: f, quotes: got.quotes, claim_id: existing ? existing.id : null };
+        }
+
+        // ── TWO OR MORE CLAIMS IN ONE MAIL (2026-10-14) ─────────────────────
+        // "two rows one for each claim inside one claim report against that
+        // container". Each line is its own claim on the SAME container; the
+        // supplier report already prints one row per claim. A line is matched
+        // to an existing claim by its label, so reading the mail again fills
+        // blanks and never makes a third.
+        if (got.lines && got.lines.length >= 2) {
+            const lk = (l) => require('../helpers/claimKinds').slugify(l);
+            const ids = []; let anyNew = false; let first = null;
+            for (const line of got.lines) {
+                const key = lk(line.label);
+                const have = claims.list().find((c) => c && c.key === claims.keyOf(f.invoice_no, f.container_no) && c.line_key === key);
+                const lf = {};
+                for (const k of ['invoice_weight', 'claimed_weight', 'weight_unit', 'stated_claim_amount', 'stated_qty', 'stated_qty_unit', 'stated_rate', 'stated_rate_unit']) lf[k] = line[k];
+                let rec2;
+                if (have) {
+                    const fill = {};
+                    for (const k of Object.keys(lf)) if ((have[k] === null || have[k] === undefined) && lf[k] !== null) fill[k] = lf[k];
+                    rec2 = Object.keys(fill).length ? await claims.update(have.id, fill, 'claims', 'filled blanks from a later mail') : have;
+                } else {
+                    const kind = await claimKind.decide(claimKind.rowText([subject, `${line.label}: ${line.quote}`], ''));
+                    rec2 = await claims.create({
+                        ...f, ...lf, line_key: key, claim_type: kind.slug,
+                        // The header's weights belong to a weight claim only if this line says them.
+                        invoice_weight: lf.invoice_weight, claimed_weight: lf.claimed_weight, weight_unit: lf.weight_unit,
+                        stated_claim_amount: lf.stated_claim_amount,
+                        quotes: { ...got.quotes, line: line.quote, ...(kind.slug ? { claim_type: kind.quote || kind.why } : {}) },
+                        mail: [mail],
+                        note: [got.reason || '', `one of ${got.lines.length} claims in this mail: ${line.label}`].filter(Boolean).join(' | '),
+                        flags: [],
+                    }, 'claims/email');
+                    await raiseVerifyTodo(rec2);
+                    anyNew = true;
+                    try { await _sendToTeam(notifyText(rec2, { isNew: true, changed: false })); }
+                    catch (e) { console.warn('[CLAIM] team notify failed:', e.message); }
+                }
+                ids.push(rec2.id); if (!first) first = rec2;
+            }
+            if (payload && typeof fetchPart === 'function' && first) {
+                try { await claimEvidence.fromMail(first.id, { payload, fetchPart, by: 'email' }); } catch (e) { console.warn('[CLAIM] attachments:', e.message); }
+            }
+            await markProcessed(messageId, `${anyNew ? 'created' : 'updated'} ${ids.join(',')}`);
+            return { claim_id: first.id, claim_ids: ids, created: anyNew, changed: !anyNew ? false : true, confidence: got.confidence };
         }
 
         let rec, changed = false, isNew = false;
