@@ -165,7 +165,7 @@ async function consider({ messageId, threadId, from, subject, body, mailbox, pay
         if (!got) {
             // A mail she is being ASKED about is not written off: if it needs her
             // to pick an order, marking it processed would hide it from the next try.
-            if (!dryRun && !(force && diag.reason === 'no_key')) await markProcessed(messageId, 'not a claim');
+            if (!dryRun && !(force && ['no_key', 'missing_one'].includes(diag.reason))) await markProcessed(messageId, 'not a claim');
             return { skipped: 'not a claim after extraction', ...(force ? { why: diag } : {}) };
         }
 

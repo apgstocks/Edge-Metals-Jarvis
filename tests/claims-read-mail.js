@@ -113,6 +113,32 @@ const routes = require(R('helpers/claims/routes.js'));
     ck('ONE report for the container, TWO rows', rep.lines.length === 2 && (html.match(/<tr[^>]*>\s*<td>/g) || []).length === 2, rep.lines.length);
     ck('  the quality row says its quantity in place of the empty weight cells', /colspan="4">1\.005 MT claimed/.test(html));
 
+    // ── asked when the container or invoice is missing; the other half comes from her orders ──
+    const ONE = { id: 'm4', threadId: 't4', snippet: 'x', payload: { mimeType: 'text/plain', body: { data: b64('Quality claim on invoice 26ZZ99, 1 MT at USD 2,000/MT.') },
+        headers: [{ name: 'From', value: 'Q <q@q.com>' }, { name: 'Subject', value: 'Quality claim' }, { name: 'Date', value: 'Tue, 13 Oct 2026 13:00:00 +0000' }] } };
+    gmail.getMessage = async () => ONE;
+    REPLY = { is_claim: true, confidence: 0.9, reason: 'quality', fields: { invoice_no: '26ZZ99' }, quotes: { invoice_no: 'invoice 26ZZ99' } };
+    const n0 = claims.list().length;
+    r = await post('/api/claims/mail/read', { id: 'm4', mailbox: 'bose@edgemetals.com' });
+    ck('invoice found but no container: Jarvis ASKS and says what it has', r.body.why && r.body.why.reason === 'missing_one' && r.body.why.have.invoice_no === '26ZZ99' && claims.list().length === n0, JSON.stringify(r.body.why));
+    r = await post('/api/claims/mail/read', { id: 'm4', mailbox: 'bose@edgemetals.com', attach: { container_no: 'ZZZU9999999', invoice_no: '', confirmed: true } });
+    const asked0 = r.body.claim_id && claims.get(r.body.claim_id);
+    ck('she may leave the invoice blank knowingly', asked0 && asked0.invoice_no === '26ZZ99' && asked0.container_no === 'ZZZU9999999');
+    // now an invoice that IS one of her orders, container typed: invoice kept, order lookup fills customer
+    REPLY = { is_claim: true, confidence: 0.9, reason: 'quality', fields: { invoice_no: '26OC02' }, quotes: { invoice_no: 'invoice 26OC02' } };
+    ONE.payload.body.data = b64('Quality claim on invoice 26OC02, 1 MT.');
+    r = await post('/api/claims/mail/read', { id: 'm4', mailbox: 'bose@edgemetals.com' });
+    const asked = r.body.claim_id && claims.get(r.body.claim_id);
+    ck('an invoice that is one of her orders needs no question: the container is auto-filled', asked && asked.container_no === 'BBBU2222222' && asked.invoice_no === '26OC02', JSON.stringify(r.body));
+    ONE.payload.body.data = b64('Please see the attached quality claim.');
+    REPLY = { is_claim: true, confidence: 0.9, reason: 'quality', fields: {}, quotes: {} };
+    r = await post('/api/claims/mail/read', { id: 'm4', mailbox: 'bose@edgemetals.com' });
+    ck('neither found and no order named: asks her to type them (no dead end)', r.body.why && r.body.why.reason === 'no_key');
+    r = await post('/api/claims/mail/read', { id: 'm4', mailbox: 'bose@edgemetals.com', attach: { container_no: 'ZZZU9999999', invoice_no: '26ZZ77', confirmed: true } });
+    ck('typing both from scratch works when the mail named nothing', r.body.claim_id && claims.get(r.body.claim_id).container_no === 'ZZZU9999999' && claims.get(r.body.claim_id).invoice_no === '26ZZ77');
+    ck('the page opens a quantity-only claim on the quantity x rate form, not invoiced/received',
+        /stated_qty != null && c\.invoice_weight == null && c\.claimed_weight == null\) return 'quality'/.test(fs.readFileSync(R('dashboard/claims.html'), 'utf8')));
+
     // ── delete a claim: archived first, only ITS to-dos cancelled ──
     const tasksLib = require(R('helpers/tasks.js'));
     const d1 = two[0], d2 = two[1];

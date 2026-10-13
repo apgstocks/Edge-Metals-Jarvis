@@ -250,7 +250,7 @@ function mount(app, cfg) {
     app.post('/api/claims/mail/read', async (req, res) => {
         try {
             const b = req.body || {};
-            const v = await readMail.read({ id: b.id, mailbox: b.mailbox, attach: b.attach && typeof b.attach === 'object' ? { container_no: String(b.attach.container_no || ''), invoice_no: String(b.attach.invoice_no || '') } : null });
+            const v = await readMail.read({ id: b.id, mailbox: b.mailbox, attach: b.attach && typeof b.attach === 'object' ? { container_no: String(b.attach.container_no || '').trim(), invoice_no: String(b.attach.invoice_no || '').trim(), confirmed: b.attach.confirmed === true } : null });
             if (v.error) return bad(res, v.error, 500);
             // A skip is an ANSWER (the model said it is not a claim), not a fault.
             res.json(v);

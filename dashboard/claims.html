@@ -520,7 +520,7 @@ const ASSESS = [
   { id:'weight',        label:'Weight shortage' },
   { id:'contamination', label:'Foreign material' },
   { id:'grade',         label:'Grade downgrade' },
-  { id:'quality',       label:'Quality — qty × rate' },
+  { id:'quality',       label:'Quantity × rate' },
 ];
 const FINDINGS = [
   ['dirt','Dirt / soil'], ['rubber_plastic','Rubber / plastic'], ['iron_attached','Iron or steel attached'],
@@ -549,6 +549,9 @@ STATE.pick = {};
 function assessOf(c){
   if (STATE.pick[c.id] && STATE.pick[c.id].assessment) return STATE.pick[c.id].assessment;
   if (c.assessment) return c.assessment;
+  /* a quantity was stated but there is no invoiced/received pair to subtract —
+     the arithmetic is quantity x rate, so do not open on the weight form */
+  if (c.stated_qty != null && c.invoice_weight == null && c.claimed_weight == null) return 'quality';
   /* the last time a claim of this kind was assessed, use the same arithmetic —
      learned from her own choices, never from a list of kind names */
   const prev = STATE.claims.filter(x => x.id !== c.id && x.claim_type && x.claim_type === c.claim_type && x.assessment)
@@ -1305,19 +1308,31 @@ function openReadMail(){
   /* When Jarvis is not sure, it says why and ASKS — never a silent drop. */
   const explainSkip = (btn, m, v, res) => {
     const w = v.why || {};
-    if (w.reason === 'no_key') {
-      const c = w.candidates || [];
-      if (!c.length) { res.textContent = 'I read it as a claim but cannot tell which shipment it is about — none of your orders is named in it. Add the claim by hand with + New claim.'; return; }
-      res.innerHTML = 'This looks like a claim, but it could be any of these shipments. Which one?<div style="display:flex;flex-direction:column;gap:6px;margin-top:6px">' +
-        c.map((x, k) => '<button type="button" class="btn m_pick" data-k="' + k + '">' + esc([x.container_no, x.invoice_no, x.customer, x.item].filter(Boolean).join(' · ')) + '</button>').join('') + '</div>';
-      res.querySelectorAll('.m_pick').forEach(p => p.onclick = async () => {
-        const x = c[Number(p.dataset.k)]; res.textContent = 'Reading…';
+    if (w.reason === 'no_key' || w.reason === 'missing_one') {
+      const c = w.candidates || [], have = w.have || {};
+      /* Not sure which shipment — ask, with the likely orders as buttons and a
+         box to type them. Whatever she gives fills in the rest from her orders. */
+      res.innerHTML = '<div>' + (w.reason === 'missing_one'
+          ? 'Jarvis found the ' + (have.container_no ? 'container' : 'invoice number') + ' but not the ' + (have.container_no ? 'invoice number' : 'container') + '. Type it, or leave it blank:'
+          : 'Jarvis could not find the container or the invoice number in this mail. Pick the shipment, or type them:') + '</div>' +
+        (c.length ? '<div style="display:flex;flex-direction:column;gap:6px;margin:6px 0">' + c.map((x, k) => '<button type="button" class="btn m_pick" data-k="' + k + '">' + esc([x.container_no, x.invoice_no, x.customer, x.item].filter(Boolean).join(' · ')) + '</button>').join('') + '</div>' : '') +
+        '<div class="actions" style="margin-top:6px"><input class="m_cn" placeholder="Container no." value="' + esc(have.container_no || '') + '" style="height:34px;padding:0 8px;border-radius:4px;border:1px solid var(--border-default);background:var(--bg-base);color:var(--text-body)">' +
+        '<input class="m_inv" placeholder="Invoice no." value="' + esc(have.invoice_no || '') + '" style="height:34px;padding:0 8px;border-radius:4px;border:1px solid var(--border-default);background:var(--bg-base);color:var(--text-body)">' +
+        '<button type="button" class="btn go m_typed">Use these</button></div><div class="hint m_msg" style="margin:4px 0 0"></div>';
+      const go = async (att) => {
+        const msg = res.querySelector('.m_msg'); msg.textContent = 'Reading…';
         try {
-          const v2 = await readOne(m, { container_no: x.container_no, invoice_no: x.invoice_no });
-          if (v2.claim_id) { res.textContent = v2.created ? 'Claim created.' : 'Existing claim updated.'; toast(res.textContent, 'ok'); await load(); }
+          const v2 = await readOne(m, Object.assign({ confirmed: true }, att));
+          if (v2.claim_id) { res.textContent = v2.created ? 'Claim created and filled from your orders.' : 'Existing claim updated.'; toast(res.textContent, 'ok'); await load(); }
           else explainSkip(btn, m, v2, res);
-        } catch (e) { res.textContent = e.message; }
-      });
+        } catch (e) { msg.textContent = e.message; }
+      };
+      res.querySelectorAll('.m_pick').forEach(p => p.onclick = () => { const x = c[Number(p.dataset.k)]; go({ container_no: x.container_no, invoice_no: x.invoice_no }); });
+      res.querySelector('.m_typed').onclick = () => {
+        const cn = res.querySelector('.m_cn').value.trim(), iv = res.querySelector('.m_inv').value.trim();
+        if (!cn && !iv) { res.querySelector('.m_msg').textContent = 'Type at least one of them.'; return; }
+        go({ container_no: cn, invoice_no: iv });
+      };
     } else if (w.reason === 'not_claim') res.textContent = 'The model did not read this as a claim: ' + (w.model_reason || 'no reason given') + '. If it is one, add it by hand with + New claim.';
     else if (w.reason === 'low_confidence') res.textContent = 'The model was not sure it is a claim (' + Math.round((w.confidence || 0) * 100) + '% — ' + (w.model_reason || '') + '). Add it by hand if it is.';
     else if (w.reason === 'model_error') res.textContent = 'The reader failed (' + (w.detail || 'no answer') + '). Try again in a minute.';

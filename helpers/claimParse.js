@@ -353,6 +353,31 @@ async function extract(email = {}, { diag = null, attach = null } = {}) {
         fields.order_ref = resolved.reference || null;
     }
 
+    // ── ONE HALF KNOWN: LOOK UP THE OTHER FROM HER ORDERS ────────────────
+    // She typed (or the mail gave) a container, the order has the invoice, and
+    // the reverse. Only when exactly one order matches; never a guess.
+    if (attach && (!fields.container_no || !fields.invoice_no) && (fields.container_no || fields.invoice_no)) {
+        try {
+            const hs = require('./claimRef').resolve(`${fields.container_no || ''} ${fields.invoice_no || ''}`);
+            if (hs.length === 1) {
+                const from = `her own order details: ${hs[0].matched_field} ${hs[0].matched}`;
+                if (!fields.container_no && hs[0].container_no) { fields.container_no = hs[0].container_no; quotes.container_no = from; }
+                if (!fields.invoice_no && hs[0].invoice_no) { fields.invoice_no = hs[0].invoice_no; quotes.invoice_no = from; }
+                if (!fields.customer && hs[0].customer) { fields.customer = hs[0].customer; quotes.customer = from; }
+            }
+        } catch (e) { /* the lookup is a convenience; asking her is the fallback */ }
+    }
+    // MANUAL READ ONLY (diag is passed): if either the container or the invoice
+    // is still missing, ASK her, unless she has already answered
+    // (attach.confirmed — she may knowingly leave one blank). The watcher never
+    // passes diag and behaves exactly as before.
+    if (diag && !(attach && attach.confirmed) && (!fields.container_no || !fields.invoice_no)) {
+        const seen = new Set();
+        const cands = orderHits.filter((h) => h.container_no || h.invoice_no).filter((h) => {
+            const k = `${h.container_no}|${h.invoice_no}`; if (seen.has(k)) return false; seen.add(k); return true;
+        }).slice(0, 12).map((h) => ({ container_no: h.container_no || '', invoice_no: h.invoice_no || '', customer: h.customer || '', item: h.item || '', reference: h.reference || '' }));
+        return why(fields.container_no || fields.invoice_no ? 'missing_one' : 'no_key', { have: { container_no: fields.container_no, invoice_no: fields.invoice_no }, candidates: cands });
+    }
     if (!fields.container_no && !fields.invoice_no) {
         // Nothing to key on. Say which of her orders it could be, so she can
         // be ASKED rather than the mail being dropped.
