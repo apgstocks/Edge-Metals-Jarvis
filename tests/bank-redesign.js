@@ -516,11 +516,50 @@ server.close();
     ck('the transfer is shown: Edge Yard → Edge Metals', tcard && /Edge Yard → Edge Metals/.test(tcard.textContent));
     ck('  escaped', tcard && !tcard.querySelector('b'));
     ck('  with Record as a loan', !!d.querySelector('[data-transfer="pair:o|i"]'));
+    // Collapsed like every other row (Apsara, 2026-10-14: "those rows between
+    // my companies - I want it to collapse").
+    ck('  collapsed by default', tcard && !tcard.classList.contains('open') && tcard.querySelector('.sum').getAttribute('aria-expanded') === 'false');
+    ck('  the one line carries the amount and the Record button',
+       /\$/.test(tcard.querySelector('.sum').textContent) && !!tcard.querySelector('.sum [data-transfer="pair:o|i"]'));
+    ck('  both legs live in the part that opens, not the summary line',
+       !!tcard.querySelector('.detail .legs') && !tcard.querySelector('.sum .legs'));
+    tcard.querySelector('.sum').click();
+    ck('  clicking the line opens it', tcard.classList.contains('open') && tcard.querySelector('.sum').getAttribute('aria-expanded') === 'true');
+    tcard.querySelector('.sum').click();
+    ck('  and clicking again closes it', !tcard.classList.contains('open'));
+
+    // ── back to top ─────────────────────────────────────────────────────
+    // Two things scroll on this page (the window and the #list box), so the
+    // test drives both and checks BOTH end at 0 — a button that reset one
+    // would leave her mid-list. (Apsara, 2026-10-14.)
+    {
+        const w = dom.window;
+        const up = d.getElementById('toTop');
+        const listEl = d.getElementById('list');
+        let listY = 0, winY = 0, scrolledTo = null;
+        Object.defineProperty(listEl, 'scrollTop', { configurable: true, get: () => listY, set: (v) => { listY = v; } });
+        Object.defineProperty(w, 'pageYOffset', { configurable: true, get: () => winY });
+        w.scrollTo = (a, b) => { scrolledTo = (a && typeof a === 'object') ? a : { top: b }; winY = 0; };
+        ck('a back-to-top button exists, pointing up', !!up && /↑/.test(up.textContent) && up.getAttribute('aria-label') === 'Back to top');
+        ck('  and is hidden at the top of the page', up.hidden === true);
+        winY = 900; w.dispatchEvent(new w.Event('scroll'));
+        ck('  appears once the PAGE has scrolled down', up.hidden === false);
+        winY = 0; w.dispatchEvent(new w.Event('scroll'));
+        ck('  goes away at the top again', up.hidden === true);
+        listY = 700; listEl.dispatchEvent(new w.Event('scroll'));
+        ck('  appears when only the review LIST has scrolled', up.hidden === false);
+        winY = 900;
+        up.click();
+        ck('  clicking it puts the list back at 0', listY === 0, String(listY));
+        ck('  and the page at 0, instantly (not a slow scroll)', !!scrolledTo && scrolledTo.top === 0 && scrolledTo.behavior === 'instant', JSON.stringify(scrolledTo));
+        ck('  and the button hides itself again', up.hidden === true);
+    }
     ck('a money-out line that would create a record gets the rule offer', !!d.querySelector('#list .card[data-dir="out"] [data-rule-desc]'));
 
     d.querySelector('[data-transfer="pair:o|i"]').click();
     await new Promise((r) => setTimeout(r, 30));
     const tp = posted.find((p) => p.u === '/api/intercompany/transfers');
+    ck('  and pressing Record did not just toggle the row open', !d.querySelector('#transfers .tcard.open'));
     ck('pressing it posts both rows and the companies', tp && tp.body.out_id === 'o' && tp.body.in_id === 'i'
        && tp.body.from === 'edge-trading' && tp.body.treatment === 'loan', JSON.stringify(tp));
 

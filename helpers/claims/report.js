@@ -40,6 +40,7 @@ const basisOf = (c) => {
     const a = c.assessment || 'weight';
     if (a === 'contamination') return nnum(c.contaminated_weight);
     if (a === 'grade') return null;
+    if (a === 'quality') return nnum(c.quality_qty);
     return nnum(c.shortage);
 };
 
@@ -127,6 +128,7 @@ function build(opts = {}) {
         contaminated_weight: num(c.contaminated_weight),
         grade_sold: c.grade_sold || '', grade_received: c.grade_received || '',
         grade_weight: num(c.grade_weight),
+        quality_qty: nnum(c.quality_qty),
         tolerance_pct: num(c.tolerance_pct), claimable_shortage: num(c.claimable_shortage),
         // `customer` stays in the JSON the PAGE reads (the report modal shows
         // it to her). The DOCUMENT never prints it — see toHtml.
@@ -214,6 +216,9 @@ function detailLine(l) {
         if (l.grade_sold || l.grade_received) bits.push(`sold as ${l.grade_sold || '—'}, received as ${l.grade_received || '—'}`);
         if (l.grade_weight !== null) bits.push(`${wt(l.grade_weight, l.unit)} affected`);
         return bits.length ? `<li><span class="mono">${esc(l.container_no || l.invoice_no || '—')}</span> — ${esc(l.kind)}: ${esc(bits.join('; '))}.</li>` : '';
+    }
+    if (l.assessment === 'quality' && l.quality_qty !== null) {
+        return `<li><span class="mono">${esc(l.container_no || l.invoice_no || '—')}</span> — ${esc(l.kind)}: ${esc(wt(l.quality_qty, l.unit))} claimed.</li>`;
     }
     return '';
 }

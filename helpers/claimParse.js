@@ -57,7 +57,28 @@ function containersIn(text) {
 // Returns why it decided, so a miss is debuggable from a log line instead of a
 // guess. A container number on its own is not enough: every booking mail has
 // one.
-function gate({ subject = '', body = '', from = '' } = {}) {
+// ── AN ORDER SHE HAS IS AS GOOD AS A CONTAINER NUMBER ───────────────────
+// Apsara, 2026-10-14, forwarding a real claim mail that names PO10554 and no
+// container: it was dropped here, with hit:false and "no container number".
+// Asked where that PO lives: "It wll be in reference of order details in my
+// sheet".
+//
+// So the gate now also passes when the mail names one of her OWN orders —
+// by reference, invoice, container, booking or HBL. helpers/claimRef.js
+// answers that from sales.json with a Map lookup over an mtime-cached index:
+// no model call, no network, which is the property this gate exists to
+// protect (five watchers poll these mailboxes every 5–15 minutes).
+//
+// WHY NOT A /PO\s?\d+/ PATTERN: it would pass any mail containing "PO" and
+// digits straight to the model, and her references are not all POs anyway —
+// sheetImport.js records that her Eccomelt deliveries carry "Local Transit"
+// in that column. Membership in her real order list cannot false-positive on
+// arbitrary mail; a shape can.
+//
+// `refs` is injectable so the gate can be tested without a sales store, and
+// required at CALL time so the mail path does not pay for helpers/sales.js
+// unless a message is actually being checked.
+function gate({ subject = '', body = '', from = '', refs = null } = {}) {
     const text = lower(`${subject}\n${body}`);
     const containers = containersIn(`${subject}\n${body}`);
     const strong = has(text, STRONG);
@@ -65,14 +86,29 @@ function gate({ subject = '', body = '', from = '' } = {}) {
     const weighty = has(text, WEIGHTY);
     const why = [];
 
-    if (!containers.length) why.push('no container number');
+    let orders = [];
+    try {
+        const named = typeof refs === 'function' ? refs : require('./claimRef').named;
+        orders = named(`${subject}\n${body}`) || [];
+    } catch (e) {
+        // A missing or unreadable sales store must not stop a mail that DOES
+        // carry a container number from being read. Degrades to the old
+        // behaviour rather than throwing inside replyWatch's loop.
+        orders = [];
+    }
+
+    if (containers.length) why.push(`container ${containers[0]}`);
+    else if (orders.length) why.push(`order ${orders[0]}`);
+    else why.push('no container number and no order of hers named');
     if (strong.length) why.push(`strong phrase: ${strong[0]}`);
     else if (claimy.length && weighty.length) why.push(`claim word "${claimy[0]}" with weight word "${weighty[0]}"`);
     else why.push('no shortage language');
 
     const language = strong.length > 0 || (claimy.length > 0 && weighty.length > 0);
-    const hit = language && containers.length > 0;
-    return { hit, containers, language, why, from };
+    // Still TWO conditions, deliberately. Loosening it to language alone
+    // would send every mail mentioning a weight to the model.
+    const hit = language && (containers.length > 0 || orders.length > 0);
+    return { hit, containers, orders, language, why, from };
 }
 
 // ── EXTRACTION ──────────────────────────────────────────────────────────────
@@ -211,8 +247,64 @@ async function extract(email = {}) {
         // a mail as for a sheet row, by the model and not by this prompt.
     };
 
+    // ── FILL THE KEY FROM HER OWN ORDER, DO NOT WEAKEN IT ───────────────
+    // Her mail named PO10554 and no container, so the guard below dropped
+    // it. The fix is NOT to let a claim be keyed on a reference: claims
+    // dedupe on findByKey(invoice_no, container_no), and a second key shape
+    // would mean two claims for one container the first time a buyer quoted
+    // the container instead of the PO.
+    //
+    // Instead the order is looked up and its invoice and container are
+    // filled IN, so everything downstream — the key, the dedup, the
+    // assessment, the page — works exactly as it did. The claim comes out
+    // indistinguishable from one raised by a mail that quoted the container.
+    //
+    // ONLY WHEN THE MAIL ITSELF DID NOT SAY. What the buyer wrote always
+    // wins; this fills blanks, it does not correct him. And only when the
+    // reference resolves to ONE order: a PO shipped as three containers is
+    // ambiguous, and picking the first would attach the claim to the wrong
+    // box. Those keep the old behaviour and stay for a person.
+    let resolved = null;
+    if (!fields.container_no || !fields.invoice_no) {
+        try {
+            const hits = require('./claimRef').resolve(`${email.subject || ''}\n${email.body || ''}`);
+            if (hits.length === 1) resolved = hits[0];
+        } catch (e) { resolved = null; }
+    }
+    if (resolved) {
+        const from = `her own order details: ${resolved.matched_field} ${resolved.matched}`;
+        if (!fields.container_no && resolved.container_no) {
+            fields.container_no = resolved.container_no;
+            quotes.container_no = from;
+        }
+        if (!fields.invoice_no && resolved.invoice_no) {
+            fields.invoice_no = resolved.invoice_no;
+            quotes.invoice_no = from;
+        }
+        // The customer and the invoiced weight are the other two blanks her
+        // "it should auto fill everything" is about. The WEIGHT only when
+        // the mail stated a unit the order's pounds can be compared against
+        // — sales.js stores lb, her mails quote MT, and a bare number in the
+        // wrong unit is the 2204x error this file refuses to risk anywhere
+        // else.
+        if (!fields.customer && resolved.customer) {
+            fields.customer = resolved.customer;
+            quotes.customer = from;
+        }
+        if (fields.invoice_weight === null && resolved.invoice_weight !== null
+            && resolved.invoice_weight_unit && fields.weight_unit
+            && String(fields.weight_unit).toLowerCase() === resolved.invoice_weight_unit) {
+            fields.invoice_weight = resolved.invoice_weight;
+            quotes.invoice_weight = from;
+        }
+        // Recorded whether or not a field was taken from it, so "which order
+        // did this attach to, and why" is answerable from the claim itself.
+        fields.order_ref = resolved.reference || null;
+    }
+
     if (!fields.container_no && !fields.invoice_no) return null;   // nothing to key on
-    return { fields, quotes, confidence: Number.isFinite(confidence) ? confidence : null, reason: clean(raw.reason) };
+    return { fields, quotes, order: resolved,
+        confidence: Number.isFinite(confidence) ? confidence : null, reason: clean(raw.reason) };
 }
 
 module.exports = { gate, extract, buildPrompt, containersIn, asUnit, asNum, keepGroundedQuotes, CONTAINER_RE, STRONG, MIN_CONFIDENCE };

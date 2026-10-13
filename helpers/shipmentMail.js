@@ -114,6 +114,66 @@ function parseRecipients(input) {
     return { good, bad };
 }
 
+// ── Invoice customer -> stored address, tolerant of how the name is printed ──
+// Apsara, 2026-10-14: "we already have that email of the customers stored in
+// jarvis. why would it ask for email id again? Based on customer in invoice
+// it should read auto." The invoice prints the legal name ("Eccomelt Texas
+// LLC"); Email Contacts / Contacts hold the short one ("Eccomelt"). The strict
+// tiers in resolveContact need the SAVED name to contain the typed one, so
+// that pair never matched. Here: drop punctuation and legal suffixes, then a
+// saved name matches when its words appear, in order and whole, inside the
+// invoice name (or the reverse). Searches Email Contacts first, then the
+// Contacts store. Exactly one distinct address -> use it; several -> report
+// ambiguous so she is asked; none -> null (the Send-to box still appears).
+const LEGAL_WORDS = new Set(['llc', 'inc', 'incorporated', 'ltd', 'limited', 'corp',
+    'corporation', 'co', 'company', 'llp', 'lp', 'pllc', 'pty', 'gmbh', 'the']);
+function nameWords(n) {
+    return String(n || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim()
+        .split(' ').filter((w) => w && !LEGAL_WORDS.has(w));
+}
+function wordsInside(small, big) {
+    if (!small.length || small.length > big.length) return false;
+    for (let i = 0; i + small.length <= big.length; i++) {
+        if (small.every((w, j) => big[i + j] === w)) return true;
+    }
+    return false;
+}
+function looseCustomerMatch(consignee) {
+    const want = nameWords(consignee);
+    if (!want.length) return null;
+    const hit = (list) => {
+        const found = [];
+        for (const c of list || []) {
+            if (!c || !c.email || !String(c.email).includes('@')) continue;
+            const have = nameWords(c.name);
+            if (have.join('').length < 3) continue;
+            if (wordsInside(have, want) || wordsInside(want, have)
+                || have.join('') === want.join('')) found.push(c);   // "M.K." == "mk"
+        }
+        // Collapse duplicates that point at the same address.
+        const seen = new Set();
+        return found.filter((c) => { const k = String(c.email).toLowerCase();
+            if (seen.has(k)) return false; seen.add(k); return true; });
+    };
+    const sources = [
+        () => require('./emailContacts').loadContacts(),
+        () => require('./contacts').loadContacts(),
+    ];
+    for (const load of sources) {
+        let list = [];
+        try { list = load(); } catch (_) { continue; }
+        const m = hit(list);
+        if (m.length === 1) return { type: 'single_partial', contact: m[0] };
+        if (m.length > 1) {
+            // A domain's marked primary is her own deliberate default.
+            const prim = m.filter((c) => c.role === 'primary');
+            if (prim.length === 1) return { type: 'domain_default', contact: prim[0] };
+            return { type: 'ambiguous', matches: m };
+        }
+    }
+    return null;
+}
+
 function draftFor(containerNo, { photos = [], consignee: consigneeOverride = null,
                                  recipients = null } = {}) {
     const shipmentDocs = require('./shipmentDocs');
@@ -168,7 +228,10 @@ function draftFor(containerNo, { photos = [], consignee: consigneeOverride = nul
         saveAs = { name: consignee, email: typed.good[0], cc: typed.good.slice(1) };
     } else {
         const { resolveContact } = require('./emailContacts');
-        const resolved = resolveContact(consignee);
+        // resolveContact first and UNCHANGED (WhatsApp flows share it). Only
+        // when it finds nothing do we try the looser customer match below —
+        // so nothing that resolves today can be re-pointed elsewhere.
+        const resolved = resolveContact(consignee) || looseCustomerMatch(consignee);
         if (!resolved) {
             // `ask_recipients` is what the screen keys on to show the box. The
             // sentence keeps its WhatsApp wording, where there is no box and
@@ -284,4 +347,4 @@ function draftFor(containerNo, { photos = [], consignee: consigneeOverride = nul
     };
 }
 
-module.exports = { draftFor, parseRecipients, REASONS };
+module.exports = { draftFor, parseRecipients, REASONS, looseCustomerMatch };

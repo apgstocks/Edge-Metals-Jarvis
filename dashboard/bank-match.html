@@ -176,6 +176,12 @@ select,input[type=text]{background:var(--surface-sunken);border:1px solid var(--
 .leg{background:var(--surface-sunken);border:1px solid var(--border-subtle);border-radius:4px;padding:8px 10px;font-size:12.5px;min-width:0}
 .leg .when{display:block}
 .surebar{display:flex;gap:12px;align-items:center;flex-wrap:wrap;background:rgba(61,168,54,.08);border:1px solid var(--leaf-600);border-radius:6px;padding:10px 14px;margin-bottom:10px}
+/* Back to top (Apsara, 2026-10-14: "a sticker which points up. on clicking it,
+   it should go to top rather than scrolling up"). Bottom-right, clear of the
+   centred toast. */
+.totop{position:fixed;right:20px;bottom:20px;width:44px;height:44px;border-radius:50%;border:1px solid var(--leaf-600);background:var(--surface-card);color:var(--leaf-300);font-size:20px;line-height:1;cursor:pointer;z-index:45;box-shadow:0 4px 14px rgba(0,0,0,.45);display:flex;align-items:center;justify-content:center}
+.totop:hover{background:var(--surface-hover);color:#fff}
+.totop[hidden]{display:none}
 .toast{position:fixed;bottom:16px;left:50%;transform:translateX(-50%);background:var(--surface-card);border:1px solid var(--border-default);color:var(--text-body);padding:9px 14px;border-radius:5px;font-size:13px;z-index:50;max-width:90vw}
 .toast.bad{border-color:#5c2a22;color:#f0b4ab}
 .toast.good{border-color:var(--leaf-600);color:var(--leaf-300)}
@@ -235,7 +241,7 @@ h2.sec .n{color:var(--text-faint);font-weight:400}
   .search{max-width:none}
   .acts .btn{min-height:40px}
 }
-@media print{ header,.tabs,.toolbar,.acts{display:none} }
+@media print{ header,.tabs,.toolbar,.acts,.totop{display:none} }
 </style>
 </head>
 <body>
@@ -759,19 +765,26 @@ async function renderTransfers() {
   if (!t) { $('transfers').innerHTML = ''; $('recorded').innerHTML = ''; countTabs(); return; }
   const props = [...(t.proposed || []), ...(t.one_sided || [])];
   $('transfers').innerHTML = props.length ? `<h2 class="sec">Between your companies <span class="n">${props.length}</span></h2>
-    ${props.map((p) => `<div class="card tcard" data-dir="${p.in_row && !p.out_row ? 'in' : (p.out_row && !p.in_row ? 'out' : 'both')}"
+    ${props.map((p) => `<div class="card row tcard" data-dir="${p.in_row && !p.out_row ? 'in' : (p.out_row && !p.in_row ? 'out' : 'both')}"
         data-k="${esc([COMPANY[p.from], COMPANY[p.to], p.amount, p.date, (p.out_row || {}).desc, (p.in_row || {}).desc].join(' ').toLowerCase())}">
-      <div class="row1">
+      <!-- Collapsed to ONE line like every other row (Apsara, 2026-10-14: "those
+           rows between my companies - I want it to collapse"): both legs, the
+           reasons and the note were always open, so a run of transfers filled
+           the screen. Everything is still in the row, behind the arrow. -->
+      <div class="sum" data-toggle="1" role="button" tabindex="0" aria-expanded="false">
+        <span class="when">${esc(fmtDay(p.date))}</span>
+        <span class="who"><strong>${esc(COMPANY[p.from] || p.from)} → ${esc(COMPANY[p.to] || p.to)}</strong>
+          <span class="d">${esc((p.out_row || p.in_row || {}).desc || '')}</span></span>
+        <span class="sug"><span class="badge ${p.sure ? 'good' : 'ask'}">${p.sure ? 'both sides found' : 'check'}</span></span>
+        <span class="conf"></span>
         <span class="amt">${money(p.amount)}</span>
-        <span class="badge blue">${esc(COMPANY[p.from] || p.from)} → ${esc(COMPANY[p.to] || p.to)}</span>
-        <span class="badge ${p.sure ? 'good' : 'ask'}">${p.sure ? 'both sides found' : 'check'}</span>
-        <span class="when">${esc(p.date)}</span>
+        <span class="go"><button class="btn solid" data-transfer="${esc(p.id)}">Record as a loan</button></span>
+        <span class="chev">▶</span>
       </div>
-      <div class="legs">${legHtml(p.out_row, 'left ' + (COMPANY[p.from] || ''))}${legHtml(p.in_row, 'arrived at ' + (COMPANY[p.to] || ''))}</div>
-      <ul class="why">${(p.reasons || []).map((x) => `<li>${esc(x)}</li>`).join('')}</ul>
-      <div class="acts">
-        <button class="btn solid" data-transfer="${esc(p.id)}">Record as a loan</button>
-        <span class="note">Not income. Books ${esc(COMPANY[p.from])} as lending and ${esc(COMPANY[p.to])} as borrowing — your CPA can change the treatment later.</span>
+      <div class="detail">
+        <div class="legs">${legHtml(p.out_row, 'left ' + (COMPANY[p.from] || ''))}${legHtml(p.in_row, 'arrived at ' + (COMPANY[p.to] || ''))}</div>
+        <ul class="why">${(p.reasons || []).map((x) => `<li>${esc(x)}</li>`).join('')}</ul>
+        <div class="note">Not income. Books ${esc(COMPANY[p.from])} as lending and ${esc(COMPANY[p.to])} as borrowing — your CPA can change the treatment later.</div>
       </div>
     </div>`).join('')}` : '';
 
@@ -1920,6 +1933,36 @@ document.addEventListener('click', async (ev) => {
 loadRange();
 paintRange();
 load();
+</script>
+<button type="button" id="toTop" class="totop" aria-label="Back to top" title="Back to top" hidden>↑</button>
+<script>
+/* TWO things scroll on this page: the window, and the review list (#list is a
+   capped box). A button that reset only one would leave her mid-list. Both go
+   to 0 in one step — behavior 'instant', not the page's smooth scrolling. */
+(function () {
+  const btn = document.getElementById('toTop');
+  if (!btn) return;
+  const SHOW_AT = 300;
+  const winY = () => window.pageYOffset || document.documentElement.scrollTop || 0;
+  const listEl = () => document.getElementById('list');
+  function sync() {
+    const l = listEl();
+    btn.hidden = !(winY() > SHOW_AT || (l && l.scrollTop > SHOW_AT));
+  }
+  function goTop() {
+    const l = listEl();
+    if (l) l.scrollTop = 0;
+    try { window.scrollTo({ top: 0, left: 0, behavior: 'instant' }); } catch (e) { window.scrollTo(0, 0); }
+    document.documentElement.scrollTop = 0; document.body.scrollTop = 0;
+    btn.hidden = true;
+  }
+  btn.addEventListener('click', goTop);
+  window.addEventListener('scroll', sync, { passive: true });
+  // scroll does not bubble: the list needs its own listener, and #list is
+  // re-created by renders only as a CHILD swap, so one listener on it holds.
+  const l = listEl(); if (l) l.addEventListener('scroll', sync, { passive: true });
+  sync();
+})();
 </script>
 <!-- The app's sidebar on this page too (Apsara 2026-10-08: "i want the sidebar to appear in all pages").
      dashboard/sidebar.js; hidden when printing. -->

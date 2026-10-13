@@ -513,6 +513,7 @@ const NAV_ITEMS = [
   // from her accounts, which is a narrower thing. Easy to open up if she
   // wants it wider — one flag.
   { id: 'bank', label: 'Bank', group: 'Edge Metals', adminOnly: true },
+  { id: 'workspace', label: 'Workspace', group: 'Edge Metals', adminOnly: true },
   { id: 'claims', label: 'Claims', group: 'Edge Metals' },
 
   // Jarvis (the bot) itself — behavior, memory, to-dos.
@@ -689,6 +690,7 @@ const NAV_ICONS = {
   quickbooks:'M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18 M9 9a3 3 0 0 1 3-3v12',
   claims:'M12 4v14 M6 8h12 M6 8l-3 6h6z M18 8l3 6h-6z M8 20h8',
   bank:'M3 10l9-5 9 5z M5 10v8 M9 10v8 M15 10v8 M19 10v8 M3 21h18',
+  workspace:'M4 5h16v14H4z M4 10h16 M9 10v9 M13 14h4',
   bot:'M7 8h10v9H7z M12 5v3 M12 3a1 1 0 1 0 0 2 M9.5 12h.01 M14.5 12h.01 M4 11v3 M20 11v3',
   facts:'M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18 M12 8h.01 M11 12h1v5h1',
   tasks:'M4 6h3v3H4z M4 15h3v3H4z M10 7.5h10 M10 16.5h10',
@@ -810,6 +812,7 @@ function renderNav() {
     if (b.dataset.tab === 'quickbooks') { window.location.href = '/quickbooks'; return; }
     if (b.dataset.tab === 'books') { window.location.href = '/books'; return; }
     if (b.dataset.tab === 'bank') { window.location.href = '/bank-match'; return; }
+    if (b.dataset.tab === 'workspace') { window.location.href = '/workspace'; return; }
     if (b.dataset.tab === 'claims') { window.location.href = '/claims'; return; }
     if (b.dataset.tab === 'design-bol') { window.location.href = '/design/bol'; return; }
     if (b.dataset.tab === 'health') { window.location.href = '/health-report'; return; }

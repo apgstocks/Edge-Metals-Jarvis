@@ -56,6 +56,7 @@
     { id: 'quickbooks', label: 'QuickBooks', group: 'Edge Metals' },
     { id: 'books', label: 'Books', group: 'Edge Metals' },
     { id: 'bank', label: 'Bank', group: 'Edge Metals', adminOnly: true },
+    { id: 'workspace', label: 'Workspace', group: 'Edge Metals', adminOnly: true },
     { id: 'claims', label: 'Claims', group: 'Edge Metals' },
     { id: 'bot', label: 'Bot', group: 'Bot & Automation' },
     { id: 'facts', label: 'Facts', group: 'Bot & Automation', adminOnly: true },
@@ -80,7 +81,7 @@
   const PAGE_HREF = {
     'address-book': '/address-book', 'quote-requests': '/quote-requests', 'outbound-loads': '/outbound-loads',
     documents: '/documents', 'edge-inventory': '/edge-inventory', quickbooks: '/quickbooks', books: '/books',
-    bank: '/bank-match', claims: '/claims', 'design-bol': '/design/bol', 'ai-usage': '/ai-usage',
+    bank: '/bank-match', workspace: '/workspace', claims: '/claims', 'design-bol': '/design/bol', 'ai-usage': '/ai-usage',
     health: '/health-report',
   };
   const STAFF_TABS = ['loads', 'petty', 'trucker-bills'];
@@ -105,6 +106,7 @@
     quickbooks:'M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18 M9 9a3 3 0 0 1 3-3v12',
     claims:'M12 4v14 M6 8h12 M6 8l-3 6h6z M18 8l3 6h-6z M8 20h8',
     bank:'M3 10l9-5 9 5z M5 10v8 M9 10v8 M15 10v8 M19 10v8 M3 21h18',
+    workspace:'M4 5h16v14H4z M4 10h16 M9 10v9 M13 14h4',
     bot:'M7 8h10v9H7z M12 5v3 M12 3a1 1 0 1 0 0 2 M9.5 12h.01 M14.5 12h.01 M4 11v3 M20 11v3',
     facts:'M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18 M12 8h.01 M11 12h1v5h1',
     tasks:'M4 6h3v3H4z M4 15h3v3H4z M10 7.5h10 M10 16.5h10',

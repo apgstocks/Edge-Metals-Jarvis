@@ -96,7 +96,8 @@ function mount(app, cfg) {
             const b = req.body || {};
             const pick = ['assessment', 'weight_unit', 'invoice_weight', 'sell_price', 'sell_price_unit',
                 'contam_claimed_pct', 'contam_accepted_pct', 'findings', 'measured_by',
-                'grade_sold', 'grade_received', 'grade_weight', 'grade_price_sold', 'grade_price_received'];
+                'grade_sold', 'grade_received', 'grade_weight', 'grade_price_sold', 'grade_price_received',
+                'quality_qty'];
             const fields = {};
             for (const k of pick) if (b[k] !== undefined) fields[k] = b[k];
             const rec = await claims.assess(req.params.id, fields, b.by || 'manager');
@@ -138,7 +139,7 @@ function mount(app, cfg) {
                 'grade_sold', 'grade_received', 'tolerance_pct'];
             const patch = {};
             for (const k of allowed) if (b[k] !== undefined) patch[k] = b[k];
-            if (patch.assessment !== undefined && patch.assessment !== null && !claims.ASSESSMENTS.includes(patch.assessment)) return bad(res, 'assessment must be weight, contamination or grade');
+            if (patch.assessment !== undefined && patch.assessment !== null && !claims.ASSESSMENTS.includes(patch.assessment)) return bad(res, 'assessment must be weight, contamination, grade or quality');
             if (patch.findings !== undefined) patch.findings = (Array.isArray(patch.findings) ? patch.findings : []).filter((f) => claims.FINDINGS.includes(f));
             if (patch.measured_by !== undefined && patch.measured_by !== null && !claims.MEASURED_BY.includes(patch.measured_by)) return bad(res, 'that is not a way of measuring I know');
             if (patch.remarks !== undefined) patch.remarks = String(patch.remarks || '').slice(0, 2000);

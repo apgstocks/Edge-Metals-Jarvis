@@ -519,6 +519,7 @@ const ASSESS = [
   { id:'weight',        label:'Weight shortage' },
   { id:'contamination', label:'Foreign material' },
   { id:'grade',         label:'Grade downgrade' },
+  { id:'quality',       label:'Quality — qty × rate' },
 ];
 const FINDINGS = [
   ['dirt','Dirt / soil'], ['rubber_plastic','Rubber / plastic'], ['iron_attached','Iron or steel attached'],
@@ -588,6 +589,16 @@ function computeContam({ inv, pct, unit, rate, rateUnit }){
   return out;
 }
 /* mirrors claims.assess() for a downgrade */
+function computeQuality({ qty, rate, rateUnit, unit }){
+  if (qty === null || rate === null) return { amount:null };
+  const q = (!unit || rateUnit === unit) ? qty : convertQty(qty, unit, rateUnit);
+  return { amount: q === null ? null : Math.round(q * rate * 100) / 100 };
+}
+function convertQty(v, from, to){
+  const MT = { MT:1, LB:1/2204.62, KG:1/1000 };
+  if (!MT[from] || !MT[to]) return null;
+  return v * MT[from] / MT[to];
+}
 function computeGrade({ w, sold, recv }){
   if (w === null || sold === null || recv === null) return { gap:null, amount:null };
   return { gap: Math.round((sold - recv) * 100) / 100, amount: Math.round(w * (sold - recv) * 100) / 100 };
@@ -804,6 +815,17 @@ function claimCard(c, i, g){
           '<div class="actions"><button class="btn go f_assess" data-kind="grade" type="button">Confirm the assessment</button><span class="hint g_why" style="margin:0"></span></div>' +
         '</div>' +
 
+        /* quality: quantity x rate */
+        '<div class="pane" data-pane="quality"' + (a==='quality'?'':' hidden') + '>' +
+          '<div class="lede2" style="margin-top:14px">For a claim that arrives as a quantity and a rate — no invoiced or received weight needed. Name the kind above, e.g. “Quality claim – MS Scrap”.</div>' +
+          '<div class="grid">' +
+            fld('Quantity claimed', 'f_qqty', c.quality_qty) +
+            fld('Rate', 'f_qrate', c.sell_price, 'e.g. 2318') +
+            '<label class="f">Rate is per<select class="f_qrateUnit" data-k="f_qrateUnit">' + unitOpt(c.sell_price_unit||unit||'MT') + '</select></label>' +
+          '</div><div class="calc c_q"></div>' +
+          '<div class="actions"><button class="btn go f_assess" data-kind="quality" type="button">Confirm the assessment</button><span class="hint q_why" style="margin:0"></span></div>' +
+        '</div>' +
+
         '<div class="hint">Nothing here is filled in from the mail unless the mail said it in words.' +
           (c.stated_claim_amount!=null ? ' The customer is asking <b>' + money(c.stated_claim_amount) + '</b> — that is their figure, not yet yours.' : '') + '</div>' +
       '</details>' +
@@ -975,13 +997,22 @@ function renderCalc(el){
   const gWhy = !f.unit ? 'Pick the unit first.' : gg.gap === null ? 'The weight affected and both prices are needed.' : gg.gap < 0 ? 'The prices are the wrong way round.' : '';
   el.querySelector('.g_why').textContent = gWhy;
   el.querySelector('.f_assess[data-kind="grade"]').disabled = !!gWhy;
+
+  /* quality: quantity x rate */
+  const qq = computeQuality({ qty: numOf(el.querySelector('.f_qqty').value), rate: numOf(el.querySelector('.f_qrate').value),
+    rateUnit: el.querySelector('.f_qrateUnit').value, unit: f.unit });
+  el.querySelector('.c_q').innerHTML =
+    '<div><span class="k">Fair claim, by our numbers</span><span class="v ' + (qq.amount===null?'muted':'hi') + '">' + (qq.amount === null ? '—' : money(qq.amount)) + '</span>' + gapLine(qq.amount, numOf(c.stated_claim_amount)) + '</div>';
+  const qWhy = !f.unit ? 'Pick the unit first.' : qq.amount === null ? 'The quantity and the rate are needed.' : '';
+  el.querySelector('.q_why').textContent = qWhy;
+  el.querySelector('.f_assess[data-kind="quality"]').disabled = !!qWhy;
 }
 
 function wireClaim(c){
   const el = document.querySelector('.claim[data-cid="' + c.id + '"]');
   if (!el) return;
   const pk = pickOf(c);
-  el.querySelectorAll('input.num,.f_rateUnit,.f_crateUnit').forEach(i => { i.oninput = () => renderCalc(el); i.onchange = () => renderCalc(el); });
+  el.querySelectorAll('input.num,.f_rateUnit,.f_crateUnit,.f_qrateUnit').forEach(i => { i.oninput = () => renderCalc(el); i.onchange = () => renderCalc(el); });
   el.querySelectorAll('.f_unit button').forEach(b => b.onclick = () => {
     el.querySelectorAll('.f_unit button').forEach(x => { x.classList.remove('sel'); x.classList.remove('need'); });
     b.classList.add('sel'); pk.unit = b.dataset.u;
@@ -1026,6 +1057,10 @@ function wireClaim(c){
       invoice_weight: numOf(el.querySelector('.f_cinv').value), contam_claimed_pct: numOf(el.querySelector('.f_cpct').value),
       contam_accepted_pct: numOf(el.querySelector('.f_apct').value), sell_price: numOf(el.querySelector('.f_crate').value),
       sell_price_unit: el.querySelector('.f_crateUnit').value, findings: pk.findings.slice(), measured_by: pk.measured_by,
+    });
+    else if (btn.dataset.kind === 'quality') Object.assign(body, {
+      quality_qty: numOf(el.querySelector('.f_qqty').value), sell_price: numOf(el.querySelector('.f_qrate').value),
+      sell_price_unit: el.querySelector('.f_qrateUnit').value,
     });
     else Object.assign(body, {
       grade_sold: el.querySelector('.f_gsold').value.trim(), grade_received: el.querySelector('.f_grecv').value.trim(),

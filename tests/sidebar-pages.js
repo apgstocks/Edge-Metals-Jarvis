@@ -100,7 +100,7 @@ for (const m of INDEX.matchAll(/if \(b\.dataset\.tab === '([a-z-]+)'\) \{ window
 // other appears on some screens and not others. It earned its keep twice in
 // one afternoon: two people added a page and each was made to notice the
 // other's.
-ck('index.html has its twelve standalone pages', Object.keys(APP_HREF).length === 12, JSON.stringify(APP_HREF));
+ck('index.html has its thirteen standalone pages', Object.keys(APP_HREF).length === 13, JSON.stringify(APP_HREF));
 ck('the same pages, to the same addresses', JSON.stringify(Object.entries(APP_HREF).sort()) === JSON.stringify(Object.entries(L.PAGE_HREF).sort()),
    JSON.stringify(L.PAGE_HREF));
 const staffSrc = (INDEX.match(/ROLE !== 'staff' \|\| n\.id === 'loads' \|\| n\.id === 'petty' \|\| n\.id === 'trucker-bills'/) || [])[0];
@@ -110,7 +110,7 @@ ck('the same staff rows (loads, petty, trucker-bills)', !!staffSrc && JSON.strin
 section('B — every page loads the rail, once, in the right place');
 // ══════════════════════════════════════════════════════════════════════════
 // Bank joined on 2026-10-10 — held back on 10-08 only while it had unsaved work.
-const WITH_RAIL = { 'bank-match': 'bank', documents: 'documents', quickbooks: 'quickbooks', books: 'books', claims: 'claims',
+const WITH_RAIL = { 'bank-match': 'bank', workspace: 'workspace', documents: 'documents', quickbooks: 'quickbooks', books: 'books', claims: 'claims',
     'edge-inventory': 'edge-inventory', 'outbound-loads': 'outbound-loads', 'address-book': 'address-book',
     'quote-requests': 'quote-requests', 'design-bol': 'design-bol' };
 for (const [file, id] of Object.entries(WITH_RAIL)) {

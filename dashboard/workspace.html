@@ -1,0 +1,562 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Workspace — Jarvis</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wght@700;800;900&family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+/* ── WORKSPACE — a QuickBooks-style desk over the SAME data ───────────────
+   Apsara, 2026-10-14: "a separate page for quickbook exclusively mimicing
+   quickbook but better ... where i can post/match transactions, take report".
+
+   THIS PAGE OWNS NO DATA AND NO RULES. Every list comes from, and every
+   button goes to, a route the Bank and Books pages already use:
+     /api/bank/review  /api/bank/match  /api/bank/set-aside
+     /api/bank/review/{match,categorise,categorised,categories}
+     /api/bank/{exclude,include}   /api/books   /api/books/account/:code
+   so it cannot show a figure those pages do not, and cannot book anything
+   twice. It writes only to Jarvis's own books — nothing here reaches
+   QuickBooks (her decision, 2026-10-14).
+
+   Deposits: shown with Jarvis's suggestion, CONFIRMED on the Bank page. The
+   receipt flow (a shortfall must be a fee or a discount, the payment mode,
+   claim hints) lives in that page's script; copying it here would be a second
+   copy of the rules that drifts. A link goes to the exact row.
+
+   Tokens copied from dashboard/bank-match.html (standalone page, in sync by
+   hand like the others). */
+:root{
+  --steel-900:#14181B; --steel-800:#1E2429; --steel-700:#2B3239; --steel-600:#3C454D;
+  --steel-500:#57616A; --steel-400:#7E8891; --steel-300:#A7B0B7; --steel-200:#CBD1D6;
+  --leaf-300:#7FD172; --leaf-400:#57BE49; --leaf-500:#3DA836; --leaf-600:#2E861F;
+  --amber-500:#D99A2B; --amber-300:#F5C04A; --red-500:#C5402F; --blue-500:#3A6EA5;
+  --bg-base:#0C0E10; --surface-card:#14181B; --surface-sunken:#0F1214; --surface-hover:#181D21;
+  --text-strong:#FFFFFF; --text-body:#CBD1D6; --text-muted:#A7B0B7; --text-faint:#7E8891;
+  --border-subtle:#1E2429; --border-default:#2B3239; --ring:var(--leaf-500);
+  --font-display:'Archivo',sans-serif; --font-sans:'IBM Plex Sans',system-ui,sans-serif;
+  --font-mono:'IBM Plex Mono',ui-monospace,monospace;
+}
+*,*::before,*::after{box-sizing:border-box}
+body{margin:0;font-family:var(--font-sans);color:var(--text-body);background:var(--bg-base);-webkit-font-smoothing:antialiased;min-height:100vh}
+h1,h2,h3{font-family:var(--font-display);color:var(--text-strong);margin:0;font-weight:900;letter-spacing:-.02em}
+button,input,select{font:inherit}
+button{cursor:pointer}
+:focus-visible{outline:2px solid var(--ring);outline-offset:2px}
+.mono{font-family:var(--font-mono)}
+[hidden]{display:none!important}
+header{display:flex;align-items:center;gap:12px 16px;padding:12px 20px;border-bottom:1px solid var(--border-default);background:var(--surface-card);position:sticky;top:0;z-index:10;flex-wrap:wrap}
+header h1{font-size:22px}
+.range{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.range label{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--text-muted)}
+input[type=date],input[type=text],input[type=search],select{background:var(--surface-sunken);border:1px solid var(--border-default);color:var(--text-strong);border-radius:4px;height:34px;padding:0 8px;font-size:13px;color-scheme:dark}
+input[type=date]{font-family:var(--font-mono)}
+select{max-width:100%}
+.hdr-right{margin-left:auto;display:flex;gap:8px;align-items:center}
+main{padding:16px 20px 70px;max-width:1280px;margin:0 auto}
+.btn{background:var(--surface-sunken);border:1px solid var(--border-default);color:var(--text-body);border-radius:4px;height:32px;padding:0 12px;font-weight:600;font-size:13px;white-space:nowrap}
+.btn:hover{border-color:var(--steel-500);color:var(--text-strong)}
+.btn.solid{background:var(--leaf-500);border-color:var(--leaf-500);color:#0C0E10}
+.btn.solid:hover{background:var(--leaf-400)}
+.btn.quiet{background:transparent}
+.btn:disabled{opacity:.45;cursor:not-allowed}
+.tabs{display:flex;gap:2px;border-bottom:1px solid var(--border-default);margin-bottom:12px;overflow-x:auto}
+.tab{background:transparent;border:0;border-bottom:2px solid transparent;color:var(--text-muted);padding:10px 14px;font-weight:600;font-size:13.5px;white-space:nowrap}
+.tab:hover{color:var(--text-body)}
+.tab.on{color:var(--text-strong);border-bottom-color:var(--leaf-500)}
+.tab .n{font-family:var(--font-mono);font-size:11px;color:var(--text-faint);margin-left:4px}
+.tabs.sub .tab{font-size:13px;padding:8px 12px}
+.bar{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin:0 0 10px}
+.bar .grow{flex:1;min-width:160px}
+.seg{display:inline-flex;border:1px solid var(--border-default);border-radius:4px;overflow:hidden}
+.seg button{background:var(--surface-sunken);border:0;color:var(--text-muted);height:32px;padding:0 12px;font-size:13px;font-weight:600}
+.seg button.on{background:var(--steel-700);color:var(--text-strong)}
+.card{background:var(--surface-card);border:1px solid var(--border-subtle);border-radius:6px}
+.note{font-size:12.5px;color:var(--text-muted)}
+.empty{padding:28px;text-align:center;color:var(--text-faint)}
+.badge{font-family:var(--font-mono);font-size:10px;letter-spacing:.07em;text-transform:uppercase;padding:2px 6px;border-radius:3px;border:1px solid var(--border-default);color:var(--text-muted);white-space:nowrap}
+.badge.good{color:var(--leaf-300);border-color:var(--leaf-600)}
+.badge.ask{color:var(--amber-500);border-color:#5a4416}
+.badge.none{color:var(--steel-400)}
+.badge.in{color:var(--leaf-300);border-color:var(--leaf-600)}
+.badge.out{color:var(--copper,#E29C68);border-color:#6b4328}
+
+/* ── the grid: one line per transaction, like QuickBooks' bank feed ──── */
+.grid{border:1px solid var(--border-subtle);border-radius:6px;overflow:hidden;background:var(--surface-card)}
+.ghead,.line{display:grid;grid-template-columns:28px 92px minmax(0,2.2fr) minmax(0,1.3fr) 112px 112px minmax(0,1.6fr) 118px 14px;gap:10px;align-items:center;padding:0 12px}
+.ghead{height:34px;background:var(--surface-sunken);border-bottom:1px solid var(--border-default);font:600 11px var(--font-mono);letter-spacing:.08em;text-transform:uppercase;color:var(--text-faint)}
+.ghead .r,.line .r{text-align:right}
+.rowwrap{border-bottom:1px solid var(--border-subtle)}
+.rowwrap:last-child{border-bottom:0}
+.line{min-height:46px;padding-top:6px;padding-bottom:6px;cursor:pointer}
+.line:hover{background:var(--surface-hover)}
+.line .d{font:12.5px var(--font-mono);color:var(--text-muted)}
+.line .desc{min-width:0}
+.line .desc strong{display:block;color:var(--text-strong);font-weight:600;font-size:13.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.line .desc .sub{display:block;font:11px var(--font-mono);color:var(--text-faint);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.line .who{font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text-body)}
+.line .amt{font:600 13.5px var(--font-mono);text-align:right;white-space:nowrap}
+.line .amt.in{color:var(--leaf-300)}
+.line .what{font-size:12.5px;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text-body)}
+.line .go{text-align:right}
+.line .chev{color:var(--text-faint);font-size:11px;transition:transform .15s}
+.rowwrap.open .chev{transform:rotate(90deg)}
+.detail{display:none;padding:4px 14px 14px 52px;border-top:1px solid var(--border-subtle);background:var(--surface-sunken)}
+.rowwrap.open .detail{display:block}
+.bank-says{margin-top:10px;font:11.5px var(--font-mono);color:var(--text-faint);overflow-wrap:anywhere;white-space:normal}
+.box{margin-top:10px;padding:10px 12px;border:1px solid var(--border-default);border-radius:8px}
+.box .r1{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.selbar{position:sticky;bottom:0;display:flex;gap:10px;align-items:center;padding:10px 14px;background:var(--surface-card);border-top:1px solid var(--leaf-600)}
+@media (max-width:900px){
+  .ghead{display:none}
+  .line{grid-template-columns:24px minmax(0,1fr) auto;grid-template-areas:"c desc amt" "c what go";row-gap:2px}
+  .line .d,.line .who,.line .out,.line .chev{display:none}
+  .line .desc{grid-area:desc}.line .amt{grid-area:amt}.line .what{grid-area:what}.line .go{grid-area:go}.line .cb{grid-area:c}
+  .detail{padding-left:14px}
+}
+
+/* ── register (Transactions) ───────────────────────────────────────── */
+table.reg{width:100%;border-collapse:collapse;font-size:13px}
+table.reg th{height:34px;text-align:left;padding:0 10px;background:var(--surface-sunken);border-bottom:1px solid var(--border-default);font:600 11px var(--font-mono);letter-spacing:.08em;text-transform:uppercase;color:var(--text-faint)}
+table.reg td{padding:8px 10px;border-bottom:1px solid var(--border-subtle);vertical-align:top}
+table.reg .r{text-align:right;font-family:var(--font-mono);white-space:nowrap}
+table.reg tr:hover td{background:var(--surface-hover)}
+table.reg tfoot td{font-weight:700;color:var(--text-strong);border-top:1px solid var(--border-default)}
+.kpis{display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:10px;margin-bottom:12px}
+.kpi{background:var(--surface-card);border:1px solid var(--border-subtle);border-radius:6px;padding:10px 14px}
+.kpi .l{font:600 10.5px var(--font-mono);letter-spacing:.08em;text-transform:uppercase;color:var(--text-faint)}
+.kpi .v{font:700 18px var(--font-mono);color:var(--text-strong);margin-top:2px}
+
+.toast{position:fixed;bottom:16px;left:50%;transform:translateX(-50%);background:var(--surface-card);border:1px solid var(--border-default);color:var(--text-body);padding:9px 14px;border-radius:5px;font-size:13px;z-index:50;max-width:90vw}
+.toast.bad{border-color:#5c2a22;color:#f0b4ab}
+.toast.good{border-color:var(--leaf-600);color:var(--leaf-300)}
+.totop{position:fixed;right:20px;bottom:20px;width:44px;height:44px;border-radius:50%;border:1px solid var(--leaf-600);background:var(--surface-card);color:var(--leaf-300);font-size:20px;line-height:1;z-index:45;box-shadow:0 4px 14px rgba(0,0,0,.45);display:flex;align-items:center;justify-content:center}
+.totop:hover{background:var(--surface-hover);color:#fff}
+@media print{header,.tabs,.bar,.btn,.totop,.selbar{display:none}}
+</style>
+</head>
+<body>
+<header>
+  <h1>Workspace</h1>
+  <div class="range">
+    <select id="preset" class="preset-sel" aria-label="Date range">
+      <option value="all">All dates</option>
+      <option value="month">This month</option>
+      <option value="30">Last 30 days</option>
+      <option value="year">This year</option>
+      <option value="custom">Custom…</option>
+    </select>
+    <label>From <input type="date" id="from"></label>
+    <label>To <input type="date" id="to"></label>
+  </div>
+  <div class="hdr-right">
+    <a class="btn quiet" href="/bank-match" style="display:inline-flex;align-items:center;text-decoration:none">Bank page</a>
+    <button class="btn" id="reload">Refresh</button>
+  </div>
+</header>
+
+<main>
+  <div class="tabs" role="tablist">
+    <button class="tab on" data-top="banking" role="tab" aria-selected="true">Banking</button>
+    <button class="tab" data-top="register" role="tab" aria-selected="false">Transactions</button>
+  </div>
+
+  <!-- ───────────── BANKING ───────────── -->
+  <section id="pane-banking">
+    <div class="tabs sub" role="tablist">
+      <button class="tab on" data-sub="review" role="tab" aria-selected="true">For review <span class="n" id="n-review"></span></button>
+      <button class="tab" data-sub="posted" role="tab" aria-selected="false">Categorised <span class="n" id="n-posted"></span></button>
+      <button class="tab" data-sub="aside" role="tab" aria-selected="false">Excluded <span class="n" id="n-aside"></span></button>
+    </div>
+    <div class="bar" id="reviewBar">
+      <div class="seg" role="group" aria-label="Direction">
+        <button data-dir="all" class="on">All</button><button data-dir="in">Money in</button><button data-dir="out">Money out</button>
+      </div>
+      <input type="search" id="q" class="grow" placeholder="Search description, name, amount…" aria-label="Search">
+      <span class="note" id="summary"></span>
+    </div>
+    <div id="banking"><div class="empty">Loading…</div></div>
+  </section>
+
+  <!-- ───────────── TRANSACTIONS ───────────── -->
+  <section id="pane-register" hidden>
+    <div class="bar">
+      <select id="regCo" aria-label="Company"></select>
+      <select id="regAcct" aria-label="Account" class="grow"></select>
+      <input type="search" id="regQ" placeholder="Search this account…" aria-label="Search this account">
+      <button class="btn" id="regCsv">Download CSV</button>
+    </div>
+    <div id="register"><div class="empty">Pick a company and an account.</div></div>
+  </section>
+</main>
+
+<button type="button" id="toTop" class="totop" aria-label="Back to top" title="Back to top" hidden>↑</button>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const esc = (v) => String(v == null ? '' : v).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const money = (n) => (typeof n === 'number' && isFinite(n))
+  ? '$' + n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '—';
+const COMPANY = { 'edge-metals': 'Edge Metals', 'edge-trading': 'Edge Yard', 'aaa-investment': 'AAA Investment' };
+const pad = (n) => String(n).padStart(2, '0');
+const ymd = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+function fmtDay(d) { return String(d == null ? '' : d).slice(0, 10); }
+
+const S = { top: 'banking', sub: 'review', dir: 'all', q: '', from: '', to: '', review: null, deposits: null, posted: null,
+  aside: null, cats: null, picked: new Set(), books: null, regData: null };
+
+function toast(msg, cls) {
+  const t = document.createElement('div'); t.className = 'toast ' + (cls || ''); t.textContent = msg;
+  document.body.appendChild(t); setTimeout(() => t.remove(), cls === 'bad' ? 9000 : 4000);
+}
+function ranged(url) {
+  if (!/^\/api\/(bank\/(match|review|set-aside)|books)/.test(url) || url.includes('?from=') || (!S.from && !S.to)) return url;
+  const qs = [S.from ? 'from=' + S.from : '', S.to ? 'to=' + S.to : ''].filter(Boolean).join('&');
+  return url + (url.includes('?') ? '&' : '?') + qs;
+}
+async function api(url, opts) {
+  const o = opts || {};
+  const r = await fetch(o.body ? url : ranged(url), o.body
+    ? { method: o.method || 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(o.body) }
+    : { method: o.method || 'GET' });
+  const j = await r.json().catch(() => ({ error: 'bad response' }));
+  if (!r.ok) { const e = new Error(j.error || ('HTTP ' + r.status)); e.body = j; e.status = r.status; throw e; }
+  return j;
+}
+
+/* ── the date range ────────────────────────────────────────────────── */
+function setPreset(p) {
+  const now = new Date();
+  if (p === 'all') { S.from = ''; S.to = ''; }
+  else if (p === 'month') { S.from = ymd(new Date(now.getFullYear(), now.getMonth(), 1)); S.to = ymd(now); }
+  else if (p === '30') { S.from = ymd(new Date(now.getTime() - 30 * 86400000)); S.to = ymd(now); }
+  else if (p === 'year') { S.from = ymd(new Date(now.getFullYear(), 0, 1)); S.to = ymd(now); }
+  $('from').value = S.from; $('to').value = S.to;
+}
+
+/* ══════════════════════════ BANKING ═══════════════════════════════ */
+async function loadBanking() {
+  $('banking').innerHTML = '<div class="empty">Loading…</div>';
+  const [rev, dep, posted, aside, cats] = await Promise.all([
+    api('/api/bank/review').catch((e) => ({ error: e.message })),
+    api('/api/bank/match').catch((e) => ({ error: e.message })),
+    api('/api/bank/review/categorised').catch((e) => ({ error: e.message })),
+    api('/api/bank/set-aside').catch((e) => ({ error: e.message })),
+    api('/api/bank/review/categories').catch((e) => ({ error: e.message })),
+  ]);
+  S.review = rev; S.deposits = dep; S.posted = posted; S.aside = aside; S.cats = cats;
+  S.picked = new Set();
+  paintBanking();
+}
+
+/* One list, both directions. Money out comes from the review queue (each row
+   already says what Jarvis found and why); money in from the deposit matcher,
+   normalised to the same shape so the grid is one thing. */
+function reviewRows() {
+  const out = ((S.review && S.review.queue && S.review.queue.rows) || []).filter((r) => r.direction === 'out');
+  const ins = ((S.deposits && S.deposits.rows) || []).map((r) => {
+    const d = r.deposit || {};
+    const p = (r.proposals || [])[0];
+    return { id: d.id, direction: 'in', date: d.date, amount: d.amount, descriptor: d.descriptor || d.desc || '',
+      party: r.party || null, bank_text: d.memo || d.desc || '',
+      state: r.ambiguous ? 'choose' : (p ? 'match' : 'ask'),
+      label: r.ambiguous ? 'Choose' : (p ? 'Match' : 'Tell Jarvis'),
+      why: r.ambiguous ? (r.note || 'several combinations fit') : (p ? ((p.reasons || [])[0] || 'matches an open invoice') : (r.note || 'nothing open matches this deposit')),
+      isDeposit: true };
+  });
+  return out.concat(ins).sort((a, b) => String(b.date).localeCompare(String(a.date)));
+}
+function visibleRows() {
+  const q = S.q.trim().toLowerCase();
+  return reviewRows().filter((r) => (S.dir === 'all' || r.direction === S.dir)
+    && (!q || [r.descriptor, r.party, r.bank_text, r.amount, r.date, r.label, r.why].join(' ').toLowerCase().includes(q)));
+}
+
+function categoriseBox(r) {
+  const c = S.cats;
+  if (!c || !Array.isArray(c.categories) || !Array.isArray(c.companies)) return '<div class="note">Categories could not be loaded — Refresh.</div>';
+  const sug = (r.categorise || {}).suggested || '';
+  return `<div class="box" data-cat="${esc(r.id)}">
+    <div class="r1"><strong>What is this?</strong>
+      <select data-cat-sel aria-label="Category"><option value=""${sug ? '' : ' selected'}>Choose a category…</option>
+        ${c.categories.map((x) => `<option value="${esc(x.code)}"${x.code === sug ? ' selected' : ''}>${esc(x.code)} · ${esc(x.name)}</option>`).join('')}</select>
+      <select data-cat-co hidden aria-label="Company"><option value="">Which company?</option>
+        ${c.companies.map((x) => `<option value="${esc(x.id)}">${esc(x.name)}</option>`).join('')}</select>
+      <button class="btn solid" data-cat-post="${esc(r.id)}" ${sug ? '' : 'disabled'}>Post</button>
+    </div>
+    <div class="note" data-cat-effect style="margin-top:6px">${sug ? 'Suggested from the description — check it, then Post.' : 'Pick a category to see what Post will book.'}</div>
+  </div>`;
+}
+function excludeBox(r) {
+  return `<div class="box" data-excl="${esc(r.id)}"><div class="r1">
+    <strong>Not a business transaction?</strong>
+    <input type="text" data-excl-why placeholder="Why — a card fee, an owner draw, a transfer between your accounts…" style="flex:1;min-width:200px" aria-label="Reason">
+    <button class="btn" data-excl-go="${esc(r.id)}">Exclude</button></div>
+    <div class="note" style="margin-top:6px">Hidden from For review, still counted, and reversible under Excluded.</div></div>`;
+}
+
+function lineHtml(r) {
+  const isIn = r.direction === 'in';
+  const what = r.state === 'match' ? 'Match' : (r.state === 'add' ? (r.label || 'Add') : (r.label || 'Review'));
+  const badge = r.state === 'match' ? 'good' : (r.state === 'choose' || r.state === 'ask' ? 'ask' : 'none');
+  const canPick = r.state === 'match' && !r.isDeposit;
+  const go = r.isDeposit
+    ? `<a class="btn solid" href="/bank-match" style="text-decoration:none;display:inline-flex;align-items:center" title="Receipts are confirmed on the Bank page">Confirm in Bank</a>`
+    : (r.state === 'match' ? `<button class="btn solid" data-match="${esc(r.id)}">Match</button>`
+      : `<button class="btn" data-open="1">Categorise</button>`);
+  const bt = String(r.bank_text || '').trim();
+  const showBt = bt && bt !== String(r.descriptor || '').trim();
+  return `<div class="rowwrap" data-id="${esc(r.id)}" data-dir="${esc(r.direction)}">
+    <div class="line" data-toggle="1" role="button" tabindex="0" aria-expanded="false">
+      <span class="cb">${canPick ? `<input type="checkbox" data-pick="${esc(r.id)}" aria-label="Select"${S.picked.has(r.id) ? ' checked' : ''}>` : ''}</span>
+      <span class="d">${esc(fmtDay(r.date))}</span>
+      <span class="desc"><strong>${esc(r.party || r.descriptor || '(no description)')}</strong><span class="sub">${esc(r.descriptor || '')}</span></span>
+      <span class="who"><span class="badge ${isIn ? 'in' : 'out'}">${isIn ? 'in' : 'out'}</span></span>
+      <span class="amt out r">${isIn ? '' : money(r.amount)}</span>
+      <span class="amt in r">${isIn ? money(r.amount) : ''}</span>
+      <span class="what"><span class="badge ${badge}">${esc(what)}</span> <span class="note">${esc(r.why || '')}</span></span>
+      <span class="go">${go}</span>
+      <span class="chev">▶</span>
+    </div>
+    <div class="detail">
+      ${showBt ? `<div class="bank-says"><b>Bank says:</b> ${esc(bt)}</div>` : ''}
+      <div class="note" style="margin-top:8px">${esc(r.why || '')}</div>
+      ${r.isDeposit ? '<div class="note" style="margin-top:6px">Confirming a receipt asks about fees, discounts and the payment mode, so it is done on the Bank page.</div>' : (r.state === 'match' ? '' : categoriseBox(r))}
+      ${excludeBox(r)}
+    </div>
+  </div>`;
+}
+
+function paintBanking() {
+  const q = S.review && S.review.queue ? S.review.queue : { rows: [] };
+  const all = reviewRows();
+  $('n-review').textContent = all.length ? String(all.length) : '';
+  $('n-posted').textContent = S.posted && S.posted.entries && S.posted.entries.length ? String(S.posted.entries.length) : '';
+  $('n-aside').textContent = S.aside && S.aside.count ? String(S.aside.count) : '';
+  $('reviewBar').hidden = S.sub !== 'review';
+
+  if (S.sub === 'posted') return paintPosted();
+  if (S.sub === 'aside') return paintAside();
+
+  if (S.review && S.review.error) { $('banking').innerHTML = `<div class="card empty">${esc(S.review.error)}</div>`; return; }
+  const rows = visibleRows();
+  const tin = rows.filter((r) => r.direction === 'in').reduce((t, r) => t + (Number(r.amount) || 0), 0);
+  const tout = rows.filter((r) => r.direction === 'out').reduce((t, r) => t + (Number(r.amount) || 0), 0);
+  $('summary').textContent = rows.length ? `${rows.length} shown · in ${money(tin)} · out ${money(tout)}` : '';
+  const note = S.review && S.review.note ? `<div class="card" style="padding:10px 14px;margin-bottom:10px"><div class="note">${esc(S.review.note)}</div></div>` : '';
+  if (!rows.length) { $('banking').innerHTML = note + `<div class="card empty">${all.length ? 'Nothing matches that search.' : 'Nothing waiting. Every line is matched, posted or set aside.'}</div>`; return; }
+  const sure = rows.filter((r) => r.state === 'match' && !r.isDeposit);
+  $('banking').innerHTML = note + `<div class="grid">
+    <div class="ghead"><span></span><span>Date</span><span>Description</span><span>Direction</span><span class="r">Spent</span><span class="r">Received</span><span>Jarvis found</span><span></span><span></span></div>
+    ${rows.map(lineHtml).join('')}
+    <div class="selbar" id="selbar"${S.picked.size || sure.length ? '' : ' hidden'}>
+      <span class="note" id="selTxt"></span>
+      <button class="btn solid" id="matchSel" ${S.picked.size ? '' : 'disabled'}>Match selected</button>
+      <button class="btn quiet" id="pickSure">Select all ${sure.length} that match exactly</button>
+    </div></div>`;
+  selTxt();
+}
+function selTxt() { const t = $('selTxt'); if (t) { t.textContent = S.picked.size ? `${S.picked.size} selected` : ''; const b = $('matchSel'); if (b) b.disabled = !S.picked.size; } }
+
+function paintPosted() {
+  const p = S.posted || {};
+  if (p.error) { $('banking').innerHTML = `<div class="card empty">${esc(p.error)}</div>`; return; }
+  const rows = p.entries || [];
+  $('banking').innerHTML = rows.length ? `<div class="grid">
+    <div class="ghead" style="grid-template-columns:92px minmax(0,2fr) minmax(0,1.6fr) 120px 100px 90px"><span>Date</span><span>Description</span><span>Booked as</span><span>Company</span><span class="r">Amount</span><span></span></div>
+    ${rows.map((e) => `<div class="line" style="grid-template-columns:92px minmax(0,2fr) minmax(0,1.6fr) 120px 100px 90px;cursor:default">
+      <span class="d">${esc(fmtDay(e.date))}</span>
+      <span class="desc"><strong>${esc(e.descriptor || '')}</strong><span class="sub">${esc(e.note || '')}</span></span>
+      <span class="what">${esc(e.account)} · ${esc(e.account_name || '')}</span>
+      <span class="who">${esc(COMPANY[e.entity] || e.entity || '')}</span>
+      <span class="amt r">${money(e.amount)}</span>
+      <span class="go"><button class="btn quiet" data-uncat="${esc(e.bank_row_id)}">Undo</button></span></div>`).join('')}</div>`
+    : '<div class="card empty">Nothing categorised from this screen yet.</div>';
+}
+function paintAside() {
+  const a = S.aside || {};
+  if (a.error) { $('banking').innerHTML = `<div class="card empty">${esc(a.error)}</div>`; return; }
+  const rows = a.rows || [];
+  $('banking').innerHTML = rows.length ? `<div class="note" style="margin-bottom:8px">${a.count} set aside · ${money(a.money)}${a.truncated ? ' · showing the newest 300' : ''}. Still counted, never deleted.</div><div class="grid">
+    <div class="ghead" style="grid-template-columns:92px minmax(0,2fr) minmax(0,1.6fr) 100px 110px"><span>Date</span><span>Description</span><span>Why</span><span class="r">Amount</span><span></span></div>
+    ${rows.map((x) => `<div class="line" style="grid-template-columns:92px minmax(0,2fr) minmax(0,1.6fr) 100px 110px;cursor:default">
+      <span class="d">${esc(fmtDay(x.date))}</span>
+      <span class="desc"><strong>${esc(x.desc)}</strong><span class="sub">${esc(COMPANY[x.company] || x.company || '')}${x.by ? ' · ' + esc(x.by) : ''}</span></span>
+      <span class="what">${esc(x.reason || '')}</span>
+      <span class="amt r">${money(x.amount)}</span>
+      <span class="go"><button class="btn quiet" data-include="${esc(x.id)}">Put back</button></span></div>`).join('')}</div>`
+    : '<div class="card empty">Nothing set aside.</div>';
+}
+
+async function catPreview(box) {
+  const id = box.dataset.cat, sel = box.querySelector('[data-cat-sel]'), co = box.querySelector('[data-cat-co]');
+  const eff = box.querySelector('[data-cat-effect]'), btn = box.querySelector('[data-cat-post]');
+  if (!sel.value) { btn.disabled = true; eff.textContent = 'Pick a category to see what Post will book.'; return null; }
+  try {
+    const p = await api('/api/bank/review/categorise', { body: { id, account: sel.value, entity: co.value || null, preview: true } });
+    if (p.needs_company) co.hidden = false;
+    btn.disabled = !p.ok;
+    eff.textContent = p.ok ? `Will book: ${p.effect}. Jarvis's books only — nothing goes to QuickBooks.` : (p.problems || []).join('; ');
+    return p;
+  } catch (e) { btn.disabled = true; eff.textContent = e.message; return null; }
+}
+
+/* ══════════════════════════ TRANSACTIONS ══════════════════════════ */
+async function loadRegisterSetup() {
+  if (S.books) return;
+  try {
+    const b = await api('/api/books');
+    S.books = b;
+    $('regCo').innerHTML = (b.companies || []).map((c) => `<option value="${esc(c.id)}">${esc(c.uiName || c.name || c.id)}</option>`).join('');
+    const accts = (b.accounts || []).slice().sort((x, y) => String(x.code).localeCompare(String(y.code)));
+    $('regAcct').innerHTML = '<option value="">Choose an account…</option>' + accts.map((a) => `<option value="${esc(a.code)}">${esc(a.code)} · ${esc(a.name)}</option>`).join('');
+  } catch (e) { $('register').innerHTML = `<div class="card empty">${esc(e.message)}</div>`; }
+}
+async function loadRegister() {
+  const entity = $('regCo').value, code = $('regAcct').value;
+  if (!entity || !code) { $('register').innerHTML = '<div class="empty">Pick a company and an account.</div>'; S.regData = null; return; }
+  $('register').innerHTML = '<div class="empty">Loading…</div>';
+  try {
+    const url = `/api/books/account/${encodeURIComponent(code)}?entity=${encodeURIComponent(entity)}`;
+    const j = await api(url);
+    S.regData = j.ledger; paintRegister();
+  } catch (e) { S.regData = null; $('register').innerHTML = `<div class="card empty">${esc(e.message)}</div>`; }
+}
+function regRows() {
+  const g = S.regData; if (!g) return [];
+  const q = ($('regQ').value || '').trim().toLowerCase();
+  return (g.entries || []).filter((e) => !q || [e.date, e.kind, e.party, e.memo, e.debit, e.credit].join(' ').toLowerCase().includes(q));
+}
+function paintRegister() {
+  const g = S.regData; if (!g) return;
+  const rows = regRows();
+  $('register').innerHTML = `<div class="kpis">
+      <div class="kpi"><div class="l">Account</div><div class="v" style="font-size:14px">${esc(g.account)} · ${esc(g.name)}</div></div>
+      <div class="kpi"><div class="l">Debits</div><div class="v">${money(g.debit)}</div></div>
+      <div class="kpi"><div class="l">Credits</div><div class="v">${money(g.credit)}</div></div>
+      <div class="kpi"><div class="l">Closing balance</div><div class="v">${money(g.closing)}</div></div></div>
+    <div class="card" style="overflow:auto"><table class="reg"><thead><tr><th>Date</th><th>Type</th><th>Name</th><th>Memo</th><th class="r">Debit</th><th class="r">Credit</th><th class="r">Balance</th></tr></thead>
+    <tbody>${rows.length ? rows.map((e) => `<tr><td class="mono">${esc(fmtDay(e.date))}</td><td>${esc(e.kind || '')}</td><td>${esc(e.party || '')}</td><td>${esc(e.memo || '')}</td>
+      <td class="r">${e.debit ? money(e.debit) : ''}</td><td class="r">${e.credit ? money(e.credit) : ''}</td><td class="r">${money(e.balance)}</td></tr>`).join('')
+      : '<tr><td colspan="7" class="empty">No postings in this account for these dates.</td></tr>'}</tbody>
+    <tfoot><tr><td colspan="4">${rows.length} line${rows.length === 1 ? '' : 's'}${rows.length !== (g.entries || []).length ? ' (filtered)' : ''}</td>
+      <td class="r">${money(rows.reduce((t, e) => t + (e.debit || 0), 0))}</td><td class="r">${money(rows.reduce((t, e) => t + (e.credit || 0), 0))}</td><td></td></tr></tfoot></table></div>`;
+}
+function csvCell(v) { const s = String(v == null ? '' : v); return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; }
+function downloadCsv() {
+  const g = S.regData; if (!g) return toast('Open an account first', 'bad');
+  const lines = [['Date', 'Type', 'Name', 'Memo', 'Debit', 'Credit', 'Balance']].concat(regRows().map((e) => [fmtDay(e.date), e.kind, e.party, e.memo, e.debit || '', e.credit || '', e.balance]));
+  const blob = new Blob([lines.map((r) => r.map(csvCell).join(',')).join('\n')], { type: 'text/csv' });
+  const a = document.createElement('a'); a.href = URL.createObjectURL(blob);
+  a.download = `${g.account}-${g.entity}${S.from ? '-from-' + S.from : ''}${S.to ? '-to-' + S.to : ''}.csv`; a.click();
+}
+
+/* ══════════════════════════ wiring ══════════════════════════════ */
+function showTop(name) {
+  S.top = name;
+  document.querySelectorAll('[data-top]').forEach((b) => { const on = b.dataset.top === name; b.classList.toggle('on', on); b.setAttribute('aria-selected', on ? 'true' : 'false'); });
+  $('pane-banking').hidden = name !== 'banking'; $('pane-register').hidden = name !== 'register';
+  if (name === 'register') loadRegisterSetup().then(() => { if (S.regData) paintRegister(); });
+}
+function showSub(name) {
+  S.sub = name;
+  document.querySelectorAll('[data-sub]').forEach((b) => { const on = b.dataset.sub === name; b.classList.toggle('on', on); b.setAttribute('aria-selected', on ? 'true' : 'false'); });
+  paintBanking();
+}
+function toggleRow(w) { if (!w) return; const o = !w.classList.contains('open'); w.classList.toggle('open', o); const l = w.querySelector('.line'); if (l) l.setAttribute('aria-expanded', o ? 'true' : 'false'); }
+
+document.addEventListener('click', async (ev) => {
+  const t = ev.target;
+  const top = t.closest('[data-top]'); if (top) return showTop(top.dataset.top);
+  const sub = t.closest('[data-sub]'); if (sub) return showSub(sub.dataset.sub);
+  const dir = t.closest('[data-dir]'); if (dir && dir.tagName === 'BUTTON') {
+    S.dir = dir.dataset.dir; document.querySelectorAll('.seg [data-dir]').forEach((b) => b.classList.toggle('on', b === dir)); return paintBanking(); }
+  if (t.closest('#reload')) return refreshAll();
+  if (t.closest('#regCsv')) return downloadCsv();
+
+  const pick = t.closest('[data-pick]');
+  if (pick) { pick.checked ? S.picked.add(pick.dataset.pick) : S.picked.delete(pick.dataset.pick); selTxt(); return; }
+  if (t.closest('#pickSure')) { visibleRows().filter((r) => r.state === 'match' && !r.isDeposit).forEach((r) => S.picked.add(r.id)); return paintBanking(); }
+  if (t.closest('#matchSel')) {
+    const ids = [...S.picked]; let ok = 0;
+    /* One at a time, stopping at the first refusal — bankLedger.markMatched is
+       one row, one lock, one atomic write, so a failure half way leaves the
+       earlier ones genuinely matched and says so. */
+    for (const id of ids) {
+      try { await api('/api/bank/review/match', { body: { id } }); ok += 1; }
+      catch (e) { toast(`Stopped after ${ok} of ${ids.length}: ${e.message}`, 'bad'); break; }
+    }
+    if (ok === ids.length) toast(`Matched ${ok}`, 'good');
+    return loadBanking();
+  }
+  const m = t.closest('[data-match]');
+  if (m) { m.disabled = true;
+    try { const r = await api('/api/bank/review/match', { body: { id: m.dataset.match } }); toast(`Matched · ${r.matched} payment(s)`, 'good'); }
+    catch (e) { toast(e.message, 'bad'); }
+    return loadBanking(); }
+  const cp = t.closest('[data-cat-post]');
+  if (cp) {
+    const box = cp.closest('[data-cat]'); cp.disabled = true;
+    const p = await catPreview(box); if (!p || !p.ok) return;
+    if (!confirm(`Post this?\n\n${p.effect}\n\nJarvis's books only. You can undo it under Categorised.`)) { cp.disabled = false; return; }
+    const sel = box.querySelector('[data-cat-sel]'), co = box.querySelector('[data-cat-co]');
+    try { await api('/api/bank/review/categorise', { body: { id: box.dataset.cat, account: sel.value, entity: co.value || null } }); toast('Posted — ' + p.effect, 'good'); loadBanking(); }
+    catch (e) { cp.disabled = false; toast(e.message, 'bad'); }
+    return;
+  }
+  const uc = t.closest('[data-uncat]');
+  if (uc) { if (!confirm('Undo this? It comes out of the books and the line goes back to For review.')) return;
+    try { await api('/api/bank/review/categorise/undo', { body: { id: uc.dataset.uncat } }); toast('Undone', 'good'); loadBanking(); } catch (e) { toast(e.message, 'bad'); } return; }
+  const ex = t.closest('[data-excl-go]');
+  if (ex) {
+    const box = ex.closest('[data-excl]'); const why = (box.querySelector('[data-excl-why]').value || '').trim();
+    if (!why) return toast('Say why — an excluded row with no reason is unexplainable at tax time', 'bad');
+    try { await api('/api/bank/exclude', { body: { id: ex.dataset.exclGo, reason: why } }); toast('Set aside — still counted, and reversible', 'good'); loadBanking(); }
+    catch (e) { toast(e.message, 'bad'); }
+    return;
+  }
+  const inc = t.closest('[data-include]');
+  if (inc) { try { await api('/api/bank/include', { body: { id: inc.dataset.include } }); toast('Put back in For review', 'good'); loadBanking(); } catch (e) { toast(e.message, 'bad'); } return; }
+
+  if (t.closest('a, button, select, input, label')) {
+    const o = t.closest('[data-open]'); if (o) toggleRow(o.closest('.rowwrap'));
+    return;
+  }
+  const line = t.closest('[data-toggle]'); if (line) toggleRow(line.closest('.rowwrap'));
+});
+document.addEventListener('keydown', (ev) => {
+  if ((ev.key === 'Enter' || ev.key === ' ') && ev.target.matches && ev.target.matches('.line[data-toggle]')) { ev.preventDefault(); toggleRow(ev.target.closest('.rowwrap')); }
+});
+document.addEventListener('change', (ev) => {
+  const sel = ev.target.closest && ev.target.closest('[data-cat-sel],[data-cat-co]');
+  if (sel) catPreview(sel.closest('[data-cat]'));
+});
+$('q').addEventListener('input', () => { S.q = $('q').value; paintBanking(); });
+$('regCo').addEventListener('change', loadRegister);
+$('regAcct').addEventListener('change', loadRegister);
+$('regQ').addEventListener('input', paintRegister);
+$('preset').addEventListener('change', () => { const p = $('preset').value; if (p !== 'custom') { setPreset(p); refreshAll(); } });
+for (const id of ['from', 'to']) $(id).addEventListener('change', () => { S[id] = $(id).value || ''; $('preset').value = 'custom'; refreshAll(); });
+
+function refreshAll() { return Promise.all([loadBanking(), S.top === 'register' ? loadRegister() : null]); }
+
+/* back to top — the page itself scrolls, so the window is what is reset */
+(function () {
+  const btn = $('toTop'); const SHOW_AT = 300;
+  const y = () => window.pageYOffset || document.documentElement.scrollTop || 0;
+  const sync = () => { btn.hidden = !(y() > SHOW_AT); };
+  btn.addEventListener('click', () => {
+    try { window.scrollTo({ top: 0, left: 0, behavior: 'instant' }); } catch (e) { window.scrollTo(0, 0); }
+    document.documentElement.scrollTop = 0; document.body.scrollTop = 0; btn.hidden = true;
+  });
+  window.addEventListener('scroll', sync, { passive: true }); sync();
+})();
+
+loadBanking();
+</script>
+<!-- The app's sidebar on this page too. dashboard/sidebar.js; hidden when printing. -->
+<script src="/sidebar.js" data-page="workspace" defer></script>
+</body>
+</html>

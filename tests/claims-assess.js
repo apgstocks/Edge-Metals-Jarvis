@@ -74,7 +74,7 @@ section('A — the store');
     ck('no accepted share, no figure', await throwsWith(() => claims.assess(n.id, { assessment: 'contamination', weight_unit: 'MT', invoice_weight: 20 }), /share Edge accepts/));
     ck('a "downgrade" priced upwards is refused', await throwsWith(() => claims.assess(n.id, { assessment: 'grade', weight_unit: 'MT', grade_weight: 5, grade_price_sold: 1000, grade_price_received: 1200 }), /not a downgrade/));
     ck('weight claims still go through verify, not assess', await throwsWith(() => claims.assess(n.id, { assessment: 'weight', weight_unit: 'MT' }), /through verify/));
-    ck('an unknown assessment is refused', await throwsWith(() => claims.assess(n.id, { assessment: 'vibes', weight_unit: 'MT' }), /contamination or grade/));
+    ck('an unknown assessment is refused', await throwsWith(() => claims.assess(n.id, { assessment: 'vibes', weight_unit: 'MT' }), /contamination, grade or quality/));
     ck('an unknown claim is refused', await throwsWith(() => claims.assess('nope', { assessment: 'grade' }), /no such claim/));
     const n2 = claims.get(n.id);
     ck('a refused assessment wrote nothing', n2.claim_amount === null && n2.status === 'unverified');
@@ -102,6 +102,30 @@ section('A — the store');
         // The line's own cell, not the total — "$0.00 recoverable" in the total
         // box is true when nothing has been raised yet.
         ck('a blank recovery on the line prints as a dash, not "$0.00"', !/class="r mono strong">\$0\.00</.test(html));
+    }
+    {
+        // Apsara, 2026-10-14: a quality claim and a shortage claim on one
+        // container, each its own quantity and rate, one total.
+        const c1 = await mk({ container_no: 'QUAL1234567', supplier: 'Gomez' });
+        const c2 = await mk({ container_no: 'QUAL1234567', supplier: 'Gomez' });
+        const q = await claims.assess(c1.id, { assessment: 'quality', weight_unit: 'MT', quality_qty: 1.005, sell_price: 2318, sell_price_unit: 'MT' }, 'test');
+        ck('quality: 1.005 MT x $2,318 = $2,329.59', q.claim_amount === 2329.59 && q.assessment === 'quality' && q.quality_qty === 1.005, q.claim_amount);
+        const w = await claims.verify(c2.id, { weight_unit: 'MT', invoice_weight: 25, claimed_weight: 23.886, sell_price: 2479 }, 'test');
+        ck('shortage: 1.114 MT x $2,479 = $2,761.61', w.claim_amount === 2761.61, w.claim_amount);
+        const nq = await mk();
+        ck('quality needs a quantity', await throwsWith(() => claims.assess(nq.id, { assessment: 'quality', weight_unit: 'MT', sell_price: 2318 }), /quantity claimed/));
+        ck('quality needs a rate', await throwsWith(() => claims.assess(nq.id, { assessment: 'quality', weight_unit: 'MT', quality_qty: 1 , sell_price: null}), /needs the rate/));
+        const nu = await mk();
+        ck('quality needs a unit', await throwsWith(() => claims.assess(nu.id, { assessment: 'quality', quality_qty: 1, sell_price: 5 }), /weight unit/));
+        const kg = await mk();
+        const ql = await claims.assess(kg.id, { assessment: 'quality', weight_unit: 'KG', quality_qty: 500, sell_price: 2000, sell_price_unit: 'MT' }, 'test');
+        ck('quality in kg at a per-MT rate converts: 500 kg = $1,000', ql.claim_amount === 1000, ql.claim_amount);
+        await claims.raiseRecovery(c1.id, { our_claim: 2329.59 }, 'test');
+        await claims.raiseRecovery(c2.id, { our_claim: 2761.61 }, 'test');
+        const b = report.build({ container: 'QUAL1234567', supplier: 'Gomez' });
+        const h = report.toHtml(b);
+        ck('report totals both lines on the container: $5,091.20', Math.abs(b.totals.recoverable - 5091.2) < 0.005 && /\$5,091\.20/.test(h), b.totals.recoverable);
+        ck('report states the quality quantity claimed', /1\.005 MT claimed/.test(h));
     }
     ck('an old claim with no assessment field still lists and totals', (() => { const s = claims.stats(); return typeof s.claimed === 'number'; })());
 }
@@ -171,7 +195,7 @@ section('C — end to end: real server, the page\'s routes, both reports');
         const rem = await req('POST', `/api/claims/${id}/edit`, { sid, body: { remarks: 'Customer photos show rubber hoses and soil. Daekwang wants credit by Friday.' } });
         ck('remarks save through /edit', rem.status === 200 && /rubber hoses/.test(rem.json.remarks));
         const badA = await req('POST', `/api/claims/${id}/edit`, { sid, body: { assessment: 'vibes' } });
-        ck('/edit refuses an assessment that is not one of the three', badA.status === 400 && /weight, contamination or grade/.test(badA.raw));
+        ck('/edit refuses an assessment that is not one of the three', badA.status === 400 && /weight, contamination, grade or quality/.test(badA.raw));
         const sneaky = await req('POST', `/api/claims/${id}/edit`, { sid, body: { claim_amount: 99999 } });
         ck('/edit still cannot set a money figure', sneaky.status === 400, sneaky.raw.slice(0, 100));
 

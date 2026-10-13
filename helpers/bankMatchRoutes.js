@@ -107,6 +107,12 @@ function mount(app, cfg) {
     app.get('/bank-match', (req, res) => {
         res.sendFile(require('path').join(cfg.ROOT, 'dashboard', 'bank-match.html'));
     });
+    // The QuickBooks-style workspace (Apsara, 2026-10-14). A second VIEW over the
+    // same stores and the same /api/bank/* and /api/books/* routes — it owns no
+    // data and no rules of its own, so it cannot disagree with the Bank page.
+    app.get('/workspace', (req, res) => {
+        res.sendFile(require('path').join(cfg.ROOT, 'dashboard', 'workspace.html'));
+    });
 
     // Learning an alias decides which customer's invoices a future deposit is
     // allowed to pay, so it is an admin act — the same bar bankDocs.js sets

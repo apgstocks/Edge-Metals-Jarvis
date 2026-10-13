@@ -54,11 +54,14 @@ const FLAG_KIND_UNKNOWN = 'kind_unknown';
 //   weight        invoiced minus received, at a rate          (verify(), unchanged)
 //   contamination a share of the net weight was not the metal (assess())
 //   grade         the metal arrived as a cheaper grade         (assess())
+//   quality       a quantity at a rate, typed straight in — no     (assess())
+//                 invoiced/received pair (Apsara, 2026-10-14: "i cant give
+//                 what we invoice and what they receive part")
 // Keeping them apart means a kind she renames tomorrow still assesses the way
 // it did today, and no kind name is ever written into the code.
 // null means "never chosen" and is treated as weight, which is what every claim
 // before this date was.
-const ASSESSMENTS = ['weight', 'contamination', 'grade'];
+const ASSESSMENTS = ['weight', 'contamination', 'grade', 'quality'];
 // What can be found in a container. Shown as tick boxes; `sealed_hazard` is the
 // one that is not a price question at all (radioactive or explosive items —
 // every scrap shipment into India carries a declaration that there are none).
@@ -128,6 +131,7 @@ function blank() {
         contam_claimed_pct: null, contam_accepted_pct: null, contaminated_weight: null,
         grade_sold: '', grade_received: '', grade_weight: null,
         grade_price_sold: null, grade_price_received: null,
+        quality_qty: null,           // 'quality' assessment: the quantity claimed, in weight_unit
         // Contract tolerance on a weight shortage. Blank = no allowance, which
         // is how every claim was worked out before it existed.
         tolerance_pct: null, claimable_shortage: null,
@@ -245,7 +249,7 @@ async function assess(id, fields = {}, by = 'manager') {
     if (!c) throw new Error('no such claim');
     const kind = fields.assessment;
     if (kind === 'weight') throw new Error('a weight shortage is confirmed through verify, not assess');
-    if (!ASSESSMENTS.includes(kind)) throw new Error('assessment must be contamination or grade');
+    if (!ASSESSMENTS.includes(kind)) throw new Error('assessment must be contamination, grade or quality');
 
     const unit = UNITS.includes(fields.weight_unit) ? fields.weight_unit : (UNITS.includes(c.weight_unit) ? c.weight_unit : null);
     if (!unit) throw new Error('assessing a claim needs the weight unit — MT, LB or KG');
@@ -274,6 +278,17 @@ async function assess(id, fields = {}, by = 'manager') {
         const measured_by = MEASURED_BY.includes(given('measured_by')) ? given('measured_by') : null;
         Object.assign(patch, { invoice_weight, contam_accepted_pct: accepted, contam_claimed_pct: claimedPct,
             contaminated_weight, findings, measured_by, sell_price, sell_price_unit });
+    } else if (kind === 'quality') {
+        // Quantity x rate, both typed. The rate is the sale rate on the claim
+        // (it never leaves the building); the supplier is argued at THEIR rate
+        // later, exactly as for every other kind.
+        const qty = has(given('quality_qty')) ? num(given('quality_qty')) : null;
+        if (qty === null || qty <= 0) throw new Error('assessing a quality claim needs the quantity claimed');
+        if (sell_price === null || sell_price <= 0) throw new Error('assessing a quality claim needs the rate');
+        const q = sell_price_unit === unit ? qty : convert(qty, unit, sell_price_unit);
+        if (q === null) throw new Error('assessing a quality claim needs a rate unit that can be compared with the quantity');
+        claim_amount = Math.round(q * sell_price * 100) / 100;
+        Object.assign(patch, { quality_qty: qty, sell_price, sell_price_unit });
     } else {
         const w = has(given('grade_weight')) ? num(given('grade_weight')) : null;
         const sold = has(given('grade_price_sold')) ? num(given('grade_price_sold')) : null;
@@ -287,7 +302,7 @@ async function assess(id, fields = {}, by = 'manager') {
             grade_sold: String(given('grade_sold') || '').slice(0, 80), grade_received: String(given('grade_received') || '').slice(0, 80) });
     }
     patch.claim_amount = claim_amount;
-    return update(id, patch, by, kind === 'contamination' ? 'contamination assessed' : 'downgrade assessed');
+    return update(id, patch, by, kind === 'contamination' ? 'contamination assessed' : kind === 'quality' ? 'quality claim assessed' : 'downgrade assessed');
 }
 
 // Recovery from the supplier. This is the half of a claim that is actually
