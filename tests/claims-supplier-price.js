@@ -151,11 +151,11 @@ section('F2 — a rate per pound against a claim in tonnes');
 
     const b = report.build({ supplier: 'Calderon' });
     const l = b.lines.find((x) => x.container_no === 'TCNU1000001');
-    ck('the line carries the shortage converted into the rate\'s unit', l && Math.abs(l.charge_qty - 2204.623) < 0.01, l && l.charge_qty);
+    ck('the rate is converted to per-MT: $0.81/LB x 2,204.62262 = $1,785.74/MT', l && l.rate_unit === 'MT' && Math.abs(l.rate - 1785.74) < 0.011 && l.rate_from === '$0.81/LB', l && JSON.stringify([l.rate, l.rate_unit, l.rate_from]));
     ck('the claim\'s own weights are NOT converted', l.shortage === 1 && l.unit === 'MT', { s: l.shortage, u: l.unit });
 
     const html = report.toHtml(b);
-    ck('the document prints the quantity his rate is applied to', /on 2,204\.623 LB/.test(html));
+    ck('the document prints the per-MT rate with the original beside it', /\$1,785\.74\/MT/.test(html) && /from \$0\.81\/LB/.test(html));
     ck('and the rate in his own unit', /\$0\.81\/LB/.test(html));
     ck('the three numbers reconcile on the page', Math.abs(2204.62262 * 0.81 - 1785.74) < 0.01);
     ck('the no-conversion note no longer claims nothing was converted',
@@ -165,6 +165,24 @@ section('F2 — a rate per pound against a claim in tonnes');
     const same = report.build({ supplier: 'Gomez Metals' }).lines.find((x) => x.invoice_no === '26JY05');
     ck('a rate in the claim\'s own unit prints no conversion line', same && same.charge_qty === null, same && same.charge_qty);
     ck('and the note is not shown for it', !/1 MT = 2,204\.62262 lb/.test(report.toHtml(report.build({ supplier: 'Gomez Metals' }))));
+}
+
+section('F2b — cents per lb, weights in pounds: rate to per-MT, quantity to MT, then calculated');
+{
+    // Typed on the page as 74 cents/lb -> stored $0.74/LB (the page divides by 100).
+    writeBills([{ id: 'b8', supplier: 'Cents Co', container_no: 'CNTU0000007', supplier_price: 0.74, price_unit: 'lb', items: [] }]);
+    const c = await claims.create({ supplier: 'Cents Co', container_no: 'CNTU0000007', note: 'short' }, 'test');
+    await claims.verify(c.id, { invoice_weight: 40000, claimed_weight: 38478.81, weight_unit: 'LB', sell_price: 0.9, sell_price_unit: 'LB' }, 'test');
+    await claims.update(c.id, { supplier_price: 0.74, supplier_price_unit: 'LB' }, 'test', 'rate');
+    await claims.raiseRecovery(c.id, { our_claim: 1125.67 }, 'test');
+    const b = report.build({ supplier: 'Cents Co' });
+    const l = b.lines[0];
+    ck('1,521.19 lb short is taken to MT: 0.690 MT', Math.abs(l.qty_mt - 0.69) < 0.0005 && Math.abs(l.charge_qty - 0.69) < 0.0005, JSON.stringify([l.qty_mt, l.charge_qty]));
+    ck('$0.74/lb becomes $1,631.42/MT, original shown', l.rate_unit === 'MT' && Math.abs(l.rate - 1631.42) < 0.011 && l.rate_from === '$0.74/LB', JSON.stringify([l.rate, l.rate_from]));
+    ck('rate x MT quantity reconciles with the amount, so the rate stays on the line', l.rate !== null && b.notReconciled.length === 0);
+    const html = report.toHtml(b);
+    ck('the document shows per-MT rate, MT quantity and the note', /\$1,631\.42\/MT/.test(html) && /on 0\.69 MT/.test(html) && /converted to a rate per metric tonne/.test(html));
+    ck('the buyer\'s rate ($0.90) is nowhere on the supplier document', !/0\.90|0\.9\b/.test(html));
 }
 
 section('F3 — the document never contradicts itself');

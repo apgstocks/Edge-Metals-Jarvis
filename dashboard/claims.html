@@ -837,7 +837,7 @@ function claimCard(c, i, g){
         '<div class="grid">' +
           '<label class="f">Supplier<input class="f_sup" data-k="f_sup" value="' + esc(c.supplier||'') + '" placeholder="who Edge bought from"></label>' +
           fld('Their rate', 'f_srate', c.supplier_price, 'from the purchase bill') +
-          '<label class="f">Their rate is per<select class="f_srateUnit" data-k="f_srateUnit">' + unitOpt(c.supplier_price_unit||unit||'MT') + '</select></label>' +
+          '<label class="f">Their rate is per<select class="f_srateUnit" data-k="f_srateUnit">' + unitOpt(c.supplier_price_unit||unit||'MT') + '<option value="CLB">¢ per lb (cents)</option></select></label>' +
           fld('Recovering from them', 'f_ours', c.our_claim) +
         '</div><div class="billrate hint">Looking up the purchase bill…</div><div class="actions">' +
           '<button class="btn go f_rec" type="button">Raise the recovery</button>' +
@@ -1122,7 +1122,7 @@ function wireClaim(c){
       const body = { supplier: el.querySelector('.f_sup').value.trim() };
       if (k !== '__new') body.claim_type = k;
       const sp = numOf(el.querySelector('.f_srate').value);
-      if (sp !== null) { body.supplier_price = sp; body.supplier_price_unit = el.querySelector('.f_srateUnit').value; }
+      if (sp !== null) Object.assign(body, srateOf(sp, el.querySelector('.f_srateUnit').value));
       await api('/api/claims/' + c.id + '/edit', body);
       savedClaim(c.id);
       toast('Saved.', 'ok'); await load();
@@ -1139,7 +1139,7 @@ function wireClaim(c){
       // prints it and a rate recorded later would not be the one this amount
       // was worked out at.
       const sp = numOf(el.querySelector('.f_srate').value);
-      if (sp !== null) { patch.supplier_price = sp; patch.supplier_price_unit = el.querySelector('.f_srateUnit').value; }
+      if (sp !== null) Object.assign(patch, srateOf(sp, el.querySelector('.f_srateUnit').value));
       if (Object.keys(patch).length) await api('/api/claims/' + c.id + '/edit', patch);
       await api('/api/claims/' + c.id + '/recovery', { our_claim: ours });
       savedClaim(c.id);
@@ -1268,6 +1268,11 @@ const SCAN_FIELDS = [
   ['weight_unit', 'Unit'], ['stated_claim_amount', 'Amount they are asking'],
   ['date', 'Date on the document'], ['what_is_claimed', 'What is claimed'],
 ];
+/* The supplier's rate is stored in DOLLARS per unit. Typed in cents per lb it is
+   divided by 100 first (74 ¢/lb -> $0.74/LB); the supplier report then converts
+   it to per-MT with the same 2,204.62 factor as everything else. */
+function srateOf(v, unit){ return unit === 'CLB' ? { supplier_price: Math.round(v / 100 * 1e6) / 1e6, supplier_price_unit: 'LB' } : { supplier_price: v, supplier_price_unit: unit }; }
+
 function openReadMail(){
   const wrap = document.createElement('div');
   wrap.className = 'modal';

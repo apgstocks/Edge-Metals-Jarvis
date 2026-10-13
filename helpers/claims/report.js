@@ -101,8 +101,24 @@ function build(opts = {}) {
         // Their own rate, off their own bill. A recoverable figure with no rate
         // beside it is a number a supplier cannot reproduce, so the first thing
         // they do is query it. Edge's sell_price is deliberately NOT here.
-        rate: (c.assessment === 'grade') ? null : nnum(c.supplier_price),
-        rate_unit: (c.assessment === 'grade') ? '' : (c.supplier_price_unit || ''),
+        // ── THE SUPPLIER'S RATE IS ALWAYS PRINTED PER MT (2026-10-14) ───────
+        // Apsara: "If price of supplier is in cents, i want it to be converted
+        // to 2204.62 (mt) and then calculated." A bill can be cents or dollars
+        // per pound; the supplier is shown ONE basis, per metric ton, with the
+        // original beside it so the conversion can be checked. The quantity is
+        // taken to MT too, so rate x quantity is readable on the page.
+        // Nothing here is ever the buyer's price: this is supplier_price only.
+        ...(() => {
+            const p = (c.assessment === 'grade') ? null : nnum(c.supplier_price);
+            const u = c.supplier_price_unit || '';
+            if (p === null) return { rate: null, rate_unit: '', rate_from: '' };
+            const per = claimPrice.toUnit(1, 'MT', u);            // units of u in one MT
+            if (!u || per === null) return { rate: p, rate_unit: u, rate_from: '' };
+            if (u === 'MT') return { rate: p, rate_unit: 'MT', rate_from: '' };
+            return { rate: Math.round(p * per * 100) / 100, rate_unit: 'MT', rate_from: `${money(p)}/${u}` };
+        })(),
+        qty_mt: (() => { const b = basisOf(c); if (b === null) return null; if (!c.weight_unit) return null;
+            const q = claimPrice.toUnit(b, c.weight_unit, 'MT'); return q === null ? null : Math.round(q * 1e6) / 1e6; })(),
         basis: basisOf(c),
         // THE RATE IS OFTEN PER POUND WHILE THE CLAIM IS IN TONNES. Apsara,
         // 2026-10-03: "What if the supplier price is in lbs?" — the conversion
@@ -112,8 +128,9 @@ function build(opts = {}) {
         // this column was added to remove. So the quantity his rate is applied
         // to is printed next to it, and only when the units actually differ —
         // the claim's own weights are left exactly as recorded.
-        charge_qty: (c.supplier_price_unit && c.weight_unit && c.supplier_price_unit !== c.weight_unit)
-            ? (() => { const b = basisOf(c); if (b === null) return null; const q = claimPrice.toUnit(b, c.weight_unit, c.supplier_price_unit); return q === null ? null : Math.round(q * 1000) / 1000; })()
+        // Shown only where the claim's own weights are NOT already in MT.
+        charge_qty: (c.supplier_price_unit && c.weight_unit && c.weight_unit !== 'MT')
+            ? (() => { const b = basisOf(c); if (b === null) return null; const q = claimPrice.toUnit(b, c.weight_unit, 'MT'); return q === null ? null : Math.round(q * 1000) / 1000; })()
             : null,
         our_claim: nnum(c.our_claim),
         status: c.status,
@@ -146,12 +163,12 @@ function build(opts = {}) {
     const RECONCILE_TOL = 0.01;   // 1%, and never less than a dollar
     const lines = rows.map(line).map((l) => {
         if (l.rate === null || !l.sendable || !l.our_claim) return l;
-        const qty = l.charge_qty === null ? l.basis : l.charge_qty;
-        if (qty === null) return l;
+        const qty = l.qty_mt;
+        if (qty === null || qty === undefined) return l;
         const implied = qty * l.rate;
         const slack = Math.max(1, Math.abs(l.our_claim) * RECONCILE_TOL);
         if (Math.abs(implied - l.our_claim) <= slack) return l;
-        return { ...l, rate: null, rate_unit: '', charge_qty: null, rate_hidden: Math.round(implied * 100) / 100 };
+        return { ...l, rate: null, rate_unit: '', rate_from: '', charge_qty: null, rate_hidden: Math.round(implied * 100) / 100 };
     });
     const sendable = lines.filter((l) => l.sendable);
     const recoverable = sendable.reduce((t, l) => t + (l.our_claim || 0), 0);
@@ -239,7 +256,7 @@ function toHtml(b) {
       <td class="r mono">${esc(wt(l.claimed_weight, l.unit))}</td>
       <td class="r mono">${esc(wt(l.shortage, l.unit))}</td>
       <td class="r mono">${l.shortage_pct === null ? '—' : esc(l.shortage_pct.toFixed(2)) + '%'}</td>`}
-      <td class="r mono">${l.rate === null ? '—' : esc(money(l.rate)) + '/' + esc(l.rate_unit || '')}${l.charge_qty === null ? '' : `<div class="conv">on ${esc(wt(l.charge_qty, l.rate_unit))}</div>`}</td>
+      <td class="r mono">${l.rate === null ? '—' : esc(money(l.rate)) + '/' + esc(l.rate_unit || '')}${l.rate_from ? `<div class="conv">from ${esc(l.rate_from)}</div>` : ''}${l.charge_qty === null ? '' : `<div class="conv">on ${esc(wt(l.charge_qty, 'MT'))}</div>`}</td>
       <td class="r mono strong">${l.sendable && l.our_claim !== null ? esc(money(l.our_claim)) : '—'}</td>
     </tr>`;
 
@@ -321,7 +338,8 @@ ${details}
   ${b.includedUnverified && b.lines.some((l) => !l.sendable) ? '<p><strong>Lines marked “not yet verified”</strong> are shown for information only. Their figures have not yet been confirmed against the loading documents and they are excluded from the total above.</p>' : ''}
   ${b.noFigure.length ? `<p><strong>${b.noFigure.length} claim(s)</strong> in this report have no recovery amount set against them yet; they are listed so the position is complete.</p>` : ''}
   <p>Weights are stated in the unit shown against each line, exactly as recorded on the claim documents. No conversion has been applied to them.</p>
-  ${b.lines.some((l) => l.charge_qty !== null) ? '<p>Where our purchase rate is per a different unit, the shortage converted into that unit is shown beneath the rate, at 1 MT = 2,204.62262 lb. The recoverable amount is that quantity at that rate.</p>' : ''}
+  ${b.lines.some((l) => l.charge_qty !== null) ? '<p>The quantity the rate is applied to, converted into metric tonnes, is shown beneath the rate. The recoverable amount is that quantity at that rate.</p>' : ''}
+  ${b.lines.some((l) => l.rate_from) ? '<p>Where our purchase rate was per pound (or in cents), it has been converted to a rate per metric tonne at 1 MT = 2,204.62262 lb; the original rate is shown beneath it.</p>' : ''}
   ${b.lines.some((l) => l.rate !== null) ? '<p><strong>“Your rate”</strong> is the price on our purchase bill for that container — the rate we paid you for the material. Each recoverable amount is the shortage at that rate.</p>' : ''}
   ${b.lines.some((l) => l.sendable && l.rate === null) ? '<p>Where no rate is shown, the amount is as agreed between us rather than calculated.</p>' : ''}
   <p>Please confirm acceptance or raise any query within 14 days of the date of this report.</p>
@@ -364,7 +382,7 @@ async function toWorkbook(built) {
     for (const l of built.lines) {
         ws.addRow([l.date, l.invoice_no, l.container_no, l.kind + (l.sendable ? '' : ' (not yet verified)'),
             l.unit, l.invoice_weight, l.claimed_weight, l.shortage, l.shortage_pct,
-            l.charge_qty === null ? l.shortage : l.charge_qty, l.rate, l.rate_unit,
+            l.qty_mt !== null && l.qty_mt !== undefined ? l.qty_mt : (l.charge_qty === null ? l.shortage : l.charge_qty), l.rate, l.rate_unit,
             l.sendable ? l.our_claim : null, l.status]);
     }
     ws.addRow([]);
