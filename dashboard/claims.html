@@ -558,7 +558,7 @@ function pickOf(c){
   if (!STATE.pick[c.id]) STATE.pick[c.id] = {
     findings: Array.isArray(c.findings) ? c.findings.slice() : [],
     measured_by: c.measured_by || null,
-    unit: c.weight_unit || null,
+    unit: c.weight_unit || c.stated_qty_unit || null,
   };
   return STATE.pick[c.id];
 }
@@ -819,9 +819,9 @@ function claimCard(c, i, g){
         '<div class="pane" data-pane="quality"' + (a==='quality'?'':' hidden') + '>' +
           '<div class="lede2" style="margin-top:14px">For a claim that arrives as a quantity and a rate — no invoiced or received weight needed. Name the kind above, e.g. “Quality claim – MS Scrap”.</div>' +
           '<div class="grid">' +
-            fld('Quantity claimed', 'f_qqty', c.quality_qty) +
-            fld('Rate', 'f_qrate', c.sell_price, 'e.g. 2318') +
-            '<label class="f">Rate is per<select class="f_qrateUnit" data-k="f_qrateUnit">' + unitOpt(c.sell_price_unit||unit||'MT') + '</select></label>' +
+            fld('Quantity claimed', 'f_qqty', c.quality_qty != null ? c.quality_qty : c.stated_qty, c.stated_qty != null ? 'from the mail' : '') +
+            fld('Rate', 'f_qrate', c.sell_price != null ? c.sell_price : c.stated_rate, 'e.g. 2318') +
+            '<label class="f">Rate is per<select class="f_qrateUnit" data-k="f_qrateUnit">' + unitOpt(c.sell_price_unit||c.stated_rate_unit||unit||'MT') + '</select></label>' +
           '</div><div class="calc c_q"></div>' +
           '<div class="actions"><button class="btn go f_assess" data-kind="quality" type="button">Confirm the assessment</button><span class="hint q_why" style="margin:0"></span></div>' +
         '</div>' +

@@ -36,6 +36,9 @@ const STRONG = [
     'short weight', 'shortage in weight', 'weight difference', 'weight discrepancy',
     'less weight', 'outturn weight', 'out-turn weight', 'shortage claim', 'short delivery',
     'received less', 'quantity shortage', 'weight claim',
+    // Apsara, 2026-10-14: a quality claim (quantity x rate) never reached the
+    // reader because the gate only knew shortage words.
+    'quality claim', 'quality complaint', 'quality issue', 'quality dispute',
 ];
 // Weaker halves — a claim word AND a weight word together also counts.
 const CLAIMY = ['claim', 'shortage', 'discrepancy', 'deduction', 'debit note', 'survey report', 'surveyor'];
@@ -130,6 +133,10 @@ const FIELDS = [
     ['claimed_weight', 'the weight the customer says they received, as a bare number'],
     ['weight_unit', 'MT, LB or KG — ONLY if the mail states it in words or a symbol'],
     ['stated_claim_amount', 'the money amount the customer is asking for, as a bare number, if stated'],
+    ['stated_qty', 'for a quality or other claim that names a quantity directly (not an invoiced/received pair): the quantity claimed, as a bare number'],
+    ['stated_qty_unit', 'MT, LB or KG — ONLY if the mail states it beside the claimed quantity'],
+    ['stated_rate', 'the price per unit the claim is worked out at, as a bare number, if stated'],
+    ['stated_rate_unit', 'MT, LB or KG — the unit that rate is per, ONLY if stated (e.g. "USD 2,318/MT")'],
 
 ];
 
@@ -138,7 +145,7 @@ function buildPrompt(email) {
     const fence = newFence();
     const fieldList = FIELDS.map(([k, d]) => `  "${k}": ${d}`).join('\n');
     return [
-        'You read one email and report what it SAYS about a weight-shortage claim against a scrap-metal exporter.',
+        'You read one email and report what it SAYS about a weight-shortage or quality claim against a scrap-metal exporter.',
         '',
         'Rules, in order of importance:',
         '1. Report only what the email states. If a field is not in the email, use null. Never guess, never infer from context, never carry a value over from another field.',
@@ -242,6 +249,14 @@ async function extract(email = {}) {
         claimed_weight: keep('claimed_weight', asNum(f.claimed_weight)),
         weight_unit: keep('weight_unit', asUnit(f.weight_unit)),
         stated_claim_amount: keep('stated_claim_amount', asNum(f.stated_claim_amount)),
+        // What the mail SAYS, never worked out: a quantity and a rate for a
+        // claim that has no invoiced/received pair. They prefill the form and
+        // nothing more — the amount is still computed only when a person
+        // confirms (helpers/claims.js assess()).
+        stated_qty: keep('stated_qty', asNum(f.stated_qty)),
+        stated_qty_unit: keep('stated_qty_unit', asUnit(f.stated_qty_unit)),
+        stated_rate: keep('stated_rate', asNum(f.stated_rate)),
+        stated_rate_unit: keep('stated_rate_unit', asUnit(f.stated_rate_unit)),
         // No claim_type here on purpose — workflow/claimWatch asks
         // helpers/claimKind about the mail, so the kind is named the same way for
         // a mail as for a sheet row, by the model and not by this prompt.

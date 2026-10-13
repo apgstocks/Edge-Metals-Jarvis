@@ -131,6 +131,7 @@ function blank() {
         contam_claimed_pct: null, contam_accepted_pct: null, contaminated_weight: null,
         grade_sold: '', grade_received: '', grade_weight: null,
         grade_price_sold: null, grade_price_received: null,
+        stated_qty: null, stated_qty_unit: null, stated_rate: null, stated_rate_unit: null, // as the MAIL said; prefill only
         quality_qty: null,           // 'quality' assessment: the quantity claimed, in weight_unit
         // Contract tolerance on a weight shortage. Blank = no allowance, which
         // is how every claim was worked out before it existed.

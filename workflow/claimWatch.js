@@ -77,6 +77,7 @@ function notifyText(c, { isNew, changed }) {
     const unit = c.weight_unit || '';
     if (c.invoice_weight != null) L.push(`Invoiced:  ${c.invoice_weight}${unit ? ' ' + unit : ' (unit not stated)'}`);
     if (c.claimed_weight != null) L.push(`They say:  ${c.claimed_weight}${unit ? ' ' + unit : ''}`);
+    if (c.stated_qty != null) L.push(`Quantity: ${c.stated_qty}${c.stated_qty_unit ? ' ' + c.stated_qty_unit : ''}${c.stated_rate != null ? ' at ' + money(c.stated_rate) + (c.stated_rate_unit ? '/' + c.stated_rate_unit : '') : ''}`);
     if (c.stated_claim_amount != null) L.push(`They ask:  ${money(c.stated_claim_amount)}`);
     L.push(`Recover from: ${c.supplier || 'SUPPLIER NOT NAMED IN THE MAIL'}`);
     L.push('');
@@ -180,7 +181,7 @@ async function consider({ messageId, threadId, from, subject, body, mailbox, pay
             for (const k of ['customer', 'supplier', 'invoice_no', 'container_no']) {
                 if (!String(existing[k] || '').trim() && f[k]) fill[k] = f[k];
             }
-            for (const k of ['invoice_weight', 'claimed_weight', 'weight_unit', 'stated_claim_amount']) {
+            for (const k of ['invoice_weight', 'claimed_weight', 'weight_unit', 'stated_claim_amount', 'stated_qty', 'stated_qty_unit', 'stated_rate', 'stated_rate_unit']) {
                 if ((existing[k] === null || existing[k] === undefined) && f[k] !== null) fill[k] = f[k];
             }
             if (Object.keys(fill).length) {

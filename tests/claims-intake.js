@@ -114,6 +114,23 @@ section('B — the prompt fences the mail, and an invented quote is dropped');
     ck('below CLAIM_MIN_CONFIDENCE returns null', (await claimParse.extract(MAIL)) === null);
 }
 
+section('B2 — a quality claim: quantity and rate are read, and only when quoted');
+{
+    const QM = { from: 'x@buyer.com', subject: 'Quality claim - MSDU2726332',
+        body: 'Container MSDU2726332, invoice 26MK10. Quality claim for MS Scrap: 1.005 MT at USD 2,318/MT.' };
+    ck('the gate lets a "quality claim" mail through', claimParse.gate({ subject: QM.subject, body: QM.body, refs: () => [] }).hit === true);
+    GEMINI_REPLY = { is_claim: true, confidence: 0.9, reason: 'quality claim',
+        fields: { customer: '', supplier: '', invoice_no: '26MK10', container_no: 'MSDU2726332', stated_qty: 1.005, stated_qty_unit: 'MT', stated_rate: 2318, stated_rate_unit: 'MT' },
+        quotes: { invoice_no: 'invoice 26MK10', stated_qty: '1.005 MT', stated_qty_unit: '1.005 MT', stated_rate: 'USD 2,318/MT', stated_rate_unit: 'USD 2,318/MT' } };
+    const q = await claimParse.extract(QM);
+    ck('quantity, rate and their units are carried', q.fields.stated_qty === 1.005 && q.fields.stated_rate === 2318 && q.fields.stated_qty_unit === 'MT' && q.fields.stated_rate_unit === 'MT', JSON.stringify(q.fields));
+    GEMINI_REPLY = { ...GEMINI_REPLY, quotes: { invoice_no: 'invoice 26MK10' } };
+    const q2 = await claimParse.extract(QM);
+    ck('with no quote in the mail, quantity and rate are dropped, not trusted', q2.fields.stated_qty === null && q2.fields.stated_rate === null);
+    const rec = await claims.create({ ...q.fields, invoice_no: '26MK10', container_no: 'MSDU2726332' }, 'test');
+    ck('the claim keeps them for prefill and computes no money', rec.stated_qty === 1.005 && rec.stated_rate === 2318 && rec.claim_amount === null);
+}
+
 section('C — a mail with no unit never gets a money figure');
 {
     GEMINI_REPLY = {
