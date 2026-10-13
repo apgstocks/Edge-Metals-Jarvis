@@ -274,6 +274,7 @@ h2.sec .n{color:var(--text-faint);font-weight:400}
     <button type="button" class="tab on" role="tab" data-tab="review" aria-selected="true">For review<span class="n" id="n-review"></span></button>
     <button type="button" class="tab" role="tab" data-tab="aside" aria-selected="false">Set aside &amp; recorded<span class="n" id="n-aside"></span></button>
     <button type="button" class="tab" role="tab" data-tab="recon" aria-selected="false">Bank vs books</button>
+    <button type="button" class="tab" role="tab" data-tab="plan" aria-selected="false">Change the books</button>
     <button type="button" class="tab" role="tab" data-tab="setup" aria-selected="false">Connections &amp; rules</button>
   </nav>
 
@@ -285,7 +286,7 @@ h2.sec .n{color:var(--text-faint);font-weight:400}
         <button type="button" data-dir="out">Money out</button>
       </div>
       <input class="search" id="q" type="search" placeholder="Search name, description or amount" aria-label="Search">
-      <span class="keys"><kbd>/</kbd> search · <kbd>J</kbd><kbd>K</kbd> move · <kbd>1</kbd>–<kbd>4</kbd> tabs</span>
+      <span class="keys"><kbd>/</kbd> search · <kbd>J</kbd><kbd>K</kbd> move · <kbd>1</kbd>–<kbd>5</kbd> tabs</span>
     </div>
     <div class="chips" id="chips"></div>
     <div id="feednote"></div>
@@ -310,6 +311,7 @@ h2.sec .n{color:var(--text-faint);font-weight:400}
   <section data-pane="aside" hidden>
     <div id="asidelist"></div>
     <div id="recorded"></div>
+    <div id="booked"></div>
     <div id="extras"></div>
   </section>
 
@@ -317,6 +319,20 @@ h2.sec .n{color:var(--text-faint);font-weight:400}
        whether payment received or sent ever again." -->
   <section data-pane="recon" hidden>
     <div id="recon"></div>
+  </section>
+
+  <section data-pane="plan" hidden>
+    <div class="card">
+      <div class="lbl">Tell Jarvis what to change</div>
+      <textarea id="planText" rows="3" style="width:100%;margin-top:6px" aria-label="What to change"
+        placeholder='e.g. Take container TGHU1234567 off bill BILL_914, put it on a new bill for Hugo dated 3-jan-26, and match payment PAY_22 to it'></textarea>
+      <div class="row1" style="margin-top:8px;gap:8px;align-items:center">
+        <button type="button" class="btn solid" id="planGo">Make a plan</button>
+        <span class="note">Jarvis turns it into steps and shows what each supplier is owed before and after. <strong>Nothing changes</strong> until the Jarvis profile applies it.</span>
+      </div>
+      <div id="planOut"></div>
+    </div>
+    <div id="plans"></div>
   </section>
 
   <section data-pane="setup" hidden>
@@ -1043,7 +1059,194 @@ async function renderReconcile() {
    QuickBooks' shape, her words in the buttons. The states and their
    buttons come from the server — helpers/bankReview.js — so the screen
    cannot invent an action the server will not take. */
+/* ── CATEGORISE A WITHDRAWAL ───────────────────────────────────────────
+   Apsara, 2026-10-13: "there should be a categoriser dropdown and post/match
+   button, just like QuickBooks." Open the row, pick where it belongs (it opens
+   on a suggestion only where the wording is unambiguous), see the effect, Post.
+   Books Jarvis's own ledger only — nothing goes to QuickBooks. Undo is under
+   "Posted". */
+let IS_SUPER = false;
+async function loadMe() { try { const m = await api('/api/me'); IS_SUPER = m && m.super === true; } catch (e) { IS_SUPER = false; } }
+async function loadCats() {
+  if (STATE.cats) return;
+  try { STATE.cats = await api('/api/bank/review/categories'); } catch (e) { STATE.cats = null; }
+}
+function categoriseHtml(r) {
+  const c = STATE.cats;
+  if (!c || !Array.isArray(c.categories) || !Array.isArray(c.companies)) return `<div class="note">Categories could not be loaded — reload the page.</div>`;
+  const sug = (r.categorise || {}).suggested || '';
+  return `<div class="cat" data-cat="${esc(r.id)}" style="margin-top:10px;padding:10px 12px;border:1px solid var(--line, #2B3239);border-radius:8px">
+    <div class="row1" style="gap:8px;flex-wrap:wrap;align-items:center">
+      <strong>What is this?</strong>
+      <select data-cat-sel aria-label="Category">
+        <option value=""${sug ? '' : ' selected'}>Choose a category…</option>
+        ${c.categories.map((x) => `<option value="${esc(x.code)}"${x.code === sug ? ' selected' : ''}>${esc(x.code)} · ${esc(x.name)}</option>`).join('')}
+      </select>
+      <select data-cat-co hidden aria-label="Company">
+        <option value="">Which company?</option>
+        ${c.companies.map((x) => `<option value="${esc(x.id)}">${esc(x.name)}</option>`).join('')}
+      </select>
+      <button class="btn solid" data-cat-post="${esc(r.id)}" ${sug ? '' : 'disabled'}>Post</button>
+    </div>
+    <div class="note" data-cat-effect style="margin-top:6px">${sug ? 'Suggested from the description — check it, then Post.' : 'Pick a category to see what Post will book.'}</div>
+  </div>`;
+}
+async function catPreview(box) {
+  const id = box.dataset.cat, sel = box.querySelector('[data-cat-sel]'), co = box.querySelector('[data-cat-co]');
+  const eff = box.querySelector('[data-cat-effect]'), btn = box.querySelector('[data-cat-post]');
+  if (!sel.value) { btn.disabled = true; eff.textContent = 'Pick a category to see what Post will book.'; return null; }
+  try {
+    const p = await api('/api/bank/review/categorise', { body: { id, account: sel.value, entity: co.value || null, preview: true } });
+    if (p.needs_company) co.hidden = false;
+    btn.disabled = !p.ok;
+    eff.textContent = p.ok ? `Will book: ${p.effect}. Jarvis's books only — nothing goes to QuickBooks.` : p.problems.join('; ');
+    return p;
+  } catch (e) { btn.disabled = true; eff.textContent = e.message; return null; }
+}
+/* ── A PLAN FOR A CARRIER PAYMENT ───────────────────────────────────────
+   Apsara, 2026-10-13: "plan screen should be there... apply for Jarvis only."
+   Anyone who is an admin can build and PREVIEW a plan (it writes nothing); only
+   the Jarvis profile can APPLY one. The plan here is two steps: add the carrier's
+   bill, then mark it paid by this bank line. Neither step can be undone (the carrier
+   store has no delete or un-pay), and the preview says so before the button. */
+function carrierOf(desc) { const m = /\b(ntg|tql|schneider)\b/i.exec(String(desc || '')); return m ? m[1].toLowerCase() : ''; }
+function planHtml(r) {
+  const car = carrierOf(r.descriptor);
+  return `<div class="plan" data-plan="${esc(r.id)}" data-plan-amount="${esc(r.amount)}" data-plan-date="${esc(r.date)}" data-plan-bank="${esc(r.bank || '')}"
+      style="margin-top:10px;padding:10px 12px;border:1px solid var(--line, #2B3239);border-radius:8px">
+    <div class="row1" style="gap:8px;flex-wrap:wrap;align-items:center">
+      <strong>Add the carrier bill and mark it paid</strong>
+      <select data-plan-carrier aria-label="Carrier">
+        <option value=""${car ? '' : ' selected'}>Which carrier?</option>
+        ${['tql', 'ntg', 'schneider'].map((c) => `<option value="${c}"${c === car ? ' selected' : ''}>${c.toUpperCase()}</option>`).join('')}
+      </select>
+      <input data-plan-ref placeholder="Their invoice number" aria-label="Invoice number" style="min-width:160px">
+      <button class="btn" data-plan-preview="${esc(r.id)}">Preview plan</button>
+    </div>
+    <div class="note" style="margin-top:6px">${money(r.amount)} on ${esc(r.date)}. Nothing is written until the Jarvis profile applies it.</div>
+    <div data-plan-out></div>
+  </div>`;
+}
+/* The preview, however the plan was made: steps in words, what is wrong with it if
+   anything, what each supplier is owed before and after, the warning that a step cannot
+   be undone, and Apply only for the Jarvis profile. */
+function preHtml(p, key) {
+  const irreversible = ((p.undo || {}).irreversible || []);
+  const diff = p.diff || [];
+  return `<ol style="margin:8px 0 0 18px">${(p.steps || []).map((s) => `<li>${esc(typeof s === 'string' ? s : (s.says || JSON.stringify(s)))}</li>`).join('')}</ol>
+    ${(p.problems || []).length ? `<div class="note" style="color:var(--bad, #C5402F)">${p.problems.map((x) => esc((x.step ? 'Step ' + x.step + ': ' : '') + (x.why || x))).join('<br>')}</div>` : ''}
+    ${p.ok && diff.length ? `<table style="margin-top:8px;width:100%;font-size:12.5px"><thead><tr><th align="left">Supplier</th><th align="right">Owed before</th><th align="right">Owed after</th></tr></thead><tbody>
+      ${diff.map((d) => `<tr><td>${esc(d.supplier)}</td><td align="right">${money((d.owed || {}).before)}</td><td align="right"><strong>${money((d.owed || {}).after)}</strong></td></tr>`).join('')}</tbody></table>` : ''}
+    ${p.ok && (p.carrierDiff || []).length ? `<div class="note">${(p.carrierDiff || []).map((d) => esc(d.carrier ? `${String(d.carrier).toUpperCase()}: ${JSON.stringify(d)}` : JSON.stringify(d))).join('<br>')}</div>` : ''}
+    ${p.ok && irreversible.length ? `<div class="note" style="color:var(--amber-500)"><strong>This cannot be undone.</strong> ${esc(irreversible.map((x) => x.why).filter(Boolean)[0] || 'A mistake here is corrected by hand.')}</div>` : ''}
+    ${p.ok ? (IS_SUPER
+      ? `<div class="acts" style="margin-top:8px"><button class="btn solid" data-plan-apply="${esc(key)}">Apply plan</button></div>`
+      : `<div class="note" style="margin-top:8px">Applying needs the <strong>Jarvis profile</strong>. Sign in with it to apply; you can preview as an admin.</div>`) : ''}`;
+}
+
+/* ── A PLAN FROM A SENTENCE ─────────────────────────────────────────────
+   Her words go to /api/ledger/plan/propose; what comes back is a PROPOSAL, shown with
+   anything Jarvis could not tell (as questions, not guesses), anything it assumed, and
+   anything it refused to include. It reaches the books only through Apply. */
+async function sentencePlan() {
+  const out = $('planOut'), text = $('planText').value.trim();
+  if (text.length < 8) { out.innerHTML = '<div class="note">Say what you want changed.</div>'; return; }
+  $('planGo').disabled = true; out.innerHTML = '<div class="note">Reading the books…</div>';
+  await loadMe();
+  try {
+    const r = await api('/api/ledger/plan/propose', { body: { sentence: text } });
+    STATE.sentence = { plan: r.plan, pre: r.preview, planId: 'sentence-' + Date.now(), asked: r.asked };
+    out.innerHTML = `
+      ${(r.questions || []).length ? `<div class="note" style="border-left:3px solid var(--amber-500)"><strong>Jarvis needs you to say:</strong><br>${r.questions.map(esc).join('<br>')}</div>` : ''}
+      ${(r.assumptions || []).length ? `<div class="note"><strong>Jarvis assumed — check these:</strong><br>${r.assumptions.map(esc).join('<br>')}</div>` : ''}
+      ${(r.dropped || []).length ? `<div class="note">Left out: ${r.dropped.map(esc).join('; ')}</div>` : ''}
+      ${r.error ? `<div class="note" style="color:var(--bad, #C5402F)">${esc(r.error)}</div>` : ''}
+      ${r.preview ? preHtml(r.preview, 'sentence') : (r.error || (r.questions || []).length ? '' : '<div class="note">No plan could be made from that.</div>')}
+      ${r.considered ? `<div class="note" style="opacity:.7">Looked at ${r.considered.bills} bill(s), ${r.considered.payments} payment(s) and ${r.considered.carriers} carrier bill(s) that your words pointed to.</div>` : ''}`;
+  } catch (e) { out.innerHTML = `<div class="note" style="color:var(--bad, #C5402F)">${esc(e.message)}</div>`; }
+  $('planGo').disabled = false;
+}
+async function sentenceApply(btn) {
+  const s = STATE.sentence;
+  if (!s || !s.pre || !s.pre.ok) return;
+  const part = ((s.pre.undo || {}).irreversible || []).length ? '\n\nPart of it cannot be undone.' : '';
+  if (!confirm('Apply this plan?\n\n' + (s.pre.steps || []).map((x) => '• ' + (x.says || x)).join('\n') + part)) return;
+  btn.disabled = true;
+  try {
+    await api('/api/ledger/plan/apply', { body: { plan: s.plan, planId: s.planId, asked: s.asked, approvedDiff: s.pre.approvedDiff, approvedCarrierDiff: s.pre.approvedCarrierDiff } });
+    toast('Applied. It is in the list below.', 'good');
+    $('planOut').innerHTML = '<div class="note">Applied.</div>'; STATE.sentence = null;
+    renderPlans(); renderReview();
+  } catch (e) { btn.disabled = false; toast(e.message, 'bad'); }
+}
+
+function planSteps(box) {
+  const carrier = box.querySelector('[data-plan-carrier]').value, ref = box.querySelector('[data-plan-ref]').value.trim();
+  const amount = Number(box.dataset.planAmount), date = box.dataset.planDate;
+  return [
+    { op: 'create-carrier-invoice', carrier, ref, amount, invoice_date: date },
+    { op: 'pay-carrier-invoice', carrier_invoice_id: '#1', amount, date, mode: 'Bank transfer', bank: box.dataset.planBank || null,
+      note: 'from bank line ' + box.dataset.plan },
+  ];
+}
+async function planPreview(box) {
+  const out = box.querySelector('[data-plan-out]');
+  const plan = planSteps(box);
+  if (!plan[0].carrier) { out.innerHTML = '<div class="note">Pick the carrier.</div>'; return; }
+  if (!plan[0].ref) { out.innerHTML = '<div class="note">Type the carrier\'s invoice number — the bank line does not carry it.</div>'; return; }
+  try {
+    const p = await api('/api/ledger/plan/preview', { body: { plan } });
+    box._plan = plan; box._pre = p;
+    box._planId = box._planId || ('bankrow-' + box.dataset.plan + '-' + Date.now());
+    out.innerHTML = preHtml(p, box.dataset.plan);
+  } catch (e) { out.innerHTML = `<div class="note" style="color:var(--bad, #C5402F)">${esc(e.message)}</div>`; }
+}
+async function planApply(box, btn) {
+  if (!box._plan || !box._pre || !box._pre.ok) return;
+  if (!confirm('Apply this plan?\n\n' + (box._pre.steps || []).map((s) => '• ' + (typeof s === 'string' ? s : (s.says || ''))).join('\n') + '\n\nIt cannot be undone.')) return;
+  btn.disabled = true;
+  try {
+    const r = await api('/api/ledger/plan/apply', { body: { plan: box._plan, planId: box._planId, asked: 'Add carrier bill and mark paid, from bank line ' + box.dataset.plan,
+      approvedDiff: box._pre.approvedDiff, approvedCarrierDiff: box._pre.approvedCarrierDiff } });
+    toast('Applied. The bank line should now show as a Match.', 'good');
+    renderReview().then(renderBooked).then(renderPlans);
+  } catch (e) { btn.disabled = false; toast(e.message, 'bad'); }
+}
+async function renderPlans() {
+  if (!IS_SUPER) { $('plans').innerHTML = ''; return; }
+  let d = null;
+  try { d = await api('/api/ledger/plan/log'); } catch (e) { d = null; }
+  if (!d) { $('plans').innerHTML = ''; return; }
+  const rows = (d.rows || []).filter((x) => x.applied);
+  $('plans').innerHTML = `<h2 class="sec">Plans applied <span class="n">${rows.length}</span></h2>
+    <div class="card">${rows.length ? rows.map((x) => `<div class="row1" style="margin:4px 0;flex-wrap:wrap">
+        <span class="when">${esc(String(x.at || '').slice(0, 16).replace('T', ' '))}</span>
+        <span class="desc">${esc(x.actor || '')}</span>
+        <span class="desc" style="flex:1;min-width:160px">${esc(x.asked || (x.steps || []).map((s) => (typeof s === 'string' ? s : (s.says || ''))).join('; '))}</span>
+        ${(x.irreversible || []).length ? '<span class="badge ask">cannot be undone</span>' : ''}
+      </div>`).join('') : '<div class="empty">None yet.</div>'}
+      <div class="note">Every applied plan is kept here with who applied it and what it was asked. Undoing from this screen is not built yet; a reversible plan can be undone by asking for the opposite change in a new sentence.</div></div>`;
+}
+
+async function renderBooked() {
+  let d = null;
+  try { d = await api('/api/bank/review/categorised'); } catch (e) { d = null; }
+  if (!d) { $('booked').innerHTML = ''; return; }
+  const rows = d.entries || [];
+  $('booked').innerHTML = `<h2 class="sec">Booked from this screen <span class="n">${rows.length}</span></h2>
+    <div class="card">${rows.length ? rows.map((e) => `<div class="row1" style="margin:4px 0">
+        <span class="amt" style="font-size:14px">−${money(e.amount)}</span>
+        <span class="when">${esc(e.date)}</span>
+        <span class="desc">${esc(e.account)} · ${esc(e.account_name || '')}</span>
+        <span class="desc" style="color:var(--text-faint);flex:1;min-width:120px">${esc(e.descriptor || '')}</span>
+        <button class="btn quiet" data-uncat="${esc(e.bank_row_id)}">Undo</button>
+      </div>`).join('') : '<div class="empty">Nothing yet. Open a withdrawal in For review, pick a category and Post.</div>'}
+      <div class="note">Undo takes the entry out of the books and puts the line back in For review.</div></div>`;
+}
+
 async function renderReview() {
+  await loadCats();
+  await loadMe();
   let d = null;
   try { d = await api('/api/bank/review'); } catch (e) { d = { error: e.message }; }
   if (d.error) {
@@ -1090,9 +1293,12 @@ async function renderReview() {
      one. */
   const creates = q.rows.filter((r) => r.state === 'add' || r.state === 'choose' || r.state === 'ask');
   if (creates.length) {
-    out.push(`<div class="card"><div class="note">${creates.length} row(s) below would CREATE a record
-      rather than tie two together. Those go through the plan screen, so you can see what each one does
-      to what you owe before it happens — not built yet, so they are listed without a button.</div></div>`);
+    out.push(`<div class="card"><div class="note">${creates.length} row(s) below would CREATE a record rather than tie two
+      together. Open a row: a withdrawal can be <strong>categorised</strong> (pick the account, then Post), and a
+      carrier payment (TQL, NTG, Schneider) opens a <strong>plan</strong> you preview first; only the Jarvis profile can
+      apply a plan. Rows with several exact fits, and deposits that match no invoice, still have no action.</div></div>`);
+  /* Withdrawals Jarvis cannot tie to a record DO have an action now: open the row,
+     pick a category, Post. The banner above was written before that existed. */
   }
 
   // The rows join the deposits in the one list (mergeOut); only the bars
@@ -1117,7 +1323,7 @@ async function renderReview() {
       </div>
       <div class="detail">
         <div class="note" style="margin-top:10px">${esc(r.why || '')}</div>
-        ${r.state === 'match' ? '' : `<div class="note">Jarvis would: <strong>${esc(r.label)}</strong> — that creates a record, so it goes through the plan screen, which is not built yet.</div>`}
+        ${r.state === 'match' ? '' : (r.kind === 'carrier-bill' ? planHtml(r) : categoriseHtml(r))}
         <div class="acts">${r.state === 'match' ? '' : ruleBtn(r.descriptor, 'out')}</div>
       </div>
     </div>`;
@@ -1266,8 +1472,8 @@ document.addEventListener('keydown', (ev) => {
   const typing = /^(INPUT|SELECT|TEXTAREA)$/.test((ev.target && ev.target.tagName) || '');
   if (typing || ev.metaKey || ev.ctrlKey || ev.altKey) return;
   if (ev.key === '/') { ev.preventDefault(); showTab('review'); $('q').focus(); return; }
-  const tabs = ['review', 'aside', 'recon', 'setup'];
-  if (/^[1-4]$/.test(ev.key)) { showTab(tabs[Number(ev.key) - 1]); return; }
+  const tabs = ['review', 'aside', 'recon', 'setup', 'plan'];
+  if (/^[1-5]$/.test(ev.key)) { showTab(tabs[Number(ev.key) - 1]); return; }
   if (ev.key === 'Enter' || ev.key === 'o') {
     const f = document.querySelector('[data-pane="review"] .card.focus.row');
     if (f) { ev.preventDefault(); toggleRow(f); return; }
@@ -1277,6 +1483,8 @@ document.addEventListener('keydown', (ev) => {
 });
 $('q').addEventListener('input', (ev) => { STATE.q = ev.target.value || ''; resetPages(); applyFilter(); });
 document.addEventListener('change', (ev) => {
+  const cbox = ev.target.closest && ev.target.closest('[data-cat]');
+  if (cbox && (ev.target.matches('[data-cat-sel]') || ev.target.matches('[data-cat-co]'))) { catPreview(cbox); return; }
   const ps = ev.target.closest && ev.target.closest('[data-pgsize]');
   if (!ps) return;
   STATE.pageSize = Number(ps.value) || 50;
@@ -1329,6 +1537,36 @@ document.addEventListener('click', async (ev) => {
     document.querySelectorAll('#dir [data-dir]').forEach((b) => b.classList.toggle('on', b === dirb));
     resetPages();
     return applyFilter();
+  }
+
+  /* Post a categorised withdrawal. The preview is asked again at the moment of the
+     press, so what she confirms is what the server would book now. */
+  const pp = ev.target.closest('[data-plan-preview]');
+  if (pp) { planPreview(pp.closest('[data-plan]')); return; }
+  const pa = ev.target.closest('[data-plan-apply]');
+  if (pa) { if (pa.dataset.planApply === 'sentence') sentenceApply(pa); else planApply(pa.closest('[data-plan]'), pa); return; }
+  if (ev.target.closest('#planGo')) { sentencePlan(); return; }
+  const cp = ev.target.closest('[data-cat-post]');
+  if (cp) {
+    const box = cp.closest('[data-cat]');
+    cp.disabled = true;
+    const p = await catPreview(box);
+    if (!p || !p.ok) return;
+    if (!confirm(`Post this?\n\n${p.effect}\n\nJarvis's books only. You can undo it under Posted.`)) { cp.disabled = false; return; }
+    const sel = box.querySelector('[data-cat-sel]'), co = box.querySelector('[data-cat-co]');
+    try {
+      await api('/api/bank/review/categorise', { body: { id: box.dataset.cat, account: sel.value, entity: co.value || null } });
+      toast('Posted — ' + p.effect, 'good');
+      renderReview().then(renderBooked);
+    } catch (e) { cp.disabled = false; toast(e.message, 'bad'); }
+    return;
+  }
+  const uc = ev.target.closest('[data-uncat]');
+  if (uc) {
+    if (!confirm('Undo this? It comes out of the books and the line goes back in For review.')) return;
+    try { await api('/api/bank/review/categorise/undo', { body: { id: uc.dataset.uncat } });
+      toast('Undone', 'good'); renderReview().then(renderBooked); } catch (e) { toast(e.message, 'bad'); }
+    return;
   }
 
   const one = ev.target.closest('[data-reviewmatch]');
@@ -1437,6 +1675,8 @@ async function load() {
     renderFeed();
     renderReconcile();
     renderReview();
+    renderBooked();
+    renderPlans();
     renderRules();
     renderAside();
   } catch (e) {

@@ -77,12 +77,20 @@ const PLAN = () => ([
 
 // ── A — WHO MAY DO THIS ──────────────────────────────────────────────────
 {
-    section('A — a plan is the Jarvis profile, not any admin');
+    section('A — an admin may LOOK; only the Jarvis profile may APPLY');
     ck('signed in as super', !!superSid);
     ck('signed in as admin', !!adminSid);
+    // Apsara, 2026-10-13: "apply for jarvis only". Preview writes nothing, so it is
+    // open to an admin; applying, and reading the log of what was applied, are not.
+    const before = JSON.stringify(bills.list());
     const asAdmin = await req('POST', '/api/ledger/plan/preview', { sid: adminSid, body: { plan: PLAN() } });
-    ck('an ordinary admin is refused', asAdmin.status === 403, `${asAdmin.status} ${asAdmin.raw.slice(0, 120)}`);
-    ck('  and told why it is reserved', /delete a bill|moves money/.test(asAdmin.raw), asAdmin.raw.slice(0, 160));
+    ck('an ordinary admin may preview', asAdmin.status === 200, `${asAdmin.status} ${asAdmin.raw.slice(0, 120)}`);
+    ck('  and it wrote nothing', JSON.stringify(bills.list()) === before);
+    const adminApply = await req('POST', '/api/ledger/plan/apply', { sid: adminSid, body: { plan: PLAN(), planId: 'admin-try' } });
+    ck('an ordinary admin is refused APPLY', adminApply.status === 403, `${adminApply.status} ${adminApply.raw.slice(0, 120)}`);
+    ck('  and told why it is reserved', /delete a bill|moves money/.test(adminApply.raw), adminApply.raw.slice(0, 160));
+    ck('  and nothing changed', JSON.stringify(bills.list()) === before);
+    ck('an ordinary admin cannot read the applied-plans log', (await req('GET', '/api/ledger/plan/log', { sid: adminSid })).status === 403);
     ck('no session at all is 401', (await req('POST', '/api/ledger/plan/preview', { body: { plan: PLAN() } })).status === 401);
 }
 

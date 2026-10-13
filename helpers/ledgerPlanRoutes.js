@@ -44,15 +44,18 @@ function mount(app, cfg) {
     // ── POST /api/ledger/plan/preview ────────────────────────────────────
     // Writes nothing. Returns the plan in words, the problems if it does
     // not verify, and the per-supplier diff if it does.
-    app.post('/api/ledger/plan/preview', (req, res) => {
-        if (!sup(req, res)) return;
-        const body = req.body || {};
-        const plan = Array.isArray(body.plan) ? body.plan : null;
-        if (!plan) return res.status(400).json({ error: 'send a plan — an array of operations' });
-        try {
-            const world = LA.readWorld();
-            const v = LP.verify(plan, world);
-            res.json({
+    // Preview WRITES NOTHING, so any admin may look (Apsara, 2026-10-13: "apply for
+    // jarvis only"). Apply and the log stay with the Jarvis profile.
+    const adm = (req, res) => {
+        if (req.role !== 'admin') { res.status(403).json({ error: 'only an admin can preview a ledger plan' }); return false; }
+        return true;
+    };
+    // The preview body, shared by the hand-built preview and the sentence proposal so
+    // the two cannot drift apart in what they show.
+    const previewPayload = (plan) => {
+    const world = LA.readWorld();
+    const v = LP.verify(plan, world);
+    return {
                 ok: v.ok,
                 steps: LP.describe(plan),
                 problems: v.problems || [],
@@ -81,7 +84,35 @@ function mount(app, cfg) {
                 // undone" is not information, it is an apology — so it
                 // goes on the confirmation screen.
                 undo: LP.reversibility(plan),
-            });
+            };
+    };
+
+    app.post('/api/ledger/plan/preview', (req, res) => {
+        if (!adm(req, res)) return;
+        const body = req.body || {};
+        const plan = Array.isArray(body.plan) ? body.plan : null;
+        if (!plan) return res.status(400).json({ error: 'send a plan — an array of operations' });
+        try { res.json(previewPayload(plan)); } catch (e) { res.status(500).json({ error: e.message }); }
+    });
+
+    // ── POST /api/ledger/plan/propose ──────────────────────────────────
+    // Apsara, 2026-10-13: her sentence in, a plan out. helpers/ledgerPropose.js has
+    // the reasoning. At this layer: admin may ask (it changes nothing and costs one
+    // model call, which the AI usage page counts), the plan it returns goes through
+    // the same verify + preview as a hand-built one, and applying is still the
+    // Jarvis profile through /apply.
+    app.post('/api/ledger/plan/propose', async (req, res) => {
+        if (!adm(req, res)) return;
+        const sentence = String((req.body || {}).sentence || '').trim();
+        if (!sentence) return res.status(400).json({ error: 'say what you want changed' });
+        try {
+            const out = await require('./ledgerPropose').propose(sentence);
+            const preview = out.plan && out.plan.length ? previewPayload(out.plan) : null;
+            res.json({ ok: out.ok, asked: out.asked, plan: out.plan, questions: out.questions || [],
+                assumptions: out.assumptions || [], dropped: out.dropped || [], error: out.error || null,
+                // What the model was shown, so a wrong proposal can be judged against it.
+                considered: out.candidates ? { bills: out.candidates.bills.length, payments: out.candidates.payments.length, carriers: out.candidates.carriers.length } : null,
+                preview });
         } catch (e) { res.status(500).json({ error: e.message }); }
     });
 

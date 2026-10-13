@@ -562,6 +562,97 @@ function mount(app, cfg) {
         } catch (e) { res.status(400).json({ error: e.message }); }
     });
 
+    // ── CATEGORISE A BANK LINE (Apsara, 2026-10-13) ──────────────────────
+    // "There should be a categoriser dropdown and post/match button, just like
+    // QuickBooks." helpers/bankEntries.js has the reasoning; at this layer:
+    //   · admin only, audited before and after, and undoable;
+    //   · the queue is REBUILT here and the row must still be one Jarvis could
+    //     not tie to a record. If it has since become a Match, categorising it
+    //     would book the same money twice, so it is refused;
+    //   · `preview: true` returns the entry it WOULD book and writes nothing.
+    const reviewRow = (id) => {
+        const ledger = require('./bankLedger');
+        const BO = require('./bankOut');
+        const BR = require('./bankReview');
+        const BRec = require('./bankReconcile');
+        const BB = require('./booksBuild');
+        const rows = ledger.list();
+        const ledgerRow = rows.find((r) => r && r.id === id) || null;
+        if (!ledgerRow) return { ledgerRow: null, row: null };
+        const built = BB.build({});
+        const results = BRec.bankAccounts()
+            .flatMap((a) => BO.sweep({ rows, lines: built.lines, code: a.code }).results);
+        return { ledgerRow, row: BR.queue({ withdrawalResults: results }).rows.find((r) => r.id === id) || null };
+    };
+
+    app.get('/api/bank/review/categories', (req, res) => {
+        try {
+            const E = require('./entities');
+            res.json({
+                categories: require('./bankEntries').categories(),
+                companies: E.ENTITIES.map((e) => ({ id: e.id, name: e.uiName })),
+            });
+        } catch (e) { res.status(500).json({ error: e.message }); }
+    });
+
+    // What has been booked from the screen, newest first (the "Posted" list, with Undo).
+    app.get('/api/bank/review/categorised', (req, res) => {
+        try {
+            const entries = require('./bankEntries').list().filter((e) => e && !e.reversed_at)
+                .sort((a, z) => String(z.at).localeCompare(String(a.at))).slice(0, 100);
+            res.json({ entries });
+        } catch (e) { res.status(500).json({ error: e.message }); }
+    });
+
+    app.post('/api/bank/review/categorise', async (req, res) => {
+        if (!admin(req, res)) return;
+        const b = req.body || {};
+        const id = String(b.id || '').trim();
+        if (!id) return res.status(400).json({ error: 'which row?' });
+        try {
+            const BE = require('./bankEntries');
+            const audit = require('./audit');
+            const { ledgerRow, row } = reviewRow(id);
+            if (!ledgerRow) return res.status(404).json({ error: 'no bank row with that id' });
+            if (!row) return res.status(409).json({ error: 'that row is no longer in the review queue — it may already be matched, posted or set aside. Reload and look again.' });
+            if (row.state !== 'ask' && row.state !== 'add') {
+                return res.status(409).json({ error: row.state === 'match'
+                    ? 'Jarvis found a recorded payment for this row — press Match instead, or this money would be booked twice'
+                    : `this row is "${row.label}" — it cannot be categorised`, state: row.state });
+            }
+            const plan = BE.plan(ledgerRow, { account: b.account, entity: b.entity || null });
+            if (b.preview) return res.json({ ok: plan.ok, problems: plan.problems, effect: plan.effect, entry: plan.entry, needs_company: plan.problems.some((p) => /which company/.test(p)) });
+            if (!plan.ok) return res.status(400).json({ error: plan.problems.join('; '), problems: plan.problems, needs_company: plan.problems.some((p) => /which company/.test(p)) });
+
+            const actor = req.profile || req.role || 'admin';
+            const entry = await audit.record({ action: 'categorise-bank-line', subject: id, actor, role: req.role, ip: req.ip,
+                detail: { amount: plan.entry.amount, account: plan.entry.account, entity: plan.entry.entity, descriptor: plan.entry.descriptor, date: plan.entry.date } });
+            try {
+                const out = await BE.post(ledgerRow, { account: b.account, entity: b.entity || null, by: actor, note: b.note || null });
+                await audit.complete(entry, 'done', { entry_id: out.entry.id, already: out.already });
+                res.json({ ok: true, entry: out.entry, already: out.already, effect: plan.effect });
+            } catch (e) {
+                await audit.complete(entry, 'failed', { reason: e.message });
+                throw e;
+            }
+        } catch (e) { res.status(400).json({ error: e.message }); }
+    });
+
+    app.post('/api/bank/review/categorise/undo', async (req, res) => {
+        if (!admin(req, res)) return;
+        const id = String((req.body || {}).id || '').trim();
+        if (!id) return res.status(400).json({ error: 'which row?' });
+        try {
+            const audit = require('./audit');
+            const actor = req.profile || req.role || 'admin';
+            const entry = await audit.record({ action: 'undo-categorise-bank-line', subject: id, actor, role: req.role, ip: req.ip, detail: {} });
+            const undone = await require('./bankEntries').undoForRow(id, { by: actor });
+            await audit.complete(entry, undone ? 'done' : 'failed', undone ? { entry_id: undone.id } : { reason: 'nothing booked for this row' });
+            if (!undone) return res.status(404).json({ error: 'nothing was booked for that row' });
+            res.json({ ok: true, undone: undone.id });
+        } catch (e) { res.status(400).json({ error: e.message }); }
+    });
+
     // ── GET /api/bank/reconcile ──────────────────────────────────────────
     // Apsara, 2026-10-08: "so that i dont need to look out for statements
     // whether payment received or sent ever again."

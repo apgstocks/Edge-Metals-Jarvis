@@ -241,6 +241,20 @@ const RULES = {
     },
 
     // ── A BANK CHARGE ────────────────────────────────────────────────────
+    // ── A BANK LINE SHE CATEGORISED (helpers/bankEntries.js) ─────────────
+    // Money out only: Dr the account she chose, Cr the bank it left. The
+    // account must be one bankEntries offers; a rule that accepted any code
+    // would let a stray value post receivables or the bank to itself.
+    'bank-entry': (tx) => {
+        const bank = bankAccount(tx);
+        if (!bank) return { problem: `cannot tell which bank "${tx.bank || ''}" is` };
+        const acct = C.get(String(tx.account || ''));
+        if (!acct || !(acct.type === 'expense' || acct.code === '3100')) {
+            return { problem: `account "${tx.account || ''}" is not one a bank line can be categorised to` };
+        }
+        return { debits: [[acct.code, r2(num(tx.amount))]], credits: [[bank, r2(num(tx.amount))]] };
+    },
+
     'bank-charge': (tx) => {
         const bank = bankAccount(tx);
         if (!bank) return { problem: `cannot tell which bank "${tx.bank || ''}" is` };

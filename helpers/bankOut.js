@@ -258,7 +258,10 @@ function autoTickable(result) {
 // one would appear on no screen — the same bug bankReconcile.js's consumed
 // claims exist to stop, and the reason both files do it rather than one.
 function sweep({ rows = [], lines = [], code, from = null, to = null, ...opts } = {}) {
-    const pool = payments(lines, { code, from, to });
+    // A payment that exists BECAUSE of one bank row (helpers/bankEntries.js) is
+    // already that row's. Left in the pool, a second $5 fee within ten days
+    // would "match" the first one's entry and stay unbooked without a word.
+    const pool = payments(lines, { code, from, to }).filter((p) => !(p.source && p.source.store === 'bank_entries'));
     // Rows for THIS bank only. 1010 is Bank of America and 1020 is Chase;
     // offering a Chase withdrawal against a payment the books say left BofA
     // would be the same class of error as matching a deposit against the

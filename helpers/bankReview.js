@@ -98,9 +98,12 @@ const KINDS = [
       store: 'party_invoices',
       note: 'this is a party-register hauler — its invoice comes from your '
           + 'sheet, so pay it from the Transport tab rather than creating one here' },
-    { re: /\b(service charge|maintenance fee|monthly fee|wire fee|overdraft|nsf)\b/i,
+    { re: /\b(service charge|maintenance fee|monthly fee|wire fee|transfer fee|overdraft|nsf|returned item|analysis fee|account fee|ach fee)\b/i,
       postable: true,
-      kind: 'bank-charge', label: 'Add as a bank charge', account: '6300',
+      // 6200, the chart's 'Bank charges'. This said 6300 until 2026-10-13, an account
+      // chartOfAccounts.js does not have: nothing posted from it yet, so nothing was
+      // misbooked, but the first executor would have posted to nowhere.
+      kind: 'bank-charge', label: 'Add as a bank charge', account: '6200',
       store: 'journal' },
 ];
 
@@ -158,18 +161,23 @@ function fromWithdrawal(res) {
     // "Post" tells her nothing, "Add as a carrier bill" tells her what will
     // exist when she presses it.
     const k = guessKind(base.descriptor);
+    // Apsara, 2026-10-13: "no way to tell/type what it is". Every withdrawal Jarvis
+    // cannot tie to a record can be categorised from a list (helpers/bankEntries.js);
+    // the list opens on a suggestion only where the wording is unambiguous.
+    const categorise = { suggested: require('./bankEntries').suggest(base.descriptor) };
     // `add` ONLY where a store will take the record. A recognised hauler
     // with no hand-add path is still named on the row — she gets to see
     // Jarvis knew what it was — but as `ask`, with where to go instead.
     if (k && k.postable) {
-        return { ...base, state: 'add', label: k.label, kind: k.kind, account: k.account,
-            why: `nothing recorded matches this, and the description names ${base.descriptor.trim()}` };
+        return { ...base, state: 'add', label: k.label, kind: k.kind, account: k.account, categorise,
+            why: k.kind === 'bank-charge' ? 'nothing recorded matches this, and it reads like a bank fee'
+                : `nothing recorded matches this, and the description names ${base.descriptor.trim()}` };
     }
     if (k) {
-        return { ...base, state: 'ask', label: k.label, kind: k.kind,
+        return { ...base, state: 'ask', label: k.label, kind: k.kind, categorise,
             why: k.note || 'nothing recorded matches this withdrawal' };
     }
-    return { ...base, state: 'ask', label: 'Tell Jarvis what this is',
+    return { ...base, state: 'ask', label: 'Tell Jarvis what this is', categorise,
         why: res.note || 'nothing recorded matches this withdrawal' };
 }
 

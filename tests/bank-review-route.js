@@ -283,8 +283,12 @@ const sid = ((await req('POST', '/login', { body: { password: process.env.ADMIN_
        // is styling; the property is that it sits behind the state ternary.
        /\$\{r\.state === 'match'\s*\n\s*\? `<button class="btn (?:go|solid)" data-reviewmatch/.test(page),
        'the Match button must be behind a state check, not rendered for every row');
-    ck('  and the page says those go through the plan screen, which is not built',
-       /not built yet/.test(page));
+    // 2026-10-13: the plan screen and the categoriser now exist, so the page must
+    // not say "not built yet". What it must still do is say plainly which rows have
+    // an action and which do not, so a label is never mistaken for a button.
+    ck('  and the page says which of those have an action now, and which still have none',
+       /categorised/.test(page) && /apply a plan/.test(page) && /still have no action/.test(page)
+       && !/not built yet, so they are listed without a button/.test(page));
 }
 
 server.close();

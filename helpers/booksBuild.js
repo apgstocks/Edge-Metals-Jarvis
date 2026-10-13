@@ -260,6 +260,13 @@ function build({ from, to } = {}) {
         txs.push(require('./interCompany').toTx(t));
     }
 
+    // Bank lines she categorised on the bank screen. They carry their own
+    // company (chosen, or taken from the bank row), so they skip place().
+    for (const t of safely('bank_entries', () => require('./bankEntries').toTxs(), notes)) {
+        if (!inRange(t.date)) continue;
+        txs.push(t);
+    }
+
     const j = P.journal(txs);
     return {
         from: from || null, to: to || null,
