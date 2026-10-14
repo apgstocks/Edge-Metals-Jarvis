@@ -51,16 +51,26 @@ const LOGS = cfg.LOGS_DIR;
 fs.mkdirSync(LOGS, { recursive: true });
 
 // A deploy, then a crash loop: shutdown→boot is explained, boot→boot is not.
+//
+// RELATIVE TO NOW, deliberately. boots() counts over a rolling 48-hour
+// window, so an absolutely-dated fixture is a test with a fuse in it: this
+// file was written on 2026-10-14 against 2026-10-11 timestamps and five
+// checks went red on 2026-10-15 when the fixture aged out of the window it
+// was being measured against. A test that breaks because the calendar moved
+// is a test that gets deleted.
+const AT = (msAgo) => new Date(Date.now() - msAgo).toISOString();
+const CRASH_AT = AT(5 * 3600 * 1000);          // 5 hours ago, inside any window here
+const SHUTDOWN_AT = AT(6 * 3600 * 1000);
 fs.writeFileSync(path.join(LOGS, 'jarvis.log'), [
-    '2026-10-11T18:00:00.000Z SIGTERM — closing',
-    '2026-10-11T18:00:02.000Z BOOT pid 101 node v22',
-    '2026-10-11T19:00:00.000Z uncaughtException: TypeError: payableOf is not a function',
-    '2026-10-11T19:00:04.000Z BOOT pid 102 node v22',
-    '2026-10-11T19:00:41.000Z BOOT pid 103 node v22',
+    `${SHUTDOWN_AT} SIGTERM — closing`,
+    `${AT(6 * 3600 * 1000 - 2000)} BOOT pid 101 node v22`,
+    `${CRASH_AT} uncaughtException: TypeError: payableOf is not a function`,
+    `${AT(5 * 3600 * 1000 - 4000)} BOOT pid 102 node v22`,
+    `${AT(5 * 3600 * 1000 - 41000)} BOOT pid 103 node v22`,
     '',
 ].join('\n'));
 
-fs.writeFileSync(path.join(LOGS, 'crash-2026-10-11T19:00:00.000Z.log'),
+fs.writeFileSync(path.join(LOGS, `crash-${CRASH_AT}.log`),
     'TypeError: payableOf is not a function\n'
     + '    at generateAndStoreLoadPdfs (/app/helpers/loadsPdf.js:47:31)\n'
     + '    at /app/routes/yard.js:479:29\n');
@@ -99,7 +109,7 @@ section('A — the reader');
        /payableOf is not a function/.test(one.headline || ''), one.headline);
     // From the NAME, not stat(): the name is what crashlog.js chose at the
     // moment of death, and a file copied or restored carries a new mtime.
-    ck('  dated from the filename', one.at === '2026-10-11T19:00:00.000Z', one.at);
+    ck('  dated from the filename', one.at === CRASH_AT, one.at);
 
     const p = hr.thisProcess();
     ck('it reports this process', p.pid === process.pid && p.rss_mb > 0, JSON.stringify(p));
@@ -120,7 +130,7 @@ section('B — it is not a file server');
        'crash-report.bak matched a loose /^crash-/ and must not match the strict one');
     // The guard, as a property rather than by inspection of the glob.
     ck('the name pattern accepts what crashlog.js writes',
-       hr.CRASH_NAME.test('crash-2026-10-11T19:00:00.000Z.log'));
+       hr.CRASH_NAME.test(`crash-${CRASH_AT}.log`));
     ck('  and rejects a neighbour', !hr.CRASH_NAME.test('crash-report.bak')
         && !hr.CRASH_NAME.test('notes.txt') && !hr.CRASH_NAME.test('crash-../../id_rsa.log'));
 
@@ -227,18 +237,18 @@ section('D — END TO END, through the real route');
         const signIn = async (pw) => ((await req('POST', '/login', { body: { password: pw } })).json || {}).sid;
 
         // ── THE GATE ────────────────────────────────────────────────────
-        const anon = await req('GET', '/api/health-report');
+        const anon = await req('GET', '/api/diagnostics');
         ck('no session gets no crash stacks', anon.status === 401 || anon.status === 403, `${anon.status}`);
         ck('  and no stack leaks in the refusal', !/payableOf/.test(anon.raw), anon.raw.slice(0, 120));
 
         const userSid = await signIn(process.env.APP_PASSWORD);
         ck('the app password signs in', !!userSid);
-        const asUser = await req('GET', '/api/health-report', { sid: userSid });
+        const asUser = await req('GET', '/api/diagnostics', { sid: userSid });
         ck('  but does NOT get the report', asUser.status === 401 || asUser.status === 403, `${asUser.status}`);
 
         const sid = await signIn(process.env.ADMIN_PASSWORD);
         ck('the admin password signs in', !!sid);
-        const r = await req('GET', '/api/health-report', { sid });
+        const r = await req('GET', '/api/diagnostics', { sid });
         ck('and gets the report', r.status === 200 && r.json && r.json.ok === true, `${r.status} ${r.raw.slice(0, 160)}`);
 
         // The figures the helper produced have to survive the round trip.
@@ -250,11 +260,11 @@ section('D — END TO END, through the real route');
 
         // Query parameters are numbers and are clamped. No parameter reaches
         // the filesystem — accepting ?file= would be one line and a hole.
-        const clamped = await req('GET', '/api/health-report?hours=999999&crashes=-5', { sid });
+        const clamped = await req('GET', '/api/diagnostics?hours=999999&crashes=-5', { sid });
         ck('an absurd window is clamped, not obeyed',
            clamped.status === 200 && clamped.json.boots.window_hours <= 24 * 30,
            JSON.stringify(clamped.json.boots && clamped.json.boots.window_hours));
-        const junk = await req('GET', '/api/health-report?hours=../../etc/passwd', { sid });
+        const junk = await req('GET', '/api/diagnostics?hours=../../etc/passwd', { sid });
         ck('  and a non-number falls back to the default',
            junk.status === 200 && junk.json.boots.window_hours === 48,
            JSON.stringify(junk.json.boots && junk.json.boots.window_hours));
@@ -264,7 +274,12 @@ section('D — END TO END, through the real route');
         ck('/health-report serves the page', page.status === 200 && /<h1>Health<\/h1>/.test(page.raw),
            `${page.status}`);
         ck('  with the shared rail', page.raw.includes('<script src="/sidebar.js" data-page="health" defer></script>'));
-        ck('  and it asks the route that exists', /\/api\/health-report/.test(page.raw));
+        // The page asks /api/diagnostics, not /api/health-report: /api/health
+        // is a bare prefix of the latter and tests/ports.js section H refuses
+        // a NEW route shaped that way. Asserted both ways so a rename back
+        // cannot pass quietly.
+        ck('  and it asks the route that exists', /\/api\/diagnostics/.test(page.raw));
+        ck('  and not the prefix-clashing name it used to', !/\/api\/health-report/.test(page.raw));
 
         // THE MISTAKE THIS PINS: /health was already a liveness probe.
         const probe = await req('GET', '/health');

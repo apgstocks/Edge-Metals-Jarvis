@@ -54,12 +54,21 @@ const { loadJson, mutateJson } = require('./json');
 // honest placeholder with no store behind them. So this connects a screen
 // she already has rather than inventing one.
 //
-// Mr. Kim and Hynos appear in her mails too ("10c for Mr.Kim and 10c for
-// Hynos included") but she has never asked for them as tabs, and a name
-// read out of an email is not a decision. Each is one entry here plus one
-// sub-tab button when she says so.
+// Mr. Kim appears in her mails too ("10c for Mr.Kim and 10c for Hynos
+// included") but she has never asked for him as a tab, and a name read out
+// of an email is not a decision. One entry here plus one sub-tab button
+// when she says so.
+//
+// 'joey' is labelled "Joey (Hynos)" because the two names are a person and
+// his company, and both are needed. Apsara, 2026-10-15: "Hynos is a company
+// joey is its owner" — and her sample commission invoice is issued by HYNOS
+// (beneficiary Hynos, signed Hynos SooAn Choi, paid to Industrial Bank of
+// Korea), while "Joey" in her address book is a broker alias shared across
+// Yeon Seong, Shinyoung, CM Trading, CM Global, Taewon and Daekwang. So the
+// tab stays the person she deals with; the register row names the entity the
+// wire actually goes to. Her choice, asked 2026-10-15.
 const PARTIES = { zimex: 'Zimex', eagle: 'Eagle Trans', jio: 'Jio', sher: 'Sher Trucking', ajtransport: 'AJ Transport', panmetal: 'Pan Metal', gardunos: "Garduno's",
-    joey: 'Joey' };
+    joey: 'Joey (Hynos)' };
 // A party whose line amount is a COMMISSION on a sale, not something they
 // invoiced. Pan Metal has always been one — it is named here so the rule is
 // a list rather than a special case buried in amountOf().
@@ -81,6 +90,54 @@ const up = (v) => txt(v).toUpperCase().replace(/\s+/g, '');
 const REVISED_RE = /\s*\b(REV(ISED|ISION)?|CORRECTED|AMENDED)\b.*$/i;
 const baseInvoice = (no) => txt(no).replace(REVISED_RE, '').trim();
 const isRevised = (no) => REVISED_RE.test(txt(no)) && baseInvoice(no) !== '';
+
+// ── TWO COMMISSION LINES ON ONE CONTAINER ────────────────────────────────
+// Hynos's invoice EM-261014-01 bills eight contracts TWICE on the same
+// container — one container, two weights, two commission figures (26JY51 /
+// KOCU5148281 at $32.16 and again at $87.14). The line key is
+// party:invoice:container, so both lines produce the identical key and
+// upsertMany treats the second as an UPDATE of the first. On one import of
+// that one invoice $237.32 vanishes with no error and no skip reason.
+//
+// Apsara chose (2026-10-15) to widen the key for COMMISSION PARTIES ONLY,
+// so the seven other parties are untouched. This is narrower still, and
+// deliberately so: the suffix is added only when a batch ACTUALLY collides,
+// and only to the second and later rows of the collision. A commission line
+// that does not collide keeps a byte-identical key, which matters because
+// her register lives on the VM and I cannot see how many Pan Metal rows are
+// already in it — a key that changed under them would re-insert every one as
+// a duplicate rather than update it.
+//
+// The ordinal comes from the data (sorted by amount, then weight), not from
+// the position in the batch, so a re-import of the same invoice reproduces
+// the same keys whatever order the extractor emits lines in.
+//
+// KNOWN HOLE, not closed: this sees collisions WITHIN one import. If the two
+// halves of a split container arrive in separate imports, the second still
+// overwrites the first, because "a different line with the same key" and "a
+// correction to the line already here" are the same thing from here and
+// guessing between them would be worse. An invoice is imported whole, so her
+// actual flow is covered; upsertMany reports dup_lines so a split that did
+// happen is visible rather than silent.
+const DUP_SUFFIX_RE = /#dup=\d+$/;
+const dupSuffixOf = (key) => { const m = DUP_SUFFIX_RE.exec(txt(key)); return m ? m[0] : ''; };
+
+function disambiguateDups(rows) {
+    const groups = new Map();
+    for (const r of rows) {
+        if (!COMMISSION_PARTIES.has(r.party)) continue;
+        if (!groups.has(r.key)) groups.set(r.key, []);
+        groups.get(r.key).push(r);
+    }
+    let marked = 0;
+    for (const g of groups.values()) {
+        if (g.length < 2) continue;
+        const ordered = g.slice().sort((a, b) => (num(a.amount) - num(b.amount)) || ((num(a.quantity) || 0) - (num(b.quantity) || 0)));
+        // The first keeps the key it has always had; only the extras are marked.
+        for (let i = 1; i < ordered.length; i++) { ordered[i].key += `#dup=${i + 1}`; marked++; }
+    }
+    return marked;
+}
 
 // What this line is worth, by party — the same field order the sweep itself reads.
 function amountOf(party, r) {
@@ -128,9 +185,13 @@ function normalize(rec) {
 
 const list = () => { const r = loadJson(cfg.PARTY_INVOICES_FILE, []); return Array.isArray(r) ? r : []; };
 
-// rows: normalize().row[]. Returns { added, updated, kept_locked }.
+// rows: normalize().row[]. Returns { added, updated, kept_locked, dup_lines }.
 async function upsertMany(rows) {
     let added = 0, updated = 0, keptLocked = 0;
+    // Copied before disambiguateDups rewrites keys, so a caller that reuses
+    // its own rows afterwards sees them exactly as it built them.
+    rows = (Array.isArray(rows) ? rows : []).map((r) => ({ ...r }));
+    const dupLines = disambiguateDups(rows);
     const paidNow = paidByRow();
     await mutateJson(cfg.PARTY_INVOICES_FILE, [], (cur) => {
         const arr = Array.isArray(cur) ? cur : [];
@@ -147,7 +208,7 @@ async function upsertMany(rows) {
         }
         return arr;
     }, { strict: true });
-    return { added, updated, kept_locked: keptLocked };
+    return { added, updated, kept_locked: keptLocked, dup_lines: dupLines };
 }
 
 
@@ -376,7 +437,13 @@ async function supersedeApply() {
         await mutateJson(cfg.PARTY_INVOICES_FILE, [], (cur) => {
             const arr = (Array.isArray(cur) ? cur : []).filter((r) => !doomed.has(r.id));
             // A revised line keeps one key (the base), so a later re-import of the original cannot re-add it.
-            for (const r of arr) if (isRevised(r.invoice_no)) { r.revised = true; r.key = `${r.party}:${baseInvoice(r.invoice_no)}:${r.container_no || r.booking_no || r.hbl_no || '(none)'}`; }
+            // The #dup=N suffix is CARRIED, not rebuilt. This is a second copy of the
+            // key formula and it is deliberately not merged with normalize()'s — the two
+            // differ for Eagle (normalize prefers booking_no, this prefers container_no)
+            // and unifying them would re-key Eagle's revised lines, which nobody asked
+            // for. Carrying the suffix is what keeps two commission lines on one
+            // container from collapsing back into one the moment a revision lands.
+            for (const r of arr) if (isRevised(r.invoice_no)) { r.revised = true; r.key = `${r.party}:${baseInvoice(r.invoice_no)}:${r.container_no || r.booking_no || r.hbl_no || '(none)'}${dupSuffixOf(r.key)}`; }
             return arr;
         }, { strict: true });
     }
@@ -400,5 +467,5 @@ function summary(rows = list()) {
 
 module.exports = { PARTIES, COMMISSION_PARTIES, TRUCKING_CAP, MODES, normalize, amountOf, list, upsertMany, summary,
     payments, paidByRow, withPaid, cancellations, editRow, deleteRow, addPayment, deletePayment, validatePayment, EDITABLE,
-    baseInvoice, isRevised, supersedePlan, supersedeApply,
+    baseInvoice, isRevised, supersedePlan, supersedeApply, disambiguateDups, dupSuffixOf,
     LOCK_MS, lockState, isUnlocked, setLock, copyRow };

@@ -664,7 +664,16 @@ module.exports = function (app, ctx) {
     // API_TOKEN gate as everything else (that middleware runs earlier, at
     // the top of this file) even though express.static would technically
     // have served dashboard/address-book.html anyway once mounted.
-    // ── GET /api/health-report — the front door for evidence we keep ─────
+    // ── GET /api/diagnostics — the front door for evidence we keep ─────
+    //
+    // NAMED 'diagnostics' AND NOT 'health-report'. It was the latter for an
+    // hour, until tests/ports.js section H went red: /api/health is already
+    // a route, and a bare prefix of /api/health-report. That check's own
+    // doctrine is that the four pre-existing clashes are grandfathered BY
+    // NAME so that anything NEW still fails — so adding this one to the
+    // exception list would have been the widening the check was written to
+    // stop. The page is still at /health-report, which the check does not
+    // scan (it reads /api/ routes only) and which is the name on her rail.
     //
     // Apsara, 2026-10-12: "Why there is no provision for USers,incidents,
     // crash report?" For crash reports, the capture was already complete and
@@ -679,7 +688,7 @@ module.exports = function (app, ctx) {
     // whatever was being processed when it threw. That is the same tier of
     // thing as the WhatsApp QR, which requireAdmin already gates, so it gets
     // the same gate. The 'staff' role is additionally refused by the
-    // default-deny prefix list in api.js — /api/health-report is not in
+    // default-deny prefix list in api.js — /api/diagnostics is not in
     // STAFF_ALLOWED_PATH_PREFIXES and must never be added to it.
     //
     // ── READ-ONLY, AND IT TAKES NO FILENAME ─────────────────────────────
@@ -688,7 +697,7 @@ module.exports = function (app, ctx) {
     // crash files by glob and checks each resolved path is inside LOGS_DIR.
     // Accepting ?file= would be one line and a path-traversal hole into the
     // directory next to her stores and her Google credentials.
-    app.get('/api/health-report', requireAdmin, (req, res) => {
+    app.get('/api/diagnostics', requireAdmin, (req, res) => {
         try {
             const n = (v, dflt, min, max) => {
                 const x = Number(v);

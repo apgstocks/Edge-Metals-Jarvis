@@ -82,16 +82,26 @@ section('A — her real mail, through the real gate');
 
 {
     const g = claimParse.gate(MAIL);
-    // THE BUG, stated as a measurement rather than a description. If this
-    // ever starts passing on its own, the gate changed and the rest of this
-    // file is testing something that no longer happens.
-    ck('TODAY the gate drops it', g.hit === false, JSON.stringify(g.why));
-    ck('  and says why: no container number',
-       (g.why || []).some((w) => /no container number/.test(w)), JSON.stringify(g.why));
-    // It is NOT a language problem — the mail is unmistakably a claim. Only
-    // the identifier was unrecognised, which is what makes this fixable
-    // without touching the shortage vocabulary.
-    ck('  while agreeing it IS claim language', g.language === true,
+    // THE BUG WAS: the gate required an ISO 6346 CONTAINER, and this mail
+    // names her own order number instead. It dropped a $5,090 claim with
+    // why: "no container number", while agreeing the words were claim
+    // language. The gate now also accepts an order number it can resolve
+    // against her sales (helpers/claimRef.js), so PO10554 gets it through.
+    //
+    // This section asserted hit === false for the hours between measuring
+    // the bug and fixing it, with a comment saying that if it ever started
+    // passing on its own the gate had changed. It had — by the fix two
+    // commits later — so the assertion is inverted here rather than deleted,
+    // because "her real mail reaches the claim machinery" is the property
+    // worth keeping a check on.
+    ck('her real mail gets THROUGH the gate', g.hit === true, JSON.stringify(g.why));
+    ck('  no longer dropped for "no container number"',
+       !(g.why || []).some((w) => /no container number/.test(w)), JSON.stringify(g.why));
+    ck('  because PO10554 resolved to one of her orders',
+       Array.isArray(g.orders) && g.orders.length > 0, JSON.stringify(g.orders));
+    // It was never a language problem — only the identifier was unrecognised,
+    // which is why the shortage vocabulary did not have to be touched.
+    ck('  and it IS claim language, as it always was', g.language === true,
        'the words were never the problem');
     ck('  and finds no ISO 6346 container, correctly',
        claimParse.containersIn(BODY).length === 0, JSON.stringify(claimParse.containersIn(BODY)));

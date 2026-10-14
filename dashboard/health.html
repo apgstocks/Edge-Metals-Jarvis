@@ -274,7 +274,7 @@ async function load() {
   $('body').innerHTML = `<div class="empty">Reading…</div>`;
   let d = null;
   try {
-    const res = await fetch('/api/health-report?hours=48');
+    const res = await fetch('/api/diagnostics?hours=48');
     // 401/403 is the normal answer for a session without the admin password,
     // and saying so beats a blank page or "failed to fetch".
     if (res.status === 401 || res.status === 403) {

@@ -1258,7 +1258,7 @@ const MUTATIONS = [
     // Metal has always used.
     { name: 'commission: an agent stops being a party, so there is no register line',
       file: 'helpers/partyInvoices.js', suites: ['commission-agents'],
-      find: "    joey: 'Joey' };",
+      find: "    joey: 'Joey (Hynos)' };",
       to:   "};" },
     { name: 'commission: an agent line reads an invoice total instead of the commission',
       file: 'helpers/partyInvoices.js', suites: ['commission-agents'],
@@ -1276,6 +1276,42 @@ const MUTATIONS = [
       file: 'helpers/partyInvoices.js', suites: ['commission-agents'],
       find: "const COMMISSION_PARTIES = new Set(['panmetal', 'joey']);",
       to:   "const COMMISSION_PARTIES = new Set(['joey']);" },
+
+    // ── HYNOS BILLS ONE CONTAINER TWICE ─────────────────────────────────
+    // Her sample commission invoice EM-261014-01 bills eight contracts twice
+    // on the same container. party:invoice:container collided and $237.32
+    // went per import, silently. Apsara chose (2026-10-15) to widen the key
+    // for commission parties only.
+    { name: 'commission: the split-container fix is not wired into the import at all',
+      file: 'helpers/partyInvoices.js', suites: ['commission-agents'],
+      find: "    const dupLines = disambiguateDups(rows);",
+      to:   "    const dupLines = 0;" },
+    // SCOPE. Widening it for everyone would re-key rows already in her
+    // register on the VM, which I cannot see — every one would re-insert as
+    // a duplicate instead of updating.
+    { name: 'commission: the key widens for all seven parties, not just the agents',
+      file: 'helpers/partyInvoices.js', suites: ['commission-agents', 'party-invoices'],
+      find: "        if (!COMMISSION_PARTIES.has(r.party)) continue;",
+      to:   "" },
+    // The FIRST of a pair must keep the key it has always had, or an
+    // existing Pan Metal row is re-keyed and duplicated.
+    { name: 'commission: the first of a colliding pair is re-keyed too',
+      file: 'helpers/partyInvoices.js', suites: ['commission-agents'],
+      find: "        for (let i = 1; i < ordered.length; i++) { ordered[i].key += `#dup=${i + 1}`; marked++; }",
+      to:   "        for (let i = 0; i < ordered.length; i++) { ordered[i].key += `#dup=${i + 1}`; marked++; }" },
+    // The ordinal must come from the DATA. From the batch position, a
+    // re-import in a different order duplicates every line.
+    { name: 'commission: the dup ordinal follows batch order instead of the data',
+      file: 'helpers/partyInvoices.js', suites: ['commission-agents'],
+      find: "        const ordered = g.slice().sort((a, b) => (num(a.amount) - num(b.amount)) || ((num(a.quantity) || 0) - (num(b.quantity) || 0)));",
+      to:   "        const ordered = g.slice();" },
+    // THE SECOND WRITER. supersedeApply rebuilds the key from scratch; drop
+    // the carried suffix and a revised commission invoice collapses two
+    // lines back into one. This is the CLAUDE.md rule 1 shape exactly.
+    { name: 'commission: a revision rebuilds the key and drops the split-line suffix',
+      file: 'helpers/partyInvoices.js', suites: ['commission-agents'],
+      find: "${r.container_no || r.booking_no || r.hbl_no || '(none)'}${dupSuffixOf(r.key)}`; }",
+      to:   "${r.container_no || r.booking_no || r.hbl_no || '(none)'}`; }" },
 
     // The ONE LINE that was missing: her Joey tab existed and was not
     // joined to the register. tests/party-invoices.js checks every party in
@@ -1578,8 +1614,8 @@ const MUTATIONS = [
     // her stores, her bank data and her Google credentials.
     { name: 'health: the report is served to anyone who asks',
       file: 'routes/admin.js', suites: ['health-page'],
-      find: "    app.get('/api/health-report', requireAdmin, (req, res) => {",
-      to:   "    app.get('/api/health-report', (req, res) => {" },
+      find: "    app.get('/api/diagnostics', requireAdmin, (req, res) => {",
+      to:   "    app.get('/api/diagnostics', (req, res) => {" },
     // suites: health-page only, deliberately. sidebar-pages would be a second
     // killer, but on 2026-10-12 it was red for an unrelated reason (the new
     // /ai-usage page shipped without the shared rail script) and a mutation

@@ -75,7 +75,7 @@ module.exports = function (app, ctx) {
     // only way to see one was to ssh to the VM and cat a file.
     //
     // The SHELL is served like every other standalone page. The DATA is
-    // behind requireAdmin on GET /api/health-report (routes/admin.js), which
+    // behind requireAdmin on GET /api/diagnostics (routes/admin.js), which
     // is the boundary that matters: a stack trace is the sensitive part, not
     // the HTML that lays it out, and the page itself says plainly when the
     // session cannot read it rather than showing a blank panel.
@@ -94,7 +94,7 @@ module.exports = function (app, ctx) {
     // kind of thing a screen-only test cannot see: the markup was correct
     // and the ROUTE was wrong.
     //
-    // The name also pairs with GET /api/health-report, so the page and its
+    // The name also pairs with GET /api/diagnostics, so the page and its
     // data are findable from each other.
     app.get('/health-report', (req, res) => {
         res.sendFile(path.join(cfg.ROOT, 'dashboard', 'health.html'));
