@@ -634,7 +634,27 @@ async function renderSpendReportTab() {
 // by_source / borrowings / transfers added 2026-09-21. `balance` keeps its
 // name and its meaning — Cash in hand, the sum of every row — so nothing that
 // already read it changes.
-let pettyCash = { balance: 0, entries: [], by_source: {}, borrowings: [], transfers: [], sources: [] };
+// ── by_source STARTS null, NOT {} ───────────────────────────────────────
+// Apsara, 2026-10-14: "WHEN I CLICK LOADS,THEN PAY IT IS SHOWING 0.AFTER
+// JSUT VISITING PERTY CASE,THEN I CLICK PAY IN LOADS,IT IS SHOWING
+// PROPERLY."
+//
+// The pay modal reads this object and nothing fetched it, so until the Petty
+// cash tab had been opened every bucket read $0.00 — and worse, the empty
+// note told her "There is no cash recorded in any account yet", which is a
+// FALSE STATEMENT ABOUT MONEY printed on her screen.
+//
+// That note already guards against exactly this: it only speaks when
+// by_source is "known", because (its own words) "claiming 'there is no
+// cash' while the figures are still loading would be a lie that clears
+// itself a second later". The guard tests `by_source && typeof === 'object'`
+// — and an EMPTY OBJECT passes it. The default defeated the defence.
+//
+// null makes "not fetched yet" different from "fetched, and empty", which is
+// the distinction the whole note depends on. Every reader already writes
+// `(pettyCash.by_source || {})`, so nothing has to change to cope with it —
+// checked, all eleven.
+let pettyCash = { balance: 0, entries: [], by_source: null, borrowings: [], transfers: [], sources: [] };
 // Which sub-tab of Petty cash is open. Her words: "Keep this borrowing
 // tracking in petty cash as a tab inside petty cash."
 let pettyTab = 'cash';

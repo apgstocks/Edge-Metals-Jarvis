@@ -2483,6 +2483,24 @@ function openPayModal(loadId, kind, opts) {
   const historyOnly = !!(opts && opts.historyOnly);
   const l = loadsCache.find(x => x.id === loadId);
   if (!l) return;
+  // ── THE CASH FIGURES HAVE TO BE FETCHED, NOT ASSUMED ─────────────────
+  // Apsara, 2026-10-14, on going straight to Loads and pressing Pay: every
+  // bucket $0.00, and right after visiting Petty cash the same modal is
+  // correct. Nothing was stale — pettyCash had never been loaded, because
+  // only renderPettyCashTab fetches it and this modal never asked.
+  //
+  // NOT AWAITED: the modal opens at once and the figures drop in when they
+  // arrive. She is on a phone at a weighbridge and asked for this to be
+  // fast. refreshPettyCash keeps the last known figure on a failure, so a
+  // bad signal leaves what was there rather than zeroing it.
+  if (pettyCash.by_source === null && typeof refreshPettyCash === 'function') {
+    refreshPettyCash().then(() => {
+      // Only if this modal is still open — a fetch landing after she has
+      // closed it and opened another row must not redraw that one.
+      const m = $('payModal');
+      if (m && !m.classList.contains('hidden')) syncBankFields('pay');
+    }).catch(() => {});
+  }
   // `amount` here is what the OVERPAYMENT check subtracts against, so it has
   // to be the payable, not the metal's figure — otherwise a load with $200
   // deducted would accept a $200 overpayment without a word. The sale branch
@@ -7779,7 +7797,21 @@ async function renderSpendReportTab() {
 // by_source / borrowings / transfers added 2026-09-21, mirroring
 // dashboard/index.html. `balance` keeps its name and meaning — Cash in hand,
 // the sum of every row — so nothing that already read it changes.
-let pettyCash = { balance: 0, entries: [], by_source: {}, borrowings: [], transfers: [], sources: [] };
+// ── by_source STARTS null, NOT {} ───────────────────────────────────────
+// Apsara, 2026-10-14: "WHEN I CLICK LOADS,THEN PAY IT IS SHOWING 0.AFTER
+// JSUT VISITING PERTY CASE,THEN I CLICK PAY IN LOADS,IT IS SHOWING
+// PROPERLY." The pay modal reads this and nothing fetched it, so before the
+// Petty cash tab had been opened every bucket read $0.00 and the note said
+// "There is no cash recorded in any account yet" — a false statement about
+// money, on her screen.
+//
+// That note already guards against this: it speaks only when by_source is
+// "known", because claiming there is no cash while the figures are loading
+// "would be a lie that clears itself a second later". The guard tests
+// `by_source && typeof === 'object'`, and an EMPTY OBJECT passes it. The
+// default defeated the defence. null makes "not fetched" different from
+// "fetched and empty"; every reader already writes (pettyCash.by_source || {}).
+let pettyCash = { balance: 0, entries: [], by_source: null, borrowings: [], transfers: [], sources: [] };
 // Which sub-tab of Petty cash is open. Her words, 2026-09-21: "Keep this
 // borrowing tracking in petty cash as a tab inside petty cash."
 let pettyTab = 'cash';

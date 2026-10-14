@@ -1251,6 +1251,57 @@ const MUTATIONS = [
       find: '         data-bank="${esc(a.bank || \'\')}" data-mask="${esc(a.mask || \'\')}"',
       to:   '         data-bank="" data-mask=""' },
 
+    // ── $0.00 UNTIL SHE VISITED PETTY CASH ──────────────────────────────
+    // Apsara, 2026-10-14: "WHEN I CLICK LOADS,THEN PAY IT IS SHOWING 0.AFTER
+    // JSUT VISITING PERTY CASE,THEN I CLICK PAY IN LOADS,IT IS SHOWING
+    // PROPERLY." pettyCash is filled by the Petty cash tab and nothing else;
+    // the pay modal read it without asking for it.
+    { name: 'paycash: the pay modal stops fetching, so it is $0 until Petty cash is opened',
+      file: 'dashboard/app/12-payments-recording.js', suites: ['pay-cash-not-loaded'],
+      find: '  if (pettyCash.by_source === null && typeof refreshPettyCash === \'function\') {',
+      to:   '  if (false) {' },
+    // THE DEFENCE THAT WAS DEFEATED BY ITS OWN DEFAULT. An empty object
+    // passes the "are these figures known" guard, so "not fetched yet" and
+    // "fetched, and genuinely empty" became the same state — and the screen
+    // printed "There is no cash recorded in any account yet" over money she
+    // actually has.
+    { name: 'paycash: by_source defaults to {} again, so "not loaded" reads as "no cash"',
+      file: 'dashboard/app/06-expenses-trucker.js', suites: ['pay-cash-not-loaded'],
+      find: 'let pettyCash = { balance: 0, entries: [], by_source: null,',
+      to:   'let pettyCash = { balance: 0, entries: [], by_source: {},' },
+    { name: 'paycash: the app\'s default goes back to {} too',
+      file: 'mobile-app/www/index.html', suites: ['pay-cash-not-loaded'],
+      find: 'let pettyCash = { balance: 0, entries: [], by_source: null,',
+      to:   'let pettyCash = { balance: 0, entries: [], by_source: {},' },
+    { name: 'paycash: the app\'s pay modal stops fetching',
+      file: 'mobile-app/www/index.html', suites: ['pay-cash-not-loaded'],
+      find: '  if (pettyCash.by_source === null && typeof refreshPettyCash === \'function\') {',
+      to:   '  if (false) {' },
+    // NOT "await refreshPettyCash(...)": openPayModal is not async, so that
+    // is a syntax error and the harness correctly reported NOT APPLIED —
+    // a mutation that cannot be applied has tested nothing. The real way to
+    // lose the benefit is to fetch and then never put the figures in.
+    { name: 'paycash: the figures arrive and the fields are never redrawn',
+      file: 'dashboard/app/12-payments-recording.js', suites: ['pay-cash-not-loaded'],
+      find: "      if (m && !m.classList.contains('hidden')) syncBankFields('pay');",
+      to:   '      /* fetched, and nothing shown */' },
+    { name: 'paycash: same in the app — fetched, never shown',
+      file: 'mobile-app/www/index.html', suites: ['pay-cash-not-loaded'],
+      find: "      if (m && !m.classList.contains('hidden')) syncBankFields('pay');",
+      to:   '      /* fetched, and nothing shown */' },
+    // Refetching on EVERY open is the other wrong fix: correct figures, and
+    // a wait on a phone every single time she presses Pay.
+    { name: 'paycash: it refetches on every open, costing a round trip each time',
+      file: 'dashboard/app/12-payments-recording.js', suites: ['pay-cash-not-loaded'],
+      find: '  if (pettyCash.by_source === null && typeof refreshPettyCash === \'function\') {',
+      to:   "  if (typeof refreshPettyCash === 'function') {" },
+    // A fetch landing after she has closed this row and opened another must
+    // not repaint the other one's figures.
+    { name: 'paycash: a late answer redraws a modal she has already closed',
+      file: 'dashboard/app/12-payments-recording.js', suites: ['pay-cash-not-loaded'],
+      find: "      if (m && !m.classList.contains('hidden')) syncBankFields('pay');",
+      to:   "      syncBankFields('pay');" },
+
     // ── THE GATE HAS TO ASK, AND THE KEY MUST NOT WEAKEN ────────────────
     // Her mail named PO10554 and no container, so the gate dropped it. The
     // fix is in two halves and both can rot independently.

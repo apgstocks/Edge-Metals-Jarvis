@@ -418,6 +418,34 @@ function openPayModal(loadId, kind, opts) {
   const historyOnly = !!(opts && opts.historyOnly);
   const l = loadsCache.find(x => x.id === loadId);
   if (!l) return;
+  // ── THE CASH FIGURES HAVE TO BE FETCHED, NOT ASSUMED ─────────────────
+  // Apsara, 2026-10-14: "WHEN I CLICK LOADS,THEN PAY IT IS SHOWING 0.AFTER
+  // JSUT VISITING PERTY CASE,THEN I CLICK PAY IN LOADS,IT IS SHOWING
+  // PROPERLY."
+  //
+  // `pettyCash` is filled by renderPettyCashTab, and this modal read it
+  // without ever asking for it. Open the app, go straight to Loads, press
+  // Pay: every bucket $0.00 and a note saying there is no cash. Visit Petty
+  // cash once and it is right for the rest of the session. Nothing was
+  // stale — it had never been loaded.
+  //
+  // NOT AWAITED, and the modal is not held open on a network call: she is on
+  // a phone and asked for this to be fast. It opens immediately showing
+  // "…", the figures arrive a moment later, and syncBankFields runs again to
+  // put them in. refreshPettyCash keeps the last known figure on a failure,
+  // so a bad connection leaves what was there rather than zeroing it.
+  //
+  // Fetched once per session unless the money has changed — every path that
+  // changes it (add cash, repay, split, delete, and recording a payment
+  // below) already calls refreshPettyCash itself.
+  if (pettyCash.by_source === null && typeof refreshPettyCash === 'function') {
+    refreshPettyCash().then(() => {
+      // Only if this modal is still the one open. A fetch that lands after
+      // she has closed it and opened another row must not redraw that one.
+      const m = $('payModal');
+      if (m && !m.classList.contains('hidden')) syncBankFields('pay');
+    }).catch(() => {});
+  }
   // `amount` here is what the OVERPAYMENT check below subtracts against, so
   // it has to be the payable, not the metal's figure — otherwise a load with
   // $200 deducted would accept a $200 overpayment without a word. The sale
