@@ -121,7 +121,7 @@ function fromDeposit(res) {
     const base = {
         id: d.id, direction: 'in', date: d.date, amount: r2(num(d.amount)),
         descriptor: d.descriptor || '', party: res.party || null,
-        bank_text: String(d.memo || d.desc || ''),
+        bank_text: String(d.memo || d.desc || ''), account_id: d.account_id || null,
     };
     if (res.ambiguous) {
         return { ...base, state: 'choose', label: 'Choose',
@@ -146,7 +146,7 @@ function fromWithdrawal(res) {
     const base = {
         id: row.id, direction: 'out', date: row.date, amount: r2(num(row.amount)),
         descriptor: row.descriptor || '', party: null,
-        bank_text: String(row.memo || row.desc || ''),
+        bank_text: String(row.memo || row.desc || ''), account_id: row.account_id || null,
     };
     if (res.outcome === 'ambiguous') {
         return { ...base, state: 'choose', label: 'Choose',

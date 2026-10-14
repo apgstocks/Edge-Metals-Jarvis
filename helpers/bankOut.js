@@ -88,6 +88,7 @@ function withdrawals(rows = []) {
             descriptor: r.party || r.desc || '',
             desc: r.desc || '', memo: r.memo || '',
             bank: r.bank || null,
+            account_id: r.account_id || null,
             company: r.company || null,
         }))
         .sort((a, b) => String(b.date).localeCompare(String(a.date)));

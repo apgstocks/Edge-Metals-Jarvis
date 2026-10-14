@@ -47,6 +47,11 @@ header h1{font-size:22px;margin-right:4px}
 main{padding:16px 20px 60px;max-width:1240px;margin:0 auto}
 
 /* ── account cards ──────────────────────────────────────────────────── */
+.acctseg{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px}
+.acctseg button{display:inline-flex;gap:8px;align-items:center;min-height:36px;padding:6px 14px;border-radius:18px;border:1px solid var(--border-default);background:var(--surface-card);color:var(--text-body);font-weight:600;font-size:13px;cursor:pointer}
+.acctseg button.on{background:var(--copper-300,#c8844a);color:#14100c;border-color:transparent}
+.acctseg .n{font:600 11px var(--font-mono);padding:1px 7px;border-radius:9px;background:rgba(255,255,255,.12)}
+.acctseg button.on .n{background:rgba(0,0,0,.18)}
 .accts{display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:10px;margin-bottom:12px}
 .acct{background:var(--surface-card);border:1px solid var(--border-subtle);border-radius:6px;padding:12px 14px;min-width:0}
 .acct.warn{border-color:#8A6416}
@@ -272,6 +277,7 @@ h2.sec .n{color:var(--text-faint);font-weight:400}
 </header>
 <main>
   <div id="repair"></div>
+  <div id="acctbar"></div>
   <div id="accounts" class="accts"></div>
   <div id="missing"></div>
   <div id="coming"></div>
@@ -575,7 +581,7 @@ function renderRow(row, i) {
   const go = quickConfirm(row)
     ? `<button class="btn solid" data-confirm="${i}">Confirm</button>`
     : `<button class="btn" data-open="1">${row.outcome === 'no_party' ? 'Name payer' : 'Review'}</button>`;
-  return `<div class="card row ${tone}" data-i="${i}" data-dir="in" data-date="${esc(dep.date || '')}" data-k="${esc([dep.descriptor, dep.desc, row.party, dep.amount, dep.date].join(' ').toLowerCase())}">
+  return `<div class="card row ${tone}" data-i="${i}" data-dir="in" data-acct="${esc(dep.account_id || '')}" data-date="${esc(dep.date || '')}" data-k="${esc([dep.descriptor, dep.desc, row.party, dep.amount, dep.date].join(' ').toLowerCase())}">
     <div class="sum" data-toggle="1" role="button" tabindex="0" aria-expanded="false">
       <span class="when">${esc(dep.date)}</span>
       <span class="who"><strong>${esc(row.party || dep.descriptor || dep.desc || '(no description)')}</strong>
@@ -671,7 +677,7 @@ async function render() {
     : `<div class="empty">No deposits to match${/none yet/.test(d.feed || '') ? '.' : ' in these dates.'}</div>`;
   mergeOut();
 
-  const bulk = rows.map((r, i) => ({ r, i, mode: bulkable(r) })).filter((x) => x.mode);
+  const bulk = rows.map((r, i) => ({ r, i, mode: bulkable(r) })).filter((x) => x.mode && inAcct((x.r.deposit || {}).account_id));
   STATE.bulk = bulk;
   $('sure').innerHTML = bulk.length > 1 ? `<div class="surebar">
       <span class="desc"><b style="color:#fff">${bulk.length}</b> deposits are sure matches — each pays its invoices in full, the account and the way it came are known.</span>
@@ -689,10 +695,24 @@ async function renderOverview() {
   let o = null;
   try { o = await api('/api/bank/overview'); } catch (e) { o = null; }
   STATE.overview = o;
-  if (!o) { for (const id of ['accounts', 'missing', 'repair', 'coming']) $(id).innerHTML = ''; return; }
-
+  if (!o) { for (const id of ['accounts', 'missing', 'repair', 'coming', 'acctbar']) $(id).innerHTML = ''; return; }
+  /* a remembered bank that is no longer in the list is forgotten, not shown empty */
+  if (STATE.acct && !(o.accounts || []).some((a) => a.key === STATE.acct)) { STATE.acct = null; saveAcct(); }
+  paintOverview();
+}
+function paintOverview() {
+  const o = STATE.overview;
+  if (!o) return;
   const day = (s) => s ? String(s).slice(0, 10) : '';
-  const cards = (o.accounts || []).map((a) => {
+  /* THE SWITCH between banks. One pill per account plus "All banks"; the
+     figures below, the queue and the counts follow the choice. */
+  $('acctbar').innerHTML = (o.accounts || []).length > 1 ? `<div class="seg acctseg" role="tablist" aria-label="Choose a bank account">
+      <button type="button" role="tab" class="${STATE.acct ? '' : 'on'}" aria-selected="${!STATE.acct}" data-acctpick="">All banks</button>
+      ${(o.accounts || []).map((a) => `<button type="button" role="tab" class="${STATE.acct === a.key ? 'on' : ''}" aria-selected="${STATE.acct === a.key}" data-acctpick="${esc(a.key)}">
+        ${esc(a.bank || 'Bank')}${a.mask ? ' ••' + esc(a.mask) : ''}${a.company ? ' · ' + esc(a.company) : ''}${a.waiting ? `<span class="n">${a.waiting}</span>` : ''}</button>`).join('')}
+    </div>` : '';
+  const shown = (o.accounts || []).filter((a) => !STATE.acct || a.key === STATE.acct);
+  const cards = shown.map((a) => {
     const needs = a.needs_login;
     const status = needs ? ['warn', 'Needs you to sign in']
       : (a.linked ? ['ok', 'Connected' + (a.last_sync_at ? ' · pulled ' + day(a.last_sync_at) : '')]
@@ -765,7 +785,7 @@ async function renderTransfers() {
   if (!t) { $('transfers').innerHTML = ''; $('recorded').innerHTML = ''; countTabs(); return; }
   const props = [...(t.proposed || []), ...(t.one_sided || [])];
   $('transfers').innerHTML = props.length ? `<h2 class="sec">Between your companies <span class="n">${props.length}</span></h2>
-    ${props.map((p) => `<div class="card row tcard" data-dir="${p.in_row && !p.out_row ? 'in' : (p.out_row && !p.in_row ? 'out' : 'both')}"
+    ${props.map((p) => `<div class="card row tcard" data-acct="${esc([(p.out_row || {}).account_id, (p.in_row || {}).account_id].filter(Boolean).join(' '))}" data-dir="${p.in_row && !p.out_row ? 'in' : (p.out_row && !p.in_row ? 'out' : 'both')}"
         data-k="${esc([COMPANY[p.from], COMPANY[p.to], p.amount, p.date, (p.out_row || {}).desc, (p.in_row || {}).desc].join(' ').toLowerCase())}">
       <!-- Collapsed to ONE line like every other row (Apsara, 2026-10-14: "those
            rows between my companies - I want it to collapse"): both legs, the
@@ -802,9 +822,10 @@ async function renderTransfers() {
 }
 
 function countTabs() {
-  const ins = ((STATE.data || {}).rows || []).length;
-  const outs = (((STATE.review || {}).queue || {}).rows || []).length;
-  const tr = STATE.transfers ? ((STATE.transfers.proposed || []).length + (STATE.transfers.one_sided || []).length) : 0;
+  const ins = ((STATE.data || {}).rows || []).filter((r) => inAcct((r.deposit || {}).account_id)).length;
+  const outs = (((STATE.review || {}).queue || {}).rows || []).filter((r) => inAcct(r.account_id)).length;
+  const tr = STATE.transfers ? [...(STATE.transfers.proposed || []), ...(STATE.transfers.one_sided || [])]
+    .filter((p) => inAcct((p.out_row || {}).account_id) || inAcct((p.in_row || {}).account_id)).length : 0;
   const n = ins + outs + tr;
   $('n-review').textContent = n ? String(n) : '';
   const L = ((STATE.data || {}).ledger || {});
@@ -953,6 +974,29 @@ async function renderReconcile() {
   let d = null;
   try { d = await api('/api/bank/reconcile'); } catch (e) { d = { error: e.message }; }
   STATE.recon = d;
+  paintRecon();
+}
+/* ONE BANK AT A TIME, same as the rest of the page. The books side is keyed by
+   a bank NAME ("BofA"), the switch by an account id, so a bank belongs to the
+   chosen account when (a) any of its bank rows carry that account's id, or
+   (b) failing that, the names agree once spelled the same way. */
+function bankWord(s) {
+  const k = String(s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+  return k === 'bofa' || k === 'boa' ? 'bankofamerica' : k;
+}
+function reconInAcct(b) {
+  if (!STATE.acct) return true;
+  const a = ((STATE.overview || {}).accounts || []).find((x) => x.key === STATE.acct);
+  if (!a) return true;
+  const rows = ((b.reconcile || {}).feed || {}).rows || [];
+  if (rows.some((r) => r && inAcct(r.account_id))) return true;
+  if (rows.length) return false;
+  const w = bankWord(a.bank);
+  return !!w && bankWord(b.bank) === w;
+}
+function paintRecon() {
+  const d = STATE.recon;
+  if (!d) return;
   if (d.error) {
     $('recon').innerHTML = `<div class="card"><div class="lbl">bank vs books</div>
       <div class="note">${esc(d.error)}</div></div>`;
@@ -982,11 +1026,21 @@ async function renderReconcile() {
       ${(j.problems || []).slice(0, 6).map((p) => `<div class="desc">${esc(p)}</div>`).join('')}</div>`);
   }
 
-  out.push(`<h2 class="sec">${d.nothingNeedsYou
+  /* With one bank chosen, the sentence is about THAT bank: the feed and
+     the journal still count (they invalidate everything), the other banks
+     do not. */
+  const bankList = (d.banks || []).filter(reconInAcct);
+  const calm = !STATE.acct ? d.nothingNeedsYou
+    : (f.ok && j.complete !== false && bankList.every((b) => b.reconcile && b.reconcile.ok
+        && b.reconcile.agrees && b.unexplained && b.unexplained.clean));
+  out.push(`<h2 class="sec">${calm
     ? 'Nothing needs you — the bank and the books moved the same money'
     : 'The bank and the books do not agree yet'}</h2>`);
+  if (STATE.acct && !bankList.length) {
+    out.push('<div class="card"><div class="note">No books side is set up for this account yet, so there is nothing to compare it with.</div></div>');
+  }
 
-  for (const b of (d.banks || [])) {
+  for (const b of bankList) {
     const r = b.reconcile || {};
     if (!r.ok) {
       out.push(`<div class="card"><div class="lbl">${esc(b.bank)}</div><div class="note">${esc(r.problem || '')}</div></div>`);
@@ -1246,7 +1300,7 @@ async function renderBooked() {
   let d = null;
   try { d = await api('/api/bank/review/categorised'); } catch (e) { d = null; }
   if (!d) { $('booked').innerHTML = ''; return; }
-  const rows = d.entries || [];
+  const rows = (d.entries || []).filter((e) => inAcct(e.account_id));
   $('booked').innerHTML = `<h2 class="sec">Booked from this screen <span class="n">${rows.length}</span></h2>
     <div class="card">${rows.length ? rows.map((e) => `<div class="row1" style="margin:4px 0">
         <span class="amt" style="font-size:14px">−${money(e.amount)}</span>
@@ -1291,10 +1345,11 @@ async function renderReview() {
 
   /* The one-press offer covers EXACT MATCHES only. A match creates
      nothing — it ties two existing records together. */
-  if (q.canPostAll) {
+  const sureOut = q.rows.filter((r) => r.state === 'match' && inAcct(r.account_id)).length;
+  if (sureOut) {
     out.push(`<div class="surebar">
-      <span class="desc">${q.canPostAll} row(s) match a payment you already recorded, to the cent.</span>
-      <button class="btn solid" data-reviewall="1">Match all ${q.canPostAll}</button>
+      <span class="desc">${sureOut} row(s) match a payment you already recorded, to the cent.</span>
+      <button class="btn solid" data-reviewall="1">Match all ${sureOut}</button>
       <span class="note" style="margin:0">Only exact matches. Anything combined, approximate or ambiguous stays here.</span>
     </div>`);
   }
@@ -1323,7 +1378,7 @@ async function renderReview() {
        muted label, not a button-shaped box: there is nothing to press until
        the plan screen exists, and a box that looks pressable is the one
        she would press. */
-    return `<div class="card row" data-dir="out" data-date="${esc(r.date || '')}" data-k="${esc([r.descriptor, r.amount, r.date, r.label].join(' ').toLowerCase())}" style="border-left:4px solid ${r.state === 'match' ? 'var(--leaf-500)' : 'var(--steel-500)'}">
+    return `<div class="card row" data-dir="out" data-acct="${esc(r.account_id || '')}" data-date="${esc(r.date || '')}" data-k="${esc([r.descriptor, r.amount, r.date, r.label].join(' ').toLowerCase())}" style="border-left:4px solid ${r.state === 'match' ? 'var(--leaf-500)' : 'var(--steel-500)'}">
       <div class="sum" data-toggle="1" role="button" tabindex="0" aria-expanded="false">
         <span class="when">${esc(fmtDay(r.date))}</span>
         <span class="who"><strong${warn}>${esc(r.descriptor || '(no description)')}</strong></span>
@@ -1406,6 +1461,30 @@ function mergeOut() {
 // Transfers between her own companies are never paged — they sit above both
 // lists and are few.
 const PAGED = { in: '#list' };
+/* ── ONE BANK AT A TIME (2026-10-14) ───────────────────────────────────────
+   Apsara: "Make it like a toggle between banks. I will connect all the banks.
+   When I click one bank that particular bank's details should come." STATE.acct
+   is the chosen account card's key (null = all banks). Every row carries its
+   account, so choosing filters the queue, the counts, set-aside, booked and the
+   bulk buttons together — a bulk "Match all" must never act on rows you cannot
+   see. */
+STATE.acct = loadAcct();
+function loadAcct() { try { return localStorage.getItem('bank.acct') || null; } catch (e) { return null; } }
+function saveAcct() { try { if (STATE.acct) localStorage.setItem('bank.acct', STATE.acct); else localStorage.removeItem('bank.acct'); } catch (e) { /* the choice just is not remembered */ } }
+function acctIds() {
+  if (!STATE.acct) return null;
+  const a = ((STATE.overview || {}).accounts || []).find((x) => x.key === STATE.acct);
+  return a ? (a.ids || []) : null;
+}
+function inAcct(id) { const ids = acctIds(); return !ids || ids.includes(id); }
+async function pickAcct(key) {
+  STATE.acct = key || null; saveAcct();
+  resetPages();
+  paintOverview();
+  await render();          // deposits + the "sure" bar
+  renderReview(); renderAside(); renderBooked(); renderTransfers();
+  paintRecon();
+}
 function applyFilter() {
   const q = STATE.q.trim().toLowerCase();
   const dir = STATE.dir;
@@ -1413,7 +1492,11 @@ function applyFilter() {
     const d = c.dataset.dir;
     const dirOk = dir === 'all' || d === dir || d === 'both';
     const qOk = !q || (c.dataset.k || '').includes(q) || c.textContent.toLowerCase().includes(q);
-    return dirOk && qOk;
+    /* ONE BANK AT A TIME: a row with no account on it is not shown under a
+       chosen bank (it cannot be said to belong to it); "All banks" shows it. */
+    const ids = acctIds();
+    const aOk = !ids || (c.dataset.acct || '').split(' ').some((x) => x && ids.includes(x));
+    return dirOk && qOk && aOk;
   };
   document.querySelectorAll('[data-pane="review"] .card[data-dir]').forEach((c) => {
     if (!c.closest('#list')) c.hidden = !matches(c);
@@ -1527,6 +1610,8 @@ for (const id of ['from', 'to']) {
 }
 
 document.addEventListener('click', async (ev) => {
+  const ap = ev.target.closest('[data-acctpick]');
+  if (ap) { await pickAcct(ap.getAttribute('data-acctpick')); return; }
   const pg = ev.target.closest('[data-pg]');
   if (pg) { if (!pg.disabled) goPage(pg.dataset.pg, pg.dataset.go); return; }
   // Opening a row: a click anywhere on its line except a control on it.
@@ -1598,7 +1683,7 @@ document.addEventListener('click', async (ev) => {
        lock, one atomic write. A failure half way leaves the ones before it
        genuinely matched and SAYS SO. */
     const ids = ((STATE.review && STATE.review.queue.rows) || [])
-      .filter((r) => r.state === 'match').map((r) => r.id);
+      .filter((r) => r.state === 'match' && inAcct(r.account_id)).map((r) => r.id);
     let ok = 0;
     for (const id of ids) { if (await doMatch(id)) ok += 1; else break; }
     toast(ok === ids.length ? `Matched all ${ok}` : `Matched ${ok} of ${ids.length} — stopped at the first problem`,
@@ -1661,7 +1746,7 @@ document.addEventListener('click', async (ev) => {
      first refusal — the same discipline as "Match all" above. */
   const sa = ev.target.closest('[data-sureall]');
   if (sa) {
-    const list = STATE.bulk || [];
+    const list = (STATE.bulk || []).filter((x) => inAcct((x.r.deposit || {}).account_id));
     if (!confirm(`Record ${list.length} receipts? Each pays its invoices in full.`)) return;
     sa.disabled = true;
     let ok = 0;
@@ -1729,7 +1814,7 @@ async function renderAside() {
   let x = null;
   try { x = await api('/api/bank/set-aside'); } catch (e) { x = null; }
   if (!x) { $('asidelist').innerHTML = ''; return; }
-  const rows = x.rows || [];
+  const rows = (x.rows || []).filter((r) => inAcct(r.account_id));
   $('asidelist').innerHTML = `<h2 class="sec">Set aside <span class="n">${x.count} · ${money(x.money)}</span></h2>
     <div class="card">${rows.length ? rows.map((r) => `<div class="xrow">
         <span class="when">${esc(fmtDay(r.date))}</span>

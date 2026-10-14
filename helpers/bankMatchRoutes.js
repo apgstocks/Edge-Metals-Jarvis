@@ -403,7 +403,7 @@ function mount(app, cfg) {
                 // Capped, and the cap is said: a list that silently stopped at
                 // 200 would read as "that is all of them".
                 rows: rows.slice(0, 300).map((r) => ({ id: r.id, date: r.date, desc: r.desc || r.party || '',
-                    amount: round2(num0(r.amount)), direction: r.direction, company: r.company || null,
+                    amount: round2(num0(r.amount)), direction: r.direction, company: r.company || null, account_id: r.account_id || null,
                     reason: r.excluded_reason || null, by: last(r).by || null, at: last(r).at || null })),
                 truncated: rows.length > 300,
             });
@@ -604,8 +604,13 @@ function mount(app, cfg) {
     // What has been booked from the screen, newest first (the "Posted" list, with Undo).
     app.get('/api/bank/review/categorised', (req, res) => {
         try {
+            // account_id comes from the bank row each entry was booked from, so
+            // the page can show one bank's entries (the entry itself only
+            // carries the ledger code, which two banks can share).
+            const byRow = new Map(require('./bankLedger').list().map((r) => [r.id, r.account_id || null]));
             const entries = require('./bankEntries').list().filter((e) => e && !e.reversed_at)
-                .sort((a, z) => String(z.at).localeCompare(String(a.at))).slice(0, 100);
+                .sort((a, z) => String(z.at).localeCompare(String(a.at))).slice(0, 100)
+                .map((e) => ({ ...e, account_id: byRow.get(e.bank_row_id) || null }));
             res.json({ entries });
         } catch (e) { res.status(500).json({ error: e.message }); }
     });
@@ -875,6 +880,7 @@ function mount(app, cfg) {
                     last_sync_at: hit ? hit.it.last_sync_at : null,
                     needs_login: hit ? hit.it.needs_login : null,
                     balance: bal ? bal.current : null, balance_as_of: bal ? bal.as_of : null,
+                    ids,
                     ...totals(ids),
                 });
             }
@@ -887,7 +893,7 @@ function mount(app, cfg) {
                     mask: a.mask || null, linked: true, item_id: it.item_id, institution: it.institution,
                     last_sync_at: it.last_sync_at, needs_login: it.needs_login,
                     balance: bal ? bal.current : null, balance_as_of: bal ? bal.as_of : null,
-                    unassigned: true, ...totals([pid]) });
+                    unassigned: true, ids: [pid], ...totals([pid]) });
             }
             // A company with no bank account record at all (AAA today).
             const covered = new Set(cards.map((c) => c.entity).filter(Boolean));

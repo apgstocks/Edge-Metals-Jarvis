@@ -370,6 +370,7 @@ const bal = (entity, account) => {
     const sa = await req('GET', '/api/bank/set-aside', { sid });
     const feeRow = (sa.json.rows || []).find((x) => x.id === 'FEE-1');
     ck('the set-aside route lists each line', sa.status === 200 && sa.json.count === 2 && !!feeRow, sa.raw.slice(0, 300));
+    ck('  each line says which bank account it is in (for the bank switch)', feeRow && feeRow.account_id === 'edge-metals-bofa' || (feeRow && typeof feeRow.account_id === 'string'), JSON.stringify(feeRow));
     ck('  with the reason and the money', feeRow && /rule "WIRE IN FEE"/.test(feeRow.reason) && feeRow.amount === 15 && feeRow.direction === 'out');
     const ranged = await req('GET', '/api/bank/set-aside?from=2026-09-15&to=2026-09-30', { sid });
     ck('  and respects the dates', ranged.json.count === 1 && ranged.json.rows[0].id === 'FEE-2', JSON.stringify(ranged.json.rows));
@@ -389,6 +390,7 @@ const bal = (entity, account) => {
     ck('one card per company account: Edge Metals BofA ••3301 and Edge Yard Chase ••4410',
        metals && metals.company === 'Edge Metals' && metals.mask === '3301' && yard && yard.company === 'Edge Yard' && yard.bank === 'Chase',
        JSON.stringify(o.json.accounts));
+    ck('  every card lists the account ids its rows carry (the switch filters on these)', metals && Array.isArray(metals.ids) && metals.ids.includes('edge-metals-bofa') && yard && yard.ids.includes('edge-trading-chase'), JSON.stringify([metals && metals.ids, yard && yard.ids]));
     ck('  AAA Investment is named as not set up rather than left out',
        (o.json.missing || []).some((x) => x.entity === 'aaa-investment'));
     ck('  Edge Metals\' card counts what moved: in 5,000 · out 2,030',
