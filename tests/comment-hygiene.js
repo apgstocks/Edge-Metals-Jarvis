@@ -63,6 +63,89 @@ const FILES = [
     'mobile-app/www/index.html',
 ].filter((f) => fs.existsSync(path.join(ROOT, f)));
 
+// ── THE FOURTH TIME, AND THE BLIND SPOT THAT LET IT THROUGH ─────────────
+// Apsara, 2026-10-14, screenshotting the Record Payment modal with six lines
+// of my comment printed inside it, trailing "-->". Her own instruction
+// contains an arrow — "when bofa-->Edge metals ac" — so the comment quoting
+// it closed at "bofa-->" and the rest became page text. Exactly the packing
+// list failure above, in a different screen.
+//
+// THIS SUITE WAS WRITTEN FOR THAT AND STILL MISSED IT. maskScripts() blanks
+// <script> bodies by design, and the reasoning was sound: a "-->" in a JS
+// line comment prints nothing. But on 2026-10-12 dashboard/index.html's
+// inline script was split into dashboard/app/*.js, which moved this markup
+// from HTML the suite read into a script body it deliberately ignored. The
+// guard did not break; the code walked out from under it.
+//
+// So: the template literals in those files are scanned as the HTML they
+// become. JS line comments are still ignored — masked below — because that
+// part of the original reasoning is still true.
+const TEMPLATE_FILES = (() => {
+    const out = [];
+    try {
+        for (const f of fs.readdirSync(path.join(ROOT, 'dashboard/app')).sort()) {
+            if (f.endsWith('.js')) out.push('dashboard/app/' + f);
+        }
+    } catch (e) { /* the split may be reverted; FILES still covers index.html */ }
+    return out;
+})();
+
+// Blank out JS comments and ordinary string literals, keeping length and
+// newlines, so only what is inside a backtick template survives to be read
+// as markup. A "-->" in `// like this` is text to the parser and prints
+// nothing — flagging it would be the noise the header warns about.
+// ── STRINGS FIRST. THIS ORDER IS THE WHOLE FUNCTION ─────────────────────
+// Written the obvious way — comments, then strings — it immediately
+// reproduced the FIRST failure in this file's own history, listed in the
+// header above: `accept="image/*"` contains `/*`, which opens a block
+// comment that then swallows everything up to the next `*/`, including the
+// `-->` that closes a real comment. The suite reported an unterminated
+// comment in a file that had none.
+//
+// Blanking quoted strings first removes `image/*` before anything looks for
+// a block comment, and removes `//` inside a URL at the same time. Template
+// literals are deliberately NOT masked — they are the markup being checked.
+// A SECOND WRONG VERSION, kept in the note because it passed: masking
+// `"..."` everywhere ate the very quote that caused the bug. Inside a
+// template literal a double quote is an HTML attribute delimiter, not a
+// string — so `"...bofa-->..."` was blanked and the leak became invisible.
+// Proved by re-inserting her arrow and watching the suite stay green.
+//
+// So it is a walk, not a set of regexes: outside a template nothing can be
+// markup and everything is blanked; inside one, every character is kept.
+function maskNonTemplate(s) {
+    const out = Array.from(s);
+    const blank = (from, to) => {
+        for (let k = from; k < to && k < out.length; k++) if (out[k] !== '\n') out[k] = ' ';
+    };
+    let i = 0;
+    while (i < s.length) {
+        const c = s[i];
+        if (c === '`') {                                  // a template: keep all of it
+            i += 1;
+            while (i < s.length && !(s[i] === '`' && s[i - 1] !== '\\')) i += 1;
+            i += 1;
+            continue;
+        }
+        if (c === '/' && s[i + 1] === '/') {              // line comment
+            const end = s.indexOf('\n', i); const to = end < 0 ? s.length : end;
+            blank(i, to); i = to; continue;
+        }
+        if (c === '/' && s[i + 1] === '*') {              // block comment
+            const end = s.indexOf('*/', i + 2); const to = end < 0 ? s.length : end + 2;
+            blank(i, to); i = to; continue;
+        }
+        if (c === "'" || c === '"') {                     // ordinary string
+            let j = i + 1;
+            while (j < s.length && s[j] !== c && s[j] !== '\n') { if (s[j] === '\\') j += 1; j += 1; }
+            blank(i, j + 1); i = j + 1; continue;
+        }
+        out[i] = c === '\n' ? '\n' : ' ';                 // plain code
+        i += 1;
+    }
+    return out.join('');
+}
+
 // Blanks out <script> and <style> bodies, keeping the length identical so the
 // line numbers a failure reports are the real ones.
 function maskScripts(s) {
@@ -114,6 +197,25 @@ for (const f of FILES) {
     ck(`  ${f}: and every comment is closed`, r.unterminated === null,
        r.unterminated ? `opened at line ${r.unterminated} and never closed — everything after it vanishes` : '');
 }
+
+// ── THE SAME WALK, OVER MARKUP THAT LIVES IN .js NOW ────────────────────
+// dashboard/app/*.js hold the template literals that used to be inline HTML
+// in dashboard/index.html. They render into the page, so a comment in one
+// leaks exactly as it would in a .html file — which is how Apsara came to
+// read six lines of mine inside the Record Payment modal.
+for (const f of TEMPLATE_FILES) {
+    const src = maskNonTemplate(fs.readFileSync(path.join(ROOT, f), 'utf8'));
+    const r = scan(src);
+    ck(`${f}: every "-->" in a template closes a comment`, r.strays.length === 0,
+       r.strays.map((s) => `line ${s.line}: …${s.text} -->`).join('\n        ')
+       + '  ← this text PRINTS INTO THE PAGE');
+    ck(`  ${f}: and every comment in one is closed`, r.unterminated === null,
+       r.unterminated ? `opened at line ${r.unterminated} and never closed` : '');
+}
+// A guard that scans nothing reports all-clear. If the split is ever
+// reverted or the folder renamed, this says so rather than passing silently.
+ck(`the template sweep found files to read (${TEMPLATE_FILES.length})`,
+   TEMPLATE_FILES.length >= 10, 'dashboard/app/*.js is empty — this check is blind');
 
 // ══════════════════════════════════════════════════════════════════════════
 section('B — and none of them is one step away from leaking');

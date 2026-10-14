@@ -76,6 +76,30 @@ function paymentBadgeHtml(l) {
   return `<span class="pay-badge pay-part">PART PAID ${money(p.paid)}${on} · ${money(p.pending)} pending</span>`;
 }
 
+// ── WHICH CASH: THE BANK FIRST, THE ACCOUNT INSIDE IT ───────────────────
+// Apsara, 2026-09-22: "when pay via cash,option of chase/bofa .when
+// bofa-->Edge metals ac or aaa investments should be asked".
+//
+// HER WORDS LIVE HERE, IN A JS COMMENT, AND NOT IN THE MARKUP BELOW.
+// That arrow is three characters that end an HTML comment. Quoted inside
+// one — which is where this note used to sit — the comment closed at
+// "bofa-->" and the remaining six lines were RENDERED INTO THE PAY MODAL.
+// Apsara saw them on screen on 2026-10-14, trailing "-->" and all.
+//
+// It is the fourth time a comment terminator inside the thing being
+// commented has bitten this project, and the second time it reached her.
+// tests/comment-hygiene.js was written for the third (a packing list that
+// went to a customer with my comment printed across it) and would have
+// caught this — except it masks <script> bodies by design, and today's
+// split moved this markup from inline HTML into a .js file, so the guard
+// stopped seeing it. The guard now reads template literals in these files
+// too; a JS line comment like this one is still ignored, because a "-->"
+// here is text to the parser and prints nothing.
+//
+// The ORDER she asked for: where the notes came from, then whose they are —
+// the same order the Add Cash prompt uses. pay_cash_source keeps its id and
+// still holds the ACCOUNT name, so the submit path is untouched and the
+// server still receives one cash_source.
 function renderLoads(loads) {
   loadsCache = loads || [];
 
@@ -517,14 +541,9 @@ function renderLoads(loads) {
                Its own field, not the bank row above: helpers/banks.js refuses
                a bank on a cash payment and is right to. -->
           <div class="field" id="pay_cash_source_row" style="margin-top:14px; display:none;">
-            <!-- Apsara, 2026-09-22: "when pay via cash,option of chase/bofa
-                 .when bofa-->Edge metals ac or aaa investments should be
-                 asked". The bank first, the account inside it — the same
-                 order the Add Cash prompt now uses, because it is the order
-                 she thinks in: where the notes came from, then whose they
-                 are. pay_cash_source keeps its id and still holds the ACCOUNT
-                 name, so the submit path below is untouched and the server
-                 still receives one cash_source. -->
+            <!-- The bank first, the account inside it. See the note above
+                 this template: her instruction contains an arrow that cannot
+                 be quoted inside an HTML comment. -->
             <label for="pay_cash_bank">Which bank</label>
             <select id="pay_cash_bank" style="margin-bottom:10px;"></select>
             <label for="pay_cash_source" id="pay_cash_source_label">Which account</label>
