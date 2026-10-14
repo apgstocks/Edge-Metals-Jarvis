@@ -26,7 +26,44 @@
 const cfg = require('../config');
 const { loadJson, mutateJson } = require('./json');
 
-const PARTIES = { zimex: 'Zimex', eagle: 'Eagle Trans', jio: 'Jio', sher: 'Sher Trucking', ajtransport: 'AJ Transport', panmetal: 'Pan Metal', gardunos: "Garduno's" };
+// ── COMMISSION AGENTS ARE PARTIES TOO ───────────────────────────────────
+// Apsara, 2026-10-14: "WHy joey commission not built in jarvis?" — and, on
+// how it should work: "We have already told about pan metal commission.
+// Mimic that."
+//
+// Pan Metal was already the precedent, and it is exact: amountOf() below
+// reads `commission` for panmetal where every other party uses an invoice
+// total. So an agent is a party whose line amount IS the commission.
+//
+// WHY THIS, RATHER THAN A FIELD ON THE SALE. helpers/sales.js has
+// commission_per_mt and commission_amount — ONE rate, ONE amount, and NO
+// PAYEE. Her own mails routinely name two or three agents on one sale;
+// proformaFromEmail.js records her example verbatim: "$2,520 CIF Busan (10c
+// for Mr.Kim and 10c for Hynos included)". Two of those three commissions
+// have nowhere to live on a sale row, and none of them has a name.
+//
+// AND IT CANNOT DOUBLE-COUNT. This file is a REGISTER: its header says it
+// "posts nothing to bills, the books, bank matching or QuickBooks". The
+// sale's commission_amount still posts 5300/2100 exactly as it did, so the
+// books are untouched and the register answers the question the books
+// cannot — WHO, and HAVE I PAID THEM.
+//
+// JOEY ONLY, AND THAT IS DELIBERATE. Her Verification tab already reads
+// "Under commission-Joey,Pan metal" (documents.html:939) — a Joey sub-tab
+// and a verifyPanelJoey have existed since that tab was built, as an
+// honest placeholder with no store behind them. So this connects a screen
+// she already has rather than inventing one.
+//
+// Mr. Kim and Hynos appear in her mails too ("10c for Mr.Kim and 10c for
+// Hynos included") but she has never asked for them as tabs, and a name
+// read out of an email is not a decision. Each is one entry here plus one
+// sub-tab button when she says so.
+const PARTIES = { zimex: 'Zimex', eagle: 'Eagle Trans', jio: 'Jio', sher: 'Sher Trucking', ajtransport: 'AJ Transport', panmetal: 'Pan Metal', gardunos: "Garduno's",
+    joey: 'Joey' };
+// A party whose line amount is a COMMISSION on a sale, not something they
+// invoiced. Pan Metal has always been one — it is named here so the rule is
+// a list rather than a special case buried in amountOf().
+const COMMISSION_PARTIES = new Set(['panmetal', 'joey']);
 // The sweep calls Eagle Trans 'eaglebrit'.
 const ALIAS = { eaglebrit: 'eagle' };
 // Same ceiling the sweep uses for its trucker tab logging: a drayage line is hundreds of
@@ -47,7 +84,10 @@ const isRevised = (no) => REVISED_RE.test(txt(no)) && baseInvoice(no) !== '';
 
 // What this line is worth, by party — the same field order the sweep itself reads.
 function amountOf(party, r) {
-    if (party === 'panmetal') return num(r.commission != null ? r.commission : r.amount);
+    // A commission party's line IS the commission. Was `party === 'panmetal'`
+    // until 2026-10-14; the set is the same rule with the agents added, so
+    // Joey's line reads his commission the way Pan Metal's always has.
+    if (COMMISSION_PARTIES.has(party)) return num(r.commission != null ? r.commission : r.amount);
     return num(r.net_amount != null ? r.net_amount : (r.total_amount != null ? r.total_amount : r.amount));
 }
 
@@ -358,7 +398,7 @@ function summary(rows = list()) {
     return out;
 }
 
-module.exports = { PARTIES, TRUCKING_CAP, MODES, normalize, amountOf, list, upsertMany, summary,
+module.exports = { PARTIES, COMMISSION_PARTIES, TRUCKING_CAP, MODES, normalize, amountOf, list, upsertMany, summary,
     payments, paidByRow, withPaid, cancellations, editRow, deleteRow, addPayment, deletePayment, validatePayment, EDITABLE,
     baseInvoice, isRevised, supersedePlan, supersedeApply,
     LOCK_MS, lockState, isUnlocked, setLock, copyRow };

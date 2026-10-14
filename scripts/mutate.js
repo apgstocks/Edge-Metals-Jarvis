@@ -1251,6 +1251,40 @@ const MUTATIONS = [
       find: '         data-bank="${esc(a.bank || \'\')}" data-mask="${esc(a.mask || \'\')}"',
       to:   '         data-bank="" data-mask=""' },
 
+    // ── JOEY'S COMMISSION HAD NOWHERE TO LIVE ───────────────────────────
+    // Apsara, 2026-10-14: "WHy joey commission not built in jarvis?" then
+    // "We have already told about pan metal commission." / "Mimic that."
+    // An agent is a party whose line amount IS the commission — the rule Pan
+    // Metal has always used.
+    { name: 'commission: an agent stops being a party, so there is no register line',
+      file: 'helpers/partyInvoices.js', suites: ['commission-agents'],
+      find: "    joey: 'Joey' };",
+      to:   "};" },
+    { name: 'commission: an agent line reads an invoice total instead of the commission',
+      file: 'helpers/partyInvoices.js', suites: ['commission-agents'],
+      find: "    if (COMMISSION_PARTIES.has(party)) return num(r.commission != null ? r.commission : r.amount);",
+      to:   "    if (party === 'panmetal') return num(r.commission != null ? r.commission : r.amount);" },
+    // The other direction: a hauler is NOT a commission party, and reading
+    // `commission` off a freight invoice would take the wrong figure.
+    { name: 'commission: every party becomes a commission party',
+      file: 'helpers/partyInvoices.js', suites: ['commission-agents'],
+      find: "const COMMISSION_PARTIES = new Set(['panmetal', 'joey']);",
+      to:   "const COMMISSION_PARTIES = new Set(Object.keys(PARTIES));" },
+    // THE PRECEDENT MUST NOT REGRESS. Pan Metal was already doing this and
+    // dropping it would change a party that has been working for a week.
+    { name: 'commission: Pan Metal stops being one, which is where this came from',
+      file: 'helpers/partyInvoices.js', suites: ['commission-agents'],
+      find: "const COMMISSION_PARTIES = new Set(['panmetal', 'joey']);",
+      to:   "const COMMISSION_PARTIES = new Set(['joey']);" },
+
+    // The ONE LINE that was missing: her Joey tab existed and was not
+    // joined to the register. tests/party-invoices.js checks every party in
+    // the store has a sub-tab wired to it, and caught this.
+    { name: 'commission: the Joey tab is unwired again, so her screen shows nothing',
+      file: 'dashboard/documents.html', suites: ['party-invoices'],
+      find: "  zimex: 'zimex', 'pan-metal': 'panmetal', eagle: 'eagle', joey: 'joey',",
+      to:   "  zimex: 'zimex', 'pan-metal': 'panmetal', eagle: 'eagle'," },
+
     // ── $0.00 UNTIL SHE VISITED PETTY CASH ──────────────────────────────
     // Apsara, 2026-10-14: "WHEN I CLICK LOADS,THEN PAY IT IS SHOWING 0.AFTER
     // JSUT VISITING PERTY CASE,THEN I CLICK PAY IN LOADS,IT IS SHOWING

@@ -1911,9 +1911,17 @@ async function loadCarrier(c) {
 //
 // Keyed by SUB-TAB, which is why this map exists at all: the sub-tab ids are
 // hyphenated ('aj-transport', 'pan-metal') and the store's party ids are not.
+// ── JOEY WAS ON THIS SCREEN ALL ALONG ───────────────────────────────────
+// Apsara, 2026-10-14: "WHy joey commission not built in jarvis?"
+//
+// The tab was. data-verify-subtab="joey" and verifyPanelJoey have existed
+// since the Verification tab was built to her layout ("Under
+// commission-Joey,Pan metal"), as an honest placeholder with nothing behind
+// it. What was missing is this ONE LINE joining it to the register, which is
+// where Pan Metal's commission has been living all along.
 const PARTY_OF_SUBTAB = {
   'aj-transport': 'ajtransport', 'sher-trucking': 'sher', jio: 'jio', gardunos: 'gardunos',
-  zimex: 'zimex', 'pan-metal': 'panmetal', eagle: 'eagle',
+  zimex: 'zimex', 'pan-metal': 'panmetal', eagle: 'eagle', joey: 'joey',
 };
 const PARTY_CHECK = { verified: 'on the sheet', match: 'on the sheet',
   not_in_sheet: 'NOT on the sheet', booking_mismatch: 'booking does not match',
