@@ -2634,7 +2634,31 @@ function openPayModal(loadId, kind, opts) {
         sel.style.display = only ? 'none' : '';
         if (label) label.style.display = only ? 'none' : '';
       };
-      if (bankSel) {
+      // ── THE GROUPING IS THE SERVER'S KNOWLEDGE, NOT A GUESS ───────────
+      // Apsara, 2026-10-14, with two screenshots: before visiting Petty cash
+      // the modal showed ONE dropdown reading "Which bank - Edge Metals
+      // $0.00"; after, "Which bank - BofA" and "Which account - Edge Metals".
+      // Not just missing figures, the WRONG QUESTION: bankFor() falls back to
+      // the account's own name when bank_of has not arrived, so each fallback
+      // ACCOUNT became its own bank, fillAccounts found one account under it
+      // and HID the account row. The label said Which bank over accounts.
+      // While the grouping is unknown the bank row is not shown at all, and
+      // she is asked for the ACCOUNT, which is what the fallback really is.
+      // pay_cash_source keeps a real value throughout: the submit path reads
+      // it, and a select holding nothing posts an empty cash_source.
+      const grouped = !!(pettyCash.bank_of && Object.keys(pettyCash.bank_of).length);
+      if (bankSel && !grouped) {
+        const bankLbl = bankSel.previousElementSibling;
+        bankSel.style.display = 'none';
+        if (bankLbl && bankLbl.tagName === 'LABEL') bankLbl.style.display = 'none';
+        sel.innerHTML = srcs.map((x) => `<option value="${esc(x)}">${esc(withAmount(x))}</option>`).join('');
+        sel.value = srcs[0] || '';
+        sel.style.display = '';
+        if (label) { label.style.display = ''; label.textContent = 'Which account'; }
+      } else if (bankSel) {
+        const bankLbl = bankSel.previousElementSibling;
+        bankSel.style.display = '';
+        if (bankLbl && bankLbl.tagName === 'LABEL') bankLbl.style.display = '';
         const banks = srcs.map(bankFor).filter((b, i, all) => all.indexOf(b) === i);
         const bankTotal = (b) => srcs.filter((x) => bankFor(x) === b).reduce((t, x) => t + held(x), 0);
         bankSel.innerHTML = banks.map((b) =>

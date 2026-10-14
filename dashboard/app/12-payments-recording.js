@@ -660,7 +660,40 @@ function openPayModal(loadId, kind, opts) {
         if (label) label.style.display = only ? 'none' : '';
       };
 
-      if (bankSel) {
+      // ── THE GROUPING IS THE SERVER'S KNOWLEDGE, NOT A GUESS ───────────
+      // Apsara, 2026-10-14, with two screenshots: before visiting Petty cash
+      // the modal showed ONE dropdown reading "Which bank — Edge Metals
+      // $0.00"; after, it showed "Which bank — BofA $70,126.61" and "Which
+      // account — Edge Metals $48,916.07".
+      //
+      // Not just missing figures — the WRONG QUESTION. bankFor() falls back
+      // to the account's own name when bank_of has not arrived, so each of
+      // the four fallback ACCOUNTS became its own "bank", and fillAccounts
+      // then found exactly one account under it and HID the account row. The
+      // label said Which bank over a list of accounts.
+      //
+      // Fetching (openPayModal) fixes the figures but this still renders for
+      // the moment before the answer lands, and a mislabelled question is
+      // worse than a blank one. So while the grouping is unknown, the bank
+      // row is not shown at all and the ACCOUNT list — which is genuinely
+      // what the fallback holds — is what she is asked.
+      //
+      // pay_cash_source still holds a real account value throughout, because
+      // the submit path reads it and a select holding nothing posts an empty
+      // cash_source. That is how the pay modal broke in September.
+      const grouped = !!(pettyCash.bank_of && Object.keys(pettyCash.bank_of).length);
+      if (bankSel && !grouped) {
+        const bankRow = bankSel.previousElementSibling;     // its <label>
+        bankSel.style.display = 'none';
+        if (bankRow && bankRow.tagName === 'LABEL') bankRow.style.display = 'none';
+        sel.innerHTML = srcs.map((x) => `<option value="${esc(x)}">${esc(withAmount(x))}</option>`).join('');
+        sel.value = srcs[0] || '';
+        sel.style.display = '';
+        if (label) { label.style.display = ''; label.textContent = 'Which account'; }
+      } else if (bankSel) {
+        const bankRow = bankSel.previousElementSibling;
+        bankSel.style.display = '';
+        if (bankRow && bankRow.tagName === 'LABEL') bankRow.style.display = '';
         const banks = srcs.map(bankFor).filter((b, i, all) => all.indexOf(b) === i);
         bankSel.innerHTML = banks.map((b) => {
           const total = srcs.filter((a) => bankFor(a) === b).reduce((t, a) => t + held(a), 0);

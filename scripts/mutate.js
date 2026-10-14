@@ -1302,6 +1302,32 @@ const MUTATIONS = [
       find: "      if (m && !m.classList.contains('hidden')) syncBankFields('pay');",
       to:   "      syncBankFields('pay');" },
 
+    // ── AND IT WAS THE WRONG QUESTION, NOT JUST THE WRONG FIGURE ────────
+    // Her second pair of screenshots: before visiting Petty cash, ONE
+    // dropdown reading "Which bank — Edge Metals $0.00". bankFor() falls
+    // back to the account's own name when bank_of has not arrived, so every
+    // ACCOUNT became its own bank and the account row hid itself.
+    { name: 'paycash: the bank/account split runs before bank_of has arrived',
+      file: 'dashboard/app/12-payments-recording.js', suites: ['pay-cash-not-loaded'],
+      find: '      const grouped = !!(pettyCash.bank_of && Object.keys(pettyCash.bank_of).length);',
+      to:   '      const grouped = true;' },
+    { name: 'paycash: same in the app — it groups on a fallback it invented',
+      file: 'mobile-app/www/index.html', suites: ['pay-cash-not-loaded'],
+      find: '      const grouped = !!(pettyCash.bank_of && Object.keys(pettyCash.bank_of).length);',
+      to:   '      const grouped = true;' },
+    // The other direction: never grouping means she can no longer choose a
+    // bank at all once the figures ARE known.
+    { name: 'paycash: the bank row never comes back, so BofA vs Chase cannot be chosen',
+      file: 'dashboard/app/12-payments-recording.js', suites: ['pay-cash-not-loaded'],
+      find: '      const grouped = !!(pettyCash.bank_of && Object.keys(pettyCash.bank_of).length);',
+      to:   '      const grouped = false;' },
+    // THE SEPTEMBER BREAK, which this must not reintroduce: a select holding
+    // nothing posts an empty cash_source and the save fails outright.
+    { name: 'paycash: the ungrouped branch leaves cash_source empty',
+      file: 'dashboard/app/12-payments-recording.js', suites: ['pay-cash-not-loaded'],
+      find: "        sel.value = srcs[0] || '';\n        sel.style.display = '';",
+      to:   "        sel.value = '';\n        sel.style.display = '';" },
+
     // ── THE GATE HAS TO ASK, AND THE KEY MUST NOT WEAKEN ────────────────
     // Her mail named PO10554 and no container, so the gate dropped it. The
     // fix is in two halves and both can rot independently.

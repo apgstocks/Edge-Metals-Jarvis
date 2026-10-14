@@ -223,7 +223,53 @@ section('D — a late answer does not redraw a modal she has closed');
 }
 
 // ══════════════════════════════════════════════════════════════════════════
-section('E — both clients, because she uses the phone at the yard');
+section('E — the WRONG QUESTION, not just the wrong figure');
+// Her two screenshots, 2026-10-14. Before visiting Petty cash: ONE dropdown
+// reading "Which bank — Edge Metals $0.00". After: "Which bank — BofA
+// $70,126.61" AND "Which account — Edge Metals $48,916.07".
+//
+// bankFor() falls back to the account's OWN NAME when bank_of has not
+// arrived, so each of the four fallback ACCOUNTS became its own bank,
+// fillAccounts found exactly one account under it, and hid the account row.
+// The label said "Which bank" over a list of accounts.
+
+{
+    // The arithmetic that produced her first screenshot, from the shipped
+    // fallback list. Pinned as a measurement: if bankFor ever stops falling
+    // back this section is describing something that no longer happens.
+    const srcs = ['Edge Metals', 'AAA Investment', 'Chase Bank', 'Unassigned'];
+    const bankFor = (a) => ({}[a]) || a;              // bank_of not arrived
+    const banks = srcs.map(bankFor).filter((b, i, all) => all.indexOf(b) === i);
+    ck('with no bank_of, every ACCOUNT becomes its own "bank"',
+       banks.length === 4 && banks[0] === 'Edge Metals', JSON.stringify(banks));
+    ck('  and only one account sits under it', srcs.filter((a) => bankFor(a) === 'Edge Metals').length === 1,
+       'which is why fillAccounts hid the account row');
+
+    // THE FIX: the grouping is only applied when the server has supplied it.
+    for (const f of ['dashboard/app/12-payments-recording.js', 'mobile-app/www/index.html']) {
+        const s = read(f);
+        ck(`${f}: the bank/account split waits for bank_of`,
+           /const grouped = !!\(pettyCash\.bank_of && Object\.keys\(pettyCash\.bank_of\)\.length\)/.test(s),
+           'without this the label says Which bank over a list of accounts');
+        ck(`  ${f}: and the bank row is hidden until then`,
+           /if \(bankSel && !grouped\) \{[\s\S]{0,400}?bankSel\.style\.display = 'none'/.test(s));
+        ck(`  ${f}: asking for the ACCOUNT instead, which is what the list holds`,
+           /if \(bankSel && !grouped\) \{[\s\S]{0,600}?label\.textContent = 'Which account'/.test(s));
+        // THE INVARIANT THAT MUST SURVIVE ALL OF THIS. The submit path reads
+        // pay_cash_source; a select holding nothing posts an empty
+        // cash_source, which is how the pay modal broke in September.
+        ck(`  ${f}: and pay_cash_source still holds a real account`,
+           /if \(bankSel && !grouped\) \{[\s\S]{0,600}?sel\.value = srcs\[0\] \|\| ''/.test(s),
+           'an empty cash_source is the September break');
+        // And the row is shown again once the grouping is known, or she
+        // could never pick a bank after the figures land.
+        ck(`  ${f}: the bank row comes back when it is known`,
+           /\} else if \(bankSel\) \{[\s\S]{0,200}?bankSel\.style\.display = ''/.test(s));
+    }
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+section('F — both clients, because she uses the phone at the yard');
 
 {
     for (const f of ['dashboard/app/06-expenses-trucker.js', 'mobile-app/www/index.html']) {
