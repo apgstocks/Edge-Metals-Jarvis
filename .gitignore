@@ -249,3 +249,5 @@ tests/sidebar-pages.js
 outputs/.probe-prose.js
 outputs/mutate-restore.stale-1791869338.json
 outputs/mutate-restore.stale2-1791869358.json
+outputs/.mutate-once-probe.js
+tests/load-create-buttons.js

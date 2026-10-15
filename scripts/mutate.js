@@ -1277,6 +1277,73 @@ const MUTATIONS = [
       find: "const COMMISSION_PARTIES = new Set(['panmetal', 'joey']);",
       to:   "const COMMISSION_PARTIES = new Set(['joey']);" },
 
+    // ── THE CREATE BUTTON FOLLOWS THE FILTER (EDGE YARD) ────────────────
+    // Apsara, 2026-10-15: "on purchases,hide the sale button(create),on sale
+    // page,hide the create invocie button.create invoce rename to +load",
+    // then "in edge yard".
+    { name: 'loadbtn: the create buttons stop following the filter entirely',
+      file: 'mobile-app/www/index.html', suites: ['load-create-buttons'],
+      find: "  toggleCreate('btnAddLoad', loadKindFilter !== 'sale');",
+      to:   "  toggleCreate('btnAddLoad', true);" },
+    { name: 'loadbtn: standing on Purchases still offers a Sale button',
+      file: 'mobile-app/www/index.html', suites: ['load-create-buttons'],
+      find: "  toggleCreate('btnAddSale', loadKindFilter !== 'purchase');",
+      to:   "  toggleCreate('btnAddSale', true);" },
+    // THE INVERSION. Hiding the wrong one on each tab is the mistake that
+    // looks right until you are standing in the yard.
+    { name: 'loadbtn: the two buttons are hidden on the wrong tabs',
+      file: 'mobile-app/www/index.html', suites: ['load-create-buttons'],
+      find: "  toggleCreate('btnAddLoad', loadKindFilter !== 'sale');\n  toggleCreate('btnAddSale', loadKindFilter !== 'purchase');",
+      to:   "  toggleCreate('btnAddLoad', loadKindFilter !== 'purchase');\n  toggleCreate('btnAddSale', loadKindFilter !== 'sale');" },
+    // 'all' must show BOTH, or the tab that is not claiming to be one kind
+    // loses the only way to record a sale.
+    { name: 'loadbtn: All hides the Sale button too, so a sale cannot be started',
+      file: 'mobile-app/www/index.html', suites: ['load-create-buttons'],
+      find: "  toggleCreate('btnAddSale', loadKindFilter !== 'purchase');",
+      to:   "  toggleCreate('btnAddSale', loadKindFilter === 'sale');" },
+    // REMOVED vs HIDDEN. tests/yard-clients.js section E checks btnAddSale
+    // exists in BOTH clients by name and tests/item-row-net.js opens the form
+    // through btnAddLoad, so removing either would break two other suites.
+    { name: 'loadbtn: hiding is done by removing the button from the DOM',
+      file: 'mobile-app/www/index.html', suites: ['load-create-buttons', 'yard-clients', 'item-row-net'],
+      find: "    if (b) b.classList.toggle('hidden', !show);",
+      to:   "    if (b && !show) b.remove(); else if (b) b.classList.remove('hidden');" },
+    // THE RENAME.
+    { name: 'loadbtn: the button goes back to claiming it creates an invoice',
+      file: 'mobile-app/www/index.html', suites: ['load-create-buttons'],
+      find: '<button id="btnAddLoad" class="btn btn-primary">+ Load</button>',
+      to:   '<button id="btnAddLoad" class="btn btn-primary">+ Create invoice</button>' },
+    { name: 'loadbtn: the modal still says Create invoice behind the + Load button',
+      file: 'mobile-app/www/index.html', suites: ['load-create-buttons'],
+      find: "  const title = sale ? 'Record sale' : 'New load';",
+      to:   "  const title = sale ? 'Record sale' : 'Create invoice';" },
+    // THE SALE SIDE MUST NOT MOVE. She named the purchase label.
+    { name: 'loadbtn: the rename leaks onto the sale side, which she did not ask for',
+      file: 'mobile-app/www/index.html', suites: ['load-create-buttons'],
+      find: "  const save = sale ? 'Record sale' : 'Save load';",
+      to:   "  const save = 'Save load';" },
+    // The pre-existing bug this change uncovered: a failed save on a SALE
+    // restored the PURCHASE label.
+    { name: 'loadbtn: a failed save on a sale puts the purchase label back',
+      file: 'mobile-app/www/index.html', suites: ['load-create-buttons'],
+      find: "      btn.textContent = isEdit ? 'Save changes' : (loadModalMode === 'sale' ? 'Record sale' : 'Save load');",
+      to:   "      btn.textContent = isEdit ? 'Save changes' : 'Save load';" },
+
+    // THE DRIFT ITSELF. These mutate the APK's COPY, not the source, because
+    // that is the failure that actually happened: www was right, the suite
+    // was green, and her phone was 195 lines behind for two days.
+    { name: 'loadbtn: the APK copy drifts back from www',
+      file: 'mobile-app/android/app/src/main/assets/public/index.html', suites: ['load-create-buttons'],
+      find: '<button id="btnAddLoad" class="btn btn-primary">+ Load</button>',
+      to:   '<button id="btnAddLoad" class="btn btn-primary">+ Create invoice</button>' },
+    // NO MUTATION FOR THE VERSION BUMP. The harness syntax-checks every
+    // mutated file as JavaScript, so a build.gradle mutation can only ever
+    // report NOT APPLIED — which is strictly worse than no mutation, because
+    // the report says "not applied" once and then everyone reads the suite as
+    // covered. The two version assertions in tests/load-create-buttons.js
+    // section F were verified by hand instead: setting versionCode back to 75
+    // turns both red. Do not re-add this one.
+
     // ── HYNOS BILLS ONE CONTAINER TWICE ─────────────────────────────────
     // Her sample commission invoice EM-261014-01 bills eight contracts twice
     // on the same container. party:invoice:container collided and $237.32

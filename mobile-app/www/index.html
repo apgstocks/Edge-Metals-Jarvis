@@ -4320,9 +4320,16 @@ let loadModalMode = 'purchase'; // 'purchase' | 'sale'
 function applyLoadModalMode(mode) {
   loadModalMode = mode === 'sale' ? 'sale' : 'purchase';
   const sale = loadModalMode === 'sale';
-  const t = sale ? 'Record sale' : 'Create invoice';
-  if ($('loadModalTitle')) $('loadModalTitle').textContent = editingLoadId ? (sale ? 'Edit sale' : 'Edit load') : t;
-  if ($('btnSaveLoad')) $('btnSaveLoad').textContent = editingLoadId ? 'Save changes' : t;
+  // Both of these said 'Create invoice' on the purchase side until
+  // 2026-10-15, when the button that opens this modal became "+ Load"
+  // (Apsara: "create invoce rename to +load"). Landing on a form headed
+  // 'Create invoice' after pressing '+ Load' reads like the wrong screen, and
+  // nothing here creates an invoice. She was asked before these two moved.
+  // THE SALE SIDE IS BYTE-FOR-BYTE UNCHANGED — she named the purchase label.
+  const title = sale ? 'Record sale' : 'New load';
+  const save = sale ? 'Record sale' : 'Save load';
+  if ($('loadModalTitle')) $('loadModalTitle').textContent = editingLoadId ? (sale ? 'Edit sale' : 'Edit load') : title;
+  if ($('btnSaveLoad')) $('btnSaveLoad').textContent = editingLoadId ? 'Save changes' : save;
   // The counterparty swaps sides: on a purchase Edge Trading is the buyer and
   // the seller is typed; on a sale Edge Trading is the seller and the buyer is
   // typed. Same two inputs, relabelled, so every downstream handler keeps
@@ -5267,7 +5274,14 @@ function renderLoads(loads) {
           <div style="font-size:13px; color:var(--text-muted);">Camera or upload gross/tare weight, computed net, generated PDF ticket.</div>
         </div>
         <div style="display:flex; gap:8px;">
-          <button id="btnAddLoad" class="btn btn-primary">+ Create invoice</button>
+          <!-- "+ Create invoice" until 2026-10-15. Apsara: "create invoce
+               rename to +load". It never created an invoice — it opens the
+               load form in purchase mode and writes an inbound load. The id
+               stays btnAddLoad, which both tests/yard-clients.js section E
+               and tests/item-row-net.js reach for by name. EDGE YARD ONLY:
+               the website's own Loads tab (dashboard/app/05-load-pricing.js)
+               keeps its label, and she asked for "in edge yard". -->
+          <button id="btnAddLoad" class="btn btn-primary">+ Load</button>
           <!-- Same modal, sale mode — see applyLoadModalMode. -->
           <!-- Visible to every role. Recording material leaving the yard is
                yard work, same as recording it arriving — Apsara, 2026-08-24,
@@ -5468,7 +5482,10 @@ function renderLoads(loads) {
       <div class="modal-shell">
         <div class="modal-stripe"></div>
         <div class="modal-head">
-          <div id="loadModalTitle" style="font-weight:700; text-transform:uppercase; font-size:14px;">Create invoice</div>
+          <!-- applyLoadModalMode overwrites this on open; it is the shape the
+               markup ships in, and must agree with the purchase branch there
+               or the modal flickers the old word on first paint. -->
+          <div id="loadModalTitle" style="font-weight:700; text-transform:uppercase; font-size:14px;">New load</div>
           <button id="btnCloseLoadModal" class="btn" style="padding:4px 10px;">✕</button>
         </div>
         <div class="modal-body">
@@ -5558,7 +5575,7 @@ function renderLoads(loads) {
           <span id="draftStatus"></span>
           <span style="flex:1;"></span>
           <button id="btnCancelLoad" class="btn">Cancel</button>
-          <button id="btnSaveLoad" class="btn btn-primary">Create invoice</button>
+          <button id="btnSaveLoad" class="btn btn-primary">Save load</button>
         </div>
       </div>
     </div>`;
@@ -6146,7 +6163,14 @@ function wireLoadsEvents() {
       // silently resubmitting the same rejected password if Save is
       // clicked again. User has to click Edit again to re-prompt.
     } finally {
-      btn.disabled = false; btn.textContent = isEdit ? 'Save changes' : 'Create invoice';
+      // DERIVED, not hardcoded. This read 'Create invoice' flat, so a failed
+      // save on a SALE restored the PURCHASE label and the Save button on a
+      // sale form said "Create invoice" until the modal was closed and
+      // reopened. Pre-existing, found on 2026-10-15 while renaming the
+      // purchase label — left in place it would simply have said "Save load"
+      // on a sale instead, which is the same bug with a different word.
+      btn.disabled = false;
+      btn.textContent = isEdit ? 'Save changes' : (loadModalMode === 'sale' ? 'Record sale' : 'Save load');
     }
   });
 
@@ -6565,6 +6589,29 @@ function paintLoadKindBar(count) {
     return `<button type="button" class="btn ${on ? 'btn-primary' : 'btn-secondary'} load-kind-btn" data-kind="${k}"
               aria-pressed="${on}" style="font-size:12px; padding:6px 14px;">${txt}</button>`;
   }).join('');
+
+  // ── THE CREATE BUTTON FOLLOWS THE FILTER ──────────────────────────────
+  // Apsara, 2026-10-15: "on purchases,hide the sale button(create),on sale
+  // page,hide the create invocie button."
+  //
+  // Done HERE rather than in the click handler because this function is the
+  // only thing that already runs on every filter change — from repaintDeck
+  // and from init — and a second place that decides what is on screen is how
+  // two of them end up disagreeing. Same reasoning as the comment on the
+  // delegated handler above.
+  //
+  // 'all' shows both: it is the view that is not claiming to be one kind, and
+  // hiding a create button there would leave the tab with no way to add a
+  // sale. Hidden with .hidden (display:none !important) so the flex row
+  // closes up rather than leaving a gap, and the ELEMENTS STAY IN THE DOM —
+  // tests/yard-clients.js section E checks btnAddSale exists in both clients
+  // by name, and tests/item-row-net.js opens the form through btnAddLoad.
+  const toggleCreate = (id, show) => {
+    const b = document.getElementById(id);
+    if (b) b.classList.toggle('hidden', !show);
+  };
+  toggleCreate('btnAddLoad', loadKindFilter !== 'sale');
+  toggleCreate('btnAddSale', loadKindFilter !== 'purchase');
 }
 let loadsCache = [];
 // Unfinished loads shown above the deck. Held separately from loadsCache on
