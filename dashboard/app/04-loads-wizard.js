@@ -236,6 +236,31 @@ function paintLoadKindBar(count) {
     return `<button type="button" class="btn ${on ? 'btn-primary' : 'btn-secondary'} load-kind-btn" data-kind="${k}"
               aria-pressed="${on}" style="font-size:12px; padding:6px 14px;">${txt}</button>`;
   }).join('');
+
+  // ── THE CREATE BUTTON FOLLOWS THE FILTER ──────────────────────────────
+  // Apsara, 2026-10-15: "on purchases,hide the sale button(create),on sale
+  // page,hide the create invocie button.create invoce rename to +load".
+  // Asked which client, she said "in edge yard" — which I read as the phone
+  // app. It was built there first and she came back with a screenshot of
+  // THIS screen: "This is still remaining same only". The Loads tab is the
+  // Edge Yard view of the website, and that is where she actually stands.
+  //
+  // Done HERE rather than in the click handler because this is the only
+  // function that already runs on every filter change — from repaintDeck and
+  // from init — and a second place deciding what is on screen is how two of
+  // them end up disagreeing. Same reasoning as the delegated handler note.
+  //
+  // 'all' shows BOTH: it is the view not claiming to be one kind, and hiding
+  // a create button there would leave the tab with no way to add a sale.
+  // Hidden with .hidden, and the elements STAY IN THE DOM — tests/
+  // yard-clients.js section E checks btnAddSale exists in both clients by
+  // name and tests/item-row-net.js opens the form through btnAddLoad.
+  const toggleCreate = (id, show) => {
+    const b = document.getElementById(id);
+    if (b) b.classList.toggle('hidden', !show);
+  };
+  toggleCreate('btnAddLoad', loadKindFilter !== 'sale');
+  toggleCreate('btnAddSale', loadKindFilter !== 'purchase');
 }
 let loadsCache = [];
 // Unfinished loads shown above the deck. Held separately from loadsCache on

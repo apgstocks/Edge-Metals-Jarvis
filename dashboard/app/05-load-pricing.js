@@ -803,8 +803,14 @@ let loadModalMode = 'purchase'; // 'purchase' | 'sale'
 function applyLoadModalMode(mode) {
   loadModalMode = mode === 'sale' ? 'sale' : 'purchase';
   const sale = loadModalMode === 'sale';
-  const t = sale ? 'Record sale' : 'Create invoice';
-  if ($('loadModalTitle')) $('loadModalTitle').textContent = editingLoadId ? (sale ? 'Edit sale' : 'Edit load') : t;
+  // Both said 'Create invoice' on the purchase side until 2026-10-15, when
+  // the button that opens this modal became "+ Load". Landing on a form
+  // headed 'Create invoice' after pressing '+ Load' reads like the wrong
+  // screen, and nothing here creates an invoice. She was asked before these
+  // moved. THE SALE SIDE IS UNCHANGED — she named the purchase label.
+  const title = sale ? 'Record sale' : 'New load';
+  const t = sale ? 'Record sale' : 'Save load';
+  if ($('loadModalTitle')) $('loadModalTitle').textContent = editingLoadId ? (sale ? 'Edit sale' : 'Edit load') : title;
   if ($('btnSaveLoad')) $('btnSaveLoad').textContent = editingLoadId ? 'Save changes' : t;
   // The counterparty swaps sides: on a purchase Edge Trading is the buyer and
   // the seller is typed; on a sale Edge Trading is the seller and the buyer is

@@ -336,7 +336,12 @@ function renderLoads(loads) {
         // Recomputed on every filter change — see loadStats/repaintDeck.
         statsId: 'loadStats',
         stats: loadStats(filterLoadsByKind(loadsCache, loadKindFilter), loadKindFilter),
-        actions: `<button id="btnAddLoad" class="btn btn-primary">+ Create invoice</button>
+        actions: `<!-- "+ Create invoice" until 2026-10-15. Apsara: "create
+               invoce rename to +load". It never created an invoice — it opens
+               the load form in purchase mode and writes an inbound load. The
+               id stays btnAddLoad: tests/yard-clients.js section E and
+               tests/item-row-net.js both reach for it by name. -->
+          <button id="btnAddLoad" class="btn btn-primary">+ Load</button>
           <!-- Visible to every role. Recording material leaving the yard is
                yard work, same as recording it arriving — Apsara, 2026-08-24,
                asked directly whether sales should be denied to staff: "no".
@@ -593,7 +598,10 @@ function renderLoads(loads) {
       <div class="modal-shell">
         <div class="modal-stripe"></div>
         <div class="modal-head">
-          <div id="loadModalTitle" style="font-weight:700; text-transform:uppercase; font-size:14px;">Create invoice</div>
+          <!-- applyLoadModalMode overwrites this on open; it is the shape
+               the markup ships in and must agree with the purchase branch
+               there, or the modal flickers the old word on first paint. -->
+          <div id="loadModalTitle" style="font-weight:700; text-transform:uppercase; font-size:14px;">New load</div>
           <button id="btnCloseLoadModal" class="btn" style="padding:4px 10px;">✕</button>
         </div>
         <div class="modal-body">
@@ -697,7 +705,7 @@ function renderLoads(loads) {
           <span id="draftStatus"></span>
           <span style="flex:1;"></span>
           <button id="btnCancelLoad" class="btn">Cancel</button>
-          <button id="btnSaveLoad" class="btn btn-primary">Create invoice</button>
+          <button id="btnSaveLoad" class="btn btn-primary">Save load</button>
         </div>
       </div>
     </div>`;
@@ -1367,7 +1375,13 @@ function wireLoadsEvents() {
       // Wrong admin password (or any other failure) — clear it rather than
       // silently resubmitting the same rejected password on a retry.
     } finally {
-      btn.disabled = false; btn.textContent = isEdit ? 'Save changes' : 'Create invoice';
+      // DERIVED, not hardcoded. This read 'Create invoice' flat, so a failed
+      // save on a SALE restored the PURCHASE label and the Save button on a
+      // sale form said "Create invoice" until the modal was closed and
+      // reopened. Pre-existing on BOTH clients, found 2026-10-15 while
+      // renaming the purchase label.
+      btn.disabled = false;
+      btn.textContent = isEdit ? 'Save changes' : (loadModalMode === 'sale' ? 'Record sale' : 'Save load');
     }
   });
 

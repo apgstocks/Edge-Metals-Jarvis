@@ -1336,6 +1336,34 @@ const MUTATIONS = [
       file: 'mobile-app/android/app/src/main/assets/public/index.html', suites: ['load-create-buttons'],
       find: '<button id="btnAddLoad" class="btn btn-primary">+ Load</button>',
       to:   '<button id="btnAddLoad" class="btn btn-primary">+ Create invoice</button>' },
+    // THE WEBSITE, which is the screen she was actually looking at. She said
+    // "in edge yard", it was built on the phone app, and she came back with
+    // a screenshot of the Loads tab: "This is still remaining same only".
+    { name: 'loadbtn: the WEBSITE create buttons stop following the filter',
+      file: 'dashboard/app/04-loads-wizard.js', suites: ['load-create-buttons'],
+      find: "  toggleCreate('btnAddSale', loadKindFilter !== 'purchase');",
+      to:   "  toggleCreate('btnAddSale', true);" },
+    { name: 'loadbtn: the WEBSITE hides the wrong one on each tab',
+      file: 'dashboard/app/04-loads-wizard.js', suites: ['load-create-buttons'],
+      find: "  toggleCreate('btnAddLoad', loadKindFilter !== 'sale');\n  toggleCreate('btnAddSale', loadKindFilter !== 'purchase');",
+      to:   "  toggleCreate('btnAddLoad', loadKindFilter !== 'purchase');\n  toggleCreate('btnAddSale', loadKindFilter !== 'sale');" },
+    { name: 'loadbtn: the WEBSITE button goes back to claiming it creates an invoice',
+      file: 'dashboard/app/13-loads-render.js', suites: ['load-create-buttons'],
+      find: '<button id="btnAddLoad" class="btn btn-primary">+ Load</button>',
+      to:   '<button id="btnAddLoad" class="btn btn-primary">+ Create invoice</button>' },
+    { name: 'loadbtn: the WEBSITE modal title falls back to the save wording',
+      file: 'dashboard/app/05-load-pricing.js', suites: ['load-create-buttons'],
+      find: "(sale ? 'Edit sale' : 'Edit load') : title;",
+      to:   "(sale ? 'Edit sale' : 'Edit load') : t;" },
+    { name: 'loadbtn: the WEBSITE rename leaks onto the sale side',
+      file: 'dashboard/app/05-load-pricing.js', suites: ['load-create-buttons'],
+      find: "  const t = sale ? 'Record sale' : 'Save load';",
+      to:   "  const t = 'Save load';" },
+    { name: 'loadbtn: a failed save on a WEBSITE sale puts the purchase label back',
+      file: 'dashboard/app/13-loads-render.js', suites: ['load-create-buttons'],
+      find: "      btn.textContent = isEdit ? 'Save changes' : (loadModalMode === 'sale' ? 'Record sale' : 'Save load');",
+      to:   "      btn.textContent = isEdit ? 'Save changes' : 'Save load';" },
+
     // NO MUTATION FOR THE VERSION BUMP. The harness syntax-checks every
     // mutated file as JavaScript, so a build.gradle mutation can only ever
     // report NOT APPLIED — which is strictly worse than no mutation, because
