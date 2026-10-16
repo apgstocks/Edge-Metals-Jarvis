@@ -48,7 +48,7 @@ const pay = require(path.join(ROOT, 'helpers/payments'));
 const banks = require(path.join(ROOT, 'helpers/banks'));
 
 const DASH = require('../helpers/sourceParts').indexHtml();
-const APP = fs.readFileSync(path.join(ROOT, 'mobile-app/www/index.html'), 'utf8');
+const APP = require("../helpers/sourceParts").mobileHtml();
 const stripComments = (s) => s.replace(/<!--[\s\S]*?-->/g, '').replace(/^[ \t]*\/\/.*$/gm, '');
 
 const reset = () => fs.writeFileSync(cfg.PETTY_CASH_FILE, '[]');

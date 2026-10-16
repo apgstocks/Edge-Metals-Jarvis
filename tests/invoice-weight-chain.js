@@ -38,7 +38,7 @@ const section = (t) => console.log('\n=== ' + t + ' ===');
 
 const ROOT = path.join(__dirname, '..');
 const WEB = fs.readFileSync(path.join(ROOT, 'dashboard/documents.html'), 'utf8');
-const APP = fs.readFileSync(path.join(ROOT, 'mobile-app/www/index.html'), 'utf8');
+const APP = require("../helpers/sourceParts").mobileHtml();
 
 // Her real shape: 56,000 gross over a 29,500 tare.
 const GROSS = 56000, TRUCK = 15000, CTARE = 8000, CHASSIS = 6000, BOXES = 500;

@@ -107,6 +107,30 @@ function makeDom(matchBody) {
 }
 const settle = () => new Promise((r) => setTimeout(r, 30));
 
+// ── FIND A CARD BY WHAT IS ON IT, NOT BY WHERE IT SITS ───────────────────
+// This file indexed #list .card by POSITION — CARLOS, [1], [2], [4] — and
+// the deck is sorted NEWEST FIRST. So CARLOS is TX-5 (2026-09-09, Big Co,
+// $99,999) and never was the Carlos row these checks describe. Eight checks
+// were red permanently while describing the wrong card: "the first deposit
+// shows its amount formatted" failed with "$99,999.00", which is a correctly
+// formatted amount belonging to a different deposit.
+//
+// That is the worst shape a failing check can take. It is not reporting a
+// bug, it is reporting its own mis-aim — and a suite with a standing red is
+// one where nobody reads the summary, which is where a REAL regression would
+// have shown up. (The bank commit 2086a74 rewrote this page without touching
+// this file, which is how it was found; the newest-first sort predates it.)
+//
+// Each fixture row has a unique descriptor, so each is now found by that.
+// Re-ordering the deck can no longer make this file lie in either direction.
+const cardFor = (doc, descriptor) => {
+    const want = descriptor.toLowerCase();
+    const hit = [...doc.querySelectorAll('#list .card')]
+        .find((c) => ((c.dataset && c.dataset.k) || c.textContent || '').toLowerCase().includes(want));
+    if (!hit) throw new Error(`no card matching "${descriptor}" — the fixture or the deck changed`);
+    return hit;
+};
+
 (async () => {
 
 let dom, w, doc;
@@ -124,18 +148,19 @@ let dom, w, doc;
 
     const cards = [...doc.querySelectorAll('#list .card')];
     ck('one card per deposit', cards.length === 5, String(cards.length));
+    const CARLOS = cardFor(doc, 'CARLOS G & C');
     ck('  the first deposit shows its amount formatted',
-       /\$47,000\.00/.test(cards[0].textContent), cards[0].querySelector('.amt').textContent);
-    ck('  and its date', /2026-09-05/.test(cards[0].textContent));
+       /\$47,000\.00/.test(CARLOS.textContent), CARLOS.querySelector('.amt').textContent);
+    ck('  and its date', /2026-09-05/.test(CARLOS.textContent));
 
     // The allocations, with her invoice numbers rather than internal ids.
     ck('the proposed allocation lists her invoice numbers',
-       /EM-1001/.test(cards[0].textContent) && /EM-1002/.test(cards[0].textContent),
-       cards[0].querySelector('.alloc') ? cards[0].querySelector('.alloc').textContent : '(no alloc table)');
-    ck('  with each amount', /\$18,000\.00/.test(cards[0].textContent) && /\$29,000\.00/.test(cards[0].textContent));
+       /EM-1001/.test(CARLOS.textContent) && /EM-1002/.test(CARLOS.textContent),
+       CARLOS.querySelector('.alloc') ? CARLOS.querySelector('.alloc').textContent : '(no alloc table)');
+    ck('  with each amount', /\$18,000\.00/.test(CARLOS.textContent) && /\$29,000\.00/.test(CARLOS.textContent));
     ck('  and the reasons in words',
-       /add up to this deposit exactly/.test(cards[0].textContent), cards[0].textContent.slice(0, 300));
-    ck('  and the confidence as a percentage', /84%/.test(cards[0].textContent));
+       /add up to this deposit exactly/.test(CARLOS.textContent), CARLOS.textContent.slice(0, 300));
+    ck('  and the confidence as a percentage', /84%/.test(CARLOS.textContent));
 }
 
 // ── B — HER NAMES ARE ESCAPED ─────────────────────────────────────────────
@@ -144,7 +169,7 @@ let dom, w, doc;
 {
     section('B — "Carlos G & C" and an angle bracket');
 
-    const card = doc.querySelectorAll('#list .card')[0];
+    const card = cardFor(doc, 'CARLOS G & C');
     ck('the supplier name appears intact', /Carlos G & C/.test(card.textContent), card.textContent.slice(0, 160));
     ck('  and the bank description too', /WIRE IN CARLOS G & C/.test(card.textContent));
     // The real test: no element was created out of her text.
@@ -161,7 +186,7 @@ let dom, w, doc;
     const cards = [...doc.querySelectorAll('#list .card')];
 
     // Unknown payer: no suggestions in the fixture, so a free-text box.
-    const unknown = cards[1];
+    const unknown = cardFor(doc, 'ZELLE FROM SOMEBODY');
     ck('an unknown payer gets a way to name them',
        !!unknown.querySelector('[data-learnfree]') && !!unknown.querySelector('[data-name]'),
        unknown.innerHTML.slice(0, 200));
@@ -171,7 +196,7 @@ let dom, w, doc;
        unknown.querySelector('[data-confirm]') === null);
 
     // Ambiguous: the rivals must be visible, not just the winner.
-    const amb = cards[2];
+    const amb = cardFor(doc, 'TWINS LLC');
     ck('an ambiguous row is marked as needing her',
        /needs you/i.test(amb.textContent), amb.textContent.slice(0, 160));
     ck('  and the OTHER possibility is shown, not hidden',
@@ -183,7 +208,7 @@ let dom, w, doc;
        !/8[0-9]%|9[0-9]%|100%/.test(amb.textContent), amb.textContent.slice(0, 200));
 
     // More than owed: the unexplained figure, in words.
-    const big = cards[4];
+    const big = cardFor(doc, 'WIRE IN BIG');
     ck('a deposit bigger than everything owed says how much is unexplained',
        /98999\.00 of it belongs to something not in Jarvis/.test(big.textContent),
        big.textContent.slice(0, 240));
@@ -230,7 +255,7 @@ let dom, w, doc;
     section('F — pressing Confirm');
 
     posted.length = 0;
-    const card = doc.querySelectorAll('#list .card')[0];
+    const card = cardFor(doc, 'CARLOS G & C');
     const bankSel = card.querySelector('[data-bank]');
     ck('the account is pre-filled from the deposit\'s own bank',
        bankSel && bankSel.value === 'BofA', bankSel && bankSel.value);
@@ -272,7 +297,7 @@ let dom, w, doc;
     section('G — 30 dollars short');
 
     posted.length = 0;
-    const card = doc.querySelectorAll('#list .card')[3];
+    const card = cardFor(doc, 'WIRE IN SHORTPAY');
     ck('the shortfall is shown on the row', /short \$30\.00/.test(card.textContent), card.textContent.slice(0, 300));
 
     w.prompt = () => 'fee';
@@ -291,7 +316,7 @@ let dom, w, doc;
     posted.length = 0;
     const dom2 = makeDom(MATCH); await settle();
     dom2.window.prompt = () => 'discount';
-    dom2.window.document.querySelectorAll('#list .card')[3].querySelector('[data-confirm]').click();
+    cardFor(dom2.window.document, 'WIRE IN SHORTPAY').querySelector('[data-confirm]').click();
     await settle();
     req = posted.find((p) => String(p.url).startsWith('/api/sales-receipts'));
     ck('answering "discount" records a discount instead',
@@ -302,7 +327,7 @@ let dom, w, doc;
     posted.length = 0;
     const dom3 = makeDom(MATCH); await settle();
     dom3.window.prompt = () => null;
-    dom3.window.document.querySelectorAll('#list .card')[3].querySelector('[data-confirm]').click();
+    cardFor(dom3.window.document, 'WIRE IN SHORTPAY').querySelector('[data-confirm]').click();
     await settle();
     ck('cancelling the question records nothing at all',
        !posted.some((p) => String(p.url).startsWith('/api/sales-receipts')),
@@ -317,7 +342,10 @@ let dom, w, doc;
     const dom4 = makeDom(MATCH); await settle();
     const d4 = dom4.window.document;
     dom4.window.prompt = () => 'bank analysis fee';
-    const btn = d4.querySelector('[data-exclude]');
+    // The exclude button on a NAMED row, not whichever one the deck happens
+    // to put first. The assertion below expects TX-1, and document order
+    // gives TX-5 (newest first) — the same mis-aim as the card indexes.
+    const btn = cardFor(d4, 'CARLOS G & C').querySelector('[data-exclude]');
     ck('every row can be set aside', !!btn);
     btn.click();
     await settle();

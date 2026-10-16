@@ -32,7 +32,7 @@ const ck = (n, c, extra) => {
 const section = (t) => console.log('\n=== ' + t + ' ===');
 
 const ROOT = path.join(__dirname, '..');
-const APP = fs.readFileSync(path.join(ROOT, 'mobile-app/www/index.html'), 'utf8');
+const APP = require("../helpers/sourceParts").mobileHtml();
 
 // ══════════════════════════════════════════════════════════════════════════
 section('A — every list that picks a value gives the keyboard back');

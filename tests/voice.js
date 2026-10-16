@@ -203,7 +203,7 @@ console.log('\n─ voice: routing and speech ───────────�
        /401\|403\|400/.test(src));
     const api = require('../helpers/sourceParts').apiSource();
     ck('a failed synthesis returns 503, not 500', /voice\/say[\s\S]{0,900}status\(503\)/.test(api));
-    const html = fs.readFileSync(path.join(R, 'mobile-app/www/index.html'), 'utf8');
+    const html = require("../helpers/sourceParts").mobileHtml();
     ck('the app shows the text before it plays anything',
        html.indexOf("voiceReplies'").length !== 0 && /TEXT FIRST, ALWAYS/.test(html));
     ck('the app asks the router, not the brain directly, for voice',
@@ -220,7 +220,7 @@ console.log('\n─ voice: routing and speech ───────────�
 // discarded every single time. The microphone cycled, nothing ever answered,
 // and no amount of fixing the speech pipeline downstream could have helped.
 {
-    const html = fs.readFileSync(path.join(R, 'mobile-app/www/index.html'), 'utf8');
+    const html = require("../helpers/sourceParts").mobileHtml();
     const m = /const WAKE_PATTERNS = \[([\s\S]*?)\n\];/.exec(html);
     ck('the wake patterns are findable', !!m);
     const pats = m ? [...m[1].matchAll(/\/(.+?)\/i,/g)].map((x) => new RegExp(x[1], 'i')) : [];
@@ -255,7 +255,7 @@ console.log('\n─ voice: routing and speech ───────────�
 
 // ── the log exists, and records the one thing reasoning could not reach ───
 {
-    const html = fs.readFileSync(path.join(R, 'mobile-app/www/index.html'), 'utf8');
+    const html = require("../helpers/sourceParts").mobileHtml();
     ck('there is a voice log', /function vlog\(/.test(html));
     ck('  it is bounded, so it cannot grow forever', /VLOG_MAX/.test(html));
     ck('  it records the RAW recogniser output', /vlog\('heard \[/.test(html));

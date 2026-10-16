@@ -107,6 +107,62 @@ const sp = require(path.join(ROOT, 'helpers/sourceParts'));
     }
 }
 
+// ── E — the EDGE YARD APP splits and reassembles the same way ────────────
+// Apsara, 2026-10-16: "The phone app is one 13,138-line HTML file --split it"
+//
+// This section is the only thing standing between that split and a silent
+// disaster. FIFTY-TWO test files read mobile-app/www/index.html as text, and
+// after the split that file is a shell of <script src> tags with no code in
+// it. If mobileHtml() ever stops reassembling, those files do not go RED —
+// they go VACUOUS: every regex matches nothing and every check passes
+// against an empty string. A suite that cannot fail is worse than no suite.
+{
+    const APP = path.join(ROOT, 'mobile-app', 'www', 'index.html');
+    const shell = fs.readFileSync(APP, 'utf8');
+    const parts = sp.mobileParts(shell);
+
+    ck('the app file is split', !!parts, 'no @@app-scripts marker; mobileHtml() would return the shell unchanged');
+    if (parts) {
+        ck('  into the 19 parts its tags list', parts.files.length === 19, String(parts.files.length));
+        ck('  and the shell no longer carries the code itself',
+           !/function loadLocalDayKey/.test(shell),
+           'the code is still inline, so the split did not happen');
+
+        // EACH PART PARSES ALONE. Every <script src> is parsed as its own
+        // script, so a part that is only valid when concatenated with its
+        // neighbours passes every test here and leaves the app blank in the
+        // yard with a syntax error nobody sees.
+        let allParse = true;
+        const bad = [];
+        for (const f of parts.files) {
+            const full = path.join(ROOT, 'mobile-app', 'www', 'app', f);
+            if (!fs.existsSync(full)) { allParse = false; bad.push(f + ' (missing)'); continue; }
+            try { new vm.Script(fs.readFileSync(full, 'utf8')); }
+            catch (e) { allParse = false; bad.push(f + ': ' + e.message); }
+        }
+        ck('  every part exists and parses on its own', allParse, bad.join('; '));
+
+        // RELATIVE src. Capacitor loads the APK from file://, where a leading
+        // slash resolves to the device root and every part 404s silently.
+        // The dashboard is served over HTTP and must use the absolute form,
+        // so this is the one place the two clients differ on purpose.
+        ck('  the tags are RELATIVE, for file:// inside the APK',
+           shell.includes('<script src="app/01-core.js"></script>'));
+        ck('  and not one is absolute', !shell.includes('<script src="/app/'),
+           'an absolute path 404s inside the APK and the app comes up blank');
+
+        // THE ONE THAT MATTERS.
+        const rebuilt = sp.mobileHtml();
+        ck('  mobileHtml() puts the code back', /function loadLocalDayKey/.test(rebuilt));
+        ck('  and drops the tags it replaced', !rebuilt.includes('<script src="app/01-core.js">'));
+        ck('  the rebuild is the full file, not a fragment',
+           rebuilt.length > 700000, `${rebuilt.length} bytes`);
+        ck('  boot() is still the LAST thing in it',
+           rebuilt.lastIndexOf('async function boot()') > rebuilt.lastIndexOf('function loadLocalDayKey'),
+           'boot runs before the parts it needs have loaded');
+    }
+}
+
 console.log(`\n  ${pass} passed, ${fail} failed`);
 if (failures.length) { console.log('\n  failed:'); failures.forEach((f) => console.log('    · ' + f)); }
 process.exit(fail ? 1 : 0);

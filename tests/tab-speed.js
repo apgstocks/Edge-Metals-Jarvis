@@ -120,7 +120,7 @@ section('B — but the client can still tell what is signed');
 
 section('C — the client reads the new field, and the old one');
 {
-    const src = fs.readFileSync(path.join(ROOT, 'mobile-app/www/index.html'), 'utf8');
+    const src = require("../helpers/sourceParts").mobileHtml();
     const i = src.indexOf('function loadIsSigned(');
     ck('the app has one place that answers "is it signed"', i > 0);
     // Brace-matched, not `indexOf('\n}')` — that stops one character short of
@@ -158,7 +158,7 @@ console.log('\n─ the tab cache ───────────────�
 // The cache lives in the shipped file, so it is extracted and run rather than
 // reimplemented here — a second copy would be a test of the copy.
 function loadCache() {
-    const src = fs.readFileSync(path.join(ROOT, 'mobile-app/www/index.html'), 'utf8');
+    const src = require("../helpers/sourceParts").mobileHtml();
     // ONE contiguous slice, from the cache declarations through the end of
     // api(). Taking the declarations and the prefer-cache flag as two separate
     // slices double-counted the region between them the moment a new
@@ -241,7 +241,7 @@ section('E — a cache miss NEVER becomes something on screen');
     ck('  and returns real data', !!got);
 
     // Nothing in the shipped file may reintroduce a thrown miss.
-    const src = fs.readFileSync(path.join(ROOT, 'mobile-app/www/index.html'), 'utf8');
+    const src = require("../helpers/sourceParts").mobileHtml();
     const nc = src.split('\n').filter((l) => !/^\s*(\/\/|\*|<!--)/.test(l)).join('\n');
     ck('nothing throws a cache miss any more', !/cacheMiss/.test(nc) && !/CACHE_MISS/.test(nc),
        'the abort has to happen before the render starts, not inside it');
@@ -249,7 +249,7 @@ section('E — a cache miss NEVER becomes something on screen');
 
 section('E2 — so the decision is made BEFORE the render runs');
 {
-    const src = fs.readFileSync(path.join(ROOT, 'mobile-app/www/index.html'), 'utf8');
+    const src = require("../helpers/sourceParts").mobileHtml();
     const grabFn = (name) => {
         const s = src.indexOf('function ' + name + '(');
         let d = 0;
@@ -327,7 +327,7 @@ section('G — the cache cannot serve something old or shared');
 
     // TTL. The revalidate makes staleness a floor rather than a promise, but
     // an entry older than the window is dropped rather than painted.
-    const src = fs.readFileSync(path.join(ROOT, 'mobile-app/www/index.html'), 'utf8');
+    const src = require("../helpers/sourceParts").mobileHtml();
     ck('there is a TTL at all', /API_CACHE_TTL_MS = \d+/.test(src));
     const ttl = Number(/API_CACHE_TTL_MS = (\d+)/.exec(src)[1]);
     ck(`  and it is short (${ttl / 1000}s)`, ttl > 0 && ttl <= 300000,
@@ -342,7 +342,7 @@ section('G — the cache cannot serve something old or shared');
 
 section('H — the tab switch paints from cache, then corrects itself');
 {
-    const src = fs.readFileSync(path.join(ROOT, 'mobile-app/www/index.html'), 'utf8');
+    const src = require("../helpers/sourceParts").mobileHtml();
     const nocomment = src.split('\n').filter((l) => !/^\s*(\/\/|\*|<!--)/.test(l)).join('\n');
     // ── RUN IT, do not read it ────────────────────────────────────────────
     // The first version of this checked that the body contained
@@ -428,7 +428,7 @@ section('H — the tab switch paints from cache, then corrects itself');
 // ── I. things near the tabs that must not have been broken ────────────────
 section('I — the yard assistant, and every overlay, survive a session expiry');
 {
-    const appSrc = fs.readFileSync(path.join(ROOT, 'mobile-app/www/index.html'), 'utf8');
+    const appSrc = require("../helpers/sourceParts").mobileHtml();
     const siteSrc = require('../helpers/sourceParts').indexHtml();
 
     // Apsara 2026-09-03: "my yard assistant is missing now ... post restart."
@@ -485,7 +485,7 @@ section('J — boot() finishes and paints a navigation');
     for (const [label, dir] of [['website', 'dashboard'], ['app', 'mobile-app/www']]) {
         const html = dir === 'dashboard'
             ? require('../helpers/sourceParts').indexHtml()
-            : fs.readFileSync(path.join(ROOT, dir, 'index.html'), 'utf8');
+            : require('../helpers/sourceParts').mobileHtml();
         const errors = [];
         const vc = new VirtualConsole();
         vc.on('jsdomError', (e) => {
@@ -545,7 +545,7 @@ section('K — modal wiring cannot take the page down again');
     for (const [label, dir] of [['website', 'dashboard'], ['app', 'mobile-app/www']]) {
         const src = dir === 'dashboard'
             ? require('../helpers/sourceParts').indexHtml()
-            : fs.readFileSync(path.join(ROOT, dir, 'index.html'), 'utf8');
+            : require('../helpers/sourceParts').mobileHtml();
         const nc = src.split('\n').filter((l) => !/^\s*(\/\/|\*|<!--)/.test(l)).join('\n');
         // Not called at boot any more — that ordering is the bug.
         const bootBlock = label === 'website'

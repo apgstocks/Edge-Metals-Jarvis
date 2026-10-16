@@ -30,7 +30,7 @@ const section = (t) => console.log('\n=== ' + t + ' ===');
 
 const ROOT = path.join(__dirname, '..');
 const CLIENTS = [
-    ['app', fs.readFileSync(path.join(ROOT, 'mobile-app/www/index.html'), 'utf8')],
+    ['app', require("../helpers/sourceParts").mobileHtml()],
     ['website', require('../helpers/sourceParts').indexHtml()],
 ];
 // Comments stripped before matching — a comment describing the thing being

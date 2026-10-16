@@ -34,7 +34,8 @@ const ck = (n, c, extra) => {
 const section = (t) => console.log('\n=== ' + t + ' ===');
 
 const ROOT = path.join(__dirname, '..');
-const read = (f) => { try { return fs.readFileSync(path.join(ROOT, f), 'utf8'); } catch (e) { return ''; } };
+const read = (f) => { try { return f === 'mobile-app/www/index.html' ? require("../helpers/sourceParts").mobileHtml()
+    : fs.readFileSync(path.join(ROOT, f), 'utf8'); } catch (e) { return ''; } };
 
 // Every screen, plus the files dashboard/index.html's <script> was split
 // into — a field's markup and its wiring call now live in different files,

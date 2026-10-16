@@ -72,6 +72,54 @@ function indexHtml(root = ROOT) {
     return html.slice(0, p.at) + '<script>' + body + '</script>\n' + html.slice(p.at + p.blockLen);
 }
 
+// ── mobile-app/www/index.html ────────────────────────────────────────────
+// Apsara, 2026-10-16: "The phone app is one 13,138-line HTML file --split it"
+//
+// Same split, same rule, same reason as the dashboard above: the inline
+// <script> (12,178 lines) is now mobile-app/www/app/01-…19-*.js, loaded in
+// order, and this puts the original text back so the FIFTY-TWO tests that
+// read this file as text keep testing exactly what they tested.
+//
+// TWO DIFFERENCES FROM THE DASHBOARD, both forced:
+//
+//   · The src is RELATIVE (app/01-core.js), not absolute (/app/01-core.js).
+//     Capacitor loads the APK from file://, where a leading slash resolves to
+//     the device root and every part silently 404s — the app would come up
+//     blank in the yard with nothing in the log to explain it. The dashboard
+//     is served over HTTP and cannot use the relative form, so this is the
+//     one place the two clients genuinely must be written differently.
+//
+//   · There is no leading '/' to strip, so the tag pattern differs. Keeping
+//     two small patterns is better than one clever one that silently matches
+//     a path that cannot load.
+const MOBILE_MARK = '<!-- @@app-scripts: the main script, in order (helpers/sourceParts.js) -->';
+const MOBILE_TAG = /^<script src="app\/([\w-]+\.js)"><\/script>$/;
+
+function mobileParts(html) {
+    const at = html.indexOf(MOBILE_MARK + '\n');
+    if (at < 0) return null;
+    const lines = html.slice(at + MOBILE_MARK.length + 1).split('\n');
+    const files = [];
+    for (const l of lines) {
+        const m = l.match(MOBILE_TAG);
+        if (!m) break;
+        files.push(m[1]);
+    }
+    const blockLen = MOBILE_MARK.length + 1
+        + files.reduce((t, f) => t + `<script src="app/${f}"></script>`.length + 1, 0);
+    return { at, blockLen, files };
+}
+
+function mobileHtml(root = ROOT) {
+    const html = fs.readFileSync(path.join(root, 'mobile-app', 'www', 'index.html'), 'utf8');
+    const p = mobileParts(html);
+    if (!p) return html;   // not split (or an old checkout): it IS the original
+    const body = p.files
+        .map((f) => stripHeader(fs.readFileSync(path.join(root, 'mobile-app', 'www', 'app', f), 'utf8')))
+        .join('');
+    return html.slice(0, p.at) + '<script>' + body + '</script>\n' + html.slice(p.at + p.blockLen);
+}
+
 // ── api.js ───────────────────────────────────────────────────────────────
 // api.js holds one marked block that builds `ctx` (dropped when rebuilding)
 // and one marked line per routes/ file (replaced by that file's moved text,
@@ -104,4 +152,5 @@ function apiSource(root = ROOT) {
     return src;
 }
 
-module.exports = { indexHtml, apiSource, appParts, routeFiles, routeChunk, APP_MARK, ROOT };
+module.exports = { indexHtml, apiSource, appParts, routeFiles, routeChunk, APP_MARK, ROOT,
+                   mobileHtml, mobileParts, MOBILE_MARK };

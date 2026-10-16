@@ -575,7 +575,7 @@ if (JSDOM) {
     // Trucking and sale costs are Edge Metals ledgers and have never been in
     // the app; this is the check that a later "port it to the phone too"
     // cannot happen by accident without someone deciding to.
-    const appSrc = fs.readFileSync(path.join(ROOT, 'mobile-app/www/index.html'), 'utf8');
+    const appSrc = require("../helpers/sourceParts").mobileHtml();
     ck('the Edge Yard app has no metals-trucking screen',
        !/api\/metals-trucking/.test(appSrc) && !/trkPayDel/.test(appSrc));
     ck('  and no sale-cost screen',

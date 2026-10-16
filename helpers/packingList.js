@@ -215,6 +215,23 @@ function buildRecord(input, prev) {
         invoice_no: str(i.invoice_no),
         date: i.date || null,
         customer: str(i.customer),
+        // ── THE ADDRESS SHE SAW ON SCREEN ──────────────────────────────
+        // Apsara, 2026-10-16: "In packing list generation,address is not
+        // coming on selecting teh customer in jarvis" (MSNU2238929).
+        //
+        // Stored on the record, not looked up at print time, for the same
+        // reason show_item_in_grid is: a packing list reopened next month
+        // must print the same paper it printed today. The address book is
+        // synced from her sheet and an entry that is renamed or merged later
+        // would otherwise silently change a document she has already sent.
+        //
+        // OPTIONAL, and empty means "this caller had no answer" — the scan
+        // path (scan() reads a photographed list, which carries no address
+        // book) and every record saved before today land here with nothing,
+        // and generatePdf falls back to the lookup exactly as before.
+        consignee_address: Array.isArray(i.consignee_address)
+            ? i.consignee_address.map(str).filter(Boolean)
+            : (str(i.consignee_address) ? str(i.consignee_address).split('\n').map(str).filter(Boolean) : []),
         seal_no: str(i.seal_no),
         // What is in the container, when it is all one thing. Her words: an
         // "item description text box" on the right, beside the booking number.
@@ -823,7 +840,16 @@ async function generatePdf(record, { renderer, allowWithoutInvoice = false } = {
         // invoice's own consignee_address wins: she may have corrected an
         // address on the invoice itself, and a book lookup that quietly
         // overrode it would put two different addresses on one shipment.
-        consignee_address: addressLinesFor(rec.customer),
+        // WHAT SHE SAW WINS. The screen's lines are the ones she could
+        // check before pressing Generate; the lookup is the fallback for
+        // callers with no screen (a scanned list, an older saved record).
+        // This is the new shape, so the FLAG IS THE PRESENCE OF AN ANSWER —
+        // absence falls back to the previous behaviour rather than the other
+        // way round, which is the rule that stops a caller that cannot
+        // supply it from being broken by this.
+        consignee_address: (Array.isArray(rec.consignee_address) && rec.consignee_address.length)
+            ? rec.consignee_address
+            : addressLinesFor(rec.customer),
         inv_date: rec.date || null,
     };
     const data = {

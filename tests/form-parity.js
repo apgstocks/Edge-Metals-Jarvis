@@ -16,7 +16,8 @@
 const fs=require('fs'),path=require('path');
 const R=path.join(__dirname,'..')+path.sep;
 function grabFrom(file,name){
-  const src=file==='dashboard/index.html' ? require('../helpers/sourceParts').indexHtml() : fs.readFileSync(R+file,'utf8');
+  const src=file === 'dashboard/index.html' ? require('../helpers/sourceParts').indexHtml()
+        : file === 'mobile-app/www/index.html' ? require('../helpers/sourceParts').mobileHtml() : fs.readFileSync(R+file,'utf8');
   const i=src.indexOf('function '+name+'('); if(i<0) throw new Error(name+' not in '+file);
   let d=0,j=src.indexOf('{',i);
   for(let k=j;k<src.length;k++){if(src[k]==='{')d++;else if(src[k]==='}'){d--;if(!d)return src.slice(i,k+1);}}
@@ -58,7 +59,7 @@ ck('net total is right', /data-label="Net">7,305</.test(web));
 // ── structural parity of the two forms ─────────────────────────────────────
 {
   const web = require('../helpers/sourceParts').indexHtml();
-  const app = fs.readFileSync(R+'mobile-app/www/index.html','utf8');
+  const app = require("../helpers/sourceParts").mobileHtml();
   for (const [label, src] of [['website', web], ['app', app]]) {
     ck(`${label}: Buyer box removed`, !/id="ld_buyer"/.test(src));
     ck(`${label}: no dead ld_fixed_label writes left behind`, !/ld_fixed_label/.test(src));
@@ -126,7 +127,7 @@ ck('net total is right', /data-label="Net">7,305</.test(web));
        'the assistant can read spend_report; letting staff reach it undoes the payments boundary');
   }
   ck('both hosts include it', /yard-bot\.js/.test(require('../helpers/sourceParts').indexHtml())
-     && /yard-bot\.js/.test(fs.readFileSync(R+'mobile-app/www/index.html','utf8')));
+     && /yard-bot\.js/.test(require("../helpers/sourceParts").mobileHtml()));
   // This used to assert the widget was read-only. That WAS the boundary, and
   // the comment here said any change to it "needs a different conversation" —
   // which is exactly what happened: Apsara, 2026-08-29, "it can do anything
@@ -162,7 +163,7 @@ ck('net total is right', /data-label="Net">7,305</.test(web));
 // ── payments exist on BOTH, and agree ──────────────────────────────────────
 {
   const web = require('../helpers/sourceParts').indexHtml();
-  const app = fs.readFileSync(R+'mobile-app/www/index.html','utf8');
+  const app = require("../helpers/sourceParts").mobileHtml();
   for (const [label, src] of [['website', web], ['app', app]]) {
     ck(`${label}: has a Pay button on the load card`, /btn-pay-load/.test(src));
     ck(`${label}: has the payment modal`, /id="payModal"/.test(src));
@@ -217,7 +218,7 @@ ck('net total is right', /data-label="Net">7,305</.test(web));
 // ── the draft autosave exists on BOTH, and agrees ──────────────────────────
 {
   const web = require('../helpers/sourceParts').indexHtml();
-  const app = fs.readFileSync(R+'mobile-app/www/index.html','utf8');
+  const app = require("../helpers/sourceParts").mobileHtml();
   for (const [label, src] of [['website', web], ['app', app]]) {
     ck(`${label}: autosaves the load form`, /queueLoadDraftSave/.test(src));
     ck(`${label}: says what the draft is doing`, /id="draftStatus"/.test(src) && /function setDraftStatus/.test(src));
@@ -391,7 +392,7 @@ ck('net total is right', /data-label="Net">7,305</.test(web));
   ck('bot: refuses to send while signed out', /if \(!isSignedIn\(\)\)/.test(src));
   // The app's sign-in really does toggle .hidden on those two ids — if that
   // ever changes, the gate silently stops working, so assert it.
-  const app = fs.readFileSync(R+'mobile-app/www/index.html','utf8');
+  const app = require("../helpers/sourceParts").mobileHtml();
   ck('bot: the app still toggles .hidden on loginScreen/appShell',
      /loginScreen'\)\.classList\.(add|remove)\('hidden'\)/.test(app)
      && /appShell'\)\.classList\.(add|remove)\('hidden'\)/.test(app));
@@ -407,7 +408,8 @@ ck('net total is right', /data-label="Net">7,305</.test(web));
 // the output.
 {
   for (const p of ['dashboard/index.html','mobile-app/www/index.html']) {
-    const src = p === 'dashboard/index.html' ? require('../helpers/sourceParts').indexHtml() : fs.readFileSync(R+p,'utf8');
+    const src = p === 'dashboard/index.html' ? require('../helpers/sourceParts').indexHtml()
+        : p === 'mobile-app/www/index.html' ? require('../helpers/sourceParts').mobileHtml() : fs.readFileSync(R+p,'utf8');
     const grab = (n) => { const i=src.indexOf('function '+n+'('); if(i<0) return null;
       let d=0,j=src.indexOf('{',i);
       for(let k=j;k<src.length;k++){ if(src[k]==='{')d++; else if(src[k]==='}'){d--; if(!d) return src.slice(i,k+1);} } };
@@ -485,7 +487,8 @@ ck('net total is right', /data-label="Net">7,305</.test(web));
 // was the one place it never reached, which is where she looks while working.
 {
   for (const p of ['dashboard/index.html','mobile-app/www/index.html']) {
-    const src = p === 'dashboard/index.html' ? require('../helpers/sourceParts').indexHtml() : fs.readFileSync(R+p,'utf8');
+    const src = p === 'dashboard/index.html' ? require('../helpers/sourceParts').indexHtml()
+        : p === 'mobile-app/www/index.html' ? require('../helpers/sourceParts').mobileHtml() : fs.readFileSync(R+p,'utf8');
     const grab = (n) => { const i=src.indexOf('function '+n+'('); if(i<0) return null;
       let d=0,j=src.indexOf('{',i);
       for(let k=j;k<src.length;k++){ if(src[k]==='{')d++; else if(src[k]==='}'){d--; if(!d) return src.slice(i,k+1);} } };
@@ -532,7 +535,7 @@ ck('net total is right', /data-label="Net">7,305</.test(web));
 // one financial column depending on which device the proforma was raised from.
 {
   const dash = fs.readFileSync(R + 'dashboard/documents.html', 'utf8');
-  const mob  = fs.readFileSync(R + 'mobile-app/www/index.html', 'utf8');
+  const mob  = require("../helpers/sourceParts").mobileHtml();
 
   // 1. Both ask on the MATERIAL step, not only on the details/review step.
   ck('dashboard asks for payment terms on the material step',
@@ -603,7 +606,7 @@ ck('net total is right', /data-label="Net">7,305</.test(web));
 // whole reason to exist. The app is the one she was actually looking at.
 {
   const dash = require('../helpers/sourceParts').indexHtml();
-  const mob  = fs.readFileSync(R + 'mobile-app/www/index.html', 'utf8');
+  const mob  = require("../helpers/sourceParts").mobileHtml();
 
   for (const [label, src] of [['dashboard', dash], ['mobile', mob]]) {
     ck(`${label}: the button on a SALE says Receive payment`,
@@ -649,7 +652,7 @@ ck('net total is right', /data-label="Net">7,305</.test(web));
 // somebody could plausibly "simplify" on one side alone.
 {
   const dash = require('../helpers/sourceParts').indexHtml();
-  const mob  = fs.readFileSync(R+'mobile-app/www/index.html','utf8');
+  const mob  = require("../helpers/sourceParts").mobileHtml();
 
   for (const [label, src] of [['dashboard', dash], ['mobile', mob]]) {
     ck(`expenses: ${label} has the tab`, /renderExpensesTab/.test(src));

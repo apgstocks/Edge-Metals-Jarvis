@@ -44,7 +44,7 @@ const pay = require(path.join(ROOT, 'helpers/payments'));
 const petty = require(path.join(ROOT, 'helpers/pettyCash'));
 const spend = require(path.join(ROOT, 'helpers/spendReport'));
 const DASH = require('../helpers/sourceParts').indexHtml();
-const APP = fs.readFileSync(path.join(ROOT, 'mobile-app/www/index.html'), 'utf8');
+const APP = require("../helpers/sourceParts").mobileHtml();
 
 (async () => {
 

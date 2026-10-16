@@ -31,7 +31,7 @@ const section = (t) => console.log('\n=== ' + t + ' ===');
 
 const ROOT = path.join(__dirname, '..');
 const WEB = fs.readFileSync(path.join(ROOT, 'dashboard', 'documents.html'), 'utf8');
-const APP = fs.readFileSync(path.join(ROOT, 'mobile-app', 'www', 'index.html'), 'utf8');
+const APP = require('../helpers/sourceParts').mobileHtml();
 
 section('A — the four money boxes are no longer type=number');
 {

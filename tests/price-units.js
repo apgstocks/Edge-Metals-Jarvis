@@ -171,7 +171,7 @@ const PU = require(path.join(ROOT, 'helpers/priceUnits'));
 // figure was one copy not knowing what the others knew.
 {
     section('E — the clients carry the same numbers');
-    const app = fs.readFileSync(path.join(ROOT, 'mobile-app/www/index.html'), 'utf8');
+    const app = require("../helpers/sourceParts").mobileHtml();
     const web = require('../helpers/sourceParts').indexHtml();
 
     // Each client declares its table as LB_PER_UNIT = { ... }. Parsed rather
@@ -214,7 +214,7 @@ const PU = require(path.join(ROOT, 'helpers/priceUnits'));
 // which is why display is not optional even though the picker is.
 {
     section('F — display everywhere, picker in the app only');
-    const app = fs.readFileSync(path.join(ROOT, 'mobile-app/www/index.html'), 'utf8');
+    const app = require("../helpers/sourceParts").mobileHtml();
     const web = require('../helpers/sourceParts').indexHtml();
     // Both pickers BUILD their options from an array now rather than listing
     // them as literal markup, so the array is what to read. My first version

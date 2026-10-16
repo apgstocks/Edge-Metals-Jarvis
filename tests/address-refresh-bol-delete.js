@@ -46,7 +46,7 @@ const ROOT = path.join(__dirname, '..');
 const cfg = require(path.join(ROOT, 'config'));
 if (!String(cfg.DATA_DIR).startsWith(TMP)) { console.error('  ABORT  config not isolated'); process.exit(1); }
 
-const APP = fs.readFileSync(path.join(ROOT, 'mobile-app/www/index.html'), 'utf8');
+const APP = require("../helpers/sourceParts").mobileHtml();
 const WEB = fs.readFileSync(path.join(ROOT, 'dashboard/documents.html'), 'utf8');
 const WEB_DASH = require('../helpers/sourceParts').indexHtml();
 

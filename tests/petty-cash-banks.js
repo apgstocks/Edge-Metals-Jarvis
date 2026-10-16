@@ -660,7 +660,8 @@ section('H — BofA is two accounts, and they belong to two companies');
     // the same mistake as the `sources.length === 3` check above.
     const EXPECTED = '[' + petty.SOURCES.map((s) => `'${s}'`).join(', ') + ']';
     for (const f of ['dashboard/index.html', 'mobile-app/www/index.html']) {
-        const src = f === 'dashboard/index.html' ? require('../helpers/sourceParts').indexHtml() : fs.readFileSync(path.join(__dirname, '..', f), 'utf8');
+        const src = f === 'dashboard/index.html' ? require('../helpers/sourceParts').indexHtml()
+        : f === 'mobile-app/www/index.html' ? require('../helpers/sourceParts').mobileHtml() : fs.readFileSync(path.join(__dirname, '..', f), 'utf8');
         const copies = (src.match(/pettyCash\.sources[\s\S]{0,160}?\[[^\]]*'Unassigned'\]/g) || []);
         ck(`${f}: every petty-cash fallback matches SOURCES`,
             copies.length > 0 && copies.every((c) => c.includes(EXPECTED)),
@@ -677,7 +678,8 @@ section('H — BofA is two accounts, and they belong to two companies');
     // The rule now requires the bank to HAVE other accounts, and the check
     // below is written against that property rather than against either name.
     for (const f of ['mobile-app/www/index.html', 'dashboard/index.html']) {
-        const src = f === 'dashboard/index.html' ? require('../helpers/sourceParts').indexHtml() : fs.readFileSync(path.join(__dirname, '..', f), 'utf8');
+        const src = f === 'dashboard/index.html' ? require('../helpers/sourceParts').indexHtml()
+        : f === 'mobile-app/www/index.html' ? require('../helpers/sourceParts').mobileHtml() : fs.readFileSync(path.join(__dirname, '..', f), 'utf8');
         const inCode = src.split('\n').filter((l) => !/^\s*(\/\/|\*|<!--)/.test(l)).join('\n');
         ck(`  ${f}: a lone account under a bank prints no bank heading`,
             /items\.length < 2/.test(inCode),
@@ -688,7 +690,7 @@ section('H — BofA is two accounts, and they belong to two companies');
     }
     // Her instruction, and the only thing that makes three cells hold one
     // line at phone width: equal thirds that are allowed to shrink.
-    const mob2 = fs.readFileSync(path.join(__dirname, '..', 'mobile-app/www/index.html'), 'utf8');
+    const mob2 = require("../helpers/sourceParts").mobileHtml();
     ck('the accounts under one bank share the line instead of wrapping',
         /flex:\$\{share \? '1 1 0' : '0 0 auto'\}; min-width:0/.test(mob2),
         'all three BofA accounts on one line — without min-width:0 the third wraps');
@@ -729,7 +731,8 @@ section('H — BofA is two accounts, and they belong to two companies');
             bank_of: { 'Edge Metals': 'BofA', 'AAA Investment': 'BofA', 'Chase Bank': 'Chase Bank', 'Unassigned': null },
         };
         for (const f of ['mobile-app/www/index.html', 'dashboard/index.html']) {
-            const src = f === 'dashboard/index.html' ? require('../helpers/sourceParts').indexHtml() : fs.readFileSync(path.join(__dirname, '..', f), 'utf8');
+            const src = f === 'dashboard/index.html' ? require('../helpers/sourceParts').indexHtml()
+        : f === 'mobile-app/www/index.html' ? require('../helpers/sourceParts').mobileHtml() : fs.readFileSync(path.join(__dirname, '..', f), 'utf8');
             // From the marker to the end of its `if (sel) { ... }`.
             const start = src.indexOf("const sel = $('pay_cash_source');");
             const open = src.indexOf('{', src.indexOf('if (sel)', start));
@@ -798,7 +801,8 @@ section('H — BofA is two accounts, and they belong to two companies');
     // AND the default must still be to refresh, so that every caller that
     // just moved money keeps re-reading the server.
     for (const f of ['mobile-app/www/index.html', 'dashboard/index.html']) {
-        const src = f === 'dashboard/index.html' ? require('../helpers/sourceParts').indexHtml() : fs.readFileSync(path.join(__dirname, '..', f), 'utf8');
+        const src = f === 'dashboard/index.html' ? require('../helpers/sourceParts').indexHtml()
+        : f === 'mobile-app/www/index.html' ? require('../helpers/sourceParts').mobileHtml() : fs.readFileSync(path.join(__dirname, '..', f), 'utf8');
         ck(`${f}: a tab switch asks for no refresh`,
             /pettyTab = b\.dataset\.pettyTab; renderPettyCashTab\(\{ refresh: false \}\)/.test(src),
             'the wait she sees is the round trip, not the server');
@@ -827,7 +831,8 @@ section('H — BofA is two accounts, and they belong to two companies');
     // Cheap to check, and checked for BOTH clients: a syntax error here takes
     // out every screen at once, not just petty cash.
     for (const f of ['mobile-app/www/index.html', 'dashboard/index.html']) {
-        const src = f === 'dashboard/index.html' ? require('../helpers/sourceParts').indexHtml() : fs.readFileSync(path.join(__dirname, '..', f), 'utf8');
+        const src = f === 'dashboard/index.html' ? require('../helpers/sourceParts').indexHtml()
+        : f === 'mobile-app/www/index.html' ? require('../helpers/sourceParts').mobileHtml() : fs.readFileSync(path.join(__dirname, '..', f), 'utf8');
         const blocks = src.match(/<script>[\s\S]*?<\/script>/g) || [];
         const js = blocks.map((b) => b.replace(/^<script>/, '').replace(/<\/script>$/, '')).join('\n');
         let bad = null;
@@ -847,7 +852,8 @@ section('H — BofA is two accounts, and they belong to two companies');
     // a second way to move money is a second way to move it wrongly — and
     // the transfer itself is already exercised end to end in section F.
     for (const f of ['mobile-app/www/index.html', 'dashboard/index.html']) {
-        const src = f === 'dashboard/index.html' ? require('../helpers/sourceParts').indexHtml() : fs.readFileSync(path.join(__dirname, '..', f), 'utf8');
+        const src = f === 'dashboard/index.html' ? require('../helpers/sourceParts').indexHtml()
+        : f === 'mobile-app/www/index.html' ? require('../helpers/sourceParts').mobileHtml() : fs.readFileSync(path.join(__dirname, '..', f), 'utf8');
         ck(`${f}: Split moves Edge Metals to AAA Investment`,
             /SPLIT_FROM = 'Edge Metals', SPLIT_TO = 'AAA Investment'/.test(src));
         ck(`  ${f}: through the reassign transfer, not a new path`,
@@ -887,7 +893,8 @@ section('H — BofA is two accounts, and they belong to two companies');
     // Now: both files, and the string is matched OUT of any comment, so a
     // note explaining the fix cannot satisfy the check that the fix happened.
     for (const f of ['mobile-app/www/index.html', 'dashboard/index.html']) {
-        const src = f === 'dashboard/index.html' ? require('../helpers/sourceParts').indexHtml() : fs.readFileSync(path.join(__dirname, '..', f), 'utf8');
+        const src = f === 'dashboard/index.html' ? require('../helpers/sourceParts').indexHtml()
+        : f === 'mobile-app/www/index.html' ? require('../helpers/sourceParts').mobileHtml() : fs.readFileSync(path.join(__dirname, '..', f), 'utf8');
         const inCode = src.split('\n')
             .filter((l) => !/^\s*(\/\/|\*|<!--)/.test(l))
             .join('\n');

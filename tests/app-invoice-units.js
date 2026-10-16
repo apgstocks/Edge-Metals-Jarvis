@@ -182,7 +182,7 @@ section('D — the two clients cannot drift apart again');
     // converting to MT for another day, because nothing in the suite had an
     // opinion about the phone.
     const web = fs.readFileSync(path.join(ROOT, 'dashboard', 'documents.html'), 'utf8');
-    const app2 = fs.readFileSync(path.join(ROOT, 'mobile-app', 'www', 'index.html'), 'utf8');
+    const app2 = require('../helpers/sourceParts').mobileHtml();
 
     ck('the website has a units control', /id="inv_units"/.test(web));
     ck('the PHONE has a units control', /id="invw_units"/.test(app2));
@@ -216,7 +216,7 @@ section('E — the phone ARITHMETIC, actually run');
     // sum. A source regex passes the moment someone writes a plausible-
     // looking line; this passes only if the number comes out right.
     const { JSDOM } = require('jsdom');
-    const APP = fs.readFileSync(path.join(ROOT, 'mobile-app', 'www', 'index.html'), 'utf8');
+    const APP = require('../helpers/sourceParts').mobileHtml();
     const SCRIPT = [...APP.matchAll(/<script(?![^>]*src=)[^>]*>([\s\S]*?)<\/script>/g)].map((m) => m[1]).join('\n');
     const dom = new JSDOM(APP, { runScripts: 'outside-only', url: 'http://localhost/' });
     const w = dom.window, d = w.document;

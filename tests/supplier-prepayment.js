@@ -494,7 +494,9 @@ section('J — BOTH SCREENS, AND THEY AGREE');
         app: path.join(ROOT, 'mobile-app/www/index.html'),
     };
     for (const [who, file] of Object.entries(CLIENTS)) {
-        const src = who === 'website' ? require('../helpers/sourceParts').indexHtml() : fs.readFileSync(file, 'utf8');
+        const src = who === 'website' ? require('../helpers/sourceParts').indexHtml()
+            : who === 'app' ? require('../helpers/sourceParts').mobileHtml()
+            : fs.readFileSync(file, 'utf8');
 
         ck(`${who}: credit shows inside the Pay modal`, /id="payPrepayBox"/.test(src));
         ck(`${who}: with an Apply control`, /id="btnApplyPrepay"/.test(src));
@@ -550,7 +552,7 @@ section('J — BOTH SCREENS, AND THEY AGREE');
     // form-parity.js exists because these two screens have drifted before.
     // This is the same rule for the three functions this feature added.
     const a = require('../helpers/sourceParts').indexHtml();
-    const b = fs.readFileSync(CLIENTS.app, 'utf8');
+    const b = require('../helpers/sourceParts').mobileHtml();
     const grab = (src, marker) => {
         const i = src.indexOf(marker);
         if (i < 0) return null;
@@ -636,8 +638,7 @@ section('K — a prepayment works for any seller');
 
     // The client gates it on purchase-vs-sale and a seller being named. Those
     // two are correct and are the ONLY two.
-    const app = require('fs').readFileSync(
-        require('path').join(__dirname, '..', 'mobile-app/www/index.html'), 'utf8');
+    const app = require('../helpers/sourceParts').mobileHtml();
     const refresh = app.slice(app.indexOf('async function refreshPrepayCredit'),
                               app.indexOf('async function refreshPrepayCredit') + 900);
     ck('the app hides it only for a sale or a missing seller',

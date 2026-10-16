@@ -54,7 +54,7 @@ const L = require(path.join(ROOT, 'helpers/bolLayouts'));
 const { buildBolHtml, assertNoUnfilledPlaceholders } = require(path.join(ROOT, 'helpers/bolPdf'));
 
 const DOCS = fs.readFileSync(path.join(ROOT, 'dashboard/documents.html'), 'utf8');
-const APP = fs.readFileSync(path.join(ROOT, 'mobile-app/www/index.html'), 'utf8');
+const APP = require("../helpers/sourceParts").mobileHtml();
 const DESIGN = fs.readFileSync(path.join(ROOT, 'dashboard/design-bol.html'), 'utf8');
 // Strips LINE comments and HTML comments only, NOT /* */ blocks.
 //

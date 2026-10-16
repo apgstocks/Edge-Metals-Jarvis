@@ -29,7 +29,7 @@ const ck = (label, ok, detail) => {
 const section = (t) => console.log('\n=== ' + t + ' ===');
 
 const ROOT = path.join(__dirname, '..');
-const APP = fs.readFileSync(path.join(ROOT, 'mobile-app/www/index.html'), 'utf8');
+const APP = require("../helpers/sourceParts").mobileHtml();
 
 const ROUTES = {
     '/api/me': { ok: true, role: 'admin', super: false },

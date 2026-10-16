@@ -266,9 +266,16 @@ section('D. the website handles the refusal');
 // is what stops the next change to one of them leaving the other behind.
 section('E. the phone does the same thing');
 {
+    // The app is split into mobile-app/www/app/*.js, so reading its
+    // index.html off disk now yields a shell with no code and every check
+    // below would pass vacuously. sourceParts puts the original back.
+    const SRC = (f) => (f === 'dashboard/index.html' ? require('../helpers/sourceParts').indexHtml()
+        : f === 'mobile-app/www/index.html' ? require('../helpers/sourceParts').mobileHtml()
+        : fs.readFileSync(path.join(ROOT, f), 'utf8'));
+
     const files = { website: 'dashboard/documents.html', app: 'mobile-app/www/index.html' };
     for (const [who, f] of Object.entries(files)) {
-        const src = fs.readFileSync(path.join(ROOT, f), 'utf8');
+        const src = SRC(f);
         ck(`the ${who} recognises WEIGHT_MISMATCH`, /WEIGHT_MISMATCH/.test(src));
         ck(`  and re-posts with weights_ok`, /weights_ok:\s*true/.test(src));
         ck(`  and does not swallow other errors`,
@@ -284,7 +291,8 @@ section('E. the phone does the same thing');
     for (const [who, f] of Object.entries({ documents: 'dashboard/documents.html',
                                             dashboard: 'dashboard/index.html',
                                             app: 'mobile-app/www/index.html' })) {
-        const src = f === 'dashboard/index.html' ? require('../helpers/sourceParts').indexHtml() : fs.readFileSync(path.join(ROOT, f), 'utf8');
+        const src = f === 'dashboard/index.html' ? require('../helpers/sourceParts').indexHtml()
+        : f === 'mobile-app/www/index.html' ? require('../helpers/sourceParts').mobileHtml() : fs.readFileSync(path.join(ROOT, f), 'utf8');
         ck(`${who}'s api() carries every field the route sent`,
            /for \(const k of Object\.keys\(data \|\| \{\}\)\)/.test(src),
            'a route\'s structured extras would arrive nowhere, silently');
@@ -295,7 +303,7 @@ section('E. the phone does the same thing');
     const callers = [];
     for (const f of ['dashboard/documents.html', 'mobile-app/www/index.html', 'helpers/tools.js',
                      'workflow/actions.js', 'workflow/brain.js']) {
-        const src = fs.readFileSync(path.join(ROOT, f), 'utf8');
+        const src = SRC(f);
         if (/\/api\/invoice\/generate/.test(src)) callers.push(f);
     }
     ck('only the two screens call the generate route', callers.length === 2,

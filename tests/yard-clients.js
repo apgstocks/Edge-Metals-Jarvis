@@ -15,7 +15,7 @@ const ck = (n, c) => { if (c) { pass++; console.log('  PASS  ' + n); } else { fa
 const section = (t) => console.log('\n=== ' + t + ' ===');
 
 const ROOT = path.join(__dirname, '..');
-const MOBILE = fs.readFileSync(path.join(ROOT, 'mobile-app/www/index.html'), 'utf8');
+const MOBILE = require("../helpers/sourceParts").mobileHtml();
 const DASH = require('../helpers/sourceParts').indexHtml();
 const mobileJs = MOBILE.match(/<script>([\s\S]*?)<\/script>/)[1];
 

@@ -355,7 +355,7 @@ section('I — narrowing to just Zelle / just Wire / just Cash');
     // The CLIENT narrows to one. Apsara, 2026-09-02: "when i choose zelle, only
     // zelle amount should come not everything." Drawing seven columns of
     // dashes is technically filtered and reads as unfiltered.
-    for (const [label, src] of [['app', fs.readFileSync(path.join(ROOT, 'mobile-app/www/index.html'), 'utf8')],
+    for (const [label, src] of [['app', require("../helpers/sourceParts").mobileHtml()],
                                 ['website', require('../helpers/sourceParts').indexHtml()]]) {
         ck(`${label}: the table shows only the chosen method's column`,
            /const cols = rep\.method \? \[rep\.method\] : \(rep\.columns \|\| \[\]\);/.test(src),

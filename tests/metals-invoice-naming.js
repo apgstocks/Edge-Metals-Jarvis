@@ -48,7 +48,7 @@ if (!String(cfg.DATA_DIR).startsWith(TMP)) { console.error('  ABORT  config not 
 const { JSDOM } = require('jsdom');
 const sales = require(path.join(ROOT, 'helpers/sales'));
 const html = require('../helpers/sourceParts').indexHtml();
-const APP = fs.readFileSync(path.join(ROOT, 'mobile-app/www/index.html'), 'utf8');
+const APP = require("../helpers/sourceParts").mobileHtml();
 const SCRIPT = [...html.matchAll(/<script(?![^>]*src=)[^>]*>([\s\S]*?)<\/script>/g)].map((m) => m[1]).join('\n');
 
 (async () => {

@@ -286,7 +286,7 @@ function violations(state) {
 // A test that cannot fail is worse than no test, because it is believed. Each
 // assertion below fails against the broken arrangement.
 {
-    const html = fs.readFileSync(path.join(R, 'mobile-app/www/index.html'), 'utf8');
+    const html = require("../helpers/sourceParts").mobileHtml();
 
     ck('the machine ships inside the app bundle',
        fs.existsSync(path.join(R, 'mobile-app/www/voice-machine.js')));

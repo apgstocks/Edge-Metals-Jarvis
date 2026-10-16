@@ -249,6 +249,7 @@ section('D — a sale is saved, edited and deleted; inventory follows each time'
                 for (const p of ['dashboard/index.html', 'mobile-app/www/index.html']) {
                     const s = p === 'dashboard/index.html'
                         ? require('../helpers/sourceParts').indexHtml()
+                        : p === 'mobile-app/www/index.html' ? require("../helpers/sourceParts").mobileHtml()
                         : fs.readFileSync(path.join(__dirname, '..', p), 'utf8');
                     ck(`${p} merges sales through asArray, not a truthiness guard`,
                         /asArray\(sales\)\.map/.test(s) && !/\(sales \|\| \[\]\)\.map/.test(s));

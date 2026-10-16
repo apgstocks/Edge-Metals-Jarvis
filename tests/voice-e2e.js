@@ -210,7 +210,7 @@ function enableVoiceFlag(html) {
 }
 
 async function bootApp(opts = {}) {
-    const html = enableVoiceFlag(inlineScripts(fs.readFileSync(path.join(R, 'mobile-app/www/index.html'), 'utf8')));
+    const html = enableVoiceFlag(inlineScripts(require("../helpers/sourceParts").mobileHtml()));
     const phone = makePhone(opts);
 
     // file:// at the real www directory, with resources enabled, so the
@@ -452,7 +452,7 @@ function hear(phone, matches) {
     // ── 3g. the watchdog is armed BEFORE anything can block ───────────────
     {
         const { win } = await bootApp({ startHangs: true });
-        const src = fs.readFileSync(path.join(R, 'mobile-app/www/index.html'), 'utf8');
+        const src = require("../helpers/sourceParts").mobileHtml();
         // Comments stripped first: the explanation above the code mentions
         // SR.start() by name, and matching that instead of the call made this
         // assertion fail against correct code.

@@ -964,7 +964,7 @@ const MUTATIONS = [
       find: '    const qtyRow = qtyForUnit(it.unit, net, it.pieces);',
       to:   '    const qtyRow = net;' },
     { name: 'units: opening a saved /MT row shows the pound figure again (app)',
-      file: 'mobile-app/www/index.html', suites: ['load-item-units'],
+      file: 'mobile-app/www/app/05-payment-roles.js', suites: ['load-item-units'],
       find: '    const qtyRow = qtyForUnit(it.unit, net, it.pieces);',
       to:   '    const qtyRow = net;' },
     // The other half of the same rule: a row with no unit is a POUND row,
@@ -1277,55 +1277,136 @@ const MUTATIONS = [
       find: "const COMMISSION_PARTIES = new Set(['panmetal', 'joey']);",
       to:   "const COMMISSION_PARTIES = new Set(['joey']);" },
 
+    // ── THE PACKING LIST WENT OUT WITH AN EMPTY BUYER BLOCK ─────────────
+    // Apsara, 2026-10-16, with MSNU2238929_packing.pdf: "In packing list
+    // generation,address is not coming on selecting teh customer in jarvis".
+    // "Nik" is an alias on two companies, resolveAddress said ambiguous, and
+    // addressLinesFor correctly refused to guess — silently.
+    { name: 'packing: the record drops the address the screen sent',
+      file: 'helpers/packingList.js', suites: ['packing-list'],
+      find: "        consignee_address: Array.isArray(i.consignee_address)",
+      to:   "        consignee_address: (false) && Array.isArray(i.consignee_address)" },
+    // THE PRECEDENCE. Her lines must beat the lookup, or a renamed
+    // address-book entry rewrites a document she has already sent.
+    { name: 'packing: a stale address-book entry overrides what she saw',
+      file: 'helpers/packingList.js', suites: ['packing-list'],
+      find: "        consignee_address: (Array.isArray(rec.consignee_address) && rec.consignee_address.length)\n            ? rec.consignee_address\n            : addressLinesFor(rec.customer),",
+      to:   "        consignee_address: addressLinesFor(rec.customer)," },
+    // THE FALLBACK. A caller with no screen — the scan path, every record
+    // saved before today — must behave exactly as it did.
+    { name: 'packing: the fallback lookup is dropped, so old records lose their address',
+      file: 'helpers/packingList.js', suites: ['packing-list'],
+      find: "        consignee_address: (Array.isArray(rec.consignee_address) && rec.consignee_address.length)\n            ? rec.consignee_address\n            : addressLinesFor(rec.customer),",
+      to:   "        consignee_address: (Array.isArray(rec.consignee_address) ? rec.consignee_address : [])," },
+    // THE SCREEN. The pick handler threw the address away for months; that is
+    // the line that caused this.
+    { name: 'packing: picking a customer throws the address away again',
+      file: 'dashboard/documents.html', suites: ['packing-list'],
+      find: "        $('pk_consignee_address').value = entry.raw || '';",
+      to:   "" },
+    { name: 'packing: the payload stops carrying the address',
+      file: 'dashboard/documents.html', suites: ['packing-list'],
+      find: "    consignee_address: $('pk_consignee_address').value.split('\\n').map((l) => l.trim()).filter(Boolean),",
+      to:   "" },
+    { name: 'packing: a reopened list no longer shows the address it printed',
+      file: 'dashboard/documents.html', suites: ['packing-list'],
+      find: "  $('pk_consignee_address').value = Array.isArray(pl.consignee_address)\n    ? pl.consignee_address.join('\\n') : (pl.consignee_address || '');",
+      to:   "" },
+
+    // ── "1 THING NEED YOU", THE THIRD TIME ──────────────────────────────
+    // The phrase has TWO copies and fixing one has twice not fixed the
+    // other. tests/ledger-agent.js was red for days asserting the singular
+    // against a three-finding fixture — the code was right and the check was
+    // wrong, which is the worst kind of red because it teaches everyone to
+    // skim the summary. Both copies are now covered; these prove it.
+    { name: 'ledger: reportText loses verb agreement',
+      file: 'helpers/ledgerAgent.js', suites: ['ledger-agent'],
+      find: "        out.push(p.length === 1 ? '1 thing needs you.' : `${p.length} things need you.`);",
+      to:   "        out.push(`${p.length} things need you.`);" },
+    { name: 'ledger: reportText goes singular for everything',
+      file: 'helpers/ledgerAgent.js', suites: ['ledger-agent'],
+      find: "        out.push(p.length === 1 ? '1 thing needs you.' : `${p.length} things need you.`);",
+      to:   "        out.push(`${p.length} thing needs you.`);" },
+    // THE SECOND COPY — the email SUBJECT, which is where the bug came back.
+    { name: 'ledger: the email subject loses verb agreement',
+      file: 'helpers/ledgerAgentJob.js', suites: ['ledger-agent'],
+      find: "        ? `Ledger agent — ${n} thing${n === 1 ? ' needs' : 's need'} you`",
+      to:   "        ? `Ledger agent — ${n} thing needs you`" },
+
+    // ── THE GUARD THAT KEEPS TESTS OUT OF HER LIVE DRIVE ────────────────
+    // Two real incidents are behind this one: a fixture uploaded "we owe Acme
+    // Metals $8,822.00" into her live business Drive (2026-08-29), and the
+    // live file yard/log/2026-08-29.jsonl was overwritten with the byte "x"
+    // when the suites were run without the env flag (2026-10-05). The guard
+    // has two halves; these prove each half carries its own weight.
+    { name: 'drive: the halves become AND, so forgetting the flag unguards Drive',
+      file: 'helpers/drive.js', suites: ['drive-guard'],
+      find: "    if (process.env.JARVIS_TEST === '1' || underTest) {",
+      to:   "    if (process.env.JARVIS_TEST === '1' && underTest) {" },
+    { name: 'drive: the entry-point half is dropped, back to 2026-10-05',
+      file: 'helpers/drive.js', suites: ['drive-guard'],
+      find: "    if (process.env.JARVIS_TEST === '1' || underTest) {",
+      to:   "    if (process.env.JARVIS_TEST === '1') {" },
+    { name: 'drive: the flag half is dropped',
+      file: 'helpers/drive.js', suites: ['drive-guard'],
+      find: "    if (process.env.JARVIS_TEST === '1' || underTest) {",
+      to:   "    if (underTest) {" },
+    // The entry-point pattern itself. A regex that stops matching is the same
+    // as deleting the half, and looks like a tidy-up in a diff.
+    { name: 'drive: the entry-point pattern stops matching tests/',
+      file: 'helpers/drive.js', suites: ['drive-guard'],
+      find: "    const underTest = /(^|[\\/\\\\])tests[\\/\\\\][^\\/\\\\]+\\.js$/.test(entry);",
+      to:   "    const underTest = /(^|[\\/\\\\])spec[\\/\\\\][^\\/\\\\]+\\.js$/.test(entry);" },
+
     // ── THE CREATE BUTTON FOLLOWS THE FILTER (EDGE YARD) ────────────────
     // Apsara, 2026-10-15: "on purchases,hide the sale button(create),on sale
     // page,hide the create invocie button.create invoce rename to +load",
     // then "in edge yard".
     { name: 'loadbtn: the create buttons stop following the filter entirely',
-      file: 'mobile-app/www/index.html', suites: ['load-create-buttons'],
+      file: 'mobile-app/www/app/10-shell.js', suites: ['load-create-buttons'],
       find: "  toggleCreate('btnAddLoad', loadKindFilter !== 'sale');",
       to:   "  toggleCreate('btnAddLoad', true);" },
     { name: 'loadbtn: standing on Purchases still offers a Sale button',
-      file: 'mobile-app/www/index.html', suites: ['load-create-buttons'],
+      file: 'mobile-app/www/app/10-shell.js', suites: ['load-create-buttons'],
       find: "  toggleCreate('btnAddSale', loadKindFilter !== 'purchase');",
       to:   "  toggleCreate('btnAddSale', true);" },
     // THE INVERSION. Hiding the wrong one on each tab is the mistake that
     // looks right until you are standing in the yard.
     { name: 'loadbtn: the two buttons are hidden on the wrong tabs',
-      file: 'mobile-app/www/index.html', suites: ['load-create-buttons'],
+      file: 'mobile-app/www/app/10-shell.js', suites: ['load-create-buttons'],
       find: "  toggleCreate('btnAddLoad', loadKindFilter !== 'sale');\n  toggleCreate('btnAddSale', loadKindFilter !== 'purchase');",
       to:   "  toggleCreate('btnAddLoad', loadKindFilter !== 'purchase');\n  toggleCreate('btnAddSale', loadKindFilter !== 'sale');" },
     // 'all' must show BOTH, or the tab that is not claiming to be one kind
     // loses the only way to record a sale.
     { name: 'loadbtn: All hides the Sale button too, so a sale cannot be started',
-      file: 'mobile-app/www/index.html', suites: ['load-create-buttons'],
+      file: 'mobile-app/www/app/10-shell.js', suites: ['load-create-buttons'],
       find: "  toggleCreate('btnAddSale', loadKindFilter !== 'purchase');",
       to:   "  toggleCreate('btnAddSale', loadKindFilter === 'sale');" },
     // REMOVED vs HIDDEN. tests/yard-clients.js section E checks btnAddSale
     // exists in BOTH clients by name and tests/item-row-net.js opens the form
     // through btnAddLoad, so removing either would break two other suites.
     { name: 'loadbtn: hiding is done by removing the button from the DOM',
-      file: 'mobile-app/www/index.html', suites: ['load-create-buttons', 'yard-clients', 'item-row-net'],
+      file: 'mobile-app/www/app/10-shell.js', suites: ['load-create-buttons', 'yard-clients', 'item-row-net'],
       find: "    if (b) b.classList.toggle('hidden', !show);",
       to:   "    if (b && !show) b.remove(); else if (b) b.classList.remove('hidden');" },
     // THE RENAME.
     { name: 'loadbtn: the button goes back to claiming it creates an invoice',
-      file: 'mobile-app/www/index.html', suites: ['load-create-buttons'],
+      file: 'mobile-app/www/app/09-loads-deck.js', suites: ['load-create-buttons'],
       find: '<button id="btnAddLoad" class="btn btn-primary">+ Load</button>',
       to:   '<button id="btnAddLoad" class="btn btn-primary">+ Create invoice</button>' },
     { name: 'loadbtn: the modal still says Create invoice behind the + Load button',
-      file: 'mobile-app/www/index.html', suites: ['load-create-buttons'],
+      file: 'mobile-app/www/app/08-load-modal.js', suites: ['load-create-buttons'],
       find: "  const title = sale ? 'Record sale' : 'New load';",
       to:   "  const title = sale ? 'Record sale' : 'Create invoice';" },
     // THE SALE SIDE MUST NOT MOVE. She named the purchase label.
     { name: 'loadbtn: the rename leaks onto the sale side, which she did not ask for',
-      file: 'mobile-app/www/index.html', suites: ['load-create-buttons'],
+      file: 'mobile-app/www/app/08-load-modal.js', suites: ['load-create-buttons'],
       find: "  const save = sale ? 'Record sale' : 'Save load';",
       to:   "  const save = 'Save load';" },
     // The pre-existing bug this change uncovered: a failed save on a SALE
     // restored the PURCHASE label.
     { name: 'loadbtn: a failed save on a sale puts the purchase label back',
-      file: 'mobile-app/www/index.html', suites: ['load-create-buttons'],
+      file: 'mobile-app/www/app/09-loads-deck.js', suites: ['load-create-buttons'],
       find: "      btn.textContent = isEdit ? 'Save changes' : (loadModalMode === 'sale' ? 'Record sale' : 'Save load');",
       to:   "      btn.textContent = isEdit ? 'Save changes' : 'Save load';" },
 
@@ -1435,11 +1516,11 @@ const MUTATIONS = [
       find: 'let pettyCash = { balance: 0, entries: [], by_source: null,',
       to:   'let pettyCash = { balance: 0, entries: [], by_source: {},' },
     { name: 'paycash: the app\'s default goes back to {} too',
-      file: 'mobile-app/www/index.html', suites: ['pay-cash-not-loaded'],
+      file: 'mobile-app/www/app/12-petty-cash.js', suites: ['pay-cash-not-loaded'],
       find: 'let pettyCash = { balance: 0, entries: [], by_source: null,',
       to:   'let pettyCash = { balance: 0, entries: [], by_source: {},' },
     { name: 'paycash: the app\'s pay modal stops fetching',
-      file: 'mobile-app/www/index.html', suites: ['pay-cash-not-loaded'],
+      file: 'mobile-app/www/app/04-payments.js', suites: ['pay-cash-not-loaded'],
       find: '  if (pettyCash.by_source === null && typeof refreshPettyCash === \'function\') {',
       to:   '  if (false) {' },
     // NOT "await refreshPettyCash(...)": openPayModal is not async, so that
@@ -1451,7 +1532,7 @@ const MUTATIONS = [
       find: "      if (m && !m.classList.contains('hidden')) syncBankFields('pay');",
       to:   '      /* fetched, and nothing shown */' },
     { name: 'paycash: same in the app — fetched, never shown',
-      file: 'mobile-app/www/index.html', suites: ['pay-cash-not-loaded'],
+      file: 'mobile-app/www/app/04-payments.js', suites: ['pay-cash-not-loaded'],
       find: "      if (m && !m.classList.contains('hidden')) syncBankFields('pay');",
       to:   '      /* fetched, and nothing shown */' },
     // Refetching on EVERY open is the other wrong fix: correct figures, and
@@ -1477,7 +1558,7 @@ const MUTATIONS = [
       find: '      const grouped = !!(pettyCash.bank_of && Object.keys(pettyCash.bank_of).length);',
       to:   '      const grouped = true;' },
     { name: 'paycash: same in the app — it groups on a fallback it invented',
-      file: 'mobile-app/www/index.html', suites: ['pay-cash-not-loaded'],
+      file: 'mobile-app/www/app/04-payments.js', suites: ['pay-cash-not-loaded'],
       find: '      const grouped = !!(pettyCash.bank_of && Object.keys(pettyCash.bank_of).length);',
       to:   '      const grouped = true;' },
     // The other direction: never grouping means she can no longer choose a
@@ -2802,7 +2883,7 @@ const MUTATIONS = [
       find: "  return (loads || []).filter((l) => (l._kind === 'sale' ? 'sale' : 'purchase') === kind);",
       to:   "  return (loads || []).filter((l) => (l._kind === 'purchase' ? 'purchase' : 'sale') === kind);" },
     { name: 'kind: the same, on the app',
-      file: 'mobile-app/www/index.html', suites: ['load-card-actions'],
+      file: 'mobile-app/www/app/09-loads-deck.js', suites: ['load-card-actions'],
       find: "  return (loads || []).filter((l) => (l._kind === 'sale' ? 'sale' : 'purchase') === kind);",
       to:   "  return (loads || []).filter((l) => (l._kind === 'purchase' ? 'purchase' : 'sale') === kind);" },
     { name: 'kind: the filter is ignored, so every tab shows everything (web)',
@@ -2823,15 +2904,15 @@ const MUTATIONS = [
       to:   '' },
 
     { name: 'app: the Pay button on a sale loses its direction (mobile)',
-      file: 'mobile-app/www/index.html', suites: ['form-parity'],
+      file: 'mobile-app/www/app/08-load-modal.js', suites: ['form-parity'],
       find: "${l._kind === 'sale' ? 'Receive payment' : 'Pay'}",
       to:   'Pay' },
     { name: 'app: the pay modal keeps one title for both directions (mobile)',
-      file: 'mobile-app/www/index.html', suites: ['form-parity'],
+      file: 'mobile-app/www/app/04-payments.js', suites: ['form-parity'],
       find: "if (ttl) ttl.textContent = sale ? 'Receive payment' : 'Record payment';",
       to:   "if (ttl) ttl.textContent = 'Record payment';" },
     { name: 'app: a sale reports money already PAID, not received (mobile)',
-      file: 'mobile-app/www/index.html', suites: ['form-parity'],
+      file: 'mobile-app/www/app/04-payments.js', suites: ['form-parity'],
       find: "already ${sale ? 'received' : 'paid'}",
       to:   'already paid' },
     { name: 'web: the Pay button on a sale loses its direction (dashboard)',
@@ -3722,7 +3803,7 @@ const MUTATIONS = [
 
     // ── BOL ON THE PHONE (2026-09-16) ────────────────────────────────────
     { name: 'bol-app: the sub-tab disappears from the app',
-      file: 'mobile-app/www/index.html', suites: ['bol'],
+      file: 'mobile-app/www/app/15-documents.js', suites: ['bol'],
       find: "['proforma', 'Proforma'], ['invoice', 'Invoice'], ['bol', 'BOL']",
       to:   "['proforma', 'Proforma'], ['invoice', 'Invoice']" },
     { name: 'bol-app: the button is there but routes to the proforma wizard',
@@ -3730,17 +3811,17 @@ const MUTATIONS = [
       find: "  else if (docsSubTab === 'bol') renderBolForm();",
       to:   '' },
     { name: 'bol-app: the consignee dropdown stops filling the address',
-      file: 'mobile-app/www/index.html', suites: ['bol'],
+      file: 'mobile-app/www/app/15-documents.js', suites: ['bol'],
       find: "    bolw.consigneeAddress = entry.raw || '';",
       to:   '' },
     { name: 'bol-app: a weight keystroke repaints the whole form',
-      file: 'mobile-app/www/index.html', suites: ['bol'],
+      file: 'mobile-app/www/app/15-documents.js', suites: ['bol'],
       // On a phone this throws the caret to the end of the box on every
       // character — the field is rebuilt underneath the cursor.
       find: '      bolRepaintTotals();\n    });\n  });\n  $(\'docBody\').querySelectorAll(\'.bolw-del\')',
       to:   '      renderBolForm();\n    });\n  });\n  $(\'docBody\').querySelectorAll(\'.bolw-del\')' },
     { name: 'bol-app: the app builds its own payload keys, diverging from the website',
-      file: 'mobile-app/www/index.html', suites: ['bol'],
+      file: 'mobile-app/www/app/15-documents.js', suites: ['bol'],
       // Two clients asking for two different documents from one route is the
       // divergence this codebase already guards for invoices.
       find: "    po_number: (w.po || '').trim(), appointment_id: (w.appointment || '').trim(),",
@@ -3819,7 +3900,7 @@ const MUTATIONS = [
       find: '        await bolDownload(out.saved_filename, out.saved_date);',
       to:   '' },
     { name: 'boldl: the app stops delivering the PDF to the phone',
-      file: 'mobile-app/www/index.html', suites: ['bol'],
+      file: 'mobile-app/www/app/15-documents.js', suites: ['bol'],
       find: "        await deliverExportedFile(blob, out.saved_filename, 'pdf');",
       to:   '' },
     { name: 'boldl: the route stops saying which day the archive filed it under',
@@ -3870,11 +3951,11 @@ const MUTATIONS = [
       find: "        status.textContent = 'Your browser blocked the new tab, so the preview was downloaded instead. Nothing was saved.';",
       to:   "        status.textContent = 'Preview opened.';" },
     { name: 'bolprev: the app goes back to window.open, which Android no-ops',
-      file: 'mobile-app/www/index.html', suites: ['bol'],
+      file: 'mobile-app/www/app/15-documents.js', suites: ['bol'],
       find: "      await deliverExportedFile(blob, `bol-preview-${String(body.bol_no || 'draft').replace(/[^A-Za-z0-9_-]/g, '_')}.pdf`, 'pdf');",
       to:   '      window.open(URL.createObjectURL(blob), \'_blank\');' },
     { name: 'bolprev: a preview claims it was saved',
-      file: 'mobile-app/www/index.html', suites: ['bol'],
+      file: 'mobile-app/www/app/15-documents.js', suites: ['bol'],
       // She would think the document had been issued.
       find: "      return set('Preview ready. Nothing was saved.');",
       to:   "      return set('Saved.');" },
@@ -3940,32 +4021,32 @@ const MUTATIONS = [
 
     // ── REPORTS IN THE YARD APP (2026-09-16) ─────────────────────────────
     { name: 'reports: the app goes back to one report',
-      file: 'mobile-app/www/index.html', suites: ['app-reports'],
+      file: 'mobile-app/www/app/12-petty-cash.js', suites: ['app-reports'],
       find: "    if (currentMobileTab === 'report') { await renderReportsMenu(); return; }",
       to:   "    if (currentMobileTab === 'report') { await renderSpendReportTab(); return; }" },
     { name: 'reports: the menu buttons render but are not wired',
-      file: 'mobile-app/www/index.html', suites: ['app-reports'],
+      file: 'mobile-app/www/app/11-reports.js', suites: ['app-reports'],
       // Looks perfect in source and does nothing on a phone — a failure this
       // project has shipped before.
       find: "  $('viewRoot').querySelectorAll('.rep-open').forEach((b) => b.addEventListener('click', () => {",
       to:   "  [].forEach((b) => b.addEventListener('click', () => {" },
     { name: 'reports: there is no way back out of a report',
-      file: 'mobile-app/www/index.html', suites: ['app-reports'],
+      file: 'mobile-app/www/app/11-reports.js', suites: ['app-reports'],
       find: "  $('repBack').addEventListener('click', () => { reportView = null; renderReportsMenu(); });",
       to:   '' },
     { name: 'reports: a buyer with no linked cost shows a margin of zero',
-      file: 'mobile-app/www/index.html', suites: ['app-reports'],
+      file: 'mobile-app/www/app/11-reports.js', suites: ['app-reports'],
       // Reads as "sold at cost", which is a different and much worse claim
       // than "we do not know".
       find: "            b.margin === null ? ' · cost not linked' : ` · margin ${repMoney(b.margin)}`}",
       to:   '            ` · margin ${repMoney(b.margin || 0)}`}' },
     { name: 'reports: profit hides how much of the sales its margin covers',
-      file: 'mobile-app/www/index.html', suites: ['app-reports'],
+      file: 'mobile-app/www/app/11-reports.js', suites: ['app-reports'],
       // The most misleading number this app could produce.
       find: "    ${m.caveat ? `<div style=\"font-size:11.5px; color:var(--status-warning, #d69e2e); margin-bottom:14px; line-height:1.5;\">${esc(m.caveat)}</div>` : '<div style=\"margin-bottom:14px;\"></div>'}",
       to:   "    <div style=\"margin-bottom:14px;\"></div>" },
     { name: 'reports: the cash figures stop being labelled NOT profit',
-      file: 'mobile-app/www/index.html', suites: ['app-reports'],
+      file: 'mobile-app/www/app/11-reports.js', suites: ['app-reports'],
       find: "    <div style=\"font-size:11px; letter-spacing:.1em; color:var(--text-muted); margin-bottom:6px;\">MONEY IN AND OUT — NOT PROFIT</div>",
       to:   "    <div style=\"font-size:11px; letter-spacing:.1em; color:var(--text-muted); margin-bottom:6px;\">PROFIT</div>" },
     { name: 'profit: the margin is computed on sales with no known cost',
@@ -3973,15 +4054,15 @@ const MUTATIONS = [
       find: '        if (b && b.cost != null) linkedRevenue += (b.amount || 0);',
       to:   '        linkedRevenue += (b.amount || 0);' },
     { name: 'profit: stock on hand shows what came IN, not what is left',
-      file: 'mobile-app/www/index.html', suites: ['app-reports'],
+      file: 'mobile-app/www/app/11-reports.js', suites: ['app-reports'],
       find: '          ${repNum(oh ? g.onHand : g.net)} ${esc(data.unit || \'lb\')}${oh && g.onHand < 0 ? \' ⚠\' : \'\'}',
       to:   '          ${repNum(g.net)} ${esc(data.unit || \'lb\')}' },
     { name: 'bolgoods: pieces is separated from the commodity again',
-      file: 'mobile-app/www/index.html', suites: ['app-reports'],
+      file: 'mobile-app/www/app/15-documents.js', suites: ['app-reports'],
       find: '        <div style="display:grid; grid-template-columns:1fr 78px 34px; gap:8px; align-items:center; margin-bottom:8px;">',
       to:   '        <div style="display:grid; grid-template-columns:1fr 34px; gap:8px; align-items:center; margin-bottom:8px;">' },
     { name: 'bolgoods: the three weights are split across two lines again',
-      file: 'mobile-app/www/index.html', suites: ['app-reports'],
+      file: 'mobile-app/www/app/15-documents.js', suites: ['app-reports'],
       find: '        <div style="display:grid; grid-template-columns:repeat(3,1fr); gap:8px;">\n          <input data-bi="${i}" data-bf="gross_weight"',
       to:   '        <div style="display:grid; grid-template-columns:repeat(2,1fr); gap:8px;">\n          <input data-bi="${i}" data-bf="gross_weight"' },
 
@@ -3994,7 +4075,7 @@ const MUTATIONS = [
       find: "  return new Date().toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' });\n}\n\nfunction bolBlankRow()",
       to:   '  return new Date().toISOString().slice(0, 10);\n}\n\nfunction bolBlankRow()' },
     { name: 'boldate: the app goes back to UTC',
-      file: 'mobile-app/www/index.html', suites: ['bol'],
+      file: 'mobile-app/www/app/15-documents.js', suites: ['bol'],
       find: "function bolTodayISO() {\n  return new Date().toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' });",
       to:   'function bolTodayISO() {\n  return new Date().toISOString().slice(0, 10);' },
     { name: 'boldate: the form stops defaulting the date at all',
@@ -4505,7 +4586,7 @@ const MUTATIONS = [
       to:   '        draft_id: null,' },
 
     { name: 'one-draft: the app stops sending the draft id',
-      file: 'mobile-app/www/index.html', suites: ['one-draft-one-load'],
+      file: 'mobile-app/www/app/09-loads-deck.js', suites: ['one-draft-one-load'],
       find: '        draft_id: currentDraftId,',
       to:   '        draft_id: null,' },
 
@@ -4559,7 +4640,7 @@ const MUTATIONS = [
       to:   '          if (false) {' },
 
     { name: 'cash-zero: the app tells her the box is empty when it is NOT',
-      file: 'mobile-app/www/index.html', suites: ['pay-cash-empty-note'],
+      file: 'mobile-app/www/app/04-payments.js', suites: ['pay-cash-empty-note'],
       find: '          if (known && listed === 0 && stranded.length) {',
       to:   '          if (false) {' },
 
@@ -4569,7 +4650,7 @@ const MUTATIONS = [
       to:   "          note.classList.toggle('hidden', true);" },
 
     { name: 'cash-zero: the app goes back to saying nothing',
-      file: 'mobile-app/www/index.html', suites: ['pay-cash-empty-note'],
+      file: 'mobile-app/www/app/04-payments.js', suites: ['pay-cash-empty-note'],
       find: "          note.classList.toggle('hidden', !msg);",
       to:   "          note.classList.toggle('hidden', true);" },
 
@@ -4750,42 +4831,42 @@ const MUTATIONS = [
       to:   "let loadMonthFilter = (() => { try { return localStorage.getItem('loadMonthFilter') || ''; } catch (e) { return ''; } })();" },
 
     { name: 'loads(app): back to a calendar month instead of a rolling week',
-      file: 'mobile-app/www/index.html', suites: ['load-deck-grouping'],
+      file: 'mobile-app/www/app/09-loads-deck.js', suites: ['load-deck-grouping'],
       find: "  const days = (opts && opts.days) || loadRecentDays();",
       to:   "  const days = 400;" },
 
     { name: 'loads(app): only the newest day opens again',
-      file: 'mobile-app/www/index.html', suites: ['load-deck-grouping', 'load-card-actions'],
+      file: 'mobile-app/www/app/09-loads-deck.js', suites: ['load-deck-grouping', 'load-card-actions'],
       find: '  const days = groups.map((g) => `\n    <details class="load-date-section" open>',
       to:   '  const days = groups.map((g, i) => `\n    <details class="load-date-section" ${i === 0 ? \'open\' : \'\'}>' },
 
     { name: 'loads(app): a chosen month is NOT expanded',
-      file: 'mobile-app/www/index.html', suites: ['load-deck-grouping'],
+      file: 'mobile-app/www/app/09-loads-deck.js', suites: ['load-deck-grouping'],
       find: "  const allOpen = !!(opts && opts.allOpen);",
       to:   '  const allOpen = false;' },
 
     { name: 'loads(app): everything is expanded all the time',
-      file: 'mobile-app/www/index.html', suites: ['load-deck-grouping'],
+      file: 'mobile-app/www/app/09-loads-deck.js', suites: ['load-deck-grouping'],
       find: "  const allOpen = !!(opts && opts.allOpen);",
       to:   '  const allOpen = true;' },
 
     { name: 'loads(app): the month filter is never applied',
-      file: 'mobile-app/www/index.html', suites: ['load-deck-grouping'],
+      file: 'mobile-app/www/app/09-loads-deck.js', suites: ['load-deck-grouping'],
       find: "    if (loadMonthFilter) rows = filterLoadsByMonth(rows, loadMonthFilter);",
       to:   '' },
 
     { name: 'loads(app): an undated load is swept into every month',
-      file: 'mobile-app/www/index.html', suites: ['load-deck-grouping'],
+      file: 'mobile-app/www/app/09-loads-deck.js', suites: ['load-deck-grouping'],
       find: "  return (loads || []).filter((l) => loadMonthKey(l && l.date) === key);",
       to:   '  return (loads || []).filter((l) => !l.date || loadMonthKey(l.date) === key);' },
 
     { name: 'loads(app): the month list is a calendar, not the data',
-      file: 'mobile-app/www/index.html', suites: ['load-deck-grouping'],
+      file: 'mobile-app/www/app/09-loads-deck.js', suites: ['load-deck-grouping'],
       find: "    const k = loadMonthKey(l && l.date);\n    if (!k) continue;\n    seen.set(k, (seen.get(k) || 0) + 1);",
       to:   "    const k = loadMonthKey(l && l.date);\n    if (!k) continue;\n    seen.set(k, 0);" },
 
     { name: 'loads(app): months list oldest first',
-      file: 'mobile-app/www/index.html', suites: ['load-deck-grouping'],
+      file: 'mobile-app/www/app/09-loads-deck.js', suites: ['load-deck-grouping'],
       find: "  return Array.from(seen.keys()).sort((a, b) => b.localeCompare(a))",
       to:   '  return Array.from(seen.keys()).sort((a, b) => a.localeCompare(b))' },
 
@@ -4793,18 +4874,18 @@ const MUTATIONS = [
     // Pacific it believes it is already tomorrow, which moves the whole
     // week boundary a day early every evening.
     { name: 'loads(app): the week boundary is computed in UTC',
-      file: 'mobile-app/www/index.html', suites: ['load-deck-grouping'],
+      file: 'mobile-app/www/app/09-loads-deck.js', suites: ['load-deck-grouping'],
       find: "function loadLocalDayKey(d) {\n  const t = new Date(d);",
       to:   "function loadLocalDayKey(d) {\n  return new Date(d).toISOString().slice(0, 10);\n  const t = new Date(d);" },
 
     // days - 1 is seven days INCLUDING today. Dropping it shows eight.
     { name: 'loads(app): the window is off by one day',
-      file: 'mobile-app/www/index.html', suites: ['load-deck-grouping'],
+      file: 'mobile-app/www/app/09-loads-deck.js', suites: ['load-deck-grouping'],
       find: "  from.setDate(from.getDate() - (days - 1));",
       to:   '  from.setDate(from.getDate() - days);' },
 
     { name: 'loads(app): the month filter is persisted across sessions',
-      file: 'mobile-app/www/index.html', suites: ['load-deck-grouping'],
+      file: 'mobile-app/www/app/10-shell.js', suites: ['load-deck-grouping'],
       find: "let loadMonthFilter = '';",
       to:   "let loadMonthFilter = (() => { try { return localStorage.getItem('loadMonthFilter') || ''; } catch (e) { return ''; } })();" },
 
@@ -5483,7 +5564,7 @@ const MUTATIONS = [
       to:   '        /* silently partial */' },
 
     { name: 'prepay-ui: the phone stops offering it at all',
-      file: 'mobile-app/www/index.html', suites: ['supplier-prepayment'],
+      file: 'mobile-app/www/app/09-loads-deck.js', suites: ['supplier-prepayment'],
       find: '          <div id="payPrepayBox" class="hidden"',
       to:   '          <div id="payPrepayBoxGone" class="hidden"' },
 

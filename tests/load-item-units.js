@@ -48,7 +48,7 @@ const ROOT = path.join(__dirname, '..');
 const cfg = require(path.join(ROOT, 'config'));
 
 const DASH = require('../helpers/sourceParts').indexHtml();
-const APP  = fs.readFileSync(path.join(ROOT, 'mobile-app/www/index.html'), 'utf8');
+const APP  = require("../helpers/sourceParts").mobileHtml();
 
 // 30,000 lb is a real load size. At $0.36/lb it is $10,800; the same metal at
 // $800/MT is $10,886.23. Close enough that a wrong unit does NOT look wrong,

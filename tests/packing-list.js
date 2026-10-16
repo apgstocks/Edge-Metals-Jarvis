@@ -732,8 +732,18 @@ section('D — the screen');
     {
         const wrap = d.querySelector('#panelPacking [data-pkfield="date"]').parentElement.parentElement;
         const colOf = (i) => [...wrap.children[i].querySelectorAll('[data-pkfield]')].map((e) => e.dataset.pkfield);
-        ck('  the left column is date, invoice, customer',
-           colOf(0).join(',') === 'date,invoice_no,customer', colOf(0).join(','));
+        // date, invoice, customer — then the CONSIGNEE ADDRESS, added
+        // 2026-10-16 when a packing list went out with an empty BUYER block.
+        // Her 2026-09-16 order is untouched: the address is a FOURTH field
+        // under the customer it belongs to, which is where the Invoice,
+        // Proforma and BOL tabs have always put theirs. This check went red
+        // when it was added, which is the point of spelling the column out —
+        // a field cannot appear on this form without someone deciding it
+        // should.
+        ck('  the left column is date, invoice, customer, consignee address',
+           colOf(0).join(',') === 'date,invoice_no,customer,consignee_address', colOf(0).join(','));
+        ck('    and her three originals are still in her order',
+           colOf(0).slice(0, 3).join(',') === 'date,invoice_no,customer', colOf(0).join(','));
         ck('  the right column is booking, container, seal',
            colOf(1).join(',') === 'booking_no,container_no,seal_no', colOf(1).join(','));
         ck('    both stacked vertically',
@@ -1773,6 +1783,120 @@ section('S2. the invoice packing list keeps its shape');
     ck('a partly-numbered tally uses positions throughout',
        decide(['1', '', '3']).join(' ') === '1 2 3');
     ck('no notes at all uses positions', decide(['', '', '']).join(' ') === '1 2 3');
+}
+
+// ── THE CONSIGNEE ADDRESS, WHICH DID NOT REACH THE DOCUMENT ───────────────
+// Apsara, 2026-10-16, with MSNU2238929_packing.pdf: "In packing list
+// generation,address is not coming on selecting teh customer in jarvis".
+//
+// WHAT HAPPENED. The tab sent the customer NAME alone. The server re-resolved
+// it through addressBook.resolveAddress(), and "Nik" is an alias on two of
+// her companies — Ascorp Singapore and Tiyanish Metal — so it came back
+// AMBIGUOUS. addressLinesFor then returns nothing on purpose, because
+// guessing puts one company's address on the other's shipping document (the
+// rule exists because a broker named "Joey" once handled two companies).
+//
+// The refusal was right. Delivering it in silence was not: the list printed
+// "Nik" over an empty BUYER block, and this was the only document tab with
+// nowhere on screen to show her. The address now travels WITH the pick.
+{
+    section('the consignee address travels with the document');
+
+    // The renderer is stubbed, so the BUYER block is asserted on the HTML
+    // that would have been printed. Chromium is not available here, and a
+    // check that can only run where Chromium is is a check that stops
+    // running.
+    let seen = null;
+    const capture = async (html) => { seen = html; return { packing: Buffer.from('%PDF-fake') }; };
+    const base = {
+        container_no: 'ADDR0000001',
+        customer: 'Nik',
+        rows: [{ container_no: 'ADDR0000001', gross_weight_lbs: '4243', tare_lbs: '115' }],
+    };
+
+    // ── WHAT SHE SAW ON SCREEN IS WHAT PRINTS ────────────────────────────
+    {
+        const rec = pl.buildRecord({ ...base, consignee_address: [
+            'Tiyanish Metal', '12 Industrial Road', 'Singapore 079903'] }, null);
+        ck('the record keeps the lines the screen sent', rec.consignee_address.length === 3,
+           JSON.stringify(rec.consignee_address));
+        await pl.generatePdf(rec, { renderer: capture, allowWithoutInvoice: true });
+        ck('  the BUYER name is the company, not the alias',
+           /Tiyanish Metal/.test(seen || ''), 'the typed alias printed instead of the company');
+        ck('  and the address is on the document', /12 Industrial Road/.test(seen || ''));
+        ck('  all of it', /Singapore 079903/.test(seen || ''));
+    }
+
+    // ── A CALLER WITH NO SCREEN IS UNCHANGED ─────────────────────────────
+    // The scan path reads a photographed list and has no address book to
+    // offer; every record saved before today has no lines either. Both must
+    // behave exactly as they did, which means the LOOKUP is still consulted.
+    // Proved by poisoning the module the lookup requires, so a fallback that
+    // had been quietly removed would show up as the stub never being asked.
+    {
+        const abPath = require.resolve(path.join(ROOT, 'helpers/addressBook'));
+        const real = require.cache[abPath];
+        let asked = null;
+        require.cache[abPath] = { id: abPath, filename: abPath, loaded: true, exports: {
+            resolveAddress: (name) => { asked = name; return { type: 'exact', entry: {
+                aliases: ['Fallback Co'], raw: 'Fallback Co\n9 Lookup Lane' } }; },
+        } };
+        try {
+            seen = null;
+            const rec = pl.buildRecord(base, null);          // NO consignee_address
+            ck('a record with no lines stores an empty list', rec.consignee_address.length === 0,
+               JSON.stringify(rec.consignee_address));
+            await pl.generatePdf(rec, { renderer: capture, allowWithoutInvoice: true });
+            ck('  the address book IS still consulted', asked === 'Nik', String(asked));
+            ck('  and what it returns reaches the document', /9 Lookup Lane/.test(seen || ''));
+        } finally {
+            if (real) require.cache[abPath] = real; else delete require.cache[abPath];
+        }
+    }
+
+    // ── AND THE SCREEN WINS OVER THE LOOKUP ──────────────────────────────
+    // Both present. Her lines are the ones she could check before pressing
+    // Generate; a stale address book entry must not override them.
+    {
+        const abPath = require.resolve(path.join(ROOT, 'helpers/addressBook'));
+        const real = require.cache[abPath];
+        require.cache[abPath] = { id: abPath, filename: abPath, loaded: true, exports: {
+            resolveAddress: () => ({ type: 'exact', entry: {
+                aliases: ['Wrong Co'], raw: 'Wrong Co\n1 Stale Street' } }),
+        } };
+        try {
+            seen = null;
+            const rec = pl.buildRecord({ ...base, consignee_address: ['Tiyanish Metal', '12 Industrial Road'] }, null);
+            await pl.generatePdf(rec, { renderer: capture, allowWithoutInvoice: true });
+            ck('her lines beat the address book', /12 Industrial Road/.test(seen || ''));
+            ck('  and the stale entry does not appear', !/1 Stale Street/.test(seen || ''),
+               'a renamed address-book entry would silently rewrite a document she already sent');
+        } finally {
+            if (real) require.cache[abPath] = real; else delete require.cache[abPath];
+        }
+    }
+
+    // ── THE SCREEN ITSELF ────────────────────────────────────────────────
+    // The field has to exist and be sent, or everything above is theory.
+    // This tab was the only one of the four without it.
+    {
+        const doc = fs.readFileSync(path.join(ROOT, 'dashboard/documents.html'), 'utf8');
+        ck('the packing list tab HAS a consignee address box',
+           /id="pk_consignee_address"/.test(doc),
+           'the only document tab without one is how this reached a customer');
+        ck('  the payload sends it', /consignee_address: \$\('pk_consignee_address'\)/.test(doc));
+        ck('  picking a customer fills it',
+           /\$\('pk_consignee_address'\)\.value = entry\.raw/.test(doc),
+           'the pick handler threw the address away and kept only the name');
+        ck('  clearing the form clears it', /'pk_item_desc', 'pk_consignee_address'/.test(doc));
+        ck('  and reopening a saved list restores it',
+           /\$\('pk_consignee_address'\)\.value = Array\.isArray\(pl\.consignee_address\)/.test(doc));
+        // The other three tabs keep theirs — this added a field, it did not
+        // move anyone else's.
+        for (const id of ['inv_consignee_address', 'pf_consignee_address', 'bol_consignee_address']) {
+            ck(`  ${id} is untouched`, doc.includes(`id="${id}"`));
+        }
+    }
 }
 
 console.log(`\n  ${pass} passed, ${fail} failed`);

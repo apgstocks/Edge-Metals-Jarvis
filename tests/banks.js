@@ -251,7 +251,7 @@ section('E — filtering by bank narrows every figure, not just the rows');
 section('F — both clients offer the same thing, and neither invents it');
 {
     const web = require('../helpers/sourceParts').indexHtml();
-    const app = fs.readFileSync(path.join(ROOT, 'mobile-app/www/index.html'), 'utf8');
+    const app = require("../helpers/sourceParts").mobileHtml();
 
     for (const [name, src] of [['website', web], ['mobile app', app]]) {
         ck(`the ${name} has a bank field on the load pay form`,

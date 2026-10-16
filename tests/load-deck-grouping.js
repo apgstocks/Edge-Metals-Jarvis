@@ -67,7 +67,8 @@ const formatLike = (ymd) => {
 const mk = (id, date) => ({ id, date, seller: 'Ramesh', net_weight: 100, amount: 10, items: [], _kind: 'purchase' });
 
 function mount(file) {
-    const html = file === 'dashboard/index.html' ? require('../helpers/sourceParts').indexHtml() : fs.readFileSync(path.join(ROOT, file), 'utf8');
+    const html = file === 'dashboard/index.html' ? require('../helpers/sourceParts').indexHtml()
+        : file === 'mobile-app/www/index.html' ? require('../helpers/sourceParts').mobileHtml() : fs.readFileSync(path.join(ROOT, file), 'utf8');
     const SCRIPT = [...html.matchAll(/<script(?![^>]*src=)[^>]*>([\s\S]*?)<\/script>/g)].map((m) => m[1]).join('\n');
     const dom = new JSDOM(html, { runScripts: 'outside-only', url: 'http://localhost/' });
     // ── boot() MUST NOT OUTLIVE THE WINDOW ───────────────────────────────
@@ -302,7 +303,8 @@ for (const file of ['dashboard/index.html', 'mobile-app/www/index.html']) {
         // The page source, for the checks that have to see the WIRING — the
         // handler is attached inside the Loads tab's setup, which needs the
         // tab rendered, so these read the file the mount() came from.
-        const pageSrc = file === 'dashboard/index.html' ? require('../helpers/sourceParts').indexHtml() : fs.readFileSync(path.join(ROOT, file), 'utf8');
+        const pageSrc = file === 'dashboard/index.html' ? require('../helpers/sourceParts').indexHtml()
+        : file === 'mobile-app/www/index.html' ? require('../helpers/sourceParts').mobileHtml() : fs.readFileSync(path.join(ROOT, file), 'utf8');
 
         // ── THE OPTIONS COME FROM THE DATA ───────────────────────────────
         // A month with no loads in it is a control that answers "no loads"

@@ -31,7 +31,7 @@ const ck = (n, c, extra) => {
 const section = (t) => console.log('\n=== ' + t + ' ===');
 
 const ROOT = path.join(__dirname, '..');
-const SRC = fs.readFileSync(path.join(ROOT, 'mobile-app/www/index.html'), 'utf8');
+const SRC = require("../helpers/sourceParts").mobileHtml();
 
 // Same extractor as tests/petty-cash-clients.js: start at the BODY, not the
 // first '{' after the name, or a destructured parameter list is mistaken for

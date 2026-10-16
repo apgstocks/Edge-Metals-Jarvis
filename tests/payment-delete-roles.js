@@ -220,7 +220,7 @@ section('E — the buttons match the rules');
     // Asserted so a button is not offered that the server will refuse, which
     // reads to her as the app being broken.
     const web = require('../helpers/sourceParts').indexHtml();
-    const app2 = fs.readFileSync(path.join(ROOT, 'mobile-app/www/index.html'), 'utf8');
+    const app2 = require("../helpers/sourceParts").mobileHtml();
 
     for (const [label, src] of [['website', web], ['app', app2]]) {
         ck(`${label}: the ✕ on a payment is admin-only`,

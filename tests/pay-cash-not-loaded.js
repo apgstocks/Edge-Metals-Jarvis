@@ -39,7 +39,12 @@ const ck = (n, c, extra) => {
 const section = (t) => console.log('\n=== ' + t + ' ===');
 
 const ROOT = path.join(__dirname, '..');
-const read = (f) => fs.readFileSync(path.join(ROOT, f), 'utf8');
+// The app is split into mobile-app/www/app/*.js, so its index.html is now a
+// shell with no code in it. sourceParts puts the original back; without this
+// every check below would pass against an empty string.
+const read = (f) => (f === 'mobile-app/www/index.html'
+    ? require('../helpers/sourceParts').mobileHtml()
+    : fs.readFileSync(path.join(ROOT, f), 'utf8'));
 
 // Lift a named function out of a file by brace-matching, so the test runs
 // the shipped code rather than a copy of it.

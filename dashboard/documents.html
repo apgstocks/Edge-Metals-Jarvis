@@ -449,6 +449,29 @@ body[data-theme="light"] {
             <input id="pk_customer" type="text" autocomplete="off" placeholder="Start typing — matches your address book">
             <div id="pkCustomerList" class="autocomplete-list hidden"></div>
           </div>
+          <!-- ── THE ADDRESS, ON SCREEN ────────────────────────────────────
+               Apsara, 2026-10-16, with MSNU2238929_packing.pdf: "In packing
+               list generation,address is not coming on selecting teh
+               customer in jarvis".
+
+               This tab was the ONLY document tab without this box — Invoice,
+               Proforma and BOL have each had one. The customer name alone
+               went to the server, which re-resolved it through
+               addressBook.resolveAddress(); "Nik" is an alias on TWO
+               companies (Ascorp Singapore and Tiyanish Metal), so it came
+               back AMBIGUOUS, and helpers/packingList.js's addressLinesFor
+               deliberately returns nothing rather than guess which one — the
+               same rule that exists because a broker named "Joey" once
+               handled two companies. Correct refusal, silent delivery: the
+               packing list printed "Nik" with an empty BUYER block and
+               nothing said why.
+
+               Filled when she picks, and editable, so the address that will
+               be PRINTED is the one she can see before pressing Generate. -->
+          <div class="field" data-pkfield="consignee_address">
+            <label for="pk_consignee_address">Consignee address</label>
+            <textarea id="pk_consignee_address" rows="4" placeholder="Fills in when you pick a customer — or type it"></textarea>
+          </div>
         </div>
         <div style="display:flex; flex-direction:column; gap:12px; width:260px;">
           <div class="field" data-pkfield="booking_no"><label for="pk_booking">Booking number</label><input id="pk_booking" type="text"></div>
@@ -7286,10 +7309,48 @@ function pkInit() {
         // consigneeNameForEntry, not aliases[0]: an entry saved as
         // "Joey/Taewon" is searched by the person and printed as the company.
         inp.value = consigneeNameForEntry(entry);
+        // THE ADDRESS COMES WITH THE PICK, exactly as the BOL tab has always
+        // done it. Before this, the name went on alone and the SERVER had to
+        // resolve it again — and a name that is an alias on two companies
+        // (her "Nik") resolves to nothing, by design, leaving the BUYER block
+        // empty on a document going to a customer.
+        $('pk_consignee_address').value = entry.raw || '';
         box.classList.add('hidden');
       }));
     });
-    inp.addEventListener('blur', () => setTimeout(() => box.classList.add('hidden'), 150));
+    // ── A TYPED NAME IS ASKED ABOUT, NOT SILENTLY DROPPED ────────────────
+    // She does not always pick from the list; a name typed out in full and
+    // tabbed past is just as much a chosen customer. If it names exactly one
+    // entry, fill the address. If it names SEVERAL, open the list so she
+    // chooses — that is the question the server could not ask her, because
+    // by then it is building a PDF.
+    //
+    // Only ever fills an EMPTY box: an address she has corrected by hand is
+    // hers, and must not be overwritten by a lookup on blur.
+    inp.addEventListener('blur', () => setTimeout(() => {
+      const typed = inp.value.trim();
+      const addr = $('pk_consignee_address');
+      if (typed && addr && !addr.value.trim()) {
+        const hits = searchAddressBook(typed.toLowerCase());
+        if (hits.length === 1) {
+          addr.value = hits[0].raw || '';
+        } else if (hits.length > 1) {
+          box.innerHTML = hits.slice(0, 8).map((m, i) =>
+            `<div class="autocomplete-item" data-idx="${i}">${esc(addressBookEntryLabel(m))}</div>`).join('');
+          box.classList.remove('hidden');
+          box.querySelectorAll('.autocomplete-item').forEach((el) => el.addEventListener('mousedown', (ev) => {
+            ev.preventDefault();
+            const entry = hits[Number(el.dataset.idx)];
+            if (!entry) return;
+            inp.value = consigneeNameForEntry(entry);
+            addr.value = entry.raw || '';
+            box.classList.add('hidden');
+          }));
+          return;   // leave it open — she has a choice to make
+        }
+      }
+      box.classList.add('hidden');
+    }, 150));
   }
 
   $('btnPkScan').addEventListener('click', () => pkScan());
@@ -7494,6 +7555,10 @@ function pkPayload() {
     invoice_no: $('pk_invoice').value.trim(),
     seal_no: $('pk_seal').value.trim(),
     customer: $('pk_customer').value.trim(),
+    // Lines, matching what invoicePdf reads and what the Invoice and
+    // Proforma tabs already send. Empty means "no answer from this screen",
+    // and the server falls back to its own lookup exactly as before.
+    consignee_address: $('pk_consignee_address').value.split('\n').map((l) => l.trim()).filter(Boolean),
     item_description: $('pk_item_desc').value.trim(),
     show_item_in_grid: pkShowItem(),
     date: $('pk_date').value,
@@ -7697,7 +7762,7 @@ async function pkSave() {
 
 function pkClearForm() {
   pkEditingId = null;
-  ['pk_container', 'pk_booking', 'pk_invoice', 'pk_seal', 'pk_customer', 'pk_item_desc'].forEach((id) => { if ($(id)) $(id).value = ''; });
+  ['pk_container', 'pk_booking', 'pk_invoice', 'pk_seal', 'pk_customer', 'pk_item_desc', 'pk_consignee_address'].forEach((id) => { if ($(id)) $(id).value = ''; });
   if ($('pk_show_item')) $('pk_show_item').checked = false;
   if ($('pk_date')) $('pk_date').value = pkTodayStr();
   document.querySelectorAll('#panelPacking [data-pkfield]').forEach((b) => pkMark(b.dataset.pkfield, false));
@@ -7719,6 +7784,10 @@ async function pkEdit(id) {
   $('pk_invoice').value = pl.invoice_no || '';
   $('pk_seal').value = pl.seal_no || '';
   $('pk_customer').value = pl.customer || '';
+  // A packing list reopened next month must show the address it PRINTED,
+  // not whatever the address book says today.
+  $('pk_consignee_address').value = Array.isArray(pl.consignee_address)
+    ? pl.consignee_address.join('\n') : (pl.consignee_address || '');
   $('pk_date').value = pl.date || '';
   $('pk_item_desc').value = pl.item_description || '';
   // The checkbox is part of the RECORD. Reopening a list she printed last

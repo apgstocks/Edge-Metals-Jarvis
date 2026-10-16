@@ -251,7 +251,8 @@ function clientChecks() {
 // correct was never the problem.
 section('G — a paint path without wiring is a dead feature');
 for (const [name, file] of [['app', 'mobile-app/www/index.html'], ['website', 'dashboard/index.html']]) {
-    const src = file === 'dashboard/index.html' ? require('../helpers/sourceParts').indexHtml() : fs.readFileSync(path.join(ROOT, file), 'utf8');
+    const src = file === 'dashboard/index.html' ? require('../helpers/sourceParts').indexHtml()
+        : file === 'mobile-app/www/index.html' ? require('../helpers/sourceParts').mobileHtml() : fs.readFileSync(path.join(ROOT, file), 'utf8');
 
     ck(`${name}: the wiring is one shared function`, /function wireInvLineToggles\(from, to\)/.test(src),
        'inline copies are how one path keeps it and another quietly does not');
@@ -266,7 +267,7 @@ for (const [name, file] of [['app', 'mobile-app/www/index.html'], ['website', 'd
 {
     // The app specifically: the initial render is paintInventory, NOT the
     // sub-tab switch. That is the path that was broken, so it gets named.
-    const app = fs.readFileSync(path.join(ROOT, 'mobile-app/www/index.html'), 'utf8');
+    const app = require("../helpers/sourceParts").mobileHtml();
     // Brace-matched. The first version sliced from paintInventory to
     // renderInventoryTab — which sits EARLIER in the file, so the slice was
     // empty and the assertion failed against a correct fix.

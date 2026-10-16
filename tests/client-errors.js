@@ -201,7 +201,7 @@ const probes = (firstFail) => ['internet', 'reach server', 'read /healthz', 'log
     ck('  and it always answers 204, telling a stranger nothing',
        /res\.status\(204\)\.end\(\);/.test(api));
 
-    const app = fs.readFileSync(path.join(ROOT, 'mobile-app/www/index.html'), 'utf8');
+    const app = require("../helpers/sourceParts").mobileHtml();
     ck('the app QUEUES a failure', /queueClientError\(/.test(app),
        'it cannot send at the moment it matters — that is the whole problem');
     ck('  and flushes on the next connection that works',

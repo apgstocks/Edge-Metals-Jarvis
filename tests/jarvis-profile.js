@@ -387,7 +387,7 @@ section('I — the app and the website agree');
     // The last time a rule was added to one client and not the other, it
     // shipped broken to the one nobody tested. Both files, every time.
     const CLIENTS = [
-        ['app', fs.readFileSync(path.join(ROOT, 'mobile-app/www/index.html'), 'utf8')],
+        ['app', require("../helpers/sourceParts").mobileHtml()],
         ['website', require('../helpers/sourceParts').indexHtml()],
     ];
     // Comments are stripped before matching — a comment describing the thing
@@ -444,7 +444,7 @@ section('I — the app and the website agree');
 
     // Re-sign is app-only — the website has no signature pad at all — so this
     // is asserted where it exists rather than pretended into both.
-    const appSrc = fs.readFileSync(path.join(ROOT, 'mobile-app/www/index.html'), 'utf8');
+    const appSrc = require("../helpers/sourceParts").mobileHtml();
     const resign = nocomment(grab(appSrc, 'loadIsResignable'));
     ck('app: re-sign is offered to Jarvis', /if \(IS_SUPER\) return true;/.test(resign));
     const site = require('../helpers/sourceParts').indexHtml();

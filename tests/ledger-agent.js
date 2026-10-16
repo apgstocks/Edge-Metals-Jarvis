@@ -412,8 +412,49 @@ section('G — FILLING WHAT THE SHEET HAS AND JARVIS DOES NOT');
     // "1 thing need you" twice, because the phrase had two copies and fixing
     // one did not fix the other. Checked on the SUBJECT, where the second
     // copy lives.
-    ck('the subject says "1 thing needs you", not "1 thing need you"',
-       /1 thing needs you/.test(String(mailed && mailed.subject)), String(mailed && mailed.subject));
+    //
+    // THIS CHECK WAS RED FOR DAYS, AND THE CODE WAS RIGHT. It asserted the
+    // SINGULAR against `mailed` from the run above, whose fixture proposes
+    // THREE findings — so the subject correctly read "3 things need you" and
+    // the check correctly failed, every run, meaning nothing. A permanent red
+    // is worse than no check: it trains everyone to skim past the summary,
+    // which is where a real regression would have appeared.
+    //
+    // So agreement is asserted against the ACTUAL count, and the singular
+    // branch — the one that carried the bug twice — is exercised on its own
+    // run below rather than hoped for.
+    const subj = String(mailed && mailed.subject);
+    const n = run.counts.proposed;
+    ck(`the subject's verb agrees with its own count (${n})`,
+       n === 1 ? /\b1 thing needs you/.test(subj)
+               : new RegExp(`\\b${n} things need you`).test(subj),
+       subj);
+    ck('  and it is plural here, because this fixture proposes more than one',
+       n > 1, `${n} proposed — if this ever becomes 1 the check above still holds`);
+
+    // THE SINGULAR BRANCH, driven. job.run() builds its findings from
+    // agent.defaultSources() and takes no source injection, so this fixture
+    // cannot be forced down to exactly one. The SAME phrase lives in
+    // reportText (helpers/ledgerAgent.js) — that is the first of the two
+    // copies, the one whose fix did not fix the other — and it IS callable
+    // directly. So the branch is exercised there, and the subject's copy is
+    // held to agreement with its own count above. Between them both copies
+    // are covered, which is the thing that failed twice.
+    {
+        const one = agent.reportText({ proposed: [
+            { what: 'C1 — S', detail: 'supplier_price: sheet says 0.34, Jarvis has nothing' },
+        ] });
+        ck('reportText with ONE finding says "1 thing needs you"',
+           /\b1 thing needs you\b/.test(String(one)), String(one));
+        ck('  and not "1 thing need you"', !/\b1 thing need you\b/.test(String(one)), String(one));
+
+        const two = agent.reportText({ proposed: [
+            { what: 'C1 — S', detail: 'a' }, { what: 'C2 — S', detail: 'b' },
+        ] });
+        ck('  and TWO findings say "2 things need you"',
+           /\b2 things need you\b/.test(String(two)), String(two));
+        ck('  not "2 things needs you"', !/\b2 things needs you\b/.test(String(two)), String(two));
+    }
 
     // ── NOT TWICE ABOUT ONE BLANK ────────────────────────────────────────
     const once = agent.reportText({ proposed: [{

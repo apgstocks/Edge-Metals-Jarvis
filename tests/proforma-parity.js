@@ -24,7 +24,8 @@ const ck = (n, c, extra) => {
 const section = (t) => console.log('\n=== ' + t + ' ===');
 
 const ROOT = path.join(__dirname, '..');
-const read = (f) => fs.readFileSync(path.join(ROOT, f), 'utf8');
+const read = (f) => (f === 'mobile-app/www/index.html' ? require("../helpers/sourceParts").mobileHtml()
+    : fs.readFileSync(path.join(ROOT, f), 'utf8'));
 const grab = (src, name) => {
     const i = src.indexOf('function ' + name + '(');
     if (i < 0) return null;

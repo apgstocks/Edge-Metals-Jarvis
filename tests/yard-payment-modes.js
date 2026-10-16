@@ -61,7 +61,7 @@ const petty = require(path.join(ROOT, 'helpers/pettyCash'));
 const banks = require(path.join(ROOT, 'helpers/banks'));
 
 const DASH = require('../helpers/sourceParts').indexHtml();
-const APP = fs.readFileSync(path.join(ROOT, 'mobile-app/www/index.html'), 'utf8');
+const APP = require("../helpers/sourceParts").mobileHtml();
 
 // The <select id="pay_mode"> block, comments stripped. Comments are removed
 // before scanning because this project has twice had an assertion satisfied by

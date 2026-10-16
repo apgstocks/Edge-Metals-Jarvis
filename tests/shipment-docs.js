@@ -319,7 +319,7 @@ global.Date = RealDate;
 // UTC on purpose, because it also seeds the date PRINTED on an invoice, and
 // moving that changes a document customers receive.
 const webDoc = fs.readFileSync(path.join(ROOT, 'dashboard/documents.html'), 'utf8');
-const appDoc = fs.readFileSync(path.join(ROOT, 'mobile-app/www/index.html'), 'utf8');
+const appDoc = require("../helpers/sourceParts").mobileHtml();
 
 // Read the CODE LINES, not the surrounding prose — an earlier version of this
 // check grepped whole function bodies and went red on the comments explaining

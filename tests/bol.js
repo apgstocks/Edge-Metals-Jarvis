@@ -481,7 +481,7 @@ const bolJs = HTML.slice(HTML.indexOf('function bolPayload'), HTML.indexOf('func
 //            uses deliverExportedFile, like its own proforma and invoice
 //            previews always did.
 {
-    const appSrc = fs.readFileSync(path.join(ROOT, 'mobile-app/www/index.html'), 'utf8');
+    const appSrc = require("../helpers/sourceParts").mobileHtml();
     // Bounded at the function's own closing brace, not a character count. A
     // fixed window ran past bolSubmit into neighbouring code that legitimately
     // uses window.open, and the assertion below failed for a reason that had
@@ -540,7 +540,7 @@ dom.window.close();
 // the same server for the same document.
 section('G — the app');
 {
-    const APP = fs.readFileSync(path.join(ROOT, 'mobile-app/www/index.html'), 'utf8');
+    const APP = require("../helpers/sourceParts").mobileHtml();
     const appErrors = [];
     const appDom = new JSDOM(APP, {
         runScripts: 'dangerously', url: 'http://localhost/',
@@ -780,7 +780,9 @@ section('H — the store behind Edit');
         ['website', 'dashboard/documents.html', 'bolTodayStr'],
         ['app', 'mobile-app/www/index.html', 'bolTodayISO'],
     ]) {
-        const src = fs.readFileSync(path.join(ROOT, file), 'utf8');
+        const src = file === 'mobile-app/www/index.html'
+            ? require('../helpers/sourceParts').mobileHtml()
+            : fs.readFileSync(path.join(ROOT, file), 'utf8');
         // Bounded at the function's own closing brace. A fixed character
         // slice cut the body in half and the eval failed with a syntax error
         // that had nothing to do with dates.
@@ -823,7 +825,7 @@ section('I — Generate hands back the file');
         // file". It used to report a filename, which is an inventory
         // number rather than a document.
         const web = fs.readFileSync(path.join(ROOT, 'dashboard/documents.html'), 'utf8');
-        const app3 = fs.readFileSync(path.join(ROOT, 'mobile-app/www/index.html'), 'utf8');
+        const app3 = require("../helpers/sourceParts").mobileHtml();
 
         // ANCHORED TO THE RESPONSE, not to the words. The first version
         // matched /saved_date: savedDate,/ anywhere in api.js — which the
