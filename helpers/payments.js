@@ -579,6 +579,165 @@ async function applyPrepayment(input = {}) {
     return record;
 }
 
+// ── SETTLING A LOAD AGAINST A SALE, AND BACK ──────────────────────────────
+// Apsara, 2026-10-17: "when we pay load/sales-there should be a option to
+// adjust against sale incase of load and against load in case of sale", and
+// on what it means, in her words: "his seller is also a buyer, he owes you
+// $3,000 on a sale, you're paying him $5,000 for a load, so you hand over
+// $2,000 and the $3,000 is settled ... This happend".
+//
+// So it is a REAL contra, not a bookkeeping tidy-up. Two documents close and
+// only the difference actually leaves the drawer.
+//
+// ── WHY THIS MOVES NO CASH, AND WHY THAT IS CORRECT ──────────────────────
+// helpers/booksBuild.js builds `yard-purchase` and `yard-sale` straight off
+// the LOAD records — this payments store never reaches it. So her P&L
+// already carries the $5,000 purchase and the $3,000 sale; the settlement is
+// a working-capital event, not an income one, and must not touch either.
+// What it must not touch EITHER is cash: only the $2,000 genuinely moved,
+// and that is recorded by the ordinary payment she makes alongside this.
+//
+// Both rows therefore carry petty_cash_entry_id: null and cash_taken: null,
+// exactly as applyPrepayment does and for the same reason — deleteByLoad's
+// reversal loop keys off those, so without them it would try to put back
+// money that was never taken.
+//
+// ── TWO ROWS, ONE WRITE ──────────────────────────────────────────────────
+// A settlement that recorded one side and not the other leaves her with a
+// load that looks paid and a sale that still looks owed, or the reverse, and
+// no way to tell which figure is the lie. So both rows go in a SINGLE
+// mutateJson, and both carry the same settlement_id so the pair can always be
+// found — and removed — together.
+//
+// NOT folded into addPayment. That function is reached by the pay modals on
+// two clients AND by helpers/tools.js's record_payment, which is how she pays
+// a supplier by TALKING to Jarvis. A new required field there has broken that
+// caller twice (CLAUDE.md §1). This is a separate entry point; nothing
+// existing changes, and a caller that knows nothing about settlements keeps
+// working exactly as it did.
+function settlementPartyOf(load, kind) {
+    if (!load) return '';
+    return String((kind === 'sale' ? load.buyer : load.seller) || '').trim();
+}
+
+// What a load still owes, through payableOf — NOT `amount`. A purchase with
+// trucking deducted or a claim adjusted in owes less than its items came to,
+// and settling against the gross would hand over money that is not due
+// (helpers/loads.js's payableOf is the single reader for this, by decision).
+function outstandingOn(loadId, kind) {
+    const { getLoad, payableOf } = require('./loads');
+    const { getOutboundLoad } = require('./outboundLoads');
+    const load = kind === 'sale' ? getOutboundLoad(loadId) : getLoad(loadId);
+    if (!load) return { load: null, owed: null };
+    const total = kind === 'sale' ? (load.amount ?? null) : payableOf(load);
+    const summary = paymentSummary(loadId, total);
+    return { load, owed: summary.total == null ? null : round2(summary.total - summary.paid) };
+}
+
+async function settleAgainst(input = {}) {
+    const loadId = String(input.load_id || '').trim();
+    const againstId = String(input.against_id || '').trim();
+    if (!loadId) throw new Error('load_id is required');
+    if (!againstId) throw new Error('against_id is required — which document is this being settled against?');
+    if (loadId === againstId) throw new Error('a load cannot be settled against itself');
+
+    // The side being PAID decides everything else. Paying a purchase settles
+    // against a sale; receiving on a sale settles against a purchase.
+    const kind = String(input.load_kind || 'purchase').trim() === 'sale' ? 'sale' : 'purchase';
+    const againstKind = kind === 'sale' ? 'purchase' : 'sale';
+
+    const here = outstandingOn(loadId, kind);
+    const there = outstandingOn(againstId, againstKind);
+    if (!here.load) throw new Error(`no ${kind} found for ${loadId}`);
+    if (!there.load) throw new Error(`no ${againstKind} found for ${againstId}`);
+
+    // ── THE SAME PERSON, OR IT IS NOT A SETTLEMENT ───────────────────────
+    // Netting Gomez's sale against Vega's load is not an adjustment, it is
+    // two errors that happen to cancel. Compared through canonicalName so
+    // "GOMEZ SCRAP" and "Gomez Scrap" are one man, the same rule the per-
+    // seller and per-buyer groupings already use.
+    const { normalizeName } = require('./canonicalName');
+    const a = settlementPartyOf(here.load, kind);
+    const b = settlementPartyOf(there.load, againstKind);
+    if (!a || !b) throw new Error('both sides need a named party before they can be settled against each other');
+    if (normalizeName(a) !== normalizeName(b)) {
+        throw new Error(`these are different parties — "${a}" and "${b}". A settlement only nets what one person both owes and is owed.`);
+    }
+
+    const amount = round2(toNum(input.amount));
+    if (amount == null || amount <= 0) throw new Error('a settlement amount is required');
+    // Refused, never silently capped — the same rule applyPrepayment follows.
+    // Quietly settling less than asked leaves her believing both documents
+    // are closed when one is not.
+    if (here.owed == null) throw new Error('this side has no total to settle against');
+    if (there.owed == null) throw new Error('the other side has no total to settle against');
+    if (amount - here.owed > CENT) {
+        throw new Error(`this ${kind} only has ${here.owed.toFixed(2)} outstanding`);
+    }
+    if (amount - there.owed > CENT) {
+        throw new Error(`that ${againstKind} only has ${there.owed.toFixed(2)} outstanding`);
+    }
+
+    const settlementId = newPaymentId();
+    const paidOn = input.paid_on || new Date().toISOString().slice(0, 10);
+    const now = new Date().toISOString();
+    const row = (lid, lkind, otherId, otherKind) => ({
+        id: newPaymentId(),
+        load_id: lid,
+        load_kind: lkind,
+        // A settlement is its own mode. It is deliberately NOT 'Cash': the
+        // spend report, the bank matcher and the petty-cash recompute all
+        // read mode, and a row calling itself Cash that never touched the
+        // drawer would show up as money she cannot find.
+        mode: 'Settlement',
+        bank: null,
+        paid_via: null,
+        amount,
+        paid_on: paidOn,
+        reference: null,
+        note: `Settled against ${otherKind} ${otherId}`,
+        settlement_id: settlementId,
+        settled_against: otherId,
+        settled_against_kind: otherKind,
+        is_settlement: true,
+        // Not a fresh cash movement — see the note above.
+        petty_cash_entry_id: null,
+        cash_taken: null,
+        created_at: now,
+        created_by: input.created_by || null,
+    });
+
+    const both = [row(loadId, kind, againstId, againstKind), row(againstId, againstKind, loadId, kind)];
+    await mutateJson(cfg.PAYMENTS_FILE, [], (all) => {
+        const list = Array.isArray(all) ? all : [];
+        // ONE push of BOTH, inside one mutator, so there is no window in
+        // which one side is settled and the other is not.
+        list.push(...both);
+        return list;
+    }, { strict: true });
+
+    return { settlement_id: settlementId, amount, party: a, rows: both };
+}
+
+// Removing a settlement removes BOTH sides. Anything else leaves one document
+// claiming money that the other no longer says was settled.
+async function deleteSettlement(settlementId) {
+    const id = String(settlementId || '').trim();
+    if (!id) throw new Error('a settlement id is required');
+    let removed = 0;
+    await mutateJson(cfg.PAYMENTS_FILE, [], (all) => {
+        const list = Array.isArray(all) ? all : [];
+        const kept = list.filter((p) => {
+            const hit = p && p.settlement_id === id;
+            if (hit) removed += 1;
+            return !hit;
+        });
+        return kept;
+    }, { strict: true });
+    if (!removed) throw new Error('no such settlement');
+    return { removed };
+}
+
 async function addPayment(input = {}) {
     const loadId = String(input.load_id || '').trim();
     if (!loadId) throw new Error('load_id is required');
@@ -1025,6 +1184,7 @@ function paymentSummary(loadId, loadAmount) {
 }
 
 module.exports = {
+    settleAgainst, deleteSettlement, outstandingOn,
     PAYMENT_MODES, YARD_LOAD_MODES, PURCHASE_MODES, modesForKind,
     PAID_VIA, PAID_VIA_BY_KIND, paidViaRequired, paidViaLabel, resolvePaidVia, paidViaOptionsFor,
     // ── EXPORTED 2026-10-06, for helpers/entities.js ─────────────────────

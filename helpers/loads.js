@@ -613,6 +613,39 @@ function getInventoryReport(allLoads, { from, to } = {}) {
     const items = filtered.flatMap(l => Array.isArray(l.items) ? l.items : []);
     let byType = items.length ? groupItemsByDescription(items) : [];
 
+    // ── HOW MANY LOADS CARRIED THIS ITEM ────────────────────────────────
+    // Apsara, 2026-10-17: "If user wants to see say item basis what how much
+    // loads we bought from this date to that date,it shpuld able to show na"
+    // / "Build it properly so as sales".
+    //
+    // `count` on these rows is the number of item LINES, which is not the
+    // same question: one load can weigh alternators across four lines, and
+    // the same item appears in many loads. "How many loads had alternator in
+    // them" needs distinct loads, so it is counted here rather than inferred
+    // from count.
+    //
+    // Keyed by the SAME canonicalKey the alias merge below uses, and held as
+    // a SET of load ids. A load carrying both "Al combo" and "Aluminium
+    // combo" is ONE load, and summing two merged rows' counts would say two.
+    // Declared HERE rather than further down, where it used to live: the
+    // loop below runs immediately and would have hit the temporal dead zone
+    // on the first load that has items.
+    const aliases = require('./itemAliases');
+    const aliasRowsForCount = aliases.list();
+    const loadIdsByKey = new Map();
+    for (const l of filtered) {
+        for (const it of (Array.isArray(l.items) ? l.items : [])) {
+            const raw = (it && it.description) ? String(it.description).trim() : 'Other';
+            const k = aliases.canonicalKey(raw, aliasRowsForCount);
+            if (!loadIdsByKey.has(k)) loadIdsByKey.set(k, new Set());
+            loadIdsByKey.get(k).add(l.id);
+        }
+    }
+    const loadCountFor = (description) => {
+        const set = loadIdsByKey.get(aliases.canonicalKey(String(description || 'Other').trim(), aliasRowsForCount));
+        return set ? set.size : 0;
+    };
+
     // ── ONE METAL, ONE ROW — HER DECISIONS, NOT A GUESS ──────────────────
     // Apsara, 2026-09-16: "Warn me if al combo and aluminium combo,remember
     // my selection-then next time let ai decide based on knowldge".
@@ -632,7 +665,6 @@ function getInventoryReport(allLoads, { from, to } = {}) {
     // helpers/itemAliases.js for why similarity is the wrong instrument here
     // ("Al 6061" and "Al 6063" differ by one character and are different
     // money).
-    const aliases = require('./itemAliases');
     const aliasRows = aliases.list();
     if (aliasRows.length && byType.length) {
         const merged = new Map();
@@ -654,9 +686,14 @@ function getInventoryReport(allLoads, { from, to } = {}) {
             // than a row silently changing name between two visits.
             out.also_known_as = (g._members || []).filter((d) => aliases.norm(d) !== aliases.norm(label));
             delete out._members;
+            out.loadCount = loadCountFor(label);
             return out;
         });
     }
+    // The un-merged path (no aliases saved yet) needs it too — otherwise the
+    // column is present for some of her yards and missing for others.
+    byType = byType.map((g) => (g.loadCount === undefined
+        ? { ...g, loadCount: loadCountFor(g.description) } : g));
 
     // ── On-hand (2026-08-24) ────────────────────────────────────────────────
     // Apsara: "when this outbound gets updated — inventory should also get
@@ -721,7 +758,7 @@ function getInventoryReport(allLoads, { from, to } = {}) {
                 // grouping key made a sold-only item render as "al combo"
                 // next to bought items reading "Al combo" — one material
                 // looking like two conventions on one screen.
-                byType.push({ description: hit.label, count: 0, gross: 0, tare: 0, net: 0, amount: 0, shipped: round2(hit.net), onHand: round2(-hit.net) });
+                byType.push({ description: hit.label, count: 0, loadCount: 0, gross: 0, tare: 0, net: 0, amount: 0, shipped: round2(hit.net), onHand: round2(-hit.net) });
             }
         }
     }

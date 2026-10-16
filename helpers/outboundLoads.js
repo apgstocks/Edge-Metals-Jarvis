@@ -404,7 +404,33 @@ function getOutboundReport(allLoads, { from, to } = {}) {
         : allLoads;
 
     const items = filtered.flatMap((l) => (Array.isArray(l.items) ? l.items : []));
-    const byType = items.length ? groupItemsByDescription(items) : [];
+    let byType = items.length ? groupItemsByDescription(items) : [];
+
+    // ── HOW MANY LOADS CARRIED THIS ITEM ────────────────────────────────
+    // Apsara, 2026-10-17: "Build it properly so as sales". The mirror of the
+    // same addition in helpers/loads.js's getInventoryReport — these two are
+    // the same report with "bought" and "sold" swapped, and adding the
+    // column to only the side she happened to name is how half a feature
+    // ships (the per-seller/per-buyer case-insensitivity fix above says the
+    // same thing about the same pair of functions).
+    //
+    // `count` is item LINES; this is distinct LOADS. Keyed exactly as
+    // groupItemsByDescription keys its rows — trimmed, lower-cased — so the
+    // two always line up. NOT alias-merged, because byType here is not
+    // either; making only the count alias-aware would have the column
+    // disagree with the row it sits on.
+    const soldLoadIdsByKey = new Map();
+    for (const l of filtered) {
+        for (const it of (Array.isArray(l.items) ? l.items : [])) {
+            const key = (it && it.description ? String(it.description).trim() : 'Other').toLowerCase();
+            if (!soldLoadIdsByKey.has(key)) soldLoadIdsByKey.set(key, new Set());
+            soldLoadIdsByKey.get(key).add(l.id);
+        }
+    }
+    byType = byType.map((g) => {
+        const set = soldLoadIdsByKey.get(String(g.description || 'Other').trim().toLowerCase());
+        return { ...g, loadCount: set ? set.size : 0 };
+    });
 
     // ── ONE BUYER, ONE ROW ───────────────────────────────────────────────
     // Apsara, 2026-09-16: "Sellers name/bUyers name-make it case

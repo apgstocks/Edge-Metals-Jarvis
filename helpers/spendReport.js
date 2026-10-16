@@ -73,7 +73,24 @@ function collectRows({ payments, expenses, from, to }) {
         // out by load_id so they cannot make a load look part-paid; this
         // report was not filtering them at all, so an old advance was being
         // counted as money spent, under a row labelled just "Load".
-        if (!p.load_id || p.is_advance) continue;
+        //
+        // ── AND NEITHER IS A SETTLEMENT (2026-10-17) ──────────────────────
+        // Apsara: "his seller is also a buyer ... you hand over $2,000 and
+        // the $3,000 is settled". helpers/payments.js's settleAgainst writes
+        // a row on the load AND one on the sale, both carrying no cash at
+        // all — only the $2,000 difference actually moved, and that is
+        // recorded by the ordinary payment beside it.
+        //
+        // Left in, the load's row would be counted as $3,000 SPENT that
+        // never left the building, and the sale's as $3,000 RECEIVED that
+        // never arrived. The spend report answers "what did we pay out", and
+        // for that day the answer is $2,000.
+        //
+        // Added to this guard rather than to METHODS: labelling the mode
+        // would have made the row visible and still counted it, which is the
+        // right number in the wrong column — the failure this file's own
+        // comments keep warning about.
+        if (!p.load_id || p.is_advance || p.is_settlement) continue;
 
         // ── DIRECTION ─────────────────────────────────────────────────────
         // A payment against a SALE is money a buyer paid US. It lives in the

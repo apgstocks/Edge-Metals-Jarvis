@@ -1277,6 +1277,106 @@ const MUTATIONS = [
       find: "const COMMISSION_PARTIES = new Set(['panmetal', 'joey']);",
       to:   "const COMMISSION_PARTIES = new Set(['joey']);" },
 
+    // ── SETTLING A LOAD AGAINST A SALE ──────────────────────────────────
+    // Apsara, 2026-10-17: "his seller is also a buyer, he owes you $3,000 on
+    // a sale, you're paying him $5,000 for a load, so you hand over $2,000
+    // and the $3,000 is settled ... This happend". Every mutation here is a
+    // way for money to go missing or for one document to lie about another.
+    { name: 'settle: the contra moves cash, so the drawer loses money that never left',
+      file: 'helpers/payments.js', suites: ['settle-against'],
+      find: "        petty_cash_entry_id: null,\n        cash_taken: null,\n        created_at: now,",
+      to:   "        petty_cash_entry_id: 'x',\n        cash_taken: amount,\n        created_at: now," },
+    { name: 'settle: a settlement calls itself Cash, so it looks like money she can find',
+      file: 'helpers/payments.js', suites: ['settle-against'],
+      find: "        mode: 'Settlement',",
+      to:   "        mode: 'Cash'," },
+    // ONE SIDE ONLY — a load that looks paid and a sale that still looks owed.
+    { name: 'settle: only the load side is written, so the sale still looks owed',
+      file: 'helpers/payments.js', suites: ['settle-against'],
+      find: "        list.push(...both);",
+      to:   "        list.push(both[0]);" },
+    { name: 'settle: deleting removes one side and leaves a half-settled pair',
+      file: 'helpers/payments.js', suites: ['settle-against'],
+      find: "            const hit = p && p.settlement_id === id;",
+      to:   "            const hit = p && p.settlement_id === id && p.load_kind === 'purchase';" },
+    // THE PARTY GUARD — netting two different people.
+    { name: 'settle: two different parties are netted against each other',
+      file: 'helpers/payments.js', suites: ['settle-against'],
+      find: "    if (normalizeName(a) !== normalizeName(b)) {",
+      to:   "    if (false) {" },
+    { name: 'settle: the party check becomes case-sensitive, so GOMEZ is not Gomez',
+      file: 'helpers/payments.js', suites: ['settle-against'],
+      find: "    if (normalizeName(a) !== normalizeName(b)) {",
+      to:   "    if (a !== b) {" },
+    // OVER-SETTLING, either side.
+    { name: 'settle: more than the other side owes is accepted',
+      file: 'helpers/payments.js', suites: ['settle-against'],
+      find: "    if (amount - there.owed > CENT) {",
+      to:   "    if (false) {" },
+    { name: 'settle: a load that owes nothing can still be settled',
+      file: 'helpers/payments.js', suites: ['settle-against'],
+      find: "    if (amount - here.owed > CENT) {",
+      to:   "    if (false) {" },
+    // PAYABLE, NOT AMOUNT — a purchase with trucking deducted owes less.
+    { name: 'settle: the purchase side uses the gross amount, not what is payable',
+      file: 'helpers/payments.js', suites: ['settle-against'],
+      find: "    const total = kind === 'sale' ? (load.amount ?? null) : payableOf(load);",
+      to:   "    const total = load.amount ?? null;" },
+
+    // ── HOW MANY LOADS CARRIED THIS ITEM ────────────────────────────────
+    // Apsara, 2026-10-17: "item basis what how much loads we bought from
+    // this date to that date" / "Build it properly so as sales".
+    { name: 'loadcount: the per-item load count falls back to counting lines',
+      file: 'helpers/loads.js', suites: ['item-loadcount'],
+      find: "        return set ? set.size : 0;",
+      to:   "        return set ? set.size + 1 : 0;" },
+    // THE ALIAS TRAP. One load carrying "Al combo" AND "Aluminium combo" is
+    // ONE load; keying the count by raw description and summing on merge
+    // says two.
+    { name: 'loadcount: aliases are counted separately, so one load reads as two',
+      file: 'helpers/loads.js', suites: ['item-loadcount'],
+      find: "            const k = aliases.canonicalKey(raw, aliasRowsForCount);",
+      to:   "            const k = raw.toLowerCase();" },
+    // THE DATE RANGE. Counting over every load instead of the filtered set
+    // is the failure that makes a September report quote a year's figure.
+    { name: 'loadcount: the date range is ignored for the load count',
+      file: 'helpers/loads.js', suites: ['item-loadcount'],
+      find: "    const loadIdsByKey = new Map();\n    for (const l of filtered) {",
+      to:   "    const loadIdsByKey = new Map();\n    for (const l of allLoads) {" },
+    // A SET, not a counter: the same load must not count twice for weighing
+    // one material across several lines, which is the original bug.
+    { name: 'loadcount: a load weighing one item twice counts twice',
+      file: 'helpers/loads.js', suites: ['item-loadcount'],
+      find: "            if (!loadIdsByKey.has(k)) loadIdsByKey.set(k, new Set());\n            loadIdsByKey.get(k).add(l.id);",
+      to:   "            if (!loadIdsByKey.has(k)) loadIdsByKey.set(k, []);\n            loadIdsByKey.get(k).push(l.id);" },
+    // THE SALES SIDE — the half that gets forgotten.
+    { name: 'loadcount: sales lose the column entirely',
+      file: 'helpers/outboundLoads.js', suites: ['item-loadcount'],
+      find: "        return { ...g, loadCount: set ? set.size : 0 };",
+      to:   "        return { ...g };" },
+    { name: 'loadcount: a sale weighing one item twice counts twice',
+      file: 'helpers/outboundLoads.js', suites: ['item-loadcount'],
+      find: "            if (!soldLoadIdsByKey.has(key)) soldLoadIdsByKey.set(key, new Set());\n            soldLoadIdsByKey.get(key).add(l.id);",
+      to:   "            if (!soldLoadIdsByKey.has(key)) soldLoadIdsByKey.set(key, []);\n            soldLoadIdsByKey.get(key).push(l.id);" },
+    { name: 'loadcount: sales count over every date, not the chosen range',
+      file: 'helpers/outboundLoads.js', suites: ['item-loadcount'],
+      find: "    const soldLoadIdsByKey = new Map();\n    for (const l of filtered) {",
+      to:   "    const soldLoadIdsByKey = new Map();\n    for (const l of allLoads) {" },
+    // THE SCREENS.
+    // NOT a deletion: removing the <td> line from inside the template
+    // literal left the file unparseable, so the harness reported NOT APPLIED
+    // — a mutation that cannot run proves nothing. This swaps the VALUE
+    // instead, which is the mistake that would actually be made: showing the
+    // line count in the Loads column, where the two numbers look alike.
+    { name: 'loadcount: the Loads column shows lines instead of loads',
+      file: 'dashboard/app/02-dashboard-bookings.js', suites: ['item-loadcount'],
+      find: "${g.loadCount != null ? g.loadCount : '—'}",
+      to:   "${g.count}" },
+    { name: 'loadcount: the Sales by-item table goes back to being discarded',
+      file: 'dashboard/outbound-loads.html', suites: ['item-loadcount'],
+      find: "    $('rptByItem').innerHTML = (data.byType || []).length ? `",
+      to:   "    $('rptByItem').innerHTML = (false) ? `" },
+
     // ── THE PACKING LIST WENT OUT WITH AN EMPTY BUYER BLOCK ─────────────
     // Apsara, 2026-10-16, with MSNU2238929_packing.pdf: "In packing list
     // generation,address is not coming on selecting teh customer in jarvis".

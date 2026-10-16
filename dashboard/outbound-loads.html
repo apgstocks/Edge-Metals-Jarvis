@@ -96,6 +96,16 @@ tr:last-child td { border-bottom:none; }
       <button id="btnRptClear" class="btn btn-secondary">Clear</button>
     </div>
     <div id="rptSummary" class="card" style="padding:16px 18px; margin-bottom:16px;"></div>
+    <!-- ── WHAT WAS SOLD, BY ITEM ───────────────────────────────────────
+         Apsara, 2026-10-17: "If user wants to see say item basis what how
+         much loads we bought from this date to that date,it shpuld able to
+         show na" / "Build it properly so as sales".
+
+         The server has returned data.byType — sales by item for the chosen
+         dates — since getOutboundReport was written. The page only ever drew
+         byBuyer, so the figure existed and nobody could see it. Buyers are
+         still below; this answers the other question, which is what SOLD. -->
+    <div id="rptByItem" class="card" style="padding:0; margin-bottom:16px; overflow:hidden;"></div>
     <div id="rptByBuyer"></div>
   </div>
 
@@ -356,6 +366,30 @@ async function loadReport() {
         <div><div style="color:var(--text-faint); font-size:11px;">Total cost (linked loads only)</div><div style="font-weight:700; color:var(--text-strong);">${data.totalCost != null ? fmtMoney(data.totalCost) : '—'}</div></div>
         <div><div style="color:var(--text-faint); font-size:11px;">Total margin</div><div style="font-weight:700; color:${data.totalMargin != null && data.totalMargin >= 0 ? 'var(--status-success)' : 'var(--status-danger)'};">${data.totalMargin != null ? fmtMoney(data.totalMargin) : 'unknown — link inbound loads for margin'}</div></div>
       </div>`;
+    // By ITEM first — "how much alternator did we sell in September" is a
+    // question about the material, and it should not need her to open five
+    // buyers and add up. loadCount is distinct SALES carrying that item; the
+    // count beside it is weighed lines, which is a different number and is
+    // labelled as such.
+    $('rptByItem').innerHTML = (data.byType || []).length ? `
+      <table style="width:100%; border-collapse:collapse; font-size:13px;">
+        <thead><tr style="text-align:left; background:var(--surface-sunken, transparent); border-bottom:1px solid var(--border-subtle);">
+          <th style="padding:9px 10px;">Item sold</th>
+          <th style="padding:9px 10px;" title="How many separate sales carried this item">Loads</th>
+          <th style="padding:9px 10px;" title="How many weighed lines, across all those sales">Lines</th>
+          <th style="padding:9px 10px;">Net</th>
+          <th style="padding:9px 10px;">Sold for</th>
+        </tr></thead>
+        <tbody>${data.byType.map((g) => `<tr style="border-bottom:1px solid var(--border-subtle);">
+          <td style="padding:8px 10px; color:var(--text-strong); font-weight:600;">${esc(g.description)}</td>
+          <td style="padding:8px 10px; font-weight:700;">${g.loadCount != null ? g.loadCount : '—'}</td>
+          <td style="padding:8px 10px; color:var(--text-muted);">${g.count}</td>
+          <td style="padding:8px 10px;">${g.net} ${esc(data.unit || 'lb')}</td>
+          <td style="padding:8px 10px;">${fmtMoney(g.amount)}</td>
+        </tr>`).join('')}</tbody>
+      </table>`
+      : '<div style="padding:20px; text-align:center; color:var(--text-faint); font-size:13px;">Nothing sold in this range.</div>';
+
     $('rptByBuyer').innerHTML = data.byBuyer.length ? data.byBuyer.map((b) => buyerReportRow(b, data.unit)).join('') : '<div style="padding:20px; text-align:center; color:var(--text-faint); font-size:13px;">No loads in this range.</div>';
   } catch (e) {
     $('rptSummary').innerHTML = `<div style="color:var(--status-danger); font-size:12px;">${esc(e.message)}</div>`;

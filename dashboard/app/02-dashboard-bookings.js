@@ -13,12 +13,24 @@ function invByTypeHtml(data) {
     ${data.onHandAvailable ? '' : '<div style="font-family:var(--font-mono); font-size:11px; color:var(--text-faint); padding-bottom:8px;">Showing what came IN for this date range — clear the dates to see what\'s on hand.</div>'}
     <table style="width:100%; border-collapse:collapse; font-size:13px;">
       <thead><tr style="text-align:left; border-bottom:1px solid var(--border-subtle);">
-        <th style="padding:8px 6px;">Item type</th><th style="padding:8px 6px;">Items</th><th style="padding:8px 6px;">Gross</th><th style="padding:8px 6px;">Tare</th><th style="padding:8px 6px;">Net in</th>${data.onHandAvailable ? '<th style="padding:8px 6px;">Shipped</th><th style="padding:8px 6px; font-weight:700;">On hand</th>' : ''}<th style="padding:8px 6px;">Amount</th>
+        <th style="padding:8px 6px;">Item type</th><th style="padding:8px 6px;" title="How many separate loads carried this item">Loads</th><th style="padding:8px 6px;" title="How many weighed lines, across all those loads">Items</th><th style="padding:8px 6px;">Gross</th><th style="padding:8px 6px;">Tare</th><th style="padding:8px 6px;">Net in</th>${data.onHandAvailable ? '<th style="padding:8px 6px;">Shipped</th><th style="padding:8px 6px; font-weight:700;">On hand</th>' : ''}<th style="padding:8px 6px;">Amount</th>
       </tr></thead>
       <tbody>
         ${data.byType.map(g => `<tr class="inv-type-row" data-inv-toggle="${esc(g.description)}" title="Show every ${esc(g.description)} line, load by load" style="border-bottom:1px solid var(--border-subtle); cursor:pointer;">
           <td style="padding:8px 6px; color:var(--accent);">▸ ${esc(g.description)}</td>
-          <td style="padding:8px 6px;">${g.count}</td>
+          <!-- LOADS, then items. Apsara, 2026-10-17: "item basis what how
+               much loads we bought from this date to that date". The count
+               beside it is weighed LINES and was the only number here - one
+               load can weigh alternators across four lines, so it answered a
+               different question to the one she was asking.
+               NO BACKTICKS IN HERE: this comment sits INSIDE a template
+               literal, so a backtick ends the string and the whole file
+               stops parsing. It did, and the test suite did not notice
+               because section D reads this file as TEXT; the mutation
+               harness caught it by refusing to mutate a file that will not
+               parse. -->
+          <td style="padding:8px 6px; font-weight:700;">${g.loadCount != null ? g.loadCount : '—'}</td>
+          <td style="padding:8px 6px; color:var(--text-muted);">${g.count}</td>
           <td style="padding:8px 6px;">${g.gross} ${esc(data.unit)}</td>
           <td style="padding:8px 6px;">${g.tare} ${esc(data.unit)}</td>
           <td style="padding:8px 6px;">${g.net} ${esc(data.unit)}</td>
@@ -28,7 +40,7 @@ function invByTypeHtml(data) {
         </tr>
         <!-- The lines behind that row, per Apsara 2026-09-02. Empty and
              hidden until the type is opened; filled by renderInvLines. -->
-        <tr><td colspan="${data.onHandAvailable ? 8 : 6}" style="padding:0;"><div data-inv-lines="${esc(g.description)}" style="display:none;"></div></td></tr>`).join('')}
+        <tr><td colspan="${data.onHandAvailable ? 9 : 7}" style="padding:0;"><div data-inv-lines="${esc(g.description)}" style="display:none;"></div></td></tr>`).join('')}
       </tbody>
     </table>
   ` : `<div style="padding:20px; color:var(--text-muted); font-size:13px;">No items in this range.</div>`;
