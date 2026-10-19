@@ -634,6 +634,68 @@ function outstandingOn(loadId, kind) {
     return { load, owed: summary.total == null ? null : round2(summary.total - summary.paid) };
 }
 
+// ── WHAT CAN THIS BE SETTLED AGAINST ─────────────────────────────────────
+// The candidate list and the GUARD must be the same rule, so it lives here
+// beside settleAgainst rather than in the route or the screen. If they drift,
+// she gets offered a row and then told it is refused — which reads as a bug
+// in the feature rather than a rule she has not met.
+//
+// Same reasoning as the payment modes travelling with /api/payments: the
+// dropdown is built from the server's answer, so it cannot offer something
+// the server would reject.
+function settleOptions(loadId, loadKind) {
+    const id = String(loadId || '').trim();
+    const kind = String(loadKind || 'purchase').trim() === 'sale' ? 'sale' : 'purchase';
+    const againstKind = kind === 'sale' ? 'purchase' : 'sale';
+
+    const here = outstandingOn(id, kind);
+    if (!here.load) return { ok: false, error: `no ${kind} found for ${id}`, options: [] };
+
+    const party = settlementPartyOf(here.load, kind);
+    if (!party) {
+        return { ok: false, error: 'this document has no named party, so there is nobody to net against', options: [] };
+    }
+
+    const { normalizeName } = require('./canonicalName');
+    const want = normalizeName(party);
+
+    const all = againstKind === 'sale'
+        ? require('./outboundLoads').loadOutboundLoads()
+        : require('./loads').loadLoads();
+
+    const options = [];
+    for (const l of (all || [])) {
+        if (!l || String(l.id) === id) continue;
+        const name = settlementPartyOf(l, againstKind);
+        if (!name || normalizeName(name) !== want) continue;
+        const o = outstandingOn(String(l.id), againstKind);
+        // Only what is actually still open. A fully settled document in the
+        // list is a row she would pick and be refused on.
+        if (o.owed == null || o.owed <= CENT) continue;
+        options.push({
+            id: String(l.id),
+            kind: againstKind,
+            date: l.date || null,
+            party: name,
+            outstanding: o.owed,
+        });
+    }
+    // Newest first, the order every other list in this app uses.
+    options.sort((a, b) => String(b.date || '').localeCompare(String(a.date || '')));
+
+    return {
+        ok: true,
+        party,
+        kind,
+        against_kind: againstKind,
+        outstanding: here.owed,
+        // The most she could possibly settle is the smaller of the two sides,
+        // and the screen needs that figure to cap its own box.
+        max: options.length ? Math.min(here.owed == null ? 0 : here.owed, Math.max(...options.map((o) => o.outstanding))) : 0,
+        options,
+    };
+}
+
 async function settleAgainst(input = {}) {
     const loadId = String(input.load_id || '').trim();
     const againstId = String(input.against_id || '').trim();
@@ -1184,7 +1246,7 @@ function paymentSummary(loadId, loadAmount) {
 }
 
 module.exports = {
-    settleAgainst, deleteSettlement, outstandingOn,
+    settleAgainst, deleteSettlement, outstandingOn, settleOptions,
     PAYMENT_MODES, YARD_LOAD_MODES, PURCHASE_MODES, modesForKind,
     PAID_VIA, PAID_VIA_BY_KIND, paidViaRequired, paidViaLabel, resolvePaidVia, paidViaOptionsFor,
     // ── EXPORTED 2026-10-06, for helpers/entities.js ─────────────────────

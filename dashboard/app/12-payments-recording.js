@@ -762,8 +762,163 @@ function openPayModal(loadId, kind, opts) {
   // hidden and appears only if there is credit, so the common case — no
   // prepayments — looks exactly as it did before this feature existed.
   refreshPrepayCredit();
+  // Same contract: fired, not awaited, hidden unless there is something.
+  refreshSettleOptions();
 
   $('payModal').classList.remove('hidden');
+}
+
+// ── ADJUST AGAINST THE OTHER SIDE ──────────────────────────────────────────
+// Apsara, 2026-10-16: "when we pay load/sales-there should be a option to
+// adjust against sale incase of load and against load in case of sale."
+//
+// Fired, not awaited, exactly like refreshPrepayCredit below: she pressed Pay
+// to record a payment, and making that wait on a second request would make a
+// working button feel broken on a slow yard connection. The box starts hidden
+// and appears only if this party has something open on the other side, so the
+// common case — a supplier who does not also buy — looks untouched.
+//
+// api() THROWS on a non-2xx and carries the server's fields onto the Error;
+// it does not return { ok: false }. Checking a falsy r.ok would therefore
+// never fire and every refusal would surface as an unhandled rejection.
+let paySettleInfo = null;
+async function refreshSettleOptions() {
+  const box = $('paySettleBox');
+  if (!box || !payingLoad) return;
+  const sel = $('pay_settle_against');
+  const amt = $('pay_settle_amount');
+  const lead = $('paySettleLead');
+  const note = $('paySettleNote');
+  const btn = $('btnSettleAgainst');
+  paySettleInfo = null;
+  if (sel) sel.innerHTML = '';
+  if (amt) amt.value = '';
+  if (note) note.textContent = '';
+
+  // ── ALWAYS VISIBLE, 2026-10-17 ───────────────────────────────────────
+  // This box used to start hidden and appear only when the party had
+  // something open on the other side, copying payPrepayBox. Apsara, on the
+  // 9.6 build: "still adjust against that feature not there in app".
+  //
+  // She was right, and hiding it was the mistake. A control that is invisible
+  // whenever the data does not line up is indistinguishable from a control
+  // that was never built — so the first time it did not apply, the feature
+  // read as missing. The prepayment box can get away with it because nobody
+  // asked for it; she asked for THIS one by name.
+  //
+  // So it is always drawn on a yard pay modal, and it SAYS why it is empty.
+  // Empty-with-a-reason is a working feature; absent is a bug report.
+  box.classList.remove('hidden');
+  const sale = payingLoad.kind === 'sale';
+  const thisWord = sale ? 'sale' : 'load';
+  const otherWord = sale ? 'Purchase' : 'Sale';
+  const setEmpty = (msg) => {
+    if (lead) lead.textContent = msg;
+    if (sel) sel.disabled = true;
+    if (amt) amt.disabled = true;
+    if (btn) btn.disabled = true;
+  };
+  const setReady = () => {
+    if (sel) sel.disabled = false;
+    if (amt) amt.disabled = false;
+    if (btn) btn.disabled = false;
+  };
+  setEmpty('Checking the other side\u2026');
+
+  try {
+    const r = await api('/api/payments/settle-options?load_id='
+      + encodeURIComponent(payingLoad.id)
+      + '&load_kind=' + encodeURIComponent(payingLoad.kind || 'purchase'));
+    const opts = (r && r.options) || [];
+    if (!r || !r.ok) { setEmpty((r && r.error) || 'Could not check the other side.'); return; }
+    if (!opts.length) {
+      // NAMED, not generic. "Nothing to settle" leaves her wondering whether
+      // it looked at the right person.
+      setEmpty('Nothing open on the other side for ' + (r.party || 'this party')
+        + ' \u2014 no ' + (sale ? 'purchase' : 'sale') + ' of theirs is still owing.');
+      return;
+    }
+    paySettleInfo = r;
+    setReady();
+    if (lead) {
+      lead.innerHTML = esc(r.party) + ' is on both sides of your books. You can net what '
+        + (sale ? 'you owe them' : 'they owe you') + ' against this ' + thisWord
+        + ' instead of moving the cash.';
+    }
+    for (const o of opts) {
+      const el = document.createElement('option');
+      el.value = o.id;
+      el.textContent = otherWord + ' ' + o.id + (o.date ? ' \u00b7 ' + o.date : '')
+        + ' \u00b7 ' + payMoney(o.outstanding) + ' open';
+      el.dataset.outstanding = String(o.outstanding);
+      sel.appendChild(el);
+    }
+    // The most that can actually be netted — the smaller of the two sides.
+    // Still editable, because she may want only part of it.
+    const capFor = (open) => Math.min(Number(r.outstanding) || 0, Number(open) || 0);
+    const first = capFor(opts[0].outstanding);
+    if (amt) amt.value = first > 0 ? first.toFixed(2) : '';
+    if (note) note.textContent = 'This moves no cash.';
+    // Re-cap on a different pick: the previous figure left in the box is a
+    // refusal waiting to happen.
+    sel.onchange = () => {
+      const pick = sel.options[sel.selectedIndex];
+      const c = capFor(pick ? pick.dataset.outstanding : 0);
+      if (amt) amt.value = c > 0 ? c.toFixed(2) : '';
+    };
+  } catch (e) {
+    // ── SAID, NOT SWALLOWED ──────────────────────────────────────────
+    // The previous version caught this and left the box hidden, so a server
+    // that does not have the route yet — exactly the case on 2026-10-17,
+    // with the APK shipped and the VM not restarted — looked identical to a
+    // feature that was never written. Recording a payment still must not be
+    // blocked, so this only ever disables the control and explains itself.
+    const stale = /404|not found|request failed \(404\)/i.test(String(e && e.message || ''));
+    setEmpty(stale
+      ? 'Settling against the other side needs the server updated \u2014 this app is ahead of it.'
+      : ('Could not check the other side: ' + (e.message || 'request failed')));
+  }
+}
+
+async function settleAgainstSelected() {
+  if (!payingLoad) return;
+  const sel = $('pay_settle_against');
+  const amt = $('pay_settle_amount');
+  const btn = $('btnSettleAgainst');
+  $('payErr').textContent = '';
+  if (!sel || !sel.value) { $('payErr').textContent = 'Pick what to settle this against.'; return; }
+  const amount = Number(amt && amt.value);
+  if (!isFinite(amount) || amount <= 0) {
+    $('payErr').textContent = 'How much of it should be settled?'; return;
+  }
+
+  btn.disabled = true; btn.textContent = 'Settling…';
+  try {
+    const r = await api('/api/payments/settle', { method: 'POST', body: JSON.stringify({
+      load_id: payingLoad.id,
+      load_kind: payingLoad.kind || 'purchase',
+      against_id: sel.value,
+      against_kind: (payingLoad.kind === 'sale') ? 'purchase' : 'sale',
+      amount,
+    }) });
+    // Reload and REOPEN on the same row, the way applying prepaid credit
+    // does: she sees the new balance and the settlement in the history,
+    // rather than being thrown back to the deck to find it. The other side's
+    // card is refreshed by the same loadLoads().
+    await loadLoads();
+    openPayModal(payingLoad.id, payingLoad.kind);
+    const left = (r && r.summary && r.summary.pending);
+    if (left != null) {
+      $('payErr').textContent = payMoney(r.amount) + ' settled, no cash moved. '
+        + (left > 0.004 ? payMoney(left) + ' still to hand over.' : 'Nothing left to pay.');
+    }
+  } catch (e) {
+    // The server's refusals are the useful ones — "this purchase only has
+    // 2000.00 outstanding" — so its message is shown verbatim.
+    $('payErr').textContent = e.message || 'Could not settle that.';
+  } finally {
+    btn.disabled = false; btn.textContent = 'Settle it';
+  }
 }
 
 // ── PREPAID CREDIT IN THE PAY MODAL ────────────────────────────────────────

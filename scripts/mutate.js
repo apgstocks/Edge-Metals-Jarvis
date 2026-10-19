@@ -2122,6 +2122,31 @@ const MUTATIONS = [
       find: '        req.setTimeout(2000, () => { req.destroy(); resolve(null); });',
       to:   '        ;' },
 
+    // ── "TIMEOUT AFTER 30000 SECONDS IN PROFORMA", 2026-10-20 ──────────
+    // Seven .replace('__FONT_X__', data) calls with STRING patterns, and
+    // template.html repeats two of the tokens. replace() with a string takes
+    // the FIRST match only, so the second shipped as a literal
+    // src: url('__FONT_POPPINS_BOLD__') — a font request against a page with
+    // no base URL, which never settles, under a renderer that waits on
+    // networkidle0. Thirty seconds, every proforma.
+    //
+    // Restoring first-match .replace() must turn tests/proforma-fonts.js
+    // red. It does so legibly rather than by crashing, which is the second
+    // half of the fix: loadTemplate throws on a leftover token, and the test
+    // catches that throw instead of exiting with a stack trace.
+    { name: 'proforma fonts: first-match .replace leaves the duplicate token behind',
+      file: 'helpers/proformaPdf.js', suites: ['proforma-fonts'],
+      find: '    for (const [token, file] of FONTS) out = out.replaceAll(token, loader(file));',
+      to:   '    for (const [token, file] of FONTS) out = out.replace(token, loader(file));' },
+
+    // And the build-time guard itself: without it a future eighth font goes
+    // back to hanging for thirty seconds in front of a customer instead of
+    // failing in one.
+    { name: 'proforma fonts: the leftover-token guard is removed',
+      file: 'helpers/proformaPdf.js', suites: ['proforma-fonts'],
+      find: "        throw new Error('proforma template has unsubstituted font tokens: '",
+      to:   "        void 0 && new Error('proforma template has unsubstituted font tokens: '" },
+
     // ── "Fix it.why its taking more time to generate", 2026-10-10 ──────
     // networkidle0 waits for load and THEN for 500ms in which no request
     // starts. These documents have no network to go quiet, so that half

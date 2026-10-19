@@ -629,6 +629,8 @@ function openPayModal(loadId, kind, opts) {
   // Fired, not awaited — the modal must open at once. Twin of the website's
   // refreshPrepayCredit; see dashboard/index.html for the reasoning.
   refreshPrepayCredit();
+  // Same contract: fired, not awaited, hidden unless there is something.
+  refreshSettleOptions();
 
   $('payModal').classList.remove('hidden');
 }

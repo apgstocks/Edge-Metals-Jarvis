@@ -459,6 +459,34 @@ function renderLoads(loads) {
             </div>
           </div>
 
+          <!-- ── ADJUST AGAINST THE OTHER SIDE ────────────────────────────
+               Apsara, 2026-10-16: "when we pay load/sales-there should be a
+               option to adjust against sale incase of load and against load
+               in case of sale." Her case, in her words: "his seller is also
+               a buyer, he owes you $3,000 on a sale, you're paying him
+               $5,000 for a load, so you hand over $2,000 and the $3,000 is
+               settled".
+
+               ALWAYS VISIBLE. It started hidden-unless-applicable, copying
+               payPrepayBox, and Apsara's verdict on that build was "still
+               adjust against that feature not there in app" — a control that
+               disappears whenever the data does not line up cannot be told
+               apart from one that was never built. It now draws every time
+               and SAYS why it is empty.
+
+               The dropdown is filled from /api/payments/settle-options, so
+               it cannot offer a document the write path would refuse. The
+               list and the guard are one rule, in helpers/payments.js. -->
+          <div id="paySettleBox" style="margin:-4px 0 16px; padding:10px 12px; border:1px solid var(--border); border-radius:8px; background:var(--bg-subtle, rgba(255,255,255,.02));">
+            <div id="paySettleLead" style="font-size:12px; line-height:1.5;"></div>
+            <div style="display:flex; gap:8px; align-items:center; margin-top:8px; flex-wrap:wrap;">
+              <select id="pay_settle_against" style="min-width:210px;"></select>
+              <input id="pay_settle_amount" type="number" step="any" placeholder="0.00" inputmode="decimal" style="width:120px;">
+              <button id="btnSettleAgainst" type="button" class="btn btn-secondary" style="padding:4px 12px; font-size:11px;">Settle it</button>
+              <span id="paySettleNote" style="font-size:11px; color:var(--text-faint);"></span>
+            </div>
+          </div>
+
           <!-- ── OR HOLD IT AS CREDIT INSTEAD ─────────────────────────────
                The other half of the same surface. Ticking this records the
                money against the SUPPLIER and not against this load, which is
@@ -828,6 +856,13 @@ function wireLoadsEvents() {
       btn.disabled = false; btn.textContent = 'Apply to this load';
     }
   });
+  // Bound beside btnApplyPrepay, the other button in this modal that writes
+  // without going through Save. Guarded on existence for the same reason the
+  // rest of this wiring is: the pay modal markup is shared by pages that do
+  // not all carry every control.
+  if ($('btnSettleAgainst')) {
+    $('btnSettleAgainst').addEventListener('click', () => settleAgainstSelected());
+  }
   $('pay_mode').addEventListener('change', () => syncBankFields('pay'));
   $('pay_bank').addEventListener('change', () => syncBankFields('pay'));
   // Delegated: the history list is re-rendered after every change, so

@@ -3,11 +3,30 @@
 <head>
 <meta charset="utf-8">
 <style>
-@font-face { font-family:'Poppins'; font-weight:800; src: url('__FONT_POPPINS_BOLD__'); }
-@font-face { font-family:'Poppins'; font-weight:700; src: url('__FONT_POPPINS_BOLD__'); }
+/* ── ONE FACE PER FILE, WEIGHT RANGES (2026-10-20) ────────────────────────
+   Poppins-Bold.ttf was declared twice (800 and 700) and DMSans-Regular.ttf
+   twice (400 and 500). Each @font-face carries its own copy of the embedded
+   base64, so the finished proforma shipped Poppins-Bold at 203 KB twice and
+   DMSans-Regular at 73 KB twice — 276 KB of duplicate payload in a 1,304 KB
+   document, on a 2 GB VM that times out at 30 seconds.
+
+   A weight RANGE says one file covers both weights. Rendering is unchanged:
+   the same file already served both, so nothing is synthesised that was not
+   synthesised before — which is exactly why this was safe to do, and why
+   Apsara's eye on one generated proforma is a confirmation rather than a
+   gamble.
+
+   The duplicate was also how the 30s timeout happened: helpers/proformaPdf.js
+   substituted with first-match .replace(), so the SECOND copy of each token
+   survived as a literal font URL and became a request that never resolved
+   under waitUntil:'networkidle0'.
+
+   NOTE: do not write a font token inside this comment. The substitution runs
+   over the whole file, so naming one here would embed 203 KB of base64 into
+   a CSS comment — which is what the first draft of this very comment did. */
+@font-face { font-family:'Poppins'; font-weight:700 800; src: url('__FONT_POPPINS_BOLD__'); }
 @font-face { font-family:'Poppins'; font-weight:500; src: url('__FONT_POPPINS_MEDIUM__'); }
-@font-face { font-family:'DM Sans'; font-weight:400; src: url('__FONT_DMSANS_REGULAR__'); }
-@font-face { font-family:'DM Sans'; font-weight:500; src: url('__FONT_DMSANS_REGULAR__'); }
+@font-face { font-family:'DM Sans'; font-weight:400 500; src: url('__FONT_DMSANS_REGULAR__'); }
 @font-face { font-family:'DM Sans'; font-weight:600; src: url('__FONT_DMSANS_SEMIBOLD__'); }
 @font-face { font-family:'DM Sans'; font-weight:700; src: url('__FONT_DMSANS_BOLD__'); }
 @font-face { font-family:'IBM Plex Mono'; font-weight:400; src: url('__FONT_IBMPLEXMONO_REGULAR__'); }

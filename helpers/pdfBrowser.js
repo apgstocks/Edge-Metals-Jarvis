@@ -59,7 +59,52 @@ const IDLE_RAW = process.env.PDF_BROWSER_IDLE_MS;
 const IDLE_MS = (IDLE_RAW === undefined || IDLE_RAW === '') ? 60 * 1000 : Number(IDLE_RAW);
 const KEEP_WARM = !(IDLE_MS > 0);
 const VIEWPORT = { width: 800, height: 600 };   // puppeteer.launch's default — what every document was laid out in
-const OWN_ARGS = ['--no-sandbox', '--disable-setuid-sandbox'];
+// ── WHY THERE ARE FIVE OF THESE AND NOT TWO ──────────────────────────────
+// Apsara, 2026-10-20: "Timed out after 30000 ms while waiting for the WS
+// endpoint URL to appear in stdout!"
+//
+// That message is puppeteer's LAUNCH timeout, not a navigation timeout. It
+// means Chromium never printed its DevTools WebSocket endpoint — the browser
+// process did not get far enough to serve a page at all. So it is not about
+// the document, which is why she saw it on several kinds of document and
+// only sometimes. No template change can fix it.
+//
+// Two causes, both of this box rather than of this code:
+//
+//   1 /dev/shm. Chromium puts its shared-memory segments there, and a small
+//     VM gives it 64 MB. When it runs out, startup stalls or dies silently
+//     and stdout stays empty — exactly the symptom.
+//     --disable-dev-shm-usage moves those files to /tmp. Slightly slower,
+//     and the standard setting for Chromium on a small Linux host.
+//
+//   2 Memory. ecosystem.config.js caps jarvis at 1500M and jarvis-render at
+//     700M, and WhatsApp's Chromium lives INSIDE the first of those. A
+//     second Chromium launching into what is left can be killed by the OOM
+//     killer mid-startup, which also produces an empty stdout.
+//     --disable-gpu and --disable-extensions drop work and resident memory
+//     this box never benefits from; headless has no GPU to use.
+//
+// NOT --single-process: it is faster to start and it crashes on real
+// documents. Not worth trading a timeout for a corrupt PDF.
+const OWN_ARGS = [
+    '--no-sandbox',
+    '--disable-setuid-sandbox',
+    '--disable-dev-shm-usage',
+    '--disable-gpu',
+    '--disable-extensions',
+];
+
+// ── AND MORE THAN 30 SECONDS TO DO IT IN ─────────────────────────────────
+// puppeteer's launch timeout defaults to 30s. This file's own measurement,
+// forty lines down, is that a cold launch on this VM costs ELEVEN AND A HALF
+// SECONDS when nothing is wrong. A 30s ceiling over an 11.5s baseline is not
+// generous, it is 2.6x headroom on the slowest box in the system — and it is
+// spent at the exact moment the box is most loaded, because this path only
+// runs after WhatsApp's browser has already failed.
+//
+// Raised, not removed: a launch that is never going to succeed must still
+// give up and say so rather than hanging a request for ever.
+const LAUNCH_MS = Number(process.env.PDF_LAUNCH_TIMEOUT_MS) || 90 * 1000;
 
 // ── A CONNECTED BROWSER IS NOT NECESSARILY A WORKING ONE ─────────────────
 // Apsara, 2026-10-10: "Navigation timeout of 30000 ms exceeded when i click
@@ -156,7 +201,7 @@ function ownBrowser() {
     if (idleTimer) { clearTimeout(idleTimer); idleTimer = null; }
     if (!own) {
         stats.ownLaunches += 1;
-        own = Promise.resolve(_launch({ headless: true, args: OWN_ARGS })).then((b) => {
+        own = Promise.resolve(_launch({ headless: true, args: OWN_ARGS, timeout: LAUNCH_MS })).then((b) => {
             // If it dies on its own, the next document launches a fresh one.
             if (typeof b.on === 'function') b.on('disconnected', () => { if (own && own.__b === b) own = null; });
             own.__b = b;
@@ -190,7 +235,11 @@ function scheduleIdleClose() {
 // Chromium arguments gets its own one-off Chromium, exactly as before.
 async function withPage(fn, opts = {}) {
     if (opts.launchArgs) {
-        const b = await _launch({ headless: true, args: opts.launchArgs });
+        // Same headroom as OWN_ARGS above. A caller passing its own args was
+        // still on puppeteer's 30s default, so the escape hatch would have
+        // kept failing after the main path was fixed — and helpers/
+        // proformaPdf.js passes opts.launchArgs through from its callers.
+        const b = await _launch({ headless: true, args: opts.launchArgs, timeout: LAUNCH_MS });
         try { const page = await b.newPage(); await fixViewport(page); return await fn(page); }
         finally { try { await b.close(); } catch { /* already gone */ } }
     }

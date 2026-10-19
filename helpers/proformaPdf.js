@@ -23,6 +23,57 @@ const path = require('path');
 
 const ASSETS_DIR = path.join(__dirname, '..', 'assets', 'proforma-dc2');
 
+const FONTS = [
+    ['__FONT_POPPINS_BOLD__', 'Poppins-Bold.ttf'],
+    ['__FONT_POPPINS_MEDIUM__', 'Poppins-Medium.ttf'],
+    ['__FONT_DMSANS_REGULAR__', 'DMSans-Regular.ttf'],
+    ['__FONT_DMSANS_SEMIBOLD__', 'DMSans-SemiBold.ttf'],
+    ['__FONT_DMSANS_BOLD__', 'DMSans-Bold.ttf'],
+    ['__FONT_IBMPLEXMONO_REGULAR__', 'IBMPlexMono-Regular.ttf'],
+    ['__FONT_IBMPLEXMONO_BOLD__', 'IBMPlexMono-Bold.ttf'],
+];
+
+// ── SUBSTITUTION, AS A FUNCTION TAKING ITS OWN LOADER ────────────────────
+// Exported and injectable so the EVERY-OCCURRENCE property can be tested on
+// a crafted template rather than on assets/proforma-dc2/template.html.
+//
+// That matters because the template no longer repeats a token: the two
+// duplicated faces were merged into weight ranges on 2026-10-20 to drop
+// 276 KB of duplicate base64. With no duplicate left in the real file, a
+// test that read the real file could not tell replaceAll from replace — the
+// mutation would have survived and the check would have been proving
+// nothing, which is the failure this repo's mutation pass exists to catch.
+//
+// So the defence is kept here, independent of what the template happens to
+// look like today. A future template that repeats a token is handled, and
+// the test can prove it without anyone editing the template to suit it.
+function embedFonts(template, loader) {
+    let out = String(template || '');
+    for (const [token, file] of FONTS) out = out.replaceAll(token, loader(file));
+    return out;
+}
+
+// ── THE GUARD, AS A FUNCTION RATHER THAN FOUR LINES INLINE ───────────────
+// Exported because a test that greps this file for the word "throw" is not
+// testing the guard — it is testing that a comment still exists. The
+// mutation harness proved exactly that: disabling the throw with `void 0 &&`
+// left the message string in place, tests/proforma-fonts.js kept passing,
+// and the mutation SURVIVED.
+//
+// Same reasoning as pdfQueue's job.timeoutMs and pdfBrowser's injectable
+// launcher: a real seam, so the behaviour can be exercised on a crafted
+// input instead of inferred from the source text.
+function assertFontsEmbedded(html) {
+    const left = String(html || '').match(/__FONT_[A-Z0-9_]+__/g);
+    if (left && left.length) {
+        throw new Error('proforma template has unsubstituted font tokens: '
+            + [...new Set(left)].join(', ')
+            + ' — add it to FONTS in helpers/proformaPdf.js. Left in, it becomes a '
+            + 'font request that never resolves and a 30s networkidle0 timeout.');
+    }
+    return true;
+}
+
 let _templateCache = null;
 function loadTemplate() {
     if (_templateCache) return _templateCache;
@@ -33,14 +84,50 @@ function loadTemplate() {
     };
 
     let html = fs.readFileSync(path.join(ASSETS_DIR, 'template.html'), 'utf8');
-    html = html
-        .replace('__FONT_POPPINS_BOLD__', fontFile('Poppins-Bold.ttf'))
-        .replace('__FONT_POPPINS_MEDIUM__', fontFile('Poppins-Medium.ttf'))
-        .replace('__FONT_DMSANS_REGULAR__', fontFile('DMSans-Regular.ttf'))
-        .replace('__FONT_DMSANS_SEMIBOLD__', fontFile('DMSans-SemiBold.ttf'))
-        .replace('__FONT_DMSANS_BOLD__', fontFile('DMSans-Bold.ttf'))
-        .replace('__FONT_IBMPLEXMONO_REGULAR__', fontFile('IBMPlexMono-Regular.ttf'))
-        .replace('__FONT_IBMPLEXMONO_BOLD__', fontFile('IBMPlexMono-Bold.ttf'));
+
+    // ── EVERY OCCURRENCE, NOT THE FIRST (2026-10-20) ─────────────────────
+    // Apsara: "TIMEOUT AFTER 30000 SECONDS IN PROFORMA".
+    //
+    // These were seven `.replace('__FONT_X__', ...)` calls with STRING
+    // patterns, and String.prototype.replace with a string replaces ONLY THE
+    // FIRST MATCH. template.html uses two of them twice:
+    //
+    //     __FONT_POPPINS_BOLD__     weight 800 and weight 700
+    //     __FONT_DMSANS_REGULAR__   twice
+    //
+    // so the second of each survived into the finished HTML as a literal
+    // src: url('__FONT_POPPINS_BOLD__'). setContent() gives the page no base
+    // URL, so Chromium resolved those against about: and issued two font
+    // requests that never completed — and this renderer waits on
+    // 'networkidle0', which requires ZERO requests in flight for 500ms.
+    // Network idle was therefore unreachable and puppeteer threw at its
+    // 30-second default. Every proforma, every time.
+    //
+    // Two things were wrong and only one of them is the timeout: Poppins 700
+    // and DM Sans 400 have never actually rendered in this document either.
+    // They silently fell back to another face, which is why nobody caught it
+    // by looking at a PDF.
+    //
+    // THE WAIT CONDITION IS LEFT AS 'networkidle0' ON PURPOSE. Switching it
+    // to 'load' — as the invoice did on 2026-10-10 — also stops the hang,
+    // and that is exactly the problem: it would have hidden a genuinely
+    // broken font reference instead of surfacing it. The strict wait is what
+    // turned a cosmetic bug into a loud one. Changing it is a separate
+    // decision with a real trade-off, and it is Apsara's to make.
+    //
+    // replaceAll is used rather than a global regex so the base64 payload is
+    // treated as a literal: a data: URL contains '+' and '/', and a few of
+    // the $-sequences that replace() interprets in a replacement string
+    // would corrupt the font silently.
+    html = embedFonts(html, fontFile);
+
+    // ── AND REFUSE TO SHIP ONE THAT IS STILL DANGLING ────────────────────
+    // The bug above was invisible for as long as it existed because a missing
+    // font looks like a slightly different font. A leftover token is now a
+    // hard failure at BUILD time, with the token named — a template that
+    // grows an eighth font, or renames one, fails here in one second instead
+    // of hanging for thirty in front of a customer.
+    assertFontsEmbedded(html);
 
     _templateCache = html;
     return html;
@@ -294,4 +381,4 @@ async function generateProformaDc2PdfUnqueued(data, opts = {}) {
     }
 }
 
-module.exports = { buildProformaDc2Html, generateProformaDc2Pdf, formatDate, amountInWords, formatRate, formatQty };
+module.exports = { buildProformaDc2Html, generateProformaDc2Pdf, assertFontsEmbedded, embedFonts, FONTS, formatDate, amountInWords, formatRate, formatQty };

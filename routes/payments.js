@@ -116,6 +116,82 @@ module.exports = function (app, ctx) {
         }
     });
 
+    // ── SETTLE AGAINST THE OTHER SIDE ────────────────────────────────────
+    // Apsara, 2026-10-16: "when we pay load/sales-there should be a option to
+    // adjust against sale incase of load and against load in case of sale."
+    // And the case, in her words: "his seller is also a buyer, he owes you
+    // $3,000 on a sale, you're paying him $5,000 for a load, so you hand over
+    // $2,000 and the $3,000 is settled".
+    //
+    // ── A SEPARATE ROUTE, NOT A FIELD ON POST /api/payments ──────────────
+    // The temptation is an `against_id` on the existing payment body, and it
+    // is the exact mistake this repo has made three times (CLAUDE.md records
+    // two of them, both live before she caught them). POST /api/payments is
+    // reached by two screens, the Jarvis voice path through helpers/tools.js,
+    // and the trucker-bill flow. A new branch inside it is a new way for all
+    // four to behave differently, and the one that breaks is always the voice
+    // path, because it has no form to put a field on.
+    //
+    // So this is its own door. Nothing that works today changes shape, and
+    // helpers/payments.js's settleAgainst is likewise its own function rather
+    // than a branch in addPayment.
+    //
+    // ── STAFF ARE ALREADY REFUSED, BY OMISSION ──────────────────────────
+    // '/api/payments' is deliberately absent from STAFF_ALLOWED_PATH_PREFIXES
+    // in api.js, and that check is a true prefix test — req.path === p ||
+    // startsWith(p + '/') — so '/api/payments/settle' inherits the flat 403
+    // without a new entry. Verified rather than assumed: writing off what a
+    // customer owes is not yard paperwork.
+
+    // What could this be netted against? Server-computed, so the dropdown
+    // cannot offer a row the write path would refuse.
+    app.get('/api/payments/settle-options', (req, res) => {
+        try {
+            const { settleOptions } = require('./helpers/payments');
+            const q = req.query || {};
+            if (!q.load_id) return res.status(400).json({ error: 'load_id is required' });
+            res.json(settleOptions(String(q.load_id), String(q.load_kind || 'purchase')));
+        } catch (e) { res.status(500).json({ error: e.message }); }
+    });
+
+    app.post('/api/payments/settle', async (req, res) => {
+        try {
+            const { settleAgainst, paymentSummary } = require('./helpers/payments');
+            const b = req.body || {};
+            const result = await settleAgainst({ ...b, created_by: (req.role || null) });
+
+            // BOTH sides repaint, because both just changed. Returning only
+            // the side she was looking at is how a screen ends up showing a
+            // sale as still fully outstanding after it was settled — the
+            // figure is right on the server and wrong in front of her.
+            const kind = String(b.load_kind || 'purchase') === 'sale' ? 'sale' : 'purchase';
+            const againstKind = kind === 'sale' ? 'purchase' : 'sale';
+            res.json({
+                ok: true,
+                settlement_id: result.settlement_id,
+                amount: result.amount,
+                party: result.party,
+                summary: paymentSummary(b.load_id, amountForLoad(b.load_id, kind)),
+                against_summary: paymentSummary(b.against_id, amountForLoad(b.against_id, againstKind)),
+            });
+        } catch (e) {
+            const body = { error: e.message };
+            if (e.code) body.code = e.code;
+            res.status(400).json(body);
+        }
+    });
+
+    // Removing one takes BOTH rows or neither — deleteSettlement enforces
+    // that, and a half-removed settlement would leave one document reopened
+    // and the other still closed.
+    app.delete('/api/payments/settle/:id', async (req, res) => {
+        try {
+            const { deleteSettlement } = require('./helpers/payments');
+            const removed = await deleteSettlement(String(req.params.id));
+            res.json({ ok: true, removed });
+        } catch (e) { res.status(400).json({ error: e.message }); }
+    });
+
     // ── SUPPLIER PREPAYMENTS, EDGE YARD ──────────────────────────────────
     // Apsara: "Add a supplier prepayment option in loads", "no for edge
     // yard", "streamline the process", "Build prepayment properly".

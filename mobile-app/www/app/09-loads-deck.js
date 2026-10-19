@@ -652,6 +652,29 @@ function renderLoads(loads) {
               <span id="payPrepayNote" style="font-size:11px; color:var(--text-faint);"></span>
             </div>
           </div>
+          <!-- ── ADJUST AGAINST THE OTHER SIDE ────────────────────────────
+               Apsara, 2026-10-16: "when we pay load/sales-there should be a
+               option to adjust against sale incase of load and against load
+               in case of sale." Her case: "his seller is also a buyer, he
+               owes you $3,000 on a sale, you're paying him $5,000 for a
+               load, so you hand over $2,000 and the $3,000 is settled".
+
+               KEPT IDENTICAL TO dashboard/app/13-loads-render.js. These two
+               modals have drifted before and it is always the phone that is
+               left behind — tests/settle-screens.js asserts both carry the
+               same ids for that reason.
+
+               ALWAYS VISIBLE, and it says why it is empty — see the website
+               copy for why hiding it was wrong. -->
+          <div id="paySettleBox" style="margin:-4px 0 16px; padding:10px 12px; border:1px solid var(--border); border-radius:8px;">
+            <div id="paySettleLead" style="font-size:12px; line-height:1.5;"></div>
+            <div style="display:flex; gap:8px; align-items:center; margin-top:8px; flex-wrap:wrap;">
+              <select id="pay_settle_against" style="min-width:180px;"></select>
+              <input id="pay_settle_amount" type="number" step="any" placeholder="0.00" inputmode="decimal" style="width:120px;">
+              <button id="btnSettleAgainst" type="button" class="btn btn-secondary" style="padding:6px 14px; font-size:11px;">Settle it</button>
+              <span id="paySettleNote" style="font-size:11px; color:var(--text-faint);"></span>
+            </div>
+          </div>
           <div id="payPrepayAsCreditRow" class="hidden" style="margin:-8px 0 16px;">
             <label style="display:flex; align-items:center; gap:8px; font-size:12px;">
               <input type="checkbox" id="pay_as_prepayment" style="width:16px; height:16px; margin:0;">
@@ -942,6 +965,9 @@ function wireLoadsEvents() {
       btn.disabled = false; btn.textContent = 'Apply to this load';
     }
   });
+  if ($('btnSettleAgainst')) {
+    $('btnSettleAgainst').addEventListener('click', () => settleAgainstSelected());
+  }
   $('pay_mode').addEventListener('change', () => syncBankFields('pay'));
   $('pay_bank').addEventListener('change', () => syncBankFields('pay'));
   // Delegated: the history list re-renders after every change, so per-button
