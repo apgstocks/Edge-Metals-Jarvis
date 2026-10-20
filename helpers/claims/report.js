@@ -22,6 +22,18 @@
 const claims = require('../claims');
 const claimKinds = require('../claimKinds');
 const claimPrice = require('../claimPrice');
+// ── HER ACTUAL SIGNATURE, THE ONE ALREADY ON HER INVOICES ────────────────
+// Apsara, 2026-10-21: "You adready have my sign in jarvis".
+//
+// She is right, and the claim note was the ONE document not using it:
+// helpers/signature.js has been signing invoices, BOLs and proformas since
+// it was written, and this file drew an empty rule and a typed name.
+//
+// FAIL-SOFT, by that file's own design: a missing or unreadable signature
+// returns an empty block of the SAME HEIGHT, so the note keeps its layout
+// and the typed name and role still appear. A claim note that cannot be
+// produced because an image is missing would be the worse failure.
+const signature = require('../signature');
 
 const money = (n) => (n === null || n === undefined || n === '') ? '—'
     : '$' + Number(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -45,6 +57,35 @@ const basisOf = (c) => {
 };
 
 const SENDABLE = ['verified', 'recovery_raised', 'settled'];
+
+// ── WHO SIGNS THE CLAIM NOTE ─────────────────────────────────────────────
+// Apsara, 2026-10-21: "Give auth sign as chandr bose".
+//
+// A CONSTANT, not a string buried in the template, because it is a person's
+// name on a document sent to a supplier: it has to be correctable in one
+// obvious place, and the next person must not have to grep the HTML to find
+// out who is signing Edge's claims.
+//
+// SPELLING IS HERS TO CONFIRM. She typed "chandr bose"; this reads it as the
+// name "Chandra Bose". A misspelt signatory on a commercial document is
+// worse than none, so if that is wrong it is this one line.
+//
+// Env-overridable so a different signatory does not need a code change.
+// ── THE ACCENT IS THE INVOICE'S BLUE, NOT A NEW ONE ──────────────────────
+// Apsara, 2026-10-21: "Give color to edge metlas claim report".
+//
+// There is no single Edge Metals colour — her three templates each have
+// their own: invoice-classic #2E6DA4 blue with #D9E8F5 tints, proforma-dc2
+// #3DA836 green, bol greys. So the choice was which family this document
+// belongs to, not which colour is nicest.
+//
+// The invoice's blue, because a claim note is commercial correspondence
+// about money owed, the same family as the invoice — and because the
+// proforma's green reads as "all fine", which is the wrong thing to say at
+// the top of a demand. Red was considered and rejected: firm is right on a
+// claim, hostile is not, and the supplier here is one she keeps buying from.
+const CLAIM_ACCENT = '#2E6DA4';     // kept as a name so it is findable
+const SIGNATORY = process.env.CLAIM_SIGNATORY || 'Chandra Bose';
 
 // ── FOR THE SUPPLIER, AND ONLY THE SUPPLIER (2026-10-10) ─────────────────
 // Apsara: "dont include customer info in this. i want claim report to be sent
@@ -101,36 +142,53 @@ function build(opts = {}) {
         // Their own rate, off their own bill. A recoverable figure with no rate
         // beside it is a number a supplier cannot reproduce, so the first thing
         // they do is query it. Edge's sell_price is deliberately NOT here.
-        // ── THE SUPPLIER'S RATE IS ALWAYS PRINTED PER MT (2026-10-14) ───────
-        // Apsara: "If price of supplier is in cents, i want it to be converted
-        // to 2204.62 (mt) and then calculated." A bill can be cents or dollars
-        // per pound; the supplier is shown ONE basis, per metric ton, with the
-        // original beside it so the conversion can be checked. The quantity is
-        // taken to MT too, so rate x quantity is readable on the page.
+        // ── THE RATE IS PRINTED IN THE UNIT IT WAS RECORDED IN (2026-10-21) ─
+        // Apsara: "If i selected it as lb .i want your rate to be in lb only
+        // not in mt".
+        //
+        // THIS REVERSES HER OWN EARLIER INSTRUCTION, and that is written down
+        // rather than quietly applied. On 2026-10-14 she asked for the
+        // opposite — "If price of supplier is in cents, i want it to be
+        // converted to 2204.62 (mt) and then calculated" — and this block
+        // converted every non-MT price to a per-MT figure with the original
+        // beneath it.
+        //
+        // What changed in between is the sorted breakdown, which works line by
+        // line in the claim's own unit. With the conversion in place the
+        // document carried $3,042.38/MT in the table and $1.38/LB three
+        // inches below it, both labelled "Your rate" — one price, two numbers,
+        // on a page whose whole purpose is that a supplier can check the
+        // arithmetic without reaching for a calculator.
+        //
+        // So: no conversion. The rate prints as it stands on his bill.
+        // `rate_from` is now always empty — the figure IS the original — and
+        // the footnote that explained the conversion went with the three
+        // other notes she removed on 2026-10-20.
+        //
         // Nothing here is ever the buyer's price: this is supplier_price only.
         ...(() => {
             const p = (c.assessment === 'grade') ? null : nnum(c.supplier_price);
             const u = c.supplier_price_unit || '';
             if (p === null) return { rate: null, rate_unit: '', rate_from: '' };
-            const per = claimPrice.toUnit(1, 'MT', u);            // units of u in one MT
-            if (!u || per === null) return { rate: p, rate_unit: u, rate_from: '' };
-            if (u === 'MT') return { rate: p, rate_unit: 'MT', rate_from: '' };
-            return { rate: Math.round(p * per * 100) / 100, rate_unit: 'MT', rate_from: `${money(p)}/${u}` };
+            return { rate: p, rate_unit: u, rate_from: '' };
         })(),
         qty_mt: (() => { const b = basisOf(c); if (b === null) return null; if (!c.weight_unit) return null;
             const q = claimPrice.toUnit(b, c.weight_unit, 'MT'); return q === null ? null : Math.round(q * 1e6) / 1e6; })(),
         basis: basisOf(c),
-        // THE RATE IS OFTEN PER POUND WHILE THE CLAIM IS IN TONNES. Apsara,
-        // 2026-10-03: "What if the supplier price is in lbs?" — the conversion
-        // was already right in the code and wrong on the DOCUMENT: a supplier
-        // reading "1.922 MT short" beside "$0.81/LB" has to find 2204.62 for
-        // himself to check the amount, which is the same unexplained number
-        // this column was added to remove. So the quantity his rate is applied
-        // to is printed next to it, and only when the units actually differ —
-        // the claim's own weights are left exactly as recorded.
-        // Shown only where the claim's own weights are NOT already in MT.
-        charge_qty: (c.supplier_price_unit && c.weight_unit && c.weight_unit !== 'MT')
-            ? (() => { const b = basisOf(c); if (b === null) return null; const q = claimPrice.toUnit(b, c.weight_unit, 'MT'); return q === null ? null : Math.round(q * 1000) / 1000; })()
+        // THE QUANTITY HIS RATE IS APPLIED TO, in HIS unit — and only when
+        // that differs from the claim's own weights. Apsara, 2026-10-03:
+        // "What if the supplier price is in lbs?" The point was never MT; it
+        // was that a supplier reading a weight in one unit beside a rate in
+        // another has to find 2204.62 himself to check the figure.
+        //
+        // Re-pointed on 2026-10-21 with the rate itself: it used to convert
+        // to MT unconditionally, which — now that the rate stays in LB —
+        // would print a tonne figure nothing on the page is priced in. Same
+        // rule, same purpose, expressed against the rate that is actually
+        // shown. Where the two units already agree there is nothing to
+        // reconcile and nothing is printed.
+        charge_qty: (c.supplier_price_unit && c.weight_unit && c.weight_unit !== c.supplier_price_unit)
+            ? (() => { const b = basisOf(c); if (b === null) return null; const q = claimPrice.toUnit(b, c.weight_unit, c.supplier_price_unit); return q === null ? null : Math.round(q * 1000) / 1000; })()
             : null,
         our_claim: nnum(c.our_claim),
         status: c.status,
@@ -171,7 +229,20 @@ function build(opts = {}) {
     const RECONCILE_TOL = 0.01;   // 1%, and never less than a dollar
     const lines = rows.map(line).map((l) => {
         if (l.rate === null || !l.sendable || !l.our_claim) return l;
-        const qty = l.qty_mt;
+        // ── THE QUANTITY MUST BE IN THE RATE'S OWN UNIT (2026-10-21) ─────
+        // This read l.qty_mt, which was right only while every rate was
+        // printed per MT. The rate now stays in the unit it was recorded in
+        // (Apsara: "i want your rate to be in lb only not in mt"), so
+        // qty_mt x a per-LB rate is out by 2,204 and NOTHING would ever
+        // reconcile — the rate would have been stripped off every single
+        // line and each claim would have read as "an agreed amount".
+        //
+        // Silent, too: the figures would all still be correct, the rate
+        // column would simply be empty everywhere. Caught by this file's own
+        // reconciliation test, which is exactly what it is for.
+        const qty = (l.basis === null || l.basis === undefined) ? null
+            : (!l.unit || !l.rate_unit || l.unit === l.rate_unit) ? l.basis
+            : claimPrice.toUnit(l.basis, l.unit, l.rate_unit);
         if (qty === null || qty === undefined) return l;
         const implied = qty * l.rate;
         const slack = Math.max(1, Math.abs(l.our_claim) * RECONCILE_TOL);
@@ -380,7 +451,7 @@ function toHtml(b) {
       <td class="r mono">${esc(wt(l.claimed_weight, l.unit))}</td>
       <td class="r mono">${esc(wt(l.shortage, l.unit))}</td>
       <td class="r mono">${l.shortage_pct === null ? '—' : esc(l.shortage_pct.toFixed(2)) + '%'}</td>`}
-      <td class="r mono">${l.rate === null ? '—' : esc(money(l.rate)) + '/' + esc(l.rate_unit || '')}${l.rate_from ? `<div class="conv">from ${esc(l.rate_from)}</div>` : ''}${l.charge_qty === null ? '' : `<div class="conv">on ${esc(wt(l.charge_qty, 'MT'))}</div>`}</td>
+      <td class="r mono">${l.rate === null ? '—' : esc(money(l.rate)) + '/' + esc(l.rate_unit || '')}${l.rate_from ? `<div class="conv">from ${esc(l.rate_from)}</div>` : ''}${l.charge_qty === null ? '' : `<div class="conv">on ${esc(wt(l.charge_qty, l.rate_unit || ''))}</div>`}</td>
       <td class="r mono strong">${l.sendable && l.our_claim !== null ? esc(money(l.our_claim)) : '—'}</td>
     </tr>`;
 
@@ -395,43 +466,78 @@ function toHtml(b) {
 body{margin:0;font-family:"Helvetica Neue",Helvetica,Arial,sans-serif;color:#1a1a1a;font-size:8.6pt;line-height:1.45}
 .mono{font-family:"SF Mono",Menlo,Consolas,monospace;font-variant-numeric:tabular-nums}
 .r{text-align:right}.strong{font-weight:700}
-header{display:flex;align-items:flex-start;gap:20px;border-bottom:2px solid #1a1a1a;padding-bottom:10px}
-header .co{font-size:15pt;font-weight:800;letter-spacing:.02em}
-header .sub{font-size:8pt;color:#555;margin-top:2px}
+/* ── A FILLED MASTHEAD ────────────────────────────────────────────────
+   Apsara, 2026-10-21: "Fill the top".
+
+   The band bleeds to the page edges with a negative margin against the
+   body's padding, so it reads as a letterhead rather than a tinted box
+   floating inside a margin.
+
+   printBackground is already true in toPdf, so the fill survives into the
+   PDF; print-color-adjust is belt and braces for the browser-print path,
+   where Chromium strips backgrounds by default and would hand her a white
+   band with white text on it.
+
+   NO BACKTICKS IN THIS COMMENT. The whole stylesheet lives inside a JS
+   template literal, so a backtick here terminates it and the file stops
+   parsing — the same bug that broke 02-dashboard-bookings.js earlier.
+
+   THE NEGATIVE MARGIN MUST MATCH @page, which is 14mm 12mm — 14 top and
+   bottom, 12 left and right. The first draft used -14mm on all four and
+   would have hung 2mm off each page edge: a horizontal overflow Chromium
+   answers with a clipped band or a stray second page. */
+header{display:flex;align-items:flex-start;gap:20px;background:#2E6DA4;color:#fff;
+       margin:-14mm -12mm 0;padding:11mm 12mm 9mm;
+       -webkit-print-color-adjust:exact;print-color-adjust:exact}
+header .co{font-size:15pt;font-weight:800;letter-spacing:.02em;color:#fff}
+header .sub{font-size:8pt;color:#D9E8F5;margin-top:2px}
 header .right{margin-left:auto;text-align:right}
-header .doc{font-size:12pt;font-weight:700;letter-spacing:.06em;text-transform:uppercase}
-header .ref{font-size:8pt;color:#555;margin-top:3px}
+header .doc{font-size:12pt;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:#fff}
+header .ref{font-size:8pt;color:#D9E8F5;margin-top:3px}
 .meta{display:flex;gap:30px;flex-wrap:wrap;margin:12px 0 4px}
 .meta .k{font-size:7.5pt;letter-spacing:.07em;text-transform:uppercase;color:#777;margin-bottom:2px}
 .lead{margin:10px 0 2px;color:#333}
 table{width:100%;border-collapse:collapse}
 table.sum{margin-top:10px}
-th{text-align:left;font-size:7pt;letter-spacing:.05em;text-transform:uppercase;color:#555;border-bottom:1px solid #999;padding:5px 5px;white-space:nowrap;background:#f1f3f4}
+th{text-align:left;font-size:7pt;letter-spacing:.05em;text-transform:uppercase;color:#1F4E79;border-bottom:1px solid #2E6DA4;padding:5px 5px;white-space:nowrap;background:#D9E8F5}
 th.r{text-align:right}
 td{padding:5px 5px;border-bottom:1px solid #e4e4e4;vertical-align:top}
 tr.info td{color:#777;font-style:italic}
 .tag{display:inline-block;margin-left:6px;font-size:7pt;font-style:normal;border:1px solid #bbb;border-radius:2px;padding:0 4px;color:#777}
-tfoot td{border-top:2px solid #1a1a1a;border-bottom:0;padding-top:7px;font-weight:700}
+tfoot td{border-top:2px solid #2E6DA4;border-bottom:0;padding-top:7px;font-weight:700}
 .what{margin:10px 0 0;padding-left:18px;color:#333}
 .what li{margin:0 0 3px}
 .total{margin-top:14px;display:flex;justify-content:flex-end}
-.total .box{border:1.5px solid #1a1a1a;padding:9px 16px;text-align:right;min-width:230px}
-.total .k{font-size:7.5pt;letter-spacing:.07em;text-transform:uppercase;color:#555}
+.total .box{border:1.5px solid #2E6DA4;background:#F4F9FD;padding:9px 16px;text-align:right;min-width:230px}
+.total .k{font-size:7.5pt;letter-spacing:.07em;text-transform:uppercase;color:#1F4E79}
 .total .v{font-size:15pt;font-weight:800;margin-top:2px}
 .notes{margin-top:16px;font-size:7.8pt;color:#555;border-top:1px solid #ddd;padding-top:9px}
 .notes p{margin:0 0 5px}
 .sign{margin-top:22px;display:flex;justify-content:space-between;align-items:flex-end}
 .sign .for{font-size:8.5pt}
-.sign .line{border-top:1px solid #1a1a1a;width:190px;margin-top:34px;padding-top:4px;font-size:8pt;color:#555}
+/* ── THE SIGNATURE SITS ABOVE THE RULE (2026-10-21) ──────────────────
+   Apsara: "Also sign should come above under line right".
+
+   It was inside .line, whose border-top IS the rule — so her signature
+   printed UNDER the line it is meant to be written on. The image is its
+   own block above it now; .line keeps the rule and carries the typed name
+   and role beneath, which is the order on every signed document.
+
+   The image block holds its height whether or not the file is readable
+   (helpers/signature.js returns an empty block of the same size), so the
+   rule does not jump up the page when the signature is missing. */
+.sign .sigimg{width:190px;margin-top:30px}
+.sign .line{border-top:1px solid #2E6DA4;width:190px;padding-top:4px;font-size:8pt;color:#555}
   /* The sorted-contaminant breakdown. A SUB-table: lighter than the main
      one so the eye still reads the claim table as the document's spine,
      but with real headings, because Apsara's note on the unlabelled
      version was "You dudnt mention like weight,price". */
+  .sign .sub2 { display:block; font-size:10px; letter-spacing:.04em; text-transform:uppercase; color:#666; margin-top:2px; }
   table.sorted { font-size: 11px; }
-  table.sorted th { border-bottom: 1px solid #ddd; padding: 3px 6px; font-size: 10px;
-                    letter-spacing: .04em; text-transform: uppercase; color: #555; font-weight: 600; }
+  table.sorted th { border-bottom: 1px solid #B9D4EC; background:#EDF4FB; padding: 3px 6px; font-size: 10px;
+                    letter-spacing: .04em; text-transform: uppercase; color: #1F4E79; font-weight: 600; }
   table.sorted td { border-bottom: 1px solid #f0f0f0; padding: 3px 6px; }
-  table.sorted tfoot td { border-top: 1px solid #bbb; border-bottom: none; font-weight: 600; }
+  table.sorted tfoot td { border-top: 1px solid #2E6DA4; border-bottom: none; font-weight: 600; }
   table.sorted .strong { font-weight: 700; }
 </style></head><body>
 <header>
@@ -477,7 +583,8 @@ ${details}
 
 <div class="sign">
   <div class="for">For <strong>EDGE METALS INC</strong></div>
-  <div class="line">Authorised signatory</div>
+  <div class="sigimg">${signature.signatureBlockHtml({ height: '40px', maxHeight: '36px', justify: 'flex-start', marginBottom: '0' })}</div>
+  <div class="line">${esc(SIGNATORY)}<span class="sub2">Authorised signatory</span></div>
 </div>
 </body></html>`;
 }
@@ -503,6 +610,7 @@ async function toWorkbook(built) {
     const wb = new ExcelJS.Workbook();
     const ws = wb.addWorksheet('Claim report');
     ws.addRow(['EDGE METALS INC — CLAIM REPORT']);
+    ws.addRow(['Authorised signatory', SIGNATORY]);
     ws.addRow([built.reference, new Date(built.generatedAt).toLocaleDateString('en-US')]);
     ws.addRow(['To', built.addressedTo || '']);
     ws.addRow([]);

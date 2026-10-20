@@ -234,7 +234,7 @@ function mount(app, cfg) {
                 'grade_sold', 'grade_received', 'tolerance_pct'];
             const patch = {};
             for (const k of allowed) if (b[k] !== undefined) patch[k] = b[k];
-            if (patch.assessment !== undefined && patch.assessment !== null && !claims.ASSESSMENTS.includes(patch.assessment)) return bad(res, 'assessment must be weight, contamination, grade or quality');
+            if (patch.assessment !== undefined && patch.assessment !== null && !claims.ASSESSMENTS.includes(patch.assessment)) return bad(res, 'assessment must be weight, contamination, grade, quality or sorted');
             if (patch.findings !== undefined) patch.findings = (Array.isArray(patch.findings) ? patch.findings : []).filter((f) => claims.FINDINGS.includes(f));
             if (patch.measured_by !== undefined && patch.measured_by !== null && !claims.MEASURED_BY.includes(patch.measured_by)) return bad(res, 'that is not a way of measuring I know');
             if (patch.remarks !== undefined) patch.remarks = String(patch.remarks || '').slice(0, 2000);

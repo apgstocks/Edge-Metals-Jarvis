@@ -195,7 +195,10 @@ section('C — end to end: real server, the page\'s routes, both reports');
         const rem = await req('POST', `/api/claims/${id}/edit`, { sid, body: { remarks: 'Customer photos show rubber hoses and soil. Daekwang wants credit by Friday.' } });
         ck('remarks save through /edit', rem.status === 200 && /rubber hoses/.test(rem.json.remarks));
         const badA = await req('POST', `/api/claims/${id}/edit`, { sid, body: { assessment: 'vibes' } });
-        ck('/edit refuses an assessment that is not one of the three', badA.status === 400 && /weight, contamination, grade or quality/.test(badA.raw));
+        // FOUR now, not three — 'sorted' joined ASSESSMENTS on 2026-10-20 and
+        // this message had gone stale with it. The refusal itself is
+        // unchanged; only the list it recites.
+        ck('/edit refuses an assessment that is not one of the four', badA.status === 400 && /weight, contamination, grade, quality or sorted/.test(badA.raw));
         const sneaky = await req('POST', `/api/claims/${id}/edit`, { sid, body: { claim_amount: 99999 } });
         ck('/edit still cannot set a money figure', sneaky.status === 400, sneaky.raw.slice(0, 100));
 

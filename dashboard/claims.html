@@ -760,8 +760,11 @@ function claimCard(c, i, g){
       // already holds "Al rims(Dirty)" and "Chrome". Free text still works:
       // a contaminant can appear that she has never bought.
       '<td><input class="s_type" list="s_matList" autocomplete="off" value="' + esc((l && l.type) || '') + '" placeholder="e.g. Clad wheel" style="width:100%"></td>' +
-      '<td><input class="num s_w" inputmode="decimal" value="' + esc(l && l.weight != null ? l.weight : '') + '" placeholder="0" style="width:90px; text-align:right"></td>' +
-      '<td><input class="num s_worth" inputmode="decimal" value="' + esc(l && l.worth != null ? l.worth : '') + '" placeholder="in full" style="width:90px; text-align:right"></td>' +
+      // PLACEHOLDERS NAME THE FIELD. The header alone was not enough: two
+      // adjacent right-aligned number boxes are indistinguishable once a
+      // value is in them, and the wrong one costs a wrong claim.
+      '<td><input class="num s_w" inputmode="decimal" value="' + esc(l && l.weight != null ? l.weight : '') + '" placeholder="how much" title="How much of this came out of the load" style="width:100px; text-align:right"></td>' +
+      '<td><input class="num s_worth" inputmode="decimal" value="' + esc(l && l.worth != null ? l.worth : '') + '" placeholder="rate" title="What this material is actually worth, per unit. Leave blank if it is worth nothing to you." style="width:100px; text-align:right"></td>' +
       '<td><select class="s_wu">' + unitOpt((l && l.worth_unit) || defUnit) + '</select></td>' +
       '<td class="s_amt" style="text-align:right; white-space:nowrap">' + (l && l.amount != null ? money(l.amount) : '—') + '</td>' +
       '<td><button class="btn s_del" type="button" title="Remove this line" style="padding:1px 7px">&times;</button></td>' +
@@ -780,6 +783,40 @@ function claimCard(c, i, g){
       (why || flags.length ? '<div class="flagbox">' +
         (why ? '<div class="why">Kind read from: “' + esc(why) + '”</div>' : '') +
         flags.map(f => '<div class="hint" data-flag="' + f + '"><b>·</b> ' + esc(FLAG_TEXT[f]) + '</div>').join('') + '</div>' : '') +
+
+      /* ── 0. THE DETAILS, EDITABLE AFTER THE FACT ──────────────────────
+         Apsara, 2026-10-21: "Add a option to change teh details later like
+         supplier,customer,container number etc.."
+
+         POST /api/claims/:id/edit has ALWAYS allowed customer, supplier,
+         invoice_no, container_no and claim_date. The page never offered a
+         control for four of those five: supplier could only be changed down
+         in Recover, and customer, invoice no, container no and the date
+         could only ever be set at creation. Route permitted, screen silent —
+         the same shape as #152.
+
+         Container and invoice are safe to change: helpers/claims.js update()
+         recomputes `key` from both on every write, so a renamed container
+         regroups correctly rather than stranding the claim under the old
+         one. (To-dos already raised against the old container number are NOT
+         moved — claimWatch keys them on the container, so an open chase on
+         the old number stays until it is closed. Said here rather than
+         discovered later.)
+
+         Collapsed by default: this is a correction, not part of the daily
+         flow, and the sections that matter are Assess and Recover. */
+      '<details class="sec minor" data-sec="details"><summary><span class="t">Claim details</span><span class="r2">' +
+        esc(c.container_no || c.invoice_no || 'no container yet') + '</span></summary>' +
+        '<div class="grid" style="margin-top:10px">' +
+          '<label class="f">Customer<input class="d_cust" list="n_custList" autocomplete="off" value="' + esc(c.customer || '') + '"></label>' +
+          '<label class="f">Supplier<input class="d_sup" list="n_supList" autocomplete="off" value="' + esc(c.supplier || '') + '" placeholder="who sold Edge the material"></label>' +
+          '<label class="f">Invoice no<input class="d_inv mono" value="' + esc(c.invoice_no || '') + '"></label>' +
+          '<label class="f">Container no<input class="d_cont mono" value="' + esc(c.container_no || '') + '"></label>' +
+          '<label class="f">Claim date<input class="d_date" value="' + esc(c.claim_date || '') + '" placeholder="YYYY-MM-DD"></label>' +
+        '</div>' +
+        '<div class="hint" style="margin-top:0">The supplier is who the claim note is addressed to, and the name is matched against your bills to find the price you paid &mdash; so it must be spelled as it is on the bill.</div>' +
+        '<div class="actions"><button class="btn go d_save" type="button">Save details</button><span class="hint d_why" style="margin:0"></span></div>' +
+      '</details>' +
 
       /* ── 1. ASSESS ─────────────────────────────────────────────────── */
       '<details class="sec" data-sec="assess"' + (st === 1 ? ' open' : '') + '><summary><span class="t">Assess the claim</span><span class="r2">' + assessSummary + '</span></summary>' +
@@ -866,10 +903,19 @@ function claimCard(c, i, g){
           '</div>' +
           '<table class="sortedT" style="width:100%; margin-top:10px; border-collapse:collapse; font-size:12px;">' +
             '<thead><tr>' +
+              // ── THE HEADER MUST FOLLOW THE UNIT CHIPS ────────────────
+              // It read "Weight (MT)" with LB selected and green, because
+              // `unit` is captured when the card is BUILT and the chips only
+              // call renderCalc(). Apsara then entered the RATE in the
+              // Weight column and the WEIGHT in the Worth column, on all
+              // four rows — 1.38 was the price she had typed above. A header
+              // naming the wrong unit, over a column of bare numbers, will
+              // do that every time. The label is now painted by renderCalc
+              // from the selected chip.
               '<th style="text-align:left">What was found</th>' +
-              '<th style="text-align:right">Weight (' + esc(unit || 'LB') + ')</th>' +
-              '<th style="text-align:right">Worth per unit</th>' +
-              '<th>per</th><th style="text-align:right">Claim</th><th></th>' +
+              '<th style="text-align:right" class="s_hw">Weight</th>' +
+              '<th style="text-align:right" class="s_hworth">Worth per unit</th>' +
+              '<th>that is per</th><th style="text-align:right">Claim</th><th></th>' +
             '</tr></thead><tbody class="s_rows">' +
               ((c.sorted_lines && c.sorted_lines.length ? c.sorted_lines : [{},{},{}])
                 .map((l) => sortedRow(l, c.paid_price_unit || c.supplier_price_unit || unit || 'LB')).join('')) +
@@ -1059,6 +1105,14 @@ function renderCalc(el){
   // sorted claim it is the sentence that matters: "Sorted and weighed" is
   // rated Medium — "their own sort — ask to witness it or re-weigh" — which
   // is precisely what a supplier will say back.
+  // The sorted table's two rate-bearing headers, named from the chip that
+  // is actually selected rather than from whatever the unit was on load.
+  {
+    const u = f.unit || 'LB';
+    const pu = (el.querySelector('.f_spaidUnit') || {}).value || u;
+    const hw = el.querySelector('.s_hw'); if (hw) hw.textContent = 'Weight (' + u + ')';
+    const hworth = el.querySelector('.s_hworth'); if (hworth) hworth.textContent = 'Worth per ' + pu;
+  }
   if (el.querySelector('.s_ev')) {
     el.querySelector('.s_ev').innerHTML = ev
       ? '<b class="' + ev[1] + '">' + ev[0] + '</b> — ' + esc(ev[2])
@@ -1167,9 +1221,21 @@ function wireClaim(c){
       const worthRaw = (tr.querySelector('.s_worth').value || '').trim();
       const worth = worthRaw === '' ? 0 : numOf(worthRaw);
       const sameUnit = tr.querySelector('.s_wu').value === paidUnit;
-      if (!ok || w == null || worth == null || !sameUnit || worth > paid) {
-        cell.textContent = '—';
+      // ── SAY WHICH NUMBER IS WRONG ────────────────────────────────────
+      // Every Claim cell showed a bare "—" on Apsara's real screen, with
+      // the four rows differing in three separate ways. A dash is the one
+      // thing that cannot be acted on: it does not say whether the problem
+      // is the unit, the rate or the missing price.
+      let why = '';
+      if (!ok) why = 'price?';
+      else if (w == null) why = 'weight?';
+      else if (!sameUnit) why = 'per ' + tr.querySelector('.s_wu').value + ', paid per ' + paidUnit;
+      else if (worth == null) why = 'rate?';
+      else if (worth > paid) why = 'above ' + money(paid);
+      if (why) {
+        cell.innerHTML = '<span class="conv">' + esc(why) + '</span>';
         if (ok && w != null && !sameUnit) ok = false;   // the server converts; this preview will not guess
+        if (ok && worth !== null && worth > paid) ok = false;
         return;
       }
       const amt = Math.round(w * (paid - worth) * 100) / 100;
@@ -1282,6 +1348,37 @@ function wireClaim(c){
     rem.value = (rem.value.replace(/\s*$/, '') ? rem.value.replace(/\s*$/, '') + ' ' : '') + b.dataset.q + '.';
     saveRemarks();
   });
+
+  // Save only what CHANGED. Sending the whole form would rewrite fields she
+  // did not touch — and on a claim that is already verified, a silent
+  // rewrite of the container number is the kind of edit nobody can trace.
+  if (el.querySelector('.d_save')) el.querySelector('.d_save').onclick = async () => {
+    const btn = el.querySelector('.d_save');
+    const why = el.querySelector('.d_why');
+    const want = {
+      customer: el.querySelector('.d_cust').value.trim(),
+      supplier: el.querySelector('.d_sup').value.trim(),
+      invoice_no: el.querySelector('.d_inv').value.trim(),
+      container_no: el.querySelector('.d_cont').value.trim(),
+      claim_date: el.querySelector('.d_date').value.trim(),
+    };
+    const patch = {};
+    for (const k of Object.keys(want)) if (want[k] !== String(c[k] == null ? '' : c[k])) patch[k] = want[k];
+    if (!Object.keys(patch).length) { why.textContent = 'Nothing changed.'; return; }
+    // The claim is found by container OR invoice. Blanking both would leave
+    // a row nothing can identify, on the page or on the note.
+    if (!want.container_no && !want.invoice_no) {
+      why.textContent = 'Keep at least a container number or an invoice number.'; return;
+    }
+    btn.disabled = true; why.textContent = '';
+    try {
+      await api('/api/claims/' + c.id + '/edit', patch);
+      savedClaim(c.id);
+      toast('Details saved.', 'ok');
+      await load();
+    } catch (e) { why.textContent = e.message || 'Could not save that.'; }
+    finally { btn.disabled = false; }
+  };
 
   el.querySelector('.f_save').onclick = async () => {
     try {

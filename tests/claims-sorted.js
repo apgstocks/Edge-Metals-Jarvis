@@ -451,6 +451,91 @@ section('G2 — the party pickers: suppliers and customers she has traded with')
 }
 
 // ══════════════════════════════════════════════════════════════════════════
+section('G3 — the details can be corrected after the fact');
+// ══════════════════════════════════════════════════════════════════════════
+// Apsara, 2026-10-21: "Add a option to change teh details later like
+// supplier,customer,container number etc.."
+//
+// POST /api/claims/:id/edit has ALWAYS allowed customer, supplier,
+// invoice_no, container_no and claim_date. The page offered a control for
+// exactly one of them — supplier, buried in Recover. Route permitted, screen
+// silent, which is #152's shape: the permission existed and could not be used.
+{
+    const http3 = require('http');
+    const { createApi } = require(path.join(ROOT, 'api'));
+    const app3 = createApi();
+    const srv3 = await new Promise((r) => { const x = app3.listen(0, '127.0.0.1', () => r(x)); });
+    const b3 = 'http://127.0.0.1:' + srv3.address().port;
+    const call = (method, p2, body, sid) => new Promise((resolve, reject) => {
+        const data = body == null ? null : JSON.stringify(body);
+        const headers = {};
+        if (data) { headers['Content-Type'] = 'application/json'; headers['Content-Length'] = Buffer.byteLength(data); }
+        if (sid) headers.Authorization = 'Bearer ' + sid;
+        const r2 = http3.request(b3 + p2, { method, headers }, (res) => {
+            let raw = ''; res.on('data', (c2) => { raw += c2; });
+            res.on('end', () => { let j = null; try { j = JSON.parse(raw); } catch (e) {} resolve({ status: res.statusCode, json: j }); });
+        });
+        r2.on('error', reject); if (data) r2.write(data); r2.end();
+    });
+
+    try {
+        const sid = ((await call('POST', '/login', { password: process.env.ADMIN_PASSWORD })).json || {}).sid;
+        const c = await mk({ container_no: 'WRONG0001', customer: '', supplier: '' });
+        const keyBefore = claims.get(c.id).key;
+
+        const res = await call('POST', `/api/claims/${c.id}/edit`, {
+            customer: 'Taewon', supplier: 'Ace Metals',
+            container_no: 'MSNU2238929', invoice_no: '26JY52',
+        }, sid);
+        ck('the edit route accepts all four', res.status === 200, `${res.status} ${JSON.stringify(res.json)}`);
+
+        const after = claims.get(c.id);
+        ck('  customer saved', after.customer === 'Taewon', after.customer);
+        ck('  supplier saved', after.supplier === 'Ace Metals', after.supplier);
+        ck('  container saved', after.container_no === 'MSNU2238929', after.container_no);
+        ck('  invoice saved', after.invoice_no === '26JY52', after.invoice_no);
+
+        // THE ONE THAT COULD HAVE BITTEN. The claim's `key` is built from
+        // invoice+container and is what groups it on the page. If update()
+        // did not recompute it, a renamed container would keep grouping
+        // under the OLD number — the claim would look moved and not be.
+        // Case-insensitive: keyOf runs the parts through norm(), which does
+        // NOT lower-case them. The first version of this check looked for a
+        // lower-case key and failed on correct code — the re-key had worked
+        // all along (INVERWLYV|WRONG0001 -> 26JY52|MSNU2238929).
+        ck('  and the claim RE-KEYS to the new container',
+           after.key !== keyBefore && after.key.toLowerCase().includes('msnu2238929'),
+           `${keyBefore} -> ${after.key}`);
+        ck('    the old container is gone from the key',
+           !after.key.toLowerCase().includes('wrong0001'), after.key);
+
+        // ── THE SCREEN HAS THE CONTROL ──────────────────────────────────
+        const HTML3 = fs.readFileSync(path.join(ROOT, 'dashboard/claims.html'), 'utf8');
+        ck('there is a Claim details section', /data-sec="details"/.test(HTML3));
+        for (const [cls, what] of [['d_cust', 'customer'], ['d_sup', 'supplier'],
+                                   ['d_inv', 'invoice no'], ['d_cont', 'container no'],
+                                   ['d_date', 'claim date']]) {
+            ck(`  a box for the ${what}`, HTML3.includes(cls), `.${cls} missing`);
+        }
+        ck('  with a Save that posts to the edit route',
+           /d_save/.test(HTML3) && /\/edit', patch\)/.test(HTML3));
+
+        // Only what changed is sent: a blanket rewrite would silently
+        // overwrite fields she never touched.
+        ck('  and it sends ONLY the changed fields',
+           /if \(want\[k\] !== String\(c\[k\] == null \? '' : c\[k\]\)\) patch\[k\] = want\[k\]/.test(HTML3),
+           'sending the whole form rewrites fields she did not edit');
+        ck('  refuses to blank both identifiers',
+           /Keep at least a container number or an invoice number/.test(HTML3),
+           'a claim with neither cannot be identified on the page or the note');
+        ck('  and the two party boxes reuse the pickers',
+           /class="d_cust" list="n_custList"/.test(HTML3) && /class="d_sup" list="n_supList"/.test(HTML3));
+    } finally {
+        await new Promise((r) => srv3.close(r));
+    }
+}
+
+// ══════════════════════════════════════════════════════════════════════════
 section('G — and the controls are on the page');
 // ══════════════════════════════════════════════════════════════════════════
 // scripts/check-route-reach.js will NOT catch a gap here: POST

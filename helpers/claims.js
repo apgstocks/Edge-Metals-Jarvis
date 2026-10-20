@@ -409,6 +409,26 @@ async function assess(id, fields = {}, by = 'manager') {
             // contaminant worth MORE than the grade she paid for is not a
             // loss, and a negative line would quietly reduce the total.
             if (worth !== null && worth > paid) {
+                // ── SAY WHAT IT ACTUALLY LOOKS LIKE ──────────────────────
+                // Apsara, 2026-10-21, hit this on her real screen: "AL
+                // WHEELS DIRTY is priced above what Edge paid (1.38 per LB)
+                // — that is not a loss". True, and useless: she had typed
+                // 38,169 — the WEIGHT — into the rate box, because the
+                // table header named the wrong unit and sat over the wrong
+                // column.
+                //
+                // 38,169 against $1.38 is not a pricing judgement, it is
+                // twenty-seven THOUSAND times the rate. A figure that far
+                // out is a field mix-up, and the message should say which
+                // field rather than describe the arithmetic. The weight is
+                // named back to her so the swap is obvious.
+                const ratio = paid > 0 ? worth / paid : 0;
+                if (ratio > 20) {
+                    throw new Error(`"${type}": ${worth} looks like a WEIGHT, not a rate — it is `
+                        + `${Math.round(ratio)}x the ${paid} per ${paidUnit} Edge paid. The boxes are `
+                        + `how much came out of the load, then what that material is worth per ${paidUnit}`
+                        + (w !== null ? ` — did you mean ${worth} ${unit} at some rate?` : '.'));
+                }
                 throw new Error(`"${type}" is priced above what Edge paid (${paid} per ${paidUnit}) — that is not a loss`);
             }
 

@@ -171,11 +171,23 @@ section('F2 — a rate per pound against a claim in tonnes');
 
     const b = report.build({ supplier: 'Calderon' });
     const l = b.lines.find((x) => x.container_no === 'TCNU1000001');
-    ck('the rate is converted to per-MT: $0.81/LB x 2,204.62262 = $1,785.74/MT', l && l.rate_unit === 'MT' && Math.abs(l.rate - 1785.74) < 0.011 && l.rate_from === '$0.81/LB', l && JSON.stringify([l.rate, l.rate_unit, l.rate_from]));
+    // ── REVERSED 2026-10-21, AT HER INSTRUCTION ──────────────────────────
+    // Apsara: "If i selected it as lb .i want your rate to be in lb only not
+    // in mt". That undoes her own 2026-10-14 request ("if price of supplier
+    // is in cents, i want it to be converted to 2204.62 (mt)"), which is why
+    // these checks pinned the conversion. They are turned round rather than
+    // deleted: the rate is still guarded, now against being converted.
+    //
+    // What drove the reversal: the sorted breakdown works in the claim's own
+    // unit, so the document carried $3,042.38/MT in the table and $1.38/LB
+    // below it, both headed "Your rate".
+    ck('the rate stays in the unit it was recorded in: $0.81/LB', l && l.rate_unit === 'LB' && Math.abs(l.rate - 0.81) < 0.0001, l && JSON.stringify([l.rate, l.rate_unit, l.rate_from]));
+    ck('  and there is no "from" line, because nothing was converted', l && l.rate_from === '', l && JSON.stringify(l.rate_from));
     ck('the claim\'s own weights are NOT converted', l.shortage === 1 && l.unit === 'MT', { s: l.shortage, u: l.unit });
 
     const html = report.toHtml(b);
-    ck('the document prints the per-MT rate with the original beside it', /\$1,785\.74\/MT/.test(html) && /from \$0\.81\/LB/.test(html));
+    ck('the document prints the rate per LB', /\$0\.81\/LB/.test(html));
+    ck('  and never converts it to MT', !/\$1,785\.74\/MT/.test(html) && !/from \$0\.81\/LB/.test(html));
     ck('and the rate in his own unit', /\$0\.81\/LB/.test(html));
     ck('the three numbers reconcile on the page', Math.abs(2204.62262 * 0.81 - 1785.74) < 0.01);
     // The FIGURES still reconcile — asserted three lines up — and that is
@@ -199,14 +211,28 @@ section('F2b — cents per lb, weights in pounds: rate to per-MT, quantity to MT
     await claims.raiseRecovery(c.id, { our_claim: 1125.67 }, 'test');
     const b = report.build({ supplier: 'Cents Co' });
     const l = b.lines[0];
-    ck('1,521.19 lb short is taken to MT: 0.690 MT', Math.abs(l.qty_mt - 0.69) < 0.0005 && Math.abs(l.charge_qty - 0.69) < 0.0005, JSON.stringify([l.qty_mt, l.charge_qty]));
-    ck('$0.74/lb becomes $1,631.42/MT, original shown', l.rate_unit === 'MT' && Math.abs(l.rate - 1631.42) < 0.011 && l.rate_from === '$0.74/LB', JSON.stringify([l.rate, l.rate_from]));
+    // qty_mt is still computed and still correct; it is simply no longer
+    // what the rate is multiplied by. charge_qty is null here because the
+    // claim's weights and the rate are BOTH in LB — there is nothing to
+    // reconcile, so nothing is printed.
+    ck('1,521.19 lb is still 0.690 MT where that is asked for', Math.abs(l.qty_mt - 0.69) < 0.0005, JSON.stringify(l.qty_mt));
+    ck('  but no reconciling quantity is printed when the units already agree',
+       l.charge_qty === null, JSON.stringify(l.charge_qty));
+    ck('$0.74/lb stays $0.74/LB', l.rate_unit === 'LB' && Math.abs(l.rate - 0.74) < 0.0001, JSON.stringify([l.rate, l.rate_unit]));
+    // THE ONE THAT NEARLY SHIPPED BROKEN. The reconciliation multiplied
+    // qty_mt by the rate; with a per-LB rate that is out by 2,204, nothing
+    // would ever reconcile, and the rate would have been stripped off EVERY
+    // line — silently, with every other figure still correct.
+    ck('  and the rate SURVIVES the reconciliation', l.rate !== null,
+       'rate x quantity must be computed in the rate\'s own unit');
     ck('rate x MT quantity reconciles with the amount, so the rate stays on the line', l.rate !== null && b.notReconciled.length === 0);
     const html = report.toHtml(b);
-    // The two FIGURES are the point of this check and still hold; the third
-    // clause pinned the removed prose and is inverted.
-    ck('the document still shows the per-MT rate and the MT quantity',
-        /\$1,631\.42\/MT/.test(html) && /on 0\.69 MT/.test(html));
+    // REVERSED with the rate: the document now prints $0.74/LB and no MT
+    // figure at all, because the weights beside it are in LB too.
+    ck('the document shows the rate per LB', /\$0\.74\/LB/.test(html));
+    ck('  with no per-MT rate anywhere', !/\$1,631\.42\/MT/.test(html));
+    ck('  and no tonne quantity nothing on the page is priced in',
+       !/on 0\.69 MT/.test(html));
     ck('  without the sentence explaining the conversion',
         !/converted to a rate per metric tonne/.test(html));
     ck('the buyer\'s rate ($0.90) is nowhere on the supplier document', !/0\.90|0\.9\b/.test(html));

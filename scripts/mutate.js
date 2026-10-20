@@ -2138,6 +2138,31 @@ const MUTATIONS = [
       find: '                parties: partyLists(rows),',
       to:   '                parties: { suppliers: [], customers: [] },' },
 
+    // ── "i want your rate to be in lb only not in mt", 2026-10-21 ────
+    // The reconciliation multiplies the quantity by the rate and strips the
+    // rate off the line when they disagree. With the rate now in LB, using
+    // qty_mt is out by 2,204 — nothing reconciles, the rate vanishes from
+    // EVERY line, and every other figure on the page stays correct. Silent.
+    { name: 'claim note: the rate is reconciled against a tonne quantity again',
+      file: 'helpers/claims/report.js', suites: ['claims-supplier-price'],
+      find: '            : claimPrice.toUnit(l.basis, l.unit, l.rate_unit);',
+      to:   '            : l.qty_mt;' },
+
+    // And the conversion itself coming back.
+    { name: 'claim note: the supplier rate is converted to MT again',
+      file: 'helpers/claims/report.js', suites: ['claims-supplier-price'],
+      find: '            return { rate: p, rate_unit: u, rate_from: \'\' };',
+      to:   '            return { rate: Math.round(p * (claimPrice.toUnit(1, \'MT\', u) || 1) * 100) / 100, rate_unit: \'MT\', rate_from: `${money(p)}/${u}` };' },
+
+    // ── "change teh details later like supplier,customer,container", 2026-10-21 ──
+    // Sending the whole form instead of the diff rewrites fields she never
+    // touched — on a verified claim, a silent overwrite of the container
+    // number is an edit nobody can trace back to a keystroke.
+    { name: 'claim details: the whole form is sent, not just what changed',
+      file: 'dashboard/claims.html', suites: ['claims-sorted'],
+      find: "    for (const k of Object.keys(want)) if (want[k] !== String(c[k] == null ? '' : c[k])) patch[k] = want[k];",
+      to:   "    for (const k of Object.keys(want)) patch[k] = want[k];" },
+
     // ── "how do i know material are this", 2026-10-21 ────────────────
     // The pane collects the evidence and drops it on the way out — the
     // field exists on the record, so nothing errors and the claim simply
