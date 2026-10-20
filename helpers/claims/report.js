@@ -466,28 +466,30 @@ function toHtml(b) {
 body{margin:0;font-family:"Helvetica Neue",Helvetica,Arial,sans-serif;color:#1a1a1a;font-size:8.6pt;line-height:1.45}
 .mono{font-family:"SF Mono",Menlo,Consolas,monospace;font-variant-numeric:tabular-nums}
 .r{text-align:right}.strong{font-weight:700}
-/* ── A FILLED MASTHEAD ────────────────────────────────────────────────
-   Apsara, 2026-10-21: "Fill the top".
+/* ── A FILLED MASTHEAD, INSIDE THE PAGE BOX ───────────────────────────
+   Apsara, 2026-10-21: "Fill the top" — then, on the PDF: "WHat the hell".
 
-   The band bleeds to the page edges with a negative margin against the
-   body's padding, so it reads as a letterhead rather than a tinted box
-   floating inside a margin.
+   The first version bled to the paper edges with margin:-14mm -12mm against
+   @page's 14mm 12mm. In a browser that is fine, and it looked right in the
+   preview. In a PRINT context it is not: Chromium clips everything outside
+   the page margin box, and the band's own text went with it — EDGE METALS
+   INC and CLAIM REPORT sheared off at the top, the reference cut off at the
+   right. Every figure on the page was correct; the letterhead was
+   decapitated.
 
-   printBackground is already true in toPdf, so the fill survives into the
-   PDF; print-color-adjust is belt and braces for the browser-print path,
-   where Chromium strips backgrounds by default and would hand her a white
-   band with white text on it.
+   Full bleed in Chromium needs @page { margin: 0 } with every margin moved
+   onto the content, which costs the per-page margins from page two onward
+   of a multi-container report. Not worth it for a tint.
 
-   NO BACKTICKS IN THIS COMMENT. The whole stylesheet lives inside a JS
-   template literal, so a backtick here terminates it and the file stops
-   parsing — the same bug that broke 02-dashboard-bookings.js earlier.
+   So the band fills the CONTENT width and stops at the margin. Nothing can
+   be clipped because nothing sits outside the box.
 
-   THE NEGATIVE MARGIN MUST MATCH @page, which is 14mm 12mm — 14 top and
-   bottom, 12 left and right. The first draft used -14mm on all four and
-   would have hung 2mm off each page edge: a horizontal overflow Chromium
-   answers with a clipped band or a stray second page. */
+   AND THE LESSON, left where the next person will need it: this file renders
+   to PDF. A browser preview does not exercise @page at all, so a change to
+   the masthead, the margins, or anything full-width must be checked on the
+   generated PDF — not on the HTML. */
 header{display:flex;align-items:flex-start;gap:20px;background:#2E6DA4;color:#fff;
-       margin:-14mm -12mm 0;padding:11mm 12mm 9mm;
+       padding:7mm 7mm 6mm;
        -webkit-print-color-adjust:exact;print-color-adjust:exact}
 header .co{font-size:15pt;font-weight:800;letter-spacing:.02em;color:#fff}
 header .sub{font-size:8pt;color:#D9E8F5;margin-top:2px}
@@ -525,7 +527,15 @@ tfoot td{border-top:2px solid #2E6DA4;border-bottom:0;padding-top:7px;font-weigh
 
    The image block holds its height whether or not the file is readable
    (helpers/signature.js returns an empty block of the same size), so the
-   rule does not jump up the page when the signature is missing. */
+   rule does not jump up the page when the signature is missing.
+
+   2026-10-21, second pass: making .sigimg a block ABOVE .line was not
+   enough. .sign is a flex ROW with space-between, so the image and the
+   rule were SIBLINGS — the image landed in the middle of the page and the
+   rule on the right, and the signature was beside the line, not on it.
+   .sigcol is the column that makes "above" mean above: the two share one
+   190px stack, so they move together and cannot drift apart again. */
+.sign .sigcol{width:190px}
 .sign .sigimg{width:190px;margin-top:30px}
 .sign .line{border-top:1px solid #2E6DA4;width:190px;padding-top:4px;font-size:8pt;color:#555}
   /* The sorted-contaminant breakdown. A SUB-table: lighter than the main
@@ -583,8 +593,10 @@ ${details}
 
 <div class="sign">
   <div class="for">For <strong>EDGE METALS INC</strong></div>
-  <div class="sigimg">${signature.signatureBlockHtml({ height: '40px', maxHeight: '36px', justify: 'flex-start', marginBottom: '0' })}</div>
-  <div class="line">${esc(SIGNATORY)}<span class="sub2">Authorised signatory</span></div>
+  <div class="sigcol">
+    <div class="sigimg">${signature.signatureBlockHtml({ height: '40px', maxHeight: '36px', justify: 'flex-start', marginBottom: '0' })}</div>
+    <div class="line">${esc(SIGNATORY)}<span class="sub2">Authorised signatory</span></div>
+  </div>
 </div>
 </body></html>`;
 }
