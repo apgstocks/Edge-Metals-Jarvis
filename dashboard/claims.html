@@ -755,7 +755,11 @@ function claimCard(c, i, g){
   // nothing to us, claim it in full" — so the box is left empty rather than
   // pre-filled with 0, which would read as a rate she typed.
   const sortedRow = (l, defUnit) => '<tr class="s_row">' +
-      '<td><input class="s_type" value="' + esc((l && l.type) || '') + '" placeholder="e.g. Clad wheel" style="width:100%"></td>' +
+      // Apsara: "how do i know material are this". Her own item types are
+      // offered — the same list the load and inventory forms use, which
+      // already holds "Al rims(Dirty)" and "Chrome". Free text still works:
+      // a contaminant can appear that she has never bought.
+      '<td><input class="s_type" list="s_matList" autocomplete="off" value="' + esc((l && l.type) || '') + '" placeholder="e.g. Clad wheel" style="width:100%"></td>' +
       '<td><input class="num s_w" inputmode="decimal" value="' + esc(l && l.weight != null ? l.weight : '') + '" placeholder="0" style="width:90px; text-align:right"></td>' +
       '<td><input class="num s_worth" inputmode="decimal" value="' + esc(l && l.worth != null ? l.worth : '') + '" placeholder="in full" style="width:90px; text-align:right"></td>' +
       '<td><select class="s_wu">' + unitOpt((l && l.worth_unit) || defUnit) + '</select></td>' +
@@ -874,6 +878,20 @@ function claimCard(c, i, g){
             '<button class="btn s_add" type="button" style="padding:3px 10px; font-size:11px;">Add another line</button>' +
             '<span class="hint s_total" style="margin-left:10px"></span>' +
           '</div>' +
+          '<datalist id="s_matList">' + (STATE.materials || []).map((m) => '<option value="' + esc(m) + '"></option>').join('') + '</datalist>' +
+          // ── HOW DO YOU KNOW IT IS CLAD WHEEL? ────────────────────────
+          // Apsara: "how do i know material are this". The claim already
+          // had the answer and this pane was not asking it — the same
+          // chips the contamination pane uses, with the same STRENGTH note
+          // underneath, which for a sorted claim is the one that matters:
+          // "Sorted and weighed" is rated Medium, "their own sort — ask to
+          // witness it or re-weigh". A supplier will say exactly that, and
+          // she should read it here first rather than in his reply.
+          '<div class="lede2" style="margin-top:12px">How do you know it is this material?</div>' +
+          '<div class="chips2 f_meas" style="margin-bottom:4px" role="radiogroup" aria-label="How it was measured">' +
+            MEASURED.map(m => '<button type="button" role="radio" aria-checked="' + (pk.measured_by===m[0]) + '" data-m="' + m[0] + '" class="' + (pk.measured_by===m[0] ? 'sel' : '') + '">' + m[1] + '</button>').join('') +
+          '</div>' +
+          '<div class="hint s_ev" style="margin-top:0"></div>' +
           '<div class="actions"><button class="btn go f_assess" data-kind="sorted" type="button">Confirm the assessment</button><span class="hint s_why" style="margin:0"></span></div>' +
         '</div>' +
 
@@ -1035,6 +1053,17 @@ function renderCalc(el){
     '<div><span class="k">Weight that was not metal</span><span class="v ' + (cc.weight===null?'muted':'') + '">' + (cc.weight === null ? '—' : cc.weight.toFixed(3) + ' ' + f.unit) + '</span></div>' +
     '<div><span class="k">Fair claim, by our numbers</span><span class="v ' + (cc.amount===null?'muted':'hi') + '">' + (cc.amount === null ? '—' : money(cc.amount)) + '</span>' + gapLine(cc.amount, numOf(c.stated_claim_amount)) + '</div>' +
     '<div><span class="k">Evidence strength</span><span class="v ' + (ev ? ev[1] : 'muted') + '">' + (ev ? ev[0] : '—') + '</span><span class="s2">' + (ev ? esc(ev[2]) : 'say how it was measured') + '</span></div>';
+  // The SAME strength note under the sorted pane's chips. `ev` is already
+  // computed from pk.measured_by two lines up, so this is one more place to
+  // print it, not a second opinion about what the evidence is worth. For a
+  // sorted claim it is the sentence that matters: "Sorted and weighed" is
+  // rated Medium — "their own sort — ask to witness it or re-weigh" — which
+  // is precisely what a supplier will say back.
+  if (el.querySelector('.s_ev')) {
+    el.querySelector('.s_ev').innerHTML = ev
+      ? '<b class="' + ev[1] + '">' + ev[0] + '</b> — ' + esc(ev[2])
+      : 'Say how it was measured — a claim he cannot check is a claim he queries.';
+  }
   const cWhy = !f.unit ? 'Pick the unit first.' : numOf(el.querySelector('.f_cinv').value) === null ? 'The net weight invoiced is needed.'
     : numOf(el.querySelector('.f_apct').value) === null ? 'Say what share Edge accepts.' : '';
   el.querySelector('.c_why').textContent = cWhy;
@@ -1085,7 +1114,11 @@ function wireClaim(c){
   });
   el.querySelectorAll('.f_meas button').forEach(b => b.onclick = () => {
     pk.measured_by = b.dataset.m;
-    el.querySelectorAll('.f_meas button').forEach(x => { const on = x === b; x.classList.toggle('sel', on); x.setAttribute('aria-checked', on); });
+    // BY data-m, NOT by identity. There are two of these chip rows now —
+    // contamination and sorted — showing ONE value, so clicking in one must
+    // light the matching chip in the other. Comparing x === b would leave
+    // the other row showing a different answer from the one being saved.
+    el.querySelectorAll('.f_meas button').forEach(x => { const on = x.dataset.m === b.dataset.m; x.classList.toggle('sel', on); x.setAttribute('aria-checked', on); });
     renderCalc(el);
   });
   renderCalc(el);
@@ -1194,6 +1227,9 @@ function wireClaim(c){
       paid_price_unit: el.querySelector('.f_spaidUnit').value,
       invoice_weight: numOf(el.querySelector('.f_sinv').value),
       sorted_lines: readSortedLines(el),
+      // The evidence. helpers/claims.js already stores it for every kind;
+      // this pane simply had no control for it until now.
+      measured_by: pk.measured_by,
     });
     else Object.assign(body, {
       grade_sold: el.querySelector('.f_gsold').value.trim(), grade_received: el.querySelector('.f_grecv').value.trim(),
@@ -1353,14 +1389,48 @@ function wireClaim(c){
 }
 
 /* ── manual entry, prefilled when adding to a container already open ─────── */
+// Options for the party datalists. STATE.parties comes from GET /api/claims
+// (helpers/claims/routes.js partyLists) — suppliers off her bills, customers
+// off her sales, plus anyone already named on a claim.
+//
+// An empty list is not an error and is not announced: it renders no options
+// and the box stays an ordinary text field, which is exactly what it was
+// before. A brand-new Jarvis has no trading history to offer.
+function partyOptions(which) {
+  const list = (STATE.parties && STATE.parties[which]) || [];
+  return list.map((n) => '<option value="' + esc(n) + '"></option>').join('');
+}
+
 function openNew(pre){
   pre = pre || {};
   const wrap = document.createElement('div');
   wrap.className = 'modal';
   wrap.innerHTML = '<div class="box"><h3>' + (pre.container_no ? 'Another claim on ' + esc(pre.container_no) : 'Claim that came in by phone or WhatsApp') + '</h3>' +
     '<div class="grid">' +
-      '<label class="f">Customer<input id="n_cust" value="' + esc(pre.customer||'') + '"></label>' +
-      '<label class="f">Supplier<input id="n_sup"></label>' +
+      // ── PICK FROM WHO SHE HAS TRADED WITH, OR TYPE A NEW ONE ──────────
+      // Apsara, 2026-10-21: "you have list of suppliers and customers.show
+      // that as drop down in claims.then match as i type".
+      //
+      // <datalist> is the pattern already used on Edge Inventory and
+      // QuickBooks: the browser filters as she types, on every device, with
+      // no dropdown of our own to maintain — AND it still accepts a name
+      // that is not on the list, which matters because a claim can land
+      // against a supplier before his first bill does.
+      //
+      // The SUPPLIER one is not only convenience. helpers/claimPrice.js
+      // finds the price Edge paid by matching this name against the bill;
+      // a different spelling means no price, and a sorted claim cannot be
+      // assessed without one. Offering the bill's own spellings keeps that
+      // join working.
+      //
+      // list="..." ON THE INPUT, not just a <datalist> beside it. Edge
+      // Inventory has had a populated #suplist since it was written and no
+      // input pointing at it, so that dropdown has never once opened —
+      // which is how a control looks finished and does nothing.
+      '<label class="f">Customer<input id="n_cust" list="n_custList" autocomplete="off" value="' + esc(pre.customer||'') + '">' +
+        '<datalist id="n_custList">' + partyOptions('customers') + '</datalist></label>' +
+      '<label class="f">Supplier<input id="n_sup" list="n_supList" autocomplete="off">' +
+        '<datalist id="n_supList">' + partyOptions('suppliers') + '</datalist></label>' +
       '<label class="f">Invoice no<input id="n_inv" class="mono" value="' + esc(pre.invoice_no||'') + '"></label>' +
       '<label class="f">Container no<input id="n_cont" class="mono" value="' + esc(pre.container_no||'') + '"></label>' +
       '<label class="f">What they are asking<input id="n_amt" class="num" inputmode="decimal"></label>' +
@@ -1892,6 +1962,12 @@ async function load(announce){
     STATE.claims = j.claims || [];
     STATE.stats = j.stats || {};
     STATE.kinds = j.kinds || [];
+    // Suppliers and customers for the New-claim pickers. Defaulted rather
+    // than assumed: an older server that does not send `parties` leaves the
+    // two boxes as plain text fields instead of throwing on page load.
+    STATE.parties = j.parties || { suppliers: [], customers: [] };
+    // Her own item types, for the Material box on a sorted claim.
+    STATE.materials = j.materials || [];
     const wide = !(window.matchMedia && window.matchMedia('(max-width:1020px)').matches);
     if (!containers().some(g => g.key === STATE.sel)) STATE.sel = wide ? ((visible()[0] || {}).key || null) : null;
     renderChips(); renderStrip(); renderTabs(); renderRows(); renderDetail();

@@ -32,6 +32,33 @@ function mount(app, cfg) {
 
     // Everything the page needs in one call — rows plus the totals, so the
     // header cannot disagree with the table below it.
+    // Union of three sources, her spelling preserved, deduped case-
+    // insensitively and sorted. Each source is wrapped on its own: one
+    // unreadable store costs that store's names, not the whole list.
+    const safely2 = (fn) => { try { return fn(); } catch (e) { return null; } };
+
+    function partyLists(rows) {
+        const dedupe = (names) => {
+            const seen = new Map();
+            for (const n of names) {
+                const s = String(n || '').trim();
+                if (s && !seen.has(s.toLowerCase())) seen.set(s.toLowerCase(), s);
+            }
+            return [...seen.values()].sort((a, b) => a.localeCompare(b));
+        };
+        const safely = (fn) => { try { return fn() || []; } catch (e) { return []; } };
+        const sup = safely(() => require('../supplierAccount').suppliers());
+        const cus = safely(() => {
+            const sales = require('../sales');
+            return (sales.facets(sales.list()) || {}).customer || [];
+        });
+        const onClaims = (f) => (rows || []).map((c) => c[f]).filter(Boolean);
+        return {
+            suppliers: dedupe([...sup, ...onClaims('supplier')]),
+            customers: dedupe([...cus, ...onClaims('customer')]),
+        };
+    }
+
     app.get('/api/claims', (req, res) => {
         try {
             const rows = claims.list();
@@ -46,6 +73,47 @@ function mount(app, cfg) {
                 statuses: claims.STATUSES,
                 kinds: vocabulary(),
                 units: claims.UNITS,
+                // ── WHO SHE HAS ACTUALLY TRADED WITH ─────────────────────
+                // Apsara, 2026-10-21: "you have list of suppliers and
+                // customers.show that as drop down in claims.then match as i
+                // type".
+                //
+                // Sent with the list the page already fetches rather than on
+                // a route of its own: one request, nothing new to reach, and
+                // the names are there before she opens the form.
+                //
+                // THE SOURCES ARE THE ONES THE REST OF THE CLAIM DEPENDS ON.
+                // Suppliers come from helpers/supplierAccount.js, built off
+                // bills and bill payments — whose own comment says it exists
+                // "so the picker offers somebody she has actually traded
+                // with rather than a free-text box". That matters here more
+                // than convenience: helpers/claimPrice.js finds the price
+                // Edge paid by matching the supplier on the claim against
+                // the supplier on the BILL. A name typed differently from
+                // the bill means no price found, and a sorted claim with no
+                // price cannot be assessed at all. Offering the bill's own
+                // spellings is what keeps that join working.
+                //
+                // Customers come from helpers/sales.js facets — "the
+                // customers she has invoiced are the customers offered".
+                //
+                // Names already used on CLAIMS are merged in last, so a
+                // party she entered by hand last week is still offered even
+                // if they have no bill yet. Never fatal: a party list that
+                // cannot be built must not stop her reading her claims.
+                parties: partyLists(rows),
+                // ── THE MATERIALS SHE ALREADY TRADES ─────────────────────
+                // Apsara, 2026-10-21: "how do i know material are this".
+                //
+                // Her own item types — the same list the load and inventory
+                // forms offer — so the breakdown is filled from names she
+                // already uses rather than invented per claim. Her list
+                // genuinely holds "Al rims(Dirty)" and "Chrome", which are
+                // exactly the words this claim needs.
+                //
+                // Free text is still allowed: a contaminant can turn up that
+                // she has never bought and will never stock.
+                materials: safely2(() => require('../itemTypes').loadCustomItemTypes()) || [],
             });
         } catch (e) { bad(res, e.message, 500); }
     });

@@ -314,6 +314,143 @@ section('F — the branch that used to be a catch-all');
 }
 
 // ══════════════════════════════════════════════════════════════════════════
+section('G2 — the party pickers: suppliers and customers she has traded with');
+// ══════════════════════════════════════════════════════════════════════════
+// Apsara, 2026-10-21: "you have list of suppliers and customers.show that as
+// drop down in claims.then match as i type".
+//
+// Not only convenience. helpers/claimPrice.js finds the price Edge paid by
+// matching the supplier on the CLAIM against the supplier on the BILL, so a
+// name typed differently from the bill means no price found — and a sorted
+// claim with no price cannot be assessed at all. Offering the bill's own
+// spellings is what keeps that join working, which is why this is tested
+// against the ROUTE's output rather than against the page's markup.
+{
+    const http2 = require('http');
+    const { createApi } = require(path.join(ROOT, 'api'));
+    const app2 = createApi();
+    const srv = await new Promise((r) => { const x = app2.listen(0, '127.0.0.1', () => r(x)); });
+    const base2 = 'http://127.0.0.1:' + srv.address().port;
+    const get = (p2, sid) => new Promise((resolve, reject) => {
+        const r2 = http2.request(base2 + p2, { method: 'GET', headers: sid ? { Authorization: 'Bearer ' + sid } : {} }, (res) => {
+            let raw = ''; res.on('data', (c) => { raw += c; });
+            res.on('end', () => { let j = null; try { j = JSON.parse(raw); } catch (e) {} resolve({ status: res.statusCode, json: j }); });
+        });
+        r2.on('error', reject); r2.end();
+    });
+    const post = (p2, body, sid) => new Promise((resolve, reject) => {
+        const data = JSON.stringify(body);
+        const r2 = http2.request(base2 + p2, { method: 'POST', headers: Object.assign(
+            { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(data) },
+            sid ? { Authorization: 'Bearer ' + sid } : {}) }, (res) => {
+            let raw = ''; res.on('data', (c) => { raw += c; });
+            res.on('end', () => { let j = null; try { j = JSON.parse(raw); } catch (e) {} resolve({ status: res.statusCode, json: j }); });
+        });
+        r2.on('error', reject); r2.write(data); r2.end();
+    });
+
+    try {
+        const sid = ((await post('/login', { password: process.env.ADMIN_PASSWORD })).json || {}).sid;
+
+        // A supplier known only from a BILL — never typed on a claim. This is
+        // the one that matters: it is the spelling claimPrice will match.
+        const bills = require(path.join(ROOT, 'helpers/bills'));
+        await bills.addBill({ supplier: 'Perez Alloys', container_no: 'TEST0001',
+            date: '2026-10-01', items: [{ description: 'Al wheel dirty', weight: 1000, price: 0.8 }] })
+            .catch(() => {});
+
+        const r = await get('/api/claims', sid);
+        ck('the claims route answers', r.status === 200, String(r.status));
+        const parties = (r.json || {}).parties;
+        ck('it carries a party list', !!parties && Array.isArray(parties.suppliers) && Array.isArray(parties.customers),
+           JSON.stringify(parties));
+
+        ck('a supplier known only from a bill is offered',
+           (parties.suppliers || []).includes('Perez Alloys'),
+           'claimPrice matches the claim\'s supplier against the BILL\'s — if the '
+           + 'picker does not offer the bill spelling, she types one that finds no price');
+
+        // Anyone already named on a claim is offered too, bill or no bill.
+        ck('a supplier used on a claim is offered',
+           (parties.suppliers || []).includes('Ace Metals'), (parties.suppliers || []).join(', '));
+
+        // Deduped and sorted, her spelling kept.
+        const lower = (parties.suppliers || []).map((x) => x.toLowerCase());
+        ck('  no duplicates', new Set(lower).size === lower.length, lower.join(', '));
+        ck('  sorted', lower.join('|') === [...lower].sort().join('|'), lower.join(', '));
+        ck('  and nothing blank crept in', (parties.suppliers || []).every((x) => x && x.trim()),
+           JSON.stringify(parties.suppliers));
+
+        // ── THE PAGE MUST ACTUALLY ATTACH THEM ──────────────────────────
+        // A populated <datalist> with no input pointing at it never opens.
+        // dashboard/edge-inventory.html has had exactly that since it was
+        // written: #suplist is filled on every load and no input references
+        // it, so that dropdown has never worked. Asserted here so this one
+        // cannot ship the same way.
+        const HTML2 = fs.readFileSync(path.join(ROOT, 'dashboard/claims.html'), 'utf8');
+        for (const id of ['n_custList', 'n_supList']) {
+            ck(`${id} exists`, HTML2.includes(`<datalist id="${id}">`));
+            ck(`  and an input points at it`, HTML2.includes(`list="${id}"`),
+               'a datalist nothing references is a dropdown that never opens');
+        }
+        ck('the page reads the list the route sends', /STATE\.parties = j\.parties/.test(HTML2));
+
+        // ── "how do i know material are this" ───────────────────────────
+        // Two answers, both of which already existed in Jarvis and neither
+        // of which this pane was using.
+        //
+        // 1. WHICH material: her own item types, the same list the load and
+        //    inventory forms offer. Her real list holds "Al rims(Dirty)" and
+        //    "Chrome", so these are her words, not invented ones.
+        const mats = (r.json || {}).materials;
+        ck('the route sends her item types', Array.isArray(mats) && mats.length > 0,
+           JSON.stringify(mats));
+        ck('  the Material box offers them', /list="s_matList"/.test(HTML2));
+        ck('  and the datalist is built from them', /id="s_matList"[\s\S]{0,120}STATE\.materials/.test(HTML2));
+        ck('  free text still works — a contaminant she has never bought',
+           !/required/.test((HTML2.match(/class="s_type"[^>]*/) || [''])[0]),
+           'a closed list would refuse a material she has not traded before');
+
+        // 2. HOW she knows: the evidence. MEASURED/STRENGTH were on the
+        //    contamination pane only; a sorted claim is ENTIRELY a claim
+        //    about what the material turned out to be, so it needed them
+        //    more than contamination did.
+        const sortedPane = HTML2.slice(HTML2.indexOf('data-pane="sorted"'),
+                                       HTML2.indexOf('data-kind="sorted"'));
+        ck('the sorted pane asks how she knows', /How do you know it is this material/.test(sortedPane));
+        ck('  with the same four methods, not a new list', /MEASURED\.map/.test(sortedPane));
+        ck('  and shows what that evidence is worth in an argument',
+           /class="hint s_ev"/.test(sortedPane) && /STRENGTH\[pk\.measured_by\]/.test(HTML2));
+        // SCOPED TO THE SORTED BRANCH. The first version searched the whole
+        // file, and `measured_by: pk.measured_by` also appears in the
+        // CONTAMINATION branch — so gutting the sorted one still matched and
+        // the mutation SURVIVED. A check that can be satisfied by a different
+        // branch is not testing this branch.
+        const sortedSubmit = HTML2.slice(
+            HTML2.indexOf("else if (btn.dataset.kind === 'sorted')"),
+            HTML2.indexOf('else Object.assign(body, {'));
+        ck('  the sorted branch exists to scope this check',
+           sortedSubmit.length > 40 && sortedSubmit.includes('sorted_lines'),
+           'could not isolate the sorted submit branch — the checks below prove nothing');
+        ck('  the answer is SENT with the assessment', /measured_by: pk\.measured_by,/.test(sortedSubmit),
+           'the field exists on the record; without this the pane collects it and drops it');
+        ck('  along with the price and the lines',
+           /paid_price: numOf/.test(sortedSubmit) && /sorted_lines: readSortedLines/.test(sortedSubmit));
+
+        // Two chip rows now mirror ONE value. Clicking in one must light the
+        // other, or the row she is not looking at shows a different answer
+        // from the one being saved.
+        ck('the two chip rows stay in sync', /x\.dataset\.m === b\.dataset\.m/.test(HTML2),
+           'comparing x === b lights only the row she clicked');
+        ck('  and survives a server that does not send one',
+           /j\.parties \|\| \{ suppliers: \[\], customers: \[\] \}/.test(HTML2),
+           'an older server would otherwise throw on page load');
+    } finally {
+        await new Promise((r) => srv.close(r));
+    }
+}
+
+// ══════════════════════════════════════════════════════════════════════════
 section('G — and the controls are on the page');
 // ══════════════════════════════════════════════════════════════════════════
 // scripts/check-route-reach.js will NOT catch a gap here: POST

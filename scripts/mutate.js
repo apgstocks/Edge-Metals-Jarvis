@@ -2122,6 +2122,38 @@ const MUTATIONS = [
       find: '        req.setTimeout(2000, () => { req.destroy(); resolve(null); });',
       to:   '        ;' },
 
+    // ── "show that as drop down in claims.then match as i type", 2026-10-21 ──
+    // The failure mode is NOT a missing datalist — it is a datalist nothing
+    // points at, which renders, populates, and never opens.
+    // dashboard/edge-inventory.html has shipped exactly that since it was
+    // written (#suplist, filled every load, zero inputs referencing it).
+    { name: 'claims party picker: the datalist is populated but no input references it',
+      file: 'dashboard/claims.html', suites: ['claims-sorted'],
+      find: '\'<label class="f">Supplier<input id="n_sup" list="n_supList" autocomplete="off">\' +',
+      to:   '\'<label class="f">Supplier<input id="n_sup" autocomplete="off">\' +' },
+
+    // And the server half: no list sent, nothing to pick from.
+    { name: 'claims party picker: the route stops sending the party lists',
+      file: 'helpers/claims/routes.js', suites: ['claims-sorted'],
+      find: '                parties: partyLists(rows),',
+      to:   '                parties: { suppliers: [], customers: [] },' },
+
+    // ── "how do i know material are this", 2026-10-21 ────────────────
+    // The pane collects the evidence and drops it on the way out — the
+    // field exists on the record, so nothing errors and the claim simply
+    // has no answer to the question a supplier will ask first.
+    { name: 'sorted pane: measured_by is collected and never sent',
+      file: 'dashboard/claims.html', suites: ['claims-sorted'],
+      find: '      measured_by: pk.measured_by,',
+      to:   '      measured_by: undefined,' },
+
+    // Two chip rows, one value. Comparing by identity lights only the row
+    // she clicked, so the other shows a different answer from the one saved.
+    { name: 'sorted pane: the two evidence rows fall out of sync',
+      file: 'dashboard/claims.html', suites: ['claims-sorted'],
+      find: 'const on = x.dataset.m === b.dataset.m;',
+      to:   'const on = x === b;' },
+
     // ── "al wheel dirty ... clad wheel,chrome wheel,truck wheel", 2026-10-20 ──
     // The claim is weight x (price PAID - what the contaminant is worth), per
     // line. Three mutations, each a way the money goes wrong while the code
