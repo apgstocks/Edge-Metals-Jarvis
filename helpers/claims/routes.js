@@ -98,7 +98,16 @@ function mount(app, cfg) {
             const pick = ['assessment', 'weight_unit', 'invoice_weight', 'sell_price', 'sell_price_unit',
                 'contam_claimed_pct', 'contam_accepted_pct', 'findings', 'measured_by',
                 'grade_sold', 'grade_received', 'grade_weight', 'grade_price_sold', 'grade_price_received',
-                'quality_qty'];
+                'quality_qty',
+                // ── ADDED 2026-10-20 WITH THE 'sorted' ASSESSMENT ────────
+                // This `pick` list is a whitelist: a field the screen sends
+                // that is not named here is silently dropped, and the claim
+                // saves with the breakdown missing and no error anywhere.
+                // That is CLAUDE.md rule 3's exact failure — "the client
+                // sends paidVia and the route reads paid_via" — so these
+                // three went in at the same time as the branch that reads
+                // them, not afterwards.
+                'sorted_lines', 'paid_price', 'paid_price_unit'];
             const fields = {};
             for (const k of pick) if (b[k] !== undefined) fields[k] = b[k];
             const rec = await claims.assess(req.params.id, fields, b.by || 'manager');

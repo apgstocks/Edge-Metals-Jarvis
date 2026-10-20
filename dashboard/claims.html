@@ -521,6 +521,10 @@ const ASSESS = [
   { id:'contamination', label:'Foreign material' },
   { id:'grade',         label:'Grade downgrade' },
   { id:'quality',       label:'Quantity × rate' },
+  // Apsara, 2026-10-20: "we buy al wheel dirty.there would be claim on that
+  // like clad wheel,chrome wheel,truck wheel". Foreign material above carries
+  // ONE percentage and ONE rate; this one is a line per thing found.
+  { id:'sorted',        label:'Sorted by type' },
 ];
 const FINDINGS = [
   ['dirt','Dirt / soil'], ['rubber_plastic','Rubber / plastic'], ['iron_attached','Iron or steel attached'],
@@ -747,6 +751,18 @@ function claimCard(c, i, g){
   const fld = (label, cls, val, ph, extra) => '<label class="f">' + label + '<input class="num ' + cls + '" data-k="' + cls + '" inputmode="decimal" value="' + esc(val ?? '') + '" placeholder="' + esc(ph || '—') + '"' + (extra || '') + '></label>';
   const txt = (label, cls, val, ph) => '<label class="f">' + label + '<input class="' + cls + '" data-k="' + cls + '" value="' + esc(val ?? '') + '" placeholder="' + esc(ph || '') + '"></label>';
 
+  // One row of the sorted table. Blank `worth` is meaningful — it is "worth
+  // nothing to us, claim it in full" — so the box is left empty rather than
+  // pre-filled with 0, which would read as a rate she typed.
+  const sortedRow = (l, defUnit) => '<tr class="s_row">' +
+      '<td><input class="s_type" value="' + esc((l && l.type) || '') + '" placeholder="e.g. Clad wheel" style="width:100%"></td>' +
+      '<td><input class="num s_w" inputmode="decimal" value="' + esc(l && l.weight != null ? l.weight : '') + '" placeholder="0" style="width:90px; text-align:right"></td>' +
+      '<td><input class="num s_worth" inputmode="decimal" value="' + esc(l && l.worth != null ? l.worth : '') + '" placeholder="in full" style="width:90px; text-align:right"></td>' +
+      '<td><select class="s_wu">' + unitOpt((l && l.worth_unit) || defUnit) + '</select></td>' +
+      '<td class="s_amt" style="text-align:right; white-space:nowrap">' + (l && l.amount != null ? money(l.amount) : '—') + '</td>' +
+      '<td><button class="btn s_del" type="button" title="Remove this line" style="padding:1px 7px">&times;</button></td>' +
+    '</tr>';
+
   const assessed = c.claim_amount != null;
   const assessSummary = assessed ? money(c.claim_amount) + ' · ' + esc((ASSESS.find(x => x.id === (c.assessment || 'weight')) || {}).label || '') : 'not assessed yet';
 
@@ -830,6 +846,35 @@ function claimCard(c, i, g){
             '<label class="f">Rate is per<select class="f_qrateUnit" data-k="f_qrateUnit">' + unitOpt(c.sell_price_unit||c.stated_rate_unit||unit||'MT') + '</select></label>' +
           '</div><div class="calc c_q"></div>' +
           '<div class="actions"><button class="btn go f_assess" data-kind="quality" type="button">Confirm the assessment</button><span class="hint q_why" style="margin:0"></span></div>' +
+        '</div>' +
+
+        /* sorted: a dirty grade sorted into named contaminants, one line each */
+        '<div class="pane" data-pane="sorted"' + (a==='sorted'?'':' hidden') + '>' +
+          '<div class="lede2" style="margin-top:14px">A dirty grade sorted into what it really was. One line per thing found &mdash; ' +
+            'clad wheel, chrome wheel, truck wheel. Each line is claimed at <b>what you paid minus what it is actually worth</b>, ' +
+            'so a line with no rate is claimed in full.</div>' +
+          '<div class="grid">' +
+            fld('Price you paid this supplier, per unit', 'f_spaid',
+                c.paid_price != null ? c.paid_price : c.supplier_price, 'e.g. 0.85') +
+            '<label class="f">Paid price is per<select class="f_spaidUnit" data-k="f_spaidUnit">' +
+              unitOpt(c.paid_price_unit || c.supplier_price_unit || unit || 'LB') + '</select></label>' +
+            fld('Net weight invoiced (optional)', 'f_sinv', c.invoice_weight, 'stops more being sorted out than arrived') +
+          '</div>' +
+          '<table class="sortedT" style="width:100%; margin-top:10px; border-collapse:collapse; font-size:12px;">' +
+            '<thead><tr>' +
+              '<th style="text-align:left">What was found</th>' +
+              '<th style="text-align:right">Weight (' + esc(unit || 'LB') + ')</th>' +
+              '<th style="text-align:right">Worth per unit</th>' +
+              '<th>per</th><th style="text-align:right">Claim</th><th></th>' +
+            '</tr></thead><tbody class="s_rows">' +
+              ((c.sorted_lines && c.sorted_lines.length ? c.sorted_lines : [{},{},{}])
+                .map((l) => sortedRow(l, c.paid_price_unit || c.supplier_price_unit || unit || 'LB')).join('')) +
+            '</tbody></table>' +
+          '<div class="actions" style="margin-top:6px">' +
+            '<button class="btn s_add" type="button" style="padding:3px 10px; font-size:11px;">Add another line</button>' +
+            '<span class="hint s_total" style="margin-left:10px"></span>' +
+          '</div>' +
+          '<div class="actions"><button class="btn go f_assess" data-kind="sorted" type="button">Confirm the assessment</button><span class="hint s_why" style="margin:0"></span></div>' +
         '</div>' +
 
         '<div class="hint">Nothing here is filled in from the mail unless the mail said it in words.' +
@@ -1056,6 +1101,78 @@ function wireClaim(c){
       await load();
     } catch (e) { toast(e.message, 'bad'); }
   };
+  // ── READ THE TABLE, NOT A SHADOW COPY OF IT ─────────────────────────
+  // The rows are read out of the DOM at submit time rather than mirrored into
+  // STATE on every keystroke. One source of truth: a mirror that drifts from
+  // the boxes she is looking at is how a figure she did not type gets posted.
+  //
+  // An empty worth box stays undefined, NOT 0 — the server reads null as
+  // "worth nothing, claim in full", and 0 would mean the same thing by luck
+  // rather than on purpose.
+  function readSortedLines(scope) {
+    return Array.from(scope.querySelectorAll('.s_row')).map((tr) => {
+      const type = (tr.querySelector('.s_type').value || '').trim();
+      const w = numOf(tr.querySelector('.s_w').value);
+      const worthRaw = (tr.querySelector('.s_worth').value || '').trim();
+      const line = { type: type, weight: w };
+      if (worthRaw !== '') { line.worth = numOf(worthRaw); line.worth_unit = tr.querySelector('.s_wu').value; }
+      return line;
+    }).filter((l) => l.type || l.weight != null);   // blank rows are not lines
+  }
+
+  // The same arithmetic as the server, so she sees the figure before she
+  // commits it. Deliberately NOT a second implementation of the rules: it
+  // does no unit conversion and no refusals, and says so — the server is
+  // what decides, and anything it would reject shows as a dash here.
+  function paintSortedTotal(scope) {
+    const paid = numOf((scope.querySelector('.f_spaid') || {}).value);
+    const paidUnit = (scope.querySelector('.f_spaidUnit') || {}).value;
+    let total = 0, ok = paid != null && paid > 0;
+    Array.from(scope.querySelectorAll('.s_row')).forEach((tr) => {
+      const cell = tr.querySelector('.s_amt');
+      const w = numOf(tr.querySelector('.s_w').value);
+      const worthRaw = (tr.querySelector('.s_worth').value || '').trim();
+      const worth = worthRaw === '' ? 0 : numOf(worthRaw);
+      const sameUnit = tr.querySelector('.s_wu').value === paidUnit;
+      if (!ok || w == null || worth == null || !sameUnit || worth > paid) {
+        cell.textContent = '—';
+        if (ok && w != null && !sameUnit) ok = false;   // the server converts; this preview will not guess
+        return;
+      }
+      const amt = Math.round(w * (paid - worth) * 100) / 100;
+      cell.textContent = money(amt);
+      total = Math.round((total + amt) * 100) / 100;
+    });
+    const out = scope.querySelector('.s_total');
+    if (out) out.innerHTML = ok ? '<b>' + money(total) + '</b> to claim'
+      : 'Fill in the price you paid, and keep the rates in that same unit, to see the total here.';
+  }
+  el.querySelectorAll('.sortedT, .f_spaid, .f_spaidUnit').forEach((n) => {
+    n.addEventListener('input', () => paintSortedTotal(el));
+    n.addEventListener('change', () => paintSortedTotal(el));
+  });
+  if (el.querySelector('.s_add')) el.querySelector('.s_add').onclick = () => {
+    const body = el.querySelector('.s_rows');
+    const last = body.querySelector('.s_row');
+    const clone = last.cloneNode(true);
+    clone.querySelectorAll('input').forEach((i) => { i.value = ''; });
+    clone.querySelector('.s_amt').textContent = '—';
+    body.appendChild(clone);
+    clone.addEventListener('input', () => paintSortedTotal(el));
+    paintSortedTotal(el);
+  };
+  el.addEventListener('click', (ev) => {
+    const del = ev.target.closest && ev.target.closest('.s_del');
+    if (!del) return;
+    const rows = el.querySelectorAll('.s_row');
+    // Never leave none: an empty table reads as a broken screen, and the
+    // server refuses a claim with no lines anyway.
+    if (rows.length > 1) del.closest('.s_row').remove();
+    else del.closest('.s_row').querySelectorAll('input').forEach((i) => { i.value = ''; });
+    paintSortedTotal(el);
+  });
+  if (el.querySelector('.sortedT')) paintSortedTotal(el);
+
   el.querySelectorAll('.f_assess').forEach(btn => btn.onclick = async () => {
     const unit = (el.querySelector('.f_unit button.sel') || {}).dataset;
     const body = { assessment: btn.dataset.kind, weight_unit: unit ? unit.u : null };
@@ -1067,6 +1184,16 @@ function wireClaim(c){
     else if (btn.dataset.kind === 'quality') Object.assign(body, {
       quality_qty: numOf(el.querySelector('.f_qqty').value), sell_price: numOf(el.querySelector('.f_qrate').value),
       sell_price_unit: el.querySelector('.f_qrateUnit').value,
+    });
+    // ── EXPLICIT, BECAUSE THE LAST BRANCH IS GRADE ──────────────────────
+    // This chain ended in a bare `else` that sent grade fields. A new kind
+    // added without its own branch would have posted grade_sold and friends
+    // for a claim that has none — the same catch-all trap the server had.
+    else if (btn.dataset.kind === 'sorted') Object.assign(body, {
+      paid_price: numOf(el.querySelector('.f_spaid').value),
+      paid_price_unit: el.querySelector('.f_spaidUnit').value,
+      invoice_weight: numOf(el.querySelector('.f_sinv').value),
+      sorted_lines: readSortedLines(el),
     });
     else Object.assign(body, {
       grade_sold: el.querySelector('.f_gsold').value.trim(), grade_received: el.querySelector('.f_grecv').value.trim(),

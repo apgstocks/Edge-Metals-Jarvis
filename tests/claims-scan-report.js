@@ -156,9 +156,19 @@ section('E — the document itself');
         /raised against material supplied by you/.test(html) && !/>Customer</.test(html));
     ck('it does NOT print what Edge itself absorbs — that is not their business',
         !/absorb/i.test(html) && !/Claimed against Edge/i.test(html));
-    ck('it states that no unit conversion was applied', /No conversion has been applied/.test(html));
+    // ── INVERTED 2026-10-20 ───────────────────────────────────────────
+    // Apsara quoted four footer notes verbatim and said "Remove". These
+    // checks pinned their wording, so they are turned round rather than
+    // deleted: the document is still guarded, now against the lines coming
+    // BACK. The figures those notes explained are unchanged and still
+    // asserted above.
+    ck('the no-conversion note is gone, at her instruction', !/No conversion has been applied/.test(html));
     ck('it is a light, printable document, not the dashboard', !/--steel-900|#0C0E10/.test(html) && /@page/.test(html));
-    ck('it asks for a reply within a stated time', /within 14 days/.test(html));
+    // SHE REMOVED THE REPLY WINDOW. Worth knowing it is a commercial term,
+    // not decoration — with it gone the note sets no deadline for the
+    // supplier to answer, and claim age is the only pressure left (#158,
+    // "age itself is the escalation").
+    ck('the 14-day reply window is gone, at her instruction', !/within 14 days/.test(html));
 
     let gotHtml = null;
     const pdf = await report.toPdf(b, { renderer: async (h) => { gotHtml = h; return Buffer.from('%PDF-1.4 stub'); } });

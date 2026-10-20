@@ -146,6 +146,14 @@ function build(opts = {}) {
         grade_sold: c.grade_sold || '', grade_received: c.grade_received || '',
         grade_weight: num(c.grade_weight),
         quality_qty: nnum(c.quality_qty),
+        // ── THE SORTED BREAKDOWN, 2026-10-20 ─────────────────────────────
+        // Apsara: "we buy al wheel dirty.there would be claim on that like
+        // clad wheel,chrome wheel,truck wheel". The whole claim IS the
+        // breakdown, so a note without it is the unexplained number this
+        // file already warns about.
+        sorted_lines: Array.isArray(c.sorted_lines) ? c.sorted_lines : [],
+        sorted_weight: num(c.sorted_weight),
+        paid_price: num(c.paid_price), paid_price_unit: c.paid_price_unit || '',
         tolerance_pct: num(c.tolerance_pct), claimable_shortage: num(c.claimable_shortage),
         // `customer` stays in the JSON the PAGE reads (the report modal shows
         // it to her). The DOCUMENT never prints it — see toHtml.
@@ -226,28 +234,144 @@ function detailLine(l) {
         if (l.findings.length) bits.push('found: ' + l.findings.join(', ').toLowerCase());
         if (l.contam_accepted_pct !== null) bits.push(`${l.contam_accepted_pct}% of ${wt(l.invoice_weight, l.unit)} accepted as not metal (${wt(l.contaminated_weight, l.unit)})`);
         if (l.measured_by) bits.push('measured by: ' + l.measured_by.toLowerCase());
-        return bits.length ? `<li><span class="mono">${esc(l.container_no || l.invoice_no || '—')}</span> — ${esc(l.kind)}: ${esc(bits.join('; '))}.</li>` : '';
+        return bits.length ? `<li><span class="mono">${esc(l.container_no || '—')}</span> — ${esc(l.kind)}: ${esc(bits.join('; '))}.</li>` : '';
     }
     if (l.assessment === 'grade') {
         const bits = [];
         if (l.grade_sold || l.grade_received) bits.push(`sold as ${l.grade_sold || '—'}, received as ${l.grade_received || '—'}`);
         if (l.grade_weight !== null) bits.push(`${wt(l.grade_weight, l.unit)} affected`);
-        return bits.length ? `<li><span class="mono">${esc(l.container_no || l.invoice_no || '—')}</span> — ${esc(l.kind)}: ${esc(bits.join('; '))}.</li>` : '';
+        return bits.length ? `<li><span class="mono">${esc(l.container_no || '—')}</span> — ${esc(l.kind)}: ${esc(bits.join('; '))}.</li>` : '';
+    }
+    if (l.assessment === 'sorted') {
+        // ── WHY THE RATES ARE ON THE SUPPLIER'S COPY ─────────────────────
+        // The claim is weight x (what Edge paid - what the material is
+        // actually worth). Without both figures the supplier cannot
+        // reproduce it, and this file's own rule is that a figure he cannot
+        // check is a figure he queries. Same reasoning as using HIS price
+        // rather than Edge's sale price: "an arithmetic a supplier can
+        // reproduce and argue with on its merits".
+        //
+        // What stays off: `remarks`, which is free text and may name the
+        // customer. That is unchanged — it was never on this document.
+        if (!l.sorted_lines.length) return '';
+        // ── A TABLE WITH HEADINGS, NOT A FORMULA (2026-10-21) ────────────
+        // Apsara, on the inline version "2,000 LB x ($0.85 - $0.30)":
+        // "Still its not easy.You dudnt mention like weight,price".
+        //
+        // She is right. The sum was correct and the numbers were unlabelled,
+        // so a supplier had to work out for himself which figure was the
+        // weight, which was his price and which was the value — on a
+        // document whose whole job is that he does not have to.
+        //
+        // Headings do that work once, at the top of a column, instead of
+        // being inferred on every line. Same reason the main table above
+        // has them. The arithmetic is unchanged: Difference is price paid
+        // minus worth, and Claim is weight x difference.
+        const pu = l.paid_price_unit || l.unit;
+        const per = (v) => `${money(v)}/${esc(pu)}`;
+        let footed = 0;
+        const rows = l.sorted_lines.map((x) => {
+            // The weight is recorded in the CLAIM's unit; the price is per the
+            // PURCHASE unit. Where they differ the converted weight is the one
+            // multiplied, so that is the one shown, with the original beside
+            // it so nothing she recorded vanishes from the document.
+            const wSame = !l.unit || l.unit === pu;
+            const wConv = wSame ? null : claimPrice.toUnit(x.weight, l.unit, pu);
+            const wForSum = wSame ? x.weight : wConv;
+            const wCell = wSame ? wt(x.weight, l.unit)
+                : `${wt(wConv, pu)} <span class="conv">(${wt(x.weight, l.unit)} as recorded)</span>`;
+
+            const worthHere = (x.worth === null || x.worth === undefined) ? null
+                : (x.worth_unit && x.worth_unit !== pu
+                    ? (claimPrice.toUnit(1, pu, x.worth_unit) === null ? null
+                        : x.worth * claimPrice.toUnit(1, pu, x.worth_unit))
+                    : x.worth);
+            const diff = (l.paid_price === null) ? null
+                : Math.round((l.paid_price - (worthHere === null ? 0 : worthHere)) * 10000) / 10000;
+
+            if (x.amount != null) footed = Math.round((footed + x.amount) * 100) / 100;
+            return `<tr>
+              <td>${esc(x.type)}</td>
+              <td class="r mono">${wCell}</td>
+              <td class="r mono">${l.paid_price === null ? '&mdash;' : per(l.paid_price)}</td>
+              <td class="r mono">${worthHere === null
+                    ? '<span class="conv">no value</span>' : per(worthHere)}</td>
+              <td class="r mono">${diff === null ? '&mdash;' : per(diff)}</td>
+              <td class="r mono strong">${x.amount == null ? '&mdash;' : money(x.amount)}</td>
+            </tr>`;
+        }).join('');
+
+        return `<li><span class="mono">${esc(l.container_no || '—')}</span> — ${esc(l.kind)}: `
+             + `${esc(wt(l.sorted_weight, l.unit))} sorted out as not the grade supplied.`
+             + `<table class="sorted" style="width:100%; margin:6px 0 2px; border-collapse:collapse">`
+             + `<thead><tr>`
+             // ── THE SAME WORDS AS THE TABLE ABOVE ───────────────────
+             // Apsara on the first attempt — "What we found / Weight /
+             // Price we paid you / What it is worth" — "this is bery bad".
+             //
+             // She was right and it was not a matter of taste: the main
+             // table one inch above already calls these YOUR RATE and
+             // RECOVERABLE, and this one had invented a second name for
+             // each. Two vocabularies for the same two figures on one page
+             // is worse than the unlabelled formula it replaced, because
+             // now the supplier has to work out that they ARE the same.
+             //
+             // So the headings are taken from `head` above, not written
+             // afresh. If that row is ever reworded, this one follows.
+             + `<th style="text-align:left">Material</th>`
+             + `<th class="r">Weight</th>`
+             + `<th class="r">Your rate</th>`
+             + `<th class="r">Assessed value</th>`
+             + `<th class="r">Difference</th>`
+             + `<th class="r">Recoverable</th>`
+             + `</tr></thead><tbody>${rows}</tbody>`
+             + `<tfoot><tr><td colspan="5" class="r">Total for this container</td>`
+             + `<td class="r mono strong">${money(footed)}</td></tr></tfoot>`
+             + `</table></li>`;
     }
     if (l.assessment === 'quality' && l.quality_qty !== null) {
-        return `<li><span class="mono">${esc(l.container_no || l.invoice_no || '—')}</span> — ${esc(l.kind)}: ${esc(wt(l.quality_qty, l.unit))} claimed.</li>`;
+        return `<li><span class="mono">${esc(l.container_no || '—')}</span> — ${esc(l.kind)}: ${esc(wt(l.quality_qty, l.unit))} claimed.</li>`;
     }
     return '';
 }
 
+// ── FOUR FOOTER NOTES REMOVED 2026-10-20, AT APSARA'S INSTRUCTION ───────
+// She quoted them verbatim and said "Remove": the "weights are stated in the
+// unit shown" note, the 1 MT = 2,204.62262 lb conversion note, the "Your
+// rate" explanation, and "please confirm acceptance ... within 14 days".
+//
+// Recorded here rather than left to look like an accident, because they were
+// added deliberately — the conversion note exists because a supplier reading
+// a per-MT rate beside a per-LB purchase has to find 2204.62 himself. The
+// figures those notes explained are unchanged and still on the document.
+//
+// THIS IS A JS COMMENT, NOT AN HTML ONE. The first version of this note was
+// an <!-- --> inside the template, which put the full text of all four
+// removed lines into the source of every claim note sent to a supplier —
+// invisible on the page, and there for anyone who views source. A comment
+// about what a document does NOT say does not belong inside that document.
+//
+// Four CONDITIONAL notes were not named and are untouched: unverified lines,
+// claims with no figure, the MT-quantity note, and the no-rate note.
 function toHtml(b) {
     const when = new Date(b.generatedAt).toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' });
     const to = b.addressedTo || (b.suppliers.length > 1 ? `${b.suppliers.length} suppliers` : '—');
-    const head = ['Date', 'Our invoice', 'Container', 'What is claimed', 'Invoiced', 'Received', 'Short', '%', 'Your rate', 'Recoverable'];
+    // ── OUR INVOICE NUMBER IS NOT ON THE SUPPLIER'S COPY (2026-10-20) ───
+    // Apsara: "Dont mention our invoice no in claim".
+    //
+    // It is Edge's reference to its CUSTOMER, and this document goes to the
+    // supplier. Same rule this file already applies to `remarks`, which is
+    // kept off "because a remark is free text and can name the customer".
+    // The invoice number identifies the sale the way a remark names the
+    // buyer, and the supplier has no use for it: he knows his material by
+    // the container.
+    //
+    // The field is still CARRIED on the line (build() reads it, and the
+    // not-reconciled warning on the page uses it) — it is only not printed.
+    const head = ['Date', 'Container', 'What is claimed', 'Invoiced', 'Received', 'Short', '%', 'Your rate', 'Recoverable'];
 
     const row = (l) => `<tr${l.sendable ? '' : ' class="info"'}>
       <td>${esc(l.date)}</td>
-      <td class="mono">${esc(l.invoice_no || '—')}</td>
       <td class="mono">${esc(l.container_no || '—')}</td>
       <td>${esc(l.kind)}${l.sendable ? '' : '<span class="tag">not yet verified</span>'}</td>
       ${l.assessment === 'quality' && l.quality_qty !== null
@@ -299,6 +423,16 @@ tfoot td{border-top:2px solid #1a1a1a;border-bottom:0;padding-top:7px;font-weigh
 .sign{margin-top:22px;display:flex;justify-content:space-between;align-items:flex-end}
 .sign .for{font-size:8.5pt}
 .sign .line{border-top:1px solid #1a1a1a;width:190px;margin-top:34px;padding-top:4px;font-size:8pt;color:#555}
+  /* The sorted-contaminant breakdown. A SUB-table: lighter than the main
+     one so the eye still reads the claim table as the document's spine,
+     but with real headings, because Apsara's note on the unlabelled
+     version was "You dudnt mention like weight,price". */
+  table.sorted { font-size: 11px; }
+  table.sorted th { border-bottom: 1px solid #ddd; padding: 3px 6px; font-size: 10px;
+                    letter-spacing: .04em; text-transform: uppercase; color: #555; font-weight: 600; }
+  table.sorted td { border-bottom: 1px solid #f0f0f0; padding: 3px 6px; }
+  table.sorted tfoot td { border-top: 1px solid #bbb; border-bottom: none; font-weight: 600; }
+  table.sorted .strong { font-weight: 700; }
 </style></head><body>
 <header>
   <div>
@@ -323,8 +457,8 @@ tfoot td{border-top:2px solid #1a1a1a;border-bottom:0;padding-top:7px;font-weigh
 
 <table class="sum">
   <thead><tr>${head.map((h, i) => `<th${i >= 4 ? ' class="r"' : ''}>${esc(h)}</th>`).join('')}</tr></thead>
-  <tbody>${b.lines.length ? b.lines.map(row).join('') : '<tr><td colspan="10" style="padding:16px;color:#777">No claims in this report.</td></tr>'}</tbody>
-  ${b.totals.claims ? `<tfoot><tr><td colspan="9" class="r">Total recoverable</td><td class="r mono">${esc(money(b.totals.recoverable))}</td></tr></tfoot>` : ''}
+  <tbody>${b.lines.length ? b.lines.map(row).join('') : '<tr><td colspan="9" style="padding:16px;color:#777">No claims in this report.</td></tr>'}</tbody>
+  ${b.totals.claims ? `<tfoot><tr><td colspan="8" class="r">Total recoverable</td><td class="r mono">${esc(money(b.totals.recoverable))}</td></tr></tfoot>` : ''}
 </table>
 
 ${details}
@@ -337,12 +471,8 @@ ${details}
 <div class="notes">
   ${b.includedUnverified && b.lines.some((l) => !l.sendable) ? '<p><strong>Lines marked “not yet verified”</strong> are shown for information only. Their figures have not yet been confirmed against the loading documents and they are excluded from the total above.</p>' : ''}
   ${b.noFigure.length ? `<p><strong>${b.noFigure.length} claim(s)</strong> in this report have no recovery amount set against them yet; they are listed so the position is complete.</p>` : ''}
-  <p>Weights are stated in the unit shown against each line, exactly as recorded on the claim documents. No conversion has been applied to them.</p>
   ${b.lines.some((l) => l.charge_qty !== null) ? '<p>The quantity the rate is applied to, converted into metric tonnes, is shown beneath the rate. The recoverable amount is that quantity at that rate.</p>' : ''}
-  ${b.lines.some((l) => l.rate_from) ? '<p>Where our purchase rate was per pound (or in cents), it has been converted to a rate per metric tonne at 1 MT = 2,204.62262 lb; the original rate is shown beneath it.</p>' : ''}
-  ${b.lines.some((l) => l.rate !== null) ? '<p><strong>“Your rate”</strong> is the price on our purchase bill for that container — the rate we paid you for the material. Each recoverable amount is the shortage at that rate.</p>' : ''}
   ${b.lines.some((l) => l.sendable && l.rate === null) ? '<p>Where no rate is shown, the amount is as agreed between us rather than calculated.</p>' : ''}
-  <p>Please confirm acceptance or raise any query within 14 days of the date of this report.</p>
 </div>
 
 <div class="sign">
@@ -377,10 +507,10 @@ async function toWorkbook(built) {
     ws.addRow(['To', built.addressedTo || '']);
     ws.addRow([]);
     // Same rule as the PDF: this file is sent to the supplier, so no customer.
-    ws.addRow(['Date', 'Our invoice', 'Container', 'What is claimed', 'Unit',
+    ws.addRow(['Date', 'Container', 'What is claimed', 'Unit',
         'Invoiced weight', 'Received weight', 'Shortage', 'Shortage %', 'Charged quantity', 'Your rate', 'Rate per', 'Recoverable from you', 'Status']);
     for (const l of built.lines) {
-        ws.addRow([l.date, l.invoice_no, l.container_no, l.kind + (l.sendable ? '' : ' (not yet verified)'),
+        ws.addRow([l.date, l.container_no, l.kind + (l.sendable ? '' : ' (not yet verified)'),
             l.unit, l.invoice_weight, l.claimed_weight, l.shortage, l.shortage_pct,
             l.qty_mt !== null && l.qty_mt !== undefined ? l.qty_mt : (l.charge_qty === null ? l.shortage : l.charge_qty), l.rate, l.rate_unit,
             l.sendable ? l.our_claim : null, l.status]);

@@ -61,7 +61,11 @@ const FLAG_KIND_UNKNOWN = 'kind_unknown';
 // it did today, and no kind name is ever written into the code.
 // null means "never chosen" and is treated as weight, which is what every claim
 // before this date was.
-const ASSESSMENTS = ['weight', 'contamination', 'grade', 'quality'];
+// 'sorted' added 2026-10-20 for Apsara's "al wheel dirty" claims — a dirty
+// grade sorted into several named contaminants, each weighed and valued. It is
+// a new MEMBER of a closed set, not a change to one: a claim already carrying
+// assessment:'contamination' assesses exactly as it did yesterday.
+const ASSESSMENTS = ['weight', 'contamination', 'grade', 'quality', 'sorted'];
 // What can be found in a container. Shown as tick boxes; `sealed_hazard` is the
 // one that is not a price question at all (radioactive or explosive items —
 // every scrap shipment into India carries a declaration that there are none).
@@ -129,6 +133,16 @@ function blank() {
         assessment: null,
         findings: [], measured_by: null,
         contam_claimed_pct: null, contam_accepted_pct: null, contaminated_weight: null,
+        // ── A DIRTY GRADE SORTED INTO NAMED CONTAMINANTS ─────────────────
+        // One row per thing found: { type, weight, worth, worth_unit, amount
+        // }. `worth` null means it is worth nothing to Edge and the line is
+        // claimed in full. Empty on every claim that is not a sorted one, so
+        // nothing that exists today reads differently.
+        sorted_lines: [], sorted_weight: null,
+        // What Edge PAID the supplier, and the unit it was priced in — the
+        // basis a sorted claim is worked out from. Distinct from sell_price,
+        // which is what Edge sold at and is what every other kind uses.
+        paid_price: null, paid_price_unit: null,
         grade_sold: '', grade_received: '', grade_weight: null,
         grade_price_sold: null, grade_price_received: null,
         stated_qty: null, stated_qty_unit: null, stated_rate: null, stated_rate_unit: null, // as the MAIL said; prefill only
@@ -251,7 +265,7 @@ async function assess(id, fields = {}, by = 'manager') {
     if (!c) throw new Error('no such claim');
     const kind = fields.assessment;
     if (kind === 'weight') throw new Error('a weight shortage is confirmed through verify, not assess');
-    if (!ASSESSMENTS.includes(kind)) throw new Error('assessment must be contamination, grade or quality');
+    if (!ASSESSMENTS.includes(kind)) throw new Error('assessment must be contamination, grade, quality or sorted');
 
     const unit = UNITS.includes(fields.weight_unit) ? fields.weight_unit : (UNITS.includes(c.weight_unit) ? c.weight_unit : null);
     if (!unit) throw new Error('assessing a claim needs the weight unit — MT, LB or KG');
@@ -291,7 +305,145 @@ async function assess(id, fields = {}, by = 'manager') {
         if (q === null) throw new Error('assessing a quality claim needs a rate unit that can be compared with the quantity');
         claim_amount = Math.round(q * sell_price * 100) / 100;
         Object.assign(patch, { quality_qty: qty, sell_price, sell_price_unit });
-    } else {
+    } else if (kind === 'sorted') {
+        // ── SORTED BY TYPE, WEIGHED, AND CLAIMED LINE BY LINE ────────────
+        // Apsara, 2026-10-20: "we buy al wheel dirty.there would be claim on
+        // that like clad wheel,chrome wheel,truck wheel".
+        //
+        // She buys a dirty grade, it gets sorted, and what comes out is not
+        // one contaminant but several — each with its own weight and its own
+        // real value. The 'contamination' assessment above cannot say that:
+        // it carries ONE accepted percentage and ONE rate, so three named
+        // contaminants collapse into a single figure she cannot defend line
+        // by line to the supplier who sold it to her.
+        //
+        // ── THE ARITHMETIC IS HERS, CONFIRMED ON A WORKED EXAMPLE ───────
+        // Asked how the money works she first answered "both 1,2", which had
+        // three readings differing by more than $1,000 on the same material.
+        // Shown 40,000lb of Al wheel dirty at $0.85 sorted into 2,000lb clad
+        // (worth $0.30), 1,200lb chrome ($0.40) and 800lb truck wheel (no
+        // rate), she chose the difference:
+        //
+        //     clad    2,000 x (0.85 - 0.30) = 1,100.00
+        //     chrome  1,200 x (0.85 - 0.40) =   540.00
+        //     truck     800 x (0.85 - 0.00) =   680.00
+        //                                    ─────────
+        //                                     2,320.00
+        //
+        // A line with no rate is worth NOTHING to her and is claimed in
+        // full. That is not a default standing in for a missing number — it
+        // is the answer she gave.
+        //
+        // Note this is the same shape as the downgrade branch below:
+        // weight x (what it should have been worth - what it was worth).
+        // That arithmetic is already proven in this file; the new part is
+        // that there are several lines and the basis is the purchase price.
+        //
+        // ── THE BASIS IS WHAT SHE PAID, NOT WHAT SHE SOLD FOR ───────────
+        // Every other kind here values the claim at `sell_price`, because
+        // every other kind starts with a CUSTOMER claiming on Edge. This one
+        // does not: she bought contaminated material, and the claim goes to
+        // the supplier who sold it. So the rate is what Edge paid HIM —
+        // which is also the answer she gave on 2026-10-03 when asked whether
+        // recovery is valued at the supplier's price or the customer's.
+        // helpers/claimPrice.js already finds that figure from the
+        // container's purchase bill, and `supplier_price` on the record is
+        // where it lands.
+        //
+        // So `claim_amount` on a sorted claim means something slightly
+        // different from `claim_amount` on the others, and that is written
+        // here rather than left to be discovered: on a sorted claim it is
+        // already the figure the supplier is being asked for. `our_claim` is
+        // deliberately NOT set — raiseRecovery still owns it, so the
+        // recovery to-do that routes.js raises behaves exactly as before.
+        const lines = Array.isArray(given('sorted_lines')) ? given('sorted_lines') : null;
+        if (!lines || !lines.length) {
+            throw new Error('a sorted claim needs at least one line — what was found, and how much of it');
+        }
+        if (lines.length > 40) throw new Error('a sorted claim is capped at 40 lines');
+
+        const paid = has(given('paid_price')) ? num(given('paid_price'))
+            : has(c.supplier_price) ? num(c.supplier_price) : null;
+        const paidUnit = UNITS.includes(fields.paid_price_unit) ? fields.paid_price_unit
+            : UNITS.includes(c.supplier_price_unit) ? c.supplier_price_unit : unit;
+        if (paid === null || paid <= 0) {
+            throw new Error('a sorted claim needs the price Edge paid this supplier — it is what the claim is '
+                + 'worked out from. helpers/claimPrice.js can find it from the container’s purchase bill.');
+        }
+
+        // A rate per LB is not a rate per MT. Converted through the SAME
+        // weight helper the rest of this file uses, inverted — convert(1, to,
+        // from) is how many `from` units are in one `to` unit, which is
+        // exactly the factor a per-unit price scales by. Pinned in
+        // tests/claims-sorted.js at 2204.62262 in both directions, because a
+        // price unit guessed wrong is this file's stated nightmare: "wrong by
+        // a factor of 1000, and that number would land in the figure she
+        // shows her uncle and her customers".
+        const rateInto = (rate, from, to) => {
+            if (rate === null) return null;
+            if (!from || from === to) return rate;
+            const factor = convert(1, to, from);
+            return factor === null ? null : rate * factor;
+        };
+
+        const clean = [];
+        let total = 0;
+        let claimedWeight = 0;
+        for (const raw of lines) {
+            const type = String((raw && raw.type) || '').trim().slice(0, 80);
+            if (!type) throw new Error('every line on a sorted claim needs a name — "clad wheel", "chrome wheel"');
+            const w = has(raw && raw.weight) ? num(raw.weight) : null;
+            if (w === null || w <= 0) throw new Error(`"${type}" needs the weight that was sorted out of the load`);
+
+            // null worth is a real answer — see above — and is kept as null
+            // rather than written as 0, so the page can show "claimed in
+            // full" instead of a rate she never typed.
+            const worthRaw = has(raw && raw.worth) ? num(raw.worth) : null;
+            if (worthRaw !== null && worthRaw < 0) throw new Error(`"${type}" cannot be worth less than nothing`);
+            const worthUnit = UNITS.includes(raw && raw.worth_unit) ? raw.worth_unit : paidUnit;
+            const worth = rateInto(worthRaw, worthUnit, paidUnit);
+            if (worthRaw !== null && worth === null) {
+                throw new Error(`"${type}" has a rate in ${worthUnit} that cannot be compared with a price in ${paidUnit}`);
+            }
+            // Mirrors "that is not a downgrade" on the grade branch. A
+            // contaminant worth MORE than the grade she paid for is not a
+            // loss, and a negative line would quietly reduce the total.
+            if (worth !== null && worth > paid) {
+                throw new Error(`"${type}" is priced above what Edge paid (${paid} per ${paidUnit}) — that is not a loss`);
+            }
+
+            const wInPaidUnit = paidUnit === unit ? w : convert(w, unit, paidUnit);
+            if (wInPaidUnit === null) {
+                throw new Error(`"${type}" is weighed in ${unit}, which cannot be compared with a price in ${paidUnit}`);
+            }
+            const amount = Math.round(wInPaidUnit * (paid - (worth === null ? 0 : worth)) * 100) / 100;
+            total = Math.round((total + amount) * 100) / 100;
+            claimedWeight = Math.round((claimedWeight + w) * 1e6) / 1e6;
+            clean.push({ type, weight: w, worth: worthRaw, worth_unit: worthRaw === null ? null : worthUnit, amount });
+        }
+
+        // The invoiced weight is not required — she may be claiming on a
+        // sorted sample long before the invoice is argued — but when it IS
+        // known, sorting out more than arrived is an arithmetic she wants
+        // stopped at the door rather than printed.
+        const invoice_weight = has(given('invoice_weight')) ? num(given('invoice_weight')) : null;
+        if (invoice_weight !== null && invoice_weight > 0 && claimedWeight - invoice_weight > 1e-6) {
+            throw new Error(`the lines add up to ${claimedWeight} ${unit}, more than the ${invoice_weight} ${unit} invoiced`);
+        }
+
+        claim_amount = total;
+        Object.assign(patch, {
+            sorted_lines: clean, sorted_weight: claimedWeight,
+            paid_price: paid, paid_price_unit: paidUnit,
+            invoice_weight: invoice_weight !== null ? invoice_weight : c.invoice_weight,
+            measured_by: MEASURED_BY.includes(given('measured_by')) ? given('measured_by') : c.measured_by,
+        });
+    } else if (kind === 'grade') {
+        // WAS A CATCH-ALL `else`. Adding 'sorted' to ASSESSMENTS above would
+        // otherwise have landed here and demanded grade prices for a claim
+        // that has none — a new assessment silently becoming a downgrade. No
+        // behaviour changes: the ASSESSMENTS guard already rejected anything
+        // that is not in the list, so this branch only ever ran for 'grade'.
         const w = has(given('grade_weight')) ? num(given('grade_weight')) : null;
         const sold = has(given('grade_price_sold')) ? num(given('grade_price_sold')) : null;
         const recv = has(given('grade_price_received')) ? num(given('grade_price_received')) : null;
@@ -302,9 +454,20 @@ async function assess(id, fields = {}, by = 'manager') {
         claim_amount = Math.round(w * (sold - recv) * 100) / 100;
         Object.assign(patch, { grade_weight: w, grade_price_sold: sold, grade_price_received: recv,
             grade_sold: String(given('grade_sold') || '').slice(0, 80), grade_received: String(given('grade_received') || '').slice(0, 80) });
+    } else {
+        // Unreachable while ASSESSMENTS and these branches agree, and that is
+        // the point: the next assessment added to the list fails HERE, loudly,
+        // instead of being written with claim_amount silently null.
+        throw new Error(`assessment '${kind}' is in ASSESSMENTS but helpers/claims.js has no branch for it`);
     }
     patch.claim_amount = claim_amount;
-    return update(id, patch, by, kind === 'contamination' ? 'contamination assessed' : kind === 'quality' ? 'quality claim assessed' : 'downgrade assessed');
+    const NOTES = {
+        contamination: 'contamination assessed',
+        quality: 'quality claim assessed',
+        sorted: 'sorted contaminants assessed',
+        grade: 'downgrade assessed',
+    };
+    return update(id, patch, by, NOTES[kind] || `${kind} assessed`);
 }
 
 // ── DELETE (2026-10-14) ────────────────────────────────────────────────────

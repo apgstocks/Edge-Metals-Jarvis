@@ -2122,6 +2122,36 @@ const MUTATIONS = [
       find: '        req.setTimeout(2000, () => { req.destroy(); resolve(null); });',
       to:   '        ;' },
 
+    // ── "al wheel dirty ... clad wheel,chrome wheel,truck wheel", 2026-10-20 ──
+    // The claim is weight x (price PAID - what the contaminant is worth), per
+    // line. Three mutations, each a way the money goes wrong while the code
+    // still runs — which is this repo's stated nightmare.
+    { name: 'sorted claim: a line with no rate is valued at nothing instead of claimed in full',
+      file: 'helpers/claims.js', suites: ['claims-sorted'],
+      find: '            const amount = Math.round(wInPaidUnit * (paid - (worth === null ? 0 : worth)) * 100) / 100;',
+      to:   '            const amount = Math.round(wInPaidUnit * (worth === null ? 0 : (paid - worth)) * 100) / 100;' },
+
+    // The guard that stops a contaminant priced above the purchase making a
+    // NEGATIVE line and quietly reducing what she claims.
+    { name: 'sorted claim: a contaminant worth more than the grade is allowed through',
+      file: 'helpers/claims.js', suites: ['claims-sorted'],
+      find: '            if (worth !== null && worth > paid) {',
+      to:   '            if (false) {' },
+
+    // A per-LB rate against a per-MT purchase, un-converted. Wrong by 2204x,
+    // and the figure still looks like money.
+    { name: 'sorted claim: the worth rate is not converted to the purchase unit',
+      file: 'helpers/claims.js', suites: ['claims-sorted'],
+      find: '            const worth = rateInto(worthRaw, worthUnit, paidUnit);',
+      to:   '            const worth = worthRaw;' },
+
+    // And the route whitelist, which is how the breakdown reaches the engine
+    // at all. Proven to matter: dropping it fails five checks in section E.
+    { name: 'sorted claim: sorted_lines is dropped by the route whitelist',
+      file: 'helpers/claims/routes.js', suites: ['claims-sorted'],
+      find: "                'sorted_lines', 'paid_price', 'paid_price_unit'];",
+      to:   "                'paid_price', 'paid_price_unit'];" },
+
     // ── "TIMEOUT AFTER 30000 SECONDS IN PROFORMA", 2026-10-20 ──────────
     // Seven .replace('__FONT_X__', data) calls with STRING patterns, and
     // template.html repeats two of the tokens. replace() with a string takes

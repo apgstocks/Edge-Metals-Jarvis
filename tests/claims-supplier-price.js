@@ -131,8 +131,28 @@ section('F — the statement prints their rate and never Edge\'s');
     ck('the document has a rate column headed as THEIRS', /Your rate/.test(html));
     ck('the rate is printed', /1,780/.test(html), html.slice(0, 0));
     ck('Edge\'s sell rate of 2140 is NOT anywhere on it', !/2,140/.test(html) && !/2140/.test(html));
-    ck('it explains what the rate is', /the rate we paid you/.test(html));
-    ck('the table still balances — 10 columns, footer spans 9', /colspan="9" class="r">Total recoverable/.test(html));
+    // ── INVERTED 2026-10-20 ───────────────────────────────────────────
+    // Apsara quoted four footer notes verbatim and said "Remove". These
+    // checks pinned their wording, so they are turned round rather than
+    // deleted: the document is still guarded, now against the lines coming
+    // BACK. The figures those notes explained are unchanged and still
+    // asserted above.
+    ck('the "Your rate" explanation is gone, at her instruction', !/the rate we paid you/.test(html));
+
+    // ── OUR INVOICE NUMBER NEVER REACHES THE SUPPLIER (2026-10-20) ───────
+    // Apsara: "Dont mention our invoice no in claim". It is Edge's reference
+    // to its CUSTOMER, and this document goes to the supplier — the same
+    // reason `remarks` has always been kept off it.
+    //
+    // Checked by VALUE, not by looking for the column heading. The heading
+    // was the easy half; the real risk was four detail lines that printed
+    // `container_no || invoice_no`, so a claim with no container number
+    // would have put the invoice number back on the page — on exactly the
+    // claims nobody inspects.
+    ck('the "Our invoice" column is gone', !/Our invoice/.test(html));
+    // NINE columns now, not ten: "Our invoice" was removed on 2026-10-20 at
+    // Apsara's instruction, so the footer spans eight.
+    ck('the table still balances — 9 columns, footer spans 8', /colspan="8" class="r">Total recoverable/.test(html));
 
     const xlsx = await report.toWorkbook(b);
     ck('the workbook is produced with the extra columns', xlsx.length > 2000);
@@ -158,8 +178,10 @@ section('F2 — a rate per pound against a claim in tonnes');
     ck('the document prints the per-MT rate with the original beside it', /\$1,785\.74\/MT/.test(html) && /from \$0\.81\/LB/.test(html));
     ck('and the rate in his own unit', /\$0\.81\/LB/.test(html));
     ck('the three numbers reconcile on the page', Math.abs(2204.62262 * 0.81 - 1785.74) < 0.01);
-    ck('the no-conversion note no longer claims nothing was converted',
-        /No conversion has been applied to them/.test(html) && /1 MT = 2,204\.62262 lb/.test(html));
+    // The FIGURES still reconcile — asserted three lines up — and that is
+    // what mattered. What is gone is only the prose explaining them.
+    ck('both conversion notes are gone, at her instruction',
+        !/No conversion has been applied to them/.test(html) && !/1 MT = 2,204\.62262 lb/.test(html));
 
     // Same unit on both sides: nothing to convert, nothing extra printed.
     const same = report.build({ supplier: 'Gomez Metals' }).lines.find((x) => x.invoice_no === '26JY05');
@@ -181,7 +203,12 @@ section('F2b — cents per lb, weights in pounds: rate to per-MT, quantity to MT
     ck('$0.74/lb becomes $1,631.42/MT, original shown', l.rate_unit === 'MT' && Math.abs(l.rate - 1631.42) < 0.011 && l.rate_from === '$0.74/LB', JSON.stringify([l.rate, l.rate_from]));
     ck('rate x MT quantity reconciles with the amount, so the rate stays on the line', l.rate !== null && b.notReconciled.length === 0);
     const html = report.toHtml(b);
-    ck('the document shows per-MT rate, MT quantity and the note', /\$1,631\.42\/MT/.test(html) && /on 0\.69 MT/.test(html) && /converted to a rate per metric tonne/.test(html));
+    // The two FIGURES are the point of this check and still hold; the third
+    // clause pinned the removed prose and is inverted.
+    ck('the document still shows the per-MT rate and the MT quantity',
+        /\$1,631\.42\/MT/.test(html) && /on 0\.69 MT/.test(html));
+    ck('  without the sentence explaining the conversion',
+        !/converted to a rate per metric tonne/.test(html));
     ck('the buyer\'s rate ($0.90) is nowhere on the supplier document', !/0\.90|0\.9\b/.test(html));
 }
 
@@ -227,8 +254,28 @@ section('F4 — nothing that leaves the building names the customer');
     ck('but it is NOT on the pdf/html statement', !/Joey/.test(html));
     ck('and there is no Customer column at all', !/>Customer</.test(html));
     ck('the lead no longer says "our customers"', !/raised by our customers/.test(html));
-    ck('the claim is still identifiable — container and our own invoice', /CAIU9975642/.test(html) && /26JY05/.test(html));
-    ck('the table still balances — 10 columns, footer spans 9', /colspan="9" class="r">Total recoverable/.test(html));
+    // ── OUR INVOICE NUMBER NEVER REACHES THE SUPPLIER (2026-10-20) ───────
+    // Apsara: "Dont mention our invoice no in claim". It is Edge's reference
+    // to its CUSTOMER, and this document goes to the supplier — the same
+    // reason `remarks` and the customer name have always been kept off it,
+    // asserted three lines above.
+    //
+    // Checked by VALUE, not by looking for the column heading. The heading
+    // was the easy half: the real risk was four detail lines that printed
+    // `container_no || invoice_no`, which would have put the number back on
+    // any claim with no container — exactly the ones nobody inspects.
+    ck('the claim is still identifiable by its container', /CAIU9975642/.test(html));
+    ck('the "Our invoice" column is gone', !/Our invoice/.test(html));
+    {
+        const invoiced = b.lines.map((l) => l.invoice_no).filter(Boolean);
+        ck('  and there ARE invoice numbers in this report, so this proves something',
+           invoiced.length > 0, 'no claim in the fixture carries an invoice number');
+        const leaked = invoiced.filter((n) => html.includes(n));
+        ck('  not one of them appears anywhere in the document', leaked.length === 0, leaked.join(', '));
+    }
+    // NINE columns now, not ten: "Our invoice" was removed on 2026-10-20 at
+    // Apsara's instruction, so the footer spans eight.
+    ck('the table still balances — 9 columns, footer spans 8', /colspan="8" class="r">Total recoverable/.test(html));
 
     const xlsx = await report.toWorkbook(b);
     const text = xlsx.toString('latin1');

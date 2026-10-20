@@ -74,7 +74,7 @@ section('A — the store');
     ck('no accepted share, no figure', await throwsWith(() => claims.assess(n.id, { assessment: 'contamination', weight_unit: 'MT', invoice_weight: 20 }), /share Edge accepts/));
     ck('a "downgrade" priced upwards is refused', await throwsWith(() => claims.assess(n.id, { assessment: 'grade', weight_unit: 'MT', grade_weight: 5, grade_price_sold: 1000, grade_price_received: 1200 }), /not a downgrade/));
     ck('weight claims still go through verify, not assess', await throwsWith(() => claims.assess(n.id, { assessment: 'weight', weight_unit: 'MT' }), /through verify/));
-    ck('an unknown assessment is refused', await throwsWith(() => claims.assess(n.id, { assessment: 'vibes', weight_unit: 'MT' }), /contamination, grade or quality/));
+    ck('an unknown assessment is refused', await throwsWith(() => claims.assess(n.id, { assessment: 'vibes', weight_unit: 'MT' }), /contamination, grade, quality or sorted/));
     ck('an unknown claim is refused', await throwsWith(() => claims.assess('nope', { assessment: 'grade' }), /no such claim/));
     const n2 = claims.get(n.id);
     ck('a refused assessment wrote nothing', n2.claim_amount === null && n2.status === 'unverified');
