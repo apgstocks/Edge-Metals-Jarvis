@@ -924,7 +924,6 @@ function claimCard(c, i, g){
             '<button class="btn s_add" type="button" style="padding:3px 10px; font-size:11px;">Add another line</button>' +
             '<span class="hint s_total" style="margin-left:10px"></span>' +
           '</div>' +
-          '<datalist id="s_matList">' + (STATE.materials || []).map((m) => '<option value="' + esc(m) + '"></option>').join('') + '</datalist>' +
           // ── HOW DO YOU KNOW IT IS CLAD WHEEL? ────────────────────────
           // Apsara: "how do i know material are this". The claim already
           // had the answer and this pane was not asking it — the same
@@ -1486,16 +1485,38 @@ function wireClaim(c){
 }
 
 /* ── manual entry, prefilled when adding to a container already open ─────── */
-// Options for the party datalists. STATE.parties comes from GET /api/claims
-// (helpers/claims/routes.js partyLists) — suppliers off her bills, customers
-// off her sales, plus anyone already named on a claim.
+// ── THE DATALISTS LIVE ONCE, ON THE BODY (2026-10-21) ────────────────────
+// Apsara: "claim edit not working".
 //
-// An empty list is not an error and is not announced: it renders no options
-// and the box stays an ordinary text field, which is exactly what it was
-// before. A brand-new Jarvis has no trading history to offer.
-function partyOptions(which) {
-  const list = (STATE.parties && STATE.parties[which]) || [];
-  return list.map((n) => '<option value="' + esc(n) + '"></option>').join('');
+// They did not. The party lists were emitted INSIDE openNew()'s modal, and
+// the Claim details section on each claim card points at them by id — so on
+// the card those two boxes referenced a datalist that is not in the document
+// unless the New-claim dialog happens to be open. A dropdown that renders,
+// populates and never opens: the exact fault I had just written up against
+// dashboard/edge-inventory.html, reproduced here within the hour.
+//
+// The material list had the mirror problem: emitted inside claimCard(), so a
+// page with nine claims carried NINE elements with id="s_matList" and the
+// whole item list nine times over.
+//
+// One copy each, appended to the body and refreshed on load. Any input
+// anywhere on the page can now reference them, and there is exactly one of
+// each to keep current.
+//
+// The test that missed this checked that the id and the list= attribute both
+// appeared in the FILE. They did — in two functions that are never rendered
+// at the same time. Co-location in a file is not co-location in a document.
+function ensureDatalists() {
+  const sets = [
+    ['n_custList', (STATE.parties && STATE.parties.customers) || []],
+    ['n_supList', (STATE.parties && STATE.parties.suppliers) || []],
+    ['s_matList', STATE.materials || []],
+  ];
+  for (const [id, items] of sets) {
+    let dl = document.getElementById(id);
+    if (!dl) { dl = document.createElement('datalist'); dl.id = id; document.body.appendChild(dl); }
+    dl.innerHTML = items.map((n) => '<option value="' + esc(n) + '"></option>').join('');
+  }
 }
 
 function openNew(pre){
@@ -1524,10 +1545,8 @@ function openNew(pre){
       // Inventory has had a populated #suplist since it was written and no
       // input pointing at it, so that dropdown has never once opened —
       // which is how a control looks finished and does nothing.
-      '<label class="f">Customer<input id="n_cust" list="n_custList" autocomplete="off" value="' + esc(pre.customer||'') + '">' +
-        '<datalist id="n_custList">' + partyOptions('customers') + '</datalist></label>' +
-      '<label class="f">Supplier<input id="n_sup" list="n_supList" autocomplete="off">' +
-        '<datalist id="n_supList">' + partyOptions('suppliers') + '</datalist></label>' +
+      '<label class="f">Customer<input id="n_cust" list="n_custList" autocomplete="off" value="' + esc(pre.customer||'') + '"></label>' +
+      '<label class="f">Supplier<input id="n_sup" list="n_supList" autocomplete="off"></label>' +
       '<label class="f">Invoice no<input id="n_inv" class="mono" value="' + esc(pre.invoice_no||'') + '"></label>' +
       '<label class="f">Container no<input id="n_cont" class="mono" value="' + esc(pre.container_no||'') + '"></label>' +
       '<label class="f">What they are asking<input id="n_amt" class="num" inputmode="decimal"></label>' +
@@ -2065,6 +2084,8 @@ async function load(announce){
     STATE.parties = j.parties || { suppliers: [], customers: [] };
     // Her own item types, for the Material box on a sorted claim.
     STATE.materials = j.materials || [];
+    // Rebuilt here rather than inside a card or a modal — see ensureDatalists.
+    ensureDatalists();
     const wide = !(window.matchMedia && window.matchMedia('(max-width:1020px)').matches);
     if (!containers().some(g => g.key === STATE.sel)) STATE.sel = wide ? ((visible()[0] || {}).key || null) : null;
     renderChips(); renderStrip(); renderTabs(); renderRows(); renderDetail();

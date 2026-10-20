@@ -2138,6 +2138,15 @@ const MUTATIONS = [
       find: '                parties: partyLists(rows),',
       to:   '                parties: { suppliers: [], customers: [] },' },
 
+    // ── "claim edit not working", 2026-10-21 ─────────────────────────
+    // Putting a datalist back inside a template is the exact bug she hit:
+    // the Claim details boxes referenced ids that only existed inside the
+    // New-claim modal, so on the card they pointed at nothing.
+    { name: 'claims datalists: built inside a template again instead of on the body',
+      file: 'dashboard/claims.html', suites: ['claims-sorted'],
+      find: '    if (!dl) { dl = document.createElement(\'datalist\'); dl.id = id; document.body.appendChild(dl); }',
+      to:   '    if (!dl) { return; }' },
+
     // ── "i want your rate to be in lb only not in mt", 2026-10-21 ────
     // The reconciliation multiplies the quantity by the rate and strips the
     // rate off the line when they disagree. With the rate now in LB, using

@@ -388,11 +388,33 @@ section('G2 — the party pickers: suppliers and customers she has traded with')
         // it, so that dropdown has never worked. Asserted here so this one
         // cannot ship the same way.
         const HTML2 = fs.readFileSync(path.join(ROOT, 'dashboard/claims.html'), 'utf8');
-        for (const id of ['n_custList', 'n_supList']) {
-            ck(`${id} exists`, HTML2.includes(`<datalist id="${id}">`));
-            ck(`  and an input points at it`, HTML2.includes(`list="${id}"`),
+        // ── CO-LOCATION IN A FILE IS NOT CO-LOCATION IN A DOCUMENT ──────
+        // The first version of this checked that `<datalist id="n_custList">`
+        // and `list="n_custList"` both appeared in claims.html. Both did —
+        // in two functions that are NEVER rendered at the same time. The
+        // datalists were emitted inside openNew()'s modal; the Claim details
+        // section on each card referenced them by id. On the card they
+        // pointed at nothing, and Apsara reported "claim edit not working".
+        //
+        // That is the identical fault this file mocks edge-inventory.html
+        // for, committed within the hour of writing the mockery. So the
+        // property asserted is now the one that matters: the lists are built
+        // ONCE, on the body, where every reference can reach them.
+        ck('the datalists are created on the body, not inside a card or modal',
+           /document\.body\.appendChild\(dl\)/.test(HTML2),
+           'emitted inside a per-item function they are either duplicated or unreachable');
+        ck('  and are rebuilt whenever the lists change', /ensureDatalists\(\);/.test(HTML2));
+        for (const id of ['n_custList', 'n_supList', 's_matList']) {
+            ck(`  ${id} is referenced by an input`, HTML2.includes(`list="${id}"`),
                'a datalist nothing references is a dropdown that never opens');
+            ck(`    and is NOT hand-written into any template`,
+               !HTML2.includes(`<datalist id="${id}">`),
+               'a literal datalist tag in a card or modal is the bug that was just fixed');
         }
+        ck('  every id ensureDatalists builds is one an input uses',
+           ['n_custList', 'n_supList', 's_matList'].every((id) => HTML2.includes("['" + id + "'")
+               || HTML2.includes('[\'' + id + '\'')),
+           'a list built and never referenced is dead weight on every page load');
         ck('the page reads the list the route sends', /STATE\.parties = j\.parties/.test(HTML2));
 
         // ── "how do i know material are this" ───────────────────────────
@@ -406,7 +428,11 @@ section('G2 — the party pickers: suppliers and customers she has traded with')
         ck('the route sends her item types', Array.isArray(mats) && mats.length > 0,
            JSON.stringify(mats));
         ck('  the Material box offers them', /list="s_matList"/.test(HTML2));
-        ck('  and the datalist is built from them', /id="s_matList"[\s\S]{0,120}STATE\.materials/.test(HTML2));
+        // Re-pointed with the fix: the list is no longer a <datalist> tag
+        // beside the input, it is built by ensureDatalists from STATE.
+        ck('  and the datalist is built from them',
+           /\['s_matList', STATE\.materials \|\| \[\]\]/.test(HTML2),
+           'the material list must come from the route, not be hand-written');
         ck('  free text still works — a contaminant she has never bought',
            !/required/.test((HTML2.match(/class="s_type"[^>]*/) || [''])[0]),
            'a closed list would refuse a material she has not traded before');
