@@ -150,7 +150,17 @@ textarea { font-family:inherit; }
 // and she would not necessarily know it had happened.
 
 async function api(path, opts = {}) {
-  const res = await fetch(path, { headers: { 'Content-Type': 'application/json' }, ...opts });
+  // cache:'no-store' added 2026-10-23. Apsara: "when i create a load/sle,i
+  // have to log out n relogin to view the latest change." The server now
+  // sends Cache-Control: no-store on every /api/ response, which is the
+  // real fix — this is the client saying the same thing, so a stale answer
+  // cannot come from anything sitting between her and the VM either (the
+  // dashboard is reached through a Cloudflare tunnel). Costs nothing: these
+  // responses were never meant to be re-used.
+  //
+  // BEFORE the spread, so a caller that ever needs a cached read can still
+  // say so — the same shape `headers` already has.
+  const res = await fetch(path, { cache: 'no-store', headers: { 'Content-Type': 'application/json' }, ...opts });
   if (res.status === 401) { location.href = '/login'; throw new Error('unauthorized'); }
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(data.error || `request failed (${res.status})`);

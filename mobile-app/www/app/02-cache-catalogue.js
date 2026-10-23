@@ -77,7 +77,17 @@ async function api(path, opts = {}) {
       if (hit !== undefined) return hit;
     }
   }
-  const res = await fetch(API_BASE + path, { ...opts, headers });
+  // cache:'no-store' added 2026-10-23 alongside the website. The server now
+  // sends Cache-Control: no-store on every /api/ response; this says the same
+  // thing from the phone, so nothing between the app and the VM can hand back
+  // yesterday's answer.
+  //
+  // This is the HTTP cache ONLY. The fast-paint cache above is a deliberate
+  // feature — it paints the last known view instantly and then replaces it
+  // with the network answer — and is deliberately NOT touched here. If the
+  // app ever shows a stale load after a create, that cache is where to look,
+  // and it is a separate decision from this one.
+  const res = await fetch(API_BASE + path, { cache: 'no-store', ...opts, headers });
   if (res.status === 401) {
     setToken(null);
     showLoginScreen('Session expired — sign in again.');

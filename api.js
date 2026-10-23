@@ -214,6 +214,47 @@ function createApi() {
         next();
     });
 
+    // ── /api/ IS LIVE DATA AND IS NEVER CACHED ───────────────────────────
+    // Apsara, 2026-10-23: "when i create a load/sle,i have to log out n
+    // relogin to view the latest change.same is hapeening in docs also."
+    //
+    // Nothing was wrong with the server or the screen. Checked both: POST
+    // /api/loads then GET /api/loads returns the new row immediately and the
+    // ETag changes, and the Loads tab refetches through loadTab('loads') on
+    // every open. What was missing is this header. Every /api/ response went
+    // out with NO Cache-Control and NO Vary at all, which leaves each
+    // browser — and anything between her and the VM — free to decide for
+    // itself how long yesterday's inventory stays fresh.
+    //
+    // THIS EXACT BUG HAS HAPPENED HERE BEFORE, on a different surface. See
+    // routes/pages.js's no-cache on .html, added 2026-08-15 after she pulled
+    // two rounds of PDF fixes onto the VM and still saw the old buttons:
+    // "express.static's default sends NO Cache-Control header at all, which
+    // leaves each browser free to use its own heuristic freshness lifetime".
+    // Static HTML was fixed then; the JSON the dashboard runs on was not.
+    // Same cause, same symptom, same fix — and from her side both look
+    // exactly like the deploy never happened.
+    //
+    // ── VARY IS THE HALF THAT IS NOT ABOUT STALENESS ─────────────────────
+    // The dashboard is reached through a Cloudflare tunnel (see
+    // dashboard/sw.js). A response with no Cache-Control and no Vary that
+    // any shared cache decides to keep is served to WHOEVER asks next — so
+    // a staff session could be handed a manager's /api/loads. no-store
+    // settles it on its own; Vary is belt and braces for the day somebody
+    // turns on "Cache Everything" and nobody connects it to this.
+    //
+    // Scoped to /api/ deliberately. The dashboard's own JS and CSS still
+    // cache normally — this is about the data, not the app shell — and the
+    // generated-document routes under /api/ are downloads nobody wants
+    // re-served stale either.
+    app.use((req, res, next) => {
+        if (req.path.startsWith('/api/')) {
+            res.set('Cache-Control', 'no-store, must-revalidate');
+            res.set('Vary', 'Cookie, Authorization');
+        }
+        next();
+    });
+
     // ── PORT 8080 ANSWERS, AND SENDS THEM TO HTTPS ───────────────────────
     // Apsara, 2026-10-05: "make it reacgable at http://35.233.131.198:8080".
     //
@@ -722,6 +763,18 @@ function createApi() {
             res.status(500).json({ error: e.message });
         }
     });
+
+    // A public GET /s/:token lived here from 2026-10-21 until the same day:
+    // Jarvis serving a claim's supporting documents to a supplier on an
+    // expiring link. Apsara settled it differently — "For supoorting doc,i
+    // will just directly provide gdrive link" — so she shares in Drive and
+    // the claim note prints the link she pastes.
+    //
+    // REMOVED RATHER THAN LEFT: it was the only route in this application
+    // that answered without a session, and an unauthenticated route that
+    // nothing calls is the #152 pattern at its worst — a door with no
+    // handle on the inside that nobody is watching. helpers/claimShare.js
+    // and tests/claim-share.js went with it.
 
     // Login page — inline HTML so it works before the dashboard static mount
     app.get('/login', (req, res) => {
