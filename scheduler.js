@@ -1569,6 +1569,23 @@ function start() {
     cron.schedule('20 * * * *',   () => require('./helpers/aiCostWatch').check().catch(e => console.error('[SCHED] ai-cost-watch:', e)), TZ);
     cron.schedule('30 6 * * *',   () => require('./helpers/integritySweepJob').run()
         .catch(e => console.error('[SCHED] integrity-sweep:', e)), TZ);
+    // ── 07:00 — PAYMENTS THAT LEFT THE BANK AND WERE NEVER RECORDED ──────
+    // Apsara, 2026-10-23: "They are forgetting to record the payment in
+    // jarvis", and on whether to rely on reminders: catch it instead. Told
+    // it needed Plaid, she said "You have pliad na.leverage that" — and she
+    // was right, helpers/bankOut.js already labels these rows 'not_recorded'.
+    //
+    // 07:00, HALF AN HOUR AFTER the integrity sweep above, deliberately: the
+    // overnight bank pull has landed by then, and a chase built on a feed
+    // that has not refreshed would name rows she recorded yesterday.
+    //
+    // ONCE A DAY, NOT HOURLY. This messages a person, not a log. It is also
+    // silent when nothing is wrong and never repeats a row it has already
+    // chased — see helpers/unrecordedPayments.js, which is where both of
+    // those rules live rather than here.
+    cron.schedule('0 7 * * *',    () => require('./helpers/unrecordedPayments').chase()
+        .then(r => { if (r.sent) console.log(`[SCHED] unrecorded-payments: chased ${r.found.rows.length}`); })
+        .catch(e => console.error('[SCHED] unrecorded-payments:', e)), TZ);
     cron.schedule('45 22 * * *',  () => nightlyCutoffBackfill().catch(e => console.error('[SCHED] cutoff-backfill:', e)), TZ);
     cron.schedule('15 23 * * *',  () => nightlyMetalsSheetSync().catch(e => console.error('[SCHED] metals-sheet-sync:', e)), TZ);
     // ── Freight / trucker invoice sweep, right after the sheet sync (Apsara, 2026-10-08) ─────────────

@@ -46,6 +46,18 @@ function renderSettings(s) {
           <div class="field"><label>Manager WhatsApp number</label><input id="s_manager" value="${esc(s.manager_number || '')}" placeholder="e.g. 918056944193"></div>
         </div>
         <div class="card" style="padding:22px 24px;">
+          <div style="font-family:var(--font-mono); font-size:11px; font-weight:600; letter-spacing:.14em; text-transform:uppercase; color:var(--text-strong); margin-bottom:4px;">Accounts contact</div>
+          <!-- Apsara, 2026-10-23: "They are forgetting to record the payment in
+               jarvis" ... "Both in Jarvis and WHatsapp to the person who i give
+               number in website.create that field in settings".
+               ONE named person on purpose — the problem is that nobody owns
+               the entry, and a group is how that stays nobody's job. -->
+          <div style="font-size:12.5px; color:var(--text-muted); margin-bottom:16px;">The person who records supplier payments. Jarvis chases this one person on WhatsApp and by email when a payment looks unrecorded. Leave blank and nothing is sent.</div>
+          <div class="field"><label>Name</label><input id="s_acc_name" value="${esc((s.accounts_contact || {}).name || '')}" placeholder="who records payments"></div>
+          <div class="field"><label>WhatsApp number</label><input id="s_acc_wa" value="${esc((s.accounts_contact || {}).whatsapp || '')}" placeholder="e.g. 918056944193"></div>
+          <div class="field"><label>Email</label><input id="s_acc_email" value="${esc((s.accounts_contact || {}).email || '')}" placeholder="accounts@edgemetals.com"></div>
+        </div>
+        <div class="card" style="padding:22px 24px;">
           <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:4px;">
             <div style="font-family:var(--font-mono); font-size:11px; font-weight:600; letter-spacing:.14em; text-transform:uppercase; color:var(--text-strong);">Internal team</div>
             <button id="btnAddTeam" class="btn btn-secondary" style="padding:7px 14px;">+ Add member</button>
@@ -166,6 +178,15 @@ function renderSettings(s) {
     try {
       await api('/api/settings', { method: 'PUT', body: JSON.stringify({
         manager_number: managerNum, internal_team: cleanedTeam, team_group_id: $('s_group').value.trim(),
+        // Sent as a whole object: PUT /api/settings merges top-level keys
+        // ({ ...loadSettings(), ...req.body }), so sending a partial here
+        // would REPLACE the contact rather than patch it — clearing the two
+        // fields she did not retype.
+        accounts_contact: {
+          name: $('s_acc_name').value.trim(),
+          whatsapp: $('s_acc_wa').value.trim(),
+          email: $('s_acc_email').value.trim(),
+        },
         gmail_watch_enabled: $('s_email_watcher_enabled').checked,
         email_cc: $('s_email_cc').value.trim(), email_bcc: $('s_email_bcc').value.trim(),
         yard_report_emails: $('s_yard_emails').value.trim(),

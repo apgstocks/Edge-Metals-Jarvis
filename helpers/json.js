@@ -244,6 +244,22 @@ function loadSettings() {
         // addresses, empty string means none. Common use: Bcc bose so she
         // still sees replies sent from Apsara's account — see
         // workflow/actions.js's draftEmailForConfirm/draftReplyForConfirm.
+        // ── WHO TO CHASE ABOUT PAYMENTS (2026-10-23) ────────────────────
+        // Apsara: "send a message to accounts team of edge metals asking
+        // about payment sent status.They are forgetting to record the
+        // payment in jarvis" — and, asked how it should go out: "Both in
+        // Jarvis and WHatsapp to the person who i give number in website.
+        // create that field in settings".
+        //
+        // One named person, not a list. The thing she is trying to fix is
+        // nobody owning the entry; a group chat is how that stays nobody's
+        // job. If it needs to be several people later, this becomes an
+        // array the way internal_team already is.
+        //
+        // Empty by default and NOTHING is sent while it is empty — a
+        // reminder to an unset number is a silent failure, and this one is
+        // about money going out unrecorded.
+        accounts_contact : { name: '', whatsapp: '', email: '' },
         email_cc       : '',
         email_bcc      : '',
         // End-of-day yard report (scheduler.js's eodYardReport job, 8pm

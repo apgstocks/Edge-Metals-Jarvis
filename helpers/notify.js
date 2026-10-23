@@ -82,4 +82,73 @@ async function criticalAlert(subject, body) {
     return { emailOk, smsOk };
 }
 
-module.exports = { init, sendEmailAlert, sendSmsAlert, criticalAlert };
+// ── MESSAGING ONE NAMED PERSON, ON BOTH CHANNELS ────────────────────────────
+// Apsara, 2026-10-23: "send a message to accounts team of edge metals asking
+// about payment sent status.They are forgetting to record the payment in
+// jarvis", and on how: "Both in Jarvis and WHatsapp to the person who i give
+// number in website."
+//
+// sendSmsAlert above cannot do this — it is hardwired to cfg.ALERT_SMS_TO,
+// the ops alert number. This takes a recipient, which is the whole point:
+// the person who records payments is not the person who gets woken up when
+// a backup fails.
+//
+// ── WHATSAPP IS TWILIO WITH A PREFIX ────────────────────────────────────────
+// Same account, same credentials, `whatsapp:` on both ends. No new
+// dependency and no second set of secrets to look after.
+//
+// ── IT REFUSES RATHER THAN HALF-SENDING ─────────────────────────────────────
+// With no contact configured it sends NOTHING and says so. A reminder about
+// unrecorded money that quietly goes nowhere is worse than no reminder: she
+// would believe it had been sent and stop chasing.
+function waNumber(raw) {
+    const digits = String(raw || '').replace(/[^0-9]/g, '');
+    return digits ? 'whatsapp:+' + digits : '';
+}
+
+async function messageContact(contact, subject, body, { twilioLib = null, sendEmail = null } = {}) {
+    const to = contact || {};
+    const out = { whatsapp: false, email: false, skipped: [], errors: [] };
+
+    const wa = waNumber(to.whatsapp);
+    if (!wa) out.skipped.push('no WhatsApp number on file');
+    else if (!cfg.TWILIO_SID || !cfg.TWILIO_AUTH_TOKEN || !cfg.TWILIO_FROM) {
+        out.skipped.push('Twilio not configured on this host');
+    } else {
+        try {
+            const twilio = twilioLib || require('twilio')(cfg.TWILIO_SID, cfg.TWILIO_AUTH_TOKEN);
+            await twilio.messages.create({
+                body: `${subject}\n\n${body}`.slice(0, 1600),
+                from: waNumber(cfg.TWILIO_FROM) || cfg.TWILIO_FROM,
+                to: wa,
+            });
+            out.whatsapp = true;
+        } catch (e) { out.errors.push('whatsapp: ' + e.message); }
+    }
+
+    if (!String(to.email || '').trim()) out.skipped.push('no email address on file');
+    else {
+        try {
+            const send = sendEmail || ((m) => require('./gmail').sendEmail(m));
+            await send({ to: to.email, subject, text: body });
+            out.email = true;
+        } catch (e) { out.errors.push('email: ' + e.message); }
+    }
+
+    out.sent = out.whatsapp || out.email;
+    return out;
+}
+
+// The accounts person from Settings. Separate from messageContact so the
+// caller cannot accidentally message a contact she has not set.
+async function messageAccounts(subject, body, opts = {}) {
+    const { loadSettings } = require('./json');
+    const who = (loadSettings() || {}).accounts_contact || {};
+    if (!String(who.whatsapp || '').trim() && !String(who.email || '').trim()) {
+        return { sent: false, whatsapp: false, email: false,
+            skipped: ['no accounts contact set — Settings > Accounts contact'], errors: [] };
+    }
+    return messageContact(who, subject, body, opts);
+}
+
+module.exports = { init, sendEmailAlert, sendSmsAlert, criticalAlert, messageContact, messageAccounts, waNumber };
