@@ -2194,6 +2194,19 @@ const MUTATIONS = [
     // APPLIED — tested nothing, which is #204's standing problem and the
     // reason this comment exists rather than a silent fix.
 
+    // data/ is gitignored, so the seed is what actually reaches the VM. Lose
+    // the fallback and the register is empty in production while looking
+    // complete on the Mac.
+    { name: 'export rules: the shipped seed fallback is dropped',
+      file: 'helpers/exportRules.js', suites: ['export-rules'],
+      find: "    if (!Array.isArray(rows)) {",
+      to:   "    if (false) {" },
+
+    { name: 'export rules: reading the seed writes her file as a side effect',
+      file: 'helpers/exportRules.js', suites: ['export-rules'],
+      find: "        try { rows = JSON.parse(require('fs').readFileSync(SEED, 'utf8')); }",
+      to:   "        try { rows = JSON.parse(require('fs').readFileSync(SEED, 'utf8')); require('fs').writeFileSync(cfg.EXPORT_RULES_FILE, JSON.stringify(rows)); }" },
+
     // The one that would quietly apply one country's rules to a box going
     // somewhere else: ambiguity tolerated instead of refused.
     { name: 'export rules: an ambiguous destination picks one anyway',

@@ -272,8 +272,11 @@ section('E. verify() — a person, on a date, or not at all');
         // somebody signs it. If a later edit marks one verified without a
         // person, this goes red.
         {
+            // seeds/, NOT data/ — data/ is gitignored, so the tracked seed is
+            // what actually reaches the VM. Reading data/ here would have
+            // tested a file production never sees, and passed.
             const real = JSON.parse(fs.readFileSync(
-                path.join(ROOT, 'data/export-rules.json'), 'utf8'));
+                path.join(ROOT, 'seeds/export-rules.json'), 'utf8'));
             ck('the shipped register has rows', real.length >= 4, String(real.length));
             ck('  and NOT ONE of them claims to be verified',
                real.every((r) => !r.verified_by && !r.verified_on),
@@ -294,6 +297,31 @@ section('E. verify() — a person, on a date, or not at all');
                 ck(`  ${label} reads unknown on the shipped register, not clear`,
                    r.outcome === 'unknown', `${r.outcome}: ${r.reasons.join(' | ')}`);
             }
+
+            // ── THE SEED FALLBACK, which is the whole reason seeds/ exists ─
+            // On a fresh VM there is no data/export-rules.json. rules() must
+            // fall back to the tracked seed rather than returning [] — an
+            // empty register answers "nothing on file" for every destination,
+            // which is still unknown, but it would silently lose the India
+            // notice and the Korea gap that are the point of the file.
+            const herFile = cfg.EXPORT_RULES_FILE;
+            const saved = fs.existsSync(herFile) ? fs.readFileSync(herFile, 'utf8') : null;
+            try {
+                if (saved !== null) fs.unlinkSync(herFile);
+                const fromSeed = X.rules();
+                ck('with no register of her own, rules() falls back to the shipped seed',
+                   fromSeed.length === real.length, `${fromSeed.length} vs ${real.length}`);
+                ck('  so a fresh VM still knows about the India notice',
+                   fromSeed.some((r) => r.id === 'IN-PSIC-2026'),
+                   fromSeed.map((r) => r.id).join(','));
+                ck('  and reading the seed does NOT create her file',
+                   !fs.existsSync(herFile), 'a read path that writes is a surprise');
+            } finally {
+                if (saved !== null) fs.writeFileSync(herFile, saved, 'utf8');
+            }
+            ck('  and her own register wins when it exists',
+               saved === null || X.rules().some((r) => r.id === 'V1'),
+               X.rules().map((r) => r.id).join(','));
         }
 
         console.log(`\n${pass} passed, ${fail} failed`);

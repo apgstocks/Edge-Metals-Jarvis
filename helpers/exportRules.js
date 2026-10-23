@@ -145,9 +145,28 @@ function countryOf(place) {
     return [...hits.values()][0];
 }
 
+// ── THE SHIPPED SEED, BECAUSE data/ IS GITIGNORED ────────────────────────
+// Found on committing: data/ is ignored, so data/export-rules.json would
+// never have reached the VM and the register would have been empty in
+// production while looking complete here. Every other store in data/ is
+// hers and accumulates on the VM; this one is the first that ships WITH
+// content, so it needs a tracked copy.
+//
+// seeds/export-rules.json is read ONLY when her own file does not exist yet.
+// Read, never written — a read path that writes a file is a surprise, and
+// mutateJson in verify() creates her copy on the first real verification. So
+// the ordering is: her register if she has one, otherwise the shipped rows,
+// which are all unverified and therefore all report unknown.
+const path = require('path');
+const SEED = path.join(__dirname, '..', 'seeds', 'export-rules.json');
+
 function rules() {
-    let rows = [];
-    try { rows = loadJson(cfg.EXPORT_RULES_FILE, []) || []; } catch (e) { return []; }
+    let rows = null;
+    try { rows = loadJson(cfg.EXPORT_RULES_FILE, null); } catch (e) { rows = null; }
+    if (!Array.isArray(rows)) {
+        try { rows = JSON.parse(require('fs').readFileSync(SEED, 'utf8')); }
+        catch (e) { return []; }
+    }
     return Array.isArray(rows) ? rows.filter((r) => r && r.id) : [];
 }
 

@@ -1,0 +1,84 @@
+[
+  {
+    "id": "IN-PSIC-2026",
+    "country": "IN",
+    "requirement": "Metallic waste and scrap needs a pre-shipment inspection certificate from the country of origin, UNLESS it originates in a listed safe country (the USA is listed) AND enters through a designated seaport",
+    "outcome": "exempt",
+    "applies_when": { "origin_country": "US" },
+    "source_ref": "DGFT Public Notice 35/2026-27, 21 Oct 2026, amending HBP 2023 para 2.51(d)(v)(iv)",
+    "source_url": "https://taxguru.in/dgft/dgft-clarifies-psic-exemption-metallic-scrap-imports-icd-clearance.html",
+    "verified_on": null,
+    "verified_by": null,
+    "expires_on": null,
+    "disputed": true,
+    "what_to_do": "A US-origin container is exempt from PSIC only through a DESIGNATED seaport. Confirm Nhava Sheva is on the current designated list before the container sails.",
+    "how_to_verify": "Get the text of DGFT Public Notice 35/2026-27 and read the designated-port list, or have the buyer's customs broker confirm in writing that the port of discharge is designated. Then: node scripts/export-rules.js verify IN-PSIC-2026 --by \"<person>\"",
+    "notes": [
+      "DISPUTED ON PURPOSE, so this rule reports unknown rather than clear. Research on 2026-10-23 found secondary sources that disagree on the designated-port list: seasaw.ai described eight ports, steel-baba.com ten. Nobody produced the notice text itself. Nhava Sheva being on or off that list is the whole question.",
+      "Trans-shipment through a safe country is reported NOT to qualify — origin is what counts. Relevant if a container is ever routed via UAE, which is not on the safe list.",
+      "Maritime Gateway reports the exemption survives onward clearance at an inland container depot if the seaport checks are documented and the proof travels with the consignment.",
+      "SteelOrbis reported in September 2026 that the Indian government was considering relaxing the PSIC regime after recycler complaints. Expect this rule to move."
+    ],
+    "history": []
+  },
+  {
+    "id": "IN-RADIATION",
+    "country": "IN",
+    "requirement": "Metallic scrap entering India is subject to a radiation-screening regime at the port",
+    "outcome": "required",
+    "applies_when": {},
+    "source_ref": "Referenced alongside the PSIC regime in trade commentary; primary source not obtained",
+    "source_url": "https://seasaw.ai/resources/metal-scrap-import-psic-inspection/",
+    "verified_on": null,
+    "verified_by": null,
+    "expires_on": null,
+    "disputed": false,
+    "what_to_do": "Ask the buyer's broker what radiation documentation India expects from the exporter, and whether anything has to accompany the container.",
+    "how_to_verify": "Buyer's customs broker at the port of discharge, in writing. Then: node scripts/export-rules.js verify IN-RADIATION --by \"<person>\"",
+    "notes": [
+      "NEVER VERIFIED, so it reports unknown. Recorded rather than omitted because a rule nobody has written down is a rule nobody will ask about. The requirement line is deliberately vague — it says a regime exists, not what it demands, because that is the limit of what was established."
+    ],
+    "history": []
+  },
+  {
+    "id": "KR-SCRAP",
+    "country": "KR",
+    "requirement": "Unestablished — what South Korea requires of a US scrap exporter is not known",
+    "outcome": "required",
+    "applies_when": {},
+    "source_ref": "No authoritative source found 2026-10-23",
+    "source_url": "https://www.investkorea.org/file/ik-en/252025Customs_Clearance_in_Korea.pdf",
+    "verified_on": null,
+    "verified_by": null,
+    "expires_on": null,
+    "disputed": false,
+    "what_to_do": "Do not treat a Busan container as clear on this file's say-so. Ask the buyer or Zimex what Korea asks for.",
+    "how_to_verify": "Korea Customs Service (customs.go.kr), or a Korean customs broker, or the buyer. Then: node scripts/export-rules.js verify KR-SCRAP --by \"<person>\"",
+    "notes": [
+      "Research on 2026-10-23 found NOTHING authoritative. A KOTRA customs guide lists the Nuclear Safety Act among applicable import laws without saying whether it reaches scrap shipments; trade.gov's guide is generic and does not mention scrap.",
+      "Radioactivity screening is common at scrap ports worldwide, so the absence of a source is not evidence there is no rule. That asymmetry is exactly why this row exists and why it is not marked allowed.",
+      "This is the most valuable row in the file. Busan is one of only two destinations in the codebase, and Jarvis does not know its rules."
+    ],
+    "history": []
+  },
+  {
+    "id": "CN-SOLID-WASTE-BAN",
+    "country": "CN",
+    "requirement": "China banned imports of most solid-waste scrap; a container of scrap is not expected to be admissible",
+    "outcome": "prohibited",
+    "applies_when": {},
+    "source_ref": "Widely reported policy effective 2021; primary instrument not obtained",
+    "source_url": "",
+    "verified_on": null,
+    "verified_by": null,
+    "expires_on": null,
+    "disputed": false,
+    "what_to_do": "Do not book scrap to a Chinese port without written confirmation from the buyer that the specific material is admissible under the current regime.",
+    "how_to_verify": "Buyer's broker in China, in writing, naming the material. Then: node scripts/export-rules.js verify CN-SOLID-WASTE-BAN --by \"<person>\"",
+    "notes": [
+      "Recorded from general industry knowledge, NOT from a source read on 2026-10-23, so it is unverified and reports unknown. Some categories were reclassified as resources rather than waste and are admissible, which is precisely the detail a blanket 'prohibited' would get wrong.",
+      "No Chinese port appears in the codebase today. This row is here so that the first time one is typed, Jarvis says 'ask' instead of nothing."
+    ],
+    "history": []
+  }
+]
