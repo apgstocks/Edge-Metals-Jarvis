@@ -165,15 +165,80 @@ function profitAndLoss(lines, opts = {}) {
     };
 }
 
+// ── EVERYTHING THAT HAPPENED BEFORE THIS PERIOD STARTED ──────────────────
+// Exclusive on `from`, and no `to` — the whole of history up to the day the
+// period opens. Used for one thing only: retained earnings.
+//
+// Deliberately NOT expressed as `inRange(date, null, dayBefore(from))`. That
+// would need date arithmetic on a string, and this file's own note at the top
+// explains why that is a trap here: her Pacific filing date already moved a
+// container into the wrong month once (#56). `date < from` is a string
+// compare that needs no calendar and cannot drift by a timezone.
+function priorLines(lines, { entity, from } = {}) {
+    if (!entity) throw new Error('statements need a company — there is no combined taxpayer');
+    if (!from) return [];
+    return (Array.isArray(lines) ? lines : [])
+        .filter((l) => l && l.entity === entity && String(l.date || '') < String(from));
+}
+
 // ── BALANCE SHEET ────────────────────────────────────────────────────────
 // And the check that makes the whole pack trustworthy: assets must equal
-// liabilities plus equity plus the profit the P&L just reported. The profit
-// is included because it has not been moved into retained earnings yet —
-// that happens at year end, and doing it here would double-count it.
+// liabilities plus equity plus retained earnings plus the profit the P&L has
+// just reported.
+//
+// ── WHAT WAS ACTUALLY WRONG HERE, 2026-10-23 — MY FINDING, NOT HERS ──────
+// The note that stood here said the period's profit is included "because it
+// has not been moved into retained earnings yet — that happens at year end".
+// The first half is right. The second half was never true: nothing in this
+// repo closes a year, and `retainedEarnings` had no occurrence anywhere.
+//
+// But that is NOT the defect, and I nearly shipped a fix for the wrong thing.
+// Adding retained earnings to the right-hand side alone made a second-year
+// sheet go OUT by exactly the first year's profit. A probe showed why, and
+// the real problem is worse:
+//
+// ── THE OLD TIE COULD NOT FAIL, SO IT PROVED NOTHING ─────────────────────
+// This function filtered EVERY account by the period, `from` included. So
+// for from=2027-01-01 it reported 2027's MOVEMENT in cash and payables, not
+// the cash and payables the company holds. On a two-year journal it showed
+// assets of 31,000 when the company's assets were 80,000.
+//
+// And it balanced. Every journal entry balances, so any complete subset of
+// them balances: debits = credits gives Δassets = Δliabilities + Δequity +
+// period profit, which is precisely what rightSide computed. The check that
+// this whole file treats as its proof of correctness was an identity that
+// holds for any date range whatsoever. Same class of error as the assertion
+// deleted from tests/claims-read-mail.js this week, which tested a string it
+// had just concatenated onto its own input.
+//
+// A balance sheet is an AS-AT statement. So:
+//   positions (asset, liability, equity)  — everything up to `to`, and
+//                                           `from` is deliberately ignored
+//   profit for the period                 — from..to, as before
+//   retained earnings                     — profit before `from`, DERIVED
+//                                           from the same profitAndLoss, so
+//                                           there is still one definition of
+//                                           profit in this file and no
+//                                           year-end journal to remember
+//
+// Cumulative assets = cumulative liabilities + equity + retained + period
+// profit, and now the tie can actually fail: feed it an unbalanced journal
+// and it reports the gap instead of absorbing it.
+//
+// ── WHAT THIS CHANGES ON HER DOCUMENTS ───────────────────────────────────
+// With `from` unset or earlier than every line, retained earnings is 0 and
+// every figure is identical to yesterday's — which is the whole of the 2026
+// year-to-date pack she has been looking at. It changes only a period that
+// OPENS after earlier activity: a quarterly or second-year sheet, where
+// assetTotal and liabilityTotal stop being movements and become balances.
+// Those figures were wrong and are now right, but they are figures her CPA
+// receives, so this wants her yes before it ships.
 function balanceSheet(lines, opts = {}) {
-    const tb = trialBalance(lines, opts);
+    // POSITIONS, as at `to`. `from` is dropped on purpose — see above.
+    const asAt = trialBalance(lines, { entity: opts.entity, to: opts.to });
+    // PROFIT, for the period as asked.
     const pl = profitAndLoss(lines, opts);
-    const pick = (type) => tb.accounts.filter((a) => a.type === type);
+    const pick = (type) => asAt.accounts.filter((a) => a.type === type);
 
     const assets = pick('asset');
     const liabilities = pick('liability');
@@ -184,16 +249,26 @@ function balanceSheet(lines, opts = {}) {
     const liabilityTotal = total(liabilities);
     const equityTotal = total(equity);
     const netIncome = pl.netIncome;
-    const rightSide = r2(liabilityTotal + equityTotal + netIncome);
+
+    // The entity is passed on, but no date bounds: profitAndLoss must see the
+    // whole of the prior lines it has been handed, not re-apply this period's.
+    const prior = priorLines(lines, opts);
+    const retainedEarnings = prior.length
+        ? profitAndLoss(prior, { entity: opts.entity }).netIncome
+        : 0;
+
+    const rightSide = r2(liabilityTotal + equityTotal + retainedEarnings + netIncome);
     const difference = r2(assetTotal - rightSide);
 
     return {
         entity: opts.entity, from: opts.from || null, to: opts.to || null,
         assets, liabilities, equity,
-        assetTotal, liabilityTotal, equityTotal, netIncome,
+        assetTotal, liabilityTotal, equityTotal, retainedEarnings, netIncome,
         rightSide, difference,
         balances: Math.abs(difference) < CENT,
-        trialBalanceOk: tb.ok,
+        // The as-at view's, not the period's — these are the accounts this
+        // statement is actually built from.
+        trialBalanceOk: asAt.ok,
     };
 }
 
@@ -216,7 +291,11 @@ function pack(lines, opts = {}) {
     }
     if (!bs.balances) {
         problems.push(`the balance sheet is out by ${bs.difference}: assets ${bs.assetTotal} `
-            + `against liabilities + equity + profit ${bs.rightSide}`);
+            + `against liabilities + equity`
+            // Named only when there is one, so the sentence for a first-year
+            // company reads exactly as it did before this was added.
+            + (bs.retainedEarnings ? ' + retained earnings' : '')
+            + ` + profit ${bs.rightSide}`);
     }
 
     // ── CAN A RETURN ACTUALLY BE FILED FROM THIS? ────────────────────────
@@ -237,4 +316,4 @@ function pack(lines, opts = {}) {
     };
 }
 
-module.exports = { trialBalance, generalLedger, profitAndLoss, balanceSheet, pack, inRange, CENT };
+module.exports = { trialBalance, generalLedger, profitAndLoss, balanceSheet, pack, inRange, priorLines, CENT };

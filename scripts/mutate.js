@@ -2163,6 +2163,39 @@ const MUTATIONS = [
       find: '            return { rate: p, rate_unit: u, rate_from: \'\' };',
       to:   '            return { rate: Math.round(p * (claimPrice.toUnit(1, \'MT\', u) || 1) * 100) / 100, rate_unit: \'MT\', rate_from: `${money(p)}/${u}` };' },
 
+    // ── RETAINED EARNINGS / THE BALANCE SHEET AS AT, 2026-10-23 ──────────
+    // The old tie could not fail: every journal entry balances, so any
+    // complete subset balances, so the old rightSide was an identity. These
+    // five exist to prove the new checks are not the same decoration.
+    { name: 'balance sheet: positions go back to being filtered by `from`',
+      file: 'helpers/statements.js', suites: ['retained-earnings'],
+      find: "    const asAt = trialBalance(lines, { entity: opts.entity, to: opts.to });",
+      to:   "    const asAt = trialBalance(lines, opts);" },
+
+    { name: 'balance sheet: retained earnings drops out of the right-hand side',
+      file: 'helpers/statements.js', suites: ['retained-earnings'],
+      find: "    const rightSide = r2(liabilityTotal + equityTotal + retainedEarnings + netIncome);",
+      to:   "    const rightSide = r2(liabilityTotal + equityTotal + netIncome);" },
+
+    // The double-count: hand the prior-period P&L this period's dates and it
+    // returns the period's own profit again instead of what came before it.
+    { name: 'balance sheet: prior profit is computed over the period, not before it',
+      file: 'helpers/statements.js', suites: ['retained-earnings'],
+      find: "        ? profitAndLoss(prior, { entity: opts.entity }).netIncome",
+      to:   "        ? profitAndLoss(prior, opts).netIncome" },
+
+    { name: 'priorLines: the `from` boundary becomes inclusive',
+      file: 'helpers/statements.js', suites: ['retained-earnings'],
+      find: "        .filter((l) => l && l.entity === entity && String(l.date || '') < String(from));",
+      to:   "        .filter((l) => l && l.entity === entity && String(l.date || '') <= String(from));" },
+
+    // In rightSide but not on the page: a CPA adding the printed rows lands
+    // short by the prior years' profit and the pack looks like it has an error.
+    { name: 'CPA pack: the retained earnings row stops being printed',
+      file: 'helpers/booksPack.js', suites: ['retained-earnings'],
+      find: "        if (b.retainedEarnings) {",
+      to:   "        if (false && b.retainedEarnings) {" },
+
     // ── NO FIGURE, NOT ON THE DEMAND, 2026-10-21 ─────────────────────────
     // "What if we have multiple claims like this.Here in first row nothing
     // was there." Five rows, four of them dashes, one number.

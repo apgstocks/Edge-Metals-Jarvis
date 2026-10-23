@@ -178,8 +178,24 @@ async function toWorkbook(built, { entity, from = null, to = null, when = null }
         block('Assets', b.assets, b.assetTotal);
         block('Liabilities', b.liabilities, b.liabilityTotal);
         block('Equity', b.equity, b.equityTotal);
+        // ── RETAINED EARNINGS, ONLY WHEN THERE ARE SOME (2026-10-23) ──────
+        // Inside rightSide, so it HAS to be visible or this sheet stops
+        // footing: a CPA adding up the printed rows would land short by the
+        // prior years' profit and the pack would look like it had an error.
+        //
+        // Suppressed at zero on purpose. A first-year company's sheet comes
+        // out exactly as it did before this was added — same rows, same
+        // totals — rather than gaining a row of 0.00 that invites a question.
+        // The label names the period it covers; "retained earnings" alone
+        // reads as a balance somebody posted, and nobody posted this.
+        if (b.retainedEarnings) {
+            ws.addRow(['', `Retained earnings (everything before ${from || 'this period'})`,
+                num(b.retainedEarnings)]);
+        }
         ws.addRow(['', 'Net income for the period', num(b.netIncome)]);
-        totalRow(ws, ['', 'Liabilities, equity and profit', num(b.rightSide)]);
+        totalRow(ws, ['', b.retainedEarnings
+            ? 'Liabilities, equity, retained earnings and profit'
+            : 'Liabilities, equity and profit', num(b.rightSide)]);
         if (!b.balances) {
             const r = totalRow(ws, ['', 'OUT OF BALANCE BY', num(b.difference)]);
             r.font = { bold: true, color: { argb: 'FFC5402F' } };

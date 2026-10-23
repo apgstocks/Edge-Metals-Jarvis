@@ -534,6 +534,17 @@ function renderBS(d) {
         'Debts first, then the owners’ share — the two sides must come to the same figure.',
         section('Liabilities', b.liabilities, b.liabilityTotal, 'cost')
         + section('Equity', b.equity, b.equityTotal, 'exp')
+        // RETAINED EARNINGS, 2026-10-23. It is inside b.rightSide, so it has
+        // to appear here or the Total band below stops matching the rows above
+        // it and the screen looks broken. Rendered only when non-zero: a
+        // first-year company's sheet is unchanged, rather than gaining a
+        // 0.00 row. JS comment, not an HTML one — an HTML comment here would
+        // be inside the string this function returns and would ship into the
+        // page, which has already happened four times on the claim note.
+        + (Number(b.retainedEarnings) ? `<div class="band">
+             <div class="t">Kept from earlier years</div>
+             <div class="n ${Number(b.retainedEarnings) >= 0 ? 'up' : 'down'}">${money(b.retainedEarnings)}</div>
+           </div>` : '')
         + `<div class="band">
              <div class="t">${Number(b.netIncome) >= 0 ? 'Profit' : 'Loss'} for the period</div>
              <div class="n ${Number(b.netIncome) >= 0 ? 'up' : 'down'}">${money(b.netIncome)}</div>
