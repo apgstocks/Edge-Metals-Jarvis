@@ -255,15 +255,28 @@ for (const [label, src] of [['app', MOBILE], ['website', DASH]]) {
         (older) => `<folded n="${(older || []).length}">`
     );
 
-    // DATED IN THE CURRENT MONTH, deliberately. Older months now fold, so a
-    // fixture dated last August would exercise the folding path and the day
-    // sections this section is about would not appear at all — the assertions
-    // would fail for a reason with nothing to do with filtering.
+    // ── DATED IN DAYS AGO, NOT IN THE CURRENT MONTH (2026-10-23) ─────────
+    // This said "dated in the current month, deliberately. Older MONTHS now
+    // fold" — and that comment was already false. The rule is the last SEVEN
+    // DAYS, so `${thisMonth}-12` was open on the 13th and folded by the 20th.
+    // Four assertions here went red every month from roughly the 19th
+    // onward, for a reason with nothing to do with what they test.
+    //
+    // tests/load-deck-grouping.js hit this exact bomb twice and wrote down
+    // the conclusion: "a test that passes on most days and fails on a few is
+    // worse than one that always fails, because it gets re-run, shrugged at,
+    // and eventually deleted." It then expressed its fixture in days ago.
+    // This file is the copy that never got the same treatment.
+    //
+    // Two distinct days, both well inside the week, so the day grouping this
+    // section is about is genuinely exercised and nothing depends on today.
+    const daysAgo = (n) => new Date(Date.now() - n * 86400000).toISOString().slice(0, 10);
+    // Still needed by the sections below, which key on the month only.
     const thisMonth = new Date().toISOString().slice(0, 7);
     const rows = [
-        { id: 'A', date: `${thisMonth}-12`, seller: 'Acme' },
-        { id: 'B', date: `${thisMonth}-10`, seller: 'Acme' },
-        { id: 'C', date: `${thisMonth}-12`, seller: 'Acme' },
+        { id: 'A', date: daysAgo(0), seller: 'Acme' },
+        { id: 'B', date: daysAgo(2), seller: 'Acme' },
+        { id: 'C', date: daysAgo(0), seller: 'Acme' },
     ];
 
     const grouped = fn(rows, 'none', undefined);

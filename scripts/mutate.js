@@ -2163,6 +2163,337 @@ const MUTATIONS = [
       find: '            return { rate: p, rate_unit: u, rate_from: \'\' };',
       to:   '            return { rate: Math.round(p * (claimPrice.toUnit(1, \'MT\', u) || 1) * 100) / 100, rate_unit: \'MT\', rate_from: `${money(p)}/${u}` };' },
 
+    // ── NO FIGURE, NOT ON THE DEMAND, 2026-10-21 ─────────────────────────
+    // "What if we have multiple claims like this.Here in first row nothing
+    // was there." Five rows, four of them dashes, one number.
+    { name: 'claim note: unpriced claims are printed again',
+      file: 'helpers/claims/report.js', suites: ['claims-read-mail'],
+      find: "    lines = lines.filter((l) => !omit.has(l.id));",
+      to:   "    lines = lines.filter(() => true);" },
+
+    // The half that makes dropping them safe: she must still be told.
+    { name: 'claim note: the omitted claims are not reported back to her',
+      file: 'helpers/claims/report.js', suites: ['claims-read-mail'],
+      find: "    const noFigure = sendableAll.filter((l) => !l.our_claim)",
+      to:   "    const noFigure = sendableAll.filter(() => false)" },
+
+    { name: 'docs link: the link is only cleaned at render, not at save',
+      file: 'helpers/claims/routes.js', suites: ['claims-mixed-container'],
+      find: "                b.docs_url = require('./report').safeUrl(b.docs_url);",
+      to:   "                b.docs_url = String(b.docs_url || '');" },
+
+    // The input back inside the collapsed section she never opened.
+    { name: 'docs link: the box goes back into the collapsed details section',
+      file: 'dashboard/claims.html', suites: ['claims-sorted'],
+      find: "            '<input class=\"d_docs\" data-k=\"d_docs\" value=\"' + esc(c.docs_url || '') + '\"",
+      to:   "            '<input class=\"d_docs_moved\" data-k=\"d_docs\" value=\"' + esc(c.docs_url || '') + '\"" },
+
+    // ── THE LINK THAT WENT WITH THE CLAIM, 2026-10-21 ────────────────────
+    // She went looking for a Drive link on a claim report and found nothing.
+    // The claim carrying it had no figure, so both were left off. Correct —
+    // but silently, which is what cost her the time.
+    { name: 'docs link: the warning stops saying the link went too',
+      file: 'helpers/claims/report.js', suites: ['claims-scan-report'],
+      find: "            has_docs: !!l.docs_url }));",
+      to:   "            has_docs: false }));" },
+
+    // ── QUALITY SAYS WHAT WAS WRONG, 2026-10-21 ──────────────────────────
+    // "wh about quality claim?" It stored a quantity and a rate and nothing
+    // else, so the note demanded $1,971.92 and never named the defect.
+
+    { name: 'quality: the branch stops reading the findings',
+      file: 'helpers/claims.js', suites: ['claims-sorted'],
+      find: "        Object.assign(patch, { quality_qty: qty, sell_price, sell_price_unit,\n            findings: qFindings, measured_by: qMeasured });",
+      to:   "        Object.assign(patch, { quality_qty: qty, sell_price, sell_price_unit });" },
+
+    // A findings list that is not filtered lets any string onto a document
+    // that goes to a supplier.
+    { name: 'quality: unknown findings are stored unfiltered',
+      file: 'helpers/claims.js', suites: ['claims-sorted'],
+      find: "            ? given('findings').filter((f) => FINDINGS.includes(f)) : c.findings;",
+      to:   "            ? given('findings') : c.findings;" },
+
+    // The note goes back to "N LB claimed" with no defect and no working.
+    { name: 'quality: the note says only the quantity again',
+      file: 'helpers/claims/report.js', suites: ['claims-sorted'],
+      find: "        if (l.findings.length) bits.push('found: ' + l.findings.join(', ').toLowerCase());\n        if (l.rate !== null) {",
+      to:   "        if (false) bits.push('found: ' + l.findings.join(', ').toLowerCase());\n        if (false) {" },
+
+    // THE DEAD-CHIP BUG, as it was actually written: a class nothing binds.
+    { name: 'quality: the findings chips go back on a dead class',
+      file: 'dashboard/claims.html', suites: ['claims-sorted'],
+      find: "'<div class=\"chips2 f_found\" style=\"margin-bottom:4px\" role=\"group\" aria-label=\"What was wrong\">' +",
+      to:   "'<div class=\"chips2 f_qfind\" style=\"margin-bottom:4px\" role=\"group\" aria-label=\"What was wrong\">' +" },
+
+    // Making findings REQUIRED is the break CLAUDE.md records twice: the
+    // mail and voice paths have no chips to tick.
+    { name: 'quality: findings become required, breaking the mail path',
+      file: 'helpers/claims.js', suites: ['claims-sorted'],
+      find: "        const qFindings = Array.isArray(given('findings'))",
+      to:   "        if (!Array.isArray(given('findings')) || !given('findings').length) throw new Error('a quality claim needs findings');\n        const qFindings = Array.isArray(given('findings'))" },
+
+    // ── DAMAGE, 2026-10-21 ───────────────────────────────────────────────
+    { name: 'damage: falls out of ASSESSMENTS and is refused again',
+      file: 'helpers/claims.js', suites: ['claims-sorted'],
+      find: "const ASSESSMENTS = ['weight', 'contamination', 'grade', 'quality', 'sorted', 'damage'];",
+      to:   "const ASSESSMENTS = ['weight', 'contamination', 'grade', 'quality', 'sorted'];" },
+
+    // The shared branch stops serving damage: it would fall through to the
+    // final throw instead of being priced.
+    { name: 'damage: the shared line branch stops recognising it',
+      file: 'helpers/claims.js', suites: ['claims-sorted'],
+      find: "const LINE_ASSESSMENTS = ['sorted', 'damage'];",
+      to:   "const LINE_ASSESSMENTS = ['sorted'];" },
+
+    // The wording collapses back to sorted — a damage claim describing
+    // material as "sorted out of the load", which did not happen.
+    { name: 'damage: refusals describe it as sorting',
+      file: 'helpers/claims.js', suites: ['claims-sorted'],
+      find: "        const isDamage = kind === 'damage';",
+      to:   "        const isDamage = false;" },
+
+    // The claim note heads a damage breakdown "Material".
+    { name: 'damage: the note calls damaged goods a material',
+      file: 'helpers/claims/report.js', suites: ['claims-sorted'],
+      find: "    if (l.assessment === 'sorted' || l.assessment === 'damage') {",
+      to:   "    if (l.assessment === 'sorted') {" },
+
+    // Rule 3 again: the field the screen posts, dropped from the whitelist.
+    // Pointed at claims-assess, not claims-sorted: claims-sorted calls
+    // claims.assess() directly and never touches the route, so this mutation
+    // SURVIVED there — the field was whitelisted and never posted.
+    { name: 'damage: damage_lines falls out of the route whitelist',
+      file: 'helpers/claims/routes.js', suites: ['claims-assess'],
+      find: "                'damage_lines'];",
+      to:   "                ];" },
+
+    // ── A GRADE CLAIM SHOWS ITS WORKING, 2026-10-21 ──────────────────────
+    // "if there is any damage,quality,grade claim,we need to procide more
+    // details na?" Grade was the worst: $1,041.35 demanded with the $0.42
+    // that makes the sum work printed nowhere.
+
+    { name: 'grade: the note goes back to naming the grades and no figures',
+      file: 'helpers/claims/report.js', suites: ['claims-supplier-price'],
+      find: "        if (l.grade_weight !== null && gs !== null && gr !== null) {",
+      to:   "        if (false) {" },
+
+    // num(null) is 0. Using it here prints "at $0.00/LB = $0.00" on a claim
+    // whose prices were never recorded — a confident zero on a demand.
+    { name: 'grade: an unrecorded price becomes a real zero',
+      file: 'helpers/claims/report.js', suites: ['claims-supplier-price'],
+      find: "        grade_price_sold: nnum(c.grade_price_sold),\n        grade_price_received: nnum(c.grade_price_received),",
+      to:   "        grade_price_sold: num(c.grade_price_sold),\n        grade_price_received: num(c.grade_price_received)," },
+
+    // The ambiguity she should not have to live with.
+    { name: 'grade: the ambiguous "sold as" wording comes back',
+      file: 'helpers/claims/report.js', suites: ['claims-supplier-price'],
+      find: "            bits.push(`billed to us as ${l.grade_sold || '—'}",
+      to:   "            bits.push(`sold as ${l.grade_sold || '—'}" },
+
+    // The screen quietly goes back to the gross figure — the engine still
+    // right, the number she reads still wrong.
+    { name: 'claim credit: the Owed card shows the gross balance again',
+      file: 'dashboard/edge-inventory.html', suites: ['supplier-account'],
+      find: "    card('Owed to them', money(DATA.account.net_owed),",
+      to:   "    card('Owed to them', money(DATA.account.closing)," },
+
+    { name: 'claim credit: the supplier index drops back to gross',
+      file: 'dashboard/edge-inventory.html', suites: ['supplier-account'],
+      find: "font-weight:700; color:${acct.net_owed > 0 ? 'var(--text-strong)' : 'var(--green-500)'};\">${money(acct.net_owed)}",
+      to:   "font-weight:700; color:${acct.closing > 0 ? 'var(--text-strong)' : 'var(--green-500)'};\">${money(acct.closing)}" },
+
+    // The engine with nothing calling it — #152, as it actually happens:
+    // the code is fine, the job is gone, and nobody notices for months.
+    { name: 'unrecorded: nothing schedules the chase',
+      file: 'scheduler.js', suites: ['unrecorded-payments'],
+      find: "    cron.schedule('0 7 * * *',    () => require('./helpers/unrecordedPayments').chase()",
+      to:   "    (() => {})(() => require('./helpers/unrecordedPayments').chase()" },
+
+    // ── UNRECORDED PAYMENTS, 2026-10-23 ──────────────────────────────────
+    // "You have pliad na.leverage that."
+
+    // Suppression turning into silence — the row never chased again.
+    { name: 'unrecorded: a failed send is marked as chased anyway',
+      file: 'helpers/unrecordedPayments.js', suites: ['unrecorded-payments'],
+      find: "    if (res.sent) await remember(found.rows.map((r) => r.id));",
+      to:   "    await remember(found.rows.map((r) => r.id));" },
+
+    // The daily repeat that gets the whole thing muted.
+    { name: 'unrecorded: the same rows are chased every morning',
+      file: 'helpers/unrecordedPayments.js', suites: ['unrecorded-payments'],
+      find: "    const already = includeAlreadyChased ? new Set() : seen();",
+      to:   "    const already = new Set();" },
+
+    // An all-clear message every day, which mutes the real one.
+    { name: 'unrecorded: it messages even when nothing is wrong',
+      file: 'helpers/unrecordedPayments.js', suites: ['unrecorded-payments'],
+      find: "    if (!found.rows.length) {",
+      to:   "    if (false) {" },
+
+    // ── CHASING THE ACCOUNTS CONTACT, 2026-10-23 ─────────────────────────
+    // "They are forgetting to record the payment in jarvis."
+
+    // The worst outcome: a reminder about unrecorded money that silently
+    // goes nowhere, so she believes it was sent and stops chasing.
+    { name: 'accounts contact: an unset contact is treated as sendable',
+      file: 'helpers/notify.js', suites: ['accounts-contact'],
+      find: "    if (!String(who.whatsapp || '').trim() && !String(who.email || '').trim()) {",
+      to:   "    if (false) {" },
+
+    // WhatsApp needs the prefix on BOTH ends; a bare number sends an SMS.
+    { name: 'accounts contact: the number loses its whatsapp: prefix',
+      file: 'helpers/notify.js', suites: ['accounts-contact'],
+      find: "    return digits ? 'whatsapp:+' + digits : '';",
+      to:   "    return digits ? '+' + digits : '';" },
+
+    // One dead channel taking the other with it.
+    { name: 'accounts contact: a failed WhatsApp aborts the email too',
+      file: 'helpers/notify.js', suites: ['accounts-contact'],
+      find: "        } catch (e) { out.errors.push('whatsapp: ' + e.message); }",
+      to:   "        } catch (e) { throw e; }" },
+
+    // ── CLAIMS COME OFF WHAT HE IS OWED, 2026-10-23 ──────────────────────
+    // Before this, supplierAccount.js had no reference to claims at all.
+
+    { name: 'claim credit: an unraised claim starts counting as a credit',
+      file: 'helpers/supplierAccount.js', suites: ['supplier-account'],
+      find: "        && c.status === 'recovery_raised'",
+      to:   "        && c.status !== 'rejected'" },
+
+    // The rule she named: stop at zero. Without the clamp a big claim turns
+    // a supplier into someone who owes Edge money.
+    { name: 'claim credit: the balance is allowed to go negative',
+      file: 'helpers/supplierAccount.js', suites: ['supplier-account'],
+      find: "    const applied = round2(Math.min(raised, Math.max(0, owed))) || 0;",
+      to:   "    const applied = raised;" },
+
+    // The remainder quietly disappearing instead of being stated.
+    { name: 'claim credit: the unapplied part is swallowed',
+      file: 'helpers/supplierAccount.js', suites: ['supplier-account'],
+      find: "        claim_credit_unapplied: round2(raised - applied) || 0,",
+      to:   "        claim_credit_unapplied: 0," },
+
+    // The ledger she already trusts must not move. A claim row in rows()
+    // would change the running balance, the opening and the closing.
+    { name: 'claim credit: the index and the statement work it out separately',
+      file: 'helpers/supplierAccount.js', suites: ['supplier-account'],
+      find: "            ...applyClaimCredit(t.closing, credit),",
+      to:   "            claims_raised: credit.raised, claims_applied: credit.raised,\n            net_owed: round2(t.closing - credit.raised), claim_credit_unapplied: 0," },
+
+    // ── /api/ IS NEVER CACHED, 2026-10-23 ────────────────────────────────
+    // "when i create a load/sle,i have to log out n relogin to view the
+    // latest change." Same bug routes/pages.js fixed for .html in August,
+    // on the JSON the dashboard actually runs on.
+    { name: 'api cache: live data loses its no-store header',
+      file: 'api.js', suites: ['api-no-cache'],
+      find: "            res.set('Cache-Control', 'no-store, must-revalidate');",
+      to:   "            res.set('X-Was-Cache-Control', 'no-store');" },
+
+    // Without Vary a shared cache serves one session's data to the next.
+    { name: 'api cache: responses become shareable between sessions',
+      file: 'api.js', suites: ['api-no-cache'],
+      find: "            res.set('Vary', 'Cookie, Authorization');",
+      to:   "            res.set('Vary', 'Accept-Encoding');" },
+
+    // Scope creep the other way: no-store on EVERYTHING re-downloads the
+    // whole dashboard on every page load.
+    { name: 'api cache: the whole site is forced to no-store, not just /api/',
+      file: 'api.js', suites: ['api-no-cache'],
+      find: "        if (req.path.startsWith('/api/')) {",
+      to:   "        if (true) {" },
+
+    // ── THE PASTED SUPPORTING-DOCUMENT LINK, 2026-10-21 ──────────────────
+    // "For supoorting doc,i will just directly provide gdrive link."
+
+    // The one that matters: esc() instead of a scheme check. It makes
+    // javascript: safe as TEXT and leaves it completely live as an href,
+    // inside a PDF that goes to a third party.
+    { name: 'docs link: any scheme is allowed through to the href',
+      file: 'helpers/claims/report.js', suites: ['claims-scan-report'],
+      find: "    if (u.protocol !== 'http:' && u.protocol !== 'https:') return '';",
+      to:   "    if (false) return '';" },
+
+    // A link pasted without a scheme is relative inside a PDF and goes
+    // nowhere — and pasting without one is what people actually do.
+    { name: 'docs link: a scheme-less paste is left relative',
+      file: 'helpers/claims/report.js', suites: ['claims-scan-report'],
+      find: "    const withScheme = /^[a-z][a-z0-9+.-]*:/i.test(raw) ? raw : 'https://' + raw;",
+      to:   "    const withScheme = raw;" },
+
+    // Rule 3: drop it from the route whitelist and the link silently never
+    // saves — no error on the screen, no link on the note.
+    { name: 'docs link: docs_url falls out of the route whitelist',
+      file: 'helpers/claims/routes.js', suites: ['claims-mixed-container'],
+      find: "                'docs_url'];",
+      to:   "                ];" },
+
+    // ── THE RATE THE SUPPLIER CAN SEE, 2026-10-21 ────────────────────────
+    // Inesh Cores Chapin's note: 2,456 LB at "$0.89/LB" demanding $2,193.21,
+    // when 2,456 x 0.89 is $2,185.84.
+
+    // The original defect: a rate flattened to two decimals.
+    { name: 'claim note: the rate is printed at two decimals again',
+      file: 'helpers/claims/report.js', suites: ['claims-supplier-price'],
+      find: "    const four = v.toFixed(4).replace(/(\\.\\d\\d)(\\d*?)0+$/, '$1$2');",
+      to:   "    const four = v.toFixed(2);" },
+
+    // NOT REGISTERED: "the guard checks the stored rate again". It SURVIVES,
+    // and it survives honestly — once the rate prints at four decimals the
+    // printed and stored values differ by at most $0.12 on a 2,456 LB line,
+    // against a 1% slack of $21.86. No realistic rate can tell the two apart.
+    // The formatter above is the fix; reconciling the printed rate is
+    // defence-in-depth for the day somebody coarsens the formatter again, and
+    // a mutation that can only be killed by a contrived fixture is a check
+    // shaped like the code rather than like the property.
+
+    // ── THE MIXED CONTAINER BLEND, 2026-10-21 ────────────────────────────
+    // "we will take avergae price of all the material that was loaded into
+    // the container" + "They will have weight slip for overall container".
+
+    // The mistake the whole design is against: averaging the RATES instead
+    // of dividing money by weight. On her own figures it is $0.30 vs
+    // $0.2966; on a lopsided container it is nearly 4x.
+    { name: 'blend: averages the rates instead of money over weight',
+      file: 'helpers/claimPrice.js', suites: ['claims-mixed-container'],
+      find: "    out.price = Math.round((amount / weight) * 1e4) / 1e4;",
+      to:   "    out.price = Math.round((items.reduce((s, i) => s + num(i.price), 0) / items.length) * 1e4) / 1e4;" },
+
+    // Rounding a RATE to cents moves a 40,000 lb claim by over $100.
+    { name: 'blend: the rate is rounded to cents',
+      file: 'helpers/claimPrice.js', suites: ['claims-mixed-container'],
+      find: "    out.price = Math.round((amount / weight) * 1e4) / 1e4;",
+      to:   "    out.price = Math.round((amount / weight) * 100) / 100;" },
+
+    // Blending the complete lines and ignoring the rest: a confident rate
+    // for a container nobody finished entering.
+    { name: 'blend: a half-entered container is blended anyway',
+      file: 'helpers/claimPrice.js', suites: ['claims-mixed-container'],
+      find: "    const bad = items.filter((i) => num(i.weight) === null || num(i.amount) === null);",
+      to:   "    const bad = [];" },
+
+    // THE RULE-1 MUTATION. Making the blend automatic silently re-rates every
+    // existing claim on a multi-item container.
+    { name: 'blend: becomes automatic instead of opt-in',
+      file: 'helpers/claimPrice.js', suites: ['claims-mixed-container'],
+      find: "    if (claim.price_basis === 'container_blend') {",
+      to:   "    if (true) {" },
+
+    // Rule 3: drop the field from the route whitelist and it vanishes in
+    // silence — the claim saves, nothing errors, the rate stays per-grade.
+    { name: 'blend: price_basis falls out of the route whitelist',
+      file: 'helpers/claims/routes.js', suites: ['claims-mixed-container'],
+      find: "                'price_basis'];",
+      to:   "                ];" },
+
+    // ── "Also sign should come above under line right", 2026-10-20 ──
+    // Takes the ink back out of its column, so it becomes a sibling of the
+    // rule inside a space-between flex row — which is exactly how it was
+    // wrong on the PDF she opened, not an invented failure.
+    { name: 'claim note: the signature drifts back beside the rule, not above it',
+      file: 'helpers/claims/report.js', suites: ['claims-assess'],
+      find: '  <div class="sigcol">\n    <div class="sigimg">',
+      to:   '  <div class="sigimg">' },
+
     // ── "change teh details later like supplier,customer,container", 2026-10-21 ──
     // Sending the whole form instead of the diff rewrites fields she never
     // touched — on a verified claim, a silent overwrite of the container
