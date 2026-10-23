@@ -48,15 +48,22 @@ const ROOT = path.join(__dirname, '..');
 // immediately — the same "always red, therefore eventually deleted" mistake
 // the ratchet above was written to avoid, made two sections further down the
 // same file. Measure first, then ratchet.
-const BASELINE_DEAD = 100;
+// 225 at the start of 2026-10-24. 125 re-pointed mechanically (one
+// unambiguous successor file), then 24 more whose own NAME states the client
+// — "(website)", "(web)", "exp-web:", "the website ..." — to their
+// dashboard/* candidate. The website/app pairs made those safe: for each
+// `loads(website): X` there is a `loads(app): X` with the IDENTICAL find
+// string, still alive and pointing at mobile-app/www, so the dashboard
+// candidate is the one the website check was always about.
+const BASELINE_DEAD = 76;
 // Matching MORE than once is the same disease: scripts/mutate.js refuses an
 // ambiguous find string, so those checks never run either. 7 of them, which
 // makes the real count of checks proving nothing 107, not 100.
 const BASELINE_AMBIGUOUS = 7;
-// The two split files (#208/#209). 58 and 9 of the surviving dead still name
-// them; those are the ones whose code now exists in BOTH the website and the
-// app, or has gone entirely.
-const BASELINE_BY_FILE = { 'dashboard/index.html': 58, 'api.js': 9 };
+// The two split files (#208/#209). 113 and 79 at the start; 34 and 9 left.
+// Those remaining are the ones whose code has gone from the tree entirely, or
+// whose name does not say which client it was about.
+const BASELINE_BY_FILE = { 'dashboard/index.html': 34, 'api.js': 9 };
 
 section('A. the audit runs at all, and runs nothing');
 let data = null;

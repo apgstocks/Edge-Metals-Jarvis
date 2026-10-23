@@ -960,7 +960,7 @@ const MUTATIONS = [
     // and only the NOT APPLIED line said so. Re-pointed at the lines that
     // replaced them.
     { name: 'units: opening a saved /MT row shows the pound figure again (website)',
-      file: 'dashboard/index.html', suites: ['load-item-units'],
+      file: 'dashboard/app/05-load-pricing.js', suites: ['load-item-units'],
       find: '    const qtyRow = qtyForUnit(it.unit, net, it.pieces);',
       to:   '    const qtyRow = net;' },
     { name: 'units: opening a saved /MT row shows the pound figure again (app)',
@@ -3413,15 +3413,15 @@ const MUTATIONS = [
       find: "  const el = $('expenseModal');\n  if (el) el.remove();",
       to:   "  const el = $('expenseModal');\n  if (el) el.style.display = 'none';" },
     { name: 'exp-web: categories are hardcoded instead of read from the server',
-      file: 'dashboard/index.html', suites: ['form-parity', 'expenses-web'],
+      file: 'dashboard/app/06-expenses-trucker.js', suites: ['form-parity', 'expenses-web'],
       find: '  expenseCategories = data.categories || [];',
       to:   "  expenseCategories = ['Fuel', 'Repairs', 'Other'];" },
     { name: 'exp-web: the default method reaches the edit path too',
-      file: 'dashboard/index.html', suites: ['form-parity', 'expenses-web'],
+      file: 'dashboard/app/06-expenses-trucker.js', suites: ['form-parity', 'expenses-web'],
       find: "    : (expenseDefaultMethod || '');",
       to:   "    : (expenseDefaultMethod || '');\n  if (!sel.value) sel.value = expenseDefaultMethod || '';" },
     { name: 'exp-web: a retired method is no longer kept on an old expense',
-      file: 'dashboard/index.html', suites: ['form-parity', 'expenses-web'],
+      file: 'dashboard/app/06-expenses-trucker.js', suites: ['form-parity', 'expenses-web'],
       find: "    .concat(retired ? [`<option value=\"${esc(retired)}\">${esc(retired)} (no longer offered)</option>`] : [])",
       to:   '    .concat([])' },
     { name: 'exp-web: a short petty-cash box is no longer mentioned',
@@ -3542,7 +3542,7 @@ const MUTATIONS = [
       to:   "'/api/trucker-bills', '/api/verify-admin-password', '/api/yard'];" },
 
     { name: 'kind: an untagged old load counts as a sale, not a purchase (web)',
-      file: 'dashboard/index.html', suites: ['load-card-actions'],
+      file: 'dashboard/app/05-load-pricing.js', suites: ['load-card-actions'],
       find: "  return (loads || []).filter((l) => (l._kind === 'sale' ? 'sale' : 'purchase') === kind);",
       to:   "  return (loads || []).filter((l) => (l._kind === 'purchase' ? 'purchase' : 'sale') === kind);" },
     { name: 'kind: the same, on the app',
@@ -3550,19 +3550,19 @@ const MUTATIONS = [
       find: "  return (loads || []).filter((l) => (l._kind === 'sale' ? 'sale' : 'purchase') === kind);",
       to:   "  return (loads || []).filter((l) => (l._kind === 'purchase' ? 'purchase' : 'sale') === kind);" },
     { name: 'kind: the filter is ignored, so every tab shows everything (web)',
-      file: 'dashboard/index.html', suites: ['load-card-actions'],
+      file: 'dashboard/app/13-loads-render.js', suites: ['load-card-actions'],
       find: '    let rows = filterLoadsByKind(loadsCache, loadKindFilter);',
       to:   '    let rows = loadsCache;' },
     { name: 'kind: Sales-only still renders grouped by date (web)',
-      file: 'dashboard/index.html', suites: ['load-card-actions'],
+      file: 'dashboard/app/13-loads-render.js', suites: ['load-card-actions'],
       find: "    const narrowed = !!q || !!chosenItemDetail || loadKindFilter !== 'all';",
       to:   '    const narrowed = !!q || !!chosenItemDetail;' },
     { name: 'kind: handlers bound to the buttons, so the bar works once (web)',
-      file: 'dashboard/index.html', suites: ['load-card-actions'],
+      file: 'dashboard/app/13-loads-render.js', suites: ['load-card-actions'],
       find: "  if (kindBar) kindBar.addEventListener('click', (ev) => {",
       to:   "  if (kindBar) kindBar.querySelector('x').addEventListener('click', (ev) => {" },
     { name: 'kind: the choice is forgotten between visits (web)',
-      file: 'dashboard/index.html', suites: ['load-card-actions'],
+      file: 'dashboard/app/13-loads-render.js', suites: ['load-card-actions'],
       find: "    try { localStorage.setItem('loadKindFilter', loadKindFilter); } catch (e) {}",
       to:   '' },
 
@@ -3579,11 +3579,11 @@ const MUTATIONS = [
       find: "already ${sale ? 'received' : 'paid'}",
       to:   'already paid' },
     { name: 'web: the Pay button on a sale loses its direction (dashboard)',
-      file: 'dashboard/index.html', suites: ['form-parity'],
+      file: 'dashboard/app/05-load-pricing.js', suites: ['form-parity'],
       find: "${l._kind === 'sale' ? 'Receive payment' : 'Pay'}",
       to:   'Pay' },
     { name: 'web: the pay modal heading loses the id it is written into',
-      file: 'dashboard/index.html', suites: ['form-parity'],
+      file: 'dashboard/app/13-loads-render.js', suites: ['form-parity'],
       find: '<div id="payModalTitle" style="font-weight:700; text-transform:uppercase; font-size:14px;">Record payment</div>',
       to:   '<div style="font-weight:700; text-transform:uppercase; font-size:14px;">Record payment</div>' },
 
@@ -5244,7 +5244,7 @@ const MUTATIONS = [
     // before it — shaped like the code instead of like the property, which is
     // the failure mode CLAUDE.md names. Only a mutation found it.
     { name: 'one-draft: the website stops sending the draft id',
-      file: 'dashboard/index.html', suites: ['one-draft-one-load'],
+      file: 'dashboard/app/13-loads-render.js', suites: ['one-draft-one-load'],
       find: '        draft_id: currentDraftId,',
       to:   '        draft_id: null,' },
 
@@ -5308,7 +5308,7 @@ const MUTATIONS = [
       to:   '          if (false) {' },
 
     { name: 'cash-zero: the website goes back to saying nothing',
-      file: 'dashboard/index.html', suites: ['pay-cash-empty-note'],
+      file: 'dashboard/app/12-payments-recording.js', suites: ['pay-cash-empty-note'],
       find: "          note.classList.toggle('hidden', !msg);",
       to:   "          note.classList.toggle('hidden', true);" },
 
@@ -5435,42 +5435,42 @@ const MUTATIONS = [
     // one nobody is looking at.
 
     { name: 'loads(website): back to a calendar month instead of a rolling week',
-      file: 'dashboard/index.html', suites: ['load-deck-grouping'],
+      file: 'dashboard/app/12-payments-recording.js', suites: ['load-deck-grouping'],
       find: "  const days = (opts && opts.days) || loadRecentDays();",
       to:   "  const days = 400;" },
 
     { name: 'loads(website): only the newest day opens again',
-      file: 'dashboard/index.html', suites: ['load-deck-grouping', 'load-card-actions'],
+      file: 'dashboard/app/12-payments-recording.js', suites: ['load-deck-grouping', 'load-card-actions'],
       find: '  const days = groups.map((g) => `\n    <details class="load-date-section" open>',
       to:   '  const days = groups.map((g, i) => `\n    <details class="load-date-section" ${i === 0 ? \'open\' : \'\'}>' },
 
     { name: 'loads(website): a chosen month is NOT expanded',
-      file: 'dashboard/index.html', suites: ['load-deck-grouping'],
+      file: 'dashboard/app/12-payments-recording.js', suites: ['load-deck-grouping'],
       find: "  const allOpen = !!(opts && opts.allOpen);",
       to:   '  const allOpen = false;' },
 
     { name: 'loads(website): everything is expanded all the time',
-      file: 'dashboard/index.html', suites: ['load-deck-grouping'],
+      file: 'dashboard/app/12-payments-recording.js', suites: ['load-deck-grouping'],
       find: "  const allOpen = !!(opts && opts.allOpen);",
       to:   '  const allOpen = true;' },
 
     { name: 'loads(website): the month filter is never applied',
-      file: 'dashboard/index.html', suites: ['load-deck-grouping'],
+      file: 'dashboard/app/13-loads-render.js', suites: ['load-deck-grouping'],
       find: "    if (loadMonthFilter) rows = filterLoadsByMonth(rows, loadMonthFilter);",
       to:   '' },
 
     { name: 'loads(website): an undated load is swept into every month',
-      file: 'dashboard/index.html', suites: ['load-deck-grouping'],
+      file: 'dashboard/app/12-payments-recording.js', suites: ['load-deck-grouping'],
       find: "  return (loads || []).filter((l) => loadMonthKey(l && l.date) === key);",
       to:   '  return (loads || []).filter((l) => !l.date || loadMonthKey(l.date) === key);' },
 
     { name: 'loads(website): the month list is a calendar, not the data',
-      file: 'dashboard/index.html', suites: ['load-deck-grouping'],
+      file: 'dashboard/app/12-payments-recording.js', suites: ['load-deck-grouping'],
       find: "    const k = loadMonthKey(l && l.date);\n    if (!k) continue;\n    seen.set(k, (seen.get(k) || 0) + 1);",
       to:   "    const k = loadMonthKey(l && l.date);\n    if (!k) continue;\n    seen.set(k, 0);" },
 
     { name: 'loads(website): months list oldest first',
-      file: 'dashboard/index.html', suites: ['load-deck-grouping'],
+      file: 'dashboard/app/12-payments-recording.js', suites: ['load-deck-grouping'],
       find: "  return Array.from(seen.keys()).sort((a, b) => b.localeCompare(a))",
       to:   '  return Array.from(seen.keys()).sort((a, b) => a.localeCompare(b))' },
 
@@ -5478,18 +5478,18 @@ const MUTATIONS = [
     // Pacific it believes it is already tomorrow, which moves the whole
     // week boundary a day early every evening.
     { name: 'loads(website): the week boundary is computed in UTC',
-      file: 'dashboard/index.html', suites: ['load-deck-grouping'],
+      file: 'dashboard/app/12-payments-recording.js', suites: ['load-deck-grouping'],
       find: "function loadLocalDayKey(d) {\n  const t = new Date(d);",
       to:   "function loadLocalDayKey(d) {\n  return new Date(d).toISOString().slice(0, 10);\n  const t = new Date(d);" },
 
     // days - 1 is seven days INCLUDING today. Dropping it shows eight.
     { name: 'loads(website): the window is off by one day',
-      file: 'dashboard/index.html', suites: ['load-deck-grouping'],
+      file: 'dashboard/app/12-payments-recording.js', suites: ['load-deck-grouping'],
       find: "  from.setDate(from.getDate() - (days - 1));",
       to:   '  from.setDate(from.getDate() - days);' },
 
     { name: 'loads(website): the month filter is persisted across sessions',
-      file: 'dashboard/index.html', suites: ['load-deck-grouping'],
+      file: 'dashboard/app/04-loads-wizard.js', suites: ['load-deck-grouping'],
       find: "let loadMonthFilter = '';",
       to:   "let loadMonthFilter = (() => { try { return localStorage.getItem('loadMonthFilter') || ''; } catch (e) { return ''; } })();" },
 
