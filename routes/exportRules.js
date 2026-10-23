@@ -83,31 +83,21 @@ module.exports = function (app, ctx) {
         });
     });
 
-    // A person records that they checked a rule. The ONLY write, admin only,
-    // and helpers/exportRules.verify refuses a blank or system name — so a
-    // forged body cannot make Jarvis the authority for a trade rule.
-    app.post('/api/export-rules/:id/verify', requireAdmin, async (req, res) => {
-        const b = req.body || {};
-        try {
-            const out = await X.verify(req.params.id, {
-                // actorOf, not a name from the body, when the caller does not
-                // name somebody explicitly — the signature should be whoever
-                // is logged in, not whoever typed into a field.
-                by: String(b.by || actorOf(req) || '').trim(),
-                on: b.on || null,
-                expires_on: b.expires_on || b.until || null,
-                outcome: b.outcome || null,
-                requirement: b.requirement || null,
-                source_url: b.source_url || null,
-                source_ref: b.source_ref || null,
-                clear_disputed: !!b.clear_disputed,
-                note: b.note || null,
-            });
-            res.json(out);
-        } catch (e) {
-            res.status(400).json({ error: e.message });
-        }
-    });
+    // ── NO VERIFY ROUTE YET, AND THAT IS DELIBERATE ──────────────────────
+    // There WAS a POST /api/export-rules/:id/verify here, written in the same
+    // pass as the reads. tests/route-reach.js caught it on the first full-suite
+    // run: "a guarded route nothing calls is a permission that cannot be used.
+    // Either the screen is missing, or the route is dead." It was the second.
+    //
+    // Verification happens today through scripts/export-rules.js verify, which
+    // is where it belongs while the only person signing rules is her on the VM.
+    // So the route was an admin-guarded write with no caller — attack surface
+    // for no benefit, which is exactly the call made on claimShare's public
+    // /s/:token route (#228): deleted rather than left sitting there unused.
+    //
+    // It comes back WITH the screen that calls it, not before. helpers/
+    // exportRules.verify is unchanged and tested; only the HTTP door is gone.
+    void requireAdmin; void actorOf;   // still destructured; used again with the screen
 // @@chunk-end
     return {};
 };
