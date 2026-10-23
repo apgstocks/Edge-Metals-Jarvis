@@ -594,6 +594,167 @@ section('L — the page actually renders her columns, in her order');
     dom.window.close();
 }
 
+section('CLAIMS COME OFF WHAT HE IS OWED');
+// Apsara, 2026-10-23, asked what else to build. This file — the one that
+// answers "what do we still owe" — had no reference to claims at all. She
+// raised $2,193.21 against Inesh, sent him a document demanding it, and
+// Jarvis went on reporting the whole bill outstanding.
+//
+// Rules hers, 2026-10-20: the credit moves WHEN SHE RAISES IT, it STOPS AT
+// ZERO, and the remainder is SHOWN SEPARATELY.
+{
+    const claims = require(path.join(ROOT, 'helpers/claims'));
+    const WHO = 'Claimtest Metals';
+    const mk = async (amount, status) => {
+        const c = await claims.create({ container_no: 'CT' + amount, supplier: WHO,
+            claim_type: 'weight shortage', weight_unit: 'LB' });
+        await claims.update(c.id, { our_claim: amount }, 't', 'figure');
+        await claims.setStatus(c.id, status, 't');
+        return c;
+    };
+    await mk(2193.21, 'recovery_raised');
+    await mk(500, 'verified');     // assessed but NOT raised
+    await mk(999, 'settled');      // the money already moved
+
+    const cr = sa.claimCredit(WHO);
+    ck('only a RAISED claim becomes a credit', cr.raised === 2193.21, cr.raised);
+    ck('  a claim she has not raised yet does not', cr.claims.length === 1);
+    // A settled claim was usually deducted from a payment, which is ALREADY
+    // a credit row. Counting it here too takes it off twice.
+    ck('  and a settled one is not counted a second time',
+        !cr.claims.some((x) => x.amount === 999));
+    ck('  the credit names the container, so she can see what it is for',
+        cr.claims[0].container_no === 'CT2193.21', cr.claims[0]);
+
+    // ── STOP AT ZERO ────────────────────────────────────────────────────
+    const at = (owed) => sa.applyClaimCredit(owed, cr);
+    ck('a claim comes off a bigger balance', at(50000).net_owed === 47806.79, at(50000));
+    ck('a claim equal to the balance clears it exactly', at(2193.21).net_owed === 0);
+    ck('a claim BIGGER than the balance stops at zero', at(1000).net_owed === 0, at(1000));
+    ck('  and never turns him into someone who owes Edge money', at(1000).net_owed >= 0);
+    ck('  the part that could not be applied is stated on its own',
+        at(1000).claim_credit_unapplied === 1193.21, at(1000));
+    ck('  with nothing owed at all, the whole credit is unapplied',
+        at(0).claims_applied === 0 && at(0).claim_credit_unapplied === 2193.21);
+
+    // ── THE LEDGER ITSELF MUST NOT HAVE MOVED ───────────────────────────
+    // Claims are deliberately NOT rows in rows(). The running balance, the
+    // opening, the closing and the totals are the figures she already
+    // trusts, and none of them may change because a claim exists.
+    const st = sa.statement(WHO);
+    ck('no claim row was smuggled into the ledger',
+        !st.rows.some((r) => r.kind === 'claim'), st.rows.map((r) => r.kind));
+    ck('  closing is still debits minus credits, claims excluded',
+        st.closing === st.debit_total - st.credit_total, { c: st.closing, d: st.debit_total, cr: st.credit_total });
+    ck('  and the claim figures ride alongside it', st.claims_raised === 2193.21 && st.net_owed !== undefined);
+
+    // The index she scans to decide who to pay must agree with the
+    // statement — worked out by the same function, not a second copy.
+    const idx = (sa.overview() || []).find((o) => o.supplier === WHO);
+    ck('the index carries the same figures as the statement',
+        idx && idx.claims_raised === st.claims_raised && idx.net_owed === st.net_owed,
+        { idx: idx && idx.net_owed, st: st.net_owed });
+    ck('  and counts the claims behind it', idx && idx.claims_count === 1);
+}
+
+section('AND THE SCREEN ACTUALLY SHOWS IT');
+// The engine above is worth nothing if nothing draws it — the #152 pattern
+// this repo keeps hitting: "a privileged route that nothing calls is a
+// permission that exists on paper". These checks are on the SCREEN, because
+// an engine with no reader is exactly what claims were before today.
+{
+    const inv = fs.readFileSync(path.join(ROOT, 'dashboard/edge-inventory.html'), 'utf8');
+
+    // The headline figure is what she pays on.
+    ck('the Owed card reads net_owed, not the gross closing balance',
+        /card\('Owed to them', money\(DATA\.account\.net_owed\)/.test(inv));
+    ck('  the gross figure is still shown, not silently replaced',
+        /card\('Before claims', money\(DATA\.account\.closing\)\)/.test(inv));
+    ck('  and the deduction is named', /Less claims raised/.test(inv));
+    // Her rule: a credit with nothing to apply it to is stated on its own.
+    ck('unapplied claim credit has its own card', /Claim credit in hand/.test(inv));
+
+    // The index is the screen she scans to decide who to pay.
+    ck('the supplier index shows what is owed AFTER claims', /money\(acct\.net_owed\)/.test(inv));
+    ck('  and says so on the line, not one click in', /after -\$\{money\(acct\.claims_applied\)\} claimed/.test(inv));
+    ck('  the picker agrees with the list', /money\(s\.net_owed\)/.test(inv));
+
+    // The old field must not still be driving the owed column anywhere —
+    // two numbers for "what do we owe" on one screen is the disagreement
+    // this change exists to remove.
+    ck('nothing still colours the owed column off the gross balance',
+        !/color:\$\{acct\.closing > 0/.test(inv));
+
+    // REACHABILITY: the fields the screen reads must be the ones the route
+    // actually sends. A rename on either side leaves a blank card and no
+    // error — which is how this screen would quietly lose the feature.
+    const st = sa.statement('Claimtest Metals');
+    for (const f of ['net_owed', 'claims_applied', 'claim_credit_unapplied', 'closing']) {
+        ck(`  the statement really sends ${f}`, st[f] !== undefined, Object.keys(st));
+    }
+    const idx = (sa.overview() || [])[0] || {};
+    for (const f of ['net_owed', 'claims_applied']) {
+        ck(`  the index really sends ${f}`, idx[f] !== undefined, Object.keys(idx));
+    }
+}
+
+section('END TO END — through the routes the screen actually calls');
+// CLAUDE.md rule 3. The sections above exercise the helper and read the
+// screen's source; neither proves the figures survive the trip. The listed
+// failure shapes are exactly this: "the route does not forward the new
+// field", "the client sends paidVia and the route reads paid_via".
+//
+// This change alters what she PAYS A SUPPLIER, so the gap matters more here
+// than on a layout tweak.
+{
+    const http = require('http');
+    process.env.APP_PASSWORD = process.env.APP_PASSWORD || 'user-pw';
+    process.env.ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'admin-pw';
+    const { createApi } = require(path.join(ROOT, 'api.js'));
+    const server = await new Promise((r) => { const x = createApi().listen(0, '127.0.0.1', () => r(x)); });
+    const base = `http://127.0.0.1:${server.address().port}`;
+    const req = (method, p, body, sid) => new Promise((resolve, reject) => {
+        const data = body == null ? null : JSON.stringify(body);
+        const headers = { Accept: 'text/html' };
+        if (data) { headers['Content-Type'] = 'application/json'; headers['Content-Length'] = Buffer.byteLength(data); }
+        if (sid) headers.Authorization = `Bearer ${sid}`;
+        const r2 = http.request(base + p, { method, headers }, (res) => {
+            let raw = ''; res.on('data', (c) => { raw += c; });
+            res.on('end', () => { let j = null; try { j = JSON.parse(raw); } catch (e) {} resolve({ status: res.statusCode, raw, json: j }); });
+        });
+        r2.on('error', reject); if (data) r2.write(data); r2.end();
+    });
+    try {
+        const sid = ((await req('POST', '/login', { password: process.env.ADMIN_PASSWORD })).json || {}).sid;
+        ck('signed in', !!sid);
+
+        const idxRes = await req('GET', '/api/edge-inventory/suppliers', null, sid);
+        ck('the supplier index route answers', idxRes.status === 200, idxRes.raw.slice(0, 140));
+        const row = ((idxRes.json || {}).suppliers || []).find((x) => x.supplier === 'Claimtest Metals');
+        ck('  it carries the claim-adjusted figure to the screen', !!row && row.net_owed !== undefined, row);
+        // This fixture supplier has CLAIMS BUT NO BILLS, so there is nothing
+        // for the credit to come off: applied 0, unapplied the whole 2,193.21.
+        // My first version asserted applied === 2193.21 and went red — the
+        // code was right and the assertion was wrong, which is the same
+        // stop-at-zero rule section above already proves at owed = $0.
+        ck('  the credit is reported, with nothing yet to apply it to',
+            !!row && row.claims_applied === 0 && row.claim_credit_unapplied === 2193.21,
+            row && { applied: row.claims_applied, unapplied: row.claim_credit_unapplied });
+        ck('  and a supplier with no bills is still listed, so it is visible',
+            !!row && row.claims_count === 1);
+
+        const one = await req('GET', '/api/edge-inventory/' + encodeURIComponent('Claimtest Metals'), null, sid);
+        ck('the statement route answers', one.status === 200, one.raw.slice(0, 140));
+        const acct = (one.json || {}).account || {};
+        ck('  net_owed survives the trip', acct.net_owed !== undefined, Object.keys(acct));
+        ck('  so does the unapplied credit', acct.claim_credit_unapplied !== undefined);
+        ck('  and the gross figure is still there to reconcile against', acct.closing !== undefined);
+        // The two screens must not disagree about one supplier.
+        ck('  the index and the statement agree on what he is owed',
+            row && acct.net_owed === row.net_owed, { idx: row && row.net_owed, st: acct.net_owed });
+    } finally { server.close(); }
+}
+
 console.log(`\n  ${pass} passed, ${fail} failed`);
 if (failures.length) { console.log('\n  failed:'); failures.forEach((f) => console.log('    · ' + f)); }
 try { fs.rmSync(TMP, { recursive: true, force: true }); } catch (_) {}

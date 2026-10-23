@@ -335,6 +335,135 @@ section('G — through the route');
     server.close();
 }
 
+// ══════════════════════════════════════════════════════════════════════════
+section('H — the supplier can reproduce the figure from the rate he can SEE');
+// ══════════════════════════════════════════════════════════════════════════
+// Apsara, 2026-10-21, holding a clubbed note to Inesh Cores Chapin: "what can
+// supplier infer from this". What he could infer is that Edge cannot multiply.
+//
+//   the line said   2,456 LB at $0.89/LB  →  $2,193.21
+//   he does         2,456 x 0.89          =  $2,185.84
+//
+// $7.37 out, on the first thing anybody checks.
+//
+// Nothing was wrong with the money. The rate was $0.8930 and money() prints at
+// exactly two decimals. The reconciliation guard above — whose whole stated
+// purpose is "the supplier never sees a contradiction" — reconciled the STORED
+// rate, 0.893, passed the line, and printed a rate that does not give the
+// amount. It was checking a number the supplier never sees.
+//
+// Two changes: a rate prints at the precision it was recorded (up to four
+// places), and the guard reconciles the PRINTED rate. These are HER figures.
+{
+    const rec = await claims.create({
+        container_no: 'MSMU1152787', supplier: 'Inesh Cores Chapin', claim_type: 'weight shortage',
+        supplier_price: 0.893, supplier_price_unit: 'LB', weight_unit: 'LB',
+        invoice_weight: 51771, claimed_weight: 49315, claim_date: '2026-10-20',
+    });
+    const v = await claims.verify(rec.id, {
+        invoice_weight: 51771, claimed_weight: 49315, weight_unit: 'LB',
+        sell_price: 0.893, sell_price_unit: 'LB' }, 'apsara');
+    await claims.raiseRecovery(rec.id, { our_claim: v.claim_amount }, 'apsara');
+
+    const b = report.build({ supplier: 'Inesh Cores Chapin' });
+    const l = b.lines[0];
+    const h = report.toHtml(b);
+
+    ck('the amount is her own $2,193.21', Math.abs(l.our_claim - 2193.21) < 0.01, l.our_claim);
+    ck('the rate is NOT flattened to $0.89', !/\$0\.89\/LB/.test(h), (h.match(/\$[0-9.]+\/LB/) || [])[0]);
+    ck('it prints at the precision it was recorded', /\$0\.893\/LB/.test(h), (h.match(/\$[0-9.]+\/LB/) || [])[0]);
+
+    // THE ASSERTION THAT MATTERS: do his arithmetic, off the page.
+    const shownRate = Number(((h.match(/\$([0-9.,]+)\/LB/) || [])[1] || '0').replace(/,/g, ''));
+    ck('2,456 LB x the PRINTED rate gives the PRINTED amount',
+        Math.abs(2456 * shownRate - l.our_claim) < 0.01,
+        { printed: shownRate, his: (2456 * shownRate).toFixed(2), ours: l.our_claim });
+    ck('  and the rate still survives the reconciliation guard', l.rate !== null && b.notReconciled.length === 0);
+
+    // Ordinary rates must look exactly as they always have — this is a
+    // formatter on every claim note, so a regression here is visible on all
+    // of them, not just the awkward ones.
+    // (A check lived here reading `/\$1\.38/.test(html + '$1.38')` — it
+    // appended the string it then searched for, so it passed unconditionally.
+    // Deleted rather than fixed: the loop below tests the same thing for
+    // real, through a rendered document.)
+    const money2 = [[0.89, '$0.89'], [1.38, '$1.38'], [2, '$2.00'], [0.5, '$0.50'], [0.2966, '$0.2966'], [0.893, '$0.893']];
+    for (const [v2, want] of money2) {
+        // Exercised through a real line rather than by reaching into the
+        // module: a formatter asserted in isolation can be right while the
+        // document still prints something else.
+        const c2 = await claims.create({ container_no: 'FMT' + String(v2).replace('.', ''), supplier: 'Fmt Co',
+            claim_type: 'weight shortage', supplier_price: v2, supplier_price_unit: 'LB', weight_unit: 'LB',
+            invoice_weight: 1000, claimed_weight: 900 });
+        const vv = await claims.verify(c2.id, { invoice_weight: 1000, claimed_weight: 900, weight_unit: 'LB',
+            sell_price: v2, sell_price_unit: 'LB' }, 't');
+        await claims.raiseRecovery(c2.id, { our_claim: vv.claim_amount }, 't');
+        const hh = report.toHtml(report.build({ container: 'FMT' + String(v2).replace('.', '') }));
+        ck(`  ${v2} prints as ${want}`, hh.includes(want + '/LB'), (hh.match(/\$[0-9.,]+\/LB/) || [])[0]);
+    }
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+section('I — a grade claim shows its working, or it is an unexplained number');
+// ══════════════════════════════════════════════════════════════════════════
+// Apsara, 2026-10-21: "if there is any damage,quality,grade claim,we need to
+// procide more details na?" She is right, and grade was the worst of them.
+//
+// The note said "sold as Alternator, received as HMS; 2,215.64 LB affected"
+// and demanded $1,041.35. The sum is weight x (sold price - received price)
+// and the received price was printed NOWHERE — so there was no path from the
+// figures on the page to the figure being demanded. The reconciliation guard
+// then correctly stripped the rate column, because 2,215.64 x the bill rate
+// of $0.89 is $1,971.92, a different number. Dash in the rate column, bare
+// amount, nothing to check.
+//
+// Asked what it should show, she chose both prices and the difference.
+{
+    const g = await claims.create({
+        container_no: 'MSMU1152787', supplier: 'Inesh Cores Chapin', claim_type: 'grade',
+        supplier_price: 0.89, supplier_price_unit: 'LB', weight_unit: 'LB',
+        invoice_weight: 51771, claim_date: '2026-10-20',
+    });
+    const r = await claims.assess(g.id, {
+        assessment: 'grade', weight_unit: 'LB', grade_sold: 'Alternator', grade_received: 'HMS',
+        grade_price_sold: 0.89, grade_price_received: 0.42, grade_weight: 2215.64, sell_price_unit: 'LB',
+    }, 'apsara');
+    await claims.raiseRecovery(g.id, { our_claim: r.claim_amount }, 'apsara');
+
+    const b = report.build({ supplier: 'Inesh Cores Chapin' });
+    const h = report.toHtml(b);
+    const row = b.lines.find((l) => l.id === g.id);
+
+    ck('the engine still charges weight x the difference', Math.abs(row.our_claim - 1041.35) < 0.01, row.our_claim);
+    ck('the price he billed is on the note', /\$0\.89\/LB/.test(h));
+    ck('the price of what arrived is on the note — it never used to be', /\$0\.42\/LB/.test(h));
+    ck('the difference he is charged is stated', /\$0\.47\/LB/.test(h));
+    // The assertion that matters: the line adds up, on its own, in his hands.
+    ck('the working ends in the amount demanded', /2,215\.64 LB affected at \$0\.47\/LB = \$1,041\.35/.test(h),
+        (h.match(/affected at[^<]*/) || [])[0]);
+
+    // "sold as" reads either as what HE sold Edge or what EDGE resold it as.
+    ck('the ambiguous "sold as" wording is gone', !/sold as Alternator/.test(h));
+    ck('  replaced by something with one meaning', /billed to us as Alternator/.test(h));
+
+    // The shared column keeps its old meaning. YOUR RATE is the rate off his
+    // own bill everywhere on this document; re-pointing it at the difference
+    // for one kind of row is how a shared column starts lying.
+    ck('YOUR RATE is NOT quietly re-pointed at the difference rate',
+        row.rate === null || Math.abs(row.rate - 0.89) < 1e-9, row.rate);
+
+    // A half-entered grade claim must not print a sum it cannot finish.
+    const g2 = await claims.create({
+        container_no: 'TEMU7', supplier: 'Inesh Cores Chapin', claim_type: 'grade',
+        supplier_price: 0.89, supplier_price_unit: 'LB', weight_unit: 'LB', invoice_weight: 1000 });
+    await claims.update(g2.id, { assessment: 'grade', grade_sold: 'Alternator', grade_received: 'HMS',
+        grade_weight: 500, our_claim: 100 }, 'test', 'partial');
+    await claims.setStatus(g2.id, 'recovery_raised', 'test');
+    const h2 = report.toHtml(report.build({ container: 'TEMU7' }));
+    ck('with no prices recorded it falls back to the plain wording, no invented sum',
+        /500 LB affected\./.test(h2) && !/= \$/.test(h2), (h2.match(/affected[^<]*/) || [])[0]);
+}
+
 console.log(`\n  ${pass} passed, ${fail} failed`);
 if (failures.length) { console.log('\n  Failed:'); failures.forEach((f) => console.log('   - ' + f)); }
 try { fs.rmSync(TMP, { recursive: true, force: true }); } catch (e) {}

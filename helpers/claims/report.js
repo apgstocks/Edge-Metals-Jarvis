@@ -37,8 +37,50 @@ const signature = require('../signature');
 
 const money = (n) => (n === null || n === undefined || n === '') ? '—'
     : '$' + Number(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+// ── A RATE IS NOT AN AMOUNT, AND IT IS NOT PRINTED LIKE ONE ─────────────────
+// Apsara, 2026-10-21, holding a clubbed note to Inesh Cores Chapin: "what can
+// supplier infer from this". The first thing he can infer is that Edge cannot
+// multiply. The line read 2,456 LB at $0.89/LB and demanded $2,193.21, and
+// 2,456 x 0.89 is $2,185.84 — out by $7.37.
+//
+// Nothing was wrong with the money. The rate was $0.8930 and money() prints
+// everything at exactly two decimals, so the page said $0.89. The supplier
+// multiplies what he can SEE.
+//
+// So a rate keeps the precision it was recorded at, up to four places, with
+// trailing zeros trimmed: $0.89 stays $0.89, $0.893 prints as $0.893,
+// $0.2966 prints as $0.2966. Four, because a rate is multiplied by tens of
+// thousands of pounds — the same reason helpers/claimPrice.js's blend keeps
+// four. AMOUNTS still go through money(), at two places, because an amount is
+// dollars and cents and always has been.
+const rateMoney = (n) => {
+    if (n === null || n === undefined || n === '') return '—';
+    const v = Number(n);
+    if (!Number.isFinite(v)) return '—';
+    const four = v.toFixed(4).replace(/(\.\d\d)(\d*?)0+$/, '$1$2');
+    const [whole, dec] = four.split('.');
+    return '$' + Number(whole).toLocaleString('en-US') + (dec ? '.' + dec : '');
+};
 const wt = (n, unit) => (n === null || n === undefined || n === '') ? '—'
     : Number(n).toLocaleString('en-US', { maximumFractionDigits: 3 }) + (unit ? ' ' + unit : '');
+// ── A PASTED LINK BECOMES AN <a href> IN A PDF ──────────────────────────────
+// So the scheme is checked, not just escaped. esc() makes "javascript:alert(1)"
+// safe as TEXT and does nothing at all to it as an href — and this string
+// comes from a box a person types into, which is the definition of untrusted.
+// http and https only; anything else is dropped and the block does not print.
+//
+// A bare "drive.google.com/..." with no scheme is a relative link inside a
+// PDF, which resolves to nothing. It gets https:// rather than being refused,
+// because pasting without the scheme is what people actually do.
+function safeUrl(v) {
+    const raw = String(v == null ? '' : v).trim();
+    if (!raw) return '';
+    const withScheme = /^[a-z][a-z0-9+.-]*:/i.test(raw) ? raw : 'https://' + raw;
+    let u;
+    try { u = new URL(withScheme); } catch { return ''; }
+    if (u.protocol !== 'http:' && u.protocol !== 'https:') return '';
+    return u.href;
+}
 const esc = (s) => String(s == null ? '' : s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 const num = (v) => { const n = Number(v); return Number.isFinite(n) ? n : null; };
 // Blank stays blank. num(null) is 0 — Number(null) === 0 — and a contamination
@@ -203,6 +245,18 @@ function build(opts = {}) {
         contaminated_weight: num(c.contaminated_weight),
         grade_sold: c.grade_sold || '', grade_received: c.grade_received || '',
         grade_weight: num(c.grade_weight),
+        // The two PRICES, carried 2026-10-21. Without them the note stated a
+        // weight and two grade names and then demanded a figure that cannot
+        // be derived from either — 2,215.64 LB "affected" and $1,041.35, with
+        // the $0.42 that makes the sum work printed nowhere. Apsara, asked
+        // what a grade claim should show: both prices and the difference.
+        // nnum, NOT num. num() runs Number() first and Number(null) is 0, so
+        // an unrecorded price came through as a real zero — and the note
+        // printed "2,215.64 LB affected at $0.00/LB = $0.00", a confident
+        // zero dressed up as a calculation on a document asking for money.
+        // Caught by this file's own section I, which is what it is for.
+        grade_price_sold: nnum(c.grade_price_sold),
+        grade_price_received: nnum(c.grade_price_received),
         quality_qty: nnum(c.quality_qty),
         // ── THE SORTED BREAKDOWN, 2026-10-20 ─────────────────────────────
         // Apsara: "we buy al wheel dirty.there would be claim on that like
@@ -210,6 +264,19 @@ function build(opts = {}) {
         // breakdown, so a note without it is the unexplained number this
         // file already warns about.
         sorted_lines: Array.isArray(c.sorted_lines) ? c.sorted_lines : [],
+        // ── THE LINK SHE PASTES ─────────────────────────────────────────
+        // Apsara, 2026-10-21: "For supoorting doc,i will just directly
+        // provide gdrive link". She shares the folder or file in Drive
+        // herself and pastes the link on the claim; Jarvis only prints it.
+        //
+        // NOT the Drive link helpers/claimEvidence.js already stores. That
+        // one is a Shared-Drive webViewLink nobody has made public, and its
+        // own header forbids printing it because those pages carry the
+        // CUSTOMER's name. This is a separate field she fills deliberately,
+        // which is the point: the sharing and the redaction are both hers.
+        //
+        // safeUrl() is what stops it being an injection hole — see there.
+        docs_url: safeUrl(c.docs_url),
         sorted_weight: num(c.sorted_weight),
         paid_price: num(c.paid_price), paid_price_unit: c.paid_price_unit || '',
         tolerance_pct: num(c.tolerance_pct), claimable_shortage: num(c.claimable_shortage),
@@ -227,7 +294,7 @@ function build(opts = {}) {
     // reconcile, the rate comes OFF that line and it reads as an agreed amount,
     // which is what it actually is. Nothing is adjusted to make it fit.
     const RECONCILE_TOL = 0.01;   // 1%, and never less than a dollar
-    const lines = rows.map(line).map((l) => {
+    let lines = rows.map(line).map((l) => {
         if (l.rate === null || !l.sendable || !l.our_claim) return l;
         // ── THE QUANTITY MUST BE IN THE RATE'S OWN UNIT (2026-10-21) ─────
         // This read l.qty_mt, which was right only while every rate was
@@ -244,18 +311,74 @@ function build(opts = {}) {
             : (!l.unit || !l.rate_unit || l.unit === l.rate_unit) ? l.basis
             : claimPrice.toUnit(l.basis, l.unit, l.rate_unit);
         if (qty === null || qty === undefined) return l;
-        const implied = qty * l.rate;
+        // ── RECONCILE THE RATE HE CAN SEE (2026-10-21) ──────────────────
+        // This used l.rate, the stored one. The document prints a FORMATTED
+        // rate, and the two were not the same number: $0.8930 stored,
+        // "$0.89" on the page. So the guard reconciled 2,456 x 0.893 =
+        // $2,193.21, passed the line, and printed a rate that gives
+        // $2,185.84 when the supplier multiplies it.
+        //
+        // The guard's whole purpose is the comment above — "the supplier
+        // never sees a contradiction" — and it was checking a number the
+        // supplier never sees. It now parses the rate back out of what is
+        // actually printed, so the check and the page cannot disagree
+        // again, whatever the formatter does later.
+        //
+        // HONESTLY: this line is NOT what fixed Inesh's note. rateMoney()
+        // did. At four decimals the printed and stored rates differ by at
+        // most $0.12 on a 2,456 LB line, against a 1% slack of $21.86, so no
+        // realistic rate can tell them apart and no test can kill a mutation
+        // that reverts this. It is here for the day somebody coarsens the
+        // formatter again — which is exactly how this bug arrived.
+        const shown = Number(String(rateMoney(l.rate)).replace(/[$,]/g, ''));
+        if (!Number.isFinite(shown)) return l;
+        const implied = qty * shown;
         const slack = Math.max(1, Math.abs(l.our_claim) * RECONCILE_TOL);
         if (Math.abs(implied - l.our_claim) <= slack) return l;
         return { ...l, rate: null, rate_unit: '', rate_from: '', charge_qty: null, rate_hidden: Math.round(implied * 100) / 100 };
     });
+    // ── A CLAIM WITH NO FIGURE DOES NOT GO ON A DEMAND (2026-10-21) ──────
+    // Apsara, holding a clubbed note to Inesh Cores Chapin where the first of
+    // two rows was entirely dashes: "What if we have multiple claims like
+    // this.Here in first row nothing was there". Asked what the note should
+    // do with them, she chose: leave them off entirely.
+    //
+    // The reasoning, because it is not a layout preference. A row of dashes
+    // does not strengthen the demand, it dilutes it — five accusations and
+    // one number reads as a list of grievances rather than a documented
+    // claim, and it is written evidence that Edge raises claims it has not
+    // substantiated. Worse, the detail bullet under such a row carried the
+    // affected weight ("2,215.64 LB affected"), which let the supplier price
+    // the unquantified claim himself at his own rate: he learned his real
+    // exposure while being formally asked for less.
+    //
+    // THEY ARE NOT LOST. They come back as `noFigure` for the SCREEN to warn
+    // her with before she sends — her second choice, and the half that makes
+    // this safe. Dropping them silently would let her believe a claim went
+    // out when it did not.
+    //
+    // `!l.our_claim` is falsy for 0 as well as null, so a claim assessed at
+    // exactly zero is also left off. That is deliberate and matches what the
+    // figure means: nothing to recover is not something to send a demand for.
+    const sendableAll = lines.filter((l) => l.sendable);
+    const noFigure = sendableAll.filter((l) => !l.our_claim)
+        // has_docs rides along so the screen can say the SECOND thing that
+        // went with the claim. Apsara, 2026-10-21, looking for a Drive link
+        // on a claim report and not finding it: a claim with no figure is
+        // left off the note, and its supporting-documents link is left off
+        // with it. That is the right behaviour — evidence for a claim he is
+        // not being asked to pay tells him a claim is coming, which is the
+        // thing leaving it off was meant to avoid — but it must not be a
+        // surprise. The warning names it; it does not vanish quietly.
+        .map((l) => ({ id: l.id, container_no: l.container_no, kind: l.kind, supplier: l.supplier,
+            has_docs: !!l.docs_url }));
+
+    const omit = new Set(noFigure.map((n) => n.id));
+    lines = lines.filter((l) => !omit.has(l.id));
+
     const sendable = lines.filter((l) => l.sendable);
     const recoverable = sendable.reduce((t, l) => t + (l.our_claim || 0), 0);
     const suppliers = [...new Set(lines.map((l) => l.supplier).filter(Boolean))];
-
-    // A line with no recovery figure on it is the one worth noticing: the claim
-    // exists, the supplier is named, and nobody has said what is being recovered.
-    const noFigure = sendable.filter((l) => !l.our_claim);
 
     return {
         scope: claimId ? 'claim' : container ? 'container' : supplier ? 'supplier' : 'all',
@@ -309,11 +432,50 @@ function detailLine(l) {
     }
     if (l.assessment === 'grade') {
         const bits = [];
-        if (l.grade_sold || l.grade_received) bits.push(`sold as ${l.grade_sold || '—'}, received as ${l.grade_received || '—'}`);
-        if (l.grade_weight !== null) bits.push(`${wt(l.grade_weight, l.unit)} affected`);
+        // ── THE WORKING, NOT JUST THE FINDING (2026-10-21) ──────────────
+        // It used to say "sold as X, received as Y; N LB affected" and stop.
+        // Two problems, both found by reading one of her real notes:
+        //
+        //   · The amount could not be reproduced. The sum is weight x (sold
+        //     price - received price), and the received price was never on
+        //     the page. The reconciliation guard then correctly STRIPPED the
+        //     rate column, because weight x the bill rate is a different
+        //     number — so the row showed a dash and a bare $1,041.35.
+        //   · "sold as" is ambiguous. It reads either as what HE sold Edge
+        //     or as what EDGE resold it as, and a supplier being asked for
+        //     money will take whichever reading suits him. "Billed to us as"
+        //     can only mean one thing, and it is the true one.
+        //
+        // The rate column is deliberately left stripped rather than being
+        // re-pointed at the difference: "YOUR RATE" means the rate off his
+        // own bill everywhere else on this document, and quietly making it
+        // mean something else on one kind of row is how a shared column
+        // starts lying.
+        const gs = l.grade_price_sold, gr = l.grade_price_received;
+        if (l.grade_sold || l.grade_received) {
+            bits.push(`billed to us as ${l.grade_sold || '—'}${gs === null ? '' : ` at ${rateMoney(gs)}/${l.unit}`}`
+                + `, received as ${l.grade_received || '—'}${gr === null ? '' : `, worth ${rateMoney(gr)}/${l.unit}`}`);
+        }
+        if (l.grade_weight !== null && gs !== null && gr !== null) {
+            // The arithmetic, spelled out, because she asked for exactly this
+            // on the sorted type: "We should show the calc na 2000*0.30 like
+            // that." Same rule, same reason.
+            bits.push(`${wt(l.grade_weight, l.unit)} affected at ${rateMoney(gs - gr)}/${l.unit} = ${money(Math.round(l.grade_weight * (gs - gr) * 100) / 100)}`);
+        } else if (l.grade_weight !== null) {
+            bits.push(`${wt(l.grade_weight, l.unit)} affected`);
+        }
         return bits.length ? `<li><span class="mono">${esc(l.container_no || '—')}</span> — ${esc(l.kind)}: ${esc(bits.join('; '))}.</li>` : '';
     }
-    if (l.assessment === 'sorted') {
+    if (l.assessment === 'sorted' || l.assessment === 'damage') {
+        // DAMAGE SHARES THIS TABLE (2026-10-21). Apsara: "if there is any
+        // damage,quality,grade claim,we need to procide more details na?"
+        // The arithmetic is the same — weight x (what Edge paid - what it is
+        // actually worth) — so the breakdown she already approved is the
+        // right shape for it. Only the column heading changes, because a
+        // damaged rim is not a "material" that was sorted out, and a heading
+        // that lies is the thing she rejected first time round: "What we
+        // found / Weight / Price we paid you ... this is bery bad".
+        const isDamage = l.assessment === 'damage';
         // ── WHY THE RATES ARE ON THE SUPPLIER'S COPY ─────────────────────
         // The claim is weight x (what Edge paid - what the material is
         // actually worth). Without both figures the supplier cannot
@@ -339,7 +501,9 @@ function detailLine(l) {
         // has them. The arithmetic is unchanged: Difference is price paid
         // minus worth, and Claim is weight x difference.
         const pu = l.paid_price_unit || l.unit;
-        const per = (v) => `${money(v)}/${esc(pu)}`;
+        // RATES, so rateMoney, not money — see its comment. A worth of
+        // $1.0475 printed as $1.05 is the Inesh defect in the sub-table.
+        const per = (v) => `${rateMoney(v)}/${esc(pu)}`;
         let footed = 0;
         const rows = l.sorted_lines.map((x) => {
             // The weight is recorded in the CLAIM's unit; the price is per the
@@ -389,7 +553,7 @@ function detailLine(l) {
              //
              // So the headings are taken from `head` above, not written
              // afresh. If that row is ever reworded, this one follows.
-             + `<th style="text-align:left">Material</th>`
+             + `<th style="text-align:left">${isDamage ? 'What was damaged' : 'Material'}</th>`
              + `<th class="r">Weight</th>`
              + `<th class="r">Your rate</th>`
              + `<th class="r">Assessed value</th>`
@@ -401,7 +565,25 @@ function detailLine(l) {
              + `</table></li>`;
     }
     if (l.assessment === 'quality' && l.quality_qty !== null) {
-        return `<li><span class="mono">${esc(l.container_no || '—')}</span> — ${esc(l.kind)}: ${esc(wt(l.quality_qty, l.unit))} claimed.</li>`;
+        // ── WHAT WAS WRONG, AND THE SUM (2026-10-21) ─────────────────────
+        // Apsara: "wh about quality claim?" This said only "2,215.64 LB
+        // claimed" beside a demand for $1,971.92 — reproducible, but silent
+        // on the defect, so the supplier's first reply was always "what was
+        // wrong with it". The findings were on the record all along and the
+        // quality branch never read them; now it does.
+        //
+        // The working is spelled out for the same reason as grade and
+        // sorted: "We should show the calc na 2000*0.30 like that."
+        const bits = [];
+        if (l.findings.length) bits.push('found: ' + l.findings.join(', ').toLowerCase());
+        if (l.rate !== null) {
+            bits.push(`${wt(l.quality_qty, l.unit)} at ${rateMoney(l.rate)}/${l.rate_unit || l.unit}`
+                + ` = ${money(l.our_claim)}`);
+        } else {
+            bits.push(`${wt(l.quality_qty, l.unit)} claimed`);
+        }
+        if (l.measured_by) bits.push('measured by: ' + l.measured_by.toLowerCase());
+        return `<li><span class="mono">${esc(l.container_no || '—')}</span> — ${esc(l.kind)}: ${esc(bits.join('; '))}.</li>`;
     }
     return '';
 }
@@ -424,6 +606,38 @@ function detailLine(l) {
 //
 // Four CONDITIONAL notes were not named and are untouched: unverified lines,
 // claims with no figure, the MT-quantity note, and the no-rate note.
+//
+// ── THE "NO RECOVERY AMOUNT YET" NOTE, removed 2026-10-21 ───────────────
+// It announced "N claim(s) in this report have no recovery amount set
+// against them yet". Those rows are no longer printed at all (see build()),
+// so the note described rows that are not there — and, worse, it told the
+// supplier precisely the thing that leaving them off is meant not to tell
+// him: that Edge has further claims against him it has not yet priced.
+//
+// AND IT IS A JS COMMENT. I first wrote this explanation as an <!-- --> in
+// the template, which would have shipped that same sentence inside every
+// claim note's source. That is the fourth time in one day a comment about
+// what the document does not say ended up inside the document. The rule has
+// not changed: nothing explaining an omission goes in the template.
+//
+// Her warning lives on the claims screen, from build()'s `noFigure`.
+//
+// ── THE LEAD PARAGRAPH, removed 2026-10-21 ──────────────────────────────
+// Apsara quoted it verbatim and said "Remove": the sentence that opened the
+// note, beginning "The claims below were raised against material supplied by
+// you" and ending "what we are recovering from you". Its .lead CSS rule went
+// with it; nothing else used the class.
+//
+// It was restating the table's own headings — DATE, CONTAINER, WHAT IS
+// CLAIMED, RECOVERABLE, and a box already reading AMOUNT RECOVERABLE FROM
+// YOU. The one thing it carried that the table does not is the offer to
+// forward the backing documents. That is NOT reinstated anywhere on my own
+// initiative; if it belongs on the note, it is her call where it goes.
+//
+// And again: A JS COMMENT. Writing this note as an <!-- --> in the template
+// is how I removed the sentence while still shipping it in the source of
+// every claim note — tests/claims-scan-report.js caught it, which is the
+// only reason it is not on the document right now.
 function toHtml(b) {
     const when = new Date(b.generatedAt).toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' });
     const to = b.addressedTo || (b.suppliers.length > 1 ? `${b.suppliers.length} suppliers` : '—');
@@ -451,7 +665,7 @@ function toHtml(b) {
       <td class="r mono">${esc(wt(l.claimed_weight, l.unit))}</td>
       <td class="r mono">${esc(wt(l.shortage, l.unit))}</td>
       <td class="r mono">${l.shortage_pct === null ? '—' : esc(l.shortage_pct.toFixed(2)) + '%'}</td>`}
-      <td class="r mono">${l.rate === null ? '—' : esc(money(l.rate)) + '/' + esc(l.rate_unit || '')}${l.rate_from ? `<div class="conv">from ${esc(l.rate_from)}</div>` : ''}${l.charge_qty === null ? '' : `<div class="conv">on ${esc(wt(l.charge_qty, l.rate_unit || ''))}</div>`}</td>
+      <td class="r mono">${l.rate === null ? '—' : esc(rateMoney(l.rate)) + '/' + esc(l.rate_unit || '')}${l.rate_from ? `<div class="conv">from ${esc(l.rate_from)}</div>` : ''}${l.charge_qty === null ? '' : `<div class="conv">on ${esc(wt(l.charge_qty, l.rate_unit || ''))}</div>`}</td>
       <td class="r mono strong">${l.sendable && l.our_claim !== null ? esc(money(l.our_claim)) : '—'}</td>
     </tr>`;
 
@@ -498,7 +712,9 @@ header .doc{font-size:12pt;font-weight:700;letter-spacing:.06em;text-transform:u
 header .ref{font-size:8pt;color:#D9E8F5;margin-top:3px}
 .meta{display:flex;gap:30px;flex-wrap:wrap;margin:12px 0 4px}
 .meta .k{font-size:7.5pt;letter-spacing:.07em;text-transform:uppercase;color:#777;margin-bottom:2px}
-.lead{margin:10px 0 2px;color:#333}
+/* .lead is gone with the paragraph it styled (2026-10-21). Nothing else in
+   this document uses it — leaving the rule behind would invite someone to
+   hang new prose on a class she asked to be emptied. */
 table{width:100%;border-collapse:collapse}
 table.sum{margin-top:10px}
 th{text-align:left;font-size:7pt;letter-spacing:.05em;text-transform:uppercase;color:#1F4E79;border-bottom:1px solid #2E6DA4;padding:5px 5px;white-space:nowrap;background:#D9E8F5}
@@ -513,6 +729,23 @@ tfoot td{border-top:2px solid #2E6DA4;border-bottom:0;padding-top:7px;font-weigh
 .total .box{border:1.5px solid #2E6DA4;background:#F4F9FD;padding:9px 16px;text-align:right;min-width:230px}
 .total .k{font-size:7.5pt;letter-spacing:.07em;text-transform:uppercase;color:#1F4E79}
 .total .v{font-size:15pt;font-weight:800;margin-top:2px}
+/* The .docs block: files she ticked for this claim. Links are printed in the
+   accent blue and always underlined, never hover-only — this renders to PDF
+   and to paper, where colour and a rule are the only signals that a line can
+   be clicked. The raw URL under each one is for the printed copy.
+
+   DELIBERATELY DOES NOT SPELL OUT THE BLOCK'S HEADING. A comment in here is
+   a comment inside the rendered document: the style tag ships. Writing the
+   heading text in this comment made the block's own "is it present" check
+   match on the comment and pass with the block absent — the third time in
+   one day that a comment about the document ended up inside it. */
+.docs{margin-top:16px;border-top:1px solid #ddd;padding-top:9px}
+.docs .k{font-size:7.5pt;letter-spacing:.07em;text-transform:uppercase;color:#1F4E79;margin-bottom:5px}
+.docs ul{margin:0;padding:0 0 0 15px;font-size:8.6pt}
+.docs li{margin:0 0 5px}
+.docs a{color:#2E6DA4;text-decoration:underline;font-weight:600}
+.docs .exp{color:#777;font-size:7.6pt;margin-left:7px}
+.docs .raw{color:#999;font-size:7pt;word-break:break-all;margin-top:1px}
 .notes{margin-top:16px;font-size:7.8pt;color:#555;border-top:1px solid #ddd;padding-top:9px}
 .notes p{margin:0 0 5px}
 .sign{margin-top:22px;display:flex;justify-content:space-between;align-items:flex-end}
@@ -569,7 +802,6 @@ tfoot td{border-top:2px solid #2E6DA4;border-bottom:0;padding-top:7px;font-weigh
   ${b.lines.some((l) => l.shortage !== null) ? `<div><div class="k">Total shortage</div><span class="mono">${esc(wt(b.totals.shortage, b.lines[0] ? b.lines[0].unit : ''))}</span></div>` : ''}
 </div>
 
-<p class="lead">The claims below were raised against material supplied by you, each one supported by the claim documents behind it, which we can forward on request. The amount shown in the final column is what we are recovering from you.</p>
 
 <table class="sum">
   <thead><tr>${head.map((h, i) => `<th${i >= 4 ? ' class="r"' : ''}>${esc(h)}</th>`).join('')}</tr></thead>
@@ -584,9 +816,35 @@ ${details}
   <div class="v mono">${esc(money(b.totals.recoverable))}</div>
 </div></div>
 
+${(() => {
+    // ── THE DOCUMENTS BEHIND THE CLAIM ──────────────────────────────────
+    // Apsara, 2026-10-21: "For supoorting doc,i will just directly provide
+    // gdrive link". One link per claim, pasted by her, printed as a real
+    // <a href> — Chromium keeps anchors as PDF link annotations, so it is
+    // clickable in the generated file.
+    //
+    // The URL is also shown in full underneath. This gets printed and read
+    // on phones that will not follow a link, and a supplier who cannot see
+    // where a link goes does not click it.
+    //
+    // Deduplicated: a clubbed note carries several claims on one container
+    // and she will often paste the same folder on each of them. Printing
+    // the same link four times reads as padding.
+    const seen = new Set();
+    const rows = b.lines
+        .filter((l) => l.docs_url && !seen.has(l.docs_url) && seen.add(l.docs_url))
+        .map((l) => `
+      <li><a href="${esc(l.docs_url)}">${esc(l.container_no || 'Supporting documents')}</a>
+          <div class="raw mono">${esc(l.docs_url)}</div></li>`).join('');
+    if (!rows) return '';
+    return `<div class="docs">
+  <div class="k">Supporting documents</div>
+  <ul>${rows}</ul>
+</div>`;
+})()}
+
 <div class="notes">
   ${b.includedUnverified && b.lines.some((l) => !l.sendable) ? '<p><strong>Lines marked “not yet verified”</strong> are shown for information only. Their figures have not yet been confirmed against the loading documents and they are excluded from the total above.</p>' : ''}
-  ${b.noFigure.length ? `<p><strong>${b.noFigure.length} claim(s)</strong> in this report have no recovery amount set against them yet; they are listed so the position is complete.</p>` : ''}
   ${b.lines.some((l) => l.charge_qty !== null) ? '<p>The quantity the rate is applied to, converted into metric tonnes, is shown beneath the rate. The recoverable amount is that quantity at that rate.</p>' : ''}
   ${b.lines.some((l) => l.sendable && l.rate === null) ? '<p>Where no rate is shown, the amount is as agreed between us rather than calculated.</p>' : ''}
 </div>
@@ -649,4 +907,4 @@ function filenameFor(built, ext) {
     return `Claim-report_${who}_${when}.${ext}`;
 }
 
-module.exports = { build, toHtml, toPdf, toWorkbook, filenameFor, SENDABLE };
+module.exports = { build, toHtml, toPdf, toWorkbook, filenameFor, SENDABLE, safeUrl };

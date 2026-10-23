@@ -110,8 +110,30 @@ const routes = require(R('helpers/claims/routes.js'));
     await claims.verify(two[1].id, { weight_unit: 'MT', invoice_weight: 25, claimed_weight: 23.886, sell_price: 2479 }, 't');
     const rep = report.build({ container: 'CCCU3333333', supplier: 'Gomez' });
     const html = report.toHtml(rep);
-    ck('ONE report for the container, TWO rows', rep.lines.length === 2 && (html.match(/<tr[^>]*>\s*<td>/g) || []).length === 2, rep.lines.length);
-    ck('  the quality row says its quantity in place of the empty weight cells', /colspan="4">1\.005 MT claimed/.test(html));
+    // ── INVERTED 2026-10-21 ───────────────────────────────────────────────
+    // Both claims are ASSESSED here but no recovery has been raised on
+    // either, so our_claim is null on both. Apsara, shown a clubbed note
+    // whose first row was entirely dashes — "What if we have multiple claims
+    // like this.Here in first row nothing was there" — chose to leave such
+    // claims off the document altogether.
+    //
+    // So this used to assert two rows and now asserts none, and the check
+    // that mattered is turned round rather than deleted: the report is
+    // SILENT about a claim nobody has priced, and says so to HER instead.
+    ck('a container whose claims are assessed but not raised sends NOTHING',
+        rep.lines.length === 0 && !/<td>/.test(html), rep.lines.length);
+    ck('  and build() hands the screen both of them to warn about',
+        rep.noFigure.length === 2 && rep.noFigure.every((n) => n.container_no === 'CCCU3333333'), rep.noFigure);
+    ck('  the quantity wording is NOT on a document nobody is being asked to pay',
+        !/1\.005 MT claimed/.test(html));
+
+    // And the round trip: raising the recovery is what puts it back on.
+    await claims.raiseRecovery(two[0].id, { our_claim: 2329.59 }, 't');
+    const repRaised = report.build({ container: 'CCCU3333333', supplier: 'Gomez' });
+    ck('raising the recovery on one puts that one — and only that one — on the note',
+        repRaised.lines.length === 1 && repRaised.noFigure.length === 1,
+        { rows: repRaised.lines.length, off: repRaised.noFigure.length });
+    ck('  and its quantity wording comes with it', /1\.005 MT claimed/.test(report.toHtml(repRaised)));
 
     // ── asked when the container or invoice is missing; the other half comes from her orders ──
     const ONE = { id: 'm4', threadId: 't4', snippet: 'x', payload: { mimeType: 'text/plain', body: { data: b64('Quality claim on invoice 26ZZ99, 1 MT at USD 2,000/MT.') },
@@ -152,8 +174,18 @@ const routes = require(R('helpers/claims/routes.js'));
         && tasksLib.loadTasks().filter((t) => t.claim_id === d2.id && t.status === 'pending').length === t2);
     r = await post('/api/claims/nope/delete', {});
     ck('  an unknown claim is a 404', r.code === 404);
-    const rep2 = require(R('helpers/claims/report.js')).build({ container: 'CCCU3333333', supplier: 'Gomez' });
-    ck('  the container report now has one row', rep2.lines.length === 1);
+    // INVERTED 2026-10-21 with the no-figure change above. d1 is the claim
+    // the recovery was raised on, so it was the container's ONLY row; d2 has
+    // no figure and is deliberately left off. Deleting d1 therefore empties
+    // the note rather than taking it from two rows to one.
+    //
+    // Asserted as a DELTA against the state just before the delete, so this
+    // does not break again the next time a fixture above it moves.
+    const repAfter = require(R('helpers/claims/report.js')).build({ container: 'CCCU3333333', supplier: 'Gomez' });
+    ck('  deleting the only priced claim leaves the note with nothing to send',
+        repAfter.lines.length === 0, repAfter.lines.length);
+    ck('  and the unpriced one is still reported to HER, not silently gone',
+        repAfter.noFigure.length === 1 && repAfter.noFigure[0].id === d2.id, repAfter.noFigure);
 
     server.close();
     console.log(`\n  ${pass} passed, ${fail} failed`); process.exit(fail ? 1 : 0);

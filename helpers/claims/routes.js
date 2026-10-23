@@ -175,7 +175,11 @@ function mount(app, cfg) {
                 // sends paidVia and the route reads paid_via" — so these
                 // three went in at the same time as the branch that reads
                 // them, not afterwards.
-                'sorted_lines', 'paid_price', 'paid_price_unit'];
+                'sorted_lines', 'paid_price', 'paid_price_unit',
+                // 'damage_lines' added 2026-10-21 with the branch that reads
+                // it. Missing from here it is dropped in silence and the
+                // claim saves with no lines and no error — rule 3's shape.
+                'damage_lines'];
             const fields = {};
             for (const k of pick) if (b[k] !== undefined) fields[k] = b[k];
             const rec = await claims.assess(req.params.id, fields, b.by || 'manager');
@@ -231,10 +235,32 @@ function mount(app, cfg) {
                 // 2026-10-10 — words and choices, never money. A figure only
                 // changes through verify or assess.
                 'remarks', 'assessment', 'findings', 'measured_by', 'contam_claimed_pct',
-                'grade_sold', 'grade_received', 'tolerance_pct'];
+                'grade_sold', 'grade_received', 'tolerance_pct',
+                // 'price_basis' added 2026-10-21 WITH the branch that reads
+                // it, not after. A field missing from this list is dropped in
+                // silence: the claim saves, the screen shows no error, and the
+                // rate quietly stays per-grade on a container she marked as
+                // weighed whole. That is CLAUDE.md rule 3's exact shape.
+                'price_basis',
+                // The Drive link she pastes for supporting documents
+                // (2026-10-21). In the list WITH the field that reads it:
+                // missing from here it is dropped in silence and the note
+                // prints no link with no error anywhere.
+                'docs_url'];
+            // ── THE DOCS LINK IS CLEANED ON THE WAY IN, NOT ONLY OUT ───
+            // safeUrl() ran at RENDER time only, so a paste that is not a
+            // web link was stored happily, shown back in the box as if
+            // saved, and then silently dropped from every claim note. She
+            // would have found out from the supplier, not from the screen.
+            //
+            // Same function the note uses — exported rather than copied, so
+            // the two can never disagree about what a usable link is.
+            if (b.docs_url !== undefined) {
+                b.docs_url = require('./report').safeUrl(b.docs_url);
+            }
             const patch = {};
             for (const k of allowed) if (b[k] !== undefined) patch[k] = b[k];
-            if (patch.assessment !== undefined && patch.assessment !== null && !claims.ASSESSMENTS.includes(patch.assessment)) return bad(res, 'assessment must be weight, contamination, grade, quality or sorted');
+            if (patch.assessment !== undefined && patch.assessment !== null && !claims.ASSESSMENTS.includes(patch.assessment)) return bad(res, `assessment must be one of: ${claims.ASSESSMENTS.join(', ')}`);
             if (patch.findings !== undefined) patch.findings = (Array.isArray(patch.findings) ? patch.findings : []).filter((f) => claims.FINDINGS.includes(f));
             if (patch.measured_by !== undefined && patch.measured_by !== null && !claims.MEASURED_BY.includes(patch.measured_by)) return bad(res, 'that is not a way of measuring I know');
             if (patch.remarks !== undefined) patch.remarks = String(patch.remarks || '').slice(0, 2000);

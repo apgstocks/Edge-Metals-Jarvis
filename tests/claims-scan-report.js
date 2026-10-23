@@ -152,8 +152,91 @@ section('E — the document itself');
     // company name mentioned in claim email of customer, then it should be
     // hided" — so the document no longer refers to a customer at all, and the
     // Customer column is gone. claims-supplier-price.js F4 holds the full guard.
-    ck('it says the claims were raised against THEIR material, naming no customer',
-        /raised against material supplied by you/.test(html) && !/>Customer</.test(html));
+    //
+    // INVERTED 2026-10-21. She quoted the lead paragraph verbatim and said
+    // "Remove". This check pinned its wording, so it is turned round rather
+    // than deleted — the same treatment the four footer notes got above.
+    // The half that mattered is the SECOND half: no customer anywhere on a
+    // document that goes to a supplier. That guard is untouched; only the
+    // sentence it happened to be bolted to has gone.
+    ck('the lead paragraph is gone — the table already says all of it',
+        !/raised against material supplied by you/.test(html)
+        && !/class="lead"/.test(html));
+    ck('and no customer leaks onto a supplier-facing note', !/>Customer</.test(html));
+    ck('what it was there to say is still on the page, in the table',
+        /Amount recoverable from you/i.test(html) && /Recoverable/i.test(html));
+    // ── THE SUPPORTING-DOCUMENT LINK SHE PASTES (2026-10-21) ────────────
+    // Apsara: "For supoorting doc,i will just directly provide gdrive link".
+    // She shares it in Drive herself; Jarvis only prints it.
+    //
+    // The interesting half is the refusals. This string comes out of a text
+    // box and goes into an <a href> in a PDF, so esc() is not enough —
+    // esc() makes "javascript:alert(1)" safe as text and leaves it fully
+    // live as an href. safeUrl() checks the SCHEME.
+    {
+        const hasBlock = (x) => /<div class="docs">/.test(x);
+        ck('a claim with no link pasted prints no documents block', !hasBlock(html));
+
+        const one = report.build({ supplier: 'Gomez' }).lines[0];
+        // build() is what runs docs_url through safeUrl, so the refusals are
+        // checked at that seam, not by hand-feeding toHtml.
+        //
+        // AWAITED. claims.update is async; without the await the store had
+        // not been written when build() ran, so the block was absent for
+        // EVERY input — and the six refusal checks below all passed for
+        // that reason rather than because safeUrl dropped anything. Only
+        // the three positive checks failing gave it away.
+        const viaBuild = async (u) => {
+            await claims.update(one.id, { docs_url: u }, 'test', 'link');
+            return report.toHtml(report.build({ supplier: 'Gomez' }));
+        };
+
+        const good = await viaBuild('https://drive.google.com/drive/folders/1AbC');
+        ck('a pasted Drive link prints as a real anchor',
+            hasBlock(good) && /<a href="https:\/\/drive\.google\.com\/drive\/folders\/1AbC">/.test(good));
+        ck('  and in full underneath, for the printed copy',
+            /class="raw mono">https:\/\/drive\.google\.com/.test(good));
+
+        ck('a link pasted without a scheme is made https, not dropped',
+            /<a href="https:\/\/drive\.google\.com/.test(await viaBuild('drive.google.com/drive/folders/1AbC')));
+
+        // Each of these is live inside a PDF if it reaches the href.
+        for (const bad of ['javascript:alert(1)', '  JavaScript:alert(1)', 'data:text/html,<script>x</script>',
+            'file:///etc/passwd', 'vbscript:msgbox', 'not a url at all ???']) {
+            ck(`  ${JSON.stringify(bad).slice(0, 34)} never reaches the href`, !hasBlock(await viaBuild(bad)));
+        }
+        // ── THE LINK GOES WITH THE CLAIM, AND SHE IS TOLD (2026-10-21) ──
+        // Apsara went looking for a Drive link on a claim report and found
+        // nothing. The cause was the change she chose earlier the same day:
+        // a claim with no recovery figure is left off the note entirely, and
+        // its supporting-documents link goes with it. Correct — evidence for
+        // a claim he is not being asked to pay tells him a claim is coming —
+        // but it must not disappear in silence.
+        {
+            const orphan = await claims.create({ container_no: 'ORPHAN1', supplier: 'Gomez',
+                claim_type: 'quality', weight_unit: 'LB',
+                docs_url: 'https://drive.google.com/drive/folders/1Orphan' });
+            await claims.setStatus(orphan.id, 'verified', 'test');
+            const ob = report.build({ claimId: orphan.id });
+            ck('a claim with no figure is off the note, link and all',
+                ob.lines.length === 0 && !/<div class="docs">/.test(report.toHtml(ob)));
+            ck('  but build() reports it, naming the container', ob.noFigure.length === 1
+                && ob.noFigure[0].container_no === 'ORPHAN1', ob.noFigure);
+            ck('  AND flags that this one carried a documents link',
+                ob.noFigure[0].has_docs === true, ob.noFigure[0]);
+            // Without has_docs the screen can only say "1 claim is not on
+            // this note", which is what sent her looking for the link.
+            const noLink = await claims.create({ container_no: 'ORPHAN2', supplier: 'Gomez',
+                claim_type: 'quality', weight_unit: 'LB' });
+            await claims.setStatus(noLink.id, 'verified', 'test');
+            ck('  and does not claim a link on a claim that never had one',
+                report.build({ claimId: noLink.id }).noFigure[0].has_docs === false);
+        }
+
+        await viaBuild('');
+        ck('clearing the link takes the block off again', !hasBlock(report.toHtml(report.build({ supplier: 'Gomez' }))));
+    }
+
     ck('it does NOT print what Edge itself absorbs — that is not their business',
         !/absorb/i.test(html) && !/Claimed against Edge/i.test(html));
     // ── INVERTED 2026-10-20 ───────────────────────────────────────────

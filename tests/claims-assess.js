@@ -74,7 +74,12 @@ section('A — the store');
     ck('no accepted share, no figure', await throwsWith(() => claims.assess(n.id, { assessment: 'contamination', weight_unit: 'MT', invoice_weight: 20 }), /share Edge accepts/));
     ck('a "downgrade" priced upwards is refused', await throwsWith(() => claims.assess(n.id, { assessment: 'grade', weight_unit: 'MT', grade_weight: 5, grade_price_sold: 1000, grade_price_received: 1200 }), /not a downgrade/));
     ck('weight claims still go through verify, not assess', await throwsWith(() => claims.assess(n.id, { assessment: 'weight', weight_unit: 'MT' }), /through verify/));
-    ck('an unknown assessment is refused', await throwsWith(() => claims.assess(n.id, { assessment: 'vibes', weight_unit: 'MT' }), /contamination, grade, quality or sorted/));
+    // The message recites ASSESSMENTS itself now rather than a hand-kept
+    // copy of it — the copy had gone stale once, which is why this check
+    // exists. So assert it names every member, whatever the list becomes.
+    ck('an unknown assessment is refused', await throwsWith(
+        () => claims.assess(n.id, { assessment: 'vibes', weight_unit: 'MT' }),
+        new RegExp('assessment must be one of: ' + claims.ASSESSMENTS.join(', '))));
     ck('an unknown claim is refused', await throwsWith(() => claims.assess('nope', { assessment: 'grade' }), /no such claim/));
     const n2 = claims.get(n.id);
     ck('a refused assessment wrote nothing', n2.claim_amount === null && n2.status === 'unverified');
@@ -198,7 +203,8 @@ section('C — end to end: real server, the page\'s routes, both reports');
         // FOUR now, not three — 'sorted' joined ASSESSMENTS on 2026-10-20 and
         // this message had gone stale with it. The refusal itself is
         // unchanged; only the list it recites.
-        ck('/edit refuses an assessment that is not one of the four', badA.status === 400 && /weight, contamination, grade, quality or sorted/.test(badA.raw));
+        ck('/edit refuses an assessment that is not on the list', badA.status === 400
+            && badA.raw.includes('assessment must be one of: ' + claims.ASSESSMENTS.join(', ')), badA.raw.slice(0, 180));
         const sneaky = await req('POST', `/api/claims/${id}/edit`, { sid, body: { claim_amount: 99999 } });
         ck('/edit still cannot set a money figure', sneaky.status === 400, sneaky.raw.slice(0, 100));
 
@@ -235,6 +241,47 @@ section('C — end to end: real server, the page\'s routes, both reports');
         ck('  no fake "0 MT" shortage on a claim that has no shortage', !/>0 MT</.test(h) && !/>0 LB</.test(h));
         ck('  their own rate is on it', /0\.62/.test(h));
         ck('  it is signed for Edge, as a document a supplier is asked to answer', /Authorised signatory/.test(h));
+
+        // Apsara, 2026-10-20: "Also sign should come above under line right".
+        // Twice wrong now. First the image was INSIDE .line, so it printed
+        // under the rule. Then it was a sibling of .line in a
+        // space-between flex ROW, so it printed beside the rule, halfway
+        // across the page. The property both versions failed is the same
+        // one: the ink and the rule must be ONE stack, ink first.
+        // Matching "they are in the same parent, image first" is what makes
+        // this check survive a restyle — greping for .sigcol would just be
+        // shaped like today's CSS.
+        {
+            const flat = h.replace(/\s+/g, ' ');
+            const stack = /<div class="sigcol">\s*<div class="sigimg">(.*?)<\/div>\s*<div class="line">/.exec(flat);
+            ck('  the signature and the rule are one stack, not two columns', !!stack);
+            ck('  the ink is ABOVE the rule, not under it and not beside it',
+                !!stack && !/class="line"/.test(stack[1]));
+            ck('  .sign does not spread the ink away from its rule',
+                /\.sign \.sigcol\{[^}]*width:190px/.test(h) && /\.sign \.line\{[^}]*width:190px/.test(h));
+        }
+
+        // ── DAMAGE THROUGH THE REAL ROUTE (2026-10-21) ──────────────────
+        // claims-sorted.js exercises damage by calling claims.assess()
+        // directly, so the mutation that drops 'damage_lines' from the
+        // route's pick list SURVIVED there — the field was whitelisted and
+        // never posted. This is the only place that proves the screen's
+        // payload actually reaches the engine. Rule 3's shape, again.
+        {
+            const made = await req('POST', '/api/claims', { sid, body: {
+                supplier: 'Nur Metal', container_no: 'DMGU0000001', claim_type: 'damage', created_by: 'manual' } });
+            const did = made.json && made.json.id;
+            ck('a damage claim is created through the route', made.status === 200 && !!did, made.raw.slice(0, 140));
+            const as = await req('POST', `/api/claims/${did}/assess`, { sid, body: {
+                assessment: 'damage', weight_unit: 'LB', paid_price: 0.89, paid_price_unit: 'LB',
+                damage_lines: [{ type: 'Bent rims', weight: 1200, worth: 0.30 },
+                               { type: 'Cracked housings', weight: 800, worth: 0.15 }] } });
+            ck('damage_lines survive the route whitelist and are priced',
+                as.status === 200 && as.json && as.json.claim_amount === 1300,
+                { status: as.status, amount: as.json && as.json.claim_amount, body: as.raw.slice(0, 160) });
+            ck('  and are stored as two lines against the claim',
+                as.json && Array.isArray(as.json.sorted_lines) && as.json.sorted_lines.length === 2);
+        }
 
         const supPdfName = (await req('GET', '/api/claims/report?container=TEMU7944250&supplier=Nur%20Metal&format=xlsx', { sid })).cd;
         ck('the supplier Excel downloads under the new name', /Claim-report_Nur-Metal_/.test(supPdfName), supPdfName);

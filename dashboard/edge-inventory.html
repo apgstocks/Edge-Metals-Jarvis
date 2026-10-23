@@ -157,7 +157,17 @@ const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
 async function api(path, opts = {}) {
-  const res = await fetch(path, { headers: { 'Content-Type': 'application/json' }, ...opts });
+  // cache:'no-store' added 2026-10-23. Apsara: "when i create a load/sle,i
+  // have to log out n relogin to view the latest change." The server now
+  // sends Cache-Control: no-store on every /api/ response, which is the
+  // real fix — this is the client saying the same thing, so a stale answer
+  // cannot come from anything sitting between her and the VM either (the
+  // dashboard is reached through a Cloudflare tunnel). Costs nothing: these
+  // responses were never meant to be re-used.
+  //
+  // BEFORE the spread, so a caller that ever needs a cached read can still
+  // say so — the same shape `headers` already has.
+  const res = await fetch(path, { cache: 'no-store', headers: { 'Content-Type': 'application/json' }, ...opts });
   if (res.status === 401) { location.href = '/login'; throw new Error('unauthorized'); }
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(data.error || `request failed (${res.status})`);
@@ -317,7 +327,12 @@ function accountTable(acct) {
         <td colspan="4" style="font-family:var(--font-mono); font-size:11px; text-transform:uppercase; letter-spacing:.08em; color:var(--text-faint);">Totals</td>
         <td style="text-align:right; font-family:var(--font-mono); font-weight:600;">${money(acct.debit_total)}</td>
         <td style="text-align:right; font-family:var(--font-mono); font-weight:600; color:var(--green-500);">${money(acct.credit_total)}</td>
-        <td style="text-align:right; font-family:var(--font-mono); font-weight:700; color:${acct.closing > 0 ? 'var(--text-strong)' : 'var(--green-500)'};">${money(acct.closing)}</td>
+        <td style="text-align:right; font-family:var(--font-mono); font-weight:700; color:${acct.net_owed > 0 ? 'var(--text-strong)' : 'var(--green-500)'};">${money(acct.net_owed)}${
+          // The claim is named on the line she scans to decide who to pay,
+          // not hidden one click in. Only when there is one.
+          acct.claims_applied > 0
+            ? `<div style="font-weight:400; font-size:11px; color:var(--amber-500);">after -${money(acct.claims_applied)} claimed</div>`
+            : ''}</td>
       </tr></tfoot>
     </table>`;
 }
@@ -398,7 +413,7 @@ async function loadSuppliers() {
   $('fStorage').value = keep;
   $('yardlist').innerHTML = (storage_names || []).map((y) => `<option value="${esc(y)}"></option>`).join('');
   $('supPick').innerHTML = suppliers.length
-    ? suppliers.map((s) => `<option value="${esc(s.supplier)}">${esc(s.supplier)} — ${money(s.closing)} owed</option>`).join('')
+    ? suppliers.map((s) => `<option value="${esc(s.supplier)}">${esc(s.supplier)} — ${money(s.net_owed)} owed${s.claims_applied > 0 ? ' (after claims)' : ''}</option>`).join('')
     : '<option value="">(no suppliers yet)</option>';
   $('suplist').innerHTML = suppliers.map((s) => `<option value="${esc(s.supplier)}"></option>`).join('');
   // A bill with no supplier is on no account at all. Surfaced rather than
@@ -435,10 +450,29 @@ async function loadSupplier() {
   }
 
   $('cards').innerHTML = [
-    card('Owed to them', money(DATA.account.closing), DATA.account.closing > 0 ? 'var(--text-strong)' : 'var(--green-500)'),
+    // ── CLAIMS COME OFF WHAT HE IS OWED (2026-10-23) ───────────────────
+    // "Owed to them" was the closing balance and nothing else, so a claim
+    // she had already raised and sent him a demand for did not appear here
+    // at all. The headline figure is now what is owed AFTER those claims,
+    // because that is the number she pays on.
+    //
+    // The gross figure stays beside it rather than being replaced — she
+    // still has to reconcile against his statement, and he has not agreed
+    // the claim yet. Two labelled numbers, not one silently changed one.
+    card('Owed to them', money(DATA.account.net_owed),
+         DATA.account.net_owed > 0 ? 'var(--text-strong)' : 'var(--green-500)'),
+    ...(DATA.account.claims_applied > 0
+      ? [card('Less claims raised', '-' + money(DATA.account.claims_applied), 'var(--amber-500)'),
+         card('Before claims', money(DATA.account.closing))]
+      : []),
     card('Billed', money(DATA.account.debit_total)),
     card('Paid', money(DATA.account.credit_total), 'var(--green-500)'),
     card('Received', wt(DATA.received.weight_lb, 'lb')),
+    // Claim money with nothing left to take it off. Stated on its own, per
+    // her rule — a supplier showing as owing Edge money reads as an error.
+    ...(DATA.account.claim_credit_unapplied > 0
+      ? [card('Claim credit in hand', money(DATA.account.claim_credit_unapplied), 'var(--green-500)')]
+      : []),
   ].join('');
 
   $('acctBox').innerHTML = accountTable(DATA.account);

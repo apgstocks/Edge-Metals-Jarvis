@@ -158,6 +158,10 @@ label.f input:disabled{color:var(--steel-500)}
 .btn.warn{border-color:#5a4416;color:var(--amber-500)}
 .btn.danger{border-color:var(--red-500);color:#f0b3aa}
 .hint{font-size:12px;color:var(--text-faint);margin-top:9px;line-height:1.55}
+/* A warning she must act on before sending, not a note. Claims with no
+   figure are LEFT OFF the document (2026-10-21), so this is the only place
+   she learns they did not go. */
+.hint.warn{color:var(--amber-500)}
 .hint b{color:var(--amber-500);font-weight:600}
 
 .quotes{display:flex;flex-direction:column;gap:9px}
@@ -516,6 +520,56 @@ const kindChip = (t) => t
    The kind is the model's free-form name (and she renames and merges them);
    the assessment is which arithmetic applies. A claim never assessed is a
    weight claim, which is what every claim before 2026-10-10 was. */
+    // Shared by the Sorted and Damaged panes — see the two <div>s above.
+    // isDamage changes only the words; every control, id and handler is
+    // the same, which is the point: one pane cannot drift from the other.
+    function paneLines(isDamage){ return ''+
+          '<div class="grid">' +
+            fld('Price you paid this supplier, per unit', 'f_spaid',
+                c.paid_price != null ? c.paid_price : c.supplier_price, 'e.g. 0.85') +
+            '<label class="f">Paid price is per<select class="f_spaidUnit" data-k="f_spaidUnit">' +
+              unitOpt(c.paid_price_unit || c.supplier_price_unit || unit || 'LB') + '</select></label>' +
+            fld('Net weight invoiced (optional)', 'f_sinv', c.invoice_weight, 'stops more being sorted out than arrived') +
+          '</div>' +
+          '<table class="sortedT" style="width:100%; margin-top:10px; border-collapse:collapse; font-size:12px;">' +
+            '<thead><tr>' +
+              // ── THE HEADER MUST FOLLOW THE UNIT CHIPS ────────────────
+              // It read "Weight (MT)" with LB selected and green, because
+              // `unit` is captured when the card is BUILT and the chips only
+              // call renderCalc(). Apsara then entered the RATE in the
+              // Weight column and the WEIGHT in the Worth column, on all
+              // four rows — 1.38 was the price she had typed above. A header
+              // naming the wrong unit, over a column of bare numbers, will
+              // do that every time. The label is now painted by renderCalc
+              // from the selected chip.
+              '<th style="text-align:left">What was found</th>' +
+              '<th style="text-align:right" class="s_hw">Weight</th>' +
+              '<th style="text-align:right" class="s_hworth">Worth per unit</th>' +
+              '<th>that is per</th><th style="text-align:right">Claim</th><th></th>' +
+            '</tr></thead><tbody class="s_rows">' +
+              ((c.sorted_lines && c.sorted_lines.length ? c.sorted_lines : [{},{},{}])
+                .map((l) => sortedRow(l, c.paid_price_unit || c.supplier_price_unit || unit || 'LB')).join('')) +
+            '</tbody></table>' +
+          '<div class="actions" style="margin-top:6px">' +
+            '<button class="btn s_add" type="button" style="padding:3px 10px; font-size:11px;">Add another line</button>' +
+            '<span class="hint s_total" style="margin-left:10px"></span>' +
+          '</div>' +
+          // ── HOW DO YOU KNOW IT IS CLAD WHEEL? ────────────────────────
+          // Apsara: "how do i know material are this". The claim already
+          // had the answer and this pane was not asking it — the same
+          // chips the contamination pane uses, with the same STRENGTH note
+          // underneath, which for a sorted claim is the one that matters:
+          // "Sorted and weighed" is rated Medium, "their own sort — ask to
+          // witness it or re-weigh". A supplier will say exactly that, and
+          // she should read it here first rather than in his reply.
+          '<div class="lede2" style="margin-top:12px">How do you know it is this material?</div>' +
+          '<div class="chips2 f_meas" style="margin-bottom:4px" role="radiogroup" aria-label="How it was measured">' +
+            MEASURED.map(m => '<button type="button" role="radio" aria-checked="' + (pk.measured_by===m[0]) + '" data-m="' + m[0] + '" class="' + (pk.measured_by===m[0] ? 'sel' : '') + '">' + m[1] + '</button>').join('') +
+          '</div>' +
+          '<div class="hint s_ev" style="margin-top:0"></div>' +
+          '<div class="actions"><button class="btn go f_assess" ' + (isDamage ? 'data-kind="damage"' : 'data-kind="sorted"') + ' type="button">Confirm the assessment</button><span class="hint s_why" style="margin:0"></span></div>' +
+    '</div>'; }
+
 const ASSESS = [
   { id:'weight',        label:'Weight shortage' },
   { id:'contamination', label:'Foreign material' },
@@ -525,6 +579,12 @@ const ASSESS = [
   // like clad wheel,chrome wheel,truck wheel". Foreign material above carries
   // ONE percentage and ONE rate; this one is a line per thing found.
   { id:'sorted',        label:'Sorted by type' },
+  // Apsara, 2026-10-21: "if there is any damage,quality,grade claim,we need to
+  // procide more details na?" Damage had no assessment of its own at all — it
+  // was squeezed into "Quantity x rate", where the note can only say "N LB
+  // claimed" and says nothing about damage. Same arithmetic as Sorted by
+  // type, which is why it reuses that pane; only the words differ.
+  { id:'damage',        label:'Damaged, line by line' },
 ];
 const FINDINGS = [
   ['dirt','Dirt / soil'], ['rubber_plastic','Rubber / plastic'], ['iron_attached','Iron or steel attached'],
@@ -813,6 +873,17 @@ function claimCard(c, i, g){
           '<label class="f">Invoice no<input class="d_inv mono" value="' + esc(c.invoice_no || '') + '"></label>' +
           '<label class="f">Container no<input class="d_cont mono" value="' + esc(c.container_no || '') + '"></label>' +
           '<label class="f">Claim date<input class="d_date" value="' + esc(c.claim_date || '') + '" placeholder="YYYY-MM-DD"></label>' +
+          // The supporting-document link, pasted. Apsara, 2026-10-21: "For
+          // supoorting doc,i will just directly provide gdrive link".
+          // Full width, because a Drive URL in a 20-character box is a box
+          // she cannot read back to check she pasted the right folder.
+          // The supporting-documents link USED TO BE HERE and has moved to
+          // "Recover from the supplier" (2026-10-21). This section is
+          // collapsed by design — "a correction, not part of the daily
+          // flow" — and a Drive link is not a correction: it is set when
+          // the claim is raised. Apsara went looking for it on a claim
+          // report and found nothing, having never found the box to paste
+          // into. ONE input only; a second copy here would drift.
         '</div>' +
         '<div class="hint" style="margin-top:0">The supplier is who the claim note is addressed to, and the name is matched against your bills to find the price you paid &mdash; so it must be spelled as it is on the bill.</div>' +
         '<div class="actions"><button class="btn go d_save" type="button">Save details</button><span class="hint d_why" style="margin:0"></span></div>' +
@@ -886,59 +957,37 @@ function claimCard(c, i, g){
             fld('Rate', 'f_qrate', c.sell_price != null ? c.sell_price : c.stated_rate, 'e.g. 2318') +
             '<label class="f">Rate is per<select class="f_qrateUnit" data-k="f_qrateUnit">' + unitOpt(c.sell_price_unit||c.stated_rate_unit||unit||'MT') + '</select></label>' +
           '</div><div class="calc c_q"></div>' +
-          '<div class="actions"><button class="btn go f_assess" data-kind="quality" type="button">Confirm the assessment</button><span class="hint q_why" style="margin:0"></span></div>' +
-        '</div>' +
-
-        /* sorted: a dirty grade sorted into named contaminants, one line each */
-        '<div class="pane" data-pane="sorted"' + (a==='sorted'?'':' hidden') + '>' +
-          '<div class="lede2" style="margin-top:14px">A dirty grade sorted into what it really was. One line per thing found &mdash; ' +
-            'clad wheel, chrome wheel, truck wheel. Each line is claimed at <b>what you paid minus what it is actually worth</b>, ' +
-            'so a line with no rate is claimed in full.</div>' +
-          '<div class="grid">' +
-            fld('Price you paid this supplier, per unit', 'f_spaid',
-                c.paid_price != null ? c.paid_price : c.supplier_price, 'e.g. 0.85') +
-            '<label class="f">Paid price is per<select class="f_spaidUnit" data-k="f_spaidUnit">' +
-              unitOpt(c.paid_price_unit || c.supplier_price_unit || unit || 'LB') + '</select></label>' +
-            fld('Net weight invoiced (optional)', 'f_sinv', c.invoice_weight, 'stops more being sorted out than arrived') +
+          // ── WHAT WAS WRONG WITH IT ──────────────────────────────────
+          // Apsara, 2026-10-21: "wh about quality claim?" This pane asked
+          // for a quantity and a rate and nothing else, so the note said
+          // "2,215.64 LB claimed" beside a demand for $1,971.92 and never
+          // said what the defect was. The chips and the record fields have
+          // existed since the contamination pane was built; quality simply
+          // never asked.
+          //
+          // OPTIONAL, deliberately. A quality claim read off a mail has no
+          // chips ticked and must still assess — the server treats both as
+          // optional for the same reason.
+          '<div class="lede2" style="margin-top:12px">What was wrong with it? <span class="hint" style="margin:0">Optional &mdash; but a claim that does not say invites the question.</span></div>' +
+          '<div class="chips2 f_found" style="margin-bottom:4px" role="group" aria-label="What was wrong">' +
+            FINDINGS.map(f => '<button type="button" aria-pressed="' + (pk.findings.indexOf(f[0])>=0) + '" data-f="' + f[0] + '" class="' + (pk.findings.indexOf(f[0])>=0 ? 'sel' : '') + '">' + f[1] + '</button>').join('') +
           '</div>' +
-          '<table class="sortedT" style="width:100%; margin-top:10px; border-collapse:collapse; font-size:12px;">' +
-            '<thead><tr>' +
-              // ── THE HEADER MUST FOLLOW THE UNIT CHIPS ────────────────
-              // It read "Weight (MT)" with LB selected and green, because
-              // `unit` is captured when the card is BUILT and the chips only
-              // call renderCalc(). Apsara then entered the RATE in the
-              // Weight column and the WEIGHT in the Worth column, on all
-              // four rows — 1.38 was the price she had typed above. A header
-              // naming the wrong unit, over a column of bare numbers, will
-              // do that every time. The label is now painted by renderCalc
-              // from the selected chip.
-              '<th style="text-align:left">What was found</th>' +
-              '<th style="text-align:right" class="s_hw">Weight</th>' +
-              '<th style="text-align:right" class="s_hworth">Worth per unit</th>' +
-              '<th>that is per</th><th style="text-align:right">Claim</th><th></th>' +
-            '</tr></thead><tbody class="s_rows">' +
-              ((c.sorted_lines && c.sorted_lines.length ? c.sorted_lines : [{},{},{}])
-                .map((l) => sortedRow(l, c.paid_price_unit || c.supplier_price_unit || unit || 'LB')).join('')) +
-            '</tbody></table>' +
-          '<div class="actions" style="margin-top:6px">' +
-            '<button class="btn s_add" type="button" style="padding:3px 10px; font-size:11px;">Add another line</button>' +
-            '<span class="hint s_total" style="margin-left:10px"></span>' +
-          '</div>' +
-          // ── HOW DO YOU KNOW IT IS CLAD WHEEL? ────────────────────────
-          // Apsara: "how do i know material are this". The claim already
-          // had the answer and this pane was not asking it — the same
-          // chips the contamination pane uses, with the same STRENGTH note
-          // underneath, which for a sorted claim is the one that matters:
-          // "Sorted and weighed" is rated Medium, "their own sort — ask to
-          // witness it or re-weigh". A supplier will say exactly that, and
-          // she should read it here first rather than in his reply.
-          '<div class="lede2" style="margin-top:12px">How do you know it is this material?</div>' +
+          '<div class="lede2" style="margin-top:12px">How do you know?</div>' +
           '<div class="chips2 f_meas" style="margin-bottom:4px" role="radiogroup" aria-label="How it was measured">' +
             MEASURED.map(m => '<button type="button" role="radio" aria-checked="' + (pk.measured_by===m[0]) + '" data-m="' + m[0] + '" class="' + (pk.measured_by===m[0] ? 'sel' : '') + '">' + m[1] + '</button>').join('') +
           '</div>' +
           '<div class="hint s_ev" style="margin-top:0"></div>' +
-          '<div class="actions"><button class="btn go f_assess" data-kind="sorted" type="button">Confirm the assessment</button><span class="hint s_why" style="margin:0"></span></div>' +
+          '<div class="actions"><button class="btn go f_assess" data-kind="quality" type="button">Confirm the assessment</button><span class="hint q_why" style="margin:0"></span></div>' +
         '</div>' +
+
+        /* sorted: a dirty grade sorted into named contaminants, one line each */
+        // ONE PANE, TWO KINDS. Sorted and Damaged price a list of lines the
+        // same way — what you paid minus what it is actually worth — so they
+        // share this pane and the server shares one branch. Only the wording
+        // changes, because a damaged rim was not "sorted out of the load".
+        '<div class="pane" data-pane="sorted"' + (a==='sorted'?'':' hidden') + '>' + paneLines(false) +
+        '<div class="pane" data-pane="damage"' + (a==='damage'?'':' hidden') + '>' + paneLines(true) +
+
 
         '<div class="hint">Nothing here is filled in from the mail unless the mail said it in words.' +
           (c.stated_claim_amount!=null ? ' The customer is asking <b>' + money(c.stated_claim_amount) + '</b> — that is their figure, not yet yours.' : '') + '</div>' +
@@ -951,6 +1000,16 @@ function claimCard(c, i, g){
           fld('Their rate', 'f_srate', c.supplier_price, 'from the purchase bill') +
           '<label class="f">Their rate is per<select class="f_srateUnit" data-k="f_srateUnit">' + unitOpt(c.supplier_price_unit||unit||'MT') + '<option value="CLB">¢ per lb (cents)</option></select></label>' +
           fld('Recovering from them', 'f_ours', c.our_claim) +
+          // ── THE LINK LIVES WHERE THE DEMAND IS MADE ─────────────────
+          // It is what backs the figure beside it, and raising the
+          // recovery is what puts both on the claim note. Saved on blur
+          // like Remarks below, so it does not need its own button and
+          // cannot be lost by leaving without pressing one.
+          '<label class="f" style="grid-column:1/-1">Supporting documents link ' +
+            '<span style="color:var(--text-faint)">— saved as you leave the box · printed on the claim note as a clickable link</span>' +
+            '<input class="d_docs" data-k="d_docs" value="' + esc(c.docs_url || '') + '" placeholder="paste the Drive link you have already shared">' +
+            '<span class="hint">Share it in Drive first — Jarvis prints the link, it does not change who can open it.</span>' +
+          '</label>' +
         '</div><div class="billrate hint">Looking up the purchase bill…</div><div class="actions">' +
           '<button class="btn go f_rec" type="button">Raise the recovery</button>' +
           '<button class="btn f_save" type="button">Save without raising</button>' +
@@ -1162,7 +1221,17 @@ function wireClaim(c){
   el.querySelectorAll('.f_found button').forEach(b => b.onclick = () => {
     const f = b.dataset.f, i = pk.findings.indexOf(f);
     if (i === -1) pk.findings.push(f); else pk.findings.splice(i, 1);
-    b.classList.toggle('sel', i === -1); b.setAttribute('aria-pressed', i === -1);
+    // BY data-f, NOT by identity — the same correction .f_meas already
+    // carries below. There are TWO of these rows now, contamination and
+    // quality (2026-10-21), showing ONE list. Toggling only the chip that
+    // was clicked would leave the other row showing a different answer from
+    // the one being saved, which is how a supplier gets a note listing
+    // findings she thought she had unticked.
+    const on = pk.findings.indexOf(f) !== -1;
+    el.querySelectorAll('.f_found button').forEach(x => {
+      if (x.dataset.f !== f) return;
+      x.classList.toggle('sel', on); x.setAttribute('aria-pressed', on);
+    });
     el.querySelector('.c_stop').hidden = !pk.findings.includes('sealed_hazard');
   });
   el.querySelectorAll('.f_meas button').forEach(b => b.onclick = () => {
@@ -1282,6 +1351,10 @@ function wireClaim(c){
     else if (btn.dataset.kind === 'quality') Object.assign(body, {
       quality_qty: numOf(el.querySelector('.f_qqty').value), sell_price: numOf(el.querySelector('.f_qrate').value),
       sell_price_unit: el.querySelector('.f_qrateUnit').value,
+      // Added WITH the server branch that reads them (2026-10-21). Sent
+      // even when empty — the server treats both as optional, so an
+      // untouched pane assesses exactly as it did before.
+      findings: pk.findings.slice(), measured_by: pk.measured_by,
     });
     // ── EXPLICIT, BECAUSE THE LAST BRANCH IS GRADE ──────────────────────
     // This chain ended in a bare `else` that sent grade fields. A new kind
@@ -1296,11 +1369,37 @@ function wireClaim(c){
       // this pane simply had no control for it until now.
       measured_by: pk.measured_by,
     });
-    else Object.assign(body, {
+    else if (btn.dataset.kind === 'damage') Object.assign(body, {
+      // Reads the SAME controls as sorted — one pane serves both (paneLines)
+      // and one server branch prices both. Only the field name differs, so
+      // the server can word its refusals as damage rather than sorting.
+      paid_price: numOf(el.querySelector('.f_spaid').value),
+      paid_price_unit: el.querySelector('.f_spaidUnit').value,
+      invoice_weight: numOf(el.querySelector('.f_sinv').value),
+      damage_lines: readSortedLines(el),
+      measured_by: pk.measured_by,
+    });
+    // ── GRADE IS NOW NAMED, AND THERE IS NO CATCH-ALL ───────────────────
+    // This chain ended in a bare `else` that posted grade fields — and the
+    // comment above it CLAIMED it had been made explicit when it had not.
+    // Adding 'damage' with no branch would have posted grade_sold for a
+    // claim that has none and the server would have thrown "assessing a
+    // downgrade needs the weight that was affected", on a screen showing a
+    // damage form. The same catch-all trap the server itself had, caught
+    // here only because a new kind was being added.
+    //
+    // The final else now REFUSES rather than guessing, so the next kind
+    // added without a branch fails loudly on the screen of whoever adds it
+    // instead of silently posting another kind's fields.
+    else if (btn.dataset.kind === 'grade') Object.assign(body, {
       grade_sold: el.querySelector('.f_gsold').value.trim(), grade_received: el.querySelector('.f_grecv').value.trim(),
       grade_weight: numOf(el.querySelector('.f_gw').value), grade_price_sold: numOf(el.querySelector('.f_gps').value),
       grade_price_received: numOf(el.querySelector('.f_gpr').value),
     });
+    else if (btn.dataset.kind !== 'weight') {
+      toast('This assessment has no form yet — tell Claude which fields it should send.', 'bad');
+      return;
+    }
     try {
       const kind = el.querySelector('.f_kind').value;
       if (kind !== '__new' && kind !== (c.claim_type || '')) await api('/api/claims/' + c.id + '/edit', { claim_type: kind });
@@ -1343,6 +1442,25 @@ function wireClaim(c){
     } catch (e) { toast('Remarks not saved — ' + e.message, 'bad'); }
   };
   rem.onblur = saveRemarks;
+
+  // The supporting-documents link, same shape as Remarks above. Separate
+  // from the details Save button it used to sit behind, so pasting a link
+  // and walking away keeps it.
+  const docsIn = el.querySelector('.d_docs');
+  if (docsIn) docsIn.onblur = async () => {
+    const v = docsIn.value.trim();
+    if (v === String(c.docs_url || '').trim()) return;
+    try {
+      const r = await api('/api/claims/' + c.id + '/edit', { docs_url: v });
+      // Shows what the SERVER stored, not what was typed: safeUrl() adds a
+      // missing https:// and drops anything that is not a web link, so a
+      // refused paste must not sit in the box looking saved.
+      c.docs_url = r.docs_url || '';
+      docsIn.value = c.docs_url;
+      if (v && !c.docs_url) toast('That is not a web link — nothing was saved.', 'bad');
+      else toast('Documents link saved', 'ok');
+    } catch (e) { toast('Link not saved — ' + e.message, 'bad'); }
+  };
   el.querySelectorAll('.f_q').forEach(b => b.onclick = () => {
     rem.value = (rem.value.replace(/\s*$/, '') ? rem.value.replace(/\s*$/, '') + ' ' : '') + b.dataset.q + '.';
     saveRemarks();
@@ -1360,6 +1478,9 @@ function wireClaim(c){
       invoice_no: el.querySelector('.d_inv').value.trim(),
       container_no: el.querySelector('.d_cont').value.trim(),
       claim_date: el.querySelector('.d_date').value.trim(),
+      // docs_url is NOT sent from here any more — the input moved to the
+      // Recover section and saves itself on blur. Reading it here would
+      // find nothing and post an empty string, wiping a link she had set.
     };
     const patch = {};
     for (const k of Object.keys(want)) if (want[k] !== String(c[k] == null ? '' : c[k])) patch[k] = want[k];
@@ -1844,7 +1965,25 @@ function openStatement(pre){
       $('#r_out', wrap).innerHTML = '<div class="card"><h3>' + b.totals.claims + ' claims · ' + money(b.totals.recoverable) + ' recoverable</h3>' +
         '<div class="hint" style="margin-top:0">To ' + esc(b.addressedTo || 'every supplier on these claims') + ' · ref ' + esc(b.reference) + '</div>' +
         (b.unverifiedCount && !b.includedUnverified ? '<div class="hint"><b>·</b> ' + b.unverifiedCount + ' unverified claim(s) are NOT in this — a reading, not a demand. Tick the box above to include them for information.</div>' : '') +
-        ((b.noFigure || []).length ? '<div class="hint"><b>·</b> ' + b.noFigure.length + ' claim(s) have no recovery figure, so they add nothing to the total. Raise the recovery on them first.</div>' : '') +
+        // Apsara, 2026-10-21, on a note whose first row was all dashes:
+        // claims with no figure are LEFT OFF the document now. This is the
+        // half that makes that safe — she chose "the screen says so before
+        // you send". It NAMES them, because "4 claims" tells her a number
+        // and not which ones, and a warning she cannot act on is noise.
+        ((b.noFigure || []).length ? '<div class="hint warn"><b>·</b> <b>' + b.noFigure.length + ' claim(s) are NOT on this note</b> — no recovery figure has been raised on them: ' +
+          b.noFigure.map(n => esc((n.container_no || '—') + ' ' + (n.kind || ''))).join(', ') +
+          '. They stay off a document demanding money. Raise the recovery on them and they appear.' +
+          // The link goes with the claim. Apsara went looking for a Drive
+          // link on a claim report and found nothing — because the claim
+          // carrying it had no figure. Saying "N claims are not on this
+          // note" did not tell her that, and she had no reason to connect
+          // the two.
+          ((b.noFigure || []).some(n => n.has_docs)
+            ? ' <b>The supporting-documents link on ' +
+              b.noFigure.filter(n => n.has_docs).map(n => esc(n.container_no || '—')).join(', ') +
+              ' is not on the note either</b> — it goes with the claim.'
+            : '') +
+          '</div>' : '') +
         ((b.notReconciled || []).length ? '<div class="hint"><b>·</b> ' + b.notReconciled.length + ' line(s) do not reconcile — ' +
           b.notReconciled.map(n => esc(n.container_no || n.invoice_no) + ': ' + money(n.our_claim) + ' recorded, ' + money(n.atRate) + ' at the bill rate').join('; ') +
           '. The rate is left OFF those lines, so the supplier is not handed a contradiction. Fix the figure or the rate if they should agree.</div>' : '') +

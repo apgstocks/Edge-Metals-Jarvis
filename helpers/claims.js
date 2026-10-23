@@ -65,7 +65,17 @@ const FLAG_KIND_UNKNOWN = 'kind_unknown';
 // grade sorted into several named contaminants, each weighed and valued. It is
 // a new MEMBER of a closed set, not a change to one: a claim already carrying
 // assessment:'contamination' assesses exactly as it did yesterday.
-const ASSESSMENTS = ['weight', 'contamination', 'grade', 'quality', 'sorted'];
+// 'damage' joined on 2026-10-21. Apsara: "if there is any damage,quality,grade
+// claim,we need to procide more details na?" — and damage had no home at all.
+// It was either squeezed into 'quality', where the note can only say "N LB
+// claimed" and says nothing about damage, or left unassessed, where the claim
+// note printed a dollar figure with no explanation whatsoever.
+//
+// It shares the 'sorted' branch below rather than copying it: see there.
+const ASSESSMENTS = ['weight', 'contamination', 'grade', 'quality', 'sorted', 'damage'];
+// The assessments that are a LIST of lines rather than one figure. Both price
+// each line as weight x (what Edge paid - what it is actually worth).
+const LINE_ASSESSMENTS = ['sorted', 'damage'];
 // What can be found in a container. Shown as tick boxes; `sealed_hazard` is the
 // one that is not a price question at all (radioactive or explosive items —
 // every scrap shipment into India carries a declaration that there are none).
@@ -121,6 +131,22 @@ function blank() {
         // This is the rate the recovery is argued at, because it is the only
         // one the supplier already agreed to. helpers/claimPrice.js finds it.
         supplier_price: null, supplier_price_unit: null, supplier_price_source: '',
+        // HOW that rate is arrived at when the container holds several
+        // materials. '' (the default, and every claim that already exists)
+        // means the behaviour that has always applied: one grade, one rate,
+        // matched off the bill. 'container_blend' is the auto-parts case —
+        // Apsara, 2026-10-21, "we will take avergae price of all the material
+        // that was loaded into the container ... They will have weight slip
+        // for overall container" — where the shortage is weighed once on the
+        // whole box, so no grade can be matched and the rate is what the
+        // container itself cost per pound. See helpers/claimPrice.js.
+        price_basis: '',
+        // A link to the supporting documents, pasted by her. Apsara,
+        // 2026-10-21: "For supoorting doc,i will just directly provide
+        // gdrive link" — she shares it in Drive herself and this is only
+        // printed. Separate from `evidence[].url`, the internal Shared-Drive
+        // link that must never leave the building.
+        docs_url: '',
         claim_amount: null, our_claim: null,
         evidence: [], mail: [], quotes: {}, flags: [], history: [],
         note: '',
@@ -265,7 +291,7 @@ async function assess(id, fields = {}, by = 'manager') {
     if (!c) throw new Error('no such claim');
     const kind = fields.assessment;
     if (kind === 'weight') throw new Error('a weight shortage is confirmed through verify, not assess');
-    if (!ASSESSMENTS.includes(kind)) throw new Error('assessment must be contamination, grade, quality or sorted');
+    if (!ASSESSMENTS.includes(kind)) throw new Error(`assessment must be one of: ${ASSESSMENTS.join(', ')}`);
 
     const unit = UNITS.includes(fields.weight_unit) ? fields.weight_unit : (UNITS.includes(c.weight_unit) ? c.weight_unit : null);
     if (!unit) throw new Error('assessing a claim needs the weight unit — MT, LB or KG');
@@ -304,8 +330,52 @@ async function assess(id, fields = {}, by = 'manager') {
         const q = sell_price_unit === unit ? qty : convert(qty, unit, sell_price_unit);
         if (q === null) throw new Error('assessing a quality claim needs a rate unit that can be compared with the quantity');
         claim_amount = Math.round(q * sell_price * 100) / 100;
-        Object.assign(patch, { quality_qty: qty, sell_price, sell_price_unit });
-    } else if (kind === 'sorted') {
+        // ── WHAT WAS WRONG WITH IT (2026-10-21) ──────────────────────────
+        // Apsara: "wh about quality claim?" — asked after damage got its own
+        // type. The answer was that there was no quality assessment at all:
+        // this branch stored a quantity and a rate and nothing else, so the
+        // note said "quality: 2,215.64 LB claimed" and demanded $1,971.92
+        // without ever saying what was wrong with the material. A supplier's
+        // first reply to that is "what was wrong with it", and she was
+        // answering it by email, outside the document.
+        //
+        // `findings` and `measured_by` have been on every claim record since
+        // the first version (blank() above) and the contamination branch has
+        // always filled them. This branch simply never read them.
+        //
+        // BOTH STAY OPTIONAL. A quality claim created from a mail or by
+        // voice has no chips to tick, and making either required would break
+        // exactly the callers CLAUDE.md records breaking twice — the ones
+        // without a form to put a field on. A claim with no findings assesses
+        // precisely as it did before this existed; the note just says less.
+        const qFindings = Array.isArray(given('findings'))
+            ? given('findings').filter((f) => FINDINGS.includes(f)) : c.findings;
+        const qMeasured = MEASURED_BY.includes(given('measured_by')) ? given('measured_by') : c.measured_by;
+        Object.assign(patch, { quality_qty: qty, sell_price, sell_price_unit,
+            findings: qFindings, measured_by: qMeasured });
+    } else if (LINE_ASSESSMENTS.includes(kind)) {
+        // ── SORTED *AND* DAMAGE, ONE BRANCH ──────────────────────────────
+        // 'damage' joined on 2026-10-21 and reuses this branch rather than
+        // copying it. They are the same question with different nouns: part
+        // of the load is worth less than what Edge paid, and here are the
+        // parts. Everything below that makes it dangerous — the rate-unit
+        // conversion, the "that looks like a WEIGHT, not a rate" guard, the
+        // refusal of a line priced ABOVE what Edge paid — is dangerous for
+        // both, and fixing it in two copies is how one of them stays broken.
+        //
+        // What differs is WORDING only, and it differs because a damage claim
+        // that said "sorted out of the load" would describe something that
+        // did not happen. The strings are chosen here and nothing else in the
+        // branch knows which kind it is running for.
+        //
+        // The lines are STORED in sorted_lines for both. The field is the
+        // line list for any line-by-line assessment; `assessment` is what
+        // says whether they were sorted out or damaged, and the claim note
+        // reads that to choose its wording. Renaming the field would reach
+        // the report, the screen, the route whitelist, the sheet import and
+        // every test and mutation that names it — a migration, not a feature.
+        const isDamage = kind === 'damage';
+        const noun = isDamage ? 'damage' : 'sorted';
         // ── SORTED BY TYPE, WEIGHED, AND CLAIMED LINE BY LINE ────────────
         // Apsara, 2026-10-20: "we buy al wheel dirty.there would be claim on
         // that like clad wheel,chrome wheel,truck wheel".
@@ -356,18 +426,26 @@ async function assess(id, fields = {}, by = 'manager') {
         // already the figure the supplier is being asked for. `our_claim` is
         // deliberately NOT set — raiseRecovery still owns it, so the
         // recovery to-do that routes.js raises behaves exactly as before.
-        const lines = Array.isArray(given('sorted_lines')) ? given('sorted_lines') : null;
+        // Read from whichever field the kind owns, so the screen posts the
+        // name that matches what it is showing. Falling back to the other
+        // is deliberate: the voice path and the sheet import both send
+        // sorted_lines, and a damage claim arriving that way should work
+        // rather than be refused on a field name.
+        const given_lines = isDamage
+            ? (Array.isArray(given('damage_lines')) ? given('damage_lines') : given('sorted_lines'))
+            : given('sorted_lines');
+        const lines = Array.isArray(given_lines) ? given_lines : null;
         if (!lines || !lines.length) {
-            throw new Error('a sorted claim needs at least one line — what was found, and how much of it');
+            throw new Error(`a ${noun} claim needs at least one line — what was found, and how much of it`);
         }
-        if (lines.length > 40) throw new Error('a sorted claim is capped at 40 lines');
+        if (lines.length > 40) throw new Error(`a ${noun} claim is capped at 40 lines`);
 
         const paid = has(given('paid_price')) ? num(given('paid_price'))
             : has(c.supplier_price) ? num(c.supplier_price) : null;
         const paidUnit = UNITS.includes(fields.paid_price_unit) ? fields.paid_price_unit
             : UNITS.includes(c.supplier_price_unit) ? c.supplier_price_unit : unit;
         if (paid === null || paid <= 0) {
-            throw new Error('a sorted claim needs the price Edge paid this supplier — it is what the claim is '
+            throw new Error(`a ${noun} claim needs the price Edge paid this supplier — it is what the claim is `
                 + 'worked out from. helpers/claimPrice.js can find it from the container’s purchase bill.');
         }
 
@@ -391,9 +469,15 @@ async function assess(id, fields = {}, by = 'manager') {
         let claimedWeight = 0;
         for (const raw of lines) {
             const type = String((raw && raw.type) || '').trim().slice(0, 80);
-            if (!type) throw new Error('every line on a sorted claim needs a name — "clad wheel", "chrome wheel"');
+            if (!type) {
+                throw new Error(isDamage
+                    ? 'every line on a damage claim needs a name — "bent rims", "cracked housings"'
+                    : 'every line on a sorted claim needs a name — "clad wheel", "chrome wheel"');
+            }
             const w = has(raw && raw.weight) ? num(raw.weight) : null;
-            if (w === null || w <= 0) throw new Error(`"${type}" needs the weight that was sorted out of the load`);
+            if (w === null || w <= 0) {
+                throw new Error(`"${type}" needs the weight that was ${isDamage ? 'damaged' : 'sorted out of the load'}`);
+            }
 
             // null worth is a real answer — see above — and is kept as null
             // rather than written as 0, so the page can show "claimed in

@@ -287,7 +287,14 @@ function statement(supplier, q = {}) {
     const toIso = to ? (bills.sortableDate(to) || to) : '';
 
     if (!fromIso && !toIso) {
-        return { supplier, opening: 0, rows: all, ...totals(all, 0) };
+        {
+            const t = totals(all, 0);
+            // Claims ride ALONGSIDE the totals, never inside them — see
+            // claimCredit's header for why rows() is left alone.
+            const credit = claimCredit(supplier);
+            return { supplier, opening: 0, rows: all, ...t,
+                claims: credit, ...applyClaimCredit(t.closing, credit) };
+        }
     }
 
     const before = all.filter((r) => fromIso && r.iso && r.iso < fromIso);
@@ -303,7 +310,17 @@ function statement(supplier, q = {}) {
         running = round2(running + (r.debit || 0) - (r.credit || 0));
         return { ...r, balance: running };
     });
-    return { supplier, opening, rows: shown, ...totals(shown, opening) };
+    {
+        const t = totals(shown, opening);
+        // The DATE-FILTERED statement gets them too. Leaving this branch out
+        // is how "what do we owe Inesh" answers one number on the full
+        // account and a different one the moment she picks a month — the
+        // kind of disagreement she already has an open question about
+        // elsewhere, and not one worth creating on purpose.
+        const credit = claimCredit(supplier);
+        return { supplier, opening, rows: shown, ...t,
+            claims: credit, ...applyClaimCredit(t.closing, credit) };
+    }
 }
 
 function totals(list, opening = 0) {
@@ -342,20 +359,113 @@ function suppliers() {
 // delivered and not yet invoiced — and, crucially, they appear at all. Built
 // from suppliers() alone, the Edge Inventory page could not show the
 // deliveries of anyone without a bill. Found by its own test.
+// ── WHAT A RAISED CLAIM DOES TO WHAT HE IS OWED ─────────────────────────────
+// Apsara, 2026-10-23, asked what else to build. This was the answer: a claim
+// produced a figure, a document and a demand, and this file — the one that
+// answers "what do we still owe" — contained no reference to claims at all.
+// She raised $2,193.21 against Inesh, sent him a note demanding it, and Jarvis
+// went on reporting the whole bill as outstanding.
+//
+// ── THE RULES ARE HERS, FROM 2026-10-20 ─────────────────────────────────────
+//   · the credit moves WHEN SHE RAISES IT to the supplier — not when the
+//     claim is merely assessed. 'recovery_raised' is that moment.
+//   · it STOPS AT ZERO. A claim bigger than the balance does not turn into
+//     a supplier who owes Edge money.
+//   · the remainder is SHOWN SEPARATELY rather than folded in.
+//
+// ── WHY THIS IS NOT A ROW IN rows() ─────────────────────────────────────────
+// The obvious build is a credit row beside the bills and payments. It is the
+// wrong one twice over. The running balance in rows() would go negative on a
+// big claim, which she ruled out; and every figure in this file that she
+// already trusts — opening, closing, the balance column, the statement
+// totals — would change meaning on data that has nothing to do with claims.
+// Kept apart, the existing arithmetic is untouched and "shown separately" is
+// literally what the code does.
+//
+// ── 'settled' IS DELIBERATELY NOT COUNTED ───────────────────────────────────
+// A settled claim is one where the money has already moved — usually deducted
+// from a payment, which is ALREADY a credit row in rows(). Counting it here
+// too would take it off what he is owed twice.
+function claimCredit(supplier, { claims: claimsMod = null } = {}) {
+    const who = String(supplier || '').trim();
+    const empty = { raised: 0, claims: [] };
+    if (!who) return empty;
+    let list = [];
+    try { list = (claimsMod || require('./claims')).list(); } catch (e) { return empty; }
+
+    const mine = (Array.isArray(list) ? list : []).filter((c) => c
+        && c.status === 'recovery_raised'
+        && num(c.our_claim) > 0
+        && sameSupplier(c.supplier, who));
+
+    return {
+        raised: round2(mine.reduce((t, c) => t + num(c.our_claim), 0)) || 0,
+        claims: mine.map((c) => ({
+            id: c.id,
+            container_no: c.container_no || '',
+            kind: c.claim_type || '',
+            date: c.claim_date || c.created_at || null,
+            amount: round2(num(c.our_claim)),
+        })),
+    };
+}
+
+// Applies that credit to a balance under her stop-at-zero rule, and reports
+// what could not be applied rather than hiding it. One function, so the
+// statement and the index cannot work it out two different ways.
+function applyClaimCredit(closing, credit) {
+    const owed = round2(num(closing)) || 0;
+    const raised = round2(num(credit && credit.raised)) || 0;
+    const applied = round2(Math.min(raised, Math.max(0, owed))) || 0;
+    return {
+        claims_raised: raised,
+        claims_applied: applied,
+        // What he is owed once the claims she has actually raised come off.
+        net_owed: round2(owed - applied) || 0,
+        // Claim money with nothing left to take it off. NOT a negative
+        // balance — she asked for it stated on its own, because a supplier
+        // showing as owing Edge money reads as an error, not as a credit.
+        claim_credit_unapplied: round2(raised - applied) || 0,
+    };
+}
+
 function overview() {
     const inv = require('./edgeInventory');
     const seen = new Map();
     for (const s of suppliers()) seen.set(s.toLowerCase(), s);
     for (const s of inv.suppliers()) if (!seen.has(s.toLowerCase())) seen.set(s.toLowerCase(), s);
+    // ── A SUPPLIER SHE HAS ONLY CLAIMED AGAINST STILL BELONGS HERE ──────
+    // The roster was bills + payments + inventory. Once a raised claim can
+    // reduce what a supplier is owed (2026-10-23), a supplier with a claim
+    // and no bill of his own would carry a credit that appears on NO screen
+    // — the index would not list him and there would be nothing to open.
+    // Rare, but it is precisely the case where an unapplied credit is the
+    // only thing on the account, which is the figure worth seeing.
+    try {
+        for (const c of require('./claims').list()) {
+            const n = String((c && c.supplier) || '').trim();
+            if (n && !seen.has(n.toLowerCase())) seen.set(n.toLowerCase(), n);
+        }
+    } catch (e) { /* claims unreadable — the index is still correct without them */ }
     const all = [...seen.values()].sort((a, b) => a.localeCompare(b));
     return all.map((s) => {
         const r = rows(s);
+        const t = totals(r, 0);
+        const credit = claimCredit(s);
         return {
             supplier: s,
             rows: r.length,
-            ...totals(r, 0),
+            ...t,
+            // The index is the screen she scans to decide who to pay, so it
+            // has to carry the same claim figures as the statement — worked
+            // out by the SAME function, not a second copy of the rule.
+            claims_count: credit.claims.length,
+            ...applyClaimCredit(t.closing, credit),
         };
-    }).sort((a, b) => (b.closing || 0) - (a.closing || 0));
+    // Sorted on what is actually still owed AFTER claims. Ordering by
+    // `closing` would put a supplier at the top on money she has already
+    // told him she is deducting.
+    }).sort((a, b) => (b.net_owed || 0) - (a.net_owed || 0));
 }
 
 // Bills carrying no supplier belong to no account and would otherwise simply
@@ -370,5 +480,6 @@ function unassigned() {
 
 module.exports = {
     rows, statement, totals, suppliers, overview, unassigned,
+    claimCredit, applyClaimCredit,
     describeBill, describePayment, sameSupplier,
 };

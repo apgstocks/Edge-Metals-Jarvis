@@ -208,9 +208,17 @@ section('D — nothing that already existed assesses differently');
         quality_qty: 1.005, sell_price: 2318, sell_price_unit: 'MT' }, 'test');
     ck('quality: 1.005 x $2,318 = $2,329.59', q.claim_amount === 2329.59, q.claim_amount);
 
-    ck('an unknown assessment is still refused, and now names sorted',
-       await throwsWith(() => claims.assess(c3.id, { assessment: 'vibes', weight_unit: 'MT' }),
-           /contamination, grade, quality or sorted/));
+    // RE-POINTED 2026-10-21. The message used to be a hand-written list that
+    // had to be edited every time ASSESSMENTS grew — and it HAD gone stale
+    // once already, which is why this check existed. It is now generated from
+    // ASSESSMENTS itself, so the check is that the refusal recites the real
+    // list rather than a copy of it: naming every member, including the two
+    // added most recently.
+    ck('an unknown assessment is still refused', await throwsWith(
+        () => claims.assess(c3.id, { assessment: 'vibes', weight_unit: 'MT' }), /assessment must be one of/));
+    ck('  and the refusal recites ASSESSMENTS itself, so it cannot go stale again',
+        await throwsWith(() => claims.assess(c3.id, { assessment: 'vibes', weight_unit: 'MT' }),
+            new RegExp(claims.ASSESSMENTS.join(', '))));
     ck('a weight shortage still goes through verify',
        await throwsWith(() => claims.assess(c3.id, { assessment: 'weight', weight_unit: 'MT' }), /through verify/));
 }
@@ -441,8 +449,19 @@ section('G2 — the party pickers: suppliers and customers she has traded with')
         //    contamination pane only; a sorted claim is ENTIRELY a claim
         //    about what the material turned out to be, so it needed them
         //    more than contamination did.
-        const sortedPane = HTML2.slice(HTML2.indexOf('data-pane="sorted"'),
-                                       HTML2.indexOf('data-kind="sorted"'));
+        // RE-POINTED 2026-10-21. This sliced the source between
+        // data-pane="sorted" and data-kind="sorted". The pane body moved into
+        // paneLines(), shared with the new Damaged pane, so data-kind came
+        // BEFORE data-pane and the slice was empty — three checks went red
+        // while the screen was perfectly fine. A check shaped like where the
+        // code sits rather than what it does.
+        //
+        // Pointed at the function that owns the body now. Still scoped, for
+        // the reason recorded below: `measured_by: pk.measured_by` also
+        // appears in the contamination branch, so searching the whole file
+        // would pass with this pane gutted.
+        const sortedPane = HTML2.slice(HTML2.indexOf('function paneLines'),
+                                       HTML2.indexOf("'</div>'; }"));
         ck('the sorted pane asks how she knows', /How do you know it is this material/.test(sortedPane));
         ck('  with the same four methods, not a new list', /MEASURED\.map/.test(sortedPane));
         ck('  and shows what that evidence is worth in an argument',
@@ -609,6 +628,143 @@ section('G — and the controls are on the page');
     // guess across units and shows a dash instead — the server converts.
     ck('the live total does not re-implement unit conversion',
        /the server converts; this preview will not guess/.test(HTML));
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+section('H — DAMAGE: the same arithmetic, its own words');
+// ══════════════════════════════════════════════════════════════════════════
+// Apsara, 2026-10-21: "if there is any damage,quality,grade claim,we need to
+// procide more details na?" Damage had no assessment at all — it was forced
+// into 'quality', where the note can only say "N LB claimed", or left
+// unassessed, where the claim note printed a dollar figure and NOTHING else.
+//
+// She chose its own type, shaped like sorted. It shares the branch rather
+// than copying it: the rate-unit conversion, the looks-like-a-weight guard
+// and the priced-above-what-Edge-paid refusal are dangerous for both, and
+// two copies is how one of them stays broken.
+{
+    const d = await mk({ weight_unit: 'LB', supplier_price: 0.89, supplier_price_unit: 'LB', invoice_weight: 51771 });
+    const r = await claims.assess(d.id, { assessment: 'damage', weight_unit: 'LB',
+        paid_price: 0.89, paid_price_unit: 'LB', invoice_weight: 51771, damage_lines: [
+            { type: 'Bent rims', weight: 1200, worth: 0.30 },
+            { type: 'Cracked housings', weight: 800, worth: 0.15 },
+            { type: 'Water damaged cores', weight: 400 },
+        ] }, 'apsara');
+
+    // 1200x(0.89-0.30)=708 + 800x(0.89-0.15)=592 + 400x0.89=356
+    ck('damage: 708 + 592 + 356 = $1,656', r.claim_amount === 1656, r.claim_amount);
+    ck('  a line with no rate is claimed in full, same rule as sorted',
+        r.sorted_lines[2].amount === 356 && r.sorted_lines[2].worth === null, r.sorted_lines[2]);
+    ck('  the assessment is recorded as damage, not sorted', r.assessment === 'damage');
+
+    // The refusals come free with the shared branch — and are worded for damage.
+    ck('a line with no name is refused IN DAMAGE WORDS', await throwsWith(
+        () => claims.assess(d.id, { assessment: 'damage', weight_unit: 'LB', paid_price: 0.89,
+            paid_price_unit: 'LB', damage_lines: [{ weight: 5 }] }, 'a'),
+        /every line on a damage claim needs a name/));
+    ck('  and never says "sorted out of the load" about damage', await throwsWith(
+        () => claims.assess(d.id, { assessment: 'damage', weight_unit: 'LB', paid_price: 0.89,
+            paid_price_unit: 'LB', damage_lines: [{ type: 'Bent rims' }] }, 'a'),
+        /needs the weight that was damaged/));
+    ck('  a line priced ABOVE what Edge paid is still refused', await throwsWith(
+        () => claims.assess(d.id, { assessment: 'damage', weight_unit: 'LB', paid_price: 0.89,
+            paid_price_unit: 'LB', damage_lines: [{ type: 'Bent rims', weight: 10, worth: 1.50 }] }, 'a'),
+        /is priced above what Edge paid/));
+
+    // THE NOTE. A damage claim must not describe itself as sorted.
+    await claims.raiseRecovery(d.id, { our_claim: 1656 }, 'apsara');
+    const report = require(path.join(ROOT, 'helpers/claims/report.js'));
+    const html = report.toHtml(report.build({ claimId: d.id }));
+    ck('the note gives damage the same line-by-line table', /Bent rims/.test(html) && /Cracked housings/.test(html));
+    ck('  headed by what it actually is', /What was damaged/.test(html) && !/>Material</.test(html));
+    ck('  and the working still adds up on the page', /1,656/.test(html));
+
+    // THE VOICE PATH — the caller CLAUDE.md says breaks every time, because
+    // it has no form to hang a new field on. It sends sorted_lines.
+    const d2 = await mk({ weight_unit: 'LB', supplier_price: 0.89, supplier_price_unit: 'LB' });
+    const viaVoice = await claims.assess(d2.id, { assessment: 'damage', weight_unit: 'LB',
+        paid_price: 0.89, paid_price_unit: 'LB',
+        sorted_lines: [{ type: 'Bent rims', weight: 1200, worth: 0.30 }] }, 'jarvis');
+    ck('a damage claim sent as sorted_lines still works — the voice path has no new field',
+        viaVoice.claim_amount === 708, viaVoice.claim_amount);
+}
+
+
+// ══════════════════════════════════════════════════════════════════════════
+section('I — QUALITY says what was wrong with it');
+// ══════════════════════════════════════════════════════════════════════════
+// Apsara, 2026-10-21: "wh about quality claim?" There was no quality
+// assessment — it stored a quantity and a rate and nothing else, so the note
+// said "2,215.64 LB claimed" beside a demand for $1,971.92 and never said
+// what the defect was. findings and measured_by had been on every claim
+// record from the first version; this branch simply never read them.
+{
+    const q = await mk({ weight_unit: 'LB', supplier_price: 0.89, supplier_price_unit: 'LB' });
+    const r = await claims.assess(q.id, { assessment: 'quality', weight_unit: 'LB',
+        quality_qty: 2215.64, sell_price: 0.89, sell_price_unit: 'LB',
+        findings: ['oil_moisture', 'iron_attached'], measured_by: 'surveyor' }, 'apsara');
+
+    ck('quality: the money is unchanged — 2,215.64 x $0.89', r.claim_amount === 1971.92, r.claim_amount);
+    ck('  and what was wrong is now kept', r.findings.join(',') === 'oil_moisture,iron_attached', r.findings);
+    ck('  with how she knows', r.measured_by === 'surveyor');
+    // On its OWN claim. The first version re-assessed q.id here, which
+    // overwrote its quantity and rate — so the note rendered below was for a
+    // $10 claim while the assertions expected $1,971.92, and two checks went
+    // red against perfectly good code. A fixture that mutates the subject of
+    // a later assertion is a test bug that reads exactly like a real one.
+    const qJunk = await mk({ weight_unit: 'LB', supplier_price: 1, supplier_price_unit: 'LB' });
+    ck('  junk findings are dropped, not stored', (await claims.assess(qJunk.id, { assessment: 'quality',
+        weight_unit: 'LB', quality_qty: 10, sell_price: 1, sell_price_unit: 'LB',
+        findings: ['oil_moisture', 'made_up'] }, 'a')).findings.join(',') === 'oil_moisture');
+
+    // ── OPTIONAL, AND THAT IS THE POINT ─────────────────────────────────
+    // A quality claim read off a mail or taken by voice has no chips to
+    // tick. CLAUDE.md records that caller breaking twice; a required field
+    // here would be the third.
+    const q2 = await mk({ weight_unit: 'LB', supplier_price: 1, supplier_price_unit: 'LB' });
+    const bare = await claims.assess(q2.id, { assessment: 'quality', weight_unit: 'LB',
+        quality_qty: 100, sell_price: 1, sell_price_unit: 'LB' }, 'jarvis');
+    ck('a quality claim with NO findings still assesses — the mail path has no chips',
+        bare.claim_amount === 100 && Array.isArray(bare.findings) && bare.findings.length === 0, bare.findings);
+
+    await claims.raiseRecovery(q.id, { our_claim: 1971.92 }, 'apsara');
+    const report = require(path.join(ROOT, 'helpers/claims/report.js'));
+    const html = report.toHtml(report.build({ claimId: q.id }));
+    ck('the note names the defect', /found: oil \/ moisture, iron or steel attached/.test(html),
+        (html.match(/quality:[^<]*/) || [])[0]);
+    ck('  shows the working, not just a quantity', /2,215\.64 LB at \$0\.89\/LB = \$1,971\.92/.test(html));
+    ck('  and says how it was measured', /measured by: independent surveyor/.test(html));
+    ck('  it no longer says only "N LB claimed"', !/: 2,215\.64 LB claimed\./.test(html));
+
+    // ── THE CHIPS MUST BE WIRED TO A HANDLER THAT EXISTS ────────────────
+    // The first version of the quality pane gave them class f_qfind while
+    // the click handler binds .f_found button — so every chip was DEAD and
+    // nothing would have been saved. That is the same bug as the claim-edit
+    // datalists, shipped once already. This check is on the wiring, not the
+    // markup, because markup that looks right is exactly what it produced.
+    const H = fs.readFileSync(path.join(ROOT, 'dashboard/claims.html'), 'utf8');
+    const qPane = H.slice(H.indexOf('data-pane="quality"'), H.indexOf('data-kind="quality"'));
+    ck('the quality pane asks what was wrong', /What was wrong with it/.test(qPane));
+    ck('  using the class the click handler actually binds', /chips2 f_found/.test(qPane));
+    ck('  and the shared vocabulary, not a second list', /FINDINGS\.map/.test(qPane));
+    ck('no chip row is left on a class nothing listens to', !/f_qfind/.test(H));
+
+    // ── THE DOCS LINK IS WHERE SHE WORKS ────────────────────────────────
+    // Apsara, 2026-10-21, after looking for a Drive link on a claim report:
+    // the box was inside the "Claim details" section, which opens CLOSED by
+    // design — its own comment calls it "a correction, not part of the daily
+    // flow". A link she sets when raising a claim is not a correction, and a
+    // control she never finds is a feature that does not exist.
+    const recSec = H.slice(H.indexOf('data-sec="recover"'), H.indexOf('f_remarks'));
+    const detSec = H.slice(H.indexOf('data-sec="details"'), H.indexOf('data-sec="assess"'));
+    ck('the documents link sits in Recover, where the demand is made', /class="d_docs"/.test(recSec));
+    ck('  and not in the section that opens collapsed', !/class="d_docs"/.test(detSec));
+    ck('  exactly one input, so two copies cannot drift', (H.match(/class="d_docs"/g) || []).length === 1);
+    ck('  saved on blur, not behind a button she can walk away from', /docsIn\.onblur/.test(H));
+    ck('the submit branch sends them', /findings: pk\.findings\.slice\(\), measured_by: pk\.measured_by,/.test(
+        H.slice(H.indexOf("dataset.kind === 'quality'"), H.indexOf("dataset.kind === 'sorted'"))));
+    // Two rows, one list: clicking in one must light the other.
+    ck('both findings rows show the same answer', /x\.dataset\.f !== f/.test(H));
 }
 
 // ══════════════════════════════════════════════════════════════════════════
