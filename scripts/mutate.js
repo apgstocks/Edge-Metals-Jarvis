@@ -2163,6 +2163,71 @@ const MUTATIONS = [
       find: '            return { rate: p, rate_unit: u, rate_from: \'\' };',
       to:   '            return { rate: Math.round(p * (claimPrice.toUnit(1, \'MT\', u) || 1) * 100) / 100, rate_unit: \'MT\', rate_from: `${money(p)}/${u}` };' },
 
+    // ── DESTINATION IMPORT RULES, 2026-10-24 ─────────────────────────────
+    // The cardinal sin is a default `clear`: a green tick on a container that
+    // gets rejected at Nhava Sheva. Every one of these makes the module say
+    // yes where it should say "ask somebody".
+    { name: 'export rules: unknown collapses into clear',
+      file: 'helpers/exportRules.js', suites: ['export-rules'],
+      find: "    const outcome = blocked ? 'blocked' : (stale ? 'unknown' : 'clear');",
+      to:   "    const outcome = blocked ? 'blocked' : 'clear';" },
+
+    { name: 'export rules: a rule nobody confirmed becomes actionable',
+      file: 'helpers/exportRules.js', suites: ['export-rules'],
+      find: "    if (!rule.verified_on || !rule.verified_by) return { actionable: false, why: 'never_verified' };",
+      to:   "    if (!rule.verified_on) return { actionable: false, why: 'never_verified' };" },
+
+    { name: 'export rules: a lapsed rule keeps being acted on',
+      file: 'helpers/exportRules.js', suites: ['export-rules'],
+      find: "    if (String(asOf) > String(expires)) {",
+      to:   "    if (false && String(asOf) > String(expires)) {" },
+
+    { name: 'export rules: a disputed rule is treated as settled',
+      file: 'helpers/exportRules.js', suites: ['export-rules'],
+      find: "    if (rule.disputed) return { actionable: false, why: 'disputed' };",
+      to:   "    if (false) return { actionable: false, why: 'disputed' };" },
+
+    // RE-POINTED 2026-10-24. The first versions of these three targeted the
+    // longest-alias-wins countryOf, which a surviving mutation showed was
+    // wrong across countries ("New Mexico, USA" came back Mexico). After the
+    // rewrite their find strings were gone and all three reported NOT
+    // APPLIED — tested nothing, which is #204's standing problem and the
+    // reason this comment exists rather than a silent fix.
+
+    // The one that would quietly apply one country's rules to a box going
+    // somewhere else: ambiguity tolerated instead of refused.
+    { name: 'export rules: an ambiguous destination picks one anyway',
+      file: 'helpers/exportRules.js', suites: ['export-rules'],
+      find: "    if (hits.size !== 1) return null;",
+      to:   "    if (hits.size === 0) return null;" },
+
+    { name: 'export rules: country matching goes back to substrings',
+      file: 'helpers/exportRules.js', suites: ['export-rules'],
+      find: "            if (!padded.includes(' ' + a + ' ')) continue;",
+      to:   "            if (!padded.includes(a)) continue;" },
+
+    // Longest-alias-wins WITHIN one country: without it "korea" can beat
+    // "south korea" and the reason line she reads becomes arbitrary.
+    { name: 'export rules: the first alias wins instead of the longest',
+      file: 'helpers/exportRules.js', suites: ['export-rules'],
+      find: "            if (!cur || a.length > cur.matched.length) {",
+      to:   "            if (!cur) {" },
+
+    { name: 'export rules: a shipment with no material satisfies a material rule',
+      file: 'helpers/exportRules.js', suites: ['export-rules'],
+      find: "        if (!m || !w.materials.some((x) => norm(x) === m)) return false;",
+      to:   "        if (m && !w.materials.some((x) => norm(x) === m)) return false;" },
+
+    { name: 'export rules: a rule can be confirmed by Jarvis itself',
+      file: 'helpers/exportRules.js', suites: ['export-rules'],
+      find: "    if (/^(jarvis|system|auto|bot|claude)$/i.test(who)) {",
+      to:   "    if (false) {" },
+
+    { name: 'export rules: origin stops mattering, so a UAE box gets the US exemption',
+      file: 'helpers/exportRules.js', suites: ['export-rules'],
+      find: "    if (w.origin_country && String(w.origin_country).toUpperCase()",
+      to:   "    if (false && String(w.origin_country).toUpperCase()" },
+
     // ── RETAINED EARNINGS / THE BALANCE SHEET AS AT, 2026-10-23 ──────────
     // The old tie could not fail: every journal entry balances, so any
     // complete subset balances, so the old rightSide was an identity. These

@@ -1168,6 +1168,7 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
     Object.assign(ctx, require('./routes/contacts')(app, ctx)); // @@part
     Object.assign(ctx, require('./routes/documents')(app, ctx)); // @@part
     Object.assign(ctx, require('./routes/invoices')(app, ctx)); // @@part
+    Object.assign(ctx, require('./routes/exportRules')(app, ctx)); // @@part
     Object.assign(ctx, require('./routes/admin')(app, ctx)); // @@part
     Object.assign(ctx, require('./routes/pages')(app, ctx)); // @@part
 

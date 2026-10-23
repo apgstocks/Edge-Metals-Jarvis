@@ -32,6 +32,10 @@ const LOGS_DIR = path.join(DATA_DIR, 'logs');
 if (!fs.existsSync(LOGS_DIR)) fs.mkdirSync(LOGS_DIR, { recursive: true });
 const FILES = {
     BOOKINGS_FILE    : path.join(DATA_DIR, 'bookings.json'),
+    // Destination import rules for scrap, each with its source and the date
+    // it was last verified — see helpers/exportRules.js. Under DATA_DIR like
+    // every other store, so a test that sets DATA_DIR is isolated by default.
+    EXPORT_RULES_FILE: path.join(DATA_DIR, 'export-rules.json'),
     WORKFLOW_FILE    : path.join(DATA_DIR, 'workflow.json'),
     TASKS_FILE       : path.join(DATA_DIR, 'tasks.json'),
     TASKS_HISTORY_FILE: path.join(DATA_DIR, 'tasks_history.json'),
