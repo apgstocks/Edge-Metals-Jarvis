@@ -146,11 +146,18 @@ builds/
 
 # Synthesised speech, rebuildable from the API. Not source.
 data/voice-cache/
+
+# NOTE 2026-10-24 (my call, not Apsara's): seven `tests/*.js` lines were
+# removed from this file. They sat among mutation-harness debris —
+# outputs/mutate-restore.stale-*.json, _to_delete/*.lock.*, and
+# tests/sidebar-pages.js listed twice — which is what a bulk-append of
+# `git status` output looks like. Three of them were consequently
+# UNTRACKED and existed only on the Mac, tests/settle-against.js among
+# them: the end-to-end test CLAUDE.md rule 3 requires for the settle
+# work (#212). So `npm test` on the VM ran a different suite from
+# `npm test` on the Mac. Test files are source. Do not ignore them.
 mobile-app/android/app/build.gradle
 mobile-app/www/index.html
-tests/form-parity.js
-tests/mobile-layout.js
-tests/spend-report.js
 .mutate-restore.json
 BOL-sample.html
 IMPORT-PREVIEW.md
@@ -244,12 +251,7 @@ _to_delete/next-index-9.lock.21455
 _to_delete/next-index-5.lock.20284
 _to_delete/next-index-9.lock.11126
 outputs/.probe-prose.js
-tests/sidebar-pages.js
-tests/sidebar-pages.js
 outputs/.probe-prose.js
 outputs/mutate-restore.stale-1791869338.json
 outputs/mutate-restore.stale2-1791869358.json
 outputs/.mutate-once-probe.js
-tests/load-create-buttons.js
-tests/item-loadcount.js
-tests/settle-against.js
