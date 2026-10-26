@@ -394,6 +394,33 @@ const BOOK = [
         pick('po_deliver', 'edge-metals-bofa');
     }
 
+    section('O — the sheet is even: Deliver-to reads like Vendor, no repeated labels');
+    {
+        pick('po_company', 'edge-metals-bofa');
+        pick('po_deliver', 'edge-metals-bofa');
+        type('po_supplier', 'FMC Metals'); type('po_supplier_address', '800 East 62nd Street\nLos Angeles');
+        const cards = () => $('poPreview').querySelectorAll('.party');
+        ck('Deliver-to has a bold name line, as Vendor does', cards()[1].querySelector('.nm') && cards()[1].querySelector('.nm').textContent === 'Edge Metals', cards()[1].innerHTML);
+        ck('and the address sits under it, not in the name', /Devonshire/.test(cards()[1].querySelector('.v').textContent) && !/Devonshire/.test(cards()[1].querySelector('.nm').textContent));
+        ck('Vendor still has its name and address', cards()[0].querySelector('.nm').textContent === 'FMC Metals' && /62nd/.test(cards()[0].querySelector('.v').textContent));
+        pick('po_deliver', '');
+        ck('with no delivery chosen the card shows a dash, not a blank', cards()[1].querySelector('.nm') && /—/.test(cards()[1].textContent), cards()[1].innerHTML);
+        pick('po_deliver', 'edge-metals-bofa');
+        $('poClear').click();
+        pick('po_company', 'edge-metals-bofa');
+        $('po_two').checked = true; $('po_two').dispatchEvent(new w.Event('change', { bubbles: true }));
+        const r = d.querySelector('#poLines .po-line');
+        const s1 = (f, v) => { const e = r.querySelector(`[data-f="${f}"]`); e.value = v; e.dispatchEvent(new w.Event('input', { bubbles: true })); };
+        s1('desc', 'Wheels'); s1('qty', '1000'); s1('price', '1.31'); s1('price2', '1.29');
+        const tds = $('poPreview').querySelectorAll('tbody tr:first-child td');
+        ck('Unit price shows CLEAN / DIRTY beside each price', tds[3].querySelectorAll('span').length === 2 && /Clean/i.test(tds[3].textContent), tds[3].innerHTML);
+        ck('Amount shows the two figures only, no labels repeated', tds[4].querySelectorAll('span').length === 0 && !/clean|dirty/i.test(tds[4].textContent), tds[4].innerHTML);
+        ck('and both amounts are there, clean first', /\$1,310\.00[^$]*\$1,290\.00/.test(tds[4].textContent), tds[4].textContent);
+        $('po_two').checked = false; $('po_two').dispatchEvent(new w.Event('change', { bubbles: true }));
+        $('poClear').click();
+        pick('po_company', 'edge-metals-bofa');
+    }
+
     section('H — Clear and the last item row');
     {
         const rows = () => d.querySelectorAll('#poLines .po-line').length;

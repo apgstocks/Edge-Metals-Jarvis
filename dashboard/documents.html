@@ -8384,13 +8384,13 @@ function poSheetCss() {
     + '.po-sheet .bar{height:6px; background:linear-gradient(90deg,#226620,#3DA836 55%,#7FD172);}'
     + '.po-sheet .pad{padding:0 44px 34px;}'
     + '.po-sheet .head{display:flex; justify-content:space-between; align-items:center; gap:28px; padding:30px 44px 28px; margin-bottom:26px; background:linear-gradient(160deg,#ECF8EA 0%,#fff 58%,#ECF8EA 100%); border-bottom:1px solid #D3F0CD;}'
-    + '.po-sheet .brand{display:flex; gap:15px; align-items:center;} .po-sheet .brand svg{flex:none; display:block;}'
-    + '.po-sheet .co{font-size:22px; font-weight:800; letter-spacing:-.02em; color:#0C0E10; line-height:1.1;}'
+    + '.po-sheet .brand{display:flex; gap:15px; align-items:center; flex:1; min-width:0;} .po-sheet .brand svg{flex:none; display:block;}'
+    + '.po-sheet .co{white-space:nowrap; font-size:22px; font-weight:800; letter-spacing:-.02em; color:#0C0E10; line-height:1.1;}'
     + '.po-sheet .tag{font-size:9.5px; font-weight:800; letter-spacing:.2em; text-transform:uppercase; color:#3DA836; margin-top:5px;}'
     + '.po-sheet .co-addr{font-size:11px; color:#57616A; margin-top:8px; white-space:pre-line; line-height:1.5;}'
     + '.po-sheet .contact{font-size:11px; color:#2E861F; font-weight:600; margin-top:2px;}'
     + '.po-sheet .title{text-align:right; flex:none;}'
-    + '.po-sheet .title b{display:block; font-size:27px; font-weight:800; letter-spacing:.14em; color:#14181B; line-height:1;}'
+    + '.po-sheet .title b{display:block; font-size:24px; font-weight:800; letter-spacing:.12em; white-space:nowrap; color:#14181B; line-height:1;}'
     + '.po-sheet .title .no{display:inline-block; margin-top:11px; background:#3DA836; color:#fff; border-radius:999px; padding:5px 16px; font-size:12.5px; font-weight:700; letter-spacing:.04em;}'
     + '.po-sheet .k{display:block; font-size:9px; font-weight:700; letter-spacing:.16em; text-transform:uppercase; color:#7E8891; margin-bottom:3px;}'
     + '.po-sheet .meta{display:grid; grid-template-columns:repeat(4,1fr); background:#F3F5F7; border-radius:6px; margin-bottom:24px;}'
@@ -8404,6 +8404,7 @@ function poSheetCss() {
     + '.po-sheet td{padding:11px; border-bottom:1px solid #E5E9EC; vertical-align:top; font-size:12.5px; color:#2B3239;}'
     + '.po-sheet td.d{font-weight:600; color:#0C0E10;}'
     + '.po-sheet .pp{display:flex; justify-content:space-between; gap:12px; white-space:nowrap;} .po-sheet .pp + .pp{margin-top:3px;}'
+    + '.po-sheet .pp.a{justify-content:flex-end;}'
     + '.po-sheet .pp span{font-size:9px; font-weight:700; letter-spacing:.1em; text-transform:uppercase; color:#7E8891; align-self:center;}'
     + '.po-sheet th:first-child,.po-sheet td:first-child{padding-left:14px;} .po-sheet th:last-child,.po-sheet td:last-child{padding-right:14px;}'
     + '.po-sheet .tot{margin:16px 0 0 auto; width:290px;}'
@@ -8428,6 +8429,15 @@ const PO_LOGO = '<svg width="56" height="56" viewBox="0 0 48 48"><rect x="1.5" y
 
 // The sheet. Used for BOTH the preview and the print window, so what is on
 // screen is what comes out. Every typed value goes through esc().
+// Deliver-to is "Name\nAddress..."; show it the way Vendor is shown (bold name,
+// address under it) so the two cards read the same.
+function poShipToHtml(shipTo, miss) {
+  if (!shipTo) return '<div class="nm">' + miss('—') + '</div>';
+  const parts = String(shipTo).split('\n');
+  const rest = parts.slice(1).join('\n').trim();
+  return '<div class="nm">' + esc(parts[0]) + '</div>' + (rest ? '<div class="v">' + esc(rest) + '</div>' : '');
+}
+
 function poSheetHtml(d) {
   const miss = (t) => '<span class="empty">' + esc(t) + '</span>';
   const meta = (k, v) => '<div><span class="k">' + k + '</span>' + (v ? esc(v) : miss('—')) + '</div>';
@@ -8441,7 +8451,7 @@ function poSheetHtml(d) {
       ? '<div class="pp"><span>' + esc(d.labelA) + '</span>' + esc(poPrice(l.price)) + '</div><div class="pp"><span>' + esc(d.labelB) + '</span>' + esc(poPrice(l.price2)) + '</div>'
       : esc(poPrice(l.price)))
     + '</td><td class="r d">' + (d.two
-      ? '<div class="pp"><span>' + esc(d.labelA) + '</span>' + esc(poMoney(l.amountCents)) + '</div><div class="pp"><span>' + esc(d.labelB) + '</span>' + esc(poMoney(l.amount2Cents)) + '</div>'
+      ? '<div class="pp a">' + esc(poMoney(l.amountCents)) + '</div><div class="pp a">' + esc(poMoney(l.amount2Cents)) + '</div>'
       : esc(poMoney(l.amountCents))) + '</td></tr>').join('');
   return '<div class="po-sheet"><div class="bar"></div>'
     + '<div class="head"><div class="brand">' + (poIsEdgeMetals(d.company) ? PO_LOGO : '') + '<div>'
@@ -8454,7 +8464,7 @@ function poSheetHtml(d) {
     + '<div class="pad"><div class="meta">' + meta('PO date', d.date) + meta('Required by', d.required) + meta('Payment terms', d.terms) + meta('Currency', 'USD') + '</div>'
     + '<div class="parties"><div class="party"><span class="k">Vendor</span><div class="nm">' + (d.supplier ? esc(d.supplier) : miss('—')) + '</div>'
     + (d.supplierAddress ? '<div class="v">' + esc(d.supplierAddress) + '</div>' : '') + '</div>'
-    + '<div class="party"><span class="k">Deliver to</span><div class="v">' + (d.shipTo ? esc(d.shipTo) : miss('—')) + '</div></div></div>'
+    + '<div class="party"><span class="k">Deliver to</span>' + poShipToHtml(d.shipTo, miss) + '</div></div>'
     + '<table><thead><tr><th>Description</th><th class="r">Qty</th><th>Unit</th><th class="r">Unit price</th><th class="r">Amount</th></tr></thead><tbody>'
     + (rows || '<tr><td colspan="5">' + miss('No items yet') + '</td></tr>') + '</tbody></table>'
     + '<div class="tot">' + (d.two
