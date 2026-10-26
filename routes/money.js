@@ -940,6 +940,25 @@ module.exports = function (app, ctx) {
         } catch (e) { res.status(500).json({ error: e.message }); }
     });
 
+    // ── PAYMENT FOLLOW-UPS (Apsara, 2026-10-26) ──────────────────────────────
+    // Drafts chasing customers who owe Edge Metals: payment status + remittance details. Customers on ETA-based
+    // payment terms are skipped. READ-ONLY and SENDS NOTHING — the Sales screen shows the drafts to copy / open in
+    // mail. The only write is the per-customer ETA-terms label (helpers/paymentFollowups.js).
+    app.get('/api/payment-followups', (req, res) => {
+        try { res.json(require('./helpers/paymentFollowups').build()); }
+        catch (e) { res.status(500).json({ error: e.message }); }
+    });
+    app.put('/api/payment-followups/terms', async (req, res) => {
+        try {
+            const pf = require('./helpers/paymentFollowups');
+            const b = req.body || {};
+            const out = await pf.setEtaTerms(b.customer, b.eta_terms, { actor: actorOf(req) });
+            await require('./helpers/audit').record({ action: 'set-customer-eta-terms', subject: out.customer, actor: actorOf(req), role: req.role, ip: req.ip,
+                detail: { company: 'edge-metals', eta_terms: out.eta_terms } });
+            res.json({ ok: true, ...out });
+        } catch (e) { res.status(400).json({ error: e.message }); }
+    });
+
     app.post('/api/sales', async (req, res) => {
         try {
             const s = require('./helpers/sales');

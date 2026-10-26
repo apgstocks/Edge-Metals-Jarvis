@@ -254,6 +254,8 @@ const FILES = {
     PARTY_INVOICE_PAYMENTS_FILE: path.join(DATA_DIR, 'party_invoice_payments.json'),
     // The ONE lock over the invoice register and the carrier invoice lists — see helpers/partyInvoices.js
     PARTY_INVOICES_LOCK_FILE: path.join(DATA_DIR, 'party_invoices_lock.json'),
+    // Customers on ETA-based payment terms (ETA-10, ETA+7 …) — skipped by the payment follow-up drafts, see helpers/paymentFollowups.js
+    CUSTOMER_PAY_TERMS_FILE: path.join(DATA_DIR, 'customer_pay_terms.json'),
     // Nightly mail sweep -> register: what each night found, and when the morning email last went — see helpers/partyInvoiceNightly.js
     PARTY_INVOICE_NIGHTLY_FILE: path.join(DATA_DIR, 'party_invoice_nightly.json'),
     // ── EDGE METALS MATERIAL RECEIVED, ITEMISED FROM A PACKING LIST ──────

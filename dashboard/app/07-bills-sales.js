@@ -271,6 +271,7 @@ async function renderLedgerTab(kind) {
         <div style="display:flex; gap:8px;">
           ${kind === 'bills' ? '<button id="btnPay" class="btn btn-secondary" style="font-size:12px; padding:8px 14px;">Pay</button>' : ''}
           ${kind === 'sales' ? '<button id="btnFromBill" class="btn btn-secondary" style="font-size:12px; padding:8px 14px;">New from bill</button>' : ''}
+          ${kind === 'sales' ? '<button id="btnFollowups" class="btn btn-secondary" style="font-size:12px; padding:8px 14px;">Payment follow-ups</button>' : ''}
           ${kind === 'bills' || kind === 'sales' ? '<button id="btnNameCleanup" class="btn btn-ghost" style="font-size:12px; padding:8px 12px;" title="The same name typed two ways">Clean names</button>' : ''}
           ${kind === 'bills' || kind === 'sales' ? '<button id="btnImport" class="btn btn-secondary" style="font-size:12px; padding:8px 14px;" title="Import a shipments workbook">Import</button>' : ''}
           <button id="btnAddLedger" class="btn btn-primary" style="font-size:12px; padding:8px 14px;">${K.addLabel}</button>
@@ -725,6 +726,7 @@ async function renderLedgerTab(kind) {
 
   wireMetalsTabs();
   if ($('btnFromBill')) $('btnFromBill').onclick = () => openFromBill();
+  if ($('btnFollowups')) $('btnFollowups').onclick = () => openFollowups();
   if ($('btnPay')) $('btnPay').onclick = () => openBillPayForm();
   if ($('btnImport')) $('btnImport').onclick = () => openImportModal(kind);
   if ($('btnNameCleanup')) $('btnNameCleanup').onclick = () => openNameCleanup(kind === 'sales' ? 'customer' : 'supplier');
@@ -1125,6 +1127,65 @@ function ledgerThemeToggle() {
     title="${LEDGER_BIG ? 'Back to the normal size' : 'Make everything bigger'}"
     aria-label="${LEDGER_BIG ? 'Back to the normal size' : 'Make everything bigger'}"
     style="background:${LEDGER_BIG ? L.line : 'none'}; border:1px solid ${L.line}; border-radius:var(--radius-sm); padding:3px 9px; font-size:11px; line-height:1.3; color:${L.inkMuted}; cursor:pointer; margin-left:5px;">\u{1F453}</button>`;
+}
+
+// ── PAYMENT FOLLOW-UPS (Apsara, 2026-10-26) ──────────────────────────────
+// One draft per customer who owes Edge Metals, asking for payment status and the remittance details.
+// Customers on ETA-based terms (ETA-10, ETA+7 …) are listed underneath and get no draft. NOTHING IS SENT from
+// here: Copy, or Open in mail. Her "option 1"; sending is a later step.
+async function openFollowups() {
+  const L = LEDGER_LIGHT;
+  const money = (n) => '$' + Number(n || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const data = await api('/api/payment-followups');
+  const drafts = data.drafts || [], skipped = data.skipped_eta || [];
+  document.body.insertAdjacentHTML('beforeend', `
+    <div id="pfModal" style="position:fixed; inset:0; background:rgba(0,0,0,.66); z-index:9100; display:flex; align-items:flex-start; justify-content:center; overflow-y:auto; padding:40px 16px;">
+      <div class="card" style="width:min(780px,100%); padding:20px 22px 18px; background:${L.sunken}; border-color:${L.line};">
+        <div style="display:flex; align-items:baseline; justify-content:space-between; margin-bottom:4px;">
+          <h3 style="margin:0; font-size:16px; text-transform:none; color:${L.ink};">Payment follow-ups</h3>
+          <button id="pfClose" aria-label="Close" style="background:none; border:none; color:${L.inkMuted}; font-size:22px; line-height:1; cursor:pointer;">&times;</button>
+        </div>
+        <div style="font-size:12px; color:${L.inkFaint}; margin-bottom:12px;">
+          ${data.open_invoices || 0} open invoice${data.open_invoices === 1 ? '' : 's'}, ${money(data.total_outstanding)} outstanding.
+          ${drafts.length} draft${drafts.length === 1 ? '' : 's'} below (${money(data.drafted_total)}) — <b>nothing is sent from here</b>.
+        </div>
+        <div id="pfDrafts">${drafts.length ? drafts.map((d, i) => `
+          <div class="pfCard" style="background:${L.paper}; border:1px solid ${L.line}; border-radius:var(--radius-sm); padding:12px 14px; margin-bottom:10px;">
+            <div style="display:flex; gap:10px; align-items:baseline; flex-wrap:wrap;">
+              <b style="color:${L.ink};">${esc(d.customer)}</b>
+              <span style="font-size:12px; color:${L.inkMuted};">${d.count} invoice${d.count === 1 ? '' : 's'} · ${money(d.total)}</span>
+              <span style="font-size:12px; color:${d.to_missing ? L.danger : L.inkFaint};">${d.to_missing ? 'no single email in the address book' : 'to ' + esc(d.to)}</span>
+              <span style="flex:1"></span>
+              <input class="pfEta" data-customer="${esc(d.customer)}" placeholder="ETA terms e.g. ETA-10" style="width:150px; padding:4px 8px; font-size:12px;" title="Customers on ETA-based terms get no draft. Type ETA-10 or ETA+7 and press Enter.">
+            </div>
+            <textarea class="pfBody" data-i="${i}" rows="11" style="width:100%; margin-top:8px; font-size:12px; font-family:var(--font-mono); padding:8px;">${esc(d.body)}</textarea>
+            <div style="display:flex; gap:8px; margin-top:8px;">
+              <button class="btn btn-secondary pfCopy" data-i="${i}" style="font-size:12px; padding:6px 12px;">Copy</button>
+              <button class="btn btn-secondary pfMail" data-i="${i}" style="font-size:12px; padding:6px 12px;">Open in mail</button>
+            </div>
+          </div>`).join('') : `<div style="padding:16px; text-align:center; font-size:12px; color:${L.inkFaint};">Nobody needs chasing.</div>`}</div>
+        ${skipped.length ? `<div style="margin-top:14px; font-size:12px; color:${L.inkMuted};"><b>On ETA-based terms — no draft (${skipped.length})</b>
+          ${skipped.map((s) => `<div style="display:flex; gap:10px; padding:4px 0; border-bottom:1px solid ${L.lineSoft};"><span style="flex:1;">${esc(s.customer)}</span><span style="font-family:var(--font-mono);">${esc(s.eta_terms)}</span><span>${s.count} · ${money(s.total)}</span><a href="#" class="pfEtaClear" data-customer="${esc(s.customer)}" style="color:${L.danger};">remove terms</a></div>`).join('')}</div>` : ''}
+        <div id="pfErr" style="color:${L.danger}; font-size:11px; margin-top:8px;"></div>
+      </div>
+    </div>`);
+  const close = () => { const m = $('pfModal'); if (m) m.remove(); document.removeEventListener('keydown', esc2); };
+  const esc2 = (e) => { if (e.key === 'Escape') close(); };
+  document.addEventListener('keydown', esc2);
+  $('pfClose').onclick = close;
+  const bodyOf = (i) => document.querySelector(`.pfBody[data-i="${i}"]`).value;   // what is in the box, edits included
+  document.querySelectorAll('.pfCopy').forEach((b) => { b.onclick = async () => {
+    try { await navigator.clipboard.writeText(bodyOf(b.dataset.i)); b.textContent = 'Copied'; } catch (e) { $('pfErr').textContent = 'Could not copy — select the text and copy it by hand.'; } }; });
+  document.querySelectorAll('.pfMail').forEach((b) => { b.onclick = () => {
+    const d = drafts[b.dataset.i];
+    const q = `subject=${encodeURIComponent(d.subject)}&body=${encodeURIComponent(bodyOf(b.dataset.i))}${d.cc ? '&cc=' + encodeURIComponent([].concat(d.cc).join(',')) : ''}`;
+    window.location.href = `mailto:${encodeURIComponent(d.to || '')}?${q}`; }; });
+  const setTerms = async (customer, value) => {
+    try { await api('/api/payment-followups/terms', { method: 'PUT', body: JSON.stringify({ customer, eta_terms: value }) }); close(); openFollowups(); }
+    catch (e) { $('pfErr').textContent = e.message || 'Could not save'; }
+  };
+  document.querySelectorAll('.pfEta').forEach((el) => el.addEventListener('keydown', (e) => { if (e.key === 'Enter' && el.value.trim()) setTerms(el.dataset.customer, el.value.trim()); }));
+  document.querySelectorAll('.pfEtaClear').forEach((el) => el.addEventListener('click', (e) => { e.preventDefault(); setTerms(el.dataset.customer, ''); }));
 }
 
 // ── SELLING A CONTAINER SHE ALREADY BOUGHT ───────────────────────────────
