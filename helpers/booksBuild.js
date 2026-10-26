@@ -282,6 +282,16 @@ function build({ from, to } = {}) {
         // correct one.
         complete: unplaced.length === 0 && j.problems.length === 0,
         problems: j.problems,
+        // ── NEEDS, 2026-10-26 ────────────────────────────────────────────
+        // Entries that DID post but are waiting on an answer — an expense in
+        // 6900 because its category is not in the chart, or credited to 2090
+        // because no bank was named. Separate from `problems` on purpose:
+        // a problem is missing from the figures, a need is in them and
+        // imperfectly placed. The banner should say those differently, or
+        // "these figures are incomplete" will keep crying wolf over a Zelle
+        // payment that is perfectly well recorded.
+        needs: j.needs || [],
+        settled: unplaced.length === 0 && j.problems.length === 0 && (j.needs || []).length === 0,
     };
 }
 

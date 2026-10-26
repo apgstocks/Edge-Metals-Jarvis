@@ -2163,6 +2163,38 @@ const MUTATIONS = [
       find: '            return { rate: p, rate_unit: u, rate_from: \'\' };',
       to:   '            return { rate: Math.round(p * (claimPrice.toUnit(1, \'MT\', u) || 1) * 100) / 100, rate_unit: \'MT\', rate_from: `${money(p)}/${u}` };' },
 
+    // ── AN EXPENSE IS ALWAYS RECORDED, 2026-10-26 ────────────────────────
+    // Apsara: "expense shpuld be accounted as well", "Even if they didnt
+    // provide the accoubt .it doest matter.it should be recorded". Each of
+    // these puts the rule back to dropping the expense, which is what made
+    // Edge Yard's P&L read "Running costs $0.00".
+    { name: 'expense: an unknown category is refused again, losing the expense',
+      file: 'helpers/postings.js', suites: ['postings', 'books-build'],
+      find: "            account = '6900';",
+      to:   "            return { problem: `no account for the category \"${tx.category}\"` };" },
+
+    { name: 'expense: an unidentified payment source is refused again',
+      file: 'helpers/postings.js', suites: ['postings', 'books-build'],
+      find: "            bank = '2090';",
+      to:   "            return { problem: `cannot tell which bank \"${tx.bank || ''}\" is` };" },
+
+    // Recorded is not enough on its own: if the note is dropped, 2090 fills
+    // up and nothing ever says why.
+    { name: 'expense: it posts but stops saying what it had to guess',
+      file: 'helpers/postings.js', suites: ['postings', 'books-build'],
+      find: "        return { debits: [[account, amount]], credits: [[bank, amount]], needs };",
+      to:   "        return { debits: [[account, amount]], credits: [[bank, amount]] };" },
+
+    { name: 'expense: needs are folded into problems, so the page cries wolf',
+      file: 'helpers/postings.js', suites: ['postings', 'books-build'],
+      find: "    if (out.lines.length) out.needs.push(...pendingNeeds);",
+      to:   "    if (out.lines.length) out.problems.push(...pendingNeeds);" },
+
+    { name: 'books: the build stops carrying needs, so readiness cannot report them',
+      file: 'helpers/booksBuild.js', suites: ['books-build', 'books-readiness'],
+      find: "        needs: j.needs || [],",
+      to:   "        needs: []," },
+
     // ── DESTINATION IMPORT RULES, 2026-10-24 ─────────────────────────────
     // The cardinal sin is a default `clear`: a green tick on a container that
     // gets rejected at Nhava Sheva. Every one of these makes the module say

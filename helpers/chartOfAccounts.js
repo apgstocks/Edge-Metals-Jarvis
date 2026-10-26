@@ -91,6 +91,28 @@ const ACCOUNTS = [
     { code: '2050', name: 'Accrued trucking and freight', type: 'liability',
       why: 'Hauliers and carriers billed but unpaid — trucker_bills, metals_trucking, '
          + 'sales_settlements all feed this.' },
+    // ── 2090, ADDED 2026-10-26 ON HER INSTRUCTION ────────────────────────
+    // Apsara: "expense shpuld be accounted as well" and "Even if they didnt
+    // provide the accoubt .it doest matter.it should be recorded".
+    //
+    // Money that has demonstrably left the business where the source is not
+    // yet known — an expense paid by Zelle or Wire with no bank named, which
+    // helpers/postings.bankAccount cannot resolve. Before this, that expense
+    // was REFUSED and vanished from the statements entirely: the Expenses tab
+    // showed it and the P&L said Running costs $0.00.
+    //
+    // A liability on purpose. Until the source is known the books are saying
+    // "this went out and is unreconciled", which is exactly true, and it can
+    // never be mistaken for a bank balance. It also makes the gap LOUD on the
+    // balance sheet rather than silent in a problems list nobody opens —
+    // the same reasoning as #66, the money stores failing loudly.
+    //
+    // It should trend to zero. A figure sitting here for months means nobody
+    // is answering "which account did this come out of".
+    { code: '2090', name: 'Unallocated payments', type: 'liability',
+      why: 'Money that left the business with no source identified yet. An expense is '
+         + 'recorded against this rather than being dropped; clearing it means telling '
+         + 'Jarvis which bank or drawer it came from.' },
     { code: '2100', name: 'Commission payable', type: 'liability',
       why: 'Owed to agents — Joey, Pan Metal, Nik. She confirmed 2026-10-06 these are '
          + 'three different people, and the sale row carries ONE commission field, so this '

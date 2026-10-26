@@ -146,22 +146,45 @@ const S = require(path.join(ROOT, 'helpers/statements'));
        haulage === BILL_TRUCKING, `${haulage}`);
 }
 
-// ── C — AN UNKNOWN CATEGORY IS SURFACED, NOT BURIED ───────────────────────
+// ── C — AN UNKNOWN CATEGORY IS RECORDED, AND SURFACED ─────────────────────
+// REVERSED 2026-10-26. This section used to require the Kryptonite expense to
+// be REFUSED — reported as a problem, posting nothing, with an explicit check
+// that "nothing lands in 6900 Other" because "burying it there hides that the
+// chart is missing an account she needs".
+//
+// That reasoning was sound about 6900 and wrong about the cost. Refusing did
+// not surface anything she looked at; it removed the money from the P&L. Edge
+// Yard's statement read "Running costs $0.00" with an Expenses tab full of
+// them, because bankAccount() knows only cash/Chase/BofA and her picker
+// offers Zelle and Wire. Apsara: "expense shpuld be accounted as well" and
+// "Even if they didnt provide the accoubt .it doest matter.it should be
+// recorded".
+//
+// The old concern is kept, as a NEED rather than as a disappearance: the
+// figure lands, and the build still says the category is missing.
 {
     section('C — the expense category the chart does not have');
 
     const b = B.build();
-    ck('the Kryptonite expense is reported as a problem',
-       b.problems.some((p) => /Kryptonite/.test(p)), JSON.stringify(b.problems));
-    ck('  and the build is NOT called complete',
-       b.complete === false, String(b.complete));
-    ck('  while the Fuel one still posts',
+    ck('the Kryptonite expense is RECORDED, not refused',
+       b.lines.some((l) => l.account === '6900'),
+       JSON.stringify(b.lines.map((l) => l.account)));
+    ck('  and it is NOT reported as a problem, because nothing is missing',
+       !b.problems.some((p) => /Kryptonite/.test(p)), JSON.stringify(b.problems));
+    ck('  but the build still names the category as needing an account',
+       (b.needs || []).some((n) => /Kryptonite/.test(n)), JSON.stringify(b.needs));
+    ck('  so it is complete', b.complete === true, JSON.stringify(b.problems));
+    ck('  and NOT settled, which is the flag the page should show',
+       b.settled === false, `needs: ${JSON.stringify(b.needs)}`);
+    ck('  while the Fuel one still posts to its own account',
        b.lines.some((l) => l.account === '6100'), JSON.stringify(b.lines.map((l) => l.account)));
 
-    // The dangerous alternative: silently in Other, where nobody looks.
-    ck('  and nothing lands in 6900 Other',
-       !b.lines.some((l) => l.account === '6900'),
-       'burying it there hides that the chart is missing an account she needs');
+    // The money must be the same either way — recording it must not change
+    // the amount, only where it sits.
+    const in6900 = b.lines.filter((l) => l.account === '6900')
+        .reduce((s, l) => s + l.debit, 0);
+    ck('  for exactly the amount on the expense row, not a rounded guess',
+       in6900 === 90, String(in6900));
 }
 
 // ── D — THE WHOLE STACK TIES ──────────────────────────────────────────────

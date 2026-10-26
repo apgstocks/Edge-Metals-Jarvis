@@ -132,17 +132,27 @@ fixture();
     section('D — one problem, not twenty-five lines');
 
     const r = run();
-    ck('rows that could not be posted are counted',
-       /ROWS THAT COULD NOT BE POSTED/.test(r.out), r.out.slice(0, 900));
-    ck('  and grouped by reason',
-       /an expense category the chart does not have/.test(r.out), r.out.slice(0, 900));
+    // ── MOVED 2026-10-26, FROM "could not be posted" TO "not settled" ────
+    // The Kryptonite expense used to be REFUSED for having a category the
+    // chart lacks, so it appeared under ROWS THAT COULD NOT BE POSTED. Since
+    // Apsara's "Even if they didnt provide the accoubt .it doest matter.it
+    // should be recorded" it posts into 6900 and is reported in its own
+    // section instead. The intent of this section is unchanged and is the
+    // reason the section still exists: she must still be told the category is
+    // missing, in one grouped line rather than twenty-five.
+    ck('an expense posted into Other is reported, not silent',
+       /POSTED BUT NOT SETTLED/.test(r.out), r.out.slice(0, 1200));
+    ck('  grouped by reason, not listed row by row',
+       /an expense category the chart does not have/.test(r.out), r.out.slice(0, 1200));
     ck('  naming the category she would add',
        /categories to add: Kryptonite/.test(r.out),
        'a category she can add in a minute is a different job from weighing 25 containers');
+    ck('  and said to be IN the figures, so she does not hunt for a missing number',
+       /ARE in the figures above/.test(r.out), r.out.slice(0, 1200));
 
-    // And the Fuel one still posted.
-    ck('  while the expense that DID post is not reported as a problem',
-       !/categories to add:.*Fuel/.test(r.out), r.out.slice(0, 900));
+    // And the Fuel one still posted to its own account, so it is not listed.
+    ck('  while the expense that DID map is not reported at all',
+       !/categories to add:.*Fuel/.test(r.out), r.out.slice(0, 1200));
 }
 
 // ── E — PER COMPANY, AND FILABLE IS ITS OWN QUESTION ──────────────────────

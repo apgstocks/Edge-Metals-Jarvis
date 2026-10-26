@@ -229,15 +229,55 @@ const RULES = {
     // PROBLEM. Defaulting to 6900 Other would hide that the chart is
     // missing an account she needs — chartOfAccounts.js refuses to default
     // for exactly this reason and this rule must not undo it.
+    // ── AN EXPENSE IS ALWAYS RECORDED, 2026-10-26 ────────────────────────
+    // Apsara, seeing Edge Yard's P&L read "Running costs $0.00" while the
+    // Expenses tab was full of them: "expense shpuld be accounted as well",
+    // then "Even if they didnt provide the accoubt .it doest matter.it should
+    // be recorded".
+    //
+    // WHAT THIS RULE USED TO DO. It returned { problem } twice — once for a
+    // category not in the chart, once when bankAccount() could not name the
+    // source. A problem posts NO LINES, so the expense left the statements
+    // altogether. bankAccount resolves exactly three things: cash, Chase and
+    // BofA. Her expense picker offers Zelle and Wire. So a Zelle-paid yard
+    // expense was silently dropped, and the yard's running costs came out as
+    // zero while the money had plainly gone.
+    //
+    // That is the silent failure this repo keeps paying for. The expense is
+    // real either way; refusing to record it does not make it less real, it
+    // only makes the P&L wrong in the direction that looks tidy.
+    //
+    // SO IT NEVER REFUSES. Both gaps become a `needs` note, which post()
+    // carries alongside the lines: the figure lands, AND it is still listed
+    // as something to fix. That keeps the intent of the note that used to sit
+    // here — "add one to the chart rather than letting it fall into Other" —
+    // without letting the money vanish to enforce it. Her instruction
+    // overrides that note; it did not say whose call it was.
     expense: (tx) => {
-        const account = C.accountForCategory(tx.category);
+        const amount = r2(num(tx.amount));
+        const needs = [];
+
+        // 6900 Other expenses, not a refusal. Still flagged, so the category
+        // can be added and the entry reclassified later.
+        let account = C.accountForCategory(tx.category);
         if (!account) {
-            return { problem: `no account for the category "${tx.category || '(blank)'}" — `
-                + 'add one to the chart rather than letting it fall into Other' };
+            account = '6900';
+            needs.push(`category "${tx.category || '(blank)'}" is not in the chart — `
+                + 'recorded in 6900 Other expenses; add the category and it will move');
         }
-        const bank = bankAccount(tx);
-        if (!bank) return { problem: `cannot tell which bank "${tx.bank || ''}" is` };
-        return { debits: [[account, r2(num(tx.amount))]], credits: [[bank, r2(num(tx.amount))]] };
+
+        // The credit side. An unknown source is NOT a reason to lose the
+        // expense: it goes to 2090 Unallocated payments, which is a real
+        // liability saying "this left, we do not yet know from where".
+        let bank = bankAccount(tx);
+        if (!bank) {
+            bank = '2090';
+            needs.push(`no bank or drawer identified for "${tx.mode || tx.bank || 'this payment'}" — `
+                + 'recorded against 2090 Unallocated payments; say which account it came '
+                + 'from and it will clear');
+        }
+
+        return { debits: [[account, amount]], credits: [[bank, amount]], needs };
     },
 
     // ── A BANK CHARGE ────────────────────────────────────────────────────
@@ -297,8 +337,13 @@ function mirrorFor(tx, bankCode) {
 // Never throws. Returns { lines, problems } — a transaction that cannot be
 // posted contributes a problem and NO lines, because half a transaction in
 // the journal breaks the trial balance for the whole year.
+// `needs` vs `problems`, and the difference is the whole point of the
+// 2026-10-26 change: a PROBLEM did not post and is missing from the figures;
+// a NEED posted and the figure is right, but something about it is still
+// unanswered. Collapsing the two would either lose the expense again or tell
+// her the books are clean when a credit is parked in 2090.
 function post(kind, tx = {}) {
-    const out = { kind, lines: [], problems: [] };
+    const out = { kind, lines: [], problems: [], needs: [] };
     const t = (tx && typeof tx === 'object') ? tx : {};
     const rule = RULES[String(kind || '')];
     if (!rule) {
@@ -317,6 +362,9 @@ function post(kind, tx = {}) {
 
     const built = rule(t);
     if (built.problem) { out.problems.push(`${kind}: ${built.problem}`); return out; }
+    // Carried only when the lines below actually post — a need on an entry
+    // that then fails to balance would be a note about nothing.
+    const pendingNeeds = (built.needs || []).map((n) => `${kind}: ${n}`);
 
     let debits = built.debits.filter(([, a]) => Math.abs(a) >= CENT);
     let credits = built.credits.filter(([, a]) => Math.abs(a) >= CENT);
@@ -392,6 +440,10 @@ function post(kind, tx = {}) {
         if (!C.get(l.account)) out.problems.push(`${kind}: account ${l.account} is not in the chart`);
     }
     if (out.problems.length) out.lines = [];
+    // Attached last and ONLY if lines survived. A need describes something
+    // unanswered about an entry that posted; if the entry did not post it is
+    // a problem, and saying both would double-count it on the page.
+    if (out.lines.length) out.needs.push(...pendingNeeds);
     return out;
 }
 
@@ -402,11 +454,13 @@ function post(kind, tx = {}) {
 function journal(entries = []) {
     const lines = [];
     const problems = [];
+    const needs = [];
     let interCompany = 0;
     for (const e of (Array.isArray(entries) ? entries : [])) {
         const r = post(e && e.kind, e);
         lines.push(...r.lines);
         problems.push(...r.problems);
+        needs.push(...(r.needs || []));
         if (r.interCompany) interCompany += 1;
     }
     const debit = r2(lines.reduce((s, l) => s + l.debit, 0));
@@ -427,12 +481,20 @@ function journal(entries = []) {
     }));
 
     return {
-        lines, problems, interCompany,
+        lines, problems, needs, interCompany,
         debit, credit,
         balanced: Math.abs(debit - credit) < CENT,
         entities,
         everyEntityBalanced: entities.every((e) => e.balanced),
+        // `complete` stays about PROBLEMS only. A need posted its figure, so
+        // the statements are complete in the sense this flag has always
+        // meant: nothing is missing from them. Folding needs in here would
+        // have made every yard expense paid by Zelle read as an incomplete
+        // journal, which is the opposite of what she asked for.
         complete: problems.length === 0,
+        // Separate, and worth surfacing on the page: these posted but are
+        // waiting on an answer. 2090 not trending to zero is the symptom.
+        settled: problems.length === 0 && needs.length === 0,
     };
 }
 

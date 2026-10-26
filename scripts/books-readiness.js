@@ -89,6 +89,42 @@ const up = (v) => String(v == null ? '' : v).trim().toUpperCase();
         if (cats.length) console.log(`           categories to add: ${cats.join(', ')}`);
     }
 
+    // ── POSTED, BUT STILL WAITING ON AN ANSWER (2026-10-26) ──────────────
+    // These used to be in the block above, as refusals. Since Apsara's
+    // "Even if they didnt provide the accoubt .it doest matter.it should be
+    // recorded", an expense with an unknown category or no identified bank
+    // POSTS — into 6900 Other expenses or against 2090 Unallocated payments
+    // — and says so here instead of vanishing from the figures.
+    //
+    // Reported SEPARATELY and after, because the difference matters to what
+    // she does next: a problem means a figure is missing and the statement is
+    // wrong; a need means the figure is there and sitting in the wrong drawer.
+    // Only the first stops a return being filed.
+    if ((built.needs || []).length) {
+        console.log(`\nPOSTED BUT NOT SETTLED — ${built.needs.length}`);
+        console.log('    These ARE in the figures above. They are waiting on an answer,');
+        console.log('    not missing.');
+        const kinds = new Map();
+        for (const n of built.needs) {
+            const key = /is not in the chart/.test(n) ? 'an expense category the chart does not have'
+                : /no bank or drawer identified/.test(n) ? 'a payment whose source was not named'
+                : n.slice(0, 60);
+            kinds.set(key, (kinds.get(key) || 0) + 1);
+        }
+        for (const [k, n] of [...kinds].sort((a, b) => b[1] - a[1])) {
+            console.log(`    ${String(n).padStart(5)}  ${k}`);
+        }
+        const cats = [...new Set(built.needs
+            .filter((n) => /is not in the chart/.test(n))
+            .map((n) => (/"([^"]*)"/.exec(n) || [])[1]))].filter(Boolean);
+        if (cats.length) console.log(`           categories to add: ${cats.join(', ')}`);
+        const modes = [...new Set(built.needs
+            .filter((n) => /no bank or drawer identified/.test(n))
+            .map((n) => (/for "([^"]*)"/.exec(n) || [])[1]))].filter(Boolean);
+        if (modes.length) console.log(`           payment sources to name: ${modes.join(', ')}`);
+        console.log('    Until these clear, 2090 Unallocated payments will not be zero.');
+    }
+
     // ── REVENUE WITH NO COST, AND COST WITH NO REVENUE ───────────────────
     // Read straight off her own stores rather than off the journal, because
     // a container whose sale posted and whose bill did not would otherwise

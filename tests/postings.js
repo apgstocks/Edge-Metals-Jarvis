@@ -202,17 +202,52 @@ const cr = (lines, account) => sum(on(lines, account), 'credit');
 {
     section('E — a guess here lands on a tax return');
 
+    // ── REVERSED 2026-10-26, ON HER INSTRUCTION ─────────────────────────
+    // These four assertions used to require the opposite: an expense with an
+    // unknown category or an unrecognised bank was REFUSED, posting nothing.
+    // That was a considered decision — the rule carried "add one to the chart
+    // rather than letting it fall into Other" — and it is why they are
+    // rewritten here rather than deleted.
+    //
+    // What it cost: bankAccount() resolves only cash, Chase and BofA, and her
+    // expense picker offers Zelle and Wire. So every Zelle-paid yard expense
+    // was dropped, and Edge Yard's P&L read "Running costs $0.00" while the
+    // Expenses tab was full of them. Apsara, seeing that: "expense shpuld be
+    // accounted as well", then "Even if they didnt provide the accoubt .it
+    // doest matter.it should be recorded".
+    //
+    // The trade-off is real and is now the other way round: a figure can land
+    // in 6900 or 2090 that belongs somewhere better. The protection is that
+    // it is never SILENT — every such entry carries a `need`.
     const unknownCat = P.post('expense', { entity: 'edge-trading', amount: 100, category: 'Diesel', bank: 'Chase' });
-    ck('an unknown category is refused, not swept into Other',
-       unknownCat.lines.length === 0, JSON.stringify(unknownCat));
-    ck('  and says to add an account instead',
-       /add one to the chart/.test(unknownCat.problems[0]), unknownCat.problems[0]);
+    ck('an unknown category is RECORDED, not refused',
+       unknownCat.lines.length === 2, JSON.stringify(unknownCat));
+    ck('  in 6900 Other expenses', dr(unknownCat.lines, '6900') === 100, JSON.stringify(unknownCat.lines));
+    ck('  against the bank it really came from', cr(unknownCat.lines, '1020') === 100, JSON.stringify(unknownCat.lines));
+    ck('  with no problem raised, because nothing is missing from the figures',
+       unknownCat.problems.length === 0, JSON.stringify(unknownCat.problems));
+    ck('  but a need that names the category and says it will move',
+       unknownCat.needs.length === 1 && /Diesel/.test(unknownCat.needs[0])
+       && /6900/.test(unknownCat.needs[0]), JSON.stringify(unknownCat.needs));
 
     const known = P.post('expense', { entity: 'edge-trading', amount: 100, category: 'Fuel', bank: 'Chase' });
     ck('a known category posts to its own account', dr(known.lines, '6100') === 100, JSON.stringify(known.lines));
+    ck('  and raises no need at all', known.needs.length === 0, JSON.stringify(known.needs));
+
+    // THE ONE THAT WAS COSTING HER MONEY ON THE PAGE.
+    const zelle = P.post('expense', { entity: 'edge-trading', amount: 100, category: 'Fuel', mode: 'Zelle' });
+    ck('a ZELLE-paid expense reaches the P&L — it used to vanish',
+       dr(zelle.lines, '6100') === 100, JSON.stringify(zelle));
+    ck('  credited to 2090 Unallocated payments, not invented into a bank',
+       cr(zelle.lines, '2090') === 100, JSON.stringify(zelle.lines));
+    ck('  and says how to clear it', /2090|which account it came from/.test(zelle.needs.join(' ')),
+       JSON.stringify(zelle.needs));
 
     const unknownBank = P.post('expense', { entity: 'edge-trading', amount: 100, category: 'Fuel', bank: 'Wells Fargo' });
-    ck('an unrecognised bank is refused', unknownBank.lines.length === 0, JSON.stringify(unknownBank));
+    ck('an unrecognised bank is RECORDED against 2090, not refused',
+       cr(unknownBank.lines, '2090') === 100, JSON.stringify(unknownBank));
+    ck('  and the expense still hits the right account',
+       dr(unknownBank.lines, '6100') === 100, JSON.stringify(unknownBank.lines));
 
     ck('cash goes to petty cash, not a bank',
        P.bankAccount({ mode: 'Cash' }) === '1050', String(P.bankAccount({ mode: 'Cash' })));
@@ -276,15 +311,37 @@ const cr = (lines, account) => sum(on(lines, account), 'credit');
        j.everyEntityBalanced === true, JSON.stringify(j.entities));
     ck('  with nothing unposted', j.complete === true, JSON.stringify(j.problems));
 
-    // complete must mean something.
+    // complete must mean something. The row used to be an expense with an
+    // unknown category; since 2026-10-26 that POSTS, so it no longer proves
+    // anything about `complete`. A kind with no rule is unpostable by
+    // construction and cannot quietly start working.
     const withBad = P.journal([
         { kind: 'metals-sale', entity: 'edge-metals', amount: 100 },
-        { kind: 'expense', entity: 'edge-trading', amount: 50, category: 'Diesel', bank: 'Chase' },
+        { kind: 'not-a-real-kind', entity: 'edge-trading', amount: 50 },
     ]);
     ck('one unpostable row makes the journal incomplete',
        withBad.complete === false && withBad.problems.length === 1, JSON.stringify(withBad.problems));
     ck('  but the rows that DID post are still there and still balance',
        withBad.lines.length === 2 && withBad.balanced === true, JSON.stringify(withBad.lines));
+
+    // ── complete vs settled ─────────────────────────────────────────────
+    // The distinction the 2026-10-26 change turns on: an expense that posted
+    // into 6900/2090 leaves the statements COMPLETE — no figure is missing —
+    // but not SETTLED, because something about it is still unanswered.
+    // Folding the two together would either lose the expense again or claim
+    // the books are clean while a credit sits in Unallocated payments.
+    const withNeed = P.journal([
+        { kind: 'metals-sale', entity: 'edge-metals', amount: 100 },
+        { kind: 'expense', entity: 'edge-trading', amount: 50, category: 'Diesel', mode: 'Zelle' },
+    ]);
+    ck('an expense that needed a guess still posts, so the journal is COMPLETE',
+       withNeed.complete === true && withNeed.lines.length === 4, JSON.stringify(withNeed.problems));
+    ck('  and it balances', withNeed.balanced === true, `${withNeed.debit} vs ${withNeed.credit}`);
+    ck('  but it is NOT settled', withNeed.settled === false, JSON.stringify(withNeed.needs));
+    ck('  and the needs say why, in two separate notes',
+       withNeed.needs.length === 2, JSON.stringify(withNeed.needs));
+    ck('a journal with nothing outstanding IS settled',
+       P.journal([{ kind: 'metals-sale', entity: 'edge-metals', amount: 100 }]).settled === true);
 
     // Empty and rubbish must not throw — this runs over a year of rows.
     let threw = null;
