@@ -23,10 +23,35 @@ const W = (f, v) => fs.writeFileSync(path.join(tmp, f), JSON.stringify(v, null, 
 // Deliberately small and deliberately DISTINCTIVE: every figure below is one
 // that could not arrive by accident, so a section that shows up carrying the
 // right number is carrying it from here.
+// ── DATED IN DAYS AGO, NOT IN SEPTEMBER (2026-10-24) ─────────────────────
+// These were '2026-09-20' and '2026-09-21'. helpers/yardBrief.js's `recent`
+// list — the only place an individual expense's DESCRIPTION appears — is
+// filtered to `>= daysAgo(30)`. So the fixture aged out of the window on
+// about 21 October and "an individual expense is readable" has been red ever
+// since, for a reason with nothing to do with Scout's access to yard data.
+// The aggregates kept passing, which is why it looked like a scoping bug.
+//
+// FOURTH TIME this exact bomb has gone off in this suite:
+// tests/load-deck-grouping.js twice, tests/load-card-actions.js earlier
+// today, now here. load-deck-grouping wrote down the conclusion and the
+// cure — "a test that passes on most days and fails on a few is worse than
+// one that always fails, because it gets re-run, shrugged at, and eventually
+// deleted" — and expressed its fixture in days ago. This is the next copy
+// that never got the same treatment.
+//
+// Two distinct days, both well inside the window, so byDay still has two
+// entries and nothing here depends on today's date.
+const daysAgo = (n) => new Date(Date.now() - n * 86400000).toISOString().slice(0, 10);
 W('expenses.json', [
-    { id: 'E1', date: '2026-09-20', category: 'Fuel', description: 'Diesel for the loader', amount: 411.25, method: 'Cash' },
-    { id: 'E2', date: '2026-09-21', category: 'Repairs', description: 'Baler belt', amount: 1288.00, method: 'Cash' },
+    { id: 'E1', date: daysAgo(4), category: 'Fuel', description: 'Diesel for the loader', amount: 411.25, method: 'Cash' },
+    { id: 'E2', date: daysAgo(3), category: 'Repairs', description: 'Baler belt', amount: 1288.00, method: 'Cash' },
 ]);
+// NOT converted, because they are not date-filtered today and converting them
+// would be a change nobody asked for: the scale ticket, BOL and petty cash
+// fixtures below still carry literal September dates. yardBrief takes those
+// by slice(0, 25) / slice(0, 30) rather than by date, so they are latent
+// rather than broken. If a date window is ever added to any of those
+// sections, they are the next three to go off.
 W('scale_tickets.json', [
     { id: 'ST-1', received_at: '2026-09-21T10:00:00Z', seller: 'Mazariegos', load_id: 'L9', gross: 78340, tare: 26060, net: 52280 },
 ]);
