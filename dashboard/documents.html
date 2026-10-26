@@ -8476,23 +8476,100 @@ function poClear() {
   poRefresh();
 }
 
-function poRenderSupplierList(matches) {
+// ── Supplier matching, as she types ───────────────────────────────────────
+// Apsara, 2026-10-26: "supplier should fetch from my address book as i type,
+// try to matching". The page's shared searchAddressBook() is a plain substring
+// test on the aliases and the raw address; it is left exactly as it is (the
+// other tabs use it). This one is for the PO tab only and is more forgiving:
+// spacing and punctuation are ignored ("mkmetal" finds "MK Metal Trading"),
+// word order does not matter ("metal mk"), each typed word may be the start of
+// a word in the name, and one slip is tolerated ("sunrize"). Names rank above
+// addresses, and a name that STARTS with what she typed ranks first.
+function poCompact(s) { return String(s || '').toLowerCase().replace(/[^a-z0-9]/g, ''); }
+function poWords(s) { return String(s || '').toLowerCase().split(/[^a-z0-9]+/).filter(Boolean); }
+function poEdit(a, b) {
+  const m = a.length, n = b.length;
+  let prev = Array.from({ length: n + 1 }, (_, j) => j);
+  for (let i = 1; i <= m; i += 1) {
+    const cur = [i];
+    for (let j = 1; j <= n; j += 1) cur[j] = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+    prev = cur;
+  }
+  return prev[n];
+}
+// Every name an entry goes by: each alias, each half of "Contact/Company",
+// and the first line of the raw address (usually the company).
+function poEntryNames(e) {
+  const names = [];
+  (e.aliases || []).forEach((a) => { names.push(a); String(a).split('/').forEach((x) => names.push(x)); });
+  const first = String(e.raw || '').split('\n')[0].trim();
+  if (first) names.push(first);
+  return names.map((n) => String(n).trim()).filter(Boolean);
+}
+function poScoreEntry(e, q) {
+  const qc = poCompact(q), qw = poWords(q);
+  if (!qc) return 0;
+  const names = poEntryNames(e);
+  const nameCompacts = names.map(poCompact);
+  const nameWords = [].concat(...names.map(poWords));
+  const rawWords = poWords(e.raw);
+  const prefixOf = (w, pool) => pool.some((x) => x.startsWith(w));
+  if (nameCompacts.some((n) => n === qc)) return 120;
+  if (nameCompacts.some((n) => n.startsWith(qc))) return 100;
+  if (nameCompacts.some((n) => n.includes(qc))) return 85;
+  if (qw.length > 1 && qw.every((w) => prefixOf(w, nameWords))) return 75;
+  if (poCompact(e.raw).includes(qc)) return 55;
+  if (qw.every((w) => prefixOf(w, nameWords.concat(rawWords)))) return 45;
+  // One slip: a typed word of 4+ letters within 1 edit (2 from 8 letters) of
+  // the start of a name word.
+  const near = (w) => w.length >= 4 && nameWords.some((x) => {
+    const allow = w.length >= 8 ? 2 : 1;
+    return Math.abs(x.length - w.length) <= allow + 3 && poEdit(w, x.slice(0, w.length)) <= allow;
+  });
+  if (qw.length && qw.every((w) => prefixOf(w, nameWords) || near(w))) return 30;
+  return 0;
+}
+function poSearchSuppliers(q) {
+  const book = typeof addressBook !== 'undefined' && Array.isArray(addressBook) ? addressBook : [];
+  return book.map((e) => ({ e, s: poScoreEntry(e, q) })).filter((x) => x.s > 0)
+    .sort((a, b) => (b.s - a.s) || (poCompact(consigneeNameForEntry(a.e)).length - poCompact(consigneeNameForEntry(b.e)).length))
+    .map((x) => x.e);
+}
+
+let poListShown = [];
+let poListActive = -1;
+function poPickSupplier(entry) {
+  if (!entry) return;
+  $('po_supplier').value = consigneeNameForEntry(entry);
+  $('po_supplier_address').value = entry.raw || '';
+  $('poSupplierList').classList.add('hidden');
+  poListShown = []; poListActive = -1;
+  poRefresh();
+}
+function poMarkActive() {
+  $('poSupplierList').querySelectorAll('.autocomplete-item').forEach((el, i) => {
+    el.style.background = i === poListActive ? 'var(--surface-hover)' : '';
+  });
+}
+function poRenderSupplierList(matches, q) {
   const box = $('poSupplierList');
-  if (!matches.length) { box.classList.add('hidden'); box.innerHTML = ''; return; }
-  const shown = matches.slice(0, 8);
-  box.innerHTML = shown.map((m, i) => '<div class="autocomplete-item" data-idx="' + i + '">' + esc(addressBookEntryLabel(m)) + '</div>').join('');
+  poListShown = matches.slice(0, 8);
+  poListActive = poListShown.length ? 0 : -1;
+  if (!poListShown.length) {
+    // Said out loud, so a silent empty list is never mistaken for a broken one.
+    box.innerHTML = '<div class="autocomplete-item" style="cursor:default; color:var(--text-faint);">Not in your address book — type the name and address yourself</div>';
+    box.classList.remove('hidden');
+    return;
+  }
+  box.innerHTML = poListShown.map((m, i) => '<div class="autocomplete-item" data-idx="' + i + '">' + esc(addressBookEntryLabel(m)) + '</div>').join('');
   box.classList.remove('hidden');
+  poMarkActive();
   // mousedown + preventDefault and index-not-id, for the same two reasons
   // given at renderConsigneeList: the input must not blur first, and many
   // address-book entries have no id.
   box.querySelectorAll('.autocomplete-item').forEach((el) => el.addEventListener('mousedown', (e) => {
     e.preventDefault();
-    const entry = shown[Number(el.dataset.idx)];
-    if (!entry) return;
-    $('po_supplier').value = consigneeNameForEntry(entry);
-    $('po_supplier_address').value = entry.raw || '';
-    box.classList.add('hidden');
-    poRefresh();
+    poPickSupplier(poListShown[Number(el.dataset.idx)]);
   }));
 }
 
@@ -8551,11 +8628,26 @@ function poInit() {
       poRefresh();
     });
     $('po_supplier').addEventListener('input', () => {
-      const q = $('po_supplier').value.trim().toLowerCase();
-      if (!q) { $('poSupplierList').classList.add('hidden'); return; }
-      poRenderSupplierList(searchAddressBook(q));
+      const q = $('po_supplier').value.trim();
+      if (!q) { $('poSupplierList').classList.add('hidden'); poListShown = []; return; }
+      poRenderSupplierList(poSearchSuppliers(q), q);
     });
-    $('po_supplier').addEventListener('blur', () => setTimeout(() => $('poSupplierList').classList.add('hidden'), 150));
+    $('po_supplier').addEventListener('keydown', (e) => {
+      if ($('poSupplierList').classList.contains('hidden') || !poListShown.length) return;
+      if (e.key === 'ArrowDown') { e.preventDefault(); poListActive = (poListActive + 1) % poListShown.length; poMarkActive(); }
+      else if (e.key === 'ArrowUp') { e.preventDefault(); poListActive = (poListActive - 1 + poListShown.length) % poListShown.length; poMarkActive(); }
+      else if (e.key === 'Enter') { e.preventDefault(); poPickSupplier(poListShown[poListActive]); }
+      else if (e.key === 'Escape') { $('poSupplierList').classList.add('hidden'); }
+    });
+    $('po_supplier').addEventListener('blur', () => {
+      setTimeout(() => $('poSupplierList').classList.add('hidden'), 150);
+      // Typed a whole name that is in the book and left the address empty:
+      // fill it in, only when exactly one entry matches the name outright.
+      const q = $('po_supplier').value.trim();
+      if (!q || $('po_supplier_address').value.trim()) return;
+      const exact = (Array.isArray(addressBook) ? addressBook : []).filter((e) => poScoreEntry(e, q) === 120);
+      if (exact.length === 1) { $('po_supplier_address').value = exact[0].raw || ''; poRefresh(); }
+    });
     $('po_deliver').addEventListener('change', () => {
       const v = $('po_deliver').value;
       const a = (Array.isArray(bankAccounts) ? bankAccounts : []).find((x) => x.id === v);

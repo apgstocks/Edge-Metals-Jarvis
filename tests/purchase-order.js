@@ -29,6 +29,13 @@ const SIG = require('../helpers/signature').signatureDataUrl();
 const BOOK = [
     { id: 's1', aliases: ['Ray'], raw: 'Ray Scrap Co\n12 Yard Rd\nBrea CA 92821' },
     { id: null, aliases: ['Marta/Sunrise Recycling'], raw: 'Sunrise Recycling\n9 Harbour St' },
+    { id: 'm1', aliases: ['MK Metal Trading'], raw: 'MK Metal Trading\n5 Foundry Ave\nCarson CA 90745' },
+    { id: 'd1', aliases: ['Daekwang'], raw: 'Daekwang Metals\n77 Pier Rd' },
+    { id: 'r2', aliases: ['Rays Recycling'], raw: 'Rays Recycling\n3 Oak St' },
+    { id: 't1', aliases: ['Tom'], raw: 'Tom Haulage\n8 Quay Rd\nSan Pedro CA' },
+    { id: 'z1', aliases: ['Zed'], raw: 'Zed Co\n1 Metaltrader Way' },
+    { id: 'w1', aliases: ['Twin Metals'], raw: 'Twin Metals\n1 North St' },
+    { id: 'w2', aliases: ['Twin Metals'], raw: 'Twin Metals\n2 South St' },
 ];
 
 (async () => {
@@ -257,6 +264,50 @@ const BOOK = [
             // and the page reads exactly that shape
             ck('the page accepts that response', w.eval('poSignatureUrl') === SIG);
         } finally { server.close(); }
+    }
+
+    section('L — supplier matching as she types');
+    {
+        const labels = () => [...$('poSupplierList').querySelectorAll('.autocomplete-item')].map((e) => e.textContent);
+        const q = (s) => { type('po_supplier', s); return labels(); };
+        const has = (arr, s) => arr.some((x) => x.includes(s));
+        ck('spacing is ignored: "mkmetal" finds MK Metal Trading', has(q('mkmetal'), 'MK Metal Trading'));
+        ck('so is punctuation: "m.k. metal"', has(q('m.k. metal'), 'MK Metal Trading'));
+        ck('word order does not matter: "metal mk"', has(q('metal mk'), 'MK Metal Trading'));
+        ck('a partial word works: "daek"', has(q('daek'), 'Daekwang'));
+        ck('one slip is forgiven: "sunrize"', has(q('sunrize'), 'Sunrise'));
+        ck('but nonsense does not match everything: "zzzq"', q('zzzq').every((x) => /Not in your address book/.test(x)));
+        ck('and says so out loud when nothing matches', /Not in your address book/.test(q('zzzq')[0] || ''));
+        ck('an address-only hit still finds it: "quay"', has(q('quay'), 'Tom'));
+        const ray = q('ray');
+        ck('a name that STARTS with the text outranks one found in an address', /^Ray\b/.test(ray[0]) , ray.join(' | '));
+        ck('the empty-result row is not clickable into the form', (() => { q('zzzq'); const before = $('po_supplier').value;
+            $('poSupplierList').querySelector('.autocomplete-item').dispatchEvent(new w.MouseEvent('mousedown', { bubbles: true, cancelable: true }));
+            return $('po_supplier').value === before; })());
+        // keyboard
+        q('ray');
+        const key = (k) => $('po_supplier').dispatchEvent(new w.KeyboardEvent('keydown', { key: k, bubbles: true, cancelable: true }));
+        key('ArrowDown'); key('Enter');
+        ck('arrow-down then Enter picks the second match', /Rays Recycling/.test($('po_supplier').value), $('po_supplier').value);
+        ck('and fills its address', /3 Oak St/.test($('po_supplier_address').value));
+        q('ray'); key('Enter');
+        ck('Enter alone takes the best match', $('po_supplier').value === 'Ray' && /12 Yard Rd/.test($('po_supplier_address').value), $('po_supplier').value);
+        q('ray'); key('Escape');
+        ck('Escape closes the list', $('poSupplierList').classList.contains('hidden'));
+        // blur auto-fill
+        $('po_supplier_address').value = ''; type('po_supplier', 'Daekwang'); $('po_supplier').dispatchEvent(new w.Event('blur'));
+        ck('typing a full name and leaving fills the address when it is empty', /77 Pier Rd/.test($('po_supplier_address').value), $('po_supplier_address').value);
+        $('po_supplier_address').value = 'my own address'; type('po_supplier', 'Daekwang'); $('po_supplier').dispatchEvent(new w.Event('blur'));
+        ck('but never overwrites an address she already typed', $('po_supplier_address').value === 'my own address');
+        $('po_supplier_address').value = ''; type('po_supplier', 'Ra'); $('po_supplier').dispatchEvent(new w.Event('blur'));
+        ck('and never guesses from a partial name', $('po_supplier_address').value === '');
+        $('po_supplier_address').value = ''; type('po_supplier', 'Twin Metals'); $('po_supplier').dispatchEvent(new w.Event('blur'));
+        ck('two entries with the same name: nothing is guessed', $('po_supplier_address').value === '', $('po_supplier_address').value);
+        const mt = q('metaltr');
+        ck('a name containing the text outranks an address that does', mt.length >= 2 && /MK Metal Trading/.test(mt[0]), mt.join(' | '));
+        // does not touch the shared matcher the other tabs use
+        ck('the shared address-book search is unchanged (substring only)', w.eval("searchAddressBook('mkmetal').length") === 0);
+        type('po_supplier', ''); $('po_supplier_address').value = '';
     }
 
     section('K — Deliver to: Edge Yard or Edge Metals, each at its own address');
