@@ -2163,6 +2163,36 @@ const MUTATIONS = [
       find: '            return { rate: p, rate_unit: u, rate_from: \'\' };',
       to:   '            return { rate: Math.round(p * (claimPrice.toUnit(1, \'MT\', u) || 1) * 100) / 100, rate_unit: \'MT\', rate_from: `${money(p)}/${u}` };' },
 
+    // ── LEARNING FROM HER HISTORY, 2026-10-26 ────────────────────────────
+    // The guard that matters: Fede is "Other" three times out of three, and
+    // acting on that would make a $99,243 mis-categorisation permanent.
+    { name: 'learning: a catch-all category becomes confident again',
+      file: 'helpers/expenseLearning.js', suites: ['expense-learning'],
+      find: "    const confident = !isCatchAll && h.seen >= MIN_SEEN && share >= CONFIDENT_AT;",
+      to:   "    const confident = h.seen >= MIN_SEEN && share >= CONFIDENT_AT;" },
+
+    { name: 'learning: one row is enough to be a pattern',
+      file: 'helpers/expenseLearning.js', suites: ['expense-learning'],
+      find: "const MIN_SEEN = 3;",
+      to:   "const MIN_SEEN = 1;" },
+
+    // Her yard has a Rigo AND a Rego. Fuzzy here files money on the wrong man.
+    { name: 'learning: vendor matching goes fuzzy, merging Rigo and Rego',
+      file: 'helpers/expenseLearning.js', suites: ['expense-learning'],
+      find: "        return nameMatch.normalizeName(v) === nameMatch.normalizeName(want);",
+      to:   "        return nameMatch.normalizeName(v).replace(/[aeiou]/g, '') === nameMatch.normalizeName(want).replace(/[aeiou]/g, '');" },
+
+    { name: 'learning: an inconsistent vendor is treated as consistent',
+      file: 'helpers/expenseLearning.js', suites: ['expense-learning'],
+      find: "const CONFIDENT_AT = 0.8;",
+      to:   "const CONFIDENT_AT = 0.1;" },
+
+    // Value is what makes it a job worth doing rather than tidying.
+    { name: 'learning: catch-all vendors stop being ranked by money',
+      file: 'helpers/expenseLearning.js', suites: ['expense-learning'],
+      find: "        cur.amount = Math.round((cur.amount + (Number(e.amount) || 0)) * 100) / 100;",
+      to:   "        cur.amount = 0;" },
+
     // ── THE SWEEP CARRIES THE NEW CHECKS, 2026-10-26 ─────────────────────
     // Apsara: make it need "very less human intervention". These checks only
     // reduce intervention if they actually fire; a check that silently stops
