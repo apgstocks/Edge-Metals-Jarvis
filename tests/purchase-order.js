@@ -413,12 +413,13 @@ const BOOK = [
         const css = w.eval('poSheetCss()');
         const printCss = css.slice(css.indexOf('@media print'));
         ck('printed, the header band and stripe run edge to edge, left to right', /\.bar\{margin:0;/.test(printCss) && /\.head\{margin:0 0 26px; padding:24px 14mm/.test(printCss), printCss);
-        ck('and the content below keeps the 14mm side space itself', /\.pad\{padding:0 14mm 0/.test(printCss), printCss);
+        ck('and the content below keeps the 14mm side space itself', /\.pad\{padding:0 14mm /.test(printCss), printCss);
         const pp = w.eval('poPrint.toString()');
         ck('the print window has no side page margin, so the header reaches both edges', /@page\{margin:14mm 0;\}/.test(pp) && /body\{margin:0;/.test(pp));
         ck('and its FIRST page has no top margin, so the header sits at the top; later pages keep theirs', /@page :first\{margin:0 0 14mm;\}/.test(pp));
         ck('and on screen the inset is still there (preview unchanged)', /\.pad\{padding:0 44px/.test(css.slice(0, css.indexOf('@media print'))));
-        ck('printed, the sheet is as tall as the page (A4 or Letter) with the signatures at the foot', /@media print\{[^}]*min-height:100vh/.test(css) && /\.sign\{margin-top:auto/.test(css), css.slice(-400));
+        ck('printed, the sheet is a fixed page-height in mm with the signatures pinned at its foot', /@media print\{[^}]*position:relative; min-height:262mm/.test(css) && /\.sign\{position:absolute; left:14mm; right:14mm; bottom:6mm/.test(css) && /\.pad\{padding:0 14mm 44mm/.test(css.slice(css.indexOf('@media print'))), css.slice(-500));
+        ck('and does NOT lean on 100vh or a flex column, which the browser measures differently when printing', !/100vh/.test(css) && !/@media print\{[^}]*flex-direction/.test(css), css.slice(-500));
         pick('po_deliver', '');
         ck('with no delivery chosen the card shows a dash, not a blank', cards()[1].querySelector('.nm') && /—/.test(cards()[1].textContent), cards()[1].innerHTML);
         pick('po_deliver', 'edge-metals-bofa');

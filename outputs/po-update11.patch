@@ -1,0 +1,58 @@
+From aaa4c5613c5c3c5257dc5e1663c446525809787b Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Mon, 26 Oct 2026 11:02:17 +0000
+Subject: [PATCH] Purchase order: print layout no longer depends on 100vh /
+ flex column
+
+Apsara's print preview showed the Vendor/Deliver-to card borders running down
+through the table and totals and the signatures jammed at the bottom edge. The
+page-tall rule (min-height:100vh on a flex column, which Chrome fragments and
+measures differently in the print preview than in a headless PDF) is replaced
+by a plain block sheet: min-height 262mm (fits A4 and Letter), signatures
+absolutely pinned to its foot, 44mm reserved so nothing can overlap them.
+Cause not reproduced in headless Chrome, so this removes the suspected
+constructs rather than proving the fault; to be confirmed in her print preview.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01DhsqdCWuGr4pw3nFPdWg6R
+---
+ dashboard/documents.html | 2 +-
+ tests/purchase-order.js  | 5 +++--
+ 2 files changed, 4 insertions(+), 3 deletions(-)
+
+diff --git a/dashboard/documents.html b/dashboard/documents.html
+index 61e57a8..1b5ca84 100644
+--- a/dashboard/documents.html
++++ b/dashboard/documents.html
+@@ -8417,7 +8417,7 @@ function poSheetCss() {
+     + '.po-sheet .ln{border-top:1px solid #14181B; padding-top:6px; font-size:11px; color:#57616A; line-height:18px;}'
+     + '.po-sheet .ln b{color:#0C0E10; font-size:11px;}'
+     + '.po-sheet .empty{color:#A7B0B7; font-style:italic; font-weight:400;}'
+-    + '@media print{.po-sheet{box-shadow:none; max-width:none; min-height:100vh; display:flex; flex-direction:column;} .po-sheet .pad{flex:1; display:flex; flex-direction:column;} .po-sheet .sign{margin-top:auto; padding-top:36px;} .po-sheet .bar{margin:0; border-radius:0;} .po-sheet .head{margin:0 0 26px; padding:24px 14mm; border:none; border-radius:0;} .po-sheet .pad{padding:0 14mm 0;} .po-sheet tr,.po-sheet .party{page-break-inside:avoid;} .po-sheet .sign,.po-sheet .tot,.po-sheet .notes{page-break-inside:avoid;}}';
++    + '@media print{.po-sheet{box-shadow:none; max-width:none; position:relative; min-height:262mm;} .po-sheet .sign{position:absolute; left:14mm; right:14mm; bottom:6mm; margin-top:0;} .po-sheet .bar{margin:0; border-radius:0;} .po-sheet .head{margin:0 0 26px; padding:24px 14mm; border:none; border-radius:0;} .po-sheet .pad{padding:0 14mm 44mm;} .po-sheet tr,.po-sheet .party{page-break-inside:avoid;} .po-sheet .sign,.po-sheet .tot,.po-sheet .notes{page-break-inside:avoid;}}';
+ }
+ 
+ // The Edge Metals mark, as on the proforma header. Printed only for Edge
+diff --git a/tests/purchase-order.js b/tests/purchase-order.js
+index b6af346..3656f68 100644
+--- a/tests/purchase-order.js
++++ b/tests/purchase-order.js
+@@ -413,12 +413,13 @@ const BOOK = [
+         const css = w.eval('poSheetCss()');
+         const printCss = css.slice(css.indexOf('@media print'));
+         ck('printed, the header band and stripe run edge to edge, left to right', /\.bar\{margin:0;/.test(printCss) && /\.head\{margin:0 0 26px; padding:24px 14mm/.test(printCss), printCss);
+-        ck('and the content below keeps the 14mm side space itself', /\.pad\{padding:0 14mm 0/.test(printCss), printCss);
++        ck('and the content below keeps the 14mm side space itself', /\.pad\{padding:0 14mm /.test(printCss), printCss);
+         const pp = w.eval('poPrint.toString()');
+         ck('the print window has no side page margin, so the header reaches both edges', /@page\{margin:14mm 0;\}/.test(pp) && /body\{margin:0;/.test(pp));
+         ck('and its FIRST page has no top margin, so the header sits at the top; later pages keep theirs', /@page :first\{margin:0 0 14mm;\}/.test(pp));
+         ck('and on screen the inset is still there (preview unchanged)', /\.pad\{padding:0 44px/.test(css.slice(0, css.indexOf('@media print'))));
+-        ck('printed, the sheet is as tall as the page (A4 or Letter) with the signatures at the foot', /@media print\{[^}]*min-height:100vh/.test(css) && /\.sign\{margin-top:auto/.test(css), css.slice(-400));
++        ck('printed, the sheet is a fixed page-height in mm with the signatures pinned at its foot', /@media print\{[^}]*position:relative; min-height:262mm/.test(css) && /\.sign\{position:absolute; left:14mm; right:14mm; bottom:6mm/.test(css) && /\.pad\{padding:0 14mm 44mm/.test(css.slice(css.indexOf('@media print'))), css.slice(-500));
++        ck('and does NOT lean on 100vh or a flex column, which the browser measures differently when printing', !/100vh/.test(css) && !/@media print\{[^}]*flex-direction/.test(css), css.slice(-500));
+         pick('po_deliver', '');
+         ck('with no delivery chosen the card shows a dash, not a blank', cards()[1].querySelector('.nm') && /—/.test(cards()[1].textContent), cards()[1].innerHTML);
+         pick('po_deliver', 'edge-metals-bofa');
+-- 
+2.43.0
+

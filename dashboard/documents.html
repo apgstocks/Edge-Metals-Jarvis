@@ -8417,7 +8417,7 @@ function poSheetCss() {
     + '.po-sheet .ln{border-top:1px solid #14181B; padding-top:6px; font-size:11px; color:#57616A; line-height:18px;}'
     + '.po-sheet .ln b{color:#0C0E10; font-size:11px;}'
     + '.po-sheet .empty{color:#A7B0B7; font-style:italic; font-weight:400;}'
-    + '@media print{.po-sheet{box-shadow:none; max-width:none; min-height:100vh; display:flex; flex-direction:column;} .po-sheet .pad{flex:1; display:flex; flex-direction:column;} .po-sheet .sign{margin-top:auto; padding-top:36px;} .po-sheet .bar{margin:0; border-radius:0;} .po-sheet .head{margin:0 0 26px; padding:24px 14mm; border:none; border-radius:0;} .po-sheet .pad{padding:0 14mm 0;} .po-sheet tr,.po-sheet .party{page-break-inside:avoid;} .po-sheet .sign,.po-sheet .tot,.po-sheet .notes{page-break-inside:avoid;}}';
+    + '@media print{.po-sheet{box-shadow:none; max-width:none; position:relative; min-height:262mm;} .po-sheet .sign{position:absolute; left:14mm; right:14mm; bottom:6mm; margin-top:0;} .po-sheet .bar{margin:0; border-radius:0;} .po-sheet .head{margin:0 0 26px; padding:24px 14mm; border:none; border-radius:0;} .po-sheet .pad{padding:0 14mm 44mm;} .po-sheet tr,.po-sheet .party{page-break-inside:avoid;} .po-sheet .sign,.po-sheet .tot,.po-sheet .notes{page-break-inside:avoid;}}';
 }
 
 // The Edge Metals mark, as on the proforma header. Printed only for Edge
