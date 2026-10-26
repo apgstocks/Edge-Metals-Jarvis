@@ -2163,6 +2163,43 @@ const MUTATIONS = [
       find: '            return { rate: p, rate_unit: u, rate_from: \'\' };',
       to:   '            return { rate: Math.round(p * (claimPrice.toUnit(1, \'MT\', u) || 1) * 100) / 100, rate_unit: \'MT\', rate_from: `${money(p)}/${u}` };' },
 
+    // ── THE SWEEP CARRIES THE NEW CHECKS, 2026-10-26 ─────────────────────
+    // Apsara: make it need "very less human intervention". These checks only
+    // reduce intervention if they actually fire; a check that silently stops
+    // noticing is worse than the script she was not running either.
+    { name: 'sweep: an unpriced outbound load stops being noticed',
+      file: 'helpers/integritySweep.js', suites: ['integrity-sweep'],
+      find: "                if (l.amount !== null && l.amount !== undefined && Math.abs(amt) >= 0.005) continue;",
+      to:   "                continue;" },
+
+    // The distinction that makes it actionable: weighed-but-unpriced is money
+    // missing from revenue; neither-weight-nor-price is probably a draft.
+    { name: 'sweep: a weighed unpriced load is called a draft like the rest',
+      file: 'helpers/integritySweep.js', suites: ['integrity-sweep'],
+      find: "                    detail: net > 0",
+      to:   "                    detail: false" },
+
+    { name: 'sweep: posted-but-not-settled stops reporting',
+      file: 'helpers/integritySweep.js', suites: ['integrity-sweep'],
+      find: "            for (const n of (built.needs || [])) {",
+      to:   "            for (const n of []) {" },
+
+    // Grouping is the difference between one job and a wall of forty lines.
+    { name: 'sweep: needs are listed row by row instead of grouped',
+      file: 'helpers/integritySweep.js', suites: ['integrity-sweep'],
+      find: "                const k = `${key}|${detail || ''}`;",
+      to:   "                const k = `${key}|${detail || ''}|${Math.random()}`;" },
+
+    // NOT MUTATED, deliberately: 'rows-on-no-company'. A mutation that stops
+    // it reporting SURVIVED, because I could not construct an unplaced row
+    // from the stores booksBuild reads — every yard store is mapped
+    // unconditionally in entities.STORE_LEDGER, bills and sales fall back to
+    // a company, and inter_company/bank_entries skip place() by design. The
+    // check is kept because booksBuild.unplaced is real and books-readiness
+    // reports it, but it is UNPROVEN, and a mutation nobody can kill is a
+    // green tick that means nothing (#204's whole subject). It needs a
+    // fixture built from a store that can genuinely fail to place.
+
     // ── AN EXPENSE IS ALWAYS RECORDED, 2026-10-26 ────────────────────────
     // Apsara: "expense shpuld be accounted as well", "Even if they didnt
     // provide the accoubt .it doest matter.it should be recorded". Each of

@@ -35,7 +35,29 @@ function safely(label, fn, notes) {
     try {
         const rows = fn();
         if (!Array.isArray(rows)) { notes.push(`${label}: not a list, skipped`); return []; }
-        return rows;
+        // ── A NULL IN ANY STORE USED TO TAKE THE WHOLE BUILD DOWN ────────
+        // Found 2026-10-26 while testing the sweep: one null in expenses.json
+        // threw `Cannot read properties of null (reading 'date')` at the
+        // `if (!inRange(x.date))` on every one of the twelve loops below, and
+        // the Books page died rather than reported.
+        //
+        // helpers/entities.of() already defends against exactly this, and its
+        // comment says why: "one null left in bills.json by any past write
+        // would have taken down an entire company's statement with a
+        // TypeError, and the statement is the thing she is trying to file a
+        // return from." That guard is real — it was just one layer too late,
+        // because every loop here reads `.date` BEFORE calling place().
+        //
+        // Filtered here rather than guarding twelve loops: one place to be
+        // right, and nothing silent about it — the count goes into `notes`,
+        // which the build already surfaces.
+        const clean = rows.filter((r) => r && typeof r === 'object' && !Array.isArray(r));
+        if (clean.length !== rows.length) {
+            notes.push(`${label}: ${rows.length - clean.length} row(s) are not rows `
+                + '(null, or not an object) and were skipped — something wrote a bad '
+                + 'entry to this store');
+        }
+        return clean;
     } catch (e) {
         notes.push(`${label}: could not be read — ${(e && e.message) || e}`);
         return [];

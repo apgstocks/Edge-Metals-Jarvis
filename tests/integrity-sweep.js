@@ -376,6 +376,83 @@ section('A LEAKED RECORD ID IS NOT A CONTAINER');
     try { fs2.rmSync(TMP2, { recursive: true, force: true }); } catch (e) {}
 }
 
+// ── THE THREE CHECKS ADDED 2026-10-26 ────────────────────────────────────
+// Apsara: make the product need "very less human intervention". Three
+// diagnostics written this week answered questions she should never have had
+// to ask, and none had been run, because running them was her job. They are
+// checks now, carried by the sweep that is already silent when clean.
+//
+// Each section asserts BOTH directions: it fires on the fault, and it stays
+// quiet without it. A check that always fires is noise she will learn to
+// ignore, which is the same outcome as not having it.
+{
+    const fs3 = require('fs'), os3 = require('os'), path3 = require('path');
+    const section3 = section;
+    section3('THE 2026-10-26 CHECKS — books that quietly left things out');
+
+    const T = fs3.mkdtempSync(path3.join(os3.tmpdir(), 'sweep-new-'));
+    const cfg3 = require(path3.join(__dirname, '..', 'config'));
+    const keep3 = { e: cfg3.EXPENSES_FILE, o: cfg3.OUTBOUND_LOADS_FILE };
+    const W3 = (f, v) => { fs3.writeFileSync(path3.join(T, f), JSON.stringify(v, null, 2)); return path3.join(T, f); };
+
+    const sweep3 = require(path3.join(__dirname, '..', 'helpers/integritySweep'));
+    const find = (res, id) => res.findings.find((f) => f.id === id);
+
+    // ── clean first, so "it fires" means something ──────────────────────
+    cfg3.EXPENSES_FILE = W3('expenses.json', [
+        { id: 'X1', date: '2026-09-20', amount: 300, category: 'Fuel', method: 'Cash' },
+    ]);
+    cfg3.OUTBOUND_LOADS_FILE = W3('outbound_loads.json', [
+        { id: 'OUT_90', date: '2026-09-10', buyer: 'Hynos', amount: 41000, items: [{ net_weight: 41000, amount: 41000 }] },
+    ]);
+    let res3 = sweep3.run({});
+    ck('a priced sale raises no unpriced finding', !find(res3, 'unpriced-outbound-loads'),
+       JSON.stringify(find(res3, 'unpriced-outbound-loads')));
+    ck('an expense Jarvis did not have to guess at raises nothing',
+       !find(res3, 'posted-but-not-settled'), JSON.stringify(find(res3, 'posted-but-not-settled')));
+
+    // ── now the faults, in HER shapes ───────────────────────────────────
+    // A sale weighed but never priced, and a draft with neither. The sweep
+    // must tell them apart: one is money missing from revenue, the other is
+    // probably nothing.
+    cfg3.OUTBOUND_LOADS_FILE = W3('outbound_loads.json', [
+        { id: 'OUT_91', date: '2026-09-10', buyer: 'Hynos', items: [{ net_weight: 41000 }] },
+        { id: 'OUT_92', date: '2026-09-11', buyer: 'Hynos', items: [], amount: null },
+    ]);
+    // EXP_06 is real: "Paid fede for copper advance 30k", no payment method.
+    cfg3.EXPENSES_FILE = W3('expenses.json', [
+        { id: 'EXP_06', date: '2026-09-02', amount: 35000, category: 'Other', description: 'copper advance' },
+    ]);
+    res3 = sweep3.run({});
+
+    const up = find(res3, 'unpriced-outbound-loads');
+    ck('an unpriced outbound load is reported', !!up && up.count === 2, JSON.stringify(up && up.count));
+    ck('  and a WEIGHED one says it is real money missing from revenue',
+       !!up && /41,000 lb weighed/.test(up.items.map((i) => i.detail).join(' ')),
+       JSON.stringify(up && up.items));
+    ck('  while one with neither weight nor price is called a probable draft',
+       !!up && /probably a draft/.test(up.items.map((i) => i.detail).join(' ')),
+       JSON.stringify(up && up.items));
+
+    const ns = find(res3, 'posted-but-not-settled');
+    ck('an entry Jarvis had to guess at is reported', !!ns && ns.count >= 1, JSON.stringify(ns && ns.count));
+    ck('  and it says the figure IS in the books, not missing from them',
+       !!ns && /ARE in the figures|Unallocated|Other expenses/i.test((ns.why || '') + JSON.stringify(ns.items)),
+       JSON.stringify(ns));
+
+    // Grouped, not one line per row — 40 rows with one cause is one job.
+    cfg3.EXPENSES_FILE = W3('expenses.json', Array.from({ length: 12 }, (_, i) => (
+        { id: `E${i}`, date: '2026-09-02', amount: 100, category: 'Other', description: 'x' })));
+    res3 = sweep3.run({});
+    const grouped = find(res3, 'posted-but-not-settled');
+    ck('twelve rows with the same cause are ONE line, not twelve',
+       !!grouped && grouped.items.length === 1 && /^12 × /.test(grouped.items[0].what),
+       JSON.stringify(grouped && grouped.items));
+
+    cfg3.EXPENSES_FILE = keep3.e; cfg3.OUTBOUND_LOADS_FILE = keep3.o;
+    try { fs3.rmSync(T, { recursive: true, force: true }); } catch (e) {}
+}
+
 console.log(`\n  ${pass} passed, ${fail} failed`);
 if (fail) { console.log('\n  FAILED:\n' + failures.map((f) => '    - ' + f).join('\n')); process.exit(1); }
 

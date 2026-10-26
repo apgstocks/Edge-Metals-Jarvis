@@ -81,6 +81,110 @@ const noRealContainer = (row) => {
 
 const CHECKS = [
 
+    // ── WHAT THE BOOKS SILENTLY LEFT OUT (2026-10-26) ─────────────────────
+    // Apsara, after four turns of "run this on the VM and paste the output":
+    // make the product need "very less human intervention". The three
+    // diagnostics written this week — scripts/entity-audit.js,
+    // scripts/books-readiness.js, scripts/yard-sales-trace.js — all answer
+    // questions she should never have had to ask, and none of them had run,
+    // because running them was her job.
+    //
+    // They are checks, not scripts. This sweep already goes out at 06:30 and
+    // is SILENT WHEN CLEAN, so adding them costs her nothing on a good day
+    // and tells her on a bad one. The scripts stay for when she wants the
+    // detail; this is the part that notices.
+    //
+    // READ ONLY, like every check here: booksBuild derives a journal and
+    // writes nothing.
+    {
+        id: 'rows-on-no-company',
+        title: 'Rows that belong to no company, so they are on no statement',
+        why: 'a row entities.js cannot place is missing from the P&L entirely, '
+           + 'and the total still balances without it',
+        run() {
+            const built = require('./booksBuild').build({});
+            const byStore = new Map();
+            for (const u of (built.unplaced || [])) {
+                const k = `${u.store}|${u.why || 'no reason given'}`;
+                byStore.set(k, (byStore.get(k) || 0) + 1);
+            }
+            // Grouped, not one line per row: 40 rows with the same cause is
+            // one job, and a wall of 40 is how a report stops being read.
+            return [...byStore.entries()].map(([k, n]) => {
+                const [store, why] = k.split('|');
+                return { what: `${n} row${n === 1 ? '' : 's'} in ${store}`, detail: why };
+            });
+        },
+    },
+
+    // ── A SALE THAT NEVER BECAME REVENUE ──────────────────────────────────
+    // Found 2026-10-26: Edge Yard showed $50,160 of sales against $1.25m of
+    // purchases. outboundLoads.sumItems() returns null for `amount` when no
+    // item on the row carries a price, postings refuses anything under a
+    // cent, and the sale leaves the books without a word. The money is on her
+    // Loads tab and absent from her P&L.
+    {
+        id: 'unpriced-outbound-loads',
+        title: 'Outbound loads with no price, so they are not in Yard sales',
+        why: 'the load is on the Loads tab but contributes nothing to revenue',
+        run() {
+            const rows = require('./outboundLoads').loadOutboundLoads() || [];
+            const out = [];
+            for (const l of rows) {
+                if (!l || !l.date) continue;
+                const amt = Number(l.amount);
+                if (l.amount !== null && l.amount !== undefined && Math.abs(amt) >= 0.005) continue;
+                const items = Array.isArray(l.items) ? l.items : [];
+                const net = items.reduce((t, it) => t + (Number(it && it.net_weight) || 0), 0);
+                // A row with WEIGHT but no price is a real sale missing a
+                // figure. One with neither is probably a draft, and saying so
+                // is the difference between a job and a distraction.
+                out.push({
+                    what: `${l.id || '(no id)'} ${l.date} ${l.buyer || '(no buyer)'}`,
+                    detail: net > 0
+                        ? `${net.toLocaleString()} lb weighed, no price — price it and it appears in revenue`
+                        : 'no weight and no price — probably a draft',
+                });
+            }
+            return out;
+        },
+    },
+
+    // ── POSTED, BUT JARVIS HAD TO GUESS ───────────────────────────────────
+    // The other half of the 2026-10-26 expense change. An expense with an
+    // unknown category or no named payment source now POSTS — into 6900 or
+    // against 2090 — instead of vanishing. That was her instruction, and the
+    // bargain was that it would never be silent. This is the half that keeps
+    // the bargain: 2090 not trending to zero means nobody is answering.
+    {
+        id: 'posted-but-not-settled',
+        title: 'Entries that posted but are waiting on an answer',
+        why: 'these ARE in the figures — they are in Other expenses or against '
+           + 'Unallocated payments until someone says where they belong',
+        run() {
+            const built = require('./booksBuild').build({});
+            const byKind = new Map();
+            for (const n of (built.needs || [])) {
+                const key = /is not in the chart/.test(n)
+                    ? 'an expense category the chart does not have'
+                    : /no bank or drawer identified/.test(n)
+                        ? 'a payment whose source was never named'
+                        : String(n).slice(0, 70);
+                const detail = (/"([^"]*)"/.exec(n) || [])[1];
+                const k = `${key}|${detail || ''}`;
+                byKind.set(k, (byKind.get(k) || 0) + 1);
+            }
+            return [...byKind.entries()].map(([k, n]) => {
+                const [key, detail] = k.split('|');
+                return {
+                    what: `${n} × ${key}`,
+                    detail: detail ? `"${detail}"` : 'see the Books page',
+                };
+            });
+        },
+    },
+
+
     // ── TWO BILLS ON ONE CONTAINER ────────────────────────────────────────
     // The one that costs money, and it is already documented in api.js:
     // margin.js keeps only the LAST bill for a container, so a duplicate
