@@ -87,11 +87,20 @@ const fakeSweep = (records, { fail = null } = {}) => { const calls = []; const f
     ck('subject says how many are new', /Invoice register: 2 new/.test(d.subject), d.subject);
     { const f = path.join(TMP, 'party_invoice_nightly.json'); const cur = JSON.parse(fs.readFileSync(f, 'utf8')); cur.digest_through = new Date(base).toISOString(); fs.writeFileSync(f, JSON.stringify(cur)); }   // the last note went out just before the E run
     const note = await N.sendDigest({ send: async (m) => { sent.push(m); }, now: Date.now() + 60000 });
-    ck('sent once, to bose@, apsara@ and accounts@edgemetals.com — all three on the one email', sent.length === 1 && ['bose@edgemetals.com', 'apsara@edgemetals.com', 'accounts@edgemetals.com'].every((a) => sent[0].to.includes(a)) && !/gmail/.test(sent[0].to) && /Invoice register: \d+ new/.test(sent[0].subject), sent[0] && sent[0].to);
+    // ── BOSE REMOVED FROM THE RECIPIENTS, 2026-10-26 ────────────────────
+    // This asserted all THREE addresses, from her 2026-10-08 instruction
+    // "send to bose, apsara@edgemetals.com, accounts@edgemetals.com". She
+    // reversed it: "now remove all my jarvis daily messages from bose" /
+    // "emails". Rewritten rather than loosened — the point of the check is
+    // that a recipient list is a deliberate thing, so it must still fail if
+    // the list changes again by accident.
+    ck('sent once, to apsara@ and accounts@edgemetals.com', sent.length === 1 && ['apsara@edgemetals.com', 'accounts@edgemetals.com'].every((a) => sent[0].to.includes(a)) && !/gmail/.test(sent[0].to) && /Invoice register: \d+ new/.test(sent[0].subject), sent[0] && sent[0].to);
+    ck('  and NOT to bose — he was removed on her instruction', !/bose@/i.test(sent[0].to), sent[0] && sent[0].to);
     {   // the REAL MIME builder must accept that To value as three recipients (a stubbed sender would hide a bad header)
         const raw = Buffer.from(require(path.join(ROOT, 'helpers/gmail')).buildMimeMessage({ to: sent[0].to, subject: sent[0].subject, body: sent[0].body }), 'base64').toString('utf8');
         const toLine = (raw.match(/^To: (.*)$/mi) || [])[1] || '';
-        ck('the MIME To header carries all three addresses', ['bose@', 'apsara@', 'accounts@'].every((a) => toLine.includes(a)), toLine);
+        ck('the MIME To header carries both addresses', ['apsara@', 'accounts@'].every((a) => toLine.includes(a)), toLine);
+        ck('  and bose is not in the header either', !/bose@/i.test(toLine), toLine);
     }
     await N.runNightly({ exec: fakeSweep([]), now: base + 60000 + DAY / 2 });   // the next night finds nothing
     const nextDay = await N.sendDigest({ send: async (m) => { sent.push(m); }, now: base + 60000 + DAY });

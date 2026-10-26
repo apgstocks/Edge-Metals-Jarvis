@@ -28,7 +28,15 @@ const ROOT = path.join(__dirname, '..');
 // register (their remittances are read by helpers/carrierRemittance.js).
 const SWEEP_PARTIES = ['zimex', 'jio', 'sher', 'ajtransport', 'panmetal', 'gardunos', 'eaglebrit'];
 const MIN_DAYS = 3, MAX_DAYS = 30, KEEP_RUNS = 20, TIMEOUT_MS = 45 * 60 * 1000;
-const DIGEST_TO = 'bose@edgemetals.com, apsara@edgemetals.com, accounts@edgemetals.com';
+// ── BOSE REMOVED 2026-10-26, ON HER INSTRUCTION ──────────────────────────
+// Apsara: "now remove all my jarvis daily messages from bose" — "emails".
+//
+// This REVERSES her own earlier instruction, recorded on line 125 below and
+// dated 2026-10-08: "send to bose, apsara@edgemetals.com,
+// accounts@edgemetals.com". Both are hers; this one is later. Said out loud
+// rather than quietly edited, because the older line still reads as current
+// to anyone who finds it first.
+const DIGEST_TO = 'apsara@edgemetals.com, accounts@edgemetals.com';
 const enabled = () => String(process.env.PARTY_INVOICE_SWEEP || 'on').toLowerCase() !== 'off';
 
 const state = () => { const s = loadJson(cfg.PARTY_INVOICE_NIGHTLY_FILE, {}); return s && typeof s === 'object' && !Array.isArray(s) ? s : {}; };

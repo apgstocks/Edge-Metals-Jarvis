@@ -858,7 +858,11 @@ function getSettings() {
         // helpers/json.js's loadSettings() defaults on purpose (see that
         // file's comment): both read the same settings.json, from two
         // different call sites (scheduler.js/actions.js use this one).
-        yard_report_emails     : 'bose@edgemetals.com, apsara@edgemetals.com',
+        // Bose removed 2026-10-26: Apsara, "now remove all my jarvis daily
+        // messages from bose" / "emails". NOTE this is only the DEFAULT —
+        // a value already saved in settings.json on the VM wins over it, so
+        // the live recipient list must be changed in Settings too.
+        yard_report_emails     : 'apsara@edgemetals.com',
         yard_whatsapp_group_id : '',
         yard_whatsapp_contacts : '',
     };
