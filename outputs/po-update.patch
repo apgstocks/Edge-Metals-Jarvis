@@ -1,0 +1,256 @@
+diff --git a/dashboard/documents.html b/dashboard/documents.html
+index 123f587..3cc9a6f 100644
+--- a/dashboard/documents.html
++++ b/dashboard/documents.html
+@@ -253,9 +253,13 @@ body[data-theme="light"] {
+           <datalist id="poTermsList">
+             <option value="Payment on delivery"></option><option value="Net 7"></option><option value="Net 15"></option><option value="Net 30"></option><option value="50% advance, balance on delivery"></option>
+           </datalist>
++          <div class="field">
++            <label for="po_deliver">Deliver to</label>
++            <select id="po_deliver"><option value="">Choose where it is delivered…</option></select>
++          </div>
+           <div class="field" style="margin-bottom:0;">
+-            <label for="po_shipto">Deliver to</label>
+-            <textarea id="po_shipto" rows="3" style="min-height:70px;" placeholder="Yard or port address the material goes to"></textarea>
++            <label for="po_shipto">Delivery address (fills in from the choice above; you can edit it)</label>
++            <textarea id="po_shipto" rows="3" style="min-height:70px;" placeholder="Name and address the material goes to"></textarea>
+           </div>
+         </div>
+ 
+@@ -8215,6 +8219,11 @@ let poLineSeq = 0;
+ // letterhead in helpers/pdf.js carries the same phone and email.
+ const PO_CONTACT = { phone: '+1 (310) 938-2525', email: 'bose@edgemetals.com' };
+ const PO_DEFAULT_SIGNER = 'Chandra Bose';
++// What each Deliver-to choice is called. The ADDRESSES are not here: they are
++// read from the Bank tab accounts (same source as the issuing company), so
++// there is one place to change one. Edge Yard is the legal entity EDGE TRADING
++// INC (helpers/entities.js); her screens call it Edge Yard, so this does too.
++const PO_DELIVER_LABELS = { 'edge-trading-chase': 'Edge Yard', 'edge-metals-bofa': 'Edge Metals' };
+ // The buyer signature image, fetched once from /api/po/signature. undefined =
+ // not asked yet, null = asked and there is none (the line then prints blank).
+ let poSignatureUrl;
+@@ -8331,6 +8340,7 @@ function poProblems(d) {
+   else if (!toIsoDate(d.date)) p.push('The PO date is not a real date (use MM/DD/YYYY).');
+   if (d.required && !toIsoDate(d.required)) p.push('"Required by" is not a real date (use MM/DD/YYYY).');
+   if (d.otherBad) p.push('Freight / other charges is not a number.');
++  if (!d.shipTo) p.push('Choose where the material is delivered.');
+   if (!d.lines.length) p.push('Add at least one item.');
+   d.lines.filter((l) => !l.ok).forEach((l) => p.push('Item ' + l.n + ' needs a description, a quantity above zero and a unit price.'));
+   if (d.totalCents < 0) p.push('The total is below zero.');
+@@ -8338,34 +8348,54 @@ function poProblems(d) {
+ }
+ 
+ function poSheetCss() {
+-  return '.po-sheet{font-family:Georgia,"Times New Roman",serif; color:#14181B; background:#fff; padding:44px 48px; line-height:1.45; font-size:13px; max-width:780px; margin:0 auto; box-shadow:0 1px 3px rgba(0,0,0,.25);}'
++  // 2026-10-26, redesign after "it looks ugly now": sans-serif and the
++  // green/steel palette of the Edge Metals proforma, in place of the first
++  // draft's serif and black bars. System fonts only, so the print window
++  // never waits on a download. print-color-adjust keeps the tints on paper.
++  return '.po-sheet{font-family:"Helvetica Neue",Helvetica,Arial,sans-serif; color:#2B3239; background:#fff; padding:0; line-height:1.45; font-size:12.5px; max-width:794px; margin:0 auto; box-shadow:0 1px 4px rgba(0,0,0,.28); -webkit-print-color-adjust:exact; print-color-adjust:exact; overflow:hidden;}'
+     + '.po-sheet *{box-sizing:border-box;}'
+-    + '.po-sheet .top{display:flex; justify-content:space-between; gap:24px; align-items:flex-start; border-bottom:3px solid #14181B; padding-bottom:16px; margin-bottom:20px;}'
+-    + '.po-sheet .co{font-size:20px; font-weight:700; letter-spacing:.01em;} .po-sheet .co-addr{font-size:12px; color:#4a535b; white-space:pre-line; margin-top:3px;}'
+-    + '.po-sheet .title{text-align:right;} .po-sheet .title b{display:block; font-size:25px; letter-spacing:.14em; font-weight:700;}'
+-    + '.po-sheet .title span{display:block; font-family:"Courier New",monospace; font-size:13px; margin-top:4px;}'
+-    + '.po-sheet .meta{display:grid; grid-template-columns:repeat(3,1fr); gap:0; border:1px solid #cbd1d6; margin-bottom:20px;}'
+-    + '.po-sheet .meta div{padding:8px 11px; border-right:1px solid #cbd1d6;} .po-sheet .meta div:last-child{border-right:none;}'
+-    + '.po-sheet .k{font-size:9.5px; letter-spacing:.14em; text-transform:uppercase; color:#6b747c; display:block; margin-bottom:2px; font-family:Arial,sans-serif;}'
+-    + '.po-sheet .parties{display:grid; grid-template-columns:1fr 1fr; gap:24px; margin-bottom:22px;}'
+-    + '.po-sheet .parties .v{white-space:pre-line;} .po-sheet .parties .nm{font-weight:700; font-size:14px;}'
+-    + '.po-sheet table{width:100%; border-collapse:collapse; margin-bottom:6px;}'
+-    + '.po-sheet th{font-family:Arial,sans-serif; font-size:9.5px; letter-spacing:.12em; text-transform:uppercase; text-align:left; color:#fff; background:#14181B; padding:8px 10px; border:none;}'
++    + '.po-sheet .bar{height:6px; background:linear-gradient(90deg,#226620,#3DA836 55%,#7FD172);}'
++    + '.po-sheet .pad{padding:0 44px 34px;}'
++    + '.po-sheet .head{display:flex; justify-content:space-between; align-items:center; gap:28px; padding:30px 44px 28px; margin-bottom:26px; background:linear-gradient(160deg,#ECF8EA 0%,#fff 58%,#ECF8EA 100%); border-bottom:1px solid #D3F0CD;}'
++    + '.po-sheet .brand{display:flex; gap:15px; align-items:center;} .po-sheet .brand svg{flex:none; display:block;}'
++    + '.po-sheet .co{font-size:22px; font-weight:800; letter-spacing:-.02em; color:#0C0E10; line-height:1.1;}'
++    + '.po-sheet .tag{font-size:9.5px; font-weight:800; letter-spacing:.2em; text-transform:uppercase; color:#3DA836; margin-top:5px;}'
++    + '.po-sheet .co-addr{font-size:11px; color:#57616A; margin-top:8px; white-space:pre-line; line-height:1.5;}'
++    + '.po-sheet .contact{font-size:11px; color:#2E861F; font-weight:600; margin-top:2px;}'
++    + '.po-sheet .title{text-align:right; flex:none;}'
++    + '.po-sheet .title b{display:block; font-size:27px; font-weight:800; letter-spacing:.14em; color:#14181B; line-height:1;}'
++    + '.po-sheet .title .no{display:inline-block; margin-top:11px; background:#3DA836; color:#fff; border-radius:999px; padding:5px 16px; font-size:12.5px; font-weight:700; letter-spacing:.04em;}'
++    + '.po-sheet .k{display:block; font-size:9px; font-weight:700; letter-spacing:.16em; text-transform:uppercase; color:#7E8891; margin-bottom:3px;}'
++    + '.po-sheet .meta{display:grid; grid-template-columns:repeat(4,1fr); background:#F3F5F7; border-radius:6px; margin-bottom:24px;}'
++    + '.po-sheet .meta div{padding:11px 14px; font-weight:600; color:#14181B; border-right:1px solid #E5E9EC;} .po-sheet .meta div:last-child{border-right:none;}'
++    + '.po-sheet .parties{display:grid; grid-template-columns:1fr 1fr; gap:18px; margin-bottom:26px;}'
++    + '.po-sheet .party{border:1px solid #E5E9EC; border-left:3px solid #3DA836; border-radius:4px; padding:12px 14px 12px 11px;}'
++    + '.po-sheet .party .k{color:#2E861F;} .po-sheet .party .v{white-space:pre-line; color:#3C454D; line-height:1.55;} .po-sheet .party .nm{font-weight:700; font-size:14px; color:#0C0E10; margin-bottom:2px;}'
++    + '.po-sheet table{width:100%; border-collapse:collapse;}'
++    + '.po-sheet th{font-size:9px; font-weight:700; letter-spacing:.14em; text-transform:uppercase; text-align:left; color:#57616A; background:#F3F5F7; padding:9px 11px; border:none; border-bottom:2px solid #3DA836;}'
+     + '.po-sheet th.r,.po-sheet td.r{text-align:right; font-variant-numeric:tabular-nums;}'
+-    + '.po-sheet td{padding:9px 10px; border-bottom:1px solid #e1e5e8; vertical-align:top; font-size:13px; color:#14181B;}'
+-    + '.po-sheet tr:last-child td{border-bottom:1px solid #e1e5e8;}'
+-    + '.po-sheet .tot{margin-left:auto; width:300px; margin-top:6px;}'
+-    + '.po-sheet .tot div{display:flex; justify-content:space-between; padding:5px 10px; font-variant-numeric:tabular-nums;}'
+-    + '.po-sheet .tot .grand{border-top:2px solid #14181B; margin-top:4px; padding-top:8px; font-weight:700; font-size:15px;}'
+-    + '.po-sheet .notes{margin-top:22px; white-space:pre-line; font-size:12px; border-left:3px solid #cbd1d6; padding:2px 0 2px 12px; color:#2b3239;}'
+-    + '.po-sheet .contact{font-family:"Courier New",monospace; font-size:11.5px; color:#2b3239; margin-top:5px;}'
+-    + '.po-sheet .sign{margin-top:34px; display:flex; gap:48px;} .po-sheet .sg{flex:1;}'
+-    + '.po-sheet .ink{height:40px; display:flex; align-items:flex-end;} .po-sheet .ink img{max-height:38px; max-width:170px;}'
+-    + '.po-sheet .ln{border-top:1px solid #14181B; padding-top:5px; font-size:11px; color:#4a535b; line-height:1.5;}'
+-    + '.po-sheet .ln b{color:#14181B; font-size:12px;}'
+-    + '.po-sheet .empty{color:#9aa3aa; font-style:italic;}'
+-    + '@media print{.po-sheet{box-shadow:none; padding:0; max-width:none;} .po-sheet tr{page-break-inside:avoid;} .po-sheet .sign{page-break-inside:avoid;}}';
+-}
++    + '.po-sheet td{padding:11px; border-bottom:1px solid #E5E9EC; vertical-align:top; font-size:12.5px; color:#2B3239;}'
++    + '.po-sheet td.d{font-weight:600; color:#0C0E10;}'
++    + '.po-sheet th:first-child,.po-sheet td:first-child{padding-left:14px;} .po-sheet th:last-child,.po-sheet td:last-child{padding-right:14px;}'
++    + '.po-sheet .tot{margin:16px 0 0 auto; width:290px;}'
++    + '.po-sheet .tot div{display:flex; justify-content:space-between; padding:5px 14px; font-variant-numeric:tabular-nums; color:#3C454D;}'
++    + '.po-sheet .tot .grand{background:#14181B; color:#fff; border-radius:5px; margin-top:7px; padding:10px 14px; font-weight:800; font-size:14px; letter-spacing:.02em;}'
++    + '.po-sheet .notes{margin-top:24px; padding:12px 14px; background:#F3F5F7; border-radius:5px; white-space:pre-line; font-size:11.5px; color:#3C454D; line-height:1.6;}'
++    + '.po-sheet .notes .k{color:#57616A;}'
++    + '.po-sheet .sign{margin-top:36px; display:flex; gap:44px;} .po-sheet .sg{flex:1;}'
++    + '.po-sheet .ink{height:44px; display:flex; align-items:flex-end;} .po-sheet .ink img{max-height:42px; max-width:170px;}'
++    + '.po-sheet .ln{border-top:1px solid #14181B; padding-top:6px; font-size:11px; color:#57616A; line-height:18px;}'
++    + '.po-sheet .ln b{color:#0C0E10; font-size:11px;}'
++    + '.po-sheet .empty{color:#A7B0B7; font-style:italic; font-weight:400;}'
++    + '@media print{.po-sheet{box-shadow:none; max-width:none;} .po-sheet tr,.po-sheet .party{page-break-inside:avoid;} .po-sheet .sign,.po-sheet .tot,.po-sheet .notes{page-break-inside:avoid;}}';
++}
++
++// The Edge Metals mark, as on the proforma header. Printed only for Edge
++// Metals: it is that company's logo and nobody else's.
++const PO_LOGO = '<svg width="56" height="56" viewBox="0 0 48 48"><rect x="1.5" y="1.5" width="45" height="45" rx="13" fill="#3DA836"></rect>'
++  + '<rect x="13" y="13.5" width="21" height="5" rx="2.5" fill="#fff"></rect><rect x="13" y="21.5" width="15" height="5" rx="2.5" fill="#fff"></rect>'
++  + '<rect x="13" y="29.5" width="21" height="5" rx="2.5" fill="#fff"></rect>'
++  + '<path d="M37 11.5c2.4 0 4.4 2 4.4 4.4 0 2.4-2 4.4-4.4 4.4-.6-2.5-1.9-3.8-4.4-4.4 2.5-.6 3.8-1.9 4.4-4.4z" fill="#ABE2A1"></path></svg>';
+ 
+ // The sheet. Used for BOTH the preview and the print window, so what is on
+ // screen is what comes out. Every typed value goes through esc().
+@@ -8373,29 +8403,32 @@ function poSheetHtml(d) {
+   const miss = (t) => '<span class="empty">' + esc(t) + '</span>';
+   const meta = (k, v) => '<div><span class="k">' + k + '</span>' + (v ? esc(v) : miss('—')) + '</div>';
+   const rows = d.lines.filter((l) => l.ok).map((l) =>
+-    '<tr><td>' + esc(l.desc) + '</td><td class="r">' + esc(poQty(l.qty)) + '</td><td>' + esc(l.unit)
+-    + '</td><td class="r">' + esc(poPrice(l.price)) + '</td><td class="r">' + esc(poMoney(l.amountCents)) + '</td></tr>').join('');
+-  return '<div class="po-sheet">'
+-    + '<div class="top"><div><div class="co">' + (d.company ? esc(d.company) : miss('Choose the issuing company')) + '</div>'
++    '<tr><td class="d">' + esc(l.desc) + '</td><td class="r">' + esc(poQty(l.qty)) + '</td><td>' + esc(l.unit)
++    + '</td><td class="r">' + esc(poPrice(l.price)) + '</td><td class="r d">' + esc(poMoney(l.amountCents)) + '</td></tr>').join('');
++  return '<div class="po-sheet"><div class="bar"></div>'
++    + '<div class="head"><div class="brand">' + (poIsEdgeMetals(d.company) ? PO_LOGO : '') + '<div>'
++    + '<div class="co">' + (d.company ? esc(d.company) : miss('Choose the issuing company')) + '</div>'
++    + (poIsEdgeMetals(d.company) ? '<div class="tag">Global Scrap</div>' : '')
+     + (d.companyAddress ? '<div class="co-addr">' + esc(d.companyAddress) + '</div>' : '')
+-    + (d.company ? '<div class="contact">Tel ' + esc(PO_CONTACT.phone) + ' &middot; ' + esc(PO_CONTACT.email) + '</div>' : '') + '</div>'
+-    + '<div class="title"><b>PURCHASE ORDER</b><span>No. ' + (d.number ? esc(d.number) : miss('—')) + '</span></div></div>'
+-    + '<div class="meta">' + meta('PO date', d.date) + meta('Required by', d.required) + meta('Payment terms', d.terms) + '</div>'
+-    + '<div class="parties"><div><span class="k">Supplier</span><div class="nm">' + (d.supplier ? esc(d.supplier) : miss('—')) + '</div>'
++    + (d.company ? '<div class="contact">Tel ' + esc(PO_CONTACT.phone) + ' &middot; ' + esc(PO_CONTACT.email) + '</div>' : '')
++    + '</div></div>'
++    + '<div class="title"><b>PURCHASE ORDER</b><span class="no">No. ' + (d.number ? esc(d.number) : '—') + '</span></div></div>'
++    + '<div class="pad"><div class="meta">' + meta('PO date', d.date) + meta('Required by', d.required) + meta('Payment terms', d.terms) + meta('Currency', 'USD') + '</div>'
++    + '<div class="parties"><div class="party"><span class="k">Vendor</span><div class="nm">' + (d.supplier ? esc(d.supplier) : miss('—')) + '</div>'
+     + (d.supplierAddress ? '<div class="v">' + esc(d.supplierAddress) + '</div>' : '') + '</div>'
+-    + '<div><span class="k">Deliver to</span><div class="v">' + (d.shipTo ? esc(d.shipTo) : miss('—')) + '</div></div></div>'
++    + '<div class="party"><span class="k">Deliver to</span><div class="v">' + (d.shipTo ? esc(d.shipTo) : miss('—')) + '</div></div></div>'
+     + '<table><thead><tr><th>Description</th><th class="r">Qty</th><th>Unit</th><th class="r">Unit price</th><th class="r">Amount</th></tr></thead><tbody>'
+     + (rows || '<tr><td colspan="5">' + miss('No items yet') + '</td></tr>') + '</tbody></table>'
+     + '<div class="tot"><div><span>Subtotal</span><span>' + esc(poMoney(d.subtotalCents)) + '</span></div>'
+     + (d.otherCents ? '<div><span>Freight / other</span><span>' + esc(poMoney(d.otherCents)) + '</span></div>' : '')
+     + '<div class="grand"><span>Total (USD)</span><span>' + esc(poMoney(d.totalCents)) + '</span></div></div>'
+-    + (d.notes ? '<div class="notes">' + esc(d.notes) + '</div>' : '')
++    + (d.notes ? '<div class="notes"><span class="k">Notes &amp; conditions</span>' + esc(d.notes) + '</div>' : '')
+     + '<div class="sign">'
+     + '<div class="sg"><div class="ink">' + (d.signatureImg ? '<img src="' + esc(d.signatureImg) + '" alt="">' : '') + '</div>'
+     + '<div class="ln">Buyer &mdash; ' + (d.company ? esc(d.company) : '&hellip;') + '<br>' + (d.signer ? '<b>' + esc(d.signer) + '</b>' : '&nbsp;') + '<br>Date</div></div>'
+     + '<div class="sg"><div class="ink"></div>'
+     + '<div class="ln">Seller &mdash; ' + (d.supplier ? esc(d.supplier) : '&hellip;') + '<br>Name<br>Date</div></div></div>'
+-    + '</div>';
++    + '</div></div>';
+ }
+ 
+ function poRefresh() {
+@@ -8434,6 +8467,7 @@ function poClear() {
+   ['po_supplier', 'po_supplier_address', 'po_number', 'po_required', 'po_terms', 'po_shipto', 'po_other', 'po_notes']
+     .forEach((id) => { $(id).value = ''; });
+   $('po_company').value = '';
++  $('po_deliver').value = '';
+   $('po_signer').value = PO_DEFAULT_SIGNER;
+   $('po_date').value = toUsDate(new Date());
+   $('poLines').innerHTML = '';
+@@ -8475,6 +8509,12 @@ async function poLoadCompanies() {
+     sel.innerHTML = '<option value="">Select the company…</option>'
+       + bankAccounts.map((a) => '<option value="' + esc(a.id) + '">' + esc(a.company) + '</option>').join('');
+     sel.value = keep;
++    const dsel = $('po_deliver');
++    const dkeep = dsel.value;
++    dsel.innerHTML = '<option value="">Choose where it is delivered…</option>'
++      + bankAccounts.map((a) => '<option value="' + esc(a.id) + '">' + esc(PO_DELIVER_LABELS[a.id] || a.company) + (a.address ? ' — ' + esc(a.address) : '') + '</option>').join('')
++      + '<option value="other">Other address…</option>';
++    dsel.value = dkeep;
+   } catch (e) {
+     $('poProblems').textContent = 'Could not load the issuing companies: ' + e.message;
+     $('poProblems').classList.remove('hidden');
+@@ -8516,6 +8556,16 @@ function poInit() {
+       poRenderSupplierList(searchAddressBook(q));
+     });
+     $('po_supplier').addEventListener('blur', () => setTimeout(() => $('poSupplierList').classList.add('hidden'), 150));
++    $('po_deliver').addEventListener('change', () => {
++      const v = $('po_deliver').value;
++      const a = (Array.isArray(bankAccounts) ? bankAccounts : []).find((x) => x.id === v);
++      if (a) $('po_shipto').value = (PO_DELIVER_LABELS[a.id] || a.company) + '\n' + (a.address || '');
++      else if (v === 'other') { $('po_shipto').value = ''; $('po_shipto').focus(); }
++      else $('po_shipto').value = '';
++      poRefresh();
++    });
++    // Typing over a filled-in address means it is no longer the preset.
++    $('po_shipto').addEventListener('input', () => { if ($('po_deliver').value && $('po_deliver').value !== 'other') $('po_deliver').value = 'other'; });
+     $('poPrint').addEventListener('click', poPrint);
+     $('poClear').addEventListener('click', poClear);
+   }
+diff --git a/tests/purchase-order.js b/tests/purchase-order.js
+index 566f7cd..bb3c951 100644
+--- a/tests/purchase-order.js
++++ b/tests/purchase-order.js
+@@ -140,6 +140,10 @@ const BOOK = [
+         ck('no print window opens without a supplier', opened === 0);
+         ck('and the reason is shown', /supplier/i.test(problems()), problems());
+         type('po_supplier', 'Sunrise Recycling');
++        pick('po_deliver', '');
++        $('poPrint').click();
++        ck('no print window opens without a delivery place', opened === 0 && /delivered/i.test(problems()), problems());
++        pick('po_deliver', 'edge-metals-bofa');
+         pick('po_company', '');
+         $('poPrint').click();
+         ck('no print window opens without a company', opened === 0 && /company/i.test(problems()), problems());
+@@ -255,6 +259,29 @@ const BOOK = [
+         } finally { server.close(); }
+     }
+ 
++    section('K — Deliver to: Edge Yard or Edge Metals, each at its own address');
++    {
++        const opts = [...$('po_deliver').options].map((o) => o.textContent);
++        ck('the choices are Edge Yard, Edge Metals and Other', opts.some((o) => /^Edge Yard — 2453 E 25th Street/.test(o))
++            && opts.some((o) => /^Edge Metals — 14750 Devonshire Ln/.test(o)) && opts.some((o) => /^Other/.test(o)), opts.join(' | '));
++        pick('po_deliver', 'edge-trading-chase');
++        ck('Edge Yard fills the LA address', /Edge Yard\n2453 E 25th Street, Los Angeles/.test($('po_shipto').value), $('po_shipto').value);
++        const dcard = () => $('poPreview').querySelectorAll('.party')[1].textContent;
++        ck('and the sheet\'s Deliver-to card shows it, not the Frisco one', /2453 E 25th Street/.test(dcard()) && !/Devonshire/.test(dcard()), dcard());
++        pick('po_deliver', 'edge-metals-bofa');
++        ck('Edge Metals fills the Frisco address', /Edge Metals\n14750 Devonshire Ln, Frisco/.test($('po_shipto').value), $('po_shipto').value);
++        ck('the issuing company is NOT changed by the delivery choice', $('po_company').value === 'edge-metals-bofa');
++        pick('po_company', 'edge-trading-chase');
++        ck('and the delivery choice is NOT changed by the issuing company', $('po_deliver').value === 'edge-metals-bofa' && /Devonshire/.test($('po_shipto').value));
++        pick('po_company', 'edge-metals-bofa');
++        $('po_shipto').value = '9 Harbour St'; $('po_shipto').dispatchEvent(new w.Event('input', { bubbles: true }));
++        ck('typing over the address flips the choice to Other', $('po_deliver').value === 'other');
++        ck('and what she typed is what prints in the card', /9 Harbour St/.test(dcard()) && !/Devonshire/.test(dcard()), dcard());
++        pick('po_deliver', 'edge-trading-chase');
++        ck('picking a preset again replaces her typed address', /2453 E 25th/.test($('po_shipto').value) && !/Harbour/.test($('po_shipto').value));
++        pick('po_deliver', 'edge-metals-bofa');
++    }
++
+     section('H — Clear and the last item row');
+     {
+         const rows = () => d.querySelectorAll('#poLines .po-line').length;
+@@ -266,6 +293,7 @@ const BOOK = [
+         $('poClear').click();
+         ck('Clear empties the number, supplier and company', $('po_number').value === '' && $('po_supplier').value === '' && $('po_company').value === '');
+         ck('and puts Chandra Bose back as the buyer', $('po_signer').value === 'Chandra Bose');
++        ck('and clears the delivery choice', $('po_deliver').value === '' && $('po_shipto').value === '');
+         ck('and puts one empty item row back', rows() === 1 && d.querySelector('#poLines [data-f="desc"]').value === '');
+     }
+ 

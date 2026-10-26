@@ -140,6 +140,10 @@ const BOOK = [
         ck('no print window opens without a supplier', opened === 0);
         ck('and the reason is shown', /supplier/i.test(problems()), problems());
         type('po_supplier', 'Sunrise Recycling');
+        pick('po_deliver', '');
+        $('poPrint').click();
+        ck('no print window opens without a delivery place', opened === 0 && /delivered/i.test(problems()), problems());
+        pick('po_deliver', 'edge-metals-bofa');
         pick('po_company', '');
         $('poPrint').click();
         ck('no print window opens without a company', opened === 0 && /company/i.test(problems()), problems());
@@ -255,6 +259,29 @@ const BOOK = [
         } finally { server.close(); }
     }
 
+    section('K — Deliver to: Edge Yard or Edge Metals, each at its own address');
+    {
+        const opts = [...$('po_deliver').options].map((o) => o.textContent);
+        ck('the choices are Edge Yard, Edge Metals and Other', opts.some((o) => /^Edge Yard — 2453 E 25th Street/.test(o))
+            && opts.some((o) => /^Edge Metals — 14750 Devonshire Ln/.test(o)) && opts.some((o) => /^Other/.test(o)), opts.join(' | '));
+        pick('po_deliver', 'edge-trading-chase');
+        ck('Edge Yard fills the LA address', /Edge Yard\n2453 E 25th Street, Los Angeles/.test($('po_shipto').value), $('po_shipto').value);
+        const dcard = () => $('poPreview').querySelectorAll('.party')[1].textContent;
+        ck('and the sheet\'s Deliver-to card shows it, not the Frisco one', /2453 E 25th Street/.test(dcard()) && !/Devonshire/.test(dcard()), dcard());
+        pick('po_deliver', 'edge-metals-bofa');
+        ck('Edge Metals fills the Frisco address', /Edge Metals\n14750 Devonshire Ln, Frisco/.test($('po_shipto').value), $('po_shipto').value);
+        ck('the issuing company is NOT changed by the delivery choice', $('po_company').value === 'edge-metals-bofa');
+        pick('po_company', 'edge-trading-chase');
+        ck('and the delivery choice is NOT changed by the issuing company', $('po_deliver').value === 'edge-metals-bofa' && /Devonshire/.test($('po_shipto').value));
+        pick('po_company', 'edge-metals-bofa');
+        $('po_shipto').value = '9 Harbour St'; $('po_shipto').dispatchEvent(new w.Event('input', { bubbles: true }));
+        ck('typing over the address flips the choice to Other', $('po_deliver').value === 'other');
+        ck('and what she typed is what prints in the card', /9 Harbour St/.test(dcard()) && !/Devonshire/.test(dcard()), dcard());
+        pick('po_deliver', 'edge-trading-chase');
+        ck('picking a preset again replaces her typed address', /2453 E 25th/.test($('po_shipto').value) && !/Harbour/.test($('po_shipto').value));
+        pick('po_deliver', 'edge-metals-bofa');
+    }
+
     section('H — Clear and the last item row');
     {
         const rows = () => d.querySelectorAll('#poLines .po-line').length;
@@ -266,6 +293,7 @@ const BOOK = [
         $('poClear').click();
         ck('Clear empties the number, supplier and company', $('po_number').value === '' && $('po_supplier').value === '' && $('po_company').value === '');
         ck('and puts Chandra Bose back as the buyer', $('po_signer').value === 'Chandra Bose');
+        ck('and clears the delivery choice', $('po_deliver').value === '' && $('po_shipto').value === '');
         ck('and puts one empty item row back', rows() === 1 && d.querySelector('#poLines [data-f="desc"]').value === '');
     }
 
