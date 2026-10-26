@@ -65,7 +65,7 @@ function spanOf(id) {
 }
 
 const PANELS = ['panelInvoice', 'panelProforma', 'panelBol', 'panelPacking',
-                'panelVerification', 'panelBank'];
+                'panelVerification', 'panelBank', 'panelPO'];
 
 // ── A — EVERY PANEL IS A CLOSED BOX ───────────────────────────────────────
 {

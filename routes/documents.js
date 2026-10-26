@@ -8,6 +8,16 @@ module.exports = function (app, ctx) {
     const documentsSaved = require('./helpers/documentsSaved');
     const invoiceVersions = require('./helpers/invoiceVersions');
 
+    // Chandra Bose's signature for the Purchase order tab (Documents). The
+    // browser cannot read assets/, and a second copy of the PNG would be the
+    // problem helpers/signature.js exists to prevent, so this hands over the
+    // one the invoice, proforma and BOL already use. Admin only, like the
+    // Bank tab. null when the file is missing — the sheet then prints a blank
+    // signature line, same fail-soft as the other documents.
+    app.get('/api/po/signature', requireAdmin, (req, res) => {
+        res.json({ signature: require('./helpers/signature').signatureDataUrl() });
+    });
+
     // preview=1 (query string) returns the PDF inline without saving a copy
     // or touching pricing memory — used by the "Preview" button so a user
     // can check the layout before committing to a generation. Anything

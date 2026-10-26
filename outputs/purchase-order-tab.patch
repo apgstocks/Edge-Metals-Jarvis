@@ -1,0 +1,793 @@
+diff --git a/dashboard/documents.html b/dashboard/documents.html
+index c09f1d4..123f587 100644
+--- a/dashboard/documents.html
++++ b/dashboard/documents.html
+@@ -58,6 +58,10 @@ button { font:inherit; }
+ .btn-spinner { display:inline-block; width:11px; height:11px; border:2px solid currentColor; border-right-color:transparent; border-radius:50%; animation:pfSpin .6s linear infinite; vertical-align:middle; margin-right:2px; }
+ .card { background:var(--surface-card); border:1px solid var(--border-subtle); border-radius:var(--radius-sm); box-shadow:var(--shadow-xs); }
+ .hidden { display:none !important; }
++.po-h { font-family:var(--font-mono); font-size:10.5px; font-weight:600; letter-spacing:.14em; text-transform:uppercase; color:var(--copper-400); margin-bottom:12px; }
++.po-line { border:1px solid var(--border-subtle); border-radius:var(--radius-sm); padding:10px 10px 8px; margin-bottom:10px; background:var(--surface-sunken); }
++.po-line-amount { font-family:var(--font-mono); font-size:11px; color:var(--text-faint); text-align:right; margin-top:6px; min-height:14px; }
++@media (max-width: 860px) { #poLayout { grid-template-columns:1fr !important; } #poLayout > div:last-child { position:static !important; } }
+ .badge { display:inline-flex; align-items:center; padding:2px 8px; border-radius:999px; font-family:var(--font-mono); font-size:10.5px; font-weight:600; letter-spacing:.04em; text-transform:uppercase; }
+ table { width:100%; border-collapse:collapse; }
+ th { text-align:left; font-family:var(--font-mono); font-size:10.5px; font-weight:600; letter-spacing:.06em; text-transform:uppercase; color:var(--text-faint); padding:8px 10px; border-bottom:1px solid var(--border-subtle); }
+@@ -167,6 +171,7 @@ body[data-theme="light"] {
+          after sending a raw Chase printout to be redesigned. What a customer
+          is told to wire to, per company, and a clean sheet to print. -->
+     <button class="subtab-btn" data-subtab="bank">Bank</button>
++    <button class="subtab-btn" data-subtab="po">Purchase order</button>
+   </div>
+ 
+   <!-- ── Bill of Lading ───────────────────────────────────────────────────
+@@ -200,6 +205,100 @@ body[data-theme="light"] {
+     <div id="bankNote" style="margin-top:16px; font-size:12px; color:var(--text-faint); line-height:1.6;"></div>
+   </div>
+ 
++  <!-- ── Purchase order ────────────────────────────────────────────────────
++       Apsara, 2026-10-26: "Create a purchase order tab in documents, design
++       it properly." What a company sends a SUPPLIER to commit to buying.
++       The opposite direction from the Proforma (which we send a customer).
++       Not the same thing as helpers/poTracker.js, which follows a customer's
++       PO that arrives by email.
++
++       Deliberately self-contained: no route, no saved record, no shared
++       helper. Nothing else on this page reads or writes anything in here.
++       The issuing company is NEVER defaulted, because Edge Metals and Edge
++       Trading are different companies and a PO is a commitment in one
++       company's name. The company names and addresses are read from the
++       Bank tab's accounts rather than typed a second time. -->
++  <div id="panelPO" class="hidden">
++    <div style="font-size:13px; color:var(--text-muted); margin-bottom:16px;">
++      Raise an order to a supplier. The sheet on the right is exactly what prints.
++    </div>
++    <div id="poLayout" style="display:grid; gap:20px; grid-template-columns:minmax(340px,430px) minmax(0,1fr); align-items:start;">
++
++      <div id="poForm">
++        <div class="card" style="padding:16px 18px; margin-bottom:14px;">
++          <div class="po-h">Who is buying, who is selling</div>
++          <div class="field">
++            <label for="po_company">Issuing company</label>
++            <select id="po_company"><option value="">Select the company…</option></select>
++          </div>
++          <div class="field" style="position:relative;">
++            <label for="po_supplier">Supplier</label>
++            <input id="po_supplier" type="text" autocomplete="off" placeholder="Start typing…">
++            <div id="poSupplierList" class="autocomplete-list hidden"></div>
++          </div>
++          <div class="field" style="margin-bottom:0;">
++            <label for="po_supplier_address">Supplier address</label>
++            <textarea id="po_supplier_address" rows="3" style="min-height:70px;" placeholder="Fills in when you pick a name — or type it"></textarea>
++          </div>
++        </div>
++
++        <div class="card" style="padding:16px 18px; margin-bottom:14px;">
++          <div class="po-h">Order details</div>
++          <div style="display:grid; grid-template-columns:1fr 1fr; gap:0 12px;">
++            <div class="field"><label for="po_number">PO number</label><input id="po_number" type="text" autocomplete="off" placeholder="Type it"></div>
++            <div class="field"><label for="po_date">PO date</label><input id="po_date" placeholder="MM/DD/YYYY" autocomplete="off"></div>
++            <div class="field"><label for="po_required">Required by</label><input id="po_required" placeholder="MM/DD/YYYY" autocomplete="off"></div>
++            <div class="field"><label for="po_terms">Payment terms</label><input id="po_terms" type="text" list="poTermsList" autocomplete="off" placeholder="e.g. Net 7"></div>
++          </div>
++          <datalist id="poTermsList">
++            <option value="Payment on delivery"></option><option value="Net 7"></option><option value="Net 15"></option><option value="Net 30"></option><option value="50% advance, balance on delivery"></option>
++          </datalist>
++          <div class="field" style="margin-bottom:0;">
++            <label for="po_shipto">Deliver to</label>
++            <textarea id="po_shipto" rows="3" style="min-height:70px;" placeholder="Yard or port address the material goes to"></textarea>
++          </div>
++        </div>
++
++        <div class="card" style="padding:16px 18px; margin-bottom:14px;">
++          <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:10px;">
++            <div class="po-h" style="margin:0;">Items</div>
++            <button type="button" id="poAddLine" class="btn btn-secondary" style="padding:5px 12px; font-size:10px;">+ Add item</button>
++          </div>
++          <div id="poLines"></div>
++          <div class="field" style="margin:12px 0 0;">
++            <label for="po_other">Freight / other charges (USD, optional — a minus sign makes it a deduction)</label>
++            <input id="po_other" type="text" inputmode="decimal" autocomplete="off" placeholder="0.00">
++          </div>
++        </div>
++
++        <div class="card" style="padding:16px 18px; margin-bottom:14px;">
++          <div class="po-h">Notes and signatures</div>
++          <div class="field">
++            <label for="po_notes">Notes / conditions (printed under the items)</label>
++            <textarea id="po_notes" rows="3" style="min-height:70px;" placeholder="Weight ticket required, material must be free of prohibited items…"></textarea>
++          </div>
++          <div class="field" style="margin-bottom:0;">
++            <label for="po_signer">Buyer signs as</label>
++            <input id="po_signer" type="text" autocomplete="off" value="Chandra Bose" placeholder="Name printed under the buyer signature">
++          </div>
++        </div>
++
++        <div id="poProblems" class="hidden" role="alert" style="margin-bottom:12px; font-size:12.5px; color:var(--status-warning); line-height:1.6;"></div>
++        <div style="display:flex; gap:10px; flex-wrap:wrap;">
++          <button type="button" id="poPrint" class="btn btn-primary" style="flex:1; padding:10px 14px;">Print / save as PDF</button>
++          <button type="button" id="poClear" class="btn btn-secondary" style="padding:10px 14px;">Clear</button>
++        </div>
++        <div style="margin-top:10px; font-size:11.5px; color:var(--text-faint); line-height:1.6;">
++          Nothing is saved on the server. In the print window choose &ldquo;Save as PDF&rdquo; to keep a copy.
++        </div>
++      </div>
++
++      <div style="position:sticky; top:16px; min-width:0;">
++        <div id="poPreview" style="overflow-x:auto;"></div>
++      </div>
++    </div>
++  </div>
++
+   <div id="panelBol" class="hidden">
+     <div class="card" style="padding:20px 22px; margin-bottom:16px;">
+ 
+@@ -1610,6 +1709,7 @@ function setSubtab(name) {
+   $('panelPacking').classList.toggle('hidden', name !== 'packing');
+   $('panelVerification').classList.toggle('hidden', name !== 'verification');
+   $('panelBank').classList.toggle('hidden', name !== 'bank');
++  $('panelPO').classList.toggle('hidden', name !== 'po');
+   // Both consignee typeaheads read `addressBook`, so it gets a refresh on
+   // entry to either — that is what stops a contact added in the Address Book
+   // page (a separate page, in another tab) from being invisible here until
+@@ -1624,6 +1724,7 @@ function setSubtab(name) {
+   if (name === 'bol') { bolInit(); loadSavedBols(); }
+   if (name === 'packing') { pkInit(); loadSavedPackingLists(); }
+   if (name === 'bank') bankInit();
++  if (name === 'po') { refreshAddressBook(); poInit(); }
+ }
+ document.querySelectorAll('.subtab-btn').forEach((b) => b.addEventListener('click', () => setSubtab(b.dataset.subtab)));
+ 
+@@ -8091,6 +8192,337 @@ function bankPrint(id) {
+   w.document.close();
+   w.focus();
+ }
++// ── Purchase order tab ────────────────────────────────────────────────────
++// Apsara, 2026-10-26: "Create a purchase order tab in documents, design it
++// properly." Self-contained on purpose — it shares only the page's own
++// helpers (esc, $, the address-book typeahead, the date picker, bankAccounts)
++// and writes nothing anywhere. Nothing outside this block calls into it
++// except setSubtab(). Decisions that were mine, not hers: there is no saved
++// record and no auto-numbering yet, and the issuing company is never
++// pre-selected.
++//
++// Line totals are held in whole cents and the quantity-times-price product is
++// rounded once per line, so the figures on paper add up exactly. The money
++// boxes are text, not type=number — see tests/money-fields.js for the day a
++// "$" in a number box deleted $205 from an invoice.
++const PO_UNITS = ['MT', 'LB', 'KG', 'Gross ton', 'PCS', 'Container'];
++let poWired = false;
++let poLineSeq = 0;
++
++// The contact line under the company name. Taken from what the Edge Metals
++// proforma header already prints (assets/proforma-dc2/template.html) — my
++// choice to reuse it here, not an instruction about the PO. Edge Trading's
++// letterhead in helpers/pdf.js carries the same phone and email.
++const PO_CONTACT = { phone: '+1 (310) 938-2525', email: 'bose@edgemetals.com' };
++const PO_DEFAULT_SIGNER = 'Chandra Bose';
++// The buyer signature image, fetched once from /api/po/signature. undefined =
++// not asked yet, null = asked and there is none (the line then prints blank).
++let poSignatureUrl;
++
++// Same loose name test the BOL uses for its shipper signature
++// (helpers/bolPdf.js isEdgeMetals): case and spacing ignored, a trailing
++// Inc / Inc. / LLC tolerated.
++function poIsEdgeMetals(name) {
++  return String(name || '').toLowerCase().replace(/[.,]/g, ' ').replace(/\s+/g, ' ').trim()
++    .replace(/\s(inc|llc)$/, '') === 'edge metals';
++}
++
++// A box's text -> a number, or null when it is empty or not a number.
++// Strips "$", commas and spaces; allows one leading minus.
++function poParseNumber(v) {
++  const s = String(v == null ? '' : v).replace(/[$,\s]/g, '');
++  if (!/^-?(\d+\.?\d*|\.\d+)$/.test(s)) return null;
++  const n = Number(s);
++  return Number.isFinite(n) ? n : null;
++}
++function poMoney(cents) {
++  const neg = cents < 0;
++  const abs = Math.abs(cents);
++  const whole = String(Math.floor(abs / 100)).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
++  return (neg ? '-' : '') + '$' + whole + '.' + String(abs % 100).padStart(2, '0');
++}
++// A unit price keeps up to four decimals, never fewer than two.
++function poPrice(n) {
++  return '$' + n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 4 });
++}
++function poQty(n) {
++  return n.toLocaleString('en-US', { maximumFractionDigits: 3 });
++}
++
++function poAddLine(seed) {
++  poLineSeq += 1;
++  const n = poLineSeq;
++  const row = document.createElement('div');
++  row.className = 'po-line';
++  row.dataset.line = String(n);
++  row.innerHTML =
++    '<div class="field" style="margin-bottom:6px;"><label for="po_l' + n + '_desc">Description</label>'
++    + '<input id="po_l' + n + '_desc" data-f="desc" type="text" autocomplete="off" placeholder="e.g. Copper birch/cliff"></div>'
++    + '<div style="display:grid; grid-template-columns:1fr 92px 1fr auto; gap:8px; align-items:end;">'
++    + '<div class="field" style="margin:0;"><label for="po_l' + n + '_qty">Qty</label><input id="po_l' + n + '_qty" data-f="qty" type="text" inputmode="decimal" autocomplete="off"></div>'
++    + '<div class="field" style="margin:0;"><label for="po_l' + n + '_unit">Unit</label><select id="po_l' + n + '_unit" data-f="unit">'
++    + PO_UNITS.map((u) => '<option>' + esc(u) + '</option>').join('') + '</select></div>'
++    + '<div class="field" style="margin:0;"><label for="po_l' + n + '_price">Unit price</label><input id="po_l' + n + '_price" data-f="price" type="text" inputmode="decimal" autocomplete="off" placeholder="0.00"></div>'
++    + '<button type="button" data-f="remove" class="btn btn-secondary" title="Remove this item" aria-label="Remove this item" style="padding:7px 10px; font-size:12px;">&times;</button>'
++    + '</div>'
++    + '<div data-f="amount" class="po-line-amount"></div>';
++  if (seed) {
++    row.querySelector('[data-f="desc"]').value = seed.desc || '';
++    row.querySelector('[data-f="qty"]').value = seed.qty || '';
++    row.querySelector('[data-f="price"]').value = seed.price || '';
++  }
++  $('poLines').appendChild(row);
++  return row;
++}
++
++// Everything on the form, as plain numbers and strings. Lines with nothing
++// typed in them are skipped; a line with SOME of the three fields is kept and
++// marked bad so the problem list can name it instead of dropping it silently.
++function poCollect() {
++  const co = (typeof bankAccounts !== 'undefined' && Array.isArray(bankAccounts) ? bankAccounts : [])
++    .find((a) => a.id === $('po_company').value) || null;
++  const lines = [];
++  document.querySelectorAll('#poLines .po-line').forEach((row, i) => {
++    const get = (f) => row.querySelector('[data-f="' + f + '"]');
++    const desc = get('desc').value.trim();
++    const qtyText = get('qty').value.trim();
++    const priceText = get('price').value.trim();
++    if (!desc && !qtyText && !priceText) return;
++    const qty = poParseNumber(qtyText);
++    const price = poParseNumber(priceText);
++    const ok = !!desc && qty !== null && qty > 0 && price !== null && price >= 0;
++    lines.push({
++      n: i + 1, row, desc, qty, unit: get('unit').value, price: price === null ? 0 : price, ok,
++      // The UNIT price keeps its fractions (scrap is quoted to four places, a
++      // dollar-and-a-bit per pound); only the LINE total is rounded to a cent.
++      // toPrecision first so 1.005*100 does not land on 100.49999999999999.
++      amountCents: ok ? Math.round(Number((qty * price * 100).toPrecision(12))) : 0,
++    });
++  });
++  const otherText = $('po_other').value.trim();
++  const other = otherText ? poParseNumber(otherText) : 0;
++  const subtotalCents = lines.reduce((s, l) => s + l.amountCents, 0);
++  const otherCents = other === null ? 0 : Math.round(other * 100);
++  return {
++    company: co ? co.company : '', companyAddress: co ? (co.address || '') : '',
++    companyId: co ? co.id : '',
++    supplier: $('po_supplier').value.trim(), supplierAddress: $('po_supplier_address').value.trim(),
++    number: $('po_number').value.trim(), date: $('po_date').value.trim(), required: $('po_required').value.trim(),
++    terms: $('po_terms').value.trim(), shipTo: $('po_shipto').value.trim(),
++    lines, otherText, otherBad: other === null, otherCents,
++    notes: $('po_notes').value.trim(), signer: $('po_signer').value.trim(),
++    // His signature goes under his name, for the company he signs for, and
++    // nowhere else: another company, or another name typed in the box, prints
++    // a blank line (the BOL's rule for its shipper signature).
++    signatureImg: (poSignatureUrl && poIsEdgeMetals(co ? co.company : '')
++      && /chandra\s+bose/i.test($('po_signer').value)) ? poSignatureUrl : '',
++    subtotalCents, totalCents: subtotalCents + otherCents,
++  };
++}
++
++// What stops a PO being printed. Each entry is a sentence a person can act on.
++function poProblems(d) {
++  const p = [];
++  if (!d.company) p.push('Choose which company is issuing this order.');
++  else if (!d.companyAddress) p.push(d.company + ' has no address on the Bank tab, so the sheet would print without one.');
++  if (!d.supplier) p.push('Enter the supplier.');
++  if (!d.number) p.push('Enter a PO number.');
++  if (!d.date) p.push('Enter the PO date.');
++  else if (!toIsoDate(d.date)) p.push('The PO date is not a real date (use MM/DD/YYYY).');
++  if (d.required && !toIsoDate(d.required)) p.push('"Required by" is not a real date (use MM/DD/YYYY).');
++  if (d.otherBad) p.push('Freight / other charges is not a number.');
++  if (!d.lines.length) p.push('Add at least one item.');
++  d.lines.filter((l) => !l.ok).forEach((l) => p.push('Item ' + l.n + ' needs a description, a quantity above zero and a unit price.'));
++  if (d.totalCents < 0) p.push('The total is below zero.');
++  return p;
++}
++
++function poSheetCss() {
++  return '.po-sheet{font-family:Georgia,"Times New Roman",serif; color:#14181B; background:#fff; padding:44px 48px; line-height:1.45; font-size:13px; max-width:780px; margin:0 auto; box-shadow:0 1px 3px rgba(0,0,0,.25);}'
++    + '.po-sheet *{box-sizing:border-box;}'
++    + '.po-sheet .top{display:flex; justify-content:space-between; gap:24px; align-items:flex-start; border-bottom:3px solid #14181B; padding-bottom:16px; margin-bottom:20px;}'
++    + '.po-sheet .co{font-size:20px; font-weight:700; letter-spacing:.01em;} .po-sheet .co-addr{font-size:12px; color:#4a535b; white-space:pre-line; margin-top:3px;}'
++    + '.po-sheet .title{text-align:right;} .po-sheet .title b{display:block; font-size:25px; letter-spacing:.14em; font-weight:700;}'
++    + '.po-sheet .title span{display:block; font-family:"Courier New",monospace; font-size:13px; margin-top:4px;}'
++    + '.po-sheet .meta{display:grid; grid-template-columns:repeat(3,1fr); gap:0; border:1px solid #cbd1d6; margin-bottom:20px;}'
++    + '.po-sheet .meta div{padding:8px 11px; border-right:1px solid #cbd1d6;} .po-sheet .meta div:last-child{border-right:none;}'
++    + '.po-sheet .k{font-size:9.5px; letter-spacing:.14em; text-transform:uppercase; color:#6b747c; display:block; margin-bottom:2px; font-family:Arial,sans-serif;}'
++    + '.po-sheet .parties{display:grid; grid-template-columns:1fr 1fr; gap:24px; margin-bottom:22px;}'
++    + '.po-sheet .parties .v{white-space:pre-line;} .po-sheet .parties .nm{font-weight:700; font-size:14px;}'
++    + '.po-sheet table{width:100%; border-collapse:collapse; margin-bottom:6px;}'
++    + '.po-sheet th{font-family:Arial,sans-serif; font-size:9.5px; letter-spacing:.12em; text-transform:uppercase; text-align:left; color:#fff; background:#14181B; padding:8px 10px; border:none;}'
++    + '.po-sheet th.r,.po-sheet td.r{text-align:right; font-variant-numeric:tabular-nums;}'
++    + '.po-sheet td{padding:9px 10px; border-bottom:1px solid #e1e5e8; vertical-align:top; font-size:13px; color:#14181B;}'
++    + '.po-sheet tr:last-child td{border-bottom:1px solid #e1e5e8;}'
++    + '.po-sheet .tot{margin-left:auto; width:300px; margin-top:6px;}'
++    + '.po-sheet .tot div{display:flex; justify-content:space-between; padding:5px 10px; font-variant-numeric:tabular-nums;}'
++    + '.po-sheet .tot .grand{border-top:2px solid #14181B; margin-top:4px; padding-top:8px; font-weight:700; font-size:15px;}'
++    + '.po-sheet .notes{margin-top:22px; white-space:pre-line; font-size:12px; border-left:3px solid #cbd1d6; padding:2px 0 2px 12px; color:#2b3239;}'
++    + '.po-sheet .contact{font-family:"Courier New",monospace; font-size:11.5px; color:#2b3239; margin-top:5px;}'
++    + '.po-sheet .sign{margin-top:34px; display:flex; gap:48px;} .po-sheet .sg{flex:1;}'
++    + '.po-sheet .ink{height:40px; display:flex; align-items:flex-end;} .po-sheet .ink img{max-height:38px; max-width:170px;}'
++    + '.po-sheet .ln{border-top:1px solid #14181B; padding-top:5px; font-size:11px; color:#4a535b; line-height:1.5;}'
++    + '.po-sheet .ln b{color:#14181B; font-size:12px;}'
++    + '.po-sheet .empty{color:#9aa3aa; font-style:italic;}'
++    + '@media print{.po-sheet{box-shadow:none; padding:0; max-width:none;} .po-sheet tr{page-break-inside:avoid;} .po-sheet .sign{page-break-inside:avoid;}}';
++}
++
++// The sheet. Used for BOTH the preview and the print window, so what is on
++// screen is what comes out. Every typed value goes through esc().
++function poSheetHtml(d) {
++  const miss = (t) => '<span class="empty">' + esc(t) + '</span>';
++  const meta = (k, v) => '<div><span class="k">' + k + '</span>' + (v ? esc(v) : miss('—')) + '</div>';
++  const rows = d.lines.filter((l) => l.ok).map((l) =>
++    '<tr><td>' + esc(l.desc) + '</td><td class="r">' + esc(poQty(l.qty)) + '</td><td>' + esc(l.unit)
++    + '</td><td class="r">' + esc(poPrice(l.price)) + '</td><td class="r">' + esc(poMoney(l.amountCents)) + '</td></tr>').join('');
++  return '<div class="po-sheet">'
++    + '<div class="top"><div><div class="co">' + (d.company ? esc(d.company) : miss('Choose the issuing company')) + '</div>'
++    + (d.companyAddress ? '<div class="co-addr">' + esc(d.companyAddress) + '</div>' : '')
++    + (d.company ? '<div class="contact">Tel ' + esc(PO_CONTACT.phone) + ' &middot; ' + esc(PO_CONTACT.email) + '</div>' : '') + '</div>'
++    + '<div class="title"><b>PURCHASE ORDER</b><span>No. ' + (d.number ? esc(d.number) : miss('—')) + '</span></div></div>'
++    + '<div class="meta">' + meta('PO date', d.date) + meta('Required by', d.required) + meta('Payment terms', d.terms) + '</div>'
++    + '<div class="parties"><div><span class="k">Supplier</span><div class="nm">' + (d.supplier ? esc(d.supplier) : miss('—')) + '</div>'
++    + (d.supplierAddress ? '<div class="v">' + esc(d.supplierAddress) + '</div>' : '') + '</div>'
++    + '<div><span class="k">Deliver to</span><div class="v">' + (d.shipTo ? esc(d.shipTo) : miss('—')) + '</div></div></div>'
++    + '<table><thead><tr><th>Description</th><th class="r">Qty</th><th>Unit</th><th class="r">Unit price</th><th class="r">Amount</th></tr></thead><tbody>'
++    + (rows || '<tr><td colspan="5">' + miss('No items yet') + '</td></tr>') + '</tbody></table>'
++    + '<div class="tot"><div><span>Subtotal</span><span>' + esc(poMoney(d.subtotalCents)) + '</span></div>'
++    + (d.otherCents ? '<div><span>Freight / other</span><span>' + esc(poMoney(d.otherCents)) + '</span></div>' : '')
++    + '<div class="grand"><span>Total (USD)</span><span>' + esc(poMoney(d.totalCents)) + '</span></div></div>'
++    + (d.notes ? '<div class="notes">' + esc(d.notes) + '</div>' : '')
++    + '<div class="sign">'
++    + '<div class="sg"><div class="ink">' + (d.signatureImg ? '<img src="' + esc(d.signatureImg) + '" alt="">' : '') + '</div>'
++    + '<div class="ln">Buyer &mdash; ' + (d.company ? esc(d.company) : '&hellip;') + '<br>' + (d.signer ? '<b>' + esc(d.signer) + '</b>' : '&nbsp;') + '<br>Date</div></div>'
++    + '<div class="sg"><div class="ink"></div>'
++    + '<div class="ln">Seller &mdash; ' + (d.supplier ? esc(d.supplier) : '&hellip;') + '<br>Name<br>Date</div></div></div>'
++    + '</div>';
++}
++
++function poRefresh() {
++  const d = poCollect();
++  $('poPreview').innerHTML = '<style>' + poSheetCss() + '</style>' + poSheetHtml(d);
++  d.lines.forEach((l) => {
++    const el = l.row.querySelector('[data-f="amount"]');
++    el.textContent = l.ok ? 'Line total ' + poMoney(l.amountCents) : '';
++  });
++  // The warning list is only shown once she has tried to print, so an empty
++  // form is not shouting at her; after that it follows her edits.
++  if (!$('poProblems').classList.contains('hidden')) poShowProblems(d);
++}
++function poShowProblems(d) {
++  const p = poProblems(d || poCollect());
++  const box = $('poProblems');
++  if (!p.length) { box.classList.add('hidden'); box.innerHTML = ''; return false; }
++  box.innerHTML = p.map((t) => '&bull; ' + esc(t)).join('<br>');
++  box.classList.remove('hidden');
++  return true;
++}
++
++function poPrint() {
++  const d = poCollect();
++  if (poShowProblems(d)) return;
++  const w = window.open('', '_blank', 'width=900,height=1100');
++  if (!w) { $('poProblems').textContent = 'The browser blocked the print window. Allow pop-ups for this site and try again.'; $('poProblems').classList.remove('hidden'); return; }
++  w.document.write('<!DOCTYPE html><html><head><meta charset="utf-8"><title>PO ' + esc(d.number) + ' - ' + esc(d.company) + '</title>'
++    + '<style>body{margin:28px; background:#fff;} @page{margin:14mm;}' + poSheetCss() + '</style></head><body>' + poSheetHtml(d) + '</body></html>');
++  w.document.close();
++  w.focus();
++  setTimeout(() => { try { w.print(); } catch (e) { /* the sheet is open; she can print it by hand */ } }, 250);
++}
++
++function poClear() {
++  ['po_supplier', 'po_supplier_address', 'po_number', 'po_required', 'po_terms', 'po_shipto', 'po_other', 'po_notes']
++    .forEach((id) => { $(id).value = ''; });
++  $('po_company').value = '';
++  $('po_signer').value = PO_DEFAULT_SIGNER;
++  $('po_date').value = toUsDate(new Date());
++  $('poLines').innerHTML = '';
++  poAddLine();
++  $('poProblems').classList.add('hidden');
++  poRefresh();
++}
++
++function poRenderSupplierList(matches) {
++  const box = $('poSupplierList');
++  if (!matches.length) { box.classList.add('hidden'); box.innerHTML = ''; return; }
++  const shown = matches.slice(0, 8);
++  box.innerHTML = shown.map((m, i) => '<div class="autocomplete-item" data-idx="' + i + '">' + esc(addressBookEntryLabel(m)) + '</div>').join('');
++  box.classList.remove('hidden');
++  // mousedown + preventDefault and index-not-id, for the same two reasons
++  // given at renderConsigneeList: the input must not blur first, and many
++  // address-book entries have no id.
++  box.querySelectorAll('.autocomplete-item').forEach((el) => el.addEventListener('mousedown', (e) => {
++    e.preventDefault();
++    const entry = shown[Number(el.dataset.idx)];
++    if (!entry) return;
++    $('po_supplier').value = consigneeNameForEntry(entry);
++    $('po_supplier_address').value = entry.raw || '';
++    box.classList.add('hidden');
++    poRefresh();
++  }));
++}
++
++async function poLoadCompanies() {
++  const sel = $('po_company');
++  const keep = sel.value;
++  try {
++    if (!Array.isArray(bankAccounts)) {
++      const r = await fetch('/api/bank-accounts');
++      const j = await r.json();
++      if (!r.ok) throw new Error(j.error || 'could not read the companies');
++      bankAccounts = j.accounts || [];
++    }
++    sel.innerHTML = '<option value="">Select the company…</option>'
++      + bankAccounts.map((a) => '<option value="' + esc(a.id) + '">' + esc(a.company) + '</option>').join('');
++    sel.value = keep;
++  } catch (e) {
++    $('poProblems').textContent = 'Could not load the issuing companies: ' + e.message;
++    $('poProblems').classList.remove('hidden');
++  }
++}
++
++async function poLoadSignature() {
++  if (poSignatureUrl !== undefined) return;
++  try {
++    const r = await fetch('/api/po/signature');
++    const j = await r.json();
++    poSignatureUrl = (r.ok && j && typeof j.signature === 'string' && /^data:image\/png;base64,/.test(j.signature)) ? j.signature : null;
++  } catch (e) { poSignatureUrl = null; }
++  poRefresh();
++}
++
++function poInit() {
++  if (!poWired) {
++    poWired = true;
++    wireUsDateField('po_date');
++    wireUsDateField('po_required');
++    poAddLine();
++    $('po_date').value = toUsDate(new Date());
++    $('poForm').addEventListener('input', poRefresh);
++    $('poForm').addEventListener('change', poRefresh);
++    $('poAddLine').addEventListener('click', () => { poAddLine(); poRefresh(); });
++    $('poLines').addEventListener('click', (e) => {
++      const b = e.target.closest('[data-f="remove"]');
++      if (!b) return;
++      const rows = document.querySelectorAll('#poLines .po-line');
++      // Never leave the form with no item row to type into.
++      if (rows.length <= 1) { const r = b.closest('.po-line'); r.querySelectorAll('input').forEach((i) => { i.value = ''; }); }
++      else b.closest('.po-line').remove();
++      poRefresh();
++    });
++    $('po_supplier').addEventListener('input', () => {
++      const q = $('po_supplier').value.trim().toLowerCase();
++      if (!q) { $('poSupplierList').classList.add('hidden'); return; }
++      poRenderSupplierList(searchAddressBook(q));
++    });
++    $('po_supplier').addEventListener('blur', () => setTimeout(() => $('poSupplierList').classList.add('hidden'), 150));
++    $('poPrint').addEventListener('click', poPrint);
++    $('poClear').addEventListener('click', poClear);
++  }
++  poLoadCompanies();
++  poLoadSignature();
++  poRefresh();
++}
+ </script>
+ <!-- The app's sidebar on this page too (Apsara 2026-10-08: "i want the sidebar to appear in all pages").
+      dashboard/sidebar.js; hidden when printing. -->
+diff --git a/routes/documents.js b/routes/documents.js
+index c29050c..f427322 100644
+--- a/routes/documents.js
++++ b/routes/documents.js
+@@ -8,6 +8,16 @@ module.exports = function (app, ctx) {
+     const documentsSaved = require('./helpers/documentsSaved');
+     const invoiceVersions = require('./helpers/invoiceVersions');
+ 
++    // Chandra Bose's signature for the Purchase order tab (Documents). The
++    // browser cannot read assets/, and a second copy of the PNG would be the
++    // problem helpers/signature.js exists to prevent, so this hands over the
++    // one the invoice, proforma and BOL already use. Admin only, like the
++    // Bank tab. null when the file is missing — the sheet then prints a blank
++    // signature line, same fail-soft as the other documents.
++    app.get('/api/po/signature', requireAdmin, (req, res) => {
++        res.json({ signature: require('./helpers/signature').signatureDataUrl() });
++    });
++
+     // preview=1 (query string) returns the PDF inline without saving a copy
+     // or touching pricing memory — used by the "Preview" button so a user
+     // can check the layout before committing to a generation. Anything
+diff --git a/tests/documents-tabs.js b/tests/documents-tabs.js
+index 5112362..d49db93 100644
+--- a/tests/documents-tabs.js
++++ b/tests/documents-tabs.js
+@@ -65,7 +65,7 @@ function spanOf(id) {
+ }
+ 
+ const PANELS = ['panelInvoice', 'panelProforma', 'panelBol', 'panelPacking',
+-                'panelVerification', 'panelBank'];
++                'panelVerification', 'panelBank', 'panelPO'];
+ 
+ // ── A — EVERY PANEL IS A CLOSED BOX ───────────────────────────────────────
+ {
+diff --git a/tests/purchase-order.js b/tests/purchase-order.js
+new file mode 100644
+index 0000000..566f7cd
+--- /dev/null
++++ b/tests/purchase-order.js
+@@ -0,0 +1,275 @@
++// ── tests/purchase-order.js ───────────────────────────────────────────────
++// Apsara, 2026-10-26: "Create a purchase order tab in documents."
++//
++// The tab writes nothing and calls no route of its own, so the ways it can go
++// wrong are on the page: the wrong company on a commitment, a total that does
++// not match its lines, a typed value that becomes markup, a print window that
++// opens on an incomplete order, and a new panel that leaks onto other tabs.
++// This boots the real page and drives the real tab.
++
++const fs = require('fs');
++const path = require('path');
++const { JSDOM } = require('jsdom');
++
++let pass = 0, fail = 0; const failures = [];
++const ck = (n, c, extra) => {
++    if (c) { pass++; console.log('  PASS  ' + n); }
++    else { fail++; failures.push(n); console.log('  FAIL  ' + n); if (extra) console.log('        ' + extra); }
++};
++const section = (t) => console.log('\n=== ' + t + ' ===');
++const wait = (ms) => new Promise((r) => setTimeout(r, ms));
++
++const SRC = fs.readFileSync(path.join(__dirname, '..', 'dashboard', 'documents.html'), 'utf8');
++
++const ACCOUNTS = [
++    { id: 'edge-metals-bofa', company: 'Edge Metals INC', address: '14750 Devonshire Ln, Frisco, TX 75035', accountNumber: 'X' },
++    { id: 'edge-trading-chase', company: 'EDGE TRADING INC', address: '2453 E 25th Street, Los Angeles, CA 90058', accountNumber: 'Y' },
++];
++const SIG = require('../helpers/signature').signatureDataUrl();
++const BOOK = [
++    { id: 's1', aliases: ['Ray'], raw: 'Ray Scrap Co\n12 Yard Rd\nBrea CA 92821' },
++    { id: null, aliases: ['Marta/Sunrise Recycling'], raw: 'Sunrise Recycling\n9 Harbour St' },
++];
++
++(async () => {
++    const hits = [];
++    const dom = new JSDOM(SRC, {
++        runScripts: 'dangerously', url: 'http://localhost/',
++        beforeParse(w) {
++            w.fetch = (u) => {
++                const k = String(u).split('?')[0].replace(/^https?:\/\/[^/]+/, '');
++                hits.push(k);
++                const body = k === '/api/bank-accounts' ? { accounts: ACCOUNTS }
++                    : k === '/api/po/signature' ? { signature: SIG }
++                    : k === '/api/address-book' ? BOOK : { ok: true };
++                return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve(body) });
++            };
++            w.alert = () => {}; w.confirm = () => true;
++            w.HTMLElement.prototype.scrollIntoView = () => {};
++        },
++    });
++    await wait(700);
++    const w = dom.window; const d = w.document;
++    const $ = (id) => d.getElementById(id);
++    const type = (id, v) => { $(id).value = v; $(id).dispatchEvent(new w.Event('input', { bubbles: true })); };
++    const pick = (id, v) => { $(id).value = v; $(id).dispatchEvent(new w.Event('change', { bubbles: true })); };
++    const line = (n, desc, qty, price, unit) => {
++        const row = d.querySelectorAll('#poLines .po-line')[n];
++        const set = (f, v) => { const el = row.querySelector(`[data-f="${f}"]`); el.value = v; el.dispatchEvent(new w.Event('input', { bubbles: true })); };
++        set('desc', desc); set('qty', qty); set('price', price);
++        if (unit) { const u = row.querySelector('[data-f="unit"]'); u.value = unit; u.dispatchEvent(new w.Event('change', { bubbles: true })); }
++    };
++    const preview = () => $('poPreview').querySelector('.po-sheet').textContent;
++    const problems = () => $('poProblems').classList.contains('hidden') ? '' : $('poProblems').textContent;
++
++    section('A — the tab exists and switches like the others');
++    {
++        const btn = d.querySelector('.subtab-btn[data-subtab="po"]');
++        ck('there is a "Purchase order" tab button', !!btn && /purchase order/i.test(btn.textContent));
++        ck('it is NOT the tab the page opens on', !btn.classList.contains('active'));
++        ck('its panel starts hidden', $('panelPO').classList.contains('hidden'));
++        btn.click(); await wait(80);
++        ck('clicking it shows the panel', !$('panelPO').classList.contains('hidden'));
++        const others = ['panelInvoice', 'panelProforma', 'panelBol', 'panelPacking', 'panelVerification', 'panelBank'];
++        ck('and hides every other panel', others.every((p) => $(p).classList.contains('hidden')),
++            others.filter((p) => !$(p).classList.contains('hidden')).join(', '));
++        d.querySelector('.subtab-btn[data-subtab="bank"]').click(); await wait(80);
++        ck('leaving for Bank hides it again', $('panelPO').classList.contains('hidden'));
++        d.querySelector('.subtab-btn[data-subtab="proforma"]').click(); await wait(80);
++        ck('and it stays hidden on Proforma', $('panelPO').classList.contains('hidden'));
++        d.querySelector('.subtab-btn[data-subtab="po"]').click(); await wait(200);
++    }
++
++    section('B — which company is buying');
++    {
++        const sel = $('po_company');
++        const opts = [...sel.options].map((o) => o.textContent);
++        ck('both companies are offered, from the Bank tab data', opts.includes('Edge Metals INC') && opts.includes('EDGE TRADING INC'), opts.join(' | '));
++        ck('NOTHING is pre-selected', sel.value === '', 'a PO is a commitment in one company\'s name — never a default');
++        ck('the sheet says to choose, rather than naming a company', /choose the issuing company/i.test(preview()));
++        pick('po_company', 'edge-trading-chase');
++        ck('choosing Edge Trading prints Edge Trading and its address', /EDGE TRADING INC/.test(preview()) && /2453 E 25th Street/.test(preview()));
++        ck('and does not print Edge Metals', !/Edge Metals INC/.test(preview()) && !/Frisco/.test(preview()));
++        pick('po_company', 'edge-metals-bofa');
++        ck('switching to Edge Metals swaps both name and address', /Edge Metals INC/.test(preview()) && /Frisco/.test(preview()) && !/EDGE TRADING/.test(preview()));
++    }
++
++    section('C — supplier typeahead, same as the other tabs');
++    {
++        type('po_supplier', 'sunrise');
++        const items = [...$('poSupplierList').querySelectorAll('.autocomplete-item')];
++        ck('typing a company name found only in the raw address finds it', items.length === 1, String(items.length));
++        items[0].dispatchEvent(new w.MouseEvent('mousedown', { bubbles: true, cancelable: true }));
++        ck('picking an entry with NO id still fills the name (after the "/")', $('po_supplier').value === 'Sunrise Recycling', $('po_supplier').value);
++        ck('and the address', /9 Harbour St/.test($('po_supplier_address').value));
++        ck('and the list closes', $('poSupplierList').classList.contains('hidden'));
++        ck('the preview shows the supplier and address', /Sunrise Recycling/.test(preview()) && /9 Harbour St/.test(preview()));
++    }
++
++    section('D — the figures');
++    {
++        type('po_number', 'PO-1001');
++        line(0, 'Copper birch/cliff', '22.571', '0.58', 'MT');
++        ck('line total is rounded once, to the cent (22.571 x 0.58 = 13.09118)', /Line total \$13\.09/.test($('poLines').textContent), $('poLines').textContent);
++        $('poAddLine').click();
++        line(1, 'Aluminium 6063', '49,760', '$1.0425', 'LB');
++        ck('a unit price keeps four decimals on paper', /\$1\.0425/.test(preview()), preview());
++        ck('commas and a dollar sign are accepted (49,760 x $1.0425 = $51,874.80)', /\$51,874\.80/.test(preview()), preview());
++    }
++    {
++        // 22.571 x 0.58 = 13.09118 -> 1309 cents ; 49760 x 1.0425 = 51874.80 -> 5187480 cents
++        const d1 = w.eval('poCollect()');
++        const sub = d1.lines.reduce((s, l) => s + l.amountCents, 0);
++        ck('subtotal equals the sum of the printed lines, in cents', d1.subtotalCents === sub && sub === 1309 + 5187480, `${d1.subtotalCents} vs ${sub}`);
++        type('po_other', '-$205');
++        ck('"-$205" is a deduction of 205 dollars (the 2026-09 invoice bug, not repeated)', w.eval('poCollect()').otherCents === -20500);
++        ck('the total includes it', w.eval('poCollect()').totalCents === 1309 + 5187480 - 20500);
++        ck('the total on the sheet matches', new RegExp(w.eval('poMoney')(1309 + 5187480 - 20500).replace(/[$.]/g, '\\$&')).test(preview()), preview());
++        type('po_other', 'abc');
++        ck('junk in freight is reported, not read as zero', /not a number/i.test((w.eval('poProblems')(w.eval('poCollect()'))).join(' ')));
++        type('po_other', '');
++    }
++
++    section('E — it refuses to print an incomplete order');
++    {
++        let opened = 0; let written = '';
++        w.open = () => { opened++; return { document: { write: (s) => { written += s; }, close() {} }, focus() {}, print() {} }; };
++        // Missing date and terms are fine; missing supplier is not.
++        type('po_supplier', '');
++        $('poPrint').click();
++        ck('no print window opens without a supplier', opened === 0);
++        ck('and the reason is shown', /supplier/i.test(problems()), problems());
++        type('po_supplier', 'Sunrise Recycling');
++        pick('po_company', '');
++        $('poPrint').click();
++        ck('no print window opens without a company', opened === 0 && /company/i.test(problems()), problems());
++        pick('po_company', 'edge-metals-bofa');
++        type('po_date', '13/45/2026');
++        $('poPrint').click();
++        ck('an impossible date blocks printing', opened === 0 && /not a real date/i.test(problems()), problems());
++        type('po_date', '10/26/2026');
++        line(1, 'Half-filled line', '5', '', 'LB');
++        $('poPrint').click();
++        ck('a half-filled item blocks printing and is named', opened === 0 && /Item 2/.test(problems()), problems());
++        line(1, '', '', '', 'LB');
++        $('poPrint').click();
++        ck('a complete order opens exactly one print window', opened === 1, String(opened));
++        ck('the sheet it prints carries the number, company and supplier', /PO-1001/.test(written) && /Edge Metals INC/.test(written) && /Sunrise Recycling/.test(written));
++        ck('and the problem list clears', $('poProblems').classList.contains('hidden'));
++    }
++
++    section('F — what is typed is text, never markup');
++    {
++        type('po_supplier', '<img src=x onerror="window.__po_xss=1">');
++        type('po_notes', '<script>window.__po_xss=2</script>');
++        await wait(50);
++        ck('no <img> was created from the typed text', [...$('poPreview').querySelectorAll('img')].every((i) => /^data:image\/png/.test(i.getAttribute('src') || '')),
++            'only the signature image may exist, and it is a data: PNG');
++        ck('no <script> was created inside the preview', $('poPreview').querySelectorAll('script').length === 0);
++        ck('and nothing ran', w.__po_xss === undefined);
++        ck('the text itself is still shown', /<img src=x/.test(preview()));
++    }
++
++    section('G — dates have the calendar, and the tab touches only its own data');
++    {
++        ck('PO date is a MM/DD/YYYY text box, not type=date', $('po_date').type === 'text' && $('po_date').placeholder === 'MM/DD/YYYY');
++        ck('PO date has a calendar button beside it', !!$('po_date').parentElement.querySelector('button[title="Pick a date"]'));
++        ck('Required-by has one too', !!$('po_required').parentElement.querySelector('button[title="Pick a date"]'));
++        ck('PO date defaults to today in MM/DD/YYYY', /^\d{2}\/\d{2}\/\d{4}$/.test($('po_date').value) || $('po_date').value === '10/26/2026');
++        type('po_required', '9/1/26'); $('po_required').dispatchEvent(new w.Event('blur'));
++        ck('a short date settles to MM/DD/YYYY on blur', $('po_required').value === '09/01/2026', $('po_required').value);
++        const mine = new Set(['/api/bank-accounts', '/api/address-book', '/api/po/signature']);
++        hits.length = 0;
++        d.querySelector('.subtab-btn[data-subtab="bank"]').click(); await wait(80);
++        hits.length = 0;
++        d.querySelector('.subtab-btn[data-subtab="po"]').click(); await wait(200);
++        ck('entering the tab reads only the Bank data, the address book and the signature', hits.length > 0 && hits.every((h) => mine.has(h)), hits.join(', '));
++        ck('and it never posts anything', !/method:\s*['"](POST|PUT|PATCH|DELETE)/.test(SRC.slice(SRC.indexOf('// ── Purchase order tab'))));
++    }
++
++    section('I — header contact, and who signs');
++    {
++        ck('the real signature file exists to test with', typeof SIG === 'string' && SIG.startsWith('data:image/png'));
++        pick('po_company', 'edge-metals-bofa');
++        ck('the header carries the phone number', /Tel \+1 \(310\) 938-2525/.test(preview()), preview().slice(0, 200));
++        ck('and Bose\'s email', /bose@edgemetals\.com/.test(preview()));
++        ck('the buyer signs as Chandra Bose by default', $('po_signer').value === 'Chandra Bose');
++        const img = () => $('poPreview').querySelectorAll('.sign img').length;
++        ck('Edge Metals + Chandra Bose: his signature image is on the buyer line', img() === 1);
++        ck('the buyer line is labelled with the company and his name', /Buyer — Edge Metals INC/.test(preview()) && /Chandra Bose/.test(preview()));
++        ck('the seller line carries the supplier and NO image', /Seller — /.test(preview()) && $('poPreview').querySelectorAll('.sign .sg')[1].querySelectorAll('img').length === 0);
++        pick('po_company', 'edge-trading-chase');
++        ck('Edge Trading: his signature is NOT printed under another company', img() === 0);
++        ck('  but the buyer line, name and header contact still print', /Buyer — EDGE TRADING INC/.test(preview()) && /bose@edgemetals\.com/.test(preview()));
++        pick('po_company', 'edge-metals-bofa');
++        type('po_signer', 'Someone Else');
++        ck('another name in the box: no signature image', img() === 0);
++        type('po_signer', 'chandra  bose');
++        ck('his name typed loosely still counts', img() === 1);
++        pick('po_company', '');
++        ck('no company chosen: no contact line and no signature', !/Tel \+1/.test(preview()) && img() === 0);
++        pick('po_company', 'edge-metals-bofa');
++        ck('"Edge Metals Inc." typed loosely is Edge Metals, "Edge Metals Yard" is not',
++            w.eval("poIsEdgeMetals('edge metals inc.')") === true && w.eval("poIsEdgeMetals('Edge Metals LLC')") === true
++            && w.eval("poIsEdgeMetals('Edge Yard')") === false && w.eval("poIsEdgeMetals('Edge Metals Yard')") === false);
++    }
++
++    section('J — the signature route, for real');
++    {
++        const http = require('http');
++        process.env.APP_PASSWORD = process.env.APP_PASSWORD || 'user-pw-aaaaaaaaaaaa';
++        process.env.ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'admin-pw-bbbbbbbbbbb';
++        process.env.STAFF_PASSWORD = process.env.STAFF_PASSWORD || 'staff-pw-ccccccccccc';
++        const { createApi } = require(path.join(__dirname, '..', 'api'));
++        const app = createApi();
++        const server = await new Promise((r) => { const s = app.listen(0, '127.0.0.1', () => r(s)); });
++        const base = `http://127.0.0.1:${server.address().port}`;
++        const req = (method, p, { body, sid } = {}) => new Promise((resolve, reject) => {
++            const data = body == null ? null : JSON.stringify(body);
++            const headers = {};
++            if (data) { headers['Content-Type'] = 'application/json'; headers['Content-Length'] = Buffer.byteLength(data); }
++            if (sid) headers.Authorization = `Bearer ${sid}`;
++            const r2 = http.request(base + p, { method, headers }, (res) => {
++                let raw = ''; res.on('data', (c) => { raw += c; });
++                res.on('end', () => { let j = null; try { j = JSON.parse(raw); } catch (e) { /* not json */ } resolve({ status: res.statusCode, json: j }); });
++            });
++            r2.on('error', reject); if (data) r2.write(data); r2.end();
++        });
++        try {
++            const none = await req('GET', '/api/po/signature');
++            ck('no session: refused', none.status === 401 || none.status === 403, String(none.status));
++            const staff = (await req('POST', '/login', { body: { password: process.env.STAFF_PASSWORD } })).json || {};
++            ck('staff can sign in (so the refusal below is about the role, not the login)', !!staff.sid, JSON.stringify(staff).slice(0, 80));
++            const usr = (await req('POST', '/login', { body: { password: process.env.APP_PASSWORD } })).json || {};
++            ck('a plain user can sign in', !!usr.sid);
++            const u = await req('GET', '/api/po/signature', { sid: usr.sid });
++            ck('a plain user session is refused (the case requireAdmin exists for)', u.status === 403, String(u.status));
++            const s = await req('GET', '/api/po/signature', { sid: staff.sid });
++            ck('a staff session is refused', s.status === 403, String(s.status));
++            const sid = ((await req('POST', '/login', { body: { password: process.env.ADMIN_PASSWORD } })).json || {}).sid;
++            ck('admin signs in', !!sid);
++            const ok = await req('GET', '/api/po/signature', { sid });
++            ck('admin gets the same PNG the invoice uses', ok.status === 200 && ok.json && ok.json.signature === SIG, String(ok.status));
++            // and the page reads exactly that shape
++            ck('the page accepts that response', w.eval('poSignatureUrl') === SIG);
++        } finally { server.close(); }
++    }
++
++    section('H — Clear and the last item row');
++    {
++        const rows = () => d.querySelectorAll('#poLines .po-line').length;
++        $('poAddLine').click(); $('poAddLine').click();
++        ck('items can be added', rows() >= 3);
++        while (rows() > 1) d.querySelector('#poLines [data-f="remove"]').click();
++        d.querySelector('#poLines [data-f="remove"]').click();
++        ck('removing the last item leaves one empty row to type into', rows() === 1);
++        $('poClear').click();
++        ck('Clear empties the number, supplier and company', $('po_number').value === '' && $('po_supplier').value === '' && $('po_company').value === '');
++        ck('and puts Chandra Bose back as the buyer', $('po_signer').value === 'Chandra Bose');
++        ck('and puts one empty item row back', rows() === 1 && d.querySelector('#poLines [data-f="desc"]').value === '');
++    }
++
++    console.log(`\n  ${pass} passed, ${fail} failed`);
++    if (failures.length) { console.log('\n  failed:'); failures.forEach((f) => console.log('    · ' + f)); }
++    process.exit(fail ? 1 : 0);
++})().catch((e) => { console.error(e); process.exit(1); });
