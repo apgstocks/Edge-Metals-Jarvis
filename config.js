@@ -858,11 +858,12 @@ function getSettings() {
         // helpers/json.js's loadSettings() defaults on purpose (see that
         // file's comment): both read the same settings.json, from two
         // different call sites (scheduler.js/actions.js use this one).
-        // Bose removed 2026-10-26: Apsara, "now remove all my jarvis daily
-        // messages from bose" / "emails". NOTE this is only the DEFAULT —
-        // a value already saved in settings.json on the VM wins over it, so
-        // the live recipient list must be changed in Settings too.
-        yard_report_emails     : 'apsara@edgemetals.com',
+        // 2026-10-26: Apsara asked to remove Bose from Jarvis's daily emails,
+        // then narrowed it: "only in edge yard report he can be there". So he
+        // STAYS here and was removed from the 07:50 invoice digest instead
+        // (helpers/partyInvoiceNightly.js). I had taken him out of this list
+        // too, which was wider than she asked for — restored.
+        yard_report_emails     : 'bose@edgemetals.com, apsara@edgemetals.com',
         yard_whatsapp_group_id : '',
         yard_whatsapp_contacts : '',
     };
