@@ -1137,7 +1137,7 @@ async function openFollowups() {
   const L = LEDGER_LIGHT;
   const money = (n) => '$' + Number(n || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   const data = await api('/api/payment-followups');
-  const drafts = data.drafts || [], skipped = data.skipped_eta || [];
+  const drafts = data.drafts || [], waiting = data.waiting_eta || [];
   document.body.insertAdjacentHTML('beforeend', `
     <div id="pfModal" style="position:fixed; inset:0; background:rgba(0,0,0,.66); z-index:9100; display:flex; align-items:flex-start; justify-content:center; overflow-y:auto; padding:40px 16px;">
       <div class="card" style="width:min(780px,100%); padding:20px 22px 18px; background:${L.sunken}; border-color:${L.line};">
@@ -1153,6 +1153,7 @@ async function openFollowups() {
           <div class="pfCard" style="background:${L.paper}; border:1px solid ${L.line}; border-radius:var(--radius-sm); padding:12px 14px; margin-bottom:10px;">
             <div style="display:flex; gap:10px; align-items:baseline; flex-wrap:wrap;">
               <b style="color:${L.ink};">${esc(d.customer)}</b>
+              <span style="font-size:11px; padding:1px 7px; border-radius:9px; border:1px solid ${L.line}; color:${L.inkMuted};">${d.kind === 'payment' ? 'payment due · ' + esc(d.eta_terms) : 'remittance status'}</span>
               <span style="font-size:12px; color:${L.inkMuted};">${d.count} invoice${d.count === 1 ? '' : 's'} · ${money(d.total)}</span>
               <span style="font-size:12px; color:${d.to_missing ? L.danger : L.inkFaint};">${d.to_missing ? 'no single email in the address book' : 'to ' + esc(d.to)}</span>
               <span style="flex:1"></span>
@@ -1164,8 +1165,8 @@ async function openFollowups() {
               <button class="btn btn-secondary pfMail" data-i="${i}" style="font-size:12px; padding:6px 12px;">Open in mail</button>
             </div>
           </div>`).join('') : `<div style="padding:16px; text-align:center; font-size:12px; color:${L.inkFaint};">Nobody needs chasing.</div>`}</div>
-        ${skipped.length ? `<div style="margin-top:14px; font-size:12px; color:${L.inkMuted};"><b>On ETA-based terms — no draft (${skipped.length})</b>
-          ${skipped.map((s) => `<div style="display:flex; gap:10px; padding:4px 0; border-bottom:1px solid ${L.lineSoft};"><span style="flex:1;">${esc(s.customer)}</span><span style="font-family:var(--font-mono);">${esc(s.eta_terms)}</span><span>${s.count} · ${money(s.total)}</span><a href="#" class="pfEtaClear" data-customer="${esc(s.customer)}" style="color:${L.danger};">remove terms</a></div>`).join('')}</div>` : ''}
+        ${waiting.length ? `<div style="margin-top:14px; font-size:12px; color:${L.inkMuted};"><b>On ETA-based terms — not yet (${waiting.length})</b> <span style="color:${L.inkFaint};">a draft starts ${data.lead_days || 11} days before each invoice's vessel ETA (from the booking)</span>
+          ${waiting.map((s) => `<div style="display:flex; gap:10px; padding:4px 0; border-bottom:1px solid ${L.lineSoft};"><span style="flex:1;">${esc(s.customer)}${(s.eta_unknown || []).length ? ` <span style="color:${L.danger};">· no ETA on the booking for ${esc(s.eta_unknown.join(', '))}</span>` : ''}</span><span style="font-family:var(--font-mono);">${esc(s.eta_terms)}</span><span>${s.next_draft ? 'draft from ' + esc(s.next_draft) : ''}</span><span>${s.count} · ${money(s.total)}</span><a href="#" class="pfEtaClear" data-customer="${esc(s.customer)}" style="color:${L.danger};">remove terms</a></div>`).join('')}</div>` : ''}
         <div id="pfErr" style="color:${L.danger}; font-size:11px; margin-top:8px;"></div>
       </div>
     </div>`);
