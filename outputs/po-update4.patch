@@ -1,0 +1,229 @@
+diff --git a/dashboard/documents.html b/dashboard/documents.html
+index b302dd9..ec6ffd8 100644
+--- a/dashboard/documents.html
++++ b/dashboard/documents.html
+@@ -60,6 +60,10 @@ button { font:inherit; }
+ .hidden { display:none !important; }
+ .po-h { font-family:var(--font-mono); font-size:10.5px; font-weight:600; letter-spacing:.14em; text-transform:uppercase; color:var(--copper-400); margin-bottom:12px; }
+ .po-line { border:1px solid var(--border-subtle); border-radius:var(--radius-sm); padding:10px 10px 8px; margin-bottom:10px; background:var(--surface-sunken); }
++.po-grid { display:grid; grid-template-columns:1fr 92px 1fr auto; gap:8px; align-items:end; }
++.po-q { order:1; } .po-u { order:2; } .po-p { order:3; } .po-x { order:5; } .po-p2 { display:none; order:4; }
++#poLines.two .po-grid { grid-template-columns:1fr 1fr auto; }
++#poLines.two .po-x { order:3; } #poLines.two .po-p { order:4; } #poLines.two .po-p2 { display:block; order:5; }
+ .po-line-amount { font-family:var(--font-mono); font-size:11px; color:var(--text-faint); text-align:right; margin-top:6px; min-height:14px; }
+ @media (max-width: 860px) { #poLayout { grid-template-columns:1fr !important; } #poLayout > div:last-child { position:static !important; } }
+ .badge { display:inline-flex; align-items:center; padding:2px 8px; border-radius:999px; font-family:var(--font-mono); font-size:10.5px; font-weight:600; letter-spacing:.04em; text-transform:uppercase; }
+@@ -268,6 +272,13 @@ body[data-theme="light"] {
+             <div class="po-h" style="margin:0;">Items</div>
+             <button type="button" id="poAddLine" class="btn btn-secondary" style="padding:5px 12px; font-size:10px;">+ Add item</button>
+           </div>
++          <label style="display:flex; align-items:center; gap:8px; font-size:12px; color:var(--text-body); margin-bottom:8px; cursor:pointer;">
++            <input type="checkbox" id="po_two" style="width:auto;"> Price depends on condition (for example clean / dirty)
++          </label>
++          <div id="poTwoLabels" class="hidden" style="display:grid; grid-template-columns:1fr 1fr; gap:8px; margin-bottom:10px;">
++            <div class="field" style="margin:0;"><label for="po_label_a">First price is for</label><input id="po_label_a" type="text" value="Clean" autocomplete="off"></div>
++            <div class="field" style="margin:0;"><label for="po_label_b">Second price is for</label><input id="po_label_b" type="text" value="Dirty" autocomplete="off"></div>
++          </div>
+           <div id="poLines"></div>
+           <div class="field" style="margin:12px 0 0;">
+             <label for="po_other">Freight / other charges (USD, optional — a minus sign makes it a deduction)</label>
+@@ -8267,12 +8278,13 @@ function poAddLine(seed) {
+   row.innerHTML =
+     '<div class="field" style="margin-bottom:6px;"><label for="po_l' + n + '_desc">Description</label>'
+     + '<input id="po_l' + n + '_desc" data-f="desc" type="text" autocomplete="off" placeholder="e.g. Copper birch/cliff"></div>'
+-    + '<div style="display:grid; grid-template-columns:1fr 92px 1fr auto; gap:8px; align-items:end;">'
+-    + '<div class="field" style="margin:0;"><label for="po_l' + n + '_qty">Qty</label><input id="po_l' + n + '_qty" data-f="qty" type="text" inputmode="decimal" autocomplete="off"></div>'
+-    + '<div class="field" style="margin:0;"><label for="po_l' + n + '_unit">Unit</label><select id="po_l' + n + '_unit" data-f="unit">'
++    + '<div class="po-grid">'
++    + '<div class="field po-q" style="margin:0;"><label for="po_l' + n + '_qty">Qty</label><input id="po_l' + n + '_qty" data-f="qty" type="text" inputmode="decimal" autocomplete="off"></div>'
++    + '<div class="field po-u" style="margin:0;"><label for="po_l' + n + '_unit">Unit</label><select id="po_l' + n + '_unit" data-f="unit">'
+     + PO_UNITS.map((u) => '<option>' + esc(u) + '</option>').join('') + '</select></div>'
+-    + '<div class="field" style="margin:0;"><label for="po_l' + n + '_price">Unit price</label><input id="po_l' + n + '_price" data-f="price" type="text" inputmode="decimal" autocomplete="off" placeholder="0.00"></div>'
+-    + '<button type="button" data-f="remove" class="btn btn-secondary" title="Remove this item" aria-label="Remove this item" style="padding:7px 10px; font-size:12px;">&times;</button>'
++    + '<div class="field po-p" style="margin:0;"><label for="po_l' + n + '_price" data-f="price-label">Unit price</label><input id="po_l' + n + '_price" data-f="price" type="text" inputmode="decimal" autocomplete="off" placeholder="0.00"></div>'
++    + '<div class="field po-p2" style="margin:0;"><label for="po_l' + n + '_price2" data-f="price2-label">Second price</label><input id="po_l' + n + '_price2" data-f="price2" type="text" inputmode="decimal" autocomplete="off" placeholder="0.00"></div>'
++    + '<button type="button" data-f="remove" class="btn btn-secondary po-x" title="Remove this item" aria-label="Remove this item" style="padding:7px 10px; font-size:12px;">&times;</button>'
+     + '</div>'
+     + '<div data-f="amount" class="po-line-amount"></div>';
+   if (seed) {
+@@ -8291,17 +8303,28 @@ function poCollect() {
+   const co = (typeof bankAccounts !== 'undefined' && Array.isArray(bankAccounts) ? bankAccounts : [])
+     .find((a) => a.id === $('po_company').value) || null;
+   const lines = [];
++  // "Price depends on condition": every item then carries TWO prices, and the
++  // order is totalled both ways. The shipper's declaration decides which one
++  // applies; this sheet states both and commits to neither.
++  const two = $('po_two').checked;
++  const labelA = $('po_label_a').value.trim();
++  const labelB = $('po_label_b').value.trim();
+   document.querySelectorAll('#poLines .po-line').forEach((row, i) => {
+     const get = (f) => row.querySelector('[data-f="' + f + '"]');
+     const desc = get('desc').value.trim();
+     const qtyText = get('qty').value.trim();
+     const priceText = get('price').value.trim();
+-    if (!desc && !qtyText && !priceText) return;
++    const price2Text = two ? get('price2').value.trim() : '';
++    if (!desc && !qtyText && !priceText && !price2Text) return;
+     const qty = poParseNumber(qtyText);
+     const price = poParseNumber(priceText);
+-    const ok = !!desc && qty !== null && qty > 0 && price !== null && price >= 0;
++    const price2 = two ? poParseNumber(price2Text) : null;
++    const ok = !!desc && qty !== null && qty > 0 && price !== null && price >= 0
++      && (!two || (price2 !== null && price2 >= 0));
+     lines.push({
+       n: i + 1, row, desc, qty, unit: get('unit').value, price: price === null ? 0 : price, ok,
++      price2: price2 === null ? 0 : price2,
++      amount2Cents: ok && two ? Math.round(Number((qty * price2 * 100).toPrecision(12))) : 0,
+       // The UNIT price keeps its fractions (scrap is quoted to four places, a
+       // dollar-and-a-bit per pound); only the LINE total is rounded to a cent.
+       // toPrecision first so 1.005*100 does not land on 100.49999999999999.
+@@ -8311,6 +8334,7 @@ function poCollect() {
+   const otherText = $('po_other').value.trim();
+   const other = otherText ? poParseNumber(otherText) : 0;
+   const subtotalCents = lines.reduce((s, l) => s + l.amountCents, 0);
++  const subtotal2Cents = lines.reduce((s, l) => s + l.amount2Cents, 0);
+   const otherCents = other === null ? 0 : Math.round(other * 100);
+   return {
+     company: co ? co.company : '', companyAddress: co ? (co.address || '') : '',
+@@ -8326,6 +8350,7 @@ function poCollect() {
+     signatureImg: (poSignatureUrl && poIsEdgeMetals(co ? co.company : '')
+       && /chandra\s+bose/i.test($('po_signer').value)) ? poSignatureUrl : '',
+     subtotalCents, totalCents: subtotalCents + otherCents,
++    two, labelA, labelB, subtotal2Cents, total2Cents: subtotal2Cents + otherCents,
+   };
+ }
+ 
+@@ -8343,7 +8368,9 @@ function poProblems(d) {
+   if (!d.shipTo) p.push('Choose where the material is delivered.');
+   if (!d.lines.length) p.push('Add at least one item.');
+   d.lines.filter((l) => !l.ok).forEach((l) => p.push('Item ' + l.n + ' needs a description, a quantity above zero and a unit price.'));
+-  if (d.totalCents < 0) p.push('The total is below zero.');
++  if (d.two && (!d.labelA || !d.labelB)) p.push('Name both price options (for example Clean and Dirty).');
++  if (d.two && d.labelA && d.labelA.toLowerCase() === d.labelB.toLowerCase()) p.push('The two price options need different names.');
++  if (d.totalCents < 0 || (d.two && d.total2Cents < 0)) p.push('The total is below zero.');
+   return p;
+ }
+ 
+@@ -8376,6 +8403,8 @@ function poSheetCss() {
+     + '.po-sheet th.r,.po-sheet td.r{text-align:right; font-variant-numeric:tabular-nums;}'
+     + '.po-sheet td{padding:11px; border-bottom:1px solid #E5E9EC; vertical-align:top; font-size:12.5px; color:#2B3239;}'
+     + '.po-sheet td.d{font-weight:600; color:#0C0E10;}'
++    + '.po-sheet .pp{display:flex; justify-content:space-between; gap:12px; white-space:nowrap;} .po-sheet .pp + .pp{margin-top:3px;}'
++    + '.po-sheet .pp span{font-size:9px; font-weight:700; letter-spacing:.1em; text-transform:uppercase; color:#7E8891; align-self:center;}'
+     + '.po-sheet th:first-child,.po-sheet td:first-child{padding-left:14px;} .po-sheet th:last-child,.po-sheet td:last-child{padding-right:14px;}'
+     + '.po-sheet .tot{margin:16px 0 0 auto; width:290px;}'
+     + '.po-sheet .tot div{display:flex; justify-content:space-between; padding:5px 14px; font-variant-numeric:tabular-nums; color:#3C454D;}'
+@@ -8404,7 +8433,12 @@ function poSheetHtml(d) {
+   const meta = (k, v) => '<div><span class="k">' + k + '</span>' + (v ? esc(v) : miss('—')) + '</div>';
+   const rows = d.lines.filter((l) => l.ok).map((l) =>
+     '<tr><td class="d">' + esc(l.desc) + '</td><td class="r">' + esc(poQty(l.qty)) + '</td><td>' + esc(l.unit)
+-    + '</td><td class="r">' + esc(poPrice(l.price)) + '</td><td class="r d">' + esc(poMoney(l.amountCents)) + '</td></tr>').join('');
++    + '</td><td class="r">' + (d.two
++      ? '<div class="pp"><span>' + esc(d.labelA) + '</span>' + esc(poPrice(l.price)) + '</div><div class="pp"><span>' + esc(d.labelB) + '</span>' + esc(poPrice(l.price2)) + '</div>'
++      : esc(poPrice(l.price)))
++    + '</td><td class="r d">' + (d.two
++      ? '<div class="pp"><span>' + esc(d.labelA) + '</span>' + esc(poMoney(l.amountCents)) + '</div><div class="pp"><span>' + esc(d.labelB) + '</span>' + esc(poMoney(l.amount2Cents)) + '</div>'
++      : esc(poMoney(l.amountCents))) + '</td></tr>').join('');
+   return '<div class="po-sheet"><div class="bar"></div>'
+     + '<div class="head"><div class="brand">' + (poIsEdgeMetals(d.company) ? PO_LOGO : '') + '<div>'
+     + '<div class="co">' + (d.company ? esc(d.company) : miss('Choose the issuing company')) + '</div>'
+@@ -8419,9 +8453,15 @@ function poSheetHtml(d) {
+     + '<div class="party"><span class="k">Deliver to</span><div class="v">' + (d.shipTo ? esc(d.shipTo) : miss('—')) + '</div></div></div>'
+     + '<table><thead><tr><th>Description</th><th class="r">Qty</th><th>Unit</th><th class="r">Unit price</th><th class="r">Amount</th></tr></thead><tbody>'
+     + (rows || '<tr><td colspan="5">' + miss('No items yet') + '</td></tr>') + '</tbody></table>'
+-    + '<div class="tot"><div><span>Subtotal</span><span>' + esc(poMoney(d.subtotalCents)) + '</span></div>'
++    + '<div class="tot">' + (d.two
++      ? '<div><span>Subtotal if ' + esc(d.labelA) + '</span><span>' + esc(poMoney(d.subtotalCents)) + '</span></div>'
++        + '<div><span>Subtotal if ' + esc(d.labelB) + '</span><span>' + esc(poMoney(d.subtotal2Cents)) + '</span></div>'
++      : '<div><span>Subtotal</span><span>' + esc(poMoney(d.subtotalCents)) + '</span></div>')
+     + (d.otherCents ? '<div><span>Freight / other</span><span>' + esc(poMoney(d.otherCents)) + '</span></div>' : '')
+-    + '<div class="grand"><span>Total (USD)</span><span>' + esc(poMoney(d.totalCents)) + '</span></div></div>'
++    + (d.two
++      ? '<div class="grand"><span>Total if ' + esc(d.labelA) + ' (USD)</span><span>' + esc(poMoney(d.totalCents)) + '</span></div>'
++        + '<div class="grand"><span>Total if ' + esc(d.labelB) + ' (USD)</span><span>' + esc(poMoney(d.total2Cents)) + '</span></div>'
++      : '<div class="grand"><span>Total (USD)</span><span>' + esc(poMoney(d.totalCents)) + '</span></div>') + '</div>'
+     + (d.notes ? '<div class="notes"><span class="k">Notes &amp; conditions</span>' + esc(d.notes) + '</div>' : '')
+     + '<div class="sign">'
+     + '<div class="sg"><div class="ink">' + (d.signatureImg ? '<img src="' + esc(d.signatureImg) + '" alt="">' : '') + '</div>'
+@@ -8434,9 +8474,17 @@ function poSheetHtml(d) {
+ function poRefresh() {
+   const d = poCollect();
+   $('poPreview').innerHTML = '<style>' + poSheetCss() + '</style>' + poSheetHtml(d);
++  $('poLines').classList.toggle('two', d.two);
++  $('poTwoLabels').classList.toggle('hidden', !d.two);
++  document.querySelectorAll('#poLines .po-line').forEach((row) => {
++    row.querySelector('[data-f="price-label"]').textContent = d.two ? 'Price — ' + (d.labelA || 'first') : 'Unit price';
++    row.querySelector('[data-f="price2-label"]').textContent = 'Price — ' + (d.labelB || 'second');
++  });
+   d.lines.forEach((l) => {
+     const el = l.row.querySelector('[data-f="amount"]');
+-    el.textContent = l.ok ? 'Line total ' + poMoney(l.amountCents) : '';
++    el.textContent = !l.ok ? '' : (d.two
++      ? d.labelA + ' ' + poMoney(l.amountCents) + '  ·  ' + d.labelB + ' ' + poMoney(l.amount2Cents)
++      : 'Line total ' + poMoney(l.amountCents));
+   });
+   // The warning list is only shown once she has tried to print, so an empty
+   // form is not shouting at her; after that it follows her edits.
+@@ -8467,6 +8515,7 @@ function poClear() {
+   ['po_supplier', 'po_supplier_address', 'po_number', 'po_required', 'po_terms', 'po_shipto', 'po_other', 'po_notes']
+     .forEach((id) => { $(id).value = ''; });
+   $('po_company').value = '';
++  $('po_two').checked = false; $('po_label_a').value = 'Clean'; $('po_label_b').value = 'Dirty';
+   $('po_deliver').value = '';
+   $('po_signer').value = PO_DEFAULT_SIGNER;
+   $('po_date').value = toUsDate(new Date());
+diff --git a/tests/purchase-order.js b/tests/purchase-order.js
+index d6bf283..52fb610 100644
+--- a/tests/purchase-order.js
++++ b/tests/purchase-order.js
+@@ -310,11 +310,50 @@ const BOOK = [
+         type('po_supplier', ''); $('po_supplier_address').value = '';
+     }
+ 
++    section('M — price depends on condition (clean / dirty)');
++    {
++        $('poClear').click();
++        pick('po_company', 'edge-metals-bofa');
++        const row = () => d.querySelector('#poLines .po-line');
++        const set = (f, v) => { const el = row().querySelector(`[data-f="${f}"]`); el.value = v; el.dispatchEvent(new w.Event('input', { bubbles: true })); };
++        ck('off by default: one price, no second box shown', !$('poLines').classList.contains('two') && $('poTwoLabels').classList.contains('hidden'));
++        $('po_two').checked = true; $('po_two').dispatchEvent(new w.Event('change', { bubbles: true }));
++        ck('turning it on shows the second price and the two names', $('poLines').classList.contains('two') && !$('poTwoLabels').classList.contains('hidden'));
++        ck('the names default to Clean and Dirty', $('po_label_a').value === 'Clean' && $('po_label_b').value === 'Dirty');
++        ck('the price boxes are labelled with them', /Clean/.test(row().querySelector('[data-f="price-label"]').textContent) && /Dirty/.test(row().querySelector('[data-f="price2-label"]').textContent));
++        set('desc', 'Aluminum wheels'); set('qty', '80,000'); set('unit', 'LB'); set('price', '1.31');
++        ck('with the second price missing the item is incomplete', w.eval('poCollect()').lines[0].ok === false);
++        set('price2', '1.29');
++        const c = w.eval('poCollect()');
++        ck('80,000 x 1.31 = $104,800.00 clean', c.subtotalCents === 10480000, String(c.subtotalCents));
++        ck('80,000 x 1.29 = $103,200.00 dirty', c.subtotal2Cents === 10320000, String(c.subtotal2Cents));
++        const cell = () => [...$('poPreview').querySelectorAll('tbody tr td')].map((x) => x.textContent);
++        ck('the Unit price cell shows BOTH prices, labelled', /Clean\s*\$1\.31/.test(cell()[3]) && /Dirty\s*\$1\.29/.test(cell()[3]), cell()[3]);
++        ck('the Amount cell shows both amounts', /\$104,800\.00/.test(cell()[4]) && /\$103,200\.00/.test(cell()[4]), cell()[4]);
++        ck('there are two totals, one for each', /Total if Clean[^$]*\$104,800\.00/.test(preview()) && /Total if Dirty[^$]*\$103,200\.00/.test(preview()), preview());
++        type('po_other', '-$200');
++        ck('freight applies to both totals', w.eval('poCollect()').totalCents === 10460000 && w.eval('poCollect()').total2Cents === 10300000);
++        type('po_other', '');
++        type('po_label_b', 'clean');
++        ck('two options with the same name are refused', /different names/i.test(w.eval('poProblems')(w.eval('poCollect()')).join(' ')));
++        type('po_label_b', '');
++        ck('and an unnamed option is refused', /Name both/i.test(w.eval('poProblems')(w.eval('poCollect()')).join(' ')));
++        type('po_label_b', 'Dirty');
++        $('po_two').checked = false; $('po_two').dispatchEvent(new w.Event('change', { bubbles: true }));
++        ck('turning it off goes back to ONE price and one total (the second is ignored)',
++            !/Total if/.test(preview()) && /Total \(USD\)/.test(preview()) && w.eval('poCollect()').totalCents === 10480000);
++        ck('and the single-price sheet is exactly as before', cell()[3].trim() === '$1.31', cell()[3]);
++        $('po_two').checked = true; $('po_two').dispatchEvent(new w.Event('change', { bubbles: true }));
++        $('poClear').click();
++        ck('Clear turns it off and restores the names', !$('po_two').checked && $('po_label_a').value === 'Clean' && $('po_label_b').value === 'Dirty' && !$('poLines').classList.contains('two'));
++    }
++
+     section('K — Deliver to: Edge Yard or Edge Metals, each at its own address');
+     {
+         const opts = [...$('po_deliver').options].map((o) => o.textContent);
+         ck('the choices are Edge Yard, Edge Metals and Other', opts.some((o) => /^Edge Yard — 2453 E 25th Street/.test(o))
+             && opts.some((o) => /^Edge Metals — 14750 Devonshire Ln/.test(o)) && opts.some((o) => /^Other/.test(o)), opts.join(' | '));
++        pick('po_company', 'edge-metals-bofa');
+         pick('po_deliver', 'edge-trading-chase');
+         ck('Edge Yard fills the LA address', /Edge Yard\n2453 E 25th Street, Los Angeles/.test($('po_shipto').value), $('po_shipto').value);
+         const dcard = () => $('poPreview').querySelectorAll('.party')[1].textContent;

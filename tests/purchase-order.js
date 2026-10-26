@@ -310,11 +310,50 @@ const BOOK = [
         type('po_supplier', ''); $('po_supplier_address').value = '';
     }
 
+    section('M — price depends on condition (clean / dirty)');
+    {
+        $('poClear').click();
+        pick('po_company', 'edge-metals-bofa');
+        const row = () => d.querySelector('#poLines .po-line');
+        const set = (f, v) => { const el = row().querySelector(`[data-f="${f}"]`); el.value = v; el.dispatchEvent(new w.Event('input', { bubbles: true })); };
+        ck('off by default: one price, no second box shown', !$('poLines').classList.contains('two') && $('poTwoLabels').classList.contains('hidden'));
+        $('po_two').checked = true; $('po_two').dispatchEvent(new w.Event('change', { bubbles: true }));
+        ck('turning it on shows the second price and the two names', $('poLines').classList.contains('two') && !$('poTwoLabels').classList.contains('hidden'));
+        ck('the names default to Clean and Dirty', $('po_label_a').value === 'Clean' && $('po_label_b').value === 'Dirty');
+        ck('the price boxes are labelled with them', /Clean/.test(row().querySelector('[data-f="price-label"]').textContent) && /Dirty/.test(row().querySelector('[data-f="price2-label"]').textContent));
+        set('desc', 'Aluminum wheels'); set('qty', '80,000'); set('unit', 'LB'); set('price', '1.31');
+        ck('with the second price missing the item is incomplete', w.eval('poCollect()').lines[0].ok === false);
+        set('price2', '1.29');
+        const c = w.eval('poCollect()');
+        ck('80,000 x 1.31 = $104,800.00 clean', c.subtotalCents === 10480000, String(c.subtotalCents));
+        ck('80,000 x 1.29 = $103,200.00 dirty', c.subtotal2Cents === 10320000, String(c.subtotal2Cents));
+        const cell = () => [...$('poPreview').querySelectorAll('tbody tr td')].map((x) => x.textContent);
+        ck('the Unit price cell shows BOTH prices, labelled', /Clean\s*\$1\.31/.test(cell()[3]) && /Dirty\s*\$1\.29/.test(cell()[3]), cell()[3]);
+        ck('the Amount cell shows both amounts', /\$104,800\.00/.test(cell()[4]) && /\$103,200\.00/.test(cell()[4]), cell()[4]);
+        ck('there are two totals, one for each', /Total if Clean[^$]*\$104,800\.00/.test(preview()) && /Total if Dirty[^$]*\$103,200\.00/.test(preview()), preview());
+        type('po_other', '-$200');
+        ck('freight applies to both totals', w.eval('poCollect()').totalCents === 10460000 && w.eval('poCollect()').total2Cents === 10300000);
+        type('po_other', '');
+        type('po_label_b', 'clean');
+        ck('two options with the same name are refused', /different names/i.test(w.eval('poProblems')(w.eval('poCollect()')).join(' ')));
+        type('po_label_b', '');
+        ck('and an unnamed option is refused', /Name both/i.test(w.eval('poProblems')(w.eval('poCollect()')).join(' ')));
+        type('po_label_b', 'Dirty');
+        $('po_two').checked = false; $('po_two').dispatchEvent(new w.Event('change', { bubbles: true }));
+        ck('turning it off goes back to ONE price and one total (the second is ignored)',
+            !/Total if/.test(preview()) && /Total \(USD\)/.test(preview()) && w.eval('poCollect()').totalCents === 10480000);
+        ck('and the single-price sheet is exactly as before', cell()[3].trim() === '$1.31', cell()[3]);
+        $('po_two').checked = true; $('po_two').dispatchEvent(new w.Event('change', { bubbles: true }));
+        $('poClear').click();
+        ck('Clear turns it off and restores the names', !$('po_two').checked && $('po_label_a').value === 'Clean' && $('po_label_b').value === 'Dirty' && !$('poLines').classList.contains('two'));
+    }
+
     section('K — Deliver to: Edge Yard or Edge Metals, each at its own address');
     {
         const opts = [...$('po_deliver').options].map((o) => o.textContent);
         ck('the choices are Edge Yard, Edge Metals and Other', opts.some((o) => /^Edge Yard — 2453 E 25th Street/.test(o))
             && opts.some((o) => /^Edge Metals — 14750 Devonshire Ln/.test(o)) && opts.some((o) => /^Other/.test(o)), opts.join(' | '));
+        pick('po_company', 'edge-metals-bofa');
         pick('po_deliver', 'edge-trading-chase');
         ck('Edge Yard fills the LA address', /Edge Yard\n2453 E 25th Street, Los Angeles/.test($('po_shipto').value), $('po_shipto').value);
         const dcard = () => $('poPreview').querySelectorAll('.party')[1].textContent;

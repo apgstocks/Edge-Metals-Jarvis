@@ -1,0 +1,13 @@
+diff --git a/dashboard/documents.html b/dashboard/documents.html
+index 982859c..b302dd9 100644
+--- a/dashboard/documents.html
++++ b/dashboard/documents.html
+@@ -8372,7 +8372,7 @@ function poSheetCss() {
+     + '.po-sheet .party{border:1px solid #E5E9EC; border-left:3px solid #3DA836; border-radius:4px; padding:12px 14px 12px 11px;}'
+     + '.po-sheet .party .k{color:#2E861F;} .po-sheet .party .v{white-space:pre-line; color:#3C454D; line-height:1.55;} .po-sheet .party .nm{font-weight:700; font-size:14px; color:#0C0E10; margin-bottom:2px;}'
+     + '.po-sheet table{width:100%; border-collapse:collapse;}'
+-    + '.po-sheet th{font-size:9px; font-weight:700; letter-spacing:.14em; text-transform:uppercase; text-align:left; color:#57616A; background:#F3F5F7; padding:9px 11px; border:none; border-bottom:2px solid #3DA836;}'
++    + '.po-sheet th{font-size:9px; font-weight:700; letter-spacing:.14em; text-transform:uppercase; text-align:left; color:#57616A; background:#F3F5F7; padding:9px 11px; white-space:nowrap; border:none; border-bottom:2px solid #3DA836;}'
+     + '.po-sheet th.r,.po-sheet td.r{text-align:right; font-variant-numeric:tabular-nums;}'
+     + '.po-sheet td{padding:11px; border-bottom:1px solid #E5E9EC; vertical-align:top; font-size:12.5px; color:#2B3239;}'
+     + '.po-sheet td.d{font-weight:600; color:#0C0E10;}'
