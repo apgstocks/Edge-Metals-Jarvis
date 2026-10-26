@@ -331,6 +331,8 @@ const BOOK = [
         ck('the Unit price cell shows BOTH prices, labelled', /Clean\s*\$1\.31/.test(cell()[3]) && /Dirty\s*\$1\.29/.test(cell()[3]), cell()[3]);
         ck('the Amount cell shows both amounts', /\$104,800\.00/.test(cell()[4]) && /\$103,200\.00/.test(cell()[4]), cell()[4]);
         ck('there are two totals, one for each', /Total if Clean[^$]*\$104,800\.00/.test(preview()) && /Total if Dirty[^$]*\$103,200\.00/.test(preview()), preview());
+        ck('and freight shows the subtotal lines again', (() => { type('po_other', '10'); const r = /Subtotal if Clean/.test(preview()); type('po_other', ''); return r; })());
+        ck('with no freight the prices are not stated a third time as subtotals', !/Subtotal/.test(preview()), preview());
         type('po_other', '-$200');
         ck('freight applies to both totals', w.eval('poCollect()').totalCents === 10460000 && w.eval('poCollect()').total2Cents === 10300000);
         type('po_other', '');
@@ -346,6 +348,26 @@ const BOOK = [
         $('po_two').checked = true; $('po_two').dispatchEvent(new w.Event('change', { bubbles: true }));
         $('poClear').click();
         ck('Clear turns it off and restores the names', !$('po_two').checked && $('po_label_a').value === 'Clean' && $('po_label_b').value === 'Dirty' && !$('poLines').classList.contains('two'));
+    }
+
+    section('N — subtotal only when it differs from the total');
+    {
+        $('poClear').click();
+        const row = () => d.querySelector('#poLines .po-line');
+        const set = (f, v) => { const el = row().querySelector(`[data-f="${f}"]`); el.value = v; el.dispatchEvent(new w.Event('input', { bubbles: true })); };
+        set('desc', 'Copper'); set('qty', '10'); set('price', '2');
+        ck('single price, no freight: Total only, no Subtotal', /Total \(USD\)/.test(preview()) && !/Subtotal/.test(preview()), preview());
+        $('poAddLine').click();
+        const row2 = d.querySelectorAll('#poLines .po-line')[1];
+        const set2 = (f, v) => { const el = row2.querySelector(`[data-f="${f}"]`); el.value = v; el.dispatchEvent(new w.Event('input', { bubbles: true })); };
+        set2('desc', 'Brass'); set2('qty', '1'); set2('price', '3');
+        ck('two different materials: the Subtotal comes back', /Subtotal/.test(preview()) && /Total \(USD\)[^$]*\$23\.00/.test(preview()), preview());
+        d.querySelectorAll('#poLines [data-f="remove"]')[1].click();
+        ck('back to one material: no Subtotal again', !/Subtotal/.test(preview()));
+        type('po_other', '5');
+        ck('with freight: Subtotal, Freight and Total all appear', /Subtotal/.test(preview()) && /Freight \/ other/.test(preview()) && /Total \(USD\)[^$]*\$25\.00/.test(preview()), preview());
+        type('po_other', '');
+        pick('po_company', 'edge-metals-bofa');
     }
 
     section('K — Deliver to: Edge Yard or Edge Metals, each at its own address');

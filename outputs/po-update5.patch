@@ -1,0 +1,70 @@
+diff --git a/dashboard/documents.html b/dashboard/documents.html
+index ec6ffd8..1f4a1d6 100644
+--- a/dashboard/documents.html
++++ b/dashboard/documents.html
+@@ -8431,6 +8431,10 @@ const PO_LOGO = '<svg width="56" height="56" viewBox="0 0 48 48"><rect x="1.5" y
+ function poSheetHtml(d) {
+   const miss = (t) => '<span class="empty">' + esc(t) + '</span>';
+   const meta = (k, v) => '<div><span class="k">' + k + '</span>' + (v ? esc(v) : miss('—')) + '</div>';
++  // A subtotal is only worth a line when it differs from the total: several
++  // items to add up, or freight / other charges on top. One item and nothing
++  // else would print the same figure twice.
++  const showSub = d.lines.filter((l) => l.ok).length > 1 || !!d.otherCents;
+   const rows = d.lines.filter((l) => l.ok).map((l) =>
+     '<tr><td class="d">' + esc(l.desc) + '</td><td class="r">' + esc(poQty(l.qty)) + '</td><td>' + esc(l.unit)
+     + '</td><td class="r">' + (d.two
+@@ -8454,9 +8458,11 @@ function poSheetHtml(d) {
+     + '<table><thead><tr><th>Description</th><th class="r">Qty</th><th>Unit</th><th class="r">Unit price</th><th class="r">Amount</th></tr></thead><tbody>'
+     + (rows || '<tr><td colspan="5">' + miss('No items yet') + '</td></tr>') + '</tbody></table>'
+     + '<div class="tot">' + (d.two
+-      ? '<div><span>Subtotal if ' + esc(d.labelA) + '</span><span>' + esc(poMoney(d.subtotalCents)) + '</span></div>'
+-        + '<div><span>Subtotal if ' + esc(d.labelB) + '</span><span>' + esc(poMoney(d.subtotal2Cents)) + '</span></div>'
+-      : '<div><span>Subtotal</span><span>' + esc(poMoney(d.subtotalCents)) + '</span></div>')
++      // Two totals follow, so with no freight the subtotals would only say
++      // the same figures a third time.
++      ? (!showSub ? '' : '<div><span>Subtotal if ' + esc(d.labelA) + '</span><span>' + esc(poMoney(d.subtotalCents)) + '</span></div>'
++        + '<div><span>Subtotal if ' + esc(d.labelB) + '</span><span>' + esc(poMoney(d.subtotal2Cents)) + '</span></div>')
++      : (!showSub ? '' : '<div><span>Subtotal</span><span>' + esc(poMoney(d.subtotalCents)) + '</span></div>'))
+     + (d.otherCents ? '<div><span>Freight / other</span><span>' + esc(poMoney(d.otherCents)) + '</span></div>' : '')
+     + (d.two
+       ? '<div class="grand"><span>Total if ' + esc(d.labelA) + ' (USD)</span><span>' + esc(poMoney(d.totalCents)) + '</span></div>'
+diff --git a/tests/purchase-order.js b/tests/purchase-order.js
+index 52fb610..7055585 100644
+--- a/tests/purchase-order.js
++++ b/tests/purchase-order.js
+@@ -331,6 +331,8 @@ const BOOK = [
+         ck('the Unit price cell shows BOTH prices, labelled', /Clean\s*\$1\.31/.test(cell()[3]) && /Dirty\s*\$1\.29/.test(cell()[3]), cell()[3]);
+         ck('the Amount cell shows both amounts', /\$104,800\.00/.test(cell()[4]) && /\$103,200\.00/.test(cell()[4]), cell()[4]);
+         ck('there are two totals, one for each', /Total if Clean[^$]*\$104,800\.00/.test(preview()) && /Total if Dirty[^$]*\$103,200\.00/.test(preview()), preview());
++        ck('and freight shows the subtotal lines again', (() => { type('po_other', '10'); const r = /Subtotal if Clean/.test(preview()); type('po_other', ''); return r; })());
++        ck('with no freight the prices are not stated a third time as subtotals', !/Subtotal/.test(preview()), preview());
+         type('po_other', '-$200');
+         ck('freight applies to both totals', w.eval('poCollect()').totalCents === 10460000 && w.eval('poCollect()').total2Cents === 10300000);
+         type('po_other', '');
+@@ -348,6 +350,26 @@ const BOOK = [
+         ck('Clear turns it off and restores the names', !$('po_two').checked && $('po_label_a').value === 'Clean' && $('po_label_b').value === 'Dirty' && !$('poLines').classList.contains('two'));
+     }
+ 
++    section('N — subtotal only when it differs from the total');
++    {
++        $('poClear').click();
++        const row = () => d.querySelector('#poLines .po-line');
++        const set = (f, v) => { const el = row().querySelector(`[data-f="${f}"]`); el.value = v; el.dispatchEvent(new w.Event('input', { bubbles: true })); };
++        set('desc', 'Copper'); set('qty', '10'); set('price', '2');
++        ck('single price, no freight: Total only, no Subtotal', /Total \(USD\)/.test(preview()) && !/Subtotal/.test(preview()), preview());
++        $('poAddLine').click();
++        const row2 = d.querySelectorAll('#poLines .po-line')[1];
++        const set2 = (f, v) => { const el = row2.querySelector(`[data-f="${f}"]`); el.value = v; el.dispatchEvent(new w.Event('input', { bubbles: true })); };
++        set2('desc', 'Brass'); set2('qty', '1'); set2('price', '3');
++        ck('two different materials: the Subtotal comes back', /Subtotal/.test(preview()) && /Total \(USD\)[^$]*\$23\.00/.test(preview()), preview());
++        d.querySelectorAll('#poLines [data-f="remove"]')[1].click();
++        ck('back to one material: no Subtotal again', !/Subtotal/.test(preview()));
++        type('po_other', '5');
++        ck('with freight: Subtotal, Freight and Total all appear', /Subtotal/.test(preview()) && /Freight \/ other/.test(preview()) && /Total \(USD\)[^$]*\$25\.00/.test(preview()), preview());
++        type('po_other', '');
++        pick('po_company', 'edge-metals-bofa');
++    }
++
+     section('K — Deliver to: Edge Yard or Edge Metals, each at its own address');
+     {
+         const opts = [...$('po_deliver').options].map((o) => o.textContent);
