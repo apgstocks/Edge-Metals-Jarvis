@@ -1,0 +1,46 @@
+From d7e856ae6ed60d748169525695a8d300cdca6315 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Mon, 26 Oct 2026 10:56:48 +0000
+Subject: [PATCH] Purchase order: printed header sits at the top of the first
+ page
+
+@page :first has no top margin; later pages keep 14mm. Print only.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01DhsqdCWuGr4pw3nFPdWg6R
+---
+ dashboard/documents.html | 2 +-
+ tests/purchase-order.js  | 4 +++-
+ 2 files changed, 4 insertions(+), 2 deletions(-)
+
+diff --git a/dashboard/documents.html b/dashboard/documents.html
+index d7a5d03..61e57a8 100644
+--- a/dashboard/documents.html
++++ b/dashboard/documents.html
+@@ -8529,7 +8529,7 @@ function poPrint() {
+   const w = window.open('', '_blank', 'width=900,height=1100');
+   if (!w) { $('poProblems').textContent = 'The browser blocked the print window. Allow pop-ups for this site and try again.'; $('poProblems').classList.remove('hidden'); return; }
+   w.document.write('<!DOCTYPE html><html><head><meta charset="utf-8"><title>PO ' + esc(d.number) + ' - ' + esc(d.company) + '</title>'
+-    + '<style>body{margin:0; background:#fff;} @page{margin:14mm 0;}' + poSheetCss() + '</style></head><body>' + poSheetHtml(d) + '</body></html>');
++    + '<style>body{margin:0; background:#fff;} @page{margin:14mm 0;} @page :first{margin:0 0 14mm;}' + poSheetCss() + '</style></head><body>' + poSheetHtml(d) + '</body></html>');
+   w.document.close();
+   w.focus();
+   setTimeout(() => { try { w.print(); } catch (e) { /* the sheet is open; she can print it by hand */ } }, 250);
+diff --git a/tests/purchase-order.js b/tests/purchase-order.js
+index 5c2e807..b6af346 100644
+--- a/tests/purchase-order.js
++++ b/tests/purchase-order.js
+@@ -414,7 +414,9 @@ const BOOK = [
+         const printCss = css.slice(css.indexOf('@media print'));
+         ck('printed, the header band and stripe run edge to edge, left to right', /\.bar\{margin:0;/.test(printCss) && /\.head\{margin:0 0 26px; padding:24px 14mm/.test(printCss), printCss);
+         ck('and the content below keeps the 14mm side space itself', /\.pad\{padding:0 14mm 0/.test(printCss), printCss);
+-        ck('the print window has no side page margin but keeps 14mm top and bottom', /@page\{margin:14mm 0;\}/.test(w.eval('poPrint.toString()')) && /body\{margin:0;/.test(w.eval('poPrint.toString()')));
++        const pp = w.eval('poPrint.toString()');
++        ck('the print window has no side page margin, so the header reaches both edges', /@page\{margin:14mm 0;\}/.test(pp) && /body\{margin:0;/.test(pp));
++        ck('and its FIRST page has no top margin, so the header sits at the top; later pages keep theirs', /@page :first\{margin:0 0 14mm;\}/.test(pp));
+         ck('and on screen the inset is still there (preview unchanged)', /\.pad\{padding:0 44px/.test(css.slice(0, css.indexOf('@media print'))));
+         ck('printed, the sheet is as tall as the page (A4 or Letter) with the signatures at the foot', /@media print\{[^}]*min-height:100vh/.test(css) && /\.sign\{margin-top:auto/.test(css), css.slice(-400));
+         pick('po_deliver', '');
+-- 
+2.43.0
+

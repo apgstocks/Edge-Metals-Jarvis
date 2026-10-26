@@ -1,0 +1,115 @@
+From 55a751bdd93352f503c4ff091aa2210179398849 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Mon, 26 Oct 2026 10:50:13 +0000
+Subject: [PATCH] Purchase order: print fills the page, header band lines up
+ with the content, vendor name not repeated
+
+PO sheet and its print window only. Header band and stripe now share the
+content's left/right edges; phone and email on their own lines; the print
+window drops its second 28px margin (the @page margin is enough); the printed
+sheet is page-tall (100vh, so A4 and Letter both stay one page) with the
+signatures at the foot; an address whose first line repeats the vendor name
+does not print it twice.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01DhsqdCWuGr4pw3nFPdWg6R
+---
+ dashboard/documents.html | 22 +++++++++++++++-------
+ tests/purchase-order.js  |  9 +++++++++
+ 2 files changed, 24 insertions(+), 7 deletions(-)
+
+diff --git a/dashboard/documents.html b/dashboard/documents.html
+index 25e4479..8edb2e3 100644
+--- a/dashboard/documents.html
++++ b/dashboard/documents.html
+@@ -8381,16 +8381,16 @@ function poSheetCss() {
+   // never waits on a download. print-color-adjust keeps the tints on paper.
+   return '.po-sheet{font-family:"Helvetica Neue",Helvetica,Arial,sans-serif; color:#2B3239; background:#fff; padding:0; line-height:1.45; font-size:12.5px; max-width:794px; margin:0 auto; box-shadow:0 1px 4px rgba(0,0,0,.28); -webkit-print-color-adjust:exact; print-color-adjust:exact; overflow:hidden;}'
+     + '.po-sheet *{box-sizing:border-box;}'
+-    + '.po-sheet .bar{height:6px; background:linear-gradient(90deg,#226620,#3DA836 55%,#7FD172);}'
++    + '.po-sheet .bar{height:6px; margin:30px 44px 0; border-radius:6px 6px 0 0; background:linear-gradient(90deg,#226620,#3DA836 55%,#7FD172);}'
+     + '.po-sheet .pad{padding:0 44px 34px;}'
+-    + '.po-sheet .head{display:flex; justify-content:space-between; align-items:center; gap:28px; padding:30px 44px 28px; margin-bottom:26px; background:linear-gradient(160deg,#ECF8EA 0%,#fff 58%,#ECF8EA 100%); border-bottom:1px solid #D3F0CD;}'
++    + '.po-sheet .head{display:flex; justify-content:space-between; align-items:center; gap:20px; padding:24px 14px 24px; margin:0 44px 26px; background:linear-gradient(160deg,#ECF8EA 0%,#fff 58%,#ECF8EA 100%); border:1px solid #D3F0CD; border-top:none; border-radius:0 0 6px 6px;}'
+     + '.po-sheet .brand{display:flex; gap:15px; align-items:center; flex:1; min-width:0;} .po-sheet .brand svg{flex:none; display:block;}'
+     + '.po-sheet .co{white-space:nowrap; font-size:22px; font-weight:800; letter-spacing:-.02em; color:#0C0E10; line-height:1.1;}'
+     + '.po-sheet .tag{font-size:9.5px; font-weight:800; letter-spacing:.2em; text-transform:uppercase; color:#3DA836; margin-top:5px;}'
+     + '.po-sheet .co-addr{font-size:11px; color:#57616A; margin-top:8px; white-space:pre-line; line-height:1.5;}'
+     + '.po-sheet .contact{font-size:11px; color:#2E861F; font-weight:600; margin-top:2px;}'
+     + '.po-sheet .title{text-align:right; flex:none;}'
+-    + '.po-sheet .title b{display:block; font-size:24px; font-weight:800; letter-spacing:.12em; white-space:nowrap; color:#14181B; line-height:1;}'
++    + '.po-sheet .title b{display:block; font-size:22px; font-weight:800; letter-spacing:.1em; white-space:nowrap; color:#14181B; line-height:1;}'
+     + '.po-sheet .title .no{display:inline-block; margin-top:11px; background:#3DA836; color:#fff; border-radius:999px; padding:5px 16px; font-size:12.5px; font-weight:700; letter-spacing:.04em;}'
+     + '.po-sheet .k{display:block; font-size:9px; font-weight:700; letter-spacing:.16em; text-transform:uppercase; color:#7E8891; margin-bottom:3px;}'
+     + '.po-sheet .meta{display:grid; grid-template-columns:repeat(4,1fr); background:#F3F5F7; border-radius:6px; margin-bottom:24px;}'
+@@ -8417,7 +8417,7 @@ function poSheetCss() {
+     + '.po-sheet .ln{border-top:1px solid #14181B; padding-top:6px; font-size:11px; color:#57616A; line-height:18px;}'
+     + '.po-sheet .ln b{color:#0C0E10; font-size:11px;}'
+     + '.po-sheet .empty{color:#A7B0B7; font-style:italic; font-weight:400;}'
+-    + '@media print{.po-sheet{box-shadow:none; max-width:none;} .po-sheet tr,.po-sheet .party{page-break-inside:avoid;} .po-sheet .sign,.po-sheet .tot,.po-sheet .notes{page-break-inside:avoid;}}';
++    + '@media print{.po-sheet{box-shadow:none; max-width:none; min-height:100vh; display:flex; flex-direction:column;} .po-sheet .pad{flex:1; display:flex; flex-direction:column;} .po-sheet .sign{margin-top:auto; padding-top:36px;} .po-sheet tr,.po-sheet .party{page-break-inside:avoid;} .po-sheet .sign,.po-sheet .tot,.po-sheet .notes{page-break-inside:avoid;}}';
+ }
+ 
+ // The Edge Metals mark, as on the proforma header. Printed only for Edge
+@@ -8431,6 +8431,14 @@ const PO_LOGO = '<svg width="56" height="56" viewBox="0 0 48 48"><rect x="1.5" y
+ // screen is what comes out. Every typed value goes through esc().
+ // Deliver-to is "Name\nAddress..."; show it the way Vendor is shown (bold name,
+ // address under it) so the two cards read the same.
++// The address book keeps "NAME, street..." in one block; the card already shows
++// the name in bold, so a first line that is only the name is not printed again.
++function poVendorAddress(d) {
++  const lines = String(d.supplierAddress || '').split('\n');
++  if (lines.length > 1 && lines[0].trim().toLowerCase() === String(d.supplier || '').trim().toLowerCase()) lines.shift();
++  return lines.join('\n').trim();
++}
++
+ function poShipToHtml(shipTo, miss) {
+   if (!shipTo) return '<div class="nm">' + miss('—') + '</div>';
+   const parts = String(shipTo).split('\n');
+@@ -8458,12 +8466,12 @@ function poSheetHtml(d) {
+     + '<div class="co">' + (d.company ? esc(d.company) : miss('Choose the issuing company')) + '</div>'
+     + (poIsEdgeMetals(d.company) ? '<div class="tag">Global Scrap</div>' : '')
+     + (d.companyAddress ? '<div class="co-addr">' + esc(d.companyAddress) + '</div>' : '')
+-    + (d.company ? '<div class="contact">Tel ' + esc(PO_CONTACT.phone) + ' &middot; ' + esc(PO_CONTACT.email) + '</div>' : '')
++    + (d.company ? '<div class="contact">Tel ' + esc(PO_CONTACT.phone) + '</div><div class="contact">' + esc(PO_CONTACT.email) + '</div>' : '')
+     + '</div></div>'
+     + '<div class="title"><b>PURCHASE ORDER</b><span class="no">No. ' + (d.number ? esc(d.number) : '—') + '</span></div></div>'
+     + '<div class="pad"><div class="meta">' + meta('PO date', d.date) + meta('Required by', d.required) + meta('Payment terms', d.terms) + meta('Currency', 'USD') + '</div>'
+     + '<div class="parties"><div class="party"><span class="k">Vendor</span><div class="nm">' + (d.supplier ? esc(d.supplier) : miss('—')) + '</div>'
+-    + (d.supplierAddress ? '<div class="v">' + esc(d.supplierAddress) + '</div>' : '') + '</div>'
++    + (poVendorAddress(d) ? '<div class="v">' + esc(poVendorAddress(d)) + '</div>' : '') + '</div>'
+     + '<div class="party"><span class="k">Deliver to</span>' + poShipToHtml(d.shipTo, miss) + '</div></div>'
+     + '<table><thead><tr><th>Description</th><th class="r">Qty</th><th>Unit</th><th class="r">Unit price</th><th class="r">Amount</th></tr></thead><tbody>'
+     + (rows || '<tr><td colspan="5">' + miss('No items yet') + '</td></tr>') + '</tbody></table>'
+@@ -8521,7 +8529,7 @@ function poPrint() {
+   const w = window.open('', '_blank', 'width=900,height=1100');
+   if (!w) { $('poProblems').textContent = 'The browser blocked the print window. Allow pop-ups for this site and try again.'; $('poProblems').classList.remove('hidden'); return; }
+   w.document.write('<!DOCTYPE html><html><head><meta charset="utf-8"><title>PO ' + esc(d.number) + ' - ' + esc(d.company) + '</title>'
+-    + '<style>body{margin:28px; background:#fff;} @page{margin:14mm;}' + poSheetCss() + '</style></head><body>' + poSheetHtml(d) + '</body></html>');
++    + '<style>body{margin:0; background:#fff;} @page{margin:14mm;}' + poSheetCss() + '</style></head><body>' + poSheetHtml(d) + '</body></html>');
+   w.document.close();
+   w.focus();
+   setTimeout(() => { try { w.print(); } catch (e) { /* the sheet is open; she can print it by hand */ } }, 250);
+diff --git a/tests/purchase-order.js b/tests/purchase-order.js
+index 6b81f80..2b738c3 100644
+--- a/tests/purchase-order.js
++++ b/tests/purchase-order.js
+@@ -403,6 +403,15 @@ const BOOK = [
+         ck('Deliver-to has a bold name line, as Vendor does', cards()[1].querySelector('.nm') && cards()[1].querySelector('.nm').textContent === 'Edge Metals', cards()[1].innerHTML);
+         ck('and the address sits under it, not in the name', /Devonshire/.test(cards()[1].querySelector('.v').textContent) && !/Devonshire/.test(cards()[1].querySelector('.nm').textContent));
+         ck('Vendor still has its name and address', cards()[0].querySelector('.nm').textContent === 'FMC Metals' && /62nd/.test(cards()[0].querySelector('.v').textContent));
++        type('po_supplier_address', 'FMC Metals\n800 East 62nd Street\nLos Angeles');
++        ck('an address that starts with the vendor name does not print the name twice', (cards()[0].textContent.match(/FMC Metals/g) || []).length === 1 && /800 East 62nd/.test(cards()[0].textContent), cards()[0].textContent);
++        type('po_supplier_address', 'Unit 5\n800 East 62nd Street');
++        ck('but a different first line is kept', /Unit 5/.test(cards()[0].textContent));
++        type('po_supplier_address', 'FMC Metals');
++        ck('and an address that is only the name is not blanked out', (cards()[0].textContent.match(/FMC Metals/g) || []).length >= 1);
++        type('po_supplier_address', '800 East 62nd Street\nLos Angeles');
++        const css = w.eval('poSheetCss()');
++        ck('printed, the sheet is as tall as the page (A4 or Letter) with the signatures at the foot', /@media print\{[^}]*min-height:100vh/.test(css) && /\.sign\{margin-top:auto/.test(css), css.slice(-400));
+         pick('po_deliver', '');
+         ck('with no delivery chosen the card shows a dash, not a blank', cards()[1].querySelector('.nm') && /—/.test(cards()[1].textContent), cards()[1].innerHTML);
+         pick('po_deliver', 'edge-metals-bofa');
+-- 
+2.43.0
+

@@ -1,0 +1,46 @@
+From 3c87ea4cbec64b66ff7aa848f4fd2f36c3d4a1df Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Mon, 26 Oct 2026 10:52:13 +0000
+Subject: [PATCH] Purchase order: printed content runs to the page margin (no
+ second inset)
+
+Print only; the on-screen preview keeps its inset. The @page margin is the
+margin, so the band, stripe and body no longer add another 44px each side.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01DhsqdCWuGr4pw3nFPdWg6R
+---
+ dashboard/documents.html | 2 +-
+ tests/purchase-order.js  | 3 +++
+ 2 files changed, 4 insertions(+), 1 deletion(-)
+
+diff --git a/dashboard/documents.html b/dashboard/documents.html
+index 8edb2e3..2ef0050 100644
+--- a/dashboard/documents.html
++++ b/dashboard/documents.html
+@@ -8417,7 +8417,7 @@ function poSheetCss() {
+     + '.po-sheet .ln{border-top:1px solid #14181B; padding-top:6px; font-size:11px; color:#57616A; line-height:18px;}'
+     + '.po-sheet .ln b{color:#0C0E10; font-size:11px;}'
+     + '.po-sheet .empty{color:#A7B0B7; font-style:italic; font-weight:400;}'
+-    + '@media print{.po-sheet{box-shadow:none; max-width:none; min-height:100vh; display:flex; flex-direction:column;} .po-sheet .pad{flex:1; display:flex; flex-direction:column;} .po-sheet .sign{margin-top:auto; padding-top:36px;} .po-sheet tr,.po-sheet .party{page-break-inside:avoid;} .po-sheet .sign,.po-sheet .tot,.po-sheet .notes{page-break-inside:avoid;}}';
++    + '@media print{.po-sheet{box-shadow:none; max-width:none; min-height:100vh; display:flex; flex-direction:column;} .po-sheet .pad{flex:1; display:flex; flex-direction:column;} .po-sheet .sign{margin-top:auto; padding-top:36px;} .po-sheet .bar{margin:0;} .po-sheet .head{margin:0 0 26px;} .po-sheet .pad{padding:0 0 4px;} .po-sheet tr,.po-sheet .party{page-break-inside:avoid;} .po-sheet .sign,.po-sheet .tot,.po-sheet .notes{page-break-inside:avoid;}}';
+ }
+ 
+ // The Edge Metals mark, as on the proforma header. Printed only for Edge
+diff --git a/tests/purchase-order.js b/tests/purchase-order.js
+index 2b738c3..cedc058 100644
+--- a/tests/purchase-order.js
++++ b/tests/purchase-order.js
+@@ -411,6 +411,9 @@ const BOOK = [
+         ck('and an address that is only the name is not blanked out', (cards()[0].textContent.match(/FMC Metals/g) || []).length >= 1);
+         type('po_supplier_address', '800 East 62nd Street\nLos Angeles');
+         const css = w.eval('poSheetCss()');
++        const printCss = css.slice(css.indexOf('@media print'));
++        ck('printed, the content runs to the page margin: no second inset on band, stripe or body', /\.pad\{padding:0 0 4px/.test(printCss) && /\.head\{margin:0 0 26px/.test(printCss) && /\.bar\{margin:0;/.test(printCss), printCss);
++        ck('and on screen the inset is still there (preview unchanged)', /\.pad\{padding:0 44px/.test(css.slice(0, css.indexOf('@media print'))));
+         ck('printed, the sheet is as tall as the page (A4 or Letter) with the signatures at the foot', /@media print\{[^}]*min-height:100vh/.test(css) && /\.sign\{margin-top:auto/.test(css), css.slice(-400));
+         pick('po_deliver', '');
+         ck('with no delivery chosen the card shows a dash, not a blank', cards()[1].querySelector('.nm') && /—/.test(cards()[1].textContent), cards()[1].innerHTML);
+-- 
+2.43.0
+

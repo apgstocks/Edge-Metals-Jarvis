@@ -1,0 +1,58 @@
+From deec2b8eb64cd9fff604b04c649236e280f46d88 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Mon, 26 Oct 2026 10:55:04 +0000
+Subject: [PATCH] Purchase order: printed header runs edge to edge (left to
+ right); 14mm top/bottom kept
+
+Print only. @page margin is 14mm 0 so the band can reach both sides while every
+page, including page 2 of a long order, keeps its top and bottom margin; the
+band and body pad themselves 14mm. (A negative-margin bleed was tried first and
+Chrome clips it, cutting the company name off.) On-screen preview unchanged.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01DhsqdCWuGr4pw3nFPdWg6R
+---
+ dashboard/documents.html | 4 ++--
+ tests/purchase-order.js  | 4 +++-
+ 2 files changed, 5 insertions(+), 3 deletions(-)
+
+diff --git a/dashboard/documents.html b/dashboard/documents.html
+index 2ef0050..d7a5d03 100644
+--- a/dashboard/documents.html
++++ b/dashboard/documents.html
+@@ -8417,7 +8417,7 @@ function poSheetCss() {
+     + '.po-sheet .ln{border-top:1px solid #14181B; padding-top:6px; font-size:11px; color:#57616A; line-height:18px;}'
+     + '.po-sheet .ln b{color:#0C0E10; font-size:11px;}'
+     + '.po-sheet .empty{color:#A7B0B7; font-style:italic; font-weight:400;}'
+-    + '@media print{.po-sheet{box-shadow:none; max-width:none; min-height:100vh; display:flex; flex-direction:column;} .po-sheet .pad{flex:1; display:flex; flex-direction:column;} .po-sheet .sign{margin-top:auto; padding-top:36px;} .po-sheet .bar{margin:0;} .po-sheet .head{margin:0 0 26px;} .po-sheet .pad{padding:0 0 4px;} .po-sheet tr,.po-sheet .party{page-break-inside:avoid;} .po-sheet .sign,.po-sheet .tot,.po-sheet .notes{page-break-inside:avoid;}}';
++    + '@media print{.po-sheet{box-shadow:none; max-width:none; min-height:100vh; display:flex; flex-direction:column;} .po-sheet .pad{flex:1; display:flex; flex-direction:column;} .po-sheet .sign{margin-top:auto; padding-top:36px;} .po-sheet .bar{margin:0; border-radius:0;} .po-sheet .head{margin:0 0 26px; padding:24px 14mm; border:none; border-radius:0;} .po-sheet .pad{padding:0 14mm 0;} .po-sheet tr,.po-sheet .party{page-break-inside:avoid;} .po-sheet .sign,.po-sheet .tot,.po-sheet .notes{page-break-inside:avoid;}}';
+ }
+ 
+ // The Edge Metals mark, as on the proforma header. Printed only for Edge
+@@ -8529,7 +8529,7 @@ function poPrint() {
+   const w = window.open('', '_blank', 'width=900,height=1100');
+   if (!w) { $('poProblems').textContent = 'The browser blocked the print window. Allow pop-ups for this site and try again.'; $('poProblems').classList.remove('hidden'); return; }
+   w.document.write('<!DOCTYPE html><html><head><meta charset="utf-8"><title>PO ' + esc(d.number) + ' - ' + esc(d.company) + '</title>'
+-    + '<style>body{margin:0; background:#fff;} @page{margin:14mm;}' + poSheetCss() + '</style></head><body>' + poSheetHtml(d) + '</body></html>');
++    + '<style>body{margin:0; background:#fff;} @page{margin:14mm 0;}' + poSheetCss() + '</style></head><body>' + poSheetHtml(d) + '</body></html>');
+   w.document.close();
+   w.focus();
+   setTimeout(() => { try { w.print(); } catch (e) { /* the sheet is open; she can print it by hand */ } }, 250);
+diff --git a/tests/purchase-order.js b/tests/purchase-order.js
+index cedc058..5c2e807 100644
+--- a/tests/purchase-order.js
++++ b/tests/purchase-order.js
+@@ -412,7 +412,9 @@ const BOOK = [
+         type('po_supplier_address', '800 East 62nd Street\nLos Angeles');
+         const css = w.eval('poSheetCss()');
+         const printCss = css.slice(css.indexOf('@media print'));
+-        ck('printed, the content runs to the page margin: no second inset on band, stripe or body', /\.pad\{padding:0 0 4px/.test(printCss) && /\.head\{margin:0 0 26px/.test(printCss) && /\.bar\{margin:0;/.test(printCss), printCss);
++        ck('printed, the header band and stripe run edge to edge, left to right', /\.bar\{margin:0;/.test(printCss) && /\.head\{margin:0 0 26px; padding:24px 14mm/.test(printCss), printCss);
++        ck('and the content below keeps the 14mm side space itself', /\.pad\{padding:0 14mm 0/.test(printCss), printCss);
++        ck('the print window has no side page margin but keeps 14mm top and bottom', /@page\{margin:14mm 0;\}/.test(w.eval('poPrint.toString()')) && /body\{margin:0;/.test(w.eval('poPrint.toString()')));
+         ck('and on screen the inset is still there (preview unchanged)', /\.pad\{padding:0 44px/.test(css.slice(0, css.indexOf('@media print'))));
+         ck('printed, the sheet is as tall as the page (A4 or Letter) with the signatures at the foot', /@media print\{[^}]*min-height:100vh/.test(css) && /\.sign\{margin-top:auto/.test(css), css.slice(-400));
+         pick('po_deliver', '');
+-- 
+2.43.0
+
