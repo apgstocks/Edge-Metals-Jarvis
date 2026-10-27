@@ -42,10 +42,26 @@ const MATCH = {
           proposals: [], suggestions: [] },
         { deposit: { id: 'TX-3', date: '2026-09-07', amount: 12000, descriptor: 'WIRE IN TWINS LLC', bank_guess: 'BofA' },
           party: 'Twins LLC', outcome: 'proposed', ambiguous: true, truncated: false,
+          // ── `tied` ADDED 2026-10-27 ──────────────────────────────────
+          // The screen now shows ONLY proposals the engine marked as tied,
+          // because it used to show everything after the best one whatever
+          // it scored — eight rows where three were real ties. This fixture
+          // stands in for engine output, so it has to carry the field or it
+          // is testing a shape the engine no longer produces. That it went
+          // red here is the check doing its job: the screen genuinely
+          // depends on the engine now, rather than re-deriving the rule.
+          //
+          // `balance` likewise — the row shows what each invoice owes, not
+          // only what would be applied.
           proposals: [
-            { kind: 'partial', score: 0.5, allocations: [{ doc_id: 'T1', label: 'EM-2001', amount: 12000, shortfall: 0, clears: false, leaves: 6000 }],
+            { kind: 'partial', score: 0.5, tied: true, allocations: [{ doc_id: 'T1', label: 'EM-2001', balance: 18000, amount: 12000, shortfall: 0, clears: false, leaves: 6000 }],
               reasons: ['part payment — this does not clear the invoice', '2 of her open invoices could each take this payment — nothing in the data says which, so this one needs you'] },
-            { kind: 'partial', score: 0.5, allocations: [{ doc_id: 'T2', label: 'EM-2002', amount: 12000, shortfall: 0, clears: false, leaves: 3000 }],
+            { kind: 'partial', score: 0.5, tied: true, allocations: [{ doc_id: 'T2', label: 'EM-2002', balance: 15000, amount: 12000, shortfall: 0, clears: false, leaves: 3000 }],
+              reasons: ['part payment — this does not clear the invoice'] },
+            // A WORSE explanation the engine ranked below the tie. It must be
+            // counted and NOT offered as a choice — the whole of the 2026-10-27
+            // fix. Her screen listed eight of these as equals.
+            { kind: 'partial', score: 0.2, tied: false, allocations: [{ doc_id: 'T9', label: 'EM-9999', balance: 99000, amount: 12000, shortfall: 0, clears: false, leaves: 87000 }],
               reasons: ['part payment — this does not clear the invoice'] }] },
         { deposit: { id: 'TX-4', date: '2026-09-08', amount: 21970, descriptor: 'WIRE IN SHORTPAY', bank_guess: 'BofA' },
           party: 'Shortpay Co', outcome: 'proposed', ambiguous: false,
@@ -202,6 +218,20 @@ let dom, w, doc;
     ck('  and the OTHER possibility is shown, not hidden',
        !!amb.querySelector('.rivals') && /EM-2002/.test(amb.querySelector('.rivals').textContent),
        amb.querySelector('.rivals') ? amb.querySelector('.rivals').textContent : '(no rivals block)');
+    // ── THE 2026-10-27 FIX, BOTH HALVES ─────────────────────────────────
+    // "Why so many matches with same amount ... that is in correct". The
+    // screen listed every proposal after the best as an equal possibility;
+    // the engine only ever considered the TIE GROUP equal.
+    ck('  a weaker explanation is NOT listed as a choice',
+       !/EM-9999/.test(amb.querySelector('.rivals').textContent),
+       amb.querySelector('.rivals').textContent.slice(0, 200));
+    ck('  but it is counted, so nothing is hidden silently',
+       /1 weaker explanation was also considered/.test(amb.textContent),
+       amb.textContent.slice(0, 400));
+    ck('  and each possibility shows what its own invoice owes',
+       /owes \$18,000\.00/.test(amb.textContent) && /owes \$15,000\.00/.test(amb.textContent),
+       amb.textContent.slice(0, 400));
+
     ck('  a part payment says what would still be owed',
        /leaves \$6,000\.00/.test(amb.textContent), amb.textContent.slice(0, 300));
     ck('  and it is NOT shown as a confident percentage',
