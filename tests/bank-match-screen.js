@@ -427,7 +427,17 @@ let dom, w, doc;
     // Every /api/ URL the page calls must exist on the server, and every
     // bank route must be called by the page. Both directions, because the
     // first catches a typo and the second catches a dead permission.
-    const calls = [...new Set([...HTML.matchAll(/'(\/api\/[a-z0-9/_-]+)'/g)].map((m) => m[1]))];
+    // ── A URL WITH A QUERY STRING IS STILL A CALL ───────────────────────
+    // This matched only a path followed immediately by the closing quote, so
+    // api('/api/bank/review/payments?id=' + encodeURIComponent(id)) — the
+    // payment picker, 2026-10-27 — read as "no caller" and this check went
+    // red on a route the page does call. Third time in this one line: the
+    // comment below already records it matching one segment, then two. The
+    // pattern keeps being shaped like the URLs that happen to exist, which is
+    // CLAUDE.md's own second failure shape. An optional '?' now ends a path,
+    // and the '?' itself is outside the capture so the path compares equal to
+    // the mounted route.
+    const calls = [...new Set([...HTML.matchAll(/'(\/api\/[a-z0-9/_-]+)(?:\?[a-z0-9=_&-]*)?'/g)].map((m) => m[1]))];
     // BOTH prefixes. The first version only checked /api/bank, so the six
     // /api/plaid routes added with the feed could have shipped with no
     // button at all — the exact defect this section exists for, one feature

@@ -374,10 +374,33 @@ function setMatched(rows, id, match, { by = null, how = 'her' } = {}) {
         const at = new Date().toISOString();
         return {
             ...r,
-            matched: match ? { at, by: by || null, how, keys: (match.keys || []) } : null,
+            // ── by_hand AND gap, 2026-10-27 ─────────────────────────
+            // Both are spread CONDITIONALLY, so the object this writes for
+            // every caller that existed before today — the Match button, the
+            // 06:50 auto-tick, bankEntries, interCompany — is byte-identical
+            // to what it was. The flag says "this one is the new shape",
+            // never "this one is the old shape": a flag that has to be set to
+            // keep existing behaviour is the mistake that cost her invoice
+            // four columns, and it is written down in CLAUDE.md for that
+            // reason.
+            //
+            // The gap is kept on the ROW and not only in the audit log,
+            // because an inexact tie takes a row out of her review queue as
+            // though it were explained. The queue is the thing that must be
+            // able to say "explained, but by 100 dollars less than the bank".
+            matched: match ? {
+                at, by: by || null, how, keys: (match.keys || []),
+                ...(match.by_hand ? { by_hand: true } : {}),
+                ...(isFinite(Number(match.gap)) && Math.abs(Number(match.gap)) >= 0.005
+                    ? { gap: Math.round(Number(match.gap) * 100) / 100 } : {}),
+            } : null,
             history: (r.history || []).concat([{
                 at, by: by || null,
-                what: match ? `matched to a recorded payment (${how})` : 'match undone',
+                what: match
+                    ? (match.by_hand
+                        ? `matched to a recorded payment she picked herself (${how})`
+                        : `matched to a recorded payment (${how})`)
+                    : 'match undone',
                 why: match && match.why ? match.why : null,
             }]),
         };

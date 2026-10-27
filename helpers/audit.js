@@ -61,6 +61,10 @@ const ACTIONS = [
     // Registered rather than left to log as 'unknown-action'. It logged that
     // way for the first hour it existed, which is what the allowlist is for.
     'unmatch-bank-row',
+    // She picked the payment herself instead of taking Jarvis's. Logged
+    // because the detail carries what Jarvis WOULD have tied it to and the
+    // gap she confirmed — the two things nobody can reconstruct afterwards.
+    'match-bank-row-by-hand',
     'delete-paid-load',           // a load with payments against it
     'delete-paid-trucker-bill',   // a trucker bill with payments against it
     'delete-payment',             // one payment removed from an EDGE YARD load

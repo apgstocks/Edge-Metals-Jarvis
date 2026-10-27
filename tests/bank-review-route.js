@@ -270,6 +270,28 @@ const sid = ((await req('POST', '/login', { body: { password: process.env.ADMIN_
        /id="review"/.test(page));
     ck('  the matched list has a place on the page too',
        /id="matchedlist"/.test(page));
+
+    // ── THE PICKER IS REACHABLE, 2026-10-27 ─────────────────────────────
+    // #163 exists because helpers/reconcile.js went dead unnoticed: a route
+    // with no client is worse than no route, because the suite is green and
+    // nothing happens on screen. So the picker gets the same treatment as
+    // the review route itself.
+    ck('the screen calls the payment picker', page.includes("api('/api/bank/review/payments?id='"));
+    ck('  from a control on the row, not a page the row cannot reach',
+       /data-pickopen=/.test(page) && /\[data-pickopen\]/.test(page));
+    ck('  and the tie posts back to the match route',
+       /data-picktie=/.test(page) && /\[data-picktie\]/.test(page));
+    ck('  every money-out row offers it, including the "Choose" dead end',
+       /\$\{pickBtn\(r\)\}/.test(page) && /function pickBtn/.test(page),
+       'pickBtn must be called unconditionally in the row markup');
+    // The gap must be CONFIRMED on screen, not swallowed by the client
+    // sending confirm_gap on the first attempt — which would make the
+    // server guard decoration.
+    ck('  the client does NOT pre-confirm the gap',
+       !/confirm_gap: true \}/.test(page.replace(/\.\.\.\(confirmGap \? \{ confirm_gap: true \} : \{\}\)/g, '')),
+       'confirm_gap may only be sent when she has pressed the second button');
+    ck('  and the refusal becomes a second, labelled press',
+       /needs_confirm/.test(page) && /data-pickconfirm/.test(page));
     // The bulk offer must say what it does NOT cover, or it reads like
     // QuickBooks' accept-all.
     ck('  the bulk offer says it is exact matches only',
@@ -414,6 +436,166 @@ const sid = ((await req('POST', '/login', { body: { password: process.env.ADMIN_
     const anon = await req('POST', '/api/bank/review/unmatch', { body: { id: 'bk-auto' } });
     ck('  and nothing at all happens without a session', anon.status === 401 || anon.status === 403,
        String(anon.status));
+}
+
+// ── PICK A DIFFERENT PAYMENT, 2026-10-27 ─────────────────────────────────
+// Apsara: "also if i want to match some other bill aganst this payment,there
+// is no option right now na", and on what "some other" meant: "Say there is a
+// payment made. Jarvis is matching one. If I want to match it against a
+// different payment and not the one Jarvis matched".
+//
+// ── WHY THE OBVIOUS BUILD WOULD HAVE BEEN USELESS ────────────────────────
+// "Show her the other candidates" serves none of her cases on a withdrawal.
+// bankOut sets `ambiguous = sets.length > 1`, so a row reading 'Match' has
+// exactly ONE candidate by construction; the payment she wants is by
+// definition one the engine did not propose. Hence a list over her whole
+// ledger for that bank, with the amount gap shown, and a confirmation before
+// an inexact tie leaves her queue looking explained.
+{
+    section('PICK — tying a row to a payment Jarvis did not propose');
+
+    const pr = (p, o) => req('GET', p, o);
+
+    // ── A FIXTURE SHAPED LIKE HER SENTENCE ──────────────────────────────
+    // "Say there is a payment made. Jarvis is matching one. If I want to
+    // match it against a different payment and not the one Jarvis matched."
+    // So: one bank row, and TWO recorded payments — one Jarvis will match to
+    // the cent, and one she might know is really the right record. Its own
+    // ids, not another section's `paired`, which is block-scoped and whose
+    // 'bk3' already collides with the carrier row above it.
+    const mine = { id: 'bk-pick', date: '2026-06-10', desc: 'WIRE OUT VEGA',
+        party: 'Vega', category: '', spent: 5000, received: 0, amount: 5000,
+        direction: 'out', bank: 'BofA', company: 'Edge Metals INC',
+        pending: false, excluded: false };
+    const before = JSON.parse(fs.readFileSync(process.env.BANK_TX_FILE, 'utf8'));
+    fs.writeFileSync(process.env.BANK_TX_FILE,
+        JSON.stringify(before.concat([mine]), null, 2));
+    // Written through the real store path, and read back before going on —
+    // tests/bank-auto-tick.js passed sixteen checks against a store that
+    // never loaded because the filename was wrong.
+    fs.writeFileSync(cfg.BILL_PAYMENTS_FILE, JSON.stringify([
+        { id: 'PICK-A', supplier: 'Vega', date: '2026-06-10', amount: 5000,
+          mode: 'Wire', bank: 'BofA', allocations: [] },
+        { id: 'PICK-B', supplier: 'Vega', date: '2026-06-09', amount: 4900,
+          mode: 'Wire', bank: 'BofA', allocations: [] },
+    ], null, 2));
+    const loaded = require(path.join(ROOT, 'helpers/billPayments')).list()
+        .filter((x) => /^PICK-/.test(x.id || ''));
+    ck('the fixture loaded through the real store — two recorded payments',
+       loaded.length === 2, `${loaded.length} loaded`);
+    ck('the picker needs a row', (await pr('/api/bank/review/payments', { sid })).status === 400);
+    ck('  and an unknown row is a 404',
+       (await pr('/api/bank/review/payments?id=nope', { sid })).status === 404);
+
+    const list = await pr(`/api/bank/review/payments?id=${encodeURIComponent(mine.id)}`, { sid });
+    ck('it offers the recorded payments for this row', list.status === 200
+       && Array.isArray(list.json.rows), JSON.stringify(list.json).slice(0, 200));
+    ck('  and says which bank row it is answering about',
+       (list.json.row || {}).id === mine.id, JSON.stringify(list.json.row));
+    // THE CONTROL. Everything below asserts refusals, and a refusal of an
+    // empty list proves nothing — the lesson from tests/bank-auto-tick.js,
+    // where sixteen checks passed against a store that never loaded.
+    ck('  the list is NOT empty, so the refusals below mean something',
+       (list.json.rows || []).length > 0,
+       `considered ${list.json.considered} payment(s) — if 0, the fixture is not loading`);
+
+    const offered = list.json.rows || [];
+    ck('  every payment carries the gap against the bank row',
+       offered.every((p) => typeof p.gap === 'number' && typeof p.exact === 'boolean'),
+       JSON.stringify(offered[0]));
+    ck('  exact ones come first, because that is how she would sort them',
+       offered.every((p, i) => i === 0 || !(p.exact && !offered[i - 1].exact)),
+       JSON.stringify(offered.map((p) => p.exact)));
+    ck('  and each one names what it is, not just a key',
+       offered.every((p) => p.key && (p.label || p.kind)), JSON.stringify(offered[0]));
+
+    // ── THE REFUSALS, EACH ON A REAL REASON ─────────────────────────────
+    const bad = await req('POST', '/api/bank/review/match',
+        { sid, body: { id: mine.id, keys: ['not|a|real|key|0.00'] } });
+    ck('a key that is not in her ledger is refused, not tied to nothing',
+       bad.status === 409 && (bad.json.missing || []).length === 1,
+       JSON.stringify(bad.json));
+
+    const inexact = offered.find((p) => !p.exact);
+    if (inexact) {
+        const warn = await req('POST', '/api/bank/review/match',
+            { sid, body: { id: mine.id, keys: [inexact.key] } });
+        ck('an inexact tie is NOT made silently — it says the gap first',
+           warn.status === 409 && warn.json.needs_confirm === true
+           && typeof warn.json.gap === 'number', JSON.stringify(warn.json));
+        ck('  and the row is still in the queue, untouched',
+           ((await req('GET', '/api/bank/review', { sid })).json.queue.rows || [])
+               .some((r) => r.id === mine.id), 'the refusal must change nothing');
+    } else {
+        console.log('  NOTE  this fixture has no inexact candidate; the gap guard is mutated separately');
+    }
+
+    // ── HER PICK, MADE ──────────────────────────────────────────────────
+    // THE INEXACT one on purpose. Picking the exact candidate would have
+    // been Jarvis's own answer, so it would prove nothing about overriding
+    // it — and it would never have exercised the gap reaching the store,
+    // which is where my first version of this silently failed: bankLedger
+    // built the match object field by field and dropped everything it did
+    // not name.
+    const want = offered.find((p) => !p.exact && !p.taken_by)
+        || offered.find((p) => !p.taken_by) || offered[0];
+    const picked = await req('POST', '/api/bank/review/match',
+        { sid, body: { id: mine.id, keys: [want.key], confirm_gap: true } });
+    ck('she can tie the row to the payment SHE picked', picked.status === 200
+       && picked.json.ok === true && picked.json.by_hand === true, JSON.stringify(picked.json));
+    ck('  and it is recorded as hers, not as Jarvis’s own match',
+       (await req('GET', '/api/bank/review/matched', { sid })).json.rows
+           .some((r) => r.id === mine.id && r.how === 'her'), 'how must be her');
+    const store = JSON.parse(fs.readFileSync(process.env.BANK_TX_FILE, 'utf8'))
+        .find((r) => r.id === mine.id);
+    ck('  the tick carries the key she chose and says it was by hand',
+       ((store.matched || {}).keys || [])[0] === want.key && store.matched.by_hand === true,
+       JSON.stringify(store.matched));
+    ck('  and the gap is ON THE ROW, not only in the audit log',
+       want.exact ? store.matched.gap == null
+                  : Math.abs(Number(store.matched.gap) - want.gap) < 0.005,
+       JSON.stringify({ stored: (store.matched || {}).gap, expected: want.gap }));
+    ck('  and the history says she picked it herself',
+       (store.history || []).some((h) => /picked it|picked herself/i.test(h.what || '')),
+       JSON.stringify((store.history || []).map((h) => h.what)));
+
+    const aud = require(path.join(ROOT, 'helpers/audit')).listEntries()
+        .filter((a) => a.subject === mine.id && a.action === 'match-bank-row-by-hand');
+    ck('  and it is audited under its own name, with what Jarvis WOULD have done',
+       aud.length === 1 && Array.isArray((aud[0].detail || {}).jarvis_would_have),
+       JSON.stringify(aud.map((a) => ({ action: a.action, detail: a.detail }))));
+
+    // ── ONE PAYMENT, ONE BANK ROW ───────────────────────────────────────
+    // Two bank rows pointing at one recorded payment would say the money
+    // left the account twice. The key she just used is now spoken for.
+    const twin = { ...mine, id: 'bk-twin', matched: undefined };
+    delete twin.matched;
+    const cur = JSON.parse(fs.readFileSync(process.env.BANK_TX_FILE, 'utf8'));
+    fs.writeFileSync(process.env.BANK_TX_FILE, JSON.stringify(cur.concat([twin]), null, 2));
+
+    const double = await req('POST', '/api/bank/review/match',
+        { sid, body: { id: 'bk-twin', keys: [want.key], confirm_gap: true } });
+    ck('a payment already tied to one bank row cannot be tied to a second',
+       double.status === 409 && (double.json.clash || []).length === 1,
+       JSON.stringify(double.json));
+    ck('  and it names which row has it, so she can unmatch that one',
+       ((double.json.clash || [])[0] || {}).row === mine.id, JSON.stringify(double.json.clash));
+
+    // And the picker says so too, rather than offering it as free.
+    const after = await pr(`/api/bank/review/payments?id=bk-twin`, { sid });
+    const same = (after.json.rows || []).find((p) => p.key === want.key);
+    ck('  the picker shows it as taken rather than hiding it — silenced is never hidden',
+       !!same && same.taken_by === mine.id, JSON.stringify(same));
+
+    // ── AND THE OLD PATH IS UNTOUCHED ───────────────────────────────────
+    // `keys` absent must behave exactly as it did before today: Jarvis's own
+    // proposal, and an 'add' row still refused. The bulk-match path and every
+    // existing caller send no keys, which is why this check is the one that
+    // matters most in this section.
+    const noKeys = await req('POST', '/api/bank/review/match', { sid, body: { id: 'bk-twin' } });
+    ck('with no keys, the route still does what it always did',
+       noKeys.status === 200 || (noKeys.status === 409 && !noKeys.json.needs_confirm),
+       `${noKeys.status} ${JSON.stringify(noKeys.json)}`);
 }
 
 server.close();

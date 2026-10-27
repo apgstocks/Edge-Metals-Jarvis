@@ -574,20 +574,120 @@ function mount(app, cfg) {
                 return res.status(409).json({ error: 'that row is no longer in the review queue — '
                     + 'it may already be matched, or excluded. Reload and look again.' });
             }
-            if (row.state !== 'match') {
-                // Named states, not a generic refusal: "Choose" and "Add"
-                // are different problems and she needs to know which.
-                return res.status(409).json({ error: row.state === 'choose'
-                    ? 'several recorded payments fit this exactly — Jarvis will not pick one'
-                    : `this row is "${row.label}", not a match — it would CREATE a record, which `
-                      + 'goes through the plan screen so you can see the effect first',
+            // ── HER OWN PICK, 2026-10-27 ─────────────────────────────────
+            // "Say there is a payment made. Jarvis is matching one. If I want
+            // to match it against a different payment and not the one Jarvis
+            // matched." So `keys` is OPTIONAL and its ABSENCE is the old
+            // behaviour, unchanged to the character: the bulk-match path and
+            // every existing caller send no keys and still get Jarvis's own
+            // proposal. The flag says "this one is the new shape", which is
+            // the rule in CLAUDE.md, written after a flag that meant the
+            // opposite cost her invoice four columns.
+            //
+            // helpers/bankAutoTick.js does not come through here at all — it
+            // calls bankLedger.markMatched directly — so the overnight job is
+            // untouched by this.
+            const picked = Array.isArray((req.body || {}).keys)
+                ? (req.body.keys).map((k) => String(k || '').trim()).filter(Boolean)
+                : null;
+
+            if (!picked) {
+                if (row.state !== 'match') {
+                    // Named states, not a generic refusal: "Choose" and "Add"
+                    // are different problems and she needs to know which.
+                    // `choose` now names the way out, since there is one.
+                    return res.status(409).json({ error: row.state === 'choose'
+                        ? 'several recorded payments fit this exactly — Jarvis will not pick one, '
+                          + 'so pick the right one yourself and it will be tied to that'
+                        : `this row is "${row.label}", not a match — it would CREATE a record, which `
+                          + 'goes through the plan screen so you can see the effect first',
+                        state: row.state, why: row.why, can_pick: row.state === 'choose' });
+                }
+                const keys = ((row.match || {}).payments || []).map((p) => p.key);
+                const saved = await ledger.markMatched(id, { keys, why: row.why },
+                    { by: req.profile || req.role || null, how: 'her' });
+                return res.json({ ok: true, row: saved, matched: keys.length });
+            }
+
+            // ── FROM HERE DOWN: SHE CHOSE ────────────────────────────────
+            // An 'add' row is still refused. Those have nothing recorded to
+            // tie to, by definition — the engine said so — and the button on
+            // them CREATES a record, which goes through the plan screen. A
+            // 'choose' row, though, is exactly the dead end she hit, and a
+            // pick is the whole answer to it.
+            if (row.state === 'add' || row.state === 'ask') {
+                return res.status(409).json({ error: `this row is "${row.label}" — Jarvis found `
+                    + 'nothing recorded that could be this payment, so there is nothing to tie it '
+                    + 'to. Recording it is a different button, and it goes through the plan screen',
                     state: row.state, why: row.why });
             }
 
-            const keys = ((row.match || {}).payments || []).map((p) => p.key);
-            const saved = await ledger.markMatched(id, { keys, why: row.why },
-                { by: req.profile || req.role || null, how: 'her' });
-            res.json({ ok: true, row: saved, matched: keys.length });
+            // BRec and BO are already in scope from the top of this handler;
+            // re-requiring them under new names was my first draft and it is
+            // exactly the kind of near-duplicate that drifts.
+            const acct = BRec.bankAccounts().find((a) => String(a.bank || '').toLowerCase()
+                === String((rows.find((r) => r.id === id) || {}).bank || '').toLowerCase());
+            if (!acct) {
+                return res.status(409).json({ error: 'the chart has no bank account for this row’s '
+                    + 'bank, so Jarvis cannot tell which payments could have left it' });
+            }
+            const pool = BO.payments(built.lines, { code: acct.code })
+                .filter((p) => !(p.source && p.source.store === 'bank_entries'));
+
+            // EVERY key must exist in that pool. A key that does not is a
+            // stale screen or a typed id, and tying a bank row to nothing is
+            // worse than refusing — it would leave the queue looking done.
+            const found = picked.map((k) => pool.find((p) => p.key === k) || null);
+            const missing = picked.filter((k, i) => !found[i]);
+            if (missing.length) {
+                return res.status(409).json({ error: 'one of those payments is no longer there to '
+                    + 'tie to — reload and look again', missing });
+            }
+
+            // AND must not belong to another bank row already. Two bank rows
+            // pointing at one payment would say the money left twice.
+            const clash = [];
+            for (const r of rows) {
+                if (!r || !r.matched || r.id === id) continue;
+                for (const k of ((r.matched || {}).keys || [])) if (picked.includes(k)) clash.push({ key: k, row: r.id });
+            }
+            if (clash.length) {
+                return res.status(409).json({ error: 'that payment is already tied to another bank '
+                    + 'row — unmatch that one first', clash });
+            }
+
+            // ── THE GAP IS SHOWN, NOT SWALLOWED ─────────────────────────
+            // She may well be right that a $12,000 withdrawal is the $11,980
+            // payment she recorded. What must never happen is the row leaving
+            // her queue as "explained" while the two quietly disagree. So an
+            // inexact tie needs confirm_gap, and the gap is stored on the
+            // match and in the audit entry either way.
+            const total = Math.round(found.reduce((t, p) => t + num0(p.amount), 0) * 100) / 100;
+            const gap = Math.round((total - num0(row.amount)) * 100) / 100;
+            const exact = Math.abs(gap) < 0.005;
+            if (!exact && (req.body || {}).confirm_gap !== true) {
+                return res.status(409).json({ error: `those payments come to ${total.toFixed(2)} but `
+                    + `the bank row is ${num0(row.amount).toFixed(2)} — a difference of `
+                    + `${gap.toFixed(2)}. Confirm and Jarvis will tie them anyway and record the gap`,
+                    gap, total, amount: Math.round(num0(row.amount) * 100) / 100, needs_confirm: true });
+            }
+
+            const audit = require('./audit');
+            const actor = req.profile || req.role || 'admin';
+            const entry = await audit.record({
+                action: 'match-bank-row-by-hand', subject: id, actor, role: req.role, ip: req.ip,
+                detail: { keys: picked, total, gap, state: row.state,
+                    jarvis_would_have: ((row.match || {}).payments || []).map((p) => p.key) },
+            });
+            const why = exact
+                ? `tied by hand to ${picked.length} recorded payment(s)`
+                : `tied by hand to ${picked.length} recorded payment(s), ${gap > 0 ? 'over' : 'under'} `
+                  + `by ${Math.abs(gap).toFixed(2)} — confirmed`;
+            const saved = await ledger.markMatched(id,
+                { keys: picked, why, gap: exact ? 0 : gap, by_hand: true },
+                { by: actor, how: 'her' });
+            await audit.complete(entry, 'done', { gap, exact });
+            res.json({ ok: true, row: saved, matched: picked.length, gap, exact, by_hand: true });
         } catch (e) { res.status(400).json({ error: e.message }); }
     });
 
@@ -717,6 +817,124 @@ function mount(app, cfg) {
                     keys: (r.matched || {}).keys || [],
                 }));
             res.json({ rows, auto: rows.filter((r) => r.how === 'auto').length });
+        } catch (e) { res.status(500).json({ error: e.message }); }
+    });
+
+    // ── GET /api/bank/review/payments ────────────────────────────────────
+    // Apsara, 2026-10-27: "also if i want to match some other bill aganst
+    // this payment,there is no option right now na" — and, asked what "some
+    // other" meant: "Say there is a payment made. Jarvis is matching one. If
+    // I want to match it against a different payment and not the one Jarvis
+    // matched".
+    //
+    // ── WHY THE ENGINE'S OWN RIVALS ARE NOT THE ANSWER ───────────────────
+    // My first instinct was "show her the other candidates". For a WITHDRAWAL
+    // there are none: helpers/bankOut.js sets `ambiguous = sets.length > 1`,
+    // so the moment a second combination exists the row is 'choose' and
+    // Jarvis picks nothing. A row that says 'Match' has exactly ONE candidate
+    // by construction. So the payment she wants instead is necessarily one
+    // the engine did not propose — outside its amount or date rules — and a
+    // picker limited to the engine's output would have shipped looking right
+    // and served none of her cases.
+    //
+    // ── WHAT IS SAFE HERE, AND WHY IT IS MORE THAN IT LOOKS ──────────────
+    // A match still creates nothing. Nothing in the books is derived from a
+    // match's contents: bankOut.withdrawals() only uses `matched` to drop a
+    // row from the worklist, and bankReconcile compares the bank balance to
+    // the ledger balance built from booksBuild, which never reads a match. So
+    // an inexact tie moves NO figure. What it does is remove a row from her
+    // queue as though it were explained — so the gap must be shown before she
+    // presses, and recorded after, which is what POST ... /match now does.
+    //
+    // ── WHAT THIS DELIBERATELY KEEPS FROM THE ENGINE ────────────────────
+    //   · ONE BANK. bankOut.sweep refuses to offer a Chase withdrawal against
+    //     a payment the books say left BofA, taking the bank's name off the
+    //     chart so a rename cannot leave the two disagreeing. Same filter.
+    //   · NO bank_entries. A payment that exists BECAUSE of a bank row
+    //     (helpers/bankEntries.js) is already that row's; offering it here
+    //     would let one row claim another's entry.
+    //   · NOTHING ALREADY TIED. A key on some other row's `matched` is spoken
+    //     for, and is listed as taken rather than hidden — "silenced is never
+    //     hidden", the rule the review queue is built on.
+    //
+    // Derived on every call from her own stores. Nothing is cached and
+    // nothing is stored, which is the ports.js rule: the candidates ARE her
+    // ledger, so there is nothing to maintain and nothing to go stale.
+    const PICK_WINDOW_DAYS = 180;
+    app.get('/api/bank/review/payments', (req, res) => {
+        const id = String(req.query.id || '').trim();
+        if (!id) return res.status(400).json({ error: 'which row?' });
+        try {
+            const ledger = require('./bankLedger');
+            const BO = require('./bankOut');
+            const BM = require('./bankMatch');
+            const BRec = require('./bankReconcile');
+            const BB = require('./booksBuild');
+
+            const all = ledger.list();
+            const row = all.find((r) => r && r.id === id);
+            if (!row) return res.status(404).json({ error: 'no bank row with that id' });
+
+            const amount = Math.round(num0(row.spent || row.amount) * 100) / 100;
+            const when = String(row.date || '').slice(0, 10);
+            const me = { id: row.id, date: when, amount,
+                descriptor: row.party || row.desc || '', bank: row.bank || null,
+                matched: (row.matched || null) };
+
+            const acct = BRec.bankAccounts().find((a) => String(a.bank || '').toLowerCase()
+                === String(row.bank || '').toLowerCase());
+            if (!acct) {
+                // Said rather than returned empty. An empty list reads as "no
+                // payments", which is a different and wrong answer.
+                return res.json({ row: me, rows: [], taken: 0,
+                    note: `the chart has no bank account for "${row.bank || '(blank)'}", so Jarvis `
+                        + 'cannot tell which payments could have left this account' });
+            }
+
+            const built = BB.build({});
+            const pool = BO.payments(built.lines, { code: acct.code })
+                .filter((p) => !(p.source && p.source.store === 'bank_entries'));
+
+            const spokenFor = new Map();
+            for (const r of all) {
+                if (!r || !r.matched || r.id === id) continue;
+                for (const k of ((r.matched || {}).keys || [])) spokenFor.set(k, r.id);
+            }
+            const mineNow = new Set(((row.matched || {}).keys || []));
+
+            const q = String(req.query.q || '').trim().toLowerCase();
+            const out = pool
+                .map((p) => {
+                    const gap = Math.round((p.amount - amount) * 100) / 100;
+                    const days = when && p.date ? BM.daysBetween(p.date, when) : null;
+                    return {
+                        key: p.key, date: p.date, amount: p.amount,
+                        kind: p.kind, party: p.party, entity: p.entity,
+                        memo: p.memo || null, label: p.label,
+                        // The two numbers she is actually choosing on.
+                        gap, days,
+                        exact: Math.abs(gap) < 0.005,
+                        // Already this row's pick — so the screen can show
+                        // which one is current rather than offering it as new.
+                        current: mineNow.has(p.key),
+                        taken_by: spokenFor.get(p.key) || null,
+                        ambiguous_key: !!p.ambiguousKey,
+                    };
+                })
+                .filter((p) => p.days == null || Math.abs(p.days) <= PICK_WINDOW_DAYS)
+                .filter((p) => !q || [p.party, p.kind, p.memo, p.label]
+                    .some((t) => String(t || '').toLowerCase().includes(q)))
+                // Exact amounts first, then by how far off, then by date:
+                // the order she would sort them in by hand.
+                .sort((a, b) => (b.exact - a.exact)
+                    || (Math.abs(a.gap) - Math.abs(b.gap))
+                    || (Math.abs(a.days || 0) - Math.abs(b.days || 0)))
+                .slice(0, 100);
+
+            res.json({ row: me, rows: out, window_days: PICK_WINDOW_DAYS,
+                taken: out.filter((p) => p.taken_by).length,
+                exact: out.filter((p) => p.exact).length,
+                considered: pool.length });
         } catch (e) { res.status(500).json({ error: e.message }); }
     });
 

@@ -149,6 +149,10 @@ main{padding:16px 20px 60px;max-width:1240px;margin:0 auto}
 .alloc{margin:8px 0 0;border-top:1px solid var(--border-subtle);padding-top:8px}
 .alloc table{width:100%;border-collapse:collapse;font-size:13px}
 .alloc td{padding:3px 0;vertical-align:top}
+/* No .alloc table had a <th> until the payment picker (2026-10-27), so this
+   rule changes nothing that was already on the page. */
+.alloc th{padding:3px 0;text-align:left;font-weight:600;color:var(--text-muted);
+  border-bottom:1px solid var(--border-subtle);white-space:nowrap}
 .alloc td.n{text-align:right;font-family:var(--font-mono);white-space:nowrap}
 .why{margin:7px 0 0;padding:0 0 0 16px;color:var(--text-muted);font-size:12.5px}
 .why li{margin:2px 0}
@@ -1450,7 +1454,8 @@ async function renderReview() {
         ${bankTextHtml(r.bank_text, r.descriptor)}
         <div class="note" style="margin-top:10px">${esc(r.why || '')}</div>
         ${r.state === 'match' ? '' : (r.kind === 'carrier-bill' ? planHtml(r) : categoriseHtml(r))}
-        <div class="acts">${r.state === 'match' ? '' : ruleBtn(r.descriptor, 'out')}</div>
+        <div class="pickbox" id="pick-${esc(r.id)}"></div>
+        <div class="acts">${pickBtn(r)}${r.state === 'match' ? '' : ruleBtn(r.descriptor, 'out')}</div>
       </div>
     </div>`;
   }).join('');
@@ -1459,6 +1464,102 @@ async function renderReview() {
   mergeOut();
   countTabs();
   applyFilter();
+}
+
+/* ── PICKING THE PAYMENT HERSELF ───────────────────────────────────────
+   Apsara, 2026-10-27: "Say there is a payment made. Jarvis is matching one.
+   If I want to match it against a different payment and not the one Jarvis
+   matched."
+
+   On EVERY money-out row, including the ones reading 'Choose'. Those were
+   the dead end: several records fit to the cent, Jarvis refuses to pick, and
+   until today she had no way to pick either. The button is the answer to
+   both sentences at once.
+
+   Jarvis's own pick is marked in the list rather than removed, so "the one
+   Jarvis matched" is visible next to the one she is choosing instead. */
+function pickBtn(r) {
+  return `<button class="btn quiet" data-pickopen="${esc(r.id)}"
+    title="List the payments in your books that could be this one, and tie it to the one you choose"
+    >${r.state === 'match' ? 'Tie to a different payment' : 'Pick the payment yourself'}</button>`;
+}
+
+async function renderPick(id) {
+  const box = $('pick-' + id);
+  if (!box) return;
+  box.innerHTML = '<div class="note">looking through your books…</div>';
+  let d = null;
+  try { d = await api('/api/bank/review/payments?id=' + encodeURIComponent(id)); }
+  catch (e) { box.innerHTML = `<div class="note">${esc(e.message)}</div>`; return; }
+
+  if (d.note) { box.innerHTML = `<div class="note">${esc(d.note)}</div>`; return; }
+  if (!(d.rows || []).length) {
+    /* Said, not left blank. An empty box reads as "still loading". */
+    box.innerHTML = `<div class="note">Nothing in your books within ${d.window_days} days could have
+      left this account for anything like this amount. ${d.considered} payment(s) were looked at.</div>`;
+    return;
+  }
+
+  const bank = (d.row || {}).amount;
+  const rows = d.rows.map((p) => {
+    /* The gap is the number she is deciding on, so it is the loud one.
+       Exact fits say nothing — no gap IS the message. */
+    const gapTxt = p.exact
+      ? '<span class="note" style="margin:0">same to the cent</span>'
+      : `<strong style="color:var(--amber-500)">${p.gap > 0 ? '+' : '−'}${money(Math.abs(p.gap))}</strong>`;
+    const taken = p.taken_by
+      ? `<span class="note" style="margin:0">already tied to ${esc(p.taken_by)} — unmatch that row first</span>`
+      : (p.current ? '<span class="note" style="margin:0">this is the one it is tied to now</span>' : '');
+    return `<tr${p.taken_by ? ' style="opacity:.55"' : ''}>
+      <td>${esc(fmtDay(p.date))}</td>
+      <td>${esc(p.party || p.kind || '')}<div class="note" style="margin:0">${esc(p.label || '')}</div></td>
+      <td style="text-align:right">${money(p.amount)}</td>
+      <td style="text-align:right">${gapTxt}</td>
+      <td>${p.days == null ? '' : `${Math.abs(p.days)}d`}</td>
+      <td style="text-align:right">${p.taken_by || p.current ? taken
+        : `<button class="btn" data-picktie="${esc(id)}" data-pickkey="${esc(p.key)}"
+             data-pickgap="${esc(String(p.gap))}">Tie to this</button>`}</td>
+    </tr>`;
+  }).join('');
+
+  box.innerHTML = `<div class="note" style="margin-top:10px">The bank row is ${money(bank)}.
+      ${d.exact} of these match it to the cent${d.taken ? `, and ${d.taken} are already tied to another row` : ''}.
+      Tying to one that does NOT match will ask you to confirm the difference first, and the
+      difference is kept on the row afterwards.</div>
+    <div class="alloc"><table><thead><tr>
+      <th>paid</th><th>to</th><th style="text-align:right">amount</th>
+      <th style="text-align:right">vs bank</th><th>apart</th><th></th>
+    </tr></thead><tbody>${rows}</tbody></table></div>`;
+}
+
+/* The gap confirmation is a SECOND PRESS on the row itself, not a browser
+   dialog: #139 replaced window.prompt on the QuickBooks page for the same
+   reason — a dialog hides the figures she is being asked about. The server
+   refuses the first attempt with the gap in the message, and that message
+   becomes the label on the button that confirms it. */
+async function doPickTie(id, key, confirmGap) {
+  try {
+    const r = await api('/api/bank/review/match',
+      { body: { id, keys: [key], ...(confirmGap ? { confirm_gap: true } : {}) } });
+    toast(r.exact ? 'Tied to the payment you picked'
+                  : `Tied, ${r.gap > 0 ? 'over' : 'under'} by ${money(Math.abs(r.gap))} — recorded on the row`,
+          'good');
+    return true;
+  } catch (e) {
+    if (e.body && e.body.needs_confirm) {
+      const box = $('pick-' + id);
+      if (box) {
+        box.insertAdjacentHTML('afterbegin', `<div class="card" style="border-left:4px solid var(--amber-500)">
+          <div class="note">${esc(e.message)}</div>
+          <div class="acts"><button class="btn solid" data-picktie="${esc(id)}"
+            data-pickkey="${esc(key)}" data-pickconfirm="1">Tie anyway and record the
+            ${money(Math.abs(e.body.gap))} difference</button></div></div>`);
+      }
+      return false;
+    }
+    toast(e.message, 'bad');
+    return false;
+  }
 }
 
 /* ── THE MATCH BUTTON ──────────────────────────────────────────────────
@@ -1715,6 +1816,39 @@ document.addEventListener('click', async (ev) => {
       toast('Posted — ' + p.effect, 'good');
       renderReview().then(renderBooked);
     } catch (e) { cp.disabled = false; toast(e.message, 'bad'); }
+    return;
+  }
+  /* ── PICKING THE PAYMENT HERSELF ─────────────────────────────────────
+     Two controls. `pickopen` lists what her books hold for this row and
+     changes nothing; `picktie` ties it. Separated because the list is the
+     part she will use most — to look, and often to close again — and a
+     list that could tie something by accident is a list she stops opening.
+
+     The handler names renderPick / doPickTie, both of which are defined
+     above. Four times this week I called something that did not exist
+     (nameMatch.same, cardFromRow, r2, refresh) and twice it reached a
+     commit, so every identifier in a handler now gets checked against its
+     definition before the diff is written. */
+  const po = ev.target.closest('[data-pickopen]');
+  if (po) {
+    const id = po.dataset.pickopen;
+    const box = $('pick-' + id);
+    /* A second press closes it. Her screen is long and a list that can
+       only be opened makes it longer. */
+    if (box && box.innerHTML.trim()) { box.innerHTML = ''; return; }
+    await renderPick(id);
+    return;
+  }
+  const pt = ev.target.closest('[data-picktie]');
+  if (pt) {
+    pt.disabled = true;
+    const ok = await doPickTie(pt.dataset.picktie, pt.dataset.pickkey,
+                              pt.dataset.pickconfirm === '1');
+    /* On success the row leaves For review and joins the matched list, so
+       both are redrawn — the same pair the unmatch handler uses. On a
+       refusal the button comes back, because the row has not moved. */
+    if (ok) renderReview().then(renderMatched);
+    else pt.disabled = false;
     return;
   }
   const um = ev.target.closest('[data-unmatch]');
