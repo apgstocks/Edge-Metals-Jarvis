@@ -3137,10 +3137,79 @@ const MUTATIONS = [
       file: 'helpers/bankMatchRoutes.js', suites: ['bank-review-route'],
       find: "                note: built.complete ? null",
       to:   "                note: true ? null" },
+    // ── THIS ONE WAS DEAD, AND IT IS THE ONE THAT MATTERS MOST ───────
+    // The find string was "    renderReview();" (four spaces), which appears
+    // TWICE in bank-match.html — in two event handlers, not in load(). The
+    // harness refuses an ambiguous find, so this mutation applied nowhere and
+    // was reported as neither killed nor survived. It had been dead since the
+    // handlers were added. Found 2026-10-27 while adding the unmatch
+    // mutations below; another #204 instance, and the worst kind, because
+    // reachability is exactly what #163 exists to guard: helpers/reconcile.js
+    // went dead unnoticed and this check is the reason that cannot happen
+    // again to this screen.
+    //
+    // Re-pointed at load(), which is the claim worth guarding — "it is on
+    // screen without pressing anything". Unique, because the whole render
+    // line is included.
     { name: 'reviewroute: the screen stops calling it, like reconcile.js did',
       file: 'dashboard/bank-match.html', suites: ['bank-review-route'],
-      find: "    renderReview();",
-      to:   "    if (false) renderReview();" },
+      find: "    renderReconcile();\n    renderReview();",
+      to:   "    renderReconcile();" },
+    // The same for the matched list, which is the half she asked for on
+    // 2026-10-27. Its first version was reachable only from pickAcct().
+    { name: 'unmatch: the matched list is not rendered on page load',
+      file: 'dashboard/bank-match.html', suites: ['bank-review-route'],
+      find: "    renderMatched();\n    renderBooked();",
+      to:   "    renderBooked();" },
+
+    // ── UNMATCH, 2026-10-27 — "for matched things there should be a
+    //    unmatch option" (#234) ──────────────────────────────────────────
+    // Each of these was run and each one turns a NAMED check red. The two
+    // that did NOT, first time round, are the reason the checks beside them
+    // were rewritten:
+    //   · deleting the admin gate changed nothing, because the check only
+    //     tried an ANONYMOUS request, which the session middleware refuses
+    //     before the handler runs. Now driven with a logged-in 'user'.
+    //   · the audit detail could be gutted silently, because nothing read
+    //     the audit log at all — and 'unmatch-bank-row' was not on
+    //     helpers/audit.js's allowlist, so every undo logged as
+    //     'unknown-action'.
+    { name: 'unmatch: a row already untied is untied again, logging it twice',
+      file: 'helpers/bankMatchRoutes.js', suites: ['bank-review-route'],
+      find: "            if (!before.matched) {",
+      to:   "            if (false) {" },
+    { name: 'unmatch: any logged-in user can undo what the overnight job did',
+      file: 'helpers/bankMatchRoutes.js', suites: ['bank-review-route'],
+      find: "    app.post('/api/bank/review/unmatch', async (req, res) => {\n        if (!admin(req, res)) return;",
+      to:   "    app.post('/api/bank/review/unmatch', async (req, res) => {" },
+    { name: 'unmatch: it reports success without clearing the tick',
+      file: 'helpers/bankMatchRoutes.js', suites: ['bank-review-route'],
+      find: "            const row = await ledger.markMatched(id, null, { by: actor, how: 'her' });",
+      to:   "            const row = before;" },
+    { name: 'unmatch: an unknown row id is answered with a cheerful ok',
+      file: 'helpers/bankMatchRoutes.js', suites: ['bank-review-route'],
+      find: "            if (!before) return res.status(404).json({ error: 'no bank row with that id' });",
+      to:   "            if (!before) return res.json({ ok: true });" },
+    { name: 'unmatch: the response stops saying what it undid',
+      file: 'helpers/bankMatchRoutes.js', suites: ['bank-review-route'],
+      find: "            res.json({ ok: true, row, was: before.matched });",
+      to:   "            res.json({ ok: true, row });" },
+    { name: 'unmatch: the audit entry no longer says whether JARVIS or she tied it',
+      file: 'helpers/bankMatchRoutes.js', suites: ['bank-review-route'],
+      find: "                detail: { how: before.matched.how || null, keys: before.matched.keys || [],",
+      to:   "                detail: { keys: before.matched.keys || []," },
+    { name: 'unmatch: the action leaves the allowlist, so every undo logs as unknown',
+      file: 'helpers/audit.js', suites: ['bank-review-route'],
+      find: "    'unmatch-bank-row',",
+      to:   "    'unmatch-bank-row-TYPO'," },
+    { name: 'unmatch: the matched list has no container on the page',
+      file: 'dashboard/bank-match.html', suites: ['bank-review-route'],
+      find: '<div id="matchedlist"></div>',
+      to:   '<div id="matchedlist_x"></div>' },
+    { name: 'unmatch: the matched list stops saying who ticked each row',
+      file: 'helpers/bankMatchRoutes.js', suites: ['bank-review-route'],
+      find: "                how: (r.matched || {}).how || null,",
+      to:   "                how_x: (r.matched || {}).how || null," },
 
     // ── THE REVIEW QUEUE — "LIKE QB, BUT BETTER", 2026-10-08 ─────────
     { name: 'review: a guess from a descriptor joins the bulk-post offer',

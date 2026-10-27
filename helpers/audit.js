@@ -50,6 +50,17 @@ const mutateJson = (file, dflt, fn) => mutateJsonRaw(file, dflt, fn, { strict: t
 const ACTIONS = [
     'categorise-bank-line',        // a bank withdrawal booked to an account she picked
     'undo-categorise-bank-line',
+    // ── UNTYING A BANK ROW FROM A RECORDED PAYMENT ───────────────────────
+    // 2026-10-27, with the unmatch button (#234). Unlike the two above it
+    // reverses no journal entry — a match creates nothing — so this entry is
+    // not here to explain a figure. It is here to answer "who untied this",
+    // which matters precisely BECAUSE the overnight auto-tick ties rows with
+    // nobody watching: an undo of something Jarvis did by itself must be
+    // attributable to the person who did it.
+    //
+    // Registered rather than left to log as 'unknown-action'. It logged that
+    // way for the first hour it existed, which is what the allowlist is for.
+    'unmatch-bank-row',
     'delete-paid-load',           // a load with payments against it
     'delete-paid-trucker-bill',   // a trucker bill with payments against it
     'delete-payment',             // one payment removed from an EDGE YARD load

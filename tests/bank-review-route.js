@@ -260,8 +260,16 @@ const sid = ((await req('POST', '/login', { body: { password: process.env.ADMIN_
                                 page.indexOf('async function showAliases'));
     ck('  from load(), so it is on screen without pressing anything',
        /\n\s*renderReview\(\);/.test(loadBody), loadBody.slice(0, 400));
+    // ── AND THE MATCHED LIST, THE SAME WAY, FOR THE SAME REASON ─────────
+    // It was added to pickAcct() only, so it rendered when she switched bank
+    // account and not when she opened the page. The slice above is the real
+    // load() body (load() to showAliases), which is why this catches it.
+    ck('  and so is the matched list, or the unmatch button has nothing to sit on',
+       /\n\s*renderMatched\(\);/.test(loadBody), loadBody.slice(0, 600));
     ck('  and the money-out section has its own place on the page',
        /id="review"/.test(page));
+    ck('  the matched list has a place on the page too',
+       /id="matchedlist"/.test(page));
     // The bulk offer must say what it does NOT cover, or it reads like
     // QuickBooks' accept-all.
     ck('  the bulk offer says it is exact matches only',
@@ -289,6 +297,123 @@ const sid = ((await req('POST', '/login', { body: { password: process.env.ADMIN_
     ck('  and the page says which of those have an action now, and which still have none',
        /categorised/.test(page) && /apply a plan/.test(page) && /still have no action/.test(page)
        && !/not built yet, so they are listed without a button/.test(page));
+}
+
+
+// ── UNMATCH, 2026-10-27 ──────────────────────────────────────────────────
+// Apsara: "for matched things, there should be a unmatch option". There was
+// none. bankLedger.setMatched has always taken a null match and writes
+// "match undone" for it; nothing reachable called it. `categorise` got an
+// /undo and `match` never did, so a matched row was a one-way door.
+//
+// That became urgent the moment helpers/bankAutoTick.js (#187) began ticking
+// rows at 06:50 unattended. Its own header calls it reversible. It was
+// reversible only in a helper she could not reach.
+//
+// End to end through the real server, because the gap was never in the
+// helper — it was that nothing called it.
+{
+    section('UNMATCH — the way back from a matched row');
+
+    // A row ticked by the overnight job, written as that job writes it.
+    const ticked = { ...row, id: 'bk-auto', date: '2026-04-20', spent: 3000,
+        amount: 3000, desc: 'WIRE OUT AUTOTICKED',
+        matched: { at: '2026-04-21T06:50:00Z', by: null, how: 'auto', keys: ['k-1'] } };
+    const current = JSON.parse(fs.readFileSync(process.env.BANK_TX_FILE, 'utf8'));
+    fs.writeFileSync(process.env.BANK_TX_FILE,
+        JSON.stringify(current.concat([ticked]), null, 2));
+
+    const listed = await req('GET', '/api/bank/review/matched', { sid });
+    ck('a matched row is listed somewhere she can see it', listed.status === 200
+       && (listed.json.rows || []).some((r) => r.id === 'bk-auto'), JSON.stringify(listed.json).slice(0, 200));
+    const mine = (listed.json.rows || []).find((r) => r.id === 'bk-auto') || {};
+    ck('  and it says JARVIS ticked it, not her',
+       mine.how === 'auto' && listed.json.auto >= 1, JSON.stringify(mine));
+
+    ck('unmatching needs a row id', (await req('POST', '/api/bank/review/unmatch', { sid, body: {} })).status === 400);
+    ck('  and an unknown row is a 404',
+       (await req('POST', '/api/bank/review/unmatch', { sid, body: { id: 'nope' } })).status === 404);
+
+    const done = await req('POST', '/api/bank/review/unmatch', { sid, body: { id: 'bk-auto' } });
+    ck('a matched row can be unmatched', done.status === 200 && done.json.ok === true,
+       JSON.stringify(done.json));
+    ck('  and it hands back what it undid, since the row no longer knows',
+       (done.json.was || {}).how === 'auto', JSON.stringify(done.json.was));
+
+    const after = JSON.parse(fs.readFileSync(process.env.BANK_TX_FILE, 'utf8'))
+        .find((r) => r.id === 'bk-auto');
+    ck('  the tick is gone from the store', after && after.matched == null, JSON.stringify(after && after.matched));
+    ck('  the history says it was undone, so it can be traced',
+       (after.history || []).some((h) => /undone/i.test(h.what || '')), JSON.stringify(after.history));
+    ck('  and the row itself is still there — unmatching destroys nothing',
+       !!after && after.amount === 3000, JSON.stringify(after && after.amount));
+
+    // ── THE AUDIT ENTRY, WHICH IS THE WHOLE POINT OF AUDITING IT ────────
+    // The route's own comment says it is "audited like the categorise undo,
+    // because 'who untied this, and when' is the question asked when a figure
+    // moves and nobody remembers why". Nothing checked that, and the claim was
+    // false: helpers/audit.js keeps a CLOSED allowlist of actions so a typo
+    // becomes a visible 'unknown-action' row, and 'unmatch-bank-row' was not
+    // on it. So every unmatch logged as unknown-action — present in the file,
+    // invisible to anyone grepping for what they untied.
+    const audits = require(path.join(ROOT, 'helpers/audit')).listEntries()
+        .filter((a) => a.subject === 'bk-auto');
+    ck('  the undo is audited under its own name, not as unknown-action',
+       audits.length === 1 && audits[0].action === 'unmatch-bank-row',
+       JSON.stringify(audits.map((a) => a.action)));
+    ck('  naming who did it and what was undone — the row no longer knows',
+       audits[0] && audits[0].actor && (audits[0].detail || {}).how === 'auto',
+       JSON.stringify(audits[0] && { actor: audits[0].actor, detail: audits[0].detail }));
+
+    const twice = await req('POST', '/api/bank/review/unmatch', { sid, body: { id: 'bk-auto' } });
+    ck('unmatching twice says so plainly rather than looking broken',
+       twice.status === 409 && twice.json.already === true, JSON.stringify(twice.json));
+
+    const gone = await req('GET', '/api/bank/review/matched', { sid });
+    ck('  and it has left the matched list', !(gone.json.rows || []).some((r) => r.id === 'bk-auto'),
+       JSON.stringify(gone.json.rows || []).slice(0, 160));
+
+    // ── THE ADMIN GATE, TESTED ON THE ROLE THAT REACHES THE HANDLER ─────
+    // The first version of this asserted only that an ANONYMOUS request is
+    // refused. A mutation deleting `admin(req, res)` from the route survived
+    // it: an anonymous request never gets that far, because the session
+    // middleware in api.js 401s first. So the check's name said "admin only"
+    // while it tested the login gate — a check shaped like the old code
+    // rather than like the property.
+    //
+    // 'user' is the role that proves it. A logged-in non-admin passes the
+    // session middleware, is not caught by STAFF_ALLOWED_PATH_PREFIXES
+    // (that one only looks at 'staff'), and lands in the handler, where
+    // admin() is the only thing standing between it and an undo.
+    const usid = ((await req('POST', '/login',
+        { body: { password: process.env.APP_PASSWORD } })).json || {}).sid;
+    ck('a non-admin can log in at all — the control for the next check',
+       !!usid, JSON.stringify(usid));
+    const asUser = await req('POST', '/api/bank/review/unmatch', { sid: usid, body: { id: 'bk-auto' } });
+    ck('  and unmatching is refused for them — 403, not a 409 about state',
+       asUser.status === 403, `${asUser.status} ${JSON.stringify(asUser.json)}`);
+    // ── READING IS AS OPEN AS ITS SIBLING, AND NO MORE ──────────────────
+    // I wrote this as "the matched list is admin-only too" and it went red
+    // at 200. The code was right and the check was wrong: NONE of the three
+    // reads on this screen (GET /api/bank/review, GET /api/bank/match, and
+    // this one) is admin-gated, so a logged-in 'user' can already see the
+    // unmatched withdrawal queue with its amounts and payees. Gating the new
+    // route alone would make it the odd one out; gating all three is a
+    // widening of her login model, which is hers to decide, not mine to slip
+    // into a diff about an unmatch button. Task #234.
+    //
+    // So what is asserted is the PROPERTY that holds today — the two reads
+    // are equally open — which will go red the day either one is gated, and
+    // name the other as the thing to look at.
+    const uReview = await req('GET', '/api/bank/review', { sid: usid });
+    const uMatched = await req('GET', '/api/bank/review/matched', { sid: usid });
+    ck('  reading the matched list is exactly as open as reading the queue beside it',
+       uMatched.status === uReview.status,
+       `matched ${uMatched.status} vs review ${uReview.status} — if these differ, one was gated and the other forgotten (#234)`);
+
+    const anon = await req('POST', '/api/bank/review/unmatch', { body: { id: 'bk-auto' } });
+    ck('  and nothing at all happens without a session', anon.status === 401 || anon.status === 403,
+       String(anon.status));
 }
 
 server.close();

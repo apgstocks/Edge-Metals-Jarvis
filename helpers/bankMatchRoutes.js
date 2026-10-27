@@ -687,6 +687,93 @@ function mount(app, cfg) {
         } catch (e) { res.status(400).json({ error: e.message }); }
     });
 
+    // ── GET /api/bank/review/matched ─────────────────────────────────────
+    // The list the Unmatch button hangs off. Without it a matched row simply
+    // disappears from the screen: it leaves "For review" and appears nowhere,
+    // so there is nothing to press. That is why #187's auto-tick needed this
+    // before it needed anything else — a row Jarvis ticked at 06:50 would
+    // otherwise vanish overnight with no trace she could reach.
+    //
+    // `how` travels, because "what did Jarvis do by itself" is the question
+    // she will actually ask, and bankLedger stores exactly that.
+    app.get('/api/bank/review/matched', (req, res) => {
+        try {
+            const rows = require('./bankLedger').list()
+                .filter((r) => r && r.matched)
+                .sort((a, z) => String((z.matched || {}).at || '').localeCompare(String((a.matched || {}).at || '')))
+                .slice(0, 200)
+                .map((r) => ({
+                    // Math.round, not an r2() helper — there is none in this
+                    // file. Caught before it shipped; calling a rounding
+                    // helper that does not exist would have made this route
+                    // throw the first time she opened the tab.
+                    id: r.id, date: r.date,
+                    amount: Math.round(num0(r.amount) * 100) / 100,
+                    direction: r.direction || null, descriptor: r.desc || r.descriptor || '',
+                    party: r.party || null, account_id: r.account_id || null,
+                    matched_at: (r.matched || {}).at || null,
+                    how: (r.matched || {}).how || null,
+                    by: (r.matched || {}).by || null,
+                    keys: (r.matched || {}).keys || [],
+                }));
+            res.json({ rows, auto: rows.filter((r) => r.how === 'auto').length });
+        } catch (e) { res.status(500).json({ error: e.message }); }
+    });
+
+    // ── POST /api/bank/review/unmatch ────────────────────────────────────
+    // Apsara, 2026-10-27: "for matched things, there should be a unmatch
+    // option".
+    //
+    // ── THIS SHOULD HAVE EXISTED BEFORE THE AUTO-TICK DID ────────────────
+    // helpers/bankLedger.setMatched has always taken a null match and writes
+    // "match undone" to the history for it. Nothing reachable called it.
+    // `categorise` got an /undo; `match` never did. So a matched row was a
+    // one-way door from the screen — and on 2026-10-27 an overnight job
+    // (helpers/bankAutoTick.js, #187) was written that ticks rows by itself
+    // at 06:50, described in its own header as reversible. It was reversible
+    // only in a helper nobody could reach. That was my miss: the job shipped
+    // before its undo was checked end to end.
+    //
+    // Unmatching CREATES NOTHING and DESTROYS NOTHING. It clears a link
+    // between a bank row and a record that both still exist; the row simply
+    // returns to the review queue. That is why it needs no plan screen and
+    // no confirmation step, unlike undoing a categorisation, which reverses a
+    // journal entry.
+    //
+    // Audited like the categorise undo, because "who untied this, and when"
+    // is the question asked when a figure moves and nobody remembers why.
+    app.post('/api/bank/review/unmatch', async (req, res) => {
+        if (!admin(req, res)) return;
+        const id = String((req.body || {}).id || '').trim();
+        if (!id) return res.status(400).json({ error: 'which row?' });
+        try {
+            const ledger = require('./bankLedger');
+            const audit = require('./audit');
+            const actor = req.profile || req.role || 'admin';
+
+            const before = ledger.list().find((r) => r && r.id === id);
+            if (!before) return res.status(404).json({ error: 'no bank row with that id' });
+            if (!before.matched) {
+                // Not an error she needs to see as a failure — it is already
+                // in the state she asked for. Said plainly so a double-click
+                // does not look like a broken button.
+                return res.status(409).json({ error: 'that row is not matched to anything',
+                    already: true });
+            }
+
+            // The detail carries what is being undone, because after the
+            // write the row no longer knows.
+            const entry = await audit.record({
+                action: 'unmatch-bank-row', subject: id, actor, role: req.role, ip: req.ip,
+                detail: { how: before.matched.how || null, keys: before.matched.keys || [],
+                    matched_at: before.matched.at || null },
+            });
+            const row = await ledger.markMatched(id, null, { by: actor, how: 'her' });
+            await audit.complete(entry, 'done', { was: before.matched.how || null });
+            res.json({ ok: true, row, was: before.matched });
+        } catch (e) { res.status(400).json({ error: e.message }); }
+    });
+
     // ── GET /api/bank/reconcile ──────────────────────────────────────────
     // Apsara, 2026-10-08: "so that i dont need to look out for statements
     // whether payment received or sent ever again."

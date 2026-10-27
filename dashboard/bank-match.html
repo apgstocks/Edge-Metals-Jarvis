@@ -323,6 +323,7 @@ h2.sec .n{color:var(--text-faint);font-weight:400}
   <section data-pane="aside" hidden>
     <div id="asidelist"></div>
     <div id="recorded"></div>
+    <div id="matchedlist"></div>
     <div id="booked"></div>
     <div id="extras"></div>
   </section>
@@ -1321,6 +1322,36 @@ async function renderPlans() {
       <div class="note">Every applied plan is kept here with who applied it and what it was asked. Undoing from this screen is not built yet; a reversible plan can be undone by asking for the opposite change in a new sentence.</div></div>`;
 }
 
+/* ── MATCHED ROWS, AND THE WAY BACK ───────────────────────────────────
+   Apsara, 2026-10-27: "for matched things, there should be a unmatch
+   option". There was not one. helpers/bankLedger.setMatched has always
+   accepted a null match and writes "match undone" for it, but nothing
+   reachable called it — `categorise` got an /undo, `match` never did.
+
+   That mattered more the moment helpers/bankAutoTick.js (#187) started
+   ticking rows at 06:50 by itself. Its header calls it reversible; it was
+   reversible only in a helper she could not reach, and a row it ticked
+   overnight simply left "For review" and appeared nowhere. This is where it
+   appears, and `how` is shown so what Jarvis did by itself is visible as
+   such rather than looking like something she did and forgot. */
+async function renderMatched() {
+  let d = null;
+  try { d = await api('/api/bank/review/matched'); } catch (e) { d = null; }
+  if (!d) { $('matchedlist').innerHTML = ''; return; }
+  const rows = (d.rows || []).filter((r) => inAcct(r.account_id));
+  $('matchedlist').innerHTML = `<h2 class="sec">Matched to a record <span class="n">${rows.length}</span>${
+      d.auto ? ` <span class="badge ask" title="Ticked by the 06:50 job, not by you">${d.auto} by Jarvis</span>` : ''}</h2>
+    <div class="card">${rows.length ? rows.map((r) => `<div class="row1" style="margin:4px 0">
+        <span class="amt" style="font-size:14px">${r.direction === 'out' ? '−' : '+'}${money(r.amount)}</span>
+        <span class="when">${esc(r.date)}</span>
+        <span class="desc" style="flex:1;min-width:120px">${esc(r.descriptor || '')}</span>
+        <span class="desc" style="color:var(--text-faint)">${r.how === 'auto' ? 'ticked by Jarvis' : 'ticked by you'}${
+          r.matched_at ? ' · ' + esc(String(r.matched_at).slice(0, 10)) : ''}</span>
+        <button class="btn quiet" data-unmatch="${esc(r.id)}">Unmatch</button>
+      </div>`).join('') : '<div class="empty">Nothing matched yet.</div>'}
+      <div class="note">Unmatching changes no figure &mdash; it only unties the bank line from the record, and the line goes back to For review.</div></div>`;
+}
+
 async function renderBooked() {
   let d = null;
   try { d = await api('/api/bank/review/categorised'); } catch (e) { d = null; }
@@ -1507,7 +1538,7 @@ async function pickAcct(key) {
   resetPages();
   paintOverview();
   await render();          // deposits + the "sure" bar
-  renderReview(); renderAside(); renderBooked(); renderTransfers();
+  renderReview(); renderAside(); renderMatched(); renderBooked(); renderTransfers();
   paintRecon();
 }
 function applyFilter() {
@@ -1686,6 +1717,22 @@ document.addEventListener('click', async (ev) => {
     } catch (e) { cp.disabled = false; toast(e.message, 'bad'); }
     return;
   }
+  const um = ev.target.closest('[data-unmatch]');
+  if (um) {
+    // No confirm(). Unmatching creates nothing, destroys nothing and moves
+    // no figure — the row simply returns to For review. A confirmation on a
+    // harmless, reversible action teaches her to click through the ones that
+    // are not, which is how the dangerous dialog stops being read.
+    // renderReview().then(renderMatched) — the same pair the uncat handler
+    // uses, NOT a refresh() I assumed existed. There is no refresh() on this
+    // page; calling one would have thrown on the first click and the button
+    // would have looked dead.
+    try { await api('/api/bank/review/unmatch', { body: { id: um.dataset.unmatch } });
+          toast('Unmatched — the line is back in For review', 'good');
+          renderReview().then(renderMatched); }
+    catch (e) { toast(e.message, 'bad'); }
+    return;
+  }
   const uc = ev.target.closest('[data-uncat]');
   if (uc) {
     if (!confirm('Undo this? It comes out of the books and the line goes back in For review.')) return;
@@ -1800,6 +1847,12 @@ async function load() {
     renderFeed();
     renderReconcile();
     renderReview();
+    // renderMatched() belongs HERE, not only in pickAcct(). It was added to
+    // the account-switch path alone, so the list of ticked rows — the whole
+    // point of the unmatch button — was blank on page load and only appeared
+    // if she happened to switch bank accounts. Caught 2026-10-27 by a
+    // mutation that was aimed at pickAcct() and survived.
+    renderMatched();
     renderBooked();
     renderPlans();
     renderRules();
