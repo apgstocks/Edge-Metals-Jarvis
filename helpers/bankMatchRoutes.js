@@ -656,38 +656,139 @@ function mount(app, cfg) {
                     + 'row — unmatch that one first', clash });
             }
 
-            // ── THE GAP IS SHOWN, NOT SWALLOWED ─────────────────────────
-            // She may well be right that a $12,000 withdrawal is the $11,980
-            // payment she recorded. What must never happen is the row leaving
-            // her queue as "explained" while the two quietly disagree. So an
-            // inexact tie needs confirm_gap, and the gap is stored on the
-            // match and in the audit entry either way.
+            // ── IT MUST ADD UP, OR BE MADE TO ───────────────────────────
+            // Apsara, 2026-10-28: "It should ask me to match the exact
+            // amount. just like quickbook. refer how qb works."
+            //
+            // She is right and my first version was wrong. Yesterday this
+            // took confirm_gap and tied the row anyway, recording the
+            // difference as a NOTE. That leaves the books unbalanced and
+            // merely annotated: the row goes quiet in her queue while the
+            // ledger still disagrees with the bank by twenty dollars.
+            //
+            // QuickBooks does not do that. Its Find Match is multi-select
+            // with a running Difference that has to read zero, and when it
+            // cannot be made to read zero, Resolve Difference adds a
+            // RESOLVING TRANSACTION — she names the account and the leftover
+            // is posted there as an adjusting entry. Then the match IS exact.
+            // Intuit's own help is explicit that the fix for a payment you
+            // cannot find is widening the date range, not accepting a gap.
+            //
+            // So there are exactly two ways out, and no third:
+            //   1. the payments she selected come to the bank row to the cent
+            //      — tie, and CREATE NOTHING;
+            //   2. they do not, and she names an account for the remainder —
+            //      post that one adjusting entry, then tie exactly.
+            // Asked whether Jarvis should tie it anyway if she has no account
+            // in mind, she said: "No — refuse until I pick". So there is no
+            // default account and no holding account on this path.
             const total = Math.round(found.reduce((t, p) => t + num0(p.amount), 0) * 100) / 100;
-            const gap = Math.round((total - num0(row.amount)) * 100) / 100;
-            const exact = Math.abs(gap) < 0.005;
-            if (!exact && (req.body || {}).confirm_gap !== true) {
-                return res.status(409).json({ error: `those payments come to ${total.toFixed(2)} but `
-                    + `the bank row is ${num0(row.amount).toFixed(2)} — a difference of `
-                    + `${gap.toFixed(2)}. Confirm and Jarvis will tie them anyway and record the gap`,
-                    gap, total, amount: Math.round(num0(row.amount) * 100) / 100, needs_confirm: true });
+            const bankAmt = Math.round(num0(row.amount) * 100) / 100;
+            // SHORT is the resolvable direction: more left the bank than her
+            // records account for, and the remainder is a cost — which is
+            // what bankEntries posts (Dr the account, Cr the bank).
+            const short = Math.round((bankAmt - total) * 100) / 100;
+            const exact = Math.abs(short) < 0.005;
+            const resolve = (req.body || {}).resolve || null;
+
+            if (!exact && short < 0) {
+                // The other direction cannot be resolved this way and saying
+                // so is better than posting something backwards. bankEntries
+                // only ever debits an account and credits the bank; booking a
+                // negative would need the opposite pair, which nothing here
+                // does. An honest limit, named.
+                return res.status(409).json({ error: `those payments come to ${total.toFixed(2)}, which is `
+                    + `${Math.abs(short).toFixed(2)} MORE than the bank line of ${bankAmt.toFixed(2)}. `
+                    + 'Jarvis will not tie that: it would say more money left the account than the bank '
+                    + 'shows. Deselect one, or correct the payment that is wrong.',
+                    total, amount: bankAmt, over: Math.abs(short), difference: short });
+            }
+            if (!exact && !(resolve && resolve.account)) {
+                return res.status(409).json({ error: `those payments come to ${total.toFixed(2)} but the `
+                    + `bank line is ${bankAmt.toFixed(2)} — a difference of ${short.toFixed(2)}. Either `
+                    + 'select more payments until the difference reads zero, or say which account the '
+                    + `${short.toFixed(2)} should go to and Jarvis will post it there.`,
+                    total, amount: bankAmt, difference: short, needs_resolve: true,
+                    categories: require('./bankEntries').categories() });
+            }
+
+            // ── CHECK THE ACCOUNT BEFORE WRITING ANYTHING AT ALL ────────
+            // plan() is pure — it decides and writes nothing — so a blank or
+            // off-chart account is caught here, before the audit log gets an
+            // entry for it. My first version audited first and marked the
+            // entry failed afterwards, which filled the log with her typos
+            // and made "how many times did she resolve this row" unanswerable.
+            // A refused attempt is not an attempt.
+            const liveRow = rows.find((r) => r && r.id === id);
+            if (!exact) {
+                const pre = require('./bankEntries').plan(liveRow, {
+                    account: String(resolve.account), entity: resolve.entity || null,
+                    amount: short, partial: true });
+                if (!pre.ok) {
+                    return res.status(409).json({ error: pre.problems.join('; '),
+                        problems: pre.problems, categories: require('./bankEntries').categories() });
+                }
             }
 
             const audit = require('./audit');
             const actor = req.profile || req.role || 'admin';
             const entry = await audit.record({
                 action: 'match-bank-row-by-hand', subject: id, actor, role: req.role, ip: req.ip,
-                detail: { keys: picked, total, gap, state: row.state,
+                detail: { keys: picked, total, difference: exact ? 0 : short, state: row.state,
+                    resolve_account: exact ? null : String(resolve.account),
                     jarvis_would_have: ((row.match || {}).payments || []).map((p) => p.key) },
             });
+
+            // ── THE RESOLVING ENTRY, BEFORE THE TICK ────────────────────
+            // Posted first so that if it fails nothing has been ticked, and
+            // reversed by hand if the tick then fails — bankEntries.post does
+            // that rollback itself when it owns the tick, and this path takes
+            // the tick off it, so it takes the rollback too.
+            let resolved = null;
+            if (!exact) {
+                const BE = require('./bankEntries');
+                let out = null;
+                try {
+                    // rows.find, not a ledgerRowOf() helper — there is no
+                    // such function in this file. I wrote one into the first
+                    // draft of this line; the fifth invented identifier this
+                    // week, which is why every name here is now checked
+                    // against its definition before the diff is written.
+                    out = await BE.post(liveRow, { account: String(resolve.account),
+                        entity: resolve.entity || null, by: actor, amount: short, partial: true,
+                        note: `difference on matching ${picked.length} payment(s) to this bank line` });
+                } catch (e) {
+                    await audit.complete(entry, 'failed', { reason: e.message });
+                    return res.status(409).json({ error: e.message, problems: e.problems || null });
+                }
+                resolved = { account: out.entry.account, account_name: out.entry.account_name,
+                    amount: out.entry.amount, entry_id: out.entry.id, key: BE.keyOf(out.entry) };
+            }
+
+            // Both the payments SHE chose and, when there was one, the entry
+            // that closed the difference. The row is explained in full by the
+            // keys on it — which is the property the reconciliation leans on.
+            const keys = resolved ? picked.concat([resolved.key]) : picked;
             const why = exact
                 ? `tied by hand to ${picked.length} recorded payment(s)`
-                : `tied by hand to ${picked.length} recorded payment(s), ${gap > 0 ? 'over' : 'under'} `
-                  + `by ${Math.abs(gap).toFixed(2)} — confirmed`;
-            const saved = await ledger.markMatched(id,
-                { keys: picked, why, gap: exact ? 0 : gap, by_hand: true },
-                { by: actor, how: 'her' });
-            await audit.complete(entry, 'done', { gap, exact });
-            res.json({ ok: true, row: saved, matched: picked.length, gap, exact, by_hand: true });
+                : `tied by hand to ${picked.length} recorded payment(s) plus `
+                  + `${resolved.amount.toFixed(2)} posted to ${resolved.account} ${resolved.account_name}`;
+            let saved = null;
+            try {
+                saved = await ledger.markMatched(id, { keys, why, by_hand: true,
+                    ...(resolved ? { resolved } : {}) }, { by: actor, how: 'her' });
+            } catch (e) {
+                if (resolved) {
+                    await require('./bankEntries').reverse(resolved.entry_id,
+                        { by: 'system', why: 'could not tick the bank row' });
+                }
+                await audit.complete(entry, 'failed', { reason: e.message });
+                throw e;
+            }
+            await audit.complete(entry, 'done', { difference: exact ? 0 : short, exact,
+                resolved_entry: resolved ? resolved.entry_id : null });
+            res.json({ ok: true, row: saved, matched: picked.length, exact,
+                by_hand: true, resolved, total, amount: bankAmt });
         } catch (e) { res.status(400).json({ error: e.message }); }
     });
 
@@ -902,6 +1003,35 @@ function mount(app, cfg) {
             }
             const mineNow = new Set(((row.matched || {}).keys || []));
 
+            // ── HER OWN WINDOW, 2026-10-28 ──────────────────────────────
+            // Intuit's own help on Find Match says it plainly: if a payment
+            // you expected is not listed, the date range is too narrow —
+            // "Try changing the date range in the From and To fields." My
+            // first version had a fixed 180 days and no way past it, so the
+            // one case she would hit hardest (an old payment she knows is
+            // there) had no answer but to give up. from/to override it, and
+            // all=1 drops the window entirely, which is QuickBooks' own
+            // "turn the suggested-matches filter off" escape hatch.
+            const from = String(req.query.from || '').slice(0, 10);
+            const to = String(req.query.to || '').slice(0, 10);
+            // noWindow, not `all` — `all` is already the ledger's rows in
+            // this handler and shadowing it would have been a very quiet bug.
+            // Caught by node refusing to parse the file, which is the cheapest
+            // place to catch anything.
+            const noWindow = String(req.query.all || '') === '1';
+            const inWindow = (p) => {
+                if (noWindow) return true;
+                // Explicit dates beat the rolling window, and string compare
+                // beats date arithmetic — the retained-earnings fix learned
+                // that the hard way (helpers/statements.js).
+                if (from || to) {
+                    if (from && String(p.date) < from) return false;
+                    if (to && String(p.date) > to) return false;
+                    return true;
+                }
+                return p.days == null || Math.abs(p.days) <= PICK_WINDOW_DAYS;
+            };
+
             const q = String(req.query.q || '').trim().toLowerCase();
             const out = pool
                 .map((p) => {
@@ -921,7 +1051,7 @@ function mount(app, cfg) {
                         ambiguous_key: !!p.ambiguousKey,
                     };
                 })
-                .filter((p) => p.days == null || Math.abs(p.days) <= PICK_WINDOW_DAYS)
+                .filter(inWindow)
                 .filter((p) => !q || [p.party, p.kind, p.memo, p.label]
                     .some((t) => String(t || '').toLowerCase().includes(q)))
                 // Exact amounts first, then by how far off, then by date:
@@ -931,7 +1061,15 @@ function mount(app, cfg) {
                     || (Math.abs(a.days || 0) - Math.abs(b.days || 0)))
                 .slice(0, 100);
 
-            res.json({ row: me, rows: out, window_days: PICK_WINDOW_DAYS,
+            res.json({ row: me, rows: out,
+                // What was actually applied, so the screen can say it rather
+                // than assume the default.
+                window_days: (noWindow || from || to) ? null : PICK_WINDOW_DAYS,
+                from: from || null, to: to || null, all: noWindow,
+                // Everything her filters hid, counted. A list that silently
+                // omits half her ledger is how she ends up believing a
+                // payment is not recorded at all.
+                hidden: pool.length - out.length,
                 taken: out.filter((p) => p.taken_by).length,
                 exact: out.filter((p) => p.exact).length,
                 considered: pool.length });

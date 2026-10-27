@@ -3206,10 +3206,6 @@ const MUTATIONS = [
     // "Say there is a payment made. Jarvis is matching one. If I want to
     // match it against a different payment and not the one Jarvis matched."
     // Every one of these was run and turns a NAMED check red.
-    { name: 'pick: an inexact tie is made silently, with no gap shown',
-      file: 'helpers/bankMatchRoutes.js', suites: ['bank-review-route'],
-      find: "            if (!exact && (req.body || {}).confirm_gap !== true) {",
-      to:   "            if (false) {" },
     { name: 'pick: a key that is not in her ledger is accepted, tying the row to nothing',
       file: 'helpers/bankMatchRoutes.js', suites: ['bank-review-route'],
       find: "            if (missing.length) {",
@@ -3218,10 +3214,51 @@ const MUTATIONS = [
       file: 'helpers/bankMatchRoutes.js', suites: ['bank-review-route'],
       find: "            if (clash.length) {",
       to:   "            if (false) {" },
-    { name: 'pick: the confirmed gap never reaches the row, only the audit log',
+    // Was 'the confirmed gap never reaches the row'. The gap-as-a-note idea
+    // lasted one day — she rejected it for QuickBooks' behaviour — so the
+    // line it pointed at is gone. Re-pointed at what replaced it rather than
+    // left to rot as NOT APPLIED, which is #204's whole population.
+    { name: 'pick: the row forgets which account closed the difference',
       file: 'helpers/bankLedger.js', suites: ['bank-review-route'],
-      find: "                ...(isFinite(Number(match.gap)) && Math.abs(Number(match.gap)) >= 0.005",
-      to:   "                ...(false" },
+      find: "                ...(match.resolved ? { resolved: match.resolved } : {}),",
+      to:   "                ...({})," },
+    { name: 'pick: a selection that does not add up is tied anyway',
+      file: 'helpers/bankMatchRoutes.js', suites: ['bank-review-route'],
+      find: "            if (!exact && !(resolve && resolve.account)) {",
+      to:   "            if (false) {" },
+    { name: 'pick: payments totalling MORE than the bank line are accepted',
+      file: 'helpers/bankMatchRoutes.js', suites: ['bank-review-route'],
+      find: "            if (!exact && short < 0) {",
+      to:   "            if (false) {" },
+    { name: 'resolve: the remainder is booked as the WHOLE bank line',
+      file: 'helpers/bankEntries.js', suites: ['bank-review-route'],
+      find: "    const amount = partial ? r2(num(part)) : r2(num(row.spent));",
+      to:   "    const amount = r2(num(row.spent));" },
+    // ── TWO THAT SURVIVED FIRST TIME, AND WHY ────────────────────────
+    // · 'a part larger than the bank line' was unreachable through the route,
+    //   which computes the difference from the row. Tested at the helper now,
+    //   where the next caller will reach it.
+    // · 'post() ticks the row itself' looked harmless: the route overwrote the
+    //   tick and the end state was identical. It is not harmless — two writes
+    //   leave two history lines, and if the second failed the row would read
+    //   as fully explained by the small resolving entry alone. The check is
+    //   now on the number of ticks, not the end state.
+    { name: 'resolve: a part larger than the bank line is booked',
+      file: 'helpers/bankEntries.js', suites: ['bank-review-route'],
+      find: "        else if (want > whole + 0.004) {",
+      to:   "        else if (false) {" },
+    { name: 'resolve: an amount with no partial flag books the whole line',
+      file: 'helpers/bankEntries.js', suites: ['bank-review-route'],
+      find: "        problems.push('an amount was given without partial:true — refusing rather than booking the whole line');",
+      to:   "        /* mutated: silently books the whole line */" },
+    { name: 'resolve: post() ticks the row itself, fighting the caller for the field',
+      file: 'helpers/bankEntries.js', suites: ['bank-review-route'],
+      find: "    if (partial) return { entry: saved, already: false, ticked: false };",
+      to:   "    if (false) return { entry: saved, already: false, ticked: false };" },
+    { name: 'resolve: the resolving entry is not among the keys explaining the row',
+      file: 'helpers/bankMatchRoutes.js', suites: ['bank-review-route'],
+      find: "            const keys = resolved ? picked.concat([resolved.key]) : picked;",
+      to:   "            const keys = picked;" },
     { name: 'pick: the row stops recording that she chose it herself',
       file: 'helpers/bankLedger.js', suites: ['bank-review-route'],
       find: "                ...(match.by_hand ? { by_hand: true } : {}),",

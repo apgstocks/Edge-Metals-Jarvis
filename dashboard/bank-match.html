@@ -1484,79 +1484,150 @@ function pickBtn(r) {
     >${r.state === 'match' ? 'Tie to a different payment' : 'Pick the payment yourself'}</button>`;
 }
 
-async function renderPick(id) {
+/* ── QUICKBOOKS' FIND MATCH, 2026-10-28 ────────────────────────────────
+   Apsara: "It should ask me to match the exact amount. just like quickbook.
+   refer how qb works."
+
+   So this is multi-select with a running DIFFERENCE that has to read zero,
+   which is what QuickBooks actually does — not the single "Tie to this"
+   button I shipped yesterday, and not a confirm-the-gap dialog. She ticks
+   payments until the difference is 0.00 and the Tie button wakes up.
+
+   When it cannot be made to read zero — a wire fee taken out of the payment —
+   Resolve difference posts the remainder to an account she names, exactly as
+   QuickBooks' resolving transaction does. Asked whether Jarvis should tie it
+   anyway when she has no account in mind, she said "No — refuse until I
+   pick", so there is no default in that dropdown.
+
+   STATE.pick holds the ticked keys per row, so a redraw of the list (she
+   widened the dates, say) does not lose what she had already chosen. */
+STATE.pick = STATE.pick || {};
+
+function pickSel(id) { return (STATE.pick[id] = STATE.pick[id] || { keys: [], data: null }); }
+
+async function renderPick(id, opts) {
   const box = $('pick-' + id);
   if (!box) return;
+  const sel = pickSel(id);
+  const o = opts || sel.filters || {};
+  sel.filters = o;
   box.innerHTML = '<div class="note">looking through your books…</div>';
+  const qs = ['id=' + encodeURIComponent(id)];
+  if (o.from) qs.push('from=' + encodeURIComponent(o.from));
+  if (o.to) qs.push('to=' + encodeURIComponent(o.to));
+  if (o.all) qs.push('all=1');
+  if (o.q) qs.push('q=' + encodeURIComponent(o.q));
   let d = null;
-  try { d = await api('/api/bank/review/payments?id=' + encodeURIComponent(id)); }
+  try { d = await api('/api/bank/review/payments?' + qs.join('&')); }
   catch (e) { box.innerHTML = `<div class="note">${esc(e.message)}</div>`; return; }
+  sel.data = d;
+  /* Keep only ticks that are still on screen, so a narrowed date range
+     cannot leave an invisible selection counting towards the total. */
+  const live = new Set((d.rows || []).map((p) => p.key));
+  sel.keys = sel.keys.filter((k) => live.has(k));
+  paintPick(id);
+}
+
+/* Drawn from STATE, not from the server, so ticking a box costs nothing and
+   the difference updates the instant she clicks. */
+function paintPick(id) {
+  const box = $('pick-' + id);
+  const sel = pickSel(id);
+  const d = sel.data;
+  if (!box || !d) return;
 
   if (d.note) { box.innerHTML = `<div class="note">${esc(d.note)}</div>`; return; }
-  if (!(d.rows || []).length) {
-    /* Said, not left blank. An empty box reads as "still loading". */
-    box.innerHTML = `<div class="note">Nothing in your books within ${d.window_days} days could have
-      left this account for anything like this amount. ${d.considered} payment(s) were looked at.</div>`;
-    return;
-  }
+  const bank = (d.row || {}).amount || 0;
+  const chosen = (d.rows || []).filter((p) => sel.keys.includes(p.key));
+  const total = Math.round(chosen.reduce((t, p) => t + (p.amount || 0), 0) * 100) / 100;
+  const diff = Math.round((bank - total) * 100) / 100;
+  const zero = Math.abs(diff) < 0.005;
+  const over = diff < 0;
 
-  const bank = (d.row || {}).amount;
-  const rows = d.rows.map((p) => {
-    /* The gap is the number she is deciding on, so it is the loud one.
-       Exact fits say nothing — no gap IS the message. */
-    const gapTxt = p.exact
-      ? '<span class="note" style="margin:0">same to the cent</span>'
-      : `<strong style="color:var(--amber-500)">${p.gap > 0 ? '+' : '−'}${money(Math.abs(p.gap))}</strong>`;
-    const taken = p.taken_by
-      ? `<span class="note" style="margin:0">already tied to ${esc(p.taken_by)} — unmatch that row first</span>`
-      : (p.current ? '<span class="note" style="margin:0">this is the one it is tied to now</span>' : '');
-    return `<tr${p.taken_by ? ' style="opacity:.55"' : ''}>
+  const f = sel.filters || {};
+  const controls = `<div class="range" style="margin-top:8px;flex-wrap:wrap">
+      <label>from <input type="date" data-pickfrom="${esc(id)}" value="${esc(f.from || '')}"></label>
+      <label>to <input type="date" data-pickto="${esc(id)}" value="${esc(f.to || '')}"></label>
+      <label><input type="checkbox" data-pickall="${esc(id)}" ${f.all ? 'checked' : ''}> show every payment</label>
+      <input placeholder="filter by name" data-pickq="${esc(id)}" value="${esc(f.q || '')}" style="min-width:140px">
+    </div>`;
+
+  const rows = (d.rows || []).map((p) => {
+    const on = sel.keys.includes(p.key);
+    const blocked = !!p.taken_by;
+    return `<tr${blocked ? ' style="opacity:.55"' : ''}>
+      <td>${blocked ? '' : `<input type="checkbox" data-pickbox="${esc(id)}" data-pickkey="${esc(p.key)}" ${on ? 'checked' : ''}>`}</td>
       <td>${esc(fmtDay(p.date))}</td>
       <td>${esc(p.party || p.kind || '')}<div class="note" style="margin:0">${esc(p.label || '')}</div></td>
       <td style="text-align:right">${money(p.amount)}</td>
-      <td style="text-align:right">${gapTxt}</td>
       <td>${p.days == null ? '' : `${Math.abs(p.days)}d`}</td>
-      <td style="text-align:right">${p.taken_by || p.current ? taken
-        : `<button class="btn" data-picktie="${esc(id)}" data-pickkey="${esc(p.key)}"
-             data-pickgap="${esc(String(p.gap))}">Tie to this</button>`}</td>
+      <td>${blocked ? `<span class="note" style="margin:0">tied to ${esc(p.taken_by)}</span>`
+            : (p.current ? '<span class="note" style="margin:0">tied to this row now</span>' : '')}</td>
     </tr>`;
   }).join('');
 
-  box.innerHTML = `<div class="note" style="margin-top:10px">The bank row is ${money(bank)}.
-      ${d.exact} of these match it to the cent${d.taken ? `, and ${d.taken} are already tied to another row` : ''}.
-      Tying to one that does NOT match will ask you to confirm the difference first, and the
-      difference is kept on the row afterwards.</div>
+  /* The difference is the number she is working towards, so it is the loud
+     one and it is always on screen — not hidden until she presses something. */
+  const diffLine = zero
+    ? `<strong style="color:var(--leaf-500)">Difference 0.00 — it adds up</strong>`
+    : `<strong style="color:var(--amber-500)">Difference ${money(Math.abs(diff))} ${over ? 'OVER' : 'still to find'}</strong>`;
+
+  const resolveBox = (!zero && !over && chosen.length) ? `
+    <div class="card" style="margin-top:8px;border-left:4px solid var(--amber-500)">
+      <div class="note">Can't find the other ${money(Math.abs(diff))}? Say which account it should go to
+        and Jarvis will post it there, the way QuickBooks' "resolve difference" does. The match then
+        comes out exact. Nothing is posted until you press the button.</div>
+      <div class="acts" style="flex-wrap:wrap">
+        <select data-pickacct="${esc(id)}">
+          <option value="">which account…</option>
+          ${(d.categories || (STATE.cats || {}).categories || []).map((c) => `<option value="${esc(c.code)}">${esc(c.code)} ${esc(c.name)}</option>`).join('')}
+        </select>
+        <button class="btn" data-pickresolve="${esc(id)}">Post ${money(Math.abs(diff))} there and tie</button>
+      </div>
+    </div>` : '';
+
+  box.innerHTML = `<div class="note" style="margin-top:10px">The bank line is <strong>${money(bank)}</strong>.
+      Tick the payments that add up to it. ${d.exact} of these match it to the cent on their own.</div>
+    ${controls}
+    ${!(d.rows || []).length ? `<div class="note">Nothing here matches those filters.
+        ${d.hidden ? `${d.hidden} payment(s) are hidden by them — widen the dates or tick "show every payment".`
+                   : `${d.considered} payment(s) were looked at.`}</div>` : `
     <div class="alloc"><table><thead><tr>
-      <th>paid</th><th>to</th><th style="text-align:right">amount</th>
-      <th style="text-align:right">vs bank</th><th>apart</th><th></th>
-    </tr></thead><tbody>${rows}</tbody></table></div>`;
+      <th></th><th>paid</th><th>to</th><th style="text-align:right">amount</th><th>apart</th><th></th>
+    </tr></thead><tbody>${rows}</tbody></table></div>`}
+    <div class="surebar" style="margin-top:8px">
+      <span class="desc">${chosen.length} selected · ${money(total)} of ${money(bank)}</span>
+      <span>${diffLine}</span>
+      <button class="btn solid" data-picktie="${esc(id)}" ${zero && chosen.length ? '' : 'disabled'}>Tie these ${chosen.length || ''}</button>
+      ${d.hidden ? `<span class="note" style="margin:0">${d.hidden} payment(s) hidden by the filters above</span>` : ''}
+    </div>
+    ${resolveBox}`;
 }
 
-/* The gap confirmation is a SECOND PRESS on the row itself, not a browser
-   dialog: #139 replaced window.prompt on the QuickBooks page for the same
-   reason — a dialog hides the figures she is being asked about. The server
-   refuses the first attempt with the gap in the message, and that message
-   becomes the label on the button that confirms it. */
-async function doPickTie(id, key, confirmGap) {
+/* ── TYING ─────────────────────────────────────────────────────────────
+   One route, two shapes. Without `resolve` the server insists the selection
+   adds up to the bank line and creates nothing. With it, it posts the
+   remainder to the account she chose first, then ties — so a refusal here
+   means nothing was posted and nothing was ticked. */
+async function doPickTie(id, resolveAccount) {
+  const sel = pickSel(id);
   try {
-    const r = await api('/api/bank/review/match',
-      { body: { id, keys: [key], ...(confirmGap ? { confirm_gap: true } : {}) } });
-    toast(r.exact ? 'Tied to the payment you picked'
-                  : `Tied, ${r.gap > 0 ? 'over' : 'under'} by ${money(Math.abs(r.gap))} — recorded on the row`,
-          'good');
+    const r = await api('/api/bank/review/match', {
+      body: { id, keys: sel.keys, ...(resolveAccount ? { resolve: { account: resolveAccount } } : {}) },
+    });
+    toast(r.resolved
+      ? `Tied · ${money(r.resolved.amount)} posted to ${r.resolved.account} ${r.resolved.account_name}`
+      : `Tied to ${r.matched} payment(s) — exact`, 'good');
+    delete STATE.pick[id];
     return true;
   } catch (e) {
-    if (e.body && e.body.needs_confirm) {
-      const box = $('pick-' + id);
-      if (box) {
-        box.insertAdjacentHTML('afterbegin', `<div class="card" style="border-left:4px solid var(--amber-500)">
-          <div class="note">${esc(e.message)}</div>
-          <div class="acts"><button class="btn solid" data-picktie="${esc(id)}"
-            data-pickkey="${esc(key)}" data-pickconfirm="1">Tie anyway and record the
-            ${money(Math.abs(e.body.gap))} difference</button></div></div>`);
-      }
-      return false;
-    }
+    /* needs_resolve is not a failure, it is the server saying "it does not
+       add up yet". The screen already shows the difference, so the message is
+       enough; no dialog, nothing to dismiss. */
+    /* No 'warn' class: this page's toast() only knows 'good' and 'bad', and
+       'bad' merely holds it on screen longer. A doesn't-add-up message is
+       worth reading, so 'bad' is right; inventing a third class would have
+       produced an unstyled toast. */
     toast(e.message, 'bad');
     return false;
   }
@@ -1740,6 +1811,25 @@ $('q').addEventListener('input', (ev) => { STATE.q = ev.target.value || ''; rese
 document.addEventListener('change', (ev) => {
   const cbox = ev.target.closest && ev.target.closest('[data-cat]');
   if (cbox && (ev.target.matches('[data-cat-sel]') || ev.target.matches('[data-cat-co]'))) { catPreview(cbox); return; }
+  /* ── THE PICKER'S DATE AND NAME FILTERS ────────────────────────────────
+     A date input and a text box fire 'change', never 'click', so these
+     cannot live in the click handler with the checkboxes. I had written the
+     three controls into the markup and wired none of them — three dead
+     controls, which is the same class of mistake as a route with no caller.
+     Caught by listing which events this page actually listens for before
+     assuming. Intuit's own Find Match help is why they exist at all: a
+     payment you cannot see means the date range is too narrow. */
+  const pf = ev.target.closest && ev.target.closest('[data-pickfrom], [data-pickto], [data-pickq]');
+  if (pf) {
+    const id = pf.dataset.pickfrom || pf.dataset.pickto || pf.dataset.pickq;
+    const sel = pickSel(id);
+    const next = { ...(sel.filters || {}) };
+    if (pf.dataset.pickfrom != null) next.from = pf.value || '';
+    if (pf.dataset.pickto != null) next.to = pf.value || '';
+    if (pf.dataset.pickq != null) next.q = pf.value || '';
+    renderPick(id, next);
+    return;
+  }
   const ps = ev.target.closest && ev.target.closest('[data-pgsize]');
   if (!ps) return;
   STATE.pageSize = Number(ps.value) || 50;
@@ -1839,16 +1929,52 @@ document.addEventListener('click', async (ev) => {
     await renderPick(id);
     return;
   }
+  /* Ticking a payment. Repainted from STATE only — no server call — so the
+     difference moves the instant she clicks and her other ticks survive. */
+  const pb = ev.target.closest('[data-pickbox]');
+  if (pb) {
+    const id = pb.dataset.pickbox;
+    const sel = pickSel(id);
+    const k = pb.dataset.pickkey;
+    sel.keys = pb.checked ? sel.keys.concat([k]).filter((x, i, a) => a.indexOf(x) === i)
+                          : sel.keys.filter((x) => x !== k);
+    paintPick(id);
+    return;
+  }
+  const pall = ev.target.closest('[data-pickall]');
+  if (pall) {
+    const id = pall.dataset.pickall;
+    const sel = pickSel(id);
+    await renderPick(id, { ...(sel.filters || {}), all: pall.checked });
+    return;
+  }
   const pt = ev.target.closest('[data-picktie]');
   if (pt) {
     pt.disabled = true;
-    const ok = await doPickTie(pt.dataset.picktie, pt.dataset.pickkey,
-                              pt.dataset.pickconfirm === '1');
+    /* No key and no confirm flag any more: the server is given the whole
+       selection and insists it adds up. Yesterday this passed one key and a
+       confirm_gap, which is the behaviour she rejected. */
+    const ok = await doPickTie(pt.dataset.picktie, null);
     /* On success the row leaves For review and joins the matched list, so
        both are redrawn — the same pair the unmatch handler uses. On a
        refusal the button comes back, because the row has not moved. */
     if (ok) renderReview().then(renderMatched);
     else pt.disabled = false;
+    return;
+  }
+  /* Resolve difference. The account comes from the dropdown beside the
+     button; empty is refused HERE as well as on the server, so she gets the
+     answer without a round trip. */
+  const prs = ev.target.closest('[data-pickresolve]');
+  if (prs) {
+    const id = prs.dataset.pickresolve;
+    const pickAcct = document.querySelector(`[data-pickacct="${id}"]`);
+    const acct = pickAcct ? pickAcct.value : '';
+    if (!acct) { toast('Choose the account the difference should go to first', 'bad'); return; }
+    prs.disabled = true;
+    const ok = await doPickTie(id, acct);
+    if (ok) renderReview().then(renderMatched);
+    else prs.disabled = false;
     return;
   }
   const um = ev.target.closest('[data-unmatch]');

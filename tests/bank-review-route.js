@@ -276,7 +276,8 @@ const sid = ((await req('POST', '/login', { body: { password: process.env.ADMIN_
     // with no client is worse than no route, because the suite is green and
     // nothing happens on screen. So the picker gets the same treatment as
     // the review route itself.
-    ck('the screen calls the payment picker', page.includes("api('/api/bank/review/payments?id='"));
+    ck('the screen calls the payment picker',
+       page.includes("api('/api/bank/review/payments?'"));
     ck('  from a control on the row, not a page the row cannot reach',
        /data-pickopen=/.test(page) && /\[data-pickopen\]/.test(page));
     ck('  and the tie posts back to the match route',
@@ -287,11 +288,26 @@ const sid = ((await req('POST', '/login', { body: { password: process.env.ADMIN_
     // The gap must be CONFIRMED on screen, not swallowed by the client
     // sending confirm_gap on the first attempt — which would make the
     // server guard decoration.
-    ck('  the client does NOT pre-confirm the gap',
-       !/confirm_gap: true \}/.test(page.replace(/\.\.\.\(confirmGap \? \{ confirm_gap: true \} : \{\}\)/g, '')),
-       'confirm_gap may only be sent when she has pressed the second button');
-    ck('  and the refusal becomes a second, labelled press',
-       /needs_confirm/.test(page) && /data-pickconfirm/.test(page));
+    // ── THE DIFFERENCE IS ON SCREEN, AND TIE IS LOCKED UNTIL IT IS ZERO ─
+    // The server refuses a selection that does not add up, but a screen that
+    // lets her press and be refused is a screen she stops trusting. So the
+    // arithmetic is shown as she ticks and the button is disabled until it
+    // reads zero — which is what QuickBooks' Find Match does.
+    ck('  the picker is multi-select, not one button per payment',
+       /data-pickbox=/.test(page) && /\[data-pickbox\]/.test(page));
+    ck('  the difference is drawn, and Tie is disabled until it is zero',
+       /Difference/.test(page) && /zero && chosen\.length \? '' : 'disabled'/.test(page));
+    // `confirm_gap:` — the object key, i.e. the client actually SENDING it —
+    // not the bare word, which appears in the comment recording why the idea
+    // was dropped. A check that a word is absent from a file forbids writing
+    // about the mistake, which is the opposite of what this repo wants.
+    ck('  the client cannot send confirm_gap any more',
+       !/confirm_gap\s*:/.test(page), 'the rejected escape hatch must not survive in the code');
+    ck('  and Resolve difference asks for an account with no default selected',
+       /data-pickresolve=/.test(page) && /data-pickacct=/.test(page)
+       && /which account…<\/option>/.test(page), 'her rule: refuse until I pick');
+    ck('  her own From/To and a show-everything toggle, which Intuit names as the fix',
+       /data-pickfrom=/.test(page) && /data-pickto=/.test(page) && /data-pickall=/.test(page));
     // The bulk offer must say what it does NOT cover, or it reads like
     // QuickBooks' accept-all.
     ck('  the bulk offer says it is exact matches only',
@@ -516,54 +532,175 @@ const sid = ((await req('POST', '/login', { body: { password: process.env.ADMIN_
        bad.status === 409 && (bad.json.missing || []).length === 1,
        JSON.stringify(bad.json));
 
-    const inexact = offered.find((p) => !p.exact);
-    if (inexact) {
-        const warn = await req('POST', '/api/bank/review/match',
-            { sid, body: { id: mine.id, keys: [inexact.key] } });
-        ck('an inexact tie is NOT made silently — it says the gap first',
-           warn.status === 409 && warn.json.needs_confirm === true
-           && typeof warn.json.gap === 'number', JSON.stringify(warn.json));
-        ck('  and the row is still in the queue, untouched',
-           ((await req('GET', '/api/bank/review', { sid })).json.queue.rows || [])
-               .some((r) => r.id === mine.id), 'the refusal must change nothing');
-    } else {
-        console.log('  NOTE  this fixture has no inexact candidate; the gap guard is mutated separately');
-    }
+    // ── IT HAS TO ADD UP, LIKE QUICKBOOKS ───────────────────────────────
+    // Apsara, 2026-10-28: "It should ask me to match the exact amount. just
+    // like quickbook." Yesterday this route took confirm_gap and tied the row
+    // anyway with the difference recorded as a note. She rejected that, and
+    // she was right: a noted gap leaves the books unbalanced and only
+    // annotated. There are now two ways out and no third.
+    const inexact = offered.find((p) => !p.exact && !p.taken_by);
+    ck('the fixture has an inexact candidate to work with', !!inexact,
+       JSON.stringify(offered.map((p) => ({ amt: p.amount, exact: p.exact }))));
 
-    // ── HER PICK, MADE ──────────────────────────────────────────────────
-    // THE INEXACT one on purpose. Picking the exact candidate would have
-    // been Jarvis's own answer, so it would prove nothing about overriding
-    // it — and it would never have exercised the gap reaching the store,
-    // which is where my first version of this silently failed: bankLedger
-    // built the match object field by field and dropped everything it did
-    // not name.
-    const want = offered.find((p) => !p.exact && !p.taken_by)
-        || offered.find((p) => !p.taken_by) || offered[0];
+    const short = await req('POST', '/api/bank/review/match',
+        { sid, body: { id: mine.id, keys: [inexact.key] } });
+    ck('a selection that does not add up is REFUSED',
+       short.status === 409 && short.json.needs_resolve === true, JSON.stringify(short.json));
+    ck('  and it says the difference, the total and the bank line',
+       typeof short.json.difference === 'number' && typeof short.json.total === 'number'
+       && typeof short.json.amount === 'number', JSON.stringify(short.json));
+    ck('  and offers the accounts, so she is not sent to another screen for them',
+       Array.isArray(short.json.categories) && short.json.categories.length > 0,
+       JSON.stringify((short.json.categories || []).slice(0, 2)));
+    ck('  confirm_gap is GONE — yesterday’s escape hatch must not still work',
+       (await req('POST', '/api/bank/review/match',
+           { sid, body: { id: mine.id, keys: [inexact.key], confirm_gap: true } })).status === 409,
+       'confirm_gap must no longer tie an inexact selection');
+    ck('  and the row has not moved — a refusal changes nothing',
+       ((await req('GET', '/api/bank/review', { sid })).json.queue.rows || [])
+           .some((r) => r.id === mine.id), 'the row must still be in For review');
+
+    // MORE than the bank line cannot be resolved by posting a cost, and
+    // saying so is better than booking something backwards.
+    const over = await req('POST', '/api/bank/review/match',
+        { sid, body: { id: mine.id, keys: offered.filter((p) => !p.taken_by).map((p) => p.key),
+                       resolve: { account: '6200' } } });
+    ck('payments totalling MORE than the bank line are refused outright',
+       over.status === 409 && typeof over.json.over === 'number'
+       && over.json.needs_resolve !== true, JSON.stringify(over.json));
+
+    // ── RESOLVE THE DIFFERENCE, QUICKBOOKS' RESOLVING TRANSACTION ───────
+    const BEmod = require(path.join(ROOT, 'helpers/bankEntries'));
+    const entriesBefore = BEmod.list().length;
+    ck('an account she has not picked is refused — her rule, "refuse until I pick"',
+       (await req('POST', '/api/bank/review/match',
+           { sid, body: { id: mine.id, keys: [inexact.key], resolve: { account: '' } } })).status === 409,
+       'a blank account must not resolve anything');
+    ck('  and an account that is not on the chart is refused too',
+       (await req('POST', '/api/bank/review/match',
+           { sid, body: { id: mine.id, keys: [inexact.key], resolve: { account: '9999' } } })).status === 409);
+    ck('  neither attempt posted anything', BEmod.list().length === entriesBefore,
+       `${entriesBefore} before, ${BEmod.list().length} after`);
+
+    const want = inexact;
+    const expectShort = Math.round((mine.amount - want.amount) * 100) / 100;
     const picked = await req('POST', '/api/bank/review/match',
-        { sid, body: { id: mine.id, keys: [want.key], confirm_gap: true } });
-    ck('she can tie the row to the payment SHE picked', picked.status === 200
-       && picked.json.ok === true && picked.json.by_hand === true, JSON.stringify(picked.json));
-    ck('  and it is recorded as hers, not as Jarvis’s own match',
-       (await req('GET', '/api/bank/review/matched', { sid })).json.rows
-           .some((r) => r.id === mine.id && r.how === 'her'), 'how must be her');
+        { sid, body: { id: mine.id, keys: [want.key], resolve: { account: '6200' } } });
+    ck('with an account named, the difference is POSTED and the row tied',
+       picked.status === 200 && picked.json.ok === true && !!picked.json.resolved,
+       JSON.stringify(picked.json));
+    ck('  the posted amount is exactly the difference, not the whole bank line',
+       Math.abs((picked.json.resolved || {}).amount - expectShort) < 0.005,
+       JSON.stringify({ posted: (picked.json.resolved || {}).amount, expected: expectShort,
+                        bank: mine.amount, payment: want.amount }));
+    ck('  and it went to the account she named',
+       (picked.json.resolved || {}).account === '6200', JSON.stringify(picked.json.resolved));
+
+    const entry = BEmod.list().find((e) => e && e.bank_row_id === mine.id && !e.reversed_at);
+    ck('  there is ONE real entry in her books for it',
+       !!entry && Math.abs(entry.amount - expectShort) < 0.005 && entry.partial === true,
+       JSON.stringify(entry));
+    ck('  and it records what it is a part OF, so the part is never read as the whole',
+       entry && Math.abs(entry.of - mine.amount) < 0.005, JSON.stringify({ of: entry && entry.of }));
+
+    // ── AND THE MATCH IS NOW EXACT ──────────────────────────────────────
+    // This is the whole point of copying QuickBooks here: the row leaves her
+    // queue EXPLAINED, not merely annotated. The keys on it must account for
+    // the bank line in full.
     const store = JSON.parse(fs.readFileSync(process.env.BANK_TX_FILE, 'utf8'))
         .find((r) => r.id === mine.id);
-    ck('  the tick carries the key she chose and says it was by hand',
-       ((store.matched || {}).keys || [])[0] === want.key && store.matched.by_hand === true,
-       JSON.stringify(store.matched));
-    ck('  and the gap is ON THE ROW, not only in the audit log',
-       want.exact ? store.matched.gap == null
-                  : Math.abs(Number(store.matched.gap) - want.gap) < 0.005,
-       JSON.stringify({ stored: (store.matched || {}).gap, expected: want.gap }));
-    ck('  and the history says she picked it herself',
-       (store.history || []).some((h) => /picked it|picked herself/i.test(h.what || '')),
-       JSON.stringify((store.history || []).map((h) => h.what)));
+    ck('  the row carries BOTH the payment she chose and the entry that closed it',
+       ((store.matched || {}).keys || []).length === 2
+       && store.matched.keys.includes(want.key)
+       && store.matched.keys.includes(BEmod.keyOf(entry)), JSON.stringify(store.matched));
+    ck('  and it says which account closed the difference',
+       ((store.matched || {}).resolved || {}).account === '6200', JSON.stringify(store.matched));
+    ck('  no `gap` field survives — the idea she rejected is gone from the data too',
+       (store.matched || {}).gap === undefined, JSON.stringify(store.matched));
+    ck('  and it is recorded as hers, by hand',
+       store.matched.how === 'her' && store.matched.by_hand === true, JSON.stringify(store.matched));
+    // ── ONE WRITER, ONE HISTORY LINE ────────────────────────────────────
+    // bankEntries.post() normally ticks the row itself; on a part it must not,
+    // because the route is ticking the same field with BOTH the payment keys
+    // and this entry. A mutation removing that hand-off survived every check
+    // above: post() ticked, the route overwrote it, and the end state looked
+    // right. It is not right. Two writes leave two history lines, and if the
+    // second one failed the row would sit ticked against the 100.00 entry
+    // alone — reading as fully explained when 5,000 left the bank.
+    const ticks = (store.history || []).filter((h) => /matched to a recorded payment/i.test(h.what || ''));
+    ck('  exactly ONE tick was written, not one per writer',
+       ticks.length === 1, JSON.stringify((store.history || []).map((h) => h.what)));
+    ck('  and it names the payment AND the posting, so the row is explained in full',
+       /payment\(s\) plus .* posted to 6200/.test(ticks[0].why || ''),
+       JSON.stringify(ticks[0]));
 
     const aud = require(path.join(ROOT, 'helpers/audit')).listEntries()
         .filter((a) => a.subject === mine.id && a.action === 'match-bank-row-by-hand');
-    ck('  and it is audited under its own name, with what Jarvis WOULD have done',
-       aud.length === 1 && Array.isArray((aud[0].detail || {}).jarvis_would_have),
-       JSON.stringify(aud.map((a) => ({ action: a.action, detail: a.detail }))));
+    ck('  audited under its own name, naming the account and what Jarvis would have done',
+       aud.length === 1 && (aud[0].detail || {}).resolve_account === '6200'
+       && Array.isArray((aud[0].detail || {}).jarvis_would_have),
+       JSON.stringify(aud.map((a) => a.detail)));
+
+    // ── THE PARTIAL GUARDS, AT THE HELPER ───────────────────────────────
+    // These cannot be reached through the route — it computes the difference
+    // from the bank row itself, so it can never ask for more than the row.
+    // A mutation deleting the "larger than the line" guard therefore survived
+    // the end-to-end checks entirely. The guard still earns its place, because
+    // bankEntries.plan is shared and the next caller will not be this route;
+    // it just has to be tested where it is reachable. A guard no test can turn
+    // red is a guard nobody knows is broken.
+    {
+        const BEp = require(path.join(ROOT, 'helpers/bankEntries'));
+        const rowFor = { id: 'bk-plan', direction: 'out', spent: 5000, date: '2026-06-10',
+            bank: 'BofA', company: 'Edge Metals INC', party: 'Vega' };
+        ck('a part of a bank line books the PART',
+           (BEp.plan(rowFor, { account: '6200', amount: 20, partial: true }).entry || {}).amount === 20,
+           JSON.stringify(BEp.plan(rowFor, { account: '6200', amount: 20, partial: true }).entry));
+        ck('  and says what it is a part of',
+           (BEp.plan(rowFor, { account: '6200', amount: 20, partial: true }).entry || {}).of === 5000);
+        const tooBig = BEp.plan(rowFor, { account: '6200', amount: 99999, partial: true });
+        ck('  a part LARGER than the bank line is refused — it would book money that never left',
+           tooBig.ok === false && tooBig.problems.some((x) => /larger than the bank line/.test(x)),
+           JSON.stringify(tooBig.problems));
+        const zeroPart = BEp.plan(rowFor, { account: '6200', amount: 0, partial: true });
+        ck('  and a part of nothing is refused', zeroPart.ok === false,
+           JSON.stringify(zeroPart.problems));
+        const noFlag = BEp.plan(rowFor, { account: '6200', amount: 20 });
+        ck('  an amount with no partial flag is REFUSED, not quietly booked as the whole line',
+           noFlag.ok === false && noFlag.problems.some((x) => /without partial/.test(x)),
+           JSON.stringify(noFlag.problems));
+        const whole = BEp.plan(rowFor, { account: '6200' });
+        ck('  and the old shape is untouched: no amount means the whole line, with no part markers',
+           whole.entry.amount === 5000 && whole.entry.partial === undefined
+           && whole.entry.of === undefined, JSON.stringify(whole.entry));
+    }
+
+    // ── AN EXACT SELECTION STILL CREATES NOTHING ────────────────────────
+    // The safe path must stay safe. When her selection adds up, no entry is
+    // written and no journal line moves — which is the licence the 06:50
+    // auto-tick runs on, and the reason bulk Match is safe to press.
+    {
+        const exactRow = { ...mine, id: 'bk-exact' };
+        delete exactRow.matched;
+        const cur0 = JSON.parse(fs.readFileSync(process.env.BANK_TX_FILE, 'utf8'));
+        fs.writeFileSync(process.env.BANK_TX_FILE, JSON.stringify(cur0.concat([exactRow]), null, 2));
+        const list2 = await pr('/api/bank/review/payments?id=bk-exact', { sid });
+        const spot = (list2.json.rows || []).find((p) => p.exact && !p.taken_by);
+        const entriesWas = BEmod.list().filter((e) => !e.reversed_at).length;
+        const BB2 = require(path.join(ROOT, 'helpers/booksBuild'));
+        const linesWas = JSON.stringify(BB2.build({}).lines);
+        const okExact = await req('POST', '/api/bank/review/match',
+            { sid, body: { id: 'bk-exact', keys: [spot.key] } });
+        ck('an exact selection ties with no account and no question',
+           okExact.status === 200 && okExact.json.exact === true && !okExact.json.resolved,
+           JSON.stringify(okExact.json));
+        ck('  and creates NOTHING — no bank entry',
+           BEmod.list().filter((e) => !e.reversed_at).length === entriesWas,
+           `${entriesWas} before, ${BEmod.list().filter((e) => !e.reversed_at).length} after`);
+        ck('  and not one journal line moved',
+           JSON.stringify(BB2.build({}).lines) === linesWas,
+           'an exact match must leave the journal byte-identical');
+    }
 
     // ── ONE PAYMENT, ONE BANK ROW ───────────────────────────────────────
     // Two bank rows pointing at one recorded payment would say the money

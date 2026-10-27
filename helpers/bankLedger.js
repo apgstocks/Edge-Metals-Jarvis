@@ -384,15 +384,19 @@ function setMatched(rows, id, match, { by = null, how = 'her' } = {}) {
             // four columns, and it is written down in CLAUDE.md for that
             // reason.
             //
-            // The gap is kept on the ROW and not only in the audit log,
-            // because an inexact tie takes a row out of her review queue as
-            // though it were explained. The queue is the thing that must be
-            // able to say "explained, but by 100 dollars less than the bank".
+            // ── `resolved`, NOT A GAP, 2026-10-28 ───────────────────
+            // This carried `gap` for one day: a note saying the tie was
+            // twenty dollars off. Apsara rejected that outright — "It should
+            // ask me to match the exact amount. just like quickbook" — and
+            // she was right, because a noted gap leaves the books unbalanced
+            // and merely annotated. A match is now always exact: either her
+            // selection adds up to the bank line, or a resolving entry was
+            // posted for the remainder. So what the row keeps is WHICH
+            // account closed it and WHICH entry did so, not how wrong it is.
             matched: match ? {
                 at, by: by || null, how, keys: (match.keys || []),
                 ...(match.by_hand ? { by_hand: true } : {}),
-                ...(isFinite(Number(match.gap)) && Math.abs(Number(match.gap)) >= 0.005
-                    ? { gap: Math.round(Number(match.gap) * 100) / 100 } : {}),
+                ...(match.resolved ? { resolved: match.resolved } : {}),
             } : null,
             history: (r.history || []).concat([{
                 at, by: by || null,

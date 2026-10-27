@@ -79,10 +79,48 @@ function keyOf(entry) {
 }
 
 // What would be booked, and why not if it cannot be. Pure.
-function plan(row, { account, entity = null } = {}) {
+// ── A PART OF A ROW, 2026-10-28 ──────────────────────────────────────────
+// Apsara, on tying a bank row to a payment that does not quite match: "It
+// should ask me to match the exact amount. just like quickbook. refer how qb
+// works."
+//
+// QuickBooks' Find Match is multi-select with a running Difference that has
+// to read zero. When it cannot be made to read zero — a wire fee eaten out of
+// the payment, say — QuickBooks' Resolve Difference adds a RESOLVING
+// TRANSACTION: she names the account, and the leftover is posted there as an
+// adjusting entry in the general ledger. The match is then exact, and the
+// books are whole rather than merely annotated.
+//
+// That is what `partial` is for. It means two things, together, and neither
+// without the other:
+//   · `amount` is a PART of the bank row, not the whole of it;
+//   · the CALLER owns the row's tick, because the row is being ticked against
+//     her chosen payments AND this entry at once. post() must not tick it
+//     itself, or the two writers would fight over one field.
+//
+// Absent — which is every caller that existed before today, and there is
+// exactly one, the categorise handler — this behaves to the character as it
+// always did: the whole row, ticked here. The flag says "this one is the new
+// shape", never "this one is the old shape"; CLAUDE.md carries the reason.
+function plan(row, { account, entity = null, amount: part = null, partial = false } = {}) {
     const problems = [];
     if (!row) return { ok: false, problems: ['no such bank row'] };
     if (row.direction !== 'out' || num(row.spent) <= 0) problems.push('only money that left the bank can be categorised here');
+    if (partial) {
+        const want = r2(num(part));
+        const whole = r2(num(row.spent));
+        // A part has to BE a part. Zero is not a difference worth posting,
+        // and more than the row would book money that never left the bank.
+        if (!(want > 0)) problems.push('the difference to resolve has to be more than nothing');
+        else if (want > whole + 0.004) {
+            problems.push(`the difference (${want.toFixed(2)}) is larger than the bank line itself `
+                + `(${whole.toFixed(2)}), so it cannot be a part of it`);
+        }
+    } else if (part != null) {
+        // Guard against a caller that passes an amount and forgets the flag,
+        // which would silently book the whole row instead of the part.
+        problems.push('an amount was given without partial:true — refusing rather than booking the whole line');
+    }
     if (row.pending) problems.push('this line is still pending at the bank — wait until it posts');
     if (row.matched) problems.push('this line is already matched or posted');
     if (row.excluded) problems.push('this line is set aside — put it back first');
@@ -93,7 +131,7 @@ function plan(row, { account, entity = null } = {}) {
     const bankCode = P.bankAccount({ bank: row.bank, mode: '' });
     if (!bankCode) problems.push(`cannot tell which bank "${row.bank || ''}" is, so the credit has nowhere to go`);
 
-    const amount = r2(num(row.spent));
+    const amount = partial ? r2(num(part)) : r2(num(row.spent));
     const acct = C.get(account);
     return {
         ok: problems.length === 0, problems,
@@ -101,6 +139,9 @@ function plan(row, { account, entity = null } = {}) {
             bank_row_id: row.id, date: day(row.date), amount, account: String(account),
             account_name: acct ? acct.name : null, entity: ent, bank: row.bank, bank_code: bankCode,
             descriptor: row.party || row.desc || '',
+            // Only on a part, so an entry written before today is unchanged
+            // byte for byte and booksBuild sees exactly what it always saw.
+            ...(partial ? { partial: true, of: r2(num(row.spent)) } : {}),
         },
         // The two lines she is about to create, in her words, for the confirm text.
         effect: problems.length ? null : `Dr ${account} ${acct ? acct.name : ''} ${amount.toFixed(2)} / Cr ${bankCode} bank ${amount.toFixed(2)}`,
@@ -110,9 +151,10 @@ function plan(row, { account, entity = null } = {}) {
 
 // Books it and ticks the bank row. If the tick fails the entry is reversed
 // again, so there is never an entry with a row still asking about it.
-async function post(row, { account, entity = null, by = null, note = null } = {}) {
+async function post(row, { account, entity = null, by = null, note = null,
+                           amount = null, partial = false } = {}) {
     const ledger = require('./bankLedger');
-    const p = plan(row, { account, entity });
+    const p = plan(row, { account, entity, amount, partial });
     if (!p.ok) { const e = new Error(p.problems.join('; ')); e.problems = p.problems; throw e; }
     const now = new Date().toISOString();
     let saved = null;
@@ -127,6 +169,13 @@ async function post(row, { account, entity = null, by = null, note = null } = {}
         return rows;
     }, { strict: true });
     if (saved.already) return { entry: saved, already: true };
+    // ── ON A PART, THE CALLER TICKS ─────────────────────────────────────
+    // The row is being tied to her chosen payments AND to this entry in one
+    // write, so ticking here would be the first of two writers to the same
+    // field and the second would overwrite it. The caller reverses this entry
+    // if its own tick then fails — the same undo this function does below,
+    // moved to where the tick now lives.
+    if (partial) return { entry: saved, already: false, ticked: false };
     try {
         await ledger.markMatched(row.id, { keys: [keyOf(saved)], why: `booked as ${saved.account} ${saved.account_name}` },
             { by: by || null, how: 'her' });
@@ -134,7 +183,7 @@ async function post(row, { account, entity = null, by = null, note = null } = {}
         await reverse(saved.id, { by: 'system', why: 'could not tick the bank row' });
         throw e;
     }
-    return { entry: saved, already: false };
+    return { entry: saved, already: false, ticked: true };
 }
 
 async function reverse(entryId, { by = null, why = null } = {}) {

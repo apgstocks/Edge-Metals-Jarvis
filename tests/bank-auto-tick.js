@@ -179,6 +179,42 @@ section('C. A MATCH CREATES NOTHING — the licence for doing this overnight');
     ck('  and it still balances',
        after.journal.balanced === true && after.journal.everyEntityBalanced === true,
        JSON.stringify(after.journal.entities));
+
+    // ── AND NOT ONE BANK ENTRY, 2026-10-28 ──────────────────────────────
+    // This section's claim used to be safe for free, because nothing on the
+    // match path could create anything. That changed today: POST
+    // /api/bank/review/match can now post a RESOLVING ENTRY for a difference
+    // she has named an account for (QuickBooks' resolve difference, which she
+    // asked for by name). So "a match creates nothing" is no longer a
+    // property of the code's shape — it has to be asserted of THIS job.
+    //
+    // Two independent reasons it holds, and both are checked rather than
+    // argued: the job never goes through that route at all (it calls
+    // bankLedger.markMatched directly), and it only ever ticks rows the
+    // engine made EXACT, which have no difference to resolve.
+    const BEaudit = require(path.join(ROOT, 'helpers/bankEntries'));
+    ck('the overnight job creates no bank entry — a match still creates NOTHING',
+       BEaudit.list().length === 0, JSON.stringify(BEaudit.list()));
+
+    // What matters is what it CALLS, not what it mentions. My first version
+    // looked for the words 'bankEntries' and 'review/match' anywhere in the
+    // file, and went red on a COMMENT that says the job rebuilds its queue
+    // "exactly as POST /api/bank/review/match does" — a comment that is both
+    // true and useful. Twice today I have written a check that forbids
+    // writing about a thing instead of testing the thing.
+    const src = fs.readFileSync(path.join(ROOT, 'helpers/bankAutoTick.js'), 'utf8');
+    ck('  and it cannot: the job never requires the module that posts',
+       !/require\(['"]\.\/bankEntries['"]\)/.test(src),
+       'bankAutoTick must not be able to write a bank entry');
+    ck('  nor name an account for a difference',
+       !/resolve\s*:/.test(src) && !/account\s*:/.test(src),
+       'nothing in the overnight job may name an account');
+    // The real guarantee, stated as behaviour rather than as source: it goes
+    // through markMatched and nothing else, so there is no code path from the
+    // 06:50 run to a journal entry.
+    ck('  the only write it makes is the tick itself',
+       (src.match(/await\s+bankLedger\.(\w+)/g) || []).every((c) => /markMatched/.test(c)),
+       JSON.stringify(src.match(/await\s+bankLedger\.(\w+)/g)));
 }
 
 // ─────────────────────────────────────────────────────────────────────────
