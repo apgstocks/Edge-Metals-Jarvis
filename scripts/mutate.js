@@ -2163,6 +2163,38 @@ const MUTATIONS = [
       find: '            return { rate: p, rate_unit: u, rate_from: \'\' };',
       to:   '            return { rate: Math.round(p * (claimPrice.toUnit(1, \'MT\', u) || 1) * 100) / 100, rate_unit: \'MT\', rate_from: `${money(p)}/${u}` };' },
 
+    // FOUR MUTATIONS REMOVED 2026-10-27, and the reason matters more than the
+    // mutations did. Each deleted one of bankAutoTick.candidates()' guards —
+    // !r.auto, direction, state, already-matched — and ALL FOUR SURVIVED,
+    // even after the fixture was isolated so the row was otherwise tickable.
+    //
+    // They survive because the guards are REDUNDANT: helpers/bankOut.js
+    // already refuses to propose a matched row, already sets `auto` only for
+    // an exact unambiguous single match, and bankReview only reaches state
+    // 'match' in the same case. The real protection lives there and is tested
+    // there. The copies in bankAutoTick are defence in depth on a job that
+    // writes to her books unattended, which is why they stay — but a
+    // mutation nobody can kill is a green tick that means nothing (#204),
+    // so it is recorded here instead of faked.
+    //
+    // If those guards are ever to be proven independently, candidates() needs
+    // a seam that lets a test hand it a queue directly.
+
+    // ── THE OVERNIGHT AUTO-TICK, 2026-10-27 (#187) ───────────────────────
+    // This one writes to her books without her watching, so every guard that
+    // keeps it narrow has to be shown to be load-bearing.
+    // The tick must say it was Jarvis, or she cannot find what it did.
+    { name: 'auto-tick: the tick stops saying it was automatic',
+      file: 'helpers/bankAutoTick.js', suites: ['bank-auto-tick'],
+      find: "                { by: null, how: 'auto' });",
+      to:   "                { by: null, how: 'her' });" },
+
+    // A dry run that writes is the worst possible bug in a job like this.
+    { name: 'auto-tick: the dry run writes anyway',
+      file: 'helpers/bankAutoTick.js', suites: ['bank-auto-tick'],
+      find: "        if (dryRun) { ticked.push(entry); continue; }",
+      to:   "        if (false) { ticked.push(entry); continue; }" },
+
     // ── THE COUNT AND THE LIST MUST AGREE, 2026-10-27 ────────────────────
     { name: 'bank match: tied is never set, so the screen filter shows nothing',
       file: 'helpers/bankMatch.js', suites: ['bank-match'],

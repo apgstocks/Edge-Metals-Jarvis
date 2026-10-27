@@ -1583,6 +1583,22 @@ function start() {
     // silent when nothing is wrong and never repeats a row it has already
     // chased — see helpers/unrecordedPayments.js, which is where both of
     // those rules live rather than here.
+    // ── 06:50 — TICK OFF WHAT JARVIS IS CERTAIN OF (#187) ────────────────
+    // Apsara, 2026-10-08: "when Jarvis is certain a bank row matches a
+    // payment already recorded, it should tick it off by itself (exact
+    // single matches only) rather than wait for her."
+    //
+    // BEFORE the 07:00 unrecorded-payments chase on purpose. That job asks
+    // a colleague about money that left the bank with nothing recorded; a
+    // row ticked at 06:50 is one it must not then chase. Ten minutes is
+    // slack, not a race — both read the stores fresh.
+    //
+    // A match CREATES NOTHING (helpers/bankLedger.js), every tick carries
+    // how:'auto' and a history line, and all of it is reversible. That is
+    // the whole licence for doing it unattended.
+    cron.schedule('50 6 * * *',   () => require('./helpers/bankAutoTick').run()
+        .then((r) => console.log('[SCHED] ' + require('./helpers/bankAutoTick').summary(r)))
+        .catch(e => console.error('[SCHED] auto-tick:', e)), TZ);
     cron.schedule('0 7 * * *',    () => require('./helpers/unrecordedPayments').chase()
         .then(r => { if (r.sent) console.log(`[SCHED] unrecorded-payments: chased ${r.found.rows.length}`); })
         .catch(e => console.error('[SCHED] unrecorded-payments:', e)), TZ);
