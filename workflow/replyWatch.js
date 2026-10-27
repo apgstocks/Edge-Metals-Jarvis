@@ -3155,14 +3155,110 @@ function buildDeadlineMessage(due) {
     return lines.join('\n');
 }
 
+// ── CHASE-UPS: ONE LINE PER SENDER, AND ONE BATCH A DAY (Apsara, 2026-10-27) ─────────────────
+// She pasted a night of WhatsApp: "11 emails still open" listing Jio Transport's invoices 8986…8994 one per
+// line, minutes after a two-line message about two more of Jio's — "Dont keep on sending like this ... just say
+// that Jio Transport mails. When I click to open that it can provide detailed. Right now my whatsapp looks so
+// clumsy." Two causes, two fixes:
+//
+//  1. ONE LINE PER SENDER. Open emails from the same sender collapse into a single numbered entry saying how
+//     many and which invoices; "what is 1 about" lists them (actions.summarizeEmail) and "ignore 1" drops them
+//     all (actions.ignoreDigestItem). "reply to 1" answers the NEWEST of them, as a matter always has.
+//     This reverses the earlier "deliberately NOT grouped" note in buildChaseMessage: that was written when a
+//     chase item's own age was worth a line each; she has now said it is not.
+//  2. ONE BATCH A DAY. Each tracked item has its own clock, so items came due minute by minute and each run sent
+//     a message for whatever had just come due — eight chase messages in one evening. collectChaseUps already
+//     lets an item "stay due, costing nothing" when it cannot send, so the gate simply holds them until the
+//     morning slot and they all go out together, grouped. Its stamp lives in its OWN file: the reply_watch store
+//     has an allowlist that has silently swallowed seven new fields.
+const CHASE_START_HOUR = 8;                 // LA time — not at 6am, not at 11pm
+const CHASE_GAP_MS = 20 * 60 * 60 * 1000;   // at most one chase message a day
+
+function chaseGateOpen(laHour, now = Date.now()) {
+    if (!(laHour >= CHASE_START_HOUR && laHour < ALERT_END_HOUR)) return false;
+    let last = null;
+    try { last = Date.parse((loadJson(cfg.REPLY_WATCH_CHASE_FILE, {}) || {}).lastSentAt || ''); } catch (e) { /* unreadable stamp: do not block */ }
+    return !(Number.isFinite(last) && now - last < CHASE_GAP_MS);
+}
+async function markChaseSent(now = Date.now()) {
+    try { await mutateJson(cfg.REPLY_WATCH_CHASE_FILE, {}, () => ({ lastSentAt: new Date(now).toISOString() })); }
+    catch (e) { console.warn('[REPLYWATCH] could not stamp the chase-up send:', e.message); }
+}
+
+// Items from one sender collapse to ONE entry: the newest as the representative (what "reply to N" answers),
+// with every member's id (so "ignore N" can drop them all) and a small record of each (so "what is N about" can
+// list them without another Gmail read). A sender with one item is left exactly as it was.
+function groupChaseBySender(due) {
+    const by = new Map(), order = [];
+    for (const d of due || []) {
+        const k = senderKey(d.from || d.fromName) || `id:${d.id}`;
+        if (!by.has(k)) { by.set(k, []); order.push(k); }
+        by.get(k).push(d);
+    }
+    return order.map((k) => {
+        const items = by.get(k);
+        if (items.length < 2) return items[0];
+        const newest = [...items].sort((a, b) => (Date.parse(b.firstFlaggedAt || '') || 0) - (Date.parse(a.firstFlaggedAt || '') || 0))[0];
+        return {
+            ...newest,
+            ageDays: Math.max(...items.map((x) => x.ageDays || 0)),
+            groupCount: items.length,
+            groupIds: items.map((x) => x.id).filter(Boolean),
+            groupItems: items.map((x) => ({ id: x.id || null, summary: x.summary || null, subject: x.subject || null, ageDays: x.ageDays || 0,
+                firstFlaggedAt: x.firstFlaggedAt || null, waiting_on: x.waiting_on || null, asked_of: x.asked_of || null }))
+                .sort((a, b) => b.ageDays - a.ageDays),
+        };
+    });
+}
+
+// "Jio Transport" — the leading CAPITALISED words every summary in the group opens with ("Jio Transport asks…",
+// "Jio Transport sends…", "Jio Transport Inc. sent…"); otherwise the sender's display name.
+function chaseGroupLabel(g) {
+    const heads = (g.groupItems || []).map((x) => String(x.summary || x.subject || '').trim().split(/\s+/).filter(Boolean));
+    const out = [];
+    if (heads.length) {
+        for (let i = 0; ; i++) {
+            const w = heads[0][i];
+            if (!w || !/^[A-Z][\w&.'-]*$/.test(w) || !heads.every((h) => h[i] === w)) break;
+            out.push(w);
+        }
+    }
+    const label = out.join(' ').replace(/[.,]+$/, '');
+    return label.length >= 3 ? label : (g.fromName || g.from || 'one sender');
+}
+// Invoice numbers the members mention, numerically ordered, de-duplicated.
+function chaseGroupRefs(g, max = 6) {
+    const nums = [...new Set((g.groupItems || []).map((x) => invoiceNumberIn(x.summary) || invoiceNumberIn(x.subject)).filter(Boolean))]
+        .sort((a, b) => (parseInt(a.replace(/\D/g, ''), 10) || 0) - (parseInt(b.replace(/\D/g, ''), 10) || 0));
+    if (!nums.length) return '';
+    return nums.length > max ? `${nums.slice(0, max).join(', ')} +${nums.length - max} more` : nums.join(', ');
+}
+// What "what is N about" shows for a group: every member, oldest first, from what is already stored.
+function chaseDetailLines(g) {
+    return (g.groupItems || []).map((x, i) => {
+        const shown = resolveRelativeDates(degenericiseSummary(x.summary || x.subject || '(no summary)', g.fromName), x.firstFlaggedAt);
+        return `${i + 1}. ${shown} — ${x.ageDays} day${x.ageDays === 1 ? '' : 's'} ago`;
+    });
+}
+
 function buildChaseMessage(due) {
-    const lines = [`${due.length} email${due.length === 1 ? '' : 's'} still open:`, ''];
+    // The count is EMAILS, not lines: a sender collapsed to one line still counts every email in it.
+    const total = due.reduce((n, d) => n + ((d.groupItems && d.groupItems.length > 1) ? d.groupItems.length : 1), 0);
+    const lines = [`${total} email${total === 1 ? '' : 's'} still open:`, ''];
     // NUMBERED, not bulleted (2026-08-31). Apsara, looking at a chase-up:
     // "What if i want to ignore that mail?" — and there was no answer. The
     // list used "•", so there was no number to name, while its own footer
     // said "tell me to reply to one". See the lastDigest write in run() for
     // the half of this that actually made "ignore 1" dangerous.
     for (const d of due) {
+        // ONE LINE FOR A SENDER WITH SEVERAL OPEN EMAILS — see groupChaseBySender. The detail is one question away.
+        if (d.groupItems && d.groupItems.length > 1) {
+            const tails = new Set(d.groupItems.map((x) => (x.waiting_on === 'them' ? 'nothing back from them yet' : x.waiting_on === 'someone_else' ? `${x.asked_of || 'they'} still hasn't answered` : 'no reply yet')));
+            const refs = chaseGroupRefs(d);
+            lines.push(`${lines.filter((l) => /^\d+\. /.test(l)).length + 1}. *${chaseGroupLabel(d)} — ${d.groupItems.length} emails${refs ? `, invoices ${refs}` : ''}* — ${d.fromName}, oldest ${d.ageDays} day${d.ageDays === 1 ? '' : 's'} ago, ${tails.size === 1 ? [...tails][0] : 'no reply yet'}`);
+            lines.push('');
+            continue;
+        }
         // Same layout rule as buildDeadlineMessage (Apsara, 2026-08-24:
         // "description should not go next line .side by side"). Applied here
         // too on purpose — two lists of the same shape reading differently is
@@ -3196,6 +3292,8 @@ function buildChaseMessage(due) {
         lines.push('');
     }
     lines.push('Say "reply to 1" to answer one, or "ignore 1" to stop me nudging about it.');
+    const g1 = due.findIndex((d) => d.groupItems && d.groupItems.length > 1);
+    if (g1 !== -1) lines.push(`For what is inside a line with several emails, say "what is ${g1 + 1} about".`);
     return lines.join('\n');
 }
 
@@ -4569,7 +4667,9 @@ async function run({ sendToManager, sendMessage: _sendMessage = null, dryRun = f
 
     try {
         const repliedDuringChase = [];
-        chaseUps = await collectChaseUps(gmail, me, store.tracked, repliedDuringChase, inAlertWindow && !!sendToManager, store);
+        // canSend also asks the DAILY GATE (chaseGateOpen): items that come due between slots wait, costing nothing,
+        // and go out together at the next one — see "CHASE-UPS: ONE LINE PER SENDER, AND ONE BATCH A DAY".
+        chaseUps = await collectChaseUps(gmail, me, store.tracked, repliedDuringChase, inAlertWindow && !!sendToManager && chaseGateOpen(laHour), store);
         for (const who of repliedDuringChase) recordSenderEvent(store, who, 'replied');
     } catch (err) {
         console.error('[REPLYWATCH] chase-up pass failed (non-fatal):', err.message);
@@ -5009,7 +5109,10 @@ async function run({ sendToManager, sendMessage: _sendMessage = null, dryRun = f
     // asks, and merging them buries the second one under the first.
     if (chaseUps.length && sendToManager && inAlertWindow) {
         try {
-            const res = await deliverDigestMessage({ sendToManager, _sendMessage }, buildChaseMessage(chaseUps), {
+            // ONE entry per sender; this SAME array becomes lastDigest below, so "reply to 1" / "ignore 1" /
+            // "what is 1 about" mean the line she is looking at.
+            const chaseList = groupChaseBySender(chaseUps);
+            const res = await deliverDigestMessage({ sendToManager, _sendMessage }, buildChaseMessage(chaseList), {
                 critical: true, subject: 'Emails still unanswered', dedupeKey: 'reply-chaseups',
             });
             if (!res.delivered) throw new Error(res.queued ? 'queued for retry (WhatsApp unavailable)' : 'not delivered');
@@ -5026,8 +5129,9 @@ async function run({ sendToManager, sendMessage: _sendMessage = null, dryRun = f
             // the chase list claims the numbers once it has actually been
             // delivered — the same after-a-confirmed-send discipline as the
             // digest, so a failed send never renumbers what she is looking at.
-            store.lastDigest = chaseUps;
+            store.lastDigest = chaseList;
             store.lastDigestAt = new Date().toISOString();
+            await markChaseSent();
         }
         catch (err) {
             console.error('[REPLYWATCH] chase-up send failed:', err.message);
@@ -5058,7 +5162,7 @@ async function run({ sendToManager, sendMessage: _sendMessage = null, dryRun = f
     return { checked, flagged: flagged.length, items: flagged, queued: store.undelivered.length, sent: delivered, chased: chaseUps.length, deadLettered: deadLettered.length };
 }
 
-module.exports = { run, senderKey, recordSenderEvent, senderHistoryLine, quoteAppearsIn, buildThreadLedger, threadMessageText, digestAudience, buildApprovalAsk, deliverDigestMessage, degenericiseSummary, resolveRelativeDates, isOwedItem, isBystanderItem, isColleagueItem, collectAttachmentNames, figureGap, parseMoneyFigure, addressing, newFence, defence, cleanLabel, normFigure, figureText, refreshSentIndex, sheWroteSince, MAX_ASSESS_ATTEMPTS, draftProformaForOrder, proformaDraftLines, buildPrompt, collectDeadlineReminders, buildDeadlineMessage, bulkMailSignal, FENCE, FENCE_END, buildDigest, buildChaseMessage, collectChaseUps, hasSheReplied, threadTail, threadMovedOn, closesLoopWithoutAsk, invoiceNumberIn, looksLikePaymentDemand, findPaymentEvidence, mutedReason, addMute, removeMute, activeMutes, MUTE_DAYS, extractLatestMessage, parseForward, stripTrailingSignature, senderLabel, assess, resolveDigestIndex, loadStore, saveStore, knownCounterpartyTest, importanceOf: importance.importanceOf, mergeMap, mergeList, mergePoRecord, laterOf, withSnapshot, poTracker, AGING_DAYS, RECHASE_DAYS, MAX_CHASES, NEVER_REPLY_PATTERNS,
+module.exports = { groupChaseBySender, chaseGateOpen, markChaseSent, chaseDetailLines, chaseGroupLabel, CHASE_START_HOUR, CHASE_GAP_MS, run, senderKey, recordSenderEvent, senderHistoryLine, quoteAppearsIn, buildThreadLedger, threadMessageText, digestAudience, buildApprovalAsk, deliverDigestMessage, degenericiseSummary, resolveRelativeDates, isOwedItem, isBystanderItem, isColleagueItem, collectAttachmentNames, figureGap, parseMoneyFigure, addressing, newFence, defence, cleanLabel, normFigure, figureText, refreshSentIndex, sheWroteSince, MAX_ASSESS_ATTEMPTS, draftProformaForOrder, proformaDraftLines, buildPrompt, collectDeadlineReminders, buildDeadlineMessage, bulkMailSignal, FENCE, FENCE_END, buildDigest, buildChaseMessage, collectChaseUps, hasSheReplied, threadTail, threadMovedOn, closesLoopWithoutAsk, invoiceNumberIn, looksLikePaymentDemand, findPaymentEvidence, mutedReason, addMute, removeMute, activeMutes, MUTE_DAYS, extractLatestMessage, parseForward, stripTrailingSignature, senderLabel, assess, resolveDigestIndex, loadStore, saveStore, knownCounterpartyTest, importanceOf: importance.importanceOf, mergeMap, mergeList, mergePoRecord, laterOf, withSnapshot, poTracker, AGING_DAYS, RECHASE_DAYS, MAX_CHASES, NEVER_REPLY_PATTERNS,
     // Exposed for tests/integration.js — deadline ranking and matter grouping
     // are pure functions and the parts most worth asserting directly.
     parseDeadline, daysUntilDeadline, applyDeadlineUrgency, deadlineIsShipmentDate, SHIPMENT_DATE, groupMatters, sameMatter,

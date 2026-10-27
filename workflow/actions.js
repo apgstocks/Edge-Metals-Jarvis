@@ -5248,7 +5248,9 @@ async function ignoreDigestItem(chatId, indices, all = false) {
         await _send(chatId, `I don't have ${indices && indices.length > 1 ? 'those numbers' : `a #${(indices || [])[0]}`} from a recent digest. Ask "what needs my reply" for a fresh list.`);
         return { action_taken: 'digest_ignore_unknown_index' };
     }
-    const ids = new Set(found.map((f) => f.item.id).filter(Boolean));
+    // A chase-up line can stand for SEVERAL emails from one sender (replyWatch.groupChaseBySender): ignoring the line
+    // ignores every email in it, or the others would be nudged about again tomorrow.
+    const ids = new Set(found.flatMap((f) => [f.item.id, ...(f.item.groupIds || [])]).filter(Boolean));
     const store = await loadStore();
     const before = new Set((store.tracked || []).map((t) => t.id));
     // RECORD THE DISMISSAL BEFORE DELETING IT (2026-08-31). Until now this
@@ -5263,7 +5265,11 @@ async function ignoreDigestItem(chatId, indices, all = false) {
     // inputs behind it, and now the human verdict on it, one line per event.
     const { recordSenderEvent } = require('./replyWatch');
     const { appendAuditLog } = require('../helpers/auditlog');
-    for (const f of found) {
+    // One audit row per EMAIL dismissed (a grouped line stands for several), so the training signal is not diluted.
+    const dismissed = found.flatMap((f) => ((f.item.groupItems && f.item.groupItems.length > 1)
+        ? f.item.groupItems.map((m) => ({ item: { ...f.item, id: m.id, summary: m.summary, subject: m.subject, threadId: null } }))
+        : [f]));
+    for (const f of dismissed) {
         try { recordSenderEvent(store, f.item.from || f.item.fromName, 'ignored'); } catch (e) {}
         try {
             await appendAuditLog({
@@ -5293,10 +5299,13 @@ async function ignoreDigestItem(chatId, indices, all = false) {
     // answered. Reporting "dropped" for something already gone is the exact
     // false-confirmation shape as the MARTINEZ bug: technically-not-a-lie
     // phrasing that reads as having done something it didn't.
-    const actuallyRemoved = found.filter((f) => before.has(f.item.id));
-    const alreadyGone = found.filter((f) => !before.has(f.item.id));
+    const inTracked = (f) => before.has(f.item.id) || (f.item.groupIds || []).some((g) => before.has(g));
+    const actuallyRemoved = found.filter(inTracked);
+    const alreadyGone = found.filter((f) => !inTracked(f));
 
-    const nameOf = (f) => f.item.fromName || f.item.from || `#${f.idx}`;
+    const nameOf = (f) => (f.item.groupIds && f.item.groupIds.length > 1
+        ? `${f.item.fromName || f.item.from || `#${f.idx}`} (${f.item.groupIds.length} emails)`
+        : (f.item.fromName || f.item.from || `#${f.idx}`));
     const lines = [];
     if (actuallyRemoved.length) {
         const names = actuallyRemoved.map(nameOf).join(', ');
@@ -5364,6 +5373,15 @@ async function summarizeEmail(chatId, index, targetName, quotedText) {
             await _send(chatId, `That message lists ${unique.length} emails — which number do you want? e.g. "what is ${unique[0]} about".`);
             return { action_taken: 'summarize_email_ambiguous_quote' };
         }
+    }
+
+    // A chase-up line that stands for SEVERAL emails from one sender (replyWatch.groupChaseBySender): list them, from what
+    // was stored when the line was sent. No Gmail read, nothing sent to anyone — this is the "detail on request" half of
+    // collapsing eleven lines into one.
+    if (item && item.groupItems && item.groupItems.length > 1) {
+        const rw = require('./replyWatch');
+        await _send(chatId, `${item.fromName || item.from} — ${item.groupItems.length} open emails:\n\n${rw.chaseDetailLines(item).join('\n')}\n\nSay "ignore ${index !== null && index !== undefined && String(index).trim() !== '' ? index : 'N'}" to drop all of them, or "reply to ${index !== null && index !== undefined && String(index).trim() !== '' ? index : 'N'}" to answer the newest.`);
+        return { action_taken: 'summarize_email_group', count: item.groupItems.length };
     }
 
     let gmail = null, msg = null;
