@@ -553,7 +553,20 @@ function renderRow(row, i) {
   const dep = row.deposit;
   const [cls, label] = BADGE[row.outcome] || ['none', esc(row.outcome)];
   const p = (row.proposals || [])[0];
-  const rivals = (row.proposals || []).slice(1);
+  /* ── ONLY THE GENUINE TIES, 2026-10-27 ───────────────────────────────
+     This was `(row.proposals || []).slice(1)` — everything after the best
+     one, whatever it scored. The engine's idea of a rival is narrower: same
+     kind, score within 0.001 of the top, i.e. a real coin flip. So the
+     sentence said "3 of her open invoices could each take this payment"
+     while this list showed eight, and Apsara asked the obvious question —
+     "Why so many matches with same amount ... that is in correct".
+
+     They were not all matches. Five of them were explanations the engine had
+     deliberately ranked lower, shown as if they were equals. Two definitions
+     of "possibility" in two files; the rule now lives in the engine beside
+     the scoring it depends on, and travels as `tied`. */
+  const rivals = (row.proposals || []).slice(1).filter((p) => p.tied);
+  const weaker = (row.proposals || []).slice(1).filter((p) => !p.tied).length;
 
   let body = '';
   if (row.note) body += `<div class="note">${esc(row.note)}</div>`;
@@ -574,8 +587,9 @@ function renderRow(row, i) {
     body += `<ul class="why">${p.reasons.map((x) => `<li>${esc(x)}</li>`).join('')}</ul>`;
     body += claimHint(row);
     if (row.ambiguous) {
-      body += `<div class="rivals"><div class="lbl">the other possibilities</div>
-        ${rivals.map((q) => allocTable(q)).join('')}</div>`;
+      body += `<div class="rivals"><div class="lbl">the other possibilities — these score the same, nothing separates them</div>
+        ${rivals.map((q) => allocTable(q)).join('')}
+        ${weaker ? `<div class="note">${weaker} weaker explanation${weaker === 1 ? ' was' : 's were'} also considered and ranked below these. Not shown, because listing them as choices is what made this screen unreadable.</div>` : ''}</div>`;
     }
     if (row.truncated) {
       body += `<div class="note">The search stopped early — there may be more combinations than these. Not the same as there being none.</div>`;

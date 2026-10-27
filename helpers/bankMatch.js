@@ -383,9 +383,27 @@ function matchDeposit(deposit, openDocs, opts = {}) {
             // no WORSE explanation should slip past an auto-apply threshold
             // either. But the sentence goes only on the ones it describes.
             p.score = Math.min(p.score, 0.5);
-            if (rival.has(p)) p.reasons = p.reasons.concat(sentence);
+            // ── `tied` CARRIED TO THE SCREEN, 2026-10-27 ─────────────────
+            // Apsara, on a screenshot showing eight candidates: "Why so many
+            // matches with same amount ... that is in correct". She was
+            // right, and this is why: the engine's `rivals` is a TIE GROUP
+            // — same kind, score within 0.001 of the best — but the screen
+            // computed its own as `proposals.slice(1)`, everything after the
+            // first regardless of score. So the sentence counted the three
+            // that genuinely tie and the list showed all eight, including
+            // explanations this engine had deliberately ranked lower.
+            //
+            // Two definitions of "possibility" in two files is the same
+            // two-sources-of-truth bug this repo keeps paying for. The rule
+            // lives here, with the scoring it depends on, and travels.
+            p.tied = rival.has(p);
+            if (p.tied) p.reasons = p.reasons.concat(sentence);
         }
     }
+    // Not ambiguous means nothing is tied — set explicitly rather than left
+    // undefined, so a screen can trust the field instead of guessing from
+    // its absence.
+    if (!ambiguous) for (const p of proposals) p.tied = false;
 
     return {
         ...base,

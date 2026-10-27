@@ -181,6 +181,37 @@ const ids = (p) => (p ? p.allocations.map((a) => a.doc_id).join('+') : null);
     ck('  and the row says what that invoice owes, not just what was applied',
        top(near) && top(near).allocations[0].balance === 22000,
        JSON.stringify(top(near) && top(near).allocations[0]));
+    // ── THE SENTENCE AND THE LIST MUST COUNT THE SAME THING ────────────
+    // Apsara, 2026-10-27: "Why so many matches with same amount ... that is
+    // in correct". The reason line said "3 of her open invoices could each
+    // take this payment" while the screen listed EIGHT, because the engine's
+    // rivals are a tie group and the screen used proposals.slice(1) —
+    // everything after the best, whatever it scored. `tied` carries the
+    // engine's rule to the screen so the two cannot drift again.
+    {
+        const four = m.matchDeposit(dep(65430.28), [
+            { id: 'A', party: 'Hynos', date: '2026-08-25', amount: 66326.40, applied: 0, label: 'A' },
+            { id: 'B', party: 'Hynos', date: '2026-08-27', amount: 74799.40, applied: 0, label: 'B' },
+            { id: 'C', party: 'Hynos', date: '2026-08-29', amount: 77077.40, applied: 0, label: 'C' },
+            { id: 'D', party: 'Hynos', date: '2026-09-01', amount: 70162.80, applied: 0, label: 'D' },
+        ], as('Hynos'));
+        const ps = four.proposals || [];
+        const tied = ps.filter((p) => p.tied);
+        const sentence = ((ps[0] || {}).reasons || []).find((x) => /could each take/.test(x)) || '';
+        const stated = Number((/(\d+) of her open/.exec(sentence) || [])[1]);
+        ck('the number in the reason line equals the number of tied proposals',
+           !!sentence && stated === tied.length, `said ${stated}, tied ${tied.length}`);
+        ck('  and every proposal carries `tied`, set rather than left undefined',
+           ps.every((p) => typeof p.tied === 'boolean'), JSON.stringify(ps.map((p) => p.tied)));
+
+        // Unambiguous rows must say tied:false, not undefined — a screen that
+        // filters on it would otherwise show nothing at all.
+        const one = m.matchDeposit(dep(22000), DOCS, as('Custom Alloys'));
+        ck('  a row with one clear answer marks it NOT tied',
+           (one.proposals || []).every((p) => p.tied === false),
+           JSON.stringify((one.proposals || []).map((p) => p.tied)));
+    }
+
     ck('  so two invoices taking the same deposit are told apart by balance',
        (() => {
            const two = m.matchDeposit(dep(1000), [

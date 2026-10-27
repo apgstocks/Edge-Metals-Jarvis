@@ -2163,6 +2163,22 @@ const MUTATIONS = [
       find: '            return { rate: p, rate_unit: u, rate_from: \'\' };',
       to:   '            return { rate: Math.round(p * (claimPrice.toUnit(1, \'MT\', u) || 1) * 100) / 100, rate_unit: \'MT\', rate_from: `${money(p)}/${u}` };' },
 
+    // ── THE COUNT AND THE LIST MUST AGREE, 2026-10-27 ────────────────────
+    { name: 'bank match: tied is never set, so the screen filter shows nothing',
+      file: 'helpers/bankMatch.js', suites: ['bank-match'],
+      find: "            p.tied = rival.has(p);",
+      to:   "            p.tied = undefined;" },
+
+    { name: 'bank match: every proposal is called a tie, so the count inflates again',
+      file: 'helpers/bankMatch.js', suites: ['bank-match'],
+      find: "            p.tied = rival.has(p);",
+      to:   "            p.tied = true;" },
+
+    { name: 'bank match: an unambiguous row leaves tied undefined',
+      file: 'helpers/bankMatch.js', suites: ['bank-match'],
+      find: "    if (!ambiguous) for (const p of proposals) p.tied = false;",
+      to:   "    if (false) for (const p of proposals) p.tied = false;" },
+
     // ── A CANDIDATE MUST BE TELLABLE APART, 2026-10-27 ───────────────────
     // Her screenshot: eight rows all reading "AL WHEELS DIRTY". The label
     // fell back to the item, so the screen asked her to pick between rows it
