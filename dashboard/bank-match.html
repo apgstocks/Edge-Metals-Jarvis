@@ -466,9 +466,20 @@ const BADGE = {
   not_a_deposit: ['none', 'not a deposit'],
 };
 
+/* Three columns, and the middle one is why. It used to show only the amount
+   APPLIED, which on a part payment is the deposit — the same figure on every
+   candidate. Eight rows then read identically: same name (see the label fix
+   in helpers/bankMatchRoutes.js), same number, differing only in a trailing
+   "leaves". Apsara's reaction to that screen was "WH THE HELL".
+
+   So each row now shows the invoice's OWN open balance beside what would be
+   applied to it. Two invoices for the same metal on the same day are told
+   apart by what is owed on them, which is the only thing that actually
+   differs — and it is the number she would use to decide. */
 function allocTable(p) {
   return `<div class="alloc"><table>${p.allocations.map((a) => `<tr>
       <td>${esc(a.label)}${a.clears ? '' : ` <span class="badge ask">part</span>`}</td>
+      <td class="n" style="color:var(--text-faint)">${a.balance != null ? 'owes ' + money(a.balance) : ''}</td>
       <td class="n">${money(a.amount)}</td>
       <td class="n" style="color:var(--text-faint)">${a.shortfall ? 'short ' + money(a.shortfall)
         : (a.clears ? '' : 'leaves ' + money(a.leaves))}</td>

@@ -171,6 +171,31 @@ const ids = (p) => (p ? p.allocations.map((a) => a.doc_id).join('+') : null);
        top(near) && top(near).kind === 'partial' && top(near).allocations[0].leaves === 1,
        JSON.stringify(top(near) && top(near).allocations));
 
+    // ── THE ROW MUST CARRY WHAT THE INVOICE ITSELF OWES ─────────────────
+    // Added 2026-10-27, after a mutation removing it SURVIVED. On a part
+    // payment every candidate shows the SAME applied figure — the deposit —
+    // so the amount column cannot tell two invoices apart. Her screenshot of
+    // eight identical rows was half this and half the label. The invoice's
+    // own open balance is the number that actually differs, and it is the
+    // one she would use to decide.
+    ck('  and the row says what that invoice owes, not just what was applied',
+       top(near) && top(near).allocations[0].balance === 22000,
+       JSON.stringify(top(near) && top(near).allocations[0]));
+    ck('  so two invoices taking the same deposit are told apart by balance',
+       (() => {
+           const two = m.matchDeposit(dep(1000), [
+               // Dated NEAR the deposit (dep() defaults to 2026-09-05). The
+               // first version of this fixture used March, six months out,
+               // and both docs fell outside the "paid within a quarter"
+               // window — so the test failed on my fixture, not the code.
+               { id: 'A', party: 'Custom Alloys', date: '2026-08-20', amount: 5000, applied: 0, label: 'A' },
+               { id: 'B', party: 'Custom Alloys', date: '2026-08-22', amount: 9000, applied: 0, label: 'B' },
+           ], as('Custom Alloys'));
+           const parts = (two.proposals || []).filter((p) => p.kind === 'partial');
+           const balances = parts.map((p) => p.allocations[0].balance);
+           return parts.length === 2 && new Set(balances).size === 2;
+       })(), 'both part proposals must carry their own balance');
+
     // A fee allowance is PER PARTY and only from a confirmation of hers.
     const fee = m.matchDeposit(dep(21970), DOCS, {
         ...as('Custom Alloys'), patternsFor: () => ({ feeAllowance: 30 }) });

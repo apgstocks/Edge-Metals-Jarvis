@@ -290,7 +290,7 @@ function matchDeposit(deposit, openDocs, opts = {}) {
                 // statement about the bank.
                 const mine = i === docs.length - 1 ? short : 0;
                 return {
-                    doc_id: d.id, label: d.label || d.id,
+                    doc_id: d.id, label: d.label || d.id, balance: bal,
                     amount: round2(bal - mine),
                     shortfall: round2(mine) || 0,
                     clears: true,
@@ -313,7 +313,7 @@ function matchDeposit(deposit, openDocs, opts = {}) {
                 docs: [d], deposit, used: 0, patterns, partialDoc: d });
             proposals.push({
                 kind: 'partial',
-                allocations: [{ doc_id: d.id, label: d.label || d.id, amount, shortfall: 0,
+                allocations: [{ doc_id: d.id, label: d.label || d.id, balance: bal, amount, shortfall: 0,
                     clears: false, leaves: round2(bal - amount) }],
                 leftover: 0, score, reasons: reasons.concat(
                     `${round2(bal - amount).toFixed(2)} would still be owed on it`),
@@ -337,9 +337,9 @@ function matchDeposit(deposit, openDocs, opts = {}) {
                     docs: docs.concat([tail]), deposit, used: 0, patterns, partialDoc: tail });
                 proposals.push({
                     kind: 'combined_partial',
-                    allocations: docs.map((d) => ({ doc_id: d.id, label: d.label || d.id,
+                    allocations: docs.map((d) => ({ doc_id: d.id, label: d.label || d.id, balance: openBalance(d),
                         amount: openBalance(d), shortfall: 0, clears: true }))
-                        .concat([{ doc_id: tail.id, label: tail.label || tail.id, amount: part,
+                        .concat([{ doc_id: tail.id, label: tail.label || tail.id, balance: tailBal, amount: part,
                             shortfall: 0, clears: false, leaves: round2(tailBal - part) }]),
                     leftover: 0, score: round2(score - 0.1), reasons,
                 });

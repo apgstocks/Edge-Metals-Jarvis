@@ -338,6 +338,46 @@ let S1, S2, S3;
     // must be REPORTED, because a matcher quietly working from a stale idea
     // of what is owed is the two-sources-of-truth bug this repo has paid for.
     const { openReceivables } = require(path.join(ROOT, 'helpers/bankMatchRoutes'));
+
+    // ── A CANDIDATE MUST BE TELLABLE APART FROM THE NEXT ONE ────────────
+    // Apsara, 2026-10-27, sent a screenshot of the review screen offering
+    // EIGHT candidates all reading "AL WHEELS DIRTY" and said "WH THE HELL".
+    // The label fell back to the ITEM when a sale had no invoice number, and
+    // her open sales to one customer are all the same grade — so the screen
+    // asked her to choose between rows it had rendered identically.
+    //
+    // The property is not "the label contains a container". It is that two
+    // different open sales never produce the SAME label, because that is the
+    // only thing that makes the question answerable.
+    {
+        const same = openReceivables([
+            { id: 'S1', customer: 'Hynos', date: '2026-09-01', container_no: 'MSMU1152787',
+              item: 'AL WHEELS DIRTY', receivable: 66326.40, received: 0, deducted: 0 },
+            { id: 'S2', customer: 'Hynos', date: '2026-09-03', container_no: 'TCNU8841002',
+              item: 'AL WHEELS DIRTY', receivable: 74799.40, received: 0, deducted: 0 },
+            { id: 'S3', customer: 'Hynos', date: '2026-09-05', container_no: 'FCIU7120344',
+              item: 'AL WHEELS DIRTY', receivable: 77077.40, received: 0, deducted: 0 },
+        ]).docs;
+        const labels = same.map((d) => d.label);
+        ck('three sales of the SAME metal get three different labels',
+           new Set(labels).size === 3, labels.join(' | '));
+        ck('  and none of them is just the metal',
+           labels.every((l) => l !== 'AL WHEELS DIRTY'), labels.join(' | '));
+        ck('  the container is in the label, because that is what this app keys on',
+           labels.every((l) => /MSMU1152787|TCNU8841002|FCIU7120344/.test(l)), labels.join(' | '));
+
+        // With no container either, it must still not collapse to the metal:
+        // the id is ugly but it is unique, and unique is the requirement.
+        const noContainer = openReceivables([
+            { id: 'S9', customer: 'Hynos', date: '2026-09-01', item: 'AL WHEELS DIRTY',
+              receivable: 100, received: 0, deducted: 0 },
+            { id: 'S8', customer: 'Hynos', date: '2026-09-01', item: 'AL WHEELS DIRTY',
+              receivable: 200, received: 0, deducted: 0 },
+        ]).docs.map((d) => d.label);
+        ck('  and with no container or invoice they are STILL distinct',
+           new Set(noContainer).size === 2, noContainer.join(' | '));
+    }
+
     const liar = openReceivables([
         { id: 'OK-1', customer: 'C', date: '2026-08-01', receivable: 10000, received: 0, deducted: 0, balance: 10000 },
         { id: 'LIES', customer: 'C', date: '2026-08-01', receivable: 10000, received: 0, deducted: 0, balance: 9000 },

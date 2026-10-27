@@ -2163,6 +2163,27 @@ const MUTATIONS = [
       find: '            return { rate: p, rate_unit: u, rate_from: \'\' };',
       to:   '            return { rate: Math.round(p * (claimPrice.toUnit(1, \'MT\', u) || 1) * 100) / 100, rate_unit: \'MT\', rate_from: `${money(p)}/${u}` };' },
 
+    // ── A CANDIDATE MUST BE TELLABLE APART, 2026-10-27 ───────────────────
+    // Her screenshot: eight rows all reading "AL WHEELS DIRTY". The label
+    // fell back to the item, so the screen asked her to pick between rows it
+    // had made identical.
+    { name: 'bank match: the candidate label falls back to the metal again',
+      file: 'helpers/bankMatchRoutes.js', suites: ['bank-match-e2e'],
+      find: "                s.container_no || s.invoice_no || s.booking_no || s.id,",
+      to:   "                s.item || s.container_no || s.id," },
+
+    { name: 'bank match: the label loses the container, so two containers read alike',
+      file: 'helpers/bankMatchRoutes.js', suites: ['bank-match-e2e'],
+      find: "            ].filter(Boolean).join(' · '),",
+      to:   "            ].filter(Boolean).slice(1).join(' · ')," },
+
+    // Each row's own open balance is the number that actually differs when
+    // the metal and the date are the same.
+    { name: 'bank match: a part payment stops showing what the invoice owes',
+      file: 'helpers/bankMatch.js', suites: ['bank-match'],
+      find: "                allocations: [{ doc_id: d.id, label: d.label || d.id, balance: bal, amount, shortfall: 0,",
+      to:   "                allocations: [{ doc_id: d.id, label: d.label || d.id, amount, shortfall: 0," },
+
     // ── LEARNING FROM HER HISTORY, 2026-10-26 ────────────────────────────
     // The guard that matters: Fede is "Other" three times out of three, and
     // acting on that would make a $99,243 mis-categorisation permanent.

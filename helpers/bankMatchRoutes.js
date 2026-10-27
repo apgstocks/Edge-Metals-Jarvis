@@ -63,8 +63,31 @@ function openReceivables(sales) {
             date: String(s.date || '').slice(0, 10),
             amount: receivable,
             applied,
-            label: s.invoice_no ? `${s.invoice_no} (${s.item || 'sale'})` : (s.item || s.id),
+            // ── LABELLED BY WHAT IDENTIFIES IT, NOT BY THE METAL ─────────
+            // Apsara, 2026-10-27, sent a screenshot of this screen offering
+            // her EIGHT candidates all reading "AL WHEELS DIRTY", and said
+            // "WH THE HELL". She was right. This line used to be:
+            //
+            //   s.invoice_no ? `${s.invoice_no} (${s.item||'sale'})`
+            //                : (s.item || s.id)
+            //
+            // A sale with no invoice number fell back to the ITEM — the
+            // grade. Her open sales to one customer are all Al wheels dirty,
+            // so every candidate rendered with the same name, and the screen
+            // asked her to choose between rows it had made identical.
+            //
+            // The container is what this product keys on everywhere else —
+            // margin.js, bills, claims, the packing list — so it goes first.
+            // The material is a qualifier and never the whole label: it
+            // cannot tell two sales apart, which is the entire job here.
+            label: [
+                s.container_no || s.invoice_no || s.booking_no || s.id,
+                s.date ? String(s.date).slice(0, 10) : null,
+                s.item || null,
+            ].filter(Boolean).join(' · '),
             invoice_no: s.invoice_no || null,
+            container_no: s.container_no || null,
+            booking_no: s.booking_no || null,
             item: s.item || null,
         };
         const mine = bankMatch.openBalance(doc);
