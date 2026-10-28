@@ -3162,6 +3162,29 @@ const MUTATIONS = [
       find: "    renderMatched();\n    renderBooked();",
       to:   "    renderBooked();" },
 
+    // ── JARVIS vs QUICKBOOKS PARITY, 2026-10-28 (#176) ───────────────
+    // The owner's question is "does your system agree with the books we
+    // already trust", and this report's answer is the one sentence he would
+    // take at face value. Every guard here protects that sentence.
+    { name: 'parity: matching totals alone are called agreement',
+      file: 'scripts/qb-parity.js', suites: ['qb-parity'],
+      find: "    const trulyAgreed = !noData && Math.abs(jTotal - qTotal) < CENT\n        && !differ.length && !jarvisOnly.length && !qbOnlyReal;",
+      to:   "    const trulyAgreed = !noData && Math.abs(jTotal - qTotal) < CENT;" },
+    { name: 'parity: an empty store counts as agreement',
+      file: 'scripts/qb-parity.js', suites: ['qb-parity'],
+      find: "    const trulyAgreed = !noData && Math.abs(jTotal - qTotal) < CENT",
+      to:   "    const trulyAgreed = Math.abs(jTotal - qTotal) < CENT" },
+    { name: 'parity: a missing store stops being announced, so $0.00 reads as a balance',
+      file: 'scripts/qb-parity.js', suites: ['qb-parity'],
+      find: "function noteIfEmpty(label, n) { if (!n) storeEmpty.push(label); return n; }",
+      to:   "function noteIfEmpty(label, n) { return n; }" },
+    // CLAUDE.md: her yard has a Rigo AND a Rego. Guessing between two
+    // suppliers puts one's balance against the other's.
+    { name: 'parity: the party join becomes a near-miss guess, so Rigo reads as Rego',
+      file: 'scripts/qb-parity.js', suites: ['qb-parity'],
+      find: "        const hit = qb.get(k) || (alt ? qb.get(alt) : null);",
+      to:   "        const hit = qb.get(k) || (alt ? qb.get(alt) : null) || [...qb.values()].find((x) => { const n = norm(x.name); return n.length === k.length && n[0] === k[0] && n[n.length - 1] === k[k.length - 1]; });" },
+
     // ── QUICKBOOKS DUPLICATES, 2026-10-28 ────────────────────────────
     // "Check for duplicates for 2026 bills and invoices in quickbook", then
     // "it should be a rolling date..from 01-01-2026 to rolling date".
