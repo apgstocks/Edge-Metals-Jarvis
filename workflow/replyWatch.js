@@ -3255,7 +3255,7 @@ function buildChaseMessage(due) {
         if (d.groupItems && d.groupItems.length > 1) {
             const tails = new Set(d.groupItems.map((x) => (x.waiting_on === 'them' ? 'nothing back from them yet' : x.waiting_on === 'someone_else' ? `${x.asked_of || 'they'} still hasn't answered` : 'no reply yet')));
             const refs = chaseGroupRefs(d);
-            lines.push(`${lines.filter((l) => /^\d+\. /.test(l)).length + 1}. *${chaseGroupLabel(d)} — ${d.groupItems.length} emails${refs ? `, invoices ${refs}` : ''}* — ${d.fromName}, oldest ${d.ageDays} day${d.ageDays === 1 ? '' : 's'} ago, ${tails.size === 1 ? [...tails][0] : 'no reply yet'}`);
+            lines.push(`${lines.filter((l) => /^\d+\. /.test(l)).length + 1}. *${chaseGroupLabel(d)} — ${d.groupItems.length} ${refs ? 'invoices' : 'emails'}* — ${d.fromName}, oldest ${d.ageDays} day${d.ageDays === 1 ? '' : 's'} ago, ${tails.size === 1 ? [...tails][0] : 'no reply yet'}`);
             lines.push('');
             continue;
         }
