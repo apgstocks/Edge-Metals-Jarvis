@@ -494,10 +494,20 @@ const MUTATIONS = [
       file: 'helpers/bills.js', suites: ['bills-sales'],
       find: '    const missing = Object.keys(tare).filter((k) => tare[k] === null);',
       to:   '    const missing = [];' },
-    { name: 'bills: the $10 rule flips, so lbs and MT swap',
+    // ── ONE RULE, TWO SITES: BOTH ARE TESTED, NEITHER WAS (2026-10-28) ──
+    // This was one mutation whose find matched twice, so the harness refused
+    // it and the $10 magnitude rule was guarded NOWHERE. cleanItems() decides
+    // a per-ROW unit and compute() decides the BILL's own; they are separate
+    // rules that happen to read alike, so each gets its own mutation anchored
+    // on the field it reads.
+    { name: 'bills: the $10 rule flips on the BILL price, so lbs and MT swap',
       file: 'helpers/bills.js', suites: ['bills-sales'],
-      find: '        : (price === null ? null : (price < PER_LB_CEILING ? \'lb\' : \'mt\'));',
-      to:   "        : (price === null ? null : (price < PER_LB_CEILING ? 'mt' : 'lb'));" },
+      find: "        ? b.price_unit\n        : (price === null ? null : (price < PER_LB_CEILING ? 'lb' : 'mt'));",
+      to:   "        ? b.price_unit\n        : (price === null ? null : (price < PER_LB_CEILING ? 'mt' : 'lb'));" },
+    { name: 'bills: the $10 rule flips on an ITEM ROW, so lbs and MT swap',
+      file: 'helpers/bills.js', suites: ['bills-sales'],
+      find: "            ? it.price_unit\n            : (price === null ? null : (price < PER_LB_CEILING ? 'lb' : 'mt'));",
+      to:   "            ? it.price_unit\n            : (price === null ? null : (price < PER_LB_CEILING ? 'mt' : 'lb'));" },
     { name: 'bills: balance stops subtracting the trucking',
       file: 'helpers/bills.js', suites: ['bills-sales'],
       find: '        : round2(amountUsed - (trucking || 0));',
@@ -745,10 +755,16 @@ const MUTATIONS = [
     // an unmutated file. That is exactly the first failure in this file's
     // own header, and it is why `not applied` is reported as loudly as a
     // survivor.
-    { name: 'metals cash drains the EDGE YARD petty cash box',
+    // Same line in addPrepayment and addPayment — one mutation matched both,
+    // so the harness refused it and NEITHER path was guarded. Split, 2026-10-28.
+    { name: 'metals cash drains the EDGE YARD petty cash box (a PAYMENT)',
       file: 'helpers/payments.js', suites: ['bills-sales'],
-      find: "    const touchesPettyCash = mode === 'Cash' && !EDGE_METALS_KINDS.has(loadKind);",
-      to:   "    const touchesPettyCash = mode === 'Cash';" },
+      find: "    const touchesPettyCash = mode === 'Cash' && !EDGE_METALS_KINDS.has(loadKind);\n    const cashComesIn = loadKind === 'sale';",
+      to:   "    const touchesPettyCash = mode === 'Cash';\n    const cashComesIn = loadKind === 'sale';" },
+    { name: 'metals cash drains the EDGE YARD petty cash box (a PREPAYMENT)',
+      file: 'helpers/payments.js', suites: ['bills-sales'],
+      find: "    const paidVia = resolvePaidVia(loadKind, mode, input.paid_via, bank);\n\n    const touchesPettyCash = mode === 'Cash' && !EDGE_METALS_KINDS.has(loadKind);",
+      to:   "    const paidVia = resolvePaidVia(loadKind, mode, input.paid_via, bank);\n\n    const touchesPettyCash = mode === 'Cash';" },
     // ── TWO MUTATIONS TRIED AND DELIBERATELY NOT KEPT, 2026-09-10 ────────
     // Removing the `&& load_kind !== 'bill'` guard from either delete path in
     // helpers/payments.js SURVIVES, and it should: pettyCash.reverseForPayment
@@ -1823,10 +1839,17 @@ const MUTATIONS = [
       to:   '            if (false) {' },
     // strict:true is what makes the refusal reach the caller. Without it
     // mutateJson logs and returns, and apply() reports success.
-    { name: 'relink: the refusal is swallowed, so a refused apply reports success',
+    // `}, { strict: true });` closes TWO writes in this file — the re-key and
+    // the de-dupe. One mutation matched both and so guarded neither; split and
+    // anchored on each write's own last statement, 2026-10-28.
+    { name: 'relink: the RE-KEY refusal is swallowed, so a refused apply reports success',
       file: 'helpers/bankRelink.js', suites: ['bank-relink'],
-      find: '    }, { strict: true });',
-      to:   '    });' },
+      find: '        return rows;\n    }, { strict: true });',
+      to:   '        return rows;\n    });' },
+    { name: 'relink: the DE-DUPE refusal is swallowed, so a refused removal reports success',
+      file: 'helpers/bankRelink.js', suites: ['bank-relink'],
+      find: '        return rows.filter((r) => !(r && ids.has(r.id)));\n    }, { strict: true });',
+      to:   '        return rows.filter((r) => !(r && ids.has(r.id)));\n    });' },
     // Her own work is the entire reason to re-key rather than re-insert.
     { name: 'relink: the re-keyed row loses the match she made on it',
       file: 'helpers/bankRelink.js', suites: ['bank-relink'],
@@ -2786,10 +2809,17 @@ const MUTATIONS = [
     // The pane collects the evidence and drops it on the way out — the
     // field exists on the record, so nothing errors and the claim simply
     // has no answer to the question a supplier will ask first.
+    // One pane serves sorted AND damage, so this line appears in both
+    // branches — the single mutation matched twice and guarded neither.
+    // Split 2026-10-28, each anchored on its own branch's lines field.
     { name: 'sorted pane: measured_by is collected and never sent',
       file: 'dashboard/claims.html', suites: ['claims-sorted'],
-      find: '      measured_by: pk.measured_by,',
-      to:   '      measured_by: undefined,' },
+      find: "      measured_by: pk.measured_by,\n    });\n    else if (btn.dataset.kind === 'damage') Object.assign(body, {",
+      to:   "      measured_by: undefined,\n    });\n    else if (btn.dataset.kind === 'damage') Object.assign(body, {" },
+    { name: 'damage pane: measured_by is collected and never sent',
+      file: 'dashboard/claims.html', suites: ['claims-sorted'],
+      find: '      damage_lines: readSortedLines(el),\n      measured_by: pk.measured_by,',
+      to:   '      damage_lines: readSortedLines(el),\n      measured_by: undefined,' },
 
     // Two chip rows, one value. Comparing by identity lights only the row
     // she clicked, so the other shows a different answer from the one saved.
@@ -5104,8 +5134,16 @@ const MUTATIONS = [
       // Exactly how it shipped, and exactly what she reported: "in bol,
       // preview not opened". The click that authorises window.open has
       // expired by then, and the refusal is silent.
-      find: "      const tab = window.open('', '_blank');",
-      to:   '      const tab = null;' },
+      // Anchored on the comment's last line because the BOL and packing-list
+      // previews open the tab with byte-identical code; the only comment-free
+      // neighbour is nine lines away. If that comment is reworded the audit
+      // reports this as NOT APPLIED, which is the intended failure mode.
+      find: "      // opens.\n      const tab = window.open('', '_blank');",
+      to:   '      // opens.\n      const tab = null;' },
+    { name: 'pkprev: the packing list opens the tab AFTER the fetch, so the blocker eats it',
+      file: 'dashboard/documents.html', suites: ['bol'],
+      find: "      const tab = window.open('', '_blank');\n      const res = await fetch('/api/packing-lists/generate?preview=1', {",
+      to:   "      const tab = null;\n      const res = await fetch('/api/packing-lists/generate?preview=1', {" },
     { name: 'bolprev: a blocked tab is not noticed, so nothing happens at all',
       file: 'dashboard/documents.html', suites: ['bol'],
       find: "        status.textContent = 'Your browser blocked the new tab, so the preview was downloaded instead. Nothing was saved.';",
@@ -5890,10 +5928,18 @@ const MUTATIONS = [
       find: '        if (required && expectsBank(mode)) {',
       to:   '        if (required) {' },
 
+    // record_payment and record_prepayment carry this line identically, so
+    // the single mutation matched twice and guarded neither. record_payment is
+    // the path CLAUDE.md records as having broken before, so it keeps the
+    // original name. Split 2026-10-28.
     { name: 'zelle-bank: the voice path nags on every Zelle with no bank',
       file: 'helpers/tools.js', suites: ['tools'],
-      find: '            if (banks.expectsBank(mode) && !bank) {',
-      to:   '            if (banks.needsBank(mode) && !bank) {' },
+      find: '            // dropdown to satisfy the warning. See helpers/banks.js.\n            if (banks.expectsBank(mode) && !bank) {',
+      to:   '            // dropdown to satisfy the warning. See helpers/banks.js.\n            if (banks.needsBank(mode) && !bank) {' },
+    { name: 'zelle-bank: a PREPAYMENT by Zelle nags for a bank it cannot be given',
+      file: 'helpers/tools.js', suites: ['tools'],
+      find: '                + `${seller} until you put it on one.`);\n            if (banks.expectsBank(mode) && !bank) {',
+      to:   '                + `${seller} until you put it on one.`);\n            if (banks.needsBank(mode) && !bank) {' },
 
     // ── FILLING WHAT THE SHEET HAS AND JARVIS DOES NOT (2026-10-01) ─────
     // "for rest of the others,check sheet properly,whatever is missed in

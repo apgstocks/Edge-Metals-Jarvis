@@ -64,7 +64,18 @@ const BASELINE_DEAD = 75;
 // Matching MORE than once is the same disease: scripts/mutate.js refuses an
 // ambiguous find string, so those checks never run either. 7 of them, which
 // makes the real count of checks proving nothing 107, not 100.
-const BASELINE_AMBIGUOUS = 7;
+//
+// ── NOW ZERO, AND WHAT THAT COST TO FIND OUT (2026-10-28) ────────────────
+// All 6 remaining were one rule written twice in the same file — cleanItems
+// and compute, addPrepayment and addPayment, record_payment and
+// record_prepayment, the sorted and damage claim panes, the BOL and
+// packing-list previews, the re-key and de-dupe writes. Each was split in two
+// and anchored on its own site. Six of the twelve then KILLED a named check;
+// the other six SURVIVED, which is the real finding: the ambiguity was hiding
+// six behaviours with no test at all, one of them the original mutation's own
+// subject. Guarding them is tracked separately — this ratchet only holds the
+// line that no find string may match twice again.
+const BASELINE_AMBIGUOUS = 0;
 // The two split files (#208/#209). 113 and 79 at the start; 34 and 9 left.
 // Those remaining are the ones whose code has gone from the tree entirely, or
 // whose name does not say which client it was about.
