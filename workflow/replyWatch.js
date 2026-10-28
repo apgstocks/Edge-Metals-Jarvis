@@ -346,6 +346,7 @@ const RECHASE_DAYS = 2;
 // Stop after this many chases. Something ignored five times is a decision,
 // not an oversight, and Jarvis is not going to keep arguing about it.
 const MAX_CHASES = 5;
+const BACKLOG_SHOW_MAX = 15;   // older still-open items listed in the first digest of the day
 // Floor between non-urgent digests, so a steady trickle of mail cannot turn
 // into a steady trickle of notifications.
 const DIGEST_MIN_GAP_MS = 60 * 60 * 1000;
@@ -443,20 +444,23 @@ function bulkMailSignal(headers) {
 const TAX_ACCOUNTING_TOPIC = /\b(?:schedule\s+)?k-?1\b|\btax\s+(?:return|filing|form|document|prep)s?\b|\bform\s+(?:1065|1120s?|1099|w-?2|w-?9|5472)\b|\b1099\b|\boperating\s+profit\b|\bprofit\s+and\s+loss\b|\bbalance\s+sheet\b|\bfinancial\s+statements?\b|\bretained\s+earnings\b/i;
 function isTaxAccountingTopic(...parts) { return TAX_ACCOUNTING_TOPIC.test(parts.map((x) => String(x || '').slice(0, 1500)).join('\n')); }
 
-// Jarvis's OWN reports emailed to her ("Jarvis: 5 things to look at", the nightly
-// invoice register, the integrity sweep) arrive in her inbox from her own address
-// and read to the model like a colleague asking her something. Apsara, 2026-10-28,
-// WhatsApp: "1 email waiting on you: Apsara, Jarvis flagged 107 outbound loads with
-// no price and 74 bills missing details." Skipped only when ALL hold: sent from
-// her own mailbox or manager address, every recipient is one of those, and the
-// subject starts "Jarvis" or the opening lines name Jarvis. A note she writes to
-// herself without that is still read.
-function isJarvisSelfReport({ from, to, cc, subject, body, me, managerAddress } = {}) {
+// MAIL SHE SENT TO HERSELF - which is what every Jarvis report is: the integrity
+// sweep ("Jarvis flagged 107 outbound loads..."), the QuickBooks check ("QuickBooks
+// has 91 stuck records..."), the morning summary ("needs to price 52,220 lb of
+// Metalco material and address 58 outstanding items"). They leave her sending
+// address for her own address, so they land in her inbox and read to the model like
+// a colleague asking her something. Apsara, 2026-10-28, WhatsApp: "I dont want
+// admin mail that is apsara to come here". First cut required the word "Jarvis";
+// the QuickBooks and Metalco reports do not say it, so it missed both.
+//
+// Skipped when ALL hold: sent from her own mailbox or manager address, and EVERY
+// recipient is one of those. Mail to or copied to anyone else is untouched. Cost,
+// and it is hers to accept: a plain note she emails to herself is skipped too.
+function isSelfSentMail({ from, to, cc, me, managerAddress } = {}) {
     const own = new Set([me, managerAddress].map((x) => String(x || '').toLowerCase()).filter(Boolean));
     if (!own.size || !own.has(senderKey(from || ''))) return false;
     const rcpts = `${to || ''},${cc || ''}`.split(',').map((x) => senderKey(x)).filter(Boolean);
-    if (!rcpts.length || !rcpts.every((r) => own.has(r))) return false;
-    return /^\s*jarvis\b/i.test(subject || '') || /\bjarvis\b/i.test(String(body || '').slice(0, 300));
+    return rcpts.length > 0 && rcpts.every((r) => own.has(r));
 }
 
 const ZIMEX_DOMAIN = /(^|\.)zimex[a-z]*\.[a-z.]+$/i;
@@ -4153,8 +4157,8 @@ async function run({ sendToManager, sendMessage: _sendMessage = null, dryRun = f
         const attachments = collectAttachmentNames(msg.payload || {}, pdfParts);
         const visible = extractLatestMessage(body || msg.snippet || '');
         if (!visible) { seen[ref.id] = new Date().toISOString(); continue; }
-        if (isJarvisSelfReport({ from, to: header(msg, 'To'), cc: header(msg, 'Cc'), subject, body: visible, me, managerAddress })) {
-            console.log(`[REPLYWATCH] skipping Jarvis's own report "${String(subject || '').slice(0, 50)}"`);
+        if (isSelfSentMail({ from, to: header(msg, 'To'), cc: header(msg, 'Cc'), me, managerAddress })) {
+            console.log(`[REPLYWATCH] skipping mail she sent to herself "${String(subject || '').slice(0, 50)}"`);
             seen[ref.id] = new Date().toISOString();
             continue;
         }
@@ -4861,29 +4865,39 @@ async function run({ sendToManager, sendMessage: _sendMessage = null, dryRun = f
         // from another is exactly the bug that once drafted a reply to the
         // wrong customer (see the sort comment above) — grouping makes that
         // trap easier to fall into, so the two must come from one variable.
-        const digestMatters = groupMatters(queued);
-        // Backlog note (2026-08-25, Apsara: "Its not understanding context" —
-        // see the long comment above `tracked` for the full root cause). This
-        // digest only ever lists what is NEW since the last one; anything
-        // still open from before is real and tracked, just not repeated here.
-        // Say so honestly rather than let the digest imply this is everything.
-        // Simplest correct measure: tracked minus whatever raw ids are
-        // actually part of THIS batch (queued already covers every item
-        // digestMatters was grouped from, pre-grouping).
-        const renderedIds = new Set(queued.map((q) => q.id));
-        const olderStillOpen = (store.tracked || []).filter((t) => !renderedIds.has(t.id)).length;
-        // ONCE A DAY, NOT EVERY TIME. Her night of 2026-09-18 carried
-        // "(+6 older items still open from before ...)" in six consecutive
-        // messages, with the same 6 every time. Text that never changes stops
-        // being read and teaches her to skim the part that does.
-        //
-        // Derived from lastDigestAt rather than a new store field: `heldBack`
-        // taught me that lesson this week, and a `lastFooterOn` key would be
-        // the seventh thing for saveStore's allowlist to swallow.
+        // ONCE A DAY, NOT EVERY TIME. Her night of 2026-09-18 carried the backlog
+        // line in six consecutive messages, with the same 6 every time. Text that
+        // never changes stops being read and teaches her to skim the part that does.
+        // Derived from lastDigestAt rather than a new store field: `heldBack` taught
+        // me that lesson, and a `lastFooterOn` key would be the seventh thing for
+        // saveStore's allowlist to swallow.
         const laDay = (t) => new Date(laMidnightUTC(t)).toISOString().slice(0, 10);
         const firstOfDay = !store.lastDigestAt || laDay(store.lastDigestAt) !== laDay(new Date());
-        const backlogNote = (olderStillOpen > 0 && firstOfDay)
-            ? `\n\n(+${olderStillOpen} older item${olderStillOpen === 1 ? '' : 's'} still open from before — say "what needs my reply" to see them, or "clear older" to drop them.)`
+        // THE OLDER ITEMS ARE LISTED, NOT COUNTED (2026-10-28). Apsara, on
+        // "(+73 older items still open from before - say 'what needs my reply' any
+        // time to see them)": "Just show pending items instead of that." So the
+        // first digest of the day carries the still-open items after the new ones,
+        // in ONE numbered sequence that is also lastDigest, exactly as
+        // actions.showPendingReplies does for "what needs my reply" - so "reply to
+        // 12" and "ignore 12" mean the line she is reading. Grouped by sender like
+        // everything else, oldest first, capped so a big backlog cannot recreate the
+        // wall of text she complained about; the rest is one line saying how many.
+        const queuedIdSet = new Set(queued.map((q) => q.id));
+        const queuedThreadSet = new Set(queued.map((q) => q.threadId).filter(Boolean));
+        const backlogAll = (store.tracked || [])
+            .filter((t) => t && !queuedIdSet.has(t.id) && !(t.threadId && queuedThreadSet.has(t.threadId)))
+            .sort((a, b) => String(a.firstFlaggedAt || '').localeCompare(String(b.firstFlaggedAt || '')))
+            .map((t) => Object.assign({}, t, { needs_reply: (t.waiting_on || 'her') === 'her', from_backlog: true }));
+        const backlogShown = firstOfDay ? backlogAll.slice(0, BACKLOG_SHOW_MAX) : [];
+        // Group ONCE, here, and use the SAME array for both the rendered
+        // digest and lastDigest below. Rendering from one array and numbering
+        // from another is exactly the bug that once drafted a reply to the
+        // wrong customer (see the sort comment above) - grouping makes that
+        // trap easier to fall into, so the two must come from one variable.
+        const digestMatters = groupMatters([...queued, ...backlogShown]);
+        const olderNotShown = firstOfDay ? backlogAll.length - backlogShown.length : 0;
+        const backlogNote = olderNotShown > 0
+            ? `\n\n(+${olderNotShown} more older item${olderNotShown === 1 ? '' : 's'} still open - say "what needs my reply" to see them all, or "clear older" to drop them.)`
             : '';
         // Dead letters ride along with the digest rather than as their own
         // ping — they are rare, and a separate message for "I could not read
@@ -4941,7 +4955,7 @@ async function run({ sendToManager, sendMessage: _sendMessage = null, dryRun = f
             const forced = digestMatters.filter((m) => heldCount(m.id) >= MAX_HELD_BACK).map((m) => m.id);
             const verdict = verifyDigest(
                 digestMatters.filter((m) => !forced.includes(m.id)),
-                (items) => buildDigest(items, queued.length, { terse: !firstOfDay }));
+                (items) => buildDigest(items, queued.length + backlogShown.length, { terse: !firstOfDay }));
             heldBack = verdict.dropped;
             // ---- THE FEEDBACK HALF OF THE LOOP (2026-09-18) ---------------
             // Apsara: "Use loop engineering to adjust the prompt as per the
@@ -4978,7 +4992,7 @@ async function run({ sendToManager, sendMessage: _sendMessage = null, dryRun = f
             const forcedItems = digestMatters.filter((m) => forced.includes(m.id));
             const finalItems = forcedItems.length ? verdict.items.concat(forcedItems) : verdict.items;
             const rendered = forcedItems.length
-                ? buildDigest(finalItems, queued.length, { terse: !firstOfDay }) : verdict.text;
+                ? buildDigest(finalItems, queued.length + backlogShown.length, { terse: !firstOfDay }) : verdict.text;
             const forcedNote = forcedItems.length
                 ? `\n\n⚠ ${forcedItems.length} item${forcedItems.length === 1 ? '' : 's'} above did not pass my own checks `
                   + `${forcedItems.length === 1 ? 'and may read' : 'and may read'} oddly (a date or a name may be stale) — `
@@ -5243,6 +5257,6 @@ async function run({ sendToManager, sendMessage: _sendMessage = null, dryRun = f
 module.exports = { groupChaseBySender, chaseGateOpen, markChaseSent, chaseDetailLines, chaseGroupLabel, CHASE_START_HOUR, CHASE_GAP_MS, run, senderKey, recordSenderEvent, senderHistoryLine, quoteAppearsIn, buildThreadLedger, threadMessageText, digestAudience, buildApprovalAsk, deliverDigestMessage, degenericiseSummary, resolveRelativeDates, isOwedItem, isBystanderItem, isColleagueItem, collectAttachmentNames, figureGap, parseMoneyFigure, addressing, newFence, defence, cleanLabel, normFigure, figureText, refreshSentIndex, sheWroteSince, MAX_ASSESS_ATTEMPTS, draftProformaForOrder, proformaDraftLines, buildPrompt, collectDeadlineReminders, buildDeadlineMessage, bulkMailSignal, FENCE, FENCE_END, buildDigest, buildChaseMessage, collectChaseUps, hasSheReplied, threadTail, threadMovedOn, closesLoopWithoutAsk, invoiceNumberIn, looksLikePaymentDemand, findPaymentEvidence, mutedReason, addMute, removeMute, activeMutes, MUTE_DAYS, extractLatestMessage, parseForward, stripTrailingSignature, senderLabel, assess, resolveDigestIndex, loadStore, saveStore, knownCounterpartyTest, importanceOf: importance.importanceOf, mergeMap, mergeList, mergePoRecord, laterOf, withSnapshot, poTracker, AGING_DAYS, RECHASE_DAYS, MAX_CHASES, NEVER_REPLY_PATTERNS,
     // Exposed for tests/integration.js — deadline ranking and matter grouping
     // are pure functions and the parts most worth asserting directly.
-    isZimexBookingMail, isTaxAccountingTopic, isJarvisSelfReport,
+    isZimexBookingMail, isTaxAccountingTopic, isSelfSentMail,
     parseDeadline, daysUntilDeadline, applyDeadlineUrgency, deadlineIsShipmentDate, SHIPMENT_DATE, groupMatters, sameMatter,
     DIGEST_INDEX_TTL_MS };

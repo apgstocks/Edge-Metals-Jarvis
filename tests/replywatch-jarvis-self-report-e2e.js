@@ -31,12 +31,14 @@ const scan = async (mails) => { for (const k of Object.keys(MAILS)) delete MAILS
     fs.writeFileSync(cfg.REPLY_WATCH_FILE, JSON.stringify({ seen: {}, undelivered: [], lastDigest: [], tracked: [], senderStats: {}, pos: {} })); const sent = [];
     await rw.run({ sendToManager: async (t) => { sent.push(t); return true; } }); return sent.join('\n'); };
 (async () => {
-    const rep = { from: 'Apsara Gopalakrishnan <apsara@edgemetals.com>', to: ME, subject: 'Jarvis: 2 things to look at', body: 'Apsara, Jarvis flagged 107 outbound loads with no price and 74 bills missing details. Please confirm.', waiting_on: 'her', summary: 'Apsara, Jarvis flagged 107 outbound loads with no price.' };
-    const t1 = await scan({ r1: rep });
+    const rep = { from: 'Apsara Gopalakrishnan <apsara@edgemetals.com>', to: ME, subject: 'Daily', body: 'Apsara, QuickBooks has 91 stuck records and 1113 held by period lock. Please confirm.', waiting_on: 'her', summary: 'Apsara, QuickBooks has 91 stuck records and 1113 held by period lock.' };
     // Read from bose@'s mailbox (a copy reached it), so the mailbox-owner skip does not catch it.
-    ck('END TO END: Jarvis\'s own sweep email is not listed', !/107 outbound/.test(t1), t1.slice(0, 200));
-    const t2 = await scan({ r2: { ...rep, subject: 'note to self', body: 'Please confirm the 107 outbound loads pricing with Kristal.', summary: 'Apsara notes 107 outbound loads need pricing confirmed.' } });
-    ck('END TO END: a plain note to herself (no Jarvis) is still read', /107 outbound/.test(t2), t2.slice(0, 200));
+    const t1 = await scan({ r1: rep });
+    ck('END TO END: QuickBooks report to herself (no word Jarvis) is not listed', !/91 stuck/.test(t1), t1.slice(0, 200));
+    const t2 = await scan({ r2: { ...rep, subject: 'Metalco', body: 'Apsara needs to price 52,220 lb of Metalco material and address 58 outstanding items. Please confirm.', summary: 'Apsara needs to price 52,220 lb of Metalco material and address 58 outstanding items.' } });
+    ck('END TO END: the Metalco morning summary is not listed', !/52,220/.test(t2), t2.slice(0, 200));
+    const t3 = await scan({ r3: { ...rep, from: 'Kristal <kristal@edgemetals.com>', subject: 'cutoff', body: 'Please confirm the cutoff for 26JY79.', summary: 'Kristal asks you to confirm the cutoff for 26JY79.' } });
+    ck('END TO END: a teammate writing to her is still listed', /Kristal asks/.test(t3), t3.slice(0, 200));
     try { fs.rmSync(scratch, { recursive: true, force: true }); } catch (e) {}
     console.log(`\n${pass} passed, ${fail} failed`); process.exit(fail ? 1 : 0);
 })().catch((e) => { console.error(e); process.exit(1); });
