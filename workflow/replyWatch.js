@@ -434,6 +434,15 @@ function bulkMailSignal(headers) {
 
 // Zimex booking mail: sender domain is Zimex's AND the mail is about a booking
 // (the word, or a carrier booking reference). Pure, so it is testable alone.
+// Tax / entity-accounting paperwork a teammate is handling ("Raghu Raman shares the
+// 2025 K1 from EEL with an operating profit of $16,122.67 and asks for
+// confirmation (your team, not you)" - Apsara 2026-10-28: "I dont want email
+// like this"). Applied ONLY to colleague items - mail where a teammate is the one
+// being asked. The same words in mail addressed to HER still list. Narrow terms
+// on purpose: no bare "tax", because customs duty and freight tax are trade.
+const TAX_ACCOUNTING_TOPIC = /\b(?:schedule\s+)?k-?1\b|\btax\s+(?:return|filing|form|document|prep)s?\b|\bform\s+(?:1065|1120s?|1099|w-?2|w-?9|5472)\b|\b1099\b|\boperating\s+profit\b|\bprofit\s+and\s+loss\b|\bbalance\s+sheet\b|\bfinancial\s+statements?\b|\bretained\s+earnings\b/i;
+function isTaxAccountingTopic(...parts) { return TAX_ACCOUNTING_TOPIC.test(parts.map((x) => String(x || '').slice(0, 1500)).join('\n')); }
+
 const ZIMEX_DOMAIN = /(^|\.)zimex[a-z]*\.[a-z.]+$/i;
 const BOOKING_WORD = /\bbook(?:ing|ed|ings)?\b/i;
 const BOOKING_REF = /\b(?:DALA|EBKG|HDMU|MEDU|MAEU|COSU|ONEY|HLCU|EGLV|SUDU|CMDU)\s?\d{6,12}\b/i;
@@ -4389,11 +4398,16 @@ async function run({ sendToManager, sendMessage: _sendMessage = null, dryRun = f
         }
         let hideZimexCritical = false;
         try { hideZimexCritical = !!cfg.getSettings().zimex_booking_hide_critical; } catch (e) { /* default: visible */ }
+        const colleagueTax = a.waiting_on === 'colleague' && imp.level !== 'critical'
+            && isTaxAccountingTopic(subject, a.summary, visible);
+        if (colleagueTax) {
+            console.log(`[REPLYWATCH] not listing "${String(a.summary || subject || '').slice(0, 55)}" — tax/accounting paperwork a teammate is handling`);
+        }
         const zimexBooking = isZimexBookingMail({ from, subject, body: visible }) && (imp.level !== 'critical' || hideZimexCritical);
         if (zimexBooking && ((a.needs_reply && a.confidence >= MIN_CONFIDENCE) || a.is_order || owedItem || bystander || colleagueItem || importantEnough)) {
             console.log(`[REPLYWATCH] not listing "${String(a.summary || subject || '').slice(0, 55)}" — Zimex booking mail, Jarvis records bookings itself`);
         }
-        if (!zimexBooking && !notEdgeBusiness && ((a.needs_reply && a.confidence >= MIN_CONFIDENCE) || a.is_order || owedItem || bystander || colleagueItem
+        if (!zimexBooking && !notEdgeBusiness && !colleagueTax && ((a.needs_reply && a.confidence >= MIN_CONFIDENCE) || a.is_order || owedItem || bystander || colleagueItem
             || importantEnough)) {
             recordSenderEvent(store, from, 'flagged');
             // ── ALREADY PAID? (2026-09-02) ──────────────────────────────
@@ -5208,6 +5222,6 @@ async function run({ sendToManager, sendMessage: _sendMessage = null, dryRun = f
 module.exports = { groupChaseBySender, chaseGateOpen, markChaseSent, chaseDetailLines, chaseGroupLabel, CHASE_START_HOUR, CHASE_GAP_MS, run, senderKey, recordSenderEvent, senderHistoryLine, quoteAppearsIn, buildThreadLedger, threadMessageText, digestAudience, buildApprovalAsk, deliverDigestMessage, degenericiseSummary, resolveRelativeDates, isOwedItem, isBystanderItem, isColleagueItem, collectAttachmentNames, figureGap, parseMoneyFigure, addressing, newFence, defence, cleanLabel, normFigure, figureText, refreshSentIndex, sheWroteSince, MAX_ASSESS_ATTEMPTS, draftProformaForOrder, proformaDraftLines, buildPrompt, collectDeadlineReminders, buildDeadlineMessage, bulkMailSignal, FENCE, FENCE_END, buildDigest, buildChaseMessage, collectChaseUps, hasSheReplied, threadTail, threadMovedOn, closesLoopWithoutAsk, invoiceNumberIn, looksLikePaymentDemand, findPaymentEvidence, mutedReason, addMute, removeMute, activeMutes, MUTE_DAYS, extractLatestMessage, parseForward, stripTrailingSignature, senderLabel, assess, resolveDigestIndex, loadStore, saveStore, knownCounterpartyTest, importanceOf: importance.importanceOf, mergeMap, mergeList, mergePoRecord, laterOf, withSnapshot, poTracker, AGING_DAYS, RECHASE_DAYS, MAX_CHASES, NEVER_REPLY_PATTERNS,
     // Exposed for tests/integration.js — deadline ranking and matter grouping
     // are pure functions and the parts most worth asserting directly.
-    isZimexBookingMail,
+    isZimexBookingMail, isTaxAccountingTopic,
     parseDeadline, daysUntilDeadline, applyDeadlineUrgency, deadlineIsShipmentDate, SHIPMENT_DATE, groupMatters, sameMatter,
     DIGEST_INDEX_TTL_MS };
