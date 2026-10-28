@@ -455,6 +455,35 @@ section('H — no route name is a prefix of another');
         // route whose name extends another invoice route. Anything matching
         // /api/invoice/preview by substring also matches preview-multi.
         '/api/invoice/preview  <  /api/invoice/preview-multi',
+        // ── SETTLE, 2026-10-28 ───────────────────────────────────────────
+        // Added by #212 on 2026-10-16 and red ever since, which is the worst
+        // state for a check to be in: CLAUDE.md §2 is about a suite that is
+        // always red and therefore stops being read. So it is either excused
+        // with evidence or fixed. Checked, not assumed:
+        //
+        //   · NO substring matcher exists for this pair. Both clients call
+        //     exact strings (api('/api/payments/settle') and
+        //     api('/api/payments/settle-options?...')), and the two source
+        //     greps in tests/settle-screens.js are anchored — one matches
+        //     'settle-options', the other the QUOTED '/api/payments/settle'.
+        //     The original bug was invoice-weight-guard counting a GET of a
+        //     list as a POST to the generator; nothing here counts that way.
+        //   · The one real prefix TEST in the app, api.js's
+        //     STAFF_ALLOWED_PATH_PREFIXES, is `req.path === p ||
+        //     startsWith(p + '/')`, and '/api/payments' is deliberately not
+        //     on it, so both routes take the flat 403 together.
+        //
+        // AND THE REASON IT IS NOT RENAMED, which is the part that decides
+        // it: '/api/payments/settle' is baked into the Android app's bundled
+        // assets. Renaming the route breaks Settle on the phone already in
+        // her hand until a new APK is built and installed, and #205 records
+        // that she is habitually behind on APK builds. A rename to satisfy a
+        // check I wrote would take a working button off her phone — exactly
+        // the widening this file's own comment above refuses.
+        //
+        // Hers to overrule. If she wants the rename, it is four files plus a
+        // new APK, and the APK has to go out FIRST.
+        '/api/payments/settle  <  /api/payments/settle-options',
     ]);
 
     const clashes = [];
