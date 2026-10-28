@@ -426,6 +426,18 @@ function bulkMailSignal(headers) {
     return null;
 }
 
+// Zimex booking mail: sender domain is Zimex's AND the mail is about a booking
+// (the word, or a carrier booking reference). Pure, so it is testable alone.
+const ZIMEX_DOMAIN = /(^|\.)zimex[a-z]*\.[a-z.]+$/i;
+const BOOKING_WORD = /\bbook(?:ing|ed|ings)?\b/i;
+const BOOKING_REF = /\b(?:DALA|EBKG|HDMU|MEDU|MAEU|COSU|ONEY|HLCU|EGLV|SUDU|CMDU)\s?\d{6,12}\b/i;
+function isZimexBookingMail({ from, subject, body } = {}) {
+    const dom = senderKey(from || '').split('@')[1] || '';
+    if (!ZIMEX_DOMAIN.test(dom)) return false;
+    const text = `${subject || ''}\n${String(body || '').slice(0, 1500)}`;
+    return BOOKING_WORD.test(text) || BOOKING_REF.test(text);
+}
+
 // Store shape: { seen: {messageId: assessedAtISO}, lastDigest: [item, ...] }.
 // `seen` is a map rather than a list so entries can be aged out — an
 // unbounded id list would grow forever on a busy mailbox. `lastDigest` is
@@ -4350,8 +4362,18 @@ async function run({ sendToManager, sendMessage: _sendMessage = null, dryRun = f
             console.log(`[REPLYWATCH] not promoting "${String(a.summary || '').slice(0, 55)}" — `
                 + 'a delivery with a figure in it, not an obligation');
         }
-        if ((a.needs_reply && a.confidence >= MIN_CONFIDENCE) || a.is_order || owedItem || bystander || colleagueItem
-            || importantEnough) {
+        // Apsara, 2026-10-28: "I dont want booking requested replies from
+        // zimex. Booking info related things are stored automatically in my
+        // jarvis." ZIMEX ONLY and BOOKING MAIL ONLY: another carrier's booking
+        // mail, and a Zimex mail about anything else, are untouched. A
+        // `critical` signal (claim, moved cutoff) still gets through, because
+        // that costs money by being missed and is not "booking info".
+        const zimexBooking = isZimexBookingMail({ from, subject, body: visible }) && imp.level !== 'critical';
+        if (zimexBooking && ((a.needs_reply && a.confidence >= MIN_CONFIDENCE) || a.is_order || owedItem || bystander || colleagueItem || importantEnough)) {
+            console.log(`[REPLYWATCH] not listing "${String(a.summary || subject || '').slice(0, 55)}" — Zimex booking mail, Jarvis records bookings itself`);
+        }
+        if (!zimexBooking && ((a.needs_reply && a.confidence >= MIN_CONFIDENCE) || a.is_order || owedItem || bystander || colleagueItem
+            || importantEnough)) {
             recordSenderEvent(store, from, 'flagged');
             // ── ALREADY PAID? (2026-09-02) ──────────────────────────────
             // Only for mail that reads as a payment demand and names an
@@ -5165,5 +5187,6 @@ async function run({ sendToManager, sendMessage: _sendMessage = null, dryRun = f
 module.exports = { groupChaseBySender, chaseGateOpen, markChaseSent, chaseDetailLines, chaseGroupLabel, CHASE_START_HOUR, CHASE_GAP_MS, run, senderKey, recordSenderEvent, senderHistoryLine, quoteAppearsIn, buildThreadLedger, threadMessageText, digestAudience, buildApprovalAsk, deliverDigestMessage, degenericiseSummary, resolveRelativeDates, isOwedItem, isBystanderItem, isColleagueItem, collectAttachmentNames, figureGap, parseMoneyFigure, addressing, newFence, defence, cleanLabel, normFigure, figureText, refreshSentIndex, sheWroteSince, MAX_ASSESS_ATTEMPTS, draftProformaForOrder, proformaDraftLines, buildPrompt, collectDeadlineReminders, buildDeadlineMessage, bulkMailSignal, FENCE, FENCE_END, buildDigest, buildChaseMessage, collectChaseUps, hasSheReplied, threadTail, threadMovedOn, closesLoopWithoutAsk, invoiceNumberIn, looksLikePaymentDemand, findPaymentEvidence, mutedReason, addMute, removeMute, activeMutes, MUTE_DAYS, extractLatestMessage, parseForward, stripTrailingSignature, senderLabel, assess, resolveDigestIndex, loadStore, saveStore, knownCounterpartyTest, importanceOf: importance.importanceOf, mergeMap, mergeList, mergePoRecord, laterOf, withSnapshot, poTracker, AGING_DAYS, RECHASE_DAYS, MAX_CHASES, NEVER_REPLY_PATTERNS,
     // Exposed for tests/integration.js — deadline ranking and matter grouping
     // are pure functions and the parts most worth asserting directly.
+    isZimexBookingMail,
     parseDeadline, daysUntilDeadline, applyDeadlineUrgency, deadlineIsShipmentDate, SHIPMENT_DATE, groupMatters, sameMatter,
     DIGEST_INDEX_TTL_MS };

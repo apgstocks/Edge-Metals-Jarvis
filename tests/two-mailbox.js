@@ -469,7 +469,7 @@ section('BJ — one good item and one bad one in the same digest');
         'good-1': { rfc: '<good@m>', from: 'Tiffany Furleigh <tfurleigh@eccomelt.com>',
                     subject: 'RE: Purchase Order #4302902', askedFor: 'the Friday 9/11 delivery slot',
                     summary: 'Tiffany asks you to confirm the Friday 9/11 slot for PO 4302902.' },
-        'bad-1': { rfc: '<bad@m>', from: 'Kristal Sosethan <k@zimexglt.com>',
+        'bad-1': { rfc: '<bad@m>', from: 'Kristal Sosethan <k@oceanlines.example.com>',  // not Zimex: Zimex booking mail is suppressed before this check
                    subject: 'RE: Bkg DALA26511200', askedFor: 'the booking rate',
                    summary: 'Confirm the booking rate next week.' },
     };
