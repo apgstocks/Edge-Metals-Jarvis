@@ -3126,8 +3126,13 @@ const MUTATIONS = [
       to:   "            if (false) {" },
     { name: 'match: the screen gives a dead button to rows it cannot act on',
       file: 'dashboard/bank-match.html', suites: ['bank-review-route'],
-      find: "      ${r.state === 'match'\n        ? `<button class=\"btn go\" data-reviewmatch=\"${esc(r.id)}\">Match</button>`",
-      to:   "      ${true\n        ? `<button class=\"btn go\" data-reviewmatch=\"${esc(r.id)}\">Match</button>`" },
+      // The button's class became "btn solid" at some point after this was
+      // written, so the find matched nothing and the guard was off. It is the
+      // one that stops a row which would CREATE a record being given a
+      // pressable Match button — "a dead button is worse than a missing one"
+      // in the route's own words. Found by the audit, not by me.
+      find: "        <span class=\"go\">${r.state === 'match'",
+      to:   "        <span class=\"go\">${true" },
 
     { name: 'reviewroute: money out stops reaching the queue',
       file: 'helpers/bankMatchRoutes.js', suites: ['bank-review-route'],
@@ -3162,6 +3167,32 @@ const MUTATIONS = [
       find: "    renderMatched();\n    renderBooked();",
       to:   "    renderBooked();" },
 
+    // ── ONE ACCOUNTS AGENT, 2026-10-28 ──────────────────────────────
+    // "MAKE IT VERY EASY.ASSIGN A AI TO THIS TO DO ALL THE JOBS" / "AN AGENT
+    // ONLY FOR QB,BOOKS,BANK". It adds no check; it runs the ones nobody ran.
+    { name: 'accounts: duplicates are reported off a stale snapshot again',
+      file: 'helpers/accountsAgent.js', suites: ['accounts-agent'],
+      find: "    } else if ((q.duplicates || []).length && !q.stale && !q.legacy) {",
+      to:   "    } else if ((q.duplicates || []).length) {" },
+    { name: 'accounts: a section that fails is swallowed, so a short email looks like good news',
+      file: 'helpers/accountsAgent.js', suites: ['accounts-agent'],
+      find: "    catch (e) { return { ok: false, error: String((e && e.message) || e), name }; }",
+      to:   "    catch (e) { return { ok: true, value: null }; }" },
+    // The property she judges it by. Nothing tested send() at first and this
+    // mutation survived every other assertion in the file.
+    { name: 'accounts: it emails every morning, clean or not',
+      file: 'helpers/accountsAgent.js', suites: ['accounts-agent'],
+      find: "    if (res.clean && !sendAlways) {",
+      to:   "    if (false) {" },
+    { name: 'accounts: the list arrives in a proportional font, losing its alignment',
+      file: 'helpers/accountsAgent.js', suites: ['accounts-agent'],
+      find: "    const bodyHtml = '<div style=\"font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;'",
+      to:   "    const bodyHtml = '<div style=\"'" },
+    { name: 'accounts: it stops naming which of two unpaid rows to delete',
+      file: 'helpers/qbDuplicates.js', suites: ['accounts-agent'],
+      find: "    if (unpaid.length === 2) {",
+      to:   "    if (false) {" },
+
     // ── JARVIS vs QUICKBOOKS PARITY, 2026-10-28 (#176) ───────────────
     // The owner's question is "does your system agree with the books we
     // already trust", and this report's answer is the one sentence he would
@@ -3186,30 +3217,41 @@ const MUTATIONS = [
       to:   "        const hit = qb.get(k) || (alt ? qb.get(alt) : null) || [...qb.values()].find((x) => { const n = norm(x.name); return n.length === k.length && n[0] === k[0] && n[n.length - 1] === k[k.length - 1]; });" },
 
     // ── QUICKBOOKS DUPLICATES, 2026-10-28 ────────────────────────────
+    // RE-POINTED the same day, at helpers/qbDuplicates.js. The signals were
+    // written inside scripts/qb-duplicates.js in the morning and extracted to
+    // the helper in the afternoon when the accounts agent needed them, which
+    // left SIX of these pointing at code that had moved — applied nowhere,
+    // reported as neither killed nor survived. I created six #204 instances
+    // with one refactor and found them only because the anchor check runs
+    // every time now. Extracting shared code without re-running it is how
+    // that list reached 225.
     // "Check for duplicates for 2026 bills and invoices in quickbook", then
     // "it should be a rolling date..from 01-01-2026 to rolling date".
     // Her live run on 2026-10-28 found a duplicate this tool had just called
     // clean: same reference, same amount, same containers, DIFFERENT TxnDate.
     // Signal 1 keyed on the date, so it landed with the reference reuses.
     { name: 'qbdup: a charge entered under two dates is no longer caught',
-      file: 'scripts/qb-duplicates.js', suites: ['qb-duplicates'],
+      file: 'helpers/qbDuplicates.js', suites: ['qb-duplicates'],
       find: "        hits.push({ why: 'SAME CHARGE, DIFFERENT DATES', rows: v });",
       to:   "        continue;" },
     { name: 'qbdup: blank line text becomes something to match two bills on',
-      file: 'scripts/qb-duplicates.js', suites: ['qb-duplicates'],
+      file: 'helpers/qbDuplicates.js', suites: ['qb-duplicates'],
       find: "    for (const [, v] of clusters(rows.filter((r) => doc(r) && textKey(r)),",
       to:   "    for (const [, v] of clusters(rows.filter((r) => doc(r))," },
     { name: 'qbdup: the containers are ignored, so a flat rate per load reads as a duplicate',
-      file: 'scripts/qb-duplicates.js', suites: ['qb-duplicates'],
+      file: 'helpers/qbDuplicates.js', suites: ['qb-duplicates'],
       find: "        (r) => `${party(r)}|${doc(r)}|${n2(r.TotalAmt)}|${textKey(r)}`)) {",
       to:   "        (r) => `${party(r)}|${doc(r)}|${n2(r.TotalAmt)}`)) {" },
+    // The arithmetic moved into helpers/qbDuplicates.overstatement() with the
+    // extraction, so the script no longer decides it. Re-pointed at the one
+    // place that does.
     { name: 'qbdup: a date-split duplicate stops counting toward the overstatement',
-      file: 'scripts/qb-duplicates.js', suites: ['qb-duplicates'],
-      find: "        if ((h.why === 'SAME LINES' && sameTotal) || h.why === 'SAME CHARGE, DIFFERENT DATES') {",
-      to:   "        if (h.why === 'SAME LINES' && sameTotal) {" },
+      file: 'helpers/qbDuplicates.js', suites: ['qb-duplicates'],
+      find: "    if ((hit.why === 'SAME LINES' && same) || hit.why === 'SAME CHARGE, DIFFERENT DATES') {",
+      to:   "    if (hit.why === 'SAME LINES' && same) {" },
 
     { name: 'qbdup: the reference is ignored, so two real freight loads read as one bill',
-      file: 'scripts/qb-duplicates.js', suites: ['qb-duplicates'],
+      file: 'helpers/qbDuplicates.js', suites: ['qb-duplicates'],
       find: "`${party(r)}|${r.TxnDate}|${lineKey(r)}|${doc(r)}`",
       to:   "`${party(r)}|${r.TxnDate}|${lineKey(r)}`" },
     // Re-pointed 2026-10-28: textKey() was added using the same filter line,
@@ -3218,12 +3260,18 @@ const MUTATIONS = [
     // The charge() body is included to make it unique again. Fourth #204
     // instance I have created and caught in the same week; the lesson is to
     // re-run the anchor check after adding any helper that reuses a line.
+    // Re-pointed TWICE in one day, which is the honest record: once this
+    // morning when textKey() made the find ambiguous, and again this
+    // afternoon when charge() moved into helpers/qbDuplicates.js with the
+    // extraction. The second miss got past my own anchor check because that
+    // check's regex only matched single-line find strings — the AUDIT caught
+    // it, which is what the #204 ratchet is for.
     { name: 'qbdup: QuickBooks own subtotal row is counted as a charge again',
-      file: 'scripts/qb-duplicates.js', suites: ['qb-duplicates'],
+      file: 'helpers/qbDuplicates.js', suites: ['qb-duplicates'],
       find: "const charge = (r) => (r.Line || [])\n    .filter((l) => l.DetailType !== 'SubTotalLineDetail' && l.Amount != null)",
       to:   "const charge = (r) => (r.Line || [])\n    .filter((l) => l.Amount != null)" },
     { name: 'qbdup: the subset signal goes, burying a 1,387 overcount inside a 21,317 bill',
-      file: 'scripts/qb-duplicates.js', suites: ['qb-duplicates'],
+      file: 'helpers/qbDuplicates.js', suites: ['qb-duplicates'],
       find: "        if (!charge(big).includes(n2(small.TotalAmt))) continue;",
       to:   "        continue;" },
     { name: 'qbdup: short data is no longer announced, so a third of a year reads clean',

@@ -55,7 +55,12 @@ const ROOT = path.join(__dirname, '..');
 // `loads(website): X` there is a `loads(app): X` with the IDENTICAL find
 // string, still alive and pointing at mobile-app/www, so the dashboard
 // candidate is the one the website check was always about.
-const BASELINE_DEAD = 76;
+// 76 -> 75 on 2026-10-28. One of the 76 was the bank-match screen's
+// dead-button guard, whose find string had gone stale when the button's class
+// became "btn solid"; re-pointed and verified to turn a named check red again.
+// The ratchet may only be lowered, which is why it is a number in the source
+// and not a tolerance.
+const BASELINE_DEAD = 75;
 // Matching MORE than once is the same disease: scripts/mutate.js refuses an
 // ambiguous find string, so those checks never run either. 7 of them, which
 // makes the real count of checks proving nothing 107, not 100.

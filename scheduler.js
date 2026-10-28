@@ -1589,6 +1589,32 @@ function start() {
         .catch(e => console.error('[SCHED] qb-snapshot:', e.message)), TZ);
     cron.schedule('30 6 * * *',   () => require('./helpers/integritySweepJob').run()
         .catch(e => console.error('[SCHED] integrity-sweep:', e)), TZ);
+    // ── 07:05 — ONE AGENT FOR QUICKBOOKS, BOOKS AND BANK ────────────────
+    // Apsara, 2026-10-28: "MAKE IT VERY EASY.ASSIGN A AI TO THIS TO DO ALL
+    // THE JOBS", then "AN AGENT ONLY FOR QB,BOOKS,BANK".
+    //
+    // It adds no check of its own. It reads what already exists and sends ONE
+    // message: the bank rows the 06:50 tick could not be certain about,
+    // helpers/booksAgent.js' per-company verdict, and the QuickBooks snapshot's
+    // freshness plus anything entered twice. TWO of those had no scheduled
+    // caller at all — booksAgent.js since 2026-10-15, and the duplicate finder
+    // since this morning. Both were written, tested, and run by nobody, which
+    // is the defect this file keeps being the fix for.
+    //
+    // Silent when clean, for the reason integritySweepJob states: a daily "all
+    // fine" is one she stops opening, and then the morning it says something
+    // she does not open that either.
+    //
+    // After 05:55 (snapshot) and 06:50 (bank tick) so it reports today's
+    // position, and before the 07:25 QuickBooks agent, which talks to Intuit
+    // and is a different question.
+    // 07:05, not 07:00: the log digest and the unrecorded-payments chase are
+    // both already on that minute, and three jobs starting together makes a
+    // slow morning look like a hung one.
+    cron.schedule('5 7 * * *',    () => require('./helpers/accountsAgent').send()
+        .then((r) => console.log(`[SCHED] accounts-agent: ${r.sent ? 'sent to ' + r.to
+            : 'not sent (' + r.why + ')'}`))
+        .catch(e => console.error('[SCHED] accounts-agent:', e.message)), TZ);
     // ── 07:00 — PAYMENTS THAT LEFT THE BANK AND WERE NEVER RECORDED ──────
     // Apsara, 2026-10-23: "They are forgetting to record the payment in
     // jarvis", and on whether to rely on reminders: catch it instead. Told
