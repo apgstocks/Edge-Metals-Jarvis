@@ -299,7 +299,7 @@ if (promoted) {
         // past it. Worth recording rather than quietly fixing: a search that
         // finds every instance of a SPELLING is not a search that finds every
         // instance of a BUG.
-        const text = (pendingFullReminder && pendingFullReminder(promoted)) || `You also have ${describePending(promoted.type)} waiting on this chat — go ahead and reply.`;
+        const text = (pendingFullReminder && pendingFullReminder(promoted)) || `You also have ${describePending(promoted.type)} waiting on this chat. Reply yes or no, or say "cancel" to drop it.`;
         await _send(chatId, `(Next up — this was queued behind what you just answered:)\n${text}`);
     } catch (e) { console.error('[ACTIONS] promote-queued notify failed:', e.message); }
 }

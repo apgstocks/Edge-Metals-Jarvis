@@ -3204,6 +3204,10 @@ const OPTIONAL_PENDINGS = new Set([
 ]);
 
 function pendingFullReminder(p) {
+    // Apsara, 2026-10-28, after "(Next up...) You also have a proforma waiting to be
+    // sent waiting on this chat - go ahead and reply." -> "How?". The generic text
+    // never said what to type. A proforma is answered yes or no.
+    if (p.type === 'confirm_proforma') return `(Still waiting: generate proforma ${(p.invNo || p.draft?.invNo || '').toString().trim() || 'invoice'} and email it to ${p.draft?.consignee || p.who || 'the buyer'}${p.subject ? ` — from "${p.subject}"` : ''}? Reply yes to send it, or no to drop it.)`;
     if (p.type === 'wizard_start') return '(Still waiting on this from earlier: any bookings need to go out to a trucker today? Reply yes or no — or "cancel" to dismiss this.)';
     if (p.type === 'wizard_await_port') return `(Still waiting: which port? ${(p.options || []).map((o, i) => `${i + 1}. ${o}`).join(', ')} — or "cancel" to dismiss.)`;
     if (p.type === 'wizard_await_booking') return `(Still waiting: which booking? ${(p.options || []).map((o, i) => `${i + 1}. ${o}`).join(', ')} — or "cancel" to dismiss.)`;

@@ -443,6 +443,22 @@ function bulkMailSignal(headers) {
 const TAX_ACCOUNTING_TOPIC = /\b(?:schedule\s+)?k-?1\b|\btax\s+(?:return|filing|form|document|prep)s?\b|\bform\s+(?:1065|1120s?|1099|w-?2|w-?9|5472)\b|\b1099\b|\boperating\s+profit\b|\bprofit\s+and\s+loss\b|\bbalance\s+sheet\b|\bfinancial\s+statements?\b|\bretained\s+earnings\b/i;
 function isTaxAccountingTopic(...parts) { return TAX_ACCOUNTING_TOPIC.test(parts.map((x) => String(x || '').slice(0, 1500)).join('\n')); }
 
+// Jarvis's OWN reports emailed to her ("Jarvis: 5 things to look at", the nightly
+// invoice register, the integrity sweep) arrive in her inbox from her own address
+// and read to the model like a colleague asking her something. Apsara, 2026-10-28,
+// WhatsApp: "1 email waiting on you: Apsara, Jarvis flagged 107 outbound loads with
+// no price and 74 bills missing details." Skipped only when ALL hold: sent from
+// her own mailbox or manager address, every recipient is one of those, and the
+// subject starts "Jarvis" or the opening lines name Jarvis. A note she writes to
+// herself without that is still read.
+function isJarvisSelfReport({ from, to, cc, subject, body, me, managerAddress } = {}) {
+    const own = new Set([me, managerAddress].map((x) => String(x || '').toLowerCase()).filter(Boolean));
+    if (!own.size || !own.has(senderKey(from || ''))) return false;
+    const rcpts = `${to || ''},${cc || ''}`.split(',').map((x) => senderKey(x)).filter(Boolean);
+    if (!rcpts.length || !rcpts.every((r) => own.has(r))) return false;
+    return /^\s*jarvis\b/i.test(subject || '') || /\bjarvis\b/i.test(String(body || '').slice(0, 300));
+}
+
 const ZIMEX_DOMAIN = /(^|\.)zimex[a-z]*\.[a-z.]+$/i;
 const BOOKING_WORD = /\bbook(?:ing|ed|ings)?\b/i;
 const BOOKING_REF = /\b(?:DALA|EBKG|HDMU|MEDU|MAEU|COSU|ONEY|HLCU|EGLV|SUDU|CMDU)\s?\d{6,12}\b/i;
@@ -4137,6 +4153,11 @@ async function run({ sendToManager, sendMessage: _sendMessage = null, dryRun = f
         const attachments = collectAttachmentNames(msg.payload || {}, pdfParts);
         const visible = extractLatestMessage(body || msg.snippet || '');
         if (!visible) { seen[ref.id] = new Date().toISOString(); continue; }
+        if (isJarvisSelfReport({ from, to: header(msg, 'To'), cc: header(msg, 'Cc'), subject, body: visible, me, managerAddress })) {
+            console.log(`[REPLYWATCH] skipping Jarvis's own report "${String(subject || '').slice(0, 50)}"`);
+            seen[ref.id] = new Date().toISOString();
+            continue;
+        }
 
         // ── WEIGHT-SHORTAGE CLAIMS (2026-09-26) ─────────────────────────────
         // Apsara: "it should read the mail with weight shortage detail and
@@ -5222,6 +5243,6 @@ async function run({ sendToManager, sendMessage: _sendMessage = null, dryRun = f
 module.exports = { groupChaseBySender, chaseGateOpen, markChaseSent, chaseDetailLines, chaseGroupLabel, CHASE_START_HOUR, CHASE_GAP_MS, run, senderKey, recordSenderEvent, senderHistoryLine, quoteAppearsIn, buildThreadLedger, threadMessageText, digestAudience, buildApprovalAsk, deliverDigestMessage, degenericiseSummary, resolveRelativeDates, isOwedItem, isBystanderItem, isColleagueItem, collectAttachmentNames, figureGap, parseMoneyFigure, addressing, newFence, defence, cleanLabel, normFigure, figureText, refreshSentIndex, sheWroteSince, MAX_ASSESS_ATTEMPTS, draftProformaForOrder, proformaDraftLines, buildPrompt, collectDeadlineReminders, buildDeadlineMessage, bulkMailSignal, FENCE, FENCE_END, buildDigest, buildChaseMessage, collectChaseUps, hasSheReplied, threadTail, threadMovedOn, closesLoopWithoutAsk, invoiceNumberIn, looksLikePaymentDemand, findPaymentEvidence, mutedReason, addMute, removeMute, activeMutes, MUTE_DAYS, extractLatestMessage, parseForward, stripTrailingSignature, senderLabel, assess, resolveDigestIndex, loadStore, saveStore, knownCounterpartyTest, importanceOf: importance.importanceOf, mergeMap, mergeList, mergePoRecord, laterOf, withSnapshot, poTracker, AGING_DAYS, RECHASE_DAYS, MAX_CHASES, NEVER_REPLY_PATTERNS,
     // Exposed for tests/integration.js — deadline ranking and matter grouping
     // are pure functions and the parts most worth asserting directly.
-    isZimexBookingMail, isTaxAccountingTopic,
+    isZimexBookingMail, isTaxAccountingTopic, isJarvisSelfReport,
     parseDeadline, daysUntilDeadline, applyDeadlineUrgency, deadlineIsShipmentDate, SHIPMENT_DATE, groupMatters, sameMatter,
     DIGEST_INDEX_TTL_MS };
