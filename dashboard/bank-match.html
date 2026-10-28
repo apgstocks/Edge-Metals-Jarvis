@@ -494,20 +494,144 @@ function allocTable(p) {
 /* Confirm posts to POST /api/sales-receipts — the route the receipts screen
    already uses. There is no second way to mark an invoice paid, so this form
    carries what addReceipt requires: a mode, and a bank when the mode has one. */
+/* ── WHICH COMBINATION, 2026-10-28 ─────────────────────────────────────
+   The withdrawal side got this today: she picks the record, not Jarvis. The
+   deposit side had the same dead end and it was worse, because a deposit
+   APPLIES money to invoices. renderRow displayed the rival combinations and
+   the only button recorded `proposals[0]`, so on a payment that fits two sets
+   of invoices equally she could read both and then close the wrong ones —
+   leaving the right invoice open and the wrong one settled.
+
+   A radio per combination. NOTHING is pre-selected when the row is ambiguous,
+   because that is the whole meaning of ambiguous: helpers/bankMatch.js
+   refuses to pick and the screen must not quietly pick for it. When the row
+   is NOT ambiguous there is a ranked best, so it starts selected and says so.
+
+   The bulk "Confirm all" path is deliberately untouched: sureOf() requires
+   !row.ambiguous, so every row it covers has exactly one combination. */
+/* ── EXACTLY THE COMBINATIONS THE CARD ALREADY OFFERS ──────────────────
+   The set is proposal 0 plus the ones AFTER it that the engine marked
+   `tied` — the same `slice(1).filter((p) => p.tied)` the rivals table uses.
+   My first version listed EVERY proposal, which would have put the weaker
+   explanations back on screen as equals: precisely the eight-identical-rows
+   complaint of 2026-10-27 ("Why so many matches with same amount"), rebuilt
+   as radio buttons. Caught before it ran, by reading how the card beside it
+   already filters rather than assuming.
+
+   The value is the ORIGINAL index, so what she picks maps back to the
+   proposal the server is told about. One offered combination means there is
+   nothing to choose, so no chooser at all. */
+function offeredProps(row) {
+  const ps = row.proposals || [];
+  if (!ps.length) return [];
+  return [{ q: ps[0], n: 0 }]
+    .concat(ps.slice(1).map((q, k) => ({ q, n: k + 1 })).filter((x) => x.q.tied));
+}
+
+function propChooser(row, i) {
+  const offered = offeredProps(row);
+  if (offered.length < 2) return '';
+  const weaker = (row.proposals || []).slice(1).filter((q) => !q.tied).length;
+  const shortOf = (q) => (q.allocations || []).reduce((t, a) => t + (a.shortfall || 0), 0);
+  return `<div class="alloc" data-propbox="${i}">
+    <div class="note" style="margin:0 0 6px">${row.ambiguous
+      ? 'These come to the same amount, so Jarvis will not choose between them. Say which invoices this paid.'
+      : 'Jarvis ranked the first of these best. Choose another if it is wrong.'}</div>
+    ${offered.map(({ q, n }) => `<label style="display:block;margin:4px 0">
+      <input type="radio" name="prop-${i}" data-prop="${i}" value="${n}"${(!row.ambiguous && n === 0) ? ' checked' : ''}>
+      ${esc((q.allocations || []).map((a) => String(a.label || '').split(' (')[0]).join(' + '))}
+      ${shortOf(q) > 0.005 ? `<span class="note" style="margin:0"> \u2014 leaves ${money(shortOf(q))} unpaid</span>` : ''}
+      ${(n === 0 && !row.ambiguous) ? '<span class="note" style="margin:0"> \u2014 Jarvis\u2019s pick</span>' : ''}
+    </label>`).join('')}
+    ${weaker ? `<div class="note" style="margin:6px 0 0">${weaker} weaker explanation${weaker === 1 ? '' : 's'}
+      ranked below these and ${weaker === 1 ? 'is' : 'are'} not offered as a choice.</div>` : ''}
+  </div>`;
+}
+
+/* ── THE SHORTFALL, OFF THE PROMPT AND ONTO THE SCREEN ─────────────────
+   This was `prompt('...Type "fee" ... or "discount"...')`. Typing anything
+   else aborted and nothing was recorded. The server is sound — it throws on a
+   shortfall with no valid reason, so no money ever vanished — but a money
+   decision that depends on spelling a word into a browser dialog is the thing
+   #139 took off the QuickBooks page, and it belongs off this one too.
+
+   Hidden until the CHOSEN combination actually leaves something unpaid, which
+   is why the radio handler shows and hides it rather than the markup. */
+function dedBox(row, i) {
+  const any = (row.proposals || []).some((q) =>
+    (q.allocations || []).reduce((t, a) => t + (a.shortfall || 0), 0) > 0.005);
+  if (!any) return '';
+  const h = row.claim_hint;
+  /* NOT class="card". A card inside a card made tests/bank-match-screen.js's
+     "one card per deposit" check red, and it was right to: the page counts
+     cards to know how many deposits there are, and the deck/pagination reads
+     the same class. A nested one is a second deposit as far as this page is
+     concerned. Plain div, same look. */
+  return `<div class="ded" data-dedbox="${i}" hidden style="margin:8px 0 0;padding:10px 12px;
+      border:1px solid var(--border-subtle);border-left:4px solid var(--amber-500);border-radius:8px">
+    <div class="note"><span data-dedlabel="${i}"></span> What happened to it? A bank charge is a cost to
+      Edge Metals; a discount means you agreed to take less, so it reduces what was earned. They are
+      not the same in the books, which is why Jarvis will not guess.
+      ${h ? `<br>It is close to the claim on ${esc(h.invoice_no)} (${money(h.claim_amount)}) — if the
+             customer deducted their claim, that is a discount.` : ''}</div>
+    <div class="acts">
+      <select data-ded="${i}">
+        <option value="">what was the shortfall…</option>
+        <option value="bank_charge">a bank charge took it in transit</option>
+        <option value="discount">a discount I agreed to</option>
+      </select>
+      <span class="note" style="margin:0">If they simply have not paid it, leave it outstanding instead
+        — cancel and record nothing.</span>
+    </div>
+  </div>`;
+}
+
 function confirmForm(row, p, i) {
   const d = STATE.data;
   const modes = d.modes || ['Wire'];
   const banks = d.banks || [];
   const guess = row.deposit.bank_guess;
-  return `<div class="acts">
+  /* Ambiguous and nothing chosen yet, so there is nothing to confirm. The
+     radio handler enables it. A button that looks pressable and is refused is
+     how she stops trusting the screen. */
+  const locked = !!row.ambiguous;
+  return `${propChooser(row, i)}${dedBox(row, i)}
+  <div class="acts">
     <select data-mode="${i}">${modes.map((m) => `<option${m === 'Wire' ? ' selected' : ''}>${esc(m)}</option>`).join('')}</select>
     <select data-bank="${i}">
       <option value="">which account?</option>
       ${banks.map((b) => `<option${b === guess ? ' selected' : ''}>${esc(b)}</option>`).join('')}
     </select>
-    <button class="btn solid" data-confirm="${i}">Confirm — record this receipt</button>
+    <button class="btn solid" data-confirm="${i}"${locked ? ' disabled' : ''}>Confirm — record this receipt</button>
     <button class="btn warn" data-exclude="${esc(row.deposit.id)}">Not a customer payment</button>
   </div>`;
+}
+
+/* Shown, hidden and labelled from the chosen combination — by direct DOM
+   edits, not a re-render, because re-rendering the list would collapse the
+   card she is working in. */
+function paintDed(card, row, i) {
+  const box = card.querySelector(`[data-dedbox="${i}"]`);
+  const n = chosenProp(card, row);
+  const q = (row.proposals || [])[n];
+  const short = q ? (q.allocations || []).reduce((t, a) => t + (a.shortfall || 0), 0) : 0;
+  const btn = card.querySelector(`[data-confirm="${i}"]`);
+  if (btn) btn.disabled = (n < 0);
+  if (!box) return;
+  box.hidden = !(n >= 0 && short > 0.005);
+  const lbl = box.querySelector(`[data-dedlabel="${i}"]`);
+  if (lbl) lbl.textContent = `This deposit is ${money(short)} short of those invoices.`;
+  if (box.hidden) { const sel = box.querySelector(`[data-ded="${i}"]`); if (sel) sel.value = ''; }
+}
+
+/* Which combination is selected. No radios means one combination, so index 0;
+   radios with none checked means she has not chosen and -1 says so, rather
+   than falling back to 0 and silently reinstating the bug this fixes. */
+function chosenProp(card, row) {
+  const radios = card ? card.querySelectorAll('[data-prop]') : [];
+  if (!radios.length) return (row.proposals || []).length ? 0 : -1;
+  for (const r of radios) if (r.checked) return Number(r.value);
+  return -1;
 }
 
 /* ── the claim hint ─────────────────────────────────────────────────────
@@ -1819,6 +1943,17 @@ document.addEventListener('change', (ev) => {
      Caught by listing which events this page actually listens for before
      assuming. Intuit's own Find Match help is why they exist at all: a
      payment you cannot see means the date range is too narrow. */
+  /* A combination radio. 'change', not 'click' — the same lesson as the
+     picker's date boxes earlier today. Repainted in place so the open card
+     does not collapse under her. */
+  const pr = ev.target.closest && ev.target.closest('[data-prop]');
+  if (pr) {
+    const i = Number(pr.dataset.prop);
+    const row = (STATE.data.rows || [])[i];
+    const card = pr.closest('.card');
+    if (row && card) paintDed(card, row, i);
+    return;
+  }
   const pf = ev.target.closest && ev.target.closest('[data-pickfrom], [data-pickto], [data-pickq]');
   if (pf) {
     const id = pf.dataset.pickfrom || pf.dataset.pickto || pf.dataset.pickq;
@@ -2312,9 +2447,19 @@ document.addEventListener('click', async (ev) => {
   if (t.dataset.confirm != null) {
     const i = Number(t.dataset.confirm);
     const row = (STATE.data.rows || [])[i];
-    const p = (row.proposals || [])[0];
-    if (!row || !p) return;
+    if (!row) return;
     const card = t.closest('.card');
+    /* ── HER COMBINATION, NOT proposals[0] ───────────────────────────────
+       This read `(row.proposals || [])[0]` and nothing else, so on an
+       ambiguous deposit — several sets of invoices coming to the same amount,
+       which bankMatch.js deliberately refuses to choose between — the screen
+       showed her the rivals and this button recorded the FIRST one anyway.
+       The money went somewhere plausible and the invoice she meant stayed
+       open. chosenProp returns -1 when she has not chosen, so nothing is
+       recorded rather than something arbitrary. */
+    const n = chosenProp(card, row);
+    const p = (row.proposals || [])[n];
+    if (n < 0 || !p) return toast('Say which invoices this paid first', 'bad');
     const mode = (card.querySelector(`[data-mode="${i}"]`) || {}).value || '';
     const bank = (card.querySelector(`[data-bank="${i}"]`) || {}).value || '';
 
@@ -2322,15 +2467,21 @@ document.addEventListener('click', async (ev) => {
        them apart because a bank charge is a cost to Edge Metals and a
        discount reduces what was earned. If there is one, she says which —
        and if it looks like her customer's claim, the question says so. */
+    /* ── THE SHORTFALL, FROM THE SCREEN ─────────────────────────────────
+       Was a prompt() asking her to TYPE "fee" or "discount"; anything else
+       aborted and nothing was recorded. Now a select, so the two options are
+       the only two things she can say. helpers/salesReceipts.js throws on a
+       shortfall with no valid reason either way — "exactly the vanishing $25
+       the whole file exists to prevent" — so this never lost money; it lost
+       her time and her trust in the button. */
     const short = p.allocations.reduce((s, a) => s + (a.shortfall || 0), 0);
     let reason = null;
     if (short > 0.005) {
-      const h = row.claim_hint;
-      const hint = h ? `\n\nIt is close to the claim on ${h.invoice_no} (${money(h.claim_amount)}) — if the customer deducted their claim, that is a "discount".` : '';
-      const ans = prompt(`This deposit is ${money(short)} short of the invoice total.\n\nType "fee" if the bank took it in transit, or "discount" if you agreed to take less.${hint}`);
-      if (ans === null) return;
-      reason = /^f/i.test(ans) ? 'bank_charge' : (/^d/i.test(ans) ? 'discount' : null);
-      if (!reason) return toast('Not recorded — a shortfall has to be a fee or a discount', 'bad');
+      reason = ((card.querySelector(`[data-ded="${i}"]`) || {}).value || '').trim() || null;
+      if (!reason) {
+        paintDed(card, row, i);
+        return toast(`Say what the ${money(short)} shortfall was — a bank charge or a discount`, 'bad');
+      }
     }
 
     t.disabled = true; t.textContent = 'Recording…';

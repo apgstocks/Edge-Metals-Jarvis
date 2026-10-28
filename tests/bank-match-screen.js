@@ -323,6 +323,16 @@ let dom, w, doc;
 // salesReceipts.js keeps bank_charge and discount apart because one is a
 // cost to Edge Metals and the other reduces what was earned, and conflating
 // them flatters the margin on every short payment. So the screen must ask.
+//
+// ── 2026-10-28: IT ASKS ON THE SCREEN NOW, NOT IN A prompt() ─────────────
+// It used to ask through window.prompt and require her to TYPE "fee" or
+// "discount"; anything else aborted and nothing was recorded. This section
+// drove it by stubbing w.prompt, so when the prompt went the section went red
+// — which is the test doing exactly its job. Rewritten to drive the select.
+//
+// The PROPERTY is unchanged and is what matters: the two answers must produce
+// two different reasons, and no answer must produce no receipt. Only the
+// control changed.
 {
     section('G — 30 dollars short');
 
@@ -330,11 +340,21 @@ let dom, w, doc;
     const card = cardFor(doc, 'WIRE IN SHORTPAY');
     ck('the shortfall is shown on the row', /short \$30\.00/.test(card.textContent), card.textContent.slice(0, 300));
 
-    w.prompt = () => 'fee';
+    // No browser dialog is involved any more. If the page reaches for one,
+    // this throws rather than silently accepting a typed answer again.
+    w.prompt = () => { throw new Error('the shortfall must be asked on the screen, not in a prompt()'); };
+
+    const sel = card.querySelector('[data-ded]');
+    ck('  and the question is a control on the card, with two options and no default',
+       !!sel && sel.value === ''
+       && [...sel.options].map((o) => o.value).join(',') === ',bank_charge,discount',
+       sel ? [...sel.options].map((o) => o.value).join(',') : 'no [data-ded] on the card');
+
+    sel.value = 'bank_charge';
     card.querySelector('[data-confirm]').click();
     await settle();
     let req = posted.find((p) => String(p.url).startsWith('/api/sales-receipts'));
-    ck('answering "fee" records a bank charge',
+    ck('choosing "a bank charge" records a bank charge',
        req && req.body.allocations[0].deduction_amount === 30
        && req.body.allocations[0].deduction_reason === 'bank_charge',
        JSON.stringify(req && req.body.allocations));
@@ -345,23 +365,99 @@ let dom, w, doc;
     // bank_charge the question would be theatre.
     posted.length = 0;
     const dom2 = makeDom(MATCH); await settle();
-    dom2.window.prompt = () => 'discount';
-    cardFor(dom2.window.document, 'WIRE IN SHORTPAY').querySelector('[data-confirm]').click();
+    const card2 = cardFor(dom2.window.document, 'WIRE IN SHORTPAY');
+    card2.querySelector('[data-ded]').value = 'discount';
+    card2.querySelector('[data-confirm]').click();
     await settle();
     req = posted.find((p) => String(p.url).startsWith('/api/sales-receipts'));
-    ck('answering "discount" records a discount instead',
+    ck('choosing "a discount" records a discount instead',
        req && req.body.allocations[0].deduction_reason === 'discount',
        JSON.stringify(req && req.body.allocations));
 
-    // And refusing to answer must not post a half-classified receipt.
+    // And leaving it unanswered must not post a half-classified receipt.
+    // Previously this was "cancelling the prompt"; the shape is the same and
+    // so is the rule — nothing is recorded until she has said which it was.
     posted.length = 0;
     const dom3 = makeDom(MATCH); await settle();
-    dom3.window.prompt = () => null;
-    cardFor(dom3.window.document, 'WIRE IN SHORTPAY').querySelector('[data-confirm]').click();
+    const card3 = cardFor(dom3.window.document, 'WIRE IN SHORTPAY');
+    ck('the select starts empty, so nothing is pre-answered for her',
+       card3.querySelector('[data-ded]').value === '');
+    card3.querySelector('[data-confirm]').click();
     await settle();
-    ck('cancelling the question records nothing at all',
+    ck('leaving the question unanswered records nothing at all',
        !posted.some((p) => String(p.url).startsWith('/api/sales-receipts')),
        JSON.stringify(posted.map((p) => p.url)));
+}
+
+// ── G2 — SHE PICKS WHICH INVOICES, NOT proposals[0] ──────────────────────
+// Apsara got this on the WITHDRAWAL side on 2026-10-27 ("if i want to match
+// some other bil aganst this payment, there is no option right now na"). The
+// deposit side had the identical dead end and it mattered more, because a
+// deposit APPLIES money to invoices.
+//
+// TX-3 is the ambiguous row: 12,000 that could pay EM-2001 or EM-2002, which
+// helpers/bankMatch.js deliberately refuses to choose between. renderRow
+// DISPLAYED both and the confirm handler read `(row.proposals || [])[0]` — so
+// she could read the two, press the only button, and settle EM-2001 while the
+// invoice she meant stayed open. The money looked recorded and the AR was
+// wrong in two places at once.
+{
+    section('G2 — which invoices this paid');
+
+    posted.length = 0;
+    const amb = cardFor(doc, 'WIRE IN TWINS LLC');
+    const radios = [...amb.querySelectorAll('[data-prop]')];
+    ck('an ambiguous deposit offers a choice of combinations',
+       radios.length === 2, `${radios.length} radio(s) — expected one per tied combination`);
+    // THE ONE THAT MATTERS MOST. Her complaint of 2026-10-27 was eight
+    // identical-looking rows; the weaker explanation is COUNTED, never
+    // offered. A chooser listing all three would rebuild that bug as radios.
+    ck('  and offers only the TIED ones — the weaker explanation is not a choice',
+       !radios.some((r) => r.value === '2'),
+       JSON.stringify(radios.map((r) => r.value)) + ' — EM-9999 scored 0.2 and is not tied');
+    ck('  it says so rather than hiding it', /1 weaker explanation/.test(amb.textContent),
+       amb.textContent.slice(0, 400));
+    ck('  NOTHING is pre-selected, because ambiguous means Jarvis will not pick',
+       !radios.some((r) => r.checked), JSON.stringify(radios.map((r) => r.checked)));
+
+    const btn = amb.querySelector('[data-confirm]');
+    ck('  and Confirm is disabled until she chooses', btn.disabled === true);
+
+    // Pressing it anyway must record nothing. The button is disabled, so this
+    // is belt and braces on the handler itself: chosenProp returns -1 and the
+    // handler refuses, rather than falling back to proposals[0].
+    btn.disabled = false;
+    btn.click();
+    await settle();
+    ck('  pressing it with nothing chosen records NOTHING',
+       !posted.some((p) => String(p.url).startsWith('/api/sales-receipts')),
+       JSON.stringify(posted.map((p) => p.url)));
+
+    // Now choose the SECOND combination — the one Jarvis did not rank first.
+    // If this records EM-2001, the bug is still there.
+    posted.length = 0;
+    const second = radios.find((r) => r.value === '1');
+    second.checked = true;
+    second.dispatchEvent(new w.Event('change', { bubbles: true }));
+    await settle();
+    amb.querySelector('[data-confirm]').click();
+    await settle();
+    const req = posted.find((p) => String(p.url).startsWith('/api/sales-receipts'));
+    ck('choosing the second combination records THAT one',
+       req && req.body.allocations.length === 1 && req.body.allocations[0].sale_id === 'T2',
+       JSON.stringify(req && req.body.allocations));
+    ck('  not Jarvis’s first pick',
+       req && req.body.allocations[0].sale_id !== 'T1',
+       'recording T1 after she chose T2 is the whole bug');
+
+    // An unambiguous row with one combination must be untouched: no chooser,
+    // and Confirm live immediately. The bulk "Confirm all" path depends on
+    // exactly these rows and was deliberately left alone.
+    const sure = cardFor(doc, 'WIRE IN CARLOS G & C');
+    ck('a row with one combination has no chooser at all',
+       sure.querySelectorAll('[data-prop]').length === 0);
+    ck('  and its Confirm is live without choosing anything',
+       sure.querySelector('[data-confirm]').disabled === false);
 }
 
 // ── H — EXCLUDING ASKS WHY ────────────────────────────────────────────────

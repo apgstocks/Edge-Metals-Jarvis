@@ -3162,6 +3162,41 @@ const MUTATIONS = [
       find: "    renderMatched();\n    renderBooked();",
       to:   "    renderBooked();" },
 
+    // ── MONEY IN: SHE PICKS THE COMBINATION, 2026-10-28 (#238) ───────
+    // The deposit side had the identical dead end to the withdrawal side, and
+    // worse consequences: a deposit APPLIES money to invoices, so recording
+    // proposals[0] on an ambiguous row settled an invoice she had not chosen
+    // and left the one she meant open. Two wrong AR figures from one press.
+    { name: 'deposit: the confirm button goes back to recording Jarvis\u2019s first pick',
+      file: 'dashboard/bank-match.html', suites: ['bank-match-screen'],
+      find: "    const n = chosenProp(card, row);",
+      to:   "    const n = 0;" },
+    { name: 'deposit: no choice made falls back to the first pick instead of refusing',
+      file: 'dashboard/bank-match.html', suites: ['bank-match-screen'],
+      find: "  for (const r of radios) if (r.checked) return Number(r.value);\n  return -1;",
+      to:   "  for (const r of radios) if (r.checked) return Number(r.value);\n  return 0;" },
+    // Her 2026-10-27 complaint was eight identical-looking rows. Offering the
+    // weaker explanations as radios would rebuild exactly that.
+    { name: 'deposit: the weaker explanations are offered as equal choices again',
+      file: 'dashboard/bank-match.html', suites: ['bank-match-screen'],
+      find: "    .concat(ps.slice(1).map((q, k) => ({ q, n: k + 1 })).filter((x) => x.q.tied));",
+      to:   "    .concat(ps.slice(1).map((q, k) => ({ q, n: k + 1 })));" },
+    { name: 'deposit: an ambiguous row quietly pre-selects one for her',
+      file: 'dashboard/bank-match.html', suites: ['bank-match-screen'],
+      find: "value=\"${n}\"${(!row.ambiguous && n === 0) ? ' checked' : ''}>",
+      to:   "value=\"${n}\"${(n === 0) ? ' checked' : ''}>" },
+    { name: 'deposit: Confirm is pressable before she has chosen anything',
+      file: 'dashboard/bank-match.html', suites: ['bank-match-screen'],
+      find: "  const locked = !!row.ambiguous;",
+      to:   "  const locked = false;" },
+    // The shortfall question, moved off window.prompt (#239). The page must
+    // not reach for a browser dialog for a money decision again; the test
+    // throws if it does.
+    { name: 'deposit: the shortfall reason is read from nowhere, so a short payment posts unclassified',
+      file: 'dashboard/bank-match.html', suites: ['bank-match-screen'],
+      find: "      reason = ((card.querySelector(`[data-ded=\"${i}\"]`) || {}).value || '').trim() || null;",
+      to:   "      reason = 'bank_charge';" },
+
     // ── UNMATCH, 2026-10-27 — "for matched things there should be a
     //    unmatch option" (#234) ──────────────────────────────────────────
     // Each of these was run and each one turns a NAMED check red. The two
