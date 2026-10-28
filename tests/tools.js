@@ -220,6 +220,26 @@ section('E — the safety line did NOT move');
         ck('  but a WIRE with no bank still says so',
            ((w.warnings || []).filter((x) => /No bank recorded/i.test(x))).length === 1,
            `warned: ${JSON.stringify(w.warnings)}`);
+
+        // ── AND THE SAME RULE ON THE PREPAYMENT CARD (2026-10-28) ────────
+        // record_prepayment carries this warning on a line byte-identical to
+        // record_payment's. The mutation above matched BOTH, so the harness
+        // refused it and neither was guarded; split in two, this half then
+        // SURVIVED because nothing had ever asked the prepayment card.
+        //
+        // It is the same path for the same reason — she records an advance by
+        // talking, and there is no dropdown here either — so a Zelle advance
+        // must not be told off for a bank it cannot be given.
+        const zp = await tools.buildWrite('record_prepayment',
+            { seller: 'Zelle Advance Co', amount: 50, mode: 'Zelle' });
+        ck('  a Zelle ADVANCE is not nagged either',
+           ((zp.warnings || []).filter((x) => /No bank recorded/i.test(x))).length === 0,
+           `warned: ${JSON.stringify(zp.warnings)}`);
+        const wp = await tools.buildWrite('record_prepayment',
+            { seller: 'Wire Advance Co', amount: 50, mode: 'Wire', paid_via: 'Edge Yard' });
+        ck('    but a WIRE advance with no bank still says so',
+           ((wp.warnings || []).filter((x) => /No bank recorded/i.test(x))).length === 1,
+           `warned: ${JSON.stringify(wp.warnings)} — "never warn" is the same bug wearing the fix`);
     }
 
     // ── REFUSED AT PROPOSE, NOT AT RUN ───────────────────────────────────

@@ -471,16 +471,49 @@ section('G2 — the party pickers: suppliers and customers she has traded with')
         // CONTAMINATION branch — so gutting the sorted one still matched and
         // the mutation SURVIVED. A check that can be satisfied by a different
         // branch is not testing this branch.
-        const sortedSubmit = HTML2.slice(
-            HTML2.indexOf("else if (btn.dataset.kind === 'sorted')"),
-            HTML2.indexOf('else Object.assign(body, {'));
+        //
+        // ── AND IT WENT UNSCOPED AGAIN, SILENTLY (2026-10-28) ────────────
+        // The end anchor was the chain's bare `else Object.assign(body, {`.
+        // That bare else is gone — it became `else if (... === 'grade')` when
+        // the catch-all was removed — so indexOf returned -1 and
+        // slice(start, -1) ran to the END OF THE FILE. The scope comment above
+        // was still true as intent and false as code, and the length check
+        // below passed happily on a scope of 40,000 characters. Proof: the
+        // measured_by mutation SURVIVED again.
+        //
+        // Now bounded by the NEXT branch rather than by the end of the chain,
+        // with the upper bound asserted — a scope that has quietly swallowed
+        // its neighbours is the failure this must report, not absorb.
+        const branchOf = (kind) => {
+            const at = HTML2.indexOf(`btn.dataset.kind === '${kind}') Object.assign(body, {`);
+            if (at < 0) return null;
+            const rest = HTML2.slice(at + 30);
+            const nxt = rest.indexOf("btn.dataset.kind === '");
+            return nxt < 0 ? rest : rest.slice(0, nxt);
+        };
+        const sortedSubmit = branchOf('sorted');
         ck('  the sorted branch exists to scope this check',
-           sortedSubmit.length > 40 && sortedSubmit.includes('sorted_lines'),
+           !!sortedSubmit && sortedSubmit.includes('sorted_lines'),
            'could not isolate the sorted submit branch — the checks below prove nothing');
-        ck('  the answer is SENT with the assessment', /measured_by: pk\.measured_by,/.test(sortedSubmit),
+        ck('    and the scope stops at the next branch, not at the end of the file',
+           !!sortedSubmit && sortedSubmit.length < 1500 && !/damage_lines/.test(sortedSubmit),
+           `scope is ${sortedSubmit && sortedSubmit.length} chars — an over-wide scope lets a sibling satisfy these checks`);
+        ck('  the answer is SENT with the assessment', /measured_by: pk\.measured_by,/.test(sortedSubmit || ''),
            'the field exists on the record; without this the pane collects it and drops it');
         ck('  along with the price and the lines',
-           /paid_price: numOf/.test(sortedSubmit) && /sorted_lines: readSortedLines/.test(sortedSubmit));
+           /paid_price: numOf/.test(sortedSubmit || '') && /sorted_lines: readSortedLines/.test(sortedSubmit || ''));
+
+        // The damage pane reads the SAME controls and posts through the same
+        // handler, so it needs the same check on its own scope — mutating one
+        // branch must not be covered by the other.
+        const damageSubmit = branchOf('damage');
+        ck('  the damage branch is isolated too',
+           !!damageSubmit && damageSubmit.includes('damage_lines')
+             && damageSubmit.length < 1500 && !/sorted_lines/.test(damageSubmit),
+           `scope is ${damageSubmit && damageSubmit.length} chars`);
+        ck('    and it sends the evidence as well',
+           /measured_by: pk\.measured_by,/.test(damageSubmit || ''),
+           'damage claims go to the same supplier and need the same "how do you know"');
 
         // Two chip rows now mirror ONE value. Clicking in one must light the
         // other, or the row she is not looking at shows a different answer

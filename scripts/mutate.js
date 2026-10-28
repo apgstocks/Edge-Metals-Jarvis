@@ -761,10 +761,23 @@ const MUTATIONS = [
       file: 'helpers/payments.js', suites: ['bills-sales'],
       find: "    const touchesPettyCash = mode === 'Cash' && !EDGE_METALS_KINDS.has(loadKind);\n    const cashComesIn = loadKind === 'sale';",
       to:   "    const touchesPettyCash = mode === 'Cash';\n    const cashComesIn = loadKind === 'sale';" },
-    { name: 'metals cash drains the EDGE YARD petty cash box (a PREPAYMENT)',
-      file: 'helpers/payments.js', suites: ['bills-sales'],
-      find: "    const paidVia = resolvePaidVia(loadKind, mode, input.paid_via, bank);\n\n    const touchesPettyCash = mode === 'Cash' && !EDGE_METALS_KINDS.has(loadKind);",
-      to:   "    const paidVia = resolvePaidVia(loadKind, mode, input.paid_via, bank);\n\n    const touchesPettyCash = mode === 'Cash';" },
+    // ── THE PREPAYMENT HALF IS UNKILLABLE, SO IT IS NOT A MUTATION ───────
+    // My first attempt here dropped `&& !EDGE_METALS_KINDS.has(loadKind)` from
+    // addPrepayment too, and it SURVIVED. Not a missing test: addPrepayment
+    // pins `const loadKind = 'purchase';` and EDGE_METALS_KINDS is
+    // {bill, sale_cost, metals_trucking}, so the term is always true and
+    // removing it changes nothing an assertion could see. A mutation that
+    // cannot alter behaviour proves as little as a check that cannot go red.
+    //
+    // It is vacuous ON PURPOSE — the header above addPrepayment says the kind
+    // is stamped explicitly so every downstream allowlist reads the same
+    // answer — so the term stays and the mutation goes. What IS killable is
+    // the pinned kind itself, which is the thing that actually decides whether
+    // her cash drawer moves. (Mine, not hers — 2026-10-28.)
+    { name: 'prepay: the pinned load kind becomes a bill, so cash never leaves the drawer',
+      file: 'helpers/payments.js', suites: ['supplier-prepayment'],
+      find: "    const loadKind = 'purchase';",
+      to:   "    const loadKind = 'bill';" },
     // ── TWO MUTATIONS TRIED AND DELIBERATELY NOT KEPT, 2026-09-10 ────────
     // Removing the `&& load_kind !== 'bill'` guard from either delete path in
     // helpers/payments.js SURVIVES, and it should: pettyCash.reverseForPayment
@@ -1846,8 +1859,11 @@ const MUTATIONS = [
       file: 'helpers/bankRelink.js', suites: ['bank-relink'],
       find: '        return rows;\n    }, { strict: true });',
       to:   '        return rows;\n    });' },
+    // bank-dedupe, NOT bank-relink: the de-dupe half of this file has its own
+    // suite, and naming the wrong one is how a mutation SURVIVES while the
+    // guard that would kill it sits green in another file.
     { name: 'relink: the DE-DUPE refusal is swallowed, so a refused removal reports success',
-      file: 'helpers/bankRelink.js', suites: ['bank-relink'],
+      file: 'helpers/bankRelink.js', suites: ['bank-dedupe'],
       find: '        return rows.filter((r) => !(r && ids.has(r.id)));\n    }, { strict: true });',
       to:   '        return rows.filter((r) => !(r && ids.has(r.id)));\n    });' },
     // Her own work is the entire reason to re-key rather than re-insert.
@@ -5140,8 +5156,11 @@ const MUTATIONS = [
       // reports this as NOT APPLIED, which is the intended failure mode.
       find: "      // opens.\n      const tab = window.open('', '_blank');",
       to:   '      // opens.\n      const tab = null;' },
+    // packing-list, NOT bol: tests/bol.js scopes its ordering check to
+    // bolSubmit, so it can never see this one. Section E of
+    // tests/packing-list.js is the guard.
     { name: 'pkprev: the packing list opens the tab AFTER the fetch, so the blocker eats it',
-      file: 'dashboard/documents.html', suites: ['bol'],
+      file: 'dashboard/documents.html', suites: ['packing-list'],
       find: "      const tab = window.open('', '_blank');\n      const res = await fetch('/api/packing-lists/generate?preview=1', {",
       to:   "      const tab = null;\n      const res = await fetch('/api/packing-lists/generate?preview=1', {" },
     { name: 'bolprev: a blocked tab is not noticed, so nothing happens at all',

@@ -1899,6 +1899,41 @@ section('S2. the invoice packing list keeps its shape');
     }
 }
 
+// ══════════════════════════════════════════════════════════════════════════
+section('E — the preview tab is claimed while the click is still live');
+// Her words about the BOL, 2026-09: "in bol, preview not opened". The cause
+// was ordering, not permissions: window.open is only allowed while the
+// browser still considers itself inside the click that triggered it, and
+// awaiting the fetch first spends that gesture. The popup blocker then eats
+// the tab silently, so the button looks dead.
+//
+// pkGenerate has the SAME shape and was copied from the fix, but nothing
+// tested it: the mutation that reorders it lived in tests/bol.js, whose
+// scope is bolSubmit, so turning the packing-list preview back into the
+// broken version SURVIVED. Found 2026-10-28 by splitting a mutation whose
+// find string matched both previews and therefore ran on neither.
+//
+// Comments stripped and bounded at the function, both for the reason
+// tests/bol.js records: an unbounded window runs into neighbouring code that
+// legitimately uses window.open, and the prose explaining the rule otherwise
+// satisfies the check that enforces it.
+{
+    const from = DOCS.indexOf('async function pkGenerate');
+    const end = DOCS.indexOf('\n}', from);
+    const fn = from < 0 ? '' : DOCS.slice(from, end === -1 ? from + 4000 : end)
+        .replace(/\/\/[^\n]*/g, '');
+    ck('pkGenerate is where the preview is built', !!fn && fn.includes('preview=1'),
+       'could not isolate pkGenerate — the checks below prove nothing');
+    const opened = fn.indexOf("window.open('', '_blank')");
+    const fetched = fn.indexOf('/api/packing-lists/generate?preview=1');
+    ck('  the tab is opened BEFORE the fetch, while the click is still live',
+       opened !== -1 && fetched !== -1 && opened < fetched,
+       `open at ${opened}, fetch at ${fetched} — opening it afterwards is what a popup blocker swallows, silently`);
+    ck('  and a blocked tab still gets her the document',
+       /if \(tab\) tab\.location = url; else window\.location = url;/.test(fn),
+       'no fallback means the preview is lost with no message at all');
+}
+
 console.log(`\n  ${pass} passed, ${fail} failed`);
 if (fail) { console.log('\n  FAILED:\n' + failures.map((f) => '    - ' + f).join('\n')); process.exit(1); }
 
