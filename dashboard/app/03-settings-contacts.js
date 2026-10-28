@@ -83,6 +83,11 @@ function renderSettings(s) {
             <input id="s_email_watcher_enabled" type="checkbox" ${s.gmail_watch_enabled ? 'checked' : ''} style="width:16px; height:16px; margin:0;">
             Email watcher enabled
           </label>
+          <label style="display:flex; align-items:flex-start; gap:10px; font-size:13px; color:var(--text-strong); cursor:pointer; margin-bottom:4px;">
+            <input id="s_zimex_booking_hide_critical" type="checkbox" ${s.zimex_booking_hide_critical ? 'checked' : ''} style="width:16px; height:16px; margin:2px 0 0;">
+            <span>Also hide claims and moved cutoffs in Zimex booking mail</span>
+          </label>
+          <div style="font-size:12px; color:var(--text-muted); margin:0 0 12px 26px;">Zimex booking mail never asks you for a reply (Jarvis records the booking itself). Off (default): a claim or a changed cutoff in that mail still alerts you. On: those are hidden too.</div>
           <div style="font-family:var(--font-mono); font-size:11.5px; color:var(--text-faint);">
             Last active: ${s.gmail_watcher_last_run
               ? esc(new Date(s.gmail_watcher_last_run).toLocaleString('en-US', { timeZone: 'America/Los_Angeles', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })) + ' (LA time)'
@@ -188,6 +193,7 @@ function renderSettings(s) {
           email: $('s_acc_email').value.trim(),
         },
         gmail_watch_enabled: $('s_email_watcher_enabled').checked,
+        zimex_booking_hide_critical: $('s_zimex_booking_hide_critical').checked,
         email_cc: $('s_email_cc').value.trim(), email_bcc: $('s_email_bcc').value.trim(),
         yard_report_emails: $('s_yard_emails').value.trim(),
         yard_whatsapp_group_id: $('s_yard_group').value.trim(),

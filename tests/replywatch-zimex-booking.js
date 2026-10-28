@@ -15,7 +15,7 @@ ck('Zimex mail NOT about a booking is untouched', !f({ from: 'export@zimexglt.co
 ck('another sender\'s booking mail is untouched', !f({ from: 'ops@hapag.example.com', subject: 'Booking confirmation', body: 'DALA20928700' }));
 ck('look-alike domain is untouched', !f({ from: 'a@notzimex.evil.com', subject: 'Booking', body: '' }));
 ck('no args does not throw', f() === false);
-ck('a critical signal still gets through the suppression', /isZimexBookingMail\(\{ from, subject, body: visible \}\) && imp\.level !== 'critical'/.test(src));
+ck('a critical signal still gets through the suppression', /isZimexBookingMail\(\{ from, subject, body: visible \}\) && \(imp\.level !== 'critical' \|\| hideZimexCritical\)/.test(src));
 ck('the suppression sits in front of the flag gate', /if \(!zimexBooking && \(\(a\.needs_reply/.test(src));
 try { fs.rmSync(scratch, { recursive: true, force: true }); } catch (e) { /* ok */ }
 console.log(`\n${pass} passed, ${fail} failed`); process.exit(fail ? 1 : 0);

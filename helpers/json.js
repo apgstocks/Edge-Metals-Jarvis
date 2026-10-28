@@ -295,6 +295,10 @@ function loadSettings() {
         // pattern as yard_report_enabled above. Falls back to that env var
         // so existing deployments keep their current behavior on upgrade.
         gmail_watch_enabled: cfg.GMAIL_WATCH_ENABLED,
+        // Zimex booking mail never produces a reply item (Jarvis records bookings
+        // itself - Apsara 2026-10-28). false (default) = a claim or moved cutoff in
+        // it still alerts; true = hidden too. Switch: Settings > Email watcher.
+        zimex_booking_hide_critical: false,
         // Stamped by emailWatcher.js every time it actually starts a poll
         // (not just when the 15-min cron tick fires) — per Apsara: "I want
         // to know at what time gmail watcher was active last." null until

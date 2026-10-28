@@ -139,6 +139,12 @@ try {
         // are orders. This flag is cheap and only says "this looks like one" —
         // the real extraction (helpers/proformaFromEmail.js) runs later, on
         // one email, when she asks for the proforma.
+        // Apsara, 2026-10-28: "understand the description and check whether it
+        // is relevant to email" - i.e. judge from the CONTENT whether a mail is
+        // Edge Metals business at all (trade, freight, customers, suppliers,
+        // truckers, banks she deals with, payments), instead of only headers.
+        // Defaults TRUE: a missing or garbled answer must never hide mail.
+        edge_relevant: z.preprocess((v) => !(v === false || v === 'false'), z.boolean()).optional().default(true),
         is_order: z.coerce.boolean().optional().default(false),
         order_buyer: z.string().nullable().optional().default(null),
         // DIRECTION (2026-08-25). Apsara, on a live digest: "intent is totally
@@ -1299,6 +1305,7 @@ asked_for_quote: the sender's OWN WORDS, copied verbatim from the email — the 
 key_figures: every figure a person deciding what to do about this email would need, as objects {"label","value"}. "value" is the figure copied VERBATIM. "label" says in 1-4 words WHAT THAT NUMBER IS, so the list is readable without opening the email — "current price", "their counter", "tonnage", "container", "invoice total", "balance due". A list like 21.428 / $990 / $995 / $1015 with no labels is useless: she cannot tell tonnage from price, or the old price from the proposed one. If you genuinely cannot tell what a number is, leave it out rather than labelling it vaguely. Up to 4, most important first, [] if the email contains none. Take them from the THREAD as well as the email - a total stated earlier in the thread is exactly what makes a later amount readable as short or correct. Copy the characters as written ("$58,313.56", not "58313.56", not "about 58k"). NEVER compute, total, convert or round one, and never write a figure that does not literally appear above.
 
 deadline: a date or time by which SOMEBODY MUST ACT, stated by the sender, verbatim. Do NOT infer or invent one — null if none is stated. A date that merely DESCRIBES THE SHIPMENT is not a deadline and must be null: an ERD or earliest return date, an estimated ready date, an ETD/ETA, an arrival or departure date, a sailing date. Nothing expires when those pass. A CUTOFF IS a deadline — an SI cutoff, doc cutoff, VGM cutoff or gate-in cutoff is the hardest deadline in this business, and so is anything the sender says is needed "by" a date.
+edge_relevant: read what the email is ABOUT. true if it concerns Edge Metals' own business: buying or selling metal/scrap, shipments, bookings, containers, freight, trucking, customs, invoices or payments with a party she deals with, claims, quality, or a bank/insurer/auditor acting on her account. false ONLY when it is clearly unrelated to that business: promotions, product or service marketing, newsletters, webinars, event invitations, surveys, generic account/security notices, social-media or software-vendor mail, cold outreach from a company she does not deal with. When in doubt answer true - hiding a real customer's mail is far worse than showing one advert.
 is_order: true ONLY if the sender is BUYING MATERIAL FROM US — asking to buy, asking for a proforma/PI, or confirming a purchase with quantities and/or prices. false for everything else. Specifically false for a REQUEST TO BOOK FREIGHT: asking a carrier, forwarder or line for container space, a sailing, a booking number or an ERD is logistics we are buying, not material someone is buying from us, and a proforma has no meaning there. Also false for a general enquiry with no material, a message about an EXISTING shipment, an invoice, or marketing. An order almost always also needs a reply, so both can be true.
 order_buyer: when is_order is true, the company that would be BUYING — often NOT the sender, because orders here arrive from agents writing on a buyer's behalf ("Daekwang confirmed 2 containers" from an agent's address means Daekwang). null if the email names no buying company, or if is_order is false.
 
@@ -1315,7 +1322,7 @@ If a HISTORY line is present above, treat it as a PRIOR, never a verdict. It is 
 Be decisive. When a message plausibly wants an answer, say so — a flagged email she can ignore costs her two seconds, a missed one can cost a booking. But do not flag pure notifications just to be safe; a digest full of noise gets ignored entirely, which is worse than not having one.
 
 Return ONLY this JSON, nothing else:
-{ "waiting_on": "her", "asked_of": null, "action_needed": null, "key_figures": [{"label": "", "value": ""}], "needs_reply": true, "confidence": 0.0, "urgency": "normal", "summary": "", "asked_for": null, "asked_for_quote": null, "deadline": null, "is_order": false, "order_buyer": null }`;
+{ "waiting_on": "her", "asked_of": null, "action_needed": null, "key_figures": [{"label": "", "value": ""}], "needs_reply": true, "confidence": 0.0, "urgency": "normal", "summary": "", "asked_for": null, "asked_for_quote": null, "deadline": null, "is_order": false, "order_buyer": null, "edge_relevant": true }`;
 }
 
 // ── QUOTE GROUNDING (2026-08-25) ───────────────────────────────────────────
@@ -2367,6 +2374,7 @@ async function assess(email) {
         // is_order false and dropped out of the digest entirely.
         is_order: (!fromInternal || !!forwardedFrom) && (res.is_order === true || res.is_order === 'true'),
         order_buyer: res.order_buyer ? String(res.order_buyer).trim() : null,
+        edge_relevant: !(res.edge_relevant === false || res.edge_relevant === 'false'),
     };
 }
 
@@ -4368,11 +4376,24 @@ async function run({ sendToManager, sendMessage: _sendMessage = null, dryRun = f
         // mail, and a Zimex mail about anything else, are untouched. A
         // `critical` signal (claim, moved cutoff) still gets through, because
         // that costs money by being missed and is not "booking info".
-        const zimexBooking = isZimexBookingMail({ from, subject, body: visible }) && imp.level !== 'critical';
+        // Content-based relevance (see edge_relevant). Hidden only when ALL hold:
+        // the model read it as unrelated to Edge business, the sender is not a
+        // known counterparty, and it carries no booking/container/PO/invoice
+        // reference. A critical signal still gets through.
+        const notEdgeBusiness = a.edge_relevant === false
+            && imp.level !== 'critical'
+            && !(typeof isKnownCounterparty === 'function' && isKnownCounterparty(from))
+            && importance.businessRefs(`${subject || ''}\n${visible || ''}`).length === 0;
+        if (notEdgeBusiness) {
+            console.log(`[REPLYWATCH] not listing "${String(subject || '').slice(0, 55)}" from ${senderLabel(from)} — not Edge Metals business (unknown sender, no booking/container/PO/invoice reference)`);
+        }
+        let hideZimexCritical = false;
+        try { hideZimexCritical = !!cfg.getSettings().zimex_booking_hide_critical; } catch (e) { /* default: visible */ }
+        const zimexBooking = isZimexBookingMail({ from, subject, body: visible }) && (imp.level !== 'critical' || hideZimexCritical);
         if (zimexBooking && ((a.needs_reply && a.confidence >= MIN_CONFIDENCE) || a.is_order || owedItem || bystander || colleagueItem || importantEnough)) {
             console.log(`[REPLYWATCH] not listing "${String(a.summary || subject || '').slice(0, 55)}" — Zimex booking mail, Jarvis records bookings itself`);
         }
-        if (!zimexBooking && ((a.needs_reply && a.confidence >= MIN_CONFIDENCE) || a.is_order || owedItem || bystander || colleagueItem
+        if (!zimexBooking && !notEdgeBusiness && ((a.needs_reply && a.confidence >= MIN_CONFIDENCE) || a.is_order || owedItem || bystander || colleagueItem
             || importantEnough)) {
             recordSenderEvent(store, from, 'flagged');
             // ── ALREADY PAID? (2026-09-02) ──────────────────────────────
