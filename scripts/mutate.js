@@ -3189,10 +3189,16 @@ const MUTATIONS = [
       file: 'scripts/qb-duplicates.js', suites: ['qb-duplicates'],
       find: "`${party(r)}|${r.TxnDate}|${lineKey(r)}|${doc(r)}`",
       to:   "`${party(r)}|${r.TxnDate}|${lineKey(r)}`" },
+    // Re-pointed 2026-10-28: textKey() was added using the same filter line,
+    // so this find string appeared TWICE and the harness refused it as
+    // ambiguous — applied nowhere, reported as neither killed nor survived.
+    // The charge() body is included to make it unique again. Fourth #204
+    // instance I have created and caught in the same week; the lesson is to
+    // re-run the anchor check after adding any helper that reuses a line.
     { name: 'qbdup: QuickBooks own subtotal row is counted as a charge again',
       file: 'scripts/qb-duplicates.js', suites: ['qb-duplicates'],
-      find: "    .filter((l) => l.DetailType !== 'SubTotalLineDetail' && l.Amount != null)",
-      to:   "    .filter((l) => l.Amount != null)" },
+      find: "const charge = (r) => (r.Line || [])\n    .filter((l) => l.DetailType !== 'SubTotalLineDetail' && l.Amount != null)",
+      to:   "const charge = (r) => (r.Line || [])\n    .filter((l) => l.Amount != null)" },
     { name: 'qbdup: the subset signal goes, burying a 1,387 overcount inside a 21,317 bill',
       file: 'scripts/qb-duplicates.js', suites: ['qb-duplicates'],
       find: "        if (!charge(big).includes(n2(small.TotalAmt))) continue;",
