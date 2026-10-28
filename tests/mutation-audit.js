@@ -60,7 +60,17 @@ const ROOT = path.join(__dirname, '..');
 // became "btn solid"; re-pointed and verified to turn a named check red again.
 // The ratchet may only be lowered, which is why it is a number in the source
 // and not a tolerance.
-const BASELINE_DEAD = 75;
+// 2026-10-29: 75 -> 65. Ten re-pointed, in helpers/sales.js, metalsTrucking.js,
+// loads.js and outboundLoads.js — the money rules, not the screens. The cause
+// was the same in nine of the ten: a LATER feature edited the line and nobody
+// re-pointed the mutation. payableFrom gained a third argument when claims
+// landed (#217) and killed two; gradeKey joined a dedupe key and killed one;
+// payables() gained { excluding }; `mt` was renamed `mtUsed`; the oncePerSave
+// require was hoisted to a local `once` and killed BOTH idempotency guards.
+// The tenth was a real rewrite (an unpriced haul became a 'missing' status
+// instead of a skip) and was restated on the flag that now carries the rule.
+// All ten verified one at a time to turn a NAMED check red.
+const BASELINE_DEAD = 65;
 // Matching MORE than once is the same disease: scripts/mutate.js refuses an
 // ambiguous find string, so those checks never run either. 7 of them, which
 // makes the real count of checks proving nothing 107, not 100.

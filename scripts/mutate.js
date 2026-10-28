@@ -3899,7 +3899,8 @@ const MUTATIONS = [
       to:   '    if (freight) {' },
     { name: 'commission runs off pounds, not metric tons',
       file: 'helpers/sales.js', suites: ['bills-sales'],
-      find: '    const commissionComputed = (perMt === null || mt === null) ? null : round2(mt * perMt);',
+      // Re-pointed 2026-10-29: `mt` became `mtUsed`, so this ran on nothing.
+      find: '    const commissionComputed = (perMt === null || mtUsed === null) ? null : round2(mtUsed * perMt);',
       to:   '    const commissionComputed = (perMt === null || lb === null) ? null : round2(lb * perMt);' },
     { name: 'no commission rate is read as zero rather than unknown',
       file: 'helpers/sales.js', suites: ['bills-sales'],
@@ -3911,8 +3912,10 @@ const MUTATIONS = [
       to:   '        if (ac !== bc) return ac < bc ? -1 : 1;' },
     { name: 'the same container under DIFFERENT bookings counts as a duplicate',
       file: 'helpers/sales.js', suites: ['bills-sales'],
-      find: '        const k = `${bk}|${cn}`;',
-      to:   '        const k = `${cn}`;' },
+      // Re-pointed 2026-10-29: gradeKey(r) was appended to the key, so the
+      // old two-part find matched nothing and the booking half went unguarded.
+      find: '        const k = `${bk}|${cn}|${gradeKey(r)}`;',
+      to:   '        const k = `${cn}|${gradeKey(r)}`;' },
     { name: 'terms accept anything, not just LC or TT',
       file: 'helpers/sales.js', suites: ['bills-sales'],
       find: "        if (!t) throw new Error(`terms must be ${TERMS.join(' or ')}`);",
@@ -4271,8 +4274,9 @@ const MUTATIONS = [
       to:   "        if (status === 'unpaid' && r.status === 'paid') return false;" },
     { name: 'a haul nobody priced can be paid, inventing the amount',
       file: 'helpers/metalsTrucking.js', suites: ['bills-sales'],
-      find: '    const open = new Map(payables().filter((p) => p.priced).map((p) => [p.bill_id, p]));',
-      to:   '    const open = new Map(payables().map((p) => [p.bill_id, p]));' },
+      // Re-pointed 2026-10-29: payables() gained an { excluding } argument.
+      find: '    const open = new Map(payables({ excluding }).filter((p) => p.priced).map((p) => [p.bill_id, p]));',
+      to:   '    const open = new Map(payables({ excluding }).map((p) => [p.bill_id, p]));' },
 
     // ── HER GROUPING AND INLINE LABELS, 2026-09-10 ───────────────────────
     { name: 'the label goes back above the field',
@@ -4337,15 +4341,23 @@ const MUTATIONS = [
       to:   '        if (false) {' },
     { name: 'a bill with a trucker but no amount becomes a zero payable',
       file: 'helpers/metalsTrucking.js', suites: ['bills-sales'],
-      find: '        if (amount === null || amount <= 0) continue;',
-      to:   '        if (amount === null) continue;' },
+      // Re-pointed 2026-10-29. This is the one whose CODE changed rather than
+      // drifting: the skip became a `priced` flag plus a 'missing' status, so
+      // `if (amount === null || amount <= 0) continue;` no longer exists. The
+      // property is unchanged and still lives on that flag — a zero is not a
+      // price, and a haul priced at zero is a data-entry mistake, not a
+      // settled debt.
+      find: '        const priced = amount !== null && amount > 0;',
+      to:   '        const priced = amount !== null;' },
     { name: 'the date filter compares her MM/DD/YYYY as plain text',
       file: 'helpers/metalsTrucking.js', suites: ['bills-sales'],
       find: "    const fromIso = from ? (bills.sortableDate(from) || from) : '';",
       to:   '    const fromIso = from;' },
     { name: 'filtering to unpaid hides the part-paid hauls she still owes on',
       file: 'helpers/metalsTrucking.js', suites: ['bills-sales'],
-      find: "        if (status === 'unpaid' && r.status === 'paid') return false;",
+      // Re-pointed 2026-10-29: 'missing' joined 'paid' in the exclusion, so
+      // the old one-status find matched nothing.
+      find: "        if (status === 'unpaid' && (r.status === 'paid' || r.status === 'missing')) return false;",
       to:   "        if (status === 'unpaid' && r.status !== 'unpaid') return false;" },
     { name: 'the summary is computed over everything, not the filtered rows',
       file: 'routes/money.js', suites: ['bills-sales'],
@@ -4885,19 +4897,24 @@ const MUTATIONS = [
     // checkable one: a re-sent save cannot make a second row.
     { name: 'once: the sale guard is gone, so a re-sent save writes twice',
       file: 'helpers/outboundLoads.js', suites: ['once-per-save'],
-      find: "        already = require('./oncePerSave').findSpent(loads, rec.client_request_id);\n        if (already) return loads;   // returned unchanged — nothing is written",
+      // Re-pointed 2026-10-29: the require was hoisted to a local `once` and
+      // findByDraft joined it, so both once-guards had been dead since.
+      find: "        already = once.findSpent(loads, rec.client_request_id)\n            || once.findByDraft(loads, rec.draft_id);\n        if (already) return loads;   // returned unchanged — nothing is written",
       to:   '        already = null;' },
     { name: 'once: the purchase guard is gone — only the noticed screen was fixed',
       file: 'helpers/loads.js', suites: ['once-per-save'],
-      find: "        already = require('./oncePerSave').findSpent(loads, rec.client_request_id);\n        if (already) return loads;   // unchanged — nothing written",
+      // Re-pointed 2026-10-29, same cause as its sale-side twin.
+      find: "        already = once.findSpent(loads, rec.client_request_id)\n            || once.findByDraft(loads, rec.draft_id);\n        if (already) return loads;   // unchanged — nothing written",
       to:   '        already = null;' },
     { name: 'once: the check moves OUTSIDE the lock, so simultaneous sends both write',
       file: 'helpers/outboundLoads.js', suites: ['once-per-save'],
       // The subtle version of the same bug. Both requests look at the file
       // before either has written, both see nothing, both save. Section D
       // fires them with Promise.all precisely to catch this.
-      find: '    let already = null;\n    await mutateJson(cfg.OUTBOUND_LOADS_FILE, [], (loads) => {\n        already =',
-      to:   '    let already = null;\n    already = require(\'./oncePerSave\').findSpent(require(\'./json\').loadJson(cfg.OUTBOUND_LOADS_FILE, []), rec.client_request_id);\n    await mutateJson(cfg.OUTBOUND_LOADS_FILE, [], (loads) => {\n        if (0) already =' },
+      // Re-pointed 2026-10-29: a `const once = require(...)` line now sits
+      // between the mutateJson opener and the assignment.
+      find: '    let already = null;\n    await mutateJson(cfg.OUTBOUND_LOADS_FILE, [], (loads) => {\n        const once = require(\'./oncePerSave\');\n        already =',
+      to:   '    let already = null;\n    already = require(\'./oncePerSave\').findSpent(require(\'./json\').loadJson(cfg.OUTBOUND_LOADS_FILE, []), rec.client_request_id);\n    await mutateJson(cfg.OUTBOUND_LOADS_FILE, [], (loads) => {\n        const once = require(\'./oncePerSave\');\n        if (0) already =' },
     { name: 'once: a BLANK ticket matches a blank ticket, so the second real save vanishes',
       file: 'helpers/oncePerSave.js', suites: ['once-per-save'],
       // The dangerous direction. Blocking a duplicate loses nothing; matching
@@ -5678,8 +5695,9 @@ const MUTATIONS = [
 
     { name: 'trucking: the deduction is netted into amount, so her record and the seller\'s ticket disagree',
       file: 'helpers/loads.js', suites: ['load-trucking'],
-      find: '        ...cleanTrucking(entry),\n        net_payable   : payableFrom(totals.amount, entry.trucking_amount),',
-      to:   '        ...cleanTrucking(entry),\n        amount        : payableFrom(totals.amount, entry.trucking_amount),\n        net_payable   : payableFrom(totals.amount, entry.trucking_amount),' },
+      // Re-pointed 2026-10-29: same third argument as above.
+      find: '        net_payable   : payableFrom(totals.amount, entry.trucking_amount, null),',
+      to:   '        amount        : payableFrom(totals.amount, entry.trucking_amount, null),\n        net_payable   : payableFrom(totals.amount, entry.trucking_amount, null),' },
 
     { name: 'trucking: an edit with no trucking key WIPES the deduction — the old-APK bug',
       file: 'helpers/loads.js', suites: ['load-trucking'],
@@ -5688,8 +5706,10 @@ const MUTATIONS = [
 
     { name: 'trucking: net_payable is carried from before the edit instead of recomputed',
       file: 'helpers/loads.js', suites: ['load-trucking'],
-      find: '            l.net_payable = payableFrom(l.amount, l.trucking_amount);',
-      to:   '            if (l.net_payable == null) l.net_payable = payableFrom(l.amount, l.trucking_amount);' },
+      // Re-pointed 2026-10-29: payableFrom took a third argument when claims
+      // landed (#217), which silently killed this and the one above it.
+      find: '            l.net_payable = payableFrom(l.amount, l.trucking_amount, l.claim_amount);',
+      to:   '            if (l.net_payable == null) l.net_payable = payableFrom(l.amount, l.trucking_amount, l.claim_amount);' },
 
     { name: 'trucking: a load recorded before this feature reads as owing nothing',
       file: 'helpers/loads.js', suites: ['load-trucking'],

@@ -1948,11 +1948,24 @@ section('S — Edge Metals haulage, which is not the yard\'s');
 
     // An unpriced haul cannot be paid: allowing it would let the payment
     // invent the amount nobody entered.
+    //
+    // ── ASSERTED, NOT ASSUMED (2026-10-29) ───────────────────────────────
+    // This read `unpriced.bill_id` straight off a .find(). When the 'missing'
+    // status stops being produced — which is precisely what the mutation on
+    // `const priced = amount !== null && amount > 0` does — the find returns
+    // undefined and the whole FILE dies here on a TypeError. Named failures
+    // above it had already fired, but a crash exits before they are counted,
+    // so the harness recorded the weakest possible kill: "CRASHED". A crash
+    // is not a test result. The fixture now says what it needs.
     const unpriced = mine().find((r) => r.status === 'missing');
+    ck('an unpriced haul is in the fixture to try to pay',
+       !!unpriced && unpriced.bill_id,
+       'nothing came back with status "missing" — a haul with a trucker and no '
+       + 'amount must survive as unpriced, and the checks below need one');
     const guess = await req('POST', '/api/metals-trucking', { sid: admin, body: {
         date: '09/12/2026', amount: 700, mode: 'Wire', bank: 'Chase',
         trucking_company: 'Sher Trucking',
-        allocations: [{ bill_id: unpriced.bill_id, amount: 700 }],
+        allocations: [{ bill_id: unpriced && unpriced.bill_id, amount: 700 }],
     } });
     ck('a haul nobody priced cannot be paid', guess.status === 400, guess.raw);
     ck('  saying the amount may have been cleared, not "no such bill"',
