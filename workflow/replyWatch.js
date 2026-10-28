@@ -4883,7 +4883,7 @@ async function run({ sendToManager, sendMessage: _sendMessage = null, dryRun = f
         const laDay = (t) => new Date(laMidnightUTC(t)).toISOString().slice(0, 10);
         const firstOfDay = !store.lastDigestAt || laDay(store.lastDigestAt) !== laDay(new Date());
         const backlogNote = (olderStillOpen > 0 && firstOfDay)
-            ? `\n\n(+${olderStillOpen} older item${olderStillOpen === 1 ? '' : 's'} still open from before — say "what needs my reply" any time to see them.)`
+            ? `\n\n(+${olderStillOpen} older item${olderStillOpen === 1 ? '' : 's'} still open from before — say "what needs my reply" to see them, or "clear older" to drop them.)`
             : '';
         // Dead letters ride along with the digest rather than as their own
         // ping — they are rare, and a separate message for "I could not read

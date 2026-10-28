@@ -1809,6 +1809,12 @@ function policyDecide(ctx) {
             const indices = m[1].split(/,|\band\b/i).map((x) => x.trim()).filter(Boolean);
             return { intent: 'ignore_digest_item', resolvedBy: 'policy', data: { indices } };
         }
+        // "clear older" / "clear the backlog" / "ignore the older ones" - the backlog
+        // line's own suggestion (2026-10-28). Checked BEFORE "ignore all", which only
+        // touches the numbered list she is looking at.
+        if (/^(?:please\s+)?(?:clear|ignore|dismiss|drop)\s+(?:all\s+)?(?:the\s+)?(?:older(?:\s+(?:items?|ones|emails?|mails?))?|old\s+(?:items?|ones|emails?|mails?)|backlog)\s*$/i.test(ctx.text.trim())) {
+            return { intent: 'clear_older_items', resolvedBy: 'policy', data: {} };
+        }
         // "ignore all" / "ignore all of them" / "dismiss everything" — the
         // natural extension of the same question, thought through this time
         // rather than waiting for her to hit the gap and ask again.
@@ -2942,6 +2948,7 @@ async function route(decision, ctx, sendMessage) {
         case 'qb_stuck':              return actions.showQuickBooksStuck(chatId);
         case 'qb_check_now':          return actions.checkQuickBooksNow(chatId);
         case 'ignore_digest_item':      return actions.ignoreDigestItem(chatId, d.indices, d.all === true);
+        case 'clear_older_items':       return actions.clearOlderItems(chatId);
         case 'reply_email':             return actions.draftReplyForConfirm(chatId, d.target_name, d.email_details, bkg, ctx.text, extractScheduleClause(ctx.text));
         case 'backfill_cutoffs':         return actions.backfillCutoffs(chatId);
         case 'verify_bookings':   return actions.verifyBookings(chatId, d.bkg_no ? [String(d.bkg_no).toUpperCase()] : null, { apply: d.apply === true });

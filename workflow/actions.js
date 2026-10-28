@@ -5324,6 +5324,35 @@ async function ignoreDigestItem(chatId, indices, all = false) {
     return { action_taken: 'digest_item_ignored', count: found.length, removedFromTracking: actuallyRemoved.length, alreadyGone: alreadyGone.length };
 }
 
+// ── "clear older" — the backlog line, made actionable (2026-10-28) ─────────
+// Apsara, after "(+73 older items still open from before)": "fix them". The line
+// told her there were 73 and gave her no way to act on them but "ignore N" one by
+// one, and the older ones are not even numbered. This drops every tracked item that
+// is NOT on the list she was last shown. Each is recorded as 'ignored' against its
+// sender - the same training signal "ignore N" gives - and the reply says how many
+// and from whom, so a wrong clear is visible. Anything new from those senders is
+// flagged afresh as usual.
+async function clearOlderItems(chatId) {
+    const { loadStore, saveStore, recordSenderEvent } = require('./replyWatch');
+    const store = await loadStore();
+    const shown = new Set();
+    for (const it of store.lastDigest || []) { if (it.id) shown.add(it.id); for (const g of it.groupIds || []) shown.add(g); }
+    const older = (store.tracked || []).filter((t) => !shown.has(t.id));
+    if (!older.length) {
+        await _send(chatId, 'No older items are open - nothing to clear.');
+        return { action_taken: 'clear_older_none' };
+    }
+    for (const t of older) recordSenderEvent(store, t.from || t.fromName, 'ignored');
+    const drop = new Set(older.map((t) => t.id));
+    store.tracked = (store.tracked || []).filter((t) => !drop.has(t.id));
+    await saveStore(store);
+    const names = {};
+    for (const t of older) { const n = t.fromName || t.from || 'unknown'; names[n] = (names[n] || 0) + 1; }
+    const top = Object.entries(names).sort((x, y) => y[1] - x[1]).slice(0, 6).map(([n, c]) => `${n} (${c})`).join(', ');
+    await _send(chatId, `Cleared ${older.length} older item${older.length === 1 ? '' : 's'}: ${top}${Object.keys(names).length > 6 ? ', ...' : ''}. Anything new from them will still be flagged. The list you were just shown is untouched.`);
+    return { action_taken: 'clear_older', count: older.length };
+}
+
 // ── "what is this email about?" ────────────────────────────────────────────
 //
 // Apsara, 2026-09-06: "when user asks about what is this email about to a
@@ -9216,6 +9245,7 @@ checkSupplierReadiness, resolveReadyCheckYes, resolveReadyCheckNo, resolveReadyC
 verifyBookings,
 applyVerifiedSchedules,
 ignoreDigestItem,
+clearOlderItems,
 muteMatter,
 unmuteMatter,
 showMutes,
