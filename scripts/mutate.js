@@ -3165,6 +3165,26 @@ const MUTATIONS = [
     // ── QUICKBOOKS DUPLICATES, 2026-10-28 ────────────────────────────
     // "Check for duplicates for 2026 bills and invoices in quickbook", then
     // "it should be a rolling date..from 01-01-2026 to rolling date".
+    // Her live run on 2026-10-28 found a duplicate this tool had just called
+    // clean: same reference, same amount, same containers, DIFFERENT TxnDate.
+    // Signal 1 keyed on the date, so it landed with the reference reuses.
+    { name: 'qbdup: a charge entered under two dates is no longer caught',
+      file: 'scripts/qb-duplicates.js', suites: ['qb-duplicates'],
+      find: "        hits.push({ why: 'SAME CHARGE, DIFFERENT DATES', rows: v });",
+      to:   "        continue;" },
+    { name: 'qbdup: blank line text becomes something to match two bills on',
+      file: 'scripts/qb-duplicates.js', suites: ['qb-duplicates'],
+      find: "    for (const [, v] of clusters(rows.filter((r) => doc(r) && textKey(r)),",
+      to:   "    for (const [, v] of clusters(rows.filter((r) => doc(r))," },
+    { name: 'qbdup: the containers are ignored, so a flat rate per load reads as a duplicate',
+      file: 'scripts/qb-duplicates.js', suites: ['qb-duplicates'],
+      find: "        (r) => `${party(r)}|${doc(r)}|${n2(r.TotalAmt)}|${textKey(r)}`)) {",
+      to:   "        (r) => `${party(r)}|${doc(r)}|${n2(r.TotalAmt)}`)) {" },
+    { name: 'qbdup: a date-split duplicate stops counting toward the overstatement',
+      file: 'scripts/qb-duplicates.js', suites: ['qb-duplicates'],
+      find: "        if ((h.why === 'SAME LINES' && sameTotal) || h.why === 'SAME CHARGE, DIFFERENT DATES') {",
+      to:   "        if (h.why === 'SAME LINES' && sameTotal) {" },
+
     { name: 'qbdup: the reference is ignored, so two real freight loads read as one bill',
       file: 'scripts/qb-duplicates.js', suites: ['qb-duplicates'],
       find: "`${party(r)}|${r.TxnDate}|${lineKey(r)}|${doc(r)}`",

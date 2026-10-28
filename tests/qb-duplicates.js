@@ -102,6 +102,83 @@ section('A. the two real findings, and the two shapes that are NOT duplicates');
 }
 
 // ─────────────────────────────────────────────────────────────────────────
+section('A2. the same charge under two transaction dates');
+{
+    // HER LIVE RUN, 2026-10-28, immediately after this tool told her "Nothing
+    // with identical lines twice". EAGLE TRANS SHIPPING ref UCSE/010480:
+    // $3,440.00 dated 2026-03-18 and PAID, and $3,440.00 dated 2026-05-05
+    // still OWING, both for the same two containers, created five days apart.
+    // One freight charge entered twice. Signal 1 keyed on TxnDate, so it saw
+    // two different bills and this landed in SAME NUMBER, unflagged and
+    // counted as nothing overstated.
+    const two = [
+        bill({ id: 30, date: '2026-03-18', total: 3440, doc: 'UCSE/010480', who: 'EAGLE TRANS SHIPPING',
+            bal: 0, paidBy: 'BillPaymentCheck', created: '2026-05-07T13:47:38-07:00',
+            note: 'SEGU5270538 ECMU2613694', lines: [3440] }),
+        bill({ id: 31, date: '2026-05-05', total: 3440, doc: 'UCSE/010480', who: 'EAGLE TRANS SHIPPING',
+            created: '2026-05-12T11:23:38-07:00', lines: [3440] }),
+        // NOT this one: same reference and same day, but DIFFERENT containers.
+        // Two real charges under one reference, one paid and one not.
+        bill({ id: 32, date: '2026-05-05', total: 15745, doc: 'UCSE/010732', who: 'EAGLE TRANS SHIPPING',
+            bal: 0, paidBy: 'BillPaymentCheck', lines: [15745] }),
+        bill({ id: 33, date: '2026-05-05', total: 8735, doc: 'UCSE/010732', who: 'EAGLE TRANS SHIPPING',
+            lines: [8735] }),
+    ];
+    // The container text is what makes it certain, so it goes on the lines.
+    two[0].Line[0].Description = 'SEGU5270538\nECMU2613694';
+    two[1].Line[0].Description = 'SEGU5270538\nECMU2613694';
+    two[2].Line[0].Description = 'SEGU2695755\nMSBU2008410\nFYCU702086';
+    two[3].Line[0].Description = 'CAIU2774482 MEDU6303901 TCLU207765';
+
+    const out = run(['--bills', write('eagle.json', two), '--from', '2026-01-01', '--to', '2026-12-31']);
+    ck('one charge entered under two dates is caught',
+       /SAME CHARGE, DIFFERENT DATES/.test(out), out.slice(0, 500));
+    ck('  and flagged, not buried with the reference reuses',
+       /LOOK AT THIS ONE[^\n]*EAGLE/.test(out), out);
+    ck('  it names the UNPAID one as the one to remove',
+       /the one still owing is id 31 \(\$3,440\.00\)/.test(out), out);
+    ck('  and counts it in the overstatement',
+       /Overstated by \$3,440\.00/.test(out), (out.match(/Overstated[^\n]*|Nothing with[^\n]*/) || [''])[0]);
+    // The discrimination that keeps it usable: same reference, same day, but
+    // different containers is TWO charges, not one entered twice.
+    ck('  two charges under one reference with different containers are NOT merged',
+       !/LOOK AT THIS ONE[^\n]*UCSE\/010732/.test(out)
+       && /SAME NUMBER[^\n]*UCSE\/010732/.test(out), out);
+    // ── THE TEXT IS WHAT DISCRIMINATES, AND THIS PROVES IT ──────────────
+    // Same party, same reference, SAME amount, different dates — but
+    // different containers. A flat rate per container makes this ordinary in
+    // her trade, and it is two real charges, not one entered twice.
+    //
+    // Without this fixture a mutation that drops the container text from the
+    // key survived everything: the UCSE/010732 pair above differs by AMOUNT,
+    // so the amount alone still told them apart. The check has to turn on the
+    // only field that actually separates these two.
+    const flat = [
+        bill({ id: 50, date: '2026-02-10', total: 2500, doc: 'FLAT1', who: 'HAULER',
+            bal: 0, paidBy: 'BillPaymentCheck', lines: [2500] }),
+        bill({ id: 51, date: '2026-04-10', total: 2500, doc: 'FLAT1', who: 'HAULER', lines: [2500] }),
+    ];
+    flat[0].Line[0].Description = 'ABCU1111111';
+    flat[1].Line[0].Description = 'ZZZU9999999';
+    const outF = run(['--bills', write('flat.json', flat), '--from', '2026-01-01', '--to', '2026-12-31']);
+    ck('  same reference and amount but DIFFERENT containers is two charges, not one',
+       !/SAME CHARGE, DIFFERENT DATES/.test(outF) && /SAME NUMBER[^\n]*HAULER/.test(outF), outF);
+    ck('    and nothing is claimed overstated for it',
+       /Nothing with identical lines twice/.test(outF),
+       (outF.match(/Overstated[^\n]*|Nothing with[^\n]*/) || [''])[0]);
+
+    // A blank description carries no information, so it must never be the
+    // thing two bills are matched on — that is the Garduno's lump-line shape.
+    const blank = [
+        bill({ id: 40, date: '2026-01-05', total: 500, doc: 'R1', who: 'X' }),
+        bill({ id: 41, date: '2026-02-05', total: 500, doc: 'R1', who: 'X' }),
+    ];
+    const outB = run(['--bills', write('blank.json', blank), '--from', '2026-01-01', '--to', '2026-12-31']);
+    ck('  blank line text is never matched on',
+       !/SAME CHARGE, DIFFERENT DATES/.test(outB), outB);
+}
+
+// ─────────────────────────────────────────────────────────────────────────
 section("B. QuickBooks' own subtotal row must not double every document");
 {
     // Her real invoices carry a SubTotalLineDetail that repeats the total. The

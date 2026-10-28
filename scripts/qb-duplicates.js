@@ -137,6 +137,17 @@ const charge = (r) => (r.Line || [])
     .filter((l) => l.DetailType !== 'SubTotalLineDetail' && l.Amount != null)
     .map((l) => n2(l.Amount));
 const lineKey = (r) => charge(r).join('+');
+// What the lines SAY, not just what they add up to. In her books a line
+// description is a list of container numbers, and a container cannot be
+// freighted twice at the same price under the same reference. Blank
+// descriptions give an empty signature and are never matched on — that is the
+// Garduno's lump-line case, where the text carries nothing.
+const textKey = (r) => (r.Line || [])
+    .filter((l) => l.DetailType !== 'SubTotalLineDetail' && l.Amount != null)
+    .map((l) => String(l.Description || '').toUpperCase().replace(/[^A-Z0-9]+/g, ' ').trim())
+    .filter(Boolean)
+    .sort()
+    .join(' | ');
 const paid = (r) => {
     const links = (r.LinkedTxn || []).map((t) => t.TxnType);
     return links.length ? links.join(', ') : null;
@@ -195,6 +206,29 @@ function report(label, rows) {
         hits.push({ why: 'SAME LINES', rows: v });
         for (const r of v) seen.add(r.Id);
     }
+    // 1a. SAME CHARGE, ANY DATE. Same party, same reference, same total, and
+    //     the same line TEXT — but the transaction dates differ, so signal 1
+    //     above never sees them.
+    //
+    //     Found by her live run on 2026-10-28, after this tool had just told
+    //     her "Nothing with identical lines twice". EAGLE TRANS SHIPPING ref
+    //     UCSE/010480: $3,440.00 dated 2026-03-18 and PAID, and $3,440.00
+    //     dated 2026-05-05 still OWING, both for the same two containers
+    //     SEGU5270538 + ECMU2613694, created five days apart. The same freight
+    //     charge entered twice under two transaction dates. My strongest
+    //     signal keyed on TxnDate, so it landed in SAME NUMBER with the
+    //     reference reuses — unflagged, and counted as nothing overstated.
+    //
+    //     The date is the one field a re-entry is most likely to get
+    //     differently: she types the invoice date off the paperwork the second
+    //     time, or the bill date instead of the shipment date. Keying on it
+    //     made the check shaped like the tidy case.
+    for (const [, v] of clusters(rows.filter((r) => doc(r) && textKey(r)),
+        (r) => `${party(r)}|${doc(r)}|${n2(r.TotalAmt)}|${textKey(r)}`)) {
+        if (v.every((r) => seen.has(r.Id))) continue;
+        hits.push({ why: 'SAME CHARGE, DIFFERENT DATES', rows: v });
+        for (const r of v) seen.add(r.Id);
+    }
     // 1b. SUBSET. One bill's whole total is a LINE inside another bill from
     //     the same party under the same reference. Found in her data on the
     //     first run and initially reported only as SAME NUMBER, which buried
@@ -236,8 +270,12 @@ function report(label, rows) {
         const v = h.rows;
         const gap = daysApart(v[0], v[1]);
         const sameTotal = new Set(v.map((r) => n2(r.TotalAmt))).size === 1;
-        const strong = (h.why === 'SAME LINES' && sameTotal) || h.why === 'ONE IS A LINE OF THE OTHER';
-        if (h.why === 'SAME LINES' && sameTotal) exposure += n2(v[0].TotalAmt) * (v.length - 1);
+        const strong = (h.why === 'SAME LINES' && sameTotal)
+            || h.why === 'ONE IS A LINE OF THE OTHER'
+            || h.why === 'SAME CHARGE, DIFFERENT DATES';
+        if ((h.why === 'SAME LINES' && sameTotal) || h.why === 'SAME CHARGE, DIFFERENT DATES') {
+            exposure += n2(v[0].TotalAmt) * (v.length - 1);
+        }
         if (h.why === 'ONE IS A LINE OF THE OTHER') exposure += h.subset;
         console.log(`\n  [${h.why}]${strong ? '  <-- LOOK AT THIS ONE' : ''}  ${party(v[0])}`
             + (doc(v[0]) ? `   ref ${doc(v[0])}` : '')
@@ -248,6 +286,15 @@ function report(label, rows) {
             console.log(`         lines ${charge(r).map(money).join(' / ') || '(none)'}`);
             const note = String(r.PrivateNote || '').replace(/\s+/g, ' ').trim();
             if (note) console.log(`         note  ${note.slice(0, 90)}`);
+        }
+        if (h.why === 'SAME CHARGE, DIFFERENT DATES') {
+            const unpaid = v.filter((r) => n2(r.Balance) > 0.005);
+            console.log('         (same reference, same amount and the SAME line text, on different'
+                + ' transaction dates — one charge entered twice)');
+            if (unpaid.length === 1 && v.length === 2) {
+                console.log(`         the one still owing is id ${unpaid[0].Id} (${money(unpaid[0].TotalAmt)})`
+                    + ' — the other is already paid, so that is the one to remove');
+            }
         }
         if (h.why === 'ONE IS A LINE OF THE OTHER') {
             console.log(`         (the ${money(h.subset)} bill is also a LINE inside the `
