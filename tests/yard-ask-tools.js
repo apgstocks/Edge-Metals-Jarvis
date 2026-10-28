@@ -475,12 +475,47 @@ section('E3 — reading the payee out of the description');
     }
     {
         // A hung request is the one failure that returns nothing at all.
-        const slow = () => new Promise((r) => setTimeout(() => r({ vendor: 'Santiago', confidence: 'high' }), v.TIMEOUT_MS + 500));
-        const started = Date.now();
+        //
+        // ── FLAKY UNTIL 2026-10-28, AND WHY ──────────────────────────────
+        // This asserted `Date.now() - started < v.TIMEOUT_MS + 400` against a
+        // stub answering at TIMEOUT_MS + 500: a 400ms margin on a 4-second
+        // wait. On a loaded machine — the whole suite running, 350 files —
+        // the timer fires late and the check goes red on a helper that did
+        // exactly the right thing. It passed and failed on alternate runs.
+        //
+        // A flaky check is worse than no check: CLAUDE.md §2 is about a suite
+        // that stops being believed, and this one taught us to shrug at a red.
+        //
+        // The property is ORDER, not duration: suggestVendor must come back
+        // WITHOUT waiting for the model. So the stub records when it finally
+        // answers, and the assertion is that it had not answered yet. No
+        // clock tolerance, nothing to tune, immune to how busy the machine is.
+        // ── THE DELAY IS FIXED, NOT DERIVED FROM THE CONSTANT ────────────
+        // It was `v.TIMEOUT_MS + 500`, so the fixture moved with whatever
+        // TIMEOUT_MS happened to be. That made the check blind to the thing
+        // most worth catching: a timeout raised to a value that is no use to
+        // someone typing. Mutating 4000 -> 999999 did not fail this test, it
+        // made the test WAIT 1000 seconds and get killed, which counted as
+        // zero failures. A self-referential fixture cannot test its own
+        // reference.
+        //
+        // 6000ms, flat. The guard below keeps that honest: if the real
+        // timeout is ever raised past it, the test says so in words instead
+        // of quietly going slow and proving nothing.
+        ck('  the 4-second budget is what this fixture assumes',
+           v.TIMEOUT_MS < 6000,
+           `TIMEOUT_MS is ${v.TIMEOUT_MS}ms; the stub below answers at 6000ms, so raise it`);
+        let answered = false;
+        const slow = () => new Promise((r) => setTimeout(() => {
+            answered = true;
+            r({ vendor: 'Santiago', confidence: 'high' });
+        }, 6000));
         const r = await v.suggestVendor('Weekly salary Santiago', { expenses: EXP, ask: slow });
         ck('a hung model gives up rather than hanging the form',
-           r.suggest === false && Date.now() - started < v.TIMEOUT_MS + 400,
-           `${Date.now() - started}ms`);
+           r.suggest === false && answered === false,
+           `suggest=${r.suggest}, model had answered=${answered}`);
+        ck('  and it says WHY, so a timeout is not read as "no match"',
+           r.why === 'no_answer', JSON.stringify(r));
     }
 
     // The known names are fed to the prompt: a name she has typed before is

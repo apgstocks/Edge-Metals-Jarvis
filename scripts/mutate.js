@@ -3167,6 +3167,19 @@ const MUTATIONS = [
       find: "    renderMatched();\n    renderBooked();",
       to:   "    renderBooked();" },
 
+    // ── THE VENDOR-SUGGEST TIMEOUT, 2026-10-28 ───────────────────────
+    // tests/yard-ask-tools.js' hung-model check was FLAKY: it compared wall
+    // clock against TIMEOUT_MS + 400, a 400ms margin on a 4-second wait, and
+    // went red under load on a helper doing exactly the right thing. Rewritten
+    // to assert ORDER — the helper came back before the model answered — and
+    // the stub's delay is now a flat 6000ms instead of being derived from
+    // TIMEOUT_MS, which is what made this mutation undetectable: raising the
+    // constant used to move the fixture with it and the test just hung.
+    { name: 'vendor-suggest: the timeout is raised past any use to someone typing',
+      file: 'helpers/vendorFromText.js', suites: ['yard-ask-tools'],
+      find: "const TIMEOUT_MS = 4000;",
+      to:   "const TIMEOUT_MS = 999999;" },
+
     // ── #218, THE DROPDOWN THAT NEVER WORKED ─────────────────────────
     // The datalist was filled on every load from the day the screen was
     // written and no input carried list="suplist", so the browser never
