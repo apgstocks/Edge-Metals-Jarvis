@@ -1,10 +1,9 @@
 #!/usr/bin/env node
 // ── scripts/qb-duplicates.js — the same bill or invoice entered twice ────
 //
-//     node scripts/qb-duplicates.js                      # live QB, this year
-//     node scripts/qb-duplicates.js --year 2026
-//     node scripts/qb-duplicates.js --bills data/qb-snapshot-bills.json \
-//                                   --invoices data/qb-snapshot-invoices.json
+//     node scripts/qb-duplicates.js            # live QB, 2026-01-01 -> today
+//     node scripts/qb-duplicates.js --offline  # the snapshot on disk instead
+//     node scripts/qb-duplicates.js --from 2026-01-01 --to 2026-06-30
 //
 // Apsara, 2026-10-28: "Check for duplicates for 2026 bills and invoices in
 // quickbook".
@@ -49,7 +48,17 @@ const path = require('path');
 
 const argv = process.argv.slice(2);
 const flag = (n, d = null) => { const i = argv.indexOf(n); return i === -1 ? d : argv[i + 1]; };
-const YEAR = String(flag('--year', String(new Date().getFullYear())));
+// ── THE WINDOW IS ROLLING ───────────────────────────────────────────────
+// Apsara, 2026-10-28: "it should be a rolling date..from 01-01-2026 to rolling
+// date". So 2026-01-01 to TODAY, every run — not a calendar year, which asked
+// QuickBooks for rows dated up to 2026-12-31 and made "this year" mean
+// something different on every machine's clock. --from and --to override it.
+const FROM = String(flag('--from', '2026-01-01'));
+const TO = String(flag('--to', new Date().toISOString().slice(0, 10)));
+const inWindow = (r) => {
+    const d = String(r.TxnDate || '').slice(0, 10);
+    return d && d >= FROM && d <= TO;          // string compare, no date maths
+};
 const money = (n) => '$' + (Number(n) || 0).toLocaleString('en-US',
     { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const n2 = (v) => Number(Number(v || 0).toFixed(2));
@@ -62,33 +71,58 @@ const n2 = (v) => Number(Number(v || 0).toFixed(2));
 // called it the books, so a clean run against those files would have been a
 // false all-clear over a third of the year. helpers/quickbooks/snapshot.js
 // already pages properly; this copies it rather than inventing a third way.
-async function fetchAll(table, year) {
+async function fetchAll(table) {
     const client = require('../helpers/quickbooks/client');
     const auth = require('../helpers/quickbooks/auth');
     const env = auth.qbEnv();
-    const where = `TxnDate >= '${year}-01-01' and TxnDate <= '${year}-12-31'`;
+    const where = `TxnDate >= '${FROM}' and TxnDate <= '${TO}'`;
     const out = [];
     for (let start = 1; start <= 20000; start += 1000) {
         const r = await client.query(
             `select * from ${table} where ${where} maxresults 1000 startposition ${start}`, { env });
-        const rows = (((r || {}).QueryResponse || {})[table]) || [];
+        // client.query ALREADY returns QueryResponse — it ends `return
+        // d.QueryResponse || {}`. My first version read r.QueryResponse[table],
+        // which is always undefined, so every live run would have found zero
+        // rows and reported a clean year. A false all-clear from the one tool
+        // written to prevent exactly that. helpers/quickbooks/snapshot.js has
+        // had `r[table]` all along; I did not read it before writing mine.
+        const rows = (r || {})[table] || [];
         out.push(...rows);
         if (rows.length < 1000) break;
     }
     return { rows: out, env };
 }
 
-function fromFile(p, year) {
+// The snapshot on disk, through the helper that owns its shape, so this reads
+// the rolling wrapper and the old bare array without a second opinion about
+// either. --bills/--invoices still take an explicit path for a one-off file.
+function fromSnapshot(kind) {
+    const snap = require('../helpers/quickbooks/snapshot').rows(kind);
+    if (!snap) return { rows: [], warn: `no ${kind} snapshot on disk — run: node scripts/qb-snapshot.js` };
+    const rows = snap.rows.filter(inWindow);
+    const last = rows.map((r) => r.TxnDate).sort().pop() || '(none)';
+    let warn = null;
+    // Say it, every time. A truncated page that looks complete is how a clean
+    // bill of health gets handed over on a third of the data.
+    if (snap.legacy) {
+        warn = `${path.basename(snap.file)} is the OLD bare-array file (${snap.count} rows, ends ${last})`
+            + (snap.count === 1000 ? ' — exactly 1000 rows, so one unpaginated page, NOT the whole window.' : '.')
+            + ' Refresh it: node scripts/qb-snapshot.js';
+    } else if (snap.until && snap.until < TO) {
+        warn = `snapshot is from ${snap.until} and you asked up to ${TO} — ${kind} after ${snap.until} are not in it.`;
+    }
+    return { rows, warn, env: snap.env };
+}
+
+function fromFile(p) {
     const abs = path.isAbsolute(p) ? p : path.join(process.cwd(), p);
     if (!fs.existsSync(abs)) { console.error(`no such file: ${p}`); process.exit(1); }
-    const all = JSON.parse(fs.readFileSync(abs, 'utf8'));
-    const rows = (Array.isArray(all) ? all : []).filter((r) => String(r.TxnDate || '').startsWith(year));
-    // Say it, every time. A truncated page that looks complete is how a
-    // clean bill of health gets handed over on a third of the data.
-    const exact1000 = (Array.isArray(all) ? all.length : 0) === 1000;
+    const raw = JSON.parse(fs.readFileSync(abs, 'utf8'));
+    const all = Array.isArray(raw) ? raw : (raw.rows || []);
+    const rows = all.filter(inWindow);
     const last = rows.map((r) => r.TxnDate).sort().pop() || '(none)';
-    return { rows, warn: exact1000
-        ? `${p} holds EXACTLY 1000 rows and ends ${last} — almost certainly one unpaginated page, NOT the whole year. Run live for the real answer.`
+    return { rows, env: raw.env || null, warn: all.length === 1000
+        ? `${p} holds EXACTLY 1000 rows and ends ${last} — one unpaginated page, NOT the whole window.`
         : null };
 }
 
@@ -136,7 +170,7 @@ function clusters(rows, keyfn) {
 }
 
 function report(label, rows) {
-    console.log(`\n═══ ${label} — ${rows.length} row(s) in ${YEAR} ═══`);
+    console.log(`\n═══ ${label} — ${rows.length} row(s) from ${FROM} to ${TO} ═══`);
     const seen = new Set();
     const hits = [];
 
@@ -229,19 +263,24 @@ function report(label, rows) {
 
 (async () => {
     const bf = flag('--bills'), inf = flag('--invoices');
+    const offline = argv.includes('--offline');
     let bills, invs, env = 'file', warns = [];
     if (bf || inf) {
-        const b = bf ? fromFile(bf, YEAR) : { rows: [], warn: null };
-        const i = inf ? fromFile(inf, YEAR) : { rows: [], warn: null };
-        bills = b.rows; invs = i.rows;
+        const b = bf ? fromFile(bf) : { rows: [], warn: null };
+        const i = inf ? fromFile(inf) : { rows: [], warn: null };
+        bills = b.rows; invs = i.rows; env = b.env || i.env || 'file';
+        warns = [b.warn, i.warn].filter(Boolean);
+    } else if (offline) {
+        const b = fromSnapshot('bills'), i = fromSnapshot('invoices');
+        bills = b.rows; invs = i.rows; env = b.env || i.env || 'snapshot on disk';
         warns = [b.warn, i.warn].filter(Boolean);
     } else {
-        const b = await fetchAll('Bill', YEAR);
-        const i = await fetchAll('Invoice', YEAR);
+        const b = await fetchAll('Bill');
+        const i = await fetchAll('Invoice');
         bills = b.rows; invs = i.rows; env = b.env;
     }
 
-    console.log(`QuickBooks duplicate check · ${YEAR} · source: ${env}`);
+    console.log(`QuickBooks duplicate check · ${FROM} to ${TO} · source: ${env}`);
     if (env === 'sandbox') console.log('  NOTE: sandbox, not her live books.');
     for (const w of warns) console.log(`  INCOMPLETE DATA: ${w}`);
 

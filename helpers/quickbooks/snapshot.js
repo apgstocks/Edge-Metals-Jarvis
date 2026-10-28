@@ -125,7 +125,61 @@ async function write({ env = auth.qbEnv(), since = '2026-01-01' } = {}) {
     snap.over_applied = overApplied;
     fs.mkdirSync(path.dirname(FILE()), { recursive: true });
     fs.writeFileSync(FILE(), JSON.stringify(snap));
+
+    // ── THE FULL ROWS, ROLLING, 2026-10-28 ──────────────────────────────
+    // Apsara: "it should be a rolling date..from 01-01-2026 to rolling date".
+    //
+    // The index above is flattened to the fields a question needs, which is
+    // right for answering questions and wrong for one job: finding the same
+    // bill entered twice. Both real duplicates in her 2026 books were caught
+    // by the LINE BREAKDOWN — three lines agreeing to the cent, and a bill
+    // whose whole total is a line inside another — and the index keeps no
+    // lines at all. So the documents are kept too.
+    //
+    // ── WHY THIS IS WRITTEN AT ALL ──────────────────────────────────────
+    // data/qb-snapshot-bills.json and -invoices.json already existed, dated
+    // 2026-09-21, holding EXACTLY 1000 rows each and stopping at 2026-09-05
+    // and 2026-08-27. Nothing in the repo wrote them and nothing in git
+    // history ever did: a one-off pull of a single unpaginated page, kept as
+    // though it were the books. A duplicate check run against them would have
+    // reported a clean year over two thirds of one. page() above pages
+    // properly, so from now on these are its output.
+    //
+    // ROLLING means the window is 2026-01-01 to NOW, every run. There is no
+    // upper bound in the query because QuickBooks has nothing dated after
+    // today; `until` is recorded so a reader can see how fresh it is rather
+    // than inferring it from the last TxnDate, which is what made the old
+    // files look complete.
+    //
+    // The wrapper carries `env`. The old bare arrays did not, and that cost
+    // real time on 2026-10-28: the index said sandbox while these two files
+    // were production, and the only way to tell was recognising her suppliers'
+    // names. A snapshot that cannot say which books it came from is a snapshot
+    // nobody should act on.
+    const rowFile = (name) => path.join(path.dirname(FILE()), name);
+    const wrap = (rows) => JSON.stringify({
+        at: snap.at, env, since, until: String(snap.at).slice(0, 10),
+        count: rows.length, rows,
+    });
+    fs.writeFileSync(rowFile('qb-snapshot-bills.json'), wrap(bills));
+    fs.writeFileSync(rowFile('qb-snapshot-invoices.json'), wrap(invoices));
     return snap;
+}
+
+// ── READING THE ROWS BACK ───────────────────────────────────────────────
+// Either shape: the wrapper this writes, or a bare array from the 2026-09-21
+// one-off. Returns the provenance either way, and SAYS when it is the legacy
+// shape, because the legacy files are the truncated ones.
+function rows(kind) {
+    const f = path.join(path.dirname(FILE()), `qb-snapshot-${kind}.json`);
+    let raw = null;
+    try { raw = JSON.parse(fs.readFileSync(f, 'utf8')); } catch { return null; }
+    if (Array.isArray(raw)) {
+        return { rows: raw, at: null, env: null, since: null, until: null,
+            legacy: true, count: raw.length, file: f };
+    }
+    if (!raw || !Array.isArray(raw.rows)) return null;
+    return { ...raw, legacy: false, file: f };
 }
 
 function read() {
@@ -142,4 +196,4 @@ function stamp() {
     try { return String(fs.statSync(FILE()).mtimeMs); } catch { return '0'; }
 }
 
-module.exports = { write, read, ageMinutes, stamp, FILE, containersOf };
+module.exports = { write, read, rows, ageMinutes, stamp, FILE, containersOf };

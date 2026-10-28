@@ -3162,6 +3162,30 @@ const MUTATIONS = [
       find: "    renderMatched();\n    renderBooked();",
       to:   "    renderBooked();" },
 
+    // ── QUICKBOOKS DUPLICATES, 2026-10-28 ────────────────────────────
+    // "Check for duplicates for 2026 bills and invoices in quickbook", then
+    // "it should be a rolling date..from 01-01-2026 to rolling date".
+    { name: 'qbdup: the reference is ignored, so two real freight loads read as one bill',
+      file: 'scripts/qb-duplicates.js', suites: ['qb-duplicates'],
+      find: "`${party(r)}|${r.TxnDate}|${lineKey(r)}|${doc(r)}`",
+      to:   "`${party(r)}|${r.TxnDate}|${lineKey(r)}`" },
+    { name: 'qbdup: QuickBooks own subtotal row is counted as a charge again',
+      file: 'scripts/qb-duplicates.js', suites: ['qb-duplicates'],
+      find: "    .filter((l) => l.DetailType !== 'SubTotalLineDetail' && l.Amount != null)",
+      to:   "    .filter((l) => l.Amount != null)" },
+    { name: 'qbdup: the subset signal goes, burying a 1,387 overcount inside a 21,317 bill',
+      file: 'scripts/qb-duplicates.js', suites: ['qb-duplicates'],
+      find: "        if (!charge(big).includes(n2(small.TotalAmt))) continue;",
+      to:   "        continue;" },
+    { name: 'qbdup: short data is no longer announced, so a third of a year reads clean',
+      file: 'scripts/qb-duplicates.js', suites: ['qb-duplicates'],
+      find: "    for (const w of warns) console.log(`  INCOMPLETE DATA: ${w}`);",
+      to:   "" },
+    { name: 'qbdup: the window stops rolling and becomes a calendar year',
+      file: 'scripts/qb-duplicates.js', suites: ['qb-duplicates'],
+      find: "const TO = String(flag('--to', new Date().toISOString().slice(0, 10)));",
+      to:   "const TO = '2026-12-31';" },
+
     // ── MONEY IN: SHE PICKS THE COMBINATION, 2026-10-28 (#238) ───────
     // The deposit side had the identical dead end to the withdrawal side, and
     // worse consequences: a deposit APPLIES money to invoices, so recording

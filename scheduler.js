@@ -1567,6 +1567,26 @@ function start() {
     // Apsara, 2026-10-12: "constantly monitoring cost". Hourly; speaks at most
     // once per Pacific day. See helpers/aiCostWatch.js.
     cron.schedule('20 * * * *',   () => require('./helpers/aiCostWatch').check().catch(e => console.error('[SCHED] ai-cost-watch:', e)), TZ);
+    // ── 05:55 — THE ROLLING QUICKBOOKS SNAPSHOT ─────────────────────────
+    // Apsara, 2026-10-28: "it should be a rolling date..from 01-01-2026 to
+    // rolling date".
+    //
+    // helpers/quickbooks/snapshot.js has always been rolling — since
+    // 2026-01-01, no upper bound, paged properly — and helpers/qbDocNumbers.js
+    // calls its output "the nightly snapshot rows". NOTHING EVER RAN IT. Not
+    // this file, not the 07:25 QuickBooks agent, not any script. The index on
+    // disk was 23 days old and the Bill/Invoice rows 37 days old, and the row
+    // files were a single unpaginated page of 1000 that stopped in early
+    // September — so a duplicate check over 2026 was reading two thirds of the
+    // year and could have called it clean.
+    //
+    // Read-only against QuickBooks: query calls only. Ahead of the integrity
+    // sweep at 06:30, the bank auto-tick at 06:50 and the QuickBooks agent at
+    // 07:25, so all three read today's books rather than last month's.
+    cron.schedule('55 5 * * *',   () => require('./helpers/quickbooks/snapshot')
+        .write({}).then((s) => console.log(`[SCHED] qb-snapshot: ${s.bills.length} bills, `
+            + `${s.invoices.length} invoices since ${s.since} (${s.env})`))
+        .catch(e => console.error('[SCHED] qb-snapshot:', e.message)), TZ);
     cron.schedule('30 6 * * *',   () => require('./helpers/integritySweepJob').run()
         .catch(e => console.error('[SCHED] integrity-sweep:', e)), TZ);
     // ── 07:00 — PAYMENTS THAT LEFT THE BANK AND WERE NEVER RECORDED ──────
