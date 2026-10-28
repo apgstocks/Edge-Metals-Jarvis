@@ -127,7 +127,19 @@ tr:last-child td { border-bottom:none; }
       <!-- "mimic add load form but we will have only seller in form" — so the
            party is the supplier and there is no buyer/seller toggle. -->
       <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px;">
-        <div class="field"><label>Supplier *</label><input id="rm_supplier" placeholder="who delivered it" autocomplete="off"><datalist id="suplist"></datalist></div>
+        <!-- list="suplist" was missing from the day this screen was written.
+             The datalist below it has been filled on every load since (see
+             $('suplist').innerHTML further down, beside the identical line
+             that fills yardlist) — but nothing referenced it, so the browser
+             never connected the two and the dropdown has never once appeared.
+             Her staff have been typing supplier names from memory into a
+             field that had the answers sitting next to it.
+             #suplist was the ONLY dead datalist in the whole dashboard;
+             yardlist nine lines below was wired correctly all along, which is
+             the convention copied here. autocomplete="off" stays: it stops
+             the browser's own autofill competing with the datalist, and does
+             not suppress it. -->
+        <div class="field"><label>Supplier *</label><input id="rm_supplier" list="suplist" placeholder="who delivered it" autocomplete="off"><datalist id="suplist"></datalist></div>
         <div class="field"><label>Date</label><input id="rm_date" placeholder="MM/DD/YYYY" autocomplete="off"></div>
         <div class="field"><label>Packing list no</label><input id="rm_pl" placeholder="their document number"></div>
         <div class="field"><label>Container no (if known)</label><input id="rm_container" placeholder="left blank until it is stuffed"></div>

@@ -3167,6 +3167,23 @@ const MUTATIONS = [
       find: "    renderMatched();\n    renderBooked();",
       to:   "    renderBooked();" },
 
+    // ── #218, THE DROPDOWN THAT NEVER WORKED ─────────────────────────
+    // The datalist was filled on every load from the day the screen was
+    // written and no input carried list="suplist", so the browser never
+    // connected them. Months of typing supplier names from memory beside a
+    // field that had the answers.
+    { name: 'inventory: the Supplier dropdown is unwired again (#218)',
+      file: 'dashboard/edge-inventory.html', suites: ['inventory-lines'],
+      find: 'id="rm_supplier" list="suplist"',
+      to:   'id="rm_supplier"' },
+    // And the generic sweep, which is the part that matters for the NEXT one:
+    // suplist was the only dead datalist in the whole dashboard and nothing
+    // would have told anyone.
+    { name: 'inventory: any other datalist can go dead unnoticed',
+      file: 'dashboard/edge-inventory.html', suites: ['inventory-lines'],
+      find: 'id="rm_storage" list="yardlist"',
+      to:   'id="rm_storage"' },
+
     // ── ONE ACCOUNTS AGENT, 2026-10-28 ──────────────────────────────
     // "MAKE IT VERY EASY.ASSIGN A AI TO THIS TO DO ALL THE JOBS" / "AN AGENT
     // ONLY FOR QB,BOOKS,BANK". It adds no check; it runs the ones nobody ran.

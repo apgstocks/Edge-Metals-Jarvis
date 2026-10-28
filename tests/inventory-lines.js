@@ -289,6 +289,47 @@ for (const [name, file] of [['app', 'mobile-app/www/index.html'], ['website', 'd
 }
 
 function done() {
+
+// ── EVERY DATALIST IS ACTUALLY WIRED TO AN INPUT ─────────────────────────
+// Apsara's #218: the Supplier field on this screen has never offered a
+// dropdown. `<datalist id="suplist">` was there from the day it was written
+// and $('suplist').innerHTML was filled on every load — but no input carried
+// list="suplist", so the browser never connected them. Her staff typed
+// supplier names from memory into a field that had the answers sitting
+// beside it. Nine lines below, yardlist was wired correctly all along.
+//
+// A filled datalist nobody points at is the same defect class as a route
+// with no caller: everything looks present, nothing happens. Checked across
+// EVERY dashboard screen rather than this one, because the next person adding
+// a datalist deserves to be told at test time — suplist was the only dead one
+// in the whole dashboard and it stayed dead for months.
+{
+    section('datalists are wired to an input');
+    const files = fs.readdirSync(path.join(ROOT, 'dashboard'))
+        .filter((f) => f.endsWith('.html'));
+    const dead = [];
+    for (const f of files) {
+        const html = fs.readFileSync(path.join(ROOT, 'dashboard', f), 'utf8');
+        const ids = [...html.matchAll(/<datalist id="([^"]+)"/g)].map((m) => m[1]);
+        const used = new Set([...html.matchAll(/\blist="([^"]+)"/g)].map((m) => m[1]));
+        for (const id of ids) if (!used.has(id)) dead.push(`${f}#${id}`);
+    }
+    ck('every datalist in dashboard/ is referenced by an input list=',
+       dead.length === 0, dead.join(', ') + ' — filled on load and connected to nothing');
+    // The control: if the scan finds no datalists at all it proves nothing.
+    const total = files.reduce((n, f) => n
+        + [...fs.readFileSync(path.join(ROOT, 'dashboard', f), 'utf8')
+            .matchAll(/<datalist id="/g)].length, 0);
+    ck('  and there are datalists to check, so this is not vacuous',
+       total >= 2, `${total} found across ${files.length} screens`);
+    // The one she reported, by name, so a future edit that drops the
+    // attribute again fails with her words rather than a generic count.
+    const inv = fs.readFileSync(path.join(ROOT, 'dashboard', 'edge-inventory.html'), 'utf8');
+    ck('  Supplier on Edge Inventory offers the supplier list (#218)',
+       /id="rm_supplier"[^>]*\blist="suplist"/.test(inv),
+       'the datalist is filled every load; without list= the dropdown never appears');
+}
+
     console.log(`\n  ${pass} passed, ${fail} failed`);
     if (failures.length) { console.log('\n  Failed:'); failures.forEach((f) => console.log('   - ' + f)); }
     try { fs.rmSync(process.env.DATA_DIR, { recursive: true, force: true }); } catch (e) {}
