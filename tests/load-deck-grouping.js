@@ -195,12 +195,64 @@ for (const file of ['dashboard/index.html', 'mobile-app/www/index.html']) {
     // splitLoadsByRecency's cutoff used to come from toISOString(), which is
     // UTC — so for the seven hours after 5pm Pacific it believed it was
     // already tomorrow and moved the boundary a day early every evening.
-    // Asserted on the helper directly: in a UTC sandbox the two agree, so
-    // only a check on the COMPONENTS can tell them apart.
-    const probe = new Date(2026, 9, 2, 23, 30, 0);   // local 2026-10-02 23:30
-    ck(`  ${who}: the day key is the LOCAL day, not the UTC one`,
-       w.loadLocalDayKey(probe) === '2026-10-02',
-       `got ${w.loadLocalDayKey(probe)} — a date on a load is the yard's own day`);
+    //
+    // ── AND THE CHECK COULD NOT TELL THEM APART (2026-10-29) ────────────
+    // The comment here used to say "in a UTC sandbox the two agree, so only a
+    // check on the COMPONENTS can tell them apart" — and then compared the
+    // RESULT STRING, which is not a check on the components. Proof: replacing
+    // the APP's loadLocalDayKey body with `t.toISOString().slice(0, 10)` left
+    // this check GREEN for both clients. It passed because the probe hour
+    // happens to map to the same calendar day in this machine's zone, not
+    // because the implementation is right.
+    //
+    // My first fix for this forced process.env.TZ to Pacific around the
+    // check. That was worse than the bug: once TZ is set in-process you
+    // CANNOT get the machine's own zone back — restoring it to '' yields
+    // Etc/Unknown and deleting it yields UTC, so every later section in this
+    // file would have silently run in a different zone than it was written
+    // for. No global state is touched now.
+    //
+    // My second attempt chose a probe that straddles midnight in whatever
+    // zone the machine runs. That worked in Pacific, Calcutta and London —
+    // and FAILED on UTC, where local and UTC are the same day by definition
+    // and no probe can discriminate. Her VM's zone is not something this file
+    // gets to assume: every date rule on the server names
+    // America/Los_Angeles explicitly through Intl precisely because the host
+    // zone is unknown (helpers/time.js:60). A check that is red on a UTC box
+    // would be a check she deletes.
+    //
+    // So the property is asserted in two zone-free halves, and it takes BOTH:
+    //   · behaviour — the key is the local calendar day of the instant, which
+    //     catches a broken formatter but cannot by itself see UTC-vs-local;
+    //   · source — the body reads the local components and never reaches for
+    //     toISOString or a getUTC*, which is the regression that actually
+    //     happened and is the half that still bites on UTC.
+    // Written as an ABSENCE, with comments stripped, for the reason
+    // tests/bol.js records: otherwise the prose explaining the rule satisfies
+    // the check enforcing it.
+    const pad2 = (n) => String(n).padStart(2, '0');
+    const localDayOf = (d) => `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+    for (const hour of [0, 9, 23]) {
+        const d = new Date(2026, 9, 2, hour, 30, 0);
+        ck(`  ${who}: ${pad2(hour)}:30 keys to its own local day`,
+           w.loadLocalDayKey(d) === localDayOf(d),
+           `got ${w.loadLocalDayKey(d)}, local day is ${localDayOf(d)}`);
+    }
+    {
+        const src = file === 'dashboard/index.html'
+            ? require('../helpers/sourceParts').indexHtml()
+            : require('../helpers/sourceParts').mobileHtml();
+        const at = src.indexOf('function loadLocalDayKey(d) {');
+        const body = at < 0 ? '' : src.slice(at, src.indexOf('\n}', at)).replace(/\/\/[^\n]*/g, '');
+        ck(`  ${who}: loadLocalDayKey is where the day is decided`, !!body,
+           'could not find it in the assembled source — the check below proves nothing');
+        ck(`  ${who}: the day key is the LOCAL day, not the UTC one`,
+           !!body && /getFullYear\(\)/.test(body) && /getMonth\(\)/.test(body)
+             && /getDate\(\)/.test(body)
+             && !/toISOString|getUTC/.test(body),
+           `body reads: ${body.replace(/\s+/g, ' ').trim()} — for the seven hours `
+           + 'after 5pm Pacific, UTC is already tomorrow and the week boundary moves early');
+    }
 
     ck(`  ${who}: and an undated load stays at the top level`,
        dayTops.some((e) => /No date set/.test(e.textContent)),
