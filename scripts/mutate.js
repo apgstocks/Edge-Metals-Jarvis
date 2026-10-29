@@ -529,6 +529,16 @@ const MUTATIONS = [
       file: 'helpers/booksClose.js', suites: ['books-close'],
       find: "    if (snap.until && snap.until < to) return `the ${kind} snapshot only covers up to `",
       to:   "    if (false) return `the ${kind} snapshot only covers up to `" },
+    // The composition. bankAutoTick writes `matched`; booksClose decides what
+    // "explained" means on its own terms. If it stops recognising a match,
+    // the overnight job does real work and the morning report gives it no
+    // credit — the open count never falls and she distrusts the tool that is
+    // working. Section G of tests/bank-auto-tick.js is what holds them
+    // together, so this mutation names BOTH suites.
+    { name: 'close: a ticked row is not credited, so the auto-tick looks useless',
+      file: 'helpers/booksClose.js', suites: ['bank-auto-tick', 'books-close'],
+      find: "const explainedBy = (row) => (row.matched ? 'matched'",
+      to:   "const explainedBy = (row) => (false ? 'matched'" },
     { name: 'close: a row the BANK restated counts as one she explained',
       file: 'helpers/booksClose.js', suites: ['books-close'],
       find: "const explainedBy = (row) => (row.matched ? 'matched'",

@@ -243,6 +243,59 @@ section('D. it survives a bad day without taking the night with it');
        AT.summary({ ok: false, error: 'boom' }));
 }
 
+// ─────────────────────────────────────────────────────────────────────────
+section('G. END TO END: what the auto-tick does, the close report credits');
+// CLAUDE.md rule 3 — "ALwyas test end to end when you add a new feature."
+//
+// booksClose decides what "explained" means on its OWN terms, and
+// deliberately not through bankLedger.actedOn(). That was the right call for
+// the reason written there (actedOn counts `history`, which is the bank
+// restating a row, not her classifying it) — but it means there are now TWO
+// definitions in the codebase, and nothing made them agree.
+//
+// If they disagree, the overnight job does real work and the morning report
+// gives it no credit: she explains nothing, the open count never falls, and
+// the one number she is using to decide about QuickBooks is wrong in the
+// direction that makes her distrust the tool that is working.
+{
+    const C = require(path.join(ROOT, 'helpers/booksClose'));
+    const WIN = { from: '2026-09-01', to: '2026-09-30' };
+
+    // Nothing recorded yet: the row is real money, unexplained.
+    seed([bankRow()], []);
+    const before = C.close(WIN).perMonth[0];
+    ck('before anything, September carries one unexplained row',
+       before.bank.open === 1 && before.bank.money === PAID,
+       JSON.stringify({ open: before.bank.open, money: before.bank.money }));
+    ck('  so the month is open', before.closed === false);
+
+    // Now the payment IS recorded, and the overnight job ties them together.
+    seed([bankRow()], RECORDED);
+    const res = await AT.run({});
+    ck('the overnight job ticks it', res.ok === true && res.ticked.length === 1,
+       JSON.stringify({ ok: res.ok, ticked: res.ticked.length, error: res.error }));
+
+    const after = C.close(WIN).perMonth[0];
+    ck('and the close report CREDITS it — nothing left open',
+       after.bank.open === 0 && after.bank.money === 0,
+       JSON.stringify({ open: after.bank.open, money: after.bank.money })
+       + ' — two definitions of "explained" that disagree means the job works '
+       + 'and the report says it did not');
+    ck('  counting it as explained, not merely as settled',
+       after.bank.explained === 1 && after.bank.settled === 1,
+       JSON.stringify(after.bank));
+
+    // ── AND THE LICENCE THE AUTO-TICK RUNS UNDER STILL HOLDS ─────────────
+    // "A MATCH CREATES NOTHING." Section C proves the journal is unchanged;
+    // this proves the CLOSE REPORT's QuickBooks half is unchanged too, which
+    // is the half she will show the owner. An overnight job that moves a
+    // Jarvis-vs-QuickBooks figure is not a reconciliation, it is a
+    // restatement.
+    const qbBefore = JSON.stringify(before.qb);
+    ck('  and no Jarvis-vs-QuickBooks figure moved', JSON.stringify(after.qb) === qbBefore,
+       `${qbBefore} -> ${JSON.stringify(after.qb)}`);
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 if (fail) { console.log('FAILURES:\n  ' + failures.join('\n  ')); process.exit(1); }
 
