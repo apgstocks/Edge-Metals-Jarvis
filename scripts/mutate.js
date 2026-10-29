@@ -494,6 +494,19 @@ const MUTATIONS = [
       file: 'helpers/bills.js', suites: ['bills-sales'],
       find: '    const missing = Object.keys(tare).filter((k) => tare[k] === null);',
       to:   '    const missing = [];' },
+    // ── THE CLAIMS PAGE MUST EXECUTE (2026-10-29) ────────────────────────
+    // Her report: "Could not load claims — Can't find variable: fld".
+    // paneLines() sat at the top level of claims.html reading twelve of
+    // claimCard's locals, so every claim threw ReferenceError and the sorted
+    // and damaged panes had never once worked. 139 source-regex checks in
+    // tests/claims-sorted.js were green throughout, because not one of them
+    // ever ran the page. This mutation makes `fld` unresolvable again; it is
+    // killed only by a test that EXECUTES the thing.
+    { name: 'claims: a render-time reference breaks, and only source checks are watching',
+      file: 'dashboard/claims.html', suites: ['claims-render', 'claims-sorted'],
+      find: '  const fld = (label, cls, val, ph, extra) =>',
+      to:   '  const fldRenamed = (label, cls, val, ph, extra) =>' },
+
     // ══════════════════════════════════════════════════════════════════════
     // BOOKS CLOSE (2026-10-29) — "fix accounting first till october".
     // This report is what she will use to decide whether QuickBooks can go.

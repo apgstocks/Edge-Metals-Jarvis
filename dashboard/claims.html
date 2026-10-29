@@ -520,55 +520,6 @@ const kindChip = (t) => t
    The kind is the model's free-form name (and she renames and merges them);
    the assessment is which arithmetic applies. A claim never assessed is a
    weight claim, which is what every claim before 2026-10-10 was. */
-    // Shared by the Sorted and Damaged panes — see the two <div>s above.
-    // isDamage changes only the words; every control, id and handler is
-    // the same, which is the point: one pane cannot drift from the other.
-    function paneLines(isDamage){ return ''+
-          '<div class="grid">' +
-            fld('Price you paid this supplier, per unit', 'f_spaid',
-                c.paid_price != null ? c.paid_price : c.supplier_price, 'e.g. 0.85') +
-            '<label class="f">Paid price is per<select class="f_spaidUnit" data-k="f_spaidUnit">' +
-              unitOpt(c.paid_price_unit || c.supplier_price_unit || unit || 'LB') + '</select></label>' +
-            fld('Net weight invoiced (optional)', 'f_sinv', c.invoice_weight, 'stops more being sorted out than arrived') +
-          '</div>' +
-          '<table class="sortedT" style="width:100%; margin-top:10px; border-collapse:collapse; font-size:12px;">' +
-            '<thead><tr>' +
-              // ── THE HEADER MUST FOLLOW THE UNIT CHIPS ────────────────
-              // It read "Weight (MT)" with LB selected and green, because
-              // `unit` is captured when the card is BUILT and the chips only
-              // call renderCalc(). Apsara then entered the RATE in the
-              // Weight column and the WEIGHT in the Worth column, on all
-              // four rows — 1.38 was the price she had typed above. A header
-              // naming the wrong unit, over a column of bare numbers, will
-              // do that every time. The label is now painted by renderCalc
-              // from the selected chip.
-              '<th style="text-align:left">What was found</th>' +
-              '<th style="text-align:right" class="s_hw">Weight</th>' +
-              '<th style="text-align:right" class="s_hworth">Worth per unit</th>' +
-              '<th>that is per</th><th style="text-align:right">Claim</th><th></th>' +
-            '</tr></thead><tbody class="s_rows">' +
-              ((c.sorted_lines && c.sorted_lines.length ? c.sorted_lines : [{},{},{}])
-                .map((l) => sortedRow(l, c.paid_price_unit || c.supplier_price_unit || unit || 'LB')).join('')) +
-            '</tbody></table>' +
-          '<div class="actions" style="margin-top:6px">' +
-            '<button class="btn s_add" type="button" style="padding:3px 10px; font-size:11px;">Add another line</button>' +
-            '<span class="hint s_total" style="margin-left:10px"></span>' +
-          '</div>' +
-          // ── HOW DO YOU KNOW IT IS CLAD WHEEL? ────────────────────────
-          // Apsara: "how do i know material are this". The claim already
-          // had the answer and this pane was not asking it — the same
-          // chips the contamination pane uses, with the same STRENGTH note
-          // underneath, which for a sorted claim is the one that matters:
-          // "Sorted and weighed" is rated Medium, "their own sort — ask to
-          // witness it or re-weigh". A supplier will say exactly that, and
-          // she should read it here first rather than in his reply.
-          '<div class="lede2" style="margin-top:12px">How do you know it is this material?</div>' +
-          '<div class="chips2 f_meas" style="margin-bottom:4px" role="radiogroup" aria-label="How it was measured">' +
-            MEASURED.map(m => '<button type="button" role="radio" aria-checked="' + (pk.measured_by===m[0]) + '" data-m="' + m[0] + '" class="' + (pk.measured_by===m[0] ? 'sel' : '') + '">' + m[1] + '</button>').join('') +
-          '</div>' +
-          '<div class="hint s_ev" style="margin-top:0"></div>' +
-          '<div class="actions"><button class="btn go f_assess" ' + (isDamage ? 'data-kind="damage"' : 'data-kind="sorted"') + ' type="button">Confirm the assessment</button><span class="hint s_why" style="margin:0"></span></div>' +
-    '</div>'; }
 
 const ASSESS = [
   { id:'weight',        label:'Weight shortage' },
@@ -831,6 +782,66 @@ function claimCard(c, i, g){
     '</tr>';
 
   const assessed = c.claim_amount != null;
+
+  // ── MOVED INSIDE claimCard, 2026-10-29 ─────────────────────────────────
+  // It was declared at the top level of the script, outside this function,
+  // while reading twelve of this function's locals: c, fld, unit, unitOpt,
+  // pk, sortedRow and the rest. A top-level function cannot see them, so
+  // every render of a sorted or damaged claim threw ReferenceError: fld is
+  // not defined, and the page reported "Could not load claims". It had been
+  // that way since the commit that introduced it (c7d9f2c, 2026-10-23), so
+  // these two panes had NEVER worked. Nothing caught it because every check
+  // in tests/claims-sorted.js reads this file as TEXT and none of them ever
+  // executed it. Not re-indented, so the diff is the move and nothing else.
+    // Shared by the Sorted and Damaged panes — see the two <div>s above.
+    // isDamage changes only the words; every control, id and handler is
+    // the same, which is the point: one pane cannot drift from the other.
+    function paneLines(isDamage){ return ''+
+          '<div class="grid">' +
+            fld('Price you paid this supplier, per unit', 'f_spaid',
+                c.paid_price != null ? c.paid_price : c.supplier_price, 'e.g. 0.85') +
+            '<label class="f">Paid price is per<select class="f_spaidUnit" data-k="f_spaidUnit">' +
+              unitOpt(c.paid_price_unit || c.supplier_price_unit || unit || 'LB') + '</select></label>' +
+            fld('Net weight invoiced (optional)', 'f_sinv', c.invoice_weight, 'stops more being sorted out than arrived') +
+          '</div>' +
+          '<table class="sortedT" style="width:100%; margin-top:10px; border-collapse:collapse; font-size:12px;">' +
+            '<thead><tr>' +
+              // ── THE HEADER MUST FOLLOW THE UNIT CHIPS ────────────────
+              // It read "Weight (MT)" with LB selected and green, because
+              // `unit` is captured when the card is BUILT and the chips only
+              // call renderCalc(). Apsara then entered the RATE in the
+              // Weight column and the WEIGHT in the Worth column, on all
+              // four rows — 1.38 was the price she had typed above. A header
+              // naming the wrong unit, over a column of bare numbers, will
+              // do that every time. The label is now painted by renderCalc
+              // from the selected chip.
+              '<th style="text-align:left">What was found</th>' +
+              '<th style="text-align:right" class="s_hw">Weight</th>' +
+              '<th style="text-align:right" class="s_hworth">Worth per unit</th>' +
+              '<th>that is per</th><th style="text-align:right">Claim</th><th></th>' +
+            '</tr></thead><tbody class="s_rows">' +
+              ((c.sorted_lines && c.sorted_lines.length ? c.sorted_lines : [{},{},{}])
+                .map((l) => sortedRow(l, c.paid_price_unit || c.supplier_price_unit || unit || 'LB')).join('')) +
+            '</tbody></table>' +
+          '<div class="actions" style="margin-top:6px">' +
+            '<button class="btn s_add" type="button" style="padding:3px 10px; font-size:11px;">Add another line</button>' +
+            '<span class="hint s_total" style="margin-left:10px"></span>' +
+          '</div>' +
+          // ── HOW DO YOU KNOW IT IS CLAD WHEEL? ────────────────────────
+          // Apsara: "how do i know material are this". The claim already
+          // had the answer and this pane was not asking it — the same
+          // chips the contamination pane uses, with the same STRENGTH note
+          // underneath, which for a sorted claim is the one that matters:
+          // "Sorted and weighed" is rated Medium, "their own sort — ask to
+          // witness it or re-weigh". A supplier will say exactly that, and
+          // she should read it here first rather than in his reply.
+          '<div class="lede2" style="margin-top:12px">How do you know it is this material?</div>' +
+          '<div class="chips2 f_meas" style="margin-bottom:4px" role="radiogroup" aria-label="How it was measured">' +
+            MEASURED.map(m => '<button type="button" role="radio" aria-checked="' + (pk.measured_by===m[0]) + '" data-m="' + m[0] + '" class="' + (pk.measured_by===m[0] ? 'sel' : '') + '">' + m[1] + '</button>').join('') +
+          '</div>' +
+          '<div class="hint s_ev" style="margin-top:0"></div>' +
+          '<div class="actions"><button class="btn go f_assess" ' + (isDamage ? 'data-kind="damage"' : 'data-kind="sorted"') + ' type="button">Confirm the assessment</button><span class="hint s_why" style="margin:0"></span></div>' +
+    '</div>'; }
   const assessSummary = assessed ? money(c.claim_amount) + ' · ' + esc((ASSESS.find(x => x.id === (c.assessment || 'weight')) || {}).label || '') : 'not assessed yet';
 
   return '<div class="claim" data-cid="' + c.id + '">' +
