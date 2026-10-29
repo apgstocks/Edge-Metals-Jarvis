@@ -494,6 +494,38 @@ const MUTATIONS = [
       file: 'helpers/bills.js', suites: ['bills-sales'],
       find: '    const missing = Object.keys(tare).filter((k) => tare[k] === null);',
       to:   '    const missing = [];' },
+    // ══════════════════════════════════════════════════════════════════════
+    // BOOKS CLOSE (2026-10-29) — "fix accounting first till october".
+    // This report is what she will use to decide whether QuickBooks can go.
+    // Its figures matter less than its refusals: every guard below exists
+    // because the same mistake has already shipped once in qb-parity, which
+    // announced "they agree to the cent" with zero parties reconciled.
+    // ══════════════════════════════════════════════════════════════════════
+    { name: 'close: a refused snapshot no longer un-closes the period',
+      file: 'helpers/booksClose.js', suites: ['books-close'],
+      find: '        closed: blockers.length === 0 && closedCount === months.length,',
+      to:   '        closed: closedCount === months.length,' },
+    { name: 'close: the 1000-row page cap stops being noticed',
+      file: 'helpers/booksClose.js', suites: ['books-close'],
+      find: "    if (snap.count && snap.count % 1000 === 0) return `the ${kind} snapshot holds exactly `",
+      to:   "    if (false) return `the ${kind} snapshot holds exactly `" },
+    { name: 'close: a snapshot that stops early is treated as covering the period',
+      file: 'helpers/booksClose.js', suites: ['books-close'],
+      find: "    if (snap.until && snap.until < to) return `the ${kind} snapshot only covers up to `",
+      to:   "    if (false) return `the ${kind} snapshot only covers up to `" },
+    { name: 'close: a row the BANK restated counts as one she explained',
+      file: 'helpers/booksClose.js', suites: ['books-close'],
+      find: "const explainedBy = (row) => (row.matched ? 'matched'",
+      to:   "const explainedBy = (row) => ((row.history || []).length ? 'matched' : row.matched ? 'matched'" },
+    { name: 'close: a missing Jarvis store reads as a figure instead of NO DATA',
+      file: 'helpers/booksClose.js', suites: ['books-close'],
+      find: "        if (refusal || !st.ok) {\n            for (const k of months) byMonth[k][side.label] = { nodata: true };\n            continue;\n        }",
+      to:   "        if (refusal) {\n            for (const k of months) byMonth[k][side.label] = { nodata: true };\n            continue;\n        }" },
+    { name: 'close: the US date order is read day-first, moving money between months',
+      file: 'helpers/booksClose.js', suites: ['books-close'],
+      find: "    if (m) return `${m[3]}-${String(m[1]).padStart(2, '0')}`;",
+      to:   "    if (m) return `${m[3]}-${String(m[2]).padStart(2, '0')}`;" },
+
     // ── ONE RULE, TWO SITES: BOTH ARE TESTED, NEITHER WAS (2026-10-28) ──
     // This was one mutation whose find matched twice, so the harness refused
     // it and the $10 magnitude rule was guarded NOWHERE. cleanItems() decides
