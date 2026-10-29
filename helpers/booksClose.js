@@ -294,4 +294,31 @@ function close({ from, to } = {}) {
     };
 }
 
-module.exports = { close, ym, ymd, monthsBetween, explainedBy, snapshotUsable, inWindow };
+// ── THE PERIOD, DECIDED IN ONE PLACE ─────────────────────────────────────
+// Both the script and the 07:05 agent ask for "the closable year so far",
+// and they must mean the same thing or her morning mail and her terminal
+// will disagree about whether September is done. Same reason metalsReports
+// reads through the helper the screen's route calls.
+//
+// The month you are standing in is never closable: rows are still arriving.
+// So the window ends at the last day of LAST month, in the yard's own zone —
+// helpers/time.todayLocal(), not UTC, because for the seven hours after 5pm
+// Pacific a UTC clock has already turned the month over.
+const START_OF_BOOKS = '2026-01-01';
+
+function lastClosableWindow(today = null) {
+    const t = require('./time');
+    const day = ymd(today) || t.todayLocal();
+    const y = Number(day.slice(0, 4));
+    const m = Number(day.slice(5, 7));
+    const ly = m === 1 ? y - 1 : y;
+    const lm = m === 1 ? 12 : m - 1;
+    // Day 0 of the next month is the last day of this one, and Date.UTC
+    // handles February and leap years so this does not have to.
+    const last = new Date(Date.UTC(ly, lm, 0)).getUTCDate();
+    return { from: START_OF_BOOKS,
+        to: `${ly}-${String(lm).padStart(2, '0')}-${String(last).padStart(2, '0')}` };
+}
+
+module.exports = { close, ym, ymd, monthsBetween, explainedBy, snapshotUsable, inWindow,
+    lastClosableWindow, START_OF_BOOKS };

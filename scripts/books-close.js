@@ -28,23 +28,16 @@ const has = (n) => process.argv.includes(n);
 const money = (n) => '$' + (Number(n) || 0).toLocaleString('en-US',
     { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
-function defaultWindow() {
-    // End of last month, in her yard's zone — not UTC, and not today.
-    const t = require(path.join(ROOT, 'helpers/time'));
-    const today = t.todayLocal();                       // YYYY-MM-DD, Pacific
-    const [y, m] = [Number(today.slice(0, 4)), Number(today.slice(5, 7))];
-    const lastY = m === 1 ? y - 1 : y;
-    const lastM = m === 1 ? 12 : m - 1;
-    const lastDay = new Date(Date.UTC(lastY, lastM, 0)).getUTCDate();
-    return { from: '2026-01-01', to: `${lastY}-${String(lastM).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}` };
-}
-
 (function main() {
     const C = require(path.join(ROOT, 'helpers/booksClose'));
     const one = arg('--month');
+    // The default period comes from the helper, not from a copy here: the
+    // 07:05 agent asks the same question and the two must not be able to
+    // disagree about whether September is closable.
+    const def = C.lastClosableWindow();
     const win = one
         ? { from: `${one}-01`, to: `${one}-31` }
-        : { from: arg('--from') || defaultWindow().from, to: arg('--to') || defaultWindow().to };
+        : { from: arg('--from') || def.from, to: arg('--to') || def.to };
 
     const r = C.close(win);
 

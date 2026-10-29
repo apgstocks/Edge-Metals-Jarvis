@@ -122,11 +122,27 @@ function quickbooks() {
 }
 
 // ── THE REVIEW ──────────────────────────────────────────────────────────
+// ── IS THE YEAR CLOSED YET? (2026-10-29) ────────────────────────────────
+// Apsara: "fix accounting first till october" / "This is the biggest
+// headache for us". The other three sections are about TODAY — what arrived
+// overnight, what needs a decision now. This one is about the year behind
+// her, and it is the one that decides whether QuickBooks can go in January.
+//
+// The window comes from booksClose.lastClosableWindow(), shared with
+// scripts/books-close.js, so her morning mail and her terminal cannot
+// disagree about which months are even eligible.
+function closing() {
+    const C = require('./booksClose');
+    const win = C.lastClosableWindow();
+    return C.close(win);
+}
+
 function review() {
     const parts = {
         bank: safely('bank', bank),
         books: safely('books', books),
         quickbooks: safely('quickbooks', quickbooks),
+        closing: safely('closing', closing),
     };
     const broke = Object.values(parts).filter((p) => !p.ok);
     // `|| fallback` on each, not just on the !ok branch. A section that
@@ -171,10 +187,39 @@ function review() {
         todo.push({ area: 'QUICKBOOKS', what: 'the QuickBooks figures cannot be trusted this morning',
             items: why.concat(['nothing comparing Jarvis to QuickBooks is meaningful until this is fixed']) });
     }
+    // ── THE YEAR BEHIND HER ──────────────────────────────────────────────
+    // One line: the OLDEST open month and why, plus a count. Not all ten.
+    // A morning email that lists every open month every day is a wall, and
+    // the oldest one is where the work has to start anyway — a later month
+    // often only disagrees because an earlier one does.
+    const c = (parts.closing.ok && parts.closing.value) || null;
+    if (c) {
+        // Snapshot complaints are already the QUICKBOOKS section's job above.
+        // Repeating them here would say the same thing twice every morning,
+        // which is how she learns to skim the whole message.
+        const qbAlreadySaid = !!(q.missing || q.stale || q.legacy || q.sandbox);
+        const mine = c.blockers.filter((x) => !(qbAlreadySaid && /snapshot/i.test(x)));
+        if (mine.length) {
+            todo.push({ area: 'CLOSING', what: `${c.period.from} to ${c.period.to} cannot be assessed`,
+                items: mine });
+        }
+        const open = c.perMonth.filter((m) => !m.closed);
+        if (!mine.length && open.length) {
+            const first = open[0];
+            todo.push({ area: 'CLOSING',
+                what: `${open.length} of ${c.months.length} month(s) not closed — start with ${first.month}`,
+                items: first.why_open.concat(
+                    (first.bank.items || []).slice(0, 3).map((x) => `${x.date}  `
+                        + `${money(x.in || x.out)}  ${x.out ? 'out' : 'in'}  ${x.desc}`),
+                    [`the full list: node scripts/books-close.js --month ${first.month}`]) });
+        }
+    }
+
     for (const p of broke) {
         todo.push({ area: 'FAILED', what: `the ${p.name} section could not run`, items: [p.error] });
     }
-    return { at: new Date().toISOString(), clean: todo.length === 0, todo, bank: b, books: k, quickbooks: q };
+    return { at: new Date().toISOString(), clean: todo.length === 0, todo,
+        bank: b, books: k, quickbooks: q, closing: c };
 }
 
 // ── WHAT SHE READS ──────────────────────────────────────────────────────

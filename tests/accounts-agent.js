@@ -43,9 +43,23 @@ const billRow = (o) => ({
     LinkedTxn: [],
 });
 
+// ── A MORNING WHERE THE YEAR CAN ALSO BE ASSESSED (2026-10-29) ──────────
+// The CLOSING section reads the bank feed and the Jarvis stores. Before it
+// existed, "a clean morning" needed only a sound snapshot; now a morning
+// where those files cannot even be READ is not a clean morning, and the
+// agent says so. That is the intended behaviour, so the fixture grew rather
+// than the assertion shrinking: present, empty and readable means a year
+// with nothing outstanding in it.
+const closableClean = () => {
+    W('bank-transactions.json', []);
+    W('bills.json', []);
+    W('sales.json', []);
+};
+
 // ─────────────────────────────────────────────────────────────────────────
 section('A. silent when there is nothing to do');
 {
+    closableClean();
     W('qb-books-snapshot.json', snap());
     W('qb-snapshot-bills.json', { at: new Date().toISOString(), env: 'production',
         since: '2026-01-01', until: '2026-10-28', count: 0, rows: [] });
@@ -146,6 +160,7 @@ section('D2. send() is silent when clean — the promise she judges it by');
 
     const now = new Date().toISOString();
     const fresh = { at: now, env: 'production', since: '2026-01-01', until: '2026-10-28' };
+    closableClean();
     W('qb-books-snapshot.json', snap({ at: now }));
     W('qb-snapshot-bills.json', { ...fresh, count: 0, rows: [] });
     W('qb-snapshot-invoices.json', { ...fresh, count: 0, rows: [] });
@@ -173,6 +188,120 @@ section('D2. send() is silent when clean — the promise she judges it by');
 
     gmail.sendEmail = realSend;
     gmail.getMyEmailAddress = realAddr;
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+section('D3. CLOSING — the year behind her, in one line');
+// Apsara, 2026-10-29: "fix accounting first till october" / "This is the
+// biggest headache for us". The other sections are about today; this one
+// decides whether QuickBooks can go in January.
+{
+    const now = new Date().toISOString();
+    const fresh = { at: now, env: 'production', since: '2026-01-01', until: '2026-12-31' };
+    W('qb-books-snapshot.json', snap({ at: now }));
+    W('qb-snapshot-bills.json', { ...fresh, count: 0, rows: [] });
+    W('qb-snapshot-invoices.json', { ...fresh, count: 0, rows: [] });
+    W('bills.json', []);
+    W('sales.json', []);
+
+    // Two months with one unexplained row each. The point of the assertion
+    // is WHICH one she is pointed at.
+    W('bank-transactions.json', [
+        { id: 'X1', date: '2026-03-04', desc: 'EAGLE TRANS', spent: 3440, received: 0,
+          amount: -3440, direction: 'out', bank: 'Chase', category: '', matched: null, history: [] },
+        { id: 'X2', date: '2026-07-19', desc: 'BIG WIRE OUT', spent: 41000, received: 0,
+          amount: -41000, direction: 'out', bank: 'Chase', category: '', matched: null, history: [] },
+    ]);
+
+    const r = A.review();
+    const close = r.todo.filter((t) => t.area === 'CLOSING');
+    ck('the agent reports the year as well as the morning', close.length === 1,
+       JSON.stringify(r.todo.map((t) => t.area)));
+    // ── EVERY READ BELOW IS GUARDED (2026-10-29) ─────────────────────────
+    // Third time today I have written `thing[0].field` straight after
+    // asserting the array is non-empty. When a mutation empties it, the
+    // named failure above fires and is then THROWN AWAY by the TypeError:
+    // the file dies, the harness logs "CRASHED", and a crash counts as zero
+    // failures — the weakest possible kill for a real finding. So the
+    // fixture is read through accessors that cannot throw.
+    const c0 = close[0] || { what: '(no CLOSING section was produced)', items: [] };
+    ck('  it counts the open months', /2 of \d+ month\(s\) not closed/.test(c0.what),
+       c0.what);
+
+    // ── THE OLDEST, NOT THE BIGGEST ──────────────────────────────────────
+    // July's row is twelve times the money. March is still the one to start
+    // with: a later month very often disagrees only because an earlier one
+    // does, and fixing July first means doing March twice.
+    ck('  and sends her to the OLDEST open month, not the largest sum',
+       /start with 2026-03/.test(c0.what),
+       `${c0.what} — July holds $41,000 against March's $3,440, and is still second`);
+    ck('  naming the row, so she has somewhere to go',
+       c0.items.some((i) => /EAGLE TRANS/.test(i)), JSON.stringify(c0.items));
+    ck('  and how to see the rest of that month',
+       c0.items.some((i) => /books-close\.js --month 2026-03/.test(i)),
+       JSON.stringify(c0.items));
+
+    // ── IT DOES NOT SAY THE SAME THING TWICE ─────────────────────────────
+    // A stale snapshot is already the QUICKBOOKS section's finding. Repeating
+    // it under CLOSING every morning is how she learns to skim the whole
+    // message, which costs her the morning that matters.
+    // ── THE FIXTURE HAS TO MAKE BOTH SECTIONS SPEAK (2026-10-29) ─────────
+    // My first version only aged the snapshot. That makes the QUICKBOOKS
+    // section complain about staleness, but booksClose does not check AGE at
+    // all — it checks provenance, the 1000-row page cap and the period
+    // covered — so it produced no snapshot blocker, there was nothing for the
+    // filter to suppress, and the mutation that deletes the filter SURVIVED.
+    // The check was asserting an absence that was free.
+    //
+    // So the snapshot here is stale AND truncated: QUICKBOOKS objects to its
+    // age, booksClose objects to the page cap, and only the filter stops her
+    // reading about the same file twice.
+    const old = new Date(Date.now() - 40 * 86400000).toISOString();
+    W('qb-books-snapshot.json', snap({ at: old }));
+    W('qb-snapshot-bills.json', { at: old, env: 'production', since: '2026-01-01',
+        until: '2026-12-31', count: 1000, rows: [] });
+    W('qb-snapshot-invoices.json', { at: old, env: 'production', since: '2026-01-01',
+        until: '2026-12-31', count: 1000, rows: [] });
+    const r2 = A.review();
+    const qbSaid = r2.todo.filter((t) => t.area === 'QUICKBOOKS')
+        .some((t) => /cannot be trusted/.test(t.what));
+    const closeSaid = r2.todo.filter((t) => t.area === 'CLOSING')
+        .flatMap((t) => t.items).filter((i) => /snapshot/i.test(i));
+    ck('a stale snapshot is reported by QUICKBOOKS', qbSaid === true,
+       JSON.stringify(r2.todo.map((t) => t.what)));
+    ck('  and CLOSING does not repeat it', closeSaid.length === 0,
+       JSON.stringify(closeSaid));
+
+    // ── A CLEAN YEAR IS SILENT ───────────────────────────────────────────
+    W('qb-books-snapshot.json', snap({ at: now }));
+    W('qb-snapshot-bills.json', { ...fresh, count: 0, rows: [] });
+    W('qb-snapshot-invoices.json', { ...fresh, count: 0, rows: [] });
+    W('bank-transactions.json', [
+        { id: 'Y1', date: '2026-03-04', desc: 'EAGLE TRANS', spent: 3440, received: 0,
+          amount: -3440, direction: 'out', bank: 'Chase', category: '5100', matched: null, history: [] },
+    ]);
+    const r3 = A.review();
+    ck('explaining every row closes the year and the section goes quiet',
+       r3.todo.filter((t) => t.area === 'CLOSING').length === 0 && r3.clean === true,
+       JSON.stringify(r3.todo));
+
+    // ── ONE DEFINITION OF THE PERIOD ─────────────────────────────────────
+    // The script and the agent must not be able to disagree about which
+    // months are even closable, so both read lastClosableWindow(). Asserted
+    // on the behaviour: the window never includes the month she is in.
+    const C = require(path.join(ROOT, 'helpers/booksClose'));
+    const w = C.lastClosableWindow('2026-10-29');
+    ck('the closable period stops at the end of LAST month', w.to === '2026-09-30',
+       JSON.stringify(w) + ' — the month she is standing in is still receiving rows');
+    ck('  and it handles January, which is the one that wraps a year',
+       C.lastClosableWindow('2027-01-14').to === '2026-12-31',
+       JSON.stringify(C.lastClosableWindow('2027-01-14')));
+    ck('  and February in a leap year, which Date.UTC is trusted for',
+       C.lastClosableWindow('2028-03-02').to === '2028-02-29',
+       JSON.stringify(C.lastClosableWindow('2028-03-02')));
+    ck('  the script reads that same helper, not a copy of the arithmetic',
+       /lastClosableWindow\(\)/.test(fs.readFileSync(path.join(ROOT, 'scripts/books-close.js'), 'utf8')),
+       'a second copy of "which months are closable" is a second answer');
 }
 
 // ─────────────────────────────────────────────────────────────────────────

@@ -501,6 +501,22 @@ const MUTATIONS = [
     // because the same mistake has already shipped once in qb-parity, which
     // announced "they agree to the cent" with zero parties reconciled.
     // ══════════════════════════════════════════════════════════════════════
+    { name: 'closing: the agent points her at the BIGGEST open month, not the oldest',
+      file: 'helpers/accountsAgent.js', suites: ['accounts-agent'],
+      find: '            const first = open[0];',
+      to:   '            const first = [...open].sort((a, b) => (b.bank.money || 0) - (a.bank.money || 0))[0];' },
+    { name: 'closing: the year is never reported, so the section is decoration',
+      file: 'helpers/accountsAgent.js', suites: ['accounts-agent'],
+      find: '        if (!mine.length && open.length) {',
+      to:   '        if (false) {' },
+    { name: 'closing: a snapshot complaint is repeated under CLOSING as well',
+      file: 'helpers/accountsAgent.js', suites: ['accounts-agent'],
+      find: '        const mine = c.blockers.filter((x) => !(qbAlreadySaid && /snapshot/i.test(x)));',
+      to:   '        const mine = c.blockers;' },
+    { name: 'closing: the closable period includes the month she is standing in',
+      file: 'helpers/booksClose.js', suites: ['accounts-agent', 'books-close'],
+      find: '    const ly = m === 1 ? y - 1 : y;\n    const lm = m === 1 ? 12 : m - 1;',
+      to:   '    const ly = y;\n    const lm = m;' },
     { name: 'close: a refused snapshot no longer un-closes the period',
       file: 'helpers/booksClose.js', suites: ['books-close'],
       find: '        closed: blockers.length === 0 && closedCount === months.length,',
