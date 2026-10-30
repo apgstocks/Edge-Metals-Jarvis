@@ -352,6 +352,37 @@ section('I — the LABEL decides the layout, not the arithmetic');
        'the widening is an OR, not a replacement');
 }
 
+// ══════════════════════════════════════════════════════════════════════════
+section('J — the layout is not frozen into a claim when it is created');
+{
+    // Apsara, 2026-10-31: "This quality template change should be applicable
+    // even for older claims."
+    //
+    // It is, and this is what makes that true rather than a hope: the demand
+    // is built from the RECORD on every download (claims/routes.js calls
+    // report.build then report.toPdf — no stored HTML, no cached file). So a
+    // claim raised in July prints with today's layout. If a stored copy is
+    // ever introduced, THIS check goes red and the retroactivity is gone.
+    await kinds.ensure('quality', 'item not as described', 't');
+    const OLD = 'Vintage Co';
+    const v = await claims.create({ supplier: OLD, container_no: 'OLDQ9999999',
+        invoice_no: 'J1', weight_unit: 'LB', claim_type: 'quality',
+        claim_date: '2026-07-04', status: 'verified' }, 't');
+    await claims.verify(v.id, { invoice_weight: 40000, claimed_weight: 40000,
+        weight_unit: 'LB', sell_price: 0.50, sell_price_unit: 'LB' }, 'a');
+    await claims.assess(v.id, { assessment: 'grade', weight_unit: 'LB', grade_weight: 900,
+        grade_sold: 'Alternator', grade_received: 'MS Scrap',
+        grade_price_sold: 0.30, grade_price_received: 0.018 }, 'a');
+    await claims.raiseRecovery(v.id, { our_claim: 253.80 }, 'a');
+    const h = report.toHtml(report.build({ supplier: OLD, includeUnverified: true }));
+
+    ck('a claim raised months ago prints with TODAY\'s layout',
+       /Claim type/.test(h) && /What we sent/.test(h),
+       'nothing about the layout is stored on the claim');
+    ck('  and carries no Short, % or rate column', !/>Short</.test(h) && !/Your rate/.test(h), '');
+    ck('  its own date is untouched', /2026-07-04/.test(h), 'the layout changed, the record did not');
+}
+
 console.log(`\n  ${pass} passed, ${fail} failed`);
 if (fail) { console.log('\n  FAILED:\n' + failures.map((f) => '    - ' + f).join('\n')); process.exit(1); }
 
