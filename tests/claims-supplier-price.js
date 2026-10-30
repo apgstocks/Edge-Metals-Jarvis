@@ -443,9 +443,19 @@ section('I — a grade claim shows its working, or it is an unexplained number')
     const row = b.lines.find((l) => l.id === g.id);
 
     ck('the engine still charges weight x the difference', Math.abs(row.our_claim - 1041.35) < 0.01, row.our_claim);
-    ck('the price he billed is on the note', /\$0\.89\/LB/.test(h));
-    ck('the price of what arrived is on the note — it never used to be', /\$0\.42\/LB/.test(h));
-    ck('the difference he is charged is stated', /\$0\.47\/LB/.test(h));
+    // ── NEITHER PRICE GOES ON HIS COPY (2026-10-30) ──────────────────────
+    // Apsara: "I dont want to disclose price billed to us as Alternator at
+    // $2,600.00/LB, received as MS Scrap". This reverses the 2026-10-21
+    // decision that put both figures here so the amount could be reproduced.
+    // Her document, her commercial relationship — and the amount is still
+    // reproducible from the DIFFERENCE and the weight, which is the next
+    // check and the one that always mattered.
+    ck('the price he billed is NOT on the note', !/\$0\.89\/LB/.test(h),
+       (h.match(/billed to us as[^<]*/) || [])[0]);
+    ck('nor the price of what arrived', !/\$0\.42\/LB/.test(h));
+    ck('the difference he is charged is stated', /\$0\.47\/LB/.test(h),
+       'without this the amount cannot be checked at all, and a difference '
+       + 'on its own discloses neither price');
     // The assertion that matters: the line adds up, on its own, in his hands.
     ck('the working ends in the amount demanded', /2,215\.64 LB affected at \$0\.47\/LB = \$1,041\.35/.test(h),
         (h.match(/affected at[^<]*/) || [])[0]);

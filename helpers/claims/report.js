@@ -452,9 +452,18 @@ function detailLine(l) {
         // mean something else on one kind of row is how a shared column
         // starts lying.
         const gs = l.grade_price_sold, gr = l.grade_price_received;
+        // ── NO PRICES IN THIS SENTENCE (2026-10-30) ─────────────────────
+        // Apsara: "I dont want to disclose price billed to us as Alternator
+        // at $2,600.00/LB, received as MS Scrap". Neither figure goes on a
+        // supplier's copy — not the grade sold, not the grade received.
+        //
+        // This REPLACES the 2026-10-21 decision recorded above, which put
+        // both prices here so the amount could be reproduced. It is her
+        // document and her commercial relationship; the amount stays
+        // reproducible from the line below, which prints the DIFFERENCE and
+        // the weight. A difference on its own discloses neither price.
         if (l.grade_sold || l.grade_received) {
-            bits.push(`billed to us as ${l.grade_sold || '—'}${gs === null ? '' : ` at ${rateMoney(gs)}/${l.unit}`}`
-                + `, received as ${l.grade_received || '—'}${gr === null ? '' : `, worth ${rateMoney(gr)}/${l.unit}`}`);
+            bits.push(`billed to us as ${l.grade_sold || '—'}, received as ${l.grade_received || '—'}`);
         }
         if (l.grade_weight !== null && gs !== null && gr !== null) {
             // The arithmetic, spelled out, because she asked for exactly this

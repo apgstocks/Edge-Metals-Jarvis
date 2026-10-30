@@ -494,6 +494,11 @@ const MUTATIONS = [
       file: 'helpers/bills.js', suites: ['bills-sales'],
       find: '    const missing = Object.keys(tare).filter((k) => tare[k] === null);',
       to:   '    const missing = [];' },
+    { name: 'downgrade: a price she asked to hide is back on the supplier copy',
+      file: 'helpers/claims/report.js', suites: ['claims-supplier-price'],
+      find: "            bits.push(`billed to us as ${l.grade_sold || '—'}, received as ${l.grade_received || '—'}`);",
+      to:   "            bits.push(`billed to us as ${l.grade_sold || '—'} at ${rateMoney(gs)}/${l.unit}, received as ${l.grade_received || '—'}, worth ${rateMoney(gr)}/${l.unit}`);" },
+
     // ── THE SUPPLIER'S COPY, 2026-10-30 ──────────────────────────────────
     { name: 'report: the "as agreed between us" footnote comes back',
       file: 'helpers/claims/report.js', suites: ['claims-report-wording'],
