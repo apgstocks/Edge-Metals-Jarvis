@@ -453,12 +453,26 @@ section('I — a grade claim shows its working, or it is an unexplained number')
     ck('the price he billed is NOT on the note', !/\$0\.89\/LB/.test(h),
        (h.match(/billed to us as[^<]*/) || [])[0]);
     ck('nor the price of what arrived', !/\$0\.42\/LB/.test(h));
-    ck('the difference he is charged is stated', /\$0\.47\/LB/.test(h),
-       'without this the amount cannot be checked at all, and a difference '
-       + 'on its own discloses neither price');
-    // The assertion that matters: the line adds up, on its own, in his hands.
-    ck('the working ends in the amount demanded', /2,215\.64 LB affected at \$0\.47\/LB = \$1,041\.35/.test(h),
-        (h.match(/affected at[^<]*/) || [])[0]);
+    // ── NOR THE DIFFERENCE (2026-10-31) ─────────────────────────────────
+    // These two checks used to assert the OPPOSITE: that $0.47/LB and the
+    // working "2,215.64 LB affected at $0.47/LB = $1,041.35" were on the
+    // note, justified by "a difference on its own discloses neither price".
+    //
+    // That justification was MINE, not hers, and it was wrong. $0.47 is the
+    // gap between what he billed and what the material turned out to be
+    // worth — which is Edge's spread, readable by any supplier who knows
+    // what he charged. Apsara, 2026-10-31: "Remove  affected at $282.00/LB
+    // = $187.25."
+    //
+    // The cost of this is real and accepted: the amount demanded can no
+    // longer be reproduced from the document. The weight and the recoverable
+    // figure are all he gets.
+    ck('the difference between the two prices is NOT stated', !/\$0\.47\/LB/.test(h),
+       (h.match(/affected[^<]*/) || [])[0]);
+    ck('no working is printed for a downgrade at all', !/affected at/.test(h),
+       (h.match(/affected[^<]*/) || [])[0]);
+    ck('  the affected weight remains', /2,215\.64 LB affected/.test(h),
+       (h.match(/affected[^<]*/) || [])[0]);
 
     // "sold as" reads either as what HE sold Edge or what EDGE resold it as.
     ck('the ambiguous "sold as" wording is gone', !/sold as Alternator/.test(h));

@@ -504,12 +504,28 @@ function detailLine(l) {
         if (l.grade_sold || l.grade_received) {
             bits.push(`billed to us as ${l.grade_sold || '—'}, received as ${l.grade_received || '—'}`);
         }
-        if (l.grade_weight !== null && gs !== null && gr !== null) {
-            // The arithmetic, spelled out, because she asked for exactly this
-            // on the sorted type: "We should show the calc na 2000*0.30 like
-            // that." Same rule, same reason.
-            bits.push(`${wt(l.grade_weight, l.unit)} affected at ${rateMoney(gs - gr)}/${l.unit} = ${money(Math.round(l.grade_weight * (gs - gr) * 100) / 100)}`);
-        } else if (l.grade_weight !== null) {
+        // ── NO PRICE GAP, NO WORKING, ON A DOWNGRADE (2026-10-31) ──────
+        // Apsara: "Remove  affected at $282.00/LB = $187.25."
+        //
+        // The priced form printed the DIFFERENCE between what the grade was
+        // billed at and what it turned out to be worth. That difference is
+        // Edge's own spread on the material: a supplier who knows what he
+        // charged can read Edge's figure straight off it. It is the same
+        // disclosure she took off this document on 2026-10-30 when the two
+        // prices were printed outright, arriving by subtraction instead.
+        //
+        // This REPLACES the 2026-10-30 note above, which kept the difference
+        // on the grounds that "a difference on its own discloses neither
+        // price". She has now looked at the result and said to take it off,
+        // so that reasoning was MINE and it was wrong.
+        //
+        // What is left is the affected weight, which is also the Claim column
+        // of the table. The amount demanded is the figure in Recoverable; it
+        // is no longer reproducible from this document, and that is the
+        // deliberate trade. It does NOT touch the sorted or damage types,
+        // where she asked for the calculation spelled out —
+        // "We should show the calc na 2000*0.30 like that."
+        if (l.grade_weight !== null) {
             bits.push(`${wt(l.grade_weight, l.unit)} affected`);
         }
         return bits.length ? `<li><span class="mono">${esc(l.container_no || '—')}</span> — ${esc(l.kind)}: ${esc(bits.join('; '))}.</li>` : '';

@@ -546,6 +546,16 @@ const MUTATIONS = [
       find: "        kind: claimKinds.label(c.claim_type) === 'not classified yet'",
       to:   "        kind: false" },
 
+    // ── NO PRICE GAP ON A DOWNGRADE (2026-10-31) ─────────────────────────
+    { name: 'downgrade: the price gap and its working come back on the demand',
+      file: 'helpers/claims/report.js', suites: ['claims-report-wording'],
+      find: "        if (l.grade_weight !== null) {\n            bits.push(`${wt(l.grade_weight, l.unit)} affected`);",
+      to:   "        if (l.grade_weight !== null && gs !== null && gr !== null) {\n            bits.push(`${wt(l.grade_weight, l.unit)} affected at ${rateMoney(gs - gr)}/${l.unit} = ${money(Math.round(l.grade_weight * (gs - gr) * 100) / 100)}`);" },
+    { name: 'downgrade: the affected weight is dropped too, leaving only names',
+      file: 'helpers/claims/report.js', suites: ['claims-report-wording'],
+      find: "            bits.push(`${wt(l.grade_weight, l.unit)} affected`);",
+      to:   "            void 0;" },
+
     // ── THE LABEL DECIDES THE LAYOUT (2026-10-30) ────────────────────────
     { name: 'layout: the assessment decides again, so her quality label is ignored',
       file: 'helpers/claims/report.js', suites: ['claims-report-wording'],
@@ -2775,10 +2785,15 @@ const MUTATIONS = [
     // details na?" Grade was the worst: $1,041.35 demanded with the $0.42
     // that makes the sum work printed nowhere.
 
-    { name: 'grade: the note goes back to naming the grades and no figures',
-      file: 'helpers/claims/report.js', suites: ['claims-supplier-price'],
-      find: "        if (l.grade_weight !== null && gs !== null && gr !== null) {",
-      to:   "        if (false) {" },
+    // RETIRED 2026-10-31, not re-pointed. This guarded the rule that a grade
+    // note must print the figures that make the sum work. Apsara reversed
+    // that rule — "Remove  affected at $282.00/LB = $187.25." — so there is
+    // no longer a property here for it to defend, and re-pointing it would
+    // have meant inventing one. Its replacement is
+    // 'downgrade: the price gap and its working come back on the demand',
+    // which asserts the opposite and kills a named check.
+    //   { name: 'grade: the note goes back to naming the grades and no figures',
+    //     find: "        if (l.grade_weight !== null && gs !== null && gr !== null) {" }
 
     // num(null) is 0. Using it here prints "at $0.00/LB = $0.00" on a claim
     // whose prices were never recorded — a confident zero on a demand.

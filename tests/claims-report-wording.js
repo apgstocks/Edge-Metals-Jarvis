@@ -383,6 +383,51 @@ section('J — the layout is not frozen into a claim when it is created');
     ck('  its own date is untouched', /2026-07-04/.test(h), 'the layout changed, the record did not');
 }
 
+// ══════════════════════════════════════════════════════════════════════════
+section('K — no price gap, no working, on a downgrade');
+{
+    // Apsara, 2026-10-31: "Remove  affected at $282.00/LB = $187.25."
+    // The difference between what a grade was billed at and what it turned
+    // out to be worth IS Edge's spread on the material — a supplier who
+    // knows what he charged reads Edge's figure straight off it.
+    const GAP = 'Gap Co';
+    const d = await claims.create({ supplier: GAP, container_no: 'GAPD3333333',
+        invoice_no: 'K1', weight_unit: 'LB', status: 'verified' }, 't');
+    await claims.verify(d.id, { invoice_weight: 24828, claimed_weight: 24828,
+        weight_unit: 'LB', sell_price: 0.89, sell_price_unit: 'LB' }, 'a');
+    await claims.assess(d.id, { assessment: 'grade', weight_unit: 'LB', grade_weight: 664,
+        grade_sold: 'Auto Parts', grade_received: 'MS Scrap',
+        grade_price_sold: 0.30, grade_price_received: 0.018 }, 'a');
+    await claims.raiseRecovery(d.id, { our_claim: 187.25 }, 'a');
+    const h = report.toHtml(report.build({ supplier: GAP, includeUnverified: true }));
+    const li = (h.match(/<li>[\s\S]*?<\/li>/g) || []).join(' ').replace(/<[^>]+>/g, '');
+
+    ck('the downgrade sentence carries no rate', !/affected at/.test(li), li);
+    ck('  and no computed amount beside it', !/= \$/.test(li), li);
+    // 0.282 is the gap; 0.30 and 0.018 are the two prices. None may appear
+    // anywhere on the document, in any of the shapes money() can print them.
+    ck('  the gap cannot be read off the page',
+       !/0\.282|\$282|\$0\.28/.test(h) && !/\$0\.30|\$0\.018/.test(h), '');
+    ck('  the affected weight stays — it is what is being claimed',
+       /664 LB affected/.test(li), li);
+
+    // The sorted type is NOT touched: she asked for its calculation spelled
+    // out — "We should show the calc na 2000*0.30 like that."
+    const SRT = 'Sorted Co';
+    const t = await claims.create({ supplier: SRT, container_no: 'SRTD4444444',
+        invoice_no: 'K2', weight_unit: 'LB', supplier_price: 0.30,
+        supplier_price_unit: 'LB', status: 'verified' }, 't');
+    await claims.verify(t.id, { invoice_weight: 20000, claimed_weight: 20000,
+        weight_unit: 'LB', sell_price: 0.30, sell_price_unit: 'LB' }, 'a');
+    await claims.assess(t.id, { assessment: 'sorted', weight_unit: 'LB',
+        sell_price: 0.30, sell_price_unit: 'LB', paid_price: 0.30, paid_price_unit: 'LB',
+        sorted_lines: [{ type: 'clad wheel', weight: 2000 }] }, 'a');
+    await claims.raiseRecovery(t.id, { our_claim: 600 }, 'a');
+    const sh = report.toHtml(report.build({ supplier: SRT, includeUnverified: true }));
+    ck('a sorted claim keeps its spelled-out calculation', /\$600|600\.00/.test(sh),
+       'only the downgrade sentence changed');
+}
+
 console.log(`\n  ${pass} passed, ${fail} failed`);
 if (fail) { console.log('\n  FAILED:\n' + failures.map((f) => '    - ' + f).join('\n')); process.exit(1); }
 
