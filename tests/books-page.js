@@ -366,8 +366,17 @@ const settle = (ms = 120) => new Promise((r) => setTimeout(r, ms));
     const { dom } = boot();
     await settle(250);
     const d = dom.window.document;
-    ck('both portals are still named', /href="\/quickbooks"/.test(HTML)
-       && /href="\/books" aria-current="page"/.test(HTML));
+    // The in-page two-tab strip is gone (2026-10-31) — accounting.js draws
+    // ONE strip for all four accounting pages, and leaving this page's own
+    // would have stacked two rows of tabs. The property this check was
+    // really about, that Books does not become a dead end, still holds: the
+    // page carries the strip, and the strip names all four. Proved for real
+    // (rendered, not regexed) in tests/accounting-portal.js section B.
+    ck('the page still reaches the other accounting pages',
+       /<script src="\/accounting\.js" data-tab="reports" defer><\/script>/.test(HTML),
+       'the shared strip replaced this page\'s own two tabs');
+    ck('  and does not carry a second strip of its own', !/<nav class="portal"/.test(HTML),
+       (HTML.match(/<nav class="portal"[^>]*>/) || [''])[0]);
     ck('the CPA pack button survives', !!d.getElementById('pack'));
     ck('  and still lets the BROWSER name the file', !/Books-.*\.xlsx/.test(HTML),
        'rebuilding the filename is a second place for the DRAFT-INCOMPLETE warning to be wrong');

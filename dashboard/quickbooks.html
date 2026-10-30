@@ -149,10 +149,10 @@ tr.click{cursor:pointer} td.r{text-align:right;font-family:var(--font-mono)}
 <header>
   <a class="back" href="/">← Jarvis</a>
   <h1>QuickBooks</h1>
-  <nav class="portal" aria-label="Accounting portals">
-    <a href="/quickbooks" aria-current="page">QuickBooks</a>
-    <a href="/books">Books</a>
-  </nav>
+  <!-- The two-tab QuickBooks/Books strip that was here is GONE (2026-10-31).
+       accounting.js now draws ONE strip for all four accounting pages, so
+       leaving this would have stacked two rows of tabs on the same page.
+       Apsara: "keep bank,book,workspace,quickbook in one portal". -->
   <div class="chips" id="chips"></div>
   <button class="lock" id="lock" title="Unlock to change mappings, push records or undo">🔒 Locked</button>
 </header>
@@ -1497,6 +1497,7 @@ loadTodo();
 </script>
 <!-- The app's sidebar on this page too (Apsara 2026-10-08: "i want the sidebar to appear in all pages").
      dashboard/sidebar.js; hidden when printing. -->
-<script src="/sidebar.js" data-page="quickbooks" defer></script>
+<script src="/accounting.js" data-tab="migration" defer></script>
+<script src="/sidebar.js" data-page="accounting" defer></script>
 </body>
 </html>

@@ -100,7 +100,13 @@ for (const m of INDEX.matchAll(/if \(b\.dataset\.tab === '([a-z-]+)'\) \{ window
 // other appears on some screens and not others. It earned its keep twice in
 // one afternoon: two people added a page and each was made to notice the
 // other's.
-ck('index.html has its thirteen standalone pages', Object.keys(APP_HREF).length === 13, JSON.stringify(APP_HREF));
+// ── TEN, NOT THIRTEEN (2026-10-31) ───────────────────────────────────────
+// QuickBooks, Books, Bank and Workspace were four rail rows for one subject.
+// Apsara: "keep bank,book,workspace,quickbook in one portal", "Replace them
+// immediately". They are one row, 'accounting', whose href is the portal's
+// first tab; dashboard/accounting.js moves between the four pages, which are
+// unchanged and still at their own URLs. 13 - 4 + 1 = 10.
+ck('index.html has its ten standalone pages', Object.keys(APP_HREF).length === 10, JSON.stringify(APP_HREF));
 ck('the same pages, to the same addresses', JSON.stringify(Object.entries(APP_HREF).sort()) === JSON.stringify(Object.entries(L.PAGE_HREF).sort()),
    JSON.stringify(L.PAGE_HREF));
 const staffSrc = (INDEX.match(/ROLE !== 'staff' \|\| n\.id === 'loads' \|\| n\.id === 'petty' \|\| n\.id === 'trucker-bills'/) || [])[0];
@@ -110,7 +116,10 @@ ck('the same staff rows (loads, petty, trucker-bills)', !!staffSrc && JSON.strin
 section('B — every page loads the rail, once, in the right place');
 // ══════════════════════════════════════════════════════════════════════════
 // Bank joined on 2026-10-10 — held back on 10-08 only while it had unsaved work.
-const WITH_RAIL = { 'bank-match': 'bank', workspace: 'workspace', documents: 'documents', quickbooks: 'quickbooks', books: 'books', claims: 'claims',
+// The four accounting pages now declare data-page="accounting" — the row
+// that exists — so the rail marks the portal while the user is on any of
+// them. Which TAB they are is accounting.js's job, checked in section F.
+const WITH_RAIL = { 'bank-match': 'accounting', workspace: 'accounting', documents: 'documents', quickbooks: 'accounting', books: 'accounting', claims: 'claims',
     'edge-inventory': 'edge-inventory', 'outbound-loads': 'outbound-loads', 'address-book': 'address-book',
     'quote-requests': 'quote-requests', 'design-bol': 'design-bol' };
 for (const [file, id] of Object.entries(WITH_RAIL)) {
@@ -119,8 +128,26 @@ for (const [file, id] of Object.entries(WITH_RAIL)) {
     ck(`${file}.html loads it once`, tags.length === 1, String(tags.length));
     ck(`  as data-page="${id}"`, tags[0] === `<script src="/sidebar.js" data-page="${id}" defer></script>`, tags[0]);
     ck(`  and ${id} is a real nav row`, L.NAV_ITEMS.some((n) => n.id === id));
-    const at = src.indexOf('/sidebar.js'), close = src.search(/^<\/body>/m);
-    ck(`  just before the page's own </body>`, at > -1 && close > at && src.slice(at, close).split('\n').length <= 3);
+    // ── MEASURED FROM THE TAG, NOT FROM THE WORD (2026-10-31) ────────
+    // This used to take indexOf('/sidebar.js'), which matches the COMMENT
+    // line above the tag on every one of these pages, and then allowed up
+    // to 3 lines of slack to absorb it. Adding the accounting.js include
+    // pushed that to 4 and turned the check red — a check that counts lines
+    // between a comment and </body> is measuring the wrong thing, and the
+    // tempting fix was to raise 3 to 4, which is how a guard quietly stops
+    // guarding.
+    //
+    // What it MEANS is: the rail tag is the last thing before the page's own
+    // </body>, with nothing but other script tags and whitespace after it —
+    // so it can never land inside a document a customer is sent. Measured
+    // from the tag, that is exact and needs no slack.
+    const tag = src.match(/<script src="\/sidebar\.js" data-page="[a-z-]+" defer><\/script>/);
+    const at = tag ? src.indexOf(tag[0]) + tag[0].length : -1;
+    const close = src.search(/^<\/body>/m);
+    const after = at > -1 && close > at ? src.slice(at, close) : 'x';
+    ck(`  just before the page's own </body>`,
+       at > -1 && close > at && /^(?:\s|<script\b[^>]*><\/script>)*$/.test(after),
+       JSON.stringify(after.slice(0, 120)));
 }
 const docs = fs.readFileSync(path.join(DASH, 'documents.html'), 'utf8');
 const printWin = docs.slice(docs.lastIndexOf("+ '</body></html>')") - 4000, docs.lastIndexOf("+ '</body></html>')"));
@@ -138,7 +165,7 @@ section('C — the rail on a page: rows, roles, links, behaviour');
     const active = d.querySelector('#jvNav a.jv-row.active');
     ck('the page she is on is marked', active && active.dataset.tab === 'documents' && active.getAttribute('aria-current') === 'page');
     const href = (id) => (d.querySelector(`#jvNav a.jv-row[data-tab="${id}"]`) || {}).getAttribute && d.querySelector(`#jvNav a.jv-row[data-tab="${id}"]`).getAttribute('href');
-    ck('a page row goes to that page', href('quickbooks') === '/quickbooks' && href('bank') === '/bank-match' && href('design-bol') === '/design/bol');
+    ck('a page row goes to that page', href('accounting') === '/workspace' && href('design-bol') === '/design/bol');
     ck('a tab row goes back into the app on that tab', href('bookings') === '/#tab=bookings' && href('loads') === '/#tab=loads');
     ck('Documents is a Metals screen, so the rail shows Metals', d.getElementById('jvNav').classList.contains('co-metals'));
     ck('  and remembers it like the app does', w.localStorage.getItem('jarvisNavCompany') === 'Edge Metals');

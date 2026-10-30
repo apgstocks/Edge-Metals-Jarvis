@@ -478,7 +478,6 @@ const NAV_ITEMS = [
   // everyone who has Jarvis to see it — but the page is read-only until the
   // padlock is opened, and the server refuses every change unless the session
   // is admin, so a staff login can look and not touch.
-  { id: 'quickbooks', label: 'QuickBooks', group: 'Edge Metals' },
   // ── BOOKS ────────────────────────────────────────────────────────────
   // Apsara, 2026-10-06: "Make the qb thing as separate portal". A separate
   // page (/books, dashboard/books.html) for the same reason QuickBooks is
@@ -499,7 +498,6 @@ const NAV_ITEMS = [
   //
   // It sits immediately after the QuickBooks entry in this array, and the
   // group sort is stable, so the two are adjacent in the rail.
-  { id: 'books', label: 'Books', group: 'Edge Metals' },
 
   // ── BANK ──────────────────────────────────────────────────────────────
   // Apsara, 2026-10-05: "Where is bank match in jarvis?" — it was nowhere.
@@ -512,8 +510,31 @@ const NAV_ITEMS = [
   // visible to everyone with a Jarvis login; this one lists raw bank lines
   // from her accounts, which is a narrower thing. Easy to open up if she
   // wants it wider — one flag.
-  { id: 'bank', label: 'Bank', group: 'Edge Metals', adminOnly: true },
-  { id: 'workspace', label: 'Workspace', group: 'Edge Metals', adminOnly: true },
+  // ── ONE ACCOUNTING PORTAL, FOUR ROWS RETIRED (2026-10-31) ────────────
+  // Apsara: "keep bank,book,workspace,quickbook in one portal..", "It should
+  // mimic qb.all accounting under one wing", and on whether the old rows
+  // should survive the change: "Replace them immediately".
+  //
+  // QuickBooks, Books, Bank and Workspace were four rail rows for one
+  // subject. They are now one row that opens the portal, and the portal's
+  // own tab strip (dashboard/accounting.js) moves between them:
+  //     Banking (/workspace) . Reconcile (/bank-match)
+  //     Reports (/books) . Migration (/quickbooks)
+  //
+  // THE PAGES AND THEIR URLS ARE UNCHANGED. Only the rail changed, and the
+  // four routes stay mounted — the strip links straight to them, an old
+  // bookmark still works, and nothing had to be moved between files. If the
+  // portal turns out wrong, putting these four lines back restores exactly
+  // what was here.
+  //
+  // adminOnly is NOT set here, and that is deliberate rather than an
+  // oversight. The four rows disagreed: QuickBooks and Books were open to
+  // everyone ("she asked for everyone who has Jarvis to see it"), Bank and
+  // Workspace were adminOnly because they list raw bank lines. One row
+  // cannot hold both answers, so the row is open and accounting.js drops
+  // the Banking and Reconcile TABS for a non-admin. Each page keeps the
+  // visibility it was given; the server gates are untouched.
+  { id: 'accounting', label: 'Accounting', group: 'Edge Metals' },
   { id: 'claims', label: 'Claims', group: 'Edge Metals' },
 
   // Jarvis (the bot) itself — behavior, memory, to-dos.
@@ -697,10 +718,9 @@ const NAV_ICONS = {
   bills:'M5 3h14v18l-3-2-2 2-2-2-2 2-2-2-3 2z M9 9h6 M9 13h4',
   invoice:'M6 3h12v18l-3-2-3 2-3-2-3 2z M9 8h6 M9 12h6 M9 16h3',
   'edge-inventory':'M3 8l9-4 9 4-9 4z M3 8v8l9 4 9-4V8',
-  quickbooks:'M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18 M9 9a3 3 0 0 1 3-3v12',
   claims:'M12 4v14 M6 8h12 M6 8l-3 6h6z M18 8l3 6h-6z M8 20h8',
   bank:'M3 10l9-5 9 5z M5 10v8 M9 10v8 M15 10v8 M19 10v8 M3 21h18',
-  workspace:'M4 5h16v14H4z M4 10h16 M9 10v9 M13 14h4',
+  accounting:'M4 4h16v16H4z M4 9h16 M9 9v11 M12.5 13h5 M12.5 16.5h5',
   bot:'M7 8h10v9H7z M12 5v3 M12 3a1 1 0 1 0 0 2 M9.5 12h.01 M14.5 12h.01 M4 11v3 M20 11v3',
   facts:'M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18 M12 8h.01 M11 12h1v5h1',
   tasks:'M4 6h3v3H4z M4 15h3v3H4z M10 7.5h10 M10 16.5h10',
@@ -819,10 +839,9 @@ function renderNav() {
     if (b.dataset.tab === 'documents') { window.location.href = '/documents'; return; }
     if (b.dataset.tab === 'ai-usage') { window.location.href = '/ai-usage'; return; }
     if (b.dataset.tab === 'edge-inventory') { window.location.href = '/edge-inventory'; return; }
-    if (b.dataset.tab === 'quickbooks') { window.location.href = '/quickbooks'; return; }
-    if (b.dataset.tab === 'books') { window.location.href = '/books'; return; }
-    if (b.dataset.tab === 'bank') { window.location.href = '/bank-match'; return; }
-    if (b.dataset.tab === 'workspace') { window.location.href = '/workspace'; return; }
+    // The accounting portal opens on its first tab; accounting.js moves
+    // between /workspace, /bank-match, /books and /quickbooks from there.
+    if (b.dataset.tab === 'accounting') { window.location.href = '/workspace'; return; }
     if (b.dataset.tab === 'claims') { window.location.href = '/claims'; return; }
     if (b.dataset.tab === 'design-bol') { window.location.href = '/design/bol'; return; }
     if (b.dataset.tab === 'health') { window.location.href = '/health-report'; return; }

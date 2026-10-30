@@ -199,7 +199,12 @@ const sel = (d, s) => [...d.querySelectorAll(s)];
     ck('  appears after scrolling', up.hidden === false);
     up.click();
     ck('  jumps to the top instantly', !!to && to.top === 0 && to.behavior === 'instant', JSON.stringify(to));
-    ck('the shared sidebar is loaded once, as workspace', (HTML.match(/<script src="\/sidebar\.js" data-page="workspace" defer><\/script>/g) || []).length === 1);
+    // data-page is 'accounting', not 'workspace' (2026-10-31): the four
+    // accounting rail rows became one portal row, so a page declaring
+    // data-page="workspace" would leave the rail with nothing marked. Which
+    // TAB this page is lives on the accounting.js include beside it.
+    ck('the shared sidebar is loaded once, as the accounting row', (HTML.match(/<script src="\/sidebar\.js" data-page="accounting" defer><\/script>/g) || []).length === 1);
+    ck('  and it carries the portal strip as the Banking tab', /<script src="\/accounting\.js" data-tab="banking" defer><\/script>/.test(HTML));
 }
 {
     section('J — failure is shown, not blank');

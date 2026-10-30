@@ -273,10 +273,10 @@ tr.tot td{border-top:1px solid var(--border-default);font-weight:700;color:var(-
 <header>
   <a class="back" href="/">&larr; Jarvis</a>
   <h1>Books</h1>
-  <nav class="portal" aria-label="Accounting portals">
-    <a href="/quickbooks">QuickBooks</a>
-    <a href="/books" aria-current="page">Books</a>
-  </nav>
+  <!-- The two-tab QuickBooks/Books strip that was here is GONE (2026-10-31).
+       accounting.js now draws ONE strip for all four accounting pages, so
+       leaving this would have stacked two rows of tabs on the same page.
+       Apsara: "keep bank,book,workspace,quickbook in one portal". -->
   <span class="mono" style="font-size:10px;color:var(--text-faint)">built from your own records &middot; nothing here is stored</span>
 </header>
 
@@ -753,6 +753,7 @@ function setPeriod(p) {
 </script>
 <!-- The app's sidebar on this page too (Apsara 2026-10-08: "i want the sidebar to appear in all pages").
      dashboard/sidebar.js; hidden when printing. -->
-<script src="/sidebar.js" data-page="books" defer></script>
+<script src="/accounting.js" data-tab="reports" defer></script>
+<script src="/sidebar.js" data-page="accounting" defer></script>
 </body>
 </html>

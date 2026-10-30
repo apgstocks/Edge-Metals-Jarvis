@@ -3946,16 +3946,31 @@ const MUTATIONS = [
     // now a tested fact rather than a judgement I get to revisit.
     { name: 'books: the portal drifts back to a heading of its own',
       file: 'dashboard/index.html', suites: ['books-portal'],
-      find: "  { id: 'books', label: 'Books', group: 'Edge Metals' },",
-      to:   "  { id: 'books', label: 'Books', group: 'Both companies' }," },
-    { name: 'books: the QuickBooks page stops offering the Books tab',
-      file: 'dashboard/quickbooks.html', suites: ['books-portal'],
-      find: '    <a href="/books">Books</a>',
-      to:   '    <span>Books</span>' },
-    { name: 'books: neither tab shows which page you are on',
-      file: 'dashboard/books.html', suites: ['books-portal'],
-      find: '    <a href="/books" aria-current="page">Books</a>',
-      to:   '    <a href="/books">Books</a>' },
+      find: "  { id: 'accounting', label: 'Accounting', group: 'Edge Metals' },",
+      to:   "  { id: 'accounting', label: 'Accounting', group: 'Both companies' }," },
+    // ── RETIRED 2026-10-31, replaced not re-pointed ──────────────────
+    // These two guarded the in-page two-tab strip (QuickBooks | Books) that
+    // each of those pages carried. accounting.js now draws ONE strip for all
+    // four accounting pages and the in-page ones were removed, because two
+    // would have stacked two rows of tabs. The property they protected —
+    // that neither page is a dead end, and that the current one is marked —
+    // is now proved by rendering the real strip in
+    // tests/accounting-portal.js sections B and C, and by the two mutations
+    // below.
+    //   { name: 'books: the QuickBooks page stops offering the Books tab' }
+    //   { name: 'books: neither tab shows which page you are on' }
+    { name: 'portal: a page stops reaching the other accounting pages',
+      file: 'dashboard/accounting.js', suites: ['accounting-portal'],
+      find: "        { id: 'migration', label: 'Migration',    href: '/quickbooks', adminOnly: false,",
+      to:   "        { id: 'XXmigration', label: 'Migration',    href: '/quickbooks-DEAD', adminOnly: false," },
+    { name: 'portal: no tab is marked, so every one looks unselected',
+      file: 'dashboard/accounting.js', suites: ['accounting-portal'],
+      find: "            + ` class=\"${t.id === here ? 'on' : ''}",
+      to:   "            + ` class=\"${false ? 'on' : ''}" },
+    { name: 'portal: a non-admin is offered the raw bank tabs',
+      file: 'dashboard/accounting.js', suites: ['accounting-portal'],
+      find: "        const show = TABS.filter((t) => isAdmin || !t.adminOnly);",
+      to:   "        const show = TABS;" },
 
     // ── THE BOOKS PORTAL AND ITS AGENT ────────────────────────────────
     // The engine shipped a day before anything could reach it, so these aim at
@@ -3996,7 +4011,7 @@ const MUTATIONS = [
       to:   "    app.get('/books-DEAD', (req, res) => {" },
     { name: 'books: the sidebar entry has no handler, so the tab does nothing',
       file: 'dashboard/app/01-core.js', suites: ['books-portal'],
-      find: "    if (b.dataset.tab === 'books') { window.location.href = '/books'; return; }",
+      find: "    if (b.dataset.tab === 'accounting') { window.location.href = '/workspace'; return; }",
       to:   '    void 0;' },
     { name: 'books: the material cost is taken net of trucking (the money bug)',
       file: 'helpers/booksBuild.js', suites: ['books-portal', 'books-build'],

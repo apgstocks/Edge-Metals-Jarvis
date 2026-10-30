@@ -297,37 +297,41 @@ const A = require(path.join(ROOT, 'helpers/booksAgent'));
     // companies' heading — correct reasoning (the portal switches between all
     // three companies) and the wrong placement, because that is a different
     // heading further down the rail. Where she looks beats where it belongs.
-    const navAt = web.indexOf("{ id: 'books'");
-    const qbAt = web.indexOf("{ id: 'quickbooks'");
-    ck('Books is in the Edge Metals group, not a heading of its own',
-       /\{ id: 'books', label: 'Books', group: 'Edge Metals' \}/.test(web),
-       (web.match(/\{ id: 'books'[^}]*\}/) || [''])[0]);
-    ck('  and immediately after QuickBooks, so the two are adjacent',
-       qbAt > 0 && navAt > qbAt
-       && !/\{ id: '(?!books|quickbooks)[a-z-]+'/.test(web.slice(qbAt, navAt)),
-       'another entry crept between them, so the group sort will separate them');
-
-    // ── THE TWO PORTALS NAME EACH OTHER ──────────────────────────────────
-    // They stay two pages: #170 is her own earlier decision that Books must
-    // not be bolted onto the QB page, and the lifecycles differ — QuickBooks
-    // holds a connection and a lock, Books holds neither. The switcher is what
-    // makes them read as one portal with two tabs without merging them.
-    const qbPage = fs.readFileSync(path.join(ROOT, 'dashboard/quickbooks.html'), 'utf8');
-    for (const [name, src, self, other] of [
-        ['the Books page', page, '/books', '/quickbooks'],
-        ['the QuickBooks page', qbPage, '/quickbooks', '/books'],
-    ]) {
-        ck(`${name} offers both portals`,
-           src.includes(`href="${self}"`) && src.includes(`href="${other}"`),
-           'a tab strip that only names itself is not a tab strip');
-        ck('  and marks which one it is on',
-           new RegExp(`href="${self}" aria-current="page"`).test(src),
-           'both tabs looking unselected is worse than no tabs');
-    }
-    ck('the sidebar offers it', /\{ id: 'books', label: 'Books'/.test(web));
-    ck('  and clicking it goes to the page',
-       /dataset\.tab === 'books'[\s\S]{0,60}\/books/.test(web),
+    // ── ONE ACCOUNTING ROW, ONE STRIP (2026-10-31) ───────────────────────
+    // Everything between here and the voice check used to assert the shape
+    // this replaced: a 'books' rail row sitting next to a 'quickbooks' rail
+    // row, and a two-tab strip inside the page naming the other portal.
+    //
+    // Apsara: "keep bank,book,workspace,quickbook in one portal..", "It
+    // should mimic qb.all accounting under one wing", and on the old rows:
+    // "Replace them immediately". There is now ONE rail row, 'accounting',
+    // and ONE strip (dashboard/accounting.js) covering all four pages.
+    //
+    // The 2026-10-07 placement decision this section recorded — "Built it
+    // professionally.under quickbook tab", Books must sit where she looks
+    // for it, beside QuickBooks — is not lost: they are now tabs of the same
+    // strip, which is as adjacent as two things get.
+    //
+    // #170 still holds. Books and QuickBooks remain two PAGES at two URLs;
+    // only the navigation merged. Section F of tests/accounting-portal.js
+    // renders the strip and proves all four are reachable from each.
+    ck('the rail has one accounting row, not a books row',
+       /\{ id: 'accounting', label: 'Accounting'/.test(web)
+       && !/\{ id: 'books', label: 'Books'/.test(web),
+       (web.match(/\{ id: '(books|accounting)'[^}]*\}/) || [''])[0]);
+    ck('  and clicking it opens the portal',
+       /dataset\.tab === 'accounting'[\s\S]{0,80}\/workspace/.test(web),
        'a nav entry with no handler is a tab that does nothing');
+    ck('the Books page carries the portal strip',
+       /<script src="\/accounting\.js" data-tab="reports" defer><\/script>/.test(page));
+    // Two strips on one page is the regression this guards: the old in-page
+    // nav plus the new shared one would have stacked two rows of tabs.
+    const qbPage = fs.readFileSync(path.join(ROOT, 'dashboard/quickbooks.html'), 'utf8');
+    for (const [name, src] of [['the Books page', page], ['the QuickBooks page', qbPage]]) {
+        ck(`${name} has no second tab strip of its own`,
+           !/<nav class="portal"/.test(src),
+           (src.match(/<nav class="portal"[^>]*>/) || [''])[0]);
+    }
     ck('"Jarvis, open the books" finds it', /key: 'books'/.test(scr) && /href: '\/books'/.test(scr));
 
     // The page must call the routes that exist, and only those.

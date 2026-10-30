@@ -557,6 +557,7 @@ function refreshAll() { return Promise.all([loadBanking(), S.top === 'register' 
 loadBanking();
 </script>
 <!-- The app's sidebar on this page too. dashboard/sidebar.js; hidden when printing. -->
-<script src="/sidebar.js" data-page="workspace" defer></script>
+<script src="/accounting.js" data-tab="banking" defer></script>
+<script src="/sidebar.js" data-page="accounting" defer></script>
 </body>
 </html>
