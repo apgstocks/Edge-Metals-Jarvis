@@ -575,6 +575,18 @@ function detailLine(l) {
         // The working is spelled out for the same reason as grade and
         // sorted: "We should show the calc na 2000*0.30 like that."
         const bits = [];
+        // ── WHAT WE SENT AGAINST WHAT THEY RECEIVED (2026-10-30) ─────────
+        // Apsara asked for these on the quality pane as optional fields.
+        // They lead the sentence when both are known, because on a quality
+        // claim the substitution IS the complaint — "sent X, received Y"
+        // says more than any finding chip. Printed only when she filled
+        // them, so a quality claim off a mail reads exactly as it did.
+        //
+        // These are item NAMES, never prices: no rate of Edge's reaches a
+        // supplier document. Same rule as the YOUR RATE column above.
+        if (l.grade_sold || l.grade_received) {
+            bits.push(`sent ${l.grade_sold || '—'}, received ${l.grade_received || '—'}`);
+        }
         if (l.findings.length) bits.push('found: ' + l.findings.join(', ').toLowerCase());
         if (l.rate !== null) {
             bits.push(`${wt(l.quality_qty, l.unit)} at ${rateMoney(l.rate)}/${l.rate_unit || l.unit}`
@@ -846,7 +858,6 @@ ${(() => {
 <div class="notes">
   ${b.includedUnverified && b.lines.some((l) => !l.sendable) ? '<p><strong>Lines marked “not yet verified”</strong> are shown for information only. Their figures have not yet been confirmed against the loading documents and they are excluded from the total above.</p>' : ''}
   ${b.lines.some((l) => l.charge_qty !== null) ? '<p>The quantity the rate is applied to, converted into metric tonnes, is shown beneath the rate. The recoverable amount is that quantity at that rate.</p>' : ''}
-  ${b.lines.some((l) => l.sendable && l.rate === null) ? '<p>Where no rate is shown, the amount is as agreed between us rather than calculated.</p>' : ''}
 </div>
 
 <div class="sign">

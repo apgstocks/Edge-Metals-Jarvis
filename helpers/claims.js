@@ -367,8 +367,26 @@ async function assess(id, fields = {}, by = 'manager') {
         const qFindings = Array.isArray(given('findings'))
             ? given('findings').filter((f) => FINDINGS.includes(f)) : c.findings;
         const qMeasured = MEASURED_BY.includes(given('measured_by')) ? given('measured_by') : c.measured_by;
+        // ── WHAT WE SENT, WHAT THEY RECEIVED (2026-10-30) ────────────────
+        // Apsara: "What we sent, what they received item type can be optional
+        // in quality claim". The two names already exist on the record and
+        // the downgrade branch fills them; quality simply never asked.
+        //
+        // OPTIONAL, for the same reason findings and measured_by above are:
+        // a quality claim read off a mail or taken by voice has no item type
+        // to give, and making either required would break the callers with
+        // no form to put a field on — the break CLAUDE.md records twice.
+        // Read through given(), NOT off `fields`. given() falls back to the
+        // record (line 314), so an edit about the quantity that never mentions
+        // the item types keeps the ones she typed. Reading fields.grade_sold
+        // directly would blank them on every such edit — and my first version
+        // of this wrapped given() in its own undefined check, which was dead
+        // code: the mutation that removed it could not change the answer.
+        const qSent = String(given('grade_sold') || '').slice(0, 80);
+        const qRecv = String(given('grade_received') || '').slice(0, 80);
         Object.assign(patch, { quality_qty: qty, sell_price, sell_price_unit,
-            findings: qFindings, measured_by: qMeasured });
+            findings: qFindings, measured_by: qMeasured,
+            grade_sold: qSent, grade_received: qRecv });
     } else if (LINE_ASSESSMENTS.includes(kind)) {
         // ── SORTED *AND* DAMAGE, ONE BRANCH ──────────────────────────────
         // 'damage' joined on 2026-10-21 and reuses this branch rather than

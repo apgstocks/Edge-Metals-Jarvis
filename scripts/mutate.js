@@ -494,6 +494,21 @@ const MUTATIONS = [
       file: 'helpers/bills.js', suites: ['bills-sales'],
       find: '    const missing = Object.keys(tare).filter((k) => tare[k] === null);',
       to:   '    const missing = [];' },
+    // ── THE SUPPLIER'S COPY, 2026-10-30 ──────────────────────────────────
+    { name: 'report: the "as agreed between us" footnote comes back',
+      file: 'helpers/claims/report.js', suites: ['claims-report-wording'],
+      find: '  ${b.lines.some((l) => l.charge_qty !== null)',
+      to:   "  ${b.lines.some((l) => l.sendable && l.rate === null) ? '<p>Where no rate is shown, the amount is as agreed between us rather than calculated.</p>' : ''}\n  ${b.lines.some((l) => l.charge_qty !== null)" },
+    { name: 'quality: the item types are collected and never printed',
+      file: 'helpers/claims/report.js', suites: ['claims-report-wording'],
+      find: "            bits.push(`sent ${l.grade_sold || '—'}, received ${l.grade_received || '—'}`);",
+      to:   '            void 0;' },
+    // An edit about the quantity must not erase the names she typed.
+    { name: 'quality: an edit that omits the item types blanks them',
+      file: 'helpers/claims.js', suites: ['claims-report-wording'],
+      find: "        const qSent = String(given('grade_sold') || '').slice(0, 80);",
+      to:   "        const qSent = String(fields.grade_sold || '').slice(0, 80);" },
+
     // ── A DOWNGRADE IS NOT A SHORTAGE (2026-10-30) ───────────────────────
     // Taewon's 26JY73: all 20,775 kg arrived, but 46 of 77 combos invoiced as
     // aluminium were steel. Before this, claimScan had no shape for it and
