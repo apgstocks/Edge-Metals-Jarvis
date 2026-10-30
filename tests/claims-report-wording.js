@@ -259,6 +259,45 @@ section('G — a MIXED demand keeps the old table, untouched');
        qRow.replace(/<[^>]+>/g, ' | ').trim().slice(0, 140));
 }
 
+// ══════════════════════════════════════════════════════════════════════════
+section('H — nothing short, nothing unclassified, on a demand');
+{
+    const SOLO = 'Header Co';
+    const q = await claims.create({ supplier: SOLO, container_no: 'HEAD1234567',
+        invoice_no: 'H1', weight_unit: 'LB', status: 'verified' }, 't');
+    // verify() records a shortage of 0 when the weights agree — which is how
+    // "TOTAL SHORTAGE 0 LB" came to sit at the top of a quality demand.
+    await claims.verify(q.id, { invoice_weight: 24828, claimed_weight: 24828,
+        weight_unit: 'LB', sell_price: 0.89, sell_price_unit: 'LB' }, 'a');
+    await claims.assess(q.id, { assessment: 'quality', weight_unit: 'LB', quality_qty: 2215.64,
+        sell_price: 0.89, sell_price_unit: 'LB',
+        grade_sold: 'Alternator', grade_received: 'MS Scrap' }, 'a');
+    await claims.raiseRecovery(q.id, { our_claim: 1971.92 }, 'a');
+    const html = report.toHtml(report.build({ supplier: SOLO, includeUnverified: true }));
+
+    ck('a demand with nothing short has no shortage line',
+       !/Total shortage/i.test(html),
+       'a zero is not a fact worth leading a demand with');
+    ck('  and nothing on it says "not classified yet"',
+       !/not classified yet/.test(html),
+       'the right words on her screen, the wrong ones on a supplier document');
+    ck('  the claim type falls back to the arithmetic', /Quality/.test(html),
+       (html.match(/<td>[^<]*<\/td>\s*<td>Alternator/) || [''])[0]);
+
+    // A real shortage still leads with it.
+    const w = await claims.create({ supplier: 'Short Co', container_no: 'SHRT1111111',
+        invoice_no: 'H2', weight_unit: 'MT', supplier_price: 1000,
+        supplier_price_unit: 'MT', status: 'verified' }, 't');
+    await claims.verify(w.id, { invoice_weight: 20, claimed_weight: 19, weight_unit: 'MT',
+        sell_price: 1000, sell_price_unit: 'MT' }, 'a');
+    await claims.raiseRecovery(w.id, { our_claim: 1000 }, 'a');
+    const sh = report.toHtml(report.build({ supplier: 'Short Co', includeUnverified: true }));
+    ck('a demand that IS short still says so', /Total shortage/i.test(sh) && /1 MT/.test(sh),
+       'the line was removed for zero, not removed outright');
+    ck('  and names the arithmetic as Shortage', /Shortage/.test(sh),
+       (sh.match(/<td>[^<]*Shortage[^<]*<\/td>/) || [''])[0]);
+}
+
 console.log(`\n  ${pass} passed, ${fail} failed`);
 if (fail) { console.log('\n  FAILED:\n' + failures.map((f) => '    - ' + f).join('\n')); process.exit(1); }
 

@@ -536,6 +536,16 @@ const MUTATIONS = [
       find: "        const qSent = String(given('grade_sold') || '').slice(0, 80);",
       to:   "        const qSent = String(fields.grade_sold || '').slice(0, 80);" },
 
+    // ── WHAT A DEMAND DOES NOT SAY (2026-10-30) ──────────────────────────
+    { name: 'demand: "Total shortage 0 LB" leads a quality claim again',
+      file: 'helpers/claims/report.js', suites: ['claims-report-wording'],
+      find: "     (Number(b.totals.shortage) || 0) > 0 ?",
+      to:   "     true ?" },
+    { name: 'demand: a supplier is told the claim is "not classified yet"',
+      file: 'helpers/claims/report.js', suites: ['claims-report-wording'],
+      find: "        kind: claimKinds.label(c.claim_type) === 'not classified yet'",
+      to:   "        kind: false" },
+
     // ── A DOWNGRADE IS NOT A SHORTAGE (2026-10-30) ───────────────────────
     // Taewon's 26JY73: all 20,775 kg arrived, but 46 of 77 combos invoiced as
     // aluminium were steel. Before this, claimScan had no shape for it and

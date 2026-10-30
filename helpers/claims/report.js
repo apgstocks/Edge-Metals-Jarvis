@@ -98,6 +98,16 @@ const basisOf = (c) => {
     return nnum(c.shortage);
 };
 
+// What each arithmetic is called when the kind has no name of its own.
+const ASSESSMENT_NAME = {
+    weight: 'Shortage',
+    contamination: 'Contamination',
+    grade: 'Downgrade',
+    quality: 'Quality',
+    sorted: 'Sorted contaminants',
+    damage: 'Damage',
+};
+
 const SENDABLE = ['verified', 'recovery_raised', 'settled'];
 
 // ── WHO SIGNS THE CLAIM NOTE ─────────────────────────────────────────────
@@ -174,7 +184,19 @@ function build(opts = {}) {
         container_no: c.container_no || '',
         customer: c.customer || '',
         supplier: c.supplier || '',
-        kind: claimKinds.label(c.claim_type),
+        // ── "not classified yet" DOES NOT GO ON A DEMAND (2026-10-30) ───
+        // claimKinds.label() answers 'not classified yet' for an unnamed
+        // claim. That is the right words on HER screen, where it is a
+        // prompt to classify it. On a document going to a supplier it
+        // reads as Edge not knowing what it is claiming for.
+        //
+        // The assessment is always known by the time a claim is sendable —
+        // it is the arithmetic that produced the figure — so the column
+        // falls back to that. Only unclassified claims change; a named
+        // kind still prints her own word for it.
+        kind: claimKinds.label(c.claim_type) === 'not classified yet'
+            ? (ASSESSMENT_NAME[c.assessment] || 'Claim')
+            : claimKinds.label(c.claim_type),
         unit: c.weight_unit || '',
         invoice_weight: nnum(c.invoice_weight),
         claimed_weight: nnum(c.claimed_weight),
@@ -863,7 +885,11 @@ tfoot td{border-top:2px solid #2E6DA4;border-bottom:0;padding-top:7px;font-weigh
   <div><div class="k">To</div><strong>${esc(to)}</strong></div>
   ${b.container ? `<div><div class="k">Container</div><span class="mono">${esc(b.container)}</span></div>` : ''}
   <div><div class="k">Claims</div>${b.totals.claims}</div>
-  ${b.lines.some((l) => l.shortage !== null) ? `<div><div class="k">Total shortage</div><span class="mono">${esc(wt(b.totals.shortage, b.lines[0] ? b.lines[0].unit : ''))}</span></div>` : ''}
+  ${/* A quality, quality or downgrade claim has no shortage, and verify()
+       records 0 when the weights agree — so this printed "Total shortage
+       0 LB" at the top of a demand where nothing was short. A zero is not
+       a fact worth leading with. (2026-10-30) */
+     (Number(b.totals.shortage) || 0) > 0 ? `<div><div class="k">Total shortage</div><span class="mono">${esc(wt(b.totals.shortage, b.lines[0] ? b.lines[0].unit : ''))}</span></div>` : ''}
 </div>
 
 
