@@ -255,7 +255,15 @@ section('F3 — the document never contradicts itself');
     ck('the amount is untouched — nothing is adjusted to make it fit', l.our_claim === 600);
     ck('she is told which line and by how much', b.notReconciled.length === 1 && b.notReconciled[0].atRate === 1000, b.notReconciled);
     const html = report.toHtml(b);
-    ck('and the document says the amount is as agreed', /as agreed between us rather than calculated/.test(html));
+    // ── THAT FOOTNOTE IS GONE (2026-10-30) ───────────────────────────────
+    // Apsara: "Remove Where no rate is shown, the amount is as agreed between
+    // us rather than calculated." It fired on any sendable row without a
+    // rate, which is EVERY downgrade — so a claim worked out to the cent told
+    // the supplier it had been agreed rather than calculated. The behaviour
+    // this section exists to protect is unchanged and still asserted above:
+    // the rate comes OFF the line, and the amount is not adjusted to fit.
+    ck('and the document no longer calls a calculated amount "agreed"',
+       !/as agreed between us rather than calculated/.test(html));
 
     await claims.raiseRecovery(c.id, { our_claim: 1000 }, 'test');
     const b2 = report.build({ supplier: 'Odd' });
