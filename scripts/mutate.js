@@ -494,6 +494,23 @@ const MUTATIONS = [
       file: 'helpers/bills.js', suites: ['bills-sales'],
       find: '    const missing = Object.keys(tare).filter((k) => tare[k] === null);',
       to:   '    const missing = [];' },
+    // ── AND SO MUST THE BOOKS PAGE (2026-10-30) ──────────────────────────
+    // 12 functions, 421 lines, and before tests/books-screen.js not one of
+    // them had ever been CALLED by a test — four files named it, two mounted
+    // it, none invoked anything. Mounting proves the script parses; it is the
+    // claims lesson (#243) and this is the screen she will stand in front of
+    // when she decides whether QuickBooks can go.
+    { name: 'books: a renderer reads a name that is not there',
+      file: 'dashboard/books.html', suites: ['books-screen'],
+      find: '  const p = d.profitAndLoss, b = d.balanceSheet;',
+      to:   '  const p = dd.profitAndLoss, b = d.balanceSheet;' },
+    // The page's own stated rule: "a blocker opens itself, because if the
+    // figures are wrong she should not have to click to learn why."
+    { name: 'books: a blocker verdict folds itself away',
+      file: 'dashboard/books.html', suites: ['books-screen'],
+      find: "    <details class=\"trust ${cls}\" ${a.counts.blocker ? 'open' : ''}>",
+      to:   "    <details class=\"trust ${cls}\">" },
+
     // ── THE CLAIMS PAGE MUST EXECUTE (2026-10-29) ────────────────────────
     // Her report: "Could not load claims — Can't find variable: fld".
     // paneLines() sat at the top level of claims.html reading twelve of
