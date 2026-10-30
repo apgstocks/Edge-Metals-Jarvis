@@ -496,8 +496,8 @@ const MUTATIONS = [
       to:   '    const missing = [];' },
     { name: 'quality-only demand: her column set is used on MIXED pages too',
       file: 'helpers/claims/report.js', suites: ['claims-report-wording'],
-      find: "    const allQuality = b.lines.length > 0 && b.lines.every((l) => l.assessment === 'quality');",
-      to:   "    const allQuality = b.lines.length > 0 && b.lines.some((l) => l.assessment === 'quality');" },
+      find: '    const allQuality = b.lines.length > 0 && b.lines.every(isQualityLine);',
+      to:   '    const allQuality = b.lines.length > 0 && b.lines.some(isQualityLine);' },
     { name: 'quality-only demand: the items stop being printed as names',
       file: 'helpers/claims/report.js', suites: ['claims-report-wording'],
       // The file holds the ESCAPE TEXT \\u2014, not the character, so the find
@@ -509,8 +509,8 @@ const MUTATIONS = [
 
     { name: 'quality row: Short, % and his rate come back on it',
       file: 'helpers/claims/report.js', suites: ['claims-report-wording'],
-      find: "      ${l.assessment === 'quality'",
-      to:   "      ${false" },
+      find: '      ${isQualityLine(l)',
+      to:   '      ${false' },
     { name: 'quality row: what we sent and what came back are dropped from the table',
       file: 'helpers/claims/report.js', suites: ['claims-report-wording'],
       find: "        ? `<td class=\"r mono\" colspan=\"5\">${(l.grade_sold || l.grade_received)",
@@ -545,6 +545,20 @@ const MUTATIONS = [
       file: 'helpers/claims/report.js', suites: ['claims-report-wording'],
       find: "        kind: claimKinds.label(c.claim_type) === 'not classified yet'",
       to:   "        kind: false" },
+
+    // ── THE LABEL DECIDES THE LAYOUT (2026-10-30) ────────────────────────
+    { name: 'layout: the assessment decides again, so her quality label is ignored',
+      file: 'helpers/claims/report.js', suites: ['claims-report-wording'],
+      find: "const isQualityLine = (l) =>\n    l.assessment === 'quality' || String(l.kind || '').trim().toLowerCase() === 'quality';",
+      to:   "const isQualityLine = (l) => l.assessment === 'quality';" },
+    { name: 'layout: the widening swallows every claim type, not just quality',
+      file: 'helpers/claims/report.js', suites: ['claims-report-wording'],
+      find: "    l.assessment === 'quality' || String(l.kind || '').trim().toLowerCase() === 'quality';",
+      to:   "    true;" },
+    { name: 'quality table: the Claim column goes blank on a downgrade again',
+      file: 'helpers/claims/report.js', suites: ['claims-report-wording'],
+      find: "    const claimedQty = (l) => (l.quality_qty !== null && l.quality_qty !== undefined",
+      to:   "    const claimedQty = (l) => (true" },
 
     // ── A DOWNGRADE IS NOT A SHORTAGE (2026-10-30) ───────────────────────
     // Taewon's 26JY73: all 20,775 kg arrived, but 46 of 77 combos invoiced as

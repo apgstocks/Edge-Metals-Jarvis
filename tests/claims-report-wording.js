@@ -36,6 +36,7 @@ if (!String(cfg.DATA_DIR).startsWith(TMP)) {
 }
 const claims = require(path.join(ROOT, 'helpers/claims'));
 const report = require(path.join(ROOT, 'helpers/claims/report'));
+const kinds = require(path.join(ROOT, 'helpers/claimKinds'));
 
 const SUPPLIER = 'Inesh Cores Chapin';
 const render = () => report.toHtml(report.build({ supplier: SUPPLIER, includeUnverified: true }));
@@ -296,6 +297,59 @@ section('H — nothing short, nothing unclassified, on a demand');
        'the line was removed for zero, not removed outright');
     ck('  and names the arithmetic as Shortage', /Shortage/.test(sh),
        (sh.match(/<td>[^<]*Shortage[^<]*<\/td>/) || [''])[0]);
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+section('I — the LABEL decides the layout, not the arithmetic');
+{
+    // Inesh's DFSU1207911: she classified it quality, the engine stored
+    // assessment 'grade' because the figure came from a price gap, and the
+    // demand printed on the nine-column shortage table with Short, % and his
+    // rate all dashes. Apsara, 2026-10-30: "anything you label 'quality' gets
+    // the 8-column quality layout regardless of the arithmetic underneath."
+    await kinds.ensure('quality', 'item not as described', 't');
+    const LBL = 'Label Co';
+    const g = await claims.create({ supplier: LBL, container_no: 'LBLQ1111111',
+        invoice_no: 'I1', weight_unit: 'LB', claim_type: 'quality', status: 'verified' }, 't');
+    await claims.verify(g.id, { invoice_weight: 24828, claimed_weight: 24828,
+        weight_unit: 'LB', sell_price: 0.89, sell_price_unit: 'LB' }, 'a');
+    await claims.assess(g.id, { assessment: 'grade', weight_unit: 'LB', grade_weight: 664,
+        grade_sold: 'Alternator', grade_received: 'MS Scrap',
+        grade_price_sold: 0.30, grade_price_received: 0.018 }, 'a');
+    await claims.raiseRecovery(g.id, { our_claim: 187.25 }, 'a');
+    const h = report.toHtml(report.build({ supplier: LBL, includeUnverified: true }));
+
+    ck('a DOWNGRADE she labelled quality gets the eight columns',
+       /Claim type/.test(h) && /What we sent/.test(h), 'the label decides');
+    ck('  Short, % and his rate are off it', !/>Short</.test(h) && !/Your rate/.test(h),
+       'they were dashes on this row and she does not want them');
+    // In the TABLE CELL, not in the detail sentence below it — which also
+    // says "664 LB affected" and made the first version of this check pass
+    // against a mutation that blanked the column. A check shaped like the
+    // output rather than the property is not a check.
+    const cells = (h.match(/<tr[^>]*>[\s\S]*?<\/tr>/g) || [])
+        .filter((r) => /LBLQ1111111/.test(r))
+        .map((r) => (r.match(/<td[^>]*>([\s\S]*?)<\/td>/g) || []).map((c) => c.replace(/<[^>]+>/g, '').trim()));
+    ck('  the Claim column is not blank on a downgrade',
+       cells.length === 1 && cells[0].length === 8 && cells[0][6] === '664 LB',
+       `row cells: ${JSON.stringify(cells[0])}`);
+    ck('  the item names still print', /Alternator/.test(h) && /MS Scrap/.test(h), '');
+
+    // Nothing that prints correctly today may change: a CONTAMINATION claim
+    // keeps all nine columns, because Short and his rate mean something on it.
+    const CON = 'Contam Co';
+    const k = await claims.create({ supplier: CON, container_no: 'CONT2222222',
+        invoice_no: 'I2', weight_unit: 'MT', supplier_price: 1000,
+        supplier_price_unit: 'MT', status: 'verified' }, 't');
+    await claims.verify(k.id, { invoice_weight: 20, claimed_weight: 20, weight_unit: 'MT',
+        sell_price: 1000, sell_price_unit: 'MT' }, 'a');
+    await claims.assess(k.id, { assessment: 'contamination', weight_unit: 'MT',
+        invoice_weight: 20, contam_accepted_pct: 10, sell_price: 1000, sell_price_unit: 'MT' }, 'a');
+    await claims.raiseRecovery(k.id, { our_claim: 2000 }, 'a');
+    const ch = report.toHtml(report.build({ supplier: CON, includeUnverified: true }));
+    ck('a contamination claim keeps all nine columns',
+       /Your rate/.test(ch) && !/Claim type/.test(ch),
+       'the widening is an OR, not a replacement');
 }
 
 console.log(`\n  ${pass} passed, ${fail} failed`);

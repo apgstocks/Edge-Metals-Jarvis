@@ -98,6 +98,23 @@ const basisOf = (c) => {
     return nnum(c.shortage);
 };
 
+// ── WHAT SHE LABELLED IT, NOT WHAT THE ENGINE COMPUTED (2026-10-30) ──────
+// Apsara: "Make the document follow the claim type you picked, so anything
+// you label 'quality' gets the 8-column quality layout regardless of the
+// arithmetic underneath."
+//
+// Inesh's DFSU1207911 is why. She classified it quality; the engine stored
+// assessment 'grade', because the figure came from a price gap. The layout
+// keyed off the assessment, so her quality claim printed on the nine-column
+// shortage table with Short, % and his rate all dashes.
+//
+// This is a test of the LABEL only. It is deliberately an OR with the
+// assessment, not a replacement: a claim whose arithmetic is quality keeps
+// the layout it has today even if its kind is named something else, so
+// nothing that prints correctly now changes.
+const isQualityLine = (l) =>
+    l.assessment === 'quality' || String(l.kind || '').trim().toLowerCase() === 'quality';
+
 // What each arithmetic is called when the kind has no name of its own.
 const ASSESSMENT_NAME = {
     weight: 'Shortage',
@@ -707,12 +724,20 @@ function toHtml(b) {
     // contamination or sorted row is on the same page, the nine-column
     // table comes back untouched, because Short, % and his rate mean
     // something on those and the columns are shared.
-    const allQuality = b.lines.length > 0 && b.lines.every((l) => l.assessment === 'quality');
+    const allQuality = b.lines.length > 0 && b.lines.every(isQualityLine);
     const head = allQuality
         ? ['Date', 'Container', 'Claim type', 'What we sent', 'What is claimed', 'Invoiced', 'Claim', 'Recoverable']
         : ['Date', 'Container', 'What is claimed', 'Invoiced', 'Received', 'Short', '%', 'Your rate', 'Recoverable'];
     // Where the right-aligned (numeric) columns start in each set.
     const rightFrom = allQuality ? 5 : 4;
+
+    // The quantity the claim is about, whichever arithmetic produced it.
+    // Reading quality_qty alone left the Claim column blank on a downgrade
+    // she had labelled quality — the exact claim that prompted this.
+    const claimedQty = (l) => (l.quality_qty !== null && l.quality_qty !== undefined
+        ? l.quality_qty
+        : (l.grade_weight !== null && l.grade_weight !== undefined ? l.grade_weight
+        : (l.contaminated_weight !== null && l.contaminated_weight !== undefined ? l.contaminated_weight : null)));
 
     // Both items are NAMES — "what is claimed as in item" — and the only
     // figures are the invoiced weight, the quantity claimed and the money.
@@ -723,7 +748,7 @@ function toHtml(b) {
       <td>${esc(l.grade_sold || '\u2014')}</td>
       <td>${esc(l.grade_received || '\u2014')}</td>
       <td class="r mono">${esc(wt(l.invoice_weight, l.unit))}</td>
-      <td class="r mono">${l.quality_qty === null ? '\u2014' : esc(wt(l.quality_qty, l.unit))}</td>
+      <td class="r mono">${claimedQty(l) === null ? '\u2014' : esc(wt(claimedQty(l), l.unit))}</td>
       <td class="r mono strong">${l.sendable && l.our_claim !== null ? esc(money(l.our_claim)) : '\u2014'}</td>
     </tr>`;
 
@@ -731,7 +756,7 @@ function toHtml(b) {
       <td>${esc(l.date)}</td>
       <td class="mono">${esc(l.container_no || '—')}</td>
       <td>${esc(l.kind)}${l.sendable ? '' : '<span class="tag">not yet verified</span>'}</td>
-      ${l.assessment === 'quality'
+      ${isQualityLine(l)
         // ── A QUALITY ROW CARRIES ITS OWN COLUMNS (2026-10-30) ─────────
         // Apsara: "What we sent ,what is claimed should be there in table.
         // dont want shirt ,%,Youra rate in table for quaity claim".
@@ -746,7 +771,7 @@ function toHtml(b) {
         // all nine columns exactly as they were.
         ? `<td class="r mono" colspan="5">${(l.grade_sold || l.grade_received)
               ? esc(`${l.grade_sold || '—'} → ${l.grade_received || '—'}`) + ' &middot; ' : ''}`
-            + `${l.quality_qty !== null ? esc(wt(l.quality_qty, l.unit)) + ' claimed' : '—'}</td>`
+            + `${claimedQty(l) !== null ? esc(wt(claimedQty(l), l.unit)) + ' claimed' : '—'}</td>`
         : `<td class="r mono">${esc(wt(l.invoice_weight, l.unit))}</td>
       <td class="r mono">${esc(wt(l.claimed_weight, l.unit))}</td>
       <td class="r mono">${esc(wt(l.shortage, l.unit))}</td>
