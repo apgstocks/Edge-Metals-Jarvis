@@ -152,7 +152,14 @@ section('F — the statement prints their rate and never Edge\'s');
     ck('the "Our invoice" column is gone', !/Our invoice/.test(html));
     // NINE columns now, not ten: "Our invoice" was removed on 2026-10-20 at
     // Apsara's instruction, so the footer spans eight.
-    ck('the table still balances — 9 columns, footer spans 8', /colspan="8" class="r">Total recoverable/.test(html));
+    // The total used to be a <tfoot> inside the one table, spanning 8 of its
+    // 9 columns. Since the page can carry TWO tables with different column
+    // counts (2026-10-31) it is its own two-cell table beneath them, so
+    // there is no span to get wrong. What still matters is that exactly one
+    // total is printed and it is the figure in the box.
+    ck('exactly one Total recoverable is printed',
+       (html.match(/Total recoverable/g) || []).length === 1,
+       String((html.match(/Total recoverable/g) || []).length));
 
     const xlsx = await report.toWorkbook(b);
     ck('the workbook is produced with the extra columns', xlsx.length > 2000);
@@ -309,7 +316,14 @@ section('F4 — nothing that leaves the building names the customer');
     }
     // NINE columns now, not ten: "Our invoice" was removed on 2026-10-20 at
     // Apsara's instruction, so the footer spans eight.
-    ck('the table still balances — 9 columns, footer spans 8', /colspan="8" class="r">Total recoverable/.test(html));
+    // The total used to be a <tfoot> inside the one table, spanning 8 of its
+    // 9 columns. Since the page can carry TWO tables with different column
+    // counts (2026-10-31) it is its own two-cell table beneath them, so
+    // there is no span to get wrong. What still matters is that exactly one
+    // total is printed and it is the figure in the box.
+    ck('exactly one Total recoverable is printed',
+       (html.match(/Total recoverable/g) || []).length === 1,
+       String((html.match(/Total recoverable/g) || []).length));
 
     const xlsx = await report.toWorkbook(b);
     const text = xlsx.toString('latin1');

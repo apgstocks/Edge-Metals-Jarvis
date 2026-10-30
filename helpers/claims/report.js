@@ -734,18 +734,22 @@ function toHtml(b) {
     // invoiced,claim,Recoverable", then "what is claimed as in item", then
     // "This sis applicable only for quality claim".
     //
-    // So this is a SECOND table shape, not a replacement. It is used only
-    // when every row on the document is a quality claim — which is what a
-    // single-claim demand usually is. The moment a weight, downgrade,
-    // contamination or sorted row is on the same page, the nine-column
-    // table comes back untouched, because Short, % and his rate mean
-    // something on those and the columns are shared.
-    const allQuality = b.lines.length > 0 && b.lines.every(isQualityLine);
-    const head = allQuality
-        ? ['Date', 'Container', 'Claim type', 'What we sent', 'What is claimed', 'Invoiced', 'Claim', 'Recoverable']
-        : ['Date', 'Container', 'What is claimed', 'Invoiced', 'Received', 'Short', '%', 'Your rate', 'Recoverable'];
-    // Where the right-aligned (numeric) columns start in each set.
-    const rightFrom = allQuality ? 5 : 4;
+    // So this is a SECOND table shape, not a replacement — and since
+    // 2026-10-31 both shapes can be on the page at once, see below.
+    // ── TWO TABLES, NOT ONE WITH MERGED CELLS (2026-10-31) ────────────
+    // Apsara, shown MSMU1152787 (one quality claim + one weight shortage on
+    // the same container): "Split the page into two tables".
+    //
+    // Before this, a mixed page fell back to the nine-column shortage table
+    // and the quality row merged five cells into one. That cell was printed
+    // in the space the header row calls INVOICED / RECEIVED / SHORT / % /
+    // YOUR RATE, so a broker reading down the INVOICED column met an item
+    // name. Every row now sits under headers that describe it.
+    const qLines = b.lines.filter(isQualityLine);
+    const oLines = b.lines.filter((l) => !isQualityLine(l));
+    // `allQuality`, `head` and `rightFrom` are GONE. They chose ONE column
+    // set for the whole page, which is the thing being replaced; keeping
+    // them would have left two ways to decide the same question.
 
     // The quantity the claim is about, whichever arithmetic produced it.
     // Reading quality_qty alone left the Claim column blank on a downgrade
@@ -768,33 +772,38 @@ function toHtml(b) {
       <td class="r mono strong">${l.sendable && l.our_claim !== null ? esc(money(l.our_claim)) : '\u2014'}</td>
     </tr>`;
 
-    const row = (l) => allQuality ? qualityRow(l) : `<tr${l.sendable ? '' : ' class="info"'}>
+    // The nine-column row. Its quality branch is GONE, not disabled: quality
+    // lines never reach here any more, they go to qualityRow in their own
+    // table. Leaving a dead branch behind is how the next reader concludes
+    // the merged cell is still a thing this document can produce.
+    const row = (l) => `<tr${l.sendable ? '' : ' class="info"'}>
       <td>${esc(l.date)}</td>
-      <td class="mono">${esc(l.container_no || '—')}</td>
+      <td class="mono">${esc(l.container_no || '\u2014')}</td>
       <td>${esc(l.kind)}${l.sendable ? '' : '<span class="tag">not yet verified</span>'}</td>
-      ${isQualityLine(l)
-        // ── A QUALITY ROW CARRIES ITS OWN COLUMNS (2026-10-30) ─────────
-        // Apsara: "What we sent ,what is claimed should be there in table.
-        // dont want shirt ,%,Youra rate in table for quaity claim".
-        //
-        // A quality claim has no invoiced-against-received pair, so Short
-        // and % were always dashes on it, and she does not want his rate
-        // beside it either. Those five cells become one saying what the row
-        // is actually about: what went out, what came back, how much is
-        // claimed. The condition dropped `quality_qty !== null` so a quality
-        // claim with no quantity yet also stops showing a shortage it does
-        // not have. ONLY this branch changed — every other assessment keeps
-        // all nine columns exactly as they were.
-        ? `<td class="r mono" colspan="5">${(l.grade_sold || l.grade_received)
-              ? esc(`${l.grade_sold || '—'} → ${l.grade_received || '—'}`) + ' &middot; ' : ''}`
-            + `${claimedQty(l) !== null ? esc(wt(claimedQty(l), l.unit)) + ' claimed' : '—'}</td>`
-        : `<td class="r mono">${esc(wt(l.invoice_weight, l.unit))}</td>
+      <td class="r mono">${esc(wt(l.invoice_weight, l.unit))}</td>
       <td class="r mono">${esc(wt(l.claimed_weight, l.unit))}</td>
       <td class="r mono">${esc(wt(l.shortage, l.unit))}</td>
-      <td class="r mono">${l.shortage_pct === null ? '—' : esc(l.shortage_pct.toFixed(2)) + '%'}</td>
-      <td class="r mono">${l.rate === null ? '—' : esc(rateMoney(l.rate)) + '/' + esc(l.rate_unit || '')}${l.rate_from ? `<div class="conv">from ${esc(l.rate_from)}</div>` : ''}${l.charge_qty === null ? '' : `<div class="conv">on ${esc(wt(l.charge_qty, l.rate_unit || ''))}</div>`}</td>`}
-      <td class="r mono strong">${l.sendable && l.our_claim !== null ? esc(money(l.our_claim)) : '—'}</td>
+      <td class="r mono">${l.shortage_pct === null ? '\u2014' : esc(l.shortage_pct.toFixed(2)) + '%'}</td>
+      <td class="r mono">${l.rate === null ? '\u2014' : esc(rateMoney(l.rate)) + '/' + esc(l.rate_unit || '')}${l.rate_from ? `<div class="conv">from ${esc(l.rate_from)}</div>` : ''}${l.charge_qty === null ? '' : `<div class="conv">on ${esc(wt(l.charge_qty, l.rate_unit || ''))}</div>`}</td>
+      <td class="r mono strong">${l.sendable && l.our_claim !== null ? esc(money(l.our_claim)) : '\u2014'}</td>
     </tr>`;
+
+    // One table. `caption` is printed only when BOTH are on the page — a
+    // single-kind demand gets no heading it does not need.
+    const tableOf = (lines, cols, firstRight, mk, caption) => !lines.length ? '' : `
+${caption ? `<div class="tcap">${esc(caption)}</div>` : ''}
+<table class="sum">
+  <thead><tr>${cols.map((h, i) => `<th${i >= firstRight ? ' class="r"' : ''}>${esc(h)}</th>`).join('')}</tr></thead>
+  <tbody>${lines.map(mk).join('')}</tbody>
+</table>`;
+
+    const QHEAD = ['Date', 'Container', 'Claim type', 'What we sent', 'What is claimed', 'Invoiced', 'Claim', 'Recoverable'];
+    const OHEAD = ['Date', 'Container', 'What is claimed', 'Invoiced', 'Received', 'Short', '%', 'Your rate', 'Recoverable'];
+    const split = qLines.length > 0 && oLines.length > 0;
+    const tables = b.lines.length
+        ? tableOf(qLines, QHEAD, 5, qualityRow, split ? 'Quality claims' : '')
+          + tableOf(oLines, OHEAD, 3, row, split ? 'Weight, contamination and other claims' : '')
+        : `<table class="sum"><tbody><tr><td style="padding:16px;color:#777">No claims in this report.</td></tr></tbody></table>`;
 
     const notesOn = b.lines.map(detailLine).filter(Boolean);
     const details = notesOn.length ? `<ul class="what">${notesOn.join('')}</ul>` : '';
@@ -844,6 +853,12 @@ header .ref{font-size:8pt;color:#D9E8F5;margin-top:3px}
    hang new prose on a class she asked to be emptied. */
 table{width:100%;border-collapse:collapse}
 table.sum{margin-top:10px}
+table.sum.grand{margin-top:0}
+/* The heading above each table on a MIXED page. Small and quiet: it labels
+   the rows under it, it is not a section title competing with the masthead. */
+.tcap{margin-top:14px;font-size:7.5pt;letter-spacing:.07em;text-transform:uppercase;color:#1F4E79;font-weight:700}
+/* A date must not break across two lines — it did on the mixed page. */
+table.sum td:first-child{white-space:nowrap}
 th{text-align:left;font-size:7pt;letter-spacing:.05em;text-transform:uppercase;color:#1F4E79;border-bottom:1px solid #2E6DA4;padding:5px 5px;white-space:nowrap;background:#D9E8F5}
 th.r{text-align:right}
 td{padding:5px 5px;border-bottom:1px solid #e4e4e4;vertical-align:top}
@@ -934,11 +949,8 @@ tfoot td{border-top:2px solid #2E6DA4;border-bottom:0;padding-top:7px;font-weigh
 </div>
 
 
-<table class="sum">
-  <thead><tr>${head.map((h, i) => `<th${i >= rightFrom ? ' class="r"' : ''}>${esc(h)}</th>`).join('')}</tr></thead>
-  <tbody>${b.lines.length ? b.lines.map(row).join('') : '<tr><td colspan="9" style="padding:16px;color:#777">No claims in this report.</td></tr>'}</tbody>
-  ${b.totals.claims ? `<tfoot><tr><td colspan="8" class="r">Total recoverable</td><td class="r mono">${esc(money(b.totals.recoverable))}</td></tr></tfoot>` : ''}
-</table>
+${tables}
+${b.totals.claims ? `<table class="sum grand"><tfoot><tr><td class="r">Total recoverable</td><td class="r mono" style="width:120px">${esc(money(b.totals.recoverable))}</td></tr></tfoot></table>` : ''}
 
 ${details}
 

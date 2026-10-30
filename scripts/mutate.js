@@ -494,10 +494,17 @@ const MUTATIONS = [
       file: 'helpers/bills.js', suites: ['bills-sales'],
       find: '    const missing = Object.keys(tare).filter((k) => tare[k] === null);',
       to:   '    const missing = [];' },
-    { name: 'quality-only demand: her column set is used on MIXED pages too',
+    // ── THE SPLIT ITSELF (2026-10-31) ────────────────────────────────────
+    // Replaces 'quality-only demand: her column set is used on MIXED pages
+    // too', which guarded the single-table rule that the split removed.
+    { name: 'split: quality rows are dragged back into the nine-column table',
       file: 'helpers/claims/report.js', suites: ['claims-report-wording'],
-      find: '    const allQuality = b.lines.length > 0 && b.lines.every(isQualityLine);',
-      to:   '    const allQuality = b.lines.length > 0 && b.lines.some(isQualityLine);' },
+      find: "    const oLines = b.lines.filter((l) => !isQualityLine(l));",
+      to:   "    const oLines = b.lines;" },
+    { name: 'split: the two tables lose their headings on a mixed page',
+      file: 'helpers/claims/report.js', suites: ['claims-report-wording'],
+      find: "    const split = qLines.length > 0 && oLines.length > 0;",
+      to:   "    const split = false;" },
     { name: 'quality-only demand: the items stop being printed as names',
       file: 'helpers/claims/report.js', suites: ['claims-report-wording'],
       // The file holds the ESCAPE TEXT \\u2014, not the character, so the find
@@ -507,14 +514,16 @@ const MUTATIONS = [
       find: "      <td>${esc(l.grade_sold || '\\u2014')}</td>",
       to:   "      <td>${esc('')}</td>" },
 
-    { name: 'quality row: Short, % and his rate come back on it',
-      file: 'helpers/claims/report.js', suites: ['claims-report-wording'],
-      find: '      ${isQualityLine(l)',
-      to:   '      ${false' },
-    { name: 'quality row: what we sent and what came back are dropped from the table',
-      file: 'helpers/claims/report.js', suites: ['claims-report-wording'],
-      find: "        ? `<td class=\"r mono\" colspan=\"5\">${(l.grade_sold || l.grade_received)",
-      to:   "        ? `<td class=\"r mono\" colspan=\"5\">${(false)" },
+    // RETIRED 2026-10-31, not re-pointed. Both guarded the MERGED CELL on a
+    // mixed page — five columns collapsed into one. Apsara replaced it with
+    // two tables ("Split the page into two tables"), so the cell is gone and
+    // there is no property left for these to defend. Their replacements are
+    // the two 'split:' mutations above, plus the check
+    // 'and no merged cell survives anywhere on the page'.
+    //   { name: 'quality row: Short, % and his rate come back on it',
+    //     find: '      ${isQualityLine(l)' }
+    //   { name: 'quality row: what we sent and what came back are dropped from the table',
+    //     find: '        ? `<td class="r mono" colspan="5">${(l.grade_sold || l.grade_received)' }
 
     { name: 'downgrade: a price she asked to hide is back on the supplier copy',
       file: 'helpers/claims/report.js', suites: ['claims-supplier-price'],

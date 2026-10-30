@@ -179,7 +179,12 @@ section('E — the quality ROW: no Short, no %, no Your rate');
 
     ck('the quality row says what we sent and what came back',
        /Alternator/.test(qRow) && /MS Scrap/.test(qRow), qRow.replace(/<[^>]+>/g, ' ').trim().slice(0, 120));
-    ck('  and how much is claimed', /2,215\.64 LB claimed/.test(qRow));
+    // Was /2,215.64 LB claimed/ — the wording of the MERGED cell, which no
+    // longer exists: the quality row has its own table and its own Claim
+    // column now (2026-10-31). The quantity is the property; "claimed" was
+    // only ever the label the merge needed.
+    ck('  and how much is claimed', /2,215\.64 LB/.test(qRow),
+       qRow.replace(/<[^>]+>/g, ' | ').trim().slice(0, 160));
     ck('  with no shortage percentage on it', !/%/.test(qRow),
        'a quality claim has no invoiced-against-received pair to take a % of');
     ck('  and no rate of his beside it', !/0\.42/.test(qRow),
@@ -244,20 +249,32 @@ section('G — a MIXED demand keeps the old table, untouched');
     await claims.raiseRecovery(q2.id, { our_claim: 500 }, 'a');
 
     const html = report.toHtml(report.build({ supplier: MIX, includeUnverified: true }));
-    const head = (html.match(/<thead>[\s\S]*?<\/thead>/) || [''])[0].replace(/<[^>]+>/g, '|');
-    ck('the nine-column header is back', /Short/.test(head) && /Your rate/.test(head)
-       && /Received/.test(head), head);
-    ck('  and her quality headers are NOT on a mixed page',
-       !/What we sent/.test(head), head);
+    // ── A MIXED PAGE NOW CARRIES BOTH TABLES (2026-10-31) ───────────────
+    // Apsara: "Split the page into two tables". These three checks used to
+    // assert the opposite — that a mixed page fell back to ONE nine-column
+    // table and the quality row merged five cells into it. That merged cell
+    // printed an item name in the space headed INVOICED, which is why she
+    // asked for the split.
+    const heads = (html.match(/<thead>[\s\S]*?<\/thead>/g) || []).map((h) => h.replace(/<[^>]+>/g, '|'));
+    ck('a mixed page carries TWO tables, not one', heads.length === 2, `${heads.length} thead(s)`);
+    ck('  one of them has her quality columns',
+       heads.some((h) => /What we sent/.test(h) && !/Short/.test(h)), heads.join('   ///   '));
+    ck('  the other keeps Short, % and his rate',
+       heads.some((h) => /Short/.test(h) && /Your rate/.test(h) && /Received/.test(h)),
+       heads.join('   ///   '));
+    ck('  and each is labelled, so neither is read under the wrong headings',
+       /Quality claims/.test(html) && /other claims/.test(html), '');
 
     const wRow = (html.split('<tr').find((c) => c.includes('MIXD1111111')) || '');
     ck('the weight row still shows shortage, % and his rate',
        /1 MT/.test(wRow) && /5\.00%/.test(wRow) && /1,000\.00\/MT/.test(wRow),
        wRow.replace(/<[^>]+>/g, ' | ').trim());
     const qRow = (html.split('<tr').find((c) => c.includes('MIXD2222222')) || '');
-    ck('  and the quality row still merges its cells',
-       /colspan="5"/.test(qRow) && /Rads/.test(qRow),
-       qRow.replace(/<[^>]+>/g, ' | ').trim().slice(0, 140));
+    ck('  the quality row no longer merges cells into the wrong columns',
+       !/colspan="5"/.test(qRow) && /Rads/.test(qRow) && /Irony/.test(qRow),
+       qRow.replace(/<[^>]+>/g, ' | ').trim().slice(0, 160));
+    ck('  and no merged cell survives anywhere on the page',
+       !/colspan="5"/.test(html), (html.match(/colspan="5"[^<]*/) || [''])[0]);
 }
 
 // ══════════════════════════════════════════════════════════════════════════
