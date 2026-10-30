@@ -142,6 +142,54 @@ section('D — the screen asks for them, and sends them');
        body.slice(0, 200));
 }
 
+// ══════════════════════════════════════════════════════════════════════════
+section('E — the quality ROW: no Short, no %, no Your rate');
+// Apsara: "What we sent ,what is claimed should be there in table. dont want
+// shirt ,%,Youra rate in table for quaity claim".
+{
+    // A container no other section uses: render() returns EVERY claim for
+    // this supplier, and section B already created TEMU7654321 — the first
+    // matching row won, so this read section B's quantity and failed.
+    const q = await claims.create({ supplier: SUPPLIER, container_no: 'QUAL9999999',
+        invoice_no: 'R4', weight_unit: 'LB', supplier_price: 0.42,
+        supplier_price_unit: 'LB', status: 'verified' }, 't');
+    await claims.assess(q.id, { assessment: 'quality', weight_unit: 'LB', quality_qty: 2215.64,
+        sell_price: 0.89, sell_price_unit: 'LB',
+        grade_sold: 'Alternator', grade_received: 'MS Scrap' }, 'a');
+    await claims.raiseRecovery(q.id, { our_claim: 1971.92 }, 'a');
+
+    // A weight claim beside it, because the columns are SHARED. The rule
+    // CLAUDE.md records breaking twice: a change asked for on one kind of
+    // row must leave the others exactly as they were.
+    const w = await claims.create({ supplier: SUPPLIER, container_no: 'MSCU2222222',
+        invoice_no: 'R5', weight_unit: 'MT', supplier_price: 1000,
+        supplier_price_unit: 'MT', status: 'verified' }, 't');
+    await claims.verify(w.id, { invoice_weight: 20, claimed_weight: 19, weight_unit: 'MT',
+        sell_price: 1000, sell_price_unit: 'MT' }, 'a');
+    await claims.raiseRecovery(w.id, { our_claim: 1000 }, 'a');
+
+    const html = render();
+    // Split on the row opener rather than matching across it — a regex that
+    // has to skip </tr> is exactly the kind that silently truncates and then
+    // "proves" a figure is absent when it is two cells further along.
+    const rowOf = (c) => (html.split('<tr').find((chunk) => chunk.includes(c)) || '');
+    const qRow = rowOf('QUAL9999999'), wRow = rowOf('MSCU2222222');
+    ck('both rows are on the document', !!qRow && !!wRow, `${qRow.length} / ${wRow.length}`);
+
+    ck('the quality row says what we sent and what came back',
+       /Alternator/.test(qRow) && /MS Scrap/.test(qRow), qRow.replace(/<[^>]+>/g, ' ').trim().slice(0, 120));
+    ck('  and how much is claimed', /2,215\.64 LB claimed/.test(qRow));
+    ck('  with no shortage percentage on it', !/%/.test(qRow),
+       'a quality claim has no invoiced-against-received pair to take a % of');
+    ck('  and no rate of his beside it', !/0\.42/.test(qRow),
+       qRow.replace(/<[^>]+>/g, ' ').trim().slice(0, 140));
+
+    // ── AND THE WEIGHT ROW IS UNTOUCHED ──────────────────────────────────
+    ck('the weight row still shows the shortage', /1 MT/.test(wRow), wRow.replace(/<[^>]+>/g, ' ').trim());
+    ck('  still shows the percentage', /5\.00%/.test(wRow));
+    ck('  and still shows HIS rate', /1,000\.00\/MT/.test(wRow));
+}
+
 console.log(`\n  ${pass} passed, ${fail} failed`);
 if (fail) { console.log('\n  FAILED:\n' + failures.map((f) => '    - ' + f).join('\n')); process.exit(1); }
 

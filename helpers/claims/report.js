@@ -680,13 +680,27 @@ function toHtml(b) {
       <td>${esc(l.date)}</td>
       <td class="mono">${esc(l.container_no || '—')}</td>
       <td>${esc(l.kind)}${l.sendable ? '' : '<span class="tag">not yet verified</span>'}</td>
-      ${l.assessment === 'quality' && l.quality_qty !== null
-        ? `<td class="r mono" colspan="4">${esc(wt(l.quality_qty, l.unit))} claimed</td>`
+      ${l.assessment === 'quality'
+        // ── A QUALITY ROW CARRIES ITS OWN COLUMNS (2026-10-30) ─────────
+        // Apsara: "What we sent ,what is claimed should be there in table.
+        // dont want shirt ,%,Youra rate in table for quaity claim".
+        //
+        // A quality claim has no invoiced-against-received pair, so Short
+        // and % were always dashes on it, and she does not want his rate
+        // beside it either. Those five cells become one saying what the row
+        // is actually about: what went out, what came back, how much is
+        // claimed. The condition dropped `quality_qty !== null` so a quality
+        // claim with no quantity yet also stops showing a shortage it does
+        // not have. ONLY this branch changed — every other assessment keeps
+        // all nine columns exactly as they were.
+        ? `<td class="r mono" colspan="5">${(l.grade_sold || l.grade_received)
+              ? esc(`${l.grade_sold || '—'} → ${l.grade_received || '—'}`) + ' &middot; ' : ''}`
+            + `${l.quality_qty !== null ? esc(wt(l.quality_qty, l.unit)) + ' claimed' : '—'}</td>`
         : `<td class="r mono">${esc(wt(l.invoice_weight, l.unit))}</td>
       <td class="r mono">${esc(wt(l.claimed_weight, l.unit))}</td>
       <td class="r mono">${esc(wt(l.shortage, l.unit))}</td>
-      <td class="r mono">${l.shortage_pct === null ? '—' : esc(l.shortage_pct.toFixed(2)) + '%'}</td>`}
-      <td class="r mono">${l.rate === null ? '—' : esc(rateMoney(l.rate)) + '/' + esc(l.rate_unit || '')}${l.rate_from ? `<div class="conv">from ${esc(l.rate_from)}</div>` : ''}${l.charge_qty === null ? '' : `<div class="conv">on ${esc(wt(l.charge_qty, l.rate_unit || ''))}</div>`}</td>
+      <td class="r mono">${l.shortage_pct === null ? '—' : esc(l.shortage_pct.toFixed(2)) + '%'}</td>
+      <td class="r mono">${l.rate === null ? '—' : esc(rateMoney(l.rate)) + '/' + esc(l.rate_unit || '')}${l.rate_from ? `<div class="conv">from ${esc(l.rate_from)}</div>` : ''}${l.charge_qty === null ? '' : `<div class="conv">on ${esc(wt(l.charge_qty, l.rate_unit || ''))}</div>`}</td>`}
       <td class="r mono strong">${l.sendable && l.our_claim !== null ? esc(money(l.our_claim)) : '—'}</td>
     </tr>`;
 
