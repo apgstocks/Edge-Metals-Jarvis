@@ -172,6 +172,22 @@ function blank() {
         grade_sold: '', grade_received: '', grade_weight: null,
         grade_price_sold: null, grade_price_received: null,
         stated_qty: null, stated_qty_unit: null, stated_rate: null, stated_rate_unit: null, // as the MAIL said; prefill only
+        // ── A DOWNGRADE, AS THE DOCUMENT STATED IT (2026-10-30) ──────────
+        // Taewon's 26JY73 claim report: 77 combos invoiced as AL at $1,000/MT,
+        // 46 of them arrived as steel, worth $645/MT, 12.972 MT affected,
+        // claimed 12.972 x $355 = $4,605.06. The grade_* fields above are the
+        // ASSESSED figures that produce claim_amount; these are only what the
+        // paper said, so the downgrade pane opens filled in and she confirms.
+        // Same split, and the same reason, as stated_qty against quality_qty.
+        //
+        // The piece counts are here because they are the EVIDENCE — "46 of 77"
+        // is what their photographs show and what a dispute turns on — while
+        // the money is worked out on weight. Jarvis stored no quantity before,
+        // so that fact was lost the moment the document was filed.
+        stated_grade_sold: '', stated_grade_received: '',
+        stated_price_sold: null, stated_price_received: null, stated_price_unit: null,
+        stated_affected_weight: null,
+        stated_pieces_total: null, stated_pieces_affected: null,
         line_key: '',                // which of several claims in ONE mail this is (e.g. 'quality_claim_ms_scrap')
         quality_qty: null,           // 'quality' assessment: the quantity claimed, in weight_unit
         // Contract tolerance on a weight shortage. Blank = no allowance, which

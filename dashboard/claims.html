@@ -567,6 +567,11 @@ function assessOf(c){
   /* a quantity was stated but there is no invoiced/received pair to subtract —
      the arithmetic is quantity x rate, so do not open on the weight form */
   if (c.stated_qty != null && c.invoice_weight == null && c.claimed_weight == null) return 'quality';
+  /* a downgrade states two prices: the grade sold and the grade received. The
+     arithmetic is weight x (sold - received), so do not open on the weight
+     form. Only a scanned or read downgrade carries these, so no existing claim
+     changes behaviour. */
+  if (c.stated_price_sold != null && c.stated_price_received != null) return 'grade';
   /* the last time a claim of this kind was assessed, use the same arithmetic —
      learned from her own choices, never from a list of kind names */
   const prev = STATE.claims.filter(x => x.id !== c.id && x.claim_type && x.claim_type === c.claim_type && x.assessment)
@@ -951,11 +956,25 @@ function claimCard(c, i, g){
         '<div class="pane" data-pane="grade"' + (a==='grade'?'':' hidden') + '>' +
           '<div class="lede2" style="margin-top:14px">A downgrade is the price gap between the grade sold and the grade received, on the weight affected — not the whole container.</div>' +
           '<div class="grid">' +
-            txt('Grade we sold', 'f_gsold', c.grade_sold, 'as on the contract') +
-            txt('Grade they say arrived', 'f_grecv', c.grade_received, 'as in their claim') +
-            fld('Weight affected', 'f_gw', c.grade_weight) +
-            fld('Our price for the grade sold, per unit', 'f_gps', c.grade_price_sold) +
-            fld('Price of the grade received, per unit', 'f_gpr', c.grade_price_received) +
+            txt('Grade we sold', 'f_gsold', c.grade_sold || c.stated_grade_sold, 'as on the contract') +
+            txt('Grade they say arrived', 'f_grecv', c.grade_received || c.stated_grade_received, 'as in their claim') +
+            fld('Weight affected', 'f_gw', c.grade_weight != null ? c.grade_weight : c.stated_affected_weight,
+                c.stated_affected_weight != null ? 'from the document' : '') +
+            fld('Our price for the grade sold, per unit', 'f_gps',
+                c.grade_price_sold != null ? c.grade_price_sold : c.stated_price_sold,
+                c.stated_price_sold != null ? 'from the document' : '') +
+            fld('Price of the grade received, per unit', 'f_gpr',
+                c.grade_price_received != null ? c.grade_price_received : c.stated_price_received,
+                c.stated_price_received != null ? 'from the document' : '') +
+            /* The evidence, beside the money. "46 of 77" is what their photos
+               show and what a dispute turns on; the figure is worked out on
+               weight, so this is shown and never multiplied by anything. */
+            (c.stated_pieces_affected != null
+              ? '<div class="hint" style="grid-column:1/-1">Their report says <b>'
+                + esc(String(c.stated_pieces_affected)) + '</b>'
+                + (c.stated_pieces_total != null ? ' of ' + esc(String(c.stated_pieces_total)) : '')
+                + ' pieces are the wrong grade. The claim is worked out on the weight, not the count.</div>'
+              : '') +
           '</div><div class="calc c_g"></div>' +
           '<div class="actions"><button class="btn go f_assess" data-kind="grade" type="button">Confirm the assessment</button><span class="hint g_why" style="margin:0"></span></div>' +
         '</div>' +
@@ -1730,6 +1749,13 @@ const SCAN_FIELDS = [
   ['invoice_weight', 'Invoiced weight'], ['claimed_weight', 'Weight received'],
   ['weight_unit', 'Unit'], ['stated_claim_amount', 'Amount they are asking'],
   ['date', 'Date on the document'], ['what_is_claimed', 'What is claimed'],
+  /* A downgrade, when that is what the paper describes. Shown after the
+     shortage fields because most documents are still shortages, and left
+     blank rather than hidden so she can see the model found nothing here. */
+  ['grade_sold', 'Grade invoiced'], ['grade_received', 'Grade received'],
+  ['price_sold', 'Price of the grade invoiced'], ['price_received', 'Price of the grade received'],
+  ['price_unit', 'Those prices are per'], ['affected_weight', 'Weight affected'],
+  ['pieces_total', 'Pieces on the shipment'], ['pieces_affected', 'Pieces of the wrong grade'],
 ];
 /* The supplier's rate is stored in DOLLARS per unit. Typed in cents per lb it is
    divided by 100 first (74 ¢/lb -> $0.74/LB); the supplier report then converts
@@ -1898,6 +1924,16 @@ function showScan(wrap, d, closeModal){
         claim_date: get('date'),
         claim_type: (d.kind && d.kind.slug) || '',
         note: get('what_is_claimed'),
+        /* PREFILL ONLY — never the assessed grade_* fields. claimScan's own
+           header states the rule: a scan "does not create a confirmed claim
+           or a money figure". She confirms these on the downgrade pane and
+           that is what computes the amount. */
+        stated_grade_sold: get('grade_sold'), stated_grade_received: get('grade_received'),
+        stated_price_sold: numOf(get('price_sold')), stated_price_received: numOf(get('price_received')),
+        stated_price_unit: get('price_unit') || null,
+        stated_affected_weight: numOf(get('affected_weight')),
+        stated_pieces_total: numOf(get('pieces_total')),
+        stated_pieces_affected: numOf(get('pieces_affected')),
         created_by: 'scan',
       });
       // The photograph is the evidence behind the figures. The claim is already

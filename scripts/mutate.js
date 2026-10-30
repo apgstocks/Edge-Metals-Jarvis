@@ -494,6 +494,33 @@ const MUTATIONS = [
       file: 'helpers/bills.js', suites: ['bills-sales'],
       find: '    const missing = Object.keys(tare).filter((k) => tare[k] === null);',
       to:   '    const missing = [];' },
+    // ── A DOWNGRADE IS NOT A SHORTAGE (2026-10-30) ───────────────────────
+    // Taewon's 26JY73: all 20,775 kg arrived, but 46 of 77 combos invoiced as
+    // aluminium were steel. Before this, claimScan had no shape for it and
+    // 12.972 MT would land in claimed_weight — "the weight received" — so
+    // Jarvis worked out a 7.8 MT shortage that never happened.
+    { name: 'scan: a scanned downgrade opens on the SHORTAGE form again',
+      file: 'dashboard/claims.html', suites: ['claims-downgrade-scan'],
+      find: "  if (c.stated_price_sold != null && c.stated_price_received != null) return 'grade';",
+      to:   "  if (false) return 'grade';" },
+    { name: 'scan: the downgrade pane stops prefilling what was read off the paper',
+      file: 'dashboard/claims.html', suites: ['claims-downgrade-scan'],
+      find: "                c.grade_price_sold != null ? c.grade_price_sold : c.stated_price_sold,",
+      to:   "                c.grade_price_sold,",
+    },
+    // The rule the whole scan path rests on, in claimScan's own words: a scan
+    // "does not create a confirmed claim or a money figure". A scanner that
+    // books a figure off a photograph makes every claim unauditable.
+    { name: 'scan: a scanned downgrade is booked as an ASSESSED figure',
+      file: 'dashboard/claims.html', suites: ['claims-downgrade-scan'],
+      find: "        stated_price_sold: numOf(get('price_sold')), stated_price_received: numOf(get('price_received')),",
+      to:   "        grade_price_sold: numOf(get('price_sold')), grade_price_received: numOf(get('price_received')),",
+    },
+    { name: 'scan: a backwards price pair is offered instead of dropped',
+      file: 'helpers/claimScan.js', suites: ['claims-downgrade-scan'],
+      find: "        && fields.price_received > fields.price_sold) {",
+      to:   "        && false) {" },
+
     // ── AND SO MUST THE BOOKS PAGE (2026-10-30) ──────────────────────────
     // 12 functions, 421 lines, and before tests/books-screen.js not one of
     // them had ever been CALLED by a test — four files named it, two mounted

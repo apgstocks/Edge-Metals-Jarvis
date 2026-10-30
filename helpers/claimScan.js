@@ -50,7 +50,26 @@ const FIELDS = `{
   "stated_claim_amount": null, // the money amount being claimed, as a bare number
   "currency": null,          // "USD", "INR" etc, only if stated
   "date": null,              // the document's own date, as printed
-  "what_is_claimed": null    // one short sentence, in the document's own terms, saying what went wrong
+  "what_is_claimed": null,   // one short sentence, in the document's own terms, saying what went wrong
+
+  // ── A DOWNGRADE: THE GOODS ARRIVED, BUT NOT THE GRADE SOLD ─────────────
+  // Everything above describes a SHORTAGE — invoiced against received. A
+  // large share of her claims are not that. Taewon's 26JY73 report (Oct-2026)
+  // is the shape: all 20,775 kg arrived, nothing is missing, but 46 of 77
+  // combos invoiced as aluminium were steel, worth $645/MT against $1,000/MT,
+  // and the claim is the price difference on the weight affected.
+  //
+  // Without these fields that document still read as a claim and its numbers
+  // landed in invoice_weight and claimed_weight, where they mean something
+  // else — so Jarvis computed a shortage of 7.8 MT that did not exist.
+  "grade_sold": null,        // the grade/item as INVOICED, e.g. "AL Combo"
+  "grade_received": null,    // the grade/item actually RECEIVED, e.g. "Steel Combo"
+  "price_sold": null,        // price per unit of the grade sold, bare number, e.g. 1000
+  "price_received": null,    // price per unit of the grade received, bare number, e.g. 645
+  "price_unit": null,        // "MT", "KG" or "LB" — the unit those two prices are per
+  "affected_weight": null,   // the weight the downgrade applies to, bare number, e.g. 12.972
+  "pieces_total": null,      // total pieces/items on the shipment, e.g. 77
+  "pieces_affected": null    // how many of them are the wrong grade, e.g. 46
 }`;
 
 function buildPrompt() {
@@ -74,6 +93,19 @@ function buildPrompt() {
         '4. For every non-null field put the words you read it from in "quotes", copied as printed, at most 100 characters. A person will check these against the document, so they must be what is actually written, not a paraphrase.',
         '5. If the page is too blurry or cropped to read a field, put that field in "unreadable" and leave it null. Say so rather than guessing — a wrong figure here becomes a claim against a supplier.',
         '6. Weights and money are bare numbers: 21.582 not "21.582 MT", 4113.08 not "$4,113.08".',
+        // ── THE TWO WAYS THE DOWNGRADE FIELDS GO WRONG ───────────────────
+        // Both are rule 2 restated for this shape, because this is where a
+        // model is most tempted to help. A price difference printed on the
+        // page ($355/MT) is NOT one of the two prices, and a weight that did
+        // not arrive short is NOT claimed_weight. Getting either wrong turns
+        // a downgrade into a phantom shortage.
+        '7. A downgrade is NOT a shortage. If the document says the full weight arrived but some of it is the',
+        '   wrong grade or item, fill grade_sold, grade_received, price_sold, price_received and',
+        '   affected_weight, and leave claimed_weight null. Only use claimed_weight when the document says',
+        '   LESS arrived than was invoiced.',
+        '8. price_sold and price_received are the two prices as printed. If the document shows only a',
+        '   difference (e.g. "Price Difference: $355/MT"), that is NOT a price — leave both null unless the',
+        '   two actual prices are also shown. Never subtract or reconstruct one from the other.',
         '',
         'Set is_claim_document false for a bill of lading, a packing list with no complaint, an invoice being sent for payment, or anything that is not somebody claiming money back.',
     ].join('\n');
@@ -150,7 +182,30 @@ async function scan({ base64, mimeType = 'image/jpeg', retries = 2 } = {}) {
         currency: clean(f.currency, 8),
         date: clean(f.date, 30),
         what_is_claimed: clean(f.what_is_claimed, 200),
+        // The downgrade half. asUnit() for price_unit so "metric ton" and "MT"
+        // land the same way the weight unit already does, and so a unit the
+        // document does not state stays null rather than being assumed.
+        grade_sold: clean(f.grade_sold, 80),
+        grade_received: clean(f.grade_received, 80),
+        price_sold: asNum(f.price_sold),
+        price_received: asNum(f.price_received),
+        price_unit: asUnit(f.price_unit),
+        affected_weight: asNum(f.affected_weight),
+        pieces_total: asNum(f.pieces_total),
+        pieces_affected: asNum(f.pieces_affected),
     };
+
+    // ── A PRICE PAIR THAT IS NOT A DOWNGRADE IS DROPPED ──────────────────
+    // The received grade being worth MORE than the grade sold is not a claim
+    // she can be charged for, and helpers/claims.js refuses it at assess()
+    // time ("the received grade is priced above the grade sold"). Dropping it
+    // here means the page never offers a downgrade form that cannot be saved,
+    // rather than letting her fill one in and be refused at the end.
+    if (fields.price_sold !== null && fields.price_received !== null
+        && fields.price_received > fields.price_sold) {
+        fields.price_sold = null;
+        fields.price_received = null;
+    }
 
     // What kind of claim, named by the model from the document's own words — the
     // same classifier the sheet import and the mail path use, so a scan does not
