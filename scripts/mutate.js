@@ -494,6 +494,19 @@ const MUTATIONS = [
       file: 'helpers/bills.js', suites: ['bills-sales'],
       find: '    const missing = Object.keys(tare).filter((k) => tare[k] === null);',
       to:   '    const missing = [];' },
+    { name: 'quality-only demand: her column set is used on MIXED pages too',
+      file: 'helpers/claims/report.js', suites: ['claims-report-wording'],
+      find: "    const allQuality = b.lines.length > 0 && b.lines.every((l) => l.assessment === 'quality');",
+      to:   "    const allQuality = b.lines.length > 0 && b.lines.some((l) => l.assessment === 'quality');" },
+    { name: 'quality-only demand: the items stop being printed as names',
+      file: 'helpers/claims/report.js', suites: ['claims-report-wording'],
+      // The file holds the ESCAPE TEXT \\u2014, not the character, so the find
+      // string needs a doubled backslash. My first two attempts matched the
+      // em-dash itself and reported NOT APPLIED — a mutation that changes
+      // nothing, which is the #204 disease in a single line.
+      find: "      <td>${esc(l.grade_sold || '\\u2014')}</td>",
+      to:   "      <td>${esc('')}</td>" },
+
     { name: 'quality row: Short, % and his rate come back on it',
       file: 'helpers/claims/report.js', suites: ['claims-report-wording'],
       find: "      ${l.assessment === 'quality'",
@@ -2665,8 +2678,12 @@ const MUTATIONS = [
 
     { name: 'quality: the branch stops reading the findings',
       file: 'helpers/claims.js', suites: ['claims-sorted'],
-      find: "        Object.assign(patch, { quality_qty: qty, sell_price, sell_price_unit,\n            findings: qFindings, measured_by: qMeasured });",
-      to:   "        Object.assign(patch, { quality_qty: qty, sell_price, sell_price_unit });" },
+      // Re-pointed 2026-10-30: I added grade_sold/grade_received to this
+      // Object.assign for her "what we sent / what they received" fields and
+      // broke this find string — the exact #204 disease, caused by me, and
+      // caught by the ratchet the same hour rather than in six months.
+      find: "        Object.assign(patch, { quality_qty: qty, sell_price, sell_price_unit,\n            findings: qFindings, measured_by: qMeasured,\n            grade_sold: qSent, grade_received: qRecv });",
+      to:   "        Object.assign(patch, { quality_qty: qty, sell_price, sell_price_unit,\n            grade_sold: qSent, grade_received: qRecv });" },
 
     // A findings list that is not filtered lets any string onto a document
     // that goes to a supplier.

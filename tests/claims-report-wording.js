@@ -190,6 +190,75 @@ section('E — the quality ROW: no Short, no %, no Your rate');
     ck('  and still shows HIS rate', /1,000\.00\/MT/.test(wRow));
 }
 
+// ══════════════════════════════════════════════════════════════════════════
+section('F — a QUALITY-ONLY demand gets her columns');
+// Apsara: "Have date,container,Claim type,what we sent,what is calimed,
+// invoiced,claim,Recoverable" / "what is claimed as in item" / "This sis
+// applicable only for quality claim".
+{
+    const SOLO = 'Quality Only Co';
+    const q = await claims.create({ supplier: SOLO, container_no: 'QUAL1234567',
+        invoice_no: 'F1', claim_date: '2026-10-02', weight_unit: 'LB', status: 'verified' }, 't');
+    await claims.verify(q.id, { invoice_weight: 24000, claimed_weight: 24000, weight_unit: 'LB',
+        sell_price: 0.89, sell_price_unit: 'LB' }, 'a');
+    await claims.assess(q.id, { assessment: 'quality', weight_unit: 'LB', quality_qty: 2215.64,
+        sell_price: 0.89, sell_price_unit: 'LB',
+        grade_sold: 'Alternator', grade_received: 'MS Scrap' }, 'a');
+    await claims.raiseRecovery(q.id, { our_claim: 1971.92 }, 'a');
+    const html = report.toHtml(report.build({ supplier: SOLO, includeUnverified: true }));
+    const head = (html.match(/<thead>[\s\S]*?<\/thead>/) || [''])[0].replace(/<[^>]+>/g, '|');
+
+    for (const h of ['Date', 'Container', 'Claim type', 'What we sent', 'What is claimed',
+        'Invoiced', 'Claim', 'Recoverable']) {
+        ck(`  the header has ${h}`, head.includes(h), head);
+    }
+    ck('  and none of the three she did not want',
+       !/Received/.test(head) && !/Short/.test(head) && !/Your rate/.test(head), head);
+
+    const row = (html.split('<tr').find((c) => c.includes('QUAL1234567')) || '');
+    ck('the items are NAMES, in their own cells',
+       /<td>Alternator<\/td>/.test(row) && /<td>MS Scrap<\/td>/.test(row),
+       row.replace(/<[^>]+>/g, ' | ').trim().slice(0, 150));
+    ck('  the invoiced weight is there', /24,000 LB/.test(row));
+    ck('  and the quantity claimed', /2,215\.64 LB/.test(row));
+    ck('  and the money', /1,971\.92/.test(row));
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+section('G — a MIXED demand keeps the old table, untouched');
+// The columns are shared. CLAUDE.md records this exact break twice: a
+// change asked for on one kind of row landing on every other one.
+{
+    const MIX = 'Mixed Co';
+    const w = await claims.create({ supplier: MIX, container_no: 'MIXD1111111',
+        invoice_no: 'G1', weight_unit: 'MT', supplier_price: 1000,
+        supplier_price_unit: 'MT', status: 'verified' }, 't');
+    await claims.verify(w.id, { invoice_weight: 20, claimed_weight: 19, weight_unit: 'MT',
+        sell_price: 1000, sell_price_unit: 'MT' }, 'a');
+    await claims.raiseRecovery(w.id, { our_claim: 1000 }, 'a');
+    const q2 = await claims.create({ supplier: MIX, container_no: 'MIXD2222222',
+        invoice_no: 'G2', weight_unit: 'LB', status: 'verified' }, 't');
+    await claims.assess(q2.id, { assessment: 'quality', weight_unit: 'LB', quality_qty: 500,
+        sell_price: 1, sell_price_unit: 'LB', grade_sold: 'Rads', grade_received: 'Irony' }, 'a');
+    await claims.raiseRecovery(q2.id, { our_claim: 500 }, 'a');
+
+    const html = report.toHtml(report.build({ supplier: MIX, includeUnverified: true }));
+    const head = (html.match(/<thead>[\s\S]*?<\/thead>/) || [''])[0].replace(/<[^>]+>/g, '|');
+    ck('the nine-column header is back', /Short/.test(head) && /Your rate/.test(head)
+       && /Received/.test(head), head);
+    ck('  and her quality headers are NOT on a mixed page',
+       !/What we sent/.test(head), head);
+
+    const wRow = (html.split('<tr').find((c) => c.includes('MIXD1111111')) || '');
+    ck('the weight row still shows shortage, % and his rate',
+       /1 MT/.test(wRow) && /5\.00%/.test(wRow) && /1,000\.00\/MT/.test(wRow),
+       wRow.replace(/<[^>]+>/g, ' | ').trim());
+    const qRow = (html.split('<tr').find((c) => c.includes('MIXD2222222')) || '');
+    ck('  and the quality row still merges its cells',
+       /colspan="5"/.test(qRow) && /Rads/.test(qRow),
+       qRow.replace(/<[^>]+>/g, ' | ').trim().slice(0, 140));
+}
+
 console.log(`\n  ${pass} passed, ${fail} failed`);
 if (fail) { console.log('\n  FAILED:\n' + failures.map((f) => '    - ' + f).join('\n')); process.exit(1); }
 

@@ -674,9 +674,38 @@ function toHtml(b) {
     //
     // The field is still CARRIED on the line (build() reads it, and the
     // not-reconciled warning on the page uses it) — it is only not printed.
-    const head = ['Date', 'Container', 'What is claimed', 'Invoiced', 'Received', 'Short', '%', 'Your rate', 'Recoverable'];
+    // ── HER COLUMNS, FOR A QUALITY-ONLY DEMAND (2026-10-30) ─────────────
+    // Apsara: "Have date,container,Claim type,what we sent,what is calimed,
+    // invoiced,claim,Recoverable", then "what is claimed as in item", then
+    // "This sis applicable only for quality claim".
+    //
+    // So this is a SECOND table shape, not a replacement. It is used only
+    // when every row on the document is a quality claim — which is what a
+    // single-claim demand usually is. The moment a weight, downgrade,
+    // contamination or sorted row is on the same page, the nine-column
+    // table comes back untouched, because Short, % and his rate mean
+    // something on those and the columns are shared.
+    const allQuality = b.lines.length > 0 && b.lines.every((l) => l.assessment === 'quality');
+    const head = allQuality
+        ? ['Date', 'Container', 'Claim type', 'What we sent', 'What is claimed', 'Invoiced', 'Claim', 'Recoverable']
+        : ['Date', 'Container', 'What is claimed', 'Invoiced', 'Received', 'Short', '%', 'Your rate', 'Recoverable'];
+    // Where the right-aligned (numeric) columns start in each set.
+    const rightFrom = allQuality ? 5 : 4;
 
-    const row = (l) => `<tr${l.sendable ? '' : ' class="info"'}>
+    // Both items are NAMES — "what is claimed as in item" — and the only
+    // figures are the invoiced weight, the quantity claimed and the money.
+    const qualityRow = (l) => `<tr${l.sendable ? '' : ' class="info"'}>
+      <td>${esc(l.date)}</td>
+      <td class="mono">${esc(l.container_no || '\u2014')}</td>
+      <td>${esc(l.kind)}${l.sendable ? '' : '<span class="tag">not yet verified</span>'}</td>
+      <td>${esc(l.grade_sold || '\u2014')}</td>
+      <td>${esc(l.grade_received || '\u2014')}</td>
+      <td class="r mono">${esc(wt(l.invoice_weight, l.unit))}</td>
+      <td class="r mono">${l.quality_qty === null ? '\u2014' : esc(wt(l.quality_qty, l.unit))}</td>
+      <td class="r mono strong">${l.sendable && l.our_claim !== null ? esc(money(l.our_claim)) : '\u2014'}</td>
+    </tr>`;
+
+    const row = (l) => allQuality ? qualityRow(l) : `<tr${l.sendable ? '' : ' class="info"'}>
       <td>${esc(l.date)}</td>
       <td class="mono">${esc(l.container_no || '—')}</td>
       <td>${esc(l.kind)}${l.sendable ? '' : '<span class="tag">not yet verified</span>'}</td>
@@ -839,7 +868,7 @@ tfoot td{border-top:2px solid #2E6DA4;border-bottom:0;padding-top:7px;font-weigh
 
 
 <table class="sum">
-  <thead><tr>${head.map((h, i) => `<th${i >= 4 ? ' class="r"' : ''}>${esc(h)}</th>`).join('')}</tr></thead>
+  <thead><tr>${head.map((h, i) => `<th${i >= rightFrom ? ' class="r"' : ''}>${esc(h)}</th>`).join('')}</tr></thead>
   <tbody>${b.lines.length ? b.lines.map(row).join('') : '<tr><td colspan="9" style="padding:16px;color:#777">No claims in this report.</td></tr>'}</tbody>
   ${b.totals.claims ? `<tfoot><tr><td colspan="8" class="r">Total recoverable</td><td class="r mono">${esc(money(b.totals.recoverable))}</td></tr></tfoot>` : ''}
 </table>
