@@ -51,13 +51,34 @@ function applyLoadModalMode(mode) {
   // the row so the address takes the space instead of leaving a gap.
   const row2 = $('ld_party_row2');
   if (row2) row2.style.gridTemplateColumns = sale ? '1fr' : '';
-  // Trucking is a PURCHASE deduction — what she pays the seller, less the
-  // haulage she covered. There is no equivalent on a sale: a customer owes
-  // the invoice, and quietly reducing it by what a hauler charged her would
-  // be inventing a discount. Hidden rather than disabled so nothing about it
-  // can reach a sale payload by accident. Mirrors dashboard/index.html.
+  // ── TRUCKING IS NOW ON BOTH KINDS (2026-11-04) ────────────────────────
+  // This used to hide the whole section on a sale, reasoning: "There is no
+  // equivalent on a sale: a customer owes the invoice, and quietly reducing
+  // it by what a hauler charged her would be inventing a discount."
+  //
+  // That reasoning held against a DEDUCTION, and it is still right — the
+  // sale side does not deduct. Apsara, 2026-11-04: "Similar to loads
+  // trucking in edge yard,sales trucking should be there na", and she chose
+  // "You haul, buyer is charged". Freight is ADDED to what the buyer owes.
+  // Nothing is invented and no discount appears; the buyer is billed for a
+  // haul that happened.
+  //
+  // The label changes with the kind so the same three boxes cannot be read
+  // as the same arithmetic.
   const truck = $('ld_trucking_section');
-  if (truck) truck.style.display = sale ? 'none' : '';
+  if (truck) truck.style.display = '';
+  // The AMOUNT field's own label — the one word on screen that says which
+  // way the arithmetic runs. I first wrote this against an element id that
+  // did not exist; the `if` guard would have hidden that forever, so the id
+  // is now on the real label in 09-loads-deck.js's markup.
+  const truckLabel = $('ld_trucking_label');
+  if (truckLabel) truckLabel.textContent = sale ? 'Charge to buyer ($)' : 'Deduct from seller ($)';
+  // The checkbox that offers to raise a trucker bill is purchase-side wiring
+  // and is NOT part of what she asked for. Left hidden on a sale rather than
+  // quietly widened — whether a sale should also raise a hauler bill is her
+  // decision, not a side effect of showing a field.
+  const billBox = $('ld_trucking_bill') && $('ld_trucking_bill').closest('label, .field, div');
+  if (billBox) billBox.style.display = sale ? 'none' : '';
 }
 
 // ── WHAT THIS DEDUCTION DOES TO THE PAYABLE, WHILE SHE TYPES ─────────────
@@ -82,8 +103,18 @@ function updateTruckingSummary() {
     return;
   }
   const r2 = (x) => Math.round(x * 100) / 100;
-  if (badge) badge.textContent = '− ' + fmtAmount(r2(trucking));
-  el.textContent = `Amount ${fmtAmount(r2(amount))} − trucking ${fmtAmount(r2(trucking))} = ${fmtAmount(r2(amount - trucking))} payable to the seller`;
+  // The SIGN follows the kind. Same reason the arithmetic is on screen at
+  // all: she is reading the figure that changes hands, and a sale showing
+  // "− trucking … payable to the seller" would be wrong twice in one line.
+  // loadModalMode is the file's own record of which kind is open — set at
+  // the top of the opener above. I first wrote this as a call to an
+  // isSaleKind() that does not exist anywhere, which would have thrown on
+  // every keystroke in the trucking box and left the summary blank.
+  const sale = loadModalMode === 'sale';
+  if (badge) badge.textContent = (sale ? '+ ' : '− ') + fmtAmount(r2(trucking));
+  el.textContent = sale
+    ? `Amount ${fmtAmount(r2(amount))} + trucking ${fmtAmount(r2(trucking))} = ${fmtAmount(r2(amount + trucking))} due from the buyer`
+    : `Amount ${fmtAmount(r2(amount))} − trucking ${fmtAmount(r2(trucking))} = ${fmtAmount(r2(amount - trucking))} payable to the seller`;
 }
 
 // Ticked when a hauling company is named, cleared when the name goes away —

@@ -50,7 +50,14 @@ module.exports = function (app, ctx) {
                 delivery_enquiry_pending: de.pendingForLoad(l.id).length > 0,
                 // Sales get payment tracking too: a buyer paying in
                 // instalments is the same problem from the other side.
-                payment: paymentSummary(l.id, l.amount),
+                //
+                // receivableOf, not l.amount, since 2026-11-04 — a sale can
+                // carry trucking charged on to the buyer, and this figure is
+                // what the paid badge and the "outstanding" line on BOTH
+                // clients are measured against. Left as l.amount, a sale
+                // hauled for $200 would show as fully paid while $200 was
+                // still owed. Same reader as the pay sheet and the ticket.
+                payment: paymentSummary(l.id, require('./helpers/outboundLoads').receivableOf(l)),
             }));
             // Returns a BARE ARRAY, matching GET /api/loads.
             //
@@ -174,6 +181,13 @@ module.exports = function (app, ctx) {
                 trucker_name: b.trucker_name, quote_request_id: b.quote_request_id, quote_request_kind: b.quote_request_kind,
                 linked_inbound_load_ids: b.linked_inbound_load_ids,
                 description: b.description, items: b.items, weight_unit: b.weight_unit,
+                // Trucking on a sale (2026-11-04). Both routes whitelist
+                // fields explicitly, so a field missing HERE never reaches
+                // the helper however well the form fills it in — the gap
+                // CLAUDE.md rule 3 names: "the route does not forward the
+                // new field to the helper".
+                trucking_company: b.trucking_company, trucking_amount: b.trucking_amount,
+                trucking_note: b.trucking_note,
                 delivery_eta_date: b.delivery_eta_date, delivery_eta_time: b.delivery_eta_time,
                 delivery_eta_tz: b.delivery_eta_tz,
                 created_by: b.created_by || req.role || 'unknown',
@@ -220,6 +234,14 @@ module.exports = function (app, ctx) {
                 trucker_name: b.trucker_name, quote_request_id: b.quote_request_id, quote_request_kind: b.quote_request_kind,
                 linked_inbound_load_ids: b.linked_inbound_load_ids,
                 description: b.description, items: b.items, weight_unit: b.weight_unit,
+                // Forwarded ONLY when the request actually carries them, so
+                // editOutboundLoad's "an edit that never mentions trucking
+                // must not wipe it" guard can tell the difference between
+                // "cleared it" and "did not mention it". Spreading b's own
+                // keys is what makes `in` meaningful downstream.
+                ...('trucking_company' in b ? { trucking_company: b.trucking_company } : {}),
+                ...('trucking_amount'  in b ? { trucking_amount:  b.trucking_amount  } : {}),
+                ...('trucking_note'    in b ? { trucking_note:    b.trucking_note    } : {}),
                 delivery_eta_date: b.delivery_eta_date, delivery_eta_time: b.delivery_eta_time,
                 delivery_eta_tz: b.delivery_eta_tz,
             });

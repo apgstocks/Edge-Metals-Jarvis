@@ -437,7 +437,15 @@ function openPayModal(loadId, kind, opts) {
     // would put two figures side by side that do not subtract — and the one
     // she would query is the one that is right.
     : `${sale ? 'Sale' : 'Load'} ${esc(l.id)}${esc(who)}<br>${sale ? 'Sale' : 'Load'} total ${payMoney(l.amount)}${
-        !sale && Number(l.trucking_amount) > 0 ? ` · less trucking ${payMoney(l.trucking_amount)}` : ''
+        // ── BOTH DIRECTIONS NOW (2026-11-04) ─────────────────────────
+        // `!sale &&` was right while only a purchase could carry haulage.
+        // A sale can since 2026-11-04 and it goes the OTHER WAY: Apsara's
+        // rule is "You haul, buyer is charged", so the line reads PLUS, and
+        // the outstanding figure beside it comes from receivableOf. Without
+        // this the sheet would print a total and an outstanding that do not
+        // subtract — the exact fault the comment above records.
+        Number(l.trucking_amount) > 0
+          ? ` · ${sale ? 'plus' : 'less'} trucking ${payMoney(l.trucking_amount)}` : ''
       } · already ${sale ? 'received' : 'paid'} ${payMoney(p.paid)} · <strong>${payMoney(p.pending)} outstanding</strong>`;
   // The modes THIS ROW accepts — see the note in dashboard/index.html's
   // openPayModal. A sale takes Cash or Bank transfer; a purchase keeps the

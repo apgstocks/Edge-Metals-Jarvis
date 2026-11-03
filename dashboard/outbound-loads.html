@@ -120,6 +120,24 @@ tr:last-child td { border-bottom:none; }
       </div>
       <div class="field" style="margin-top:10px;"><label>Description (optional overall note)</label><input id="lm_description"></div>
 
+      <!-- ── TRUCKING ON A SALE (2026-11-04) ──────────────────────────────
+           Apsara: "Similar to loads trucking in edge yard,sales trucking
+           should be there na", and she chose "You haul, buyer is charged".
+           So this ADDS to what the buyer owes, where the purchase form's
+           identical three boxes SUBTRACT from what the seller is paid.
+           Folded away in a <details> like the purchase side, and opened by
+           the editor when a load already has trucking on it, so a sale
+           without one looks exactly as it did. -->
+      <details id="lm_trucking_details" style="margin-top:10px;">
+        <summary style="cursor:pointer; font-size:12px; color:var(--text-muted);">Trucking (charged to the buyer)</summary>
+        <div class="grid2" style="margin-top:8px;">
+          <div class="field"><label>Hauler</label><input id="lm_trucking_company" placeholder="who hauled it"></div>
+          <div class="field"><label>Trucking charged ($)</label><input id="lm_trucking_amount" inputmode="decimal" placeholder="0.00"></div>
+        </div>
+        <div class="field" style="margin-top:8px;"><label>Note</label><input id="lm_trucking_note" placeholder="e.g. LA to Long Beach"></div>
+        <div id="lm_trucking_hint" style="font-size:11px; color:var(--text-faint); margin-top:6px;"></div>
+      </details>
+
       <!-- The trucker's promised delivery. Both halves are needed: a date on
            its own cannot schedule an enquiry at a time, and Jarvis says so
            rather than guessing an hour. -->
@@ -263,6 +281,15 @@ function loadCard(l) {
         </div>
         <div style="text-align:right;">
           <div style="font-family:var(--font-mono); font-weight:600; color:var(--text-strong);">${fmtMoney(l.amount)}</div>
+          <!-- ── WHAT THE BUYER OWES, WHEN IT IS NOT THE AMOUNT ──────────
+               Printed only when there IS trucking, so a sale without one
+               reads exactly as it did. The METAL figure stays on top,
+               because that is what the margin beside it is computed from —
+               showing the gross there and the margin under it would put two
+               numbers side by side that do not subtract, which is the fault
+               helpers/payments.js records on the purchase side. -->
+          ${Number(l.trucking_amount) > 0 ? `<div style="font-size:11px; color:var(--text-muted); margin-top:2px; font-family:var(--font-mono);">+ ${fmtMoney(l.trucking_amount)} trucking${l.trucking_company ? ' · ' + esc(l.trucking_company) : ''}</div>
+          <div style="font-size:12px; margin-top:2px; font-family:var(--font-mono); font-weight:700; color:var(--text-strong);">${fmtMoney(l.net_receivable != null ? l.net_receivable : l.amount)} due</div>` : ''}
           <div style="font-size:11px; margin-top:2px;">${marginText}</div>
         </div>
       </div>
@@ -426,6 +453,13 @@ function openLoadModal() {
   // an enquiry on the NEXT load she opens this modal for.
   $('lm_eta_date').value = ''; $('lm_eta_time').value = '';
   $('lm_trucker').value = ''; $('lm_description').value = '';
+  // Cleared for the same reason the ETA above is: a hauler and an amount
+  // left behind would be charged to the NEXT buyer she opens this for.
+  if ($('lm_trucking_company')) $('lm_trucking_company').value = '';
+  if ($('lm_trucking_amount')) $('lm_trucking_amount').value = '';
+  if ($('lm_trucking_note')) $('lm_trucking_note').value = '';
+  if ($('lm_trucking_details')) $('lm_trucking_details').open = false;
+  if ($('lm_trucking_hint')) $('lm_trucking_hint').textContent = '';
   $('lm_items').innerHTML = itemRowHtml(0);
   $('lm_inbound_search').value = ''; $('lm_inbound_results').innerHTML = '';
   linkedInbound = [];
@@ -484,6 +518,12 @@ $('lmSave').addEventListener('click', async () => {
     buyer, buyer_address: $('lm_buyer_address').value.trim() || null,
     date: toIsoDate($('lm_date').value) || null, trucker_name: $('lm_trucker').value.trim() || null,
     description: $('lm_description').value.trim() || '',
+    // Always sent, even blank: editOutboundLoad tells "cleared it" from
+    // "never mentioned it" by whether the key is present, so a form that
+    // omitted these on a cleared field could never clear one.
+    trucking_company: $('lm_trucking_company') ? $('lm_trucking_company').value.trim() : '',
+    trucking_amount: $('lm_trucking_amount') ? $('lm_trucking_amount').value : '',
+    trucking_note: $('lm_trucking_note') ? $('lm_trucking_note').value.trim() : '',
     items, linked_inbound_load_ids: linkedInbound.map((l) => l.id),
     delivery_eta_date: toIsoDate($('lm_eta_date').value) || null,
     delivery_eta_time: $('lm_eta_time').value || null,

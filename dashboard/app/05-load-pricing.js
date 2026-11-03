@@ -835,7 +835,18 @@ function applyLoadModalMode(mode) {
   // be inventing a discount. Hidden rather than disabled so nothing about it
   // can reach a sale payload by accident.
   const truck = $('ld_trucking_section');
-  if (truck) truck.style.display = sale ? 'none' : '';
+  // ── SHOWN ON BOTH KINDS SINCE 2026-11-04 ────────────────────────────
+  // Hidden on a sale until now, because trucking was a deduction and
+  // deducting a haul from what a customer owes would invent a discount.
+  // Apsara: "Similar to loads trucking in edge yard,sales trucking should
+  // be there na" — and she chose "You haul, buyer is charged", so it ADDS.
+  // The twin of this line lives in mobile-app's 08-load-modal.js; they are
+  // changed together or the two clients disagree on what a sale can hold.
+  if (truck) truck.style.display = '';
+  const truckLabel = $('ld_trucking_label');
+  if (truckLabel) truckLabel.textContent = sale ? 'Charge to buyer ($)' : 'Deduct from seller ($)';
+  const billBox = $('ld_trucking_bill') && $('ld_trucking_bill').closest('label, .field, div');
+  if (billBox) billBox.style.display = sale ? 'none' : '';
 }
 
 // ── WHAT THIS DEDUCTION DOES TO THE PAYABLE, WHILE SHE TYPES ─────────────
@@ -862,8 +873,14 @@ function updateTruckingSummary() {
     return;
   }
   const r2 = (x) => Math.round(x * 100) / 100;
-  if (badge) badge.textContent = '− ' + fmtAmount(r2(trucking));
-  el.textContent = `Amount ${fmtAmount(r2(amount))} − trucking ${fmtAmount(r2(trucking))} = ${fmtAmount(r2(amount - trucking))} payable to the seller`;
+  // The sign follows the kind — the twin of this block in mobile-app's
+  // 08-load-modal.js. A sale reading "− trucking … payable to the seller"
+  // would be wrong twice in one sentence.
+  const sale = loadModalMode === 'sale';
+  if (badge) badge.textContent = (sale ? '+ ' : '− ') + fmtAmount(r2(trucking));
+  el.textContent = sale
+    ? `Amount ${fmtAmount(r2(amount))} + trucking ${fmtAmount(r2(trucking))} = ${fmtAmount(r2(amount + trucking))} due from the buyer`
+    : `Amount ${fmtAmount(r2(amount))} − trucking ${fmtAmount(r2(trucking))} = ${fmtAmount(r2(amount - trucking))} payable to the seller`;
 }
 
 // Ticked when a hauling company is named, cleared when the name goes away —

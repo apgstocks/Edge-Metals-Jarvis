@@ -555,6 +555,48 @@ const MUTATIONS = [
       find: "        kind: claimKinds.label(c.claim_type) === 'not classified yet'",
       to:   "        kind: false" },
 
+    // ── TRUCKING ON A SALE (2026-11-04) ──────────────────────────────────
+    // Apsara: "You haul, buyer is charged". The SIGN is the whole feature,
+    // so the first mutation is the sign — a paste of the purchase side.
+    { name: 'sale trucking: the haul is DEDUCTED from the buyer, as on a purchase',
+      file: 'helpers/outboundLoads.js', suites: ['sale-trucking'],
+      find: "    return round2(amt + (toNum(trucking) || 0));",
+      to:   "    return round2(amt - (toNum(trucking) || 0));" },
+    { name: 'sale trucking: an edit that never mentions it wipes it',
+      file: 'helpers/outboundLoads.js', suites: ['sale-trucking'],
+      find: "        if (!mentions) {",
+      to:   "        if (false) {" },
+    { name: 'sale trucking: the receivable is left stale after an edit',
+      file: 'helpers/outboundLoads.js', suites: ['sale-trucking'],
+      find: "        patch.net_receivable = receivableFrom(patch.amount, patch.trucking_amount);",
+      to:   "        patch.net_receivable = prior.net_receivable;" },
+    { name: 'sale trucking: hauling a sale improves its margin',
+      file: 'helpers/outboundLoads.js', suites: ['sale-trucking'],
+      find: "    const margin = outboundLoad.amount != null ? round2(outboundLoad.amount - cost) : null;",
+      to:   "    const margin = outboundLoad.amount != null ? round2(receivableOf(outboundLoad) - cost) : null;" },
+    // THE ROUTE, which is where this feature would have died silently.
+    { name: 'sale trucking: the create route stops forwarding it',
+      file: 'routes/yard.js', suites: ['sale-trucking'],
+      find: "                trucking_company: b.trucking_company, trucking_amount: b.trucking_amount,\n                trucking_note: b.trucking_note,",
+      to:   "                // dropped" },
+    { name: 'sale trucking: a buyer who paid only for the metal reads as settled',
+      file: 'routes/yard.js', suites: ['sale-trucking'],
+      find: "                payment: paymentSummary(l.id, require('./helpers/outboundLoads').receivableOf(l)),",
+      to:   "                payment: paymentSummary(l.id, l.amount)," },
+    { name: 'sale trucking: the pay ledger settles a sale against the metal only',
+      file: 'helpers/payments.js', suites: ['sale-trucking'],
+      find: "    const total = kind === 'sale' ? receivableOf(load) : payableOf(load);",
+      to:   "    const total = kind === 'sale' ? (load.amount ?? null) : payableOf(load);" },
+    // And the sign on the two screens, which is what she actually reads.
+    { name: 'sale trucking: the app hides the section on a sale again',
+      file: 'mobile-app/www/app/08-load-modal.js', suites: ['sale-trucking'],
+      find: "  if (truck) truck.style.display = '';",
+      to:   "  if (truck) truck.style.display = sale ? 'none' : '';" },
+    { name: 'sale trucking: the website drops it from the sale payload',
+      file: 'dashboard/app/13-loads-render.js', suites: ['sale-trucking'],
+      find: "          trucking_company: payload.trucking_company,\n          trucking_amount: payload.trucking_amount,\n          trucking_note: payload.trucking_note,",
+      to:   "          // dropped" },
+
     // ── NO PRICE GAP ON A DOWNGRADE (2026-10-31) ─────────────────────────
     { name: 'downgrade: the price gap and its working come back on the demand',
       file: 'helpers/claims/report.js', suites: ['claims-report-wording'],
@@ -1549,7 +1591,11 @@ const MUTATIONS = [
     // PAYABLE, NOT AMOUNT — a purchase with trucking deducted owes less.
     { name: 'settle: the purchase side uses the gross amount, not what is payable',
       file: 'helpers/payments.js', suites: ['settle-against'],
-      find: "    const total = kind === 'sale' ? (load.amount ?? null) : payableOf(load);",
+      // Re-pointed 2026-11-04: the sale branch became receivableOf when a
+      // sale gained trucking. The property is unchanged — the PURCHASE side
+      // must not fall back to the gross — so the find moves and the 
+      // still collapses both branches onto amount.
+      find: "    const total = kind === 'sale' ? receivableOf(load) : payableOf(load);",
       to:   "    const total = load.amount ?? null;" },
 
     // ── HOW MANY LOADS CARRIED THIS ITEM ────────────────────────────────

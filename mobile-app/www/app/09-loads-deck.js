@@ -842,7 +842,7 @@ function renderLoads(loads) {
                 <div class="ld-grid-2" id="ld_trucking_row">
                   <div class="field"><label>Hauled by (optional)</label>
                     <input id="ld_trucking_company" type="text" placeholder="who collected it" autocomplete="off"></div>
-                  <div class="field"><label>Deduct from seller ($)</label>
+                  <div class="field"><label id="ld_trucking_label">Deduct from seller ($)</label>
                     <input id="ld_trucking_amount" type="text" inputmode="decimal" placeholder="0.00" autocomplete="off"></div>
                 </div>
                 <div class="field"><label>Note (optional)</label>
@@ -1362,6 +1362,18 @@ function wireLoadsEvents() {
           description: payload.description,
           weight_unit: payload.weight_unit,
           items: payload.items,
+          // ── TRUCKING FORWARDED ON A SALE TOO (2026-11-04) ────────────
+          // The form already collected these — payload carries them from
+          // 03-item-rows.js, and the same three boxes serve both kinds.
+          // This object simply dropped them, so a hauler typed on a sale
+          // went nowhere: the field existed, was filled in, and was thrown
+          // away between the form and the request. Apsara: "Similar to
+          // loads trucking in edge yard,sales trucking should be there na".
+          // On a SALE the server ADDS it to what the buyer owes, where on a
+          // purchase it subtracts — see helpers/outboundLoads.js.
+          trucking_company: payload.trucking_company,
+          trucking_amount: payload.trucking_amount,
+          trucking_note: payload.trucking_note,
           client_request_id: payload.client_request_id,
           draft_id: payload.draft_id,   // one draft, one load — see above
         };

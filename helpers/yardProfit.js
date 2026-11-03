@@ -84,7 +84,24 @@ function yardProfit({ from = null, to = null } = {}) {
     // margin on every sale drawn from that lot.
     const { payableOf } = require('./loads');
     const bought = round2(purchases.reduce((s, l) => s + (payableOf(l) || 0), 0)) || 0;
-    const sold = round2(sales.reduce((s, l) => s + (l.amount || 0), 0)) || 0;
+    // ── AND receivableOf ON THE SALE SIDE, FOR THE SAME REASON ───────────
+    // Apsara, 2026-11-04, on sale trucking: "You haul, buyer is charged".
+    // So the haulage on a sale arrives from the buyer AND leaves to the
+    // hauler. `trucking` below already sums every trucker bill in range as
+    // money out; if the matching money IN were left out of `sold`, this
+    // report would subtract the haul without ever adding what was collected
+    // for it, and every sale with a truck on it would read as a loss of
+    // exactly the freight.
+    //
+    // That is the SAME double-count trap as the purchase side above, with
+    // the sign flipped — which is why both lines go through a single reader
+    // rather than reaching for `.amount`.
+    //
+    // On every sale without trucking — all of them until she enters the
+    // first — receivableOf returns `amount` and this line is the line it has
+    // always been.
+    const { receivableOf } = require('./outboundLoads');
+    const sold = round2(sales.reduce((s, l) => s + (receivableOf(l) || 0), 0)) || 0;
 
     let expenses = 0;
     try {

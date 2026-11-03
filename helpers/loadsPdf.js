@@ -70,14 +70,23 @@ async function generateAndStoreLoadPdfs(load, opts = {}) {
             const { paymentSummary } = require('./payments');
             // A PURCHASE may carry a trucking deduction, so the "Paid X of Y"
             // block on the ticket has to measure against what the seller is
-            // actually owed, not what the metal came to. A SALE cannot carry
-            // one — netting haulage out of what a customer owes HER would be
-            // an invention — so it keeps reading .amount. Named by kind rather
-            // than left to payableOf's fallback: this is a deliberate
-            // difference between the two documents, not an accident of which
-            // store the record came from.
+            // actually owed, not what the metal came to.
+            //
+            // ── THE SALE BRANCH CHANGED, AND THE OLD REASON WAS SOUND ────
+            // This used to read `load.amount` for a sale, justified here as:
+            // "A SALE cannot carry one — netting haulage out of what a
+            // customer owes HER would be an invention". That was correct
+            // while a sale could not carry trucking at all.
+            //
+            // It can since 2026-11-04, and the direction is the opposite of
+            // what that sentence guarded against: Apsara's rule is "You
+            // haul, buyer is charged", so freight is ADDED to what the
+            // customer owes, not netted out of it. Nothing is invented — the
+            // buyer is being billed for a haul that happened. A ticket still
+            // reading `amount` would tell him he owes the metal only, and
+            // disagree with the pay sheet beside it.
             payment = opts.kind === 'sale'
-                ? paymentSummary(load.id, load.amount)
+                ? paymentSummary(load.id, require('./outboundLoads').receivableOf(load))
                 : paymentSummary(load.id, require('./loads').payableOf(load));
         } catch (e) {
             console.warn('[LOADS-PDF] payment lookup failed, ticket will omit it:', e.message);

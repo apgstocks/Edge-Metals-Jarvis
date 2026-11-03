@@ -249,7 +249,15 @@ const TOOLS = {
             // second implementation in this file would eventually disagree
             // with the ledger, on money.
             const { paymentSummary } = require('./payments');
-            const withPay = rows.map((l) => ({ ...l, payment: paymentSummary(l.id, l.amount) }));
+            // receivableOf, not l.amount — these rows are SALES, and since
+            // 2026-11-04 a sale can carry trucking charged on to the buyer.
+            // Asking Jarvis "which sales are unpaid" off the gross amount
+            // would call a sale settled while the freight on it is still
+            // outstanding. The voice path is the caller CLAUDE.md records
+            // breaking twice, both times because it has no form to put a
+            // field on; it needs no new field here, only the right reader.
+            const { receivableOf } = require('./outboundLoads');
+            const withPay = rows.map((l) => ({ ...l, payment: paymentSummary(l.id, receivableOf(l)) }));
             const shown = p.unpaid_only
                 ? withPay.filter((l) => l.payment && l.payment.pending > 0)
                 : withPay;

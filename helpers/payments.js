@@ -624,12 +624,25 @@ function settlementPartyOf(load, kind) {
 // trucking deducted or a claim adjusted in owes less than its items came to,
 // and settling against the gross would hand over money that is not due
 // (helpers/loads.js's payableOf is the single reader for this, by decision).
+//
+// ── AND receivableOf ON A SALE, SINCE 2026-11-04 ─────────────────────────
+// This line read `load.amount` for a sale, which was right while a sale
+// could not carry trucking. It can now, and Apsara's rule is "You haul,
+// buyer is charged" — so a $500 sale hauled for $200 is $700 owed. Left as
+// `amount`, recording the buyer's $700 would have read as a $200
+// OVERPAYMENT, and a buyer who paid only the metal would have shown as
+// settled in full with the freight still outstanding.
+//
+// Both sides now go through their own single reader, which is the whole
+// reason those readers exist. A sale with no trucking — all of them until
+// she enters the first — gets `amount` back from receivableOf, so this is
+// the line it has always been.
 function outstandingOn(loadId, kind) {
     const { getLoad, payableOf } = require('./loads');
-    const { getOutboundLoad } = require('./outboundLoads');
+    const { getOutboundLoad, receivableOf } = require('./outboundLoads');
     const load = kind === 'sale' ? getOutboundLoad(loadId) : getLoad(loadId);
     if (!load) return { load: null, owed: null };
-    const total = kind === 'sale' ? (load.amount ?? null) : payableOf(load);
+    const total = kind === 'sale' ? receivableOf(load) : payableOf(load);
     const summary = paymentSummary(loadId, total);
     return { load, owed: summary.total == null ? null : round2(summary.total - summary.paid) };
 }

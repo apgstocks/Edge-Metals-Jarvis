@@ -125,6 +125,47 @@ function sumItems(items) {
     return { gross_weight: sum('gross_weight'), tare_weight: sum('tare_weight'), net_weight: sum('net_weight'), amount: sum('amount') };
 }
 
+// ── TRUCKING ON A SALE (2026-11-04) ──────────────────────────────────────
+// Apsara: "Similar to loads trucking in edge yard,sales trucking should be
+// there na", and asked who bears it: "You haul, buyer is charged".
+//
+// So this is the MIRROR of helpers/loads.js's deduction, not a copy of it.
+// There Edge arranges the haul and takes the cost OFF what the seller is
+// paid; here Edge arranges the haul and puts it ON what the buyer owes. In
+// both cases the counterparty bears the freight — the sign is the only
+// difference, and it is the whole of the difference.
+//
+// THREE FIELDS, the same three, for the same reason loads.js gives: who
+// hauled it, what it cost, and a note. Splitting it into line haul / fuel /
+// accessorials is helpers/bills.js's job when a real hauler invoice arrives.
+function cleanTrucking(entry) {
+    const company = String(entry.trucking_company || '').trim();
+    const note    = String(entry.trucking_note || '').trim();
+    return {
+        trucking_company: company || null,
+        trucking_amount : toNum(entry.trucking_amount),
+        trucking_note   : note || null,
+    };
+}
+
+// PLUS, where loads.js has minus. A sale with no amount yet has no
+// receivable, and 0 + trucking would invent a debt the buyer does not owe
+// for metal he has not been priced for — the same guard, mirrored.
+function receivableFrom(amount, trucking) {
+    const amt = toNum(amount);
+    if (amt === null) return null;
+    return round2(amt + (toNum(trucking) || 0));
+}
+
+// THE SINGLE READER, exactly as payableOf is on the purchase side. Falls
+// back to `amount` for every sale recorded before this existed — those have
+// no net_receivable key and must read as "nothing added".
+function receivableOf(load) {
+    if (!load) return null;
+    return load.net_receivable !== undefined && load.net_receivable !== null
+        ? load.net_receivable : (load.amount ?? null);
+}
+
 // Sequential OUT_N ids — own namespace, deliberately never colliding with
 // loads.js's EDGE_N ids (two different stores, two different sequences;
 // sharing a namespace would falsely imply they're the same series of
@@ -221,6 +262,12 @@ function buildRecord(entry) {
         tare_weight   : totals.tare_weight,
         net_weight    : totals.net_weight,
         amount        : totals.amount,
+        ...cleanTrucking(entry),
+        // Derived at WRITE time, never at read time — the same decision
+        // loads.js records for net_payable, for the same reason:
+        // receivableOf has many callers, several in loops, and must stay a
+        // pure read of the record.
+        net_receivable: receivableFrom(totals.amount, entry.trucking_amount),
         weight_unit   : entry.weight_unit || 'lb',
         status        : 'sent',
     };
@@ -292,6 +339,25 @@ async function editOutboundLoad(id, entry) {
         // that forgets which draft it came from lets that draft create
         // another one, which is the rule this is here to hold.
         patch.draft_id = prior.draft_id || null;
+        // ── AND MUST NOT WIPE TRUCKING IT NEVER MENTIONED (2026-11-04) ──
+        // buildRecord rebuilds from a fixed field list, so a caller that
+        // does not send the three trucking fields blanks them AND resets
+        // net_receivable to the bare amount — quietly dropping money the
+        // buyer owes. The two screens send them; the voice path and any
+        // future caller may not, and CLAUDE.md records that the caller
+        // without a form is the one that breaks. loads.js guards the same
+        // thing with its truckingGiven flag; this is that guard, mirrored.
+        const mentions = ('trucking_amount' in entry) || ('trucking_company' in entry)
+            || ('trucking_note' in entry);
+        if (!mentions) {
+            patch.trucking_company = prior.trucking_company || null;
+            patch.trucking_amount  = prior.trucking_amount ?? null;
+            patch.trucking_note    = prior.trucking_note || null;
+        }
+        // Recomputed either way: the ITEMS may have changed, which moves
+        // `amount`, and a net_receivable left over from the old amount is
+        // the stale-derived-figure bug loads.js records having had.
+        patch.net_receivable = receivableFrom(patch.amount, patch.trucking_amount);
         // NOTE (mine, not hers): client_request_id is wiped by the same
         // mechanism and is NOT restored here, because that is a separate
         // pre-existing weakness and fixing it was not asked for. Flagged to
@@ -389,6 +455,14 @@ function getLoadMargin(outboundLoad) {
     }
     if (!foundCount) return { cost: null, margin: null, linkedCount: ids.length };
     cost = round2(cost);
+    // ── amount, NOT receivableOf, AND THAT IS THE POINT (2026-11-04) ─────
+    // Trucking on a sale is charged straight through to the buyer, so the
+    // money arrives and leaves again: using net_receivable here would show
+    // the haulage as profit on the metal, and every sale with a truck on it
+    // would look better than it was. The haulage shows up as a trucker bill
+    // where it belongs. Anyone tempted to "fix" this to receivableOf for
+    // consistency should read helpers/yardProfit.js's double-count comment
+    // first — this is the same trap with the sign flipped.
     const margin = outboundLoad.amount != null ? round2(outboundLoad.amount - cost) : null;
     return { cost, margin, linkedCount: ids.length, missingCount: ids.length - foundCount };
 }
@@ -485,6 +559,7 @@ function getOutboundReport(allLoads, { from, to } = {}) {
 }
 
 module.exports = {
+    receivableOf, receivableFrom,
     normaliseDraws, patchOutboundLoad,
     loadOutboundLoads, addOutboundLoad, editOutboundLoad, deleteOutboundLoad, getOutboundLoad, getOutboundReport, getLoadMargin,
     markDelivered,

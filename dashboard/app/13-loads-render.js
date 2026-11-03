@@ -706,7 +706,7 @@ function renderLoads(loads) {
                 <div class="ld-grid-2" id="ld_trucking_row">
                   <div class="field"><label>Hauled by (optional)</label>
                     <input id="ld_trucking_company" type="text" placeholder="who collected it" autocomplete="off"></div>
-                  <div class="field"><label>Deduct from seller ($)</label>
+                  <div class="field"><label id="ld_trucking_label">Deduct from seller ($)</label>
                     <input id="ld_trucking_amount" type="text" inputmode="decimal" placeholder="0.00" autocomplete="off"></div>
                 </div>
                 <div class="field"><label>Note (optional)</label>
@@ -1320,6 +1320,12 @@ function wireLoadsEvents() {
         const salePayload = {
           date: payload.date, buyer: payload.seller, buyer_address: payload.seller_address,
           description: payload.description, weight_unit: payload.weight_unit, items: payload.items,
+          // Forwarded on a sale too since 2026-11-04 — the form already
+          // collected these and this object dropped them, so a hauler typed
+          // on a sale went nowhere. Twin of mobile-app's 09-loads-deck.js.
+          trucking_company: payload.trucking_company,
+          trucking_amount: payload.trucking_amount,
+          trucking_note: payload.trucking_note,
           client_request_id: payload.client_request_id,
           draft_id: payload.draft_id,   // one draft, one load — see above
         };
