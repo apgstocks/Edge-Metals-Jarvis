@@ -555,6 +555,24 @@ const MUTATIONS = [
       find: "        kind: claimKinds.label(c.claim_type) === 'not classified yet'",
       to:   "        kind: false" },
 
+    // ── A SAVED LOAD'S DRAFT IS SPENT (2026-11-05) ───────────────────────
+    // Apsara: "as soon as it is created,it is appearing in purchase" — the
+    // sale filed correctly and its DRAFT stayed, showing in the strip above
+    // both tabs.
+    { name: 'draft: a saved SALE leaves its draft behind again',
+      file: 'routes/yard.js', suites: ['draft-spent'],
+      find: "            if (b.draft_id) {\n                try { await require('./helpers/loadDrafts').deleteDraft(String(b.draft_id)); }\n                catch (e) { console.warn('[API] draft cleanup failed, load is saved:', e.message); }\n            }\n            const enquiry = await scheduleDeliveryEnquiry(record, req, 'created');",
+      to:   "            const enquiry = await scheduleDeliveryEnquiry(record, req, 'created');" },
+    { name: 'draft: a saved PURCHASE leaves its draft behind again',
+      file: 'routes/loads.js', suites: ['draft-spent'],
+      find: "            if (b.draft_id) {\n                try { await require('./helpers/loadDrafts').deleteDraft(String(b.draft_id)); }\n                catch (e) { console.warn('[API] draft cleanup failed, load is saved:', e.message); }\n            }\n            res.json({ ok: true, load: finalLoad, trucker_bill: truckerBill });",
+      to:   "            res.json({ ok: true, load: finalLoad, trucker_bill: truckerBill });" },
+    // The guard that must survive the cleanup.
+    { name: 'draft: spending it also frees it to make a SECOND load',
+      file: 'helpers/outboundLoads.js', suites: ['draft-spent'],
+      find: "            || once.findByDraft(loads, rec.draft_id);",
+      to:   "            || null;" },
+
     // ── TRUCKING ON A SALE (2026-11-04) ──────────────────────────────────
     // Apsara: "You haul, buyer is charged". The SIGN is the whole feature,
     // so the first mutation is the sign — a paste of the purchase side.

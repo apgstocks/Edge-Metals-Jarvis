@@ -319,6 +319,28 @@ module.exports = function (app, ctx) {
                 console.error('[API] trucker bill from load failed:', e.message);
                 truckerBill = { skipped: true, reason: 'error', message: e.message };
             }
+            // ── THE DRAFT IS SPENT: DELETE IT (2026-11-05) ────────────────
+            // The twin of the block in routes/yard.js's outbound create.
+            // Apsara reported this on a SALE ("as soon as it is created,it
+            // is appearing in purchase"), and the leftover draft was never
+            // sale-specific: NEITHER create route removed it, so a saved
+            // purchase also sat in the "Unfinished — not saved as loads
+            // yet" strip until she deleted it by hand.
+            //
+            // THE CREATE ROUTE ONLY. The edit route a few lines down ends
+            // with the identical line and is deliberately left alone: an
+            // edit has no draft to spend, and deleting one there would hit
+            // whatever draft_id the record happens to still carry.
+            //
+            // WIDENED PAST WHAT SHE ASKED, DELIBERATELY, and flagged rather
+            // than slipped in: fixing only the sale side would leave the
+            // identical fault on purchases AND make the two routes disagree
+            // about what draft_id means. Narrowing it back to sales is
+            // deleting this block and nothing else.
+            if (b.draft_id) {
+                try { await require('./helpers/loadDrafts').deleteDraft(String(b.draft_id)); }
+                catch (e) { console.warn('[API] draft cleanup failed, load is saved:', e.message); }
+            }
             res.json({ ok: true, load: finalLoad, trucker_bill: truckerBill });
         } catch (err) {
             // validateLoadForSave (helpers/loads.js) throws a plain Error

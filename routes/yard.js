@@ -203,6 +203,29 @@ module.exports = function (app, ctx) {
             // second, weaker promise — an unknown trucker or a past ETA must
             // not fail the save — so its outcome rides back on the response
             // as `enquiry` for the form to show, rather than being thrown.
+
+            // ── THE DRAFT IS SPENT: DELETE IT (2026-11-05) ────────────────
+            // Apsara: "as soon as it is created,it is appearing in purchase".
+            // The sale saved correctly into outbound_loads.json — it was its
+            // DRAFT that stayed, and the strip above the deck ("Unfinished —
+            // not saved as loads yet") kept showing it while she was looking
+            // at Purchases.
+            //
+            // clearLoadDraft() on the client only clears localStorage. The
+            // server's copy was never removed by either create route — the
+            // only thing that deleted a draft was her pressing Delete on it.
+            // draft_id was used solely by oncePerSave.findByDraft to stop a
+            // SECOND load being created, which it still does: that guard
+            // reads the draft_id stored on the LOAD, not the draft record,
+            // so removing the draft does not weaken it.
+            //
+            // Fire-and-forget and swallowed: the load is already saved and
+            // committed, and a tidy-up that cannot run must never surface as
+            // a failed save.
+            if (b.draft_id) {
+                try { await require('./helpers/loadDrafts').deleteDraft(String(b.draft_id)); }
+                catch (e) { console.warn('[API] draft cleanup failed, load is saved:', e.message); }
+            }
             const enquiry = await scheduleDeliveryEnquiry(record, req, 'created');
             res.json({ ok: true, load: record, enquiry, stock_warning: stockWarnings });
         } catch (err) {
