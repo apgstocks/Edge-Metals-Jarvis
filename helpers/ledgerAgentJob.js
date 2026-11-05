@@ -122,7 +122,13 @@ async function run({ sheetReport = null, send, alreadySent, markSent, qbLook = u
 
     const result = await build({ sheetReport, apply: true, qbLook });
     const agent = require('./ledgerAgent');
-    const text = agent.reportText(result);
+    // The mail is a SUMMARY now (see ledgerAgent.reportText): the long tail of
+    // findings moves to an attached CSV instead of 190 lines of body. Attached only
+    // when something was actually cut, so a quiet day is a plain short mail.
+    const csvName = `ledger-agent-${dateKey}.csv`;
+    const text = agent.reportText(result, { csvName });
+    const cut = !!text && /\.\.\.and \d+ more/.test(text);
+    const html = text ? agent.reportHtml(result, { csvName: cut ? csvName : null }) : null;
 
     // SILENT WHEN THERE IS NOTHING. reportText returns null for an empty day,
     // and a daily "all clear" for a month is an email she stops opening —
@@ -160,7 +166,8 @@ async function run({ sheetReport = null, send, alreadySent, markSent, qbLook = u
         // text. Checked against scheduler.js:406 rather than assumed, which
         // is how the two names above got here in the first place.
         const mail = send || ((o) => require('./gmail').sendEmail(o));
-        await mail({ to, subject, body: text });
+        const att = cut ? [{ filename: csvName, mimeType: 'text/csv', content: Buffer.from('\ufeff' + agent.fullListCsv(result), 'utf8') }] : undefined;
+        await mail({ to, subject, body: text, bodyHtml: html || undefined, attachments: att });
         return { ...result, sent: true, text };
     } catch (e) {
         // A send failure must not look like a clean day. It is logged loudly

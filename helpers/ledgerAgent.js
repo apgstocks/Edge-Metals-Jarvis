@@ -303,7 +303,53 @@ function defaultSources() {
 // SILENT WHEN THERE IS NOTHING. A daily email that arrives saying "all clear"
 // every day for a month is an email that stops being opened, and the day it
 // matters she will not open it either.
-function reportText(run) {
+// ── HOW IT READS (2026-11-05) ────────────────────────────────────────────
+// Apsara, on the 4 Nov mail, 191 lines long: "this looks ugly, i dont feel like
+// reading this mail at all". It listed every finding as three lines, so 100 of
+// them were one container's sheet fields printed one per line. Now:
+//   * a count per KIND at the top, so the shape of the day is visible in five lines;
+//   * findings grouped by kind, and rows about the SAME container merged into one
+//     line carrying all its fields;
+//   * at most SHOW_PER_GROUP lines per kind in the body - the rest are in the
+//     attached CSV, which opens in a sheet, so nothing is hidden, only moved;
+//   * the same content as a clean HTML mail (reportHtml). The plain text stays for
+//     clients that do not render HTML, and for the first-line contract the tests pin.
+const SHOW_PER_GROUP = 5;
+
+function fixLine(f) {
+    return `${f.field}: ${str(f.from) || '(blank)'} \u2192 ${str(f.to)}`
+        + (f.from_source ? `  (${f.from_source})` : '');
+}
+
+// Findings -> [{ title, items: [{ what, lines: [..] }] }], first appearance order.
+// Same `what` inside one kind is ONE item with several lines.
+function groupFindings(list) {
+    const groups = new Map();
+    for (const f of list || []) {
+        const title = f.title || 'Other';
+        if (!groups.has(title)) groups.set(title, { title, count: 0, items: new Map() });
+        const g = groups.get(title);
+        g.count++;
+        const key = String(f.what || f.title || '');
+        if (!g.items.has(key)) g.items.set(key, { what: key, lines: [] });
+        const it = g.items.get(key);
+        const fixField = f.fix && f.fix.field ? String(f.fix.field) : '';
+        // DON'T SAY THE SAME FIELD TWICE: the sheet source sets both a detail and a
+        // fix on the same field; the fix line names where the number came from.
+        const detailRepeats = fixField && String(f.detail || '').trim().startsWith(`${fixField}:`);
+        if (f.detail && !detailRepeats) it.lines.push(String(f.detail));
+        if (f.fix && f.fix.field) it.lines.push(fixLine(f.fix));
+    }
+    return [...groups.values()].map((g) => ({ title: g.title, count: g.count, items: [...g.items.values()] }));
+}
+
+function itemText(it) {
+    if (!it.lines.length) return [`  \u00b7 ${it.what}`];
+    if (it.lines.length === 1) return [`  \u00b7 ${it.what} \u2014 ${it.lines[0]}`];
+    return [`  \u00b7 ${it.what}`, ...it.lines.map((l) => `      ${l}`)];
+}
+
+function reportText(run, { csvName = null } = {}) {
     const s = run.settled || [];
     const p = run.proposed || [];
     const broken = run.broken || [];
@@ -311,9 +357,8 @@ function reportText(run) {
 
     const out = [];
     if (p.length) {
-        // The VERB agrees too. "1 thing need you" is the kind of line that
-        // makes a person trust the rest of the email slightly less, and this
-        // mail exists to be trusted at a glance.
+        // The VERB agrees too. "1 thing need you" makes a person trust the rest of
+        // the email slightly less, and this mail exists to be trusted at a glance.
         out.push(p.length === 1 ? '1 thing needs you.' : `${p.length} things need you.`);
     } else {
         out.push('Nothing needs you today.');
@@ -321,51 +366,103 @@ function reportText(run) {
     out.push('');
 
     if (p.length) {
-        out.push('── WAITING FOR YOU ──────────────────────────────');
-        for (const f of p) {
-            out.push(`  · ${f.what || f.title}`);
-            // ── DON'T SAY THE SAME FIELD TWICE ───────────────────────────
-            // The sheet source sets both a detail ("supplier_price: sheet
-            // says 0.34, Jarvis has nothing") and a fix on the SAME field,
-            // and printing both read as two findings about one blank. The
-            // fix line is the better of the two — it names where the number
-            // came from — so the detail is dropped when it is about the
-            // field the fix already covers. Keyed on the field name rather
-            // than on the sentence, so rewording a detail cannot resurrect
-            // the duplicate.
-            const fixField = f.fix && f.fix.field ? String(f.fix.field) : '';
-            const detailRepeats = fixField
-                && String(f.detail || '').trim().startsWith(`${fixField}:`);
-            if (f.detail && !detailRepeats) out.push(`      ${f.detail}`);
-            // Both figures, always, when there are two. This is the whole
-            // point of a proposal — she should not have to go and look one up
-            // to judge the other.
-            if (f.fix && f.fix.field) {
-                out.push(`      ${f.fix.field}: ${str(f.fix.from) || '(blank)'} → ${str(f.fix.to)}`
-                    + (f.fix.from_source ? `  (${f.fix.from_source})` : ''));
-            }
+        const groups = groupFindings(p);
+        out.push('\u2500\u2500 WAITING FOR YOU \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500');
+        if (groups.length > 1) {
+            for (const g of groups) out.push(`  ${String(g.count).padStart(4)}   ${g.title}`);
+            out.push('');
         }
-        out.push('');
+        let truncated = 0;
+        for (const g of groups) {
+            if (groups.length > 1) out.push(`${g.title} (${g.count})`);
+            for (const it of g.items.slice(0, SHOW_PER_GROUP)) out.push(...itemText(it));
+            const rest = g.items.length - SHOW_PER_GROUP;
+            if (rest > 0) { truncated += rest; out.push(`  ...and ${rest} more`); }
+            out.push('');
+        }
+        if (truncated) out.push(csvName ? `The full list is attached (${csvName}) - it opens in a sheet.` : 'The full list is in the attached file.', '');
     }
 
     if (s.length) {
-        out.push(`── TIDIED, NOTHING TO DO ───────────────────────`);
-        out.push('  (one possible answer each — say so if any of these look wrong)');
-        for (const f of s) {
-            out.push(`  · ${f.what || f.title}`
-                + (f.fix ? `: ${f.fix.field} → ${str(f.fix.to)}` : ''));
+        out.push('\u2500\u2500 TIDIED, NOTHING TO DO \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500');
+        out.push('  (one possible answer each - say so if any of these look wrong)');
+        const shown = s.slice(0, SHOW_PER_GROUP * 2);
+        for (const f of shown) {
+            out.push(`  \u00b7 ${f.what || f.title}` + (f.fix ? `: ${f.fix.field} \u2192 ${str(f.fix.to)}` : ''));
         }
+        if (s.length > shown.length) out.push(`  ...and ${s.length - shown.length} more`);
         out.push('');
     }
 
     if (broken.length) {
         // Said out loud rather than swallowed. A check that silently stopped
-        // running is worse than one that fails, because the report keeps
-        // looking clean.
-        out.push('── A CHECK DID NOT RUN ─────────────────────────');
-        for (const b of broken) out.push(`  · ${b.id}: ${b.error}`);
+        // running is worse than one that fails, because the report keeps looking clean.
+        out.push('\u2500\u2500 A CHECK DID NOT RUN \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500');
+        for (const b of broken) out.push(`  \u00b7 ${b.id}: ${b.error}`);
     }
     return out.join('\n');
+}
+
+const escHtml = (v) => String(v == null ? '' : v).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+
+// The same report as a clean mail. Inline styles only (mail clients drop <style>).
+function reportHtml(run, { csvName = null } = {}) {
+    const s = run.settled || [];
+    const p = run.proposed || [];
+    const broken = run.broken || [];
+    if (!s.length && !p.length && !broken.length) return null;
+    const ink = '#1f2937', mute = '#6b7280', line = '#e5e7eb', accent = '#b45309';
+    const h = (t) => `<div style="font:600 12px Arial,sans-serif;letter-spacing:.08em;text-transform:uppercase;color:${mute};margin:22px 0 8px">${escHtml(t)}</div>`;
+    const out = [`<div style="font:14px/1.5 Arial,sans-serif;color:${ink};max-width:640px">`];
+    out.push(`<div style="font:600 20px Arial,sans-serif;margin-bottom:2px">${p.length ? (p.length === 1 ? '1 thing needs you' : `${p.length} things need you`) : 'Nothing needs you today'}</div>`);
+    if (p.length) {
+        const groups = groupFindings(p);
+        out.push(`<div style="color:${mute};margin-bottom:6px">Open the attached list for every line.</div>`);
+        if (groups.length > 1) {
+            out.push(`<table style="border-collapse:collapse;width:100%;margin:10px 0">`);
+            for (const g of groups) {
+                out.push(`<tr><td style="padding:6px 10px;border-bottom:1px solid ${line};width:56px;font-weight:700;color:${accent};text-align:right">${g.count}</td><td style="padding:6px 10px;border-bottom:1px solid ${line}">${escHtml(g.title)}</td></tr>`);
+            }
+            out.push('</table>');
+        }
+        for (const g of groups) {
+            out.push(h(groups.length > 1 ? `${g.title} (${g.count})` : 'Waiting for you'));
+            out.push(`<table style="border-collapse:collapse;width:100%">`);
+            for (const it of g.items.slice(0, SHOW_PER_GROUP)) {
+                out.push(`<tr><td style="padding:7px 10px;border-bottom:1px solid ${line};vertical-align:top"><div style="font-weight:600">${escHtml(it.what)}</div>`
+                    + it.lines.map((l) => `<div style="color:${mute};font-size:13px">${escHtml(l)}</div>`).join('') + '</td></tr>');
+            }
+            const rest = g.items.length - SHOW_PER_GROUP;
+            if (rest > 0) out.push(`<tr><td style="padding:7px 10px;color:${mute}">\u2026and ${rest} more</td></tr>`);
+            out.push('</table>');
+        }
+    }
+    if (s.length) {
+        out.push(h('Tidied, nothing to do'));
+        out.push(`<div style="color:${mute};font-size:13px;margin-bottom:6px">One possible answer each \u2014 say so if any look wrong.</div>`);
+        for (const f of s.slice(0, SHOW_PER_GROUP * 2)) {
+            out.push(`<div style="padding:3px 0">${escHtml(f.what || f.title)}${f.fix ? ` <span style="color:${mute}">\u2014 ${escHtml(f.fix.field)} \u2192 ${escHtml(str(f.fix.to))}</span>` : ''}</div>`);
+        }
+        if (s.length > SHOW_PER_GROUP * 2) out.push(`<div style="color:${mute}">\u2026and ${s.length - SHOW_PER_GROUP * 2} more</div>`);
+    }
+    if (broken.length) {
+        out.push(h('A check did not run'));
+        for (const b of broken) out.push(`<div style="color:#b91c1c">${escHtml(b.id)}: ${escHtml(b.error)}</div>`);
+    }
+    if (csvName) out.push(`<div style="margin-top:22px;color:${mute};font-size:13px">Full list attached: ${escHtml(csvName)}</div>`);
+    out.push('</div>');
+    return out.join('');
+}
+
+// Every finding, one row each, for a spreadsheet. Nothing is truncated here.
+function fullListCsv(run) {
+    const q = (v) => { const t = String(v == null ? '' : v); return /[",\n]/.test(t) ? `"${t.replace(/"/g, '""')}"` : t; };
+    const rows = [['Status', 'Kind', 'What', 'Detail', 'Field', 'Jarvis has', 'Should be', 'Source']];
+    const add = (status, list) => { for (const f of list || []) {
+        rows.push([status, f.title || '', f.what || '', f.detail || '',
+            f.fix ? f.fix.field : '', f.fix ? str(f.fix.from) : '', f.fix ? str(f.fix.to) : '', f.fix ? (f.fix.from_source || '') : '']); } };
+    add('Needs you', run.proposed); add('Tidied', run.settled);
+    return rows.map((r) => r.map(q).join(',')).join('\r\n');
 }
 
 // ── WRITING THE SETTLED ONES ──────────────────────────────────────────────
@@ -484,6 +581,6 @@ async function apply(findings, { kinds, allowMoney = false } = {}) {
 
 module.exports = {
     SETTLED, PROPOSED, MONEY_FIELDS,
-    touchesMoney, classify, sort, collect, defaultSources, reportText, apply,
+    touchesMoney, classify, sort, collect, defaultSources, reportText, reportHtml, fullListCsv, groupFindings, SHOW_PER_GROUP, apply,
     markBlocking, blockingFirst,
 };
