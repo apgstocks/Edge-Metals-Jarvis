@@ -343,6 +343,30 @@ label.f textarea{height:auto;padding:10px 12px;font-family:var(--font-sans);font
 .back2{display:none}
 #fabNew{display:none}
 
+/* ── BROWSING: NOTHING SELECTED, SO THE LIST OWNS THE PAGE ──────────────
+   Apsara, 2026-11-05: "make the headers not just restricted to left side of
+   screen ,unless user selects a container/claim.once user selects something,
+   push the list to left side and proceed".
+
+   The 340px column exists to leave room for the detail pane. With nothing
+   selected there IS no detail pane, so the column was 340px of list beside
+   a metre of empty card — the headers she asked for squeezed into a third
+   of the screen while the other two thirds said "Pick a container".
+
+   While browsing, the grid collapses to one column and the rows flow as a
+   responsive grid, so the headers and the claims use the width they have.
+   The moment she picks one, the class comes off in renderDetail() and the
+   page is exactly the two-column layout it has always been. No second
+   layout to maintain — the same elements, one constraint removed. */
+body.browsing .cols{grid-template-columns:minmax(0,1fr)}
+body.browsing .detailp{display:none}
+/* Sticky and height-capped only makes sense beside something taller. */
+body.browsing .listp{position:static;max-height:none}
+body.browsing .listp .rows{overflow-y:visible;display:grid;
+  grid-template-columns:repeat(auto-fill,minmax(300px,1fr))}
+/* A grid needs its cells bounded on the right as well as the bottom. */
+body.browsing .listp .rows .prow{border-right:1px solid var(--border-subtle)}
+
 @media (max-width:1020px){
   .wrap{padding:16px 16px 100px}
   header.top h1{font-size:26px}
@@ -488,7 +512,11 @@ const containerKey = (c) => String(c.container_no || c.invoice_no || '—').toUp
 const claimDate = (c) => String(c.claim_date || c.created_at || '').slice(0, 10);
 const monthKey = (c) => { const d = claimDate(c); return d ? d.slice(0, 7) : 'no date'; };
 const supplierKey = (c) => String(c.supplier || '').trim() || 'No supplier named';
+/* Apsara, 2026-11-05: "Also group by customer as well". The other side of the
+   same claim: supplier is who Edge recovers FROM, customer is who claimed. */
+const customerKey = (c) => String(c.customer || '').trim() || 'No customer named';
 const groupKeyOf = (c) => (STATE.group === 'supplier' ? supplierKey(c)
+                        : STATE.group === 'customer' ? customerKey(c)
                         : STATE.group === 'month' ? monthKey(c)
                         : containerKey(c));
 
@@ -745,6 +773,9 @@ function renderStrip(){
 const GROUPS = [
   { id:'container', label:'Container' },
   { id:'supplier',  label:'Supplier' },
+  // "Also group by customer as well" (2026-11-05). Next to Supplier because
+  // they are the two ends of one claim — who complained, and who pays for it.
+  { id:'customer',  label:'Customer' },
   { id:'month',     label:'Month' },
 ];
 function renderGroupBy(){
@@ -815,6 +846,7 @@ function renderRows(){
          she reads first. (2026-11-05) */
       '<span class="t"><span class="who">' + esc(
           g.groupKind === 'supplier' ? g.key
+        : g.groupKind === 'customer' ? g.key
         : g.groupKind === 'month' ? g.key
         : (g.customer || 'Customer not named')) + '</span><span class="amt">' + amt + '</span></span>' +
       '<span class="m"><span class="cid">' + esc(g.key) + '</span>' +
@@ -1245,6 +1277,13 @@ function renderDetail(){
   const g = containers().find(x => x.key === STATE.sel);
   const d = $('#detail');
   snapshotDrafts();
+  // ── THE LAYOUT FOLLOWS THE SELECTION, FROM ONE PLACE ────────────────
+  // Six paths change what is selected — picking a row, the banner's "Show
+  // me", saving a claim, saving an edit, switching the lens, and a reload
+  // whose container has gone. Toggling the class at each of them is six
+  // chances to miss one and leave the page in the wrong shape. Every one of
+  // them ends here, so it is decided here and nowhere else.
+  document.body.classList.toggle('browsing', !g);
   if (!g){
     // Apsara, 2026-11-05: "I dont want to shw anything.Jusr show headers
     // liek open and what all needed". The paragraph that used to sit here
@@ -1261,6 +1300,10 @@ function renderDetail(){
         g.groupKind === 'supplier'
           ? g.claims.length + ' claim' + (g.claims.length === 1 ? '' : 's') + ' against this supplier'
             + ' &nbsp;·&nbsp; ' + [...new Set(g.claims.map(c => c.container_no).filter(Boolean))].length + ' container(s)'
+        : g.groupKind === 'customer'
+          ? g.claims.length + ' claim' + (g.claims.length === 1 ? '' : 's') + ' from this customer'
+            + ' &nbsp;·&nbsp; ' + [...new Set(g.claims.map(c => c.container_no).filter(Boolean))].length + ' container(s)'
+            + ' &nbsp;·&nbsp; recover from ' + esc(g.suppliers.join(', ') || 'nobody yet')
         : g.groupKind === 'month'
           ? g.claims.length + ' claim' + (g.claims.length === 1 ? '' : 's') + ' raised this month'
             + ' &nbsp;·&nbsp; ' + esc(g.suppliers.join(', ') || 'no supplier named')
@@ -1274,7 +1317,18 @@ function renderDetail(){
            "November" is not a document, and "+ another claim" would have to
            invent a container. Both are container-and-supplier actions, so
            under the month lens the row is for READING. (2026-11-05) */
-        (g.groupKind === 'month' ? '' : reportMenu(g)) +
+        /* ── AND NOT UNDER THE CUSTOMER LENS EITHER (2026-11-05) ──────
+           The same reason as the month. A customer row is claims Edge owes
+           its customer, spanning any number of suppliers; the claim report
+           is a demand ADDRESSED TO ONE SUPPLIER and says so on its face
+           ("For <supplier> — no customer name, no sale prices"). Offering
+           it here would hand her a document to send to Taewon built out of
+           Modern Enterprises' complaints across four of her suppliers.
+           reportMenu would also fall through to its container branch and
+           fetch container="Modern enterprises", which returns empty with
+           nothing on screen to say why — the worst kind of wrong, and the
+           exact trap the supplier lens was given its own branch to avoid. */
+        (g.groupKind === 'month' || g.groupKind === 'customer' ? '' : reportMenu(g)) +
         (g.groupKind === 'container' ? '<button type="button" class="b sm" id="addClaim">+ another claim</button>' : '') +
       '</div></div>' +
       '<div class="csum2">' +
