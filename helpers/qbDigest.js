@@ -140,6 +140,7 @@ function digestHtml(body) {
             out.push(`<div style="padding:2px 0 2px ${deep ? 34 : 14}px;${deep ? `color:${mute};font-size:13px;` : ''}border-left:2px solid ${line}">${esc(t.trim())}</div>`);
             continue;
         }
+        if (!/^\s/.test(t) && /\(\d+\)$/.test(t)) { out.push(`<div style="font:700 13px Arial,sans-serif;color:${accent};margin:14px 0 4px">${esc(t)}</div>`); continue; }
         if (t === OPEN_LINE) { out.push(`<div style="margin-top:18px;color:${mute}">${esc(t)}</div>`); continue; }
         out.push(`<div>${esc(t)}</div>`);
     }

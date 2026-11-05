@@ -47,7 +47,7 @@ const journal = require('../helpers/quickbooks/journal');
         if (e.action === 'asked') out.asked.push({ kind: e.kind, who, what, why: e.reason });
     }
     const text = job.reportText(out);
-    ck('the email names the stuck record, not just a count', /TCNU5101067/.test(text) && /no supplier amount yet/.test(text), text.slice(0, 200));
+    ck('the email names the stuck record, not just a count', /TCNU5101067/.test(text) && /no supplier amount yet/i.test(text), text.slice(0, 200));
     ck('...and what needs her, with the reason', /Hugo/.test(text) && /already left the bank/.test(text));
     ck('...and the cutover dates, so "why was this skipped" is answered', /2026-09-06/.test(text) && /2026-08-28/.test(text));
     ck('...and points at the page for fixing it', /QuickBooks page/.test(text));

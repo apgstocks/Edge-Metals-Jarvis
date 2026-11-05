@@ -46,6 +46,14 @@ agent.collect = () => ({ findings: F, broken: [] });
     ck('  including a container deep in the list the body cut', /KOCU5000039/.test(csv));
     ck('  with headers a sheet can use', /^Status,Kind,What,Detail,Field,Jarvis has,Should be,Source/.test(rows[0]));
 
+    // "list all container below": a kind whose findings all say the same thing lists EVERY container under one heading.
+    ck('a kind of identical findings lists ALL its containers, uncapped (25 of 25)', (mailed.body.match(/HMMU40000\d\d/g) || []).length === 25, String((mailed.body.match(/HMMU40000\d\d/g) || []).length));
+    ck('  under one heading, with the count', /^Bought and not sold \(25\)$/m.test(mailed.body));
+    ck('  three to a line, not one sentence per row', /HMMU4000000 - Edge Yard   \u00b7   HMMU4000001 - Edge Yard   \u00b7   HMMU4000002 - Edge Yard/.test(mailed.body));
+    ck('  and no "bought N days ago" sentence repeated 25 times', (mailed.body.match(/bought \d+ days ago/g) || []).length === 0);
+    ck('  OUT_11 keeps "lb weighed" in the body', /OUT_11[\s\S]{0,80}\d+ lb weighed/.test(mailed.body), mailed.body.slice(0, 600));
+    ck('a kind that carries VALUES still shows both figures (capped, rest in the CSV)', /\(blank\) \u2192 1\.07\s+\(the sheet\)/.test(mailed.body) && /\.\.\.and 35 more/.test(mailed.body));
+
     // A quiet, small day stays a plain short mail with no attachment.
     agent.collect = () => ({ findings: [{ check: 'x', title: 'Weighed, not priced', what: 'OUT_1', detail: '10 lb weighed, no price' }], broken: [] });
     let small = null;

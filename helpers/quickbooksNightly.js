@@ -120,6 +120,21 @@ function groupBlocked(blocked) {
         .sort((x, y) => y.n - x.n);
 }
 
+// [{ heading, items: ['HMMU4741911', ...] }] biggest first. Heading carries the kind
+// ("Bills \u00b7 No supplier amount yet") because a bill and a sale stuck for the same
+// words are fixed on different screens.
+function groupBlockedByReason(blocked) {
+    const m = new Map();
+    for (const b of blocked || []) {
+        let r = reasonKinds(b.why)[0];
+        if (/^no supplier( assigned| name| yet)?$/i.test(r)) r = 'no supplier assigned';
+        const heading = `${b.kind === 'sale' ? 'Sales' : b.kind === 'bill' ? 'Bills' : `${b.kind}s`} \u00b7 ${r.charAt(0).toUpperCase()}${r.slice(1)}`;
+        if (!m.has(heading)) m.set(heading, []);
+        m.get(heading).push(String(b.what || b.who || '(no container)'));
+    }
+    return [...m.entries()].map(([heading, items]) => ({ heading, items })).sort((x, y) => y.items.length - x.items.length);
+}
+
 // Every stuck / needs-you row, one per line, for a spreadsheet.
 function stuckCsv(out) {
     const q = (v) => { const t = String(v == null ? '' : v); return /[",\n]/.test(t) ? `"${t.replace(/"/g, '""')}"` : t; };
@@ -142,16 +157,17 @@ function reportText(out, { csvName = null } = {}) {
         if (parts) lines.push(`${kind}: ${parts}`);
     }
     if (out.blocked.length) {
-        lines.push('', `STUCK \u2014 ${out.blocked.length} record(s) Jarvis would not enter:`);
-        const groups = groupBlocked(out.blocked);
-        for (const g of groups.slice(0, 8)) lines.push(`  ${String(g.n).padStart(4)}  ${g.kind} \u00b7 ${g.reason}`);
-        if (groups.length > 8) lines.push(`  \u2026and ${groups.length - 8} more kinds of reason`);
-        lines.push('  (a record can have more than one reason)', '', '  For example:');
-        for (const b of out.blocked.slice(0, STUCK_EXAMPLES)) lines.push(`  ${b.kind} ${b.who} ${b.what} \u2014 ${b.why}`);
-        if (out.blocked.length > STUCK_EXAMPLES) {
-            lines.push(csvName ? `  \u2026and ${out.blocked.length - STUCK_EXAMPLES} more \u2014 the full list is attached (${csvName}).`
-                               : `  \u2026and ${out.blocked.length - STUCK_EXAMPLES} more, on the QuickBooks page.`);
+        // One heading per reason, the containers listed under it (Apsara, 2026-11-05:
+        // "if some containers has no suppliers put one heading ... list all container
+        // below ... make it crisp"). Each record sits under its FIRST reason only, so the
+        // headings add up to the total and nothing is listed twice; every reason for every
+        // row is in the attached CSV.
+        lines.push('', `STUCK \u2014 ${out.blocked.length} record(s) Jarvis would not enter`);
+        for (const g of groupBlockedByReason(out.blocked)) {
+            lines.push('', `${g.heading} (${g.items.length})`);
+            for (let i = 0; i < g.items.length; i += 4) lines.push('  ' + g.items.slice(i, i + 4).join(',  '));
         }
+        if (csvName) lines.push('', `Every reason for every row: ${csvName} (attached).`);
     }
     if (out.asked.length) {
         lines.push('', `NEEDS YOU — ${out.asked.length} record(s) where the same money looks like it is already there:`);
@@ -238,4 +254,4 @@ async function emailReport(out, opts = {}) {
     return require('./gmail').sendEmail({ to, subject, body: reportText(out) });
 }
 
-module.exports = { run, reportText, emailReport, summarise, enabled, stuckCsv, groupBlocked, reasonKinds };
+module.exports = { run, reportText, emailReport, summarise, enabled, stuckCsv, groupBlocked, groupBlockedByReason, reasonKinds };

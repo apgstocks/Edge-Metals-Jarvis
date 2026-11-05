@@ -321,15 +321,30 @@ function fixLine(f) {
         + (f.from_source ? `  (${f.from_source})` : '');
 }
 
-// Findings -> [{ title, items: [{ what, lines: [..] }] }], first appearance order.
+// Findings -> [{ title, count, compact, items: [{ what, lines }] }], first-appearance order.
 // Same `what` inside one kind is ONE item with several lines.
+//
+// `compact` (Apsara, 2026-11-05: "if some containers has no suppliers put one heading
+// ... list all container below ... make it crisp"): a kind whose findings carry no fix
+// and all say the same thing once the numbers are ignored ("bought N days ago and not
+// sold") needs only the containers listed under its heading, ALL of them, not capped.
+// Kinds that carry values (a sheet figure against Jarvis's) keep the capped list with
+// both figures; every row is in the attached CSV.
+const normDetail = (d) => String(d || '').replace(/\d[\d,.]*/g, '#').trim().toLowerCase();
+
 function groupFindings(list) {
     const groups = new Map();
     for (const f of list || []) {
         const title = f.title || 'Other';
-        if (!groups.has(title)) groups.set(title, { title, count: 0, items: new Map() });
+        if (!groups.has(title)) groups.set(title, { title, count: 0, items: new Map(), details: new Set(), anyFix: false });
         const g = groups.get(title);
         g.count++;
+        if (f.fix && f.fix.field) g.anyFix = true;
+        g.details.add(normDetail(f.detail));
+        // Compact only if the ONLY numbers in the detail are ages ("22 days ago"). A weight
+        // or an amount ("52,220 lb weighed, no price") is the thing she decides on, so a
+        // row carrying one keeps its detail line.
+        if (/\d/.test(String(f.detail || '').replace(/\d+ days? ago/g, ''))) g.hasFigures = true;
         const key = String(f.what || f.title || '');
         if (!g.items.has(key)) g.items.set(key, { what: key, lines: [] });
         const it = g.items.get(key);
@@ -340,7 +355,11 @@ function groupFindings(list) {
         if (f.detail && !detailRepeats) it.lines.push(String(f.detail));
         if (f.fix && f.fix.field) it.lines.push(fixLine(f.fix));
     }
-    return [...groups.values()].map((g) => ({ title: g.title, count: g.count, items: [...g.items.values()] }));
+    return [...groups.values()].map((g) => ({
+        title: g.title, count: g.count,
+        compact: !g.anyFix && !g.hasFigures && g.details.size <= 1 && g.items.size > 1,
+        items: [...g.items.values()],
+    }));
 }
 
 function itemText(it) {
@@ -375,6 +394,13 @@ function reportText(run, { csvName = null } = {}) {
         let truncated = 0;
         for (const g of groups) {
             if (groups.length > 1) out.push(`${g.title} (${g.count})`);
+            if (g.compact) {
+                // every container, three to a line
+                const names = g.items.map((it) => it.what);
+                for (let i = 0; i < names.length; i += 3) out.push('  ' + names.slice(i, i + 3).join('   \u00b7   '));
+                out.push('');
+                continue;
+            }
             for (const it of g.items.slice(0, SHOW_PER_GROUP)) out.push(...itemText(it));
             const rest = g.items.length - SHOW_PER_GROUP;
             if (rest > 0) { truncated += rest; out.push(`  ...and ${rest} more`); }
@@ -427,6 +453,10 @@ function reportHtml(run, { csvName = null } = {}) {
         }
         for (const g of groups) {
             out.push(h(groups.length > 1 ? `${g.title} (${g.count})` : 'Waiting for you'));
+            if (g.compact) {
+                out.push(`<div style="line-height:1.9">${g.items.map((it) => `<span style="display:inline-block;background:#f3f4f6;border-radius:4px;padding:1px 8px;margin:0 6px 4px 0;font-size:13px">${escHtml(it.what)}</span>`).join('')}</div>`);
+                continue;
+            }
             out.push(`<table style="border-collapse:collapse;width:100%">`);
             for (const it of g.items.slice(0, SHOW_PER_GROUP)) {
                 out.push(`<tr><td style="padding:7px 10px;border-bottom:1px solid ${line};vertical-align:top"><div style="font-weight:600">${escHtml(it.what)}</div>`

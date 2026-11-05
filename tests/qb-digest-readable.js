@@ -23,14 +23,18 @@ const out = { ok: true, dryRun: false, env: 'production',
 
 (async () => {
     const text = job.reportText(out, { csvName: digest.STUCK_CSV_NAME });
-    const stuckLines = text.split('\n').filter((l) => /^\s+(bill|sale) /.test(l)).length;
-    ck('the stuck section is by REASON: one line per kind with a count', /\s64\s+bill · no supplier amount yet/.test(text) && /\s26\s+bill · no invoice number/.test(text) && /\s30\s+sale · no freight charge yet/.test(text), text);
-    ck('  the grade names are lifted out, so 64 different "grade X has no amount" are ONE line', (text.match(/a grade has no amount/g) || []).length === 1);
-    ck('  only five example rows, not 25', stuckLines === 5, String(stuckLines));
-    ck('  the cut points at the attachment', /full list is attached \(qb-stuck-rows\.csv\)/.test(text));
-    ck('the long period-lock explanation is gone (one line remains)', !/With no lock, every 2026 row/.test(text) && /Period lock —/.test(text));
+    // Apsara, 2026-11-05: "if some containers has no suppliers put one heading ... list all container below ... make it
+    // crisp". One heading per reason, every container under it.
+    ck('one HEADING per reason, with its count', /^Bills \u00b7 No supplier amount yet \(60\)$/m.test(text) && /^Bills \u00b7 No invoice number \(it ties the bill to its sale\) \(26\)$/m.test(text) && /^Sales \u00b7 No freight charge yet \(30\)$/m.test(text) && /^Bills \u00b7 Invoice number too long for QuickBooks \(4\)$/m.test(text), text);
+    ck('headings add up to the total: nothing listed twice (60+26+4+30 = 120)', 60 + 26 + 4 + 30 === 120 && !/\(64\)/.test(text));
+    const listed = (text.match(/\b(HMMU49|EMHU27|HMMU47|KOCU44)\d\d\b/g) || []);
+    ck('EVERY container is listed under its heading (all 120)', listed.length === 120 && new Set(listed).size === 120, String(listed.length));
+    ck('  containers only, four to a line - no per-row sentences', !/ \u2014 no supplier amount yet; grade/.test(text) && /HMMU4900,  HMMU4901,  HMMU4902,  HMMU4903/.test(text));
+    ck('  grade names are not repeated 64 times', !/grade "Auto Cast"/.test(text));
+    ck('  the reasons for every row are in the attached CSV, and the mail says so', /Every reason for every row: qb-stuck-rows\.csv \(attached\)\./.test(text));
+    ck('the long period-lock explanation is gone (one line remains)', !/With no lock, every 2026 row/.test(text) && /Period lock \u2014/.test(text));
     ck('the headline counts are unchanged', /Entered in QuickBooks \(production\): 4/.test(text) && /bill: already-linked 48, blocked 90, created 1/.test(text));
-    ck('the old failure path (no csvName) still reads sensibly', /on the QuickBooks page\./.test(job.reportText(out)));
+    ck('without a csvName (the old failure path) there is no dangling attachment line', !/attached/.test(job.reportText(out)));
     ck('decisions are untouched: out.blocked still has every row', out.blocked.length === 120);
 
     const csv = job.stuckCsv(out).split('\r\n');
@@ -45,7 +49,7 @@ const out = { ok: true, dryRun: false, env: 'production',
     const r = await digest.send({ to: 'apsara@edgemetals.com', mail: (o) => { mailed = o; }, alreadySent: async () => false, markSent: async () => {} });
     ck('the digest sent', r.sent === true && !!mailed, JSON.stringify(r).slice(0, 160));
     ck('the pointer line appears ONCE, not once per part', (mailed.body.match(/Open the QuickBooks page in Jarvis to fix a stuck row or undo anything here\./g) || []).length === 1, String((mailed.body.match(/Open the QuickBooks page/g) || []).length));
-    ck('the body is short (under 60 lines for 120 stuck rows)', mailed.body.split('\n').length < 60, String(mailed.body.split('\n').length));
+    ck('the body is short (under 90 lines with all 120 containers listed)', mailed.body.split('\n').length < 90, String(mailed.body.split('\n').length));
     ck('an HTML half is sent with section headings, escaped', /<div/.test(mailed.bodyHtml) && /STUCK/.test(mailed.bodyHtml) && !/<script/i.test(mailed.bodyHtml));
     ck('exactly one attachment: the stuck-rows CSV', Array.isArray(mailed.attachments) && mailed.attachments.length === 1 && mailed.attachments[0].filename === 'qb-stuck-rows.csv' && mailed.attachments[0].mimeType === 'text/csv');
     ck('  carrying all 121 rows', Buffer.from(mailed.attachments[0].content).toString('utf8').replace(/^﻿/, '').split('\r\n').length === 122);
