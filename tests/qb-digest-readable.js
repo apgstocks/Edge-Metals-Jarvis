@@ -60,6 +60,11 @@ const out = { ok: true, dryRun: false, env: 'production',
     let small = null;
     await digest.send({ to: 'a@b.c', mail: (o) => { small = o; }, alreadySent: async () => false, markSent: async () => {} });
     ck('a night with nothing stuck: no attachment', small && !small.attachments);
+    const agent = require(path.join(ROOT, 'helpers/quickbooks/agent'));
+    const longNote = 'QuickBooks refuses an account merge over the API, so the documents move instead. A bill that has already been paid is never moved: QuickBooks accepts the write and silently unapplies the payment (sandbox, 2026-10-05), which would turn settled bills back into debts.';
+    const agentText = agent.reportText({ survey: { owe: { total: 1 }, owedToYou: { total: 1 }, invariants: {}, errors: {} }, did: [], dryRun: false,
+        asked: [{ verdict: 'ask', title: '3 payable accounts are in use', detail: '307 bill(s) can move onto #109', note: longNote }] });
+    ck('QB Agent "WAITING ON YOU" carries a count and ONE sentence per note, not the paragraph', /WAITING ON YOU \(1\)/.test(agentText) && /refuses an account merge over the API, so the documents move instead\./.test(agentText) && !/silently unapplies/.test(agentText), agentText);
     ck('HTML escapes what parts print', /&lt;b&gt;/.test(digest.digestHtml('T\n\n  <b>x</b>')));
     console.log(`\n${pass} passed, ${fail} failed`); process.exit(fail ? 1 : 0);
 })().catch((e) => { console.error(e); process.exit(1); });
