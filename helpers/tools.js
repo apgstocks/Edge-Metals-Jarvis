@@ -541,6 +541,155 @@ const TOOLS = {
         },
     },
 
+    // ══ THE BANK AND THE CLAIMS, WHICH THE BOT COULD NOT SEE ═══════════════
+    // Apsara, 2026-11-05: "what about our own bot" — then, on finding it had
+    // no way in: "give door access".
+    //
+    // Eighteen tools covered loads, inventory, sales, expenses, petty cash
+    // and trucker bills. None touched the bank and none touched claims —
+    // the two newest and most expensive subsystems in the app. So the
+    // QuickBooks Ask box could answer about Intuit's data while her own bot
+    // could not answer "who is that deposit from" or "which claims are
+    // open". That is the wrong way round, and it is the whole argument for
+    // Jarvis over QuickBooks.
+    //
+    // ALL FOUR ARE READ. The writes stay on the screens, because confirming
+    // a receipt asks about fees, discounts and the payment mode, and
+    // CLAUDE.md records the voice path breaking twice for exactly this
+    // reason — it is the caller with no form to put a field on. A write
+    // tool here is a separate decision, asked for one at a time.
+
+    bank_unmatched: {
+        kind: 'read',
+        description: 'Money in the bank that is not yet explained — deposits with no invoice '
+            + 'against them and withdrawals with no bill. Says what Jarvis read each line as.',
+        params: { direction: { type: 'string' }, limit: { type: 'number' } },
+        run: async (p) => {
+            const ledger = require('./bankLedger');
+            const { payeeOf } = require('./bankPayee');
+            const want = String(p.direction || '').toLowerCase();
+            const rows = (ledger.worklist ? ledger.worklist() : ledger.list()) || [];
+            const open = rows.filter((r) => !ledger.actedOn || !ledger.actedOn(r))
+                .filter((r) => (want === 'in' ? Number(r.amount) > 0
+                              : want === 'out' ? Number(r.amount) < 0 : true));
+            // read_as is the point of the answer: a bank line is unreadable
+            // out loud, and the company name is the only part she wants said.
+            const said = open.map((r) => ({
+                date: r.date || r.posted_at || null,
+                amount: r.amount,
+                read_as: payeeOf(r.descriptor || r.name || '') || null,
+                descriptor: r.descriptor || r.name || '',
+                bank: (ledger.bankOf ? ledger.bankOf(r) : null) || null,
+            }));
+            const total = said.reduce((t, r) => t + (Number(r.amount) || 0), 0);
+            return { unexplained_rows: said.length, unexplained_total: Math.round(total * 100) / 100,
+                     ...cap(said.slice(0, Math.max(1, Math.min(Number(p.limit) || 25, MAX_ROWS)))) };
+        },
+    },
+
+    bank_who_is: {
+        kind: 'read',
+        description: 'Who a bank line is from. Reads the company name out of the bank\'s own '
+            + 'description and says whether it matches anyone in the ledger.',
+        params: { descriptor: { type: 'string', required: true } },
+        run: async (p) => {
+            const { payeeOf } = require('./bankPayee');
+            const bankLearn = require('./bankLearn');
+            const read = payeeOf(p.descriptor);
+            // The same two steps the screen takes, in the same order, so the
+            // bot and the Bank page can never disagree about one line.
+            const customers = (() => {
+                try { return require('./bankMatchRoutes').openReceivables().map((d) => d.party)
+                    .filter(Boolean); } catch (e) { return []; }
+            })();
+            const names = [...new Set(customers)];
+            const resolved = bankLearn.resolverFrom(bankLearn.listAliases(), names)(p.descriptor);
+            const hints = resolved ? [] : (bankLearn.suggestParty(p.descriptor, names) || []);
+            return {
+                read_as: read || null,
+                matched: resolved || null,
+                // Never a single guess dressed as an answer: nameMatch.js
+                // refuses near-misses because a wrong one pays the wrong
+                // company. Two candidates come back as two.
+                suggestions: hints.slice(0, 3),
+                needs_you: !resolved,
+            };
+        },
+    },
+
+    find_claims: {
+        kind: 'read',
+        description: 'Customer claims: open, settled, by supplier, by container, or by how long '
+            + 'they have been sitting. Includes what Edge has recovered and what it has not.',
+        params: { status: { type: 'string' }, supplier: { type: 'string' },
+                  container: { type: 'string' }, from: { type: 'date' }, to: { type: 'date' } },
+        run: async (p) => {
+            const claims = require('./claims');
+            const CLOSED = ['settled', 'rejected', 'withdrawn'];
+            const want = String(p.status || '').toLowerCase();
+            const norm = (v) => String(v || '').trim().toLowerCase();
+            let rows = claims.list() || [];
+            if (p.supplier) rows = rows.filter((c) => norm(c.supplier).includes(norm(p.supplier)));
+            if (p.container) rows = rows.filter((c) => norm(c.container_no).includes(norm(p.container)));
+            if (want === 'open') rows = rows.filter((c) => !CLOSED.includes(c.status));
+            else if (want === 'settled') rows = rows.filter((c) => CLOSED.includes(c.status));
+            else if (want) rows = rows.filter((c) => c.status === want);
+            const dayOf = (c) => String(c.claim_date || c.created_at || '').slice(0, 10);
+            if (p.from) rows = rows.filter((c) => dayOf(c) && dayOf(c) >= p.from);
+            if (p.to) rows = rows.filter((c) => dayOf(c) && dayOf(c) <= p.to);
+
+            // AGE, because her own rule is that there is no deadline field —
+            // "age itself is the escalation". A claim nobody has chased for
+            // 90 days is the answer to most questions about claims.
+            const today = new Date().toISOString().slice(0, 10);
+            const days = (a, b) => (!a || !b ? null
+                : Math.round((Date.parse(b) - Date.parse(a)) / 86400000));
+            const said = rows.map((c) => ({
+                container: c.container_no || null, supplier: c.supplier || null,
+                status: c.status, claimed: c.claim_amount, recovered: c.our_claim,
+                raised: dayOf(c) || null,
+                days_open: CLOSED.includes(c.status) ? null : days(dayOf(c), today),
+                days_to_settle: CLOSED.includes(c.status)
+                    ? days(dayOf(c), String(c.settled_at || c.updated_at || '').slice(0, 10)) : null,
+            })).sort((a, b) => (b.days_open || 0) - (a.days_open || 0));
+            const sum = (k) => Math.round(said.reduce((t, r) => t + (Number(r[k]) || 0), 0) * 100) / 100;
+            return { claims: said.length, claimed_total: sum('claimed'),
+                     recovered_total: sum('recovered'), ...cap(said) };
+        },
+    },
+
+    claim_detail: {
+        kind: 'read',
+        description: 'One container\'s claims in full: every kind on it, what was worked out, '
+            + 'what the supplier has paid back, and what Jarvis is waiting on.',
+        params: { container: { type: 'string', required: true } },
+        run: async (p) => {
+            const claims = require('./claims');
+            const norm = (v) => String(v || '').trim().toLowerCase();
+            const rows = (claims.list() || [])
+                .filter((c) => norm(c.container_no) === norm(p.container)
+                            || norm(c.invoice_no) === norm(p.container));
+            if (!rows.length) return { found: false, container: p.container };
+            const CLOSED = ['settled', 'rejected', 'withdrawn'];
+            return {
+                found: true, container: p.container,
+                customer: (rows.find((c) => c.customer) || {}).customer || null,
+                suppliers: [...new Set(rows.map((c) => c.supplier).filter(Boolean))],
+                claimed_total: Math.round(rows.reduce((t, c) => t + (Number(c.claim_amount) || 0), 0) * 100) / 100,
+                recovered_total: Math.round(rows.reduce((t, c) => t + (Number(c.our_claim) || 0), 0) * 100) / 100,
+                // The next step, in her own words from the screen, so the
+                // spoken answer and the page say the same thing.
+                waiting_on_you: rows.filter((c) => c.status === 'unverified'
+                    || (c.status === 'verified' && !Number(c.our_claim))).length,
+                ...cap(rows.map((c) => ({
+                    kind: c.claim_type || null, assessment: c.assessment || null,
+                    status: c.status, claimed: c.claim_amount, recovered: c.our_claim,
+                    settled: CLOSED.includes(c.status),
+                }))),
+            };
+        },
+    },
+
     // ══ WRITE ══════════════════════════════════════════════════════════════
     // Each returns a PROPOSAL — a summary, the details worth checking, any
     // warnings, and a run() that is only ever called after the person

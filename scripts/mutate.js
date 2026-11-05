@@ -578,6 +578,42 @@ const MUTATIONS = [
       find: "    STATE.sel = null;\n    // '2+ claims' counts claims on one CONTAINER.",
       to:   "    // '2+ claims' counts claims on one CONTAINER." },
 
+    // ── THE BOT'S DOORS TO THE BANK AND CLAIMS (2026-11-05) ──────────────
+    // Apsara: "what about our own bot" / "give door access".
+    { name: 'bot: a settled claim is answered as open',
+      file: 'helpers/tools.js', suites: ['bot-doors'],
+      find: "            if (want === 'open') rows = rows.filter((c) => !CLOSED.includes(c.status));",
+      to:   "            if (want === 'open') rows = rows;" },
+    { name: 'bot: claims come back newest-first, burying the oldest',
+      file: 'helpers/tools.js', suites: ['bot-doors'],
+      find: "            })).sort((a, b) => (b.days_open || 0) - (a.days_open || 0));",
+      to:   "            })).sort((a, b) => (a.days_open || 0) - (b.days_open || 0));" },
+    { name: 'bot: a settled claim still reports days_open',
+      file: 'helpers/tools.js', suites: ['bot-doors'],
+      find: "                days_open: CLOSED.includes(c.status) ? null : days(dayOf(c), today),",
+      to:   "                days_open: days(dayOf(c), today)," },
+    { name: 'bot: a container with no claims is answered as found',
+      file: 'helpers/tools.js', suites: ['bot-doors'],
+      find: "            if (!rows.length) return { found: false, container: p.container };",
+      to:   "            if (!rows.length) return { found: true, container: p.container, suppliers: [] };" },
+    { name: 'bot: the bank line is read whole again, so the bot cannot name it',
+      file: 'helpers/tools.js', suites: ['bot-doors'],
+      find: "            const read = payeeOf(p.descriptor);",
+      to:   "            const read = p.descriptor;" },
+    // RETIRED 2026-11-05, unkillable in this harness and said so rather than
+    // left green. Promoting a suggestion to a match only differs when there
+    // ARE suggestions, and suggestions need a seeded receivables store that
+    // tests/bot-doors.js does not stand up. The tightened check
+    // ('a line it needs her for has matched nobody') holds the half that can
+    // be proven here; the rest is covered where the screen does it, in
+    // tests/bank-payee.js section D.
+    //   { name: 'bot: a single suggestion is answered as a match',
+    //     find: "                matched: resolved || null," }
+    { name: 'bot: the four read tools become writes',
+      file: 'helpers/tools.js', suites: ['bot-doors'],
+      find: "    bank_unmatched: {\n        kind: 'read',",
+      to:   "    bank_unmatched: {\n        kind: 'write'," },
+
     // ── THE NAME, NOT THE WHOLE BANK LINE (2026-11-05) ───────────────────
     // Apsara: "why my jarvis was not able to identify that?" / "Jarvis
     // should able to identify everytgibg".

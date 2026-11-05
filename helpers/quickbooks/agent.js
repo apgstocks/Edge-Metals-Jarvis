@@ -453,8 +453,19 @@ function reportText(out) {
 
     const asks = (out.asked || []).filter((i) => i.verdict === 'ask' || i.verdict === 'propose');
     if (asks.length) {
-        L.push('', 'WAITING ON YOU');
-        for (const a of asks) L.push(`  ${a.title}${a.detail ? ` — ${a.detail}` : ''}`, `      ${a.note || ''}`);
+        L.push('', `WAITING ON YOU (${asks.length})`);
+        // The first sentence of each note, not the whole paragraph (Apsara, 2026-11-05: "make it crisp").
+        // The full note is on the QuickBooks page, where each item opens with its impact.
+        const lead = (t) => {
+            const x = String(t || '').trim();
+            const m = /^(.+?[.!?])(\s|$)/.exec(x);
+            const one = m ? m[1] : x;
+            return one.length > 170 ? `${one.slice(0, 167)}...` : one;
+        };
+        for (const a of asks) {
+            L.push(`  \u00b7 ${a.title}${a.detail ? ` \u2014 ${a.detail}` : ''}`);
+            if (a.note) L.push(`      ${lead(a.note)}`);
+        }
     }
     if (Object.keys(s.errors || {}).length) {
         L.push('', 'COULD NOT BE READ');
