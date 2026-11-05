@@ -84,7 +84,52 @@ async function run(opts = {}) {
     return out;
 }
 
-function reportText(out) {
+// ── HOW THE STUCK LIST READS (2026-11-05) ───────────────────────────────
+// Apsara pasted the 4 Nov digest ("QuickBooks — entered 4, 120 stuck...") as another
+// mail she did not want to read: 25 near-identical lines such as 'no supplier amount
+// yet; grade "Auto Cast" has no amount' under a four-line essay on the period lock.
+// Now: one line per KIND OF REASON with a count (the grade names are lifted out, so
+// 90 rows that all say "a grade has no amount" are one line), a handful of examples,
+// and the full list as a CSV the digest attaches. Display only - out.blocked and
+// every decision about what is entered are untouched.
+const STUCK_EXAMPLES = 5;
+
+function reasonKinds(why) {
+    const kinds = [];
+    for (const piece of String(why || '').split(/;\s*/).map((x) => x.trim()).filter(Boolean)) {
+        let k = piece;
+        if (/^grade ".*" has no amount$/i.test(k)) k = 'a grade has no amount';
+        else if (/^item ".*" is none/i.test(k)) k = 'an item is not set \u2014 confirm it first';
+        else if (/^invoice number longer than QuickBooks allows/i.test(k)) k = 'invoice number too long for QuickBooks';
+        else if (/^no invoice number/i.test(k)) k = 'no invoice number (it ties the bill to its sale)';
+        if (!kinds.includes(k)) kinds.push(k);
+    }
+    return kinds.length ? kinds : ['no reason recorded'];
+}
+
+// [{ kind: 'bill', reason, n }] biggest first
+function groupBlocked(blocked) {
+    const m = new Map();
+    for (const b of blocked || []) {
+        for (const r of reasonKinds(b.why)) {
+            const key = `${b.kind}|${r}`;
+            m.set(key, (m.get(key) || 0) + 1);
+        }
+    }
+    return [...m.entries()].map(([key, n]) => { const i = key.indexOf('|'); return { kind: key.slice(0, i), reason: key.slice(i + 1), n }; })
+        .sort((x, y) => y.n - x.n);
+}
+
+// Every stuck / needs-you row, one per line, for a spreadsheet.
+function stuckCsv(out) {
+    const q = (v) => { const t = String(v == null ? '' : v); return /[",\n]/.test(t) ? `"${t.replace(/"/g, '""')}"` : t; };
+    const rows = [['Status', 'Kind', 'Who', 'What', 'Why']];
+    for (const b of (out && out.blocked) || []) rows.push(['Stuck', b.kind, b.who, b.what, b.why]);
+    for (const a of (out && out.asked) || []) rows.push(['Needs you', a.kind, a.who, a.what, a.why]);
+    return rows.map((r) => r.map(q).join(',')).join('\r\n');
+}
+
+function reportText(out, { csvName = null } = {}) {
     if (out.error) return `The nightly QuickBooks run could not finish.\n\n${out.error}\n\nNothing further was written.`;
     const s = summarise(out.result || {});
     const lines = [];
@@ -97,9 +142,16 @@ function reportText(out) {
         if (parts) lines.push(`${kind}: ${parts}`);
     }
     if (out.blocked.length) {
-        lines.push('', `STUCK — ${out.blocked.length} record(s) Jarvis would not enter:`);
-        for (const b of out.blocked.slice(0, 25)) lines.push(`  ${b.kind} ${b.who} ${b.what} — ${b.why}`);
-        if (out.blocked.length > 25) lines.push(`  …and ${out.blocked.length - 25} more`);
+        lines.push('', `STUCK \u2014 ${out.blocked.length} record(s) Jarvis would not enter:`);
+        const groups = groupBlocked(out.blocked);
+        for (const g of groups.slice(0, 8)) lines.push(`  ${String(g.n).padStart(4)}  ${g.kind} \u00b7 ${g.reason}`);
+        if (groups.length > 8) lines.push(`  \u2026and ${groups.length - 8} more kinds of reason`);
+        lines.push('  (a record can have more than one reason)', '', '  For example:');
+        for (const b of out.blocked.slice(0, STUCK_EXAMPLES)) lines.push(`  ${b.kind} ${b.who} ${b.what} \u2014 ${b.why}`);
+        if (out.blocked.length > STUCK_EXAMPLES) {
+            lines.push(csvName ? `  \u2026and ${out.blocked.length - STUCK_EXAMPLES} more \u2014 the full list is attached (${csvName}).`
+                               : `  \u2026and ${out.blocked.length - STUCK_EXAMPLES} more, on the QuickBooks page.`);
+        }
     }
     if (out.asked.length) {
         lines.push('', `NEEDS YOU — ${out.asked.length} record(s) where the same money looks like it is already there:`);
@@ -159,10 +211,10 @@ function reportText(out) {
     const lock = (k, label) => cut[k === 'bill' ? 'bills' : 'invoices']
         ? `${label} locked before ${cut[k === 'bill' ? 'bills' : 'invoices']}${src(k)}`
         : `${label} open — no period locked`;
-    lines.push('', `Period lock — ${lock('bill', 'bills')}, ${lock('invoice', 'invoices')}. Nothing dated after ${push.todayISO()} is entered.`,
-        'With no lock, every 2026 row is fair game and each one is judged on evidence instead: already in',
-        'QuickBooks? cost already sitting on a cheque with no bill behind it? Lock a period on the',
-        'QuickBooks page only once you have genuinely closed it.',
+    // One line. The paragraph that used to follow explained, every single morning, what
+    // having no lock would mean; that is a setting's documentation, not news, and it
+    // lives on the QuickBooks page where the lock is set.
+    lines.push('', `Period lock \u2014 ${lock('bill', 'bills')}, ${lock('invoice', 'invoices')}. Nothing dated after ${push.todayISO()} is entered.`,
         '', 'Open the QuickBooks page in Jarvis to fix a stuck row or undo anything here.');
     if (out.snapshot && out.snapshot.totals) {
         const t = out.snapshot.totals;
@@ -186,4 +238,4 @@ async function emailReport(out, opts = {}) {
     return require('./gmail').sendEmail({ to, subject, body: reportText(out) });
 }
 
-module.exports = { run, reportText, emailReport, summarise, enabled };
+module.exports = { run, reportText, emailReport, summarise, enabled, stuckCsv, groupBlocked, reasonKinds };

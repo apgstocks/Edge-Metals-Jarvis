@@ -1344,7 +1344,9 @@ async function nightlyQuickBooks() {
     try {
         if (out.error) await job.emailReport(out);
         else await require('./helpers/qbDigest').record('sweep',
-            { text: job.reportText(out), summary: s, ok: true });
+            { text: job.reportText(out, { csvName: require('./helpers/qbDigest').STUCK_CSV_NAME }),
+              csv: (out.blocked && out.blocked.length) || (out.asked && out.asked.length) ? job.stuckCsv(out) : null,
+              summary: s, ok: true });
     } catch (e) { console.error('[SCHED] quickbooks report failed:', e.message); }
     return out;
 }

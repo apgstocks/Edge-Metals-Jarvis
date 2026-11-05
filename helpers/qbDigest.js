@@ -80,9 +80,11 @@ const str = (v) => String(v == null ? '' : v).trim();
 // Called by each job in place of its own emailReport. Stores the text the job
 // already knows how to write, so each agent keeps its own wording and this
 // file never has to understand QuickBooks.
-async function record(id, { text, summary = null, at = new Date(), ok = true } = {}) {
+async function record(id, { text, summary = null, csv = null, at = new Date(), ok = true } = {}) {
     if (!PARTS.some((p) => p.id === id)) throw new Error(`unknown digest part: ${id}`);
     const entry = { id, text: str(text) || null, summary, ok: !!ok, at: new Date(at).toISOString() };
+    // The long tail of a report (e.g. every stuck row) rides along as a CSV the digest attaches.
+    if (csv && String(csv).trim()) entry.csv = String(csv);
     try {
         await mutateJson(FILE, {}, (all) => ({ ...(all && typeof all === 'object' ? all : {}), [id]: entry }),
             { strict: true });
@@ -108,6 +110,42 @@ const hoursOld = (iso, now) => {
     if (!Number.isFinite(t)) return Infinity;
     return (now.getTime() - t) / 3600000;
 };
+
+// ── HOW IT LOOKS (2026-11-05) ────────────────────────────────────────────
+// Apsara pasted this digest as "ugly". The parts each write plain text in their own
+// words (this file deliberately never learns what a bill is), so the HTML half is
+// made FROM that text: rule lines become headings, SHOUTING lines become section
+// labels, indented lines become a list. Everything is escaped. The plain text stays
+// the source of truth and is still sent.
+const OPEN_LINE = 'Open the QuickBooks page in Jarvis to fix a stuck row or undo anything here.';
+const STUCK_CSV_NAME = 'qb-stuck-rows.csv';
+const esc = (v) => String(v == null ? '' : v).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+
+function digestHtml(body) {
+    const ink = '#1f2937', mute = '#6b7280', line = '#e5e7eb', accent = '#b45309';
+    const out = [`<div style="font:14px/1.5 Arial,sans-serif;color:${ink};max-width:680px">`];
+    const lines = String(body || '').split('\n');
+    let i = 0;
+    if (lines[0]) out.push(`<div style="font:600 20px Arial,sans-serif;margin-bottom:2px">${esc(lines[0])}</div>`);
+    for (i = 1; i < lines.length; i++) {
+        const t = lines[i];
+        const rule = /^\u2500{8} (.+?) \u2500{8}$/.exec(t);
+        if (!t.trim()) { out.push('<div style="height:6px"></div>'); continue; }
+        if (rule) { out.push(`<div style="font:600 13px Arial,sans-serif;letter-spacing:.06em;text-transform:uppercase;color:#fff;background:#374151;padding:6px 10px;margin:22px 0 8px">${esc(rule[1])}</div>`); continue; }
+        if (/^[A-Z][A-Z0-9 \u2019'\-\u2014,.#]{5,}(?: \u2014.*)?$/.test(t) && !/^\s/.test(t)) {
+            out.push(`<div style="font:700 13px Arial,sans-serif;color:${accent};margin:14px 0 4px">${esc(t)}</div>`); continue;
+        }
+        if (/^\s{2,}/.test(t)) {
+            const deep = /^\s{6,}/.test(t);
+            out.push(`<div style="padding:2px 0 2px ${deep ? 34 : 14}px;${deep ? `color:${mute};font-size:13px;` : ''}border-left:2px solid ${line}">${esc(t.trim())}</div>`);
+            continue;
+        }
+        if (t === OPEN_LINE) { out.push(`<div style="margin-top:18px;color:${mute}">${esc(t)}</div>`); continue; }
+        out.push(`<div>${esc(t)}</div>`);
+    }
+    out.push('</div>');
+    return out.join('');
+}
 
 // ── COMPOSING ─────────────────────────────────────────────────────────────
 // Returns { subject, body, parts } or null when there is genuinely nothing to
@@ -174,7 +212,8 @@ function compose({ now = new Date(), stash = null } = {}) {
         if (!s.entry.text) continue;
         L.push(`${'─'.repeat(8)} ${s.title} (${s.when}) ${'─'.repeat(8)}`);
         L.push('');
-        L.push(s.entry.text);
+        // Each part ends with the same pointer to the QuickBooks page; the digest says it once.
+        L.push(String(s.entry.text).split('\n').filter((x) => x.trim() !== OPEN_LINE).join('\n').replace(/\n+$/, ''));
         L.push('');
     }
 
@@ -192,14 +231,17 @@ function compose({ now = new Date(), stash = null } = {}) {
         L.push('');
     }
 
-    L.push('Open the QuickBooks page in Jarvis to fix a stuck row or undo anything here.');
+    L.push(OPEN_LINE);
 
     const quiet = seen.filter((s) => s.entry.text).length === 0;
     const subject = quiet
         ? `QuickBooks — ${missing.length} job(s) did not run (${when})`
         : `QuickBooks — ${score.length ? score.join(', ') : 'overnight report'} (${when})`;
 
-    return { subject, body: L.join('\n'), parts: seen.map((s) => s.id),
+    const csv = seen.map((s) => s.entry.csv).filter(Boolean).join('\r\n');
+    const body = L.join('\n');
+    return { subject, body, html: digestHtml(body), parts: seen.map((s) => s.id),
+             attachments: csv ? [{ filename: STUCK_CSV_NAME, mimeType: 'text/csv', content: Buffer.from('\ufeff' + csv, 'utf8') }] : undefined,
              missing: missing.map((p) => p.id), empty: false };
 }
 
@@ -233,7 +275,7 @@ async function send({ mail, to, now = new Date(), alreadySent, markSent } = {}) 
 
     try {
         const post = mail || ((o) => require('./gmail').sendEmail(o));
-        await post({ to: addr, subject: composed.subject, body: composed.body });
+        await post({ to: addr, subject: composed.subject, body: composed.body, bodyHtml: composed.html, attachments: composed.attachments });
         await clear();
         if (markSent) await markSent(key);
         return { sent: true, ...composed };
@@ -253,4 +295,4 @@ async function clear() {
     catch (e) { console.error('[qb-digest] could not clear:', e.message); }
 }
 
-module.exports = { record, read, compose, send, clear, PARTS, STALE_HOURS, FILE };
+module.exports = { record, read, compose, send, clear, digestHtml, PARTS, STALE_HOURS, FILE, STUCK_CSV_NAME };
