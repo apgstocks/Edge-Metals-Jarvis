@@ -88,19 +88,38 @@
     const css = document.createElement('style');
     css.id = 'jvAcctCss';
     css.textContent = `
+/* ── HER TOKENS, NOT THE PDF'S (2026-11-05) ──────────────────────────
+   Apsara: "why that header looks very odd?"
+
+   Because I pasted the CLAIM REPORT's palette onto the app — white
+   background, #2E6DA4 blue, Helvetica. That is right for a document a
+   supplier prints and wrong for every page it was sitting on: a white band
+   across the top of a dark screen reads as a browser chrome bug, not as
+   navigation.
+
+   Every colour below is now one of the variables the four pages already
+   define in :root, with a fallback for any page that does not. */
 #jvAcctTabs{position:sticky;top:0;z-index:40;display:flex;align-items:center;gap:2px;
-  flex-wrap:wrap;background:#fff;border-bottom:2px solid #2E6DA4;padding:0 0 0 2px;
-  margin:0 0 14px;font-family:"Helvetica Neue",Helvetica,Arial,sans-serif}
-#jvAcctTabs .jv-acct-name{font-size:11px;letter-spacing:.09em;text-transform:uppercase;
-  color:#1F4E79;font-weight:800;padding:0 14px 0 4px;white-space:nowrap}
-#jvAcctTabs a{display:inline-block;padding:9px 15px;font-size:13px;color:#44607a;
-  text-decoration:none;border:1px solid transparent;border-bottom:0;
-  border-radius:4px 4px 0 0;margin-bottom:-2px;white-space:nowrap}
-#jvAcctTabs a:hover{background:#F4F9FD;color:#1F4E79}
-#jvAcctTabs a.on{background:#fff;color:#1F4E79;font-weight:700;
-  border-color:#2E6DA4 #2E6DA4 #fff;border-bottom:2px solid #fff}
-#jvAcctTabs a.last{margin-left:auto;color:#777;font-size:12px}
-#jvAcctTabs a.last.on{color:#1F4E79}
+  flex-wrap:wrap;padding:0 4px;margin:0 0 14px;
+  background:var(--surface-card,#14181B);
+  border-bottom:1px solid var(--border-default,#2B3239);
+  font-family:var(--font-sans),'IBM Plex Sans',system-ui,sans-serif}
+#jvAcctTabs .jv-acct-name{font-size:10px;letter-spacing:.14em;text-transform:uppercase;
+  color:var(--text-faint,#7E8891);font-weight:600;padding:0 14px 0 6px;white-space:nowrap;
+  font-family:var(--font-mono),ui-monospace,monospace}
+#jvAcctTabs a{display:inline-block;padding:10px 14px;font-size:12.5px;font-weight:500;
+  color:var(--text-muted,#A7B0B7);text-decoration:none;white-space:nowrap;
+  border-bottom:2px solid transparent;margin-bottom:-1px}
+#jvAcctTabs a:hover{color:var(--text-strong,#fff);background:var(--surface-hover,#181D21)}
+#jvAcctTabs a.on{color:var(--text-strong,#fff);font-weight:600;
+  border-bottom-color:var(--leaf-500,#3DA836)}
+/* Migration sat at the far right edge of a 2000px screen, which reads as
+   belonging to something else. It keeps its own group, separated by a rule
+   rather than by half a metre of empty bar. */
+#jvAcctTabs a.last{margin-left:18px;padding-left:18px;
+  border-left:1px solid var(--border-default,#2B3239);
+  color:var(--text-faint,#7E8891);font-size:12px}
+#jvAcctTabs a.last.on{color:var(--text-strong,#fff)}
 @media print{#jvAcctTabs,#jvAcctCss{display:none !important}}
 @media (max-width:760px){#jvAcctTabs .jv-acct-name{display:none}
   #jvAcctTabs a{padding:8px 10px;font-size:12px}
