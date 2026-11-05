@@ -1246,8 +1246,13 @@ function renderDetail(){
   const d = $('#detail');
   snapshotDrafts();
   if (!g){
-    d.innerHTML = '<div class="blank"><div class="big">Pick a container on the left.</div>' +
-      '<div style="max-width:470px;margin:8px auto 0;line-height:1.6;color:var(--text-faint)">One container can carry more than one claim, and they are rarely the same kind — a weight shortage, a grade downgrade and foreign material are three different arguments with the customer and three different recoveries from the supplier.</div></div>';
+    // Apsara, 2026-11-05: "I dont want to shw anything.Jusr show headers
+    // liek open and what all needed". The paragraph that used to sit here
+    // explained why a container can hold several claims — true, and she has
+    // known it for months. On a page she opens many times a day it is three
+    // lines of text in the largest area of the screen saying nothing she
+    // needs. The heading is the whole message.
+    d.innerHTML = '<div class="blank"><div class="big">Pick a container on the left.</div></div>';
     return;
   }
   d.innerHTML =
@@ -2414,8 +2419,24 @@ async function load(announce){
     STATE.materials = j.materials || [];
     // Rebuilt here rather than inside a card or a modal — see ensureDatalists.
     ensureDatalists();
-    const wide = !(window.matchMedia && window.matchMedia('(max-width:1020px)').matches);
-    if (!containers().some(g => g.key === STATE.sel)) STATE.sel = wide ? ((visible()[0] || {}).key || null) : null;
+    // ── NOTHING OPENS BY ITSELF ──────────────────────────────────────
+    // Apsara, 2026-11-05: "by default,some calim is getting opneed .i feel
+    // it to be too clumpsy", then "Just let the user do what he wants".
+    //
+    // This used to auto-select the first visible container on a wide screen.
+    // The intent was to save her a click; the effect is that the page lands
+    // showing ONE supplier's claim she did not ask for, which reads as the
+    // answer to a question she has not put yet — and it moves under her
+    // whenever the list re-sorts.
+    //
+    // A stale selection is still cleared: if the container she had open is
+    // no longer in the list, the pane goes back to "Pick a container on the
+    // left." What is gone is the page choosing FOR her.
+    //
+    // The two places that DO set a selection stay, because both are her own
+    // action: saving a new claim and saving an edit jump to the claim she
+    // just made. That is her doing what she wants, not the page guessing.
+    if (!containers().some(g => g.key === STATE.sel)) STATE.sel = null;
     paint();
     if (announce) toast('Up to date.', 'ok');
   } catch (e) { toast('Could not load claims — ' + e.message, 'bad'); }
