@@ -311,7 +311,17 @@ section('D — the controls are on the page');
     ck('closing a claim takes two taps', /tap again to mark it/.test(HTML));
     ck('typed values survive a refresh', /function snapshotDrafts/.test(HTML) && /restoreDrafts\(\)/.test(HTML));
     ck('the container report menu offers the supplier report only', /<b>Claim report<\/b> · PDF/.test(HTML) && !/audience=/.test(HTML) && !/Full report/.test(HTML));
-    ck('the report link is scoped to the container and its supplier', /const base = '\/api\/claims\/report\?container=' \+ cont \+ sup;/.test(HTML));
+    // ── NOW SCOPED BY THE LENS (2026-11-05) ──────────────────────────
+    // This matched one exact source line. The link gained a second shape
+    // when the supplier lens landed: a supplier ROW asks by supplier, and
+    // passing container=<supplier name> would come back empty with nothing
+    // on screen saying why. The property is that it asks for the right
+    // ONE, which is checked for real — rendered, not matched — in
+    // tests/claims-lenses.js section B.
+    ck('a container report is still scoped to the container and its supplier',
+       /\/api\/claims\/report\?container=' \+ encodeURIComponent\(g\.container \|\| g\.key\)/.test(HTML));
+    ck('  and a supplier row asks by supplier instead',
+       /\/api\/claims\/report\?supplier=' \+ encodeURIComponent\(g\.key\)/.test(HTML));
     ck('every claim shows its next step', /function nextLine/.test(HTML) && /<b>Next:<\/b>/.test(HTML));
     ck('one primary action in the header', (HTML.match(/class="b pri"/g) || []).length === 2 /* header + phone */);
     ck('the old wall of chips is gone', !/class="chip act"/.test(HTML.split('function openNew')[0]));

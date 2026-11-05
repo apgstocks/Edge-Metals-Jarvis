@@ -389,6 +389,18 @@ label.f textarea{height:auto;padding:10px 12px;font-family:var(--font-sans);font
     <div class="search">
       <input id="q" type="search" placeholder="Search container, invoice, customer, supplier" aria-label="Search claims">
     </div>
+    <!-- ── THE LENS (2026-11-05) ──────────────────────────────────────
+         Apsara: "supplier wise claim,datewise etc". Above the tabs rather
+         than beside them because they answer different questions: this one
+         is what a ROW is, the tabs are which rows. Two controls that look
+         alike and mean different things is how the wrong one gets used. -->
+    <div class="tabs" id="groupBy" role="tablist" aria-label="Group the claims by"></div>
+    <div class="search" id="dateRange" style="display:flex; gap:6px; align-items:center;">
+      <input id="from" type="date" aria-label="Claims from this date" style="flex:1">
+      <span style="color:var(--text-faint); font-size:12px;">to</span>
+      <input id="to" type="date" aria-label="Claims up to this date" style="flex:1">
+      <button type="button" class="b sm" id="clearDates" title="Clear the date range">&times;</button>
+    </div>
     <div class="tabs" id="tabs" role="tablist" aria-label="Which claims"></div>
     <div class="rows" id="rows"></div>
   </aside>
@@ -408,7 +420,21 @@ label.f textarea{height:auto;padding:10px 12px;font-family:var(--font-sans);font
    "Not all the container have same kind of claim .. put it into website per
    container basis." */
 const MT = { MT:1, LB:1/2204.62, KG:1/1000 };
-const STATE = { claims:[], stats:{}, kinds:[], sel:null, tab:'needs', q:'' };
+/* ── HOW THE LEFT LIST IS CUT (2026-11-05) ──────────────────────────────
+   Apsara: "rebuild the claim tab to have provision o see open claims,
+   settled,supplier wise claim,datewise etc.."
+
+   Her 2026-09-26 decision above — claims grouped per CONTAINER — is not
+   undone by this and stays the default: open the page and it is the screen
+   she knows. Supplier and month are additional LENSES on the same claims,
+   not a different list, so no claim moves and no card changes.
+
+   `group` picks what a row is. `from`/`to` filter the CLAIMS before they are
+   grouped, so a supplier row's totals are the totals of what is on screen —
+   a row whose figure disagrees with the rows under it is worse than no
+   filter at all. */
+const STATE = { claims:[], stats:{}, kinds:[], sel:null, tab:'needs', q:'',
+                group:'container', from:'', to:'' };
 const $ = (s, root) => (root || document).querySelector(s);
 const esc = (s) => String(s==null?'':s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const money = (n) => (n===null||n===undefined||n==='') ? '—' : '$' + Number(n).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2});
@@ -452,11 +478,44 @@ function compute({ inv, recv, unit, rate, rateUnit }){
 
 /* ── containers ─────────────────────────────────────────────────────────── */
 const containerKey = (c) => String(c.container_no || c.invoice_no || '—').toUpperCase();
+/* The date a claim IS, for grouping and for the range boxes. created_at is
+   when it was typed; claim_date is when it happened, and that is the one she
+   means by "datewise". Falls back so a claim with neither still lands
+   somewhere rather than vanishing from a filtered list. */
+const claimDate = (c) => String(c.claim_date || c.created_at || '').slice(0, 10);
+const monthKey = (c) => { const d = claimDate(c); return d ? d.slice(0, 7) : 'no date'; };
+const supplierKey = (c) => String(c.supplier || '').trim() || 'No supplier named';
+const groupKeyOf = (c) => (STATE.group === 'supplier' ? supplierKey(c)
+                        : STATE.group === 'month' ? monthKey(c)
+                        : containerKey(c));
+
+/* The claims the whole screen is working from, after the date range. Applied
+   HERE and not in visible(), so every total computed below is a total of
+   what she can actually see. */
+function inRange(c){
+  if (!STATE.from && !STATE.to) return true;
+  const d = claimDate(c);
+  if (!d) return false;              // undated cannot be proved inside a range
+  if (STATE.from && d < STATE.from) return false;
+  if (STATE.to && d > STATE.to) return false;
+  return true;
+}
+
 function containers(){
   const map = new Map();
   for (const c of STATE.claims){
-    const k = containerKey(c);
-    if (!map.has(k)) map.set(k, { key:k, container:c.container_no||'', claims:[] });
+    if (!inRange(c)) continue;
+    const k = groupKeyOf(c);
+    if (!map.has(k)) map.set(k, {
+      key:k,
+      /* ONLY a container grouping has a container. Left blank otherwise so
+         nothing downstream can mistake a supplier name for one — the report
+         link and "+ another claim" both read it, and a report fetched for
+         container="Inesh Cores Chapin" would come back empty with no hint
+         why. */
+      container: STATE.group === 'container' ? (c.container_no || '') : '',
+      groupKind: STATE.group,
+      claims:[] });
     map.get(k).claims.push(c);
   }
   for (const g of map.values()){
@@ -473,16 +532,22 @@ function containers(){
   return [...map.values()];
 }
 
+/* 'Open' was already here. 'Settled' is the other half she asked for, and
+   it is deliberately EVERY claim finished rather than ANY — a container with
+   one settled claim and one still being argued is not settled. */
+const CLOSED = ['settled', 'rejected', 'withdrawn'];
 const TABS = [
   { id:'needs',  label:'Needs you' },
-  { id:'multi',  label:'2+ claims' },
   { id:'open',   label:'Open' },
+  { id:'settled',label:'Settled' },
+  { id:'multi',  label:'2+ claims' },
   { id:'all',    label:'All' },
 ];
 function inTab(g){
   if (STATE.tab === 'needs') return g.needs > 0;
   if (STATE.tab === 'multi') return g.claims.length > 1;
-  if (STATE.tab === 'open')  return g.claims.some(c => !['settled','rejected','withdrawn'].includes(c.status));
+  if (STATE.tab === 'open')  return g.claims.some(c => !CLOSED.includes(c.status));
+  if (STATE.tab === 'settled') return g.claims.every(c => CLOSED.includes(c.status));
   return true;
 }
 function visible(){
@@ -674,9 +739,39 @@ function renderStrip(){
   ].map(t => '<div class="kpi ' + t[3] + '"><div class="k">' + t[0] + '</div><div class="v">' + t[1] + '</div><div class="s">' + t[2] + '</div></div>').join('');
 }
 
+const GROUPS = [
+  { id:'container', label:'Container' },
+  { id:'supplier',  label:'Supplier' },
+  { id:'month',     label:'Month' },
+];
+function renderGroupBy(){
+  const bar = $('#groupBy');
+  if (!bar) return;
+  bar.innerHTML = GROUPS.map(gr =>
+    '<button type="button" role="tab" aria-selected="' + (STATE.group===gr.id) + '" data-g="' + gr.id + '" class="' + (STATE.group===gr.id?'sel':'') + '">' + gr.label + '</button>').join('');
+  bar.querySelectorAll('button').forEach(b => b.onclick = () => {
+    if (b.dataset.g === STATE.group) return;
+    STATE.group = b.dataset.g;
+    // The selected row's key only means something inside one grouping —
+    // a container id is not a supplier name. Dropped rather than carried,
+    // or the detail panel keeps showing a group the list no longer has.
+    STATE.sel = null;
+    // '2+ claims' counts claims on one CONTAINER. Under a supplier or a
+    // month it would answer a question nobody asked, so if she is standing
+    // on it when she switches, she lands somewhere that still means
+    // something instead of on an empty list.
+    if (STATE.tab === 'multi' && STATE.group !== 'container') STATE.tab = 'open';
+    renderGroupBy(); renderTabs(); renderRows(); renderDetail();
+  });
+}
+
 function renderTabs(){
   const all = containers();
-  $('#tabs').innerHTML = TABS.map(t => {
+  // '2+ claims' is a container question. Hidden, not disabled, under the
+  // other two lenses — a control that is visible and does nothing is worse
+  // than one that is not there.
+  const tabs = TABS.filter(t => t.id !== 'multi' || STATE.group === 'container');
+  $('#tabs').innerHTML = tabs.map(t => {
     const keep = STATE.tab; STATE.tab = t.id;
     const n = all.filter(inTab).length;
     STATE.tab = keep;
@@ -711,7 +806,14 @@ function renderRows(){
     const amt = g.claimed > 0 ? money(g.claimed) : '—';
     const st = rowStatus(g);
     return '<button type="button" class="prow ' + (STATE.sel===g.key?'sel':'') + '" data-k="' + esc(g.key) + '"' + (STATE.sel===g.key?' aria-current="true"':'') + '>' +
-      '<span class="t"><span class="who">' + esc(g.customer || 'Customer not named') + '</span><span class="amt">' + amt + '</span></span>' +
+      /* The headline on a row is whoever the row is ABOUT: the customer on a
+         container, the supplier or the month on the other two. The key is
+         already printed below, so repeating it here would waste the one line
+         she reads first. (2026-11-05) */
+      '<span class="t"><span class="who">' + esc(
+          g.groupKind === 'supplier' ? g.key
+        : g.groupKind === 'month' ? g.key
+        : (g.customer || 'Customer not named')) + '</span><span class="amt">' + amt + '</span></span>' +
       '<span class="m"><span class="cid">' + esc(g.key) + '</span>' +
         (g.claims.length > 1 ? '<span class="cid">· ' + g.claims.length + ' claims</span>' : '') +
         '<span class="st ' + st[1] + '">' + esc(st[0]) + '</span></span>' +
@@ -1094,9 +1196,23 @@ function claimCard(c, i, g){
 }
 
 function reportMenu(g){
-  const cont = encodeURIComponent(g.container || g.key);
-  const sup = g.suppliers.length === 1 ? '&supplier=' + encodeURIComponent(g.suppliers[0]) : '';
-  const base = '/api/claims/report?container=' + cont + sup;
+  // ── WHAT THIS REPORT IS OF (2026-11-05) ─────────────────────────────
+  // Under the container lens, unchanged: container=<id>, plus the supplier
+  // when there is exactly one.
+  //
+  // Under the SUPPLIER lens the row IS a supplier, and helpers/claims/report
+  // already builds by supplier — so the menu asks for that instead. Passing
+  // container=<supplier name> would have come back empty with nothing on
+  // screen to say why, which is the worst kind of wrong.
+  //
+  // Under the MONTH lens a row is claims from several suppliers, and a
+  // supplier demand addressed to "November" is not a document. The menu is
+  // not drawn at all there — see renderDetail.
+  const sup1 = g.suppliers.length === 1 ? g.suppliers[0] : '';
+  const base = g.groupKind === 'supplier'
+    ? '/api/claims/report?supplier=' + encodeURIComponent(g.key)
+    : '/api/claims/report?container=' + encodeURIComponent(g.container || g.key)
+      + (sup1 ? '&supplier=' + encodeURIComponent(sup1) : '');
   return '<details class="menu"><summary class="b sm" role="button">' + icon('M12 4v11 M7 10l5 5 5-5 M5 20h14') + 'Claim report ▾</summary><div class="pop" style="min-width:300px">' +
     '<a href="' + base + '&format=pdf"><b>Claim report</b> · PDF<span class="sub">For ' + esc(g.suppliers[0] || 'the supplier') + ' — no customer name, no sale prices, no remarks</span></a>' +
     '<a href="' + base + '&format=xlsx">Claim report · Excel<span class="sub">the same lines, for a supplier who argues them one by one</span></a>' +
@@ -1133,11 +1249,26 @@ function renderDetail(){
   }
   d.innerHTML =
     '<div class="chead"><div class="top2"><div><h2>' + esc(g.key) + '</h2>' +
-      '<div class="sub">' + esc(g.customer || 'customer not named') + (g.invoices.length ? ' &nbsp;·&nbsp; ' + esc(g.invoices.join(', ')) : '') +
-        ' &nbsp;·&nbsp; recover from ' + esc(g.suppliers.join(', ') || 'nobody yet') + '</div>' +
+      '<div class="sub">' + (
+        g.groupKind === 'supplier'
+          ? g.claims.length + ' claim' + (g.claims.length === 1 ? '' : 's') + ' against this supplier'
+            + ' &nbsp;·&nbsp; ' + [...new Set(g.claims.map(c => c.container_no).filter(Boolean))].length + ' container(s)'
+        : g.groupKind === 'month'
+          ? g.claims.length + ' claim' + (g.claims.length === 1 ? '' : 's') + ' raised this month'
+            + ' &nbsp;·&nbsp; ' + esc(g.suppliers.join(', ') || 'no supplier named')
+        : esc(g.customer || 'customer not named') + (g.invoices.length ? ' &nbsp;·&nbsp; ' + esc(g.invoices.join(', ')) : '')
+            + ' &nbsp;·&nbsp; recover from ' + esc(g.suppliers.join(', ') || 'nobody yet')
+      ) + '</div>' +
       (g.claims.length > 1 ? '<div class="why3">' + g.claims.length + ' claims on this container. They are rarely the same kind — three different arguments with the customer and three different recoveries from the supplier — so each is worked out on its own.</div>' : '') +
       '</div>' +
-      '<div class="acts">' + reportMenu(g) + '<button type="button" class="b sm" id="addClaim">+ another claim</button></div></div>' +
+      '<div class="acts">' +
+        /* A month is claims from several suppliers; a demand addressed to
+           "November" is not a document, and "+ another claim" would have to
+           invent a container. Both are container-and-supplier actions, so
+           under the month lens the row is for READING. (2026-11-05) */
+        (g.groupKind === 'month' ? '' : reportMenu(g)) +
+        (g.groupKind === 'container' ? '<button type="button" class="b sm" id="addClaim">+ another claim</button>' : '') +
+      '</div></div>' +
       '<div class="csum2">' +
         '<div><div class="k">Claims</div><div class="v">' + g.claims.length + '</div></div>' +
         '<div><div class="k">Customer claimed</div><div class="v">' + money(g.claimed) + '</div></div>' +
@@ -2282,12 +2413,27 @@ async function load(announce){
     ensureDatalists();
     const wide = !(window.matchMedia && window.matchMedia('(max-width:1020px)').matches);
     if (!containers().some(g => g.key === STATE.sel)) STATE.sel = wide ? ((visible()[0] || {}).key || null) : null;
-    renderChips(); renderStrip(); renderTabs(); renderRows(); renderDetail();
+    renderChips(); renderStrip(); renderGroupBy(); renderTabs(); renderRows(); renderDetail();
     if (announce) toast('Up to date.', 'ok');
   } catch (e) { toast('Could not load claims — ' + e.message, 'bad'); }
 }
 
 $('#q').oninput = (e) => { STATE.q = e.target.value; renderRows(); };
+/* The date range. renderTabs() too, not just the rows: the counts beside
+   each tab are counts of what is in range, and a tab reading 7 above a list
+   of 2 is the kind of disagreement she would be right to distrust. */
+function applyDates(){
+  STATE.sel = null;
+  renderTabs(); renderRows(); renderDetail();
+}
+if ($('#from')) $('#from').onchange = (e) => { STATE.from = e.target.value || ''; applyDates(); };
+if ($('#to'))   $('#to').onchange   = (e) => { STATE.to   = e.target.value || ''; applyDates(); };
+if ($('#clearDates')) $('#clearDates').onclick = () => {
+  STATE.from = ''; STATE.to = '';
+  if ($('#from')) $('#from').value = '';
+  if ($('#to')) $('#to').value = '';
+  applyDates();
+};
 $('#fabNew').onclick = () => openNew();
 $('#backList').onclick = () => { document.body.classList.remove('show-detail'); window.scrollTo(0, 0); };
 /* a menu closes when you click away from it, as menus do */

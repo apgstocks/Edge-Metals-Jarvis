@@ -555,6 +555,29 @@ const MUTATIONS = [
       find: "        kind: claimKinds.label(c.claim_type) === 'not classified yet'",
       to:   "        kind: false" },
 
+    // ── THE CLAIM LENSES (2026-11-05) ────────────────────────────────────
+    // Apsara: "open claims,settled,supplier wise claim,datewise etc".
+    { name: 'claims: every lens falls back to grouping by container',
+      file: 'dashboard/claims.html', suites: ['claims-lenses'],
+      find: "const groupKeyOf = (c) => (STATE.group === 'supplier' ? supplierKey(c)",
+      to:   "const groupKeyOf = (c) => (false ? supplierKey(c)" },
+    { name: 'claims: the date range is ignored, so a row totals more than it shows',
+      file: 'dashboard/claims.html', suites: ['claims-lenses'],
+      find: "    if (!inRange(c)) continue;",
+      to:   "    if (false) continue;" },
+    { name: 'claims: Settled counts a container with ANY claim finished',
+      file: 'dashboard/claims.html', suites: ['claims-lenses'],
+      find: "  if (STATE.tab === 'settled') return g.claims.every(c => CLOSED.includes(c.status));",
+      to:   "  if (STATE.tab === 'settled') return g.claims.some(c => CLOSED.includes(c.status));" },
+    { name: 'claims: a supplier demand is fetched by container name again',
+      file: 'dashboard/claims.html', suites: ['claims-lenses'],
+      find: "  const base = g.groupKind === 'supplier'",
+      to:   "  const base = false" },
+    { name: 'claims: switching the lens keeps a key that means nothing there',
+      file: 'dashboard/claims.html', suites: ['claims-lenses'],
+      find: "    STATE.sel = null;\n    // '2+ claims' counts claims on one CONTAINER.",
+      to:   "    // '2+ claims' counts claims on one CONTAINER." },
+
     // ── A SAVED LOAD'S DRAFT IS SPENT (2026-11-05) ───────────────────────
     // Apsara: "as soon as it is created,it is appearing in purchase" — the
     // sale filed correctly and its DRAFT stayed, showing in the strip above

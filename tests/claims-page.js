@@ -108,8 +108,20 @@ console.log('\n=== E — the page is organised per CONTAINER, not per row ===');
     // All three helpers are single-line declarations in the page; a [^;]+
     // pattern truncates numOf at its first inner semicolon and the sandbox then
     // fails to parse, which is how this test lied about itself once already.
+    // ── THE SANDBOX MUST CARRY WHAT containers() NOW REACHES FOR ────────
+    // It grew three dependencies on 2026-11-05 when the lenses landed:
+    // groupKeyOf (which of container/supplier/month a row is) and inRange
+    // (the date filter), plus the three keyers groupKeyOf itself calls.
+    // Missing them, the sandbox parsed, ran, and threw "inRange is not
+    // defined" — the test CRASHED rather than failing, which is the shape
+    // that reads as "no totals printed" and tells you nothing.
     const parts = [
         js.match(/^const containerKey = .*$/m),
+        js.match(/^const claimDate = .*$/m),
+        js.match(/^const monthKey = .*$/m),
+        js.match(/^const supplierKey = .*$/m),
+        js.match(/^const groupKeyOf = [\s\S]*?containerKey\(c\)\);$/m),
+        js.match(/^function inRange\(c\)\{[\s\S]*?^\}$/m),
         js.match(/^const numOf = .*$/m),
         js.match(/^const kindLabel = .*$/m),
         js.match(/^function containers\(\)\{[\s\S]*?^\}$/m),
@@ -117,7 +129,7 @@ console.log('\n=== E — the page is organised per CONTAINER, not per row ===');
     ck('the page still declares its per-container grouping', parts.every(Boolean), parts.map((p) => !!p));
     let containers = null, box = null;
     if (parts.every(Boolean)) {
-        box = { console, STATE: { labels: {} } };
+        box = { console, STATE: { labels: {}, group: 'container', from: '', to: '' } };
         vm.createContext(box);
         vm.runInContext(parts.map((p) => p[0]).join('\n') + '\nglobalThis.__c = containers;', box);
         containers = box.__c;
