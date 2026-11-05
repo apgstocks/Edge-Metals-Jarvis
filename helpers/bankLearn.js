@@ -151,9 +151,44 @@ function resolverFrom(aliases, customers) {
         const name = payeeOf(descriptor);
         if (!name) return null;
         const k = normalizeName(name);
-        if (!k || k === whole) return null;
-        if (byKey.has(k)) return byKey.get(k);
-        if (byName.has(k)) return byName.get(k) || null;
+        if (!k) return null;
+        if (k !== whole) {
+            if (byKey.has(k)) return byKey.get(k);
+            if (byName.has(k)) return byName.get(k) || null;
+        }
+
+        // ── THE BANK TRUNCATES THE NAME, AND THAT IS NOT A NEAR MISS ─────
+        // Apsara, shown a line she still had to confirm: "still bad".
+        //
+        //   ALEE METAL TRADI   <- what the bank printed
+        //   A.LEE METAL TRADING <- what she calls them
+        //
+        // Banks cut the payee at a fixed width. The read name is then a
+        // PREFIX of the real one, which is a different thing from the
+        // near-miss helpers/nameMatch.js refuses — that refusal is about
+        // two companies looking alike, and it still stands below.
+        //
+        // THREE CONDITIONS, ALL REQUIRED, because this decides where her
+        // money is allocated:
+        //   1. EXACTLY ONE ledger name starts with what was read. Two and
+        //      it is ambiguous, which is the danger nameMatch names, and
+        //      she is asked.
+        //   2. At least 8 characters were read. "AJ" must never select
+        //      "AJAX TRADING" — the same instinct bankLearn's own comment
+        //      records, with a mechanism that cannot wave a long generic
+        //      name through.
+        //   3. It is a prefix, not a fuzzy distance. A cut name shares its
+        //      whole beginning; nothing else qualifies.
+        //
+        // Reversible in one block if she wants only exact matching back.
+        if (k.length >= 8) {
+            const starts = [];
+            for (const [nk, who] of byName) {
+                if (who && nk.startsWith(k)) starts.push(who);
+            }
+            const uniq = [...new Set(starts)];
+            if (uniq.length === 1) return uniq[0];
+        }
         return null;
     };
 }
@@ -184,7 +219,28 @@ function resolverFrom(aliases, customers) {
 const partyName = require('./partyName');
 
 function suggestParty(descriptor, customers) {
-    const d = String(descriptor || '');
+    // ── SEARCH THE NAME, NOT THE WHOLE LINE (2026-11-05) ─────────────────
+    // Apsara, shown "could be Edge Metals Recycling or A.LEE METAL TRADING":
+    // "How can it assume its edge recycling?"
+    //
+    // It did not assume. It matched substrings over the WHOLE descriptor,
+    // and an ACH line carries INDN: — the RECEIVER, which is Edge itself:
+    //
+    //   ALEE METAL TRADI DES:ACH Pmt ID:XXXXX81012 INDN:Edge Metal Inc. ...
+    //
+    // So her own company was in the haystack on EVERY incoming payment, and
+    // a clear answer became "too close to call". Searching the name
+    // helpers/bankPayee.js reads instead leaves exactly one candidate.
+    //
+    // Falls back to the raw text when no name can be read, so a descriptor
+    // this cannot parse still gets the old, wider search rather than none.
+    // ONE thing is removed: the value of INDN:, which on a deposit is the
+    // RECEIVER — Edge itself. Searching the whole line put her own company
+    // in the haystack on every incoming payment. Prose and every other
+    // field stay, because two companies in one description must BOTH be
+    // offered and some banks print the name after the first marker.
+    const { withoutSelfFields } = require('./bankPayee');
+    const d = withoutSelfFields(descriptor);
     if (!d.trim()) return [];
     const hits = [];
     for (const c of (customers || [])) {

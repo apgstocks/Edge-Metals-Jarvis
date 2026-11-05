@@ -218,4 +218,50 @@ function wasTrimmed(descriptor) {
     return !!name && name.toLowerCase() !== raw.toLowerCase();
 }
 
-module.exports = { payeeOf, wasTrimmed, MARKERS, LEAD_INS };
+// ── FOR THE SUGGESTER, WHICH NEEDS THE PROSE BUT NOT EDGE'S OWN NAME ─────
+// Apsara, shown "could be Edge Metals Recycling or A.LEE METAL TRADING":
+//   "How can it assume its edge recycling?"
+//
+// It never assumed. On an ACH deposit the bank prints INDN: — the RECEIVER,
+// which is Edge — and suggestParty searched the WHOLE descriptor, so her own
+// company sat in the haystack on every incoming payment she has ever had.
+//
+// ── WHY NOT JUST USE payeeOf, WHICH I TRIED FIRST ────────────────────────
+// payeeOf answers "the ONE counterparty" and therefore trims: it cuts at the
+// first connective and strips lead-ins. Two existing checks caught that:
+//   * 'TRANSFER CUSTOM ALLOYS VIA ZIMEX FREIGHT' names TWO real companies,
+//     and tests/bank-learn.js has always insisted both are offered —
+//     "hiding the second would make a coin flip look certain";
+//   * 'WIRE TYPE:WIRE IN FROM CUSTOM ALLOYS LLC' carries its name AFTER the
+//     first marker, so cutting at the marker threw the name away entirely.
+// Both of those are the suggester's job to get right, and payeeOf is the
+// wrong tool for it.
+//
+// So this removes exactly ONE thing: the value of a self-identifying field.
+// Prose is untouched, every other field is untouched, and the only name that
+// disappears is the one the bank put there to say who was paid.
+const SELF_FIELDS = ['INDN:', 'IND NAME:', 'BNF:'];
+
+function withoutSelfFields(descriptor) {
+    let raw = String(descriptor == null ? '' : descriptor).replace(/\s+/g, ' ').trim();
+    if (!raw) return '';
+    const up = () => raw.toUpperCase();
+    for (const f of SELF_FIELDS) {
+        let at = up().indexOf(f);
+        while (at !== -1) {
+            // The field's value runs to the next marker, or to the end.
+            const after = at + f.length;
+            let stop = raw.length;
+            const tailUp = up().slice(after);
+            for (const m of MARKERS) {
+                const i = tailUp.indexOf(m);
+                if (i !== -1 && after + i < stop) stop = after + i;
+            }
+            raw = (raw.slice(0, at) + ' ' + raw.slice(stop)).replace(/\s+/g, ' ').trim();
+            at = up().indexOf(f);
+        }
+    }
+    return raw;
+}
+
+module.exports = { payeeOf, wasTrimmed, withoutSelfFields, MARKERS, LEAD_INS };

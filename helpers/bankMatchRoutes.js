@@ -152,7 +152,7 @@ function mount(app, cfg) {
     // Read-only. Everything the screen needs in one call, because a screen
     // that needs four calls to show one list is a screen that shows a
     // half-populated list while two of them are still in flight.
-    app.get('/api/bank/match', (req, res) => {
+    app.get('/api/bank/match', async (req, res) => {
         try {
             const sales = require('./sales');
             const receipts = require('./salesReceipts');
@@ -288,6 +288,51 @@ function mount(app, cfg) {
                 if (r.outcome === 'no_party') {
                     r.suggestions = bankLearn.suggestParty(r.deposit.descriptor, customers);
                 }
+            }
+
+            // ── WHERE THE STRINGS RUN OUT, THE AI READS ──────────────────
+            // Apsara, 2026-11-05: "dont just use pattern matching,if its
+            // unable to answer,let jarvis ai answers".
+            //
+            // Everything above is exact string work and runs FIRST, always:
+            // her aliases, the payee parser, partyName's generic-word list,
+            // nameMatch's refusal of near misses. It is free, auditable, and
+            // it is what she has spent weeks teaching. The AI is only asked
+            // about the rows that beat it — nothing found (0 suggestions) or
+            // a genuine tie (2+). A row the strings answered on its own is
+            // not sent anywhere.
+            //
+            // helpers/bankAI.js cannot name a company: it hands the model a
+            // NUMBERED list of her own customers and takes back an index, so
+            // the worst it can produce is the wrong one of HER names, as a
+            // suggestion she clicks to confirm. Nothing here matches, writes
+            // or aliases, and the reason rides along so she can check it in
+            // two seconds instead of reading 160 characters of ACH.
+            try {
+                const needHelp = out.rows.filter((r) => r.outcome === 'no_party'
+                    && (r.suggestions || []).length !== 1);
+                if (needHelp.length) {
+                    const bankAI = require('./bankAI');
+                    const got = await bankAI.identifyParties(
+                        needHelp.map((r) => ({ id: r.deposit.id,
+                            descriptor: r.deposit.descriptor, amount: r.deposit.amount })),
+                        customers,
+                        { callGemini: bankAI.geminiCaller() });
+                    for (const r of needHelp) {
+                        const hit = got.get(r.deposit.id);
+                        if (!hit) continue;
+                        r.ai_suggestion = hit;
+                        // Appended, never substituted: when the strings
+                        // offered two names, both stay on the row and the
+                        // AI's reading is a third line with a reason, not a
+                        // decision taken on her behalf.
+                        r.suggestions = [...(r.suggestions || []), hit];
+                    }
+                }
+            } catch (e) {
+                // A model that is down, slow or out of quota costs her the
+                // help and nothing else. The row is the question it was.
+                console.warn('[BANK] AI party reading unavailable: ' + (e && e.message));
             }
 
             // ── A SHORT PAYMENT THAT LOOKS LIKE HER CUSTOMER'S CLAIM ─────

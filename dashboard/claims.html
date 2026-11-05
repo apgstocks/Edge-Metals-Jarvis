@@ -395,6 +395,9 @@ label.f textarea{height:auto;padding:10px 12px;font-family:var(--font-sans);font
          is what a ROW is, the tabs are which rows. Two controls that look
          alike and mean different things is how the wrong one gets used. -->
     <div class="tabs" id="groupBy" role="tablist" aria-label="Group the claims by"></div>
+    <!-- Said on the page, not in a toast: a half-drawn screen that looks
+         finished is the fault she reported three times. -->
+    <div id="paintErr" style="display:none;margin:8px 10px;padding:8px 10px;border:1px solid var(--amber-600,#9a6b00);border-radius:6px;background:rgba(154,107,0,.12);color:var(--text-strong,#fff);font-size:12px"></div>
     <div class="search" id="dateRange" style="display:flex; gap:6px; align-items:center;">
       <input id="from" type="date" aria-label="Claims from this date" style="flex:1">
       <span style="color:var(--text-faint); font-size:12px;">to</span>
@@ -2413,9 +2416,46 @@ async function load(announce){
     ensureDatalists();
     const wide = !(window.matchMedia && window.matchMedia('(max-width:1020px)').matches);
     if (!containers().some(g => g.key === STATE.sel)) STATE.sel = wide ? ((visible()[0] || {}).key || null) : null;
-    renderChips(); renderStrip(); renderGroupBy(); renderTabs(); renderRows(); renderDetail();
+    paint();
     if (announce) toast('Up to date.', 'ok');
   } catch (e) { toast('Could not load claims — ' + e.message, 'bad'); }
+}
+
+/* ── ONE RENDER FAILURE MUST NOT TAKE THE CONTROLS WITH IT ───────────────
+   Apsara, 2026-11-05, on the live page: "Also here there is no open,group
+   by etc.." — the third report on this screen.
+
+   The six renders used to be one statement:
+
+       renderChips(); renderStrip(); renderGroupBy(); renderTabs(); ...
+
+   so a throw in ANY of them silently skipped every one after it, and the
+   only trace was a toast that fades. That is how a page ends up with its
+   stat cards and its detail pane populated and its Group-by and Open/Settled
+   bars empty, and why I could not tell from a screenshot which function had
+   actually failed.
+
+   Each one now runs on its own and says SO ON THE PAGE if it fails, naming
+   itself. Six independent renders instead of one chain: a broken strip costs
+   the strip, not the navigation. */
+function paint(){
+  const steps = [['chips', renderChips], ['strip', renderStrip],
+                 ['group-by', renderGroupBy], ['tabs', renderTabs],
+                 ['rows', renderRows], ['detail', renderDetail]];
+  const broke = [];
+  for (const [name, fn] of steps) {
+    try { fn(); } catch (e) { broke.push(name + ': ' + (e && e.message || e)); }
+  }
+  // Not a toast. A toast for this fades before she can read it, and the
+  // whole problem has been that a half-drawn page looks like a finished one.
+  const box = $('#paintErr');
+  if (box) {
+    box.style.display = broke.length ? 'block' : 'none';
+    box.textContent = broke.length
+      ? 'Part of this page did not draw — ' + broke.join(' · ') + '. Everything else below is still correct.'
+      : '';
+  }
+  if (broke.length) console.error('[claims] render failed:', broke);
 }
 
 $('#q').oninput = (e) => { STATE.q = e.target.value; renderRows(); };
@@ -2440,6 +2480,18 @@ $('#backList').onclick = () => { document.body.classList.remove('show-detail'); 
 document.addEventListener('click', (e) => {
   document.querySelectorAll('details.menu[open]').forEach(m => { if (!m.contains(e.target)) m.open = false; });
 });
+
+/* ── THE CONTROLS ARE NOT DATA ───────────────────────────────────────────
+   Group-by and the Open/Settled tabs were drawn only inside load(), AFTER
+   /api/claims answered. So a slow, failed or half-successful fetch left the
+   page with its navigation missing and no explanation — the shape of fault
+   Apsara has now reported three times.
+
+   They do not depend on the claims: GROUPS is a fixed list of three, and the
+   tabs are a fixed list whose only data-dependent part is the count beside
+   each label. Drawn immediately, with zero counts, then redrawn with real
+   ones the moment the data lands. */
+try { renderGroupBy(); renderTabs(); } catch (e) { console.error('[claims] chrome:', e); }
 load();
 </script>
 <!-- The app's sidebar on this page too (Apsara 2026-10-08: "i want the sidebar to appear in all pages").

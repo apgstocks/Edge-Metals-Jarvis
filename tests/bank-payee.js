@@ -168,6 +168,45 @@ section('E — the guard that must not have moved');
        'every alias she already created must keep working');
 }
 
+// ══════════════════════════════════════════════════════════════════════════
+section('F — her own company is not a candidate, and a cut name resolves');
+// ══════════════════════════════════════════════════════════════════════════
+// Apsara, shown "could be Edge Metals Recycling or A.LEE METAL TRADING":
+// "How can it assume its edge recycling?" — then "still bad".
+{
+    const CUT = 'ALEE METAL TRADI DES:ACH Pmt ID:XXXXX81012 INDN:Edge Metal Inc. CO ID:XXXXX02235 CCD';
+    const names = ['Edge Metals Recycling', 'A.LEE METAL TRADING', 'Taewon', 'AJAX TRADING'];
+
+    // It never assumed. An ACH line carries INDN: — the RECEIVER, Edge
+    // itself — and the suggester searched the WHOLE line, so her own
+    // company was in the haystack on every incoming payment.
+    const hints = bankLearn.suggestParty(CUT, names).map((h) => h.customer);
+    ck('her own company is no longer offered as the payer',
+       !hints.includes('Edge Metals Recycling'), JSON.stringify(hints));
+    ck('  leaving exactly the one it really is',
+       JSON.stringify(hints) === JSON.stringify(['A.LEE METAL TRADING']), JSON.stringify(hints));
+
+    // ── A CUT NAME IS NOT A NEAR MISS ────────────────────────────────────
+    const resolve = bankLearn.resolverFrom([], names);
+    ck('a name the bank truncated resolves on its own',
+       resolve(CUT) === 'A.LEE METAL TRADING', JSON.stringify(resolve(CUT)));
+
+    // The three conditions, each proved to matter.
+    ck('  two companies sharing the cut prefix are NOT chosen between',
+       bankLearn.resolverFrom([], ['ALEE METAL TRADING LLC', 'ALEE METAL TRADING INC'])(CUT) === null,
+       'ambiguity is the danger nameMatch.js names, and she is asked');
+    ck('  a short name can never select a long one',
+       resolve('AJ DES:ACH ID:1') === null,
+       '"AJ" must not pick AJAX TRADING — fewer than 8 characters read');
+    ck('  and it is a prefix, not a fuzzy distance',
+       bankLearn.resolverFrom([], ['TAEWON METALS'])('WAEWON METALS DES:ACH ID:1') === null,
+       'one letter different is a different company, not a cut one');
+
+    // A full exact name still resolves, as it always did.
+    ck('an exact name is unaffected', resolve('TAEWON DES:ACH ID:1') === 'Taewon',
+       JSON.stringify(resolve('TAEWON DES:ACH ID:1')));
+}
+
 console.log(`\n  ${pass} passed, ${fail} failed`);
 if (fail) { console.log('FAILED:'); failures.forEach((f) => console.log('  - ' + f)); process.exit(1); }
 })();
