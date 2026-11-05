@@ -578,6 +578,45 @@ const MUTATIONS = [
       find: "    STATE.sel = null;\n    // '2+ claims' counts claims on one CONTAINER.",
       to:   "    // '2+ claims' counts claims on one CONTAINER." },
 
+    // ── THE NAME, NOT THE WHOLE BANK LINE (2026-11-05) ───────────────────
+    // Apsara: "why my jarvis was not able to identify that?" / "Jarvis
+    // should able to identify everytgibg".
+    { name: 'bank: the resolver goes back to matching the whole descriptor',
+      file: 'helpers/bankLearn.js', suites: ['bank-payee'],
+      find: "        const name = payeeOf(descriptor);",
+      to:   "        const name = '';" },
+    { name: 'bank: an alias she created the old way stops working',
+      file: 'helpers/bankLearn.js', suites: ['bank-payee'],
+      find: "        if (whole) {\n            if (byKey.has(whole)) return byKey.get(whole);",
+      to:   "        if (false) {\n            if (byKey.has(whole)) return byKey.get(whole);" },
+    { name: 'bank: INDN (Edge itself) is read as the payer',
+      file: 'helpers/bankPayee.js', suites: ['bank-payee'],
+      find: "    'ORIG:', 'BNF:', 'OBI:', 'FROM:', 'PAYER:', 'PAYEE:', 'MERCHANT:'];",
+      to:   "    'ORIG:', 'BNF:', 'OBI:', 'FROM:', 'PAYER:', 'PAYEE:', 'MERCHANT:', 'INDN:'];" },
+    { name: 'bank: a half-parsed fragment is handed to the matcher',
+      file: 'helpers/bankPayee.js', suites: ['bank-payee'],
+      find: "    if (/[:]/.test(name)) return '';",
+      to:   "    /* no refusal */" },
+    { name: 'bank: a bank fee is offered as a company',
+      file: 'helpers/bankPayee.js', suites: ['bank-payee'],
+      find: "    if (NOT_A_PARTY.some((w) => U === w || U.startsWith(w + ' '))) return '';",
+      to:   "    /* no refusal */" },
+    { name: 'bank: the ask goes back to quoting the whole line',
+      file: 'helpers/bankMatch.js', suites: ['bank-payee'],
+      // Re-pointed 2026-11-05: payeeOf is INJECTED now, not imported —
+      // helpers/bankMatch.js requires nothing by design and two suites
+      // assert it. Importing it was my break, not a change of intent.
+      find: "        const read = readPayee ? readPayee(deposit.descriptor) : '';",
+      to:   "        const read = '';" },
+    { name: 'bank: the suggestion it already computed is thrown away again',
+      file: 'helpers/bankMatch.js', suites: ['bank-payee'],
+      find: "        const hints = (opts.suggestParty ? opts.suggestParty(deposit.descriptor) : null) || [];",
+      to:   "        const hints = [];" },
+    { name: 'bank: two near-equal candidates get resolved to the first',
+      file: 'helpers/bankMatch.js', suites: ['bank-payee'],
+      find: "            : hints.length > 1",
+      to:   "            : false" },
+
     // ── A SAVED LOAD'S DRAFT IS SPENT (2026-11-05) ───────────────────────
     // Apsara: "as soon as it is created,it is appearing in purchase" — the
     // sale filed correctly and its DRAFT stayed, showing in the strip above
@@ -4048,8 +4087,11 @@ const MUTATIONS = [
     //   { name: 'books: neither tab shows which page you are on' }
     { name: 'portal: a page stops reaching the other accounting pages',
       file: 'dashboard/accounting.js', suites: ['accounting-portal'],
-      find: "        { id: 'migration', label: 'Migration',    href: '/quickbooks', adminOnly: false,",
-      to:   "        { id: 'XXmigration', label: 'Migration',    href: '/quickbooks-DEAD', adminOnly: false," },
+      // Re-pointed 2026-11-05: the tab was renamed Migration -> QuickBooks
+      // after Apsara asked what happened to the assistant on that page. The
+      // property is unchanged — the row must still reach /quickbooks.
+      find: "        { id: 'migration', label: 'QuickBooks',  href: '/quickbooks', adminOnly: false,",
+      to:   "        { id: 'XXmigration', label: 'QuickBooks',  href: '/quickbooks-DEAD', adminOnly: false," },
     { name: 'portal: no tab is marked, so every one looks unselected',
       file: 'dashboard/accounting.js', suites: ['accounting-portal'],
       find: "            + ` class=\"${t.id === here ? 'on' : ''}",

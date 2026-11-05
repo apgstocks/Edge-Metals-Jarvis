@@ -73,8 +73,14 @@
           hint: 'Rules, drift, between your companies' },
         { id: 'reports',   label: 'Reports',      href: '/books', adminOnly: false,
           hint: 'P&L, balance sheet, trial balance, CPA pack' },
-        { id: 'migration', label: 'Migration',    href: '/quickbooks', adminOnly: false,
-          hint: 'QuickBooks parity and cutover — this tab goes away when QuickBooks does' },
+        // ── NAMED FOR THE WRONG HALF, FIXED 2026-11-05 ───────────────
+        // Apsara: "what happens to our assistant which mimicked intuit
+        // intelligence". Nothing — but I had hidden it. That page carries
+        // the Ask box (/api/qb/ask) and the nightly qbAgent as well as the
+        // parity and cutover tools, and 'Migration' named only the half
+        // with an end date. The Ask box is the half she wants to KEEP.
+        { id: 'migration', label: 'QuickBooks',  href: '/quickbooks', adminOnly: false,
+          hint: 'Ask, parity and cutover — the migration tools go when QuickBooks does, the assistant does not' },
     ];
 
     const script = document.currentScript

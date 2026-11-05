@@ -225,8 +225,42 @@ function matchDeposit(deposit, openDocs, opts = {}) {
         // resolves to the wrong company, and here that would allocate real
         // money to the wrong customer's invoice. One question, answered once,
         // becomes an alias that matches exactly forever after.
-        return { ...base, outcome: 'no_party',
-            note: `nothing in the ledger is named "${String(deposit.descriptor || '').trim() || '(no description)'}" — name it once and every future deposit from them matches itself` };
+        // ── ASK WELL, OR DO NOT CALL IT ASKING (2026-11-05) ─────────────
+        // Apsara: "IF it find any difficulty,it should have asked for my
+        // help rather than neglecting or sitting dle". It DID ask — and the
+        // ask was useless. It quoted all 160 characters of a bank line,
+        // payment id and PO number included, and promised "name it once and
+        // every future deposit from them matches itself", which was false
+        // while the alias was keyed on that whole line.
+        //
+        // Now it says the NAME it read, and offers what it already worked
+        // out. suggestParty had the answer the whole time and nothing put it
+        // on screen.
+        // INJECTED, like resolveParty above — this file requires nothing, and
+        // tests/bank-not-trade.js and tests/bank-match.js both assert that.
+        // I imported helpers/bankPayee here first and broke the rule the
+        // file's own header states. The caller supplies it; with no reader
+        // the note degrades to quoting the line, which is what it did
+        // before, rather than throwing.
+        const readPayee = typeof opts.payeeOf === 'function' ? opts.payeeOf : null;
+        const read = readPayee ? readPayee(deposit.descriptor) : '';
+        const hints = (opts.suggestParty ? opts.suggestParty(deposit.descriptor) : null) || [];
+        const shown = read || String(deposit.descriptor || '').trim() || '(no description)';
+        const note = hints.length === 1
+            ? `looks like ${hints[0].customer} — ${hints[0].basis}. Confirm it once and every deposit from them matches itself.`
+            : hints.length > 1
+                ? `could be ${hints.slice(0, 3).map((h) => h.customer).join(' or ')} — too close to call, so nothing was assumed. Pick one and it is remembered.`
+                // No reader injected at all -> the sentence this file has
+                // always printed, quoting the line. A reader that LOOKED and
+                // found no name is a different answer and says so: that is
+                // the line she has to name by hand, and pretending it is the
+                // same as an unknown company would send her looking for a
+                // customer that does not exist.
+                : (read || !readPayee)
+                    ? `nothing in the ledger is named "${shown}" — name it once and every future deposit from them matches itself`
+                    : `this line carries no company name Jarvis can read, so it has to be named by hand`;
+        return { ...base, outcome: 'no_party', read_as: read || null,
+            suggestions: hints.slice(0, 3), note };
     }
 
     const patterns = patternsFor(party) || null;

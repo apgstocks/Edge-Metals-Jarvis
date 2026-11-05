@@ -273,6 +273,11 @@ function mount(app, cfg) {
             const out = bankMatch.matchStatement({
                 deposits, openDocs: docs,
                 resolveParty,
+                // Supplied, not imported by bankMatch — that file requires
+                // nothing by design. These two are what let it name a
+                // company off a bank line instead of asking every time.
+                payeeOf: require('./bankPayee').payeeOf,
+                suggestParty: (d) => bankLearn.suggestParty(d, customers),
                 patternsFor: (party) => patterns[party] || null,
             });
 

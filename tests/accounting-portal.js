@@ -76,15 +76,19 @@ section('B — all four pages are reachable, under QuickBooks\' own order');
        JSON.stringify(hrefs(w)) === JSON.stringify(['/workspace', '/bank-match', '/books', '/quickbooks']),
        JSON.stringify(hrefs(w)));
     ck('  Banking is first, as it is in QuickBooks', labels(w)[0] === 'Banking', labels(w).join(' '));
-    ck('  Reports comes before the QuickBooks tab', labels(w).indexOf('Reports') < labels(w).indexOf('Migration'),
+    ck('  Reports comes before the QuickBooks tab', labels(w).indexOf('Reports') < labels(w).indexOf('QuickBooks'),
        labels(w).join(' '));
     // Not "QuickBooks". It is the one tab with an end date (#176 is about
     // proving parity so QuickBooks can LEAVE), and naming it QuickBooks
     // would make it look permanent.
-    ck('  the QuickBooks tab is named Migration, not QuickBooks',
-       labels(w).includes('Migration') && !labels(w).includes('QuickBooks'), labels(w).join(' '));
-    ck('  and says so when you hover it',
-       /goes away when QuickBooks does/.test(
+    // RENAMED 2026-11-05. 'Migration' named only the half with an end
+    // date; the same page carries the Ask box and the nightly agent, which
+    // is the half she wants kept. Apsara: "what happens to our assistant
+    // which mimicked intuit intelligence".
+    ck('  the tab is named QuickBooks, for everything on that page',
+       labels(w).includes('QuickBooks') && !labels(w).includes('Migration'), labels(w).join(' '));
+    ck('  and the hover says which half has an end date',
+       /migration tools go when QuickBooks does, the assistant does not/.test(
            w.document.querySelector('#jvAcctTabs a[data-acct="migration"]').getAttribute('title')));
 }
 
@@ -117,8 +121,8 @@ section('D — the four rows disagreed about who could see them');
     ck('a non-admin does NOT get the raw bank tabs',
        !labels(staff).includes('Banking') && !labels(staff).includes('Reconcile'),
        labels(staff).join(' '));
-    ck('  but keeps Reports and Migration, which were open to everyone',
-       labels(staff).includes('Reports') && labels(staff).includes('Migration'),
+    ck('  but keeps Reports and QuickBooks, which were open to everyone',
+       labels(staff).includes('Reports') && labels(staff).includes('QuickBooks'),
        labels(staff).join(' '));
     ck('  and still gets a usable strip, not an empty bar', labels(staff).length === 2,
        labels(staff).join(' '));

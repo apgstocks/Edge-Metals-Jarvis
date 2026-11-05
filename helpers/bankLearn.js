@@ -118,9 +118,40 @@ function resolverFrom(aliases, customers) {
         if (byName.has(k) && byName.get(k) !== c) byName.set(k, null);
         else if (!byName.has(k)) byName.set(k, c);
     }
+    // ── THE NAME, NOT THE WHOLE LINE (2026-11-05) ────────────────────────
+    // Apsara: "why my jarvis was not able to identify that?" — a deposit
+    // whose line began "ARIS ENTERPRISES DES:ACH Pmt ID:XXXXX620487 ...".
+    //
+    // This normalised the WHOLE descriptor and looked for a ledger name
+    // equal to it. Nothing is called
+    // "arisenterprisesdesachpmtidxxxxx620487indnedgemetalinc..." so it found
+    // nothing and asked her. The company name was the first two words.
+    //
+    // Worse, the alias she would then create was keyed on that same full
+    // line — payment id and PO number included — so the NEXT ARIS payment,
+    // carrying a different payment id, missed again. The screen promised
+    // "name it once and every future deposit from them matches itself" and
+    // that promise was false. Proven by changing only the reference on a
+    // second line: with the alias in place it still resolved to null.
+    //
+    // helpers/bankPayee.js reads the counterparty out of the bank's own
+    // field markers. That is PARSING, not the near-miss guessing
+    // nameMatch.js refuses to do — what comes out is still matched exactly,
+    // and an unparseable line still returns null and still asks her.
+    //
+    // The full-line key is tried FIRST so every alias she has already
+    // created keeps working untouched.
+    const { payeeOf } = require('./bankPayee');
     return (descriptor) => {
-        const k = normalizeName(descriptor);
-        if (!k) return null;
+        const whole = normalizeName(descriptor);
+        if (whole) {
+            if (byKey.has(whole)) return byKey.get(whole);
+            if (byName.has(whole)) return byName.get(whole) || null;
+        }
+        const name = payeeOf(descriptor);
+        if (!name) return null;
+        const k = normalizeName(name);
+        if (!k || k === whole) return null;
         if (byKey.has(k)) return byKey.get(k);
         if (byName.has(k)) return byName.get(k) || null;
         return null;
