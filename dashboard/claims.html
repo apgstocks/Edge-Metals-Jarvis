@@ -761,7 +761,41 @@ function renderStrip(){
       '<button type="button" class="b sm" id="showMe">Show me</button></div>'
     : '<div class="wait ok"><div style="display:flex;align-items:center;gap:12px"><span class="dot"></span><strong>Nothing is waiting on you</strong><span class="what">every claim has been assessed and every recovery raised</span></div></div>';
   const sm = $('#showMe');
-  if (sm) sm.onclick = () => { STATE.tab = 'needs'; renderTabs(); renderRows(); const first = visible()[0]; if (first) pickContainer(first.key); };
+  // ── "Show me" HAS TO SHOW (2026-11-05) ───────────────────────────────
+  // Apsara: "if something waiting on me,when i click show me-it has to
+  // show".
+  //
+  // It used to set the tab to Needs-you and nothing else. But the BANNER
+  // counts from STATE.stats — the server's figure over EVERY claim — while
+  // the LIST is filtered by the search box and the date range. So a stray
+  // search term, or a date range covering one day, leaves her looking at an
+  // empty list under a banner promising 22 things. The button is a promise
+  // the page could not keep.
+  //
+  // It now clears what can hide them. That is the whole point of the
+  // control: she is not asking to filter, she is asking to be SHOWN.
+  if (sm) sm.onclick = () => {
+    STATE.q = '';    if ($('#q')) $('#q').value = '';
+    STATE.from = ''; if ($('#from')) $('#from').value = '';
+    STATE.to = '';   if ($('#to')) $('#to').value = '';
+    STATE.tab = 'needs';
+    // Not opened — "Just let the user do what he wants" (2026-11-05). She
+    // asked to be shown WHAT is waiting, which is the list; which one to
+    // work on is still hers to pick.
+    STATE.sel = null;
+    renderTabs(); renderRows(); renderDetail();
+    const n = visible().length;
+    if (!n) {
+      // The banner and the list now disagree with NOTHING filtering them,
+      // which is a real fault and not something to leave her staring at an
+      // empty list over.
+      toast('The banner counts ' + todo + ', but no claim on this page matches. '
+          + 'That is a disagreement worth reporting.', 'bad');
+    } else {
+      const rows = $('#rows');
+      if (rows && rows.scrollIntoView) rows.scrollIntoView({ block: 'nearest' });
+    }
+  };
   $('#strip').innerHTML = [
     ['Customers claimed', money(s.claimed), (s.containers||0) + ' containers · ' + (s.total||0) + ' claims', ''],
     ['Got back from suppliers', money(s.recovered), (s.recovery_rate||0) + '% of what was claimed', 'got'],

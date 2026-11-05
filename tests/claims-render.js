@@ -173,8 +173,15 @@ section('D — no function the page calls is declared outside the scope it reads
             w.matchMedia = () => ({ matches: false, addListener() {}, removeListener() {} });
             w.scrollTo = () => {};
             w.fetch = () => Promise.resolve({ ok: true, status: 200, headers: { get: () => 'application/json' },
-                json: () => Promise.resolve({ claims: rows, stats: {}, kinds: [],
-                    parties: { suppliers: [], customers: [] }, materials: [] }),
+                // The banner counts from the SERVER's stats, not from the
+                // rows — that split is the whole fault "Show me" had. Both
+                // fixture rows need her: one unverified, one verified with
+                // no recovery raised. Empty stats here would render
+                // "Nothing is waiting on you" and there would be no button.
+                json: () => Promise.resolve({ claims: rows,
+                    stats: { unverified: 1, awaiting_recovery: 1, claimed: 7390.8,
+                             recovered: 0, net: 7390.8, containers: 2, total: 2, recovery_rate: 0 },
+                    kinds: [], parties: { suppliers: [], customers: [] }, materials: [] }),
                 text: () => Promise.resolve('{}') });
         } });
     const w = dom.window, d = w.document;
@@ -268,9 +275,53 @@ section('D — no function the page calls is declared outside the scope it reads
                         ck('  nor "+ another claim", which would invent a container',
                            !d.getElementById('addClaim'));
 
-                        console.log(`\n  ${pass} passed, ${fail} failed`);
-                        if (fail) { console.log('\n  FAILED:\n' + failures.map((f) => '    - ' + f).join('\n')); process.exit(1); }
-                        process.exit(0);
+                        // ── "Show me" HAS TO SHOW ────────────────────
+                        // Apsara, 2026-11-05: "if something waiting on
+                        // me,when i click show me-it has to show".
+                        //
+                        // The banner counts from the SERVER's stats, over
+                        // every claim. The list is filtered by the search
+                        // box and the date range. So the two can disagree,
+                        // and the button promised something the page did
+                        // not deliver. Both filters are set here to the
+                        // state her own screenshot was in — a single-day
+                        // range — plus a search term that matches nothing.
+                        const q = d.getElementById('q');
+                        const from = d.getElementById('from');
+                        const to = d.getElementById('to');
+                        const ev = (el, kind) => el.dispatchEvent(new w.Event(kind));
+                        from.value = '2026-11-05'; ev(from, 'change');
+                        to.value = '2026-11-05';   ev(to, 'change');
+                        q.value = 'zzzz';          ev(q, 'input');
+                        setTimeout(() => {
+                            const hidden = d.querySelectorAll('#rows .prow').length;
+                            ck('a filter CAN hide everything the banner counts', hidden === 0,
+                               String(hidden) + ' — if this is not 0 the fixture no longer reproduces the fault');
+                            const sm = d.getElementById('showMe');
+                            ck('  the banner offers "Show me"', !!sm,
+                               'the fixture must have something waiting, or there is nothing to test');
+                            sm.click();
+                            setTimeout(() => {
+                                const shown = d.querySelectorAll('#rows .prow').length;
+                                ck('"Show me" SHOWS them', shown > 0,
+                                   'it used to set the tab and leave the filters on, so it showed an empty list');
+                                ck('  it clears the search box', q.value === '', JSON.stringify(q.value));
+                                ck('  and the date range', from.value === '' && to.value === '',
+                                   JSON.stringify([from.value, to.value]));
+                                ck('  landing on Needs-you',
+                                   /Needs you/.test((d.querySelector('#tabs button.sel') || {}).textContent || ''),
+                                   (d.querySelector('#tabs button.sel') || {}).textContent);
+                                // She asked to be SHOWN what is waiting, not
+                                // to have one of them chosen for her.
+                                ck('  without opening one for her',
+                                   d.querySelectorAll('#rows .prow.sel').length === 0);
+
+                                console.log(`\n  ${pass} passed, ${fail} failed`);
+                                if (fail) { console.log('\n  FAILED:\n' + failures.map((f) => '    - ' + f).join('\n')); process.exit(1); }
+                                process.exit(0);
+                            }, 80);
+                        }, 80);
+                        return;
                     }, 60);
                 }, 60);
                 return;
