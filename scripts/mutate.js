@@ -578,6 +578,29 @@ const MUTATIONS = [
       find: "    STATE.sel = null;\n    // '2+ claims' counts claims on one CONTAINER.",
       to:   "    // '2+ claims' counts claims on one CONTAINER." },
 
+    // ── HER OWN COMPANY, AND A NAME THE BANK CUT (2026-11-05) ────────────
+    // Apsara: "How can it assume its edge recycling?" / "still bad".
+    { name: 'bank: the suggester searches the whole line, so INDN names Edge',
+      file: 'helpers/bankLearn.js', suites: ['bank-payee'],
+      find: "    const name = payeeOf(descriptor);\n    const d = String(name || descriptor || '');",
+      to:   "    const d = String(descriptor || '');" },
+    { name: 'bank: a name the bank cut short stops resolving',
+      file: 'helpers/bankLearn.js', suites: ['bank-payee'],
+      find: "            if (uniq.length === 1) return uniq[0];",
+      to:   "            if (false) return uniq[0];" },
+    { name: 'bank: two companies sharing a cut prefix get the first one',
+      file: 'helpers/bankLearn.js', suites: ['bank-payee'],
+      find: "            const uniq = [...new Set(starts)];\n            if (uniq.length === 1) return uniq[0];",
+      to:   "            const uniq = [...new Set(starts)];\n            if (uniq.length >= 1) return uniq[0];" },
+    { name: 'bank: a two-letter name can select a long company again',
+      file: 'helpers/bankLearn.js', suites: ['bank-payee'],
+      find: "        if (k.length >= 8) {",
+      to:   "        if (k.length >= 1) {" },
+    { name: 'bank: a prefix rule becomes a contains rule',
+      file: 'helpers/bankLearn.js', suites: ['bank-payee'],
+      find: "                if (who && nk.startsWith(k)) starts.push(who);",
+      to:   "                if (who && nk.includes(k)) starts.push(who);" },
+
     // ── THE BOT'S DOORS TO THE BANK AND CLAIMS (2026-11-05) ──────────────
     // Apsara: "what about our own bot" / "give door access".
     { name: 'bot: a settled claim is answered as open',
