@@ -419,6 +419,38 @@ function build(opts = {}) {
     const recoverable = sendable.reduce((t, l) => t + (l.our_claim || 0), 0);
     const suppliers = [...new Set(lines.map((l) => l.supplier).filter(Boolean))];
 
+    // ── A CONTAINER CANNOT HAVE TWO SUPPLIERS ───────────────────────────
+    // Apsara, 2026-11-05, asked how Jarvis should split a two-supplier
+    // container's note: "One container cannot have two suppliers."
+    //
+    // So this is not a document to lay out. It is BAD DATA — a typo in a
+    // supplier name, a claim filed against the wrong one, or two claims that
+    // should be on different containers — and the only safe thing to do with
+    // it is refuse and say which two names disagree.
+    //
+    // WHAT IT USED TO DO, which is why this is a refusal and not a warning:
+    // build() declined to name an addressee (addressedTo stayed ''), and then
+    // toHtml INVENTED one — "To: 2 suppliers" — over a table holding both
+    // suppliers' claims and a single "AMOUNT RECOVERABLE FROM YOU" adding
+    // them together. On the fixture that is $1,679.26 sent to a supplier who
+    // owes $1,492.01, with a competitor's name and claim printed underneath.
+    // That is a wrong demand and a confidentiality leak on one page, and this
+    // document leaves the building.
+    //
+    // ONLY the container scope. A supplier-scoped report is one supplier by
+    // definition, and the all-scope listing is internal and is not addressed
+    // to anybody.
+    if (container && !supplier && suppliers.length > 1) {
+        const e = new Error(
+            `Container ${container} has claims against ${suppliers.length} different suppliers `
+            + `(${suppliers.join(' and ')}). A container only comes from one supplier, so one of `
+            + `these claims has the wrong supplier on it. Fix that first — a claim report built `
+            + `from this would be addressed to nobody and would bill one supplier for the other's claim.`);
+        e.code = 'CONTAINER_TWO_SUPPLIERS';
+        e.suppliers = suppliers;
+        throw e;
+    }
+
     return {
         scope: claimId ? 'claim' : container ? 'container' : supplier ? 'supplier' : 'all',
         addressedTo: supplier || (suppliers.length === 1 ? suppliers[0] : ''),
@@ -716,7 +748,13 @@ function detailLine(l) {
 // only reason it is not on the document right now.
 function toHtml(b) {
     const when = new Date(b.generatedAt).toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' });
-    const to = b.addressedTo || (b.suppliers.length > 1 ? `${b.suppliers.length} suppliers` : '—');
+    // NEVER invents an addressee. This used to read `${n} suppliers` when
+    // build() had deliberately left addressedTo empty — the template filling
+    // in a blank the builder refused to fill, which is how "To: 2 suppliers"
+    // got onto a document. build() now refuses outright for the container
+    // scope; this is the second lock, and it holds for the all-scope listing
+    // too, which is internal and addressed to nobody.
+    const to = b.addressedTo || '—';
     // ── OUR INVOICE NUMBER IS NOT ON THE SUPPLIER'S COPY (2026-10-20) ───
     // Apsara: "Dont mention our invoice no in claim".
     //

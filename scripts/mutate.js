@@ -497,6 +497,27 @@ const MUTATIONS = [
     // ── THE SPLIT ITSELF (2026-10-31) ────────────────────────────────────
     // Replaces 'quality-only demand: her column set is used on MIXED pages
     // too', which guarded the single-table rule that the split removed.
+    // ── ONE CONTAINER, ONE SUPPLIER (2026-11-05) ────────────────────────
+    // Apsara: "One container cannot have two suppliers." So a container whose
+    // claims name two is BAD DATA, and the note built from it billed one
+    // supplier for the other's claim under "To: 2 suppliers".
+    { name: 'two-supplier container: the refusal is dropped and the note builds',
+      file: 'helpers/claims/report.js', suites: ['claims-one-supplier'],
+      find: "    if (container && !supplier && suppliers.length > 1) {",
+      to:   "    if (false) {" },
+    // WIDENING it is the other failure mode, and the one CLAUDE.md rule 1 is
+    // about. This mutation SURVIVED when first run: the supplier branch can
+    // never see two suppliers (filtering by one leaves one), so only the
+    // all-scope listing tells the two conditions apart. A check for it was
+    // added rather than retiring the mutation.
+    { name: 'two-supplier container: the refusal widens and kills the all-scope listing',
+      file: 'helpers/claims/report.js', suites: ['claims-one-supplier'],
+      find: "    if (container && !supplier && suppliers.length > 1) {",
+      to:   "    if (suppliers.length > 1) {" },
+    { name: 'two-supplier container: the template invents "N suppliers" again',
+      file: 'helpers/claims/report.js', suites: ['claims-one-supplier'],
+      find: "    const to = b.addressedTo || '\u2014';",
+      to:   "    const to = b.addressedTo || (b.suppliers.length > 1 ? `${b.suppliers.length} suppliers` : '\u2014');" },
     { name: 'split: quality rows are dragged back into the nine-column table',
       file: 'helpers/claims/report.js', suites: ['claims-report-wording'],
       find: "    const oLines = b.lines.filter((l) => !isQualityLine(l));",

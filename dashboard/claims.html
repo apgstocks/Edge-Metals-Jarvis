@@ -1265,6 +1265,20 @@ function claimCard(c, i, g){
 }
 
 function reportMenu(g){
+  // ── A CONTAINER WITH TWO SUPPLIERS IS BAD DATA, NOT A DOCUMENT ───────
+  // Apsara, 2026-11-05: "One container cannot have two suppliers."
+  //
+  // helpers/claims/report.js now refuses to build one. But these are plain
+  // download links — the browser would navigate and she would get a 500 in
+  // a new tab, which is a worse way to learn this than being told here,
+  // where the claim she needs to correct is on screen in front of her.
+  if (g.groupKind === 'container' && g.suppliers.length > 1) {
+    return '<div class="hint" style="margin:0;max-width:430px;color:#F5C04A">'
+      + 'Claims here name ' + g.suppliers.length + ' different suppliers ('
+      + esc(g.suppliers.join(', ')) + '). A container only comes from one, so one of these '
+      + 'claims has the wrong supplier. No report until that is fixed — it would bill one '
+      + 'supplier for the other&rsquo;s claim.</div>';
+  }
   // ── WHAT THIS REPORT IS OF (2026-11-05) ─────────────────────────────
   // Under the container lens, unchanged: container=<id>, plus the supplier
   // when there is exactly one.
