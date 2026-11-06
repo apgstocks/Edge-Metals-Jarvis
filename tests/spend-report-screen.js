@@ -39,6 +39,7 @@ const SRC = fs.readFileSync(path.join(ROOT, 'dashboard/app/06-expenses-trucker.j
 // either marker moves, this throws rather than silently testing nothing.
 const MARK_HELPERS = '  // ── THE LOOK, 2026-11-07';
 const MARK_TPL = "$('viewRoot').innerHTML = `";
+const MARK_WIRE = '  // ── TAKE THE DATES OFF THE SCREEN BEFORE EVERY RE-RUN';
 function extract() {
     const h0 = SRC.indexOf(MARK_HELPERS);
     if (h0 < 0) throw new Error('the Spend report helpers block has moved — this test is now testing nothing');
@@ -49,7 +50,15 @@ function extract() {
     // gets this wrong. The render ends at the section close, once.
     const end = SRC.indexOf('</section>`;', open);
     if (end < 0) throw new Error('could not find the end of the Spend report template');
-    return { helpers: SRC.slice(h0, t0), tpl: SRC.slice(open, end + '</section>`'.length) };
+    // The handlers, from the same real file. The template alone cannot show
+    // that a click does the right thing, and both the date-wipe and the
+    // auto-apply live entirely in here.
+    const w0 = SRC.indexOf(MARK_WIRE, end);
+    if (w0 < 0) throw new Error('the Spend report handlers have moved — the click checks test nothing');
+    const w1 = SRC.indexOf('\n}', SRC.indexOf('.btn-spend-sold', w0));
+    if (w1 < 0) throw new Error('could not find the end of the Spend report handlers');
+    return { helpers: SRC.slice(h0, t0), tpl: SRC.slice(open, end + '</section>`'.length),
+             wiring: SRC.slice(w0, w1) };
 }
 
 const REAL = {
@@ -74,9 +83,13 @@ const REAL = {
     received: { total: 400000, count: 2, rows: [] },
 };
 
-function render(rep, { method = '', bank = '', via = '', bought = '', sold = '' } = {}) {
+function render(rep, { method = '', bank = '', via = '', bought = '', sold = '', company = 'edge-trading' } = {}) {
     const { helpers, tpl } = extract();
-    const dom = new JSDOM('<div id="viewRoot"></div>', { url: 'http://localhost/' });
+    // runScripts: 'dangerously' so w.eval runs in PAGE scope, where `document`
+// and `window` are real globals. Without it the evals run in a bare Node
+// scope and the page's own `$(id)` helper cannot see `document`.
+const dom = new JSDOM('<div id="viewRoot"></div>',
+    { url: 'http://localhost/', runScripts: 'dangerously' });
     const w = dom.window;
     w.eval(`
       var esc=s=>String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -91,6 +104,7 @@ function render(rep, { method = '', bank = '', via = '', bought = '', sold = '' 
     w.eval(`var rep=${JSON.stringify(rep)}; var cols=rep.columns;`);
     w.eval(`var spendMethod=${JSON.stringify(method)},spendBank=${JSON.stringify(bank)},spendPaidVia=${JSON.stringify(via)};`);
     w.eval(`var spendBought=${JSON.stringify(bought)},spendSold=${JSON.stringify(sold)};`);
+    w.eval(`var spendCompany=${JSON.stringify(company)};`);
     // ── ONE eval, NOT TWO ────────────────────────────────────────────────
     // The helpers are `const`, which is block-scoped to its own eval and
     // therefore invisible to a second one — the first version of this test
@@ -99,6 +113,49 @@ function render(rep, { method = '', bank = '', via = '', bought = '', sold = '' 
     const html = w.eval(helpers + '\n;(' + tpl + ')');
     w.document.getElementById('viewRoot').innerHTML = html;
     return { w, d: w.document, text: w.document.getElementById('viewRoot').textContent };
+}
+
+// ── CLICKING, NOT JUST RENDERING ─────────────────────────────────────────
+// Render the real template, then attach the REAL handlers with
+// renderSpendReportTab stubbed, so a click records the state it would have
+// re-run with instead of fetching. Both the auto-apply and the date-wipe
+// live entirely in the handlers; a template-only check cannot see either.
+function mount(rep, sel = {}) {
+    const { w, d } = render(rep, sel);
+    const { wiring } = extract();
+    w.eval(`
+      // The wiring uses $() to reach the date boxes; the template never did,
+      // so render() had no reason to define it.
+      var $ = function(id){ return document.getElementById(id); };
+      var __runs = [];
+      function renderSpendReportTab(){ __runs.push({ from: spendFrom, to: spendTo,
+        method: spendMethod, bank: spendBank, via: spendPaidVia,
+        bought: spendBought, sold: spendSold, company: spendCompany }); }
+      var presets = [
+        ['This month', function(){ return ['2026-11-01','2026-11-30']; }],
+        ['Last month', function(){ return ['2026-10-01','2026-10-31']; }],
+        ['This year',  function(){ return ['2026-01-01','2026-12-31']; }],
+        ['All time',   function(){ return ['','']; }],
+      ];
+      var toIsoDate = function(v){
+        var m = String(v||'').match(/^(\\d{2})\\/(\\d{2})\\/(\\d{4})$/);
+        return m ? m[3]+'-'+m[1]+'-'+m[2] : (v || '');
+      };
+    `);
+    w.eval(wiring);
+    return {
+        w, d,
+        // type() fires `change`, which is how a date picker and a committed
+        // keystroke both behave. put() only sets the value — the "typed but
+        // not committed" case that used to be thrown away.
+        type: (id, v) => {
+            const el = d.getElementById(id); el.value = v;
+            el.dispatchEvent(new w.Event('change', { bubbles: true }));
+        },
+        put: (id, v) => { d.getElementById(id).value = v; },
+        click: (q) => d.querySelector(q).dispatchEvent(new w.Event('click', { bubbles: true })),
+        runs: () => w.__runs,
+    };
 }
 
 (() => {
@@ -251,15 +308,24 @@ section('F — nothing else on the screen was lost in the restyle');
 // A redesign that drops a section is a behaviour change, and she asked for
 // paint.
 {
-    const { text } = render({ ...REAL,
+    const full = render({ ...REAL,
         months: [{ month: '2026-10', Cash: 1000, total: 1000 }],
         cash: { opening: 500, in: 200, out: 100, closing: 600 },
         received: { total: 40000, count: 3, rows: [] } });
+    const text = full.text;
+    const bare2 = () => full.d;
     ck('the petty cash reconciliation is still there', /Petty cash over this period/.test(text));
     ck('money received is still shown, and still kept apart',
        /Received from buyers/.test(text) && /not.*counted in the figures above/i.test(text));
     ck('the month table is still there', /All months/.test(text));
-    ck('the date range and Apply are still there', /Apply/.test(text));
+    // SUPERSEDED 2026-11-07. This required an Apply button. Apsara: "if i
+    // select it should auto app;y" — the button is gone and changing either
+    // date box re-runs the report. The property worth keeping is that the
+    // RANGE is still settable, which section I now proves by clicking.
+    ck('the date range is still there', !!bare2().getElementById('spend_from')
+       && !!bare2().getElementById('spend_to'));
+    ck('  and no Apply button remains to be pressed',
+       !bare2().getElementById('btnSpendApply'), 'dates auto-apply now');
 }
 
 // ══════════════════════════════════════════════════════════════════════════
@@ -323,6 +389,96 @@ section('H — a one-name list renders NO row, rather than a dead control');
        /Whom we buy from/.test(bare.text), 'the gap is still worth seeing');
     ck('  and with nothing received, no sell-side card is drawn',
        !/Whom we sell to/.test(bare.text), 'an empty card is clutter');
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+section('I — dates auto-apply, and a filter never throws them away');
+// ══════════════════════════════════════════════════════════════════════════
+// Apsara, 2026-11-07, twice: "What if i want from this date to this date in
+// this filter", then "if i select it should auto app;y".
+//
+// Two faults, one cause. Only Apply read the two boxes. So (a) picking a
+// date did nothing until you found the button, and (b) typing a range and
+// then clicking a filter re-ran with the OLD window and wiped what you
+// typed, because the re-render repaints the boxes from the stored values.
+// Nothing errored — the figures were real and answered a different question
+// than the one on screen, which is the worst shape a date bug can take.
+{
+    const m = mount(REAL);
+    m.type('spend_from', '03/01/2026');
+    ck('changing a date box re-runs the report on its own', m.runs().length === 1,
+       'no Apply button exists any more');
+    ck('  with the date that was picked', m.runs()[0].from === '2026-03-01',
+       JSON.stringify(m.runs()[0]));
+
+    // Typed but NOT committed, then a filter clicked — the original fault.
+    for (const [sel, field, want] of [
+        ['.btn-spend-method[data-method="Wire"]', 'method', 'Wire'],
+        ['.btn-spend-bank[data-bank="BofA"]', 'bank', 'BofA'],
+        ['.btn-spend-via[data-via="Edge Yard"]', 'via', 'Edge Yard'],
+        ['.btn-spend-bought[data-bought="Ramesh"]', 'bought', 'Ramesh'],
+        ['.btn-spend-sold[data-sold="Hynos"]', 'sold', 'Hynos'],
+        ['.btn-spend-company[data-company="edge-metals"]', 'company', 'edge-metals'],
+    ]) {
+        const k = mount(REAL);
+        k.put('spend_from', '03/01/2026'); k.put('spend_to', '03/31/2026');  // typed, no event
+        k.click(sel);
+        const got = k.runs()[0];
+        ck(`${field} keeps dates typed but not yet committed`,
+           got && got.from === '2026-03-01' && got.to === '2026-03-31' && got[field] === want,
+           JSON.stringify(got));
+    }
+
+    // ── A PRESET MUST STILL OVERWRITE ────────────────────────────────────
+    // The obvious way to get this fix wrong is to have the presets read the
+    // boxes they exist to replace, which would silently turn them into
+    // no-ops — a worse bug than the one being fixed.
+    const p = mount(REAL);
+    p.put('spend_from', '03/01/2026'); p.put('spend_to', '03/31/2026');
+    p.click('.btn-spend-preset[data-i="1"]');
+    ck('a preset still OVERWRITES whatever is in the boxes',
+       p.runs()[0].from === '2026-10-01' && p.runs()[0].to === '2026-10-31',
+       JSON.stringify(p.runs()[0]) + ' — replacing the range is the point of a preset');
+
+    const c = mount(REAL);
+    c.put('spend_from', '03/01/2026'); c.type('spend_to', '');
+    ck('an emptied box means open-ended, not the previous value',
+       c.runs()[0].from === '2026-03-01' && c.runs()[0].to === '');
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+section('J — one company at a time, and it says so when it is not');
+// ══════════════════════════════════════════════════════════════════════════
+// Apsara: this "should be the one stop thing for the edge yard", defaulting
+// to Edge Yard. CLAUDE.md rule 5: Edge Yard and Edge Metals are different
+// companies. The headline used to add them together.
+{
+    const { d } = render(REAL);          // render() defaults to edge-trading
+    const chips = [...d.querySelectorAll('.btn-spend-company')].map((n) => n.dataset.company);
+    ck('all three choices are offered', chips.join() === 'edge-trading,edge-metals,',
+       JSON.stringify(chips));
+    const lit = [...d.querySelectorAll('.btn-spend-company')]
+        .filter((n) => /font-weight:700/.test(n.getAttribute('style') || ''))
+        .map((n) => n.dataset.company);
+    ck('Edge Yard is the one selected by default', lit.join() === 'edge-trading',
+       JSON.stringify(lit));
+
+    // The warning belongs ONLY on the combined view.
+    ck('scoped to one company there is no two-company warning',
+       !/Two companies in one figure/.test(render(REAL).text));
+    ck('  and choosing Both says plainly what the figure now is',
+       /Two companies in one figure/.test(render(REAL, { company: '' }).text),
+       'never for a return');
+    ck('  Edge Metals alone is also unwarned',
+       !/Two companies in one figure/.test(render(REAL, { company: 'edge-metals' }).text));
+
+    // Switching company must not silently keep another company's filter on
+    // screen as though it still applied — it re-runs, which is what matters.
+    const k = mount(REAL, { method: 'Wire' });
+    k.click('.btn-spend-company[data-company=""]');
+    ck('switching company re-runs the whole report',
+       k.runs().length === 1 && k.runs()[0].company === '', JSON.stringify(k.runs()[0]));
+    ck('  and keeps the other filters she had set', k.runs()[0].method === 'Wire');
 }
 
 console.log(`\n  ${pass} passed, ${fail} failed`);

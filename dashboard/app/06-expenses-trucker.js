@@ -5,6 +5,20 @@ let spendTo = '';
 // they narrow opposite directions of money — see helpers/spendReport.js.
 let spendBought = '';
 let spendSold = '';
+// ── DEFAULTS TO EDGE YARD ────────────────────────────────────────────────
+// Apsara, 2026-11-07: this screen "should be the one stop thing for the edge
+// yard", and asked whether the default should change her headline figure she
+// chose Edge Yard knowing it would.
+//
+// It does change it. The old total added Edge Yard and Edge Metals together
+// — loads, expenses and trucker bills on one side, supplier payments, sale
+// costs and metals haulage on the other — so the figure she has been reading
+// was two companies in one number. Scoped to the yard it DROPS, and that
+// drop is the fix, not a regression.
+//
+// The engine defaults to every company; only this screen defaults to the
+// yard. So the voice path and every other caller are untouched.
+let spendCompany = 'edge-trading';
 // '' means every method. Held here so it survives a repaint, like the date
 // range — a filter that resets itself when you tap Apply is worse than none.
 let spendMethod = '';
@@ -365,6 +379,7 @@ async function renderSpendReportTab() {
   if (spendPaidVia) qs.push('paid_via=' + encodeURIComponent(spendPaidVia));
   if (spendBought) qs.push('bought_from=' + encodeURIComponent(spendBought));
   if (spendSold) qs.push('sold_to=' + encodeURIComponent(spendSold));
+  if (spendCompany) qs.push('company=' + encodeURIComponent(spendCompany));
   let rep;
   try {
     rep = await api('/api/reports/spend' + (qs.length ? '?' + qs.join('&') : ''));
@@ -532,14 +547,38 @@ async function renderSpendReportTab() {
            strip beside Apply.
            Three stacked rows now, each with a job: the range, then the
            presets, then the method. Every row wraps on its own. -->
-      <div class="card" style="padding:14px 16px; margin-bottom:18px;">
+      <!-- ── WHOSE BOOKS, FIRST, AND ON ITS OWN ─────────────────────────
+           Apsara, 2026-11-07: this "should be the one stop thing for the
+           edge yard". It sits above everything else and outside the filter
+           card because it is not a filter like the others — it decides
+           which company the whole page is about, and CLAUDE.md rule 5 says
+           those two must never be read as one. -->
+      <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-bottom:14px;">
+        ${[['edge-trading', 'Edge Yard'], ['edge-metals', 'Edge Metals'], ['', 'Both companies']]
+          .map(([id, label]) => `
+          <button class="btn btn-spend-company" data-company="${esc(id)}" style="${
+            spendCompany === id
+              ? 'font-size:12px; padding:7px 16px; border-radius:999px; background:var(--text-strong); color:#0C0E10; font-weight:700; border:1px solid var(--text-strong);'
+              : 'font-size:12px; padding:7px 16px; border-radius:999px; background:transparent; color:var(--text-muted); font-weight:500; border:1px solid var(--border-subtle);'
+          }">${esc(label)}</button>`).join('')}
+        ${spendCompany === '' ? `<span style="font-size:11.5px; color:var(--status-warning, #d69e2e);">Two companies in one figure — useful for a bank total, never for a return.</span>` : ''}
+      </div>
+
+      <div class="card" style="padding:16px 18px; margin-bottom:18px;">
+        <!-- ── PERIOD ──────────────────────────────────────────────────
+             Apsara, 2026-11-07: "if i select it should auto app;y". There
+             is no Apply button any more. Changing either box re-runs the
+             report, and so does a preset. The button existed only because
+             the boxes were read nowhere else, which is the same defect that
+             made typing a range and then clicking a filter throw the range
+             away. -->
         <div style="display:flex; gap:10px; align-items:flex-end; flex-wrap:wrap;">
-          <div class="field" style="margin-bottom:0; flex:1 1 130px; min-width:130px;"><label>From</label><input id="spend_from" placeholder="MM/DD/YYYY" autocomplete="off" value="${esc(typeof toUsDate === 'function' ? toUsDate(spendFrom) : spendFrom)}"></div>
-          <div class="field" style="margin-bottom:0; flex:1 1 130px; min-width:130px;"><label>To</label><input id="spend_to" placeholder="MM/DD/YYYY" autocomplete="off" value="${esc(typeof toUsDate === 'function' ? toUsDate(spendTo) : spendTo)}"></div>
-          <button id="btnSpendApply" class="btn btn-primary" style="padding:10px 18px;">Apply</button>
-        </div>
-        <div style="display:flex; gap:8px; flex-wrap:wrap; margin-top:12px;">
-          ${presets.map((p, i) => `<button class="btn btn-spend-preset" data-i="${i}" style="${chipCss(false)}">${esc(p[0])}</button>`).join('')}
+          <span style="${groupLabel} align-self:flex-end; padding-bottom:11px;">Period</span>
+          <div class="field" style="margin-bottom:0; flex:0 1 150px; min-width:130px;"><label>From</label><input id="spend_from" placeholder="MM/DD/YYYY" autocomplete="off" value="${esc(typeof toUsDate === 'function' ? toUsDate(spendFrom) : spendFrom)}"></div>
+          <div class="field" style="margin-bottom:0; flex:0 1 150px; min-width:130px;"><label>To</label><input id="spend_to" placeholder="MM/DD/YYYY" autocomplete="off" value="${esc(typeof toUsDate === 'function' ? toUsDate(spendTo) : spendTo)}"></div>
+          <div style="display:flex; gap:8px; flex-wrap:wrap; padding-bottom:1px;">
+            ${presets.map((p, i) => `<button class="btn btn-spend-preset" data-i="${i}" style="${chipCss(false)}">${esc(p[0])}</button>`).join('')}
+          </div>
         </div>
         <!-- ── one method at a time ──────────────────────────────────────
              Apsara, 2026-09-02: "in reports what if i want to see report
@@ -760,12 +799,47 @@ async function renderSpendReportTab() {
   // Dates are typed as MM/DD/YYYY and sent as ISO — the same split the rest of
   // the app uses: what a person reads, versus what goes over the wire.
   if (typeof wireUsDateField === 'function') { wireUsDateField('spend_from'); wireUsDateField('spend_to'); }
-  $('btnSpendApply').addEventListener('click', () => {
+  // ── TAKE THE DATES OFF THE SCREEN BEFORE EVERY RE-RUN ──────────────────
+  // Apsara, 2026-11-07: "What if i want from this date to this date in this
+  // filter".
+  //
+  // The dates and the filters DO combine — the server ANDs all five, proven
+  // in tests/spend-parties.js section C. The hole was on this side. Only
+  // Apply read the two boxes. Every chip handler set its own variable and
+  // re-rendered, and the re-render repaints the boxes from spendFrom /
+  // spendTo — so typing a date range and then clicking a filter, without
+  // pressing Apply first, silently threw the typed dates away and ran the
+  // old window.
+  //
+  // Nothing errored and nothing looked broken: the report came back for
+  // whatever range was set before, which is the worst shape a date bug can
+  // take, because the figures are real and simply answer a different
+  // question than the one on screen.
+  //
+  // So every control that re-runs the report takes the boxes first. The
+  // presets still OVERWRITE them, which is the whole point of a preset.
+  const takeDates = () => {
     const iso = (v) => (typeof toIsoDate === 'function' ? toIsoDate(v) : v);
-    spendFrom = iso($('spend_from').value) || '';
-    spendTo = iso($('spend_to').value) || '';
+    const f = $('spend_from'), t = $('spend_to');
+    if (f) spendFrom = iso(f.value) || '';
+    if (t) spendTo = iso(t.value) || '';
+  };
+
+  // ── AUTO-APPLY ─────────────────────────────────────────────────────────
+  // Apsara: "if i select it should auto app;y". `change` fires when a date
+  // picker commits a selection AND when a typed box loses focus or takes
+  // Enter, so both ways of entering a date re-run the report without a
+  // button. An unparseable half-typed date becomes '' — open-ended — rather
+  // than throwing or freezing the old window in place.
+  for (const id of ['spend_from', 'spend_to']) {
+    const el = $(id);
+    if (el) el.addEventListener('change', () => { takeDates(); renderSpendReportTab(); });
+  }
+  document.querySelectorAll('.btn-spend-company').forEach(b => b.addEventListener('click', () => {
+    takeDates();
+    spendCompany = b.dataset.company || '';
     renderSpendReportTab();
-  });
+  }));
   document.querySelectorAll('.btn-spend-preset').forEach(b => b.addEventListener('click', () => {
     const [f, t] = presets[Number(b.dataset.i)][1]();
     spendFrom = f; spendTo = t;
@@ -774,22 +848,27 @@ async function renderSpendReportTab() {
   // One method at a time. Re-runs the whole report rather than hiding rows —
   // see helpers/spendReport.js for why every figure has to follow the filter.
   document.querySelectorAll('.btn-spend-method').forEach(b => b.addEventListener('click', () => {
+    takeDates();
     spendMethod = b.dataset.method || '';
     renderSpendReportTab();
   }));
   document.querySelectorAll('.btn-spend-bank').forEach(b => b.addEventListener('click', () => {
+    takeDates();
     spendBank = b.dataset.bank || '';
     renderSpendReportTab();
   }));
   document.querySelectorAll('.btn-spend-via').forEach(b => b.addEventListener('click', () => {
+    takeDates();
     spendPaidVia = b.dataset.via || '';
     renderSpendReportTab();
   }));
   document.querySelectorAll('.btn-spend-bought').forEach(b => b.addEventListener('click', () => {
+    takeDates();
     spendBought = b.dataset.bought || '';
     renderSpendReportTab();
   }));
   document.querySelectorAll('.btn-spend-sold').forEach(b => b.addEventListener('click', () => {
+    takeDates();
     spendSold = b.dataset.sold || '';
     renderSpendReportTab();
   }));

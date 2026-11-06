@@ -87,6 +87,48 @@ const inRange = (d, from, to) => {
 //
 // Keyed `kind:ref` so one flat object covers all six kinds without this
 // function knowing what any of them mean.
+// ── WHICH COMPANY A ROW BELONGS TO ───────────────────────────────────────
+// Apsara, 2026-11-07: this screen "should be the one stop thing for the edge
+// yard", defaulting to Edge Yard.
+//
+// Before today the headline added two companies together. Of the
+// $2,153,593.65 she was looking at, loads + expenses + trucker bills are
+// EDGE YARD and supplier payments + sale costs + metals haulage are EDGE
+// METALS. CLAUDE.md rule 5 exists for exactly this: "Edge Yard and Edge
+// Metals are different companies ... the separation is most of what this app
+// is for." One figure covering both is the thing the rule forbids, and it
+// was the headline.
+//
+// ── NOT A SECOND LIST ───────────────────────────────────────────────────
+// helpers/entities.js STORE_LEDGER already decides which company every store
+// belongs to, and the posting layer and the company statements read it. A
+// hand-written copy here would be a second answer to a question that already
+// has one — and the day she adds a fourth Edge Metals kind, the copy is the
+// one that goes stale. So the map below is KIND -> STORE, and the company
+// comes from entities.
+//
+// `paid_via` is NOT this. That records whose money moved; this records whose
+// books the transaction belongs on. Edge Metals paying for a yard purchase
+// is a real thing (it is why paid_via exists) and it does not make that
+// purchase an Edge Metals transaction.
+const KIND_STORE = {
+    load: 'loads',
+    expense: 'expenses',
+    trucker: 'trucker_bills',
+    sale: 'outbound_loads',
+    supplier: 'bill_payments',
+    sale_cost: 'sales_settlements',
+    metals_trucking: 'metals_trucking',
+};
+
+function companyOfKind(kind) {
+    try {
+        const store = KIND_STORE[kind];
+        if (!store) return null;
+        return require('./entities').STORE_LEDGER[store] || null;
+    } catch (e) { return null; }
+}
+
 const partyKey = (kind, ref) => `${kind}:${ref == null ? '' : ref}`;
 
 function collectRows({ payments, expenses, from, to, parties = null }) {
@@ -227,6 +269,8 @@ function collectRows({ payments, expenses, from, to, parties = null }) {
                 : isSaleCost ? 'sale_cost' : isMetalsTrucking ? 'metals_trucking' : 'load',
                 p.load_id) || NOT_RECORDED,
             side: isSale ? 'sold_to' : 'bought_from',
+            company: companyOfKind(isSale ? 'sale' : isTrucker ? 'trucker' : isBill ? 'supplier'
+                : isSaleCost ? 'sale_cost' : isMetalsTrucking ? 'metals_trucking' : 'load'),
         });
     }
 
@@ -260,6 +304,7 @@ function collectRows({ payments, expenses, from, to, parties = null }) {
             // filter on and trust.
             party: (e.vendor && String(e.vendor).trim()) || NOT_RECORDED,
             side: 'bought_from',
+            company: companyOfKind('expense'),
         });
     }
 
@@ -283,7 +328,7 @@ function collectRows({ payments, expenses, from, to, parties = null }) {
 // The COLUMNS still list every method, so the table keeps its shape and it is
 // obvious the others are empty by filter rather than by accident.
 function buildSpendReport({ payments, expenses, pettyEntries, from, to, method, bank, paidVia,
-                           boughtFrom, soldTo, parties = null } = {}) {
+                           boughtFrom, soldTo, company, parties = null } = {}) {
     const columns = METHODS.concat([UNCLASSIFIED]);
     // Only a method the report actually reports in. Anything else is ignored
     // rather than returning nothing — a typo in a query string should not look
@@ -328,7 +373,16 @@ function buildSpendReport({ payments, expenses, pettyEntries, from, to, method, 
     const wantedSold = String(soldTo || '').trim();
     const sameName = (a, b) => String(a || '').toLowerCase() === String(b || '').toLowerCase();
 
+    // ── THE COMPANY FILTER DEFAULTS TO OFF HERE, ON IN THE SCREEN ────────
+    // The engine keeps showing everything unless asked, because
+    // helpers/tools.js (the voice path) and ~50 test call sites pass no
+    // company and their figures must not move. The CLIENT defaults to Edge
+    // Yard, which is where she asked for the default to be — so her screen
+    // changes and nothing else does.
+    const wantedCompany = String(company || '').trim();
+
     const all = collectRows({ payments, expenses, from, to, parties })
+        .filter(r => !wantedCompany || r.company === wantedCompany)
         .filter(r => !wanted || r.method === wanted)
         .filter(r => !wantedBank || String(r.bank || '').toLowerCase() === wantedBank.toLowerCase())
         .filter(r => !wantedPaidVia || String(r.paid_via || '').toLowerCase() === wantedPaidVia.toLowerCase())
@@ -503,6 +557,13 @@ function buildSpendReport({ payments, expenses, pettyEntries, from, to, method, 
         // actually asked for is what makes the empty report make sense.
         boughtFrom: wantedBought || null,
         soldTo: wantedSold || null,
+        // Echoed back like every other filter, and the uiName beside it so a
+        // screen never has to translate 'edge-trading' into 'Edge Yard'
+        // itself — that rename is entities.js's business, not a client's.
+        company: wantedCompany || null,
+        companyName: wantedCompany ? (() => {
+            try { return require('./entities').get(wantedCompany).uiName; } catch (e) { return wantedCompany; }
+        })() : null,
         // Every counterparty that appears ANYWHERE, so the chips can be
         // built even when this window has nothing from one of them. Same
         // sort as the banks: the gap goes last, because it is a gap and not

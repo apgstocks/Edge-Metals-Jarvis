@@ -79,6 +79,13 @@ module.exports = function (app, ctx) {
                 // paid_via — "Not recorded" is a legitimate thing to ask for.
                 boughtFrom: req.query.bought_from,
                 soldTo: req.query.sold_to,
+                // Which company's books the row belongs on — NOT whose money
+                // paid (that is paid_via). Absent means every company, which
+                // is what the voice path and the old clients get. The web
+                // screen sends edge-trading by default, per Apsara
+                // 2026-11-07: it "should be the one stop thing for the edge
+                // yard".
+                company: req.query.company,
                 payments: listPayments(),
                 expenses: loadExpenses(),
                 pettyEntries: listEntries(),
