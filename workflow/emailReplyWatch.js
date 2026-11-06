@@ -57,6 +57,37 @@ async function pollGeneralEmailReplies() {
             // still push the bell alert too (below, same as any other
             // reply) so it's visible on the dashboard even though the
             // manager also gets a direct WhatsApp message from the relay.
+            // ── A PICKUP ETA ANSWERS ITSELF (2026-11-06) ────────────
+            // Apsara: "it should follow up with the logistic company about
+            // the pickup eta". The Follow-up Agent asks; this is where the
+            // answer lands.
+            //
+            // helpers/pickupMail.js stamps every chase thread with
+            // expected_intent = 'pickup_eta:<id>', so the reply is filed
+            // against the RIGHT arrangement rather than matched back by
+            // subject line — two pickups from one carrier in a week would
+            // make subject matching allocate the wrong ETA.
+            //
+            // The carrier's own words are stored, not a parsed time. They
+            // reply "around 2pm", "after lunch", "driver is loading" —
+            // turning that into a timestamp would be inventing precision,
+            // and a wrong one is worse than her own eyes on the sentence.
+            // What the agent needs is only that an answer EXISTS.
+            const intent = String(t.expected_intent || '');
+            if (intent.startsWith('pickup_eta:')) {
+                try {
+                    const pickupId = intent.slice('pickup_eta:'.length);
+                    await require('../helpers/pickups')
+                        .recordEta(pickupId, (body || '').trim().slice(0, 300), 'email reply');
+                } catch (err) {
+                    // The reply HAS landed and the alert below still fires,
+                    // so she sees it either way. A pickup that fails to
+                    // close keeps being chased, which is the safe direction
+                    // to fail in: noisy, not silent.
+                    console.error(`[EMAIL-REPLY-WATCH] could not close pickup for thread ${t.thread_id}:`, err.message);
+                }
+            }
+
             if (t.relay_to) {
                 try {
                     const actions = require('./actions');

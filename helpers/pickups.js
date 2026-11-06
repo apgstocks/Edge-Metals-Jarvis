@@ -67,9 +67,18 @@ async function create(input = {}, by = 'jarvis') {
         contact_email: str(input.contact_email),
         contact_whatsapp: str(input.contact_whatsapp),
         status,
-        // Where it came from. Both entry points she asked for are equal
-        // citizens; this is for her to see, not for the agent to branch on.
-        source: str(input.source) || (by === 'jarvis' ? 'jarvis' : 'recorded'),
+        // Where it came from — the ACTUAL caller, not a two-way label.
+        // This first collapsed everything that was not Jarvis into
+        // 'recorded', which threw away the one thing the field is for: a
+        // pickup spoken to the bot and one typed on the screen look
+        // identical afterwards, and when one of the two paths starts
+        // dropping pickups there is nothing to count. The voice path is the
+        // caller CLAUDE.md records breaking twice, so it is the one most
+        // worth being able to see.
+        //
+        // Still never branched on: the agent chases a spoken pickup exactly
+        // as hard as a typed one.
+        source: str(input.source) || str(by) || 'recorded',
         created_at: now(),
         created_by: str(by),
         // Filled in when the company answers. Either one stops the chasing —

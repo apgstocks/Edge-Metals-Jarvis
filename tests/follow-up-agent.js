@@ -241,6 +241,150 @@ section('H — it does not trespass on the chasers that already exist');
     }
 }
 
+// ══════════════════════════════════════════════════════════════════════════
+section('I — END TO END, through a real server');
+// ══════════════════════════════════════════════════════════════════════════
+// CLAUDE.md rule 3, in her words: "ALwyas test end to end when you add a new
+// feature." Sections A-H can all be green while the feature does not work.
+// The gaps live between them: the route may not forward a field, the mount
+// may not have happened, the client may send `pickup_date` where the server
+// reads `date`.
+//
+// So: a real server, a real login, a pickup posted the way the screen posts
+// it, and the agent then driven over THAT row.
+{
+    const http = require('http');
+    process.env.APP_PASSWORD   = process.env.APP_PASSWORD   || 'user-pw-aaaaaaaaaaaa';
+    process.env.ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'admin-pw-bbbbbbbbbbb';
+    process.env.STAFF_PASSWORD = process.env.STAFF_PASSWORD || 'staff-pw-ccccccccccc';
+
+    const { createApi } = require(path.join(ROOT, 'api'));
+    const app = createApi();
+    const server = await new Promise((r) => { const s = app.listen(0, '127.0.0.1', () => r(s)); });
+    const base = `http://127.0.0.1:${server.address().port}`;
+    const req = (method, p, { body, sid } = {}) => new Promise((resolve, reject) => {
+        const data = body == null ? null : JSON.stringify(body);
+        const headers = {};
+        if (data) { headers['Content-Type'] = 'application/json'; headers['Content-Length'] = Buffer.byteLength(data); }
+        if (sid) headers.Authorization = `Bearer ${sid}`;
+        const r2 = http.request(base + p, { method, headers }, (res) => {
+            let raw = ''; res.on('data', (c) => { raw += c; });
+            res.on('end', () => { let j = null; try { j = JSON.parse(raw); } catch (e) {} resolve({ status: res.statusCode, json: j }); });
+        });
+        r2.on('error', reject); if (data) r2.write(data); r2.end();
+    });
+
+    const sid = ((await req('POST', '/login', { body: { password: process.env.ADMIN_PASSWORD } })).json || {}).sid;
+    ck('signed in', !!sid);
+
+    // ── THE ROUTE IS ACTUALLY MOUNTED ────────────────────────────────────
+    // The check that would have caught a bad mount path. routes/pages.js
+    // reaches helpers through a SYMLINK (routes/helpers -> ../helpers), so
+    // './helpers/x' and '../helpers/x' both resolve from there and a wrong
+    // one is invisible until a request arrives.
+    const before = await req('GET', '/api/pickups', { sid });
+    ck('GET /api/pickups answers at all', before.status === 200,
+       `${before.status} — if this 404s the mount in routes/pages.js is wrong`);
+
+    const made = await req('POST', '/api/pickups', { sid, body: {
+        company: 'Zimex Freight', pickup_date: '11/20/2026',
+        container_no: 'msdu1122334', location: 'the yard',
+        contact_email: 'ops@zimex.example',
+    } });
+    ck('a pickup posts through the route', made.status === 200 && !!(made.json || {}).id,
+       `${made.status} ${JSON.stringify(made.json)}`);
+    const id = (made.json || {}).id;
+    // The MM/DD/YYYY the screen will send, kept as sent and understood later.
+    ck('  the date it sent is stored as sent', (made.json || {}).pickup_date === '11/20/2026');
+
+    const listed = await req('GET', '/api/pickups?open=1', { sid });
+    const row = ((listed.json || {}).pickups || []).find((p) => p.id === id);
+    ck('it comes back on the list', !!row, JSON.stringify(listed.json).slice(0, 120));
+    // ── THE ROUTE AND THE AGENT CANNOT DISAGREE ──────────────────────────
+    // Both read pickupAgent.nextAction. A screen that computed its own
+    // "waiting on them" would drift from what the agent actually does.
+    ck('  carrying what the agent will do next', 'next_step' in (row || {}), JSON.stringify(row));
+    ck('  and whether it can be reached at all', row && row.reachable === true);
+
+    // ── NOW DRIVE THE AGENT OVER THE ROW THE ROUTE MADE ──────────────────
+    const s1 = senders();
+    const r1 = await job.run({ sendEmail: s1.sendEmail, sendWhatsapp: s1.sendWhatsapp,
+        sendToTeam: s1.sendToTeam, now: la(8, 20) });
+    ck('the agent asks about the pickup the ROUTE created',
+       s1.sent.email.some((m) => /MSDU1122334/.test(m.body)), JSON.stringify(r1));
+
+    // ── THE ETA, THE WAY IT USUALLY ARRIVES: BY PHONE ────────────────────
+    const eta = await req('POST', `/api/pickups/${id}/eta`, { sid, body: { eta: 'truck at 2pm' } });
+    ck('an ETA can be recorded by hand', eta.status === 200 && (eta.json || {}).eta === 'truck at 2pm',
+       `${eta.status} ${JSON.stringify(eta.json)}`);
+    const s2 = senders();
+    await job.run({ sendEmail: s2.sendEmail, sendWhatsapp: s2.sendWhatsapp,
+        sendToTeam: s2.sendToTeam, now: la(14, 20) });
+    ck('  and the chasing stops for good',
+       s2.sent.email.length === 0 && s2.sent.team.length === 0,
+       'she told it the answer; asking again would be absurd');
+
+    const blank = await req('POST', `/api/pickups/${id}/eta`, { sid, body: { eta: '' } });
+    ck('an empty ETA is refused with a sentence',
+       blank.status >= 400 && /whatever they said/.test(JSON.stringify(blank.json)),
+       JSON.stringify(blank.json));
+
+    // ── THE EDIT ROUTE CANNOT REACH THE AGENT'S BOOKKEEPING ─────────────
+    // WRITTEN BECAUSE A MUTATION SURVIVED. Replacing the EDITABLE allowlist
+    // with Object.assign(fields, b) broke nothing above, and it is a real
+    // hole in both directions: a form posting `sent: []` makes the agent
+    // ask the carrier everything a second time, and one posting an `eta`
+    // silences it on a pickup nobody has actually answered. `sent`,
+    // `eta` and `confirmed_at` belong to the agent and to the /eta route.
+    const p2 = (await req('POST', '/api/pickups', { sid, body: {
+        company: 'Allowlist Freight', pickup_date: '11/25/2026',
+        contact_email: 'a@b.example' } })).json;
+    await req('POST', `/api/pickups/${p2.id}/eta`, { sid, body: { eta: 'noon' } });
+    const meddle = await req('PATCH', `/api/pickups/${p2.id}`, { sid, body: {
+        location: 'gate 4',            // legitimate, must land
+        sent: [], eta: '', confirmed_at: '', status: 'cancelled', id: 'hijacked',
+    } });
+    ck('an edit changes what it is allowed to', meddle.status === 200
+       && (meddle.json || {}).location === 'gate 4', JSON.stringify(meddle.json).slice(0, 120));
+    // Looked up defensively, and the id is checked FIRST. Without that the
+    // `id: 'hijacked'` in the body makes get() return null and the whole
+    // file CRASHES — which does kill the mutation, but a crash names
+    // nothing. A red check with a sentence on it tells the next person what
+    // broke; a stack trace makes them go and find out.
+    const after2 = pickups.get(p2.id) || null;
+    ck('  the id cannot be rewritten by an edit', !!after2,
+       'the record is gone under its own id — a body field overwrote it');
+    if (after2) {
+        ck('  and cannot blank the ETA, which would re-chase an answered pickup',
+           after2.eta === 'noon', JSON.stringify(after2.eta));
+        ck('  nor rewrite what the agent has already sent',
+           Array.isArray(after2.sent) && after2.sent.length === (p2.sent || []).length,
+           JSON.stringify(after2.sent));
+        ck('  nor change the status behind the status route\'s back',
+           after2.status !== 'cancelled', after2.status);
+    }
+
+    // ── THE VOICE PATH, THE CALLER THAT ALWAYS BREAKS ────────────────────
+    // CLAUDE.md names it twice: it is the caller with no form to put a field
+    // on, and it has broken twice before for exactly that reason.
+    const tools = require(path.join(ROOT, 'helpers/tools'));
+    const names = tools.TOOL_NAMES || Object.keys(tools.TOOLS);
+    ck('the bot can record a pickup by voice', names.includes('record_pickup'));
+    ck('  and can be asked about one', names.includes('pickup_status'));
+    const prop = tools.TOOLS.record_pickup.build({ company: 'AJ Transport', pickup_date: '2026-11-21' });
+    ck('  the proposal says what will HAPPEN, not just what is stored',
+       /ask them for the ETA/.test(prop.summary), prop.summary);
+    const spoken = await prop.run();
+    ck('  and a spoken pickup is a real one', !!spoken.id && spoken.source === 'voice',
+       JSON.stringify(spoken).slice(0, 100));
+    const asked = await tools.TOOLS.pickup_status.run({ company: 'zimex' });
+    ck('"has anyone chased Zimex" is answerable', asked.pickups >= 1, JSON.stringify(asked).slice(0, 140));
+    ck('  and leads with whether they answered', 'eta' in (asked.rows[0] || {}) && 'asked' in (asked.rows[0] || {}),
+       JSON.stringify(asked.rows[0]));
+
+    await new Promise((r) => server.close(r));
+}
+
 console.log(`\n  ${pass} passed, ${fail} failed`);
 if (fail) { console.log('FAILED:'); failures.forEach((f) => console.log('  - ' + f)); process.exit(1); }
 })().catch((e) => { console.log('CRASHED: ' + (e && e.stack || e)); process.exit(1); });

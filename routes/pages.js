@@ -160,6 +160,13 @@ module.exports = function (app, ctx) {
     // carries the customer's complaint and Edge's margin.
     require('./helpers/claims/routes').mount(app, cfg);
 
+    // ── Pickups, and the Follow-up Agent's screen data ──────────────────
+    // Apsara, 2026-11-06: "Have a followup agent". Mounted here for the same
+    // reason claims is — one line, so api.js keeps its shape. Not in the
+    // staff-allowed prefixes: a pickup carries a carrier's direct contact
+    // and causes mail to go out in Edge's name.
+    require('../helpers/pickupRoutes').mount(app, cfg);
+
     // Old standalone Contact Quotes page — MERGED into /quote-requests
     // 2026-08-16 per Apsara ("Contact Quotes and Quote Requests... both are
     // same"). dashboard/contact-quote-requests.html still exists on disk

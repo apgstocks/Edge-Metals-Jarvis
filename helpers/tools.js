@@ -559,6 +559,78 @@ const TOOLS = {
     // reason — it is the caller with no form to put a field on. A write
     // tool here is a separate decision, asked for one at a time.
 
+    // ── THE PICKUP, BY TALKING (2026-11-06) ─────────────────────────────
+    // Apsara: "Have a followup agent", and before that the pickup she books
+    // with a logistics company. She chose BOTH entry points — Jarvis
+    // arranges it, and she records one — so the voice path gets the same
+    // door the screen has.
+    //
+    // CLAUDE.md rule 1 names this caller twice: the voice path is the one
+    // that breaks, because it is the caller with no form to put a field on.
+    // So it is built from the store's OWN requirements (company and date,
+    // nothing else) rather than from whatever the screen happens to collect.
+    // A field the screen adds later cannot break this.
+    record_pickup: {
+        kind: 'write',
+        description: 'Record that a pickup has been arranged with a logistics company for a '
+            + 'given day, so Jarvis follows up with them on that day for the ETA.',
+        params: {
+            company: { type: 'string', required: true, describe: 'the logistics company or trucker collecting' },
+            pickup_date: { type: 'string', required: true, describe: 'the day it is arranged for' },
+            container_no: { type: 'string' },
+            booking_no: { type: 'string' },
+            location: { type: 'string', describe: 'where they are collecting from' },
+            contact_email: { type: 'string' },
+            contact_whatsapp: { type: 'string' },
+        },
+        // She is agreeing to a sentence, not to a tool call — and the
+        // sentence says what will HAPPEN, because the consequence of this
+        // record is mail going out in her name.
+        build: (p) => ({
+            summary: `Pickup with ${p.company} on ${p.pickup_date}`
+                + (p.container_no ? ` for ${String(p.container_no).toUpperCase()}` : '')
+                + '. Jarvis will ask them for the ETA that morning, chase at 11, '
+                + 'and tell the team at 2 if they have not answered.',
+            run: async () => require('./pickups').create(p, 'voice'),
+        }),
+    },
+
+    // Read, so it answers at once — "is anyone chasing the Zimex pickup?"
+    // is a question, and making her confirm a lookup is what made this feel
+    // like a form.
+    pickup_status: {
+        kind: 'read',
+        description: 'Pickups arranged, what Jarvis has already asked the logistics company, '
+            + 'and whether they have given an ETA yet.',
+        params: { company: { type: 'string' }, container: { type: 'string' }, open: { type: 'boolean' } },
+        run: async (p) => {
+            const pk = require('./pickups');
+            const agent = require('./pickupAgent');
+            const norm = (v) => String(v == null ? '' : v).trim().toLowerCase();
+            let rows = pk.list();
+            if (norm(p.company)) rows = rows.filter((r) => norm(r.company).includes(norm(p.company)));
+            if (norm(p.container)) rows = rows.filter((r) => norm(r.container_no) === norm(p.container));
+            if (p.open) rows = rows.filter((r) => r.status === 'arranged' && !String(r.eta || '').trim());
+            const nowD = new Date();
+            return {
+                pickups: rows.length,
+                rows: rows.map((r) => {
+                    const next = agent.nextAction(r, nowD);
+                    return {
+                        company: r.company, container_no: r.container_no,
+                        pickup_date: r.pickup_date, status: r.status,
+                        // Her actual question is "has anyone chased them",
+                        // so the answer leads with that rather than a status.
+                        eta: r.eta || null,
+                        asked: (r.sent || []).filter((s) => s && s.step !== 'escalate').length,
+                        team_told: (r.sent || []).some((s) => s && s.step === 'escalate'),
+                        next_step: next.step, next_why: next.why,
+                    };
+                }),
+            };
+        },
+    },
+
     bank_unmatched: {
         kind: 'read',
         description: 'Money in the bank that is not yet explained — deposits with no invoice '

@@ -497,6 +497,30 @@ const MUTATIONS = [
     // ── THE SPLIT ITSELF (2026-10-31) ────────────────────────────────────
     // Replaces 'quality-only demand: her column set is used on MIXED pages
     // too', which guarded the single-table rule that the split removed.
+    // ── THE FOLLOW-UP AGENT'S WAY IN (2026-11-06) ───────────────────────
+    { name: 'pickups: the route stops carrying what the agent will do, so the screen drifts',
+      file: 'helpers/pickupRoutes.js', suites: ['follow-up-agent'],
+      find: "                    next_step: next.step,",
+      to:   "                    next_step_gone: next.step," },
+    { name: 'pickups: an empty ETA is accepted, silencing a pickup nobody answered',
+      file: 'helpers/pickupRoutes.js', suites: ['follow-up-agent'],
+      find: "            if (!eta) return bad(res,",
+      to:   "            if (false) return bad(res," },
+    // SURVIVED on first run: the allowlist could be dropped and nothing went
+    // red. A form posting `sent: []` re-chases the carrier from scratch and
+    // one posting `eta` silences a live pickup. Checks were added rather
+    // than the mutation retired.
+    { name: 'pickups: the edit allowlist is dropped, so a form can rewrite the agent\'s bookkeeping',
+      file: 'helpers/pickupRoutes.js', suites: ['follow-up-agent'],
+      find: "            for (const k of EDITABLE) if (k in b) fields[k] = str(b[k]);",
+      to:   "            Object.assign(fields, b);" },
+    // The reply is how a pickup closes itself. Without it she confirms every
+    // ETA by hand and the agent keeps chasing people who have answered.
+    { name: 'pickups: a carrier\'s reply no longer closes the pickup',
+      file: 'workflow/emailReplyWatch.js', suites: ['follow-up-agent'],
+      find: "            if (intent.startsWith('pickup_eta:')) {",
+      to:   "            if (false) {" },
+
     // ── THE FOLLOW-UP AGENT'S SENDING (2026-11-06) ──────────────────────
     // "Have a followup agent". The seventh agent, and the only one that
     // mails a company she buys from — claimsAgentJob deliberately chases HER
