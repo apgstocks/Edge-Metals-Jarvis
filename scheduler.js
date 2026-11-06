@@ -1566,6 +1566,52 @@ function start() {
         .run({ send: (t) => _sendToManager(t), alreadySent, markSent })
         .catch(e => console.error('[SCHED] booking-agent:', e)), TZ);
 
+    // ── Follow-up Agent — did the truck actually turn up? ────────────────
+    // Apsara, 2026-11-06: "Have a followup agent", after:
+    //   "if i book a shipment pickup with a logistics company,say pickup
+    //    arranged @11/05 say on that particular day,it should follow up with
+    //    the logistic company about the pickup eta na?if no response,it needs
+    //    to follow up and communicate the same to my team"
+    //
+    // ── HOURLY, NOT ONCE A DAY, AND THAT IS THE WHOLE DESIGN ────────────
+    // Every other agent here fires once and says its piece. This one has a
+    // LADDER across the pickup day — 08:00 ask, 11:00 chase, 14:00 tell the
+    // team — and a rung is only due if the one before it got no answer. A
+    // daily slot could not express that; the agent has to be able to look at
+    // the clock more than once. 8-15 covers the ladder with an hour either
+    // side, so a missed tick is caught by the next one rather than lost.
+    //
+    // helpers/pickupAgent.js decides and will not fire a rung twice, so
+    // running eight times a day sends at most three messages. The extra
+    // ticks cost a file read.
+    //
+    // ── THE ONE AGENT THAT MAILS A SUPPLIER DIRECTLY ────────────────────
+    // claimsAgentJob deliberately does not ("sends no mail to a supplier" —
+    // its own header); it chases HER. This one chases THEM, because that is
+    // what she asked for in so many words. So it gets the real senders, and
+    // everything defensive in helpers/pickupAgent.js exists for that reason.
+    //
+    // sendToTeam is her team's WhatsApp group (cfg.getTeamGroupId), falling
+    // back to the manager when no group is set — index.js already makes that
+    // decision, and the escalation should not make a second one.
+    cron.schedule('0 8-15 * * *', () => require('./helpers/followUpAgentJob')
+        .run({
+            sendEmail: async (m) => {
+                const { sendTrackedEmail } = require('./helpers/pickupMail');
+                return sendTrackedEmail(m);
+            },
+            sendWhatsapp: async (to, text) => _sendMessage(to, text),
+            sendToTeam: async (text) => _sendToTeam(text),
+        })
+        .then((r) => {
+            const line = require('./helpers/followUpAgentJob').summarise(r);
+            // Quiet unless there is something a person must act on. Every
+            // agent here that spoke daily regardless has had to be
+            // quietened later.
+            if (line) return _sendToManager(line);
+        })
+        .catch(e => console.error('[SCHED] follow-up:', e)), TZ);
+
     // Apsara, 2026-10-12: "constantly monitoring cost". Hourly; speaks at most
     // once per Pacific day. See helpers/aiCostWatch.js.
     cron.schedule('20 * * * *',   () => require('./helpers/aiCostWatch').check().catch(e => console.error('[SCHED] ai-cost-watch:', e)), TZ);

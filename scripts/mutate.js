@@ -497,6 +497,32 @@ const MUTATIONS = [
     // ── THE SPLIT ITSELF (2026-10-31) ────────────────────────────────────
     // Replaces 'quality-only demand: her column set is used on MIXED pages
     // too', which guarded the single-table rule that the split removed.
+    // ── THE FOLLOW-UP AGENT'S SENDING (2026-11-06) ──────────────────────
+    // "Have a followup agent". The seventh agent, and the only one that
+    // mails a company she buys from — claimsAgentJob deliberately chases HER
+    // instead. So these mutations are about where the words LAND.
+    { name: 'follow-up: a failed send is recorded as sent, burying the pickup',
+      file: 'helpers/followUpAgentJob.js', suites: ['follow-up-agent'],
+      find: "            if (!landed.length) {",
+      to:   "            if (false) {" },
+    { name: 'follow-up: an unreachable pickup is silently skipped',
+      file: 'helpers/followUpAgentJob.js', suites: ['follow-up-agent'],
+      find: "                out.unreachable.push({ id: row.id, company: str(row.company),",
+      to:   "                if (false) out.unreachable.push({ id: row.id, company: str(row.company)," },
+    // The mortifying one: "someone needs to call them" arriving AT them.
+    { name: 'follow-up: the escalation goes to the carrier instead of her team',
+      file: 'helpers/followUpAgentJob.js', suites: ['follow-up-agent'],
+      find: "            if (step === 'escalate') {",
+      to:   "            if (false) {" },
+    { name: 'follow-up: WhatsApp is dropped, so only one channel is ever used',
+      file: 'helpers/followUpAgentJob.js', suites: ['follow-up-agent'],
+      find: "            if (ch.whatsapp && sendWhatsapp) {",
+      to:   "            if (false) {" },
+    { name: 'follow-up: the briefing speaks every day whether or not anything happened',
+      file: 'helpers/followUpAgentJob.js', suites: ['follow-up-agent'],
+      find: "    const lines = bits.length ? ['Follow-ups: ' + bits.join(' \u00b7 ')] : [];",
+      to:   "    const lines = ['Follow-ups: ' + bits.join(' \u00b7 ')];" },
+
     // ── THE PICKUP CHASER (2026-11-06) ──────────────────────────────────
     // Apsara: "if i book a shipment pickup with a logistics company ... on
     // that particular day,it should follow up ... if no response,it needs to
