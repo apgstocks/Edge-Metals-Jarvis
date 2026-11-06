@@ -258,6 +258,8 @@ const FILES = {
     REPLY_WATCH_CHASE_FILE: path.join(DATA_DIR, 'reply_watch_chase.json'),
     // Customers on ETA-based payment terms (ETA-10, ETA+7 …) — skipped by the payment follow-up drafts, see helpers/paymentFollowups.js
     CUSTOMER_PAY_TERMS_FILE: path.join(DATA_DIR, 'customer_pay_terms.json'),
+    // What the Follow-up Agent has already told her about each customer's unpaid invoices (helpers/paymentChaser.js).
+    PAYMENT_CHASE_LOG_FILE: path.join(DATA_DIR, 'payment_chase_log.json'),
     // Nightly mail sweep -> register: what each night found, and when the morning email last went — see helpers/partyInvoiceNightly.js
     PARTY_INVOICE_NIGHTLY_FILE: path.join(DATA_DIR, 'party_invoice_nightly.json'),
     // ── EDGE METALS MATERIAL RECEIVED, ITEMISED FROM A PACKING LIST ──────

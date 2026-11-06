@@ -1602,6 +1602,8 @@ function start() {
             },
             sendWhatsapp: async (to, text) => _sendMessage(to, text),
             sendToTeam: async (text) => _sendToTeam(text),
+            // Payment follow-ups tell HER (drafts only; nothing goes to a customer).
+            sendToManager: async (text) => _sendToManager(text),
         })
         .then((r) => {
             const line = require('./helpers/followUpAgentJob').summarise(r);

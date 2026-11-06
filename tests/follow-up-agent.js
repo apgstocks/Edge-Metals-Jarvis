@@ -235,7 +235,13 @@ section('H — it does not trespass on the chasers that already exist');
        kinds.join(','));
     const src = fs.readFileSync(path.join(ROOT, 'helpers/followUpAgentJob.js'), 'utf8');
     const code = src.replace(/\/\/[^\n]*/g, '').replace(/\/\*[\s\S]*?\*\//g, '');
-    for (const owned of ['claimsAgent', 'quoteRequests', 'paymentFollowups']) {
+    // paymentFollowups was on this list until 2026-11-07. It chased nobody - it only BUILT drafts for a
+    // screen - so there was no second chaser to collide with, and Apsara asked for payment follow-ups
+    // under this agent ("Add customer payment follow-ups"). The decision is made here, in the commit that
+    // uses it, as this file's own header demands. The guard that matters moved with it: the payment half
+    // must have NO path to a customer (tests/follow-up-payments.js pins that). claimsAgent and
+    // quoteRequests still have owners and are still not reached into.
+    for (const owned of ['claimsAgent', 'quoteRequests']) {
         ck(`  it does not reach into ${owned}`, !new RegExp(owned).test(code),
            'that ground has an owner; two chasers means two mails');
     }

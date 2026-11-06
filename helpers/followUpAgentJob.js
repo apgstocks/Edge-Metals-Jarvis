@@ -15,7 +15,10 @@
 //
 //   helpers/claimsAgentJob.js    chases claims, and gets LOUDER with age
 //   workflow/quoteRequests.js    chases truckers who have not quoted
-//   helpers/paymentFollowups.js  chases payments
+//   helpers/paymentFollowups.js  chases payments   (2026-11-07: now the DRAFT SOURCE for
+//                                                    the payment half below, which is
+//                                                    this agent's and tells HER, never
+//                                                    the customer - see paymentChaser.js)
 //
 // Pointing a second agent at any of those would mail the same supplier about
 // the same thing twice in one morning, from the same address, which is how a
@@ -85,6 +88,7 @@ async function run(opts = {}) {
     const sendEmail = typeof opts.sendEmail === 'function' ? opts.sendEmail : null;
     const sendWhatsapp = typeof opts.sendWhatsapp === 'function' ? opts.sendWhatsapp : null;
     const sendToTeam = typeof opts.sendToTeam === 'function' ? opts.sendToTeam : null;
+    const sendToManager = typeof opts.sendToManager === 'function' ? opts.sendToManager : null;
     const now = opts.now || null;
 
     const out = {
@@ -206,7 +210,52 @@ async function run(opts = {}) {
             else if (step === 'chase') out.chased += 1;
         }
     }
+    // ── CUSTOMER PAYMENTS (2026-11-07) ───────────────────────────────────
+    // After the pickups and walled off from them: whatever happens here, a pickup rung
+    // has already fired, and a failure here is reported rather than thrown.
+    try { out.payments = await runPayments({ sendToManager, sendToTeam, now: opts.now, drafts: opts.paymentDrafts }); }
+    catch (e) { out.payments = { asked: 0, chased: 0, escalated: 0, failed: [{ why: 'payment follow-ups could not run: ' + (e && e.message) }] }; }
     return out;
+}
+
+// ── THE PAYMENT HALF ─────────────────────────────────────────────────────
+// Drafts only; this never contacts a customer (see helpers/paymentChaser.js). One batched
+// message to her for the asks and chases, one to the team per escalation. A rung is
+// recorded only AFTER the message went, so a failed send is retried next run rather than
+// buried.
+async function runPayments({ sendToManager, sendToTeam, now, drafts }) {
+    const res = { asked: 0, chased: 0, escalated: 0, failed: [] };
+    if (String(process.env.PAYMENT_CHASE || '').toLowerCase() === 'off') return { ...res, off: true };
+    const chaser = require('./paymentChaser');
+    const t = now ? new Date(now).getTime() : Date.now();
+    let list = drafts;
+    if (!list) list = require('./paymentFollowups').build({ now: t }).drafts;
+    const log = chaser.prune(chaser.readLog(), list);
+    const todo = chaser.plan(list, log, t);
+    if (!todo.length) { if (JSON.stringify(log) !== JSON.stringify(chaser.readLog())) await chaser.writeLog(log); return res; }
+
+    const told = [];
+    const forMe = todo.filter((x) => x.step !== 'escalate');
+    if (forMe.length) {
+        if (!sendToManager) res.failed.push({ why: 'nothing to tell her with (payment follow-ups are waiting)' });
+        else {
+            const asks = forMe.filter((x) => x.step === 'ask');
+            const chases = forMe.filter((x) => x.step === 'chase');
+            const parts = [];
+            if (asks.length) parts.push(`Payment follow-ups ready (${asks.length}):`, ...asks.map((x) => '  \u00b7 ' + chaser.lineFor(x.draft, 'ask')));
+            if (chases.length) parts.push(...(parts.length ? [''] : []), `Still unpaid (${chases.length}):`, ...chases.map((x) => '  \u00b7 ' + chaser.lineFor(x.draft, 'chase')));
+            parts.push('', 'The drafts are in Jarvis under Payment follow-ups. Nothing has been sent to any customer.');
+            try { await sendToManager(parts.join('\n')); told.push(...forMe); res.asked += asks.length; res.chased += chases.length; }
+            catch (e) { res.failed.push({ why: 'could not tell her: ' + (e && e.message) }); }
+        }
+    }
+    for (const x of todo.filter((y) => y.step === 'escalate')) {
+        if (!sendToTeam) { res.failed.push({ company: x.draft.customer, why: 'nothing to tell the team with' }); continue; }
+        try { await sendToTeam(chaser.lineFor(x.draft, 'escalate')); told.push(x); res.escalated += 1; }
+        catch (e) { res.failed.push({ company: x.draft.customer, why: 'escalation failed: ' + (e && e.message) }); }
+    }
+    if (told.length) await chaser.writeLog(chaser.recorded(log, told, t));
+    return res;
 }
 
 // ── A LINE FOR THE MORNING BRIEFING ──────────────────────────────────────
@@ -224,6 +273,15 @@ function summarise(result) {
     if (r.chased) bits.push(`${r.chased} chased`);
     if (r.escalated) bits.push(`${r.escalated} passed to the team`);
     const lines = bits.length ? ['Follow-ups: ' + bits.join(' · ')] : [];
+    const pay = r.payments || {};
+    if (pay.asked || pay.chased || pay.escalated) {
+        const pb = [];
+        if (pay.asked) pb.push(`${pay.asked} payment follow-up${pay.asked === 1 ? '' : 's'} drafted`);
+        if (pay.chased) pb.push(`${pay.chased} still unpaid`);
+        if (pay.escalated) pb.push(`${pay.escalated} passed to the team`);
+        lines.push('Payments: ' + pb.join(' \u00b7 '));
+    }
+    for (const f of (pay.failed || [])) lines.push(`Payment follow-up failed${f.company ? ' for ' + f.company : ''}: ${f.why}`);
     for (const u of (r.unreachable || [])) {
         lines.push(`No way to reach ${u.company || 'a carrier'} about ${u.container_no || 'a pickup'} — ${u.why}`);
     }
