@@ -95,7 +95,10 @@ tr:last-child td { border-bottom:none; }
       <button id="btnRptApply" class="btn btn-secondary">Apply</button>
       <button id="btnRptClear" class="btn btn-secondary">Clear</button>
     </div>
-    <div id="rptSummary" class="card" style="padding:16px 18px; margin-bottom:16px;"></div>
+    <div id="rptSummary" class="card" style="padding:16px 18px; margin-bottom:4px;"></div>
+    <!-- How the collected money arrived. Its own element so a failure to
+         render it cannot take the totals above down with it. -->
+    <div id="rptByMode" style="margin:0 0 16px; padding:0 18px;"></div>
     <!-- ── WHAT WAS SOLD, BY ITEM ───────────────────────────────────────
          Apsara, 2026-10-17: "If user wants to see say item basis what how
          much loads we bought from this date to that date,it shpuld able to
@@ -381,6 +384,17 @@ function buyerReportRow(b, unit) {
         <span style="font-family:var(--font-mono); font-size:12px; color:var(--text-muted); white-space:nowrap;">${b.loadCount} load${b.loadCount === 1 ? '' : 's'} · ${b.net} ${esc(unit)} · ${fmtMoney(b.amount)}${b.margin != null ? ' · ' + fmtMoney(b.margin) + ' margin' : ''}</span>
       </summary>
       <div style="padding:0 16px 14px;">
+        <!-- ── WHAT THIS BUYER STILL OWES (2026-11-07) ──────────────────
+             The summary line above carries the metal and the margin. This
+             is the collection side: billed, received, and still out — plus
+             how it came in. A buyer row that shows only what was sold
+             cannot answer "has Eccomelt paid me". -->
+        <div style="display:flex; gap:16px; flex-wrap:wrap; font-size:12px; padding:2px 0 10px; color:var(--text-muted);">
+          <span>Invoiced <b style="color:var(--text-strong); font-family:var(--font-mono);">${fmtMoney(b.invoiced)}</b></span>
+          <span>Collected <b style="color:var(--status-success); font-family:var(--font-mono);">${fmtMoney(b.collected)}</b></span>
+          <span>Outstanding <b style="color:${(b.outstanding || 0) > 0 ? 'var(--status-warning)' : 'var(--text-strong)'}; font-family:var(--font-mono);">${fmtMoney(b.outstanding)}</b></span>
+          ${(b.byMode || []).map((m) => `<span style="color:var(--text-faint);">${esc(m.mode)} ${fmtMoney(m.amount)}</span>`).join('')}
+        </div>
         ${b.byType.length ? `
           <table style="width:100%; border-collapse:collapse; font-size:12px;">
             <thead><tr style="text-align:left; border-bottom:1px solid var(--border-subtle);"><th style="padding:6px;">Item type</th><th style="padding:6px;">Items</th><th style="padding:6px;">Net</th><th style="padding:6px;">Amount</th></tr></thead>
@@ -400,6 +414,19 @@ async function loadReport() {
       <div style="display:flex; gap:24px; flex-wrap:wrap; font-size:13px;">
         <div><div style="color:var(--text-faint); font-size:11px;">Loads</div><div style="font-weight:700; color:var(--text-strong);">${data.loadCount}</div></div>
         <div><div style="color:var(--text-faint); font-size:11px;">Total sold</div><div style="font-weight:700; color:var(--text-strong);">${fmtMoney(data.totalAmount)}</div></div>
+        <!-- ── INVOICED / COLLECTED / OUTSTANDING (2026-11-07) ──────────
+             Apsara: "What if paid by cash,paid by various payment type,
+             invoice amount in report of ege yard".
+
+             "Total sold" is the METAL, because margin is measured against
+             it and the haulage she recharges is a pass-through. INVOICED is
+             what the buyer was actually billed — it includes that haulage —
+             and the two differ by exactly the trucking. Shown side by side
+             rather than one replacing the other, because both are real and
+             she needs the pair to see the recharge at all. -->
+        <div><div style="color:var(--text-faint); font-size:11px;">Invoiced</div><div style="font-weight:700; color:var(--text-strong);">${fmtMoney(data.totalInvoiced)}</div></div>
+        <div><div style="color:var(--text-faint); font-size:11px;">Collected</div><div style="font-weight:700; color:var(--status-success);">${fmtMoney(data.totalCollected)}</div></div>
+        <div><div style="color:var(--text-faint); font-size:11px;">Outstanding</div><div style="font-weight:700; color:${(data.totalOutstanding || 0) > 0 ? 'var(--status-warning)' : 'var(--text-strong)'};">${fmtMoney(data.totalOutstanding)}</div></div>
         <div><div style="color:var(--text-faint); font-size:11px;">Total cost (linked loads only)</div><div style="font-weight:700; color:var(--text-strong);">${data.totalCost != null ? fmtMoney(data.totalCost) : '—'}</div></div>
         <div><div style="color:var(--text-faint); font-size:11px;">Total margin</div><div style="font-weight:700; color:${data.totalMargin != null && data.totalMargin >= 0 ? 'var(--status-success)' : 'var(--status-danger)'};">${data.totalMargin != null ? fmtMoney(data.totalMargin) : 'unknown — link inbound loads for margin'}</div></div>
       </div>`;
@@ -427,6 +454,18 @@ async function loadReport() {
       </table>`
       : '<div style="padding:20px; text-align:center; color:var(--text-faint); font-size:13px;">Nothing sold in this range.</div>';
 
+    // How the money actually arrived. One line, under the totals: she asked
+    // "paid by cash, paid by various payment type", and a report that gives
+    // a collected figure without saying how it came in answers half of it.
+    const modeBox = document.getElementById('rptByMode');
+    if (modeBox) {
+      const modes = data.byMode || [];
+      modeBox.innerHTML = modes.length
+        ? '<div style="display:flex; gap:18px; flex-wrap:wrap; font-size:12px; color:var(--text-muted); padding-top:10px;">'
+          + modes.map((m) => `<span>${esc(m.mode)} <b style="color:var(--text-strong); font-family:var(--font-mono);">${fmtMoney(m.amount)}</b></span>`).join('')
+          + '</div>'
+        : '';
+    }
     $('rptByBuyer').innerHTML = data.byBuyer.length ? data.byBuyer.map((b) => buyerReportRow(b, data.unit)).join('') : '<div style="padding:20px; text-align:center; color:var(--text-faint); font-size:13px;">No loads in this range.</div>';
   } catch (e) {
     $('rptSummary').innerHTML = `<div style="color:var(--status-danger); font-size:12px;">${esc(e.message)}</div>`;

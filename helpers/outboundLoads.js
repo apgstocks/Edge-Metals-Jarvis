@@ -516,9 +516,37 @@ function getOutboundReport(allLoads, { from, to } = {}) {
     const { groupByName, normalizeName } = require('./canonicalName');
     const buyerMap = new Map();
     for (const [key, grp] of groupByName(filtered, (l) => l.buyer, 'Unknown buyer')) {
-        buyerMap.set(key, { buyer: grp.label, loadCount: 0, net: 0, amount: 0, cost: 0, costKnown: false, items: [] });
+        buyerMap.set(key, { buyer: grp.label, loadCount: 0, net: 0, amount: 0,
+            invoiced: 0, collected: 0, byMode: new Map(),
+            cost: 0, costKnown: false, items: [] });
     }
     let overallCost = 0, overallCostKnown = false;
+
+    // ── WHAT WAS INVOICED, AND WHAT CAME BACK (2026-11-07) ───────────────
+    // Apsara, 2026-11-06: "What if paid by cash,paid by various payment
+    // type,invoice amount in report of ege yard/think of all permuattion adn
+    // combination", then "not in nightky yard report.in webiste/app".
+    //
+    // This report answered one question — what did we SELL — and she was
+    // asking a different one: of that, what has actually been collected, and
+    // how. A sales figure with no collection beside it reads as money in the
+    // bank when half of it may still be owed.
+    //
+    // THREE FIGURES, NOT ONE, because they are genuinely different:
+    //   amount    the METAL. Untouched, because `margin` is measured against
+    //             it and the haulage she recharges is a pass-through, not
+    //             profit. Changing this would quietly move every margin.
+    //   invoiced  what the buyer was actually billed — receivableOf, so the
+    //             trucking charged to him is in it. The old report summed
+    //             `amount` and therefore UNDER-REPORTED the invoice by
+    //             exactly the haulage, the same mistake api.js made on the
+    //             payment path (fixed yesterday).
+    //   collected what has been received against it.
+    //
+    // Lazy require: helpers/payments.js already requires THIS file, so a
+    // top-level require back would be a cycle.
+    const pay = (() => { try { return require('./payments'); } catch (e) { return null; } })();
+
     for (const l of filtered) {
         const key = normalizeName(String(l.buyer || '').trim()) || '~blank';
         const b = buyerMap.get(key);
@@ -526,6 +554,19 @@ function getOutboundReport(allLoads, { from, to } = {}) {
         b.loadCount += 1;
         b.net += l.net_weight || 0;
         b.amount += l.amount || 0;
+        // The whole invoice, haulage included.
+        b.invoiced += receivableOf(l) || 0;
+        if (pay) {
+            // Payments are read per load rather than totalled off the load,
+            // because a load carries no paid figure — the payments store is
+            // the only truth, and it is what every screen already reads.
+            const sum = pay.paymentSummary(l.id, receivableOf(l));
+            b.collected += sum.paid || 0;
+            for (const row of (sum.payments || [])) {
+                const mode = String((row && row.mode) || 'Not recorded');
+                b.byMode.set(mode, round2((b.byMode.get(mode) || 0) + (Number(row.amount) || 0)));
+            }
+        }
         if (Array.isArray(l.items)) b.items.push(...l.items);
         // Margin only accumulates for loads that actually have a linked
         // inbound cost — an unlinked load contributes to net/amount (real,
@@ -540,6 +581,14 @@ function getOutboundReport(allLoads, { from, to } = {}) {
             loadCount: b.loadCount,
             net: round2(b.net),
             amount: round2(b.amount),
+            invoiced: round2(b.invoiced),
+            collected: round2(b.collected),
+            // Never negative: an overpayment is not "minus owed". Same rule
+            // helpers/payments.js's paymentSummary follows for `pending`.
+            outstanding: Math.max(0, round2(b.invoiced - b.collected)),
+            byMode: [...b.byMode.entries()]
+                .map(([mode, amount]) => ({ mode, amount }))
+                .sort((x, y) => y.amount - x.amount),
             cost: b.costKnown ? round2(b.cost) : null,
             margin: b.costKnown ? round2(b.amount - b.cost) : null,
             byType: b.items.length ? groupItemsByDescription(b.items) : [],
@@ -547,12 +596,28 @@ function getOutboundReport(allLoads, { from, to } = {}) {
         .sort((a, b) => (b.net || 0) - (a.net || 0));
 
     const totalAmount = filtered.reduce((sum, l) => sum + (l.amount || 0), 0);
+    const totalInvoiced = byBuyer.reduce((s, b) => s + (b.invoiced || 0), 0);
+    const totalCollected = byBuyer.reduce((s, b) => s + (b.collected || 0), 0);
+    // One list for the whole report, so "how much came in as cash" is
+    // answerable without adding up the buyers by hand.
+    const modeTotals = new Map();
+    for (const b of byBuyer) {
+        for (const m of (b.byMode || [])) {
+            modeTotals.set(m.mode, round2((modeTotals.get(m.mode) || 0) + m.amount));
+        }
+    }
     return {
         loadCount: filtered.length,
         unit: filtered.find((l) => l.weight_unit)?.weight_unit || 'lb',
         byType,
         byBuyer,
         totalAmount: round2(totalAmount),
+        totalInvoiced: round2(totalInvoiced),
+        totalCollected: round2(totalCollected),
+        totalOutstanding: Math.max(0, round2(totalInvoiced - totalCollected)),
+        byMode: [...modeTotals.entries()]
+            .map(([mode, amount]) => ({ mode, amount }))
+            .sort((a, b) => b.amount - a.amount),
         totalCost: overallCostKnown ? round2(overallCost) : null,
         totalMargin: overallCostKnown ? round2(totalAmount - overallCost) : null,
     };

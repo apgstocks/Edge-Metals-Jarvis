@@ -507,10 +507,25 @@ async function renderSalesReportInto(id) {
   const data = await api('/api/outbound-loads/report');
   const rows = data.byBuyer || [];
   $(id).innerHTML = `
-    <div style="display:flex; gap:18px; margin-bottom:14px;">
+    <div style="display:flex; gap:18px; margin-bottom:10px; flex-wrap:wrap;">
       <div><div style="font-size:20px; font-weight:700; color:var(--text-strong);">${repMoney(data.totalAmount)}</div><div style="font-size:11px; color:var(--text-muted);">sold</div></div>
       <div><div style="font-size:20px; font-weight:700; color:var(--text-strong);">${data.totalMargin === null ? '—' : repMoney(data.totalMargin)}</div><div style="font-size:11px; color:var(--text-muted);">margin</div></div>
     </div>
+    <!-- ── THE COLLECTION SIDE (2026-11-07) ────────────────────────────
+         Apsara: "invoice amount in report of ege yard", "paid by cash,paid
+         by various payment type". "Sold" is the metal — margin is measured
+         against it. "Invoiced" is what the buyer was billed, haulage
+         included, so the two differ by exactly the trucking recharge.
+         Second row rather than the same one: these answer "has the money
+         come in", which is a different question from "did we make any". -->
+    <div style="display:flex; gap:18px; margin-bottom:14px; flex-wrap:wrap;">
+      <div><div style="font-size:15px; font-weight:700; color:var(--text-strong);">${repMoney(data.totalInvoiced)}</div><div style="font-size:11px; color:var(--text-muted);">invoiced</div></div>
+      <div><div style="font-size:15px; font-weight:700; color:var(--status-success, #2F8F57);">${repMoney(data.totalCollected)}</div><div style="font-size:11px; color:var(--text-muted);">collected</div></div>
+      <div><div style="font-size:15px; font-weight:700; color:${(data.totalOutstanding || 0) > 0 ? 'var(--status-warning, #D99A2B)' : 'var(--text-strong)'};">${repMoney(data.totalOutstanding)}</div><div style="font-size:11px; color:var(--text-muted);">outstanding</div></div>
+    </div>
+    ${(data.byMode || []).length ? `<div style="font-size:11.5px; color:var(--text-muted); margin-bottom:12px; line-height:1.6;">${
+      data.byMode.map((m) => `${esc(m.mode)} <span style="font-family:var(--font-mono); color:var(--text-strong);">${repMoney(m.amount)}</span>`).join(' &middot; ')
+    }</div>` : ''}
     ${data.totalMargin === null ? `<div style="font-size:11.5px; color:var(--status-warning, #d69e2e); margin-bottom:12px; line-height:1.5;">No sale is linked to the loads it came from, so there is no cost to measure against.</div>` : ''}
     ${rows.length ? rows.map((b) => `
       <div style="border-top:1px solid var(--border-subtle); padding:9px 0;">
@@ -521,6 +536,13 @@ async function renderSalesReportInto(id) {
         <div style="font-size:11.5px; color:var(--text-muted); margin-top:2px;">
           ${repNum(b.net)} ${esc(data.unit || 'lb')} · ${b.loadCount} load${b.loadCount === 1 ? '' : 's'}${
             b.margin === null ? ' · cost not linked' : ` · margin ${repMoney(b.margin)}`}
+        </div>
+        <div style="font-size:11.5px; margin-top:3px; color:var(--text-muted);">
+          invoiced <span style="font-family:var(--font-mono); color:var(--text-strong);">${repMoney(b.invoiced)}</span>
+          · collected <span style="font-family:var(--font-mono); color:var(--status-success, #2F8F57);">${repMoney(b.collected)}</span>${
+            (b.outstanding || 0) > 0
+              ? ` · <span style="color:var(--status-warning, #D99A2B);">owes <span style="font-family:var(--font-mono);">${repMoney(b.outstanding)}</span></span>`
+              : ' · settled'}
         </div>
       </div>`).join('') : '<div>Nothing sold yet.</div>'}`;
 }

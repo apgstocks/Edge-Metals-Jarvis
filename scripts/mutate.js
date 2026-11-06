@@ -531,6 +531,34 @@ const MUTATIONS = [
       find: "    Object.defineProperty(o, 'entity', { value: entity || null, enumerable: true });",
       to:   "    Object.defineProperty(o, 'entity', { value: null, enumerable: true });" },
 
+    // ── THE SALES REPORT'S COLLECTION SIDE (2026-11-07) ─────────────────
+    // "invoice amount in report of ege yard", "paid by cash,paid by various
+    // payment type". The report showed SOLD and MARGIN and could not say
+    // what had actually come in.
+    { name: 'yard-sales: invoiced sums the metal, dropping the haulage billed to the buyer',
+      file: 'helpers/outboundLoads.js', suites: ['yard-sales-collection'],
+      find: "        b.invoiced += receivableOf(l) || 0;",
+      to:   "        b.invoiced += l.amount || 0;" },
+    { name: 'yard-sales: collected is read off the load instead of the payments store',
+      file: 'helpers/outboundLoads.js', suites: ['yard-sales-collection'],
+      find: "            b.collected += sum.paid || 0;",
+      to:   "            b.collected += l.paid || 0;" },
+    { name: 'yard-sales: outstanding goes negative on an overpayment',
+      file: 'helpers/outboundLoads.js', suites: ['yard-sales-collection'],
+      find: "            outstanding: Math.max(0, round2(b.invoiced - b.collected)),",
+      to:   "            outstanding: round2(b.invoiced - b.collected)," },
+    { name: 'yard-sales: every payment is lumped under one mode',
+      file: 'helpers/outboundLoads.js', suites: ['yard-sales-collection'],
+      find: "                const mode = String((row && row.mode) || 'Not recorded');",
+      to:   "                const mode = 'Paid';" },
+    // The one that would quietly move money she prices from. Section D was
+    // VACUOUS at first — no fixture had a linked cost, so every margin was
+    // null and null === null passed. Fixed with real linked loads.
+    { name: 'yard-sales: margin is measured on the invoice, inventing profit on recharged haulage',
+      file: 'helpers/outboundLoads.js', suites: ['yard-sales-collection'],
+      find: "            margin: b.costKnown ? round2(b.amount - b.cost) : null,",
+      to:   "            margin: b.costKnown ? round2(b.invoiced - b.cost) : null," },
+
     // ── WHAT A YARD LOAD TOTALS, ON EVERY PATH (2026-11-06) ─────────────
     // Apsara: "What if paid by cash,paid by various payment type,invoice
     // amount in report of ege yard/think of all permuattion adn combination".
