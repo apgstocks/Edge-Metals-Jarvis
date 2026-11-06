@@ -393,16 +393,100 @@ async function renderSpendReportTab() {
     ['All time',   () => ['', '']],
   ];
 
+  // ── THE LOOK, 2026-11-07 ────────────────────────────────────────────────
+  // Apsara: "Ugly". Fifteen filter chips in solid light grey, three rows of
+  // them, shouting louder than the money. An inactive control should be
+  // legible and quiet; only the SELECTED one earns contrast. Same classes and
+  // the same data- attributes, so every click handler below is untouched —
+  // this is paint, not wiring.
+  const chipCss = (on) => on
+    ? 'font-size:11.5px; padding:6px 13px; border-radius:999px; background:var(--accent); '
+      + 'color:#0C0E10; font-weight:700; border:1px solid var(--accent);'
+    : 'font-size:11.5px; padding:6px 13px; border-radius:999px; background:transparent; '
+      + 'color:var(--text-muted); font-weight:500; border:1px solid var(--border-subtle);';
+
+  const groupLabel = 'font-family:var(--font-mono); font-size:9.5px; letter-spacing:.14em; '
+    + 'text-transform:uppercase; color:var(--text-faint); align-self:center; '
+    + 'width:64px; flex:0 0 64px;';
+
+  // A proportion bar. The point of the whole redesign: "$2,049,070.70" and
+  // "95% of everything" are the same number and only one of them is read.
+  const pct = (n, of) => (!of ? 0 : Math.max(0, Math.min(100, (Number(n) || 0) / of * 100)));
+  const bar = (n, of, colour) => `
+    <div style="height:5px; border-radius:3px; background:var(--surface-sunken); overflow:hidden; margin-top:5px;">
+      <div style="height:100%; width:${pct(n, of).toFixed(1)}%; background:${colour}; border-radius:3px;"></div>
+    </div>`;
+
+  // ── WHAT "OUT" IS MADE OF ───────────────────────────────────────────────
+  // Named in the order she thinks about them. Only the non-zero parts are
+  // shown, but NOTHING is dropped for being awkward: these add to rep.total
+  // exactly, which is the property tests/spend-report.js already asserts on
+  // the engine and the reason the heading can stop guessing.
+  const PARTS = [
+    ['Paid to sellers',   rep.loadTotal,           'var(--accent)'],
+    ['Trucking',          rep.truckerTotal,        '#6B8FB5'],
+    ['Suppliers',         rep.supplierTotal,       '#8E7CC3'],
+    ['Cost of sales',     rep.saleCostTotal,       '#C98A5E'],
+    ['Edge Metals haulage', rep.metalsTruckingTotal, '#5E9E8E'],
+    ['Expenses',          rep.expenseTotal,        '#B5736B'],
+  ].filter((r) => Math.abs(Number(r[1]) || 0) > 0.005);
+  const partsSum = PARTS.reduce((a, r) => a + (Number(r[1]) || 0), 0);
+  // If these ever stop reconciling, SAY SO rather than printing a tidy bar
+  // that is quietly short. An unexplained remainder is exactly the thing
+  // this card exists to have stopped.
+  const partsGap = Math.round((Number(rep.total) || 0) - partsSum, 2);
+
+  // One card for both breakdowns. "Not recorded" is a gap, not a bank and not
+  // a company, so it is drawn in warning amber wherever it appears — it was
+  // previously indistinguishable from a real account sitting between BofA and
+  // Chase.
+  const NOT_REC = 'Not recorded';
+  const splitCard = (title, obj, note) => {
+    const keys = Object.keys(obj || {});
+    if (!keys.length) return '';
+    const of = Number(rep.total) || keys.reduce((a, k) => a + (Number(obj[k]) || 0), 0);
+    const rows = keys.sort((a, b) => (obj[b] || 0) - (obj[a] || 0));
+    return `
+      <div style="flex:1 1 300px; min-width:260px;">
+        <div style="font-family:var(--font-mono); font-size:9.5px; letter-spacing:.14em; text-transform:uppercase; color:var(--text-faint); margin-bottom:12px;">${esc(title)}</div>
+        ${rows.map((k) => {
+          const gap = k === NOT_REC;
+          const colour = gap ? 'var(--status-warning, #d69e2e)' : 'var(--accent)';
+          return `
+          <div style="margin-bottom:12px;">
+            <div style="display:flex; justify-content:space-between; align-items:baseline; gap:10px;">
+              <span style="font-size:12.5px; color:${gap ? 'var(--status-warning, #d69e2e)' : 'var(--text-muted)'};">${esc(k)}</span>
+              <span style="font-family:var(--font-mono); font-size:13px; font-weight:700; color:var(--text-strong); white-space:nowrap;">${esc(money(obj[k]))}<span style="color:var(--text-faint); font-weight:400; font-size:11px; margin-left:6px;">${pct(obj[k], of).toFixed(0)}%</span></span>
+            </div>
+            ${bar(obj[k], of, colour)}
+          </div>`;
+        }).join('')}
+        ${note && Number(obj[NOT_REC]) > 0 ? `<div style="font-size:11.5px; color:var(--status-warning, #d69e2e); line-height:1.5; margin-top:-2px;">${esc(note)}</div>` : ''}
+      </div>`;
+  };
+
   $('viewRoot').innerHTML = `
     <section style="max-width:1080px; margin:0 auto; padding:28px 20px 80px;">
       ${pageHead('Spend report', {
         note: spendMethod
           ? `Showing <strong style="color:var(--text-strong);">${esc(spendMethod)}</strong> only — every figure below is ${esc(spendMethod)}.`
           : 'Money OUT — what you paid sellers and spent on expenses, by month and by how it was paid. Sales income is shown separately.',
-        // The four figures were a card below the heading. They ARE the
-        // heading now: "where the money went" is what the numbers say.
-        stats: [['out', esc(money(rep.total))], ['loads', esc(money(rep.loadTotal))],
-                ['expenses', esc(money(rep.expenseTotal))], ['entries', esc(rep.count)]],
+        // ── FOUR FIGURES, AND THREE OF THEM DID NOT ADD UP ──────────────
+        // Apsara, 2026-11-07, on this screen: "Ugly".
+        //
+        // It was, and the worst of it was not the styling. The heading read
+        // out $2,153,593.65 / loads $857,196.72 / expenses $111,925.00 —
+        // which invites the obvious subtraction, and the obvious subtraction
+        // leaves $1,184,471.93 with no name on it. FIFTY-FIVE PER CENT of
+        // the money on her spend report was in categories the screen never
+        // mentioned: trucking, suppliers, sale costs, Edge Metals haulage.
+        //
+        // The engine has had all four since the day each was added and
+        // tests/spend-report.js already asserts they sum to the total. Only
+        // the screen was picking two to show. So the heading now carries the
+        // total and the count, and the composition below it names every
+        // part — see the "Where it went" card.
+        stats: [['out', esc(money(rep.total))], ['entries', esc(rep.count)]],
         chips: [spendMethod ? `${spendMethod} only` : null, 'admin only'],
       })}
 
@@ -421,7 +505,7 @@ async function renderSpendReportTab() {
           <button id="btnSpendApply" class="btn btn-primary" style="padding:10px 18px;">Apply</button>
         </div>
         <div style="display:flex; gap:8px; flex-wrap:wrap; margin-top:12px;">
-          ${presets.map((p, i) => `<button class="btn btn-spend-preset" data-i="${i}" style="font-size:11.5px; padding:7px 12px;">${esc(p[0])}</button>`).join('')}
+          ${presets.map((p, i) => `<button class="btn btn-spend-preset" data-i="${i}" style="${chipCss(false)}">${esc(p[0])}</button>`).join('')}
         </div>
         <!-- ── one method at a time ──────────────────────────────────────
              Apsara, 2026-09-02: "in reports what if i want to see report
@@ -435,7 +519,7 @@ async function renderSpendReportTab() {
         <div style="display:flex; gap:8px; flex-wrap:wrap; margin-top:12px; padding-top:12px; border-top:1px solid var(--border-subtle);">
           <span style="font-family:var(--font-mono); font-size:10px; letter-spacing:.12em; text-transform:uppercase; color:var(--text-muted); align-self:center; margin-right:2px;">Paid by</span>
           ${['', ...(rep.columns || [])].map(m => `
-            <button class="btn btn-spend-method" data-method="${esc(m)}" style="font-size:11.5px; padding:7px 12px; ${spendMethod === m ? 'background:var(--accent); color:#0C0E10; font-weight:700;' : ''}">${esc(m || 'All')}</button>`).join('')}
+            <button class="btn btn-spend-method" data-method="${esc(m)}" style="${chipCss(spendMethod === m)}">${esc(m || 'All')}</button>`).join('')}
         </div>
         <!-- ── AND OUT OF WHICH ACCOUNT ──────────────────────────────────
              Apsara, 2026-09-09. Narrows the whole report the same way the
@@ -450,7 +534,7 @@ async function renderSpendReportTab() {
         <div style="display:flex; gap:8px; flex-wrap:wrap; margin-top:10px;">
           <span style="font-family:var(--font-mono); font-size:10px; letter-spacing:.12em; text-transform:uppercase; color:var(--text-muted); align-self:center; margin-right:2px;">Out of</span>
           ${['', ...(rep.bankColumns || [])].map(b => `
-            <button class="btn btn-spend-bank" data-bank="${esc(b)}" style="font-size:11.5px; padding:7px 12px; ${spendBank === b ? 'background:var(--accent); color:#0C0E10; font-weight:700;' : ''}">${esc(b || 'All')}</button>`).join('')}
+            <button class="btn btn-spend-bank" data-bank="${esc(b)}" style="${chipCss(spendBank === b)}">${esc(b || 'All')}</button>`).join('')}
         </div>` : ''}
         <!-- ── AND WHOSE MONEY ───────────────────────────────────────────
              Apsara, 2026-09-17: "We need to keep track of this also in
@@ -467,51 +551,55 @@ async function renderSpendReportTab() {
         <div style="display:flex; gap:8px; flex-wrap:wrap; margin-top:10px;">
           <span style="font-family:var(--font-mono); font-size:10px; letter-spacing:.12em; text-transform:uppercase; color:var(--text-muted); align-self:center; margin-right:2px;">Paid via</span>
           ${['', ...(rep.paidViaColumns || [])].map(v => `
-            <button class="btn btn-spend-via" data-via="${esc(v)}" style="font-size:11.5px; padding:7px 12px; ${spendPaidVia === v ? 'background:var(--accent); color:#0C0E10; font-weight:700;' : ''}">${esc(v || 'All')}</button>`).join('')}
+            <button class="btn btn-spend-via" data-via="${esc(v)}" style="${chipCss(spendPaidVia === v)}">${esc(v || 'All')}</button>`).join('')}
         </div>` : ''}
       </div>
 
-      <!-- ── WHAT LEFT EACH ACCOUNT ──────────────────────────────────────
-           Apsara, 2026-09-09. Sits beside the totals rather than replacing
-           the method table: the method answers "how", the bank answers "from
-           where", and she reconciles against a statement using the second.
-
-           These add up to Total out exactly, INCLUDING "Not recorded" — a
-           breakdown that quietly omits the rows it has no bank for would
-           disagree with the total and invite her to pick which number to
-           believe. -->
-      ${Object.keys(rep.byBank || {}).length ? `
-      <div class="card" style="padding:16px 18px; margin-bottom:18px;">
-        <div style="font-family:var(--font-mono); font-size:10px; letter-spacing:.14em; text-transform:uppercase; color:var(--text-muted); margin-bottom:10px;">Out of each account</div>
-        <div style="display:flex; gap:26px; flex-wrap:wrap;">
-          ${Object.keys(rep.byBank).sort((a, b) => (rep.byBank[b] || 0) - (rep.byBank[a] || 0)).map(b => `
-            <div>
-              <div style="font-family:var(--font-mono); font-size:11px; color:var(--text-muted);">${esc(b)}</div>
-              <div style="font-size:20px; font-weight:800; color:var(--text-strong);">${esc(money(rep.byBank[b]))}</div>
+      <!-- ── WHERE IT WENT ───────────────────────────────────────────────
+           The card that had to exist before any of this could be called
+           tidy. The heading used to print out / loads / expenses, which do
+           not add up, leaving 55% of her money unnamed on screen. Every
+           part is named here and they sum to the total exactly. -->
+      ${PARTS.length ? `
+      <div class="card" style="padding:18px 20px; margin-bottom:18px;">
+        <div style="font-family:var(--font-mono); font-size:9.5px; letter-spacing:.14em; text-transform:uppercase; color:var(--text-faint); margin-bottom:14px;">Where it went</div>
+        <div style="display:flex; height:8px; border-radius:4px; overflow:hidden; background:var(--surface-sunken); margin-bottom:16px;">
+          ${PARTS.map(([, v, c]) => `<div title="${esc(money(v))}" style="width:${pct(v, rep.total).toFixed(2)}%; background:${c};"></div>`).join('')}
+        </div>
+        <div style="display:flex; flex-wrap:wrap; gap:14px 30px;">
+          ${PARTS.map(([label, v, c]) => `
+            <div style="min-width:132px;">
+              <div style="display:flex; align-items:center; gap:7px;">
+                <span style="width:8px; height:8px; border-radius:2px; background:${c}; flex:0 0 8px;"></span>
+                <span style="font-size:11.5px; color:var(--text-muted);">${esc(label)}</span>
+              </div>
+              <div style="font-family:var(--font-mono); font-size:15px; font-weight:700; color:var(--text-strong); margin-top:3px;">${esc(money(v))}</div>
+              <div style="font-size:10.5px; color:var(--text-faint);">${pct(v, rep.total).toFixed(1)}% of out</div>
             </div>`).join('')}
         </div>
+        ${Math.abs(partsGap) > 0.01 ? `
+        <div style="margin-top:14px; font-size:12px; color:var(--status-danger, #c53030);">
+          These parts come to ${esc(money(partsSum))}, which is ${esc(money(Math.abs(partsGap)))} ${partsGap > 0 ? 'short of' : 'more than'} the ${esc(money(rep.total))} total. One of the two is wrong — do not file from this screen until it is found.
+        </div>` : ''}
       </div>` : ''}
 
+      <!-- ── OUT OF WHICH ACCOUNT, AND WHOSE MONEY ───────────────────────
+           Apsara 2026-09-09 and 2026-09-17, two cards until today. They
+           answer neighbouring questions about the same total, so they sit
+           side by side now and each figure carries its share.
 
-      <!-- ── AND WHOSE MONEY IT WAS ───────────────────────────────────────
-           Apsara, 2026-09-17. The bank says WHICH ACCOUNT; this says whose
-           company. "Chase Bank" does not tell her whether Edge Metals funded
-           a yard purchase.
-
-           Adds up to Total out exactly, including "Not recorded" — the same
-           rule the bank card follows, and for the same reason: a breakdown
-           that quietly omits what it cannot classify disagrees with the total
-           and invites her to pick which number to believe. -->
-      ${Object.keys(rep.byPaidVia || {}).length ? `
-      <div class="card" style="padding:16px 18px; margin-bottom:18px;">
-        <div style="font-family:var(--font-mono); font-size:10px; letter-spacing:.14em; text-transform:uppercase; color:var(--text-muted); margin-bottom:10px;">Paid via</div>
-        <div style="display:flex; gap:26px; flex-wrap:wrap;">
-          ${Object.keys(rep.byPaidVia).sort((a, b) => (rep.byPaidVia[b] || 0) - (rep.byPaidVia[a] || 0)).map(v => `
-            <div>
-              <div style="font-family:var(--font-mono); font-size:11px; color:var(--text-muted);">${esc(v)}</div>
-              <div style="font-size:20px; font-weight:800; color:var(--text-strong);">${esc(money(rep.byPaidVia[v]))}</div>
-            </div>`).join('')}
-        </div>
+           Both still include "Not recorded" and both still add to Total out
+           exactly — a breakdown that quietly omits the rows it cannot
+           classify disagrees with its own total and invites her to pick
+           which number to believe. What has changed is that the gap is
+           drawn AS a gap: amber, with its percentage, instead of sitting
+           between BofA and Chase looking like a third account. -->
+      ${(Object.keys(rep.byBank || {}).length || Object.keys(rep.byPaidVia || {}).length) ? `
+      <div class="card" style="padding:18px 20px; margin-bottom:18px; display:flex; gap:36px; flex-wrap:wrap;">
+        ${splitCard('Out of each account', rep.byBank,
+          'Money that left with no account recorded. Filter "Out of → Not recorded" to find and fix these.')}
+        ${splitCard('Whose money it was', rep.byPaidVia,
+          'Spend with no paying company against it. Edge Yard and Edge Metals are different companies, so an unattributed payment sits on neither return.')}
       </div>` : ''}
 
       <!-- ── money IN, kept apart from money out ──────────────────────────

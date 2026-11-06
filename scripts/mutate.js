@@ -531,6 +531,31 @@ const MUTATIONS = [
       find: "    Object.defineProperty(o, 'entity', { value: entity || null, enumerable: true });",
       to:   "    Object.defineProperty(o, 'entity', { value: null, enumerable: true });" },
 
+    // ── THE SPEND REPORT'S COMPOSITION (2026-11-07) ─────────────────────
+    // Apsara: "Ugly". The heading printed out / loads / expenses, three
+    // numbers that invite a subtraction leaving 55% of her money unnamed.
+    { name: 'spend screen: the heading goes back to printing loads and expenses beside out',
+      file: 'dashboard/app/06-expenses-trucker.js', suites: ['spend-report-screen'],
+      find: "        stats: [['out', esc(money(rep.total))], ['entries', esc(rep.count)]],",
+      to:   "        stats: [['out', esc(money(rep.total))], ['loads', esc(money(rep.loadTotal))], ['expenses', esc(money(rep.expenseTotal))], ['entries', esc(rep.count)]]," },
+    { name: 'spend screen: a part of the total is dropped, so the shares no longer reach 100%',
+      file: 'dashboard/app/06-expenses-trucker.js', suites: ['spend-report-screen'],
+      find: "    ['Suppliers',         rep.supplierTotal,       '#8E7CC3'],",
+      to:   "" },
+    // The quiet failure: a card that draws a short bar and says nothing.
+    { name: 'spend screen: the parts stop reconciling and the screen keeps quiet about it',
+      file: 'dashboard/app/06-expenses-trucker.js', suites: ['spend-report-screen'],
+      find: "        ${Math.abs(partsGap) > 0.01 ? `",
+      to:   "        ${false ? `" },
+    { name: 'spend screen: "Not recorded" is drawn like a real account, not like a gap',
+      file: 'dashboard/app/06-expenses-trucker.js', suites: ['spend-report-screen'],
+      find: "          const gap = k === NOT_REC;",
+      to:   "          const gap = false;" },
+    { name: 'spend screen: every chip gets the accent, so nothing shows which filter is on',
+      file: 'dashboard/app/06-expenses-trucker.js', suites: ['spend-report-screen'],
+      find: "  const chipCss = (on) => on",
+      to:   "  const chipCss = (on) => true" },
+
     // ── THE CALIFORNIA SELLER RECORD (2026-11-07) ───────────────────────
     // Edge Yard is a junk dealer at 2453 E 25th St, Los Angeles. BPC 21606
     // and 21608.5 say what the purchase record must contain, and a false
