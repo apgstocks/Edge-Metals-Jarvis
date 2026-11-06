@@ -141,6 +141,60 @@ section('D — nothing the accounts mail prints can be an object');
        /journal line\(s\)`/.test(src), 'a throw there would put the object back');
 }
 
+// ══════════════════════════════════════════════════════════════════════════
+section('E — "its ugly": the mail she actually reads');
+// ══════════════════════════════════════════════════════════════════════════
+// Apsara, 2026-11-06, on the same mail. It was: the HTML half was the plain
+// text escaped into one monospace <pre>, so a wall of grey courier arrived
+// every morning with no hierarchy — and the worst of it was REPETITION, five
+// identical sentences under three companies.
+{
+    const accounts = require(path.join(ROOT, 'helpers/accountsAgent'));
+    const res = {
+        clean: false,
+        todo: [{ area: 'BOOKS', what: 'Edge Metals: the figures cannot be trusted yet',
+            items: ['Edge Metals: 412 journal lines, books balance.'].concat(
+                Array.from({ length: 5 }, () => 'an entry could not be posted — "metals-purchase" has no amount')) }],
+        quickbooks: { missing: false, stale: false, at: '2026-11-06',
+            owe: 5900366.44, owed: 5190602.1, bills: 497, invoices: 489 },
+    };
+
+    // ── FIFTEEN LINES BECOME ONE ─────────────────────────────────────────
+    const t = accounts.text(res);
+    const repeated = (t.match(/has no amount/g) || []).length;
+    ck('five identical findings print ONCE in the text', repeated === 1, `${repeated} times`);
+    ck('  carrying the count, so nothing is hidden', /5 x /.test(t), t);
+
+    const h = accounts.html(res);
+    const repeatedHtml = (h.match(/has no amount/g) || []).length;
+    ck('and once in the HTML', repeatedHtml === 1, `${repeatedHtml} times`);
+    ck('  with the count as its own column', /5&times;/.test(h), 'inline "5 x" pushes every line to a different start');
+
+    // ── IT IS A LAYOUT, NOT ESCAPED TEXT ─────────────────────────────────
+    // SUPERSEDES the old check "bodyHtml must be preformatted", which
+    // required font-family:ui-monospace. That was right while the HTML was
+    // the plain text in a <pre>: alignment depended on the font. It is now a
+    // table, so alignment is structural and the monospace requirement would
+    // force back the exact wall she objected to.
+    ck('the HTML is a real layout, not a <pre> of the text', !/white-space:pre/.test(h));
+    ck('  and does not force monospace on her', !/ui-monospace/.test(h));
+    ck('  it is table-based, because Gmail strips <style> and class selectors',
+       /<table role="presentation"/.test(h));
+    ck('  with the width as a max, not a fixed 640', !/width="640"/.test(h),
+       'a fixed width attribute beats max-width and runs off a phone');
+
+    // Everything the text says, the HTML says.
+    ck('the HTML carries the heading', /What needs you this morning/.test(h));
+    ck('  the area', /BOOKS/.test(h));
+    ck('  and the standing QuickBooks figures', /5,900,366.44/.test(h), 'owed/owes are context, not a task');
+    ck('nothing in it renders as an object', !/\[object Object\]/.test(h));
+
+    // A clean morning is a sentence, not an empty shell.
+    const clean = accounts.html({ clean: true });
+    ck('a clean morning says so plainly', /Nothing needs you this morning/.test(clean));
+    ck('  and carries no empty sections', !/BOOKS|QUICKBOOKS/.test(clean), clean.slice(0, 200));
+}
+
 console.log(`\n  ${pass} passed, ${fail} failed`);
 if (fail) { console.log('FAILED:'); failures.forEach((f) => console.log('  - ' + f)); process.exit(1); }
 })();

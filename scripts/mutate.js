@@ -497,6 +497,16 @@ const MUTATIONS = [
     // ── THE SPLIT ITSELF (2026-10-31) ────────────────────────────────────
     // Replaces 'quality-only demand: her column set is used on MIXED pages
     // too', which guarded the single-table rule that the split removed.
+    // ── "ITS UGLY" — THE MORNING MAIL'S LAYOUT (2026-11-06) ─────────────
+    { name: 'accounts-mail: identical findings are printed one by one again',
+      file: 'helpers/accountsAgent.js', suites: ['accounts-mail-lines'],
+      find: "        seen.set(line, (seen.get(line) || 0) + 1);",
+      to:   "        seen.set(line + Math.random(), 1);" },
+    { name: 'accounts-mail: the html goes back to escaped text in a monospace block',
+      file: 'helpers/accountsAgent.js', suites: ['accounts-mail-lines', 'accounts-agent'],
+      find: "    const bodyHtml = html(res);",
+      to:   "    const bodyHtml = '<div style=\"font-family:ui-monospace;white-space:pre\">' + gmail.escapeHtmlText(body) + '</div>';" },
+
     // ── THE ACCOUNTS MAIL'S OWN SENTENCES (2026-11-06) ──────────────────
     // Apsara's morning mail said "[object Object]" above figures she was
     // being told not to trust, and blamed all three companies for five Edge

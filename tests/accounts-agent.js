@@ -184,7 +184,18 @@ section('D2. send() is silent when clean — the promise she judges it by');
        /\$13,506\.42/.test(sentTo[0].body) && /delete bill id 38553/.test(sentTo[0].body),
        String(sentTo[0] && sentTo[0].body).slice(0, 200));
     ck('  in monospace, because the meaning is in the alignment',
-       /font-family:ui-monospace/.test(sentTo[0].bodyHtml || ''), 'bodyHtml must be preformatted');
+       // SUPERSEDED 2026-11-06. This required font-family:ui-monospace, and
+       // was right while bodyHtml was the plain text escaped into one <pre>:
+       // the alignment depended on the font. Apsara: "its ugly" — it is now
+       // a table-based layout, where alignment is structural, and keeping
+       // this check would force back the wall of courier she objected to.
+       //
+       // The property it was really defending — the HTML must not be at the
+       // mercy of a client's default font and wrapping — is now defended by
+       // tests/accounts-mail-lines.js section E, which asserts a real table
+       // and no white-space:pre.
+       /<table role="presentation"/.test(sentTo[0].bodyHtml || ''),
+       'bodyHtml must be a laid-out email, not escaped text');
 
     gmail.sendEmail = realSend;
     gmail.getMyEmailAddress = realAddr;

@@ -251,13 +251,37 @@ function review() {
 // so the finding can be run and read without a mailbox — the split
 // integritySweepJob.js already uses, and for its reason: "a change to the
 // wording of an email cannot break a check".
+// ── FIVE IDENTICAL LINES IS THE UGLIEST THING IN THE MAIL ────────────────
+// Apsara, 2026-11-06, on the morning mail: "its ugly".
+//
+// The worst of it was repetition. Five entries failing for the same reason
+// printed the same sentence five times, under three companies — fifteen
+// identical lines in one email, which is both unreadable and misleading
+// about how much is wrong. It reads as fifteen problems; it is one problem
+// with five instances.
+//
+// Collapsed here rather than at the source, because the FINDINGS are right:
+// there genuinely are five unposted entries and each is a separate thing to
+// fix. It is the PRESENTATION that should say "5 x" and the detail that
+// should carry the count.
+function groupItems(items) {
+    const seen = new Map();
+    for (const raw of (items || [])) {
+        const line = String(raw);
+        seen.set(line, (seen.get(line) || 0) + 1);
+    }
+    return [...seen.entries()].map(([line, n]) => ({ line, n }));
+}
+
 function text(res) {
     const r = res || review();
     if (r.clean) return 'Accounts: nothing needs you this morning.';
     const lines = ['What needs you on the accounts this morning:', ''];
     for (const t of r.todo) {
         lines.push(`${t.area} — ${t.what}`);
-        for (const i of t.items) lines.push(`    ${i}`);
+        for (const g of groupItems(t.items)) {
+            lines.push(`    ${g.n > 1 ? g.n + ' x ' : ''}${g.line}`);
+        }
         lines.push('');
     }
     const q = r.quickbooks || {};
@@ -267,6 +291,104 @@ function text(res) {
     }
     lines.push('Nothing was changed by this message.');
     return lines.join('\n');
+}
+
+// ── THE MAIL SHE ACTUALLY LOOKS AT ───────────────────────────────────────
+// Apsara, 2026-11-06: "its ugly". It was: the HTML half was the plain text
+// escaped into one monospace <pre> block, so a wall of grey courier arrived
+// every morning with no hierarchy, no alignment and fifteen repeated lines.
+//
+// ── WHY TABLES AND INLINE STYLE, WHICH LOOK ARCHAIC ─────────────────────
+// Because this is email. Gmail strips <style> blocks, ignores most flexbox
+// and drops class selectors; a table with inline attributes is what actually
+// renders the same in Gmail, Apple Mail and Outlook. The dashboard's own
+// tokens are reused as literal hex so the mail looks like the app she opens
+// next, without importing a stylesheet no mail client would read.
+//
+// ── IT STILL SAYS EXACTLY WHAT THE TEXT SAYS ────────────────────────────
+// Same review(), same items, same grouping. If the two ever disagree the
+// plain-text half is the one to trust — it is what the checks read, and what
+// arrives if the HTML is stripped.
+const ESC = (v) => String(v == null ? '' : v)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+
+// One accent per area, so she can tell at a glance which part of the morning
+// is shouting. BOOKS is the serious one — it is the only section that can
+// say "the figures cannot be trusted".
+const AREA_COLOUR = {
+    BOOKS: '#C5402F', BANK: '#D99A2B', QUICKBOOKS: '#3A6EA5', CLOSING: '#57616A',
+};
+
+function html(res) {
+    const r = res || review();
+    const wrap = (inner) => '<div style="margin:0;padding:24px 0;background:#F3F5F7;'
+        + 'font-family:-apple-system,BlinkMacSystemFont,\'Segoe UI\',Roboto,Helvetica,Arial,sans-serif;">'
+        + '<table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%">'
+        + '<tr><td align="center">'
+        // width="100%" with a max-width, NOT width="640". A fixed width
+        // attribute wins over the style in several renderers, and the card
+        // then runs off the side of a phone — which is where she reads this.
+        + '<table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" '
+        + 'style="max-width:640px;background:#FFFFFF;border:1px solid #E5E9EC;border-radius:6px;">'
+        + inner + '</table></td></tr></table></div>';
+
+    if (r.clean) {
+        return wrap('<tr><td style="padding:28px 28px 26px;">'
+            + '<div style="font-size:11px;letter-spacing:.14em;text-transform:uppercase;'
+            + 'color:#7E8891;font-weight:600;">Jarvis &middot; Accounts</div>'
+            + '<div style="font-size:19px;color:#202124;font-weight:600;padding-top:8px;">'
+            + 'Nothing needs you this morning.</div></td></tr>');
+    }
+
+    const sections = r.todo.map((t) => {
+        const colour = AREA_COLOUR[t.area] || '#57616A';
+        const rows = groupItems(t.items).map((g) => ''
+            + '<tr>'
+            // The count is its own column so the sentences line up down the
+            // page. "5 x" inline would push every line to a different start.
+            + '<td valign="top" align="right" style="padding:3px 10px 3px 0;width:34px;'
+            + 'font-variant-numeric:tabular-nums;font-size:12px;color:' + colour + ';font-weight:700;">'
+            + (g.n > 1 ? ESC(g.n) + '&times;' : '') + '</td>'
+            + '<td valign="top" style="padding:3px 0;font-size:13px;line-height:1.5;color:#3C454D;">'
+            + ESC(g.line) + '</td>'
+            + '</tr>').join('');
+        return ''
+            + '<tr><td style="padding:0 28px;">'
+            + '<table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" '
+            + 'style="border-top:1px solid #E5E9EC;"><tr><td style="padding:18px 0 0;">'
+            + '<div style="font-size:10.5px;letter-spacing:.14em;text-transform:uppercase;'
+            + 'font-weight:700;color:' + colour + ';">' + ESC(t.area) + '</div>'
+            + '<div style="font-size:14.5px;color:#202124;font-weight:600;padding:3px 0 8px;">'
+            + ESC(t.what) + '</div>'
+            + '<table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" '
+            + 'style="padding-bottom:16px;">' + rows + '</table>'
+            + '</td></tr></table></td></tr>';
+    }).join('');
+
+    const q = r.quickbooks || {};
+    // The standing figures, set apart: they are context, not a task, and
+    // putting them in the same list is half of why the mail read as a wall.
+    const footer = (!q.missing && !q.stale)
+        ? '<tr><td style="padding:4px 28px 0;">'
+          + '<table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" '
+          + 'style="background:#F3F5F7;border-radius:4px;"><tr>'
+          + '<td style="padding:12px 14px;font-size:12px;color:#57616A;line-height:1.5;">'
+          + 'QuickBooks as at ' + ESC(String(q.at).slice(0, 10)) + ' &mdash; owes <b style="color:#202124;">'
+          + ESC(money(q.owe)) + '</b>, owed <b style="color:#202124;">' + ESC(money(q.owed)) + '</b>'
+          + ' <span style="color:#7E8891;">(' + ESC(q.bills) + ' bills, ' + ESC(q.invoices) + ' invoices)</span>'
+          + '</td></tr></table></td></tr>'
+        : '';
+
+    return wrap(''
+        + '<tr><td style="padding:26px 28px 16px;">'
+        + '<div style="font-size:11px;letter-spacing:.14em;text-transform:uppercase;'
+        + 'color:#7E8891;font-weight:600;">Jarvis &middot; Accounts</div>'
+        + '<div style="font-size:19px;color:#202124;font-weight:600;padding-top:8px;">'
+        + 'What needs you this morning</div></td></tr>'
+        + sections
+        + footer
+        + '<tr><td style="padding:16px 28px 24px;font-size:11.5px;color:#9AA3AA;">'
+        + 'Nothing was changed by this message.</td></tr>');
 }
 
 function subject(res) {
@@ -306,9 +428,10 @@ async function send({ sendAlways = String(process.env.SEND_ALWAYS || '') === '1'
     // Monospace for the same reason the sweep supplies its own HTML: the
     // default renders in Arial with pre-wrap, which is wrong for a list whose
     // meaning is in its alignment.
-    const bodyHtml = '<div style="font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;'
-                   + 'font-size:12px;line-height:1.45;white-space:pre;color:#202124;">'
-                   + gmail.escapeHtmlText(body) + '</div>';
+    // Was the plain text escaped into one monospace <pre> — which is what
+    // "its ugly" was about. html() lays it out properly; `body` is still the
+    // plain-text half, so a client that strips HTML loses nothing.
+    const bodyHtml = html(res);
     try {
         await gmail.sendEmail({ to, subject: subject(res), body, bodyHtml });
         console.log(`[ACCOUNTS] ${subject(res)} → ${to}`);
@@ -322,4 +445,4 @@ async function send({ sendAlways = String(process.env.SEND_ALWAYS || '') === '1'
     }
 }
 
-module.exports = { review, text, subject, send, bank, books, quickbooks };
+module.exports = { review, text, html, subject, send, bank, books, quickbooks, groupItems };
