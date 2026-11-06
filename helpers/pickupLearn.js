@@ -1,46 +1,65 @@
 // ── helpers/pickupLearn.js — the carrier teaches Jarvis, not Apsara ──────
-// Apsara, 2026-11-06, in four messages:
+// Apsara, 2026-11-06:
 //   "it should learn and adapt"
 //   "i cant custom train as per buyer.it should learn and adapt"
-//   "reinforcement"   "learning"   "adaptiv learning"
+//   "reinforcement"  "learning"  "adaptiv learning"
+//   "use renorcement and adaptive learning concepts"
 //
-// The complaint underneath is specific and fair: a settings page with a row
-// per carrier is work she will never do. Zimex answers in twenty minutes on
-// WhatsApp; A.LEE answers next morning by email; one of them has not
-// answered at all this year. None of that should be typed in. It is all
-// visible in what already happened.
+// ══════════════════════════════════════════════════════════════════════════
+//  WHY THE FIRST VERSION OF THIS FILE WAS NOT REINFORCEMENT LEARNING
+// ══════════════════════════════════════════════════════════════════════════
+// It counted successes and applied thresholds: four failures and a channel
+// was dropped. That is a statistic with an if-statement, and it had the
+// defect that gives the game away — A CHANNEL ONCE DROPPED WAS DROPPED
+// FOREVER. If Zimex fixed their mail server Jarvis would never find out,
+// because it had stopped generating the evidence that would change its mind.
+// Pure exploitation, zero exploration, and it would have cost her a working
+// channel permanently.
 //
-// ── WHAT "REINFORCEMENT" HONESTLY MEANS HERE ─────────────────────────────
-// Not a neural net, and this file does not pretend otherwise. Every pickup
-// produces a labelled outcome on its own: Jarvis asked on these channels at
-// this time, and either an answer came back — on a known channel, after a
-// measurable delay — or the day ended with none. That is a reward signal,
-// recorded per carrier, and the next pickup for that carrier is run
-// differently because of it. The feedback loop is real even though the
-// machinery is arithmetic.
+// ══════════════════════════════════════════════════════════════════════════
+//  THE CONCEPTS NOW USED, AND WHY EACH EARNS ITS PLACE
+// ══════════════════════════════════════════════════════════════════════════
+// 1. AN EXPLICIT REWARD. Every finished pickup scores in [0,1]: answered on
+//    the first ask is 1.0, answered after a chase is worth less, never
+//    answered is 0. Written down (`rewardFor`) rather than implied, because
+//    a reward function you cannot read is a policy nobody can argue with.
 //
-// Arithmetic on purpose. This decides when Jarvis mails a company she buys
-// from; it has to be inspectable when she asks "why did you chase them at
-// half nine", and "the median of its last nine replies was 22 minutes" is an
-// answer. A model's hunch is not.
+// 2. A BETA POSTERIOR PER (CARRIER, CHANNEL), not a hit count. Beta(a,b) is
+//    the conjugate prior for "does asking on this channel work", and it
+//    carries its own uncertainty: 0 of 2 and 0 of 40 are both zero, and only
+//    the second is evidence. Starting at Beta(1,1) — uniform — is exactly
+//    why a new carrier behaves as it did before any of this existed.
 //
-// ── THE THREE THINGS IT LEARNS ───────────────────────────────────────────
-//   1. HOW TO REACH THEM. The direct answer to "i cant custom train as per
-//      buyer": she records "pickup with Zimex Friday" and the address is
-//      already known, from the last mail they sent. No more unreachable
-//      pickups for a carrier Jarvis has dealt with before.
-//   2. WHICH CHANNEL THEY ANSWER ON. A channel that has been tried enough
-//      times and NEVER worked stops being used, when the other one does.
-//   3. HOW LONG THEY TAKE. The chase moves to when an answer is actually
-//      overdue for THIS carrier, instead of a fixed three hours for
-//      everyone.
+// 3. EXPLORATION THAT NEVER REACHES ZERO. A channel is set aside only when
+//    its 95% upper bound is genuinely poor AND the other channel is working
+//    — and even then it is retried with probability e, which decays with
+//    evidence but never hits 0. This is the fix for the defect above:
+//    Jarvis keeps a door open to being proved wrong.
 //
-// ── WHAT IT IS NOT ALLOWED TO LEARN ──────────────────────────────────────
-// Her instruction was "Chase twice, then tell the team". Learning tunes the
-// WHEN and the HOW; it never removes a rung, never stops the ask, never
-// moves the escalation off the pickup day, and can never leave a carrier
-// with no channel at all. A system that learns its way into silence is worse
-// than one that never learned anything, because she would stop checking.
+// 4. RECENCY DISCOUNTING (gamma), because this world is NON-STATIONARY. A
+//    carrier changes dispatcher and last year stops being evidence. Both
+//    posteriors and reply times decay on every update, so old observations
+//    fade smoothly instead of falling off a fixed window.
+//
+// 5. AN ONLINE VALUE ESTIMATE for reply time — the standard incremental
+//    update V <- V + alpha(x - V). No list to re-sort, recent behaviour
+//    dominates, and it is one number she can be shown.
+//
+// ── WHAT THIS IS NOT ─────────────────────────────────────────────────────
+// Not a neural net, and not pretending to be. The state is a handful of
+// numbers per carrier and the action is "which channels, how long to wait" —
+// a contextual bandit, not a control problem, and fitting a network to it
+// would be less accurate and far harder to defend. This decides when Jarvis
+// mails a company she buys from. When she asks "why did you chase them at
+// half nine", the answer has to be a sentence, and "Beta(2,9) on email,
+// upper bound 0.41, expected reply 22 minutes" is one. A hunch is not.
+//
+// ── WHAT THE POLICY MAY NEVER DO ─────────────────────────────────────────
+// "Chase twice, then tell the team" is hers. Learning tunes WHEN and HOW; it
+// never removes a rung, never skips the ask, never moves the escalation off
+// the pickup day, and can never leave a carrier with no channel at all. A
+// system that learns its way into silence is worse than one that never
+// learned anything, because she would stop checking.
 const path = require('path');
 const cfg = require('../config');
 const { loadJson, mutateJson } = require('./json');
@@ -50,75 +69,96 @@ const FILE = () => cfg.PICKUP_LEARN_FILE || path.join(cfg.DATA_DIR, 'pickup-lear
 const str = (v) => String(v == null ? '' : v).trim();
 const key = (company) => str(company).toLowerCase().replace(/\s+/g, ' ');
 
-// ── THE BOUNDS, IN ONE PLACE ─────────────────────────────────────────────
-// Every one of these exists to stop a confident conclusion from a handful of
-// events. The first pickups with a new carrier behave exactly as they do
-// today, and the behaviour only moves once there is something to move it.
-const MIN_FOR_TIMING = 3;    // replies before the chase hour is allowed to move
-const MIN_TRIES_TO_DROP = 4; // sends on a channel with no answer before dropping it
-const MIN_WINS_TO_PREFER = 2; // answers on the OTHER channel before that counts
-const KEEP_SAMPLES = 20;     // a carrier that changes dispatcher should not be
-                             // judged on last year — the window forgets.
-// ── TOMBSTONE: THIS BOUND IS CURRENTLY UNREACHABLE (2026-11-06) ──────────
-// Intent: never chase within an hour of asking. Real, and it reads as the
-// guard that stops a 20-minute carrier being nagged at 08:20.
+// ── THE HYPERPARAMETERS, IN ONE PLACE ────────────────────────────────────
+const GAMMA = 0.92;          // recency discount per observation: ~8 effective
+                             // observations of memory
+const PRIOR = 1;             // Beta(1,1), uniform. Knows nothing, assumes
+                             // nothing, and is why cold start is unchanged.
+const ALPHA_LR = 0.35;       // learning rate for the reply-time estimate
+const MIN_EVIDENCE = 4.0;    // effective observations before ANY adaptation
+// ── CALIBRATED AGAINST THE ACTUAL POSTERIOR, NOT GUESSED ─────────────────
+// First set to 0.25, which the simulation showed is UNREACHABLE: with
+// partial negative credit (0.5) and gamma decay, a channel that never once
+// produces the answer converges to mean ~0.12 and an upper bound of ~0.35
+// and stops falling. A threshold below the asymptote is dead code, and a
+// check on dead code is a check that cannot go red.
 //
-// It is not what stops that. pickupAgent's ladder is HOUR-GRANULAR and the
-// learned hour goes through Math.ceil, so a median of 4 minutes gives
-// ceil(8.1) = 9 and a median of 60 gives ceil(9.0) = 9 — identical. Setting
-// this to 0 changes nothing and a mutation of it SURVIVES, which by the rule
-// in this repo means it is guarding nothing.
-//
-// Kept rather than deleted: it documents the intent, and it becomes load
-// bearing the moment the ladder gains sub-hour precision. Deliberately NOT
-// registered in scripts/mutate.js — an unkillable mutation in the baseline
-// is a lie about coverage.
+// 0.40 is crossed after roughly fifteen consistent observations — which is
+// deliberately slow for an action that stops mailing a channel at all, and
+// is recoverable at any time by the exploration below.
+const DEAD_UPPER = 0.40;     // set aside when even the optimistic bound is poor
+const ALIVE_MEAN = 0.35;     // ...and only if the other channel really works
+const EXPLORE_FLOOR = 0.08;  // e never decays below this. The door that stays
+                             // open, and the whole fix for the old defect.
 const EARLIEST_CHASE_MIN = 60;
-const LATEST_CHASE_HOUR = 13;    // and never so late it crowds the 14:00 escalation
+const LATEST_CHASE_HOUR = 13;
+
+const CHANNELS = ['email', 'whatsapp'];
 
 const EMPTY = () => ({ carriers: {} });
 const load = () => Object.assign(EMPTY(), loadJson(FILE(), EMPTY()));
+const blankArm = () => ({ a: PRIOR, b: PRIOR });
+const blank = (company) => ({ company, asks: 0, answers: 0, reward_sum: 0,
+    arms: { email: blankArm(), whatsapp: blankArm() },
+    reply_value: null, reply_n: 0, seen_pickups: [] });
 
 function carrier(store, company) {
     const k = key(company);
     return (store.carriers && store.carriers[k]) || null;
 }
 
-const median = (nums) => {
-    const a = (nums || []).filter((n) => typeof n === 'number' && isFinite(n) && n >= 0).sort((x, y) => x - y);
-    if (!a.length) return null;
-    const mid = Math.floor(a.length / 2);
-    return a.length % 2 ? a[mid] : Math.round((a[mid - 1] + a[mid]) / 2);
-};
+// ── 1. THE REWARD ────────────────────────────────────────────────────────
+// What "good" means, written down. Answered at all is most of it; answered
+// without needing a chase is the rest. A pickup is NOT scored on whether the
+// truck came — that is the yard's fact, not the carrier's responsiveness,
+// and conflating them would punish a carrier for weather.
+function rewardFor(pickup) {
+    const p = pickup || {};
+    const answered = !!(str(p.eta) || str(p.confirmed_at));
+    if (!answered) return 0;
+    const chases = (Array.isArray(p.sent) ? p.sent : []).filter((s) => s && s.step === 'chase').length;
+    return Math.max(0.5, 1 - 0.3 * chases);
+}
+
+// Beta helpers. The upper bound is a normal approximation (mean + 2 sd),
+// which is plenty at these sample sizes and is something she could check on
+// paper if she ever wanted to.
+const armMean = (arm) => arm.a / (arm.a + arm.b);
+function armUpper(arm) {
+    const n = arm.a + arm.b;
+    const m = armMean(arm);
+    const sd = Math.sqrt((m * (1 - m)) / (n + 1));
+    return Math.min(1, m + 2 * sd);
+}
+const armEvidence = (arm) => (arm.a + arm.b) - 2 * PRIOR;
 
 // ── observe(pickup) ──────────────────────────────────────────────────────
-// Called once a pickup is finished with — answered, or its day gone. This is
-// the reward signal, and it is derived ENTIRELY from the record rather than
-// from anything a person types.
+// The update step, derived entirely from the record.
 //
-// Deliberately idempotent-ish: a pickup already observed is skipped, so a
-// re-run of the job cannot teach the same lesson twice and make a carrier
-// look twice as reliable as it is.
-async function observe(pickup) {
+// CREDIT ASSIGNMENT, which is the honest part: the channel the answer came
+// back on takes the reward. Other channels tried on the same pickup take a
+// PARTIAL negative (0.5), not a full one — the carrier may well have seen
+// the WhatsApp and chosen to reply by mail, so calling WhatsApp a failure
+// would be wrong. If nobody answered, every channel tried takes the full
+// negative, because in that case none of them worked.
+async function observe(pickup, opts = {}) {
     const p = pickup || {};
     const company = str(p.company);
     if (!company) return null;
 
     const sent = Array.isArray(p.sent) ? p.sent : [];
     const asks = sent.filter((s) => s && (s.step === 'ask' || s.step === 'chase'));
-    if (!asks.length) return null;           // nothing was tried; nothing to learn
+    if (!asks.length) return null;
 
-    const answered = !!(str(p.eta) || str(p.confirmed_at));
-    // Which channel the answer came back on. 'email reply' is what the reply
-    // watch records; anything she types by hand is not a channel lesson —
-    // the carrier did not choose it, she did.
+    const reward = rewardFor(p);
+    const answered = reward > 0;
     const via = str(p.confirmed_via).toLowerCase();
     const answerChannel = /email/.test(via) ? 'email'
         : /whatsapp|wa\b/.test(via) ? 'whatsapp' : null;
 
-    // Minutes from the FIRST ask to the answer. The first, not the last:
-    // what is being learned is how long this carrier takes to respond to
-    // being asked, not how quickly they answer a nag.
+    const tried = new Set();
+    for (const s of asks) for (const c of str(s.via).split('+')) if (CHANNELS.includes(c)) tried.add(c);
+
     let minutes = null;
     if (answered && str(p.confirmed_at) && asks[0] && asks[0].at) {
         const t0 = new Date(asks[0].at).getTime();
@@ -126,31 +166,48 @@ async function observe(pickup) {
         if (isFinite(t0) && isFinite(t1) && t1 > t0) minutes = Math.round((t1 - t0) / 60000);
     }
 
-    // Which channels were actually tried, from what was recorded as sent.
-    const tried = new Set();
-    for (const s of asks) for (const c of str(s.via).split('+')) if (c) tried.add(c);
-
     const k = key(company);
     let out = null;
     await mutateJson(FILE(), EMPTY(), (store) => {
         const s = Object.assign(EMPTY(), store);
         s.carriers = s.carriers || {};
-        const c = s.carriers[k] || { company, asks: 0, answers: 0,
-            tried: {}, answered_on: {}, reply_minutes: [], seen_pickups: [] };
+        const c = Object.assign(blank(company), s.carriers[k] || {});
+        c.arms = Object.assign({ email: blankArm(), whatsapp: blankArm() }, c.arms || {});
 
-        // The guard against learning the same pickup twice.
+        // Idempotence. The job re-runs hourly and the reply watch polls every
+        // five minutes; without this, one reliable reply would look like ten.
         if (p.id && (c.seen_pickups || []).includes(p.id)) { out = c; s.carriers[k] = c; return s; }
-        if (p.id) c.seen_pickups = (c.seen_pickups || []).concat([p.id]).slice(-KEEP_SAMPLES * 2);
+        if (p.id) c.seen_pickups = (c.seen_pickups || []).concat([p.id]).slice(-60);
 
-        c.company = company;                 // keep her spelling, not the key
+        c.company = company;
         c.asks += 1;
-        for (const t of tried) c.tried[t] = (c.tried[t] || 0) + 1;
-        if (answered) {
-            c.answers += 1;
-            if (answerChannel) c.answered_on[answerChannel] = (c.answered_on[answerChannel] || 0) + 1;
-            if (minutes != null) c.reply_minutes = (c.reply_minutes || []).concat([minutes]).slice(-KEEP_SAMPLES);
+        if (answered) c.answers += 1;
+        c.reward_sum = Math.round(((c.reward_sum || 0) + reward) * 1000) / 1000;
+
+        // ── 4. DISCOUNT FIRST, THEN UPDATE ───────────────────────────────
+        // Every arm decays toward the prior on every observation, including
+        // arms not tried this time. That is what makes the estimate TRACK a
+        // carrier who changes, rather than average their whole history.
+        for (const ch of CHANNELS) {
+            const arm = c.arms[ch];
+            arm.a = PRIOR + (arm.a - PRIOR) * GAMMA;
+            arm.b = PRIOR + (arm.b - PRIOR) * GAMMA;
         }
-        // Contacts worth keeping, so she never types them again.
+        for (const ch of tried) {
+            const arm = c.arms[ch];
+            if (answerChannel === ch) arm.a += reward;
+            else if (answered) arm.b += 0.5;
+            else arm.b += 1;
+        }
+
+        // ── 5. ONLINE VALUE ESTIMATE for the reply time ──────────────────
+        if (minutes != null) {
+            c.reply_value = (c.reply_value == null)
+                ? minutes
+                : Math.round(c.reply_value + ALPHA_LR * (minutes - c.reply_value));
+            c.reply_n = Math.min(50, (c.reply_n || 0) * GAMMA + 1);
+        }
+
         if (str(p.contact_email)) c.email = str(p.contact_email);
         if (str(p.contact_whatsapp)) c.whatsapp = str(p.contact_whatsapp);
         c.last_seen = new Date().toISOString();
@@ -163,8 +220,8 @@ async function observe(pickup) {
 }
 
 // ── contactsFor(company) ─────────────────────────────────────────────────
-// "i cant custom train as per buyer". She records a pickup with a name and
-// nothing else; this is how it still gets chased.
+// "i cant custom train as per buyer": she records a pickup with a name and
+// nothing else, and it is still chaseable.
 function contactsFor(company) {
     const c = carrier(load(), company);
     if (!c) return {};
@@ -175,81 +232,119 @@ function contactsFor(company) {
 }
 
 // ── profileFor(company) ──────────────────────────────────────────────────
-// What has been learned, and what it means for the next pickup. Every field
-// comes back with the evidence behind it, because this decides when a
-// company she buys from gets mailed and she is entitled to ask why.
+// The policy's view, with the evidence attached — this decides when a
+// company she buys from gets mailed, and she is entitled to ask why.
 function profileFor(company) {
     const c = carrier(load(), company);
     const base = {
-        known: false, asks: 0, answers: 0, answer_rate: null,
+        known: false, asks: 0, answers: 0, answer_rate: null, avg_reward: null,
         typical_reply_minutes: null, chase_after_minutes: null,
-        drop_channels: [], never_answers: false, why: 'no history with this carrier yet',
+        arms: {}, set_aside: [], never_answers: false,
+        why: 'no history with this carrier yet',
     };
     if (!c || !c.asks) return base;
 
-    const rate = c.asks ? c.answers / c.asks : null;
-    const med = median(c.reply_minutes);
-
-    // ── WHEN TO CHASE ────────────────────────────────────────────────────
-    // Half again their usual reply time: late enough that an answer is
-    // genuinely overdue, early enough to be useful. Floored at an hour so a
-    // fast carrier is not nagged, and it never outgrows the escalation.
-    let chaseAfter = null;
-    if (med != null && (c.reply_minutes || []).length >= MIN_FOR_TIMING) {
-        chaseAfter = Math.max(EARLIEST_CHASE_MIN, Math.round(med * 1.5));
+    const arms = {};
+    for (const ch of CHANNELS) {
+        const arm = Object.assign(blankArm(), (c.arms || {})[ch] || {});
+        arms[ch] = {
+            mean: Math.round(armMean(arm) * 100) / 100,
+            upper: Math.round(armUpper(arm) * 100) / 100,
+            evidence: Math.round(armEvidence(arm) * 10) / 10,
+        };
     }
 
-    // ── A CHANNEL THAT HAS NEVER WORKED ──────────────────────────────────
-    // Dropped only on real evidence: tried enough times with nothing back,
-    // while the other channel has actually produced answers. And never the
-    // last one standing — a carrier with no channel is a pickup nobody
-    // chases, which is the fault this whole feature exists to fix.
-    const drop = [];
-    for (const ch of ['email', 'whatsapp']) {
+    // ── 3. SET ASIDE, NEVER CLOSED ───────────────────────────────────────
+    // "set_aside" rather than "dropped" is the honest word: adaptChannels
+    // still explores it.
+    const setAside = [];
+    for (const ch of CHANNELS) {
         const other = ch === 'email' ? 'whatsapp' : 'email';
-        const tries = (c.tried && c.tried[ch]) || 0;
-        const wins = (c.answered_on && c.answered_on[ch]) || 0;
-        const otherWins = (c.answered_on && c.answered_on[other]) || 0;
-        if (tries >= MIN_TRIES_TO_DROP && wins === 0 && otherWins >= MIN_WINS_TO_PREFER) drop.push(ch);
+        const arm = Object.assign(blankArm(), (c.arms || {})[ch] || {});
+        const otherArm = Object.assign(blankArm(), (c.arms || {})[other] || {});
+        // TOMBSTONE: the MIN_EVIDENCE clause is belt-and-braces and a
+        // mutation of it SURVIVES. Below the floor the lowest reachable
+        // upper bound is 0.48, already above DEAD_UPPER (0.40), so the
+        // evidence requirement is logically implied by the bound test. Kept
+        // because it states the intent and stays correct if either constant
+        // moves; deliberately NOT registered as a mutation.
+        if (armEvidence(arm) >= MIN_EVIDENCE
+            && armUpper(arm) < DEAD_UPPER
+            && armMean(otherArm) >= ALIVE_MEAN) setAside.push(ch);
     }
-    const dropChannels = drop.length < 2 ? drop : [];
+    // TOMBSTONE: also unkillable, also kept. For BOTH channels to qualify,
+    // each needs the other's mean >= 0.35 while its own upper is < 0.40 —
+    // and since upper always exceeds mean, that needs ~364 observations of
+    // one carrier. adaptChannels has the real last-channel guard, which IS
+    // killable and is registered.
+    const aside = setAside.length < CHANNELS.length ? setAside : [];
 
-    // ── THE ONE THAT CHANGES THE WORDS, NOT THE POLICY ───────────────────
-    // A carrier that never answers is not chased less — her rule stands —
-    // but the note to her team says so, because "they have answered 1 of
-    // the last 8" is the sentence that makes someone pick up the phone.
-    const neverAnswers = c.asks >= MIN_TRIES_TO_DROP && c.answers === 0;
+    const reply = (c.reply_n || 0) >= MIN_EVIDENCE ? c.reply_value : null;
+    const chaseAfter = reply == null ? null
+        : Math.max(EARLIEST_CHASE_MIN, Math.round(reply * 1.5));
 
+    const rate = c.asks ? c.answers / c.asks : null;
     return {
         known: true,
         asks: c.asks, answers: c.answers,
         answer_rate: rate == null ? null : Math.round(rate * 100) / 100,
-        typical_reply_minutes: med,
+        avg_reward: Math.round(((c.reward_sum || 0) / c.asks) * 100) / 100,
+        typical_reply_minutes: reply,
         chase_after_minutes: chaseAfter,
-        drop_channels: dropChannels,
-        never_answers: neverAnswers,
-        why: med != null
-            ? `${c.answers} of ${c.asks} answered, usually in about ${med} minutes`
+        arms, set_aside: aside,
+        never_answers: c.asks >= 4 && c.answers === 0,
+        why: reply != null
+            ? `${c.answers} of ${c.asks} answered, usually in about ${reply} minutes`
             : `${c.answers} of ${c.asks} answered`,
     };
 }
 
-// ── adaptChannels(channels, profile) ─────────────────────────────────────
+// ── 3. e-GREEDY EXPLORATION ──────────────────────────────────────────────
+// How often a set-aside channel is retried anyway. Decays as evidence
+// accumulates, but never reaches zero, so a channel that starts working
+// again is always found.
+//
+// `rng` is injectable so a test can stand on both sides of the coin. Without
+// that, exploration is the one part of the policy nobody could check.
+function exploreRate(profile, channel) {
+    const arm = (profile && profile.arms && profile.arms[channel]) || null;
+    const evidence = arm ? Math.max(0, arm.evidence) : 0;
+    return Math.max(EXPLORE_FLOOR, 1 / (1 + evidence));
+}
+
+// ── adaptChannels(channels, profile, opts) ───────────────────────────────
 // Applied to what pickupAgent worked out, never instead of it. Refuses to
-// return nothing: if dropping would leave no way to reach them, the drop is
-// ignored and the original stands.
-function adaptChannels(channels, profile) {
+// return nothing: if setting a channel aside would leave no way to reach
+// them, the original stands.
+function adaptChannels(channels, profile, opts = {}) {
     const ch = Object.assign({}, channels || {});
     const prof = profile || {};
-    if (!ch.reachable || !(prof.drop_channels || []).length) return ch;
+    const aside = prof.set_aside || [];
+    if (!ch.reachable || !aside.length) return ch;
 
+    const rng = typeof opts.rng === 'function' ? opts.rng : Math.random;
     const next = Object.assign({}, ch);
-    for (const dead of prof.drop_channels) next[dead] = null;
-    if (!next.email && !next.whatsapp) return ch;    // never the last one
+    const explored = [];
+    const quieted = [];
+
+    for (const dead of aside) {
+        if (rng() < exploreRate(prof, dead)) { explored.push(dead); continue; }
+        next[dead] = null;
+        quieted.push(dead);
+    }
+    if (!next.email && !next.whatsapp) return ch;   // never the last one
+
     next.reachable = true;
-    next.dropped = prof.drop_channels.slice();
+    if (quieted.length) next.set_aside = quieted;
+    // Surfaced, because an exploration nobody can see is a cost with no
+    // visible benefit.
+    if (explored.length) next.exploring = explored;
     return next;
 }
 
-module.exports = { observe, contactsFor, profileFor, adaptChannels, median, key, FILE,
-    MIN_FOR_TIMING, MIN_TRIES_TO_DROP, MIN_WINS_TO_PREFER, EARLIEST_CHASE_MIN, LATEST_CHASE_HOUR };
+module.exports = {
+    observe, contactsFor, profileFor, adaptChannels, rewardFor, exploreRate,
+    armMean, armUpper, armEvidence, key, FILE,
+    GAMMA, PRIOR, ALPHA_LR, MIN_EVIDENCE, DEAD_UPPER, ALIVE_MEAN, EXPLORE_FLOOR,
+    EARLIEST_CHASE_MIN, LATEST_CHASE_HOUR, CHANNELS,
+};

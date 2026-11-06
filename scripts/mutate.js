@@ -497,32 +497,50 @@ const MUTATIONS = [
     // ── THE SPLIT ITSELF (2026-10-31) ────────────────────────────────────
     // Replaces 'quality-only demand: her column set is used on MIXED pages
     // too', which guarded the single-table rule that the split removed.
-    // ── ADAPTIVE LEARNING PER CARRIER (2026-11-06) ──────────────────────
-    // "i cant custom train as per buyer.it should learn and adapt",
-    // "reinforcement", "adaptiv learning". A system that learns can learn
-    // something WRONG and act on it in her name, so most of these are about
-    // the BOUNDS, not about whether it learns.
-    { name: 'pickup-learn: it drops the last channel, leaving a pickup nobody chases',
+    // ── REINFORCEMENT / ADAPTIVE LEARNING PER CARRIER (2026-11-06) ──────
+    // "use renorcement and adaptive learning concepts". A contextual bandit
+    // over (carrier, channel): Beta posterior, recency discounting, e-greedy
+    // exploration. A system that learns can learn something WRONG and act on
+    // it in her name — by mailing, or by going quiet — so most of these
+    // attack the BOUNDS rather than the learning.
+    //
+    // REPLACED the six threshold entries that were here: the code they named
+    // no longer exists, and NOT APPLIED is worse than nothing because it
+    // reads as coverage.
+    //
+    // TWO MORE were written, SURVIVED, and are NOT here: the MIN_EVIDENCE
+    // clause and the both-channels guard are implied by the upper-bound
+    // arithmetic and cannot change behaviour. Tombstoned in pickupLearn.js
+    // with the numbers that prove it.
+    { name: 'pickup-learn: exploration decays to zero, so a dead channel can never recover',
       file: 'helpers/pickupLearn.js', suites: ['pickup-learn'],
-      find: "    if (!next.email && !next.whatsapp) return ch;    // never the last one",
+      find: "    return Math.max(EXPLORE_FLOOR, 1 / (1 + evidence));",
+      to:   "    return 1 / (1 + evidence);" },
+    { name: 'pickup-learn: it sets aside the last channel, leaving a pickup nobody chases',
+      file: 'helpers/pickupLearn.js', suites: ['pickup-learn'],
+      find: "    if (!next.email && !next.whatsapp) return ch;   // never the last one",
       to:   "    if (false) return ch;" },
-    { name: 'pickup-learn: one reply is enough to change the timing',
+    { name: 'pickup-learn: the reply estimate acts on a single observation',
       file: 'helpers/pickupLearn.js', suites: ['pickup-learn'],
-      find: "    if (med != null && (c.reply_minutes || []).length >= MIN_FOR_TIMING) {",
-      to:   "    if (med != null) {" },
-    { name: 'pickup-learn: the same pickup teaches the lesson over and over',
+      find: "    const reply = (c.reply_n || 0) >= MIN_EVIDENCE ? c.reply_value : null;",
+      to:   "    const reply = c.reply_value;" },
+    // Non-stationarity: without this a carrier is judged on last year.
+    { name: 'pickup-learn: recency discounting is dropped from the success arm',
+      file: 'helpers/pickupLearn.js', suites: ['pickup-learn'],
+      find: "            arm.a = PRIOR + (arm.a - PRIOR) * GAMMA;",
+      to:   "            arm.a = arm.a;" },
+    { name: 'pickup-learn: credit is assigned to the channel that did NOT answer',
+      file: 'helpers/pickupLearn.js', suites: ['pickup-learn'],
+      find: "            if (answerChannel === ch) arm.a += reward;",
+      to:   "            if (answerChannel !== ch) arm.a += reward;" },
+    { name: 'pickup-learn: the same outcome teaches the lesson over and over',
       file: 'helpers/pickupLearn.js', suites: ['pickup-learn'],
       find: "        if (p.id && (c.seen_pickups || []).includes(p.id)) { out = c; s.carriers[k] = c; return s; }",
       to:   "        if (false) { return s; }" },
-    { name: 'pickup-learn: a channel is written off after a single failure',
-      file: 'helpers/pickupLearn.js', suites: ['pickup-learn'],
-      find: "        if (tries >= MIN_TRIES_TO_DROP && wins === 0 && otherWins >= MIN_WINS_TO_PREFER) drop.push(ch);",
-      to:   "        if (wins === 0) drop.push(ch);" },
     { name: 'pickup-learn: the learned chase hour ignores its 13:00 ceiling',
       file: 'helpers/pickupAgent.js', suites: ['pickup-learn'],
       find: "                chaseHour = Math.min(LATEST_CHASE_HOUR, Math.max(askT.hour + 1, Math.ceil(due)));",
       to:   "                chaseHour = Math.max(askT.hour + 1, Math.ceil(due));" },
-    // The one that would quietly mail last year's dispatcher.
     { name: 'pickup-learn: a learned address overwrites the one she typed',
       file: 'helpers/pickups.js', suites: ['pickup-learn'],
       find: "    const email = str(input.contact_email) || str(learned.contact_email);",
