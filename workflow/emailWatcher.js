@@ -186,6 +186,8 @@ async function _runOnce() {
                 const mail = {
                     from: hdrs.From || '', subject, body,
                     received_at: hdrs.Date || '', thread_id: msg.threadId || '',
+                    // Their client threads on this, not on Gmail's id.
+                    message_id: hdrs['Message-ID'] || hdrs['Message-Id'] || '',
                 };
                 if (pickRead.looksLikePickup(mail)) {
                     const gem = require('../helpers/gemini');

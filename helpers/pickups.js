@@ -56,6 +56,23 @@ async function create(input = {}, by = 'jarvis') {
     if (!date) throw new Error('a pickup needs the date it is arranged for — there is no day to chase on otherwise');
 
     const status = STATUSES.includes(str(input.status)) ? str(input.status) : 'arranged';
+
+    // ── WHAT JARVIS ALREADY KNOWS ABOUT THIS CARRIER ─────────────────────
+    // Apsara, 2026-11-06: "i cant custom train as per buyer.it should learn
+    // and adapt".
+    //
+    // She records "pickup with Zimex Friday" and nothing else. If Zimex has
+    // written to Jarvis before, the address is already on file and this
+    // pickup is chaseable instead of landing on the unreachable list. She
+    // never types a contact twice, and there is no per-carrier settings page
+    // for her to not fill in.
+    //
+    // ONLY fills what is missing. Anything she typed wins — the learned
+    // value is last year's dispatcher, hers is today's.
+    let learned = {};
+    try { learned = require('./pickupLearn').contactsFor(company) || {}; } catch (e) { /* learning is optional */ }
+    const email = str(input.contact_email) || str(learned.contact_email);
+    const whatsapp = str(input.contact_whatsapp) || str(learned.contact_whatsapp);
     const rec = {
         id: 'pk_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 8),
         company,
@@ -64,8 +81,12 @@ async function create(input = {}, by = 'jarvis') {
         container_no: str(input.container_no).toUpperCase(),
         booking_no: str(input.booking_no),
         location: str(input.location),
-        contact_email: str(input.contact_email),
-        contact_whatsapp: str(input.contact_whatsapp),
+        contact_email: email,
+        contact_whatsapp: whatsapp,
+        // Visible, because a contact she did not type is a thing she is
+        // entitled to see before Jarvis mails it.
+        contacts_learned: (!str(input.contact_email) && !!email)
+            || (!str(input.contact_whatsapp) && !!whatsapp),
         status,
         // Where it came from — the ACTUAL caller, not a two-way label.
         // This first collapsed everything that was not Jarvis into
@@ -90,6 +111,15 @@ async function create(input = {}, by = 'jarvis') {
         // workflow/emailReplyWatch.js machinery can close this without a
         // second poller being written.
         thread_id: str(input.thread_id),
+        // ── THE RFC Message-ID, WHICH IS A DIFFERENT THING ──────────────
+        // Apsara, 2026-11-06: "follow up should happen in corresponding
+        // email thread only".
+        //
+        // thread_id above is GMAIL's id. Passing it threads the chase in HER
+        // mailbox and does nothing at all in the carrier's — their client
+        // threads on In-Reply-To / References, which need this. Without it
+        // every chase arrives at Zimex as a brand new message.
+        last_message_id: str(input.last_message_id),
         // What has already gone out. The agent reads this to avoid sending a
         // rung twice; it is append-only.
         sent: [],
@@ -130,8 +160,20 @@ async function recordSent(id, step, detail = {}) {
 // inventing precision, and a wrong parsed time is worse than her own eyes on
 // the sentence. What matters to the agent is only that an answer EXISTS.
 async function recordEta(id, eta, source = 'reply') {
-    return patch(id, { eta: str(eta), confirmed_at: now(), confirmed_via: str(source) },
+    const rec = await patch(id, { eta: str(eta), confirmed_at: now(), confirmed_via: str(source) },
         'follow-up-agent');
+    // ── THE REWARD SIGNAL ────────────────────────────────────────────────
+    // "reinforcement". An answer arriving is the outcome worth learning
+    // from: which channel it came back on, and how long after the first ask.
+    // Recorded here rather than in the agent because the answer can arrive
+    // three ways — the reply watch, the route, her voice — and all three
+    // land on this function.
+    //
+    // Best effort, always. A learning write that failed must never cost her
+    // the ETA that was the point of the whole exercise.
+    try { await require('./pickupLearn').observe(rec); }
+    catch (e) { console.warn('[PICKUPS] outcome not learned: ' + (e && e.message)); }
+    return rec;
 }
 
 const open = () => list().filter((p) => p && p.status === 'arranged' && !str(p.eta));

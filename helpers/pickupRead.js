@@ -147,6 +147,9 @@ async function readPickup(mail = {}, opts = {}) {
             // The chase replies on THIS thread, so the carrier sees one
             // conversation rather than a stranger's cold mail.
             thread_id: str(mail.thread_id),
+            // And in THEIR client too: their mail reader threads on
+            // In-Reply-To/References, not on Gmail's thread id.
+            last_message_id: str(mail.message_id),
             source: 'email',
         },
         confidence: ['high', 'medium', 'low'].includes(str(res.confidence).toLowerCase())

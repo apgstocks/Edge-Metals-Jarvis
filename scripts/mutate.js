@@ -497,6 +497,37 @@ const MUTATIONS = [
     // ── THE SPLIT ITSELF (2026-10-31) ────────────────────────────────────
     // Replaces 'quality-only demand: her column set is used on MIXED pages
     // too', which guarded the single-table rule that the split removed.
+    // ── ADAPTIVE LEARNING PER CARRIER (2026-11-06) ──────────────────────
+    // "i cant custom train as per buyer.it should learn and adapt",
+    // "reinforcement", "adaptiv learning". A system that learns can learn
+    // something WRONG and act on it in her name, so most of these are about
+    // the BOUNDS, not about whether it learns.
+    { name: 'pickup-learn: it drops the last channel, leaving a pickup nobody chases',
+      file: 'helpers/pickupLearn.js', suites: ['pickup-learn'],
+      find: "    if (!next.email && !next.whatsapp) return ch;    // never the last one",
+      to:   "    if (false) return ch;" },
+    { name: 'pickup-learn: one reply is enough to change the timing',
+      file: 'helpers/pickupLearn.js', suites: ['pickup-learn'],
+      find: "    if (med != null && (c.reply_minutes || []).length >= MIN_FOR_TIMING) {",
+      to:   "    if (med != null) {" },
+    { name: 'pickup-learn: the same pickup teaches the lesson over and over',
+      file: 'helpers/pickupLearn.js', suites: ['pickup-learn'],
+      find: "        if (p.id && (c.seen_pickups || []).includes(p.id)) { out = c; s.carriers[k] = c; return s; }",
+      to:   "        if (false) { return s; }" },
+    { name: 'pickup-learn: a channel is written off after a single failure',
+      file: 'helpers/pickupLearn.js', suites: ['pickup-learn'],
+      find: "        if (tries >= MIN_TRIES_TO_DROP && wins === 0 && otherWins >= MIN_WINS_TO_PREFER) drop.push(ch);",
+      to:   "        if (wins === 0) drop.push(ch);" },
+    { name: 'pickup-learn: the learned chase hour ignores its 13:00 ceiling',
+      file: 'helpers/pickupAgent.js', suites: ['pickup-learn'],
+      find: "                chaseHour = Math.min(LATEST_CHASE_HOUR, Math.max(askT.hour + 1, Math.ceil(due)));",
+      to:   "                chaseHour = Math.max(askT.hour + 1, Math.ceil(due));" },
+    // The one that would quietly mail last year's dispatcher.
+    { name: 'pickup-learn: a learned address overwrites the one she typed',
+      file: 'helpers/pickups.js', suites: ['pickup-learn'],
+      find: "    const email = str(input.contact_email) || str(learned.contact_email);",
+      to:   "    const email = str(learned.contact_email) || str(input.contact_email);" },
+
     // ── READING A PICKUP OUT OF HER MAIL (2026-11-06) ───────────────────
     // "even if i dont tell,based on my email,it should know". An auto-created
     // pickup makes Jarvis EMAIL A THIRD PARTY, so the first two mutations

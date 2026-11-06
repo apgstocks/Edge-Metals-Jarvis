@@ -49,14 +49,27 @@ const KINDS = {
     pickup: {
         label: 'pickup',
         due: () => pickups.list(),
-        decide: (row, now) => pickupAgent.nextAction(row, now),
-        channels: (row) => pickupAgent.channelsFor(row),
+        // ── ADAPTED, NEVER REPLACED ──────────────────────────────────
+        // pickupAgent decides; learning only tunes WHEN and HOW. It cannot
+        // remove a rung, stop the ask, or move the escalation off the day —
+        // "Chase twice, then tell the team" is hers and stands.
+        decide: (row, now) => pickupAgent.nextAction(row, now,
+            { profile: safeProfile(row.company) }),
+        channels: (row) => require('./pickupLearn')
+            .adaptChannels(pickupAgent.channelsFor(row), safeProfile(row.company)),
         message: (row, step) => pickupAgent.messageFor(row, step),
         record: (row, step, detail) => pickups.recordSent(row.id, step, detail),
     },
 };
 
 const str = (v) => String(v == null ? '' : v).trim();
+
+// Learning is an improvement, never a dependency. A store that cannot be
+// read leaves the agent behaving exactly as it did before any of this —
+// which is also what a brand new carrier gets.
+function safeProfile(company) {
+    try { return require('./pickupLearn').profileFor(company); } catch (e) { return null; }
+}
 
 // ── run({ sendEmail, sendWhatsapp, sendToTeam, now }) ────────────────────
 // Every sender is INJECTED. Nothing in this file knows what a mailbox is,
@@ -118,6 +131,13 @@ async function run(opts = {}) {
                     await sendToTeam(`${msg.subject}\n\n${msg.body}`);
                     await kind.record(row, step, { to: 'team' });
                     out.escalated += 1;
+                    // ── THE REWARD SIGNAL, AT THE MOMENT IT IS FINAL ─────
+                    // Escalating means the day ended with no answer. That is
+                    // the negative outcome, and it is as much of a lesson as
+                    // a fast reply: it is what eventually retires a channel
+                    // this carrier never reads.
+                    try { await require('./pickupLearn').observe(pickups.get(row.id) || row); }
+                    catch (e) { /* learning must never cost her an escalation */ }
                 } catch (e) {
                     out.failed.push({ id: row.id, why: 'escalation failed: ' + (e && e.message) });
                 }
@@ -141,13 +161,23 @@ async function run(opts = {}) {
             if (ch.email && sendEmail) {
                 try {
                     const r = await sendEmail({ to: ch.email, subject: msg.subject,
-                        body: msg.body, threadId: str(row.thread_id) || null, pickupId: row.id });
+                        body: msg.body,
+                        threadId: str(row.thread_id) || null,
+                        // "follow up should happen in corresponding email
+                        // thread only" — the carrier's client threads on
+                        // this, not on Gmail's id.
+                        messageId: str(row.last_message_id) || null,
+                        pickupId: row.id });
                     landed.push('email');
                     // The reply watch closes this pickup when the carrier
                     // answers, so the thread id is worth keeping the moment
-                    // we learn it.
-                    if (r && r.threadId && !str(row.thread_id)) {
-                        try { await pickups.patch(row.id, { thread_id: String(r.threadId) }, 'follow-up-agent'); }
+                    // we learn it — and the Message-ID, so the NEXT rung
+                    // replies to this one rather than starting again.
+                    const keep = {};
+                    if (r && r.threadId && !str(row.thread_id)) keep.thread_id = String(r.threadId);
+                    if (r && r.messageId) keep.last_message_id = String(r.messageId);
+                    if (Object.keys(keep).length) {
+                        try { await pickups.patch(row.id, keep, 'follow-up-agent'); }
                         catch (e) { /* the send happened; a lost id is not worth failing over */ }
                     }
                 } catch (e) { trouble.push('email: ' + (e && e.message)); }

@@ -65,6 +65,11 @@ const LADDER = [
 // A pickup in one of these is finished with. Nothing is sent about it.
 const CLOSED = ['done', 'collected', 'cancelled'];
 
+// The latest a learned chase hour may be pushed to. Past this it crowds the
+// 14:00 escalation, and a chase an hour before the team is told is not a
+// chase, it is a formality.
+const LATEST_CHASE_HOUR = 13;
+
 const str = (v) => String(v == null ? '' : v).trim();
 
 // ── DATES ────────────────────────────────────────────────────────────────
@@ -109,8 +114,12 @@ const rungsDueAt = (hour) => LADDER.filter((r) => hour >= r.hour).reverse();
 // not send the same rung twice, and that is checked HERE rather than at the
 // send site, so a second caller (a manual "chase now" button, a retry after
 // a crash) cannot bypass it.
-function nextAction(pickup, now) {
+// `opts.profile` is what helpers/pickupLearn.js has observed about this
+// carrier. Optional and third, so every existing caller — and a carrier
+// Jarvis has never dealt with — behaves exactly as before.
+function nextAction(pickup, now, opts) {
     const p = pickup || {};
+    const profile = (opts && opts.profile) || null;
     const t = laNow(now);
     if (!t) return { step: null, why: 'the time could not be read' };
 
@@ -142,14 +151,43 @@ function nextAction(pickup, now) {
     }
 
     // ── ON THE DAY ───────────────────────────────────────────────────────
-    for (const rung of rungsDueAt(t.hour)) {
+    // ── WHEN THIS CARRIER IS ACTUALLY OVERDUE ────────────────────────────
+    // Apsara, 2026-11-06: "it should learn and adapt", "adaptiv learning".
+    //
+    // 11:00 is a guess that fits nobody. A carrier whose last nine replies
+    // came in about twenty minutes is overdue by half nine, and waiting
+    // until eleven wastes her morning. One that always answers after lunch
+    // is not overdue at eleven at all, and chasing is just noise that
+    // teaches them to ignore Jarvis.
+    //
+    // So the chase hour moves to the ask plus half again their usual reply
+    // time. BOUNDED HARD: never inside an hour of asking, never past 13:00,
+    // and it only moves at all once there are MIN_FOR_TIMING real replies to
+    // average. Everything else about the ladder is untouched — this changes
+    // WHEN the second ask goes, never whether it does.
+    let chaseHour = null;
+    if (profile && typeof profile.chase_after_minutes === 'number') {
+        const askAt = (Array.isArray(p.sent) ? p.sent : []).find((x) => x && x.step === 'ask');
+        if (askAt && askAt.at) {
+            const askT = laNow(askAt.at);
+            if (askT && askT.day === t.day) {
+                const due = askT.hour + (profile.chase_after_minutes / 60);
+                chaseHour = Math.min(LATEST_CHASE_HOUR, Math.max(askT.hour + 1, Math.ceil(due)));
+            }
+        }
+    }
+    const ladderNow = chaseHour == null ? LADDER
+        : LADDER.map((r) => (r.step === 'chase'
+            ? Object.assign({}, r, { hour: chaseHour, learned: true }) : r));
+
+    for (const rung of ladderNow.filter((r) => t.hour >= r.hour).reverse()) {
         if (done.has(rung.step)) continue;
         // The rungs are ordered, so a later one being due does not let an
         // earlier one be skipped: if the job was down all morning and wakes
         // at 14:00, it asks FIRST. Escalating to her team about a company
         // Jarvis never actually asked would be indefensible.
-        const earlierMissing = LADDER
-            .slice(0, LADDER.findIndex((r) => r.step === rung.step))
+        const earlierMissing = ladderNow
+            .slice(0, ladderNow.findIndex((r) => r.step === rung.step))
             .find((r) => !done.has(r.step));
         const use = earlierMissing || rung;
         return { step: use.step, why: use.what, day, hour: t.hour,
@@ -215,4 +253,4 @@ function messageFor(pickup, step) {
             + `Someone needs to call them.` };
 }
 
-module.exports = { nextAction, channelsFor, messageFor, isoDay, laNow, LADDER, CLOSED };
+module.exports = { nextAction, channelsFor, messageFor, isoDay, laNow, LADDER, CLOSED, LATEST_CHASE_HOUR };

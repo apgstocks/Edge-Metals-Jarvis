@@ -35,15 +35,27 @@ const str = (v) => String(v == null ? '' : v).trim();
 // why the chase subject is "Re: ..." — a chase arriving as a fresh thread
 // makes the reader hunt for the original, and that is how a chase gets left
 // until tomorrow.
-async function sendTrackedEmail({ to, subject, body, threadId, pickupId } = {}) {
+async function sendTrackedEmail({ to, subject, body, threadId, messageId, pickupId } = {}) {
     const dest = str(to);
     if (!dest) throw new Error('no address to send the follow-up to');
 
+    // ── THREADED IN THEIR CLIENT, NOT JUST IN HERS ───────────────────────
+    // Apsara, 2026-11-06: "follow up should happen in corresponding email
+    // thread only".
+    //
+    // threadId is GMAIL's. It threads the chase in her mailbox and does
+    // NOTHING in the carrier's: their reader threads on In-Reply-To and
+    // References. Without these two headers every chase arrived at Zimex as
+    // a brand new message — the conversation scattered across three
+    // unconnected mails, which is the fault she is naming.
+    const parent = str(messageId);
     const res = await gmail.sendEmail({
         to: dest,
         subject: str(subject),
         body: str(body),
         threadId: str(threadId) || undefined,
+        inReplyTo: parent || undefined,
+        references: parent || undefined,
     });
 
     const newThread = (res && (res.threadId || res.thread_id)) || str(threadId) || '';
@@ -72,7 +84,29 @@ async function sendTrackedEmail({ to, subject, body, threadId, pickupId } = {}) 
             console.warn('[FOLLOW-UP] sent but not tracked for a reply: ' + (e && e.message));
         }
     }
-    return { threadId: newThread };
+    // ── OUR OWN Message-ID, SO THE NEXT RUNG REPLIES TO THIS ONE ────────
+    // The send API returns Gmail's internal id, not the RFC Message-ID the
+    // carrier's client will thread on. One metadata read gets it. Best
+    // effort: without it the chase still threads in her mailbox and still
+    // reaches them, it just starts a new conversation on their side — worth
+    // one extra call out of at most three a day, not worth failing a send.
+    let messageIdOut = parent;
+    try {
+        if (res && res.id) {
+            const api = gmail.getGmailWrite();
+            const meta = await api.users.messages.get({
+                userId: 'me', id: res.id, format: 'metadata',
+                metadataHeaders: ['Message-ID', 'Message-Id'],
+            });
+            const hs = (meta && meta.data && meta.data.payload && meta.data.payload.headers) || [];
+            const found = hs.find((h) => /^message-id$/i.test(h.name));
+            if (found && found.value) messageIdOut = found.value;
+        }
+    } catch (e) {
+        console.warn('[FOLLOW-UP] could not read back the Message-ID: ' + (e && e.message));
+    }
+
+    return { threadId: newThread, messageId: messageIdOut };
 }
 
 module.exports = { sendTrackedEmail };
