@@ -56,15 +56,36 @@ const closableClean = () => {
     W('sales.json', []);
 };
 
+// ── THE SNAPSHOT'S `until` MUST MOVE WITH THE CALENDAR (2026-11-07) ───────
+// Seven checks in this file went RED on 2026-11-01 with nothing changed, and
+// stayed red for a week.
+//
+// CAUSE: the fixtures pinned `until: '2026-10-28'`. Written on 2026-10-29,
+// when the last CLOSABLE window ended 2026-09-30, so a snapshot reaching
+// 10-28 covered it comfortably. On 2026-11-01 October became closable, the
+// window end moved to 2026-10-31, and 10-28 no longer reached it. booksClose
+// then CORRECTLY refused to assess a period its snapshot cannot speak for —
+// the exact refusal it was built to make — so "a clean morning" was no
+// longer clean and three checks in A plus four in D2 failed.
+//
+// NOTHING WAS WRONG WITH THE CODE. A fixture pinned to a date, measured
+// against a window that moves, is a check whose colour is a fact about the
+// calendar. Second one found today; tests/entrances.js had the same shape.
+//
+// So: ask for the window, and cover it. A snapshot that genuinely covers the
+// period is what "clean" was always supposed to mean.
+const coversTheWindow = () =>
+    require(path.join(ROOT, 'helpers/booksClose')).lastClosableWindow().to;
+
 // ─────────────────────────────────────────────────────────────────────────
 section('A. silent when there is nothing to do');
 {
     closableClean();
     W('qb-books-snapshot.json', snap());
     W('qb-snapshot-bills.json', { at: new Date().toISOString(), env: 'production',
-        since: '2026-01-01', until: '2026-10-28', count: 0, rows: [] });
+        since: '2026-01-01', until: coversTheWindow(), count: 0, rows: [] });
     W('qb-snapshot-invoices.json', { at: new Date().toISOString(), env: 'production',
-        since: '2026-01-01', until: '2026-10-28', count: 0, rows: [] });
+        since: '2026-01-01', until: coversTheWindow(), count: 0, rows: [] });
     const r = A.review();
     ck('a clean morning produces nothing to do', r.clean === true, JSON.stringify(r.todo));
     ck('  and says so in one line', /nothing needs you/i.test(A.text(r)), A.text(r));
@@ -107,7 +128,7 @@ section('C. on a FRESH snapshot it names the duplicate and the row to delete');
     const now = new Date().toISOString();
     W('qb-books-snapshot.json', snap({ at: now }));
     W('qb-snapshot-bills.json', { at: now, env: 'production', since: '2026-01-01',
-        until: '2026-10-28', count: 2, rows: [
+        until: coversTheWindow(), count: 2, rows: [
             billRow({ id: 38324, total: 13506.42, doc: '26MK56', who: 'Houston Junk Car Buyers',
                 lines: [745.36, 6742.58, 6018.48], created: '2026-05-20T10:21:16-07:00' }),
             billRow({ id: 38553, total: 13506.42, doc: '26MK56', who: 'Houston Junk Car Buyers',
@@ -159,7 +180,7 @@ section('D2. send() is silent when clean — the promise she judges it by');
     gmail.getMyEmailAddress = async () => 'apsara@example.com';
 
     const now = new Date().toISOString();
-    const fresh = { at: now, env: 'production', since: '2026-01-01', until: '2026-10-28' };
+    const fresh = { at: now, env: 'production', since: '2026-01-01', until: coversTheWindow() };
     closableClean();
     W('qb-books-snapshot.json', snap({ at: now }));
     W('qb-snapshot-bills.json', { ...fresh, count: 0, rows: [] });
