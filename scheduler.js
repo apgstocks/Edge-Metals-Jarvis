@@ -1606,6 +1606,8 @@ function start() {
             sendToManager: async (text) => _sendToManager(text),
             // Reads the mailbox for a customer's remittance copy before chasing them (read-only).
             findRemittance: require('./helpers/remittanceMail').liveFinder(),
+            // QuickBooks decides who still owes; if it cannot be read, nobody is chased.
+            qbSurvey: require('./helpers/paymentTruth').liveSurvey(),
             // A customer email is STAGED on WhatsApp and goes only after her yes (workflow/actions.js).
             stageCustomerEmail: async (draft, step) => {
                 const st = cfg.getSettings ? cfg.getSettings() : {};

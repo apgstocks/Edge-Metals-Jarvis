@@ -213,7 +213,7 @@ async function run(opts = {}) {
     // ── CUSTOMER PAYMENTS (2026-11-07) ───────────────────────────────────
     // After the pickups and walled off from them: whatever happens here, a pickup rung
     // has already fired, and a failure here is reported rather than thrown.
-    try { out.payments = await runPayments({ sendToManager, sendToTeam, now: opts.now, drafts: opts.paymentDrafts, findRemittance: opts.findRemittance, stageCustomerEmail: opts.stageCustomerEmail }); }
+    try { out.payments = await runPayments({ sendToManager, sendToTeam, now: opts.now, drafts: opts.paymentDrafts, findRemittance: opts.findRemittance, stageCustomerEmail: opts.stageCustomerEmail, qbSurvey: opts.qbSurvey }); }
     catch (e) { out.payments = { asked: 0, chased: 0, escalated: 0, failed: [{ why: 'payment follow-ups could not run: ' + (e && e.message) }] }; }
     return out;
 }
@@ -223,7 +223,7 @@ async function run(opts = {}) {
 // message to her for the asks and chases, one to the team per escalation. A rung is
 // recorded only AFTER the message went, so a failed send is retried next run rather than
 // buried.
-async function runPayments({ sendToManager, sendToTeam, now, drafts, findRemittance, stageCustomerEmail }) {
+async function runPayments({ sendToManager, sendToTeam, now, drafts, findRemittance, stageCustomerEmail, qbSurvey }) {
     const res = { asked: 0, chased: 0, escalated: 0, held: 0, staged: 0, failed: [] };
     if (String(process.env.PAYMENT_CHASE || '').toLowerCase() === 'off') return { ...res, off: true };
     const chaser = require('./paymentChaser');
@@ -231,6 +231,31 @@ async function runPayments({ sendToManager, sendToTeam, now, drafts, findRemitta
     let list = drafts;
     if (!list) list = require('./paymentFollowups').build({ now: t }).drafts;
     const log = chaser.prune(chaser.readLog(), list);
+
+    // QUICKBOOKS DECIDES WHO OWES (Apsara, 2026-11-07). Jarvis's ledger has no payments in it (Rad Metal: 96 sales, 0 receipts,
+    // "$4.78M open", a customer who always pays), so when a survey is supplied nothing is followed up unless QuickBooks shows the
+    // invoice open. FAILS CLOSED: if QuickBooks cannot be read, nobody is followed up and she is told once a week.
+    if (typeof qbSurvey === 'function') {
+        const truth = require('./paymentTruth');
+        const note = async (text, key) => {
+            const last = log[key] ? Date.parse(log[key].at) : 0;
+            if (sendToManager && (!last || t - last > 7 * 86400000)) {
+                try { await sendToManager(text); log[key] = { at: new Date(t).toISOString() }; await chaser.writeLog(log); }
+                catch (e) { res.failed.push({ why: 'could not tell her: ' + (e && e.message) }); }
+            }
+        };
+        let sv = null;
+        try { sv = await qbSurvey(); } catch (e) { sv = null; res.qb_error = (e && e.message) || 'unreadable'; }
+        if (!sv) {
+            await note('Payment follow-ups are paused: I cannot read QuickBooks (' + (res.qb_error || 'no data') + '), and I will not chase anyone without confirming they owe. Nobody was contacted.', '_qbdown');
+            return { ...res, paused: true };
+        }
+        const rec = truth.reconcile(list, sv);
+        list = rec.drafts; res.skipped = rec.skipped.length;
+        for (const sk of rec.skipped) delete log[chaser.keyOf(sk.customer)];     // forgotten, so a real balance starts with a fresh first note
+        const line = truth.skippedLine(rec.skipped);
+        if (line) await note(line, '_qbskip');
+    }
 
     // SEND MODE ONLY. Apsara, 2026-11-07, on the first live run: a 52-line "draft ready (no email on file)" wall. A customer
     // with no address cannot be emailed, so listing each one every run is noise and the list is already on the Payment

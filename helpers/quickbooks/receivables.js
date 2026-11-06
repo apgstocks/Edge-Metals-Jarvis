@@ -50,13 +50,13 @@ async function pull(table, where, opts, cap = 5000) {
 const containersIn = (x) => [...new Set(((x.Line || []).map((l) => l.Description || '').join(' ').match(/[A-Z]{4}\d{7}/g)) || [])];
 
 // ── SURVEY ────────────────────────────────────────────────────────────────
-async function survey({ env = auth.qbEnv(), since = '2024-01-01' } = {}) {
+async function survey({ env = auth.qbEnv(), since = '2024-01-01', light = false } = {}) {
     const opts = { env };
     const map = aliases();
     const [open, receipts, paidHistory] = await Promise.all([
         pull('Invoice', "Balance > '0'", opts),
         pull('Payment', `TxnDate >= '${since}'`, opts),
-        pull('Invoice', `TxnDate >= '${since}' and Balance = '0'`, opts),
+        light ? Promise.resolve([]) : pull('Invoice', `TxnDate >= '${since}' and Balance = '0'`, opts),   // light: skip the paying-habit history
     ]);
 
     const byCustomer = {};
