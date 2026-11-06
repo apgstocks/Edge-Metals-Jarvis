@@ -42,57 +42,56 @@ section('A — the doors exist at all');
 // ══════════════════════════════════════════════════════════════════════════
 {
     const names = tools.TOOL_NAMES || Object.keys(T);
-    for (const n of ['bank_unmatched', 'bank_who_is', 'find_claims', 'claim_detail']) {
+    for (const n of ['bank_unmatched', 'bank_who_is']) {
         ck(`${n} is a tool the bot can reach`, names.includes(n), names.join(' '));
     }
-    // The gap this file exists to close: before today, both of these were
-    // empty lists.
+    // ── AND THE CLAIMS DOORS ARE SHUT (2026-11-07, Apsara) ──────────────
+    // find_claims and claim_detail used to be here. helpers/tools.js IS the
+    // YARD assistant's registry, and claims are raised against SUPPLIERS on
+    // CONTAINERS — the export side. tests/voice-router.js caught it.
+    // Asked whether to narrow that guard or remove the tools, she said
+    // "Neither — take both back out."
+    for (const n of ['find_claims', 'claim_detail']) {
+        ck(`${n} is NOT on the yard assistant`, !names.includes(n),
+           'claims belong to Edge Metals; the yard assistant must not learn them');
+    }
+    // The gap this file exists to close: before this file, the bot could not
+    // see the bank at all.
     ck('the bot can now see the bank', names.some((n) => /^bank_/.test(n)));
-    ck('  and claims', names.some((n) => /claim/.test(n)));
+    // The claims half of that sentence is gone on purpose — see above. The
+    // check is INVERTED rather than deleted, because "no tool whose name
+    // mentions a claim" is now the rule, and a rule with no check is a rule
+    // that comes back by accident.
+    ck('  and sees no claims at all', !names.some((n) => /claim/i.test(n)),
+       names.filter((n) => /claim/i.test(n)).join(', '));
 }
 
 // ══════════════════════════════════════════════════════════════════════════
-section('B — claims, the way she asks about them');
+// SECTION B — REMOVED 2026-11-07, WITH THE CODE IT COVERED
 // ══════════════════════════════════════════════════════════════════════════
-{
-    await claims.create({ supplier: 'Taewon', container_no: 'HMMU6180208', invoice_no: 'X1',
-        weight_unit: 'LB', claim_date: '2026-09-01', status: 'recovery_raised' }, 't');
-    await claims.create({ supplier: 'Taewon', container_no: 'KOCU5251324', invoice_no: 'X2',
-        weight_unit: 'LB', claim_date: '2026-10-20', status: 'settled' }, 't');
-    await claims.create({ supplier: 'Nur Metal', container_no: 'TEMU7944250', invoice_no: 'X3',
-        weight_unit: 'LB', claim_date: '2026-10-25', status: 'unverified' }, 't');
-
-    const open = await T.find_claims.run({ status: 'open' });
-    ck('"which claims are open" leaves the settled one out', open.claims === 2, String(open.claims));
-
-    const settled = await T.find_claims.run({ status: 'settled' });
-    ck('"which are settled" is its own answer', settled.claims === 1, String(settled.claims));
-
-    const bySup = await T.find_claims.run({ supplier: 'taewon' });
-    ck('"what about Taewon" matches however she types it', bySup.claims === 2, String(bySup.claims));
-
-    // ── AGE IS THE ESCALATION ────────────────────────────────────────────
-    // Her own rule, recorded when she refused a deadline field: "age itself
-    // is the escalation". A claim nobody has chased is the answer to most
-    // questions about claims, so it is on every row and it sorts the list.
-    const first = rowsOf(open)[0];
-    ck('every open claim says how long it has been sitting',
-       first && typeof first.days_open === 'number' && first.days_open > 0,
-       JSON.stringify(first));
-    ck('  and the oldest is first, because that is the one that is costing her',
-       rowsOf(open).every((r, i, a) => i === 0 || (a[i - 1].days_open || 0) >= (r.days_open || 0)),
-       JSON.stringify(rowsOf(open).map((r) => r.days_open)));
-    ck('a settled claim has no days_open — it is not open',
-       rowsOf(settled).every((r) => r.days_open === null), JSON.stringify(rowsOf(settled)));
-
-    const one = await T.claim_detail.run({ container: 'TEMU7944250' });
-    ck('one container answers with its supplier and what is waiting',
-       one.found && one.suppliers.includes('Nur Metal') && one.waiting_on_you === 1,
-       JSON.stringify({ s: one.suppliers, w: one.waiting_on_you }));
-    const miss = await T.claim_detail.run({ container: 'NOSUCH0000000' });
-    ck('  and a container with no claims says so rather than inventing one',
-       miss.found === false, JSON.stringify(miss));
-}
+// It exercised find_claims and claim_detail: open vs settled, matching a
+// supplier however she types it, days_open on every open row, the oldest
+// first because "age itself is the escalation" (her rule, when she refused a
+// deadline field), a settled claim having no days_open, and a container with
+// no claims saying so rather than inventing one.
+//
+// That shaping lived INSIDE the two tools in helpers/tools.js, not in
+// helpers/claims.js — so when Apsara had the tools taken off the yard
+// assistant ("Neither — take both back out"), the code these checks covered
+// went with them. Deleting the checks quietly would have made the suite look
+// unchanged while real behaviour stopped being guarded, so this stone is
+// here instead.
+//
+// IF CLAIMS EVER COME BACK — in Jarvis proper (workflow/brain.js), which is
+// where they would belong — bring these checks back with them. The rules
+// they encode are hers and did not stop being true:
+//   · open and settled are separate answers, never one list
+//   · a supplier matches however she spells it
+//   · every open claim says how long it has been sitting, and the oldest
+//     sorts first, because that is the one costing her money
+//   · a settled claim has no days_open
+//   · a container with no claims says so rather than inventing one
+// The removed section is in git: tests/bot-doors.js before this commit.
 
 // ══════════════════════════════════════════════════════════════════════════
 section('C — the bank, including the line she showed me');
@@ -127,7 +126,7 @@ section('C — the bank, including the line she showed me');
 section('D — the line that must not move');
 // ══════════════════════════════════════════════════════════════════════════
 {
-    for (const n of ['bank_unmatched', 'bank_who_is', 'find_claims', 'claim_detail']) {
+    for (const n of ['bank_unmatched', 'bank_who_is']) {
         ck(`${n} is READ, never write`, T[n].kind === 'read', T[n].kind);
         ck(`  and has no buildWrite`, typeof T[n].build !== 'function');
     }

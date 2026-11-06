@@ -375,14 +375,28 @@ section('I — END TO END, through a real server');
     // on, and it has broken twice before for exactly that reason.
     const tools = require(path.join(ROOT, 'helpers/tools'));
     const names = tools.TOOL_NAMES || Object.keys(tools.TOOLS);
-    ck('the bot can record a pickup by voice', names.includes('record_pickup'));
-    ck('  and can be asked about one', names.includes('pickup_status'));
-    const prop = tools.TOOLS.record_pickup.build({ company: 'AJ Transport', pickup_date: '2026-11-21' });
-    ck('  the proposal says what will HAPPEN, not just what is stored',
-       /ask them for the ETA/.test(prop.summary), prop.summary);
-    const spoken = await prop.run();
-    ck('  and a spoken pickup is a real one', !!spoken.id && spoken.source === 'voice',
-       JSON.stringify(spoken).slice(0, 100));
+    // ── record_pickup WAS TAKEN BACK OUT (2026-11-07, Apsara) ───────────
+    // tests/yard-assistant-knowledge.js guards the yard assistant's WRITE
+    // list so a new write power cannot appear silently. record_pickup made
+    // it grow, and a pickup is booked with a logistics company — the export
+    // side, not the yard. Asked whether to accept it or remove it, she said
+    // "Neither — take both back out."
+    //
+    // WHAT THAT COSTS, PLAINLY: she can no longer create a pickup by TALKING
+    // to the yard assistant. The Follow-up Agent is otherwise untouched —
+    // its routes, its screen, the ladder, the learning and the threading all
+    // still work, and a pickup read out of her mail still creates itself.
+    // If recording one by voice is wanted back it belongs in Jarvis proper
+    // (workflow/brain.js), not in the yard assistant's registry.
+    //
+    // Inverted rather than deleted: "the yard assistant cannot write a
+    // pickup" is the rule now, and a rule with no check comes back by
+    // accident.
+    ck('the yard assistant can NOT record a pickup by voice', !names.includes('record_pickup'),
+       'a pickup is booked with a logistics company — Edge Metals, not the yard');
+    // The READ tool stayed. It tripped neither guard, and she named only the
+    // two that did; removing it as well would be widening her decision.
+    ck('  but can still be ASKED about one', names.includes('pickup_status'));
     const asked = await tools.TOOLS.pickup_status.run({ company: 'zimex' });
     ck('"has anyone chased Zimex" is answerable', asked.pickups >= 1, JSON.stringify(asked).slice(0, 140));
     ck('  and leads with whether they answered', 'eta' in (asked.rows[0] || {}) && 'asked' in (asked.rows[0] || {}),

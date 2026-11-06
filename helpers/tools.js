@@ -113,6 +113,30 @@ const TOOLS = {
     // The boundary is enforced in tests/yard-ask-tools.js, not just here.
 
 
+    // ── REMOVED 2026-11-07, BY APSARA ───────────────────────────────────
+    // find_claims, claim_detail and record_pickup lived here. This file IS
+    // the YARD assistant's registry, and two guards went red when they
+    // appeared in it:
+    //
+    //   tests/voice-router.js            Scout must advertise no freight
+    //   tests/yard-assistant-knowledge.js  and its WRITE list must not grow
+    //
+    // Both guards exist for CLAUDE.md rule 5 — "Edge Yard and Edge Metals
+    // are different companies ... the separation is most of what this app
+    // is for". Claims are raised against SUPPLIERS on CONTAINERS and
+    // pickups are booked with logistics companies: both are the export
+    // side, and neither belongs to the yard.
+    //
+    // Asked whether to narrow the guards or remove the tools, Apsara chose
+    // to remove them. Her words: "Neither — take both back out." So the
+    // guards stay exactly as strict as they were.
+    //
+    // NOTHING IN PRODUCTION CALLED THEM. Every reference outside this file
+    // was a test. The Follow-up Agent keeps its routes and its screen; what
+    // it loses is the ability to record a pickup by TALKING to the yard
+    // assistant. If that is wanted back, it belongs in Jarvis proper
+    // (workflow/brain.js), not here.
+
     find_loads: {
         kind: 'read',
         description: 'Search purchase loads by seller, date range, item description, or payment state. Use this before answering anything about specific loads.',
@@ -570,30 +594,6 @@ const TOOLS = {
     // So it is built from the store's OWN requirements (company and date,
     // nothing else) rather than from whatever the screen happens to collect.
     // A field the screen adds later cannot break this.
-    record_pickup: {
-        kind: 'write',
-        description: 'Record that a pickup has been arranged with a logistics company for a '
-            + 'given day, so Jarvis follows up with them on that day for the ETA.',
-        params: {
-            company: { type: 'string', required: true, describe: 'the logistics company or trucker collecting' },
-            pickup_date: { type: 'string', required: true, describe: 'the day it is arranged for' },
-            container_no: { type: 'string' },
-            booking_no: { type: 'string' },
-            location: { type: 'string', describe: 'where they are collecting from' },
-            contact_email: { type: 'string' },
-            contact_whatsapp: { type: 'string' },
-        },
-        // She is agreeing to a sentence, not to a tool call — and the
-        // sentence says what will HAPPEN, because the consequence of this
-        // record is mail going out in her name.
-        build: (p) => ({
-            summary: `Pickup with ${p.company} on ${p.pickup_date}`
-                + (p.container_no ? ` for ${String(p.container_no).toUpperCase()}` : '')
-                + '. Jarvis will ask them for the ETA that morning, chase at 11, '
-                + 'and tell the team at 2 if they have not answered.',
-            run: async () => require('./pickups').create(p, 'voice'),
-        }),
-    },
 
     // Read, so it answers at once — "is anyone chasing the Zimex pickup?"
     // is a question, and making her confirm a lookup is what made this feel
@@ -689,78 +689,7 @@ const TOOLS = {
         },
     },
 
-    find_claims: {
-        kind: 'read',
-        description: 'Customer claims: open, settled, by supplier, by container, or by how long '
-            + 'they have been sitting. Includes what Edge has recovered and what it has not.',
-        params: { status: { type: 'string' }, supplier: { type: 'string' },
-                  container: { type: 'string' }, from: { type: 'date' }, to: { type: 'date' } },
-        run: async (p) => {
-            const claims = require('./claims');
-            const CLOSED = ['settled', 'rejected', 'withdrawn'];
-            const want = String(p.status || '').toLowerCase();
-            const norm = (v) => String(v || '').trim().toLowerCase();
-            let rows = claims.list() || [];
-            if (p.supplier) rows = rows.filter((c) => norm(c.supplier).includes(norm(p.supplier)));
-            if (p.container) rows = rows.filter((c) => norm(c.container_no).includes(norm(p.container)));
-            if (want === 'open') rows = rows.filter((c) => !CLOSED.includes(c.status));
-            else if (want === 'settled') rows = rows.filter((c) => CLOSED.includes(c.status));
-            else if (want) rows = rows.filter((c) => c.status === want);
-            const dayOf = (c) => String(c.claim_date || c.created_at || '').slice(0, 10);
-            if (p.from) rows = rows.filter((c) => dayOf(c) && dayOf(c) >= p.from);
-            if (p.to) rows = rows.filter((c) => dayOf(c) && dayOf(c) <= p.to);
 
-            // AGE, because her own rule is that there is no deadline field —
-            // "age itself is the escalation". A claim nobody has chased for
-            // 90 days is the answer to most questions about claims.
-            const today = new Date().toISOString().slice(0, 10);
-            const days = (a, b) => (!a || !b ? null
-                : Math.round((Date.parse(b) - Date.parse(a)) / 86400000));
-            const said = rows.map((c) => ({
-                container: c.container_no || null, supplier: c.supplier || null,
-                status: c.status, claimed: c.claim_amount, recovered: c.our_claim,
-                raised: dayOf(c) || null,
-                days_open: CLOSED.includes(c.status) ? null : days(dayOf(c), today),
-                days_to_settle: CLOSED.includes(c.status)
-                    ? days(dayOf(c), String(c.settled_at || c.updated_at || '').slice(0, 10)) : null,
-            })).sort((a, b) => (b.days_open || 0) - (a.days_open || 0));
-            const sum = (k) => Math.round(said.reduce((t, r) => t + (Number(r[k]) || 0), 0) * 100) / 100;
-            return { claims: said.length, claimed_total: sum('claimed'),
-                     recovered_total: sum('recovered'), ...cap(said) };
-        },
-    },
-
-    claim_detail: {
-        kind: 'read',
-        description: 'One container\'s claims in full: every kind on it, what was worked out, '
-            + 'what the supplier has paid back, and what Jarvis is waiting on.',
-        params: { container: { type: 'string', required: true } },
-        run: async (p) => {
-            const claims = require('./claims');
-            const norm = (v) => String(v || '').trim().toLowerCase();
-            const rows = (claims.list() || [])
-                .filter((c) => norm(c.container_no) === norm(p.container)
-                            || norm(c.invoice_no) === norm(p.container));
-            if (!rows.length) return { found: false, container: p.container };
-            const CLOSED = ['settled', 'rejected', 'withdrawn'];
-            return {
-                found: true, container: p.container,
-                customer: (rows.find((c) => c.customer) || {}).customer || null,
-                suppliers: [...new Set(rows.map((c) => c.supplier).filter(Boolean))],
-                claimed_total: Math.round(rows.reduce((t, c) => t + (Number(c.claim_amount) || 0), 0) * 100) / 100,
-                recovered_total: Math.round(rows.reduce((t, c) => t + (Number(c.our_claim) || 0), 0) * 100) / 100,
-                // The next step, in her own words from the screen, so the
-                // spoken answer and the page say the same thing.
-                waiting_on_you: rows.filter((c) => c.status === 'unverified'
-                    || (c.status === 'verified' && !Number(c.our_claim))).length,
-                ...cap(rows.map((c) => ({
-                    kind: c.claim_type || null, assessment: c.assessment || null,
-                    status: c.status, claimed: c.claim_amount, recovered: c.our_claim,
-                    settled: CLOSED.includes(c.status),
-                }))),
-            };
-        },
-    },
 
     // ══ WRITE ══════════════════════════════════════════════════════════════
     // Each returns a PROPOSAL — a summary, the details worth checking, any
