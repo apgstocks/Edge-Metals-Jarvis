@@ -211,7 +211,25 @@ section('C — the rail on a page: rows, roles, links, behaviour');
 {
     const w = await mountRail({ role: 'user', page: 'books' });
     const ids = [...w.document.querySelectorAll('#jvNav a.jv-row')].map((a) => a.dataset.tab);
-    ck('standard login: no admin-only rows', ids.length && ids.every((id) => !APP_NAV.find((n) => n.id === id).adminOnly));
+    // ── A CRASH NAMES NOTHING (fixed 2026-11-07, by audit) ───────────────
+    // This read .adminOnly straight off the result of .find(), so the moment
+    // the rail rendered a row that index.html's NAV_ITEMS does not contain,
+    // the whole FILE died with "Cannot read properties of undefined" and
+    // every check after it stopped running — including the Jarvis-profile
+    // ones below. A TypeError tells you a property was missing; it does not
+    // tell you WHICH row, or that the two lists have drifted apart at all.
+    //
+    // Two separate claims now, because they fail for different reasons and
+    // need different fixes.
+    const unknown = ids.filter((id) => !APP_NAV.find((n) => n.id === id));
+    ck('every rendered row exists in index.html NAV_ITEMS', unknown.length === 0,
+       `the rail renders ${JSON.stringify(unknown)}, which NAV_ITEMS has never heard of — `
+       + 'add it there, or stop rendering it');
+    ck('standard login: no admin-only rows',
+       ids.length > 0 && ids.every((id) => {
+           const row = APP_NAV.find((n) => n.id === id);
+           return row ? !row.adminOnly : true;   // unknown rows are the check above's business
+       }), JSON.stringify(ids));
     ck('  and says Standard access', /Standard access/.test(w.document.querySelector('#jvSidebar .jv-role').textContent));
 }
 {

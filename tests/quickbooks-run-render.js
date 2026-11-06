@@ -274,7 +274,28 @@ function mount(extra = '') {
     ck('it is still newline-separated', text.split('\n').length > 5,
        `${text.split('\n').length} lines — an email body on one line is unreadable in a mail client`);
     ck('  it still names the stuck record', /HMMU4933766/.test(text));
-    ck('  it still carries the reason', /no supplier amount yet/.test(text));
+    // ── WENT RED ON HER OWN CHANGE (2026-11-07, by audit) ────────────────
+    // This matched the reason case-SENSITIVELY, as a bare lowercase phrase
+    // sitting beside the container. Apsara, 2026-11-05: "if some containers
+    // has no suppliers put one heading ... list all container below ... make
+    // it crisp" — so the reason became a grouped HEADING, capitalised:
+    //
+    //     Bills · No supplier amount yet (1)
+    //       HMMU4933766
+    //
+    // The reason still reaches her, more clearly than before, and the check
+    // failed because of one capital N. Same shape as the payableOf check in
+    // tests/load-card-actions.js: asserting a spelling, not a property.
+    //
+    // The property is that the reason arrives WITH its record, so the mail
+    // says why something is stuck and not merely that it is.
+    ck('  it still carries the reason', /no supplier amount yet/i.test(text), text.slice(0, 200));
+    ck('  and the reason sits with the record, not in a separate list',
+       (() => {
+           const r = text.search(/no supplier amount yet/i);
+           const c = text.indexOf('HMMU4933766');
+           return r >= 0 && c > r && (c - r) < 120;
+       })(), 'a reason she has to go and match up by hand is a reason she will not read');
     // ── THE PROPERTY, NOT THE WORD ───────────────────────────────────────
     // Written first as /cutover/i, and it went red the same day — not because
     // the email stopped explaining the boundary, but because another session

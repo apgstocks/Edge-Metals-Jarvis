@@ -536,6 +536,15 @@ const NAV_ITEMS = [
   // visibility it was given; the server gates are untouched.
   { id: 'accounting', label: 'Accounting', group: 'Edge Metals' },
   { id: 'claims', label: 'Claims', group: 'Edge Metals' },
+  // Added 2026-11-07. The Pickups page went into dashboard/sidebar.js
+  // when the Follow-up Agent was built and was never added HERE, so the
+  // rail on every stand-alone page offered Pickups and the dashboard's
+  // own sidebar did not. tests/sidebar-pages.js caught it only as a
+  // TypeError, because it read .adminOnly off the result of a .find()
+  // that returned undefined — a crash that named nothing and killed
+  // every check after it. Same id, label, group and position as
+  // sidebar.js:82, because that test compares them in order.
+  { id: 'pickups', label: 'Pickups', group: 'Edge Metals' },
 
   // Jarvis (the bot) itself — behavior, memory, to-dos.
   { id: 'bot',       label: 'Bot',   group: 'Bot & Automation' },
