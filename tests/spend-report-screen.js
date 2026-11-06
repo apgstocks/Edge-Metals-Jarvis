@@ -490,6 +490,48 @@ section('J — one company at a time, and it says so when it is not');
     ck('  and keeps the other filters she had set', k.runs()[0].method === 'Wire');
 }
 
+// ══════════════════════════════════════════════════════════════════════════
+section('K — a long counterparty list becomes a picker, not a wall of chips');
+// ══════════════════════════════════════════════════════════════════════════
+// Apsara, 2026-11-07, on a screenshot of 45 Bought-from chips filling the
+// page: "What the hell bro". The chip row was designed against three banks
+// and never looked at with her real supplier list.
+{
+    const many = Array.from({ length: 45 }, (_, i) => `Seller ${String(i + 1).padStart(2, '0')}`);
+    const big = render({ ...REAL, boughtFromColumns: many });
+    ck('45 names render NO chips', big.d.querySelectorAll('.btn-spend-bought').length === 0,
+       'sixty controls is not a filter');
+    const sel = big.d.getElementById('spend_bought');
+    ck('  a select appears instead', !!sel);
+    ck('  carrying every name plus All', sel.options.length === 46, String(sel.options.length));
+    ck('  and All is what it starts on', sel.value === '');
+
+    // The SHORT lists must stay chips — one click is right for Cash/Zelle/Wire.
+    ck('a short list is still chips', render(REAL).d.querySelectorAll('.btn-spend-bought').length > 0,
+       'REAL has 4 names, under the threshold');
+    ck('  and the method row is untouched by any of this',
+       render(REAL).d.querySelectorAll('.btn-spend-method').length === 8);
+
+    // Selected state has to survive the re-render, or she cannot tell what
+    // she is looking at.
+    const picked = render({ ...REAL, boughtFromColumns: many }, { bought: 'Seller 07' });
+    ck('the chosen name is selected when the page comes back',
+       picked.d.getElementById('spend_bought').value === 'Seller 07');
+    ck('  and it says so in words beside the control',
+       /showing Seller 07 only/.test(picked.text));
+
+    // ── AND THE CLICK STILL FILTERS ──────────────────────────────────────
+    // A control that looks right and files nothing is worse than the wall.
+    const m = mount({ ...REAL, boughtFromColumns: many });
+    m.put('spend_from', '03/01/2026');
+    const sl = m.d.getElementById('spend_bought');
+    sl.value = 'Seller 12';
+    sl.dispatchEvent(new m.w.Event('change', { bubbles: true }));
+    const r = m.runs()[0];
+    ck('choosing a name re-runs the report with it', r && r.bought === 'Seller 12', JSON.stringify(r));
+    ck('  and keeps the dates she had typed', r && r.from === '2026-03-01', JSON.stringify(r));
+}
+
 console.log(`\n  ${pass} passed, ${fail} failed`);
 if (fail) { console.log('FAILURES:'); failures.forEach((f) => console.log('  - ' + f)); process.exit(1); }
 })();

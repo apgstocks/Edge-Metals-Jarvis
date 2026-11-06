@@ -466,6 +466,47 @@ async function renderSpendReportTab() {
       </div>`;
   };
 
+  // ── SIXTY CHIPS IS NOT A FILTER, IT IS A WALL ──────────────────────────
+  // Apsara, 2026-11-07, on the counterparty rows: "What the hell bro".
+  //
+  // Fair. The chip row was built when the only lists were three banks and
+  // two companies, and it was never looked at against her real data. Her
+  // Bought-from list is 45 names and fills the screen; the controls became
+  // bigger than the report they control.
+  //
+  // So the row picks its own control by how many values it has. Under the
+  // threshold it stays chips — instant, one click, which is right for Cash /
+  // Zelle / Wire. Over it, a native <select>: searchable by typing, scrolls,
+  // works on the phone, and needs no custom JS to go wrong.
+  //
+  // Native on purpose. A hand-rolled type-ahead here would be a third
+  // dropdown implementation in this app and the one nobody tests.
+  const CHIP_LIMIT = 8;
+
+  const chipRow = (label, cls, attr, values, current) => `
+    <div style="display:flex; gap:8px; flex-wrap:wrap; margin-top:10px; align-items:center;">
+      <span style="${groupLabel}">${esc(label)}</span>
+      ${['', ...values].map((v) => `
+        <button class="btn ${esc(cls)}" data-${esc(attr)}="${esc(v)}" style="${chipCss(current === v)}">${esc(v || 'All')}</button>`).join('')}
+    </div>`;
+
+  const pickRow = (label, id, values, current) => `
+    <div style="display:flex; gap:10px; flex-wrap:wrap; margin-top:10px; align-items:center;">
+      <span style="${groupLabel}">${esc(label)}</span>
+      <select id="${esc(id)}" style="flex:1 1 260px; max-width:420px; background:var(--surface-sunken); color:var(--text-strong); border:1px solid var(--border-subtle); border-radius:999px; padding:7px 14px; font-family:inherit; font-size:12.5px;">
+        <option value=""${current ? '' : ' selected'}>All ${esc(String(values.length))}</option>
+        ${values.map((v) => `<option value="${esc(v)}"${current === v ? ' selected' : ''}>${esc(v)}</option>`).join('')}
+      </select>
+      ${current ? `<span style="font-size:11.5px; color:var(--accent);">showing ${esc(current)} only</span>` : ''}
+    </div>`;
+
+  // One row, the control chosen by size. Both paths carry the SAME data-
+  // attributes and ids the handlers below match on.
+  const partyRow = (label, cls, attr, id, values, current) =>
+    ((values || []).length > CHIP_LIMIT
+      ? pickRow(label, id, values, current)
+      : chipRow(label, cls, attr, values, current));
+
   // ── WHAT "OUT" IS MADE OF ───────────────────────────────────────────────
   // Named in the order she thinks about them. Only the non-zero parts are
   // shown, but NOTHING is dropped for being awkward: these add to rep.total
@@ -652,17 +693,12 @@ async function renderSpendReportTab() {
              entry long, so the rows stay hidden rather than appearing broken.
         -->
         ${(rep.boughtFromColumns || []).length > 1 ? `
-        <div style="display:flex; gap:8px; flex-wrap:wrap; margin-top:10px; padding-top:10px; border-top:1px solid var(--border-subtle);">
-          <span style="${groupLabel}">Bought from</span>
-          ${['', ...(rep.boughtFromColumns || [])].map(v => `
-            <button class="btn btn-spend-bought" data-bought="${esc(v)}" style="${chipCss(spendBought === v)}">${esc(v || 'All')}</button>`).join('')}
+        <div style="padding-top:10px; border-top:1px solid var(--border-subtle);">
+          ${partyRow('Bought from', 'btn-spend-bought', 'bought', 'spend_bought', rep.boughtFromColumns || [], spendBought)}
         </div>` : ''}
-        ${(rep.soldToColumns || []).length > 1 ? `
-        <div style="display:flex; gap:8px; flex-wrap:wrap; margin-top:10px;">
-          <span style="${groupLabel}">Sold to</span>
-          ${['', ...(rep.soldToColumns || [])].map(v => `
-            <button class="btn btn-spend-sold" data-sold="${esc(v)}" style="${chipCss(spendSold === v)}">${esc(v || 'All')}</button>`).join('')}
-        </div>` : ''}
+        ${(rep.soldToColumns || []).length > 1
+          ? partyRow('Sold to', 'btn-spend-sold', 'sold', 'spend_sold', rep.soldToColumns || [], spendSold)
+          : ''}
       </div>
 
       <!-- ── WHERE IT WENT ───────────────────────────────────────────────
@@ -874,6 +910,9 @@ async function renderSpendReportTab() {
     spendPaidVia = b.dataset.via || '';
     renderSpendReportTab();
   }));
+  // Either control can be on screen depending on how many names there are,
+  // so BOTH are wired every time. querySelectorAll over nothing is a no-op,
+  // and a missing id is guarded — a row that is not rendered must not throw.
   document.querySelectorAll('.btn-spend-bought').forEach(b => b.addEventListener('click', () => {
     takeDates();
     spendBought = b.dataset.bought || '';
@@ -884,6 +923,16 @@ async function renderSpendReportTab() {
     spendSold = b.dataset.sold || '';
     renderSpendReportTab();
   }));
+  if ($('spend_bought')) $('spend_bought').addEventListener('change', (e) => {
+    takeDates();
+    spendBought = e.target.value || '';
+    renderSpendReportTab();
+  });
+  if ($('spend_sold')) $('spend_sold').addEventListener('change', (e) => {
+    takeDates();
+    spendSold = e.target.value || '';
+    renderSpendReportTab();
+  });
 }
 
 // ── Petty cash ─────────────────────────────────────────────────────────────
