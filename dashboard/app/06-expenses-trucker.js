@@ -566,12 +566,19 @@ async function renderSpendReportTab() {
 
       <div class="card" style="padding:16px 18px; margin-bottom:18px;">
         <!-- ── PERIOD ──────────────────────────────────────────────────
-             Apsara, 2026-11-07: "if i select it should auto app;y". There
-             is no Apply button any more. Changing either box re-runs the
-             report, and so does a preset. The button existed only because
-             the boxes were read nowhere else, which is the same defect that
-             made typing a range and then clicking a filter throw the range
-             away. -->
+             Apsara, 2026-11-07: "if i select it should auto app;y", then —
+             after it was removed — "Sorry we ca have apply". So BOTH.
+
+             Changing either box re-runs the report on its own, and so does
+             a preset, so the button is never the only way to commit a date.
+             Apply stays as the explicit one: a visible "I have finished
+             typing" for a half-entered range, and the habit she already
+             has. It does exactly what a committed box does, so neither path can
+             drift from the other.
+
+             What is NOT coming back is the old behaviour where the boxes
+             were read ONLY here — that is what made typing a range and then
+             clicking a filter silently throw the range away. -->
         <div style="display:flex; gap:10px; align-items:flex-end; flex-wrap:wrap;">
           <span style="${groupLabel} align-self:flex-end; padding-bottom:11px;">Period</span>
           <div class="field" style="margin-bottom:0; flex:0 1 150px; min-width:130px;"><label>From</label><input id="spend_from" placeholder="MM/DD/YYYY" autocomplete="off" value="${esc(typeof toUsDate === 'function' ? toUsDate(spendFrom) : spendFrom)}"></div>
@@ -579,6 +586,7 @@ async function renderSpendReportTab() {
           <div style="display:flex; gap:8px; flex-wrap:wrap; padding-bottom:1px;">
             ${presets.map((p, i) => `<button class="btn btn-spend-preset" data-i="${i}" style="${chipCss(false)}">${esc(p[0])}</button>`).join('')}
           </div>
+          <button id="btnSpendApply" class="btn btn-primary" style="padding:9px 18px; font-size:12px; margin-bottom:1px;">Apply</button>
         </div>
         <!-- ── one method at a time ──────────────────────────────────────
              Apsara, 2026-09-02: "in reports what if i want to see report
@@ -831,10 +839,14 @@ async function renderSpendReportTab() {
   // Enter, so both ways of entering a date re-run the report without a
   // button. An unparseable half-typed date becomes '' — open-ended — rather
   // than throwing or freezing the old window in place.
+  const applyDates = () => { takeDates(); renderSpendReportTab(); };
   for (const id of ['spend_from', 'spend_to']) {
     const el = $(id);
-    if (el) el.addEventListener('change', () => { takeDates(); renderSpendReportTab(); });
+    if (el) el.addEventListener('change', applyDates);
   }
+  // Apply does the same thing as a committed date box, deliberately — one
+  // function, so the button and the auto-apply cannot drift apart.
+  if ($('btnSpendApply')) $('btnSpendApply').addEventListener('click', applyDates);
   document.querySelectorAll('.btn-spend-company').forEach(b => b.addEventListener('click', () => {
     takeDates();
     spendCompany = b.dataset.company || '';

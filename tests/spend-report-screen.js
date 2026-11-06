@@ -324,8 +324,9 @@ section('F — nothing else on the screen was lost in the restyle');
     // RANGE is still settable, which section I now proves by clicking.
     ck('the date range is still there', !!bare2().getElementById('spend_from')
        && !!bare2().getElementById('spend_to'));
-    ck('  and no Apply button remains to be pressed',
-       !bare2().getElementById('btnSpendApply'), 'dates auto-apply now');
+    // "Sorry we ca have apply" — it is back, and it coexists with
+    // auto-apply rather than being the only way to commit a date.
+    ck('  and Apply is there too', !!bare2().getElementById('btnSpendApply'));
 }
 
 // ══════════════════════════════════════════════════════════════════════════
@@ -407,7 +408,7 @@ section('I — dates auto-apply, and a filter never throws them away');
     const m = mount(REAL);
     m.type('spend_from', '03/01/2026');
     ck('changing a date box re-runs the report on its own', m.runs().length === 1,
-       'no Apply button exists any more');
+       'no button needed');
     ck('  with the date that was picked', m.runs()[0].from === '2026-03-01',
        JSON.stringify(m.runs()[0]));
 
@@ -439,6 +440,14 @@ section('I — dates auto-apply, and a filter never throws them away');
     ck('a preset still OVERWRITES whatever is in the boxes',
        p.runs()[0].from === '2026-10-01' && p.runs()[0].to === '2026-10-31',
        JSON.stringify(p.runs()[0]) + ' — replacing the range is the point of a preset');
+
+    // Apply still works, and does exactly what a committed box does.
+    const a = mount(REAL);
+    a.put('spend_from', '01/15/2026'); a.put('spend_to', '02/15/2026');
+    a.click('#btnSpendApply');
+    ck('Apply still commits a typed range', a.runs().length === 1
+       && a.runs()[0].from === '2026-01-15' && a.runs()[0].to === '2026-02-15',
+       JSON.stringify(a.runs()[0]));
 
     const c = mount(REAL);
     c.put('spend_from', '03/01/2026'); c.type('spend_to', '');
