@@ -69,7 +69,7 @@ function isLcDraft(draft) {
 
 function nextAction(draft, entry, now = Date.now()) {
     const a = ladder(draft, entry, now);
-    if ((a.step === 'chase' || a.step === 'escalate') && isLcDraft(draft)) return { step: null, why: 'LC terms: the bank pays against documents, so no chase' };
+    if (a.step && isLcDraft(draft)) return { step: null, why: 'LC terms: the bank pays against documents, so no follow-up at all' };
     return a;
 }
 

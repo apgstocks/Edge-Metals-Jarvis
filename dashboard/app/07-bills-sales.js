@@ -1165,8 +1165,8 @@ async function openFollowups() {
               if (f.asked) bits.push('asked ' + f.asked);
               if (f.chased) bits.push('chased ' + f.chased);
               if (f.escalated) bits.push('passed to the team ' + f.escalated);
-              const txt = bits.length ? bits.join(' · ') : 'not told to you yet';
-              return `<div class="pfStatus" style="font-size:11.5px; margin-top:6px; color:${f.escalated ? L.danger : L.inkMuted};">${esc(txt)}${f.lc ? ' · <span style="color:' + L.inkFaint + ';">LC terms: not chased</span>' : ''}</div>`;
+              const txt = f.lc ? 'LC terms: no follow-ups' : (bits.length ? bits.join(' · ') : 'not told to you yet');
+              return `<div class="pfStatus" style="font-size:11.5px; margin-top:6px; color:${f.escalated ? L.danger : L.inkMuted};">${esc(txt)}</div>`;
             })()}
             <textarea class="pfBody" data-i="${i}" rows="11" style="width:100%; margin-top:8px; font-size:12px; font-family:var(--font-mono); padding:8px;">${esc(d.body)}</textarea>
             <div style="display:flex; gap:8px; margin-top:8px;">
