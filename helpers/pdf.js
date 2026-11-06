@@ -1168,6 +1168,93 @@ function generateInventoryReportPdf(dateKey, todayReport, overallReport) {
 // on screen — `rangeLabel` is a human-readable description of that range
 // (e.g. "All time" or "2026-08-01 to 2026-08-15"), `report` is a single
 // getInventoryReport() result for that range.
+// ── THE SPEND REPORT, PRINTED (2026-11-07) ───────────────────────────────
+// Apsara: "export as xls and pdf".
+//
+// Handed the finished report object routes/reports.js already built from her
+// query string — the SAME object the screen draws — so the sheet of paper
+// cannot be a different period, company or filter from the page the button
+// was pressed on. The label across the top says which, in words, because a
+// printed page with no period on it cannot be checked against anything a
+// month later.
+//
+// Built from the drawing primitives generateInventoryExportPdf already uses,
+// so this is one more caller of the house letterhead rather than a second
+// way of making a PDF.
+function generateSpendReportPdf(label, rep) {
+    return new Promise((resolve, reject) => {
+        try {
+            const r = rep || {};
+            const n = (v) => (Number.isFinite(Number(v)) ? Number(v) : 0);
+            const doc = new PDFDocument({ size: 'LETTER', margin: 50, bufferPages: true });
+            const chunks = [];
+            doc.on('data', (c) => chunks.push(c));
+            doc.on('end', () => resolve(Buffer.concat(chunks)));
+            doc.on('error', reject);
+
+            drawLetterhead(doc, 'Spend report', { id: label || '' });
+            drawSectionHeading(doc, label || 'All time');
+
+            // WHERE IT WENT — every part, never two of six.
+            const PARTS = [
+                ['Paid to sellers', r.loadTotal], ['Trucking', r.truckerTotal],
+                ['Suppliers', r.supplierTotal], ['Cost of sales', r.saleCostTotal],
+                ['Edge Metals haulage', r.metalsTruckingTotal], ['Expenses', r.expenseTotal],
+            ].filter(([, v]) => Math.abs(n(v)) > 0.005);
+
+            const money = (v) => `$${fmtAmount(round2(n(v)))}`;
+            const pct = (v, of) => (of ? `${((n(v) / of) * 100).toFixed(1)}%` : '—');
+
+            // ── COLUMNS NEED AN ABSOLUTE x ─────────────────────────────
+            // drawItemTable positions by `x`, not by flowing widths; without
+            // it every cell lands at NaN and PDFKit throws "unsupported
+            // number". Found by running it rather than by reading it.
+            //
+            // And the keys are `paid` / `share`, NOT `amount`: drawItemTable
+            // puts a $ in front of a column called `amount` and formats it
+            // as a number, which would double up on strings already
+            // formatted here.
+            const COLS = [
+                { key: 'what',  label: '',       x: 50,  width: 250, align: 'left'  },
+                { key: 'paid',  label: 'Amount', x: 300, width: 150, align: 'right' },
+                { key: 'share', label: 'Share',  x: 450, width: 112, align: 'right' },
+            ];
+            const table = (title, rows, of) => {
+                if (!rows.length) return;
+                drawSectionHeading(doc, title);
+                drawItemTable(doc, rows.map(([k, v]) => ({
+                    what: k, paid: money(v), share: pct(v, of),
+                })), COLS);
+            };
+
+            table('Where it went', PARTS, n(r.total));
+
+            const asRows = (obj) => Object.keys(obj || {})
+                .sort((a, b) => n(obj[b]) - n(obj[a])).map((k) => [k, obj[k]]);
+            table('Out of each account', asRows(r.byBank), n(r.total));
+            table('Whose money it was', asRows(r.byPaidVia), n(r.total));
+            table('Whom we buy from', asRows(r.byBoughtFrom), n(r.total));
+            if (r.received && n(r.received.total)) {
+                table('Whom we sell to (of money received)', asRows(r.bySoldTo), n(r.received.total));
+            }
+
+            const summary = [
+                { label: 'Entries', value: String(n(r.count)) },
+                { label: 'Money out', value: money(r.total), emphasize: true },
+            ];
+            // Money in is shown, and labelled as NOT part of the figure
+            // above — the same rule the screen follows. "Paid out X, took in
+            // Y" is two facts, and adding them is the oldest mistake here.
+            if (r.received && n(r.received.total)) {
+                summary.push({ label: 'Received (kept apart)', value: money(r.received.total) });
+            }
+            drawSummaryBox(doc, summary);
+
+            doc.end();
+        } catch (e) { reject(e); }
+    });
+}
+
 function generateInventoryExportPdf(rangeLabel, report) {
     return new Promise((resolve, reject) => {
         try {
@@ -1443,7 +1530,7 @@ function generateLoadReceiptPdf(load, opts = {}) {
 // by type" for both the PDF and the report.
 module.exports = {
     PDF_TEMPLATE_VERSION,
-    generateLoadPdf, generateWeightsPdf, generateLoadReceiptPdf, groupItemsByDescription, generateInventoryReportPdf, generateInventoryExportPdf,
+    generateLoadPdf, generateWeightsPdf, generateLoadReceiptPdf, groupItemsByDescription, generateInventoryReportPdf, generateInventoryExportPdf, generateSpendReportPdf,
     // Additive exports — added 2026-08-19 for the Documents (Invoice/Proforma/
     // Verification) build-out. These drawing primitives already existed as
     // private module-level functions used internally by generateLoadPdf and

@@ -96,8 +96,15 @@ const dom = new JSDOM('<div id="viewRoot"></div>',
       var money=n=>'$'+Number(n||0).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2});
       var toUsDate=s=>s||''; var cell=v=>v?money(v):'-';
       var statRowHtml=st=>st.map(x=>'<div class="stat" data-label="'+x[0]+'">'+x[1]+'</div>').join('');
+      // ── THE STUB MUST RENDER actions, OR SECTION L LIES ───────────────
+      // The real pageHead drops its actions block into the header. The first
+      // version of this stub ignored it, so the Export menu was never in
+      // the DOM and a check for it would have been impossible to pass — or,
+      // worse, could have been written to pass against a screen where the
+      // button does not exist.
       function pageHead(t,o){o=o||{};return '<h2>'+esc(t)+'</h2>'+(o.note?'<div class="note">'+o.note+'</div>':'')
-        +'<div id="headStats">'+statRowHtml(o.stats||[])+'</div>';}
+        +'<div id="headStats">'+statRowHtml(o.stats||[])+'</div>'
+        +'<div id="headActions">'+(o.actions||'')+'</div>';}
       var presets=[['This month',0],['Last month',0],['This year',0],['All time',0]];
       var spendFrom='',spendTo='';
     `);
@@ -530,6 +537,42 @@ section('K — a long counterparty list becomes a picker, not a wall of chips');
     const r = m.runs()[0];
     ck('choosing a name re-runs the report with it', r && r.bought === 'Seller 12', JSON.stringify(r));
     ck('  and keeps the dates she had typed', r && r.from === '2026-03-01', JSON.stringify(r));
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+section('L — Export carries the SAME filters the page was drawn with');
+// ══════════════════════════════════════════════════════════════════════════
+// Apsara, 2026-11-07: "export as xls and pdf".
+//
+// The one way this feature goes wrong is for the download to be a DIFFERENT
+// report from the page the button was pressed on — the same month with a
+// filter quietly dropped, saved, and sent to an accountant. It fails
+// silently, in a file, away from the screen that would have shown it.
+{
+    const { d } = render(REAL);
+    ck('there is an export control', !!d.getElementById('btnSpendExport'));
+    const kinds = [...d.querySelectorAll('.spendExportItem')].map((n) => n.dataset.kind).sort();
+    ck('  offering Excel and PDF', kinds.join(',') === 'pdf,xlsx', JSON.stringify(kinds));
+    ck('  and the menu starts closed', d.getElementById('spendExportMenu').className.includes('hidden'));
+
+    // THE PROPERTY. The client must build the export URL from the SAME query
+    // string it fetched the report with, not from a second assembly of the
+    // filters that can drift.
+    const src = fs.readFileSync(path.join(ROOT, 'dashboard/app/06-expenses-trucker.js'), 'utf8');
+    ck('the export URL is built from the report\'s own query string',
+       /export\.\$\{b\.dataset\.kind\}\$\{spendQs\}/.test(src),
+       'a second assembly of the filters is the bug, not the typing');
+    ck('  and spendQs is set where the report is fetched',
+       /spendQs = qs\.length \? '\?' \+ qs\.join\('&'\) : ''/.test(src));
+
+    // Every filter the screen can set must be in that query string, or the
+    // export silently widens. Checked by name so a NEW filter added later
+    // without an export line fails here.
+    for (const q of ['from=', 'to=', 'method=', 'bank=', 'paid_via=',
+                     'bought_from=', 'sold_to=', 'company=']) {
+        ck(`  ${q.replace('=', '')} reaches the query string`, src.includes(`'${q}'`),
+           'a filter missing here makes the file a wider report than the page');
+    }
 }
 
 console.log(`\n  ${pass} passed, ${fail} failed`);

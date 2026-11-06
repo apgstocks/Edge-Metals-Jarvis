@@ -2,8 +2,15 @@
 module.exports = function (app, ctx) {
     const { actorOf, requireAdmin } = ctx;
 // @@chunk-start
-    app.get('/api/reports/spend', requireAdmin, (req, res) => {
-        try {
+    // ── ONE READER FOR THREE ROUTES ──────────────────────────────────────
+    // Apsara, 2026-11-07, asked for the Spend report to export as xls and
+    // pdf. The one way to get that wrong is for the export to be a DIFFERENT
+    // report from the screen — the same month with a filter quietly dropped,
+    // downloaded, and sent to someone. So the query is read ONCE, here, and
+    // the JSON the screen draws and both exports all come out of it.
+    //
+    // A second copy of this parsing is the bug, not the typing.
+    function spendFromQuery(req) {
             const { buildSpendReport } = require('./helpers/spendReport');
             const { listPayments } = require('./helpers/payments');
             const { loadExpenses } = require('./helpers/expenses');
@@ -72,7 +79,7 @@ module.exports = function (app, ctx) {
                 for (const x of (require('./helpers/metalsTrucking').list() || [])) put('metals_trucking', x.id, x.trucking_company);
             });
 
-            res.json(buildSpendReport({
+            return buildSpendReport({
                 parties,
                 // Each narrows its OWN side: bought_from the money out,
                 // sold_to the money in. Not validated, same as bank and
@@ -103,7 +110,59 @@ module.exports = function (app, ctx) {
                 // thing to filter for, and it is how she finds the transfers
                 // written before the field existed.
                 paidVia: req.query.paid_via,
-            }));
+            });
+    }
+
+    // A label she will recognise on the printed page: the period, the
+    // company, and whichever filters are on.
+    function spendLabel(rep) {
+        const bits = [rep.from || rep.to
+            ? `${rep.from || 'the beginning'} to ${rep.to || 'today'}` : 'All time'];
+        bits.push(rep.companyName || 'Both companies');
+        if (rep.method) bits.push(`paid by ${rep.method}`);
+        if (rep.bank) bits.push(`out of ${rep.bank}`);
+        if (rep.paidVia) bits.push(`via ${rep.paidVia}`);
+        if (rep.boughtFrom) bits.push(`bought from ${rep.boughtFrom}`);
+        if (rep.soldTo) bits.push(`sold to ${rep.soldTo}`);
+        return bits.join(' \u00b7 ');
+    }
+
+    app.get('/api/reports/spend', requireAdmin, (req, res) => {
+        try { res.json(spendFromQuery(req)); }
+        catch (e) { res.status(500).json({ error: e.message }); }
+    });
+
+    // ── THE SAME REPORT, AS A FILE ───────────────────────────────────────
+    // Apsara, 2026-11-07: "export as xls and pdf". Both routes go through
+    // spendFromQuery, so a download can never be a different period, company
+    // or filter from the page she pressed it on — which is the one way this
+    // feature goes wrong, and it goes wrong silently, in a file she sends to
+    // somebody. The filename carries the company and the period for the same
+    // reason.
+    const slug = (v) => String(v || '').toLowerCase().replace(/[^a-z0-9]+/g, '-')
+        .replace(/^-|-$/g, '') || 'all';
+    const fileName = (rep, ext) =>
+        `spend-${slug(rep.companyName || 'both')}-${slug(rep.from || 'all')}.${ext}`;
+
+    app.get('/api/reports/spend/export.xlsx', requireAdmin, async (req, res) => {
+        try {
+            const rep = spendFromQuery(req);
+            const { spendWorkbookBuffer } = require('./helpers/spendExport');
+            const buf = await spendWorkbookBuffer(rep, spendLabel(rep));
+            res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+            res.setHeader('Content-Disposition', `attachment; filename="${fileName(rep, 'xlsx')}"`);
+            res.send(Buffer.from(buf));
+        } catch (e) { res.status(500).json({ error: e.message }); }
+    });
+
+    app.get('/api/reports/spend/export.pdf', requireAdmin, async (req, res) => {
+        try {
+            const rep = spendFromQuery(req);
+            const { generateSpendReportPdf } = require('./helpers/pdf');
+            const buf = await generateSpendReportPdf(spendLabel(rep), rep);
+            res.setHeader('Content-Type', 'application/pdf');
+            res.setHeader('Content-Disposition', `attachment; filename="${fileName(rep, 'pdf')}"`);
+            res.send(buf);
         } catch (e) { res.status(500).json({ error: e.message }); }
     });
 

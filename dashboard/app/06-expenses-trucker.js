@@ -19,6 +19,7 @@ let spendSold = '';
 // The engine defaults to every company; only this screen defaults to the
 // yard. So the voice path and every other caller are untouched.
 let spendCompany = 'edge-trading';
+let spendQs = '';
 // '' means every method. Held here so it survives a repaint, like the date
 // range — a filter that resets itself when you tap Apply is worse than none.
 let spendMethod = '';
@@ -380,6 +381,8 @@ async function renderSpendReportTab() {
   if (spendBought) qs.push('bought_from=' + encodeURIComponent(spendBought));
   if (spendSold) qs.push('sold_to=' + encodeURIComponent(spendSold));
   if (spendCompany) qs.push('company=' + encodeURIComponent(spendCompany));
+  // Kept so the Export menu can hand the SAME filters to the export route.
+  spendQs = qs.length ? '?' + qs.join('&') : '';
   let rep;
   try {
     rep = await api('/api/reports/spend' + (qs.length ? '?' + qs.join('&') : ''));
@@ -578,6 +581,22 @@ async function renderSpendReportTab() {
         // part — see the "Where it went" card.
         stats: [['out', esc(money(rep.total))], ['entries', esc(rep.count)]],
         chips: [spendMethod ? `${spendMethod} only` : null, 'admin only'],
+        // ── EXPORT ───────────────────────────────────────────────────────
+        // Apsara, 2026-11-07: "export as xls and pdf". Same kebab menu the
+        // Inventory export uses, and it navigates to the export route with
+        // THE CURRENT QUERY STRING attached — the same one the screen was
+        // drawn from. A download that is a different period or company from
+        // the page it was pressed on is the one way this goes wrong, and it
+        // goes wrong silently, in a file she sends to somebody.
+        actions: `
+          <div style="position:relative;">
+            <button id="btnSpendExport" class="btn" title="Export" style="${chipCss(false)}">Export \u25be</button>
+            <div id="spendExportMenu" class="hidden" style="position:absolute; right:0; top:100%; margin-top:6px; z-index:40;
+                 background:var(--surface-sunken); border:1px solid var(--border-subtle); border-radius:8px; min-width:170px; overflow:hidden;">
+              <button class="spendExportItem" data-kind="xlsx" style="display:block; width:100%; text-align:left; background:none; border:none; cursor:pointer; padding:9px 14px; font-size:12.5px; color:var(--text-muted); font-family:inherit;">Export as Excel</button>
+              <button class="spendExportItem" data-kind="pdf" style="display:block; width:100%; text-align:left; background:none; border:none; cursor:pointer; padding:9px 14px; font-size:12.5px; color:var(--text-muted); font-family:inherit; border-top:1px solid var(--border-subtle);">Export as PDF</button>
+            </div>
+          </div>`,
       })}
 
       <!-- ── the filter bar ───────────────────────────────────────────────
@@ -875,6 +894,21 @@ async function renderSpendReportTab() {
   // Enter, so both ways of entering a date re-run the report without a
   // button. An unparseable half-typed date becomes '' — open-ended — rather
   // than throwing or freezing the old window in place.
+  // The export carries the query string this very report was fetched with,
+  // so the file and the page can never be different reports.
+  const exportMenu = $('spendExportMenu');
+  if (exportMenu && $('btnSpendExport')) {
+    $('btnSpendExport').addEventListener('click', (ev) => {
+      ev.stopPropagation();
+      exportMenu.classList.toggle('hidden');
+    });
+    document.addEventListener('click', () => exportMenu.classList.add('hidden'));
+    exportMenu.querySelectorAll('.spendExportItem').forEach((b) => b.addEventListener('click', () => {
+      exportMenu.classList.add('hidden');
+      location.href = `/api/reports/spend/export.${b.dataset.kind}${spendQs}`;
+    }));
+  }
+
   const applyDates = () => { takeDates(); renderSpendReportTab(); };
   for (const id of ['spend_from', 'spend_to']) {
     const el = $(id);
