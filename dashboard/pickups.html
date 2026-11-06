@@ -1,0 +1,231 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Pickups — Jarvis</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wght@700;800;900&family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+/* Same design tokens as dashboard/quote-requests.html / address-book.html /
+   index.html — kept in sync by hand since this is a standalone page. If the
+   main dashboard's theme changes, mirror the change here too. */
+:root {
+  --steel-950: #0C0E10; --steel-900: #14181B; --steel-800: #1E2429; --steel-700: #2B3239;
+  --steel-600: #3C454D; --steel-500: #57616A; --steel-400: #7E8891; --steel-300: #A7B0B7;
+  --steel-200: #CBD1D6; --steel-100: #E5E9EC; --steel-50: #F3F5F7; --white: #FFFFFF;
+  --leaf-50: #ECF8EA; --leaf-100: #D3F0CD; --leaf-200: #ABE2A1; --leaf-300: #7FD172;
+  --leaf-400: #57BE49; --leaf-500: #3DA836; --leaf-600: #2E861F; --leaf-700: #226620; --leaf-800: #194C18;
+  --copper-50: #FBF1E9; --copper-100: #F5DCC8; --copper-200: #EDBE99; --copper-300: #E29C68;
+  --copper-400: #D77E3D; --copper-500: #C25E22; --copper-600: #A54A17; --copper-700: #813913;
+  --green-500: #2F8F57; --amber-500: #D99A2B; --red-500: #C5402F; --blue-500: #3A6EA5;
+  --bg-base: #0C0E10; --bg-panel: #0F1214;
+  --surface-card: #14181B; --surface-sunken: #0F1214; --surface-hover: #181D21;
+  --text-strong: #FFFFFF; --text-body: #CBD1D6; --text-muted: #A7B0B7; --text-faint: #7E8891;
+  --accent: var(--leaf-500); --accent-hover: var(--leaf-600); --accent-soft: rgba(87,190,73,.15);
+  --accent-onSoft: var(--leaf-300);
+  --border-subtle: #1E2429; --border-default: #2B3239;
+  --status-success: var(--green-500); --status-warning: var(--amber-500);
+  --status-danger: var(--red-500); --status-info: var(--blue-500);
+  --ring: var(--leaf-500);
+  --font-display: 'Archivo', sans-serif;
+  --font-sans: 'IBM Plex Sans', system-ui, -apple-system, sans-serif;
+  --font-mono: 'IBM Plex Mono', ui-monospace, 'SFMono-Regular', monospace;
+  --radius-xs: 2px; --radius-sm: 4px; --radius-md: 6px;
+  --shadow-xs: 0 1px 2px rgba(0,0,0,.3);
+  --dur-fast: 120ms; --ease-out: cubic-bezier(.2,.7,.2,1);
+}
+* , *::before, *::after { box-sizing: border-box; }
+body { margin:0; font-family:var(--font-sans); font-size:1rem; line-height:1.5; color:var(--text-body); background:var(--bg-base); -webkit-font-smoothing:antialiased; min-height:100vh; }
+h1,h2 { font-family:var(--font-display); color:var(--text-strong); margin:0; font-weight:900; line-height:1.15; letter-spacing:-.02em; }
+a { color:var(--leaf-400); text-decoration:none; }
+a:hover { color:var(--leaf-300); text-decoration:underline; text-underline-offset:3px; }
+button { font:inherit; }
+::selection { background:rgba(87,190,73,.35); color:#fff; }
+:focus-visible { outline:2px solid var(--ring); outline-offset:2px; }
+.eyebrow { font-family:var(--font-mono); font-size:11px; font-weight:500; letter-spacing:.18em; text-transform:uppercase; color:var(--copper-400); margin-bottom:8px; }
+.btn { display:inline-flex; align-items:center; gap:8px; justify-content:center; border-radius:var(--radius-xs); font-family:var(--font-mono); font-size:11px; font-weight:600; letter-spacing:.08em; text-transform:uppercase; cursor:pointer; border:1px solid transparent; padding:10px 18px; transition:background var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out); }
+.btn-primary { background:var(--accent); color:#fff; border-color:var(--accent); box-shadow:0 0 22px rgba(61,168,54,.28); }
+.btn-primary:hover { background:var(--accent-hover); }
+.btn-secondary { background:var(--surface-card); color:var(--text-strong); border-color:var(--border-default); }
+.btn-secondary:hover { border-color:var(--steel-600); }
+.btn:disabled { opacity:.5; cursor:not-allowed; }
+.card { background:var(--surface-card); border:1px solid var(--border-subtle); border-radius:var(--radius-sm); box-shadow:var(--shadow-xs); }
+.spinner { display:inline-block; width:13px; height:13px; border:2px solid rgba(255,255,255,.4); border-top-color:#fff; border-radius:50%; animation:spin .7s linear infinite; }
+@keyframes spin { to { transform:rotate(360deg); } }
+.hidden { display:none !important; }
+.badge { display:inline-flex; align-items:center; padding:2px 8px; border-radius:999px; font-family:var(--font-mono); font-size:10.5px; font-weight:600; letter-spacing:.04em; text-transform:uppercase; }
+::-webkit-scrollbar { width:10px; height:10px; }
+::-webkit-scrollbar-thumb { background:var(--steel-700); border-radius:5px; border:2px solid transparent; background-clip:content-box; }
+::-webkit-scrollbar-track { background:transparent; }
+table { width:100%; border-collapse:collapse; }
+th { text-align:left; font-family:var(--font-mono); font-size:10.5px; font-weight:600; letter-spacing:.06em; text-transform:uppercase; color:var(--text-faint); padding:8px 10px; border-bottom:1px solid var(--border-subtle); }
+td { padding:10px 10px; font-size:13px; border-bottom:1px solid var(--border-subtle); vertical-align:top; }
+tr:last-child td { border-bottom:none; }
+</style>
+<style>
+/* ── dashboard/pickups.html — the Follow-up Agent, visible ───────────────
+   Apsara, 2026-11-06: "Have a followup agent" and, on the pickups it reads
+   out of her mail, "tell me if the date is wrong". Until this page the only
+   ways in were the API and the bot, and the only way to SEE what the agent
+   was about to do was to wait for it to do it.
+
+   Tokens above are the shared block, copied verbatim from the other
+   standalone pages rather than re-typed, so this cannot drift from them. */
+.row { padding:14px 16px; border-bottom:1px solid var(--border-subtle); }
+.row:last-child { border-bottom:none; }
+.who { font-weight:600; color:var(--text-strong); font-size:14px; }
+.meta { font-family:var(--font-mono); font-size:11.5px; color:var(--text-muted); margin-top:3px; }
+.next { font-size:12.5px; color:var(--text-muted); margin-top:7px; }
+.ok { color:var(--leaf-300); }
+.warn { color:var(--amber-500); }
+.field { display:block; margin-bottom:10px; }
+.field span { display:block; font-family:var(--font-mono); font-size:10.5px; letter-spacing:.06em;
+  text-transform:uppercase; color:var(--text-faint); margin-bottom:4px; }
+.field input { width:100%; height:38px; padding:0 10px; border-radius:var(--radius-sm);
+  border:1px solid var(--border-default); background:var(--surface-sunken); color:#fff; font:inherit; font-size:13px; }
+.grid2 { display:grid; grid-template-columns:1fr 1fr; gap:12px; }
+#err { display:none; margin:0 0 16px; padding:10px 12px; border-radius:var(--radius-sm);
+  border:1px solid var(--amber-500); background:rgba(217,154,43,.12); color:#fff; font-size:12.5px; }
+</style>
+</head>
+<body>
+<section style="max-width:960px; margin:0 auto; padding:38px 40px 80px;">
+  <a href="/" style="display:inline-flex; gap:6px; font-family:var(--font-mono); font-size:11px; letter-spacing:.1em; text-transform:uppercase; color:var(--text-faint); margin-bottom:20px;">&larr; Back to dashboard</a>
+  <div style="display:flex; align-items:center; justify-content:space-between; gap:16px; margin-bottom:8px;">
+    <div><div class="eyebrow">// Follow-up agent</div><h2 style="font-size:24px; text-transform:uppercase;">Pickups</h2></div>
+    <button id="btnRefresh" class="btn btn-secondary">Refresh</button>
+  </div>
+  <div style="font-size:13px; color:var(--text-muted); margin-bottom:22px;">
+    What is arranged, and what Jarvis will do about it. On the pickup day it asks the
+    logistics company for an ETA at 8, chases if nobody answers, and tells the team at 2.
+    Pickups it read out of your mail say so &mdash; check the date on those.
+  </div>
+
+  <!-- Said on the page, not in a toast. A half-drawn screen that looks
+       finished is the fault she reported three times on the claims page. -->
+  <div id="err"></div>
+
+  <div class="card" style="margin-bottom:22px;">
+    <div style="padding:14px 16px; border-bottom:1px solid var(--border-subtle); font-family:var(--font-mono); font-size:10.5px; letter-spacing:.06em; text-transform:uppercase; color:var(--text-faint);">Record a pickup</div>
+    <form id="newForm" style="padding:16px;">
+      <div class="grid2">
+        <label class="field"><span>Logistics company</span><input id="f_company" required placeholder="Zimex Freight"></label>
+        <label class="field"><span>Pickup date</span><input id="f_date" required placeholder="11/20/2026"></label>
+        <label class="field"><span>Container</span><input id="f_container" placeholder="optional"></label>
+        <label class="field"><span>Collecting from</span><input id="f_location" placeholder="optional"></label>
+        <label class="field"><span>Their email</span><input id="f_email" placeholder="leave blank if Jarvis knows them"></label>
+        <label class="field"><span>Their WhatsApp</span><input id="f_wa" placeholder="leave blank if Jarvis knows them"></label>
+      </div>
+      <button type="submit" class="btn btn-primary" id="btnSave">Record it</button>
+    </form>
+  </div>
+
+  <div class="card"><div id="rows"><div class="row" style="color:var(--text-faint);">Loading&hellip;</div></div></div>
+</section>
+<script>
+async function api(path, opts = {}) {
+  // cache:'no-store' added 2026-10-23. Apsara: "when i create a load/sle,i
+  // have to log out n relogin to view the latest change." The server now
+  // sends Cache-Control: no-store on every /api/ response, which is the
+  // real fix — this is the client saying the same thing, so a stale answer
+  // cannot come from anything sitting between her and the VM either (the
+  // dashboard is reached through a Cloudflare tunnel). Costs nothing: these
+  // responses were never meant to be re-used.
+  //
+  // BEFORE the spread, so a caller that ever needs a cached read can still
+  // say so — the same shape `headers` already has.
+  const res = await fetch(path, { cache: 'no-store', headers: { 'Content-Type': 'application/json' }, ...opts });
+  if (res.status === 401) { location.href = '/login'; throw new Error('unauthorized'); }
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || `request failed (${res.status})`);
+  return data;
+}
+
+const $ = (s) => document.querySelector(s);
+const esc = (v) => String(v == null ? '' : v).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+
+/* The agent's own words for what it will do next, never the page's. The
+   route runs pickupAgent.nextAction on every row for exactly this reason:
+   a screen that computed its own "waiting on them" would drift from what is
+   actually being sent, and she would have no way to tell which was lying. */
+function rowHtml(p) {
+  const bits = [esc(p.pickup_date)];
+  if (p.container_no) bits.push(esc(p.container_no));
+  if (p.location) bits.push('from ' + esc(p.location));
+
+  let line;
+  if (p.eta) line = '<span class="ok">They said: ' + esc(p.eta) + '</span>';
+  else if (!p.reachable) line = '<span class="warn">No way to reach them &mdash; ' + esc(p.unreachable_why) + '</span>';
+  else if (p.next_step) line = 'Next: ' + esc(p.next_step) + ' &mdash; ' + esc(p.next_why);
+  else line = esc(p.next_why || 'nothing due');
+
+  const flags = [];
+  if (p.source === 'email') flags.push('<span class="warn">read from your mail &mdash; check the date</span>');
+  if (p.contacts_learned) flags.push('<span style="color:var(--text-faint)">contact remembered from last time</span>');
+
+  return '<div class="row" data-id="' + esc(p.id) + '">'
+    + '<div class="who">' + esc(p.company) + '</div>'
+    + '<div class="meta">' + bits.join(' &middot; ') + '</div>'
+    + '<div class="next">' + line + '</div>'
+    + (flags.length ? '<div class="next" style="font-size:11.5px">' + flags.join(' &middot; ') + '</div>' : '')
+    + (p.eta ? '' : '<div style="margin-top:9px"><input class="etaBox" placeholder="they told me&hellip; e.g. truck at 2pm" '
+        + 'style="height:32px;padding:0 9px;border-radius:4px;border:1px solid var(--border-default);background:var(--surface-sunken);color:#fff;font:inherit;font-size:12.5px;width:260px">'
+        + ' <button class="btn btn-secondary etaSave" style="padding:7px 12px">Save ETA</button></div>')
+    + '</div>';
+}
+
+function say(msg) {
+  const box = $('#err');
+  box.style.display = msg ? 'block' : 'none';
+  box.textContent = msg || '';
+}
+
+async function load() {
+  try {
+    const j = await api('/api/pickups');
+    const rows = (j.pickups || []);
+    $('#rows').innerHTML = rows.length
+      ? rows.map(rowHtml).join('')
+      : '<div class="row" style="color:var(--text-faint);">Nothing arranged yet.</div>';
+    say('');
+    wire();
+  } catch (e) {
+    /* Named, on the page. Not a toast that fades before she reads it. */
+    say('Could not load pickups — ' + e.message);
+  }
+}
+
+function wire() {
+  document.querySelectorAll('.etaSave').forEach((b) => {
+    b.onclick = async () => {
+      const row = b.closest('.row');
+      const eta = (row.querySelector('.etaBox') || {}).value || '';
+      if (!eta.trim()) { say('Say what they told you — "2pm", "after lunch", whatever they said.'); return; }
+      try { await api('/api/pickups/' + row.dataset.id + '/eta', { method:'POST', body: JSON.stringify({ eta }) }); await load(); }
+      catch (e) { say(e.message); }
+    };
+  });
+}
+
+$('#btnRefresh').onclick = load;
+$('#newForm').onsubmit = async (e) => {
+  e.preventDefault();
+  const body = {
+    company: $('#f_company').value, pickup_date: $('#f_date').value,
+    container_no: $('#f_container').value, location: $('#f_location').value,
+    contact_email: $('#f_email').value, contact_whatsapp: $('#f_wa').value,
+  };
+  try {
+    await api('/api/pickups', { method:'POST', body: JSON.stringify(body) });
+    $('#newForm').reset();
+    await load();
+  } catch (e) { say(e.message); }
+};
+
+load();
+</script>
+<script src="/sidebar.js" data-page="pickups" defer></script>
+</body>
+</html>

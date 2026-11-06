@@ -167,6 +167,12 @@ module.exports = function (app, ctx) {
     // and causes mail to go out in Edge's name.
     require('../helpers/pickupRoutes').mount(app, cfg);
 
+    // The Follow-up Agent's screen. Until this, the only ways to see what it
+    // was about to do were the API and waiting for it to do it.
+    app.get('/pickups', (req, res) => {
+        res.sendFile(path.join(cfg.ROOT, 'dashboard', 'pickups.html'));
+    });
+
     // Old standalone Contact Quotes page — MERGED into /quote-requests
     // 2026-08-16 per Apsara ("Contact Quotes and Quote Requests... both are
     // same"). dashboard/contact-quote-requests.html still exists on disk

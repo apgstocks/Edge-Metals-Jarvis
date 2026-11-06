@@ -497,6 +497,27 @@ const MUTATIONS = [
     // ── THE SPLIT ITSELF (2026-10-31) ────────────────────────────────────
     // Replaces 'quality-only demand: her column set is used on MIXED pages
     // too', which guarded the single-table rule that the split removed.
+    // ── THE FOLLOW-UP AGENT'S SCREEN (2026-11-06) ───────────────────────
+    // dashboard/claims.html was dead for six days behind 139 green checks
+    // that only ever read it as text. tests/pickups-screen.js RENDERS this
+    // page, so these mutations are about what she can SEE.
+    { name: 'pickups-screen: the page invents its own status instead of the agent\'s',
+      file: 'dashboard/pickups.html', suites: ['pickups-screen'],
+      find: "  else if (p.next_step) line = 'Next: ' + esc(p.next_step) + ' &mdash; ' + esc(p.next_why);",
+      to:   "  else if (p.next_step) line = 'Waiting on them';" },
+    { name: 'pickups-screen: a pickup read from her mail is no longer flagged',
+      file: 'dashboard/pickups.html', suites: ['pickups-screen'],
+      find: "  if (p.source === 'email') flags.push",
+      to:   "  if (false) flags.push" },
+    { name: 'pickups-screen: an unreachable pickup looks like a normal one',
+      file: 'dashboard/pickups.html', suites: ['pickups-screen'],
+      find: "  else if (!p.reachable) line",
+      to:   "  else if (false) line" },
+    { name: 'pickups-screen: a failed load leaves the page looking finished',
+      file: 'dashboard/pickups.html', suites: ['pickups-screen'],
+      find: "    say('Could not load pickups \u2014 ' + e.message);",
+      to:   "    /* swallowed */" },
+
     // ── REINFORCEMENT / ADAPTIVE LEARNING PER CARRIER (2026-11-06) ──────
     // "use renorcement and adaptive learning concepts". A contextual bandit
     // over (carrier, channel): Beta posterior, recency discounting, e-greedy

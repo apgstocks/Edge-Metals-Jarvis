@@ -79,6 +79,7 @@
     // visibility it was given; the server gates are untouched.
     { id: 'accounting', label: 'Accounting', group: 'Edge Metals' },
     { id: 'claims', label: 'Claims', group: 'Edge Metals' },
+    { id: 'pickups', label: 'Pickups', group: 'Edge Metals' },
     { id: 'bot', label: 'Bot', group: 'Bot & Automation' },
     { id: 'facts', label: 'Facts', group: 'Bot & Automation', adminOnly: true },
     { id: 'tasks', label: 'Tasks', group: 'Bot & Automation' },
