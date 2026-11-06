@@ -213,7 +213,7 @@ async function run(opts = {}) {
     // ── CUSTOMER PAYMENTS (2026-11-07) ───────────────────────────────────
     // After the pickups and walled off from them: whatever happens here, a pickup rung
     // has already fired, and a failure here is reported rather than thrown.
-    try { out.payments = await runPayments({ sendToManager, sendToTeam, now: opts.now, drafts: opts.paymentDrafts }); }
+    try { out.payments = await runPayments({ sendToManager, sendToTeam, now: opts.now, drafts: opts.paymentDrafts, findRemittance: opts.findRemittance }); }
     catch (e) { out.payments = { asked: 0, chased: 0, escalated: 0, failed: [{ why: 'payment follow-ups could not run: ' + (e && e.message) }] }; }
     return out;
 }
@@ -223,15 +223,45 @@ async function run(opts = {}) {
 // message to her for the asks and chases, one to the team per escalation. A rung is
 // recorded only AFTER the message went, so a failed send is retried next run rather than
 // buried.
-async function runPayments({ sendToManager, sendToTeam, now, drafts }) {
-    const res = { asked: 0, chased: 0, escalated: 0, failed: [] };
+async function runPayments({ sendToManager, sendToTeam, now, drafts, findRemittance }) {
+    const res = { asked: 0, chased: 0, escalated: 0, held: 0, failed: [] };
     if (String(process.env.PAYMENT_CHASE || '').toLowerCase() === 'off') return { ...res, off: true };
     const chaser = require('./paymentChaser');
     const t = now ? new Date(now).getTime() : Date.now();
     let list = drafts;
     if (!list) list = require('./paymentFollowups').build({ now: t }).drafts;
     const log = chaser.prune(chaser.readLog(), list);
-    const todo = chaser.plan(list, log, t);
+    let todo = chaser.plan(list, log, t);
+
+    // Mail from the customer that looks like proof of payment HOLDS the follow-up and tells her to look (Apsara, 2026-11-07).
+    // Read-only: nothing is marked paid. A hold lapses after HOLD_DAYS if no receipt has been recorded, then the ladder resumes.
+    const heldNotes = [];
+    if (typeof findRemittance === 'function' && todo.length) {
+        const HOLD_MS = require('./remittanceMail').HOLD_DAYS * 86400000;
+        const keep = [];
+        for (const x of todo) {
+            const entry = log[x.key];
+            const held = entry && entry.held;
+            const stale = held && (t - held.at) > HOLD_MS;
+            let hit = null;
+            try {
+                const since = entry && entry.firstAt ? Date.parse(entry.firstAt) : t - 45 * 86400000;
+                hit = await findRemittance(x.draft, { sinceMs: since, ignoreId: stale ? held.id : undefined });
+            } catch (e) { hit = null; }
+            if (!hit) { keep.push(x); continue; }
+            res.held += 1;
+            if (!held || held.id !== hit.id) {
+                log[x.key] = { ...(entry || { set: null, firstAt: new Date(t).toISOString(), lastStep: null, lastAt: null, customer: x.draft.customer }), held: { id: hit.id, at: hit.dateMs || t } };
+                heldNotes.push(`${x.draft.customer} \u2014 ${chaser.money(x.draft.total)} open: they emailed something that looks like proof of payment (${hit.subject ? '"' + hit.subject + '"' : 'no subject'}). Check it and record the receipt; follow-up on hold.`);
+            }
+        }
+        todo = keep;
+        if (heldNotes.length && sendToManager) {
+            try { await sendToManager('Possible payment received:\n' + heldNotes.map((n) => '  \u00b7 ' + n).join('\n')); }
+            catch (e) { res.failed.push({ why: 'could not tell her about a possible payment: ' + (e && e.message) }); }
+        }
+        if (heldNotes.length) await chaser.writeLog(log);
+    }
     if (!todo.length) { if (JSON.stringify(log) !== JSON.stringify(chaser.readLog())) await chaser.writeLog(log); return res; }
 
     const told = [];

@@ -1604,6 +1604,8 @@ function start() {
             sendToTeam: async (text) => _sendToTeam(text),
             // Payment follow-ups tell HER (drafts only; nothing goes to a customer).
             sendToManager: async (text) => _sendToManager(text),
+            // Reads the mailbox for a customer's remittance copy before chasing them (read-only).
+            findRemittance: require('./helpers/remittanceMail').liveFinder(),
         })
         .then((r) => {
             const line = require('./helpers/followUpAgentJob').summarise(r);

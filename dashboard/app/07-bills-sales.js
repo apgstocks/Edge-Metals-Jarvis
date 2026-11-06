@@ -1165,6 +1165,7 @@ async function openFollowups() {
               if (f.asked) bits.push('asked ' + f.asked);
               if (f.chased) bits.push('chased ' + f.chased);
               if (f.escalated) bits.push('passed to the team ' + f.escalated);
+              if (f.held) bits.push('payment mail received ' + f.held + ' - check it');
               const txt = f.lc ? 'LC terms: no follow-ups' : (bits.length ? bits.join(' · ') : 'not told to you yet');
               return `<div class="pfStatus" style="font-size:11.5px; margin-top:6px; color:${f.escalated ? L.danger : L.inkMuted};">${esc(txt)}</div>`;
             })()}

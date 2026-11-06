@@ -152,9 +152,10 @@ const mmdd = (iso) => { const t = Date.parse(iso || ''); if (!Number.isFinite(t)
 function statusFor(draft, log) {
     const lc = isLcDraft(draft);
     const entry = (log || {})[keyOf(draft.customer)];
-    if (!entry || entry.set !== setKey(draft)) return { asked: null, chased: null, escalated: null, lc };
+    const held = entry && entry.held ? mmdd(new Date(entry.held.at).toISOString()) : null;
+    if (!entry || entry.set !== setKey(draft)) return { asked: null, chased: null, escalated: null, held, lc };
     const st = entry.steps || { [entry.lastStep]: entry.lastAt };
-    return { asked: mmdd(st.ask), chased: mmdd(st.chase), escalated: mmdd(st.escalate), lc };
+    return { asked: mmdd(st.ask), chased: mmdd(st.chase), escalated: mmdd(st.escalate), held, lc };
 }
 
 function prune(log, drafts) {
