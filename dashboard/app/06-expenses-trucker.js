@@ -1,6 +1,10 @@
 // dashboard/app/06-expenses-trucker.js — split from dashboard/index.html's <script> (helpers/sourceParts.js reconstructs the original)
 let spendFrom = '';
 let spendTo = '';
+// Apsara 2026-11-07: "TWO FILTERS,WHOM WE BUY,WHOM WE SELL". Two, because
+// they narrow opposite directions of money — see helpers/spendReport.js.
+let spendBought = '';
+let spendSold = '';
 // '' means every method. Held here so it survives a repaint, like the date
 // range — a filter that resets itself when you tap Apply is worse than none.
 let spendMethod = '';
@@ -359,6 +363,8 @@ async function renderSpendReportTab() {
   if (spendMethod) qs.push('method=' + encodeURIComponent(spendMethod));
   if (spendBank) qs.push('bank=' + encodeURIComponent(spendBank));
   if (spendPaidVia) qs.push('paid_via=' + encodeURIComponent(spendPaidVia));
+  if (spendBought) qs.push('bought_from=' + encodeURIComponent(spendBought));
+  if (spendSold) qs.push('sold_to=' + encodeURIComponent(spendSold));
   let rep;
   try {
     rep = await api('/api/reports/spend' + (qs.length ? '?' + qs.join('&') : ''));
@@ -416,6 +422,34 @@ async function renderSpendReportTab() {
     <div style="height:5px; border-radius:3px; background:var(--surface-sunken); overflow:hidden; margin-top:5px;">
       <div style="height:100%; width:${pct(n, of).toFixed(1)}%; background:${colour}; border-radius:3px;"></div>
     </div>`;
+
+  // ── THE SOLD-TO CARD TAKES A DIFFERENT DENOMINATOR ─────────────────────
+  // splitCard proportions everything against rep.total, which is money OUT.
+  // The sold-to figures are money IN, so running them through splitCard
+  // would print percentages of the wrong number — 9,000 received shown as
+  // "0% of out" if she happened to buy more than she sold that month. A
+  // percentage of the wrong denominator is worse than no percentage: it is
+  // a wrong figure that looks computed.
+  const soldCard = (title, obj, ofTotal) => {
+    const keys = Object.keys(obj || {});
+    if (!keys.length) return '';
+    const of = Number(ofTotal) || keys.reduce((a, k) => a + (Number(obj[k]) || 0), 0);
+    return `
+      <div style="flex:1 1 300px; min-width:260px;">
+        <div style="font-family:var(--font-mono); font-size:9.5px; letter-spacing:.14em; text-transform:uppercase; color:var(--text-faint); margin-bottom:12px;">${esc(title)}<span style="color:var(--text-faint); text-transform:none; letter-spacing:0; font-size:10px;"> — of money received</span></div>
+        ${keys.sort((a, b) => (obj[b] || 0) - (obj[a] || 0)).map((k) => {
+          const gap = k === NOT_REC;
+          return `
+          <div style="margin-bottom:12px;">
+            <div style="display:flex; justify-content:space-between; align-items:baseline; gap:10px;">
+              <span style="font-size:12.5px; color:${gap ? 'var(--status-warning, #d69e2e)' : 'var(--text-muted)'};">${esc(k)}</span>
+              <span style="font-family:var(--font-mono); font-size:13px; font-weight:700; color:var(--leaf-600, #2e7d32); white-space:nowrap;">${esc(money(obj[k]))}<span style="color:var(--text-faint); font-weight:400; font-size:11px; margin-left:6px;">${pct(obj[k], of).toFixed(0)}%</span></span>
+            </div>
+            ${bar(obj[k], of, gap ? 'var(--status-warning, #d69e2e)' : 'var(--leaf-600, #2e7d32)')}
+          </div>`;
+        }).join('')}
+      </div>`;
+  };
 
   // ── WHAT "OUT" IS MADE OF ───────────────────────────────────────────────
   // Named in the order she thinks about them. Only the non-zero parts are
@@ -553,6 +587,35 @@ async function renderSpendReportTab() {
           ${['', ...(rep.paidViaColumns || [])].map(v => `
             <button class="btn btn-spend-via" data-via="${esc(v)}" style="${chipCss(spendPaidVia === v)}">${esc(v || 'All')}</button>`).join('')}
         </div>` : ''}
+        <!-- ── WHOM WE BUY, AND WHOM WE SELL ─────────────────────────────
+             Apsara, 2026-11-07: "What if i want supplier wise filter in edge
+             yard", and when asked which counterparty she meant: "TWO
+             FILTERS,WHOM WE BUY,WHOM WE SELL".
+
+             TWO, not one. Each narrows its own direction of money and leaves
+             the other alone — "Bought from" the spend, "Sold to" the
+             received. One combined filter would empty the received block
+             whenever the name is a seller, and this business already has a
+             settleAgainst path precisely because the same party can be both.
+
+             Rendered only when there is more than one name to choose
+             between, exactly like the bank and company rows: a single-value
+             row of chips is a control that cannot change anything. Until the
+             counterparty is recorded against a payment these lists are one
+             entry long, so the rows stay hidden rather than appearing broken.
+        -->
+        ${(rep.boughtFromColumns || []).length > 1 ? `
+        <div style="display:flex; gap:8px; flex-wrap:wrap; margin-top:10px; padding-top:10px; border-top:1px solid var(--border-subtle);">
+          <span style="${groupLabel}">Bought from</span>
+          ${['', ...(rep.boughtFromColumns || [])].map(v => `
+            <button class="btn btn-spend-bought" data-bought="${esc(v)}" style="${chipCss(spendBought === v)}">${esc(v || 'All')}</button>`).join('')}
+        </div>` : ''}
+        ${(rep.soldToColumns || []).length > 1 ? `
+        <div style="display:flex; gap:8px; flex-wrap:wrap; margin-top:10px;">
+          <span style="${groupLabel}">Sold to</span>
+          ${['', ...(rep.soldToColumns || [])].map(v => `
+            <button class="btn btn-spend-sold" data-sold="${esc(v)}" style="${chipCss(spendSold === v)}">${esc(v || 'All')}</button>`).join('')}
+        </div>` : ''}
       </div>
 
       <!-- ── WHERE IT WENT ───────────────────────────────────────────────
@@ -600,6 +663,22 @@ async function renderSpendReportTab() {
           'Money that left with no account recorded. Filter "Out of → Not recorded" to find and fix these.')}
         ${splitCard('Whose money it was', rep.byPaidVia,
           'Spend with no paying company against it. Edge Yard and Edge Metals are different companies, so an unattributed payment sits on neither return.')}
+      </div>` : ''}
+
+      <!-- ── WHOM WE BUY, WHOM WE SELL ───────────────────────────────────
+           Apsara, 2026-11-07. The two breakdowns behind the two filters.
+
+           byBoughtFrom adds to Total out; bySoldTo adds to Received. They
+           are NEVER added to each other — the whole reason she asked for two
+           filters is that money out and money in are two questions, and one
+           combined "counterparty" figure would answer neither. -->
+      ${(Object.keys(rep.byBoughtFrom || {}).length || Object.keys(rep.bySoldTo || {}).length) ? `
+      <div class="card" style="padding:18px 20px; margin-bottom:18px; display:flex; gap:36px; flex-wrap:wrap;">
+        ${splitCard('Whom we buy from', rep.byBoughtFrom,
+          'Money paid out with no counterparty recorded against it. Until that is closed these two lists cannot answer "how much have I paid them this year".')}
+        ${rep.received && rep.received.total
+          ? soldCard('Whom we sell to', rep.bySoldTo, rep.received.total)
+          : ''}
       </div>` : ''}
 
       <!-- ── money IN, kept apart from money out ──────────────────────────
@@ -704,6 +783,14 @@ async function renderSpendReportTab() {
   }));
   document.querySelectorAll('.btn-spend-via').forEach(b => b.addEventListener('click', () => {
     spendPaidVia = b.dataset.via || '';
+    renderSpendReportTab();
+  }));
+  document.querySelectorAll('.btn-spend-bought').forEach(b => b.addEventListener('click', () => {
+    spendBought = b.dataset.bought || '';
+    renderSpendReportTab();
+  }));
+  document.querySelectorAll('.btn-spend-sold').forEach(b => b.addEventListener('click', () => {
+    spendSold = b.dataset.sold || '';
     renderSpendReportTab();
   }));
 }

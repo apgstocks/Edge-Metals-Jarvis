@@ -9,7 +9,76 @@ module.exports = function (app, ctx) {
             const { loadExpenses } = require('./helpers/expenses');
             const { listEntries } = require('./helpers/pettyCash');
             const ymd = (v) => (/^\d{4}-\d{2}-\d{2}$/.test(String(v || '')) ? String(v) : null);
+
+            // ── WHOM WE BUY, WHOM WE SELL ────────────────────────────────
+            // Apsara, 2026-11-07: "What if i want supplier wise filter in
+            // edge yard" → "TWO FILTERS,WHOM WE BUY,WHOM WE SELL".
+            //
+            // A spend row knew how much, by what method, out of which
+            // account and whose company, and had NO idea who received it —
+            // its label was "Load 1234". The name lives in a different store
+            // for every kind, and helpers/spendReport.js deliberately
+            // reaches into none of them: it takes an optional `parties` map
+            // and reads "Not recorded" when there is none.
+            //
+            // That is why this lookup is HERE and not in the helper. The
+            // other two callers — helpers/tools.js (the voice path) and ~50
+            // test call sites — pass no map and must keep working untouched.
+            // CLAUDE.md records two outages caused by a new requirement in
+            // shared code that the voice path could not satisfy.
+            //
+            // Keyed `kind:ref`, matching the kinds collectRows assigns. A
+            // store that will not load is skipped rather than failing the
+            // report: a missing name shows as the gap it is, and a Spend
+            // report that 500s because one store is unreadable is worse than
+            // one that cannot name every payee.
+            const parties = {};
+            const put = (kind, id, name) => {
+                const n = name == null ? '' : String(name).trim();
+                if (!n || id == null) return;
+                parties[`${kind}:${id}`] = n;
+            };
+            const safely = (what, fn) => {
+                try { fn(); } catch (e) {
+                    console.warn('[SPEND] could not read ' + what + ' for names:', e && e.message);
+                }
+            };
+            // Yard purchases — the seller on the load. This is the one she
+            // asked for: Edge Yard's own counterparties.
+            safely('loads', () => {
+                for (const l of (require('./helpers/loads').loadLoads() || [])) put('load', l.id, l.seller);
+            });
+            // Sales — the buyer on the outbound load. The money-IN side.
+            safely('outbound loads', () => {
+                for (const l of (require('./helpers/outboundLoads').loadOutboundLoads() || [])) put('sale', l.id, l.buyer);
+            });
+            // Edge Yard haulage: a trucker payment's load_id IS the bill id
+            // (helpers/truckerBills.js:21), and the carrier is `company`.
+            safely('trucker bills', () => {
+                for (const b of (require('./helpers/truckerBills').listBills() || [])) put('trucker', b.id, b.company);
+            });
+            // Edge METALS supplier payments. A different company from the
+            // yard, which is exactly why they are a separate kind and never
+            // summed with the yard's sellers.
+            safely('bill payments', () => {
+                for (const b of (require('./helpers/billPayments').list() || [])) put('supplier', b.id, b.supplier);
+            });
+            // What a sale COSTS — freight, commission. `payee` is free text
+            // and deliberately unverified; it is recorded as given.
+            safely('sale settlements', () => {
+                for (const x of (require('./helpers/salesSettlements').list() || [])) put('sale_cost', x.id, x.payee);
+            });
+            safely('metals trucking', () => {
+                for (const x of (require('./helpers/metalsTrucking').list() || [])) put('metals_trucking', x.id, x.trucking_company);
+            });
+
             res.json(buildSpendReport({
+                parties,
+                // Each narrows its OWN side: bought_from the money out,
+                // sold_to the money in. Not validated, same as bank and
+                // paid_via — "Not recorded" is a legitimate thing to ask for.
+                boughtFrom: req.query.bought_from,
+                soldTo: req.query.sold_to,
                 payments: listPayments(),
                 expenses: loadExpenses(),
                 pettyEntries: listEntries(),

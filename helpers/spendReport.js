@@ -58,8 +58,44 @@ const inRange = (d, from, to) => {
 // One row shape for both sources, so everything downstream is a single sum.
 // `kind` keeps them distinguishable for the drill-down and for the split
 // between "paid for loads" and "spent on expenses".
-function collectRows({ payments, expenses, from, to }) {
+// ── WHO THE MONEY WENT TO, OR CAME FROM ──────────────────────────────────
+// Apsara, 2026-11-07: "What if i want supplier wise filter in edge yard",
+// and asked which counterparty she meant: "TWO FILTERS,WHOM WE BUY,WHOM WE
+// SELL".
+//
+// Until today a spend row was labelled "Load 1234". The report knew how much,
+// by what method, out of which account and whose company — and had no idea
+// WHO received it. That is why there was no supplier filter to turn on.
+//
+// ── THE NAMES ARE INJECTED, NEVER FETCHED ───────────────────────────────
+// A name lives in a different store for every kind: the seller on a yard
+// load, the buyer on an outbound load, the vendor on a bill, a trucker, a
+// settlement agent. Reaching into six stores from here would make this
+// module depend on most of the app, and — the part that actually matters —
+// it would make `names` a thing every caller has to supply.
+//
+// CLAUDE.md records two separate outages caused by exactly that: a new
+// requirement added to shared code, and the caller that could not satisfy it
+// was the voice path, which has no form to put a field on. helpers/tools.js
+// line 419 calls buildSpendReport, and ~50 test call sites pass nothing but
+// payments and expenses.
+//
+// So `parties` is OPTIONAL and the absence of it is a supported answer. With
+// no map every row reads "Not recorded", the two filters offer one value
+// each, and the screen renders no chip row — the same rule the bank filter
+// has always followed. Nothing that worked yesterday needs to change.
+//
+// Keyed `kind:ref` so one flat object covers all six kinds without this
+// function knowing what any of them mean.
+const partyKey = (kind, ref) => `${kind}:${ref == null ? '' : ref}`;
+
+function collectRows({ payments, expenses, from, to, parties = null }) {
     const rows = [];
+    const nameFor = (kind, ref) => {
+        if (!parties) return null;
+        const v = parties[partyKey(kind, ref)];
+        return (v && String(v).trim()) || null;
+    };
 
     for (const p of (payments || [])) {
         if (!p || !inRange(p.paid_on || p.created_at, from, to)) continue;
@@ -181,6 +217,16 @@ function collectRows({ payments, expenses, from, to }) {
             label: `${isSale ? 'Sale' : isTrucker ? 'Trucker' : isBill ? 'Supplier'
                 : isSaleCost ? 'Sale cost' : isMetalsTrucking ? 'Metals haulage' : 'Load'} ${p.load_id}`.trim(),
             ref: p.load_id,
+            // WHOM WE BUY / WHOM WE SELL. A sale's counterparty is a buyer;
+            // everything else here is somebody we paid. NOT_RECORDED rather
+            // than null and rather than dropping the row — identical rule to
+            // `bank` and `paid_via` above, and for the identical reason: a
+            // named bucket is a gap she can see and close, a missing row is
+            // a total that disagrees with itself for no visible reason.
+            party: nameFor(isSale ? 'sale' : isTrucker ? 'trucker' : isBill ? 'supplier'
+                : isSaleCost ? 'sale_cost' : isMetalsTrucking ? 'metals_trucking' : 'load',
+                p.load_id) || NOT_RECORDED,
+            side: isSale ? 'sold_to' : 'bought_from',
         });
     }
 
@@ -207,6 +253,13 @@ function collectRows({ payments, expenses, from, to }) {
             amount: round2(amount),
             label: e.description || e.category || 'Expense',
             ref: e.category || null,
+            // An expense already carries its own counterparty —
+            // helpers/expenses.js has stored `vendor` since 2026-09. No
+            // lookup needed, and no inventing one out of the description:
+            // a vendor guessed from free text is a name she would then
+            // filter on and trust.
+            party: (e.vendor && String(e.vendor).trim()) || NOT_RECORDED,
+            side: 'bought_from',
         });
     }
 
@@ -229,7 +282,8 @@ function collectRows({ payments, expenses, from, to }) {
 //
 // The COLUMNS still list every method, so the table keeps its shape and it is
 // obvious the others are empty by filter rather than by accident.
-function buildSpendReport({ payments, expenses, pettyEntries, from, to, method, bank, paidVia } = {}) {
+function buildSpendReport({ payments, expenses, pettyEntries, from, to, method, bank, paidVia,
+                           boughtFrom, soldTo, parties = null } = {}) {
     const columns = METHODS.concat([UNCLASSIFIED]);
     // Only a method the report actually reports in. Anything else is ignored
     // rather than returning nothing — a typo in a query string should not look
@@ -248,10 +302,38 @@ function buildSpendReport({ payments, expenses, pettyEntries, from, to, method, 
     // filter for — it is how she finds the wires written before today and
     // decides what to do about them.
     const wantedPaidVia = String(paidVia || '').trim();
-    const all = collectRows({ payments, expenses, from, to })
+    // ── WHOM WE BUY, AND WHOM WE SELL — TWO FILTERS, NOT ONE ────────────
+    // Apsara, 2026-11-07, asked which counterparty she meant and answered:
+    // "TWO FILTERS,WHOM WE BUY,WHOM WE SELL".
+    //
+    // They are NOT one "counterparty" filter with two lists, and the reason
+    // is that each belongs to a different DIRECTION of money. So each one
+    // narrows its own side and leaves the other alone:
+    //
+    //   boughtFrom  narrows money OUT. Money received is untouched.
+    //   soldTo      narrows money IN.  Money paid out is untouched.
+    //
+    // The alternative — one filter applied to everything — answers neither
+    // question. Filtering the whole report to "Eccomelt" would empty the
+    // received block whenever Eccomelt is a seller, and empty the spend
+    // block whenever they are a buyer, and the same name can be both: this
+    // app already has a settleAgainst path precisely because "his seller is
+    // also a buyer" (2026-10-17). A screen that shows $0.00 received because
+    // of a filter about purchases is a screen that lies quietly.
+    //
+    // Neither is validated against a list, for the reason the bank is not:
+    // the names are whatever she has typed, and "Not recorded" is a
+    // legitimate thing to filter FOR — it is how the gap gets closed.
+    const wantedBought = String(boughtFrom || '').trim();
+    const wantedSold = String(soldTo || '').trim();
+    const sameName = (a, b) => String(a || '').toLowerCase() === String(b || '').toLowerCase();
+
+    const all = collectRows({ payments, expenses, from, to, parties })
         .filter(r => !wanted || r.method === wanted)
         .filter(r => !wantedBank || String(r.bank || '').toLowerCase() === wantedBank.toLowerCase())
-        .filter(r => !wantedPaidVia || String(r.paid_via || '').toLowerCase() === wantedPaidVia.toLowerCase());
+        .filter(r => !wantedPaidVia || String(r.paid_via || '').toLowerCase() === wantedPaidVia.toLowerCase())
+        .filter(r => (r.direction === 'in' ? !wantedSold || sameName(r.party, wantedSold)
+                                           : !wantedBought || sameName(r.party, wantedBought)));
 
     // The report answers "where did the money GO". Money received from buyers
     // is a different question and must not be added to that answer — but it is
@@ -270,6 +352,10 @@ function buildSpendReport({ payments, expenses, pettyEntries, from, to, method, 
     // Whose money went out, in this window. Built from the rows like byBank,
     // so a company with no spend in the period does not appear as a zero.
     const byPaidVia = {};
+    // Whom the money went to, in this window. Same construction as byBank:
+    // built from the rows, so a counterparty with nothing in the period does
+    // not appear as a zero.
+    const byBoughtFrom = {};
     let total = 0, loadTotal = 0, expenseTotal = 0, truckerTotal = 0, supplierTotal = 0;
     let saleCostTotal = 0, metalsTruckingTotal = 0;
 
@@ -283,6 +369,8 @@ function buildSpendReport({ payments, expenses, pettyEntries, from, to, method, 
         byBank[b] = round2((byBank[b] || 0) + r.amount);
         const v = r.paid_via || NOT_RECORDED;
         byPaidVia[v] = round2((byPaidVia[v] || 0) + r.amount);
+        const who = r.party || NOT_RECORDED;
+        byBoughtFrom[who] = round2((byBoughtFrom[who] || 0) + r.amount);
         total = round2(total + r.amount);
         // An explicit three-way split, not an if/else pair. The previous shape
         // was `if load ... else expense`, which would have swept the new
@@ -343,6 +431,39 @@ function buildSpendReport({ payments, expenses, pettyEntries, from, to, method, 
             .reduce((a, e) => a + num0(e.amount), 0)) || 0,
     };
 
+    // Whom we sold to, over the received rows — the money-IN mirror of
+    // byBoughtFrom, and kept separate for the same reason the received total
+    // is: "paid out X" and "took in Y" are two facts, not one.
+    const bySoldTo = {};
+    for (const r of inRows) {
+        const who = r.party || NOT_RECORDED;
+        bySoldTo[who] = round2((bySoldTo[who] || 0) + r.amount);
+    }
+
+    // The chip lists. Built over the WHOLE store with no window and no
+    // filter, exactly as bankColumns is, so choosing a name never removes
+    // that name from the list she chose it from — the bug where a filter
+    // cannot be undone because the control that set it has vanished.
+    // ── ONE UNFILTERED PASS, NOT FOUR ───────────────────────────────────
+    // Every chip list is built over the WHOLE store with no window and no
+    // filter, so that choosing a value never removes it from the list she
+    // chose it from. That was already true of bankColumns and
+    // paidViaColumns — but each of them called collectRows AGAIN, so a
+    // report did three full passes over payments and expenses, and the two
+    // older calls passed no `parties`, which meant those rows were built
+    // with every counterparty blank for no reason.
+    //
+    // Harmless in production, since nothing read `party` off those rows.
+    // Found because a mutation that made a missing name throw died in
+    // bankColumns rather than anywhere the names are used — the mutation
+    // pointing at the real shape of the code, which is what it is for.
+    const everything = collectRows({ payments, expenses, from: null, to: null, parties });
+    const sortGapLast = (a, b) => (a === NOT_RECORDED) - (b === NOT_RECORDED) || a.localeCompare(b);
+    const namesOf = (dir) => [...new Set(everything
+        .filter((r) => (dir === 'in' ? r.direction === 'in' : r.direction !== 'in'))
+        .map((r) => r.party || NOT_RECORDED))]
+        .sort(sortGapLast);
+
     return {
         from: from || null,
         to: to || null,
@@ -359,22 +480,35 @@ function buildSpendReport({ payments, expenses, pettyEntries, from, to, method, 
         // be built even when the current window has no spend from one of them.
         // Sorted, with "Not recorded" pushed last — it is a gap, not a bank,
         // and it should not sit at the top of her list.
-        bankColumns: [...new Set(collectRows({ payments, expenses, from: null, to: null })
-            .map((r) => r.bank || NOT_RECORDED))]
-            .sort((a, b) => (a === NOT_RECORDED) - (b === NOT_RECORDED) || a.localeCompare(b)),
+        bankColumns: [...new Set(everything.map((r) => r.bank || NOT_RECORDED))].sort(sortGapLast),
         // The companies to build the filter from — every value that appears in
         // the payments at all, so "Not recorded" is selectable even in a
         // window where every row has one. Same sort as the banks: the gap
         // goes last, because it is a gap and not a company.
-        paidViaColumns: [...new Set(collectRows({ payments, expenses, from: null, to: null })
-            .map((r) => r.paid_via || NOT_RECORDED))]
-            .sort((a, b) => (a === NOT_RECORDED) - (b === NOT_RECORDED) || a.localeCompare(b)),
+        paidViaColumns: [...new Set(everything.map((r) => r.paid_via || NOT_RECORDED))].sort(sortGapLast),
         months: monthRows,
         byMethod,
         // What left each account in this window. Only banks with spend appear.
         byBank,
         // And whose money it was. Apsara, 2026-09-17.
         byPaidVia,
+        // ── WHOM WE BUY, WHOM WE SELL. Apsara, 2026-11-07. ──────────────
+        // byBoughtFrom adds up to `total` exactly, the same promise byBank
+        // and byPaidVia make, and for the same reason: a breakdown that
+        // omits what it cannot name disagrees with its own total.
+        byBoughtFrom,
+        bySoldTo,
+        // Echoed back like `bank` and `paid_via`, NOT normalised — if she
+        // filtered on a name that matches nothing, showing her what she
+        // actually asked for is what makes the empty report make sense.
+        boughtFrom: wantedBought || null,
+        soldTo: wantedSold || null,
+        // Every counterparty that appears ANYWHERE, so the chips can be
+        // built even when this window has nothing from one of them. Same
+        // sort as the banks: the gap goes last, because it is a gap and not
+        // a name.
+        boughtFromColumns: namesOf('out'),
+        soldToColumns: namesOf('in'),
         total,
         loadTotal,
         expenseTotal,

@@ -61,11 +61,20 @@ const REAL = {
     paidViaColumns: ['Edge Metals', 'Edge Yard', 'Not recorded'],
     byBank: { 'BofA': 1301951.93, 'Not recorded': 834163.32, 'Chase Bank': 17478.40 },
     byPaidVia: { 'Not recorded': 2049070.70, 'Edge Metals': 87044.55, 'Edge Yard': 17478.40 },
+    // Apsara 2026-11-07: "TWO FILTERS,WHOM WE BUY,WHOM WE SELL".
+    boughtFromColumns: ['Eccomelt', 'Ramesh', 'Zimex', 'Not recorded'],
+    soldToColumns: ['Hynos', 'Eccomelt'],
+    byBoughtFrom: { 'Eccomelt': 1200000, 'Ramesh': 700000, 'Zimex': 153593.65, 'Not recorded': 100000 },
+    bySoldTo: { 'Hynos': 300000, 'Eccomelt': 100000 },
     byMethod: {}, months: [], rows: [],
-    cash: { opening: 0, in: 0, out: 0, closing: 0 }, received: { total: 0, count: 0, rows: [] },
+    cash: { opening: 0, in: 0, out: 0, closing: 0 },
+    // received.total is the sum of bySoldTo, because the engine builds the
+    // second FROM the first. A fixture where they disagree is a shape the
+    // code cannot produce, and a test built on one proves nothing.
+    received: { total: 400000, count: 2, rows: [] },
 };
 
-function render(rep, { method = '', bank = '', via = '' } = {}) {
+function render(rep, { method = '', bank = '', via = '', bought = '', sold = '' } = {}) {
     const { helpers, tpl } = extract();
     const dom = new JSDOM('<div id="viewRoot"></div>', { url: 'http://localhost/' });
     const w = dom.window;
@@ -81,6 +90,7 @@ function render(rep, { method = '', bank = '', via = '' } = {}) {
     `);
     w.eval(`var rep=${JSON.stringify(rep)}; var cols=rep.columns;`);
     w.eval(`var spendMethod=${JSON.stringify(method)},spendBank=${JSON.stringify(bank)},spendPaidVia=${JSON.stringify(via)};`);
+    w.eval(`var spendBought=${JSON.stringify(bought)},spendSold=${JSON.stringify(sold)};`);
     // ── ONE eval, NOT TWO ────────────────────────────────────────────────
     // The helpers are `const`, which is block-scoped to its own eval and
     // therefore invisible to a second one — the first version of this test
@@ -166,8 +176,14 @@ section('D — "Not recorded" is drawn as a gap, not as a third bank');
     const amber = [...d.querySelectorAll('span')]
         .filter((n) => /status-warning/.test(n.getAttribute('style') || ''))
         .map((n) => n.textContent.trim());
-    ck('"Not recorded" is amber in both breakdowns',
-       amber.filter((t) => t === 'Not recorded').length === 2, JSON.stringify(amber));
+    // Counted as a PROPERTY, not as a magic number: every breakdown that has
+    // a gap draws it amber. The first version asserted "=== 2" and went red
+    // the day a third breakdown was added, which is a check measuring the
+    // layout instead of the rule.
+    const cards = (text.match(/Out of each account|Whose money it was|Whom we buy from/g) || []).length;
+    ck('every breakdown with a gap draws it amber',
+       amber.filter((t) => t === 'Not recorded').length === cards,
+       JSON.stringify({ amber: amber.filter((t) => t === 'Not recorded').length, cards }));
     ck('  and the real accounts are not',
        !amber.includes('BofA') && !amber.includes('Edge Metals'), JSON.stringify(amber));
 
@@ -244,6 +260,69 @@ section('F — nothing else on the screen was lost in the restyle');
        /Received from buyers/.test(text) && /not.*counted in the figures above/i.test(text));
     ck('the month table is still there', /All months/.test(text));
     ck('the date range and Apply are still there', /Apply/.test(text));
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+section('G — whom we buy from, whom we sell to: TWO rows, not one');
+// ══════════════════════════════════════════════════════════════════════════
+// Apsara, 2026-11-07: "What if i want supplier wise filter in edge yard" →
+// "TWO FILTERS,WHOM WE BUY,WHOM WE SELL".
+{
+    const { d, text } = render(REAL, { bought: 'Ramesh', sold: 'Hynos' });
+
+    const boughtChips = [...d.querySelectorAll('.btn-spend-bought')].map((n) => n.dataset.bought);
+    const soldChips = [...d.querySelectorAll('.btn-spend-sold')].map((n) => n.dataset.sold);
+    ck('there is a Bought-from chip for every counterparty, plus All',
+       boughtChips.length === 5 && boughtChips.includes('') && boughtChips.includes('Eccomelt'),
+       JSON.stringify(boughtChips));
+    ck('and a SEPARATE Sold-to row', soldChips.length === 3 && soldChips.includes('Hynos'),
+       JSON.stringify(soldChips));
+    ck('  the two rows are not the same control',
+       boughtChips.join() !== soldChips.join(), 'one filter cannot answer both questions');
+
+    const lit = (cls, attr) => [...d.querySelectorAll('.' + cls)]
+        .filter((n) => /background:var\(--accent\)/.test(n.getAttribute('style') || ''))
+        .map((n) => n.dataset[attr]);
+    ck('exactly one Bought-from chip is lit, and it is the chosen one',
+       lit('btn-spend-bought', 'bought').join() === 'Ramesh');
+    ck('exactly one Sold-to chip is lit, independently',
+       lit('btn-spend-sold', 'sold').join() === 'Hynos');
+
+    ck('both breakdowns are drawn', /Whom we buy from/.test(text) && /Whom we sell to/.test(text));
+    // ── THE LABEL IS NOT THE PROPERTY ────────────────────────────────────
+    // First written as a check that the words "of money received" appear.
+    // The mutation that swaps the denominator to rep.total left those words
+    // untouched and SURVIVED — the check was reading the caption, not the
+    // arithmetic. Hynos is 300,000 of 400,000 received = 75%. Against money
+    // out it would read 14%, which is a figure that looks computed and is
+    // about the wrong total.
+    ck('  the sold-to side says "of money received"', /of money received/.test(text));
+    ck('  and its percentages ARE of money received, not of money out',
+       /75%/.test(text) && !/14%/.test(text),
+       'Hynos 300,000 of 400,000 received = 75%; of total out it would be 14%');
+    ck('  "Not recorded" is amber on the buy side too',
+       [...d.querySelectorAll('span')].filter((n) => /status-warning/.test(n.getAttribute('style') || ''))
+           .filter((n) => n.textContent.trim() === 'Not recorded').length === 3,
+       'bank, paid-via, and now bought-from');
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+section('H — a one-name list renders NO row, rather than a dead control');
+// ══════════════════════════════════════════════════════════════════════════
+// Until counterparties are recorded these lists are one entry long. Same
+// rule the bank and company rows have always followed: a row of chips with
+// one option is a control that cannot change anything.
+{
+    const bare = render({ ...REAL,
+        boughtFromColumns: ['Not recorded'], soldToColumns: ['Not recorded'],
+        byBoughtFrom: { 'Not recorded': 2153593.65 }, bySoldTo: {} });
+    ck('no Bought-from row when there is only one name',
+       bare.d.querySelectorAll('.btn-spend-bought').length === 0);
+    ck('no Sold-to row either', bare.d.querySelectorAll('.btn-spend-sold').length === 0);
+    ck('  but the breakdown still shows where the money went',
+       /Whom we buy from/.test(bare.text), 'the gap is still worth seeing');
+    ck('  and with nothing received, no sell-side card is drawn',
+       !/Whom we sell to/.test(bare.text), 'an empty card is clutter');
 }
 
 console.log(`\n  ${pass} passed, ${fail} failed`);

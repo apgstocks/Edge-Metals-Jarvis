@@ -531,6 +531,49 @@ const MUTATIONS = [
       find: "    Object.defineProperty(o, 'entity', { value: entity || null, enumerable: true });",
       to:   "    Object.defineProperty(o, 'entity', { value: null, enumerable: true });" },
 
+    // ── WHOM WE BUY, WHOM WE SELL (2026-11-07) ──────────────────────────
+    // "What if i want supplier wise filter in edge yard" → "TWO FILTERS,
+    // WHOM WE BUY,WHOM WE SELL". Two filters on opposite directions of
+    // money; every mutation here collapses that back into one, or breaks
+    // the caller that supplies no names at all.
+    { name: 'spend parties: one filter applied to everything, so a purchase filter empties the sales',
+      file: 'helpers/spendReport.js', suites: ['spend-parties'],
+      find: "        .filter(r => (r.direction === 'in' ? !wantedSold || sameName(r.party, wantedSold)\n                                           : !wantedBought || sameName(r.party, wantedBought)));",
+      to:   "        .filter(r => (!wantedBought || sameName(r.party, wantedBought)) && (!wantedSold || sameName(r.party, wantedSold)));" },
+    { name: 'spend parties: a missing name throws instead of reading "Not recorded" — the voice path',
+      file: 'helpers/spendReport.js', suites: ['spend-parties'],
+      find: "        if (!parties) return null;",
+      to:   "        if (!parties) throw new Error('no parties map');" },
+    { name: 'spend parties: the name is keyed on the bare id, so a yard load and an Edge Metals bill collide',
+      file: 'helpers/spendReport.js', suites: ['spend-parties'],
+      find: "const partyKey = (kind, ref) => `${kind}:${ref == null ? '' : ref}`;",
+      to:   "const partyKey = (kind, ref) => `${ref == null ? '' : ref}`;" },
+    { name: 'spend parties: an unnamed payment is dropped, so the breakdown stops reconciling',
+      file: 'helpers/spendReport.js', suites: ['spend-parties'],
+      find: "        const who = r.party || NOT_RECORDED;\n        byBoughtFrom[who] = round2((byBoughtFrom[who] || 0) + r.amount);",
+      to:   "        const who = r.party || NOT_RECORDED;\n        if (who !== NOT_RECORDED) byBoughtFrom[who] = round2((byBoughtFrom[who] || 0) + r.amount);" },
+    // Re-pointed after the three unfiltered passes were collapsed into one
+    // `everything`. The old find string no longer existed, so this came back
+    // NOT APPLIED — guarding nothing. Aimed at `everything` now, which is
+    // stronger: it is the source of ALL FOUR chip lists, so the one-way-door
+    // bug is caught for the banks and companies too.
+    { name: 'spend parties: every chip list is built from the FILTERED rows, so no filter can be undone',
+      file: 'helpers/spendReport.js', suites: ['spend-parties', 'banks', 'paid-via'],
+      find: "    const everything = collectRows({ payments, expenses, from: null, to: null, parties });",
+      to:   "    const everything = all;" },
+    { name: 'spend parties: an expense vendor is guessed from its description',
+      file: 'helpers/spendReport.js', suites: ['spend-parties'],
+      find: "            party: (e.vendor && String(e.vendor).trim()) || NOT_RECORDED,",
+      to:   "            party: (e.vendor && String(e.vendor).trim()) || (e.description ? String(e.description).split(' ').pop() : NOT_RECORDED)," },
+    { name: 'spend screen: the two counterparty rows collapse into one control',
+      file: 'dashboard/app/06-expenses-trucker.js', suites: ['spend-report-screen'],
+      find: "            <button class=\"btn btn-spend-sold\" data-sold=\"${esc(v)}\" style=\"${chipCss(spendSold === v)}\">${esc(v || 'All')}</button>`).join('')}",
+      to:   "            <button class=\"btn btn-spend-bought\" data-bought=\"${esc(v)}\" style=\"${chipCss(spendSold === v)}\">${esc(v || 'All')}</button>`).join('')}" },
+    { name: 'spend screen: sales are proportioned against money OUT, printing a percentage of the wrong total',
+      file: 'dashboard/app/06-expenses-trucker.js', suites: ['spend-report-screen'],
+      find: "          ? soldCard('Whom we sell to', rep.bySoldTo, rep.received.total)",
+      to:   "          ? soldCard('Whom we sell to', rep.bySoldTo, rep.total)" },
+
     // ── THE SPEND REPORT'S COMPOSITION (2026-11-07) ─────────────────────
     // Apsara: "Ugly". The heading printed out / loads / expenses, three
     // numbers that invite a subtraction leaving 55% of her money unnamed.
@@ -547,10 +590,13 @@ const MUTATIONS = [
       file: 'dashboard/app/06-expenses-trucker.js', suites: ['spend-report-screen'],
       find: "        ${Math.abs(partsGap) > 0.01 ? `",
       to:   "        ${false ? `" },
-    { name: 'spend screen: "Not recorded" is drawn like a real account, not like a gap',
+    // Anchored per card: `const gap = k === NOT_REC` is now written TWICE,
+    // once in splitCard and once in soldCard, so the bare string came back
+    // NOT APPLIED (ambiguous) and the rule was guarded in neither place.
+    { name: 'spend screen: "Not recorded" is drawn like a real account on the buy side',
       file: 'dashboard/app/06-expenses-trucker.js', suites: ['spend-report-screen'],
-      find: "          const gap = k === NOT_REC;",
-      to:   "          const gap = false;" },
+      find: "          const gap = k === NOT_REC;\n          const colour = gap ? 'var(--status-warning, #d69e2e)' : 'var(--accent)';",
+      to:   "          const gap = false;\n          const colour = gap ? 'var(--status-warning, #d69e2e)' : 'var(--accent)';" },
     { name: 'spend screen: every chip gets the accent, so nothing shows which filter is on',
       file: 'dashboard/app/06-expenses-trucker.js', suites: ['spend-report-screen'],
       find: "  const chipCss = (on) => on",
