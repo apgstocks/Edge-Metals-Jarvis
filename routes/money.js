@@ -945,7 +945,15 @@ module.exports = function (app, ctx) {
     // payment terms are skipped. READ-ONLY and SENDS NOTHING — the Sales screen shows the drafts to copy / open in
     // mail. The only write is the per-customer ETA-terms label (helpers/paymentFollowups.js).
     app.get('/api/payment-followups', (req, res) => {
-        try { res.json(require('./helpers/paymentFollowups').build()); }
+        try {
+            const out = require('./helpers/paymentFollowups').build();
+            // When the Follow-up Agent asked / chased / passed each customer to the team (helpers/paymentChaser.js).
+            try {
+                const chaser = require('./helpers/paymentChaser'), log = chaser.readLog();
+                out.drafts = out.drafts.map((d) => ({ ...d, followup: chaser.statusFor(d, log) }));
+            } catch (e) { /* the screen works without the status line */ }
+            res.json(out);
+        }
         catch (e) { res.status(500).json({ error: e.message }); }
     });
     app.put('/api/payment-followups/terms', async (req, res) => {

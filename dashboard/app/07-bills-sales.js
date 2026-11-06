@@ -1159,6 +1159,15 @@ async function openFollowups() {
               <span style="flex:1"></span>
               <input class="pfEta" data-customer="${esc(d.customer)}" placeholder="ETA terms e.g. ETA-10" style="width:150px; padding:4px 8px; font-size:12px;" title="Customers on ETA-based terms get no draft. Type ETA-10 or ETA+7 and press Enter.">
             </div>
+            ${(() => {
+              const f = d.followup || {};
+              const bits = [];
+              if (f.asked) bits.push('asked ' + f.asked);
+              if (f.chased) bits.push('chased ' + f.chased);
+              if (f.escalated) bits.push('passed to the team ' + f.escalated);
+              const txt = bits.length ? bits.join(' · ') : 'not told to you yet';
+              return `<div class="pfStatus" style="font-size:11.5px; margin-top:6px; color:${f.escalated ? L.danger : L.inkMuted};">${esc(txt)}${f.lc ? ' · <span style="color:' + L.inkFaint + ';">LC terms: not chased</span>' : ''}</div>`;
+            })()}
             <textarea class="pfBody" data-i="${i}" rows="11" style="width:100%; margin-top:8px; font-size:12px; font-family:var(--font-mono); padding:8px;">${esc(d.body)}</textarea>
             <div style="display:flex; gap:8px; margin-top:8px;">
               <button class="btn btn-secondary pfCopy" data-i="${i}" style="font-size:12px; padding:6px 12px;">Copy</button>

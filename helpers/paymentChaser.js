@@ -57,7 +57,23 @@ function earliestDue(draft) {
 
 // entry: what was recorded last time for this customer ({ set, firstAt, lastStep, lastAt }) or undefined.
 // Returns { step: 'ask'|'chase'|'escalate'|null, why }.
+// Letter-of-credit sales. Apsara, 2026-11-07, asked whether the chase and escalate steps should
+// also notify her for customers on LC terms: "no". An LC is paid by the bank against documents,
+// so a payment-request chase is the wrong note; the first "draft ready" still fires. A draft is LC
+// only if EVERY line is LC - a customer with one LC and one T/T invoice is still chased for the T/T.
+const isLcLine = (l) => /^\s*lc\b/i.test(String((l && l.terms) || ''));
+function isLcDraft(draft) {
+    const lines = (draft && draft.lines) || [];
+    return lines.length > 0 && lines.every(isLcLine);
+}
+
 function nextAction(draft, entry, now = Date.now()) {
+    const a = ladder(draft, entry, now);
+    if ((a.step === 'chase' || a.step === 'escalate') && isLcDraft(draft)) return { step: null, why: 'LC terms: the bank pays against documents, so no chase' };
+    return a;
+}
+
+function ladder(draft, entry, now = Date.now()) {
     if (!draft || !(draft.total > 0.005)) return { step: null, why: 'nothing outstanding' };
     const today = todayUtc(now);
     const set = setKey(draft);
@@ -123,11 +139,22 @@ function recorded(log, items, now = Date.now()) {
         const set = setKey(it.draft);
         const iso = new Date(now).toISOString();
         next[it.key] = (prev && prev.set === set)
-            ? { ...prev, lastStep: it.step, lastAt: iso }
-            : { set, firstAt: iso, lastStep: it.step, lastAt: iso, customer: it.draft.customer };
+            ? { ...prev, lastStep: it.step, lastAt: iso, steps: { ...(prev.steps || {}), [it.step]: iso } }
+            : { set, firstAt: iso, lastStep: it.step, lastAt: iso, steps: { [it.step]: iso }, customer: it.draft.customer };
     }
     // Customers who no longer owe anything fall out of the memory, so a later invoice starts fresh.
     return next;
+}
+
+// What the screen shows beside a customer: when each rung fired for the CURRENT set of invoices.
+// null when nothing has been said about this exact set yet.
+const mmdd = (iso) => { const t = Date.parse(iso || ''); if (!Number.isFinite(t)) return null; const d = new Date(t); return `${String(d.getUTCMonth() + 1).padStart(2, '0')}/${String(d.getUTCDate()).padStart(2, '0')}`; };
+function statusFor(draft, log) {
+    const lc = isLcDraft(draft);
+    const entry = (log || {})[keyOf(draft.customer)];
+    if (!entry || entry.set !== setKey(draft)) return { asked: null, chased: null, escalated: null, lc };
+    const st = entry.steps || { [entry.lastStep]: entry.lastAt };
+    return { asked: mmdd(st.ask), chased: mmdd(st.chase), escalated: mmdd(st.escalate), lc };
 }
 
 function prune(log, drafts) {
@@ -137,5 +164,5 @@ function prune(log, drafts) {
     return next;
 }
 
-module.exports = { nextAction, plan, lineFor, recorded, prune, readLog, writeLog, setKey, earliestDue, money, keyOf,
+module.exports = { nextAction, isLcDraft, statusFor, plan, lineFor, recorded, prune, readLog, writeLog, setKey, earliestDue, money, keyOf,
     CHASE_AFTER_ASK_DAYS, ESCALATE_AFTER_ASK_DAYS, ESCALATE_PAST_DUE_DAYS };
