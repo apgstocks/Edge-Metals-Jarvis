@@ -497,6 +497,40 @@ const MUTATIONS = [
     // ── THE SPLIT ITSELF (2026-10-31) ────────────────────────────────────
     // Replaces 'quality-only demand: her column set is used on MIXED pages
     // too', which guarded the single-table rule that the split removed.
+    // ── THE PICKUP CHASER (2026-11-06) ──────────────────────────────────
+    // Apsara: "if i book a shipment pickup with a logistics company ... on
+    // that particular day,it should follow up ... if no response,it needs to
+    // follow up and communicate the same to my team". This agent SENDS MAIL
+    // IN HER NAME to a company she buys from, so half these mutations are
+    // about it staying QUIET, not about it chasing.
+    { name: 'pickup: the catch-up guard goes, so it escalates about a mail never sent',
+      file: 'helpers/pickupAgent.js', suites: ['pickup-agent'],
+      find: "        const use = earlierMissing || rung;",
+      to:   "        const use = rung;" },
+    { name: 'pickup: it keeps chasing after the company has given an ETA',
+      file: 'helpers/pickupAgent.js', suites: ['pickup-agent'],
+      find: "    if (str(p.eta) || str(p.confirmed_at)) {",
+      to:   "    if (false) {" },
+    { name: 'pickup: it chases a truck that is not due until tomorrow',
+      file: 'helpers/pickupAgent.js', suites: ['pickup-agent'],
+      find: "    if (day > t.day) return { step: null, why: `pickup is on ${day}, not today` };",
+      to:   "    if (false) return null;" },
+    { name: 'pickup: the team is re-told every morning about a missed pickup',
+      file: 'helpers/pickupAgent.js', suites: ['pickup-agent'],
+      find: "        if (done.has('escalate')) return { step: null, why: 'the team has already been told' };",
+      to:   "        if (false) return null;" },
+    { name: 'pickup: a rung is allowed to fire twice',
+      file: 'helpers/pickupAgent.js', suites: ['pickup-agent'],
+      find: "        if (done.has(rung.step)) continue;",
+      to:   "        if (false) continue;" },
+    // The two entry points she asked for will not agree on a date format:
+    // bookings.json is MM/DD/YYYY, computed dates are YYYY-MM-DD. A pickup
+    // dropped over a slash is the silent skip this feature exists to end.
+    { name: 'pickup: MM/DD/YYYY stops being understood, so recorded pickups vanish',
+      file: 'helpers/pickupAgent.js', suites: ['pickup-agent'],
+      find: "    m = /^(\\d{1,2})\\/(\\d{1,2})\\/(\\d{4})$/.exec(s);",
+      to:   "    m = null; if (false) m = /x/.exec(s);" },
+
     // ── ONE CONTAINER, ONE SUPPLIER (2026-11-05) ────────────────────────
     // Apsara: "One container cannot have two suppliers." So a container whose
     // claims name two is BAD DATA, and the note built from it billed one
