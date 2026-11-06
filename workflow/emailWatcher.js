@@ -167,6 +167,60 @@ async function _runOnce() {
             const subject = hdrs.Subject || '(no subject)';
             const { body, pdfParts } = getEmailContent(msg.payload);
 
+            // ── A PICKUP SHE NEVER TOLD JARVIS ABOUT (2026-11-06) ────────
+            // Apsara: "even if i dont tell,based on my email,it should know".
+            //
+            // Placed ABOVE the no-attachment skip on purpose: a booking
+            // confirmation arrives as a PDF, but a pickup arrangement is
+            // nearly always plain text — "our driver will collect Friday".
+            // Below the skip this would never run on the mails that matter.
+            //
+            // ── IT CANNOT BREAK THE BOOKING WATCHER ─────────────────────
+            // This file's whole job is creating bookings, and CLAUDE.md
+            // rule 1 is about exactly this shape: new behaviour landing in
+            // code other callers reach. So it is wrapped whole, reads
+            // nothing the booking path writes, writes only pickups.json,
+            // and a throw here costs the pickup and nothing else.
+            try {
+                const pickRead = require('../helpers/pickupRead');
+                const mail = {
+                    from: hdrs.From || '', subject, body,
+                    received_at: hdrs.Date || '', thread_id: msg.threadId || '',
+                };
+                if (pickRead.looksLikePickup(mail)) {
+                    const gem = require('../helpers/gemini');
+                    const out = await pickRead.readPickup(mail, {
+                        callGemini: (prompt) => gem.callGeminiJSON(prompt, 1, null,
+                            cfg.GEMINI_MODEL_SMART ? { model: cfg.GEMINI_MODEL_SMART } : {}),
+                    });
+                    if (out && out.pickup) {
+                        const pk = require('../helpers/pickups');
+                        const dupe = pickRead.alreadyKnown(out.pickup, pk.list());
+                        if (dupe) {
+                            // A carrier confirms, re-confirms, then replies to
+                            // its own thread. Three mails, one truck.
+                            console.log(`[${AGENT}] pickup already known (${dupe.id}) — ${out.pickup.company} ${out.pickup.pickup_date}`);
+                        } else {
+                            const rec = await pk.create(out.pickup, 'email');
+                            console.log(`[${AGENT}] pickup learnt from mail: ${rec.company} ${rec.pickup_date} ${rec.container_no || ''}`);
+                            // TOLD, not silently filed. She asked for this to
+                            // happen without her — that is not the same as
+                            // happening without her knowing, and the first
+                            // thing she will want to check is the DATE,
+                            // which is the field a model can get wrong.
+                            try {
+                                await _sendToManager(`Pickup noted from your mail: ${rec.company}`
+                                    + (rec.container_no ? ` — ${rec.container_no}` : '')
+                                    + ` on ${rec.pickup_date}.\n\n"${out.why}"\n\n`
+                                    + `I'll ask them for the ETA that morning. Tell me if the date is wrong.`);
+                            } catch (e) { /* the pickup is recorded either way */ }
+                        }
+                    }
+                }
+            } catch (err) {
+                console.error(`[${AGENT}] pickup read failed (booking flow unaffected):`, err.message);
+            }
+
             if (!pdfParts.length) {
                 processed.add(m.id);
                 await appendAuditLog({ source: 'email_watcher', intent: 'no_attachment', resolvedBy: 'ai', confidence: null, actionTaken: 'skipped', subject, messageId: m.id });

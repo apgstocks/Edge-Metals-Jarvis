@@ -497,6 +497,35 @@ const MUTATIONS = [
     // ── THE SPLIT ITSELF (2026-10-31) ────────────────────────────────────
     // Replaces 'quality-only demand: her column set is used on MIXED pages
     // too', which guarded the single-table rule that the split removed.
+    // ── READING A PICKUP OUT OF HER MAIL (2026-11-06) ───────────────────
+    // "even if i dont tell,based on my email,it should know". An auto-created
+    // pickup makes Jarvis EMAIL A THIRD PARTY, so the first two mutations
+    // here are about the recipient, which is the only irreversible part.
+    { name: 'pickup-read: the model\'s own email address is trusted',
+      file: 'helpers/pickupRead.js', suites: ['pickup-read'],
+      find: "    const contact_email = /@/.test(fromAddr) ? fromAddr.trim() : '';",
+      to:   "    const contact_email = str(res.contact_email) || (/@/.test(fromAddr) ? fromAddr.trim() : '');" },
+    { name: 'pickup-read: a mail with no readable sender still creates a pickup',
+      file: 'helpers/pickupRead.js', suites: ['pickup-read'],
+      find: "    if (!contact_email) {",
+      to:   "    if (false) {" },
+    { name: 'pickup-read: a vague date is accepted, so it chases on the wrong morning',
+      file: 'helpers/pickupRead.js', suites: ['pickup-read'],
+      find: "    if (!/^\\d{4}-\\d{2}-\\d{2}$/.test(date)) {",
+      to:   "    if (false) {" },
+    { name: 'pickup-read: the model saying "not a pickup" is ignored',
+      file: 'helpers/pickupRead.js', suites: ['pickup-read'],
+      find: "    if (res.is_pickup !== true) return",
+      to:   "    if (false) return" },
+    { name: 'pickup-read: the container comes from the model, not from the text',
+      file: 'helpers/pickupRead.js', suites: ['pickup-read'],
+      find: "            container_no: containerIn(`${mail.subject} ${mail.body}`),",
+      to:   "            container_no: str(res.container_no)," },
+    { name: 'pickup-read: dedupe is dropped, so three mails chase one truck three times',
+      file: 'helpers/pickupRead.js', suites: ['pickup-read'],
+      find: "        if (!p || str(p.pickup_date) !== day) return false;",
+      to:   "        if (true) return false;" },
+
     // ── THE FOLLOW-UP AGENT'S WAY IN (2026-11-06) ───────────────────────
     { name: 'pickups: the route stops carrying what the agent will do, so the screen drifts',
       file: 'helpers/pickupRoutes.js', suites: ['follow-up-agent'],
