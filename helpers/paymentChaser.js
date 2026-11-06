@@ -161,7 +161,7 @@ function statusFor(draft, log) {
 function prune(log, drafts) {
     const live = new Set((drafts || []).map((d) => keyOf(d.customer)));
     const next = {};
-    for (const [k, v] of Object.entries(log || {})) if (live.has(k)) next[k] = v;
+    for (const [k, v] of Object.entries(log || {})) if (k[0] === '_' || live.has(k)) next[k] = v;   // '_' keys are the agent's own notes (e.g. _noaddr)
     return next;
 }
 

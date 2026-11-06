@@ -231,6 +231,26 @@ async function runPayments({ sendToManager, sendToTeam, now, drafts, findRemitta
     let list = drafts;
     if (!list) list = require('./paymentFollowups').build({ now: t }).drafts;
     const log = chaser.prune(chaser.readLog(), list);
+
+    // SEND MODE ONLY. Apsara, 2026-11-07, on the first live run: a 52-line "draft ready (no email on file)" wall. A customer
+    // with no address cannot be emailed, so listing each one every run is noise and the list is already on the Payment
+    // follow-ups screen. They are left out of the ladder (and forgotten from the log, so once an address is added they start
+    // with a fresh first note) and mentioned in ONE line, at most once a week.
+    if (typeof stageCustomerEmail === 'function' && String(process.env.PAYMENT_CHASE_SEND || '').toLowerCase() !== 'off') {
+        const noAddr = list.filter((d) => !chaser.hasAddress(d) && d.total > 0.005 && !chaser.isLcDraft(d));
+        for (const d of noAddr) delete log[chaser.keyOf(d.customer)];
+        list = list.filter((d) => chaser.hasAddress(d) || chaser.isLcDraft(d) || !(d.total > 0.005));
+        const last = log._noaddr ? Date.parse(log._noaddr.at) : 0;
+        if (noAddr.length && sendToManager && (!last || t - last > 7 * 86400000)) {
+            const top = [...noAddr].sort((a, b) => b.total - a.total).slice(0, 3).map((d) => `${d.customer} (${chaser.money(d.total)})`).join(', ');
+            const sum = noAddr.reduce((a, d) => a + d.total, 0);
+            try {
+                await sendToManager(`${noAddr.length} customer${noAddr.length === 1 ? ' has' : 's have'} open invoices (${chaser.money(sum)} in all) but no email address on file, so I can't draft follow-ups for ${noAddr.length === 1 ? 'them' : 'them'}. Add the address${noAddr.length === 1 ? '' : 'es'} in the address book and ${noAddr.length === 1 ? 'they' : 'they'}'ll be picked up automatically. Largest: ${top}.`);
+                log._noaddr = { at: new Date(t).toISOString() };
+                await chaser.writeLog(log);
+            } catch (e) { res.failed.push({ why: 'could not tell her about customers without an address: ' + (e && e.message) }); }
+        }
+    }
     let todo = chaser.plan(list, log, t);
 
     // Mail from the customer that looks like proof of payment HOLDS the follow-up and tells her to look (Apsara, 2026-11-07).

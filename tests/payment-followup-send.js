@@ -42,7 +42,7 @@ const go = async (iso, over = {}) => { wa.length = 0; mgr.length = 0; return job
     let r = await go('2026-11-07');
     ck('exactly ONE customer email is staged this run', r.payments.staged === 1 && wa.filter((t) => /Send this to the customer/.test(t)).length === 1, JSON.stringify(r.payments));
     ck('nothing has gone to any customer yet', sentMail.length === 0);
-    ck('a customer with no address is listed for HER (not staged)', mgr.some((t) => /NoMail Co/.test(t) && /no email on file/.test(t)), JSON.stringify(mgr));
+    ck('a customer with no address: one short line to HER, never staged', mgr.length === 1 && /NoMail Co/.test(mgr[0]) && /no email address on file/.test(mgr[0]) && mgr[0].split('\n').length === 1, JSON.stringify(mgr));
     const p = actions.getPending(CHAT);
     ck('a real await_email_confirm is open for her, addressed to the customer', p && p.type === 'await_email_confirm' && p.to === 'ap@daekwang.example' && p.source === 'payment_followup' && /INV-1/.test(p.body), JSON.stringify(p));
     ck('the WhatsApp preview shows who, subject and body, and asks yes/no', /Daekwang <ap@daekwang.example>/.test(wa.join('\n')) && /Subject: Payment status/.test(wa.join('\n')) && /\(yes\/no/.test(wa.join('\n')));
@@ -98,6 +98,23 @@ const go = async (iso, over = {}) => { wa.length = 0; mgr.length = 0; return job
     ck('the chase refers back to the earlier note, is polite, and is not the first email again', /following up on my earlier message/.test(cb) && /Kind regards,/.test(cb) && cb !== dk.body && /INV-1/.test(cb) && /\$5,000\.00/.test(cb), cb);
     ck('no scolding / pressure words', !/overdue|immediately|failure|legal|final notice|urgent/i.test(cb + dk.body));
     ck('the first note is signed properly too', /Kind regards,\nApsara\nEdge Metals Inc/.test(dk.body));
+
+    section('E3. the first-run wall (Apsara, 2026-11-07: a 52-line list of customers with no email)');
+    const many = Array.from({ length: 52 }, (_, i) => ({ id: 'M' + i, customer: 'Cust ' + i, invoice_no: 'I' + i, container_no: 'CONT' + i, booking_no: 'B' + i, date: '2026-10-01', receivable: 1000 + i, received: 0, balance: 1000 + i, terms: 'TT' }));
+    const wall = pf.build({ salesRows: many, terms: pf.loadTerms(), resolve: () => null, bookings: {}, now: D('2026-11-07') }).drafts;
+    fs.rmSync(cfg.PAYMENT_CHASE_LOG_FILE, { force: true });
+    r = await go('2026-11-07', { paymentDrafts: wall });
+    ck('52 customers without an address: ONE short message, not 52 lines', mgr.length === 1 && mgr[0].split('\n').length === 1 && /52 customers/.test(mgr[0]) && /no email address on file/.test(mgr[0]) && /Cust 51/.test(mgr[0]), mgr.join('|').slice(0, 300));
+    ck('  nothing staged, nothing recorded as asked', r.payments.staged === 0 && r.payments.asked === 0 && Object.keys(chaser.readLog()).every((k) => k[0] === '_'));
+    r = await go('2026-11-08', { paymentDrafts: wall });
+    ck('the next day: silent (once a week at most)', mgr.length === 0);
+    r = await go('2026-11-15', { paymentDrafts: wall });
+    ck('a week later: the one line again', mgr.length === 1 && /52 customers/.test(mgr[0]));
+    // an address is added later: the customer starts with a fresh first note, not a chase
+    const withAddr = pf.build({ salesRows: many, terms: pf.loadTerms(), resolve: (n) => n === 'Cust 51' ? { type: 'exact', contact: { email: 'c51@x.example' } } : null, bookings: {}, now: D('2026-11-16') }).drafts;
+    r = await go('2026-11-16', { paymentDrafts: withAddr });
+    ck('once an address is added, that customer is staged with a first note', r.payments.staged === 1 && actions.getPending(CHAT).to === 'c51@x.example' && /Payment status/.test(actions.getPending(CHAT).subject));
+    await actions.resolvePending(CHAT, actions.getPending(CHAT), 'no');
 
     section('F. the stager guards itself');
     ck('invalid address: not staged', (await stage({ customer: 'X', to: 'nope', subject: 's', body: 'b' }, 'ask')).staged === false);
