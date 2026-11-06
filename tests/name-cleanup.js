@@ -277,9 +277,39 @@ section('E. two companies stay two companies');
     // most plausibly be pointed at one day — was the single yard store this
     // guard did not cover. Behaviour was already correct; the test just could
     // not have caught it changing.
-    ck('the yard ledger is not among the stores this rewrites',
-       !/LOADS_FILE|OUTBOUND_LOADS_FILE|TRUCKER_BILLS_FILE/.test(src),
-       'a merge would be editing the other company\'s books');
+    // ── NARROWED 2026-11-07, AND DELIBERATELY ───────────────────────────
+    // This was a blanket grep: LOADS_FILE must not appear in nameCleanup.js
+    // AT ALL. That was right while the yard was wholly out of scope.
+    //
+    // Apsara then asked for the yard's own seller names to be cleanable
+    // ("clean the names"), because her Bought-from list carried MAZARIEGOES
+    // beside MAZARIEGOS. So a `seller` field exists now, and a text search
+    // for LOADS_FILE can no longer tell a legitimate yard field from an
+    // Edge Metals field reaching across the line.
+    //
+    // Replaced by a STRUCTURAL check, which is stronger than the grep it
+    // replaces: it reads the actual targets of every field rather than the
+    // file's text, so it still catches the thing that matters even if the
+    // constant is renamed or reached through a variable.
+    //
+    // THE TWO STORES SHE DID NOT ASK FOR STAY UNTOUCHABLE. Outbound loads
+    // (buyers) and trucker bills (haulage) are not part of cleaning seller
+    // names, and nothing may quietly grow into them.
+    const YARD_ONLY_FOR = 'seller';
+    const everyTarget = nc.FIELD_KEYS.flatMap((f) => nc.targetsFor(f).map((t) => ({ f, ...t })));
+    ck('no Edge Metals field reaches the yard ledger',
+       !everyTarget.some((t) => t.f !== YARD_ONLY_FOR && /loads|drafts/.test(t.key)),
+       JSON.stringify(everyTarget.filter((t) => /loads|drafts/.test(t.key)).map((t) => t.f + ':' + t.key)));
+    // ── cfg IS REQUIRED HERE, NOT AT THE TOP OF THE FILE ────────────────
+    // config.js computes every *_FILE from DATA_DIR AT LOAD TIME. Requiring
+    // it before this suite has redirected DATA_DIR pins the REAL paths — and
+    // a test suite holding her live filenames is how four rows once landed
+    // in the real petty cash. Required here, after the redirect, where it is
+    // only ever read.
+    const cfgNow = require(path.join(ROOT, 'config'));
+    ck('  and NOTHING rewrites outbound loads or trucker bills',
+       !everyTarget.some((t) => t.file === cfgNow.OUTBOUND_LOADS_FILE || t.file === cfgNow.TRUCKER_BILLS_FILE),
+       'buyers and haulage were not part of what she asked to clean');
 }
 
 // ── F. THROUGH THE REAL ROUTES ──────────────────────────────────────────────
@@ -516,6 +546,54 @@ section('I. carrier, trucker and customer');
        nc.targetsFor('trucker').some((t) => t.key === 'bills' && t.field === 'trucking_company'),
        'her word for it is Trucker; the column is trucking_company');
 
+    // ── THE YARD'S OWN SELLERS (2026-11-07) ──────────────────────────────
+    // Apsara: "clean the names", after the Spend report showed MAZARIEGOES
+    // beside MAZARIEGOS and CORES CHAPIN INESH beside INESH CORES CHAPIN —
+    // the same two counterparties twice, so "how much have I paid them" was
+    // split and both answers were wrong.
+    //
+    // This field was deliberately absent while every field here belonged to
+    // EDGE METALS: pulling loads.json into `supplier` would have merged
+    // across two companies. It is its own field now, listing only Edge
+    // Yard's stores, so the separation holds in both directions.
+    ck('seller is a cleanable field', nc.FIELD_KEYS.includes('seller'));
+
+    // THE ONE THAT WOULD COST HER MONEY. A PREPAYMENT row stores the
+    // seller's name and prepaymentCredit() finds unapplied credit BY that
+    // name. Rewriting loads.json alone leaves an advance filed under the old
+    // spelling: the money stays on disk and vanishes from the screen that
+    // says what a seller is holding.
+    ck('  and it reaches PREPAYMENTS, not just the loads',
+       nc.targetsFor('seller').some((t) => t.key === 'prepayments'),
+       'an advance left under the old spelling is money that disappears from the screen');
+    ck('  and the drafts, so the old spelling cannot come back on the next load',
+       nc.targetsFor('seller').some((t) => t.key === 'drafts'));
+    ck('  loads is the vote — the ledger decides the winning spelling',
+       nc.targetsFor('seller').some((t) => t.key === 'loads' && t.votes === true));
+
+    // ── AND IT NEVER CROSSES INTO EDGE METALS ───────────────────────────
+    // CLAUDE.md rule 5. This is the check that would fail if somebody
+    // "tidied up" by folding seller into the supplier field.
+    const METALS = ['bills', 'suppliers', 'sales', 'bookings', 'workflow'];
+    ck('a seller merge touches no Edge Metals store',
+       !nc.targetsFor('seller').some((t) => METALS.includes(t.key)),
+       JSON.stringify(nc.targetsFor('seller').map((t) => t.key)));
+    ck('  and no Edge Metals field reaches the yard ledger',
+       ['supplier', 'carrier', 'trucker', 'customer']
+           .every((f) => !nc.targetsFor(f).some((t) => t.key === 'loads' || t.key === 'drafts')),
+       'the yard is another company\'s books');
+
+    // Her two real pairs normalise to DIFFERENT keys, so neither is merged
+    // automatically — they are proposed and she answers. Asserted here
+    // because a future "make it smarter" would merge them silently, and a
+    // near-miss here means paying the wrong person.
+    const { normalizeName } = require(path.join(ROOT, 'helpers/nameMatch'));
+    for (const [a, b] of [['MAZARIEGOES', 'MAZARIEGOS'],
+                          ['CORES CHAPIN INESH', 'INESH CORES CHAPIN']]) {
+        ck(`"${a}" / "${b}" is NOT auto-merged`, normalizeName(a) !== normalizeName(b),
+           'a near-miss is a wrong answer with a confident face — she confirms these');
+    }
+
     // ── MERGING ONE LEAVES THE OTHERS ALONE ─────────────────────────────
     const suppliersBefore = [...new Set(bills.list().map((b) => b.supplier))].sort().join('|');
     const carrierMerge = await nc.apply(nc.plan('carrier'));
@@ -555,6 +633,69 @@ section('I. carrier, trucker and customer');
     ck('past merges say which field they were',
        nc.merges().every((m) => !!m.field && !!m.label),
        JSON.stringify(nc.merges().map((m) => [m.field, m.rows])));
+}
+
+// ── K. THE YARD'S SELLERS, END TO END ──────────────────────────────────────
+section("K. cleaning a yard seller reaches the money, not just the ledger");
+{
+    // Apsara, 2026-11-07: "clean the names".
+    //
+    // The check that matters is the PREPAYMENT. A prepayment row stores the
+    // seller's name and prepaymentCredit() finds unapplied credit BY that
+    // name, so a merge that rewrote loads.json alone would leave an advance
+    // filed under a spelling nothing looks for any more: the money stays on
+    // disk and vanishes from the screen that says what a seller is holding.
+    //
+    // Written as a DELTA against a fixture built here, not against whatever
+    // earlier sections left behind.
+    const cfgK = require(path.join(ROOT, 'config'));
+    const put = (f, v) => fs.writeFileSync(f, JSON.stringify(v, null, 2));
+    const get = (f) => JSON.parse(fs.readFileSync(f, 'utf8'));
+
+    // "Randy Recycling" wins on count: three loads against one.
+    put(cfgK.LOADS_FILE, [
+        { id: 'K1', date: '2026-10-01', seller: 'Randy Recycling', amount: 1000, items: [] },
+        { id: 'K2', date: '2026-10-02', seller: 'Randy Recycling', amount: 2000, items: [] },
+        { id: 'K3', date: '2026-10-03', seller: 'Randy Recycling', amount: 500, items: [] },
+        { id: 'K4', date: '2026-10-04', seller: 'RANDY  RECYCLING', amount: 300, items: [] },
+        { id: 'K5', date: '2026-10-05', seller: 'Nur Metal', amount: 900, items: [] },
+    ]);
+    put(cfgK.LOAD_DRAFTS_FILE, [{ id: 'KD1', seller: 'RANDY  RECYCLING' }]);
+    put(cfgK.PAYMENTS_FILE, [{ id: 'KP1', load_kind: 'prepayment', is_prepayment: true,
+        seller: 'RANDY  RECYCLING', amount: 400, paid_on: '2026-10-05', mode: 'Cash' }]);
+
+    const planK = nc.plan('seller');
+    const cl = planK.clusters.find((c) => /randy/i.test(c.winner));
+    ck('the tidy spelling wins on count, not on luck',
+       cl && cl.winner === 'Randy Recycling', JSON.stringify(cl && cl.winner));
+    ck('  and the preview counts all THREE stores, not just the ledger',
+       planK.byStore.loads === 1 && planK.byStore.drafts === 1 && planK.byStore.prepayments === 1,
+       JSON.stringify(planK.byStore));
+
+    const applied = await nc.apply(planK);
+    ck('applying changes three rows', applied.changed === 3, String(applied.changed));
+    ck('  the load is rewritten',
+       get(cfgK.LOADS_FILE).find((l) => l.id === 'K4').seller === 'Randy Recycling');
+    ck('  the draft is rewritten, so the old spelling cannot come back',
+       get(cfgK.LOAD_DRAFTS_FILE)[0].seller === 'Randy Recycling');
+    ck('  AND THE PREPAYMENT IS REWRITTEN — the advance stays findable',
+       get(cfgK.PAYMENTS_FILE)[0].seller === 'Randy Recycling',
+       'left behind, $400 of credit would be on disk and invisible on screen');
+    ck('  a different seller is untouched',
+       get(cfgK.LOADS_FILE).find((l) => l.id === 'K5').seller === 'Nur Metal');
+
+    // Every changed row keeps the handle that undoes it.
+    const changedRow = get(cfgK.LOADS_FILE).find((l) => l.id === 'K4');
+    ck('every changed row carries its merge id',
+       !!(changedRow.name_merge && changedRow.name_merge.seller),
+       JSON.stringify(changedRow.name_merge));
+    const mergeId = changedRow.name_merge.seller;
+    await nc.undo(mergeId);
+    ck('undo puts the ledger back',
+       get(cfgK.LOADS_FILE).find((l) => l.id === 'K4').seller === 'RANDY  RECYCLING');
+    ck('  and puts the PREPAYMENT back too',
+       get(cfgK.PAYMENTS_FILE)[0].seller === 'RANDY  RECYCLING',
+       'an undo that forgets the money is not an undo');
 }
 
 // ── J. THE ANSWERS SHE ALREADY GAVE ARE NOT LOST ────────────────────────────

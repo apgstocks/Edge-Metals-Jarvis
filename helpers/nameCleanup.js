@@ -106,6 +106,41 @@ const FIELDS = {
             { key: 'sales', file: cfg.SALES_FILE, shape: 'array', field: 'customer', label: 'invoices', votes: true },
         ],
     },
+    // ── THE YARD'S OWN SELLERS (2026-11-07) ─────────────────────────────
+    // Apsara: "clean the names", after the Spend report's Bought-from list
+    // showed MAZARIEGOES beside MAZARIEGOS and CORES CHAPIN INESH beside
+    // INESH CORES CHAPIN — the same two counterparties twice, so "how much
+    // have I paid them" was split and both answers were wrong.
+    //
+    // THE HEADER ABOVE SAYS THIS LEDGER IS DELIBERATELY ABSENT. That was
+    // right while every field here was an EDGE METALS field: pulling
+    // loads.json into `supplier` would have merged across two companies.
+    // It is a SEPARATE field, listing only Edge Yard's own stores, so the
+    // separation holds — nothing here can reach a Metals book, and nothing
+    // in the Metals fields can reach this one. She asked for it; the
+    // exclusion was about mixing, not about the yard being uncleanable.
+    //
+    // ── payments.json IS IN THIS LIST FOR A REASON ──────────────────────
+    // A PREPAYMENT row stores the seller's name (helpers/payments.js
+    // addPrepayment), and prepaymentCredit() finds unapplied credit BY that
+    // name. Rewriting loads.json alone would leave an advance filed under
+    // the old spelling: the money stays on disk and disappears from the
+    // screen that says what a seller is holding. Found by listing every
+    // writer of a seller name before adding this, which is the rule
+    // CLAUDE.md states and which has been broken here twice before.
+    //
+    // Not in the list: helpers/pricelist.js. Its `name` is a WhatsApp
+    // contact, and its own header says it is kept separate from supplier
+    // contacts "even if some names overlap".
+    seller: {
+        label: 'Seller (Edge Yard)',
+        where: 'yard loads, load drafts and prepayments',
+        targets: [
+            { key: 'loads', file: cfg.LOADS_FILE, shape: 'array', field: 'seller', label: 'yard loads', votes: true },
+            { key: 'drafts', file: cfg.LOAD_DRAFTS_FILE, shape: 'array', field: 'seller', label: 'load drafts' },
+            { key: 'prepayments', file: cfg.PAYMENTS_FILE, shape: 'array', field: 'seller', label: 'prepayments' },
+        ],
+    },
 };
 
 const FIELD_KEYS = Object.keys(FIELDS);
