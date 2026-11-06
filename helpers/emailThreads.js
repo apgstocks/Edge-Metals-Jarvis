@@ -37,7 +37,7 @@ const loadEmailThreads = () => loadJson(cfg.EMAIL_THREADS_FILE, []);
 // reply needs to route BACK to relayTo, same as the WhatsApp
 // await_relay_reply pending does today. See actions.js's
 // relayReplyReceivedViaEmail for that side.
-async function trackSentEmail({ threadId, to, targetName, subject, bkgNo, relayTo, askedOf, question, expectedIntent }) {
+async function trackSentEmail({ threadId, to, targetName, subject, bkgNo, relayTo, askedOf, question, expectedIntent, refs, messageId }) {
     if (!threadId) return null;
     const entry = {
         id: crypto.randomUUID(),
@@ -54,6 +54,10 @@ async function trackSentEmail({ threadId, to, targetName, subject, bkgNo, relayT
         asked_of: askedOf || null,
         question: question || null,
         expected_intent: expectedIntent || null,
+        // Optional, added 2026-11-07: the invoice / container numbers this mail carried and its Message-ID, so a later
+        // payment follow-up can reply in the same thread (helpers/invoiceThread.js). Absent on every older entry.
+        refs: Array.isArray(refs) && refs.length ? refs.filter(Boolean) : undefined,
+        message_id: messageId || undefined,
     };
     await mutateJson(cfg.EMAIL_THREADS_FILE, [], (list) => { list.push(entry); return list; });
     return entry;

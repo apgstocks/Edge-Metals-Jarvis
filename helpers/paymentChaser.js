@@ -165,5 +165,8 @@ function prune(log, drafts) {
     return next;
 }
 
-module.exports = { nextAction, isLcDraft, statusFor, plan, lineFor, recorded, prune, readLog, writeLog, setKey, earliestDue, money, keyOf,
+// Whether the draft has an address the customer email could go to. The agent never reads the address itself.
+const hasAddress = (draft) => !!(draft && !draft.to_missing && draft.to);
+
+module.exports = { hasAddress, nextAction, isLcDraft, statusFor, plan, lineFor, recorded, prune, readLog, writeLog, setKey, earliestDue, money, keyOf,
     CHASE_AFTER_ASK_DAYS, ESCALATE_AFTER_ASK_DAYS, ESCALATE_PAST_DUE_DAYS };

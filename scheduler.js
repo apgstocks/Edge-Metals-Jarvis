@@ -1606,6 +1606,11 @@ function start() {
             sendToManager: async (text) => _sendToManager(text),
             // Reads the mailbox for a customer's remittance copy before chasing them (read-only).
             findRemittance: require('./helpers/remittanceMail').liveFinder(),
+            // A customer email is STAGED on WhatsApp and goes only after her yes (workflow/actions.js).
+            stageCustomerEmail: async (draft, step) => {
+                const st = cfg.getSettings ? cfg.getSettings() : {};
+                return actions.stagePaymentFollowupEmail((st.manager_number || cfg.MANAGER_NUMBER || '') + '@c.us', draft, step);
+            },
         })
         .then((r) => {
             const line = require('./helpers/followUpAgentJob').summarise(r);

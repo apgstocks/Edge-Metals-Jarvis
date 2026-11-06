@@ -4659,6 +4659,9 @@ async function sendDraftedEmail(chatId, pending) {
         const sent = await sendEmail({
             to: pending.to, cc: pending.cc, bcc: pending.bcc, subject: pending.subject, body: pending.body,
             inReplyTo: pending.inReplyTo, references: pending.references, attachments,
+            // Only a payment follow-up carries this (stagePaymentFollowupEmail): a thread of OUR OWN earlier send, so valid
+            // on this account. No other pending has the field, so every other send is exactly as before.
+            threadId: pending.send_thread_id || undefined,
         });
         // REAL GAP (found 2026-08-06, live — Apsara: "notification bell icon
         // in website for reply thread"): this send's threadId used to be
@@ -4670,6 +4673,7 @@ async function sendDraftedEmail(chatId, pending) {
         require('../helpers/emailThreads').trackSentEmail({
             threadId: sent?.threadId, to: pending.to, targetName: pending.target_name,
             subject: pending.subject, bkgNo: pending.bkg_no,
+            refs: [pending.attach_container, ...(pending.refs || [])].filter(Boolean), messageId: sent?.messageId || undefined,
         }).catch((e) => console.error('[ACTIONS] emailThreads.trackSentEmail failed (non-fatal):', e.message));
         // Report both parts honestly. A silent partial success ("Sent.") when
         // the forward failed would leave her expecting a copy in her inbox
@@ -9208,6 +9212,42 @@ async function paySupplierAnswer(chatId, pending, answerText, senderName, { isMa
     }
 }
 
+// ── Payment follow-up -> the customer, ONLY after her yes on WhatsApp ───────
+// Apsara, 2026-11-07: asked whether Jarvis should send payment emails to customers, she said "Ask for my confirmation in
+// whatsapp". So the Follow-up Agent does not send; it STAGES the draft here as the same await_email_confirm every other
+// outbound email uses, shows it to her, and nothing leaves until she answers yes. "no" drops it, any other instruction
+// revises it (revise_ctx), exactly as for an email she asked for.
+// ONE AT A TIME, and only when she has nothing else open: a customer email must never be the second question stacked
+// behind another, where a stray "yes" could land on it. Returns { staged:false, reason } when not staged, so the agent
+// tries again on its next run instead of recording something she never saw.
+async function stagePaymentFollowupEmail(chatId, draft, step) {
+    if (!draft || !isValidEmail(draft.to)) return { staged: false, reason: 'no valid address' };
+    if (getPending(chatId) || ((loadBrain().pending_queue || {})[chatId] || []).length) return { staged: false, reason: 'busy' };
+    const { cc: globalCc, bcc } = ccBccFromSettings();
+    const cc = mergeCc(globalCc, draft.cc);
+    // Apsara, 2026-11-07: "Make sure it asks in the same email thread as we sent the invoice." Reply inside the thread the
+    // invoice went out in; if it cannot be found, send a NEW email and SAY so rather than pretend.
+    // The second note refers back to the first; it is not the same email sent again.
+    const chaseBody = step === 'chase' ? require('../helpers/paymentFollowups').chaseBodyFor(draft) : null;
+    let thread = null;
+    try { thread = await require('../helpers/invoiceThread').liveFinder()(draft); } catch (e) { thread = null; }
+    const staged = await setPending(chatId, {
+        type: 'await_email_confirm',
+        to: draft.to, cc, bcc, subject: thread ? thread.subject : draft.subject, body: step === 'chase' ? chaseBody : draft.body,
+        target_name: draft.customer, bkg_no: null, scheduled_for: null, req: null,
+        revise_ctx: { kind: 'new' },
+        source: 'payment_followup',
+        refs: (draft.lines || []).flatMap((l) => [l.invoice_no, l.container_no]).filter(Boolean),
+        ...(thread ? { send_thread_id: thread.threadId, inReplyTo: thread.messageId, references: thread.messageId } : {}),
+        // A confirmation she did not ask for must not sit open and capture a stray "yes" later.
+        expires_in_ms: 6 * 60 * 60 * 1000,
+    });
+    if (staged.queued) return { staged: false, reason: 'busy' };
+    const label = step === 'chase' ? 'Still unpaid - follow-up email to' : 'Payment follow-up email to';
+    await _send(chatId, `${label} ${draft.customer} <${draft.to}>:\n${ccBccPreviewLine({ cc, bcc })}Subject: ${thread ? thread.subject : draft.subject}\n${thread ? `(reply in the same thread as the invoice mail, found by ${thread.ref})` : '(NEW email - I could not find the thread the invoice went out in)'}\n\n${step === 'chase' ? chaseBody : draft.body}\n\nSend this to the customer? (yes/no, or tell me what to change)`);
+    return { staged: true };
+}
+
 module.exports = {
     metalsBriefing, metalsReport,
     replyToFocusedDigest, askWhichDigestItem, reviseDraftedEmail,
@@ -9217,7 +9257,7 @@ module.exports = {
     logBug, showBugs, closeBugForConfirm, applyBugClose, resolveBugRef,
     showPendingReplies, replyToDigestItem, summarizeEmail, markPendingReminded, forwardOriginalToSelf, sendDraftedEmail,
 init,
-setPending, clearPending, getPending, resolvePending, promoteQueued,
+setPending, clearPending, getPending, resolvePending, promoteQueued, stagePaymentFollowupEmail,
 showMenu, showBookingsMenu, showBookingStatus, showContacts,
 showBookingsAll, showBookingsUrgent, showBookingsAvailable, showBookingsWeek,
 forwardBooking, executeForward,

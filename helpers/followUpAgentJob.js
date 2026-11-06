@@ -213,7 +213,7 @@ async function run(opts = {}) {
     // ── CUSTOMER PAYMENTS (2026-11-07) ───────────────────────────────────
     // After the pickups and walled off from them: whatever happens here, a pickup rung
     // has already fired, and a failure here is reported rather than thrown.
-    try { out.payments = await runPayments({ sendToManager, sendToTeam, now: opts.now, drafts: opts.paymentDrafts, findRemittance: opts.findRemittance }); }
+    try { out.payments = await runPayments({ sendToManager, sendToTeam, now: opts.now, drafts: opts.paymentDrafts, findRemittance: opts.findRemittance, stageCustomerEmail: opts.stageCustomerEmail }); }
     catch (e) { out.payments = { asked: 0, chased: 0, escalated: 0, failed: [{ why: 'payment follow-ups could not run: ' + (e && e.message) }] }; }
     return out;
 }
@@ -223,8 +223,8 @@ async function run(opts = {}) {
 // message to her for the asks and chases, one to the team per escalation. A rung is
 // recorded only AFTER the message went, so a failed send is retried next run rather than
 // buried.
-async function runPayments({ sendToManager, sendToTeam, now, drafts, findRemittance }) {
-    const res = { asked: 0, chased: 0, escalated: 0, held: 0, failed: [] };
+async function runPayments({ sendToManager, sendToTeam, now, drafts, findRemittance, stageCustomerEmail }) {
+    const res = { asked: 0, chased: 0, escalated: 0, held: 0, staged: 0, failed: [] };
     if (String(process.env.PAYMENT_CHASE || '').toLowerCase() === 'off') return { ...res, off: true };
     const chaser = require('./paymentChaser');
     const t = now ? new Date(now).getTime() : Date.now();
@@ -265,7 +265,24 @@ async function runPayments({ sendToManager, sendToTeam, now, drafts, findRemitta
     if (!todo.length) { if (JSON.stringify(log) !== JSON.stringify(chaser.readLog())) await chaser.writeLog(log); return res; }
 
     const told = [];
-    const forMe = todo.filter((x) => x.step !== 'escalate');
+    // CUSTOMER EMAIL, ONLY AFTER HER YES (Apsara, 2026-11-07: "Ask for my confirmation in whatsapp"). Where a customer has a
+    // valid address the draft is staged on WhatsApp as a send-confirmation instead of listed; nothing is sent here. One per
+    // run, and only when she has nothing else open - the rest are tried on the next hourly run, unrecorded until she has seen them.
+    let toList = todo.filter((x) => x.step !== 'escalate');
+    if (typeof stageCustomerEmail === 'function' && String(process.env.PAYMENT_CHASE_SEND || '').toLowerCase() !== 'off') {
+        const sendable = toList.filter((x) => chaser.hasAddress(x.draft));
+        const rest = toList.filter((x) => !chaser.hasAddress(x.draft));
+        let did = false;
+        for (const x of sendable) {
+            if (did) continue;
+            try {
+                const r = await stageCustomerEmail(x.draft, x.step);
+                if (r && r.staged) { did = true; told.push(x); res.staged += 1; if (x.step === 'ask') res.asked += 1; else res.chased += 1; }
+            } catch (e) { res.failed.push({ company: x.draft.customer, why: 'could not stage the email: ' + (e && e.message) }); }
+        }
+        toList = rest;
+    }
+    const forMe = toList;
     if (forMe.length) {
         if (!sendToManager) res.failed.push({ why: 'nothing to tell her with (payment follow-ups are waiting)' });
         else {
@@ -305,6 +322,7 @@ function summarise(result) {
     const lines = bits.length ? ['Follow-ups: ' + bits.join(' · ')] : [];
     const pay = r.payments || {};
     if (pay.asked || pay.chased || pay.escalated) {
+        // (counts include emails waiting for her yes)
         const pb = [];
         if (pay.asked) pb.push(`${pay.asked} payment follow-up${pay.asked === 1 ? '' : 's'} drafted`);
         if (pay.chased) pb.push(`${pay.chased} still unpaid`);

@@ -104,7 +104,7 @@ function draftFor(customer, lines, { to = null, cc = null, kind = 'remittance', 
         '',
         `Please arrange payment and send us the remittance details (bank transfer / SWIFT confirmation) once it is done, so we can match it on our side. If it has already been sent, please share the remittance copy.`,
         '',
-        'Thank you,',
+        'Kind regards,',
         'Apsara',
         'Edge Metals Inc',
     ] : [
@@ -118,7 +118,7 @@ function draftFor(customer, lines, { to = null, cc = null, kind = 'remittance', 
         '',
         `Could you please confirm the payment status ${many ? 'of each' : 'of this invoice'}? If payment has already been sent, please share the remittance details (bank transfer / SWIFT confirmation) so we can match it on our side. If it has not been sent yet, please let us know when we can expect it.`,
         '',
-        'Thank you,',
+        'Kind regards,',
         'Apsara',
         'Edge Metals Inc',
     ]).join('\n');
@@ -180,4 +180,29 @@ function build({ salesRows = null, terms = null, resolve = null, bookings = null
         drafted_total: round2(drafts.reduce((s, d) => s + d.total, 0)), customers_with_terms: Object.values(t).map((x) => ({ customer: x.customer, eta_terms: x.eta_terms })) };
 }
 
-module.exports = { build, draftFor, parseEtaTerms, setEtaTerms, termsFor, loadTerms, keyOf, parseDate, bookingEta, LEAD_DAYS };
+// The SECOND note to the same customer (the "chase"). Apsara, 2026-11-07: "Followup should be professional" - a repeat of the
+// first email word for word is not; this one refers back to it, stays polite, and does not scold. Same invoice lines.
+function chaseBodyFor(draft) {
+    const rows = String(draft.body || '').split('\n').filter((l) => /^ {2}- /.test(l));
+    const many = (draft.lines || []).length > 1;
+    const total = money(draft.total);
+    if (draft.kind === 'payment') {
+        return [
+            `Dear ${draft.customer},`, '',
+            `I am following up on my earlier message regarding the ${many ? 'invoices' : 'invoice'} below, ${many ? 'which have' : 'which has'} now reached the payment date under our agreed terms${draft.eta_terms ? ` (${draft.eta_terms})` : ''}:`, '',
+            ...rows, '', `Total: ${total}`, '',
+            `We would be grateful if you could arrange payment at your earliest convenience and send us the remittance details (bank transfer / SWIFT confirmation) so that we can match it on our side. If payment has already been made, please accept our thanks and share the remittance copy.`, '',
+            'Kind regards,', 'Apsara', 'Edge Metals Inc',
+        ].join('\n');
+    }
+    return [
+        `Dear ${draft.customer},`, '',
+        `I am following up on my earlier message regarding the ${many ? 'invoices' : 'invoice'} below, which our records still show as open:`, '',
+        ...rows, '', `Total outstanding: ${total}`, '',
+        `Could you please confirm the payment status and let us know when we can expect payment? If it has already been sent, kindly share the remittance details (bank transfer / SWIFT confirmation) so that we can match it on our side. If anything is holding it up, please tell us and we will gladly help resolve it.`, '',
+        'Thank you for your attention to this matter.', '',
+        'Kind regards,', 'Apsara', 'Edge Metals Inc',
+    ].join('\n');
+}
+
+module.exports = { build, draftFor, chaseBodyFor, parseEtaTerms, setEtaTerms, termsFor, loadTerms, keyOf, parseDate, bookingEta, LEAD_DAYS };
