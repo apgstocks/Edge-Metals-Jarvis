@@ -1425,10 +1425,16 @@ const MUTATIONS = [
       file: 'helpers/spendReport.js', suites: ['banks'],
       find: "            bank: (p.bank && String(p.bank).trim()) || NOT_RECORDED,",
       to:   '            bank: p.bank || null,' },
+    // Re-pointed 2026-11-07. The find string ended in a semicolon because the
+    // bank filter used to be LAST in the chain; paid_via, bought/sold and the
+    // company scope have been added after it since, so the semicolon moved
+    // and this check had been guarding nothing. Anchored on the filter itself
+    // now, with no trailing punctuation to go stale the next time something
+    // is appended.
     { name: 'report: the bank filter narrows rows but not the totals',
       file: 'helpers/spendReport.js', suites: ['banks'],
-      find: "        .filter(r => !wantedBank || String(r.bank || '').toLowerCase() === wantedBank.toLowerCase());",
-      to:   '        ;' },
+      find: "        .filter(r => !wantedBank || String(r.bank || '').toLowerCase() === wantedBank.toLowerCase())",
+      to:   "        .filter(r => true)" },
 
     // ── the offer, and the answer to it (2026-09-08) ────────────────────
     { name: 'offer: "yes" goes back to being answered from the table',
@@ -7309,10 +7315,20 @@ const MUTATIONS = [
 
     // The email must stay silent when there is nothing, or she stops opening
     // it — including on the day it matters.
-    { name: 'agent: it emails her every day whether or not there is anything',
+    // SPLIT 2026-11-07. One find string, written identically in BOTH
+    // reportText and reportHtml, so the harness called it ambiguous and
+    // refused it — and the "say nothing when there is nothing" rule was
+    // guarded in NEITHER place. Same defect class as the six closed in
+    // #240: a rule written twice needs a check per site, anchored on
+    // something unique to that site.
+    { name: 'agent: the TEXT mail goes out even when there is nothing to say',
       file: 'helpers/ledgerAgent.js', suites: ['ledger-agent'],
-      find: '    if (!s.length && !p.length && !broken.length) return null;',
-      to:   '' },
+      find: "function reportText(run, { csvName = null } = {}) {\n    const s = run.settled || [];\n    const p = run.proposed || [];\n    const broken = run.broken || [];\n    if (!s.length && !p.length && !broken.length) return null;",
+      to:   "function reportText(run, { csvName = null } = {}) {\n    const s = run.settled || [];\n    const p = run.proposed || [];\n    const broken = run.broken || [];" },
+    { name: 'agent: the HTML mail goes out even when there is nothing to say',
+      file: 'helpers/ledgerAgent.js', suites: ['ledger-agent'],
+      find: "function reportHtml(run, { csvName = null } = {}) {\n    const s = run.settled || [];\n    const p = run.proposed || [];\n    const broken = run.broken || [];\n    if (!s.length && !p.length && !broken.length) return null;",
+      to:   "function reportHtml(run, { csvName = null } = {}) {\n    const s = run.settled || [];\n    const p = run.proposed || [];\n    const broken = run.broken || [];" },
 
     { name: 'agent: a check that stopped running is swallowed',
       file: 'helpers/ledgerAgent.js', suites: ['ledger-agent'],

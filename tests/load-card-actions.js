@@ -217,8 +217,27 @@ section('D — hiding a button is not the same as removing an endpoint');
     ck('POST /api/payments still exists', /app\.post\('\/api\/payments'/.test(api));
     // And the clients read the SERVER's arithmetic rather than doing their
     // own, so a card cannot disagree with a ticket about what is settled.
+    // ── THIS WENT RED ON A FIX, NOT A BREAK (2026-11-07, by audit) ──────
+    // It required `paymentSummary(l.id, l.amount)` literally. The route now
+    // passes payableOf(l) instead — task #78, "route every 'what is owed'
+    // through payableOf", because amount ignores the trucking deducted from
+    // what the seller is actually paid. The code got MORE correct and the
+    // check went red for it.
+    //
+    // CLAUDE.md rule 2 names this shape: "a check shaped like the old code
+    // rather than like the property, which passes happily when the code
+    // moves". Here it failed instead of passing, which is the kinder
+    // direction, but it was still asserting a spelling.
+    //
+    // So: the property. The route attaches a SERVER-computed summary, and
+    // the figure it is computed against is the PAYABLE, never the gross
+    // amount — a card that says "paid" off the gross would disagree with
+    // the ticket the seller signed.
     ck('/api/loads attaches the server-computed payment summary',
-       /payment: paymentSummary\(l\.id, l\.amount\)/.test(api));
+       /payment:\s*paymentSummary\(/.test(api));
+    ck('  and computes it against the PAYABLE, not the gross amount',
+       /payment:\s*paymentSummary\(l\.id,[\s\S]{0,80}?payableOf\(l\)\)/.test(api),
+       'amount ignores the trucking deducted from what the seller is paid');
 }
 
 // ── 5. a search result is a flat list, not date sections ──────────────────

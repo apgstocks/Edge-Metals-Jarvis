@@ -180,6 +180,17 @@ section('F — THE EMAIL, AND WHEN IT DOES NOT ARRIVE');
        agent.reportText({ settled: [], proposed: [], broken: [] }) === null,
        'a daily "all clear" for a month is an email she stops opening, including the day it matters');
 
+    // ── THE HTML HALF WAS NEVER CHECKED (found 2026-11-07, by audit) ─────
+    // The same guard is written twice, once in reportText and once in
+    // reportHtml. Only the text one was tested — and because the mutation
+    // covering it matched BOTH sites, the harness refused it as ambiguous
+    // and the rule was guarded in neither. Splitting the mutation per
+    // function made this hole visible immediately: the HTML mail could go
+    // out empty every morning with nothing to notice.
+    ck('  and the HTML mail is silent too', 
+       agent.reportHtml({ settled: [], proposed: [], broken: [] }) === null,
+       'both halves of the same rule, or the rule only half exists');
+
     const txt = agent.reportText({
         settled: [{ what: 'BK1 — Fede', fix: { field: 'supplier', to: 'Fede' } }],
         proposed: [{ what: 'TCLU6619618', detail: 'needs weights',
