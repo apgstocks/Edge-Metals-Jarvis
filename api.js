@@ -1136,16 +1136,42 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
                 const b = require('./helpers/truckerBills').getBill(loadId);
                 return b ? b.amount : null;
             }
+            // ── A SALE CARRIES TRUCKING TOO, SINCE 2026-11-05 ───────────
+            // Apsara, 2026-11-06: "What if paid by cash,paid by various
+            // payment type,invoice amount in report of ege yard/think of all
+            // permuattion adn combination".
+            //
+            // THIS BRANCH WAS WRONG, AND IT WAS MY MISS. It read .amount —
+            // the metal only — while routes/yard.js, helpers/loadsPdf.js and
+            // the bot all read receivableOf, which is amount + trucking
+            // charged to the buyer. So on a sale with $800 of haulage, taking
+            // $10,000 in cash made THIS path report "paid, nothing pending"
+            // while the card beside it still showed $800 outstanding. The
+            // $800 was silently written off at the moment of payment.
+            //
+            // Introduced by omission: receivableOf arrived with sales
+            // trucking (f0c7ef5) and five sale-side callers were re-pointed
+            // at it. This one was missed because it is reached through ctx
+            // rather than by requiring outboundLoads, so grepping the new
+            // function's callers never showed it. CLAUDE.md rule 1 says to
+            // list the callers of shared code; the list has to come from the
+            // QUESTION ("what is a sale's total"), not from the new
+            // function's name.
+            //
+            // The old comment here reasoned that "netting haulage out of a
+            // sale would be an invention". That is still true and is not
+            // what this does: receivableOf ADDS the haulage she charges the
+            // buyer, it does not subtract it. Her decision, recorded on
+            // f0c7ef5, was that sales trucking is billed to the customer.
             if (kind === 'sale') {
-                const { loadOutboundLoads } = require('./helpers/outboundLoads');
+                const { loadOutboundLoads, receivableOf } = require('./helpers/outboundLoads');
                 const l = loadOutboundLoads().find((x) => x.id === loadId);
-                return l ? l.amount : null;
+                return l ? receivableOf(l) : null;
             }
-            // A PURCHASE is the one kind that can carry a trucking deduction,
-            // so it is the one branch that asks payableOf rather than reading
-            // .amount. The sale and trucker branches above deliberately do
-            // not: a trucker bill IS the haulage, and netting haulage out of
-            // a sale would be an invention.
+            // A PURCHASE nets the haulage OUT — she deducts it from what the
+            // seller is owed — so it asks payableOf. A trucker bill is left
+            // alone: the bill IS the haulage, and its amount is the whole of
+            // it.
             const { loadLoads, payableOf } = require('./helpers/loads');
             const l = loadLoads().find((x) => x.id === loadId);
             return l ? payableOf(l) : null;

@@ -497,6 +497,25 @@ const MUTATIONS = [
     // ── THE SPLIT ITSELF (2026-10-31) ────────────────────────────────────
     // Replaces 'quality-only demand: her column set is used on MIXED pages
     // too', which guarded the single-table rule that the split removed.
+    // ── WHAT A YARD LOAD TOTALS, ON EVERY PATH (2026-11-06) ─────────────
+    // Apsara: "What if paid by cash,paid by various payment type,invoice
+    // amount in report of ege yard/think of all permuattion adn combination".
+    // The question found a real fault: api.js resolved a SALE to .amount
+    // while the card, the PDF and the bot used receivableOf, so the trucking
+    // charged to the buyer was written off at the moment of payment.
+    { name: 'yard-perms: a sale resolves to the bare amount, writing off the trucking',
+      file: 'api.js', suites: ['yard-payment-permutations'],
+      find: "                return l ? receivableOf(l) : null;",
+      to:   "                return l ? l.amount : null;" },
+    { name: 'yard-perms: a purchase stops netting the haulage out of what the seller is owed',
+      file: 'helpers/loads.js', suites: ['yard-payment-permutations'],
+      find: "    return load.net_payable !== undefined && load.net_payable !== null\n        ? load.net_payable : (load.amount ?? null);",
+      to:   "    return load.amount ?? null;" },
+    { name: 'yard-perms: an unpriced load is reported as settled',
+      file: 'helpers/payments.js', suites: ['yard-payment-permutations'],
+      find: "        return { paid, total: null, pending: null, status: paid > 0 ? 'paid_amount_unknown' : 'unpaid', payments: rows };",
+      to:   "        return { paid, total: null, pending: 0, status: 'paid', payments: rows };" },
+
     // ── THE FOLLOW-UP AGENT'S SCREEN (2026-11-06) ───────────────────────
     // dashboard/claims.html was dead for six days behind 139 green checks
     // that only ever read it as text. tests/pickups-screen.js RENDERS this
