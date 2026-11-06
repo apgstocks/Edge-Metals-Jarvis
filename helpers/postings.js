@@ -342,26 +342,62 @@ function mirrorFor(tx, bankCode) {
 // a NEED posted and the figure is right, but something about it is still
 // unanswered. Collapsing the two would either lose the expense again or tell
 // her the books are clean when a credit is parked in 2090.
+// ── A PROBLEM CARRIES THE COMPANY IT BELONGS TO (2026-11-06) ─────────────
+// Apsara's morning accounts mail listed the SAME five "metals-purchase has
+// no amount" lines under Edge Metals, Edge Yard AND AAA Investment, and told
+// her all three sets of books could not be trusted. Two of those three were
+// innocent: the problems belong to one company, and helpers/booksAgent.js
+// was handed the whole journal's list for every entity it reported on.
+//
+// It could not do better, because a problem was a bare string. Now it is an
+// object that KNOWS whose it is — and whose toString() is the same sentence
+// it always was, so `String(p)` at every existing call site is unchanged and
+// nothing that merely prints these had to be touched.
+//
+// `entity` is null when the failure is that there IS no company (the second
+// branch below). That one belongs to everybody and is reported once, not
+// three times — see booksAgent.
+// ── IT IS A STRING, WITH A COMPANY ATTACHED ──────────────────────────────
+// First attempt returned a plain object with a toString(). That LOOKED
+// compatible — String(p) and `${p}` both gave the sentence — and it broke
+// tests/postings.js immediately: existing code calls p.includes(...) on a
+// problem, not just String(p). A plain object has no .includes, so the file
+// crashed rather than failing a check.
+//
+// So it is a String object. Every string method still works, String(p) and
+// template interpolation are unchanged, and `entity` rides along. The two
+// known costs, both acceptable here: typeof is 'object' (nothing branches on
+// that), and JSON.stringify renders it as the plain sentence, dropping the
+// entity — which is exactly what any screen serialising these used to get.
+function problem(text, entity) {
+    const o = new String(String(text));
+    Object.defineProperty(o, 'entity', { value: entity || null, enumerable: true });
+    return o;
+}
+
 function post(kind, tx = {}) {
     const out = { kind, lines: [], problems: [], needs: [] };
     const t = (tx && typeof tx === 'object') ? tx : {};
+    // Read once, before any branch can return: every push below wants it.
+    const who = (tx && typeof tx === 'object' && tx.entity) ? tx.entity : null;
     const rule = RULES[String(kind || '')];
     if (!rule) {
-        out.problems.push(`no posting rule for "${kind}"`);
+        out.problems.push(problem(`no posting rule for "${kind}"`, who));
         return out;
     }
     if (!t.entity || !E.get(t.entity)) {
-        out.problems.push(`"${kind}" has no company against it — entities.js could not place it, `
-            + 'and a line with no company cannot go on any return');
+        // No entity by definition — this is the branch that says so.
+        out.problems.push(problem(`"${kind}" has no company against it — entities.js could not place it, `
+            + 'and a line with no company cannot go on any return', null));
         return out;
     }
     if (Math.abs(num(t.amount)) < CENT && kind !== 'advance-applied') {
-        out.problems.push(`"${kind}" has no amount`);
+        out.problems.push(problem(`"${kind}" has no amount`, who));
         return out;
     }
 
     const built = rule(t);
-    if (built.problem) { out.problems.push(`${kind}: ${built.problem}`); return out; }
+    if (built.problem) { out.problems.push(problem(`${kind}: ${built.problem}`, who)); return out; }
     // Carried only when the lines below actually post — a need on an entry
     // that then fails to balance would be a note about nothing.
     const pendingNeeds = (built.needs || []).map((n) => `${kind}: ${n}`);
@@ -376,12 +412,12 @@ function post(kind, tx = {}) {
     // the same way as this half; any problem below clears BOTH.
     if (built.mirror) {
         const m = built.mirror;
-        if (!E.get(m.entity)) { out.problems.push(`${kind}: the other company is unknown`); return out; }
+        if (!E.get(m.entity)) { out.problems.push(problem(`${kind}: the other company is unknown`, who)); return out; }
         const md = (m.debits || []).filter(([, a]) => Math.abs(a) >= CENT);
         const mc = (m.credits || []).filter(([, a]) => Math.abs(a) >= CENT);
         const sd = r2(md.reduce((x, [, a]) => x + a, 0)), sc = r2(mc.reduce((x, [, a]) => x + a, 0));
         if (!md.length || Math.abs(sd - sc) >= CENT) {
-            out.problems.push(`${kind}: the other company's half does not balance — neither half posted`);
+            out.problems.push(problem(`${kind}: the other company's half does not balance — neither half posted`, who));
             return out;
         }
         mirror = { date: t.date || null, entity: m.entity, kind: m.kind || kind,
@@ -406,9 +442,9 @@ function post(kind, tx = {}) {
             // money moves, and `paidBy` on it means nothing. Which is
             // precisely why this must be said out loud rather than assumed
             // either way.
-            out.problems.push(`${kind} says ${E.get(t.paidBy).uiName} paid it, but this rule moves `
+            out.problems.push(problem(`${kind} says ${E.get(t.paidBy).uiName} paid it, but this rule moves `
                 + 'no bank money, so there is nothing to record against the other company. Either '
-                + 'the paidBy belongs on the PAYMENT rather than here, or this rule needs a bank line.');
+                + 'the paidBy belongs on the PAYMENT rather than here, or this rule needs a bank line.', who));
             return out;
         }
     }
@@ -416,8 +452,8 @@ function post(kind, tx = {}) {
     const dSum = r2(debits.reduce((s, [, a]) => s + a, 0));
     const cSum = r2(credits.reduce((s, [, a]) => s + a, 0));
     if (Math.abs(dSum - cSum) >= CENT) {
-        out.problems.push(`${kind} does not balance: debits ${dSum} vs credits ${cSum} — `
-            + 'not posted, because half a transaction breaks the whole year\'s trial balance');
+        out.problems.push(problem(`${kind} does not balance: debits ${dSum} vs credits ${cSum} — `
+            + 'not posted, because half a transaction breaks the whole year\'s trial balance', who));
         return out;
     }
 
@@ -437,7 +473,7 @@ function post(kind, tx = {}) {
     // Every account used must exist. A line against an unknown code lands
     // nowhere on a statement and silently shrinks a total.
     for (const l of out.lines) {
-        if (!C.get(l.account)) out.problems.push(`${kind}: account ${l.account} is not in the chart`);
+        if (!C.get(l.account)) out.problems.push(problem(`${kind}: account ${l.account} is not in the chart`, who));
     }
     if (out.problems.length) out.lines = [];
     // Attached last and ONLY if lines survived. A need describes something

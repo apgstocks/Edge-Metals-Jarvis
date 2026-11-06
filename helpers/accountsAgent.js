@@ -155,6 +155,19 @@ function review() {
     const k = (parts.books.ok && parts.books.value) || [];
     const q = (parts.quickbooks.ok && parts.quickbooks.value) || {};
 
+    // Never throws and never returns an object: this line goes straight into
+    // an email, and the whole point of this fix is that nothing here can
+    // render as [object Object] again.
+    const booksSummaryLine = (co) => {
+        try {
+            const line = require('./booksAgent').summary(co);
+            if (typeof line === 'string' && line.trim()) return line;
+        } catch (e) { /* fall through */ }
+        const h = (co && co.headline) || {};
+        return `${co && co.entityName ? co.entityName : 'this company'}: `
+            + `${h.lines == null ? 'an unknown number of' : h.lines} journal line(s)`;
+    };
+
     const todo = [];
     if (b.waiting) {
         todo.push({ area: 'BANK', what: `${b.waiting} bank line(s) still need you`,
@@ -163,7 +176,18 @@ function review() {
     for (const co of k) {
         todo.push({ area: 'BOOKS',
             what: `${co.entity}: ${co.trustworthy === false ? 'the figures cannot be trusted yet' : 'something to look at'}`,
-            items: [co.headline].concat(co.items.map((i) => `${i.what} — ${i.why}`)) });
+            // ── [object Object], ON HER DESK, EVERY MORNING ──────────────
+            // `co.headline` is an OBJECT — { lines, netIncome, balanced,
+            // complete } — and this list is joined into text, so the first
+            // line of every BOOKS section read "[object Object]". Three
+            // times a morning, above figures she is being told not to trust.
+            //
+            // booksAgent already exports summary(), which is the sentence
+            // this line was reaching for: "Edge Metals: 412 journal lines,
+            // books balance, nothing unplaced. Net $...". It was never
+            // called. The headline object stays on the result — the screens
+            // use its fields — it is just not printed raw.
+            items: [booksSummaryLine(co)].concat(co.items.map((i) => `${i.what} — ${i.why}`)) });
     }
     if (q.missing) {
         todo.push({ area: 'QUICKBOOKS', what: 'no QuickBooks snapshot has ever been taken',

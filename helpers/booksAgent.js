@@ -227,7 +227,27 @@ function review(built, { entity, from = null, to = null } = {}) {
     //     the unplaced rows and the inter-company pair, and reported "books
     //     balance, nothing unplaced" over a journal that had refused to post
     //     a $9,700 payment. Found by a mutation surviving.
-    for (const p of (built.problems || [])) {
+    // ── ONLY THIS COMPANY'S, PLUS THE ONES NOBODY OWNS ──────────────────
+    // Apsara's accounts mail, 2026-11-06, listed the same five
+    // "metals-purchase has no amount" lines under Edge Metals, Edge Yard AND
+    // AAA Investment, and told her all three sets of books could not be
+    // trusted. Two of the three were innocent.
+    //
+    // built.problems is the WHOLE journal's — this function runs once per
+    // company and was handed the lot every time. Exactly the bug the comment
+    // forty lines below already records for transaction counts ("the first
+    // version tested built.transactions, which is every company's rows added
+    // together"), repeated here and not noticed because a string carried no
+    // company to check against. helpers/postings.js now attaches one.
+    //
+    // A problem whose entity is NULL is the branch that says there is no
+    // company — it cannot be filed under one, and it genuinely does make
+    // every statement incomplete, so it is shown to all of them.
+    const mineOrOrphan = (built.problems || []).filter((p) => {
+        const e = p && typeof p === 'object' ? p.entity : null;
+        return !e || e === entity;
+    });
+    for (const p of mineOrOrphan) {
         add({
             code: 'could-not-post', severity: 'high',
             what: 'an entry could not be posted, so it is on no statement',

@@ -497,6 +497,30 @@ const MUTATIONS = [
     // ── THE SPLIT ITSELF (2026-10-31) ────────────────────────────────────
     // Replaces 'quality-only demand: her column set is used on MIXED pages
     // too', which guarded the single-table rule that the split removed.
+    // ── THE ACCOUNTS MAIL'S OWN SENTENCES (2026-11-06) ──────────────────
+    // Apsara's morning mail said "[object Object]" above figures she was
+    // being told not to trust, and blamed all three companies for five Edge
+    // Metals entries. Neither fault was in her books.
+    { name: 'accounts-mail: the headline OBJECT is printed into the email again',
+      file: 'helpers/accountsAgent.js', suites: ['accounts-mail-lines'],
+      find: "            items: [booksSummaryLine(co)].concat(co.items.map((i) => `${i.what} \u2014 ${i.why}`)) });",
+      to:   "            items: [co.headline].concat(co.items.map((i) => `${i.what} \u2014 ${i.why}`)) });" },
+    { name: 'accounts-mail: every company is blamed for every company\'s problems',
+      file: 'helpers/booksAgent.js', suites: ['accounts-mail-lines'],
+      find: "        return !e || e === entity;",
+      to:   "        return true;" },
+    // The other direction: filtering so hard that an unattributable problem
+    // reaches nobody. A line with no company really does leave every
+    // statement incomplete.
+    { name: 'accounts-mail: an unattributable problem is shown to nobody',
+      file: 'helpers/booksAgent.js', suites: ['accounts-mail-lines'],
+      find: "        return !e || e === entity;",
+      to:   "        return e === entity;" },
+    { name: 'accounts-mail: a problem stops carrying the company it belongs to',
+      file: 'helpers/postings.js', suites: ['accounts-mail-lines'],
+      find: "    Object.defineProperty(o, 'entity', { value: entity || null, enumerable: true });",
+      to:   "    Object.defineProperty(o, 'entity', { value: null, enumerable: true });" },
+
     // ── WHAT A YARD LOAD TOTALS, ON EVERY PATH (2026-11-06) ─────────────
     // Apsara: "What if paid by cash,paid by various payment type,invoice
     // amount in report of ege yard/think of all permuattion adn combination".
