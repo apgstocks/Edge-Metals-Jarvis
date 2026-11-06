@@ -50,6 +50,33 @@ const resp = (status, location) => ({ status,
     headers: { get: (k) => (String(k).toLowerCase() === 'location' ? (location || null) : null) } });
 const TIMEOUT = () => { const e = new Error('The operation was aborted'); e.name = 'AbortError'; throw e; };
 
+// ── A CERTIFICATE STUB EVERY J.run IN THIS FILE MUST BE GIVEN ─────────────
+// 2026-11-07. Three J.run calls were passing no tlsImpl. entrancesJob
+// DEFAULTS tlsImpl to the real require('tls').connect — which is right in
+// production, and is exactly what section F asserts entrances.js itself must
+// never do — so those three dialled jarvis.edgemetals.com and read her LIVE
+// certificate. What that cost:
+//
+//   section B  "and nothing is emailed" went RED on 2026-11-07 with nothing
+//              changed, because the real certificate came inside the 30-day
+//              window. The check's colour was a fact about the calendar.
+//   section C  asserts the subject is "old address is dead", and section
+//              D/E assert an outage subject. subjectFor() puts an EXPIRED
+//              certificate ABOVE both. So on 2026-12-04, when the real
+//              certificate runs out, those would have gone red too — a
+//              second failure, from the same cause, four weeks later.
+//
+// A test that reaches the network is a test that reports the world, not the
+// code. Far-off expiry, so the healthy path is genuinely healthy.
+const certFarOff = () => {
+    const validTo = new Date(Date.now() + 200 * 86400000).toUTCString();
+    return (opts, onConnect) => {
+        const sock = { getPeerCertificate: () => ({ valid_to: validTo }), end() {}, on() {} };
+        setTimeout(() => onConnect(), 0);
+        return sock;
+    };
+};
+
 // Everything healthy: front door serves, the two old addresses redirect.
 function healthy() {
     return async (url) => {
@@ -135,8 +162,15 @@ const recording = (inner) => async (url, opts) => { calls.push(String(url)); ret
        JSON.stringify(res.results.find((r) => r.id === 'bare-ip-https')));
 
     const sent = [];
-    const r = await J.run({ fetchImpl: healthy(), sendEmail: async (m) => sent.push(m), to: 'x@y.com' });
+    const r = await J.run({ fetchImpl: healthy(), tlsImpl: certFarOff(),
+        sendEmail: async (m) => sent.push(m), to: 'x@y.com' });
     ck('and nothing is emailed', sent.length === 0 && r.sent === false, JSON.stringify(sent.map((m) => m.subject)));
+
+    // And the thing that was accidentally being tested, on purpose this
+    // time: no check in this file may reach the network.
+    ck('  the certificate check is driven by a stub, never a real socket',
+       res.certificate && res.certificate.checked === false,
+       'checkAll in this section is given no tlsImpl at all, so it must not attempt one');
 }
 
 // ── C — THE FAILURE THAT ACTUALLY HAPPENED ────────────────────────────────
@@ -173,7 +207,11 @@ const recording = (inner) => async (url, opts) => { calls.push(String(url)); ret
        /cannot reach.*cannot sign in/i.test(out), out.slice(-300));
 
     const sent = [];
-    const r = await J.run({ fetchImpl: asItWas, sendEmail: async (m) => sent.push(m), to: 'x@y.com' });
+    // certFarOff: subjectFor() ranks an EXPIRED certificate ABOVE 'old links
+    // dead', so without this the real certificate running out on 2026-12-04
+    // would have turned this check red for a reason it is not about.
+    const r = await J.run({ fetchImpl: asItWas, tlsImpl: certFarOff(),
+        sendEmail: async (m) => sent.push(m), to: 'x@y.com' });
     ck('it emails', sent.length === 1 && r.sent === true, JSON.stringify(sent.map((m) => m.subject)));
     ck('  with a subject about old links, not a general alarm',
        /old address is dead/.test(sent[0].subject), sent[0].subject);
@@ -286,7 +324,8 @@ const recording = (inner) => async (url, opts) => { calls.push(String(url)); ret
     ck('it is an outage', res.outage === true, JSON.stringify(res));
 
     const sent = [];
-    await J.run({ fetchImpl: down, sendEmail: async (m) => sent.push(m), to: 'x@y.com' });
+    await J.run({ fetchImpl: down, tlsImpl: certFarOff(),
+        sendEmail: async (m) => sent.push(m), to: 'x@y.com' });
     ck('  and the subject says nobody can reach it',
        /NOBODY CAN REACH/.test(sent[0].subject), sent[0].subject);
     ck('  which is a different subject from a stale bookmark',
