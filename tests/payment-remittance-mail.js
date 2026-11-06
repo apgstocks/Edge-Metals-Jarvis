@@ -17,18 +17,22 @@ const pickups = require(path.join(ROOT, 'helpers/pickups')); pickups.list = () =
 const D = (iso) => Date.parse(iso + 'T12:00:00Z');
 
 section('A. the query');
-ck('company domain: from the whole domain', rm.queryFor({ to: 'ap@daekwang.example' }, D('2026-11-01')).startsWith('from:(@daekwang.example) after:2026/11/1 ('));
+ck('company domain: from the whole domain', rm.queryFor({ to: 'ap@daekwang.example' }, D('2026-11-01')).startsWith('from:(@daekwang.example) after:2026/11/1'));
 ck('gmail.com: exact address only, never the whole of gmail', rm.queryFor({ to: 'bob@gmail.com' }, D('2026-11-01')).startsWith('from:(bob@gmail.com)'));
 ck('no address on file: no search (cannot guess)', rm.queryFor({ to: null }, 1) === null && rm.queryFor({ to_missing: true }, 1) === null);
-ck('asks about remittance / proof of payment', /remittance/.test(rm.queryFor({ to: 'a@b.example' }, 1)) && /proof of payment/.test(rm.queryFor({ to: 'a@b.example' }, 1)));
+ck('NO keyword list: every mail from them since the first note is a candidate', rm.queryFor({ to: 'a@b.example' }, D('2026-11-01')) === 'from:(@b.example) after:2026/11/1');
+const pr = rm.promptFor({ customer: 'Daekwang', count: 1, lines: [{ invoice_no: 'INV-2', container_no: 'KOCU2' }] }, { subject: 'hi', snippet: 'body', files: ['a.pdf'] });
+ck('the model is asked about meaning, any language, any wording', /any language/i.test(pr) && /INV-2/.test(pr) && /a\.pdf/.test(pr));
 
 section('B. the Follow-up Agent with the real finder over a stub mailbox');
 const rows = [{ id: 'S2', customer: 'Daekwang', invoice_no: 'INV-2', container_no: 'KOCU2', booking_no: 'BKT2', date: '2026-10-25', receivable: 6000, received: 1000, balance: 5000 }];
 const draftsAt = (iso) => pf.build({ salesRows: rows, terms: pf.loadTerms(), resolve: () => ({ type: 'exact', contact: { email: 'ap@daekwang.example' } }), bookings: {}, now: D(iso) }).drafts;
 let inbox = [], queries = [], boom = false;
+let ai = (m) => ({ payment_related: !!m.pay, why: 'test' }), aiDown = false, asked = [];
 const finder = rm.makeFinder({
     list: async (q) => { queries.push(q); if (boom) throw new Error('gmail down'); return inbox.map((m) => ({ id: m.id })); },
     get: async (id) => inbox.find((m) => m.id === id),
+    classify: async (prompt) => { asked.push(prompt); if (aiDown) throw new Error('quota'); const m = inbox.find((x) => prompt.includes(x.subject)); return ai(m); },
 });
 const calls = { manager: [], team: [], email: [] };
 const go = async (iso, over = {}) => { for (const k of Object.keys(calls)) calls[k].length = 0; queries = [];
@@ -44,7 +48,7 @@ const go = async (iso, over = {}) => { for (const k of Object.keys(calls)) calls
     // They email a remittance copy on 11/16. Chase would be due 11/22 (next rung).
     fs.rmSync(cfg.PAYMENT_CHASE_LOG_FILE, { force: true });
     await go('2026-11-07');
-    inbox = [{ id: 'm1', subject: 'Wire confirmation INV-2', from: 'ap@daekwang.example', dateMs: D('2026-11-15') }];
+    inbox = [{ id: 'm1', subject: 'Wire confirmation INV-2', from: 'ap@daekwang.example', dateMs: D('2026-11-15'), pay: true, snippet: 'attached', files: ['swift.pdf'] }];
     r = await go('2026-11-15');
     ck('payment mail found: the chase is HELD', r.payments.chased === 0 && r.payments.held === 1, JSON.stringify(r.payments));
     ck('  she is told to check it and record the receipt', calls.manager.length === 1 && /Possible payment received/.test(calls.manager[0]) && /Daekwang/.test(calls.manager[0]) && /Wire confirmation INV-2/.test(calls.manager[0]) && /record the receipt/.test(calls.manager[0]), calls.manager[0]);
@@ -56,9 +60,29 @@ const go = async (iso, over = {}) => { for (const k of Object.keys(calls)) calls
 
     r = await go('2026-11-23');
     ck('a week with no receipt recorded: the same mail stops holding, the chase resumes', r.payments.chased === 1 && r.payments.held === 0, JSON.stringify(r.payments));
-    inbox.push({ id: 'm2', subject: 'RE: payment sent', from: 'ap@daekwang.example', dateMs: D('2026-11-23') });
+    inbox.push({ id: 'm2', subject: 'RE: payment sent', from: 'ap@daekwang.example', dateMs: D('2026-11-23'), pay: true });
     fs.rmSync(cfg.PAYMENT_CHASE_LOG_FILE, { force: true });
     r = await go('2026-11-23');
+
+    section('B2. AI decides, not a word list');
+    fs.rmSync(cfg.PAYMENT_CHASE_LOG_FILE, { force: true }); inbox = []; await go('2026-11-07');
+    inbox = [{ id: 'x1', subject: 'Container KOCU2 pickup time', from: 'ap@daekwang.example', dateMs: D('2026-11-14'), pay: false, snippet: 'truck arrives Monday' }];
+    r = await go('2026-11-15');
+    ck('mail from them that is NOT about payment does not hold the chase', r.payments.chased === 1 && r.payments.held === 0, JSON.stringify(r.payments));
+    fs.rmSync(cfg.PAYMENT_CHASE_LOG_FILE, { force: true }); inbox = []; await go('2026-11-07');
+    inbox = [{ id: 'x2', subject: 'Re: your note', from: 'ap@daekwang.example', dateMs: D('2026-11-14'), pay: true, snippet: 'Our bank released the funds on Thursday' }];
+    r = await go('2026-11-15');
+    ck('payment mail with NONE of the old keywords is still caught (the model read it)', r.payments.held === 1 && r.payments.chased === 0, JSON.stringify(r.payments));
+    ck('  the model saw the invoice references and the text', asked.some((p) => /INV-2/.test(p) && /funds on Thursday/.test(p)));
+    fs.rmSync(cfg.PAYMENT_CHASE_LOG_FILE, { force: true }); inbox = []; await go('2026-11-07');
+    inbox = [{ id: 'x4', subject: 'Pickup Monday', from: 'ap@daekwang.example', dateMs: D('2026-11-14'), pay: false, snippet: 'truck at 9' }];
+    aiDown = true;
+    r = await go('2026-11-15');
+    ck('model unreachable: falls back to leaning "tell her" (unrelated mail, so chase)', r.payments.held === 0 && r.payments.chased === 1, JSON.stringify(r.payments));
+    fs.rmSync(cfg.PAYMENT_CHASE_LOG_FILE, { force: true }); inbox = []; await go('2026-11-07'); inbox = [{ id: 'x3', subject: 'Payment for INV-2', from: 'ap@daekwang.example', dateMs: D('2026-11-14'), pay: true, snippet: '' }];
+    r = await go('2026-11-15');
+    ck('model unreachable + mail names the invoice: held anyway', r.payments.held === 1, JSON.stringify(r.payments));
+    aiDown = false;
 
     section('C. failure and the switch');
     fs.rmSync(cfg.PAYMENT_CHASE_LOG_FILE, { force: true }); inbox = []; boom = true;
