@@ -531,6 +531,46 @@ const MUTATIONS = [
       find: "    Object.defineProperty(o, 'entity', { value: entity || null, enumerable: true });",
       to:   "    Object.defineProperty(o, 'entity', { value: null, enumerable: true });" },
 
+    // ── THE CALIFORNIA SELLER RECORD (2026-11-07) ───────────────────────
+    // Edge Yard is a junk dealer at 2453 E 25th St, Los Angeles. BPC 21606
+    // and 21608.5 say what the purchase record must contain, and a false
+    // entry is a misdemeanour under 21606(b). Every mutation here is a way
+    // of telling her a statutory record is complete when it is not.
+    { name: 'seller record: an unconfirmed statute still yields a verdict, so cannot_say disappears',
+      file: 'helpers/sellerRecord.js', suites: ['seller-record'],
+      find: "    const outcome = unverified.length ? 'cannot_say' : (anyGap ? 'incomplete' : 'complete');",
+      to:   "    const outcome = anyGap ? 'incomplete' : 'complete';" },
+    // THE MOST DANGEROUS ONE. She HAS a signature; it attests to weights and
+    // price, not ownership. Counting it looks exactly like coverage.
+    { name: 'seller record: the weights signature is counted as the 21606(a)(6) ownership statement',
+      file: 'helpers/sellerRecord.js', suites: ['seller-record'],
+      find: "      read: () => nowhere('an ownership declaration on the ticket the seller signs'),",
+      to:   "      read: (l) => (filled(l.seller_signature) ? present('signed') : nowhere('an ownership declaration on the ticket the seller signs'))," },
+    { name: 'seller record: an unrecognised metal is assumed ferrous, dropping the thumbprint rule',
+      file: 'helpers/sellerRecord.js', suites: ['seller-record'],
+      find: "    const nfApplies = material.kind !== 'ferrous';",
+      to:   "    const nfApplies = material.kind === 'nonferrous';" },
+    { name: 'seller record: "no field exists" is reported as merely empty, so it reads as data entry',
+      file: 'helpers/sellerRecord.js', suites: ['seller-record'],
+      find: "const nowhere = (what) => ({ verdict: 'not_captured', needs: what });",
+      to:   "const nowhere = (what) => ({ verdict: 'missing', needs: what });" },
+    { name: 'seller record: created_by of the literal string "unknown" counts as a named employee',
+      file: 'helpers/sellerRecord.js', suites: ['seller-record'],
+      find: "      read: (l) => (filled(l.created_by) && String(l.created_by) !== 'unknown'",
+      to:   "      read: (l) => (filled(l.created_by)" },
+    // First written as a hack that broke the syntax, so it came back NOT
+    // APPLIED — which is weaker than a survivor: it tested nothing at all.
+    // The property is that a caveat REACHES her, so cut it where it is
+    // passed on, not where it is written.
+    { name: 'seller record: a field\'s caveat is dropped on the way out, so the scale photo reads as proof',
+      file: 'helpers/sellerRecord.js', suites: ['seller-record'],
+      find: "            caveat: got.caveat || null, note: req.note || null,",
+      to:   "            caveat: null, note: req.note || null," },
+    { name: 'seller record: a confirmation that has expired keeps counting',
+      file: 'helpers/sellerRecord.js', suites: ['seller-record'],
+      find: "        const st = statusOf(law, when);\n        if (!st.actionable && !unverified.some((u) => u.law === req.law)) {",
+      to:   "        const st = law ? { actionable: true, why: 'ok' } : statusOf(law, when);\n        if (!st.actionable && !unverified.some((u) => u.law === req.law)) {" },
+
     // ── THE SALES REPORT'S COLLECTION SIDE (2026-11-07) ─────────────────
     // "invoice amount in report of ege yard", "paid by cash,paid by various
     // payment type". The report showed SOLD and MARGIN and could not say

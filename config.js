@@ -36,6 +36,11 @@ const FILES = {
     // it was last verified — see helpers/exportRules.js. Under DATA_DIR like
     // every other store, so a test that sets DATA_DIR is isolated by default.
     EXPORT_RULES_FILE: path.join(DATA_DIR, 'export-rules.json'),
+    // The California junk-dealer record requirements, once a PERSON has
+    // confirmed each statute. helpers/sellerRecord.js falls back to
+    // seeds/seller-record-laws.json, where every row is unverified, so an
+    // absent file reports "nobody has checked this" rather than "compliant".
+    SELLER_RECORD_LAWS_FILE: path.join(DATA_DIR, 'seller-record-laws.json'),
     WORKFLOW_FILE    : path.join(DATA_DIR, 'workflow.json'),
     TASKS_FILE       : path.join(DATA_DIR, 'tasks.json'),
     TASKS_HISTORY_FILE: path.join(DATA_DIR, 'tasks_history.json'),

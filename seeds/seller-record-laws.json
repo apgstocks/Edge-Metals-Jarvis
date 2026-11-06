@@ -1,0 +1,24 @@
+[
+  {
+    "id": "ca-21606",
+    "title": "CA Bus & Prof Code §21606 — junk dealer / recycler written record",
+    "researched_on": "2026-11-07",
+    "source": "https://law.justia.com/codes/california/code-bpc/division-8/chapter-9/article-3/section-21606/",
+    "amended": "Amended by Stats. 2025, Ch. 694, Sec. 1 (AB 476). Effective January 1, 2026.",
+    "verified_on": null,
+    "verified_by": null,
+    "disputed": false,
+    "why": "Full current text retrieved, and the amending act is named on the source page. The two newest requirements — the TIME of the transaction and the EMPLOYEE who handled it — come from AB 476 and are less than a year old, so any earlier advice she was given about this section predates them."
+  },
+  {
+    "id": "ca-21608-5",
+    "title": "CA Bus & Prof Code §21608.5 — nonferrous material: payment, ID, photographs, thumbprint",
+    "researched_on": "2026-11-07",
+    "source": "https://law.onecle.com/california/business/21608.5.html",
+    "amended": "Source states: Amended by Stats. 2012, Ch. 531, Sec. 1.5 (AB 1508), effective January 1, 2013.",
+    "verified_on": null,
+    "verified_by": null,
+    "disputed": true,
+    "why": "MARKED DISPUTED ON PURPOSE, and not because the rule is doubted. The only full text found was on a page whose own footer says it was last modified in 2018, and AB 476 amended neighbouring sections of this article in 2025. A twelve-year-old reading of a section in an article that was amended last year is exactly the kind of source that should not drive a green tick. Confirm against leginfo.legislature.ca.gov before acting on the payment timing or the thumbprint."
+  }
+]
