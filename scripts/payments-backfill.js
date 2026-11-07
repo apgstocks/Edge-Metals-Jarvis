@@ -13,6 +13,7 @@ const pb = require('../helpers/paymentBackfill');
 const arg = (k) => { const a = process.argv.find((x) => x.startsWith(`--${k}=`)); return a ? a.slice(k.length + 3) : null; };
 const WRITE = process.argv.includes('--write');
 const BANK_ONLY = process.argv.includes('--bank-verified-only');   // with --write: only receipts a Plaid bank deposit confirms
+const JARVIS_SALES_ONLY = process.argv.includes('--jarvis-sales');   // old behaviour: trust Jarvis's sales table instead of the invoice page
 const FIFO = process.argv.includes('--apply-unapplied');   // also apply cash QuickBooks holds unapplied, oldest invoice first
 const only = (arg('customer') || '').toLowerCase();
 const money = (n) => '$' + (Math.round(n * 100) / 100).toLocaleString('en-US', { minimumFractionDigits: 2 });
@@ -33,12 +34,30 @@ async function pull(client, table, where, cap = 20000) {
     if (only) rows = rows.filter((s) => String(s.customer || '').toLowerCase().includes(only));
     const since = rows.map((s) => s.date).filter(Boolean).sort()[0] || '2026-01-01';
     console.log(`Jarvis sales: ${rows.length}${only ? ` (matching "${only}")` : ''}; reading QuickBooks payments and invoices since ${since} ...`);
+    // THE INVOICE PAGE decides which invoices exist (Apsara, 2026-11-07: "dont pick from jarvis sale, pick from edge metals invoice page").
+    let invoicePage = null;
+    if (!JARVIS_SALES_ONLY) {
+        try {
+            const all = await require('../helpers/invoiceSheet').listAllInvoices(true);
+            invoicePage = all.filter((i) => !only || String(i.customer || i.consignee || '').toLowerCase().includes(only));
+            console.log(`Invoice page (Order Details): ${invoicePage.length} invoices${only ? ` for "${only}"` : ''}, ${money(invoicePage.reduce((t, i) => t + (i.final_amount || 0), 0))}`);
+        } catch (e) { console.error('Could not read the invoice page (' + e.message + '). Nothing done - run with --jarvis-sales only if you want Jarvis\'s own sales table instead.'); process.exit(1); }
+    }
     const [payments, invoices] = await Promise.all([pull(client, 'Payment', `TxnDate >= '${since}'`), pull(client, 'Invoice', `TxnDate >= '${new Date(Date.parse(since) - 120 * 864e5).toISOString().slice(0, 10)}'`)])   // invoices can predate the Jarvis sale by weeks;
     console.log(`QuickBooks: ${payments.length} payments, ${invoices.length} invoices`);
     // With --customer, QuickBooks payments of OTHER customers are not "unplaced", they are simply not in scope.
     const inScope = (c) => !only || String((c && c.name) || '').toLowerCase().includes(only);
-    const plan = pb.plan({ qb: { payments: payments.filter((p) => inScope(p.CustomerRef)), invoices: invoices.filter((i) => inScope(i.CustomerRef)) }, sales: rows, receipts: salesReceipts.list(), fifoUnapplied: FIFO });
+    const plan = pb.plan({ qb: { payments: payments.filter((p) => inScope(p.CustomerRef)), invoices: invoices.filter((i) => inScope(i.CustomerRef)) }, sales: rows, receipts: salesReceipts.list(), fifoUnapplied: FIFO, invoicePage });
     const t = plan.totals;
+    if (plan.invoicePageReport) {
+        const ir = plan.invoicePageReport;
+        const ex = ir.notOnPage;
+        console.log(`\nINVOICE PAGE vs JARVIS SALES: ${ir.invoices} invoices on the page.`);
+        console.log(`  Jarvis sales NOT on the invoice page (ignored, still showing open): ${ex.length} sales, ${money(ex.reduce((a, x) => a + x.open, 0))}`);
+        for (const x of ex.slice(0, 6)) console.log(`      ${String(x.invoice_no || x.container_no || '-').padEnd(26)} ${x.date || '-'}  ${money(x.open).padStart(14)}  made by: ${x.created_by || '?'}`);
+        console.log(`  Invoice-page invoices with NO Jarvis sale (cannot receive a receipt): ${ir.pageOnly.length}`);
+        for (const x of ir.pageOnly.slice(0, 6)) console.log(`      ${String(x.inv_no).padEnd(26)} ${money(x.amount || 0).padStart(14)}`);
+    }
     console.log(`\nWould add ${t.receipts} receipts (${money(t.money)}) for ${t.customers} customers.  Already imported: ${t.alreadyImported}.`);
     if (t.modeGuessed) console.log(`  ${t.modeGuessed} receipts have a payment method QuickBooks did not name - set to Wire (check them).`);
     if (t.wireFeeCount) console.log(`  ${t.wireFeeCount} invoices closed with a small wire-fee shortfall (${money(t.wireFees)} in all, up to $${pb.FEE_TOLERANCE} each) - recorded as bank charges, said on each receipt.`);

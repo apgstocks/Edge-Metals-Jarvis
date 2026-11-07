@@ -33,7 +33,25 @@ function bankOf(acct) {
 }
 
 // qb: { payments: [QuickBooks Payment], invoices: [QuickBooks Invoice] } · sales: sales.listWithTotals() rows · receipts: existing Jarvis receipts
-function plan({ qb, sales, receipts = [], fifoUnapplied = false }) {
+// invoicePage (optional): the invoices on the Edge Metals invoice page (Order Details sheet = Jarvis Documents > Invoices, one copy), as
+// [{ inv_no, containers[], final_amount, customer }]. Apsara, 2026-11-07: "dont pick from jarvis sale, pick from edge metals invoice
+// page". When given, ONLY Jarvis sales that are on that page are used; the rest are reported as 'not on the invoice page' and ignored.
+function onInvoicePage(allSales, invoicePage) {
+    const inv = new Set(), cont = new Set();
+    for (const i of invoicePage) { if (i.inv_no) inv.add(KEY(i.inv_no)); for (const c of (i.containers || [])) cont.add(KEY(c)); }
+    const use = [], notOnPage = [];
+    for (const s of allSales) ((s.invoice_no && inv.has(KEY(s.invoice_no))) || (s.container_no && cont.has(KEY(s.container_no))) ? use : notOnPage).push(s);
+    const sale = (i) => use.some((s) => (s.invoice_no && KEY(s.invoice_no) === KEY(i.inv_no)) || (s.container_no && (i.containers || []).some((c) => KEY(c) === KEY(s.container_no))));
+    const pageOnly = invoicePage.filter((i) => !sale(i));
+    return { use, notOnPage, pageOnly };
+}
+
+function plan({ qb, sales: allSales, receipts = [], fifoUnapplied = false, invoicePage = null }) {
+    let sales = allSales, page = null;
+    if (Array.isArray(invoicePage)) {
+        page = onInvoicePage(allSales, invoicePage);
+        sales = page.use;
+    }
     const invById = new Map((qb.invoices || []).map((i) => [String(i.Id), i]));
     // a payment already imported under ANY customer split is skipped whole (its sale balances already reflect it)
     const done = new Set((receipts || []).map((r) => (/^QB:(\d+)/.exec(String(r.ref || '')) || [])[1]).filter(Boolean));
@@ -179,7 +197,13 @@ function plan({ qb, sales, receipts = [], fifoUnapplied = false }) {
     const sum = (a, k = 'amount') => r2(a.reduce((t, x) => t + x[k], 0));
     const oldestOpen = sales.filter((x) => x.balance !== null && x.balance !== undefined && r2(x.balance - (covered.get(x.id) || 0)) > CENT)
         .map((x) => ({ invoice_no: x.invoice_no || null, container_no: x.container_no || null, date: x.date || null, open: r2(x.balance - (covered.get(x.id) || 0)) })).sort((a, b) => String(a.date).localeCompare(String(b.date)));
-    return { proposed, leftover, unmatched, unexplained, skippedDone, remaining, unappliedCash, oldestOpen,
+    const openOf = (x) => r2(Number(x.balance) || 0);
+    const invoicePageReport = page ? {
+        notOnPage: page.notOnPage.filter((x) => openOf(x) > CENT).map((x) => ({ invoice_no: x.invoice_no || null, container_no: x.container_no || null, date: x.date || null, customer: x.customer, open: openOf(x), created_by: x.created_by || null })),
+        pageOnly: page.pageOnly.map((i) => ({ inv_no: i.inv_no, customer: i.customer || null, containers: i.containers || [], amount: i.final_amount })),
+        invoices: invoicePage.length,
+    } : null;
+    return { proposed, leftover, unmatched, unexplained, skippedDone, remaining, unappliedCash, oldestOpen, invoicePageReport,
         totals: { receipts: proposed.length, money: sum(proposed), leftover: sum(leftover), unmatched: sum(unmatched), unexplained: sum(unexplained, 'open'), alreadyImported: skippedDone.length,
             wireFees: r2(proposed.reduce((t, r) => t + r.allocations.reduce((a, x) => a + (x.deduction_amount || 0), 0), 0)), wireFeeCount: proposed.reduce((t, r) => t + r.allocations.filter((x) => x.deduction_amount).length, 0), unappliedCash: r2(unappliedCash.reduce((t, x) => t + x.amount, 0)), unappliedPlaced: r2(unappliedCash.reduce((t, x) => t + (x.placed || 0), 0)), customers: [...new Set(proposed.map((x) => x.customer))].length, modeGuessed: proposed.filter((x) => x.mode_guessed).length } };
 }
@@ -259,4 +283,4 @@ function bankHints(openSales, bankRows, { usedDepositIds = new Set(), maxDays = 
     return { hints, money: r2(hints.reduce((t, h) => t + h.open, 0)), of: openSales.length };
 }
 
-module.exports = { FEE_TOLERANCE, plan, apply, modeOf, bankOf, verifyWithBank, crossCheck, bankHints, BANK_DAYS };
+module.exports = { FEE_TOLERANCE, onInvoicePage, plan, apply, modeOf, bankOf, verifyWithBank, crossCheck, bankHints, BANK_DAYS };

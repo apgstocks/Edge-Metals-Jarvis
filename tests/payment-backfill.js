@@ -158,6 +158,23 @@ const qpay = (Id, customer, amount, lines, extra = {}) => ({ Id, TxnDate: '2026-
     const fh = pb.bankHints([{ invoice_no: 'H1', date: '2026-10-01', open: 5000 }], [{ id: 'q', date: '2026-10-10', amount: 4980, direction: 'in' }]);
     ck('bank hints also allow the wire fee', fh.hints.length === 1);
 
+    section('D7. the invoice page decides which invoices exist (Apsara: "dont pick from jarvis sale")');
+    const g1b = await mk('Page Co', 'P-1', '2026-09-01', 10000, 1, 'PPPP1111111');
+    const g2b = await mk('Page Co', 'P-1-DUP', '2026-09-01', 10000, 1, 'PPPP1111111');          // a duplicate Jarvis made: same container, other number
+    const g3b = await mk('Page Co', 'P-9', '2026-09-02', 7000, 1, 'PPPP9999999');                // a stray Jarvis sale that is not on the invoice page
+    const page = [{ inv_no: 'P-1', containers: ['PPPP1111111'], final_amount: 10000, customer: 'Page Co' }, { inv_no: 'P-2', containers: ['PPPP2222222'], final_amount: 3000, customer: 'Page Co' }];
+    const pq = { invoices: [qinv('91', 'P-1', 10000, 0)], payments: [qpay('900', 'Page Co', 10000, [['91', 10000]])] };
+    const pp = pb.plan({ qb: pq, sales: rows().filter((s) => s.customer === 'Page Co'), receipts: [], invoicePage: page });
+    const ids = (pp.proposed[0] || {}).allocations || [];
+    ck('only sales that are ON the invoice page are paid; the stray one is ignored', ids.every((a) => [g1b, g2b].includes(a.sale_id)) && !ids.some((a) => a.sale_id === g3b), JSON.stringify(pp.proposed));
+    ck('the stray Jarvis sale is REPORTED as not on the page (with who made it)', pp.invoicePageReport.notOnPage.some((x) => x.invoice_no === 'P-9' && x.open === 7000), JSON.stringify(pp.invoicePageReport));
+    ck('an invoice on the page with no Jarvis sale is reported (cannot be receipted)', pp.invoicePageReport.pageOnly.some((x) => x.inv_no === 'P-2' && x.amount === 3000));
+    ck('and what the stray sale is NOT counted in "still open"', !pp.oldestOpen.some((x) => x.invoice_no === 'P-9'));
+    const noPage = pb.plan({ qb: pq, sales: rows().filter((s) => s.customer === 'Page Co'), receipts: [] });
+    ck('without an invoice page nothing changes (old behaviour kept for --jarvis-sales)', noPage.invoicePageReport === null);
+    const srcP = fs.readFileSync(path.join(ROOT, 'scripts/payments-backfill.js'), 'utf8');
+    ck('the script reads the invoice page by default, and stops (does not silently fall back) if it cannot', /listAllInvoices\(true\)/.test(srcP) && /process\.exit\(1\)/.test(srcP) && /--jarvis-sales/.test(srcP));
+
     section('E. the script is dry by default');
     const src = fs.readFileSync(path.join(ROOT, 'scripts/payments-backfill.js'), 'utf8');
     ck('writes only behind --write', /const WRITE = process\.argv\.includes\('--write'\)/.test(src) && /if \(!WRITE\) \{[^}]*DRY RUN[^}]*return;/.test(src));
