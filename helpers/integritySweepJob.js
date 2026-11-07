@@ -85,9 +85,12 @@ async function depSection({ auditImpl } = {}) {
 
 async function run({ send = true, force = false, auditImpl = null } = {}) {
     const sweep = require('./integritySweep');
-    const res = sweep.run();
+    // The sweep is run UNCAPPED so the emailed CSV has every line; `text` (returned to callers, unchanged) is still built from the
+    // 25-per-check view it always was.
+    const res = sweep.run({ limitPerCheck: 1e9 });
     const deps = await depSection(auditImpl ? { auditImpl } : {});
-    const text = sweep.reportText(res) + (deps.lines.length ? '\n' + deps.lines.join('\n') + '\n' : '');
+    const capped = { ...res, findings: res.findings.map((f) => ({ ...f, items: f.items.slice(0, 25), truncated: Math.max(0, f.count - 25) })) };
+    const text = sweep.reportText(capped) + (deps.lines.length ? '\n' + deps.lines.join('\n') + '\n' : '');
 
     // A dependency finding is a reason to send even when the ledger agrees
     // with itself. Recomputed rather than mutating res, so the sweep's own
@@ -120,12 +123,18 @@ async function run({ send = true, force = false, auditImpl = null } = {}) {
     // Monospace, for the same reason the log digest supplies its own HTML:
     // the default renders in Arial with pre-wrap, which is right for a letter
     // to a buyer and wrong for a list whose meaning is in its alignment.
-    const bodyHtml = '<div style="font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;'
-                   + 'font-size:12px;line-height:1.45;white-space:pre;color:#202124;">'
-                   + gmail.escapeHtmlText(text) + '</div>';
+    // THE EMAIL (Apsara, 2026-11-07: "This is also ugly"): one heading per reason, items compact, the full list attached as a CSV,
+    // dependencies one line each. See helpers/sweepReport.js. `text` above is unchanged for every other caller.
+    const report = require('./sweepReport');
+    const day = new Date().toISOString().slice(0, 10);
+    const csvName = `jarvis-sweep-${day}.csv`;
+    const cut = res.findings.some((f) => f.count > report.SHOW_ITEMS);
+    const body = report.compactText(res, res.dependencies, { csvName: cut ? csvName : null });
+    const bodyHtml = report.compactHtml(res, res.dependencies, { csvName: cut ? csvName : null });
+    const attachments = cut ? [{ filename: csvName, mimeType: 'text/csv', content: Buffer.from('\ufeff' + report.fullCsv(res), 'utf8') }] : undefined;
 
     try {
-        await gmail.sendEmail({ to, subject, body: text, bodyHtml });
+        await gmail.sendEmail({ to, subject, body, bodyHtml, attachments });
         console.log(`[SWEEP] ${subject} → ${to}`);
         return { ...res, text, sent: true, to };
     } catch (e) {
