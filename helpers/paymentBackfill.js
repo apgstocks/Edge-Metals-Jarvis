@@ -196,7 +196,7 @@ function plan({ qb, sales: allSales, receipts = [], fifoUnapplied = false, invoi
     }
     const sum = (a, k = 'amount') => r2(a.reduce((t, x) => t + x[k], 0));
     const oldestOpen = sales.filter((x) => x.balance !== null && x.balance !== undefined && r2(x.balance - (covered.get(x.id) || 0)) > CENT)
-        .map((x) => ({ invoice_no: x.invoice_no || null, container_no: x.container_no || null, date: x.date || null, open: r2(x.balance - (covered.get(x.id) || 0)) })).sort((a, b) => String(a.date).localeCompare(String(b.date)));
+        .map((x) => ({ sale_id: x.id, customer: x.customer, invoice_no: x.invoice_no || null, container_no: x.container_no || null, date: x.date || null, open: r2(x.balance - (covered.get(x.id) || 0)) })).sort((a, b) => String(a.date).localeCompare(String(b.date)));
     const openOf = (x) => r2(Number(x.balance) || 0);
     const invoicePageReport = page ? {
         notOnPage: page.notOnPage.filter((x) => openOf(x) > CENT).map((x) => ({ invoice_no: x.invoice_no || null, container_no: x.container_no || null, date: x.date || null, customer: x.customer, open: openOf(x), created_by: x.created_by || null })),
@@ -275,12 +275,25 @@ function bankHints(openSales, bankRows, { usedDepositIds = new Set(), maxDays = 
     const day = (d) => Date.parse(String(d).slice(0, 10) + 'T12:00:00Z');
     const deps = (bankRows || []).filter((r) => r && r.direction === 'in' && !r.excluded && !r.matched && r.date && Number(r.amount) > 0 && !usedDepositIds.has(r.id));
     const taken = new Set(); const hints = [];
-    for (const s of [...openSales].sort((a, b) => String(a.date).localeCompare(String(b.date)))) {
+    // a few cents or dollars left on an invoice is a rounding/fee residue, not something a deposit "confirms"
+    for (const s of [...openSales].filter((x) => x.open >= 100).sort((a, b) => String(a.date).localeCompare(String(b.date)))) {
         const d = deps.filter((x) => !taken.has(x.id) && cents(s.open) - cents(x.amount) >= 0 && cents(s.open) - cents(x.amount) <= FEE_TOLERANCE * 100 && day(x.date) >= day(s.date) - 86400000 && day(x.date) <= day(s.date) + maxDays * 864e5)
             .sort((a, b) => String(a.date).localeCompare(String(b.date)))[0];
-        if (d) { taken.add(d.id); hints.push({ invoice_no: s.invoice_no, container_no: s.container_no, sale_date: s.date, open: s.open, deposit_id: d.id, deposit_date: String(d.date).slice(0, 10), desc: d.desc || '' }); }
+        if (d) { taken.add(d.id); hints.push({ sale_id: s.sale_id, customer: s.customer, invoice_no: s.invoice_no, container_no: s.container_no, sale_date: s.date, open: s.open, deposit_id: d.id, deposit_amount: r2(d.amount), deposit_date: String(d.date).slice(0, 10), desc: d.desc || '', bank: d.bank || null }); }
     }
     return { hints, money: r2(hints.reduce((t, h) => t + h.open, 0)), of: openSales.length };
 }
 
-module.exports = { FEE_TOLERANCE, onInvoicePage, plan, apply, modeOf, bankOf, verifyWithBank, crossCheck, bankHints, BANK_DAYS };
+// A hint becomes a PROPOSED receipt (never written here). Money = the deposit; a small shortfall is a wire fee, said on the receipt.
+function hintReceipts(hints) {
+    return hints.map((h) => {
+        const short = r2(h.open - h.deposit_amount);
+        const al = { sale_id: h.sale_id, amount: h.deposit_amount };
+        if (short > 0.01) { al.deduction_amount = short; al.deduction_reason = 'bank_charge'; al.deduction_note = 'wire fee: bank deposit was this much short of the invoice'; }
+        return { ref: `PLAID:${h.deposit_id}:${KEY(h.invoice_no || h.container_no)}`, qb_payment: null, customer: h.customer, date: h.deposit_date, amount: h.deposit_amount, mode: 'Wire', mode_guessed: false,
+            bank: bankOf(h.bank), allocations: [al], from_bank: true,
+            note: `Applied from bank deposit ${h.deposit_id} "${String(h.desc).slice(0, 50)}" - exact amount, nothing in QuickBooks` };
+    });
+}
+
+module.exports = { FEE_TOLERANCE, hintReceipts, onInvoicePage, plan, apply, modeOf, bankOf, verifyWithBank, crossCheck, bankHints, BANK_DAYS };

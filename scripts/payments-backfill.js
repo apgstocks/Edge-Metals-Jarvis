@@ -14,6 +14,7 @@ const arg = (k) => { const a = process.argv.find((x) => x.startsWith(`--${k}=`))
 const WRITE = process.argv.includes('--write');
 const BANK_ONLY = process.argv.includes('--bank-verified-only');   // with --write: only receipts a Plaid bank deposit confirms
 const JARVIS_SALES_ONLY = process.argv.includes('--jarvis-sales');   // old behaviour: trust Jarvis's sales table instead of the invoice page
+const APPLY_BANK_HINTS = process.argv.includes('--apply-bank-hints');   // ALSO write receipts for sales a bank deposit of that exact amount settles
 const FIFO = process.argv.includes('--apply-unapplied');   // also apply cash QuickBooks holds unapplied, oldest invoice first
 const only = (arg('customer') || '').toLowerCase();
 const money = (n) => '$' + (Math.round(n * 100) / 100).toLocaleString('en-US', { minimumFractionDigits: 2 });
@@ -84,7 +85,14 @@ async function pull(client, table, where, cap = 20000) {
     const usedIds = new Set(bv.rows.filter((r) => r.bank_check.status === 'verified').map((r) => r.bank_check.deposit_id));
     const bh = pb.bankHints(plan.oldestOpen, bankRows, { usedDepositIds: usedIds });
     console.log(`\nOf the ${bh.of} sales still open, ${bh.hints.length} have an unused bank deposit of that amount (or up to $50 less, a wire fee) after the invoice date: ${money(bh.money)}`);
-    for (const h of bh.hints.slice(0, 8)) console.log(`      ${String(h.invoice_no || h.container_no).padEnd(24)} ${money(h.open).padStart(14)}  deposit ${h.deposit_date} "${String(h.desc).slice(0, 36)}"`);
+    for (const h of bh.hints.slice(0, 25)) console.log(`      ${String(h.invoice_no || h.container_no).padEnd(24)} ${money(h.open).padStart(14)}  deposit ${h.deposit_date} "${String(h.desc).slice(0, 36)}"`);
+    const hintRcpts = pb.hintReceipts(bh.hints);
+    if (APPLY_BANK_HINTS) { plan.proposed = plan.proposed.concat(hintRcpts.map((r) => ({ ...r, bank_check: { status: 'verified', deposit_id: r.ref.split(':')[1] } }))); }
+    else if (hintRcpts.length) console.log(`  (Not applied. Add --apply-bank-hints to record these ${hintRcpts.length} as receipts from the bank deposits.)`);
+    const hintedIds = new Set(bh.hints.map((h) => h.sale_id));
+    const still = plan.oldestOpen.filter((x) => !hintedIds.has(x.sale_id));
+    console.log(`\nStill open with NO bank deposit to support payment: ${still.length} sales, ${money(still.reduce((a, x) => a + x.open, 0))}`);
+    for (const x of still.slice(0, 40)) console.log(`      ${String(x.invoice_no || x.container_no || '-').padEnd(26)} ${x.date || '-'}  ${money(x.open).padStart(14)}`);
     if (plan.proposed.some((r) => r.matched_by_amount)) console.log(`  ${plan.proposed.filter((r) => r.matched_by_amount).length} receipts were matched to their invoice by exact amount only (noted on the receipt).`);
     if (only) {
         const cc = pb.crossCheck({ sales: rows, qbPayments: payments.filter((p) => inScope(p.CustomerRef)), bankRows, customer: only, since });

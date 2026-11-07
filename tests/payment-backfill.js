@@ -175,6 +175,20 @@ const qpay = (Id, customer, amount, lines, extra = {}) => ({ Id, TxnDate: '2026-
     const srcP = fs.readFileSync(path.join(ROOT, 'scripts/payments-backfill.js'), 'utf8');
     ck('the script reads the invoice page by default, and stops (does not silently fall back) if it cannot', /listAllInvoices\(true\)/.test(srcP) && /process\.exit\(1\)/.test(srcP) && /--jarvis-sales/.test(srcP));
 
+    section('D8. bank deposits that settle open sales (what the VM output showed: 20 of 33 had one)');
+    const hh = pb.bankHints([{ sale_id: 's1', customer: 'Rad Metal', invoice_no: 'A-1', date: '2026-08-04', open: 55368 }, { sale_id: 's2', customer: 'Rad Metal', invoice_no: 'A-2', date: '2026-05-01', open: 0.2 }, { sale_id: 's3', customer: 'Rad Metal', invoice_no: 'A-3', date: '2026-08-05', open: 54000 }],
+        [{ id: 'w1', date: '2026-08-24', amount: 55368, direction: 'in', desc: 'WIRE IN', bank: 'Chase Business' }, { id: 'w2', date: '2026-05-05', amount: 0.2, direction: 'in', desc: 'ACH' }, { id: 'w3', date: '2026-08-27', amount: 53980, direction: 'in', desc: 'WIRE IN' }]);
+    ck('a residue under $100 is not "confirmed" by a deposit', !hh.hints.some((h) => h.invoice_no === 'A-2'));
+    const hr = pb.hintReceipts(hh.hints);
+    const r0 = hr.find((r) => /A1/.test(r.ref)), r3 = hr.find((r) => /A3/.test(r.ref));
+    ck('a hint becomes a proposed Wire receipt dated at the deposit, with the sale and bank, flagged from_bank', r0 && r0.from_bank === true && r0.date === '2026-08-24' && r0.amount === 55368 && r0.mode === 'Wire' && r0.bank === 'Chase Bank' && r0.allocations[0].sale_id === 's1', JSON.stringify(r0));
+    ck('a deposit $20 short books the $20 as a bank charge', r3 && r3.amount === 53980 && r3.allocations[0].deduction_amount === 20 && r3.allocations[0].deduction_reason === 'bank_charge', JSON.stringify(r3));
+    const hs = await mk('Hint Co', 'H-1', '2026-08-04', 55368, 1, 'HHHH1111111');
+    const ho = await pb.apply(pb.hintReceipts([{ sale_id: hs, customer: 'Hint Co', invoice_no: 'H-1', open: 55368, deposit_id: 'w1', deposit_amount: 55368, deposit_date: '2026-08-24', desc: 'WIRE IN', bank: 'Chase Business' }]), { addReceipt: receipts.addReceipt });
+    ck('written: the sale closes', ho.written === 1 && rows().find((x) => x.id === hs).balance === 0, JSON.stringify(ho));
+    const srcH = fs.readFileSync(path.join(ROOT, 'scripts/payments-backfill.js'), 'utf8');
+    ck('bank-hint receipts are written only behind --apply-bank-hints (and --write)', /APPLY_BANK_HINTS/.test(srcH) && /Add --apply-bank-hints/.test(srcH));
+
     section('E. the script is dry by default');
     const src = fs.readFileSync(path.join(ROOT, 'scripts/payments-backfill.js'), 'utf8');
     ck('writes only behind --write', /const WRITE = process\.argv\.includes\('--write'\)/.test(src) && /if \(!WRITE\) \{[^}]*DRY RUN[^}]*return;/.test(src));
