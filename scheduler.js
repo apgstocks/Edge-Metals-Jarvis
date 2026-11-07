@@ -1608,6 +1608,8 @@ function start() {
             findRemittance: require('./helpers/remittanceMail').liveFinder(),
             // QuickBooks decides who still owes; if it cannot be read, nobody is chased.
             qbSurvey: require('./helpers/paymentTruth').liveSurvey(),
+            // Money already in the bank feed (Plaid) but not matched yet holds the follow-up.
+            findDeposit: require('./helpers/bankDepositCheck').liveFinder(),
             // A customer email is STAGED on WhatsApp and goes only after her yes (workflow/actions.js).
             stageCustomerEmail: async (draft, step) => {
                 const st = cfg.getSettings ? cfg.getSettings() : {};

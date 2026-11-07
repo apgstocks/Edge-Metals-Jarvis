@@ -213,7 +213,7 @@ async function run(opts = {}) {
     // ── CUSTOMER PAYMENTS (2026-11-07) ───────────────────────────────────
     // After the pickups and walled off from them: whatever happens here, a pickup rung
     // has already fired, and a failure here is reported rather than thrown.
-    try { out.payments = await runPayments({ sendToManager, sendToTeam, now: opts.now, drafts: opts.paymentDrafts, findRemittance: opts.findRemittance, stageCustomerEmail: opts.stageCustomerEmail, qbSurvey: opts.qbSurvey }); }
+    try { out.payments = await runPayments({ sendToManager, sendToTeam, now: opts.now, drafts: opts.paymentDrafts, findRemittance: opts.findRemittance, stageCustomerEmail: opts.stageCustomerEmail, qbSurvey: opts.qbSurvey, findDeposit: opts.findDeposit }); }
     catch (e) { out.payments = { asked: 0, chased: 0, escalated: 0, failed: [{ why: 'payment follow-ups could not run: ' + (e && e.message) }] }; }
     return out;
 }
@@ -223,7 +223,7 @@ async function run(opts = {}) {
 // message to her for the asks and chases, one to the team per escalation. A rung is
 // recorded only AFTER the message went, so a failed send is retried next run rather than
 // buried.
-async function runPayments({ sendToManager, sendToTeam, now, drafts, findRemittance, stageCustomerEmail, qbSurvey }) {
+async function runPayments({ sendToManager, sendToTeam, now, drafts, findRemittance, stageCustomerEmail, qbSurvey, findDeposit }) {
     const res = { asked: 0, chased: 0, escalated: 0, held: 0, staged: 0, failed: [] };
     if (String(process.env.PAYMENT_CHASE || '').toLowerCase() === 'off') return { ...res, off: true };
     const chaser = require('./paymentChaser');
@@ -281,7 +281,7 @@ async function runPayments({ sendToManager, sendToTeam, now, drafts, findRemitta
     // Mail from the customer that looks like proof of payment HOLDS the follow-up and tells her to look (Apsara, 2026-11-07).
     // Read-only: nothing is marked paid. A hold lapses after HOLD_DAYS if no receipt has been recorded, then the ladder resumes.
     const heldNotes = [];
-    if (typeof findRemittance === 'function' && todo.length) {
+    if ((typeof findRemittance === 'function' || typeof findDeposit === 'function') && todo.length) {
         const HOLD_MS = require('./remittanceMail').HOLD_DAYS * 86400000;
         const keep = [];
         for (const x of todo) {
@@ -291,13 +291,18 @@ async function runPayments({ sendToManager, sendToTeam, now, drafts, findRemitta
             let hit = null;
             try {
                 const since = entry && entry.firstAt ? Date.parse(entry.firstAt) : t - 45 * 86400000;
-                hit = await findRemittance(x.draft, { sinceMs: since, ignoreId: stale ? held.id : undefined });
+                const opts = { sinceMs: since, ignoreId: stale ? held.id : undefined };
+                if (typeof findRemittance === 'function') hit = await findRemittance(x.draft, opts);
+                // The bank feed too (Apsara, 2026-11-07: "You have Plaid as well"): money that has already ARRIVED but is not matched yet.
+                if (!hit && typeof findDeposit === 'function') hit = await findDeposit(x.draft, opts);
             } catch (e) { hit = null; }
             if (!hit) { keep.push(x); continue; }
             res.held += 1;
             if (!held || held.id !== hit.id) {
                 log[x.key] = { ...(entry || { set: null, firstAt: new Date(t).toISOString(), lastStep: null, lastAt: null, customer: x.draft.customer }), held: { id: hit.id, at: hit.dateMs || t } };
-                heldNotes.push(`${x.draft.customer} \u2014 ${chaser.money(x.draft.total)} open: they emailed something that looks like proof of payment (${hit.subject ? '"' + hit.subject + '"' : 'no subject'}). Check it and record the receipt; follow-up on hold.`);
+                heldNotes.push(hit.kind === 'bank'
+                    ? `${x.draft.customer} \u2014 ${chaser.money(x.draft.total)} open: the bank shows a ${hit.subject} that may be theirs. Match it to their invoices; follow-up on hold.`
+                    : `${x.draft.customer} \u2014 ${chaser.money(x.draft.total)} open: they emailed something that looks like proof of payment (${hit.subject ? '"' + hit.subject + '"' : 'no subject'}). Check it and record the receipt; follow-up on hold.`);
             }
         }
         todo = keep;
