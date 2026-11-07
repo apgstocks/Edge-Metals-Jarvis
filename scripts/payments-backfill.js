@@ -12,6 +12,8 @@ const salesReceipts = require('../helpers/salesReceipts');
 const pb = require('../helpers/paymentBackfill');
 const arg = (k) => { const a = process.argv.find((x) => x.startsWith(`--${k}=`)); return a ? a.slice(k.length + 3) : null; };
 const WRITE = process.argv.includes('--write');
+const BANK_ONLY = process.argv.includes('--bank-verified-only');   // with --write: only receipts a Plaid bank deposit confirms
+const FIFO = process.argv.includes('--apply-unapplied');   // also apply cash QuickBooks holds unapplied, oldest invoice first
 const only = (arg('customer') || '').toLowerCase();
 const money = (n) => '$' + (Math.round(n * 100) / 100).toLocaleString('en-US', { minimumFractionDigits: 2 });
 
@@ -35,30 +37,44 @@ async function pull(client, table, where, cap = 20000) {
     console.log(`QuickBooks: ${payments.length} payments, ${invoices.length} invoices`);
     // With --customer, QuickBooks payments of OTHER customers are not "unplaced", they are simply not in scope.
     const inScope = (c) => !only || String((c && c.name) || '').toLowerCase().includes(only);
-    const plan = pb.plan({ qb: { payments: payments.filter((p) => inScope(p.CustomerRef)), invoices: invoices.filter((i) => inScope(i.CustomerRef)) }, sales: rows, receipts: salesReceipts.list() });
+    const plan = pb.plan({ qb: { payments: payments.filter((p) => inScope(p.CustomerRef)), invoices: invoices.filter((i) => inScope(i.CustomerRef)) }, sales: rows, receipts: salesReceipts.list(), fifoUnapplied: FIFO });
     const t = plan.totals;
     console.log(`\nWould add ${t.receipts} receipts (${money(t.money)}) for ${t.customers} customers.  Already imported: ${t.alreadyImported}.`);
     if (t.modeGuessed) console.log(`  ${t.modeGuessed} receipts have a payment method QuickBooks did not name - set to Wire (check them).`);
     console.log(`Could NOT place: ${money(t.unmatched)} on QuickBooks invoices with no Jarvis sale (${plan.unmatched.length} lines); ${money(t.leftover)} more than the sale still showed outstanding.`);
     console.log(`Paid in QuickBooks but nothing explains it in Jarvis: ${plan.unexplained.length} sales, ${money(t.unexplained)}.`);
+    if (t.unappliedCash) console.log(`QuickBooks holds ${money(t.unappliedCash)} of customer cash applied to NO invoice (lump payments). ${FIFO ? `Applying it to the oldest open invoices: ${money(t.unappliedPlaced)} placed.` : 'NOT applied here - add --apply-unapplied to apply it oldest invoice first.'}`);
     const rem = plan.remaining;
     console.log(`\nStill open in Jarvis AFTER this: ${rem.qbOpen.n + rem.qbPaidUnexplained.n + rem.notInQuickbooks.n} sales`);
     console.log(`  QuickBooks agrees they are unpaid:            ${String(rem.qbOpen.n).padStart(4)} sales  ${money(rem.qbOpen.amount)}`);
     console.log(`  QuickBooks says paid, nothing explains it:    ${String(rem.qbPaidUnexplained.n).padStart(4)} sales  ${money(rem.qbPaidUnexplained.amount)}`);
     console.log(`  No matching invoice found in QuickBooks:      ${String(rem.notInQuickbooks.n).padStart(4)} sales  ${money(rem.notInQuickbooks.amount)}`);
+    const oo = plan.oldestOpen;
+    if (oo.length) console.log(`  Oldest still open: ${oo.slice(0, 3).map((x) => `${x.invoice_no || x.container_no || '-'} (${x.date}) ${money(x.open)}`).join('; ')}   Newest: ${oo.slice(-1).map((x) => `${x.invoice_no || x.container_no || '-'} (${x.date})`)[0]}`);
     for (const x of rem.notInQuickbooksList.slice(0, 5)) console.log(`      e.g. ${x.invoice_no || '-'} / ${x.container_no || '-'} (${x.date || '-'}) ${money(x.open)}`);
+    // CHECK AGAINST THE BANK (Plaid feed): is there a real deposit of that amount near each receipt's date?
+    let bankRows = []; try { bankRows = require('../helpers/bankLedger').list(); } catch (e) { /* no bank feed here */ }
+    const bv = pb.verifyWithBank(plan.proposed, bankRows);
+    const bt = bv.totals;
+    console.log(`\nBANK CHECK (Plaid feed ${bv.coverage.from || 'empty'} to ${bv.coverage.to || '-'}, ${bv.coverage.deposits} deposits):`);
+    console.log(`  confirmed by a deposit of the same amount within ${pb.BANK_DAYS} days: ${String(bt.verified).padStart(4)} receipts  ${money(bt.verifiedMoney)}`);
+    console.log(`  NOT found in the bank feed:                                ${String(bt.notFound).padStart(4)} receipts  ${money(bt.notFoundMoney)}`);
+    console.log(`  older than the bank feed (cannot be checked):              ${String(bt.outsideFeed).padStart(4)} receipts  ${money(bt.outsideFeedMoney)}`);
+    plan.proposed = bv.rows;
     const per = {}; for (const r of plan.proposed) { (per[r.customer] = per[r.customer] || { n: 0, m: 0 }); per[r.customer].n++; per[r.customer].m += r.amount; }
     console.log('\nBy customer (largest first):');
     for (const [c, v] of Object.entries(per).sort((a, b) => b[1].m - a[1].m).slice(0, 15)) console.log(`  ${c.padEnd(34)} ${String(v.n).padStart(4)} receipts  ${money(v.m)}`);
     if (arg('csv')) {
         const esc = (x) => '"' + String(x == null ? '' : x).replace(/"/g, '""') + '"';
-        const lines = ['ref,customer,date,amount,mode,mode_guessed,bank,sales_allocated'];
-        for (const r of plan.proposed) lines.push([r.ref, r.customer, r.date, r.amount, r.mode, r.mode_guessed, r.bank, r.allocations.length].map(esc).join(','));
+        const lines = ['ref,customer,date,amount,mode,mode_guessed,bank,sales_allocated,bank_check'];
+        for (const r of plan.proposed) lines.push([r.ref, r.customer, r.date, r.amount, r.mode, r.mode_guessed, r.bank, r.allocations.length, r.bank_check && r.bank_check.status].map(esc).join(','));
         fs.writeFileSync(arg('csv'), lines.join('\n')); console.log(`\nProposed receipts written to ${arg('csv')}`);
     }
     if (!WRITE) { console.log('\nDRY RUN - nothing was written. Run again with --write to add these receipts.'); return; }
     const existing = new Set(salesReceipts.list().map((r) => String(r.ref || '')));
-    const out = await pb.apply(plan.proposed, { addReceipt: salesReceipts.addReceipt, existingRefs: existing });
+    const toWrite = BANK_ONLY ? plan.proposed.filter((r) => r.bank_check && r.bank_check.status === 'verified') : plan.proposed;
+    if (BANK_ONLY) console.log(`\n--bank-verified-only: writing ${toWrite.length} of ${plan.proposed.length} receipts (the ones a bank deposit confirms).`);
+    const out = await pb.apply(toWrite, { addReceipt: salesReceipts.addReceipt, existingRefs: existing });
     console.log(`\nWROTE ${out.written} receipts, skipped ${out.skipped}, failed ${out.failed.length}.`);
     for (const f of out.failed.slice(0, 20)) console.log(`  failed ${f.ref} ${f.customer}: ${f.why}`);
 })().catch((e) => { console.error('payments-backfill failed:', e.message); process.exit(1); });

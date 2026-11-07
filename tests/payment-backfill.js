@@ -78,6 +78,35 @@ const qpay = (Id, customer, amount, lines, extra = {}) => ({ Id, TxnDate: '2026-
     const o3 = await pb.apply([bad, ...good], { addReceipt: receipts.addReceipt });
     ck('the bad row is reported, the good one is written', o3.failed.length === 1 && /no sale/.test(o3.failed[0].why) && o3.written === 1 && rows().find((s) => s.id === d1).balance === 0, JSON.stringify(o3));
 
+    section('D2. a lump payment QuickBooks holds UNAPPLIED (Apsara: "everything is paid except the latest ones")');
+    const l1 = await mk('Lump Co', 'L-1', '2026-09-01', 5000, 1, 'LLLL1111111'), l2 = await mk('Lump Co', 'L-2', '2026-09-10', 5000, 1, 'LLLL2222222'), l3 = await mk('Lump Co', 'L-3', '2026-11-06', 5000, 1, 'LLLL3333333');
+    const lumpQb = { invoices: [qinv('51', 'L-1', 5000, 5000), qinv('52', 'L-2', 5000, 5000), qinv('53', 'L-3', 5000, 5000)],
+        payments: [{ Id: '600', TxnDate: '2026-10-30', TotalAmt: 10000, CustomerRef: { name: 'Lump Co' }, PaymentMethodRef: { name: 'Wire' }, DepositToAccountRef: { name: 'Chase Business' }, Line: [] }] };
+    const noFifo = pb.plan({ qb: lumpQb, sales: rows(), receipts: receipts.list() });
+    ck('unapplied cash is LISTED, and not applied unless asked', noFifo.unappliedCash.length === 1 && noFifo.unappliedCash[0].amount === 10000 && !noFifo.proposed.some((p) => p.customer === 'Lump Co') && noFifo.totals.unappliedCash === 10000, JSON.stringify(noFifo.totals));
+    const fifo = pb.plan({ qb: lumpQb, sales: rows(), receipts: receipts.list(), fifoUnapplied: true });
+    const lp = fifo.proposed.find((p) => p.customer === 'Lump Co');
+    ck('applied oldest invoice first: L-1 and L-2 paid, the latest L-3 stays open', lp && lp.amount === 10000 && lp.allocations.map((a) => a.sale_id).join() === [l1, l2].join() && fifo.oldestOpen.some((x) => x.invoice_no === 'L-3' && x.open === 5000) && !fifo.oldestOpen.some((x) => x.invoice_no === 'L-1'), JSON.stringify(fifo.oldestOpen));
+    ck('  the note says it was an oldest-first application, bank mapped, flagged as unapplied', /unapplied/.test(lp.note) && lp.unapplied === true && lp.bank === 'Chase Bank');
+    const wl = await pb.apply(fifo.proposed.filter((p) => p.customer === 'Lump Co'), { addReceipt: receipts.addReceipt });
+    ck('written: Lump Co now owes only the latest $5,000', wl.written === 1 && rows().filter((s) => s.customer === 'Lump Co' && s.balance > 0.005).map((s) => s.invoice_no).join() === 'L-3');
+    ck('re-planning does not apply that cash twice', pb.plan({ qb: lumpQb, sales: rows(), receipts: receipts.list(), fifoUnapplied: true }).proposed.filter((p) => p.customer === 'Lump Co').length === 0);
+
+    section('D3. checked against the bank feed (Plaid)');
+    const P = [{ ref: 'a', customer: 'X', date: '2026-10-20', amount: 15000 }, { ref: 'b', customer: 'X', date: '2026-10-21', amount: 15000 }, { ref: 'c', customer: 'Y', date: '2026-10-01', amount: 700 }, { ref: 'd', customer: 'Z', date: '2026-03-01', amount: 99 }];
+    const bank = [{ id: 'b1', date: '2026-10-22', amount: 15000, direction: 'in' }, { id: 'b2', date: '2026-10-05', amount: 700, direction: 'in' }, { id: 'b3', date: '2026-10-21', amount: 15000, direction: 'out' }, { id: 'b4', date: '2026-09-15', amount: 5, direction: 'in' }];
+    const v = pb.verifyWithBank(P, bank);
+    const st = Object.fromEntries(v.rows.map((r) => [r.ref, r.bank_check.status]));
+    ck('same amount within 10 days = verified; the deposit is used ONCE (two $15,000 receipts, one deposit)', [st.a, st.b].filter((x) => x === 'verified').length === 1, JSON.stringify(st));
+    ck('  the nearer receipt gets it (b is 1 day from the deposit, a is 2)', st.b === 'verified');
+    ck('money OUT never vouches for money in (the outgoing $15,000 deposit-lookalike is ignored)', pb.verifyWithBank([{ ref: 'o', customer: 'X', date: '2026-10-21', amount: 15000 }], [{ id: 'o1', date: '2026-10-21', amount: 15000, direction: 'out' }]).rows[0].bank_check.status !== 'verified');
+    ck('a receipt 4 days from a matching deposit is verified', st.c === 'verified');
+    ck('older than the feed is "outside-feed", not unverified', st.d === 'outside-feed' && v.coverage.from === '2026-09-15');
+    ck('totals', v.totals.verified === 2 && v.totals.notFound === 1 && v.totals.outsideFeed === 1 && v.totals.verifiedMoney === 15700, JSON.stringify(v.totals));
+    ck('an empty bank feed verifies nothing', pb.verifyWithBank(P, []).totals.verified === 0);
+    const src1 = fs.readFileSync(path.join(ROOT, 'scripts/payments-backfill.js'), 'utf8');
+    ck('the script runs the bank check and can restrict --write to verified receipts', /verifyWithBank/.test(src1) && /--bank-verified-only/.test(src1) && /status === 'verified'/.test(src1));
+
     section('E. the script is dry by default');
     const src = fs.readFileSync(path.join(ROOT, 'scripts/payments-backfill.js'), 'utf8');
     ck('writes only behind --write', /const WRITE = process\.argv\.includes\('--write'\)/.test(src) && /if \(!WRITE\) \{[^}]*DRY RUN[^}]*return;/.test(src));
