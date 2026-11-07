@@ -50,14 +50,38 @@ module.exports = function (app, ctx) {
                     console.warn('[SPEND] could not read ' + what + ' for names:', e && e.message);
                 }
             };
+            // ── AND WHICH RECORD IS BEHIND EACH PAYMENT ──────────────────
+            // Apsara, 2026-11-07: "What if i want ti see the correspodning
+            // loads/invoices based on that filter".
+            //
+            // Built in the SAME pass as the names, off stores already being
+            // read — no extra file reads for this. `doc` carries a title she
+            // will recognise and, when one was generated, the stored PDF.
+            // A record with no document gets a title and no link, because a
+            // dead link is worse than an honest absence.
+            const docs = {};
+            const doc = (kind, id, title, link) => {
+                if (id == null || !title) return;
+                docs[`${kind}:${id}`] = link ? { title, link } : { title };
+            };
             // Yard purchases — the seller on the load. This is the one she
             // asked for: Edge Yard's own counterparties.
             safely('loads', () => {
-                for (const l of (require('./helpers/loads').loadLoads() || [])) put('load', l.id, l.seller);
+                for (const l of (require('./helpers/loads').loadLoads() || [])) {
+                    put('load', l.id, l.seller);
+                    const when = String(l.date || '').slice(0, 10);
+                    doc('load', l.id, `Load ${l.id}${when ? ' \u00b7 ' + when : ''}`,
+                        l.pdf_link || l.receipt_pdf_link || null);
+                }
             });
             // Sales — the buyer on the outbound load. The money-IN side.
             safely('outbound loads', () => {
-                for (const l of (require('./helpers/outboundLoads').loadOutboundLoads() || [])) put('sale', l.id, l.buyer);
+                for (const l of (require('./helpers/outboundLoads').loadOutboundLoads() || [])) {
+                    put('sale', l.id, l.buyer);
+                    const when = String(l.date || '').slice(0, 10);
+                    doc('sale', l.id, `Sale ${l.id}${when ? ' \u00b7 ' + when : ''}`,
+                        l.pdf_link || l.receipt_pdf_link || null);
+                }
             });
             // Edge Yard haulage: a trucker payment's load_id IS the bill id
             // (helpers/truckerBills.js:21), and the carrier is `company`.
@@ -81,6 +105,7 @@ module.exports = function (app, ctx) {
 
             return buildSpendReport({
                 parties,
+                docs,
                 // Each narrows its OWN side: bought_from the money out,
                 // sold_to the money in. Not validated, same as bank and
                 // paid_via — "Not recorded" is a legitimate thing to ask for.

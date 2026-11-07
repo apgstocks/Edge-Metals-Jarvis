@@ -131,8 +131,21 @@ function companyOfKind(kind) {
 
 const partyKey = (kind, ref) => `${kind}:${ref == null ? '' : ref}`;
 
-function collectRows({ payments, expenses, from, to, parties = null }) {
+function collectRows({ payments, expenses, from, to, parties = null, docs = null }) {
     const rows = [];
+    // ── WHICH RECORD IS BEHIND THIS PAYMENT ──────────────────────────────
+    // Apsara, 2026-11-07: "What if i want ti see the correspodning
+    // loads/invoices based on that filter".
+    //
+    // The drill-down listed the PAYMENTS and stopped there — she could see
+    // that $12,784.22 went out in four payments and not which loads those
+    // four paid for. Keyed `kind:ref` like `parties`, injected like
+    // `parties`, and OPTIONAL like `parties`, so the voice path and ~50 test
+    // call sites that pass neither are untouched.
+    const docFor = (kind, ref) => {
+        if (!docs) return null;
+        return docs[partyKey(kind, ref)] || null;
+    };
     const nameFor = (kind, ref) => {
         if (!parties) return null;
         const v = parties[partyKey(kind, ref)];
@@ -271,6 +284,13 @@ function collectRows({ payments, expenses, from, to, parties = null }) {
             side: isSale ? 'sold_to' : 'bought_from',
             company: companyOfKind(isSale ? 'sale' : isTrucker ? 'trucker' : isBill ? 'supplier'
                 : isSaleCost ? 'sale_cost' : isMetalsTrucking ? 'metals_trucking' : 'load'),
+            // { title, link } when the record was found and has a document,
+            // { title } when it exists but has no PDF, null when nothing is
+            // injected. A missing document is reported as missing rather
+            // than as a dead link.
+            doc: docFor(isSale ? 'sale' : isTrucker ? 'trucker' : isBill ? 'supplier'
+                : isSaleCost ? 'sale_cost' : isMetalsTrucking ? 'metals_trucking' : 'load',
+                p.load_id),
         });
     }
 
@@ -328,7 +348,7 @@ function collectRows({ payments, expenses, from, to, parties = null }) {
 // The COLUMNS still list every method, so the table keeps its shape and it is
 // obvious the others are empty by filter rather than by accident.
 function buildSpendReport({ payments, expenses, pettyEntries, from, to, method, bank, paidVia,
-                           boughtFrom, soldTo, company, parties = null } = {}) {
+                           boughtFrom, soldTo, company, parties = null, docs = null } = {}) {
     const columns = METHODS.concat([UNCLASSIFIED]);
     // Only a method the report actually reports in. Anything else is ignored
     // rather than returning nothing — a typo in a query string should not look
@@ -381,7 +401,7 @@ function buildSpendReport({ payments, expenses, pettyEntries, from, to, method, 
     // changes and nothing else does.
     const wantedCompany = String(company || '').trim();
 
-    const all = collectRows({ payments, expenses, from, to, parties })
+    const all = collectRows({ payments, expenses, from, to, parties, docs })
         .filter(r => !wantedCompany || r.company === wantedCompany)
         .filter(r => !wanted || r.method === wanted)
         .filter(r => !wantedBank || String(r.bank || '').toLowerCase() === wantedBank.toLowerCase())
@@ -511,7 +531,7 @@ function buildSpendReport({ payments, expenses, pettyEntries, from, to, method, 
     // Found because a mutation that made a missing name throw died in
     // bankColumns rather than anywhere the names are used — the mutation
     // pointing at the real shape of the code, which is what it is for.
-    const everything = collectRows({ payments, expenses, from: null, to: null, parties });
+    const everything = collectRows({ payments, expenses, from: null, to: null, parties, docs });
     const sortGapLast = (a, b) => (a === NOT_RECORDED) - (b === NOT_RECORDED) || a.localeCompare(b);
     const namesOf = (dir) => [...new Set(everything
         .filter((r) => (dir === 'in' ? r.direction === 'in' : r.direction !== 'in'))

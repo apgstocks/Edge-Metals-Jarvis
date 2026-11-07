@@ -469,6 +469,26 @@ async function renderSpendReportTab() {
       </div>`;
   };
 
+  // ── EVERY KIND WAS LABELLED "LOAD" OR "EXP" ────────────────────────────
+  // Apsara, 2026-11-07: "What if i want ti see the correspodning
+  // loads/invoices based on that filter".
+  //
+  // Two faults in that drill-down, and the smaller one was a lie on screen.
+  // The tag was `r.kind === 'load' ? 'LOAD' : 'EXP'`, so a trucker payment,
+  // a supplier payment, a sale cost and Edge Metals haulage ALL printed as
+  // "EXP". Six kinds, two labels, four of them wrong.
+  //
+  // The bigger one: the row named the payment and stopped. She could see
+  // that money went out in four payments and not which loads those four
+  // paid for. Each row now carries the RECORD behind it — the load or sale,
+  // with its date — and links to the stored PDF when one was generated. No
+  // link when there is none, and it says so: a dead link is worse than an
+  // honest absence.
+  const KIND_TAG = {
+    load: 'LOAD', sale: 'SALE', trucker: 'TRUCKER', supplier: 'SUPPLIER',
+    sale_cost: 'SALE COST', metals_trucking: 'HAULAGE', expense: 'EXPENSE',
+  };
+
   // ── SIXTY CHIPS IS NOT A FILTER, IT IS A WALL ──────────────────────────
   // Apsara, 2026-11-07, on the counterparty rows: "What the hell bro".
   //
@@ -847,7 +867,15 @@ async function renderSpendReportTab() {
             <tbody>
               ${rep.rows.map(r => `
               <tr style="border-top:1px solid var(--border-subtle);">
-                <td class="st-head" style="padding:8px 12px;"><span style="font-family:var(--font-mono); font-size:10.5px; color:var(--text-faint);">${esc(r.kind === 'load' ? 'LOAD' : 'EXP')}</span> ${esc(r.label)}</td>
+                <td class="st-head" style="padding:8px 12px;">
+                  <span style="font-family:var(--font-mono); font-size:10.5px; color:var(--text-faint);">${esc(KIND_TAG[r.kind] || 'OTHER')}</span>
+                  ${r.doc && r.doc.link
+                    ? `<a href="${esc(r.doc.link)}" target="_blank" rel="noopener" style="color:var(--accent); text-decoration:none;">${esc(r.doc.title)} \u2197</a>`
+                    : `<span style="color:var(--text-strong);">${esc((r.doc && r.doc.title) || r.label)}</span>`}
+                  ${r.doc && !r.doc.link
+                    ? `<span style="font-size:11px; color:var(--text-faint); margin-left:6px;">no document generated</span>` : ''}
+                </td>
+                <td data-label="Counterparty" style="padding:8px 12px; color:${r.party === NOT_REC ? 'var(--status-warning, #d69e2e)' : 'var(--text-muted)'};">${esc(r.party || NOT_REC)}</td>
                 <td data-label="Date" style="padding:8px 12px; font-family:var(--font-mono); color:var(--text-muted); white-space:nowrap;">${esc(typeof fmtDate === 'function' ? fmtDate(r.date) : r.date)}</td>
                 <td data-label="Paid by" style="padding:8px 12px; font-family:var(--font-mono); color:var(--text-muted);">${esc(r.method)}</td>
                 <td data-label="Amount" style="padding:8px 12px; text-align:right; font-family:var(--font-mono); font-weight:700;">${esc(money(r.amount))}</td>

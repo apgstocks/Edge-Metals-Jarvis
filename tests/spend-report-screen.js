@@ -43,8 +43,16 @@ const MARK_WIRE = '  // ── TAKE THE DATES OFF THE SCREEN BEFORE EVERY RE-RUN
 function extract() {
     const h0 = SRC.indexOf(MARK_HELPERS);
     if (h0 < 0) throw new Error('the Spend report helpers block has moved — this test is now testing nothing');
-    const t0 = SRC.indexOf(MARK_TPL, h0);
-    if (t0 < 0) throw new Error('the Spend report template has moved');
+    // ── ANCHOR ON THE REAL TEMPLATE, NOT THE FIRST ONE ───────────────────
+    // renderSpendReportTab has TWO `$('viewRoot').innerHTML = \`` templates:
+    // a one-line error state ("Could not load the report") and the report
+    // itself. Taking the first match after the helpers picked the error one,
+    // which rendered 12kB of nothing and made section M's checks impossible
+    // to pass. Anchored on the pageHead call that only the real one has.
+    const anchor = SRC.indexOf("pageHead('Spend report'", h0);
+    if (anchor < 0) throw new Error('the Spend report template has moved');
+    const t0 = SRC.lastIndexOf(MARK_TPL, anchor);
+    if (t0 < 0) throw new Error('could not find the template that holds the Spend report');
     const open = t0 + MARK_TPL.length - 1;
     // The markup is full of nested template literals, so a backtick counter
     // gets this wrong. The render ends at the section close, once.
@@ -573,6 +581,70 @@ section('L — Export carries the SAME filters the page was drawn with');
         ck(`  ${q.replace('=', '')} reaches the query string`, src.includes(`'${q}'`),
            'a filter missing here makes the file a wider report than the page');
     }
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+section('M — the drill-down names the RECORD, and labels every kind');
+// ══════════════════════════════════════════════════════════════════════════
+// Apsara, 2026-11-07: "What if i want ti see the correspodning
+// loads/invoices based on that filter".
+{
+    const rows = [
+        { kind: 'load', date: '2026-11-03', method: 'Cash', amount: 12784.22,
+          label: 'Load 41', party: 'Randy Recycling',
+          doc: { title: 'Load 41 \u00b7 2026-11-02', link: 'https://drive/load41' } },
+        { kind: 'trucker', date: '2026-11-04', method: 'Zelle', amount: 300,
+          label: 'Trucker 7', party: 'Zimex', doc: { title: 'Trucker bill 7' } },
+        { kind: 'supplier', date: '2026-11-05', method: 'Wire', amount: 4000,
+          label: 'Supplier 55', party: 'Houston', doc: null },
+        { kind: 'expense', date: '2026-11-06', method: 'Cash', amount: 150,
+          label: 'Fuel', party: 'Not recorded', doc: null },
+    ];
+    // ── months MUST BE NON-EMPTY, OR THE ROWS ARE NEVER DRAWN ────────────
+    // The drill-down lives INSIDE the `rep.months.length ? ...` branch, so a
+    // fixture with rows and no months renders nothing — and that is a shape
+    // the engine cannot produce, because months are derived FROM the rows.
+    // My first version of this section passed rows with months: [] and every
+    // check failed for a reason that had nothing to do with the code. Third
+    // impossible fixture today; the rule is to build the fixture the way the
+    // engine would.
+    const months = [{ month: '2026-11', Cash: 12934.22, Wire: 4000, Zelle: 300,
+        total: rows.reduce((a, r) => a + r.amount, 0) }];
+    const { d, text } = render({ ...REAL, rows, months, count: rows.length });
+
+    // ── THE LABEL THAT WAS A LIE ─────────────────────────────────────────
+    // It was `kind === 'load' ? 'LOAD' : 'EXP'`, so a trucker, a supplier, a
+    // sale cost and Edge Metals haulage all printed as "EXP".
+    for (const tag of ['LOAD', 'TRUCKER', 'SUPPLIER', 'EXPENSE']) {
+        ck(`a ${tag.toLowerCase()} row is labelled ${tag}`, text.includes(tag), tag);
+    }
+    ck('  a trucker payment is NOT called an expense',
+       !/TRUCKER[\s\S]{0,80}Zimex[\s\S]{0,40}EXPENSE/.test(text),
+       'four of six kinds used to print as EXP');
+
+    // ── THE RECORD BEHIND THE PAYMENT ────────────────────────────────────
+    const link = [...d.querySelectorAll('a')].find((a) => /load41/.test(a.href));
+    ck('a payment with a stored document links to it', !!link, 'the whole ask');
+    ck('  showing the record, not the payment row',
+       link && /Load 41 \u00b7 2026-11-02/.test(link.textContent), link && link.textContent);
+    ck('  and opens in a new tab so her filters survive',
+       link && link.target === '_blank' && /noopener/.test(link.rel || ''));
+
+    ck('a record with NO document is named but not linked',
+       text.includes('Trucker bill 7')
+       && ![...d.querySelectorAll('a')].some((a) => /Trucker bill 7/.test(a.textContent)),
+       'a dead link is worse than an honest absence');
+    ck('  and says so in words', /no document generated/.test(text));
+
+    ck('the counterparty is on every row now', /Randy Recycling/.test(text) && /Zimex/.test(text));
+    ck('  and an unknown one is amber, like every other gap',
+       [...d.querySelectorAll('td')].some((t) => /status-warning/.test(t.getAttribute('style') || '')
+           && /Not recorded/.test(t.textContent)));
+
+    // A row the server sent no doc for must still render — the voice path
+    // and any older client send none at all.
+    ck('a row with no doc at all still renders its label',
+       text.includes('Fuel'), 'docs are optional everywhere');
 }
 
 console.log(`\n  ${pass} passed, ${fail} failed`);
