@@ -40,11 +40,20 @@ function plan({ qb, sales, receipts = [], fifoUnapplied = false }) {
     const proposed = [], leftover = [], unmatched = [], skippedDone = [], unappliedCash = [];
     const covered = new Map();                                   // sale id -> amount this plan covers
 
+    // "26rmt42,43" is one QuickBooks invoice written for two Jarvis sales (26RMT42 and 26RMT43)
+    const docTokens = (d) => {
+        const t = String(d || '').trim();
+        const m = /^(.*?[A-Za-z_])(\d+)((?:\s*[,&/]\s*\d+)+)$/.exec(t);
+        const raw = m ? [m[1] + m[2], ...m[3].split(/[,&/]/).map((x) => x.trim()).filter(Boolean).map((n) => m[1] + n)] : [t];
+        return raw.map(KEY).filter((k) => k.length >= 5);
+    };
     const salesFor = (qinv) => {
         const doc = KEY(qinv.DocNumber);
+        const toks = docTokens(qinv.DocNumber);
         const conts = new Set(((qinv.Line || []).map((l) => l.Description || '').join(' ').match(/[A-Z]{4}\d{7}/g)) || []);
         return sales.filter((s) => s.balance !== null && s.balance !== undefined && (
-            (doc && s.invoice_no && KEY(s.invoice_no) === doc) || (s.container_no && conts.has(KEY(s.container_no).toUpperCase()))))
+            (doc && s.invoice_no && KEY(s.invoice_no) === doc) || (s.container_no && conts.has(KEY(s.container_no).toUpperCase()))
+            || (s.invoice_no && toks.some((k) => KEY(s.invoice_no).includes(k)))))
             .sort((a, b) => String(a.date || '').localeCompare(String(b.date || '')));
     };
 
@@ -61,6 +70,19 @@ function plan({ qb, sales, receipts = [], fifoUnapplied = false }) {
                 let amt = r2(links.length === 1 ? line.Amount : line.Amount / links.length);
                 const qinv = invById.get(String(l.TxnId));
                 const cands = qinv ? salesFor(qinv) : [];
+                if (!cands.length) {
+                    // LAST RESORT, exact money: one open Jarvis sale of this customer whose outstanding amount equals this payment line to the cent.
+                    // Only when exactly ONE such sale exists; flagged on the receipt so she can see it was matched by amount.
+                    const cname = KEY((p.CustomerRef || {}).name);
+                    const byAmt = sales.filter((x) => x.balance !== null && x.balance !== undefined && (room.get(x.id) || 0) > CENT && Math.abs((room.get(x.id) || 0) - amt) < 0.01
+                        && cname && (KEY(x.customer) === cname || KEY(x.customer).includes(cname) || cname.includes(KEY(x.customer))));
+                    if (byAmt.length === 1 && amt > 1) {
+                        const x = byAmt[0]; room.set(x.id, 0); covered.set(x.id, r2((covered.get(x.id) || 0) + amt));
+                        const c = perCustomer.get(x.customer) || { allocations: [], total: 0, byAmount: false };
+                        c.allocations.push({ sale_id: x.id, amount: amt }); c.total = r2(c.total + amt); c.byAmount = true; perCustomer.set(x.customer, c);
+                        continue;
+                    }
+                }
                 if (!cands.length) { unmatched.push({ ref, doc: qinv ? qinv.DocNumber : String(l.TxnId), customer: (p.CustomerRef || {}).name || '', amount: amt, why: qinv ? 'no Jarvis sale for this invoice' : 'invoice not in the QuickBooks pull' }); continue; }
                 for (const s of cands) {
                     if (amt <= CENT) break;
@@ -85,7 +107,8 @@ function plan({ qb, sales, receipts = [], fifoUnapplied = false }) {
         for (const [customer, c] of perCustomer) {
             proposed.push({ ref: ref + ':' + KEY(customer), qb_payment: String(p.Id), customer, date: String(p.TxnDate || '').slice(0, 10), amount: c.total, mode, mode_guessed: guessed,
                 bank: (mode === 'Wire' || mode === 'Zelle') ? bankOf(p.DepositToAccountRef) : null, allocations: c.allocations,
-                note: `Backfilled from QuickBooks payment ${p.Id}${p.PaymentRefNum ? ' (ref ' + p.PaymentRefNum + ')' : ''}` });
+                matched_by_amount: !!c.byAmount,
+                note: `Backfilled from QuickBooks payment ${p.Id}${p.PaymentRefNum ? ' (ref ' + p.PaymentRefNum + ')' : ''}${c.byAmount ? ' - matched to the invoice by exact amount' : ''}` });
         }
         if (unplaced > CENT) leftover.push({ ref, customer: (p.CustomerRef || {}).name || '', amount: unplaced, why: 'more than the matching Jarvis sale(s) still show outstanding' });
     }
@@ -199,4 +222,19 @@ function crossCheck({ sales, qbPayments, bankRows, customer, since }) {
     return { invoiced, jarvisReceived, qbPaid, bank, bankDeposits: deps.length, matchedBy: toks.join(' '), nameSignal: toks.length > 0 };
 }
 
-module.exports = { plan, apply, modeOf, bankOf, verifyWithBank, crossCheck, BANK_DAYS };
+// For the sales STILL open after the plan: is there a bank deposit of exactly that amount after the invoice date that nothing above
+// has used? Exact cents on a five-figure amount is strong evidence even when the bank text never names the customer. Pure.
+function bankHints(openSales, bankRows, { usedDepositIds = new Set(), maxDays = 150 } = {}) {
+    const cents = (n) => Math.round(Number(n) * 100);
+    const day = (d) => Date.parse(String(d).slice(0, 10) + 'T12:00:00Z');
+    const deps = (bankRows || []).filter((r) => r && r.direction === 'in' && !r.excluded && !r.matched && r.date && Number(r.amount) > 0 && !usedDepositIds.has(r.id));
+    const taken = new Set(); const hints = [];
+    for (const s of [...openSales].sort((a, b) => String(a.date).localeCompare(String(b.date)))) {
+        const d = deps.filter((x) => !taken.has(x.id) && cents(x.amount) === cents(s.open) && day(x.date) >= day(s.date) - 86400000 && day(x.date) <= day(s.date) + maxDays * 864e5)
+            .sort((a, b) => String(a.date).localeCompare(String(b.date)))[0];
+        if (d) { taken.add(d.id); hints.push({ invoice_no: s.invoice_no, container_no: s.container_no, sale_date: s.date, open: s.open, deposit_id: d.id, deposit_date: String(d.date).slice(0, 10), desc: d.desc || '' }); }
+    }
+    return { hints, money: r2(hints.reduce((t, h) => t + h.open, 0)), of: openSales.length };
+}
+
+module.exports = { plan, apply, modeOf, bankOf, verifyWithBank, crossCheck, bankHints, BANK_DAYS };

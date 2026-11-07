@@ -113,6 +113,23 @@ const qpay = (Id, customer, amount, lines, extra = {}) => ({ Id, TxnDate: '2026-
     ck('invoiced / QuickBooks / bank figures; excluded, outgoing, pre-period and look-alike (RADIUS) deposits ignored', cc.invoiced === 15000 && cc.qbPaid === 9000 && cc.bankDeposits === 1 && cc.bank === 9000, JSON.stringify(cc));
     ck('a name made only of generic words has no name signal', pb.crossCheck({ sales: [], qbPayments: [], bankRows: [], customer: 'Trading Co Inc' }).nameSignal === false);
 
+    section('D5. numbering mismatches (what Rad Metal\'s real output showed)');
+    const m1 = await mk('Mismatch Co', '251201 25RMT136', '2026-01-02', 46619.58, 1, 'MMMM1111111');         // QuickBooks calls it 35347
+    const m2 = await mk('Mismatch Co', '260701_AC_26RMT42', '2026-07-10', 50000, 1, 'MMMM2222222');
+    const m3 = await mk('Mismatch Co', '260701_AC_26RMT43', '2026-07-16', 58698.4, 1, 'MMMM3333333');      // QuickBooks: one invoice "26rmt42,43"
+    const mq = { invoices: [qinv('71', '26rmt42,43', 108698.4, 0)], payments: [
+        qpay('700', 'Mismatch Co', 46619.58, [['35347', 46619.58]]),                                        // invoice 35347 not even in the pull
+        qpay('701', 'Mismatch Co', 108698.4, [['71', 108698.4]]) ] };
+    const mp = pb.plan({ qb: mq, sales: rows(), receipts: receipts.list() });
+    const byAmt = mp.proposed.find((p) => p.qb_payment === '700'), bundle = mp.proposed.find((p) => p.qb_payment === '701');
+    ck('a payment on an invoice QuickBooks numbered differently is matched by EXACT amount (one candidate) and says so', byAmt && byAmt.allocations[0].sale_id === m1 && byAmt.matched_by_amount === true && /by exact amount/.test(byAmt.note), JSON.stringify(mp.proposed));
+    ck('"26rmt42,43" is read as 26RMT42 and 26RMT43: both sales paid', bundle && bundle.allocations.length === 2 && bundle.amount === 108698.4 && mp.unmatched.length === 0, JSON.stringify(mp.unmatched));
+    ck('an amount that fits TWO open sales is not guessed', (() => { const two = pb.plan({ qb: { invoices: [], payments: [qpay('702', 'Twin Co', 100, [['nope', 100]])] }, sales: [{ id: 'a', customer: 'Twin Co', balance: 100, date: '2026-01-01' }, { id: 'b', customer: 'Twin Co', balance: 100, date: '2026-01-02' }], receipts: [] }); return two.proposed.length === 0 && two.unmatched.length === 1; })());
+    ck('an amount that matches a DIFFERENT customer\'s sale is not used', (() => { const x = pb.plan({ qb: { invoices: [], payments: [qpay('703', 'Alpha', 5000, [['nope', 5000]])] }, sales: [{ id: 'a', customer: 'Beta', balance: 5000, date: '2026-01-01' }], receipts: [] }); return x.proposed.length === 0; })());
+    const hints = pb.bankHints([{ invoice_no: 'I1', sale_date: '2026-10-01', date: '2026-10-01', open: 46914.15 }, { invoice_no: 'I2', date: '2026-10-01', open: 5000 }, { invoice_no: 'I3', date: '2026-10-01', open: 7777 }],
+        [{ id: 'd1', date: '2026-10-20', amount: 46914.15, direction: 'in', desc: 'ACH 8841' }, { id: 'd2', date: '2026-09-01', amount: 5000, direction: 'in' }, { id: 'd3', date: '2026-10-05', amount: 7777, direction: 'in', matched: { kind: 'x' } }, { id: 'd4', date: '2026-10-05', amount: 5000, direction: 'out' }]);
+    ck('bank hints: exact amount after the invoice date, unused, unmatched, incoming only', hints.hints.length === 1 && hints.hints[0].invoice_no === 'I1' && hints.money === 46914.15, JSON.stringify(hints));
+
     section('E. the script is dry by default');
     const src = fs.readFileSync(path.join(ROOT, 'scripts/payments-backfill.js'), 'utf8');
     ck('writes only behind --write', /const WRITE = process\.argv\.includes\('--write'\)/.test(src) && /if \(!WRITE\) \{[^}]*DRY RUN[^}]*return;/.test(src));

@@ -33,7 +33,7 @@ async function pull(client, table, where, cap = 20000) {
     if (only) rows = rows.filter((s) => String(s.customer || '').toLowerCase().includes(only));
     const since = rows.map((s) => s.date).filter(Boolean).sort()[0] || '2026-01-01';
     console.log(`Jarvis sales: ${rows.length}${only ? ` (matching "${only}")` : ''}; reading QuickBooks payments and invoices since ${since} ...`);
-    const [payments, invoices] = await Promise.all([pull(client, 'Payment', `TxnDate >= '${since}'`), pull(client, 'Invoice', `TxnDate >= '${since}'`)]);
+    const [payments, invoices] = await Promise.all([pull(client, 'Payment', `TxnDate >= '${since}'`), pull(client, 'Invoice', `TxnDate >= '${new Date(Date.parse(since) - 120 * 864e5).toISOString().slice(0, 10)}'`)])   // invoices can predate the Jarvis sale by weeks;
     console.log(`QuickBooks: ${payments.length} payments, ${invoices.length} invoices`);
     // With --customer, QuickBooks payments of OTHER customers are not "unplaced", they are simply not in scope.
     const inScope = (c) => !only || String((c && c.name) || '').toLowerCase().includes(only);
@@ -61,6 +61,11 @@ async function pull(client, table, where, cap = 20000) {
     console.log(`  NOT found in the bank feed:                                ${String(bt.notFound).padStart(4)} receipts  ${money(bt.notFoundMoney)}`);
     console.log(`  older than the bank feed (cannot be checked):              ${String(bt.outsideFeed).padStart(4)} receipts  ${money(bt.outsideFeedMoney)}`);
     plan.proposed = bv.rows;
+    const usedIds = new Set(bv.rows.filter((r) => r.bank_check.status === 'verified').map((r) => r.bank_check.deposit_id));
+    const bh = pb.bankHints(plan.oldestOpen, bankRows, { usedDepositIds: usedIds });
+    console.log(`\nOf the ${bh.of} sales still open, ${bh.hints.length} have an unused bank deposit of EXACTLY that amount after the invoice date: ${money(bh.money)}`);
+    for (const h of bh.hints.slice(0, 8)) console.log(`      ${String(h.invoice_no || h.container_no).padEnd(24)} ${money(h.open).padStart(14)}  deposit ${h.deposit_date} "${String(h.desc).slice(0, 36)}"`);
+    if (plan.proposed.some((r) => r.matched_by_amount)) console.log(`  ${plan.proposed.filter((r) => r.matched_by_amount).length} receipts were matched to their invoice by exact amount only (noted on the receipt).`);
     if (only) {
         const cc = pb.crossCheck({ sales: rows, qbPayments: payments.filter((p) => inScope(p.CustomerRef)), bankRows, customer: only, since });
         console.log(`\nTHREE-WAY CHECK for "${only}" since ${since}:`);
