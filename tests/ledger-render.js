@@ -263,6 +263,134 @@ section('A2 — the bills table is narrow, and the rest expands');
         ck('  nor does ticking it for deletion', detail.style.display === 'none');
     }
 
+    // ── DOUBLE TAP TO EDIT (2026-11-07) ──────────────────────────────────
+    // Apsara: "Make it like doble tap any row to edit that row."
+    //
+    // A single click must still ONLY unfold the row. If one click opened
+    // the form, the panel she asked for in October would be unreachable.
+    detail.style.display = 'none';
+    firstRow.style.background = '';
+    firstRow.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }));
+    ck('one click still only unfolds — it does not open the form',
+       !root.ownerDocument.getElementById('ledgerForm')
+       && detail.style.display !== 'none');
+    firstRow.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }));
+
+    // A real double click sends click, click, THEN dblclick. Firing only
+    // the dblclick would hide the thing most likely to go wrong: the two
+    // clicks leaving the panel flapped open behind the form.
+    // The starting state is SET here, not read back from the click above —
+    // reading it back makes the check agree with whatever the clicks do,
+    // which is how a check passes against broken code.
+    detail.style.display = 'none';
+    firstRow.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }));
+    firstRow.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }));
+    firstRow.dispatchEvent(new dom.window.MouseEvent('dblclick', { bubbles: true }));
+
+    const dblForm = root.ownerDocument.getElementById('ledgerForm');
+    ck('double-clicking the row opens the edit form', !!dblForm);
+    const want = BILL_ROWS.find((r) => r.id === firstRow.dataset.id);
+    ck('  on THAT row, not a blank one',
+       !!dblForm && !!want
+       && dblForm.querySelector('[name="date"]').value === want.date,
+       dblForm ? `${dblForm.querySelector('[name="date"]').value} vs ${want && want.date}` : 'no form');
+    ck('  and the panel is left shut, not flapped open behind the form',
+       detail.style.display === 'none',
+       `display="${detail.style.display}" — the two clicks of the double click `
+       + 'have to cancel each other out');
+
+    // A double click on a control inside the row belongs to that control.
+    if (w.document.getElementById('ledClose')) w.document.getElementById('ledClose').click();
+    await new Promise((r) => setTimeout(r, 40));
+    // The tick box is drawn only on the Jarvis profile (canBulk = IS_SUPER),
+    // and this section does not mount as one — so the control to prove the
+    // exclusion with is the one every profile has: the actions icon. Both
+    // go through the same closest(...) expression, so this guards it.
+    ck('  the actions icon is there to double-click', !!menuBtn);
+    if (menuBtn) {
+        menuBtn.dispatchEvent(new dom.window.MouseEvent('dblclick', { bubbles: true }));
+        ck('double-clicking the actions icon does NOT open the edit form',
+           !w.document.getElementById('ledgerForm'),
+           'the icon owns its own clicks');
+    }
+
+    dom.window.close();
+}
+
+section('A3 — the columns picker, and Bills untouched by it');
+{
+    // Apsara, 2026-11-07: "I want them in earlier positions only but these
+    // are like option column just like reports show in qb".
+    const SALE_ROWS = [{ id: 'S1', customer: 'Daekwang', date: '09/10/2026',
+        invoice_no: 'INV-1', booking_no: 'BK1', container_no: 'MSKU1',
+        hbl_no: 'HBL-9', terms: 'TT 100%', shipment_terms: 'CIF Busan',
+        weight: 29000, invoice_price: 0.41 }].map(sales.withTotals);
+    const { w, dom } = await mount({ '/api/sales': () => ({
+        sales: SALE_ROWS, summary: sales.summary(SALE_ROWS),
+        columns: sales.tableColumns(), fields: sales.COLUMNS, groups: sales.GROUPS,
+        writable: sales.WRITABLE, facets: sales.facets(SALE_ROWS),
+        total_unfiltered: 1 }) }, { isSuper: true });
+    const heads = () => [...w.document.querySelectorAll('#viewRoot thead th')]
+        .map((t) => t.textContent.replace(/ƒ/g, '').trim()).filter(Boolean);
+    const panel = () => {
+        const d = w.document.querySelector('#viewRoot tr.ledDetail');
+        return d ? d.textContent.replace(/\s+/g, ' ') : '';
+    };
+
+    await w.renderLedgerTab('sales');
+    ck('the Invoice register offers a columns picker', !!w.document.getElementById('btnCols'));
+    ck('  listing exactly the three she took off',
+       [...w.document.querySelectorAll('.colPick')].map((b) => b.dataset.key).join(',')
+         === 'hbl_no,terms,shipment_terms',
+       [...w.document.querySelectorAll('.colPick')].map((b) => b.dataset.key).join(','));
+    ck('  none of them on the table to begin with',
+       !heads().includes('HBL number') && !heads().includes('Payment terms'));
+    ck('  and all of them reachable under the row',
+       panel().includes('HBL number') && panel().includes('Payment terms')
+       && panel().includes('Shipment terms'), panel().slice(0, 160));
+
+    const tick = async (k) => {
+        const b = w.document.querySelector(`.colPick[data-key="${k}"]`);
+        b.checked = true;
+        b.dispatchEvent(new w.Event('change', { bubbles: true }));
+        await new Promise((r) => setTimeout(r, 70));
+    };
+    await tick('hbl_no');
+    await tick('terms');
+
+    // THE POSITION IS THE REQUEST. Appending them to the end would satisfy
+    // "switch it on" and fail "in earlier positions only" — so the check is
+    // on the index, not on presence.
+    const h = heads();
+    ck('switching HBL on puts it back after Container no, not at the end',
+       h.indexOf('HBL number') === h.indexOf('Container no') + 1,
+       h.join(' | '));
+    ck('  and Payment terms lands after Customer name',
+       h.indexOf('Payment terms') === h.indexOf('Customer name') + 1,
+       h.join(' | '));
+    ck('  Date is still first', h[0] === 'Date', h[0]);
+    ck('a column on the table is NOT also in the panel',
+       !panel().includes('HBL number') && !panel().includes('Payment terms'),
+       panel().slice(0, 160));
+    ck('  but the one still off IS', panel().includes('Shipment terms'), panel().slice(0, 160));
+    ck('the choice is remembered',
+       w.localStorage.getItem('ledgerCols:sales') === '["hbl_no","terms"]',
+       String(w.localStorage.getItem('ledgerCols:sales')));
+    dom.window.close();
+}
+
+section('A4 — BILLS IS NOT PART OF THIS');
+{
+    // CLAUDE.md rule 1. The picker is gated on `displayIndex`, which only
+    // helpers/sales.js sends. If bills ever grows one it must be because she
+    // asked, not because the two screens share a renderer.
+    const { w, dom } = await mount({ '/api/bills': billsRoute }, { isSuper: true });
+    await w.renderLedgerTab('bills');
+    ck('the Bills tab has no columns picker', !w.document.getElementById('btnCols'),
+       'a request about the Invoice register changed the Invoice register');
+    ck('  because bills sends no displayIndex',
+       !bills.tableColumns().some((c) => Number.isInteger(c.displayIndex)));
+    ck('  and sales does', sales.tableColumns().every((c) => Number.isInteger(c.displayIndex)));
     dom.window.close();
 }
 
@@ -1860,10 +1988,19 @@ section('G7 — a fixed list the form actually offers');
        labels.indexOf('Proforma date') === labels.indexOf('Item') + 1
        && labels.indexOf('Reference') === labels.indexOf('Proforma date') + 1,
        labels.join(' | '));
-    ck('  Date comes first', labels[0] === 'Date' || labels[1] === 'Date',
+    // ── CORRECTED BY HER, SAME DAY ───────────────────────────────────────
+    // My first cut read "bkg no,cont no,hbl no it can be removed" as all
+    // three leaving. She corrected it: "no booking no,container no should be
+    // there in core". Only HBL goes. The check moved with the rule rather
+    // than the rule being argued with.
+    ck('  Date comes first', labels[0] === 'Date', labels.join(' | '));
+    ck('  then Booking no, then Container no — her correction',
+       labels[1] === 'Booking no' && labels[2] === 'Container no',
        labels.join(' | '));
-    for (const gone of ['Booking no', 'Container no', 'HBL number',
-                        'Payment terms', 'Shipment terms']) {
+    ck('  and Invoice number and Customer name follow',
+       labels[3] === 'Invoice number' && labels[4] === 'Customer name',
+       labels.join(' | '));
+    for (const gone of ['HBL number', 'Payment terms', 'Shipment terms']) {
         ck(`  ${gone} is off the table, not deleted`, !labels.includes(gone),
            labels.join(' | '));
     }

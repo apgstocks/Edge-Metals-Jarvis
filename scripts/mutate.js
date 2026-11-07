@@ -559,16 +559,25 @@ const MUTATIONS = [
     // bug is caught for the banks and companies too.
     { name: 'spend parties: every chip list is built from the FILTERED rows, so no filter can be undone',
       file: 'helpers/spendReport.js', suites: ['spend-parties', 'banks', 'paid-via'],
-      find: "    const everything = collectRows({ payments, expenses, from: null, to: null, parties });",
+      // Re-pointed AGAIN 2026-11-07: `docs` joined the argument list when the
+      // drill-down gained document links, and the find string went stale the
+      // same day it was written. Same lesson as the first re-point — the
+      // mutation has to be re-read whenever the line it names is edited.
+      find: "    const everything = collectRows({ payments, expenses, from: null, to: null, parties, docs });",
       to:   "    const everything = all;" },
     { name: 'spend parties: an expense vendor is guessed from its description',
       file: 'helpers/spendReport.js', suites: ['spend-parties'],
       find: "            party: (e.vendor && String(e.vendor).trim()) || NOT_RECORDED,",
       to:   "            party: (e.vendor && String(e.vendor).trim()) || (e.description ? String(e.description).split(' ').pop() : NOT_RECORDED)," },
+    // Re-pointed 2026-11-07: the 45-chip wall became a picker, so both rows
+    // are now drawn by one shared partyRow() and the per-row <button> markup
+    // this used to name is gone. The CALL SITE is the better anchor anyway —
+    // it is the only place the two rows are still told apart, and it is what
+    // a careless edit would collapse.
     { name: 'spend screen: the two counterparty rows collapse into one control',
       file: 'dashboard/app/06-expenses-trucker.js', suites: ['spend-report-screen'],
-      find: "            <button class=\"btn btn-spend-sold\" data-sold=\"${esc(v)}\" style=\"${chipCss(spendSold === v)}\">${esc(v || 'All')}</button>`).join('')}",
-      to:   "            <button class=\"btn btn-spend-bought\" data-bought=\"${esc(v)}\" style=\"${chipCss(spendSold === v)}\">${esc(v || 'All')}</button>`).join('')}" },
+      find: "          ? partyRow('Sold to', 'btn-spend-sold', 'sold', 'spend_sold', rep.soldToColumns || [], spendSold)",
+      to:   "          ? partyRow('Sold to', 'btn-spend-bought', 'bought', 'spend_bought', rep.soldToColumns || [], spendSold)" },
     { name: 'spend screen: sales are proportioned against money OUT, printing a percentage of the wrong total',
       file: 'dashboard/app/06-expenses-trucker.js', suites: ['spend-report-screen'],
       find: "          ? soldCard('Whom we sell to', rep.bySoldTo, rep.received.total)",

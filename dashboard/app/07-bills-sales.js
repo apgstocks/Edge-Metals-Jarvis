@@ -74,6 +74,24 @@ const SALES_TAB_TITLES = {
   commission: ['Invoice', 'Commission'],
 };
 
+// ── WHICH OPTIONAL COLUMNS SHE HAS SWITCHED ON ──────────────────────────
+// Per tab, and remembered, because a column choice she has to make again
+// every morning is a column choice she will stop making. Kept in the browser
+// rather than on the server: it is a view preference, not data, and nothing
+// else reads it. Wrapped because localStorage throws outright in a few
+// browser modes, and a thrown preference must not take the table with it.
+function ledgerExtraCols(kind) {
+  try {
+    const raw = localStorage.getItem('ledgerCols:' + kind);
+    const v = raw ? JSON.parse(raw) : [];
+    return Array.isArray(v) ? v.filter((k) => typeof k === 'string') : [];
+  } catch (e) { return []; }
+}
+function setLedgerExtraCols(kind, keys) {
+  try { localStorage.setItem('ledgerCols:' + kind, JSON.stringify(keys)); }
+  catch (e) { /* she still gets the change, just not after a reload */ }
+}
+
 async function renderLedgerTab(kind) {
   // Incoming, Freight and Commission are their own screens — they are not the
   // sales table with different columns, and pretending otherwise is how a
@@ -140,8 +158,44 @@ async function renderLedgerTab(kind) {
   // The flag marks the NEW shape, never the old: sales has no core-marked
   // columns, so it renders exactly as before.
   const anyCore = columns.some((c) => c && c.core);
-  const shown = anyCore ? columns.filter((c) => c.core) : columns;
-  const hidden = anyCore ? columns.filter((c) => !c.core) : [];
+  // ── coreIndex ORDERS THE NARROWED TABLE (2026-11-07) ──────────────────
+  // Apsara asked for Date first on the Invoice register, then corrected me:
+  // "no booking no,container no should be there in core". TABLE_ORDER opens
+  // booking, container, date — deliberately, and shared with the export — so
+  // filtering alone leaves Date third.
+  //
+  // The server now sends `coreIndex` on each core column, which is the order
+  // SHE asked for, and only this narrowed view sorts by it. A column without
+  // one keeps its TABLE_ORDER place, so bills (which has no coreIndex) is
+  // untouched.
+  // ── OPTIONAL COLUMNS SHE CAN SWITCH BACK ON (2026-11-07) ──────────────
+  // Apsara: "I want them in earlier positions only but these are like option
+  // column just like reports show in qb".
+  //
+  // So HBL number, Payment terms and Shipment terms are not gone, they are
+  // OFF — and switching one on puts it back where it used to sit, not at the
+  // end of the row. The server states that position as `displayIndex`; the
+  // order rule itself lives in helpers/sales.js, so no client invents it.
+  //
+  // GATED ON displayIndex, which is the flag saying "this one is the new
+  // shape". helpers/bills.js marks `core` and sends no displayIndex, so the
+  // Bills tab gets no picker and renders exactly as it did this morning.
+  // The flag marks the NEW behaviour, never the old one — a flag you must
+  // set to keep a screen unchanged is the one that eventually goes unset.
+  const canPickColumns = anyCore && columns.some((c) => Number.isInteger(c.displayIndex));
+  const extraOn = canPickColumns ? ledgerExtraCols(kind) : [];
+  const ord = (c) => (Number.isInteger(c.displayIndex) ? c.displayIndex
+    : Number.isInteger(c.coreIndex) ? c.coreIndex : 999);
+  const shown = !anyCore ? columns
+    : canPickColumns
+      ? columns.filter((c) => c.core || extraOn.includes(c.key)).sort((a, b) => ord(a) - ord(b))
+      : columns.filter((c) => c.core).sort((a, b) =>
+          (Number.isInteger(a.coreIndex) ? a.coreIndex : 999)
+          - (Number.isInteger(b.coreIndex) ? b.coreIndex : 999));
+  // Whatever is NOT on the table still has to be reachable under the row —
+  // switching a column off must never be the same as losing the field.
+  const shownKeys = new Set(shown.map((c) => c.key));
+  const hidden = anyCore ? columns.filter((c) => !shownKeys.has(c.key)) : [];
 
   const canBulk = IS_SUPER === true;
   // Supplier -> unapplied advance. From /api/bills (see the route), so the
@@ -180,7 +234,7 @@ async function renderLedgerTab(kind) {
   };
 
   const body = rows.length ? rows.map((r, i) => `
-    <tr class="ledRow" data-id="${esc(r.id)}" style="border-top:1px solid var(--line); cursor:pointer;" title="Click for the full detail">
+    <tr class="ledRow" data-id="${esc(r.id)}" style="border-top:1px solid var(--line); cursor:pointer;" title="Click for the full detail · double-click to edit">
       ${canBulk ? `<td style="padding:7px 4px 7px 10px; width:26px;"><input type="checkbox" class="ledPick" data-id="${esc(r.id)}" aria-label="Select ${esc(r.container_no || r.id)}" style="cursor:pointer;"></td>` : ''}
       ${shown.map((c) => `<td style="padding:8px 9px; white-space:nowrap; ${c.derived ? 'color:var(--text-muted);' : ''}">${ledgerCell(r, c, K)}</td>`).join('')}
       <td style="padding:7px 9px; white-space:nowrap; position:sticky; right:0; background:var(--surface-card); box-shadow:-8px 0 8px -8px rgba(0,0,0,.55); z-index:2;">
@@ -274,6 +328,27 @@ async function renderLedgerTab(kind) {
           ${kind === 'sales' ? '<button id="btnFollowups" class="btn btn-secondary" style="font-size:12px; padding:8px 14px;">Payment follow-ups</button>' : ''}
           ${kind === 'bills' || kind === 'sales' ? '<button id="btnNameCleanup" class="btn btn-ghost" style="font-size:12px; padding:8px 12px;" title="The same name typed two ways">Clean names</button>' : ''}
           ${kind === 'bills' || kind === 'sales' ? '<button id="btnImport" class="btn btn-secondary" style="font-size:12px; padding:8px 14px;" title="Import a shipments workbook">Import</button>' : ''}
+          ${canPickColumns ? `<div style="position:relative;">
+            <button id="btnCols" class="btn btn-ghost" aria-haspopup="menu" aria-expanded="false"
+              style="font-size:12px; padding:8px 12px;"
+              title="Choose which columns the table shows">Columns${extraOn.length ? ' (' + extraOn.length + ')' : ''}</button>
+            <div id="colsMenu" class="hidden" role="menu"
+              style="position:absolute; right:0; top:calc(100% + 6px); z-index:60; min-width:210px;
+                     background:var(--surface-card); border:1px solid var(--line); border-radius:var(--radius-sm);
+                     box-shadow:0 10px 30px rgba(0,0,0,.35); padding:8px 4px;">
+              <div style="font-family:var(--font-mono); font-size:9px; letter-spacing:.11em; text-transform:uppercase;
+                          color:var(--text-muted); padding:2px 12px 7px;">Add a column</div>
+              ${columns.filter((c) => !c.core).map((c) => `
+                <label style="display:flex; align-items:center; gap:9px; padding:6px 12px; font-size:12px; cursor:pointer;">
+                  <input type="checkbox" class="colPick" data-key="${esc(c.key)}" ${extraOn.includes(c.key) ? 'checked' : ''}
+                         style="cursor:pointer;">
+                  <span>${esc(c.label || c.key)}</span>
+                </label>`).join('')}
+              <div style="border-top:1px solid var(--line); margin:6px 0 0; padding:7px 12px 2px; font-size:11px; color:var(--text-faint);">
+                Anything off the table is still under the row.
+              </div>
+            </div>
+          </div>` : ''}
           <button id="btnAddLedger" class="btn btn-primary" style="font-size:12px; padding:8px 14px;">${K.addLabel}</button>
           ${kind === 'bills' || kind === 'sales' ? `<div style="position:relative;">
             <button id="btnExport" class="btn btn-ghost" aria-haspopup="menu" aria-expanded="false"
@@ -768,6 +843,40 @@ async function renderLedgerTab(kind) {
   // Closed by a click anywhere else and by Escape, and the handler is removed
   // when it closes — a document-level listener left behind by every render of
   // this tab would accumulate one per visit and they all keep firing.
+  // ── THE COLUMNS PICKER ────────────────────────────────────────────────
+  // Ticking redraws the table immediately and leaves the menu open, so she
+  // can add HBL, look, and add Payment terms without reopening it.
+  if ($('btnCols')) {
+    const cb = $('btnCols'), cm = $('colsMenu');
+    let colsAway = null;
+    const shutCols = () => {
+      cm.classList.add('hidden');
+      cb.setAttribute('aria-expanded', 'false');
+      if (colsAway) { document.removeEventListener('click', colsAway, true); document.removeEventListener('keydown', colsAway); colsAway = null; }
+    };
+    cb.onclick = (e) => {
+      e.stopPropagation();
+      if (!cm.classList.contains('hidden')) return shutCols();
+      cm.classList.remove('hidden');
+      cb.setAttribute('aria-expanded', 'true');
+      colsAway = (ev) => {
+        if (ev.type === 'keydown' && ev.key !== 'Escape') return;
+        if (ev.type === 'click' && cm.contains(ev.target)) return;
+        shutCols();
+      };
+      document.addEventListener('click', colsAway, true);
+      document.addEventListener('keydown', colsAway);
+    };
+    document.querySelectorAll('.colPick').forEach((box) => {
+      box.addEventListener('change', () => {
+        const on = [...document.querySelectorAll('.colPick')]
+          .filter((b) => b.checked).map((b) => b.dataset.key);
+        setLedgerExtraCols(kind, on);
+        renderLedgerTab(kind);
+      });
+    });
+  }
+
   if ($('btnExport')) {
     const btn = $('btnExport'), menu = $('exportMenu');
     let away = null;
@@ -911,6 +1020,29 @@ async function renderLedgerTab(kind) {
       // The row itself shows it is open, so a long panel still has a visible
       // owner once the heading has scrolled past.
       tr.style.background = open ? '' : 'var(--surface-sunken)';
+    });
+
+    // ── DOUBLE TAP THE ROW TO EDIT IT (2026-11-07) ─────────────────────
+    // Apsara: "Make it like doble tap any row to edit that row."
+    //
+    // This opens the SAME form the row menu's Edit opens — openLedgerForm —
+    // so there is no second write path to keep in step, and whatever that
+    // form already refuses it still refuses.
+    //
+    // The two clicks of a double click both reach the toggle above, so the
+    // panel opens and closes again and ends exactly where it started. That
+    // is why there is nothing to undo here.
+    //
+    // Same exclusion as the toggle: a double click on the tick box, the
+    // menu icon or a link inside a cell is that control's business.
+    tr.addEventListener('dblclick', (e) => {
+      if (e.target.closest('input, button, a, label, select')) return;
+      const row = (ledgerState.rows || []).find((r) => r.id === tr.dataset.id);
+      if (!row) return;
+      // A double click selects the text under the pointer first; leaving it
+      // selected behind the form looks like a mis-click.
+      if (window.getSelection) window.getSelection().removeAllRanges();
+      openLedgerForm(kind, row);
     });
   });
 

@@ -367,29 +367,100 @@ const GROUPS = [
 // including the ones that are empty on most rows, and the eye has to cross
 // a field of gaps to get from the date to the amount.
 //
-// Her list, by key:
-//   date          first, and filtering TABLE_ORDER to the core set puts it
-//                 there without reordering anything
-//   invoice_no    wanted
-//   customer      wanted
+// Her list, by key — CORRECTED 2026-11-07 by "no booking no,container no
+// should be there in core". My first cut read "bkg no,cont no,hbl no it can
+// be removed" as all three going. Only HBL does.
+//
+//   date          FIRST
+//   booking_no    stays — her correction
+//   container_no  stays — her correction
+//   invoice_no, customer
 //   rest          item, proforma_date, reference, weight, invoice_price,
 //                 amount, received, balance — "rest can be there"
 //
 // Off the table, into the row's panel:
-//   booking_no, container_no, hbl_no   "it can be removed"
-//   terms, shipment_terms              "removed"
+//   hbl_no                   "it can be removed"
+//   terms, shipment_terms    "removed"
+//
+// ── AND NOW THE ORDER HAS TO BE STATED, NOT INHERITED ───────────────────
+// TABLE_ORDER opens booking_no, container_no, date — correct, and deliberate
+// (see COLUMNS: "bookng first then container no"). With booking and
+// container back in core, filtering alone leaves Date third, and she asked
+// for it first.
+//
+// So CORE_KEYS is the ORDER as well as the set, and each core column carries
+// a `coreIndex`. TABLE_ORDER IS NOT TOUCHED: the export, the API and every
+// other reader still get all sixteen in the order they have always been in.
+// Only a client that narrows sorts on the new field — additive, like `core`
+// itself. Changing TABLE_ORDER to move one column would have reordered her
+// spreadsheet columns too, which nobody asked for.
 //
 // NOTHING IS DELETED. `core` is ADDITIVE, the same way helpers/bills.js
 // added it: every existing reader — the export, the API, the margin
 // calculation — still sees all sixteen columns in the same order, and only a
 // client that looks for the flag narrows. A column she wants back is one
 // line here, which is what "add/remove columns on request" asks for.
-const CORE_KEYS = ['date', 'invoice_no', 'customer', 'item', 'proforma_date',
-    'reference', 'weight', 'invoice_price', 'amount', 'received', 'balance'];
+const CORE_KEYS = ['date', 'booking_no', 'container_no', 'invoice_no', 'customer',
+    'item', 'proforma_date', 'reference', 'weight', 'invoice_price', 'amount',
+    'received', 'balance'];
 
-const tableColumns = () => TABLE_ORDER.map((k) => COLUMNS.find((c) => c.key === k))
-    .filter(Boolean)
-    .map((c) => (CORE_KEYS.includes(c.key) ? { ...c, core: true } : c));
+// ── THE THREE SHE TOOK OFF ARE OPTIONAL, NOT GONE (2026-11-07) ──────────
+// Apsara, after seeing the narrowed table: "I want them in earlier positions
+// only but these are like option column just like reports show in qb".
+//
+// So hbl_no, terms and shipment_terms become columns she can switch back on,
+// the way a QuickBooks report lets you pick your columns — and when she does,
+// each one returns to the slot it used to hold, not to the end of the row.
+//
+// THE ORDER RULE, stated once here so no client has to invent it:
+//   core columns keep CORE_KEYS order (Date first, as she asked);
+//   an optional column goes after whichever of its TABLE_ORDER predecessors
+//   now sits FURTHEST RIGHT.
+//
+// "Furthest right", not "nearest in TABLE_ORDER". The nearest rule puts HBL
+// second, because TABLE_ORDER reads booking, container, date, hbl and date
+// has moved to the front — so HBL follows it there, ahead of booking and
+// container it used to sit behind. Anchoring on the furthest-right
+// predecessor keeps it behind all three, which is where she has always seen
+// it, and still lands shipment_terms after terms rather than after customer.
+//
+// Run against her own words that produces exactly what she described on
+// 2026-09-10 and again today:
+//   hbl_no          follows container_no   (TABLE_ORDER: ...container_no, hbl_no...)
+//   terms           follows customer       — "customer name,then payment terms"
+//   shipment_terms  follows terms          — "shioment terms" next to it
+//
+// `displayIndex` is the new shape, and it is a FLAG IN THAT DIRECTION:
+// helpers/bills.js marks `core` with no index at all, so the Bills tab sends
+// no displayIndex, shows no picker, and is untouched. A client narrows only
+// when the server hands it one. TABLE_ORDER is still not touched — the
+// export, the API and every other reader see all sixteen as they always have.
+const OPTIONAL_KEYS = TABLE_ORDER.filter((k) => !CORE_KEYS.includes(k));
+
+const displayOrder = () => {
+    const out = CORE_KEYS.slice();
+    for (const k of OPTIONAL_KEYS) {
+        const before = TABLE_ORDER.slice(0, TABLE_ORDER.indexOf(k));
+        // The anchor may itself be an optional column already placed (that is
+        // how shipment_terms lands after terms rather than after customer).
+        const at = before.reduce((m, p) => Math.max(m, out.indexOf(p) + 1), 0);
+        out.splice(at, 0, k);
+    }
+    return out;
+};
+
+const tableColumns = () => {
+    const order = displayOrder();
+    return TABLE_ORDER.map((k) => COLUMNS.find((c) => c.key === k))
+        .filter(Boolean)
+        .map((c) => {
+            const i = CORE_KEYS.indexOf(c.key);
+            const d = order.indexOf(c.key);
+            return i < 0
+                ? { ...c, optional: true, displayIndex: d }
+                : { ...c, core: true, coreIndex: i, displayIndex: d };
+        });
+};
 
 // Same helper bills has, so the form can walk a group in the order the group
 // states rather than in COLUMNS order.

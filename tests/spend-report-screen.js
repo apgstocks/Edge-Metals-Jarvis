@@ -168,7 +168,16 @@ function mount(rep, sel = {}) {
             el.dispatchEvent(new w.Event('change', { bubbles: true }));
         },
         put: (id, v) => { d.getElementById(id).value = v; },
-        click: (q) => d.querySelector(q).dispatchEvent(new w.Event('click', { bubbles: true })),
+        // A missing control THROWS a named error rather than a bare
+        // "Cannot read properties of null". Under mutation that difference
+        // decides whether the harness can say which rule broke: a crash ends
+        // the file with no totals line, so every check after it goes unrun
+        // and the kill is reported as CRASHED instead of by name.
+        click: (q) => {
+            const el = d.querySelector(q);
+            if (!el) throw new Error(`no control matching ${q} on the page`);
+            return el.dispatchEvent(new w.Event('click', { bubbles: true }));
+        },
         runs: () => w.__runs,
     };
 }
