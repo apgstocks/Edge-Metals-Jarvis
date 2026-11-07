@@ -184,4 +184,19 @@ function verifyWithBank(proposed, bankRows, { days = BANK_DAYS } = {}) {
             outsideFeed: tot('outside-feed').length, outsideFeedMoney: sum(tot('outside-feed')) } };
 }
 
-module.exports = { plan, apply, modeOf, bankOf, verifyWithBank, BANK_DAYS };
+// "Where does the truth lie?" for ONE customer: what Jarvis invoiced, what QuickBooks recorded as paid, and what the BANK shows
+// coming in from them. Three independent figures; the gap between them says which system is wrong. Pure.
+function crossCheck({ sales, qbPayments, bankRows, customer, since }) {
+    const bd = require('./bankDepositCheck');
+    const toks = bd.specific(customer);
+    const words = (t) => String(t || '').toLowerCase().replace(/[^a-z0-9 ]+/g, ' ').split(/\s+/).filter(Boolean);
+    const deps = (bankRows || []).filter((r) => r && r.direction === 'in' && !r.excluded && String(r.date || '') >= (since || '0000')
+        && toks.length && toks.every((t) => words(`${r.desc} ${r.memo || ''} ${r.party || ''}`).some((w) => w === t || (t.length >= 5 && w.startsWith(t)))));
+    const invoiced = r2(sales.reduce((t, x) => t + Number(x.receivable || 0), 0));
+    const jarvisReceived = r2(sales.reduce((t, x) => t + Number(x.received || 0), 0));
+    const qbPaid = r2((qbPayments || []).reduce((t, p) => t + Number(p.TotalAmt || 0), 0));
+    const bank = r2(deps.reduce((t, r) => t + Number(r.amount || 0), 0));
+    return { invoiced, jarvisReceived, qbPaid, bank, bankDeposits: deps.length, matchedBy: toks.join(' '), nameSignal: toks.length > 0 };
+}
+
+module.exports = { plan, apply, modeOf, bankOf, verifyWithBank, crossCheck, BANK_DAYS };

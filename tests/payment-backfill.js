@@ -107,6 +107,12 @@ const qpay = (Id, customer, amount, lines, extra = {}) => ({ Id, TxnDate: '2026-
     const src1 = fs.readFileSync(path.join(ROOT, 'scripts/payments-backfill.js'), 'utf8');
     ck('the script runs the bank check and can restrict --write to verified receipts', /verifyWithBank/.test(src1) && /--bank-verified-only/.test(src1) && /status === 'verified'/.test(src1));
 
+    section('D4. three-way check: invoiced vs QuickBooks vs bank');
+    const cc = pb.crossCheck({ sales: [{ receivable: 10000, received: 0 }, { receivable: 5000, received: 0 }], qbPayments: [{ TotalAmt: 9000 }], customer: 'Rad Metal', since: '2026-01-01',
+        bankRows: [{ direction: 'in', date: '2026-03-01', amount: 9000, desc: 'WIRE FROM RAD METAL INC' }, { direction: 'in', date: '2026-04-01', amount: 5000, desc: 'RADIUS SUPPLY' }, { direction: 'in', date: '2026-04-01', amount: 6000, desc: 'RAD METAL', excluded: true }, { direction: 'out', date: '2026-04-02', amount: 7000, desc: 'RAD METAL' }, { direction: 'in', date: '2025-12-01', amount: 8000, desc: 'RAD METAL' }] });
+    ck('invoiced / QuickBooks / bank figures; excluded, outgoing, pre-period and look-alike (RADIUS) deposits ignored', cc.invoiced === 15000 && cc.qbPaid === 9000 && cc.bankDeposits === 1 && cc.bank === 9000, JSON.stringify(cc));
+    ck('a name made only of generic words has no name signal', pb.crossCheck({ sales: [], qbPayments: [], bankRows: [], customer: 'Trading Co Inc' }).nameSignal === false);
+
     section('E. the script is dry by default');
     const src = fs.readFileSync(path.join(ROOT, 'scripts/payments-backfill.js'), 'utf8');
     ck('writes only behind --write', /const WRITE = process\.argv\.includes\('--write'\)/.test(src) && /if \(!WRITE\) \{[^}]*DRY RUN[^}]*return;/.test(src));

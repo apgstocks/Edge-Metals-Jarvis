@@ -61,6 +61,18 @@ async function pull(client, table, where, cap = 20000) {
     console.log(`  NOT found in the bank feed:                                ${String(bt.notFound).padStart(4)} receipts  ${money(bt.notFoundMoney)}`);
     console.log(`  older than the bank feed (cannot be checked):              ${String(bt.outsideFeed).padStart(4)} receipts  ${money(bt.outsideFeedMoney)}`);
     plan.proposed = bv.rows;
+    if (only) {
+        const cc = pb.crossCheck({ sales: rows, qbPayments: payments.filter((p) => inScope(p.CustomerRef)), bankRows, customer: only, since });
+        console.log(`\nTHREE-WAY CHECK for "${only}" since ${since}:`);
+        console.log(`  Jarvis invoiced:                          ${money(cc.invoiced)}   (Jarvis shows ${money(cc.jarvisReceived)} received)`);
+        console.log(`  QuickBooks recorded as paid:              ${money(cc.qbPaid)}`);
+        console.log(`  Bank deposits that look like theirs:      ${money(cc.bank)}   (${cc.bankDeposits} deposits${cc.nameSignal ? `, text contains "${cc.matchedBy}"` : ', name too generic to match - amount only'})`);
+        console.log(`  If the bank figure is close to the invoiced figure, they HAVE paid and QuickBooks/Jarvis are the ones behind.`);
+    }
+    if (plan.unmatched.length) {
+        console.log('\nQuickBooks payments I could not place on any Jarvis sale:');
+        for (const u of plan.unmatched.slice(0, 10)) console.log(`  QB invoice ${String(u.doc).padEnd(26)} ${money(u.amount).padStart(14)}  (${u.why})`);
+    }
     const per = {}; for (const r of plan.proposed) { (per[r.customer] = per[r.customer] || { n: 0, m: 0 }); per[r.customer].n++; per[r.customer].m += r.amount; }
     console.log('\nBy customer (largest first):');
     for (const [c, v] of Object.entries(per).sort((a, b) => b[1].m - a[1].m).slice(0, 15)) console.log(`  ${c.padEnd(34)} ${String(v.n).padStart(4)} receipts  ${money(v.m)}`);

@@ -21,7 +21,7 @@ function makeFinder({ rows }) {
             && String(r.date || '') >= since)
             .filter((r) => {
                 const text = words(`${r.desc} ${r.memo || ''} ${r.party || ''}`);
-                const byName = toks.length && toks.every((t) => text.some((w) => w === t || w.startsWith(t)));
+                const byName = toks.length && toks.every((t) => text.some((w) => w === t || (t.length >= 5 && w.startsWith(t))));
                 return byName || amounts.has(cents(r.amount));
             })
             .sort((a, b) => String(b.date).localeCompare(String(a.date)));
