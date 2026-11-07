@@ -288,7 +288,7 @@ async function runPayments({ sendToManager, sendToTeam, now, drafts, findRemitta
             const entry = log[x.key];
             const held = entry && entry.held;
             // dismissed by her ("no, not theirs") or lapsed; a hold she CONFIRMED lasts until its own date (30 days).
-            const stale = held && (held.dismissed || (held.confirmed ? t > (held.until || 0) : (t - held.at) > HOLD_MS));
+            const stale = held && (held.dismissed || (held.promisedUntil ? t > held.promisedUntil : held.confirmed ? t > (held.until || 0) : (t - held.at) > HOLD_MS));
             let hit = null;
             try {
                 const since = entry && entry.firstAt ? Date.parse(entry.firstAt) : t - 45 * 86400000;
@@ -302,6 +302,14 @@ async function runPayments({ sendToManager, sendToTeam, now, drafts, findRemitta
             if (!held || held.id !== hit.id) {
                 log[x.key] = { ...(entry || { set: null, firstAt: new Date(t).toISOString(), lastStep: null, lastAt: null, customer: x.draft.customer }), held: { id: hit.id, at: hit.dateMs || t } };
                 newHolds += 1;
+                // A PROMISE: the mail states when they will pay. Recorded (inside the company, undoable by the log), the follow-up waits
+                // until the day after, and she is told in one line. No question needed - nothing external happens.
+                if (hit.promisedOn) {
+                    log[x.key].held.promisedUntil = Date.parse(hit.promisedOn + 'T23:59:59Z');
+                    log[x.key].held.promisedOn = hit.promisedOn;
+                    heldNotes.push(`${x.draft.customer} \u2014 ${chaser.money(x.draft.total)} open: they wrote that they will pay by ${hit.promisedOn.slice(5, 7)}/${hit.promisedOn.slice(8, 10)}${hit.subject ? ' ("' + hit.subject + '")' : ''}. I'll hold their follow-up until then and check again.`);
+                    continue;
+                }
                 // If something may be theirs and she can be asked, ASK (Apsara, 2026-11-07: "if it has any question, ask").
                 let asked = false;
                 if (typeof askAboutHold === 'function') {

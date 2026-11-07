@@ -32,7 +32,9 @@ Below is an email that ${draft.customer} sent to Edge Metals. Decide whether it 
 Subject: ${mail.subject || ''}
 Attachments: ${(mail.files || []).join(', ') || 'none'}
 Text: ${String(mail.snippet || '').slice(0, 1500)}
-Return ONLY JSON: {"payment_related": true|false, "why": "<=12 words"}`;
+Email date: ${mail.dateMs ? new Date(mail.dateMs).toISOString().slice(0, 10) : 'unknown'}
+If the email SAYS WHEN they will pay (a date, "Friday", "next week", "end of the month", "after the vessel sails"), give that day as YYYY-MM-DD, working out relative words from the email date; otherwise null. Never invent a date the email does not state.
+Return ONLY JSON: {"payment_related": true|false, "why": "<=12 words", "promised_on": "YYYY-MM-DD"|null}`;
 }
 
 // Used when the model cannot be reached: lean toward telling her. A needless "check this" is cheap; a chase after they paid is not.
@@ -55,7 +57,13 @@ function makeFinder({ list, get, classify }) {
             const yes = verdict && typeof verdict.payment_related !== 'undefined'
                 ? (verdict.payment_related === true || verdict.payment_related === 'true')
                 : fallbackJudge(draft, m);
-            if (yes) return { id, subject: m.subject || '', from: m.from || '', dateMs: m.dateMs || Date.now(), why: (verdict && verdict.why) || null };
+            if (yes) {
+                // A stated payment date is a PROMISE: recorded, and the follow-up waits for it (ownership plan slice 3).
+                const p = verdict && /^\d{4}-\d{2}-\d{2}$/.test(String(verdict.promised_on || '')) ? String(verdict.promised_on) : null;
+                const when = p ? Date.parse(p + 'T23:59:59Z') : null;
+                const ok = when && when >= (m.dateMs || 0) && when <= (m.dateMs || Date.now()) + 120 * 86400000;   // not before the mail, not months out
+                return { id, subject: m.subject || '', from: m.from || '', dateMs: m.dateMs || Date.now(), why: (verdict && verdict.why) || null, promisedOn: ok ? p : null };
+            }
         }
         return null;
     };
