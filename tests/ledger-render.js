@@ -1846,11 +1846,34 @@ section('G7 — a fixed list the form actually offers');
        doc.querySelector('#ledgerForm [name="shipment_terms"]').tagName === 'INPUT');
 
     const labels = [...doc.querySelectorAll('#viewRoot thead th')].map((t) => t.textContent.trim());
+    // ── THE TERMS PAIR LEFT THE TABLE, BY HER INSTRUCTION (2026-11-07) ──
+    // This asserted Shipment terms sits right after Payment terms IN THE
+    // HEADER. Apsara: "payment terms,shioment terms removed" — both are now
+    // in the row's panel, so indexOf returns -1 for each and the clause
+    // compared -1 to 0.
+    //
+    // Not deleted: the ORDER rule still holds for the columns that remain,
+    // and the pair's own order still matters where they now live. What
+    // replaces the third clause is the NEW rule, which is worth more: the
+    // five she asked for are OFF the table.
     ck('the table reads in her order',
        labels.indexOf('Proforma date') === labels.indexOf('Item') + 1
-       && labels.indexOf('Reference') === labels.indexOf('Proforma date') + 1
-       && labels.indexOf('Shipment terms') === labels.indexOf('Payment terms') + 1,
+       && labels.indexOf('Reference') === labels.indexOf('Proforma date') + 1,
        labels.join(' | '));
+    ck('  Date comes first', labels[0] === 'Date' || labels[1] === 'Date',
+       labels.join(' | '));
+    for (const gone of ['Booking no', 'Container no', 'HBL number',
+                        'Payment terms', 'Shipment terms']) {
+        ck(`  ${gone} is off the table, not deleted`, !labels.includes(gone),
+           labels.join(' | '));
+    }
+    // "Nothing is removed — everything is one click nearer than a scrollbar."
+    // If these ever stop being reachable from the row, the fix for the blanks
+    // has become a loss of data on screen.
+    const panel = doc.querySelector('#viewRoot tbody');
+    ck('  and still reachable in the row panel',
+       !!panel && /Payment terms|Shipment terms|Booking no/.test(panel.textContent),
+       'off the table must mean one click away, never gone');
     ck('  and "Terms" alone is gone from the header',
        !labels.includes('Terms'), labels.join(' | '));
 

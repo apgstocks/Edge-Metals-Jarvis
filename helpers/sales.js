@@ -355,7 +355,41 @@ const GROUPS = [
     { id: 'money',     label: 'Weight & money' },
 ];
 
-const tableColumns = () => TABLE_ORDER.map((k) => COLUMNS.find((c) => c.key === k));
+// ── WHICH COLUMNS THE INVOICE REGISTER SHOWS (2026-11-07) ────────────────
+// Apsara: "bill and invoice tab data are unevenly spaced .mny blank in
+// between" — and then, exactly: "inv register i want date first,bkg no,cont
+// no,hbl no it can be removed,i want inv no,customer name,then payment
+// terms,shioment terms removed,rest can be there".
+//
+// The blanks were the cause, not the symptom. Bills has marked its core
+// columns since 2026-10 and shows nine, with the rest one click away under
+// the row. SALES NEVER DID — so the Invoice register rendered all sixteen,
+// including the ones that are empty on most rows, and the eye has to cross
+// a field of gaps to get from the date to the amount.
+//
+// Her list, by key:
+//   date          first, and filtering TABLE_ORDER to the core set puts it
+//                 there without reordering anything
+//   invoice_no    wanted
+//   customer      wanted
+//   rest          item, proforma_date, reference, weight, invoice_price,
+//                 amount, received, balance — "rest can be there"
+//
+// Off the table, into the row's panel:
+//   booking_no, container_no, hbl_no   "it can be removed"
+//   terms, shipment_terms              "removed"
+//
+// NOTHING IS DELETED. `core` is ADDITIVE, the same way helpers/bills.js
+// added it: every existing reader — the export, the API, the margin
+// calculation — still sees all sixteen columns in the same order, and only a
+// client that looks for the flag narrows. A column she wants back is one
+// line here, which is what "add/remove columns on request" asks for.
+const CORE_KEYS = ['date', 'invoice_no', 'customer', 'item', 'proforma_date',
+    'reference', 'weight', 'invoice_price', 'amount', 'received', 'balance'];
+
+const tableColumns = () => TABLE_ORDER.map((k) => COLUMNS.find((c) => c.key === k))
+    .filter(Boolean)
+    .map((c) => (CORE_KEYS.includes(c.key) ? { ...c, core: true } : c));
 
 // Same helper bills has, so the form can walk a group in the order the group
 // states rather than in COLUMNS order.
