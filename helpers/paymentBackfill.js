@@ -94,8 +94,21 @@ function plan({ qb, sales, receipts = [] }) {
             if (open > CENT) unexplained.push({ sale_id: s.id, customer: s.customer, invoice_no: s.invoice_no || null, container_no: s.container_no || null, open });
         }
     }
+    // What is STILL open in Jarvis after this plan, and why: QuickBooks agrees it is unpaid / QuickBooks says paid but nothing explains it
+    // (listed above) / QuickBooks has no invoice for it at all (never invoiced there, or numbered differently).
+    const qbFor = (sale) => (qb.invoices || []).find((i) => salesFor(i).some((x) => x.id === sale.id));
+    const remaining = { qbOpen: { n: 0, amount: 0 }, qbPaidUnexplained: { n: 0, amount: 0 }, notInQuickbooks: { n: 0, amount: 0 }, notInQuickbooksList: [] };
+    for (const s of sales) {
+        if (s.balance === null || s.balance === undefined) continue;
+        const open = r2(s.balance - (covered.get(s.id) || 0));
+        if (open <= CENT) continue;
+        const i = qbFor(s);
+        const k = !i ? 'notInQuickbooks' : Number(i.Balance) > CENT ? 'qbOpen' : 'qbPaidUnexplained';
+        remaining[k].n += 1; remaining[k].amount = r2(remaining[k].amount + open);
+        if (k === 'notInQuickbooks' && remaining.notInQuickbooksList.length < 10) remaining.notInQuickbooksList.push({ invoice_no: s.invoice_no || null, container_no: s.container_no || null, date: s.date || null, open });
+    }
     const sum = (a, k = 'amount') => r2(a.reduce((t, x) => t + x[k], 0));
-    return { proposed, leftover, unmatched, unexplained, skippedDone,
+    return { proposed, leftover, unmatched, unexplained, skippedDone, remaining,
         totals: { receipts: proposed.length, money: sum(proposed), leftover: sum(leftover), unmatched: sum(unmatched), unexplained: sum(unexplained, 'open'), alreadyImported: skippedDone.length,
             customers: [...new Set(proposed.map((x) => x.customer))].length, modeGuessed: proposed.filter((x) => x.mode_guessed).length } };
 }

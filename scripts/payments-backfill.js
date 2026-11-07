@@ -33,12 +33,20 @@ async function pull(client, table, where, cap = 20000) {
     console.log(`Jarvis sales: ${rows.length}${only ? ` (matching "${only}")` : ''}; reading QuickBooks payments and invoices since ${since} ...`);
     const [payments, invoices] = await Promise.all([pull(client, 'Payment', `TxnDate >= '${since}'`), pull(client, 'Invoice', `TxnDate >= '${since}'`)]);
     console.log(`QuickBooks: ${payments.length} payments, ${invoices.length} invoices`);
-    const plan = pb.plan({ qb: { payments, invoices }, sales: rows, receipts: salesReceipts.list() });
+    // With --customer, QuickBooks payments of OTHER customers are not "unplaced", they are simply not in scope.
+    const inScope = (c) => !only || String((c && c.name) || '').toLowerCase().includes(only);
+    const plan = pb.plan({ qb: { payments: payments.filter((p) => inScope(p.CustomerRef)), invoices: invoices.filter((i) => inScope(i.CustomerRef)) }, sales: rows, receipts: salesReceipts.list() });
     const t = plan.totals;
     console.log(`\nWould add ${t.receipts} receipts (${money(t.money)}) for ${t.customers} customers.  Already imported: ${t.alreadyImported}.`);
     if (t.modeGuessed) console.log(`  ${t.modeGuessed} receipts have a payment method QuickBooks did not name - set to Wire (check them).`);
     console.log(`Could NOT place: ${money(t.unmatched)} on QuickBooks invoices with no Jarvis sale (${plan.unmatched.length} lines); ${money(t.leftover)} more than the sale still showed outstanding.`);
     console.log(`Paid in QuickBooks but nothing explains it in Jarvis: ${plan.unexplained.length} sales, ${money(t.unexplained)}.`);
+    const rem = plan.remaining;
+    console.log(`\nStill open in Jarvis AFTER this: ${rem.qbOpen.n + rem.qbPaidUnexplained.n + rem.notInQuickbooks.n} sales`);
+    console.log(`  QuickBooks agrees they are unpaid:            ${String(rem.qbOpen.n).padStart(4)} sales  ${money(rem.qbOpen.amount)}`);
+    console.log(`  QuickBooks says paid, nothing explains it:    ${String(rem.qbPaidUnexplained.n).padStart(4)} sales  ${money(rem.qbPaidUnexplained.amount)}`);
+    console.log(`  No matching invoice found in QuickBooks:      ${String(rem.notInQuickbooks.n).padStart(4)} sales  ${money(rem.notInQuickbooks.amount)}`);
+    for (const x of rem.notInQuickbooksList.slice(0, 5)) console.log(`      e.g. ${x.invoice_no || '-'} / ${x.container_no || '-'} (${x.date || '-'}) ${money(x.open)}`);
     const per = {}; for (const r of plan.proposed) { (per[r.customer] = per[r.customer] || { n: 0, m: 0 }); per[r.customer].n++; per[r.customer].m += r.amount; }
     console.log('\nBy customer (largest first):');
     for (const [c, v] of Object.entries(per).sort((a, b) => b[1].m - a[1].m).slice(0, 15)) console.log(`  ${c.padEnd(34)} ${String(v.n).padStart(4)} receipts  ${money(v.m)}`);

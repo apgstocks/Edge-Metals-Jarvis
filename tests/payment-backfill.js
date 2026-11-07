@@ -50,6 +50,10 @@ const qpay = (Id, customer, amount, lines, extra = {}) => ({ Id, TxnDate: '2026-
     ck('an unnamed payment method is a flagged guess', pb.modeOf(null).guessed === true && pb.modeOf('Zelle').mode === 'Zelle' && pb.modeOf('Check').mode === 'Cheque' && pb.modeOf('Cash').mode === 'Cash');
     ck('banks: Chase and unknown accounts mapped sensibly', pb.bankOf('Chase Business') === 'Chase Bank' && pb.bankOf('Wells Fargo') === 'Wells Fargo' && pb.bankOf(null) === 'Others');
 
+    ck('after the plan, what is STILL open is classified: Daekwang = QuickBooks agrees unpaid; Ghost Co = not in QuickBooks', plan.remaining.qbOpen.n === 1 && plan.remaining.qbOpen.amount === 4000 && plan.remaining.notInQuickbooks.n === 1 && plan.remaining.notInQuickbooks.amount === 900 && plan.remaining.notInQuickbooksList[0].invoice_no === 'G-1', JSON.stringify(plan.remaining));
+    const src0 = fs.readFileSync(path.join(ROOT, 'scripts/payments-backfill.js'), 'utf8');
+    ck('--customer also scopes the QuickBooks side (other customers\' payments are not "unplaced")', /inScope\(p\.CustomerRef\)/.test(src0) && /inScope\(i\.CustomerRef\)/.test(src0));
+
     section('B. apply: real receipts, real balances');
     const before = rows().find((s) => s.id === r1).balance;
     const out = await pb.apply(plan.proposed, { addReceipt: receipts.addReceipt });
