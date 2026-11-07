@@ -130,6 +130,34 @@ const qpay = (Id, customer, amount, lines, extra = {}) => ({ Id, TxnDate: '2026-
         [{ id: 'd1', date: '2026-10-20', amount: 46914.15, direction: 'in', desc: 'ACH 8841' }, { id: 'd2', date: '2026-09-01', amount: 5000, direction: 'in' }, { id: 'd3', date: '2026-10-05', amount: 7777, direction: 'in', matched: { kind: 'x' } }, { id: 'd4', date: '2026-10-05', amount: 5000, direction: 'out' }]);
     ck('bank hints: exact amount after the invoice date, unused, unmatched, incoming only', hints.hints.length === 1 && hints.hints[0].invoice_no === 'I1' && hints.money === 46914.15, JSON.stringify(hints));
 
+    section('D6. bank fees (Apsara: "bank fee can be there na?")');
+    const f1 = await mk('Fee Co', 'F-1', '2026-08-01', 10000, 1, 'FFFF1111111');     // $10,000, customer wired and the bank took $25
+    const f2 = await mk('Fee Co', 'F-2', '2026-08-02', 20000, 1, 'FFFF2222222');     // QuickBooks closed it for $19,999.80 ($0.20 short)
+    const f3 = await mk('Fee Co', 'F-3', '2026-08-03', 30000, 1, 'FFFF3333333');     // QuickBooks still shows $12 open: a REAL balance
+    const f4 = await mk('Fee Co', 'F-4', '2026-08-04', 40000, 1, 'FFFF4444444');     // paid $39,800: $200 short is not a fee
+    const feeQb = { invoices: [qinv('81', 'F-2', 20000, 0), qinv('82', 'F-3', 30000, 12), qinv('83', 'F-4', 40000, 200)], payments: [
+        qpay('800', 'Fee Co', 9975, [['not-in-pull', 9975]]),                    // matched by amount, $25 short
+        qpay('801', 'Fee Co', 19999.8, [['81', 19999.8]]),
+        qpay('802', 'Fee Co', 29988, [['82', 29988]]),
+        qpay('803', 'Fee Co', 39800, [['83', 39800]]) ] };
+    const fp = pb.plan({ qb: feeQb, sales: rows(), receipts: receipts.list() });
+    const fr = (id) => fp.proposed.find((p) => p.qb_payment === id);
+    const ded = (r) => r.allocations.reduce((t, a) => t + (a.deduction_amount || 0), 0);
+    ck('a payment $25 short of the one open sale with that amount is matched, with a $25 bank-charge deduction (said so)', fr('800') && ded(fr('800')) === 25 && fr('800').allocations[0].deduction_reason === 'bank_charge' && /wire fee/.test(fr('800').allocations[0].deduction_note), JSON.stringify(fr('800')));
+    ck('QuickBooks closed the invoice $0.20 short: the residue becomes a bank-charge deduction', fr('801') && Math.abs(ded(fr('801')) - 0.2) < 0.001 && fr('801').has_fee === true, JSON.stringify(fr('801')));
+    ck('QuickBooks still shows $12 open: that is a real balance, NOT a fee', fr('802') && ded(fr('802')) === 0);
+    ck('$200 short is not a fee: the sale keeps a real balance', fr('803') && ded(fr('803')) === 0);
+    ck('fee totals reported', fp.totals.wireFeeCount === 2 && Math.abs(fp.totals.wireFees - 25.2) < 0.001, JSON.stringify([fp.totals.wireFeeCount, fp.totals.wireFees]));
+    const fo = await pb.apply(fp.proposed.filter((p) => p.customer === 'Fee Co'), { addReceipt: receipts.addReceipt });
+    const fbal = (id) => rows().find((x) => x.id === id).balance;
+    ck('written: F-1 and F-2 CLOSE (fee deductions count), F-3 keeps $12, F-4 keeps $200', fo.failed.length === 0 && fbal(f1) === 0 && fbal(f2) === 0 && Math.abs(fbal(f3) - 12) < 0.001 && Math.abs(fbal(f4) - 200) < 0.001, JSON.stringify([fo, fbal(f1), fbal(f2), fbal(f3), fbal(f4)]));
+    const feeBank = pb.verifyWithBank([{ ref: 'x', customer: 'C', date: '2026-10-20', amount: 1000 }, { ref: 'y', customer: 'C', date: '2026-10-20', amount: 2000 }, { ref: 'z', customer: 'C', date: '2026-10-20', amount: 3000 }],
+        [{ id: 'b0', date: '2026-01-01', amount: 1, direction: 'in' }, { id: 'b1', date: '2026-10-21', amount: 975, direction: 'in' }, { id: 'b2', date: '2026-10-21', amount: 2100, direction: 'in' }, { id: 'b3', date: '2026-10-21', amount: 2940, direction: 'in' }]);
+    const fs2 = Object.fromEntries(feeBank.rows.map((r) => [r.ref, r.bank_check.status]));
+    ck('bank: a deposit up to $50 SHORT of the receipt verifies it (fee shown); a bigger shortfall or a deposit ABOVE it does not', fs2.x === 'verified' && feeBank.rows[0].bank_check.fee_short === 25 && fs2.y === 'not-found' && fs2.z === 'not-found', JSON.stringify(fs2));
+    const fh = pb.bankHints([{ invoice_no: 'H1', date: '2026-10-01', open: 5000 }], [{ id: 'q', date: '2026-10-10', amount: 4980, direction: 'in' }]);
+    ck('bank hints also allow the wire fee', fh.hints.length === 1);
+
     section('E. the script is dry by default');
     const src = fs.readFileSync(path.join(ROOT, 'scripts/payments-backfill.js'), 'utf8');
     ck('writes only behind --write', /const WRITE = process\.argv\.includes\('--write'\)/.test(src) && /if \(!WRITE\) \{[^}]*DRY RUN[^}]*return;/.test(src));

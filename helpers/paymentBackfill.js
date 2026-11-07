@@ -13,6 +13,9 @@
 const KEY = (v) => String(v || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
 const r2 = (n) => Math.round(Number(n || 0) * 100) / 100;
 const CENT = 0.005;
+// A wire loses a few dollars to the intermediary banks on the way (helpers/salesReceipts.js: 'bank_charge'). Apsara, 2026-11-07: "bank fee can be
+// there". Up to this much short is read as a wire fee, never as an unpaid balance - and always SAID on the receipt.
+const FEE_TOLERANCE = 50;
 
 function modeOf(pm) {
     const t = String((pm && (pm.name || pm)) || '');
@@ -74,12 +77,15 @@ function plan({ qb, sales, receipts = [], fifoUnapplied = false }) {
                     // LAST RESORT, exact money: one open Jarvis sale of this customer whose outstanding amount equals this payment line to the cent.
                     // Only when exactly ONE such sale exists; flagged on the receipt so she can see it was matched by amount.
                     const cname = KEY((p.CustomerRef || {}).name);
-                    const byAmt = sales.filter((x) => x.balance !== null && x.balance !== undefined && (room.get(x.id) || 0) > CENT && Math.abs((room.get(x.id) || 0) - amt) < 0.01
+                    const byAmt = sales.filter((x) => x.balance !== null && x.balance !== undefined && (room.get(x.id) || 0) > CENT && (room.get(x.id) || 0) - amt > -0.01 && (room.get(x.id) || 0) - amt <= FEE_TOLERANCE
                         && cname && (KEY(x.customer) === cname || KEY(x.customer).includes(cname) || cname.includes(KEY(x.customer))));
                     if (byAmt.length === 1 && amt > 1) {
-                        const x = byAmt[0]; room.set(x.id, 0); covered.set(x.id, r2((covered.get(x.id) || 0) + amt));
+                        const x = byAmt[0]; const short = r2(Math.max(0, (room.get(x.id) || 0) - amt));
+                        room.set(x.id, 0); covered.set(x.id, r2((covered.get(x.id) || 0) + amt + short));
                         const c = perCustomer.get(x.customer) || { allocations: [], total: 0, byAmount: false };
-                        c.allocations.push({ sale_id: x.id, amount: amt }); c.total = r2(c.total + amt); c.byAmount = true; perCustomer.set(x.customer, c);
+                        const al = { sale_id: x.id, amount: amt };
+                        if (short > 0.01) { al.deduction_amount = short; al.deduction_reason = 'bank_charge'; al.deduction_note = 'probable wire fee: payment matched by amount, short by this much'; }
+                        c.allocations.push(al); c.total = r2(c.total + amt); c.byAmount = true; perCustomer.set(x.customer, c);
                         continue;
                     }
                 }
@@ -122,6 +128,21 @@ function plan({ qb, sales, receipts = [], fifoUnapplied = false }) {
             if (open > CENT) unexplained.push({ sale_id: s.id, customer: s.customer, invoice_no: s.invoice_no || null, container_no: s.container_no || null, open });
         }
     }
+    // A sale this plan paid down to a few dollars, on an invoice QuickBooks shows CLOSED: that residue is a wire fee, recorded as a bank-charge
+    // deduction on the same receipt (so the sale closes and the cost is not lost). Larger residues are left as real balances.
+    let feeDeductions = 0;
+    for (const sale of sales) {
+        const left = room.get(sale.id) || 0;
+        if (!(left > 0.005 && left <= FEE_TOLERANCE && (covered.get(sale.id) || 0) > 0)) continue;
+        const qi = (qb.invoices || []).find((i) => salesFor(i).some((x) => x.id === sale.id));
+        if (!qi || Number(qi.Balance) > CENT) continue;
+        for (let k = proposed.length - 1; k >= 0; k--) {
+            const al = proposed[k].allocations.find((a) => a.sale_id === sale.id);
+            if (!al || al.deduction_amount) continue;
+            al.deduction_amount = r2(left); al.deduction_reason = 'bank_charge'; al.deduction_note = 'wire fee: QuickBooks closed this invoice for less than Jarvis shows';
+            proposed[k].has_fee = true; room.set(sale.id, 0); covered.set(sale.id, r2((covered.get(sale.id) || 0) + left)); feeDeductions += 1; break;
+        }
+    }
     if (fifoUnapplied) {
         for (const u of unappliedCash.sort((a, b) => a.date.localeCompare(b.date))) {
             const q = KEY(u.customerQB); if (!q) continue;
@@ -160,7 +181,7 @@ function plan({ qb, sales, receipts = [], fifoUnapplied = false }) {
         .map((x) => ({ invoice_no: x.invoice_no || null, container_no: x.container_no || null, date: x.date || null, open: r2(x.balance - (covered.get(x.id) || 0)) })).sort((a, b) => String(a.date).localeCompare(String(b.date)));
     return { proposed, leftover, unmatched, unexplained, skippedDone, remaining, unappliedCash, oldestOpen,
         totals: { receipts: proposed.length, money: sum(proposed), leftover: sum(leftover), unmatched: sum(unmatched), unexplained: sum(unexplained, 'open'), alreadyImported: skippedDone.length,
-            unappliedCash: r2(unappliedCash.reduce((t, x) => t + x.amount, 0)), unappliedPlaced: r2(unappliedCash.reduce((t, x) => t + (x.placed || 0), 0)), customers: [...new Set(proposed.map((x) => x.customer))].length, modeGuessed: proposed.filter((x) => x.mode_guessed).length } };
+            wireFees: r2(proposed.reduce((t, r) => t + r.allocations.reduce((a, x) => a + (x.deduction_amount || 0), 0), 0)), wireFeeCount: proposed.reduce((t, r) => t + r.allocations.filter((x) => x.deduction_amount).length, 0), unappliedCash: r2(unappliedCash.reduce((t, x) => t + x.amount, 0)), unappliedPlaced: r2(unappliedCash.reduce((t, x) => t + (x.placed || 0), 0)), customers: [...new Set(proposed.map((x) => x.customer))].length, modeGuessed: proposed.filter((x) => x.mode_guessed).length } };
 }
 
 // Writes the proposed receipts. Idempotent (skips a ref already present) and per-row safe (one failure never stops the rest).
@@ -191,13 +212,14 @@ function verifyWithBank(proposed, bankRows, { days = BANK_DAYS } = {}) {
     const out = proposed.map((r) => ({ ...r }));
     // closest pairs first so a deposit goes to the receipt it is nearest to
     const pairs = [];
-    out.forEach((r, i) => deps.forEach((d, j) => { if (cents(d.amount) === cents(r.amount)) { const gap = Math.abs(day(d.date) - day(r.date)) / 864e5; if (gap <= days) pairs.push({ i, j, gap }); } }));
-    pairs.sort((a, b) => a.gap - b.gap);
+    // the deposit can be a wire fee short of the receipt (never more than it): exact matches are preferred, then the nearest date
+    out.forEach((r, i) => deps.forEach((d, j) => { const diff = cents(r.amount) - cents(d.amount); if (diff >= 0 && diff <= FEE_TOLERANCE * 100) { const gap = Math.abs(day(d.date) - day(r.date)) / 864e5; if (gap <= days) pairs.push({ i, j, gap, diff }); } }));
+    pairs.sort((a, b) => (a.diff - b.diff) || (a.gap - b.gap));
     const doneR = new Set();
-    for (const { i, j, gap } of pairs) {
+    for (const { i, j, gap, diff } of pairs) {
         if (doneR.has(i) || used.has(j)) continue;
         doneR.add(i); used.add(j);
-        out[i].bank_check = { status: 'verified', deposit_id: deps[j].id, deposit_date: String(deps[j].date).slice(0, 10), gap_days: gap };
+        out[i].bank_check = { status: 'verified', deposit_id: deps[j].id, deposit_date: String(deps[j].date).slice(0, 10), gap_days: gap, fee_short: diff ? r2(diff / 100) : 0 };
     }
     for (const r of out) if (!r.bank_check) r.bank_check = { status: (from && String(r.date) < from) ? 'outside-feed' : 'not-found' };
     const tot = (st) => out.filter((r) => r.bank_check.status === st);
@@ -230,11 +252,11 @@ function bankHints(openSales, bankRows, { usedDepositIds = new Set(), maxDays = 
     const deps = (bankRows || []).filter((r) => r && r.direction === 'in' && !r.excluded && !r.matched && r.date && Number(r.amount) > 0 && !usedDepositIds.has(r.id));
     const taken = new Set(); const hints = [];
     for (const s of [...openSales].sort((a, b) => String(a.date).localeCompare(String(b.date)))) {
-        const d = deps.filter((x) => !taken.has(x.id) && cents(x.amount) === cents(s.open) && day(x.date) >= day(s.date) - 86400000 && day(x.date) <= day(s.date) + maxDays * 864e5)
+        const d = deps.filter((x) => !taken.has(x.id) && cents(s.open) - cents(x.amount) >= 0 && cents(s.open) - cents(x.amount) <= FEE_TOLERANCE * 100 && day(x.date) >= day(s.date) - 86400000 && day(x.date) <= day(s.date) + maxDays * 864e5)
             .sort((a, b) => String(a.date).localeCompare(String(b.date)))[0];
         if (d) { taken.add(d.id); hints.push({ invoice_no: s.invoice_no, container_no: s.container_no, sale_date: s.date, open: s.open, deposit_id: d.id, deposit_date: String(d.date).slice(0, 10), desc: d.desc || '' }); }
     }
     return { hints, money: r2(hints.reduce((t, h) => t + h.open, 0)), of: openSales.length };
 }
 
-module.exports = { plan, apply, modeOf, bankOf, verifyWithBank, crossCheck, bankHints, BANK_DAYS };
+module.exports = { FEE_TOLERANCE, plan, apply, modeOf, bankOf, verifyWithBank, crossCheck, bankHints, BANK_DAYS };

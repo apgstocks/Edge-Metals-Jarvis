@@ -41,6 +41,7 @@ async function pull(client, table, where, cap = 20000) {
     const t = plan.totals;
     console.log(`\nWould add ${t.receipts} receipts (${money(t.money)}) for ${t.customers} customers.  Already imported: ${t.alreadyImported}.`);
     if (t.modeGuessed) console.log(`  ${t.modeGuessed} receipts have a payment method QuickBooks did not name - set to Wire (check them).`);
+    if (t.wireFeeCount) console.log(`  ${t.wireFeeCount} invoices closed with a small wire-fee shortfall (${money(t.wireFees)} in all, up to $${pb.FEE_TOLERANCE} each) - recorded as bank charges, said on each receipt.`);
     console.log(`Could NOT place: ${money(t.unmatched)} on QuickBooks invoices with no Jarvis sale (${plan.unmatched.length} lines); ${money(t.leftover)} more than the sale still showed outstanding.`);
     console.log(`Paid in QuickBooks but nothing explains it in Jarvis: ${plan.unexplained.length} sales, ${money(t.unexplained)}.`);
     if (t.unappliedCash) console.log(`QuickBooks holds ${money(t.unappliedCash)} of customer cash applied to NO invoice (lump payments). ${FIFO ? `Applying it to the oldest open invoices: ${money(t.unappliedPlaced)} placed.` : 'NOT applied here - add --apply-unapplied to apply it oldest invoice first.'}`);
@@ -63,7 +64,7 @@ async function pull(client, table, where, cap = 20000) {
     plan.proposed = bv.rows;
     const usedIds = new Set(bv.rows.filter((r) => r.bank_check.status === 'verified').map((r) => r.bank_check.deposit_id));
     const bh = pb.bankHints(plan.oldestOpen, bankRows, { usedDepositIds: usedIds });
-    console.log(`\nOf the ${bh.of} sales still open, ${bh.hints.length} have an unused bank deposit of EXACTLY that amount after the invoice date: ${money(bh.money)}`);
+    console.log(`\nOf the ${bh.of} sales still open, ${bh.hints.length} have an unused bank deposit of that amount (or up to $50 less, a wire fee) after the invoice date: ${money(bh.money)}`);
     for (const h of bh.hints.slice(0, 8)) console.log(`      ${String(h.invoice_no || h.container_no).padEnd(24)} ${money(h.open).padStart(14)}  deposit ${h.deposit_date} "${String(h.desc).slice(0, 36)}"`);
     if (plan.proposed.some((r) => r.matched_by_amount)) console.log(`  ${plan.proposed.filter((r) => r.matched_by_amount).length} receipts were matched to their invoice by exact amount only (noted on the receipt).`);
     if (only) {
