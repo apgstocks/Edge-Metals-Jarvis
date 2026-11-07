@@ -256,6 +256,9 @@ const RULES = {
     expense: (tx) => {
         const amount = r2(num(tx.amount));
         const needs = [];
+        // WHICH expense a note is about (added 2026-11-07): without it the sweep could only say "25 payments have no source", never which ones.
+        // Appended at the END of each note so nothing that matches the start of the text changes.
+        const who = `[${[tx.date || 'no date', '$' + (amount === null ? '?' : amount.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })), tx.party || tx.memo].filter(Boolean).join(' ')}]`;
 
         // 6900 Other expenses, not a refusal. Still flagged, so the category
         // can be added and the entry reclassified later.
@@ -263,7 +266,7 @@ const RULES = {
         if (!account) {
             account = '6900';
             needs.push(`category "${tx.category || '(blank)'}" is not in the chart — `
-                + 'recorded in 6900 Other expenses; add the category and it will move');
+                + `recorded in 6900 Other expenses; add the category and it will move ${who}`);
         }
 
         // The credit side. An unknown source is NOT a reason to lose the
@@ -274,7 +277,7 @@ const RULES = {
             bank = '2090';
             needs.push(`no bank or drawer identified for "${tx.mode || tx.bank || 'this payment'}" — `
                 + 'recorded against 2090 Unallocated payments; say which account it came '
-                + 'from and it will clear');
+                + `from and it will clear ${who}`);
         }
 
         return { debits: [[account, amount]], credits: [[bank, amount]], needs };

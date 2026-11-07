@@ -57,7 +57,7 @@ function compactText(res, dep, { csvName = null } = {}) {
             if (g.rest > 0) out.push(`  …and ${g.rest} more`);
         } else {
             for (const x of g.groups) {
-                if (x.few) { for (const i of x.few) out.push(`  \u00b7 ${short(i.what)}: ${clip(i.detail, 70)}`); continue; }
+                if (x.few) { for (const i of x.few) out.push(`  \u00b7 ${short(i.what)}: ${clip(i.detail, 190)}`); continue; }
                 if (x.reason) out.push(`  ${clip(x.reason, 80)} (${x.count})`);
                 out.push(x.byParty ? `    ${x.byParty.top.join(' \u00b7 ')}${x.byParty.more ? ` \u00b7 +${x.byParty.more} more` : ''}` : `    ${x.names.join(' \u00b7 ')}${x.rest ? ` \u00b7 +${x.rest} more` : ''}`);
             }
@@ -88,7 +88,7 @@ function compactHtml(res, dep, { csvName = null } = {}) {
             if (g.rest > 0) out.push(`<div style="color:${mute}">…and ${g.rest} more</div>`);
         } else {
             for (const x of g.groups) {
-                if (x.few) { for (const i of x.few) out.push(`<div style="padding:3px 0"><b>${esc(short(i.what))}</b> <span style="color:${mute}">${esc(clip(i.detail, 90))}</span></div>`); continue; }
+                if (x.few) { for (const i of x.few) out.push(`<div style="padding:3px 0"><b>${esc(short(i.what))}</b> <span style="color:${mute}">${esc(clip(i.detail, 190))}</span></div>`); continue; }
                 if (x.reason) out.push(`<div style="font-weight:600;margin-top:8px">${esc(clip(x.reason, 90))} <span style="color:${mute};font-weight:400">(${x.count})</span></div>`);
                 if (x.byParty) { out.push(`<div style="line-height:1.9">${x.byParty.top.map((t) => `<span style="display:inline-block;background:#f3f4f6;border-radius:4px;padding:1px 8px;margin:0 4px 4px 0;font-size:13px">${esc(t)}</span>`).join('')}${x.byParty.more ? `<span style="color:${mute}">+${x.byParty.more} more</span>` : ''}</div>`); continue; }
                 out.push(`<div style="line-height:1.9">${x.names.map((n) => `<span style="display:inline-block;background:#f3f4f6;border-radius:4px;padding:1px 8px;margin:0 4px 4px 0;font-size:13px">${esc(n)}</span>`).join('')}${x.rest ? `<span style="color:${mute}">+${x.rest} more</span>` : ''}</div>`);

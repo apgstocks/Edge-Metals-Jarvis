@@ -164,21 +164,39 @@ const CHECKS = [
         run() {
             const built = require('./booksBuild').build({});
             const byKind = new Map();
-            for (const n of (built.needs || [])) {
+            const examples = new Map(), totals = new Map();
+            for (const raw of (built.needs || [])) {
+                // postings.js ends each note with "[date $amount who]" (2026-11-07) so this can say WHICH ones.
+                const who = (/\[([^\]]*)\]\s*$/.exec(raw) || [])[1] || null;
+                const n = String(raw).replace(/\s*\[[^\]]*\]\s*$/, '');
                 const key = /is not in the chart/.test(n)
                     ? 'an expense category the chart does not have'
                     : /no bank or drawer identified/.test(n)
                         ? 'a payment whose source was never named'
                         : String(n).slice(0, 70);
-                const detail = (/"([^"]*)"/.exec(n) || [])[1];
+                // For "no bank identified" the quoted text is only the fallback label ("this payment"), which says nothing; the entries do.
+                const quoted = (/"([^"]*)"/.exec(n) || [])[1];
+                const detail = /no bank or drawer identified/.test(n) ? '' : quoted;
                 const k = `${key}|${detail || ''}`;
                 byKind.set(k, (byKind.get(k) || 0) + 1);
+                if (who) {
+                    if (!examples.has(k)) examples.set(k, []);
+                    if (examples.get(k).length < 3) examples.get(k).push(who);
+                    const m = /\$(-?[\d,]+(?:\.\d+)?)/.exec(who);
+                    const amt = m ? Number(m[1].replace(/,/g, '')) : NaN;
+                    if (Number.isFinite(amt)) totals.set(k, (totals.get(k) || 0) + amt);
+                }
             }
             return [...byKind.entries()].map(([k, n]) => {
                 const [key, detail] = k.split('|');
+                const ex = examples.get(k);
+                const tot = totals.get(k);
+                const which = ex && ex.length
+                    ? `e.g. ${ex.join('; ')}${n > ex.length ? '; \u2026' : ''}${tot ? ` (total $${tot.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })})` : ''} \u2014 set the payment method on each in Expenses`
+                    : null;
                 return {
-                    what: `${n} × ${key}`,
-                    detail: detail ? `"${detail}"` : 'see the Books page',
+                    what: `${n} \u00d7 ${key}`,
+                    detail: which || (detail ? `"${detail}"` : 'see the Books page'),
                 };
             });
         },
