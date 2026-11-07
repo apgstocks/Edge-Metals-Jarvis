@@ -3281,6 +3281,9 @@ function pendingFullReminder(p) {
         const n = (p.bookings || []).length;
         return `(Still waiting: reply *apply* and I'll correct ${n === 1 ? `${(p.bookings || [])[0]}` : `those ${n} bookings`} from the latest confirmation PDF, or "no" to leave them.)`;
     }
+    if (p.type === 'await_payment_held_answer') {
+        return `(Still waiting: is the payment I found really from ${p.customer}? Reply yes (hold their follow-up) or no (carry on).)`;
+    }
     if (p.type === 'await_payment_confirm') {
         const m = `$${(Math.round((Number(p.amount) || 0) * 100) / 100).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
         return `(Still waiting: a payment of ${m} looks like it arrived for ${p.inv_no}${p.source_from ? ` — from "${String(p.source_from).slice(0, 40)}"` : ''}. Record it? Reply yes or no — nothing is credited until you say yes.)`;

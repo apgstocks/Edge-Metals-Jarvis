@@ -1610,6 +1610,11 @@ function start() {
             qbSurvey: require('./helpers/paymentTruth').liveSurvey(),
             // Money already in the bank feed (Plaid) but not matched yet holds the follow-up.
             findDeposit: require('./helpers/bankDepositCheck').liveFinder(),
+            // When something MAY be a customer's payment, ASK her (yes = hold, no = carry on) rather than only report it.
+            askAboutHold: async (info) => {
+                const st = cfg.getSettings ? cfg.getSettings() : {};
+                return actions.stagePaymentHeldQuestion((st.manager_number || cfg.MANAGER_NUMBER || '') + '@c.us', info);
+            },
             // A customer email is STAGED on WhatsApp and goes only after her yes (workflow/actions.js).
             stageCustomerEmail: async (draft, step) => {
                 const st = cfg.getSettings ? cfg.getSettings() : {};

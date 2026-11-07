@@ -1568,6 +1568,26 @@ if (pending.type === 'await_name_confirm') {
         pending.scheduled_for ? new Date(pending.scheduled_for) : null);
 }
 
+// Apsara, 2026-11-07: "if it has any question, ask". The Follow-up Agent found mail or a bank deposit that MAY be a
+// customer's payment and cannot know. It asks. yes = she says that is their payment: keep the follow-up on hold for 30 days
+// while it is recorded. no = it is not: that item stops holding and the follow-up carries on. Writes only the agent's own
+// memory (the follow-up log); it records no receipt and contacts nobody.
+if (pending.type === 'await_payment_held_answer') {  // handled before the generic 'no': here "no" means "not theirs", not "cancel"
+    await clearPending(chatId);
+    const chaser = require('../helpers/paymentChaser');
+    const log = chaser.readLog();
+    const e = log[pending.key];
+    if (e && e.held && e.held.id === pending.hit_id) {
+        if (answer === 'no') e.held = { ...e.held, dismissed: true, at: 0 };
+        else e.held = { ...e.held, confirmed: true, until: (pending.asked_at || Date.now()) + 30 * 86400000 };
+        await chaser.writeLog(log);
+    }
+    await _send(chatId, answer === 'no'
+        ? `Understood - that is not ${pending.customer}'s payment. I'll carry on with their follow-up.`
+        : `Okay - I'll leave ${pending.customer} alone for 30 days. Record the payment (Bank match / receipts) so their invoices close.`);
+    return { action_taken: answer === 'no' ? 'payment_hold_dismissed' : 'payment_hold_confirmed' };
+}
+
 if (pending.type === 'await_cc_pattern_confirm') {
     await clearPending(chatId);
     const emailContacts = require('../helpers/emailContacts');
@@ -9248,6 +9268,17 @@ async function stagePaymentFollowupEmail(chatId, draft, step) {
     return { staged: true };
 }
 
+// The Follow-up Agent's question when it finds something that MAY be a customer's payment. One at a time and only when she has
+// nothing else open; { staged:false } means the agent says it as a plain note instead.
+async function stagePaymentHeldQuestion(chatId, { customer, key, hit, total, now }) {
+    if (getPending(chatId) || ((loadBrain().pending_queue || {})[chatId] || []).length) return { staged: false, reason: 'busy' };
+    const what = hit.kind === 'bank' ? `the bank shows a ${hit.subject}` : `they emailed something that may be proof of payment${hit.subject ? ` ("${hit.subject}")` : ''}`;
+    const staged = await setPending(chatId, { type: 'await_payment_held_answer', customer, key, hit_id: hit.id, asked_at: now || Date.now(), expires_in_ms: 12 * 60 * 60 * 1000 });
+    if (staged.queued) return { staged: false, reason: 'busy' };
+    await _send(chatId, `${customer} has about $${(Math.round(Number(total || 0) * 100) / 100).toLocaleString('en-US', { minimumFractionDigits: 2 })} open, and ${what}. Is that their payment? (yes = I'll hold their follow-up, no = it is not theirs and I'll carry on)`);
+    return { staged: true };
+}
+
 module.exports = {
     metalsBriefing, metalsReport,
     replyToFocusedDigest, askWhichDigestItem, reviseDraftedEmail,
@@ -9257,7 +9288,7 @@ module.exports = {
     logBug, showBugs, closeBugForConfirm, applyBugClose, resolveBugRef,
     showPendingReplies, replyToDigestItem, summarizeEmail, markPendingReminded, forwardOriginalToSelf, sendDraftedEmail,
 init,
-setPending, clearPending, getPending, resolvePending, promoteQueued, stagePaymentFollowupEmail,
+setPending, clearPending, getPending, resolvePending, promoteQueued, stagePaymentFollowupEmail, stagePaymentHeldQuestion,
 showMenu, showBookingsMenu, showBookingStatus, showContacts,
 showBookingsAll, showBookingsUrgent, showBookingsAvailable, showBookingsWeek,
 forwardBooking, executeForward,

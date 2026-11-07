@@ -213,7 +213,7 @@ async function run(opts = {}) {
     // ── CUSTOMER PAYMENTS (2026-11-07) ───────────────────────────────────
     // After the pickups and walled off from them: whatever happens here, a pickup rung
     // has already fired, and a failure here is reported rather than thrown.
-    try { out.payments = await runPayments({ sendToManager, sendToTeam, now: opts.now, drafts: opts.paymentDrafts, findRemittance: opts.findRemittance, stageCustomerEmail: opts.stageCustomerEmail, qbSurvey: opts.qbSurvey, findDeposit: opts.findDeposit }); }
+    try { out.payments = await runPayments({ sendToManager, sendToTeam, now: opts.now, drafts: opts.paymentDrafts, findRemittance: opts.findRemittance, stageCustomerEmail: opts.stageCustomerEmail, qbSurvey: opts.qbSurvey, findDeposit: opts.findDeposit, askAboutHold: opts.askAboutHold }); }
     catch (e) { out.payments = { asked: 0, chased: 0, escalated: 0, failed: [{ why: 'payment follow-ups could not run: ' + (e && e.message) }] }; }
     return out;
 }
@@ -223,7 +223,7 @@ async function run(opts = {}) {
 // message to her for the asks and chases, one to the team per escalation. A rung is
 // recorded only AFTER the message went, so a failed send is retried next run rather than
 // buried.
-async function runPayments({ sendToManager, sendToTeam, now, drafts, findRemittance, stageCustomerEmail, qbSurvey, findDeposit }) {
+async function runPayments({ sendToManager, sendToTeam, now, drafts, findRemittance, stageCustomerEmail, qbSurvey, findDeposit, askAboutHold }) {
     const res = { asked: 0, chased: 0, escalated: 0, held: 0, staged: 0, failed: [] };
     if (String(process.env.PAYMENT_CHASE || '').toLowerCase() === 'off') return { ...res, off: true };
     const chaser = require('./paymentChaser');
@@ -280,14 +280,15 @@ async function runPayments({ sendToManager, sendToTeam, now, drafts, findRemitta
 
     // Mail from the customer that looks like proof of payment HOLDS the follow-up and tells her to look (Apsara, 2026-11-07).
     // Read-only: nothing is marked paid. A hold lapses after HOLD_DAYS if no receipt has been recorded, then the ladder resumes.
-    const heldNotes = [];
+    const heldNotes = []; let newHolds = 0;
     if ((typeof findRemittance === 'function' || typeof findDeposit === 'function') && todo.length) {
         const HOLD_MS = require('./remittanceMail').HOLD_DAYS * 86400000;
         const keep = [];
         for (const x of todo) {
             const entry = log[x.key];
             const held = entry && entry.held;
-            const stale = held && (t - held.at) > HOLD_MS;
+            // dismissed by her ("no, not theirs") or lapsed; a hold she CONFIRMED lasts until its own date (30 days).
+            const stale = held && (held.dismissed || (held.confirmed ? t > (held.until || 0) : (t - held.at) > HOLD_MS));
             let hit = null;
             try {
                 const since = entry && entry.firstAt ? Date.parse(entry.firstAt) : t - 45 * 86400000;
@@ -300,7 +301,13 @@ async function runPayments({ sendToManager, sendToTeam, now, drafts, findRemitta
             res.held += 1;
             if (!held || held.id !== hit.id) {
                 log[x.key] = { ...(entry || { set: null, firstAt: new Date(t).toISOString(), lastStep: null, lastAt: null, customer: x.draft.customer }), held: { id: hit.id, at: hit.dateMs || t } };
-                heldNotes.push(hit.kind === 'bank'
+                newHolds += 1;
+                // If something may be theirs and she can be asked, ASK (Apsara, 2026-11-07: "if it has any question, ask").
+                let asked = false;
+                if (typeof askAboutHold === 'function') {
+                    try { const q = await askAboutHold({ customer: x.draft.customer, key: x.key, hit, total: x.draft.total, now: t }); asked = !!(q && q.staged); } catch (e) { asked = false; }
+                }
+                if (!asked) heldNotes.push(hit.kind === 'bank'
                     ? `${x.draft.customer} \u2014 ${chaser.money(x.draft.total)} open: the bank shows a ${hit.subject} that may be theirs. Match it to their invoices; follow-up on hold.`
                     : `${x.draft.customer} \u2014 ${chaser.money(x.draft.total)} open: they emailed something that looks like proof of payment (${hit.subject ? '"' + hit.subject + '"' : 'no subject'}). Check it and record the receipt; follow-up on hold.`);
             }
@@ -310,7 +317,7 @@ async function runPayments({ sendToManager, sendToTeam, now, drafts, findRemitta
             try { await sendToManager('Possible payment received:\n' + heldNotes.map((n) => '  \u00b7 ' + n).join('\n')); }
             catch (e) { res.failed.push({ why: 'could not tell her about a possible payment: ' + (e && e.message) }); }
         }
-        if (heldNotes.length) await chaser.writeLog(log);
+        if (heldNotes.length || newHolds) await chaser.writeLog(log);
     }
     if (!todo.length) { if (JSON.stringify(log) !== JSON.stringify(chaser.readLog())) await chaser.writeLog(log); return res; }
 
