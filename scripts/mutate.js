@@ -574,6 +574,19 @@ const MUTATIONS = [
     // this used to name is gone. The CALL SITE is the better anchor anyway —
     // it is the only place the two rows are still told apart, and it is what
     // a careless edit would collapse.
+    // ── A LOAD WORTH MINUS MONEY (2026-11-08) ───────────────────────────
+    // Apsara: "A mistyped tare weight creates a load worth minus money fix
+    // it". Aimed at the TOTAL, which is where the rule lives — a per-row
+    // version would have locked her out of EDGE_90, a real $22,938 load
+    // carrying a deliberate -100 lb correction row.
+    { name: 'yard load: a mistyped tare saves a load worth minus money again',
+      file: 'helpers/loads.js', suites: ['edge-yard-scenarios'],
+      find: "    if (Number(totals.net_weight) < 0) neg.push(`net weight ${totals.net_weight}`);",
+      to:   "    if (false) neg.push(`net weight ${totals.net_weight}`);" },
+    { name: 'yard load: the negative-total refusal is skipped on an edit',
+      file: 'helpers/loads.js', suites: ['edge-yard-scenarios', 'load-item-units'],
+      find: "    const totals = sumItems(items);\n    assertLoadNotNegative(totals, items);\n\n    const patch = {",
+      to:   "    const totals = sumItems(items);\n\n    const patch = {" },
     { name: 'spend screen: the two counterparty rows collapse into one control',
       file: 'dashboard/app/06-expenses-trucker.js', suites: ['spend-report-screen'],
       find: "          ? partyRow('Sold to', 'btn-spend-sold', 'sold', 'spend_sold', rep.soldToColumns || [], spendSold)",

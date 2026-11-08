@@ -294,6 +294,58 @@ function nextLoadId(loads) {
 // (e.g. "+ Add item" clicked by mistake) and silently skipped, same as the
 // existing filter that drops fully-blank items before they're saved — it's
 // not "an item" yet, so it isn't held to the same completeness bar.
+// ── A LOAD CANNOT BE WORTH MINUS MONEY (2026-11-08) ──────────────────────
+// Apsara: "A mistyped tare weight creates a load worth minus money fix it".
+//
+// Found by tests/edge-yard-scenarios.js: gross 1,000 with tare 4,000 — the
+// slip you make typing two numbers at a scale — saved happily as net_weight
+// -3000, amount -3000, net_payable -3000, with no warning. That load then
+// SUBTRACTS from what the seller is owed, from stock and from the day's
+// totals, and nothing flags it. It is only found by someone noticing a total
+// looks wrong, weeks later.
+//
+// ── WHY THE CHECK IS ON THE TOTAL AND NOT ON EACH ROW ───────────────────
+// The obvious rule is "tare must never exceed gross". Her live data says no.
+// Scanning all 233 purchases and 17 sales on 2026-11-08 found exactly one
+// row that breaks it: load EDGE_90, 2026-09-26, Beto — a single Auto cast
+// line of gross -100 / net -100 / -$105 sitting inside a perfectly healthy
+// $22,938.74 load whose paperwork is already generated. That is somebody
+// correcting an over-weigh, and it is legitimate.
+//
+// A per-row rule would have locked her out of editing that real load. The
+// rule she actually asked for is about the LOAD being worth minus money, so
+// that is what is checked: the totals that are about to be stored. One
+// negative correction row inside a positive load still saves; a load that
+// comes out negative does not.
+//
+// ── WHERE IT LIVES ───────────────────────────────────────────────────────
+// Called from addLoad and editLoad, right after sumItems, so it judges the
+// EXACT numbers being written rather than recomputing them a second way and
+// risking the two disagreeing.
+//
+// updateLoad is deliberately NOT touched. It is a plain patch merge that
+// never recomputes totals, and two of its callers send no items at all —
+// the seller-signature stamp (routes/yard.js:740) and the PDF stamp
+// (helpers/loadsPdf.js:161). Putting a totals rule there would have broken
+// both, which is exactly the shape of mistake CLAUDE.md rule 1 describes.
+function assertLoadNotNegative(totals, items) {
+    const neg = [];
+    if (Number(totals.net_weight) < 0) neg.push(`net weight ${totals.net_weight}`);
+    if (Number(totals.amount) < 0) neg.push(`value ${totals.amount}`);
+    if (!neg.length) return;
+    // Name the rows that look like the typo, so she can go straight to it
+    // instead of hunting a long ticket for the one that is wrong.
+    const culprits = (items || [])
+        .filter((it) => Number(it.net_weight) < 0)
+        .map((it) => `${it.description || 'row'} (gross ${it.gross_weight}, tare ${it.tare_weight})`);
+    throw new Error(
+        `This load comes out at ${neg.join(' and ')}, which cannot be right. `
+        + (culprits.length
+            ? `Check the weights on ${culprits.join('; ')} — a tare heavier than the gross `
+              + 'usually means the two were typed the wrong way round.'
+            : 'Check the weights.'));
+}
+
 function validateLoadForSave(entry) {
     if (!entry.seller || !String(entry.seller).trim()) {
         throw new Error('Validation: seller is required.');
@@ -334,6 +386,7 @@ async function addLoad(entry) {
     const items = Array.isArray(entry.items)
         ? require('./itemSpelling').canonicaliseItems(entry.items, _known).map(computeItem) : [];
     const totals = sumItems(items);
+    assertLoadNotNegative(totals, items);
 
     const rec = {
         id            : null, // assigned below, under the lock — see nextLoadId
@@ -462,6 +515,7 @@ async function editLoad(id, entry) {
     const items = Array.isArray(entry.items)
         ? require('./itemSpelling').canonicaliseItems(entry.items, _known).map(computeItem) : [];
     const totals = sumItems(items);
+    assertLoadNotNegative(totals, items);
 
     const patch = {
         date          : entry.date || null,
