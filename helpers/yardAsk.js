@@ -224,7 +224,24 @@ async function askYardInner(question, opts = {}) {
             + 'Use `tool` to LOOK SOMETHING UP — leave `answer` empty when you do. '
             + 'Set have_data to false only after looking and finding nothing. '
             + 'Leave `action` null unless you were asked to do something.',
-        ].join('\n');
+            // ── AND, WHEN SHE IS ASKING TO BE SHOWN, WHERE TO TAKE HER ──
+            // Apsara, 2026-11-08: "i dont want to restrict only to
+            // pedefined actions.let ai resolve that". So the model reads her
+            // sentence however she phrased it and names the screen and the
+            // filters itself, instead of me guessing phrasings for ever.
+            //
+            // What it may name comes from helpers/scoutActions.promptFor(),
+            // generated from the same constants that validate the reply — so
+            // it cannot be told about a screen that would then be rejected,
+            // and the reply is still checked before it can move her. A model
+            // that navigates freely can put her on the wrong company's books
+            // while she believes she is reading the yard's, and rule 5 is
+            // that those are different companies.
+            //
+            // Absent for every other caller: the voice path passes no
+            // `show`, so its prompt is byte-for-byte what it always was.
+            opts.show || null,
+        ].filter((x) => x !== null).join('\n');
     }
 
     let prompt = buildPrompt();
@@ -353,7 +370,26 @@ async function askYardInner(question, opts = {}) {
                 return { ok: true, answer: `${text}\n\nI can't do that: ${e.message}`, have_data: res.have_data !== false, data_as_of: brief.generated_at };
             }
         }
-        return { ok: true, answer: text, have_data: res.have_data !== false, proposal, data_as_of: brief.generated_at };
+        // ── WHAT IT LOOKED UP, NOT ONLY WHAT IT CONCLUDED (2026-11-08) ───
+        // Apsara: "Say if user say tell me how muc aash i paid in last three
+        // days.Let ai should handle that with detailed report".
+        //
+        // The model already runs the right tool and gets the rows back. They
+        // died here: only the prose came out, so a screen could print the
+        // sentence and nothing else. `used` carries the tool name, the
+        // params it chose and the rows it got, which is what a panel needs
+        // to show the working under the figure.
+        //
+        // ADDITIVE. Every existing caller — the voice path above all — reads
+        // `answer` and is untouched by a new key. Same reasoning as the
+        // `core` flag on the invoice columns this morning.
+        return { ok: true, answer: text, have_data: res.have_data !== false, proposal,
+                 // What it decided she wanted to SEE. Raw and unchecked here
+                 // on purpose — validating it is the caller's job, and
+                 // routes/scout.js puts it through scoutActions.sanitise
+                 // before it is allowed anywhere near the screen.
+                 show: (res && res.show) || null,
+                 used: found, data_as_of: brief.generated_at };
     } catch (err) {
         console.error('[YARD-ASK] failed:', err.message);
         // Says what went wrong rather than producing a made-up answer. A bot

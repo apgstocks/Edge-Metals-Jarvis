@@ -1124,6 +1124,7 @@ const STAFF_ALLOWED_PATH_PREFIXES = ['/api/loads', '/api/load-drafts', '/api/out
     Object.assign(ctx, require('./routes/ledger')(app, ctx)); // @@part
     Object.assign(ctx, require('./routes/money')(app, ctx)); // @@part
     Object.assign(ctx, require('./routes/reports')(app, ctx)); // @@part
+    Object.assign(ctx, require('./routes/scout')(app, ctx)); // @@part
     function amountForLoad(loadId, kind) {
         try {
             // A trucker bill is a payable like a load, with its amount on the
