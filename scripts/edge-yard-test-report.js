@@ -6,9 +6,16 @@
 //   EY_RESULTS_JSON=/tmp/ey.json node tests/edge-yard-scenarios.js
 //   node scripts/edge-yard-test-report.js /tmp/ey.json out.html
 //
-// The defect register below is the only hand-written part, because a verdict
-// needs a human judgement about severity and blast radius that a pass/fail
-// line cannot carry. Every defect names the evidence that produced it.
+// ── WRITTEN FOR APSARA, NOT FOR A DEVELOPER (2026-11-08) ─────────────────
+// Her words on the first draft: "Report shpuld be readable not full on
+// technical jargons". She is right, and it is the difference between a
+// report she can act on and one she has to decode. So every finding leads
+// with what happens at the yard and what it costs her. File names, function
+// names and line numbers are real and worth keeping — they live in one small
+// line at the bottom of each finding, labelled for whoever does the fix.
+//
+// The rule used throughout: if a sentence cannot be said to someone standing
+// at the scale, it belongs in the small grey line.
 
 const fs = require('fs');
 
@@ -19,241 +26,284 @@ const R = JSON.parse(fs.readFileSync(src, 'utf8'));
 const esc = (s) => String(s == null ? '' : s)
     .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
-// ── THE DEFECT REGISTER ──────────────────────────────────────────────────
-// Severity is about HER MONEY and HER PAPERWORK, not about how hard it is to
-// fix. "High" means a wrong number can leave the yard without anyone seeing
-// it happen.
-const DEFECTS = [
+// Severity is about HER MONEY, not about how hard the fix is.
+//   Serious = a wrong number can leave the yard and nobody sees it happen.
+const FINDINGS = [
     {
-        id: 'EY-D1', sev: 'HIGH', title: 'A double-tapped payment pays the seller twice',
-        where: 'helpers/payments.js — addPayment (line ~816)',
-        what: 'Two identical POSTs to /api/payments carrying the SAME client_request_id '
-            + 'both succeed. Outstanding moved $200 for two $100 payments.',
-        why: 'The once-per-save guard (oncePerSave.normTicket / findSpent) exists in this '
-            + 'file at lines 478 and 487 — both inside addPrepayment. addPayment has no '
-            + 'guard at all. Both clients already SEND client_request_id '
-            + '(dashboard/app/13-loads-render.js:1307, mobile-app/www/app/09-loads-deck.js:1343), '
-            + 'so they believe they are protected and are not.',
-        risk: 'She pays suppliers from a phone, in a yard, on a bad signal. A retry or a '
-            + 'fat-fingered second tap hands over the money twice and the ledger agrees '
-            + 'with the wrong figure. Nothing downstream can tell the two apart.',
-        evidence: 'EY-10',
-        fixNote: 'NOT FIXED — addPayment is shared by both screens, the voice path and the '
-            + 'settle path. Per CLAUDE.md rule 1 the caller list has to be walked before a '
-            + 'required-field or dedupe rule lands in it. Needs her go-ahead.',
+        id: 1, sev: 'Serious',
+        title: 'Tapping Pay twice pays the seller twice',
+        happens: 'If the Pay button is pressed twice — a double tap, or a retry when the '
+            + 'signal drops — the seller is paid twice. I paid $100 twice over and Jarvis '
+            + 'recorded $200 going out, with no warning and nothing to show the two apart.',
+        costs: 'You pay suppliers from a phone, standing in the yard, on a signal that comes '
+            + 'and goes. This is the single most likely way money leaves twice, and the '
+            + 'books agree with the wrong figure afterwards, so nothing later catches it.',
+        meant: 'Jarvis already has protection for exactly this. It was built for advance '
+            + 'payments and never extended to ordinary payments — and both the website and '
+            + 'the phone app are already sending the information it needs, so they behave '
+            + 'as though they are protected when they are not.',
+        next: 'Worth fixing first. The ordinary payment path is shared by the website, the '
+            + 'phone and talking to Jarvis, so I want to check all three before changing it '
+            + 'rather than fix one and break another.',
+        tech: 'helpers/payments.js — the once-per-save guard (oncePerSave.normTicket / '
+            + 'findSpent) is at lines 478 and 487, both inside addPrepayment. addPayment '
+            + '(line ~816) has none. Clients already send client_request_id: '
+            + 'dashboard/app/13-loads-render.js:1307, mobile-app/www/app/09-loads-deck.js:1343.',
+        seen: 'Use case 10',
     },
     {
-        id: 'EY-D2', sev: 'MEDIUM',
-        title: 'The spend report contradicts itself: no rows, but money went out',
-        where: 'helpers/spendReport.js — the cash block (line ~489)',
-        what: 'Paid by = Cash together with Paid via = Edge Yard returns ZERO rows and '
-            + '"Nothing was paid out in this period", while the petty cash band above it '
-            + 'still reports Cash out $51,572.16 for the same window.',
-        why: 'Two separate causes that meet on one screen. (1) paid_via is only ever '
-            + 'captured on Wire/Bank transfer, so NO cash row carries a company — across '
-            + 'all of 2026 that is 0 rows out of $787,739.92. The pair is an empty set by '
-            + 'construction and the screen offers it as a real question. (2) The cash band '
-            + 'is filtered only by date and by "is this cash"; company, paid_via, bank, '
-            + 'bought-from and sold-to never reach it.',
-        risk: '"Nothing was paid out in this period" reads as *you spent nothing*. It is '
-            + 'false — it means her filter excluded everything.',
-        evidence: 'EY-17, plus read-only probes against live data on 2026-11-08',
-        fixNote: 'NOT FIXED. Recommended: say which it is ("No rows match these filters. '
-            + '$51,572.16 was paid out — 13 cash payments, all with Paid via not recorded"), '
-            + 'disable the Paid via chips under Cash, and label the band as covering the '
-            + 'whole drawer. Scoping the band by company was considered and REJECTED — see '
-            + 'the note under Open Questions.',
+        id: 2, sev: 'Serious',
+        title: 'A mistyped tare weight creates a load worth minus money',
+        happens: 'I entered a gross weight of 1,000 lb and a tare of 4,000 lb — the kind of '
+            + 'slip you make typing two numbers at a scale. Jarvis saved it without a '
+            + 'murmur: the load came out at minus 3,000 lb, worth minus $3,000, with minus '
+            + '$3,000 owed to the seller.',
+        costs: 'That one load quietly SUBTRACTS from what the seller is owed, from what the '
+            + 'yard is holding, and from the day\'s totals. There is no flag on it. It is '
+            + 'only ever found by someone noticing a total looks wrong, long afterwards.',
+        meant: 'Nothing currently checks that the tare is lighter than the gross.',
+        next: 'Refusing it is the obvious answer. Before adding that rule I want to look at '
+            + 'whether any load already saved this way is sitting in your real data — if '
+            + 'one is, the new rule would stop you being able to edit it and fix it.',
+        tech: 'helpers/loads.js — validateLoadForSave does not compare tare against gross. '
+            + 'Saved as net_weight -3000, amount -3000, net_payable -3000, HTTP 200.',
+        seen: 'Use case 4',
     },
     {
-        id: 'EY-D3', sev: 'MEDIUM',
-        title: 'A yard claim cannot be raised against a walk-in purchase',
-        where: 'the /api/claims route',
-        what: 'Posting a claim against a yard load is refused: "a claim needs at least a '
-            + 'container number or an invoice number".',
-        why: 'That rule comes from the Edge Metals side, where every claim hangs off a '
-            + 'container. A yard purchase from a walk-in seller has neither a container '
-            + 'number nor an invoice number.',
-        risk: 'Either yard claims are being raised against invented container numbers, or '
-            + 'they are not being raised at all. Both are worse than the rule being wrong.',
-        evidence: 'EY-14',
-        fixNote: 'NOT FIXED — this is a design question, not a bug to patch. Should a yard '
-            + 'claim key on the load id instead?',
+        id: 3, sev: 'Worth fixing',
+        title: 'The Spend report says "nothing was paid out" when $51,572 was',
+        happens: 'This is the one you asked about. Choosing Paid by = Cash together with '
+            + 'Paid via = Edge Yard shows an empty list and the words "Nothing was paid out '
+            + 'in this period" — while the band directly above it says $51,572.16 went out '
+            + 'over the very same days.',
+        costs: '"Nothing was paid out" reads as *you spent nothing*. It is not true. It '
+            + 'means the filter you chose excluded everything, which is a completely '
+            + 'different thing to be told.',
+        meant: 'Two separate causes that happen to meet on one screen. First: Jarvis only '
+            + 'ever asks which company\'s money was used on a wire or bank transfer — never '
+            + 'on cash. So no cash payment carries a company, and that pair of filters can '
+            + 'only ever return nothing. Across the whole of 2026 that is zero rows out of '
+            + '$787,739.92 of cash. Second: the cash band at the top ignores every filter '
+            + 'except the dates, so it keeps showing money while the list below shows none.',
+        next: 'Three small changes: say which it is ("no rows match these filters — '
+            + '$51,572.16 was paid out, 13 cash payments, none of them recorded against a '
+            + 'company"), stop offering the Paid via buttons when Cash is chosen, and label '
+            + 'the cash band as covering the whole box rather than the filtered list.',
+        tech: 'helpers/spendReport.js — the cash block (~line 489) filters on date and '
+            + 'method only; company / paidVia / bank / boughtFrom / soldTo never reach it.',
+        seen: 'Use case 17, plus read-only checks against your live site on 8 Nov',
     },
     {
-        id: 'EY-D4', sev: 'HIGH',
-        title: 'A mistyped tare saves a load with negative weight and negative money',
-        where: 'helpers/loads.js — validateLoadForSave',
-        what: 'Gross 1,000 with tare 4,000 saves happily: net_weight -3000, amount -3000, '
-            + 'net_payable -3000. HTTP 200, no warning.',
-        why: 'Nothing rejects or clamps a tare heavier than the gross.',
-        risk: 'Weights are typed on a phone at the scale. One transposed figure creates a '
-            + 'load that SUBTRACTS from what a seller is owed, and from stock, and from the '
-            + 'yard total — silently. It is the kind of wrong number that is only ever '
-            + 'found by someone noticing a total looks odd.',
-        evidence: 'EY-04',
-        fixNote: 'NOT FIXED. Refusing it outright is the obvious move, but a load already '
-            + 'saved this way on live data would then fail to edit — so the migration has '
-            + 'to be checked before the rule lands.',
+        id: 4, sev: 'Needs your decision',
+        title: 'A claim cannot be raised against a walk-in yard purchase',
+        happens: 'Trying to raise a claim against a yard load is refused: "a claim needs at '
+            + 'least a container number or an invoice number".',
+        costs: 'A yard purchase from someone who drives in has no container number and no '
+            + 'invoice number. So either yard claims are being raised against made-up '
+            + 'container numbers, or they are not being raised at all. Both are worse than '
+            + 'the rule simply being wrong for the yard.',
+        meant: 'That rule comes from the Edge Metals side, where every claim does hang off a '
+            + 'container. It was never adjusted for the yard.',
+        next: 'This is a question for you rather than something to patch: should a yard '
+            + 'claim attach to the load itself instead of a container number?',
+        tech: 'the /api/claims route rejects a body with neither container_no nor invoice_no.',
+        seen: 'Use case 14',
     },
 ];
 
-const OBSERVATIONS = [
-    {
-        id: 'EY-O1',
-        what: 'A cash payment that names no bucket is refused with "Only 0.00 available in '
-            + 'Unassigned" — naming a bucket she never chose.',
-        note: 'Not a defect: both screens always send a bucket, and refusing is correct. '
-            + 'The wording would confuse anyone who hit it.',
-    },
-    {
-        id: 'EY-O2',
-        what: 'Refusing to pay cash the box does not hold, refusing a standalone borrow, '
-            + 'and stopping to name the lenders before borrowing are all working exactly as '
-            + 'built.',
-        note: 'Found by my first scenario run failing. The product was right and my test was '
-            + 'wrong — recorded here because a tester who quietly fixes their own harness '
-            + 'and reports only the leftovers hides the behaviour that was verified.',
-    },
+const WORKING = [
+    'Buying a load — by the pound, by the ton, and with several different metals on one '
+    + 'ticket. Every weight and every price came out right.',
+    'Jarvis refuses to pay out cash the box does not hold, and says how much is actually '
+    + 'there rather than just failing.',
+    'A wire will not go through until you say whose money it is, and the Spend report then '
+    + 'files it under the right company.',
+    'Paying more cash than one pot holds stops and asks first, names who would be lending, '
+    + 'and says exactly how short it is. The money only moves once you say yes.',
+    'A borrow cannot be invented on its own — it only exists because a payment needed it.',
+    'Haulage comes off what the seller is paid, while the metal still counts at its full '
+    + 'value. No double-counting.',
+    'A payment of zero, and a payment of minus money, are both refused.',
+    'Selling more metal than the yard holds is caught.',
+    'Editing a load re-prices it without wiping the payments already made against it.',
+    'Chase Bank cash now counts as Edge Yard\'s, and the per-company split still adds up to '
+    + 'the single cash-in-hand figure.',
+    'Nothing done in the yard showed up anywhere under Edge Metals.',
+];
+
+const MINE = [
+    'My first run showed 11 failures. Most of them were my own test being wrong, not Jarvis: '
+    + 'I tried to pay cash before putting any in the box, did not say which pot to take it '
+    + 'from, tried to create a borrow out of thin air, and measured "what is still owed" '
+    + 'from a field that does not exist. Jarvis was right every single time.',
+    'Those are listed under "What is working" rather than quietly deleted. A tester who '
+    + 'fixes their own mistakes and only reports the leftovers is hiding the behaviour that '
+    + 'was actually proved correct.',
 ];
 
 const OPEN = [
-    'Should a cash payment ask whose money it was? The drawer is funded from Edge Metals, '
-    + 'AAA Investment and Chase (Edge Yard), so the question is answerable — it just is not '
-    + 'asked. Answering yes makes the Paid via chip meaningful; answering no means the chip '
-    + 'should say it is wire-only. Either way, $787,739.92 of past cash stays "Not recorded" '
-    + 'unless a backfill is wanted.',
-    'Should the petty cash band follow the company switcher? Recommended NO. The drawer is '
-    + 'one physical box funded from several accounts; scoping it by the spend report\'s '
-    + 'company would produce a confident, wrong number. Labelling what it covers is the '
-    + 'honest fix.',
-    'Should a yard claim key on the load id rather than a container number? (EY-D3)',
+    'Should Jarvis ask which company\'s money was used when you pay CASH? Today it only asks '
+    + 'on wires. The cash box is funded from Edge Metals, AAA Investment and Chase (Edge '
+    + 'Yard), so the question can be answered — it just is not asked. Say yes and the Paid '
+    + 'via filter starts working for cash; say no and it should say plainly that it only '
+    + 'applies to wires. Either way, past cash stays unrecorded unless you want it filled in.',
+    'Should the cash band at the top of the Spend report follow the company buttons? My '
+    + 'advice is NO. The cash box is one physical box filled from several accounts, so '
+    + 'splitting it by company would produce a confident number that is wrong. Saying what '
+    + 'it covers is the honest fix.',
+    'Should a yard claim attach to the load instead of a container number? (Finding 4)',
 ];
 
 const NOT_COVERED = [
-    'The Edge Yard Android app itself. The scenarios drive the same routes the app posts to, '
-    + 'which is not the same as running the APK on a handset.',
-    'PDF and document generation (scale tickets, seller receipts, BOLs) — exercised elsewhere '
-    + 'in the suite, not here.',
-    'Google Drive upload, email sending, and the nightly watchers.',
-    'Concurrency: two people paying the same load at the same moment.',
-    'Her live data was READ ONLY. Nothing in this run wrote to jarvis.edgemetals.com.',
-    'The voice path for payments (EY-07) could not be driven directly from the harness and '
-    + 'is marked SKIPPED, not passed. CLAUDE.md names this as the caller that breaks most '
-    + 'often, so the gap is worth closing.',
+    'The Edge Yard app on an actual phone. The tests drive the same machinery the app talks '
+    + 'to, which is not the same as holding the handset.',
+    'Printed paperwork — scale tickets, seller receipts, bills of lading. Covered by other '
+    + 'tests, not by this one.',
+    'Saving to Google Drive, sending email, and the overnight checks.',
+    'Two people paying for the same load at the same moment.',
+    'Recording a payment by TALKING to Jarvis. This one could not be driven from the test '
+    + 'and is marked skipped, not passed — and it is historically the part most likely to '
+    + 'break when a rule changes, so it is the gap worth closing next.',
+    'Your live site was only ever READ. Nothing in this run wrote anything to it.',
 ];
 
-const sevColour = { HIGH: '#EA3323', MEDIUM: '#D98300', LOW: '#6b7280' };
+const sevColour = { 'Serious': '#C2261B', 'Worth fixing': '#B45309', 'Needs your decision': '#4B5563' };
 const totalSteps = R.cases.reduce((a, c) => a + c.steps.length, 0);
+
+// A failure note from the run is often a raw server reply. Shown, because
+// evidence matters, but trimmed and kept out of the way.
+const tidy = (d) => {
+    const s = String(d || '');
+    if (!s) return '';
+    return s.length > 230 ? s.slice(0, 230) + '…' : s;
+};
 
 const caseRow = (c) => `
   <div class="case ${c.verdict.toLowerCase()}">
     <div class="caseHead">
-      <span class="cid">${esc(c.id)}</span>
+      <span class="cid">${esc(c.id.replace('EY-', ''))}</span>
       <span class="doing">${esc(c.doing)}</span>
-      <span class="verdict v-${c.verdict.toLowerCase()}">${esc(c.verdict)}</span>
+      <span class="verdict v-${c.verdict.toLowerCase()}">${c.verdict === 'PASS' ? 'All good' : (c.verdict === 'SKIPPED' ? 'Not tested' : 'Problem found')}</span>
     </div>
     <table>
-      <thead><tr><th style="width:62%">Step — what must be true</th><th>Result</th><th>Evidence</th></tr></thead>
       <tbody>
         ${c.steps.map((s) => `<tr class="${s.ok === null ? 'skip' : (s.ok ? 'ok' : 'bad')}">
-          <td>${esc(s.label)}</td>
-          <td class="r">${s.ok === null ? 'SKIPPED' : (s.ok ? 'pass' : 'FAIL')}</td>
-          <td class="d">${esc(s.detail)}</td>
+          <td class="r">${s.ok === null ? '—' : (s.ok ? '✓' : '✗')}</td>
+          <td>${esc(s.label)}${s.detail ? `<div class="d">${esc(tidy(s.detail))}</div>` : ''}</td>
         </tr>`).join('')}
       </tbody>
     </table>
   </div>`;
 
 const html = `<!doctype html><meta charset="utf-8">
-<title>Edge Yard — test report</title>
+<title>Edge Yard — what I tested, and what I found</title>
 <style>
-  :root { --ink:#111; --muted:#6b7280; --line:#e5e7eb; --ok:#15803d; --bad:#EA3323; }
-  body { font:14px/1.55 -apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-serif;
-         color:var(--ink); max-width:1000px; margin:0 auto; padding:34px 26px 90px; }
-  h1 { font-size:23px; margin:0 0 4px; letter-spacing:-.01em; }
-  h2 { font-size:16px; margin:34px 0 10px; padding-bottom:6px; border-bottom:2px solid var(--ink); text-transform:uppercase; letter-spacing:.06em; }
-  .sub { color:var(--muted); margin:0 0 20px; }
-  .scoreboard { display:flex; gap:10px; flex-wrap:wrap; margin:18px 0 6px; }
-  .box { border:1px solid var(--line); border-radius:8px; padding:11px 15px; min-width:104px; }
-  .box .n { font-size:21px; font-weight:650; }
-  .box .l { font-size:10px; text-transform:uppercase; letter-spacing:.09em; color:var(--muted); }
-  table { width:100%; border-collapse:collapse; font-size:13px; }
-  th { text-align:left; font-size:10px; text-transform:uppercase; letter-spacing:.07em;
-       color:var(--muted); border-bottom:1px solid var(--line); padding:5px 7px; font-weight:600; }
-  td { padding:5px 7px; border-bottom:1px solid #f3f4f6; vertical-align:top; }
-  td.r { font-weight:650; white-space:nowrap; }
-  td.d { color:var(--muted); font-size:11.5px; font-family:ui-monospace,SFMono-Regular,Menlo,monospace; }
-  tr.ok td.r { color:var(--ok); font-weight:500; }
-  tr.bad td.r { color:var(--bad); }
-  tr.skip td.r { color:#b45309; }
-  .case { margin:0 0 20px; border:1px solid var(--line); border-radius:9px; overflow:hidden; }
-  .case.fail { border-color:#fca5a5; }
-  .caseHead { display:flex; align-items:center; gap:11px; padding:9px 13px; background:#fafafa; border-bottom:1px solid var(--line); }
-  .case.fail .caseHead { background:#fef2f2; }
-  .cid { font-family:ui-monospace,Menlo,monospace; font-weight:650; font-size:12px; }
-  .doing { flex:1; }
-  .verdict { font-size:10px; letter-spacing:.08em; padding:2px 8px; border-radius:20px; border:1px solid var(--line); }
+  :root { --ink:#15161a; --muted:#6b7280; --line:#e5e7eb; --ok:#15803d; --bad:#C2261B; }
+  body { font:15px/1.65 -apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-serif;
+         color:var(--ink); max-width:880px; margin:0 auto; padding:38px 26px 90px; }
+  h1 { font-size:26px; margin:0 0 6px; letter-spacing:-.015em; }
+  h2 { font-size:15px; margin:40px 0 12px; padding-bottom:7px; border-bottom:2px solid var(--ink);
+       text-transform:uppercase; letter-spacing:.07em; }
+  .sub { color:var(--muted); margin:0 0 22px; font-size:14px; }
+  .lede { font-size:16.5px; line-height:1.6; margin:20px 0 6px; }
+  .scoreboard { display:flex; gap:10px; flex-wrap:wrap; margin:20px 0 6px; }
+  .box { border:1px solid var(--line); border-radius:9px; padding:12px 17px; min-width:108px; }
+  .box .n { font-size:23px; font-weight:650; }
+  .box .l { font-size:10.5px; text-transform:uppercase; letter-spacing:.08em; color:var(--muted); }
+  .note { background:#fffdf5; border:1px solid #f0e2b6; border-radius:9px; padding:15px 18px; margin:18px 0; font-size:14px; }
+  .find { border:1px solid var(--line); border-left:5px solid var(--line); border-radius:9px;
+          padding:16px 20px; margin:0 0 16px; }
+  .find h3 { margin:0 0 10px; font-size:17px; letter-spacing:-.01em; }
+  .find .sev { font-size:10.5px; letter-spacing:.07em; padding:3px 9px; border-radius:20px;
+               color:#fff; vertical-align:middle; margin-left:7px; font-weight:600; }
+  .find p { margin:9px 0; }
+  .lab { display:block; font-size:10.5px; text-transform:uppercase; letter-spacing:.08em;
+         color:var(--muted); font-weight:600; margin-bottom:1px; }
+  .tech { margin-top:13px; padding-top:10px; border-top:1px dashed var(--line);
+          font-size:11.5px; color:#9095a0; font-family:ui-monospace,SFMono-Regular,Menlo,monospace; }
+  .case { margin:0 0 13px; border:1px solid var(--line); border-radius:9px; overflow:hidden; }
+  .case.fail { border-color:#f1b6b1; }
+  .caseHead { display:flex; align-items:center; gap:12px; padding:10px 14px; background:#fafafa;
+              border-bottom:1px solid var(--line); }
+  .case.fail .caseHead { background:#fdf3f2; }
+  .cid { font-family:ui-monospace,Menlo,monospace; font-weight:650; font-size:12px; color:var(--muted);
+         min-width:22px; }
+  .doing { flex:1; font-size:14.5px; }
+  .verdict { font-size:10.5px; letter-spacing:.06em; padding:3px 9px; border-radius:20px; border:1px solid var(--line); white-space:nowrap; }
   .v-pass { color:var(--ok); border-color:#bbf7d0; background:#f0fdf4; }
-  .v-fail { color:var(--bad); border-color:#fecaca; background:#fef2f2; }
+  .v-fail { color:var(--bad); border-color:#f1b6b1; background:#fdf3f2; }
   .v-skipped { color:#b45309; border-color:#fde68a; background:#fffbeb; }
-  .def { border:1px solid var(--line); border-left:4px solid var(--line); border-radius:7px; padding:13px 16px; margin:0 0 13px; }
-  .def h3 { margin:0 0 3px; font-size:14.5px; }
-  .def .meta { font-size:11px; color:var(--muted); font-family:ui-monospace,Menlo,monospace; margin-bottom:8px; }
-  .def p { margin:5px 0; }
-  .def .lab { font-size:10px; text-transform:uppercase; letter-spacing:.08em; color:var(--muted); }
-  .sev { font-size:10px; letter-spacing:.08em; padding:2px 8px; border-radius:20px; color:#fff; }
-  ul { margin:7px 0; padding-left:19px; } li { margin:4px 0; }
-  .note { background:#fffbeb; border:1px solid #fde68a; border-radius:7px; padding:12px 15px; margin:14px 0; }
+  table { width:100%; border-collapse:collapse; font-size:14px; }
+  td { padding:7px 9px; border-bottom:1px solid #f4f4f5; vertical-align:top; }
+  td.r { width:18px; font-weight:700; text-align:center; }
+  tr.ok td.r { color:var(--ok); } tr.bad td.r { color:var(--bad); } tr.skip td.r { color:#b45309; }
+  tr:last-child td { border-bottom:none; }
+  .d { color:#9095a0; font-size:11.5px; font-family:ui-monospace,Menlo,monospace;
+       margin-top:3px; word-break:break-word; }
+  ul { margin:9px 0; padding-left:21px; } li { margin:7px 0; }
 </style>
 
-<h1>Edge Yard — test report</h1>
-<p class="sub">Jarvis · run ${esc(new Date(R.ranAt).toLocaleString('en-US'))} ·
-${R.cases.length} use cases, ${totalSteps} checks</p>
+<h1>Edge Yard — what I tested, and what I found</h1>
+<p class="sub">Jarvis · ${esc(new Date(R.ranAt).toLocaleDateString('en-US', { day:'numeric', month:'long', year:'numeric' }))}</p>
+
+<p class="lede">I went through a full day at the yard — buying metal, paying for it, deducting
+haulage, selling it on, raising a claim, and counting the cash box — and checked that the money
+came out right at every step. <strong>${R.cases.length} tasks, ${totalSteps} checks.</strong>
+Most of it works. I found <strong>four problems</strong>, two of which can cost you money
+without anyone noticing.</p>
 
 <div class="scoreboard">
-  <div class="box"><div class="n">${R.cases.length}</div><div class="l">use cases</div></div>
+  <div class="box"><div class="n">${R.cases.length}</div><div class="l">tasks tested</div></div>
   <div class="box"><div class="n" style="color:var(--ok)">${R.pass}</div><div class="l">checks passed</div></div>
-  <div class="box"><div class="n" style="color:var(--bad)">${R.fail}</div><div class="l">checks failed</div></div>
-  <div class="box"><div class="n" style="color:#b45309">${R.skip}</div><div class="l">skipped</div></div>
-  <div class="box"><div class="n" style="color:var(--bad)">${DEFECTS.filter((d) => d.sev === 'HIGH').length}</div><div class="l">high defects</div></div>
+  <div class="box"><div class="n" style="color:var(--bad)">${R.fail}</div><div class="l">problems found</div></div>
+  <div class="box"><div class="n" style="color:#b45309">${R.skip}</div><div class="l">not tested</div></div>
 </div>
 
 <div class="note">
-  <strong>How this was run, and what it is worth.</strong>
-  Every scenario below was executed against a <em>real Jarvis server</em> on a throwaway data
-  directory — real routes, real login, money read back out of the same route each screen reads.
-  <strong>Nothing was written to the live site.</strong> Simulating buy/pay/sell scenarios against
-  jarvis.edgemetals.com would have put test loads and test payments into the real books. Live was
-  probed separately, read only, and those findings are marked as such.
+  <strong>Your real data was not touched.</strong> Pretending to buy and pay for loads on the
+  live site would have put fake loads and fake payments into your actual books. So every test
+  ran on a private copy of Jarvis with its own empty records. I did look at your live site, but
+  only to read — never to change anything.
 </div>
 
-<h2>Defects</h2>
-${DEFECTS.map((d) => `
-<div class="def" style="border-left-color:${sevColour[d.sev]}">
-  <h3>${esc(d.id)} — ${esc(d.title)} <span class="sev" style="background:${sevColour[d.sev]}">${d.sev}</span></h3>
-  <div class="meta">${esc(d.where)} · evidence: ${esc(d.evidence)}</div>
-  <p><span class="lab">What happens</span><br>${esc(d.what)}</p>
-  <p><span class="lab">Why</span><br>${esc(d.why)}</p>
-  <p><span class="lab">What it costs her</span><br>${esc(d.risk)}</p>
-  <p><span class="lab">Status</span><br>${esc(d.fixNote)}</p>
+<h2>What I found</h2>
+${FINDINGS.map((d) => `
+<div class="find" style="border-left-color:${sevColour[d.sev]}">
+  <h3>${d.id}. ${esc(d.title)}<span class="sev" style="background:${sevColour[d.sev]}">${esc(d.sev)}</span></h3>
+  <p><span class="lab">What happens</span>${esc(d.happens)}</p>
+  <p><span class="lab">Why it matters</span>${esc(d.costs)}</p>
+  <p><span class="lab">Why it is happening</span>${esc(d.meant)}</p>
+  <p><span class="lab">What I suggest</span>${esc(d.next)}</p>
+  <div class="tech">For whoever fixes it — ${esc(d.tech)} · seen in ${esc(d.seen)}</div>
 </div>`).join('')}
 
-<h2>Observations — not defects</h2>
-${OBSERVATIONS.map((o) => `<div class="def" style="border-left-color:#9ca3af">
-  <h3>${esc(o.id)}</h3><p>${esc(o.what)}</p><p style="color:var(--muted)">${esc(o.note)}</p></div>`).join('')}
+<div class="note">
+  <strong>I have not changed any of these.</strong> The first two sit in code that the website,
+  the phone app and talking to Jarvis all share, so a fix in the wrong place breaks one of them
+  while fixing another. The fourth is a question for you, not a bug to patch. Say the word and
+  I will start with the first.
+</div>
 
-<h2>Open questions for Apsara</h2>
+<h2>What is working</h2>
+<ul>${WORKING.map((w) => `<li>${esc(w)}</li>`).join('')}</ul>
+
+<h2>Where I got it wrong</h2>
+<ul>${MINE.map((m) => `<li>${esc(m)}</li>`).join('')}</ul>
+
+<h2>Questions for you</h2>
 <ul>${OPEN.map((o) => `<li>${esc(o)}</li>`).join('')}</ul>
 
-<h2>Use cases, step by step</h2>
+<h2>Every task, step by step</h2>
+<p class="sub">A tick means the money or the paperwork came out right. A cross is a problem —
+each one is explained above.</p>
 ${R.cases.map(caseRow).join('')}
 
-<h2>What this report does NOT cover</h2>
-<p class="sub">A test document that does not say where it stops is read as more assurance than it is.</p>
+<h2>What this does not cover</h2>
+<p class="sub">So the report is not read as promising more than it checked.</p>
 <ul>${NOT_COVERED.map((n) => `<li>${esc(n)}</li>`).join('')}</ul>
 `;
 
 fs.writeFileSync(out, html);
-console.log(`${R.cases.length} use cases, ${R.pass} passed / ${R.fail} failed / ${R.skip} skipped`);
-console.log(`defects: ${DEFECTS.length} (${DEFECTS.filter((d) => d.sev === 'HIGH').length} high)`);
+console.log(`${R.cases.length} tasks, ${R.pass} passed / ${R.fail} problems / ${R.skip} not tested`);
+console.log(`findings: ${FINDINGS.length} (${FINDINGS.filter((d) => d.sev === 'Serious').length} serious)`);
 console.log(`-> ${out}`);
