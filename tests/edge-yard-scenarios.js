@@ -346,7 +346,24 @@ useCase('EY-09', 'A payment of zero, and a payment of minus money');
 }
 
 // ══════════════════════════════════════════════════════════════════════════
-useCase('EY-10', 'The same payment submitted twice (double tap, bad signal)');
+useCase('EY-10', 'The same payment arriving twice after a dropped connection');
+// ── CORRECTED 2026-11-08, after Apsara pushed back ───────────────────────
+// This was written as "double tap pays twice". She answered: "when i pay
+// once covering the inv amount pay woud become invisible na" — and she was
+// right. Both pay modals disable the button the instant it is tapped
+// (dashboard/app/13-loads-render.js:892, mobile-app/www/app/09-loads-deck.js:995),
+// and the Pay action is gone once the load is settled. A double tap CANNOT
+// produce two requests from either screen.
+//
+// What this case actually proves is narrower, and it is still worth having:
+// the SERVER does not recognise a repeat. So the real-world route in is a
+// retry after a lost reply — Jarvis saves, the reply never arrives, the
+// catch re-enables the button, and she taps a payment that already went
+// through. Two requests is exactly what that looks like from here.
+//
+// The lesson for me, not for the code: I proved something at the server
+// that I then described as something at the screen. Those are different
+// claims and only one of them was tested.
 // ══════════════════════════════════════════════════════════════════════════
 {
     const body = { load_id: global.__EY_LOAD_MULTI, load_kind: 'purchase',
@@ -357,10 +374,11 @@ useCase('EY-10', 'The same payment submitted twice (double tap, bad signal)');
     const b = await POST('/api/payments', body);
     const after = owedOn(global.__EY_LOAD_MULTI);
     ck('the first one posts', a.status < 400, String(a.status));
-    ck('  and the second does not pay him twice',
+    ck('  and a repeat of the SAME save does not pay him twice',
        money(before - after) === 100,
-       `owed moved ${money(before - after)}; second call said ${b.status}. `
-       + 'A duplicate on a flaky yard connection is the commonest way a supplier is overpaid.');
+       `owed moved ${money(before - after)}; the repeat said ${b.status}. `
+       + 'The screens stop a double tap themselves; this is the retry-after-a-lost-reply '
+       + 'case, where Jarvis has already saved and the phone never heard.');
 }
 
 // ══════════════════════════════════════════════════════════════════════════

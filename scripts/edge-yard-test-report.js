@@ -30,26 +30,33 @@ const esc = (s) => String(s == null ? '' : s)
 //   Serious = a wrong number can leave the yard and nobody sees it happen.
 const FINDINGS = [
     {
-        id: 1, sev: 'Serious',
-        title: 'Tapping Pay twice pays the seller twice',
-        happens: 'If the Pay button is pressed twice — a double tap, or a retry when the '
-            + 'signal drops — the seller is paid twice. I paid $100 twice over and Jarvis '
-            + 'recorded $200 going out, with no warning and nothing to show the two apart.',
-        costs: 'You pay suppliers from a phone, standing in the yard, on a signal that comes '
-            + 'and goes. This is the single most likely way money leaves twice, and the '
-            + 'books agree with the wrong figure afterwards, so nothing later catches it.',
-        meant: 'Jarvis already has protection for exactly this. It was built for advance '
-            + 'payments and never extended to ordinary payments — and both the website and '
-            + 'the phone app are already sending the information it needs, so they behave '
-            + 'as though they are protected when they are not.',
-        next: 'Worth fixing first. The ordinary payment path is shared by the website, the '
-            + 'phone and talking to Jarvis, so I want to check all three before changing it '
-            + 'rather than fix one and break another.',
-        tech: 'helpers/payments.js — the once-per-save guard (oncePerSave.normTicket / '
-            + 'findSpent) is at lines 478 and 487, both inside addPrepayment. addPayment '
-            + '(line ~816) has none. Clients already send client_request_id: '
-            + 'dashboard/app/13-loads-render.js:1307, mobile-app/www/app/09-loads-deck.js:1343.',
-        seen: 'Use case 10',
+        id: 1, sev: 'Worth fixing',
+        title: 'If the signal drops at the wrong moment, the same payment can go in twice',
+        happens: 'I first reported this as "tapping Pay twice pays twice". APSARA WAS RIGHT '
+            + 'TO PUSH BACK ON THAT and it is corrected here: the Pay button locks the '
+            + 'instant you tap it, on both the website and the phone, and once a load is '
+            + 'settled the Pay action is gone. A plain double tap cannot pay twice. What '
+            + 'IS still open is narrower — if Jarvis records the payment but the reply '
+            + 'never makes it back to your phone, the screen shows an error and puts the '
+            + 'Pay button back. Tapping again records a second payment.',
+        costs: 'Much less likely than I first said. It needs the connection to fail in the '
+            + 'gap between Jarvis saving and your phone hearing about it. But that is the '
+            + 'yard, and in that moment the screen is actively inviting the second tap — it '
+            + 'is showing an error for a payment that actually went through.',
+        meant: 'Jarvis already has protection for exactly this: it recognises a repeat of '
+            + 'the same save and refuses to act on it twice. It was built for advance '
+            + 'payments and never extended to ordinary ones. Both the website and the phone '
+            + 'already send the information it needs, so they behave as though the '
+            + 'protection is there.',
+        next: 'Extend the existing protection to ordinary payments. It is a small change, '
+            + 'but the payment path is shared by the website, the phone and talking to '
+            + 'Jarvis, so I want to check all three before touching it.',
+        tech: 'helpers/payments.js — oncePerSave.normTicket / findSpent at lines 478 and 487, '
+            + 'both inside addPrepayment; addPayment (~816) has none. Clients send '
+            + 'client_request_id already. Both pay modals disable the button on submit '
+            + '(13-loads-render.js:892, 09-loads-deck.js:995) and re-enable it in the catch, '
+            + 'which is what leaves the retry-after-timeout window open.',
+        seen: 'Use case 10, revised after Apsara challenged the original finding',
     },
     {
         id: 2, sev: 'Serious',
@@ -139,6 +146,11 @@ const MINE = [
     'Those are listed under "What is working" rather than quietly deleted. A tester who '
     + 'fixes their own mistakes and only reports the leftovers is hiding the behaviour that '
     + 'was actually proved correct.',
+    'I also OVERSTATED finding 1. I fired two payments straight at the server, which is not '
+    + 'something the screen can do — Apsara pointed out that the Pay button disappears once '
+    + 'the load is covered, and she was right. Checking properly showed the button also '
+    + 'locks the instant it is tapped, on both the website and the phone. The finding is '
+    + 'corrected and downgraded, not quietly dropped.',
 ];
 
 const OPEN = [
@@ -249,14 +261,22 @@ const html = `<!doctype html><meta charset="utf-8">
 <p class="lede">I went through a full day at the yard — buying metal, paying for it, deducting
 haulage, selling it on, raising a claim, and counting the cash box — and checked that the money
 came out right at every step. <strong>${R.cases.length} tasks, ${totalSteps} checks.</strong>
-Most of it works. I found <strong>four problems</strong>, two of which can cost you money
-without anyone noticing.</p>
+Most of it works. I found <strong>four problems</strong>. One of them can
+cost you money without anyone noticing.</p>
 
 <div class="scoreboard">
   <div class="box"><div class="n">${R.cases.length}</div><div class="l">tasks tested</div></div>
   <div class="box"><div class="n" style="color:var(--ok)">${R.pass}</div><div class="l">checks passed</div></div>
   <div class="box"><div class="n" style="color:var(--bad)">${R.fail}</div><div class="l">problems found</div></div>
   <div class="box"><div class="n" style="color:#b45309">${R.skip}</div><div class="l">not tested</div></div>
+</div>
+
+<div class="note" style="background:#f4f8ff; border-color:#c7d9f5;">
+  <strong>One finding was corrected after Apsara challenged it.</strong> I first reported that
+  tapping Pay twice pays the seller twice. She pointed out that the Pay button disappears once
+  the load is covered — and she was right. The button also locks the moment it is tapped, on
+  both the website and the phone, so a double tap cannot send two payments. Finding 1 is now
+  the narrower case that genuinely remains, and its severity is down from Serious.
 </div>
 
 <div class="note">
