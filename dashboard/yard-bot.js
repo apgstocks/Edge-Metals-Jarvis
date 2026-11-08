@@ -107,6 +107,28 @@
        small display wastes most of it and puts the input under the thumb of
        whatever is behind it. */
     '@media(max-width:520px){#yardBotPanel{right:0;bottom:0;width:100vw;height:100vh;border-radius:0;border:none;}}',
+
+    /* ── DOCKED DOWN THE RIGHT, ON THE WEBSITE (2026-11-08) ───────────────
+     * Apsara: "There should be a scout AI to assist us with yard on the
+     * right side ... It should be the highest form of intelligence."
+     *
+     * A 560px card floating over the middle of a laptop screen is a chat
+     * window you dismiss to see your work. Docked full-height down the edge,
+     * it is something you work ALONGSIDE — which is what she described, and
+     * the difference between an assistant and an interruption.
+     *
+     * .yb-docked is set by the script only when the host is the website and
+     * the window is wide enough to spare the room. The phone keeps the
+     * full-screen sheet above and the app is not touched at all: one file,
+     * two hosts, and the FLAG MARKS THE NEW SHAPE rather than the old one.
+     */
+    '#yardBotPanel.yb-docked{top:0;right:0;bottom:0;height:100vh;width:min(420px,38vw);',
+    'border-radius:0;border-top:none;border-right:none;border-bottom:none;}',
+    '#yardBotPanel.yb-docked #yardBotLog{flex:1;}',
+    '.yb-working{margin:2px 0 0;font-size:11px;color:rgba(255,255,255,.5);}',
+    '.yb-working summary{cursor:pointer;padding:3px 0;}',
+    '.yb-working-row{padding:2px 0 2px 10px;font-family:ui-monospace,Menlo,monospace;',
+    'font-size:10.5px;color:rgba(255,255,255,.42);word-break:break-all;}',
   ].join('');
 
   var TIPS = [
@@ -246,9 +268,25 @@
     });
   }
 
-  function toggle() {
-    open = !open;
-    el('yardBotPanel').classList.toggle('open', open);
+  // `want` forces a state; omitted it flips, which is what every existing
+  // caller does. Added 2026-11-08 so doAction can close the sheet on a phone
+  // after taking her somewhere — a panel left over the thing she asked to
+  // see is the assistant talking across the answer.
+  function toggle(want) {
+    open = (want === undefined) ? !open : !!want;
+    var panel = el('yardBotPanel');
+    panel.classList.toggle('open', open);
+    // ── DOCKED, OR FLOATING ──────────────────────────────────────────────
+    // Decided every time it opens rather than once at load, because a laptop
+    // gets resized and a window dragged to a second screen should not keep a
+    // layout chosen for the first one.
+    //
+    // THE WEBSITE IS THE ONE WITH loadTab AND THE TABS. The app's shell has
+    // #appShell and works differently, so it keeps the floating card it has
+    // always had — the flag marks the new shape, never the old one.
+    var onWeb = !document.getElementById('appShell');
+    var roomy = !window.matchMedia || window.matchMedia('(min-width:900px)').matches;
+    panel.classList.toggle('yb-docked', !!(onWeb && roomy));
     el('yardBotFab').classList.toggle('hidden', open);
     if (open) setTimeout(function () { el('yardBotInput').focus(); }, 60);
   }
@@ -271,6 +309,82 @@
   // Only the opaque id goes back on Confirm. Nothing on this card is editable
   // and no amount travels with the request, so what is confirmed is exactly
   // what was validated server-side.
+  // ── TAKING HER TO THE SCREEN SHE ASKED FOR (2026-11-08) ──────────────────
+  // Apsara: "If i say show spend report for last three days.it should do that
+  // from any screen in edge yard."
+  //
+  // The server has already resolved what she meant and checked it against the
+  // list of screens that really exist (helpers/scoutActions.js). By the time
+  // it gets here it names a tab loadTab() answers to and filters that are real
+  // fields, so this does not second-guess it — it applies it.
+  //
+  // WEBSITE ONLY, by construction: loadTab and the spend* variables exist only
+  // there, and the app never asks for an action in the first place. The guard
+  // is belt and braces, not the mechanism.
+  function doAction(a) {
+    if (!a || typeof loadTab !== 'function') return;
+    var f = a.filters || {};
+    try {
+      // The spend screen keeps its filters in plain variables that the tab
+      // reads when it draws. Setting them before loadTab is how the screen
+      // opens ALREADY filtered rather than opening and then jumping, which
+      // looks like a bug even when the end state is right.
+      if (a.open === 'spend') {
+        if (typeof f.from === 'string') spendFrom = f.from;
+        if (typeof f.to === 'string') spendTo = f.to;
+        if (f.company) spendCompany = f.company;
+        if (typeof f.method === 'string') spendMethod = f.method;
+        if (typeof f.bank === 'string') spendBank = f.bank;
+        if (typeof f.paid_via === 'string') spendPaidVia = f.paid_via;
+        if (typeof f.bought_from === 'string') spendBought = f.bought_from;
+        if (typeof f.sold_to === 'string') spendSold = f.sold_to;
+      }
+      loadTab(a.open);
+      // ── AND GET OUT OF THE WAY ────────────────────────────────────────
+      // She asked to SEE something. Leaving a panel sitting over the thing
+      // she asked for is the assistant talking across the answer. The
+      // conversation is still there when she opens it again.
+      if (window.matchMedia && window.matchMedia('(max-width:520px)').matches) toggle(false);
+    } catch (e) {
+      // A navigation that fails must not eat the answer that came with it.
+      add('bot', 'I could not open that screen from here — the answer above still stands.');
+    }
+  }
+
+  // ── THE WORKING UNDER THE FIGURE (2026-11-08) ────────────────────────────
+  // Apsara: "Let ai should handle that with detailed report". A number with no
+  // rows behind it is something she has to take on trust, and the whole point
+  // of asking her own books is not having to.
+  //
+  // askYard now returns what it looked up — the tool, the parameters it chose
+  // and the rows it got back. Rendered folded: the answer stays the answer,
+  // and the evidence is one tap away rather than a wall of JSON over it.
+  function renderWorking(used) {
+    if (!used || !used.length) return;
+    var log = el('yardBotLog');
+    if (!log) return;
+    var box = document.createElement('details');
+    box.className = 'yb-working';
+    var sum = document.createElement('summary');
+    sum.textContent = 'Where this came from (' + used.length + ')';
+    box.appendChild(sum);
+    used.forEach(function (u) {
+      var r = u && u.result;
+      var n = (r && (r.count != null ? r.count
+             : (Array.isArray(r.rows) ? r.rows.length
+             : (Array.isArray(r) ? r.length : null))));
+      var line = document.createElement('div');
+      line.className = 'yb-working-row';
+      line.textContent = (u.name || 'lookup')
+        + (n != null ? ' — ' + n + ' row' + (n === 1 ? '' : 's') : '')
+        + (u.params && Object.keys(u.params).length
+            ? '  ' + JSON.stringify(u.params) : '');
+      box.appendChild(line);
+    });
+    log.appendChild(box);
+    log.scrollTop = log.scrollHeight;
+  }
+
   function renderProposal(p) {
     var log = el('yardBotLog');
     var card = document.createElement('div');
@@ -348,16 +462,33 @@
     // source: recorded in the daily transcript so a problem seen only on a
     // phone is separable from the website without guessing. The app is the
     // host with #appShell in its markup; the website has none.
+    // ── SCOUT CAN POINT, ON THE WEBSITE (2026-11-08) ────────────────────
+    // Apsara: "If i say show spend report for last three days.it should do
+    // that from any screen in edge yard."
+    //
+    // `show` is asked for only where there is a screen to move: the website
+    // has loadTab() and the tabs; the app's shell does not work that way, so
+    // it keeps asking exactly what it always asked and is untouched. The
+    // flag marks the NEW behaviour — never the old one — because a flag you
+    // must set to keep something working is one that eventually goes unset.
+    var onWeb = !document.getElementById('appShell');
     callApi('/api/yard/ask', {
       question: q,
       history: history.slice(-6),
-      source: document.getElementById('appShell') ? 'app' : 'website',
+      source: onWeb ? 'website' : 'app',
+      show: onWeb || undefined,
+      // Which company she is looking at, so Scout does not move her between
+      // two different businesses on a guess. Edge Yard and Edge Metals are
+      // different companies and that separation is most of what this is for.
+      company: (onWeb && typeof spendCompany === 'string') ? spendCompany : undefined,
     })
       .then(function (r) {
         var answer = (r && r.answer) || "I couldn't answer that.";
         thinking.textContent = answer;
         history.push({ role: 'bot', text: answer });
         if (r && r.proposal) renderProposal(r.proposal);
+        if (r && r.used) renderWorking(r.used);
+        if (r && r.action) doAction(r.action);
       })
       .catch(function (err) {
         // ── SAY WHICH FAILURE IT WAS ──────────────────────────────────────

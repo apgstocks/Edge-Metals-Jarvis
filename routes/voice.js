@@ -8,7 +8,51 @@ module.exports = function (app, ctx) {
         try {
             const { askYard } = require('./helpers/yardAsk');
             const b = req.body || {};
-            const out = await askYard(b.question, { history: b.history, days: b.days, role: req.role });
+
+            // ── SCOUT CAN POINT, NOT ONLY TALK (2026-11-08) ──────────────
+            // Apsara: "If i say show spend report for last three days.it
+            // should do that from any screen in edge yard."
+            //
+            // THIS ROUTE, not a new one. The first cut of this was a
+            // separate /api/scout/ask that wrapped the same askYard with the
+            // same logging — a second door to the same room, which is the
+            // drift that cost a day this morning when two files disagreed
+            // about whose bank Chase was. Deleted before it shipped.
+            //
+            // OPT-IN, so nothing else changes: only a caller that sets
+            // `show` gets the extra prompt and the extra field. The floating
+            // bot, the app and the voice path pass nothing and are
+            // byte-for-byte what they were.
+            const scoutActions = require('./helpers/scoutActions');
+            const wantShow = b.show === true || b.want_show === true;
+
+            const out = await askYard(b.question, {
+                history: b.history, days: b.days, role: req.role,
+                show: wantShow ? scoutActions.promptFor() : null,
+            });
+
+            if (wantShow) {
+                // The model resolved what she meant; this checks it before
+                // it can move her. A screen that does not exist is refused,
+                // a filter key that is not real is dropped. If the model
+                // named nothing — it was down, or it rightly judged this to
+                // be a question — the word-based resolver gets a turn, so
+                // landing on the right screen never depends on a model being
+                // reachable.
+                const company = String(b.company || '').trim() || null;
+                let action = scoutActions.sanitise(out && out.show);
+                if (!action) {
+                    action = scoutActions.sanitise(
+                        scoutActions.actionFromWords(b.question, { company }));
+                } else if (!action.filters.company && company) {
+                    action.filters.company = company;
+                    action.said = scoutActions.describe(action.label, action.filters);
+                }
+                out.action = action || null;
+                // Said BEFORE the screen moves, so a wrong read is visible
+                // before she reads a number off it and believes it.
+                if (action) out.answer = `Opening ${action.said}.` + (out.answer ? `\n\n${out.answer}` : '');
+            }
             // Transcript, one file per day — per Apsara 2026-08-29. Written
             // AFTER the answer is in hand and deliberately not awaited into the
             // response path: a log that cannot be written must never turn a
