@@ -678,6 +678,70 @@ section('M — the drill-down names the RECORD, and labels every kind');
        text.includes('Fuel'), 'docs are optional everywhere');
 }
 
+section('O — HER SCREENSHOT: no rows, but the band says money went out');
+{
+    // Apsara, 2026-11-08, on a report showing Edge Yard / Cash / Paid via
+    // Edge Yard over 11/03–11/06: "Why it is not showing the breakdown".
+    //
+    // The list was empty and the screen said "Nothing was paid out in this
+    // period", while the band directly above it reported $51,572.16 out over
+    // the very same days. Both came from the same report and neither was
+    // lying: the list is filtered, the band is not. But "nothing was paid
+    // out" is a statement about her BUSINESS, and it was false.
+    const EMPTY = Object.assign({}, REAL, {
+        rows: [], months: [], total: 0, count: 0,
+        cash: { opening: 50562.57, in: 20000, out: 51572.16, closing: 18990.41 },
+    });
+    const t = mount(EMPTY, { method: 'Cash', via: 'Edge Yard' });
+    const text = t.d.getElementById('viewRoot').textContent;
+
+    ck('it no longer claims nothing was paid out',
+       !/Nothing was paid out in this period/.test(text),
+       'that sentence reads as "you spent nothing", and it was not true');
+    ck('  it says the FILTERS matched nothing', /No payments match these filters/.test(text),
+       text.slice(0, 200));
+    ck('  and that money did move anyway', /Money did move over these dates/.test(text));
+    ck('  naming the figure she could see above it', /51,572\.16/.test(text));
+    ck('  and why this particular pair can never match',
+       /only recorded on wires and bank transfers/.test(text),
+       'cash carries no company, so Cash + Paid via is empty by construction');
+
+    ck('the Paid via buttons are not offered under Cash',
+       !t.d.querySelector('.btn-spend-via'),
+       'offering a filter that can only ever return nothing is the defect');
+    ck('  but the row still explains itself rather than vanishing',
+       !!t.d.getElementById('spendViaCashNote'),
+       'a control that disappears looks like a bug');
+
+    ck('the cash band says what it covers',
+       /the whole box, not narrowed by the filters above/.test(text),
+       'unsaid, that band is how the screen ends up contradicting itself');
+}
+
+section('O2 — a genuinely empty period still reads as empty');
+{
+    // The opposite mistake: shouting "money did move" at a quiet week would
+    // be its own kind of wrong.
+    const QUIET = Object.assign({}, REAL, {
+        rows: [], months: [], total: 0, count: 0,
+        cash: { opening: 0, in: 0, out: 0, closing: 0 },
+    });
+    const t = mount(QUIET, {});
+    const text = t.d.getElementById('viewRoot').textContent;
+    ck('nothing really happened, and it says so',
+       /Nothing was paid out in this period/.test(text), text.slice(0, 160));
+    ck('  without claiming money moved', !/Money did move/.test(text));
+}
+
+section('O3 — Paid via is still there for wires');
+{
+    const t = mount(REAL, { method: 'Wire' });
+    ck('choosing Wire keeps the Paid via buttons',
+       !!t.d.querySelector('.btn-spend-via'),
+       'the filter is meaningful on a wire — that is the only place it is recorded');
+    ck('  and no cash note', !t.d.getElementById('spendViaCashNote'));
+}
+
 section('N — THE DISSECTION: one number, then what it is made of');
 {
     // Apsara, 2026-11-08: "we can disect into lower level from higher level

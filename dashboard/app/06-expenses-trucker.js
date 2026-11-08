@@ -724,12 +724,34 @@ async function renderSpendReportTab() {
              Only rendered when there is more than one to choose between, and
              "Not recorded" is offered on purpose: it is how she finds the
              transfers written before this field existed. -->
-        ${(rep.paidViaColumns || []).length > 1 ? `
+        <!-- ── PAID VIA IS A WIRE QUESTION (2026-11-08) ─────────────────
+             Apsara's report: choosing Cash AND a Paid via showed an empty
+             list and "Nothing was paid out in this period", while the cash
+             band above it said $51,572.16 had gone out over the same days.
+
+             Measured on her live data that day: across the whole of 2026,
+             ZERO of $787,739.92 of cash payments carry a paid_via, because
+             Jarvis only ever asks whose money it was on a wire or a bank
+             transfer. So Cash + Paid via is an empty set by construction —
+             the screen was offering a question that could only ever answer
+             nothing, and then reporting that nothing as if it were a fact
+             about her spending.
+
+             So under Cash the row says what it is instead of pretending to
+             filter. Not hidden: a control that vanishes looks like a bug,
+             and she would be left wondering where it went. -->
+        ${(rep.paidViaColumns || []).length > 1 ? (spendMethod === 'Cash' ? `
+        <div style="display:flex; gap:8px; flex-wrap:wrap; margin-top:10px; align-items:center;">
+          <span style="font-family:var(--font-mono); font-size:10px; letter-spacing:.12em; text-transform:uppercase; color:var(--text-muted); margin-right:2px;">Paid via</span>
+          <span id="spendViaCashNote" style="font-size:12px; color:var(--text-faint);">
+            not asked on cash — Jarvis only records whose money it was on wires and bank transfers
+          </span>
+        </div>` : `
         <div style="display:flex; gap:8px; flex-wrap:wrap; margin-top:10px;">
           <span style="font-family:var(--font-mono); font-size:10px; letter-spacing:.12em; text-transform:uppercase; color:var(--text-muted); align-self:center; margin-right:2px;">Paid via</span>
           ${['', ...(rep.paidViaColumns || [])].map(v => `
             <button class="btn btn-spend-via" data-via="${esc(v)}" style="${chipCss(spendPaidVia === v)}">${esc(v || 'All')}</button>`).join('')}
-        </div>` : ''}
+        </div>`) : ''}
         <!-- ── WHOM WE BUY, AND WHOM WE SELL ─────────────────────────────
              Apsara, 2026-11-07: "What if i want supplier wise filter in edge
              yard", and when asked which counterparty she meant: "TWO
@@ -842,7 +864,19 @@ async function renderSpendReportTab() {
            cash in". Opened with X, took in Y, paid out Z, so it should hold W;
            that last figure is what gets counted against the drawer. -->
       <div class="card" style="padding:16px 18px; margin-bottom:18px;">
-        <div style="font-family:var(--font-mono); font-size:10px; letter-spacing:.14em; text-transform:uppercase; color:var(--text-muted); margin-bottom:10px;">Petty cash over this period</div>
+        <!-- ── WHAT THIS BAND COVERS, SAID OUT LOUD (2026-11-08) ────────
+             It is filtered by the DATES and by nothing else. Company, Paid
+             via, Out of, Bought from and Sold to never reach it, which is
+             right — the cash box is one physical box, and narrowing a
+             drawer balance by "bought from Darwin" would produce a
+             confident number that is not a balance.
+             But unsaid, that is how the band ends up reporting $51,572 out
+             while the list below it shows nothing, and she is left to work
+             out which one to believe. -->
+        <div style="font-family:var(--font-mono); font-size:10px; letter-spacing:.14em; text-transform:uppercase; color:var(--text-muted); margin-bottom:10px;">
+          Petty cash over this period
+          <span style="text-transform:none; letter-spacing:0; color:var(--text-faint);">— the whole box, not narrowed by the filters above</span>
+        </div>
         <div style="display:flex; gap:26px; flex-wrap:wrap; font-family:var(--font-mono); font-size:13px;">
           <div>Opened <strong>${esc(money(rep.cash.opening))}</strong></div>
           <div style="color:var(--leaf-600, #2e7d32);">Cash in <strong>+${esc(money(rep.cash.in))}</strong></div>
@@ -920,7 +954,31 @@ async function renderSpendReportTab() {
           </table>
         </div>
       </details>`
-      : `<div style="padding:60px; text-align:center; color:var(--text-faint); font-family:var(--font-mono); font-size:12px;">Nothing was paid out in this period.</div>`}
+      : `<div style="padding:46px 24px; text-align:center; font-family:var(--font-mono); font-size:12px;">
+          ${Number((rep.cash || {}).out) > 0.005 || Number(rep.total) > 0.005
+            // ── SAY WHICH IT IS (2026-11-08) ──────────────────────────────
+            // Apsara: "Why it is not showing the breakdown". The screen said
+            // "Nothing was paid out in this period" while the band above it
+            // reported $51,572.16 going out over the very same days.
+            //
+            // Both were drawn from the same report and neither was lying —
+            // the list is filtered and the cash band is not. But "nothing was
+            // paid out" reads as YOU SPENT NOTHING, which is a statement
+            // about her business, and it was false. What was true is that her
+            // filter excluded everything.
+            //
+            // Those are two different things to be told, and only one of them
+            // is her problem to solve.
+            ? `<div style="color:var(--status-warning, #d69e2e);">No payments match these filters.</div>
+               <div style="margin-top:8px; color:var(--text-faint); line-height:1.7;">
+                 Money did move over these dates — the cash box shows
+                 <strong style="color:var(--text-strong);">${esc(money((rep.cash || {}).out))}</strong> going out.
+                 ${spendMethod === 'Cash' && spendPaidVia
+                   ? 'Paid via is only recorded on wires and bank transfers, so choosing it alongside Cash can never match anything.'
+                   : 'Widen the filters above to see it.'}
+               </div>`
+            : '<span style="color:var(--text-faint);">Nothing was paid out in this period.</span>'}
+        </div>`}
     </section>`;
 
   // Dates are typed as MM/DD/YYYY and sent as ISO — the same split the rest of
