@@ -176,12 +176,39 @@ function bankOf(source) {
 }
 
 // ── AND WHOSE MONEY IT IS ─────────────────────────────────────────────────
-// ONLY what she has actually said. She named the company behind the two new
-// accounts and nothing else. Plain BofA is a mix by definition, and she has
-// never said whose Chase Bank is or whose the opening float was — so they sit
-// under COMPANY_UNKNOWN rather than being quietly assigned to Edge Metals
-// because it is the bigger company. A guess here would print a per-company
-// figure that reads as fact on a screen she makes decisions from.
+// ONLY what she has actually said. Plain BofA is a mix by definition, and she
+// has never said whose the opening float was — so Unassigned sits under
+// COMPANY_UNKNOWN rather than being quietly assigned to Edge Metals because it
+// is the bigger company. A guess here would print a per-company figure that
+// reads as fact on a screen she makes decisions from.
+//
+// ── CHASE WAS MISSING FROM THIS MAP FOR SIX WEEKS (2026-11-08) ───────────
+// Apsara, today: "Chase Bank belongs to Edge Yard". That is not new
+// information — she answered it on 2026-09-24, asked directly, and
+// helpers/payments.js has carried it since:
+//
+//     // CHASE IS EDGE YARD'S — her answer, 2026-09-24, asked directly.
+//     if (/^chase/i.test(b)) return ['Edge Yard'];
+//
+// helpers/entities.js says the same from the other side: its Chase account is
+// 'EDGE TRADING INC', and Edge Trading IS Edge Yard (uiName). So two files
+// knew and this one did not, while the comment above it claimed to hold only
+// what she had said. It held LESS than what she had said, which is the more
+// dangerous of the two failures: an absence reads as "she never told us".
+//
+// WHAT NAMING IT CHANGES, measured against her live data on 2026-11-08
+// before the edit:
+//   · $7,923.54 "Edge Metals owes Chase Bank" was flagged intercompany:false,
+//     because COMPANY_UNKNOWN claims nothing. It is a debt Edge Metals owes
+//     EDGE YARD, and under rule 5 that is exactly the kind of thing this app
+//     exists to keep apart. It now flags true.
+//   · $3,878.83 of cash moves out of "Company not stated" onto Edge Yard.
+//   · $13,871.80 "Chase Bank owes Unassigned" stays intercompany:false — the
+//     other side is still unstated, and still claims nothing.
+//
+// The string is 'Edge Yard' and not 'Edge Trading': uiName is what she must
+// keep seeing (helpers/entities.js), and payments.js's PAID_VIA already says
+// 'Edge Yard'. Two spellings here would recreate the drift one layer down.
 //
 // The account and the company share a name, which is not a coincidence and
 // not a collision: the account IS that company's money at BofA. Kept as an
@@ -191,6 +218,7 @@ const COMPANY_UNKNOWN = 'Company not stated';
 const COMPANY_OF = {
     'Edge Metals': 'Edge Metals',
     'AAA Investment': 'AAA Investment',
+    'Chase Bank': 'Edge Yard',
 };
 function companyOf(source) {
     return COMPANY_OF[String(source || '').trim()] || COMPANY_UNKNOWN;

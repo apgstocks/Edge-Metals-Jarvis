@@ -430,9 +430,13 @@ section('F — END TO END, through the real routes');
         Array.isArray(tab.json.sources)
         && tab.json.sources.join('|') === petty.SOURCES.join('|'),
         JSON.stringify(tab.json.sources));
+    // Re-pointed 2026-11-08: Chase was the example of a bucket with no stated
+    // company. It has one — Edge Yard, her answer of 2026-09-24. 'Unassigned'
+    // is the bucket that genuinely has none, so it carries that half now.
     ck('  with the company behind each bucket, where she has said one',
         tab.json.company_of && tab.json.company_of['AAA Investment'] === 'AAA Investment'
-        && tab.json.company_of['Chase Bank'] === tab.json.company_unknown,
+        && tab.json.company_of['Chase Bank'] === 'Edge Yard'
+        && tab.json.company_of['Unassigned'] === tab.json.company_unknown,
         JSON.stringify(tab.json.company_of));
 
     const { addLoad } = require(path.join(ROOT, 'helpers/loads'));
@@ -537,15 +541,24 @@ section('H — BofA is two accounts, and they belong to two companies');
         Math.abs(Object.values(co).reduce((a, b) => a + b, 0) - B().total) < 0.005,
         `${JSON.stringify(co)} vs ${B().total}`);
 
-    // ── WHAT SHE HAS NOT SAID IS NOT GUESSED ─────────────────────────────
-    // Plain BofA is a mix, and she has never said whose Chase is. Assigning
-    // either to Edge Metals because it is the bigger company would print a
-    // per-company figure that reads as fact.
-    ck('money whose company she has not stated says so',
-        co[petty.COMPANY_UNKNOWN] === 7500, JSON.stringify(co));
-    ck('  no unstated money is quietly filed under Edge Metals',
+    // ── CHASE IS EDGE YARD'S (re-pointed 2026-11-08) ─────────────────────
+    // This block used Chase as its example of "a bucket whose company she has
+    // not stated", and asserted co[COMPANY_UNKNOWN] === 7500. She HAD stated
+    // it — on 2026-09-24 — and helpers/pettyCash.js was the file that did not
+    // know. So the check was shaped like the stale data rather than like the
+    // rule, and it would have gone on confirming the gap indefinitely.
+    //
+    // The rule it was really guarding — an absence of an answer is never
+    // guessed — is unchanged and still exercised, against 'Unassigned', which
+    // genuinely has no company. See the borrow checks further down.
+    ck("Chase's money is Edge Yard's, not nobody's",
+        co['Edge Yard'] === 7500, JSON.stringify(co));
+    ck('  and whatever is still unattributed is not Chase money',
+        (co[petty.COMPANY_UNKNOWN] || 0) !== 7500,
+        JSON.stringify(co));
+    ck('  nothing is quietly filed under Edge Metals',
         co['Edge Metals'] === 4000,
-        'plain BofA and Chase must not be swept into the company she trades most under');
+        'plain BofA must not be swept into the company she trades most under');
 
     // ── THE CALLER WITHOUT A DROPDOWN ────────────────────────────────────
     // helpers/tools.js is how she records a payment by TALKING to Jarvis. It
@@ -621,12 +634,34 @@ section('H — BofA is two accounts, and they belong to two companies');
 
     // Two buckets with no stated company are not "the same company" — an
     // absence of an answer must not be asserted as a match.
+    // Re-pointed 2026-11-08. Both of these used Edge Metals -> Chase Bank,
+    // which is no longer an unstated bucket: it is Edge Yard, and that borrow
+    // IS intercompany — $7,923.54 of it on her live data, flagged as neither
+    // until today. They were also the SAME fixture twice, so the second check
+    // could not fail unless the first did; split properly now.
+    //
+    // 'Unassigned' is the only bucket left with no stated company, so the
+    // unnamed-vs-unnamed case needs a second unbanked bucket that does not
+    // exist today. Exercised with a name that is in no map, because the rule
+    // must hold the day she adds one.
     const plain = petty.borrowings([
-        { kind: 'transfer', transfer_reason: 'borrow', cash_source: 'Edge Metals',
-          transfer_to: 'Chase Bank', amount: -500 },
+        { kind: 'transfer', transfer_reason: 'borrow', cash_source: 'Unassigned',
+          transfer_to: 'Petty box 2', amount: -500 },
     ])[0];
     ck('two buckets with no company stated are not called intercompany',
         !!plain && plain.intercompany === false, JSON.stringify(plain));
+    const nowStated = petty.borrowings([
+        { kind: 'transfer', transfer_reason: 'borrow', cash_source: 'Edge Metals',
+          transfer_to: 'Chase Bank', amount: -500 },
+    ])[0];
+    // borrowings() normalises direction from the sign, so which side lands in
+    // `owes` is its business — the property is that Edge Yard is ONE of the
+    // two companies and the pair is flagged as crossing a line.
+    ck('  but Edge Metals borrowing from Chase IS between two companies',
+        !!nowStated && nowStated.intercompany === true
+        && [nowStated.owes_company, nowStated.to_company].includes('Edge Yard')
+        && [nowStated.owes_company, nowStated.to_company].includes('Edge Metals'),
+        JSON.stringify(nowStated));
     // AND THE ONE THAT MATTERS MORE, which the check above cannot catch:
     // 'Company not stated' differs from 'Edge Metals' as a STRING, so a rule
     // written as "the two labels differ" calls this intercompany. It is not.
@@ -634,7 +669,7 @@ section('H — BofA is two accounts, and they belong to two companies');
     // to cross a line that has not been drawn.
     const half = petty.borrowings([
         { kind: 'transfer', transfer_reason: 'borrow', cash_source: 'Edge Metals',
-          transfer_to: 'Chase Bank', amount: -500 },
+          transfer_to: 'Unassigned', amount: -500 },
     ])[0];
     ck('  nor is a named company against an unnamed one',
         !!half && half.intercompany === false, JSON.stringify(half));
@@ -911,6 +946,60 @@ section('H — BofA is two accounts, and they belong to two companies');
             && !/Type 1\s*[–-]\s*\d/.test(inCode),
             'so it cannot go stale again the next time an account is added');
     }
+}
+
+// ── THE TWO FILES MUST AGREE ON WHOSE BANK IS WHOSE (2026-11-08) ────────
+// Apsara, today: "Chase Bank belongs to Edge Yard" — which she had already
+// answered on 2026-09-24. helpers/payments.js recorded it; pettyCash.js's
+// COMPANY_OF did not, and the gap went unnoticed for six weeks because
+// nothing compared the two. A per-company cash figure and an intercompany
+// borrow flag were both computed from the file that did not know.
+//
+// So the check is not "Chase is Edge Yard" — that is the answer, and a test
+// of the answer goes stale the day a fourth account arrives. It is that the
+// two files AGREE: for every petty cash source, if payments.js can name
+// exactly one owner for that bank, pettyCash.js must name the same company.
+// A new account added to one file and not the other turns this red.
+{
+    section('Chase, and the rule that keeps the two files in step');
+    const petty = require(path.join(ROOT, 'helpers', 'pettyCash'));
+    const payments = require(path.join(ROOT, 'helpers', 'payments'));
+
+    ck('Chase Bank reads as Edge Yard, as she answered on 2026-09-24',
+       petty.companyOf('Chase Bank') === 'Edge Yard',
+       petty.companyOf('Chase Bank'));
+    ck('  and not as an absence of an answer',
+       petty.companyOf('Chase Bank') !== petty.COMPANY_UNKNOWN);
+
+    let compared = 0;
+    for (const src of petty.SOURCES) {
+        const bank = petty.bankOf(src);
+        if (!bank) continue;
+        const owners = payments.paidViaOptionsFor(bank);
+        // Only a bank with exactly ONE possible owner states a fact. BofA
+        // holds two companies, so it says nothing about whose a source is.
+        if (!Array.isArray(owners) || owners.length !== 1) continue;
+        compared += 1;
+        ck(`  ${src}: pettyCash says ${petty.companyOf(src)}, payments says ${owners[0]}`,
+           petty.companyOf(src) === owners[0],
+           'the two files disagree about whose money this is');
+    }
+    ck('  at least one source was actually compared',
+       compared > 0,
+       'a loop that compares nothing is a check that proves nothing');
+
+    // The borrow flag is the thing that was silently wrong, so it gets its
+    // own check rather than being left implied by the mapping above.
+    const flag = (a, z) => {
+        const x = petty.companyOf(a), y = petty.companyOf(z);
+        return x !== petty.COMPANY_UNKNOWN && y !== petty.COMPANY_UNKNOWN && x !== y;
+    };
+    ck('Edge Metals owing Chase IS a loan between two companies',
+       flag('Edge Metals', 'Chase Bank'),
+       'on her live data that is $7,923.54 that was flagged as neither');
+    ck('  but Chase owing Unassigned still claims nothing',
+       !flag('Chase Bank', 'Unassigned'),
+       'one side unstated must stay unstated, not become a debt');
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);
