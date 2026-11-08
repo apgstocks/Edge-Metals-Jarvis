@@ -20,6 +20,22 @@ let spendSold = '';
 // yard. So the voice path and every other caller are untouched.
 let spendCompany = 'edge-trading';
 let spendQs = '';
+
+// ── WHERE SHE IS IN THE DISSECTION (2026-11-08) ─────────────────────────
+// Apsara: "The spend report should be built in a way sich that we can disect
+// into lower level from higher level in a humanely possible way."
+//
+// The trail she has clicked: [{by,key}, ...]. Empty is the top. Held here
+// rather than in the URL so the back button still means "leave the report",
+// which is what every other tab on this screen means by it.
+//
+// The GROUPING ITSELF IS NOT HERE. helpers/spendLevels.js decides what the
+// levels are, which one is next and when to skip one, and the route serves
+// it through the same reader the report and both exports use. A second copy
+// of that arithmetic in the browser would one day disagree with the report
+// it is drawn under, and she would reconcile against whichever she saw last.
+let spendPath = [];
+let spendDir = 'out';
 // '' means every method. Held here so it survives a repaint, like the date
 // range — a filter that resets itself when you tap Apply is worse than none.
 let spendMethod = '';
@@ -836,6 +852,26 @@ async function renderSpendReportTab() {
         ${Number(rep.cash.closing) < 0 ? `<div style="margin-top:9px; font-size:12.5px; color:var(--status-warning, #d69e2e);">Negative — cash left the drawer that was never entered on the Petty cash tab.</div>` : ''}
       </div>
 
+      <!-- ── THE DISSECTION (2026-11-08) ────────────────────────────────
+           Apsara: "we can disect into lower level from higher level in a
+           humanely possible way."
+
+           Drawn EMPTY here and filled by loadSpendLevel() after the page
+           settles. The level is a second request, and making the whole
+           report wait on it would turn one slow call into a blank screen —
+           the report she already had must not get worse because a new panel
+           was added under it.
+
+           Placed ABOVE the month table and not instead of it. She asked to
+           be able to dissect; she did not ask to lose the view she reads
+           every day (rule 1). If she wants the old table gone she will say
+           so, and that is one line. -->
+      <div class="card" id="spendDissect" style="padding:16px 18px; margin-bottom:18px;">
+        <div style="font-family:var(--font-mono); font-size:10px; letter-spacing:.14em;
+                    text-transform:uppercase; color:var(--text-muted);">Open it up</div>
+        <div id="spendDissectBody" style="margin-top:10px; color:var(--text-faint); font-size:13px;">Working it out…</div>
+      </div>
+
       ${(rep.months || []).length ? `
       <div class="card" style="padding:0; overflow-x:auto; margin-bottom:18px;">
         <table id="spendReportTable" class="stack-table" style="width:100%; border-collapse:collapse; font-size:13px; min-width:600px;">
@@ -915,6 +951,100 @@ async function renderSpendReportTab() {
     if (f) spendFrom = iso(f.value) || '';
     if (t) spendTo = iso(t.value) || '';
   };
+
+  // ── THE DISSECTION, DRAWN ───────────────────────────────────────────────
+  // One level at a time, from /api/reports/spend/level — the same reader the
+  // report above it came from, so the two cannot disagree.
+  async function loadSpendLevel() {
+    const box = $('spendDissectBody');
+    if (!box) return;
+    const q = (spendQs ? spendQs + '&' : '?')
+      + 'direction=' + spendDir
+      + '&path=' + encodeURIComponent(JSON.stringify(spendPath));
+    let lv;
+    try {
+      lv = await api('/api/reports/spend/level' + q);
+    } catch (e) {
+      // The report above is already on screen and still true. Saying which
+      // part failed beats blanking a page that mostly worked.
+      box.innerHTML = `<span style="color:var(--status-danger);">Could not open that up: ${esc(e.message || '')}</span>`;
+      return;
+    }
+
+    const bar = (pct) => `<span style="display:inline-block; height:6px; width:${Math.max(2, Math.min(100, pct))}%;
+      background:var(--accent, #2e7d32); border-radius:3px; vertical-align:middle;"></span>`;
+
+    // The trail, every step clickable. A long path stays readable and one
+    // click goes back to any point in it — including the top.
+    const crumbs = (lv.crumbs || []).map((c, i) => {
+      const last = i === (lv.crumbs.length - 1);
+      return last
+        ? `<span style="color:var(--text-strong); font-weight:600;">${esc(c.label)}</span>`
+        : `<button class="spendCrumb" data-path="${esc(JSON.stringify(c.path))}"
+             style="background:none; border:none; padding:0; cursor:pointer; color:var(--accent, #2e7d32);
+                    font:inherit; text-decoration:underline;">${esc(c.label)}</button>`;
+    }).join('<span style="color:var(--text-faint); margin:0 7px;">›</span>');
+
+    // Levels it walked past because they held one thing. Said out loud, or
+    // she cannot tell why "Supplier settlements" never appeared.
+    const skipped = (lv.skipped || []).length
+      ? `<div style="margin-top:4px; font-size:11.5px; color:var(--text-faint);">
+           only one — ${(lv.skipped).map((s) => esc(s.label)).join(', ')}</div>`
+      : '';
+
+    const rows = (lv.rows || []).map((r) => `
+      <tr class="spendOpen" ${r.canOpen ? `data-path="${esc(JSON.stringify(r.path))}"` : ''}
+          style="border-top:1px solid var(--line); ${r.canOpen ? 'cursor:pointer;' : ''}">
+        <td style="padding:8px 10px;">${esc(r.label)}
+          ${r.canOpen ? '<span style="color:var(--text-faint); margin-left:6px;">›</span>' : ''}</td>
+        <td style="padding:8px 10px; width:34%;">${bar(r.share)}</td>
+        <td style="padding:8px 10px; text-align:right; font-family:var(--font-mono);">${esc(money(r.amount))}</td>
+        <td style="padding:8px 10px; text-align:right; font-family:var(--font-mono); color:var(--text-faint); font-size:11.5px;">${r.share}%</td>
+        <td style="padding:8px 10px; text-align:right; color:var(--text-faint); font-size:11.5px;">${r.count}</td>
+      </tr>`).join('');
+
+    // At the bottom the payments ARE the answer, so they are listed rather
+    // than summarised into a row that cannot be opened.
+    const recs = (lv.records || []).map((r) => `
+      <tr style="border-top:1px solid var(--line);">
+        <td style="padding:8px 10px; font-family:var(--font-mono); font-size:12px;">${esc(r.date || '—')}</td>
+        <td style="padding:8px 10px;">${esc(r.party || 'Not recorded')}</td>
+        <td style="padding:8px 10px; color:var(--text-faint); font-size:11.5px;">${esc(r.method || '')}</td>
+        <td style="padding:8px 10px; text-align:right; font-family:var(--font-mono);">${esc(money(r.amount))}</td>
+        <td style="padding:8px 10px; text-align:right;">${r.doc && r.doc.link
+          ? `<a href="${esc(r.doc.link)}" target="_blank" rel="noopener" style="font-size:11.5px;">${esc(r.doc.title || 'document')}</a>`
+          : '<span style="color:var(--text-faint); font-size:11.5px;">no document</span>'}</td>
+      </tr>`).join('');
+
+    box.innerHTML = `
+      <div style="display:flex; justify-content:space-between; align-items:flex-start; gap:12px; flex-wrap:wrap;">
+        <div>${crumbs}${skipped}</div>
+        <div style="font-family:var(--font-mono); font-size:13px;">
+          ${esc(money(lv.total))}
+          <span style="color:var(--text-faint); font-size:11.5px;">· ${lv.count} payment${lv.count === 1 ? '' : 's'}</span>
+        </div>
+      </div>
+      <div style="margin-top:10px; font-family:var(--font-mono); font-size:10px; letter-spacing:.12em;
+                  text-transform:uppercase; color:var(--text-muted);">${esc(lv.heading)}</div>
+      <table style="width:100%; border-collapse:collapse; font-size:13px; margin-top:4px;">
+        <tbody>${rows}${recs}</tbody>
+      </table>`;
+
+    box.querySelectorAll('.spendCrumb').forEach((b) => b.addEventListener('click', () => {
+      try { spendPath = JSON.parse(b.dataset.path || '[]'); } catch (e) { spendPath = []; }
+      loadSpendLevel();
+    }));
+    box.querySelectorAll('.spendOpen[data-path]').forEach((tr) => tr.addEventListener('click', () => {
+      try { spendPath = JSON.parse(tr.dataset.path || '[]'); } catch (e) { return; }
+      loadSpendLevel();
+    }));
+  }
+  // The filters above decide what is in scope, so a changed filter makes any
+  // trail she was down meaningless — it is dropped rather than re-applied to
+  // a different set of rows, which would keep the breadcrumb and change what
+  // it means.
+  spendPath = [];
+  loadSpendLevel();
 
   // ── AUTO-APPLY ─────────────────────────────────────────────────────────
   // Apsara: "if i select it should auto app;y". `change` fires when a date

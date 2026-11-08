@@ -135,9 +135,29 @@ const dom = new JSDOM('<div id="viewRoot"></div>',
 // renderSpendReportTab stubbed, so a click records the state it would have
 // re-run with instead of fetching. Both the auto-apply and the date-wipe
 // live entirely in the handlers; a template-only check cannot see either.
-function mount(rep, sel = {}) {
+function mount(rep, sel = {}, level = null) {
     const { w, d } = render(rep, sel);
     const { wiring } = extract();
+    // ── THE DISSECTION ASKS THE SERVER (2026-11-08) ──────────────────────
+    // loadSpendLevel lives in the wiring block and calls api(). Without a
+    // stub it throws inside an async function — a rejected promise that
+    // never surfaces, so the panel would simply stay on "Working it out…"
+    // and every check about it would fail for a reason nothing printed.
+    // The stub records what was asked for, because WHICH path the click
+    // sent is most of what these checks are about.
+    w.__levelCalls = [];
+    w.__level = level || { direction: 'out', crumbs: [{ label: 'Money out', path: [] }],
+        skipped: [], heading: 'Whose money', by: 'company', total: 0, count: 0,
+        rows: [], records: [], path: [] };
+    w.eval(`
+      var api = function (p) { __levelCalls.push(p); return Promise.resolve(__level); };
+      // Declared at the top of 06-expenses-trucker.js, outside the slice this
+      // harness evaluates. Without them the dissection throws on its first
+      // line and the panel sits on "Working it out…" with nothing printed.
+      var spendQs = '';
+      var spendPath = [];
+      var spendDir = 'out';
+    `);
     w.eval(`
       // The wiring uses $() to reach the date boxes; the template never did,
       // so render() had no reason to define it.
@@ -179,10 +199,12 @@ function mount(rep, sel = {}) {
             return el.dispatchEvent(new w.Event('click', { bubbles: true }));
         },
         runs: () => w.__runs,
+        levelCalls: () => w.__levelCalls,
+        setLevel: (lv) => { w.__level = lv; },
     };
 }
 
-(() => {
+(async () => {
 
 // ══════════════════════════════════════════════════════════════════════════
 section('A — the heading no longer prints a subtraction that leaves 55% unnamed');
@@ -656,6 +678,112 @@ section('M — the drill-down names the RECORD, and labels every kind');
        text.includes('Fuel'), 'docs are optional everywhere');
 }
 
+section('N — THE DISSECTION: one number, then what it is made of');
+{
+    // Apsara, 2026-11-08: "we can disect into lower level from higher level
+    // in a humanely possible way."
+    //
+    // The grouping itself is helpers/spendLevels.js and tests/spend-levels.js
+    // holds it. THIS checks the half that lives in the browser: that the
+    // panel draws the level, that a click sends the path the row carries,
+    // and that the trail goes back. Those are three different ways to be
+    // broken and none of them is visible from the engine's own tests.
+    const LEVEL = {
+        direction: 'out',
+        crumbs: [{ label: 'Money out', path: [] },
+                 { label: 'Edge Yard', path: [{ by: 'company', key: 'edge-trading' }] }],
+        skipped: [{ by: 'kind', label: 'Metal bought' }],
+        heading: 'Who it went to', by: 'party', total: 11785.48, count: 3,
+        rows: [
+            { key: 'Randy Recycling', label: 'Randy Recycling', amount: 8368.77, share: 71.0, count: 2,
+              canOpen: true, path: [{ by: 'company', key: 'edge-trading' }, { by: 'party', key: 'Randy Recycling' }] },
+            { key: 'Edgar lopez', label: 'Edgar lopez', amount: 3416.71, share: 29.0, count: 1,
+              canOpen: false, path: [{ by: 'company', key: 'edge-trading' }, { by: 'party', key: 'Edgar lopez' }] },
+        ],
+        records: [],
+        path: [{ by: 'company', key: 'edge-trading' }],
+    };
+    const t = mount(REAL, {}, LEVEL);
+    await new Promise((r) => setTimeout(r, 40));
+    const box = t.d.getElementById('spendDissectBody');
+
+    ck('the panel is on the page', !!t.d.getElementById('spendDissect'));
+    ck('  and it asked the server for a level',
+       (t.levelCalls() || []).some((p) => /reports\/spend\/level/.test(p)),
+       JSON.stringify(t.levelCalls()));
+    ck('  carrying the trail she is on',
+       (t.levelCalls() || []).some((p) => /path=/.test(p)), JSON.stringify(t.levelCalls()));
+    ck('  and which direction — money out is not money in',
+       (t.levelCalls() || []).some((p) => /direction=out/.test(p)), JSON.stringify(t.levelCalls()));
+
+    const text = box ? box.textContent : '';
+    ck('it stops saying "Working it out" once the level lands',
+       !/Working it out/.test(text), text.slice(0, 80));
+    ck('  the level is named', /Who it went to/.test(text), text.slice(0, 120));
+    ck('  every name is listed', /Randy Recycling/.test(text) && /Edgar lopez/.test(text));
+    ck('  with its money', /8,368\.77/.test(text), text.slice(0, 200));
+    ck('  and its share', /71%/.test(text), text.slice(0, 200));
+    ck('the trail says where she is',
+       /Money out/.test(text) && /Edge Yard/.test(text), text.slice(0, 120));
+    // Skipping silently would leave her unable to tell why a whole level
+    // never appeared.
+    ck('  and names the level it walked past',
+       /only one/.test(text) && /Metal bought/.test(text), text.slice(0, 200));
+
+    // ── THE CLICK ────────────────────────────────────────────────────────
+    const before = (t.levelCalls() || []).length;
+    const openable = box.querySelector('.spendOpen[data-path]');
+    ck('a row that can be opened is clickable', !!openable);
+    if (openable) {
+        openable.dispatchEvent(new t.w.Event('click', { bubbles: true }));
+        await new Promise((r) => setTimeout(r, 30));
+        const asked = (t.levelCalls() || [])[t.levelCalls().length - 1] || '';
+        ck('  clicking it asks for the level below',
+           t.levelCalls().length > before, `${before} -> ${t.levelCalls().length}`);
+        ck('  sending the path THAT ROW carried, not one the client guessed',
+           /Randy%20Recycling|Randy Recycling/.test(decodeURIComponent(asked)),
+           decodeURIComponent(asked));
+    }
+
+    // A row at the bottom must not offer a click that does nothing.
+    ck('a row with nothing below it is not clickable',
+       !box.querySelector('.spendOpen[data-path*="Edgar"]'),
+       'offering a dead click is how a drill-down teaches her not to trust it');
+
+    // ── AND BACK UP ──────────────────────────────────────────────────────
+    const crumb = box.querySelector('.spendCrumb');
+    ck('the trail is clickable back to the top', !!crumb);
+    if (crumb) {
+        const n = t.levelCalls().length;
+        crumb.dispatchEvent(new t.w.Event('click', { bubbles: true }));
+        await new Promise((r) => setTimeout(r, 30));
+        ck('  and going back asks again, from there',
+           t.levelCalls().length > n, `${n} -> ${t.levelCalls().length}`);
+    }
+}
+
+section('N2 — the dissection failing does not take the report with it');
+{
+    // The report above it is already on screen and still true. Blanking a
+    // page that mostly worked, because one panel under it could not load, is
+    // the failure mode that makes people distrust the whole screen.
+    const t = mount(REAL, {}, null);
+    t.w.eval("api = function(){ return Promise.reject(new Error('level route is down')); };");
+    t.w.eval('spendPath = []; loadSpendLevel();');
+    await new Promise((r) => setTimeout(r, 40));
+    // Read defensively. A mutation that blanks the page makes this element
+    // disappear, and `box.textContent` would then throw — ending the file
+    // with no totals line, so the kill is reported as CRASHED instead of by
+    // name. The missing panel IS the failure and should say so.
+    const box = t.d.getElementById('spendDissectBody');
+    const txt = box ? box.textContent : '(the panel is gone from the page)';
+    ck('it says the panel failed', /Could not open that up/.test(txt), txt.slice(0, 120));
+    ck('  and says why', /level route is down/.test(txt), txt.slice(0, 160));
+    ck('  while the report above it is untouched',
+       /\$2,153,593\.65/.test((t.d.getElementById('viewRoot') || {}).textContent || ''),
+       'the figures she came for are still on screen');
+}
+
 console.log(`\n  ${pass} passed, ${fail} failed`);
 if (fail) { console.log('FAILURES:'); failures.forEach((f) => console.log('  - ' + f)); process.exit(1); }
-})();
+})().catch((e) => { console.error('\n  CRASH  ', (e && e.stack) || e); process.exit(1); });
