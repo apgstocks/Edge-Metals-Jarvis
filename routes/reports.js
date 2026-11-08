@@ -169,6 +169,39 @@ module.exports = function (app, ctx) {
     const fileName = (rep, ext) =>
         `spend-${slug(rep.companyName || 'both')}-${slug(rep.from || 'all')}.${ext}`;
 
+    // ── ONE LEVEL OF THE DISSECTION (2026-11-08) ─────────────────────────
+    // Apsara: "The spend report should be built in a way sich that we can
+    // disect into lower level from higher level in a humanely possible way."
+    //
+    // Served from spendFromQuery, the SAME reader the screen and both
+    // exports already use. That is the whole reason this is a route and not
+    // client-side grouping: a drill-down computed a second way will one day
+    // disagree with the report it came out of, and she will reconcile
+    // against the wrong one. The window and every filter are applied exactly
+    // once, upstream of all four.
+    //
+    // `path` is what she has clicked, as JSON: [{"by":"company","key":"..."}].
+    // Unparseable means the top level, not an error — a malformed trail
+    // should land her at the beginning rather than on a stack trace.
+    app.get('/api/reports/spend/level', (req, res) => {
+        try {
+            const rep = spendFromQuery(req);
+            let path = [];
+            try {
+                const raw = JSON.parse(String(req.query.path || '[]'));
+                if (Array.isArray(raw)) {
+                    path = raw.filter((s) => s && typeof s.by === 'string')
+                              .map((s) => ({ by: s.by, key: String(s.key == null ? '' : s.key) }));
+                }
+            } catch (e) { path = []; }
+            const direction = req.query.direction === 'in' ? 'in' : 'out';
+            const { level } = require('./helpers/spendLevels');
+            res.json(level(rep.rows || [], path, { direction }));
+        } catch (e) {
+            res.status(500).json({ error: e.message });
+        }
+    });
+
     app.get('/api/reports/spend/export.xlsx', requireAdmin, async (req, res) => {
         try {
             const rep = spendFromQuery(req);
