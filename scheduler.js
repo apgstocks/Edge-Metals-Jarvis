@@ -1810,6 +1810,9 @@ function start() {
         const managerChatId = (settings.manager_number || cfg.MANAGER_NUMBER || '') + '@c.us';
         require('./helpers/dailyLearning').run({ sendToManager: _sendToManager, setPending: actions.setPending, managerChatId }).catch(e => console.error('[SCHED] learning:', e));
     }, TZ);
+    // Weekly owner report (ownership plan step 6). Sundays 20:00 LA = Monday morning for her in India.
+    // OFF unless JARVIS_OWNER_REPORT=1; sends to the manager only; read-only. Replaces no other message yet.
+    cron.schedule('0 20 * * 0', () => require('./helpers/ownerReportJob').runWeekly({ sendToManager: _sendToManager }).catch(e => console.error('[SCHED] owner-report:', e)), TZ);
     // Nightly full replication of facts.json to Supabase.
     //
     // The per-write replicate() calls in helpers/json.js are fire-and-forget

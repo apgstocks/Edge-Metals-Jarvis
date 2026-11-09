@@ -68,6 +68,7 @@ Jarvis also **learns from outcomes without being told**: how many days each cust
 4. **Certain deposits applied automatically** (exact amount, one invoice, name matches), with undo and a daily one-line "applied N deposits". Anything less certain asks. *This reverses her earlier rule that deposits always need her. It needs her explicit yes.*
 5. **Habit-based timing** from each customer's real days-to-pay.
 6. **One owner's report** each week: cash in, who is late, what I did, what I need from you. Replaces most of the separate daily messages.
+   - *Built, not wired:* `helpers/ownerReport.js` + `node scripts/owner-report.js [--days=N]` print the report (read-only, sends nothing). It is NOT on the scheduler and replaces no daily message yet; that needs her yes.
 7. **Playbook screen** so every rule she has given is visible and editable.
 
 Repeat the same model, one area at a time, for bookings and truckers, then supplier bills, then the inbox.

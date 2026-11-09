@@ -1,0 +1,30 @@
+// tests/owner-report-job.js — the weekly send: off by default, manager only, never throws, and registered in the scheduler.
+const fs = require('fs'), os = require('os'), path = require('path');
+const R = (p) => path.join(__dirname, '..', p);
+let pass = 0, fail = 0;
+const ck = (n, c, d) => { if (c) { pass++; console.log('  PASS  ' + n); } else { fail++; console.log('  FAIL  ' + n + (d ? '\n        ' + d : '')); } };
+process.env.JARVIS_TEST = '1';
+process.env.DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvis-orj-')); process.env.API_TOKEN = 't';
+process.env.JARVIS_INBOUND_LOG_FILE = path.join(process.env.DATA_DIR, 'in.jsonl');
+const job = require(R('helpers/ownerReportJob.js'));
+const NOW = Date.parse('2026-11-09T12:00:00Z');
+const src = { receipts: () => [{ date: '2026-11-08', amount: 100, customer: 'A' }], followups: () => ({ open_invoices: 0, total_outstanding: 0, drafts: [], waiting_eta: [] }), outcomes: () => [], builds: () => [], told: () => [] };
+(async () => {
+    const sent = [];
+    delete process.env.JARVIS_OWNER_REPORT;
+    let r = await job.runWeekly({ sendToManager: async (t) => sent.push(t), now: NOW, src });
+    ck('off by default: nothing is sent', r.sent === false && r.reason === 'off' && sent.length === 0);
+    process.env.JARVIS_OWNER_REPORT = '0';
+    r = await job.runWeekly({ sendToManager: async (t) => sent.push(t), now: NOW, src });
+    ck('only "1" turns it on', sent.length === 0);
+    process.env.JARVIS_OWNER_REPORT = '1';
+    r = await job.runWeekly({ sendToManager: async (t) => sent.push(t), now: NOW, src });
+    ck('on: exactly one message, to the manager callback, with the report', r.sent && sent.length === 1 && /Weekly report/.test(sent[0]) && /Cash in: \$100/.test(sent[0]), sent[0]);
+    r = await job.runWeekly({ sendToManager: async () => { throw new Error('whatsapp down'); }, now: NOW, src });
+    ck('a failing send does not throw', r.sent === false && r.reason === 'error' && /whatsapp down/.test(r.error));
+    const bad = await job.runWeekly({ sendToManager: async (t) => sent.push(t), now: NOW, src: { receipts: () => { throw new Error('x'); } } });
+    ck('a broken source still sends, and says so', bad.sent === true && /Could not read: receipts/.test(sent[sent.length - 1]));
+    const sch = fs.readFileSync(R('scheduler.js'), 'utf8');
+    ck('the scheduler runs it weekly, to the manager only', /cron\.schedule\('0 20 \* \* 0'[^\n]*ownerReportJob[^\n]*sendToManager: _sendToManager/.test(sch) && !/ownerReportJob[^\n]*(sendToTeam|sendMessage)/.test(sch));
+    console.log(`\n${pass} passed, ${fail} failed`); process.exit(fail ? 1 : 0);
+})().catch((e) => { console.log('CRASH', e); process.exit(1); });
