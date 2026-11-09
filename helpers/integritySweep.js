@@ -409,18 +409,7 @@ const CHECKS = [
         title: 'Bookings missing ERD or cutoff',
         why: 'both dates decide whether a booking can still move, and a booking without them cannot be chased',
         run() {
-            const { loadBookings, loadWorkflow } = require('./json');
-            const wfAll = loadWorkflow() || {};
-            return Object.values(loadBookings() || {})
-                .filter((b) => b && b.booking_number)
-                .map((b) => ({ b, miss: [!String(b.erd_date || '').trim() && 'ERD', !String(b.cutoff_date || '').trim() && 'cutoff'].filter(Boolean) }))
-                .filter((x) => x.miss.length)
-                .map(({ b, miss }) => {
-                    const wf = wfAll[b.booking_number] || {};
-                    const who = [b.supplier || wf.supplier, wf.trucker_name && `trucker ${wf.trucker_name}`,
-                                 b.port_of_loading && `from ${b.port_of_loading}`].filter(Boolean).join(', ');
-                    return { what: `${b.booking_number}`, detail: `no ${miss.join(' or ')}` + (who ? ` (${who})` : '') };
-                });
+            return require('./bookingDates').missing().map((x) => ({ what: x.booking, detail: x.detail }));
         },
     },
 

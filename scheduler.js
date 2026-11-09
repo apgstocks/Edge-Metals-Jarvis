@@ -217,6 +217,21 @@ async function urgentWatch() {
     }
 }
 
+// ── Daily 09:30 — bookings still missing ERD / cutoff ───────────────────────
+// Apsara, 2026-11-09: monitor until these are filled. Tries the mail backfill
+// first (fills gaps only), then one consolidated message per day for whatever
+// is still blank. Stops by itself the moment the dates exist.
+async function datesWatch() {
+    try { await require('./helpers/cutoffBackfill').run(); } catch (e) { console.error('[SCHED] dates-watch backfill:', e.message); }
+    const bd = require('./helpers/bookingDates');
+    const msg = bd.watchMessage(bd.missing());
+    if (!msg) return;
+    const key = `dates_missing_${todayKey()}`;
+    if (alreadySent(key)) return;
+    await _sendToManager(msg);
+    await markSent(key);
+}
+
 // ── Hourly — stall detection + proactive outreach ──────────────────────────
 // Piggybacks on the same cron slot as urgentWatch (9-17 LA time). Different
 // concern though: urgentWatch is cutoff-deadline-driven; this is STAGE-STALL
@@ -1380,6 +1395,7 @@ async function qbAgent() {
 function start() {
     cron.schedule('0 8 * * *',    () => morningDigest().catch(e => console.error('[SCHED] digest:', e)), TZ);
     cron.schedule('15 8 * * *',   () => dailyTruckerCheck().catch(e => console.error('[SCHED] trucker-check:', e)), TZ);
+    cron.schedule('30 9 * * *',   () => datesWatch().catch(e => console.error('[SCHED] dates-watch:', e)), TZ);
     cron.schedule('0 9-17 * * *', () => urgentWatch().catch(e => console.error('[SCHED] urgent:', e)),   TZ);
     cron.schedule('0 9-17 * * *', () => stallWatch().catch(e => console.error('[SCHED] stall:', e)),     TZ);
     cron.schedule('0 6 * * *',    () => pricelistFallback().catch(e => console.error('[SCHED] pricelist:', e)), TZ);
@@ -1850,4 +1866,4 @@ function start() {
 // Two checks that only grepped survived a mutation — one that truncated the
 // email to 15 rows, one that dropped the monospace html — because the words
 // they matched were still sitting in the comments.
-module.exports = { init, start, morningDigest, urgentWatch, autoArchive, taskRunner, pricelistFallback, eodYardReport, buildYardReportText, nightlyLogDigest };
+module.exports = { init, start, morningDigest, datesWatch, urgentWatch, autoArchive, taskRunner, pricelistFallback, eodYardReport, buildYardReportText, nightlyLogDigest };
