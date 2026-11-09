@@ -142,6 +142,8 @@ module.exports = function (app, ctx) {
     // Transfers between her own companies, recorded as loans — its own file
     // because it writes books and bankMatchRoutes.js deliberately does not.
     require('./helpers/interCompanyRoutes').mount(app);
+    // The Playbook screen (ownership plan step 7): list, edit, forget. Changes no decision — nothing reads the Playbook yet.
+    require('./helpers/playbookRoutes').mount(app, cfg);
     // ── THE LEDGER PLAN ROUTES ───────────────────────────────────────────
     // Apsara, 2026-10-08: the agent that can "remove this container from
     // the <billno>… and then match it with this payment". Preview and

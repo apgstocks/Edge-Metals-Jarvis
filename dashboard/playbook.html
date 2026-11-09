@@ -1,0 +1,146 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Playbook — Jarvis</title>
+<style>
+:root{
+  --steel-900:#14181B; --steel-800:#1E2429; --steel-700:#2B3239; --steel-600:#3C454D;
+  --steel-500:#57616A; --steel-400:#7E8891; --steel-300:#A7B0B7; --steel-200:#CBD1D6;
+  --leaf-300:#7FD172; --leaf-400:#57BE49; --leaf-500:#3DA836; --leaf-600:#2E861F;
+  --copper-300:#E29C68; --copper-400:#D77E3D;
+  --green-500:#2F8F57; --amber-500:#D99A2B; --red-500:#C5402F; --blue-500:#3A6EA5;
+  --bg-base:#0C0E10; --surface-card:#14181B; --surface-sunken:#0F1214; --surface-hover:#181D21;
+  --text-strong:#FFFFFF; --text-body:#CBD1D6; --text-muted:#A7B0B7; --text-faint:#7E8891;
+  --border-subtle:#1E2429; --border-default:#2B3239; --ring:var(--leaf-500);
+  --font-display:'Archivo',sans-serif; --font-sans:'IBM Plex Sans',system-ui,sans-serif;
+  --font-mono:'IBM Plex Mono',ui-monospace,monospace;
+}
+*,*::before,*::after{box-sizing:border-box}
+body{margin:0;font-family:var(--font-sans);color:var(--text-body);background:var(--bg-base);-webkit-font-smoothing:antialiased;height:100vh;display:flex;flex-direction:column;overflow:hidden}
+h1,h2,h3{font-family:var(--font-display);color:var(--text-strong);margin:0;font-weight:900;letter-spacing:-.02em}
+button{font:inherit;cursor:pointer}
+input,select{font:inherit}
+:focus-visible{outline:2px solid var(--ring);outline-offset:2px}
+.mono{font-family:var(--font-mono)}
+.num{font-family:var(--font-mono);font-variant-numeric:tabular-nums}
+
+header{display:flex;align-items:center;gap:14px;padding:10px 16px;border-bottom:1px solid var(--border-default);background:var(--surface-card);flex:none}
+header h1{font-size:17px}
+header .back{color:var(--steel-400);font-size:13px;text-decoration:none}
+header .back:hover{color:var(--text-body)}
+.chips{display:flex;gap:6px;flex-wrap:wrap;margin-left:auto;align-items:center}
+.chip{font-family:var(--font-mono);font-size:10.5px;letter-spacing:.06em;text-transform:uppercase;padding:3px 7px;border-radius:3px;border:1px solid var(--border-default);color:var(--text-muted);background:var(--surface-sunken);white-space:nowrap}
+.chip.on{color:var(--leaf-300);border-color:var(--leaf-600);background:rgba(87,190,73,.10)}
+.chip.warn{color:var(--amber-500);border-color:#5a4416;background:rgba(217,154,43,.10)}
+.chip.bad{color:#f0b3aa;border-color:var(--red-500);background:rgba(197,64,47,.12)}
+.chip.act{cursor:pointer}
+.chip.act:hover{border-color:var(--text-body);color:var(--text-body)}
+
+
+body{height:auto;display:block}
+.wrap{max-width:860px;margin:0 auto;padding:14px 16px 60px}
+.lede{color:var(--text-muted);font-size:13px;margin:4px 0 14px}
+.note{border:1px solid var(--border-default);background:var(--surface-sunken);border-radius:6px;padding:9px 12px;font-size:12.5px;color:var(--text-muted);margin-bottom:14px}
+.grp{font-family:var(--font-mono);font-size:10.5px;letter-spacing:.07em;text-transform:uppercase;color:var(--text-faint);margin:18px 0 6px}
+.rule{border:1px solid var(--border-default);background:var(--surface-card);border-radius:6px;padding:10px 12px;margin-bottom:8px}
+.rule .nm{font-family:var(--font-mono);font-size:11.5px;color:var(--leaf-300)}
+.rule .words{margin:5px 0;color:var(--text-strong);font-size:14px;white-space:pre-wrap}
+.rule .meta{font-size:11.5px;color:var(--text-faint)}
+.rule textarea{width:100%;min-height:70px;margin:6px 0;padding:8px;border-radius:4px;border:1px solid var(--border-default);background:var(--bg-base);color:var(--text-body);font:inherit;font-size:14px}
+.acts{display:flex;gap:8px;margin-top:6px}
+.btn{padding:6px 11px;border-radius:4px;border:1px solid var(--border-default);background:transparent;color:var(--text-body);font-size:12.5px;font-weight:600}
+.btn.pri{border-color:var(--leaf-600);background:rgba(87,190,73,.14);color:var(--leaf-300)}
+.btn.bad{border-color:var(--red-500);color:#f0b3aa}
+.empty{color:var(--text-muted);padding:24px 0}
+.toast{position:fixed;bottom:18px;left:50%;transform:translateX(-50%);background:var(--surface-card);border:1px solid var(--leaf-600);padding:8px 14px;border-radius:5px;font-size:13px}
+.toast.bad{border-color:var(--red-500);color:#f0b3aa}
+</style>
+</head>
+<body>
+<div class="wrap">
+<header style="border:0;padding:0;background:none">
+  <div>
+    <a class="back" href="/" style="color:var(--steel-400);font-size:13px;text-decoration:none">&larr; Jarvis</a>
+    <h1 style="margin-top:6px">Playbook</h1>
+    <div class="lede">Every rule you have given Jarvis for Edge Metals, in your words. Edit the words or forget a rule.</div>
+  </div>
+</header>
+<div class="note">Editing here changes what Jarvis would <b>recall</b>. Jarvis does not act on these rules yet, so nothing it does today changes when you edit one.</div>
+<div id="list"><div class="empty">Loading…</div></div>
+</div>
+<script>
+const $ = (id) => document.getElementById(id);
+function esc(v) {
+  return String(v == null ? '' : v).replace(/[&<>"]/g, c =>
+    ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+}
+function toast(msg, cls) {
+  const t = document.createElement('div'); t.className = 'toast ' + (cls || ''); t.textContent = msg;
+  document.body.appendChild(t); setTimeout(() => t.remove(), cls === 'bad' ? 7000 : 3500);
+}
+async function api(url, body) {
+  const r = await fetch(url, body ? { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) } : { method: 'GET' });
+  const j = await r.json().catch(() => ({ error: 'bad response' }));
+  if (!r.ok) { const e = new Error(j.error || ('HTTP ' + r.status)); e.status = r.status; throw e; }
+  return j;
+}
+let RULES = [];
+const NICE = { lc_customers_no_followup: 'LC customers: no follow-ups', customer_emails: 'Customer emails', payment_truth: 'Who still owes',
+  if_unsure_ask: 'When Jarvis is unsure', report_style: 'Report style', always_pays: 'Always pays' };
+const label = (r) => NICE[r.name] || r.name.replace(/_/g, ' ');
+function render() {
+  const box = $('list');
+  if (!RULES.length) { box.innerHTML = '<div class="empty">The Playbook is empty. On the server, run <span class="mono">node scripts/playbook.js seed</span> to add the rules you gave on 2026-11-07.</div>'; return; }
+  const groups = new Map();
+  for (const r of RULES) {
+    const g = r.scopeType === 'global' ? 'Applies to everything' : (r.scopeType + ': ' + r.scopeId);
+    if (!groups.has(g)) groups.set(g, []); groups.get(g).push(r);
+  }
+  let h = '';
+  for (const [g, rows] of groups) {
+    h += `<div class="grp">${esc(g)}</div>`;
+    for (const r of rows) {
+      h += `<div class="rule" data-id="${esc(r.id)}">
+        <div class="nm">${esc(label(r))}</div>
+        <div class="words">${esc(typeof r.value === 'string' ? r.value : JSON.stringify(r.value))}</div>
+        <div class="meta">${esc(r.said || 'stated')} · taught by ${esc(r.taughtBy)} · ${esc(String(r.at || '').slice(0, 10))}</div>
+        <div class="acts">${r.editable ? `<button class="btn" data-edit="${esc(r.id)}">Edit</button>` : ''}
+          <button class="btn bad" data-forget="${esc(r.id)}">Forget</button></div>
+      </div>`;
+    }
+  }
+  box.innerHTML = h;
+}
+async function load() {
+  try { const j = await api('/api/playbook'); RULES = j.rules || []; render(); }
+  catch (e) { $('list').innerHTML = '<div class="empty">' + esc(e.status === 403 ? 'Only an admin can see the Playbook.' : e.message) + '</div>'; }
+}
+document.addEventListener('click', async (ev) => {
+  const ed = ev.target.closest('[data-edit]'), fg = ev.target.closest('[data-forget]');
+  const sv = ev.target.closest('[data-save]'), cn = ev.target.closest('[data-cancel]');
+  try {
+    if (ed) {
+      const r = RULES.find((x) => String(x.id) === ed.dataset.edit); if (!r) return;
+      const card = ed.closest('.rule');
+      card.querySelector('.words').outerHTML = `<textarea data-ta="${esc(r.id)}">${esc(r.value)}</textarea>`;
+      card.querySelector('.acts').innerHTML = `<button class="btn pri" data-save="${esc(r.id)}">Save</button><button class="btn" data-cancel="1">Cancel</button>`;
+    } else if (cn) { render(); }
+    else if (sv) {
+      const ta = document.querySelector(`[data-ta="${sv.dataset.save}"]`);
+      await api('/api/playbook/edit', { id: Number(sv.dataset.save), value: ta.value });
+      toast('Saved'); await load();
+    } else if (fg) {
+      const r = RULES.find((x) => String(x.id) === fg.dataset.forget); if (!r) return;
+      if (!confirm('Forget this rule?\n\n' + r.value)) return;
+      await api('/api/playbook/forget', { id: Number(fg.dataset.forget) });
+      toast('Forgotten'); await load();
+    }
+  } catch (e) { toast(e.message, 'bad'); }
+});
+load();
+</script>
+<script src="/sidebar.js" data-page="playbook" defer></script>
+</body>
+</html>

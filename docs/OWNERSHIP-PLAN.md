@@ -72,6 +72,7 @@ Jarvis also **learns from outcomes without being told**: how many days each cust
 6. **One owner's report** each week: cash in, who is late, what I did, what I need from you. Replaces most of the separate daily messages.
    - *Built, not wired:* `helpers/ownerReport.js` + `node scripts/owner-report.js [--days=N]` print the report (read-only, sends nothing). It is NOT on the scheduler and replaces no daily message yet; that needs her yes.
 7. **Playbook screen** so every rule she has given is visible and editable.
+   - **Built 2026-11-09 (not deployed).** `/playbook` (`dashboard/playbook.html`, `helpers/playbookRoutes.js`): list, edit the words, forget. Admin only, Edge Metals only. It changes what Jarvis would *recall*, not what it does: nothing reads the Playbook yet. Test: `tests/playbook-screen.js` (real server + the real page). No sidebar row yet; reachable at `/playbook`.
 
 Repeat the same model, one area at a time, for bookings and truckers, then supplier bills, then the inbox.
 
