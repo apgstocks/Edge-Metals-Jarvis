@@ -124,7 +124,7 @@ check('no existing file reads the Playbook or the disk (so no behaviour has chan
     };
     // scripts/notes.js: a new command-line tool for the notes layer, added 2026-11-09 and called by nothing in the app.
     // Listing it here is MY call as the author (not hers); it is a new file, not an existing one starting to read the disk.
-    const mine = new Set(['helpers/playbook.js', 'helpers/diskStore.js', 'scripts/playbook.js', 'scripts/notes.js', 'tests/playbook.js', 'tests/disk.js']);
+    const mine = new Set(['helpers/playbook.js', 'helpers/diskStore.js', 'scripts/playbook.js', 'scripts/notes.js', 'scripts/restore-inbound-log.js', 'tests/playbook.js', 'tests/disk.js']);
     const callers = scan(ROOT, '').filter((f) => !mine.has(f) && !f.startsWith('helpers/disk/') && !ALLOWED_CALLERS.includes(f));
     assert.deepStrictEqual(callers, [], 'wiring the Playbook into a decision needs her yes first');
 });

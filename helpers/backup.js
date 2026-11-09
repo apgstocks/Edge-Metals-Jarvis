@@ -138,6 +138,15 @@ function collectStores(dir = cfg.DATA_DIR) {
         }
     };
     walk(dir, '');
+    // The record of everything said to Jarvis is JSON-lines, which the walk above
+    // skips (it only takes .json). Carry it as ONE array store so it is not left on
+    // a single machine. Restore writes it back as data/inbound_log.json; turn it into
+    // the live .jsonl with `node scripts/restore-inbound-log.js`.
+    try {
+        const il = require('./inboundLog');
+        const jl = path.join(dir, 'inbound_log.jsonl');
+        if (fs.existsSync(jl)) out['inbound_log.json'] = il.readAll(jl);
+    } catch (e) { problems.push({ path: 'inbound_log.jsonl', error: e.message }); }
     return { stores: out, problems };
 }
 

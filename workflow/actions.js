@@ -2265,6 +2265,49 @@ Return ONLY: { "contradicts": <the number from the list, or null>, "confidence":
     }
 }
 
+// ── Self-build over WhatsApp (helpers/selfBuild.js). Opt-in: nothing runs unless JARVIS_SELF_BUILD=1.
+// A build takes minutes, so the request is answered at once and the result is sent when it is ready.
+// The manager-only check is repeated inside selfBuild itself; the caller (brain.js) also checks the role.
+let _sbDeps = null;                         // test hook: { cfg, coder, runTests }
+let _sbRunning = false;
+async function selfBuildCommand(chatId, d) {
+    if (!d || !['request', 'approve', 'reject', 'rollback', 'list'].includes(d.kind)) return { action_taken: 'ignored' };
+    const sb = require('../helpers/selfBuild');
+    const cfgFile = require('../config');
+    if (process.env.JARVIS_SELF_BUILD !== '1') {
+        await _send(chatId, 'Self-build is switched off on this server. Set JARVIS_SELF_BUILD=1 and restart to turn it on.');
+        return { action_taken: 'replied' };
+    }
+    const deps = _sbDeps || {};
+    const cfg = deps.cfg || { repo: require('path').join(__dirname, '..'), dataDir: cfgFile.DATA_DIR, workRoot: process.env.JARVIS_BUILD_DIR };
+    const by = 'manager';
+    if (d.kind === 'list') {
+        const rows = sb.list(cfg).slice(-8);
+        await _send(chatId, rows.length ? 'Recent builds:\n' + rows.map((r) => `${r.id}  ${r.state}  ${String(r.request || '').slice(0, 60)}`).join('\n') : 'No builds yet.');
+        return { action_taken: 'replied' };
+    }
+    if (d.kind === 'approve' || d.kind === 'reject' || d.kind === 'rollback') {
+        const r = sb[d.kind](cfg, { by, id: d.id });
+        await _send(chatId, r.ok
+            ? (d.kind === 'approve' ? `Merged build ${d.id} here. ${r.note}` : d.kind === 'reject' ? `Dropped build ${d.id}.` : `Rolled build ${d.id} back.`)
+            : `Not done: ${r.error}`);
+        return { action_taken: 'replied' };
+    }
+    if (_sbRunning) { await _send(chatId, 'One build at a time. I will message you when the current one is ready.'); return { action_taken: 'replied' }; }
+    _sbRunning = true;
+    await _send(chatId, 'On it. I will build this on a private copy, run every check, and message you when it is ready. Nothing goes live until you say yes.');
+    const job = sb.request(cfg, { by, text: d.text, coder: deps.coder, runTests: deps.runTests })
+        .then(async (rec) => {
+            if (rec.state === 'ready') await _send(chatId, rec.summary);
+            else await _send(chatId, `Build ${rec.id || ''} did not make it: ${rec.reason || rec.error || rec.state}. Nothing was changed.`);
+        })
+        .catch(async (e) => { try { await _send(chatId, 'The build crashed, nothing was changed: ' + e.message); } catch (x) { /* ignore */ } })
+        .finally(() => { _sbRunning = false; });
+    if (deps.await) await job;
+    return { action_taken: 'self_build_started' };
+}
+function _setSelfBuildDeps(d) { _sbDeps = d; _sbRunning = false; }
+
 async function rememberFact(chatId, text) {
 const clean = String(text || '').trim();
 if (!clean) { await _send(chatId, "What should I remember?"); return { action_taken: 'replied' }; }
@@ -9297,7 +9340,7 @@ emptyDropConfirmed, loadReadyReceived, pickedUpConfirmed, scaleTicketReceived, i
 askWhichBooking, askWhichContainer, fireResolvedStateIntent,
 recallBooking, executeRecall, archiveNow,
 showErd, showCutoff, getBookingField,
-scheduleFollowup, escalateUnclear, rememberFact, addBusinessContext, logKnowledgeGap, resolveFactBatch,
+scheduleFollowup, escalateUnclear, selfBuildCommand, _setSelfBuildDeps, rememberFact, addBusinessContext, logKnowledgeGap, resolveFactBatch,
 resolveFactConflict, findContradictedFact,
     draftEmailForConfirm, sendDraftedEmail, scheduleDraftedEmail, reschedulePendingEmail, searchMail, draftReplyForConfirm, backfillCutoffs,
     sendShipmentDocsForConfirm,

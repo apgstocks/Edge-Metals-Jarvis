@@ -58,7 +58,7 @@ async function hydrate(hits, { max = 3 } = {}) {
 }
 
 const LABEL = { email: 'Email received', sent_email: 'Email Jarvis sent', invoice: 'Invoice',
-    document: 'Document on file', quote_reply: 'Quote reply', fact: 'Something you told me', context: 'Business context' };
+    document: 'Document on file', quote_reply: 'Quote reply', fact: 'Something you told me', told: 'Something you said to me', context: 'Business context' };
 
 function passages(hits) {
     return hits.map((h, i) => [

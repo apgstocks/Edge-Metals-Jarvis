@@ -30,6 +30,7 @@ const day = (v) => {
 function signature() {
     const files = [cfg.REPLY_WATCH_FILE, cfg.EMAIL_THREADS_FILE, cfg.FACTS_FILE,
         cfg.INVOICE_VERSIONS_FILE, cfg.QUOTE_REQUESTS_FILE, cfg.MEMORY_CONTEXT_FILE];
+    try { const lf = require('../inboundLog').logFile(); if (lf) files.push(lf); } catch (e) { /* optional */ }
     return files.map((f) => {
         try { const s = fs.statSync(f); return `${s.mtimeMs}:${s.size}`; } catch (e) { return '0'; }
     }).join('|');
@@ -124,7 +125,13 @@ function factRows() {
     return out.filter((r) => r.body);
 }
 
-const SOURCES = { email: mailRows, sent_email: sentRows, invoice: invoiceRows, document: documentRows, quote_reply: quoteRows, fact: factRows };
+// Everything the manager/team ever said to Jarvis, verbatim (helpers/inboundLog.js).
+function toldRows() {
+    const il = require('../inboundLog');
+    return il.readAll().map((m) => row('told', m.messageId || '', 'Said to Jarvis', m.role || '', day(m.at), m.text)).filter((r) => r.body);
+}
+
+const SOURCES = { email: mailRows, sent_email: sentRows, invoice: invoiceRows, document: documentRows, quote_reply: quoteRows, fact: factRows, told: toldRows };
 
 let cache = null;
 function ensure({ force = false } = {}) {

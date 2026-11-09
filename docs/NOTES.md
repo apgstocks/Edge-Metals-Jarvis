@@ -64,3 +64,26 @@ customer as a whole word. Agent-inferred facts are marked "(inferred, not confir
 - Failure to load facts is swallowed; the follow-up goes out without remarks.
 - Letting a remembered rule skip or delay a chase is NOT done; that needs Apsara's yes.
 - Test: `tests/payment-facts.js` (runs the real job end to end).
+
+## Everything said to Jarvis is recorded (2026-11-09)
+
+`helpers/inboundLog.js`, hooked in `workflow/brain.js` `process()` right after the duplicate check.
+Every message from the manager, team or yard is appended verbatim to `data/inbound_log.jsonl`
+(time, chatId, role, messageId, text). No cap, no eviction, never edited.
+
+- Record only: nothing acts on it, so no existing behaviour changes. A failed write returns false and the reply goes on.
+- Findable: `ask_text` / `textIndex` have a `told` source, so "what did I tell you about X" searches it.
+- Not logged: truckers, suppliers, contacts, strangers. Voice is logged only if it arrives as text.
+- Off switch: `JARVIS_INBOUND_LOG=0`. Under `JARVIS_TEST=1` nothing is written unless `JARVIS_INBOUND_LOG_FILE` is set.
+- No company field (the app does not know it at this point); chatId is kept so Edge Yard / Edge Metals can be separated when read.
+- Contains whatever she types, so keep `data/` out of git and out of backups that leave the VM.
+- Test: `tests/inbound-log.js`.
+- Backup: `helpers/backup.js` `collectStores` also carries the log as one array store (`inbound_log.json`) because the nightly archive only takes `.json`. After `helpers/restore.js`, run `node scripts/restore-inbound-log.js` to rebuild `data/inbound_log.jsonl` (refuses to overwrite a non-empty live log). Test: `tests/inbound-log-backup.js`. The archive grows with the log; nightly copies are kept 30 days.
+
+## Past statements reach the classifier (2026-11-09)
+
+`helpers/saidBefore.js`, used in `workflow/brain.js` `buildPrompt`. For manager/team messages only, up to 3 earlier
+messages from the inbound log that share 2+ distinctive words with the new one are added to the AI prompt under
+"WHAT SHE HAS SAID BEFORE THAT MAY RELATE", labelled history-not-instructions (FACTS win; what she says now wins).
+Advisory: it can change how the AI reads a message, never runs an action. Off: `JARVIS_SAID_BEFORE=0`. Test: `tests/said-before.js`.
+Limits: word-overlap match (not semantic); the log is shared across Edge Yard / Edge Metals chats; adds a few lines to a prompt that already carries the whole business.
