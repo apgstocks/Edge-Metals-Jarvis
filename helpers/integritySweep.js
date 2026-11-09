@@ -397,6 +397,33 @@ const CHECKS = [
     // toggle, its own recipients and its own WhatsApp group under
     // Settings > Yard. Her daily reminder, on the yard's channel.
 
+    // ── A BOOKING WITH NO ERD OR NO CUTOFF ────────────────────────────────
+    // Apsara, 2026-11-09: "ERD and cutoff is must for a booking in jarvis. If
+    // its not there, sweep email wherever that booking is mentioned."
+    // Active bookings only (archived ones live in history). Read-only: the
+    // line names the booking and who it is with so she can chase the dates.
+    // This does NOT refuse a booking without them — that would be a change to
+    // booking intake, which she has not asked for.
+    {
+        id: 'booking-missing-dates',
+        title: 'Bookings missing ERD or cutoff',
+        why: 'both dates decide whether a booking can still move, and a booking without them cannot be chased',
+        run() {
+            const { loadBookings, loadWorkflow } = require('./json');
+            const wfAll = loadWorkflow() || {};
+            return Object.values(loadBookings() || {})
+                .filter((b) => b && b.booking_number)
+                .map((b) => ({ b, miss: [!String(b.erd_date || '').trim() && 'ERD', !String(b.cutoff_date || '').trim() && 'cutoff'].filter(Boolean) }))
+                .filter((x) => x.miss.length)
+                .map(({ b, miss }) => {
+                    const wf = wfAll[b.booking_number] || {};
+                    const who = [b.supplier || wf.supplier, wf.trucker_name && `trucker ${wf.trucker_name}`,
+                                 b.port_of_loading && `from ${b.port_of_loading}`].filter(Boolean).join(', ');
+                    return { what: `${b.booking_number}`, detail: `no ${miss.join(' or ')}` + (who ? ` (${who})` : '') };
+                });
+        },
+    },
+
     // ── A ROW WITH NO DATE OR NO PARTY ────────────────────────────────────
     // compute() already marks these `incomplete` rather than refusing them,
     // deliberately — a form that refuses a real bill is a form she works
