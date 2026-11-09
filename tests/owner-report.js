@@ -27,6 +27,7 @@ const src = {
         { kind: 'outcome', at: iso(1), outcome: 'approved' }, { kind: 'outcome', at: iso(2), outcome: 'approved' }, { kind: 'outcome', at: iso(2), outcome: 'declined' },
         { kind: 'outcome', at: iso(30), outcome: 'approved' }, { kind: 'decision', at: iso(1) } ],
     builds: () => [{ state: 'merged', at: iso(2) }, { state: 'merged', at: iso(40) }, { state: 'ready', at: iso(1) }],
+    slow: () => [{ customer: 'Zimex', invoice_no: 'Z1', balance: 30000, age: 61, usual: 28 }, { customer: 'A', balance: 1, age: 50, usual: 9 }, { customer: 'B', balance: 1, age: 50, usual: 9 }, { customer: 'C', balance: 1, age: 50, usual: 9 }],
     told: () => [{ at: iso(1), text: 'a' }, { at: iso(2), text: 'b' }, { at: iso(30), text: 'c' }],
 };
 let r = rep.build({ now: NOW, src });
@@ -36,20 +37,24 @@ ck('open total and biggest', r.open.total === 55000 && r.open.invoices === 7 && 
 ck('"needs you": no address, no terms, waiting ETA', r.needs.noAddress.join() === 'Taewon,NoMail' && r.needs.noTerms.join() === 'Taewon' && r.needs.waitingEta === 2);
 ck('"what I did" counts only this week, only outcomes', r.did.approved === 2 && r.did.declined === 1);
 ck('builds merged this week and waiting', r.builds.merged === 1 && r.builds.waiting === 1);
+ck('slower-than-usual: counted, biggest first three kept', r.slow && r.slow.count === 4 && r.slow.top.length === 3 && r.slow.top[0].customer === 'Zimex', JSON.stringify(r.slow));
 ck('messages heard this week', r.told === 2);
 const t = rep.text(r);
 ck('the text has every part, short', /Cash in: \$16,500\.5 from 3 payments/.test(t) && /Still open: \$55,000 on 7 invoices/.test(t) && /What I did: 2 approved by you, 1 declined, 1 code change merged/.test(t) && /Needs you:/.test(t) && t.split('\n').length <= 7, t);
+ck('the text names who is slower than usual, and how many more', /Slower than their usual: Zimex \$30,000 \(day 61, usually 28\), A \$1 \(day 50, usually 9\), B \$1 \(day 50, usually 9\) and 1 more\./.test(t), t);
 ck('"needs you" names the people', /no email address on file for Taewon, NoMail/.test(t) && /payment terms for Taewon/.test(t) && /1 code change ready for your yes/.test(t));
 
 console.log('\n=== quiet weeks and broken sources ===');
-const quiet = rep.text(rep.build({ now: NOW, src: { receipts: () => [], followups: () => ({ open_invoices: 0, total_outstanding: 0, drafts: [], waiting_eta: [] }), outcomes: () => [], builds: () => [], told: () => [] } }));
-ck('a quiet week says so and invents nothing', /no payments recorded this week/.test(quiet) && !/What I did/.test(quiet) && !/Needs you/.test(quiet) && !/Heard from you/.test(quiet), quiet);
+const quiet = rep.text(rep.build({ now: NOW, src: { receipts: () => [], followups: () => ({ open_invoices: 0, total_outstanding: 0, drafts: [], waiting_eta: [] }), outcomes: () => [], builds: () => [], told: () => [], slow: () => [] } }));
+ck('a quiet week says so and invents nothing', /no payments recorded this week/.test(quiet) && !/Slower/.test(quiet) && !/What I did/.test(quiet) && !/Needs you/.test(quiet) && !/Heard from you/.test(quiet), quiet);
 const bt = rep.text(rep.build({ now: NOW, src: { receipts: () => ({ __error: 'x' }), followups: src.followups, outcomes: () => ({ __error: 'x' }), builds: src.builds, told: src.told } }));
 ck('an unreadable source is named, not shown as zero', /Could not read: receipts, outcomes/.test(bt) && !/Cash in/.test(bt) && /Still open/.test(bt), bt);
 const thrown = rep.text(rep.build({ now: NOW, src: Object.assign({}, src, { receipts: () => { throw new Error('boom'); } }) }));
 ck('a source that THROWS is named as unreadable and the rest of the report still comes', /Could not read: receipts/.test(thrown) && /Still open/.test(thrown), thrown);
 const edge = rep.build({ now: NOW, src: { receipts: () => [{ date: ymd(6), amount: 100, customer: 'In' }, { date: ymd(9), amount: 900, customer: 'Out' }], outcomes: () => [{ kind: 'outcome', at: iso(6), outcome: 'approved' }, { kind: 'outcome', at: iso(9), outcome: 'approved' }], told: () => [{ at: iso(6) }, { at: iso(9) }], builds: () => [{ state: 'merged', at: iso(6) }, { state: 'merged', at: iso(9) }] } });
 ck('the 7-day edge: a day-6 item is in, a day-9 item is out, for every source', edge.cash.total === 100 && edge.did.approved === 1 && edge.told === 1 && edge.builds.merged === 1, JSON.stringify([edge.cash, edge.did, edge.told, edge.builds]));
+const bs = rep.text(rep.build({ now: NOW, src: Object.assign({}, src, { slow: () => ({ __error: 'x' }) }) }));
+ck('unreadable pay habits are named, not hidden', /Could not read: pay habits/.test(bs) && !/Slower than/.test(bs), bs);
 ck('days is respected', rep.build({ now: NOW, days: 30, src }).cash.total === 16500.5 + 99999);
 
 (async () => {

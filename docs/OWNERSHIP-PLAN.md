@@ -66,7 +66,9 @@ Jarvis also **learns from outcomes without being told**: how many days each cust
 2. **Case file store** and move the follow-up log, holds and questions into it. No change in what she sees except one status per customer.
 3. **Promises.** An AI reads customer replies for "will pay on X" and sets the next check to that date, instead of chasing before it.
 4. **Certain deposits applied automatically** (exact amount, one invoice, name matches), with undo and a daily one-line "applied N deposits". Anything less certain asks. *This reverses her earlier rule that deposits always need her. It needs her explicit yes.*
+   - *Built, off by default (`JARVIS_AUTO_APPLY=1`):* see `docs/AUTO-APPLY-DEPOSITS.md`. Her yes was given 2026-11-09, with a daily report of what and why, an Undo button, and learning from undos.
 5. **Habit-based timing** from each customer's real days-to-pay.
+   - *Measuring built, not acting:* `helpers/payHabits.js` + `node scripts/pay-habits.js` print each customer's median / 80th-percentile days-to-pay (3+ settled invoices) and open invoices slower than usual. Read-only; it does NOT change when anyone is chased. That needs her yes, and the backfill (step 1) first, because wrong receipts give wrong habits.
 6. **One owner's report** each week: cash in, who is late, what I did, what I need from you. Replaces most of the separate daily messages.
    - *Built, not wired:* `helpers/ownerReport.js` + `node scripts/owner-report.js [--days=N]` print the report (read-only, sends nothing). It is NOT on the scheduler and replaces no daily message yet; that needs her yes.
 7. **Playbook screen** so every rule she has given is visible and editable.

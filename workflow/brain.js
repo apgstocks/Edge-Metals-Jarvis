@@ -608,6 +608,20 @@ function policyDecide(ctx) {
         if (sbCmd) return { intent: 'self_build', resolvedBy: 'policy', data: sbCmd };
     }
 
+    // ── Automatic deposits: "undo <CODE>" / "resume auto deposits for <name>". Manager only, exact grammar, never the
+    // AI classifier. An "undo" acts only when its code belongs to a real automatic deposit, so no other "undo ..." changes
+    // meaning. See helpers/depositAutoApply.js.
+    if (ctx.role === 'manager') {
+        const dc = require('../helpers/depositCommands').parse(ctx.text);
+        const dl = dc && dc.kind !== 'resume' ? require('../helpers/depositAutoApply').list() : null;
+        const known = dc && (dc.kind === 'resume'
+            || (dc.kind === 'undo' && dl.entries.some((e) => String(e.code).toUpperCase() === dc.code))
+            || ((dc.kind === 'confirm' || dc.kind === 'decline') && dl.asks.some((q) => String(q.code).toUpperCase() === dc.code && !q.answer)));
+        if (known) {
+            return { intent: 'deposit_auto', resolvedBy: 'policy', data: dc };
+        }
+    }
+
     // ── A(-1). Fresh well-formed command jumps ANY open pending — see
     // detectFreshCommand's own comment above for the full reasoning. Checked
     // before every pending-type-specific block below (A0 onward), so it
@@ -2978,6 +2992,7 @@ async function route(decision, ctx, sendMessage) {
         case 'contact_quote_leg_reply_received': return actions.handleContactQuoteLegReply(chatId, ctx.text.trim());
         // A code change is only ever started by the exact-grammar policy rule, never by an AI-chosen action.
         case 'self_build':             return decision.resolvedBy === 'policy' && ctx.role === 'manager' ? actions.selfBuildCommand(chatId, d) : { action_taken: 'ignored' };
+        case 'deposit_auto':           return decision.resolvedBy === 'policy' && ctx.role === 'manager' ? actions.depositAutoCommand(chatId, d) : { action_taken: 'ignored' };
         case 'remember_fact':          return actions.rememberFact(chatId, d.fact);
         case 'add_business_context':   return actions.addBusinessContext(chatId, d.note);
         case 'ask_contact': {

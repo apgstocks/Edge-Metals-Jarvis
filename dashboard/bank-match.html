@@ -327,6 +327,7 @@ h2.sec .n{color:var(--text-faint);font-weight:400}
   <section data-pane="aside" hidden>
     <div id="asidelist"></div>
     <div id="recorded"></div>
+    <div id="autoapplied"></div>
     <div id="matchedlist"></div>
     <div id="booked"></div>
     <div id="extras"></div>
@@ -1480,6 +1481,43 @@ async function renderMatched() {
       <div class="note">Unmatching changes no figure &mdash; it only unties the bank line from the record, and the line goes back to For review.</div></div>`;
 }
 
+/* ── DEPOSITS JARVIS PLACED BY ITSELF ──────────────────────────────────
+   Apsara, 2026-11-09: what was applied automatically, against what, WHY — with an Undo button. Read from
+   GET /api/bank/auto-applied (helpers/depositAutoApply.js). Undo needs the Jarvis profile (same lock as deleting a
+   receipt); a plain admin sees the server's message. Everything here is escaped: customer and payer names come from
+   a bank feed. Nothing renders at all when Jarvis has placed nothing and nothing is paused. */
+const AA_WHY = [['', 'what was wrong? (optional)'], ['wrong invoice', 'wrong invoice'], ['wrong customer', 'wrong customer'],
+  ['not our money', 'not our money'], ['wrong bank or mode', 'wrong bank or mode'], ['other', 'something else']];
+async function renderAutoApplied() {
+  const box = $('autoapplied'); if (!box) return;
+  let d = null;
+  try { d = await api('/api/bank/auto-applied'); } catch (e) { d = null; }
+  if (!d || (!(d.entries || []).length && !(d.blocks || []).length && !(d.asks || []).length)) { box.innerHTML = ''; return; }
+  const rows = (d.entries || []).slice(0, 30);
+  const live = rows.filter((e) => !e.undone).length;
+  box.innerHTML = `<h2 class="sec">Placed by Jarvis <span class="n">${live}</span>${d.on ? '' : ' <span class="badge ask">switched off</span>'}</h2>
+    <div class="card">${rows.map((e) => `<div style="margin:8px 0;padding-bottom:8px;border-bottom:1px solid var(--line,#2a2a2a)">
+        <div class="row1">
+          <span class="amt in" style="font-size:14px">+${money(e.amount)}</span>
+          <span class="when">${esc(e.date)}</span>
+          <span class="desc" style="flex:1;min-width:120px"><strong>${esc(e.customer)}</strong> → ${esc([e.invoice_no, e.container_no, e.booking_no].filter(Boolean).join(' / ') || e.saleId)}</span>
+          ${e.undone ? '<span class="badge ask">undone</span>'
+            : `<select data-aa-why="${esc(e.code)}">${AA_WHY.map(([v, l]) => `<option value="${esc(v)}">${esc(l)}</option>`).join('')}</select>
+               <button class="btn quiet" data-aa-undo="${esc(e.code)}">Undo</button>`}
+        </div>
+        <div class="note" data-aa-reasons="1">Why: ${(e.reasons || []).map(esc).join('; ')}.</div>
+        ${e.undone ? `<div class="note">Undone${e.undone.reason ? ' &mdash; ' + esc(e.undone.reason) : ''}.${
+            e.diagnosis ? ' <b>What I found:</b> ' + esc(e.diagnosis.detail) + '.' : ' I am watching what you do with this deposit to work out what was wrong.'}</div>` : ''}
+      </div>`).join('')}
+      ${(d.asks || []).length ? `<div data-aa-asks="1" style="margin-top:10px"><div class="note"><b>Waiting for your answer</b> &mdash; I was not sure, so I did not place ${(d.asks || []).length === 1 ? 'this' : 'these'}. Answer on WhatsApp (yes CODE / no CODE) or place ${(d.asks || []).length === 1 ? 'it' : 'them'} from the list above.</div>${(d.asks || []).map((q) => `<div class="row1" style="margin:4px 0">
+          <span class="amt in" style="font-size:14px">+${money(q.amount)}</span><span class="when">${esc(q.date)}</span>
+          <span class="desc" style="flex:1;min-width:120px">${esc(q.customer || q.descriptor || '')}${q.proposal ? ' &rarr; ' + esc(q.proposal.label) : ''}</span>
+          <span class="desc" style="color:var(--text-faint)">${esc(q.why)} &middot; ${esc(q.code)}</span></div>`).join('')}</div>` : ''}
+      ${(d.blocks || []).length ? `<div class="note" style="margin-top:8px">Paused &mdash; Jarvis asks instead: ${(d.blocks || []).map((b) =>
+          `<b>${esc(b.customer)}</b> <button class="btn quiet" data-aa-resume="${esc(b.customer)}">Resume</button>`).join(' ')}</div>` : ''}
+      <div class="note">Undo removes the receipt Jarvis placed and reopens the invoice. It also pauses automatic deposits for that customer until you press Resume. Only a deposit that was one invoice, to the cent, from a payer you had already matched, is ever placed this way.</div></div>`;
+}
+
 async function renderBooked() {
   let d = null;
   try { d = await api('/api/bank/review/categorised'); } catch (e) { d = null; }
@@ -2112,6 +2150,23 @@ document.addEventListener('click', async (ev) => {
     else prs.disabled = false;
     return;
   }
+  const aau = ev.target.closest('[data-aa-undo]');
+  if (aau) {
+    const code = aau.dataset.aaUndo;
+    const why = (document.querySelector(`select[data-aa-why="${code}"]`) || {}).value || '';
+    if (!confirm('Undo this deposit? The invoice opens again and Jarvis stops placing this customer\'s deposits by itself until you press Resume.')) return;
+    try { await api('/api/bank/auto-applied/undo', { body: { id: code, reason: why || null } });
+          toast('Undone — Jarvis will watch what you do with it and learn', 'good'); renderAutoApplied(); }
+    catch (e) { toast(e.message, 'bad'); }
+    return;
+  }
+  const aar = ev.target.closest('[data-aa-resume]');
+  if (aar) {
+    try { await api('/api/bank/auto-applied/resume', { body: { customer: aar.dataset.aaResume } });
+          toast('Resumed for ' + aar.dataset.aaResume, 'good'); renderAutoApplied(); }
+    catch (e) { toast(e.message, 'bad'); }
+    return;
+  }
   const um = ev.target.closest('[data-unmatch]');
   if (um) {
     // No confirm(). Unmatching creates nothing, destroys nothing and moves
@@ -2248,6 +2303,7 @@ async function load() {
     // if she happened to switch bank accounts. Caught 2026-10-27 by a
     // mutation that was aimed at pickAcct() and survived.
     renderMatched();
+    renderAutoApplied();
     renderBooked();
     renderPlans();
     renderRules();

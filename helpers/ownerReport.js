@@ -19,6 +19,7 @@ function defaults() {
         outcomes: () => guard(() => require('./outcomes').readAll()),
         builds: () => guard(() => require('./selfBuild').list({ repo: require('path').join(__dirname, '..'), dataDir: require('../config').DATA_DIR })),
         told: () => guard(() => require('./inboundLog').readAll()),
+        slow: (now) => guard(() => require('./payHabits').slow({ now })),
     };
 }
 const bad = (x) => x && typeof x === 'object' && !Array.isArray(x) && x.__error;
@@ -55,6 +56,10 @@ function build({ now = Date.now(), days = 7, src = {} } = {}) {
         };
     }
 
+    const sl = d.slow(now);
+    if (bad(sl) || !Array.isArray(sl)) { r.problems.push('pay habits'); r.slow = null; }
+    else r.slow = { count: sl.length, top: sl.slice(0, 3) };
+
     const oc = d.outcomes();
     if (bad(oc) || !Array.isArray(oc)) { r.problems.push('outcomes'); r.did = null; }
     else {
@@ -76,6 +81,7 @@ function text(r) {
     const L = [`Weekly report (last ${r.days} days)`];
     if (r.cash) L.push(r.cash.count ? `Cash in: ${money(r.cash.total)} from ${r.cash.count} payment${r.cash.count === 1 ? '' : 's'}${r.cash.top.length ? ' (' + r.cash.top.map((x) => `${x.customer} ${money(x.total)}`).join(', ') + ')' : ''}.` : 'Cash in: no payments recorded this week.');
     if (r.open) L.push(`Still open: ${money(r.open.total)} on ${r.open.invoices} invoice${r.open.invoices === 1 ? '' : 's'}${r.open.top.length ? '. Biggest: ' + r.open.top.map((x) => `${x.customer} ${money(x.total)}`).join(', ') : ''}.`);
+    if (r.slow && r.slow.count) L.push(`Slower than their usual: ${r.slow.top.map((x) => `${x.customer} ${money(x.balance)} (day ${x.age}, usually ${x.usual})`).join(', ')}${r.slow.count > r.slow.top.length ? ` and ${r.slow.count - r.slow.top.length} more` : ''}.`);
     const did = [];
     if (r.did) { if (r.did.approved) did.push(`${r.did.approved} approved by you`); if (r.did.declined) did.push(`${r.did.declined} declined`); if (r.did.corrected) did.push(`${r.did.corrected} corrected`); if (r.did.ignored) did.push(`${r.did.ignored} ignored`); }
     if (r.builds && r.builds.merged) did.push(`${r.builds.merged} code change${r.builds.merged === 1 ? '' : 's'} merged`);

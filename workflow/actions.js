@@ -2308,6 +2308,34 @@ async function selfBuildCommand(chatId, d) {
 }
 function _setSelfBuildDeps(d) { _sbDeps = d; _sbRunning = false; }
 
+// "undo <CODE>" / "resume auto deposits for <name>" (helpers/depositCommands.js, decided by policy, manager only).
+// Undo removes ONLY a receipt Jarvis placed itself (depositAutoApply.undo refuses anything else).
+async function depositAutoCommand(chatId, d) {
+    if (!d || !['undo', 'resume', 'confirm', 'decline'].includes(d.kind)) return { action_taken: 'ignored' };
+    const A = require('../helpers/depositAutoApply');
+    const money = (n) => '$' + Number(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    if (d.kind === 'resume') {
+        const n = await A.lift(d.customer, { by: 'manager' });
+        await _send(chatId, n ? `Resumed automatic deposits for ${d.customer}.` : `${d.customer} was not paused.`);
+        return { action_taken: 'replied' };
+    }
+    if (d.kind === 'confirm' || d.kind === 'decline') {
+        const r2 = d.kind === 'confirm' ? await A.confirmAsk(d.code, { by: 'manager' }) : await A.declineAsk(d.code, { by: 'manager' });
+        if (!r2.ok) { await _send(chatId, `Not done: ${r2.error}`); return { action_taken: 'replied' }; }
+        await _send(chatId, d.kind === 'confirm'
+            ? `Placed: ${money(r2.entry.amount)} from ${r2.entry.customer} on ${r2.entry.invoice_no || 'the invoice'}. If that was wrong, "undo ${r2.entry.code}".`
+            : `Left it. ${money(r2.ask.amount)}${r2.ask.customer ? ' from ' + r2.ask.customer : ''} stays on the Bank page for you.`);
+        return { action_taken: 'replied' };
+    }
+    const r = await A.undo(d.code, { by: 'manager', reason: d.reason });
+    if (!r.ok) { await _send(chatId, r.already ? `${d.code} was already undone.` : `Not undone: ${r.error}`); return { action_taken: 'replied' }; }
+    const e = r.entry;
+    await _send(chatId, `Undone: ${money(e.amount)} from ${e.customer} is open again on ${e.invoice_no || 'the invoice'}. I have paused automatic deposits for ${e.customer}.\n`
+        + (d.reason ? 'Noted what was wrong. ' : `If you tell me what was wrong ("undo ${e.code}: <what>") I will keep it. Otherwise place it yourself and I will work out what I got wrong. `)
+        + `"resume auto deposits for ${e.customer}" lifts the pause.`);
+    return { action_taken: 'replied' };
+}
+
 async function rememberFact(chatId, text) {
 const clean = String(text || '').trim();
 if (!clean) { await _send(chatId, "What should I remember?"); return { action_taken: 'replied' }; }
@@ -9340,7 +9368,7 @@ emptyDropConfirmed, loadReadyReceived, pickedUpConfirmed, scaleTicketReceived, i
 askWhichBooking, askWhichContainer, fireResolvedStateIntent,
 recallBooking, executeRecall, archiveNow,
 showErd, showCutoff, getBookingField,
-scheduleFollowup, escalateUnclear, selfBuildCommand, _setSelfBuildDeps, rememberFact, addBusinessContext, logKnowledgeGap, resolveFactBatch,
+scheduleFollowup, escalateUnclear, selfBuildCommand, _setSelfBuildDeps, depositAutoCommand, rememberFact, addBusinessContext, logKnowledgeGap, resolveFactBatch,
 resolveFactConflict, findContradictedFact,
     draftEmailForConfirm, sendDraftedEmail, scheduleDraftedEmail, reschedulePendingEmail, searchMail, draftReplyForConfirm, backfillCutoffs,
     sendShipmentDocsForConfirm,

@@ -1810,6 +1810,10 @@ function start() {
         const managerChatId = (settings.manager_number || cfg.MANAGER_NUMBER || '') + '@c.us';
         require('./helpers/dailyLearning').run({ sendToManager: _sendToManager, setPending: actions.setPending, managerChatId }).catch(e => console.error('[SCHED] learning:', e));
     }, TZ);
+    // Automatic deposits (ownership plan slice 4, helpers/depositAutoApply.js): learn from her undos, place the CERTAIN
+    // deposits, send ONE daily message of what was placed and why. OFF unless JARVIS_AUTO_APPLY=1; a quiet day sends nothing.
+    // 06:20 LA: after the 05:xx bank pull and before bankAutoTick at 06:50, so the two never write the bank ledger at once.
+    cron.schedule('20 6 * * *', () => require('./helpers/depositAutoApply').runDaily({ sendToManager: _sendToManager }).catch(e => console.error('[SCHED] deposit-auto-apply:', e)), TZ);
     // Weekly owner report (ownership plan step 6). Sundays 20:00 LA = Monday morning for her in India.
     // OFF unless JARVIS_OWNER_REPORT=1; sends to the manager only; read-only. Replaces no other message yet.
     cron.schedule('0 20 * * 0', () => require('./helpers/ownerReportJob').runWeekly({ sendToManager: _sendToManager }).catch(e => console.error('[SCHED] owner-report:', e)), TZ);

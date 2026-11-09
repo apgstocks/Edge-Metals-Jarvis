@@ -61,6 +61,10 @@ const ACTIONS = [
     // Registered rather than left to log as 'unknown-action'. It logged that
     // way for the first hour it existed, which is what the allowlist is for.
     'unmatch-bank-row',
+    // A customer deposit Jarvis placed on an invoice BY ITSELF (helpers/depositAutoApply.js), and her undo of one.
+    // The detail carries the reasons it gave, because nobody can reconstruct them afterwards.
+    'auto-apply-deposit',
+    'undo-auto-apply-deposit',
     // She picked the payment herself instead of taking Jarvis's. Logged
     // because the detail carries what Jarvis WOULD have tied it to and the
     // gap she confirmed — the two things nobody can reconstruct afterwards.

@@ -21,6 +21,9 @@
 // one), and that is deliberate: a deposit match applies money to an invoice.
 // Withdrawals only.
 //
+// UPDATE 2026-11-09: Apsara has since said yes to placing CERTAIN deposits automatically. That is a different job,
+// helpers/depositAutoApply.js (docs/AUTO-APPLY-DEPOSITS.md). This file still ticks withdrawals only and is unchanged.
+//
 // ── IT IS ALLOWED TO BE WRONG, AND THAT IS THE DESIGN ────────────────────
 // Every tick is stored with how:'auto' and a history line, so the screen can
 // name what Jarvis did by itself and she can undo it. Her words again:

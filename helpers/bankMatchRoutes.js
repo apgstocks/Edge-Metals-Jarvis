@@ -121,6 +121,263 @@ function transferRowIds(rows) {
     } catch (e) { return new Set(); }
 }
 
+// ── THE PROPOSALS, AS A FUNCTION ─────────────────────────────────────────
+// Lifted out of GET /api/bank/match unchanged so the overnight auto-apply job (helpers/depositAutoApply.js)
+// reads the SAME rows through the SAME filters — company (rule 5), not-trade, between-your-companies — instead of a
+// second copy that could drift. `ai:false` skips the model's payer reading (the job never needs a suggestion).
+async function depositProposals({ query = {}, ai = true } = {}) {
+    const sales = require('./sales');
+    const receipts = require('./salesReceipts');
+
+    const all = sales.listWithTotals();
+    const { docs, disagreements } = openReceivables(all);
+
+    // Customers come from the SALES, not from the address book: a
+    // deposit can only pay an invoice that exists, so a name with no
+    // sale against it is not a candidate and offering it would invite
+    // an allocation that cleanAllocations would then reject.
+    const customers = [...new Set(all.map((s) => String(s.customer || '').trim()).filter(Boolean))];
+
+    const aliases = bankLearn.listAliases();
+    const resolveParty = bankLearn.resolverFrom(aliases, customers);
+
+    const salesById = new Map(all.map((s) => [s.id, { date: s.date, amount: round2(num0(s.receivable)) }]));
+    const patterns = bankLearn.patternsFromHistory(receipts.list(), salesById);
+
+    // ── THE ROWS COME THROUGH bankLedger, NOT RAW ────────────────
+    // This read raw JSON and handed it to bankMatch.bankInflows(),
+    // which expects PLAID's signed amount (negative = money in).
+    // bankLedger stores QuickBooks' shape instead — spent/received
+    // and a direction — so once rows arrived through ingestPlaid
+    // every deposit would have read as a withdrawal and NOTHING
+    // would have matched. It would have looked like the matcher was
+    // broken rather than the one line that converts between them.
+    //
+    // Going through worklist() is also what makes her exclusions
+    // real: a row she set aside must not come back as a proposal, or
+    // the Exclude button is decoration.
+    const ledger = require('./bankLedger');
+    const bankRows = ledger.list();
+    let deposits = ledger.worklist(bankRows)
+        .filter((t) => t.direction === 'in' && num0(t.received) > 0.005)
+        .map((t) => ({ id: t.id, date: t.date, amount: round2(num0(t.received)),
+            descriptor: t.party || t.desc || '', account_id: t.account_id,
+            company: t.company || null, desc: t.desc || '', memo: t.memo || '',
+            // Which account it landed in, in the words addReceipt
+            // accepts, resolved once at ingest by bankLedger.bankOf
+            // and stored on the row. A wire has to name one, so
+            // pre-filling it saves a dropdown per row, and a wrong
+            // guess is visible and editable rather than silently
+            // posted.
+            bank_guess: t.bank || null }))
+        .sort((a, b) => String(b.date).localeCompare(String(a.date)));
+    const ledgerSummary = ledger.summary(bankRows);
+
+    const from = String(query.from || '').slice(0, 10) || null;
+    const to = String(query.to || '').slice(0, 10) || null;
+    if (from) deposits = deposits.filter((d) => d.date >= from);
+    if (to) deposits = deposits.filter((d) => d.date <= to);
+    if (query.account) deposits = deposits.filter((d) => d.account_id === query.account);
+    // ── RULE 5: EDGE METALS AND EDGE TRADING ARE DIFFERENT ───────
+    // The receivables in sales.json are Edge Metals'. A deposit into
+    // the Edge Trading account must therefore never be offered
+    // against them — that is the separation most of this app exists
+    // for, and an amount coincidence across two companies would be
+    // the worst possible match.
+    // ── AN UNKNOWN COMPANY IS NOT A PASS ─────────────────────────
+    // My first version was `!d.company || d.company === METALS`,
+    // which reads as cautious and is the opposite. The account_id on
+    // a Plaid row is PLAID's id; qb-settings/bank-accounts.json is
+    // keyed by her own ids and carries no plaid_account_id yet. So
+    // in production company would be null on EVERY row and that
+    // filter would have matched Edge Trading deposits against Edge
+    // Metals invoices — the one thing rule 5 exists to prevent.
+    //
+    // Unmapped rows therefore get their own list and are NOT matched.
+    // That leaves the feature inert until the accounts are linked,
+    // which is correct: doing nothing beats crediting one company's
+    // money to the other, and the response says exactly what to add.
+    const crossCompany = deposits.filter((d) => d.company && d.company !== METALS);
+    const unknownAccount = deposits.filter((d) => !d.company);
+    deposits = deposits.filter((d) => d.company === METALS);
+
+    // ── WHAT WAS NEVER TRADE, SET ASIDE HERE AND NOT IN THE ENGINE ───
+    // #167. Most of a bank feed is not a customer or a supplier — bank
+    // fees, the phone bill, the IRS, loan repayments, transfers between
+    // her own accounts. Without this every one of them reached
+    // matchDeposit, failed to resolve to a party, and came back as
+    // `no_party`: "name it once and every future deposit from them
+    // matches itself". For a bank charge that is an invitation to alias
+    // a fee to a customer, and on the CSV path MOST of 661 pending
+    // lines were this — a review queue made mostly of questions with
+    // no right answer, which is how a queue stops being read.
+    //
+    // ── WHY NOT INSIDE helpers/bankMatch.js ──────────────────────────
+    // I put it there first. tests/bank-match.js section I went red, and
+    // correctly: that file is asserted to require NOTHING — no store,
+    // no fs, no QuickBooks — which is what makes the matching engine
+    // auditable, and one `require` of a pure helper is still the first
+    // crack in it. The invariant is worth more than my convenience.
+    //
+    // It also belongs here on the merits. Deciding WHAT IS TRADE is
+    // curating the feed; the engine's job is matching what it is given.
+    // This is the same shape as crossCompany and unknownAccount
+    // directly above — partition, then report the set-aside rows under
+    // their own name so she knows they exist and why they are not in
+    // the queue.
+    const { notTrade } = require('./notTrade');
+    const notTradeRows = deposits
+        .map((d) => ({ row: d, why: notTrade(d) }))
+        .filter((x) => x.why);
+    const asideIds = new Set(notTradeRows.map((x) => x.row.id));
+    deposits = deposits.filter((d) => !asideIds.has(d.id));
+
+    // ── MONEY FROM HER OWN COMPANIES IS NEVER INCOME ─────────────
+    // Apsara, 2026-10-09. A deposit that interCompany.detect() pairs
+    // with money leaving Edge Yard or AAA Investment (or that names
+    // one of them) is shown under "Between your companies" on the
+    // same tab, NOT offered against a customer's invoice. Same
+    // partition shape as not_trade above: moved, and named.
+    const transferIds = transferRowIds(bankRows);
+    const transferRows = deposits.filter((d) => transferIds.has(d.id));
+    deposits = deposits.filter((d) => !transferIds.has(d.id));
+
+    const out = bankMatch.matchStatement({
+        deposits, openDocs: docs,
+        resolveParty,
+        // Supplied, not imported by bankMatch — that file requires
+        // nothing by design. These two are what let it name a
+        // company off a bank line instead of asking every time.
+        payeeOf: require('./bankPayee').payeeOf,
+        suggestParty: (d) => bankLearn.suggestParty(d, customers),
+        patternsFor: (party) => patterns[party] || null,
+    });
+
+    // A row she cannot act on is worse than no row, so an unresolved
+    // descriptor carries its suggestions with it. They are labelled
+    // suggestions the whole way to the screen and resolve nothing.
+    for (const r of out.rows) {
+        if (r.outcome === 'no_party') {
+            r.suggestions = bankLearn.suggestParty(r.deposit.descriptor, customers);
+        }
+    }
+
+    // ── WHERE THE STRINGS RUN OUT, THE AI READS ──────────────────
+    // Apsara, 2026-11-05: "dont just use pattern matching,if its
+    // unable to answer,let jarvis ai answers".
+    //
+    // Everything above is exact string work and runs FIRST, always:
+    // her aliases, the payee parser, partyName's generic-word list,
+    // nameMatch's refusal of near misses. It is free, auditable, and
+    // it is what she has spent weeks teaching. The AI is only asked
+    // about the rows that beat it — nothing found (0 suggestions) or
+    // a genuine tie (2+). A row the strings answered on its own is
+    // not sent anywhere.
+    //
+    // helpers/bankAI.js cannot name a company: it hands the model a
+    // NUMBERED list of her own customers and takes back an index, so
+    // the worst it can produce is the wrong one of HER names, as a
+    // suggestion she clicks to confirm. Nothing here matches, writes
+    // or aliases, and the reason rides along so she can check it in
+    // two seconds instead of reading 160 characters of ACH.
+    if (ai) try {
+        const needHelp = out.rows.filter((r) => r.outcome === 'no_party'
+            && (r.suggestions || []).length !== 1);
+        if (needHelp.length) {
+            const bankAI = require('./bankAI');
+            const got = await bankAI.identifyParties(
+                needHelp.map((r) => ({ id: r.deposit.id,
+                    descriptor: r.deposit.descriptor, amount: r.deposit.amount })),
+                customers,
+                { callGemini: bankAI.geminiCaller() });
+            for (const r of needHelp) {
+                const hit = got.get(r.deposit.id);
+                if (!hit) continue;
+                r.ai_suggestion = hit;
+                // Appended, never substituted: when the strings
+                // offered two names, both stay on the row and the
+                // AI's reading is a third line with a reason, not a
+                // decision taken on her behalf.
+                r.suggestions = [...(r.suggestions || []), hit];
+            }
+        }
+    } catch (e) {
+        // A model that is down, slow or out of quota costs her the
+        // help and nothing else. The row is the question it was.
+        console.warn('[BANK] AI party reading unavailable: ' + (e && e.message));
+    }
+
+    // ── A SHORT PAYMENT THAT LOOKS LIKE HER CUSTOMER'S CLAIM ─────
+    // A HINT, never an action. When what a deposit leaves unpaid on
+    // one invoice is within a few dollars of a claim already raised
+    // on that invoice, the row says so. Settling the claim from here
+    // is not wired: the deduction reasons feed the QuickBooks push
+    // (quickbooks/pushPayments.js knows bank_charge and discount
+    // only), so adding a third is a change to that path, not to this
+    // screen.
+    try {
+        const claims = require('./claims').list();
+        const docById = new Map(docs.map((d) => [d.id, d]));
+        const norm = (v) => String(v || '').trim().toUpperCase();
+        for (const r of out.rows) {
+            const p = (r.proposals || [])[0];
+            if (!p || (p.allocations || []).length !== 1) continue;
+            const a = p.allocations[0];
+            const gap = round2(num0(a.shortfall) || num0(a.leaves));
+            const doc = docById.get(a.doc_id);
+            if (!(gap > 0.005) || !doc || !doc.invoice_no) continue;
+            const c = claims.find((x) => x && norm(x.invoice_no) === norm(doc.invoice_no)
+                && num0(x.claim_amount) > 0
+                && Math.abs(num0(x.claim_amount) - gap) <= Math.max(5, gap * 0.02)
+                && !['rejected', 'withdrawn'].includes(x.status));
+            if (c) r.claim_hint = { claim_id: c.id, invoice_no: doc.invoice_no,
+                claim_amount: round2(num0(c.claim_amount)), gap, status: c.status };
+        }
+    } catch (e) { /* a hint that cannot be computed is simply not shown */ }
+
+    return {
+        ...out,
+        from, to,
+        ledger: ledgerSummary,
+        // Named, not silently dropped: she needs to know these rows
+        // exist and why they are not here.
+        other_company: crossCompany.map((d) => ({ id: d.id, date: d.date,
+            amount: d.amount, company: d.company, desc: d.desc })),
+        // Set aside, with the RULE that set each one aside — a line
+        // that merely vanished from the queue would be a figure she
+        // cannot account for at tax time.
+        // On the screen under "Between your companies".
+        transfer_rows: transferRows.map((d) => ({ id: d.id, date: d.date, amount: d.amount, desc: d.desc })),
+        not_trade: notTradeRows.map((x) => ({ id: x.row.id, date: x.row.date,
+            amount: x.row.amount, desc: x.row.desc || x.row.descriptor || null,
+            why: x.why })),
+        // Not matched, and told why, with the fix named. An account
+        // whose company is unknown is a one-line edit away.
+        unknown_account: unknownAccount.map((d) => ({ id: d.id, date: d.date,
+            amount: d.amount, account_id: d.account_id, desc: d.desc })),
+        unknown_account_fix: unknownAccount.length
+            ? 'Add "plaid_account_id" to the matching entry in qb-settings/bank-accounts.json so Jarvis knows which company each account belongs to. Until then these are not matched against anything.'
+            : null,
+        open_invoices: docs.length,
+        customers_with_open: [...new Set(docs.map((d) => d.party))].length,
+        // NOT a count of rows — the actual mismatches, because a
+        // number she cannot investigate is a number she will ignore.
+        balance_disagreements: disagreements,
+        // Said plainly rather than left for her to infer from an
+        // empty list: no feed means no deposits, which is not the
+        // same as a clean reconciliation.
+        feed: bankRows.length ? 'bank-transactions.json' : 'none yet — connect the bank feed or no deposits have been pulled',
+        learned_names: aliases.length,
+        // ── THE FORM IS SERVER-DRIVEN ────────────────────────────
+        // Confirming posts to POST /api/sales-receipts, which
+        // validates mode and bank against its own lists. A page
+        // carrying its own copy of those lists would drift and she
+        // would get a refusal with no way to see why.
+        modes: require('./salesReceipts').RECEIPT_MODES,
+        banks: (() => { try { return require('./banks').options(); } catch (e) { return []; } })(),
+    };
+}
+
 function mount(app, cfg) {
     // ── THE PAGE ─────────────────────────────────────────────────────────
     // Same standalone-page pattern as /quickbooks and /edge-inventory, and
@@ -154,256 +411,7 @@ function mount(app, cfg) {
     // half-populated list while two of them are still in flight.
     app.get('/api/bank/match', async (req, res) => {
         try {
-            const sales = require('./sales');
-            const receipts = require('./salesReceipts');
-
-            const all = sales.listWithTotals();
-            const { docs, disagreements } = openReceivables(all);
-
-            // Customers come from the SALES, not from the address book: a
-            // deposit can only pay an invoice that exists, so a name with no
-            // sale against it is not a candidate and offering it would invite
-            // an allocation that cleanAllocations would then reject.
-            const customers = [...new Set(all.map((s) => String(s.customer || '').trim()).filter(Boolean))];
-
-            const aliases = bankLearn.listAliases();
-            const resolveParty = bankLearn.resolverFrom(aliases, customers);
-
-            const salesById = new Map(all.map((s) => [s.id, { date: s.date, amount: round2(num0(s.receivable)) }]));
-            const patterns = bankLearn.patternsFromHistory(receipts.list(), salesById);
-
-            // ── THE ROWS COME THROUGH bankLedger, NOT RAW ────────────────
-            // This read raw JSON and handed it to bankMatch.bankInflows(),
-            // which expects PLAID's signed amount (negative = money in).
-            // bankLedger stores QuickBooks' shape instead — spent/received
-            // and a direction — so once rows arrived through ingestPlaid
-            // every deposit would have read as a withdrawal and NOTHING
-            // would have matched. It would have looked like the matcher was
-            // broken rather than the one line that converts between them.
-            //
-            // Going through worklist() is also what makes her exclusions
-            // real: a row she set aside must not come back as a proposal, or
-            // the Exclude button is decoration.
-            const ledger = require('./bankLedger');
-            const bankRows = ledger.list();
-            let deposits = ledger.worklist(bankRows)
-                .filter((t) => t.direction === 'in' && num0(t.received) > 0.005)
-                .map((t) => ({ id: t.id, date: t.date, amount: round2(num0(t.received)),
-                    descriptor: t.party || t.desc || '', account_id: t.account_id,
-                    company: t.company || null, desc: t.desc || '', memo: t.memo || '',
-                    // Which account it landed in, in the words addReceipt
-                    // accepts, resolved once at ingest by bankLedger.bankOf
-                    // and stored on the row. A wire has to name one, so
-                    // pre-filling it saves a dropdown per row, and a wrong
-                    // guess is visible and editable rather than silently
-                    // posted.
-                    bank_guess: t.bank || null }))
-                .sort((a, b) => String(b.date).localeCompare(String(a.date)));
-            const ledgerSummary = ledger.summary(bankRows);
-
-            const from = String(req.query.from || '').slice(0, 10) || null;
-            const to = String(req.query.to || '').slice(0, 10) || null;
-            if (from) deposits = deposits.filter((d) => d.date >= from);
-            if (to) deposits = deposits.filter((d) => d.date <= to);
-            if (req.query.account) deposits = deposits.filter((d) => d.account_id === req.query.account);
-            // ── RULE 5: EDGE METALS AND EDGE TRADING ARE DIFFERENT ───────
-            // The receivables in sales.json are Edge Metals'. A deposit into
-            // the Edge Trading account must therefore never be offered
-            // against them — that is the separation most of this app exists
-            // for, and an amount coincidence across two companies would be
-            // the worst possible match.
-            // ── AN UNKNOWN COMPANY IS NOT A PASS ─────────────────────────
-            // My first version was `!d.company || d.company === METALS`,
-            // which reads as cautious and is the opposite. The account_id on
-            // a Plaid row is PLAID's id; qb-settings/bank-accounts.json is
-            // keyed by her own ids and carries no plaid_account_id yet. So
-            // in production company would be null on EVERY row and that
-            // filter would have matched Edge Trading deposits against Edge
-            // Metals invoices — the one thing rule 5 exists to prevent.
-            //
-            // Unmapped rows therefore get their own list and are NOT matched.
-            // That leaves the feature inert until the accounts are linked,
-            // which is correct: doing nothing beats crediting one company's
-            // money to the other, and the response says exactly what to add.
-            const crossCompany = deposits.filter((d) => d.company && d.company !== METALS);
-            const unknownAccount = deposits.filter((d) => !d.company);
-            deposits = deposits.filter((d) => d.company === METALS);
-
-            // ── WHAT WAS NEVER TRADE, SET ASIDE HERE AND NOT IN THE ENGINE ───
-            // #167. Most of a bank feed is not a customer or a supplier — bank
-            // fees, the phone bill, the IRS, loan repayments, transfers between
-            // her own accounts. Without this every one of them reached
-            // matchDeposit, failed to resolve to a party, and came back as
-            // `no_party`: "name it once and every future deposit from them
-            // matches itself". For a bank charge that is an invitation to alias
-            // a fee to a customer, and on the CSV path MOST of 661 pending
-            // lines were this — a review queue made mostly of questions with
-            // no right answer, which is how a queue stops being read.
-            //
-            // ── WHY NOT INSIDE helpers/bankMatch.js ──────────────────────────
-            // I put it there first. tests/bank-match.js section I went red, and
-            // correctly: that file is asserted to require NOTHING — no store,
-            // no fs, no QuickBooks — which is what makes the matching engine
-            // auditable, and one `require` of a pure helper is still the first
-            // crack in it. The invariant is worth more than my convenience.
-            //
-            // It also belongs here on the merits. Deciding WHAT IS TRADE is
-            // curating the feed; the engine's job is matching what it is given.
-            // This is the same shape as crossCompany and unknownAccount
-            // directly above — partition, then report the set-aside rows under
-            // their own name so she knows they exist and why they are not in
-            // the queue.
-            const { notTrade } = require('./notTrade');
-            const notTradeRows = deposits
-                .map((d) => ({ row: d, why: notTrade(d) }))
-                .filter((x) => x.why);
-            const asideIds = new Set(notTradeRows.map((x) => x.row.id));
-            deposits = deposits.filter((d) => !asideIds.has(d.id));
-
-            // ── MONEY FROM HER OWN COMPANIES IS NEVER INCOME ─────────────
-            // Apsara, 2026-10-09. A deposit that interCompany.detect() pairs
-            // with money leaving Edge Yard or AAA Investment (or that names
-            // one of them) is shown under "Between your companies" on the
-            // same tab, NOT offered against a customer's invoice. Same
-            // partition shape as not_trade above: moved, and named.
-            const transferIds = transferRowIds(bankRows);
-            const transferRows = deposits.filter((d) => transferIds.has(d.id));
-            deposits = deposits.filter((d) => !transferIds.has(d.id));
-
-            const out = bankMatch.matchStatement({
-                deposits, openDocs: docs,
-                resolveParty,
-                // Supplied, not imported by bankMatch — that file requires
-                // nothing by design. These two are what let it name a
-                // company off a bank line instead of asking every time.
-                payeeOf: require('./bankPayee').payeeOf,
-                suggestParty: (d) => bankLearn.suggestParty(d, customers),
-                patternsFor: (party) => patterns[party] || null,
-            });
-
-            // A row she cannot act on is worse than no row, so an unresolved
-            // descriptor carries its suggestions with it. They are labelled
-            // suggestions the whole way to the screen and resolve nothing.
-            for (const r of out.rows) {
-                if (r.outcome === 'no_party') {
-                    r.suggestions = bankLearn.suggestParty(r.deposit.descriptor, customers);
-                }
-            }
-
-            // ── WHERE THE STRINGS RUN OUT, THE AI READS ──────────────────
-            // Apsara, 2026-11-05: "dont just use pattern matching,if its
-            // unable to answer,let jarvis ai answers".
-            //
-            // Everything above is exact string work and runs FIRST, always:
-            // her aliases, the payee parser, partyName's generic-word list,
-            // nameMatch's refusal of near misses. It is free, auditable, and
-            // it is what she has spent weeks teaching. The AI is only asked
-            // about the rows that beat it — nothing found (0 suggestions) or
-            // a genuine tie (2+). A row the strings answered on its own is
-            // not sent anywhere.
-            //
-            // helpers/bankAI.js cannot name a company: it hands the model a
-            // NUMBERED list of her own customers and takes back an index, so
-            // the worst it can produce is the wrong one of HER names, as a
-            // suggestion she clicks to confirm. Nothing here matches, writes
-            // or aliases, and the reason rides along so she can check it in
-            // two seconds instead of reading 160 characters of ACH.
-            try {
-                const needHelp = out.rows.filter((r) => r.outcome === 'no_party'
-                    && (r.suggestions || []).length !== 1);
-                if (needHelp.length) {
-                    const bankAI = require('./bankAI');
-                    const got = await bankAI.identifyParties(
-                        needHelp.map((r) => ({ id: r.deposit.id,
-                            descriptor: r.deposit.descriptor, amount: r.deposit.amount })),
-                        customers,
-                        { callGemini: bankAI.geminiCaller() });
-                    for (const r of needHelp) {
-                        const hit = got.get(r.deposit.id);
-                        if (!hit) continue;
-                        r.ai_suggestion = hit;
-                        // Appended, never substituted: when the strings
-                        // offered two names, both stay on the row and the
-                        // AI's reading is a third line with a reason, not a
-                        // decision taken on her behalf.
-                        r.suggestions = [...(r.suggestions || []), hit];
-                    }
-                }
-            } catch (e) {
-                // A model that is down, slow or out of quota costs her the
-                // help and nothing else. The row is the question it was.
-                console.warn('[BANK] AI party reading unavailable: ' + (e && e.message));
-            }
-
-            // ── A SHORT PAYMENT THAT LOOKS LIKE HER CUSTOMER'S CLAIM ─────
-            // A HINT, never an action. When what a deposit leaves unpaid on
-            // one invoice is within a few dollars of a claim already raised
-            // on that invoice, the row says so. Settling the claim from here
-            // is not wired: the deduction reasons feed the QuickBooks push
-            // (quickbooks/pushPayments.js knows bank_charge and discount
-            // only), so adding a third is a change to that path, not to this
-            // screen.
-            try {
-                const claims = require('./claims').list();
-                const docById = new Map(docs.map((d) => [d.id, d]));
-                const norm = (v) => String(v || '').trim().toUpperCase();
-                for (const r of out.rows) {
-                    const p = (r.proposals || [])[0];
-                    if (!p || (p.allocations || []).length !== 1) continue;
-                    const a = p.allocations[0];
-                    const gap = round2(num0(a.shortfall) || num0(a.leaves));
-                    const doc = docById.get(a.doc_id);
-                    if (!(gap > 0.005) || !doc || !doc.invoice_no) continue;
-                    const c = claims.find((x) => x && norm(x.invoice_no) === norm(doc.invoice_no)
-                        && num0(x.claim_amount) > 0
-                        && Math.abs(num0(x.claim_amount) - gap) <= Math.max(5, gap * 0.02)
-                        && !['rejected', 'withdrawn'].includes(x.status));
-                    if (c) r.claim_hint = { claim_id: c.id, invoice_no: doc.invoice_no,
-                        claim_amount: round2(num0(c.claim_amount)), gap, status: c.status };
-                }
-            } catch (e) { /* a hint that cannot be computed is simply not shown */ }
-
-            res.json({
-                ...out,
-                from, to,
-                ledger: ledgerSummary,
-                // Named, not silently dropped: she needs to know these rows
-                // exist and why they are not here.
-                other_company: crossCompany.map((d) => ({ id: d.id, date: d.date,
-                    amount: d.amount, company: d.company, desc: d.desc })),
-                // Set aside, with the RULE that set each one aside — a line
-                // that merely vanished from the queue would be a figure she
-                // cannot account for at tax time.
-                // On the screen under "Between your companies".
-                transfer_rows: transferRows.map((d) => ({ id: d.id, date: d.date, amount: d.amount, desc: d.desc })),
-                not_trade: notTradeRows.map((x) => ({ id: x.row.id, date: x.row.date,
-                    amount: x.row.amount, desc: x.row.desc || x.row.descriptor || null,
-                    why: x.why })),
-                // Not matched, and told why, with the fix named. An account
-                // whose company is unknown is a one-line edit away.
-                unknown_account: unknownAccount.map((d) => ({ id: d.id, date: d.date,
-                    amount: d.amount, account_id: d.account_id, desc: d.desc })),
-                unknown_account_fix: unknownAccount.length
-                    ? 'Add "plaid_account_id" to the matching entry in qb-settings/bank-accounts.json so Jarvis knows which company each account belongs to. Until then these are not matched against anything.'
-                    : null,
-                open_invoices: docs.length,
-                customers_with_open: [...new Set(docs.map((d) => d.party))].length,
-                // NOT a count of rows — the actual mismatches, because a
-                // number she cannot investigate is a number she will ignore.
-                balance_disagreements: disagreements,
-                // Said plainly rather than left for her to infer from an
-                // empty list: no feed means no deposits, which is not the
-                // same as a clean reconciliation.
-                feed: bankRows.length ? 'bank-transactions.json' : 'none yet — connect the bank feed or no deposits have been pulled',
-                learned_names: aliases.length,
-                // ── THE FORM IS SERVER-DRIVEN ────────────────────────────
-                // Confirming posts to POST /api/sales-receipts, which
-                // validates mode and bank against its own lists. A page
-                // carrying its own copy of those lists would drift and she
-                // would get a refusal with no way to see why.
-                modes: require('./salesReceipts').RECEIPT_MODES,
-                banks: (() => { try { return require('./banks').options(); } catch (e) { return []; } })(),
-            });
+            res.json(await depositProposals({ query: req.query }));
         } catch (e) {
             res.status(500).json({ error: e.message });
         }
@@ -1180,6 +1188,41 @@ function mount(app, cfg) {
         } catch (e) { res.status(400).json({ error: e.message }); }
     });
 
+    // ── DEPOSITS JARVIS PLACED BY ITSELF (helpers/depositAutoApply.js) ─────
+    // Apsara, 2026-11-09: a daily report of what was applied, against what, why — with an undo button, and Jarvis
+    // learns from an undo. These are that screen's three calls.
+    //   GET  /api/bank/auto-applied         what it did, why, what she undid, what it learned, who is paused
+    //   POST /api/bank/auto-applied/undo    removes the receipt it placed. SUPER only — the same lock as deleting a receipt
+    //                                       (api.js requireSuper): the Jarvis profile, never a script holding the token.
+    //   POST /api/bank/auto-applied/resume  lifts the pause on a customer (admin)
+    app.get('/api/bank/auto-applied', (req, res) => {
+        if (req.role !== 'admin') return res.status(403).json({ error: 'only an admin can see this' });
+        try {
+            const A = require('./depositAutoApply'); const st = A.list();
+            res.json({ on: A.on(), max_age_days: A.MAX_AGE_DAYS(), max_per_run: A.MAX_PER_RUN(),
+                entries: st.entries.slice(-100).reverse(), blocks: st.blocks.filter((b) => !b.lifted),
+                asks: st.asks.filter((q) => !q.answer).slice(-30).reverse() });
+        } catch (e) { res.status(500).json({ error: e.message }); }
+    });
+    app.post('/api/bank/auto-applied/undo', async (req, res) => {
+        if (req.role !== 'admin') return res.status(403).json({ error: 'only an admin can undo this' });
+        if (req.isSuper !== true) return res.status(403).json({ code: 'JARVIS_PROFILE_REQUIRED',
+            error: 'This removes an Edge Metals receipt. Sign in with the Jarvis profile to undo it.' });
+        const id = String((req.body || {}).id || '').trim();
+        if (!id) return res.status(400).json({ error: 'which one?' });
+        try {
+            const r = await require('./depositAutoApply').undo(id, { by: req.profile || req.role || 'admin', reason: (req.body || {}).reason || null });
+            res.status(r.ok ? 200 : (r.already ? 409 : 400)).json(r);
+        } catch (e) { res.status(400).json({ error: e.message }); }
+    });
+    app.post('/api/bank/auto-applied/resume', async (req, res) => {
+        if (req.role !== 'admin') return res.status(403).json({ error: 'only an admin can do this' });
+        const customer = String((req.body || {}).customer || '').trim();
+        if (!customer) return res.status(400).json({ error: 'which customer?' });
+        try { res.json({ ok: true, lifted: await require('./depositAutoApply').lift(customer, { by: req.profile || req.role }) }); }
+        catch (e) { res.status(400).json({ error: e.message }); }
+    });
+
     // ── GET /api/bank/reconcile ──────────────────────────────────────────
     // Apsara, 2026-10-08: "so that i dont need to look out for statements
     // whether payment received or sent ever again."
@@ -1481,4 +1524,4 @@ function mount(app, cfg) {
     });
 }
 
-module.exports = { mount, openReceivables };
+module.exports = { mount, openReceivables, depositProposals };
