@@ -49,3 +49,18 @@ It sits beside the L1 facts (which keep their structure). One notes file per com
 - Taking her sentences from WhatsApp needs brain.js (the intake). That is not built; this ships the part behind it.
 - Saved questions (`checkpoints.teach.jsonl`) are not in the nightly backup (helpers/backup.js only collects *.json).
 - Not end-to-end through an HTTP route: none exists. When wired, add the server section (tests/paid-via.js section F).
+
+## Payment follow-ups show what Jarvis already knows (2026-11-09)
+
+`helpers/paymentFacts.js` + two lines in `helpers/followUpAgentJob.js` `runPayments`.
+When the job messages the manager, each "ready" / "still unpaid" line is followed by up to
+2 remembered facts (from `remember_fact` / facts.json, believable only) whose text names the
+customer as a whole word. Agent-inferred facts are marked "(inferred, not confirmed)".
+
+- Advisory only: the ladder, holds, QuickBooks truth, team escalation and the staged customer
+  email are unchanged. Only the message to the manager gains lines.
+- Name match only. A fact that does not contain the customer's name is not shown.
+- External-origin facts (authority none) never appear.
+- Failure to load facts is swallowed; the follow-up goes out without remarks.
+- Letting a remembered rule skip or delay a chase is NOT done; that needs Apsara's yes.
+- Test: `tests/payment-facts.js` (runs the real job end to end).

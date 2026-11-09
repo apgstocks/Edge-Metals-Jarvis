@@ -213,7 +213,7 @@ async function run(opts = {}) {
     // ── CUSTOMER PAYMENTS (2026-11-07) ───────────────────────────────────
     // After the pickups and walled off from them: whatever happens here, a pickup rung
     // has already fired, and a failure here is reported rather than thrown.
-    try { out.payments = await runPayments({ sendToManager, sendToTeam, now: opts.now, drafts: opts.paymentDrafts, findRemittance: opts.findRemittance, stageCustomerEmail: opts.stageCustomerEmail, qbSurvey: opts.qbSurvey, findDeposit: opts.findDeposit, askAboutHold: opts.askAboutHold }); }
+    try { out.payments = await runPayments({ sendToManager, sendToTeam, now: opts.now, drafts: opts.paymentDrafts, findRemittance: opts.findRemittance, stageCustomerEmail: opts.stageCustomerEmail, qbSurvey: opts.qbSurvey, findDeposit: opts.findDeposit, askAboutHold: opts.askAboutHold, loadFacts: opts.loadFacts }); }
     catch (e) { out.payments = { asked: 0, chased: 0, escalated: 0, failed: [{ why: 'payment follow-ups could not run: ' + (e && e.message) }] }; }
     return out;
 }
@@ -223,7 +223,7 @@ async function run(opts = {}) {
 // message to her for the asks and chases, one to the team per escalation. A rung is
 // recorded only AFTER the message went, so a failed send is retried next run rather than
 // buried.
-async function runPayments({ sendToManager, sendToTeam, now, drafts, findRemittance, stageCustomerEmail, qbSurvey, findDeposit, askAboutHold }) {
+async function runPayments({ sendToManager, sendToTeam, now, drafts, findRemittance, stageCustomerEmail, qbSurvey, findDeposit, askAboutHold, loadFacts }) {
     const res = { asked: 0, chased: 0, escalated: 0, held: 0, staged: 0, failed: [] };
     if (String(process.env.PAYMENT_CHASE || '').toLowerCase() === 'off') return { ...res, off: true };
     const chaser = require('./paymentChaser');
@@ -354,8 +354,14 @@ async function runPayments({ sendToManager, sendToTeam, now, drafts, findRemitta
             const asks = forMe.filter((x) => x.step === 'ask');
             const chases = forMe.filter((x) => x.step === 'chase');
             const parts = [];
-            if (asks.length) parts.push(`Payment follow-ups ready (${asks.length}):`, ...asks.map((x) => '  \u00b7 ' + chaser.lineFor(x.draft, 'ask')));
-            if (chases.length) parts.push(...(parts.length ? [''] : []), `Still unpaid (${chases.length}):`, ...chases.map((x) => '  \u00b7 ' + chaser.lineFor(x.draft, 'chase')));
+            // What she has told Jarvis about each customer, shown under its line (2026-11-09, her "it must use" ask). ADVISORY: it changes
+            // no rung and no recipient, and it goes only in THIS message to her, never to the team or a customer. A failure here costs
+            // the extra lines, never the follow-up. See helpers/paymentFacts.js.
+            let known = [];
+            try { known = (typeof loadFacts === 'function' ? loadFacts() : require('./json').loadBelievableFacts()) || []; } catch (e) { known = []; }
+            const factNotes = (d) => { try { return require('./paymentFacts').onFile(d.customer, known).map((f) => `\n      on file${f.inferred ? ' (inferred, not confirmed)' : ''}: ${f.text}`).join(''); } catch (e) { return ''; } };
+            if (asks.length) parts.push(`Payment follow-ups ready (${asks.length}):`, ...asks.map((x) => '  \u00b7 ' + chaser.lineFor(x.draft, 'ask') + factNotes(x.draft)));
+            if (chases.length) parts.push(...(parts.length ? [''] : []), `Still unpaid (${chases.length}):`, ...chases.map((x) => '  \u00b7 ' + chaser.lineFor(x.draft, 'chase') + factNotes(x.draft)));
             parts.push('', 'The drafts are in Jarvis under Payment follow-ups. Nothing has been sent to any customer.');
             try { await sendToManager(parts.join('\n')); told.push(...forMe); res.asked += asks.length; res.chased += chases.length; }
             catch (e) { res.failed.push({ why: 'could not tell her: ' + (e && e.message) }); }
