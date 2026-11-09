@@ -61,7 +61,11 @@ let CASE = null;
 // PASSING is reported too, because that means the defect is fixed and the
 // entry is now lying about the state of the yard.
 const OPEN_DEFECTS = new Set([
-    'and a repeat of the SAME save does not pay him twice',
+    // 'and a repeat of the SAME save does not pay him twice' — FIXED
+    // 2026-11-09. helpers/payments.addPayment now honours client_request_id,
+    // the way addPrepayment always did. Taken off this list the moment the
+    // suite reported it as passing, which is what the list is for: a stale
+    // "known problem" is how a fixed bug keeps being reported as broken.
     'DEFECT EY-D3: a yard purchase HAS no container number, so that refusal blocks every walk-in claim',
     'and when it returns nothing, the cash band must not still show money out',
 ]);
@@ -445,6 +449,23 @@ useCase('EY-10', 'The same payment arriving twice after a dropped connection');
     const b = await POST('/api/payments', body);
     const after = owedOn(global.__EY_LOAD_MULTI);
     ck('the first one posts', a.status < 400, String(a.status));
+    // ── AND THE CASE THE FIX MUST NOT BREAK ──────────────────────────────
+    // She pays Randy $100 in the morning and $100 again in the afternoon.
+    // Two real payments, same load, same amount, same day. If the guard
+    // keyed on anything but the TICKET it would quietly swallow the second
+    // one and he would be underpaid — a worse failure than the one being
+    // fixed, because nothing on the screen would say so.
+    const twice = { load_id: global.__EY_LOAD_MULTI, load_kind: 'purchase',
+        mode: 'Cash', cash_source: 'Chase Bank', amount: 50, paid_on: '2026-11-08' };
+    const sep0 = owedOn(global.__EY_LOAD_MULTI);
+    await POST('/api/payments', twice);
+    await POST('/api/payments', twice);
+    const sep1 = owedOn(global.__EY_LOAD_MULTI);
+    ck('two SEPARATE payments of the same amount both count',
+       money(sep0 - sep1) === 100,
+       `owed moved ${money(sep0 - sep1)}, expected 100 — only a repeat of the `
+       + 'same save is refused, never two real payments that look alike');
+
     ck('  and a repeat of the SAME save does not pay him twice',
        money(before - after) === 100,
        `owed moved ${money(before - after)}; the repeat said ${b.status}. `

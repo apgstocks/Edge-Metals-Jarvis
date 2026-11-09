@@ -816,6 +816,55 @@ async function deleteSettlement(settlementId) {
 async function addPayment(input = {}) {
     const loadId = String(input.load_id || '').trim();
     if (!loadId) throw new Error('load_id is required');
+
+    // ── ONE SAVE, ONE PAYMENT (2026-11-09) ───────────────────────────────
+    // Found by tests/edge-yard-scenarios.js: two identical POSTs carrying the
+    // SAME client_request_id both succeeded, and what she owed the seller
+    // moved by $200 for two $100 payments.
+    //
+    // The guard already existed in this very file — addPrepayment has used
+    // oncePerSave since prepayments landed. It was never extended here, to
+    // the ordinary pay-the-seller path, while BOTH clients were already
+    // sending the ticket (dashboard/app/13-loads-render.js:1307,
+    // mobile-app/www/app/09-loads-deck.js:1343). They behaved as though they
+    // were covered. They were not.
+    //
+    // ── APSARA WAS RIGHT THAT THE SCREENS STOP A DOUBLE TAP ──────────────
+    // She pushed back on the first report of this: "when i pay once covering
+    // the inv amount pay woud become invisible na". Checked, and true — both
+    // pay modals disable the button on submit and the action disappears once
+    // a load is settled. So a double tap cannot do this.
+    //
+    // What remains is the retry after a lost reply: Jarvis records the
+    // payment, the reply never reaches the phone, the catch re-enables the
+    // button, and she taps a payment that already went through. Narrower
+    // than first reported, and still money leaving twice on a yard signal.
+    //
+    // ── BEFORE ANYTHING MOVES ────────────────────────────────────────────
+    // Deliberately the first thing after the id check, ahead of the petty
+    // cash withdrawal below. Checking after the cash was taken would mean a
+    // repeat withdraws real money and then has to put it back, and that
+    // reversal is one more thing that can fail.
+    //
+    // OPT-IN BY TICKET. A caller that sends no client_request_id behaves
+    // exactly as it did — which is every other caller today
+    // (helpers/salesSettlements.js, helpers/metalsTrucking.js,
+    // helpers/billPayments.js, helpers/tools.js). Two genuinely separate
+    // $100 cash payments to the same seller on the same day are still two
+    // payments; only a repeat of the SAME save is refused.
+    {
+        const once = require('./oncePerSave');
+        const ticket = once.normTicket(input.client_request_id);
+        if (ticket) {
+            const already = once.findSpent(listPayments(), ticket);
+            // The ORIGINAL record is handed back, not an error. The client
+            // asked for this payment to exist; it does. Telling it "duplicate"
+            // would leave the screen showing a failure for money that is
+            // correctly recorded, which is the same confusion the other way
+            // round.
+            if (already) return already;
+        }
+    }
     const amount = round2(toNum(input.amount));
     // Rejected rather than stored as null: a payment with no amount cannot be
     // summed, so it would sit on the ledger looking like a receipt while
@@ -1061,6 +1110,11 @@ async function addPayment(input = {}) {
         note: String(input.note || '').trim() || null,
         created_at: new Date().toISOString(),
         created_by: input.created_by || null,
+        // The ticket is STORED, or the guard at the top of this function has
+        // nothing to find on the second attempt. Null when the caller sent
+        // none, which is every path except the two pay screens — findSpent
+        // ignores a null, so those rows behave exactly as they always have.
+        client_request_id: require('./oncePerSave').normTicket(input.client_request_id),
     };
     try {
     // ── STRICT: THIS WRITE EITHER HAPPENS OR SAYS SO ─────────────────────
