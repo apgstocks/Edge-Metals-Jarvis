@@ -22,12 +22,12 @@ function missing() {
         });
 }
 
-// One consolidated message; empty string when nothing is missing.
-function watchMessage(list) {
+// One short line for the morning digest: numbers only, capped. '' when none.
+function digestLine(list = missing(), cap = 6) {
     if (!list.length) return '';
-    return `${list.length} booking${list.length === 1 ? '' : 's'} still without ERD or cutoff — I will keep reminding you daily until filled:\n` +
-        list.map((x) => `- ${x.booking}: ${x.detail}`).join('\n') +
-        `\nReply with the dates (e.g. "${list[0].booking} ERD 11/12 cutoff 11/16") or forward the carrier mail.`;
+    const shown = list.slice(0, cap).map((x) => x.booking).join(', ');
+    const more = list.length > cap ? ` +${list.length - cap} more` : '';
+    return `NO ERD/CUTOFF (${list.length}): ${shown}${more}`;
 }
 
-module.exports = { missing, watchMessage };
+module.exports = { missing, digestLine };

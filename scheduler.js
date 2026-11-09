@@ -160,6 +160,10 @@ async function morningDigest() {
         lines.push(...stuck.map(([bkgNo, wf]) => `- ${bkgNo} at ${stepLabel(wf.step)}`));
     }
 
+    // Bookings still without ERD/cutoff: one line, silent when none.
+    const dl = require('./helpers/bookingDates').digestLine();
+    if (dl) lines.push('', dl);
+
     // ── AND WHO COULD NOT GET IN ─────────────────────────────────────────
     // Last, because it is rare — but FIRST among the things she can act on
     // when it appears, because a staff member who cannot sign in has usually
@@ -217,19 +221,12 @@ async function urgentWatch() {
     }
 }
 
-// ── Daily 09:30 — bookings still missing ERD / cutoff ───────────────────────
-// Apsara, 2026-11-09: monitor until these are filled. Tries the mail backfill
-// first (fills gaps only), then one consolidated message per day for whatever
-// is still blank. Stops by itself the moment the dates exist.
+// ── Daily 09:30 — try to fill missing ERD / cutoff from mail ────────────────
+// Apsara, 2026-11-09: monitor until filled, but "i dont want jarvis to bomb my
+// whatsapp clumsily". So this sends NOTHING. What is still blank rides the one
+// morning digest (a single compact line) and the 06:30 sweep email.
 async function datesWatch() {
     try { await require('./helpers/cutoffBackfill').run(); } catch (e) { console.error('[SCHED] dates-watch backfill:', e.message); }
-    const bd = require('./helpers/bookingDates');
-    const msg = bd.watchMessage(bd.missing());
-    if (!msg) return;
-    const key = `dates_missing_${todayKey()}`;
-    if (alreadySent(key)) return;
-    await _sendToManager(msg);
-    await markSent(key);
 }
 
 // ── Hourly — stall detection + proactive outreach ──────────────────────────
