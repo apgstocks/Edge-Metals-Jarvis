@@ -416,8 +416,17 @@ async function healthWatch() {
         return { sent: false, reason: 'healthy' };
     }
     const body = 'Jarvis health check\n\n' + hb.report();
+    // Same problems as the last report -> say nothing, until a day has passed.
+    // It used to repeat the identical list three times a day.
+    const sig = [...s.failing, ...s.late, ...s.silent].map((j) => j.name).sort().join(',');
+    const ps = loadBrain().proactive_sent || {};
+    const prev = { sig: ps.health_sig, at: ps.health_sig_at };
+    if (prev.sig === sig && Date.now() - Date.parse(prev.at || 0) < 24 * 3600 * 1000) {
+        return { sent: false, reason: 'unchanged' };
+    }
     try {
         await _sendToManager(body);
+        await mutateBrain((b) => { b.proactive_sent.health_sig = sig; b.proactive_sent.health_sig_at = new Date().toISOString(); });
         console.warn(`[HEALTH] reported ${s.failing.length} failing, ${s.late.length} late, ${s.silent.length} never-run`);
         return { sent: true, failing: s.failing.length, late: s.late.length, silent: s.silent.length };
     } catch (err) {
@@ -1863,4 +1872,4 @@ function start() {
 // Two checks that only grepped survived a mutation — one that truncated the
 // email to 15 rows, one that dropped the monospace html — because the words
 // they matched were still sitting in the comments.
-module.exports = { init, start, morningDigest, datesWatch, urgentWatch, autoArchive, taskRunner, pricelistFallback, eodYardReport, buildYardReportText, nightlyLogDigest };
+module.exports = { init, start, morningDigest, healthWatch, datesWatch, urgentWatch, autoArchive, taskRunner, pricelistFallback, eodYardReport, buildYardReportText, nightlyLogDigest };

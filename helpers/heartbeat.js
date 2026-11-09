@@ -129,6 +129,14 @@ function nameFor(fn, expr, used) {
     return name;
 }
 
+// Names registered by THIS process. A record in the file that this process
+// never registered is an orphan: the job is gone (renamed, or the scheduler was
+// once started twice and left "digest-2" behind) and will never run again, so
+// reporting it "late" is a false alarm that nothing can ever clear.
+// Apsara, 2026-11-09, after three identical "digest-2 last ran 23d ago"
+// WhatsApps a day: "i dont want jarvis to bomb my whatsapp clumsily".
+const LIVE = new Set();
+
 function record(name, patch) {
     try {
         const state = load();
@@ -146,6 +154,7 @@ function instrument(cronModule, { onBeat = null } = {}) {
     wrapped.schedule = function schedule(expr, fn, opts) {
         const name = nameFor(fn, expr, used);
         const period_ms = periodFor(expr);
+        LIVE.add(name);
         record(name, { expr, period_ms, registered: new Date().toISOString() });
         const beating = async (...args) => {
             const t0 = Date.now();
@@ -193,7 +202,9 @@ function instrument(cronModule, { onBeat = null } = {}) {
 const GRACE = 2.5;        // a job may miss two ticks before it is "late"
 function status(now = Date.now(), state = null) {
     const s = state || load();
-    const jobs = Object.entries(s.jobs || {});
+    // Only when reading the real file in a process that has registered jobs;
+    // an explicit `state` (tests, tooling) is taken exactly as given.
+    const jobs = Object.entries(s.jobs || {}).filter(([n]) => state || !LIVE.size || LIVE.has(n));
     const late = [], failing = [], silent = [], ok = [];
     for (const [name, j] of jobs) {
         if (j.ok === false) { failing.push({ name, ...j }); continue; }
@@ -221,4 +232,4 @@ function report(now = Date.now(), state = null) {
     return lines.join('\n');
 }
 
-module.exports = { instrument, status, report, periodFor, expandHours, nameFor, load, save, GRACE, _MIN: MIN, _HOUR: HOUR, _DAY: DAY };
+module.exports = { LIVE, instrument, status, report, periodFor, expandHours, nameFor, load, save, GRACE, _MIN: MIN, _HOUR: HOUR, _DAY: DAY };
