@@ -460,7 +460,7 @@ const MT = { MT:1, LB:1/2204.62, KG:1/1000 };
    grouped, so a supplier row's totals are the totals of what is on screen —
    a row whose figure disagrees with the rows under it is worse than no
    filter at all. */
-const STATE = { claims:[], stats:{}, kinds:[], sel:null, tab:'needs', q:'',
+const STATE = { landing:true, claims:[], stats:{}, kinds:[], sel:null, tab:'needs', q:'',
                 group:'container', from:'', to:'' };
 const $ = (s, root) => (root || document).querySelector(s);
 const esc = (s) => String(s==null?'':s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
@@ -815,10 +815,21 @@ const GROUPS = [
 function renderGroupBy(){
   const bar = $('#groupBy');
   if (!bar) return;
-  bar.innerHTML = GROUPS.map(gr =>
-    '<button type="button" role="tab" aria-selected="' + (STATE.group===gr.id) + '" data-g="' + gr.id + '" class="' + (STATE.group===gr.id?'sel':'') + '">' + gr.label + '</button>').join('');
+  /* Landing = customer summary (Apsara 2026-11-09). 'Summary' is the way back
+     to it; the four lenses below it behave exactly as before. */
+  const on = (id) => !STATE.landing && STATE.group === id;
+  bar.innerHTML = '<button type="button" role="tab" aria-selected="' + STATE.landing + '" data-g="__landing" class="' + (STATE.landing?'sel':'') + '">Summary</button>' +
+    GROUPS.map(gr =>
+    '<button type="button" role="tab" aria-selected="' + on(gr.id) + '" data-g="' + gr.id + '" class="' + (on(gr.id)?'sel':'') + '">' + gr.label + '</button>').join('');
   bar.querySelectorAll('button').forEach(b => b.onclick = () => {
-    if (b.dataset.g === STATE.group) return;
+    if (b.dataset.g === '__landing') {
+      if (STATE.landing) return;
+      STATE.landing = true; STATE.sel = null;
+      renderGroupBy(); renderTabs(); renderRows(); renderDetail();
+      return;
+    }
+    if (!STATE.landing && b.dataset.g === STATE.group) return;
+    STATE.landing = false;
     STATE.group = b.dataset.g;
     // The selected row's key only means something inside one grouping —
     // a container id is not a supplier name. Dropped rather than carried,
@@ -834,6 +845,8 @@ function renderGroupBy(){
 }
 
 function renderTabs(){
+  $('#tabs').style.display = STATE.landing ? 'none' : '';
+  if (STATE.landing) { $('#tabs').innerHTML = ''; return; }
   const all = containers();
   // '2+ claims' is a container question. Hidden, not disabled, under the
   // other two lenses — a control that is visible and does nothing is worse
@@ -864,7 +877,43 @@ function pickContainer(key){
   if (window.matchMedia && window.matchMedia('(max-width:1020px)').matches) window.scrollTo(0, 0);
 }
 
+/* Landing: one row per customer with how many claims they have. Claims with
+   no customer are counted together under 'Not recorded' so they are not lost. */
+function renderLanding(){
+  const by = new Map();
+  for (const c of STATE.claims){
+    if (!inRange(c)) continue;
+    const k = String(c.customer || '').trim() || '';
+    if (!by.has(k)) by.set(k, { key:k, n:0, claimed:0 });
+    const g = by.get(k); g.n++; g.claimed += numOf(c.claim_amount) || 0;
+  }
+  let list = [...by.values()];
+  const q = String(STATE.q || '').trim().toLowerCase();
+  if (q) list = list.filter(g => (g.key || 'not recorded').toLowerCase().includes(q));
+  list.sort((a,b) => (!a.key) - (!b.key) || b.n - a.n || a.key.localeCompare(b.key));
+  const total = STATE.claims.filter(inRange).length;
+  $('#rows').innerHTML =
+    '<button type="button" class="prow" data-showall="1"><span class="t"><span class="who">Show all claims</span><span class="amt">' + total + '</span></span></button>' +
+    (list.length ? list.map(g =>
+      '<button type="button" class="prow" data-cust="' + esc(g.key) + '"><span class="t"><span class="who">' + esc(g.key || 'Not recorded') + '</span><span class="amt">' + g.n + (g.n === 1 ? ' claim' : ' claims') + '</span></span>' +
+      '<span class="m"><span class="cid">' + (g.claimed > 0 ? money(g.claimed) + ' claimed' : (g.key ? '' : 'customer not recorded')) + '</span></span></button>').join('')
+      : '<div class="empty">Nothing matches.</div>');
+  $('#rows').querySelector('[data-showall]').onclick = () => {
+    STATE.landing = false; STATE.group = 'container'; STATE.tab = 'all'; STATE.sel = null;
+    renderGroupBy(); renderTabs(); renderRows(); renderDetail();
+  };
+  $('#rows').querySelectorAll('[data-cust]').forEach(el => el.onclick = () => {
+    const name = el.dataset.cust;
+    STATE.landing = false; STATE.group = 'customer'; STATE.tab = 'all'; STATE.q = '';
+    if ($('#q')) $('#q').value = '';
+    STATE.sel = null;
+    renderGroupBy(); renderTabs(); renderRows();
+    pickContainer(name || 'No customer named');
+  });
+}
+
 function renderRows(){
+  if (STATE.landing) return renderLanding();
   const rows = visible();
   if (!rows.length){
     $('#rows').innerHTML = '<div class="empty">' + (STATE.q ? 'Nothing matches “' + esc(STATE.q) + '”.' : STATE.tab === 'needs' ? 'Nothing needs you right now.' : 'No containers here.') + '</div>';

@@ -190,6 +190,12 @@ section('D — no function the page calls is declared outside the scope it reads
 
     setTimeout(() => {
         // ── ON ARRIVAL ───────────────────────────────────────────────────
+        // The landing is the customer summary (2026-11-09): a Show-all row plus
+        // one row per customer. 'Show all claims' opens the container list.
+        ck('landing: Show-all row plus one row per customer', d.querySelectorAll('#rows .prow').length === 3,
+           String(d.querySelectorAll('#rows .prow').length));
+        ck('  and each customer shows its claim count', /Modern enterprises1 claim/.test(d.getElementById('rows').textContent.replace(/\s+/g,' ').replace(/ /g,'')) || /1 claim/.test(d.getElementById('rows').textContent));
+        d.querySelector('#rows [data-showall]').click();
         ck('the list has rows to show', d.querySelectorAll('#rows .prow').length === 2,
            String(d.querySelectorAll('#rows .prow').length));
         ck('NOTHING is open on arrival', sel() === 0,

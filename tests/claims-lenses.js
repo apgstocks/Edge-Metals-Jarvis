@@ -66,7 +66,7 @@ function boot() {
 }
 const S = (w) => w.__probe.STATE;
 function paint(w, patch) {
-    Object.assign(S(w), { claims: CLAIMS, kinds: [], stats: {} }, patch || {});
+    Object.assign(S(w), { claims: CLAIMS, kinds: [], stats: {}, landing: false }, patch || {});
     w.renderGroupBy(); w.renderTabs(); w.renderRows();
     return w;
 }
