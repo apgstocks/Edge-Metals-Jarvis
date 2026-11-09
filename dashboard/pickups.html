@@ -188,7 +188,8 @@ async function load() {
     const rows = (j.pickups || []);
     $('#rows').innerHTML = rows.length
       ? rows.map(rowHtml).join('')
-      : '<div class="row" style="color:var(--text-faint);">Nothing arranged yet.</div>';
+      : '<div class="row" style="color:var(--text-faint);">Nothing arranged yet. Jarvis only chases a pickup once it is recorded, and nothing has been. '
+        + 'Record one above, or tell Jarvis on WhatsApp, e.g. <i>&ldquo;pickup arranged 11/20 with Zimex for HMMU1234567&rdquo;</i>.</div>';
     say('');
     wire();
   } catch (e) {
