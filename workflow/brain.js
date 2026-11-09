@@ -61,6 +61,17 @@ function extractScheduleClause(rawText) {
 // the real gap found 2026-08-05 when this syntax didn't exist yet at all.
 // Returns null if the text isn't a "get quote" command in the first place.
 function parseGetQuoteCommand(rawText) {
+    // 2026-11-09, Apsara: "ask dylan for the quote from junk car to mario". The
+    // names lead and the verb is "ask", which none of the verbs below accept, so
+    // this phrasing returned null and fell through to the AI classifier. It is
+    // rewritten to the shape this parser already handles ("get quote <names>
+    // from A to B" -> preNames), so email/ask clauses after the destination keep
+    // working and there is still ONE grammar, not two. Only text that STARTS with
+    // "ask ... for ... quote ... from" is touched; everything that matched before
+    // starts with get/send/request/obtain (or glued debris before one) and is
+    // unchanged. (Her decision to add the phrasing; the rewrite approach is mine.)
+    const askForm = String(rawText || '').trim().match(/^(?:please\s+)?ask\s+(.+?)\s+for\s+(?:the\s+|a\s+)?quotes?(?:\s+requests?)?\s+(from\s+.+)$/i);
+    if (askForm) rawText = `get quote ${askForm[1]} ${askForm[2]}`;
     // REAL GAP (found 2026-08-06, live): "send a quote from LA to Humble
     // email Jose" / "request a quote from LA to Humble email Jose" both
     // missed this entirely — the old regex only accepted the literal verb
@@ -3717,4 +3728,4 @@ async function handleManagerLLMFallback(text, chatId, sendMessage) {
     return { intent: 'awaiting_confirmation', resolvedBy: 'llm', data: {}, confidence: decision.confidence };
 }
 
-module.exports = { process, normalize, policyDecide, pendingFullReminder, OPTIONAL_PENDINGS, route };
+module.exports = { process, normalize, policyDecide, pendingFullReminder, OPTIONAL_PENDINGS, route, parseGetQuoteCommand };

@@ -98,7 +98,8 @@ function renderSettings(s) {
           <div style="font-family:var(--font-mono); font-size:11px; font-weight:600; letter-spacing:.14em; text-transform:uppercase; color:var(--text-strong); margin-bottom:4px;">Outbound email — Cc / Bcc</div>
           <div style="font-size:12.5px; color:var(--text-muted); margin-bottom:16px;">Applied to every email Jarvis drafts — composing new mail or replying in a thread — before you confirm sending. Comma-separate multiple addresses. Leave blank for none.</div>
           <div class="field"><label>Cc</label><input id="s_email_cc" value="${esc(s.email_cc || '')}" placeholder="e.g. ops@edgemetals.com"></div>
-          <div class="field" style="margin-bottom:0;"><label>Bcc</label><input id="s_email_bcc" value="${esc(s.email_bcc || '')}" placeholder="e.g. bose@edgemetals.com"></div>
+          <div class="field"><label>Bcc</label><input id="s_email_bcc" value="${esc(s.email_bcc || '')}" placeholder="e.g. bose@edgemetals.com"></div>
+          <div class="field" style="margin-bottom:0;"><label>Quote requests Cc</label><input id="s_quote_email_cc" value="${esc(s.quote_email_cc || '')}" placeholder="e.g. bose@edgemetals.com, accounts@edgemetals.com"><div style="font-size:11.5px; color:var(--text-muted); margin-top:4px;">Copied only on quote-request emails to truckers / logistics companies. Leave empty for no Cc.</div></div>
         </div>
       </div>
 
@@ -195,6 +196,7 @@ function renderSettings(s) {
         gmail_watch_enabled: $('s_email_watcher_enabled').checked,
         zimex_booking_hide_critical: $('s_zimex_booking_hide_critical').checked,
         email_cc: $('s_email_cc').value.trim(), email_bcc: $('s_email_bcc').value.trim(),
+        quote_email_cc: $('s_quote_email_cc').value.trim(),
         yard_report_emails: $('s_yard_emails').value.trim(),
         yard_whatsapp_group_id: $('s_yard_group').value.trim(),
         yard_whatsapp_contacts: $('s_yard_contacts').value.trim(),

@@ -97,8 +97,14 @@ async function dispatchLeg(request, leg, send) {
             await qr.markLegSent(request.id, leg.trucker_name);
         } else if (leg.channel === 'email') {
             const { sendEmail } = require('../helpers/gmail');
+            // Settings > Outbound email > "Quote requests Cc" (quote_email_cc).
+            // Empty/unset = no Cc, exactly as before. Deliberately NOT the global
+            // email_cc: that one is applied to every drafted email, and she asked
+            // for her team on QUOTE requests only. (Her request 2026-11-09.)
+            const quoteCc = String((cfg.getSettings() || {}).quote_email_cc || '').trim();
             const sent = await sendEmail({
                 to: leg.target,
+                ...(quoteCc ? { cc: quoteCc } : {}),
                 subject: `Quote request: ${request.origin_query} to ${request.destination_query}`,
                 body: message,
             });
@@ -512,4 +518,5 @@ module.exports = {
     handleQuoteEscalationTask,
     handleIncomingReply,
     pollEmailReplies,
+    dispatchLeg,
 };
