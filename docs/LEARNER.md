@@ -12,6 +12,17 @@ to it, so `GET /report` can say how often they agreed. Acting on a prediction is
   A placement she does NOT undo is not labelled (silence is not approval until she says how long it must last).
 - Only the `deposit` kind so far. Adding a kind = calling `learnerClient.judge/example/actual` at that decision.
 
+## Prices (added 2026-11-10)
+`helpers/priceHistory.js` turns every sales-invoice price and supplier-bill price into exact facts in $/lb (per party and grade: how many times seen,
+last price, typical = median of the earlier ones, how far off the last is). `node scripts/price-facts.js` shows them. It decides nothing and has no
+threshold: `caseFor()` hands one price's facts to the learner as a `price-check` case, and the learner (not a rule) says normal / check once she has
+labelled some. Her own companies (Edge Yard etc.) are marked intercompany and never counted as "the market".
+**Daily price watch (`helpers/priceWatch.js`, cron 06:40 LA, OFF unless `JARVIS_PRICE_WATCH=1`):** every new price goes to the learner (shadow), and up
+to 3 a day are asked about on WhatsApp: "normal CODE" / "check CODE". Her answer is the labelled example. Once the learner is confident
+(>= 0.8) ITS call decides what is asked (a confident "normal" is not asked, a confident "check" is); before that it asks about prices at least
+`JARVIS_PRICE_WATCH_MIN_PCT` (default 5%) off the party's own typical, so it can collect her first answers. That 5% only chooses what to ASK,
+never whether a price is wrong. It changes no price, invoice or bill. Also: supplier bills often state no grade, so their prices mix grades until the line items are filled in.
+
 ## Behaviour that matters
 - **Cold start abstains.** Fewer than 5 past decisions of a kind: it says so, it does not guess.
 - It abstains if the model answers with anything she has never chosen for that kind.

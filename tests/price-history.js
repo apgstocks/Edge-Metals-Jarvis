@@ -28,19 +28,22 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
     for (const [d, p] of [['2026-08-02', 1.50], ['2026-08-12', 1.52], ['2026-09-02', 1.51], ['2026-09-12', 1.50], ['2026-09-20', 1.51]]) await sale('Zimex', 'AL WHEELS DIRTY', d, p);
     await sale('Newco', 'AL WHEELS DIRTY', '2026-10-02', 1.58);                    // one price only
     await sale('Mtco', 'COPPER', '2026-10-03', 6600, 'mt');                        // $/MT
+    for (const [d, p] of [['2026-09-21', 0.5], ['2026-09-22', 0.5], ['2026-09-23', 0.5], ['2026-09-24', 0.5]]) await sale('EDGEYARD', 'AL WHEELS DIRTY', d, p);   // transfer prices between her own companies
+    for (const [d, p] of [['2026-09-01', 4.0], ['2026-09-08', 4.1], ['2026-09-15', 4.0], ['2026-09-22', 5.5]]) await sale('Fourco', 'TIN', d, p);                // 4 prices: only 3 earlier, so no "typical" yet
     const obs = ph.observations();
-    ck('every dated price is an observation, in date order', obs.length === 13 && obs.every((o, i) => i === 0 || obs[i - 1].date <= o.date), String(obs.length));
+    ck('every dated price is an observation, in date order', obs.length === 21 && obs.every((o, i) => i === 0 || obs[i - 1].date <= o.date), String(obs.length));
     const ser = ph.series(obs);
     const ecc = ser.find((s) => s.party === 'Eccomelt');
     ck('Eccomelt: 6 prices, last 2.10, typical is the MEDIAN of the earlier ones, and the gap is a fact', ecc.n === 6 && ecc.last === 2.1 && ecc.typical === 1.61 && ecc.pct_off === 30.4, JSON.stringify({ n: ecc.n, last: ecc.last, typical: ecc.typical, off: ecc.pct_off }));
     ck('a party with too little history gets facts but NO claimed "typical"', (() => { const n = ser.find((s) => s.party === 'Newco'); return n.n === 1 && n.typical === null && n.pct_off === null && n.enough_history === false; })());
     ck('the $/MT invoice is on the same $/lb scale as the others', Math.abs(ser.find((s) => s.party === 'Mtco').last - 2.9937) < 0.001);
-    ck('series are separate per party AND per item (Zimex is not mixed into Eccomelt)', ser.filter((s) => s.item === 'AL WHEELS DIRTY').length === 3 && ser.find((s) => s.party === 'Zimex').typical === 1.505);
+    ck('series are separate per party AND per item (Zimex is not mixed into Eccomelt)', ser.filter((s) => s.item === 'AL WHEELS DIRTY').length === 4 && ser.find((s) => s.party === 'Zimex').typical === 1.505);
     ck('ordered with the biggest gap first', ser[0].party === 'Eccomelt');
 
     const c = ph.caseFor(obs.find((o) => o.party === 'Eccomelt' && o.date === '2026-10-01'), obs);
     ck('the case for the learner is exact facts, nothing to calculate', c.price_per_lb === 2.1 && c.typical_for_this_party === 1.61 && c.pct_off_typical === 30.4 && c.times_seen_before === 5 && /2026-09-10 1.62/.test(c.last_three_for_this_party), JSON.stringify(c));
-    ck('  the market figure uses OTHER parties only', c.market_among_other_parties === null || c.market_among_other_parties < 1.6, JSON.stringify(c.market_among_other_parties));
+    ck('  the market figure is the OTHER outside parties (Zimex), and her own company\'s 0.50 transfer price is not in it', c.market_among_other_parties === 1.51, JSON.stringify(c.market_among_other_parties));
+    ck('a series with only 3 earlier prices claims no typical, however odd the last one looks', ser.find((x) => x.party === 'Fourco').typical === null && ser.find((x) => x.party === 'Fourco').pct_off === null);
     ck('  the case never uses a price from AFTER its own date', ph.caseFor(obs.find((o) => o.party === 'Eccomelt' && o.date === '2026-08-20'), obs).times_seen_before === 2);
 
     console.log('\n=== supplier bills, and what cannot be compared ===');

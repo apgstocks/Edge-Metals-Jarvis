@@ -1814,6 +1814,11 @@ function start() {
     // deposits, send ONE daily message of what was placed and why. OFF unless JARVIS_AUTO_APPLY=1; a quiet day sends nothing.
     // 06:20 LA: after the 05:xx bank pull and before bankAutoTick at 06:50, so the two never write the bank ledger at once.
     cron.schedule('20 6 * * *', () => require('./helpers/depositAutoApply').runDaily({ sendToManager: _sendToManager }).catch(e => console.error('[SCHED] deposit-auto-apply:', e)), TZ);
+    // Price watch (helpers/priceWatch.js): each new price goes to the learner, and up to 3 unusual ones are asked about on WhatsApp
+    // ("normal CODE" / "check CODE"); her answers are what the learner learns from. OFF unless JARVIS_PRICE_WATCH=1. Changes no price.
+    // 06:40 LA, after the 06:20 deposit run; a quiet day sends nothing.
+    cron.schedule('40 6 * * *', () => require('./helpers/priceWatch').runDaily({ sendToManager: _sendToManager }).catch(e => console.error('[SCHED] price-watch:', e)), TZ);
+    if (process.env.JARVIS_DAILY_METRICS === '1') cron.schedule('50 6 * * *', () => require('./helpers/dailyMetrics').record().catch(e => console.error('[SCHED] daily-metrics:', e)), TZ);
     // Weekly owner report (ownership plan step 6). Sundays 20:00 LA = Monday morning for her in India.
     // OFF unless JARVIS_OWNER_REPORT=1; sends to the manager only; read-only. Replaces no other message yet.
     cron.schedule('0 20 * * 0', () => require('./helpers/ownerReportJob').runWeekly({ sendToManager: _sendToManager }).catch(e => console.error('[SCHED] owner-report:', e)), TZ);

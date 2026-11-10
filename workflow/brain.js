@@ -633,6 +633,15 @@ function policyDecide(ctx) {
         }
     }
 
+    // ── Price questions: "normal <CODE>" / "check <CODE>". Manager only, exact grammar, never the AI classifier, and only for a code that
+    // belongs to a real unanswered price question. See helpers/priceWatch.js.
+    if (ctx.role === 'manager') {
+        const pc = require('../helpers/priceCommands').parse(ctx.text);
+        if (pc && require('../helpers/priceWatch').list().asks.some((q) => String(q.code).toUpperCase() === pc.code && !q.answer)) {
+            return { intent: 'price_answer', resolvedBy: 'policy', data: pc };
+        }
+    }
+
     // ── A(-1). Fresh well-formed command jumps ANY open pending — see
     // detectFreshCommand's own comment above for the full reasoning. Checked
     // before every pending-type-specific block below (A0 onward), so it
@@ -3003,6 +3012,7 @@ async function route(decision, ctx, sendMessage) {
         case 'contact_quote_leg_reply_received': return actions.handleContactQuoteLegReply(chatId, ctx.text.trim());
         // A code change is only ever started by the exact-grammar policy rule, never by an AI-chosen action.
         case 'self_build':             return decision.resolvedBy === 'policy' && ctx.role === 'manager' ? actions.selfBuildCommand(chatId, d) : { action_taken: 'ignored' };
+        case 'price_answer':           return decision.resolvedBy === 'policy' && ctx.role === 'manager' ? actions.priceAnswerCommand(chatId, d) : { action_taken: 'ignored' };
         case 'deposit_auto':           return decision.resolvedBy === 'policy' && ctx.role === 'manager' ? actions.depositAutoCommand(chatId, d) : { action_taken: 'ignored' };
         case 'remember_fact':          return actions.rememberFact(chatId, d.fact);
         case 'add_business_context':   return actions.addBusinessContext(chatId, d.note);

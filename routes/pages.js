@@ -146,6 +146,7 @@ module.exports = function (app, ctx) {
     require('./helpers/playbookRoutes').mount(app, cfg);
     // One status per customer and its timeline (ownership plan step 2). Read-only: it reads the follow-up log, receipts and auto-apply store, moves nothing.
     require('./helpers/caseFileRoutes').mount(app);
+    require('./helpers/metricsRoutes').mount(app);
     // ── THE LEDGER PLAN ROUTES ───────────────────────────────────────────
     // Apsara, 2026-10-08: the agent that can "remove this container from
     // the <billno>… and then match it with this payment". Preview and

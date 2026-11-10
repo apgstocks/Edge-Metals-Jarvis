@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Metrics — Jarvis</title>
+<style>
+:root{
+  --steel-900:#14181B; --steel-800:#1E2429; --steel-700:#2B3239; --steel-600:#3C454D;
+  --steel-500:#57616A; --steel-400:#7E8891; --steel-300:#A7B0B7; --steel-200:#CBD1D6;
+  --leaf-300:#7FD172; --leaf-400:#57BE49; --leaf-500:#3DA836; --leaf-600:#2E861F;
+  --copper-300:#E29C68; --copper-400:#D77E3D;
+  --green-500:#2F8F57; --amber-500:#D99A2B; --red-500:#C5402F; --blue-500:#3A6EA5;
+  --bg-base:#0C0E10; --surface-card:#14181B; --surface-sunken:#0F1214; --surface-hover:#181D21;
+  --text-strong:#FFFFFF; --text-body:#CBD1D6; --text-muted:#A7B0B7; --text-faint:#7E8891;
+  --border-subtle:#1E2429; --border-default:#2B3239; --ring:var(--leaf-500);
+  --font-display:'Archivo',sans-serif; --font-sans:'IBM Plex Sans',system-ui,sans-serif;
+  --font-mono:'IBM Plex Mono',ui-monospace,monospace;
+}
+*,*::before,*::after{box-sizing:border-box}
+body{margin:0;font-family:var(--font-sans);color:var(--text-body);background:var(--bg-base);-webkit-font-smoothing:antialiased;height:100vh;display:flex;flex-direction:column;overflow:hidden}
+h1,h2,h3{font-family:var(--font-display);color:var(--text-strong);margin:0;font-weight:900;letter-spacing:-.02em}
+button{font:inherit;cursor:pointer}
+input,select{font:inherit}
+:focus-visible{outline:2px solid var(--ring);outline-offset:2px}
+.mono{font-family:var(--font-mono)}
+.num{font-family:var(--font-mono);font-variant-numeric:tabular-nums}
+
+header{display:flex;align-items:center;gap:14px;padding:10px 16px;border-bottom:1px solid var(--border-default);background:var(--surface-card);flex:none}
+header h1{font-size:17px}
+header .back{color:var(--steel-400);font-size:13px;text-decoration:none}
+header .back:hover{color:var(--text-body)}
+.chips{display:flex;gap:6px;flex-wrap:wrap;margin-left:auto;align-items:center}
+.chip{font-family:var(--font-mono);font-size:10.5px;letter-spacing:.06em;text-transform:uppercase;padding:3px 7px;border-radius:3px;border:1px solid var(--border-default);color:var(--text-muted);background:var(--surface-sunken);white-space:nowrap}
+.chip.on{color:var(--leaf-300);border-color:var(--leaf-600);background:rgba(87,190,73,.10)}
+.chip.warn{color:var(--amber-500);border-color:#5a4416;background:rgba(217,154,43,.10)}
+.chip.bad{color:#f0b3aa;border-color:var(--red-500);background:rgba(197,64,47,.12)}
+.chip.act{cursor:pointer}
+.chip.act:hover{border-color:var(--text-body);color:var(--text-body)}
+
+
+body{height:auto;display:block}
+.wrap{max-width:860px;margin:0 auto;padding:14px 16px 60px}
+.lede{color:var(--text-muted);font-size:13px;margin:4px 0 14px}
+.note{border:1px solid var(--border-default);background:var(--surface-sunken);border-radius:6px;padding:9px 12px;font-size:12.5px;color:var(--text-muted);margin-bottom:14px}
+.grp{font-family:var(--font-mono);font-size:10.5px;letter-spacing:.07em;text-transform:uppercase;color:var(--text-faint);margin:18px 0 6px}
+.rule{border:1px solid var(--border-default);background:var(--surface-card);border-radius:6px;padding:10px 12px;margin-bottom:8px}
+.rule .nm{font-family:var(--font-mono);font-size:11.5px;color:var(--leaf-300)}
+.rule .words{margin:5px 0;color:var(--text-strong);font-size:14px;white-space:pre-wrap}
+.rule .meta{font-size:11.5px;color:var(--text-faint)}
+.rule textarea{width:100%;min-height:70px;margin:6px 0;padding:8px;border-radius:4px;border:1px solid var(--border-default);background:var(--bg-base);color:var(--text-body);font:inherit;font-size:14px}
+.acts{display:flex;gap:8px;margin-top:6px}
+.btn{padding:6px 11px;border-radius:4px;border:1px solid var(--border-default);background:transparent;color:var(--text-body);font-size:12.5px;font-weight:600}
+.btn.pri{border-color:var(--leaf-600);background:rgba(87,190,73,.14);color:var(--leaf-300)}
+.btn.bad{border-color:var(--red-500);color:#f0b3aa}
+.empty{color:var(--text-muted);padding:24px 0}
+.toast{position:fixed;bottom:18px;left:50%;transform:translateX(-50%);background:var(--surface-card);border:1px solid var(--leaf-600);padding:8px 14px;border-radius:5px;font-size:13px}
+.toast.bad{border-color:var(--red-500);color:#f0b3aa}
+
+main{flex:1;overflow:auto;padding:14px 16px;max-width:960px;width:100%;margin:0 auto}
+.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:10px;margin-bottom:18px}
+.card{background:var(--surface-card);border:1px solid var(--border-default);border-radius:6px;padding:12px 14px}
+.card h3{font-size:12px;letter-spacing:.06em;text-transform:uppercase;color:var(--text-faint);font-family:var(--font-mono);font-weight:500;margin-bottom:6px}
+.card .big{font-family:var(--font-mono);font-size:26px;color:var(--text-strong)}
+.card .sub{font-size:12.5px;color:var(--text-muted);margin-top:4px;line-height:1.45}
+.tablewrap{overflow-x:auto;border:1px solid var(--border-default);border-radius:6px}
+table{border-collapse:collapse;width:100%;font-size:12.5px}
+th,td{padding:7px 10px;text-align:right;border-bottom:1px solid var(--border-subtle);white-space:nowrap}
+th:first-child,td:first-child{text-align:left}
+th{color:var(--text-faint);font-weight:500;font-family:var(--font-mono);font-size:11px;text-transform:uppercase;letter-spacing:.05em;background:var(--surface-sunken)}
+.up{color:var(--leaf-300)} .down{color:#f0b3aa} .na{color:var(--text-faint)}
+.note{font-size:12.5px;color:var(--text-muted);margin:0 0 14px;line-height:1.5}
+</style>
+</head>
+<body>
+<header><a class="back" href="/">&larr; Jarvis</a><h1>Metrics</h1><div class="chips"><span class="chip" id="chip">loading</span></div></header>
+<main>
+<p class="note">Is Jarvis getting better, or just busier? These are measured against what <b>you</b> decided. One line is saved each day, so the trend builds up over time. Nothing here changes any decision.</p>
+<div class="cards" id="cards"></div>
+<h2 style="font-size:14px;margin:0 0 8px">Day by day</h2>
+<div class="tablewrap"><table><thead><tr><th>Day</th><th>Agrees</th><th>Change</th><th>Abstains</th><th>Undone</th><th>Check</th><th>Model fails</th><th>Est. $</th></tr></thead><tbody id="rows"></tbody></table></div>
+<p class="note" id="empty" style="display:none;margin-top:10px">No saved days yet. The daily line is saved at 06:50 when JARVIS_DAILY_METRICS=1 is set on the server.</p>
+</main>
+<script>
+const $ = (id) => document.getElementById(id);
+function esc(v) {
+  return String(v == null ? '' : v).replace(/[&<>"]/g, c =>
+    ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+}
+const pc = (v) => (v == null ? '<span class="na">n/a</span>' : esc(v) + '%');
+function change(v) { if (v == null) return '<span class="na">n/a</span>'; return '<span class="' + (v > 0 ? 'up' : v < 0 ? 'down' : '') + '">' + (v > 0 ? '+' : '') + esc(v) + '</span>'; }
+function card(title, big, sub) { return '<div class="card"><h3>' + esc(title) + '</h3><div class="big">' + big + '</div><div class="sub">' + sub + '</div></div>'; }
+function render(j) {
+  const t = j.today, L = t.learner, D = t.deposits, P = t.prices, A = t.ai;
+  $('chip').textContent = t.day; $('chip').className = 'chip on';
+  $('cards').innerHTML =
+    card('Learner agrees with you', L ? pc(L.agreement_pct) : '<span class="na">off</span>', L ? esc(L.agree) + ' of ' + esc(L.compared) + ' compared<br>abstains on ' + pc(L.abstain_pct) + ' of ' + esc(L.judged) : 'The learner service is off or not reachable.') +
+    card('Deposits', esc(D.yes + D.no) + ' answered', esc(D.yes) + ' yes, ' + esc(D.no) + ' no, ' + esc(D.waiting) + ' waiting<br>auto-placed ' + esc(D.auto_placed) + ', you undid ' + esc(D.undone) + ' (' + pc(D.undo_pct) + ')') +
+    card('Prices', esc(P.normal + P.check) + ' answered', esc(P.normal) + ' normal, ' + esc(P.check) + ' check, ' + esc(P.waiting) + ' waiting') +
+    card('Model calls, ' + A.day, esc(A.calls), esc(A.failed) + ' failed (' + pc(A.fail_pct) + ')<br>about $' + esc(A.usd_est) + ' (estimate)');
+  const h = (j.history || []).slice().reverse();
+  $('empty').style.display = h.length ? 'none' : '';
+  $('rows').innerHTML = h.map((r) => '<tr class="num"><td>' + esc(r.day) + '</td><td>' + pc(r.learner ? r.learner.agreement_pct : null) + '</td><td>' + change(r.agreement_change) +
+    '</td><td>' + pc(r.learner ? r.learner.abstain_pct : null) + '</td><td>' + pc(r.deposits && r.deposits.undo_pct) + '</td><td>' + pc(r.prices && r.prices.check_pct) +
+    '</td><td>' + pc(r.ai && r.ai.fail_pct) + '</td><td>' + esc(r.ai && r.ai.usd_est) + '</td></tr>').join('');
+}
+async function boot() {
+  try {
+    const r = await fetch('/api/metrics?days=60');
+    if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || ('error ' + r.status));
+    render(await r.json());
+  } catch (e) { $('chip').textContent = e.message; $('chip').className = 'chip bad'; }
+}
+boot();
+</script>
+<script src="/sidebar.js" data-page="metrics" defer></script>
+</body>
+</html>

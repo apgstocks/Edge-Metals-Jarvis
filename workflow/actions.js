@@ -2336,6 +2336,17 @@ async function depositAutoCommand(chatId, d) {
     return { action_taken: 'replied' };
 }
 
+// "normal <CODE>" / "check <CODE>" (helpers/priceCommands.js, decided by policy, manager only). Records her label for the learner; changes no price.
+async function priceAnswerCommand(chatId, d) {
+    if (!d || d.kind !== 'price_answer') return { action_taken: 'ignored' };
+    const r = await require('../helpers/priceWatch').answer(d.code, d.label, { by: 'manager' });
+    if (!r.ok) { await _send(chatId, `Not recorded: ${r.error}`); return { action_taken: 'replied' }; }
+    await _send(chatId, d.label === 'normal'
+        ? `Noted: that price is normal for ${r.ask.case.party}. I will treat prices like it as usual.`
+        : `Noted: that price needs checking. I will flag prices like it for ${r.ask.case.party}. I have changed nothing on the invoice or bill.`);
+    return { action_taken: 'replied' };
+}
+
 async function rememberFact(chatId, text) {
 const clean = String(text || '').trim();
 if (!clean) { await _send(chatId, "What should I remember?"); return { action_taken: 'replied' }; }
@@ -9457,7 +9468,7 @@ emptyDropConfirmed, loadReadyReceived, pickedUpConfirmed, scaleTicketReceived, i
 askWhichBooking, askWhichContainer, fireResolvedStateIntent,
 recallBooking, executeRecall, archiveNow,
 showErd, showCutoff, getBookingField,
-scheduleFollowup, escalateUnclear, selfBuildCommand, _setSelfBuildDeps, depositAutoCommand, rememberFact, addBusinessContext, logKnowledgeGap, resolveFactBatch,
+scheduleFollowup, escalateUnclear, selfBuildCommand, _setSelfBuildDeps, depositAutoCommand, priceAnswerCommand, rememberFact, addBusinessContext, logKnowledgeGap, resolveFactBatch,
 resolveFactConflict, findContradictedFact,
     draftEmailForConfirm, sendDraftedEmail, scheduleDraftedEmail, reschedulePendingEmail, searchMail, draftReplyForConfirm, backfillCutoffs,
     sendShipmentDocsForConfirm,

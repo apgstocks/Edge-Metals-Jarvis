@@ -85,3 +85,18 @@ Repeat the same model, one area at a time, for bookings and truckers, then suppl
 
 ## 8. The learner (added 2026-11-10)
 Fixed rules do not scale ("I can't keep on teaching it"). `learner/` predicts her decision from her own past decisions, in shadow, and measures agreement. See `docs/LEARNER.md`. The case file (step 2) becomes the context the learner reads, not a place rules live.
+
+### 8b. Prices (added 2026-11-10)
+
+`helpers/priceHistory.js` turns every sale and supplier-bill price into exact facts (per-lb, party's own typical, market). It decides nothing.
+`helpers/priceWatch.js` (cron 06:40, OFF unless `JARVIS_PRICE_WATCH=1`) sends each new price to the learner in shadow and asks her about up to 3 a day
+on WhatsApp: `normal CODE` / `check CODE`. Her answer is the labelled example. Once the learner is confident, its call picks what to ask; before that,
+a 5% gap from the party's typical only chooses what to ASK. It changes no price, invoice or bill. Needs her yes before it ever acts on a price.
+
+### 8c. Daily metrics (added 2026-11-10)
+
+`helpers/dailyMetrics.js` saves one line a day to `data/metrics.jsonl` (cron 06:50 LA, OFF unless `JARVIS_DAILY_METRICS=1`): learner agreement and abstain
+rate, deposit questions answered yes/no/waiting, auto-placements and how many she undid, price questions normal/check/waiting, and yesterday's model
+calls, failures and estimated cost (from `helpers/aiUsage.js`; that file already logs every call). Quality is measured against HER decisions, not a second
+model's opinion. Read-only over every store; never throws. See it: `node scripts/daily-metrics.js` (`--record`, `--trend`) or admin `GET /api/metrics?days=30`.
+An LLM-as-judge belongs only where she has given no label (reply tone, summaries) and must be calibrated against her labels first. Not built.
