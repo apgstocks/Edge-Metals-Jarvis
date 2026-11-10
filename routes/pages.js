@@ -144,6 +144,8 @@ module.exports = function (app, ctx) {
     require('./helpers/interCompanyRoutes').mount(app);
     // The Playbook screen (ownership plan step 7): list, edit, forget. Changes no decision — nothing reads the Playbook yet.
     require('./helpers/playbookRoutes').mount(app, cfg);
+    // One status per customer and its timeline (ownership plan step 2). Read-only: it reads the follow-up log, receipts and auto-apply store, moves nothing.
+    require('./helpers/caseFileRoutes').mount(app);
     // ── THE LEDGER PLAN ROUTES ───────────────────────────────────────────
     // Apsara, 2026-10-08: the agent that can "remove this container from
     // the <billno>… and then match it with this payment". Preview and
