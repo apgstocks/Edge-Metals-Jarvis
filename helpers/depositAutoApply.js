@@ -194,6 +194,29 @@ async function place({ dep, party, alloc, mode, reasons, score, sale, by = 'jarv
 }
 
 // A deposit it is NOT sure about becomes a QUESTION (Apsara: "if unsure, always ask"), once per deposit, never silently dropped.
+// ── THE LEARNER, IN SHADOW (Apsara, 2026-11-10: "I can't keep on teaching it based on fixed rules") ──
+// helpers/learnerClient.js asks the Python learner what she would decide, from her own past decisions, and logs it. It is NOT
+// awaited, NOT used, and fail-silent: the rules above decide exactly as before, with or without it, and it is off unless
+// JARVIS_LEARNER_URL is set. Labels are "apply" / "leave". Her yes, her no and her undo are examples and the measured outcome;
+// a placement she does not undo is NOT labelled yet (silence is not approval until she says how long it must last).
+const learner = require('./learnerClient');
+const caseOf = (o) => ({ customer: o.customer || null, amount: round2(o.amount), descriptor: String(o.descriptor || '').slice(0, 120),
+    mode: o.mode || null, bank: o.bank || null, note: o.note || null });
+const shadowJudge = (row, e, note) => {
+    try {
+        const dep = row.deposit; const a = ((row.proposals || [])[0] || {}).allocations || [];
+        learner.judge('deposit', caseOf({ customer: row.party, amount: dep.amount, descriptor: dep.descriptor || dep.desc,
+            mode: modeFrom(dep.descriptor || dep.desc, ['Wire', 'Zelle']), bank: dep.bank_guess, note: (note || '') + (a.length === 1 ? '' : ' allocations:' + a.length) }), 'dep:' + dep.id);
+    } catch (_) { /* shadow only */ }
+};
+const shadowLabel = (q, decision) => {
+    try {
+        const c = caseOf({ customer: q.customer, amount: q.amount, descriptor: q.descriptor, mode: q.mode || (q.proposal && q.proposal.mode), bank: q.bank || (q.proposal && q.proposal.bank), note: q.why });
+        learner.example('deposit', c, decision, { ref: 'dep:' + q.depositId });
+        learner.actual('dep:' + q.depositId, decision);
+    } catch (_) { /* shadow only */ }
+};
+
 function makeAsk(row, e, now) {
     const dep = row.deposit; const p = (row.proposals || [])[0]; const a = p && (p.allocations || []).length === 1 ? p.allocations[0] : null;
     const proposal = a && a.clears && !a.shortfall && dep.bank_guess && modeFrom(dep.descriptor || dep.desc, ['Wire', 'Zelle'])
@@ -222,6 +245,7 @@ async function run({ dryRun = false, now = Date.now(), proposals = null } = {}) 
             if (!askable(why)) return;
             if (nAsk >= MAX_ASKS()) { out.skipped.push({ deposit: row.deposit.id, why: why + ' (more questions than I send in one day; it is on the Bank page)' }); return; }
             const q = makeAsk(row, { ...e, why }, now); nAsk++; out.asked.push(q);
+            if (!dryRun) shadowJudge(row, e, why);
             if (!dryRun) { await mutate((d) => { d.asks.push(q); }); state.asks.push(q); }
         };
         if (!e.ok) { if (row && row.deposit) out.skipped.push({ deposit: row.deposit.id, why: e.why }); await ask(e.why); continue; }
@@ -230,6 +254,7 @@ async function run({ dryRun = false, now = Date.now(), proposals = null } = {}) 
         const dep = row.deposit;
         const sale = sales.find((s) => s.id === e.alloc.doc_id) || {};
         if (dryRun) { out.applied.push({ depositId: dep.id, customer: row.party, amount: round2(dep.amount), reasons: e.reasons, invoice_no: sale.invoice_no || null, saleId: e.alloc.doc_id }); n++; continue; }
+        shadowJudge(row, e, 'certain: ' + (e.reasons || []).join('; '));
         const r = await place({ dep, party: row.party, alloc: e.alloc, mode: e.mode, reasons: e.reasons, score: e.score, sale, by: 'jarvis', now, state });
         if (r.error) { out.failed.push({ deposit: dep.id, error: r.error }); continue; }
         receipts.push({ ref: dep.id }); taken.add(e.alloc.doc_id); out.applied.push(r.entry); n++;
@@ -253,6 +278,7 @@ async function confirmAsk(code, { by = 'her', now = Date.now() } = {}) {
     if (r.error) return { ok: false, error: r.error };
     await mutate((d) => { const x = d.asks.find((y) => y.id === q.id); if (x) x.answer = { kind: 'yes', at: new Date(now).toISOString(), by, entry: r.entry.id }; });
     try { const oc = require('./outcomes'); oc.recordDecision({ ref: 'auto-ask:' + q.id, surfaced: true, source: 'deposit-auto-apply' }); oc.recordOutcome({ ref: 'auto-ask:' + q.id, outcome: oc.OUTCOMES.APPROVED, by, detail: q.why }); } catch (e) { /* learning is best effort */ }
+    shadowLabel(q, 'apply');
     return { ok: true, entry: r.entry, ask: q };
 }
 async function declineAsk(code, { by = 'her', now = Date.now() } = {}) {
@@ -261,6 +287,7 @@ async function declineAsk(code, { by = 'her', now = Date.now() } = {}) {
     if (q.answer) return { ok: false, error: 'you already answered that one (' + q.answer.kind + ')' };
     await mutate((d) => { const x = d.asks.find((y) => y.id === q.id); if (x) x.answer = { kind: 'no', at: new Date(now).toISOString(), by }; });
     try { const oc = require('./outcomes'); oc.recordDecision({ ref: 'auto-ask:' + q.id, surfaced: true, source: 'deposit-auto-apply' }); oc.recordOutcome({ ref: 'auto-ask:' + q.id, outcome: oc.OUTCOMES.DECLINED, by, detail: q.why }); } catch (e) { /* best effort */ }
+    shadowLabel(q, 'leave');
     return { ok: true, ask: q };
 }
 
@@ -300,6 +327,7 @@ async function undo(idOrCode, { by = 'her', reason = null } = {}) {
         oc.recordDecision({ ref: 'auto-apply:' + entry.id, surfaced: true, source: 'deposit-auto-apply' });
         oc.recordOutcome({ ref: 'auto-apply:' + entry.id, outcome: oc.OUTCOMES.CORRECTED, by, said: reason || null, detail: 'undid an automatic deposit placement' });
     } catch (e) { /* learning is best effort */ }
+    shadowLabel({ customer: entry.customer, amount: entry.amount, descriptor: entry.payer, mode: entry.mode, bank: entry.bank, depositId: entry.depositId, why: 'certain: ' + (entry.reasons || []).join('; ') }, 'leave');
     return { ok: true, entry: read().entries.find((e) => e.id === entry.id) };
 }
 

@@ -273,6 +273,43 @@ const M = await A.run({ now: NOW });
 ck('with a limit of 1 question a day, one is asked and the other says it is on the Bank page', M.asked.length === 1 && A.list().asks.length === before2 + 1 && M.skipped.some((x) => /more questions than I send in one day/.test(x.why)), JSON.stringify([M.asked.length, M.skipped]));
 delete process.env.JARVIS_AUTO_APPLY_MAX_ASKS;
 
+section('N — THE LEARNER, IN SHADOW: it predicts and measures, and cannot change a decision or break a run');
+{
+    const { spawn } = require('child_process');
+    const LP = 21000 + Math.floor(Math.random() * 15000), LTOK = 'learner-test-token-yyyyyyyy', LD = path.join(TMP, 'learner');
+    const lsrv = spawn('python3', [path.join(ROOT, 'learner', 'server.py'), String(LP)], { env: { ...process.env, LEARNER_TOKEN: LTOK, LEARNER_DATA: LD, LEARNER_FAKE_LM: '1' }, stdio: 'ignore' });
+    const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+    for (let i = 0; i < 40; i++) { try { if ((await fetch(`http://127.0.0.1:${LP}/health`)).ok) break; } catch (e) {} await sleep(150); }
+    process.env.JARVIS_LEARNER_URL = `http://127.0.0.1:${LP}`; process.env.JARVIS_LEARNER_TOKEN = LTOK;
+    const lc = require(path.join(ROOT, 'helpers/learnerClient'));
+    for (let i = 0; i < 6; i++) await lc.example('deposit', { customer: 'Kolon', amount: 500, descriptor: 'WIRE IN KOLON KO-1', mode: 'Wire', bank: 'BofA', note: 'certain: names the invoice' }, 'apply');
+    const KO = await mk('Kolon', 'KO-1', '2026-10-25', 1000, 0.5), S1 = await mk('Skc One', 'SK-1', '2026-10-25', 1000, 0.5), S2 = await mk('Skc Two', 'SK-2', '2026-10-25', 1000, 0.5);
+    put([dep('TX-N1', 500, 'WIRE IN KOLON KO-1', '2026-11-06'), dep('TX-N2', 500, 'WIRE IN SKC ONE REFUND', '2026-11-06'), dep('TX-N3', 500, 'WIRE IN SKC TWO REFUND', '2026-11-06')]);
+    await teach('WIRE IN KOLON KO-1', 'Kolon'); await teach('WIRE IN SKC ONE REFUND', 'Skc One'); await teach('WIRE IN SKC TWO REFUND', 'Skc Two');
+    const bK = bal(KO);
+    const N = await A.run({ now: NOW }); await sleep(500);
+    ck('the rules decided exactly as they would have: the certain one placed, the refunds asked', bK - bal(KO) === 500 && N.applied.some((x) => x.depositId === 'TX-N1') && ['TX-N2', 'TX-N3'].every((id) => A.list().asks.some((q) => q.depositId === id)), JSON.stringify(N.applied.map((x) => x.depositId)));
+    let rep = await lc.report();
+    ck('the learner judged all three, each tied to its deposit', rep && rep.judged === 3, JSON.stringify(rep));
+    const shadow = fs.readFileSync(path.join(LD, 'shadow.jsonl'), 'utf8').split('\n').filter(Boolean).map((x) => JSON.parse(x));
+    ck('  the logged cases carry what the screen shows (customer, amount, bank line), not internal ids', shadow.filter((x) => x.t === 'predicted').every((x) => x.case.customer && x.case.amount === 500 && /WIRE IN/.test(x.case.descriptor) && !('depositId' in x.case)));
+    const q2n = A.list().asks.find((q) => q.depositId === 'TX-N2'), q3n = A.list().asks.find((q) => q.depositId === 'TX-N3');
+    await A.confirmAsk(q2n.code); await A.declineAsk(q3n.code);
+    const entN1 = A.list().entries.find((e) => e.depositId === 'TX-N1');
+    await A.undo(entN1.code, { by: 'her', reason: 'wrong' }); await sleep(500);
+    const ex = fs.readFileSync(path.join(LD, 'examples.jsonl'), 'utf8').split('\n').filter(Boolean).map((x) => JSON.parse(x));
+    ck('her yes, her no and her undo each became an example, labelled apply / leave / leave', ex.filter((x) => x.ref === 'dep:TX-N2')[0].decision === 'apply' && ex.filter((x) => x.ref === 'dep:TX-N3')[0].decision === 'leave' && ex.filter((x) => x.ref === 'dep:TX-N1')[0].decision === 'leave');
+    rep = await lc.report();
+    ck('and each is measured against what the learner predicted (3 compared)', rep.compared === 3, JSON.stringify(rep));
+    ck('a placement she did NOT undo gets no label (silence is not approval yet)', !ex.some((x) => x.ref === 'dep:TX-HW'));
+    lsrv.kill(); await sleep(300);
+    const K2 = await mk('Kumho', 'KU-1', '2026-10-25', 1000, 0.5);
+    put([dep('TX-N4', 500, 'WIRE IN KUMHO KU-1', '2026-11-06')]); await teach('WIRE IN KUMHO KU-1', 'Kumho');
+    const t0 = Date.now(); const N4 = await A.run({ now: NOW }); const took = Date.now() - t0;
+    ck('with the learner DOWN the run still places the deposit, and is not held up by it', bal(K2) === 0 && N4.applied.some((x) => x.depositId === 'TX-N4') && took < 2000, took + 'ms');
+    delete process.env.JARVIS_LEARNER_URL; delete process.env.JARVIS_LEARNER_TOKEN;
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 server.close(); process.exit(fail ? 1 : 0);
 })().catch((e) => { console.log('CRASH', e && e.stack || e); try { server && server.close(); } catch (x) {} process.exit(1); });

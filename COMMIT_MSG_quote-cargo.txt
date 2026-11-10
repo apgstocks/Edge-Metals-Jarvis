@@ -1,0 +1,25 @@
+Quote cargo answers accumulate; "70000$" reads as a value
+
+Apsara, 2026-11-10 01:26: "Al scrap", then "70000$", then "Al scrap" again was
+asked for everything every time.
+
+Cause: resumeQuoteWithCargoDetails saved the partial answer with setPending()
+while the SAME pending was still active. setPending's duplicate guard (same
+type + same lane, added 2026-08-20 for the cancel loop) dropped the write, so
+cargoSoFar was never stored and every reply was judged alone. The partial is now
+updated in place; the guard is untouched. Also: a "$" AFTER the number
+("70000$") is now read as a value (VALUE_RE).
+
+Scope: workflow/actions.js only (resumeQuoteWithCargoDetails, VALUE_RE).
+analyzeCargoNumbers has no other caller.
+
+Test: tests/quote-cargo-accumulate.js (10 checks) replays her transcript;
+reverse-verified (old save restored -> 5 fail; trailing-$ off -> 1 fails).
+Full suite: 418/423 files pass; the 5 failures (dead-helpers, form-parity,
+mutate-once, mutation-audit, qb-snapshot) fail identically on the previous code.
+
+Not covered: pauseForUnresolvedTrucker re-saves its own pending the same way;
+unverified.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TvkhK8AjdrLbSc7KyHM3iG

@@ -85,6 +85,16 @@ module.exports = function (app, ctx) {
     // Step 3: generate + save the PDF from the (possibly hand-edited)
     // preview data the client sends back. preview=1 returns the PDF inline
     // without archiving a copy, same convention as /api/proforma/generate.
+    // Scan a supplier scale ticket for the scale-ticket packing list (2026-11-10).
+    // Read-only: returns boxes for her to check; saves and sends nothing.
+    app.post('/api/invoice/scan-ticket-packing', async (req, res) => {
+        try {
+            const b = req.body || {};
+            res.json({ ok: true, fields: await require('./helpers/ticketPackingList').readTicket(b.base64, b.mime) });
+        } catch (e) {
+            res.status(e.code === 'NO_FILE' || e.code === 'UNREADABLE' ? 400 : 500).json({ error: e.message });
+        }
+    });
     app.post('/api/invoice/generate', async (req, res) => {
         try {
             const body = req.body || {};
@@ -138,7 +148,18 @@ module.exports = function (app, ctx) {
                 });
             }
 
-            const out = await generateInvoiceClassicPdf(body, { separate, invoiceOnly });
+            // Scale-ticket packing list (2026-11-10): replaces the packing-list PDF, and only
+            // in separate mode. Sent without separate it is IGNORED, not an error, so a stale
+            // tick can never change the combined invoice. Callers: dashboard/documents.html
+            // only; the send route below is unchanged and does not carry it.
+            const ticketPacking = separate && body.ticket_packing && typeof body.ticket_packing === 'object' ? body.ticket_packing : null;
+            let out;
+            try {
+                out = await generateInvoiceClassicPdf(body, { separate, invoiceOnly, ...(ticketPacking ? { ticketPacking } : {}) });
+            } catch (ge) {
+                if (ge && ge.code === 'TICKET_PACKING_INVALID') return res.status(400).json({ error: ge.message, code: ge.code, problems: ge.problems });
+                throw ge;
+            }
 
             if (req.query.preview === '1') {
                 // Preview is a single inline PDF by construction — a browser

@@ -82,3 +82,6 @@ Repeat the same model, one area at a time, for bookings and truckers, then suppl
 - **The weak point is data, not intelligence.** Wrong or missing receipts (Rad Metal) made the agent confidently wrong. Slice 1 comes before everything else for that reason.
 - **Customer name clean-up** (A Tech / A-Tech, Modern / Modern Enterprises, Daiki x2, Dhatu x3, internal names such as Edge Metals Recycling) will make cases split. A one-time merge list is needed.
 - **Nothing replaces her yes** for anything outside the company until she opts in per kind.
+
+## 8. The learner (added 2026-11-10)
+Fixed rules do not scale ("I can't keep on teaching it"). `learner/` predicts her decision from her own past decisions, in shadow, and measures agreement. See `docs/LEARNER.md`. The case file (step 2) becomes the context the learner reads, not a place rules live.

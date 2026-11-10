@@ -1298,6 +1298,20 @@ async function generateInvoiceClassicPdf(data, opts = {}) {
         const { both } = await render(html, ['both'], opts);
         return both;
     }
+    // opts.ticketPacking (2026-11-10, her tick-box on Documents -> Invoice): the packing
+    // list half is the scale-ticket document INSTEAD of the standard one. Only reachable
+    // in separate mode, and only when the caller passes it, so every existing caller
+    // gets the two PDFs it always got.
+    if (opts.ticketPacking) {
+        // Validated BEFORE any render, so figures that do not add up fail fast and never
+        // cost a Chromium pass on the invoice first.
+        const tpl = require('./ticketPackingList');
+        const chk = tpl.buildTicketPackingHtml(opts.ticketPacking);
+        if (chk.problems.length) { const e = new Error(`Scale-ticket packing list: ${chk.problems.join('; ')}`); e.code = 'TICKET_PACKING_INVALID'; e.problems = chk.problems; throw e; }
+        const { invoice } = await render(html, ['invoice'], opts);
+        const packing = await require('./ticketPackingList').generateTicketPackingPdf(opts.ticketPacking, opts);
+        return { invoice, packing };
+    }
     const { invoice, packing } = await render(html, ['invoice', 'packing'], opts);
     return { invoice, packing };
 }

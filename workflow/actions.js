@@ -7180,7 +7180,9 @@ async function askForCargoDetails(chatId, state) {
 // because nobody types the same fact twice. Only a single bare number is
 // genuinely ambiguous.
 const WEIGHT_RE = /\d[\d,]*\s*(lbs?|pounds?|kgs?|kilograms?|tons?)\b/i;
-const VALUE_RE  = /(\$\s?\d)|\d[\d,]*\s*(dollars?|usd)\b/i;
+// 2026-11-10: "70000$" (the sign AFTER the number — how she types it) was not read
+// as a value, so it was asked for again. Added \d[\d,]*\s*\$ — nothing else changed.
+const VALUE_RE  = /(\$\s?\d)|\d[\d,]*\s*\$|\d[\d,]*\s*(dollars?|usd)\b/i;
 // Matches a thousands-separated number as ONE token, but "40000,42000" (no
 // space) as TWO — a greedy [\d,]* class merged those into a single match and
 // silently re-created the infinite loop.
@@ -7203,13 +7205,72 @@ function analyzeCargoNumbers(text) {
     const hasValue  = numCount >= 2 ? true : VALUE_RE.test(text);
     return { hasWeight, hasValue, hasDescription: hasCargoDescription(text) };
 }
+// AI READING of the cargo answer (Apsara, 2026-11-10: "it's an AI" - a fixed pattern
+// should not decide whether "Al scrap, 70000$, 40000 lbs" is complete). The model only
+// JUDGES what is present; it never writes what goes to truckers - that stays her own
+// words (finalCargo below). Every field it reports must be findable in her text, so it
+// cannot invent a weight or a value. Returns null when the AI is unavailable or answers
+// badly, and the caller falls back to the regex check, so nothing gets worse offline.
+function _digits(s) { return String(s || '').replace(/[^0-9.]/g, ''); }
+function verifyCargoFields(raw, text) {
+    const out = { description: false, weight: false, value: false };
+    if (!raw || typeof raw !== 'object') return out;
+    const t = String(text || '');
+    const tl = t.toLowerCase();
+    const nums = (t.match(/\d[\d,]*(?:\.\d+)?/g) || []).map((n) => _digits(n));
+    const numOk = (v) => { const d = _digits(v); return !!d && nums.includes(d); };
+    if (typeof raw.description === 'string' && raw.description.trim()) {
+        out.description = raw.description.toLowerCase().split(/[^a-z']+/).some((w) => w.length >= 3 && tl.includes(w));
+    }
+    if (raw.weight != null && numOk(raw.weight)) out.weight = true;
+    if (raw.value != null && numOk(raw.value)) out.value = true;
+    // The same figure cannot be both the weight and the value.
+    if (out.weight && out.value && _digits(raw.weight) === _digits(raw.value)) out.weight = false;
+    return out;
+}
+async function defaultCargoReader(text) {
+    const { callGeminiJSON } = require('../helpers/gemini');
+    const prompt = `A freight manager is answering "what is the cargo, its weight and its value?" for a trucking quote. Read her words and report what she actually gave. Copy values exactly as written; use null for anything she did not state. Never guess or compute.
+Return JSON only: {"description": string|null, "weight": string|null, "value": string|null}
+description = what the cargo is (e.g. "Al scrap", "junk car"). weight = a weight she gave (e.g. "40000 lbs"). value = the money value of the cargo (e.g. "$70000", "70000$", "5k dollars").
+Her words: ${JSON.stringify(String(text || ''))}`;
+    return callGeminiJSON(prompt, 1);
+}
+let _cargoReader = defaultCargoReader;
+function _setCargoReader(fn) { _cargoReader = fn || defaultCargoReader; }
+async function readCargoAnswer(text) {
+    // Tests never reach the network unless they inject a reader.
+    if (process.env.JARVIS_TEST && _cargoReader === defaultCargoReader) return null;
+    try {
+        const raw = await _cargoReader(text);
+        if (!raw) return null;
+        const v = verifyCargoFields(raw, text);
+        return { hasDescription: v.description, hasWeight: v.weight, hasValue: v.value };
+    } catch (e) {
+        console.warn('[ACTIONS] AI cargo read unavailable, using pattern check:', e.message);
+        return null;
+    }
+}
 async function resumeQuoteWithCargoDetails(chatId, pending, cargoText) {
     const clean = String(cargoText || '').trim();
     // Answers accumulate across turns, so a partial reply is never discarded.
     const combined = [pending.state.cargoSoFar, clean].filter(Boolean).join(', ');
-    const { hasWeight, hasValue, hasDescription } = analyzeCargoNumbers(combined);
+    const { hasWeight, hasValue, hasDescription } = (await readCargoAnswer(combined)) || analyzeCargoNumbers(combined);
     if (!hasWeight || !hasValue || !hasDescription) {
-        await setPending(chatId, { type: 'await_quote_cargo_details', state: { ...pending.state, cargoSoFar: combined } });
+        // Updated IN PLACE, not through setPending(). REAL BUG (Apsara, 2026-11-10 01:26 —
+        // "Al scrap", then "70000$", then "Al scrap" again, asked for everything every time):
+        // this pending is still active, and setPending's duplicate guard (same type + same
+        // lane = "the same question", added 2026-08-20 for the cancel loop) DROPPED this
+        // write, so cargoSoFar was never saved and every reply was judged alone. The guard
+        // is right for its job and is untouched; this is not a new question, it is the
+        // same one gaining an answer. The expiry window is refreshed like setPending would.
+        await mutateBrain((b) => {
+            const live = b.pending_actions && b.pending_actions[chatId];
+            if (live && live.type === 'await_quote_cargo_details') {
+                live.state = { ...(live.state || {}), cargoSoFar: combined };
+                live.expires_at = new Date(Date.now() + cfg.PENDING_EXPIRY_MS).toISOString();
+            }
+        });
         const missing = [];
         if (!hasDescription) missing.push('a description');
         if (!hasWeight) missing.push('a weight');
@@ -7577,7 +7638,35 @@ async function resolveReminderTarget(query, managerChatId) {
             if (chatId) return { chatId, label: c.name };
         }
     } catch { /* contacts store optional */ }
+
+    // 4. Address Book - LAST, so it can only turn a "couldn't find" into a hit; nothing
+    // that resolves above can be re-pointed by it. (Apsara, 2026-11-10: "Then whats the
+    // use of address book?" - Bose was saved there with a mobile and still "not found".)
+    // Only an entry whose mobile she has marked WhatsApp-verified is used, so a number
+    // she typed but never confirmed is never messaged. Two matches => ambiguous, not a pick.
+    try {
+        const { resolveAddress } = require('../helpers/addressBook');
+        const r = resolveAddress(bare || q);
+        if (r && r.type === 'ambiguous') {
+            const withPhone = r.matches.filter((e) => e.mobile && e.whatsapp_verified);
+            if (withPhone.length > 1) return { ambiguous: withPhone.slice(0, 8).map((e) => ({ name: (e.aliases || [])[0] || e.mobile })) };
+            if (withPhone.length === 1) r.entry = withPhone[0];
+        }
+        const e = r && r.entry;
+        if (e && e.mobile && e.whatsapp_verified) {
+            const wa = addressBookWaId(e.mobile);
+            if (wa) return { chatId: wa, label: (e.aliases || [])[0] || q };
+        }
+    } catch { /* address book optional */ }
     return { notFound: true };
+}
+// 10 digits = a US number missing its country code (Edge's contacts are US); 11 digits
+// starting with 1 is already complete; anything else is taken as typed, international.
+function addressBookWaId(mobile) {
+    let d = String(mobile || '').replace(/\D/g, '');
+    if (d.length === 10) d = '1' + d;
+    if (d.length < 10 || d.length > 15) return null;
+    return `${d}@c.us`;
 }
 
 // RESTORED 2026-08-22 — lost to a file overwrite, same as the cargo
@@ -9375,7 +9464,7 @@ resolveFactConflict, findContradictedFact,
     continueBookingRequest, correctBookingDraft, trimTrailingConnective,
     resolveManualEmailAddress, learnDomainForConfirm, resolveDomainLearnName,
 checkSupplierReadiness, resolveReadyCheckYes, resolveReadyCheckNo, resolveReadyCheckDate, recordContainerNumber, sendPriceListTo, sendPriceListCity, relayQuestionToContact, relayReplyReceived, relayReplyReceivedViaEmail, detectExpectedIntent,
-    startQuoteRequestFlow, resumeQuoteWithTruckerNames, resumeQuoteWithCargoDetails, resumeQuoteWithTruckerRetry, handleQuoteLegReply,
+    startQuoteRequestFlow, resumeQuoteWithTruckerNames, resumeQuoteWithCargoDetails, _setCargoReader, verifyCargoFields, resumeQuoteWithTruckerRetry, handleQuoteLegReply,
     startContactQuoteRequestFlow, resumeContactQuoteWithRetry, handleContactQuoteLegReply,
     // Restored 2026-08-22 — dropped by commit 7179955 while brain.js kept
     // routing to them. See the block comment above their definitions.

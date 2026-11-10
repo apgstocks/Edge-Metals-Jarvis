@@ -984,6 +984,24 @@ body[data-theme="light"] {
 
       <div style="text-align:right; font-size:13px; color:var(--text-strong); margin-bottom:6px;">Final Amount: <strong id="invFinalAmountDisplay">$0.00</strong></div>
 
+      <!-- Apsara, 2026-11-10: "add a checkbox - if checked it replaces the existing packing list when
+           we generate both invoice and packing list separately ... scan option so I don't need to type".
+           OFF by default; only takes effect together with "Separate invoice & packing list" (the server
+           ignores it otherwise). Invoice no, date, container, seal and the consignee come from the boxes
+           above; only the weights live here. -->
+      <div id="tpPanel" style="display:none; margin:10px 0; padding:10px 12px; border:1px solid var(--border, #ccc); border-radius:8px;">
+        <div style="display:flex; align-items:center; gap:10px; flex-wrap:wrap; margin-bottom:8px;">
+          <strong style="font-size:13px;">Scale-ticket packing list</strong>
+          <span style="font-size:11px; color:var(--text-muted);">Replaces the packing-list PDF when invoice &amp; packing list are generated separately.</span>
+          <input type="file" id="tpFile" accept="application/pdf,image/*" style="display:none">
+          <button type="button" id="tpScan" class="btn" style="padding:4px 10px; font-size:11px;">Scan scale ticket</button>
+          <span id="tpMsg" style="font-size:11px;"></span>
+        </div>
+        <table style="width:100%; font-size:12px;"><thead><tr><th align="left">Item</th><th align="right">Gross (lbs)</th><th align="right">Tare (lbs)</th><th align="right">Pallets (60 lb each)</th><th></th></tr></thead><tbody id="tpRows"></tbody></table>
+        <button type="button" id="tpAdd" class="btn" style="padding:3px 8px; font-size:11px; margin-top:6px;">+ Add item</button>
+        <span style="font-size:11px; color:var(--text-muted); margin-left:8px;">Net and pallet tare are worked out for you. Check every box against the ticket.</span>
+      </div>
+
       <div style="display:flex; justify-content:flex-end; align-items:center; gap:12px; margin-top:10px;">
         <!-- Apsara, 2026-09-09: "What if i want to have separate invoice and
              packing list" -> "Use seprate flag."
@@ -1006,6 +1024,10 @@ body[data-theme="light"] {
         <label style="display:inline-flex; align-items:center; gap:6px; font-size:12px; color:var(--text-body); cursor:pointer; user-select:none;">
           <input type="checkbox" id="inv_only" style="width:auto; margin:0;">
           Invoice only
+        </label>
+        <label style="display:inline-flex; align-items:center; gap:6px; font-size:12px; color:var(--text-body); cursor:pointer; user-select:none;">
+          <input type="checkbox" id="inv_ticket_pl" style="width:auto; margin:0;">
+          Scale-ticket packing list
         </label>
         <span id="invSuccessMsg" style="font-size:12px; color:var(--leaf-400); align-self:center;"></span>
         <!-- Apsara, 2026-09-23: "ADD SEND MAIL BUTTON IN INVOICE POST
@@ -6384,6 +6406,53 @@ for (const id of ['inv_only', 'inv_only_bulk']) {
   if (el) el.addEventListener('change', () => syncInvOnly(id));
 }
 
+// ── Scale-ticket packing list (2026-11-10) ────────────────────────────────
+// Ticking it only SHOWS the weights panel; it takes effect at Generate and only together with
+// "Separate invoice & packing list" (also enforced on the server). Unticked = nothing changes.
+function tpRow(g = {}) {
+  const tr = document.createElement('tr');
+  const cell = (k, w, right) => `<td><input data-k="${k}" value="${String(g[k] == null ? '' : g[k]).replace(/"/g, '&quot;')}" style="width:${w};${right ? 'text-align:right;' : ''}"></td>`;
+  tr.innerHTML = cell('item', '95%') + cell('gross', '90px', 1) + cell('tare', '90px', 1) + cell('pallets', '70px', 1) + '<td><button type="button" class="btn" style="padding:1px 6px;font-size:11px;" title="Remove">&times;</button></td>';
+  tr.querySelector('button').addEventListener('click', () => tr.remove());
+  $('tpRows').appendChild(tr);
+}
+function tpShow() { $('tpPanel').style.display = $('inv_ticket_pl').checked ? 'block' : 'none'; if ($('inv_ticket_pl').checked && !$('tpRows').children.length) tpRow(); }
+function tpCollect() {
+  const groups = [...$('tpRows').children].map((tr) => { const o = {}; tr.querySelectorAll('input').forEach((i) => { o[i.dataset.k] = i.value.trim(); }); return o; })
+    .filter((g) => g.item || g.gross || g.tare);
+  return {
+    invoice_no: $('inv_no').value.trim(), date: $('inv_date').value.trim(), container_no: $('inv_container').value.trim(), seal_no: $('inv_seal').value.trim(),
+    consignee_lines: $('inv_consignee_address').value.split('\n').map((x) => x.trim()).filter(Boolean), groups,
+  };
+}
+if ($('inv_ticket_pl')) {
+  $('inv_ticket_pl').addEventListener('change', () => {
+    // Needs separate mode: tick it for her rather than leave a box that does nothing.
+    if ($('inv_ticket_pl').checked) { const sep = $('inv_separate'); if (sep && !sep.checked) { sep.checked = true; syncInvSeparate('inv_separate'); } }
+    tpShow();
+  });
+  $('inv_separate').addEventListener('change', () => { if (!$('inv_separate').checked && $('inv_ticket_pl').checked) { $('inv_ticket_pl').checked = false; tpShow(); } });
+  $('inv_only').addEventListener('change', () => { if ($('inv_only').checked && $('inv_ticket_pl').checked) { $('inv_ticket_pl').checked = false; tpShow(); } });
+  $('tpAdd').addEventListener('click', () => tpRow());
+  $('tpScan').addEventListener('click', () => $('tpFile').click());
+  $('tpFile').addEventListener('change', async () => {
+    const f = $('tpFile').files[0]; if (!f) return;
+    const msg = $('tpMsg'); msg.style.color = ''; msg.textContent = 'Reading the ticket…';
+    try {
+      const base64 = await new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(String(r.result).split(',')[1]); r.onerror = rej; r.readAsDataURL(f); });
+      const out = await api('/api/invoice/scan-ticket-packing', { method: 'POST', body: JSON.stringify({ base64, mime: f.type || 'application/pdf' }) });
+      const x = out.fields || {};
+      // Only fills blanks on the invoice form; never overwrites what she already typed.
+      if (x.container_no && !$('inv_container').value.trim()) $('inv_container').value = x.container_no;
+      if (x.seal_no && !$('inv_seal').value.trim()) $('inv_seal').value = x.seal_no;
+      $('tpRows').innerHTML = '';
+      (x.groups && x.groups.length ? x.groups : [{}]).forEach((g) => tpRow(g));
+      msg.style.color = 'var(--leaf-400)'; msg.textContent = 'Filled from the ticket — check each box.';
+    } catch (e) { msg.style.color = 'var(--status-warn, #d98324)'; msg.textContent = e.message || 'Could not read it — type the weights in.'; }
+    $('tpFile').value = '';
+  });
+}
+
 // ── THE "Loaded" FIELD ────────────────────────────────────────────────────
 // Apsara, 2026-09-22: "no.make it work on this" — on the review screen, where
 // the heading promises "every field below is editable before you download".
@@ -6596,6 +6665,9 @@ $('btnInvGenerate').addEventListener('click', async () => {
     // asked to send on its own.
     payload.separate = !payload.invoice_only
       && !!((sepEl && sepEl.checked) || (sepBulkEl && sepBulkEl.checked));
+    // Scale-ticket packing list: sent only when ticked AND separate; otherwise the key is absent
+    // and the request is byte-for-byte what it was.
+    if (payload.separate && $('inv_ticket_pl') && $('inv_ticket_pl').checked) payload.ticket_packing = tpCollect();
     // ── THE QUANTITY MUST AGREE WITH THE WEIGHTS ────────────────────────
     // The server refuses a 409 WEIGHT_MISMATCH when a row's Quantity
     // disagrees with its own gross and tare — 260918_AP_26ARIS02 went to the
