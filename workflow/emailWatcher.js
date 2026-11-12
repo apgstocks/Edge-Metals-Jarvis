@@ -120,9 +120,55 @@ async function run() {
             return s;
         });
         await _runOnce();
+        // Text-only date changes (no PDF) — a separate pass that can never
+        // break the booking watcher above. See helpers/bookingAmendments.js.
+        try { await _amendmentPass(); }
+        catch (err) { console.error(`[${AGENT}] text amendment pass failed (PDF path unaffected):`, err.message); }
     } finally {
         _running = false;
     }
+}
+
+async function _amendmentPass() {
+    const amend = require('../helpers/bookingAmendments');
+    const gmail = getGmailRead();
+    const processed = loadProcessed();
+    const after = new Date(Date.now() - cfg.GMAIL_POLL_DAYS_BACK * 86400000);
+    const afterStr = `${after.getFullYear()}/${after.getMonth() + 1}/${after.getDate()}`;
+    const out = await amend.run({
+        listActive: () => Object.values(loadBookings()),
+        // The booking numbers ARE the search — no keyword list to go stale.
+        search: (numbers) => listMessages(gmail, `after:${afterStr} -from:me (${numbers.map((n) => `"${n}"`).join(' OR ')})`, 50),
+        getMessageInfo: async (m) => {
+            const msg = await getMessage(gmail, m.id);
+            const hdrs = Object.fromEntries((msg.payload.headers || []).map((h) => [h.name, h.value]));
+            const { body, pdfParts } = getEmailContent(msg.payload);
+            return { subject: hdrs.Subject || '', body, hasPdf: pdfParts.length > 0,
+                     fromSelf: false, at: Number(msg.internalDate) || 0 };
+        },
+        extractText: (t) => extractBookingFieldsFromText(t).catch(() => null),
+        mutateBooking: async (bkg, fn) => {
+            await mutateJson(cfg.BOOKINGS_FILE, {}, (all) => {
+                if (!all[bkg]) return all;
+                const patch = fn(all[bkg]);
+                if (patch) Object.assign(all[bkg], patch);
+                return all;
+            });
+        },
+        notify: async ({ booking, changes, subject }) => {
+            const summary = changes.map((c) => `${c.field} ${c.from} → ${c.to}${c.note ? ` (${c.note})` : ''}`).join(', ');
+            await syncBookingToSheet(booking);
+            await appendAuditLog({ source: 'email_watcher', bkgNo: booking, intent: 'booking_rescheduled', resolvedBy: 'ai',
+                confidence: null, actionTaken: 'updated', subject, fields: Object.fromEntries(changes.map((c) => [c.field, c.to])) });
+            await pushAlert({ type: 'booking_rescheduled_email', bkgNo: booking,
+                message: `Booking ${booking} rescheduled by carrier (text mail): ${summary}`,
+                severity: changes.some((c) => c.note) ? 'warning' : 'info' });
+            await _sendToManager(`Booking ${booking} updated from a carrier email ("${String(subject).slice(0, 70)}"):\n  ${summary}`);
+        },
+        isProcessed: (id) => processed.has('amend:' + id),
+        markProcessed: (id) => processed.add('amend:' + id),
+    });
+    if (out.looked) await saveProcessed(processed);
 }
 
 async function _runOnce() {
