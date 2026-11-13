@@ -40,6 +40,7 @@ const SCREENS = [
             say: [`${name.toLowerCase()} verification`, `verify ${name.toLowerCase()}`, `${name.toLowerCase()} verify`] })),
     { key: 'edge-inventory', label: 'Edge Inventory', company: 'metals', href: '/edge-inventory', say: ['edge inventory', 'metals inventory'] },
     { key: 'quote-requests', label: 'Quote Requests', company: 'metals', href: '/quote-requests', say: ['quote requests', 'quotes', 'quote request'] },
+    { key: 'fixit', label: 'Fix it (accounts)', company: 'metals', href: '/fixit', say: ['fix it', 'fix accounts', 'accounting problems', 'books problems'] },
     { key: 'address-book', label: 'Address Book', company: 'metals', href: '/address-book', say: ['address book', 'addresses'] },
     { key: 'email-contacts', label: 'Email Contacts', company: 'metals', tab: 'email-contacts', say: ['email contacts', 'mail contacts'] },
     { key: 'design-bol', label: 'BOL design', company: 'metals', href: '/design/bol', say: ['bol design', 'design bol', 'bol layout'] },

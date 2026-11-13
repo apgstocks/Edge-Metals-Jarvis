@@ -33,28 +33,18 @@ const stampOf = (r) => String(r.updated_at || r.created_at || '') || new Date(Nu
   const bd = require(path.join(ROOT, 'helpers/ledgerBulkDelete'));
   const cfg = require(path.join(ROOT, 'config'));
 
-  // ── invoices ──
-  const groups = new Map();
-  for (const r of sales.list()) {
-    const c = ckey(r.container_no); if (!c) continue;
-    const k = c + '|' + U(r.booking_no);
-    (groups.get(k) || groups.set(k, []).get(k)).push(r);
-  }
-  const drop = [], skipped = [];
-  for (const [k, rows] of groups) {
-    const byInv = new Map();
-    for (const r of rows) (byInv.get(U(r.invoice_no)) || byInv.set(U(r.invoice_no), []).get(U(r.invoice_no))).push(r);
-    if (byInv.size < 2) continue;
-    if (byInv.has('')) { skipped.push(`${rows[0].container_no}: some rows have no invoice number — left alone`); continue; }
-    const newest = (rs) => rs.map(stampOf).sort().pop();
-    const ranked = [...byInv.entries()].sort((a, b) => newest(b[1]).localeCompare(newest(a[1])));
-    console.log(`\n${rows[0].container_no} (${rows[0].booking_no || 'no booking'}): ${byInv.size} invoices — keeping ${ranked[0][0]}`);
-    for (const [inv, rs] of ranked.slice(1)) {
-      console.log(`   drop ${inv}: ${rs.length} row(s) ${rs.map((r) => r.item || '—').join(', ')}`);
-      drop.push(...rs);
+  // ── invoices ── (detection lives in helpers/onePerContainer.js, shared with Fix-it)
+  const opc = require(path.join(ROOT, 'helpers/onePerContainer'));
+  const inv = opc.invoices(sales.list());
+  const drop = [];
+  for (const g of inv.found) {
+    console.log(`\n${g.container} (${g.booking || 'no booking'}): ${g.drop.length + 1} invoices — keeping ${g.keep.invoice_no}`);
+    for (const d of g.drop) {
+      console.log(`   drop ${d.invoice_no}: ${d.rows.length} row(s) ${d.rows.map((r) => r.item || '—').join(', ')}`);
+      drop.push(...d.rows);
     }
   }
-  skipped.forEach((s) => console.log('\nSKIPPED ' + s));
+  inv.skipped.forEach((s2) => console.log(`\nSKIPPED ${s2.container}: ${s2.why} — left alone`));
   let planned = null;
   if (drop.length) {
     planned = bd.plan('sales', drop.map((r) => r.id), { reason: 'one invoice per container — keep latest (2026-11-13)' });
@@ -64,14 +54,10 @@ const stampOf = (r) => String(r.updated_at || r.created_at || '') || new Date(Nu
 
   // ── packing lists ──
   const pl = require(path.join(ROOT, 'helpers/packingList'));
-  const pg = new Map();
-  for (const r of pl.list()) { const c = ckey(r.container_no); if (!c) continue; (pg.get(c) || pg.set(c, []).get(c)).push(r); }
   const plDrop = [];
-  for (const rows of pg.values()) {
-    if (rows.length < 2) continue;
-    rows.sort((a, b) => String(b.updated_at || '').localeCompare(String(a.updated_at || '')));
-    console.log(`\nPacking list ${rows[0].container_no}: ${rows.length} lists — keeping the one updated ${rows[0].updated_at || '?'}`);
-    plDrop.push(...rows.slice(1));
+  for (const g of opc.packingLists(pl.list()).found) {
+    console.log(`\nPacking list ${g.container}: ${g.drop.length + 1} lists — keeping the one updated ${g.keep.updated_at || '?'}`);
+    plDrop.push(...g.drop);
   }
   console.log(plDrop.length ? `Packing lists: ${plDrop.length} to delete.` : 'Packing lists: every container has a single list.');
 

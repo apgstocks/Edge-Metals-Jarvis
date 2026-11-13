@@ -58,6 +58,11 @@ module.exports = function (app, ctx) {
         res.sendFile(path.join(cfg.ROOT, 'dashboard', 'books.html'));
     });
 
+    // Accounts "Fix it" — the problems from the morning email as cards.
+    app.get('/fixit', (req, res) => {
+        res.sendFile(path.join(cfg.ROOT, 'dashboard', 'fixit.html'));
+    });
+
     // AI usage and activity (2026-10-12) — read-only; the data routes behind it
     // (/api/ai-usage, /api/activity) are admin-only.
     app.get('/ai-usage', (req, res) => {

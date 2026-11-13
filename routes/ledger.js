@@ -544,6 +544,27 @@ module.exports = function (app, ctx) {
         } catch (e) { res.status(400).json({ error: e.message }); }
     });
 
+    // ── Accounts "Fix it" (2026-11-14) ─────────────────────────────────────
+    // Reads are plain; every write re-derives its card server-side from the
+    // current books (helpers/fixIt.js), so the browser cannot name a row it
+    // was not shown. requireSuper like the bulk-delete routes it reuses.
+    app.get('/api/fixit', requireSuper, (req, res) => {
+        try { res.json(require('./helpers/fixIt').collect()); }
+        catch (e) { res.status(500).json({ error: e.message }); }
+    });
+    app.post('/api/fixit/apply', requireSuper, async (req, res) => {
+        try {
+            const { id, value, note } = req.body || {};
+            res.json(await require('./helpers/fixIt').apply(String(id || ''), { value, note }));
+        } catch (e) { res.status(400).json({ error: e.message }); }
+    });
+    app.post('/api/fixit/dismiss', requireSuper, (req, res) => {
+        try {
+            const { id, note } = req.body || {};
+            res.json(require('./helpers/fixIt').dismiss(String(id || ''), note));
+        } catch (e) { res.status(400).json({ error: e.message }); }
+    });
+
     // ── Paying for containers ─────────────────────────────────────────────
     // Apsara, 2026-09-10: "We need pay option.in payment,there is a possible
     // of giving advance deduction and multiple container paynebt at once."

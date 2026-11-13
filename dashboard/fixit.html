@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Fix it — Jarvis</title>
+<style>
+/* Apsara, 2026-11-14: "build properly ... it should mimic human brain". Each
+   card is one thing a careful accountant would have flagged: what is wrong,
+   why Jarvis thinks so, one proposed fix and how sure it is. Nothing is done
+   until she presses the button. Same tokens as books.html (standalone page). */
+:root{--bg:#0C0E10;--card:#14181B;--sunk:#0F1214;--line:#2B3239;--text:#CBD1D6;--strong:#fff;--muted:#A7B0B7;
+  --leaf:#57BE49;--amber:#D99A2B;--red:#C5402F;--blue:#3A6EA5}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--text);font:14px/1.5 'IBM Plex Sans',system-ui,sans-serif}
+main{max-width:860px;margin:0 auto;padding:28px 18px 80px}
+h1{margin:0 0 4px;color:var(--strong);font-size:26px;font-weight:900}
+a{color:var(--leaf)} .sub{color:var(--muted);margin-bottom:18px}
+.sum{display:flex;gap:10px;flex-wrap:wrap;margin:14px 0 22px}
+.pill{border:1px solid var(--line);border-radius:999px;padding:5px 12px;font-size:12.5px;color:var(--muted)}
+.pill b{color:var(--strong)}
+h2{font-size:12px;letter-spacing:.14em;text-transform:uppercase;color:var(--muted);margin:26px 0 10px}
+.card{background:var(--card);border:1px solid var(--line);border-left:4px solid var(--line);border-radius:6px;padding:14px 16px;margin-bottom:12px}
+.card.high{border-left-color:var(--leaf)} .card.check{border-left-color:var(--amber)} .card.ask{border-left-color:var(--red)}
+.top{display:flex;justify-content:space-between;gap:12px;align-items:baseline}
+.title{color:var(--strong);font-weight:600} .money{font-family:'IBM Plex Mono',monospace;color:var(--amber);white-space:nowrap}
+.diag{margin:6px 0 4px}
+ul.ev{margin:6px 0;padding-left:18px;color:var(--muted);font-size:12.5px}
+.why{font-size:12.5px;color:var(--muted);border-top:1px dashed var(--line);margin-top:8px;padding-top:8px}
+.tag{display:inline-block;font-size:11px;letter-spacing:.06em;text-transform:uppercase;border-radius:3px;padding:1px 7px;margin-right:6px}
+.tag.high{background:#1d3a1a;color:var(--leaf)} .tag.check{background:#3a2d12;color:var(--amber)} .tag.ask{background:#3a1a15;color:#ff8a78}
+.habit{font-size:12px;color:var(--blue);margin-top:4px}
+.row{display:flex;gap:8px;margin-top:10px;flex-wrap:wrap;align-items:center}
+button{font:inherit;border-radius:4px;border:1px solid var(--line);background:var(--sunk);color:var(--text);padding:7px 13px;cursor:pointer}
+button.go{background:var(--leaf);color:#0C0E10;border-color:var(--leaf);font-weight:600}
+button:disabled{opacity:.5;cursor:default}
+input{background:var(--sunk);color:var(--strong);border:1px solid var(--line);border-radius:4px;padding:7px 10px;min-width:180px}
+.msg{margin-top:8px;font-size:13px} .msg.ok{color:var(--leaf)} .msg.bad{color:#ff8a78}
+.empty{border:1px dashed var(--line);border-radius:6px;padding:26px;text-align:center;color:var(--muted)}
+.warn{border:1px solid var(--amber);border-radius:6px;padding:10px 14px;margin-bottom:14px;color:var(--amber)}
+</style>
+</head>
+<body>
+<main>
+  <h1>Fix it</h1>
+  <div class="sub">What needs you in the books, in the order a careful accountant would take it. Nothing changes until you press a button. <a href="/books">Books</a> · <a href="/quickbooks">QuickBooks</a></div>
+  <div id="broken"></div>
+  <div class="sum" id="sum"></div>
+  <div id="cards"><div class="empty">Looking through the books…</div></div>
+</main>
+<script>
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const money = (n) => '$' + Math.abs(Number(n) || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const LABEL = { high: 'Ready to fix', check: 'Have a look first', ask: 'Needs you' };
+const HEAD = { high: 'Ready to fix — nothing contradicts these', check: 'Have a look first — I think so, but you should confirm', ask: 'Needs an answer or a decision from you' };
+let STATE = { cards: [] };
+
+// Same shape as the other pages' api(path, { method, body }) — scripts/check-route-reach.js
+// reads these calls to prove each protected route has a caller.
+async function api(path, opts) {
+  const r = await fetch(path, opts ? { headers: { 'Content-Type': 'application/json' }, ...opts } : {});
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(j.error || ('HTTP ' + r.status));
+  return j;
+}
+
+function cardHtml(c) {
+  const p = c.proposal || {};
+  const act = p.do && p.do !== 'none' && p.do !== 'open';
+  return '<div class="card ' + esc(p.confidence) + '" data-id="' + esc(c.id) + '">' +
+    '<div class="top"><span class="title">' + esc(c.title) + '</span>' + (c.money ? '<span class="money">' + money(c.money) + '</span>' : '') + '</div>' +
+    '<div class="diag">' + esc(c.diagnosis) + '</div>' +
+    (c.evidence && c.evidence.length ? '<ul class="ev">' + c.evidence.map((e) => '<li>' + esc(e) + '</li>').join('') + '</ul>' : '') +
+    '<div class="why"><span class="tag ' + esc(p.confidence) + '">' + esc(LABEL[p.confidence] || '') + '</span>' + esc(p.why || '') + '</div>' +
+    (c.habit ? '<div class="habit">' + esc(c.habit) + ' I still wait for you — tell me if I should do these by myself.</div>' : '') +
+    '<div class="row">' +
+      (c.ask ? '<input data-ask placeholder="' + esc(c.ask.label) + '" inputmode="decimal" aria-label="' + esc(c.ask.label) + '">' : '') +
+      (act ? '<button class="go" data-do>' + esc(p.label) + '</button>' : '<span style="color:var(--muted);font-size:12.5px">' + esc(p.label || '') + '</span>') +
+      '<button data-dismiss>Not now</button>' +
+    '</div>' +
+    (c.ask && c.ask.hint ? '<div class="why" style="border:0;margin:4px 0 0;padding:0">' + esc(c.ask.hint) + '</div>' : '') +
+    '<div class="msg" data-msg></div></div>';
+}
+
+function paint() {
+  const cs = STATE.cards;
+  const by = (k) => cs.filter((c) => c.proposal.confidence === k);
+  $('sum').innerHTML = cs.length
+    ? '<span class="pill"><b>' + cs.length + '</b> thing' + (cs.length === 1 ? '' : 's') + '</span>' +
+      ['high', 'check', 'ask'].map((k) => by(k).length ? '<span class="pill"><b>' + by(k).length + '</b> ' + LABEL[k].toLowerCase() + '</span>' : '').join('') +
+      (STATE.hidden ? '<span class="pill"><b>' + STATE.hidden + '</b> set aside by you</span>' : '')
+    : '';
+  $('broken').innerHTML = (STATE.broken || []).length
+    ? '<div class="warn">Part of the check did not run — ' + STATE.broken.map((b) => esc(b.detector + ': ' + b.error)).join(' · ') + '. What is shown below is still real, but it may not be everything.</div>' : '';
+  if (!cs.length) { $('cards').innerHTML = '<div class="empty">Nothing needs you right now. Everything I check is in order.</div>'; return; }
+  $('cards').innerHTML = ['high', 'check', 'ask'].map((k) => by(k).length ? '<h2>' + esc(HEAD[k]) + '</h2>' + by(k).map(cardHtml).join('') : '').join('');
+  $('cards').querySelectorAll('.card').forEach((el) => wire(el));
+}
+
+function wire(el) {
+  const id = el.dataset.id, msg = el.querySelector('[data-msg]');
+  const say = (t, cls) => { msg.className = 'msg ' + cls; msg.innerHTML = t; };
+  const go = el.querySelector('[data-do]');
+  if (go) go.onclick = async () => {
+    const c = STATE.cards.find((x) => x.id === id), p = c.proposal;
+    const ask = el.querySelector('[data-ask]');
+    if (c.ask && !String(ask.value).trim()) { say('Type the amount first.', 'bad'); return; }
+    if (p.do === 'delete-rows' || p.do === 'delete-packing') {
+      if (!confirm(p.label + '?\n\n' + c.evidence.join('\n') + '\n\nIt is archived first and can be restored.')) return;
+    }
+    go.disabled = true; say('Working…', '');
+    try {
+      const r = await api('/api/fixit/apply', { method: 'POST', body: JSON.stringify({ id, value: ask ? ask.value : undefined }) });
+      const undo = r.batch ? ' <a href="#" data-undo="' + esc(r.batch) + '">Undo</a>' : '';
+      say('Done' + (r.removed != null ? ' — removed ' + r.removed : '') + (r.set != null ? ' — saved ' + money(r.set) : '') + '.' + undo, 'ok');
+      go.style.display = 'none';
+      const u = msg.querySelector('[data-undo]');
+      if (u) u.onclick = async (e) => { e.preventDefault(); try { await api('/api/ledger/bulk-delete/restore', { method: 'POST', body: JSON.stringify({ batch: u.dataset.undo }) }); say('Restored.', 'ok'); } catch (er) { say(esc(er.message), 'bad'); } };
+    } catch (e) { go.disabled = false; say(esc(e.message), 'bad'); }
+  };
+  el.querySelector('[data-dismiss]').onclick = async () => {
+    const note = prompt('Set this aside. Why? (optional — I will keep quiet about it until it changes)');
+    if (note === null) return;
+    try { await api('/api/fixit/dismiss', { method: 'POST', body: JSON.stringify({ id, note }) }); STATE.cards = STATE.cards.filter((x) => x.id !== id); STATE.hidden = (STATE.hidden || 0) + 1; paint(); }
+    catch (e) { say(esc(e.message), 'bad'); }
+  };
+}
+
+(async () => {
+  try { STATE = await api('/api/fixit'); paint(); }
+  catch (e) { $('cards').innerHTML = '<div class="warn">Could not load: ' + esc(e.message) + '</div>'; }
+})();
+</script>
+</body>
+</html>
