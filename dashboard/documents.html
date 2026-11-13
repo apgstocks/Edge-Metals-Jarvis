@@ -6915,13 +6915,13 @@ const bolNum = (v) => {
   return isFinite(n) ? n : null;
 };
 
-// '' when there is no gross to work from. Rounded to 2 places, no thousands
-// separators — the PDF parses what it is given, and bolNum strips commas anyway.
+// '' when there is no gross to work from. Rounded to 2 places, with commas
+// like the packing list; bolNum strips them and the PDF parses what it is given.
 function bolNetOf(gross, tare) {
   const g = bolNum(gross);
   if (g === null) return '';
   const t = bolNum(tare) || 0;
-  return String(Math.round((g - t) * 100) / 100);
+  return (Math.round((g - t) * 100) / 100).toLocaleString('en-US', { maximumFractionDigits: 2 });  // 19,250 — as the packing list shows it
 }
 
 function bolPaintItems() {
@@ -6948,6 +6948,13 @@ function bolPaintItems() {
       // tare is TYPED, never on repaint, so an old saved BOL is not rewritten
       // just by opening it.
       if (el.dataset.bf === 'gross_weight' || el.dataset.bf === 'tare_weight') {
+        // Same as the packing list ("by default make tare as 0"): once a gross
+        // is typed, an empty tare becomes 0 and is shown as such.
+        if (el.dataset.bf === 'gross_weight' && bolNum(row.gross_weight) !== null && String(row.tare_weight).trim() === '') {
+          row.tare_weight = '0';
+          const tb = $('bolItems').querySelector('input[data-bi="' + el.dataset.bi + '"][data-bf="tare_weight"]');
+          if (tb) tb.value = '0';
+        }
         row.net_weight = bolNetOf(row.gross_weight, row.tare_weight);
         const nb = $('bolItems').querySelector('input[data-bi="' + el.dataset.bi + '"][data-bf="net_weight"]');
         if (nb) nb.value = row.net_weight;
