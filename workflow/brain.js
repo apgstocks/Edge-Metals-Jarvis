@@ -642,6 +642,15 @@ function policyDecide(ctx) {
         }
     }
 
+    // ── "case <customer>": the read-only case file over WhatsApp. MANAGER only (it shows what a customer owes), exact shape, and ONLY a
+    // customer we know by name, so the word "case" in any other sentence is untouched. See helpers/customerFocus.js.
+    if (ctx.role === 'manager') {
+        const cc = require('../helpers/customerFocus').parseCaseCommand(ctx.text);
+        if (cc && require('../helpers/customerFocus').match(cc.name)) {
+            return { intent: 'case_file', resolvedBy: 'policy', data: { name: cc.name } };
+        }
+    }
+
     // ── A(-1). Fresh well-formed command jumps ANY open pending — see
     // detectFreshCommand's own comment above for the full reasoning. Checked
     // before every pending-type-specific block below (A0 onward), so it
@@ -3012,6 +3021,7 @@ async function route(decision, ctx, sendMessage) {
         case 'contact_quote_leg_reply_received': return actions.handleContactQuoteLegReply(chatId, ctx.text.trim());
         // A code change is only ever started by the exact-grammar policy rule, never by an AI-chosen action.
         case 'self_build':             return decision.resolvedBy === 'policy' && ctx.role === 'manager' ? actions.selfBuildCommand(chatId, d) : { action_taken: 'ignored' };
+        case 'case_file':              return decision.resolvedBy === 'policy' && ctx.role === 'manager' ? actions.caseFileCommand(chatId, d) : { action_taken: 'ignored' };
         case 'price_answer':           return decision.resolvedBy === 'policy' && ctx.role === 'manager' ? actions.priceAnswerCommand(chatId, d) : { action_taken: 'ignored' };
         case 'deposit_auto':           return decision.resolvedBy === 'policy' && ctx.role === 'manager' ? actions.depositAutoCommand(chatId, d) : { action_taken: 'ignored' };
         case 'remember_fact':          return actions.rememberFact(chatId, d.fact);
@@ -3408,6 +3418,15 @@ async function process(rawEvent, sendMessage) {
     // the "check supplier" ready flow needs a pending question on the SUPPLIER's
     // own chat (awaiting yes/no, then possibly a date).
     const pending = actions.getPending(inbound.chatId);
+    // ── Customer in focus: "what do they owe" / "their balance" / "show their case" right after a customer came up. Fills in the NAME and
+    // nothing else, only for those exact shapes, only with no question open (a verbatim-capture pending must receive her real words), and
+    // never over a sentence that already names someone. Read-only questions only. See helpers/customerFocus.js.
+    if (inbound.role === 'manager' && !pending) {
+        try {
+            const f = require('../helpers/customerFocus').resolve(inbound.text, require('../helpers/context').getSession(inbound.chatId));
+            if (f) { inbound.originalText = inbound.text; inbound.text = f.text; inbound.textLower = f.text.toLowerCase(); console.log(`[BRAIN] customer in focus: "${inbound.originalText}" -> "${f.text}"`); }
+        } catch (e) { /* a failed lookup leaves her words exactly as she typed them */ }
+    }
     const ctx     = await buildContext(inbound, pending);
 
     let decision = policyDecide(ctx);

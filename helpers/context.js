@@ -193,7 +193,7 @@ let semanticFactCandidates = [];
 try {
     const embeddings = require('./embeddings');
     const matches = await embeddings.searchSimilar(ctx.text, { topK: 10, minSimilarity: 0.55 });
-    const summaryMatches = matches.filter(m => m.type === 'session_summary').slice(0, 3);
+    const summaryMatches = require('./summaryRank').rank(matches.filter(m => m.type === 'session_summary'), { limit: 3 });
     if (summaryMatches.length) {
         semanticMemory = summaryMatches
             .map(m => `- (${new Date(m.created_at).toLocaleDateString()}, ${Math.round(m.similarity * 100)}% match) ${m.text}`)

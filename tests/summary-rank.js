@@ -1,0 +1,25 @@
+'use strict';
+const assert = require('assert');
+const sr = require('../helpers/summaryRank');
+let pass = 0; const ok = (c, n) => { assert(c, n); pass++; };
+const now = Date.parse('2026-11-13T00:00:00Z');
+const d = n => new Date(now - n * 86400000).toISOString();
+const old = { text: 'old', similarity: 0.80, created_at: d(120) };
+const fresh = { text: 'fresh', similarity: 0.78, created_at: d(3) };
+const weak = { text: 'weak', similarity: 0.56, created_at: d(0) };
+delete process.env.JARVIS_SUMMARY_RECENCY;
+ok(sr.rank([old, fresh, weak], { now })[0].text === 'old', 'flag off keeps similarity order');
+ok(sr.rank([old, fresh, weak], { now, limit: 2 }).length === 2, 'limit honoured off');
+process.env.JARVIS_SUMMARY_RECENCY = '1';
+ok(sr.rank([old, fresh, weak], { now })[0].text === 'fresh', 'on: near-tie goes to recent');
+ok(sr.rank([old, fresh, weak], { now })[2].text === 'weak', 'on: similarity still dominates a weak match');
+const strong = { text: 'strong', similarity: 0.95, created_at: d(200) };
+ok(sr.rank([fresh, strong], { now })[0].text === 'strong', 'on: much stronger old match still wins');
+ok(sr.rank([old, fresh, weak], { now }).length === 3, 'nothing dropped');
+const inp = [old, fresh]; sr.rank(inp, { now }); ok(inp[0] === old, 'input not mutated');
+ok(sr.rank([{ text: 'x', similarity: 0.7 }], { now }).length === 1, 'missing date does not throw');
+ok(sr.rank(null, { now }).length === 0, 'null safe');
+ok(sr.rank([fresh, { ...fresh, text: 'twin' }], { now })[0].text === 'fresh', 'ties keep original order');
+// wiring: context.js must use the ranker
+ok(/summaryRank'\)\.rank\(/.test(require('fs').readFileSync(__dirname + '/../helpers/context.js', 'utf8')), 'context.js wired');
+console.log(pass + ' passed, 0 failed');

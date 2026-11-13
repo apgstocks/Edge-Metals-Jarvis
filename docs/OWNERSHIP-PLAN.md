@@ -100,3 +100,23 @@ rate, deposit questions answered yes/no/waiting, auto-placements and how many sh
 calls, failures and estimated cost (from `helpers/aiUsage.js`; that file already logs every call). Quality is measured against HER decisions, not a second
 model's opinion. Read-only over every store; never throws. See it: `node scripts/daily-metrics.js` (`--record`, `--trend`) or admin `GET /api/metrics?days=30`.
 An LLM-as-judge belongs only where she has given no label (reply tone, summaries) and must be calibrated against her labels first. Not built.
+
+### 8d. Customer focus (added 2026-11-13)
+
+Apsara: "contextual memory should be there, mimicking the human brain." Jarvis already kept a BOOKING in focus per chat; nothing did that for a customer.
+`helpers/customerFocus.js` adds a separate slot, `session.focusCustomer` (persisted with the rest of the session). How it behaves, on purpose:
+- **Strong cues only.** A customer she names that matches exactly ONE known customer (Edge Metals sales ledger + follow-up log; Inc/LLC ignored). Ambiguous
+  or unknown names set nothing. Set by `case <customer>` and by naming a customer for receivables.
+- **It fades** after 60 minutes (`JARVIS_CUSTOMER_FOCUS_MIN`). A newer customer replaces it. A sentence that names someone is never rewritten.
+- **It fills in words, never acts.** Only the exact shapes "what do they owe", "their balance", "do they still owe us anything" (-> "what does X owe")
+  and "show their case", "how are we with them", "what's going on with them" (-> `case X`). Not chase / hold / pay / send: those have no focus-resolved
+  form and still need their own named command and confirmation.
+- **Manager only**, and not while a question is open (a verbatim answer must stay verbatim).
+- **New read-only command:** `case <customer>` (manager only, known customers only) replies with the case file: status, why, what is owed, latest events.
+- **Edge Metals only.** An Edge Yard-only party is not a known customer here, so it can never become a focus. Booking focus is not touched.
+- Not done (needs her yes): chase/hold by "them"; focus from the customer named in an inbound email or a daily question; a Metrics-style screen for what Jarvis
+  currently has in focus.
+
+## 8e. Recency in cross-chat memory (summaries)
+
+Facts already rank by relevance, importance, recency and strength (helpers/factRetrieval.js). Session-summary matches were plain similarity. helpers/summaryRank.js re-orders those matches only: similarity plus up to 0.15 for recency (30-day decay). Nothing is added or dropped. OFF unless `JARVIS_SUMMARY_RECENCY=1` because it changes the AI prompt on every message. The 0.15 is my judgement, not measured. No importance for summaries: no measurable, non-fixed signal exists. Test: tests/summary-rank.js.
