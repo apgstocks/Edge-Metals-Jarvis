@@ -131,3 +131,8 @@ Apsara: "mimic the human brain... it should get better as it learns... layer by 
 3. **Open loops.** Promises and pending asks held with a due date, raised when due or when the entity comes up.
 4. **Recall receipts.** Each recalled memory is logged with what she did with it (used, ignored, corrected). Importance becomes measured, so memory improves with use. Shadow first.
 5. **Consolidation.** Quiet-hours pass that merges repeats and lets unused detail fade, never deleting.
+
+## 8g. Outsiders are shown only their own jobs (2026-11-14)
+
+Truckers and suppliers used to receive the same AI prompt as the manager: every active booking, every party's name, the ongoing business notes, and a "reply" went to their chat unchecked. Now (helpers/context.js, always on): they see only their own jobs (helpers/partyAnswer.viewFor), no rosters, no port summary, no business notes. Standing facts still reach them. Any AI reply to a trucker or supplier is checked (partyAnswer.guardReply): if it names someone else on file or mentions money it is held, nothing is sent, and the manager and team are told (actions.holdPartyReply). Tests: tests/party-security.js. Not covered yet: pinned facts could still carry a price or a name if she typed one; the team-chat and yard-staff roles are unchanged.
+Also built, OFF until JARVIS_PARTY_ANSWER=1: unplaced trucker/supplier questions are answered from their own jobs or escalated to manager + team with silence in the chat (tests/party-answer.js).

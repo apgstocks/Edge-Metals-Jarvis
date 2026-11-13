@@ -84,4 +84,11 @@ async function answer({ kind, name, text, bookings, rosters, call }) {
     if (/\$\s?\d|\busd\b|\bper\s+(?:lb|mt|ton)\b/i.test(ans)) return { ok: false, reason: 'mentions_money' };
     return { ok: true, answer: ans.slice(0, 500), view };
 }
-module.exports = { answer, viewFor, forbiddenNames, mentionsOther, buildPrompt };
+// The same second wall, for ANY reply headed to an outsider (not only ones
+// written here): returns null if it is safe to send, else the reason to hold it.
+function guardReply({ kind, name, text, bookings, rosters }) {
+    if (mentionsOther(text, forbiddenNames(kind, name, bookings, rosters))) return 'names_someone_else';
+    if (/\$\s?\d|\busd\b|\bper\s+(?:lb|mt|ton)\b/i.test(String(text || ''))) return 'mentions_money';
+    return null;
+}
+module.exports = { guardReply, answer, viewFor, forbiddenNames, mentionsOther, buildPrompt };

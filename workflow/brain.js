@@ -3219,7 +3219,20 @@ async function route(decision, ctx, sendMessage) {
         case 'forward_booking_menu':
         case 'ask_booking_number':     return askBkg(chatId, 'Type the booking number.', 'show_booking_status');
         case 'ask_which_booking':      return ask(chatId, `This chat has multiple bookings: ${(d.slots || []).join(', ')}. Which one?`);
-        case 'reply':                  return d.reply ? send(chatId, d.reply) : { action_taken: 'noop' };
+        case 'reply': {
+            if (!d.reply) return { action_taken: 'noop' };
+            // A reply to a trucker or supplier is checked before it leaves: if it
+            // names someone else on file or mentions money it is held back and
+            // the team is told instead (helpers/partyAnswer.guardReply).
+            if (ctx.isTrucker || ctx.isSupplier) {
+                const pa = require('../helpers/partyAnswer');
+                const kind = ctx.isTrucker ? 'trucker' : 'supplier';
+                const who = (ctx.isTrucker ? ctx.matchedTrucker : ctx.matchedSupplier) || {};
+                const held = pa.guardReply({ kind, name: who.name, text: d.reply, bookings: ctx.allBookings, rosters: { truckers: ctx.truckers, suppliers: ctx.suppliers } });
+                if (held) { console.warn('[BRAIN] reply to ' + kind + ' held back: ' + held); return actions.holdPartyReply(ctx, held); }
+            }
+            return send(chatId, d.reply);
+        }
         case 'NEED_APPROVAL':          return ask(chatId, `This needs your explicit confirmation. ${d.reply || 'Please restate the exact action.'}`);
         case 'NEED_DATA':
         default:

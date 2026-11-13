@@ -2204,6 +2204,18 @@ async function answerParty(ctx) {
     return { action_taken: 'party_escalated_silent', reason: r.reason };
 }
 
+// A reply drafted for a trucker/supplier was held back by the safety check:
+// nothing goes to their chat, the manager and team are told what it would have said.
+async function holdPartyReply(ctx, reason) {
+    const kind = ctx.isTrucker ? 'Trucker' : 'Supplier';
+    const who = (ctx.isTrucker ? ctx.matchedTrucker : ctx.matchedSupplier) || {};
+    const why = reason === 'mentions_money' ? 'it mentioned money' : 'it named someone else';
+    const msg = `${kind} ${who.name || ctx.senderName || 'unknown'} asked: "${ctx.text}"\nI did not reply in their chat (${why}). Please answer them.`;
+    await _sendToManager(msg);
+    await _sendToTeam(msg);
+    return { action_taken: 'party_reply_held', reason };
+}
+
 // ── Feedback loop — "remember X" or an AI-detected correction ───────────────
 // Persists to facts.json, fed into every AI prompt (see helpers/context.js
 // formatForAI). This is how corrections and standing instructions survive
@@ -9548,7 +9560,7 @@ emptyDropConfirmed, loadReadyReceived, pickedUpConfirmed, scaleTicketReceived, i
 askWhichBooking, askWhichContainer, fireResolvedStateIntent,
 recallBooking, executeRecall, archiveNow,
 showErd, showCutoff, getBookingField,
-scheduleFollowup, escalateUnclear, answerParty, selfBuildCommand, _setSelfBuildDeps, depositAutoCommand, priceAnswerCommand, caseFileCommand, rememberFact, addBusinessContext, logKnowledgeGap, resolveFactBatch,
+scheduleFollowup, escalateUnclear, answerParty, holdPartyReply, selfBuildCommand, _setSelfBuildDeps, depositAutoCommand, priceAnswerCommand, caseFileCommand, rememberFact, addBusinessContext, logKnowledgeGap, resolveFactBatch,
 resolveFactConflict, findContradictedFact,
     draftEmailForConfirm, sendDraftedEmail, scheduleDraftedEmail, reschedulePendingEmail, searchMail, draftReplyForConfirm, backfillCutoffs,
     sendShipmentDocsForConfirm,

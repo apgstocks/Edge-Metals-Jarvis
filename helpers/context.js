@@ -317,7 +317,7 @@ const bookingsTable = bookingRows.join('\n') || '(no active bookings)';
 const truckerRoster  = (ctx.truckers  || []).map(t => `${t.name}${t.locality ? ' (' + t.locality + ')' : ''}`).join(', ') || '(none registered)';
 const supplierRoster = (ctx.suppliers || []).map(s => `${s.name}${s.locality ? ' (' + s.locality + ')' : ''}`).join(', ') || '(none registered)';
 
-return {
+const view = {
     now_la        : getLATime(),
     senderName    : ctx.senderName,
     role          : ctx.role,
@@ -344,6 +344,28 @@ return {
     message       : ctx.text,
     slots         : ctx.activeSlots.map(s => s.bkgNo).join(', ') || '(none)',
 };
+// ── OUTSIDERS GET ONLY THEIR OWN JOBS (2026-11-14, "improve the security") ──
+// The prompt above carries every active booking, every party's name and the
+// ongoing business situations. For a trucker or supplier the model can answer
+// straight from that, and a "reply" goes to their chat unchecked. A model cannot
+// repeat what it was never shown, so they are shown their own jobs and nothing
+// else. Managers, team and yard staff are untouched.
+if (!['manager', 'team', 'yard'].includes(ctx.role)) {
+    const pa = require('./partyAnswer');
+    const kind = ctx.role === 'supplier' ? 'supplier' : ctx.role === 'trucker' ? 'trucker' : null;
+    const who = kind === 'supplier' ? (ctx.matchedSupplier || {}).name : kind === 'trucker' ? (ctx.matchedTrucker || {}).name : null;
+    const mine = kind && who ? pa.viewFor(kind, who, ctx.allBookings) : [];
+    view.bookingsTable = mine.map(j => `${j.booking} | ${j.port_of_loading || '?'}→${j.port_of_discharge || '?'} | ERD ${j.erd_date || '—'} | cutoff ${j.cutoff_date || '—'} | ${j.vessel_voyage || '—'} | your containers: ${j.your_containers.map(c => `${c.container_number || '?'} (${c.stage})`).join(', ')}`).join('\n') || '(none of your jobs are active)';
+    const own = new Set(mine.map(j => j.booking));
+    view.bookingContext = ctx.booking && own.has(ctx.booking.booking_number)
+        ? mine.filter(j => j.booking === ctx.booking.booking_number).map(j => JSON.stringify(j)).join('\n') : '(not shown)';
+    view.portStats = '(not shown)';
+    view.urgentBookings = '(not shown)';
+    view.businessContext = '(not shown)';
+    view.truckerRoster = '(not shown)';
+    view.supplierRoster = '(not shown)';
+}
+return view;
 }
 
 module.exports = {
