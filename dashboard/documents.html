@@ -6915,6 +6915,15 @@ const bolNum = (v) => {
   return isFinite(n) ? n : null;
 };
 
+// '' when there is no gross to work from. Rounded to 2 places, no thousands
+// separators — the PDF parses what it is given, and bolNum strips commas anyway.
+function bolNetOf(gross, tare) {
+  const g = bolNum(gross);
+  if (g === null) return '';
+  const t = bolNum(tare) || 0;
+  return String(Math.round((g - t) * 100) / 100);
+}
+
 function bolPaintItems() {
   // Rebuilt wholesale on every change, and the inputs carry their value in
   // the VALUE attribute rather than being left to the DOM — a half-rebuilt
@@ -6926,12 +6935,23 @@ function bolPaintItems() {
       <input data-bi="${i}" data-bf="pieces"       type="text" value="${esc(r.pieces)}" placeholder="Pcs">
       <input data-bi="${i}" data-bf="gross_weight" type="text" value="${esc(r.gross_weight)}" placeholder="Gross">
       <input data-bi="${i}" data-bf="tare_weight"  type="text" value="${esc(r.tare_weight)}" placeholder="Tare">
-      <input data-bi="${i}" data-bf="net_weight"   type="text" value="${esc(r.net_weight)}" placeholder="Net">
+      <input data-bi="${i}" data-bf="net_weight"   type="text" value="${esc(r.net_weight)}" placeholder="Net" readonly tabindex="-1" title="Worked out for you: gross minus tare" style="background:var(--surface-sunken);">
       <button type="button" class="btn btn-secondary bol-del" data-bi="${i}" style="padding:4px 8px; font-size:11px;">&times;</button>
     </div>`).join('');
   $('bolItems').querySelectorAll('input[data-bi]').forEach((el) => {
     el.addEventListener('input', () => {
-      bolRows[Number(el.dataset.bi)][el.dataset.bf] = el.value;
+      const row = bolRows[Number(el.dataset.bi)];
+      row[el.dataset.bf] = el.value;
+      // Apsara, 2026-11-13: "For BOL, i want net weight to be auto calculated."
+      // BOL form ONLY — the packing list and the invoice have their own.
+      // Net = gross - tare; no tare typed counts as 0. Written when gross or
+      // tare is TYPED, never on repaint, so an old saved BOL is not rewritten
+      // just by opening it.
+      if (el.dataset.bf === 'gross_weight' || el.dataset.bf === 'tare_weight') {
+        row.net_weight = bolNetOf(row.gross_weight, row.tare_weight);
+        const nb = $('bolItems').querySelector('input[data-bi="' + el.dataset.bi + '"][data-bf="net_weight"]');
+        if (nb) nb.value = row.net_weight;
+      }
       bolRecalc();   // NOT bolPaintItems() — repainting on every keystroke destroys the caret
     });
   });
@@ -6962,6 +6982,9 @@ function bolRecalc() {
     `tare ${bolFmt(bolTotal('tare_weight'))} · <strong style="color:var(--text-strong);">net ${bolFmt(bolTotal('net_weight'))} ${esc(unit)}</strong>`;
 
   // ── SHOWN, NOT ENFORCED ─────────────────────────────────────────────────
+  // (Net is now filled in from gross and tare as she types — 2026-11-13 — so
+  // the mismatch warning below only fires on a row that was saved before that,
+  // or where tare was later changed through another route.)
   // She types all three weights off a scale ticket. If they do not reconcile
   // this says so and then gets out of the way: the PDF prints exactly what
   // she typed. Auto-correcting a weight on a legal shipping document — a
