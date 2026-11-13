@@ -668,6 +668,11 @@ async function sendEmail({ to, cc, bcc, subject, body, bodyHtml, inReplyTo, refe
     // untestable without real OAuth credentials on disk, which is not a thing
     // a test may require.
     const gmail = module.exports.getGmailWrite();
+    // Never Cc/Bcc the addresses in helpers/neverCc.js (Bose) — whoever asked.
+    const _nc = require('./neverCc');
+    const _clean = (v) => { const r = _nc.strip(v); return (Array.isArray(r) ? r.length : r) ? r : undefined; };
+    cc = _clean(cc);
+    bcc = _clean(bcc);
     // Derived here so no call site has to remember. A caller that supplies
     // its own html wins; an empty body produces no html half at all rather
     // than an empty <div>.

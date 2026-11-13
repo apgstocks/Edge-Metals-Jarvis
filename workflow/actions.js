@@ -2347,6 +2347,24 @@ async function priceAnswerCommand(chatId, d) {
     return { action_taken: 'replied' };
 }
 
+// "case <customer>" / "show their case" (helpers/customerFocus.js, decided by policy, manager only, a KNOWN customer only). READ-ONLY: the
+// case file is a view over the follow-up log, receipts and deposit placements. It changes nothing, and it puts that customer in focus.
+async function caseFileCommand(chatId, d) {
+    const cf = require('../helpers/customerFocus');
+    const who = cf.match(d && d.name);
+    if (!who) { await _send(chatId, `I don't know a customer called "${String((d && d.name) || '').slice(0, 60)}".`); return { action_taken: 'replied' }; }
+    let c;
+    try { c = require('../helpers/caseFile').buildOne(who); } catch (e) { await _send(chatId, `Couldn't read the case for ${who}: ${e.message}`); return { action_taken: 'replied' }; }
+    cf.note(chatId, who);
+    const L = [`${c.customer}: ${c.status}`, c.why];
+    L.push(c.balance > 0.005 ? `Owes ${money(c.balance)} on ${c.open_invoices} invoice${c.open_invoices === 1 ? '' : 's'}.` : 'Nothing owed.');
+    const ev = (c.events || []).slice(-5);
+    if (ev.length) { L.push('', 'Latest:'); for (const e of ev) L.push(`- ${String(e.at).slice(0, 10)} ${e.text}`); }
+    else L.push('', 'Nothing recorded for them yet.');
+    await _send(chatId, L.join('\n'));
+    return { action_taken: 'replied' };
+}
+
 async function rememberFact(chatId, text) {
 const clean = String(text || '').trim();
 if (!clean) { await _send(chatId, "What should I remember?"); return { action_taken: 'replied' }; }
@@ -2822,9 +2840,14 @@ return { action_taken: 'fact_batch_confirmed', saved: saved.length, lost: lost.l
 // of this app.
 function ccBccFromSettings() {
     const settings = cfg.getSettings ? cfg.getSettings() : {};
-    return { cc: (settings.email_cc || '').trim() || null, bcc: (settings.email_bcc || '').trim() || null };
+    const nc = require('../helpers/neverCc');
+    return { cc: nc.strip((settings.email_cc || '').trim()) || null, bcc: nc.strip((settings.email_bcc || '').trim()) || null };
 }
 function ccBccPreviewLine({ cc, bcc }) {
+    // Same filter sendEmail applies, so the preview never promises a copy
+    // that will not go (helpers/neverCc.js).
+    const nc = require('../helpers/neverCc');
+    cc = nc.strip(cc); bcc = nc.strip(bcc);
     const lines = [];
     if (cc) lines.push(`Cc: ${cc}`);
     if (bcc) lines.push(`Bcc: ${bcc}`);
@@ -2877,7 +2900,8 @@ function mergeCc(...sources) {
         else combined.push(...String(src).split(',').map((s) => s.trim()));
     }
     const seen = new Set();
-    return combined.filter(Boolean).filter((addr) => {
+    const blocked = require('../helpers/neverCc');
+    return blocked.strip(combined.filter(Boolean)).filter((addr) => {
         const key = addr.toLowerCase();
         if (seen.has(key)) return false;
         seen.add(key);
@@ -4039,7 +4063,7 @@ async function sendShipmentDocsForConfirm(chatId, containerNo, rawText) {
         `Send ${found.container}'s documents?`,
         '',
         `To: ${contact.name || found.consignee} <${contact.email}>`,
-        ...(cc && cc.length ? [`Cc: ${(Array.isArray(cc) ? cc : [cc]).join(', ')}`] : []),
+        ...(require('../helpers/neverCc').strip(cc) && require('../helpers/neverCc').strip(cc).length ? [`Cc: ${[].concat(require('../helpers/neverCc').strip(cc)).join(', ')}`] : []),
         `Subject: ${subject}`,
         `Attached: ${docLines.join(', ')}`,
         ...(warnings.length ? ['', ...warnings] : []),
@@ -4381,7 +4405,7 @@ async function siGenerate(chatId, state, layout) {
     }
     await _send(chatId, [
         `Email it to ${draft.contact.name || draft.found.consignee} <${draft.contact.email}>?`,
-        ...(cc && cc.length ? [`Cc: ${(Array.isArray(cc) ? cc : [cc]).join(', ')}`] : []),
+        ...(require('../helpers/neverCc').strip(cc) && require('../helpers/neverCc').strip(cc).length ? [`Cc: ${[].concat(require('../helpers/neverCc').strip(cc)).join(', ')}`] : []),
         `Subject: ${draft.subject}`,
         `Attached: ${draft.attachments.join(', ')}`,
         ...(photos.length ? [`Loading photos: ${photos.length} linked in the email`] : []),
@@ -7797,6 +7821,8 @@ async function lookupAddress(chatId, query) {
 }
 
 async function showReceivables(chatId, who) {
+    // She named a customer: keep them in mind, so "what do they owe" next means them. A focus only fills in words; it never acts.
+    if (who) { try { require('../helpers/customerFocus').note(chatId, who); } catch (_) { /* never blocks the answer */ } }
     const ar = require('../helpers/receivables');
     let ledger;
     try {
@@ -9468,7 +9494,7 @@ emptyDropConfirmed, loadReadyReceived, pickedUpConfirmed, scaleTicketReceived, i
 askWhichBooking, askWhichContainer, fireResolvedStateIntent,
 recallBooking, executeRecall, archiveNow,
 showErd, showCutoff, getBookingField,
-scheduleFollowup, escalateUnclear, selfBuildCommand, _setSelfBuildDeps, depositAutoCommand, priceAnswerCommand, rememberFact, addBusinessContext, logKnowledgeGap, resolveFactBatch,
+scheduleFollowup, escalateUnclear, selfBuildCommand, _setSelfBuildDeps, depositAutoCommand, priceAnswerCommand, caseFileCommand, rememberFact, addBusinessContext, logKnowledgeGap, resolveFactBatch,
 resolveFactConflict, findContradictedFact,
     draftEmailForConfirm, sendDraftedEmail, scheduleDraftedEmail, reschedulePendingEmail, searchMail, draftReplyForConfirm, backfillCutoffs,
     sendShipmentDocsForConfirm,
