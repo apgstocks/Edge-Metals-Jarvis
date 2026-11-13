@@ -192,7 +192,11 @@ let semanticFactMatches = [];
 let semanticFactCandidates = [];
 try {
     const embeddings = require('./embeddings');
-    const matches = await embeddings.searchSimilar(ctx.text, { topK: 10, minSimilarity: 0.55 });
+    // Layer 0 (helpers/memoryScope.js): only the manager recalls across every
+    // chat; everyone else gets their own chat's past, never another party's.
+    const matches = require('./memoryScope').filter(
+        await embeddings.searchSimilar(ctx.text, { topK: 10, minSimilarity: 0.55 }),
+        { role: ctx.role, chatId: ctx.chatId });
     const summaryMatches = require('./summaryRank').rank(matches.filter(m => m.type === 'session_summary'), { limit: 3 });
     if (summaryMatches.length) {
         semanticMemory = summaryMatches

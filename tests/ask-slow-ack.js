@@ -1,0 +1,34 @@
+// tests/ask-slow-ack.js — a slow ledger question says "on it" once, a fast one never does, and the answer is unchanged.
+const fs = require('fs'), os = require('os'), path = require('path');
+const R = (p) => path.join(__dirname, '..', p);
+let pass = 0, fail = 0;
+const ck = (n, c, d) => { if (c) { pass++; console.log('  PASS  ' + n); } else { fail++; console.log('  FAIL  ' + n + (d ? '\n        ' + d : '')); } };
+process.env.JARVIS_TEST = '1';
+const TMP = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvis-slowack-'));
+process.env.DATA_DIR = path.join(TMP, 'data'); process.env.API_TOKEN = 't';
+fs.mkdirSync(process.env.DATA_DIR, { recursive: true });
+process.env.JARVIS_ASK_ACK_MS = '60';
+const actions = require(R('workflow/actions.js'));
+const askData = require(R('helpers/data/askData'));
+let sent = [];
+const sendMessage = async (c, t) => { sent.push(String(t)); };
+actions.init({ sendMessage, sendToManager: sendMessage, sendToTeam: sendMessage, pushAlert: () => {} });
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const log = console.log; 
+(async () => {
+    askData.ask = async () => { await sleep(250); return { ok: true, screen: 'ANSWER-SLOW', spoken: 's', rows: [], tables: [] }; };
+    sent = []; await actions.askLedger('C1', 'how much do we owe Inesh');
+    ck('a slow answer is preceded by exactly one "on it"', sent.filter((x) => /On it/.test(x)).length === 1, JSON.stringify(sent));
+    ck('...which arrives BEFORE the answer, and the answer is unchanged', /On it/.test(sent[0]) && sent[1] === 'ANSWER-SLOW', JSON.stringify(sent));
+    askData.ask = async () => ({ ok: true, screen: 'ANSWER-FAST', spoken: 's', rows: [], tables: [] });
+    sent = []; await actions.askLedger('C1', 'how much do we owe Inesh'); await sleep(150);
+    ck('a fast answer never says "on it", even after the delay would have elapsed', sent.length === 1 && sent[0] === 'ANSWER-FAST', JSON.stringify(sent));
+    askData.ask = async () => { await sleep(30); throw new Error('boom'); };
+    sent = []; await actions.askLedger('C1', 'x'); await sleep(150);
+    ck('a failure cancels it too: one message, the error', sent.length === 1 && /Couldn't answer/.test(sent[0]), JSON.stringify(sent));
+    process.env.JARVIS_ASK_ACK_MS = '0';
+    askData.ask = async () => { await sleep(250); return { ok: true, screen: 'A', spoken: 's', rows: [], tables: [] }; };
+    sent = []; await actions.askLedger('C1', 'q');
+    ck('JARVIS_ASK_ACK_MS=0 turns it off', sent.length === 1 && sent[0] === 'A', JSON.stringify(sent));
+    log(`\n${pass} passed, ${fail} failed`); process.exit(fail ? 1 : 0);
+})();

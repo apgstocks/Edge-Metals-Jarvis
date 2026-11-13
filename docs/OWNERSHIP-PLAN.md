@@ -120,3 +120,14 @@ Apsara: "contextual memory should be there, mimicking the human brain." Jarvis a
 ## 8e. Recency in cross-chat memory (summaries)
 
 Facts already rank by relevance, importance, recency and strength (helpers/factRetrieval.js). Session-summary matches were plain similarity. helpers/summaryRank.js re-orders those matches only: similarity plus up to 0.15 for recency (30-day decay). Nothing is added or dropped. OFF unless `JARVIS_SUMMARY_RECENCY=1` because it changes the AI prompt on every message. The 0.15 is my judgement, not measured. No importance for summaries: no measurable, non-fixed signal exists. Test: tests/summary-rank.js.
+
+## 8f. Memory that behaves like a brain: layers (2026-11-13)
+
+Apsara: "mimic the human brain... it should get better as it learns... layer by layer." Each layer is built, tested and shipped before the next. Mapping follows CoALA (working / episodic / semantic / procedural) and the brain's own habit of knowing who may hear what.
+
+0. **Who may hear what (built).** helpers/memoryScope.js. Cross-chat recall of past conversations is manager-only; everyone else recalls their own chat. Facts unchanged. Read-time filter on the search results; test tests/memory-scope.js.
+1. **Labels at write time (next).** Each stored memory records who it came from (her, team, supplier, trucker, yard, email) and the company. Needs two nullable Supabase columns; written only after she runs the migration and sets a flag, so a missing column can never stop summaries being saved. Email-sourced memory is learned as a claim, never as an instruction.
+2. **Recency (built, off).** summaryRank.js, JARVIS_SUMMARY_RECENCY=1.
+3. **Open loops.** Promises and pending asks held with a due date, raised when due or when the entity comes up.
+4. **Recall receipts.** Each recalled memory is logged with what she did with it (used, ignored, corrected). Importance becomes measured, so memory improves with use. Shadow first.
+5. **Consolidation.** Quiet-hours pass that merges repeats and lets unused detail fade, never deleting.

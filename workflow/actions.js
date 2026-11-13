@@ -2180,6 +2180,30 @@ await _sendToManager(`${kind} ${who}${bkgLabel} sent something I couldn't unders
 return { action_taken: 'escalated' };
 }
 
+// ── A TRUCKER / SUPPLIER ASKS SOMETHING UNPLACED (2026-11-14) ────────────────
+// Answer from THEIR OWN jobs only, or tell the team and stay silent in the chat.
+// See helpers/partyAnswer.js. OFF unless JARVIS_PARTY_ANSWER=1: it talks to
+// outside parties on its own, so it is switched on deliberately, not by deploy.
+async function answerParty(ctx) {
+    const pa = require('../helpers/partyAnswer');
+    const { loadBookings } = require('../helpers/json');
+    const kind = ctx.isTrucker ? 'trucker' : 'supplier';
+    const who = (kind === 'trucker' ? ctx.matchedTrucker : ctx.matchedSupplier) || {};
+    const r = await pa.answer({ kind, name: who.name, text: ctx.text, bookings: loadBookings(),
+        rosters: { truckers: ctx.truckers, suppliers: ctx.suppliers } });
+    if (r.ok) {
+        await _send(ctx.chatId, r.answer);
+        return { action_taken: 'party_answered' };
+    }
+    const label = who.name || ctx.senderName || ctx.senderNumber || 'Unknown sender';
+    const why = { no_jobs: 'they have no active job on file', not_sure: 'I was not sure of the answer', error: 'the AI was unavailable',
+        names_someone_else: 'my draft mentioned someone else, so I held it back', mentions_money: 'my draft mentioned money, so I held it back' }[r.reason] || 'I was not sure';
+    const msg = `${kind === 'trucker' ? 'Trucker' : 'Supplier'} ${label}${ctx.activeBooking ? ` (re ${ctx.activeBooking})` : ''} asked: "${ctx.text}"\nI did not reply in their chat (${why}). Please answer them.`;
+    await _sendToManager(msg);
+    await _sendToTeam(msg);
+    return { action_taken: 'party_escalated_silent', reason: r.reason };
+}
+
 // ── Feedback loop — "remember X" or an AI-detected correction ───────────────
 // Persists to facts.json, fed into every AI prompt (see helpers/context.js
 // formatForAI). This is how corrections and standing instructions survive
@@ -4525,6 +4549,21 @@ async function saleInvoiceAnswer(chatId, pending, text) {
 //
 // Voice hears one sentence; the table, the source and the row count go on
 // screen, per her standing rule about not reading tables aloud.
+// ── "ON IT" WHEN A QUESTION IS SLOW (2026-11-13) ─────────────────────────
+// Apsara timed it: a loose QuickBooks sentence took 37 s and 17 s with
+// silence in between. The model call cannot be made instant, but silence can
+// end: if the answer is not back after a few seconds, say so once. Text only,
+// never a second one, cancelled the moment the answer is ready, and
+// JARVIS_ASK_ACK_MS=0 turns it off. Default 4000 ms. This is a courtesy line
+// only; it changes nothing about the answer.
+function _slowAck(chatId, text) {
+    const ms = process.env.JARVIS_ASK_ACK_MS === undefined ? 4000 : Number(process.env.JARVIS_ASK_ACK_MS);
+    if (!(ms > 0)) return () => {};
+    const t = setTimeout(() => { Promise.resolve(_send(chatId, text)).catch(() => {}); }, ms);
+    if (t.unref) t.unref();
+    return () => clearTimeout(t);
+}
+
 async function askLedger(chatId, question) {
     const askData = require('../helpers/data/askData');
     const askLog = require('../helpers/data/askLog');
@@ -4546,14 +4585,17 @@ async function askLedger(chatId, question) {
     // signature so a repeat bumps a count instead of adding a row.
     const bugs = require('../helpers/bugs');
     let out;
+    const stopAck = _slowAck(chatId, 'On it, checking the books. This one takes a few seconds.');
     try { out = await askData.ask(question); }
     catch (e) {
+        stopAck();
         console.error('[ACTIONS] askLedger failed:', e && e.stack);
         await note(null, e);
         bugs.autoFileCrash(e, 'Asking the ledgers').catch(() => {});
         await _send(chatId, `Couldn't answer that from the ledgers: ${e.message}`);
         return { action_taken: 'ask_data_failed', reason: e.message };
     }
+    stopAck();
     await note(out, null);
     if (out && !out.ok && out.scope !== 'yard' && !out.ask) bugs.autoFileQuestion(question, { kind: 'data' }).catch(() => {});
     const wa = require('../helpers/wa-state');
@@ -4565,6 +4607,18 @@ async function askLedger(chatId, question) {
     await _send(chatId, out.screen || out.spoken);
     wa.sayAloud(out.spoken);
     return { action_taken: 'ask_data_answered', rows: (out.rows || []).length, tables: out.tables, empty: !!out.empty };
+}
+
+// ── SEARCH THE WEB (2026-11-13) ──────────────────────────────────────────
+// Read-only. Her question goes out, a short sourced answer comes back. The
+// answer is shown to her and is never used to act: see helpers/webSearch.js.
+async function webSearch(chatId, question) {
+    const ws = require('../helpers/webSearch');
+    const stopAck = _slowAck(chatId, 'Searching the web, one moment.');
+    let r;
+    try { r = await ws.search(question); } finally { stopAck(); }
+    await _send(chatId, ws.format(r));
+    return { action_taken: r.ok ? 'web_search_answered' : 'web_search_failed', reason: r.ok ? null : r.reason };
 }
 
 // ── ASK WHAT WAS SAID ──────────────────────────────────────────────────────
@@ -9481,7 +9535,7 @@ module.exports = {
     replyToFocusedDigest, askWhichDigestItem, reviseDraftedEmail,
     ready,
     describeLink,
-    startSaleInvoice, saleInvoiceAnswer, askLedger, askText,
+    startSaleInvoice, saleInvoiceAnswer, askLedger, askText, webSearch,
     logBug, showBugs, closeBugForConfirm, applyBugClose, resolveBugRef,
     showPendingReplies, replyToDigestItem, summarizeEmail, markPendingReminded, forwardOriginalToSelf, sendDraftedEmail,
 init,
@@ -9494,7 +9548,7 @@ emptyDropConfirmed, loadReadyReceived, pickedUpConfirmed, scaleTicketReceived, i
 askWhichBooking, askWhichContainer, fireResolvedStateIntent,
 recallBooking, executeRecall, archiveNow,
 showErd, showCutoff, getBookingField,
-scheduleFollowup, escalateUnclear, selfBuildCommand, _setSelfBuildDeps, depositAutoCommand, priceAnswerCommand, caseFileCommand, rememberFact, addBusinessContext, logKnowledgeGap, resolveFactBatch,
+scheduleFollowup, escalateUnclear, answerParty, selfBuildCommand, _setSelfBuildDeps, depositAutoCommand, priceAnswerCommand, caseFileCommand, rememberFact, addBusinessContext, logKnowledgeGap, resolveFactBatch,
 resolveFactConflict, findContradictedFact,
     draftEmailForConfirm, sendDraftedEmail, scheduleDraftedEmail, reschedulePendingEmail, searchMail, draftReplyForConfirm, backfillCutoffs,
     sendShipmentDocsForConfirm,
