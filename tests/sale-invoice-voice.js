@@ -102,6 +102,8 @@ section('A. the pure parts, and the routing');
     ck('invoice number "yes" takes the suggestion', flow.parseInvNo('yes', '260921_AP_26DK15').inv_no === '260921_AP_26DK15');
     ck('  "yes" with nothing suggested is not a number', flow.parseInvNo('yes', null).ok === false);
     ck('  her own number is kept verbatim', flow.parseInvNo('invoice number is 26dk15a', 'x').inv_no === '26DK15A');
+    ck('a container number is NOT an invoice number', flow.parseInvNo('HMMU4994761', '261102_RD_26Metalco24').ok === false && flow.parseInvNo('hmmu 4994761', null).container === 'HMMU4994761');
+    ck('  invoice numbers with letters+digits still pass', flow.parseInvNo('261102_RD_26Metalco24', 'x').ok === true && flow.parseInvNo('26DK15A', 'x').ok === true);
     ck('layout: separate', flow.parseLayout('separate please').separate === true);
     ck('layout: invoice only', flow.parseLayout('just the invoice').invoiceOnly === true);
     ck('layout: normal', flow.parseLayout('normal').separate === false && flow.parseLayout('normal').invoiceOnly === false);
@@ -259,6 +261,26 @@ section('D2. "invoice for Daekwang" — a customer, so the sale side');
     ck('  the number lands on the sale', sales.getSale(s.id).invoice_no === '260921_AP_26DK15');
     const gen = await j.say('invoice only');
     ck('  and it generates from the bill + sale', /Generated 260921_AP_26DK15 for DKWU1234567 — invoice only/.test(A(gen)), A(gen));
+    await j.stop();
+}
+
+section('D3. a container number at the invoice-number step is not saved as the number (2026-11-14)');
+{
+    const j = await boot({});
+    const bills = require(R('helpers/bills'));
+    const sales = require(R('helpers/sales'));
+    require(R('helpers/nextInvoiceNo')).suggestNextInvNo = async () => ({ inv_no: '260921_AP_26DK15', highest_existing: '26DK14' });
+    await bills.addBill({ date: '09/15/2026', supplier: 'Gomez', booking_no: 'BKD3', container_no: 'KOCU4340622', description: 'Motors', gross: 30000, truck: 9000, container: 4000, chassis: 1000, boxes: 0, net: 16000 });
+    const s = await sales.addSale({ booking_no: 'BKD3', container_no: 'KOCU4340622', customer: 'Daekwang Co', date: '09/20/2026', item: 'Motors', weight: 16000, invoice_price: 0.52, invoice_no: '261102_RD_26Metalco24' });
+    await j.say('generate invoice for KOCU4340622');
+    const bad = await j.say('HMMU4994761');
+    ck('asked, not saved: says it is a container number', /container number/i.test(A(bad)) && !/Changes to the sale/i.test(A(bad)), A(bad));
+    ck('  the sale keeps its own invoice number', sales.getSale(s.id).invoice_no === '261102_RD_26Metalco24');
+    await bills.addBill({ date: '09/15/2026', supplier: 'Gomez', booking_no: 'BKD4', container_no: 'ABCD99', description: 'Motors', gross: 1000, truck: 100, container: 100, chassis: 100, boxes: 0, net: 700 });
+    const odd = await j.say('ABCD99');
+    ck('  a container KNOWN from the bills is refused even in an odd shape', /container number/i.test(A(odd)) && sales.getSale(s.id).invoice_no === '261102_RD_26Metalco24', A(odd));
+    const ok = await j.say('261102_RD_26Metalco25');
+    ck('  a real number afterwards is taken', /Invoice number: 261102_RD_26METALCO25/i.test(A(ok)), A(ok));
     await j.stop();
 }
 

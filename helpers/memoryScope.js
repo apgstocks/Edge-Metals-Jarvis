@@ -19,8 +19,10 @@
 // next layer (docs/OWNERSHIP-PLAN.md §8f).
 function canSee(match, viewer) {
     const v = viewer || {};
-    if (v.role === 'manager') return true;
     if (!match) return false;
+    // Company wall (layer 1): a memory labelled for another company never crosses, whoever asks.
+    if (match.company && v.company && match.company !== v.company) return false;
+    if (v.role === 'manager') return true;
     if (match.type === 'fact') return true;
     if (match.type === 'session_summary') return !!match.chatId && !!v.chatId && String(match.chatId) === String(v.chatId);
     return false;

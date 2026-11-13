@@ -207,6 +207,12 @@ function parseInvNo(text, suggestion) {
         return suggestion ? { ok: true, inv_no: suggestion } : { ok: false };
     }
     const v = t.replace(/^(invoice\s*(number|no\.?|#)?|number|inv\s*(no\.?)?)\s*(is|:|-)?\s*/i, '').replace(/[.!?]+$/, '').trim();
+    // A container number (4 letters + 7 digits) is a thing she names at the
+    // first step, not an invoice number. Saved as one on 2026-11-14 (HMMU4994761
+    // became the invoice number of KOCU4340622). Format check on an entity, not a
+    // meaning rule; a real invoice number never has this shape. Asked, not saved.
+    const cn = v.replace(/[\s-]+/g, '').toUpperCase();
+    if (/^[A-Z]{4}\d{7}$/.test(cn)) return { ok: false, container: cn };
     return /\d/.test(v) && v.length <= 40 ? { ok: true, inv_no: v.replace(/\s+/g, ' ').toUpperCase() } : { ok: false };
 }
 

@@ -79,7 +79,7 @@ async function archiveSessionSummary(chatId, session) {
     // Also embed it for semantic search — this is what lets a much LATER
     // conversation recall this session by meaning, not just recency. Fire
     // async without blocking; a failed embed shouldn't break session close.
-    require('./embeddings').storeEmbedding({ chatId, text, type: 'session_summary' })
+    require('./embeddings').storeEmbedding({ chatId, text, type: 'session_summary', origin: session.lastRole || null, company: 'edge_metals' })
         .catch(e => console.error('[MEMORY] embedding store failed:', e.message));
 }
 

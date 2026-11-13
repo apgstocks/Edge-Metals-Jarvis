@@ -73,14 +73,26 @@ async function embedText(text, taskType = 'RETRIEVAL_DOCUMENT') {
 // Store a piece of text (session summary, etc.) as searchable long-term
 // memory. Failure here is non-fatal by design — memory is a nice-to-have,
 // never a dependency for the app's core operation.
-async function storeEmbedding({ chatId, text, type = 'summary' }) {
+// LABELS (2026-11-14, memory layer 1): who a memory came from (origin: the role
+// of the chat it was formed in) and which company it belongs to. Written only
+// when JARVIS_MEMORY_LABELS=1, AFTER the two columns exist (supabase_labels.sql).
+// If the columns are missing the insert is retried without them, so turning the
+// flag on early can never stop memories being saved.
+const labelsOn = () => process.env.JARVIS_MEMORY_LABELS === '1';
+async function storeEmbedding({ chatId, text, type = 'summary', origin = null, company = null }) {
     const clean = String(text || '').trim();
     if (!clean) return;
     try {
         const vector = await embedText(clean, 'RETRIEVAL_DOCUMENT');
-        const { error } = await getSupabase().from('memory_embeddings').insert({
-            chat_id: chatId, text: clean, type, embedding: vector,
-        });
+        const row = { chat_id: chatId, text: clean, type, embedding: vector };
+        const labelled = labelsOn() && (origin || company);
+        if (labelled) { if (origin) row.origin = origin; if (company) row.company = company; }
+        let { error } = await getSupabase().from('memory_embeddings').insert(row);
+        if (error && labelled && /origin|company|column/i.test(String(error.message || ''))) {
+            console.warn('[EMBEDDINGS] label columns missing, saving without labels (run supabase_labels.sql)');
+            delete row.origin; delete row.company;
+            ({ error } = await getSupabase().from('memory_embeddings').insert(row));
+        }
         if (error) throw error;
     } catch (e) {
         console.error('[EMBEDDINGS] store failed (non-fatal):', e.message);
@@ -105,6 +117,7 @@ async function searchSimilar(queryText, { chatId = null, topK = DEFAULT_TOP_K, m
         return (data || []).map(row => ({
             id: row.id, chatId: row.chat_id, text: row.text, type: row.type,
             created_at: row.created_at, similarity: row.similarity,
+            origin: row.origin || null, company: row.company || null,
         }));
     } catch (e) {
         console.error('[EMBEDDINGS] search failed (non-fatal):', e.message);

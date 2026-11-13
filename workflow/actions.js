@@ -4521,6 +4521,20 @@ async function saleInvoiceAnswer(chatId, pending, text) {
     }
     if (p.stage === 'inv_no') {
         const r = flow.parseInvNo(t, p.suggestion);
+        // Jarvis knows its containers: the bills and sales hold them. A known one
+        // is never an invoice number, whatever its shape (her note, 2026-11-14).
+        const known = (() => {
+            const want = String(t).replace(/[\s-]+/g, '').toUpperCase();
+            if (!want) return null;
+            const norm = (x) => String((x && x.container_no) || '').replace(/[\s-]+/g, '').toUpperCase();
+            try {
+                const hit = require('../helpers/sales').list().find((x) => norm(x) === want)
+                    || require('../helpers/bills').list().find((x) => norm(x) === want);
+                return hit ? want : null;
+            } catch (_) { return null; }
+        })();
+        if (r.ok && known) r.ok = false, r.container = known;
+        if (!r.ok && r.container) return again(`${r.container} looks like a container number, not an invoice number, so I haven't saved it.${p.suggestion ? ` Say yes to keep ${p.suggestion}, or` : ''} Tell me the invoice number (to invoice ${r.container} instead, cancel and start again with that container).`);
         if (!r.ok) return again(p.suggestion ? `Say yes to use ${p.suggestion}, or tell me the invoice number.` : "What's the invoice number?");
         return siConfirm(chatId, { ...p, shared: { ...(p.shared || {}), invoice_no: r.inv_no } });
     }
