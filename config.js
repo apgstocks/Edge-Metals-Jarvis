@@ -341,6 +341,9 @@ const FILES = {
     // typed once becomes a normal selectable option afterward instead of
     // requiring "Others…" every time.
     ITEM_TYPES_FILE: path.join(DATA_DIR, 'item_types.json'),
+    // Journal of Edge Yard item renames (helpers/itemMaintenance.js) — what each
+    // rename changed, so it can be undone.
+    ITEM_RENAMES_FILE: path.join(DATA_DIR, 'item_renames.json'),
     // Apsara, 2026-09-07: "maintain a separate catalogue for edge metals.
     // keep on appending to that new catalogue as i generate proforma and keep
     // the existing workflow catalogue for yard."

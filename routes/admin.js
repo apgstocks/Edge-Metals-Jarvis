@@ -256,6 +256,29 @@ module.exports = function (app, ctx) {
 
 
 
+    // ── EDGE YARD ITEM MAINTENANCE (2026-11-14) ─────────────────────────
+    // Apsara: "i want to filter by items and then if i want to change names,
+    // like rotor and rotors" — and, asked, "rewrite old loads, Edge Yard only".
+    // Admin only, and a path of its own (NOT under /api/item-types, which staff
+    // may use): this one rewrites saved loads. Item NAMES only; see
+    // helpers/itemMaintenance.js for what it will not touch and why.
+    app.get('/api/item-maintenance', requireAdmin, (req, res) => {
+        try { res.json({ items: require('./helpers/itemMaintenance').summary({ q: req.query.q }), history: require('./helpers/itemMaintenance').history() }); }
+        catch (e) { res.status(500).json({ error: e.message }); }
+    });
+    app.post('/api/item-maintenance/preview', requireAdmin, (req, res) => {
+        try { res.json(require('./helpers/itemMaintenance').preview(req.body.from, req.body.to)); }
+        catch (e) { res.status(400).json({ error: e.message }); }
+    });
+    app.post('/api/item-maintenance/apply', requireAdmin, async (req, res) => {
+        try { res.json(await require('./helpers/itemMaintenance').apply(req.body.from, req.body.to, { by: actorOf(req) })); }
+        catch (e) { res.status(400).json({ error: e.message }); }
+    });
+    app.post('/api/item-maintenance/undo', requireAdmin, async (req, res) => {
+        try { res.json(await require('./helpers/itemMaintenance').undo(req.body.id)); }
+        catch (e) { res.status(400).json({ error: e.message }); }
+    });
+
     // ── Quote requests (multi-trucker quote comparison table, 2026-08-05) ────
     // Read-only — every mutation (send/reminder/escalation/reply) happens
     // through the WhatsApp flow (workflow/quoteRequests.js) or the scheduler,

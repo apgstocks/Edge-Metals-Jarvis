@@ -1117,6 +1117,126 @@ function describeTools() {
     ].join('\n');
 }
 
+// ── RECORD AN OUTBOUND SALE (2026-11-14) ───────────────────────────────────
+// Apsara typed into the yard assistant: "We have sold all rotors and drums
+// before 11/13. Make changes in my inventory accordingly. We sold this to
+// metalco" — and was told it cannot record outbound sales. Asked what she
+// wanted, she chose: teach the assistant, and ASK her the price and the sale
+// date every time rather than guess.
+//
+// WHAT IT DOES: sells ALL that is still on hand of the named items, from the
+// purchase lots received before a cutoff date, as one outbound load. Stock is
+// netted by DRAWS (helpers/stock.js), so the sale is written with draws against
+// the exact lots — that is what makes on-hand fall, and it is the same shape
+// the outbound screen writes, saved through the same addOutboundLoad.
+//
+// WHAT IT DOES NOT DO: partial quantities (the screen does that), prices in
+// anything but $/lb, or any change to Edge Metals (bills, sales, proformas).
+// Draws are written per item line, so what a lot has already given up is
+// known per item; a shared lot's weight is never counted twice.
+TOOLS.record_outbound_sale = {
+    kind: 'write',
+    description: 'Record an outbound sale of ALL the stock on hand of named items (optionally only lots received before a date). Not for part-quantities.',
+    params: {
+        buyer: { type: 'string', required: true, describe: 'who the yard sold to' },
+        date: { type: 'date', required: true, describe: 'the sale date as YYYY-MM-DD — ASK, do not assume today' },
+        price: { type: 'number', required: true, describe: 'price per LB in dollars — ASK, do not guess' },
+        descriptions: { type: 'array', required: true, describe: 'item names to sell, e.g. ["Rotors","Drums"]' },
+        received_before: { type: 'date', describe: 'only lots received BEFORE this date (YYYY-MM-DD); omit for every lot' },
+        note: { type: 'string' },
+    },
+    propose: async (p, ctx = {}) => {
+        const { loadLoads } = require('./loads');
+        const { loadOutboundLoads } = require('./outboundLoads');
+        const stock = require('./stock');
+        const { keyOf } = require('./itemMaintenance');
+        const buyer = str(p.buyer);
+        if (!buyer) throw new Error('who did the yard sell to?');
+        const price = num(p.price);
+        if (price == null || price <= 0) throw new Error('what price per lb? A sale needs one');
+        if (!isYmd(p.date)) throw new Error('what date was the sale?');
+        const cutoff = isYmd(p.received_before) ? p.received_before : null;
+        const names = (Array.isArray(p.descriptions) ? p.descriptions : [p.descriptions]).map(str).filter(Boolean).slice(0, 12);
+        if (!names.length) throw new Error('which items were sold?');
+
+        const inbound = loadLoads();
+        const outbound = loadOutboundLoads();
+        const lots = stock.lotReport(inbound, outbound).filter((l) => l.remaining > 0.001 && (!cutoff || (l.date && l.date < cutoff)));
+        const byId = new Map(inbound.map((l) => [l.id, l]));
+
+        // One draw per lot (all items together), one item line per name.
+        // ITEM-LEVEL, not pro rata: a draw is (load, weight), but a draw is
+        // always written on an outbound ITEM LINE, so what each lot has already
+        // given up PER ITEM is known from those lines. Sharing a lot's remaining
+        // weight pro rata instead attributes an earlier all-rotors sale to the
+        // drums too, and the item totals then disagree with stockReport (rotors
+        // went 167 lb negative in the first version of this test).
+        const drawnFrom = new Map();   // `${lot}|${item}` -> weight already drawn
+        for (const o of outbound) {
+            for (const it of (o.items || [])) {
+                for (const d of (it.draws || [])) {
+                    const key = `${d.load_id}|${keyOf(it.description)}`;
+                    drawnFrom.set(key, (drawnFrom.get(key) || 0) + (Number(d.weight) || 0));
+                }
+            }
+        }
+        const onHandAll = new Map(stock.stockReport(inbound, outbound).map((r) => [keyOf(r.description), r.purchased - r.shipped]));
+        const room = new Map(lots.map((l) => [l.id, l.remaining]));
+        const lines = [];
+        const drawByLot = new Map();
+        for (const name of names) {
+            const k = keyOf(name);
+            let cap = Math.max(0, onHandAll.has(k) ? onHandAll.get(k) : 0);
+            let weight = 0; const itemDraws = [];
+            for (const lot of lots) {
+                if (cap <= 0.001) break;
+                const load = byId.get(lot.id);
+                const mine = (load && load.items || []).filter((i) => keyOf(i.description) === k).reduce((a, i) => a + (Number(i.net_weight) || 0), 0);
+                const avail = Math.max(0, mine - (drawnFrom.get(`${lot.id}|${k}`) || 0));
+                const take = Math.round(Math.min(avail, room.get(lot.id) || 0, cap) * 100) / 100;
+                if (take <= 0) continue;
+                weight += take; cap -= take;
+                room.set(lot.id, (room.get(lot.id) || 0) - take);
+                itemDraws.push({ load_id: lot.id, weight: take });
+                drawByLot.set(lot.id, (drawByLot.get(lot.id) || 0) + take);
+            }
+            if (weight > 0.001) lines.push({ description: (inbound.flatMap((l) => l.items || []).find((i) => keyOf(i.description) === k) || {}).description || name, weight: Math.round(weight * 100) / 100, draws: itemDraws });
+        }
+        if (!lines.length) {
+            throw new Error(`there is no ${names.join(' or ')} on hand${cutoff ? ` from lots received before ${cutoff}` : ''} to sell`);
+        }
+        const missing = names.filter((n) => !lines.some((l) => keyOf(l.description) === keyOf(n)));
+        const totalWeight = lines.reduce((a, l) => a + l.weight, 0);
+        const amount = Math.round(totalWeight * price * 100) / 100;
+        const details = [
+            ['Buyer', buyer],
+            ['Sale date', p.date],
+            ...(cutoff ? [['From lots received', `before ${cutoff}`]] : []),
+            ...lines.map((l) => [l.description, `${Math.round(l.weight).toLocaleString()} lb from ${l.draws.length} lot${l.draws.length === 1 ? '' : 's'}`]),
+            ['Price', `${money(price)} per lb`],
+            ['Sale total', money(amount)],
+        ];
+        const warnings = ['Priced per lb. On-hand drops by exactly these weights.'];
+        if (missing.length) warnings.push(`Nothing on hand for: ${missing.join(', ')} — left out.`);
+        if (!outbound.some((o) => keyOf(o.buyer) === keyOf(buyer))) warnings.push(`${buyer} has no earlier sale in the yard records — check the spelling.`);
+        return {
+            summary: `Record a sale to ${buyer} on ${p.date}: ${lines.map((l) => `${l.description} ${Math.round(l.weight).toLocaleString()} lb`).join(', ')} at ${money(price)}/lb (${money(amount)}).`,
+            details, warnings,
+            run: async (c = {}) => {
+                const { addOutboundLoad } = require('./outboundLoads');
+                const fresh = stock.validateDraws(loadLoads(), loadOutboundLoads(), [...drawByLot].map(([load_id, weight]) => ({ load_id, weight })));
+                if (!fresh.ok) throw new Error(`stock changed since this was shown — ${fresh.errors.join(' ')} Ask me again.`);
+                return addOutboundLoad({
+                    date: p.date, buyer, description: str(p.note),
+                    items: lines.map((l) => ({ description: l.description, gross_weight: l.weight, tare_weight: 0, price, unit: '', draws: l.draws })),
+                    weight_unit: 'lb',
+                    created_by: c.role || ctx.role || 'yard-assistant',
+                });
+            },
+        };
+    },
+};
+
 const TOOL_NAMES = Object.keys(TOOLS);
 const readToolNames = () => TOOL_NAMES.filter((n) => TOOLS[n].kind === 'read');
 const writeToolNames = () => TOOL_NAMES.filter((n) => TOOLS[n].kind === 'write');

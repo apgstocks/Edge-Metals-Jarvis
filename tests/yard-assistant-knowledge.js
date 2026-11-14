@@ -278,10 +278,15 @@ section('F — nothing new can write');
     // records one, so it is a write and belongs here — this pin going red
     // when it appeared is the guard doing exactly its job.
     //
+    // record_outbound_sale JOINS, DELIBERATELY (2026-11-14). Apsara told the
+    // assistant "we sold all rotors and drums to metalco, update my inventory"
+    // and it refused; asked, she chose to teach it, propose-then-confirm, with
+    // the price and date always asked. tests/yard-outbound-sale-tool.js.
+    //
     // Anything else arriving in this list is NOT declared and should be
     // argued about before the pin is widened again.
     ck('  and the write list is unchanged',
-       writes.sort().join(',') === ['record_payment', 'record_prepayment', 'add_trucker_bill', 'add_expense'].sort().join(','),
+       writes.sort().join(',') === ['record_payment', 'record_prepayment', 'add_trucker_bill', 'add_expense', 'record_outbound_sale'].sort().join(','),
        writes.join(', '));
 }
 

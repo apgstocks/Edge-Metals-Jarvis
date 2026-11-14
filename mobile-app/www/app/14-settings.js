@@ -25,6 +25,7 @@ $('btnAdminSettings').addEventListener('click', async () => {
   // Outside the try: a failed /api/settings read must not also swallow the
   // description list, they're independent panels in the same modal.
   renderItemTypeManager('as');
+  renderItemMaintenance();
 });
 $('btnCloseAdminSettings').addEventListener('click', () => $('adminSettingsModal').classList.add('hidden'));
 
@@ -154,6 +155,69 @@ async function renderItemTypeManager(prefix) {
     rows.innerHTML = `<div style="color:var(--status-danger); font-size:11.5px;">Couldn't load the description list: ${esc(e.message)}</div>`;
   }
 }
+
+// ── Item maintenance (Settings, admin) ────────────────────────────────
+// Filter the items in use, rename one across every saved Edge Yard load. The
+// server (helpers/itemMaintenance.js) changes the NAME only and journals it,
+// so each rename can be undone from the list at the bottom.
+async function renderItemMaintenance() {
+  const rows = $('as_im_rows'), hist = $('as_im_history'), filter = $('as_im_filter');
+  if (!rows || !hist) return;
+  const fmt = (n) => Math.round(Number(n) || 0).toLocaleString();
+  try {
+    const q = (filter && filter.value || '').trim();
+    const r = await api('/api/item-maintenance' + (q ? '?q=' + encodeURIComponent(q) : ''));
+    rows.innerHTML = r.items.length ? r.items.map(it => `
+      <div style="display:flex; align-items:center; gap:8px; padding:9px 10px; background:var(--steel-900); border-radius:8px;">
+        <div style="flex:1; min-width:0;">
+          <div style="font-size:12.5px; color:var(--steel-100, #fff); overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${esc(it.name)}${it.spellings.length > 1 ? ' <span style="color:var(--steel-500); font-size:10.5px;">(also typed: ' + esc(it.spellings.slice(1).join(', ')) + ')</span>' : ''}</div>
+          <div style="font-family:var(--font-mono); font-size:10px; color:var(--steel-500);">bought ${it.inbound.loads} load${it.inbound.loads === 1 ? '' : 's'} · ${fmt(it.inbound.weight)} · shipped ${it.outbound.loads}</div>
+        </div>
+        <button class="btn btn-im-rename" data-name="${esc(it.name)}" style="padding:5px 10px; font-size:10px;">Rename</button>
+      </div>`).join('') : '<div style="font-family:var(--font-mono); font-size:11px; color:var(--steel-500); text-align:center; padding:8px 0;">No items match.</div>';
+    rows.querySelectorAll('.btn-im-rename').forEach(btn => btn.addEventListener('click', async () => {
+      const from = btn.dataset.name;
+      const to = prompt(`Rename "${from}" in all saved loads to:`, from);
+      if (to === null || !to.trim() || to.trim() === from) return;
+      btn.disabled = true;
+      try {
+        const p = await api('/api/item-maintenance/preview', { method: 'POST', body: JSON.stringify({ from, to: to.trim() }) });
+        const s = p.stores;
+        const msg = `Rename "${p.from}" to "${p.to}"?\n\n` +
+          `${s.inbound.loads} load${s.inbound.loads === 1 ? '' : 's'} bought, ${s.outbound.loads} shipped, ${s.drafts.loads} open draft${s.drafts.loads === 1 ? '' : 's'}.` +
+          (p.merges_into_existing ? `\n\n"${p.to}" already exists, so the two become one item.` : '') +
+          `\n\nOnly the name changes. Issued PDFs keep their old wording. You can undo this.`;
+        if (!p.total_lines) { alert('Nothing to rename — no saved load uses that item.'); return; }
+        if (!await askYesNo(msg)) return;
+        const done = await api('/api/item-maintenance/apply', { method: 'POST', body: JSON.stringify({ from, to: to.trim() }) });
+        if (done.catalog_renamed) customItemTypes = customItemTypes.filter(x => String(x).toLowerCase() !== from.toLowerCase());
+        renderItemTypeManager('as');
+        renderItemMaintenance();
+      } catch (e) { alert(e.message); } finally { btn.disabled = false; }
+    }));
+    hist.innerHTML = r.history.length ? '<div style="font-family:var(--font-mono); font-size:10px; letter-spacing:.12em; text-transform:uppercase; color:var(--text-muted);">Recent renames</div>' + r.history.slice(0, 8).map(h => `
+      <div style="display:flex; align-items:center; gap:8px; font-size:11.5px; color:var(--steel-100, #fff);">
+        <span style="flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${esc(h.from)} → ${esc(h.to)} <span style="color:var(--steel-500);">· ${h.lines} line${h.lines === 1 ? '' : 's'}${h.undone ? ' · undone' : ''}</span></span>
+        ${h.undone ? '' : `<button class="btn btn-im-undo" data-id="${esc(h.id)}" style="padding:4px 9px; font-size:10px;">Undo</button>`}
+      </div>`).join('') : '';
+    hist.querySelectorAll('.btn-im-undo').forEach(btn => btn.addEventListener('click', async () => {
+      if (!await askYesNo('Undo this rename? Lines you have edited since are left alone.')) return;
+      btn.disabled = true;
+      try {
+        await api('/api/item-maintenance/undo', { method: 'POST', body: JSON.stringify({ id: btn.dataset.id }) });
+        renderItemMaintenance();
+      } catch (e) { alert(e.message); btn.disabled = false; }
+    }));
+  } catch (e) {
+    rows.innerHTML = `<div style="color:var(--status-danger); font-size:11.5px;">Couldn't load items: ${esc(e.message)}</div>`;
+  }
+}
+(function () {
+  const f = $('as_im_filter');
+  if (!f) return;
+  let t = null;
+  f.addEventListener('input', () => { clearTimeout(t); t = setTimeout(renderItemMaintenance, 250); });
+})();
 
 // Add straight from Settings, so the catalog can be set up before anyone
 // types a load — the auto-add-on-save path (see the save handler) only ever
