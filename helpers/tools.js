@@ -1143,7 +1143,8 @@ TOOLS.record_outbound_sale = {
     params: {
         buyer: { type: 'string', required: true, describe: 'who the yard sold to' },
         date: { type: 'date', required: true, describe: 'the sale date as YYYY-MM-DD — ASK, do not assume today' },
-        price: { type: 'number', required: true, describe: 'price per LB in dollars — ASK, do not guess' },
+        price: { type: 'number', required: true, describe: 'the price in dollars, in the unit given by price_per — ASK, do not guess' },
+        price_per: { type: 'string', describe: 'the unit the price is quoted in: lb (default), metric_ton (MT, tonne, 2204.62 lb), gross_ton (2240 lb) or net_ton (2000 lb). Pass the price AS SHE SAID IT and the unit — never convert it yourself; the system does the arithmetic.' },
         descriptions: { type: 'array', required: true, describe: 'item names to sell, e.g. ["Rotors","Drums"]' },
         received_before: { type: 'date', describe: 'only lots received BEFORE this date (YYYY-MM-DD); omit for every lot' },
         note: { type: 'string' },
@@ -1155,8 +1156,17 @@ TOOLS.record_outbound_sale = {
         const { keyOf } = require('./itemMaintenance');
         const buyer = str(p.buyer);
         if (!buyer) throw new Error('who did the yard sell to?');
-        const price = num(p.price);
-        if (price == null || price <= 0) throw new Error('what price per lb? A sale needs one');
+        const quoted = num(p.price);
+        if (quoted == null || quoted <= 0) throw new Error('what price? A sale needs one');
+        // The sale is stored per lb. A price quoted per ton is divided HERE, in code, from what she said
+        // (Apsara 2026-11-15: "per mt weight is 350" - the model was asked to convert and kept asking).
+        const UNITS = { lb: 1, lbs: 1, pound: 1, metric_ton: 2204.62, mt: 2204.62, tonne: 2204.62, gross_ton: 2240, long_ton: 2240, net_ton: 2000, short_ton: 2000 };
+        const unitKey = str(p.price_per || 'lb').toLowerCase().replace(/[\s/-]+/g, '_').replace(/^per_/, '');
+        if (!(unitKey in UNITS)) throw new Error(`I don't know the price unit "${p.price_per}" - is it per lb, per metric ton (MT), per gross ton or per net ton?`);
+        // A per-lb price above $5 is a per-ton price typed without its unit; do not sell scrap at $350 a pound.
+        if (UNITS[unitKey] === 1 && quoted > 5) throw new Error(`$${quoted} per lb is far too high for scrap - is that per metric ton (MT), per gross ton or per net ton?`);
+        const price = quoted / UNITS[unitKey];
+        const quotedText = UNITS[unitKey] === 1 ? null : `${money(quoted)} per ${unitKey === 'metric_ton' || unitKey === 'mt' || unitKey === 'tonne' ? 'metric ton (2,204.62 lb)' : (unitKey === 'gross_ton' || unitKey === 'long_ton') ? 'gross ton (2,240 lb)' : 'net ton (2,000 lb)'}`;
         if (!isYmd(p.date)) throw new Error('what date was the sale?');
         const cutoff = isYmd(p.received_before) ? p.received_before : null;
         const names = (Array.isArray(p.descriptions) ? p.descriptions : [p.descriptions]).map(str).filter(Boolean).slice(0, 12);
@@ -1216,10 +1226,11 @@ TOOLS.record_outbound_sale = {
             ['Sale date', p.date],
             ...(cutoff ? [['From lots received', `before ${cutoff}`]] : []),
             ...lines.map((l) => [l.description, `${Math.round(l.weight).toLocaleString()} lb from ${l.draws.length} lot${l.draws.length === 1 ? '' : 's'}`]),
-            ['Price', `${perLb(price)} per lb`],
+            ...(quotedText ? [['Quoted price', quotedText]] : []),
+            ['Price', `${perLb(price)} per lb${quotedText ? ' (worked out from the quote)' : ''}`],
             ['Sale total', money(amount)],
         ];
-        const warnings = ['Priced per lb. On-hand drops by exactly these weights.'];
+        const warnings = [quotedText ? 'Stored per lb, divided from the quoted price. On-hand drops by exactly these weights.' : 'Priced per lb. On-hand drops by exactly these weights.'];
         if (missing.length) warnings.push(`Nothing on hand for: ${missing.join(', ')} — left out.`);
         if (!outbound.some((o) => keyOf(o.buyer) === keyOf(buyer))) warnings.push(`${buyer} has no earlier sale in the yard records — check the spelling.`);
         return {

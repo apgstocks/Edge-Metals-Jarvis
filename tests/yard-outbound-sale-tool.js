@@ -78,6 +78,29 @@ section('B2. Apsara 2026-11-15: she typed 0.159 and the card said "$0.16"');
     try { await ya.cancelAction(card.id); } catch (_) {}
 }
 
+section('B3. Apsara 2026-11-15: "per mt weight is 350" - the system converts, the model does not');
+{
+    const P = { buyer: 'Metalco', date: '2026-11-14', descriptions: ['Rotors'], received_before: '2026-11-13' };
+    const ask = async (extra) => { try { return await ya.proposeAction({ kind: 'record_outbound_sale', params: { ...P, ...extra } }); } catch (e) { return { error: e.message }; } };
+    const mt = await ask({ price: 350, price_per: 'metric_ton' });
+    const want = Math.round(3000 * 350 / 2204.62 * 100) / 100;
+    ck('350 per metric ton: total = weight / 2,204.62 x 350', !mt.error && JSON.stringify(mt.details).includes('$' + want.toFixed(2)), JSON.stringify(mt.error || mt.details));
+    ck('  the card shows the quote AND the per-lb price worked out from it', /Quoted price[^\]]*\$350\.00 per metric ton \(2,204\.62 lb\)/.test(JSON.stringify(mt.details)) && /\$0\.1588 per lb/.test(JSON.stringify(mt.details)), JSON.stringify(mt.details));
+    const alias = await ask({ price: 350, price_per: 'MT' });
+    ck('"MT" means metric ton, same answer', !alias.error && JSON.stringify(alias.details) === JSON.stringify(mt.details), JSON.stringify(alias.error));
+    const gt = await ask({ price: 350, price_per: 'gross_ton' });
+    ck('gross ton divides by 2,240', !gt.error && JSON.stringify(gt.details).includes('$' + (Math.round(3000 * 350 / 2240 * 100) / 100).toFixed(2)), JSON.stringify(gt.error || gt.details));
+    const nt = await ask({ price: 350, price_per: 'per net ton' });
+    ck('"per net ton" divides by 2,000', !nt.error && JSON.stringify(nt.details).includes('$' + (Math.round(3000 * 350 / 2000 * 100) / 100).toFixed(2)), JSON.stringify(nt.error || nt.details));
+    const bare = await ask({ price: 350 });
+    ck('350 with no unit is refused, asking which ton - never sold at $350 a pound', /per metric ton|per gross ton/.test(bare.error || ''), JSON.stringify(bare));
+    const odd = await ask({ price: 350, price_per: 'per bucket' });
+    ck('an unknown unit is refused', /don't know the price unit/.test(odd.error || ''), JSON.stringify(odd));
+    const lb = await ask({ price: 0.159 });
+    ck('a plain per-lb price still works exactly as before', !lb.error && /\$0\.159 per lb/.test(JSON.stringify(lb.details)) && !/Quoted price/.test(JSON.stringify(lb.details)), JSON.stringify(lb.error || lb.details));
+    for (const c of [mt, alias, gt, nt, lb]) { try { if (c && c.id) await ya.cancelAction(c.id); } catch (_) {} }
+}
+
 section('C. the proposal is exact and writes nothing');
 let proposal;
 {
@@ -119,6 +142,16 @@ section('D2. stock moved between the card and the tap');
     ck('  and nothing was written for it', !outbound().some((o) => o.items.some((i) => i.price === 0.2)));
 }
 
+section('D2. a price quoted per metric ton is STORED per lb, divided from what she said');
+{
+    const card = await ya.proposeAction({ kind: 'record_outbound_sale', params: { buyer: 'Metalco', date: '2026-11-15', price: 350, price_per: 'MT', descriptions: ['Auto cast'] } }, { role: 'admin' });
+    const out = await ya.confirmAction(card.id, { role: 'admin' });
+    const rec = outbound().find((o) => o.id === out.result.id);
+    const kg = rec.items[0].gross_weight;
+    ck('the saved line carries 350 / 2,204.62 per lb, not a rounded 0.159', rec && Math.abs(rec.items[0].price - 350 / 2204.62) < 1e-9, JSON.stringify(rec && rec.items[0].price));
+    ck('  and the load amount is weight x that price (to the cent)', Math.abs((rec.amount != null ? rec.amount : rec.total_amount) - Math.round(kg * 350 / 2204.62 * 100) / 100) < 0.02, JSON.stringify([rec.amount, rec.total_amount, kg]));
+}
+
 section('E. END TO END, through the real server');
 {
     const { createApi } = require(path.join(ROOT, 'api'));
@@ -141,11 +174,15 @@ section('E. END TO END, through the real server');
     // The 11/13 lot is now the sale's target: "sell all Rotors" with no cutoff.
     const p2 = await ya.proposeAction({ kind: 'record_outbound_sale', params: { buyer: 'Metalco', date: '2026-11-14', price: 0.3, descriptions: ['Rotors'] } }, { role: 'admin' });
     const before = ((await req('GET', '/api/loads/stock', { sid: admin })).json.byType.find((t) => /rotors/i.test(t.description)) || {});
+    const invRow = async () => (((await req('GET', '/api/loads/inventory', { sid: admin })).json || {}).byType || []).find((t) => /rotors/i.test(t.description)) || {};
+    const invBefore = await invRow();   // the Inventory SCREEN reads this route, not /stock
     const act = await req('POST', '/api/yard/act', { sid: admin, body: { id: p2.id } });
     ck('/api/yard/act writes it', act.status === 200 && act.json.ok === true, JSON.stringify(act.json));
     const after = ((await req('GET', '/api/loads/stock', { sid: admin })).json.byType.find((t) => /rotors/i.test(t.description)) || {});
     ck('  the stock route shows 800 lb more shipped (delta, not absolute)', Math.abs((after.shipped - before.shipped) - 800) < 0.02, JSON.stringify([before, after]));
     ck('  and nothing left on hand — no negative stock', Math.abs(after.purchased - after.shipped) < 0.02 && !after.negative, JSON.stringify(after));
+    const invAfter = await invRow();
+    ck('  the INVENTORY screen route shows it too: shipped +800 and on hand -800 (Apsara 2026-11-15: "why my inventory is not adjusted?")', Math.abs((invAfter.shipped - invBefore.shipped) - 800) < 0.02 && Math.abs((invBefore.onHand - invAfter.onHand) - 800) < 0.02, JSON.stringify([invBefore, invAfter]));
     const list = await req('GET', '/api/outbound-loads', { sid: admin });
     ck('  the outbound list shows it for Metalco', JSON.stringify(list.json).includes('Metalco'));
     ck('Edge Metals data untouched', JSON.stringify(['bills.json', 'sales.json'].map((f) => fs.existsSync(path.join(TMP, f)))) === metalsSnap);
