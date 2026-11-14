@@ -190,6 +190,20 @@ section('F. the screen posts what the routes read');
     ck('  the panel is in the ADMIN modal only (staff cannot rewrite loads)', /id="as_im_rows"/.test(html) && !/id="ss_im_/.test(html));
 }
 
+
+section('H. Apsara 2026-11-14: "prompt() is not supported" and "typed letters are not visible"');
+{
+    const rd = (f) => fs.readFileSync(path.join(ROOT, f), 'utf8');
+    for (const [label, settings, core, filterId] of [['website', 'dashboard/app/03-settings-contacts.js', 'dashboard/app/01-core.js', 'imFilter'], ['phone', 'mobile-app/www/app/14-settings.js', 'mobile-app/www/app/01-core.js', 'as_im_filter']]) {
+        const src = rd(settings); const k = src.indexOf('async function renameItems');
+        const body = src.slice(k, src.indexOf('\n}\n', k));
+        ck(label + ': renaming asks with the in-app box, not prompt()/confirm()', /await askText\(/.test(body) && !/[^a-zA-Z.]prompt\(|[^a-zA-Z.]confirm\(/.test(body));
+        ck(label + ': askText exists in the core script', /function askText\(/.test(rd(core)));
+    }
+    ck('website filter box has a visible text colour', /id="imFilter"[^>]*color:var\(--text-strong\)/.test(rd('dashboard/app/03-settings-contacts.js')));
+    ck('phone filter box has a visible text colour', /id="as_im_filter"[^>]*color:var\(--text-strong\)/.test(rd('mobile-app/www/index.html')));
+}
+
 console.log(`\n  ${pass} passed, ${fail} failed`);
 if (fail) { console.log('\n  FAILED:\n' + failures.map((f) => '    - ' + f).join('\n')); process.exit(1); }
 process.exit(0);

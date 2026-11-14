@@ -231,6 +231,40 @@ function askYesNo(message) {
     overlay.addEventListener('click', (ev) => { if (ev.target === overlay) cleanup(false); });
   });
 }
+
+// Text-entry modal — the native prompt() is blocked in the desktop wrapper
+// ("prompt() is not supported", Apsara 2026-11-14) and in some WebViews, so
+// anything new that needs a typed answer uses this. Resolves the text, or null
+// on Cancel / click-away, exactly as prompt() would. Added for Item
+// maintenance only; older prompt() callers are unchanged.
+function askText(message, initial) {
+  return new Promise((resolve) => {
+    const overlay = document.createElement('div');
+    overlay.className = 'modal-overlay';
+    overlay.style.display = 'flex';
+    overlay.innerHTML = `
+      <div class="modal-shell" style="max-width:420px;">
+        <div class="modal-stripe"></div>
+        <div class="modal-body" style="padding:22px 24px 6px;">
+          <div style="font-size:14px; color:var(--text-strong, #fff); line-height:1.5; white-space:pre-line; margin-bottom:12px;">${esc(message)}</div>
+          <input id="askTextInput" type="text" autocomplete="off" style="width:100%; box-sizing:border-box;">
+        </div>
+        <div class="modal-foot">
+          <button class="btn" id="askTextNo">Cancel</button>
+          <button class="btn btn-primary" id="askTextYes">OK</button>
+        </div>
+      </div>`;
+    document.body.appendChild(overlay);
+    const input = overlay.querySelector('#askTextInput');
+    input.value = initial == null ? '' : String(initial);
+    const cleanup = (v) => { overlay.remove(); resolve(v); };
+    overlay.querySelector('#askTextYes').addEventListener('click', () => cleanup(input.value));
+    overlay.querySelector('#askTextNo').addEventListener('click', () => cleanup(null));
+    overlay.addEventListener('click', (ev) => { if (ev.target === overlay) cleanup(null); });
+    input.addEventListener('keydown', (ev) => { if (ev.key === 'Enter') { ev.preventDefault(); cleanup(input.value); } else if (ev.key === 'Escape') cleanup(null); });
+    setTimeout(() => { input.focus(); input.select(); }, 30);
+  });
+}
 const normLoc = (s) => String(s ?? '').toLowerCase().trim().replace(/\s+/g, ' ');
 function localityMatchesPort(loc, port) {
   const l = normLoc(loc), p = normLoc(port);

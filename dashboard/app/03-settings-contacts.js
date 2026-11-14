@@ -141,7 +141,7 @@ function renderSettings(s) {
         <div class="card" style="padding:22px 24px;">
           <div style="font-family:var(--font-mono); font-size:11px; font-weight:600; letter-spacing:.14em; text-transform:uppercase; color:var(--text-strong); margin-bottom:4px;">Item maintenance</div>
           <div style="font-size:12.5px; color:var(--text-muted); margin-bottom:16px;">Find an item, then rename it in every saved Edge Yard load (bought and shipped) — for example Rotor and Rotors. Tick several to turn them into one item. Only the name changes; weights, prices, signatures and issued PDFs stay. Every rename can be undone below.</div>
-          <input id="imFilter" placeholder="Filter items (e.g. rotor)" style="width:100%; max-width:420px; box-sizing:border-box; padding:10px 12px; margin-bottom:12px; background:var(--surface-sunken); border:1px solid var(--border-default); border-radius:var(--radius-xs);">
+          <input id="imFilter" placeholder="Filter items (e.g. rotor)" style="color:var(--text-strong); outline:none; width:100%; max-width:420px; box-sizing:border-box; padding:10px 12px; margin-bottom:12px; background:var(--surface-sunken); border:1px solid var(--border-default); border-radius:var(--radius-xs);">
           <div id="imBar" style="display:none; align-items:center; gap:10px; margin-bottom:10px;">
             <button id="imSelectAll" class="btn" style="padding:6px 12px; font-size:10px;">Select all</button>
             <span id="imSelected" style="flex:1; font-size:12.5px; color:var(--text-muted);"></span>
@@ -315,7 +315,7 @@ async function loadItemTypeRows() {
 const imSelected = new Set();
 async function renameItems(names) {
   const first = names[0];
-  const to = prompt(names.length === 1
+  const to = await askText(names.length === 1
     ? `Rename "${first}" in all saved loads to:`
     : `Rename these ${names.length} items to one name:\n${names.map(n => '• ' + n).join('\n')}\n\nNew name:`, first);
   if (to === null || !to.trim()) return false;
@@ -328,7 +328,7 @@ async function renameItems(names) {
     `${s.inbound.loads} load${s.inbound.loads === 1 ? '' : 's'} bought, ${s.outbound.loads} shipped, ${s.drafts.loads} open draft${s.drafts.loads === 1 ? '' : 's'}.` +
     (p.merges_into_existing ? `\n\nThey become one item: "${p.to}".` : '') +
     `\n\nOnly the name changes. Issued PDFs keep their old wording. You can undo this.`;
-  if (!confirm(msg)) return false;
+  if (!await askYesNo(msg)) return false;
   const done = await api('/api/item-maintenance/apply', { method: 'POST', body: JSON.stringify(body) });
   if (done.catalog_renamed) { const gone = names.map(n => n.toLowerCase()); customItemTypes = customItemTypes.filter(x => !gone.includes(String(x).toLowerCase())); }
   return true;

@@ -164,7 +164,7 @@ async function renderItemTypeManager(prefix) {
 const imSelected = new Set();   // item names ticked in Item maintenance (several can be renamed at once)
 async function renameItems(names) {
   const first = names[0];
-  const to = prompt(names.length === 1
+  const to = await askText(names.length === 1
     ? `Rename "${first}" in all saved loads to:`
     : `Rename these ${names.length} items to one name:\n${names.map(n => '• ' + n).join('\n')}\n\nNew name:`, first);
   if (to === null || !to.trim()) return false;
