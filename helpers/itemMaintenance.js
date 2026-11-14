@@ -120,6 +120,7 @@ function preview(from, to) {
 async function apply(from, to, { by = null, catalog = true } = {}) {
     const { list, t, keys } = check(from, to);
     const entry = { id: `REN_${Date.now().toString(36)}`, at: new Date().toISOString(), by, from: list.length === 1 ? list[0] : list, to: t, undone: false, changes: [] };
+    const months = new Set();   // YYYY-MM of every load changed, so the Drive sheets can be rebuilt for them
     for (const store of STORES) {
         await mutateJson(store.file(), [], (data) => {
             if (!Array.isArray(data)) return data;
@@ -128,6 +129,7 @@ async function apply(from, to, { by = null, catalog = true } = {}) {
                 load.items.forEach((it, i) => {
                     if (it && keys.has(keyOf(it.description)) && it.description !== t) {
                         entry.changes.push({ store: store.key, load_id: load.id, line: i, before: it.description });
+                        months.add(String(load.date || '').slice(0, 7));
                         it.description = t;
                     }
                 });
@@ -147,7 +149,7 @@ async function apply(from, to, { by = null, catalog = true } = {}) {
     }
     entry.catalog_renamed = catalogRenamed;
     await mutateJson(cfg.ITEM_RENAMES_FILE, [], (l) => { l.push(entry); return l; }, { strict: true });
-    return { id: entry.id, from: entry.from, to: t, lines: entry.changes.length, catalog_renamed: catalogRenamed };
+    return { id: entry.id, from: entry.from, to: t, lines: entry.changes.length, catalog_renamed: catalogRenamed, months: [...months].filter(Boolean) };
 }
 
 // Put a rename back. A line is restored only if it still reads the new text.
@@ -157,6 +159,7 @@ async function undo(id) {
     if (!entry) throw new Error('rename not found');
     if (entry.undone) throw new Error('that rename was already undone');
     let restored = 0, skipped = 0;
+    const months = new Set();
     for (const store of STORES) {
         const mine = entry.changes.filter((c) => c.store === store.key);
         if (!mine.length) continue;
@@ -165,7 +168,7 @@ async function undo(id) {
             for (const c of mine) {
                 const load = data.find((l) => l && l.id === c.load_id);
                 const it = load && Array.isArray(load.items) ? load.items[c.line] : null;
-                if (it && keyOf(it.description) === keyOf(entry.to) && it.description === entry.to) { it.description = c.before; restored += 1; }
+                if (it && keyOf(it.description) === keyOf(entry.to) && it.description === entry.to) { it.description = c.before; restored += 1; months.add(String(load.date || '').slice(0, 7)); }
                 else skipped += 1;
             }
             return data;
@@ -176,7 +179,7 @@ async function undo(id) {
         if (e) { e.undone = true; e.undone_at = new Date().toISOString(); }
         return list;
     }, { strict: true });
-    return { id, restored, skipped };
+    return { id, restored, skipped, months: [...months].filter(Boolean) };
 }
 
 function history() {

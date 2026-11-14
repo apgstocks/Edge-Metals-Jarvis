@@ -135,15 +135,22 @@ section('E. END TO END, through the real routes');
     const pv = await req('POST', '/api/item-maintenance/preview', { sid: admin, body: { from: 'Rotor', to: 'Rotors' } });
     ck('the preview route reports the same counts', pv.status === 200 && pv.json.total_lines === 3, JSON.stringify(pv.json));
 
+    // Apsara 2026-11-14: "all my previous load tickets/excel which gets written daily also needs to be changed".
+    // The Drive sheets are rebuilt from the loads by sheetSync.scheduleSync; a rename must ask for that.
+    const sheetSync = require(path.join(ROOT, 'helpers/sheetSync'));
+    const syncCalls = []; const realSched = sheetSync.scheduleSync; sheetSync.scheduleSync = (m) => { syncCalls.push(m); };
     const s0 = onHand('rotors'), r0 = onHand('rotor');
     const ap = await req('POST', '/api/item-maintenance/apply', { sid: admin, body: { from: 'Rotor', to: 'Rotors' } });
     ck('apply route renames the loads', ap.status === 200 && ap.json.lines === 3, JSON.stringify(ap.json));
+    ck('  apply asks the Drive sheets to rebuild, for the months of the loads it changed', syncCalls.length === 1 && Array.isArray(syncCalls[0]) && syncCalls[0].length >= 1 && syncCalls[0].every((m) => /^\d{4}-\d{2}$/.test(m)) && JSON.stringify(syncCalls[0]) === JSON.stringify(ap.json.months), JSON.stringify([syncCalls, ap.json.months]));
     const after = onHand('rotors');
     ck('  the stock figure read back is the two merged (delta, not absolute)', after.purchased === (s0 ? s0.purchased : 0) + (r0 ? r0.purchased : 0) && after.shipped === (r0 ? r0.shipped : 0) + (s0 ? s0.shipped : 0), JSON.stringify([s0, r0, after]));
     const hist = await req('GET', '/api/item-maintenance', { sid: admin });
     ck('  history lists it', hist.json.history.some((h) => h.id === ap.json.id && !h.undone), JSON.stringify(hist.json.history));
     const un = await req('POST', '/api/item-maintenance/undo', { sid: admin, body: { id: ap.json.id } });
     ck('undo route puts Rotor back', un.status === 200 && inbound()[0].items[0].description === 'Rotor', JSON.stringify(un.json));
+    ck('  undo asks for the rebuild too, so the sheets get the old name back', syncCalls.length === 2 && syncCalls[1].length >= 1, JSON.stringify(syncCalls));
+    sheetSync.scheduleSync = realSched;
     ck('Edge Metals bills and sales still untouched', metals() === metalsSnap);
     const multi = await req('POST', '/api/item-maintenance/preview', { sid: admin, body: { from: ['Rotor', 'Rotors'], to: 'Rotors' } });
     ck('the preview route takes a LIST of items', multi.status === 200 && multi.json.froms.length === 2 && multi.json.merges_into_existing === true, JSON.stringify(multi.json));

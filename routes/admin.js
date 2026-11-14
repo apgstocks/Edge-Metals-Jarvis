@@ -271,11 +271,21 @@ module.exports = function (app, ctx) {
         catch (e) { res.status(400).json({ error: e.message }); }
     });
     app.post('/api/item-maintenance/apply', requireAdmin, async (req, res) => {
-        try { res.json(await require('./helpers/itemMaintenance').apply(req.body.from, req.body.to, { by: actorOf(req) })); }
+        try {
+            const r = await require('./helpers/itemMaintenance').apply(req.body.from, req.body.to, { by: actorOf(req) });
+            // The Drive 'Inventory-Overall' sheet and the monthly loads workbooks are rebuilt from the loads on every change; a rename changes them too, so rebuild (fire-and-forget, never fails the rename).
+            try { const ss = require('./helpers/sheetSync'); ss.scheduleSync(r.months || []); } catch (_) { /* Drive is best-effort */ }
+            res.json(r);
+        }
         catch (e) { res.status(400).json({ error: e.message }); }
     });
     app.post('/api/item-maintenance/undo', requireAdmin, async (req, res) => {
-        try { res.json(await require('./helpers/itemMaintenance').undo(req.body.id)); }
+        try {
+            const r = await require('./helpers/itemMaintenance').undo(req.body.id);
+            // The Drive 'Inventory-Overall' sheet and the monthly loads workbooks are rebuilt from the loads on every change; a rename changes them too, so rebuild (fire-and-forget, never fails the rename).
+            try { const ss = require('./helpers/sheetSync'); ss.scheduleSync(r.months || []); } catch (_) { /* Drive is best-effort */ }
+            res.json(r);
+        }
         catch (e) { res.status(400).json({ error: e.message }); }
     });
 
