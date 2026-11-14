@@ -145,6 +145,7 @@ function renderSettings(s) {
           <div id="imBar" style="display:none; align-items:center; gap:10px; margin-bottom:10px;">
             <button id="imSelectAll" class="btn" style="padding:6px 12px; font-size:10px;">Select all</button>
             <span id="imSelected" style="flex:1; font-size:12.5px; color:var(--text-muted);"></span>
+            <button id="imClear" class="btn" style="display:none; padding:6px 12px; font-size:10px;">Clear</button>
             <button id="imRenameSelected" class="btn btn-primary" disabled style="padding:7px 14px; font-size:11px;">Rename selected</button>
           </div>
           <div id="imRows" style="display:flex; flex-direction:column; gap:8px;"></div>
@@ -342,7 +343,8 @@ async function renderItemMaintenance() {
     const q = (filter && filter.value || '').trim();
     const r = await api('/api/item-maintenance' + (q ? '?q=' + encodeURIComponent(q) : ''));
     const visible = new Set(r.items.map(it => it.name));
-    [...imSelected].forEach(n => { if (!visible.has(n)) imSelected.delete(n); });
+    // Ticked items stay ticked while the filter changes (Apsara 2026-11-14: typing a new
+    // filter wiped the selection). The bar below lists every ticked name, hidden or not.
     rows.innerHTML = r.items.length ? r.items.map(it => `
       <div style="display:flex; align-items:center; gap:10px; padding:9px 12px; background:var(--surface-sunken); border-radius:var(--radius-xs);">
         <input type="checkbox" class="im-pick" data-name="${esc(it.name)}" ${imSelected.has(it.name) ? 'checked' : ''} style="width:17px; height:17px; flex:none;">
@@ -355,8 +357,9 @@ async function renderItemMaintenance() {
     const refreshBar = () => {
       if (!bar) return;
       const n = imSelected.size;
-      bar.style.display = r.items.length ? 'flex' : 'none';
-      $('imSelected').textContent = n ? `${n} selected` : 'Tick items to rename several as one';
+      bar.style.display = (r.items.length || n) ? 'flex' : 'none';
+      $('imSelected').textContent = n ? `${n} selected: ${[...imSelected].join(', ')}` : 'Tick items to rename several as one';
+      const clr = $('imClear'); if (clr) clr.style.display = n ? '' : 'none';
       $('imRenameSelected').disabled = n < 1;
     };
     refreshBar();
@@ -364,6 +367,8 @@ async function renderItemMaintenance() {
       if (cb.checked) imSelected.add(cb.dataset.name); else imSelected.delete(cb.dataset.name);
       refreshBar();
     }));
+    const clr = $('imClear');
+    if (clr) clr.onclick = () => { imSelected.clear(); rows.querySelectorAll('.im-pick').forEach(cb => { cb.checked = false; }); refreshBar(); };
     const selAll = $('imSelectAll');
     if (selAll) selAll.onclick = () => {
       const all = r.items.every(it => imSelected.has(it.name));

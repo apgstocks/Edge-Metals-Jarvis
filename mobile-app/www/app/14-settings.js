@@ -193,7 +193,8 @@ async function renderItemMaintenance() {
     // A ticked item that no longer exists (renamed, or filtered away by a new
     // search) must not stay selected and get renamed unseen.
     const visible = new Set(r.items.map(it => it.name));
-    [...imSelected].forEach(n => { if (!visible.has(n)) imSelected.delete(n); });
+    // Ticked items stay ticked while the filter changes (Apsara 2026-11-14: typing a new
+    // filter wiped the selection). The bar below lists every ticked name, hidden or not.
     rows.innerHTML = r.items.length ? r.items.map(it => `
       <div style="display:flex; align-items:center; gap:8px; padding:9px 10px; background:var(--steel-900); border-radius:8px;">
         <input type="checkbox" class="im-pick" data-name="${esc(it.name)}" ${imSelected.has(it.name) ? 'checked' : ''} style="width:18px; height:18px; flex:none;">
@@ -206,8 +207,9 @@ async function renderItemMaintenance() {
     const refreshBar = () => {
       if (!bar) return;
       const n = imSelected.size;
-      bar.style.display = r.items.length ? 'flex' : 'none';
-      $('as_im_selected').textContent = n ? `${n} selected` : 'Tick items to rename several as one';
+      bar.style.display = (r.items.length || n) ? 'flex' : 'none';
+      $('as_im_selected').textContent = n ? `${n} selected: ${[...imSelected].join(', ')}` : 'Tick items to rename several as one';
+      const clr = $('as_im_clear'); if (clr) clr.style.display = n ? '' : 'none';
       $('as_im_rename_selected').disabled = n < 1;
     };
     refreshBar();
@@ -215,6 +217,8 @@ async function renderItemMaintenance() {
       if (cb.checked) imSelected.add(cb.dataset.name); else imSelected.delete(cb.dataset.name);
       refreshBar();
     }));
+    const clr = $('as_im_clear');
+    if (clr) clr.onclick = () => { imSelected.clear(); rows.querySelectorAll('.im-pick').forEach(cb => { cb.checked = false; }); refreshBar(); };
     const selAll = $('as_im_select_all');
     if (selAll) selAll.onclick = () => {
       const all = r.items.every(it => imSelected.has(it.name));

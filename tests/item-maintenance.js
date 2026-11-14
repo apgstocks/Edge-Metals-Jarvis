@@ -204,6 +204,20 @@ section('H. Apsara 2026-11-14: "prompt() is not supported" and "typed letters ar
     ck('phone filter box has a visible text colour', /id="as_im_filter"[^>]*color:var\(--text-strong\)/.test(rd('mobile-app/www/index.html')));
 }
 
+
+section('I. Apsara 2026-11-14: "when i type rums, all previously selected things get reset"');
+{
+    const rd = (f) => fs.readFileSync(path.join(ROOT, f), 'utf8');
+    for (const [label, f, sel] of [['website', 'dashboard/app/03-settings-contacts.js', 'imSelected'], ['phone', 'mobile-app/www/app/14-settings.js', 'as_im_selected']]) {
+        const src = rd(f); const k = src.indexOf('async function renderItemMaintenance');
+        const body = src.slice(k, k + 6000);
+        ck(label + ': a new filter does not drop ticked items that are hidden', !/forEach\(n => \{ if \(!visible\.has\(n\)\) imSelected\.delete\(n\)/.test(body));
+        ck(label + ': the bar names every ticked item, hidden or not', new RegExp("\\$\\('" + sel + "'\\)\\.textContent = n \\? `\\$\\{n\\} selected: \\$\\{\\[\\.\\.\\.imSelected\\]\\.join").test(body));
+        ck(label + ': the bar stays up when the filter hides everything but items are ticked', /\(r\.items\.length \|\| n\) \? 'flex'/.test(body));
+        ck(label + ': there is a Clear to empty the selection', /imSelected\.clear\(\); rows\.querySelectorAll\('\.im-pick'\)/.test(body));
+    }
+}
+
 console.log(`\n  ${pass} passed, ${fail} failed`);
 if (fail) { console.log('\n  FAILED:\n' + failures.map((f) => '    - ' + f).join('\n')); process.exit(1); }
 process.exit(0);
