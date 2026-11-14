@@ -1296,6 +1296,7 @@ function filterLoads(loads, query) {
 // them.
 const invLinesCache = {};        // description -> payload, per render
 let invLinesOpen = null;         // which type is expanded
+let invLinesRange = null;        // the 'from|to' the cache was fetched for
 
 async function toggleInvLines(description, from, to) {
   const key = String(description || '');
@@ -1330,6 +1331,15 @@ async function toggleInvLines(description, from, to) {
 // Pulled out here so a paint path cannot exist without the wiring sitting
 // beside it.
 function wireInvLineToggles(from, to) {
+  // The lines are fetched for ONE date range and cached by item name alone, so a new range must
+  // empty the cache. It never did (Apsara 2026-11-15: range 11/13-11/13 showed Rotors lines from
+  // 11/09-11/11 - the ones fetched under the earlier range).
+  const rangeKey = (from || '') + '|' + (to || '');
+  if (invLinesRange !== null && invLinesRange !== rangeKey) {
+    Object.keys(invLinesCache).forEach((k) => { delete invLinesCache[k]; });
+    invLinesOpen = null;
+  }
+  invLinesRange = rangeKey;
   document.querySelectorAll('[data-inv-toggle]').forEach((el) => el.addEventListener('click', () => {
     toggleInvLines(el.getAttribute('data-inv-toggle'), from, to);
   }));

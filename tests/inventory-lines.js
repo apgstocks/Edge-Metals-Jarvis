@@ -158,7 +158,7 @@ section('E — /api/loads/<word> routes are not swallowed by /api/loads/:id');
         ck('  :id first really does swallow it', wrong.matched === '/api/loads/:id' && wrong.id === 'lookup',
            'this is what production was doing — the sales page load search got 404');
         ck('  the literal first really does win', right.matched === '/api/loads/lookup');
-        clientChecks().then(done);
+        clientChecks().then(rangeChecks).then(done);
     });
 }
 
@@ -334,4 +334,40 @@ function done() {
     if (failures.length) { console.log('\n  Failed:'); failures.forEach((f) => console.log('   - ' + f)); }
     try { fs.rmSync(process.env.DATA_DIR, { recursive: true, force: true }); } catch (e) {}
     process.exit(fail ? 1 : 0);
+}
+
+// ── G ──
+async function rangeChecks() {
+    // ── G. Apsara 2026-11-15: range 11/13-11/13 listed Rotors lines dated 11/09-11/11 ──
+    // The lines are fetched per range but were cached by item name alone and never emptied, so the
+    // lines fetched under an earlier range were shown under the new one. Runs the real client code.
+    section('G. the item lines follow the date range, on both clients');
+    {
+        const vm = require('vm');
+        for (const [label, files] of [['website', ['dashboard/app/05-load-pricing.js']], ['phone', ['mobile-app/www/app/11-reports.js', 'mobile-app/www/app/13-inventory.js']]]) {
+            const src = files.map((f) => fs.readFileSync(path.join(ROOT, f), 'utf8')).join('\n');
+            const grab = (re) => { const m = src.match(re); return m ? m[0] : ''; };
+            const code = [
+                grab(/const invLinesCache = \{\}[^\n]*\n/), grab(/let invLinesOpen = null;[^\n]*\n/), grab(/let invLinesRange = null;[^\n]*\n/),
+                grab(/async function toggleInvLines[\s\S]*?\n\}\n/), grab(/function wireInvLineToggles[\s\S]*?\n\}\n/),
+            ].join('\n');
+            const urls = [];
+            const ctx = { document: { querySelectorAll: () => [] }, renderInvLines: () => {}, esc: (x) => x,
+                api: async (u) => { urls.push(u); return { count: 1, lines: [], totals: {}, u }; } };
+            vm.createContext(ctx);
+            vm.runInContext(code + '\n;this.api2 = { toggleInvLines, wireInvLineToggles, cache: invLinesCache, open: () => invLinesOpen };', ctx);
+            const A = ctx.api2;
+            ck(label + ': the code under test was found', code.includes('wireInvLineToggles') && code.includes('toggleInvLines'));
+            A.wireInvLineToggles('', '');                       // Inventory opened with no dates
+            await A.toggleInvLines('Rotors', '', '');           // she opens Rotors: every line
+            ck(label + ': opening Rotors fetched them with no range', urls.length === 1 && !/from=/.test(urls[0]), urls.join(' '));
+            A.wireInvLineToggles('2026-11-13', '2026-11-13');   // she applies 11/13 - 11/13
+            ck(label + ': a new range empties what was fetched for the old one', Object.keys(A.cache).length === 0 && A.open() === null);
+            await A.toggleInvLines('Rotors', '2026-11-13', '2026-11-13');
+            ck(label + ': opening Rotors again fetches for the new range', urls.length === 2 && /from=2026-11-13/.test(urls[1]) && /to=2026-11-13/.test(urls[1]), urls.join(' '));
+            A.wireInvLineToggles('2026-11-13', '2026-11-13');   // a repaint with the SAME range
+            ck(label + ': a repaint with the same range keeps it (no refetch on every redraw)', Object.keys(A.cache).length === 1 && A.open() === 'Rotors');
+        }
+    }
+
 }

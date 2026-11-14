@@ -318,6 +318,7 @@ function todayLocalDateStrForExpense() {
 // them.
 const invLinesCache = {};        // description -> payload, per render
 let invLinesOpen = null;         // which type is expanded
+let invLinesRange = null;        // the 'from|to' the cache was fetched for
 
 async function toggleInvLines(description, from, to) {
   const key = String(description || '');

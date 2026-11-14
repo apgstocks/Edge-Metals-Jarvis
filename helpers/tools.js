@@ -55,6 +55,9 @@
 // paragraph in front of them.
 
 const money = (n) => `$${(Math.round(Number(n) * 100) / 100).toFixed(2)}`;
+// A price per pound is a fraction of a dollar: money() would show 0.159 as "$0.16" on a confirm card
+// while the total is worked out from 0.159. Show what will be saved, to 4 places, trimmed to at least 2.
+const perLb = (n) => { const v = Math.round(Number(n) * 10000) / 10000; return `$${v.toFixed(4).replace(/(\.\d\d)0+$/, '$1').replace(/(\.\d\d\d)0$/, '$1')}`; };
 const isYmd = (v) => /^\d{4}-\d{2}-\d{2}$/.test(String(v || ''));
 const str = (v) => String(v == null ? '' : v).trim();
 const num = (v) => { const n = Number(v); return Number.isFinite(n) ? n : null; };
@@ -1213,14 +1216,14 @@ TOOLS.record_outbound_sale = {
             ['Sale date', p.date],
             ...(cutoff ? [['From lots received', `before ${cutoff}`]] : []),
             ...lines.map((l) => [l.description, `${Math.round(l.weight).toLocaleString()} lb from ${l.draws.length} lot${l.draws.length === 1 ? '' : 's'}`]),
-            ['Price', `${money(price)} per lb`],
+            ['Price', `${perLb(price)} per lb`],
             ['Sale total', money(amount)],
         ];
         const warnings = ['Priced per lb. On-hand drops by exactly these weights.'];
         if (missing.length) warnings.push(`Nothing on hand for: ${missing.join(', ')} — left out.`);
         if (!outbound.some((o) => keyOf(o.buyer) === keyOf(buyer))) warnings.push(`${buyer} has no earlier sale in the yard records — check the spelling.`);
         return {
-            summary: `Record a sale to ${buyer} on ${p.date}: ${lines.map((l) => `${l.description} ${Math.round(l.weight).toLocaleString()} lb`).join(', ')} at ${money(price)}/lb (${money(amount)}).`,
+            summary: `Record a sale to ${buyer} on ${p.date}: ${lines.map((l) => `${l.description} ${Math.round(l.weight).toLocaleString()} lb`).join(', ')} at ${perLb(price)}/lb (${money(amount)}).`,
             details, warnings,
             run: async (c = {}) => {
                 const { addOutboundLoad } = require('./outboundLoads');

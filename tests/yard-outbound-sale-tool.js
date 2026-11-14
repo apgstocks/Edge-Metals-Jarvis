@@ -69,6 +69,15 @@ section('B. refuses what it must ask first');
     ck('an item with nothing on hand → refused, says so', /no Widgets on hand/i.test(await miss({ ...full, descriptions: ['Widgets'] }) || ''));
 }
 
+section('B2. Apsara 2026-11-15: she typed 0.159 and the card said "$0.16"');
+{
+    const card = await ya.proposeAction({ kind: 'record_outbound_sale', params: { buyer: 'Metalco', date: '2026-11-14', price: 0.159, descriptions: ['Rotors'], received_before: '2026-11-13' } });
+    const priceRow = (card.details || []).find((d) => d[0] === 'Price');
+    ck('the card shows the price as typed, not rounded to cents', priceRow && priceRow[1] === '$0.159 per lb', JSON.stringify(priceRow));
+    ck('  and so does the one-line summary', /at \$0\.159\/lb/.test(card.summary || ''), card.summary);
+    try { await ya.cancelAction(card.id); } catch (_) {}
+}
+
 section('C. the proposal is exact and writes nothing');
 let proposal;
 {
