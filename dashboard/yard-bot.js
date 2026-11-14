@@ -125,6 +125,10 @@
     '#yardBotPanel.yb-docked{top:0;right:0;bottom:0;height:100vh;width:min(420px,38vw);',
     'border-radius:0;border-top:none;border-right:none;border-bottom:none;}',
     '#yardBotPanel.yb-docked #yardBotLog{flex:1;}',
+    '.yb-chips{display:flex;flex-wrap:wrap;gap:6px;margin:2px 0 0;}',
+    '.yb-chip{background:transparent;border:1px solid rgba(255,255,255,.28);color:inherit;border-radius:14px;',
+    'padding:6px 11px;font-size:12px;cursor:pointer;text-align:left;}',
+    '.yb-chip:hover{border-color:rgba(255,255,255,.6);}',
     '.yb-working{margin:2px 0 0;font-size:11px;color:rgba(255,255,255,.5);}',
     '.yb-working summary{cursor:pointer;padding:3px 0;}',
     '.yb-working-row{padding:2px 0 2px 10px;font-family:ui-monospace,Menlo,monospace;',
@@ -392,6 +396,35 @@
     log.scrollTop = log.scrollHeight;
   }
 
+  // The next steps Scout offers after an answer ("lead the user", Apsara 2026-11-15). Tapping one sends it as
+  // her own next question - it does nothing she could not have typed, and a change still waits for her Yes.
+  // Only the latest set stays on screen: older ones would answer a question she has moved on from.
+  function clearChips() {
+    var old = el('yardBotLog').querySelectorAll('.yb-chips');
+    for (var i = 0; i < old.length; i++) old[i].parentNode.removeChild(old[i]);
+  }
+  function renderFollowUps(list) {
+    clearChips();
+    if (!list || !list.length) return;
+    var log = el('yardBotLog');
+    var box = document.createElement('div');
+    box.className = 'yb-chips';
+    list.slice(0, 3).forEach(function (t) {
+      var b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'yb-chip';
+      b.textContent = String(t);
+      b.addEventListener('click', function () {
+        if (busy) return;
+        el('yardBotInput').value = String(t);
+        send();
+      });
+      box.appendChild(b);
+    });
+    log.appendChild(box);
+    log.scrollTop = log.scrollHeight;
+  }
+
   function renderProposal(p) {
     var log = el('yardBotLog');
     var card = document.createElement('div');
@@ -459,6 +492,7 @@
     var q = String(input.value || '').trim();
     if (!q) return;
     input.value = '';
+    clearChips();
     add('you', q);
     history.push({ role: 'you', text: q });
 
@@ -484,6 +518,8 @@
       history: history.slice(-6),
       source: onWeb ? 'website' : 'app',
       show: onWeb || undefined,
+      // Asks to be LED: next steps offered after each answer. Opt-in on the server, so nothing else changes.
+      lead: true,
       // Which company she is looking at, so Scout does not move her between
       // two different businesses on a guess. Edge Yard and Edge Metals are
       // different companies and that separation is most of what this is for.
@@ -495,6 +531,7 @@
         history.push({ role: 'bot', text: answer });
         if (r && r.proposal) renderProposal(r.proposal);
         if (r && r.used) renderWorking(r.used);
+        if (r && r.follow_ups && !r.proposal) renderFollowUps(r.follow_ups);
         if (r && r.action) doAction(r.action);
       })
       .catch(function (err) {

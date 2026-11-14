@@ -115,6 +115,22 @@ const FIGURE_QUESTION = /\b(how much|how many|total|totals|sum|average|avg|owe|o
 // Wrapping the function instead of the three callers is the point: a fourth
 // route cannot be added without logging, and none of the eight return
 // statements below has to remember anything.
+
+// What the model offers as next steps, made safe to put on a button. Her words, tapped, are sent as a
+// normal question, so a suggestion can do nothing she could not type - but it still must not carry a
+// figure (a wrong amount on a button is a wrong amount she may not notice), markup, or a wall of text.
+function cleanFollowUps(raw) {
+    const out = [];
+    for (const v of (Array.isArray(raw) ? raw : [])) {
+        const t = String(v == null ? '' : v).replace(/\s+/g, ' ').trim();
+        if (!t || t.length > 80 || /[<>`{}]/.test(t) || /\d[\d,]*(\.\d+)?\s*(lb|lbs|kg|mt|ton|tons|usd)\b|\$\s*\d|\b\d{1,2}\/\d{1,2}\b|\d{4}-\d{2}-\d{2}/i.test(t)) continue;
+        if (out.some((x) => x.toLowerCase() === t.toLowerCase())) continue;
+        out.push(t);
+        if (out.length === 3) break;
+    }
+    return out;
+}
+
 async function askYard(question, opts = {}) {
     const started = Date.now();
     let out;
@@ -257,6 +273,18 @@ async function askYardInner(question, opts = {}) {
             // Absent for every other caller: the voice path passes no
             // `show`, so its prompt is byte-for-byte what it always was.
             opts.show || null,
+            // ── LEADING: WHAT TO DO NEXT (Apsara 2026-11-15) ────────────────
+            // "lead the user, just like how chatgpt works". Opt-in, so the voice
+            // path and every other caller get exactly the prompt they always had.
+            // She declined the other half of the idea ("ask everything missing in one go").
+            opts.lead ? [
+                'ALSO put up to 3 short next steps in `follow_ups` — things she could tap, written as HER next message, '
+                + 'in her voice (for example "Show Randy\'s loads" or "What is still owed on EDGE_262?"). '
+                + 'Base them on what you just answered or found. Only suggest what you can actually do or look up. '
+                + 'Name the person, item or load; NEVER put an amount, a weight, a price or a date in one. '
+                + 'Leave `follow_ups` empty when you are asking her a question, when you have just proposed a change for her to confirm, '
+                + 'or when nothing sensible follows.',
+            ].join(' ') : null,
         ].filter((x) => x !== null).join('\n');
     }
 
@@ -429,6 +457,8 @@ async function askYardInner(question, opts = {}) {
             if (firstUse.length) answerText += `\n\n(I used what you taught me: "${firstUse.map((l) => l.text).join('"; "')}". Say "forget that" if it is wrong.)`;
         } catch (e) { /* never worth an answer */ }
         return { ok: true, answer: answerText, have_data: res.have_data !== false, proposal,
+                 // Only for a caller that asked to lead; empty when a change is waiting on her tap.
+                 ...(opts.lead ? { follow_ups: proposal ? [] : cleanFollowUps(res && res.follow_ups) } : {}),
                  // What it decided she wanted to SEE. Raw and unchecked here
                  // on purpose — validating it is the caller's job, and
                  // routes/scout.js puts it through scoutActions.sanitise
@@ -444,4 +474,4 @@ async function askYardInner(question, opts = {}) {
     }
 }
 
-module.exports = { askYard, SYSTEM_RULES };
+module.exports = { cleanFollowUps, askYard, SYSTEM_RULES };

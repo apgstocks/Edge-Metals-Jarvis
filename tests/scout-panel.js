@@ -254,6 +254,47 @@ section('F — it cannot be talked into opening something that is not there');
     dom.window.close();
 }
 
+section('G — Apsara 2026-11-15: it leads - tappable next steps after an answer, on both hosts');
+for (const host of [{ name: 'website', app: false }, { name: 'phone', app: true }]) {
+    const { w, dom } = await mount({ app: host.app, width: 1400 });
+    const sent = []; const replies = [
+        { ok: true, answer: 'Randy sold us 3 loads.', follow_ups: ["Show Randy's loads", 'What do we owe Randy?'] },
+        { ok: true, answer: 'We owe Randy a balance.', follow_ups: ['Pay Randy'] },
+        { ok: true, answer: 'Nothing more to add.', follow_ups: [] },
+    ];
+    w.api = async (pth, opts) => { sent.push(JSON.parse((opts && opts.body) || '{}')); return replies.shift() || { ok: true, answer: 'done' }; };
+    const log = () => w.document.getElementById('yardBotLog');
+    const chips = () => [...log().querySelectorAll('.yb-chip')].map((b) => b.textContent);
+    const settle = () => new Promise((r) => setTimeout(r, 40));
+    w.document.getElementById('yardBotFab').click();
+    w.document.getElementById('yardBotInput').value = 'what did Randy sell us';
+    w.document.getElementById('yardBotSend').click();
+    await settle();
+    ck(host.name + ': the question asks to be led', sent[0] && sent[0].lead === true, JSON.stringify(sent[0]));
+    ck(host.name + ': the next steps appear as buttons', JSON.stringify(chips()) === JSON.stringify(["Show Randy's loads", 'What do we owe Randy?']), JSON.stringify(chips()));
+    log().querySelectorAll('.yb-chip')[1].click();
+    await settle();
+    ck(host.name + ': tapping one sends it as her own question', sent[1] && sent[1].question === 'What do we owe Randy?', JSON.stringify(sent[1]));
+    ck('  and it shows in the chat as hers', /What do we owe Randy\?/.test(log().textContent));
+    ck('  the old suggestions are replaced by the new ones', JSON.stringify(chips()) === JSON.stringify(['Pay Randy']), JSON.stringify(chips()));
+    w.document.getElementById('yardBotInput').value = 'ok thanks';
+    w.document.getElementById('yardBotSend').click();
+    await settle();
+    ck(host.name + ': an answer with no next steps leaves no buttons behind', chips().length === 0, JSON.stringify(chips()));
+    dom.window.close();
+}
+{
+    // A reply with a change waiting on her tap must not also offer chips (the server sends none; the client must not draw any).
+    const reply = { ok: true, answer: 'I can record that.', follow_ups: ['Something else'], proposal: { id: 'p1', summary: 'Record a sale', details: [['Buyer', 'Metalco']], warnings: [] } };
+    const { w, dom } = await mount({ app: false, width: 1400, reply });
+    w.document.getElementById('yardBotFab').click();
+    w.document.getElementById('yardBotInput').value = 'sell it';
+    w.document.getElementById('yardBotSend').click();
+    await new Promise((r) => setTimeout(r, 40));
+    ck('a pending confirmation card shows no suggestions beside it', w.document.querySelectorAll('.yb-chip').length === 0);
+    dom.window.close();
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 if (failures.length) { console.log('\nFailures:'); failures.forEach((f) => console.log('  - ' + f)); }
 try { fs.rmSync(process.env.DATA_DIR, { recursive: true, force: true }); } catch (e) {}

@@ -29,6 +29,8 @@ module.exports = function (app, ctx) {
             const out = await askYard(b.question, {
                 history: b.history, days: b.days, role: req.role,
                 show: wantShow ? scoutActions.promptFor() : null,
+                // Opt-in, like `show`: only the Scout panel asks to be led. Everyone else is unchanged.
+                lead: b.lead === true,
             });
 
             if (wantShow) {
