@@ -113,6 +113,17 @@ const INV_SUBTAB_RENDER = { byType: invByTypeHtml, byDay: invByDayHtml, bySeller
 // Last inventory payload, so switching sub-tabs repaints instead of refetching.
 let invData = null;
 
+// The headline figure. It was labelled "on hand" but summed the NET IN column - what came in, which never
+// falls when something is sold (Apsara 2026-11-15: "rotors show old data only in inventory"). With the whole
+// history showing, it is the sum of each row's real on-hand; under a date range there is no on-hand, so it
+// says what it is: what came in.
+function invHeadlineStat(data) {
+  const rows = data.byType || [];
+  const hand = !!data.onHandAvailable;
+  const total = rows.reduce((t, g) => t + (Number(hand ? g.onHand : g.net) || 0), 0);
+  return [hand ? 'on hand' : 'came in', esc((Math.round(total * 100) / 100).toLocaleString() + ' ' + (data.unit || 'lb'))];
+}
+
 async function renderInventory() {
   const params = new URLSearchParams();
   if (invFrom) params.set('from', invFrom);
@@ -129,7 +140,7 @@ async function renderInventory() {
       ${pageHead('Inventory', {
         note: 'Computed live from every current load — deleting a load removes its material.',
         stats: [['item types', String((data.byType || []).length)],
-                ['on hand', esc(((data.byType || []).reduce((t, g) => t + (Number(g.net) || 0), 0)).toLocaleString() + ' ' + (data.unit || 'lb'))]],
+                invHeadlineStat(data)],
         chips: ['live from loads'],
       })}
       <div style="display:flex; justify-content:flex-end; margin-bottom:12px;">
@@ -1161,3 +1172,29 @@ function updateWaBadge(status) {
 }
 
 // ── SETTINGS (admin only) ─────────────────────────────────────────────────
+
+// ── Inventory keeps itself current ────────────────────────────────────
+// Apsara, 2026-11-15: after a sale was saved (through Scout) the open Inventory tab
+// did not change - "it should get refreshed auto na". The tab only read the server
+// when it was opened or Clear/Apply was pressed. Now, while the Inventory tab is
+// showing and the page is visible, it checks every 30s and when the tab is brought
+// back, and repaints ONLY if the figures changed. Never while a date box is being
+// typed in (a repaint would wipe the text).
+const INV_REFRESH_MS = 30000;
+async function inventoryAutoRefresh() {
+  if (document.visibilityState !== 'visible' || !$('btnInvApply') || !invData) return;
+  const a = document.activeElement;
+  if (a && (a.id === 'inv_from' || a.id === 'inv_to')) return;
+  const params = new URLSearchParams();
+  if (invFrom) params.set('from', invFrom);
+  if (invTo) params.set('to', invTo);
+  const sentFrom = invFrom, sentTo = invTo;
+  try {
+    const fresh = await api('/api/loads/inventory' + (params.toString() ? '?' + params.toString() : ''));
+    // The filter moved, or she left the tab, while this was in flight: drop it.
+    if (sentFrom !== invFrom || sentTo !== invTo || !$('btnInvApply')) return;
+    if (JSON.stringify(fresh) !== JSON.stringify(invData)) renderInventory();
+  } catch (_) { /* a failed background check must never blank the screen */ }
+}
+setInterval(inventoryAutoRefresh, INV_REFRESH_MS);
+document.addEventListener('visibilitychange', inventoryAutoRefresh);

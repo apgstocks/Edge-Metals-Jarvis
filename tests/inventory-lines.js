@@ -370,4 +370,69 @@ async function rangeChecks() {
         }
     }
 
+
+    // ── I. the headline "on hand" summed NET IN ──
+    section('I. the Inventory headline says what it is (website)');
+    {
+        const vm = require('vm');
+        const src = fs.readFileSync(path.join(ROOT, 'dashboard/app/02-dashboard-bookings.js'), 'utf8');
+        const fn = src.slice(src.indexOf('function invHeadlineStat'), src.indexOf('async function renderInventory'));
+        const ctx = { esc: (x) => String(x) }; vm.createContext(ctx); vm.runInContext(fn + '\n;this.f = invHeadlineStat;', ctx);
+        const rows = [{ description: 'Rotors', net: 293511, shipped: 277515, onHand: 15996 }, { description: 'HMS', net: 1000, shipped: 0, onHand: 1000 }];
+        const whole = ctx.f({ unit: 'lb', onHandAvailable: true, byType: rows });
+        ck('whole history: "on hand" is the sum of on hand, so it falls after a sale', whole[0] === 'on hand' && whole[1] === '16,996 lb', JSON.stringify(whole));
+        const afterSale = ctx.f({ unit: 'lb', onHandAvailable: true, byType: [{ ...rows[0], shipped: 277515 + 1000, onHand: 14996 }, rows[1]] });
+        ck('  a further sale of 1,000 lb lowers it by 1,000', afterSale[1] === '15,996 lb', JSON.stringify(afterSale));
+        const ranged = ctx.f({ unit: 'lb', onHandAvailable: false, byType: rows });
+        ck('date range: it says "came in", not "on hand"', ranged[0] === 'came in' && ranged[1] === '294,511 lb', JSON.stringify(ranged));
+    }
+
+    // ── H. Apsara 2026-11-15: "it should get refreshed auto" - the open Inventory tab follows the data ──
+    section('H. the open Inventory tab refreshes itself when the figures change');
+    {
+        const vm = require('vm');
+        const mk = (extra) => {
+            const calls = { api: 0, render: 0 }; const timers = []; const listeners = [];
+            const doc = { visibilityState: 'visible', activeElement: null, addEventListener: (ev, fn) => listeners.push([ev, fn]) };
+            const ctx = { document: doc, calls, timers, listeners, URLSearchParams,
+                setInterval: (fn, ms) => { timers.push([fn, ms]); return 1; },
+                $: (id) => (ctx.present && id === 'btnInvApply' ? {} : null), present: true,
+                Promise, JSON, ...extra };
+            vm.createContext(ctx); return ctx;
+        };
+        // website
+        {
+            const src = fs.readFileSync(path.join(ROOT, 'dashboard/app/02-dashboard-bookings.js'), 'utf8');
+            const blk = src.slice(src.indexOf('const INV_REFRESH_MS'));
+            const ctx = mk({});
+            let server = { n: 1 };
+            ctx.api = async () => { ctx.calls.api++; return { ...server }; };
+            ctx.renderInventory = () => { ctx.calls.render++; };
+            vm.runInContext("let invData = { n: 1 }; let invFrom = ''; let invTo = '';\n" + blk + "\n;this.run = inventoryAutoRefresh;", ctx);
+            ck('website: it is scheduled (every 30s) and re-checks when the tab is brought back', ctx.timers.length === 1 && ctx.timers[0][1] === 30000 && ctx.listeners.some(([e]) => e === 'visibilitychange'));
+            await ctx.run();
+            ck('website: figures unchanged -> no repaint', ctx.calls.api === 1 && ctx.calls.render === 0);
+            server = { n: 2 }; await ctx.run();
+            ck('website: figures changed (a sale was saved) -> repaints', ctx.calls.render === 1, JSON.stringify(ctx.calls));
+            ctx.document.activeElement = { id: 'inv_from' }; const n0 = ctx.calls.api; await ctx.run();
+            ck('website: not while a date box is being typed in', ctx.calls.api === n0);
+            ctx.document.activeElement = null; ctx.document.visibilityState = 'hidden'; await ctx.run();
+            ck('website: not while the page is hidden', ctx.calls.api === n0);
+            ctx.document.visibilityState = 'visible'; ctx.present = false; await ctx.run();
+            ck('website: not when another tab is showing', ctx.calls.api === n0);
+        }
+        // phone
+        {
+            const src = fs.readFileSync(path.join(ROOT, 'mobile-app/www/app/13-inventory.js'), 'utf8');
+            const blk = src.slice(src.indexOf('const MOB_INV_REFRESH_MS'));
+            const ctx = mk({}); ctx.renders = 0;
+            ctx.renderInventoryTab = async () => { ctx.renders++; };
+            vm.runInContext("let currentMobileTab = 'inventory';\n" + blk + "\n;this.run = mobInventoryAutoRefresh; this.setTab = (t) => { currentMobileTab = t; };", ctx);
+            ck('phone: scheduled every 30s, and on coming back to the front', ctx.timers.length === 1 && ctx.timers[0][1] === 30000 && ctx.listeners.some(([e]) => e === 'visibilitychange'));
+            ctx.run(); ck('phone: refreshes when Inventory is the open tab', ctx.renders === 1);
+            ctx.setTab('loads'); ctx.run(); ck('phone: not when another tab is open', ctx.renders === 1);
+            ctx.setTab('inventory'); ctx.document.activeElement = { id: 'inv_to' }; ctx.run(); ck('phone: not while typing a date', ctx.renders === 1);
+            ctx.document.activeElement = null; ctx.document.visibilityState = 'hidden'; ctx.run(); ck('phone: not while hidden', ctx.renders === 1);
+        }
+    }
 }

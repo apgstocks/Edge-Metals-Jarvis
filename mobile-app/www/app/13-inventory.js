@@ -345,3 +345,19 @@ $('btnSignout').addEventListener('click', () => {
   showLoginScreen();
 });
 
+
+// ── Inventory keeps itself current ────────────────────────────────────
+// Apsara, 2026-11-15: a saved sale did not show on the open Inventory tab ("it should
+// get refreshed auto na"). While the Inventory tab is showing and the app is visible,
+// re-read every 30s and when the app comes back to the front. renderInventoryTab already
+// paints what it holds first and swaps in the fresh figures, so nothing flashes. Never
+// while a date box is being typed in.
+const MOB_INV_REFRESH_MS = 30000;
+function mobInventoryAutoRefresh() {
+  if (document.visibilityState !== 'visible' || currentMobileTab !== 'inventory' || !$('btnInvApply')) return;
+  const a = document.activeElement;
+  if (a && (a.id === 'inv_from' || a.id === 'inv_to')) return;
+  Promise.resolve(renderInventoryTab()).catch(() => {});
+}
+setInterval(mobInventoryAutoRefresh, MOB_INV_REFRESH_MS);
+document.addEventListener('visibilitychange', mobInventoryAutoRefresh);
