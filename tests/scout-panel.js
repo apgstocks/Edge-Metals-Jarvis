@@ -108,6 +108,16 @@ section('B — docked down the right on a laptop, floating on a phone');
     web.w.document.getElementById('yardBotFab').click();
     const p = web.w.document.getElementById('yardBotPanel');
     ck('clicking the icon opens it', p.classList.contains('open'));
+    // Apsara 2026-11-15: "once yard assistant is opened, we cant close it". Close and the icon were wired
+    // as addEventListener('click', toggle): the click Event became toggle's `want`, truthy = force open.
+    web.w.document.getElementById('yardBotClose').click();
+    ck('the Close button closes it', !p.classList.contains('open'));
+    ck('  and the icon comes back', !web.w.document.getElementById('yardBotFab').classList.contains('hidden'));
+    web.w.document.getElementById('yardBotFab').click();
+    ck('  and the icon opens it again', p.classList.contains('open'));
+    web.w.document.getElementById('yardBotClose').click();
+    ck('  and it closes again', !p.classList.contains('open'));
+    web.w.document.getElementById('yardBotFab').click();
     ck('  and on a wide website window it DOCKS to the right',
        p.classList.contains('yb-docked'),
        'a card floating over the middle is a chat window you dismiss to see '

@@ -208,6 +208,9 @@
   }
 
   function mount() {
+    // Mounted once. A second run would add a second pair of click handlers to the SAME button
+    // (getElementById finds the first), and two toggles per click is "never opens".
+    if (document.getElementById('yardBotFab')) return;
     var style = document.createElement('style');
     style.textContent = CSS;
     document.head.appendChild(style);
@@ -229,8 +232,12 @@
     ].join('');
     document.body.appendChild(wrap);
 
-    el('yardBotFab').addEventListener('click', toggle);
-    el('yardBotClose').addEventListener('click', toggle);
+    // NOT `addEventListener('click', toggle)`: a click passes its Event as the first argument, and
+    // toggle(want) reads any value that is not undefined as "force this state" - an Event is truthy,
+    // so Close "forced open" and the panel could never be closed (Apsara 2026-11-15: "once yard
+    // assistant is opened, we cant close it"). Broke the day `want` was added, 2026-11-08.
+    el('yardBotFab').addEventListener('click', function () { toggle(); });
+    el('yardBotClose').addEventListener('click', function () { toggle(); });
     el('yardBotSend').addEventListener('click', send);
     el('yardBotInput').addEventListener('keydown', function (e) {
       if (e.key === 'Enter') { e.preventDefault(); send(); }
