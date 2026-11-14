@@ -160,39 +160,78 @@ async function renderItemTypeManager(prefix) {
 // Filter the items in use, rename one across every saved Edge Yard load. The
 // server (helpers/itemMaintenance.js) changes the NAME only and journals it,
 // so each rename can be undone from the list at the bottom.
+const imSelected = new Set();   // item names ticked in Item maintenance (several can be renamed at once)
+async function renameItems(names) {
+  const first = names[0];
+  const to = prompt(names.length === 1
+    ? `Rename "${first}" in all saved loads to:`
+    : `Rename these ${names.length} items to one name:\n${names.map(n => '• ' + n).join('\n')}\n\nNew name:`, first);
+  if (to === null || !to.trim()) return false;
+  if (names.length === 1 && to.trim() === first) return false;
+  const body = { from: names.length === 1 ? names[0] : names, to: to.trim() };
+  const p = await api('/api/item-maintenance/preview', { method: 'POST', body: JSON.stringify(body) });
+  const s = p.stores;
+  if (!p.total_lines) { alert('Nothing to rename — no saved load needs changing.'); return false; }
+  const msg = `Rename ${names.length === 1 ? '"' + names[0] + '"' : names.length + ' items'} to "${p.to}"?\n\n` +
+    `${s.inbound.loads} load${s.inbound.loads === 1 ? '' : 's'} bought, ${s.outbound.loads} shipped, ${s.drafts.loads} open draft${s.drafts.loads === 1 ? '' : 's'}.` +
+    (p.merges_into_existing ? `\n\nThey become one item: "${p.to}".` : '') +
+    `\n\nOnly the name changes. Issued PDFs keep their old wording. You can undo this.`;
+  if (!await askYesNo(msg)) return false;
+  const done = await api('/api/item-maintenance/apply', { method: 'POST', body: JSON.stringify(body) });
+  if (done.catalog_renamed) { const gone = names.map(n => n.toLowerCase()); customItemTypes = customItemTypes.filter(x => !gone.includes(String(x).toLowerCase())); }
+  return true;
+}
+
 async function renderItemMaintenance() {
-  const rows = $('as_im_rows'), hist = $('as_im_history'), filter = $('as_im_filter');
+  const rows = $('as_im_rows'), hist = $('as_im_history'), filter = $('as_im_filter'), bar = $('as_im_bar');
   if (!rows || !hist) return;
   const fmt = (n) => Math.round(Number(n) || 0).toLocaleString();
   try {
     const q = (filter && filter.value || '').trim();
     const r = await api('/api/item-maintenance' + (q ? '?q=' + encodeURIComponent(q) : ''));
+    // A ticked item that no longer exists (renamed, or filtered away by a new
+    // search) must not stay selected and get renamed unseen.
+    const visible = new Set(r.items.map(it => it.name));
+    [...imSelected].forEach(n => { if (!visible.has(n)) imSelected.delete(n); });
     rows.innerHTML = r.items.length ? r.items.map(it => `
       <div style="display:flex; align-items:center; gap:8px; padding:9px 10px; background:var(--steel-900); border-radius:8px;">
+        <input type="checkbox" class="im-pick" data-name="${esc(it.name)}" ${imSelected.has(it.name) ? 'checked' : ''} style="width:18px; height:18px; flex:none;">
         <div style="flex:1; min-width:0;">
           <div style="font-size:12.5px; color:var(--steel-100, #fff); overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${esc(it.name)}${it.spellings.length > 1 ? ' <span style="color:var(--steel-500); font-size:10.5px;">(also typed: ' + esc(it.spellings.slice(1).join(', ')) + ')</span>' : ''}</div>
           <div style="font-family:var(--font-mono); font-size:10px; color:var(--steel-500);">bought ${it.inbound.loads} load${it.inbound.loads === 1 ? '' : 's'} · ${fmt(it.inbound.weight)} · shipped ${it.outbound.loads}</div>
         </div>
         <button class="btn btn-im-rename" data-name="${esc(it.name)}" style="padding:5px 10px; font-size:10px;">Rename</button>
       </div>`).join('') : '<div style="font-family:var(--font-mono); font-size:11px; color:var(--steel-500); text-align:center; padding:8px 0;">No items match.</div>';
+    const refreshBar = () => {
+      if (!bar) return;
+      const n = imSelected.size;
+      bar.style.display = r.items.length ? 'flex' : 'none';
+      $('as_im_selected').textContent = n ? `${n} selected` : 'Tick items to rename several as one';
+      $('as_im_rename_selected').disabled = n < 1;
+    };
+    refreshBar();
+    rows.querySelectorAll('.im-pick').forEach(cb => cb.addEventListener('change', () => {
+      if (cb.checked) imSelected.add(cb.dataset.name); else imSelected.delete(cb.dataset.name);
+      refreshBar();
+    }));
+    const selAll = $('as_im_select_all');
+    if (selAll) selAll.onclick = () => {
+      const all = r.items.every(it => imSelected.has(it.name));
+      r.items.forEach(it => { if (all) imSelected.delete(it.name); else imSelected.add(it.name); });
+      rows.querySelectorAll('.im-pick').forEach(cb => { cb.checked = imSelected.has(cb.dataset.name); });
+      refreshBar();
+    };
+    const go = $('as_im_rename_selected');
+    if (go) go.onclick = async () => {
+      go.disabled = true;
+      try {
+        if (await renameItems([...imSelected])) { imSelected.clear(); renderItemTypeManager('as'); renderItemMaintenance(); }
+      } catch (e) { alert(e.message); } finally { refreshBar(); }
+    };
     rows.querySelectorAll('.btn-im-rename').forEach(btn => btn.addEventListener('click', async () => {
-      const from = btn.dataset.name;
-      const to = prompt(`Rename "${from}" in all saved loads to:`, from);
-      if (to === null || !to.trim() || to.trim() === from) return;
       btn.disabled = true;
       try {
-        const p = await api('/api/item-maintenance/preview', { method: 'POST', body: JSON.stringify({ from, to: to.trim() }) });
-        const s = p.stores;
-        const msg = `Rename "${p.from}" to "${p.to}"?\n\n` +
-          `${s.inbound.loads} load${s.inbound.loads === 1 ? '' : 's'} bought, ${s.outbound.loads} shipped, ${s.drafts.loads} open draft${s.drafts.loads === 1 ? '' : 's'}.` +
-          (p.merges_into_existing ? `\n\n"${p.to}" already exists, so the two become one item.` : '') +
-          `\n\nOnly the name changes. Issued PDFs keep their old wording. You can undo this.`;
-        if (!p.total_lines) { alert('Nothing to rename — no saved load uses that item.'); return; }
-        if (!await askYesNo(msg)) return;
-        const done = await api('/api/item-maintenance/apply', { method: 'POST', body: JSON.stringify({ from, to: to.trim() }) });
-        if (done.catalog_renamed) customItemTypes = customItemTypes.filter(x => String(x).toLowerCase() !== from.toLowerCase());
-        renderItemTypeManager('as');
-        renderItemMaintenance();
+        if (await renameItems([btn.dataset.name])) { imSelected.delete(btn.dataset.name); renderItemTypeManager('as'); renderItemMaintenance(); }
       } catch (e) { alert(e.message); } finally { btn.disabled = false; }
     }));
     hist.innerHTML = r.history.length ? '<div style="font-family:var(--font-mono); font-size:10px; letter-spacing:.12em; text-transform:uppercase; color:var(--text-muted);">Recent renames</div>' + r.history.slice(0, 8).map(h => `

@@ -72,51 +72,61 @@ function summary({ q } = {}) {
     }).sort((a, b) => a.name.toLowerCase().localeCompare(b.name.toLowerCase()));
 }
 
+// `from` may be one name or a list (several items chosen at once, all becoming
+// `to` — 2026-11-14: "what if i want to choose multiple items and rename").
 function check(from, to) {
-    const f = clean(from), t = clean(to);
-    if (!f) throw new Error('the item to rename is required');
+    const list = (Array.isArray(from) ? from : [from]).map(clean).filter(Boolean);
+    const t = clean(to);
+    if (!list.length) throw new Error('the item to rename is required');
     if (!t) throw new Error('the new item name is required');
     if (t.length > 80) throw new Error('the new item name is too long (80 characters at most)');
-    if (f === t) throw new Error('the new name is the same as the old one');
-    return { f, t };
+    if (list.length > 50) throw new Error('too many items at once (50 at most)');
+    const keys = new Set(list.map(keyOf));
+    // Choosing only the name it already has changes nothing. Several items where
+    // one already reads exactly `t` is fine: the others become it.
+    if (list.length === 1 && list[0] === t) throw new Error('the new name is the same as the old one');
+    return { list: [...new Set(list)], t, keys };
 }
 
 // What a rename WOULD do. Writes nothing.
 function preview(from, to) {
-    const { f, t } = check(from, to);
-    const fk = keyOf(f);
+    const { list, t, keys } = check(from, to);
     const tk = keyOf(t);
-    const out = { from: f, to: t, merges_into_existing: false, stores: {}, total_lines: 0 };
+    const out = { from: list.length === 1 ? list[0] : list, froms: list, to: t, merges_into_existing: false, stores: {}, total_lines: 0 };
     for (const store of STORES) {
         let loads = 0, lines = 0, weight = 0; const ids = [];
         for (const load of rowsOf(store)) {
             let hit = false;
             for (const it of (Array.isArray(load && load.items) ? load.items : [])) {
                 const k = keyOf(it && it.description);
-                if (k === fk) { lines += 1; weight += num(it.net_weight); hit = true; }
-                else if (fk !== tk && k === tk) out.merges_into_existing = true;
+                if (!keys.has(k)) continue;
+                if (clean(it.description) === t && it.description === t) continue;   // already exactly the target
+                lines += 1; weight += num(it.net_weight); hit = true;
             }
             if (hit) { loads += 1; if (ids.length < 12) ids.push(load.id); }
         }
         out.stores[store.key] = { label: store.label, loads, lines, weight, sample_ids: ids };
         out.total_lines += lines;
     }
+    // "Becomes one item" when several are chosen, or the new name already exists
+    // as an item that was not chosen.
+    const existing = summary({}).some((x) => keyOf(x.name) === tk && !keys.has(tk));
+    out.merges_into_existing = existing || keys.size > 1;
     return out;
 }
 
 // Do it. Item name only. The journal is written in the same pass as each file
 // change, per file; undo() reads it.
 async function apply(from, to, { by = null, catalog = true } = {}) {
-    const { f, t } = check(from, to);
-    const fk = keyOf(f);
-    const entry = { id: `REN_${Date.now().toString(36)}`, at: new Date().toISOString(), by, from: f, to: t, undone: false, changes: [] };
+    const { list, t, keys } = check(from, to);
+    const entry = { id: `REN_${Date.now().toString(36)}`, at: new Date().toISOString(), by, from: list.length === 1 ? list[0] : list, to: t, undone: false, changes: [] };
     for (const store of STORES) {
         await mutateJson(store.file(), [], (data) => {
             if (!Array.isArray(data)) return data;
             for (const load of data) {
                 if (!load || !Array.isArray(load.items)) continue;
                 load.items.forEach((it, i) => {
-                    if (it && keyOf(it.description) === fk) {
+                    if (it && keys.has(keyOf(it.description)) && it.description !== t) {
                         entry.changes.push({ store: store.key, load_id: load.id, line: i, before: it.description });
                         it.description = t;
                     }
@@ -125,18 +135,19 @@ async function apply(from, to, { by = null, catalog = true } = {}) {
             return data;
         }, { strict: true });
     }
-    // The yard's own pick-list (item_types.json), so the old spelling is not
-    // offered again. Only an entry that matches; absent is fine.
+    // The yard's own pick-list (item_types.json), so the old spellings are not
+    // offered again. Only entries that match; absent is fine.
     let catalogRenamed = false;
     if (catalog && entry.changes.length) {
-        try {
-            const r = await require('./itemTypes').renameItemType(f, t);
-            catalogRenamed = !!r.renamed;
-        } catch (_) { /* the list is a convenience; the loads are what matter */ }
+        for (const f of list) {
+            if (f === t) continue;
+            try { const r = await require('./itemTypes').renameItemType(f, t); catalogRenamed = catalogRenamed || !!r.renamed; }
+            catch (_) { /* the list is a convenience; the loads are what matter */ }
+        }
     }
     entry.catalog_renamed = catalogRenamed;
-    await mutateJson(cfg.ITEM_RENAMES_FILE, [], (list) => { list.push(entry); return list; }, { strict: true });
-    return { id: entry.id, from: f, to: t, lines: entry.changes.length, catalog_renamed: catalogRenamed };
+    await mutateJson(cfg.ITEM_RENAMES_FILE, [], (l) => { l.push(entry); return l; }, { strict: true });
+    return { id: entry.id, from: entry.from, to: t, lines: entry.changes.length, catalog_renamed: catalogRenamed };
 }
 
 // Put a rename back. A line is restored only if it still reads the new text.
@@ -171,7 +182,7 @@ async function undo(id) {
 function history() {
     const j = loadJson(cfg.ITEM_RENAMES_FILE, []);
     return (Array.isArray(j) ? j : []).slice().reverse().slice(0, 30)
-        .map((e) => ({ id: e.id, at: e.at, from: e.from, to: e.to, lines: e.changes.length, undone: !!e.undone }));
+        .map((e) => ({ id: e.id, at: e.at, from: Array.isArray(e.from) ? e.from.join(' + ') : e.from, to: e.to, lines: e.changes.length, undone: !!e.undone }));
 }
 
 module.exports = { summary, preview, apply, undo, history, keyOf };

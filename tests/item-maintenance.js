@@ -145,7 +145,33 @@ section('E. END TO END, through the real routes');
     const un = await req('POST', '/api/item-maintenance/undo', { sid: admin, body: { id: ap.json.id } });
     ck('undo route puts Rotor back', un.status === 200 && inbound()[0].items[0].description === 'Rotor', JSON.stringify(un.json));
     ck('Edge Metals bills and sales still untouched', metals() === metalsSnap);
+    const multi = await req('POST', '/api/item-maintenance/preview', { sid: admin, body: { from: ['Rotor', 'Rotors'], to: 'Rotors' } });
+    ck('the preview route takes a LIST of items', multi.status === 200 && multi.json.froms.length === 2 && multi.json.merges_into_existing === true, JSON.stringify(multi.json));
+    const mApply = await req('POST', '/api/item-maintenance/apply', { sid: admin, body: { from: ['Rotor', 'Rotors'], to: 'Rotors' } });
+    ck('  and the apply route renames them all', mApply.status === 200 && mApply.json.lines >= 3 && !inbound().some((l) => l.items.some((i) => i.description.trim().toLowerCase() === 'rotor')), JSON.stringify(mApply.json));
+    await req('POST', '/api/item-maintenance/undo', { sid: admin, body: { id: mApply.json.id } });
     server.close();
+}
+
+section('G. several items chosen at once, one new name');
+{
+    await mutateJson(cfg.LOADS_FILE, [], (d) => { d.push({ id: 'EDGE_9', date: '2026-10-09', seller: 'Anil', status: 'open', seller_signature: 'SIG9', amount: 40, items: [{ description: 'Rotor disc', net_weight: 200, amount: 40 }, { description: 'ROTORS', net_weight: 50, amount: 10 }] }); return d; });
+    const s0 = stock.stockReport(inbound(), outbound()).filter((r) => /^rotor/i.test(r.description)).reduce((a, r) => a + r.purchased, 0);
+    const pv = im.preview(['Rotor', 'Rotors', 'Rotor disc'], 'Rotors');
+    ck('preview counts every chosen spelling, and says they become one', pv.total_lines >= 5 && pv.merges_into_existing === true && pv.froms.length === 3, JSON.stringify(pv));
+    ck('  lines already exactly "Rotors" are not counted as changes', pv.total_lines === ([...inbound(), ...outbound()].flatMap((l) => l.items).filter((i) => /^rotors?( disc)?$/i.test(i.description.trim()) && i.description !== 'Rotors').length));
+    const r = await im.apply(['Rotor', 'Rotors', 'Rotor disc'], 'Rotors', { by: 'admin' });
+    const names = [...inbound(), ...outbound()].flatMap((l) => l.items).map((i) => i.description);
+    ck('every chosen spelling now reads exactly Rotors', !names.some((n) => /^rotor( disc)?$/i.test(n.trim())) && !names.includes('ROTORS'), JSON.stringify(names));
+    ck('an item not chosen (Auto cast) is untouched', names.includes('Auto cast'));
+    const s1 = stock.stockReport(inbound(), outbound()).filter((r2) => /^rotor/i.test(r2.description)).reduce((a, r2) => a + r2.purchased, 0);
+    ck('stock: the rotors added up before and after are the same weight, now one row', s1 === s0 && stock.stockReport(inbound(), outbound()).filter((x) => /^rotor/i.test(x.description)).length === 1, `${s0} vs ${s1}`);
+    ck('signatures and status untouched', inbound().find((l) => l.id === 'EDGE_9').seller_signature === 'SIG9');
+    const u = await im.undo(r.id);
+    ck('one undo puts every spelling back', u.restored === r.lines && inbound().find((l) => l.id === 'EDGE_9').items[0].description === 'Rotor disc' && inbound().find((l) => l.id === 'EDGE_9').items[1].description === 'ROTORS', JSON.stringify(u));
+    let e1 = null; try { im.preview([], 'X'); } catch (e) { e1 = e; }
+    let e2 = null; try { im.preview(['Rotors'], 'Rotors'); } catch (e) { e2 = e; }
+    ck('an empty choice and a no-op single rename are refused', !!e1 && !!e2);
 }
 
 section('F. the screen posts what the routes read');
@@ -153,7 +179,8 @@ section('F. the screen posts what the routes read');
     const src = fs.readFileSync(path.join(ROOT, 'mobile-app/www/app/14-settings.js'), 'utf8');
     const html = fs.readFileSync(path.join(ROOT, 'mobile-app/www/index.html'), 'utf8');
     ck('screen calls all four routes', ['/api/item-maintenance/preview', '/api/item-maintenance/apply', '/api/item-maintenance/undo'].every((r) => src.includes(r)) && /api\('\/api\/item-maintenance'/.test(src));
-    ck('  and sends {from, to} / {id}, the keys the routes read', /preview'[^)]*JSON\.stringify\(\{ from, to:/.test(src) && /apply'[^)]*JSON\.stringify\(\{ from, to:/.test(src) && /undo'[^)]*JSON\.stringify\(\{ id:/.test(src));
+    ck('  and sends {from: name or list, to} / {id}, the keys the routes read', /body = \{ from: names\.length === 1 \? names\[0\] : names, to:/.test(src) && /preview', \{ method: 'POST', body: JSON\.stringify\(body\)/.test(src) && /apply', \{ method: 'POST', body: JSON\.stringify\(body\)/.test(src) && /undo'[^)]*JSON\.stringify\(\{ id:/.test(src));
+    ck('  tick boxes, select all, and a Rename selected button exist', /class="im-pick"/.test(src) && /as_im_rename_selected/.test(html) && /as_im_select_all/.test(html));
     ck('  the panel is in the ADMIN modal only (staff cannot rewrite loads)', /id="as_im_rows"/.test(html) && !/id="ss_im_/.test(html));
 }
 
