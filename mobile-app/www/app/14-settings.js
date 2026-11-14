@@ -26,6 +26,7 @@ $('btnAdminSettings').addEventListener('click', async () => {
   // description list, they're independent panels in the same modal.
   renderItemTypeManager('as');
   renderItemMaintenance();
+  renderScoutLessons();
 });
 $('btnCloseAdminSettings').addEventListener('click', () => $('adminSettingsModal').classList.add('hidden'));
 
@@ -257,6 +258,31 @@ async function renderItemMaintenance() {
   let t = null;
   f.addEventListener('input', () => { clearTimeout(t); t = setTimeout(renderItemMaintenance, 250); });
 })();
+
+// ── What Scout has learned (Settings, admin) ──────────────────────────
+async function renderScoutLessons() {
+  const box = $('as_scout_lessons');
+  if (!box) return;
+  try {
+    const r = await api('/api/yard/lessons');
+    box.innerHTML = r.lessons.length ? r.lessons.map(l => `
+      <div style="display:flex; align-items:center; gap:8px; padding:9px 10px; background:var(--steel-900); border-radius:8px;">
+        <div style="flex:1; min-width:0;">
+          <div style="font-size:12.5px; color:var(--steel-100, #fff);">${esc(l.text)}</div>
+          <div style="font-family:var(--font-mono); font-size:10px; color:var(--steel-500);">taught ${esc(String(l.at || '').slice(0, 10))} · used ${l.uses} time${l.uses === 1 ? '' : 's'}</div>
+        </div>
+        <button class="btn btn-danger btn-scout-forget" data-id="${l.id}" style="padding:5px 10px; font-size:10px;">Forget</button>
+      </div>`).join('') : '<div style="font-family:var(--font-mono); font-size:11px; color:var(--steel-500);">Nothing yet. Tell Scout something to remember.</div>';
+    box.querySelectorAll('.btn-scout-forget').forEach(btn => btn.addEventListener('click', async () => {
+      if (!await askYesNo('Forget this? Scout stops using it.')) return;
+      btn.disabled = true;
+      try { await api('/api/yard/lessons/forget', { method: 'POST', body: JSON.stringify({ id: Number(btn.dataset.id) }) }); renderScoutLessons(); }
+      catch (e) { alert(e.message); btn.disabled = false; }
+    }));
+  } catch (e) {
+    box.innerHTML = `<div style="color:var(--status-danger); font-size:11.5px;">Couldn't load lessons: ${esc(e.message)}</div>`;
+  }
+}
 
 // Add straight from Settings, so the catalog can be set up before anyone
 // types a load — the auto-add-on-save path (see the save handler) only ever

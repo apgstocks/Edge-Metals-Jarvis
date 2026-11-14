@@ -48,7 +48,12 @@ const MAX_PENDING = 50;
 
 function sweep() {
     const now = Date.now();
-    for (const [id, p] of pending) if (now - p.created > PROPOSAL_TTL_MS) pending.delete(id);
+    for (const [id, p] of pending) {
+        if (now - p.created > PROPOSAL_TTL_MS) {
+            pending.delete(id);
+            try { require('./scoutLearning').outcome(p.eventId, 'expired', { kind: p.kind }).catch(() => {}); } catch (e) { /* optional */ }
+        }
+    }
     // Hard cap as well as a TTL: the TTL alone bounds age, not count, so a
     // flood of questions inside one minute could still grow this without limit.
     while (pending.size > MAX_PENDING) pending.delete(pending.keys().next().value);
@@ -291,7 +296,11 @@ async function proposeAction(raw, ctx = {}) {
         throw new Error(`I cannot do "${kind || 'that'}". I can: ${names.join(', ')}.`);
     }
     const id = crypto.randomBytes(16).toString('hex');
-    pending.set(id, { id, kind, created: Date.now(), built, role: ctx.role || null });
+    // What happens to this card is what Scout learns from (helpers/scoutLearning.js):
+    // confirmed, cancelled or left to expire. Never blocks, never throws.
+    let eventId = null;
+    try { eventId = require('./scoutLearning').proposed(kind, ctx.role); } catch (e) { /* learning is optional */ }
+    pending.set(id, { id, kind, created: Date.now(), built, role: ctx.role || null, eventId, params: (raw && (raw.params || raw)) || {} });
     return {
         id,
         kind,
@@ -312,10 +321,17 @@ async function confirmAction(id, ctx = {}) {
     if (!p) throw new Error('That confirmation has expired or was already used. Ask again and I will re-propose it.');
     pending.delete(p.id);
     const result = await p.built.run(ctx);
+    // Only a write that actually ran counts as "approved".
+    try { require('./scoutLearning').outcome(p.eventId, 'confirmed', { kind: p.kind, params: p.params }).catch(() => {}); } catch (e) { /* optional */ }
     return { ok: true, kind: p.kind, summary: p.built.summary, result };
 }
 
-function cancelAction(id) { return pending.delete(String(id || '')); }
+function cancelAction(id) {
+    const p = pending.get(String(id || ''));
+    const gone = pending.delete(String(id || ''));
+    if (gone && p) { try { require('./scoutLearning').outcome(p.eventId, 'cancelled', { kind: p.kind }).catch(() => {}); } catch (e) { /* optional */ } }
+    return gone;
+}
 function pendingCount() { sweep(); return pending.size; }
 
 module.exports = { proposeAction, confirmAction, cancelAction, pendingCount, ACTION_NAMES, EDITABLE_LOAD_FIELDS, PROPOSAL_TTL_MS };

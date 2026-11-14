@@ -181,6 +181,12 @@ section('F. the screen posts what the routes read');
     ck('screen calls all four routes', ['/api/item-maintenance/preview', '/api/item-maintenance/apply', '/api/item-maintenance/undo'].every((r) => src.includes(r)) && /api\('\/api\/item-maintenance'/.test(src));
     ck('  and sends {from: name or list, to} / {id}, the keys the routes read', /body = \{ from: names\.length === 1 \? names\[0\] : names, to:/.test(src) && /preview', \{ method: 'POST', body: JSON\.stringify\(body\)/.test(src) && /apply', \{ method: 'POST', body: JSON\.stringify\(body\)/.test(src) && /undo'[^)]*JSON\.stringify\(\{ id:/.test(src));
     ck('  tick boxes, select all, and a Rename selected button exist', /class="im-pick"/.test(src) && /as_im_rename_selected/.test(html) && /as_im_select_all/.test(html));
+    // The WEBSITE has its own settings code (dashboard/app), separate from the phone app's.
+    // Built into the app first, and she opened the website: this is the check for that miss.
+    const web = fs.readFileSync(path.join(ROOT, 'dashboard/app/03-settings-contacts.js'), 'utf8');
+    ck('the WEBSITE settings has the panel too: filter, tick boxes, select all, Rename selected, undo', ['id="imFilter"', 'id="imRenameSelected"', 'id="imSelectAll"', 'class="im-pick"', 'btn-im-undo'].every((x) => web.includes(x)));
+    ck('  the website sends the keys the routes read', /body = \{ from: names\.length === 1 \? names\[0\] : names, to:/.test(web) && /preview', \{ method: 'POST', body: JSON\.stringify\(body\)/.test(web) && /apply', \{ method: 'POST', body: JSON\.stringify\(body\)/.test(web) && /undo'[^)]*JSON\.stringify\(\{ id:/.test(web));
+    ck('  and the panel sits above the old Item description list', web.indexOf('id="imRows"') > 0 && web.indexOf('id="imRows"') < web.indexOf('id="itemTypeRows"'));
     ck('  the panel is in the ADMIN modal only (staff cannot rewrite loads)', /id="as_im_rows"/.test(html) && !/id="ss_im_/.test(html));
 }
 

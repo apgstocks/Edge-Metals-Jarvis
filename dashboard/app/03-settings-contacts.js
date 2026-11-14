@@ -134,6 +134,23 @@ function renderSettings(s) {
           <div class="field" style="margin-bottom:0; max-width:220px;"><label>Next load number</label><input id="s_next_load_number" type="number" min="1" value="${esc(s.next_load_number ?? '')}" placeholder="e.g. 500"></div>
         </div>
         <div class="card" style="padding:22px 24px;">
+          <div style="font-family:var(--font-mono); font-size:11px; font-weight:600; letter-spacing:.14em; text-transform:uppercase; color:var(--text-strong); margin-bottom:4px;">What Scout has learned</div>
+          <div style="font-size:12.5px; color:var(--text-muted); margin-bottom:16px;">What you or your team told the yard assistant to remember, in your own words. Edge Yard only. Scout never keeps prices or weights here. Forget one and it stops being used.</div>
+          <div id="scoutLessons" style="display:flex; flex-direction:column; gap:8px;"><div style="font-family:var(--font-mono); font-size:11.5px; color:var(--text-faint);">Loading…</div></div>
+        </div>
+        <div class="card" style="padding:22px 24px;">
+          <div style="font-family:var(--font-mono); font-size:11px; font-weight:600; letter-spacing:.14em; text-transform:uppercase; color:var(--text-strong); margin-bottom:4px;">Item maintenance</div>
+          <div style="font-size:12.5px; color:var(--text-muted); margin-bottom:16px;">Find an item, then rename it in every saved Edge Yard load (bought and shipped) — for example Rotor and Rotors. Tick several to turn them into one item. Only the name changes; weights, prices, signatures and issued PDFs stay. Every rename can be undone below.</div>
+          <input id="imFilter" placeholder="Filter items (e.g. rotor)" style="width:100%; max-width:420px; box-sizing:border-box; padding:10px 12px; margin-bottom:12px; background:var(--surface-sunken); border:1px solid var(--border-default); border-radius:var(--radius-xs);">
+          <div id="imBar" style="display:none; align-items:center; gap:10px; margin-bottom:10px;">
+            <button id="imSelectAll" class="btn" style="padding:6px 12px; font-size:10px;">Select all</button>
+            <span id="imSelected" style="flex:1; font-size:12.5px; color:var(--text-muted);"></span>
+            <button id="imRenameSelected" class="btn btn-primary" disabled style="padding:7px 14px; font-size:11px;">Rename selected</button>
+          </div>
+          <div id="imRows" style="display:flex; flex-direction:column; gap:8px;"></div>
+          <div id="imHistory" style="display:flex; flex-direction:column; gap:6px; margin-top:14px;"></div>
+        </div>
+        <div class="card" style="padding:22px 24px;">
           <div style="font-family:var(--font-mono); font-size:11px; font-weight:600; letter-spacing:.14em; text-transform:uppercase; color:var(--text-strong); margin-bottom:4px;">Item description list</div>
           <div style="font-size:12.5px; color:var(--text-muted); margin-bottom:16px;">The descriptions offered while typing an item on a load. Anything new typed on a load is added here automatically. Renaming or removing one here only changes what future loads are offered — loads that already used the old wording keep it, and so do their PDFs and monthly sheets.</div>
           <div style="display:flex; gap:8px; margin-bottom:14px; max-width:420px;">
@@ -211,6 +228,10 @@ function renderSettings(s) {
   $('btnFindYardGroup').addEventListener('click', () => doGroupSearch($('yardGroupSearch').closest('.card')));
 
   loadItemTypeRows();
+  renderItemMaintenance();
+  renderScoutLessons();
+  const imf = $('imFilter');
+  if (imf) { let t = null; imf.addEventListener('input', () => { clearTimeout(t); t = setTimeout(renderItemMaintenance, 250); }); }
 }
 
 // ── Item description catalog manager (Settings > Yard) ────────────────
@@ -283,6 +304,126 @@ async function loadItemTypeRows() {
     }
   } catch (e) {
     rows.innerHTML = `<div style="color:var(--status-danger); font-size:12px;">Couldn't load the description list: ${esc(e.message)}</div>`;
+  }
+}
+
+// ── Item maintenance (Settings, admin) ────────────────────────────────
+// Mirrors the phone app's panel (mobile-app/www/app/14-settings.js): filter the
+// items in use, rename one — or several ticked together — across every saved Edge
+// Yard load. The server (helpers/itemMaintenance.js) changes the NAME only and
+// journals each rename so it can be undone from the list below.
+const imSelected = new Set();
+async function renameItems(names) {
+  const first = names[0];
+  const to = prompt(names.length === 1
+    ? `Rename "${first}" in all saved loads to:`
+    : `Rename these ${names.length} items to one name:\n${names.map(n => '• ' + n).join('\n')}\n\nNew name:`, first);
+  if (to === null || !to.trim()) return false;
+  if (names.length === 1 && to.trim() === first) return false;
+  const body = { from: names.length === 1 ? names[0] : names, to: to.trim() };
+  const p = await api('/api/item-maintenance/preview', { method: 'POST', body: JSON.stringify(body) });
+  const s = p.stores;
+  if (!p.total_lines) { alert('Nothing to rename — no saved load needs changing.'); return false; }
+  const msg = `Rename ${names.length === 1 ? '"' + names[0] + '"' : names.length + ' items'} to "${p.to}"?\n\n` +
+    `${s.inbound.loads} load${s.inbound.loads === 1 ? '' : 's'} bought, ${s.outbound.loads} shipped, ${s.drafts.loads} open draft${s.drafts.loads === 1 ? '' : 's'}.` +
+    (p.merges_into_existing ? `\n\nThey become one item: "${p.to}".` : '') +
+    `\n\nOnly the name changes. Issued PDFs keep their old wording. You can undo this.`;
+  if (!confirm(msg)) return false;
+  const done = await api('/api/item-maintenance/apply', { method: 'POST', body: JSON.stringify(body) });
+  if (done.catalog_renamed) { const gone = names.map(n => n.toLowerCase()); customItemTypes = customItemTypes.filter(x => !gone.includes(String(x).toLowerCase())); }
+  return true;
+}
+
+async function renderItemMaintenance() {
+  const rows = $('imRows'), hist = $('imHistory'), filter = $('imFilter'), bar = $('imBar');
+  if (!rows || !hist) return;
+  const fmt = (n) => Math.round(Number(n) || 0).toLocaleString();
+  try {
+    const q = (filter && filter.value || '').trim();
+    const r = await api('/api/item-maintenance' + (q ? '?q=' + encodeURIComponent(q) : ''));
+    const visible = new Set(r.items.map(it => it.name));
+    [...imSelected].forEach(n => { if (!visible.has(n)) imSelected.delete(n); });
+    rows.innerHTML = r.items.length ? r.items.map(it => `
+      <div style="display:flex; align-items:center; gap:10px; padding:9px 12px; background:var(--surface-sunken); border-radius:var(--radius-xs);">
+        <input type="checkbox" class="im-pick" data-name="${esc(it.name)}" ${imSelected.has(it.name) ? 'checked' : ''} style="width:17px; height:17px; flex:none;">
+        <div style="flex:1; min-width:0;">
+          <div style="font-size:13px; color:var(--text-strong); overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${esc(it.name)}${it.spellings.length > 1 ? ' <span style="color:var(--text-faint); font-size:11px;">(also typed: ' + esc(it.spellings.slice(1).join(', ')) + ')</span>' : ''}</div>
+          <div style="font-family:var(--font-mono); font-size:10.5px; color:var(--text-faint);">bought ${it.inbound.loads} load${it.inbound.loads === 1 ? '' : 's'} · ${fmt(it.inbound.weight)} · shipped ${it.outbound.loads}</div>
+        </div>
+        <button class="btn btn-im-rename" data-name="${esc(it.name)}" style="padding:6px 12px; font-size:10px;">Rename</button>
+      </div>`).join('') : '<div style="font-family:var(--font-mono); font-size:11.5px; color:var(--text-faint); text-align:center; padding:10px 0;">No items match.</div>';
+    const refreshBar = () => {
+      if (!bar) return;
+      const n = imSelected.size;
+      bar.style.display = r.items.length ? 'flex' : 'none';
+      $('imSelected').textContent = n ? `${n} selected` : 'Tick items to rename several as one';
+      $('imRenameSelected').disabled = n < 1;
+    };
+    refreshBar();
+    rows.querySelectorAll('.im-pick').forEach(cb => cb.addEventListener('change', () => {
+      if (cb.checked) imSelected.add(cb.dataset.name); else imSelected.delete(cb.dataset.name);
+      refreshBar();
+    }));
+    const selAll = $('imSelectAll');
+    if (selAll) selAll.onclick = () => {
+      const all = r.items.every(it => imSelected.has(it.name));
+      r.items.forEach(it => { if (all) imSelected.delete(it.name); else imSelected.add(it.name); });
+      rows.querySelectorAll('.im-pick').forEach(cb => { cb.checked = imSelected.has(cb.dataset.name); });
+      refreshBar();
+    };
+    const go = $('imRenameSelected');
+    if (go) go.onclick = async () => {
+      go.disabled = true;
+      try {
+        if (await renameItems([...imSelected])) { imSelected.clear(); loadItemTypeRows(); renderItemMaintenance(); }
+      } catch (e) { alert(e.message); } finally { refreshBar(); }
+    };
+    rows.querySelectorAll('.btn-im-rename').forEach(btn => btn.addEventListener('click', async () => {
+      btn.disabled = true;
+      try {
+        if (await renameItems([btn.dataset.name])) { imSelected.delete(btn.dataset.name); loadItemTypeRows(); renderItemMaintenance(); }
+      } catch (e) { alert(e.message); } finally { btn.disabled = false; }
+    }));
+    hist.innerHTML = r.history.length ? '<div style="font-family:var(--font-mono); font-size:10.5px; letter-spacing:.12em; text-transform:uppercase; color:var(--text-muted);">Recent renames</div>' + r.history.slice(0, 8).map(h => `
+      <div style="display:flex; align-items:center; gap:10px; font-size:12.5px; color:var(--text-strong);">
+        <span style="flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${esc(h.from)} → ${esc(h.to)} <span style="color:var(--text-faint);">· ${h.lines} line${h.lines === 1 ? '' : 's'}${h.undone ? ' · undone' : ''}</span></span>
+        ${h.undone ? '' : `<button class="btn btn-im-undo" data-id="${esc(h.id)}" style="padding:5px 11px; font-size:10px;">Undo</button>`}
+      </div>`).join('') : '';
+    hist.querySelectorAll('.btn-im-undo').forEach(btn => btn.addEventListener('click', async () => {
+      if (!confirm('Undo this rename? Lines you have edited since are left alone.')) return;
+      btn.disabled = true;
+      try {
+        await api('/api/item-maintenance/undo', { method: 'POST', body: JSON.stringify({ id: btn.dataset.id }) });
+        renderItemMaintenance();
+      } catch (e) { alert(e.message); btn.disabled = false; }
+    }));
+  } catch (e) {
+    rows.innerHTML = `<div style="color:var(--status-danger); font-size:12px;">Couldn't load items: ${esc(e.message)}</div>`;
+  }
+}
+
+// ── What Scout has learned (Settings, admin) ──────────────────────────
+async function renderScoutLessons() {
+  const box = $('scoutLessons');
+  if (!box) return;
+  try {
+    const r = await api('/api/yard/lessons');
+    box.innerHTML = r.lessons.length ? r.lessons.map(l => `
+      <div style="display:flex; align-items:center; gap:10px; padding:9px 12px; background:var(--surface-sunken); border-radius:var(--radius-xs);">
+        <div style="flex:1; min-width:0;">
+          <div style="font-size:13px; color:var(--text-strong);">${esc(l.text)}</div>
+          <div style="font-family:var(--font-mono); font-size:10.5px; color:var(--text-faint);">taught ${esc(String(l.at || '').slice(0, 10))} · used ${l.uses} time${l.uses === 1 ? '' : 's'}</div>
+        </div>
+        <button class="btn btn-danger btn-scout-forget" data-id="${l.id}" style="padding:6px 12px; font-size:10px;">Forget</button>
+      </div>`).join('') : '<div style="font-family:var(--font-mono); font-size:11.5px; color:var(--text-faint); padding:6px 0;">Nothing yet. Tell Scout something to remember, like "we call Ramesh\'s lots Auto cast".</div>';
+    box.querySelectorAll('.btn-scout-forget').forEach(btn => btn.addEventListener('click', async () => {
+      if (!confirm('Forget this? Scout stops using it.')) return;
+      btn.disabled = true;
+      try { await api('/api/yard/lessons/forget', { method: 'POST', body: JSON.stringify({ id: Number(btn.dataset.id) }) }); renderScoutLessons(); }
+      catch (e) { alert(e.message); btn.disabled = false; }
+    }));
+  } catch (e) {
+    box.innerHTML = `<div style="color:var(--status-danger); font-size:12px;">Couldn't load lessons: ${esc(e.message)}</div>`;
   }
 }
 

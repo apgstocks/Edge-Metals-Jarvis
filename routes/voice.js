@@ -1674,6 +1674,24 @@ module.exports = function (app, ctx) {
         }
     });
 
+    // ── WHAT SCOUT HAS LEARNED (2026-11-14) ────────────────────────────────
+    // Apsara: "Scout needs to self learn as well", with a list she can see and a
+    // Forget on each lesson. Edge Yard's own memory only (helpers/scoutLearning.js);
+    // admin only, and under /api/yard/ so staff are already turned away by the
+    // staff prefix gate. Who forgot is the session role, never a client field.
+    app.get('/api/yard/lessons', (req, res) => {
+        if (req.role !== 'admin') return res.status(403).json({ error: 'only an admin can see what Scout has learned' });
+        try { res.json({ lessons: require('./helpers/scoutLearning').list() }); }
+        catch (e) { res.status(500).json({ error: e.message }); }
+    });
+    app.post('/api/yard/lessons/forget', (req, res) => {
+        if (req.role !== 'admin') return res.status(403).json({ error: 'only an admin can change what Scout has learned' });
+        try {
+            const ok = require('./helpers/scoutLearning').forget((req.body || {}).id, { by: req.role, appRole: req.role });
+            res.status(ok ? 200 : 404).json({ ok });
+        } catch (e) { res.status(400).json({ ok: false, error: e.message }); }
+    });
+
     app.post('/api/yard/cancel-action', (req, res) => {
         try {
             const { cancelAction } = require('./helpers/yardActions');

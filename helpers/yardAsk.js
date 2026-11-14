@@ -190,9 +190,20 @@ async function askYardInner(question, opts = {}) {
     const MAX_LOOKUPS = 3;
     const found = [];        // what the tools returned, fed back each round
 
+    // ── WHAT SCOUT HAS BEEN TAUGHT (2026-11-14) ───────────────────────────
+    // Apsara: "Scout needs to self learn as well". Her own words from earlier
+    // chats, kept in the EDGE YARD partition only (helpers/scoutLearning.js).
+    // Advice for the model; never a source of figures. Never throws.
+    let learn = { block: '', ids: [], usual: [] };
+    try { learn = require('./scoutLearning').recallFor(); } catch (e) { /* learning never breaks an answer */ }
+    let usualText = '';
+    try { usualText = require('./scoutLearning').usualBlock(learn.usual); } catch (e) { /* same */ }
+
     function buildPrompt() {
         return [
             SYSTEM_RULES,
+            learn.block ? '\n' + learn.block : null,
+            usualText ? '\n' + usualText : null,
             '',
             'DATA (a summary — ask for anything else with `tool`):',
             JSON.stringify(brief),
@@ -223,7 +234,12 @@ async function askYardInner(question, opts = {}) {
             + 'Plain sentences in `answer`, no markdown. '
             + 'Use `tool` to LOOK SOMETHING UP — leave `answer` empty when you do. '
             + 'Set have_data to false only after looking and finding nothing. '
-            + 'Leave `action` null unless you were asked to do something.',
+            + 'Leave `action` null unless you were asked to do something. '
+            + 'Set `teach` to true ONLY when the person is telling you something to remember about how they work '
+            + '(a name they use, a habit, a preference, who someone is) — not when they ask a question or ask you to do something. '
+            + 'Otherwise leave `teach` out. '
+            + 'If you relied on something you were taught, list its number in `used_lessons`, like [12]. '
+            + 'If the person asks you to forget something you were taught, put its number in `forget_lesson`.',
             // ── AND, WHEN SHE IS ASKING TO BE SHOWN, WHERE TO TAKE HER ──
             // Apsara, 2026-11-08: "i dont want to restrict only to
             // pedefined actions.let ai resolve that". So the model reads her
@@ -305,6 +321,28 @@ async function askYardInner(question, opts = {}) {
 
         const text = String((res && res.answer) || '').trim();
 
+        // ── TEACHING (2026-11-14) ────────────────────────────────────────
+        // The MODEL decides THAT this message was a lesson; what is stored is
+        // the person's OWN WORDS (q), never the model's paraphrase. Only the
+        // manager or the team may teach, and a figure is refused — see
+        // helpers/scoutLearning.js for why each.
+        if (res && res.forget_lesson != null && learn.ids.includes(Number(res.forget_lesson))) {
+            let note;
+            try {
+                const gone = require('./scoutLearning').forget(Number(res.forget_lesson), { by: opts.role || null, appRole: opts.role });
+                note = gone ? 'Forgotten.' : "I can't forget that one: only the manager or the team can change what I was taught.";
+            } catch (e) { note = "I couldn't forget that just now."; }
+            return { ok: true, answer: (text ? text + '\n\n' : '') + note, have_data: true, forgot: true, data_as_of: brief.generated_at };
+        }
+        if (res && res.teach === true) {
+            let note;
+            try {
+                const r = require('./scoutLearning').teach({ text: q, by: opts.role || null, appRole: opts.role, sourceMsg: q });
+                note = r.ok ? (r.already ? 'I already have that.' : 'Got it, I will remember that.') : `I can't keep that: ${r.reason}.`;
+            } catch (e) { note = "I couldn't save that just now."; }
+            return { ok: true, answer: (text ? text + '\n\n' : '') + note, have_data: true, taught: true, data_as_of: brief.generated_at };
+        }
+
         // ── THE LEDGER, WHEN THE BRIEF COULD NOT (2026-09-23) ────────────
         // The brief above is a THIRTY DAY window. Outside it there is nothing
         // to read, so "what did we pay Junk Car in March" came back as "I
@@ -383,7 +421,14 @@ async function askYardInner(question, opts = {}) {
         // ADDITIVE. Every existing caller — the voice path above all — reads
         // `answer` and is untouched by a new key. Same reasoning as the
         // `core` flag on the invoice columns this morning.
-        return { ok: true, answer: text, have_data: res.have_data !== false, proposal,
+        // The first time a lesson is used, say so once (her decision, 2026-11-14), so
+        // she can Forget one that is steering an answer without her knowing.
+        let answerText = text;
+        try {
+            const firstUse = require('./scoutLearning').noteUse((Array.isArray(res.used_lessons) ? res.used_lessons : []).map(Number).filter((n) => learn.ids.includes(n)));
+            if (firstUse.length) answerText += `\n\n(I used what you taught me: "${firstUse.map((l) => l.text).join('"; "')}". Say "forget that" if it is wrong.)`;
+        } catch (e) { /* never worth an answer */ }
+        return { ok: true, answer: answerText, have_data: res.have_data !== false, proposal,
                  // What it decided she wanted to SEE. Raw and unchecked here
                  // on purpose — validating it is the caller's job, and
                  // routes/scout.js puts it through scoutActions.sanitise

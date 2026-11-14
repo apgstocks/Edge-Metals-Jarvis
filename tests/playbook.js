@@ -109,7 +109,11 @@ check('forget removes one rule and leaves the rest', () => {
 // THE GUARD. Nothing in the app may read the Playbook until she says so. When she does,
 // the change that wires it adds the file to this list on purpose, and adds its own
 // end-to-end section. An empty list is what "changes no existing behaviour" means.
-const ALLOWED_CALLERS = [];
+// helpers/scoutLearning.js reads the disk, with her yes: Apsara, 2026-11-14, "Yard assistant a.k.a. Scout needs to
+// self learn as well", then "yes" to all four design questions (claude/scout-self-learning-design-2026-11-14.md in
+// the Jarvis project). It uses the EDGE YARD partition only; the Playbook (Edge Metals) is untouched. Its own
+// end-to-end section is tests/scout-learning.js.
+const ALLOWED_CALLERS = ['helpers/scoutLearning.js'];
 check('no existing file reads the Playbook or the disk (so no behaviour has changed)', () => {
     const uses = /(helpers\/|\.\/|\.\.\/)(playbook|diskStore|disk)(\/|['"])/;
     const scan = (dir, rel) => {
